@@ -5,8 +5,9 @@ mod info;
 mod moderation;
 
 use clap::Subcommand;
+use commands::RoomTargetOption;
 use conduwuit::Result;
-use ruma::OwnedRoomId;
+use ruma::{OwnedRoomId, OwnedRoomOrAliasId};
 
 use self::{
 	alias::RoomAliasCommand, directory::RoomDirectoryCommand, info::RoomInfoCommand,
@@ -59,5 +60,26 @@ pub enum RoomCommand {
 	/// Check if we know about a room
 	Exists {
 		room_id: OwnedRoomId,
+	},
+
+	/// - Delete all sync tokens for a room
+	PurgeSyncTokens {
+		/// Room ID or alias to purge sync tokens for
+		#[arg(value_parser)]
+		room: OwnedRoomOrAliasId,
+	},
+
+	/// - Delete sync tokens for all rooms that have no local users
+	///
+	/// By default, processes all empty rooms.
+	PurgeAllSyncTokens {
+		/// Target specific room types
+		#[arg(long, value_enum)]
+		target_option: Option<RoomTargetOption>,
+
+		/// Execute token deletions. Otherwise,
+		/// Performs a dry run without actually deleting any tokens
+		#[arg(long)]
+		execute: bool,
 	},
 }
