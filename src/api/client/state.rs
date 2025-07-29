@@ -1,9 +1,10 @@
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Result, err,
+	Err, Result, debug, err, error,
 	matrix::{Event, pdu::PduBuilder},
 	utils::BoolExt,
+	warn,
 };
 use conduwuit_service::Services;
 use futures::{FutureExt, TryStreamExt};
@@ -20,7 +21,7 @@ use ruma::{
 			server_acl::RoomServerAclEventContent,
 		},
 	},
-	serde::Raw,
+	serde::{JsonObject, Raw},
 };
 use serde_json::json;
 
@@ -39,9 +40,58 @@ pub(crate) async fn send_state_event_for_key_route(
 		.users
 		.update_device_last_seen(sender_user, body.sender_device.as_deref(), ip)
 		.await;
+	let room_id = &body.room_id;
+	let event_type = &body.event_type;
+	let state_key = body.state_key.as_str();
 
 	if services.users.is_suspended(sender_user).await? {
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
+	}
+
+	// Check if the user is trying to leave by setting the state, rather than
+	// calling the leave endpoint. Sneaky!
+	if state_key == sender_user.as_str()
+		&& event_type == &StateEventType::RoomMember
+		&& services
+			.rooms
+			.state_cache
+			.server_in_room(services.globals.server_name(), room_id)
+			.await
+		&& !services.config.auto_join_rooms.is_empty()
+	{
+		let content: JsonObject = serde_json::from_str(body.body.body.json().get())?;
+		if content
+			.get("membership")
+			.and_then(|v| v.as_str())
+			.map_or(MembershipState::Leave, MembershipState::from)
+			== MembershipState::Leave
+		{
+			// Holy nest
+			debug!(room_id = %room_id, user_id = %sender_user, "checking if user can leave local room");
+			for room in &services.config.auto_join_rooms {
+				let sn = room.server_name();
+				if sn.is_none_or(|_| sn.is_some_and(|n| n == services.globals.server_name())) {
+					// Only resolve the ID or aliases of local rooms, since federated lookups are
+					// slow
+					match services.rooms.alias.resolve(room).await {
+						| Err(e) => {
+							error!("Failed to resolve auto-join room {room}: {e}");
+						},
+						| Ok(resolved_room_id) =>
+							if resolved_room_id == *room_id {
+								warn!(
+									room_id = %room_id,
+									user_id = %sender_user,
+									"Refusing to let user leave auto-join room"
+								);
+								return Err!(Request(Forbidden(
+									"You cannot leave rooms you were automatically joined to"
+								)));
+							},
+					}
+				}
+			}
+		}
 	}
 
 	Ok(send_state_event::v3::Response {
