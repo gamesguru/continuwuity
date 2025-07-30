@@ -34,6 +34,17 @@ pub(crate) async fn leave_room_route(
 	body: Ruma<leave_room::v3::Request>,
 ) -> Result<leave_room::v3::Response> {
 	let user = body.sender_user();
+	if services.users.is_suspended(user).await?
+		&& services.admin.is_admin_dm_room(&body.room_id).await
+	{
+		// forbid leaving admin DM rooms while suspended
+		warn!(
+			room_id = %body.room_id,
+			user_id = %user,
+			"User tried to leave admin DM room while suspended"
+		);
+		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
+	}
 	let room_id = body.room_id.to_owned();
 	if services
 		.rooms

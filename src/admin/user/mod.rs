@@ -9,6 +9,12 @@ use crate::admin_command_dispatch;
 #[admin_command_dispatch]
 #[derive(Debug, Subcommand)]
 pub enum UserCommand {
+	/// Create a DM between the user and all server admins
+	CreateDm {
+		/// Username of the user to create a DM with
+		user_id: String,
+	},
+
 	/// Create a new user
 	#[clap(alias = "create")]
 	CreateUser {

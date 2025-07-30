@@ -451,6 +451,26 @@ impl Service {
 			.ok_or_else(|| err!(Request(NotFound("Admin user not joined to admin room"))))
 	}
 
+	pub async fn is_admin_dm_room(&self, room_id: &RoomId) -> bool {
+		if self.is_admin_room(room_id).await {
+			return true;
+		}
+
+		let state_lock = self.services.state.mutex.lock(room_id).await;
+		let mut members = self.services.state_cache.room_members(room_id);
+		drop(state_lock);
+		let mut non_admins: u64 = 0;
+		while let Some(member) = members.next().await {
+			if !self.user_is_admin(member).await {
+				non_admins = non_admins.saturating_add(1);
+			}
+			if non_admins > 1 {
+				return false; // More than one non-admin member
+			}
+		}
+		true // Only one non-admin user
+	}
+
 	async fn handle_response(&self, content: RoomMessageEventContent) -> Result<()> {
 		let Some(Relation::Reply { in_reply_to }) = content.relates_to.as_ref() else {
 			return Ok(());

@@ -25,7 +25,9 @@ pub(crate) async fn send_message_event_route(
 	let sender_user = body.sender_user();
 	let sender_device = body.sender_device.as_deref();
 	let appservice_info = body.appservice_info.as_ref();
-	if services.users.is_suspended(sender_user).await? {
+	if services.users.is_suspended(sender_user).await?
+		&& !services.admin.is_admin_dm_room(&body.room_id).await
+	{
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
 	}
 
