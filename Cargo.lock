@@ -1180,6 +1180,8 @@ dependencies = [
  "log",
  "loole",
  "lru-cache",
+ "once_cell",
+ "oxide-auth",
  "rand 0.8.5",
  "recaptcha-verify",
  "regex",
