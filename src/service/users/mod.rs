@@ -2,13 +2,14 @@ pub(super) mod dehydrated_device;
 
 #[cfg(feature = "ldap")]
 use std::collections::HashMap;
-use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
+use std::{collections::BTreeMap, mem, net::IpAddr, pin::pin, sync::Arc};
 
 #[cfg(feature = "ldap")]
 use conduwuit::result::LogErr;
 use conduwuit::{
 	Err, Error, Result, Server, debug_warn, err, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
+	warn,
 };
 #[cfg(feature = "ldap")]
 use conduwuit_core::{debug, error};
@@ -25,6 +26,7 @@ use ruma::{
 		AnyToDeviceEvent, GlobalAccountDataEventType,
 		ignored_user_list::IgnoredUserListEvent,
 		invite_permission_config::{FilterLevel, InvitePermissionConfigEvent},
+		room::redaction::RoomRedactionEventContent
 	},
 	serde::Raw,
 	uint,
@@ -55,8 +57,10 @@ struct Services {
 	admin: Dep<admin::Service>,
 	appservice: Dep<appservice::Service>,
 	globals: Dep<globals::Service>,
+	state: Dep<rooms::state::Service>,
 	state_accessor: Dep<rooms::state_accessor::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
+	timeline: Dep<rooms::timeline::Service>,
 }
 
 struct Data {
@@ -96,9 +100,11 @@ impl crate::Service for Service {
 				admin: args.depend::<admin::Service>("admin"),
 				appservice: args.depend::<appservice::Service>("appservice"),
 				globals: args.depend::<globals::Service>("globals"),
+				state: args.depend::<rooms::state::Service>("rooms::state"),
 				state_accessor: args
 					.depend::<rooms::state_accessor::Service>("rooms::state_accessor"),
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
+				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 			},
 			db: Data {
 				keychangeid_userid: args.db["keychangeid_userid"].clone(),
@@ -216,6 +222,51 @@ impl Service {
 		self.set_password(user_id, None).await?;
 
 		// TODO: Unhook 3PID
+		Ok(())
+	}
+
+	// Attempts to redact all of a user's events in all rooms they are joined to at
+	// the point of call. This puppets the user to attempt to redact all of their
+	// events. Some redactions may fail due to power levels etc.
+	pub async fn redact_user(&self, user_id: &UserId) -> Result<()> {
+		let mut rooms = self.services.state_cache.rooms_joined(user_id);
+		while let Some(room_id) = rooms.next().await {
+			debug_info!("Finding events in {room_id}");
+			let mut events = pin!(self.services.timeline.all_pdus(user_id, room_id,));
+			let lock = self.services.state.mutex.lock(room_id).await;
+			while let Some((_, pdu)) = events.next().await {
+				if pdu.is_redacted() || pdu.sender() != user_id {
+					// TODO: optimise this
+					continue; // don't duplicate efforts
+				}
+				debug_info!(
+					"Redacting event {} in room {room_id} for user {user_id}",
+					pdu.event_id()
+				);
+				self.services
+					.timeline
+					.build_and_append_pdu(
+						conduwuit::pdu::PduBuilder::timeline(&RoomRedactionEventContent {
+							redacts: Some(pdu.event_id().to_owned()),
+							reason: None,
+						}),
+						user_id,
+						room_id,
+						&lock,
+					)
+					.await
+					.inspect_err(|e| {
+						warn!(
+							%user_id,
+							%room_id,
+							"Failed to redact event: {e}",
+						)
+					})
+					.ok();
+			}
+			drop(lock);
+		}
+
 		Ok(())
 	}
 

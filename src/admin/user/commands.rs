@@ -178,7 +178,12 @@ pub(super) async fn create_user(&self, username: String, password: Option<String
 }
 
 #[admin_command]
-pub(super) async fn deactivate(&self, no_leave_rooms: bool, user_id: String) -> Result {
+pub(super) async fn deactivate(
+	&self,
+	no_leave_rooms: bool,
+	user_id: String,
+	redact: bool,
+) -> Result {
 	// Validate user id
 	let user_id = parse_local_user_id(self.services, &user_id)?;
 
@@ -187,13 +192,16 @@ pub(super) async fn deactivate(&self, no_leave_rooms: bool, user_id: String) -> 
 		return Err!("Not allowed to deactivate the server service account.",);
 	}
 
+	info!("Deactivating user {user_id}...");
 	self.services.users.deactivate_account(&user_id).await?;
 
+	if redact {
+		info!("Redacting user {user_id} before deactivation");
+		self.services.users.redact_user(&user_id).boxed().await?;
+	}
+
 	if !no_leave_rooms {
-		self.services
-			.admin
-			.send_text(&format!("Making {user_id} leave all rooms after deactivation..."))
-			.await;
+		info!("Making {user_id} leave all rooms after deactivation");
 
 		let all_joined_rooms: Vec<OwnedRoomId> = self
 			.services
@@ -210,6 +218,25 @@ pub(super) async fn deactivate(&self, no_leave_rooms: bool, user_id: String) -> 
 	}
 
 	self.write_str(&format!("User {user_id} has been deactivated"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn redact_user(&self, user_id: String) -> Result {
+	// Validate user id
+	let user_id = parse_local_user_id(self.services, &user_id)?;
+
+	if user_id == self.services.globals.server_user {
+		return Err!("Not allowed to redact the server service account.",);
+	}
+
+	if !self.services.users.exists(&user_id).await {
+		return Err!("User {user_id} does not exist.");
+	}
+
+	self.services.users.redact_user(&user_id).boxed().await?;
+
+	self.write_str(&format!("User {user_id} has been redacted."))
 		.await
 }
 

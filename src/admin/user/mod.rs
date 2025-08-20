@@ -40,8 +40,19 @@ pub enum UserCommand {
 	/// User will be removed from all rooms by default.
 	/// Use --no-leave-rooms to not leave all rooms by default.
 	Deactivate {
+		/// When passed, the user will not leave any rooms they are in.
 		#[arg(short, long)]
 		no_leave_rooms: bool,
+		user_id: String,
+		/// Redact every event the user sent in rooms they are currently joined
+		/// to.
+		#[arg(short, long)]
+		redact: bool,
+	},
+
+	//// - Redact all of a user's events in all rooms they are joined to
+	RedactUser {
+		/// Username of the user to redact
 		user_id: String,
 	},
 
