@@ -3,31 +3,35 @@ use std::{
 	fmt::Write as _,
 };
 
-use api::client::{full_user_deactivate, join_room_by_id_helper, leave_room, remote_leave_room};
+use api::client::{
+	full_user_deactivate, join_room_by_id_helper, leave_all_rooms, leave_room, remote_leave_room,
+	update_avatar_url, update_displayname,
+};
 use conduwuit::{
-	Err, Result, debug_warn, error, info,
-	matrix::{Event, pdu::PduBuilder},
-	utils::{self, ReadyExt},
+	debug, debug_warn, error, info, is_equal_to, matrix::{pdu::PduBuilder, Event}, utils::{self, ReadyExt},
 	warn,
+	Err,
+	Result,
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	Int, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomId, UserId,
 	events::{
-		RoomAccountDataEventType, StateEventType,
 		room::{
 			create::RoomCreateEventContent,
 			member::{MembershipState, RoomMemberEventContent},
 			power_levels::{RoomPowerLevels, RoomPowerLevelsEventContent},
 			redaction::RoomRedactionEventContent,
-		},
-		tag::{TagEvent, TagEventContent, TagInfo},
-	},
-	int,
+		}, tag::{TagEvent, TagEventContent, TagInfo},
+		RoomAccountDataEventType,
+		StateEventType,
+	}, int, Int, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
+	OwnedUserId,
+	RoomId,
+	UserId,
 };
 
 use crate::{
-	admin_command, get_room_info,
+	get_room_info,
 	utils::{parse_active_local_user_id, parse_local_user_id, parse_user_id},
 };
 
@@ -35,7 +39,10 @@ const AUTO_GEN_PASSWORD_LENGTH: usize = 25;
 const BULK_JOIN_REASON: &str = "Bulk force joining this room as initiated by the server admin.";
 
 #[admin_command]
-pub(super) async fn list_users(&self) -> Result {
+pub(super) use conduwuit_macros::admin_command;
+use conduwuit_macros::admin_command;
+
+async fn list_users(&self) -> Result {
 	let users: Vec<_> = self
 		.services
 		.users
@@ -212,6 +219,39 @@ pub(super) async fn deactivate(
 			.collect()
 			.await;
 
+		// Rescind any invites they may have sent
+		for room_id in &all_joined_rooms {
+			let invitees = self
+				.services
+				.rooms
+				.state_cache
+				.room_members_invited(room_id)
+				.collect::<Vec<_>>()
+				.await;
+			for invitee in invitees {
+				// Try to kick the users
+				info!("Rescinding invite for {invitee} in room {room_id}");
+				let lock = self.services.rooms.state.mutex.lock(room_id).await;
+				self.services
+					.rooms
+					.timeline
+					.build_and_append_pdu(
+						PduBuilder::state(
+							String::from(invitee.as_str()),
+							&RoomMemberEventContent {
+								membership: MembershipState::Leave,
+								..RoomMemberEventContent::new(MembershipState::Leave)
+							},
+						),
+						&user_id,
+						room_id,
+						&lock,
+					)
+					.await
+					.ok();
+				drop(lock);
+			}
+		}
 		full_user_deactivate(self.services, &user_id, &all_joined_rooms)
 			.boxed()
 			.await?;
@@ -410,6 +450,10 @@ pub(super) async fn deactivate_all(&self, no_leave_rooms: bool, force: bool) -> 
 					full_user_deactivate(self.services, &user_id, &all_joined_rooms)
 						.boxed()
 						.await?;
+					update_displayname(self.services, &user_id, None, &all_joined_rooms).await;
+					update_avatar_url(self.services, &user_id, None, None, &all_joined_rooms)
+						.await;
+					leave_all_rooms(self.services, &user_id).await;
 				}
 			},
 		}
