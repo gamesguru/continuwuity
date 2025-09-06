@@ -220,6 +220,7 @@ pub(super) async fn deactivate(
 			.await;
 
 		// Rescind any invites they may have sent
+		info!("Rescinding any invites sent by {user_id}");
 		for room_id in &all_joined_rooms {
 			let invitees = self
 				.services
