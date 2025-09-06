@@ -260,7 +260,7 @@ impl Service {
 							%user_id,
 							%room_id,
 							"Failed to redact event: {e}",
-						)
+						);
 					})
 					.ok();
 			}

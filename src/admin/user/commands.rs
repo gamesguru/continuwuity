@@ -1001,7 +1001,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 
 	if !self.services.users.exists(&user_id).await {
 		return Err!("User {user_id} does not exist.");
-	};
+	}
 
 	let mut server_admins = vec![self.services.globals.server_user.clone()];
 	let mut stream = self.services.rooms.state_cache.room_members(&admin_room);

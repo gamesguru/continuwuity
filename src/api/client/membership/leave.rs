@@ -45,7 +45,7 @@ pub(crate) async fn leave_room_route(
 		);
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
 	}
-	let room_id = body.room_id.to_owned();
+	let room_id = body.room_id.clone();
 	if services
 		.rooms
 		.state_cache
