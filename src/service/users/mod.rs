@@ -26,7 +26,7 @@ use ruma::{
 		AnyToDeviceEvent, GlobalAccountDataEventType,
 		ignored_user_list::IgnoredUserListEvent,
 		invite_permission_config::{FilterLevel, InvitePermissionConfigEvent},
-		room::redaction::RoomRedactionEventContent
+		room::redaction::RoomRedactionEventContent,
 	},
 	serde::Raw,
 	uint,
@@ -232,7 +232,7 @@ impl Service {
 		let mut rooms = self.services.state_cache.rooms_joined(user_id);
 		while let Some(room_id) = rooms.next().await {
 			debug_info!("Finding events in {room_id}");
-			let mut events = pin!(self.services.timeline.all_pdus(user_id, room_id,));
+			let mut events = pin!(self.services.timeline.all_pdus(room_id));
 			let lock = self.services.state.mutex.lock(room_id).await;
 			while let Some((_, pdu)) = events.next().await {
 				if pdu.is_redacted() || pdu.sender() != user_id {
@@ -251,7 +251,7 @@ impl Service {
 							reason: None,
 						}),
 						user_id,
-						room_id,
+						Some(room_id),
 						&lock,
 					)
 					.await

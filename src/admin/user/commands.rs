@@ -245,7 +245,7 @@ pub(super) async fn deactivate(
 							},
 						),
 						&user_id,
-						room_id,
+						Some(room_id),
 						&lock,
 					)
 					.await
@@ -1035,7 +1035,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 		.build_and_append_pdu(
 			PduBuilder::state(String::new(), &RoomCreateEventContent::new_v11()),
 			&self.services.globals.server_user,
-			&room_id,
+			Some(&room_id),
 			&state_lock,
 		)
 		.boxed()
@@ -1061,7 +1061,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 				},
 			),
 			&self.services.globals.server_user,
-			&room_id,
+			Some(&room_id),
 			&state_lock,
 		)
 		.boxed()
@@ -1087,7 +1087,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 				..RoomPowerLevelsEventContent::default()
 			}),
 			&self.services.globals.server_user,
-			&room_id,
+			Some(&room_id),
 			&state_lock,
 		)
 		.boxed()
@@ -1113,7 +1113,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 					&RoomMemberEventContent::new(MembershipState::Invite),
 				),
 				&self.services.globals.server_user,
-				&room_id,
+				Some(&room_id),
 				&state_lock,
 			)
 			.boxed()
@@ -1136,7 +1136,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 				.build_and_append_pdu(
 					PduBuilder::state(String::from(admin.as_str()), &content),
 					&admin,
-					&room_id,
+					Some(&room_id),
 					&state_lock,
 				)
 				.boxed()
@@ -1160,7 +1160,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 			.build_and_append_pdu(
 				PduBuilder::state(String::from(user_id.as_str()), user_membership),
 				&self.services.globals.server_user,
-				&room_id,
+				Some(&room_id),
 				&state_lock,
 			)
 			.boxed()
@@ -1180,7 +1180,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 						..user_membership.clone()
 					}),
 					&user_id,
-					&room_id,
+					Some(&room_id),
 					&state_lock,
 				)
 				.boxed()
@@ -1204,7 +1204,7 @@ pub(super) async fn create_dm(&self, user_id: String) -> Result {
 					&RoomMemberEventContent::new(MembershipState::Leave),
 				),
 				&self.services.globals.server_user,
-				&room_id,
+				Some(&room_id),
 				&state_lock,
 			)
 			.boxed()

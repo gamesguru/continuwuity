@@ -613,7 +613,7 @@ async fn takeover(&self, force: bool, room: OwnedRoomOrAliasId) -> Result {
 						},
 					),
 					user_id,
-					&room_id,
+					Some(&room_id),
 					&lock,
 				)
 				.await
@@ -637,7 +637,7 @@ async fn takeover(&self, force: bool, room: OwnedRoomOrAliasId) -> Result {
 			.build_and_append_pdu(
 				conduwuit::pdu::Builder::state(String::new(), &new_power_levels),
 				user_id,
-				&room_id,
+				Some(&room_id),
 				&lock,
 			)
 			.await
@@ -798,7 +798,7 @@ async fn shutdown_room(&self, force: bool, redact: bool, room: OwnedRoomOrAliasI
 						},
 					),
 					user_id,
-					&room_id,
+					Some(&room_id),
 					&lock,
 				)
 				.await
@@ -824,7 +824,7 @@ async fn shutdown_room(&self, force: bool, redact: bool, room: OwnedRoomOrAliasI
 						&RoomJoinRulesEventContent::new(JoinRule::Private),
 					),
 					user_id,
-					&room_id,
+					Some(&room_id),
 					&lock,
 				)
 				.await
@@ -857,7 +857,7 @@ async fn shutdown_room(&self, force: bool, redact: bool, room: OwnedRoomOrAliasI
 						},
 					),
 					user_id,
-					&room_id,
+					Some(&room_id),
 					&lock,
 				)
 				.await

@@ -460,7 +460,9 @@ impl Service {
 		let mut members = self.services.state_cache.room_members(room_id);
 		drop(state_lock);
 		let mut non_admins: u64 = 0;
+		let mut total: u64 = 0;
 		while let Some(member) = members.next().await {
+			total = total.saturating_add(1);
 			if !self.user_is_admin(member).await {
 				non_admins = non_admins.saturating_add(1);
 			}
@@ -468,7 +470,8 @@ impl Service {
 				return false; // More than one non-admin member
 			}
 		}
-		true // Only one non-admin user
+		// Only one non-admin user
+		total.saturating_sub(non_admins) == 1
 	}
 
 	async fn handle_response(&self, content: RoomMessageEventContent) -> Result<()> {

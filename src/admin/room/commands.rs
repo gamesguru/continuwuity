@@ -1,5 +1,5 @@
 use conduwuit::{Err, Result};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use ruma::OwnedRoomId;
 
 use crate::{PAGE_SIZE, admin_command, get_room_info};
@@ -81,4 +81,32 @@ pub(super) async fn exists(&self, room_id: OwnedRoomId) -> Result {
 	let result = self.services.rooms.metadata.exists(&room_id).await;
 
 	self.write_str(&format!("{result}")).await
+}
+
+#[admin_command]
+pub(super) async fn export(&self, room_id: OwnedRoomId) -> Result {
+	let pdus = self
+		.services
+		.rooms
+		.timeline
+		.pdus(&room_id, None)
+		.map_ok(|(_, pdu)| async move {
+			self.services
+				.rooms
+				.timeline
+				.get_pdu_json(&pdu.event_id)
+				.await
+		})
+		.try_buffer_unordered(10)
+		.collect::<Vec<_>>()
+		.await
+		.into_iter()
+		.filter_map(Result::ok)
+		.collect::<Vec<_>>();
+
+	if pdus.is_empty() {
+		return Err!("No PDUs found in room.");
+	}
+
+	self.write_str(&serde_json::to_string_pretty(&pdus)?).await
 }

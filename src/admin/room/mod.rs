@@ -60,4 +60,9 @@ pub enum RoomCommand {
 	Exists {
 		room_id: OwnedRoomId,
 	},
+
+	/// - Export all PDUs we know about in a room as a file
+	Export {
+		room_id: OwnedRoomId,
+	},
 }
