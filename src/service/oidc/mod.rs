@@ -18,9 +18,11 @@ use oxide_auth::{
 	endpoint::{PreGrant, Scope},
 	frontends::simple::endpoint::{Generic, Vacant},
 	primitives::{
+		generator::AssertionKind,
 		grant::Grant,
+		issuer::TokenMap,
 		prelude::{
-			AuthMap, Authorizer, Client, ClientUrl, Issuer, RandomGenerator, Registrar, TokenMap,
+			Assertion, AuthMap, Authorizer, Client, ClientUrl, Issuer, RandomGenerator, Registrar,
 		},
 		registrar::{
 			Argon2, BoundClient, EncodedClient, RegisteredClient, RegisteredUrl, RegistrarError,
@@ -77,7 +79,8 @@ pub struct Service {
 	/// longer lived refresh tokens.
 	///
 	/// Will be reinitialised on continuwuity's restart.
-	issuer: Mutex<TokenMap<RandomGenerator>>,
+	issuer: Mutex<TokenMap<Assertion>>,
+	
 	services: Services,
 	db: Data,
 }
@@ -85,11 +88,21 @@ pub struct Service {
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
-		// TODO implement authorizer and issuer inside database so that token
-		// requests survive server restarts.
+		let issuer_secret = args
+			.server
+			.config
+			.auth
+			.as_ref()
+			.expect("some auth config")
+			.issuer_secret
+			.clone();
 		Ok(Arc::new(Self {
 			authorizer: Mutex::new(AuthMap::new(RandomGenerator::new(16))),
-			issuer: Mutex::new(TokenMap::new(RandomGenerator::new(16))),
+			issuer: Mutex::new(TokenMap::new(Assertion::new(
+				AssertionKind::HmacSha256,
+				issuer_secret.as_bytes(),
+			))),
+
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 			},
@@ -156,6 +169,11 @@ impl Service {
 			.put(device_id, client_id.to_owned());
 
 		Ok(())
+	}
+
+	pub fn revoke_device(&self, token: &str) {
+		let mut issuer = self.issuer.lock().expect("lockable issuer");
+		issuer.revoke(token);
 	}
 
 	fn grant_from_token(&self, token: &str) -> Option<Grant> {

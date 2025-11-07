@@ -11,12 +11,14 @@ mod error;
 mod login;
 mod request;
 mod response;
+mod revoke;
 pub use authorize::AuthorizationQuery;
 pub use consent::oidc_consent_form;
 pub use error::OidcError;
 pub use login::{LoginError, LoginQuery, oidc_login_form};
 pub use request::OidcRequest;
 pub use response::OidcResponse;
+pub use revoke::RevokeQuery;
 
 /// The parameters for the OIDC login page template.
 #[derive(Template)]

@@ -127,6 +127,8 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			post(client::oidc_login))
 		.route("/_matrix/client/unstable/org.matrix.msc2964/token",
 			post(client::token))
+		.route("/_matrix/client/unstable/org.matrix.msc4254/revoke",
+			post(client::revoke))
 		// MSC2966: Usage of OAuth 2.0 Dynamic Client Registration in Matrix.
 		.route("/_matrix/client/unstable/org.matrix.msc2964/device/register",
 			post(client::register_client))

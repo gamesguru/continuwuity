@@ -16,6 +16,7 @@ mod authorize;
 mod discovery;
 mod login;
 mod register;
+mod revoke;
 mod token;
 
 pub(crate) use self::{
@@ -23,5 +24,6 @@ pub(crate) use self::{
 	discovery::get_auth_metadata,
 	login::oidc_login,
 	register::register_client,
+	revoke::revoke,
 	token::token,
 };
