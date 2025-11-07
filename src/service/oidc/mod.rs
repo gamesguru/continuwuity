@@ -66,10 +66,11 @@ struct Data {
 }
 
 pub struct Service {
-	/// Authorization tokens are 16 byte random keys to a memory hash map.
+	/// Authorization codes are 16 byte random keys to a memory hash map.
 	///
 	/// Will be reinitialised on continuwuity's restart.
 	authorizer: Mutex<AuthMap<RandomGenerator>>,
+
 	/// Bearer tokens are also random generated but 256-bit tokens, since they
 	/// live longer.
 	///
@@ -80,6 +81,7 @@ pub struct Service {
 	///
 	/// Will be reinitialised on continuwuity's restart.
 	issuer: Mutex<TokenMap<Assertion>>,
+
 	
 	services: Services,
 	db: Data,
@@ -292,7 +294,7 @@ pub fn normalize_redirect(mut url: Url) -> RegisteredUrl {
 	}
 }
 
-/// Let this service act as an oxide-auth `Registrar`.
+/// Let this service act as an oxide-auth client app `Registrar`.
 impl Registrar for Service {
 	fn bound_redirect<'a>(
 		&self,
@@ -303,9 +305,8 @@ impl Registrar for Service {
 			.client_registrar
 			.get_blocking(bound.client_id.as_ref())
 			.map_err(|_| RegistrarError::Unspecified)?;
-		let oidc_client: OidcClient = client_handle
-			.deserialized()
-			.map_err(|_| RegistrarError::Unspecified)?;
+		let oidc_client: OidcClient = client_handle.deserialized()
+			.map_err(|_| RegistrarError::PrimitiveError)?;
 		let client = oidc_client.client;
 		// Perform exact matching as motivated in the rfc, but substitute
 		// "127.0.0.1" and "[::1]" for "localhost" to let oxide-auth ignore
