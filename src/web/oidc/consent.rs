@@ -26,10 +26,7 @@ pub fn oidc_consent_form(hostname: &str, query: &AuthorizationQuery) -> OidcResp
 
 /// Render the html contents of the user consent page.
 fn consent_page(hostname: &str, query: &AuthorizationQuery, route: &str, nonce: &str) -> String {
-	let response_mode = query
-		.response_mode
-		.as_deref()
-		.unwrap_or("fragment");
+	let response_mode = query.response_mode.as_deref().unwrap_or("fragment");
 	let user_id = query
 		.username
 		.clone()

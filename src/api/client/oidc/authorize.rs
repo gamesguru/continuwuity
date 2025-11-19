@@ -3,11 +3,7 @@ use std::borrow::Cow;
 use axum::extract::{Query, State};
 use conduwuit::{Result, debug, err};
 use conduwuit_web::oidc::{
-	AuthorizationQuery,
-	OidcRequest,
-	OidcResponse,
-	oidc_consent_form,
-	oidc_login_form,
+	AuthorizationQuery, OidcRequest, OidcResponse, oidc_consent_form, oidc_login_form,
 };
 use oxide_auth::{code_grant::authorization::Error as AuthorizationError, endpoint::WebResponse};
 use oxide_auth_async::code_grant;

@@ -30,7 +30,8 @@ impl IntoResponse for OidcResponse {
 		};
 		// Adding localhost to the "form-action" directive lets Continuwuity
 		// reply to private clients that call it _from_ localhost, any port.
-		let csp_form_action = "form-action 'self' http://localhost:* http://127.0.0.1:* http://[::1]:*;";
+		let csp_form_action =
+			"form-action 'self' http://localhost:* http://127.0.0.1:* http://[::1]:*;";
 		let content_csp = format!("{csp_src} {csp_form_action}");
 		let content_type = match self.body {
 			| Some(OAuthRequestBody::Json(_)) => "application/json",
