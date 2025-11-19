@@ -3,14 +3,48 @@
 <div class="panel">
     <h1 class-"project-name">{{ hostname }}</h1>
     <p>
-        '{{ client_id }}' (at {{ redirect_uri }}) is requesting permission for '{{ scope }}'
+        "{%- if let Some(name) = client_name -%}
+            <b>{{ name }}</b>
+        {%- else -%}
+            The app with id {{ client_id }}
+        {%- endif -%}" wants access to <b>{{ user_id }}</b>'s data at
+        {{ redirect_uri | safe }}.
     </p>
-    <form method="post">
-        <input type="submit" value="Accept" formaction="{{ route }}?client_id={{ client_id }}{%- if let Some(secret)
-        = client_secret -%}&client_secret={{ secret }}{%- endif -%}&redirect_uri={{ redirect_uri }}&scope={{ scope
-        }}&state={{ state }}&code_challenge={{ code_challenge }}&code_challenge_method={{ code_challenge_method
-        }}&response_type={{ response_type }}&response_mode={{ response_mode }}&allow={{ user_id }}">
-        <input type="submit" value="Deny" formaction="{{ route }}?client_id={{ client_id }}{%- if let Some(secret) = client_secret -%}&client_secret={{ secret }}{%- endif -%}&redirect_uri={{ redirect_uri }}&scope={{scope }}&state={{ state }}&code_challenge={{ code_challenge }}&code_challenge_method={{ code_challenge_method }}&response_type={{ response_type }}&response_mode={{ response_mode }}&deny=true">
+    <form action="{{ route }}" method="post">
+        <input
+            type="submit"
+            value="Accept"
+            formaction="{{- route -}}
+                ?client_id={{- client_id | urlencode_strict -}}
+                {%- if let Some(secret) = client_secret -%}
+                    &client_secret={{- secret -}}
+                {%- endif -%}
+                &redirect_uri={{- redirect_uri | urlencode_strict -}}
+                &scope={{- scope | urlencode_strict -}}
+                &state={{- state | urlencode_strict -}}
+                &code_challenge={{- code_challenge -}}
+                &code_challenge_method={{- code_challenge_method -}}
+                &response_type={{- response_type -}}
+                &response_mode={{- response_mode -}}
+                &allow={{- user_id -}}"
+        >
+        <input
+            type="submit"
+            value="Deny"
+            formaction="{{- route -}}
+                ?client_id={{- client_id | urlencode_strict -}}
+                {%- if let Some(secret) = client_secret -%}
+                    &client_secret={{- secret -}}
+                {%- endif -%}
+                &redirect_uri={{- redirect_uri | urlencode_strict -}}
+                &scope={{- scope | urlencode_strict -}}
+                &state={{- state | urlencode_strict -}}
+                &code_challenge={{- code_challenge -}}
+                &code_challenge_method={{- code_challenge_method -}}
+                &response_type={{- response_type -}}
+                &response_mode={{- response_mode -}}
+                &deny=true"
+        >
     </form>
 </div>
 {%- endblock content -%}

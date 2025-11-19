@@ -41,14 +41,15 @@ fn consent_page(hostname: &str, query: &AuthorizationQuery, route: &str, nonce: 
 		route,
 		user_id: &encode(&user_id),
 		client_id: &encode(query.client_id.as_str()),
+		client_name: query.client_name.as_deref(),
 		client_secret: query.client_secret.as_deref(),
-		redirect_uri: &encode(query.redirect_uri.as_str()),
-		scope: &encode(query.scope.as_str()),
-		state: &encode(query.state.as_str()),
-		code_challenge: &encode(query.code_challenge.as_str()),
-		code_challenge_method: &encode(query.code_challenge_method.as_str()),
-		response_type: &encode(query.response_type.as_str()),
-		response_mode: &encode(response_mode.as_str()),
+		redirect_uri: query.redirect_uri.as_str(),
+		scope: query.scope.as_str(),
+		state: query.state.as_str(),
+		code_challenge: query.code_challenge.as_str(),
+		code_challenge_method: query.code_challenge_method.as_str(),
+		response_type: query.response_type.as_str(),
+		response_mode,
 	};
 
 	template.render().expect("consent page render")

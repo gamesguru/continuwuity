@@ -13,6 +13,7 @@ pub struct LoginQuery {
 	pub username: String,
 	pub password: String,
 	pub client_id: String,
+	pub client_name: Option<String>,
 	pub client_secret: Option<String>,
 	pub redirect_uri: Url,
 	pub scope: String,
@@ -41,6 +42,8 @@ impl TryFrom<OidcRequest> for LoginQuery {
 		let Some(client_id) = body.unique_value("client_id") else {
 			return Err(LoginError("missing field: client_id".to_owned()));
 		};
+		let client_name = body.unique_value("client_name").map(|s| s.to_string());
+		let client_secret = body.unique_value("client_secret").map(|s| s.to_string());
 		let Some(redirect_uri) = body.unique_value("redirect_uri") else {
 			return Err(LoginError("missing field: redirect_uri".to_owned()));
 		};
@@ -73,6 +76,7 @@ impl TryFrom<OidcRequest> for LoginQuery {
 			username: username.to_string(),
 			password: password.to_string(),
 			client_id: client_id.to_string(),
+            client_name,
 			client_secret,
 			redirect_uri,
 			scope: scope.to_string(),
@@ -112,6 +116,7 @@ fn login_page(hostname: &str, query: &AuthorizationQuery, route: &str, nonce: &s
 		hostname,
 		route,
 		client_id: query.client_id.as_str(),
+		client_name: query.client_name.as_deref(),
 		client_secret: query.client_secret.as_deref(),
 		redirect_uri: query.redirect_uri.as_str(),
 		scope: query.scope.as_str(),

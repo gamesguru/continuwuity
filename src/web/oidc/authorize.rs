@@ -6,6 +6,7 @@ use super::LoginQuery;
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct AuthorizationQuery {
 	pub client_id: String,
+	pub client_name: Option<String>,
 	pub client_secret: Option<String>,
 	pub redirect_uri: Url,
 	pub scope: String,
@@ -21,6 +22,7 @@ impl From<LoginQuery> for AuthorizationQuery {
 	fn from(value: LoginQuery) -> Self {
 		let LoginQuery {
 			client_id,
+            client_name,
 			client_secret,
 			redirect_uri,
 			scope,
@@ -35,6 +37,7 @@ impl From<LoginQuery> for AuthorizationQuery {
 
 		Self {
 			client_id,
+            client_name,
 			client_secret,
 			redirect_uri,
 			scope,
