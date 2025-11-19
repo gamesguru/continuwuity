@@ -1,6 +1,18 @@
+use std::borrow::Cow;
+
 use axum::extract::State;
-use conduwuit::{Result, err, utils::hash::verify_password};
-use conduwuit_web::oidc::{LoginError, LoginQuery, OidcRequest, OidcResponse, oidc_consent_form};
+use conduwuit::{Result, debug, err, utils::hash::verify_password};
+use conduwuit_web::oidc::{
+	// TODO add consent form.
+	AuthorizationQuery,
+	LoginError,
+	LoginQuery,
+	OidcRequest,
+	OidcResponse,
+	oidc_consent_form,
+};
+use oxide_auth::{code_grant::authorization::Error as AuthorizationError, endpoint::WebResponse};
+use oxide_auth_async::code_grant;
 use ruma::user_id::UserId;
 
 //#[axum::debug_handler]
@@ -35,14 +47,56 @@ pub(crate) async fn oidc_login(
 		return Err(err!(Request(InvalidParam("password does not match"))));
 	}
 	// TODO check if user disabled, etc. See /src/api/client/session.rs
-	let hostname = services.config.server_name.host();
 	tracing::info!("logging in {user_id:?}");
 
-	services
-		.oidc
-		.endpoint()
+	/*
+	let issuer = services.oidc.endpoint.get_mut().issuer;
+
+	issuer
 		.with_solicitor(oidc_consent_form(hostname, &query.into()))
 		.authorization_flow()
 		.execute(request)
 		.map_err(|err| err!(Request(Unknown("authorisation failed: {err:?}"))))
+	*/
+
+	let query: AuthorizationQuery = query.into();
+
+	let mut endpoint = services.oidc.endpoint.lock().await;
+	let pending =
+		match code_grant::authorization::authorization_code(&mut *endpoint, &query).await {
+			| Err(e) => match e {
+				| AuthorizationError::Ignore => {
+					debug!(?user_id, "authorization request ignored");
+					return Err(err!(Request(Unknown("authorization request ignored"))));
+				},
+				| AuthorizationError::Redirect(url) => {
+					debug!(?user_id, "authorization request was redirected");
+					let mut response = OidcResponse::default();
+					response
+						.redirect(url.into())
+						.map_err(|e| err!(Request(Unknown("{}", e))))?;
+					return Ok(response);
+				},
+				| AuthorizationError::PrimitiveError => {
+					debug!(?user_id, "there was a primitive error while authorizing");
+					return Err(err!(Request(Unknown("primitive error"))));
+				},
+			},
+			| Ok(pending) => pending,
+		};
+
+	let user_id = Cow::from(user_id.to_string());
+	match pending.authorize(&mut *endpoint, user_id.clone()).await {
+		| Err(_) => {
+			debug!(?user_id, "there was a primitive error while allowing auth");
+			Err(err!(Request(Unknown("primitive error"))))
+		},
+		| Ok(url) => {
+			let mut web_response = OidcResponse::default();
+			web_response
+				.redirect(url)
+				.map_err(|e| err!(Request(Unknown("{}", e))))?;
+			Ok(web_response)
+		},
+	}
 }

@@ -75,7 +75,7 @@ pub(crate) async fn register_client(
 	Json(client): Json<ClientQuery>,
 ) -> Result<Json<ClientResponse>> {
 	tracing::trace!("processing OIDC device register request for client: {client:#?}");
-	if client.redirect_uris.is_empty() {
+	if client.redirect_uris.len() == 0 {
 		return Err(err!(Request(Unknown(
 			"the client's registration request should contain at least a redirect_uri"
 		))));
@@ -107,6 +107,7 @@ pub(crate) async fn register_client(
 			device_id.as_ref(),
 			redirect_uri,
 			scope,
+			// client_secret was built above, so unwrap().
 			client_secret.as_ref().unwrap().as_bytes(),
 		)
 		.with_additional_redirect_uris(remaining_uris),
@@ -114,9 +115,10 @@ pub(crate) async fn register_client(
 			.with_additional_redirect_uris(remaining_uris),
 	};
 	tracing::trace!("registering OIDC device : {registration:#?}");
-	services
-		.oidc
-		.register_client(Some(client.client_name.clone()), registration);
+	let endpoint = services.oidc.endpoint.lock().await;
+	endpoint
+		.registrar
+		.register_client(Some(client.client_name.clone()), &registration);
 
 	let client_response = ClientResponse {
 		client_id: device_id.to_string(),

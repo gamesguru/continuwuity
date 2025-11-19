@@ -30,7 +30,7 @@ use ruma::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{Dep, account_data, admin, appservice, globals, oidc, rooms};
+use crate::{Dep, account_data, admin, appservice, globals, rooms};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSuspension {
@@ -53,7 +53,6 @@ struct Services {
 	admin: Dep<admin::Service>,
 	appservice: Dep<appservice::Service>,
 	globals: Dep<globals::Service>,
-	oidc: Dep<oidc::Service>,
 	state_accessor: Dep<rooms::state_accessor::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
 }
@@ -91,7 +90,6 @@ impl crate::Service for Service {
 				account_data: args.depend::<account_data::Service>("account_data"),
 				admin: args.depend::<admin::Service>("admin"),
 				appservice: args.depend::<appservice::Service>("appservice"),
-				oidc: args.depend::<oidc::Service>("oidc"),
 				globals: args.depend::<globals::Service>("globals"),
 				state_accessor: args
 					.depend::<rooms::state_accessor::Service>("rooms::state_accessor"),
@@ -273,18 +271,7 @@ impl Service {
 
 	/// Find out which user an access token belongs to.
 	pub async fn find_from_token(&self, token: &str) -> Result<(OwnedUserId, OwnedDeviceId)> {
-		if self
-			.services
-			.server
-			.config
-			.auth
-			.as_ref()
-			.is_some_and(|auth| auth.enable_oidc_login)
-		{
-			self.services.oidc.user_and_device_from_token(token).await
-		} else {
-			self.db.token_userdeviceid.get(token).await.deserialized()
-		}
+		self.db.token_userdeviceid.get(token).await.deserialized()
 	}
 
 	/// Returns an iterator over all users on this homeserver (offered for
@@ -550,24 +537,7 @@ impl Service {
 		// Only existing devices should be able to call this, but we shouldn't assert
 		// either...
 		let key = (user_id, device_id);
-		if self
-			.services
-			.server
-			.config
-			.auth
-			.as_ref()
-			.is_some_and(|auth| auth.enable_oidc_login)
-		{
-			if self
-				.services
-				.oidc
-				.client_from_device_id(device_id.into())
-				.await?
-				.is_none()
-			{
-				return Err!(Database(error!(?user_id, ?device_id, "Device has no metadata.")));
-			}
-		} else if self.db.userdeviceid_metadata.qry(&key).await.is_err() {
+		if self.db.userdeviceid_metadata.qry(&key).await.is_err() {
 			return Err!(Database(error!(
 				?user_id,
 				?device_id,

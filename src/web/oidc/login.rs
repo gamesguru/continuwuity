@@ -22,6 +22,7 @@ pub struct LoginQuery {
 	pub code_challenge_method: String,
 	pub response_type: String,
 	pub response_mode: String,
+	pub owner_allowance: Option<String>,
 }
 
 #[derive(Debug)]
@@ -65,18 +66,18 @@ impl TryFrom<OidcRequest> for LoginQuery {
 		let Ok(redirect_uri) = Url::from_str(&redirect_uri) else {
 			return Err(LoginError("invalid field: redirect_uri".to_owned()));
 		};
+		let owner_allowance = body.unique_value("allow").map(|s| s.to_string());
 		// response_mode is not strictly needed : it must be the literal "fragment"
 		// when over https. It's required by the spec but Fractal doesn't provide it.
 		let response_mode = body
 			.unique_value("response_mode")
 			.unwrap_or(Cow::Borrowed("fragment"));
-		let client_secret = body.unique_value("client_secret").map(|s| s.to_string());
 
 		Ok(Self {
 			username: username.to_string(),
 			password: password.to_string(),
 			client_id: client_id.to_string(),
-            client_name,
+			client_name,
 			client_secret,
 			redirect_uri,
 			scope: scope.to_string(),
@@ -85,13 +86,15 @@ impl TryFrom<OidcRequest> for LoginQuery {
 			code_challenge_method: code_challenge_method.to_string(),
 			response_type: response_type.to_string(),
 			response_mode: response_mode.to_string(),
+			owner_allowance,
 		})
 	}
 }
 
 /// A web login form for the OIDC authentication flow.
 ///
-/// The returned `OidcResponse` handles CSP headers to allow that form.
+/// The returned `OidcResponse` handles CSP headers to owner_allowance that
+/// form.
 #[must_use]
 pub fn oidc_login_form(hostname: &str, query: &AuthorizationQuery) -> OidcResponse {
 	// The target request route.

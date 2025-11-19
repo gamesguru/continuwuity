@@ -12,6 +12,7 @@ mod login;
 mod request;
 mod response;
 mod revoke;
+mod token;
 pub use authorize::AuthorizationQuery;
 pub use consent::oidc_consent_form;
 pub use error::OidcError;
@@ -19,6 +20,7 @@ pub use login::{LoginError, LoginQuery, oidc_login_form};
 pub use request::OidcRequest;
 pub use response::OidcResponse;
 pub use revoke::RevokeQuery;
+pub use token::AccessTokenForm;
 
 /// The parameters for the OIDC login page template.
 #[derive(Template)]

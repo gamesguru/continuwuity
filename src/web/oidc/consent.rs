@@ -29,8 +29,7 @@ fn consent_page(hostname: &str, query: &AuthorizationQuery, route: &str, nonce: 
 	let response_mode = query
 		.response_mode
 		.as_deref()
-		.unwrap_or("fragment")
-		.to_owned();
+		.unwrap_or("fragment");
 	let user_id = query
 		.username
 		.clone()

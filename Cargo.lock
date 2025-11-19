@@ -1044,6 +1044,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "oxide-auth",
+ "oxide-auth-async",
  "percent-encoding",
  "rand 0.8.5",
  "reqwest",
@@ -1196,6 +1197,7 @@ dependencies = [
  "base64 0.22.1",
  "blurhash",
  "bytes",
+ "chrono",
  "conduwuit_core",
  "conduwuit_database",
  "const-str",
@@ -1213,6 +1215,7 @@ dependencies = [
  "lru-cache",
  "once_cell",
  "oxide-auth",
+ "oxide-auth-async",
  "rand 0.8.5",
  "recaptcha-verify",
  "regex",
@@ -3437,6 +3440,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "subtle",
+ "url",
+]
+
+[[package]]
+name = "oxide-auth-async"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5979faf468f3386b8dc0e60acbaffdbb1ad387d9fd58dd9c71d05514e4a940d1"
+dependencies = [
+ "async-trait",
+ "base64 0.21.7",
+ "chrono",
+ "oxide-auth",
  "url",
 ]
 

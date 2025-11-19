@@ -1,14 +1,17 @@
+use std::borrow::Cow;
+
 use axum::extract::{Query, State};
-use conduwuit::{Result, err, utils::ReadyExt};
+use conduwuit::{Result, debug, err};
 use conduwuit_web::oidc::{
-	AuthorizationQuery, OidcRequest, OidcResponse, oidc_consent_form, oidc_login_form,
+	AuthorizationQuery,
+	OidcRequest,
+	OidcResponse,
+	oidc_consent_form,
+	oidc_login_form,
 };
-use oxide_auth::{
-	endpoint::{OwnerConsent, Solicitation},
-	frontends::simple::endpoint::FnSolicitor,
-};
+use oxide_auth::{code_grant::authorization::Error as AuthorizationError, endpoint::WebResponse};
+use oxide_auth_async::code_grant;
 use percent_encoding::percent_decode_str;
-use ruma::UserId;
 use service::oidc::{SCOPE_PREFIX_API, SCOPE_PREFIX_DEVICE};
 
 /// # `GET /_matrix/client/unstable/org.matrix.msc2964/authorize`
@@ -24,6 +27,7 @@ pub(crate) async fn authorize(
 	Query(query): Query<AuthorizationQuery>,
 	oauth: OidcRequest,
 ) -> Result<OidcResponse> {
+	// TODO add solicitor page.
 	tracing::trace!("processing OAuth request: {query:#?}");
 	// Enforce MSC2964's restrictions on OAuth2 flow.
 	let Ok(scope) = percent_decode_str(&query.scope).decode_utf8() else {
@@ -46,11 +50,13 @@ pub(crate) async fn authorize(
 	};
 
 	tracing::debug!("submitting OIDC authorisation for token : {token:#?}");
-	// Get the user id from the token and add it to the query.
-	let (owner_id, _) = services.oidc.user_and_device_from_token(token).await?;
-	let mut query_with_user_id = query.clone();
-	query_with_user_id.username = Some(owner_id.localpart().to_owned());
 
+	// Add the user_id to the query.
+	let (user_id, device_id) = services.users.find_from_token(token).await?;
+	let mut query_with_user_id = query.clone();
+	query_with_user_id.username = Some(user_id.localpart().to_string());
+
+	/*
 	services
 		.oidc
 		.endpoint()
@@ -58,12 +64,74 @@ pub(crate) async fn authorize(
 		.authorization_flow()
 		.execute(oauth)
 		.map_err(|err| err!("authorization failed: {err:?}"))
-}
+	*/
 
-/// Whether a user allows their device to access this homeserver's resources.
-#[derive(serde::Deserialize)]
-pub(crate) struct Allowance {
-	allow: Option<String>,
+	let mut endpoint = services.oidc.endpoint.lock().await;
+	let pending =
+		match code_grant::authorization::authorization_code(&mut *endpoint, &query_with_user_id)
+			.await
+		{
+			| Err(e) => match e {
+				| AuthorizationError::Ignore => {
+					debug!(?user_id, ?device_id, "authorization request ignored");
+					return Err(err!(Request(Unknown("authorization request ignored"))));
+				},
+				| AuthorizationError::Redirect(url) => {
+					debug!(?user_id, ?device_id, "authorization request was redirected");
+					let mut response = OidcResponse::default();
+					response
+						.redirect(url.into())
+						.map_err(|e| err!(Request(Unknown("{}", e))))?;
+					return Ok(response);
+				},
+				| AuthorizationError::PrimitiveError => {
+					debug!(?user_id, ?device_id, "there was a primitive error while authorizing");
+					return Err(err!(Request(Unknown("primitive error"))));
+				},
+			},
+			| Ok(pending) => pending,
+		};
+
+	match query.owner_allowance.as_deref() {
+		| Some("false") => match pending.deny() {
+			| Err(AuthorizationError::Redirect(url)) => {
+				debug!(?user_id, ?device_id, "authorization request was redirected");
+				let mut response = OidcResponse::default();
+				response
+					.redirect(url.into())
+					.map_err(|e| err!(Request(Unknown("{}", e))))?;
+
+				Ok(response)
+			},
+			| _ => {
+				debug!(?user_id, ?device_id, "there was a primitive error while denying auth");
+
+				Err(err!(Request(Unknown("primitive error"))))
+			},
+		},
+		| _ => {
+			let user_id = Cow::from(user_id.to_string());
+			match pending.authorize(&mut *endpoint, user_id.clone()).await {
+				| Err(_) => {
+					debug!(
+						?user_id,
+						?device_id,
+						"there was a primitive error while allowing auth"
+					);
+
+					Err(err!(Request(Unknown("primitive error"))))
+				},
+				| Ok(url) => {
+					let mut web_response = OidcResponse::default();
+					web_response
+						.redirect(url)
+						.map_err(|e| err!(Request(Unknown("{}", e))))?;
+
+					Ok(web_response)
+				},
+			}
+		},
+	}
 }
 
 /// # `POST /_matrix/client/unstable/org.matrix.msc2964/authorize?allow=[Option<String>]`
@@ -76,54 +144,16 @@ pub(crate) struct Allowance {
 /// registered in their device list (not to be confused with the OIDC client
 /// registration).
 pub(crate) async fn authorize_consent(
-	Query(Allowance { allow }): Query<Allowance>,
 	State(services): State<crate::State>,
 	Query(query): Query<AuthorizationQuery>,
 	oauth: OidcRequest,
 ) -> Result<OidcResponse> {
-	tracing::debug!("processing owner's consent: {:?}", allow);
+	tracing::debug!("processing owner's consent");
 	tracing::trace!("owner's consent request: {:#?}", query);
-	let Some(owner_id) = allow.clone() else {
-		return Err(err!(Request(Unknown("the owner did not consent to the client's access"))));
-	};
-	let server_name = services.globals.server_name();
-	let owner_id = UserId::parse_with_server_name(owner_id.clone(), server_name)
-		.map_err(|err| err!(Request(InvalidUsername("invalid username {owner_id:?}: {err}"))))?;
-	let Some(matrix_client) = services
-		.oidc
-		.client_from_client_id(&query.client_id)
-		.await?
-	else {
-		return Err(err!(Request(Unknown(
-			"no client has registered client_id {:?}",
-			query.client_id
-		))));
-	};
-	let scope = query.scope.parse().map_err(|err| {
-		err!(Request(Unknown("could not parse scope {:?}: {}", query.scope, err)))
-	})?;
-	let device_id = services.oidc.device_id_from_scope(&scope)?;
-	// Check that the device is registered in the owner devices list.
-	// Note that this is _not_ the OIDC client registration.
-	let device_is_registered_with_owner = services
-		.users
-		.all_device_ids(&owner_id)
-		.ready_any(|v| v == device_id)
-		.await;
-	if !device_is_registered_with_owner {
-		// TODO get the client's IP from the request.
-		let client_ip = None;
-		services
-			.oidc
-			.register_device(
-				&query.client_id,
-				(&owner_id, &device_id),
-				matrix_client.name.as_deref(),
-				client_ip,
-			)
-			.await?;
-	}
 
+	authorize(State(services), Query(query), oauth).await
+
+	/*
 	services
 		.oidc
 		.endpoint()
@@ -134,4 +164,5 @@ pub(crate) async fn authorize_consent(
 		.authorization_flow()
 		.execute(oauth)
 		.map_err(|err| err!(Request(Unknown("consent request failed: {err:?}"))))
+	*/
 }

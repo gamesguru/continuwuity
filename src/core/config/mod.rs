@@ -2036,9 +2036,6 @@ pub struct AuthConfig {
 	/// Unset by default.
 	pub enable_oidc_login: bool,
 
-	/// A secret seed to generate OIDC tokens.
-	pub issuer_secret: String,
-
 	/// Whether this homeserver should provide users with an account management
 	/// interface. Only used if `enable_oidc_login` is set. Note that the
 	/// endpoint is unimplemented at the moment.

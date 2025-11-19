@@ -10,7 +10,7 @@ pub(crate) async fn revoke(
 	Query(query): Query<RevokeQuery>,
 ) -> Result<()> {
 	tracing::trace!("processing user's client revoke request: {query:#?}");
-	services.oidc.revoke_device(&query.token);
+	let mut endpoint = services.oidc.endpoint.lock().await;
 
-	Ok(())
+	endpoint.issuer.revoke_device(&query.token).await
 }

@@ -95,6 +95,7 @@ tokio.workspace = true
 tracing.workspace = true
 ctor.workspace = true
 oxide-auth.workspace = true
+oxide-auth-async.workspace = true
 conduwuit-web.workspace = true
 percent-encoding.workspace = true
 
