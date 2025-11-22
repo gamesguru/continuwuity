@@ -1,8 +1,8 @@
 use std::{borrow::Cow, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{Result, trace};
-use database::{Deserialized, Json, Map};
+use conduwuit_core::{Result, trace};
+use conduwuit_database::{Deserialized, Json, Map};
 use once_cell::sync::Lazy;
 use oxide_auth::{
 	endpoint::{PreGrant, Scope},
@@ -28,12 +28,13 @@ pub struct OidcClient {
 	pub client: EncodedClient,
 }
 
-pub struct OxideRegistrar {
+/// A simple DB registrar that stores known clients in its DB.
+pub struct OidcRegistrar {
 	clientid_oidcclient: Arc<Map>,
 }
 
-impl OxideRegistrar {
-	pub fn new(clientid_oidcclient: Arc<Map>) -> Self { OxideRegistrar { clientid_oidcclient } }
+impl OidcRegistrar {
+	pub fn new(clientid_oidcclient: Arc<Map>) -> Self { OidcRegistrar { clientid_oidcclient } }
 
 	pub async fn get_client(&self, client_id: &str) -> Result<Option<OidcClient>> {
 		if let Err(_) = self.clientid_oidcclient.exists(client_id).await {
@@ -59,7 +60,7 @@ impl OxideRegistrar {
 
 /// Let this service act as an oxide-auth-async client app `Registrar`.
 #[async_trait]
-impl Registrar for OxideRegistrar {
+impl Registrar for OidcRegistrar {
 	/// Determine the allowed redirect_uri for the client.
 	async fn bound_redirect<'a>(
 		&self,
@@ -152,7 +153,7 @@ impl Registrar for OxideRegistrar {
 }
 
 #[async_trait]
-impl Registrar for &OxideRegistrar {
+impl Registrar for &OidcRegistrar {
 	async fn bound_redirect<'a>(
 		&self,
 		bound: ClientUrl<'a>,

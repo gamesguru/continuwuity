@@ -1,47 +1,50 @@
-use async_trait::async_trait;
-use conduwuit_oidc::{AsyncSolicitor, OidcError, OidcRequest, OidcResponse};
+use axum::async_trait;
 use oxide_auth::{
 	endpoint::{OAuthError, Scope, Scopes, Template, WebRequest},
 	frontends::simple::extensions::AddonList,
-	primitives::{
-		prelude::{AuthMap, RandomGenerator},
-		registrar::RegisteredUrl,
-	},
+	primitives::{prelude::{AuthMap, RandomGenerator}, registrar::RegisteredUrl},
 };
-use oxide_auth_async::{
-	endpoint::{Endpoint, Extension, OwnerSolicitor},
-	primitives::{Authorizer, Issuer, Registrar},
-};
+use oxide_auth_async::{endpoint::{Endpoint, Extension, OwnerSolicitor}, primitives::{Authorizer, Issuer, Registrar}};
 use url::Url;
 
-mod issuer;
-pub use issuer::OxideIssuer;
+mod device_store;
+pub use device_store::DeviceStore;
 mod registrar;
-pub use registrar::OxideRegistrar;
+pub use registrar::{OidcClient, OidcRegistrar};
+mod solicitor;
+pub use solicitor::AsyncSolicitor;
+mod issuer;
+pub use issuer::{OidcDevice, OidcIssuer};
 
-pub struct OxideEndpoint {
-	/// Authorization codes are 16 byte random keys to a memory hash map.
-	///
-	/// Will be reinitialised on continuwuity's restart.
+use crate::{OidcError, OidcRequest, OidcResponse};
+
+pub const SCOPE_PREFIX_DEVICE: &str = "urn:matrix:org.matrix.msc2967.client:device:";
+pub const SCOPE_PREFIX_API: &str = "urn:matrix:org.matrix.msc2967.client:api:";
+
+pub struct OidcEndpoint<R, I>
+where 
+	R: Registrar,
+	I: Issuer,
+{
 	pub authorizer: AuthMap<RandomGenerator>,
-	pub registrar: OxideRegistrar,
-	pub issuer: OxideIssuer,
+	pub registrar: R,
+	pub issuer: I,
 	pub solicitor: AsyncSolicitor,
 	pub extension: AddonList,
 	pub scopes: Vec<Scope>,
 }
 
-impl OxideEndpoint {
-	pub(super) fn from_primitives(
-		registrar: OxideRegistrar,
-		issuer: OxideIssuer,
-		solicitor: AsyncSolicitor,
-	) -> Self {
+impl<R, I> OidcEndpoint<R, I>
+where 
+	R: Registrar + Sync + Send,
+	I: Issuer + Sync + Send,
+{
+	pub fn from_primitives(registrar: R, issuer: I, solicitor: AsyncSolicitor) -> Self {
 		let authorizer = AuthMap::new(RandomGenerator::new(16));
 		let extension = AddonList::new();
 		let scopes = Vec::new();
 
-		OxideEndpoint {
+		OidcEndpoint {
 			authorizer,
 			registrar,
 			issuer,
@@ -49,11 +52,16 @@ impl OxideEndpoint {
 			extension,
 			scopes,
 		}
+
 	}
 }
 
 #[async_trait]
-impl Endpoint<OidcRequest> for &mut OxideEndpoint {
+impl<R, I> Endpoint<OidcRequest> for &mut OidcEndpoint<R, I>
+where 
+	R: Registrar + Sync + Send,
+	I: Issuer + Sync + Send,
+{
 	type Error = OidcError;
 
 	fn registrar(&self) -> Option<&(dyn Registrar + Sync)> { Some(&self.registrar) }
@@ -91,6 +99,11 @@ impl Endpoint<OidcRequest> for &mut OxideEndpoint {
 
 	fn extension(&mut self) -> Option<&mut (dyn Extension + Send)> { None }
 }
+
+
+
+
+
 
 /// Substitute "127.0.0.1" and "[::1]" for "localhost" to let oxide-auth compare
 /// them ignoring their port.

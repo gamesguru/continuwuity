@@ -1,6 +1,6 @@
 use axum::extract::{Query, State};
 use conduwuit::Result;
-use conduwuit_oidc::RevokeQuery;
+use conduwuit_oidc::flows::RevokeQuery;
 
 /// # `GET /_matrix/client/unstable/org.matrix.msc4254/revoke`
 ///

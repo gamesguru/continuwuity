@@ -16,20 +16,17 @@ use async_trait::async_trait;
 use axum::extract::FromRef;
 use axum_extra::extract::cookie::Key;
 use conduwuit::Result;
-use conduwuit_oidc::AsyncSolicitor;
+use conduwuit_oidc::endpoint::{AsyncSolicitor, OidcEndpoint, OidcIssuer, OidcRegistrar};
 use futures::lock::Mutex;
 use ruma::OwnedServerName;
 
 use crate::{state::State, users};
 
-mod endpoint;
-pub use endpoint::{OxideEndpoint, OxideIssuer, OxideRegistrar, normalize_redirect};
-
-pub const SCOPE_PREFIX_DEVICE: &str = "urn:matrix:org.matrix.msc2967.client:device:";
-pub const SCOPE_PREFIX_API: &str = "urn:matrix:org.matrix.msc2967.client:api:";
+mod device_store;
+use device_store::DbDeviceStore;
 
 pub struct Service {
-	pub endpoint: Arc<Mutex<OxideEndpoint>>,
+	pub endpoint: Arc<Mutex<OidcEndpoint<OidcRegistrar, OidcIssuer<DbDeviceStore>>>>,
 	pub server_name: OwnedServerName,
 	pub login_token_ttl: i64,
 	pub refresh_token_ttl: i64,
@@ -43,19 +40,21 @@ impl crate::Service for Service {
 		let login_token_ttl = args.server.config.login_token_ttl as i64;
 		let refresh_token_ttl = 7_200_000;
 		let cookie_signing_key = Key::generate();
-		let issuer = OxideIssuer::new(
+		let device_store = DbDeviceStore::new(args.depend::<users::Service>("users"));
+		let issuer = OidcIssuer::new(
 			server_name.clone(),
 			login_token_ttl,
 			refresh_token_ttl,
 			args.db["refreshtoken_userdeviceidexpiresat"].clone(),
 			args.db["clientid_oidcclient"].clone(),
 			args.db["userdeviceid_oidcdevice"].clone(),
-			args.depend::<users::Service>("users"),
+			device_store,
 		);
-		let registrar = OxideRegistrar::new(args.db["clientid_oidcclient"].clone());
+		let registrar = OidcRegistrar::new(args.db["clientid_oidcclient"].clone());
 		let solicitor = AsyncSolicitor { hostname: server_name.to_string() };
 		let endpoint =
-			Arc::new(Mutex::new(OxideEndpoint::from_primitives(registrar, issuer, solicitor)));
+			Arc::new(Mutex::new(OidcEndpoint::from_primitives(registrar, issuer, solicitor)));
+
 		Ok(Arc::new(Self {
 			endpoint,
 			server_name,

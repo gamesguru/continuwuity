@@ -1,7 +1,7 @@
 use axum::{extract::State, response::IntoResponse};
 use axum_extra::extract::{SignedCookieJar, cookie::Cookie};
 use conduwuit::{Result, err, utils::hash::verify_password};
-use conduwuit_oidc::{LoginQuery, OidcRequest};
+use conduwuit_oidc::{flows::LoginQuery, OidcRequest};
 use oxide_auth_async::endpoint::authorization::AuthorizationFlow;
 use ruma::user_id::UserId;
 

@@ -1,6 +1,6 @@
 use axum::{Json, extract::State};
 use conduwuit::{Result, err};
-use conduwuit_service::oidc::normalize_redirect;
+use conduwuit_oidc::endpoint::normalize_redirect;
 use oxide_auth::primitives::prelude::Client;
 use reqwest::Url;
 use ruma::{ClientSecret, DeviceId, identifiers_validation};

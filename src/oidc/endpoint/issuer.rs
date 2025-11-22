@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use conduwuit::{
-	err, trace,
-	utils::{ReadyExt, millis_since_unix_epoch, result::Result},
+use conduwuit_core::{
+	debug, err, trace,
+	utils::{millis_since_unix_epoch, result::Result},
 };
-use database::{Deserialized, Json, Map};
+use conduwuit_database::{Deserialized, Json, Map};
 use oxide_auth::{
 	endpoint::Scope,
 	primitives::{
@@ -19,12 +19,7 @@ use oxide_auth_async::primitives::Issuer;
 use ruma::{DeviceId, OwnedDeviceId, OwnedServerName, OwnedUserId, UserId};
 use serde::{Deserialize, Serialize};
 
-use super::normalize_redirect;
-use crate::{
-	Dep,
-	oidc::{SCOPE_PREFIX_DEVICE, endpoint::registrar::OidcClient},
-	users,
-};
+use super::{normalize_redirect, SCOPE_PREFIX_DEVICE, registrar::OidcClient, DeviceStore};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OidcDevice {
@@ -41,43 +36,38 @@ pub struct OidcDevice {
 /// tokens which can be read and parsed by anyone, but not maliciously
 /// created. However, they can not be revoked and thus don't offer even
 /// longer lived refresh tokens.
-///
-/// Will be reinitialised on continuwuity's restart.
-pub struct OxideIssuer {
+pub struct OidcIssuer<T> where T: DeviceStore {
 	pub server_name: OwnedServerName,
 	pub token_ttl: i64,
 	pub refresh_ttl: i64,
-	/// Maps [String] refresh tokens to
-	///
-	///		(([OwnedUserId], [OwnedDeviceId]), `expires_at`)
-	///
-	///	where `expires_at` is an [i64] timestamp in milliseconds.
+	/// Maps [String] refresh tokens to (([OwnedUserId], [OwnedDeviceId]),
+	/// `expires_at`) where `expires_at` is an [i64] timestamp.
 	refreshtoken_userdeviceidexpiresat: Arc<Map>,
 	/// Maps client id [String]s to [OidcClient]s.
 	clientid_oidcclient: Arc<Map>,
 	/// Maps (&[UserId], &[DeviceId]) to their [OidcDevice].
 	userdeviceid_oidcdevice: Arc<Map>,
-	users: Dep<users::Service>,
+	devices: T,
 }
 
-impl OxideIssuer {
-	pub(crate) fn new(
+impl<T> OidcIssuer<T> where T: DeviceStore {
+	pub fn new(
 		server_name: OwnedServerName,
 		token_ttl: i64,
 		refresh_ttl: i64,
 		refreshtoken_userdeviceidexpiresat: Arc<Map>,
 		clientid_oidcclient: Arc<Map>,
 		userdeviceid_oidcdevice: Arc<Map>,
-		users: Dep<users::Service>,
+		devices: T,
 	) -> Self {
-		OxideIssuer {
+		OidcIssuer {
 			server_name,
 			token_ttl,
 			refresh_ttl,
 			refreshtoken_userdeviceidexpiresat,
 			clientid_oidcclient,
 			userdeviceid_oidcdevice,
-			users,
+			devices,
 		}
 	}
 
@@ -103,7 +93,7 @@ impl OxideIssuer {
 	}
 
 	pub async fn revoke_device(&mut self, token: &str) -> Result<()> {
-		let key = self.users.find_from_token(token).await?;
+		let key = self.devices.find(token).await?;
 		self.userdeviceid_oidcdevice.del(&key);
 
 		Ok(())
@@ -111,12 +101,12 @@ impl OxideIssuer {
 }
 
 #[async_trait]
-impl Issuer for OxideIssuer {
-	/// Create a token authorizing the request parameters.
+impl<T> Issuer for OidcIssuer<T> where T: DeviceStore {
 	async fn issue(&mut self, grant: Grant) -> Result<IssuedToken, ()> {
-		trace!(?grant, "issuer creating token");
+		debug!("issuing token for {grant:?}");
 		let user_id = UserId::parse_with_server_name(&grant.owner_id, &self.server_name)
 			.expect("valid owner id in grant");
+		trace!("deserialising device id");
 		let device_id = deviceid_from_scope(grant.scope.clone())
 			.expect("valid device id from the grant's scope");
 		let client = self
@@ -124,19 +114,14 @@ impl Issuer for OxideIssuer {
 			.await
 			.map_err(|_| ())?
 			.ok_or(())?;
-		let access_token = self.users.generate_unique_token().await;
-		let refresh_token = self.users.generate_unique_token().await;
+		let access_token = self.devices.generate_token().await;
+		let refresh_token = self.devices.generate_token().await;
 		let until = Utc::now() + Duration::milliseconds(self.token_ttl);
 		let refresh_until = Utc::now() + Duration::milliseconds(self.refresh_ttl);
 
 		trace!("checking if the device is registered");
 		// Register the device if not registered in the owner devices list.
-		let device_is_registered_with_owner = self
-			.users
-			.all_device_ids(&user_id)
-			.ready_any(|v| v == device_id)
-			.await;
-		if !device_is_registered_with_owner {
+		if ! self.devices.exists(&user_id, &device_id).await {
 			let oidc_device = OidcDevice {
 				client_id: grant.client_id,
 				scope: grant.scope,
@@ -145,8 +130,8 @@ impl Issuer for OxideIssuer {
 				until: until.timestamp_millis() as u64,
 			};
 			trace!("saving device metadata");
-			self.users
-				.create_device(&user_id, &device_id, &access_token, client.name, None)
+			self.devices
+				.create(&user_id, &device_id, &access_token, client.name, None)
 				.await
 				.map_err(|_| ())?;
 			trace!("saving device OIDC details");
@@ -156,7 +141,7 @@ impl Issuer for OxideIssuer {
 
 		// Store the device's login token.
 		trace!("saving device's access token");
-		self.users
+		self.devices
 			.set_token(&user_id, &device_id, &access_token)
 			.await
 			.map_err(|_| ())?;
@@ -164,10 +149,9 @@ impl Issuer for OxideIssuer {
 		// Store the device's refresh token with the device id.
 		trace!("saving device's refresh token");
 		let value = ((user_id, device_id), refresh_until.timestamp_millis());
-		self.refreshtoken_userdeviceidexpiresat
-			.put(refresh_token.clone(), value);
-		trace!(?access_token, ?until, ?refresh_token, ?refresh_until, "returning token");
+		self.refreshtoken_userdeviceidexpiresat.put(refresh_token.clone(), value);
 
+		trace!("returning token");
 		Ok(IssuedToken {
 			token: access_token,
 			refresh: Some(refresh_token),
@@ -176,57 +160,46 @@ impl Issuer for OxideIssuer {
 		})
 	}
 
-	/// Refresh a token.
 	async fn refresh(&mut self, refresh: &str, grant: Grant) -> Result<RefreshedToken, ()> {
-		trace!(?grant, "issuer refreshing grant");
-		/*
-		let user_id = UserId::parse_with_server_name(&grant.owner_id, &self.server_name)
-			.expect("valid owner id in grant");
-		let device_id = deviceid_from_scope(grant.scope.clone())
-			.expect("valid device id from the grant's scope");
-		let client = self
-			.get_client(&grant.client_id)
-			.await
-			.map_err(|_| ())?
-			.ok_or(())?;
-		trace!(?client, "got oidc client");
-		*/
-		let handle = self
+		let expected_device_id = deviceid_from_scope(grant.scope.clone()).map_err(|_| ())?;
+		trace!("getting refresh token's expiration date");
+		let ((user_id, device_id), expires_at): ((OwnedUserId, OwnedDeviceId), i64) = self
 			.refreshtoken_userdeviceidexpiresat
 			.get(refresh)
 			.await
+			.map_err(|_| ())?
+			.deserialized()
 			.map_err(|_| ())?;
-		trace!("issuer got grant handle");
-		let ((user_id, device_id), expires_at): ((OwnedUserId, OwnedDeviceId), i64) =
-			handle.deserialized().map_err(|_| ())?;
-		trace!(?expires_at, "issuer got refreshable grant");
+
+		// Check the device id.
+		if device_id != expected_device_id {
+			debug!("the device ID doesn't match the one recorded");
+			return Err(());
+		}
 
 		// Check the refresh token's expiration date.
 		if (expires_at as u64) < millis_since_unix_epoch() {
 			trace!(?user_id, ?device_id, ?refresh, "refresh token is expired, removing device");
 			self.refreshtoken_userdeviceidexpiresat.remove(&refresh);
-			self.users.remove_device(&user_id, &device_id).await;
+			self.devices.remove(&user_id, &device_id).await;
 			return Err(());
 		}
 
 		let until = Utc::now() + Duration::milliseconds(self.token_ttl);
-		let refresh_until = Utc::now() + Duration::milliseconds(self.refresh_ttl);
-		trace!(?until, ?refresh_until, "using updated expiries");
 
 		// Replace the old token with a new one.
-		let new_access = self.users.generate_unique_token().await;
-		let new_refresh = self.users.generate_unique_token().await;
-		self.users
+		let new_access = self.devices.generate_token().await;
+		let new_refresh = self.devices.generate_token().await;
+		self.devices
 			.set_token(&user_id, &device_id, &new_access)
 			.await
 			.map_err(|_| ())?;
 
 		// Store the device's refresh token with the device id.
 		// TODO remove old refresh tokens.
-
+		let refresh_until = Utc::now() + Duration::milliseconds(self.refresh_ttl);
 		let value = ((user_id, device_id), refresh_until.timestamp_millis());
-		self.refreshtoken_userdeviceidexpiresat
-			.put(new_refresh.clone(), value);
+		self.refreshtoken_userdeviceidexpiresat.put(new_refresh.clone(), value);
 
 		Ok(RefreshedToken {
 			token: new_access,
@@ -236,116 +209,70 @@ impl Issuer for OxideIssuer {
 		})
 	}
 
-	/// Get the values corresponding to a bearer token.
 	async fn recover_token<'a>(&'a mut self, token: &str) -> Result<Option<Grant>, ()> {
-		trace!("issuer recovering token");
-		let (user_id, device_id) = self.users.find_from_token(token).await.map_err(|_| ())?;
-		let oidc_device = self
+		let (user_id, device_id) = self.devices.find(token).await.map_err(|_| ())?;
+		let device = self
 			.get_device(&user_id, &device_id)
 			.await
 			.map_err(|_| ())?;
-		trace!(?oidc_device, "got oidc_device, checking expiration");
 
-		// Check that the oidc_device is not expired.
-		if oidc_device.until < millis_since_unix_epoch() {
-			trace!(?user_id, ?device_id, ?token, "removing expired oidc_device");
-			self.users.remove_device(&user_id, &device_id).await;
-			self.refreshtoken_userdeviceidexpiresat.remove(&token);
+		// Check that the device is not expired.
+		if device.until < millis_since_unix_epoch() {
+			trace!(?user_id, ?device_id, ?token, "removing expired device");
+			self.devices.remove(&user_id, &device_id).await;
 			return Err(());
 		}
 
 		// TODO the cast as i64 could overflow, deal with it.
-		let until = DateTime::from_timestamp_millis(oidc_device.until as i64)
-			.expect("some valid timestamp");
+		let until =
+			DateTime::from_timestamp_millis(device.until as i64).expect("some valid timestamp");
 		let grant = Grant {
 			owner_id: user_id.to_string(),
-			client_id: oidc_device.client_id,
-			scope: oidc_device.scope,
-			redirect_uri: oidc_device.redirect_uri.to_url(),
+			client_id: device.client_id,
+			scope: device.scope,
+			redirect_uri: device.redirect_uri.to_url(),
 			until,
 			// TODO understand what extensions are.
 			extensions: Extensions::new(),
 		};
-		trace!(?until, "issuer returning recovered token");
 
 		Ok(Some(grant))
 	}
 
-	/// Get the values corresponding to a refresh token.
 	async fn recover_refresh<'a>(&'a mut self, refresh: &str) -> Result<Option<Grant>, ()> {
-		trace!("issuer recovering refresh");
 		// First check that the token exists.
-		let handle = self
+		let ((user_id, device_id), expires_at): ((OwnedUserId, OwnedDeviceId), i64) = self
 			.refreshtoken_userdeviceidexpiresat
 			.get(refresh)
 			.await
+			.map_err(|_| ())?
+			.deserialized()
 			.map_err(|_| ())?;
-		trace!("issuer got refresh handle");
-		let ((user_id, device_id), expires_at): ((OwnedUserId, OwnedDeviceId), i64) =
-			handle.deserialized().map_err(|_| ())?;
-		trace!("got refresh, checking for oidc_device");
-		let oidc_device = self
+		let device = self
 			.get_device(&user_id, &device_id)
 			.await
 			.map_err(|_| ())?;
-		trace!(?oidc_device, "got oidc_device, checking expiration");
 
 		// Then check that it's not expired.
 		if (expires_at as u64) < millis_since_unix_epoch() {
-			trace!(?oidc_device, ?refresh, "removing expired oidc_device refresh token");
-			self.users.remove_device(&user_id, &device_id).await;
-			self.refreshtoken_userdeviceidexpiresat.remove(&refresh);
+			trace!(?device, ?refresh, "removing expired device refresh token");
+			self.devices.remove(&user_id, &device_id).await;
 			return Err(());
 		}
 
 		// TODO the cast as i64 could overflow, deal with it.
-		let until = DateTime::from_timestamp_millis(oidc_device.until as i64)
-			.expect("some valid timestamp");
+		let until =
+			DateTime::from_timestamp_millis(device.until as i64).expect("some valid timestamp");
 		let grant = Grant {
 			owner_id: user_id.to_string(),
-			client_id: oidc_device.client_id,
-			scope: oidc_device.scope,
-			redirect_uri: oidc_device.redirect_uri.to_url(),
+			client_id: device.client_id,
+			scope: device.scope,
+			redirect_uri: device.redirect_uri.to_url(),
 			until,
 			extensions: Extensions::new(),
 		};
-		trace!(?grant, "issuer returning grant");
 
 		Ok(Some(grant.into()))
-	}
-}
-
-#[async_trait]
-impl Issuer for &OxideIssuer {
-	async fn issue(&mut self, grant: Grant) -> Result<IssuedToken, ()> { self.issue(grant).await }
-
-	async fn refresh(&mut self, refresh: &str, grant: Grant) -> Result<RefreshedToken, ()> {
-		self.refresh(refresh, grant).await
-	}
-
-	async fn recover_token(&mut self, token: &str) -> Result<Option<Grant>, ()> {
-		self.recover_token(token).await
-	}
-
-	async fn recover_refresh(&mut self, refresh: &str) -> Result<Option<Grant>, ()> {
-		self.recover_refresh(refresh).await
-	}
-}
-
-#[async_trait]
-impl Issuer for &mut OxideIssuer {
-	async fn issue(&mut self, grant: Grant) -> Result<IssuedToken, ()> { self.issue(grant).await }
-
-	async fn refresh(&mut self, refresh: &str, grant: Grant) -> Result<RefreshedToken, ()> {
-		self.refresh(refresh, grant).await
-	}
-
-	async fn recover_token(&mut self, token: &str) -> Result<Option<Grant>, ()> {
-		self.recover_token(token).await
-	}
-
-	async fn recover_refresh(&mut self, refresh: &str) -> Result<Option<Grant>, ()> {
-		self.recover_refresh(refresh).await
 	}
 }
 

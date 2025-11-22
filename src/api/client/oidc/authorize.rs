@@ -1,11 +1,14 @@
 use axum::extract::{Query, State};
 use axum_extra::extract::SignedCookieJar;
 use conduwuit::{Result, err};
-use conduwuit_oidc::{AuthorizationQuery, OidcRequest, OidcResponse, oidc_login_form};
+use conduwuit_oidc::{
+	OidcRequest, OidcResponse,
+	endpoint::{SCOPE_PREFIX_API, SCOPE_PREFIX_DEVICE},
+	flows::{AuthorizationQuery, oidc_login_form},
+};
 use oxide_auth_async::endpoint::authorization::AuthorizationFlow;
 use percent_encoding::percent_decode_str;
 use ruma::UserId;
-use service::oidc::{SCOPE_PREFIX_API, SCOPE_PREFIX_DEVICE};
 
 /// # `GET /_matrix/client/unstable/org.matrix.msc2964/authorize`
 ///

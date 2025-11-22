@@ -6,7 +6,8 @@ use conduwuit_build_metadata::{GIT_REMOTE_COMMIT_URL, GIT_REMOTE_WEB_URL, versio
 use oxide_auth::{endpoint::QueryParameter, frontends::simple::request::Body};
 use url::Url;
 
-use super::{AuthorizationQuery, OidcRequest, OidcResponse};
+use crate::{OidcRequest, OidcResponse};
+use super::AuthorizationQuery;
 
 /// The parameters for the OIDC login page template.
 #[derive(Template)]

@@ -1,12 +1,35 @@
 use std::{borrow::Cow, str::FromStr};
 
+use askama::Template;
+use conduwuit_build_metadata::{GIT_REMOTE_COMMIT_URL, GIT_REMOTE_WEB_URL, version_tag};
 use oxide_auth::{
 	code_grant::authorization::Request as AuthorizationRequest, endpoint::QueryParameter,
 };
 use url::Url;
 
-use super::LoginQuery;
 use crate::OidcRequest;
+use super::LoginQuery;
+
+/// The parameters for the OIDC consent page template.
+#[derive(Template)]
+#[template(path = "consent.html.j2")]
+pub(crate) struct ConsentPageTemplate<'a> {
+	pub(crate) nonce: &'a str,
+	pub(crate) hostname: &'a str,
+	pub(crate) route: &'a str,
+	pub(crate) beneficiary: &'a str,
+	pub(crate) client_id: &'a str,
+	pub(crate) client_name: Option<&'a str>,
+	pub(crate) client_secret: Option<&'a str>,
+	pub(crate) redirect_uri: &'a str,
+	pub(crate) scope: &'a str,
+	pub(crate) state: &'a str,
+	pub(crate) code_challenge: &'a str,
+	pub(crate) code_challenge_method: &'a str,
+	pub(crate) response_type: &'a str,
+	pub(crate) response_mode: &'a str,
+}
+
 
 /// The set of parameters required for an OIDC authorization request.
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -62,16 +85,14 @@ impl TryFrom<OidcRequest> for AuthorizationQuery {
 	type Error = AuthError;
 
 	fn try_from(value: OidcRequest) -> Result<Self, Self::Error> {
-		//let query = value.body().ok_or(AuthError::NoBody)?;
+		// Grab data from the query if present, if not from the body.
 		let query = value.query().or(value.body()).ok_or(AuthError::NoQuery)?;
 
 		let getopt = |key| query.unique_value(key).map(|s| s.to_string());
-		let get = |key| {
-			query
-				.unique_value(key)
-				.ok_or(AuthError::MissingField(key.into()))
-				.map(|s| s.to_string())
-		};
+		let get = |key| query
+			.unique_value(key)
+			.ok_or(AuthError::MissingField(key.into()))
+			.map(|s| s.to_string());
 
 		Ok(AuthorizationQuery {
 			client_id: get("client_id")?,
