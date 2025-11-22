@@ -13,11 +13,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use axum::extract::FromRef;
+use axum_extra::extract::cookie::Key;
 use conduwuit::Result;
+use conduwuit_oidc::AsyncSolicitor;
 use futures::lock::Mutex;
 use ruma::OwnedServerName;
 
-use crate::users;
+use crate::{users, state::State};
 
 mod endpoint;
 pub use endpoint::{OxideEndpoint, OxideIssuer, OxideRegistrar, normalize_redirect};
@@ -30,6 +33,7 @@ pub struct Service {
 	pub server_name: OwnedServerName,
 	pub login_token_ttl: i64,
 	pub refresh_token_ttl: i64,
+	pub(crate) cookie_signing_key: Key,
 }
 
 #[async_trait]
@@ -38,6 +42,7 @@ impl crate::Service for Service {
 		let server_name = args.server.config.server_name.clone();
 		let login_token_ttl = args.server.config.login_token_ttl as i64;
 		let refresh_token_ttl = 7_200_000;
+		let cookie_signing_key = Key::generate();
 		let issuer = OxideIssuer::new(
 			server_name.clone(),
 			login_token_ttl,
@@ -48,14 +53,28 @@ impl crate::Service for Service {
 			args.depend::<users::Service>("users"),
 		);
 		let registrar = OxideRegistrar::new(args.db["clientid_oidcclient"].clone());
-		let endpoint = Arc::new(Mutex::new(OxideEndpoint::from_primitives(registrar, issuer)));
+		let solicitor = AsyncSolicitor { hostname: server_name.to_string() };
+		let endpoint = Arc::new(Mutex::new(OxideEndpoint::from_primitives(
+				registrar,
+				issuer,
+				solicitor,
+		)));
 		Ok(Arc::new(Self {
 			endpoint,
 			server_name,
 			login_token_ttl,
 			refresh_token_ttl,
+			cookie_signing_key,
 		}))
 	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
+
+/// Let `CookieJar`s access their signing key.
+impl FromRef<State> for Key {
+	fn from_ref(services: &State) -> Self {
+	    services.oidc.cookie_signing_key.clone()
+	}
+}
+

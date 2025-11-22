@@ -1,18 +1,11 @@
-use std::borrow::Cow;
-
-use axum::extract::State;
-use conduwuit::{Result, debug, err, utils::hash::verify_password};
-use conduwuit_web::oidc::{
-	// TODO add consent form.
-	AuthorizationQuery,
-	LoginError,
+use axum::{extract::State, response::IntoResponse};
+use axum_extra::extract::{SignedCookieJar, cookie::Cookie};
+use conduwuit::{Result, err, utils::hash::verify_password};
+use conduwuit_oidc::{
 	LoginQuery,
 	OidcRequest,
-	OidcResponse,
-	oidc_consent_form,
 };
-use oxide_auth::{code_grant::authorization::Error as AuthorizationError, endpoint::WebResponse};
-use oxide_auth_async::code_grant;
+use oxide_auth_async::endpoint::authorization::AuthorizationFlow;
 use ruma::user_id::UserId;
 
 //#[axum::debug_handler]
@@ -24,12 +17,13 @@ use ruma::user_id::UserId;
 /// [super::authorize::authorize_consent].
 pub(crate) async fn oidc_login(
 	State(services): State<crate::State>,
+	jar: SignedCookieJar,
 	request: OidcRequest,
-) -> Result<OidcResponse> {
-	let query: LoginQuery = request.clone().try_into().map_err(|LoginError(err)| {
-		err!(Request(InvalidParam("Cannot process login form. {err}")))
-	})?;
-	tracing::trace!("processing login query {:#?}", query.clone());
+) -> Result<impl IntoResponse> {
+	let query: LoginQuery = request
+		.clone()
+		.try_into()
+		.map_err(|err| err!(Request(InvalidParam("Cannot process login form. {err:?}"))))?;
 	// Only accept local usernames. Mostly to simplify things at first.
 	let user_id =
 		UserId::parse_with_server_name(query.username.clone(), &services.config.server_name)
@@ -46,57 +40,35 @@ pub(crate) async fn oidc_login(
 	if verify_password(&query.password, &valid_hash).is_err() {
 		return Err(err!(Request(InvalidParam("password does not match"))));
 	}
+
 	// TODO check if user disabled, etc. See /src/api/client/session.rs
+
+	let jar = jar.add(default_cookie("user_id", user_id.to_string()));
 	tracing::info!("logging in {user_id:?}");
 
-	/*
-	let issuer = services.oidc.endpoint.get_mut().issuer;
-
-	issuer
-		.with_solicitor(oidc_consent_form(hostname, &query.into()))
-		.authorization_flow()
-		.execute(request)
-		.map_err(|err| err!(Request(Unknown("authorisation failed: {err:?}"))))
-	*/
-
-	let query: AuthorizationQuery = query.into();
-
+	tracing::trace!("submitting login flow with {request:#?}");
 	let mut endpoint = services.oidc.endpoint.lock().await;
-	let pending =
-		match code_grant::authorization::authorization_code(&mut *endpoint, &query).await {
-			| Err(e) => match e {
-				| AuthorizationError::Ignore => {
-					debug!(?user_id, "authorization request ignored");
-					return Err(err!(Request(Unknown("authorization request ignored"))));
-				},
-				| AuthorizationError::Redirect(url) => {
-					debug!(?user_id, "authorization request was redirected");
-					let mut response = OidcResponse::default();
-					response
-						.redirect(url.into())
-						.map_err(|e| err!(Request(Unknown("{}", e))))?;
-					return Ok(response);
-				},
-				| AuthorizationError::PrimitiveError => {
-					debug!(?user_id, "there was a primitive error while authorizing");
-					return Err(err!(Request(Unknown("primitive error"))));
-				},
-			},
-			| Ok(pending) => pending,
-		};
+	let mut flow = AuthorizationFlow::prepare(&mut *endpoint)
+		.map_err(|e| err!(Request(Unknown("flow preparation: {:?}", e))))?;
 
-	let user_id = Cow::from(user_id.to_string());
-	match pending.authorize(&mut *endpoint, user_id.clone()).await {
-		| Err(_) => {
-			debug!(?user_id, "there was a primitive error while allowing auth");
-			Err(err!(Request(Unknown("primitive error"))))
-		},
-		| Ok(url) => {
-			let mut web_response = OidcResponse::default();
-			web_response
-				.redirect(url)
-				.map_err(|e| err!(Request(Unknown("{}", e))))?;
-			Ok(web_response)
-		},
-	}
+	let oidc_response = flow.execute(request)
+		.await
+		.map_err(|e| err!(Request(Unknown("flow execution: {:?}", e))))?;
+
+	// Build up a response with the cookie jar embedded, so it's commited by the client.
+	Ok((jar, oidc_response.into_response()).into_response())
+}
+
+fn default_cookie<'a>(
+	key: &str,
+	user_id: String,
+) -> Cookie<'a> {
+	Cookie::build((key.to_string(), user_id))
+		.path("/")
+		.http_only(true)
+		// TODO make this a global setting ?
+		// TODO import the cookie crate and cookie::time::Duration.
+		//.max_age(Duration::new(24 * 60 * 60, 0).into())
+		.secure(true)
+		.build()
 }

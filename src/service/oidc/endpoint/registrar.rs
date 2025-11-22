@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::Result;
+use conduwuit::{Result, trace};
 use database::{Deserialized, Json, Map};
 use once_cell::sync::Lazy;
 use oxide_auth::{
@@ -57,13 +57,15 @@ impl OxideRegistrar {
 	}
 }
 
-/// Let this service act as an oxide-auth client app `Registrar`.
+/// Let this service act as an oxide-auth-async client app `Registrar`.
 #[async_trait]
 impl Registrar for OxideRegistrar {
+	/// Determine the allowed redirect_uri for the client.
 	async fn bound_redirect<'a>(
 		&self,
 		bound: ClientUrl<'a>,
 	) -> Result<BoundClient<'a>, RegistrarError> {
+		trace!(?bound, "registrar fetching client redirect");
 		let Some(oidc_client) = self
 			.get_client(bound.client_id.as_ref())
 			.await
@@ -71,6 +73,7 @@ impl Registrar for OxideRegistrar {
 		else {
 			return Err(RegistrarError::Unspecified);
 		};
+		trace!(?oidc_client, "registrar got oidc client");
 		let client = oidc_client.client;
 
 		// Perform exact matching as motivated in the rfc, but substitute
@@ -90,7 +93,7 @@ impl Registrar for OxideRegistrar {
 					// If normalized_uri is Some(url), so is redirect_uri, so unwrap().
 					redirect_uri.unwrap().into_owned().into()
 				} else {
-					tracing::debug!(
+					tracing::trace!(
 						"the request's redirect url didn't match any registered. bound: {:?}, \
 						 in client {:#?}",
 						url,
@@ -100,6 +103,7 @@ impl Registrar for OxideRegistrar {
 				}
 			},
 		};
+		trace!(?redirect_uri, "registrar pushing redirect_uri");
 
 		Ok(BoundClient {
 			client_id: bound.client_id,
@@ -107,21 +111,16 @@ impl Registrar for OxideRegistrar {
 		})
 	}
 
+	/// Determine the allowed scope for the client.
 	async fn negotiate<'a>(
 		&self,
 		bound: BoundClient<'a>,
 		scope: Option<Scope>,
 	) -> Result<PreGrant, RegistrarError> {
-		let Some(oidc_client) = self
-			.get_client(bound.client_id.as_ref())
-			.await
-			.map_err(|_| RegistrarError::PrimitiveError)?
-		else {
+		trace!(?bound, ?scope, "registrar doing negociate");
+		let Some(scope) = scope else {
 			return Err(RegistrarError::Unspecified);
 		};
-		// Note that issuing a token to a default scope will not work,
-		// as the issuer uses the scope to get the device_id.
-		let scope = scope.unwrap_or(oidc_client.client.default_scope);
 
 		Ok(PreGrant {
 			client_id: bound.client_id.into_owned(),
@@ -130,11 +129,14 @@ impl Registrar for OxideRegistrar {
 		})
 	}
 
+	/// Log the client in (not the user, not the device either). Currently limited to
+	/// checking that the client is registered.
 	async fn check(
 		&self,
 		client_id: &str,
 		passphrase: Option<&[u8]>,
 	) -> Result<(), RegistrarError> {
+		trace!(?client_id, ?passphrase, "registrar doing client check");
 		let Some(oidc_client) = self
 			.get_client(client_id)
 			.await
@@ -143,6 +145,7 @@ impl Registrar for OxideRegistrar {
 			return Err(RegistrarError::Unspecified);
 		};
 
+		trace!(?oidc_client, "registrar check passed");
 		RegisteredClient::new(&oidc_client.client, &*PASSWORD_POLICY)
 			.check_authentication(passphrase)
 	}

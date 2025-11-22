@@ -1,9 +1,14 @@
 use std::borrow::Cow;
 
-use oxide_auth::code_grant::{
-	accesstoken::{Authorization, Request as AccessTokenRequest},
-	refresh::Request as RefreshTokenRequest,
+use oxide_auth::{
+	code_grant::{
+		accesstoken::{Authorization, Request as AccessTokenRequest},
+		refresh::Request as RefreshTokenRequest,
+	},
+	endpoint::QueryParameter,
 };
+
+use crate::OidcRequest;
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct AccessTokenForm<'a> {
@@ -18,6 +23,7 @@ pub struct AccessTokenForm<'a> {
 }
 
 impl AccessTokenRequest for AccessTokenForm<'_> {
+	/// Placeholder TODO replace.
 	fn valid(&self) -> bool { true }
 
 	fn code(&self) -> Option<Cow<'_, str>> { self.code.clone() }
@@ -30,16 +36,17 @@ impl AccessTokenRequest for AccessTokenForm<'_> {
 
 	fn authorization(&self) -> Authorization<'_> { Authorization::None }
 
-	/// Placeholder.
+	/// Placeholder TODO replace.
 	fn extension(&self, _key: &str) -> Option<Cow<'_, str>> { None }
 }
 
 impl RefreshTokenRequest for AccessTokenForm<'_> {
+	/// Placeholder TODO replace.
 	fn valid(&self) -> bool { true }
 
 	fn refresh_token(&self) -> Option<Cow<'_, str>> { self.refresh_token.clone() }
 
-	/// Placeholder.
+	/// Placeholder TODO replace.
 	fn authorization(&self) -> Option<(Cow<'_, str>, Cow<'_, [u8]>)> { None }
 
 	fn scope(&self) -> Option<Cow<'_, str>> { self.scope.clone() }
@@ -48,4 +55,38 @@ impl RefreshTokenRequest for AccessTokenForm<'_> {
 
 	/// Wild-guessed.
 	fn grant_type(&self) -> Option<Cow<'_, str>> { Some(Cow::Borrowed("refresh_token")) }
+}
+
+#[derive(Debug)]
+pub enum AuthError {
+	NoBody,
+	MissingField(String),
+	InvalidField(String),
+}
+
+impl TryFrom<&mut OidcRequest> for AccessTokenForm<'_> {
+	type Error = AuthError;
+
+	fn try_from(value: &mut OidcRequest) -> Result<Self, Self::Error> {
+		AccessTokenForm::try_from(value.clone())
+	}
+}
+
+impl TryFrom<OidcRequest> for AccessTokenForm<'_> {
+	type Error = AuthError;
+	
+	fn try_from(value: OidcRequest) -> Result<Self, Self::Error> {
+		let body = value.body().ok_or(AuthError::NoBody)?;
+		let getopt = |key| body.unique_value(key).map(|s| Cow::Owned(s.to_string()));
+
+	    Ok(AccessTokenForm {
+			code: getopt("code_challenge"),
+			code_verifier: getopt("code_challenge_method"),
+			client_id: getopt("client_id"),
+			grant_type: getopt("grant_type"),
+			redirect_uri: getopt("redirect_uri"),
+			scope: getopt("scope"),
+			refresh_token: getopt("refresh_token"),
+		})
+	}
 }

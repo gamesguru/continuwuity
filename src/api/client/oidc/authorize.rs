@@ -1,13 +1,12 @@
-use std::borrow::Cow;
-
 use axum::extract::{Query, State};
-use conduwuit::{Result, debug, err};
-use conduwuit_web::oidc::{
-	AuthorizationQuery, OidcRequest, OidcResponse, oidc_consent_form, oidc_login_form,
+use axum_extra::extract::SignedCookieJar;
+use conduwuit::{Result, err};
+use conduwuit_oidc::{
+	AuthorizationQuery, OidcRequest, OidcResponse, oidc_login_form,
 };
-use oxide_auth::{code_grant::authorization::Error as AuthorizationError, endpoint::WebResponse};
-use oxide_auth_async::code_grant;
+use oxide_auth_async::endpoint::authorization::AuthorizationFlow;
 use percent_encoding::percent_decode_str;
+use ruma::UserId;
 use service::oidc::{SCOPE_PREFIX_API, SCOPE_PREFIX_DEVICE};
 
 /// # `GET /_matrix/client/unstable/org.matrix.msc2964/authorize`
@@ -20,11 +19,11 @@ use service::oidc::{SCOPE_PREFIX_API, SCOPE_PREFIX_DEVICE};
 /// access to stage two, [authorize_consent].
 pub(crate) async fn authorize(
 	State(services): State<crate::State>,
+	jar: SignedCookieJar,
 	Query(query): Query<AuthorizationQuery>,
-	oauth: OidcRequest,
+	mut request: OidcRequest,
 ) -> Result<OidcResponse> {
 	// TODO add solicitor page.
-	tracing::trace!("processing OAuth request: {query:#?}");
 	// Enforce MSC2964's restrictions on OAuth2 flow.
 	let Ok(scope) = percent_decode_str(&query.scope).decode_utf8() else {
 		return Err(err!(Request(Unknown("the scope could not be percent-decoded"))));
@@ -39,95 +38,24 @@ pub(crate) async fn authorize(
 		return Err(err!(Request(Unknown("unsupported code challenge method"))));
 	}
 
-	// Redirect to the login page if no token or token not known.
-	let hostname = services.config.server_name.host();
-	let Some(token) = oauth.authorization_header() else {
+	let Some(user_id) = jar.get("user_id").map(|cookie| cookie.value().to_owned()) else {
+		let hostname = services.config.server_name.host();
 		return Ok(oidc_login_form(hostname, &query));
 	};
+	let user_id = UserId::parse(&user_id)?;
+	tracing::debug!("submitting OIDC authorisation for user_id {user_id}");
 
-	tracing::debug!("submitting OIDC authorisation for token : {token:#?}");
+	// Add the username field to the request so it's used as beneficiary in the consent form.
+	request.add_username_to_query(user_id.localpart())
+		.map_err(|e| err!(Request(Unknown("cannot add username to query: {e:?}"))))?;
 
-	// Add the user_id to the query.
-	let (user_id, device_id) = services.users.find_from_token(token).await?;
-	let mut query_with_user_id = query.clone();
-	query_with_user_id.username = Some(user_id.localpart().to_string());
-
-	/*
-	services
-		.oidc
-		.endpoint()
-		.with_solicitor(oidc_consent_form(hostname, &query_with_user_id))
-		.authorization_flow()
-		.execute(oauth)
-		.map_err(|err| err!("authorization failed: {err:?}"))
-	*/
-
+	tracing::trace!("submitting authorization flow with {request:#?}");
 	let mut endpoint = services.oidc.endpoint.lock().await;
-	let pending =
-		match code_grant::authorization::authorization_code(&mut *endpoint, &query_with_user_id)
-			.await
-		{
-			| Err(e) => match e {
-				| AuthorizationError::Ignore => {
-					debug!(?user_id, ?device_id, "authorization request ignored");
-					return Err(err!(Request(Unknown("authorization request ignored"))));
-				},
-				| AuthorizationError::Redirect(url) => {
-					debug!(?user_id, ?device_id, "authorization request was redirected");
-					let mut response = OidcResponse::default();
-					response
-						.redirect(url.into())
-						.map_err(|e| err!(Request(Unknown("{}", e))))?;
-					return Ok(response);
-				},
-				| AuthorizationError::PrimitiveError => {
-					debug!(?user_id, ?device_id, "there was a primitive error while authorizing");
-					return Err(err!(Request(Unknown("primitive error"))));
-				},
-			},
-			| Ok(pending) => pending,
-		};
+	let mut flow = AuthorizationFlow::prepare(&mut *endpoint)
+		.map_err(|e| err!(Request(Unknown("flow preparation: {:?}", e))))?;
 
-	match query.owner_allowance.as_deref() {
-		| Some("false") => match pending.deny() {
-			| Err(AuthorizationError::Redirect(url)) => {
-				debug!(?user_id, ?device_id, "authorization request was redirected");
-				let mut response = OidcResponse::default();
-				response
-					.redirect(url.into())
-					.map_err(|e| err!(Request(Unknown("{}", e))))?;
-
-				Ok(response)
-			},
-			| _ => {
-				debug!(?user_id, ?device_id, "there was a primitive error while denying auth");
-
-				Err(err!(Request(Unknown("primitive error"))))
-			},
-		},
-		| _ => {
-			let user_id = Cow::from(user_id.to_string());
-			match pending.authorize(&mut *endpoint, user_id.clone()).await {
-				| Err(_) => {
-					debug!(
-						?user_id,
-						?device_id,
-						"there was a primitive error while allowing auth"
-					);
-
-					Err(err!(Request(Unknown("primitive error"))))
-				},
-				| Ok(url) => {
-					let mut web_response = OidcResponse::default();
-					web_response
-						.redirect(url)
-						.map_err(|e| err!(Request(Unknown("{}", e))))?;
-
-					Ok(web_response)
-				},
-			}
-		},
-	}
+	flow.execute(request).await
+		.map_err(|e| err!(Request(Unknown("flow execution: {:?}", e))))
 }
 
 /// # `POST /_matrix/client/unstable/org.matrix.msc2964/authorize?allow=[Option<String>]`
@@ -141,24 +69,16 @@ pub(crate) async fn authorize(
 /// registration).
 pub(crate) async fn authorize_consent(
 	State(services): State<crate::State>,
-	Query(query): Query<AuthorizationQuery>,
-	oauth: OidcRequest,
+	jar: SignedCookieJar,
+	request: OidcRequest,
 ) -> Result<OidcResponse> {
+	// The request's query, either GET or POST fields.
+	let query: AuthorizationQuery = request.clone().try_into()
+		.map_err(|_| err!(Request(Unknown("cannot parse request"))))?;
+
 	tracing::debug!("processing owner's consent");
-	tracing::trace!("owner's consent request: {:#?}", query);
+	tracing::trace!("owner's consent query: {:#?}", query);
 
-	authorize(State(services), Query(query), oauth).await
-
-	/*
-	services
-		.oidc
-		.endpoint()
-		.with_solicitor(FnSolicitor(move |_: &mut _, _: Solicitation<'_>| match allow.clone() {
-			| None => OwnerConsent::Denied,
-			| Some(user_id) => OwnerConsent::Authorized(user_id),
-		}))
-		.authorization_flow()
-		.execute(oauth)
-		.map_err(|err| err!(Request(Unknown("consent request failed: {err:?}"))))
-	*/
+	// Pass the consent form fields as GET query fields.
+	authorize(State(services), jar, Query(query), request).await
 }

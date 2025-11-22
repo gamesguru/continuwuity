@@ -38,6 +38,16 @@ impl OidcRequest {
 	/// Fetch the body of the request
 	#[must_use]
 	pub fn body(&self) -> Option<&NormalizedParameter> { self.body.as_ref() }
+
+	pub fn add_username_to_query(&mut self, username: &str) -> Result<(), OidcError> {
+		let query = self.query_mut().ok_or(OidcError::Query)?;
+		if query.unique_value("username").is_some() {
+			return Err(OidcError::InternalError(Some("there already was a username".into())));
+		}
+		query.insert_or_poison("username".into(), username.to_string().into());
+
+		Ok(())
+	}
 }
 
 impl WebRequest for OidcRequest {
@@ -98,19 +108,17 @@ where
 			.ok()
 			.map(|b: Form<NormalizedParameter>| b.0);
 
-		// If the query is empty and the body has a request, copy it over
+		// If the query is None or empty and the body has a request, copy it over
 		// because login forms are POST requests but OAuth flow expects
 		// arguments in query.
+
 		let query = match query {
-			| None => body.clone(),
-			| Some(params) => {
-				//if params == NormalizedParameter::new() {
-				if params.unique_value("client_id").is_none() {
-					body.clone()
-				} else {
-					Some(params)
-				}
+			// If the query is non-empty, it should have a client_id.
+			| Some(params) => match params.unique_value("client_id") {
+				Some(_) => Some(params),
+				None => body.clone(),
 			},
+			| None => body.clone(),
 		};
 
 		Ok(Self { auth, query, body })

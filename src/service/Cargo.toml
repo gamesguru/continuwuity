@@ -82,11 +82,14 @@ zstd_compression = [
 
 [dependencies]
 async-trait.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 conduwuit-core.workspace = true
 conduwuit-database.workspace = true
+conduwuit-oidc.workspace = true
 const-str.workspace = true
 either.workspace = true
 futures.workspace = true

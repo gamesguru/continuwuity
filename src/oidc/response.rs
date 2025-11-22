@@ -4,12 +4,12 @@ use axum::{
 	response::IntoResponse,
 };
 use oxide_auth::{
-	endpoint::{OwnerConsent, OwnerSolicitor, Solicitation, WebRequest, WebResponse},
+	endpoint::WebResponse,
 	frontends::simple::request::Body as OAuthRequestBody,
 };
 use url::Url;
 
-use super::{LoginQuery, OidcError, OidcRequest, oidc_consent_form};
+use super::OidcError;
 
 /// A Web response that can be processed by the OIDC authentication flow before
 /// being sent over.
@@ -24,15 +24,14 @@ pub struct OidcResponse {
 
 impl IntoResponse for OidcResponse {
 	fn into_response(self) -> Response<Body> {
-		let csp_src = match self.nonce {
+		let csp_default_src = match self.nonce {
 			| Some(nonce) => &format!("default-src 'nonce-{nonce}';"),
 			| None => "default-src 'none';",
 		};
 		// Adding localhost to the "form-action" directive lets Continuwuity
 		// reply to private clients that call it _from_ localhost, any port.
-		let csp_form_action =
-			"form-action 'self' http://localhost:* http://127.0.0.1:* http://[::1]:*;";
-		let content_csp = format!("{csp_src} {csp_form_action}");
+		let csp_form_action = "form-action 'self' http://localhost:* http://127.0.0.1:*;";
+		let content_csp = format!("{csp_default_src} {csp_form_action}");
 		let content_type = match self.body {
 			| Some(OAuthRequestBody::Json(_)) => "application/json",
 			| _ => "text/html",
@@ -48,25 +47,6 @@ impl IntoResponse for OidcResponse {
 		let body_content = self.body.map(|b| b.as_str().to_owned()).unwrap_or_default();
 
 		response.body(body_content.into()).unwrap()
-	}
-}
-
-/// OidcResponse uses [super::oidc_consent_form] to be turned into an owner
-/// consent solicitation.
-impl OwnerSolicitor<OidcRequest> for OidcResponse {
-	fn check_consent(
-		&mut self,
-		request: &mut OidcRequest,
-		_: Solicitation<'_>,
-	) -> OwnerConsent<<OidcRequest as WebRequest>::Response> {
-		// TODO find a way to pass the hostname to the template.
-		let hostname = "Continuwuity";
-		let query: LoginQuery = request
-			.clone()
-			.try_into()
-			.expect("login query from OidcRequest");
-
-		OwnerConsent::InProgress(oidc_consent_form(hostname, &query.into()))
 	}
 }
 
@@ -110,7 +90,7 @@ impl WebResponse for OidcResponse {
 		Ok(())
 	}
 
-	/// Json response data, with media type `aplication/json.
+	/// Json response data, with media type `aplication/json`.
 	fn body_json(&mut self, data: &str) -> Result<(), Self::Error> {
 		self.body = Some(OAuthRequestBody::Json(data.to_owned()));
 

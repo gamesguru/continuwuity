@@ -1,6 +1,12 @@
 use async_trait::async_trait;
+use conduwuit_oidc::{
+	OidcError,
+	OidcRequest,
+	OidcResponse,
+	AsyncSolicitor,
+};
 use oxide_auth::{
-	endpoint::Scope,
+	endpoint::{OAuthError, Scope, Scopes, Template, WebRequest},
 	frontends::simple::extensions::AddonList,
 	primitives::{
 		prelude::{AuthMap, RandomGenerator},
@@ -8,13 +14,7 @@ use oxide_auth::{
 	},
 };
 use oxide_auth_async::{
-	code_grant::{
-		access_token::Endpoint as TokenEndpoint,
-		authorization::Endpoint as AuthorizationEndpoint,
-		client_credentials::Endpoint as CredentialsEndpoint,
-		refresh::Endpoint as RefreshEndpoint, resource::Endpoint as ResourceEndpoint,
-	},
-	endpoint::{AccessTokenExtension, AuthorizationExtension, ClientCredentialsExtension},
+	endpoint::{Endpoint, Extension, OwnerSolicitor},
 	primitives::{Authorizer, Issuer, Registrar},
 };
 use url::Url;
@@ -31,12 +31,17 @@ pub struct OxideEndpoint {
 	pub authorizer: AuthMap<RandomGenerator>,
 	pub registrar: OxideRegistrar,
 	pub issuer: OxideIssuer,
+	pub solicitor: AsyncSolicitor,
 	pub extension: AddonList,
 	pub scopes: Vec<Scope>,
 }
 
 impl OxideEndpoint {
-	pub(super) fn from_primitives(registrar: OxideRegistrar, issuer: OxideIssuer) -> Self {
+	pub(super) fn from_primitives(
+		registrar: OxideRegistrar,
+		issuer: OxideIssuer,
+		solicitor: AsyncSolicitor,
+	) -> Self {
 		let authorizer = AuthMap::new(RandomGenerator::new(16));
 		let extension = AddonList::new();
 		let scopes = Vec::new();
@@ -45,84 +50,54 @@ impl OxideEndpoint {
 			authorizer,
 			registrar,
 			issuer,
+			solicitor,
 			extension,
 			scopes,
 		}
 	}
+}
 
-	/*
-	pub(super) fn new(
-		users: Dep<users::Service>,
-		server_name: OwnedServerName,
-		token_ttl: i64,
-		refresh_ttl: i64,
-		userdeviceid_oidcdevice: Arc<Map>,
-		refreshtoken_userdeviceidexpiresat: Arc<Map>,
-		clientid_oidcclient: Arc<Map>,
-	) -> Self {
-		OxideEndpoint {
-			authorizer: AuthMap::new(RandomGenerator::new(16)),
-			registrar: OxideRegistrar::new(clientid_oidcclient),
-			issuer: OxideIssuer::new(
-				server_name,
-				token_ttl,
-				refresh_ttl,
-				refreshtoken_userdeviceidexpiresat,
-				userdeviceid_oidcdevice,
-				users,
-			),
-			extension: AddonList::new(),
-			scopes: Vec::new(),
+#[async_trait]
+impl Endpoint<OidcRequest> for &mut OxideEndpoint {
+	type Error = OidcError;
+
+    fn registrar(&self) -> Option<&(dyn Registrar + Sync)> {
+		Some(&self.registrar)
+	}
+    fn authorizer_mut(&mut self) -> Option<&mut (dyn Authorizer + Send)> {
+		Some(&mut self.authorizer)
+	}
+    fn issuer_mut(&mut self) -> Option<&mut (dyn Issuer + Send)> {
+		Some(&mut self.issuer)
+	}
+    fn owner_solicitor(&mut self) -> Option<&mut (dyn OwnerSolicitor<OidcRequest> + Send)> {
+		Some(&mut self.solicitor)
+	}
+    fn scopes(&mut self) -> Option<&mut dyn Scopes<OidcRequest>> {
+		Some(&mut self.scopes)
+	}
+    fn response(
+        &mut self,
+		_request: &mut OidcRequest,
+		_kind: Template<'_>,
+    ) -> Result<<OidcRequest as WebRequest>::Response, Self::Error> {
+		// TODO check.
+		Ok(OidcResponse::default())
+	}
+    fn error(&mut self, err: OAuthError) -> Self::Error {
+		match err {
+			OAuthError::DenySilently => OidcError::Authorization,
+			OAuthError::BadRequest => OidcError::Encoding,
+			OAuthError::PrimitiveError => OidcError::InternalError(None),
 		}
 	}
-	*/
-}
-
-#[async_trait]
-impl TokenEndpoint for OxideEndpoint {
-	fn registrar(&self) -> &(dyn Registrar + Sync) { &self.registrar }
-
-	fn authorizer(&mut self) -> &mut (dyn Authorizer + Send) { &mut self.authorizer }
-
-	fn issuer(&mut self) -> &mut (dyn Issuer + Send) { &mut self.issuer }
-
-	fn extension(&mut self) -> &mut (dyn AccessTokenExtension + Send) { &mut self.extension }
-}
-
-#[async_trait]
-impl AuthorizationEndpoint for OxideEndpoint {
-	fn registrar(&self) -> &(dyn Registrar + Sync) { &self.registrar }
-
-	fn authorizer(&mut self) -> &mut (dyn Authorizer + Send) { &mut self.authorizer }
-
-	fn extension(&mut self) -> &mut (dyn AuthorizationExtension + Send) { &mut self.extension }
-}
-
-#[async_trait]
-impl CredentialsEndpoint for OxideEndpoint {
-	fn registrar(&self) -> &(dyn Registrar + Sync) { &self.registrar }
-
-	fn authorizer(&mut self) -> &mut (dyn Authorizer + Send) { &mut self.authorizer }
-
-	fn issuer(&mut self) -> &mut (dyn Issuer + Send) { &mut self.issuer }
-
-	fn extension(&mut self) -> &mut (dyn ClientCredentialsExtension + Send) {
-		&mut self.extension
+    fn web_error(&mut self, err: OidcError) -> Self::Error {
+		err
 	}
-}
+    fn extension(&mut self) -> Option<&mut (dyn Extension + Send)> {
+        None
+    }
 
-#[async_trait]
-impl RefreshEndpoint for OxideEndpoint {
-	fn registrar(&self) -> &(dyn Registrar + Sync) { &self.registrar }
-
-	fn issuer(&mut self) -> &mut (dyn Issuer + Send) { &mut self.issuer }
-}
-
-#[async_trait]
-impl ResourceEndpoint for OxideEndpoint {
-	fn scopes(&mut self) -> &[Scope] { &mut self.scopes }
-
-	fn issuer(&mut self) -> &mut (dyn Issuer + Send) { &mut self.issuer }
 }
 
 /// Substitute "127.0.0.1" and "[::1]" for "localhost" to let oxide-auth compare

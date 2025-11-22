@@ -111,7 +111,7 @@ features = [
 [workspace.dependencies.axum-extra]
 version = "0.9.6"
 default-features = false
-features = ["typed-header", "tracing"]
+features = ["typed-header", "tracing", "cookie", "cookie-signed"]
 
 [workspace.dependencies.axum-server]
 version = "0.7.2"
@@ -621,6 +621,11 @@ default-features = false
 [workspace.dependencies.conduwuit-api]
 package = "conduwuit_api"
 path = "src/api"
+default-features = false
+
+[workspace.dependencies.conduwuit-oidc]
+package = "conduwuit_oidc"
+path = "src/oidc"
 default-features = false
 
 [workspace.dependencies.conduwuit-service]
