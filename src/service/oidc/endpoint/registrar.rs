@@ -129,8 +129,8 @@ impl Registrar for OxideRegistrar {
 		})
 	}
 
-	/// Log the client in (not the user, not the device either). Currently limited to
-	/// checking that the client is registered.
+	/// Log the client in (not the user, not the device either). Currently
+	/// limited to checking that the client is registered.
 	async fn check(
 		&self,
 		client_id: &str,

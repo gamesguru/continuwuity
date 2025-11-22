@@ -1,6 +1,9 @@
 use askama::Template;
 use axum::{async_trait, http::StatusCode};
-use oxide_auth::{frontends::simple::request::Body, endpoint::{OwnerConsent, Solicitation, WebRequest}};
+use oxide_auth::{
+	endpoint::{OwnerConsent, Solicitation, WebRequest},
+	frontends::simple::request::Body,
+};
 use oxide_auth_async::endpoint::OwnerSolicitor;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
@@ -12,20 +15,21 @@ pub struct AsyncSolicitor {
 
 #[async_trait]
 impl OwnerSolicitor<OidcRequest> for AsyncSolicitor {
-    async fn check_consent(
-        &mut self,
+	async fn check_consent(
+		&mut self,
 		request: &mut OidcRequest,
 		_solicitation: Solicitation<'_>,
-    ) -> OwnerConsent<<OidcRequest as WebRequest>::Response> {
-		let query: AuthorizationQuery = request.try_into()
+	) -> OwnerConsent<<OidcRequest as WebRequest>::Response> {
+		let query: AuthorizationQuery = request
+			.try_into()
 			.expect("OidcRequest should be a valid AuthorizationQuery");
 		if query.deny.is_some() {
 			return OwnerConsent::Denied;
 		}
 
 		match query.allow {
-			Some(username) => OwnerConsent::Authorized(username),
-			None => OwnerConsent::InProgress(oidc_consent_form(&self.hostname, &query)),
+			| Some(username) => OwnerConsent::Authorized(username),
+			| None => OwnerConsent::InProgress(oidc_consent_form(&self.hostname, &query)),
 		}
 	}
 }
@@ -39,10 +43,12 @@ pub(crate) fn oidc_consent_form(hostname: &str, query: &AuthorizationQuery) -> O
 	// The target request route.
 	let route = "/_matrix/client/unstable/org.matrix.msc2964/authorize";
 	let nonce = &rand::random::<u64>().to_string();
-	let beneficiary = &encode(query
-		.username
-		.as_ref()
-		.expect("the username as a beneficiary to present to the owner"));
+	let beneficiary = &encode(
+		query
+			.username
+			.as_ref()
+			.expect("the username as a beneficiary to present to the owner"),
+	);
 	let template = ConsentPageTemplate {
 		nonce,
 		hostname,

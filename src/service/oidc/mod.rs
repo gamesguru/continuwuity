@@ -20,7 +20,7 @@ use conduwuit_oidc::AsyncSolicitor;
 use futures::lock::Mutex;
 use ruma::OwnedServerName;
 
-use crate::{users, state::State};
+use crate::{state::State, users};
 
 mod endpoint;
 pub use endpoint::{OxideEndpoint, OxideIssuer, OxideRegistrar, normalize_redirect};
@@ -54,11 +54,8 @@ impl crate::Service for Service {
 		);
 		let registrar = OxideRegistrar::new(args.db["clientid_oidcclient"].clone());
 		let solicitor = AsyncSolicitor { hostname: server_name.to_string() };
-		let endpoint = Arc::new(Mutex::new(OxideEndpoint::from_primitives(
-				registrar,
-				issuer,
-				solicitor,
-		)));
+		let endpoint =
+			Arc::new(Mutex::new(OxideEndpoint::from_primitives(registrar, issuer, solicitor)));
 		Ok(Arc::new(Self {
 			endpoint,
 			server_name,
@@ -73,8 +70,5 @@ impl crate::Service for Service {
 
 /// Let `CookieJar`s access their signing key.
 impl FromRef<State> for Key {
-	fn from_ref(services: &State) -> Self {
-	    services.oidc.cookie_signing_key.clone()
-	}
+	fn from_ref(services: &State) -> Self { services.oidc.cookie_signing_key.clone() }
 }
-

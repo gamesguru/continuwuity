@@ -74,12 +74,12 @@ impl TryFrom<&mut OidcRequest> for AccessTokenForm<'_> {
 
 impl TryFrom<OidcRequest> for AccessTokenForm<'_> {
 	type Error = AuthError;
-	
+
 	fn try_from(value: OidcRequest) -> Result<Self, Self::Error> {
 		let body = value.body().ok_or(AuthError::NoBody)?;
 		let getopt = |key| body.unique_value(key).map(|s| Cow::Owned(s.to_string()));
 
-	    Ok(AccessTokenForm {
+		Ok(AccessTokenForm {
 			code: getopt("code_challenge"),
 			code_verifier: getopt("code_challenge_method"),
 			client_id: getopt("client_id"),

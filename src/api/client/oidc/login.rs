@@ -1,10 +1,7 @@
 use axum::{extract::State, response::IntoResponse};
 use axum_extra::extract::{SignedCookieJar, cookie::Cookie};
 use conduwuit::{Result, err, utils::hash::verify_password};
-use conduwuit_oidc::{
-	LoginQuery,
-	OidcRequest,
-};
+use conduwuit_oidc::{LoginQuery, OidcRequest};
 use oxide_auth_async::endpoint::authorization::AuthorizationFlow;
 use ruma::user_id::UserId;
 
@@ -51,18 +48,17 @@ pub(crate) async fn oidc_login(
 	let mut flow = AuthorizationFlow::prepare(&mut *endpoint)
 		.map_err(|e| err!(Request(Unknown("flow preparation: {:?}", e))))?;
 
-	let oidc_response = flow.execute(request)
+	let oidc_response = flow
+		.execute(request)
 		.await
 		.map_err(|e| err!(Request(Unknown("flow execution: {:?}", e))))?;
 
-	// Build up a response with the cookie jar embedded, so it's commited by the client.
+	// Build up a response with the cookie jar embedded, so it's commited by the
+	// client.
 	Ok((jar, oidc_response.into_response()).into_response())
 }
 
-fn default_cookie<'a>(
-	key: &str,
-	user_id: String,
-) -> Cookie<'a> {
+fn default_cookie<'a>(key: &str, user_id: String) -> Cookie<'a> {
 	Cookie::build((key.to_string(), user_id))
 		.path("/")
 		.http_only(true)

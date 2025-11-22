@@ -60,10 +60,11 @@ impl TryFrom<OidcRequest> for LoginQuery {
 		let body = value.body().ok_or(LoginError::NoQuery)?;
 
 		let getopt = |key| body.unique_value(key).map(|s| s.to_string());
-		let get = |key| body
-			.unique_value(key)
-			.ok_or(LoginError::MissingField(key.into()))
-			.map(|s| s.to_string());
+		let get = |key| {
+			body.unique_value(key)
+				.ok_or(LoginError::MissingField(key.into()))
+				.map(|s| s.to_string())
+		};
 
 		Ok(Self {
 			username: get("username")?,
@@ -80,7 +81,9 @@ impl TryFrom<OidcRequest> for LoginQuery {
 			response_type: get("response_type")?,
 			// response_mode is not strictly needed : it must be the literal "fragment"
 			// when over https. It's required by the Matrix spec but Fractal doesn't provide it.
-			response_mode: getopt("response_mode").or(Some("fragment".to_string())).unwrap(),
+			response_mode: getopt("response_mode")
+				.or(Some("fragment".to_string()))
+				.unwrap(),
 			allow: getopt("allow"),
 			deny: getopt("deny"),
 		})

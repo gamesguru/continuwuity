@@ -1,14 +1,12 @@
 use std::{borrow::Cow, str::FromStr};
 
 use oxide_auth::{
-	endpoint::QueryParameter,
-	code_grant::authorization::Request as AuthorizationRequest,
+	code_grant::authorization::Request as AuthorizationRequest, endpoint::QueryParameter,
 };
 use url::Url;
 
-use crate::OidcRequest;
-
 use super::LoginQuery;
+use crate::OidcRequest;
 
 /// The set of parameters required for an OIDC authorization request.
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -62,23 +60,25 @@ impl TryFrom<&mut OidcRequest> for AuthorizationQuery {
 
 impl TryFrom<OidcRequest> for AuthorizationQuery {
 	type Error = AuthError;
-	
+
 	fn try_from(value: OidcRequest) -> Result<Self, Self::Error> {
 		//let query = value.body().ok_or(AuthError::NoBody)?;
 		let query = value.query().or(value.body()).ok_or(AuthError::NoQuery)?;
 
 		let getopt = |key| query.unique_value(key).map(|s| s.to_string());
-		let get = |key| query
-			.unique_value(key)
-			.ok_or(AuthError::MissingField(key.into()))
-			.map(|s| s.to_string());
+		let get = |key| {
+			query
+				.unique_value(key)
+				.ok_or(AuthError::MissingField(key.into()))
+				.map(|s| s.to_string())
+		};
 
-	    Ok(AuthorizationQuery {
+		Ok(AuthorizationQuery {
 			client_id: get("client_id")?,
 			client_name: getopt("client_name"),
 			client_secret: getopt("client_secret"),
 			redirect_uri: Url::from_str(&get("redirect_uri")?)
-			.map_err(|_| AuthError::InvalidField("redirect_uri".into()))?,
+				.map_err(|_| AuthError::InvalidField("redirect_uri".into()))?,
 			scope: get("scope")?,
 			state: get("state")?,
 			code_challenge: get("code_challenge")?,
@@ -93,7 +93,6 @@ impl TryFrom<OidcRequest> for AuthorizationQuery {
 		})
 	}
 }
-
 
 impl From<LoginQuery> for AuthorizationQuery {
 	/// Drops the `password` field on the way.

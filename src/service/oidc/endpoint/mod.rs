@@ -1,10 +1,5 @@
 use async_trait::async_trait;
-use conduwuit_oidc::{
-	OidcError,
-	OidcRequest,
-	OidcResponse,
-	AsyncSolicitor,
-};
+use conduwuit_oidc::{AsyncSolicitor, OidcError, OidcRequest, OidcResponse};
 use oxide_auth::{
 	endpoint::{OAuthError, Scope, Scopes, Template, WebRequest},
 	frontends::simple::extensions::AddonList,
@@ -61,43 +56,40 @@ impl OxideEndpoint {
 impl Endpoint<OidcRequest> for &mut OxideEndpoint {
 	type Error = OidcError;
 
-    fn registrar(&self) -> Option<&(dyn Registrar + Sync)> {
-		Some(&self.registrar)
-	}
-    fn authorizer_mut(&mut self) -> Option<&mut (dyn Authorizer + Send)> {
+	fn registrar(&self) -> Option<&(dyn Registrar + Sync)> { Some(&self.registrar) }
+
+	fn authorizer_mut(&mut self) -> Option<&mut (dyn Authorizer + Send)> {
 		Some(&mut self.authorizer)
 	}
-    fn issuer_mut(&mut self) -> Option<&mut (dyn Issuer + Send)> {
-		Some(&mut self.issuer)
-	}
-    fn owner_solicitor(&mut self) -> Option<&mut (dyn OwnerSolicitor<OidcRequest> + Send)> {
+
+	fn issuer_mut(&mut self) -> Option<&mut (dyn Issuer + Send)> { Some(&mut self.issuer) }
+
+	fn owner_solicitor(&mut self) -> Option<&mut (dyn OwnerSolicitor<OidcRequest> + Send)> {
 		Some(&mut self.solicitor)
 	}
-    fn scopes(&mut self) -> Option<&mut dyn Scopes<OidcRequest>> {
-		Some(&mut self.scopes)
-	}
-    fn response(
-        &mut self,
+
+	fn scopes(&mut self) -> Option<&mut dyn Scopes<OidcRequest>> { Some(&mut self.scopes) }
+
+	fn response(
+		&mut self,
 		_request: &mut OidcRequest,
 		_kind: Template<'_>,
-    ) -> Result<<OidcRequest as WebRequest>::Response, Self::Error> {
+	) -> Result<<OidcRequest as WebRequest>::Response, Self::Error> {
 		// TODO check.
 		Ok(OidcResponse::default())
 	}
-    fn error(&mut self, err: OAuthError) -> Self::Error {
+
+	fn error(&mut self, err: OAuthError) -> Self::Error {
 		match err {
-			OAuthError::DenySilently => OidcError::Authorization,
-			OAuthError::BadRequest => OidcError::Encoding,
-			OAuthError::PrimitiveError => OidcError::InternalError(None),
+			| OAuthError::DenySilently => OidcError::Authorization,
+			| OAuthError::BadRequest => OidcError::Encoding,
+			| OAuthError::PrimitiveError => OidcError::InternalError(None),
 		}
 	}
-    fn web_error(&mut self, err: OidcError) -> Self::Error {
-		err
-	}
-    fn extension(&mut self) -> Option<&mut (dyn Extension + Send)> {
-        None
-    }
 
+	fn web_error(&mut self, err: OidcError) -> Self::Error { err }
+
+	fn extension(&mut self) -> Option<&mut (dyn Extension + Send)> { None }
 }
 
 /// Substitute "127.0.0.1" and "[::1]" for "localhost" to let oxide-auth compare

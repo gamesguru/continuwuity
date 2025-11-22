@@ -115,8 +115,8 @@ where
 		let query = match query {
 			// If the query is non-empty, it should have a client_id.
 			| Some(params) => match params.unique_value("client_id") {
-				Some(_) => Some(params),
-				None => body.clone(),
+				| Some(_) => Some(params),
+				| None => body.clone(),
 			},
 			| None => body.clone(),
 		};

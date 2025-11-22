@@ -164,7 +164,8 @@ impl Issuer for OxideIssuer {
 		// Store the device's refresh token with the device id.
 		trace!("saving device's refresh token");
 		let value = ((user_id, device_id), refresh_until.timestamp_millis());
-		self.refreshtoken_userdeviceidexpiresat.put(refresh_token.clone(), value);
+		self.refreshtoken_userdeviceidexpiresat
+			.put(refresh_token.clone(), value);
 		trace!(?access_token, ?until, ?refresh_token, ?refresh_until, "returning token");
 
 		Ok(IssuedToken {
@@ -190,7 +191,11 @@ impl Issuer for OxideIssuer {
 			.ok_or(())?;
 		trace!(?client, "got oidc client");
 		*/
-		let handle = self.refreshtoken_userdeviceidexpiresat.get(refresh).await.map_err(|_| ())?;
+		let handle = self
+			.refreshtoken_userdeviceidexpiresat
+			.get(refresh)
+			.await
+			.map_err(|_| ())?;
 		trace!("issuer got grant handle");
 		let ((user_id, device_id), expires_at): ((OwnedUserId, OwnedDeviceId), i64) =
 			handle.deserialized().map_err(|_| ())?;
@@ -220,7 +225,8 @@ impl Issuer for OxideIssuer {
 		// TODO remove old refresh tokens.
 
 		let value = ((user_id, device_id), refresh_until.timestamp_millis());
-		self.refreshtoken_userdeviceidexpiresat.put(new_refresh.clone(), value);
+		self.refreshtoken_userdeviceidexpiresat
+			.put(new_refresh.clone(), value);
 
 		Ok(RefreshedToken {
 			token: new_access,
@@ -249,8 +255,8 @@ impl Issuer for OxideIssuer {
 		}
 
 		// TODO the cast as i64 could overflow, deal with it.
-		let until =
-			DateTime::from_timestamp_millis(oidc_device.until as i64).expect("some valid timestamp");
+		let until = DateTime::from_timestamp_millis(oidc_device.until as i64)
+			.expect("some valid timestamp");
 		let grant = Grant {
 			owner_id: user_id.to_string(),
 			client_id: oidc_device.client_id,
@@ -293,8 +299,8 @@ impl Issuer for OxideIssuer {
 		}
 
 		// TODO the cast as i64 could overflow, deal with it.
-		let until =
-			DateTime::from_timestamp_millis(oidc_device.until as i64).expect("some valid timestamp");
+		let until = DateTime::from_timestamp_millis(oidc_device.until as i64)
+			.expect("some valid timestamp");
 		let grant = Grant {
 			owner_id: user_id.to_string(),
 			client_id: oidc_device.client_id,

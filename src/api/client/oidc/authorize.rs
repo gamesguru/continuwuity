@@ -1,9 +1,7 @@
 use axum::extract::{Query, State};
 use axum_extra::extract::SignedCookieJar;
 use conduwuit::{Result, err};
-use conduwuit_oidc::{
-	AuthorizationQuery, OidcRequest, OidcResponse, oidc_login_form,
-};
+use conduwuit_oidc::{AuthorizationQuery, OidcRequest, OidcResponse, oidc_login_form};
 use oxide_auth_async::endpoint::authorization::AuthorizationFlow;
 use percent_encoding::percent_decode_str;
 use ruma::UserId;
@@ -45,8 +43,10 @@ pub(crate) async fn authorize(
 	let user_id = UserId::parse(&user_id)?;
 	tracing::debug!("submitting OIDC authorisation for user_id {user_id}");
 
-	// Add the username field to the request so it's used as beneficiary in the consent form.
-	request.add_username_to_query(user_id.localpart())
+	// Add the username field to the request so it's used as beneficiary in the
+	// consent form.
+	request
+		.add_username_to_query(user_id.localpart())
 		.map_err(|e| err!(Request(Unknown("cannot add username to query: {e:?}"))))?;
 
 	tracing::trace!("submitting authorization flow with {request:#?}");
@@ -54,7 +54,8 @@ pub(crate) async fn authorize(
 	let mut flow = AuthorizationFlow::prepare(&mut *endpoint)
 		.map_err(|e| err!(Request(Unknown("flow preparation: {:?}", e))))?;
 
-	flow.execute(request).await
+	flow.execute(request)
+		.await
 		.map_err(|e| err!(Request(Unknown("flow execution: {:?}", e))))
 }
 
@@ -73,7 +74,9 @@ pub(crate) async fn authorize_consent(
 	request: OidcRequest,
 ) -> Result<OidcResponse> {
 	// The request's query, either GET or POST fields.
-	let query: AuthorizationQuery = request.clone().try_into()
+	let query: AuthorizationQuery = request
+		.clone()
+		.try_into()
 		.map_err(|_| err!(Request(Unknown("cannot parse request"))))?;
 
 	tracing::debug!("processing owner's consent");

@@ -12,7 +12,9 @@ pub(crate) async fn token(
 	State(services): State<crate::State>,
 	request: OidcRequest,
 ) -> Result<OidcResponse> {
-	let oauth: AccessTokenForm<'_> = request.clone().try_into()
+	let oauth: AccessTokenForm<'_> = request
+		.clone()
+		.try_into()
 		.map_err(|_| err!(Request(Unknown("form parsing error"))))?;
 	let grant_type = AccessTokenRequest::grant_type(&oauth).map(|t| t.to_string());
 
