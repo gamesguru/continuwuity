@@ -181,12 +181,6 @@ where
 			.deserialized()
 			.map_err(|_| ())?;
 
-		// Check the device id.
-		if device_id != expected_device_id {
-			debug!("the device ID doesn't match the one recorded");
-			return Err(());
-		}
-
 		// Check the refresh token's expiration date.
 		if (expires_at as u64) < millis_since_unix_epoch() {
 			trace!(?user_id, ?device_id, ?refresh, "refresh token is expired, removing device");
