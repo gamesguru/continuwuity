@@ -7,10 +7,14 @@ use oxide_auth::{
 use oxide_auth_async::endpoint::OwnerSolicitor;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
-use crate::{OidcRequest, OidcResponse, flows::{AuthorizationQuery, ConsentPageTemplate}};
+use crate::{
+	OidcRequest, OidcResponse,
+	flows::{AuthorizationQuery, ConsentPageTemplate},
+};
 
-/// An async owner solicitor that asks for permission to access `hostname` on their behalf.
-/// It does so by sending them a web page with a form pointing to the Authorize flow.
+/// An async owner solicitor that asks for permission to access `hostname` on
+/// their behalf. It does so by sending them a web page with a form pointing to
+/// the Authorize flow.
 pub struct AsyncSolicitor {
 	pub hostname: String,
 }

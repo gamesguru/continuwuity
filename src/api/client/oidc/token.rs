@@ -1,6 +1,6 @@
 use axum::extract::State;
 use conduwuit::{Result, err};
-use conduwuit_oidc::{flows::AccessTokenForm, OidcRequest, OidcResponse};
+use conduwuit_oidc::{OidcRequest, OidcResponse, flows::AccessTokenForm};
 use oxide_auth::code_grant::accesstoken::Request as AccessTokenRequest;
 use oxide_auth_async::endpoint::{access_token::AccessTokenFlow, refresh::RefreshFlow};
 

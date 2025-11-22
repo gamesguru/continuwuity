@@ -2,9 +2,15 @@ use axum::async_trait;
 use oxide_auth::{
 	endpoint::{OAuthError, Scope, Scopes, Template, WebRequest},
 	frontends::simple::extensions::AddonList,
-	primitives::{prelude::{AuthMap, RandomGenerator}, registrar::RegisteredUrl},
+	primitives::{
+		prelude::{AuthMap, RandomGenerator},
+		registrar::RegisteredUrl,
+	},
 };
-use oxide_auth_async::{endpoint::{Endpoint, Extension, OwnerSolicitor}, primitives::{Authorizer, Issuer, Registrar}};
+use oxide_auth_async::{
+	endpoint::{Endpoint, Extension, OwnerSolicitor},
+	primitives::{Authorizer, Issuer, Registrar},
+};
 use url::Url;
 
 mod device_store;
@@ -22,7 +28,7 @@ pub const SCOPE_PREFIX_DEVICE: &str = "urn:matrix:org.matrix.msc2967.client:devi
 pub const SCOPE_PREFIX_API: &str = "urn:matrix:org.matrix.msc2967.client:api:";
 
 pub struct OidcEndpoint<R, I>
-where 
+where
 	R: Registrar,
 	I: Issuer,
 {
@@ -35,7 +41,7 @@ where
 }
 
 impl<R, I> OidcEndpoint<R, I>
-where 
+where
 	R: Registrar + Sync + Send,
 	I: Issuer + Sync + Send,
 {
@@ -52,13 +58,12 @@ where
 			extension,
 			scopes,
 		}
-
 	}
 }
 
 #[async_trait]
 impl<R, I> Endpoint<OidcRequest> for &mut OidcEndpoint<R, I>
-where 
+where
 	R: Registrar + Sync + Send,
 	I: Issuer + Sync + Send,
 {
@@ -99,11 +104,6 @@ where
 
 	fn extension(&mut self) -> Option<&mut (dyn Extension + Send)> { None }
 }
-
-
-
-
-
 
 /// Substitute "127.0.0.1" and "[::1]" for "localhost" to let oxide-auth compare
 /// them ignoring their port.

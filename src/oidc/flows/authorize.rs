@@ -7,8 +7,8 @@ use oxide_auth::{
 };
 use url::Url;
 
-use crate::OidcRequest;
 use super::LoginQuery;
+use crate::OidcRequest;
 
 /// The parameters for the OIDC consent page template.
 #[derive(Template)]
@@ -29,7 +29,6 @@ pub(crate) struct ConsentPageTemplate<'a> {
 	pub(crate) response_type: &'a str,
 	pub(crate) response_mode: &'a str,
 }
-
 
 /// The set of parameters required for an OIDC authorization request.
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -89,10 +88,12 @@ impl TryFrom<OidcRequest> for AuthorizationQuery {
 		let query = value.query().or(value.body()).ok_or(AuthError::NoQuery)?;
 
 		let getopt = |key| query.unique_value(key).map(|s| s.to_string());
-		let get = |key| query
-			.unique_value(key)
-			.ok_or(AuthError::MissingField(key.into()))
-			.map(|s| s.to_string());
+		let get = |key| {
+			query
+				.unique_value(key)
+				.ok_or(AuthError::MissingField(key.into()))
+				.map(|s| s.to_string())
+		};
 
 		Ok(AuthorizationQuery {
 			client_id: get("client_id")?,

@@ -19,7 +19,7 @@ use oxide_auth_async::primitives::Issuer;
 use ruma::{DeviceId, OwnedDeviceId, OwnedServerName, OwnedUserId, UserId};
 use serde::{Deserialize, Serialize};
 
-use super::{normalize_redirect, SCOPE_PREFIX_DEVICE, registrar::OidcClient, DeviceStore};
+use super::{DeviceStore, SCOPE_PREFIX_DEVICE, normalize_redirect, registrar::OidcClient};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OidcDevice {
@@ -36,7 +36,10 @@ pub struct OidcDevice {
 /// tokens which can be read and parsed by anyone, but not maliciously
 /// created. However, they can not be revoked and thus don't offer even
 /// longer lived refresh tokens.
-pub struct OidcIssuer<T> where T: DeviceStore {
+pub struct OidcIssuer<T>
+where
+	T: DeviceStore,
+{
 	pub server_name: OwnedServerName,
 	pub token_ttl: i64,
 	pub refresh_ttl: i64,
@@ -50,7 +53,10 @@ pub struct OidcIssuer<T> where T: DeviceStore {
 	devices: T,
 }
 
-impl<T> OidcIssuer<T> where T: DeviceStore {
+impl<T> OidcIssuer<T>
+where
+	T: DeviceStore,
+{
 	pub fn new(
 		server_name: OwnedServerName,
 		token_ttl: i64,
@@ -101,7 +107,10 @@ impl<T> OidcIssuer<T> where T: DeviceStore {
 }
 
 #[async_trait]
-impl<T> Issuer for OidcIssuer<T> where T: DeviceStore {
+impl<T> Issuer for OidcIssuer<T>
+where
+	T: DeviceStore,
+{
 	async fn issue(&mut self, grant: Grant) -> Result<IssuedToken, ()> {
 		debug!("issuing token for {grant:?}");
 		let user_id = UserId::parse_with_server_name(&grant.owner_id, &self.server_name)
@@ -121,7 +130,7 @@ impl<T> Issuer for OidcIssuer<T> where T: DeviceStore {
 
 		trace!("checking if the device is registered");
 		// Register the device if not registered in the owner devices list.
-		if ! self.devices.exists(&user_id, &device_id).await {
+		if !self.devices.exists(&user_id, &device_id).await {
 			let oidc_device = OidcDevice {
 				client_id: grant.client_id,
 				scope: grant.scope,
@@ -149,7 +158,8 @@ impl<T> Issuer for OidcIssuer<T> where T: DeviceStore {
 		// Store the device's refresh token with the device id.
 		trace!("saving device's refresh token");
 		let value = ((user_id, device_id), refresh_until.timestamp_millis());
-		self.refreshtoken_userdeviceidexpiresat.put(refresh_token.clone(), value);
+		self.refreshtoken_userdeviceidexpiresat
+			.put(refresh_token.clone(), value);
 
 		trace!("returning token");
 		Ok(IssuedToken {
@@ -199,7 +209,8 @@ impl<T> Issuer for OidcIssuer<T> where T: DeviceStore {
 		// TODO remove old refresh tokens.
 		let refresh_until = Utc::now() + Duration::milliseconds(self.refresh_ttl);
 		let value = ((user_id, device_id), refresh_until.timestamp_millis());
-		self.refreshtoken_userdeviceidexpiresat.put(new_refresh.clone(), value);
+		self.refreshtoken_userdeviceidexpiresat
+			.put(new_refresh.clone(), value);
 
 		Ok(RefreshedToken {
 			token: new_access,
