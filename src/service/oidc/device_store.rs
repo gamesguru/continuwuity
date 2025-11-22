@@ -5,12 +5,14 @@ use ruma::{DeviceId, OwnedDeviceId, OwnedUserId, UserId};
 
 use crate::{Dep, users};
 
+/// Manage Matrix devices over Continuwuity's database through [users::Service].
 pub struct DbDeviceStore(Dep<users::Service>);
 
 impl DbDeviceStore {
 	pub(crate) fn new(users: Dep<users::Service>) -> Self { DbDeviceStore(users) }
 }
 
+/// Let [crate::OidcIssuer] use [DbDeviceStore] as its [DeviceStore].
 #[async_trait]
 impl DeviceStore for DbDeviceStore {
 	async fn exists(&self, user_id: &UserId, device_id: &DeviceId) -> bool {

@@ -30,7 +30,9 @@ pub(crate) struct ConsentPageTemplate<'a> {
 	pub(crate) response_mode: &'a str,
 }
 
-/// The set of parameters required for an OIDC authorization request.
+/// POST or GET parameters required for an OIDC authorization request.
+///
+/// If `allow` or `deny` are [Some], it's a consent allowance request.
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct AuthorizationQuery {
 	pub client_id: String,

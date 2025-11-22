@@ -10,6 +10,20 @@ use oxide_auth::{
 
 use crate::OidcRequest;
 
+/// POST parameters required for an OIDC token request.
+///
+/// `grant_type` may either be "authorization_code" or "refresh_token".
+/// If asking for an access_token, mandatory fields are :
+/// - `grant_type`
+/// - `client_id`
+/// - `code`
+/// - `redirect_uri`
+/// - `code_verifier`
+/// If asking for a refresh token, mandatory fields are :
+/// - `grant_type`
+/// - `client_id`
+/// - `refresh_token`
+/// Awkward, right ? That's part of the OIDC spec.
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct AccessTokenForm<'a> {
 	pub code: Option<Cow<'a, str>>,

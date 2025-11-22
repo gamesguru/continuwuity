@@ -4,7 +4,7 @@ pub enum TokenTypeHint {
 	RefreshToken,
 }
 
-/// The set of query parameters a client needs to get authorization.
+/// GET parameters an [OidcDevice] needs to get authorization.
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct RevokeQuery {
 	pub token: String,

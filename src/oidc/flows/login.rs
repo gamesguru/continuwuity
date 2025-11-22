@@ -28,7 +28,7 @@ pub(crate) struct LoginPageTemplate<'a> {
 	response_mode: &'a str,
 }
 
-/// The set of query parameters a client needs to get authorization.
+/// POST parameters an [OidcDevice] needs to login (to eventually get authorization).
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct LoginQuery {
 	pub username: String,

@@ -18,8 +18,7 @@ use super::normalize_redirect;
 
 static PASSWORD_POLICY: Lazy<Argon2> = Lazy::new(Argon2::default);
 
-/// A client app that connects to continuwuity via OIDC, as recorded in the
-/// database.
+/// A Matrix OIDC-ready client.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OidcClient {
 	/// The name published by the app itself.
@@ -28,7 +27,11 @@ pub struct OidcClient {
 	pub client: EncodedClient,
 }
 
-/// A simple DB registrar that stores known clients in its DB.
+/// A simple DB registrar that stores Matrix OIDC-ready clients.
+///
+/// MSC3861 states that user devices should register as a client before attempting
+/// OIDC flows. This registrar implements oxide-auth-async's [Registrar], so that it's used by
+/// [super::OidcEndpoint].
 pub struct OidcRegistrar {
 	clientid_oidcclient: Arc<Map>,
 }
@@ -58,7 +61,7 @@ impl OidcRegistrar {
 	}
 }
 
-/// Let this service act as an oxide-auth-async client app `Registrar`.
+/// Register Matrix OIDC-ready clients in Continuwuity's database.
 #[async_trait]
 impl Registrar for OidcRegistrar {
 	/// Determine the allowed redirect_uri for the client.

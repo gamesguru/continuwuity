@@ -21,21 +21,37 @@ use serde::{Deserialize, Serialize};
 
 use super::{DeviceStore, SCOPE_PREFIX_DEVICE, normalize_redirect, registrar::OidcClient};
 
+/// A Matrix OIDC-ready client's device.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OidcDevice {
+	/// The id of the [OidcClient] this device is linked to.
 	pub client_id: String,
+	/// According to MSC3861, the device's scope _must_ contain the formats
+	///	
+	///		"{SCOPE_PREFIX_DEVICE}:{device_id}"
+	///
+	///	and
+	///	
+	///		"{SCOPE_PREFIX_API}:*"
+	///
+	///	where `device_id` is the OIDC device id.
 	pub scope: Scope,
+	/// The redirect uri attached to this device. Must match the [OidcClient]'s registered
+	/// redirect uris.
 	pub redirect_uri: RegisteredUrl,
+	/// The expiry date, in milliseconds since January first, 1970.
 	pub until: u64,
 }
 
-/// Bearer tokens are also random generated but 256-bit tokens, since they
-/// live longer.
+/// Issue connection tokens for Matrix OIDC-ready devices.
 ///
-/// We could also use a `TokenSigner::ephemeral` here to create signed
-/// tokens which can be read and parsed by anyone, but not maliciously
-/// created. However, they can not be revoked and thus don't offer even
-/// longer lived refresh tokens.
+/// Each token is specific to an [OidcDevice], which in turn is linked to an [OidcClient].
+/// This struct implements oxide-auth-async's [Issuer], so that it's used by
+/// [super::OidcEndpoint].
+///
+/// [OidcIssuer] is defined over the [DeviceStore] trait, to abstract away the storage details of
+/// devices and tokens. See [conduwuit_service::oidc::endpoint::DBDeviceStore] for the current
+/// implementation.
 pub struct OidcIssuer<T>
 where
 	T: DeviceStore,

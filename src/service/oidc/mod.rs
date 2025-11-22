@@ -1,14 +1,10 @@
-//! OIDC service.
+//! Authorization service for OIDC-aware Matrix clients.
 //!
-//! Provides the registrar, authorizer and issuer needed by [api::client::oidc].
-//! The whole OIDC OAuth2 flow is taken care of by [oxide-auth].
+//! Provides the registrar, authorizer and issuer needed by the [conduwuit_api::client::oidc]
+//! endpoints. The whole OIDC OAuth2 flows are taken care of by [oxide-auth-async] to provide
+//! connection tokens to user [OidcDevice]s that have registered themselves as an [OidcClient].
 //!
-//! Summing up relations between OIDC (oxide-auth) ids and Matrix (ruma) ids:
-//!
-//! [ruma::DeviceId] is oidc_device_id
-//! [ruma::UserId] is oidc_owner_id
-//!
-//! [oxide-auth]: https://docs.rs/oxide-auth
+//! [oxide-auth-async]: https://docs.rs/oxide-auth-async
 
 use std::sync::Arc;
 
@@ -67,7 +63,7 @@ impl crate::Service for Service {
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
 
-/// Let `CookieJar`s access their signing key.
+/// Let [cookie::SignedJar]s access their signing key.
 impl FromRef<State> for Key {
 	fn from_ref(services: &State) -> Self { services.oidc.cookie_signing_key.clone() }
 }

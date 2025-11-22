@@ -2,6 +2,10 @@ use async_trait::async_trait;
 use conduwuit_core::Result;
 use ruma::{DeviceId, OwnedDeviceId, OwnedUserId, UserId};
 
+/// The set of functions needed to manage [super::OidcDevice]s and their tokens.
+///
+/// They are abstracted away from [super::OidcIssuer] so that it doesn't depend on the
+/// conduwuit_service crate.
 #[async_trait]
 pub trait DeviceStore: Send + Sync + 'static {
 	async fn exists(&self, user_id: &UserId, device_id: &DeviceId) -> bool;
