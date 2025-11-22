@@ -16,8 +16,8 @@ use crate::{
 /// their behalf. It does so by sending them a web page with a form pointing to
 /// the Authorize flow.
 ///
-/// [AsyncSolicitor] implements oxide-auth's [OwnerSolicitor], so that it's used by
-/// [super::OidcEndpoint].
+/// [AsyncSolicitor] implements oxide-auth's [OwnerSolicitor], so that it's used
+/// by [super::OidcEndpoint].
 pub struct AsyncSolicitor {
 	pub hostname: String,
 }

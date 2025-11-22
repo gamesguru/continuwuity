@@ -29,9 +29,9 @@ pub struct OidcClient {
 
 /// A simple DB registrar that stores Matrix OIDC-ready clients.
 ///
-/// MSC3861 states that user devices should register as a client before attempting
-/// OIDC flows. This registrar implements oxide-auth-async's [Registrar], so that it's used by
-/// [super::OidcEndpoint].
+/// MSC3861 states that user devices should register as a client before
+/// attempting OIDC flows. This registrar implements oxide-auth-async's
+/// [Registrar], so that it's used by [super::OidcEndpoint].
 pub struct OidcRegistrar {
 	clientid_oidcclient: Arc<Map>,
 }

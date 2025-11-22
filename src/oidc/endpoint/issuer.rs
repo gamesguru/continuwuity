@@ -27,17 +27,17 @@ pub struct OidcDevice {
 	/// The id of the [OidcClient] this device is linked to.
 	pub client_id: String,
 	/// According to MSC3861, the device's scope _must_ contain the formats
-	///	
+	///
 	///		"{SCOPE_PREFIX_DEVICE}:{device_id}"
 	///
 	///	and
-	///	
+	///
 	///		"{SCOPE_PREFIX_API}:*"
 	///
 	///	where `device_id` is the OIDC device id.
 	pub scope: Scope,
-	/// The redirect uri attached to this device. Must match the [OidcClient]'s registered
-	/// redirect uris.
+	/// The redirect uri attached to this device. Must match the [OidcClient]'s
+	/// registered redirect uris.
 	pub redirect_uri: RegisteredUrl,
 	/// The expiry date, in milliseconds since January first, 1970.
 	pub until: u64,
@@ -45,12 +45,13 @@ pub struct OidcDevice {
 
 /// Issue connection tokens for Matrix OIDC-ready devices.
 ///
-/// Each token is specific to an [OidcDevice], which in turn is linked to an [OidcClient].
-/// This struct implements oxide-auth-async's [Issuer], so that it's used by
-/// [super::OidcEndpoint].
+/// Each token is specific to an [OidcDevice], which in turn is linked to an
+/// [OidcClient]. This struct implements oxide-auth-async's [Issuer], so that
+/// it's used by [super::OidcEndpoint].
 ///
-/// [OidcIssuer] is defined over the [DeviceStore] trait, to abstract away the storage details of
-/// devices and tokens. See [conduwuit_service::oidc::endpoint::DBDeviceStore] for the current
+/// [OidcIssuer] is defined over the [DeviceStore] trait, to abstract away the
+/// storage details of devices and tokens. See
+/// [conduwuit_service::oidc::endpoint::DBDeviceStore] for the current
 /// implementation.
 pub struct OidcIssuer<T>
 where
@@ -147,7 +148,7 @@ where
 		let until = Utc::now() + Duration::milliseconds(self.token_ttl);
 		let refresh_until = Utc::now() + Duration::milliseconds(self.refresh_ttl);
 		// Register the device if not registered in the owner devices list.
-		if ! self.devices.exists(&user_id, &device_id).await {
+		if !self.devices.exists(&user_id, &device_id).await {
 			let oidc_device = OidcDevice {
 				client_id: grant.client_id,
 				scope: grant.scope,

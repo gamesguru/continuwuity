@@ -1,8 +1,9 @@
 //! Authorization service for OIDC-aware Matrix clients.
 //!
-//! Provides the registrar, authorizer and issuer needed by the [conduwuit_api::client::oidc]
-//! endpoints. The whole OIDC OAuth2 flows are taken care of by [oxide-auth-async] to provide
-//! connection tokens to user [OidcDevice]s that have registered themselves as an [OidcClient].
+//! Provides the registrar, authorizer and issuer needed by the
+//! [conduwuit_api::client::oidc] endpoints. The whole OIDC OAuth2 flows are
+//! taken care of by [oxide-auth-async] to provide connection tokens to user
+//! [OidcDevice]s that have registered themselves as an [OidcClient].
 //!
 //! [oxide-auth-async]: https://docs.rs/oxide-auth-async
 
