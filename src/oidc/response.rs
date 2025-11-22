@@ -25,17 +25,6 @@ impl IntoResponse for OidcResponse {
 			| Some(nonce) => &format!("default-src 'nonce-{nonce}';"),
 			| None => "default-src 'none';",
 		};
-		let csp_source = self.location.as_ref().map(|l| {
-			format!(
-				"http://{}:{}",
-				l.domain().expect("some location domain"),
-				l.port_or_known_default().expect("known protocol")
-			)
-		});
-		let csp_form_action = match csp_source {
-			| Some(s) => format!("form-action 'self' {s} http://localhost:* http://127.0.0.1:*;"),
-			| None => "form-action 'self' http://localhost:* http://127.0.0.1:*;".to_string(),
-		};
 		// Adding localhost to the "form-action" directive lets Continuwuity
 		// reply to private clients that call it _from_ localhost, any port.
 		let csp_form_action = "form-action 'self' http://localhost:* http://127.0.0.1:*;";

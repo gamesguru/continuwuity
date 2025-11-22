@@ -7,7 +7,7 @@
             <b>{{ name }}</b>
         {%- else -%}
             The app with id {{ client_id }}
-        {%- endif -%}" wants access to <b>{{ user_id }}</b>'s data at
+        {%- endif -%}" wants access to <b>{{ beneficiary }}</b>'s data at
         {{ redirect_uri | safe }}.
     </p>
     <form action="{{ route }}" method="post">
@@ -26,7 +26,7 @@
                 &code_challenge_method={{- code_challenge_method -}}
                 &response_type={{- response_type -}}
                 &response_mode={{- response_mode -}}
-                &allow={{- user_id -}}"
+                &allow={{- beneficiary -}}"
         >
         <input
             type="submit"
