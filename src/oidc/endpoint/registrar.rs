@@ -33,6 +33,8 @@ pub struct OidcClient {
 /// attempting OIDC flows. This registrar implements oxide-auth-async's
 /// [Registrar], so that it's used by [super::OidcEndpoint].
 pub struct OidcRegistrar {
+	/// The registered clients list maintained by this struct.
+	/// Maps client id [String]s to [OidcClient]s.
 	clientid_oidcclient: Arc<Map>,
 }
 
@@ -133,8 +135,8 @@ impl Registrar for OidcRegistrar {
 		})
 	}
 
-	/// Log the client in (not the user, not the device either). Currently
-	/// limited to checking that the client is registered.
+	/// Log the client in (not the device). Currently limited to checking that
+	/// the client is registered.
 	async fn check(
 		&self,
 		client_id: &str,

@@ -57,16 +57,23 @@ pub struct OidcIssuer<T>
 where
 	T: DeviceStore,
 {
+	/// The server name used as a hint to parse user ids on login.
 	pub server_name: OwnedServerName,
+	/// The access tokens time-to-live in milliseconds since epoch.
 	pub token_ttl: i64,
+	/// The refresh tokens time-to-live in milliseconds since epoch.
 	pub refresh_ttl: i64,
+	/// The known issued refresh tokens list maintained by this struct.
 	/// Maps [String] refresh tokens to (([OwnedUserId], [OwnedDeviceId]),
 	/// `expires_at`) where `expires_at` is an [i64] timestamp.
 	refreshtoken_userdeviceidexpiresat: Arc<Map>,
-	/// Maps client id [String]s to [OidcClient]s.
-	clientid_oidcclient: Arc<Map>,
+	/// The connected devices list maintained by this struct.
 	/// Maps (&[UserId], &[DeviceId]) to their [OidcDevice].
 	userdeviceid_oidcdevice: Arc<Map>,
+	/// The registered clients list maintained by an [OidcRegistrar] instance.
+	/// Maps client id [String]s to [OidcClient]s.
+	clientid_oidcclient: Arc<Map>,
+	/// The [DeviceStore] that will be used to manage devices.
 	devices: T,
 }
 
