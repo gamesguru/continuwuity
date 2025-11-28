@@ -27,6 +27,7 @@ use crate::OidcRequest;
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct AccessTokenForm<'a> {
 	pub code: Option<Cow<'a, str>>,
+	/// TODO mark dead_code as necessary in the serde signature.
 	code_verifier: Option<Cow<'a, str>>,
 	client_id: Option<Cow<'a, str>>,
 	grant_type: Option<Cow<'a, str>>,

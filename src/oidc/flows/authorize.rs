@@ -63,7 +63,7 @@ impl AuthorizationRequest for AuthorizationQuery {
 
 	fn response_type(&self) -> Option<Cow<'_, str>> { Some(self.response_type.as_str().into()) }
 
-	/// Placeholder.
+	/// Matrix OIDC authentication doesn't use any authorization flow extension.
 	fn extension(&self, _key: &str) -> Option<Cow<'_, str>> { None }
 }
 

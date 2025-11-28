@@ -39,7 +39,7 @@ pub struct OidcDevice {
 	/// The redirect uri attached to this device. Must match the [OidcClient]'s
 	/// registered redirect uris.
 	pub redirect_uri: RegisteredUrl,
-	/// The expiry date, in milliseconds since January first, 1970.
+	/// The expiry date, in milliseconds since epoch.
 	pub until: u64,
 }
 

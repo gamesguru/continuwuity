@@ -85,11 +85,9 @@ pub(crate) async fn register_client(
 	let redirect_uri = normalize_redirect(redirect_uri);
 	let remaining_uris = redirect_uris.into_iter().map(normalize_redirect).collect();
 	let device_id = DeviceId::new();
-	// Only provide a default scope, we'll test the client's proposed scope for
-	// consent anyway.
+	// Only provide a default scope, we'll use the device's scope on authorization
+	// flow.
 	let scope = "default".parse().unwrap();
-	// TODO check if the users service needs an update.
-	//services.users.update_device_metadata();
 
 	// If the client cannot authenticate itself at the token endpoint, then
 	// it's a public client. This is usually the case in Matrix.

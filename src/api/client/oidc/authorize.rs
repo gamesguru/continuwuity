@@ -24,7 +24,6 @@ pub(crate) async fn authorize(
 	Query(query): Query<AuthorizationQuery>,
 	mut request: OidcRequest,
 ) -> Result<OidcResponse> {
-	// TODO add solicitor page.
 	// Enforce MSC2964's restrictions on OAuth2 flow.
 	let Ok(scope) = percent_decode_str(&query.scope).decode_utf8() else {
 		return Err(err!(Request(Unknown("the scope could not be percent-decoded"))));
