@@ -53,7 +53,7 @@ pub(crate) async fn oidc_login(
 		.await
 		.map_err(|e| err!(Request(Unknown("flow execution: {:?}", e))))?;
 
-	// Build up a response with the cookie jar embedded, so it's commited by the
+	// Build up a response with the cookie jar embedded, so it's committed by the
 	// client.
 	Ok((jar, oidc_response.into_response()).into_response())
 }

@@ -123,7 +123,7 @@ impl Registrar for OidcRegistrar {
 		bound: BoundClient<'a>,
 		scope: Option<Scope>,
 	) -> Result<PreGrant, RegistrarError> {
-		trace!(?bound, ?scope, "registrar doing negociate");
+		trace!(?bound, ?scope, "registrar doing negotiate");
 		let Some(scope) = scope else {
 			return Err(RegistrarError::Unspecified);
 		};
