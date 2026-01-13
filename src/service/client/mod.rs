@@ -14,6 +14,10 @@ pub struct Service {
 	pub well_known: reqwest::Client,
 	pub federation: reqwest::Client,
 	pub synapse: reqwest::Client,
+	// this client is used if the destination matches insecure_skip_tls_validation_for_servers
+	// WHY: this is for servers who are on an overlay network like TOR/I2P who dont need or cant
+	// get      a https certificate
+	pub insecure_federation_no_tls_validation: reqwest::Client,
 	pub sender: reqwest::Client,
 	pub appservice: reqwest::Client,
 	pub pusher: reqwest::Client,
@@ -91,6 +95,21 @@ impl crate::Service for Service {
 				))
 				.pool_max_idle_per_host(0)
 				.redirect(redirect::Policy::limited(3))
+				.build()?,
+
+			insecure_federation_no_tls_validation: base(config)?
+				.dns_resolver(resolver.resolver.hooked.clone())
+				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
+				.read_timeout(Duration::from_secs(config.federation_timeout.saturating_mul(6)))
+				.timeout(Duration::from_secs(
+					config
+						.federation_timeout
+						.saturating_mul(6)
+						.saturating_add(config.federation_conn_timeout),
+				))
+				.pool_max_idle_per_host(0)
+				.redirect(redirect::Policy::limited(3))
+				.danger_accept_invalid_certs(true)
 				.build()?,
 
 			sender: base(config)?

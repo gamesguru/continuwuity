@@ -26,7 +26,17 @@ pub async fn execute<T>(&self, dest: &ServerName, request: T) -> Result<T::Incom
 where
 	T: OutgoingRequest + Debug + Send,
 {
-	let client = &self.services.client.federation;
+	let client = if self
+		.services
+		.server
+		.config
+		.insecure_skip_tls_validation_for_servers
+		.is_match(dest.host())
+	{
+		&self.services.client.insecure_federation_no_tls_validation
+	} else {
+		&self.services.client.federation
+	};
 	self.execute_on(client, dest, request).await
 }
 
@@ -41,7 +51,17 @@ pub async fn execute_synapse<T>(
 where
 	T: OutgoingRequest + Debug + Send,
 {
-	let client = &self.services.client.synapse;
+	let client = if self
+		.services
+		.server
+		.config
+		.insecure_skip_tls_validation_for_servers
+		.is_match(dest.host())
+	{
+		&self.services.client.insecure_federation_no_tls_validation
+	} else {
+		&self.services.client.synapse
+	};
 	self.execute_on(client, dest, request).await
 }
 

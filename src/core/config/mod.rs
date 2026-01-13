@@ -2035,6 +2035,15 @@ pub struct Config {
 	pub allow_invalid_tls_certificates_yes_i_know_what_the_fuck_i_am_doing_with_this_and_i_know_this_is_insecure:
 		bool,
 
+	/// a regular expression for destinations whose tls certificates are NOT
+	/// checked
+	///
+	/// This is useful for overlay networks like TOR/I2P. This is not documented
+	/// as this should not be a quick fix for your friends server having
+	/// invalid certs
+	#[serde(default, with = "serde_regex")]
+	pub insecure_skip_tls_validation_for_servers: RegexSet,
+
 	/// display: nested
 	#[serde(default)]
 	pub ldap: LdapConfig,
