@@ -1,6 +1,6 @@
 use axum::extract::State;
 use conduwuit::{Err, Event, Result, debug_warn, err};
-use futures::{FutureExt, TryFutureExt, future::try_join};
+use futures::TryFutureExt;
 use ruma::api::client::room::get_room_event;
 
 use crate::{Ruma, client::is_ignored_pdu};
@@ -15,19 +15,19 @@ pub(crate) async fn get_room_event_route(
 	let event_id = &body.event_id;
 	let room_id = &body.room_id;
 
-	let event = services
+	let mut event = services
 		.rooms
 		.timeline
 		.get_remote_pdu(room_id, event_id)
-		.map_err(|_| err!(Request(NotFound("Event {} not found.", event_id))));
+		.map_err(|_| err!(Request(NotFound("Event {} not found.", event_id))))
+		.await?;
 
-	let visible = services
-		.rooms
-		.state_accessor
-		.user_can_see_event(body.sender_user(), room_id, event_id)
-		.map(Ok);
-
-	let (mut event, visible) = try_join(event, visible).await?;
+	let visible = services.users.is_admin(body.sender_user()).await
+		|| services
+			.rooms
+			.state_accessor
+			.user_can_see_event(body.sender_user(), room_id, event_id)
+			.await;
 
 	if !visible || is_ignored_pdu(services, &event, body.sender_user()).await? {
 		return Err!(Request(Forbidden("You don't have permission to view this event.")));

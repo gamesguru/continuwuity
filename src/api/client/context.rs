@@ -10,7 +10,7 @@ use conduwuit::{
 use conduwuit_service::rooms::{lazy_loading, lazy_loading::Options, short::ShortStateKey};
 use futures::{
 	FutureExt, StreamExt, TryFutureExt, TryStreamExt,
-	future::{OptionFuture, join, join3, try_join3},
+	future::{OptionFuture, join, join3},
 };
 use ruma::{OwnedEventId, UserId, api::client::context::get_context, events::StateEventType};
 
@@ -56,21 +56,22 @@ pub(crate) async fn get_context_route(
 		.rooms
 		.timeline
 		.get_pdu_id(event_id)
-		.map_err(|_| err!(Request(NotFound("Event not found."))));
+		.map_err(|_| err!(Request(NotFound("Event not found."))))
+		.await?;
 
 	let base_pdu = services
 		.rooms
 		.timeline
 		.get_pdu(event_id)
-		.map_err(|_| err!(Request(NotFound("Event not found."))));
+		.map_err(|_| err!(Request(NotFound("Event not found."))))
+		.await?;
 
-	let visible = services
-		.rooms
-		.state_accessor
-		.user_can_see_event(sender_user, room_id, event_id)
-		.map(Ok);
-
-	let (base_id, base_pdu, visible) = try_join3(base_id, base_pdu, visible).await?;
+	let visible = services.users.is_admin(sender_user).await
+		|| services
+			.rooms
+			.state_accessor
+			.user_can_see_event(sender_user, room_id, event_id)
+			.await;
 
 	if base_pdu.room_id_or_hash() != *room_id || base_pdu.event_id != *event_id {
 		return Err!(Request(NotFound("Event not found.")));

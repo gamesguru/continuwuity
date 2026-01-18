@@ -138,11 +138,12 @@ pub(crate) async fn get_state_events_route(
 ) -> Result<get_state_events::v3::Response> {
 	let sender_user = body.sender_user();
 
-	if !services
-		.rooms
-		.state_accessor
-		.user_can_see_state_events(sender_user, &body.room_id)
-		.await
+	if !services.users.is_admin(sender_user).await
+		&& !services
+			.rooms
+			.state_accessor
+			.user_can_see_state_events(sender_user, &body.room_id)
+			.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view the room state.")));
 	}
@@ -172,11 +173,12 @@ pub(crate) async fn get_state_events_for_key_route(
 ) -> Result<get_state_events_for_key::v3::Response> {
 	let sender_user = body.sender_user();
 
-	if !services
-		.rooms
-		.state_accessor
-		.user_can_see_state_events(sender_user, &body.room_id)
-		.await
+	if !services.users.is_admin(sender_user).await
+		|| !services
+			.rooms
+			.state_accessor
+			.user_can_see_state_events(sender_user, &body.room_id)
+			.await
 	{
 		return Err!(Request(NotFound(debug_warn!(
 			"You don't have permission to view the room state."
