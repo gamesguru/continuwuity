@@ -11,6 +11,8 @@ repository.workspace = true
 version.workspace = true
 metadata.crane.workspace = true
 
+build = "build.rs"
+
 [lib]
 path = "mod.rs"
 crate-type = [
@@ -214,8 +216,10 @@ conduwuit-database.workspace = true
 conduwuit-router.workspace = true
 conduwuit-service.workspace = true
 conduwuit-build-metadata.workspace = true
+conduwuit-macros.workspace = true
 
 clap.workspace = true
+
 console-subscriber.optional = true
 console-subscriber.workspace = true
 const-str.workspace = true
