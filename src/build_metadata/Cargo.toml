@@ -2,6 +2,7 @@
 name = "conduwuit_build_metadata"
 description.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 readme.workspace = true
 repository.workspace = true
@@ -23,6 +24,7 @@ crate-type = [
 [dependencies]
 
 [build-dependencies]
+built = { version = "0.8", features = [] }
 
 [lints]
 workspace = true
