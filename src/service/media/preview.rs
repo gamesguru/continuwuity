@@ -11,7 +11,6 @@ use conduwuit::{Err, Result, debug, err};
 use conduwuit_core::implement;
 use ipaddress::IPAddress;
 use serde::Serialize;
-use url::Url;
 
 use super::Service;
 
@@ -46,7 +45,7 @@ pub async fn set_url_preview(&self, url: &str, data: &UrlPreviewData) -> Result<
 }
 
 #[implement(Service)]
-pub async fn get_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
+pub async fn get_url_preview(&self, url: &reqwest::Url) -> Result<UrlPreviewData> {
 	if let Ok(preview) = self.db.get_url_preview(url.as_str()).await {
 		return Ok(preview);
 	}
@@ -61,15 +60,20 @@ pub async fn get_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 }
 
 #[implement(Service)]
-async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
+async fn request_url_preview(&self, url: &reqwest::Url) -> Result<UrlPreviewData> {
 	if let Ok(ip) = IPAddress::parse(url.host_str().expect("URL previously validated")) {
 		if !self.services.client.valid_cidr_range(&ip) {
 			return Err!(Request(Forbidden("Requesting from this address is forbidden")));
 		}
 	}
 
-	let client = &self.services.client.url_preview;
-	let response = client.head(url.as_str()).send().await?;
+	let response = self
+		.services
+		.client
+		.get_client(&crate::client::ClientType::UrlPreview, url)
+		.head(url.as_str())
+		.send()
+		.await?;
 
 	debug!(%url, "URL preview response headers: {:?}", response.headers());
 
@@ -92,8 +96,8 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 		.map_err(|e| err!(Request(Unknown("Unknown or invalid Content-Type header: {e}"))))?;
 
 	let data = match content_type {
-		| html if html.starts_with("text/html") => self.download_html(url.as_str()).await?,
-		| img if img.starts_with("image/") => self.download_image(url.as_str()).await?,
+		| html if html.starts_with("text/html") => self.download_html(url).await?,
+		| img if img.starts_with("image/") => self.download_image(url).await?,
 		| _ => return Err!(Request(Unknown("Unsupported Content-Type"))),
 	};
 
@@ -104,12 +108,18 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
-pub async fn download_image(&self, url: &str) -> Result<UrlPreviewData> {
+pub async fn download_image(&self, url: &reqwest::Url) -> Result<UrlPreviewData> {
 	use conduwuit::utils::random_string;
 	use image::ImageReader;
 	use ruma::Mxc;
 
-	let image = self.services.client.url_preview.get(url).send().await?;
+	let image = self
+		.services
+		.client
+		.get_client(&crate::client::ClientType::UrlPreview, url)
+		.get(url.to_owned())
+		.send()
+		.await?;
 	let image = image.bytes().await?;
 	let mxc = Mxc {
 		server_name: self.services.globals.server_name(),
@@ -144,11 +154,16 @@ pub async fn download_image(&self, _url: &str) -> Result<UrlPreviewData> {
 
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
-async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
+async fn download_html(&self, url: &reqwest::Url) -> Result<UrlPreviewData> {
 	use webpage::HTML;
 
-	let client = &self.services.client.url_preview;
-	let mut response = client.get(url).send().await?;
+	let mut response = self
+		.services
+		.client
+		.get_client(&crate::client::ClientType::UrlPreview, url)
+		.get(url.to_owned())
+		.send()
+		.await?;
 
 	let mut bytes: Vec<u8> = Vec::new();
 	while let Some(chunk) = response.chunk().await? {
@@ -165,13 +180,16 @@ async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
 		}
 	}
 	let body = String::from_utf8_lossy(&bytes);
-	let Ok(html) = HTML::from_string(body.to_string(), Some(url.to_owned())) else {
+	let Ok(html) = HTML::from_string(body.to_string(), Some(url.to_string())) else {
 		return Err!(Request(Unknown("Failed to parse HTML")));
 	};
 
 	let mut data = match html.opengraph.images.first() {
 		| None => UrlPreviewData::default(),
-		| Some(obj) => self.download_image(&obj.url).await?,
+		| Some(obj) => match reqwest::Url::parse(&obj.url) {
+			| Ok(url) => self.download_image(&url).await?,
+			| Err(_) => return Err!(Request(Unknown("HTML specified an invalid url"))),
+		},
 	};
 
 	let props = html.opengraph.properties;
@@ -190,7 +208,7 @@ async fn download_html(&self, _url: &str) -> Result<UrlPreviewData> {
 }
 
 #[implement(Service)]
-pub fn url_preview_allowed(&self, url: &Url) -> bool {
+pub fn url_preview_allowed(&self, url: &reqwest::Url) -> bool {
 	if ["http", "https"]
 		.iter()
 		.all(|&scheme| scheme != url.scheme().to_lowercase())

@@ -254,11 +254,13 @@ async fn handle_location(
 
 #[implement(super::Service)]
 async fn location_request(&self, location: &str) -> Result<FileMeta> {
+	let url = reqwest::Url::parse(location)
+		.expect("service->media->remote->location_request: invalid url");
 	let response = self
 		.services
 		.client
-		.extern_media
-		.get(location)
+		.get_client(&crate::client::ClientType::ExternMedia, &url)
+		.get(url)
 		.send()
 		.await?;
 
