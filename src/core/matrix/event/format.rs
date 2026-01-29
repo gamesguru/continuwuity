@@ -147,6 +147,10 @@ impl<'a, E: Event> From<Ref<'a, E>> for Raw<AnySyncStateEvent> {
 			"type": event.kind(),
 		});
 
+		if event.state_key().is_none() {
+			conduwuit::warn!("Serializing AnySyncStateEvent with NULL state_key: {:?}", event.event_id());
+		}
+
 		if let Some(unsigned) = event.unsigned() {
 			json["unsigned"] = json!(unsigned);
 		}
