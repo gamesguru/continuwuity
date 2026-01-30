@@ -8,6 +8,7 @@ pub mod router;
 pub mod server;
 
 pub mod admin;
+pub mod synapse;
 
 pub(crate) use self::router::{Ruma, RumaResponse, State};
 
