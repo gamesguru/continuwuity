@@ -12,6 +12,7 @@ use ruma::{
 		uiaa::{AuthData, AuthType, Password, UiaaInfo, UserIdentifier},
 	},
 };
+use serde::Deserialize;
 
 use crate::{Dep, config, globals, registration_tokens, users};
 
@@ -181,31 +182,61 @@ pub async fn try_auth(
 			uiaainfo.completed.push(AuthType::Password);
 		},
 		| AuthData::ReCaptcha(r) => {
-			if self.services.config.recaptcha_private_site_key.is_none() {
-				return Err!(Request(Forbidden("ReCaptcha is not configured.")));
-			}
-			match recaptcha_verify::verify(
-				self.services
-					.config
-					.recaptcha_private_site_key
-					.as_ref()
-					.unwrap(),
-				r.response.as_str(),
-				None,
-			)
-			.await
-			{
-				| Ok(()) => {
-					uiaainfo.completed.push(AuthType::ReCaptcha);
-				},
-				| Err(e) => {
-					error!("ReCaptcha verification failed: {e:?}");
-					uiaainfo.auth_error = Some(StandardErrorBody {
-						kind: ErrorKind::forbidden(),
-						message: "ReCaptcha verification failed.".to_owned(),
-					});
-					return Ok((false, uiaainfo));
-				},
+			if let Some(secret) = &self.services.config.turnstile_secret_key {
+				let client = reqwest::Client::new();
+				let params = [("secret", secret.as_str()), ("response", r.response.as_str())];
+
+				let res = client
+					.post("https://challenges.cloudflare.com/turnstile/v0/siteverify")
+					.form(&params)
+					.send()
+					.await;
+
+				match res {
+					| Ok(res) => match res.json::<TurnstileResponse>().await {
+						| Ok(data) =>
+							if data.success {
+								uiaainfo.completed.push(AuthType::ReCaptcha);
+							} else {
+								error!("Turnstile verification failed: {:?}", data.error_codes);
+								uiaainfo.auth_error = Some(StandardErrorBody {
+									kind: ErrorKind::forbidden(),
+									message: "Turnstile verification failed.".to_owned(),
+								});
+								return Ok((false, uiaainfo));
+							},
+						| Err(e) => {
+							error!("Failed to parse Turnstile response: {e}");
+							return Err(Error::BadRequest(
+								ErrorKind::Unrecognized,
+								"Failed to verify Turnstile response.",
+							));
+						},
+					},
+					| Err(e) => {
+						error!("Failed to verify Turnstile response: {e}");
+						return Err(Error::BadRequest(
+							ErrorKind::Unrecognized,
+							"Failed to verify Turnstile response.",
+						));
+					},
+				}
+			} else if let Some(secret) = &self.services.config.recaptcha_private_site_key {
+				match recaptcha_verify::verify(secret, r.response.as_str(), None).await {
+					| Ok(()) => {
+						uiaainfo.completed.push(AuthType::ReCaptcha);
+					},
+					| Err(e) => {
+						error!("ReCaptcha verification failed: {e:?}");
+						uiaainfo.auth_error = Some(StandardErrorBody {
+							kind: ErrorKind::forbidden(),
+							message: "ReCaptcha verification failed.".to_owned(),
+						});
+						return Ok((false, uiaainfo));
+					},
+				}
+			} else {
+				return Err!(Request(Forbidden("Captcha is not configured.")));
 			}
 		},
 		| AuthData::RegistrationToken(t) => {
@@ -346,4 +377,12 @@ async fn get_uiaa_session(
 		.await
 		.deserialized()
 		.map_err(|_| err!(Request(Forbidden("UIAA session does not exist."))))
+}
+
+#[derive(Deserialize)]
+struct TurnstileResponse {
+	success: bool,
+	#[serde(default)]
+	#[serde(rename = "error-codes")]
+	error_codes: Vec<String>,
 }

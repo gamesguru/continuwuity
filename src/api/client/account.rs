@@ -313,57 +313,68 @@ pub(crate) async fn register_route(
 		uiaainfo.flows.push(AuthFlow {
 			stages: vec![AuthType::RegistrationToken],
 		});
-	} else {
-		if services
-			.registration_tokens
-			.iterate_tokens()
-			.next()
-			.await
-			.is_some()
+	}
+	if services
+		.registration_tokens
+		.iterate_tokens()
+		.next()
+		.await
+		.is_some()
+	{
+		// Registration token required
+		uiaainfo.flows.push(AuthFlow {
+			stages: vec![AuthType::RegistrationToken],
+		});
+	}
+	if services.config.turnstile_secret_key.is_some() {
+		if let Some(pubkey) = &services.config.turnstile_site_key {
+			// Turnstile required
+			uiaainfo
+				.flows
+				.push(AuthFlow { stages: vec![AuthType::ReCaptcha] });
+			uiaainfo.params = serde_json::value::to_raw_value(&serde_json::json!({
+				"m.login.recaptcha": {
+					"public_key": pubkey,
+				},
+			}))
+			.expect("Failed to serialize recaptcha params");
+		}
+	} else if services.config.recaptcha_private_site_key.is_some() {
+		if let Some(pubkey) = &services.config.recaptcha_site_key {
+			// ReCaptcha required
+			uiaainfo
+				.flows
+				.push(AuthFlow { stages: vec![AuthType::ReCaptcha] });
+			uiaainfo.params = serde_json::value::to_raw_value(&serde_json::json!({
+				"m.login.recaptcha": {
+					"public_key": pubkey,
+				},
+			}))
+			.expect("Failed to serialize recaptcha params");
+		}
+	}
+
+	if uiaainfo.flows.is_empty() && !skip_auth {
+		// Registration isn't _disabled_, but there's no captcha configured and no
+		// registration tokens currently set. Bail out by default unless open
+		// registration was explicitly enabled.
+		if !services
+			.config
+			.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse
 		{
-			// Registration token required
-			uiaainfo.flows.push(AuthFlow {
-				stages: vec![AuthType::RegistrationToken],
-			});
+			return Err!(Request(Forbidden(
+				"This server is not accepting registrations at this time."
+			)));
 		}
 
-		if services.config.recaptcha_private_site_key.is_some() {
-			if let Some(pubkey) = &services.config.recaptcha_site_key {
-				// ReCaptcha required
-				uiaainfo
-					.flows
-					.push(AuthFlow { stages: vec![AuthType::ReCaptcha] });
-				uiaainfo.params = serde_json::value::to_raw_value(&serde_json::json!({
-					"m.login.recaptcha": {
-						"public_key": pubkey,
-					},
-				}))
-				.expect("Failed to serialize recaptcha params");
-			}
-		}
-
-		if uiaainfo.flows.is_empty() && !skip_auth {
-			// Registration isn't _disabled_, but there's no captcha configured and no
-			// registration tokens currently set. Bail out by default unless open
-			// registration was explicitly enabled.
-			if !services
-				.config
-				.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse
-			{
-				return Err!(Request(Forbidden(
-					"This server is not accepting registrations at this time."
-				)));
-			}
-
-			// We have open registration enabled (😧), provide a dummy stage
-			uiaainfo = UiaaInfo {
-				flows: vec![AuthFlow { stages: vec![AuthType::Dummy] }],
-				completed: Vec::new(),
-				params: Box::default(),
-				session: None,
-				auth_error: None,
-			};
-		}
+		// We have open registration enabled (😧), provide a dummy stage
+		uiaainfo = UiaaInfo {
+			flows: vec![AuthFlow { stages: vec![AuthType::Dummy] }],
+			completed: Vec::new(),
+			params: Box::default(),
+			session: None,
+			auth_error: None,
+		};
 	}
 
 	if !skip_auth {
