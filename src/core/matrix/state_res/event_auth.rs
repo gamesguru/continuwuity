@@ -857,7 +857,7 @@ where
 							warn!(
 								%sender,
 								membership_event_id = ?target_user_membership_event_id,
-								membership = ?target_user_current_membership,
+								current_membership = ?target_user_current_membership,
 								"sender cannot join as they are not invited to the invite-only room"
 							);
 							false
@@ -874,7 +874,7 @@ where
 							warn!(
 								%sender,
 								membership_event_id = ?target_user_membership_event_id,
-								membership=?target_user_current_membership,
+								current_membership=?target_user_current_membership,
 								"sender cannot join a knock room without being invited or already joined"
 							);
 							false
@@ -924,7 +924,7 @@ where
 							warn!(
 								%sender,
 								membership_event_id = ?target_user_membership_event_id,
-								membership=?target_user_current_membership,
+								current_membership=?target_user_current_membership,
 								%user_for_join_auth_is_valid,
 								?user_for_join_auth,
 								"sender cannot join as they are not invited nor already joined to the room, nor was a \
