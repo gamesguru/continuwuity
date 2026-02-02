@@ -489,6 +489,20 @@
 #
 #recaptcha_private_site_key =
 
+# The public site key for Cloudflare Turnstile. If this is provided,
+# Turnstile becomes required during registration.
+#
+# If both `turnstile_site_key` and `recaptcha_site_key` are provided,
+# Turnstile will be prioritized.
+#
+#turnstile_site_key =
+
+# The secret key for Cloudflare Turnstile.
+# If this is omitted, Turnstile registration will not work,
+# even if `turnstile_site_key` is set.
+#
+#turnstile_secret_key =
+
 # Controls whether encrypted rooms and events are allowed.
 #
 #allow_encryption = true

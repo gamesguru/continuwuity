@@ -615,6 +615,18 @@ pub struct Config {
 	/// even if `recaptcha_site_key` is set.
 	pub recaptcha_private_site_key: Option<String>,
 
+	/// The public site key for Cloudflare Turnstile. If this is provided,
+	/// Turnstile becomes required during registration.
+	///
+	/// If both `turnstile_site_key` and `recaptcha_site_key` are provided,
+	/// Turnstile will be prioritized.
+	pub turnstile_site_key: Option<String>,
+
+	/// The secret key for Cloudflare Turnstile.
+	/// If this is omitted, Turnstile registration will not work,
+	/// even if `turnstile_site_key` is set.
+	pub turnstile_secret_key: Option<String>,
+
 	/// Controls whether encrypted rooms and events are allowed.
 	#[serde(default = "true_fn")]
 	pub allow_encryption: bool,
