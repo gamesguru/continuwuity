@@ -376,6 +376,66 @@ pub(crate) async fn upload_signatures_route(
 		}
 	}
 
+	// Sending the signed keys to the user's server
+	for (user_id, keys) in &body.signed_keys {
+		if services.globals.user_is_local(user_id) {
+			continue;
+		}
+
+		let mut master_key = None;
+		let mut self_signing_key = None;
+
+		for (key_id, key) in keys {
+			// Check if it's a master key or self-signing key based on the key ID or content
+			// Usually cross-signing keys are named "master" or "self_signing" in the key ID,
+			// or we can infer from the key content if needed.
+			// Ruma's `SigningKeyUpdateContent` expects `Raw<CrossSigningKey>`.
+
+			// We need to determine which key this is.
+			// The key_id for cross-signing keys typically looks like "master" or "self_signing"
+			// but could also be the base64 key ID.
+			// Let's try to parse it as a CrossSigningKey to check usage.
+
+			let Ok(key_json) = serde_json::to_value(key) else {
+				continue;
+			};
+
+			let Ok(cross_signing_key) = serde_json::from_value::<CrossSigningKey>(key_json.clone()) else {
+				// Not a cross-signing key (maybe a device key?), skip
+				continue;
+			};
+
+			let is_master = cross_signing_key.usage.contains(&ruma::encryption::CrossSigningKeyUsage::Master);
+			let is_self_signing = cross_signing_key.usage.contains(&ruma::encryption::CrossSigningKeyUsage::SelfSigning);
+
+			if is_master {
+				master_key = Some(Raw::new(&key_json).expect("valid json"));
+			} else if is_self_signing {
+				self_signing_key = Some(Raw::new(&key_json).expect("valid json"));
+			}
+		}
+
+		if master_key.is_some() || self_signing_key.is_some() {
+			debug!(%user_id, "Sending signing key update to remote server");
+			let mut buf = conduwuit_service::sending::EduBuf::new();
+			serde_json::to_writer(
+				&mut buf,
+				&ruma::api::federation::transactions::edu::Edu::SigningKeyUpdate(
+					ruma::api::federation::transactions::edu::SigningKeyUpdateContent {
+						user_id: user_id.clone(),
+						master_key,
+						self_signing_key,
+					},
+				),
+			)
+			.expect("SigningKeyUpdate EDU can be serialized");
+
+			if let Err(e) = services.sending.send_edu_server(user_id.server_name(), buf) {
+				debug_warn!(%user_id, "Failed to send signing key update: {e}");
+			}
+		}
+	}
+
 	Ok(upload_signatures::v3::Response { failures: BTreeMap::new() })
 }
 
