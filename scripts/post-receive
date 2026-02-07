@@ -8,8 +8,11 @@ if [ -f "$HOME/.cargo/env" ]; then
 fi
 
 echo "Deploying to $TARGET..."
-# Force checkout (HEAD)
-git --work-tree=$TARGET --git-dir=$GIT_DIR checkout -f
+# Force checkout (dev branch)
+if ! git --work-tree=$TARGET --git-dir=$GIT_DIR checkout -f dev; then
+    echo "Error: Failed to checkout dev branch."
+    exit 1
+fi
 
 # Check for [build] in the last commit message
 cd $TARGET || exit 1
