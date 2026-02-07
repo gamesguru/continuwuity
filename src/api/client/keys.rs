@@ -5,7 +5,7 @@ use std::{
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Error, Result, debug, debug_warn, err,
+	Err, Error, Result, debug, debug_warn, err, error, info,
 	result::NotFound,
 	utils,
 	utils::{IterStream, stream::WidebandExt},
