@@ -6,13 +6,11 @@
 
 use axum::{
 	Form,
-	extract::{Path, Query, State},
+	extract::{Query, State},
 	response::{Html, IntoResponse},
 };
 use conduwuit::{Result, err};
 use serde::Deserialize;
-
-use crate::service::Services;
 
 /// Query parameters for fallback auth GET request
 #[derive(Debug, Deserialize)]
@@ -74,6 +72,14 @@ pub async fn post_recaptcha_fallback(
 		.as_ref()
 		.ok_or_else(|| err!(Request(Unknown("reCAPTCHA is not configured on this server"))))?;
 
+	// Get the site key from config (needed for error page)
+	let site_key = services
+		.server
+		.config
+		.recaptcha_site_key
+		.as_ref()
+		.ok_or_else(|| err!(Request(Unknown("reCAPTCHA is not configured on this server"))))?;
+
 	// Verify with Google
 	let valid = services
 		.uiaa
@@ -82,7 +88,11 @@ pub async fn post_recaptcha_fallback(
 
 	if !valid {
 		// Return an error page
-		let html = generate_error_html(session_id, "reCAPTCHA verification failed. Please try again.");
+		let html = generate_error_html(
+			site_key,
+			session_id,
+			"reCAPTCHA verification failed. Please try again.",
+		);
 		return Ok(Html(html));
 	}
 
@@ -96,6 +106,7 @@ pub async fn post_recaptcha_fallback(
 
 /// Generates the HTML page with the reCAPTCHA widget
 fn generate_recaptcha_html(site_key: &str, session_id: &str) -> String {
+	let session_id = escape_html(session_id);
 	format!(
 		r#"<!DOCTYPE html>
 <html>
@@ -170,7 +181,10 @@ fn generate_recaptcha_html(site_key: &str, session_id: &str) -> String {
 }
 
 /// Generates an error HTML page
-fn generate_error_html(session_id: &str, error_message: &str) -> String {
+fn generate_error_html(site_key: &str, session_id: &str, error_message: &str) -> String {
+	let session_id = escape_html(session_id);
+	let error_message = escape_html(error_message);
+
 	format!(
 		r#"<!DOCTYPE html>
 <html>
@@ -236,7 +250,7 @@ fn generate_error_html(session_id: &str, error_message: &str) -> String {
         <p class="error">{error_message}</p>
         <form method="POST">
             <input type="hidden" name="session" value="{session_id}">
-            <div class="g-recaptcha" data-sitekey=""></div>
+            <div class="g-recaptcha" data-sitekey="{site_key}"></div>
             <br>
             <button type="submit">Try Again</button>
         </form>
@@ -244,7 +258,8 @@ fn generate_error_html(session_id: &str, error_message: &str) -> String {
 </body>
 </html>"#,
 		session_id = session_id,
-		error_message = error_message
+		error_message = error_message,
+		site_key = site_key
 	)
 }
 
@@ -307,4 +322,12 @@ fn generate_success_html() -> String {
     </script>
 </body>
 </html>"#.to_string()
+}
+
+fn escape_html(s: &str) -> String {
+	s.replace('&', "&amp;")
+		.replace('<', "&lt;")
+		.replace('>', "&gt;")
+		.replace('"', "&quot;")
+		.replace('\'', "&#x27;")
 }
