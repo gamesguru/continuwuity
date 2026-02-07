@@ -2,12 +2,27 @@ VPS_USER ?= gg
 VPS_HOST ?= dev.nutra.tk
 VPS ?= $(VPS_USER)@$(VPS_HOST)
 LOCAL_BIN_NAME ?= conduwuit
-LOCAL_BIN ?= target/release/$(LOCAL_BIN_NAME)
+
+PROFILE ?= release
+CARGO_FLAGS = --release
+BIN_DIR = target/release
+
+ifeq ($(PROFILE),debug)
+	CARGO_FLAGS =
+	BIN_DIR = target/debug
+endif
+
+ifeq ($(PROFILE),fast-release)
+	CARGO_FLAGS = --profile fast-release
+	BIN_DIR = target/fast-release
+endif
+
+LOCAL_BIN ?= $(BIN_DIR)/$(LOCAL_BIN_NAME)
 REMOTE_BIN ?= /usr/local/bin/$(LOCAL_BIN_NAME)
 
 .PHONY: build
 build:
-	cargo build --release
+	cargo build $(CARGO_FLAGS)
 
 .PHONY: deploy
 deploy: build

@@ -640,6 +640,14 @@ path = "src/main"
 # Release profiles
 #
 
+[profile.fast-release]
+inherits = "release"
+opt-level = 1
+lto = "off"
+codegen-units = 16
+panic = "abort"
+strip = "none"
+
 [profile.release]
 strip = "symbols"
 lto = "thin"
