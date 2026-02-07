@@ -16,3 +16,12 @@ deploy: build
 	scp $(LOCAL_BIN) $(VPS):/tmp/$(REMOTE_BIN_NAME)
 	ssh -t $(VPS) "sudo mv /tmp/$(REMOTE_BIN_NAME) $(REMOTE_BIN) && sudo systemctl restart $(REMOTE_BIN_NAME)"
 	@echo "Deployment complete."
+
+.PHONY: install
+install:
+	@echo "Installing $(LOCAL_BIN_NAME) to $(REMOTE_BIN)..."
+	@if [ ! -f $(LOCAL_BIN) ]; then echo "Error: $(LOCAL_BIN) not found. Run 'cargo build --release' first."; exit 1; fi
+	sudo mv $(LOCAL_BIN) $(REMOTE_BIN)
+	@echo "Restarting $(REMOTE_BIN_NAME) service..."
+	sudo systemctl restart $(REMOTE_BIN_NAME)
+	@echo "Installation complete."
