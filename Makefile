@@ -20,13 +20,6 @@ deploy: build
 install:
 	@echo "Installing $(LOCAL_BIN_NAME) to $(REMOTE_BIN)..."
 	@if [ ! -f $(LOCAL_BIN) ]; then echo "Error: $(LOCAL_BIN) not found. Run 'cargo build --release' first."; exit 1; fi
-	@if [ -f $(REMOTE_BIN) ]; then \
-		echo "Backing up existing binary..."; \
-		VERSION=$$($(REMOTE_BIN) --version | awk '{print $$2}'); \
-		HASH=$$($(REMOTE_BIN) --version | awk '{print $$3}' | tr -d '()'); \
-		echo "Backup: $$BACKUP_NAME"; \
-		sudo cp $(REMOTE_BIN) $$BACKUP_NAME; \
-	fi
 	@echo "Updating systemd service..."
 	sudo cp pkg/conduwuit.service /etc/systemd/system/conduwuit.service
 	sudo systemctl daemon-reload
