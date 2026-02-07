@@ -19,7 +19,7 @@ Environment="CONTINUWUITY_CONFIG_RELOAD_SIGNAL=true"
 
 LoadCredential=conduwuit.toml:/etc/conduwuit/conduwuit.toml
 
-ExecStart=/usr/bin/conduwuit --config ${CREDENTIALS_DIRECTORY}/conduwuit.toml
+ExecStart=/usr/local/bin/conduwuit --config ${CREDENTIALS_DIRECTORY}/conduwuit.toml
 
 AmbientCapabilities=
 CapabilityBoundingSet=

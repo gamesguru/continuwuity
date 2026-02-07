@@ -3,7 +3,7 @@ VPS_HOST ?= dev.nutra.tk
 VPS ?= $(VPS_USER)@$(VPS_HOST)
 LOCAL_BIN_NAME ?= conduwuit
 LOCAL_BIN ?= target/release/$(LOCAL_BIN_NAME)
-REMOTE_BIN ?= /usr/bin/$(LOCAL_BIN_NAME)
+REMOTE_BIN ?= /usr/local/bin/$(LOCAL_BIN_NAME)
 
 .PHONY: build
 build:
