@@ -22,9 +22,9 @@ install:
 	@if [ ! -f $(LOCAL_BIN) ]; then echo "Error: $(LOCAL_BIN) not found. Run 'cargo build --release' first."; exit 1; fi
 	@echo "Checking systemd service..."
 	@if ! cmp -s pkg/conduwuit.service /etc/systemd/system/conduwuit.service; then \
-		echo "Service file changed or missing. Updating..."; \
-		sudo cp pkg/conduwuit.service /etc/systemd/system/conduwuit.service; \
-		sudo systemctl daemon-reload; \
+		echo "Error: pkg/conduwuit.service differs from installed version."; \
+		echo "Automatic update not possible. Please update /etc/systemd/system/conduwuit.service manually."; \
+		exit 1; \
 	else \
 		echo "Service file unchanged."; \
 	fi
