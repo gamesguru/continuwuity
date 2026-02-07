@@ -332,12 +332,13 @@ pub(crate) async fn upload_signatures_route(
 	State(services): State<crate::State>,
 	body: Ruma<upload_signatures::v3::Request>,
 ) -> Result<upload_signatures::v3::Response> {
+	let sender_user = body.sender_user();
+	info!(%sender_user, "Received signature upload request");
+
 	if body.signed_keys.is_empty() {
 		debug!("Empty signed_keys sent in key signature upload");
 		return Ok(upload_signatures::v3::Response::new());
 	}
-
-	let sender_user = body.sender_user();
 
 	for (user_id, keys) in &body.signed_keys {
 		for (key_id, key) in keys {
