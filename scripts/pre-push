@@ -3,7 +3,7 @@
 
 echo "Auto-updating remote git hook..."
 
-if ! make deploy-hook; then
+if ! make git/hooks; then
     echo "Warning: Failed to update remote hook. Using existing version."
     # We don't block the push, just warn.
 fi
