@@ -1,10 +1,9 @@
 VPS_USER ?= gg
 VPS_HOST ?= dev.nutra.tk
-VPS := $(VPS_USER)@$(VPS_HOST)
-LOCAL_BIN_NAME := conduwuit
-REMOTE_BIN_NAME := conduwuit
-LOCAL_BIN := target/release/$(LOCAL_BIN_NAME)
-REMOTE_BIN := /usr/bin/$(REMOTE_BIN_NAME)
+VPS ?= $(VPS_USER)@$(VPS_HOST)
+LOCAL_BIN_NAME ?= conduwuit
+LOCAL_BIN ?= target/release/$(LOCAL_BIN_NAME)
+REMOTE_BIN ?= /usr/bin/$(LOCAL_BIN_NAME)
 
 .PHONY: build
 build:
@@ -21,7 +20,15 @@ deploy: build
 install:
 	@echo "Installing $(LOCAL_BIN_NAME) to $(REMOTE_BIN)..."
 	@if [ ! -f $(LOCAL_BIN) ]; then echo "Error: $(LOCAL_BIN) not found. Run 'cargo build --release' first."; exit 1; fi
+	@if [ -f $(REMOTE_BIN) ]; then \
+		echo "Backing up existing binary..."; \
+		VERSION=$$($(REMOTE_BIN) --version | awk '{print $$2}'); \
+		HASH=$$(sha256sum $(REMOTE_BIN) | cut -c1-8); \
+		BACKUP_NAME="$(dir $(REMOTE_BIN)).$(notdir $(REMOTE_BIN))-$$VERSION-$$HASH"; \
+		echo "Backup: $$BACKUP_NAME"; \
+		sudo cp $(REMOTE_BIN) $$BACKUP_NAME; \
+	fi
 	sudo mv $(LOCAL_BIN) $(REMOTE_BIN)
-	@echo "Restarting $(REMOTE_BIN_NAME) service..."
-	sudo systemctl restart $(REMOTE_BIN_NAME)
+	@echo "Restarting $(LOCAL_BIN_NAME)..."
+	sudo systemctl restart $(LOCAL_BIN_NAME)
 	@echo "Installation complete."
