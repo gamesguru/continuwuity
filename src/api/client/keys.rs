@@ -410,7 +410,7 @@ pub(crate) async fn upload_signatures_route(
 		}
 
 		if master_key.is_some() || self_signing_key.is_some() {
-			debug!(%user_id, "Sending signing key update to remote server");
+			info!(%user_id, "Sending signing key update to remote server");
 			let mut buf = conduwuit_service::sending::EduBuf::new();
 			serde_json::to_writer(
 				&mut buf,
@@ -425,7 +425,7 @@ pub(crate) async fn upload_signatures_route(
 			.expect("SigningKeyUpdate EDU can be serialized");
 
 			if let Err(e) = services.sending.send_edu_server(user_id.server_name(), buf) {
-				debug_warn!(%user_id, "Failed to send signing key update: {e}");
+				error!(%user_id, "Failed to send signing key update: {e}");
 			}
 		}
 	}
