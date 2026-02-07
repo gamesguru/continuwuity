@@ -20,9 +20,14 @@ deploy: build
 install:
 	@echo "Installing $(LOCAL_BIN_NAME) to $(REMOTE_BIN)..."
 	@if [ ! -f $(LOCAL_BIN) ]; then echo "Error: $(LOCAL_BIN) not found. Run 'cargo build --release' first."; exit 1; fi
-	@echo "Updating systemd service..."
-	sudo cp pkg/conduwuit.service /etc/systemd/system/conduwuit.service
-	sudo systemctl daemon-reload
+	@echo "Checking systemd service..."
+	@if ! cmp -s pkg/conduwuit.service /etc/systemd/system/conduwuit.service; then \
+		echo "Service file changed or missing. Updating..."; \
+		sudo cp pkg/conduwuit.service /etc/systemd/system/conduwuit.service; \
+		sudo systemctl daemon-reload; \
+	else \
+		echo "Service file unchanged."; \
+	fi
 	sudo mv $(LOCAL_BIN) $(REMOTE_BIN)
 	@echo "Restarting $(LOCAL_BIN_NAME)..."
 	sudo systemctl restart $(LOCAL_BIN_NAME)
