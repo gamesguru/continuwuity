@@ -11,11 +11,13 @@ echo "Deploying to $TARGET..."
 # Force checkout (HEAD)
 git --work-tree=$TARGET --git-dir=$GIT_DIR checkout -f
 
-# Check for [skip ci] in the last commit message
+# Check for [build] in the last commit message
 cd $TARGET || exit 1
 LAST_MSG=$(git log -1 --pretty=%B)
-if [[ "$LAST_MSG" == *"[skip ci]"* ]]; then
-    echo "Build skipped due to [skip ci] in commit message."
+if [[ "$LAST_MSG" == *"[build]"* ]]; then
+    echo "Build triggered by [build] in commit message."
+else
+    echo "Build skipped. Use '[build]' in commit message to trigger."
     exit 0
 fi
 

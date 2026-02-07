@@ -28,10 +28,14 @@ install:
 	sudo systemctl restart $(LOCAL_BIN_NAME)
 	@echo "Installation complete."
 
-.PHONY: deploy-hook
+.PHONY: git/hooks
 # Helper to update the git hook on the server (run locally)
-deploy-hook:
+git/hooks:
 	@echo "Deploying post-receive hook to git@$(VPS_HOST)..."
-	scp scripts/post-receive git@$(VPS_HOST):repos/home.shane.repos.continuwuity.git/hooks/post-receive
+	scp -p scripts/post-receive git@$(VPS_HOST):repos/home.shane.repos.continuwuity.git/hooks/post-receive
 	ssh git@$(VPS_HOST) "chmod +x repos/home.shane.repos.continuwuity.git/hooks/post-receive"
 	@echo "Hook deployed."
+	@echo "Copying pre-push hook to local .git/hooks..."
+	cp scripts/pre-push .git/hooks/pre-push
+	chmod +x .git/hooks/pre-push
+	@echo "Hook copied."

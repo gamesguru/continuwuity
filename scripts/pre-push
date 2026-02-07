@@ -1,0 +1,11 @@
+#!/bin/bash
+# Automatically deploy the remote post-receive hook before pushing.
+
+echo "Auto-updating remote git hook..."
+
+if ! make deploy-hook; then
+    echo "Warning: Failed to update remote hook. Using existing version."
+    # We don't block the push, just warn.
+fi
+
+exit 0
