@@ -26,9 +26,10 @@ use ruma::{
 		},
 		federation,
 	},
-	encryption::CrossSigningKey,
+	encryption::{CrossSigningKey, KeyUsage},
 	serde::Raw,
 };
+use ruma::api::federation::transactions::edu::{Edu, SigningKeyUpdateContent};
 use serde_json::json;
 
 use super::SESSION_ID_LENGTH;
@@ -385,16 +386,9 @@ pub(crate) async fn upload_signatures_route(
 		let mut master_key = None;
 		let mut self_signing_key = None;
 
-		for (key_id, key) in keys {
-			// Check if it's a master key or self-signing key based on the key ID or content
-			// Usually cross-signing keys are named "master" or "self_signing" in the key ID,
-			// or we can infer from the key content if needed.
+		for (_key_id, key) in keys {
+			// Check if it's a master key or self-signing key based on the key id or content
 			// Ruma's `SigningKeyUpdateContent` expects `Raw<CrossSigningKey>`.
-
-			// We need to determine which key this is.
-			// The key_id for cross-signing keys typically looks like "master" or "self_signing"
-			// but could also be the base64 key ID.
-			// Let's try to parse it as a CrossSigningKey to check usage.
 
 			let Ok(key_json) = serde_json::to_value(key) else {
 				continue;
@@ -405,13 +399,13 @@ pub(crate) async fn upload_signatures_route(
 				continue;
 			};
 
-			let is_master = cross_signing_key.usage.contains(&ruma::encryption::CrossSigningKeyUsage::Master);
-			let is_self_signing = cross_signing_key.usage.contains(&ruma::encryption::CrossSigningKeyUsage::SelfSigning);
+			let is_master = cross_signing_key.usage.contains(&KeyUsage::Master);
+			let is_self_signing = cross_signing_key.usage.contains(&KeyUsage::SelfSigning);
 
 			if is_master {
-				master_key = Some(Raw::new(&key_json).expect("valid json"));
+				master_key = Some(Raw::new(&cross_signing_key).expect("valid CrossSigningKey"));
 			} else if is_self_signing {
-				self_signing_key = Some(Raw::new(&key_json).expect("valid json"));
+				self_signing_key = Some(Raw::new(&cross_signing_key).expect("valid CrossSigningKey"));
 			}
 		}
 
@@ -420,8 +414,8 @@ pub(crate) async fn upload_signatures_route(
 			let mut buf = conduwuit_service::sending::EduBuf::new();
 			serde_json::to_writer(
 				&mut buf,
-				&ruma::api::federation::transactions::edu::Edu::SigningKeyUpdate(
-					ruma::api::federation::transactions::edu::SigningKeyUpdateContent {
+				&Edu::SigningKeyUpdate(
+					SigningKeyUpdateContent {
 						user_id: user_id.clone(),
 						master_key,
 						self_signing_key,

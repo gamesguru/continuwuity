@@ -23,7 +23,7 @@ use ruma::{
 			profile::{get_avatar_url, get_display_name, get_profile, get_profile_key},
 			voip::get_turn_server_info,
 		},
-		federation::{authentication::XMatrix, openid::get_openid_userinfo},
+		federation::authentication::XMatrix,
 	},
 };
 use service::{
