@@ -28,7 +28,7 @@ install:
 	else \
 		echo "Service file unchanged."; \
 	fi
-	sudo mv $(LOCAL_BIN) $(REMOTE_BIN)
+	mv $(LOCAL_BIN) $(REMOTE_BIN)
 	@echo "Restarting $(LOCAL_BIN_NAME)..."
 	sudo systemctl restart $(LOCAL_BIN_NAME)
 	@echo "Installation complete."
