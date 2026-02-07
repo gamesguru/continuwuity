@@ -23,7 +23,7 @@ install:
 	@if [ -f $(REMOTE_BIN) ]; then \
 		echo "Backing up existing binary..."; \
 		VERSION=$$($(REMOTE_BIN) --version | awk '{print $$2}'); \
-		HASH=$$(sha256sum $(REMOTE_BIN) | cut -c1-8); \
+		HASH=$$($(REMOTE_BIN) --version | awk '{print $$3}' | tr -d '()'); \
 		BACKUP_NAME="$(dir $(REMOTE_BIN)).$(notdir $(REMOTE_BIN))-$$VERSION-$$HASH"; \
 		echo "Backup: $$BACKUP_NAME"; \
 		sudo cp $(REMOTE_BIN) $$BACKUP_NAME; \
