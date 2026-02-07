@@ -27,3 +27,11 @@ install:
 	@echo "Restarting $(LOCAL_BIN_NAME)..."
 	sudo systemctl restart $(LOCAL_BIN_NAME)
 	@echo "Installation complete."
+
+.PHONY: deploy-hook
+# Helper to update the git hook on the server (run locally)
+deploy-hook:
+	@echo "Deploying post-receive hook to git@$(VPS_HOST)..."
+	scp scripts/post-receive git@$(VPS_HOST):repos/home.shane.repos.continuwuity.git/hooks/post-receive
+	ssh git@$(VPS_HOST) "chmod +x repos/home.shane.repos.continuwuity.git/hooks/post-receive"
+	@echo "Hook deployed."
