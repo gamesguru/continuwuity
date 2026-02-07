@@ -24,10 +24,12 @@ install:
 		echo "Backing up existing binary..."; \
 		VERSION=$$($(REMOTE_BIN) --version | awk '{print $$2}'); \
 		HASH=$$($(REMOTE_BIN) --version | awk '{print $$3}' | tr -d '()'); \
-		BACKUP_NAME="$(dir $(REMOTE_BIN)).$(notdir $(REMOTE_BIN))-$$VERSION-$$HASH"; \
 		echo "Backup: $$BACKUP_NAME"; \
 		sudo cp $(REMOTE_BIN) $$BACKUP_NAME; \
 	fi
+	@echo "Updating systemd service..."
+	sudo cp pkg/conduwuit.service /etc/systemd/system/conduwuit.service
+	sudo systemctl daemon-reload
 	sudo mv $(LOCAL_BIN) $(REMOTE_BIN)
 	@echo "Restarting $(LOCAL_BIN_NAME)..."
 	sudo systemctl restart $(LOCAL_BIN_NAME)
