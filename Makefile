@@ -32,8 +32,9 @@ deploy: build
 	@echo "Deployment complete."
 
 .PHONY: install
-install: build
+install:
 	@echo "Installing $(LOCAL_BIN_NAME) to $(REMOTE_BIN)..."
+	@if [ ! -f $(LOCAL_BIN) ]; then echo "Error: $(LOCAL_BIN) not found. Run 'cargo build --release' first."; exit 1; fi
 	@echo "Checking systemd service..."
 	@if ! cmp -s pkg/conduwuit.service /etc/systemd/system/conduwuit.service; then \
 		echo "Error: pkg/conduwuit.service differs from installed version."; \
