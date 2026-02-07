@@ -12,9 +12,9 @@ ifeq ($(PROFILE),debug)
 	BIN_DIR = target/debug
 endif
 
-ifeq ($(PROFILE),fast-release)
-	CARGO_FLAGS = --profile fast-release
-	BIN_DIR = target/fast-release
+ifeq ($(PROFILE),release-fast)
+	CARGO_FLAGS = --profile release-fast
+	BIN_DIR = target/release-fast
 endif
 
 LOCAL_BIN ?= $(BIN_DIR)/$(LOCAL_BIN_NAME)

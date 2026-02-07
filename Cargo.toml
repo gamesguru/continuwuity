@@ -640,17 +640,17 @@ path = "src/main"
 # Release profiles
 #
 
-[profile.fast-release]
+[profile.release]
+strip = "symbols"
+lto = "thin"
+
+[profile.release-fast]
 inherits = "release"
 opt-level = 1
 lto = "off"
 codegen-units = 16
 panic = "abort"
 strip = "none"
-
-[profile.release]
-strip = "symbols"
-lto = "thin"
 
 # release profile with debug symbols
 [profile.release-debuginfo]

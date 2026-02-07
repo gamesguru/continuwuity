@@ -186,7 +186,7 @@ pub(crate) async fn sync_events_route(
 ) -> Result<sync_events::v3::Response, RumaResponse<UiaaResponse>> {
 	let (sender_user, sender_device) = body.sender();
 
-    warn!("Sync filter from {}: {:?}", sender_user, body.body.filter);
+	debug!("Sync filter from {}: {:?}", sender_user, body.body.filter);
 
 	// Presence update
 	if services.config.allow_local_presence {
