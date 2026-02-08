@@ -92,6 +92,11 @@ pub(crate) async fn get_keys_route(
 		));
 	}
 
+	let origin = body.origin.as_deref();
+	let users: Vec<_> = body.device_keys.keys().map(ToString::to_string).collect();
+
+	debug!(?origin, ?users, "Received federation keys query");
+
 	let result = get_keys_helper(
 		&services,
 		None,
@@ -101,6 +106,13 @@ pub(crate) async fn get_keys_route(
 		Duration::from_secs(0),
 	)
 	.await?;
+
+	debug!(
+		device_keys_count = result.device_keys.len(),
+		master_keys_count = result.master_keys.len(),
+		self_signing_keys_count = result.self_signing_keys.len(),
+		"Federation keys query result"
+	);
 
 	Ok(get_keys::v1::Response {
 		device_keys: result.device_keys,
