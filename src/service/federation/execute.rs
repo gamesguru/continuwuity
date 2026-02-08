@@ -2,7 +2,8 @@ use std::{fmt::Debug, mem};
 
 use bytes::Bytes;
 use conduwuit::{
-	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, err, implement, trace, warn, error,
+	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, err, error, error::inspect_debug_log,
+	implement, trace, warn,
 };
 use http::{HeaderValue, header::AUTHORIZATION};
 use ipaddress::IPAddress;

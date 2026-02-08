@@ -3,7 +3,7 @@ use std::sync::Arc;
 use conduwuit::{Result, implement};
 use database::{Database, Deserialized, Map};
 use futures::StreamExt;
-use ruma::{RoomId, UserId};
+use ruma::{OwnedRoomId, OwnedUserId, RoomId, UserId};
 
 use crate::{Dep, globals, rooms, rooms::short::ShortStateHash};
 
@@ -57,26 +57,26 @@ pub fn reset_notification_counts(&self, user_id: &UserId, room_id: &RoomId) {
 	self.db
 		.roomuserid_lastnotificationread
 		.put(roomuser_id, count);
-	let roomuser_id = (room_id, user_id);
-	let count = self.services.globals.next_count().unwrap();
-	self.db
-		.roomuserid_lastnotificationread
-		.put(roomuser_id, count);
 }
 
 #[implement(Service)]
 pub fn stream_notification_counts<'a>(
 	&'a self,
 	user_id: &'a UserId,
-) -> impl futures::Stream<Item = (Result<RoomId>, u64)> + Send + 'a {
+) -> impl futures::Stream<Item = (Result<OwnedRoomId>, u64)> + Send + 'a {
 	let prefix = (user_id, database::Interfix);
 	self.db
 		.userroomid_notificationcount
 		.stream_prefix(&prefix)
-		.map(|(key, value): (_, u64)| {
-			let (_, room_id): (UserId, RoomId) =
-				database::keyval::KeyVal::from_bytes(&key).unwrap();
-			(Ok(room_id), value)
+		.map(|res| {
+			let (key, value): (_, u64) = res?;
+			let (_, room_id): (OwnedUserId, OwnedRoomId) = database::de::from_slice(&key)
+				.map_err(conduwuit::Error::from)?;
+			Ok((room_id, value))
+		})
+		.map(|res| match res {
+			| Ok((room_id, value)) => (Ok(room_id), value),
+			| Err(e) => (Err(e), 0),
 		})
 }
 
