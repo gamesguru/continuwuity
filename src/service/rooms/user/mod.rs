@@ -67,15 +67,9 @@ pub fn stream_notification_counts<'a>(
 	let prefix = (user_id, database::Interfix);
 	self.db
 		.userroomid_notificationcount
-		.stream_prefix(&prefix)
-		.map(|res| {
-			let (key, value): (_, u64) = res?;
-			let (_, room_id): (OwnedUserId, OwnedRoomId) = database::de::from_slice(&key)
-				.map_err(conduwuit::Error::from)?;
-			Ok((room_id, value))
-		})
+		.stream_prefix::<(OwnedUserId, OwnedRoomId), u64, _>(&prefix)
 		.map(|res| match res {
-			| Ok((room_id, value)) => (Ok(room_id), value),
+			| Ok(((_user_id, room_id), count)) => (Ok(room_id), count),
 			| Err(e) => (Err(e), 0),
 		})
 }

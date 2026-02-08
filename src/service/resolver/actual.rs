@@ -3,7 +3,8 @@ use std::{
 	net::{IpAddr, SocketAddr},
 };
 
-use conduwuit::{Err, Error, Result, debug, implement, trace, warn};
+use conduwuit::{	Err, Error, Result, debug, debug_info, err, error, implement, trace, warn,
+};
 use futures::{FutureExt, TryFutureExt};
 use hickory_resolver::ResolveError;
 use ipaddress::IPAddress;
