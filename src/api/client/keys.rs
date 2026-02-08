@@ -139,6 +139,9 @@ pub(crate) async fn get_keys_route(
 	body: Ruma<get_keys::v3::Request>,
 ) -> Result<get_keys::v3::Response> {
 	let sender_user = body.sender_user();
+	let users: Vec<_> = body.device_keys.keys().map(ToString::to_string).collect();
+
+	debug!(?sender_user, ?users, "Received keys query request");
 
 	get_keys_helper(
 		&services,
@@ -589,6 +592,7 @@ where
 		.into_iter()
 		.stream()
 		.wide_filter_map(|(server, vec)| async move {
+			debug!(?server, count = vec.len(), "Querying keys over federation");
 			let mut device_keys_input_fed = BTreeMap::new();
 			for (user_id, keys) in vec {
 				device_keys_input_fed.insert(user_id.to_owned(), keys.clone());
@@ -610,6 +614,8 @@ where
 		.collect::<FuturesUnordered<_>>()
 		.await
 		.into_iter();
+
+	debug!(count = futures.len(), "Finished querying keys over federation");
 
 	for (server, response) in futures {
 		match response {
