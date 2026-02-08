@@ -36,12 +36,29 @@ pub async fn fetch_remote_thumbnail(
 		.await;
 
 	if let Err(Error::Request(NotFound, ..)) = &result {
-		return self
+		let result = self
 			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
 			.await;
+
+		if result.is_ok() {
+			return result;
+		}
+	} else if result.is_ok() {
+		return result;
 	}
 
-	result
+	debug_warn!(
+		%mxc,
+		?user,
+		?server,
+		"Failed to fetch remote thumbnail, falling back to full content download"
+	);
+
+	self.fetch_remote_content(mxc, user, server, timeout_ms).await?;
+
+	self.get_thumbnail(mxc, dim).await?.ok_or_else(|| {
+		err!(Request(NotFound("Could not generate thumbnail after fetching full content.")))
+	})
 }
 
 #[implement(super::Service)]
