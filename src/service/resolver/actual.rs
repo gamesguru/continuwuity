@@ -340,7 +340,7 @@ impl super::Service {
 			| Proto(e) => match e.kind() {
 				| ProtoErrorKind::NoRecordsFound { .. } => {
 					// Raise to debug_warn if we can find out the result wasn't from cache
-					debug!(%host, "No DNS records found: {e}");
+					warn!(%host, "No DNS records found: {e}");
 					Ok(())
 				},
 				| ProtoErrorKind::Timeout => {
