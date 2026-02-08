@@ -540,6 +540,8 @@ where
 				}
 			}
 
+			debug!(user_id = ?user_id, device_count = container.len(), "Found local devices for user");
+
 			device_keys.insert(user_id.to_owned(), container);
 		} else {
 			for device_id in device_ids {
