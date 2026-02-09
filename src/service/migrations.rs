@@ -745,7 +745,7 @@ async fn fix_local_invite_state(services: &Services) -> Result {
 	// for each user invited to a room
 	let fixed =  userroomid_invitestate.stream()
 		// if they're a local user on this homeserver
-		.try_filter(|((user_id, _), _): &KeyVal<'_>| ready(services.globals.user_is_local(user_id)))
+		.try_filter(|((user_id, _), _): &KeyVal<'_>| ready(Ok(services.globals.user_is_local(user_id))))
 		.and_then(async |((user_id, room_id), stripped_state): KeyVal<'_>| Ok::<_, conduwuit::Error>((user_id.to_owned(), room_id.to_owned(), stripped_state.deserialize()?)))
 		.try_fold(0_usize, async |mut fixed, (user_id, room_id, stripped_state)| {
 			// and their invite state is None
