@@ -188,6 +188,7 @@ pub(crate) async fn create_invite_route(
 				sender_user,
 				Some(invite_state),
 				body.via.clone(),
+				true,
 			)
 			.await?;
 
