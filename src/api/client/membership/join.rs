@@ -323,7 +323,16 @@ pub async fn join_room_by_id_helper(
 	};
 	if let Ok(m) = membership {
 		if m.membership == MembershipState::Ban {
-			debug_warn!("{sender_user} is banned from {room_id} but attempted to join");
+			warn!("{sender_user} is banned from {room_id} but attempted to join");
+			services
+				.admin
+				.send_text(&format!(
+					"User {} attempted to join {}, but they are banned: {}",
+					sender_user,
+					room_id,
+					m.reason.unwrap_or("No reason provided".to_owned())
+				))
+				.await;
 			// TODO: return reason
 			return Err!(Request(Forbidden("You are banned from the room.")));
 		}
@@ -333,6 +342,34 @@ pub async fn join_room_by_id_helper(
 		return Err!(Request(NotFound(
 			"No servers were provided to assist in joining the room remotely, and we are not \
 			 already participating in the room."
+		)));
+	}
+
+	// continuwuity.rocks: if this room ID is in the auto lock list, lock this user
+	// and send an admin notice.
+	if services
+		.config
+		.auto_lock_on_join
+		.contains(&room_id.to_owned())
+	{
+		warn!(
+			"User {} attempted to join room {} which is on the auto-lock list. Locking user.",
+			sender_user, room_id
+		);
+		services
+			.users
+			.lock_account(sender_user, &services.globals.server_user)
+			.await;
+		services
+			.admin
+			.send_text(&format!(
+				"User {} was automatically locked for attempting to join room {}",
+				sender_user, room_id
+			))
+			.await;
+		return Err!(Request(Forbidden(
+			"This room is banned on this homeserver - your account has been locked, pending \
+			 administrator review."
 		)));
 	}
 

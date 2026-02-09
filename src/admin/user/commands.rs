@@ -8,26 +8,26 @@ use api::client::{
 	update_avatar_url, update_displayname,
 };
 use conduwuit::{
-	debug, debug_warn, error, info, is_equal_to, matrix::{pdu::PduBuilder, Event}, utils::{self, ReadyExt},
+	Err, Result, debug, debug_warn, error, info, is_equal_to,
+	matrix::{Event, pdu::PduBuilder},
+	utils::{self, ReadyExt},
 	warn,
-	Err,
-	Result,
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
+	Int, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomId,
+	UserId,
 	events::{
+		RoomAccountDataEventType, StateEventType,
 		room::{
 			create::RoomCreateEventContent,
 			member::{MembershipState, RoomMemberEventContent},
 			power_levels::{RoomPowerLevels, RoomPowerLevelsEventContent},
 			redaction::RoomRedactionEventContent,
-		}, tag::{TagEvent, TagEventContent, TagInfo},
-		RoomAccountDataEventType,
-		StateEventType,
-	}, int, Int, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	OwnedUserId,
-	RoomId,
-	UserId,
+		},
+		tag::{TagEvent, TagEventContent, TagInfo},
+	},
+	int,
 };
 
 use crate::{

@@ -2085,6 +2085,12 @@ pub struct Config {
 	/// display: nested
 	#[serde(default)]
 	pub matrix_rtc: MatrixRtcConfig,
+	/// (continuwuity.rocks) Room IDs that, when joined, will automatically lock
+	/// users.
+	///
+	/// default: []
+	#[serde(default)]
+	pub auto_lock_on_join: Vec<OwnedRoomId>,
 
 	#[serde(flatten)]
 	#[allow(clippy::zero_sized_map_values)]
