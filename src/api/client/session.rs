@@ -285,32 +285,21 @@ pub(crate) async fn login_route(
 		},
 		| _ => {
 			// Check for m.login.reciprocal
-			if let Some(json) = &body.json_body {
-				if json
-					.as_object()
-					.and_then(|o| o.get("type"))
-					.and_then(|v| v.as_str())
-					== Some("m.login.reciprocal")
-				{
-					debug!("Got reciprocal login type");
-					if !services.server.config.login_via_existing_session {
-						return Err!(Request(Unknown("Reciprocal login is not enabled.")));
-					}
+			let reciprocal_token = body
+				.json_body
+				.as_ref()
+				.filter(|json| {
+					json.get("type").and_then(|v| v.as_str()) == Some("m.login.reciprocal")
+				})
+				.and_then(|json| json.get("token").and_then(|v| v.as_str()));
 
-					let token = json
-						.as_object()
-						.and_then(|o| o.get("token"))
-						.and_then(|v| v.as_str())
-						.ok_or_else(|| err!(Request(MissingToken("Missing login token."))))?;
-
-					services.users.find_from_login_token(token).await?
-				} else {
-					debug!("/login json_body: {:?}", &body.json_body);
-					return Err!(Request(Unknown(debug_warn!(
-						?body.login_info,
-						"Invalid or unsupported login type"
-					))));
+			if let Some(token) = reciprocal_token {
+				debug!("Got reciprocal login type");
+				if !services.server.config.login_via_existing_session {
+					return Err!(Request(Unknown("Reciprocal login is not enabled.")));
 				}
+
+				services.users.find_from_login_token(token).await?
 			} else {
 				debug!("/login json_body: {:?}", &body.json_body);
 				return Err!(Request(Unknown(debug_warn!(
