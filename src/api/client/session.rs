@@ -283,10 +283,34 @@ pub(crate) async fn login_route(
 			user_id
 		},
 		| _ => {
-			debug!("/login json_body: {:?}", &body.json_body);
-			return Err!(Request(Unknown(
-				debug_warn!(?body.login_info, "Invalid or unsupported login type")
-			)));
+			// Check for m.login.reciprocal
+			if let Some(json) = &body.json_body {
+				if json.get("type").and_then(|v| v.as_str()) == Some("m.login.reciprocal") {
+					debug!("Got reciprocal login type");
+					if !services.server.config.login_via_existing_session {
+						return Err!(Request(Unknown("Reciprocal login is not enabled.")));
+					}
+
+					let token = json
+						.get("token")
+						.and_then(|v| v.as_str())
+						.ok_or_else(|| err!(Request(MissingToken("Missing login token."))))?;
+
+					services.users.find_from_login_token(token).await?
+				} else {
+					debug!("/login json_body: {:?}", &body.json_body);
+					return Err!(Request(Unknown(debug_warn!(
+						?body.login_info,
+						"Invalid or unsupported login type"
+					))));
+				}
+			} else {
+				debug!("/login json_body: {:?}", &body.json_body);
+				return Err!(Request(Unknown(debug_warn!(
+					?body.login_info,
+					"Invalid or unsupported login type"
+				))));
+			}
 		},
 	};
 
