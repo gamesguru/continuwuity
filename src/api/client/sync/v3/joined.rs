@@ -578,7 +578,7 @@ async fn build_notification_counts(
 		)
 		.await;
 
-		trace!(%notification_count, %highlight_count, "syncing new notification counts");
+		debug!(%notification_count, %highlight_count, "syncing new notification counts");
 
 		Ok(Some(UnreadNotificationsCount {
 			notification_count: Some(notification_count),
