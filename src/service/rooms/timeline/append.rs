@@ -3,7 +3,7 @@ use std::{
 	sync::Arc,
 };
 
-use conduwuit::trace;
+use conduwuit::{debug, trace};
 use conduwuit_core::{
 	Result, err, error, implement,
 	matrix::{
