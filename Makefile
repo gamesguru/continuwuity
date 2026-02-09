@@ -17,8 +17,8 @@ ifeq ($(PROFILE),release-fast)
 	BIN_DIR = target/release-fast
 endif
 
-LOCAL_BIN ?= $(BIN_DIR)/$(LOCAL_BIN_NAME)
-REMOTE_BIN ?= /usr/local/bin/$(LOCAL_BIN_NAME)
+# Local backup directory (relative to user's home)
+LOCAL_BACKUP_DIR = $(HOME)/$(BACKUP_DIR_BASE)
 
 .PHONY: build
 build:
@@ -43,7 +43,15 @@ install:
 	else \
 		echo "Service file unchanged."; \
 	fi
-	mv $(LOCAL_BIN) $(REMOTE_BIN)
+	@echo "Creating backup directory $(LOCAL_BACKUP_DIR)..."
+	@mkdir -p $(LOCAL_BACKUP_DIR)
+	@if [ -f $(REMOTE_BIN) ]; then \
+		CURRENT_VER=$$($(REMOTE_BIN) --version | awk '{print $$2}'); \
+		echo "Backing up existing binary to $(LOCAL_BACKUP_DIR)/$(LOCAL_BIN_NAME)-$$CURRENT_VER..."; \
+		cp -p $(REMOTE_BIN) $(LOCAL_BACKUP_DIR)/$(LOCAL_BIN_NAME)-$$CURRENT_VER; \
+	fi
+	@echo "Moving new binary..."
+	sudo mv $(LOCAL_BIN) $(REMOTE_BIN)
 	@echo "Restarting $(LOCAL_BIN_NAME)..."
 	sudo systemctl restart $(LOCAL_BIN_NAME)
 	@echo "Installation complete."
