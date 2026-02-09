@@ -9,6 +9,7 @@ use ruma::{
 	push::{Action, Ruleset, Tweak},
 	serde::Raw,
 	uint,
+	MilliSecondsSinceUnixEpoch,
 };
 use futures::StreamExt;
 use conduwuit_core::matrix::pdu::PduCount;
@@ -107,7 +108,8 @@ pub(crate) async fn get_notifications_route(
 			}
 
 			if notify {
-				let event: AnySyncTimelineEvent = pdu_raw.deserialize()?;
+				let event: AnySyncTimelineEvent = serde_json::from_value(serde_json::to_value(&pdu_json).expect("CanonicalJsonObject is valid Value"))
+					.map_err(|e| conduwuit::Error::bad_database(format!("Invalid PDU event: {e}")))?;
 
 				// Construct the Notification object
 				notifications.push(r::Notification {
@@ -115,8 +117,8 @@ pub(crate) async fn get_notifications_route(
 					event,
 					profile_tag: None, // TODO
 					read: false,       // We are scanning unread, so false
-					room_id: Some(room_id.clone()),
-					ts: pdu.origin_server_ts,
+					room_id: room_id.to_owned(),
+					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
 				});
 			}
 		}
