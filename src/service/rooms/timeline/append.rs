@@ -250,7 +250,7 @@ where
 			}
 		}
 
-		trace!(%user, %notify, %highlight, "Evaluated push rules");
+		debug!(%user, %notify, %highlight, "Evaluated push rules");
 
 		if notify {
 			notifies.push(user.clone());
