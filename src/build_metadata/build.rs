@@ -19,7 +19,7 @@ fn get_env(env_var: &str) -> Option<String> {
 fn main() {
 	// built gets the default crate from the workspace. Not sure if this is intended
 	// behavior, but it's what we want.
-	built::write_built_file().expect("Failed to acquire build-time information");
+	// built::write_built_file().expect("Failed to acquire build-time information");
 
 	// --- Git Information ---
 	let mut commit_hash = None;
@@ -39,6 +39,23 @@ fn main() {
 		.or_else(|| run_git_command(&["rev-parse", "--short", "HEAD"]))
 	{
 		println!("cargo:rustc-env=GIT_COMMIT_HASH_SHORT={short_hash}");
+
+		// Construct version extra with hash and branch
+		if get_env("CONTINUWUITY_VERSION_EXTRA").is_none() {
+			if let Some(branch) = get_env("CONTINUWUITY_BRANCH")
+				.or_else(|| run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"]))
+			{
+				let branch_suffix = if branch != "main" && branch != "master" {
+					format!(",b={branch}")
+				} else {
+					String::new()
+				};
+				println!(
+					"cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={short_hash}{branch_suffix}"
+				);
+			}
+		}
+
 		commit_hash_short = Some(short_hash);
 	}
 
@@ -77,17 +94,27 @@ fn main() {
 		println!("cargo:rustc-env=GIT_REMOTE_COMMIT_URL={commit_page}");
 	}
 
-	// --- Rerun Triggers ---
-	// TODO: The git rerun triggers seem to always run
-	// // Rerun if the git HEAD changes
-	// println!("cargo:rerun-if-changed=.git/HEAD");
-	// // Rerun if the ref pointed to by HEAD changes (e.g., new commit on branch)
-	// if let Some(ref_path) = run_git_command(&["symbolic-ref", "--quiet", "HEAD"])
-	// { 	println!("cargo:rerun-if-changed=.git/{ref_path}");
-	// }
+	// Rerun if the git HEAD changes
+	if let Some(head_path) = run_git_command(&["rev-parse", "--git-path", "HEAD"]) {
+		println!("cargo:rerun-if-changed={head_path}");
+	}
+
+	// Rerun if the current branch ref changes (e.g. switching back/forth)
+	if let Some(ref_path) = run_git_command(&["symbolic-ref", "--quiet", "HEAD"]) {
+		if let Some(ref_path) = run_git_command(&["rev-parse", "--git-path", &ref_path]) {
+			println!("cargo:rerun-if-changed={ref_path}");
+		}
+	}
+
+	// Rerun if packed-refs changes (in case the branch is packed)
+	if let Some(packed_refs_path) = run_git_command(&["rev-parse", "--git-path", "packed-refs"]) {
+		println!("cargo:rerun-if-changed={packed_refs_path}");
+	}
 
 	println!("cargo:rerun-if-env-changed=GIT_COMMIT_HASH");
 	println!("cargo:rerun-if-env-changed=GIT_COMMIT_HASH_SHORT");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_URL");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_COMMIT_URL");
+	println!("cargo:rerun-if-env-changed=CONTINUWUITY_VERSION_EXTRA");
+	println!("cargo:rerun-if-env-changed=CONTINUWUITY_BRANCH");
 }

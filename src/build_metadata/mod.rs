@@ -1,6 +1,4 @@
-pub mod built {
-	include!(concat!(env!("OUT_DIR"), "/built.rs"));
-}
+// built module removed: we no longer call built::write_built_file()
 
 pub static GIT_COMMIT_HASH: Option<&str> = option_env!("GIT_COMMIT_HASH");
 

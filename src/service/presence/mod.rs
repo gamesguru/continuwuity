@@ -5,13 +5,12 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use conduwuit::{
-	Error, Result, Server, checked, debug, debug_warn, error, result::LogErr, trace,
+	Error, Result, Server, checked, debug, debug_warn, error, info, result::LogErr, trace,
 };
 use database::Database;
-use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
+use futures::{Stream, StreamExt, TryFutureExt};
 use loole::{Receiver, Sender};
 use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
-use tokio::time::sleep;
 
 use self::{data::Data, presence::Presence};
 use crate::{Dep, globals, users};
@@ -56,21 +55,68 @@ impl crate::Service for Service {
 	}
 
 	async fn worker(self: Arc<Self>) -> Result<()> {
+		use std::collections::HashMap;
+
+		use tokio::time::{Duration, Instant, sleep_until};
+
 		let receiver = self.timer_channel.1.clone();
 
-		let mut presence_timers = FuturesUnordered::new();
+		let mut deadlines: HashMap<OwnedUserId, Instant> = HashMap::new();
+		let mut events_received: u64 = 0;
+		let mut events_expired: u64 = 0;
+		let mut next_tally = Instant::now()
+			.checked_add(Duration::from_secs(300))
+			.unwrap_or_else(Instant::now);
+
 		while !receiver.is_closed() {
+			// Find the soonest deadline, or wait indefinitely
+			let soonest = deadlines.values().copied().min();
+
 			tokio::select! {
-				Some(user_id) = presence_timers.next() => {
-					self.process_presence_timer(&user_id).await.log_err().ok();
+				() = async {
+					match soonest {
+						| Some(deadline) => sleep_until(deadline).await,
+						| None => std::future::pending::<()>().await,
+					}
+				} => {
+					// At least one timer has fired — process all expired deadlines
+					let now = Instant::now();
+					let expired: Vec<OwnedUserId> = deadlines
+						.iter()
+						.filter(|&(_, deadline)| *deadline <= now)
+						.map(|(user_id, _)| user_id.clone())
+						.collect();
+
+					events_expired = events_expired.saturating_add(expired.len().try_into().unwrap_or(u64::MAX));
+					for user_id in expired {
+						deadlines.remove(&user_id);
+						self.process_presence_timer(&user_id).await.log_err().ok();
+					}
 				},
 				event = receiver.recv_async() => match event {
 					Err(_) => break,
 					Ok((user_id, timeout)) => {
-						debug!("Adding timer {}: {user_id} timeout:{timeout:?}", presence_timers.len());
-						presence_timers.push(presence_timer(user_id, timeout));
+						let deadline = Instant::now().checked_add(timeout).unwrap_or_else(Instant::now);
+						debug!("Adding/replacing timer {}: {user_id} timeout:{timeout:?}", deadlines.len());
+						deadlines.insert(user_id, deadline);
+						events_received = events_received.saturating_add(1);
 					},
 				},
+			}
+
+			// Periodic tally
+			if Instant::now() >= next_tally {
+				info!(
+					"presence stats: {} active timers, {} received, {} expired",
+					deadlines.len(),
+					events_received,
+					events_expired
+				);
+				events_received = 0;
+				events_expired = 0;
+				next_tally = Instant::now()
+					.checked_add(Duration::from_secs(300))
+					.unwrap_or_else(Instant::now);
 			}
 		}
 
@@ -279,10 +325,4 @@ impl Service {
 
 		Ok(())
 	}
-}
-
-async fn presence_timer(user_id: OwnedUserId, timeout: Duration) -> OwnedUserId {
-	sleep(timeout).await;
-
-	user_id
 }
