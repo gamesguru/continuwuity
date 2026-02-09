@@ -260,8 +260,9 @@ async fn handle_edu_presence_update(
 			%update.user_id, %origin,
 			"received presence EDU for user not belonging to origin"
 		);
-		return;
 	}
+
+	debug!(%update.user_id, ?update.presence, "Received presence update");
 
 	services
 		.presence

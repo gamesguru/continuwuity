@@ -603,6 +603,7 @@ impl Service {
 				.server_sees_user(server_name, user_id)
 				.await
 			{
+				debug!(%server_name, %user_id, "Skipping presence update: server does not see user");
 				continue;
 			}
 
