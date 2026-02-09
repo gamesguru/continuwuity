@@ -12,7 +12,7 @@ license = "Apache-2.0"
 # See also `rust-toolchain.toml`
 readme = "README.md"
 repository = "https://forgejo.ellis.link/continuwuation/continuwuity"
-version = "0.5.3"
+version = "0.5.4"
 
 [workspace.metadata.crane]
 name = "conduwuit"
@@ -158,7 +158,7 @@ features = ["raw_value"]
 
 # Used for appservice registration files
 [workspace.dependencies.serde-saphyr]
-version = "0.0.14"
+version = "0.0.17"
 
 # Used to load forbidden room/user regex from config
 [workspace.dependencies.serde_regex]
@@ -342,7 +342,7 @@ version = "0.1.2"
 # Used for matrix spec type definitions and helpers
 [workspace.dependencies.ruma]
 git = "https://forgejo.ellis.link/continuwuation/ruwuma"
-rev = "85d00fb5746cba23904234b4fd3c838dcf141541"
+rev = "458d52bdc7f9a07c497be94a1420ebd3d87d7b2b"
 features = [
     "compat",
     "rand",

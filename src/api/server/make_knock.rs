@@ -1,6 +1,6 @@
 use RoomVersionId::*;
 use axum::extract::State;
-use conduwuit::{Err, Error, Result, debug_warn, matrix::pdu::PduBuilder, warn};
+use conduwuit::{Err, Error, Result, debug_warn, info, matrix::pdu::PduBuilder, warn};
 use ruma::{
 	RoomVersionId,
 	api::{client::error::ErrorKind, federation::knock::create_knock_event_template},
@@ -19,6 +19,18 @@ pub(crate) async fn create_knock_event_template_route(
 ) -> Result<create_knock_event_template::v1::Response> {
 	if !services.rooms.metadata.exists(&body.room_id).await {
 		return Err!(Request(NotFound("Room is unknown to this server.")));
+	}
+	if !services
+		.rooms
+		.state_cache
+		.server_in_room(services.globals.server_name(), &body.room_id)
+		.await
+	{
+		info!(
+			origin = body.origin().as_str(),
+			"Refusing to serve make_knock for room we aren't participating in"
+		);
+		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
 	if body.user_id.server_name() != body.origin() {

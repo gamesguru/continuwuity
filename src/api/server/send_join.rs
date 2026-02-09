@@ -36,6 +36,18 @@ async fn create_join_event(
 	if !services.rooms.metadata.exists(room_id).await {
 		return Err!(Request(NotFound("Room is unknown to this server.")));
 	}
+	if !services
+		.rooms
+		.state_cache
+		.server_in_room(services.globals.server_name(), room_id)
+		.await
+	{
+		info!(
+			origin = origin.as_str(),
+			"Refusing to serve send_join for room we aren't participating in"
+		);
+		return Err!(Request(NotFound("This server is not participating in that room.")));
+	}
 
 	// ACL check origin server
 	services
