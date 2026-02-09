@@ -198,7 +198,7 @@ fn handle_error(
 		e = e.without_url();
 		debug!("{e:?}");
 	} else if e.is_redirect() {
-		error!(
+		debug!(
 			%method,
 			%url,
 			final_url = e.url().map(tracing::field::display),
@@ -207,7 +207,7 @@ fn handle_error(
 			e,
 		);
 	} else {
-		error!("{e:?}");
+		debug!("{e:?}");
 	}
 
 	Err(e.into())

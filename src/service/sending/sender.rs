@@ -254,7 +254,7 @@ impl Service {
 
 			let entry = txns.entry(dest.clone()).or_default();
 			if self.server.config.startup_netburst_keep >= 0 && entry.len() >= keep {
-				warn!("Dropping unsent event {dest:?} {:?}", String::from_utf8_lossy(&key));
+				debug!("Dropping unsent event {dest:?} {:?}", String::from_utf8_lossy(&key));
 				self.db.delete_active_request(&key);
 			} else {
 				entry.push(event);
