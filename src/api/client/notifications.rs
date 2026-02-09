@@ -6,7 +6,7 @@ use ruma::{
 		AnySyncTimelineEvent, GlobalAccountDataEventType, StateEventType,
 		push_rules::PushRulesEvent, room::power_levels::RoomPowerLevelsEventContent,
 	},
-	push::{Action, Ruleset, Tweak},
+	push::{Action, Ruleset},
 	serde::Raw,
 	uint,
 	MilliSecondsSinceUnixEpoch,
@@ -28,13 +28,15 @@ pub(crate) async fn get_notifications_route(
 ) -> Result<get_notifications::v3::Response> {
 	// Extract the `limit` and `from` query parameters
 	let limit = body.limit.unwrap_or(uint!(10));
-	let from = body.from.as_deref();
+	let _from = body.from.as_deref();
+
+	let sender_user = body.sender_user.as_ref().expect("user is authenticated");
 
 	let mut notifications = Vec::new();
 
 	// iterate over all rooms where the user has a notification count
 	// this is efficient because we only scan rooms with unread messages
-	let mut rooms_stream = services.users.stream_notification_counts(&body.sender_user);
+	let mut rooms_stream = std::pin::pin!(services.rooms.user.stream_notification_counts(sender_user));
 
 	while let Some((room_id, count)) = rooms_stream.next().await {
 		let Ok(room_id) = room_id else { continue };
@@ -46,12 +48,14 @@ pub(crate) async fn get_notifications_route(
 
 		// Get the last read receipt for this room (as a PDU count)
 		let last_read = services
-			.users
-			.last_notification_read(&body.sender_user, &room_id)
+			.rooms
+			.user
+			.last_notification_read(sender_user, &room_id)
 			.await;
 
 		// Get the power levels for the room (needed for push rules)
 		let power_levels: RoomPowerLevelsEventContent = services
+			.rooms
 			.state_accessor
 			.room_state_get_content(&room_id, &StateEventType::RoomPowerLevels, "")
 			.await
@@ -60,33 +64,35 @@ pub(crate) async fn get_notifications_route(
 		// Get user's push rules
 		let global_account_data = services
 			.account_data
-			.get_global(&body.sender_user, GlobalAccountDataEventType::PushRules)
+			.get_global(sender_user, GlobalAccountDataEventType::PushRules)
 			.await;
 
 		let ruleset = global_account_data
 			.map(|ev: PushRulesEvent| ev.content.global)
-			.unwrap_or_else(|| Ruleset::server_default(&body.sender_user));
+			.unwrap_or_else(|_| Ruleset::server_default(sender_user));
 
 		// Iterate over PDUs in the room *after* the last read receipt
-		let mut pdus = services
+		let mut pdus = std::pin::pin!(services
 			.rooms
 			.timeline
-			.pdus(&room_id, Some(PduCount::Normal(last_read)));
+			.pdus(&room_id, Some(PduCount::Normal(last_read))));
 
-		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
+		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
 			// Skip events sent by the user themselves
-			if pdu.sender == body.sender_user {
+			if pdu.sender == *sender_user {
 				continue;
 			}
 
 			// Check push rules to see if this event should notify
 			let pdu_json = services.rooms.timeline.get_pdu_json(&pdu.event_id).await?;
-			let pdu_raw = Raw::new(&pdu_json).expect("CanonicalJsonValue is valid Raw<...>");
+			let pdu_raw: Raw<AnySyncTimelineEvent> = Raw::new(&pdu_json)
+				.expect("CanonicalJsonValue is valid Raw<...>")
+				.cast();
 
 			let actions = services
 				.pusher
 				.get_actions(
-					&body.sender_user,
+					sender_user,
 					&ruleset,
 					&power_levels,
 					&pdu_raw,
@@ -95,21 +101,15 @@ pub(crate) async fn get_notifications_route(
 				.await;
 
 			let mut notify = false;
-			let mut highlight = false;
-			let mut sound = None;
 
 			for action in actions {
-				match action {
-					| Action::Notify => notify = true,
-					| Action::SetTweak(Tweak::Highlight(h)) => highlight = *h,
-					| Action::SetTweak(Tweak::Sound(s)) => sound = Some(s.clone()),
-					| _ => {},
+				if matches!(action, Action::Notify) {
+					notify = true;
 				}
 			}
 
 			if notify {
-				let event: AnySyncTimelineEvent = serde_json::from_value(serde_json::to_value(&pdu_json).expect("CanonicalJsonObject is valid Value"))
-					.map_err(|e| conduwuit::Error::bad_database(format!("Invalid PDU event: {e}")))?;
+				let event: Raw<AnySyncTimelineEvent> = pdu_raw.clone();
 
 				// Construct the Notification object
 				notifications.push(r::Notification {

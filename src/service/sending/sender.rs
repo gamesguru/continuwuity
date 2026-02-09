@@ -10,7 +10,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit_core::{
-	Error, Event, Result, debug, err, error,
+	Error, Event, Result, err, error,
 	result::LogErr,
 	trace,
 	utils::{
