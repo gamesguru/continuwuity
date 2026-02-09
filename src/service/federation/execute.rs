@@ -3,7 +3,7 @@ use std::{fmt::Debug, mem};
 use bytes::Bytes;
 use conduwuit::{
 	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, err, error, error::inspect_debug_log,
-	implement, trace, warn,
+	implement, trace,
 };
 use http::{HeaderValue, header::AUTHORIZATION};
 use ipaddress::IPAddress;
@@ -196,7 +196,7 @@ fn handle_error(
 ) -> Result {
 	if e.is_timeout() || e.is_connect() {
 		e = e.without_url();
-		warn!("{e:?}");
+		debug!("{e:?}");
 	} else if e.is_redirect() {
 		error!(
 			%method,
