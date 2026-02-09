@@ -49,7 +49,8 @@ pub(crate) async fn get_login_types_route(
 		get_login_types::v3::LoginType::Token(TokenLoginType {
 			get_login_token: services.server.config.login_via_existing_session,
 		}),
-		get_login_types::v3::LoginType::new("m.login.reciprocal"),
+		// TODO: This uses the unstable, private API `LoginType::new` because Ruma doesn't have a variant for this yet (and custom is not available in this version?)
+		get_login_types::v3::LoginType::new("m.login.reciprocal", Default::default()).expect("LoginType::new failed"),
 	]))
 }
 
