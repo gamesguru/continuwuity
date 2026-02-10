@@ -1,7 +1,9 @@
 use axum::extract::State;
-use conduwuit::Result;
+use conduwuit::{Result, matrix::pdu::PduCount};
+use futures::StreamExt;
 use ruma::{
-	api::client::push::get_notifications,
+	MilliSecondsSinceUnixEpoch,
+	api::client::push::{get_notifications, get_notifications::v3 as r},
 	events::{
 		AnySyncTimelineEvent, GlobalAccountDataEventType, StateEventType,
 		push_rules::PushRulesEvent, room::power_levels::RoomPowerLevelsEventContent,
@@ -9,11 +11,8 @@ use ruma::{
 	push::{Action, Ruleset},
 	serde::Raw,
 	uint,
-	MilliSecondsSinceUnixEpoch,
 };
-use futures::StreamExt;
-use conduwuit::matrix::pdu::PduCount;
-use ruma::api::client::push::get_notifications::v3 as r;
+use tracing::warn;
 
 use crate::Ruma;
 
@@ -27,8 +26,7 @@ pub(crate) async fn get_notifications_route(
 	body: Ruma<get_notifications::v3::Request>,
 ) -> Result<get_notifications::v3::Response> {
 	// Extract the `limit` and `from` query parameters
-	let limit = body.limit.unwrap_or(uint!(10));
-	let _from = body.from.as_deref();
+	let limit = body.limit.unwrap_or_else(|| uint!(10));
 
 	let sender_user = body.sender_user.as_ref().expect("user is authenticated");
 
@@ -36,10 +34,17 @@ pub(crate) async fn get_notifications_route(
 
 	// iterate over all rooms where the user has a notification count
 	// this is efficient because we only scan rooms with unread messages
-	let mut rooms_stream = std::pin::pin!(services.rooms.user.stream_notification_counts(sender_user));
+	let mut rooms_stream =
+		std::pin::pin!(services.rooms.user.stream_notification_counts(sender_user));
 
 	while let Some((room_id, count)) = rooms_stream.next().await {
-		let Ok(room_id) = room_id else { continue };
+		let room_id = match room_id {
+			| Ok(room_id) => room_id,
+			| Err(e) => {
+				warn!("Failed to get room_id from notification stream: {e}");
+				continue;
+			},
+		};
 
 		// Skip rooms with no notifications
 		if count == 0 {
@@ -67,15 +72,18 @@ pub(crate) async fn get_notifications_route(
 			.get_global(sender_user, GlobalAccountDataEventType::PushRules)
 			.await;
 
-		let ruleset = global_account_data
-			.map(|ev: PushRulesEvent| ev.content.global)
-			.unwrap_or_else(|_| Ruleset::server_default(sender_user));
+		let ruleset = global_account_data.map_or_else(
+			|_| Ruleset::server_default(sender_user),
+			|ev: PushRulesEvent| ev.content.global,
+		);
 
 		// Iterate over PDUs in the room *after* the last read receipt
-		let mut pdus = std::pin::pin!(services
-			.rooms
-			.timeline
-			.pdus(&room_id, Some(PduCount::Normal(last_read))));
+		let mut pdus = std::pin::pin!(
+			services
+				.rooms
+				.timeline
+				.pdus(&room_id, Some(PduCount::Normal(last_read)))
+		);
 
 		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
 			// Skip events sent by the user themselves
@@ -91,13 +99,7 @@ pub(crate) async fn get_notifications_route(
 
 			let actions = services
 				.pusher
-				.get_actions(
-					sender_user,
-					&ruleset,
-					&power_levels,
-					&pdu_raw,
-					&room_id,
-				)
+				.get_actions(sender_user, &ruleset, &power_levels, &pdu_raw, &room_id)
 				.await;
 
 			let mut notify = false;
@@ -117,7 +119,7 @@ pub(crate) async fn get_notifications_route(
 					event,
 					profile_tag: None, // TODO
 					read: false,       // We are scanning unread, so false
-					room_id: room_id.to_owned(),
+					room_id: room_id.clone(),
 					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
 				});
 			}
@@ -134,8 +136,8 @@ pub(crate) async fn get_notifications_route(
 		.collect();
 
 	// TODO: implement pagination token (next_token)
-	// For now we return None, which means the client might re-request if they scroll?
-	// But since this is "unread" focus, it might be fine.
+	// For now we return None, which means the client might re-request if they
+	// scroll? But since this is "unread" focus, it might be fine.
 
 	Ok(get_notifications::v3::Response {
 		next_token: None,
