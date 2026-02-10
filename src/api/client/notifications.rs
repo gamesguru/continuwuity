@@ -28,12 +28,11 @@ pub(crate) async fn get_notifications_route(
 	// Extract the `limit` and `from` query parameters
 	let limit = body.limit.unwrap_or_else(|| uint!(10));
 
-	let sender_user = body.sender_user.as_ref().expect("user is authenticated");
+	let sender_user = body.sender_user();
 
 	let mut notifications = Vec::new();
 
 	// iterate over all rooms where the user has a notification count
-	// this is efficient because we only scan rooms with unread messages
 	let mut rooms_stream =
 		std::pin::pin!(services.rooms.user.stream_notification_counts(sender_user));
 
@@ -51,7 +50,7 @@ pub(crate) async fn get_notifications_route(
 			continue;
 		}
 
-		// Get the last read receipt for this room (as a PDU count)
+		// Get the last read receipt for this room (as PDU count)
 		let last_read = services
 			.rooms
 			.user
@@ -77,15 +76,24 @@ pub(crate) async fn get_notifications_route(
 			|ev: PushRulesEvent| ev.content.global,
 		);
 
-		// Iterate over PDUs in the room *after* the last read receipt
-		let mut pdus = std::pin::pin!(
-			services
-				.rooms
-				.timeline
-				.pdus(&room_id, Some(PduCount::Normal(last_read)))
-		);
+		// Iterate backwards over PDUs using pdus_rev to find the newest updates first
+		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
 
-		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
+		let mut notifications_found = 0;
+
+		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
+			// Stop if we've reached the user's last read receipt
+			if let PduCount::Normal(c) = pdu_count {
+				if c <= last_read {
+					break;
+				}
+			}
+
+			// Limit the number of notifications found
+			if notifications_found >= u64::from(limit) {
+				break;
+			}
+
 			// Skip events sent by the user themselves
 			if pdu.sender == *sender_user {
 				continue;
@@ -122,6 +130,8 @@ pub(crate) async fn get_notifications_route(
 					room_id: room_id.clone(),
 					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
 				});
+
+				notifications_found += 1;
 			}
 		}
 	}
