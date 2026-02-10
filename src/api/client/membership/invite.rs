@@ -213,7 +213,14 @@ pub(crate) async fn invite_helper(
 				err!(Request(InvalidParam("Could not accept incoming PDU as timeline event.")))
 			})?;
 
-		return services.sending.send_pdu_room(room_id, &pdu_id).await;
+		let result = services.sending.send_pdu_room(room_id, &pdu_id).await;
+		if result.is_ok() {
+			services
+				.admin
+				.notice(&format!("{} invited {} to {}", sender_user, recipient_user, room_id))
+				.await;
+		}
+		return result;
 	}
 
 	if !services
@@ -250,6 +257,10 @@ pub(crate) async fn invite_helper(
 		.await?;
 
 	drop(state_lock);
+	services
+		.admin
+		.notice(&format!("{} invited {} to {}", sender_user, recipient_user, room_id))
+		.await;
 
 	Ok(())
 }

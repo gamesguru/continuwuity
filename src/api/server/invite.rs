@@ -4,7 +4,7 @@ use base64::{Engine as _, engine::general_purpose};
 use conduwuit::{
 	Err, Error, PduEvent, Result, err, error,
 	matrix::{Event, event::gen_event_id},
-	utils::{self, hash::sha256},
+	utils::{self, hash::sha256, time::format},
 	warn,
 };
 use ruma::{
@@ -154,6 +154,13 @@ pub(crate) async fn create_invite_route(
 		.await
 	{
 		warn!("Antispam rejected invite: {e:?}");
+		services
+			.admin
+			.notice(&format!(
+				"Antispam rejected invite from {} to {} in room {}: {e:?}",
+				sender_user, recipient_user, body.room_id
+			))
+			.await;
 		return Err!(Request(Forbidden("Invite rejected by antispam service.")));
 	}
 
@@ -223,6 +230,11 @@ pub(crate) async fn create_invite_route(
 			}
 		}
 	}
+
+	services
+		.admin
+		.notice(&format!("{} invited {} to {}", sender_user, recipient_user, body.room_id))
+		.await;
 
 	Ok(create_invite::v2::Response {
 		event: services
