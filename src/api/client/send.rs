@@ -2,8 +2,14 @@ use std::collections::BTreeMap;
 
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
-use conduwuit::{Err, Result, err, matrix::pdu::PduBuilder, utils};
-use ruma::{api::client::message::send_message_event, events::MessageLikeEventType};
+use conduwuit::{Err, Error, Result, err, matrix::pdu::PduBuilder, utils};
+use ruma::{
+	api::client::{
+		error::{ErrorKind, RetryAfter::Delay},
+		message::send_message_event,
+	},
+	events::MessageLikeEventType,
+};
 use serde_json::from_str;
 
 use crate::Ruma;
@@ -77,6 +83,20 @@ pub(crate) async fn send_message_event_route(
 	let content = from_str(body.body.body.json().get())
 		.map_err(|e| err!(Request(BadJson("Invalid JSON body: {e}"))))?;
 
+	let is_admin = services.admin.user_is_admin(sender_user).await;
+	if !is_admin
+		&& let Some(reset_after) = services
+			.rooms
+			.ratelimiter
+			.reset_after(sender_user.to_owned(), body.room_id.clone())
+	{
+		return Err(Error::Request(
+			ErrorKind::LimitExceeded { retry_after: Some(Delay(reset_after)) },
+			"You are sending messages too quickly. Please wait before trying again.".into(),
+			http::StatusCode::TOO_MANY_REQUESTS,
+		));
+	}
+
 	let event_id = services
 		.rooms
 		.timeline
@@ -93,6 +113,13 @@ pub(crate) async fn send_message_event_route(
 			&state_lock,
 		)
 		.await?;
+
+	if !is_admin {
+		services
+			.rooms
+			.ratelimiter
+			.hit(sender_user.to_owned(), body.room_id.clone());
+	}
 
 	services.transactions.add_client_txnid(
 		sender_user,

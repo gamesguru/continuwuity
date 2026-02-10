@@ -330,7 +330,7 @@ pub async fn join_room_by_id_helper(
 					"User {} attempted to join {}, but they are banned: {}",
 					sender_user,
 					room_id,
-					m.reason.unwrap_or("No reason provided".to_owned())
+					m.reason.unwrap_or_else(|| "No reason provided".to_owned())
 				))
 				.await;
 			// TODO: return reason
@@ -363,8 +363,8 @@ pub async fn join_room_by_id_helper(
 		services
 			.admin
 			.send_text(&format!(
-				"User {} was automatically locked for attempting to join room {}",
-				sender_user, room_id
+				"User {sender_user} was automatically locked for attempting to join room \
+				 {room_id}",
 			))
 			.await;
 		return Err!(Request(Forbidden(

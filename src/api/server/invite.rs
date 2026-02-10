@@ -4,7 +4,7 @@ use base64::{Engine as _, engine::general_purpose};
 use conduwuit::{
 	Err, Error, PduEvent, Result, err, error,
 	matrix::{Event, event::gen_event_id},
-	utils::{self, hash::sha256, time::format},
+	utils::{self, hash::sha256},
 	warn,
 };
 use ruma::{
