@@ -20,7 +20,7 @@ use crate::Ruma;
 ///
 /// Get notifications for the user.
 ///
-/// Returns a list of notifications based on the user's push rules and room history.
+/// Returns list of notifications based on user push rules & room history.
 pub(crate) async fn get_notifications_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_notifications::v3::Request>,
