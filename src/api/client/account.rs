@@ -153,7 +153,13 @@ pub(crate) async fn register_route(
 	let allow_registration =
 		services.config.allow_registration || services.firstrun.is_first_run();
 
-	if !allow_registration && body.appservice_info.is_none() {
+	if services.globals.registration_killed() {
+		return Err!(Request(Forbidden(
+			"This server is not accepting registrations at this time."
+		)));
+	}
+
+	if !services.config.allow_registration && body.appservice_info.is_none() {
 		match (body.username.as_ref(), body.initial_device_display_name.as_ref()) {
 			| (Some(username), Some(device_display_name)) => {
 				info!(
