@@ -20,7 +20,7 @@ use ruma::{
 	events::room::create::RoomCreateEventContent,
 };
 
-use crate::{Dep, globals, rooms, sending, server_keys};
+use crate::{Dep, admin, globals, rooms, sending, server_keys};
 
 pub struct Service {
 	pub mutex_federation: RoomMutexMap,
@@ -30,6 +30,7 @@ pub struct Service {
 
 struct Services {
 	globals: Dep<globals::Service>,
+	admin: Dep<admin::Service>,
 	sending: Dep<sending::Service>,
 	auth_chain: Dep<rooms::auth_chain::Service>,
 	metadata: Dep<rooms::metadata::Service>,
@@ -56,6 +57,7 @@ impl crate::Service for Service {
 			federation_handletime: HandleTimeMap::new().into(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
+				admin: args.depend::<admin::Service>("admin"),
 				sending: args.depend::<sending::Service>("sending"),
 				auth_chain: args.depend::<rooms::auth_chain::Service>("rooms::auth_chain"),
 				metadata: args.depend::<rooms::metadata::Service>("rooms::metadata"),

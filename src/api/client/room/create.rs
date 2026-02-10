@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Result, RoomVersion, debug, debug_info, debug_warn, err, info,
+	Err, Error, Result, RoomVersion, debug, debug_info, debug_warn, err, info,
 	matrix::{StateKey, pdu::PduBuilder},
 	trace, warn,
 };
@@ -10,7 +10,10 @@ use conduwuit_service::{Services, appservice::RegistrationInfo};
 use futures::FutureExt;
 use ruma::{
 	CanonicalJsonObject, Int, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomVersionId,
-	api::client::room::{self, create_room},
+	api::client::{
+		error::{ErrorKind, RetryAfter::Delay},
+		room::{self, create_room},
+	},
 	events::{
 		TimelineEventType,
 		invite_permission_config::FilterLevel,
@@ -156,6 +159,13 @@ pub(crate) async fn create_room_route(
 		invitees.insert(recipient_user.clone());
 	}
 
+	let is_admin = services.users.is_admin(sender_user).await;
+	if invitees.len() > 10 && !is_admin {
+		return Err!(Request(Forbidden(
+			"You cannot invite more than 10 users to a room during creation."
+		)));
+	}
+
 	let alias: Option<OwnedRoomAliasId> = match body.room_alias_name.as_ref() {
 		| Some(alias) =>
 			Some(room_alias_check(&services, alias, body.appservice_info.as_ref()).await?),
@@ -227,6 +237,19 @@ pub(crate) async fn create_room_route(
 		},
 	};
 
+	if !is_admin
+		&& let Some(retry_after) = services
+			.rooms
+			.ratelimiter
+			.reset_after(sender_user.to_owned(), ruma::room_id!("!#create_room").to_owned())
+	{
+		return Err(Error::Request(
+			ErrorKind::LimitExceeded { retry_after: Some(Delay(retry_after)) },
+			"You're creating rooms too quickly. Please wait a bit before trying again.".into(),
+			http::StatusCode::TOO_MANY_REQUESTS,
+		));
+	}
+
 	// 1. The room create event
 	debug!("Creating room create event for {sender_user} in room {room_id:?}");
 	let tmp_id = room_id.as_deref();
@@ -247,6 +270,12 @@ pub(crate) async fn create_room_route(
 		)
 		.boxed()
 		.await?;
+	if !is_admin {
+		services
+			.rooms
+			.ratelimiter
+			.hit(sender_user.to_owned(), ruma::room_id!("!#create_room").to_owned());
+	}
 	trace!("Created room create event with ID {}", &create_event_id);
 	let room_id = match room_id.clone() {
 		| Some(room_id) => room_id,
@@ -287,6 +316,33 @@ pub(crate) async fn create_room_route(
 		)
 		.boxed()
 		.await?;
+
+	services
+		.admin
+		.notice(&format!(
+			"{sender_user} created room {room_id} with version {room_version} (name: {}, alias: \
+			 {}, federated: {}, direct: {}, encrypted: {}, invitees: {})",
+			body.name.as_deref().unwrap_or("<no name>"),
+			alias
+				.as_ref()
+				.map(|a| a.as_str())
+				.unwrap_or("<no alias name>"),
+			create_content
+				.get("m.federate")
+				.and_then(|v| v.as_bool())
+				.unwrap_or(true),
+			body.is_direct,
+			body.initial_state.iter().any(|e| {
+				e.deserialize_as::<PduBuilder>()
+					.is_ok_and(|event| event.event_type == TimelineEventType::RoomEncryption)
+			}),
+			invitees
+				.iter()
+				.map(|u| u.as_str())
+				.collect::<Vec<_>>()
+				.join(", ")
+		))
+		.await;
 
 	// 3. Power levels
 

@@ -8,7 +8,13 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
-use ruma::{CanonicalJsonValue, RoomId, ServerName, events::StateEventType};
+use ruma::{
+	CanonicalJsonValue, RoomId, ServerName,
+	events::{
+		StateEventType,
+		room::member::{MembershipState, RoomMemberEventContent},
+	},
+};
 
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
@@ -247,6 +253,42 @@ where
 			.state
 			.force_state(room_id, shortstatehash, added, removed, &state_lock)
 			.await?;
+
+		// If this is a membership state event, notify the admin room if a local user
+		// was kicked, banned, or unbanned.
+		if incoming_pdu.kind().to_string() == "m.room.member" {
+			let new_membership = incoming_pdu.get_content::<RoomMemberEventContent>();
+			if let Ok(new_membership) = new_membership {
+				if incoming_pdu.sender().as_str() != incoming_pdu.state_key().unwrap_or_default()
+				{
+					if matches!(new_membership.membership, MembershipState::Ban) {
+						self.services
+							.admin
+							.send_text(&format!(
+								"User {} was banned in room {} by {}: {}",
+								incoming_pdu.state_key().unwrap_or_default(),
+								room_id,
+								incoming_pdu.sender(),
+								new_membership
+									.reason
+									.clone()
+									.unwrap_or_else(|| "<no reason>".to_owned())
+							))
+							.await;
+					} else if matches!(new_membership.membership, MembershipState::Leave) {
+						self.services
+							.admin
+							.send_text(&format!(
+								"User {} was kicked or unbanned in room {} by {}",
+								incoming_pdu.state_key().unwrap_or_default(),
+								room_id,
+								incoming_pdu.sender(),
+							))
+							.await;
+					}
+				}
+			}
+		}
 	}
 
 	if !soft_fail {

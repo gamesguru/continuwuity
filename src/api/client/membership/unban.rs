@@ -51,6 +51,15 @@ pub(crate) async fn unban_user_route(
 			&state_lock,
 		)
 		.await?;
+	services
+		.admin
+		.send_text(&format!(
+			"User {} was unbanned from room {} by {sender_user}: {}",
+			body.user_id,
+			body.room_id,
+			body.reason.as_deref().unwrap_or("No reason provided.")
+		))
+		.await;
 
 	drop(state_lock);
 
