@@ -77,13 +77,21 @@ fn main() {
 		println!("cargo:rustc-env=GIT_REMOTE_COMMIT_URL={commit_page}");
 	}
 
-	// --- Rerun Triggers ---
-	// TODO: The git rerun triggers seem to always run
 	// Rerun if the git HEAD changes
-	println!("cargo:rerun-if-changed=.git/HEAD");
-	// Rerun if the ref pointed to by HEAD changes (e.g., new commit on branch)
+	if let Some(head_path) = run_git_command(&["rev-parse", "--git-path", "HEAD"]) {
+		println!("cargo:rerun-if-changed={head_path}");
+	}
+
+	// Rerun if the current branch ref changes (e.g. switching back/forth)
 	if let Some(ref_path) = run_git_command(&["symbolic-ref", "--quiet", "HEAD"]) {
-		println!("cargo:rerun-if-changed=.git/{ref_path}");
+		if let Some(ref_path) = run_git_command(&["rev-parse", "--git-path", &ref_path]) {
+			println!("cargo:rerun-if-changed={ref_path}");
+		}
+	}
+
+	// Rerun if packed-refs changes (in case the branch is packed)
+	if let Some(packed_refs_path) = run_git_command(&["rev-parse", "--git-path", "packed-refs"]) {
+		println!("cargo:rerun-if-changed={packed_refs_path}");
 	}
 
 	println!("cargo:rerun-if-env-changed=GIT_COMMIT_HASH");
