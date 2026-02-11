@@ -54,7 +54,7 @@ pub(crate) async fn get_notifications_route(
 		let room_id = match room_id {
 			| Ok(room_id) => room_id,
 			| Err(_e) => {
-				//warn!("Failed to get room_id from notification stream: {e}");
+				warn!("Failed to get room_id from notification stream: {e}");
 				continue;
 			},
 		};
@@ -90,8 +90,7 @@ pub(crate) async fn get_notifications_route(
 
 		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
 			// Skip events strictly newer than our start_ts (pagination)
-			// (Note: since we scan forward, we could optimization this, but filtering is
-			// safe)
+			// (Note: since we scan forward, it's sub-optimal but safe enough)
 			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX) {
 				continue;
 			}
@@ -145,11 +144,8 @@ pub(crate) async fn get_notifications_route(
 		.take(limit.try_into().unwrap_or(usize::MAX))
 		.collect();
 
-	// Return the timestamp of the last notification as the next_token
-	let _next_token = limited_notifications.last().map(|n| n.ts.0.to_string());
-
 	Ok(get_notifications::v3::Response {
-		next_token: None, // Temporarily disabled to match 1dd00e80 behavior
+		next_token: None, // TODO, but not vital apparently
 		notifications: limited_notifications,
 	})
 }
