@@ -12,7 +12,6 @@ use ruma::{
 	serde::Raw,
 	uint,
 };
-use tracing::warn;
 
 use crate::Ruma;
 
@@ -32,23 +31,11 @@ pub(crate) async fn get_notifications_route(
 
 	let mut notifications = Vec::new();
 
-	// iterate over all rooms where the user has a notification count
-	let mut rooms_stream =
-		std::pin::pin!(services.rooms.user.stream_notification_counts(sender_user));
+	// iterate over all joined rooms to catch read notifications (history) too
+	let mut rooms_stream = std::pin::pin!(services.rooms.state_cache.rooms_joined(sender_user));
 
-	while let Some((room_id, count)) = rooms_stream.next().await {
-		let room_id = match room_id {
-			| Ok(room_id) => room_id,
-			| Err(e) => {
-				warn!("Failed to get room_id from notification stream: {e}");
-				continue;
-			},
-		};
-
-		// Skip rooms with no notifications
-		if count == 0 {
-			continue;
-		}
+	while let Some(room_id) = rooms_stream.next().await {
+		let room_id = room_id.to_owned();
 
 		// Get the last read receipt for this room (as PDU count)
 		let last_read = services
@@ -79,18 +66,15 @@ pub(crate) async fn get_notifications_route(
 		// Iterate backwards over PDUs using pdus_rev to find the newest updates first
 		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
 
-		let mut notifications_found = 0;
+		// Search depth (iterations) to prevent checking too far back in history
+		// Synapse default is flexible, but we need a hard limit to avoid slow responses
+		// checking 50 events per room seems reasonable for recent notifications
+		let search_limit = 50;
+		let mut iterations = 0;
 
 		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
-			// Stop if we've reached the user's last read receipt
-			if let PduCount::Normal(c) = pdu_count {
-				if c <= last_read {
-					break;
-				}
-			}
-
-			// Limit the number of notifications found
-			if notifications_found >= u64::from(limit) {
+			iterations += 1;
+			if iterations > search_limit {
 				break;
 			}
 
@@ -121,17 +105,22 @@ pub(crate) async fn get_notifications_route(
 			if notify {
 				let event: Raw<AnySyncTimelineEvent> = pdu_raw.clone();
 
+				// Determine read status
+				let read = if let PduCount::Normal(c) = pdu_count {
+					c <= last_read
+				} else {
+					false
+				};
+
 				// Construct the Notification object
 				notifications.push(r::Notification {
 					actions: actions.to_vec(),
 					event,
 					profile_tag: None, // TODO
-					read: false,       // We are scanning unread, so false
+					read,
 					room_id: room_id.clone(),
 					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
 				});
-
-				notifications_found += 1;
 			}
 		}
 	}
