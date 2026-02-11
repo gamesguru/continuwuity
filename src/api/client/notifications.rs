@@ -79,37 +79,19 @@ pub(crate) async fn get_notifications_route(
 			.room_state_get_content(&room_id, &StateEventType::RoomPowerLevels, "")
 			.await
 			.unwrap_or_default();
-		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
 
-		// Search depth (iterations) to prevent checking too far back in history
-		// Synapse default is flexible, but we need a hard limit to avoid slow responses
-		// checking 50 events per room seems reasonable for recent notifications
-		let search_limit = 50;
-		let mut iterations = 0;
-		
-		let mut notifications_found = 0;
+		// Iterate over PDUs in the room *after* the last read receipt
+		// Using forward scan guarantees we find all unread notifications
+		let mut pdus = std::pin::pin!(services
+			.rooms
+			.timeline
+			.pdus(&room_id, Some(PduCount::Normal(last_read))));
 
 		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
-			// Stop if we've reached the user's last read receipt
-			if let PduCount::Normal(c) = pdu_count {
-				if c <= last_read {
-					break;
-				}
-			}
-
 			// Skip events strictly newer than our start_ts (pagination)
+			// (Note: since we scan forward, we could optimization this, but filtering is safe)
 			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX) {
 				continue;
-			}
-
-			// Limit the number of notifications found
-			if notifications_found >= u64::from(limit) {
-				break;
-			}
-
-			iterations += 1;
-			if iterations > search_limit {
-				break;
 			}
 
 			// Skip events sent by the user themselves
@@ -148,8 +130,6 @@ pub(crate) async fn get_notifications_route(
 					room_id: room_id.clone(),
 					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
 				});
-
-				notifications_found += 1;
 			}
 		}
 	}
