@@ -31,6 +31,17 @@ pub(crate) async fn get_notifications_route(
 
 	let mut notifications = Vec::new();
 
+	// Get user's push rules
+	let global_account_data = services
+		.account_data
+		.get_global(sender_user, GlobalAccountDataEventType::PushRules)
+		.await;
+
+	let ruleset = global_account_data.map_or_else(
+		|_| Ruleset::server_default(sender_user),
+		|ev: PushRulesEvent| ev.content.global,
+	);
+
 	// iterate over all joined rooms to catch read notifications (history) too
 	let mut rooms_stream = std::pin::pin!(services.rooms.state_cache.rooms_joined(sender_user));
 
@@ -51,24 +62,9 @@ pub(crate) async fn get_notifications_route(
 			.room_state_get_content(&room_id, &StateEventType::RoomPowerLevels, "")
 			.await
 			.unwrap_or_default();
-
-		// Get user's push rules
-		let global_account_data = services
-			.account_data
-			.get_global(sender_user, GlobalAccountDataEventType::PushRules)
-			.await;
-
-		let ruleset = global_account_data.map_or_else(
-			|_| Ruleset::server_default(sender_user),
-			|ev: PushRulesEvent| ev.content.global,
-		);
-
-		// Iterate backwards over PDUs using pdus_rev to find the newest updates first
 		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
 
 		// Search depth (iterations) to prevent checking too far back in history
-		// Synapse default is flexible, but we need a hard limit to avoid slow responses
-		// checking 50 events per room seems reasonable for recent notifications
 		let search_limit = 50;
 		let mut iterations = 0;
 
