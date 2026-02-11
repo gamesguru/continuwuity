@@ -2,7 +2,7 @@ use axum::extract::State;
 use conduwuit::{Result, matrix::pdu::PduCount};
 use futures::StreamExt;
 use ruma::{
-	MilliSecondsSinceUnixEpoch,
+	MilliSecondsSinceUnixEpoch, UInt,
 	api::client::push::{get_notifications, get_notifications::v3 as r},
 	events::{
 		AnySyncTimelineEvent, GlobalAccountDataEventType, StateEventType,
@@ -10,7 +10,6 @@ use ruma::{
 	},
 	push::{Action, Ruleset},
 	serde::Raw,
-	UInt,
 };
 
 use crate::Ruma;
@@ -82,14 +81,17 @@ pub(crate) async fn get_notifications_route(
 
 		// Iterate over PDUs in the room *after* the last read receipt
 		// Using forward scan guarantees we find all unread notifications
-		let mut pdus = std::pin::pin!(services
-			.rooms
-			.timeline
-			.pdus(&room_id, Some(PduCount::Normal(last_read))));
+		let mut pdus = std::pin::pin!(
+			services
+				.rooms
+				.timeline
+				.pdus(&room_id, Some(PduCount::Normal(last_read)))
+		);
 
 		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
 			// Skip events strictly newer than our start_ts (pagination)
-			// (Note: since we scan forward, we could optimization this, but filtering is safe)
+			// (Note: since we scan forward, we could optimization this, but filtering is
+			// safe)
 			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX) {
 				continue;
 			}
@@ -144,9 +146,7 @@ pub(crate) async fn get_notifications_route(
 		.collect();
 
 	// Return the timestamp of the last notification as the next_token
-	let _next_token = limited_notifications
-		.last()
-		.map(|n| n.ts.0.to_string());
+	let _next_token = limited_notifications.last().map(|n| n.ts.0.to_string());
 
 	Ok(get_notifications::v3::Response {
 		next_token: None, // Temporarily disabled to match 1dd00e80 behavior
