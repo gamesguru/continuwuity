@@ -87,7 +87,7 @@ pub(crate) async fn get_notifications_route(
 			.timeline
 			.pdus(&room_id, Some(PduCount::Normal(last_read))));
 
-		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
+		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
 			// Skip events strictly newer than our start_ts (pagination)
 			// (Note: since we scan forward, we could optimization this, but filtering is safe)
 			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX) {
@@ -144,12 +144,12 @@ pub(crate) async fn get_notifications_route(
 		.collect();
 
 	// Return the timestamp of the last notification as the next_token
-	let next_token = limited_notifications
+	let _next_token = limited_notifications
 		.last()
 		.map(|n| n.ts.0.to_string());
 
 	Ok(get_notifications::v3::Response {
-		next_token,
+		next_token: None, // Temporarily disabled to match 1dd00e80 behavior
 		notifications: limited_notifications,
 	})
 }
