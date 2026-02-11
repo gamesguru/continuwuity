@@ -26,11 +26,6 @@ pub(crate) async fn get_notifications_route(
 ) -> Result<get_notifications::v3::Response> {
 	// Extract the `limit` and `from` query parameters
 	let limit = body.limit.unwrap_or_else(|| UInt::new(10).unwrap());
-	let start_ts = body
-		.from
-		.as_ref()
-		.and_then(|s| s.parse::<u64>().ok())
-		.unwrap_or(u64::MAX);
 
 	let sender_user = body.sender_user();
 
@@ -97,15 +92,11 @@ pub(crate) async fn get_notifications_route(
 				}
 			}
 
-			// Skip events strictly newer than our start_ts (pagination)
-			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX) {
-				continue;
-			}
-
 			// Limit the number of notifications found
 			if notifications_found >= u64::from(limit) {
 				break;
 			}
+
 			iterations += 1;
 			if iterations > search_limit {
 				break;
@@ -162,13 +153,12 @@ pub(crate) async fn get_notifications_route(
 		.take(limit.try_into().unwrap_or(usize::MAX))
 		.collect();
 
-	// Return the timestamp of the last notification as the next_token
-	let next_token = limited_notifications
-		.last()
-		.map(|n| n.ts.0.to_string());
+	// TODO: implement pagination token (next_token)
+	// For now we return None, which means the client might re-request if they
+	// scroll? But since this is "unread" focus, it might be fine.
 
 	Ok(get_notifications::v3::Response {
-		next_token,
+		next_token: None,
 		notifications: limited_notifications,
 	})
 }
