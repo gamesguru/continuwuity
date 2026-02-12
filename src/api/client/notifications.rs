@@ -1,5 +1,5 @@
 use axum::extract::State;
-use conduwuit::{Event, Result, matrix::pdu::PduCount, warn};
+use conduwuit::{Result, matrix::pdu::PduCount};
 use futures::StreamExt;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, UInt,
@@ -23,11 +23,8 @@ pub(crate) async fn get_notifications_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_notifications::v3::Request>,
 ) -> Result<get_notifications::v3::Response> {
-	use std::{cmp::Reverse, collections::BinaryHeap};
-
 	// Extract the `limit` and `from` query parameters
 	let limit = body.limit.unwrap_or_else(|| UInt::new(10).unwrap());
-	let limit = std::cmp::min(limit, UInt::new(100).unwrap()); // Cap limit to 100 for safety
 	let start_ts = body
 		.from
 		.as_ref()
@@ -36,34 +33,7 @@ pub(crate) async fn get_notifications_route(
 
 	let sender_user = body.sender_user();
 
-	// Wrapper to order notifications by timestamp
-	#[derive(Debug)]
-	struct NotificationItem(r::Notification);
-
-	impl PartialEq for NotificationItem {
-		fn eq(&self, other: &Self) -> bool {
-			self.0.ts == other.0.ts
-		}
-	}
-
-	impl Eq for NotificationItem {}
-
-	impl PartialOrd for NotificationItem {
-		fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-			Some(self.cmp(other))
-		}
-	}
-
-	impl Ord for NotificationItem {
-		fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-			self.0.ts.cmp(&other.0.ts)
-		}
-	}
-
-	// Min-heap to keep the top `limit` notifications (newest timestamps).
-	// The top of the heap is the oldest of the newest notifications.
-	let limit_usize = limit.try_into().unwrap_or(usize::MAX);
-	let mut notifications: BinaryHeap<Reverse<NotificationItem>> = BinaryHeap::with_capacity(limit_usize);
+	let mut notifications = Vec::new();
 
 	// Get user's push rules
 	let global_account_data = services
@@ -83,7 +53,7 @@ pub(crate) async fn get_notifications_route(
 	while let Some((room_id, count)) = rooms_stream.next().await {
 		let room_id = match room_id {
 			| Ok(room_id) => room_id,
-			| Err(e) => {
+			| Err(_e) => {
 				warn!("Failed to get room_id from notification stream: {e}");
 				continue;
 			},
@@ -120,29 +90,20 @@ pub(crate) async fn get_notifications_route(
 			.await
 			.unwrap_or_default();
 
-		// Iterate over PDUs, reverse scan should be the fastest
-		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
+		// Iterate over PDUs in the room *after* the last read receipt
+		// Using forward scan guarantees we find all unread notifications
+		let mut pdus = std::pin::pin!(
+			services
+				.rooms
+				.timeline
+				.pdus(&room_id, Some(PduCount::Normal(last_read)))
+		);
 
-		// optimization: we can stop once we have enough notifications and current pdu is older than the oldest one in our list
-		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
-			if pdu_count <= PduCount::Normal(last_read) {
-				break;
-			}
-
+		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
 			// Skip events strictly newer than our start_ts (pagination)
+			// (Note: since we scan forward, it's sub-optimal but safe enough)
 			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX) {
 				continue;
-			}
-
-			// Optimization: if we have enough notifications, check if this PDU is older than the oldest one we have.
-			// If it is, then all subsequent PDUs in this room will be even older, so we can skip the rest of the room.
-			// We check this BEFORE the expensive push rule calculation.
-			if notifications.len() >= limit_usize {
-				if let Some(Reverse(oldest_kept)) = notifications.peek() {
-					if pdu.origin_server_ts <= oldest_kept.0.ts.0 {
-						break;
-					}
-				}
 			}
 
 			// Skip events sent by the user themselves
@@ -151,7 +112,10 @@ pub(crate) async fn get_notifications_route(
 			}
 
 			// Check push rules to see if this event should notify
-			let pdu_raw: Raw<AnySyncTimelineEvent> = pdu.to_format();
+			let pdu_json = services.rooms.timeline.get_pdu_json(&pdu.event_id).await?;
+			let pdu_raw: Raw<AnySyncTimelineEvent> = Raw::new(&pdu_json)
+				.expect("CanonicalJsonValue is valid Raw<...>")
+				.cast();
 
 			let actions = services
 				.pusher
@@ -161,7 +125,7 @@ pub(crate) async fn get_notifications_route(
 			let mut notify = false;
 
 			for action in actions {
-				if matches!(action, &Action::Notify) {
+				if matches!(action, Action::Notify) {
 					notify = true;
 				}
 			}
@@ -169,44 +133,30 @@ pub(crate) async fn get_notifications_route(
 			if notify {
 				let event: Raw<AnySyncTimelineEvent> = pdu_raw.clone();
 
-				let notification_item = NotificationItem(r::Notification {
+				// Construct the Notification object
+				notifications.push(r::Notification {
 					actions: actions.to_vec(),
 					event,
-					profile_tag: None,
+					profile_tag: None, // TODO
 					read: false,
 					room_id: room_id.clone(),
 					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
 				});
-
-				if notifications.len() < limit_usize {
-					notifications.push(Reverse(notification_item));
-				} else {
-					// We already checked if this is newer than the oldest kept above.
-					// So we just pop the oldest and push this one.
-					notifications.pop();
-					notifications.push(Reverse(notification_item));
-				}
 			}
 		}
 	}
 
-	// Convert heap to vector and sort by timestamp descending (newest first)
-	let mut notifications: Vec<_> = notifications
-		.into_iter()
-		.map(|Reverse(item)| item.0)
-		.collect();
+	// Sort by timestamp descending (newest first)
 	notifications.sort_by(|a, b| b.ts.cmp(&a.ts));
 
-	let next_token = if notifications.len() >= limit_usize {
-		notifications
-			.last()
-			.map(|n| n.ts.0.to_string())
-	} else {
-		None
-	};
+	// Apply limit
+	let limited_notifications: Vec<_> = notifications
+		.into_iter()
+		.take(limit.try_into().unwrap_or(usize::MAX))
+		.collect();
 
 	Ok(get_notifications::v3::Response {
-		next_token,
-		notifications,
+		next_token: None, // TODO, but not vital apparently
+		notifications: limited_notifications,
 	})
 }
