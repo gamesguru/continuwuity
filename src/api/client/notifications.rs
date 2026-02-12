@@ -80,15 +80,13 @@ pub(crate) async fn get_notifications_route(
 			.unwrap_or_default();
 
 		// Iterate over PDUs, reverse scan should be the fastest
-		let mut pdus = std::pin::pin!(
-			services
-				.rooms
-				.timeline
-				.pdus_rev(&room_id, Some(PduCount::Normal(last_read).saturating_add(1)))
-		);
+		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
 
-		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
-			if notifications.len() >= limit.try_into().unwrap_or(usize::MAX) {
+		let mut current_room_notifications = 0;
+		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
+			if current_room_notifications >= limit.try_into().unwrap_or(usize::MAX)
+				|| pdu_count <= PduCount::Normal(last_read)
+			{
 				break;
 			}
 
@@ -130,9 +128,20 @@ pub(crate) async fn get_notifications_route(
 					room_id: room_id.clone(),
 					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
 				});
+
+				current_room_notifications += 1;
 			}
 		}
 	}
+
+	// Sort by timestamp descending (newest first)
+	notifications.sort_by(|a, b| b.ts.cmp(&a.ts));
+
+	// Apply limit
+	let limited_notifications: Vec<_> = notifications
+		.into_iter()
+		.take(limit.try_into().unwrap_or(usize::MAX))
+		.collect();
 
 	// Sort by timestamp descending (newest first)
 	notifications.sort_by(|a, b| b.ts.cmp(&a.ts));
