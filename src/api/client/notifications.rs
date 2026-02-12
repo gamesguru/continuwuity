@@ -1,5 +1,5 @@
 use axum::extract::State;
-use conduwuit::{Result, matrix::pdu::PduCount};
+use conduwuit::{Result, matrix::pdu::PduCount, warn};
 use futures::StreamExt;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, UInt,
@@ -53,7 +53,7 @@ pub(crate) async fn get_notifications_route(
 	while let Some((room_id, count)) = rooms_stream.next().await {
 		let room_id = match room_id {
 			| Ok(room_id) => room_id,
-			| Err(_e) => {
+			| Err(e) => {
 				warn!("Failed to get room_id from notification stream: {e}");
 				continue;
 			},
