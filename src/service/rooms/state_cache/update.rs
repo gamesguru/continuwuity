@@ -118,9 +118,21 @@ pub async fn update_membership(
 			self.mark_as_joined(user_id, room_id);
 		},
 		| MembershipState::Invite => {
-			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
-			self.mark_as_invited(user_id, room_id, pdu.sender(), Some(last_state), None)
-				.await?;
+			let sender = pdu.sender();
+			let filter = self
+				.services
+				.users
+				.invite_filter_level(sender, user_id)
+				.await;
+
+			if matches!(filter, FilterLevel::Block) {
+				self.mark_as_invited(user_id, room_id, sender, None, None)
+					.await?;
+			} else {
+				let last_state = self.services.state.summary_stripped(pdu, room_id).await;
+				self.mark_as_invited(user_id, room_id, sender, Some(last_state), None)
+					.await?;
+			}
 		},
 		| MembershipState::Leave | MembershipState::Ban => {
 			self.mark_as_left(user_id, room_id, Some(pdu.clone())).await;

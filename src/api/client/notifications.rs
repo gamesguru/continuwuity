@@ -111,7 +111,7 @@ pub(crate) async fn get_notifications_route(
 			let mut notify = false;
 
 			for action in actions {
-				if matches!(action, Action::Notify) {
+				if matches!(action, &Action::Notify) {
 					notify = true;
 				}
 			}
@@ -123,7 +123,7 @@ pub(crate) async fn get_notifications_route(
 				notifications.push(r::Notification {
 					actions: actions.to_vec(),
 					event,
-					profile_tag: None, // TODO, and: next_token
+					profile_tag: None,
 					read: false,
 					room_id: room_id.clone(),
 					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
@@ -137,23 +137,21 @@ pub(crate) async fn get_notifications_route(
 	// Sort by timestamp descending (newest first)
 	notifications.sort_by(|a, b| b.ts.cmp(&a.ts));
 
-	// Apply limit
-	let limited_notifications: Vec<_> = notifications
-		.into_iter()
-		.take(limit.try_into().unwrap_or(usize::MAX))
-		.collect();
+	let usize_limit = limit.try_into().unwrap_or(usize::MAX);
 
-	// Sort by timestamp descending (newest first)
-	notifications.sort_by(|a, b| b.ts.cmp(&a.ts));
+	let next_token = if notifications.len() > usize_limit {
+		notifications
+			.get(usize_limit - 1)
+			.map(|n| n.ts.0.to_string())
+	} else {
+		None
+	};
 
 	// Apply limit
-	let limited_notifications: Vec<_> = notifications
-		.into_iter()
-		.take(limit.try_into().unwrap_or(usize::MAX))
-		.collect();
+	let limited_notifications: Vec<_> = notifications.into_iter().take(usize_limit).collect();
 
 	Ok(get_notifications::v3::Response {
-		next_token: None, // TODO, but not vital apparently
+		next_token,
 		notifications: limited_notifications,
 	})
 }
