@@ -126,8 +126,9 @@ pub async fn update_membership(
 				.await;
 
 			if matches!(filter, FilterLevel::Block) {
-				self.mark_as_invited(user_id, room_id, sender, None, None, false)
-					.await?;
+				return Err!(Request(InviteBlocked(
+					"{user_id} has blocked invites from {sender}."
+				)));
 			} else {
 				let last_state = self.services.state.summary_stripped(pdu, room_id).await;
 				self.mark_as_invited(user_id, room_id, sender, Some(last_state), None, false)
