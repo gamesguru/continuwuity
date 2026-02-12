@@ -79,18 +79,20 @@ pub(crate) async fn get_notifications_route(
 			.await
 			.unwrap_or_default();
 
-		// Iterate over PDUs in the room *after* the last read receipt
-		// Using forward scan guarantees we find all unread notifications
+		// Iterate over PDUs, reverse scan should be the fastest
 		let mut pdus = std::pin::pin!(
 			services
 				.rooms
 				.timeline
-				.pdus(&room_id, Some(PduCount::Normal(last_read)))
+				.pdus_rev(&room_id, Some(PduCount::Normal(last_read).saturating_add(1)))
 		);
 
 		while let Some(Ok((_pdu_count, pdu))) = pdus.next().await {
+			if notifications.len() >= limit.try_into().unwrap_or(usize::MAX) {
+				break;
+			}
+
 			// Skip events strictly newer than our start_ts (pagination)
-			// (Note: since we scan forward, it's sub-optimal but safe enough)
 			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX) {
 				continue;
 			}
@@ -123,7 +125,7 @@ pub(crate) async fn get_notifications_route(
 				notifications.push(r::Notification {
 					actions: actions.to_vec(),
 					event,
-					profile_tag: None, // TODO
+					profile_tag: None, // TODO, and: next_token
 					read: false,
 					room_id: room_id.clone(),
 					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
