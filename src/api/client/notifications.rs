@@ -1,5 +1,5 @@
 use axum::extract::State;
-use conduwuit::{Result, matrix::pdu::PduCount, warn};
+use conduwuit::{Event, Result, matrix::pdu::PduCount, warn};
 use futures::StreamExt;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, UInt,
@@ -101,10 +101,7 @@ pub(crate) async fn get_notifications_route(
 			}
 
 			// Check push rules to see if this event should notify
-			let pdu_json = services.rooms.timeline.get_pdu_json(&pdu.event_id).await?;
-			let pdu_raw: Raw<AnySyncTimelineEvent> = Raw::new(&pdu_json)
-				.expect("CanonicalJsonValue is valid Raw<...>")
-				.cast();
+			let pdu_raw: Raw<AnySyncTimelineEvent> = pdu.to_format();
 
 			let actions = services
 				.pusher
