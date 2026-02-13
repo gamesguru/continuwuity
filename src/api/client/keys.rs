@@ -5,7 +5,7 @@ use std::{
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Error, Result, debug, debug_warn, err,
+	Err, Error, Result, debug, debug_warn, err, error, info,
 	result::NotFound,
 	utils,
 	utils::{IterStream, stream::WidebandExt},
@@ -26,9 +26,10 @@ use ruma::{
 		},
 		federation,
 	},
-	encryption::CrossSigningKey,
+	encryption::{CrossSigningKey, KeyUsage},
 	serde::Raw,
 };
+use ruma::api::federation::transactions::edu::{Edu, SigningKeyUpdateContent};
 use serde_json::json;
 
 use super::SESSION_ID_LENGTH;
@@ -138,6 +139,9 @@ pub(crate) async fn get_keys_route(
 	body: Ruma<get_keys::v3::Request>,
 ) -> Result<get_keys::v3::Response> {
 	let sender_user = body.sender_user();
+	let users: Vec<_> = body.device_keys.keys().map(ToString::to_string).collect();
+
+	debug!(?sender_user, ?users, "Received keys query request");
 
 	get_keys_helper(
 		&services,
@@ -331,12 +335,13 @@ pub(crate) async fn upload_signatures_route(
 	State(services): State<crate::State>,
 	body: Ruma<upload_signatures::v3::Request>,
 ) -> Result<upload_signatures::v3::Response> {
+	let sender_user = body.sender_user();
+	info!(%sender_user, "Received signature upload request");
+
 	if body.signed_keys.is_empty() {
 		debug!("Empty signed_keys sent in key signature upload");
 		return Ok(upload_signatures::v3::Response::new());
 	}
-
-	let sender_user = body.sender_user();
 
 	for (user_id, keys) in &body.signed_keys {
 		for (key_id, key) in keys {
@@ -372,6 +377,59 @@ pub(crate) async fn upload_signatures_route(
 				{
 					continue;
 				}
+			}
+		}
+	}
+
+	// Sending the signed keys to the user's server
+	for (user_id, keys) in &body.signed_keys {
+		if services.globals.user_is_local(user_id) {
+			continue;
+		}
+
+		let mut master_key = None;
+		let mut self_signing_key = None;
+
+		for (_key_id, key) in keys {
+			// Check if it's a master key or self-signing key based on the key id or content
+			// Ruma's `SigningKeyUpdateContent` expects `Raw<CrossSigningKey>`.
+
+			let Ok(key_json) = serde_json::to_value(key) else {
+				continue;
+			};
+
+			let Ok(cross_signing_key) = serde_json::from_value::<CrossSigningKey>(key_json.clone()) else {
+				// Not a cross-signing key (maybe a device key?), skip
+				continue;
+			};
+
+			let is_master = cross_signing_key.usage.contains(&KeyUsage::Master);
+			let is_self_signing = cross_signing_key.usage.contains(&KeyUsage::SelfSigning);
+
+			if is_master {
+				master_key = Some(Raw::new(&cross_signing_key).expect("valid CrossSigningKey"));
+			} else if is_self_signing {
+				self_signing_key = Some(Raw::new(&cross_signing_key).expect("valid CrossSigningKey"));
+			}
+		}
+
+		if master_key.is_some() || self_signing_key.is_some() {
+			info!(%user_id, "Sending signing key update to remote server");
+			let mut buf = conduwuit_service::sending::EduBuf::new();
+			serde_json::to_writer(
+				&mut buf,
+				&Edu::SigningKeyUpdate(
+					SigningKeyUpdateContent {
+						user_id: user_id.clone(),
+						master_key,
+						self_signing_key,
+					},
+				),
+			)
+			.expect("SigningKeyUpdate EDU can be serialized");
+
+			if let Err(e) = services.sending.send_edu_server(user_id.server_name(), buf) {
+				error!(%user_id, "Failed to send signing key update: {e}");
 			}
 		}
 	}
@@ -482,6 +540,8 @@ where
 				}
 			}
 
+			debug!(user_id = ?user_id, device_count = container.len(), "Found local devices for user");
+
 			device_keys.insert(user_id.to_owned(), container);
 		} else {
 			for device_id in device_ids {
@@ -534,6 +594,7 @@ where
 		.into_iter()
 		.stream()
 		.wide_filter_map(|(server, vec)| async move {
+			debug!(?server, count = vec.len(), "Querying keys over federation");
 			let mut device_keys_input_fed = BTreeMap::new();
 			for (user_id, keys) in vec {
 				device_keys_input_fed.insert(user_id.to_owned(), keys.clone());
@@ -555,6 +616,8 @@ where
 		.collect::<FuturesUnordered<_>>()
 		.await
 		.into_iter();
+
+	debug!(count = futures.len(), "Finished querying keys over federation");
 
 	for (server, response) in futures {
 		match response {

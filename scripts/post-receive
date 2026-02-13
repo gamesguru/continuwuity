@@ -1,0 +1,35 @@
+#!/bin/bash
+TARGET="/home/git/builds/continuwuity"
+GIT_DIR="/home/git/repos/home.shane.repos.continuwuity.git"
+
+# Explicitly source rustup environment to ensure we get 1.90.0+
+if [ -f "$HOME/.cargo/env" ]; then
+    source "$HOME/.cargo/env"
+fi
+
+echo "Deploying to $TARGET..."
+# Force checkout (dev branch)
+if ! git --work-tree=$TARGET --git-dir=$GIT_DIR checkout -f dev; then
+    echo "Error: Failed to checkout dev branch."
+    exit 1
+fi
+
+# Check for [build] in the last commit message
+cd $TARGET || exit 1
+LAST_MSG=$(git log -1 --pretty=%B)
+if [[ "$LAST_MSG" == *"[build]"* ]]; then
+    echo "Build triggered by [build] in commit message."
+else
+    echo "Build skipped. Use '[build]' in commit message to trigger."
+    exit 0
+fi
+
+echo "Building release with $(cargo --version)..."
+
+if cargo build --release; then
+    echo "Build successful."
+    echo "To install, ssh in and run 'make install'"
+else
+    echo "Build failed."
+    exit 1
+fi

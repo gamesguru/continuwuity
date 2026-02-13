@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Result, at, debug_warn, err, extract_variant,
+	Result, at, debug, debug_warn, err, extract_variant,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
@@ -578,7 +578,7 @@ async fn build_notification_counts(
 		)
 		.await;
 
-		trace!(%notification_count, %highlight_count, "syncing new notification counts");
+		debug!(%notification_count, %highlight_count, "syncing new notification counts");
 
 		Ok(Some(UnreadNotificationsCount {
 			notification_count: Some(notification_count),

@@ -54,5 +54,13 @@ pub(crate) async fn get_capabilities_route(
 		capabilities.set("uk.timedout.msc4323", json!({"suspend":true, "lock": false}))?;
 	}
 
+	// Advertise QR code verification (MSC2638)
+	// This signals to clients that we support QR code verification flows.
+	// We support both showing and scanning by proxy of the client doing it.
+	capabilities.set("m.qr_code", json!({
+		"show_qr": true,
+		"scan_qr": true,
+	}))?;
+
 	Ok(get_capabilities::v3::Response { capabilities })
 }

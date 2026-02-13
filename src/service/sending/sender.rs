@@ -140,7 +140,7 @@ impl Service {
 	}
 
 	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
-		debug!(dest = ?dest, "{e:?}");
+		debug!(dest = ?dest, "Federation request failed: {e:?}");
 		statuses.entry(dest).and_modify(|e| {
 			*e = match e {
 				| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
@@ -254,7 +254,7 @@ impl Service {
 
 			let entry = txns.entry(dest.clone()).or_default();
 			if self.server.config.startup_netburst_keep >= 0 && entry.len() >= keep {
-				warn!("Dropping unsent event {dest:?} {:?}", String::from_utf8_lossy(&key));
+				debug!("Dropping unsent event {dest:?} {:?}", String::from_utf8_lossy(&key));
 				self.db.delete_active_request(&key);
 			} else {
 				entry.push(event);
@@ -603,6 +603,7 @@ impl Service {
 				.server_sees_user(server_name, user_id)
 				.await
 			{
+				debug!(%server_name, %user_id, "Skipping presence update: server does not see user");
 				continue;
 			}
 

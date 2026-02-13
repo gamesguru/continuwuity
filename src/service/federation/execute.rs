@@ -2,8 +2,8 @@ use std::{fmt::Debug, mem};
 
 use bytes::Bytes;
 use conduwuit::{
-	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_warn, err,
-	error::inspect_debug_log, implement, trace,
+	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, err, error, error::inspect_debug_log,
+	implement, trace,
 };
 use http::{HeaderValue, header::AUTHORIZATION};
 use ipaddress::IPAddress;
@@ -65,7 +65,7 @@ where
 	}
 
 	if self.services.moderation.is_remote_server_forbidden(dest) {
-		return Err!(Request(Forbidden(debug_warn!("Federation with {dest} is not allowed."))));
+		return Err!(Request(Forbidden(warn!("Federation with {dest} is not allowed."))));
 	}
 
 	let actual = self.services.resolver.get_actual_dest(dest).await?;
@@ -196,9 +196,9 @@ fn handle_error(
 ) -> Result {
 	if e.is_timeout() || e.is_connect() {
 		e = e.without_url();
-		debug_warn!("{e:?}");
+		debug!("{e:?}");
 	} else if e.is_redirect() {
-		debug_error!(
+		debug!(
 			%method,
 			%url,
 			final_url = e.url().map(tracing::field::display),
@@ -207,7 +207,7 @@ fn handle_error(
 			e,
 		);
 	} else {
-		debug_error!("{e:?}");
+		debug!("{e:?}");
 	}
 
 	Err(e.into())

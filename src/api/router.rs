@@ -17,11 +17,12 @@ use http::{Uri, uri};
 
 use self::handler::RouterExt;
 pub(super) use self::{args::Args as Ruma, response::RumaResponse};
-use crate::{admin, client, server};
+use crate::{admin, client, server, synapse};
 
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 	let config = &server.config;
 	let mut router = router
+        .route("/_synapse/admin/v1/users/:user_id/admin", get(synapse::admin::get_user_admin_route))
         .ruma_route(&client::get_profile_key_route)
         .ruma_route(&client::set_profile_key_route)
         .ruma_route(&client::delete_profile_key_route)
@@ -52,6 +53,7 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::set_pushrule_actions_route)
 		.ruma_route(&client::delete_pushrule_route)
 		.ruma_route(&client::get_room_event_route)
+		.ruma_route(&client::get_notifications_route)
 		.ruma_route(&client::get_room_aliases_route)
 		.ruma_route(&client::get_filter_route)
 		.ruma_route(&client::create_filter_route)

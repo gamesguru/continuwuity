@@ -49,6 +49,9 @@ pub(crate) async fn get_login_types_route(
 		get_login_types::v3::LoginType::Token(TokenLoginType {
 			get_login_token: services.server.config.login_via_existing_session,
 		}),
+		// TODO: This uses the unstable, private API `LoginType::new` because Ruma doesn't have a variant for this yet (and custom is not available in this version?)
+		get_login_types::v3::LoginType::new("m.login.reciprocal", Default::default())
+			.expect("LoginType::new failed"),
 	]))
 }
 
@@ -108,8 +111,7 @@ pub(super) async fn ldap_login(
 	let (user_dn, is_ldap_admin) = match services.config.ldap.bind_dn.as_ref() {
 		| Some(bind_dn) if bind_dn.contains("{username}") =>
 			(bind_dn.replace("{username}", lowercased_user_id.localpart()), false),
-		| _ => {
-			debug!("Searching user in LDAP");
+		| _ => {debug!("Searching user in LDAP");
 
 			let dns = services.users.search_ldap(user_id).await?;
 			if dns.len() >= 2 {
@@ -282,10 +284,29 @@ pub(crate) async fn login_route(
 			user_id
 		},
 		| _ => {
-			debug!("/login json_body: {:?}", &body.json_body);
-			return Err!(Request(Unknown(
-				debug_warn!(?body.login_info, "Invalid or unsupported login type")
-			)));
+			// Check for m.login.reciprocal
+			let reciprocal_token = body
+				.json_body
+				.as_ref()
+				.filter(|json| {
+					json.get("type").and_then(|v| v.as_str()) == Some("m.login.reciprocal")
+				})
+				.and_then(|json| json.get("token").and_then(|v| v.as_str()));
+
+			if let Some(token) = reciprocal_token {
+				debug!("Got reciprocal login type");
+				if !services.server.config.login_via_existing_session {
+					return Err!(Request(Unknown("Reciprocal login is not enabled.")));
+				}
+
+				services.users.find_from_login_token(token).await?
+			} else {
+				debug!("/login json_body: {:?}", &body.json_body);
+				return Err!(Request(Unknown(debug_warn!(
+					?body.login_info,
+					"Invalid or unsupported login type"
+				))));
+			}
 		},
 	};
 

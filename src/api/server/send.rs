@@ -263,6 +263,8 @@ async fn handle_edu_presence_update(
 		return;
 	}
 
+	debug!(%update.user_id, ?update.presence, "Received presence update");
+
 	services
 		.presence
 		.set_presence(

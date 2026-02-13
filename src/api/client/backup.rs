@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use axum::extract::State;
-use conduwuit::{Err, Result, err};
+use conduwuit::{Err, Result, debug_warn, err};
 use conduwuit_service::Services;
 use futures::{FutureExt, future::try_join};
 use ruma::{
@@ -321,7 +321,15 @@ pub(crate) async fn get_backup_keys_for_session_route(
 		.key_backups
 		.get_session(body.sender_user(), &body.version, &body.room_id, &body.session_id)
 		.await
-		.map_err(|_| {
+		.map_err(|e| {
+			debug_warn!(
+				"Backup key not found for user_id={} version={} room_id={} session_id={}: {:?}",
+				body.sender_user(),
+				body.version,
+				body.room_id,
+				body.session_id,
+				e
+			);
 			err!(Request(NotFound(debug_error!("Backup key not found for this user's session."))))
 		})?;
 

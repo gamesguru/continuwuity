@@ -16,7 +16,7 @@ use conduwuit::{
 		ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, Tools, WidebandExt},
 	},
-	warn,
+	warn, debug,
 };
 use conduwuit_service::Services;
 use futures::{
@@ -185,6 +185,8 @@ pub(crate) async fn sync_events_route(
 	body: Ruma<sync_events::v3::Request>,
 ) -> Result<sync_events::v3::Response, RumaResponse<UiaaResponse>> {
 	let (sender_user, sender_device) = body.sender();
+
+	debug!("Sync filter from {} ({}): {:?}", sender_user, sender_device, body.body.filter);
 
 	// Presence update
 	if services.config.allow_local_presence {
