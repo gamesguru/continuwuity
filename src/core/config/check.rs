@@ -171,6 +171,13 @@ pub fn check(config: &Config) -> Result {
 		));
 	}
 
+	if config.turnstile_site_key.is_some() && config.turnstile_secret_key.is_none() {
+		return Err!(Config(
+			"turnstile_secret_key",
+			"Turnstile secret key is required when Turnstile site key is set."
+		));
+	}
+
 	if config.allow_registration
 		&& config.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse
 		&& config.registration_token.is_none()

@@ -321,7 +321,20 @@ pub(crate) async fn register_route(
 			stages: vec![AuthType::RegistrationToken],
 		});
 	}
-	if services.config.recaptcha_private_site_key.is_some() {
+	if services.config.turnstile_secret_key.is_some() {
+		if let Some(pubkey) = &services.config.turnstile_site_key {
+			// Turnstile required
+			uiaainfo
+				.flows
+				.push(AuthFlow { stages: vec![AuthType::ReCaptcha] });
+			uiaainfo.params = serde_json::value::to_raw_value(&serde_json::json!({
+				"m.login.recaptcha": {
+					"public_key": pubkey,
+				},
+			}))
+			.expect("Failed to serialize recaptcha params");
+		}
+	} else if services.config.recaptcha_private_site_key.is_some() {
 		if let Some(pubkey) = &services.config.recaptcha_site_key {
 			// ReCaptcha required
 			uiaainfo
