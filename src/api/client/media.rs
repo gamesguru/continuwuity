@@ -6,7 +6,6 @@ use conduwuit::{
 	Err, Result, err,
 	utils::{self, content_disposition::make_content_disposition, math::ruma_from_usize},
 };
-use conduwuit_core::error;
 use conduwuit_service::{
 	Services,
 	media::{CACHE_CONTROL_IMMUTABLE, CORP_CROSS_ORIGIN, Dim, FileMeta, MXC_LENGTH},
@@ -114,10 +113,18 @@ pub(crate) async fn get_content_thumbnail_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_thumbnail(&services, &mxc, user, body.timeout_ms, &dim).await?;
+	} = fetch_thumbnail(&services, &mxc, Some(user), body.timeout_ms, &dim)
+		.await
+		.map_err(|e| {
+			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+		})?;
+
+	let Some(file) = content else {
+		return Err!(Request(NotFound("Media not found.")));
+	};
 
 	Ok(get_content_thumbnail::v1::Response {
-		file: content.expect("entire file contents"),
+		file,
 		content_type: content_type.map(Into::into),
 		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
@@ -145,25 +152,23 @@ pub(crate) async fn get_content_route(
 		server_name: &body.server_name,
 		media_id: &body.media_id,
 	};
+
 	let FileMeta {
 		content,
 		content_type,
 		content_disposition,
-	} = match fetch_file(&services, &mxc, user, body.timeout_ms, None).await {
-		| Ok(meta) => meta,
-		| Err(conduwuit::Error::Io(e)) => match e.kind() {
-			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
-			| std::io::ErrorKind::PermissionDenied => {
-				error!("Permission denied when trying to read file: {e:?}");
-				return Err!(Request(Unknown("Unknown error when fetching file.")));
-			},
-			| _ => return Err!(Request(Unknown("Unknown error when fetching file."))),
-		},
-		| Err(_) => return Err!(Request(Unknown("Unknown error when fetching file."))),
+	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, None)
+		.await
+		.map_err(|e| {
+			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+		})?;
+
+	let Some(file) = content else {
+		return Err!(Request(NotFound("Media not found.")));
 	};
 
 	Ok(get_content::v1::Response {
-		file: content.expect("entire file contents"),
+		file,
 		content_type: content_type.map(Into::into),
 		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
@@ -196,21 +201,18 @@ pub(crate) async fn get_content_as_filename_route(
 		content,
 		content_type,
 		content_disposition,
-	} = match fetch_file(&services, &mxc, user, body.timeout_ms, None).await {
-		| Ok(meta) => meta,
-		| Err(conduwuit::Error::Io(e)) => match e.kind() {
-			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
-			| std::io::ErrorKind::PermissionDenied => {
-				error!("Permission denied when trying to read file: {e:?}");
-				return Err!(Request(Unknown("Unknown error when fetching file.")));
-			},
-			| _ => return Err!(Request(Unknown("Unknown error when fetching file."))),
-		},
-		| Err(_) => return Err!(Request(Unknown("Unknown error when fetching file."))),
+	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, Some(&body.filename))
+		.await
+		.map_err(|e| {
+			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+		})?;
+
+	let Some(file) = content else {
+		return Err!(Request(NotFound("Media not found.")));
 	};
 
 	Ok(get_content_as_filename::v1::Response {
-		file: content.expect("entire file contents"),
+		file,
 		content_type: content_type.map(Into::into),
 		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
@@ -269,7 +271,7 @@ pub(crate) async fn get_media_preview_route(
 async fn fetch_thumbnail(
 	services: &Services,
 	mxc: &Mxc<'_>,
-	user: &UserId,
+	user: Option<&UserId>,
 	timeout_ms: Duration,
 	dim: &Dim,
 ) -> Result<FileMeta> {
@@ -295,7 +297,7 @@ async fn fetch_thumbnail(
 async fn fetch_file(
 	services: &Services,
 	mxc: &Mxc<'_>,
-	user: &UserId,
+	user: Option<&UserId>,
 	timeout_ms: Duration,
 	filename: Option<&str>,
 ) -> Result<FileMeta> {
@@ -321,7 +323,7 @@ async fn fetch_file(
 async fn fetch_thumbnail_meta(
 	services: &Services,
 	mxc: &Mxc<'_>,
-	user: &UserId,
+	user: Option<&UserId>,
 	timeout_ms: Duration,
 	dim: &Dim,
 ) -> Result<FileMeta> {
@@ -335,14 +337,14 @@ async fn fetch_thumbnail_meta(
 
 	services
 		.media
-		.fetch_remote_thumbnail(mxc, Some(user), None, timeout_ms, dim)
+		.fetch_remote_thumbnail(mxc, user, None, timeout_ms, dim)
 		.await
 }
 
 async fn fetch_file_meta(
 	services: &Services,
 	mxc: &Mxc<'_>,
-	user: &UserId,
+	user: Option<&UserId>,
 	timeout_ms: Duration,
 ) -> Result<FileMeta> {
 	if let Some(filemeta) = services.media.get(mxc).await? {
@@ -355,6 +357,6 @@ async fn fetch_file_meta(
 
 	services
 		.media
-		.fetch_remote_content(mxc, Some(user), None, timeout_ms)
+		.fetch_remote_content(mxc, user, None, timeout_ms)
 		.await
 }

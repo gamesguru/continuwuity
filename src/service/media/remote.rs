@@ -1,8 +1,7 @@
 use std::{fmt::Debug, time::Duration};
 
 use conduwuit::{
-	Err, Error, Result, debug_warn, err, implement,
-	utils::content_disposition::make_content_disposition,
+	Err, Result, debug_warn, err, implement, utils::content_disposition::make_content_disposition,
 };
 use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue};
 use ruma::{
@@ -10,7 +9,7 @@ use ruma::{
 	api::{
 		OutgoingRequest,
 		client::{
-			error::ErrorKind::{NotFound, Unrecognized},
+			error::ErrorKind::{Forbidden, NotFound, Unauthorized, Unknown, Unrecognized},
 			media,
 		},
 		federation,
@@ -35,10 +34,15 @@ pub async fn fetch_remote_thumbnail(
 		.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
 		.await;
 
-	if let Err(Error::Request(NotFound, ..)) = &result {
-		return self
-			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
-			.await;
+	if let Err(error) = &result {
+		if matches!(
+			error.kind(),
+			NotFound | Unrecognized | Unauthorized | Forbidden { .. } | Unknown
+		) {
+			return self
+				.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
+				.await;
+		}
 	}
 
 	result
@@ -67,10 +71,15 @@ pub async fn fetch_remote_content(
 			);
 		});
 
-	if let Err(Error::Request(Unrecognized, ..)) = &result {
-		return self
-			.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
-			.await;
+	if let Err(error) = &result {
+		if matches!(
+			error.kind(),
+			NotFound | Unrecognized | Unauthorized | Forbidden { .. } | Unknown
+		) {
+			return self
+				.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
+				.await;
+		}
 	}
 
 	result
@@ -318,89 +327,6 @@ where
 }
 
 #[implement(super::Service)]
-#[allow(deprecated)]
-pub async fn fetch_remote_thumbnail_legacy(
-	&self,
-	body: &media::get_content_thumbnail::v3::Request,
-) -> Result<media::get_content_thumbnail::v3::Response> {
-	let mxc = Mxc {
-		server_name: &body.server_name,
-		media_id: &body.media_id,
-	};
-
-	self.check_legacy_freeze()?;
-	self.check_fetch_authorized(&mxc)?;
-	let response = self
-		.services
-		.sending
-		.send_federation_request(mxc.server_name, media::get_content_thumbnail::v3::Request {
-			allow_remote: body.allow_remote,
-			height: body.height,
-			width: body.width,
-			method: body.method.clone(),
-			server_name: body.server_name.clone(),
-			media_id: body.media_id.clone(),
-			timeout_ms: body.timeout_ms,
-			allow_redirect: body.allow_redirect,
-			animated: body.animated,
-		})
-		.await?;
-
-	let dim = Dim::from_ruma(body.width, body.height, body.method.clone())?;
-	self.upload_thumbnail(
-		&mxc,
-		None,
-		None,
-		response.content_type.as_deref(),
-		&dim,
-		&response.file,
-	)
-	.await?;
-
-	Ok(response)
-}
-
-#[implement(super::Service)]
-#[allow(deprecated)]
-pub async fn fetch_remote_content_legacy(
-	&self,
-	mxc: &Mxc<'_>,
-	allow_redirect: bool,
-	timeout_ms: Duration,
-) -> Result<media::get_content::v3::Response, Error> {
-	self.check_legacy_freeze()?;
-	self.check_fetch_authorized(mxc)?;
-	let response = self
-		.services
-		.sending
-		.send_federation_request(mxc.server_name, media::get_content::v3::Request {
-			allow_remote: true,
-			server_name: mxc.server_name.into(),
-			media_id: mxc.media_id.into(),
-			timeout_ms,
-			allow_redirect,
-		})
-		.await?;
-
-	let content_disposition = make_content_disposition(
-		response.content_disposition.as_ref(),
-		response.content_type.as_deref(),
-		None,
-	);
-
-	self.create(
-		mxc,
-		None,
-		Some(&content_disposition),
-		response.content_type.as_deref(),
-		&response.file,
-	)
-	.await?;
-
-	Ok(response)
-}
-
-#[implement(super::Service)]
 fn check_fetch_authorized(&self, mxc: &Mxc<'_>) -> Result<()> {
 	if self
 		.services
@@ -414,14 +340,4 @@ fn check_fetch_authorized(&self, mxc: &Mxc<'_>) -> Result<()> {
 	}
 
 	Ok(())
-}
-
-#[implement(super::Service)]
-fn check_legacy_freeze(&self) -> Result<()> {
-	self.services
-		.server
-		.config
-		.freeze_legacy_media
-		.then_some(())
-		.ok_or(err!(Request(NotFound("Remote media is frozen."))))
 }
