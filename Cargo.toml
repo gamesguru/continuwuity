@@ -652,6 +652,15 @@ path = "src/main"
 strip = "symbols"
 lto = "thin"
 
+# Hybrid dev/release: "fast" here refers to compile times, not runtime speed
+[profile.release-fast]
+inherits = "release"
+opt-level = 1
+lto = "off"
+codegen-units = 16
+panic = "abort"
+strip = "none"
+
 # release profile with debug symbols
 [profile.release-debuginfo]
 inherits = "release"
