@@ -3,7 +3,7 @@
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Result, err,
+	Err, Result, debug_info, err,
 	utils::{content_disposition::make_content_disposition, math::ruma_from_usize},
 };
 use conduwuit_service::media::{CACHE_CONTROL_IMMUTABLE, CORP_CROSS_ORIGIN, Dim, FileMeta};
@@ -163,23 +163,44 @@ pub(crate) async fn get_content_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
-				let response = services
-					.media
-					.fetch_remote_content_legacy(&mxc, body.allow_redirect, body.timeout_ms)
-					.await
-					.map_err(|e| {
-						err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-					})?;
+				let authenticated = services.server.config.legacy_media_authenticated_fetch;
+				let FileMeta {
+					content,
+					content_type,
+					content_disposition,
+				} = if authenticated {
+					debug_info!(%mxc, "Fetching remote media via authenticated federation");
+					services
+						.media
+						.fetch_remote_content(&mxc, None, None, body.timeout_ms)
+						.await
+				} else {
+					debug_info!(%mxc, "Fetching remote media via legacy unauthenticated federation");
+					services
+						.media
+						.fetch_remote_content_legacy(&mxc, body.allow_redirect, body.timeout_ms)
+						.await
+						.map(|r| FileMeta {
+							content: Some(r.file),
+							content_type: r.content_type.map(Into::into),
+							content_disposition: r.content_disposition,
+						})
+				}
+				.map_err(|e| {
+					err!(Request(NotFound(
+						debug_warn!(%mxc, %authenticated, "Fetching media failed: {e:?}")
+					)))
+				})?;
 
 				let content_disposition = make_content_disposition(
-					response.content_disposition.as_ref(),
-					response.content_type.as_deref(),
+					content_disposition.as_ref(),
+					content_type.as_deref(),
 					None,
 				);
 
 				Ok(get_content::v3::Response {
-					file: response.file,
-					content_type: response.content_type,
+					file: content.expect("entire file contents"),
+					content_type: content_type.map(Into::into),
 					content_disposition: Some(content_disposition),
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
@@ -254,24 +275,50 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
-				let response = services
-					.media
-					.fetch_remote_content_legacy(&mxc, body.allow_redirect, body.timeout_ms)
-					.await
-					.map_err(|e| {
-						err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-					})?;
+				let FileMeta {
+					content,
+					content_type,
+					content_disposition,
+				} = {
+					if services.server.config.freeze_legacy_media {
+						return Err!(Request(NotFound("Media not found.")));
+					}
+
+					if services.server.config.legacy_media_authenticated_fetch {
+						services
+							.media
+							.fetch_remote_content(&mxc, None, None, body.timeout_ms)
+							.await
+					} else {
+						services
+							.media
+							.fetch_remote_content_legacy(
+								&mxc,
+								body.allow_redirect,
+								body.timeout_ms,
+							)
+							.await
+							.map(|r| FileMeta {
+								content: Some(r.file),
+								content_type: r.content_type.map(Into::into),
+								content_disposition: r.content_disposition,
+							})
+					}
+				}
+				.map_err(|e| {
+					err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+				})?;
 
 				let content_disposition = make_content_disposition(
-					response.content_disposition.as_ref(),
-					response.content_type.as_deref(),
-					None,
+					content_disposition.as_ref(),
+					content_type.as_deref(),
+					Some(&body.filename),
 				);
 
 				Ok(get_content_as_filename::v3::Response {
+					file: content.expect("entire file contents"),
+					content_type: content_type.map(Into::into),
 					content_disposition: Some(content_disposition),
-					content_type: response.content_type,
-					file: response.file,
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
 				})
@@ -345,23 +392,44 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
-				let response = services
-					.media
-					.fetch_remote_thumbnail_legacy(&body)
-					.await
-					.map_err(|e| {
-						err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-					})?;
+				let authenticated = services.server.config.legacy_media_authenticated_fetch;
+				let FileMeta {
+					content,
+					content_type,
+					content_disposition,
+				} = if authenticated {
+					debug_info!(%mxc, "Fetching remote thumbnail via authenticated federation");
+					services
+						.media
+						.fetch_remote_thumbnail(&mxc, None, None, body.timeout_ms, &dim)
+						.await
+				} else {
+					debug_info!(%mxc, "Fetching remote thumbnail via legacy unauthenticated federation");
+					services
+						.media
+						.fetch_remote_thumbnail_legacy(&body)
+						.await
+						.map(|r| FileMeta {
+							content: Some(r.file),
+							content_type: r.content_type.map(Into::into),
+							content_disposition: r.content_disposition,
+						})
+				}
+				.map_err(|e| {
+					err!(Request(NotFound(
+						debug_warn!(%mxc, %authenticated, "Fetching media failed: {e:?}")
+					)))
+				})?;
 
 				let content_disposition = make_content_disposition(
-					response.content_disposition.as_ref(),
-					response.content_type.as_deref(),
+					content_disposition.as_ref(),
+					content_type.as_deref(),
 					None,
 				);
 
 				Ok(get_content_thumbnail::v3::Response {
-					file: response.file,
-					content_type: response.content_type,
+					file: content.expect("entire file contents"),
+					content_type: content_type.map(Into::into),
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
 					content_disposition: Some(content_disposition),
