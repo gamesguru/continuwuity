@@ -1,5 +1,8 @@
 use std::process::Command;
 
+#[path = "src/git.rs"]
+mod git;
+
 fn run_git_command(args: &[&str]) -> Option<String> {
 	Command::new("git")
 		.args(args)
@@ -22,37 +25,73 @@ fn main() {
 	built::write_built_file().expect("Failed to acquire build-time information");
 
 	// --- Git Information ---
-	let mut commit_hash = None;
-	let mut commit_hash_short = None;
-	let mut remote_url_web = None;
+	// Get short commit hash
+	let short_hash = run_git_command(&["rev-parse", "--short", "HEAD"])
+		.unwrap_or_else(|| "unknown".to_owned());
 
 	// Get full commit hash
-	if let Some(hash) =
-		get_env("GIT_COMMIT_HASH").or_else(|| run_git_command(&["rev-parse", "HEAD"]))
-	{
-		println!("cargo:rustc-env=GIT_COMMIT_HASH={hash}");
-		commit_hash = Some(hash);
+	let full_hash =
+		run_git_command(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
+
+	println!("cargo:rustc-env=GIT_COMMIT_HASH_SHORT={short_hash}");
+	println!("cargo:rustc-env=GIT_COMMIT_HASH={full_hash}");
+
+	// only rebuild if the HEAD commit changes
+	// println!("cargo:rerun-if-changed=.git/HEAD");
+
+	for (var, url) in [
+		("GIT_REMOTE_URL", "remote.origin.url"),
+		("GIT_REMOTE_WEB_URL", "remote.origin.web_url"),
+		("GIT_REMOTE_COMMIT_URL", "remote.origin.commit_url"),
+	] {
+		if get_env(var).is_none() {
+			if let Some(url) = run_git_command(&["config", "--get", url]) {
+				println!("cargo:rustc-env={var}={url}");
+			}
+		}
 	}
 
-	// Get short commit hash
-	if let Some(short_hash) = get_env("GIT_COMMIT_HASH_SHORT")
-		.or_else(|| run_git_command(&["rev-parse", "--short", "HEAD"]))
-	{
-		println!("cargo:rustc-env=GIT_COMMIT_HASH_SHORT={short_hash}");
+	// This is the version string that Conduwuit uses.
+	// It is generated here and exposed as an environment variable.
+	// We want this to be robust, so we handle pre-release tags and
+	// the version string while keeping the hash dynamic
+	if get_env("CONTINUWUITY_VERSION_EXTRA").is_none() {
+		let desc = std::env::var("GIT_DESCRIBE").ok().or_else(git::description);
 
-		// If CONTINUWUITY_BRANCH is manually set (e.g. in .env), use it to construct the version string
-		// while keeping the hash dynamic
-		if get_env("CONTINUWUITY_VERSION_EXTRA").is_none() {
-			if let Some(branch_env) = get_env("CONTINUWUITY_BRANCH") {
-				let extra = format!("{short_hash},b={branch_env}");
-				println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={extra}");
+		let mut extra = vec![desc.unwrap_or_else(|| short_hash.clone())];
+
+		if let Ok(ver) = std::env::var("CARGO_PKG_VERSION") {
+			// Safely strip the base version and any leading + or -
+			if let Some(stripped) = extra[0].strip_prefix(&ver) {
+				extra[0] = stripped
+					.trim_start_matches(|c| c == '+' || c == '-')
+					.to_owned();
 			}
 		}
 
-		commit_hash_short = Some(short_hash);
+		if let Some(b) = get_env("CONTINUWUITY_BRANCH")
+			.or_else(|| run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"]))
+		{
+			println!("cargo:rustc-env=GIT_BRANCH={b}");
+			if b != "main" && b != "master" {
+				extra.push(format!("b={b}"));
+			}
+		}
+
+		// Remove empty strings so we don't join with a leading comma
+		extra.retain(|s| !s.is_empty());
+
+		let extra_s = extra.join(",");
+		println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={extra_s}");
+		println!(
+			"cargo:warning=Continuwuity Version: {} ({})",
+			std::env::var("CARGO_PKG_VERSION").unwrap_or_default(),
+			extra_s
+		);
 	}
 
 	// Get remote URL and convert to web URL
+	let mut remote_url_web = None;
 	if let Some(remote_url_raw) = get_env("GIT_REMOTE_URL")
 		.or_else(|| run_git_command(&["config", "--get", "remote.origin.url"]))
 	{
@@ -80,9 +119,12 @@ fn main() {
 	// Construct remote commit URL
 	if let Some(remote_commit_url) = get_env("GIT_REMOTE_COMMIT_URL") {
 		println!("cargo:rustc-env=GIT_REMOTE_COMMIT_URL={remote_commit_url}");
-	} else if let (Some(base_url), Some(hash)) =
-		(&remote_url_web, commit_hash.as_ref().or(commit_hash_short.as_ref()))
-	{
+	} else if let Some(base_url) = remote_url_web.as_ref() {
+		let hash = if full_hash != "unknown" {
+			&full_hash
+		} else {
+			&short_hash
+		};
 		let commit_page = format!("{base_url}/commit/{hash}");
 		println!("cargo:rustc-env=GIT_REMOTE_COMMIT_URL={commit_page}");
 	}
@@ -107,5 +149,7 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=GIT_COMMIT_HASH");
 	println!("cargo:rerun-if-env-changed=GIT_COMMIT_HASH_SHORT");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_URL");
+	println!("cargo:rerun-if-env-changed=GIT_DESCRIBE");
+	println!("cargo:rerun-if-env-changed=CONTINUWUITY_VERSION_EXTRA");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_COMMIT_URL");
 }
