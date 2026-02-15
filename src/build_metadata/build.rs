@@ -62,6 +62,7 @@ fn main() {
 			if let Some(b) = get_env("CONTINUWUITY_BRANCH")
 				.or_else(|| run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"]))
 			{
+				println!("cargo:rustc-env=GIT_BRANCH={b}");
 				if b != "main" && b != "master" {
 					extra.push(format!("b={b}"));
 				}

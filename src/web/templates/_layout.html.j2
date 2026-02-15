@@ -18,11 +18,11 @@
     {%~ block footer ~%}
         <footer>
             <p>Powered by <a href="https://continuwuity.org">Continuwuity</a>
-                {%~ if let Some(version_info) = self::version_tag() ~%}
-                    {%~ if let Some(url) = GIT_REMOTE_COMMIT_URL.or(GIT_REMOTE_WEB_URL) ~%}
-                        (<a href="{{ url }}">{{ version_info }}</a>)
+                {%~ if !version.is_empty() ~%}
+                    {%~ if !git_url.is_empty() ~%}
+                        (<a href="{{ git_url }}">{{ version }}</a>)
                     {%~ else ~%}
-                        ({{ version_info }})
+                        ({{ version }})
                     {%~ endif ~%}
                 {%~ endif ~%}</p>
         </footer>

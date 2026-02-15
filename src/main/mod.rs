@@ -14,12 +14,30 @@ mod sentry;
 mod server;
 mod signal;
 
+use conduwuit_build_metadata as metadata;
 pub use conduwuit_core::{Error, Result};
 use server::Server;
 
 pub use crate::clap::Args;
 
 pub fn run() -> Result<()> {
+	let extra = metadata::version_tag();
+	let pkg_ver = env!("CARGO_PKG_VERSION");
+	let version_full = if let Some(tag) = extra {
+		format!("{pkg_ver} ({tag})")
+	} else {
+		pkg_ver.to_owned()
+	};
+
+	conduwuit_core::info::version::set(
+		version_full,
+		metadata::GIT_BRANCH.unwrap_or("unknown"),
+		metadata::GIT_COMMIT_HASH.unwrap_or("unknown"),
+		metadata::GIT_REMOTE_URL.unwrap_or("unknown"),
+		metadata::GIT_REMOTE_COMMIT_URL.unwrap_or("unknown"),
+		metadata::GIT_REMOTE_WEB_URL.unwrap_or("unknown"),
+	);
+
 	panic::init();
 
 	let args = clap::parse();

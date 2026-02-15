@@ -1116,7 +1116,6 @@ dependencies = [
  "checked_ops",
  "chrono",
  "clap",
- "conduwuit_build_metadata",
  "conduwuit_macros",
  "const-str",
  "core_affinity",
@@ -1271,7 +1270,6 @@ version = "0.5.4"
 dependencies = [
  "askama 0.14.0",
  "axum 0.7.9",
- "conduwuit_build_metadata",
  "conduwuit_service",
  "futures",
  "rand 0.8.5",

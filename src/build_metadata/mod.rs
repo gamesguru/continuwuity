@@ -25,5 +25,7 @@ pub fn version_tag() -> Option<&'static str> {
 
 pub static GIT_REMOTE_WEB_URL: Option<&str> = option_env!("GIT_REMOTE_WEB_URL");
 pub static GIT_REMOTE_COMMIT_URL: Option<&str> = option_env!("GIT_REMOTE_COMMIT_URL");
+pub static GIT_REMOTE_URL: Option<&str> = option_env!("GIT_REMOTE_URL");
+pub static GIT_BRANCH: Option<&str> = option_env!("GIT_BRANCH");
 
 // TODO: Mark dirty builds within the version string

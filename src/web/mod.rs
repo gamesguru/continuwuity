@@ -6,7 +6,7 @@ use axum::{
 	response::{Html, IntoResponse, Response},
 	routing::get,
 };
-use conduwuit_build_metadata::{GIT_REMOTE_COMMIT_URL, GIT_REMOTE_WEB_URL, version_tag};
+use conduwuit_core::info::version;
 use conduwuit_service::state;
 
 pub fn build() -> Router<state::State> {
@@ -22,12 +22,16 @@ async fn index_handler(
 	struct Tmpl<'a> {
 		nonce: &'a str,
 		server_name: &'a str,
+		version: &'a str,
+		git_url: &'a str,
 	}
 	let nonce = rand::random::<u64>().to_string();
 
 	let template = Tmpl {
 		nonce: &nonce,
 		server_name: services.config.server_name.as_str(),
+		version: version::version(),
+		git_url: version::git_remote_commit_url(),
 	};
 	Ok((
 		[(header::CONTENT_SECURITY_POLICY, format!("default-src 'none' 'nonce-{nonce}';"))],
@@ -47,6 +51,8 @@ impl IntoResponse for WebError {
 		#[template(path = "error.html.j2")]
 		struct Tmpl<'a> {
 			nonce: &'a str,
+			version: &'a str,
+			git_url: &'a str,
 			err: WebError,
 		}
 
@@ -55,7 +61,12 @@ impl IntoResponse for WebError {
 		let status = match &self {
 			| Self::Render(_) => StatusCode::INTERNAL_SERVER_ERROR,
 		};
-		let tmpl = Tmpl { nonce: &nonce, err: self };
+		let tmpl = Tmpl {
+			nonce: &nonce,
+			err: self,
+			version: version::version(),
+			git_url: version::git_remote_commit_url(),
+		};
 		if let Ok(body) = tmpl.render() {
 			(
 				status,
