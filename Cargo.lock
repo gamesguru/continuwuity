@@ -1270,6 +1270,7 @@ version = "0.5.4"
 dependencies = [
  "askama 0.14.0",
  "axum 0.7.9",
+ "conduwuit_core",
  "conduwuit_service",
  "futures",
  "rand 0.8.5",
