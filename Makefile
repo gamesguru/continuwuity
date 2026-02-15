@@ -64,6 +64,10 @@ clean: _profile-check _clean-check	##H Clean build directory
 	cargo clean
 	rm -rf target/debian
 
+.PHONY: benchmark
+benchmark: _profile-check _clean-check	##H Benchmark clean build time
+	cargo clean
+	time cargo build $(CARGO_FLAGS)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # DevOps commands
