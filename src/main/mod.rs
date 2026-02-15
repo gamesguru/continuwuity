@@ -31,11 +31,7 @@ pub fn run() -> Result<()> {
 
 	conduwuit_core::info::version::set(
 		version_full,
-		metadata::GIT_BRANCH.unwrap_or("unknown"),
-		metadata::GIT_COMMIT_HASH.unwrap_or("unknown"),
-		metadata::GIT_REMOTE_URL.unwrap_or("unknown"),
 		metadata::GIT_REMOTE_COMMIT_URL.unwrap_or("unknown"),
-		metadata::GIT_REMOTE_WEB_URL.unwrap_or("unknown"),
 	);
 
 	panic::init();
