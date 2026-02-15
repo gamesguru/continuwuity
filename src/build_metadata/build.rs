@@ -43,10 +43,37 @@ fn main() {
 		// If CONTINUWUITY_BRANCH is manually set (e.g. in .env), use it to construct
 		// the version string while keeping the hash dynamic
 		if get_env("CONTINUWUITY_VERSION_EXTRA").is_none() {
-			if let Some(branch_env) = get_env("CONTINUWUITY_BRANCH") {
-				let extra = format!("{short_hash},b={branch_env}");
-				println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={extra}");
+			let desc = std::env::var("GIT_DESCRIBE").ok().or_else(|| {
+				run_git_command(&["describe", "--tags", "--always", "--dirty"]).map(|s| {
+					s.trim_start_matches('v')
+						.replacen('-', "+", 1)
+						.replace("-g", "~g")
+				})
+			});
+
+			let mut extra = vec![desc.unwrap_or(short_hash.clone())];
+			// remove the base version if present (e.g. 0.5.4+33~gABC -> +33~gABC)
+			if let Ok(ver) = std::env::var("CARGO_PKG_VERSION") {
+				if extra[0].starts_with(&ver) {
+					extra[0] = extra[0].trim_start_matches(&ver).to_owned();
+				}
 			}
+
+			if let Some(b) = get_env("CONTINUWUITY_BRANCH")
+				.or_else(|| run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"]))
+			{
+				if b != "main" && b != "master" {
+					extra.push(format!("b={b}"));
+				}
+			}
+
+			let extra_s = extra.join(",");
+			println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={extra_s}");
+			println!(
+				"cargo:warning=Continuwuity Version: {} ({})",
+				std::env::var("CARGO_PKG_VERSION").unwrap_or_default(),
+				extra_s
+			);
 		}
 
 		commit_hash_short = Some(short_hash);

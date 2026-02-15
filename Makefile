@@ -19,19 +19,24 @@ help: ##H Show this help
 PROFILE ?=
 CARGO_FLAGS ?= --profile $(PROFILE)
 
+GIT_DESCRIBE ?= $(shell git describe --tags --always --dirty | sed 's/^v//;s/-\([0-9]\+\)-g/+\1~g/')
+export GIT_DESCRIBE
+
 .PHONY: profiles
 profiles: ##H List available cargo profiles
 	@grep "^\[profile\." Cargo.toml | sed 's/\[profile\.//;s/\]//' | grep -v 'package' | grep -v 'build-override' | sort
 
 .PHONY: _profile-check
 _profile-check:
+	@echo "BUILD_SIGNATURE=$(GIT_DESCRIBE)"
 	@if [ -z "$(PROFILE)" ]; then echo "ERROR: Please set PROFILE on command line or in .env"; exit 1; fi
 	read -p "Continue with PROFILE=$(PROFILE)? [Y/n] " ans && [ "$${ans:-Y}" != "n" ] && [ "$${ans:-Y}" != "N" ]
 
 
 .PHONY: format
-format: _profile-check	##H Format changed code blocks
+format:	##H Format changed code blocks
 	cargo +nightly fmt
+	@echo "BUILD_SIGNATURE=$(GIT_DESCRIBE)"
 
 .PHONY: lint
 lint: _profile-check	##H Lint code
@@ -45,6 +50,10 @@ test: _profile-check	##H Run tests
 build: _profile-check	##H Build with PROFILE=
 	cargo build $(CARGO_FLAGS)
 
+.PHONY: deb
+deb:	##H Build Debian package
+	@read -p "Are you sure you want to build a Debian package for $(GIT_DESCRIBE)? [y/N] " ans && [ $${ans:-N} = y ]
+	cargo-deb --release
 
 .PHONY: _clean-check
 _clean-check:
@@ -53,6 +62,7 @@ _clean-check:
 .PHONY: clean
 clean: _profile-check _clean-check	##H Clean build directory
 	cargo clean
+	rm -rf target/debian
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
