@@ -40,8 +40,8 @@ fn main() {
 	{
 		println!("cargo:rustc-env=GIT_COMMIT_HASH_SHORT={short_hash}");
 
-		// If CONTINUWUITY_BRANCH is manually set (e.g. in .env), use it to construct the version string
-		// while keeping the hash dynamic
+		// If CONTINUWUITY_BRANCH is manually set (e.g. in .env), use it to construct
+		// the version string while keeping the hash dynamic
 		if get_env("CONTINUWUITY_VERSION_EXTRA").is_none() {
 			if let Some(branch_env) = get_env("CONTINUWUITY_BRANCH") {
 				let extra = format!("{short_hash},b={branch_env}");
