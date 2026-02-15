@@ -9,9 +9,10 @@ version.workspace = true
 
 
 build = "build.rs"
-# [[bin]]
-# path = "main.rs"
-# name = "conduwuit_build_metadata"
+
+[[bin]]
+name = "conduwuit-version"
+path = "src/bin/version.rs"
 
 [lib]
 path = "mod.rs"
