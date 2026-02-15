@@ -8,11 +8,12 @@ use api::client::{
 	update_avatar_url, update_displayname,
 };
 use conduwuit::{
-	Err, Result, debug, debug_warn, error, info, is_equal_to,
+	Err, Result, debug, debug_warn, error, info,
 	matrix::{Event, pdu::PduBuilder},
 	utils::{self, ReadyExt},
 	warn,
 };
+use conduwuit_macros::admin_command;
 use futures::{FutureExt, StreamExt};
 use ruma::{
 	Int, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomId,
@@ -39,10 +40,7 @@ const AUTO_GEN_PASSWORD_LENGTH: usize = 25;
 const BULK_JOIN_REASON: &str = "Bulk force joining this room as initiated by the server admin.";
 
 #[admin_command]
-pub(super) use conduwuit_macros::admin_command;
-use conduwuit_macros::admin_command;
-
-async fn list_users(&self) -> Result {
+pub(crate) async fn list_users(&self) -> Result {
 	let users: Vec<_> = self
 		.services
 		.users

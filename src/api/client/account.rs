@@ -159,7 +159,7 @@ pub(crate) async fn register_route(
 		)));
 	}
 
-	if !services.config.allow_registration && body.appservice_info.is_none() {
+	if !allow_registration && body.appservice_info.is_none() {
 		match (body.username.as_ref(), body.initial_device_display_name.as_ref()) {
 			| (Some(username), Some(device_display_name)) => {
 				info!(
