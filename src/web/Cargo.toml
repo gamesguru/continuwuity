@@ -21,7 +21,7 @@ crate-type = [
 conduwuit-core.workspace = true
 conduwuit-service.workspace = true
 
-askama = "0.14.0"
+askama = "0.15.1"
 
 axum.workspace = true
 futures.workspace = true

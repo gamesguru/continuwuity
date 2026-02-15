@@ -51,11 +51,14 @@ fn main() {
 				})
 			});
 
-			let mut extra = vec![desc.unwrap_or(short_hash.clone())];
+			let mut extra = vec![desc.unwrap_or_else(|| short_hash.clone())];
 			// remove the base version if present (e.g. 0.5.4+33~gABC -> +33~gABC)
 			if let Ok(ver) = std::env::var("CARGO_PKG_VERSION") {
 				if extra[0].starts_with(&ver) {
-					extra[0] = extra[0].trim_start_matches(&ver).to_owned();
+					let len_to_remove = extra[0]
+						.len()
+						.saturating_sub(extra[0].trim_start_matches(&ver).len());
+					extra[0].drain(..len_to_remove);
 				}
 			}
 

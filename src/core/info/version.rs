@@ -35,9 +35,9 @@ pub fn user_agent() -> &'static str { USER_AGENT.get_or_init(init_user_agent) }
 fn init_user_agent() -> String { format!("{}/{}", name(), version()) }
 
 /// Initialize the version strings, should be called once at startup.
-pub fn set(version: impl Into<String>, commit_url: impl Into<String>) {
-	let _ = VERSION.set(version.into());
-	let _ = GIT_REMOTE_COMMIT_URL.set(commit_url.into());
+pub fn set<V: Into<String>, C: Into<String>>(version: V, commit_url: C) {
+	let _: Result<(), String> = VERSION.set(version.into());
+	let _: Result<(), String> = GIT_REMOTE_COMMIT_URL.set(commit_url.into());
 }
 
 fn init_version() -> String { SEMANTIC.to_owned() }
