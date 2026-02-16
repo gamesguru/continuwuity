@@ -42,6 +42,14 @@ pub fn user_agent() -> &'static str { USER_AGENT.get_or_init(init_user_agent) }
 
 fn init_user_agent() -> String { format!("{}/{} (bot; +{WEBSITE})", name(), version_ua()) }
 
+pub fn user_agent_media() -> &'static str { USER_AGENT_MEDIA.get_or_init(init_user_agent_media) }
+
+static USER_AGENT_MEDIA: OnceLock<String> = OnceLock::new();
+
+fn init_user_agent_media() -> String {
+	format!("{}/{} (embedbot; +{WEBSITE})", name(), version_ua())
+}
+
 fn init_version_ua() -> String {
 	conduwuit_build_metadata::version_tag().map_or_else(
 		|| SEMANTIC.to_owned(),
