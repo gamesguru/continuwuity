@@ -14,6 +14,7 @@ static SEMANTIC: &str = env!("CARGO_PKG_VERSION");
 static VERSION: OnceLock<String> = OnceLock::new();
 static VERSION_UA: OnceLock<String> = OnceLock::new();
 static USER_AGENT: OnceLock<String> = OnceLock::new();
+static USER_AGENT_MEDIA: OnceLock<String> = OnceLock::new();
 static GIT_REMOTE_COMMIT_URL: OnceLock<String> = OnceLock::new();
 
 #[inline]
@@ -43,8 +44,6 @@ pub fn user_agent() -> &'static str { USER_AGENT.get_or_init(init_user_agent) }
 fn init_user_agent() -> String { format!("{}/{} (bot; +{WEBSITE})", name(), version_ua()) }
 
 pub fn user_agent_media() -> &'static str { USER_AGENT_MEDIA.get_or_init(init_user_agent_media) }
-
-static USER_AGENT_MEDIA: OnceLock<String> = OnceLock::new();
 
 fn init_user_agent_media() -> String {
 	format!("{}/{} (embedbot; +{WEBSITE})", name(), version_ua())
