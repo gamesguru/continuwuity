@@ -1,199 +1,108 @@
 SHELL=/bin/bash
-.DEFAULT_GOAL=help
+.DEFAULT_GOAL := help
 
-# [CONFIG] Suppresses annoying "make[1]: Entering directory" messages
-MAKEFLAGS += --no-print-directory
-
-# [CONFIG] source .env if it exists
+# source .env if it exists
 ifneq (,$(wildcard ./.env))
 	include .env
 	export
-	# Strip double quotes from .env values (annoying disagreement between direnv, dotenv)
-	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
 endif
 
-# [CONFIG] Auto-discover vars defined in Makefiles (not env-inherited)
-VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter file override command,$(origin $v)),$v)))
-
-# [ENUM] Styling / Colors
-STYLE_CYAN := $(shell tput setaf 6 2>/dev/null || echo -e "\033[36m")
-STYLE_RESET := $(shell tput sgr0 2>/dev/null || echo -e "\033[0m")
-
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Meta/help commands
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 .PHONY: help
-help: ##H Show this help, list available targets
+help: ##H Show this help
 	@grep -hE '^[a-zA-Z0-9_\/-]+:.*?##H .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-15s$(STYLE_RESET) %s\n", $$1, $$2}'
-
-
-.PHONY: doctor
-doctor: ##H Output version info for required tools
-	@echo "Sanity check — not comprehensive. Requirements may be missing or out of date."
-	@echo "See rust-toolchain.toml for authoritative versions."
-	cargo --version
-	rustup --version
-	cargo +nightly fmt --version
-	cargo fmt --version
-	cargo +nightly clippy --version
-	cargo clippy --version
-	pre-commit --version
-	pkg-config --version
-	pkg-config --libs --cflags liburing
-	@echo "OK."
-	@echo "Checking for newer tags [DRY RUN]..."
-	git fetch --all --dry-run --tags
-
-.PHONY: cpu-info
-cpu-info: ##H Print CPU info relevant to target-cpu=native
-	@echo "=== CPU Model ==="
-	@grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown"
-	@echo "=== Architecture ==="
-	@uname -a
-	@echo "=== rustc Host Target ==="
-	@rustc -vV | grep host
-	@echo "=== rustc Native CPU ==="
-	@rustc --print=cfg -C target-cpu=native 2>/dev/null | grep target_feature | sort
-	@echo "=== CPU Flags (from /proc/cpuinfo) ==="
-	@grep -m1 'flags' /proc/cpuinfo 2>/dev/null | tr ' ' '\n' | grep -E 'avx|sse|aes|bmi|fma|popcnt|lzcnt|sha|pclmul' | sort
-
-.PHONY: vars
-vars: ##H Print debug info
-	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
-	@echo "... computing version."
-	@printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$$(cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
+		| awk 'BEGIN {FS = ":.*?##H "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Development commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PROFILE ?=
+CARGO_FLAGS ?= --profile $(PROFILE)
 
 .PHONY: profiles
 profiles: ##H List available cargo profiles
-	# NOTE: not authoritative — see Cargo.toml for definitive profiles.
-	@grep "^\[profile\." Cargo.toml \
-		| sed 's/\[profile\.//;s/\]//' \
-		| grep -v 'package' \
-		| grep -v 'build-override' \
-		| sort
+	@grep "^\[profile\." Cargo.toml | sed 's/\[profile\.//;s/\]//' | grep -v 'package' | grep -v 'build-override' | sort
 
-PROFILE ?=
-CRATE ?=
-CARGO_SCOPE ?= $(if $(CRATE),-p $(CRATE),--workspace)
-CARGO_FLAGS ?= --profile $(PROFILE)
+.PHONY: version
+version: ##H Print the version
+	cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet
 
-# For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
-RUSTFLAGS ?=
 
-# Display crate compilation progress [X/Y] in nohup or no-tty environment.
-# Override or unset in .env to disable.
-export CARGO_TERM_PROGRESS_WHEN ?= auto
-export CARGO_TERM_PROGRESS_WIDTH ?= 80
-
-# To suppress the confirmation prompt, add to your .env: SKIP_CONFIRM=1
-SKIP_CONFIRM ?=
-
-# Target to prompt for confirmation before proceeding (slow tasks, cleaning builds, etc)
-.PHONY: _confirm
-_confirm:
-	# Verifying required variables are set...
-	@test "$(PROFILE)" || (echo "ERROR: PROFILE is not set" && exit 1)
-	# Confirming you wish to proceed...
-	@if [ -t 0 ] && [ -z "$(SKIP_CONFIRM)" ]; then read -p "Press [Enter] to continue or Ctrl+C to cancel..." _; fi
+.PHONY: _profile-check
+_profile-check: version
+	@if [ -z "$(PROFILE)" ]; then echo "ERROR: Please set PROFILE on command line or in .env"; exit 1; fi
+	@if [ -t 0 ]; then read -p "Continue with PROFILE=$(PROFILE)? Press [Enter] to continue or Ctrl+C to abort..." _; fi
 
 
 .PHONY: format
-format: ##H Run pre-commit hooks/formatters
+format: ##H Run pre-commit hooks/formatter
 	pre-commit run --all-files
 
 .PHONY: lint
+lint: _profile-check
 lint:	##H Lint code
-	@echo "Lint code? PROFILE='$(PROFILE)'"
-	@$(MAKE) _confirm
-	cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
+	cargo clippy --workspace --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
+test: _profile-check
 test:	##H Run tests
-	@echo "Run tests? PROFILE='$(PROFILE)'"
-	@$(MAKE) _confirm
-	cargo test $(CARGO_SCOPE) --features full --locked --profile $(PROFILE) --all-targets
-
+	cargo test --workspace --features full --locked --profile $(PROFILE) --all-targets
 
 .PHONY: build
-build:	##H Build with selected profile,
-	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
-	@echo "Build this profile? PROFILE='$(PROFILE)'"
-	@$(MAKE) _confirm
+build: _profile-check
+build:	##H Build with PROFILE=
 	cargo build $(CARGO_FLAGS)
-	@echo "Build finished! Linking '$(PROFILE)' to target/latest"
-	ln -sfn $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
 
-.PHONY: nohup
-nohup:	##H Build with nohup
-	nohup $(MAKE) build SKIP_CONFIRM=1 > build.log 2>&1 &
-	tail -n +1 -f build.log
-
+.PHONY: _benchmark
+_benchmark: _profile-check
+_benchmark:
+	$(MAKE) clean
+	time cargo build $(CARGO_FLAGS)
 
 .PHONY: deb
+deb: _profile-check
 deb:	##H Build Debian package
-	@echo "Build Debian package?"
-	@$(MAKE) _confirm
 	cargo-deb --release
 
 
-.PHONY: clean
-clean:	##H Clean build directory for current profile
-	@echo "Clean the '$(PROFILE)' build directory?"
-	@$(MAKE) _confirm
-	cargo clean --profile $(PROFILE)
-	@echo "Also remove debian build?"
-	@$(MAKE) _confirm
-	rm -rf target/debian
+.PHONY: _clean-check
+_clean-check:
+	@if [ -t 0 ]; then read -p "Cleaning $(PROFILE) build directory. Press [Enter] to continue or Ctrl+C to abort..." _; fi
 
+.PHONY: clean
+clean: _profile-check _clean-check
+clean:	##H Clean build directory
+	cargo clean
+	rm -rf target/debian
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Deployment commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-# Auto-detect Ubuntu version, e.g. "ubuntu-22.04". Override with: make download OS_VERSION=ubuntu-24.04
-OS_VERSION ?= $(shell lsb_release -si 2>/dev/null | tr A-Z a-z)-$(shell lsb_release -sr 2>/dev/null)
-GH_REPO ?=
-
-.PHONY: download
-download:	##H Download latest CI binary for this OS
-	mkdir -p target/ci
-	# Checking old version if it exists
-	-./target/ci/conduwuit -V
-	test "$(GH_REPO)"
-	rm -f target/ci/conduwuit
-	@echo "Downloading latest 'conduwuit-$(OS_VERSION)' from $(GH_REPO)..."
-	gh run download -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
-	chmod +x target/ci/conduwuit
-	@echo "Downloaded to target/ci/conduwuit"
-	./target/ci/conduwuit -V
-	ln -sfn ci target/latest
-
-# Binary name
 CONTINUWUITY ?= conduwuit
 
-# Configure these in .env if alternate path(s) are desired
-LOCAL_BIN_DIR ?= target/latest
+CARGO_OUT_DIR := $(if $(filter $(PROFILE),dev test),debug,$(PROFILE))
+LOCAL_BIN_DIR ?= target/$(CARGO_OUT_DIR)
+LOCAL_BIN := $(LOCAL_BIN_DIR)/$(CONTINUWUITY)
+
 REMOTE_BIN_DIR ?= /usr/local/bin
+REMOTE_BIN := $(REMOTE_BIN_DIR)/$(CONTINUWUITY)
 
-LOCAL_BIN ?= $(LOCAL_BIN_DIR)/$(CONTINUWUITY)
-REMOTE_BIN ?= $(REMOTE_BIN_DIR)/$(CONTINUWUITY)
+BACKUP_DIR_BASE ?= .nginx-ops/continuwuity
+LOCAL_BACKUP_DIR := $(HOME)/$(BACKUP_DIR_BASE) # Local backup directory (relative to user's home)
 
+.PHONY: _deploy-check
+_deploy-check: version
+	@if [ -t 0 ]; then read -p "Deploying $(CONTINUWUITY) to $(REMOTE_BIN)? Press [Enter] to continue or Ctrl+C to abort..." _; fi
 
-.PHONY: install
-install:	##H Install (executed on VPS)
-	@echo "Install $(CONTINUWUITY) to $(REMOTE_BIN)?"
-	@$(MAKE) _confirm
-	# You may need to run with sudo or adjust REMOTE_BIN_DIR if this fails
-	install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"
+.PHONY: deploy/install
+deploy/install: _deploy-check
+deploy/install:	##H Install (executed on VPS)
+	@echo "Installing $(CONTINUWUITY) to $(REMOTE_BIN)"
+	if [ ! -f "$(REMOTE_BIN)" ] || ! cmp -s "$(LOCAL_BIN)" "$(REMOTE_BIN)"; then \
+		install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)" || sudo install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"; \
+	else \
+		echo "Binary $(REMOTE_BIN) is identical to $(LOCAL_BIN). Skipping install."; \
+	fi
+	@echo "Restarting $(CONTINUWUITY)"
+	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)
 	@echo "Installation complete."
-# 	@echo "Restarting $(CONTINUWUITY)"
-# 	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)

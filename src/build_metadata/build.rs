@@ -1,5 +1,17 @@
 #[path = "src/git.rs"]
 mod git;
+use std::process::Command;
+
+fn run_git_command(args: &[&str]) -> Option<String> {
+	Command::new("git")
+		.args(args)
+		.output()
+		.ok()
+		.filter(|output| output.status.success())
+		.and_then(|output| String::from_utf8(output.stdout).ok())
+		.map(|s| s.trim().to_owned())
+		.filter(|s| !s.is_empty())
+}
 
 fn get_env(env_var: &str) -> Option<String> {
 	match std::env::var(env_var) {
@@ -19,14 +31,16 @@ fn main() {
 	let mut remote_url_web = None;
 
 	// Get full commit hash
-	if let Some(hash) = get_env("GIT_COMMIT_HASH").or_else(|| git::run(&["rev-parse", "HEAD"])) {
+	if let Some(hash) =
+		get_env("GIT_COMMIT_HASH").or_else(|| run_git_command(&["rev-parse", "HEAD"]))
+	{
 		println!("cargo:rustc-env=GIT_COMMIT_HASH={hash}");
 		commit_hash = Some(hash);
 	}
 
 	// Get short commit hash
-	if let Some(short_hash) =
-		get_env("GIT_COMMIT_HASH_SHORT").or_else(|| git::run(&["rev-parse", "--short", "HEAD"]))
+	if let Some(short_hash) = get_env("GIT_COMMIT_HASH_SHORT")
+		.or_else(|| run_git_command(&["rev-parse", "--short", "HEAD"]))
 	{
 		println!("cargo:rustc-env=GIT_COMMIT_HASH_SHORT={short_hash}");
 		commit_hash_short = Some(short_hash);
@@ -48,7 +62,7 @@ fn main() {
 			}
 		}
 		if let Some(b) = get_env("CONTINUWUITY_BRANCH")
-			.or_else(|| git::run(&["rev-parse", "--abbrev-ref", "HEAD"]))
+			.or_else(|| run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"]))
 		{
 			println!("cargo:rustc-env=GIT_BRANCH={b}");
 			if b != "main" && b != "master" {
@@ -60,8 +74,8 @@ fn main() {
 	}
 
 	// Get remote URL and convert to web URL
-	if let Some(remote_url_raw) =
-		get_env("GIT_REMOTE_URL").or_else(|| git::run(&["config", "--get", "remote.origin.url"]))
+	if let Some(remote_url_raw) = get_env("GIT_REMOTE_URL")
+		.or_else(|| run_git_command(&["config", "--get", "remote.origin.url"]))
 	{
 		println!("cargo:rustc-env=GIT_REMOTE_URL={remote_url_raw}");
 		let web_url = if remote_url_raw.starts_with("http") {
@@ -92,12 +106,12 @@ fn main() {
 
 	// --- Rerun Triggers ---
 	for arg in ["HEAD", "packed-refs"] {
-		if let Some(p) = git::run(&["rev-parse", "--git-path", arg]) {
+		if let Some(p) = run_git_command(&["rev-parse", "--git-path", arg]) {
 			println!("cargo:rerun-if-changed={p}");
 		}
 	}
-	if let Some(ref_path) = git::run(&["symbolic-ref", "--quiet", "HEAD"]) {
-		if let Some(p) = git::run(&["rev-parse", "--git-path", &ref_path]) {
+	if let Some(ref_path) = run_git_command(&["symbolic-ref", "--quiet", "HEAD"]) {
+		if let Some(p) = run_git_command(&["rev-parse", "--git-path", &ref_path]) {
 			println!("cargo:rerun-if-changed={p}");
 		}
 	}
@@ -108,5 +122,4 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_COMMIT_URL");
 	println!("cargo:rerun-if-env-changed=GIT_DESCRIBE");
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_VERSION_EXTRA");
-	println!("cargo:rerun-if-env-changed=CONTINUWUITY_BRANCH");
 }
