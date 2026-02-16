@@ -99,7 +99,7 @@ deploy/install: _deploy-check
 deploy/install:	##H Install (executed on VPS)
 	@echo "Installing $(CONTINUWUITY) to $(REMOTE_BIN)"
 	if [ ! -f "$(REMOTE_BIN)" ] || ! cmp -s "$(LOCAL_BIN)" "$(REMOTE_BIN)"; then \
-		sudo install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"; \
+		install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)" || sudo install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"; \
 	else \
 		echo "Binary $(REMOTE_BIN) is identical to $(LOCAL_BIN). Skipping install."; \
 	fi

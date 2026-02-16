@@ -14,6 +14,10 @@ build = "build.rs"
 name = "conduwuit-version"
 path = "src/bin/version.rs"
 
+[[bin]]
+name = "conduwuit-deploy"
+path = "src/bin/deploy.rs"
+
 [lib]
 path = "mod.rs"
 crate-type = [
@@ -27,7 +31,6 @@ crate-type = [
 [dependencies]
 
 [build-dependencies]
-built = { version = "0.8", features = [] }
 
 [lints]
 workspace = true
