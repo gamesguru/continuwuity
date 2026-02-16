@@ -1473,6 +1473,14 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_legacy_media: bool,
 
+	/// Sign federation requests as authenticated when fetching remote
+	/// media through legacy endpoints. This is needed above Matrix 1.11+
+	/// and helps resolve image download errors to users on legacy clients.
+	///
+	/// default: false
+	#[serde(default = "false_fn")]
+	pub legacy_media_authenticated_fetch: bool,
+
 	#[serde(default = "true_fn")]
 	pub freeze_legacy_media: bool,
 
@@ -2429,6 +2437,8 @@ impl Config {
 }
 
 fn true_fn() -> bool { true }
+
+fn false_fn() -> bool { false }
 
 fn default_address() -> ListeningAddr {
 	ListeningAddr {

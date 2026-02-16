@@ -32,4 +32,4 @@ indent_size = 4
 indent_style = space
 
 [Makefile]
-indent_style = tabs
+indent_style = tab
