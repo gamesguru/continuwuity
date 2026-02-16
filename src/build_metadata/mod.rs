@@ -1,7 +1,3 @@
-pub mod built {
-	include!(concat!(env!("OUT_DIR"), "/built.rs"));
-}
-
 pub static GIT_COMMIT_HASH: Option<&str> = option_env!("GIT_COMMIT_HASH");
 
 pub static GIT_COMMIT_HASH_SHORT: Option<&str> = option_env!("GIT_COMMIT_HASH_SHORT");
