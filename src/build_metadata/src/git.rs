@@ -27,7 +27,12 @@ fn format(s: &str) -> String {
 			}
 		}
 	}
-	s.replace("-g", "~")
+
+	// Trim out unintuitive git suffixes (g being a hexadecimal value)
+	match s.rsplit_once("-g") {
+		| Some((prefix, suffix)) => format!("{prefix}~{suffix}"),
+		| None => s,
+	}
 }
 
 #[cfg(test)]
@@ -43,5 +48,7 @@ mod tests {
 		assert_eq!(format("abc1234"), "abc1234");
 		assert_eq!(format("abc1234-dirty"), "abc1234-dirty");
 		assert_eq!(format("v0.5.5-beta-g23701cf0"), "0.5.5-beta~23701cf0");
+		// Tag names containing "-g" should not be corrupted
+		assert_eq!(format("v1.0.0-gamma-g1234abc"), "1.0.0-gamma~1234abc");
 	}
 }

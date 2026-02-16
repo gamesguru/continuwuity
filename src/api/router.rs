@@ -265,10 +265,6 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 				get(client::get_content_thumbnail_legacy_legacy_route),
 			)
 			.route(
-				"/_matrix/media/r0/preview_url",
-				get(client::get_media_preview_legacy_legacy_route),
-			)
-			.route(
 				"/_matrix/media/r0/download/:server_name/:media_id",
 				get(client::get_content_legacy_legacy_route),
 			)

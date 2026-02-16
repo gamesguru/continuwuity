@@ -732,6 +732,7 @@ incremental = true
 
 # Dev/testing build with fast compile time, decent runtime performance.
 # Here, "quick" refers to compile time, not runtime speed.
+# NOTE: for smaller binaries on disk, put: strip = "symbols"
 [profile.dev-quick]
 inherits = "dev"
 opt-level = 1
