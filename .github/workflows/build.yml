@@ -25,6 +25,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install system dependencies
         run: |
@@ -43,9 +45,13 @@ jobs:
           toolchain: "1.90.0"
           components: clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Debug checks
+        run: make vars
 
+      - uses: Swatinem/rust-cache@v2
       - name: Build
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: cargo build --profile ${{ env.PROFILE }} --features full --locked
 
       - name: Upload binary

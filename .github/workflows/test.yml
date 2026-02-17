@@ -1,0 +1,52 @@
+---
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  PROFILE: dev-quick
+  SKIP_CONFIRM: 1
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.90.0"
+          components: clippy
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: make format
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test

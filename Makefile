@@ -47,15 +47,6 @@ doctor: ##H Output version info for required tools
 	@echo "Checking for newer tags [DRY RUN]..."
 	git fetch --all --dry-run --tags
 
-.PHONY: profiles
-profiles: ##H List available cargo profiles
-	# NOTE: not authoritative — see Cargo.toml for definitive profiles.
-	@grep "^\[profile\." Cargo.toml \
-		| sed 's/\[profile\.//;s/\]//' \
-		| grep -v 'package' \
-		| grep -v 'build-override' \
-		| sort
-
 .PHONY: vars
 vars: ##H Print debug info
 	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
@@ -67,6 +58,15 @@ vars: ##H Print debug info
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Development commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.PHONY: profiles
+profiles: ##H List available cargo profiles
+	# NOTE: not authoritative — see Cargo.toml for definitive profiles.
+	@grep "^\[profile\." Cargo.toml \
+		| sed 's/\[profile\.//;s/\]//' \
+		| grep -v 'package' \
+		| grep -v 'build-override' \
+		| sort
 
 PROFILE ?=
 CRATE ?=
@@ -149,10 +149,14 @@ GH_REPO ?= gamesguru/continuwuity
 .PHONY: download
 download:	##H Download latest CI binary for this OS
 	mkdir -p target/ci
+	# Checking old version if it exists
+	-./target/ci/conduwuit -V
+	rm -f target/ci/conduwuit
 	@echo "Downloading latest 'conduwuit-$(OS_VERSION)' from $(GH_REPO)..."
 	gh run download -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
 	chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
+	./target/ci/conduwuit -V
 	ln -sfn ci target/latest
 
 # Binary name
@@ -170,7 +174,8 @@ REMOTE_BIN ?= $(REMOTE_BIN_DIR)/$(CONTINUWUITY)
 install:	##H Install (executed on VPS)
 	@echo "Install $(CONTINUWUITY) to $(REMOTE_BIN)?"
 	@$(MAKE) _confirm
-	install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)" || sudo install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"
+	# You may need to run with sudo or adjust REMOTE_BIN_DIR if this fails
+	install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"
 	@echo "Installation complete."
 # 	@echo "Restarting $(CONTINUWUITY)"
 # 	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)
