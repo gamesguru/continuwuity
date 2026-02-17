@@ -1483,8 +1483,8 @@ pub struct Config {
 	/// media through legacy endpoints. This is needed above Matrix 1.11+
 	/// and helps resolve image download errors to users on legacy clients.
 	///
-	/// default: false
-	#[serde(default = "false_fn")]
+	/// default: true
+	#[serde(default = "true_fn")]
 	pub legacy_media_authenticated_fetch: bool,
 
 	#[serde(default = "true_fn")]
@@ -2443,8 +2443,6 @@ impl Config {
 }
 
 fn true_fn() -> bool { true }
-
-fn false_fn() -> bool { false }
 
 fn default_address() -> ListeningAddr {
 	ListeningAddr {
