@@ -1025,6 +1025,9 @@ dependencies = [
 [[package]]
 name = "conduwuit_build_metadata"
 version = "0.5.5"
+dependencies = [
+ "built",
+]
 
 [[package]]
 name = "conduwuit_core"

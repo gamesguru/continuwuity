@@ -8,11 +8,12 @@ MAKEFLAGS += --no-print-directory
 ifneq (,$(wildcard ./.env))
 	include .env
 	export
+	# Strip double quotes from .env values (annoying disagreement between direnv, dotenv)
+	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
 endif
 
-# [CONFIG] Auto-discover custom vars
-_BUILTIN_VARS := $(.VARIABLES)
-VARS := $(sort $(filter-out $(_BUILTIN_VARS) _BUILTIN_VARS VARS, $(.VARIABLES)))
+# [CONFIG] Auto-discover vars defined in Makefiles (not env-inherited)
+VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter file override command,$(origin $v)),$v)))
 
 # [ENUM] Styling / Colors
 STYLE_CYAN := $(shell tput setaf 6 2>/dev/null || echo -e "\033[36m")
@@ -46,6 +47,31 @@ doctor: ##H Output version info for required tools
 	@echo "Checking for newer tags [DRY RUN]..."
 	git fetch --all --dry-run --tags
 
+.PHONY: cpu-info
+cpu-info: ##H Print CPU info relevant to target-cpu=native
+	@echo "=== CPU Model ==="
+	@grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown"
+	@echo "=== Architecture ==="
+	@uname -a
+	@echo "=== rustc Host Target ==="
+	@rustc -vV | grep host
+	@echo "=== rustc Native CPU ==="
+	@rustc --print=cfg -C target-cpu=native 2>/dev/null | grep target_feature | sort
+	@echo "=== CPU Flags (from /proc/cpuinfo) ==="
+	@grep -m1 'flags' /proc/cpuinfo 2>/dev/null | tr ' ' '\n' | grep -E 'avx|sse|aes|bmi|fma|popcnt|lzcnt|sha|pclmul' | sort
+
+.PHONY: vars
+vars: ##H Print debug info
+	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
+	@echo "... computing version."
+	@printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
+		"$$(cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Development commands
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 .PHONY: profiles
 profiles: ##H List available cargo profiles
 	# NOTE: not authoritative — see Cargo.toml for definitive profiles.
@@ -55,21 +81,13 @@ profiles: ##H List available cargo profiles
 		| grep -v 'build-override' \
 		| sort
 
-.PHONY: vars
-vars: ##H Print debug info
-	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
-	@printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$(shell cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
-
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Development commands
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 PROFILE ?=
 CRATE ?=
 CARGO_SCOPE ?= $(if $(CRATE),-p $(CRATE),--workspace)
 CARGO_FLAGS ?= --profile $(PROFILE)
+
+# For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
+RUSTFLAGS ?=
 
 # Display crate compilation progress [X/Y] in nohup or no-tty environment.
 # Override or unset in .env to disable.
@@ -106,7 +124,8 @@ test:	##H Run tests
 
 
 .PHONY: build
-build:	##H Build with selected profile
+build:	##H Build with selected profile,
+	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
 	@echo "Build this profile? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
 	cargo build $(CARGO_FLAGS)
@@ -140,6 +159,31 @@ clean:	##H Clean build directory for current profile
 # Deployment commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+# CI artifact OS target. Override with: make download OS_VERSION=ubuntu-22.04
+OS_VERSION ?=
+GH_REPO ?=
+RUN_ID ?=
+
+.PHONY: download
+download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
+	# Testing whether OS_VERSION and GH_REPO are set...
+	@test "$(OS_VERSION)"
+	@test "$(GH_REPO)"
+	@mkdir -p target/ci
+	# Checking version of old binary, if it exists
+	@-./target/ci/conduwuit -V
+	@rm -f target/ci/conduwuit
+	gh run download $(RUN_ID) -R "$(GH_REPO)" -n "conduwuit-$(OS_VERSION)" -D target/ci
+	@chmod +x target/ci/conduwuit
+	@echo "Downloaded to target/ci/conduwuit"
+	@./target/ci/conduwuit -V
+	@ln -sfn ci target/latest
+
+.PHONY: download/list
+download/list:	##H List recent CI runs
+	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
+	gh run list -R "$(GH_REPO)" --limit 15
+
 # Binary name
 CONTINUWUITY ?= conduwuit
 
@@ -155,7 +199,8 @@ REMOTE_BIN ?= $(REMOTE_BIN_DIR)/$(CONTINUWUITY)
 install:	##H Install (executed on VPS)
 	@echo "Install $(CONTINUWUITY) to $(REMOTE_BIN)?"
 	@$(MAKE) _confirm
-	install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)" || sudo install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"
+	# You may need to run with sudo or adjust REMOTE_BIN_DIR if this fails
+	install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"
 	@echo "Installation complete."
 # 	@echo "Restarting $(CONTINUWUITY)"
 # 	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)

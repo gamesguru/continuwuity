@@ -1276,7 +1276,7 @@
 # media through legacy endpoints. This is needed above Matrix 1.11+
 # and helps resolve image download errors to users on legacy clients.
 #
-#legacy_media_authenticated_fetch = false
+#legacy_media_authenticated_fetch = true
 
 # This item is undocumented. Please contribute documentation for it.
 #
