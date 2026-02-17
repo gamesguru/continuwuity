@@ -2444,8 +2444,6 @@ impl Config {
 
 fn true_fn() -> bool { true }
 
-fn false_fn() -> bool { false }
-
 fn default_address() -> ListeningAddr {
 	ListeningAddr {
 		addrs: Right(vec![Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into()]),

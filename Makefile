@@ -108,7 +108,8 @@ test:	##H Run tests
 
 
 .PHONY: build
-build:	##H Build with selected profile
+build:	##H Build with selected profile,
+	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
 	@echo "Build this profile? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
 	cargo build $(CARGO_FLAGS)
