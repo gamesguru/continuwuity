@@ -12,7 +12,8 @@ endif
 
 # [CONFIG] Auto-discover custom vars
 _BUILTIN_VARS := $(.VARIABLES)
-VARS := $(sort $(filter-out $(_BUILTIN_VARS) _BUILTIN_VARS VARS, $(.VARIABLES)))
+# Lazy load with = not :=
+VARS = $(sort $(filter-out $(_BUILTIN_VARS) _BUILTIN_VARS VARS, $(.VARIABLES)))
 
 # [ENUM] Styling / Colors
 STYLE_CYAN := $(shell tput setaf 6 2>/dev/null || echo -e "\033[36m")
@@ -58,6 +59,7 @@ profiles: ##H List available cargo profiles
 .PHONY: vars
 vars: ##H Print debug info
 	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
+	@echo "... computing version."
 	@printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
 		"$(shell cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
 
@@ -139,6 +141,19 @@ clean:	##H Clean build directory for current profile
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Deployment commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Auto-detect Ubuntu version, e.g. "ubuntu-22.04". Override with: make download OS_VERSION=ubuntu-24.04
+OS_VERSION ?= $(shell lsb_release -si 2>/dev/null | tr A-Z a-z)-$(shell lsb_release -sr 2>/dev/null)
+GH_REPO ?= gamesguru/continuwuity
+
+.PHONY: download
+download:	##H Download latest CI binary for this OS
+	mkdir -p target/ci
+	@echo "Downloading latest 'conduwuit-$(OS_VERSION)' from $(GH_REPO)..."
+	gh run download -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci --sort created
+	chmod +x target/ci/conduwuit
+	@echo "Downloaded to target/ci/conduwuit"
+	ln -sfn ci target/latest
 
 # Binary name
 CONTINUWUITY ?= conduwuit
