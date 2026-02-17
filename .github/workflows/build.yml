@@ -11,7 +11,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  PROFILE: release
+  PROFILE: release-high-perf
 
 jobs:
   build:

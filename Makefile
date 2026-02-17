@@ -150,7 +150,7 @@ GH_REPO ?= gamesguru/continuwuity
 download:	##H Download latest CI binary for this OS
 	mkdir -p target/ci
 	@echo "Downloading latest 'conduwuit-$(OS_VERSION)' from $(GH_REPO)..."
-	gh run download -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci --sort created
+	gh run download -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
 	chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	ln -sfn ci target/latest
