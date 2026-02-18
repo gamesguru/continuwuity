@@ -19,7 +19,7 @@ fn get_env(env_var: &str) -> Option<String> {
 fn main() {
 	// built gets the default crate from the workspace. Not sure if this is intended
 	// behavior, but it's what we want.
-	built::write_built_file().expect("Failed to acquire build-time information");
+	// built::write_built_file().expect("Failed to acquire build-time information");
 
 	// --- Git Information ---
 	let mut commit_hash = None;
@@ -40,12 +40,19 @@ fn main() {
 	{
 		println!("cargo:rustc-env=GIT_COMMIT_HASH_SHORT={short_hash}");
 
-		// If CONTINUWUITY_BRANCH is manually set (e.g. in .env), use it to construct
-		// the version string while keeping the hash dynamic
+		// Construct version extra with hash and branch
 		if get_env("CONTINUWUITY_VERSION_EXTRA").is_none() {
-			if let Some(branch_env) = get_env("CONTINUWUITY_BRANCH") {
-				let extra = format!("{short_hash},b={branch_env}");
-				println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={extra}");
+			if let Some(branch) = get_env("CONTINUWUITY_BRANCH")
+				.or_else(|| run_git_command(&["rev-parse", "--abbrev-ref", "HEAD"]))
+			{
+				let branch_suffix = if branch != "main" && branch != "master" {
+					format!(",b={branch}")
+				} else {
+					String::new()
+				};
+				println!(
+					"cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={short_hash}{branch_suffix}"
+				);
 			}
 		}
 
