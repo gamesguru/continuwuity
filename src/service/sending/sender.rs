@@ -292,7 +292,7 @@ impl Service {
 		}
 
 		let _cork = self.db.db.cork();
-		let mut events = Vec::new();
+		let mut events = Vec::with_capacity(new_events.len().saturating_add(EDU_LIMIT));
 
 		// Must retry any previous transaction for this remote.
 		if retry {
@@ -586,7 +586,8 @@ impl Service {
 		let presence_since = self.services.presence.presence_since(since.0);
 
 		pin_mut!(presence_since);
-		let mut presence_updates = HashMap::<OwnedUserId, PresenceUpdate>::new();
+		let mut presence_updates =
+			HashMap::<OwnedUserId, PresenceUpdate>::with_capacity(SELECT_PRESENCE_LIMIT);
 		while let Some((user_id, count, presence_bytes)) = presence_since.next().await {
 			if count > since.1 {
 				break;

@@ -58,8 +58,12 @@ impl Data {
 		currently_active: Option<bool>,
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
+		cached_presence: Option<Result<(u64, PresenceEvent)>>,
 	) -> Result<()> {
-		let last_presence = self.get_presence(user_id).await;
+		let last_presence = match cached_presence {
+			| Some(cached) => cached,
+			| None => self.get_presence(user_id).await,
+		};
 		let state_changed = match last_presence {
 			| Err(_) => true,
 			| Ok(ref presence) => presence.1.content.presence != *presence_state,

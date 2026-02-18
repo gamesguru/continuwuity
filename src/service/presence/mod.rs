@@ -8,10 +8,9 @@ use conduwuit::{
 	Error, Result, Server, checked, debug, debug_warn, error, result::LogErr, trace,
 };
 use database::Database;
-use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
+use futures::{Stream, StreamExt, TryFutureExt, pin_mut};
 use loole::{Receiver, Sender};
 use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
-use tokio::time::sleep;
 
 use self::{data::Data, presence::Presence};
 use crate::{Dep, globals, users};
@@ -56,19 +55,43 @@ impl crate::Service for Service {
 	}
 
 	async fn worker(self: Arc<Self>) -> Result<()> {
+		use std::collections::HashMap;
+
+		use tokio::time::{Instant, sleep_until};
+
 		let receiver = self.timer_channel.1.clone();
 
-		let mut presence_timers = FuturesUnordered::new();
+		let mut deadlines: HashMap<OwnedUserId, Instant> = HashMap::new();
 		while !receiver.is_closed() {
+			// Find the soonest deadline, or wait indefinitely
+			let soonest = deadlines.values().copied().min();
+
 			tokio::select! {
-				Some(user_id) = presence_timers.next() => {
-					self.process_presence_timer(&user_id).await.log_err().ok();
+				() = async {
+					match soonest {
+						| Some(deadline) => sleep_until(deadline).await,
+						| None => std::future::pending::<()>().await,
+					}
+				} => {
+					// At least one timer has fired — process all expired deadlines
+					let now = Instant::now();
+					let expired: Vec<OwnedUserId> = deadlines
+						.iter()
+						.filter(|&(_, deadline)| *deadline <= now)
+						.map(|(user_id, _)| user_id.clone())
+						.collect();
+
+					for user_id in expired {
+						deadlines.remove(&user_id);
+						self.process_presence_timer(&user_id).await.log_err().ok();
+					}
 				},
 				event = receiver.recv_async() => match event {
 					Err(_) => break,
 					Ok((user_id, timeout)) => {
-						debug!("Adding timer {}: {user_id} timeout:{timeout:?}", presence_timers.len());
-						presence_timers.push(presence_timer(user_id, timeout));
+						let deadline = Instant::now().checked_add(timeout).unwrap_or_else(Instant::now);
+						debug!("Adding/replacing timer {}: {user_id} timeout:{timeout:?}", deadlines.len());
+						deadlines.insert(user_id, deadline);
 					},
 				},
 			}
@@ -125,8 +148,15 @@ impl Service {
 
 		let last_active_ago = UInt::new(0);
 		let currently_active = *new_state == PresenceState::Online;
-		self.set_presence(user_id, new_state, Some(currently_active), last_active_ago, status_msg)
-			.await
+		self.set_presence_inner(
+			user_id,
+			new_state,
+			Some(currently_active),
+			last_active_ago,
+			status_msg,
+			Some(last_presence),
+		)
+		.await
 	}
 
 	/// Adds a presence event which will be saved until a new event replaces it.
@@ -138,13 +168,42 @@ impl Service {
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
 	) -> Result<()> {
+		self.set_presence_inner(
+			user_id,
+			state,
+			currently_active,
+			last_active_ago,
+			status_msg,
+			None,
+		)
+		.await
+	}
+
+	/// Inner implementation that accepts an optional cached presence to avoid
+	/// redundant DB reads when the caller already has the data.
+	async fn set_presence_inner(
+		&self,
+		user_id: &UserId,
+		state: &PresenceState,
+		currently_active: Option<bool>,
+		last_active_ago: Option<UInt>,
+		status_msg: Option<String>,
+		cached_presence: Option<Result<(u64, PresenceEvent)>>,
+	) -> Result<()> {
 		let presence_state = match state.as_str() {
 			| "" => &PresenceState::Offline, // default an empty string to 'offline'
 			| &_ => state,
 		};
 
 		self.db
-			.set_presence(user_id, presence_state, currently_active, last_active_ago, status_msg)
+			.set_presence(
+				user_id,
+				presence_state,
+				currently_active,
+				last_active_ago,
+				status_msg,
+				cached_presence,
+			)
 			.await?;
 
 		if (self.timeout_remote_users || self.services.globals.user_is_local(user_id))
@@ -179,15 +238,12 @@ impl Service {
 	pub async fn unset_all_presence(&self) {
 		let _cork = self.services.db.cork();
 
-		for user_id in &self
-			.services
-			.users
-			.list_local_users()
-			.map(ToOwned::to_owned)
-			.collect::<Vec<OwnedUserId>>()
-			.await
-		{
-			let presence = self.db.get_presence(user_id).await;
+		let users = self.services.users.list_local_users();
+
+		pin_mut!(users);
+		while let Some(user_id) = users.next().await {
+			let user_id = user_id.to_owned();
+			let presence = self.db.get_presence(&user_id).await;
 
 			let presence = match presence {
 				| Ok((_, ref presence)) => &presence.content,
@@ -206,7 +262,7 @@ impl Service {
 
 			_ = self
 				.set_presence(
-					user_id,
+					&user_id,
 					&PresenceState::Offline,
 					Some(false),
 					presence.last_active_ago,
@@ -279,10 +335,4 @@ impl Service {
 
 		Ok(())
 	}
-}
-
-async fn presence_timer(user_id: OwnedUserId, timeout: Duration) -> OwnedUserId {
-	sleep(timeout).await;
-
-	user_id
 }
