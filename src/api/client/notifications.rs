@@ -63,6 +63,8 @@ pub(crate) async fn get_notifications_route(
 	let limit_usize = limit.try_into().unwrap_or(usize::MAX);
 	let mut notifications: BinaryHeap<Reverse<NotificationItem>> =
 		BinaryHeap::with_capacity(limit_usize);
+	let mut total_scanned: usize = 0;
+	let mut rooms_scanned: usize = 0;
 
 	// Get user's push rules
 	let global_account_data = services
@@ -195,6 +197,8 @@ pub(crate) async fn get_notifications_route(
 				notifications.push(Reverse(notification_item));
 			}
 		}
+		total_scanned = total_scanned.saturating_add(scanned);
+		rooms_scanned = rooms_scanned.saturating_add(1);
 	}
 
 	// Capture heap stats before consuming
@@ -216,11 +220,14 @@ pub(crate) async fn get_notifications_route(
 
 	let elapsed = started.elapsed();
 	conduwuit::info!(
-		"built notification heap: {} items for {} in {:.3}s (used {} bytes)",
+		"built notification heap: {} items for {} in {:.3}s (used {} bytes, scanned {} PDUs in \
+		 {} rooms)",
 		heap_count,
 		sender_user,
 		elapsed.as_secs_f64(),
 		heap_bytes,
+		total_scanned,
+		rooms_scanned,
 	);
 
 	Ok(get_notifications::v3::Response { next_token, notifications })
