@@ -8,12 +8,12 @@ MAKEFLAGS += --no-print-directory
 ifneq (,$(wildcard ./.env))
 	include .env
 	export
+	# Strip double quotes from .env values (annoying disagreement between direnv, dotenv)
+	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
 endif
 
-# [CONFIG] Auto-discover custom vars
-_BUILTIN_VARS := $(.VARIABLES)
-# Lazy load with = not :=
-VARS = $(sort $(filter-out $(_BUILTIN_VARS) _BUILTIN_VARS VARS, $(.VARIABLES)))
+# [CONFIG] Auto-discover vars defined in Makefiles (not env-inherited)
+VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter file override command,$(origin $v)),$v)))
 
 # [ENUM] Styling / Colors
 STYLE_CYAN := $(shell tput setaf 6 2>/dev/null || echo -e "\033[36m")
@@ -47,12 +47,25 @@ doctor: ##H Output version info for required tools
 	@echo "Checking for newer tags [DRY RUN]..."
 	git fetch --all --dry-run --tags
 
+.PHONY: cpu-info
+cpu-info: ##H Print CPU info relevant to target-cpu=native
+	@echo "=== CPU Model ==="
+	@grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown"
+	@echo "=== Architecture ==="
+	@uname -a
+	@echo "=== rustc Host Target ==="
+	@rustc -vV | grep host
+	@echo "=== rustc Native CPU ==="
+	@rustc --print=cfg -C target-cpu=native 2>/dev/null | grep target_feature | sort
+	@echo "=== CPU Flags (from /proc/cpuinfo) ==="
+	@grep -m1 'flags' /proc/cpuinfo 2>/dev/null | tr ' ' '\n' | grep -E 'avx|sse|aes|bmi|fma|popcnt|lzcnt|sha|pclmul' | sort
+
 .PHONY: vars
 vars: ##H Print debug info
 	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
 	@echo "... computing version."
 	@printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$(shell cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
+		"$$(cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -72,6 +85,9 @@ PROFILE ?=
 CRATE ?=
 CARGO_SCOPE ?= $(if $(CRATE),-p $(CRATE),--workspace)
 CARGO_FLAGS ?= --profile $(PROFILE)
+
+# For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
+RUSTFLAGS ?=
 
 # Display crate compilation progress [X/Y] in nohup or no-tty environment.
 # Override or unset in .env to disable.
@@ -145,13 +161,14 @@ clean:	##H Clean build directory for current profile
 
 # Auto-detect Ubuntu version, e.g. "ubuntu-22.04". Override with: make download OS_VERSION=ubuntu-24.04
 OS_VERSION ?= $(shell lsb_release -si 2>/dev/null | tr A-Z a-z)-$(shell lsb_release -sr 2>/dev/null)
-GH_REPO ?= gamesguru/continuwuity
+GH_REPO ?=
 
 .PHONY: download
 download:	##H Download latest CI binary for this OS
 	mkdir -p target/ci
 	# Checking old version if it exists
 	-./target/ci/conduwuit -V
+	test "$(GH_REPO)"
 	rm -f target/ci/conduwuit
 	@echo "Downloading latest 'conduwuit-$(OS_VERSION)' from $(GH_REPO)..."
 	gh run download -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
