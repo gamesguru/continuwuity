@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use conduwuit::{
-	Error, Result, Server, checked, debug, debug_warn, error, result::LogErr, trace,
+	Error, Result, Server, checked, debug, debug_warn, error, info, result::LogErr, trace,
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryFutureExt, pin_mut};
@@ -57,11 +57,17 @@ impl crate::Service for Service {
 	async fn worker(self: Arc<Self>) -> Result<()> {
 		use std::collections::HashMap;
 
-		use tokio::time::{Instant, sleep_until};
+		use tokio::time::{Duration, Instant, sleep_until};
 
 		let receiver = self.timer_channel.1.clone();
 
 		let mut deadlines: HashMap<OwnedUserId, Instant> = HashMap::new();
+		let mut events_received: u64 = 0;
+		let mut events_expired: u64 = 0;
+		let mut next_tally = Instant::now()
+			.checked_add(Duration::from_secs(300))
+			.unwrap_or_else(Instant::now);
+
 		while !receiver.is_closed() {
 			// Find the soonest deadline, or wait indefinitely
 			let soonest = deadlines.values().copied().min();
@@ -81,6 +87,7 @@ impl crate::Service for Service {
 						.map(|(user_id, _)| user_id.clone())
 						.collect();
 
+					events_expired = events_expired.saturating_add(expired.len().try_into().unwrap_or(u64::MAX));
 					for user_id in expired {
 						deadlines.remove(&user_id);
 						self.process_presence_timer(&user_id).await.log_err().ok();
@@ -92,8 +99,24 @@ impl crate::Service for Service {
 						let deadline = Instant::now().checked_add(timeout).unwrap_or_else(Instant::now);
 						debug!("Adding/replacing timer {}: {user_id} timeout:{timeout:?}", deadlines.len());
 						deadlines.insert(user_id, deadline);
+						events_received = events_received.saturating_add(1);
 					},
 				},
+			}
+
+			// Periodic tally
+			if Instant::now() >= next_tally {
+				info!(
+					"presence stats: {} active timers, {} received, {} expired",
+					deadlines.len(),
+					events_received,
+					events_expired
+				);
+				events_received = 0;
+				events_expired = 0;
+				next_tally = Instant::now()
+					.checked_add(Duration::from_secs(300))
+					.unwrap_or_else(Instant::now);
 			}
 		}
 
