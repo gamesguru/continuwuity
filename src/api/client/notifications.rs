@@ -166,7 +166,7 @@ pub(crate) async fn get_notifications_route(
 			}
 
 			if notify {
-				let event: Raw<AnySyncTimelineEvent> = pdu_raw.clone();
+				let event: Raw<AnySyncTimelineEvent> = pdu_raw;
 
 				let notification_item = NotificationItem(r::Notification {
 					actions: actions.to_vec(),
