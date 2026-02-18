@@ -503,17 +503,16 @@
 #
 #turnstile_secret_key =
 
+# Ordered list of auth backends to use for registration. When set,
+# the first available backend is presented to clients.
+#
+# example: ["recaptcha", "turnstile"]
+#
+#authenticated_flow = []
+
 # Controls whether encrypted rooms and events are allowed.
 #
 #allow_encryption = true
-
-# Authenticated flow definition. Here you can enable Cloudflare
-# Turnstile or reCaptcha. The order of the list decides which is used
-# first; the other functioning only as a fallback if necessary.
-# A token, if enabled, by default, is still required. No configuration
-# is available to require "either or" authentication.
-#
-#authenticated_flow = {"optional": ["recaptcha", "turnstile"], "required": ["token"]}
 
 # Controls whether federation is allowed or not. It is not recommended to
 # disable this after the fact due to potential federation breakage.

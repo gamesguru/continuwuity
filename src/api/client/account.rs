@@ -332,7 +332,7 @@ pub(crate) async fn register_route(
 
 	// Determine captcha backend order: use `authenticated_flow` if set,
 	// otherwise auto-detect.
-	let default_backends = [AuthBackend::Turnstile, AuthBackend::Recaptcha];
+	let default_backends = [AuthBackend::Recaptcha, AuthBackend::Turnstile];
 	let backends: &[AuthBackend] = if services.config.authenticated_flow.is_empty() {
 		&default_backends
 	} else {

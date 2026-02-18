@@ -25,8 +25,8 @@ use ruma::{
 use serde::{Deserialize, de::IgnoredAny};
 use url::Url;
 
-use self::{auth::AuthBackend, proxy::ProxyConfig};
-pub use self::{check::check, manager::Manager};
+use self::proxy::ProxyConfig;
+pub use self::{auth::AuthBackend, check::check, manager::Manager};
 use crate::{Result, err, error::Error, utils::sys};
 
 /// All the config options for continuwuity.
@@ -631,7 +631,7 @@ pub struct Config {
 	/// Ordered list of auth backends to use for registration. When set,
 	/// the first available backend is presented to clients.
 	///
-	/// example: ["turnstile", "recaptcha"]
+	/// example: ["recaptcha", "turnstile"]
 	///
 	/// default: []
 	#[serde(default)]
