@@ -168,6 +168,7 @@ download:	##H Download latest CI binary for this OS
 	mkdir -p target/ci
 	# Checking old version if it exists
 	-./target/ci/conduwuit -V
+	test "$(GH_REPO)"
 	rm -f target/ci/conduwuit
 	@echo "Downloading latest 'conduwuit-$(OS_VERSION)' from $(GH_REPO)..."
 	gh run download -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
