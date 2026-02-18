@@ -553,7 +553,7 @@ version = "0.7.5"
 version = "1.0.1"
 
 [workspace.dependencies.askama]
-version = "0.14.0"
+version = "0.15"
 
 #
 # Patches
@@ -651,15 +651,6 @@ path = "src/main"
 strip = "symbols"
 lto = "thin"
 
-# Hybrid dev/release: "fast" here refers to compile times, not runtime speed
-[profile.release-fast]
-inherits = "release"
-opt-level = 1
-lto = "off"
-codegen-units = 16
-panic = "abort"
-strip = "none"
-
 # release profile with debug symbols
 [profile.release-debuginfo]
 inherits = "release"
@@ -738,6 +729,18 @@ incremental = true
 #	'-Clink-arg=-Wl,-z,keep-text-section-prefix',
 #	'-Clink-arg=-Wl,-z,lazy',
 #]
+
+# Dev/testing build with fast compile time, decent runtime performance.
+# Here, "quick" refers to compile time, not runtime speed.
+# NOTE: for smaller binaries on disk, put: strip = "symbols"
+[profile.dev-quick]
+inherits = "dev"
+opt-level = 1
+debug = 0
+strip = "none"
+lto = "off"
+codegen-units = 16
+incremental = true
 
 [profile.dev.package.conduwuit_core]
 inherits = "dev"
