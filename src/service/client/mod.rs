@@ -39,7 +39,7 @@ impl crate::Service for Service {
 		let url_preview_user_agent = config
 			.url_preview_user_agent
 			.clone()
-			.unwrap_or_else(|| conduwuit::version::user_agent().to_owned());
+			.unwrap_or_else(|| conduwuit::version::user_agent_media().to_owned());
 
 		Ok(Arc::new(Self {
 			default: base(config)?
@@ -60,6 +60,7 @@ impl crate::Service for Service {
 			extern_media: base(config)?
 				.dns_resolver(resolver.resolver.clone())
 				.redirect(redirect::Policy::limited(3))
+				.user_agent(conduwuit::version::user_agent_media())
 				.build()?,
 
 			well_known: base(config)?
