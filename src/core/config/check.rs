@@ -180,7 +180,7 @@ pub fn check(config: &Config) -> Result {
 
 	if config.turnstile_secret_key.is_some()
 		&& config.recaptcha_private_site_key.is_some()
-		&& config.authenticated_flow.optional.is_empty()
+		&& config.authenticated_flow.is_empty()
 	{
 		warn!(
 			"Both Turnstile and reCAPTCHA keys are configured. Set `authenticated_flow` to \
@@ -189,7 +189,7 @@ pub fn check(config: &Config) -> Result {
 	}
 
 	// Verify we got valid credentials from the config for requested backends
-	for backend in &config.authenticated_flow.optional {
+	for backend in &config.authenticated_flow {
 		match backend {
 			| super::AuthBackend::Recaptcha => {
 				if config.recaptcha_site_key.is_none()

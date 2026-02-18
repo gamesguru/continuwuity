@@ -184,10 +184,11 @@ pub async fn try_auth(
 		| AuthData::ReCaptcha(r) => {
 			use conduwuit::config::AuthBackend;
 
-			let backends = if self.services.config.authenticated_flow.optional.is_empty() {
-				vec![AuthBackend::Turnstile, AuthBackend::Recaptcha]
+			let default_backends = [AuthBackend::Turnstile, AuthBackend::Recaptcha];
+			let backends: &[AuthBackend] = if self.services.config.authenticated_flow.is_empty() {
+				&default_backends
 			} else {
-				self.services.config.authenticated_flow.optional.clone()
+				&self.services.config.authenticated_flow
 			};
 
 			let mut verified = false;

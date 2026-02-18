@@ -1,4 +1,5 @@
 #![allow(clippy::doc_link_with_quotes)]
+pub mod auth;
 pub mod check;
 pub mod manager;
 pub mod proxy;
@@ -24,32 +25,9 @@ use ruma::{
 use serde::{Deserialize, de::IgnoredAny};
 use url::Url;
 
-use self::proxy::ProxyConfig;
+use self::{auth::AuthBackend, proxy::ProxyConfig};
 pub use self::{check::check, manager::Manager};
 use crate::{Result, err, error::Error, utils::sys};
-
-/// Auth backend for the `authenticated_flow` config option.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthBackend {
-	Token,
-	Turnstile,
-	Recaptcha,
-}
-
-/// Configuration for the authenticated registration flow.
-#[derive(Clone, Debug, Deserialize, Default)]
-pub struct AuthenticatedFlow {
-	/// Ordered list of captcha backends. The first configured backend is
-	/// presented to clients; others serve as fallbacks.
-	#[serde(default)]
-	pub optional: Vec<AuthBackend>,
-
-	/// Auth types that are always required. Token is implicitly required
-	/// unless it appears in `optional`.
-	#[serde(default)]
-	pub required: Vec<AuthBackend>,
-}
 
 /// All the config options for continuwuity.
 #[allow(clippy::struct_excessive_bools)]
@@ -650,17 +628,14 @@ pub struct Config {
 	/// even if `turnstile_site_key` is set.
 	pub turnstile_secret_key: Option<String>,
 
-	/// Ordered list of captcha backends to use for registration.
-	/// The first entry with valid keys configured will be presented to clients.
-	/// If both `turnstile` and `recaptcha` are listed, the order determines
-	/// priority. When empty (default), auto-detects from which keys are set
-	/// (Turnstile first, then reCAPTCHA).
+	/// Ordered list of auth backends to use for registration. When set,
+	/// the first available backend is presented to clients.
 	///
 	/// example: ["turnstile", "recaptcha"]
 	///
 	/// default: []
 	#[serde(default)]
-	pub authenticated_flow: AuthenticatedFlow,
+	pub authenticated_flow: Vec<AuthBackend>,
 
 	/// Controls whether encrypted rooms and events are allowed.
 	#[serde(default = "true_fn")]

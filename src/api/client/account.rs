@@ -316,7 +316,6 @@ pub(crate) async fn register_route(
 	let token_is_optional = services
 		.config
 		.authenticated_flow
-		.optional
 		.contains(&AuthBackend::Token);
 
 	if !token_is_optional
@@ -331,15 +330,16 @@ pub(crate) async fn register_route(
 		stages.push(AuthType::RegistrationToken);
 	}
 
-	// Determine captcha backend order: use `authenticated_flow.optional` if set,
-	// otherwise auto-detect (Turnstile first, then reCAPTCHA).
-	let backends = if services.config.authenticated_flow.optional.is_empty() {
-		vec![AuthBackend::Turnstile, AuthBackend::Recaptcha]
+	// Determine captcha backend order: use `authenticated_flow` if set,
+	// otherwise auto-detect.
+	let default_backends = [AuthBackend::Turnstile, AuthBackend::Recaptcha];
+	let backends: &[AuthBackend] = if services.config.authenticated_flow.is_empty() {
+		&default_backends
 	} else {
-		services.config.authenticated_flow.optional.clone()
+		&services.config.authenticated_flow
 	};
 
-	for backend in &backends {
+	for backend in backends {
 		match backend {
 			| AuthBackend::Turnstile => {
 				if let (Some(pubkey), Some(_)) =
