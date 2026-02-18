@@ -274,17 +274,12 @@ where
 		.increment_notification_counts(room_id, notifies.clone(), highlights.clone());
 
 	if !notifies.is_empty() || !highlights.is_empty() {
-		conduwuit::warn!(
-			"Notifying {} users and highlighting {} users in room {}",
-			notifies.len(),
-			highlights.len(),
-			room_id
-		);
-	} else {
-		conduwuit::warn!(
-			"No users notified or highlighted in room {} (pushtargets: {})",
-			room_id,
-			push_target.len()
+		conduwuit::debug!(
+			%room_id,
+			notifies = notifies.len(),
+			highlights = highlights.len(),
+			targets = push_target.len(),
+			"push notifications"
 		);
 	}
 
