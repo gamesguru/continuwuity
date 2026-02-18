@@ -182,61 +182,63 @@ pub async fn try_auth(
 			uiaainfo.completed.push(AuthType::Password);
 		},
 		| AuthData::ReCaptcha(r) => {
-			if let Some(secret) = &self.services.config.turnstile_secret_key {
-				let client = reqwest::Client::new();
-				let params = [("secret", secret.as_str()), ("response", r.response.as_str())];
+			use conduwuit::config::AuthBackend;
 
-				let res = client
-					.post("https://challenges.cloudflare.com/turnstile/v0/siteverify")
-					.form(&params)
-					.send()
-					.await;
-
-				match res {
-					| Ok(res) => match res.json::<TurnstileResponse>().await {
-						| Ok(data) =>
-							if data.success {
-								uiaainfo.completed.push(AuthType::ReCaptcha);
-							} else {
-								error!("Turnstile verification failed: {:?}", data.error_codes);
-								uiaainfo.auth_error = Some(StandardErrorBody {
-									kind: ErrorKind::forbidden(),
-									message: "Turnstile verification failed.".to_owned(),
-								});
-								return Ok((false, uiaainfo));
-							},
-						| Err(e) => {
-							error!("Failed to parse Turnstile response: {e}");
-							return Err(Error::BadRequest(
-								ErrorKind::Unrecognized,
-								"Failed to verify Turnstile response.",
-							));
-						},
-					},
-					| Err(e) => {
-						error!("Failed to verify Turnstile response: {e}");
-						return Err(Error::BadRequest(
-							ErrorKind::Unrecognized,
-							"Failed to verify Turnstile response.",
-						));
-					},
-				}
-			} else if let Some(secret) = &self.services.config.recaptcha_private_site_key {
-				match recaptcha_verify::verify(secret, r.response.as_str(), None).await {
-					| Ok(()) => {
-						uiaainfo.completed.push(AuthType::ReCaptcha);
-					},
-					| Err(e) => {
-						error!("ReCaptcha verification failed: {e:?}");
-						uiaainfo.auth_error = Some(StandardErrorBody {
-							kind: ErrorKind::forbidden(),
-							message: "ReCaptcha verification failed.".to_owned(),
-						});
-						return Ok((false, uiaainfo));
-					},
-				}
+			let backends = if self.services.config.authenticated_flow.optional.is_empty() {
+				vec![AuthBackend::Turnstile, AuthBackend::Recaptcha]
 			} else {
-				return Err!(Request(Forbidden("Captcha is not configured.")));
+				self.services.config.authenticated_flow.optional.clone()
+			};
+
+			let mut verified = false;
+			for backend in &backends {
+				match backend {
+					| AuthBackend::Turnstile => {
+						let Some(secret) = &self.services.config.turnstile_secret_key else {
+							continue;
+						};
+
+						match verify_turnstile(secret, &r.response).await {
+							| Ok(data) if data.success => {
+								uiaainfo.completed.push(AuthType::ReCaptcha);
+								verified = true;
+							},
+							| Ok(data) => {
+								error!("Turnstile verification failed: {:?}", data.error_codes);
+							},
+							| Err(e) => {
+								error!("Turnstile request failed: {e}");
+							},
+						}
+						break;
+					},
+					| AuthBackend::Recaptcha => {
+						let Some(secret) = &self.services.config.recaptcha_private_site_key
+						else {
+							continue;
+						};
+
+						match recaptcha_verify::verify(secret, r.response.as_str(), None).await {
+							| Ok(()) => {
+								uiaainfo.completed.push(AuthType::ReCaptcha);
+								verified = true;
+							},
+							| Err(e) => {
+								error!("ReCaptcha verification failed: {e:?}");
+							},
+						}
+						break;
+					},
+					| AuthBackend::Token => continue,
+				}
+			}
+
+			if !verified {
+				uiaainfo.auth_error = Some(StandardErrorBody {
+					kind: ErrorKind::forbidden(),
+					message: "Captcha verification failed.".to_owned(),
+				});
+				return Ok((false, uiaainfo));
 			}
 		},
 		| AuthData::RegistrationToken(t) => {
@@ -377,6 +379,16 @@ async fn get_uiaa_session(
 		.await
 		.deserialized()
 		.map_err(|_| err!(Request(Forbidden("UIAA session does not exist."))))
+}
+
+async fn verify_turnstile(secret: &str, response: &str) -> reqwest::Result<TurnstileResponse> {
+	reqwest::Client::new()
+		.post("https://challenges.cloudflare.com/turnstile/v0/siteverify")
+		.form(&[("secret", secret), ("response", response)])
+		.send()
+		.await?
+		.json()
+		.await
 }
 
 #[derive(Deserialize)]

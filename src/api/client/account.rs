@@ -306,58 +306,75 @@ pub(crate) async fn register_route(
 	};
 	let skip_auth = body.appservice_info.is_some() || is_guest;
 
-	// Populate required UIAA flows
+	// Populate required UIAA flows — build a single flow with all required
+	// stages so that every configured gate must be passed (not just one).
+	use conduwuit::config::AuthBackend;
+	let mut stages = Vec::new();
 
-	if services.firstrun.is_first_run() {
-		// Registration token forced while in first-run mode
-		uiaainfo.flows.push(AuthFlow {
-			stages: vec![AuthType::RegistrationToken],
-		});
-	}
-	if services
-		.registration_tokens
-		.iterate_tokens()
-		.next()
-		.await
-		.is_some()
+	// Token is implicitly required (during first-run or when tokens exist),
+	// UNLESS it appears in the `optional` list.
+	let token_is_optional = services
+		.config
+		.authenticated_flow
+		.optional
+		.contains(&AuthBackend::Token);
+
+	if !token_is_optional
+		&& (services.firstrun.is_first_run()
+			|| services
+				.registration_tokens
+				.iterate_tokens()
+				.next()
+				.await
+				.is_some())
 	{
-		// Registration token required
-		uiaainfo.flows.push(AuthFlow {
-			stages: vec![AuthType::RegistrationToken],
-		});
+		stages.push(AuthType::RegistrationToken);
 	}
-	if services.config.turnstile_secret_key.is_some() {
-		if let Some(pubkey) = &services.config.turnstile_site_key {
-			// Turnstile required
-			uiaainfo
-				.flows
-				.push(AuthFlow { stages: vec![AuthType::ReCaptcha] });
-			uiaainfo.params = serde_json::value::to_raw_value(&serde_json::json!({
-				"m.login.recaptcha": {
-					"public_key": pubkey,
-				},
-			}))
-			.expect("Failed to serialize recaptcha params");
-		}
-	} else if services.config.recaptcha_private_site_key.is_some() {
-		if let Some(pubkey) = &services.config.recaptcha_site_key {
-			// ReCaptcha required
-			uiaainfo
-				.flows
-				.push(AuthFlow { stages: vec![AuthType::ReCaptcha] });
-			uiaainfo.params = serde_json::value::to_raw_value(&serde_json::json!({
-				"m.login.recaptcha": {
-					"public_key": pubkey,
-				},
-			}))
-			.expect("Failed to serialize recaptcha params");
+
+	// Determine captcha backend order: use `authenticated_flow.optional` if set,
+	// otherwise auto-detect (Turnstile first, then reCAPTCHA).
+	let backends = if services.config.authenticated_flow.optional.is_empty() {
+		vec![AuthBackend::Turnstile, AuthBackend::Recaptcha]
+	} else {
+		services.config.authenticated_flow.optional.clone()
+	};
+
+	for backend in &backends {
+		match backend {
+			| AuthBackend::Turnstile => {
+				if let (Some(pubkey), Some(_)) =
+					(&services.config.turnstile_site_key, &services.config.turnstile_secret_key)
+				{
+					stages.push(AuthType::ReCaptcha);
+					uiaainfo.params = serde_json::value::to_raw_value(&serde_json::json!({
+						"m.login.recaptcha": { "public_key": pubkey },
+					}))
+					.expect("Failed to serialize captcha params");
+					break;
+				}
+			},
+			| AuthBackend::Recaptcha => {
+				if let (Some(pubkey), Some(_)) = (
+					&services.config.recaptcha_site_key,
+					&services.config.recaptcha_private_site_key,
+				) {
+					stages.push(AuthType::ReCaptcha);
+					uiaainfo.params = serde_json::value::to_raw_value(&serde_json::json!({
+						"m.login.recaptcha": { "public_key": pubkey },
+					}))
+					.expect("Failed to serialize captcha params");
+					break;
+				}
+			},
+			| AuthBackend::Token => {},
 		}
 	}
 
-	if uiaainfo.flows.is_empty() && !skip_auth {
-		// Registration isn't _disabled_, but there's no captcha configured and no
-		// registration tokens currently set. Bail out by default unless open
-		// registration was explicitly enabled.
+	if !stages.is_empty() {
+		uiaainfo.flows.push(AuthFlow { stages });
+	} else if !skip_auth {
+		// No captcha configured and no registration tokens set. Bail out by
+		// default unless open registration was explicitly enabled.
 		if !services
 			.config
 			.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse

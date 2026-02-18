@@ -178,6 +178,43 @@ pub fn check(config: &Config) -> Result {
 		));
 	}
 
+	if config.turnstile_secret_key.is_some()
+		&& config.recaptcha_private_site_key.is_some()
+		&& config.authenticated_flow.optional.is_empty()
+	{
+		warn!(
+			"Both Turnstile and reCAPTCHA keys are configured. Set `authenticated_flow` to \
+			 control the order explicitly."
+		);
+	}
+
+	// Verify we got valid credentials from the config for requested backends
+	for backend in &config.authenticated_flow.optional {
+		match backend {
+			| super::AuthBackend::Recaptcha => {
+				if config.recaptcha_site_key.is_none()
+					|| config.recaptcha_private_site_key.is_none()
+				{
+					return Err!(Config(
+						"authenticated_flow",
+						"reCAPTCHA is listed in `authenticated_flow` but `recaptcha_site_key` \
+						 and/or `recaptcha_private_site_key` are not set."
+					));
+				}
+			},
+			| super::AuthBackend::Turnstile => {
+				if config.turnstile_site_key.is_none() || config.turnstile_secret_key.is_none() {
+					return Err!(Config(
+						"authenticated_flow",
+						"Turnstile is listed in `authenticated_flow` but `turnstile_site_key` \
+						 and/or `turnstile_secret_key` are not set."
+					));
+				}
+			},
+			| super::AuthBackend::Token => {},
+		}
+	}
+
 	if config.allow_registration
 		&& config.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse
 		&& config.registration_token.is_none()

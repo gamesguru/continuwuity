@@ -28,6 +28,29 @@ use self::proxy::ProxyConfig;
 pub use self::{check::check, manager::Manager};
 use crate::{Result, err, error::Error, utils::sys};
 
+/// Auth backend for the `authenticated_flow` config option.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthBackend {
+	Token,
+	Turnstile,
+	Recaptcha,
+}
+
+/// Configuration for the authenticated registration flow.
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct AuthenticatedFlow {
+	/// Ordered list of captcha backends. The first configured backend is
+	/// presented to clients; others serve as fallbacks.
+	#[serde(default)]
+	pub optional: Vec<AuthBackend>,
+
+	/// Auth types that are always required. Token is implicitly required
+	/// unless it appears in `optional`.
+	#[serde(default)]
+	pub required: Vec<AuthBackend>,
+}
+
 /// All the config options for continuwuity.
 #[allow(clippy::struct_excessive_bools)]
 #[allow(rustdoc::broken_intra_doc_links, rustdoc::bare_urls)]
@@ -626,6 +649,18 @@ pub struct Config {
 	/// If this is omitted, Turnstile registration will not work,
 	/// even if `turnstile_site_key` is set.
 	pub turnstile_secret_key: Option<String>,
+
+	/// Ordered list of captcha backends to use for registration.
+	/// The first entry with valid keys configured will be presented to clients.
+	/// If both `turnstile` and `recaptcha` are listed, the order determines
+	/// priority. When empty (default), auto-detects from which keys are set
+	/// (Turnstile first, then reCAPTCHA).
+	///
+	/// example: ["turnstile", "recaptcha"]
+	///
+	/// default: []
+	#[serde(default)]
+	pub authenticated_flow: AuthenticatedFlow,
 
 	/// Controls whether encrypted rooms and events are allowed.
 	#[serde(default = "true_fn")]
