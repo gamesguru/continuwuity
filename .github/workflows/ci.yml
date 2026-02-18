@@ -1,0 +1,109 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  PROFILE: release-high-perf
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.90.0"
+          components: clippy, rust-analyzer, rust-src
+
+      - name: Debug checks
+        run: make vars
+
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: cargo build --profile ${{ env.PROFILE }} --features full --locked
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: conduwuit-${{ matrix.os }}
+          path: target/${{ env.PROFILE }}/conduwuit
+          retention-days: 90
+
+  # Runs format, lint, and test
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.90.0"
+          components: clippy, rustfmt, rust-analyzer, rust-src
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt --component clippy
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Debug checks
+        run: |
+          make vars
+          make doctor
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: make format
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
