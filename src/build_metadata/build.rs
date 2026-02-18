@@ -108,4 +108,6 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=GIT_COMMIT_HASH_SHORT");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_URL");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_COMMIT_URL");
+	println!("cargo:rerun-if-env-changed=CONTINUWUITY_VERSION_EXTRA");
+	println!("cargo:rerun-if-env-changed=CONTINUWUITY_BRANCH");
 }

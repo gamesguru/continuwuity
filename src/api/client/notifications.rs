@@ -23,7 +23,7 @@ pub(crate) async fn get_notifications_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_notifications::v3::Request>,
 ) -> Result<get_notifications::v3::Response> {
-	use std::{cmp::Reverse, collections::BinaryHeap};
+	use std::{cmp::Reverse, collections::BinaryHeap, time::Instant};
 
 	// Wrapper to order notifications by timestamp
 	#[derive(Debug)]
@@ -44,6 +44,8 @@ pub(crate) async fn get_notifications_route(
 	impl Ord for NotificationItem {
 		fn cmp(&self, other: &Self) -> std::cmp::Ordering { self.0.ts.cmp(&other.0.ts) }
 	}
+
+	let started = Instant::now();
 
 	// Extract the `limit` and `from` query parameters
 	let limit = body.limit.unwrap_or_else(|| UInt::new(10).unwrap());
@@ -187,6 +189,10 @@ pub(crate) async fn get_notifications_route(
 		}
 	}
 
+	// Capture heap stats before consuming
+	let heap_count = notifications.len();
+	let heap_bytes = size_of_val(notifications.as_slice());
+
 	// Convert heap to vector and sort by timestamp descending (newest first)
 	let mut notifications: Vec<_> = notifications
 		.into_iter()
@@ -199,6 +205,15 @@ pub(crate) async fn get_notifications_route(
 	} else {
 		None
 	};
+
+	let elapsed = started.elapsed();
+	conduwuit::info!(
+		"built notification heap: {} items for {} in {:.3}s (used {} bytes)",
+		heap_count,
+		sender_user,
+		elapsed.as_secs_f64(),
+		heap_bytes,
+	);
 
 	Ok(get_notifications::v3::Response { next_token, notifications })
 }
