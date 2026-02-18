@@ -129,11 +129,11 @@ pub async fn update_membership(
 				return Err!(Request(InviteBlocked(
 					"{user_id} has blocked invites from {sender}."
 				)));
-			} else {
-				let last_state = self.services.state.summary_stripped(pdu, room_id).await;
-				self.mark_as_invited(user_id, room_id, sender, Some(last_state), None, false)
-					.await?;
 			}
+
+			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
+			self.mark_as_invited(user_id, room_id, sender, Some(last_state), None, false)
+				.await?;
 		},
 		| MembershipState::Leave | MembershipState::Ban => {
 			self.mark_as_left(user_id, room_id, Some(pdu.clone())).await;
