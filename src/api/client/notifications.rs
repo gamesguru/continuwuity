@@ -47,9 +47,9 @@ pub(crate) async fn get_notifications_route(
 
 	let started = Instant::now();
 
-	// Extract the `limit` and `from` query parameters
+	let max_limit = services.server.config.notification_max_limit;
 	let limit = body.limit.unwrap_or_else(|| UInt::new(10).unwrap());
-	let limit = std::cmp::min(limit, UInt::new(100).unwrap()); // Cap limit to 100 for safety
+	let limit = std::cmp::min(limit, UInt::try_from(max_limit).unwrap());
 	let start_ts = body
 		.from
 		.as_ref()
@@ -119,12 +119,20 @@ pub(crate) async fn get_notifications_route(
 			.await
 			.unwrap_or_default();
 
-		// Iterate over PDUs, reverse scan should be the fastest
+		// Iterate over PDUs, reverse scan should be the fastest.
+		// Cap per-room scan depth to prevent abuse from deep pagination.
+		let max_pdus_per_room = services.server.config.notification_max_pdus_per_room;
 		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
+		let mut scanned: usize = 0;
 
 		// optimization: we can stop once we have enough notifications and current pdu
 		// is older than the oldest one in our list
 		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
+			scanned = scanned.saturating_add(1);
+			if max_pdus_per_room > 0 && scanned > max_pdus_per_room {
+				break;
+			}
+
 			if pdu_count <= PduCount::Normal(last_read) {
 				break;
 			}

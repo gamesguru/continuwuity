@@ -1118,6 +1118,18 @@
 #
 #notification_push_path = "/_matrix/push/v1/notify"
 
+# Maximum number of notifications returned per request via the
+# `GET /_matrix/client/v3/notifications` endpoint. Clients may request
+# a lower limit, but never higher than this value.
+#
+#notification_max_limit = 100
+
+# Maximum number of PDUs scanned per room when collecting
+# notifications. This prevents abuse from clients requesting
+# deeply-paginated notification history. Set to 0 for no limit.
+#
+#notification_max_pdus_per_room = 1000
+
 # Allow local (your server only) presence updates/requests.
 #
 # Local presence must be enabled for outgoing presence to function.
