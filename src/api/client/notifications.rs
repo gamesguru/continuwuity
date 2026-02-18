@@ -94,6 +94,17 @@ pub(crate) async fn get_notifications_route(
 			continue;
 		}
 
+		// Skip rooms the user is no longer joined to (stale notification
+		// counts can persist after leaving a room)
+		if !services
+			.rooms
+			.state_cache
+			.is_joined(sender_user, &room_id)
+			.await
+		{
+			continue;
+		}
+
 		// Get the last read receipt for this room (as PDU count)
 		let last_read = services
 			.rooms
