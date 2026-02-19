@@ -50,15 +50,15 @@ doctor: ##H Output version info for required tools
 .PHONY: cpu-info
 cpu-info: ##H Print CPU info relevant to target-cpu=native
 	@echo "=== CPU Model ==="
-	@grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown"
+	-@grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown"
 	@echo "=== Architecture ==="
-	@uname -a
+	-@uname -a
 	@echo "=== rustc Host Target ==="
-	@rustc -vV | grep host
+	-@rustc -vV | grep host
 	@echo "=== rustc Native CPU ==="
-	@rustc --print=cfg -C target-cpu=native 2>/dev/null | grep target_feature | sort
+	-@rustc --print=cfg -C target-cpu=native 2>/dev/null | grep target_feature | sort
 	@echo "=== CPU Flags (from /proc/cpuinfo) ==="
-	@grep -m1 'flags' /proc/cpuinfo 2>/dev/null | tr ' ' '\n' | grep -E 'avx|sse|aes|bmi|fma|popcnt|lzcnt|sha|pclmul' | sort
+	-@grep -m1 'flags' /proc/cpuinfo 2>/dev/null | tr ' ' '\n' | grep -E 'avx|sse|aes|bmi|fma|popcnt|lzcnt|sha|pclmul' | sort
 
 .PHONY: vars
 vars: ##H Print debug info
