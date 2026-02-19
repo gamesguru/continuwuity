@@ -14,10 +14,13 @@ use ruma::{
 };
 use serde::Deserialize;
 
-use crate::{Dep, client, config, globals, registration_tokens, users};
+use crate::{
+	Dep, client, config, globals, registration_tokens, registration_tokens::ValidToken, users,
+};
 
 pub struct Service {
 	userdevicesessionid_uiaarequest: SyncRwLock<RequestMap>,
+	pending_tokens: SyncRwLock<PendingTokenMap>,
 	db: Data,
 	services: Services,
 }
@@ -35,6 +38,7 @@ struct Data {
 }
 
 type RequestMap = BTreeMap<RequestKey, CanonicalJsonValue>;
+type PendingTokenMap = BTreeMap<String, ValidToken>;
 type RequestKey = (OwnedUserId, OwnedDeviceId, String);
 
 pub const SESSION_ID_LENGTH: usize = 32;
@@ -43,6 +47,7 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			userdevicesessionid_uiaarequest: SyncRwLock::new(RequestMap::new()),
+			pending_tokens: SyncRwLock::new(PendingTokenMap::new()),
 			db: Data {
 				userdevicesessionid_uiaainfo: args.db["userdevicesessionid_uiaainfo"].clone(),
 			},
@@ -253,9 +258,13 @@ pub async fn try_auth(
 				.validate_token(token)
 				.await
 			{
-				self.services
-					.registration_tokens
-					.mark_token_as_used(valid_token);
+				// Defer mark_token_as_used until the full UIAA flow completes,
+				// so abandoned flows don't burn limited-use tokens.
+				if let Some(session) = uiaainfo.session.as_ref() {
+					self.pending_tokens
+						.write()
+						.insert(session.clone(), valid_token);
+				}
 
 				uiaainfo.completed.push(AuthType::RegistrationToken);
 			} else {
@@ -292,6 +301,15 @@ pub async fn try_auth(
 		}
 		// We didn't break, so this flow succeeded!
 		completed = true;
+	}
+
+	// Consume any pending registration token now that all stages passed.
+	if completed {
+		if let Some(session) = uiaainfo.session.as_ref() {
+			if let Some(token) = self.pending_tokens.write().remove(session) {
+				self.services.registration_tokens.mark_token_as_used(token);
+			}
+		}
 	}
 
 	if !completed {
@@ -364,6 +382,8 @@ fn update_uiaa_session(
 			.userdevicesessionid_uiaainfo
 			.put(key, Json(uiaainfo));
 	} else {
+		// Session is being removed; drop any pending token.
+		self.pending_tokens.write().remove(session);
 		self.db.userdevicesessionid_uiaainfo.del(key);
 	}
 }

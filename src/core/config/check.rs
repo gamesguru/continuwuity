@@ -193,7 +193,9 @@ pub fn check(config: &Config) -> Result {
 	for backend in &config.authenticated_flow {
 		if !seen.insert(backend) {
 			warn!("Duplicate entry {backend:?} in `authenticated_flow` will be ignored.");
+			continue;
 		}
+
 		match backend {
 			| super::AuthBackend::Recaptcha => {
 				if config.recaptcha_site_key.is_none()
