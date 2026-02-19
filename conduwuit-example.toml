@@ -489,6 +489,36 @@
 #
 #recaptcha_private_site_key =
 
+# The public site key for Cloudflare Turnstile. If this is provided,
+# Turnstile becomes available as a registration captcha.
+#
+# Use `authenticated_flow` to control which backend is preferred
+# when both Turnstile and reCAPTCHA are both configured.
+#
+#turnstile_site_key =
+
+# The secret key for Cloudflare Turnstile.
+# If this is omitted, Turnstile registration will not work,
+# even if `turnstile_site_key` is set.
+#
+#turnstile_secret_key =
+
+# Ordered list of captcha backends for registration. The first available
+# backend is presented to clients.
+#
+# Supported values: "recaptcha", "turnstile"
+#
+# When empty (default), captcha is auto-detected from configured keys
+# (preferring reCAPTCHA over Turnstile).
+#
+# Registration tokens are always required when any exist, regardless
+# of this setting.
+#
+# example: ["turnstile", "recaptcha"]
+# the above config will prefer turnstile but fallback to recaptcha
+#
+#authenticated_flow = []
+
 # Controls whether encrypted rooms and events are allowed.
 #
 #allow_encryption = true
@@ -1197,8 +1227,8 @@
 # Allow outgoing typing updates to federation.
 #
 # Note that sending typing indicators to remote servers in large rooms
-# with lots of other homeservers may cause additional strain on the CPU and
-# network.
+# with lots of other homeservers may cause additional strain on the CPU
+# and network.
 #
 #allow_outgoing_typing = true
 

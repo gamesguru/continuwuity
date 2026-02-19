@@ -12,11 +12,15 @@ use ruma::{
 		uiaa::{AuthData, AuthType, Password, UiaaInfo, UserIdentifier},
 	},
 };
+use serde::Deserialize;
 
-use crate::{Dep, config, globals, registration_tokens, users};
+use crate::{
+	Dep, client, config, globals, registration_tokens, registration_tokens::ValidToken, users,
+};
 
 pub struct Service {
 	userdevicesessionid_uiaarequest: SyncRwLock<RequestMap>,
+	pending_tokens: SyncRwLock<PendingTokenMap>,
 	db: Data,
 	services: Services,
 }
@@ -25,6 +29,7 @@ struct Services {
 	globals: Dep<globals::Service>,
 	users: Dep<users::Service>,
 	config: Dep<config::Service>,
+	client: Dep<client::Service>,
 	registration_tokens: Dep<registration_tokens::Service>,
 }
 
@@ -33,6 +38,7 @@ struct Data {
 }
 
 type RequestMap = BTreeMap<RequestKey, CanonicalJsonValue>;
+type PendingTokenMap = BTreeMap<String, ValidToken>;
 type RequestKey = (OwnedUserId, OwnedDeviceId, String);
 
 pub const SESSION_ID_LENGTH: usize = 32;
@@ -41,6 +47,7 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			userdevicesessionid_uiaarequest: SyncRwLock::new(RequestMap::new()),
+			pending_tokens: SyncRwLock::new(PendingTokenMap::new()),
 			db: Data {
 				userdevicesessionid_uiaainfo: args.db["userdevicesessionid_uiaainfo"].clone(),
 			},
@@ -48,6 +55,7 @@ impl crate::Service for Service {
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
 				config: args.depend::<config::Service>("config"),
+				client: args.depend::<client::Service>("client"),
 				registration_tokens: args
 					.depend::<registration_tokens::Service>("registration_tokens"),
 			},
@@ -181,31 +189,64 @@ pub async fn try_auth(
 			uiaainfo.completed.push(AuthType::Password);
 		},
 		| AuthData::ReCaptcha(r) => {
-			if self.services.config.recaptcha_private_site_key.is_none() {
-				return Err!(Request(Forbidden("ReCaptcha is not configured.")));
+			use conduwuit::config::{AuthBackend, auth::DEFAULT_AUTH_BACKENDS};
+
+			let backends: &[AuthBackend] = if self.services.config.authenticated_flow.is_empty() {
+				&DEFAULT_AUTH_BACKENDS
+			} else {
+				&self.services.config.authenticated_flow
+			};
+
+			let mut verified = false;
+			for backend in backends {
+				match backend {
+					| AuthBackend::Turnstile => {
+						let Some(secret) = &self.services.config.turnstile_secret_key else {
+							continue;
+						};
+
+						match verify_turnstile(&self.services.client.default, secret, &r.response)
+							.await
+						{
+							| Ok(data) if data.success => {
+								uiaainfo.completed.push(AuthType::ReCaptcha);
+								verified = true;
+							},
+							| Ok(data) => {
+								error!("Turnstile verification failed: {:?}", data.error_codes);
+							},
+							| Err(e) => {
+								error!("Turnstile request failed: {e}");
+							},
+						}
+						break;
+					},
+					| AuthBackend::Recaptcha => {
+						let Some(secret) = &self.services.config.recaptcha_private_site_key
+						else {
+							continue;
+						};
+
+						match recaptcha_verify::verify(secret, r.response.as_str(), None).await {
+							| Ok(()) => {
+								uiaainfo.completed.push(AuthType::ReCaptcha);
+								verified = true;
+							},
+							| Err(e) => {
+								error!("ReCaptcha verification failed: {e:?}");
+							},
+						}
+						break;
+					},
+				}
 			}
-			match recaptcha_verify::verify(
-				self.services
-					.config
-					.recaptcha_private_site_key
-					.as_ref()
-					.unwrap(),
-				r.response.as_str(),
-				None,
-			)
-			.await
-			{
-				| Ok(()) => {
-					uiaainfo.completed.push(AuthType::ReCaptcha);
-				},
-				| Err(e) => {
-					error!("ReCaptcha verification failed: {e:?}");
-					uiaainfo.auth_error = Some(StandardErrorBody {
-						kind: ErrorKind::forbidden(),
-						message: "ReCaptcha verification failed.".to_owned(),
-					});
-					return Ok((false, uiaainfo));
-				},
+
+			if !verified {
+				uiaainfo.auth_error = Some(StandardErrorBody {
+					kind: ErrorKind::forbidden(),
+					message: "Captcha verification failed.".to_owned(),
+				});
+				return Ok((false, uiaainfo));
 			}
 		},
 		| AuthData::RegistrationToken(t) => {
@@ -217,9 +258,13 @@ pub async fn try_auth(
 				.validate_token(token)
 				.await
 			{
-				self.services
-					.registration_tokens
-					.mark_token_as_used(valid_token);
+				// Defer mark_token_as_used until the full UIAA flow completes,
+				// so abandoned flows don't burn limited-use tokens.
+				if let Some(session) = uiaainfo.session.as_ref() {
+					self.pending_tokens
+						.write()
+						.insert(session.clone(), valid_token);
+				}
 
 				uiaainfo.completed.push(AuthType::RegistrationToken);
 			} else {
@@ -256,6 +301,15 @@ pub async fn try_auth(
 		}
 		// We didn't break, so this flow succeeded!
 		completed = true;
+	}
+
+	// Consume any pending registration token now that all stages passed.
+	if completed {
+		if let Some(session) = uiaainfo.session.as_ref() {
+			if let Some(token) = self.pending_tokens.write().remove(session) {
+				self.services.registration_tokens.mark_token_as_used(token);
+			}
+		}
 	}
 
 	if !completed {
@@ -328,6 +382,8 @@ fn update_uiaa_session(
 			.userdevicesessionid_uiaainfo
 			.put(key, Json(uiaainfo));
 	} else {
+		// Session is being removed; drop any pending token.
+		self.pending_tokens.write().remove(session);
 		self.db.userdevicesessionid_uiaainfo.del(key);
 	}
 }
@@ -346,4 +402,26 @@ async fn get_uiaa_session(
 		.await
 		.deserialized()
 		.map_err(|_| err!(Request(Forbidden("UIAA session does not exist."))))
+}
+
+async fn verify_turnstile(
+	client: &reqwest::Client,
+	secret: &str,
+	response: &str,
+) -> reqwest::Result<TurnstileResponse> {
+	client
+		.post("https://challenges.cloudflare.com/turnstile/v0/siteverify")
+		.form(&[("secret", secret), ("response", response)])
+		.send()
+		.await?
+		.json()
+		.await
+}
+
+#[derive(Deserialize)]
+struct TurnstileResponse {
+	success: bool,
+	#[serde(default)]
+	#[serde(rename = "error-codes")]
+	error_codes: Vec<String>,
 }

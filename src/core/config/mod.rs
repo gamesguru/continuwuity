@@ -1,4 +1,5 @@
 #![allow(clippy::doc_link_with_quotes)]
+pub mod auth;
 pub mod check;
 pub mod manager;
 pub mod proxy;
@@ -25,7 +26,7 @@ use serde::{Deserialize, de::IgnoredAny};
 use url::Url;
 
 use self::proxy::ProxyConfig;
-pub use self::{check::check, manager::Manager};
+pub use self::{auth::AuthBackend, check::check, manager::Manager};
 use crate::{Result, err, error::Error, utils::sys};
 
 /// All the config options for continuwuity.
@@ -614,6 +615,36 @@ pub struct Config {
 	/// If this is omitted, captcha registration will not work,
 	/// even if `recaptcha_site_key` is set.
 	pub recaptcha_private_site_key: Option<String>,
+
+	/// The public site key for Cloudflare Turnstile. If this is provided,
+	/// Turnstile becomes available as a registration captcha.
+	///
+	/// Use `authenticated_flow` to control which backend is preferred
+	/// when both Turnstile and reCAPTCHA are both configured.
+	pub turnstile_site_key: Option<String>,
+
+	/// The secret key for Cloudflare Turnstile.
+	/// If this is omitted, Turnstile registration will not work,
+	/// even if `turnstile_site_key` is set.
+	pub turnstile_secret_key: Option<String>,
+
+	/// Ordered list of captcha backends for registration. The first available
+	/// backend is presented to clients.
+	///
+	/// Supported values: "recaptcha", "turnstile"
+	///
+	/// When empty (default), captcha is auto-detected from configured keys
+	/// (preferring reCAPTCHA over Turnstile).
+	///
+	/// Registration tokens are always required when any exist, regardless
+	/// of this setting.
+	///
+	/// example: ["turnstile", "recaptcha"]
+	/// the above config will prefer turnstile but fallback to recaptcha
+	///
+	/// default: []
+	#[serde(default)]
+	pub authenticated_flow: Vec<AuthBackend>,
 
 	/// Controls whether encrypted rooms and events are allowed.
 	#[serde(default = "true_fn")]
