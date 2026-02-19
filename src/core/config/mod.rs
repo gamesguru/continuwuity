@@ -617,10 +617,10 @@ pub struct Config {
 	pub recaptcha_private_site_key: Option<String>,
 
 	/// The public site key for Cloudflare Turnstile. If this is provided,
-	/// Turnstile becomes required during registration.
+	/// Turnstile becomes available as a registration captcha.
 	///
-	/// If both `turnstile_site_key` and `recaptcha_site_key` are provided,
-	/// Turnstile will be prioritized.
+	/// Use `authenticated_flow` to control which backend is preferred
+	/// when both Turnstile and reCAPTCHA are both configured.
 	pub turnstile_site_key: Option<String>,
 
 	/// The secret key for Cloudflare Turnstile.
@@ -628,10 +628,19 @@ pub struct Config {
 	/// even if `turnstile_site_key` is set.
 	pub turnstile_secret_key: Option<String>,
 
-	/// Ordered list of auth backends to use for registration. When set,
-	/// the first available backend is presented to clients.
+	/// Ordered list of captcha backends for registration. The first available
+	/// backend is presented to clients.
 	///
-	/// example: ["recaptcha", "turnstile"]
+	/// Supported values: "recaptcha", "turnstile"
+	///
+	/// When empty (default), captcha is auto-detected from configured keys
+	/// (preferring reCAPTCHA over Turnstile).
+	///
+	/// Registration tokens are always required when any exist, regardless
+	/// of this setting.
+	///
+	/// example: ["turnstile", "recaptcha"]
+	/// the above config will prefer turnstile but fallback to recaptcha
 	///
 	/// default: []
 	#[serde(default)]

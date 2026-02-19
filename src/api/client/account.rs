@@ -311,30 +311,23 @@ pub(crate) async fn register_route(
 	use conduwuit::config::AuthBackend;
 	let mut stages = Vec::new();
 
-	// Token is implicitly required (during first-run or when tokens exist),
-	// UNLESS it appears in the `optional` list.
-	let token_is_optional = services
-		.config
-		.authenticated_flow
-		.contains(&AuthBackend::Token);
-
-	if !token_is_optional
-		&& (services.firstrun.is_first_run()
-			|| services
-				.registration_tokens
-				.iterate_tokens()
-				.next()
-				.await
-				.is_some())
+	// Token is always required during first-run or when tokens exist.
+	if services.firstrun.is_first_run()
+		|| services
+			.registration_tokens
+			.iterate_tokens()
+			.next()
+			.await
+			.is_some()
 	{
 		stages.push(AuthType::RegistrationToken);
 	}
 
 	// Determine captcha backend order: use `authenticated_flow` if set,
 	// otherwise auto-detect.
-	let default_backends = [AuthBackend::Recaptcha, AuthBackend::Turnstile];
+	use conduwuit::config::auth::DEFAULT_AUTH_BACKENDS;
 	let backends: &[AuthBackend] = if services.config.authenticated_flow.is_empty() {
-		&default_backends
+		&DEFAULT_AUTH_BACKENDS
 	} else {
 		&services.config.authenticated_flow
 	};
@@ -366,7 +359,6 @@ pub(crate) async fn register_route(
 					break;
 				}
 			},
-			| AuthBackend::Token => {},
 		}
 	}
 

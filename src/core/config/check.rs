@@ -189,7 +189,11 @@ pub fn check(config: &Config) -> Result {
 	}
 
 	// Verify we got valid credentials from the config for requested backends
+	let mut seen = std::collections::HashSet::new();
 	for backend in &config.authenticated_flow {
+		if !seen.insert(backend) {
+			warn!("Duplicate entry {backend:?} in `authenticated_flow` will be ignored.");
+		}
 		match backend {
 			| super::AuthBackend::Recaptcha => {
 				if config.recaptcha_site_key.is_none()
@@ -211,7 +215,6 @@ pub fn check(config: &Config) -> Result {
 					));
 				}
 			},
-			| super::AuthBackend::Token => {},
 		}
 	}
 

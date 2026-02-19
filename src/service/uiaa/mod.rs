@@ -14,7 +14,7 @@ use ruma::{
 };
 use serde::Deserialize;
 
-use crate::{Dep, config, globals, registration_tokens, users};
+use crate::{Dep, client, config, globals, registration_tokens, users};
 
 pub struct Service {
 	userdevicesessionid_uiaarequest: SyncRwLock<RequestMap>,
@@ -26,6 +26,7 @@ struct Services {
 	globals: Dep<globals::Service>,
 	users: Dep<users::Service>,
 	config: Dep<config::Service>,
+	client: Dep<client::Service>,
 	registration_tokens: Dep<registration_tokens::Service>,
 }
 
@@ -49,6 +50,7 @@ impl crate::Service for Service {
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
 				config: args.depend::<config::Service>("config"),
+				client: args.depend::<client::Service>("client"),
 				registration_tokens: args
 					.depend::<registration_tokens::Service>("registration_tokens"),
 			},
@@ -182,11 +184,10 @@ pub async fn try_auth(
 			uiaainfo.completed.push(AuthType::Password);
 		},
 		| AuthData::ReCaptcha(r) => {
-			use conduwuit::config::AuthBackend;
+			use conduwuit::config::{AuthBackend, auth::DEFAULT_AUTH_BACKENDS};
 
-			let default_backends = [AuthBackend::Recaptcha, AuthBackend::Turnstile];
 			let backends: &[AuthBackend] = if self.services.config.authenticated_flow.is_empty() {
-				&default_backends
+				&DEFAULT_AUTH_BACKENDS
 			} else {
 				&self.services.config.authenticated_flow
 			};
@@ -199,7 +200,9 @@ pub async fn try_auth(
 							continue;
 						};
 
-						match verify_turnstile(secret, &r.response).await {
+						match verify_turnstile(&self.services.client.default, secret, &r.response)
+							.await
+						{
 							| Ok(data) if data.success => {
 								uiaainfo.completed.push(AuthType::ReCaptcha);
 								verified = true;
@@ -230,7 +233,6 @@ pub async fn try_auth(
 						}
 						break;
 					},
-					| AuthBackend::Token => continue,
 				}
 			}
 
@@ -382,8 +384,12 @@ async fn get_uiaa_session(
 		.map_err(|_| err!(Request(Forbidden("UIAA session does not exist."))))
 }
 
-async fn verify_turnstile(secret: &str, response: &str) -> reqwest::Result<TurnstileResponse> {
-	reqwest::Client::new()
+async fn verify_turnstile(
+	client: &reqwest::Client,
+	secret: &str,
+	response: &str,
+) -> reqwest::Result<TurnstileResponse> {
+	client
 		.post("https://challenges.cloudflare.com/turnstile/v0/siteverify")
 		.form(&[("secret", secret), ("response", response)])
 		.send()
