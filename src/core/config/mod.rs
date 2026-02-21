@@ -1303,7 +1303,8 @@ pub struct Config {
 
 	/// Maximum number of notifications returned per request via the
 	/// `GET /_matrix/client/v3/notifications` endpoint. Clients may request
-	/// a lower limit, but never higher than this value.
+	/// a lower limit, but never higher than this value. Current implementation
+	/// may strain CPU. Set to 0 to disable the endpoint and return a quick 404.
 	///
 	/// default: 100
 	#[serde(default = "default_notification_max_limit_per_request")]
@@ -1311,7 +1312,8 @@ pub struct Config {
 
 	/// Maximum number of PDUs scanned per room when collecting
 	/// notifications. This prevents abuse from clients requesting
-	/// deeply-paginated notification history. Set to 0 for no limit.
+	/// deeply-paginated notification history. Set to 0 to disable
+	/// notifications (returns 404).
 	///
 	/// default: 5000
 	#[serde(default = "default_notification_max_pdus_per_room")]

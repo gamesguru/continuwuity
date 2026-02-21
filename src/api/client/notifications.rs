@@ -1,5 +1,5 @@
 use axum::extract::State;
-use conduwuit::{Event, Result, matrix::pdu::PduCount, warn};
+use conduwuit::{Err, Event, Result, matrix::pdu::PduCount, warn};
 use futures::StreamExt;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, UInt,
@@ -48,6 +48,12 @@ pub(crate) async fn get_notifications_route(
 	let started = Instant::now();
 
 	let max_limit = services.server.config.notification_max_limit_per_request;
+
+	// 0 = disabled
+	if max_limit == 0 {
+		return Err!(Request(NotFound("Notification endpoint is disabled.")));
+	}
+
 	let limit = body.limit.unwrap_or_else(|| UInt::new(10).unwrap());
 	let limit = std::cmp::min(limit, UInt::try_from(max_limit).unwrap());
 	let start_ts = body
