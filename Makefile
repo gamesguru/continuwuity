@@ -155,6 +155,11 @@ clean:	##H Clean build directory for current profile
 	rm -rf target/debian
 
 
+.PHONY: docs
+docs:	##H Regenerate docs (admin commands, etc.)
+	cargo run -p xtask --profile $(PROFILE) -- generate-docs
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Deployment commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
