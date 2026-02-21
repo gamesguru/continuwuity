@@ -46,19 +46,18 @@ fn init_user_agent() -> String { format!("{}/{} (bot; +{WEBSITE})", name(), vers
 pub fn user_agent_media() -> &'static str { USER_AGENT_MEDIA.get_or_init(init_user_agent_media) }
 
 fn init_user_agent_media() -> String {
-	format!("{}/{} (embedbot; +{WEBSITE})", name(), version_ua())
+	format!("{}/{} (embedbot - facebookexternalhit/1.1; +{WEBSITE})", name(), version_ua())
 }
 
 fn init_version_ua() -> String {
 	conduwuit_build_metadata::version_tag().map_or_else(
 		|| SEMANTIC.to_owned(),
 		|extra| {
-			let sep = if extra.starts_with('+') || extra.starts_with('-') {
-				""
+			if extra.starts_with("+") {
+				format!("{SEMANTIC}{extra}")
 			} else {
-				"+"
-			};
-			format!("{SEMANTIC}{sep}{extra}")
+				format!("{SEMANTIC} ({extra})")
+			}
 		},
 	)
 }
