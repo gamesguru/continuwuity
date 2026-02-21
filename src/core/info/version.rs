@@ -53,7 +53,7 @@ fn init_version_ua() -> String {
 	conduwuit_build_metadata::version_tag().map_or_else(
 		|| SEMANTIC.to_owned(),
 		|extra| {
-			if extra.starts_with("+") {
+			if extra.starts_with('+') {
 				format!("{SEMANTIC}{extra}")
 			} else {
 				format!("{SEMANTIC} ({extra})")
