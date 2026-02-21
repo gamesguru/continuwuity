@@ -118,21 +118,8 @@ pub async fn update_membership(
 			self.mark_as_joined(user_id, room_id);
 		},
 		| MembershipState::Invite => {
-			let sender = pdu.sender();
-			let filter = self
-				.services
-				.users
-				.invite_filter_level(sender, user_id)
-				.await;
-
-			if matches!(filter, FilterLevel::Block) {
-				return Err!(Request(InviteBlocked(
-					"{user_id} has blocked invites from {sender}."
-				)));
-			}
-
 			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
-			self.mark_as_invited(user_id, room_id, sender, Some(last_state), None, false)
+			self.mark_as_invited(user_id, room_id, pdu.sender(), Some(last_state), None)
 				.await?;
 		},
 		| MembershipState::Leave | MembershipState::Ban => {
@@ -347,23 +334,18 @@ pub async fn mark_as_invited(
 	sender_user: &UserId,
 	last_state: Option<Vec<Raw<AnyStrippedStateEvent>>>,
 	invite_via: Option<Vec<OwnedServerName>>,
-	check_permissions: bool,
 ) -> Result<()> {
-	if check_permissions {
-		// return an error for blocked invites. ignored invites aren't handled here
-		// since the recipient's membership should still be changed to `invite`.
-		// they're filtered out in the individual /sync handlers
-		if matches!(
-			self.services
-				.users
-				.invite_filter_level(sender_user, user_id)
-				.await,
-			FilterLevel::Block
-		) {
-			return Err!(Request(InviteBlocked(
-				"{user_id} has blocked invites from {sender_user}."
-			)));
-		}
+	// return an error for blocked invites. ignored invites aren't handled here
+	// since the recipient's membership should still be changed to `invite`.
+	// they're filtered out in the individual /sync handlers
+	if matches!(
+		self.services
+			.users
+			.invite_filter_level(sender_user, user_id)
+			.await,
+		FilterLevel::Block
+	) {
+		return Err!(Request(InviteBlocked("{user_id} has blocked invites from {sender_user}.")));
 	}
 
 	let roomuser_id = (room_id, user_id);

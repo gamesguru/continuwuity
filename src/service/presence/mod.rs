@@ -8,7 +8,7 @@ use conduwuit::{
 	Error, Result, Server, checked, debug, debug_warn, error, info, result::LogErr, trace,
 };
 use database::Database;
-use futures::{Stream, StreamExt, TryFutureExt, pin_mut};
+use futures::{Stream, StreamExt, TryFutureExt};
 use loole::{Receiver, Sender};
 use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
 
@@ -171,15 +171,8 @@ impl Service {
 
 		let last_active_ago = UInt::new(0);
 		let currently_active = *new_state == PresenceState::Online;
-		self.set_presence_inner(
-			user_id,
-			new_state,
-			Some(currently_active),
-			last_active_ago,
-			status_msg,
-			Some(last_presence),
-		)
-		.await
+		self.set_presence(user_id, new_state, Some(currently_active), last_active_ago, status_msg)
+			.await
 	}
 
 	/// Adds a presence event which will be saved until a new event replaces it.
@@ -191,42 +184,13 @@ impl Service {
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
 	) -> Result<()> {
-		self.set_presence_inner(
-			user_id,
-			state,
-			currently_active,
-			last_active_ago,
-			status_msg,
-			None,
-		)
-		.await
-	}
-
-	/// Inner implementation that accepts an optional cached presence to avoid
-	/// redundant DB reads when the caller already has the data.
-	async fn set_presence_inner(
-		&self,
-		user_id: &UserId,
-		state: &PresenceState,
-		currently_active: Option<bool>,
-		last_active_ago: Option<UInt>,
-		status_msg: Option<String>,
-		cached_presence: Option<Result<(u64, PresenceEvent)>>,
-	) -> Result<()> {
 		let presence_state = match state.as_str() {
 			| "" => &PresenceState::Offline, // default an empty string to 'offline'
 			| &_ => state,
 		};
 
 		self.db
-			.set_presence(
-				user_id,
-				presence_state,
-				currently_active,
-				last_active_ago,
-				status_msg,
-				cached_presence,
-			)
+			.set_presence(user_id, presence_state, currently_active, last_active_ago, status_msg)
 			.await?;
 
 		if (self.timeout_remote_users || self.services.globals.user_is_local(user_id))
@@ -261,12 +225,15 @@ impl Service {
 	pub async fn unset_all_presence(&self) {
 		let _cork = self.services.db.cork();
 
-		let users = self.services.users.list_local_users();
-
-		pin_mut!(users);
-		while let Some(user_id) = users.next().await {
-			let user_id = user_id.to_owned();
-			let presence = self.db.get_presence(&user_id).await;
+		for user_id in &self
+			.services
+			.users
+			.list_local_users()
+			.map(ToOwned::to_owned)
+			.collect::<Vec<OwnedUserId>>()
+			.await
+		{
+			let presence = self.db.get_presence(user_id).await;
 
 			let presence = match presence {
 				| Ok((_, ref presence)) => &presence.content,
@@ -285,7 +252,7 @@ impl Service {
 
 			_ = self
 				.set_presence(
-					&user_id,
+					user_id,
 					&PresenceState::Offline,
 					Some(false),
 					presence.last_active_ago,
