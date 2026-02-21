@@ -3,12 +3,14 @@ mod appservice;
 mod data;
 mod dest;
 mod sender;
+pub mod stats;
 
 use std::{
 	fmt::Debug,
 	hash::{DefaultHasher, Hash, Hasher},
 	iter::once,
 	sync::Arc,
+	time::Duration,
 };
 
 use async_trait::async_trait;
@@ -34,6 +36,7 @@ use crate::{
 
 pub struct Service {
 	pub db: Data,
+	pub stats: stats::FederationStats,
 	server: Arc<Server>,
 	services: Services,
 	channels: Vec<(loole::Sender<Msg>, loole::Receiver<Msg>)>,
@@ -82,6 +85,7 @@ impl crate::Service for Service {
 		let num_senders = num_senders(&args);
 		Ok(Arc::new(Self {
 			db: Data::new(&args),
+			stats: stats::FederationStats::default(),
 			server: args.server.clone(),
 			services: Services {
 				client: args.depend::<client::Service>("client"),
@@ -120,6 +124,16 @@ impl crate::Service for Service {
 					let _abort = joinset.spawn_on(worker, runtime);
 					joinset
 				});
+
+		// Periodic federation stats reporter
+		let stats_self = self.clone();
+		let runtime = self.server.runtime();
+		runtime.spawn(async move {
+			loop {
+				tokio::time::sleep(Duration::from_secs(300)).await;
+				stats_self.stats.report_and_reset();
+			}
+		});
 
 		while let Some(ret) = senders.join_next_with_id().await {
 			match ret {
@@ -385,11 +399,13 @@ fn num_senders(args: &crate::Args<'_>) -> usize {
 	const MIN_SENDERS: usize = 1;
 	// Limit the number of senders to the number of workers threads or number of
 	// cores, conservatively.
-	let max_senders = args
-		.server
-		.metrics
-		.num_workers()
-		.min(available_parallelism());
+	let mut max_senders = args.server.metrics.num_workers();
+
+	// Work around some platforms not returning the number of cores.
+	let num_cores = available_parallelism();
+	if num_cores > 0 {
+		max_senders = max_senders.min(num_cores);
+	}
 
 	// If the user doesn't override the default 0, this is intended to then default
 	// to 1 for now as multiple senders is experimental.

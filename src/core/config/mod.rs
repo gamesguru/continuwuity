@@ -1244,12 +1244,6 @@ pub struct Config {
 	#[serde(default)]
 	pub rocksdb_repair: bool,
 
-	#[serde(default)]
-	pub rocksdb_read_only: bool,
-
-	#[serde(default)]
-	pub rocksdb_secondary: bool,
-
 	/// Enables idle CPU priority for compaction thread. This is not enabled by
 	/// default to prevent compaction from falling too far behind on busy
 	/// systems.
@@ -1306,6 +1300,24 @@ pub struct Config {
 	/// default: "/_matrix/push/v1/notify"
 	#[serde(default = "default_notification_push_path")]
 	pub notification_push_path: String,
+
+	/// Maximum number of notifications returned per request via the
+	/// `GET /_matrix/client/v3/notifications` endpoint. Clients may request
+	/// a lower limit, but never higher than this value. Current implementation
+	/// may strain CPU. Set to 0 to disable the endpoint and return a quick 404.
+	///
+	/// default: 100
+	#[serde(default = "default_notification_max_limit_per_request")]
+	pub notification_max_limit_per_request: usize,
+
+	/// Maximum number of PDUs scanned per room when collecting
+	/// notifications. This prevents abuse from clients requesting
+	/// deeply-paginated notification history. Set to 0 to disable
+	/// notifications (returns 404).
+	///
+	/// default: 5000
+	#[serde(default = "default_notification_max_pdus_per_room")]
+	pub notification_max_pdus_per_room: usize,
 
 	/// Allow local (your server only) presence updates/requests.
 	///
@@ -2581,6 +2593,10 @@ pub fn default_log() -> String {
 pub fn default_log_span_events() -> String { "none".into() }
 
 fn default_notification_push_path() -> String { "/_matrix/push/v1/notify".to_owned() }
+
+fn default_notification_max_limit_per_request() -> usize { 100 }
+
+fn default_notification_max_pdus_per_room() -> usize { 5000 }
 
 fn default_openid_token_ttl() -> u64 { 60 * 60 }
 

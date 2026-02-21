@@ -4,7 +4,6 @@ use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{Err, Event, Result, debug_info, info, matrix::pdu::PduEvent, utils::ReadyExt};
 use conduwuit_service::Services;
-use rand::Rng;
 use ruma::{
 	EventId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId,
 	api::client::{
@@ -244,7 +243,7 @@ fn build_report(report: Report) -> RoomMessageEventContent {
 /// random delay sending a response per spec suggestion regarding
 /// enumerating for potential events existing in our server.
 async fn delay_response() {
-	let time_to_wait = rand::thread_rng().gen_range(2..5);
+	let time_to_wait = rand::random_range(2..5);
 	debug_info!(
 		"Got successful /report request, waiting {time_to_wait} seconds before sending \
 		 successful response."

@@ -33,8 +33,6 @@ pub struct Engine {
 	pub(crate) db: Db,
 	pub(crate) pool: Arc<Pool>,
 	pub(crate) ctx: Arc<Context>,
-	pub(super) read_only: bool,
-	pub(super) secondary: bool,
 	pub(crate) checksums: bool,
 	corks: AtomicU32,
 }
@@ -129,14 +127,6 @@ impl Engine {
 
 		sequence
 	}
-
-	#[inline]
-	#[must_use]
-	pub fn is_read_only(&self) -> bool { self.secondary || self.read_only }
-
-	#[inline]
-	#[must_use]
-	pub fn is_secondary(&self) -> bool { self.secondary }
 }
 
 impl Drop for Engine {

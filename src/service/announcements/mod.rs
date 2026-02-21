@@ -20,7 +20,6 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use conduwuit::{Result, Server, debug, error, warn};
 use database::{Deserialized, Map};
-use rand::Rng;
 use ruma::events::{Mentions, room::message::RoomMessageEventContent};
 use serde::Deserialize;
 use tokio::{
@@ -100,8 +99,7 @@ impl crate::Service for Service {
 		}
 
 		let first_check_jitter = {
-			let mut rng = rand::thread_rng();
-			let jitter_percent = rng.gen_range(-50.0..=10.0);
+			let jitter_percent = rand::random_range(-50.0..=10.0);
 			self.interval.mul_f64(1.0 + jitter_percent / 100.0)
 		};
 
