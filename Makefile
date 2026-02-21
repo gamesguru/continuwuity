@@ -12,6 +12,16 @@ ifneq (,$(wildcard ./.env))
 	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
 endif
 
+# Example .env:
+# #!/bin/bash
+# export OS_VERSION=ubuntu-24.04
+# export GH_REPO=gamesguru/continuwuity
+# export SKIP_CONFIRM=1
+# export PROFILE=dev-quick
+# export GIT_DESCRIBE_OPTIONAL_BRANCH=
+# export RUSTFLAGS="-C target-cpu=native"
+
+
 # [CONFIG] Auto-discover vars defined in Makefiles (not env-inherited)
 VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter file override command,$(origin $v)),$v)))
 
@@ -124,25 +134,13 @@ test:	##H Run tests
 
 
 .PHONY: build
-build:	##H Build with selected profile,
+build:	##H Build with selected profile
 	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
 	@echo "Build this profile? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
 	cargo build $(CARGO_FLAGS)
 	@echo "Build finished! Linking '$(PROFILE)' to target/latest"
 	ln -sfn $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
-
-.PHONY: nohup
-nohup:	##H Build with nohup
-	nohup $(MAKE) build SKIP_CONFIRM=1 > build.log 2>&1 &
-	tail -n +1 -f build.log
-
-
-.PHONY: deb
-deb:	##H Build Debian package
-	@echo "Build Debian package?"
-	@$(MAKE) _confirm
-	cargo-deb --release
 
 
 .PHONY: clean
@@ -178,16 +176,17 @@ download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
 	# Checking version of old binary, if it exists
 	@-./target/ci/conduwuit -V
 	@rm -f target/ci/conduwuit
-	gh run download $(RUN_ID) -R "$(GH_REPO)" -n "conduwuit-$(OS_VERSION)" -D target/ci
+	gh run download $(RUN_ID) -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
 	@ln -sfn ci target/latest
 
-.PHONY: download/list
-download/list:	##H List recent CI runs
+.PHONY: download-list
+download-list:	##H List recent CI runs
 	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
-	gh run list -R "$(GH_REPO)" --limit 15
+	gh run list -R $(GH_REPO) --limit 15
+
 
 # Binary name
 CONTINUWUITY ?= conduwuit
@@ -199,13 +198,12 @@ REMOTE_BIN_DIR ?= /usr/local/bin
 LOCAL_BIN ?= $(LOCAL_BIN_DIR)/$(CONTINUWUITY)
 REMOTE_BIN ?= $(REMOTE_BIN_DIR)/$(CONTINUWUITY)
 
-
 .PHONY: install
 install:	##H Install (executed on VPS)
 	@echo "Install $(CONTINUWUITY) to $(REMOTE_BIN)?"
 	@$(MAKE) _confirm
 	# You may need to run with sudo or adjust REMOTE_BIN_DIR if this fails
-	install -b -p -m 755 "$(LOCAL_BIN)" "$(REMOTE_BIN)"
+	install -b -p -m 755 $(LOCAL_BIN) $(REMOTE_BIN)
 	@echo "Installation complete."
 # 	@echo "Restarting $(CONTINUWUITY)"
 # 	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)
