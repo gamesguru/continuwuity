@@ -751,6 +751,17 @@ inherits = "dev"
 #	'-Clink-arg=-Wl,-z,lazy',
 #]
 
+# Dev/testing build with fast compile time, decent runtime performance.
+# Here, "quick" refers to compile time, not runtime speed.
+[profile.dev-quick]
+inherits = "dev"
+opt-level = 1
+debug = 0
+strip = "none"
+lto = "off"
+codegen-units = 16
+incremental = true
+
 [profile.dev.package.'*']
 inherits = "dev"
 debug = 'limited'
