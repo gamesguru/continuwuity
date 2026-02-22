@@ -172,13 +172,7 @@ pub(crate) async fn get_content_legacy_route(
 					debug_info!(%mxc, "Fetching remote media via authenticated federation");
 					services
 						.media
-						.fetch_remote_content(
-							&mxc,
-							None,
-							None,
-							body.allow_redirect,
-							body.timeout_ms,
-						)
+						.fetch_remote_content(&mxc, None, None, body.timeout_ms)
 						.await
 				} else {
 					debug_info!(%mxc, "Fetching remote media via legacy unauthenticated federation");
