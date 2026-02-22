@@ -108,4 +108,11 @@ pub enum MediaCommand {
 		#[arg(long, default_value("800"))]
 		height: u32,
 	},
+
+	/// Deletes a cached URL preview, forcing it to be re-fetched on the
+	///   next request.
+	DeleteUrlPreview {
+		/// The URL to clear from the preview cache
+		url: String,
+	},
 }

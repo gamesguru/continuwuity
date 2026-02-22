@@ -388,3 +388,11 @@ pub(super) async fn get_remote_thumbnail(
 	self.write_str(&format!("```\n{result:#?}\nreceived {len} bytes for file content.\n```"))
 		.await
 }
+
+#[admin_command]
+pub(super) async fn delete_url_preview(&self, url: String) -> Result {
+	self.services.media.remove_url_preview(&url).await?;
+
+	self.write_str(&format!("Deleted cached URL preview for: {url}"))
+		.await
+}
