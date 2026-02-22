@@ -163,6 +163,10 @@ pub(crate) async fn get_content_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
+				if services.server.config.freeze_legacy_media {
+					return Err!(Request(NotFound("Media not found.")));
+				}
+
 				let authenticated = services.server.config.legacy_media_authenticated_fetch;
 				let FileMeta {
 					content,
@@ -392,6 +396,10 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
+				if services.server.config.freeze_legacy_media {
+					return Err!(Request(NotFound("Media not found.")));
+				}
+
 				let authenticated = services.server.config.legacy_media_authenticated_fetch;
 				let FileMeta {
 					content,

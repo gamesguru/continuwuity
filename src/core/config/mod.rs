@@ -1482,20 +1482,17 @@ pub struct Config {
 	/// Enabling this ensures those clients can still load remote media
 	/// by routing through the signed federation media API
 	/// (/_matrix/federation/v1/media) instead of the deprecated unsigned
-	/// path. This overrides `freeze_legacy_media` since the federation
-	/// request is signed, not legacy.
+	/// path.
 	///
 	/// default: true
 	#[serde(default = "true_fn")]
 	pub legacy_media_authenticated_fetch: bool,
 
 	/// Freeze legacy media: block new remote media fetches through
-	/// unsigned legacy federation endpoints. Already-cached local media
-	/// is still served.
+	/// legacy endpoints. Already-cached local media is still served.
 	///
-	/// This only takes effect when `legacy_media_authenticated_fetch` is
-	/// disabled, as signed fetches use the modern federation API and are
-	/// not subject to this freeze.
+	/// This applies to both authenticated and unauthenticated remote
+	/// fetches via the legacy (/r0, /v3) media endpoints.
 	#[serde(default = "true_fn")]
 	pub freeze_legacy_media: bool,
 
