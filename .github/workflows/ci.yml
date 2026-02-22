@@ -43,8 +43,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-
-          components: clippy, rust-analyzer, rust-src
+          toolchain: "1.90.0"
 
       - name: Debug checks
         run: make vars cpu-info
@@ -139,7 +138,7 @@ jobs:
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: "1.90.0"
-          components: clippy, rustfmt, rust-analyzer, rust-src
+          components: clippy, rustfmt
 
       - name: Install nightly rustfmt
         run: rustup toolchain install nightly --component rustfmt --component clippy
