@@ -758,7 +758,7 @@ inherits = "dev"
 opt-level = 1
 debug = 0
 strip = "none"
-lto = "off"
+lto = false
 codegen-units = 16
 incremental = true
 

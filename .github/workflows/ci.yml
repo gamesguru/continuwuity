@@ -43,7 +43,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: "1.90.0"
+
           components: clippy, rust-analyzer, rust-src
 
       - name: Debug checks
@@ -147,11 +147,10 @@ jobs:
       - name: Install pre-commit
         run: pip install pre-commit
 
-      - name: Debug checks
-        run: make vars doctor cpu-info
-
       - uses: Swatinem/rust-cache@v2
 
+      - name: Debug checks
+        run: make vars doctor cpu-info
       - name: Format
         run: make format
 

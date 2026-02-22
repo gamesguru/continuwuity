@@ -172,7 +172,7 @@ pub(crate) async fn get_content_legacy_route(
 					debug_info!(%mxc, "Fetching remote media via authenticated federation");
 					services
 						.media
-						.fetch_remote_content(&mxc, None, None, body.timeout_ms)
+						.fetch_remote_content(&mxc, None, None, body.allow_redirect, body.timeout_ms)
 						.await
 				} else {
 					debug_info!(%mxc, "Fetching remote media via legacy unauthenticated federation");
@@ -279,21 +279,27 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 					content,
 					content_type,
 					content_disposition,
-				} = if services.server.config.legacy_media_authenticated_fetch {
-					services
-						.media
-						.fetch_remote_content(&mxc, None, None, body.timeout_ms)
-						.await
-				} else {
-					services
-						.media
-						.fetch_remote_content_legacy(&mxc, body.allow_redirect, body.timeout_ms)
-						.await
-						.map(|r| FileMeta {
-							content: Some(r.file),
-							content_type: r.content_type.map(Into::into),
-							content_disposition: r.content_disposition,
-						})
+				} = {
+					if services.server.config.freeze_legacy_media {
+						return Err!(Request(NotFound("Media not found.")));
+					}
+
+					if services.server.config.legacy_media_authenticated_fetch {
+						services
+							.media
+							.fetch_remote_content(&mxc, None, None, body.timeout_ms)
+							.await
+					} else {
+						services
+							.media
+							.fetch_remote_content_legacy(&mxc, body.allow_redirect, body.timeout_ms)
+							.await
+							.map(|r| FileMeta {
+								content: Some(r.file),
+								content_type: r.content_type.map(Into::into),
+								content_disposition: r.content_disposition,
+							})
+					}
 				}
 				.map_err(|e| {
 					err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
