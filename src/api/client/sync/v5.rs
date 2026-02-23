@@ -479,7 +479,7 @@ where
 		let mut receipts: Vec<Raw<AnySyncEphemeralRoomEvent>> = services
 			.rooms
 			.read_receipt
-			.readreceipts_since(room_id, Some(*roomsince))
+			.readreceipts_since(room_id, Some(*roomsince), Some(next_batch))
 			.filter_map(|(read_user, _ts, v)| async move {
 				services
 					.users

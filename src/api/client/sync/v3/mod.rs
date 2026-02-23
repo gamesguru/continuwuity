@@ -230,7 +230,7 @@ pub(crate) async fn build_sync_events(
 ) -> Result<sync_events::v3::Response, RumaResponse<UiaaResponse>> {
 	let (syncing_user, syncing_device) = body.sender();
 
-	let current_count = services.globals.current_count()?;
+	let current_count = services.globals.current_count_in_flight()?;
 
 	// the `since` token is the last sync end count stringified
 	let last_sync_end_count = body
@@ -367,7 +367,9 @@ pub(crate) async fn build_sync_events(
 	let presence_updates: OptionFuture<_> = services
 		.config
 		.allow_local_presence
-		.then(|| process_presence_updates(services, last_sync_end_count, syncing_user))
+		.then(|| {
+			process_presence_updates(services, last_sync_end_count, current_count, syncing_user)
+		})
 		.into();
 
 	let account_data = services
@@ -448,11 +450,12 @@ pub(crate) async fn build_sync_events(
 async fn process_presence_updates(
 	services: &Services,
 	last_sync_end_count: Option<u64>,
+	current_count: u64,
 	syncing_user: &UserId,
 ) -> PresenceUpdates {
 	services
 		.presence
-		.presence_since(last_sync_end_count.unwrap_or(0)) // send all presences on initial sync
+		.presence_since(last_sync_end_count.unwrap_or(0), Some(current_count)) // send all presences on initial sync
 		.filter(|(user_id, ..)| {
 			services
 				.rooms
