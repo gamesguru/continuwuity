@@ -113,9 +113,11 @@ pub(crate) async fn get_content_thumbnail_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_thumbnail(&services, &mxc, Some(user), body.timeout_ms, &dim).await.map_err(|e| {
-		err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-	})?;
+	} = fetch_thumbnail(&services, &mxc, Some(user), body.timeout_ms, &dim)
+		.await
+		.map_err(|e| {
+			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+		})?;
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
@@ -155,9 +157,11 @@ pub(crate) async fn get_content_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, None).await.map_err(|e| {
-		err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-	})?;
+	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, None)
+		.await
+		.map_err(|e| {
+			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+		})?;
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
@@ -197,9 +201,11 @@ pub(crate) async fn get_content_as_filename_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, Some(&body.filename)).await.map_err(|e| {
-		err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-	})?;
+	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, Some(&body.filename))
+		.await
+		.map_err(|e| {
+			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+		})?;
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
