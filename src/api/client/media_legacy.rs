@@ -163,38 +163,18 @@ pub(crate) async fn get_content_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
-				if services.server.config.freeze_legacy_media {
-					return Err!(Request(NotFound("Media not found.")));
-				}
-
-				let authenticated = services.server.config.legacy_media_authenticated_fetch;
+				debug_info!(%mxc, "Fetching remote media via authenticated federation fallback");
 				let FileMeta {
 					content,
 					content_type,
 					content_disposition,
-				} = if authenticated {
-					debug_info!(%mxc, "Fetching remote media via authenticated federation");
-					services
-						.media
-						.fetch_remote_content(&mxc, None, None, body.timeout_ms)
-						.await
-				} else {
-					debug_info!(%mxc, "Fetching remote media via legacy unauthenticated federation");
-					services
-						.media
-						.fetch_remote_content_legacy(&mxc, body.allow_redirect, body.timeout_ms)
-						.await
-						.map(|r| FileMeta {
-							content: Some(r.file),
-							content_type: r.content_type.map(Into::into),
-							content_disposition: r.content_disposition,
-						})
-				}
-				.map_err(|e| {
-					err!(Request(NotFound(
-						debug_warn!(%mxc, %authenticated, "Fetching media failed: {e:?}")
-					)))
-				})?;
+				} = services
+					.media
+					.fetch_remote_content(&mxc, None, None, body.timeout_ms)
+					.await
+					.map_err(|e| {
+						err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+					})?;
 
 				let content_disposition = make_content_disposition(
 					content_disposition.as_ref(),
@@ -279,39 +259,18 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
+				debug_info!(%mxc, "Fetching remote media via authenticated federation fallback");
 				let FileMeta {
 					content,
 					content_type,
 					content_disposition,
-				} = {
-					if services.server.config.freeze_legacy_media {
-						return Err!(Request(NotFound("Media not found.")));
-					}
-
-					if services.server.config.legacy_media_authenticated_fetch {
-						services
-							.media
-							.fetch_remote_content(&mxc, None, None, body.timeout_ms)
-							.await
-					} else {
-						services
-							.media
-							.fetch_remote_content_legacy(
-								&mxc,
-								body.allow_redirect,
-								body.timeout_ms,
-							)
-							.await
-							.map(|r| FileMeta {
-								content: Some(r.file),
-								content_type: r.content_type.map(Into::into),
-								content_disposition: r.content_disposition,
-							})
-					}
-				}
-				.map_err(|e| {
-					err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-				})?;
+				} = services
+					.media
+					.fetch_remote_content(&mxc, None, None, body.timeout_ms)
+					.await
+					.map_err(|e| {
+						err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+					})?;
 
 				let content_disposition = make_content_disposition(
 					content_disposition.as_ref(),
@@ -396,38 +355,18 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
-				if services.server.config.freeze_legacy_media {
-					return Err!(Request(NotFound("Media not found.")));
-				}
-
-				let authenticated = services.server.config.legacy_media_authenticated_fetch;
+				debug_info!(%mxc, "Fetching remote thumbnail via authenticated federation fallback");
 				let FileMeta {
 					content,
 					content_type,
 					content_disposition,
-				} = if authenticated {
-					debug_info!(%mxc, "Fetching remote thumbnail via authenticated federation");
-					services
-						.media
-						.fetch_remote_thumbnail(&mxc, None, None, body.timeout_ms, &dim)
-						.await
-				} else {
-					debug_info!(%mxc, "Fetching remote thumbnail via legacy unauthenticated federation");
-					services
-						.media
-						.fetch_remote_thumbnail_legacy(&body)
-						.await
-						.map(|r| FileMeta {
-							content: Some(r.file),
-							content_type: r.content_type.map(Into::into),
-							content_disposition: r.content_disposition,
-						})
-				}
-				.map_err(|e| {
-					err!(Request(NotFound(
-						debug_warn!(%mxc, %authenticated, "Fetching media failed: {e:?}")
-					)))
-				})?;
+				} = services
+					.media
+					.fetch_remote_thumbnail(&mxc, None, None, body.timeout_ms, &dim)
+					.await
+					.map_err(|e| {
+						err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+					})?;
 
 				let content_disposition = make_content_disposition(
 					content_disposition.as_ref(),

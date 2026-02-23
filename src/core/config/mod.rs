@@ -1473,26 +1473,6 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_legacy_media: bool,
 
-	/// Use signed federation requests when fetching remote media through
-	/// legacy endpoints. This is needed for remote servers running Matrix
-	/// 1.11+ which reject unsigned media requests.
-	///
-	/// The /r0 and /v3 media endpoints are still actively used by
-	/// matrix.to link previews, SchildiChat, and other legacy clients.
-	/// Enabling this ensures those clients can still load remote media
-	/// by routing through the signed federation media API
-	/// (/_matrix/federation/v1/media) instead of the deprecated unsigned
-	/// path.
-	///
-	/// default: true
-	#[serde(default = "true_fn")]
-	pub legacy_media_authenticated_fetch: bool,
-
-	/// Freeze legacy media: block new remote media fetches through
-	/// legacy endpoints. Already-cached local media is still served.
-	///
-	/// This applies to both authenticated and unauthenticated remote
-	/// fetches via the legacy (/r0, /v3) media endpoints.
 	#[serde(default = "true_fn")]
 	pub freeze_legacy_media: bool,
 
