@@ -9,7 +9,7 @@ use tokio::sync::watch;
 
 type Watcher = SyncRwLock<HashMap<Vec<u8>, (watch::Sender<()>, watch::Receiver<()>)>>;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Watchers {
 	watchers: Watcher,
 }
