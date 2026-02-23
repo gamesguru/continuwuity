@@ -274,6 +274,56 @@ impl Data {
 		}
 	}
 
+	pub(super) async fn prev_timeline_count(&self, before: &PduId) -> Result<PduCount> {
+		let before_pdu =
+			Self::pdu_count_to_id(before.shortroomid, before.shorteventid, Direction::Backward);
+
+		let pdu_ids = self
+			.pduid_pdu
+			.rev_keys_raw_from(&before_pdu)
+			.ready_try_take_while(|pdu_id| Ok(pdu_id.is_room_eq(before_pdu)))
+			.ready_and_then(|pdu_id: RawPduId| Ok(pdu_id.pdu_count()));
+
+		pin_mut!(pdu_ids);
+		pdu_ids
+			.try_next()
+			.await
+			.log_err()?
+			.ok_or_else(|| err!(Request(NotFound("No earlier PDU's found in room"))))
+	}
+
+	pub(super) async fn next_timeline_count(&self, after: &PduId) -> Result<PduCount> {
+		let after_pdu =
+			Self::pdu_count_to_id(after.shortroomid, after.shorteventid, Direction::Forward);
+
+		let pdu_ids = self
+			.pduid_pdu
+			.keys_raw_from(&after_pdu)
+			.ready_try_take_while(|pdu_id| Ok(pdu_id.is_room_eq(after_pdu)))
+			.ready_and_then(|pdu_id: RawPduId| Ok(pdu_id.pdu_count()));
+
+		pin_mut!(pdu_ids);
+		pdu_ids
+			.try_next()
+			.await
+			.log_err()?
+			.ok_or_else(|| err!(Request(NotFound("No more PDU's found in room"))))
+	}
+
+	fn pdu_count_to_id(
+		shortroomid: ShortRoomId,
+		shorteventid: PduCount,
+		dir: Direction,
+	) -> RawPduId {
+		// +1 so we don't send the base event
+		let pdu_id = PduId {
+			shortroomid,
+			shorteventid: shorteventid.saturating_inc(dir),
+		};
+
+		pdu_id.into()
+	}
+
 	async fn count_to_id(
 		&self,
 		room_id: &RoomId,
@@ -287,13 +337,7 @@ impl Data {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-		// +1 so we don't send the base event
-		let pdu_id = PduId {
-			shortroomid,
-			shorteventid: shorteventid.saturating_inc(dir),
-		};
-
-		Ok(pdu_id.into())
+		Ok(Self::pdu_count_to_id(shortroomid, shorteventid, dir))
 	}
 }
 
