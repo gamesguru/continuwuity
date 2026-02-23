@@ -125,15 +125,18 @@ impl crate::Service for Service {
 					joinset
 				});
 
-		// Periodic federation stats reporter
+		// Periodic federation stats reporter (tracked via JoinSet so it
+		// shuts down together with the sender workers)
 		let stats_self = self.clone();
-		let runtime = self.server.runtime();
-		runtime.spawn(async move {
-			loop {
-				tokio::time::sleep(Duration::from_secs(300)).await;
-				stats_self.stats.report_and_reset();
-			}
-		});
+		senders.spawn_on(
+			async move {
+				loop {
+					tokio::time::sleep(Duration::from_secs(300)).await;
+					stats_self.stats.report_and_reset();
+				}
+			},
+			self.server.runtime(),
+		);
 
 		while let Some(ret) = senders.join_next_with_id().await {
 			match ret {

@@ -118,8 +118,21 @@ pub async fn update_membership(
 			self.mark_as_joined(user_id, room_id);
 		},
 		| MembershipState::Invite => {
+			// Check invite filter before expensive stripped state computation
+			let sender = pdu.sender();
+			if matches!(
+				self.services
+					.users
+					.invite_filter_level(sender, user_id)
+					.await,
+				FilterLevel::Block
+			) {
+				return Err!(Request(InviteBlocked(
+					"{user_id} has blocked invites from {sender}."
+				)));
+			}
 			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
-			self.mark_as_invited(user_id, room_id, pdu.sender(), Some(last_state), None)
+			self.mark_as_invited(user_id, room_id, sender, Some(last_state), None)
 				.await?;
 		},
 		| MembershipState::Leave | MembershipState::Ban => {
