@@ -280,14 +280,12 @@ impl Data {
 
 		let pdu_ids = self
 			.pduid_pdu
-			.rev_stream_from(&before_pdu)
-			.ignore_err()
-			.ready_try_take_while({
-				let before_pdu = before_pdu.clone();
-				move |(pdu_id, _)| Ok(pdu_id.as_ref().starts_with(&before_pdu.as_ref()[..9]))
+			.rev_keys_raw_from(&before_pdu)
+			.ready_try_take_while(move |pdu_bytes: &&[u8]| {
+				Ok(pdu_bytes.starts_with(&before_pdu.as_ref()[..9]))
 			})
-			.ready_and_then(|(pdu_id, _): KeyVal<'_>| {
-				let pdu_id: RawPduId = pdu_id.try_into().expect("pdu_id token is a valid size");
+			.ready_and_then(|pdu_bytes: &[u8]| {
+				let pdu_id = RawPduId::from(pdu_bytes);
 				Ok(pdu_id.pdu_count())
 			});
 
@@ -304,14 +302,12 @@ impl Data {
 
 		let pdu_ids = self
 			.pduid_pdu
-			.stream_from(&after_pdu)
-			.ignore_err()
-			.ready_try_take_while({
-				let after_pdu = after_pdu.clone();
-				move |(pdu_id, _)| Ok(pdu_id.as_ref().starts_with(&after_pdu.as_ref()[..9]))
+			.keys_raw_from(&after_pdu)
+			.ready_try_take_while(move |pdu_bytes: &&[u8]| {
+				Ok(pdu_bytes.starts_with(&after_pdu.as_ref()[..9]))
 			})
-			.ready_and_then(|(pdu_id, _): KeyVal<'_>| {
-				let pdu_id: RawPduId = pdu_id.try_into().expect("pdu_id token is a valid size");
+			.ready_and_then(|pdu_bytes: &[u8]| {
+				let pdu_id = RawPduId::from(pdu_bytes);
 				Ok(pdu_id.pdu_count())
 			});
 

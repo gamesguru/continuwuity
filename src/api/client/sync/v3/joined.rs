@@ -379,6 +379,7 @@ async fn fetch_shortstatehashes(
 	let safe_computed_shortstatehash = async {
 		if let Some(last_sync_count) = last_sync_end_count {
 			let computed = services
+				.rooms
 				.timeline
 				.next_shortstatehash(room_id, PduCount::Normal(last_sync_count))
 				.await;

@@ -18,7 +18,7 @@ use conduwuit_core::{
 	utils::{MutexMap, MutexMapGuard, future::TryExtExt, stream::TryIgnore},
 	warn,
 };
-use futures::{Future, FutureExt, Stream, TryStreamExt, pin_mut};
+use futures::{Future, Stream, TryStreamExt, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId,
 	events::room::encrypted::Relation,

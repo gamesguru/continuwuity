@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{RoomVersion, debug, implement};
+use conduwuit::{RoomVersion, debug};
 use conduwuit_core::{
 	Event, PduEvent, Result, err,
 	result::FlatOk,
@@ -361,14 +361,15 @@ impl Service {
 
 	/// Returns the room's version.
 	#[tracing::instrument(skip(self), level = "debug")]
-	pub fn get_room_version(&self, room_id: &RoomId) -> Result<RoomVersionId> {
-		self.db
-			.get_room_version(room_id)
+	pub async fn get_room_version(&self, room_id: &RoomId) -> Result<RoomVersionId> {
+		self.services
+			.state_accessor
+			.room_state_get_content(room_id, &StateEventType::RoomCreate, "")
+			.await
 			.map(|content: RoomCreateEventContent| content.room_version)
 			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
 	}
 
-	#[implement(Service)]
 	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
 		let event_id: OwnedEventId = self
 			.services
@@ -376,10 +377,14 @@ impl Service {
 			.get_eventid_from_short(shorteventid)
 			.await?;
 		let room_id = self.services.timeline.get_pdu(&event_id).await?.room_id;
-		self.get_room_shortstatehash(&room_id).await
+		self.get_room_shortstatehash(
+			room_id
+				.as_deref()
+				.ok_or_else(|| err!(Database("PDU has no room_id")))?,
+		)
+		.await
 	}
 
-	#[implement(Service)]
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
 		self.db
 			.roomid_shortstatehash
@@ -388,7 +393,6 @@ impl Service {
 			.deserialized()
 	}
 
-	#[implement(Service)]
 	pub fn get_forward_extremities<'a>(
 		&'a self,
 		room_id: &'a RoomId,

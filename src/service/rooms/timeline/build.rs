@@ -45,7 +45,7 @@ pub async fn build_and_append_pdu(
 	if *pdu.kind() == TimelineEventType::RoomRedaction {
 		use RoomVersionId::*;
 		trace!("Running redaction checks for room {room_id}");
-		match self.services.state.get_room_version(&room_id)? {
+		match self.services.state.get_room_version(&room_id).await? {
 			| V1 | V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 => {
 				if let Some(redact_id) = pdu.redacts() {
 					if !self

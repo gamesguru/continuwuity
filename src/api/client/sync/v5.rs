@@ -860,6 +860,7 @@ where
 			.ok();
 
 		let computed_since_shortstatehash = services
+			.rooms
 			.timeline
 			.next_shortstatehash(room_id, PduCount::Normal(globalsince))
 			.await

@@ -277,7 +277,7 @@ where
 		| TimelineEventType::RoomRedaction => {
 			use RoomVersionId::*;
 
-			let room_version_id = self.services.state.get_room_version(room_id)?;
+			let room_version_id = self.services.state.get_room_version(room_id).await?;
 			match room_version_id {
 				| V1 | V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 => {
 					if let Some(redact_id) = pdu.redacts() {
