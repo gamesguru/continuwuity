@@ -113,7 +113,9 @@ pub(crate) async fn get_content_thumbnail_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_thumbnail(&services, &mxc, user, body.timeout_ms, &dim).await?;
+	} = fetch_thumbnail(&services, &mxc, Some(user), body.timeout_ms, &dim).await.map_err(|e| {
+		err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+	})?;
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
@@ -153,7 +155,9 @@ pub(crate) async fn get_content_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_file(&services, &mxc, user, body.timeout_ms, None).await?;
+	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, None).await.map_err(|e| {
+		err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+	})?;
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
@@ -193,7 +197,9 @@ pub(crate) async fn get_content_as_filename_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_file(&services, &mxc, user, body.timeout_ms, Some(&body.filename)).await?;
+	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, Some(&body.filename)).await.map_err(|e| {
+		err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
+	})?;
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
@@ -259,7 +265,7 @@ pub(crate) async fn get_media_preview_route(
 async fn fetch_thumbnail(
 	services: &Services,
 	mxc: &Mxc<'_>,
-	user: &UserId,
+	user: Option<&UserId>,
 	timeout_ms: Duration,
 	dim: &Dim,
 ) -> Result<FileMeta> {
@@ -285,7 +291,7 @@ async fn fetch_thumbnail(
 async fn fetch_file(
 	services: &Services,
 	mxc: &Mxc<'_>,
-	user: &UserId,
+	user: Option<&UserId>,
 	timeout_ms: Duration,
 	filename: Option<&str>,
 ) -> Result<FileMeta> {
@@ -311,7 +317,7 @@ async fn fetch_file(
 async fn fetch_thumbnail_meta(
 	services: &Services,
 	mxc: &Mxc<'_>,
-	user: &UserId,
+	user: Option<&UserId>,
 	timeout_ms: Duration,
 	dim: &Dim,
 ) -> Result<FileMeta> {
@@ -325,14 +331,14 @@ async fn fetch_thumbnail_meta(
 
 	services
 		.media
-		.fetch_remote_thumbnail(mxc, Some(user), None, timeout_ms, dim)
+		.fetch_remote_thumbnail(mxc, user, None, timeout_ms, dim)
 		.await
 }
 
 async fn fetch_file_meta(
 	services: &Services,
 	mxc: &Mxc<'_>,
-	user: &UserId,
+	user: Option<&UserId>,
 	timeout_ms: Duration,
 ) -> Result<FileMeta> {
 	if let Some(filemeta) = services.media.get(mxc).await? {
@@ -345,6 +351,6 @@ async fn fetch_file_meta(
 
 	services
 		.media
-		.fetch_remote_content(mxc, Some(user), None, timeout_ms)
+		.fetch_remote_content(mxc, user, None, timeout_ms)
 		.await
 }
