@@ -43,13 +43,27 @@ where
 	K: AsRef<[u8]> + ?Sized + Debug,
 {
 	let write_options = &self.write_options;
-	self.db
-		.db
-		.delete_cf_opt(&self.cf(), key, write_options)
-		.or_else(or_else)
-		.expect("database remove error");
 
-	if !self.db.corked() {
-		self.db.flush().expect("database flush error");
+	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
+		.try_with(|batch| {
+			// blocking_lock is structurally safe here since TRANSACTION_BATCH
+			// is task_local! and only accessed consecutively within the same
+			// async task. Falling back with try_lock would silently break atomicity.
+			let mut batch_guard = batch.lock().expect("Transaction batch mutex poisoned");
+			let (batch, _closures) = &mut *batch_guard;
+			batch.delete_cf(&self.cf(), key.as_ref());
+		})
+		.is_ok();
+
+	if !appended_to_txn {
+		self.db
+			.db
+			.delete_cf_opt(&self.cf(), key, write_options)
+			.or_else(or_else)
+			.expect("database remove error");
+
+		if !self.db.corked() {
+			self.db.flush().expect("database flush error");
+		}
 	}
 }
