@@ -116,8 +116,12 @@ pub(crate) async fn get_content_thumbnail_route(
 		content_disposition,
 	} = fetch_thumbnail(&services, &mxc, user, body.timeout_ms, &dim).await?;
 
+	let Some(file) = content else {
+		return Err!(Request(NotFound("Media not found.")));
+	};
+
 	Ok(get_content_thumbnail::v1::Response {
-		file: content.expect("entire file contents"),
+		file,
 		content_type: content_type.map(Into::into),
 		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
@@ -162,8 +166,12 @@ pub(crate) async fn get_content_route(
 		| Err(_) => return Err!(Request(Unknown("Unknown error when fetching file."))),
 	};
 
+	let Some(file) = content else {
+		return Err!(Request(NotFound("Media not found.")));
+	};
+
 	Ok(get_content::v1::Response {
-		file: content.expect("entire file contents"),
+		file,
 		content_type: content_type.map(Into::into),
 		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
@@ -209,8 +217,12 @@ pub(crate) async fn get_content_as_filename_route(
 		| Err(_) => return Err!(Request(Unknown("Unknown error when fetching file."))),
 	};
 
+	let Some(file) = content else {
+		return Err!(Request(NotFound("Media not found.")));
+	};
+
 	Ok(get_content_as_filename::v1::Response {
-		file: content.expect("entire file contents"),
+		file,
 		content_type: content_type.map(Into::into),
 		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),

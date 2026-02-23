@@ -26,11 +26,7 @@ use ruma::{
 	DeviceId, RoomId, UserId,
 	api::{
 		Direction,
-		client::{
-			error::ErrorKind,
-			filter::RoomEventFilter,
-			message::{get_message_events, get_message_events_by_timestamp},
-		},
+		client::{error::ErrorKind, filter::RoomEventFilter, message::get_message_events},
 	},
 	events::{
 		AnyStateEvent, StateEventType,
@@ -387,14 +383,4 @@ pub(crate) async fn is_ignored_invite(
 		.users
 		.invite_filter_level(&sender_user, recipient_user)
 		.await == FilterLevel::Ignore
-}
-
-/// # `GET /_matrix/client/v1/rooms/{roomId}/timestamp_to_event`
-///
-/// Get the closest event to a given timestamp.
-pub(crate) async fn get_message_events_by_timestamp_route(
-	State(_services): State<crate::State>,
-	body: Ruma<get_message_events_by_timestamp::v1::Request>,
-) -> Result<get_message_events_by_timestamp::v1::Response> {
-	Err!(Request(NotFound("Endpoint not fully implemented")))
 }
