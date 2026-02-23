@@ -25,7 +25,7 @@ pub mod transaction;
 pub(crate) mod util;
 mod watchers;
 
-use std::{ops::Index, sync::Arc};
+use std::{future::Future, ops::Index, sync::Arc};
 
 use conduwuit::{Result, Server, err};
 
@@ -81,7 +81,7 @@ impl Database {
 	pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
 	where
 		F: FnOnce() -> Fut,
-		Fut: std::future::Future<Output = Result<R>>,
+		Fut: Future<Output = Result<R>>,
 	{
 		use rocksdb::WriteBatchWithTransaction;
 		use tokio::sync::Mutex;
@@ -96,8 +96,8 @@ impl Database {
 		let write_options = map::write_options_default(&self.db);
 		self.db
 			.db
-			.write_opt(&*batch_guard, &write_options)
-			.or_else(util::or_else)?;
+			.write_opt(&batch_guard, &write_options)
+			.or_else(or_else)?;
 		batch_guard.clear();
 
 		Ok(res)
