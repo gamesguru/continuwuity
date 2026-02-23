@@ -43,13 +43,23 @@ where
 	K: AsRef<[u8]> + ?Sized + Debug,
 {
 	let write_options = &self.write_options;
-	self.db
-		.db
-		.delete_cf_opt(&self.cf(), key, write_options)
-		.or_else(or_else)
-		.expect("database remove error");
 
-	if !self.db.corked() {
-		self.db.flush().expect("database flush error");
+	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
+		.try_with(|batch| {
+			let mut batch_guard = batch.try_lock().expect("Failed to lock transaction batch");
+			batch_guard.delete_cf(&self.cf(), key.as_ref());
+		})
+		.is_ok();
+
+	if !appended_to_txn {
+		self.db
+			.db
+			.delete_cf_opt(&self.cf(), key, write_options)
+			.or_else(or_else)
+			.expect("database remove error");
+
+		if !self.db.corked() {
+			self.db.flush().expect("database flush error");
+		}
 	}
 }

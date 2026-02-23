@@ -21,6 +21,7 @@ mod ser;
 mod stream;
 #[cfg(test)]
 mod tests;
+pub mod transaction;
 pub(crate) mod util;
 mod watchers;
 
@@ -74,6 +75,33 @@ impl Database {
 
 	#[inline]
 	pub fn keys(&self) -> impl Iterator<Item = &MapsKey> + Send + '_ { self.maps.keys() }
+
+	/// Executes a block of database operations within an atomic transaction.
+	/// Automatically commits the operations to the database upon completion.
+	pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
+	where
+		F: FnOnce() -> Fut,
+		Fut: std::future::Future<Output = Result<R>>,
+	{
+		use rocksdb::WriteBatchWithTransaction;
+		use tokio::sync::Mutex;
+
+		let batch = Arc::new(Mutex::new(WriteBatchWithTransaction::<false>::default()));
+
+		let res = transaction::TRANSACTION_BATCH
+			.scope(batch.clone(), async { f().await })
+			.await?;
+
+		let mut batch_guard = batch.lock().await;
+		let write_options = map::write_options_default(&self.db);
+		self.db
+			.db
+			.write_opt(&*batch_guard, &write_options)
+			.or_else(util::or_else)?;
+		batch_guard.clear();
+
+		Ok(res)
+	}
 }
 
 impl Index<&str> for Database {
