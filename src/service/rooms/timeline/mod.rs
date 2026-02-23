@@ -18,7 +18,7 @@ use conduwuit_core::{
 	utils::{MutexMap, MutexMapGuard, future::TryExtExt, stream::TryIgnore},
 	warn,
 };
-use futures::{Future, Stream, TryStreamExt, pin_mut};
+use futures::{Future, FutureExt, Stream, TryStreamExt, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId,
 	events::room::encrypted::Relation,
@@ -28,7 +28,9 @@ use serde::Deserialize;
 use self::data::Data;
 pub use self::{create::pdu_fits, data::PdusIterItem};
 use crate::{
-	Dep, account_data, admin, appservice, globals, pusher, rooms, sending, server_keys, users,
+	Dep, account_data, admin, appservice, globals, pusher, rooms,
+	rooms::short::{ShortEventId, ShortRoomId, ShortStateHash},
+	sending, server_keys, users,
 };
 
 // Update Relationships
@@ -293,9 +295,7 @@ impl Service {
 	pub async fn get_event_id_from_pdu_id(&self, pdu_id: &PduId) -> Result<OwnedEventId> {
 		let pdu_id: RawPduId = (*pdu_id).into();
 
-		self.get_pdu_from_id(&pdu_id)
-			.map_ok(|pdu| pdu.event_id)
-			.await
+		self.get_pdu_from_id(&pdu_id).await.map(|pdu| pdu.event_id)
 	}
 
 	/// Checks if pdu exists

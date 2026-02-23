@@ -280,15 +280,21 @@ impl Data {
 
 		let pdu_ids = self
 			.pduid_pdu
-			.rev_keys_raw_from(&before_pdu)
-			.ready_try_take_while(|pdu_id| Ok(pdu_id.is_room_eq(before_pdu)))
-			.ready_and_then(|pdu_id: RawPduId| Ok(pdu_id.pdu_count()));
+			.rev_stream_from(&before_pdu)
+			.ignore_err()
+			.ready_try_take_while({
+				let before_pdu = before_pdu.clone();
+				move |(pdu_id, _)| Ok(pdu_id.as_ref().starts_with(&before_pdu.as_ref()[..9]))
+			})
+			.ready_and_then(|(pdu_id, _): KeyVal<'_>| {
+				let pdu_id: RawPduId = pdu_id.try_into().expect("pdu_id token is a valid size");
+				Ok(pdu_id.pdu_count())
+			});
 
 		pin_mut!(pdu_ids);
 		pdu_ids
 			.try_next()
-			.await
-			.log_err()?
+			.await?
 			.ok_or_else(|| err!(Request(NotFound("No earlier PDU's found in room"))))
 	}
 
@@ -298,15 +304,21 @@ impl Data {
 
 		let pdu_ids = self
 			.pduid_pdu
-			.keys_raw_from(&after_pdu)
-			.ready_try_take_while(|pdu_id| Ok(pdu_id.is_room_eq(after_pdu)))
-			.ready_and_then(|pdu_id: RawPduId| Ok(pdu_id.pdu_count()));
+			.stream_from(&after_pdu)
+			.ignore_err()
+			.ready_try_take_while({
+				let after_pdu = after_pdu.clone();
+				move |(pdu_id, _)| Ok(pdu_id.as_ref().starts_with(&after_pdu.as_ref()[..9]))
+			})
+			.ready_and_then(|(pdu_id, _): KeyVal<'_>| {
+				let pdu_id: RawPduId = pdu_id.try_into().expect("pdu_id token is a valid size");
+				Ok(pdu_id.pdu_count())
+			});
 
 		pin_mut!(pdu_ids);
 		pdu_ids
 			.try_next()
-			.await
-			.log_err()?
+			.await?
 			.ok_or_else(|| err!(Request(NotFound("No more PDU's found in room"))))
 	}
 

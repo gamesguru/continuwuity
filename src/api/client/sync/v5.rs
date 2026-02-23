@@ -852,12 +852,31 @@ where
 			continue;
 		};
 
-		let since_shortstatehash = services
+		let db_since_shortstatehash = services
 			.rooms
 			.user
 			.get_token_shortstatehash(room_id, globalsince)
 			.await
 			.ok();
+
+		let computed_since_shortstatehash = services
+			.timeline
+			.next_shortstatehash(room_id, PduCount::Normal(globalsince))
+			.await
+			.ok();
+
+		if let (Some(db_hash), Some(computed_hash)) =
+			(db_since_shortstatehash, computed_since_shortstatehash)
+		{
+			if db_hash != computed_hash {
+				warn!(
+					"State hash mismatch for room {}! DB={} vs Computed={}",
+					room_id, db_hash, computed_hash
+				);
+			}
+		}
+
+		let since_shortstatehash = db_since_shortstatehash;
 
 		let encrypted_room = services
 			.rooms

@@ -376,8 +376,38 @@ async fn fetch_shortstatehashes(
 		.map(Option::flatten)
 		.map(Ok);
 
-	let (current_shortstatehash, last_sync_end_shortstatehash) =
-		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
+	let safe_computed_shortstatehash = async {
+		if let Some(last_sync_count) = last_sync_end_count {
+			let computed = services
+				.timeline
+				.next_shortstatehash(room_id, PduCount::Normal(last_sync_count))
+				.await;
+
+			return Some(computed);
+		}
+		None
+	};
+
+	let (current_shortstatehash, last_sync_end_shortstatehash_result, computed_result) =
+		try_join3(
+			current_shortstatehash,
+			last_sync_end_shortstatehash,
+			safe_computed_shortstatehash.map(Ok),
+		)
+		.await?;
+
+	if let (Some(db_hash), Some(Ok(computed_hash))) =
+		(last_sync_end_shortstatehash_result, computed_result)
+	{
+		if db_hash != computed_hash {
+			warn!(
+				"State hash mismatch for room {}! DB={} vs Computed={}",
+				room_id, db_hash, computed_hash
+			);
+		}
+	}
+
+	let last_sync_end_shortstatehash = last_sync_end_shortstatehash_result;
 
 	/*
 	associate the `current_count` with the `current_shortstatehash`, so we can
