@@ -524,13 +524,7 @@ async fn takeover(&self, force: bool, room: OwnedRoomOrAliasId) -> Result {
 			},
 		};
 
-		match self
-			.services
-			.rooms
-			.alias
-			.resolve_alias(room_alias, None)
-			.await
-		{
+		match self.services.rooms.alias.resolve_alias(room_alias).await {
 			| Ok((room_id, servers)) => {
 				debug!(
 					?room_id,
@@ -688,13 +682,7 @@ async fn shutdown_room(&self, force: bool, redact: bool, room: OwnedRoomOrAliasI
 			},
 		};
 
-		match self
-			.services
-			.rooms
-			.alias
-			.resolve_alias(room_alias, None)
-			.await
-		{
+		match self.services.rooms.alias.resolve_alias(room_alias).await {
 			| Ok((room_id, servers)) => {
 				debug!(
 					?room_id,
