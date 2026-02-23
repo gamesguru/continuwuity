@@ -182,8 +182,12 @@ pub(crate) async fn get_content_legacy_route(
 					None,
 				);
 
+				let Some(file) = content else {
+					return Err!(Request(NotFound("Media not found.")));
+				};
+
 				Ok(get_content::v3::Response {
-					file: content.expect("entire file contents"),
+					file,
 					content_type: content_type.map(Into::into),
 					content_disposition: Some(content_disposition),
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
@@ -278,8 +282,12 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 					Some(&body.filename),
 				);
 
+				let Some(file) = content else {
+					return Err!(Request(NotFound("Media not found.")));
+				};
+
 				Ok(get_content_as_filename::v3::Response {
-					file: content.expect("entire file contents"),
+					file,
 					content_type: content_type.map(Into::into),
 					content_disposition: Some(content_disposition),
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
@@ -374,8 +382,12 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 					None,
 				);
 
+				let Some(file) = content else {
+					return Err!(Request(NotFound("Media not found.")));
+				};
+
 				Ok(get_content_thumbnail::v3::Response {
-					file: content.expect("entire file contents"),
+					file,
 					content_type: content_type.map(Into::into),
 					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
 					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
