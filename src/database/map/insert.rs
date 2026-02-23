@@ -202,7 +202,12 @@ where
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
 		.try_with(|batch| {
 			let mut batch_guard = batch.try_lock().expect("Failed to lock transaction batch");
-			batch_guard.put_cf(&self.cf(), key.as_ref(), val.as_ref());
+			let (batch, closures) = &mut *batch_guard;
+			batch.put_cf(&self.cf(), key.as_ref(), val.as_ref());
+
+			let watchers = self.watchers.clone();
+			let key_owned = key.as_ref().to_vec();
+			closures.push(Box::new(move || watchers.wake(&key_owned)));
 		})
 		.is_ok();
 
@@ -216,9 +221,9 @@ where
 		if !self.db.corked() {
 			self.db.flush().expect("database flush error");
 		}
+	} else {
+		self.watchers.wake(key.as_ref());
 	}
-
-	self.watchers.wake(key.as_ref());
 }
 
 #[implement(super::Map)]

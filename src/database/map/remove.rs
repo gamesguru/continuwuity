@@ -47,7 +47,8 @@ where
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
 		.try_with(|batch| {
 			let mut batch_guard = batch.try_lock().expect("Failed to lock transaction batch");
-			batch_guard.delete_cf(&self.cf(), key.as_ref());
+			let (batch, _closures) = &mut *batch_guard;
+			batch.delete_cf(&self.cf(), key.as_ref());
 		})
 		.is_ok();
 

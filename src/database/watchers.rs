@@ -2,6 +2,7 @@ use std::{
 	collections::{HashMap, hash_map},
 	future::Future,
 	pin::Pin,
+	sync::Arc,
 };
 
 use conduwuit::SyncRwLock;
@@ -11,7 +12,7 @@ type Watcher = SyncRwLock<HashMap<Vec<u8>, (watch::Sender<()>, watch::Receiver<(
 
 #[derive(Clone, Default)]
 pub(crate) struct Watchers {
-	watchers: Watcher,
+	watchers: Arc<Watcher>,
 }
 
 impl Watchers {

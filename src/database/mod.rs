@@ -86,7 +86,8 @@ impl Database {
 		use rocksdb::WriteBatchWithTransaction;
 		use tokio::sync::Mutex;
 
-		let batch = Arc::new(Mutex::new(WriteBatchWithTransaction::<false>::default()));
+		let batch =
+			Arc::new(Mutex::new((WriteBatchWithTransaction::<false>::default(), Vec::new())));
 
 		let res = transaction::TRANSACTION_BATCH
 			.scope(batch.clone(), async { f().await })
@@ -96,9 +97,13 @@ impl Database {
 		let write_options = map::write_options_default(&self.db);
 		self.db
 			.db
-			.write_opt(&batch_guard, &write_options)
+			.write_opt(&batch_guard.0, &write_options)
 			.or_else(or_else)?;
-		batch_guard.clear();
+		batch_guard.0.clear();
+
+		for wake_closure in batch_guard.1.drain(..) {
+			wake_closure();
+		}
 
 		Ok(res)
 	}
