@@ -1,0 +1,160 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  PROFILE: release-high-perf
+  SKIP_CONFIRM: "1"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+
+      - name: Debug checks
+        run: make vars cpu-info
+
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          GIT_COMMIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: make build
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: conduwuit-${{ matrix.os }}
+          path: target/${{ env.PROFILE }}/conduwuit
+          retention-days: 90
+
+  # Optimized build for VPS
+  build-custom-cpu:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+
+      - name: Debug checks
+        run: make vars cpu-info
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Detect best CPU target
+        id: cpu
+        run: |
+          if grep -q avx512f /proc/cpuinfo 2>/dev/null; then
+            echo "target=skylake-avx512" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=skylake" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Detected target: $(grep target= "$GITHUB_OUTPUT" | cut -d= -f2)"
+
+      - name: Build (${{ steps.cpu.outputs.target }})
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          GIT_COMMIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
+        run: make build
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: conduwuit-${{ steps.cpu.outputs.target }}-ubuntu-22.04
+          path: target/${{ env.PROFILE }}/conduwuit
+          retention-days: 90
+
+  # Runs format, lint, and test
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+          components: clippy, rustfmt
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt --component clippy
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Debug checks
+        run: make vars doctor cpu-info
+      - name: Format
+        run: make format
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
