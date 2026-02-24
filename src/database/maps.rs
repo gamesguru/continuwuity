@@ -176,15 +176,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "roomsynctoken_shortstatehash",
-		file_shape: 3,
-		val_size_hint: Some(8),
-		block_size: 512,
-		compression_level: 3,
-		bottommost_level: Some(6),
-		..descriptor::SEQUENTIAL
-	},
-	Descriptor {
 		name: "roomuserdataid_accountdata",
 		..descriptor::RANDOM_SMALL
 	},

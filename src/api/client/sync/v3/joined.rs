@@ -342,7 +342,7 @@ struct ShortStateHashes {
 #[tracing::instrument(level = "debug", skip_all)]
 async fn fetch_shortstatehashes(
 	services: &Services,
-	SyncContext { last_sync_end_count, current_count, .. }: SyncContext<'_>,
+	SyncContext { last_sync_end_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<ShortStateHashes> {
 	// the room state currently.
@@ -354,23 +354,15 @@ async fn fetch_shortstatehashes(
 		.get_room_shortstatehash(room_id)
 		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
 
-	// the room state as of the end of the last sync.
-	// this will be None if we are doing an initial sync or if we just joined this
-	// room.
+	// the room state as of the end of the last sync, computed statelessly from
+	// the timeline. this will be None if we are doing an initial sync or if
+	// we just joined this room.
 	let last_sync_end_shortstatehash =
 		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
-			// look up the shortstatehash saved by the last sync's call to
-			// `associate_token_shortstatehash`
 			services
 				.rooms
-				.user
-				.get_token_shortstatehash(room_id, last_sync_end_count)
-				.inspect_err(move |_| {
-					debug_warn!(
-						token = last_sync_end_count,
-						"Room has no shortstatehash for this token"
-					);
-				})
+				.timeline
+				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
 				.ok()
 		}))
 		.map(Option::flatten)
@@ -378,20 +370,6 @@ async fn fetch_shortstatehashes(
 
 	let (current_shortstatehash, last_sync_end_shortstatehash) =
 		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
-
-	/*
-	associate the `current_count` with the `current_shortstatehash`, so we can
-	use it on the next sync as the `last_sync_end_shortstatehash`.
-
-	TODO: the table written to by this call grows extremely fast, gaining one new entry for each
-	joined room on _every single sync request_. we need to find a better way to remember the shortstatehash
-	between syncs.
-	*/
-	services
-		.rooms
-		.user
-		.associate_token_shortstatehash(room_id, current_count, current_shortstatehash)
-		.await;
 
 	Ok(ShortStateHashes {
 		current_shortstatehash,

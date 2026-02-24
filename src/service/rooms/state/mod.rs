@@ -370,6 +370,21 @@ impl Service {
 			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
 	}
 
+	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
+		let event_id: OwnedEventId = self
+			.services
+			.short
+			.get_eventid_from_short(shorteventid)
+			.await?;
+		let room_id = self.services.timeline.get_pdu(&event_id).await?.room_id;
+		self.get_room_shortstatehash(
+			room_id
+				.as_deref()
+				.ok_or_else(|| err!(Database("PDU has no room_id")))?,
+		)
+		.await
+	}
+
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
 		self.db
 			.roomid_shortstatehash

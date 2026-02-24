@@ -28,7 +28,9 @@ use serde::Deserialize;
 use self::data::Data;
 pub use self::{create::pdu_fits, data::PdusIterItem};
 use crate::{
-	Dep, account_data, admin, appservice, globals, pusher, rooms, sending, server_keys, users,
+	Dep, account_data, admin, appservice, globals, pusher, rooms,
+	rooms::short::{ShortEventId, ShortRoomId, ShortStateHash},
+	sending, server_keys, users,
 };
 
 // Update Relationships
@@ -207,6 +209,93 @@ impl Service {
 	#[inline]
 	pub async fn get_pdu_json_from_id(&self, pdu_id: &RawPduId) -> Result<CanonicalJsonObject> {
 		self.db.get_pdu_json_from_id(pdu_id).await
+	}
+
+	/// Returns the shortstatehash of the room at the event directly preceding
+	/// the exclusive `before` param. `before` does not have to be a valid
+	/// count or in the room.
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub async fn prev_shortstatehash(
+		&self,
+		room_id: &RoomId,
+		before: PduCount,
+	) -> Result<ShortStateHash> {
+		let shortroomid: ShortRoomId = self
+			.services
+			.short
+			.get_shortroomid(room_id)
+			.await
+			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
+
+		let before_pdu = PduId { shortroomid, shorteventid: before };
+
+		let prev_count = self.db.prev_timeline_count(&before_pdu).await?;
+		let prev_pdu = PduId { shortroomid, shorteventid: prev_count };
+
+		let shorteventid = self.get_shorteventid_from_pdu_id(&prev_pdu).await?;
+
+		self.services.state.get_shortstatehash(shorteventid).await
+	}
+
+	/// Returns the shortstatehash of the room at the event directly following
+	/// the exclusive `after` param. `after` does not have to be a valid count
+	/// or in the room.
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub async fn next_shortstatehash(
+		&self,
+		room_id: &RoomId,
+		after: PduCount,
+	) -> Result<ShortStateHash> {
+		let shortroomid: ShortRoomId = self
+			.services
+			.short
+			.get_shortroomid(room_id)
+			.await
+			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
+
+		let after_pdu = PduId { shortroomid, shorteventid: after };
+
+		let next_count = self.db.next_timeline_count(&after_pdu).await?;
+		let next_pdu = PduId { shortroomid, shorteventid: next_count };
+
+		let shorteventid = self.get_shorteventid_from_pdu_id(&next_pdu).await?;
+
+		self.services.state.get_shortstatehash(shorteventid).await
+	}
+
+	/// Returns the shortstatehash of the room at the event
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub async fn get_shortstatehash(
+		&self,
+		room_id: &RoomId,
+		count: PduCount,
+	) -> Result<ShortStateHash> {
+		let shortroomid: ShortRoomId = self
+			.services
+			.short
+			.get_shortroomid(room_id)
+			.await
+			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
+
+		let pdu_id = PduId { shortroomid, shorteventid: count };
+
+		let shorteventid = self.get_shorteventid_from_pdu_id(&pdu_id).await?;
+
+		self.services.state.get_shortstatehash(shorteventid).await
+	}
+
+	/// Returns the `shorteventid` from the `pdu_id`
+	pub async fn get_shorteventid_from_pdu_id(&self, pdu_id: &PduId) -> Result<ShortEventId> {
+		let event_id = self.get_event_id_from_pdu_id(pdu_id).await?;
+
+		self.services.short.get_shorteventid(&event_id).await
+	}
+
+	/// Returns the `event_id` from the `pdu_id`
+	pub async fn get_event_id_from_pdu_id(&self, pdu_id: &PduId) -> Result<OwnedEventId> {
+		let pdu_id: RawPduId = (*pdu_id).into();
+
+		self.get_pdu_from_id(&pdu_id).await.map(|pdu| pdu.event_id)
 	}
 
 	/// Checks if pdu exists
