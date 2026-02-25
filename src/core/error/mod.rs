@@ -191,7 +191,6 @@ impl Error {
 			| Self::Reqwest(error) => error.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
 			| Self::Conflict(_) => StatusCode::CONFLICT,
 			| Self::Io(error) => response::io_error_code(error.kind()),
-			| Self::Uiaa(_) => StatusCode::UNAUTHORIZED,
 			| _ => StatusCode::INTERNAL_SERVER_ERROR,
 		}
 	}

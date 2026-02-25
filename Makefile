@@ -139,8 +139,10 @@ build:	##H Build with selected profile
 	@echo "Build this profile? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
 	cargo build --features full --locked $(CARGO_FLAGS)
-	@echo "Build finished! Linking '$(PROFILE)' to target/latest"
-	ln -sfn $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
+	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
+	mkdir -p target/latest target/debug
+	ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
+	ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/debug/conduwuit
 
 
 .PHONY: clean
