@@ -1,7 +1,8 @@
 use std::{fmt::Debug, time::Duration};
 
 use conduwuit::{
-	Err, Result, debug_warn, err, implement, utils::content_disposition::make_content_disposition,
+	Err, Result, debug_warn, err, error::Error, implement,
+	utils::content_disposition::make_content_disposition,
 };
 use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue};
 use ruma::{
@@ -9,7 +10,7 @@ use ruma::{
 	api::{
 		OutgoingRequest,
 		client::{
-			error::ErrorKind::{Forbidden, NotFound, Unauthorized, Unknown, Unrecognized},
+			error::ErrorKind::{NotFound, Unrecognized},
 			media,
 		},
 		federation,

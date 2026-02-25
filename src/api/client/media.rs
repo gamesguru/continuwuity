@@ -3,7 +3,7 @@ use std::time::Duration;
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Result, err,
+	Err, Result, debug_warn, err, error,
 	utils::{self, content_disposition::make_content_disposition, math::ruma_from_usize},
 };
 use conduwuit_service::{
@@ -113,11 +113,21 @@ pub(crate) async fn get_content_thumbnail_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_thumbnail(&services, &mxc, Some(user), body.timeout_ms, &dim)
-		.await
-		.map_err(|e| {
-			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-		})?;
+	} = match fetch_thumbnail(&services, &mxc, Some(user), body.timeout_ms, &dim).await {
+		| Ok(meta) => meta,
+		| Err(conduwuit::Error::Io(e)) => match e.kind() {
+			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
+			| std::io::ErrorKind::PermissionDenied => {
+				error!("Permission denied when trying to read file: {e:?}");
+				return Err!(Request(Unknown("Unknown error when fetching file.")));
+			},
+			| _ => return Err!(Request(Unknown("Unknown error when fetching file."))),
+		},
+		| Err(e) => {
+			debug_warn!(%mxc, "Fetching thumbnail failed: {e:?}");
+			return Err!(Request(NotFound("Media not found.")));
+		},
+	};
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
@@ -157,11 +167,21 @@ pub(crate) async fn get_content_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, None)
-		.await
-		.map_err(|e| {
-			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-		})?;
+	} = match fetch_file(&services, &mxc, Some(user), body.timeout_ms, None).await {
+		| Ok(meta) => meta,
+		| Err(conduwuit::Error::Io(e)) => match e.kind() {
+			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
+			| std::io::ErrorKind::PermissionDenied => {
+				error!("Permission denied when trying to read file: {e:?}");
+				return Err!(Request(Unknown("Unknown error when fetching file.")));
+			},
+			| _ => return Err!(Request(Unknown("Unknown error when fetching file."))),
+		},
+		| Err(e) => {
+			debug_warn!(%mxc, "Fetching media failed: {e:?}");
+			return Err!(Request(NotFound("Media not found.")));
+		},
+	};
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
@@ -201,11 +221,21 @@ pub(crate) async fn get_content_as_filename_route(
 		content,
 		content_type,
 		content_disposition,
-	} = fetch_file(&services, &mxc, Some(user), body.timeout_ms, Some(&body.filename))
-		.await
-		.map_err(|e| {
-			err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
-		})?;
+	} = match fetch_file(&services, &mxc, Some(user), body.timeout_ms, Some(&body.filename)).await {
+		| Ok(meta) => meta,
+		| Err(conduwuit::Error::Io(e)) => match e.kind() {
+			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
+			| std::io::ErrorKind::PermissionDenied => {
+				error!("Permission denied when trying to read file: {e:?}");
+				return Err!(Request(Unknown("Unknown error when fetching file.")));
+			},
+			| _ => return Err!(Request(Unknown("Unknown error when fetching file."))),
+		},
+		| Err(e) => {
+			debug_warn!(%mxc, "Fetching media failed: {e:?}");
+			return Err!(Request(NotFound("Media not found.")));
+		},
+	};
 
 	let Some(file) = content else {
 		return Err!(Request(NotFound("Media not found.")));
