@@ -631,7 +631,7 @@ impl Service {
 
 		self.db
 			.userid_lastonetimekeyupdate
-			.insert(user_id, &count.to_be_bytes());
+			.insert(user_id, count.to_be_bytes());
 
 		Ok(())
 	}
@@ -654,7 +654,7 @@ impl Service {
 		let count = self.services.globals.next_count()?;
 		self.db
 			.userid_lastonetimekeyupdate
-			.insert(user_id, &count.to_be_bytes());
+			.insert(user_id, count.to_be_bytes());
 
 		let mut prefix = user_id.as_bytes().to_vec();
 		prefix.push(0xFF);
