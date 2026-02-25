@@ -96,6 +96,7 @@ where
 		// appservices still call APIs like /join like this. so let's just default to
 		// empty object `{}` to copy synapse's behaviour
 		if json_body.is_none()
+			&& request.body.is_empty()
 			&& (request.parts.method == http::Method::POST
 				|| request.parts.method == http::Method::PUT
 				|| request.parts.method == http::Method::DELETE)
