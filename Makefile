@@ -164,7 +164,7 @@ docs:	##H Regenerate docs (admin commands, etc.)
 docker/complement: ##H Build conduwuit image for Complement testing
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
-	PROFILE=dev CARGO_FLAGS="--features direct_tls" $(MAKE) build
+	CARGO_FLAGS="--features direct_tls" $(MAKE) build
 	@echo "Building Complement Docker image..."
 	docker build --no-cache -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
