@@ -11,7 +11,8 @@ allow_guest_registration = true
 allow_public_room_directory_over_federation = true
 allow_registration = true
 database_path = "/var/lib/continuwuity"
-log = "trace,h2=debug,hyper=debug"
+# log = "trace,h2=debug,hyper=debug"
+log = "info"
 port = [8008, 8448]
 trusted_servers = []
 only_query_trusted_key_servers = false

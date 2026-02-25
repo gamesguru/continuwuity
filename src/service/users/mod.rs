@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 use conduwuit::result::LogErr;
 use conduwuit::{
 	Err, Error, Result, Server, at, debug_warn, err, is_equal_to, trace,
-	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
+	utils::{self, ReadyExt, stream::TryIgnore},
 };
 #[cfg(feature = "ldap")]
 use conduwuit_core::{debug, error};
@@ -15,8 +15,8 @@ use futures::{Stream, StreamExt, TryFutureExt};
 #[cfg(feature = "ldap")]
 use ldap3::{LdapConnAsync, Scope, SearchEntry};
 use ruma::{
-	DeviceId, KeyId, MilliSecondsSinceUnixEpoch, OneTimeKeyAlgorithm, OneTimeKeyId,
-	OneTimeKeyName, OwnedDeviceId, OwnedKeyId, OwnedMxcUri, OwnedUserId, RoomId, UInt, UserId,
+	DeviceId, KeyId, MilliSecondsSinceUnixEpoch, OneTimeKeyAlgorithm, OneTimeKeyName,
+	OwnedDeviceId, OwnedKeyId, OwnedMxcUri, OwnedUserId, RoomId, UInt, UserId,
 	api::client::{device::Device, error::ErrorKind, filter::FilterDefinition},
 	encryption::{CrossSigningKey, DeviceKeys, OneTimeKey},
 	events::{
@@ -609,24 +609,29 @@ impl Service {
 			)));
 		}
 
+		let (algorithm, name) = one_time_key_key
+			.as_str()
+			.split_once(':')
+			.expect("KeyId must contain a colon");
+		let count = self.services.globals.next_count()?;
+
 		let mut key = user_id.as_bytes().to_vec();
 		key.push(0xFF);
 		key.extend_from_slice(device_id.as_bytes());
 		key.push(0xFF);
-		// TODO: Use DeviceKeyId::to_string when it's available (and update everything,
-		// because there are no wrapping quotation marks anymore)
-		key.extend_from_slice(
-			serde_json::to_string(one_time_key_key)
-				.expect("DeviceKeyId::to_string always works")
-				.as_bytes(),
-		);
+		key.extend_from_slice(algorithm.as_bytes());
+		key.push(0xFF);
+		key.extend_from_slice(&count.to_be_bytes());
+		key.push(0xFF);
+		key.extend_from_slice(name.as_bytes());
 
 		self.db
 			.onetimekeyid_onetimekeys
 			.raw_put(key, Json(one_time_key_value));
 
-		let count = self.services.globals.next_count().unwrap();
-		self.db.userid_lastonetimekeyupdate.raw_put(user_id, count);
+		self.db
+			.userid_lastonetimekeyupdate
+			.insert(user_id, &count.to_be_bytes());
 
 		Ok(())
 	}
@@ -646,16 +651,17 @@ impl Service {
 		device_id: &DeviceId,
 		key_algorithm: &OneTimeKeyAlgorithm,
 	) -> Result<(OwnedKeyId<OneTimeKeyAlgorithm, OneTimeKeyName>, Raw<OneTimeKey>)> {
-		let count = self.services.globals.next_count()?.to_be_bytes();
-		self.db.userid_lastonetimekeyupdate.insert(user_id, count);
+		let count = self.services.globals.next_count()?;
+		self.db
+			.userid_lastonetimekeyupdate
+			.insert(user_id, &count.to_be_bytes());
 
 		let mut prefix = user_id.as_bytes().to_vec();
 		prefix.push(0xFF);
 		prefix.extend_from_slice(device_id.as_bytes());
 		prefix.push(0xFF);
-		prefix.push(b'"'); // Annoying quotation mark
 		prefix.extend_from_slice(key_algorithm.as_ref().as_bytes());
-		prefix.push(b':');
+		prefix.push(0xFF);
 
 		let one_time_key = self
 			.db
@@ -665,13 +671,18 @@ impl Service {
 			.map(|(key, val)| {
 				self.db.onetimekeyid_onetimekeys.remove(key);
 
-				let key = key
+				let name = key
 					.rsplit(|&b| b == 0xFF)
 					.next()
 					.ok_or_else(|| err!(Database("OneTimeKeyId in db is invalid.")))
 					.unwrap();
 
-				let key = serde_json::from_slice(key)
+				let name = std::str::from_utf8(name)
+					.map_err(|e| err!(Database("OneTimeKey name in db is invalid. {e}")))
+					.unwrap();
+
+				let key_id = format!("{key_algorithm}:{name}")
+					.try_into()
 					.map_err(|e| err!(Database("OneTimeKeyId in db is invalid. {e}")))
 					.unwrap();
 
@@ -679,7 +690,7 @@ impl Service {
 					.map_err(|e| err!(Database("OneTimeKeys in db are invalid. {e}")))
 					.unwrap();
 
-				(key, val)
+				(key_id, val)
 			})
 			.next()
 			.await;
@@ -692,24 +703,23 @@ impl Service {
 		user_id: &UserId,
 		device_id: &DeviceId,
 	) -> BTreeMap<OneTimeKeyAlgorithm, UInt> {
-		type KeyVal<'a> = ((Ignore, Ignore, &'a Unquoted), Ignore);
-
 		let mut algorithm_counts = BTreeMap::<OneTimeKeyAlgorithm, _>::new();
-		let query = (user_id, device_id);
+		let mut prefix = user_id.as_bytes().to_vec();
+		prefix.push(0xFF);
+		prefix.extend_from_slice(device_id.as_bytes());
+		prefix.push(0xFF);
+
 		self.db
 			.onetimekeyid_onetimekeys
-			.stream_prefix(&query)
+			.raw_stream_prefix(&prefix)
 			.ignore_err()
-			.ready_for_each(|((Ignore, Ignore, device_key_id), Ignore): KeyVal<'_>| {
-				let one_time_key_id: &OneTimeKeyId = device_key_id
-					.as_str()
-					.try_into()
-					.expect("Invalid DeviceKeyID in database");
+			.ready_for_each(|(key, _)| {
+				let mut parts = key.split(|&b| b == 0xFF).skip(2);
+				let algorithm = parts.next().expect("Algorithm in OTK key");
+				let algorithm = std::str::from_utf8(algorithm).expect("Valid UTF-8 algorithm");
+				let algorithm: OneTimeKeyAlgorithm = algorithm.into();
 
-				let count: &mut UInt = algorithm_counts
-					.entry(one_time_key_id.algorithm())
-					.or_default();
-
+				let count: &mut UInt = algorithm_counts.entry(algorithm).or_default();
 				*count = count.saturating_add(1_u32.into());
 			})
 			.await;
