@@ -165,8 +165,10 @@ docker/complement: ##H Build conduwuit image for Complement testing
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	CARGO_FLAGS="--features direct_tls" $(MAKE) build
+	@echo "Copying binary for Docker build context..."
+	cp -f $$(readlink -f target/latest/conduwuit) target/conduwuit-complement
 	@echo "Building Complement Docker image..."
-	docker build --no-cache -t continuwuity:complement -f ./docker/complement.Dockerfile .
+	docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Deployment commands
