@@ -327,12 +327,13 @@ pub(crate) async fn register_route(
 			stages: vec![AuthType::RegistrationToken],
 		});
 	} else {
-		if services
-			.registration_tokens
-			.iterate_tokens()
-			.next()
-			.await
-			.is_some()
+		if !open_registration
+			&& services
+				.registration_tokens
+				.iterate_tokens()
+				.next()
+				.await
+				.is_some()
 		{
 			// Registration token required
 			uiaainfo.flows.push(AuthFlow {
