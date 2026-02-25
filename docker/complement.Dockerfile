@@ -1,7 +1,7 @@
 FROM ubuntu:latest
 EXPOSE 8008
 EXPOSE 8448
-RUN apt-get update && apt-get install -y ca-certificates liburing2 curl python3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates liburing2 && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /etc/continuwuity /var/lib/continuwuity /usr/local/bin/
 COPY complement/complement-entrypoint.sh /usr/local/bin/complement-entrypoint.sh
 COPY complement/complement.config.toml /etc/continuwuity/config.toml
