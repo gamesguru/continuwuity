@@ -39,7 +39,7 @@ jobs:
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
 
       - name: Build conduwuit for Complement
-        run: PROFILE=dev SKIP_CONFIRM=1 make build
+        run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
 
       - name: Checkout Complement
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
