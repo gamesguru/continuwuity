@@ -25,7 +25,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
@@ -48,7 +48,7 @@ jobs:
       - name: Debug checks
         run: make vars cpu-info
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
       - name: Build
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -56,7 +56,7 @@ jobs:
         run: make build
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conduwuit-${{ matrix.os }}
           path: target/${{ env.PROFILE }}/conduwuit
@@ -90,7 +90,7 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
@@ -112,12 +112,12 @@ jobs:
           components: clippy, rustfmt
 
       - name: Install nightly rustfmt
-        run: rustup toolchain install nightly --component rustfmt --component clippy
+        run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
 
       - name: Install pre-commit
         run: pip install pre-commit
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
 
       - name: Debug checks
         run: make vars doctor cpu-info
