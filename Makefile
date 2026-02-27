@@ -217,3 +217,17 @@ CONT_SERV ?= conduwuit.service
 .PHONY: restart
 restart:    ##H Restart service (using systemctl)
 	sudo systemctl restart $(CONT_SERV)
+
+# SSH host for remote deploy (e.g. vps151). Configure in .env: VPS_HOST=vps151
+VPS_HOST ?=
+VPS_REMOTE_BIN ?= /usr/local/bin/$(CONTINUWUITY)
+
+.PHONY: deploy
+deploy:	##H Build skylake release, rsync to VPS, and restart service
+	@test "$(VPS_HOST)" || (echo "ERROR: VPS_HOST is not set. Add VPS_HOST=<host> to .env" && exit 1)
+	@$(MAKE) build PROFILE=release-high-perf RUSTFLAGS="-C target-cpu=skylake"
+	@echo "Uploading $(LOCAL_BIN) to $(VPS_HOST):$(VPS_REMOTE_BIN)..."
+	rsync -avz --progress $(LOCAL_BIN) $(VPS_HOST):$(VPS_REMOTE_BIN)
+	@echo "Restarting $(CONT_SERV) on $(VPS_HOST)..."
+	ssh $(VPS_HOST) "sudo systemctl restart $(CONT_SERV)"
+	@echo "Deploy complete."
