@@ -35,7 +35,11 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 
 	let mut event = None;
 
-	let mut low = PduCount::min().into_signed();
+	let Ok((first_count, _)) = services.rooms.timeline.first_item_in_room(room_id).await else {
+		return Err!(Request(NotFound("No events found in this room")));
+	};
+
+	let mut low = first_count.into_signed();
 	let mut high = services
 		.rooms
 		.timeline
