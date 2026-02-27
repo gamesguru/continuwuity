@@ -13,16 +13,16 @@ use conduwuit::{
 	result::FlatOk,
 	trace,
 	utils::{
-		self, shuffle,
-		stream::{IterStream, ReadyExt},
+		self, TryFutureExtExt, shuffle,
+		stream::{BroadbandExt, IterStream, ReadyExt},
 		to_canonical_object,
 	},
 	warn,
 };
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, OwnedRoomId, OwnedServerName, OwnedUserId, RoomId,
-	RoomVersionId, UserId,
+	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedServerName,
+	OwnedUserId, RoomId, RoomVersionId, UserId,
 	api::{
 		client::{
 			error::ErrorKind,
@@ -561,47 +561,66 @@ async fn join_room_by_id_helper_remote(
 
 	info!("Going through send_join response room_state");
 	let cork = services.db.cork_and_flush();
-	let state = send_join_response
+	let state: HashMap<u64, OwnedEventId> = send_join_response
 		.room_state
 		.state
 		.iter()
 		.stream()
-		.then(|pdu| {
-			services
-				.server_keys
-				.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
-				.inspect_err(|e| {
-					debug_warn!("Could not validate send_join response room_state event: {e:?}");
-				})
-				.inspect(|_| debug!("Completed validating send_join response room_state event"))
+		.broad_then({
+			let server_keys = services.server_keys.clone();
+			let room_version_id = room_version_id.clone();
+			move |pdu| {
+				let server_keys = server_keys.clone();
+				let room_version_id = room_version_id.clone();
+				async move {
+					server_keys
+						.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+						.inspect_err(|e| {
+							debug_warn!(
+								"Could not validate send_join response room_state event: {e:?}"
+							);
+						})
+						.inspect(|_| {
+							debug!("Completed validating send_join response room_state event")
+						})
+						.ok()
+						.await
+				}
+			}
 		})
-		.ready_filter_map(Result::ok)
-		.fold(HashMap::new(), |mut state, (event_id, value)| async move {
-			let pdu = match PduEvent::from_id_val(&event_id, value.clone()) {
-				| Ok(pdu) => pdu,
-				| Err(e) => {
-					debug_warn!("Invalid PDU in send_join response: {e:?}: {value:#?}");
-					return state;
-				},
-			};
-			if !pdu_fits(&mut value.clone()) {
-				warn!(
-					"dropping incoming PDU {event_id} in room {room_id} from room join because \
-					 it exceeds 65535 bytes or is otherwise too large."
-				);
-				return state;
-			}
-			services.rooms.outlier.add_pdu_outlier(&event_id, &value);
-			if let Some(state_key) = &pdu.state_key {
-				let shortstatekey = services
-					.rooms
-					.short
-					.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
-					.await;
+		.ready_filter_map(std::convert::identity)
+		.fold(HashMap::new(), {
+			let short = services.rooms.short.clone();
+			let outlier = services.rooms.outlier.clone();
+			move |mut state, (event_id, value): (OwnedEventId, _)| {
+				let short = short.clone();
+				let outlier = outlier.clone();
+				async move {
+					let pdu = match PduEvent::from_id_val(&event_id, value.clone()) {
+						| Ok(pdu) => pdu,
+						| Err(e) => {
+							debug_warn!("Invalid PDU in send_join response: {e:?}: {value:#?}");
+							return state;
+						},
+					};
+					if !pdu_fits(&mut value.clone()) {
+						warn!(
+							"dropping incoming PDU {event_id} in room {room_id} from room join \
+							 because it exceeds 65535 bytes or is otherwise too large."
+						);
+						return state;
+					}
+					outlier.add_pdu_outlier(&event_id, &value);
+					if let Some(state_key) = &pdu.state_key {
+						let shortstatekey = short
+							.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
+							.await;
 
-				state.insert(shortstatekey, pdu.event_id.clone());
+						state.insert(shortstatekey, pdu.event_id.clone());
+					}
+					state
+				}
 			}
-			state
 		})
 		.await;
 
@@ -614,15 +633,27 @@ async fn join_room_by_id_helper_remote(
 		.auth_chain
 		.iter()
 		.stream()
-		.then(|pdu| {
-			services
-				.server_keys
-				.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+		.broad_then({
+			let server_keys = services.server_keys.clone();
+			let room_version_id = room_version_id.clone();
+			move |pdu| {
+				let server_keys = server_keys.clone();
+				let room_version_id = room_version_id.clone();
+				async move {
+					server_keys
+						.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+						.ok()
+						.await
+				}
+			}
 		})
-		.ready_filter_map(Result::ok)
-		.ready_for_each(|(event_id, value)| {
-			trace!(%event_id, "Adding PDU as an outlier from send_join auth_chain");
-			services.rooms.outlier.add_pdu_outlier(&event_id, &value);
+		.ready_filter_map(std::convert::identity)
+		.ready_for_each({
+			let outlier = services.rooms.outlier.clone();
+			move |(event_id, value): (OwnedEventId, _)| {
+				trace!(%event_id, "Adding PDU as an outlier from send_join auth_chain");
+				outlier.add_pdu_outlier(&event_id, &value);
+			}
 		})
 		.await;
 

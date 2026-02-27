@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use conduwuit::{RoomVersion, debug};
 use conduwuit_core::{
 	Event, PduEvent, Result, err, info,
-	result::FlatOk,
 	state_res::{self, StateMap},
 	utils::{
 		IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash,
@@ -13,9 +12,7 @@ use conduwuit_core::{
 	warn,
 };
 use conduwuit_database::{Deserialized, Ignore, Interfix, Map};
-use futures::{
-	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::join_all, pin_mut,
-};
+use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::join_all};
 use ruma::{
 	EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId, UserId,
 	events::{
@@ -102,50 +99,51 @@ impl Service {
 		_statediffremoved: Arc<CompressedState>,
 		state_lock: &RoomMutexGuard,
 	) -> Result {
-		let event_ids = statediffnew
+		self.set_room_state(room_id, shortstatehash, state_lock);
+
+		statediffnew
 			.iter()
 			.stream()
-			.map(|&new| parse_compressed_state_event(new).1)
-			.then(|shorteventid| {
-				self.services
+			.broad_then(|&new| async move {
+				let shorteventid = parse_compressed_state_event(new).1;
+				let event_id = self
+					.services
 					.short
 					.get_eventid_from_short::<Box<_>>(shorteventid)
+					.await
+					.ok()?;
+
+				self.services.timeline.get_pdu(&event_id).await.ok()
 			})
-			.ignore_err();
-
-		pin_mut!(event_ids);
-		while let Some(event_id) = event_ids.next().await {
-			let Ok(pdu) = self.services.timeline.get_pdu(&event_id).await else {
-				continue;
-			};
-
-			match pdu.kind {
-				| TimelineEventType::RoomMember => {
-					let Some(user_id) = pdu.state_key.as_ref().map(UserId::parse).flat_ok()
-					else {
-						continue;
-					};
-
-					self.services
-						.state_cache
-						.update_membership(room_id, user_id, &pdu, false)
-						.await?;
-				},
-				| TimelineEventType::SpaceChild => {
-					self.services
-						.spaces
-						.roomid_spacehierarchy_cache
-						.lock()
-						.await
-						.remove(room_id);
-				},
-				| _ => continue,
-			}
-		}
+			.ready_filter_map(std::convert::identity)
+			.broad_all(|pdu| async move {
+				match pdu.kind {
+					| TimelineEventType::RoomMember => {
+						if let Some(user_id) =
+							pdu.state_key.as_ref().and_then(|k| UserId::parse(k).ok())
+						{
+							_ = self
+								.services
+								.state_cache
+								.update_membership(room_id, &user_id, &pdu, false)
+								.await;
+						}
+					},
+					| TimelineEventType::SpaceChild => {
+						self.services
+							.spaces
+							.roomid_spacehierarchy_cache
+							.lock()
+							.await
+							.remove(room_id);
+					},
+					| _ => {},
+				}
+				true
+			})
+			.await;
 
 		self.services.state_cache.update_joined_count(room_id).await;
-
-		self.set_room_state(room_id, shortstatehash, state_lock);
 
 		Ok(())
 	}
