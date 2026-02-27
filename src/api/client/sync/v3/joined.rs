@@ -377,11 +377,26 @@ async fn fetch_shortstatehashes(
 	let (current_shortstatehash, last_sync_end_shortstatehash) =
 		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
 
-	// For idle rooms where next_shortstatehash returned None (no events after
-	// last_sync_end_count), fall back to current_shortstatehash. The state
-	// hasn't changed so current == last_sync_end.
-	let last_sync_end_shortstatehash = last_sync_end_shortstatehash
-		.or_else(|| last_sync_end_count.map(|_| current_shortstatehash));
+	// the room state as of the end of the last sync. if next_shortstatehash
+	// returned None (no events after last_sync_end_count), we fall back to
+	// current_shortstatehash IF the room actually existed at that count.
+	// if the room is brand new to this sync stream, we keep it as None so
+	// that we correctly trigger an initial state sync.
+	let last_sync_end_shortstatehash = match (last_sync_end_shortstatehash, last_sync_end_count) {
+		| (Some(hash), _) => Some(hash),
+		| (None, Some(last_count)) => {
+			let first_event = services
+				.rooms
+				.timeline
+				.first_item_in_room(room_id)
+				.await
+				.ok();
+			first_event
+				.filter(|(count, _)| *count <= PduCount::Normal(last_count))
+				.map(|_| current_shortstatehash)
+		},
+		| _ => None,
+	};
 
 	debug!(
 		"fetch_shortstatehashes: room={room_id} last_count={last_sync_end_count:?} \
