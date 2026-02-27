@@ -271,7 +271,17 @@ where
 	}
 
 	self.db
-		.increment_notification_counts(room_id, notifies, highlights);
+		.increment_notification_counts(room_id, notifies.clone(), highlights.clone());
+
+	if !notifies.is_empty() || !highlights.is_empty() {
+		conduwuit::debug!(
+			%room_id,
+			notifies = notifies.len(),
+			highlights = highlights.len(),
+			targets = push_target.len(),
+			"push notifications"
+		);
+	}
 
 	match *pdu.kind() {
 		| TimelineEventType::RoomRedaction => {
