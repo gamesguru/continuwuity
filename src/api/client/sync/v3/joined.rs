@@ -371,6 +371,11 @@ async fn fetch_shortstatehashes(
 	let (current_shortstatehash, last_sync_end_shortstatehash) =
 		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
 
+	info!(
+		"fetch_shortstatehashes: room={room_id} last_count={last_sync_end_count:?} \
+		 current={current_shortstatehash} last_end={last_sync_end_shortstatehash:?}",
+	);
+
 	Ok(ShortStateHashes {
 		current_shortstatehash,
 		last_sync_end_shortstatehash,

@@ -255,12 +255,27 @@ impl Service {
 
 		let after_pdu = PduId { shortroomid, shorteventid: after };
 
-		let next_count = self.db.next_timeline_count(&after_pdu).await?;
+		let next_count = self
+			.db
+			.next_timeline_count(&after_pdu)
+			.await
+			.inspect_err(|e| {
+				info!("next_shortstatehash: no next event after {after:?} in {room_id}: {e}")
+			})?;
+		info!("next_shortstatehash: after={after:?} next_count={next_count:?} room={room_id}");
 		let next_pdu = PduId { shortroomid, shorteventid: next_count };
 
-		let shorteventid = self.get_shorteventid_from_pdu_id(&next_pdu).await?;
+		let shorteventid = self
+			.get_shorteventid_from_pdu_id(&next_pdu)
+			.await
+			.inspect_err(|e| {
+				info!("next_shortstatehash: failed to get shorteventid for {next_count:?}: {e}")
+			})?;
+		info!("next_shortstatehash: shorteventid={shorteventid}");
 
-		self.services.state.get_shortstatehash(shorteventid).await
+		let result = self.services.state.get_shortstatehash(shorteventid).await;
+		info!("next_shortstatehash: result={result:?}");
+		result
 	}
 
 	/// Returns the shortstatehash of the room at the event
