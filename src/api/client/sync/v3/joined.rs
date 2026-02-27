@@ -383,7 +383,7 @@ async fn fetch_shortstatehashes(
 	let last_sync_end_shortstatehash = last_sync_end_shortstatehash
 		.or_else(|| last_sync_end_count.map(|_| current_shortstatehash));
 
-	info!(
+	debug!(
 		"fetch_shortstatehashes: room={room_id} last_count={last_sync_end_count:?} \
 		 current={current_shortstatehash} last_end={last_sync_end_shortstatehash:?}",
 	);

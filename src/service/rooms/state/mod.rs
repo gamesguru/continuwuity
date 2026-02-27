@@ -125,7 +125,7 @@ impl Service {
 							_ = self
 								.services
 								.state_cache
-								.update_membership(room_id, &user_id, &pdu, false)
+								.update_membership(room_id, user_id, &pdu, false)
 								.await;
 						}
 					},

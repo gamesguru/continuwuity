@@ -581,7 +581,7 @@ async fn join_room_by_id_helper_remote(
 							);
 						})
 						.inspect(|_| {
-							debug!("Completed validating send_join response room_state event")
+							debug!("Completed validating send_join response room_state event");
 						})
 						.ok()
 						.await
