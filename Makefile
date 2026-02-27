@@ -169,7 +169,7 @@ docs:	##H Regenerate docs (admin commands, etc.)
 # CI artifact OS target. Override with: make download OS_VERSION=ubuntu-22.04
 OS_VERSION ?=
 GH_REPO ?=
-RUN_ID ?=
+RUN ?=
 
 .PHONY: download
 download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
@@ -180,7 +180,7 @@ download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
 	# Checking version of old binary, if it exists
 	@-./target/ci/conduwuit -V
 	@rm -f target/ci/conduwuit
-	gh run download $(RUN_ID) -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
+	gh run download $(RUN) -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
