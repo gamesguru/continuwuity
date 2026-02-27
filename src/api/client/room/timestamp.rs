@@ -32,7 +32,7 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 
 	let mut event = None;
 
-	let mut low = 0_i64;
+	let mut low = PduCount::min().into_signed();
 	let mut high = services
 		.rooms
 		.timeline
@@ -49,8 +49,9 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 		pin_mut!(pdus);
 
 		let mut found_pdu = None;
+		let mut found_count = 0_i64;
 
-		while let Some(Ok((_count, pdu))) = pdus.next().await {
+		while let Some(Ok((count, pdu))) = pdus.next().await {
 			if services
 				.rooms
 				.state_accessor
@@ -58,6 +59,7 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 				.await
 			{
 				found_pdu = Some(pdu);
+				found_count = count.into_signed();
 				break;
 			}
 		}
@@ -70,13 +72,13 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 					event = Some(pdu);
 					high = mid.saturating_sub(1);
 				} else {
-					low = mid.saturating_add(1);
+					low = found_count.saturating_add(1);
 				}
 			} else {
 				// dir == Direction::Backward
 				if pdu_ts <= ts {
 					event = Some(pdu);
-					low = mid.saturating_add(1);
+					low = found_count.saturating_add(1);
 				} else {
 					high = mid.saturating_sub(1);
 				}
