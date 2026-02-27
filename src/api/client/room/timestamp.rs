@@ -15,6 +15,9 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_event_by_timestamp::v1::Request>,
 ) -> Result<get_event_by_timestamp::v1::Response> {
+	// Maximum PDUs to scan per binary search step before giving up on that range.
+	// Bounds worst-case work at O(K * MAX_SCAN) where K = log2(timeline count).
+	const MAX_SCAN_PER_STEP: usize = 64;
 	let room_id = &body.room_id;
 	let ts = body.ts;
 	let dir = body.dir;
@@ -50,8 +53,10 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 
 		let mut found_pdu = None;
 		let mut found_count = 0_i64;
+		let mut scanned = 0_usize;
 
 		while let Some(Ok((count, pdu))) = pdus.next().await {
+			scanned = scanned.saturating_add(1);
 			if services
 				.rooms
 				.state_accessor
@@ -60,6 +65,9 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 			{
 				found_pdu = Some(pdu);
 				found_count = count.into_signed();
+				break;
+			}
+			if scanned >= MAX_SCAN_PER_STEP {
 				break;
 			}
 		}
