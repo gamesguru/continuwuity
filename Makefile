@@ -147,7 +147,7 @@ build:	##H Build with selected profile
 clean:	##H Clean build directory for current profile
 	@echo "Clean the '$(PROFILE)' build directory?"
 	@$(MAKE) _confirm
-	find target -name '*conduwuit*' -exec rm -r {} \;
+	-find target -name '*conduwuit*' -exec rm -r {} \;
 # Old logic, wipes it out too much, results in slow builds
 # 	cargo clean --profile $(PROFILE)
 # 	@echo "Also remove debian build?"
@@ -157,6 +157,8 @@ clean:	##H Clean build directory for current profile
 
 .PHONY: docs
 docs:	##H Regenerate docs (admin commands, etc.)
+	@echo "Regenerate docs with PROFILE='$(PROFILE)'?"
+	@$(MAKE) _confirm
 	cargo run -p xtask --profile $(PROFILE) -- generate-docs
 
 
