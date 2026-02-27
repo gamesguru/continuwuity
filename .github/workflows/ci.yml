@@ -62,35 +62,6 @@ jobs:
           path: target/${{ env.PROFILE }}/conduwuit
           retention-days: 90
 
-  # Optimized build for VPS
-  build-custom-cpu:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            liburing-dev \
-            clang \
-            libclang-dev \
-            llvm-dev
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
-        with:
-          toolchain: "1.90.0"
-
-      - name: Debug checks
-        run: make vars cpu-info
-
-      - uses: Swatinem/rust-cache@v2
-
       - name: Detect best CPU target
         id: cpu
         run: |
@@ -108,10 +79,10 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
         run: make build
 
-      - name: Upload binary
+      - name: Upload binary (${{ steps.cpu.outputs.target }})
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-${{ steps.cpu.outputs.target }}-ubuntu-22.04
+          name: conduwuit-${{ steps.cpu.outputs.target }}-${{ matrix.os }}
           path: target/${{ env.PROFILE }}/conduwuit
           retention-days: 90
 
