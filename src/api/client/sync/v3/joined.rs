@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Result, at, debug_warn, err, extract_variant, info,
+	Result, at, debug, debug_warn, err, extract_variant,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
@@ -378,7 +378,15 @@ async fn fetch_shortstatehashes(
 	let (current_shortstatehash, last_sync_end_shortstatehash) =
 		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
 
-	info!(
+	// If prev_shortstatehash returned None due to a data gap (e.g. the room's
+	// first PDU has no shorteventid_shortstatehash entry because there was no
+	// prior state when it was appended), fall back to current_shortstatehash.
+	// This conservatively treats the room as "state unchanged" rather than
+	// falsely indicating the user just joined.
+	let last_sync_end_shortstatehash = last_sync_end_shortstatehash
+		.or_else(|| last_sync_end_count.map(|_| current_shortstatehash));
+
+	debug!(
 		"fetch_shortstatehashes: room={room_id} last_count={last_sync_end_count:?} \
 		 current={current_shortstatehash} last_end={last_sync_end_shortstatehash:?}",
 	);
