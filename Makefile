@@ -140,7 +140,7 @@ build:	##H Build with selected profile
 	@$(MAKE) _confirm
 	cargo build --features full --locked $(CARGO_FLAGS)
 	@echo "Build finished! Linking '$(PROFILE)' to target/latest"
-	ln -sfn $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
+	ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
 
 
 .PHONY: clean
@@ -184,7 +184,7 @@ download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
-	@ln -sfn ci target/latest
+	@ln -sfnT ci target/latest
 
 .PHONY: download-list
 download-list:	##H List recent CI runs
@@ -238,5 +238,5 @@ deploy:	##H Build skylake release, rsync to VPS, and restart service
 	@echo "Uploading $(LOCAL_BIN) to $(VPS_HOST):$(VPS_REMOTE_BIN)..."
 	rsync -avz --progress $(LOCAL_BIN) $(VPS_HOST):$(VPS_REMOTE_BIN)
 	@echo "Restarting $(CONT_SERV) on $(VPS_HOST)..."
-	ssh $(VPS_HOST) "sudo systemctl restart $(CONT_SERV)"
+	ssh -t $(VPS_HOST) "sudo systemctl restart $(CONT_SERV)"
 	@echo "Deploy complete."
