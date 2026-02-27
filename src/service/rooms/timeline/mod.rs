@@ -16,7 +16,7 @@ use conduwuit_core::{
 		pdu::{PduCount, PduEvent},
 	},
 	utils::{MutexMap, MutexMapGuard, future::TryExtExt, stream::TryIgnore},
-	warn,
+	warn, info,
 };
 use futures::{Future, Stream, TryStreamExt, pin_mut};
 use ruma::{

@@ -10,7 +10,7 @@ use conduwuit_core::{
 		IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash,
 		stream::{BroadbandExt, TryIgnore},
 	},
-	warn,
+	warn, info,
 };
 use conduwuit_database::{Deserialized, Ignore, Interfix, Map};
 use futures::{
