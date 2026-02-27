@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Result, at, debug, debug_warn, err, extract_variant,
+	Result, at, debug, debug_warn, err, extract_variant, info,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
@@ -615,7 +615,11 @@ async fn check_joined_since_last_sync(
 		});
 
 	if joined_since_last_sync {
-		trace!("user joined since last sync");
+		info!(
+			"user joined since last sync: \
+			 last_sync_end_shortstatehash={last_sync_end_shortstatehash:?}, \
+			 membership={membership_during_previous_sync:?}"
+		);
 	}
 
 	Ok(joined_since_last_sync)
