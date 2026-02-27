@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Result, at, debug_warn, err, extract_variant,
+	Result, at, debug_warn, err, extract_variant, info,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
@@ -356,13 +356,20 @@ async fn fetch_shortstatehashes(
 
 	// the room state as of the end of the last sync, computed statelessly from
 	// the timeline. this will be None if we are doing an initial sync or if
-	// we just joined this room.
+	// we just joined this room (in which case there are no events in this room
+	// at or before last_sync_end_count).
 	let last_sync_end_shortstatehash =
 		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
 			services
 				.rooms
 				.timeline
-				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
+				// prev_shortstatehash(N+1) returns the state of the most recent PDU
+				// at or before N — the room state at end of last sync — and succeeds
+				// even for idle rooms (no events after last_sync_end_count).
+				.prev_shortstatehash(
+					room_id,
+					PduCount::Normal(last_sync_end_count.saturating_add(1)),
+				)
 				.ok()
 		}))
 		.map(Option::flatten)

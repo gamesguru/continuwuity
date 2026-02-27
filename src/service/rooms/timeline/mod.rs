@@ -10,13 +10,13 @@ use std::{fmt::Write, sync::Arc};
 use async_trait::async_trait;
 pub use conduwuit_core::matrix::pdu::{PduId, RawPduId};
 use conduwuit_core::{
-	Result, Server, at, err,
+	Result, Server, at, err, info,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduEvent},
 	},
 	utils::{MutexMap, MutexMapGuard, future::TryExtExt, stream::TryIgnore},
-	warn, info,
+	warn,
 };
 use futures::{Future, Stream, TryStreamExt, pin_mut};
 use ruma::{
@@ -260,7 +260,7 @@ impl Service {
 			.next_timeline_count(&after_pdu)
 			.await
 			.inspect_err(|e| {
-				info!("next_shortstatehash: no next event after {after:?} in {room_id}: {e}")
+				info!("next_shortstatehash: no next event after {after:?} in {room_id}: {e}");
 			})?;
 		info!("next_shortstatehash: after={after:?} next_count={next_count:?} room={room_id}");
 		let next_pdu = PduId { shortroomid, shorteventid: next_count };
@@ -269,7 +269,7 @@ impl Service {
 			.get_shorteventid_from_pdu_id(&next_pdu)
 			.await
 			.inspect_err(|e| {
-				info!("next_shortstatehash: failed to get shorteventid for {next_count:?}: {e}")
+				info!("next_shortstatehash: failed to get shorteventid for {next_count:?}: {e}");
 			})?;
 		info!("next_shortstatehash: shorteventid={shorteventid}");
 

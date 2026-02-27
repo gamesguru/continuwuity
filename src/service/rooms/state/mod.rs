@@ -3,14 +3,14 @@ use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 use async_trait::async_trait;
 use conduwuit::{RoomVersion, debug};
 use conduwuit_core::{
-	Event, PduEvent, Result, err,
+	Event, PduEvent, Result, err, info,
 	result::FlatOk,
 	state_res::{self, StateMap},
 	utils::{
 		IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash,
 		stream::{BroadbandExt, TryIgnore},
 	},
-	warn, info,
+	warn,
 };
 use conduwuit_database::{Deserialized, Ignore, Interfix, Map};
 use futures::{
