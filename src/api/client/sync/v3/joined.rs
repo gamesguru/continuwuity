@@ -352,7 +352,10 @@ async fn fetch_shortstatehashes(
 		.rooms
 		.state
 		.get_room_shortstatehash(room_id)
-		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
+		.inspect_err(|e| {
+			debug!(%room_id, "Room has no current state: {e}");
+		})
+		.map_err(|_| err!(Database(info!("Room {room_id} has no state"))));
 
 	// the room state as of the end of the last sync, computed statelessly from
 	// the timeline. shorteventid_shortstatehash maps each event to the state
@@ -380,7 +383,7 @@ async fn fetch_shortstatehashes(
 	let last_sync_end_shortstatehash = last_sync_end_shortstatehash
 		.or_else(|| last_sync_end_count.map(|_| current_shortstatehash));
 
-	debug!(
+	info!(
 		"fetch_shortstatehashes: room={room_id} last_count={last_sync_end_count:?} \
 		 current={current_shortstatehash} last_end={last_sync_end_shortstatehash:?}",
 	);
@@ -609,10 +612,9 @@ async fn check_joined_since_last_sync(
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
 	// the root cause of this needs to be addressed
-	let joined_since_last_sync =
-		membership_during_previous_sync.is_none_or(|content: RoomMemberEventContent| {
-			content.membership != MembershipState::Join
-		});
+	let joined_since_last_sync = membership_during_previous_sync.as_ref().is_none_or(
+		|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
+	);
 
 	if joined_since_last_sync {
 		info!(

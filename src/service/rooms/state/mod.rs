@@ -373,12 +373,15 @@ impl Service {
 	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
 		const KEY_LEN: usize = size_of::<ShortEventId>();
 
-		self.db
+		let result = self
+			.db
 			.shorteventid_shortstatehash
 			.aqry::<KEY_LEN, _>(&shorteventid)
 			.await
-			.deserialized()
-			.inspect_err(|e| info!("get_shortstatehash: shorteventid={shorteventid} {e}"))
+			.deserialized();
+
+		info!("get_shortstatehash: shorteventid={shorteventid} result={result:?}");
+		result
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
