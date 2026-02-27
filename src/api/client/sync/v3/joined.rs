@@ -355,21 +355,17 @@ async fn fetch_shortstatehashes(
 		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
 
 	// the room state as of the end of the last sync, computed statelessly from
-	// the timeline. this will be None if we are doing an initial sync or if
-	// we just joined this room (in which case there are no events in this room
-	// at or before last_sync_end_count).
+	// the timeline. shorteventid_shortstatehash maps each event to the state
+	// BEFORE that event, so next_shortstatehash(N) finds the first event after N
+	// and returns its pre-state = the correct post-state at count N.
+	// For idle rooms (no events after N), it fails and we fall back to
+	// current_shortstatehash since the state hasn't changed.
 	let last_sync_end_shortstatehash =
 		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
 			services
 				.rooms
 				.timeline
-				// prev_shortstatehash(N+1) returns the state of the most recent PDU
-				// at or before N — the room state at end of last sync — and succeeds
-				// even for idle rooms (no events after last_sync_end_count).
-				.prev_shortstatehash(
-					room_id,
-					PduCount::Normal(last_sync_end_count.saturating_add(1)),
-				)
+				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
 				.ok()
 		}))
 		.map(Option::flatten)
@@ -378,11 +374,9 @@ async fn fetch_shortstatehashes(
 	let (current_shortstatehash, last_sync_end_shortstatehash) =
 		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
 
-	// If prev_shortstatehash returned None due to a data gap (e.g. the room's
-	// first PDU has no shorteventid_shortstatehash entry because there was no
-	// prior state when it was appended), fall back to current_shortstatehash.
-	// This conservatively treats the room as "state unchanged" rather than
-	// falsely indicating the user just joined.
+	// For idle rooms where next_shortstatehash returned None (no events after
+	// last_sync_end_count), fall back to current_shortstatehash. The state
+	// hasn't changed so current == last_sync_end.
 	let last_sync_end_shortstatehash = last_sync_end_shortstatehash
 		.or_else(|| last_sync_end_count.map(|_| current_shortstatehash));
 

@@ -10,7 +10,7 @@ use std::{fmt::Write, sync::Arc};
 use async_trait::async_trait;
 pub use conduwuit_core::matrix::pdu::{PduId, RawPduId};
 use conduwuit_core::{
-	Result, Server, at, err, info,
+	Result, Server, at, debug, err, info,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduEvent},
@@ -260,7 +260,7 @@ impl Service {
 			.next_timeline_count(&after_pdu)
 			.await
 			.inspect_err(|e| {
-				info!("next_shortstatehash: no next event after {after:?} in {room_id}: {e}");
+				debug!("next_shortstatehash: no next event after {after:?} in {room_id}: {e}");
 			})?;
 		info!("next_shortstatehash: after={after:?} next_count={next_count:?} room={room_id}");
 		let next_pdu = PduId { shortroomid, shorteventid: next_count };
