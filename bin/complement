@@ -48,7 +48,8 @@ set +o pipefail
 env \
     -C "$COMPLEMENT_SRC" \
     COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-    go test -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h -json ./tests/... | tee "$LOG_FILE"
+    gotestsum --format testname --jsonfile "$LOG_FILE" -- \
+        -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/...
 set -o pipefail
 
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results

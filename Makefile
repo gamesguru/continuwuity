@@ -140,7 +140,11 @@ build:	##H Build with selected profile
 	@$(MAKE) _confirm
 	cargo build --features full --locked $(CARGO_FLAGS)
 	@echo "Build finished! Linking '$(PROFILE)' to target/latest"
-	ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
+	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
+	mkdir -p target/latest target/debug
+	# ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
+	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
+	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/debug/conduwuit
 
 
 .PHONY: clean
@@ -161,6 +165,14 @@ docs:	##H Regenerate docs (admin commands, etc.)
 	@$(MAKE) _confirm
 	cargo run -p xtask --profile $(PROFILE) -- generate-docs
 
+
+.PHONY: docker/complement
+docker/complement: ##H Build conduwuit image for Complement testing
+	@echo "Building conduwuit binary with direct_tls feature for Complement..."
+	@$(MAKE) _confirm
+	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
+	@echo "Building Complement Docker image..."
+	docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Deployment commands
