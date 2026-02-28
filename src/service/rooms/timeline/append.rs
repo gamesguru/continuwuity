@@ -258,6 +258,7 @@ where
 			highlights.push(user.clone());
 		}
 
+		// TODO: replace with future
 		self.services
 			.pusher
 			.get_pushkeys(user)
@@ -265,7 +266,7 @@ where
 				self.services
 					.sending
 					.send_pdu_push(&pdu_id, user, push_key.to_owned())
-					.expect("TODO: replace with future");
+					.ok();
 			})
 			.await;
 	}
