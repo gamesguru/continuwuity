@@ -232,6 +232,26 @@ impl Service {
 		self.db.get_pdu_json_from_id(pdu_id).await
 	}
 
+	pub fn multi_get_pdu_ids<'a, S>(
+		&'a self,
+		event_ids: S,
+	) -> impl Stream<Item = Result<RawPduId>> + Send + 'a
+	where
+		S: Stream<Item = OwnedEventId> + Send + 'a,
+	{
+		self.db.multi_get_pdu_ids(event_ids)
+	}
+
+	pub fn multi_get_pdus<'a, S>(
+		&'a self,
+		pdu_ids: S,
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a
+	where
+		S: Stream<Item = RawPduId> + Send + 'a,
+	{
+		self.db.multi_get_pdus(pdu_ids)
+	}
+
 	/// Returns the shortstatehash of the room at the event directly preceding
 	/// the exclusive `before` param. `before` does not have to be a valid
 	/// count or in the room.

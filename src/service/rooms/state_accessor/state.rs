@@ -6,7 +6,7 @@ use conduwuit::{
 	pair_of,
 	utils::{
 		result::FlatOk,
-		stream::{BroadbandExt, IterStream, ReadyExt, TryIgnore},
+		stream::{IterStream, ReadyExt, TryIgnore},
 	},
 };
 use database::Deserialized;
@@ -329,13 +329,22 @@ pub fn state_full_pdus(
 		.ignore_err()
 		.map(at!(1));
 
-	self.services
+	let event_ids = self
+		.services
 		.short
 		.multi_get_eventid_from_short(short_ids)
+		.ready_filter_map(Result::ok);
+
+	let pdu_ids = self
+		.services
+		.timeline
+		.multi_get_pdu_ids(event_ids)
+		.ready_filter_map(Result::ok);
+
+	self.services
+		.timeline
+		.multi_get_pdus(pdu_ids)
 		.ready_filter_map(Result::ok)
-		.broad_filter_map(move |event_id: OwnedEventId| async move {
-			self.services.timeline.get_pdu(&event_id).await.ok()
-		})
 }
 
 /// Builds a StateMap by iterating over all keys that start

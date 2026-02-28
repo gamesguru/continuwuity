@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{RoomVersion, debug, debug_info};
+use conduwuit::{RoomVersion, debug};
 use conduwuit_core::{
 	Event, PduEvent, Result, err,
 	state_res::{self, StateMap},
@@ -371,15 +371,11 @@ impl Service {
 	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
 		const KEY_LEN: usize = size_of::<ShortEventId>();
 
-		let result = self
-			.db
+		self.db
 			.shorteventid_shortstatehash
 			.aqry::<KEY_LEN, _>(&shorteventid)
 			.await
-			.deserialized();
-
-		debug_info!("get_shortstatehash: shorteventid={shorteventid} result={result:?}");
-		result
+			.deserialized()
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {

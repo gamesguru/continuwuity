@@ -5,9 +5,11 @@ use conduwuit::{
 	result::NotFound,
 	utils::{self, stream::TryReadyExt},
 };
-use database::{Database, Deserialized, Json, KeyVal, Map};
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
-use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, api::Direction};
+use database::{Database, Deserialized, Get, Json, KeyVal, Map};
+use futures::{
+	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::select_ok, pin_mut,
+};
+use ruma::{CanonicalJsonObject, EventId, OwnedEventId, OwnedUserId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
@@ -114,6 +116,28 @@ impl Data {
 		let pduid = self.get_pdu_id(event_id).await?;
 
 		self.pduid_pdu.get(&pduid).await.deserialized()
+	}
+
+	pub(super) fn multi_get_pdu_ids<'a, S>(
+		&'a self,
+		event_ids: S,
+	) -> impl Stream<Item = Result<RawPduId>> + Send + 'a
+	where
+		S: Stream<Item = OwnedEventId> + Send + 'a,
+	{
+		event_ids
+			.get(&self.eventid_pduid)
+			.map(|handle| handle.map(|h| RawPduId::from(&*h)))
+	}
+
+	pub(super) fn multi_get_pdus<'a, S>(
+		&'a self,
+		pdu_ids: S,
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a
+	where
+		S: Stream<Item = RawPduId> + Send + 'a,
+	{
+		pdu_ids.get(&self.pduid_pdu).map(Deserialized::deserialized)
 	}
 
 	/// Like get_non_outlier_pdu(), but without the expense of fetching and
