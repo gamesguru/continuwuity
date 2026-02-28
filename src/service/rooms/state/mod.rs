@@ -1,9 +1,9 @@
 use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{RoomVersion, debug};
+use conduwuit::{RoomVersion, debug, debug_info};
 use conduwuit_core::{
-	Event, PduEvent, Result, err, info,
+	Event, PduEvent, Result, err,
 	state_res::{self, StateMap},
 	utils::{
 		IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash,
@@ -378,7 +378,7 @@ impl Service {
 			.await
 			.deserialized();
 
-		info!("get_shortstatehash: shorteventid={shorteventid} result={result:?}");
+		debug_info!("get_shortstatehash: shorteventid={shorteventid} result={result:?}");
 		result
 	}
 

@@ -394,12 +394,12 @@ async fn fetch_shortstatehashes(
 			} else {
 				info!(
 					%room_id, ?count, ?last_count,
-					"fetch_shortstatehashes: first event is after last sync"
+					"fetch_shortstatehashes: first event is after last sync (room joined since then?)"
 				);
 				None
 			}
 		} else {
-			info!(%room_id, "fetch_shortstatehashes: no first event found");
+			info!(%room_id, ?last_count, "fetch_shortstatehashes: no first event found (empty room?)");
 			None
 		}
 	} else {
