@@ -195,6 +195,7 @@ pub async fn handle_incoming_pdu<'a>(
 		}
 		info!(
 			%origin,
+			%room_id,
 			"Dropping inbound PDU for room we aren't participating in"
 		);
 		return Err!(Request(NotFound("This server is not participating in that room.")));

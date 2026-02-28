@@ -97,7 +97,7 @@ features = [
 ]
 
 [workspace.dependencies.axum-extra]
-version = "0.10.1"
+version = "0.12.0"
 default-features = false
 features = ["typed-header", "tracing"]
 
@@ -730,6 +730,18 @@ incremental = true
 #	'-Clink-arg=-Wl,-z,keep-text-section-prefix',
 #	'-Clink-arg=-Wl,-z,lazy',
 #]
+
+# Dev/testing build with fast compile time, decent runtime performance.
+# Here, "quick" refers to compile time, not runtime speed.
+# NOTE: for smaller binaries on disk, put: strip = "symbols"
+[profile.dev-quick]
+inherits = "dev"
+opt-level = 1
+debug = 0
+strip = "none"
+lto = "off"
+codegen-units = 16
+incremental = true
 
 [profile.dev.package.conduwuit_core]
 inherits = "dev"

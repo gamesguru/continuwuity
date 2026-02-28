@@ -4,10 +4,7 @@ mod presence;
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use conduwuit::{
-	Error, Result, Server, checked, debug, debug_warn, error, result::LogErr, trace,
-};
-use database::Database;
+use conduwuit::{Error, Result, Server, checked, debug, error, result::LogErr};
 use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
 use loole::{Receiver, Sender};
 use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
@@ -27,7 +24,6 @@ pub struct Service {
 
 struct Services {
 	server: Arc<Server>,
-	db: Arc<Database>,
 	globals: Dep<globals::Service>,
 	users: Dep<users::Service>,
 }
@@ -48,7 +44,6 @@ impl crate::Service for Service {
 			db: Data::new(&args),
 			services: Services {
 				server: args.server.clone(),
-				db: args.db.clone(),
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
 			},
@@ -175,53 +170,11 @@ impl Service {
 		self.db.remove_presence(user_id).await;
 	}
 
+	/// Clear all presence records from the database.
+	pub async fn clear_presence(&self) { self.db.clear().await; }
+
 	// Unset online/unavailable presence to offline on startup
-	pub async fn unset_all_presence(&self) {
-		let _cork = self.services.db.cork();
-
-		for user_id in &self
-			.services
-			.users
-			.list_local_users()
-			.map(ToOwned::to_owned)
-			.collect::<Vec<OwnedUserId>>()
-			.await
-		{
-			let presence = self.db.get_presence(user_id).await;
-
-			let presence = match presence {
-				| Ok((_, ref presence)) => &presence.content,
-				| _ => continue,
-			};
-
-			if !matches!(
-				presence.presence,
-				PresenceState::Unavailable | PresenceState::Online | PresenceState::Busy
-			) {
-				trace!(%user_id, ?presence, "Skipping user");
-				continue;
-			}
-
-			trace!(%user_id, ?presence, "Resetting presence to offline");
-
-			_ = self
-				.set_presence(
-					user_id,
-					&PresenceState::Offline,
-					Some(false),
-					presence.last_active_ago,
-					presence.status_msg.clone(),
-				)
-				.await
-				.inspect_err(|e| {
-					debug_warn!(
-						?presence,
-						"{user_id} has invalid presence in database and failed to reset it to \
-						 offline: {e}"
-					);
-				});
-		}
-	}
+	pub async fn unset_all_presence(&self) { self.db.clear().await; }
 
 	/// Returns the most recent presence updates that happened after the event
 	/// with id `since`.
