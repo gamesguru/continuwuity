@@ -94,7 +94,8 @@ where
 			self.handle_response::<T>(dest, actual, &method, &url, response)
 				.await,
 		| Err(error) =>
-			Err(handle_error(actual, &method, &url, error).expect_err("always returns error")),
+			Err(handle_error(dest, actual, &method, &url, error)
+				.expect_err("always returns error")),
 	}
 }
 
@@ -189,15 +190,25 @@ async fn into_http_response(
 }
 
 fn handle_error(
+	dest: &ServerName,
 	actual: &ActualDest,
 	method: &Method,
 	url: &Url,
 	mut e: reqwest::Error,
 ) -> Result {
-	if e.is_timeout() || e.is_connect() {
+	if e.is_timeout() {
 		e = e.without_url();
-		debug_warn!("{e:?}");
-	} else if e.is_redirect() {
+		debug_warn!(dest = ?dest, "{e:?}");
+		return Err(Error::FederationTimeout(dest.to_owned()));
+	}
+
+	if e.is_connect() {
+		e = e.without_url();
+		debug_warn!(dest = ?dest, "{e:?}");
+		return Err(Error::FederationConnection(dest.to_owned()));
+	}
+
+	if e.is_redirect() {
 		debug_error!(
 			%method,
 			%url,
