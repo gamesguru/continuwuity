@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Result, at, debug, debug_warn, err, extract_variant, info,
+	Error, Result, at, debug, debug_warn, err, extract_variant, info,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
@@ -363,40 +363,55 @@ async fn fetch_shortstatehashes(
 	// and returns its pre-state = the correct post-state at count N.
 	// For idle rooms (no events after N), it fails and we fall back to
 	// current_shortstatehash since the state hasn't changed.
-	let last_sync_end_shortstatehash =
-		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
-			services
-				.rooms
-				.timeline
-				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
-				.ok()
-		}))
-		.map(Option::flatten)
-		.map(Ok);
+	let next_hash = OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
+		services
+			.rooms
+			.timeline
+			.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
+			.ok()
+	}))
+	.map(|o| Ok::<_, Error>(o.flatten()));
 
-	let (current_shortstatehash, last_sync_end_shortstatehash) =
-		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
+	let (current_shortstatehash, next_hash) = try_join(current_shortstatehash, next_hash).await?;
 
 	// the room state as of the end of the last sync. if next_shortstatehash
 	// returned None (no events after last_sync_end_count), we fall back to
 	// current_shortstatehash IF the room actually existed at that count.
 	// if the room is brand new to this sync stream, we keep it as None so
 	// that we correctly trigger an initial state sync.
-	let last_sync_end_shortstatehash = match (last_sync_end_shortstatehash, last_sync_end_count) {
-		| (Some(hash), _) => Some(hash),
-		| (None, Some(last_count)) => {
-			let first_event = services
-				.rooms
-				.timeline
-				.first_item_in_room(room_id)
-				.await
-				.ok();
-			first_event
-				.filter(|(count, _)| *count <= PduCount::Normal(last_count))
-				.map(|_| current_shortstatehash)
-		},
-		| _ => None,
+	let last_sync_end_shortstatehash = if let Some(hash) = next_hash {
+		Some(hash)
+	} else if let Some(last_count) = last_sync_end_count {
+		let first_event = services
+			.rooms
+			.timeline
+			.first_item_in_room(room_id)
+			.await
+			.ok();
+		if let Some((count, _)) = first_event {
+			if count <= PduCount::Normal(last_count) {
+				Some(current_shortstatehash)
+			} else {
+				info!(
+					%room_id, ?count, ?last_count,
+					"fetch_shortstatehashes: first event is after last sync"
+				);
+				None
+			}
+		} else {
+			info!(%room_id, "fetch_shortstatehashes: no first event found");
+			None
+		}
+	} else {
+		None
 	};
+
+	if last_sync_end_count.is_some() && last_sync_end_shortstatehash.is_none() {
+		info!(
+			%room_id, ?last_sync_end_count, ?next_hash,
+			"fetch_shortstatehashes: failed to derive last_sync_end_shortstatehash"
+		);
+	}
 
 	debug!(
 		"fetch_shortstatehashes: room={room_id} last_count={last_sync_end_count:?} \

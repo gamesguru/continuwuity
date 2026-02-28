@@ -16,7 +16,8 @@ use conduwuit_core::{
 		pdu::{PduCount, PduEvent},
 	},
 	utils::{
-		MutexMap, MutexMapGuard, future::TryExtExt, math::usize_from_f64, stream::TryIgnore,
+		MutexMap, MutexMapGuard, bytes, future::TryExtExt, math::usize_from_f64,
+		stream::TryIgnore,
 	},
 	warn,
 };
@@ -134,11 +135,20 @@ impl crate::Service for Service {
 	}
 
 	async fn memory_usage(&self, out: &mut (dyn Write + Send)) -> Result {
+		let cache_len = self.next_shortstatehash_cache.lock().len();
+		let cache_bytes = cache_len.saturating_mul(
+			size_of::<(ShortRoomId, PduCount)>().saturating_add(size_of::<ShortStateHash>()),
+		);
+		let bytes = bytes::pretty(cache_bytes);
+		writeln!(out, "next_shortstatehash_cache: {cache_len} ({bytes})")?;
+
 		let mutex_insert = self.mutex_insert.len();
 		writeln!(out, "insert_mutex: {mutex_insert}")?;
 
 		Ok(())
 	}
+
+	async fn clear_cache(&self) { self.next_shortstatehash_cache.lock().clear(); }
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
