@@ -174,6 +174,7 @@ docker/complement: ##H Build conduwuit image for Complement testing
 	@echo "Building Complement Docker image..."
 	docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Deployment commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -184,7 +185,7 @@ GH_REPO ?=
 RUN ?=
 
 .PHONY: download
-download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
+download:	##H Download CI binary (use RUN=... to pick a specific run)
 	# Testing whether OS_VERSION and GH_REPO are set...
 	@test "$(OS_VERSION)"
 	@test "$(GH_REPO)"
@@ -196,7 +197,7 @@ download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
-	@ln -sfnT ci target/latest
+	@ln -sfn ci target/latest
 
 .PHONY: download-list
 download-list:	##H List recent CI runs
@@ -223,6 +224,7 @@ install:	##H Install (executed on VPS)
 	@echo "Installation complete."
 # 	@echo "Restarting $(CONTINUWUITY)"
 # 	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)
+
 
 CONT_SERV ?= conduwuit.service
 

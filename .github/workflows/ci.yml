@@ -44,6 +44,7 @@ jobs:
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: "1.90.0"
+          components: clippy, rust-analyzer, rust-src
 
       - name: Debug checks
         run: make vars cpu-info
@@ -61,6 +62,35 @@ jobs:
           name: conduwuit-${{ matrix.os }}
           path: target/${{ env.PROFILE }}/conduwuit
           retention-days: 90
+
+  # Optimized build for VPS
+  build-custom-cpu:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+
+      - name: Debug checks
+        run: make vars cpu-info
+
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
 
       - name: Detect best CPU target
         id: cpu
@@ -80,9 +110,9 @@ jobs:
         run: make build
 
       - name: Upload binary (${{ steps.cpu.outputs.target }})
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: conduwuit-${{ steps.cpu.outputs.target }}-${{ matrix.os }}
+          name: conduwuit-${{ steps.cpu.outputs.target }}-ubuntu-22.04
           path: target/${{ env.PROFILE }}/conduwuit
           retention-days: 90
 
@@ -109,7 +139,7 @@ jobs:
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: "1.90.0"
-          components: clippy, rustfmt
+          components: clippy, rustfmt, rust-analyzer, rust-src
 
       - name: Install nightly rustfmt
         run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
@@ -121,6 +151,7 @@ jobs:
 
       - name: Debug checks
         run: make vars doctor cpu-info
+
       - name: Format
         run: make format
 
