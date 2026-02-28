@@ -33,6 +33,25 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 		)));
 	}
 
+	if let Ok(pdu) = services
+		.rooms
+		.timeline
+		.pdu_from_timestamp(room_id, ts.0.into(), dir)
+		.await
+	{
+		if services
+			.rooms
+			.state_accessor
+			.user_can_see_event(body.sender_user(), room_id, &pdu.event_id)
+			.await
+		{
+			return Ok(get_event_by_timestamp::v1::Response::new(
+				pdu.event_id.clone(),
+				MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
+			));
+		}
+	}
+
 	let mut event = None;
 
 	let Ok((first_count, _)) = services.rooms.timeline.first_item_in_room(room_id).await else {

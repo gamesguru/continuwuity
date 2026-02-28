@@ -225,6 +225,15 @@ pub enum DebugCommand {
 		level: Option<i32>,
 	},
 
+	/// Purge outlier PDUs from the database
+	PurgeOutliers,
+
+	/// Backfill the timestamp index for MSC3030
+	BackfillTimestampIndex {
+		/// Room ID to backfill (otherwise all rooms)
+		room: Option<OwnedRoomId>,
+	},
+
 	/// Developer test stubs
 	#[command(subcommand)]
 	#[allow(non_snake_case)]

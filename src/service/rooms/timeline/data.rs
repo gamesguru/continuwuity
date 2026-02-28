@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
 use conduwuit::{
 	Err, PduCount, PduEvent, Result, at, err,
@@ -6,8 +6,10 @@ use conduwuit::{
 	utils::{self, stream::TryReadyExt},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
-use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, api::Direction};
+use futures::{
+	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::select_ok, pin_mut,
+};
+use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, UInt, api::Direction};
 
 use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
@@ -16,6 +18,7 @@ pub(super) struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
+	roomid_timestamp_pducount: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
 	pub(super) db: Arc<Database>,
@@ -35,6 +38,7 @@ impl Data {
 			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
 			pduid_pdu: db["pduid_pdu"].clone(),
+			roomid_timestamp_pducount: db["roomid_timestamp_pducount"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
 			db: args.db.clone(),
@@ -180,6 +184,7 @@ impl Data {
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(pdu.event_id.as_bytes(), pdu_id);
 		self.eventid_outlierpdu.remove(pdu.event_id.as_bytes());
+		self.append_timestamp_index(pdu_id, pdu);
 	}
 
 	pub(super) fn prepend_backfill_pdu(
@@ -191,6 +196,21 @@ impl Data {
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(event_id, pdu_id);
 		self.eventid_outlierpdu.remove(event_id);
+		if let Ok(pdu) =
+			serde_json::from_value::<PduEvent>(serde_json::to_value(json).expect("valid json"))
+		{
+			self.append_timestamp_index(pdu_id, &pdu);
+		}
+	}
+
+	fn append_timestamp_index(&self, pdu_id: &RawPduId, pdu: &PduEvent) {
+		let key = database::keyval::serialize_key((
+			pdu_id.shortroomid(),
+			pdu.origin_server_ts,
+			pdu_id.pdu_count(),
+		))
+		.expect("valid key");
+		self.roomid_timestamp_pducount.insert(&key, []);
 	}
 
 	/// Removes a pdu and creates a new one with the same id.
@@ -241,6 +261,67 @@ impl Data {
 					.ready_and_then(Self::from_json_slice)
 			})
 			.try_flatten_stream()
+	}
+
+	pub(super) async fn pdu_from_timestamp(
+		&self,
+		room_id: &RoomId,
+		timestamp: u64,
+		dir: Direction,
+	) -> Result<PduEvent> {
+		let shortroomid: ShortRoomId = self
+			.services
+			.short
+			.get_shortroomid(room_id)
+			.await
+			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
+
+		// Key format: (ShortRoomId, origin_server_ts, PduCount)
+		// We use a dummy PduCount (min or max depending on direction) to start the scan
+		let start_count = match dir {
+			| Direction::Forward => PduCount::Normal(0),
+			| Direction::Backward => PduCount::max(),
+		};
+		let start_key = database::keyval::serialize_key((shortroomid, timestamp, start_count))?;
+
+		let prefix = shortroomid;
+		let stream: Pin<Box<dyn Stream<Item = Result<KeyVal<'_>>> + Send>> = match dir {
+			| Direction::Forward => Box::pin(
+				self.roomid_timestamp_pducount
+					.raw_stream_from(&start_key)
+					.ready_try_take_while(move |(k, _)| Ok(k.starts_with(&prefix.to_be_bytes()))),
+			),
+			| Direction::Backward => Box::pin(
+				self.roomid_timestamp_pducount
+					.rev_raw_stream_from(&start_key)
+					.ready_try_take_while(move |(k, _)| Ok(k.starts_with(&prefix.to_be_bytes()))),
+			),
+		};
+
+		pin_mut!(stream);
+		if let Some(Ok((key, _))) = stream.next().await {
+			// Key is (ShortRoomId, origin_server_ts, PduCount)
+			// We need the PduCount to fetch the actual PDU
+			let count: PduCount = database::keyval::deserialize_key::<(u64, UInt, PduCount)>(key)
+				.map(at!(2))
+				.map_err(|e| err!(Database("Failed to deserialize index key: {e:?}")))?;
+
+			let pdu_id = PduId { shortroomid, shorteventid: count };
+			self.get_pdu_from_id(&pdu_id.into()).await
+		} else {
+			Err!(Request(NotFound("No PDU found for timestamp")))
+		}
+	}
+
+	pub(super) async fn backfill_timestamp_index(&self, room_id: &RoomId) -> Result {
+		let shortroomid: ShortRoomId = self.services.short.get_shortroomid(room_id).await?;
+		let pdus = self.pdus(room_id, PduCount::min());
+		pin_mut!(pdus);
+		while let Some(Ok((count, pdu))) = pdus.next().await {
+			let pdu_id = PduId { shortroomid, shorteventid: count };
+			self.append_timestamp_index(&pdu_id.into(), &pdu);
+		}
+		Ok(())
 	}
 
 	fn from_json_slice((pdu_id, pdu): KeyVal<'_>) -> Result<PdusIterItem> {
