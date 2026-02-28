@@ -92,8 +92,9 @@ profiles: ##H List available cargo profiles
 		| sort
 
 PROFILE ?=
+p ?=
 CRATE ?=
-CARGO_SCOPE ?= $(if $(CRATE),-p $(CRATE),--workspace)
+CARGO_SCOPE ?= $(if $(p),-p $(p),$(if $(CRATE),-p $(CRATE),--workspace))
 CARGO_FLAGS ?= --profile $(PROFILE)
 
 # For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
