@@ -10,15 +10,18 @@ use std::{fmt::Write, sync::Arc};
 use async_trait::async_trait;
 pub use conduwuit_core::matrix::pdu::{PduId, RawPduId};
 use conduwuit_core::{
-	Result, Server, at, debug, err, info,
+	Result, Server, SyncMutex, at, debug, err, info,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduEvent},
 	},
-	utils::{MutexMap, MutexMapGuard, future::TryExtExt, stream::TryIgnore},
+	utils::{
+		MutexMap, MutexMapGuard, future::TryExtExt, math::usize_from_f64, stream::TryIgnore,
+	},
 	warn,
 };
 use futures::{Future, Stream, TryStreamExt, pin_mut};
+use lru_cache::LruCache;
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId,
 	events::room::encrypted::Relation,
@@ -59,6 +62,7 @@ pub struct Service {
 	services: Services,
 	db: Data,
 	pub mutex_insert: RoomMutexMap,
+	pub next_shortstatehash_cache: SyncMutex<LruCache<(ShortRoomId, PduCount), ShortStateHash>>,
 }
 
 struct Services {
@@ -91,7 +95,14 @@ pub type RoomMutexGuard = MutexMapGuard<OwnedRoomId, ()>;
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
+		let config = &args.server.config;
+		let cache_capacity =
+			f64::from(config.shortstatehash_cache_capacity) * config.cache_capacity_modifier;
+
 		Ok(Arc::new(Self {
+			next_shortstatehash_cache: SyncMutex::new(LruCache::new(usize_from_f64(
+				cache_capacity,
+			)?)),
 			services: Services {
 				server: args.server.clone(),
 				account_data: args.depend::<account_data::Service>("account_data"),
@@ -253,6 +264,14 @@ impl Service {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
+		if let Some(hash) = self
+			.next_shortstatehash_cache
+			.lock()
+			.get_mut(&(shortroomid, after))
+		{
+			return Ok(*hash);
+		}
+
 		let after_pdu = PduId { shortroomid, shorteventid: after };
 
 		let next_count = self
@@ -262,7 +281,7 @@ impl Service {
 			.inspect_err(|e| {
 				debug!("next_shortstatehash: no next event after {after:?} in {room_id}: {e}");
 			})?;
-		info!("next_shortstatehash: after={after:?} next_count={next_count:?} room={room_id}");
+
 		let next_pdu = PduId { shortroomid, shorteventid: next_count };
 
 		let shorteventid = self
@@ -271,10 +290,15 @@ impl Service {
 			.inspect_err(|e| {
 				info!("next_shortstatehash: failed to get shorteventid for {next_count:?}: {e}");
 			})?;
-		info!("next_shortstatehash: shorteventid={shorteventid}");
 
 		let result = self.services.state.get_shortstatehash(shorteventid).await;
-		info!("next_shortstatehash: result={result:?}");
+
+		if let Ok(hash) = result {
+			self.next_shortstatehash_cache
+				.lock()
+				.insert((shortroomid, after), hash);
+		}
+
 		result
 	}
 
