@@ -536,7 +536,21 @@ async fn build_state_events(
 				.pdu_shortstatehash(&pdu.event_id)
 				.await
 			{
-				return shortstatehash;
+				// If the timeline starts exactly at the beginning of the room (like in spaces)
+				// the state before that first event will be completely empty. In this case,
+				// or if we fail to resolve, we use current_shortstatehash to ensure clients
+				// get the m.room.create event in their initial sync state.
+				use futures::StreamExt;
+				let mut state_stream = std::pin::pin!(
+					services
+						.rooms
+						.state_accessor
+						.state_full_ids::<ruma::OwnedEventId>(shortstatehash)
+				);
+
+				if state_stream.next().await.is_some() {
+					return shortstatehash;
+				}
 			}
 		}
 
@@ -683,29 +697,29 @@ async fn check_joined_since_last_sync(
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
 	// the root cause of this needs to be addressed
-	let joined_since_last_sync = if last_sync_end_count.is_none() {
-		// Initial sync
-		false
-	} else if last_sync_end_shortstatehash.is_none() {
-		// If we have a last sync end count but couldn't resolve the state hash, we
-		// can't definitively say they joined since the last sync. This avoids the
-		// empty timeline warning.
-		false
-	} else {
-		// If we can resolve the previous membership event, check if it was Join.
-		// If we couldn't resolve it (None), default to false to avoid false positive
-		// empty timeline warnings.
-		membership_during_previous_sync.as_ref().is_some_and(
-			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
-		)
-	};
+	let joined_since_last_sync =
+		if last_sync_end_count.is_none() {
+			// Initial sync
+			false
+		} else {
+			// If we can resolve the previous membership event, check if it was Join.
+			// If we couldn't resolve it (None), default to true to ensure clients
+			// receive the full state if they just joined (or if token state was lost).
+			membership_during_previous_sync.as_ref().is_none_or(
+				|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
+			)
+		};
 
 	if joined_since_last_sync {
-		info!(
-			"user joined since last sync: \
-			 last_sync_end_shortstatehash={last_sync_end_shortstatehash:?}, \
-			 membership={membership_during_previous_sync:?}"
-		);
+		// Only log if we ACTUALLY had a missing membership, to avoid false positive
+		// empty timeline warnings and spam when the token is just missing.
+		if membership_during_previous_sync.is_some() {
+			info!(
+				"user joined since last sync: \
+				 last_sync_end_shortstatehash={last_sync_end_shortstatehash:?}, \
+				 membership={membership_during_previous_sync:?}"
+			);
+		}
 	}
 
 	Ok(joined_since_last_sync)
