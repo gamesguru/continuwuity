@@ -1496,14 +1496,11 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_legacy_media: bool,
 
-	/// Sign federation requests as authenticated when fetching remote
-	/// media through legacy endpoints. This is needed above Matrix 1.11+
-	/// and helps resolve image download errors to users on legacy clients.
-	///
-	/// default: true
-	#[serde(default = "true_fn")]
-	pub legacy_media_authenticated_fetch: bool,
-
+	/// Disallow remote legacy media downloading. If set to true, requests for
+	/// remote media using legacy endpoints will be rejected. This is useful
+	/// for stopping unauthenticated abusive media traffic (e.g. from malicious
+	/// apps or scripts hitting the legacy endpoints) from forcing the server
+	/// to fetch and cache things. Local media is still served.
 	#[serde(default = "true_fn")]
 	pub freeze_legacy_media: bool,
 

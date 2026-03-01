@@ -45,10 +45,10 @@ jobs:
         with:
           toolchain: "1.90.0"
 
+      - uses: Swatinem/rust-cache@v2
       - name: Debug checks
         run: make vars cpu-info
 
-      - uses: Swatinem/rust-cache@v2
       - name: Build
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
