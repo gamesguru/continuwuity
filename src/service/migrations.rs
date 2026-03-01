@@ -156,7 +156,9 @@ async fn migrate(services: &Services) -> Result<()> {
 	}
 
 	if services.globals.db.database_version().await < 19 {
-		services.db.db.drop_cf("roomsynctoken_shortstatehash").ok();
+		if let Err(e) = services.db.db.drop_cf("roomsynctoken_shortstatehash") {
+			debug_warn!("drop_cf roomsynctoken_shortstatehash: {e:?}");
+		}
 		services.globals.db.bump_database_version(19);
 		warn!("Migration: Bumped database version to 19");
 	}

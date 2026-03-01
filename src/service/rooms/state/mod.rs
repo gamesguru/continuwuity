@@ -122,11 +122,14 @@ impl Service {
 						if let Some(user_id) =
 							pdu.state_key.as_ref().and_then(|k| UserId::parse(k).ok())
 						{
-							_ = self
+							if let Err(e) = self
 								.services
 								.state_cache
 								.update_membership(room_id, user_id, &pdu, false)
-								.await;
+								.await
+							{
+								warn!(%room_id, %user_id, "Failed to update membership cache in force_state: {e:?}");
+							}
 						}
 					},
 					| TimelineEventType::SpaceChild => {
