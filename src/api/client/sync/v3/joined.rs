@@ -83,6 +83,10 @@ pub(super) async fn load_joined_room(
 	.boxed()
 	.await?;
 
+	if timeline.is_empty() && state_events.is_empty() {
+		info!(%room_id, "load_joined_room: room is empty and will be skipped in sync response");
+	}
+
 	if !timeline.is_empty() || !state_events.is_empty() {
 		trace!(
 			"syncing {} timeline events (limited = {}) and {} state events",
@@ -274,6 +278,14 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
+	info!(
+		%room_id,
+		joined_since_last_sync,
+		timeline_len = timeline.pdus.len(),
+		state_len = state_events.len(),
+		"build_state_and_timeline: results"
+	);
+
 	// the timeline should always include at least one PDU if the syncing user
 	// joined since the last sync, that being the syncing user's join event. if
 	// it's empty something is wrong.
@@ -406,46 +418,48 @@ async fn fetch_shortstatehashes(
 	let last_sync_end_shortstatehash = if let Some(hash) = next_hash {
 		Some(hash)
 	} else if let Some(last_count) = last_sync_end_count {
-		let first_event = services
+		let mut fallback_hash = None;
+
+		// Check the user's own membership event to see if they were already in the room
+		let membership_event_id = services
 			.rooms
-			.timeline
-			.first_item_in_room(room_id)
+			.state_accessor
+			.room_state_get_id::<ruma::OwnedEventId>(
+				room_id,
+				&StateEventType::RoomMember,
+				syncing_user.as_str(),
+			)
 			.await
 			.ok();
-		let mut fallback_hash = None;
-		if let Some((count, _)) = first_event {
-			if count <= PduCount::Normal(last_count) {
-				fallback_hash = Some(current_shortstatehash);
-			} else {
-				info!(
-					%room_id, ?count, ?last_count,
-					"fetch_shortstatehashes: first event is after last sync (room joined since then?)"
-				);
-			}
-		} else {
-			info!(%room_id, ?last_count, "fetch_shortstatehashes: no first event found (empty room?)");
-		}
 
-		if fallback_hash.is_none() {
-			let event_id = services
-				.rooms
-				.state_accessor
-				.room_state_get_id::<ruma::OwnedEventId>(
-					room_id,
-					&StateEventType::RoomMember,
-					syncing_user.as_str(),
-				)
-				.await
-				.ok();
-			if let Some(event_id) = event_id {
-				if let Ok(shorteventid) = services.rooms.short.get_shorteventid(&event_id).await {
-					if shorteventid <= last_count {
-						info!(
-							%room_id, ?last_count,
-							"fetch_shortstatehashes: user was already joined though timeline is empty or later"
-						);
+		if let Some(event_id) = membership_event_id {
+			if let Ok(shorteventid) = services.rooms.short.get_shorteventid(&event_id).await {
+				if shorteventid <= last_count {
+					// The user's current membership event was already known at the last sync.
+					// Check if they were joined then.
+					let membership = services
+						.rooms
+						.state_accessor
+						.get_member(room_id, syncing_user)
+						.await
+						.ok();
+
+					if membership
+						.as_ref()
+						.is_some_and(|m| m.membership == MembershipState::Join)
+					{
 						fallback_hash = Some(current_shortstatehash);
 					}
+				}
+			}
+		}
+
+		// Fallback for extremely old rooms or when membership info is missing
+		// but we know for a fact the room timeline started earlier.
+		if fallback_hash.is_none() {
+			if let Ok((count, _)) = services.rooms.timeline.first_item_in_room(room_id).await {
+				if count <= PduCount::Normal(last_count) {
+					info!(%room_id, "fetch_shortstatehashes: oldest event is before last sync");
 				}
 			}
 		}
