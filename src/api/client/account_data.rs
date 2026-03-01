@@ -9,7 +9,7 @@ use ruma::{
 	},
 	events::{
 		AnyGlobalAccountDataEventContent, AnyRoomAccountDataEventContent,
-		GlobalAccountDataEventType, RoomAccountDataEventType,
+		RoomAccountDataEventType,
 	},
 	serde::Raw,
 };
