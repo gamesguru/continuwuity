@@ -14,7 +14,7 @@ env:
 
 jobs:
   complement:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -60,8 +60,94 @@ jobs:
         run: go install gotest.tools/gotestsum@latest
 
       - name: Build and run Complement tests
+        continue-on-error: true
         run: |
           ./bin/complement ./complement-src
+
+      - name: Parse Complement results
+        if: always()
+        id: results
+        run: |
+          if [ -f complement_test_results.jsonl ]; then
+            PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' complement_test_results.jsonl)
+            FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' complement_test_results.jsonl)
+            SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' complement_test_results.jsonl)
+            TOTAL=$((PASS + FAIL + SKIP))
+            FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' complement_test_results.jsonl | sort -u)
+
+            echo "pass=$PASS" >> "$GITHUB_OUTPUT"
+            echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
+            echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+            echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+            echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=0" >> "$GITHUB_OUTPUT"
+            echo "fail=0" >> "$GITHUB_OUTPUT"
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+            echo "total=0" >> "$GITHUB_OUTPUT"
+            echo "failed_tests=No results file found" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post Complement results to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const pass = ${{ steps.results.outputs.pass }};
+            const fail = ${{ steps.results.outputs.fail }};
+            const skip = ${{ steps.results.outputs.skip }};
+            const total = ${{ steps.results.outputs.total }};
+            const failedTests = `${{ steps.results.outputs.failed_tests }}`;
+
+            const lines = failedTests.trim().split('\n').filter(l => l.length > 0);
+            const failedList = lines.map(t => `- \`${t}\``).join('\n');
+
+            const body = [
+              '## Complement Test Results',
+              '',
+              '| Status | Count |',
+              '|--------|-------|',
+              `| ✓ Pass | ${pass} |`,
+              `| ✗ Fail | ${fail} |`,
+              `| ○ Skip | ${skip} |`,
+              `| **Total** | **${total}** |`,
+              '',
+              `<details><summary>Failed Tests (${fail})</summary>`,
+              '',
+              failedList,
+              '',
+              '</details>',
+              '',
+              '<!-- complement-test-results -->'
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.body && c.body.includes('<!-- complement-test-results -->')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
       - name: Upload test logs
         if: always()
@@ -71,4 +157,4 @@ jobs:
           path: |
             complement_test_logs.jsonl
             complement_test_results.jsonl
-          retention-days: 14
+          retention-days: 90

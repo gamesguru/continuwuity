@@ -42,26 +42,37 @@ echo "\$RESULTS_FILE: $RESULTS_FILE"
 echo "\$LOG_FILE: $LOG_FILE"
 echo ""
 
-# Determine the test runner
-GOTEST="go test -json"
-command -v gotestsum >/dev/null 2>&1 && GOTEST="gotestsum --format testname --jsonfile $LOG_FILE --"
+# Determine the test runner and output handling
+HAS_GOTESTSUM=false
+command -v gotestsum >/dev/null 2>&1 && HAS_GOTESTSUM=true
 
 # It's okay (likely, even) that `go test` exits nonzero
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
 set +o pipefail
-env \
-    -C "$COMPLEMENT_SRC" \
-    COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-    $GOTEST -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE"
-set -o pipefail
+if [ "$HAS_GOTESTSUM" = true ]; then
+    # gotestsum writes full JSON logs and pass/fail/skip results to separate files
+    env \
+        -C "$COMPLEMENT_SRC" \
+        COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
+        gotestsum --format github-actions \
+            --jsonfile "$LOG_FILE" \
+            --jsonfile-timing-events "$RESULTS_FILE" \
+            -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/...
+else
+    env \
+        -C "$COMPLEMENT_SRC" \
+        COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
+        go test -json -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE"
 
-# Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
-jq -s -c 'sort_by(.Test)[]' < "$LOG_FILE" | jq -c '
-    select(
-        (.Action == "pass" or .Action == "fail" or .Action == "skip")
-        and .Test != null
-    ) | {Action: .Action, Test: .Test}
-    ' > "$RESULTS_FILE"
+    # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
+    jq -s -c 'sort_by(.Test)[]' < "$LOG_FILE" | jq -c '
+        select(
+            (.Action == "pass" or .Action == "fail" or .Action == "skip")
+            and .Test != null
+        ) | {Action: .Action, Test: .Test}
+        ' > "$RESULTS_FILE"
+fi
+set -o pipefail
 
 echo ""
 echo ""
