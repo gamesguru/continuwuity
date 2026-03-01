@@ -1,11 +1,12 @@
 use std::{collections::BTreeSet, ops::ControlFlow};
 
 use conduwuit::{
-	Result, at, is_equal_to,
+	Result, at, info, is_equal_to,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
 	},
+	trace,
 	utils::{
 		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, TryIgnore},
@@ -19,7 +20,6 @@ use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use ruma::{OwnedEventId, RoomId, UserId, events::StateEventType};
 use service::rooms::short::ShortEventId;
-use tracing::trace;
 
 use crate::client::TimelinePdus;
 
@@ -49,7 +49,11 @@ pub(super) async fn build_state_initial(
 		.unzip()
 		.await;
 
-	trace!("performing initial sync of {} state events", event_ids.len());
+	info!(
+		timeline_start_shortstatehash,
+		count = event_ids.len(),
+		"build_state_initial: state IDs found"
+	);
 
 	let event_ids = services
 		.rooms
