@@ -66,7 +66,7 @@ pub(crate) async fn get_member_events_route(
 			.rooms
 			.state_accessor
 			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
-			.broad_filter_map(|(_, event_id)| async move {
+			.broadn_filter_map(256, |(_, event_id)| async move {
 				services.rooms.timeline.get_pdu(&event_id).await.ok()
 			})
 			.ready_filter_map(|pdu| {
@@ -91,7 +91,7 @@ pub(crate) async fn get_member_events_route(
 			.rooms
 			.state_accessor
 			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
-			.broad_filter_map(|(_, event_id)| async move {
+			.broadn_filter_map(256, |(_, event_id)| async move {
 				services.rooms.timeline.get_pdu(&event_id).await.ok()
 			})
 			.ready_filter_map(|pdu| {
@@ -123,29 +123,34 @@ pub(crate) async fn joined_members_route(
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));
 	}
 
-	let shortstatehash = services
-		.rooms
-		.state
-		.get_room_shortstatehash(&body.room_id)
-		.await?;
+	let room_id_closure = body.room_id.clone();
 
 	Ok(joined_members::v3::Response {
 		joined: services
 			.rooms
-			.state_accessor
-			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
-			.broad_filter_map(|(state_key, event_id)| async move {
-				let user_id: OwnedUserId = state_key.as_str().try_into().ok()?;
-				let pdu = services.rooms.timeline.get_pdu(&event_id).await.ok()?;
-				let content: RoomMemberEventContent = pdu.get_content().ok()?;
-				if content.membership != MembershipState::Join {
-					return None;
-				}
+			.state_cache
+			.room_members(&body.room_id)
+			.map(ToOwned::to_owned)
+			.broadn_filter_map(256, move |user_id: OwnedUserId| {
+				let room_id = room_id_closure.clone();
+				async move {
+					let pdu = services
+						.rooms
+						.state_accessor
+						.room_state_get(&room_id, &StateEventType::RoomMember, user_id.as_str())
+						.await
+						.ok()?;
 
-				Some((user_id, RoomMember {
-					display_name: content.displayname,
-					avatar_url: content.avatar_url,
-				}))
+					let content: RoomMemberEventContent = pdu.get_content().ok()?;
+					if content.membership != MembershipState::Join {
+						return None;
+					}
+
+					Some((user_id, RoomMember {
+						display_name: content.displayname,
+						avatar_url: content.avatar_url,
+					}))
+				}
 			})
 			.collect()
 			.await,
