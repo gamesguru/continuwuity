@@ -148,6 +148,13 @@ where
 		} else {
 			error!("Invalid unsigned type in pdu.");
 		}
+
+		// Invalidate cached room state for this event type+key
+		self.services.state_accessor.invalidate_room_state(
+			room_id,
+			&pdu.kind().to_string().into(),
+			state_key,
+		);
 	}
 
 	// We must keep track of all events that have been referenced.
