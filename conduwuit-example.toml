@@ -1285,7 +1285,11 @@
 #
 #allow_legacy_media = true
 
-# This item is undocumented. Please contribute documentation for it.
+# Disallow remote legacy media downloading. If set to true, requests for
+# remote media using legacy endpoints will be rejected. This is useful
+# for stopping unauthenticated abusive media traffic (e.g. from malicious
+# apps or scripts hitting the legacy endpoints) from forcing the server
+# to fetch and cache things. Local media is still served.
 #
 #freeze_legacy_media = true
 
