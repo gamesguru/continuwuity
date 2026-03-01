@@ -85,11 +85,26 @@ pub async fn room_state_get(
 	event_type: &StateEventType,
 	state_key: &str,
 ) -> Result<Pdu> {
-	self.services
+	let cache_key = (room_id.to_owned(), event_type.clone(), state_key.to_owned());
+
+	if let Some(cached) = self.room_state_cache.lock().get_mut(&cache_key) {
+		return cached
+			.clone()
+			.ok_or_else(|| err!(Request(NotFound("Not found in cache"))));
+	}
+
+	let result = self
+		.services
 		.state
 		.get_room_shortstatehash(room_id)
 		.and_then(|shortstatehash| self.state_get(shortstatehash, event_type, state_key))
-		.await
+		.await;
+
+	self.room_state_cache
+		.lock()
+		.insert(cache_key, result.as_ref().ok().cloned());
+
+	result
 }
 
 /// Returns all state keys for the given `room_id` and `event_type`.
