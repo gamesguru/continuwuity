@@ -253,16 +253,17 @@ async fn build_state_and_timeline(
 	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<StateAndTimeline> {
-	let (shortstatehashes, timeline) = try_join(
-		fetch_shortstatehashes(services, sync_context, room_id),
-		build_timeline(services, sync_context, room_id),
-	)
-	.await?;
+	let shortstatehashes = fetch_shortstatehashes(services, sync_context, room_id).await?;
 
-	let (state_events, notification_counts, joined_since_last_sync) = try_join3(
+	let joined_since_last_sync =
+		check_joined_since_last_sync(services, shortstatehashes, sync_context).await?;
+
+	let timeline =
+		build_timeline(services, sync_context, room_id, joined_since_last_sync).await?;
+
+	let (state_events, notification_counts) = try_join(
 		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
 	)
 	.await?;
 
@@ -471,6 +472,7 @@ async fn build_timeline(
 	services: &Services,
 	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
+	joined_since_last_sync: bool,
 ) -> Result<TimelinePdus> {
 	let SyncContext {
 		syncing_user,
@@ -493,11 +495,17 @@ async fn build_timeline(
 		.and_then(|limit| limit.try_into().ok())
 		.unwrap_or(DEFAULT_TIMELINE_LIMIT);
 
+	let starting_count = if joined_since_last_sync {
+		None
+	} else {
+		last_sync_end_count.map(PduCount::Normal)
+	};
+
 	load_timeline(
 		services,
 		syncing_user,
 		room_id,
-		last_sync_end_count.map(PduCount::Normal),
+		starting_count,
 		Some(PduCount::Normal(current_count)),
 		timeline_limit,
 	)
