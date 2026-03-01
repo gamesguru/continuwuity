@@ -18,7 +18,6 @@ endif
 # export GH_REPO=gamesguru/continuwuity
 # export SKIP_CONFIRM=1
 # export PROFILE=dev-quick
-# export GIT_DESCRIBE_OPTIONAL_BRANCH=
 # export RUSTFLAGS="-C target-cpu=native"
 
 
@@ -92,8 +91,9 @@ profiles: ##H List available cargo profiles
 		| sort
 
 PROFILE ?=
+p ?=
 CRATE ?=
-CARGO_SCOPE ?= $(if $(CRATE),-p $(CRATE),--workspace)
+CARGO_SCOPE ?= $(if $(p),-p $(p),$(if $(CRATE),-p $(CRATE),--workspace))
 CARGO_FLAGS ?= --profile $(PROFILE)
 
 # For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
@@ -139,7 +139,6 @@ build:	##H Build with selected profile
 	@echo "Build this profile? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
 	cargo build --features full --locked $(CARGO_FLAGS)
-	@echo "Build finished! Linking '$(PROFILE)' to target/latest"
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
 	# ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
@@ -185,7 +184,7 @@ GH_REPO ?=
 RUN ?=
 
 .PHONY: download
-download:	##H Download CI binary (use RUN=... to pick a specific run)
+download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
 	# Testing whether OS_VERSION and GH_REPO are set...
 	@test "$(OS_VERSION)"
 	@test "$(GH_REPO)"
@@ -225,14 +224,14 @@ install:	##H Install (executed on VPS)
 # 	@echo "Restarting $(CONTINUWUITY)"
 # 	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)
 
-
 CONT_SERV ?= conduwuit.service
 
 .PHONY: restart
 restart:    ##H Restart service (using systemctl)
 	sudo systemctl restart $(CONT_SERV)
 
-# SSH host for remote deploy (e.g. vps151). Configure in .env: VPS_HOST=vps151
+
+# SSH host for remote deploy (e.g. vps151). Configure in .env: VPS_HOST=
 # Or pass ENV=nightly / ENV=dev on the command line to use a preset.
 ENV ?=
 ifeq ($(ENV),nightly)

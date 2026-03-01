@@ -42,14 +42,17 @@ echo "\$RESULTS_FILE: $RESULTS_FILE"
 echo "\$LOG_FILE: $LOG_FILE"
 echo ""
 
+# Determine the test runner
+GOTEST="go test -json"
+command -v gotestsum >/dev/null 2>&1 && GOTEST="gotestsum --format testname --jsonfile $LOG_FILE --"
+
 # It's okay (likely, even) that `go test` exits nonzero
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
 set +o pipefail
 env \
     -C "$COMPLEMENT_SRC" \
     COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-    gotestsum --format testname --jsonfile "$LOG_FILE" -- \
-        -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/...
+    $GOTEST -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE"
 set -o pipefail
 
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
