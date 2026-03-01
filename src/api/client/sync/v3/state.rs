@@ -75,17 +75,10 @@ pub(super) async fn build_state_initial(
 			}
 		});
 
-	let pdu_ids = services
-		.rooms
-		.timeline
-		.multi_get_pdu_ids(event_ids)
-		.ready_filter_map(Result::ok);
-
-	services
-		.rooms
-		.timeline
-		.multi_get_pdus(pdu_ids)
-		.ready_filter_map(Result::ok)
+	event_ids
+		.broad_filter_map(|event_id: OwnedEventId| async move {
+			services.rooms.timeline.get_pdu(&event_id).await.ok()
+		})
 		.collect()
 		.map(Ok)
 		.await
@@ -271,18 +264,11 @@ pub(super) async fn build_state_incremental<'a>(
 		)
 		.ignore_err();
 
-	let pdu_ids = services
-		.rooms
-		.timeline
-		.multi_get_pdu_ids(state_diff)
-		.ready_filter_map(Result::ok);
-
 	// finally, fetch the PDU contents and collect them into a vec
-	let state_diff_pdus = services
-		.rooms
-		.timeline
-		.multi_get_pdus(pdu_ids)
-		.ready_filter_map(Result::ok)
+	let state_diff_pdus = state_diff
+		.broad_filter_map(|event_id: OwnedEventId| async move {
+			services.rooms.timeline.get_pdu(&event_id).await.ok()
+		})
 		.collect::<Vec<_>>()
 		.await;
 

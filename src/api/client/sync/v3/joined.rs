@@ -262,7 +262,14 @@ async fn build_state_and_timeline(
 		build_timeline(services, sync_context, room_id, joined_since_last_sync).await?;
 
 	let (state_events, notification_counts) = try_join(
-		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
+		build_state_events(
+			services,
+			sync_context,
+			room_id,
+			shortstatehashes,
+			&timeline,
+			joined_since_last_sync,
+		),
 		build_notification_counts(services, sync_context, room_id, &timeline),
 	)
 	.await?;
@@ -519,6 +526,7 @@ async fn build_state_events(
 	room_id: &RoomId,
 	shortstatehashes: ShortStateHashes,
 	timeline: &TimelinePdus,
+	joined_since_last_sync: bool,
 ) -> Result<Vec<PduEvent>> {
 	let SyncContext {
 		syncing_user,
@@ -578,9 +586,11 @@ async fn build_state_events(
 		/*
 		if `last_sync_end_count` is Some (meaning this is an incremental sync), and `last_sync_end_shortstatehash`
 		is Some (meaning the syncing user didn't just join this room for the first time ever), and `full_state` is false,
+		AND the user didn't join since the last sync (which would require a full state block),
 		then use `build_state_incremental`.
 		*/
-		| (Some(last_sync_end_count), Some(last_sync_end_shortstatehash)) if !full_state =>
+		| (Some(last_sync_end_count), Some(last_sync_end_shortstatehash))
+			if !full_state && !joined_since_last_sync =>
 			build_state_incremental(
 				services,
 				syncing_user,
