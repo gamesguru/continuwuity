@@ -2,7 +2,11 @@ use axum::extract::State;
 use conduwuit::{
 	Err, Result,
 	matrix::pdu::PduBuilder,
-	utils::{IterStream, future::TryExtExt, stream::TryIgnore},
+	utils::{
+		IterStream,
+		future::TryExtExt,
+		stream::{BroadbandExt, TryIgnore},
+	},
 	warn,
 };
 use conduwuit_service::Services;
@@ -305,16 +309,12 @@ pub async fn update_displayname(
 	displayname: Option<String>,
 	all_joined_rooms: &[OwnedRoomId],
 ) {
-	let (current_avatar_url, current_blurhash, current_displayname) = join3(
+	let (current_avatar_url, current_blurhash, _current_displayname) = join3(
 		services.users.avatar_url(user_id).ok(),
 		services.users.blurhash(user_id).ok(),
 		services.users.displayname(user_id).ok(),
 	)
 	.await;
-
-	if displayname == current_displayname {
-		return;
-	}
 
 	services.users.set_displayname(user_id, displayname.clone());
 
@@ -354,16 +354,12 @@ pub async fn update_avatar_url(
 	blurhash: Option<String>,
 	all_joined_rooms: &[OwnedRoomId],
 ) {
-	let (current_avatar_url, current_blurhash, current_displayname) = join3(
+	let (_current_avatar_url, _current_blurhash, current_displayname) = join3(
 		services.users.avatar_url(user_id).ok(),
 		services.users.blurhash(user_id).ok(),
 		services.users.displayname(user_id).ok(),
 	)
 	.await;
-
-	if current_avatar_url == avatar_url && current_blurhash == blurhash {
-		return;
-	}
 
 	services.users.set_avatar_url(user_id, avatar_url.clone());
 	services.users.set_blurhash(user_id, blurhash.clone());
@@ -402,15 +398,24 @@ pub async fn update_all_rooms(
 	all_joined_rooms: Vec<(PduBuilder, &OwnedRoomId)>,
 	user_id: &UserId,
 ) {
-	for (pdu_builder, room_id) in all_joined_rooms {
-		let state_lock = services.rooms.state.mutex.lock(room_id).await;
-		if let Err(e) = services
-			.rooms
-			.timeline
-			.build_and_append_pdu(pdu_builder, user_id, Some(room_id), &state_lock)
-			.await
-		{
-			warn!(%user_id, %room_id, "Failed to update/send new profile join membership update in room: {e}");
-		}
-	}
+	all_joined_rooms
+		.into_iter()
+		.stream()
+		.broad_then(|(pdu_builder, room_id)| async move {
+			let state_lock = services.rooms.state.mutex.lock(room_id).await;
+			if let Err(e) = services
+				.rooms
+				.timeline
+				.build_and_append_pdu(pdu_builder, user_id, Some(room_id), &state_lock)
+				.await
+			{
+				warn!(
+					%user_id,
+					%room_id,
+					"Failed to update/send new profile join membership update in room: {e}"
+				);
+			}
+		})
+		.collect::<()>()
+		.await;
 }
