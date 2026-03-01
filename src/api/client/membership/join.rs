@@ -710,6 +710,14 @@ async fn join_room_by_id_helper_remote(
 		})
 		.await?;
 
+	// We must set the room state to the state before the join, so that
+	// `append_to_state` calculates the state delta based on the remote state,
+	// instead of an empty state.
+	services
+		.rooms
+		.state
+		.set_room_state(room_id, statehash_before_join, &state_lock);
+
 	// We append to state before appending the pdu, so we don't have a moment in
 	// time with the pdu without its state. If append_pdu fails, the state will
 	// have been updated but the pdu will not exist — a subsequent retry or state
