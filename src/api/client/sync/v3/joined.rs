@@ -418,65 +418,18 @@ async fn fetch_shortstatehashes(
 	let last_sync_end_shortstatehash = if let Some(hash) = next_hash {
 		Some(hash)
 	} else if let Some(last_count) = last_sync_end_count {
-		let mut fallback_hash = None;
-
-		// Check the user's own membership event to see if they were already in the room
-		let membership_event_id = services
-			.rooms
-			.state_accessor
-			.room_state_get_id::<ruma::OwnedEventId>(
-				room_id,
-				&StateEventType::RoomMember,
-				syncing_user.as_str(),
-			)
-			.await
-			.ok();
-
-		if let Some(event_id) = membership_event_id {
-			if let Ok(shorteventid) = services.rooms.short.get_shorteventid(&event_id).await {
-				if shorteventid <= last_count {
-					// The user's current membership event was already known at the last sync.
-					// Check if they were joined then.
-					let membership = services
-						.rooms
-						.state_accessor
-						.get_member(room_id, syncing_user)
-						.await
-						.ok();
-
-					if membership
-						.as_ref()
-						.is_some_and(|m| m.membership == MembershipState::Join)
-					{
-						fallback_hash = Some(current_shortstatehash);
-					}
-				}
-			}
+		// Fallback for idle rooms: if nothing happened since last sync,
+		// and the room timeline started earlier, the state is unchanged.
+		match services.rooms.timeline.first_item_in_room(room_id).await {
+			| Ok((count, _)) if count <= PduCount::Normal(last_count) =>
+				Some(current_shortstatehash),
+			| _ => None,
 		}
-
-		// Fallback for extremely old rooms or when membership info is missing
-		// but we know for a fact the room timeline started earlier.
-		if fallback_hash.is_none() {
-			if let Ok((count, _)) = services.rooms.timeline.first_item_in_room(room_id).await {
-				if count <= PduCount::Normal(last_count) {
-					warn!(%room_id, "fetch_shortstatehashes: oldest event is before last sync");
-				}
-			}
-		}
-
-		fallback_hash
 	} else {
 		None
 	};
 
-	if last_sync_end_count.is_some() && last_sync_end_shortstatehash.is_none() {
-		warn!(
-			%room_id, ?last_sync_end_count, ?next_hash,
-			"fetch_shortstatehashes: failed to derive last_sync_end_shortstatehash"
-		);
-	}
-
-	debug!(
+	trace!(
 		"fetch_shortstatehashes: room={room_id} last_count={last_sync_end_count:?} \
 		 current={current_shortstatehash} last_end={last_sync_end_shortstatehash:?}",
 	);
