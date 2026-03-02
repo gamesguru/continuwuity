@@ -87,10 +87,8 @@ pub async fn room_state_get(
 ) -> Result<Pdu> {
 	let cache_key = (room_id.to_owned(), event_type.clone(), state_key.to_owned());
 
-	if let Some(cached) = self.room_state_cache.lock().get_mut(&cache_key) {
-		return cached
-			.clone()
-			.ok_or_else(|| err!(Request(NotFound("Not found in cache"))));
+	if let Some(Some(cached)) = self.room_state_cache.lock().get_mut(&cache_key) {
+		return Ok(cached.clone());
 	}
 
 	let result = self
@@ -100,16 +98,13 @@ pub async fn room_state_get(
 		.and_then(|shortstatehash| self.state_get(shortstatehash, event_type, state_key))
 		.await;
 
-	match &result {
-		| Ok(pdu) => {
-			self.room_state_cache
-				.lock()
-				.insert(cache_key, Some(pdu.clone()));
-		},
-		| Err(e) if e.is_not_found() => {
-			self.room_state_cache.lock().insert(cache_key, None);
-		},
-		| _ => {}, // don't cache transient/DB errors
+	if let Ok(pdu) = &result {
+		self.room_state_cache
+			.lock()
+			.insert(cache_key, Some(pdu.clone()));
+		// Note: we intentionally do not cache negative results (None) because
+		// state can arrive shortly after (e.g. during room joins) and caching
+		// a miss would suppress the correct result until eviction.
 	}
 
 	result

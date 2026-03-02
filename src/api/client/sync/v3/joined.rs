@@ -682,18 +682,17 @@ async fn check_joined_since_last_sync(
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
 	// the root cause of this needs to be addressed
-	let joined_since_last_sync =
-		if last_sync_end_count.is_none() {
-			// Initial sync
-			false
-		} else {
-			// If we can resolve the previous membership event, check if it was Join.
-			// If we couldn't resolve it (None), default to true to ensure clients
-			// receive the full state if they just joined (or if token state was lost).
-			membership_during_previous_sync.as_ref().is_none_or(
-				|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
-			)
-		};
+	let joined_since_last_sync = if last_sync_end_count.is_none() {
+		// Initial sync
+		false
+	} else {
+		// If we can resolve the previous membership event, check if it was Join.
+		// If we couldn't resolve it (None), default to false (not a fresh join)
+		// to avoid spuriously sending limited timelines on every sync.
+		membership_during_previous_sync.as_ref().is_some_and(
+			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
+		)
+	};
 
 	if joined_since_last_sync {
 		// Only log if we ACTUALLY had a missing membership, to avoid false positive
