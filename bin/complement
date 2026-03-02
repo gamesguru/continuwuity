@@ -17,7 +17,7 @@ RESULTS_FILE="${3:-complement_test_results.jsonl}"
 COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
-SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*"|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
+SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
 
 # $COMPLEMENT_SRC needs to be a directory to Complement source code
 if [ -f "$COMPLEMENT_SRC" ]; then
@@ -50,21 +50,25 @@ command -v gotestsum >/dev/null 2>&1 && HAS_GOTESTSUM=true
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
 set +o pipefail
 if [ "$HAS_GOTESTSUM" = true ]; then
-    # gotestsum writes full JSON logs and pass/fail/skip results to separate files
-    env \
+    # gotestsum writes full JSON logs
+    # We ignore the exit code because we post-process the logs even on failure.
+    (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
         gotestsum --format github-actions \
             --jsonfile "$LOG_FILE" \
-            --jsonfile-timing-events "$RESULTS_FILE" \
-            -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/...
+            -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... || true)
 else
-    env \
+    # We ignore the exit code because we post-process the logs even on failure.
+    (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        go test -json -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE"
+        go test -json -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE" || true)
+fi
 
-    # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
+# Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
+# This ensures we have a consistent results file for the CI parser.
+if [ -f "$LOG_FILE" ]; then
     jq -s -c 'sort_by(.Test)[]' < "$LOG_FILE" | jq -c '
         select(
             (.Action == "pass" or .Action == "fail" or .Action == "skip")
