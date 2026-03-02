@@ -5,9 +5,8 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use conduwuit::{
-	Error, Result, Server, checked, debug, debug_warn, error, result::LogErr, trace,
+	Error, Result, Server, checked, debug, debug_info, debug_warn, error, info, result::LogErr,
 };
-use database::Database;
 use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
 use loole::{Receiver, Sender};
 use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
@@ -27,7 +26,6 @@ pub struct Service {
 
 struct Services {
 	server: Arc<Server>,
-	db: Arc<Database>,
 	globals: Dep<globals::Service>,
 	users: Dep<users::Service>,
 }
@@ -48,7 +46,6 @@ impl crate::Service for Service {
 			db: Data::new(&args),
 			services: Services {
 				server: args.server.clone(),
-				db: args.db.clone(),
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
 			},
@@ -57,6 +54,17 @@ impl crate::Service for Service {
 
 	async fn worker(self: Arc<Self>) -> Result<()> {
 		let receiver = self.timer_channel.1.clone();
+
+		// Resetting dormant online/away statuses to offline on startup
+		if self.services.server.config.allow_local_presence {
+			let self_ = Arc::clone(&self);
+			self.services.server.runtime().spawn(async move {
+				self_.unset_all_presence().await;
+				_ = self_
+					.ping_presence(&self_.services.globals.server_user, &PresenceState::Online)
+					.await;
+			});
+		}
 
 		let mut presence_timers = FuturesUnordered::new();
 		while !receiver.is_closed() {
@@ -177,18 +185,20 @@ impl Service {
 
 	// Unset online/unavailable presence to offline on startup
 	pub async fn unset_all_presence(&self) {
-		let _cork = self.services.db.cork();
+		use futures::StreamExt;
 
-		for user_id in &self
-			.services
-			.users
-			.list_local_users()
-			.map(ToOwned::to_owned)
-			.collect::<Vec<OwnedUserId>>()
-			.await
-		{
+		debug_info!("Resetting presence for all local users...");
+		let mut total = 0_usize;
+		let mut reset = 0_usize;
+
+		let mut users = Box::pin(self.services.users.list_local_users());
+		while let Some(user_id) = users.next().await {
+			total = total.saturating_add(1);
+			if total.is_multiple_of(1000) {
+				info!("Resetting presence: processed {total} users...");
+			}
+
 			let presence = self.db.get_presence(user_id).await;
-
 			let presence = match presence {
 				| Ok((_, ref presence)) => &presence.content,
 				| _ => continue,
@@ -198,12 +208,10 @@ impl Service {
 				presence.presence,
 				PresenceState::Unavailable | PresenceState::Online | PresenceState::Busy
 			) {
-				trace!(%user_id, ?presence, "Skipping user");
 				continue;
 			}
 
-			trace!(%user_id, ?presence, "Resetting presence to offline");
-
+			reset = reset.saturating_add(1);
 			_ = self
 				.set_presence(
 					user_id,
@@ -221,6 +229,8 @@ impl Service {
 					);
 				});
 		}
+
+		info!("Presence reset complete: {total} users processed, {reset} reset to offline.");
 	}
 
 	/// Returns the most recent presence updates that happened after the event
