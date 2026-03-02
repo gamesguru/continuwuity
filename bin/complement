@@ -22,23 +22,24 @@ SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Re
 # A regex for tests to run.
 RUN_TESTS="${COMPLEMENT_RUN:-TestLogin}"
 
+# Ensure paths are absolute so they don't break when we change directory
+COMPLEMENT_SRC="$(realpath -m "$COMPLEMENT_SRC")"
+LOG_FILE="$(realpath -m "$LOG_FILE")"
+RESULTS_FILE="$(realpath -m "$RESULTS_FILE")"
+
 # $COMPLEMENT_SRC needs to be a directory to Complement source code
-if [ -f "$COMPLEMENT_SRC" ]; then
+if [ ! -d "$COMPLEMENT_SRC" ]; then
     echo "\$COMPLEMENT_SRC must be a directory/path to Complement source code"
     exit 1
 fi
 
-# quick test to make sure we can actually write to $LOG_FILE and $RESULTS_FILE
-touch $LOG_FILE && rm -v $LOG_FILE
-touch $RESULTS_FILE && rm -v $RESULTS_FILE
-
 toplevel="$(git rev-parse --show-toplevel)"
 pushd "$toplevel" > /dev/null
 
-# Ensure paths are absolute so they don't break when we change directory
-LOG_FILE="$(mkdir -p "$(dirname "$LOG_FILE")" && realpath -m "$LOG_FILE")"
-RESULTS_FILE="$(mkdir -p "$(dirname "$RESULTS_FILE")" && realpath -m "$RESULTS_FILE")"
 
+# Ensure result files exist even if tests fail to start
+touch "$LOG_FILE"
+touch "$RESULTS_FILE"
 
 echo ""
 echo "running go test with:"
@@ -52,6 +53,7 @@ echo ""
 # Determine the test runner and output handling
 HAS_GOTESTSUM=false
 command -v gotestsum >/dev/null 2>&1 && HAS_GOTESTSUM=true
+echo "gotestsum installed: $HAS_GOTESTSUM"
 
 # It's okay (likely, even) that `go test` exits nonzero
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
