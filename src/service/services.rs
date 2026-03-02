@@ -208,7 +208,7 @@ impl Services {
 		warn!("Interrupting services...");
 		for (name, (service, ..)) in self.service.read().iter() {
 			if let Some(service) = service.upgrade() {
-				info!("Interrupting {name}");
+				debug!("Interrupting {name}");
 				service.interrupt();
 			}
 		}
