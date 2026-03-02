@@ -84,7 +84,7 @@ pub(super) async fn load_joined_room(
 	.await?;
 
 	if timeline.is_empty() && state_events.is_empty() {
-		info!(%room_id, "load_joined_room: room is empty and will be skipped in sync response");
+		debug!(%room_id, "load_joined_room: room is empty and will be skipped in sync response");
 	}
 
 	if !timeline.is_empty() || !state_events.is_empty() {
@@ -278,7 +278,7 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	info!(
+	debug!(
 		%room_id,
 		joined_since_last_sync,
 		timeline_len = timeline.pdus.len(),
