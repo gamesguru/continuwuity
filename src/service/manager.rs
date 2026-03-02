@@ -1,6 +1,8 @@
 use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
-use conduwuit::{Err, Error, Result, Server, debug, debug_warn, error, trace, utils::time, warn};
+use conduwuit::{
+	Err, Error, Result, Server, debug, debug_warn, error, info, trace, utils::time, warn,
+};
 use futures::{FutureExt, TryFutureExt};
 use tokio::{
 	sync::{Mutex, MutexGuard},
@@ -45,7 +47,7 @@ impl Manager {
 	pub(super) async fn start(self: Arc<Self>) -> Result<()> {
 		let mut workers = self.workers.lock().await;
 
-		debug!("Starting service manager...");
+		info!("Starting service manager...");
 		let self_ = self.clone();
 		_ = self.manager.lock().await.insert(
 			self.server
@@ -63,7 +65,7 @@ impl Manager {
 			.map(|arc| arc.expect("services available for manager startup"))
 			.collect();
 
-		debug!("Starting service workers...");
+		info!("Starting service workers...");
 		for service in services {
 			self.start_worker(&mut workers, &service).await?;
 		}
@@ -160,7 +162,7 @@ impl Manager {
 			);
 		}
 
-		debug!("Service {:?} worker starting...", service.name());
+		info!("Service {:?} worker starting...", service.name());
 		workers.spawn_on(worker(service.clone()), self.server.runtime());
 
 		Ok(())
