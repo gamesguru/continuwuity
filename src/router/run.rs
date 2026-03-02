@@ -112,7 +112,7 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 		);
 	}
 
-	info!("Shutdown complete.");
+	warn!("Shutdown complete.");
 	Ok(())
 }
 

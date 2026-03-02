@@ -20,7 +20,7 @@ COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
 
 # A regex for tests to run.
-RUN_TESTS="${COMPLEMENT_RUN:-TestLogin}"
+RUN_TESTS="${COMPLEMENT_RUN:-.}"
 
 # Ensure paths are absolute so they don't break when we change directory
 COMPLEMENT_SRC="$(realpath -m "$COMPLEMENT_SRC")"
