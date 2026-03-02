@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, ops::ControlFlow};
 
 use conduwuit::{
-	Result, at, info, is_equal_to,
+	Result, at, debug, is_equal_to,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
