@@ -105,10 +105,27 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 		);
 	}
 
-	if Weak::strong_count(&db) > 0 {
-		debug_error!(
-			"{} dangling references to Database after shutdown",
-			Weak::strong_count(&db)
+	// Give async tasks a chance to release their references before reporting.
+	let mut remaining = Weak::strong_count(&db);
+	if remaining > 0 {
+		info!(
+			"{} dangling references to Database, attempting to close them cleanly",
+			remaining
+		);
+		for _ in 0..8_u8 {
+			tokio::task::yield_now().await;
+			remaining = Weak::strong_count(&db);
+			if remaining == 0 {
+				break;
+			}
+		}
+	}
+
+	if remaining > 0 {
+		warn!(
+			"{remaining} dangling references to Database refused to close; database may not \
+			 close cleanly.
+			It is advisable to run database cleanup commands if this message recurs."
 		);
 	}
 
