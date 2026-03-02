@@ -19,6 +19,9 @@ COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
 SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
 
+# A regex for tests to run.
+RUN_TESTS="${COMPLEMENT_RUN:-TestLogin}"
+
 # $COMPLEMENT_SRC needs to be a directory to Complement source code
 if [ -f "$COMPLEMENT_SRC" ]; then
     echo "\$COMPLEMENT_SRC must be a directory/path to Complement source code"
@@ -40,6 +43,7 @@ echo "\$COMPLEMENT_SRC: $COMPLEMENT_SRC"
 echo "\$COMPLEMENT_BASE_IMAGE: $COMPLEMENT_BASE_IMAGE"
 echo "\$RESULTS_FILE: $RESULTS_FILE"
 echo "\$LOG_FILE: $LOG_FILE"
+echo "\$RUN_TESTS: $RUN_TESTS"
 echo ""
 
 # Determine the test runner and output handling
@@ -57,24 +61,27 @@ if [ "$HAS_GOTESTSUM" = true ]; then
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
         gotestsum --format github-actions \
             --jsonfile "$LOG_FILE" \
-            -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... || true)
+            -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -v -timeout 1h ./tests/... || true)
 else
     # We ignore the exit code because we post-process the logs even on failure.
     (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        go test -json -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE" || true)
+        go test -json -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE" || true)
 fi
 
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
 # This ensures we have a consistent results file for the CI parser.
-if [ -f "$LOG_FILE" ]; then
+if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
     jq -s -c 'sort_by(.Test)[]' < "$LOG_FILE" | jq -c '
         select(
             (.Action == "pass" or .Action == "fail" or .Action == "skip")
             and .Test != null
         ) | {Action: .Action, Test: .Test}
         ' > "$RESULTS_FILE"
+    echo "processed $(wc -l < "$RESULTS_FILE") results into $RESULTS_FILE"
+else
+    echo "Warning: $LOG_FILE is missing or empty. No results processed."
 fi
 set -o pipefail
 

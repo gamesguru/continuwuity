@@ -459,7 +459,7 @@ async fn fetch_shortstatehashes(
 		if fallback_hash.is_none() {
 			if let Ok((count, _)) = services.rooms.timeline.first_item_in_room(room_id).await {
 				if count <= PduCount::Normal(last_count) {
-					info!(%room_id, "fetch_shortstatehashes: oldest event is before last sync");
+					warn!(%room_id, "fetch_shortstatehashes: oldest event is before last sync");
 				}
 			}
 		}
@@ -470,7 +470,7 @@ async fn fetch_shortstatehashes(
 	};
 
 	if last_sync_end_count.is_some() && last_sync_end_shortstatehash.is_none() {
-		info!(
+		warn!(
 			%room_id, ?last_sync_end_count, ?next_hash,
 			"fetch_shortstatehashes: failed to derive last_sync_end_shortstatehash"
 		);

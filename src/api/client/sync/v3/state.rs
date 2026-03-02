@@ -49,7 +49,7 @@ pub(super) async fn build_state_initial(
 		.unzip()
 		.await;
 
-	info!(
+	debug!(
 		timeline_start_shortstatehash,
 		count = event_ids.len(),
 		"build_state_initial: state IDs found"
