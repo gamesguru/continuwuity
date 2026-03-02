@@ -11,7 +11,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  PROFILE: release-high-perf
   SKIP_CONFIRM: "1"
 
 jobs:
@@ -22,6 +21,9 @@ jobs:
         os:
           - ubuntu-22.04
           - ubuntu-24.04
+        profile:
+          - release-high-perf
+          - dev
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -48,9 +50,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Debug checks
         run: make vars cpu-info
+        env:
+          PROFILE: ${{ matrix.profile }}
 
       - name: Build
         env:
+          PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           GIT_COMMIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
         run: make build
@@ -58,8 +63,8 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-${{ matrix.os }}
-          path: target/${{ env.PROFILE }}/conduwuit
+          name: conduwuit-${{ matrix.profile }}-${{ matrix.os }}
+          path: target/${{ matrix.profile == 'dev' && 'debug' || matrix.profile }}/conduwuit
           retention-days: 90
 
   # Runs format, lint, and test
