@@ -187,50 +187,46 @@ impl Service {
 	pub async fn unset_all_presence(&self) {
 		use futures::StreamExt;
 
-		debug_info!("Resetting presence for all local users...");
-		let mut total = 0_usize;
+		debug_info!("Resetting presence for active users...");
 		let mut reset = 0_usize;
 
-		let mut users = Box::pin(self.services.users.list_local_users());
-		while let Some(user_id) = users.next().await {
-			total = total.saturating_add(1);
-			if total.is_multiple_of(1000) {
-				info!("Resetting presence: processed {total} users...");
-			}
-
-			let presence = self.db.get_presence(user_id).await;
-			let presence = match presence {
-				| Ok((_, ref presence)) => &presence.content,
-				| _ => continue,
+		let mut presence_stream = Box::pin(self.db.presence_since(0));
+		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
+			let Ok(presence) = Presence::from_json_bytes(bytes) else {
+				continue;
 			};
 
 			if !matches!(
-				presence.presence,
+				presence.state,
 				PresenceState::Unavailable | PresenceState::Online | PresenceState::Busy
 			) {
 				continue;
 			}
 
+			let user_id = user_id.to_owned();
+			let now = conduwuit::utils::millis_since_unix_epoch();
+			let last_active_ago =
+				Some(UInt::new_saturating(now.saturating_sub(presence.last_active_ts)));
+
 			reset = reset.saturating_add(1);
 			_ = self
 				.set_presence(
-					user_id,
+					&user_id,
 					&PresenceState::Offline,
 					Some(false),
-					presence.last_active_ago,
-					presence.status_msg.clone(),
+					last_active_ago,
+					presence.status_msg,
 				)
 				.await
 				.inspect_err(|e| {
 					debug_warn!(
-						?presence,
-						"{user_id} has invalid presence in database and failed to reset it to \
-						 offline: {e}"
+						?user_id,
+						"Failed to reset presence for {user_id} to offline: {e}"
 					);
 				});
 		}
 
-		info!("Presence reset complete: {total} users processed, {reset} reset to offline.");
+		info!("Presence reset complete: {reset} users reset to offline.");
 	}
 
 	/// Returns the most recent presence updates that happened after the event
