@@ -6,10 +6,10 @@ set -euo pipefail
 COMPLEMENT_SRC="${COMPLEMENT_SRC:-$1}"
 
 # A `.jsonl` file to write test logs to
-LOG_FILE="${2:-complement_test_logs.jsonl}"
+LOG_FILE="${2:-${LOG_FILE:-complement_test_logs.jsonl}}"
 
 # A `.jsonl` file to write test results to
-RESULTS_FILE="${3:-complement_test_results.jsonl}"
+RESULTS_FILE="${3:-${RESULTS_FILE:-complement_test_results.jsonl}}"
 
 # The base docker image to use for complement tests
 # You can build the default with `docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .`
@@ -33,8 +33,11 @@ touch $LOG_FILE && rm -v $LOG_FILE
 touch $RESULTS_FILE && rm -v $RESULTS_FILE
 
 toplevel="$(git rev-parse --show-toplevel)"
-
 pushd "$toplevel" > /dev/null
+
+# Ensure paths are absolute so they don't break when we change directory
+LOG_FILE="$(mkdir -p "$(dirname "$LOG_FILE")" && realpath -m "$LOG_FILE")"
+RESULTS_FILE="$(mkdir -p "$(dirname "$RESULTS_FILE")" && realpath -m "$RESULTS_FILE")"
 
 
 echo ""

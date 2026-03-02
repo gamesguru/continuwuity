@@ -70,6 +70,8 @@ jobs:
   # Runs format, lint, and test
   test:
     runs-on: ubuntu-24.04
+    env:
+      PROFILE: dev-quick
     steps:
       - uses: actions/checkout@v4
         with:
