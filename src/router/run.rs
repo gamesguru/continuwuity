@@ -32,7 +32,7 @@ pub(crate) async fn run(services: Arc<Services>) -> Result<()> {
 	let (tx, _) = broadcast::channel::<()>(1);
 	let sigs = server
 		.runtime()
-		.spawn(signal(server.clone(), tx.clone(), handle.clone()));
+		.spawn(signal(services.clone(), tx.clone(), handle.clone()));
 
 	let mut listener =
 		server
@@ -117,18 +117,22 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 }
 
 #[tracing::instrument(skip_all, level = "info")]
-async fn signal(server: Arc<Server>, tx: Sender<()>, handle: axum_server::Handle) {
-	server
+async fn signal(services: Arc<Services>, tx: Sender<()>, handle: axum_server::Handle) {
+	services
+		.server
 		.clone()
 		.until_shutdown()
-		.then(move |()| handle_shutdown(server, tx, handle))
+		.then(move |()| handle_shutdown(services, tx, handle))
 		.await;
 }
 
-async fn handle_shutdown(server: Arc<Server>, tx: Sender<()>, handle: axum_server::Handle) {
+async fn handle_shutdown(services: Arc<Services>, tx: Sender<()>, handle: axum_server::Handle) {
+	let server = &services.server;
 	if let Err(e) = tx.send(()) {
 		error!("failed sending shutdown transaction to channel: {e}");
 	}
+
+	services.interrupt();
 
 	let timeout = server.config.client_shutdown_timeout;
 	let timeout = Duration::from_secs(timeout);

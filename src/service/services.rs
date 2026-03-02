@@ -1,7 +1,11 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug, debug_info, info, trace, utils::stream::IterStream,
+	Result, Server, SyncRwLock, debug, debug_info, info, trace, warn,
+	utils::{
+		ReadyExt,
+		stream::{BroadbandExt, IterStream},
+	},
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -200,11 +204,11 @@ impl Services {
 			.await
 	}
 
-	fn interrupt(&self) {
-		debug!("Interrupting services...");
+	pub fn interrupt(&self) {
+		warn!("Interrupting services...");
 		for (name, (service, ..)) in self.service.read().iter() {
 			if let Some(service) = service.upgrade() {
-				trace!("Interrupting {name}");
+				info!("Interrupting {name}");
 				service.interrupt();
 			}
 		}
