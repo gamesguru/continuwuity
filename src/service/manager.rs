@@ -1,8 +1,6 @@
 use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
-use conduwuit::{
-	Err, Error, Result, Server, debug, debug_warn, error, info, trace, utils::time, warn,
-};
+use conduwuit::{Err, Error, Result, Server, debug, error, info, trace, utils::time, warn};
 use futures::{FutureExt, TryFutureExt};
 use tokio::{
 	sync::{Mutex, MutexGuard},
@@ -137,7 +135,7 @@ impl Manager {
 		error!("service {name:?} aborted: {error}");
 
 		if !self.server.running() {
-			debug_warn!("service {name:?} error ignored on shutdown.");
+			warn!("service {name:?} error ignored on shutdown.");
 			return Ok(());
 		}
 
