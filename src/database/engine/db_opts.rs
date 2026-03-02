@@ -28,7 +28,7 @@ pub(crate) fn db_options(config: &Config, env: &Env, row_cache: &Cache) -> Resul
 	opts.set_max_background_jobs(num_threads::<i32>(config)?);
 	opts.set_max_subcompactions(num_threads::<u32>(config)?);
 	opts.set_avoid_unnecessary_blocking_io(true);
-	opts.set_max_file_opening_threads(0);
+	opts.set_max_file_opening_threads(num_threads::<i32>(config)?);
 
 	// IO
 	opts.set_manual_wal_flush(true);
