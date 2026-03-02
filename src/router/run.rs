@@ -8,7 +8,7 @@ use std::{
 };
 
 use axum_server::Handle as ServerHandle;
-use conduwuit::{Error, Result, Server, debug, debug_error, debug_info, error, info};
+use conduwuit::{Error, Result, Server, debug, debug_error, debug_info, error, info, warn};
 use futures::FutureExt;
 use service::Services;
 use tokio::{
@@ -96,7 +96,7 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 	// Check that Services and Database will drop as expected, The complex of Arc's
 	// used for various components can easily lead to references being held
 	// somewhere improperly; this can hang shutdowns.
-	debug!("Cleaning up...");
+	info!("Closing database...");
 	let db = Arc::downgrade(&services.db);
 	if let Err(services) = Arc::try_unwrap(services) {
 		debug_error!(

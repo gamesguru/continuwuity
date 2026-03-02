@@ -1,8 +1,7 @@
 use std::{fmt::Debug, time::Duration};
 
 use conduwuit::{
-	Err, Result, debug_warn, err, error::Error, implement,
-	utils::content_disposition::make_content_disposition,
+	Err, Result, debug_warn, err, implement, utils::content_disposition::make_content_disposition,
 };
 use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue};
 use ruma::{
@@ -35,10 +34,12 @@ pub async fn fetch_remote_thumbnail(
 		.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
 		.await;
 
-	if let Err(Error::Request(NotFound | Unrecognized, ..)) = &result {
-		return self
-			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
-			.await;
+	if let Err(error) = &result {
+		if matches!(error.kind(), NotFound | Unrecognized) {
+			return self
+				.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
+				.await;
+		}
 	}
 
 	result
@@ -67,10 +68,12 @@ pub async fn fetch_remote_content(
 			);
 		});
 
-	if let Err(Error::Request(NotFound | Unrecognized, ..)) = &result {
-		return self
-			.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
-			.await;
+	if let Err(error) = &result {
+		if matches!(error.kind(), NotFound | Unrecognized) {
+			return self
+				.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
+				.await;
+		}
 	}
 
 	result
@@ -328,15 +331,6 @@ fn check_fetch_authorized(&self, mxc: &Mxc<'_>) -> Result<()> {
 		// log. the client has no way of telling anyways so this is a security bonus.
 		debug_warn!(%mxc, "Received request for media on blocklisted server");
 		return Err!(Request(NotFound("Media not found.")));
-	}
-
-	Ok(())
-}
-
-#[implement(super::Service)]
-pub fn check_legacy_freeze(&self) -> Result<()> {
-	if self.services.server.config.freeze_legacy_media {
-		return Err!(Request(NotFound("Remote media is frozen.")));
 	}
 
 	Ok(())
