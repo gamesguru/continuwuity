@@ -335,10 +335,9 @@ fn check_fetch_authorized(&self, mxc: &Mxc<'_>) -> Result<()> {
 
 #[implement(super::Service)]
 pub fn check_legacy_freeze(&self) -> Result<()> {
-	self.services
-		.server
-		.config
-		.freeze_legacy_media
-		.then_some(())
-		.ok_or(err!(Request(NotFound("Remote media is frozen."))))
+	if self.services.server.config.freeze_legacy_media {
+		return Err!(Request(NotFound("Remote media is frozen.")));
+	}
+
+	Ok(())
 }
