@@ -91,8 +91,8 @@ impl Database {
 	/// transaction-aware APIs inside this method if they require atomicity.
 	///
 	/// **Note:** Nested transactions are not supported. Calling `transaction`
-	/// inside another `transaction` closure will shadow the outer batch,
-	/// splitting operations across two independent writes.
+	/// inside another `transaction` closure will panic to prevent nesting and
+	/// preserve the atomicity guarantees of the outer transaction.
 	pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
 	where
 		F: FnOnce() -> Fut,

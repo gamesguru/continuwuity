@@ -100,9 +100,17 @@ pub async fn room_state_get(
 		.and_then(|shortstatehash| self.state_get(shortstatehash, event_type, state_key))
 		.await;
 
-	self.room_state_cache
-		.lock()
-		.insert(cache_key, result.as_ref().ok().cloned());
+	match &result {
+		| Ok(pdu) => {
+			self.room_state_cache
+				.lock()
+				.insert(cache_key, Some(pdu.clone()));
+		},
+		| Err(e) if e.is_not_found() => {
+			self.room_state_cache.lock().insert(cache_key, None);
+		},
+		| _ => {}, // don't cache transient/DB errors
+	}
 
 	result
 }

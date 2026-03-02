@@ -309,12 +309,16 @@ pub async fn update_displayname(
 	displayname: Option<String>,
 	all_joined_rooms: &[OwnedRoomId],
 ) {
-	let (current_avatar_url, current_blurhash, _current_displayname) = join3(
+	let (current_avatar_url, current_blurhash, current_displayname) = join3(
 		services.users.avatar_url(user_id).ok(),
 		services.users.blurhash(user_id).ok(),
 		services.users.displayname(user_id).ok(),
 	)
 	.await;
+
+	if current_displayname == displayname {
+		return;
+	}
 
 	services.users.set_displayname(user_id, displayname.clone());
 
@@ -354,12 +358,16 @@ pub async fn update_avatar_url(
 	blurhash: Option<String>,
 	all_joined_rooms: &[OwnedRoomId],
 ) {
-	let (_current_avatar_url, _current_blurhash, current_displayname) = join3(
+	let (current_avatar_url, current_blurhash, current_displayname) = join3(
 		services.users.avatar_url(user_id).ok(),
 		services.users.blurhash(user_id).ok(),
 		services.users.displayname(user_id).ok(),
 	)
 	.await;
+
+	if current_avatar_url == avatar_url && current_blurhash == blurhash {
+		return;
+	}
 
 	services.users.set_avatar_url(user_id, avatar_url.clone());
 	services.users.set_blurhash(user_id, blurhash.clone());
