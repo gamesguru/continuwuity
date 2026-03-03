@@ -73,51 +73,57 @@ jobs:
         id: results
         run: |
           if [ -f complement_test_results.jsonl ]; then
+            # Calculate summary numbers
             PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' complement_test_results.jsonl)
             FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' complement_test_results.jsonl)
             SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' complement_test_results.jsonl)
             TOTAL=$((PASS + FAIL + SKIP))
-            FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' complement_test_results.jsonl | sort -u)
+
+            # Identify regressions vs baseline
+            TOUCH_BASELINE="tests/complement-baseline.txt"
+            [ -f "$TOUCH_BASELINE" ] || touch "$TOUCH_BASELINE"
+
+            jq -r 'select(.Action == "fail") | .Test' complement_test_results.jsonl | sort -u > current_failures.txt
+            sort -u "$TOUCH_BASELINE" > baseline.txt
+
+            NEW_FAILURES=$(comm -13 baseline.txt current_failures.txt || true)
+            FIXED_TESTS=$(comm -23 baseline.txt current_failures.txt || true)
+
+            NUM_NEW=$(echo "$NEW_FAILURES" | grep -c . || echo 0)
+            NUM_FIXED=$(echo "$FIXED_TESTS" | grep -c . || echo 0)
 
             echo "pass=$PASS" >> "$GITHUB_OUTPUT"
             echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
             echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
             echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
-            echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
-            echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
+            echo "num_new=$NUM_NEW" >> "$GITHUB_OUTPUT"
+            echo "num_fixed=$NUM_FIXED" >> "$GITHUB_OUTPUT"
+
+            echo "new_failures<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$NEW_FAILURES" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+
+            echo "fixed_tests<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$FIXED_TESTS" >> "$GITHUB_OUTPUT"
             echo "EOF" >> "$GITHUB_OUTPUT"
           else
             echo "pass=0" >> "$GITHUB_OUTPUT"
             echo "fail=0" >> "$GITHUB_OUTPUT"
             echo "skip=0" >> "$GITHUB_OUTPUT"
             echo "total=0" >> "$GITHUB_OUTPUT"
-            echo "failed_tests=No results file found" >> "$GITHUB_OUTPUT"
+            echo "num_new=0" >> "$GITHUB_OUTPUT"
+            echo "num_fixed=0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Post Complement results to PR
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
-        env:
-          FAILED_TESTS: ${{ steps.results.outputs.failed_tests }}
         with:
           script: |
-            const pass = ${{ steps.results.outputs.pass || 0 }};
-            const fail = ${{ steps.results.outputs.fail || 0 }};
-            const skip = ${{ steps.results.outputs.skip || 0 }};
-            const total = ${{ steps.results.outputs.total || 0 }};
-            const failedTestsRaw = process.env.FAILED_TESTS || '';
-
-            const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
-            const maxDisplay = 50;
-            const displayLines = lines.slice(0, maxDisplay);
-            const truncated = lines.length > maxDisplay;
-
-            let failedContent = 'No failing tests recorded.';
-            if (lines.length > 0) {
-              const list = displayLines.join('\n');
-              const suffix = truncated ? `\n... and ${lines.length - maxDisplay} more.` : '';
-              failedContent = '```\n' + list + suffix + '\n```';
-            }
+            const pass = parseInt("${{ steps.results.outputs.pass }}") || 0;
+            const fail = parseInt("${{ steps.results.outputs.fail }}") || 0;
+            const skip = parseInt("${{ steps.results.outputs.skip }}") || 0;
+            const total = parseInt("${{ steps.results.outputs.total }}") || 0;
 
             const body = [
               '## Complement Test Results',
@@ -129,19 +135,19 @@ jobs:
               `| ○ Skip | ${skip} |`,
               `| **Total** | **${total}** |`,
               '',
-              `<details><summary>Failed Tests (${fail})</summary>`,
-              '',
-              failedContent,
-              '',
-              '</details>',
-              '',
               '<!-- complement-test-results -->'
             ].join('\n');
+
+            const issue_number = context.payload.pull_request ? context.payload.pull_request.number : context.issue.number;
+            if (!issue_number) {
+              console.log("No PR number found in context, skipping comment.");
+              return;
+            }
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: issue_number,
             });
 
             const existing = comments.find(c =>
@@ -159,7 +165,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
+                issue_number: issue_number,
                 body,
               });
             }
