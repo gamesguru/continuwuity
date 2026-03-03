@@ -128,11 +128,8 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 	}
 
 	if remaining > 0 {
-		warn!(
-			"{remaining} dangling references to Database refused to close; database may not \
-			 close cleanly.
-			It is advisable to run database cleanup commands if this message recurs."
-		);
+		warn!("{remaining} database connections are still held by running background tasks \
+		(likely pending network requests). The system will now exit.");
 	}
 
 	warn!("Shutdown complete.");
