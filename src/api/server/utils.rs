@@ -62,7 +62,7 @@ pub(super) async fn check(&self) -> Result {
 	}
 
 	if server_can_see.is_some_and(is_false!()) {
-		return Err!(Request(Forbidden(warn!(
+		return Err!(Request(Forbidden(info!(
 			%self.origin,
 			%self.room_id,
 			?self.event_id,
