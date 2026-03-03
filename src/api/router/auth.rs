@@ -364,12 +364,14 @@ async fn parse_x_matrix(request: &mut Request) -> Result<XMatrix> {
 		.await
 		.map_err(|e| {
 			let msg = match e.reason() {
-				| TypedHeaderRejectionReason::Missing => "Missing Authorization header.",
-				| TypedHeaderRejectionReason::Error(_) => "Invalid X-Matrix signatures.",
+				| TypedHeaderRejectionReason::Missing => "Missing Authorization header",
+				| TypedHeaderRejectionReason::Error(_) => "Invalid X-Matrix signatures",
 				| _ => "Unknown header-related error",
 			};
 
-			err!(Request(Forbidden(warn!("{msg}: {e}"))))
+			err!(Request(Forbidden(warn!(
+				"{msg}: {e} for {request.parts.method} {request.parts.uri}"
+			))));
 		})?;
 
 	Ok(x_matrix)
