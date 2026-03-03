@@ -56,15 +56,17 @@ impl crate::Service for Service {
 		let receiver = self.timer_channel.1.clone();
 
 		// Resetting dormant online/away statuses to offline on startup
-		if self.services.server.config.allow_local_presence {
+		let startup_task = if self.services.server.config.allow_local_presence {
 			let self_ = Arc::clone(&self);
-			self.services.server.runtime().spawn(async move {
+			Some(self.services.server.runtime().spawn(async move {
 				self_.unset_all_presence().await;
 				_ = self_
 					.ping_presence(&self_.services.globals.server_user, &PresenceState::Online)
 					.await;
-			});
-		}
+			}))
+		} else {
+			None
+		};
 
 		let mut presence_timers = FuturesUnordered::new();
 		while !receiver.is_closed() {
@@ -80,6 +82,10 @@ impl crate::Service for Service {
 					},
 				},
 			}
+		}
+
+		if let Some(task) = startup_task {
+			_ = task.await;
 		}
 
 		Ok(())
@@ -192,6 +198,10 @@ impl Service {
 
 		let mut presence_stream = Box::pin(self.db.presence_since(0));
 		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
+			if !self.services.server.running() {
+				debug_info!("Shutdown during presence reset.");
+				break;
+			}
 			let Ok(presence) = Presence::from_json_bytes(bytes) else {
 				continue;
 			};
