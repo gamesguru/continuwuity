@@ -9,7 +9,7 @@ use ruma::{
 	api::{
 		OutgoingRequest,
 		client::{
-			error::ErrorKind::{NotFound, Unrecognized},
+			error::ErrorKind::{Forbidden, NotFound, Unrecognized},
 			media,
 		},
 		federation,
@@ -35,7 +35,7 @@ pub async fn fetch_remote_thumbnail(
 		.await;
 
 	if let Err(error) = &result {
-		if matches!(error.kind(), NotFound | Unrecognized) {
+		if matches!(error.kind(), NotFound | Unrecognized | Forbidden { .. }) {
 			return self
 				.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
 				.await;
@@ -69,7 +69,7 @@ pub async fn fetch_remote_content(
 		});
 
 	if let Err(error) = &result {
-		if matches!(error.kind(), NotFound | Unrecognized) {
+		if matches!(error.kind(), NotFound | Unrecognized | Forbidden { .. }) {
 			return self
 				.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
 				.await;

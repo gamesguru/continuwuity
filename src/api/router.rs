@@ -295,6 +295,32 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			.route(
 				"/_matrix/media/r0/thumbnail/{server_name}/{media_id}",
 				get(client::get_content_thumbnail_legacy_legacy_route),
+			)
+			// /_matrix/client/r0/media/* aliases for clients that use the client prefix
+			// with the r0 version instead of /_matrix/media/r0/* or /_matrix/client/v1/media/*
+			.route(
+				"/_matrix/client/r0/media/thumbnail/{server_name}/{media_id}",
+				get(client::get_content_thumbnail_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/download/{server_name}/{media_id}",
+				get(client::get_content_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/download/{server_name}/{media_id}/{file_name}",
+				get(client::get_content_as_filename_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/config",
+				get(client::get_media_config_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/preview_url",
+				get(client::get_media_preview_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/upload",
+				post(client::create_content_legacy_route),
 			);
 	} else {
 		router = router
