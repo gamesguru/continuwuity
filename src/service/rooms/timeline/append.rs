@@ -180,7 +180,8 @@ where
 
 	self.services
 		.user
-		.reset_notification_counts(pdu.sender(), room_id);
+		.reset_notification_counts(pdu.sender(), room_id)
+		.await;
 
 	let count2 = PduCount::Normal(self.services.globals.next_count().unwrap());
 	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: count2 }.into();
@@ -278,8 +279,10 @@ where
 			.await;
 	}
 
-	self.db
-		.increment_notification_counts(room_id, notifies, highlights);
+	self.services
+		.user
+		.increment_notification_counts(room_id, notifies, highlights)
+		.await;
 
 	match *pdu.kind() {
 		| TimelineEventType::RoomRedaction => {

@@ -827,7 +827,7 @@ async fn join_room_by_id_helper_remote(
 			services
 				.rooms
 				.state
-				.force_state(room_id, statehash_before_join, added, removed, &state_lock)
+				.force_state(room_id, statehash_after_join, added, removed, &state_lock)
 				.await?;
 
 			debug!("Updating joined counts for new room");

@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
 use conduwuit::{
-	Err, PduCount, PduEvent, Result, at, err,
-	result::NotFound,
-	utils::{self, stream::TryReadyExt},
+	Err, PduCount, PduEvent, Result, at, err, result::NotFound, utils::stream::TryReadyExt,
 };
 use database::{Database, Deserialized, Get, Json, KeyVal, Map};
 use futures::{
 	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::select_ok, pin_mut,
 };
-use ruma::{CanonicalJsonObject, EventId, OwnedEventId, OwnedUserId, RoomId, api::Direction};
+use ruma::{CanonicalJsonObject, EventId, OwnedEventId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
@@ -18,8 +16,6 @@ pub(super) struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
-	userroomid_highlightcount: Arc<Map>,
-	userroomid_notificationcount: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
 }
@@ -37,8 +33,6 @@ impl Data {
 			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
 			pduid_pdu: db["pduid_pdu"].clone(),
-			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
-			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
 			db: args.db.clone(),
 			services: Services {
 				short: args.depend::<rooms::short::Service>("rooms::short"),
@@ -275,29 +269,6 @@ impl Data {
 		Ok((pdu_id.pdu_count(), pdu))
 	}
 
-	pub(super) fn increment_notification_counts(
-		&self,
-		room_id: &RoomId,
-		notifies: Vec<OwnedUserId>,
-		highlights: Vec<OwnedUserId>,
-	) {
-		let _cork = self.db.cork();
-
-		for user in notifies {
-			let mut userroom_id = user.as_bytes().to_vec();
-			userroom_id.push(0xFF);
-			userroom_id.extend_from_slice(room_id.as_bytes());
-			increment(&self.userroomid_notificationcount, &userroom_id);
-		}
-
-		for user in highlights {
-			let mut userroom_id = user.as_bytes().to_vec();
-			userroom_id.push(0xFF);
-			userroom_id.extend_from_slice(room_id.as_bytes());
-			increment(&self.userroomid_highlightcount, &userroom_id);
-		}
-	}
-
 	pub(super) async fn prev_timeline_count(&self, before: &PduId) -> Result<PduCount> {
 		let before_pdu =
 			Self::pdu_count_to_id(before.shortroomid, before.shorteventid, Direction::Backward);
@@ -369,11 +340,4 @@ impl Data {
 
 		Ok(Self::pdu_count_to_id(shortroomid, shorteventid, dir))
 	}
-}
-
-//TODO: this is an ABA
-fn increment(db: &Arc<Map>, key: &[u8]) {
-	let old = db.get_blocking(key);
-	let new = utils::increment(old.ok().as_deref());
-	db.insert(key, new);
 }

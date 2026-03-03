@@ -260,7 +260,7 @@ async fn build_state_and_timeline(
 	let shortstatehashes = fetch_shortstatehashes(services, sync_context, room_id).await?;
 
 	let joined_since_last_sync =
-		check_joined_since_last_sync(services, shortstatehashes, sync_context).await?;
+		check_joined_since_last_sync(services, room_id, shortstatehashes, sync_context).await?;
 
 	let timeline =
 		build_timeline(services, sync_context, room_id, joined_since_last_sync).await?;
@@ -662,6 +662,7 @@ async fn build_notification_counts(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn check_joined_since_last_sync(
 	services: &Services,
+	room_id: &RoomId,
 	ShortStateHashes {
 		last_sync_end_shortstatehash,
 		current_shortstatehash,
@@ -713,6 +714,7 @@ async fn check_joined_since_last_sync(
 
 		if joined_since_last_sync && membership_during_previous_sync.is_some() {
 			warn!(
+				%room_id,
 				user_joined_since_last_sync = syncing_user.as_str(),
 				?last_sync_end_shortstatehash,
 				membership = ?membership_during_previous_sync,

@@ -96,7 +96,7 @@ impl Service {
 		room_id: &RoomId,
 		shortstatehash: u64,
 		statediffnew: Arc<CompressedState>,
-		_statediffremoved: Arc<CompressedState>,
+		statediffremoved: Arc<CompressedState>,
 		state_lock: &RoomMutexGuard,
 	) -> Result {
 		self.set_room_state(room_id, shortstatehash, state_lock);
@@ -105,7 +105,20 @@ impl Service {
 			.iter()
 			.stream()
 			.broad_then(|&new| async move {
-				let shorteventid = parse_compressed_state_event(new).1;
+				let (shortstatekey, shorteventid) = parse_compressed_state_event(new);
+				if let Ok((event_type, state_key)) = self
+					.services
+					.short
+					.get_statekey_from_short(shortstatekey)
+					.await
+				{
+					self.services.state_accessor.invalidate_room_state(
+						room_id,
+						&event_type,
+						&state_key,
+					);
+				}
+
 				let event_id = self
 					.services
 					.short
@@ -141,6 +154,27 @@ impl Service {
 							.remove(room_id);
 					},
 					| _ => {},
+				}
+				true
+			})
+			.await;
+
+		statediffremoved
+			.iter()
+			.stream()
+			.broad_all(|&removed| async move {
+				let (shortstatekey, _) = parse_compressed_state_event(removed);
+				if let Ok((event_type, state_key)) = self
+					.services
+					.short
+					.get_statekey_from_short(shortstatekey)
+					.await
+				{
+					self.services.state_accessor.invalidate_room_state(
+						room_id,
+						&event_type,
+						&state_key,
+					);
 				}
 				true
 			})
