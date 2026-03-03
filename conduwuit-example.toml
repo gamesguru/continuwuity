@@ -200,6 +200,10 @@
 
 # This item is undocumented. Please contribute documentation for it.
 #
+#shortstatehash_cache_capacity = varies by system
+
+# This item is undocumented. Please contribute documentation for it.
+#
 #roomid_spacehierarchy_cache_capacity = varies by system
 
 # Maximum entries stored in DNS memory-cache. The size of an entry may
@@ -1284,6 +1288,12 @@
 # in the next release.
 #
 #allow_legacy_media = true
+
+# Sign federation requests as authenticated when fetching remote
+# media through legacy endpoints. This is needed above Matrix 1.11+
+# and helps resolve image download errors to users on legacy clients.
+#
+#legacy_media_authenticated_fetch = true
 
 # This item is undocumented. Please contribute documentation for it.
 #

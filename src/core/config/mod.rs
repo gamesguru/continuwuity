@@ -263,6 +263,10 @@ pub struct Config {
 	pub stateinfo_cache_capacity: u32,
 
 	/// default: varies by system
+	#[serde(default = "default_shortstatehash_cache_capacity")]
+	pub shortstatehash_cache_capacity: u32,
+
+	/// default: varies by system
 	#[serde(default = "default_roomid_spacehierarchy_cache_capacity")]
 	pub roomid_spacehierarchy_cache_capacity: u32,
 
@@ -1492,6 +1496,14 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_legacy_media: bool,
 
+	/// Sign federation requests as authenticated when fetching remote
+	/// media through legacy endpoints. This is needed above Matrix 1.11+
+	/// and helps resolve image download errors to users on legacy clients.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub legacy_media_authenticated_fetch: bool,
+
 	#[serde(default = "true_fn")]
 	pub freeze_legacy_media: bool,
 
@@ -2541,6 +2553,8 @@ fn default_servernameevent_data_cache_capacity() -> u32 {
 }
 
 fn default_stateinfo_cache_capacity() -> u32 { parallelism_scaled_u32(100) }
+
+fn default_shortstatehash_cache_capacity() -> u32 { parallelism_scaled_u32(1000) }
 
 fn default_roomid_spacehierarchy_cache_capacity() -> u32 { parallelism_scaled_u32(1000) }
 

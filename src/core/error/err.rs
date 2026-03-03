@@ -157,6 +157,14 @@ macro_rules! err_lev {
 		}
 	};
 
+	(info) => {
+		$crate::tracing::Level::INFO
+	};
+
+	(debug) => {
+		$crate::tracing::Level::DEBUG
+	};
+
 	(warn) => {
 		$crate::tracing::Level::WARN
 	};

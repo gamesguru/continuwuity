@@ -116,6 +116,8 @@ impl Engine {
 			.expect("column must be described prior to database open")
 	}
 
+	pub fn drop_cf(&self, name: &str) -> Result { self.db.drop_cf(name).map_err(map_err) }
+
 	#[inline]
 	#[must_use]
 	#[tracing::instrument(name = "sequence", level = "debug", skip_all, fields(sequence))]

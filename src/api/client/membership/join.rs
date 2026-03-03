@@ -13,16 +13,16 @@ use conduwuit::{
 	result::FlatOk,
 	trace,
 	utils::{
-		self, shuffle,
-		stream::{IterStream, ReadyExt},
+		self, TryFutureExtExt, shuffle,
+		stream::{BroadbandExt, IterStream, ReadyExt},
 		to_canonical_object,
 	},
 	warn,
 };
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, OwnedRoomId, OwnedServerName, OwnedUserId, RoomId,
-	RoomVersionId, UserId,
+	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedServerName,
+	OwnedUserId, RoomId, RoomVersionId, UserId,
 	api::{
 		client::{
 			error::ErrorKind,
@@ -561,47 +561,66 @@ async fn join_room_by_id_helper_remote(
 
 	info!("Going through send_join response room_state");
 	let cork = services.db.cork_and_flush();
-	let state = send_join_response
+	let state: HashMap<u64, OwnedEventId> = send_join_response
 		.room_state
 		.state
 		.iter()
 		.stream()
-		.then(|pdu| {
-			services
-				.server_keys
-				.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
-				.inspect_err(|e| {
-					debug_warn!("Could not validate send_join response room_state event: {e:?}");
-				})
-				.inspect(|_| debug!("Completed validating send_join response room_state event"))
+		.broad_then({
+			let server_keys = services.server_keys.clone();
+			let room_version_id = room_version_id.clone();
+			move |pdu| {
+				let server_keys = server_keys.clone();
+				let room_version_id = room_version_id.clone();
+				async move {
+					server_keys
+						.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+						.inspect_err(|e| {
+							debug_warn!(
+								"Could not validate send_join response room_state event: {e:?}"
+							);
+						})
+						.inspect(|_| {
+							debug!("Completed validating send_join response room_state event");
+						})
+						.ok()
+						.await
+				}
+			}
 		})
-		.ready_filter_map(Result::ok)
-		.fold(HashMap::new(), |mut state, (event_id, value)| async move {
-			let pdu = match PduEvent::from_id_val(&event_id, value.clone()) {
-				| Ok(pdu) => pdu,
-				| Err(e) => {
-					debug_warn!("Invalid PDU in send_join response: {e:?}: {value:#?}");
-					return state;
-				},
-			};
-			if !pdu_fits(&mut value.clone()) {
-				warn!(
-					"dropping incoming PDU {event_id} in room {room_id} from room join because \
-					 it exceeds 65535 bytes or is otherwise too large."
-				);
-				return state;
-			}
-			services.rooms.outlier.add_pdu_outlier(&event_id, &value);
-			if let Some(state_key) = &pdu.state_key {
-				let shortstatekey = services
-					.rooms
-					.short
-					.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
-					.await;
+		.ready_filter_map(std::convert::identity)
+		.fold(HashMap::new(), {
+			let short = services.rooms.short.clone();
+			let outlier = services.rooms.outlier.clone();
+			move |mut state, (event_id, value): (OwnedEventId, _)| {
+				let short = short.clone();
+				let outlier = outlier.clone();
+				async move {
+					let pdu = match PduEvent::from_id_val(&event_id, value.clone()) {
+						| Ok(pdu) => pdu,
+						| Err(e) => {
+							debug_warn!("Invalid PDU in send_join response: {e:?}: {value:#?}");
+							return state;
+						},
+					};
+					if !pdu_fits(&mut value.clone()) {
+						warn!(
+							"dropping incoming PDU {event_id} in room {room_id} from room join \
+							 because it exceeds 65535 bytes or is otherwise too large."
+						);
+						return state;
+					}
+					outlier.add_pdu_outlier(&event_id, &value);
+					if let Some(state_key) = &pdu.state_key {
+						let shortstatekey = short
+							.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
+							.await;
 
-				state.insert(shortstatekey, pdu.event_id.clone());
+						state.insert(shortstatekey, pdu.event_id.clone());
+					}
+					state
+				}
 			}
-			state
 		})
 		.await;
 
@@ -614,15 +633,27 @@ async fn join_room_by_id_helper_remote(
 		.auth_chain
 		.iter()
 		.stream()
-		.then(|pdu| {
-			services
-				.server_keys
-				.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+		.broad_then({
+			let server_keys = services.server_keys.clone();
+			let room_version_id = room_version_id.clone();
+			move |pdu| {
+				let server_keys = server_keys.clone();
+				let room_version_id = room_version_id.clone();
+				async move {
+					server_keys
+						.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+						.ok()
+						.await
+				}
+			}
 		})
-		.ready_filter_map(Result::ok)
-		.ready_for_each(|(event_id, value)| {
-			trace!(%event_id, "Adding PDU as an outlier from send_join auth_chain");
-			services.rooms.outlier.add_pdu_outlier(&event_id, &value);
+		.ready_filter_map(std::convert::identity)
+		.ready_for_each({
+			let outlier = services.rooms.outlier.clone();
+			move |(event_id, value): (OwnedEventId, _)| {
+				trace!(%event_id, "Adding PDU as an outlier from send_join auth_chain");
+				outlier.add_pdu_outlier(&event_id, &value);
+			}
 		})
 		.await;
 
@@ -662,33 +693,35 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	debug!("Saving compressed state");
-	let HashSetCompressStateEvent {
-		shortstatehash: statehash_before_join,
-		added,
-		removed,
-	} = services
-		.rooms
-		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
+	let (statehash_before_join, added, removed) = services
+		.db
+		.transaction(|| async {
+			let HashSetCompressStateEvent {
+				shortstatehash: statehash_before_join,
+				added,
+				removed,
+			} = services
+				.rooms
+				.state_compressor
+				.save_state(room_id, Arc::new(compressed))
+				.await?;
+
+			Ok((statehash_before_join, added, removed))
+		})
 		.await?;
 
-	debug!("Forcing state for new room");
+	// We must set the room state to the state before the join, so that
+	// `append_to_state` calculates the state delta based on the remote state,
+	// instead of an empty state.
 	services
 		.rooms
 		.state
-		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
-		.await?;
-
-	debug!("Updating joined counts for new room");
-	services
-		.rooms
-		.state_cache
-		.update_joined_count(room_id)
-		.await;
+		.set_room_state(room_id, statehash_before_join, &state_lock);
 
 	// We append to state before appending the pdu, so we don't have a moment in
-	// time with the pdu without it's state. This is okay because append_pdu can't
-	// fail.
+	// time with the pdu without its state. If append_pdu fails, the state will
+	// have been updated but the pdu will not exist — a subsequent retry or state
+	// reset will reconcile this.
 	let statehash_after_join = services
 		.rooms
 		.state
@@ -715,6 +748,24 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_join, &state_lock);
+
+	// Now that the room state is fully saved and the PDU is appended, we can safely
+	// force the state into the caches. If this is done earlier, the user's
+	// membership change will trigger a sync which will fail to find the room
+	// state.
+	debug!("Forcing state for new room");
+	services
+		.rooms
+		.state
+		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
+		.await?;
+
+	debug!("Updating joined counts for new room");
+	services
+		.rooms
+		.state_cache
+		.update_joined_count(room_id)
+		.await;
 
 	Ok(())
 }
@@ -793,8 +844,19 @@ async fn join_room_by_id_helper_local(
 		remote_servers = %servers.len(),
 		"Could not join room locally, attempting remote join",
 	);
-	join_room_by_id_helper_remote(services, sender_user, room_id, reason, servers, state_lock)
-		.await
+
+	// `Box::pin` is required here to break the future recursion cycle between
+	// `join_room_by_id_helper_local` and `join_room_by_id_helper_remote`.
+	// Removing it results in an infinite size future and an E0733 compile error.
+	Box::pin(join_room_by_id_helper_remote(
+		services,
+		sender_user,
+		room_id,
+		reason,
+		servers,
+		state_lock,
+	))
+	.await
 }
 
 async fn make_join_request(

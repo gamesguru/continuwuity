@@ -1,11 +1,12 @@
 use std::{collections::BTreeSet, ops::ControlFlow};
 
 use conduwuit::{
-	Result, at, is_equal_to,
+	Result, at, info, is_equal_to,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
 	},
+	trace,
 	utils::{
 		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, TryIgnore},
@@ -19,7 +20,6 @@ use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use ruma::{OwnedEventId, RoomId, UserId, events::StateEventType};
 use service::rooms::short::ShortEventId;
-use tracing::trace;
 
 use crate::client::TimelinePdus;
 
@@ -49,9 +49,13 @@ pub(super) async fn build_state_initial(
 		.unzip()
 		.await;
 
-	trace!("performing initial sync of {} state events", event_ids.len());
+	info!(
+		timeline_start_shortstatehash,
+		count = event_ids.len(),
+		"build_state_initial: state IDs found"
+	);
 
-	services
+	let event_ids = services
 		.rooms
 		.short
 		// look up the full state keys
@@ -73,7 +77,9 @@ pub(super) async fn build_state_initial(
 			} else {
 				Some(event_id)
 			}
-		})
+		});
+
+	event_ids
 		.broad_filter_map(|event_id: OwnedEventId| async move {
 			services.rooms.timeline.get_pdu(&event_id).await.ok()
 		})
@@ -264,13 +270,8 @@ pub(super) async fn build_state_incremental<'a>(
 
 	// finally, fetch the PDU contents and collect them into a vec
 	let state_diff_pdus = state_diff
-		.broad_filter_map(|event_id| async move {
-			services
-				.rooms
-				.timeline
-				.get_non_outlier_pdu(&event_id)
-				.await
-				.ok()
+		.broad_filter_map(|event_id: OwnedEventId| async move {
+			services.rooms.timeline.get_pdu(&event_id).await.ok()
 		})
 		.collect::<Vec<_>>()
 		.await;

@@ -1,13 +1,11 @@
 use axum::extract::State;
 use conduwuit::{
-	Err, Event, Pdu, PduCount, Result, at, err,
-	utils::{
-		future::TryExtExt,
-		stream::{BroadbandExt, ReadyExt},
-	},
+	Err, Event, Pdu, PduCount, Result, err,
+	utils::stream::{BroadbandExt, ReadyExt},
 };
-use futures::{FutureExt, StreamExt, future::join};
+use futures::StreamExt;
 use ruma::{
+	OwnedEventId, OwnedUserId,
 	api::client::membership::{
 		get_member_events::{self, v3::MembershipEventFilter},
 		joined_members::{self, v3::RoomMember},
@@ -64,38 +62,44 @@ pub(crate) async fn get_member_events_route(
 			.pdu_shortstatehash(pdu.event_id())
 			.await?;
 
-		// Collect into Vec<Pdu> to avoid HRTB/opaque-type conflicts with
-		// room_state_full's impl Event stream used later in this function.
-		let all_pdus: Vec<Pdu> = services
+		let chunk: Vec<_> = services
 			.rooms
 			.state_accessor
-			.state_full_pdus(shortstatehash)
-			.map(Event::into_pdu)
+			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
+			.broad_filter_map(|(_, event_id)| async move {
+				services.rooms.timeline.get_pdu(&event_id).await.ok()
+			})
+			.ready_filter_map(|pdu| {
+				let pdu: Pdu = pdu.into_pdu();
+				membership_filter(pdu, membership, not_membership)
+			})
+			.map(Event::into_format)
 			.collect()
 			.await;
 
-		let chunk = all_pdus
-			.into_iter()
-			.filter(|pdu| *pdu.kind() == ruma::events::TimelineEventType::RoomMember)
-			.filter_map(|pdu| membership_filter(pdu, membership, not_membership))
-			.map(Event::into_format)
-			.collect();
-
 		return Ok(get_member_events::v3::Response { chunk });
 	}
+
+	let shortstatehash = services
+		.rooms
+		.state
+		.get_room_shortstatehash(&body.room_id)
+		.await?;
 
 	Ok(get_member_events::v3::Response {
 		chunk: services
 			.rooms
 			.state_accessor
-			.room_state_full(&body.room_id)
-			.ready_filter_map(Result::ok)
-			.ready_filter(|((ty, _), _)| *ty == StateEventType::RoomMember)
-			.map(at!(1))
-			.ready_filter_map(|pdu| membership_filter(pdu, membership, not_membership))
+			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
+			.broad_filter_map(|(_, event_id)| async move {
+				services.rooms.timeline.get_pdu(&event_id).await.ok()
+			})
+			.ready_filter_map(|pdu| {
+				let pdu: Pdu = pdu.into_pdu();
+				membership_filter(pdu, membership, not_membership)
+			})
 			.map(Event::into_format)
 			.collect()
-			.boxed()
 			.await,
 	})
 }
@@ -119,20 +123,29 @@ pub(crate) async fn joined_members_route(
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));
 	}
 
+	let shortstatehash = services
+		.rooms
+		.state
+		.get_room_shortstatehash(&body.room_id)
+		.await?;
+
 	Ok(joined_members::v3::Response {
 		joined: services
 			.rooms
-			.state_cache
-			.room_members(&body.room_id)
-			.map(ToOwned::to_owned)
-			.broad_then(|user_id| async move {
-				let (display_name, avatar_url) = join(
-					services.users.displayname(&user_id).ok(),
-					services.users.avatar_url(&user_id).ok(),
-				)
-				.await;
+			.state_accessor
+			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
+			.broad_filter_map(|(state_key, event_id)| async move {
+				let user_id: OwnedUserId = state_key.as_str().try_into().ok()?;
+				let pdu = services.rooms.timeline.get_pdu(&event_id).await.ok()?;
+				let content: RoomMemberEventContent = pdu.get_content().ok()?;
+				if content.membership != MembershipState::Join {
+					return None;
+				}
 
-				(user_id, RoomMember { display_name, avatar_url })
+				Some((user_id, RoomMember {
+					display_name: content.displayname,
+					avatar_url: content.avatar_url,
+				}))
 			})
 			.collect()
 			.await,

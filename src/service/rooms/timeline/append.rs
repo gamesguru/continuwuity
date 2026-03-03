@@ -148,6 +148,13 @@ where
 		} else {
 			error!("Invalid unsigned type in pdu.");
 		}
+
+		// Invalidate cached room state for this event type+key
+		self.services.state_accessor.invalidate_room_state(
+			room_id,
+			&pdu.kind().to_string().into(),
+			state_key,
+		);
 	}
 
 	// We must keep track of all events that have been referenced.
@@ -258,6 +265,7 @@ where
 			highlights.push(user.clone());
 		}
 
+		// TODO: replace with future
 		self.services
 			.pusher
 			.get_pushkeys(user)
@@ -265,7 +273,7 @@ where
 				self.services
 					.sending
 					.send_pdu_push(&pdu_id, user, push_key.to_owned())
-					.expect("TODO: replace with future");
+					.ok();
 			})
 			.await;
 	}

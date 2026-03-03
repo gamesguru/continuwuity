@@ -1,0 +1,1 @@
+Implemented transactional wrappers around room joins and other key database operations to guarantee atomicity. This mitigates previously silent race conditions where partial state was written (fixes #1142 "Room has no state" sync error).
