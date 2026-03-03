@@ -3,7 +3,7 @@
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Result, err, info,
+	Err, Result, debug_info, err,
 	utils::{content_disposition::make_content_disposition, math::ruma_from_usize},
 };
 use conduwuit_service::media::{CACHE_CONTROL_IMMUTABLE, CORP_CROSS_ORIGIN, Dim, FileMeta};
@@ -163,7 +163,7 @@ pub(crate) async fn get_content_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
-				info!(%mxc, "Fetching remote media via authenticated federation fallback");
+				debug_info!(%mxc, "Fetching remote media via authenticated federation fallback");
 				let FileMeta {
 					content,
 					content_type,
@@ -263,7 +263,7 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
-				info!(%mxc, "Fetching remote media via authenticated federation fallback");
+				debug_info!(%mxc, "Fetching remote media via authenticated federation fallback");
 				let FileMeta {
 					content,
 					content_type,
@@ -363,7 +363,7 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
-				info!(%mxc, "Fetching remote thumbnail via authenticated federation fallback");
+				debug_info!(%mxc, "Fetching remote thumbnail via authenticated federation fallback");
 				let FileMeta {
 					content,
 					content_type,

@@ -1,7 +1,7 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug, debug_info, info, trace,
+	Result, Server, SyncRwLock, debug_info, info, trace,
 	utils::{
 		ReadyExt,
 		stream::{BroadbandExt, IterStream},
@@ -210,7 +210,7 @@ impl Services {
 		warn!("Interrupting services...");
 		for (name, (service, ..)) in self.service.read().iter() {
 			if let Some(service) = service.upgrade() {
-				debug!("Interrupting {name}");
+				info!("Interrupting {name}");
 				service.interrupt();
 			}
 		}

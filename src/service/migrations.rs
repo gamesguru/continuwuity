@@ -247,7 +247,7 @@ async fn migrate(services: &Services) -> Result<()> {
 		}
 	}
 
-	info!("Loaded RocksDB database with schema version {DATABASE_VERSION}");
+	warn!("Loaded RocksDB database with schema version {DATABASE_VERSION}");
 
 	Ok(())
 }
