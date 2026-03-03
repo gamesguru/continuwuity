@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Error, Result, at, debug, debug_warn, err, extract_variant, info,
+	Error, Result, at, debug, debug_warn, extract_variant,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
@@ -16,8 +16,8 @@ use conduwuit::{
 };
 use conduwuit_service::Services;
 use futures::{
-	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join, join3, join4, try_join, try_join3},
+	FutureExt, StreamExt,
+	future::{join, join3, join4, try_join, try_join3},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -378,37 +378,41 @@ struct ShortStateHashes {
 #[tracing::instrument(level = "debug", skip_all)]
 async fn fetch_shortstatehashes(
 	services: &Services,
-	SyncContext { last_sync_end_count, .. }: SyncContext<'_>,
+	SyncContext { last_sync_end_count, current_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<ShortStateHashes> {
-	// the room state currently.
-	// TODO: this should be the room state as of `current_count`, but there's no way
-	// to get that right now.
-	let current_shortstatehash = services
-		.rooms
-		.state
-		.get_room_shortstatehash(room_id)
-		.inspect_err(|e| {
-			debug!(%room_id, "Room has no current state: {e}");
-		})
-		.map_err(|_| err!(Database(info!("Room {room_id} has no state"))));
-
-	// the room state as of the end of the last sync, computed statelessly from
-	// the timeline. shorteventid_shortstatehash maps each event to the state
-	// BEFORE that event, so next_shortstatehash(N) finds the first event after N
-	// and returns its pre-state = the correct post-state at count N.
-	// For idle rooms (no events after N), it fails and we fall back to
-	// current_shortstatehash since the state hasn't changed.
-	let next_hash = OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
-		services
+	// the room state at the end of this sync range.
+	// next_shortstatehash(N) finds the first event after N and returns its
+	// pre-state = the correct post-state at count N.
+	// For idle rooms (no events after current_count), it fails and we fall back to
+	// the global current state since the state hasn't changed.
+	let current_hash = async {
+		match services
 			.rooms
 			.timeline
-			.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
-			.ok()
-	}))
-	.map(|o| Ok::<_, Error>(o.flatten()));
+			.next_shortstatehash(room_id, PduCount::Normal(current_count))
+			.await
+		{
+			| Ok(h) => Ok(h),
+			| Err(_) => services.rooms.state.get_room_shortstatehash(room_id).await,
+		}
+	};
 
-	let (current_shortstatehash, next_hash) = try_join(current_shortstatehash, next_hash).await?;
+	// the room state as of the end of the last sync.
+	let next_hash = async {
+		let hash = match last_sync_end_count {
+			| Some(last_sync_end_count) => services
+				.rooms
+				.timeline
+				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
+				.await
+				.ok(),
+			| None => None,
+		};
+		Ok::<_, Error>(hash)
+	};
+
+	let (current_shortstatehash, next_hash) = try_join(current_hash, next_hash).await?;
 
 	// the room state as of the end of the last sync. if next_shortstatehash
 	// returned None (no events after last_sync_end_count), we fall back to
@@ -658,7 +662,10 @@ async fn build_notification_counts(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn check_joined_since_last_sync(
 	services: &Services,
-	ShortStateHashes { last_sync_end_shortstatehash, .. }: ShortStateHashes,
+	ShortStateHashes {
+		last_sync_end_shortstatehash,
+		current_shortstatehash,
+	}: ShortStateHashes,
 	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
 ) -> Result<bool> {
 	// fetch the syncing user's membership event during the last sync.
@@ -678,6 +685,17 @@ async fn check_joined_since_last_sync(
 		| None => None,
 	};
 
+	let membership_during_current_sync: Option<RoomMemberEventContent> = services
+		.rooms
+		.state_accessor
+		.state_get_content(
+			current_shortstatehash,
+			&StateEventType::RoomMember,
+			syncing_user.as_str(),
+		)
+		.await
+		.ok();
+
 	// TODO: If the requesting user got state-reset out of the room, this
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
@@ -691,14 +709,15 @@ async fn check_joined_since_last_sync(
 		// to avoid spuriously sending limited timelines on every sync.
 		membership_during_previous_sync.as_ref().is_some_and(
 			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
+		) && membership_during_current_sync.as_ref().is_some_and(
+			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
 		)
 	};
 
 	if joined_since_last_sync {
-		// Only log if we ACTUALLY had a missing membership, to avoid false positive
-		// empty timeline warnings and spam when the token is just missing.
+		// Log if we had a missing membership. Also a canary for race conditions.
 		if membership_during_previous_sync.is_some() {
-			info!(
+			warn!(
 				"user joined since last sync: \
 				 last_sync_end_shortstatehash={last_sync_end_shortstatehash:?}, \
 				 membership={membership_during_previous_sync:?}"
