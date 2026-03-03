@@ -30,7 +30,7 @@ use super::{
 	},
 	room_version::RoomVersion,
 };
-use crate::{debug, error, trace, warn};
+use crate::{debug, error, info, trace, warn};
 
 // FIXME: field extracting could be bundled for `content`
 #[derive(Deserialize)]
