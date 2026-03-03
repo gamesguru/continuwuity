@@ -528,7 +528,7 @@
 # Always calls /forget on behalf of the user if leaving a room. This is a
 # part of MSC4267 "Automatically forgetting rooms on leave"
 #
-#forget_forced_upon_leave = false
+#forget_forced_upon_leave = true
 
 # Set this to true to require authentication on the normally
 # unauthenticated profile retrieval endpoints (GET)

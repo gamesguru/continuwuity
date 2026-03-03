@@ -659,7 +659,7 @@ pub struct Config {
 
 	/// Always calls /forget on behalf of the user if leaving a room. This is a
 	/// part of MSC4267 "Automatically forgetting rooms on leave"
-	#[serde(default)]
+	#[serde(default = "true_fn")]
 	pub forget_forced_upon_leave: bool,
 
 	/// Set this to true to require authentication on the normally
