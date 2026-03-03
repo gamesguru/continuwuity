@@ -1,5 +1,5 @@
 use axum::extract::State;
-use conduwuit::{Err, Result, matrix::pdu::PduBuilder};
+use conduwuit::{Err, Result, info, matrix::pdu::PduBuilder};
 use ruma::{
 	api::client::membership::kick_user,
 	events::room::member::{MembershipState, RoomMemberEventContent},
@@ -26,10 +26,22 @@ pub(crate) async fn kick_user_route(
 		.get_member(&body.room_id, &body.user_id)
 		.await
 	else {
+		info!(
+			room_id = %body.room_id,
+			user_id = %body.user_id,
+			"Target user has no membership, returning 200 (Synapse behavior)"
+		);
 		// copy synapse's behaviour of returning 200 without any change to the state
 		// instead of erroring on left users
 		return Ok(kick_user::v3::Response::new());
 	};
+
+	info!(
+		room_id = %body.room_id,
+		user_id = %body.user_id,
+		membership = ?event.membership,
+		"Attempting to kick user"
+	);
 
 	if !matches!(
 		event.membership,

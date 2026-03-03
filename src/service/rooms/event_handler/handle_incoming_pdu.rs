@@ -4,8 +4,8 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer, err,
-	implement, info, trace, utils::stream::IterStream, warn,
+	Err, Event, PduEvent, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer,
+	err, implement, info, trace, utils::stream::IterStream, warn,
 };
 use futures::{
 	FutureExt, TryFutureExt, TryStreamExt,
@@ -18,8 +18,8 @@ use ruma::{
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
 };
-use tracing::debug;
 
+// use tracing::debug; (Removed)
 use crate::rooms::timeline::{RawPduId, pdu_fits};
 
 async fn should_rescind_invite(
@@ -174,7 +174,7 @@ pub async fn handle_incoming_pdu<'a>(
 		.services
 		.state_cache
 		.server_in_room(self.services.globals.server_name(), room_id)
-		.await
+		.await && !self.mutex_federation.contains(&room_id.to_owned())
 	{
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300

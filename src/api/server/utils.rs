@@ -62,10 +62,21 @@ pub(super) async fn check(&self) -> Result {
 	}
 
 	if server_can_see.is_some_and(is_false!()) {
+		let event_id = self.event_id.expect("server_can_see implies event_id");
+		let event_type = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu(event_id)
+			.await
+			.ok()
+			.map(|pdu| pdu.kind.to_string());
+
 		return Err!(Request(Forbidden(info!(
 			%self.origin,
 			%self.room_id,
-			?self.event_id,
+			%event_id,
+			?event_type,
 			"Server is not allowed to see event."
 		))));
 	}

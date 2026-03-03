@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{RoomVersion, debug};
+use conduwuit::{RoomVersion, debug, info, warn};
 use conduwuit_core::{
 	Event, PduEvent, Result, err,
 	state_res::{self, StateMap},
@@ -9,7 +9,6 @@ use conduwuit_core::{
 		IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash,
 		stream::{BroadbandExt, TryIgnore},
 	},
-	warn,
 };
 use conduwuit_database::{Deserialized, Ignore, Interfix, Map};
 use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::join_all};
@@ -99,6 +98,13 @@ impl Service {
 		statediffremoved: Arc<CompressedState>,
 		state_lock: &RoomMutexGuard,
 	) -> Result {
+		info!(
+			%room_id,
+			%shortstatehash,
+			added = ?statediffnew.len(),
+			removed = ?statediffremoved.len(),
+			"force_state"
+		);
 		self.set_room_state(room_id, shortstatehash, state_lock);
 
 		statediffnew
@@ -117,46 +123,62 @@ impl Service {
 						&event_type,
 						&state_key,
 					);
-				}
 
-				let event_id = self
-					.services
-					.short
-					.get_eventid_from_short::<Box<_>>(shorteventid)
-					.await
-					.ok()?;
-
-				self.services.timeline.get_pdu(&event_id).await.ok()
-			})
-			.ready_filter_map(std::convert::identity)
-			.broad_all(|pdu| async move {
-				match pdu.kind {
-					| TimelineEventType::RoomMember => {
-						if let Some(user_id) =
-							pdu.state_key.as_ref().and_then(|k| UserId::parse(k).ok())
+					if event_type == StateEventType::RoomMember
+						|| event_type == StateEventType::SpaceChild
+					{
+						let event_id = if let Ok(id) = self
+							.services
+							.short
+							.get_eventid_from_short::<Box<_>>(shorteventid)
+							.await
 						{
-							if let Err(e) = self
-								.services
-								.state_cache
-								.update_membership(room_id, user_id, &pdu, false)
-								.await
-							{
-								warn!(%room_id, %user_id, "Failed to update membership cache in force_state: {e:?}");
+							id
+						} else {
+							return true;
+						};
+
+						if let Ok(pdu) = self.services.timeline.get_pdu(&event_id).await {
+							match pdu.kind {
+								| TimelineEventType::RoomMember => {
+									if let Some(user_id) =
+										pdu.state_key.as_ref().and_then(|k| UserId::parse(k).ok())
+									{
+										if let Err(e) = self
+											.services
+											.state_cache
+											.update_membership(room_id, user_id, &pdu, false)
+											.await
+										{
+											warn!(%room_id, %user_id, "Failed to update membership cache in force_state: {e:?}");
+										}
+
+										// Also invalidate the state accessor cache for this
+										// user's membership just in case it wasn't in
+										// the diff (e.g. if we just joined/knocked)
+										self.services.state_accessor.invalidate_room_state(
+											room_id,
+											&StateEventType::RoomMember,
+											user_id.as_str(),
+										);
+									}
+								},
+								| TimelineEventType::SpaceChild => {
+									self.services
+										.spaces
+										.roomid_spacehierarchy_cache
+										.lock()
+										.await
+										.remove(room_id);
+								},
+								| _ => {},
 							}
 						}
-					},
-					| TimelineEventType::SpaceChild => {
-						self.services
-							.spaces
-							.roomid_spacehierarchy_cache
-							.lock()
-							.await
-							.remove(room_id);
-					},
-					| _ => {},
+					}
 				}
 				true
 			})
+			.for_each(|_| async {})
 			.await;
 
 		statediffremoved

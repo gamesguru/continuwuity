@@ -91,14 +91,42 @@ pub async fn room_state_get(
 		return Ok(cached.clone());
 	}
 
-	let result = self
+	let shortstatehash = self
 		.services
 		.state
 		.get_room_shortstatehash(room_id)
-		.and_then(|shortstatehash| self.state_get(shortstatehash, event_type, state_key))
-		.await;
+		.await
+		.ok();
+
+	if *event_type == StateEventType::RoomMember {
+		conduwuit::debug!(
+			%room_id,
+			%state_key,
+			?shortstatehash,
+			"room_state_get(RoomMember)"
+		);
+	}
+
+	let result = if let Some(shortstatehash) = shortstatehash {
+		self.state_get(shortstatehash, event_type, state_key).await
+	} else {
+		Err(err!(Database("No state found for room {room_id:?}")))
+	};
 
 	if let Ok(pdu) = &result {
+		if *event_type == StateEventType::RoomMember {
+			if let Ok(member) =
+				pdu.get_content::<ruma::events::room::member::RoomMemberEventContent>()
+			{
+				conduwuit::debug!(
+					%room_id,
+					%state_key,
+					?shortstatehash,
+					membership = ?member.membership,
+					"room_state_get(RoomMember) -> Success"
+				);
+			}
+		}
 		self.room_state_cache
 			.lock()
 			.insert(cache_key, Some(pdu.clone()));
