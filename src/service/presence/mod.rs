@@ -198,7 +198,7 @@ impl Service {
 		let mut presence_stream = Box::pin(self.db.presence_since(0));
 		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
 			if !self.services.server.running() {
-				debug_info!("Shutdown during presence reset.");
+				info!("Shutdown requested during presence reset.");
 				break;
 			}
 			let Ok(presence) = Presence::from_json_bytes(bytes) else {
