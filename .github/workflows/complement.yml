@@ -108,18 +108,13 @@ jobs:
             const failedTestsRaw = process.env.FAILED_TESTS || '';
 
             const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
-            const maxDisplay = 50;
-            const displayLines = lines.slice(0, maxDisplay);
-            const truncated = lines.length > maxDisplay;
-
             let failedContent = 'No failing tests recorded.';
             if (lines.length > 0) {
-              const list = displayLines.join('\n');
-              const suffix = truncated ? `\n... and ${lines.length - maxDisplay} more.` : '';
-              failedContent = '```\n' + list + suffix + '\n```';
+              const list = lines.join('\n');
+              failedContent = '```\n' + list + '\n```';
             }
 
-            const body = [
+            let currentRun = [
               '## Complement Test Results',
               '',
               '| Status | Count |',
@@ -134,8 +129,6 @@ jobs:
               failedContent,
               '',
               '</details>',
-              '',
-              '<!-- complement-test-results -->'
             ].join('\n');
 
             const { data: comments } = await github.rest.issues.listComments({
@@ -148,7 +141,13 @@ jobs:
               c.body && c.body.includes('<!-- complement-test-results -->')
             );
 
+            let body = currentRun + '\n\n<!-- complement-test-results -->';
+
             if (existing) {
+              const oldBody = existing.body.replace('<!-- complement-test-results -->', '').replace('## Complement Test Results', '').trim();
+              if (oldBody.length > 0) {
+                body = currentRun + '\n\n<details><summary>Previous Runs</summary>\n\n' + oldBody + '\n\n</details>\n\n<!-- complement-test-results -->';
+              }
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
