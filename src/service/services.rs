@@ -2,10 +2,7 @@ use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
 	Result, Server, SyncRwLock, debug, debug_info, info, trace, warn,
-	utils::{
-		ReadyExt,
-		stream::{BroadbandExt, IterStream},
-	},
+	utils::stream::IterStream,
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryStreamExt};
