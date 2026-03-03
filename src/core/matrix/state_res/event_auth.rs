@@ -30,7 +30,7 @@ use super::{
 	},
 	room_version::RoomVersion,
 };
-use crate::{debug, debug_warn, error, info, trace, warn};
+use crate::{debug, error, info, trace, warn};
 
 // FIXME: field extracting could be bundled for `content`
 #[derive(Deserialize)]
@@ -1054,7 +1054,7 @@ where
 					MembershipState::Join | MembershipState::Invite | MembershipState::Knock
 				);
 				if !allow {
-					debug_warn!(
+					warn!(
 						%sender,
 						current_membership_event_id=?target_user_membership_event_id,
 						current_membership=?target_user_current_membership,
