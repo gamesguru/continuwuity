@@ -163,6 +163,7 @@ impl Service {
 
 		if (self.timeout_remote_users || self.services.globals.user_is_local(user_id))
 			&& user_id != self.services.globals.server_user
+			&& self.services.server.running()
 		{
 			let timeout = match presence_state {
 				| PresenceState::Online => self.services.server.config.presence_idle_timeout_s,
@@ -173,7 +174,11 @@ impl Service {
 				.0
 				.send((user_id.to_owned(), Duration::from_secs(timeout)))
 				.map_err(|e| {
-					error!("Failed to add presence timer: {}", e);
+					if self.services.server.running() {
+						error!("Failed to add presence timer: {}", e);
+					} else {
+						debug!("Failed to add presence timer (server shutting down): {}", e);
+					}
 					Error::bad_database("Failed to add presence timer")
 				})?;
 		}

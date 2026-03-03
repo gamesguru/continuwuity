@@ -359,6 +359,9 @@ async fn handle_room(
 }
 
 async fn handle_edu(services: &Services, client: &IpAddr, origin: &ServerName, edu: Edu) {
+	if services.server.check_running().is_err() {
+		return;
+	}
 	match edu {
 		| Edu::Presence(presence) if services.server.config.allow_incoming_presence =>
 			handle_edu_presence(services, client, origin, presence).await,
