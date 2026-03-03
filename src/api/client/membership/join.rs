@@ -851,10 +851,7 @@ async fn join_room_by_id_helper_remote(
 	}
 
 	warn!("All {} servers were unable to assist in joining {room_id} :(", servers.len());
-	match Arc::try_unwrap(last_error)
-		.expect("no more references")
-		.into_inner()
-	{
+	match last_error.lock().await.take() {
 		| Some(e) => Err(e),
 		| None => Err!(BadServerResponse("No server available to assist in joining.")),
 	}
