@@ -15,6 +15,9 @@ env:
 jobs:
   complement:
     runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -94,16 +97,27 @@ jobs:
       - name: Post Complement results to PR
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          FAILED_TESTS: ${{ steps.results.outputs.failed_tests }}
         with:
           script: |
-            const pass = ${{ steps.results.outputs.pass }};
-            const fail = ${{ steps.results.outputs.fail }};
-            const skip = ${{ steps.results.outputs.skip }};
-            const total = ${{ steps.results.outputs.total }};
-            const failedTests = ${{ toJSON(steps.results.outputs.failed_tests) }};
+            const pass = ${{ steps.results.outputs.pass || 0 }};
+            const fail = ${{ steps.results.outputs.fail || 0 }};
+            const skip = ${{ steps.results.outputs.skip || 0 }};
+            const total = ${{ steps.results.outputs.total || 0 }};
+            const failedTestsRaw = process.env.FAILED_TESTS || '';
 
-            const lines = failedTests.trim().split('\n').filter(l => l.length > 0);
-            const failedList = lines.map(t => `- \`${t}\``).join('\n');
+            const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
+            const maxDisplay = 50;
+            const displayLines = lines.slice(0, maxDisplay);
+            const truncated = lines.length > maxDisplay;
+
+            let failedContent = 'No failing tests recorded.';
+            if (lines.length > 0) {
+              const list = displayLines.join('\n');
+              const suffix = truncated ? `\n... and ${lines.length - maxDisplay} more.` : '';
+              failedContent = '```\n' + list + suffix + '\n```';
+            }
 
             const body = [
               '## Complement Test Results',
@@ -117,7 +131,7 @@ jobs:
               '',
               `<details><summary>Failed Tests (${fail})</summary>`,
               '',
-              failedList,
+              failedContent,
               '',
               '</details>',
               '',
