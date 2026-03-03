@@ -108,17 +108,23 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 	// Give async tasks a chance to release their references before reporting.
 	let mut remaining = Weak::strong_count(&db);
 	if remaining > 0 {
+		use tokio::time::{Duration, sleep, timeout};
+
 		info!(
 			"{} dangling references to Database, attempting to close them cleanly",
 			remaining
 		);
-		for _ in 0..8_u8 {
-			tokio::task::yield_now().await;
-			remaining = Weak::strong_count(&db);
-			if remaining == 0 {
-				break;
+		timeout(Duration::from_secs(5), async {
+			loop {
+				sleep(Duration::from_millis(25)).await;
+				if Weak::strong_count(&db) == 0 {
+					break;
+				}
 			}
-		}
+		})
+		.await
+		.ok();
+		remaining = Weak::strong_count(&db);
 	}
 
 	if remaining > 0 {
