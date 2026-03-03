@@ -127,14 +127,12 @@ impl Service {
 					if event_type == StateEventType::RoomMember
 						|| event_type == StateEventType::SpaceChild
 					{
-						let event_id = if let Ok(id) = self
+						let Ok(event_id) = self
 							.services
 							.short
 							.get_eventid_from_short::<Box<_>>(shorteventid)
 							.await
-						{
-							id
-						} else {
+						else {
 							return true;
 						};
 
@@ -197,6 +195,15 @@ impl Service {
 						&event_type,
 						&state_key,
 					);
+
+					if event_type == StateEventType::SpaceChild {
+						self.services
+							.spaces
+							.roomid_spacehierarchy_cache
+							.lock()
+							.await
+							.remove(room_id);
+					}
 				}
 				true
 			})
