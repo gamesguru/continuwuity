@@ -268,7 +268,7 @@ impl Service {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-		let before_pdu = PduId { shortroomid, shorteventid: before };
+		let _before_pdu = PduId { shortroomid, shorteventid: before };
 
 		let prev_count = self.db.last_timeline_count(room_id).await?;
 		let prev_pdu = PduId { shortroomid, shorteventid: prev_count };
@@ -302,7 +302,7 @@ impl Service {
 			return Ok(*hash);
 		}
 
-		let after_pdu = PduId { shortroomid, shorteventid: after };
+		let _after_pdu = PduId { shortroomid, shorteventid: after };
 
 		let next_count = self
 			.db
