@@ -108,31 +108,27 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 	// Give async tasks a chance to release their references before reporting.
 	let mut remaining = Weak::strong_count(&db);
 	if remaining > 0 {
-		use tokio::time::{Duration, sleep, timeout};
+		use tokio::time::{Duration, sleep};
 
 		info!(
-			"{} dangling references to Database, attempting to close them cleanly",
-			remaining
+			"{remaining} background tasks still hold database connections. Waiting for them to \
+			 finish cleanly..."
 		);
-		timeout(Duration::from_secs(5), async {
-			loop {
-				sleep(Duration::from_millis(25)).await;
-				if Weak::strong_count(&db) == 0 {
-					break;
-				}
+
+		loop {
+			sleep(Duration::from_millis(100)).await;
+			let current = Weak::strong_count(&db);
+			if current == 0 {
+				break;
 			}
-		})
-		.await
-		.ok();
-		remaining = Weak::strong_count(&db);
+			if current < remaining {
+				info!("{current} background tasks still hold database connections...");
+				remaining = current;
+			}
+		}
 	}
 
-	if remaining > 0 {
-		warn!("{remaining} database connections are still held by running background tasks \
-		(likely pending network requests). The system will now exit.");
-	}
-
-	warn!("Shutdown complete.");
+	warn!("Every task has finished. Shutdown complete.");
 	Ok(())
 }
 
