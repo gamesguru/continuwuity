@@ -370,8 +370,9 @@ async fn parse_x_matrix(request: &mut Request) -> Result<XMatrix> {
 			};
 
 			err!(Request(Forbidden(warn!(
-				"{msg}: {e} for {request.parts.method} {request.parts.uri}"
-			))));
+				"{msg}: {e} for {} {}",
+				&request.parts.method, &request.parts.uri
+			))))
 		})?;
 
 	Ok(x_matrix)
