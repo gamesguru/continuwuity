@@ -207,6 +207,13 @@ impl Service {
 				info!("Shutdown requested during presence reset.");
 				break;
 			}
+
+			if !self.services.globals.user_is_local(user_id)
+				|| user_id == self.services.globals.server_user
+			{
+				continue;
+			}
+
 			let Ok(presence) = Presence::from_json_bytes(bytes) else {
 				continue;
 			};
