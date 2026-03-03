@@ -100,7 +100,7 @@ jobs:
             const fail = ${{ steps.results.outputs.fail }};
             const skip = ${{ steps.results.outputs.skip }};
             const total = ${{ steps.results.outputs.total }};
-            const failedTests = `${{ steps.results.outputs.failed_tests }}`;
+            const failedTests = ${{ toJSON(steps.results.outputs.failed_tests) }};
 
             const lines = failedTests.trim().split('\n').filter(l => l.length > 0);
             const failedList = lines.map(t => `- \`${t}\``).join('\n');
