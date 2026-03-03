@@ -693,14 +693,6 @@ async fn knock_room_helper_remote(
 		)
 		.await?;
 
-	info!("Setting final room state for new room");
-	// We set the room state after inserting the pdu, so that we never have a moment
-	// in time where events in the current room state do not exist
-	services
-		.rooms
-		.state
-		.set_room_state(room_id, statehash_after_knock, &state_lock);
-
 	Ok(())
 }
 

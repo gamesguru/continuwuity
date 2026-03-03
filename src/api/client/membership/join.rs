@@ -811,14 +811,6 @@ async fn join_room_by_id_helper_remote(
 				)
 				.await?;
 
-			info!("Setting final room state for new room");
-			// We set the room state after inserting the pdu, so that we never have a moment
-			// in time where events in the current room state do not exist
-			services
-				.rooms
-				.state
-				.set_room_state(room_id, statehash_after_join, &state_lock);
-
 			// Now that the room state is fully saved and the PDU is appended, we can safely
 			// force the state into the caches. If this is done earlier, the user's
 			// membership change will trigger a sync which will fail to find the room
