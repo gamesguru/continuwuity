@@ -287,7 +287,7 @@ pub async fn remote_leave_room<S: ::std::hash::BuildHasher>(
 	for remote_server in servers {
 		let make_leave_response = services
 			.sending
-			.send_federation_request(
+			.send_synapse_request(
 				remote_server.as_ref(),
 				federation::membership::prepare_leave_event::v1::Request {
 					room_id: room_id.to_owned(),
@@ -391,7 +391,7 @@ pub async fn remote_leave_room<S: ::std::hash::BuildHasher>(
 
 	services
 		.sending
-		.send_federation_request(
+		.send_synapse_request(
 			&remote_server,
 			federation::membership::create_leave_event::v2::Request {
 				room_id: room_id.to_owned(),
