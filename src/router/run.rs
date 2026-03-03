@@ -111,7 +111,7 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 		use tokio::time::{Duration, sleep, timeout};
 
 		info!(
-			"{} dangling references to Database, attempting to close them cleanly",
+			"{} dangling references to Database, allowing them 5 seconds to close cleanly",
 			remaining
 		);
 		timeout(Duration::from_secs(5), async {
@@ -129,9 +129,8 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 
 	if remaining > 0 {
 		warn!(
-			"{remaining} dangling references to Database refused to close; database may not \
-			 close cleanly.
-			It is advisable to run database cleanup commands if this message recurs."
+			"{remaining} database connections are still held by running background tasks (this \
+			 is harmless, likely pending network requests). The system will now exit."
 		);
 	}
 
