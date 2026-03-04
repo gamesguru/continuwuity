@@ -3,7 +3,7 @@ pub(crate) mod tester;
 
 use clap::Subcommand;
 use conduwuit::Result;
-use ruma::{OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName};
+use ruma::{OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId};
 use service::rooms::short::{ShortEventId, ShortRoomId};
 
 use self::tester::TesterCommand;
@@ -48,7 +48,16 @@ pub enum DebugCommand {
 
 	/// List all outlier PDUs in our database.
 	ListOutliers {
+		/// Filter outliers to a specific room
+		#[arg(short, long)]
+		room_id: Option<OwnedRoomId>,
+
+		/// Filter outliers to a specific sender
+		#[arg(short, long)]
+		sender: Option<OwnedUserId>,
+
 		/// Limit the number of outliers listed.
+		#[arg(short, long)]
 		limit: Option<usize>,
 	},
 

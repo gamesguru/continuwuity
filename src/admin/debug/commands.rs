@@ -21,7 +21,7 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, TryStreamExt, future::ready};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
-	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
+	OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomId, RoomVersionId,
 	api::federation::event::get_room_state,
 	events::{AnyStateEvent, StateEventType},
 	serde::Raw,
@@ -135,15 +135,43 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn list_outliers(&self, limit: Option<usize>) -> Result {
+pub(super) async fn list_outliers(
+	&self,
+	room_id: Option<OwnedRoomId>,
+	sender: Option<OwnedUserId>,
+	limit: Option<usize>,
+) -> Result {
 	let limit = limit.unwrap_or(100);
-	let mut outliers = self.services.rooms.outlier.stream().take(limit);
 
+	// TODO(admin): This currently performs a full, linear scan of the
+	// `eventid_outlierpdu` RocksDB KV table. There are no secondary indexes for
+	// room_id or sender, so filtering here will brute-force iterate the map.
+	let mut outliers = self.services.rooms.outlier.stream();
+
+	let mut count = 0_usize;
 	let mut body = String::new();
 	while let Some((event_id, pdu)) = outliers.next().await {
-		let room_id = pdu.room_id().map_or("unknown", RoomId::as_str);
+		if let Some(room) = &room_id {
+			if pdu.room_id().is_none_or(|r| r != room) {
+				continue;
+			}
+		}
+
+		if let Some(sender_filter) = &sender {
+			if pdu.sender() != sender_filter {
+				continue;
+			}
+		}
+
+		if count >= limit {
+			writeln!(body, "--- Stopped after {limit} entries ---")?;
+			break;
+		}
+
+		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
 		let sender = pdu.sender();
-		writeln!(body, "{event_id}\tRoom: {room_id}\tSender: {sender}")?;
+		writeln!(body, "{event_id}\tRoom: {room_id_str}\tSender: {sender}")?;
+		count = count.saturating_add(1);
 	}
 
 	if body.is_empty() {
