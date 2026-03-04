@@ -14,10 +14,10 @@ env:
   SKIP_CONFIRM: 1
 
 jobs:
-  default-haswell-cpu:
+  cpu-haswell:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
-    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_DEFAULT_HASWELL_CPU != ''
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_HASWELL != ''
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -77,10 +77,10 @@ jobs:
           retention-days: 90
 
   # NOTE: Currently just for Ubuntu 22/24 Skylake-optimized builds (avx512 or avx2)
-  skylake-cpu:
+  cpu-skylake:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
-    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_SKYLAKE_CPU != ''
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_SKYLAKE != ''
     runs-on: ${{ matrix.os }}
     env:
       PROFILE: release-max-perf
