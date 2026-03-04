@@ -184,7 +184,7 @@ GH_REPO ?=
 RUN ?=
 
 .PHONY: download
-download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
+download:	##H Download CI binary (use RUN=... to pick a specific run)
 	# Testing whether OS_VERSION and GH_REPO are set...
 	@test "$(OS_VERSION)"
 	@test "$(GH_REPO)"
