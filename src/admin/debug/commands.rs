@@ -18,11 +18,13 @@ use conduwuit::{
 	},
 	warn,
 };
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt, future::ready};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
 	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
-	api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
+	api::federation::event::get_room_state,
+	events::{AnyStateEvent, StateEventType},
+	serde::Raw,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -92,6 +94,126 @@ pub(super) async fn parse_pdu(&self) -> Result {
 		},
 	}
 	.await
+}
+
+#[admin_command]
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
+	let pdu_json = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu_json(&event_id)
+		.await
+		.map_err(|_| err!("PDU not found in database."))?;
+
+	let pdu: PduEvent = serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
+	let room_id = pdu
+		.room_id()
+		.ok_or_else(|| err!("PDU has no room_id."))?
+		.to_owned();
+
+	let create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.map_err(|_| err!("Failed to find create event for room."))?;
+
+	let origin = pdu
+		.origin
+		.clone()
+		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+	self.services
+		.rooms
+		.event_handler
+		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id, true)
+		.await?;
+
+	self.write_str("Successfully rescued PDU.").await
+}
+
+#[admin_command]
+pub(super) async fn list_outliers(&self, limit: Option<usize>) -> Result {
+	let limit = limit.unwrap_or(100);
+	let mut outliers = self.services.rooms.outlier.stream().take(limit);
+
+	let mut body = String::new();
+	while let Some((event_id, pdu)) = outliers.next().await {
+		let room_id = pdu.room_id().map_or("unknown", RoomId::as_str);
+		let sender = pdu.sender();
+		writeln!(body, "{event_id}\tRoom: {room_id}\tSender: {sender}")?;
+	}
+
+	if body.is_empty() {
+		return Err!("No outliers found.");
+	}
+
+	self.write_str(&format!("Outliers:\n```\n{body}\n```"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
+	let mut outliers: Vec<PduEvent> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| ready(pdu.room_id().is_some_and(|r| r == room_id)))
+		.map(|(_, pdu)| pdu)
+		.collect()
+		.await;
+
+	// Sort by origin_server_ts
+	outliers.sort_by_key(|pdu| pdu.origin_server_ts);
+
+	let mut count = 0_usize;
+	for pdu in outliers {
+		let event_id = pdu.event_id().to_owned();
+		let pdu_json = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_json(&event_id)
+			.await
+			.map_err(|_| err!("PDU not found in database."))?;
+
+		let create_event = self
+			.services
+			.rooms
+			.state_accessor
+			.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+			.await
+			.map_err(|_| err!("Failed to find create event for room."))?;
+
+		let origin = pdu
+			.origin
+			.clone()
+			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+		if self
+			.services
+			.rooms
+			.event_handler
+			.upgrade_outlier_to_timeline_pdu(
+				pdu,
+				pdu_json,
+				&create_event,
+				&origin,
+				&room_id,
+				true,
+			)
+			.await
+			.is_ok()
+		{
+			count = count.saturating_add(1);
+		}
+	}
+
+	self.write_str(&format!("Rescued {count} PDUs in room {room_id}."))
+		.await
 }
 
 #[admin_command]

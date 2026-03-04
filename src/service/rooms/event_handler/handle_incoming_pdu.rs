@@ -289,7 +289,7 @@ pub async fn handle_incoming_pdu<'a>(
 			.remove(room_id);
 	}};
 
-	self.upgrade_outlier_to_timeline_pdu(incoming_pdu, val, create_event, origin, room_id)
+	self.upgrade_outlier_to_timeline_pdu(incoming_pdu, val, create_event, origin, room_id, false)
 		.boxed()
 		.await
 }

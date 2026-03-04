@@ -38,6 +38,26 @@ pub enum DebugCommand {
 		event_id: OwnedEventId,
 	},
 
+	/// Attempts to "rescue" an outlier PDU by upgrading it to a timeline event.
+	///
+	/// This will perform all necessary auth checks and state resolution.
+	RescuePdu {
+		/// An event ID (a $ followed by the base64 reference hash)
+		event_id: OwnedEventId,
+	},
+
+	/// List all outlier PDUs in our database.
+	ListOutliers {
+		/// Limit the number of outliers listed.
+		limit: Option<usize>,
+	},
+
+	/// Attempts to "rescue" all outlier PDUs in a room.
+	RescueRoom {
+		/// The room ID.
+		room_id: OwnedRoomId,
+	},
+
 	/// Retrieve and print a PDU by PduId from the Continuwuity database
 	GetShortPdu {
 		/// Shortroomid integer
