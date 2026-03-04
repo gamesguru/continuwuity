@@ -27,7 +27,7 @@ jobs:
           - ubuntu-22.04
           - ubuntu-24.04
         profile:
-          - release-high-perf
+          - release-max-perf
           - dev
 
     steps:
@@ -81,7 +81,7 @@ jobs:
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_SKYLAKE_CPU != ''
     runs-on: ${{ matrix.os }}
     env:
-      PROFILE: release-high-perf
+      PROFILE: release-max-perf
 
     strategy:
       fail-fast: false
