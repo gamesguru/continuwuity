@@ -183,6 +183,7 @@ CPU_TARGET ?=
 OS_VERSION ?=
 GH_REPO ?=
 RUN ?=
+N_RUNS ?= 8
 
 .PHONY: download
 download:	##H Download CI binary (use RUN=... to pick a specific run)
@@ -202,7 +203,37 @@ download:	##H Download CI binary (use RUN=... to pick a specific run)
 .PHONY: download-list
 download-list:	##H List recent CI runs
 	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
-	gh run list -R $(GH_REPO) --limit 15
+#	gh run list -R $(GH_REPO) --limit $(N_RUNS)
+	@echo "Fetching latest $(N_RUNS) runs and their artifacts in parallel..."
+	@echo ""
+	@gh run list -R "$(GH_REPO)" --limit $(N_RUNS) --json databaseId,workflowName,headBranch,headSha,event,conclusion,status > .tmp/runs.json
+	@bash -c ' \
+	for ID in $$(jq -r ".[].databaseId" .tmp/runs.json); do \
+		gh api "repos/$(GH_REPO)/actions/runs/$$ID/artifacts" --jq ".artifacts[].name" > ".tmp/artifacts_$$ID.txt" & \
+	done; \
+	wait; \
+	jq -c ".[]" .tmp/runs.json | while read -r run; do \
+		ID=$$(echo "$$run" | jq -r ".databaseId"); \
+		STATUS=$$(echo "$$run" | jq -r "if .status == \"completed\" then .conclusion else .status end"); \
+		WORKFLOW=$$(echo "$$run" | jq -r ".workflowName"); \
+		BRANCH=$$(echo "$$run" | jq -r ".headBranch"); \
+		SHA=$$(echo "$$run" | jq -r ".headSha" | cut -c 1-7); \
+		ICON="-"; \
+		if [ "$$STATUS" = "success" ]; then ICON="✓"; fi; \
+		if [ "$$STATUS" = "failure" ]; then ICON="X"; fi; \
+		if [ "$$STATUS" = "in_progress" ]; then ICON="*"; fi; \
+		printf "%-2s %-20s %-30s %-15s (ID: %s)\n" "$$ICON" "$$WORKFLOW" "$$BRANCH ($$SHA)" "$$STATUS" "$$ID"; \
+		if [ -s ".tmp/artifacts_$$ID.txt" ]; then \
+			while read -r artifact; do \
+				echo "    └─ $$artifact"; \
+			done < ".tmp/artifacts_$$ID.txt"; \
+		else \
+			echo "    └─ (No artifacts)"; \
+		fi; \
+		echo ""; \
+		rm -f ".tmp/artifacts_$$ID.txt"; \
+	done'
+	@rm -f .tmp/runs.json
 
 # Binary name
 CONTINUWUITY ?= conduwuit
