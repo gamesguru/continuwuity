@@ -54,7 +54,7 @@ doctor: ##H Output version info for required tools
 	pkg-config --libs --cflags liburing
 	@echo "OK."
 	@echo "Checking for newer tags [DRY RUN]..."
-	git fetch --all --dry-run --tags
+	git fetch --all --tags --dry-run
 
 .PHONY: cpu-info
 cpu-info: ##H Print CPU info relevant to target-cpu=native
