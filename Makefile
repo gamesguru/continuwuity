@@ -184,10 +184,16 @@ complement/docker-run: ##H Run Complement tests locally (requires COMPLEMENT_DIR
 	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
 	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
 
+GH_CACHE_KEY ?=
+
 .PHONY: cache-clear-github
-cache-clear-github: ##H Delete all GitHub Actions caches (requires gh CLI)
-	@echo "Deleting all GitHub Actions caches..."
-	@gh cache list --limit 1000 | awk '{print $$1}' | grep -v 'KEYS' | xargs -r -n 1 gh cache delete || true
+cache-clear-github: ##H Delete GitHub Actions caches (requires gh CLI). Use GH_CACHE_KEY=foo to filter.
+	# Testing you have explicitly set GH_CACHE_KEY
+	test -n "$(GH_CACHE_KEY)"
+	echo "Deleting GitHub Actions caches matching prefix: $(GH_CACHE_KEY)..."
+	gh cache list --key "$(GH_CACHE_KEY)" --limit 1000 | awk '{print $$1}' \
+		| grep -v 'KEYS' \
+		| xargs -r -I {} sh -c 'echo "Deleting cache: {}" && gh cache delete {}'
 	@echo "Done."
 
 # CI artifact OS target. Override with: make download OS_VERSION=ubuntu-22.04
