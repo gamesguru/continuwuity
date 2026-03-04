@@ -91,12 +91,7 @@ pub async fn room_state_get(
 		return Ok(cached.clone());
 	}
 
-	let shortstatehash = self
-		.services
-		.state
-		.get_room_shortstatehash(room_id)
-		.await
-		.ok();
+	let shortstatehash = self.services.state.get_room_shortstatehash(room_id).await?;
 
 	if *event_type == StateEventType::RoomMember {
 		conduwuit::debug!(
@@ -107,11 +102,7 @@ pub async fn room_state_get(
 		);
 	}
 
-	let result = if let Some(shortstatehash) = shortstatehash {
-		self.state_get(shortstatehash, event_type, state_key).await
-	} else {
-		Err(err!(Database("No state found for room {room_id:?}")))
-	};
+	let result = self.state_get(shortstatehash, event_type, state_key).await;
 
 	if let Ok(pdu) = &result {
 		if *event_type == StateEventType::RoomMember {

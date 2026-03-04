@@ -174,7 +174,7 @@ pub async fn handle_incoming_pdu<'a>(
 		.services
 		.state_cache
 		.server_in_room(self.services.globals.server_name(), room_id)
-		.await && !self.mutex_federation.contains(&room_id.to_owned())
+		.await
 	{
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
