@@ -213,8 +213,15 @@ jobs:
             let body = currentRun + '\n\n<!-- complement-test-results -->';
 
             if (existing) {
-              const oldBody = existing.body.replace('<!-- complement-test-results -->', '').replace('## Complement Test Results', '').trim();
+              let oldBody = existing.body.replace('<!-- complement-test-results -->', '').replace('## Complement Test Results', '').trim();
               if (oldBody.length > 0) {
+                const maxPreviousRuns = 6;
+                let parts = oldBody.split('<details><summary>Previous Runs</summary>');
+                if (parts.length > maxPreviousRuns) {
+                  parts = parts.slice(0, maxPreviousRuns);
+                  oldBody = parts.join('<details><summary>Previous Runs</summary>');
+                  oldBody += '\n\n' + '</details>\n\n'.repeat(maxPreviousRuns - 1).trim();
+                }
                 body = currentRun + '\n\n<details><summary>Previous Runs</summary>\n\n' + oldBody + '\n\n</details>\n\n<!-- complement-test-results -->';
               }
               await github.rest.issues.updateComment({

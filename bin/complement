@@ -66,13 +66,13 @@ if [ "$HAS_GOTESTSUM" = true ]; then
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
         gotestsum --format github-actions \
             --jsonfile "$LOG_FILE" \
-            -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -v -timeout 1h ./tests/... || true)
+            -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -timeout 1h ./tests/... || true)
 else
     # We ignore the exit code because we post-process the logs even on failure.
     (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        go test -json -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE" || true)
+        go test -json -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -timeout 1h ./tests/... | tee "$LOG_FILE" || true)
 fi
 
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
