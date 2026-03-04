@@ -1,5 +1,5 @@
 ---
-name: CI
+name: Build
 
 on:
   push:
@@ -11,13 +11,15 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  SKIP_CONFIRM: "1"
+  SKIP_CONFIRM: 1
 
 jobs:
   build:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
-    # i.e., under /settings/variables/actions
-    if: vars.ENABLE_GITHUB_WORKFLOWS != ''
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD != ''
+    runs-on: ${{ matrix.os }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +29,6 @@ jobs:
         profile:
           - release-high-perf
           - dev
-    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +53,8 @@ jobs:
         with:
           toolchain: "1.90.0"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
       - name: Debug checks
         run: make vars cpu-info
         env:
@@ -72,14 +74,20 @@ jobs:
           path: target/${{ matrix.profile == 'dev' && 'debug' || matrix.profile }}/conduwuit
           retention-days: 90
 
-  # Runs format, lint, and test
-  test:
+  # NOTE: Currently just for Ubuntu 22/24 Skylake-optimized builds (avx512 or avx2)
+  build-custom:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
-    # i.e., under /settings/variables/actions
-    if: vars.ENABLE_GITHUB_WORKFLOWS != ''
-    runs-on: ubuntu-24.04
-    env:
-      PROFILE: dev-quick
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_SKYLAKE_CPU != ''
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,23 +110,32 @@ jobs:
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: "1.90.0"
-          components: clippy, rustfmt
 
-      - name: Install nightly rustfmt
-        run: rustup toolchain install nightly --component rustfmt --component clippy
-
-      - name: Install pre-commit
-        run: pip install pre-commit
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
 
       - name: Debug checks
-        run: make vars doctor cpu-info
-      - name: Format
-        run: make format
+        run: make vars cpu-info
 
-      - name: Lint
-        run: make lint
+      - name: Detect best CPU target
+        id: cpu
+        run: |
+          if grep -q avx512f /proc/cpuinfo 2>/dev/null; then
+            echo "target=skylake-avx512" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=skylake" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Detected target: $(grep target= "$GITHUB_OUTPUT" | cut -d= -f2)"
 
-      - name: Test
-        run: make test
+      - name: Build (${{ steps.cpu.outputs.target }})
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          GIT_COMMIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
+        run: make build
+
+      - name: Upload binary (${{ steps.cpu.outputs.target }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: conduwuit-${{ steps.cpu.outputs.target }}-${{ matrix.os }}
+          path: target/${{ env.PROFILE }}/conduwuit
+          retention-days: 60

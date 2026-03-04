@@ -1,5 +1,5 @@
 ---
-name: Complement Tests
+name: PR Checks
 
 on:
   push:
@@ -11,14 +11,74 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  SKIP_CONFIRM: 1
 
 jobs:
-  complement:
+  clippy-checks:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_CLIPPY_CHECKS != ''
+    runs-on: ubuntu-latest
+    env:
+      PROFILE: dev-quick
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+          components: clippy, rustfmt
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt --component clippy
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - name: Debug checks
+        run: make vars doctor cpu-info
+      - name: Format
+        run: make format
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # Complement tests (advised to run in docker or isolated container)
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  complement-csapi:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: vars.ENABLE_GITHUB_WORKFLOWS != ''
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+
+    # For writing/updating PR comments on running test totals (# pass/fail/skip)
     permissions:
       pull-requests: write
       contents: read
+
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -170,7 +230,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: complement-logs
-          path: |
-            complement_test_logs.jsonl
-            complement_test_results.jsonl
+          path: complement_test_results.jsonl
           retention-days: 90
