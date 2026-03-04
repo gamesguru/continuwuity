@@ -164,8 +164,8 @@ clean:	##H Clean build directory for current profile
 # 	rm -rf target/debian
 
 
-.PHONY: docs
-docs:	##H Regenerate docs (admin commands, etc.)
+.PHONY: build-docs
+build-docs:	##H Regenerate docs (admin commands, etc.)
 	@echo "Regenerate docs with PROFILE='$(PROFILE)'?"
 	@$(MAKE) _confirm
 	cargo run -p xtask --profile $(PROFILE) -- generate-docs
@@ -174,16 +174,16 @@ docs:	##H Regenerate docs (admin commands, etc.)
 COMPLEMENT_DIR ?=
 COMPLEMENT_IMAGE ?= continuwuity:complement
 
-.PHONY: complement/docker-build
-complement/docker-build: ##H Build conduwuit image for Complement testing
+.PHONY: complement/build
+complement/build: ##H Build conduwuit docker image for Complement testing
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
 	@echo "Building Complement Docker image..."
 	docker build -t $(COMPLEMENT_IMAGE) -f ./docker/complement.Dockerfile .
 
-.PHONY: complement/docker-run
-complement/docker-run: ##H Run Complement tests locally (requires COMPLEMENT_DIR)
+.PHONY: complement/run
+complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
 	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
 	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
 	@cd $(COMPLEMENT_DIR) && \
@@ -192,8 +192,8 @@ complement/docker-run: ##H Run Complement tests locally (requires COMPLEMENT_DIR
 
 GH_CACHE_KEY ?=
 
-.PHONY: cache-clear-github
-cache-clear-github: ##H Delete GitHub Actions caches (requires gh CLI). Use GH_CACHE_KEY=foo to filter.
+.PHONY: download-cache-clear
+download-cache-clear: ##H Delete GitHub Actions caches (requires gh CLI). Use GH_CACHE_KEY=foo to filter.
 	# Testing you have explicitly set GH_CACHE_KEY
 	test -n "$(GH_CACHE_KEY)"
 	echo "Deleting GitHub Actions caches matching prefix: $(GH_CACHE_KEY)..."
