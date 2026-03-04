@@ -71,7 +71,7 @@ jobs:
   complement-csapi:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
-    if: vars.ENABLE_GITHUB_WORKFLOWS != ''
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_COMPLEMENT_TESTS != ''
     runs-on: ubuntu-latest
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
