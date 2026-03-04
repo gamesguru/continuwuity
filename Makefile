@@ -202,45 +202,62 @@ complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR
 	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
 	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
 
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# GitHub CI/build related targets
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+GH_REPO ?=
+
 GH_CACHE_KEY ?=
 
-.PHONY: download-cache-clear
-download-cache-clear: ##H Delete GitHub Actions caches (requires gh CLI). Use GH_CACHE_KEY=foo to filter.
+.PHONY: download/clear-cache
+download/clear-cache: ##H Delete GitHub Actions caches
 	# Testing you have explicitly set GH_CACHE_KEY
-	test -n "$(GH_CACHE_KEY)"
-	echo "Deleting GitHub Actions caches matching prefix: $(GH_CACHE_KEY)..."
-	gh cache list --key "$(GH_CACHE_KEY)" --limit 1000 | awk '{print $$1}' \
-		| grep -v 'KEYS' \
-		| xargs -r -I {} sh -c 'echo "Deleting cache: {}" && gh cache delete {}'
-	@echo "Done."
+	@if [ -z "$(GH_CACHE_KEY)" ]; then \
+		gh cache list -R "$(GH_REPO)" --limit 100; \
+		echo ""; \
+		echo "Hint: Use GH_CACHE_KEY=prefix to delete caches."; \
+	else \
+		echo "Deleting GitHub Actions caches matching prefix: $(GH_CACHE_KEY)..."; \
+		gh cache list -R "$(GH_REPO)" --key "$(GH_CACHE_KEY)" --limit 1000 | awk '{print $$1}' \
+			| grep -v 'ID' | grep -v 'KEYS' \
+			| xargs -r -I {} sh -c 'echo "Deleting cache: {}" && gh cache delete -R "$(GH_REPO)" {}'; \
+	fi
 
-# CI artifact OS target. Override with: make download OS_VERSION=ubuntu-22.04
+
 CPU_TARGET ?=
 OS_VERSION ?=
-GH_ARTIFACT ?= conduwuit$(CPU_TARGET)-$(OS_VERSION)
-GH_REPO ?=
+
+GH_ARTIFACT_NAME ?= conduwuit
+GH_ARTIFACT_SUFFIX ?= $(CPU_TARGET)-$(OS_VERSION)
+ARTIFACT ?= $(GH_ARTIFACT_NAME)$(GH_ARTIFACT_SUFFIX)
+
 RUN ?=
-N_RUNS ?= 8
+N_RUNS ?= 6
 
 .PHONY: download
 download:	##H Download CI binary (use RUN=... to pick a specific run)
-	# Testing whether OS_VERSION and GH_REPO are set...
-	@test "$(OS_VERSION)"
-	@test "$(GH_REPO)"
+	# Testing whether GH_REPO is set
+	test "$(GH_REPO)"
+	# Testing whether ARTIFACT related vars are set
+	(test "$(OS_VERSION)" && test "$(CPU_TARGET)" ) || test "$(ARTIFACT)"
 	@mkdir -p target/ci
 	# Checking version of old binary, if it exists
 	@-./target/ci/conduwuit -V
 	@rm -f target/ci/conduwuit
-	gh run download $(RUN) -R $(GH_REPO) -n $(GH_ARTIFACT) -D target/ci
+	gh run download $(RUN) -R $(GH_REPO) -n $(ARTIFACT) -D target/ci
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
 	@ln -sfn ci target/latest
 
-.PHONY: download-list
-download-list:	##H List recent CI runs
+.PHONY: download/list
+download/list:	##H List recent CI runs
 	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
-#	gh run list -R $(GH_REPO) --limit $(N_RUNS)
+	mkdir -p .tmp && echo '**' > .tmp/.gitignore
+	# gh run list -R $(GH_REPO) --limit $(N_RUNS)
 	@echo "Fetching latest $(N_RUNS) runs and their artifacts in parallel..."
 	@echo ""
 	@gh run list -R "$(GH_REPO)" --limit $(N_RUNS) --json databaseId,workflowName,headBranch,headSha,event,conclusion,status > .tmp/runs.json
