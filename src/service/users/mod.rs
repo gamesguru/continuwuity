@@ -1,3 +1,5 @@
+pub(super) mod dehydrated_device;
+
 #[cfg(feature = "ldap")]
 use std::collections::HashMap;
 use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
@@ -6,7 +8,7 @@ use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 use conduwuit::result::LogErr;
 use conduwuit::{
 	Err, Error, Result, Server, at, debug_warn, err, is_equal_to, trace,
-	utils::{self, ReadyExt, stream::TryIgnore},
+	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
 };
 #[cfg(feature = "ldap")]
 use conduwuit_core::{debug, error};
@@ -70,6 +72,7 @@ struct Data {
 	userfilterid_filter: Arc<Map>,
 	userid_avatarurl: Arc<Map>,
 	userid_blurhash: Arc<Map>,
+	userid_dehydrateddevice: Arc<Map>,
 	userid_devicelistversion: Arc<Map>,
 	userid_displayname: Arc<Map>,
 	userid_lastonetimekeyupdate: Arc<Map>,
@@ -110,6 +113,7 @@ impl crate::Service for Service {
 				userfilterid_filter: args.db["userfilterid_filter"].clone(),
 				userid_avatarurl: args.db["userid_avatarurl"].clone(),
 				userid_blurhash: args.db["userid_blurhash"].clone(),
+				userid_dehydrateddevice: args.db["userid_dehydrateddevice"].clone(),
 				userid_devicelistversion: args.db["userid_devicelistversion"].clone(),
 				userid_displayname: args.db["userid_displayname"].clone(),
 				userid_lastonetimekeyupdate: args.db["userid_lastonetimekeyupdate"].clone(),
@@ -480,6 +484,11 @@ impl Service {
 
 	/// Removes a device from a user.
 	pub async fn remove_device(&self, user_id: &UserId, device_id: &DeviceId) {
+		// Remove dehydrated device if this is the dehydrated device
+		let _: Result<_> = self
+			.remove_dehydrated_device(user_id, Some(device_id))
+			.await;
+
 		let userdeviceid = (user_id, device_id);
 
 		// Remove tokens
@@ -1040,7 +1049,7 @@ impl Service {
 		device_id: &'a DeviceId,
 		since: Option<u64>,
 		to: Option<u64>,
-	) -> impl Stream<Item = Raw<AnyToDeviceEvent>> + Send + 'a {
+	) -> impl Stream<Item = (u64, Raw<AnyToDeviceEvent>)> + Send + 'a {
 		type Key<'a> = (&'a UserId, &'a DeviceId, u64);
 
 		let from = (user_id, device_id, since.map_or(0, |since| since.saturating_add(1)));
@@ -1054,7 +1063,7 @@ impl Service {
 					&& device_id == *device_id_
 					&& to.is_none_or(|to| *count <= to)
 			})
-			.map(at!(1))
+			.map(|((_, _, count), event)| (count, event))
 	}
 
 	pub async fn remove_to_device_events<Until>(
