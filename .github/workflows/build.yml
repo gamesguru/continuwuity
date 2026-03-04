@@ -80,6 +80,8 @@ jobs:
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_SKYLAKE_CPU != ''
     runs-on: ${{ matrix.os }}
+    env:
+      PROFILE: release-high-perf
 
     strategy:
       fail-fast: false
