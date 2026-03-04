@@ -179,6 +179,7 @@ docker/complement: ##H Build conduwuit image for Complement testing
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # CI artifact OS target. Override with: make download OS_VERSION=ubuntu-22.04
+CPU_TARGET ?=
 OS_VERSION ?=
 GH_REPO ?=
 RUN ?=
@@ -192,7 +193,7 @@ download:	##H Download CI binary (use RUN=... to pick a specific run)
 	# Checking version of old binary, if it exists
 	@-./target/ci/conduwuit -V
 	@rm -f target/ci/conduwuit
-	gh run download $(RUN) -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
+	gh run download $(RUN) -R $(GH_REPO) -n conduwuit$(CPU_TARGET)-$(OS_VERSION) -D target/ci
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
