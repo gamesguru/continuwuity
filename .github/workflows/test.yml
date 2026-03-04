@@ -29,6 +29,9 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
 
+      - name: Fetch tags manually
+        run: git fetch --tags --force
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -85,6 +88,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
           fetch-depth: 0
+
+      - name: Fetch tags manually
+        run: git fetch --tags --force
 
       - name: Install system dependencies
         run: |

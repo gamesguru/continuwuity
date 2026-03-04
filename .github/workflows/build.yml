@@ -37,6 +37,9 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
 
+      - name: Fetch tags manually
+        run: git fetch --tags --force
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -64,7 +67,6 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          GIT_COMMIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
         run: make build
 
       - name: Upload binary
@@ -96,6 +98,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
           fetch-depth: 0
+
+      - name: Fetch tags manually
+        run: git fetch --tags --force
 
       - name: Install system dependencies
         run: |
@@ -131,7 +136,6 @@ jobs:
       - name: Build (${{ steps.cpu.outputs.target }})
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          GIT_COMMIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
         run: make build
 
