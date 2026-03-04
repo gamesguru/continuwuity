@@ -1,0 +1,103 @@
+---
+name: Complement Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  SKIP_CONFIRM: 1
+
+jobs:
+  complement-tests:
+    runs-on: ubuntu-24.04
+    container:
+      image: "ghcr.io/tcpipuk/act-runner:ubuntu-latest"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ forge.event.pull_request.head.sha || forge.sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Fetch tags manually
+        run: git fetch --tags --force
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-complement-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-complement-
+
+      - name: Setup sccache
+        uses: https://git.tomfos.tr/tom/sccache-action@v1
+
+      - name: Configure sccache environment
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_CACHE_SIZE=10G" >> $GITHUB_ENV
+          # Aggressive GC since cache restores don't increment counter
+          echo "CARGO_INCREMENTAL_GC_TRIGGER=5" >> $GITHUB_ENV
+
+      - name: Setup Rust
+        uses: ./.forgejo/actions/setup-rust
+        with:
+          github-token: ${{ secrets.GH_PUBLIC_RO }}
+
+      - name: Build conduwuit for Complement
+        run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+
+      - name: Checkout Complement
+        uses: actions/checkout@v4
+        with:
+          repository: matrix-org/complement
+          path: complement-src
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: complement-src/go.sum
+
+      - name: Build Complement Docker image
+        run: docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Build and run Complement tests
+        continue-on-error: true
+        run: |
+          ./bin/complement ./complement-src
+
+      - name: Upload test logs
+        if: always()
+        uses: forgejo/upload-artifact@v4
+        with:
+          name: complement-logs
+          path: complement_test_results.jsonl
+          retention-days: 90
