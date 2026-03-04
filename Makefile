@@ -81,11 +81,23 @@ vars: ##H Print debug info
 # Development commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.PHONY: cargo/lock
-cargo/lock: ##H Regenerate Cargo.lock file safely
-	@echo "Regenerating Cargo.lock..."
+.PHONY: cargo/lock-init
+cargo/lock-init:	##H Init or fully upgrade the lockfile (wipes it)
 	cargo generate-lockfile
-	@echo "Done."
+	@echo "OK."
+
+.PHONY: cargo/lock-update
+cargo/lock-update: ##H Update Cargo.lock minimally to match Cargo.toml
+	@echo "Updating Cargo.lock..."
+	cargo metadata --format-version 1 --no-deps > /dev/null
+	@echo "OK."
+
+.PHONY: cargo/sync
+cargo/sync: ##H Sync Cargo.lock with origin/main and refresh minimally
+	@echo "Synchronizing Cargo.lock..."
+	git restore --source origin/main Cargo.lock
+	cargo metadata --format-version 1 --no-deps > /dev/null
+	@echo "OK."
 
 .PHONY: profiles
 profiles: ##H List available cargo profiles
