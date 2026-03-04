@@ -165,18 +165,30 @@ docs:	##H Regenerate docs (admin commands, etc.)
 	cargo run -p xtask --profile $(PROFILE) -- generate-docs
 
 
-.PHONY: docker/complement
-docker/complement: ##H Build conduwuit image for Complement testing
+COMPLEMENT_DIR ?=
+COMPLEMENT_IMAGE ?= continuwuity:complement
+
+.PHONY: complement/docker-build
+complement/docker-build: ##H Build conduwuit image for Complement testing
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
 	@echo "Building Complement Docker image..."
-	docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
+	docker build -t $(COMPLEMENT_IMAGE) -f ./docker/complement.Dockerfile .
 
+.PHONY: complement/docker-run
+complement/docker-run: ##H Run Complement tests locally (requires COMPLEMENT_DIR)
+	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
+	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
+	@cd $(COMPLEMENT_DIR) && \
+	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
+	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
 
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Deployment commands
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.PHONY: cache-clear-github
+cache-clear-github: ##H Delete all GitHub Actions caches (requires gh CLI)
+	@echo "Deleting all GitHub Actions caches..."
+	@gh cache list --limit 1000 | awk '{print $$1}' | grep -v 'KEYS' | xargs -r -n 1 gh cache delete || true
+	@echo "Done."
 
 # CI artifact OS target. Override with: make download OS_VERSION=ubuntu-22.04
 CPU_TARGET ?=

@@ -217,10 +217,10 @@ jobs:
               if (oldBody.length > 0) {
                 const maxPreviousRuns = 6;
                 let parts = oldBody.split('<details><summary>Previous Runs</summary>');
-                if (parts.length > maxPreviousRuns) {
-                  parts = parts.slice(0, maxPreviousRuns);
+                if (parts.length > maxPreviousRuns + 1) {
+                  parts = parts.slice(0, maxPreviousRuns + 1);
                   oldBody = parts.join('<details><summary>Previous Runs</summary>');
-                  oldBody += '\n\n' + '</details>\n\n'.repeat(maxPreviousRuns - 1).trim();
+                  oldBody += '\n\n' + '</details>\n\n'.repeat(maxPreviousRuns).trim();
                 }
                 body = currentRun + '\n\n<details><summary>Previous Runs</summary>\n\n' + oldBody + '\n\n</details>\n\n<!-- complement-test-results -->';
               }
