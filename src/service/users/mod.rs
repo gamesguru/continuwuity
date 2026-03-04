@@ -7,8 +7,8 @@ use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 #[cfg(feature = "ldap")]
 use conduwuit::result::LogErr;
 use conduwuit::{
-	Err, Error, Result, Server, at, debug_warn, err, is_equal_to, trace,
-	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
+	Err, Error, Result, Server, debug_warn, err, is_equal_to, trace,
+	utils::{self, ReadyExt, stream::TryIgnore},
 };
 #[cfg(feature = "ldap")]
 use conduwuit_core::{debug, error};

@@ -81,6 +81,12 @@ vars: ##H Print debug info
 # Development commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+.PHONY: cargo/lock
+cargo/lock: ##H Regenerate Cargo.lock file safely
+	@echo "Regenerating Cargo.lock..."
+	cargo generate-lockfile
+	@echo "Done."
+
 .PHONY: profiles
 profiles: ##H List available cargo profiles
 	# NOTE: not authoritative — see Cargo.toml for definitive profiles.
