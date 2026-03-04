@@ -22,8 +22,9 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
+          fetch-depth: 0
 
       - name: Install system dependencies
         run: |
