@@ -151,6 +151,11 @@ pub(super) async fn list_outliers(
 	let mut count = 0_usize;
 	let mut body = String::new();
 	while let Some((event_id, pdu)) = outliers.next().await {
+		if count >= limit {
+			writeln!(body, "--- Stopped after {limit} entries ---")?;
+			break;
+		}
+
 		if let Some(room) = &room_id {
 			if pdu.room_id().is_none_or(|r| r != room) {
 				continue;
@@ -161,11 +166,6 @@ pub(super) async fn list_outliers(
 			if pdu.sender() != sender_filter {
 				continue;
 			}
-		}
-
-		if count >= limit {
-			writeln!(body, "--- Stopped after {limit} entries ---")?;
-			break;
 		}
 
 		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
