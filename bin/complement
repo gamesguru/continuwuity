@@ -64,7 +64,7 @@ if [ "$HAS_GOTESTSUM" = true ]; then
     (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        gotestsum --format testname --hide-summary=output \
+        gotestsum --format pkgname --hide-summary=output \
             --jsonfile "$LOG_FILE" \
             -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -timeout 1h ./tests/... || true)
 else
