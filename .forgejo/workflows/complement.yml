@@ -37,9 +37,9 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
-            clang \
-            libclang-dev \
-            llvm-dev
+            clang-18 \
+            libclang-18-dev \
+            llvm-18-dev
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
