@@ -16,6 +16,9 @@ env:
 
 jobs:
   build:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions
+    if: vars.ENABLE_GITHUB_WORKFLOWS != ''
     strategy:
       fail-fast: false
       matrix:

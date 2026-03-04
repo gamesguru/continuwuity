@@ -14,6 +14,7 @@ env:
 
 jobs:
   complement:
+    if: vars.ENABLE_GITHUB_WORKFLOWS != ''
     runs-on: ubuntu-24.04
     permissions:
       pull-requests: write
