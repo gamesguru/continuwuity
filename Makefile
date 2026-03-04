@@ -36,7 +36,7 @@ STYLE_RESET := $(shell tput sgr0 2>/dev/null || echo -e "\033[0m")
 .PHONY: help
 help: ##H Show this help, list available targets
 	@grep -hE '^[a-zA-Z0-9_\/-]+:.*?##H .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-15s$(STYLE_RESET) %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-20s$(STYLE_RESET) %s\n", $$1, $$2}'
 
 
 .PHONY: doctor
@@ -204,53 +204,27 @@ download-list:	##H List recent CI runs
 	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
 	gh run list -R $(GH_REPO) --limit 15
 
-
 # Binary name
 CONTINUWUITY ?= conduwuit
+# systemctl service name
+C10Y_SERV ?= conduwuit.service
 
 # Configure these in .env if alternate path(s) are desired
-LOCAL_BIN_DIR ?= target/latest
-REMOTE_BIN_DIR ?= /usr/local/bin
+BUILD_BIN_DIR ?= target/latest
+DEPLOY_BIN_DIR ?= /usr/local/bin
 
-LOCAL_BIN ?= $(LOCAL_BIN_DIR)/$(CONTINUWUITY)
-REMOTE_BIN ?= $(REMOTE_BIN_DIR)/$(CONTINUWUITY)
+BUILD_BIN ?= $(BUILD_BIN_DIR)/$(CONTINUWUITY)
+DEPLOY_BIN ?= $(DEPLOY_BIN_DIR)/$(CONTINUWUITY)
 
 .PHONY: install
 install:	##H Install (executed on VPS)
-	@echo "Install $(CONTINUWUITY) to $(REMOTE_BIN)?"
+	@echo "Install $(CONTINUWUITY) to $(DEPLOY_BIN)?"
 	@$(MAKE) _confirm
 	# You may need to run with sudo or adjust REMOTE_BIN_DIR if this fails
-	install -b -p -m 755 $(LOCAL_BIN) $(REMOTE_BIN)
+	install -b -p -m 755 $(BUILD_BIN) $(DEPLOY_BIN)
 	@echo "Installation complete."
-# 	@echo "Restarting $(CONTINUWUITY)"
-# 	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)
 
-CONT_SERV ?= conduwuit.service
 
 .PHONY: restart
 restart:    ##H Restart service (using systemctl)
-	sudo systemctl restart $(CONT_SERV)
-
-
-# SSH host for remote deploy (e.g. vps151). Configure in .env: VPS_HOST=
-# Or pass ENV=nightly / ENV=dev on the command line to use a preset.
-ENV ?=
-ifeq ($(ENV),nightly)
-VPS_HOST ?= nightly
-CONT_SERV ?= conduwuit.service
-else ifeq ($(ENV),dev)
-VPS_HOST ?= dev
-CONT_SERV ?= conduwuit.service
-endif
-VPS_HOST ?=
-VPS_REMOTE_BIN ?= /usr/local/bin/$(CONTINUWUITY)
-
-.PHONY: deploy
-deploy:	##H Build skylake release, rsync to VPS, and restart service
-	@test "$(VPS_HOST)" || (echo "ERROR: VPS_HOST is not set. Add VPS_HOST=<host> to .env" && exit 1)
-	@$(MAKE) build PROFILE=release-high-perf CARGO_FLAGS="--profile release-high-perf" RUSTFLAGS="-C target-cpu=skylake"
-	@echo "Uploading $(LOCAL_BIN) to $(VPS_HOST):$(VPS_REMOTE_BIN)..."
-	rsync -avz --progress $(LOCAL_BIN) $(VPS_HOST):$(VPS_REMOTE_BIN)
-	@echo "Restarting $(CONT_SERV) on $(VPS_HOST)..."
-	ssh -t $(VPS_HOST) "sudo systemctl restart $(CONT_SERV)"
-	@echo "Deploy complete."
+	sudo systemctl restart $(C10Y_SERV)
