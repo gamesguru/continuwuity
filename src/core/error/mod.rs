@@ -213,6 +213,25 @@ impl Error {
 	/// Result where Ok(None) is instead Err(e) if e.is_not_found().
 	#[inline]
 	pub fn is_not_found(&self) -> bool { self.status_code() == http::StatusCode::NOT_FOUND }
+
+	/// Returns true if the error is a service-interrupted error (e.g.
+	/// shutdown).
+	#[inline]
+	pub fn is_interrupted(&self) -> bool {
+		match self {
+			| Self::Io(error) => error.kind() == std::io::ErrorKind::Interrupted,
+			| _ => false,
+		}
+	}
+
+	/// Returns true if the error is a DNS timeout error.
+	#[inline]
+	pub fn is_dns_timeout(&self) -> bool {
+		match self {
+			| Self::Err(error) => error.starts_with("DNS timeout:"),
+			| _ => false,
+		}
+	}
 }
 
 impl std::fmt::Debug for Error {
