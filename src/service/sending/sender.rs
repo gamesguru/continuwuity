@@ -586,8 +586,7 @@ impl Service {
 		let presence_since = self.services.presence.presence_since(since.0);
 
 		pin_mut!(presence_since);
-		let mut presence_updates =
-			HashMap::<OwnedUserId, PresenceUpdate>::with_capacity(SELECT_PRESENCE_LIMIT);
+		let mut presence_updates = HashMap::<OwnedUserId, PresenceUpdate>::new();
 		while let Some((user_id, count, presence_bytes)) = presence_since.next().await {
 			if count > since.1 {
 				break;
@@ -637,10 +636,6 @@ impl Service {
 		if presence_updates.is_empty() {
 			return None;
 		}
-
-		self.stats
-			.outgoing_presence
-			.fetch_add(presence_updates.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
 
 		let presence_content = Edu::Presence(PresenceContent {
 			push: presence_updates.into_values().collect(),
