@@ -54,6 +54,19 @@ jobs:
 
           chmod +x target/debug/conduwuit || true
 
+      - name: Sanity Test Artifact
+        run: |
+          echo "Checking file type..."
+          file target/debug/conduwuit
+
+          echo "Testing execution..."
+          if ! ./target/debug/conduwuit --version; then
+            echo "❌ ERROR: Downloaded artifact is not a valid executable!"
+            echo "It might be a 404 HTML page, a corrupted zip, or for the wrong architecture."
+            exit 1
+          fi
+          echo "✅ Artifact is a valid executable."
+
       - name: Checkout Complement
         run: |
           # Manual checkout of complement to avoid Node overhead
