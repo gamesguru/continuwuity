@@ -9,7 +9,7 @@ use futures::{Future, TryFutureExt};
 use http::Method;
 use ruma::api::IncomingRequest;
 
-use super::{Ruma, RumaResponse, State};
+use super::{OptionalRuma, Ruma, RumaResponse, State};
 
 pub(in super::super) trait RumaHandler<T> {
 	fn add_route(&'static self, router: Router<State>, path: &str) -> Router<State>;
@@ -44,10 +44,17 @@ impl RouterExt for Router<State> {
 
 macro_rules! ruma_handler {
 	( $($tx:ident),* $(,)? ) => {
+		ruma_handler_impl!(Ruma, $($tx,)*);
+		ruma_handler_impl!(OptionalRuma, $($tx,)*);
+	};
+}
+
+macro_rules! ruma_handler_impl {
+	( $wrapper:ident, $($tx:ident,)* ) => {
 		#[allow(non_snake_case)]
-		impl<Err, Req, Fut, Fun, $($tx,)*> RumaHandler<($($tx,)* Ruma<Req>,)> for Fun
+		impl<Err, Req, Fut, Fun, $($tx,)*> RumaHandler<($($tx,)* $wrapper<Req>,)> for Fun
 		where
-			Fun: Fn($($tx,)* Ruma<Req>,) -> Fut + Send + Sync + 'static,
+			Fun: Fn($($tx,)* $wrapper<Req>,) -> Fut + Send + Sync + 'static,
 			Fut: Future<Output = Result<Req::OutgoingResponse, Err>> + Send,
 			Req: IncomingRequest + Send + Sync + 'static,
 			Err: IntoResponse + Send,
@@ -67,7 +74,7 @@ macro_rules! ruma_handler {
 				router.route(path, on(method, action))
 			}
 		}
-	}
+	};
 }
 ruma_handler!();
 ruma_handler!(T1);

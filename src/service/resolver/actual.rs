@@ -73,32 +73,28 @@ impl super::Service {
 				if let Some(pos) = dest.as_str().find(':') {
 					self.actual_dest_2(dest, cache, pos, &mut timeouts).await?
 				} else {
-					match self
-						.conditional_query_and_cache(dest.as_str(), 8448, true)
-						.await
-					{
-						| Ok(()) => (),
-						| Err(e) if e.is_interrupted() => return Err(e),
-						| Err(_) => timeouts = timeouts.saturating_add(1),
-					}
+					self.handle_dns_step_unit(
+						&mut timeouts,
+						self.conditional_query_and_cache(dest.as_str(), 8448, true),
+					)
+					.await?;
 
 					self.services.server.check_running()?;
-					let ww = self.request_well_known(dest.as_str()).await;
+					let ww = self
+						.handle_interrupted(self.request_well_known(dest.as_str()))
+						.await?;
 					match ww {
-						| Ok(Some(delegated)) =>
+						| Some(delegated) =>
 							self.actual_dest_3(&mut host, cache, delegated, &mut timeouts)
 								.await?,
-						| Err(e) if e.is_interrupted() => return Err(e),
-						| _ => match self.query_srv_record(dest.as_str()).await {
-							| Ok(Some(overrider)) =>
+						| _ => match self
+							.handle_dns_step(&mut timeouts, self.query_srv_record(dest.as_str()))
+							.await?
+						{
+							| Some(overrider) =>
 								self.actual_dest_4(&host, cache, overrider, &mut timeouts)
 									.await?,
-							| Ok(None) => self.actual_dest_5(dest, cache, &mut timeouts).await?,
-							| Err(e) if e.is_dns_timeout() => {
-								timeouts = timeouts.saturating_add(1);
-								self.actual_dest_5(dest, cache, &mut timeouts).await?
-							},
-							| Err(e) => return Err(e),
+							| _ => self.actual_dest_5(dest, cache, &mut timeouts).await?,
 						},
 					}
 				},
@@ -185,7 +181,7 @@ impl super::Service {
 							*timeouts = timeouts.saturating_add(1);
 							self.actual_dest_3_4(cache, delegated, timeouts).await
 						},
-						| Err(e) => Err(e)?,
+						| Err(e) => Err(e),
 					}
 				},
 		}
@@ -501,5 +497,51 @@ impl super::Service {
 		}
 
 		Ok(())
+	}
+
+	#[inline]
+	async fn handle_dns_step_unit(
+		&self,
+		timeouts: &mut u8,
+		fut: impl Future<Output = Result<()>>,
+	) -> Result<()> {
+		match fut.await {
+			| Ok(()) => Ok(()),
+			| Err(e) if e.is_interrupted() => Err(e),
+			| Err(e) if e.is_dns_timeout() => {
+				*timeouts = timeouts.saturating_add(1);
+				Ok(())
+			},
+			| Err(_) => Ok(()),
+		}
+	}
+
+	#[inline]
+	async fn handle_dns_step<T>(
+		&self,
+		timeouts: &mut u8,
+		fut: impl Future<Output = Result<Option<T>>>,
+	) -> Result<Option<T>> {
+		match fut.await {
+			| Ok(res) => Ok(res),
+			| Err(e) if e.is_interrupted() => Err(e),
+			| Err(e) if e.is_dns_timeout() => {
+				*timeouts = timeouts.saturating_add(1);
+				Ok(None)
+			},
+			| Err(_) => Ok(None),
+		}
+	}
+
+	#[inline]
+	async fn handle_interrupted<T>(
+		&self,
+		fut: impl Future<Output = Result<Option<T>>>,
+	) -> Result<Option<T>> {
+		match fut.await {
+			| Ok(res) => Ok(res),
+			| Err(e) if e.is_interrupted() => Err(e),
+			| Err(_) => Ok(None),
+		}
 	}
 }
