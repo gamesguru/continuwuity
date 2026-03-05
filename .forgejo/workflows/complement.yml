@@ -12,27 +12,38 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   SKIP_CONFIRM: 1
+  # Persistent CI cache directories on the host
+  CARGO_HOME: /home/forgejo-runner/.cache/conduwuit-ci/cargo
+  SCCACHE_DIR: /home/forgejo-runner/.cache/conduwuit-ci/sccache
+  GOPATH: /home/forgejo-runner/.cache/conduwuit-ci/go
+  RUSTC_WRAPPER: sccache
 
 jobs:
   complement-tests:
-    runs-on: ubuntu-24.04
-    # Removed container block to run on host and avoid DinD issues
+    runs-on: host
+    # Using 'host' label to run directly on the VPS machine OS.
+    # Eliminates container overhead and Docker-in-Docker.
+
+    env:
+      # Limit concurrent build jobs to avoid overloading the server
+      CARGO_BUILD_JOBS: 2
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ forge.event.pull_request.head.sha || forge.sha }}
-          fetch-tags: true
-          fetch-depth: 0
-
-      - name: Fetch tags manually
-        run: git fetch --tags --force
+      - name: Slim Checkout
+        run: |
+          # Use raw git to avoid Node-based checkout action
+          if [ ! -d ".git" ]; then
+            git init
+            git remote add origin ${{ forge.server_url }}/${{ forge.repository }}
+          fi
+          git fetch --depth 1 origin ${{ forge.sha }}
+          git checkout FETCH_HEAD
+          git fetch --tags --force
 
       - name: Install system dependencies
         run: |
-          apt-get update
-          apt-get install -y \
+          sudo apt-get update
+          sudo apt-get install -y \
             build-essential \
             pkg-config \
             liburing-dev \
@@ -40,35 +51,32 @@ jobs:
             libclang-18-dev \
             llvm-18-dev
 
-      - name: Setup Rust
-        uses: ./.forgejo/actions/setup-rust
-        with:
-          github-token: ${{ secrets.GH_PUBLIC_RO }}
+      - name: Native Rust Setup
+        run: |
+          # Avoid setup-rust action (Node-based) and use rustup directly
+          rustup toolchain install $(cat rust-toolchain.toml | grep channel | cut -d'"' -f2)
+          rustup default $(cat rust-toolchain.toml | grep channel | cut -d'"' -f2)
+          mkdir -p "$CARGO_HOME" "$SCCACHE_DIR"
 
       - name: Build conduwuit for Complement
         run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
 
       - name: Checkout Complement
-        uses: actions/checkout@v4
-        with:
-          repository: matrix-org/complement
-          path: complement-src
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-          cache-dependency-path: complement-src/go.sum
+        run: |
+          # Manual checkout of complement to avoid Node overhead
+          if [ ! -d "complement-src" ]; then
+            git clone --depth 1 https://github.com/matrix-org/complement complement-src
+          else
+            cd complement-src && git fetch --depth 1 && git checkout FETCH_HEAD && cd ..
+          fi
 
       - name: Build Complement Docker image
         run: docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@latest
-
       - name: Build and run Complement tests
         continue-on-error: true
         run: |
+          # Go installation should be present on the host or we can apt install it
           ./bin/complement ./complement-src
 
       - name: Summarize results
