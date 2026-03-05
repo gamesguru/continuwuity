@@ -14,10 +14,9 @@ env:
   SKIP_CONFIRM: 1
   # Persistent CI cache directories on the host
   CARGO_HOME: /home/forgejo-runner/.cache/conduwuit-ci/cargo
-  SCCACHE_DIR: /home/forgejo-runner/.cache/conduwuit-ci/sccache
   GOPATH: /home/forgejo-runner/.cache/conduwuit-ci/go
-  RUSTC_WRAPPER: sccache
-  PATH: /opt/rust/cargo/bin:${{ github.workspace }}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  RUSTC_WRAPPER: ccache
+  PATH: /opt/rust/cargo/bin:/home/forgejo-runner/.cargo/bin:${{ github.workspace }}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 jobs:
   complement-tests:
@@ -45,7 +44,7 @@ jobs:
         run: |
           # Use rustup to ensure toolchain is ready, but let it handle the file automatically
           rustup show
-          mkdir -p "$CARGO_HOME" "$SCCACHE_DIR"
+          mkdir -p "$CARGO_HOME"
 
       - name: Build conduwuit for Complement
         run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
