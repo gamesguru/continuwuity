@@ -7,7 +7,7 @@ use futures::future::{AbortHandle, Abortable};
 use ruma::events::room::message::RoomMessageEventContent;
 use rustyline_async::{Readline, ReadlineError, ReadlineEvent};
 use termimad::MadSkin;
-use tokio::task::JoinHandle;
+use tokio::{select, task::JoinHandle};
 
 use crate::{
 	Dep,
@@ -150,6 +150,7 @@ impl Console {
 		}
 
 		self.add_history(line.clone());
+		let mut sig_recv = self.server.signal.subscribe();
 		let future = self.clone().process(line);
 
 		let (abort, abort_reg) = AbortHandle::new_pair();
@@ -159,7 +160,14 @@ impl Console {
 			_ = self.command_abort.lock().take();
 		}}
 
-		_ = future.await;
+		select! {
+			_ = future => {},
+			Ok(sig) = sig_recv.recv() => {
+				if sig == "SIGINT" {
+					self.output.print_text("Interrupted");
+				}
+			},
+		}
 	}
 
 	async fn process(self: Arc<Self>, line: String) {
