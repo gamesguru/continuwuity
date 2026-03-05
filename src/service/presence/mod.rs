@@ -116,24 +116,24 @@ impl Service {
 	pub async fn ping_presence(&self, user_id: &UserId, new_state: &PresenceState) -> Result<()> {
 		const REFRESH_TIMEOUT: u64 = 60 * 1000;
 
-		let last_presence = self.db.get_presence(user_id).await;
+		let last_presence = self.db.get_presence_raw(user_id).await;
 		let state_changed = match last_presence {
 			| Err(_) => true,
-			| Ok((_, ref presence)) => presence.content.presence != *new_state,
+			| Ok((_, ref presence)) => presence.state != *new_state,
 		};
 
-		let last_last_active_ago = match last_presence {
+		let last_last_active_ts = match last_presence {
 			| Err(_) => 0_u64,
-			| Ok((_, ref presence)) =>
-				presence.content.last_active_ago.unwrap_or_default().into(),
+			| Ok((_, ref presence)) => presence.last_active_ts,
 		};
 
-		if !state_changed && last_last_active_ago < REFRESH_TIMEOUT {
+		let now = conduwuit::utils::millis_since_unix_epoch();
+		if !state_changed && now.saturating_sub(last_last_active_ts) < REFRESH_TIMEOUT {
 			return Ok(());
 		}
 
 		let status_msg = match last_presence {
-			| Ok((_, ref presence)) => presence.content.status_msg.clone(),
+			| Ok((_, ref presence)) => presence.status_msg.clone(),
 			| Err(_) => Some(String::new()),
 		};
 
@@ -276,21 +276,24 @@ impl Service {
 
 	async fn process_presence_timer(&self, user_id: &OwnedUserId) -> Result<()> {
 		let mut presence_state = PresenceState::Offline;
-		let mut last_active_ago = None;
+		let mut last_active_ts = 0_u64;
 		let mut status_msg = None;
 
-		let presence_event = self.get_presence(user_id).await;
+		let last_presence = self.db.get_presence_raw(user_id).await;
 
-		if let Ok(presence_event) = presence_event {
-			presence_state = presence_event.content.presence;
-			last_active_ago = presence_event.content.last_active_ago;
-			status_msg = presence_event.content.status_msg;
+		if let Ok((_, ref presence)) = last_presence {
+			presence_state = presence.state.clone();
+			last_active_ts = presence.last_active_ts;
+			status_msg.clone_from(&presence.status_msg);
 		}
 
-		let new_state = match (&presence_state, last_active_ago.map(u64::from)) {
-			| (PresenceState::Online, Some(ago)) if ago >= self.idle_timeout =>
+		let now = conduwuit::utils::millis_since_unix_epoch();
+		let ago = now.saturating_sub(last_active_ts);
+
+		let new_state = match presence_state {
+			| PresenceState::Online if ago >= self.idle_timeout =>
 				Some(PresenceState::Unavailable),
-			| (PresenceState::Unavailable, Some(ago)) if ago >= self.offline_timeout =>
+			| PresenceState::Unavailable if ago >= self.offline_timeout =>
 				Some(PresenceState::Offline),
 			| _ => None,
 		};
@@ -301,6 +304,7 @@ impl Service {
 		);
 
 		if let Some(new_state) = new_state {
+			let last_active_ago = Some(UInt::new_saturating(ago));
 			self.set_presence(user_id, &new_state, Some(false), last_active_ago, status_msg)
 				.await?;
 		}
