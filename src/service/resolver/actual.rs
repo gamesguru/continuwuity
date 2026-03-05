@@ -309,13 +309,17 @@ impl super::Service {
 		let hostnames =
 			[format!("_matrix-fed._tcp.{hostname}."), format!("_matrix._tcp.{hostname}.")];
 
+		let mut last_error = None;
 		for hostname in hostnames {
 			self.services.server.check_running()?;
 
 			debug!("querying SRV for {hostname:?}");
 			let hostname = hostname.trim_end_matches('.');
 			match self.resolver.resolver.srv_lookup(hostname).await {
-				| Err(e) => Self::handle_resolve_error(&e, hostname, "SRV")?,
+				| Err(e) => match Self::handle_resolve_error(&e, hostname, "SRV") {
+					| Ok(()) => continue,
+					| Err(e) => last_error = Some(e),
+				},
 				| Ok(result) => {
 					return Ok(result.iter().next().map(|result| {
 						FedDest::Named(
@@ -328,6 +332,10 @@ impl super::Service {
 					}));
 				},
 			}
+		}
+
+		if let Some(e) = last_error {
+			return Err(e);
 		}
 
 		Ok(None)
@@ -345,7 +353,7 @@ impl super::Service {
 				},
 				| ProtoErrorKind::Timeout => {
 					conduwuit::warn!(%host, %qtype, "DNS timeout: {e}");
-					Ok(())
+					Err!(error!(%host, %qtype, "DNS timeout: {e}"))
 				},
 				| ProtoErrorKind::NoConnections => {
 					error!(
