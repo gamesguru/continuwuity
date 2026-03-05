@@ -101,7 +101,7 @@ impl Data {
 
 		let changed = state_changed || status_msg_changed || currently_active_changed;
 
-		if !changed && last_active_ts < last_last_active_ts.saturating_add(5000) {
+		if !changed && last_active_ts < last_last_active_ts.saturating_add(100) {
 			return Ok(());
 		}
 

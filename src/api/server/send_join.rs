@@ -156,13 +156,6 @@ async fn create_join_event(
 			)));
 		}
 
-		if !services.globals.user_is_local(&authorising_user) {
-			return Err!(Request(InvalidParam(
-				"Cannot authorise membership event through {authorising_user} as they do not \
-				 belong to this homeserver"
-			)));
-		}
-
 		if !services
 			.rooms
 			.state_cache
