@@ -4,7 +4,9 @@ use conduwuit::{Err, Result, utils::content_disposition::make_content_dispositio
 use conduwuit_service::media::{Dim, FileMeta};
 use ruma::{
 	Mxc,
-	api::federation::authenticated_media::{Content, ContentMetadata, FileOrLocation, get_content, get_content_thumbnail},
+	api::federation::authenticated_media::{
+		Content, ContentMetadata, FileOrLocation, get_content, get_content_thumbnail,
+	},
 };
 
 use crate::OptionalRuma as Ruma;

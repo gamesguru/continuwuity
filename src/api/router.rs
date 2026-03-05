@@ -16,7 +16,10 @@ pub(super) use conduwuit_service::state::State;
 use http::{Uri, uri};
 
 use self::handler::RouterExt;
-pub(super) use self::{args::Args as Ruma, args::OptionalArgs as OptionalRuma, response::RumaResponse};
+pub(crate) use self::{
+	args::{Args as Ruma, OptionalArgs as OptionalRuma},
+	response::RumaResponse,
+};
 use crate::{admin, client, server};
 
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
