@@ -66,23 +66,39 @@ impl super::Service {
 	) -> Result<CachedDest> {
 		self.validate_dest(dest)?;
 		let mut host = dest.as_str().to_owned();
+		let mut timeouts = 0_u8;
 		let actual_dest = match get_ip_with_port(dest.as_str()) {
 			| Some(host_port) => Self::actual_dest_1(host_port)?,
 			| None =>
 				if let Some(pos) = dest.as_str().find(':') {
-					self.actual_dest_2(dest, cache, pos).await?
+					self.actual_dest_2(dest, cache, pos, &mut timeouts).await?
 				} else {
-					self.conditional_query_and_cache(dest.as_str(), 8448, true)
+					match self
+						.conditional_query_and_cache(dest.as_str(), 8448, true)
 						.await
-						.ok();
+					{
+						| Ok(()) => (),
+						| Err(e) if e.is_interrupted() => return Err(e),
+						| Err(_) => timeouts = timeouts.saturating_add(1),
+					};
+
 					self.services.server.check_running()?;
-					match self.request_well_known(dest.as_str()).await? {
-						| Some(delegated) =>
-							self.actual_dest_3(&mut host, cache, delegated).await?,
-						| _ => match self.query_srv_record(dest.as_str()).await? {
-							| Some(overrider) =>
-								self.actual_dest_4(&host, cache, overrider).await?,
-							| _ => self.actual_dest_5(dest, cache).await?,
+					let ww = self.request_well_known(dest.as_str()).await;
+					match ww {
+						| Ok(Some(delegated)) =>
+							self.actual_dest_3(&mut host, cache, delegated, &mut timeouts)
+								.await?,
+						| Err(e) if e.is_interrupted() => return Err(e),
+						| _ => match self.query_srv_record(dest.as_str()).await {
+							| Ok(Some(overrider)) =>
+								self.actual_dest_4(&host, cache, overrider, &mut timeouts)
+									.await?,
+							| Ok(None) => self.actual_dest_5(dest, cache, &mut timeouts).await?,
+							| Err(e) if e.is_dns_timeout() => {
+								timeouts = timeouts.saturating_add(1);
+								self.actual_dest_5(dest, cache, &mut timeouts).await?
+							},
+							| Err(e) => return Err(e),
 						},
 					}
 				},
@@ -117,12 +133,27 @@ impl super::Service {
 		Ok(host_port)
 	}
 
-	async fn actual_dest_2(&self, dest: &ServerName, cache: bool, pos: usize) -> Result<FedDest> {
+	async fn actual_dest_2(
+		&self,
+		dest: &ServerName,
+		cache: bool,
+		pos: usize,
+		timeouts: &mut u8,
+	) -> Result<FedDest> {
 		debug!("2: Hostname with included port");
 		let (host, port) = dest.as_str().split_at(pos);
-		self.conditional_query_and_cache(host, port.parse::<u16>().unwrap_or(8448), cache)
+		match self
+			.conditional_query_and_cache(host, port.parse::<u16>().unwrap_or(8448), cache)
 			.await
-			.ok();
+		{
+			| Ok(()) => (),
+			| Err(e) if e.is_interrupted() => return Err(e),
+			| Err(e) if e.is_dns_timeout() => {
+				*timeouts = timeouts.saturating_add(1);
+				conduwuit::warn!(%dest, "DNS resolution timed out for the only attempt");
+			},
+			| Err(_) => (),
+		}
 
 		Ok(FedDest::Named(
 			host.to_owned(),
@@ -135,6 +166,7 @@ impl super::Service {
 		host: &mut String,
 		cache: bool,
 		delegated: String,
+		timeouts: &mut u8,
 	) -> Result<FedDest> {
 		debug!("3: A .well-known file is available");
 		*host = add_port_to_hostname(&delegated).uri_string();
@@ -142,13 +174,19 @@ impl super::Service {
 			| Some(host_and_port) => Self::actual_dest_3_1(host_and_port),
 			| None =>
 				if let Some(pos) = delegated.find(':') {
-					self.actual_dest_3_2(cache, delegated, pos).await
+					self.actual_dest_3_2(cache, delegated, pos, timeouts).await
 				} else {
 					trace!("Delegated hostname has no port in this branch");
-					match self.query_srv_record(&delegated).await? {
-						| Some(overrider) =>
-							self.actual_dest_3_3(cache, delegated, overrider).await,
-						| _ => self.actual_dest_3_4(cache, delegated).await,
+					match self.query_srv_record(&delegated).await {
+						| Ok(Some(overrider)) =>
+							self.actual_dest_3_3(cache, delegated, overrider, timeouts)
+								.await,
+						| Ok(None) => self.actual_dest_3_4(cache, delegated, timeouts).await,
+						| Err(e) if e.is_dns_timeout() => {
+							*timeouts = timeouts.saturating_add(1);
+							self.actual_dest_3_4(cache, delegated, timeouts).await
+						},
+						| Err(e) => return Err(e),
 					}
 				},
 		}
@@ -164,12 +202,22 @@ impl super::Service {
 		cache: bool,
 		delegated: String,
 		pos: usize,
+		timeouts: &mut u8,
 	) -> Result<FedDest> {
 		debug!("3.2: Hostname with port in .well-known file");
 		let (host, port) = delegated.split_at(pos);
-		self.conditional_query_and_cache(host, port.parse::<u16>().unwrap_or(8448), cache)
+		match self
+			.conditional_query_and_cache(host, port.parse::<u16>().unwrap_or(8448), cache)
 			.await
-			.ok();
+		{
+			| Ok(()) => (),
+			| Err(e) if e.is_interrupted() => return Err(e),
+			| Err(e) if e.is_dns_timeout() => {
+				*timeouts = timeouts.saturating_add(1);
+				// We don't warn here because it might not be the last fallback
+			},
+			| Err(_) => (),
+		}
 
 		Ok(FedDest::Named(
 			host.to_owned(),
@@ -182,16 +230,26 @@ impl super::Service {
 		cache: bool,
 		delegated: String,
 		overrider: FedDest,
+		timeouts: &mut u8,
 	) -> Result<FedDest> {
 		debug!("3.3: SRV lookup successful");
 		let force_port = overrider.port();
-		self.conditional_query_and_cache_override(
-			&delegated,
-			&overrider.hostname(),
-			force_port.unwrap_or(8448),
-			cache,
-		)
-		.await?;
+		match self
+			.conditional_query_and_cache_override(
+				&delegated,
+				&overrider.hostname(),
+				force_port.unwrap_or(8448),
+				cache,
+			)
+			.await
+		{
+			| Ok(()) => (),
+			| Err(e) if e.is_interrupted() => return Err(e),
+			| Err(e) if e.is_dns_timeout() => {
+				*timeouts = timeouts.saturating_add(1);
+			},
+			| Err(_) => (),
+		}
 
 		if let Some(port) = force_port {
 			return Ok(FedDest::Named(
@@ -206,11 +264,27 @@ impl super::Service {
 		Ok(add_port_to_hostname(&delegated))
 	}
 
-	async fn actual_dest_3_4(&self, cache: bool, delegated: String) -> Result<FedDest> {
+	async fn actual_dest_3_4(
+		&self,
+		cache: bool,
+		delegated: String,
+		timeouts: &mut u8,
+	) -> Result<FedDest> {
 		debug!("3.4: No SRV records, just use the hostname from .well-known");
-		self.conditional_query_and_cache(&delegated, 8448, cache)
+		match self
+			.conditional_query_and_cache(&delegated, 8448, cache)
 			.await
-			.ok();
+		{
+			| Ok(()) => (),
+			| Err(e) if e.is_interrupted() => return Err(e),
+			| Err(e) if e.is_dns_timeout() => {
+				*timeouts = timeouts.saturating_add(1);
+				if *timeouts >= 3 {
+					conduwuit::warn!(host = %delegated, "DNS resolution timed out for all attempts");
+				}
+			},
+			| Err(_) => (),
+		}
 		Ok(add_port_to_hostname(&delegated))
 	}
 
@@ -219,16 +293,26 @@ impl super::Service {
 		host: &str,
 		cache: bool,
 		overrider: FedDest,
+		timeouts: &mut u8,
 	) -> Result<FedDest> {
 		debug!("4: No .well-known; SRV record found");
 		let force_port = overrider.port();
-		self.conditional_query_and_cache_override(
-			host,
-			&overrider.hostname(),
-			force_port.unwrap_or(8448),
-			cache,
-		)
-		.await?;
+		match self
+			.conditional_query_and_cache_override(
+				host,
+				&overrider.hostname(),
+				force_port.unwrap_or(8448),
+				cache,
+			)
+			.await
+		{
+			| Ok(()) => (),
+			| Err(e) if e.is_interrupted() => return Err(e),
+			| Err(e) if e.is_dns_timeout() => {
+				*timeouts = timeouts.saturating_add(1);
+			},
+			| Err(_) => (),
+		}
 
 		if let Some(port) = force_port {
 			let port = format!(":{port}");
@@ -242,11 +326,27 @@ impl super::Service {
 		Ok(add_port_to_hostname(host))
 	}
 
-	async fn actual_dest_5(&self, dest: &ServerName, cache: bool) -> Result<FedDest> {
+	async fn actual_dest_5(
+		&self,
+		dest: &ServerName,
+		cache: bool,
+		timeouts: &mut u8,
+	) -> Result<FedDest> {
 		debug!("5: No SRV record found");
-		self.conditional_query_and_cache(dest.as_str(), 8448, cache)
+		match self
+			.conditional_query_and_cache(dest.as_str(), 8448, cache)
 			.await
-			.ok();
+		{
+			| Ok(()) => (),
+			| Err(e) if e.is_interrupted() => return Err(e),
+			| Err(e) if e.is_dns_timeout() => {
+				*timeouts = timeouts.saturating_add(1);
+				if *timeouts >= 3 {
+					conduwuit::warn!(%dest, "DNS resolution timed out for all attempts");
+				}
+			},
+			| Err(_) => (),
+		}
 
 		Ok(add_port_to_hostname(dest.as_str()))
 	}
@@ -355,8 +455,8 @@ impl super::Service {
 					Ok(())
 				},
 				| ProtoErrorKind::Timeout => {
-					conduwuit::warn!(%host, %qtype, "DNS timeout: {e}");
-					Err!(error!(%host, %qtype, "DNS timeout: {e}"))
+					debug!(%host, %qtype, "DNS timeout: {e}");
+					Err!(debug!(%host, %qtype, "DNS timeout: {e}"))
 				},
 				| ProtoErrorKind::NoConnections => {
 					error!(
