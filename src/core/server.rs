@@ -113,11 +113,8 @@ impl Server {
 
 	#[inline]
 	pub async fn until_shutdown(self: &Arc<Self>) {
-		let mut signals = self.signal.subscribe();
 		while self.running() {
-			if signals.recv().await == Err(broadcast::error::RecvError::Closed) {
-				break;
-			}
+			self.signal.subscribe().recv().await.ok();
 		}
 	}
 

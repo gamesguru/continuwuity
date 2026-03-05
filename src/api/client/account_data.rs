@@ -16,7 +16,7 @@ use ruma::{
 use serde::Deserialize;
 use serde_json::{json, value::RawValue as RawJsonValue};
 
-use crate::Ruma;
+use crate::{Ruma, RumaResponse};
 
 /// # `PUT /_matrix/client/r0/user/{userId}/account_data/{type}`
 ///
@@ -118,7 +118,7 @@ pub(crate) async fn get_room_account_data_route(
 pub(crate) async fn delete_global_account_data_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_global_account_data::v3::Request>,
-) -> Result<set_global_account_data::v3::Response> {
+) -> Result<RumaResponse<set_global_account_data::v3::Response>> {
 	let sender_user = body.sender_user();
 
 	if sender_user != body.user_id && body.appservice_info.is_none() {
@@ -127,10 +127,10 @@ pub(crate) async fn delete_global_account_data_route(
 
 	services
 		.account_data
-		.remove(None, &body.user_id, body.event_type.clone().into())
+		.remove(None, &body.user_id, body.event_type.to_string().into())
 		.await?;
 
-	Ok(set_global_account_data::v3::Response {})
+	Ok(RumaResponse(set_global_account_data::v3::Response {}))
 }
 
 /// # `DELETE /_matrix/client/r0/user/{userId}/rooms/{roomId}/account_data/{type}`
@@ -139,7 +139,7 @@ pub(crate) async fn delete_global_account_data_route(
 pub(crate) async fn delete_room_account_data_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_room_account_data::v3::Request>,
-) -> Result<set_room_account_data::v3::Response> {
+) -> Result<RumaResponse<set_room_account_data::v3::Response>> {
 	let sender_user = body.sender_user();
 
 	if sender_user != body.user_id && body.appservice_info.is_none() {
@@ -151,7 +151,7 @@ pub(crate) async fn delete_room_account_data_route(
 		.remove(Some(&body.room_id), &body.user_id, body.event_type.clone())
 		.await?;
 
-	Ok(set_room_account_data::v3::Response {})
+	Ok(RumaResponse(set_room_account_data::v3::Response {}))
 }
 
 async fn set_account_data(
@@ -171,7 +171,7 @@ async fn set_account_data(
 	let data: serde_json::Value = serde_json::from_str(data.get())
 		.map_err(|e| err!(Request(BadJson(warn!("Invalid JSON provided: {e}")))))?;
 
-	if data.is_object() && data.as_object().is_some_and(|o| o.is_empty()) {
+	if data.is_object() && data.as_object().is_some_and(serde_json::Map::is_empty) {
 		return services
 			.account_data
 			.remove(room_id, sender_user, event_type_s.into())

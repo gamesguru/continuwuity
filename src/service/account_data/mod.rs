@@ -98,7 +98,7 @@ pub async fn remove(
 	}
 
 	// We also remove the type index
-	self.db.roomusertype_roomuserdataid.del(&key);
+	self.db.roomusertype_roomuserdataid.del(key);
 
 	// To notify sync, we need to add a "deleted" entry in the timeline of changes
 	let count = self.services.globals.next_count().unwrap();
