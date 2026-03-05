@@ -80,7 +80,7 @@ impl super::Service {
 						| Ok(()) => (),
 						| Err(e) if e.is_interrupted() => return Err(e),
 						| Err(_) => timeouts = timeouts.saturating_add(1),
-					};
+					}
 
 					self.services.server.check_running()?;
 					let ww = self.request_well_known(dest.as_str()).await;
@@ -146,13 +146,12 @@ impl super::Service {
 			.conditional_query_and_cache(host, port.parse::<u16>().unwrap_or(8448), cache)
 			.await
 		{
-			| Ok(()) => (),
 			| Err(e) if e.is_interrupted() => return Err(e),
 			| Err(e) if e.is_dns_timeout() => {
 				*timeouts = timeouts.saturating_add(1);
 				conduwuit::warn!(%dest, "DNS resolution timed out for the only attempt");
 			},
-			| Err(_) => (),
+			| Ok(()) | Err(_) => (),
 		}
 
 		Ok(FedDest::Named(
@@ -186,7 +185,7 @@ impl super::Service {
 							*timeouts = timeouts.saturating_add(1);
 							self.actual_dest_3_4(cache, delegated, timeouts).await
 						},
-						| Err(e) => return Err(e),
+						| Err(e) => Err(e)?,
 					}
 				},
 		}
@@ -210,13 +209,12 @@ impl super::Service {
 			.conditional_query_and_cache(host, port.parse::<u16>().unwrap_or(8448), cache)
 			.await
 		{
-			| Ok(()) => (),
 			| Err(e) if e.is_interrupted() => return Err(e),
 			| Err(e) if e.is_dns_timeout() => {
 				*timeouts = timeouts.saturating_add(1);
 				// We don't warn here because it might not be the last fallback
 			},
-			| Err(_) => (),
+			| Ok(()) | Err(_) => (),
 		}
 
 		Ok(FedDest::Named(
@@ -243,12 +241,11 @@ impl super::Service {
 			)
 			.await
 		{
-			| Ok(()) => (),
 			| Err(e) if e.is_interrupted() => return Err(e),
 			| Err(e) if e.is_dns_timeout() => {
 				*timeouts = timeouts.saturating_add(1);
 			},
-			| Err(_) => (),
+			| Ok(()) | Err(_) => (),
 		}
 
 		if let Some(port) = force_port {
@@ -275,7 +272,6 @@ impl super::Service {
 			.conditional_query_and_cache(&delegated, 8448, cache)
 			.await
 		{
-			| Ok(()) => (),
 			| Err(e) if e.is_interrupted() => return Err(e),
 			| Err(e) if e.is_dns_timeout() => {
 				*timeouts = timeouts.saturating_add(1);
@@ -283,7 +279,7 @@ impl super::Service {
 					conduwuit::warn!(host = %delegated, "DNS resolution timed out for all attempts");
 				}
 			},
-			| Err(_) => (),
+			| Ok(()) | Err(_) => (),
 		}
 		Ok(add_port_to_hostname(&delegated))
 	}
@@ -306,12 +302,11 @@ impl super::Service {
 			)
 			.await
 		{
-			| Ok(()) => (),
 			| Err(e) if e.is_interrupted() => return Err(e),
 			| Err(e) if e.is_dns_timeout() => {
 				*timeouts = timeouts.saturating_add(1);
 			},
-			| Err(_) => (),
+			| Ok(()) | Err(_) => (),
 		}
 
 		if let Some(port) = force_port {
@@ -337,7 +332,6 @@ impl super::Service {
 			.conditional_query_and_cache(dest.as_str(), 8448, cache)
 			.await
 		{
-			| Ok(()) => (),
 			| Err(e) if e.is_interrupted() => return Err(e),
 			| Err(e) if e.is_dns_timeout() => {
 				*timeouts = timeouts.saturating_add(1);
@@ -345,7 +339,7 @@ impl super::Service {
 					conduwuit::warn!(%dest, "DNS resolution timed out for all attempts");
 				}
 			},
-			| Err(_) => (),
+			| Ok(()) | Err(_) => (),
 		}
 
 		Ok(add_port_to_hostname(dest.as_str()))
