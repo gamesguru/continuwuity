@@ -20,8 +20,8 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: host
-    # Using 'host' label to run directly on the VPS machine OS.
+    runs-on: ubuntu-24.04
+    # Run directly on the VPS machine OS without a container block.
     # Eliminates container overhead and Docker-in-Docker.
 
     env:
