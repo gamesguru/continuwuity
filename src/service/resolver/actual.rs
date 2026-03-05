@@ -506,13 +506,12 @@ impl super::Service {
 		fut: impl Future<Output = Result<()>>,
 	) -> Result<()> {
 		match fut.await {
-			| Ok(()) => Ok(()),
 			| Err(e) if e.is_interrupted() => Err(e),
 			| Err(e) if e.is_dns_timeout() => {
 				*timeouts = timeouts.saturating_add(1);
 				Ok(())
 			},
-			| Err(_) => Ok(()),
+			| Ok(()) | Err(_) => Ok(()),
 		}
 	}
 
