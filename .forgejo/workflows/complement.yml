@@ -12,17 +12,19 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   SKIP_CONFIRM: 1
-  PATH: /opt/rust/cargo/bin:/home/forgejo-runner/.cargo/bin:${{ github.workspace }}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  # Absolute paths for Rust tools on the host VPS
+  CARGO: /opt/rust/cargo/bin/cargo
+  RUSTUP: /opt/rust/cargo/bin/rustup
+  PATH: /opt/rust/cargo/bin:/home/forgejo-runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 jobs:
   complement-tests:
     runs-on: ubuntu-24.04-avx512
-    if: |
-      (vars.C10Y_ENABLE_FORGE_WORKFLOW_PR_CHECKS != '' || github.event_name == 'workflow_dispatch')
+    if: (vars.C10Y_ENABLE_FORGE_WORKFLOW_PR_CHECKS != '' || github.event_name == 'workflow_dispatch')
 
     env:
       CARGO_BUILD_JOBS: 2
-      # Persistent cache dirs
+      # Persistent cache dirs on the VPS
       CARGO_HOME: /home/forgejo-runner/.cache/conduwuit-ci/cargo
       CARGO_TARGET_DIR: /home/forgejo-runner/.cache/conduwuit-ci/target
       CCACHE_DIR: /home/forgejo-runner/.cache/conduwuit-ci/ccache
@@ -53,13 +55,12 @@ jobs:
 
       - name: Native Rust Setup
         run: |
-          # Use rustup to ensure toolchain is ready, but let it handle the file automatically
-          rustup show
+          $RUSTUP show
           mkdir -p "$CARGO_HOME" "$CARGO_TARGET_DIR" "$CCACHE_DIR"
 
       - name: Run Lints (Clippy)
         run: |
-          cargo clippy \
+          $CARGO clippy \
             --workspace \
             --features full \
             --locked \
@@ -69,7 +70,7 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          cargo test \
+          $CARGO test \
             --workspace \
             --features full \
             --locked \
@@ -79,7 +80,7 @@ jobs:
 
       - name: Build conduwuit for Complement (Debug)
         run: |
-          cargo build \
+          $CARGO build \
             --features full,direct_tls \
             --locked \
             --profile dev
@@ -208,7 +209,7 @@ jobs:
             curl -X POST \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               -H "Content-Type: application/json" \
-              -d "{\"body\": \"$BODY\"}" \
+              -d "{{\"body\": \"$BODY\"}}" \
               "${{ forge.server_url }}/api/v1/repos/${{ forge.repository }}/issues/${{ forge.event.pull_request.number }}/comments"
           fi
 
