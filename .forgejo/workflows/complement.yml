@@ -16,8 +16,7 @@ env:
 jobs:
   complement-tests:
     runs-on: ubuntu-24.04
-    container:
-      image: "ghcr.io/tcpipuk/act-runner:ubuntu-latest"
+    # Removed container block to run on host and avoid DinD issues
 
     steps:
       - name: Checkout repository
@@ -40,28 +39,6 @@ jobs:
             clang-18 \
             libclang-18-dev \
             llvm-18-dev
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-complement-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-complement-
-
-      - name: Setup sccache
-        uses: https://git.tomfos.tr/tom/sccache-action@v1
-
-      - name: Configure sccache environment
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
-          echo "SCCACHE_CACHE_SIZE=10G" >> $GITHUB_ENV
-          # Aggressive GC since cache restores don't increment counter
-          echo "CARGO_INCREMENTAL_GC_TRIGGER=5" >> $GITHUB_ENV
 
       - name: Setup Rust
         uses: ./.forgejo/actions/setup-rust
@@ -94,10 +71,50 @@ jobs:
         run: |
           ./bin/complement ./complement-src
 
+      - name: Summarize results
+        id: summary
+        if: always()
+        run: |
+          RESULTS="tests/test_results/complement/test_results.jsonl"
+          if [ -f "$RESULTS" ]; then
+            PASS=$(grep -c '"Action":"pass"' "$RESULTS" || true)
+            FAIL=$(grep -c '"Action":"fail"' "$RESULTS" || true)
+            SKIP=$(grep -c '"Action":"skip"' "$RESULTS" || true)
+            TOTAL=$((PASS + FAIL + SKIP))
+            echo "pass=$PASS" >> $GITHUB_OUTPUT
+            echo "fail=$FAIL" >> $GITHUB_OUTPUT
+            echo "skip=$SKIP" >> $GITHUB_OUTPUT
+            echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Add PR comment
+        if: ${{ forge.event_name == 'pull_request' && always() }}
+        run: |
+          PASS="${{ steps.summary.outputs.pass }}"
+          FAIL="${{ steps.summary.outputs.fail }}"
+          SKIP="${{ steps.summary.outputs.skip }}"
+          TOTAL="${{ steps.summary.outputs.total }}"
+
+          # Only post if we have results
+          if [ -n "$TOTAL" ]; then
+            BODY="Complement tests results: $PASS pass, $FAIL fail, $SKIP skip (total $TOTAL)"
+            if [ "$FAIL" -gt 0 ]; then
+              BODY="$BODY - ❌ Some tests failed!"
+            else
+              BODY="$BODY - ✅ All tests passed!"
+            fi
+
+            curl -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": \"$BODY\"}" \
+              "${{ forge.server_url }}/api/v1/repos/${{ forge.repository }}/issues/${{ forge.event.pull_request.number }}/comments"
+          fi
+
       - name: Upload test logs
         if: always()
         uses: forgejo/upload-artifact@v4
         with:
           name: complement-logs
-          path: complement_test_results.jsonl
+          path: tests/test_results/complement/
           retention-days: 90
