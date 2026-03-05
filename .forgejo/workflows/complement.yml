@@ -154,13 +154,12 @@ jobs:
             echo "Nothing to commit."
           fi
 
-      - name: Upload test logs & ledger
+      - name: Upload test results & ledger
         if: always()
         uses: forgejo/upload-artifact@v4
         with:
           name: complement-results
           path: |
-            tests/test_results/complement/test_logs.jsonl
             tests/test_results/complement/test_results.jsonl
             c10y-complement-results/csvdata/
           retention-days: 90

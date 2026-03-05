@@ -52,8 +52,13 @@ echo ""
 
 # Determine the test runner and output handling
 HAS_GOTESTSUM=false
-command -v gotestsum >/dev/null 2>&1 && HAS_GOTESTSUM=true
-echo "gotestsum installed: $HAS_GOTESTSUM"
+if command -v gotestsum >/dev/null 2>&1; then
+    HAS_GOTESTSUM=true
+    echo "gotestsum installed: true"
+    gotestsum --version
+else
+    echo "gotestsum installed: false"
+fi
 
 # It's okay (likely, even) that `go test` exits nonzero
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
