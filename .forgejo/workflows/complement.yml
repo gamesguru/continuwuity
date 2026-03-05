@@ -40,22 +40,10 @@ jobs:
           git checkout FETCH_HEAD
           git fetch --tags --force
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            liburing-dev \
-            clang-18 \
-            libclang-18-dev \
-            llvm-18-dev
-
       - name: Native Rust Setup
         run: |
-          # Avoid setup-rust action (Node-based) and use rustup directly
-          rustup toolchain install $(cat rust-toolchain.toml | grep channel | cut -d'"' -f2)
-          rustup default $(cat rust-toolchain.toml | grep channel | cut -d'"' -f2)
+          # Use rustup to ensure toolchain is ready, but let it handle the file automatically
+          rustup show
           mkdir -p "$CARGO_HOME" "$SCCACHE_DIR"
 
       - name: Build conduwuit for Complement
