@@ -307,7 +307,7 @@ pub(crate) async fn build_sync_events(
 				.ok()
 		})
 		.ready_filter_map(|(room_id, left_room)| left_room.map(|left_room| (room_id, left_room)))
-		.collect();
+		.collect::<BTreeMap<_, _>>();
 
 	let invited_rooms = services
 		.rooms
@@ -411,8 +411,31 @@ pub(crate) async fn build_sync_events(
 	let (account_data, ephemeral, device_one_time_keys_count, keys_changed, rooms) = top;
 	let ((), to_device_events, presence_updates) = ephemeral;
 	let (joined_rooms, left_rooms, invited_rooms, knocked_rooms) = rooms;
-	let (joined_rooms, mut device_list_updates) = joined_rooms;
+	let (mut joined_rooms, mut device_list_updates) = joined_rooms;
 	device_list_updates.changed.extend(keys_changed);
+
+	// #779: rooms_joined() uses a RocksDB prefix iterator that may miss
+	// recently-joined rooms due to snapshot isolation. Check the in-memory
+	// recently-joined set for any rooms that fell through.
+	let recently_joined = services
+		.rooms
+		.state_cache
+		.take_recently_joined(syncing_user);
+	for room_id in recently_joined {
+		if joined_rooms.contains_key(&room_id)
+			|| left_rooms.contains_key(&room_id)
+			|| invited_rooms.contains_key(&room_id)
+		{
+			continue;
+		}
+		warn!("#779: loading recently-joined room {room_id} missed by iterator");
+		if let Ok((room, updates, _)) =
+			load_joined_room(services, context, room_id.clone()).await
+		{
+			device_list_updates.merge(updates);
+			joined_rooms.insert(room_id, room);
+		}
+	}
 
 	let response = sync_events::v3::Response {
 		account_data: GlobalAccountData { events: account_data },
