@@ -147,13 +147,15 @@ async fn process_inbound_transaction(
 	sender: Sender<WrappedTransactionResponse>,
 ) {
 	let txn_start_time = Instant::now();
-	let pdus = body
-		.pdus
-		.iter()
-		.stream()
-		.broad_then(|pdu| services.rooms.event_handler.parse_incoming_pdu(pdu))
-		.inspect_err(|e| debug_warn!("Could not parse PDU: {e}"))
-		.ready_filter_map(Result::ok);
+	let mut pdus = Vec::with_capacity(body.pdus.len());
+	for pdu in &body.pdus {
+		if let Ok(pdu) = services.rooms.event_handler.parse_incoming_pdu(pdu).await {
+			pdus.push(pdu);
+		} else {
+			debug_warn!("Could not parse PDU");
+		}
+	}
+	let pdus = pdus.into_iter().stream();
 
 	let edus = body
 		.edus
