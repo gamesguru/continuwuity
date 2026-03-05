@@ -89,7 +89,7 @@ cargo/lock-init:	##H Init or fully upgrade the lockfile (wipes it)
 .PHONY: cargo/lock-update
 cargo/lock-update: ##H Update Cargo.lock minimally to match Cargo.toml
 	@echo "Updating Cargo.lock..."
-	cargo metadata --format-version 1 --no-deps > /dev/null
+	cargo update --workspace
 	@echo "OK."
 
 .PHONY: cargo/sync
