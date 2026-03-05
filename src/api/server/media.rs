@@ -100,69 +100,20 @@ pub(crate) async fn get_content_thumbnail_route(
 ///
 /// Load media from our server (unauthenticated legacy).
 pub(crate) async fn get_content_legacy_route(
-	State(services): State<crate::State>,
-	InsecureClientIp(_client): InsecureClientIp,
+	state: State<crate::State>,
+	client: InsecureClientIp,
 	body: Ruma<get_content::v1::Request>,
 ) -> Result<get_content::v1::Response> {
-	let mxc = Mxc {
-		server_name: services.globals.server_name(),
-		media_id: &body.media_id,
-	};
-
-	let Some(FileMeta {
-		content,
-		content_type,
-		content_disposition,
-	}) = services.media.get(&mxc).await?
-	else {
-		return Err!(Request(NotFound("Media not found.")));
-	};
-
-	let content_disposition =
-		make_content_disposition(content_disposition.as_ref(), content_type.as_deref(), None);
-
-	Ok(get_content::v1::Response {
-		content: FileOrLocation::File(Content {
-			file: content.expect("entire file contents"),
-			content_type: content_type.map(Into::into),
-			content_disposition: Some(content_disposition),
-		}),
-		metadata: ContentMetadata::new(),
-	})
+	get_content_route(state, client, body).await
 }
 
 /// # `GET /_matrix/federation/v1/media/thumbnail/{mediaId}`
 ///
 /// Load media thumbnail from our server (unauthenticated legacy).
 pub(crate) async fn get_content_thumbnail_legacy_route(
-	State(services): State<crate::State>,
-	InsecureClientIp(_client): InsecureClientIp,
+	state: State<crate::State>,
+	client: InsecureClientIp,
 	body: Ruma<get_content_thumbnail::v1::Request>,
 ) -> Result<get_content_thumbnail::v1::Response> {
-	let dim = Dim::from_ruma(body.width, body.height, body.method.clone())?;
-	let mxc = Mxc {
-		server_name: services.globals.server_name(),
-		media_id: &body.media_id,
-	};
-
-	let Some(FileMeta {
-		content,
-		content_type,
-		content_disposition,
-	}) = services.media.get_thumbnail(&mxc, &dim).await?
-	else {
-		return Err!(Request(NotFound("Media not found.")));
-	};
-
-	let content_disposition =
-		make_content_disposition(content_disposition.as_ref(), content_type.as_deref(), None);
-
-	Ok(get_content_thumbnail::v1::Response {
-		content: FileOrLocation::File(Content {
-			file: content.expect("entire file contents"),
-			content_type: content_type.map(Into::into),
-			content_disposition: Some(content_disposition),
-		}),
-		metadata: ContentMetadata::new(),
-	})
+	get_content_thumbnail_route(state, client, body).await
 }
