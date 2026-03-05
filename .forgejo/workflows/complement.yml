@@ -12,10 +12,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   SKIP_CONFIRM: 1
-  # Persistent CI cache directories on the host
-  CARGO_HOME: /home/forgejo-runner/.cache/conduwuit-ci/cargo
-  CARGO_TARGET_DIR: /home/forgejo-runner/.cache/conduwuit-ci/target
-  RUSTC_WRAPPER: ccache
   PATH: /opt/rust/cargo/bin:/home/forgejo-runner/.cargo/bin:${{ github.workspace }}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 jobs:
@@ -27,6 +23,11 @@ jobs:
     env:
       # Limit concurrent build jobs to avoid overloading the server
       CARGO_BUILD_JOBS: 2
+      # Persistent CI cache directories on the host
+      CARGO_HOME: /home/forgejo-runner/.cache/conduwuit-ci/cargo
+      CARGO_TARGET_DIR: /home/forgejo-runner/.cache/conduwuit-ci/target
+      CCACHE_DIR: /home/forgejo-runner/.cache/conduwuit-ci/ccache
+      RUSTC_WRAPPER: ccache
 
     steps:
       - name: Slim Checkout
@@ -40,11 +41,22 @@ jobs:
           git checkout FETCH_HEAD
           git fetch --tags --force
 
+      - name: Restore Cargo cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}
+            ${{ env.CARGO_TARGET_DIR }}
+            ${{ env.CCACHE_DIR }}
+          key: continuwuity-complement-cache-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            continuwuity-complement-cache-
+
       - name: Native Rust Setup
         run: |
           # Use rustup to ensure toolchain is ready, but let it handle the file automatically
           rustup show
-          mkdir -p "$CARGO_HOME"
+          mkdir -p "$CARGO_HOME" "$CARGO_TARGET_DIR" "$CCACHE_DIR"
 
       - name: Build conduwuit for Complement
         run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
@@ -124,6 +136,16 @@ jobs:
               -d "{\"body\": \"$BODY\"}" \
               "${{ forge.server_url }}/api/v1/repos/${{ forge.repository }}/issues/${{ forge.event.pull_request.number }}/comments"
           fi
+
+      - name: Save Cargo cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}
+            ${{ env.CARGO_TARGET_DIR }}
+            ${{ env.CCACHE_DIR }}
+          key: continuwuity-complement-cache-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
 
       - name: Upload test logs
         if: always()
