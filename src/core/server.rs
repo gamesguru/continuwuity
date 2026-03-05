@@ -115,7 +115,13 @@ impl Server {
 	pub async fn until_shutdown(self: &Arc<Self>) {
 		let mut subscriber = self.signal.subscribe();
 		while self.running() {
-			subscriber.recv().await.ok();
+			match subscriber.recv().await {
+				| Ok(signal) => tracing::info!(%signal, "Server signal received"),
+				| Err(broadcast::error::RecvError::Lagged(n)) => {
+					tracing::warn!(%n, "Server signal subscriber lagged");
+				},
+				| Err(broadcast::error::RecvError::Closed) => break,
+			}
 		}
 	}
 
