@@ -12,8 +12,8 @@ use conduwuit::{
 	state_res::lexicographical_topological_sort,
 	trace,
 	utils::{
-		IterStream, ReadyExt, millis_since_unix_epoch,
-		stream::{BroadbandExt, TryBroadbandExt, automatic_width},
+		IterStream, millis_since_unix_epoch,
+		stream::{TryBroadbandExt, automatic_width},
 	},
 };
 use conduwuit_service::{

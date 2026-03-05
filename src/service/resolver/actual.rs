@@ -309,17 +309,15 @@ impl super::Service {
 		let hostnames =
 			[format!("_matrix-fed._tcp.{hostname}."), format!("_matrix._tcp.{hostname}.")];
 
-		let mut last_error = None;
+		let mut last_error = Ok(None);
 		for hostname in hostnames {
 			self.services.server.check_running()?;
 
 			debug!("querying SRV for {hostname:?}");
 			let hostname = hostname.trim_end_matches('.');
 			match self.resolver.resolver.srv_lookup(hostname).await {
-				| Err(e) => match Self::handle_resolve_error(&e, hostname, "SRV") {
-					| Ok(()) => continue,
-					| Err(e) => last_error = Some(e),
-				},
+				| Err(e) =>
+					last_error = Self::handle_resolve_error(&e, hostname, "SRV").map(|()| None),
 				| Ok(result) => {
 					return Ok(result.iter().next().map(|result| {
 						FedDest::Named(
@@ -334,11 +332,7 @@ impl super::Service {
 			}
 		}
 
-		if let Some(e) = last_error {
-			return Err(e);
-		}
-
-		Ok(None)
+		last_error
 	}
 
 	fn handle_resolve_error(e: &ResolveError, host: &'_ str, qtype: &'_ str) -> Result<()> {
@@ -348,7 +342,7 @@ impl super::Service {
 			| Proto(e) => match e.kind() {
 				| ProtoErrorKind::NoRecordsFound { .. } => {
 					// Raise to debug_warn if we can find out the result wasn't from cache
-					conduwuit::info!(%host, %qtype, "No DNS records found: {e}");
+					debug!(%host, %qtype, "No DNS records found: {e}");
 					Ok(())
 				},
 				| ProtoErrorKind::Timeout => {
