@@ -174,18 +174,20 @@ impl Service {
 		}
 
 		// Check if another transaction from this origin is already running
-		let has_active_from_origin = state
+		let active_from_origin = state
 			.iter()
-			.any(|(k, v)| k.0 == key.0 && matches!(v, TxnState::Active(_)));
+			.filter(|(k, v)| k.0 == key.0 && matches!(v, TxnState::Active(_)))
+			.count();
 
-		if has_active_from_origin {
+		if active_from_origin >= 3 {
 			debug_warn!(
 				origin = ?key.0,
-				"Got concurrent transaction request from an origin with an active transaction"
+				count = active_from_origin,
+				"Got too many concurrent transaction requests from this origin"
 			);
 			return Err(Error::BadRequest(
 				LimitExceeded { retry_after: None },
-				"Still processing another transaction from this origin",
+				"Too many concurrent transactions from this origin",
 			));
 		}
 

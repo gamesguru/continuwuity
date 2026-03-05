@@ -7,7 +7,7 @@ use futures::future::{AbortHandle, Abortable};
 use ruma::events::room::message::RoomMessageEventContent;
 use rustyline_async::{Readline, ReadlineError, ReadlineEvent};
 use termimad::MadSkin;
-use tokio::{pin, select, task::JoinHandle};
+use tokio::{pin, select, sync::broadcast, task::JoinHandle};
 
 use crate::{
 	Dep,
@@ -171,10 +171,10 @@ impl Console {
 						self.interrupt_command();
 						break;
 					},
-					Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+					Err(broadcast::error::RecvError::Lagged(_)) => {
 						continue;
 					},
-					Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+					Err(broadcast::error::RecvError::Closed) => {
 						break;
 					},
 				},

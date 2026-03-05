@@ -110,7 +110,7 @@ pub(crate) async fn send_transaction_message_route(
 async fn wait_for_result(
 	mut recv: Receiver<WrappedTransactionResponse>,
 ) -> Result<send_transaction_message::v1::Response> {
-	if tokio::time::timeout(Duration::from_secs(50), recv.changed())
+	if tokio::time::timeout(Duration::from_secs(120), recv.changed())
 		.await
 		.is_err()
 	{

@@ -6,6 +6,7 @@ use conduwuit::{
 	config::{Config, check},
 	error, implement,
 };
+use tokio::sync::broadcast;
 
 use crate::registration_tokens::{ValidToken, ValidTokenSource};
 
@@ -39,7 +40,7 @@ impl crate::Service for Service {
 					if let Err(e) = self.handle_reload() {
 						error!("Failed to reload config: {e}");
 					},
-				| Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+				| Err(broadcast::error::RecvError::Closed) => break,
 				| _ => {},
 			}
 		}

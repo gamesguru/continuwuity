@@ -115,7 +115,7 @@ impl Server {
 	pub async fn until_shutdown(self: &Arc<Self>) {
 		let mut signals = self.signal.subscribe();
 		while self.running() {
-			if let Err(tokio::sync::broadcast::error::RecvError::Closed) = signals.recv().await {
+			if signals.recv().await == Err(broadcast::error::RecvError::Closed) {
 				break;
 			}
 		}
