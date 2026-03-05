@@ -17,6 +17,7 @@ env:
   SCCACHE_DIR: /home/forgejo-runner/.cache/conduwuit-ci/sccache
   GOPATH: /home/forgejo-runner/.cache/conduwuit-ci/go
   RUSTC_WRAPPER: sccache
+  PATH: /opt/rust/cargo/bin:${{ github.workspace }}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 jobs:
   complement-tests:
