@@ -2,11 +2,12 @@
 name: Complement Tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      artifact_url:
+        description: "URL to the conduwuit artifact (binary or zip)"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,14 +21,8 @@ env:
 jobs:
   complement-tests:
     runs-on: ubuntu-24.04-avx512
-    if: (vars.C10Y_ENABLE_FORGE_WORKFLOW_PR_CHECKS != '' || github.event_name == 'workflow_dispatch')
 
     env:
-      CARGO_BUILD_JOBS: 2
-      # Persistent cache dirs on the VPS
-      CARGO_HOME: /home/forgejo-runner/.cache/conduwuit-ci/cargo
-      CARGO_TARGET_DIR: /home/forgejo-runner/.cache/conduwuit-ci/target
-      CCACHE_DIR: /home/forgejo-runner/.cache/conduwuit-ci/ccache
       RUSTC_WRAPPER: ccache
 
     steps:
@@ -42,48 +37,22 @@ jobs:
           git checkout FETCH_HEAD
           git fetch --tags --force
 
-      - name: Restore Cargo cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ${{ env.CARGO_HOME }}
-            ${{ env.CARGO_TARGET_DIR }}
-            ${{ env.CCACHE_DIR }}
-          key: continuwuity-complement-cache-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
-          restore-keys: |
-            continuwuity-complement-cache-
-
-      - name: Native Rust Setup
+      - name: Download conduwuit artifact
         run: |
-          $RUSTUP show
-          mkdir -p "$CARGO_HOME" "$CARGO_TARGET_DIR" "$CCACHE_DIR"
+          mkdir -p target/debug
+          echo "Downloading artifact from ${{ github.event.inputs.artifact_url }}..."
+          curl -L -o target/debug/artifact_download "${{ github.event.inputs.artifact_url }}"
 
-      - name: Run Lints (Clippy)
-        run: |
-          $CARGO clippy \
-            --workspace \
-            --features full \
-            --locked \
-            --no-deps \
-            --profile dev \
-            -- -D warnings
+          # Check if it's a zip file
+          if file target/debug/artifact_download | grep -q 'Zip archive data'; then
+            echo "Unzipping artifact..."
+            unzip -o target/debug/artifact_download -d target/debug/
+            rm target/debug/artifact_download
+          else
+            mv target/debug/artifact_download target/debug/conduwuit
+          fi
 
-      - name: Run Unit Tests
-        run: |
-          $CARGO test \
-            --workspace \
-            --features full \
-            --locked \
-            --profile dev \
-            --all-targets \
-            --no-fail-fast
-
-      - name: Build conduwuit for Complement (Debug)
-        run: |
-          $CARGO build \
-            --features full,direct_tls \
-            --locked \
-            --profile dev
+          chmod +x target/debug/conduwuit || true
 
       - name: Checkout Complement
         run: |
@@ -174,7 +143,7 @@ jobs:
           # Insert into run_details
           # {"Action":"pass","Test":"TestName"} -> ($RUN_ID, 'TestName', 'pass')
           # Escape single quotes in test names
-          jq -r ". | \"INSERT INTO run_details (run_id, file_name, status) VALUES ($RUN_ID, '\" + (.Test | gsub(\"'\"; \"''\")) + \"', '\" + .Action + \"');\"" "../$JSONL" | sqlite3 ledger.db
+          jq -r ". | \"INSERT INTO run_details (run_id, file_name, status) VALUES ($RUN_ID, '" + (.Test | gsub("'"'"'; "''")) + "', '" + .Action + "');\"" ../$JSONL | sqlite3 ledger.db
 
           # Export CSVs
           make export
@@ -212,16 +181,6 @@ jobs:
               -d "{{\"body\": \"$BODY\"}}" \
               "${{ forge.server_url }}/api/v1/repos/${{ forge.repository }}/issues/${{ forge.event.pull_request.number }}/comments"
           fi
-
-      - name: Save Cargo cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ${{ env.CARGO_HOME }}
-            ${{ env.CARGO_TARGET_DIR }}
-            ${{ env.CCACHE_DIR }}
-          key: continuwuity-complement-cache-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
 
       - name: Upload test logs & ledger
         if: always()
