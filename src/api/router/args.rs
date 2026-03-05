@@ -12,6 +12,76 @@ use service::Services;
 use super::{auth, auth::Auth, request, request::Request};
 use crate::{State, service::appservice::RegistrationInfo};
 
+/// Extractor for Ruma request structs (optional authentication)
+pub(crate) struct OptionalArgs<T> {
+	/// Request struct body
+	pub(crate) body: T,
+
+	/// Federation server authentication: X-Matrix origin
+	/// None when not a federation server.
+	pub(crate) origin: Option<OwnedServerName>,
+
+	/// Local user authentication: user_id.
+	/// None when not an authenticated local user.
+	pub(crate) sender_user: Option<OwnedUserId>,
+
+	/// Local user authentication: device_id.
+	/// None when not an authenticated local user or no device.
+	pub(crate) sender_device: Option<OwnedDeviceId>,
+
+	/// Appservice authentication; registration info.
+	/// None when not an appservice.
+	pub(crate) appservice_info: Option<RegistrationInfo>,
+
+	/// Parsed JSON content.
+	/// None when body is not a valid string
+	pub(crate) json_body: Option<CanonicalJsonValue>,
+}
+
+impl<T> Deref for OptionalArgs<T>
+where
+	T: IncomingRequest + Send + Sync + 'static,
+{
+	type Target = T;
+
+	fn deref(&self) -> &Self::Target { &self.body }
+}
+
+impl<T> FromRequest<State, Body> for OptionalArgs<T>
+where
+	T: IncomingRequest + Send + Sync + 'static,
+{
+	type Rejection = Error;
+
+	async fn from_request(
+		request: hyper::Request<Body>,
+		services: &State,
+	) -> Result<Self, Self::Rejection> {
+		let mut request = request::from(services, request).await?;
+		let mut json_body = serde_json::from_slice::<CanonicalJsonValue>(&request.body).ok();
+
+		let auth = auth::auth(services, &mut request, json_body.as_ref(), &T::METADATA)
+			.await
+			.ok();
+
+		let auth_ref = auth.as_ref().unwrap_or(&Auth {
+			origin: None,
+			sender_user: None,
+			sender_device: None,
+			appservice_info: None,
+		});
+
+		Ok(Self {
+			body: make_body::<T>(services, &mut request, json_body.as_mut(), auth_ref)?,
+			origin: auth.as_ref().and_then(|a| a.origin.clone()),
+			sender_user: auth.as_ref().and_then(|a| a.sender_user.clone()),
+			sender_device: auth.as_ref().and_then(|a| a.sender_device.clone()),
+			appservice_info: auth.as_ref().and_then(|a| a.appservice_info.clone()),
+			json_body,
+		})
+	}
+}
+
 /// Extractor for Ruma request structs
 pub(crate) struct Args<T> {
 	/// Request struct body

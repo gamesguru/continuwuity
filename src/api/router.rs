@@ -16,7 +16,7 @@ pub(super) use conduwuit_service::state::State;
 use http::{Uri, uri};
 
 use self::handler::RouterExt;
-pub(super) use self::{args::Args as Ruma, response::RumaResponse};
+pub(super) use self::{args::Args as Ruma, args::OptionalArgs as OptionalRuma, response::RumaResponse};
 use crate::{admin, client, server};
 
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
@@ -236,8 +236,6 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			.ruma_route(&server::well_known_server)
 			.ruma_route(&server::get_content_route)
 			.ruma_route(&server::get_content_thumbnail_route)
-			.route("/_matrix/federation/v1/media/download/:media_id", get(server::get_content_legacy_route))
-			.route("/_matrix/federation/v1/media/thumbnail/:media_id", get(server::get_content_thumbnail_legacy_route))
 			.ruma_route(&server::get_edutypes_route)
 			.route("/_conduwuit/local_user_count", get(client::conduwuit_local_user_count))
 			.route("/_continuwuity/local_user_count", get(client::conduwuit_local_user_count));

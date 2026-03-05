@@ -4,12 +4,10 @@ use conduwuit::{Err, Result, utils::content_disposition::make_content_dispositio
 use conduwuit_service::media::{Dim, FileMeta};
 use ruma::{
 	Mxc,
-	api::federation::authenticated_media::{
-		Content, ContentMetadata, FileOrLocation, get_content, get_content_thumbnail,
-	},
+	api::federation::authenticated_media::{Content, ContentMetadata, FileOrLocation, get_content, get_content_thumbnail},
 };
 
-use crate::Ruma;
+use crate::OptionalRuma as Ruma;
 
 /// # `GET /_matrix/federation/v1/media/download/{mediaId}`
 ///
@@ -94,26 +92,4 @@ pub(crate) async fn get_content_thumbnail_route(
 		content: FileOrLocation::File(content),
 		metadata: ContentMetadata::new(),
 	})
-}
-
-/// # `GET /_matrix/federation/v1/media/download/{mediaId}`
-///
-/// Load media from our server (unauthenticated legacy).
-pub(crate) async fn get_content_legacy_route(
-	state: State<crate::State>,
-	client: InsecureClientIp,
-	body: Ruma<get_content::v1::Request>,
-) -> Result<get_content::v1::Response> {
-	get_content_route(state, client, body).await
-}
-
-/// # `GET /_matrix/federation/v1/media/thumbnail/{mediaId}`
-///
-/// Load media thumbnail from our server (unauthenticated legacy).
-pub(crate) async fn get_content_thumbnail_legacy_route(
-	state: State<crate::State>,
-	client: InsecureClientIp,
-	body: Ruma<get_content_thumbnail::v1::Request>,
-) -> Result<get_content_thumbnail::v1::Response> {
-	get_content_thumbnail_route(state, client, body).await
 }
