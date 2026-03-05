@@ -137,40 +137,52 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
 #[admin_command]
 pub(super) async fn list_outliers(
 	&self,
-	room_id: Option<OwnedRoomId>,
+	room: Option<OwnedRoomOrAliasId>,
 	sender: Option<OwnedUserId>,
 	limit: Option<usize>,
 ) -> Result {
 	let limit = limit.unwrap_or(100);
 
-	// TODO(admin): This currently performs a full, linear scan of the
-	// `eventid_outlierpdu` RocksDB KV table. There are no secondary indexes for
-	// room_id or sender, so filtering here will brute-force iterate the map.
-	let mut outliers = self.services.rooms.outlier.stream();
+	let room_id = if let Some(room) = room {
+		Some(self.services.rooms.alias.resolve(&room).await?)
+	} else {
+		None
+	};
+
+	let mut outliers: Vec<(OwnedEventId, PduEvent)> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| {
+			let room_match = room_id
+				.as_ref()
+				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
+			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+			ready(room_match && sender_match)
+		})
+		.collect()
+		.await;
+
+	// Sort by origin_server_ts
+	outliers.sort_by_key(|(_, pdu)| pdu.origin_server_ts);
 
 	let mut count = 0_usize;
 	let mut body = String::new();
-	while let Some((event_id, pdu)) = outliers.next().await {
+	for (event_id, pdu) in outliers {
 		if count >= limit {
 			writeln!(body, "--- Stopped after {limit} entries ---")?;
 			break;
 		}
 
-		if let Some(room) = &room_id {
-			if pdu.room_id().is_none_or(|r| r != room) {
-				continue;
-			}
-		}
-
-		if let Some(sender_filter) = &sender {
-			if pdu.sender() != sender_filter {
-				continue;
-			}
-		}
-
 		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
 		let sender = pdu.sender();
-		writeln!(body, "{event_id}\tRoom: {room_id_str}\tSender: {sender}")?;
+		let kind = pdu.kind.to_string();
+		let ts = pdu.origin_server_ts;
+		writeln!(
+			body,
+			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: {kind}"
+		)?;
 		count = count.saturating_add(1);
 	}
 
@@ -179,6 +191,79 @@ pub(super) async fn list_outliers(
 	}
 
 	self.write_str(&format!("Outliers:\n```\n{body}\n```"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn purge_outliers(
+	&self,
+	room: Option<OwnedRoomOrAliasId>,
+	sender: Option<OwnedUserId>,
+	all: bool,
+) -> Result {
+	if room.is_none() && sender.is_none() && !all {
+		return Err!("You must specify a room, a sender, or use --all to purge outliers.");
+	}
+
+	let room_id = if let Some(room) = room {
+		Some(self.services.rooms.alias.resolve(&room).await?)
+	} else {
+		None
+	};
+
+	let outliers: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| {
+			let room_match = room_id
+				.as_ref()
+				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
+			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+			ready(room_match && sender_match)
+		})
+		.map(|(event_id, _)| event_id)
+		.collect()
+		.await;
+
+	let count = outliers.len();
+	for event_id in outliers {
+		self.services.rooms.outlier.remove_outlier(&event_id);
+	}
+
+	self.write_str(&format!("Purged {count} outliers.")).await
+}
+
+#[admin_command]
+pub(super) async fn view_extremities(&self, room: OwnedRoomOrAliasId) -> Result {
+	let room_id = self.services.rooms.alias.resolve(&room).await?;
+	let extremities: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let num = extremities.len();
+	let mut body = String::new();
+	for event_id in extremities {
+		let pdu = self.services.rooms.timeline.get_pdu(&event_id).await;
+		match pdu {
+			| Ok(pdu) => {
+				let ts = pdu.origin_server_ts;
+				let sender = pdu.sender();
+				writeln!(body, "{event_id}\tTS: {ts}\tSender: {sender}")?;
+			},
+			| Err(_) => {
+				writeln!(body, "{event_id}\tERROR: PDU not found in timeline")?;
+			},
+		}
+	}
+
+	self.write_str(&format!("Room {room_id} has {num} extremities:\n```\n{body}\n```"))
 		.await
 }
 

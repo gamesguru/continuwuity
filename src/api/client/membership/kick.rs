@@ -47,10 +47,13 @@ pub(crate) async fn kick_user_route(
 		event.membership,
 		MembershipState::Invite | MembershipState::Knock | MembershipState::Join,
 	) {
-		return Err!(Request(Forbidden(
-			"Cannot kick a user who is not apart of the room (current membership: {})",
-			event.membership
-		)));
+		info!(
+			room_id = %body.room_id,
+			user_id = %body.user_id,
+			membership = ?event.membership,
+			"Target user is not in the room, returning 200 (Synapse behavior)"
+		);
+		return Ok(kick_user::v3::Response::new());
 	}
 
 	services

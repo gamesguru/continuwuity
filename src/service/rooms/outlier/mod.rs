@@ -59,3 +59,8 @@ pub fn stream(&self) -> impl Stream<Item = (OwnedEventId, PduEvent)> + Send + '_
 pub fn add_pdu_outlier(&self, event_id: &EventId, pdu: &CanonicalJsonObject) {
 	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
 }
+
+/// Remove the PDU from the outlier tree.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub fn remove_outlier(&self, event_id: &EventId) { self.db.eventid_outlierpdu.remove(event_id); }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use conduwuit::{
-	Result, debug, utils,
+	Result, utils,
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
@@ -72,6 +72,12 @@ impl Data {
 			| Ok(ref presence) => presence.1.state != *presence_state,
 		};
 
+		let currently_active_changed = match last_presence {
+			| Err(_) => true,
+			| Ok(ref presence) =>
+				currently_active.is_some_and(|active| active != presence.1.currently_active),
+		};
+
 		let status_msg_changed = match last_presence {
 			| Err(_) => true,
 			| Ok(ref last_presence) => {
@@ -93,12 +99,9 @@ impl Data {
 			| Some(last_active_ago) => now.saturating_sub(last_active_ago.into()),
 		};
 
-		// TODO: tighten for state flicker?
-		if !status_msg_changed && !state_changed && last_active_ts < last_last_active_ts {
-			debug!(
-				"presence spam {user_id:?} last_active_ts:{last_active_ts:?} < \
-				 {last_last_active_ts:?}",
-			);
+		let changed = state_changed || status_msg_changed || currently_active_changed;
+
+		if !changed && last_active_ts < last_last_active_ts.saturating_add(5000) {
 			return Ok(());
 		}
 

@@ -7,7 +7,7 @@ use futures::future::{AbortHandle, Abortable};
 use ruma::events::room::message::RoomMessageEventContent;
 use rustyline_async::{Readline, ReadlineError, ReadlineEvent};
 use termimad::MadSkin;
-use tokio::{select, task::JoinHandle};
+use tokio::{pin, select, task::JoinHandle};
 
 use crate::{
 	Dep,
@@ -155,18 +155,28 @@ impl Console {
 
 		let (abort, abort_reg) = AbortHandle::new_pair();
 		let future = Abortable::new(future, abort_reg);
+		pin!(future);
+
 		_ = self.command_abort.lock().insert(abort);
 		defer! {{
 			_ = self.command_abort.lock().take();
 		}}
 
-		select! {
-			_ = future => {},
-			Ok(sig) = sig_recv.recv() => {
-				if sig == "SIGINT" {
-					self.output.print_text("Interrupted");
-				}
-			},
+		loop {
+			select! {
+				_ = &mut future => break,
+				sig = sig_recv.recv() => match sig {
+					Ok("SIGINT") => {
+						self.output.print_text("Interrupted");
+						self.interrupt_command();
+						break;
+					},
+					Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+						continue;
+					},
+					_ => {},
+				},
+			}
 		}
 	}
 

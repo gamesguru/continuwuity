@@ -50,7 +50,7 @@ pub enum DebugCommand {
 	ListOutliers {
 		/// Filter outliers to a specific room
 		#[arg(short, long)]
-		room_id: Option<OwnedRoomId>,
+		room_id: Option<OwnedRoomOrAliasId>,
 
 		/// Filter outliers to a specific sender
 		#[arg(short, long)]
@@ -59,6 +59,27 @@ pub enum DebugCommand {
 		/// Limit the number of outliers listed.
 		#[arg(short, long)]
 		limit: Option<usize>,
+	},
+
+	/// Purge all outlier PDUs matching the filters.
+	PurgeOutliers {
+		/// Filter outliers to a specific room
+		#[arg(short, long)]
+		room_id: Option<OwnedRoomOrAliasId>,
+
+		/// Filter outliers to a specific sender
+		#[arg(short, long)]
+		sender: Option<OwnedUserId>,
+
+		/// Purge ALL outliers in the database.
+		#[arg(long)]
+		all: bool,
+	},
+
+	/// View the current forward extremities (timeline tips) of a room.
+	ViewExtremities {
+		/// The room ID or alias.
+		room: OwnedRoomOrAliasId,
 	},
 
 	/// Attempts to "rescue" all outlier PDUs in a room.
