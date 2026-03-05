@@ -177,6 +177,7 @@ impl Console {
 					Err(broadcast::error::RecvError::Closed) => {
 						break;
 					},
+					_ => {},
 				},
 			}
 		}
