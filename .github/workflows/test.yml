@@ -1,0 +1,248 @@
+---
+name: PR Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  SKIP_CONFIRM: 1
+
+jobs:
+  clippy-checks:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_PR_CHECKS_CLIPPY_CHECKS != ''
+    runs-on: ubuntu-latest
+    env:
+      PROFILE: dev-quick
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Fetch tags manually
+        run: git fetch --tags --force
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+          components: clippy, rustfmt
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt --component clippy
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - name: Debug checks
+        run: make vars doctor cpu-info
+      - name: Format
+        run: make format
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # Complement tests (advised to run in docker or isolated container)
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  complement-tests:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_PR_CHECKS_COMPLEMENT_TESTS != ''
+    runs-on: ubuntu-latest
+
+    # For writing/updating PR comments on running test totals (# pass/fail/skip)
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Fetch tags manually
+        run: git fetch --tags --force
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - name: Build conduwuit for Complement
+        run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+
+      - name: Checkout Complement
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: matrix-org/complement
+          path: complement-src
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: complement-src/go.sum
+
+      - name: Build Complement Docker image
+        run: docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Build and run Complement tests
+        continue-on-error: true
+        run: |
+          ./bin/complement ./complement-src
+
+      - name: Parse Complement results
+        if: always()
+        id: results
+        run: |
+          if [ -f complement_test_results.jsonl ]; then
+            PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' complement_test_results.jsonl)
+            FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' complement_test_results.jsonl)
+            SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' complement_test_results.jsonl)
+            TOTAL=$((PASS + FAIL + SKIP))
+            FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' complement_test_results.jsonl | sort -u)
+
+            echo "pass=$PASS" >> "$GITHUB_OUTPUT"
+            echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
+            echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+            echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+            echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "pass=0" >> "$GITHUB_OUTPUT"
+            echo "fail=0" >> "$GITHUB_OUTPUT"
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+            echo "total=0" >> "$GITHUB_OUTPUT"
+            echo "failed_tests=No results file found" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post Complement results to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          FAILED_TESTS: ${{ steps.results.outputs.failed_tests }}
+        with:
+          script: |
+            const pass = ${{ steps.results.outputs.pass || 0 }};
+            const fail = ${{ steps.results.outputs.fail || 0 }};
+            const skip = ${{ steps.results.outputs.skip || 0 }};
+            const total = ${{ steps.results.outputs.total || 0 }};
+            const failedTestsRaw = process.env.FAILED_TESTS || '';
+
+            const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
+            let failedContent = 'No failing tests recorded.';
+            if (lines.length > 0) {
+              const list = lines.join('\n');
+              failedContent = '```\n' + list + '\n```';
+            }
+
+            let currentRun = [
+              '## Complement Test Results',
+              `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
+              '',
+              '| Status | Count |',
+              '|--------|-------|',
+              `| ✓ Pass | ${pass} |`,
+              `| ✗ Fail | ${fail} |`,
+              `| ○ Skip | ${skip} |`,
+              `| **Total** | **${total}** |`,
+              '',
+              `<details><summary>Failed Tests (${fail})</summary>`,
+              '',
+              failedContent,
+              '',
+              '</details>',
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.body && c.body.includes('<!-- complement-test-results -->')
+            );
+
+            let body = currentRun + '\n\n<!-- complement-test-results -->';
+
+            if (existing) {
+              let oldBody = existing.body.replace('<!-- complement-test-results -->', '').replace('## Complement Test Results', '').trim();
+              if (oldBody.length > 0) {
+                const maxPreviousRuns = 6;
+                let parts = oldBody.split('<details><summary>Previous Runs</summary>');
+                if (parts.length > maxPreviousRuns + 1) {
+                  parts = parts.slice(0, maxPreviousRuns + 1);
+                  oldBody = parts.join('<details><summary>Previous Runs</summary>');
+                  oldBody += '\n\n' + '</details>\n\n'.repeat(maxPreviousRuns).trim();
+                }
+                body = currentRun + '\n\n<details><summary>Previous Runs</summary>\n\n' + oldBody + '\n\n</details>\n\n<!-- complement-test-results -->';
+              }
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: complement-logs
+          path: complement_test_results.jsonl
+          retention-days: 90
