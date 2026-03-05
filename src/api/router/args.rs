@@ -13,6 +13,7 @@ use super::{auth, auth::Auth, request, request::Request};
 use crate::{State, service::appservice::RegistrationInfo};
 
 /// Extractor for Ruma request structs (optional authentication)
+#[allow(dead_code)]
 pub(crate) struct OptionalArgs<T> {
 	/// Request struct body
 	pub(crate) body: T,
