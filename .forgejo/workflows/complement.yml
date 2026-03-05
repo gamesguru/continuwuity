@@ -20,7 +20,7 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: ubuntu-24.04-avx512
+    runs-on: ubuntu-22.04-avx512
 
     env:
       RUSTC_WRAPPER: ccache
@@ -39,9 +39,27 @@ jobs:
 
       - name: Download conduwuit artifact
         run: |
+          ARTIFACT_URL="${{ github.event.inputs.artifact_url }}"
+
+          # If the user pasted a github.com web UI URL, convert it to the API endpoint
+          if [[ "$ARTIFACT_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/(suites|actions/runs)/[^/]+/artifacts/([^/]+) ]]; then
+            OWNER="${BASH_REMATCH[1]}"
+            REPO="${BASH_REMATCH[2]}"
+            ARTIFACT_ID="${BASH_REMATCH[4]}"
+            ARTIFACT_URL="https://api.github.com/repos/$OWNER/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
+            echo "Converted Web URL to API URL: $ARTIFACT_URL"
+          fi
+
+          # Security Check: Only allow downloads from api.github.com or objects.githubusercontent.com
+          if [[ ! "$ARTIFACT_URL" =~ ^https://(api\.github\.com|objects\.githubusercontent\.com)/ ]]; then
+            echo "❌ ERROR: Security violation. Artifact URL must be from GitHub."
+            echo "URL provided: $ARTIFACT_URL"
+            exit 1
+          fi
+
           mkdir -p target/debug
-          echo "Downloading artifact from ${{ github.event.inputs.artifact_url }}..."
-          curl -L -o target/debug/artifact_download "${{ github.event.inputs.artifact_url }}"
+          echo "Downloading artifact from $ARTIFACT_URL..."
+          curl -L -o target/debug/artifact_download -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
           # Check if it's a zip file
           if file target/debug/artifact_download | grep -q 'Zip archive data'; then
