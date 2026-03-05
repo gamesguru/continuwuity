@@ -306,6 +306,15 @@ async fn build_left_state_and_timeline(
 		state.swap_remove(index);
 	}
 
+	// #779 workaround: when the timeline is empty due to the membership DB
+	// race, include the leave membership event in state so the LeftRoom is
+	// never empty. This ensures the client sees the leave transition even
+	// when load_joined_room consumed the leave event first.
+	if timeline.pdus.is_empty() && state.is_empty() {
+		trace!("empty left room timeline, injecting leave membership event");
+		state.push(leave_membership_event);
+	}
+
 	trace!(
 		%timeline_start_count,
 		%timeline_end_count,

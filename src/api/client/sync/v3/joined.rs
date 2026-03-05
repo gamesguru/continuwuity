@@ -58,7 +58,7 @@ pub(super) async fn load_joined_room(
 	services: &Services,
 	sync_context: SyncContext<'_>,
 	ref room_id: OwnedRoomId,
-) -> Result<(JoinedRoom, DeviceListUpdates)> {
+) -> Result<(JoinedRoom, DeviceListUpdates, bool)> {
 	/*
 	Building a sync response involves many steps which all depend on each other.
 	To parallelize the process as much as possible, each step is divided into its own function,
@@ -74,6 +74,7 @@ pub(super) async fn load_joined_room(
 			summary,
 			notification_counts,
 			device_list_updates,
+			joined_since_last_sync,
 		},
 	) = try_join3(
 		build_account_data(services, sync_context, room_id),
@@ -104,7 +105,7 @@ pub(super) async fn load_joined_room(
 		unread_thread_notifications: BTreeMap::new(),
 	};
 
-	Ok((joined_room, device_list_updates))
+	Ok((joined_room, device_list_updates, joined_since_last_sync))
 }
 
 /// Collect changes to the syncing user's account data events.
@@ -244,6 +245,7 @@ struct StateAndTimeline {
 	summary: Option<RoomSummary>,
 	notification_counts: Option<UnreadNotificationsCount>,
 	device_list_updates: DeviceListUpdates,
+	joined_since_last_sync: bool,
 }
 
 /// Compute changes to the room's state and timeline.
@@ -269,8 +271,26 @@ async fn build_state_and_timeline(
 	// the timeline should always include at least one PDU if the syncing user
 	// joined since the last sync, that being the syncing user's join event. if
 	// it's empty something is wrong.
+	//
+	// #779 workaround: when the timeline is empty due to the non-atomic
+	// mark_as_joined DB race, inject the user's join membership event into
+	// the state so the sync response is never empty for a newly joined room.
+	// This ensures any client sees the membership transition.
+	let mut state_events = state_events;
 	if joined_since_last_sync && timeline.pdus.is_empty() {
-		warn!("timeline for newly joined room is empty");
+		warn!("timeline for newly joined room is empty, injecting membership event");
+		if let Ok(membership_pdu) = services
+			.rooms
+			.state_accessor
+			.state_get(
+				shortstatehashes.current_shortstatehash,
+				&StateEventType::RoomMember,
+				sync_context.syncing_user.as_str(),
+			)
+			.await
+		{
+			state_events.push(membership_pdu);
+		}
 	}
 
 	let (summary, device_list_updates) = try_join(
@@ -326,6 +346,7 @@ async fn build_state_and_timeline(
 		summary,
 		notification_counts,
 		device_list_updates,
+		joined_since_last_sync,
 	})
 }
 

@@ -273,7 +273,7 @@ pub(crate) async fn build_sync_events(
 			let joined_room = load_joined_room(services, context, room_id.clone()).await;
 
 			match joined_room {
-				| Ok((room, updates)) => Some((room_id, room, updates)),
+				| Ok((room, updates, newly_joined)) => Some((room_id, room, updates, newly_joined)),
 				| Err(err) => {
 					warn!(?err, %room_id, "error loading joined room");
 					None
@@ -282,10 +282,14 @@ pub(crate) async fn build_sync_events(
 		})
 		.ready_fold(
 			(BTreeMap::new(), DeviceListUpdates::new()),
-			|(mut joined_rooms, mut all_updates), (room_id, joined_room, updates)| {
+			|(mut joined_rooms, mut all_updates), (room_id, joined_room, updates, newly_joined)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() {
+				// Always include rooms the user just joined, even if the sync
+				// response is empty due to the membership DB race (#779).
+				// The client needs the room to appear in the joined section
+				// to complete the membership transition.
+				if newly_joined || !joined_room.is_empty() {
 					joined_rooms.insert(room_id, joined_room);
 				}
 
