@@ -14,7 +14,7 @@ env:
   SKIP_CONFIRM: 1
   # Persistent CI cache directories on the host
   CARGO_HOME: /home/forgejo-runner/.cache/conduwuit-ci/cargo
-  GOPATH: /home/forgejo-runner/.cache/conduwuit-ci/go
+  CARGO_TARGET_DIR: /home/forgejo-runner/.cache/conduwuit-ci/target
   RUSTC_WRAPPER: ccache
   PATH: /opt/rust/cargo/bin:/home/forgejo-runner/.cargo/bin:${{ github.workspace }}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -59,13 +59,31 @@ jobs:
           fi
 
       - name: Build Complement Docker image
-        run: docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
+        run: |
+          # Use buildx for BuildKit support (faster, modern)
+          docker buildx build -t continuwuity:complement -f ./docker/complement.Dockerfile . --load
 
       - name: Build and run Complement tests
         continue-on-error: true
         run: |
-          # Go installation should be present on the host or we can apt install it
+          # Ensure results directory exists
+          mkdir -p tests/test_results/complement/
+
+          # Check for required tools
+          command -v jq || (echo "❌ jq not found" && exit 1)
+          command -v docker || (echo "❌ docker not found" && exit 1)
+
           ./bin/complement ./complement-src
+
+      - name: Debug Results
+        if: always()
+        run: |
+          echo "Checking results directory:"
+          ls -la tests/test_results/complement/
+          echo "Log file size:"
+          stat -c%s tests/test_results/complement/test_logs.jsonl || echo "Log missing"
+          echo "Results file size:"
+          stat -c%s tests/test_results/complement/test_results.jsonl || echo "Results missing"
 
       - name: Summarize results
         id: summary
