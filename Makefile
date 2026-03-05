@@ -36,7 +36,7 @@ STYLE_RESET := $(shell tput sgr0 2>/dev/null || echo -e "\033[0m")
 .PHONY: help
 help: ##H Show this help, list available targets
 	@grep -hE '^[a-zA-Z0-9_\/-]+:.*?##H .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-15s$(STYLE_RESET) %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-20s$(STYLE_RESET) %s\n", $$1, $$2}'
 
 
 .PHONY: doctor
@@ -54,7 +54,7 @@ doctor: ##H Output version info for required tools
 	pkg-config --libs --cflags liburing
 	@echo "OK."
 	@echo "Checking for newer tags [DRY RUN]..."
-	git fetch --all --dry-run --tags
+	git fetch --all --tags --dry-run
 
 .PHONY: cpu-info
 cpu-info: ##H Print CPU info relevant to target-cpu=native
@@ -80,6 +80,24 @@ vars: ##H Print debug info
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Development commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.PHONY: cargo/lock-init
+cargo/lock-init:	##H Init or fully upgrade the lockfile (wipes it)
+	cargo generate-lockfile
+	@echo "OK."
+
+.PHONY: cargo/lock-update
+cargo/lock-update: ##H Update Cargo.lock minimally to match Cargo.toml
+	@echo "Updating Cargo.lock..."
+	cargo metadata --format-version 1 --no-deps > /dev/null
+	@echo "OK."
+
+.PHONY: cargo/sync
+cargo/sync: ##H Sync Cargo.lock with origin/main and refresh minimally
+	@echo "Synchronizing Cargo.lock..."
+	git restore --source origin/main Cargo.lock
+	cargo metadata --format-version 1 --no-deps > /dev/null
+	@echo "OK."
 
 .PHONY: profiles
 profiles: ##H List available cargo profiles
@@ -158,98 +176,140 @@ clean:	##H Clean build directory for current profile
 # 	rm -rf target/debian
 
 
-.PHONY: docs
-docs:	##H Regenerate docs (admin commands, etc.)
+.PHONY: build-docs
+build-docs:	##H Regenerate docs (admin commands, etc.)
 	@echo "Regenerate docs with PROFILE='$(PROFILE)'?"
 	@$(MAKE) _confirm
 	cargo run -p xtask --profile $(PROFILE) -- generate-docs
 
 
-.PHONY: docker/complement
-docker/complement: ##H Build conduwuit image for Complement testing
+COMPLEMENT_DIR ?=
+COMPLEMENT_IMAGE ?= continuwuity:complement
+
+.PHONY: complement/build
+complement/build: ##H Build conduwuit docker image for Complement testing
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
 	@echo "Building Complement Docker image..."
-	docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
+	docker build -t $(COMPLEMENT_IMAGE) -f ./docker/complement.Dockerfile .
+
+.PHONY: complement/run
+complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
+	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
+	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
+	@cd $(COMPLEMENT_DIR) && \
+	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
+	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
 
 
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Deployment commands
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# CI artifact OS target. Override with: make download OS_VERSION=ubuntu-22.04
-OS_VERSION ?=
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# GitHub CI/build related targets
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 GH_REPO ?=
+
+GH_CACHE_KEY ?=
+
+.PHONY: download/clear-cache
+download/clear-cache: ##H Delete GitHub Actions caches
+	# Testing you have explicitly set GH_CACHE_KEY
+	@if [ -z "$(GH_CACHE_KEY)" ]; then \
+		gh cache list -R "$(GH_REPO)" --limit 100; \
+		echo ""; \
+		echo "Hint: Use GH_CACHE_KEY=prefix to delete caches."; \
+	else \
+		echo "Deleting GitHub Actions caches matching prefix: $(GH_CACHE_KEY)..."; \
+		gh cache list -R "$(GH_REPO)" --key "$(GH_CACHE_KEY)" --limit 1000 | awk '{print $$1}' \
+			| grep -v 'ID' | grep -v 'KEYS' \
+			| xargs -r -I {} sh -c 'echo "Deleting cache: {}" && gh cache delete -R "$(GH_REPO)" {}'; \
+	fi
+
+
+CPU_TARGET ?=
+OS_VERSION ?=
+
+GH_ARTIFACT_NAME ?= conduwuit
+GH_ARTIFACT_SUFFIX ?= $(CPU_TARGET)-$(OS_VERSION)
+ARTIFACT ?= $(GH_ARTIFACT_NAME)$(GH_ARTIFACT_SUFFIX)
+
 RUN ?=
+N_RUNS ?= 6
 
 .PHONY: download
-download:	##H Download CI binary (use RUN_ID=... to pick a specific run)
-	# Testing whether OS_VERSION and GH_REPO are set...
-	@test "$(OS_VERSION)"
-	@test "$(GH_REPO)"
+download:	##H Download CI binary (use RUN=... to pick a specific run)
+	# Testing whether GH_REPO is set
+	test "$(GH_REPO)"
+	# Testing whether ARTIFACT related vars are set
+	(test "$(OS_VERSION)" && test "$(CPU_TARGET)" ) || test "$(ARTIFACT)"
 	@mkdir -p target/ci
 	# Checking version of old binary, if it exists
 	@-./target/ci/conduwuit -V
 	@rm -f target/ci/conduwuit
-	gh run download $(RUN) -R $(GH_REPO) -n conduwuit-$(OS_VERSION) -D target/ci
+	gh run download $(RUN) -R $(GH_REPO) -n $(ARTIFACT) -D target/ci
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
 	@ln -sfn ci target/latest
 
-.PHONY: download-list
-download-list:	##H List recent CI runs
+.PHONY: download/list
+download/list:	##H List recent CI runs
 	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
-	gh run list -R $(GH_REPO) --limit 15
-
+	mkdir -p .tmp && echo '**' > .tmp/.gitignore
+	# gh run list -R $(GH_REPO) --limit $(N_RUNS)
+	@echo "Fetching latest $(N_RUNS) runs and their artifacts in parallel..."
+	@echo ""
+	@gh run list -R "$(GH_REPO)" --limit $(N_RUNS) --json databaseId,workflowName,headBranch,headSha,event,conclusion,status > .tmp/runs.json
+	@bash -c ' \
+	for ID in $$(jq -r ".[].databaseId" .tmp/runs.json); do \
+		gh api "repos/$(GH_REPO)/actions/runs/$$ID/artifacts" --jq ".artifacts[].name" > ".tmp/artifacts_$$ID.txt" & \
+	done; \
+	wait; \
+	jq -c ".[]" .tmp/runs.json | while read -r run; do \
+		ID=$$(echo "$$run" | jq -r ".databaseId"); \
+		STATUS=$$(echo "$$run" | jq -r "if .status == \"completed\" then .conclusion else .status end"); \
+		WORKFLOW=$$(echo "$$run" | jq -r ".workflowName"); \
+		BRANCH=$$(echo "$$run" | jq -r ".headBranch"); \
+		SHA=$$(echo "$$run" | jq -r ".headSha" | cut -c 1-7); \
+		ICON="-"; \
+		if [ "$$STATUS" = "success" ]; then ICON="✓"; fi; \
+		if [ "$$STATUS" = "failure" ]; then ICON="X"; fi; \
+		if [ "$$STATUS" = "in_progress" ]; then ICON="*"; fi; \
+		printf "%-2s %-20s %-30s %-15s (ID: %s)\n" "$$ICON" "$$WORKFLOW" "$$BRANCH ($$SHA)" "$$STATUS" "$$ID"; \
+		if [ -s ".tmp/artifacts_$$ID.txt" ]; then \
+			while read -r artifact; do \
+				echo "    └─ $$artifact"; \
+			done < ".tmp/artifacts_$$ID.txt"; \
+		else \
+			echo "    └─ (No artifacts)"; \
+		fi; \
+		echo ""; \
+		rm -f ".tmp/artifacts_$$ID.txt"; \
+	done'
+	@rm -f .tmp/runs.json
 
 # Binary name
 CONTINUWUITY ?= conduwuit
+# systemctl service name
+C10Y_SERV ?= conduwuit.service
 
 # Configure these in .env if alternate path(s) are desired
-LOCAL_BIN_DIR ?= target/latest
-REMOTE_BIN_DIR ?= /usr/local/bin
+BUILD_BIN_DIR ?= target/latest
+DEPLOY_BIN_DIR ?= /usr/local/bin
 
-LOCAL_BIN ?= $(LOCAL_BIN_DIR)/$(CONTINUWUITY)
-REMOTE_BIN ?= $(REMOTE_BIN_DIR)/$(CONTINUWUITY)
+BUILD_BIN ?= $(BUILD_BIN_DIR)/$(CONTINUWUITY)
+DEPLOY_BIN ?= $(DEPLOY_BIN_DIR)/$(CONTINUWUITY)
 
 .PHONY: install
 install:	##H Install (executed on VPS)
-	@echo "Install $(CONTINUWUITY) to $(REMOTE_BIN)?"
+	@echo "Install $(CONTINUWUITY) to $(DEPLOY_BIN)?"
 	@$(MAKE) _confirm
 	# You may need to run with sudo or adjust REMOTE_BIN_DIR if this fails
-	install -b -p -m 755 $(LOCAL_BIN) $(REMOTE_BIN)
+	install -b -p -m 755 $(BUILD_BIN) $(DEPLOY_BIN)
 	@echo "Installation complete."
-# 	@echo "Restarting $(CONTINUWUITY)"
-# 	systemctl restart $(CONTINUWUITY) || sudo systemctl restart $(CONTINUWUITY)
 
-CONT_SERV ?= conduwuit.service
 
 .PHONY: restart
 restart:    ##H Restart service (using systemctl)
-	sudo systemctl restart $(CONT_SERV)
-
-
-# SSH host for remote deploy (e.g. vps151). Configure in .env: VPS_HOST=
-# Or pass ENV=nightly / ENV=dev on the command line to use a preset.
-ENV ?=
-ifeq ($(ENV),nightly)
-VPS_HOST ?= nightly
-CONT_SERV ?= conduwuit.service
-else ifeq ($(ENV),dev)
-VPS_HOST ?= dev
-CONT_SERV ?= conduwuit.service
-endif
-VPS_HOST ?=
-VPS_REMOTE_BIN ?= /usr/local/bin/$(CONTINUWUITY)
-
-.PHONY: deploy
-deploy:	##H Build skylake release, rsync to VPS, and restart service
-	@test "$(VPS_HOST)" || (echo "ERROR: VPS_HOST is not set. Add VPS_HOST=<host> to .env" && exit 1)
-	@$(MAKE) build PROFILE=release-high-perf CARGO_FLAGS="--profile release-high-perf" RUSTFLAGS="-C target-cpu=skylake"
-	@echo "Uploading $(LOCAL_BIN) to $(VPS_HOST):$(VPS_REMOTE_BIN)..."
-	rsync -avz --progress $(LOCAL_BIN) $(VPS_HOST):$(VPS_REMOTE_BIN)
-	@echo "Restarting $(CONT_SERV) on $(VPS_HOST)..."
-	ssh -t $(VPS_HOST) "sudo systemctl restart $(CONT_SERV)"
-	@echo "Deploy complete."
+	sudo systemctl restart $(C10Y_SERV)

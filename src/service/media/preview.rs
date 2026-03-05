@@ -7,7 +7,7 @@
 
 use std::time::SystemTime;
 
-use conduwuit::{Err, Result, debug, err};
+use conduwuit::{Err, Result, debug, err, utils::response::LimitReadExt};
 use conduwuit_core::implement;
 use ipaddress::IPAddress;
 use serde::Serialize;
@@ -72,7 +72,7 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 	}
 
 	let client = &self.services.client.url_preview;
-	let response = client.get(url.as_str()).send().await?;
+	let response = client.head(url.as_str()).send().await?;
 
 	debug!(%url, "URL preview response headers: {:?}", response.headers());
 
@@ -95,9 +95,8 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 		.map_err(|e| err!(Request(Unknown("Unknown or invalid Content-Type header: {e}"))))?;
 
 	let data = match content_type {
-		| html if html.starts_with("text/html") =>
-			self.parse_html(url.as_str(), response).await?,
-		| img if img.starts_with("image/") => self.parse_image(url.as_str(), response).await?,
+		| html if html.starts_with("text/html") => self.download_html(url.as_str()).await?,
+		| img if img.starts_with("image/") => self.download_image(url.as_str()).await?,
 		| _ => return Err!(Request(Unknown("Unsupported Content-Type"))),
 	};
 
@@ -109,22 +108,26 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
 pub async fn download_image(&self, url: &str) -> Result<UrlPreviewData> {
-	let response = self.services.client.url_preview.get(url).send().await?;
-	self.parse_image(url, response).await
-}
-
-#[cfg(feature = "url_preview")]
-#[implement(Service)]
-pub async fn parse_image(
-	&self,
-	_url: &str,
-	response: reqwest::Response,
-) -> Result<UrlPreviewData> {
 	use conduwuit::utils::random_string;
 	use image::ImageReader;
 	use ruma::Mxc;
 
-	let image = response.bytes().await?;
+	let image = self
+		.services
+		.client
+		.url_preview
+		.get(url)
+		.send()
+		.await?
+		.limit_read(
+			self.services
+				.server
+				.config
+				.max_request_size
+				.try_into()
+				.expect("u64 should fit in usize"),
+		)
+		.await?;
 	let mxc = Mxc {
 		server_name: self.services.globals.server_name(),
 		media_id: &random_string(super::MXC_LENGTH),
@@ -156,37 +159,26 @@ pub async fn download_image(&self, _url: &str) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
 }
 
-#[cfg(not(feature = "url_preview"))]
-#[implement(Service)]
-pub async fn parse_image(
-	&self,
-	_url: &str,
-	_response: reqwest::Response,
-) -> Result<UrlPreviewData> {
-	Err!(FeatureDisabled("url_preview"))
-}
-
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
-async fn parse_html(&self, url: &str, mut response: reqwest::Response) -> Result<UrlPreviewData> {
+async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
 	use webpage::HTML;
 
-	let mut bytes: Vec<u8> = Vec::new();
-	while let Some(chunk) = response.chunk().await? {
-		bytes.extend_from_slice(&chunk);
-		if bytes.len() > self.services.globals.url_preview_max_spider_size() {
-			debug!(
-				"Response body from URL {} exceeds url_preview_max_spider_size ({}), not \
-				 processing the rest of the response body and assuming our necessary data is in \
-				 this range.",
-				url,
-				self.services.globals.url_preview_max_spider_size()
-			);
-			break;
-		}
-	}
-	let body = String::from_utf8_lossy(&bytes);
-	let Ok(html) = HTML::from_string(body.to_string(), Some(url.to_owned())) else {
+	let client = &self.services.client.url_preview;
+	let body = client
+		.get(url)
+		.send()
+		.await?
+		.limit_read_text(
+			self.services
+				.server
+				.config
+				.max_request_size
+				.try_into()
+				.expect("u64 should fit in usize"),
+		)
+		.await?;
+	let Ok(html) = HTML::from_string(body.clone(), Some(url.to_owned())) else {
 		return Err!(Request(Unknown("Failed to parse HTML")));
 	};
 
@@ -206,7 +198,7 @@ async fn parse_html(&self, url: &str, mut response: reqwest::Response) -> Result
 
 #[cfg(not(feature = "url_preview"))]
 #[implement(Service)]
-async fn parse_html(&self, _url: &str, _response: reqwest::Response) -> Result<UrlPreviewData> {
+async fn download_html(&self, _url: &str) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
 }
 
