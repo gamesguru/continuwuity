@@ -174,7 +174,9 @@ impl Console {
 					Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
 						continue;
 					},
-					_ => {},
+					Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+						break;
+					},
 				},
 			}
 		}

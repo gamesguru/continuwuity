@@ -147,7 +147,12 @@ impl crate::Service for Service {
 				},
 				sig = signals.recv() => match sig {
 					Ok(sig) => self.handle_signal(sig).await,
-					Err(_) => continue,
+					Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+						continue;
+					},
+					Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+						break;
+					},
 				},
 			}
 		}

@@ -32,11 +32,15 @@ impl crate::Service for Service {
 	}
 
 	async fn worker(self: Arc<Self>) -> Result {
+		let mut signals = self.server.signal.subscribe();
 		while self.server.running() {
-			if self.server.signal.subscribe().recv().await == Ok(SIGNAL) {
-				if let Err(e) = self.handle_reload() {
-					error!("Failed to reload config: {e}");
-				}
+			match signals.recv().await {
+				| Ok(SIGNAL) =>
+					if let Err(e) = self.handle_reload() {
+						error!("Failed to reload config: {e}");
+					},
+				| Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+				| _ => {},
 			}
 		}
 
