@@ -16,14 +16,13 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: ubuntu-24.04
-    # Run directly on the VPS machine OS without a container block.
-    # Eliminates container overhead and Docker-in-Docker.
+    runs-on: ubuntu-24.04-avx512
+    if: |
+      (vars.C10Y_ENABLE_FORGE_WORKFLOW_PR_CHECKS != '' || github.event_name == 'workflow_dispatch')
 
     env:
-      # Limit concurrent build jobs to avoid overloading the server
       CARGO_BUILD_JOBS: 2
-      # Persistent CI cache directories on the host
+      # Persistent cache dirs
       CARGO_HOME: /home/forgejo-runner/.cache/conduwuit-ci/cargo
       CARGO_TARGET_DIR: /home/forgejo-runner/.cache/conduwuit-ci/target
       CCACHE_DIR: /home/forgejo-runner/.cache/conduwuit-ci/ccache
@@ -58,8 +57,32 @@ jobs:
           rustup show
           mkdir -p "$CARGO_HOME" "$CARGO_TARGET_DIR" "$CCACHE_DIR"
 
-      - name: Build conduwuit for Complement
-        run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+      - name: Run Lints (Clippy)
+        run: |
+          cargo clippy \
+            --workspace \
+            --features full \
+            --locked \
+            --no-deps \
+            --profile dev \
+            -- -D warnings
+
+      - name: Run Unit Tests
+        run: |
+          cargo test \
+            --workspace \
+            --features full \
+            --locked \
+            --profile dev \
+            --all-targets \
+            --no-fail-fast
+
+      - name: Build conduwuit for Complement (Debug)
+        run: |
+          cargo build \
+            --features full,direct_tls \
+            --locked \
+            --profile dev
 
       - name: Checkout Complement
         run: |
@@ -72,19 +95,15 @@ jobs:
 
       - name: Build Complement Docker image
         run: |
-          # Use buildx for BuildKit support (faster, modern)
-          docker buildx build -t continuwuity:complement -f ./docker/complement.Dockerfile . --load
+          DOCKER_BUILDKIT=1 docker build \
+            --build-arg BINARY_PATH=target/debug/conduwuit \
+            -t continuwuity:complement \
+            -f ./docker/complement.Dockerfile .
 
-      - name: Build and run Complement tests
+      - name: Run Complement tests
         continue-on-error: true
         run: |
-          # Ensure results directory exists
           mkdir -p tests/test_results/complement/
-
-          # Check for required tools
-          command -v jq || (echo "❌ jq not found" && exit 1)
-          command -v docker || (echo "❌ docker not found" && exit 1)
-
           ./bin/complement ./complement-src
 
       - name: Debug Results
@@ -111,6 +130,62 @@ jobs:
             echo "fail=$FAIL" >> $GITHUB_OUTPUT
             echo "skip=$SKIP" >> $GITHUB_OUTPUT
             echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update Results Ledger Repo
+        if: always()
+        run: |
+          JSONL="tests/test_results/complement/test_results.jsonl"
+          if [ ! -f "$JSONL" ]; then
+            echo "⚠️ No test results found."
+            exit 0
+          fi
+
+          # Ensure the results repo is present and up to date
+          if [ ! -d "c10y-complement-results" ]; then
+            git clone https://${{ secrets.GITHUB_TOKEN }}@forgejo.ellis.link/gamesguru/c10y-complement-results.git c10y-complement-results
+          fi
+          cd c10y-complement-results
+          git pull --rebase || true
+
+          # Initialize Schema
+          sqlite3 ledger.db < tables.sql
+
+          # Prepare metadata
+          PASS="${{ steps.summary.outputs.pass || 0 }}"
+          FAIL="${{ steps.summary.outputs.fail || 0 }}"
+          SKIP="${{ steps.summary.outputs.skip || 0 }}"
+          SHA="${{ forge.sha }}"
+
+          # Detect Provider & Host
+          PROVIDER=$([ -n "$FORGEJO_URL" ] && echo "forgejo" || echo "github")
+          OS_INFO=$(lsb_release -ds 2>/dev/null || echo "Unknown OS")
+          HOST_NAME=$(hostname)
+          HOST_INFO="$OS_INFO ($HOST_NAME)"
+
+          PR_NUM="${{ forge.event.pull_request.number || 'NULL' }}"
+          REF_NAME="${{ forge.ref_name }}"
+          ACTOR="${{ forge.actor }}"
+
+          # Insert into runs and get ID
+          RUN_ID=$(sqlite3 ledger.db "INSERT INTO runs (provider, host_info, commit_hash, pr_number, branch_or_pr_name, author_name, passed_count, skipped_count, failed_count) VALUES ('$PROVIDER', '$HOST_INFO', '$SHA', $PR_NUM, '$REF_NAME', '$ACTOR', $PASS, $SKIP, $FAIL); SELECT last_insert_rowid();")
+
+          # Insert into run_details
+          # {"Action":"pass","Test":"TestName"} -> ($RUN_ID, 'TestName', 'pass')
+          # Escape single quotes in test names
+          jq -r ". | \"INSERT INTO run_details (run_id, file_name, status) VALUES ($RUN_ID, '\" + (.Test | gsub(\"'\"; \"''\")) + \"', '\" + .Action + \"');\"" "../$JSONL" | sqlite3 ledger.db
+
+          # Export CSVs
+          make export
+
+          # Commit and Push
+          git config user.name "Forgejo Runner"
+          git config user.email "runner@forgejo.ellis.link"
+          git add .
+          if git commit -m "Update results: $SHA ($REF_NAME)"; then
+            git push
+          else
+            echo "Nothing to commit."
           fi
 
       - name: Add PR comment
@@ -147,10 +222,13 @@ jobs:
             ${{ env.CCACHE_DIR }}
           key: continuwuity-complement-cache-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
 
-      - name: Upload test logs
+      - name: Upload test logs & ledger
         if: always()
         uses: forgejo/upload-artifact@v4
         with:
-          name: complement-logs
-          path: tests/test_results/complement/
+          name: complement-results
+          path: |
+            tests/test_results/complement/test_logs.jsonl
+            tests/test_results/complement/test_results.jsonl
+            c10y-complement-results/csvdata/
           retention-days: 90
