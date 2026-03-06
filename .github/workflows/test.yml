@@ -75,7 +75,17 @@ jobs:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_PR_CHECKS_COMPLEMENT_TESTS != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+
+    env:
+      PROFILE: dev
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
     permissions:
@@ -112,6 +122,13 @@ jobs:
 
       - name: Build conduwuit for Complement
         run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: conduwuit-${{ env.PROFILE }}-direct_tls-${{ matrix.os }}
+          path: target/${{ env.PROFILE }}/conduwuit
+          retention-days: 60
 
       - name: Checkout Complement
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
