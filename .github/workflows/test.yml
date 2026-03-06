@@ -88,9 +88,10 @@ jobs:
           - ubuntu-24.04
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
+    # and pushing the generated github-badge.json to the badges branch
     permissions:
       pull-requests: write
-      contents: read
+      contents: write
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -127,7 +128,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-${{ env.PROFILE }}-direct_tls-${{ matrix.os }}
-          path: target/${{ env.PROFILE }}/conduwuit
+          path: target/debug/conduwuit
           retention-days: 60
 
       - name: Checkout Complement
@@ -177,6 +178,33 @@ jobs:
           echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
           echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
+
+          if [ "$FAIL" -gt 0 ]; then
+            COLOR="red"
+          elif [ "$SKIP" -gt 0 ]; then
+            COLOR="yellow"
+          else
+            COLOR="green"
+          fi
+
+          mkdir -p .github/badges
+          jq -n \
+            --arg pass "$PASS" \
+            --arg skip "$SKIP" \
+            --arg fail "$FAIL" \
+            --arg color "$COLOR" \
+            '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}' \
+            > .github/badges/github-badge.json
+
+      - name: Deploy GitHub Badge
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .github/badges
+          publish_branch: badges
+          force_orphan: true
+          commit_message: "Update Complement Tests badge"
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
