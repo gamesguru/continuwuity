@@ -214,6 +214,12 @@ impl Error {
 	#[inline]
 	pub fn is_not_found(&self) -> bool { self.status_code() == http::StatusCode::NOT_FOUND }
 
+	/// Returns true if the error is a "missing token" error.
+	#[inline]
+	pub fn is_missing_token(&self) -> bool {
+		matches!(self.kind(), ruma::api::client::error::ErrorKind::MissingToken)
+	}
+
 	/// Returns true if the error is a service-interrupted error (e.g.
 	/// shutdown).
 	#[inline]
