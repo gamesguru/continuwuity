@@ -58,7 +58,8 @@ jobs:
           fi
 
           mkdir -p target/debug
-          echo "Downloading artifact from $ARTIFACT_URL..."
+          echo "Downloading artifact from:"
+          echo "$ARTIFACT_URL"
           curl -L -o target/debug/artifact_download -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
           # Check if it's a zip file
