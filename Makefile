@@ -185,14 +185,15 @@ build-docs:	##H Regenerate docs (admin commands, etc.)
 
 COMPLEMENT_DIR ?=
 COMPLEMENT_IMAGE ?= continuwuity:complement
+COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
 
 .PHONY: complement/build
 complement/build: ##H Build conduwuit docker image for Complement testing
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
-	@echo "Building Complement Docker image..."
-	docker build -t $(COMPLEMENT_IMAGE) -f ./docker/complement.Dockerfile .
+	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
+	docker build --build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) -t $(COMPLEMENT_IMAGE) -f ./docker/complement.Dockerfile .
 
 .PHONY: complement/run
 complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
