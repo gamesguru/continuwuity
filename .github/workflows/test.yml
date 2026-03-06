@@ -81,7 +81,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      PROFILE: dev
+      PROFILE: release-max-perf
 
     strategy:
       fail-fast: false
@@ -130,13 +130,13 @@ jobs:
       - name: Build conduwuit for Complement
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+        run: SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-${{ env.PROFILE }}-direct_tls-${{ matrix.os }}
-          path: target/debug/conduwuit
+          path: target/${{ env.PROFILE }}/conduwuit
           retention-days: 60
 
       - name: Checkout Complement
@@ -152,7 +152,7 @@ jobs:
           cache-dependency-path: complement-src/go.sum
 
       - name: Build Complement Docker image
-        run: docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
+        run: docker build --build-arg BINARY_PATH=target/${{ env.PROFILE }}/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -206,7 +206,7 @@ jobs:
           skip_count: ${{ steps.results.outputs.skip || 0 }}
           version_string: ${{ github.sha }}
           actor: ${{ github.actor }}
-          binary_path: target/debug/conduwuit
+          binary_path: target/${{ env.PROFILE }}/conduwuit
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
@@ -303,7 +303,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      PROFILE: dev
+      PROFILE: release-max-perf
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: 16
 
@@ -354,7 +354,7 @@ jobs:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
-        run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+        run: SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
 
       - name: Checkout Complement
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -369,7 +369,7 @@ jobs:
           cache-dependency-path: complement-src/go.sum
 
       - name: Build Complement Docker image
-        run: docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
+        run: docker build --build-arg BINARY_PATH=target/${{ env.PROFILE }}/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -424,7 +424,7 @@ jobs:
           skip_count: ${{ steps.results.outputs.skip || 0 }}
           version_string: ${{ github.sha }}
           actor: ${{ github.actor }}
-          binary_path: target/debug/conduwuit
+          binary_path: target/${{ env.PROFILE }}/conduwuit
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
