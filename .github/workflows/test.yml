@@ -140,17 +140,18 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: complement-logs
-          path: complement_test_results.jsonl
+          path: tests/test_results/complement/test_results.jsonl
           retention-days: 90
 
       - name: Parse Complement results
         id: results
         run: |
-          PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' complement_test_results.jsonl)
-          FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' complement_test_results.jsonl)
-          SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' complement_test_results.jsonl)
+          RESULTS="tests/test_results/complement/test_results.jsonl"
+          PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
+          FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' "$RESULTS")
+          SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' "$RESULTS")
           TOTAL=$((PASS + FAIL + SKIP))
-          FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' complement_test_results.jsonl | sort -u)
+          FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' "$RESULTS" | sort -u)
 
           echo "pass=$PASS" >> "$GITHUB_OUTPUT"
           echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
