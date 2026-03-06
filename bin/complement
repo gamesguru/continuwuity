@@ -62,7 +62,6 @@ fi
 
 # Common flags for both test runners
 TEST_FLAGS=(
-    -v
     -tags "conduwuit"
     -skip "$SKIPPED_COMPLEMENT_TESTS"
     -run "$RUN_TESTS"
@@ -80,16 +79,15 @@ if [ "$HAS_GOTESTSUM" = true ]; then
     (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        gotestsum --format pkgname --hide-summary=output \
+        gotestsum --format testname --hide-summary=output \
             --jsonfile "$LOG_FILE" \
             -- "${TEST_FLAGS[@]}" || true)
 else
     # We ignore the exit code because we post-process the logs even on failure.
-    echo "Running go test (saving JSON to $LOG_FILE)..."
     (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        go test -json "${TEST_FLAGS[@]}" > "$LOG_FILE" || true)
+        go test -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || true)
 fi
 
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
