@@ -1,81 +1,130 @@
-name: "Update Results Ledger Repo"
-description: "Parses test results and stores them in a remote SQLite ledger"
+name: "Update Results Ledger"
+description: "Parses test results, computes binary SHA, and updates the _metadata/results branch"
 inputs:
   github_token:
-    description: "Token for cloning the ledger repository"
+    description: "Token for pushing to the repository"
     required: true
   pass_count:
-    description: "Number of passed tests"
     required: true
   fail_count:
-    description: "Number of failed tests"
     required: true
   skip_count:
-    description: "Number of skipped tests"
     required: true
   results_file:
-    description: "Path to the JSONL test results file"
     default: "tests/test_results/complement/test_results.jsonl"
   version_string:
-    description: "The version string to associate with this run"
     required: true
   actor:
-    description: "The user who triggered the action"
     required: true
+  binary_path:
+    description: "Path to the tested binary"
+    default: "target/debug/conduwuit"
 
 runs:
   using: "composite"
   steps:
-    - name: Update Ledger
+    - name: Process and push results
       shell: bash
       run: |
         JSONL="${{ inputs.results_file }}"
-        if [ ! -f "$JSONL" ]; then
-          echo "⚠️ No test results found."
-          exit 0
-        fi
+        if [ ! -f "$JSONL" ]; then echo "⚠️ No test results found."; exit 0; fi
 
-        # Ensure the results repo is present and up to date
-        if [ ! -d "c10y-complement-results" ]; then
-          git clone https://${{ inputs.github_token }}@forgejo.ellis.link/gamesguru/c10y-complement-results.git c10y-complement-results
-        fi
-        cd c10y-complement-results
-        git pull --rebase || true
-
-        # Initialize Schema
-        sqlite3 ledger.db < tables.sql
-
-        # Prepare metadata
         PASS="${{ inputs.pass_count }}"
         FAIL="${{ inputs.fail_count }}"
         SKIP="${{ inputs.skip_count }}"
         VERSION_STRING="${{ inputs.version_string }}"
+        ACTOR="${{ inputs.actor }}"
+        BINARY_PATH="${{ inputs.binary_path }}"
 
-        # Detect Provider & Host
+        # Compute SHA256
+        if [ -f "$BINARY_PATH" ]; then
+          BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
+        else
+          BIN_SHA="unknown"
+        fi
+
         PROVIDER=$([ -n "$FORGEJO_URL" ] && echo "forgejo" || echo "github")
         OS_INFO=$(lsb_release -ds 2>/dev/null || echo "Unknown OS")
-        HOST_NAME=$(hostname)
-        HOST_INFO="$OS_INFO ($HOST_NAME)"
+        HOST_INFO="$OS_INFO ($(hostname))"
 
-        ACTOR="${{ inputs.actor }}"
+        BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} || echo "main")
+        if [ -z "$BRANCH_NAME" ]; then BRANCH_NAME="main"; fi
+        COMMIT_HASH="${GITHUB_SHA:-unknown}"
+        RUN_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        RUN_ID="${COMMIT_HASH}-${RUN_DATE}"
 
-        # Insert into runs and get ID
-        RUN_ID=$(sqlite3 ledger.db "INSERT INTO runs (provider, host_info, version_string, author_name, passed_count, skipped_count, failed_count) VALUES ('$PROVIDER', '$HOST_INFO', '$VERSION_STRING', '$ACTOR', $PASS, $SKIP, $FAIL); SELECT last_insert_rowid();")
+        # Copy the test file to a safe place
+        cp "$JSONL" /tmp/current_run.jsonl
+        # Copy helper scripts
+        cp .forgejo/actions/update-results-ledger/tables.sql /tmp/tables.sql
+        cp .forgejo/actions/update-results-ledger/import.py /tmp/import.py
+        cp .forgejo/actions/update-results-ledger/Makefile /tmp/Makefile
 
-        # Insert into run_details
-        # Escape single quotes in test names
-        jq -r ". | \"INSERT INTO run_details (run_id, file_name, status) VALUES ($RUN_ID, '" + (.Test | gsub("'"'"'; "''")) + "', '" + .Action + "');\"" "../$JSONL" | sqlite3 ledger.db
+        git config --global user.name "CI Runner"
+        git config --global user.email "runner@ci.local"
 
-        # Export CSVs/JSON
-        make export || true
-        sqlite3 -json ledger.db "SELECT r.run_date, r.run_time, r.version_string, t.file_name as test_name, t.status FROM run_details t JOIN runs r ON t.run_id = r.id ORDER BY r.run_date DESC, r.run_time DESC;" > csvdata/full_test_history.json || true
+        # Set URL to HTTPS so we don't hang on SSH prompts in the runner
+        git remote set-url origin https://${{ inputs.github_token }}@forgejo.ellis.link/gamesguru/continuwuity.git || true
 
-        # Commit and Push
-        git config user.name "CI Runner"
-        git config user.email "runner@ci.local"
-        git add .
-        if git commit -m "Update results: $VERSION_STRING"; then
-          git push
+        git fetch origin _metadata/results || true
+        git checkout _metadata/results
+
+        # Restore helpers into the branch
+        cp /tmp/tables.sql .
+        cp /tmp/import.py .
+        cp /tmp/Makefile .
+
+        # Ensure we never commit the DB
+        echo "ledger.db" >> .gitignore
+
+        if [ ! -f runs.jsonl ]; then touch runs.jsonl; fi
+        if [ ! -f run_details.jsonl ]; then touch run_details.jsonl; fi
+
+        # Append new run info to JSONL
+        jq -n -c \
+          --arg run_id "$RUN_ID" --arg run_date "$RUN_DATE" --arg commit_hash "$COMMIT_HASH" \
+          --arg branch "$BRANCH_NAME" --arg author_name "$ACTOR" --arg provider "$PROVIDER" \
+          --arg host_info "$HOST_INFO" --arg binary_sha256 "$BIN_SHA" \
+          --arg version_string "$VERSION_STRING" \
+          --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" \
+          '{run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, host_info: $host_info, binary_sha256: $binary_sha256, version_string: $version_string, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
+
+        # Append all test events
+        jq -c --arg run_id "$RUN_ID" '. + {run_id: $run_id}' /tmp/current_run.jsonl >> run_details.jsonl
+
+        # Verify SQL import works
+        make import
+
+        # Generate badges
+        if [ "$FAIL" -gt 0 ]; then COLOR="red"; elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"; else COLOR="green"; fi
+        mkdir -p badges
+        jq -n --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" --arg color "$COLOR" \
+          '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}' > "badges/badge-${BRANCH_NAME}.json"
+
+        git add .gitignore tables.sql Makefile import.py runs.jsonl run_details.jsonl badges/
+        if git commit -m "Add test results for ${COMMIT_HASH} [skip ci]"; then
+          # Retry loop for concurrent pushes
+          max_retries=5
+          count=0
+          while [ $count -lt $max_retries ]; do
+            if git push origin HEAD:_metadata/results; then
+              echo "Successfully pushed ledger updates."
+              break
+            else
+              echo "Push failed due to remote changes. Pulling with rebase and retrying..."
+              # Create a tracking branch so pull works correctly
+              git branch -f _metadata/results HEAD
+              git checkout _metadata/results
+              # Pull remote changes securely
+              git pull --rebase origin _metadata/results
+              count=$((count + 1))
+            fi
+          done
+
+          if [ $count -eq $max_retries ]; then
+            echo "Failed to push ledger updates after $max_retries attempts due to heavy concurrency."
+            exit 1
+          fi
         else
           echo "Nothing to commit."
         fi

@@ -185,14 +185,38 @@ build-docs:	##H Regenerate docs (admin commands, etc.)
 
 COMPLEMENT_DIR ?=
 COMPLEMENT_IMAGE ?= continuwuity:complement
+COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
 
 .PHONY: complement/build
 complement/build: ##H Build conduwuit docker image for Complement testing
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
-	@echo "Building Complement Docker image..."
-	docker build -t $(COMPLEMENT_IMAGE) -f ./docker/complement.Dockerfile .
+	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
+	docker build --build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) -t $(COMPLEMENT_IMAGE) -f ./docker/complement.Dockerfile .
+
+
+.PHONY: complement/stats
+complement/stats: ##H Check local test stats from tests/test_results/complement/test_results.jsonl
+	@test -f "tests/test_results/complement/test_results.jsonl" || (echo "ERROR: tests/test_results/complement/test_results.jsonl does not exist" && exit 1)
+	@echo "Parsing Complement test results..."
+	@PASS=$$(jq -s '[.[] | select(.Action == "pass")] | length' tests/test_results/complement/test_results.jsonl); \
+	FAIL=$$(jq -s '[.[] | select(.Action == "fail")] | length' tests/test_results/complement/test_results.jsonl); \
+	SKIP=$$(jq -s '[.[] | select(.Action == "skip")] | length' tests/test_results/complement/test_results.jsonl); \
+	TOTAL=$$((PASS + FAIL + SKIP)); \
+	echo ""; \
+	if [ "$$FAIL" -gt 0 ] && [ "$$VERBOSE" = "1" ]; then \
+		echo "Failed Tests:"; \
+		jq -r 'select(.Action == "fail") | .Test' tests/test_results/complement/test_results.jsonl | sort -u; \
+		echo ""; \
+	fi; \
+	echo "=== Complement Test Stats ==="; \
+	echo "✓ Passed:  $$PASS"; \
+	echo "✗ Failed:  $$FAIL"; \
+	echo "○ Skipped: $$SKIP"; \
+	echo "---------------------------"; \
+	echo "Total:     $$TOTAL"; \
+	echo ""
 
 .PHONY: complement/run
 complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)

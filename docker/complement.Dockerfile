@@ -1,4 +1,5 @@
-FROM ubuntu:latest
+ARG BASE_IMAGE=ubuntu:latest
+FROM ${BASE_IMAGE}
 EXPOSE 8008
 EXPOSE 8448
 RUN apt-get update && apt-get install -y ca-certificates liburing2 && rm -rf /var/lib/apt/lists/*
