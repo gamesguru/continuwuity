@@ -81,7 +81,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      PROFILE: release-max-perf
+      PROFILE: release
 
     strategy:
       fail-fast: false
@@ -303,7 +303,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      PROFILE: release-max-perf
+      PROFILE: release
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: 16
 
