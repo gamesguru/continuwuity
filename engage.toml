@@ -63,13 +63,13 @@ script = "markdownlint --version"
 [[task]]
 name = "cargo-audit"
 group = "security"
-script = "cargo audit --verbose --color=always -D warnings -D unmaintained -D unsound -D yanked"
+script = "cargo audit --color=always -D warnings -D unmaintained -D unsound -D yanked"
 
 [[task]]
 name = "cargo-fmt"
 group = "lints"
 script = """
-cargo fmt --verbose --check -- --color=always
+cargo fmt --check -- --color=always
 """
 
 [[task]]
@@ -79,7 +79,7 @@ script = """
 env DIRENV_DEVSHELL=all-features \
     RUSTDOCFLAGS="-D warnings" \
     direnv exec . \
-    cargo doc --verbose \
+    cargo doc \
         --workspace \
         --locked \
         --profile test \
@@ -94,7 +94,7 @@ name = "clippy/default"
 group = "lints"
 script = """
 direnv exec . \
-cargo clippy --verbose \
+cargo clippy \
     --workspace \
     --features full \
     --locked \
@@ -110,7 +110,7 @@ group = "lints"
 script = """
 env DIRENV_DEVSHELL=all-features \
     direnv exec . \
-    cargo clippy --verbose \
+    cargo clippy \
         --workspace \
         --locked \
         --profile test \
@@ -126,7 +126,7 @@ group = "lints"
 script = """
 env DIRENV_DEVSHELL=no-features \
     direnv exec . \
-    cargo clippy --verbose \
+    cargo clippy \
         --workspace \
         --locked \
         --profile test \
@@ -141,7 +141,7 @@ name = "clippy/other-features"
 group = "lints"
 script = """
 direnv exec . \
-cargo clippy --verbose \
+cargo clippy \
     --workspace \
     --locked \
     --profile test \
@@ -168,7 +168,7 @@ group = "tests"
 script = """
 env DIRENV_DEVSHELL=default \
     direnv exec . \
-    cargo test --verbose \
+    cargo test \
         --workspace \
         --locked \
         --profile test \
