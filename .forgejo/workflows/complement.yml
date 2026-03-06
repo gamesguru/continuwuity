@@ -101,11 +101,21 @@ jobs:
             -t continuwuity:complement \
             -f ./docker/complement.Dockerfile .
 
+      - name: Capture baseline stats
+        run: VERBOSE=1 make complement/stats > baseline_stats.txt || true
+
       - name: Run Complement tests
         continue-on-error: true
         run: |
           mkdir -p tests/test_results/complement/
           ./bin/complement ./complement-src
+
+      - name: Compare results with baseline
+        if: always()
+        run: |
+          VERBOSE=1 make complement/stats > new_stats.txt || true
+          echo "=== Changes from baseline ==="
+          diff --color=always -u baseline_stats.txt new_stats.txt || true
 
       - name: Debug Results
         if: always()

@@ -84,8 +84,9 @@ runs:
           --arg run_id "$RUN_ID" --arg run_date "$RUN_DATE" --arg commit_hash "$COMMIT_HASH" \
           --arg branch "$BRANCH_NAME" --arg author_name "$ACTOR" --arg provider "$PROVIDER" \
           --arg host_info "$HOST_INFO" --arg binary_sha256 "$BIN_SHA" \
+          --arg version_string "$VERSION_STRING" \
           --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" \
-          '{run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, host_info: $host_info, binary_sha256: $binary_sha256, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
+          '{run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, host_info: $host_info, binary_sha256: $binary_sha256, version_string: $version_string, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
 
         # Append all test events
         jq -c --arg run_id "$RUN_ID" '. + {run_id: $run_id}' /tmp/current_run.jsonl >> run_details.jsonl

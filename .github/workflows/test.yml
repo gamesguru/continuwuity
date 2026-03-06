@@ -155,10 +155,20 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
+      - name: Capture baseline stats
+        run: VERBOSE=1 make complement/stats > baseline_stats.txt || true
+
       - name: Build and run Complement tests
         continue-on-error: true
         run: |
           ./bin/complement ./complement-src
+
+      - name: Compare results with baseline
+        if: always()
+        run: |
+          VERBOSE=1 make complement/stats > new_stats.txt || true
+          echo "=== Changes from baseline ==="
+          diff --color=always -u baseline_stats.txt new_stats.txt || true
 
       - name: Upload test logs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -362,10 +372,20 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
+      - name: Capture baseline stats
+        run: VERBOSE=1 make complement/stats > baseline_stats.txt || true
+
       - name: Build and run Complement tests
         continue-on-error: true
         run: |
           ./bin/complement ./complement-src
+
+      - name: Compare results with baseline
+        if: always()
+        run: |
+          VERBOSE=1 make complement/stats > new_stats.txt || true
+          echo "=== Changes from baseline ==="
+          diff --color=always -u baseline_stats.txt new_stats.txt || true
 
       - name: Upload test logs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

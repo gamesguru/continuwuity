@@ -5,8 +5,8 @@ import hashlib
 
 INSERT_RUN = """
 INSERT
-    OR IGNORE INTO runs (run_id, run_date, commit_hash, branch, author_name, provider, host_info, binary_sha256, passed_count, skipped_count, failed_count, row_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    OR IGNORE INTO runs (run_id, run_date, commit_hash, branch, author_name, provider, host_info, binary_sha256, version_string, passed_count, skipped_count, failed_count, row_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 INSERT_RUN_DETAILS = """
@@ -80,6 +80,7 @@ if os.path.exists("runs.jsonl"):
                         d.get("provider"),
                         d.get("host_info"),
                         d.get("binary_sha256"),
+                        d.get("version_string"),
                         d.get("passed_count"),
                         d.get("skipped_count"),
                         d.get("failed_count"),
