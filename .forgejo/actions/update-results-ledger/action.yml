@@ -1,0 +1,81 @@
+name: "Update Results Ledger Repo"
+description: "Parses test results and stores them in a remote SQLite ledger"
+inputs:
+  github_token:
+    description: "Token for cloning the ledger repository"
+    required: true
+  pass_count:
+    description: "Number of passed tests"
+    required: true
+  fail_count:
+    description: "Number of failed tests"
+    required: true
+  skip_count:
+    description: "Number of skipped tests"
+    required: true
+  results_file:
+    description: "Path to the JSONL test results file"
+    default: "tests/test_results/complement/test_results.jsonl"
+  version_string:
+    description: "The version string to associate with this run"
+    required: true
+  actor:
+    description: "The user who triggered the action"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Update Ledger
+      shell: bash
+      run: |
+        JSONL="${{ inputs.results_file }}"
+        if [ ! -f "$JSONL" ]; then
+          echo "⚠️ No test results found."
+          exit 0
+        fi
+
+        # Ensure the results repo is present and up to date
+        if [ ! -d "c10y-complement-results" ]; then
+          git clone https://${{ inputs.github_token }}@forgejo.ellis.link/gamesguru/c10y-complement-results.git c10y-complement-results
+        fi
+        cd c10y-complement-results
+        git pull --rebase || true
+
+        # Initialize Schema
+        sqlite3 ledger.db < tables.sql
+
+        # Prepare metadata
+        PASS="${{ inputs.pass_count }}"
+        FAIL="${{ inputs.fail_count }}"
+        SKIP="${{ inputs.skip_count }}"
+        VERSION_STRING="${{ inputs.version_string }}"
+
+        # Detect Provider & Host
+        PROVIDER=$([ -n "$FORGEJO_URL" ] && echo "forgejo" || echo "github")
+        OS_INFO=$(lsb_release -ds 2>/dev/null || echo "Unknown OS")
+        HOST_NAME=$(hostname)
+        HOST_INFO="$OS_INFO ($HOST_NAME)"
+
+        ACTOR="${{ inputs.actor }}"
+
+        # Insert into runs and get ID
+        RUN_ID=$(sqlite3 ledger.db "INSERT INTO runs (provider, host_info, version_string, author_name, passed_count, skipped_count, failed_count) VALUES ('$PROVIDER', '$HOST_INFO', '$VERSION_STRING', '$ACTOR', $PASS, $SKIP, $FAIL); SELECT last_insert_rowid();")
+
+        # Insert into run_details
+        # Escape single quotes in test names
+        jq -r ". | \"INSERT INTO run_details (run_id, file_name, status) VALUES ($RUN_ID, '" + (.Test | gsub("'"'"'; "''")) + "', '" + .Action + "');\"" "../$JSONL" | sqlite3 ledger.db
+
+        # Export CSVs/JSON
+        make export || true
+        sqlite3 -json ledger.db "SELECT r.run_date, r.run_time, r.version_string, t.file_name as test_name, t.status FROM run_details t JOIN runs r ON t.run_id = r.id ORDER BY r.run_date DESC, r.run_time DESC;" > csvdata/full_test_history.json || true
+
+        # Commit and Push
+        git config user.name "CI Runner"
+        git config user.email "runner@ci.local"
+        git add .
+        if git commit -m "Update results: $VERSION_STRING"; then
+          git push
+        else
+          echo "Nothing to commit."
+        fi

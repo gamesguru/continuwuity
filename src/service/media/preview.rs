@@ -159,16 +159,6 @@ pub async fn download_image(&self, _url: &str) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
 }
 
-#[cfg(not(feature = "url_preview"))]
-#[implement(Service)]
-pub async fn parse_image(
-	&self,
-	_url: &str,
-	_response: reqwest::Response,
-) -> Result<UrlPreviewData> {
-	Err!(FeatureDisabled("url_preview"))
-}
-
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
 async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {

@@ -2,102 +2,161 @@
 name: Complement Tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      artifact_url:
+        description: "URL to the conduwuit artifact (binary or zip)"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   SKIP_CONFIRM: 1
+  # Absolute paths for Rust tools on the host VPS
+  CARGO: /opt/rust/cargo/bin/cargo
+  RUSTUP: /opt/rust/cargo/bin/rustup
+  PATH: /opt/rust/cargo/bin:/home/forgejo-runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 jobs:
   complement-tests:
-    runs-on: ubuntu-latest
-    container:
-      image: "ghcr.io/tcpipuk/act-runner:ubuntu-latest"
+    runs-on: ubuntu-22.04-avx512
+
+    env:
+      RUSTC_WRAPPER: ccache
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ forge.event.pull_request.head.sha || forge.sha }}
-          fetch-tags: true
-          fetch-depth: 0
-
-      - name: Fetch tags manually
-        run: git fetch --tags --force
-
-      - name: Install system dependencies
+      - name: Slim Checkout
         run: |
-          apt-get update
-          apt-get install -y \
-            build-essential \
-            pkg-config \
-            liburing-dev \
-            clang \
-            libclang-dev \
-            llvm-dev
+          # Use raw git to avoid Node-based checkout action
+          if [ ! -d ".git" ]; then
+            git init
+            git remote add origin ${{ forge.server_url }}/${{ forge.repository }}
+          fi
+          git fetch --depth 1 origin ${{ forge.sha }}
+          git checkout FETCH_HEAD
+          git fetch --tags --force
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-complement-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-complement-
-
-      - name: Setup sccache
-        uses: https://git.tomfos.tr/tom/sccache-action@v1
-
-      - name: Configure sccache environment
+      - name: Download conduwuit artifact
         run: |
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
-          echo "SCCACHE_CACHE_SIZE=10G" >> $GITHUB_ENV
-          # Aggressive GC since cache restores don't increment counter
-          echo "CARGO_INCREMENTAL_GC_TRIGGER=5" >> $GITHUB_ENV
+          ARTIFACT_URL="${{ github.event.inputs.artifact_url }}"
 
-      - name: Setup Rust
-        uses: ./.forgejo/actions/setup-rust
-        with:
-          github-token: ${{ secrets.GH_PUBLIC_RO }}
+          # If the user pasted a github.com web UI URL, convert it to the API endpoint
+          if [[ "$ARTIFACT_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/(suites|actions/runs)/[^/]+/artifacts/([^/]+) ]]; then
+            OWNER="${BASH_REMATCH[1]}"
+            REPO="${BASH_REMATCH[2]}"
+            ARTIFACT_ID="${BASH_REMATCH[4]}"
+            ARTIFACT_URL="https://api.github.com/repos/$OWNER/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
+            echo "Converted Web URL to API URL: $ARTIFACT_URL"
+          fi
 
-      - name: Build conduwuit for Complement
-        run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+          # Security Check: Only allow downloads from api.github.com or objects.githubusercontent.com
+          if [[ ! "$ARTIFACT_URL" =~ ^https://(api\.github\.com|objects\.githubusercontent\.com)/ ]]; then
+            echo "❌ ERROR: Security violation. Artifact URL must be from GitHub."
+            echo "URL provided: $ARTIFACT_URL"
+            exit 1
+          fi
+
+          mkdir -p target/debug
+          echo "Downloading artifact from $ARTIFACT_URL..."
+          curl -L -o target/debug/artifact_download -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
+
+          # Check if it's a zip file
+          if file target/debug/artifact_download | grep -q 'Zip archive data'; then
+            echo "Unzipping artifact..."
+            unzip -o target/debug/artifact_download -d target/debug/
+            rm target/debug/artifact_download
+          else
+            mv target/debug/artifact_download target/debug/conduwuit
+          fi
+
+          chmod +x target/debug/conduwuit || true
+
+      - name: Sanity Test Artifact
+        run: |
+          echo "Checking file type..."
+          file target/debug/conduwuit
+
+          echo "Testing execution..."
+          if ! ./target/debug/conduwuit --version; then
+            echo "❌ ERROR: Downloaded artifact is not a valid executable!"
+            echo "It might be a 404 HTML page, a corrupted zip, or for the wrong architecture."
+            exit 1
+          fi
+          echo "✅ Artifact is a valid executable."
 
       - name: Checkout Complement
-        uses: actions/checkout@v4
-        with:
-          repository: matrix-org/complement
-          path: complement-src
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-          cache-dependency-path: complement-src/go.sum
+        run: |
+          # Manual checkout of complement to avoid Node overhead
+          if [ ! -d "complement-src" ]; then
+            git clone --depth 1 https://github.com/matrix-org/complement complement-src
+          else
+            cd complement-src && git fetch --depth 1 && git checkout FETCH_HEAD && cd ..
+          fi
 
       - name: Build Complement Docker image
-        run: docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .
+        run: |
+          DOCKER_BUILDKIT=1 docker build \
+            --build-arg BINARY_PATH=target/debug/conduwuit \
+            -t continuwuity:complement \
+            -f ./docker/complement.Dockerfile .
 
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@latest
-
-      - name: Build and run Complement tests
+      - name: Run Complement tests
         continue-on-error: true
         run: |
+          mkdir -p tests/test_results/complement/
           ./bin/complement ./complement-src
 
-      - name: Upload test logs
+      - name: Debug Results
+        if: always()
+        run: |
+          echo "Checking results directory:"
+          ls -la tests/test_results/complement/
+          echo "Log file size:"
+          stat -c%s tests/test_results/complement/test_logs.jsonl || echo "Log missing"
+          echo "Results file size:"
+          stat -c%s tests/test_results/complement/test_results.jsonl || echo "Results missing"
+
+      - name: Summarize results
+        id: summary
+        if: always()
+        run: |
+          RESULTS="tests/test_results/complement/test_results.jsonl"
+          if [ -f "$RESULTS" ]; then
+            PASS=$(grep -c '"Action":"pass"' "$RESULTS" || true)
+            FAIL=$(grep -c '"Action":"fail"' "$RESULTS" || true)
+            SKIP=$(grep -c '"Action":"skip"' "$RESULTS" || true)
+            TOTAL=$((PASS + FAIL + SKIP))
+            echo "pass=$PASS" >> $GITHUB_OUTPUT
+            echo "fail=$FAIL" >> $GITHUB_OUTPUT
+            echo "skip=$SKIP" >> $GITHUB_OUTPUT
+            echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get conduwuit version
+        id: version
+        if: always()
+        run: |
+          VERSION=$(./target/debug/conduwuit --version 2>/dev/null || echo "unknown")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update Results Ledger Repo
+        if: always()
+        uses: ./.forgejo/actions/update-results-ledger
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pass_count: ${{ steps.summary.outputs.pass || 0 }}
+          fail_count: ${{ steps.summary.outputs.fail || 0 }}
+          skip_count: ${{ steps.summary.outputs.skip || 0 }}
+          version_string: ${{ steps.version.outputs.version }}
+          actor: ${{ forge.actor || github.actor }}
+
+      - name: Upload test results & ledger
         if: always()
         uses: forgejo/upload-artifact@v4
         with:
-          name: complement-logs
-          path: complement_test_results.jsonl
+          name: complement-results
+          path: |
+            tests/test_results/complement/test_results.jsonl
+            c10y-complement-results/csvdata/
           retention-days: 90

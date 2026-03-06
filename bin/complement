@@ -6,10 +6,10 @@ set -euo pipefail
 COMPLEMENT_SRC="${COMPLEMENT_SRC:-$1}"
 
 # A `.jsonl` file to write test logs to
-LOG_FILE="${2:-${LOG_FILE:-complement_test_logs.jsonl}}"
+LOG_FILE="${2:-${LOG_FILE:-tests/test_results/complement/test_logs.jsonl}}"
 
 # A `.jsonl` file to write test results to
-RESULTS_FILE="${3:-${RESULTS_FILE:-complement_test_results.jsonl}}"
+RESULTS_FILE="${3:-${RESULTS_FILE:-tests/test_results/complement/test_results.jsonl}}"
 
 # The base docker image to use for complement tests
 # You can build the default with `docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .`
@@ -52,8 +52,23 @@ echo ""
 
 # Determine the test runner and output handling
 HAS_GOTESTSUM=false
-command -v gotestsum >/dev/null 2>&1 && HAS_GOTESTSUM=true
-echo "gotestsum installed: $HAS_GOTESTSUM"
+if command -v gotestsum >/dev/null 2>&1; then
+    HAS_GOTESTSUM=true
+    echo "gotestsum installed: true"
+    gotestsum --version
+else
+    echo "gotestsum installed: false"
+fi
+
+# Common flags for both test runners
+TEST_FLAGS=(
+    -tags "conduwuit"
+    -skip "$SKIPPED_COMPLEMENT_TESTS"
+    -run "$RUN_TESTS"
+    -timeout 1h
+    -count=1
+    ./tests/...
+)
 
 # It's okay (likely, even) that `go test` exits nonzero
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
@@ -64,15 +79,15 @@ if [ "$HAS_GOTESTSUM" = true ]; then
     (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        gotestsum --format pkgname --hide-summary=output \
+        gotestsum --format testname --hide-summary=output \
             --jsonfile "$LOG_FILE" \
-            -- -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -timeout 1h ./tests/... || true)
+            -- "${TEST_FLAGS[@]}" || true)
 else
     # We ignore the exit code because we post-process the logs even on failure.
     (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        go test -json -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -run "$RUN_TESTS" -timeout 1h ./tests/... | tee "$LOG_FILE" || true)
+        go test -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || true)
 fi
 
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
