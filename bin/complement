@@ -62,7 +62,7 @@ fi
 
 # Common flags for both test runners
 TEST_FLAGS=(
-    -tags "conduwuit"
+    -tags "conduwuit_blacklist"
     -skip "$SKIPPED_COMPLEMENT_TESTS"
     -run "$RUN_TESTS"
     -timeout 1h
