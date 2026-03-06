@@ -28,7 +28,6 @@ jobs:
           - ubuntu-24.04
         profile:
           - release-max-perf
-          - dev
 
     steps:
       - uses: actions/checkout@v4

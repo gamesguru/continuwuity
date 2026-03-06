@@ -39,21 +39,11 @@ fn main() {
 				.clone()
 				.unwrap_or_else(|| "unknown".into())
 		})];
-		if let Ok(ver) = std::env::var("CARGO_PKG_VERSION") {
-			if let Some(stripped) = extra[0].strip_prefix(&ver) {
-				#[allow(clippy::assigning_clones)]
-				{
-					extra[0] = stripped.trim_start_matches(['+', '-']).to_owned();
-				}
-			}
-		}
 		if let Some(b) = get_env("CONTINUWUITY_BRANCH")
 			.or_else(|| git::run(&["rev-parse", "--abbrev-ref", "HEAD"]))
 		{
 			println!("cargo:rustc-env=GIT_BRANCH={b}");
-			if b != "main" && b != "master" {
-				extra.push(format!("b={b}"));
-			}
+			extra.push(format!("b={b}"));
 		}
 		extra.retain(|s| !s.is_empty());
 		println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={}", extra.join(","));

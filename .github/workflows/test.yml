@@ -130,7 +130,7 @@ jobs:
       - name: Build conduwuit for Complement
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+        run: SKIP_CONFIRM=1 make build PROFILE=${{ env.PROFILE }} CARGO_FLAGS="--profile ${{ env.PROFILE }} --features direct_tls"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -354,7 +354,7 @@ jobs:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
-        run: SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
+        run: SKIP_CONFIRM=1 make build PROFILE=${{ env.PROFILE }} CARGO_FLAGS="--profile ${{ env.PROFILE }} --features direct_tls"
 
       - name: Checkout Complement
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
