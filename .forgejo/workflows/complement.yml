@@ -151,12 +151,23 @@ jobs:
           version_string: ${{ steps.version.outputs.version }}
           actor: ${{ forge.actor || github.actor }}
 
-      - name: Upload test results & ledger
+      - name: Upload test results
         if: always()
         uses: forgejo/upload-artifact@v4
         with:
           name: complement-results
           path: |
             tests/test_results/complement/test_results.jsonl
-            c10y-complement-results/csvdata/
           retention-days: 90
+
+      - name: Evaluate final status
+        if: always()
+        run: |
+          FAIL=${{ steps.summary.outputs.fail || 0 }}
+          SKIP=${{ steps.summary.outputs.skip || 0 }}
+          if [ "$FAIL" -gt 0 ]; then
+            echo "::error::$FAIL tests failed!"
+            exit 1
+          elif [ "$SKIP" -gt 0 ]; then
+            echo "::warning::$SKIP tests skipped."
+          fi

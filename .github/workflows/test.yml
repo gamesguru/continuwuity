@@ -179,32 +179,16 @@ jobs:
           echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-          if [ "$FAIL" -gt 0 ]; then
-            COLOR="red"
-          elif [ "$SKIP" -gt 0 ]; then
-            COLOR="yellow"
-          else
-            COLOR="green"
-          fi
-
-          mkdir -p .github/badges
-          jq -n \
-            --arg pass "$PASS" \
-            --arg skip "$SKIP" \
-            --arg fail "$FAIL" \
-            --arg color "$COLOR" \
-            '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}' \
-            > .github/badges/github-badge.json
-
-      - name: Deploy GitHub Badge
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: peaceiris/actions-gh-pages@v3
+      - name: Update Results Ledger
+        uses: ./.forgejo/actions/update-results-ledger
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .github/badges
-          publish_branch: badges
-          force_orphan: true
-          commit_message: "Update Complement Tests badge"
+          pass_count: ${{ steps.results.outputs.pass || 0 }}
+          fail_count: ${{ steps.results.outputs.fail || 0 }}
+          skip_count: ${{ steps.results.outputs.skip || 0 }}
+          version_string: ${{ github.sha }}
+          actor: ${{ github.actor }}
+          binary_path: target/debug/conduwuit
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
@@ -282,3 +266,14 @@ jobs:
                 body,
               });
             }
+
+      - name: Evaluate final status
+        run: |
+          FAIL=${{ steps.results.outputs.fail || 0 }}
+          SKIP=${{ steps.results.outputs.skip || 0 }}
+          if [ "$FAIL" -gt 0 ]; then
+            echo "::error::$FAIL tests failed!"
+            exit 1
+          elif [ "$SKIP" -gt 0 ]; then
+            echo "::warning::$SKIP tests skipped."
+          fi
