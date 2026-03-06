@@ -61,9 +61,12 @@ where
 		let mut request = request::from(services, request).await?;
 		let mut json_body = serde_json::from_slice::<CanonicalJsonValue>(&request.body).ok();
 
-		let auth = auth::auth(services, &mut request, json_body.as_ref(), &T::METADATA)
-			.await
-			.ok();
+		let auth = match auth::auth(services, &mut request, json_body.as_ref(), &T::METADATA).await
+		{
+			| Ok(auth) => Some(auth),
+			| Err(e) if e.is_missing_token() => None,
+			| Err(e) => return Err(e),
+		};
 
 		let auth_ref = auth.as_ref().unwrap_or(&Auth {
 			origin: None,
