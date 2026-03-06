@@ -1,0 +1,147 @@
+---
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  SKIP_CONFIRM: 1
+
+jobs:
+  cpu-haswell:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_HASWELL != ''
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+        profile:
+          - release-max-perf
+          - dev
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Fetch tags manually
+        run: git fetch --tags --force
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - name: Debug checks
+        run: make vars cpu-info
+        env:
+          PROFILE: ${{ matrix.profile }}
+
+      - name: Build
+        env:
+          PROFILE: ${{ matrix.profile }}
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: make build
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: conduwuit-${{ matrix.profile }}-${{ matrix.os }}
+          path: target/${{ matrix.profile == 'dev' && 'debug' || matrix.profile }}/conduwuit
+          retention-days: 90
+
+  # NOTE: Currently just for Ubuntu 22/24 Skylake-optimized builds (avx512 or avx2)
+  cpu-skylake:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_SKYLAKE != ''
+    runs-on: ${{ matrix.os }}
+    env:
+      PROFILE: release-max-perf
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Fetch tags manually
+        run: git fetch --tags --force
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: "1.90.0"
+
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+
+      - name: Debug checks
+        run: make vars cpu-info
+
+      - name: Detect best CPU target
+        id: cpu
+        run: |
+          if grep -q avx512f /proc/cpuinfo 2>/dev/null; then
+            echo "target=skylake-avx512" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=skylake" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Detected target: $(grep target= "$GITHUB_OUTPUT" | cut -d= -f2)"
+
+      - name: Build (${{ steps.cpu.outputs.target }})
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
+        run: make build
+
+      - name: Upload binary (${{ steps.cpu.outputs.target }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: conduwuit-skylake-${{ matrix.os }}
+          path: target/${{ env.PROFILE }}/conduwuit
+          retention-days: 60
