@@ -22,7 +22,7 @@ pub(crate) fn from_slice<'a, T>(buf: &'a [u8]) -> Result<T>
 where
 	T: Deserialize<'a>,
 {
-	let mut deserializer = Deserializer { buf, pos: 0, rec: 0, depth: 0 };
+	let mut deserializer = Deserializer { buf, pos: 0, rec: 0, seq: false };
 
 	T::deserialize(&mut deserializer).debug_inspect(|_| {
 		deserializer
@@ -36,7 +36,7 @@ pub(crate) struct Deserializer<'de> {
 	buf: &'de [u8],
 	pos: usize,
 	rec: usize,
-	depth: usize,
+	seq: bool,
 }
 
 /// Directive to ignore a record. This type can be used to skip deserialization
@@ -70,18 +70,17 @@ impl<'de> Deserializer<'de> {
 
 	/// Called at the start of arrays and tuples
 	#[inline]
-	fn sequence_start(&mut self) { self.depth = self.depth.saturating_add(1); }
-
-	/// Called at the end of arrays and tuples
-	#[inline]
-	fn sequence_end(&mut self) { self.depth = self.depth.saturating_sub(1); }
+	fn sequence_start(&mut self) {
+		debug_assert!(!self.seq, "Nested sequences are not handled at this time");
+		self.seq = true;
+	}
 
 	/// Consume the current record to ignore it. Inside a sequence the next
 	/// record is skipped but at the top-level all records are skipped such that
 	/// deserialization completes with self.finished() == Ok.
 	#[inline]
 	fn record_ignore(&mut self) {
-		if self.depth > 0 {
+		if self.seq {
 			self.record_next();
 		} else {
 			self.record_ignore_all();
@@ -180,11 +179,8 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		self.record_start();
 		self.sequence_start();
-		let val = visitor.visit_seq(&mut *self);
-		self.sequence_end();
-		val
+		visitor.visit_seq(self)
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip(self, visitor)))]
@@ -192,11 +188,8 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		self.record_start();
 		self.sequence_start();
-		let val = visitor.visit_seq(&mut *self);
-		self.sequence_end();
-		val
+		visitor.visit_seq(self)
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip(self, visitor)))]
@@ -209,11 +202,8 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		self.record_start();
 		self.sequence_start();
-		let val = visitor.visit_seq(&mut *self);
-		self.sequence_end();
-		val
+		visitor.visit_seq(self)
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
@@ -221,7 +211,6 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		self.record_start();
 		let input = self.record_next();
 		let mut d = serde_json::Deserializer::from_slice(input);
 		d.deserialize_map(visitor).map_err(Into::into)
@@ -237,7 +226,6 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		self.record_start();
 		let input = self.record_next();
 		let mut d = serde_json::Deserializer::from_slice(input);
 		d.deserialize_struct(name, fields, visitor)
@@ -249,7 +237,6 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		self.record_start();
 		match name {
 			| "Ignore" => self.record_ignore(),
 			| "IgnoreAll" => self.record_ignore_all(),
@@ -264,7 +251,6 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		self.record_start();
 		match name {
 			| "$serde_json::private::RawValue" => visitor.visit_map(self),
 			| "Cbor" => visitor
@@ -285,7 +271,6 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		self.record_start();
 		unhandled!("deserialize Enum not implemented")
 	}
 
@@ -296,7 +281,6 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 			.get(self.pos)
 			.is_none_or(|b| *b == Deserializer::SEP)
 		{
-		self.record_start();
 			visitor.visit_none()
 		} else {
 			visitor.visit_some(self)
@@ -452,21 +436,16 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 impl<'a, 'de: 'a> de::SeqAccess<'de> for &'a mut Deserializer<'de> {
 	type Error = Error;
 
+	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip(self, seed)))]
 	fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
 	where
 		T: DeserializeSeed<'de>,
 	{
-		self.record_start();
 		if self.pos >= self.buf.len() {
 			return Ok(None);
 		}
 
-		// Peek at the current byte. If it's a separator, it means the sequence has ended.
-		// (Sequence elements in our format are never empty and thus never start with a separator).
-		if self.buf[self.pos] == Deserializer::SEP {
-			return Ok(None);
-		}
-
+		self.record_start();
 		seed.deserialize(&mut **self).map(Some)
 	}
 }
@@ -481,7 +460,6 @@ impl<'a, 'de: 'a> de::MapAccess<'de> for &'a mut Deserializer<'de> {
 	where
 		K: DeserializeSeed<'de>,
 	{
-		self.record_start();
 		seed.deserialize(&mut **self).map(Some)
 	}
 
@@ -490,7 +468,6 @@ impl<'a, 'de: 'a> de::MapAccess<'de> for &'a mut Deserializer<'de> {
 	where
 		V: DeserializeSeed<'de>,
 	{
-		self.record_start();
 		seed.deserialize(&mut **self)
 	}
 }

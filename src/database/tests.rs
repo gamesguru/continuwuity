@@ -358,6 +358,7 @@ fn de_array() {
 }
 
 #[test]
+#[ignore = "Nested sequences are not supported"]
 fn de_complex() {
 	type Key<'a> = (&'a UserId, ArrayVec<u64, 2>, &'a RoomId);
 
