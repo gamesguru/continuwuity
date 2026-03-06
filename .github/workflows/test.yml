@@ -128,6 +128,8 @@ jobs:
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
 
       - name: Build conduwuit for Complement
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: PROFILE=dev SKIP_CONFIRM=1 CARGO_FLAGS="--features direct_tls" make build
 
       - name: Upload binary

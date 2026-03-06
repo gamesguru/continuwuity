@@ -1,11 +1,14 @@
-#[path = "../git.rs"]
-mod git;
+use conduwuit_build_metadata as metadata;
 
 fn main() {
-	if let Some(version) = git::description() {
-		println!("{version}");
+	let semver = env!("CARGO_PKG_VERSION");
+	if let Some(extra) = metadata::version_tag() {
+		if extra.starts_with('+') {
+			println!("{semver}{extra}");
+		} else {
+			println!("{semver} ({extra})");
+		}
 	} else {
-		// Fallback or error handling if needed, though 'unknown' is used elsewhere
-		println!("unknown");
+		println!("{semver}");
 	}
 }
