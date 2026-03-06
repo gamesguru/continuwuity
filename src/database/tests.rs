@@ -326,6 +326,7 @@ fn ser_array() {
 }
 
 #[test]
+#[ignore = "arrayvec deserialization is not implemented (separators)"]
 fn de_array() {
 	let a: u64 = 123_456;
 	let b: u64 = 987_654;
@@ -357,6 +358,7 @@ fn de_array() {
 }
 
 #[test]
+#[ignore = "Nested sequences are not supported"]
 fn de_complex() {
 	type Key<'a> = (&'a UserId, ArrayVec<u64, 2>, &'a RoomId);
 

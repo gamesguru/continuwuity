@@ -1,5 +1,3 @@
-use std::mem;
-
 use conduwuit::{
 	Error, Result, arrayvec::ArrayVec, checked, debug::DebugInspect, err, utils::string,
 };
@@ -24,7 +22,7 @@ pub(crate) fn from_slice<'a, T>(buf: &'a [u8]) -> Result<T>
 where
 	T: Deserialize<'a>,
 {
-	let mut deserializer = Deserializer { buf, pos: 0, rec: 0, first: true };
+	let mut deserializer = Deserializer { buf, pos: 0, rec: 0, seq: false };
 
 	T::deserialize(&mut deserializer).debug_inspect(|_| {
 		deserializer
@@ -38,7 +36,7 @@ pub(crate) struct Deserializer<'de> {
 	buf: &'de [u8],
 	pos: usize,
 	rec: usize,
-	first: bool,
+	seq: bool,
 }
 
 /// Directive to ignore a record. This type can be used to skip deserialization
@@ -72,18 +70,17 @@ impl<'de> Deserializer<'de> {
 
 	/// Called at the start of arrays and tuples
 	#[inline]
-	fn sequence_start(&mut self) -> bool { mem::replace(&mut self.first, true) }
-
-	/// Called at the end of arrays and tuples
-	#[inline]
-	fn sequence_end(&mut self, first: bool) { self.first = first; }
+	fn sequence_start(&mut self) {
+		debug_assert!(!self.seq, "Nested sequences are not handled at this time");
+		self.seq = true;
+	}
 
 	/// Consume the current record to ignore it. Inside a sequence the next
 	/// record is skipped but at the top-level all records are skipped such that
 	/// deserialization completes with self.finished() == Ok.
 	#[inline]
 	fn record_ignore(&mut self) {
-		if self.pos != 0 || self.rec > 0 {
+		if self.seq {
 			self.record_next();
 		} else {
 			self.record_ignore_all();
@@ -112,26 +109,26 @@ impl<'de> Deserializer<'de> {
 	#[inline]
 	fn record_peek_byte(&self) -> Option<u8> {
 		let started = self.pos != 0 || self.rec > 0;
-		if started {
-			debug_assert!(
-				self.buf[self.pos] == Self::SEP,
-				"Missing expected record separator at current position"
-			);
-		}
+		let buf = &self.buf[self.pos..];
+		debug_assert!(
+			!started || buf[0] == Self::SEP,
+			"Missing expected record separator at current position"
+		);
 
-		self.buf
-			.get::<usize>(self.pos + usize::from(started))
-			.copied()
+		buf.get::<usize>(started.into()).copied()
 	}
 
 	/// Consume the record separator such that the position cleanly points to
 	/// the start of the next record. (Case for some sequences)
 	#[inline]
 	fn record_start(&mut self) {
-		if self.pos < self.buf.len() && self.buf[self.pos] == Self::SEP {
-			self.inc_pos(1);
-		}
+		let started = self.pos != 0 || self.rec > 0;
+		debug_assert!(
+			!started || self.buf[self.pos] == Self::SEP,
+			"Missing expected record separator at current position"
+		);
 
+		self.inc_pos(started.into());
 		self.inc_rec(1);
 	}
 
@@ -182,10 +179,8 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		let first = self.sequence_start();
-		let val = visitor.visit_seq(&mut *self);
-		self.sequence_end(first);
-		val
+		self.sequence_start();
+		visitor.visit_seq(self)
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip(self, visitor)))]
@@ -193,10 +188,8 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		let first = self.sequence_start();
-		let val = visitor.visit_seq(&mut *self);
-		self.sequence_end(first);
-		val
+		self.sequence_start();
+		visitor.visit_seq(self)
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip(self, visitor)))]
@@ -209,10 +202,8 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	where
 		V: Visitor<'de>,
 	{
-		let first = self.sequence_start();
-		let val = visitor.visit_seq(&mut *self);
-		self.sequence_end(first);
-		val
+		self.sequence_start();
+		visitor.visit_seq(self)
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
@@ -320,14 +311,13 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	fn deserialize_i64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
 		const BYTES: usize = size_of::<i64>();
 
-		let end = self.pos.saturating_add(BYTES);
-		if end > self.buf.len() {
-			return Err(Self::Error::SerdeDe("integer buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = self.buf[self.pos..end].try_into().unwrap();
+		let end = self.pos.saturating_add(BYTES).min(self.buf.len());
+		let bytes: ArrayVec<u8, BYTES> = self.buf[self.pos..end].try_into()?;
+		let bytes = bytes
+			.into_inner()
+			.map_err(|_| Self::Error::SerdeDe("i64 buffer underflow".into()))?;
 
 		self.inc_pos(BYTES);
-		self.inc_rec(1);
 		visitor.visit_i64(i64::from_be_bytes(bytes))
 	}
 
@@ -353,14 +343,13 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	fn deserialize_u64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
 		const BYTES: usize = size_of::<u64>();
 
-		let end = self.pos.saturating_add(BYTES);
-		if end > self.buf.len() {
-			return Err(Self::Error::SerdeDe("integer buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = self.buf[self.pos..end].try_into().unwrap();
+		let end = self.pos.saturating_add(BYTES).min(self.buf.len());
+		let bytes: ArrayVec<u8, BYTES> = self.buf[self.pos..end].try_into()?;
+		let bytes = bytes
+			.into_inner()
+			.map_err(|_| Self::Error::SerdeDe("u64 buffer underflow".into()))?;
 
 		self.inc_pos(BYTES);
-		self.inc_rec(1);
 		visitor.visit_u64(u64::from_be_bytes(bytes))
 	}
 
@@ -447,6 +436,7 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 impl<'a, 'de: 'a> de::SeqAccess<'de> for &'a mut Deserializer<'de> {
 	type Error = Error;
 
+	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip(self, seed)))]
 	fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
 	where
 		T: DeserializeSeed<'de>,
@@ -455,43 +445,7 @@ impl<'a, 'de: 'a> de::SeqAccess<'de> for &'a mut Deserializer<'de> {
 			return Ok(None);
 		}
 
-		if self.first {
-			// At the first element of a sequence.
-			// In our format, sequences never start with a separator unless they are empty.
-			if self.buf[self.pos] == Deserializer::SEP {
-				return Ok(None);
-			}
-		} else {
-			// NOT at the first element.
-			if self.buf[self.pos] == Deserializer::SEP {
-				// Delimited element. Consume our separator.
-				self.record_start();
-			} else {
-				// No separator. This was a concatenated fixed-size sequence.
-				// However, if we're here, it means the caller (the Visitor) is
-				// asking for ANOTHER element.
-				// Since there's no separator, we might be at the end of the
-				// concatenated part and looking at the next part of the outer
-				// sequence.
-				//
-				// This is the tricky part: how do we know if the next bytes
-				// belong to us (another fixed-size element) or the parent?
-				//
-				// In the DB format, fixed-size elements in a sequence are only
-				// used when the length is known (e.g. [u64; 2] or tuple).
-				// If the length is known, the Visitor will only call us that
-				// many times. If it calls us MORE times, it's either an error
-				// or a variable-length sequence (Vec) that is NOT delimited.
-				//
-				// For Vec<u64>, we expect it to be delimited if it's in a
-				// larger structure, or trail if it's at the end.
-				//
-				// If we see NO separator, we assume we are still in the same
-				// record (concatenated).
-			}
-		}
-
-		self.first = false;
+		self.record_start();
 		seed.deserialize(&mut **self).map(Some)
 	}
 }
