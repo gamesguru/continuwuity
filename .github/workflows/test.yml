@@ -136,34 +136,32 @@ jobs:
         run: |
           ./bin/complement ./complement-src
 
+      - name: Upload test logs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: complement-logs
+          path: complement_test_results.jsonl
+          retention-days: 90
+
       - name: Parse Complement results
-        if: always()
         id: results
         run: |
-          if [ -f complement_test_results.jsonl ]; then
-            PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' complement_test_results.jsonl)
-            FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' complement_test_results.jsonl)
-            SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' complement_test_results.jsonl)
-            TOTAL=$((PASS + FAIL + SKIP))
-            FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' complement_test_results.jsonl | sort -u)
+          PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' complement_test_results.jsonl)
+          FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' complement_test_results.jsonl)
+          SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' complement_test_results.jsonl)
+          TOTAL=$((PASS + FAIL + SKIP))
+          FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' complement_test_results.jsonl | sort -u)
 
-            echo "pass=$PASS" >> "$GITHUB_OUTPUT"
-            echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
-            echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-            echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
-            echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
-            echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
-            echo "EOF" >> "$GITHUB_OUTPUT"
-          else
-            echo "pass=0" >> "$GITHUB_OUTPUT"
-            echo "fail=0" >> "$GITHUB_OUTPUT"
-            echo "skip=0" >> "$GITHUB_OUTPUT"
-            echo "total=0" >> "$GITHUB_OUTPUT"
-            echo "failed_tests=No results file found" >> "$GITHUB_OUTPUT"
-          fi
+          echo "pass=$PASS" >> "$GITHUB_OUTPUT"
+          echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Post Complement results to PR
-        if: always() && github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
           FAILED_TESTS: ${{ steps.results.outputs.failed_tests }}
@@ -238,11 +236,3 @@ jobs:
                 body,
               });
             }
-
-      - name: Upload test logs
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: complement-logs
-          path: complement_test_results.jsonl
-          retention-days: 90
