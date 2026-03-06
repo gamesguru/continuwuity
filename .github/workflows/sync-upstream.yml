@@ -1,0 +1,37 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: "0 * * * *" # Runs automatically every hour
+  workflow_dispatch: # Also gives you a button to trigger it manually anytime
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync with Forgejo upstream
+        run: |
+          # Add the official Forgejo upstream repository
+          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git fetch upstream
+
+          # Attempt to merge upstream's main branch into your fork's current branch
+          if ! git merge upstream/main --no-edit; then
+            echo "::error::Merge conflict detected! You must resolve this manually."
+            exit 1
+          fi
+
+          # Push the merged changes back to your GitHub fork
+          git push origin main
