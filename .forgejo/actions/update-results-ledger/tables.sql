@@ -28,4 +28,3 @@ CREATE TABLE IF NOT EXISTS test_scores (
     failed_count integer DEFAULT 0,
     skipped_count integer DEFAULT 0
 );
-
