@@ -79,7 +79,7 @@ if [ "$HAS_GOTESTSUM" = true ]; then
     (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        gotestsum --format testname --hide-summary=output \
+        gotestsum --format pkgname --hide-summary=output \
             --jsonfile "$LOG_FILE" \
             -- "${TEST_FLAGS[@]}" || true)
 else
