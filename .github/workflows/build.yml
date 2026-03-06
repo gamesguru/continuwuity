@@ -37,9 +37,6 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
 
-      - name: Fetch tags manually
-        run: git fetch --tags --force
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -62,6 +59,7 @@ jobs:
         run: make vars cpu-info
         env:
           PROFILE: ${{ matrix.profile }}
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
       - name: Build
         env:
@@ -99,9 +97,6 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
 
-      - name: Fetch tags manually
-        run: git fetch --tags --force
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -122,6 +117,8 @@ jobs:
 
       - name: Debug checks
         run: make vars cpu-info
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
       - name: Detect best CPU target
         id: cpu
