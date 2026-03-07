@@ -6,8 +6,6 @@
 
 [![Chat on Matrix](https://img.shields.io/matrix/continuwuity%3Acontinuwuity.org?server_fqdn=matrix.continuwuity.org&fetchMode=summary&logo=matrix)](https://matrix.to/#/#continuwuity:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org) [![Join the space](https://img.shields.io/matrix/space%3Acontinuwuity.org?server_fqdn=matrix.continuwuity.org&fetchMode=summary&logo=matrix&label=space)](https://matrix.to/#/#space:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org)
 
-
-
 <!-- ANCHOR_END: catchphrase -->
 
 [continuwuity] is a Matrix homeserver written in Rust.
@@ -29,13 +27,14 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 
 ### Complement Test Status
 
-We track the health of the project through automated [Complement](https://github.com/matrix-org/complement) tests. 
+We track the health of the project through automated [Complement](https://github.com/matrix-org/complement) tests.
 
 - **Current Status (main):** See the badge above for the latest results on the `main` branch.
 - **Commit-Specific History:** We are moving toward per-commit test tracking. You can view the status of a specific commit by accessing its JSON endpoint:
   `https://raw.githubusercontent.com/gamesguru/continuwuity/_metadata/badges/badges/forgejo/commits/<COMMIT_HASH>.json`
 
 #### Roadmap for Test Transparency:
+
 1.  [✓] **Dynamic Branch Badges**: Real-time status for `main` and feature branches.
 2.  [✓] **Historical Commit Tracking**: JSON ledger of test results for every CI run.
 3.  [ ] **README Commit Dashboard**: A dedicated page or section showing a grid of recent commit health.
@@ -78,12 +77,13 @@ Continuwuity aims to:
 Check out the [documentation](https://continuwuity.org) for installation instructions.
 
 If you want to try it out as a user, we have some partnered homeservers you can use:
-* You can head over to [https://federated.nexus](https://federated.nexus/) in your browser.
-  * Hit the `Apply to Join` button. Once your request has been accepted, you will receive an email with your username and password.
-  * Head over to [https://app.federated.nexus](https://app.federated.nexus/) and you can sign in there, or use any other matrix chat client you wish elsewhere.
-  * Your username for matrix will be in the form of `@username:federated.nexus`, however you can simply use the `username` part to log in. Your password is your password.
 
-* There's also [https://continuwuity.rocks/](https://continuwuity.rocks/). You can register a new account using Cinny via [this convenient link](https://app.cinny.in/register/continuwuity.rocks), or you can use Element or another matrix client *that supports registration*.
+- You can head over to [https://federated.nexus](https://federated.nexus/) in your browser.
+    - Hit the `Apply to Join` button. Once your request has been accepted, you will receive an email with your username and password.
+    - Head over to [https://app.federated.nexus](https://app.federated.nexus/) and you can sign in there, or use any other matrix chat client you wish elsewhere.
+    - Your username for matrix will be in the form of `@username:federated.nexus`, however you can simply use the `username` part to log in. Your password is your password.
+
+- There's also [https://continuwuity.rocks/](https://continuwuity.rocks/). You can register a new account using Cinny via [this convenient link](https://app.cinny.in/register/continuwuity.rocks), or you can use Element or another matrix client _that supports registration_.
 
 ### What are we working on?
 
@@ -122,7 +122,6 @@ We haven't written up a guide on migrating from incompatible homeservers yet. Re
 
 The main branch is always green!
 
-
 ### Policy on pulling from other forks
 
 We welcome contributions from other forks of conduwuit, subject to our review process.
@@ -142,6 +141,5 @@ When incorporating code from other forks:
 Join our [Matrix room](https://matrix.to/#/#continuwuity:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org) and [space](https://matrix.to/#/#space:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org) to chat with us about the project!
 
 <!-- ANCHOR_END: footer -->
-
 
 [continuwuity]: https://forgejo.ellis.link/continuwuation/continuwuity
