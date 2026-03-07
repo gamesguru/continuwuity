@@ -78,18 +78,18 @@ runs:
 
         jq -c --arg version_string "$VERSION_STRING" --arg run_id "$RUN_ID" '. + {version_string: $version_string, run_id: $run_id}' /tmp/run.jsonl >> run_details.jsonl
 
-        # Import and generate badges
-        make import
-        COLOR="green"; [ "$SKIP" -gt 0 ] && COLOR="yellow"; [ "$FAIL" -gt 0 ] && COLOR="red"
+        # Generate badges
+        if [ "$FAIL" -gt 0 ]; then COLOR="red"; elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"; else COLOR="green"; fi
         mkdir -p "badges/$PROVIDER/commits"
         BADGE=$(jq -n --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" --arg color "$COLOR" \
-          '{schemaVersion: 1, label: "Complement Tests", message: "$pass pass, $skip skip, $fail fail", color: $color}')
+          '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}')
         echo "$BADGE" > "badges/$PROVIDER/badge-${BRANCH_NAME}.json"
         echo "$BADGE" > "badges/$PROVIDER/commits/${COMMIT_HASH}.json"
 
-        # Commit and Push (with retry for concurrent builds)
-        git add .
+        # Commit and Push
+        git add runs.jsonl run_details.jsonl badges/
         if git commit -m "Add test results for ${COMMIT_HASH} [skip ci]"; then
+
           MAX_RETRIES=5
           RETRY_COUNT=0
           until git push origin HEAD:_metadata/badges; do
