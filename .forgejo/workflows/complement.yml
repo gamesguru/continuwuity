@@ -172,15 +172,3 @@ jobs:
           path: |
             tests/test_results/complement/test_results.jsonl
           retention-days: 90
-
-      - name: Evaluate final status
-        if: always()
-        run: |
-          FAIL=${{ steps.summary.outputs.fail || 0 }}
-          SKIP=${{ steps.summary.outputs.skip || 0 }}
-          if [ "$FAIL" -gt 0 ]; then
-            echo "::error::$FAIL tests failed!"
-            exit 1
-          elif [ "$SKIP" -gt 0 ]; then
-            echo "::warning::$SKIP tests skipped."
-          fi

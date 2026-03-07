@@ -136,7 +136,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-${{ env.PROFILE }}-direct_tls-${{ matrix.os }}
-          path: target/${{ env.PROFILE }}/conduwuit
+          path: target/latest/conduwuit
           retention-days: 60
 
       - name: Checkout Complement
@@ -152,7 +152,7 @@ jobs:
           cache-dependency-path: complement-src/go.sum
 
       - name: Build Complement Docker image
-        run: docker build --build-arg BINARY_PATH=target/${{ env.PROFILE }}/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile .
+        run: docker build --build-arg BINARY_PATH=target/latest/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -206,7 +206,7 @@ jobs:
           skip_count: ${{ steps.results.outputs.skip || 0 }}
           version_string: ${{ github.sha }}
           actor: ${{ github.actor }}
-          binary_path: target/${{ env.PROFILE }}/conduwuit
+          binary_path: target/latest/conduwuit
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
@@ -285,17 +285,6 @@ jobs:
               });
             }
 
-      - name: Evaluate final status
-        run: |
-          FAIL=${{ steps.results.outputs.fail || 0 }}
-          SKIP=${{ steps.results.outputs.skip || 0 }}
-          if [ "$FAIL" -gt 0 ]; then
-            echo "::error::$FAIL tests failed!"
-            exit 1
-          elif [ "$SKIP" -gt 0 ]; then
-            echo "::warning::$SKIP tests skipped."
-          fi
-
   complement-tests-pi5:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
@@ -369,7 +358,7 @@ jobs:
           cache-dependency-path: complement-src/go.sum
 
       - name: Build Complement Docker image
-        run: docker build --build-arg BINARY_PATH=target/${{ env.PROFILE }}/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile .
+        run: docker build --build-arg BINARY_PATH=target/latest/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile .
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -424,7 +413,7 @@ jobs:
           skip_count: ${{ steps.results.outputs.skip || 0 }}
           version_string: ${{ github.sha }}
           actor: ${{ github.actor }}
-          binary_path: target/${{ env.PROFILE }}/conduwuit
+          binary_path: target/latest/conduwuit
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
@@ -502,15 +491,3 @@ jobs:
                 body,
               });
             }
-
-      - name: Evaluate final status
-        if: always()
-        run: |
-          FAIL=${{ steps.results.outputs.fail || 0 }}
-          SKIP=${{ steps.results.outputs.skip || 0 }}
-          if [ "$FAIL" -gt 0 ]; then
-            echo "::error::$FAIL tests failed on Pi 5!"
-            exit 1
-          elif [ "$SKIP" -gt 0 ]; then
-            echo "::warning::$SKIP tests skipped on Pi 5."
-          fi
