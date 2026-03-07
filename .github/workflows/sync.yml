@@ -1,0 +1,74 @@
+name: Sync
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git fetch upstream main
+          git merge upstream/main --no-edit || exit 1
+          git push origin main
+
+  results:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git fetch upstream _metadata/results:upstream_results || true
+          git checkout _metadata/results || git checkout -b _metadata/results
+          git merge upstream_results --no-edit || exit 1
+          git push origin _metadata/results
+
+  badges:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git fetch upstream badges:upstream_badges || true
+          git checkout badges || git checkout -b badges
+          git merge upstream_badges --no-edit || exit 1
+          git push origin badges
+
+  forge-head:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git fetch upstream main:upstream_main
+          git checkout _metadata/forge.ellis.link/HEAD || git checkout -b _metadata/forge.ellis.link/HEAD
+          git reset --hard upstream_main
+          git push origin _metadata/forge.ellis.link/HEAD --force
