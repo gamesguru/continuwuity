@@ -98,8 +98,16 @@ runs:
         # Generate badges
         if [ "$FAIL" -gt 0 ]; then COLOR="red"; elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"; else COLOR="green"; fi
         mkdir -p "badges/$PROVIDER"
-        jq -n --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" --arg color "$COLOR" \
-          '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}' > "badges/$PROVIDER/badge-${BRANCH_NAME}.json"
+        mkdir -p "badges/$PROVIDER/commits"
+
+        BADGE_DATA=$(jq -n --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" --arg color "$COLOR" \
+          '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}')
+
+        # Branch-specific badge
+        echo "$BADGE_DATA" > "badges/$PROVIDER/badge-${BRANCH_NAME}.json"
+
+        # Commit-specific badge
+        echo "$BADGE_DATA" > "badges/$PROVIDER/commits/${COMMIT_HASH}.json"
 
         git add .gitignore tables.sql Makefile import.py runs.jsonl run_details.jsonl badges/
         if git commit -m "Add test results for ${COMMIT_HASH} [skip ci]"; then

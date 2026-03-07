@@ -24,7 +24,22 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 [![Codeberg](https://img.shields.io/badge/Codeberg-mirror-2185D0?style=flat&logo=codeberg&labelColor=fff)](https://codeberg.org/continuwuity/continuwuity) [![Stars](https://codeberg.org/continuwuity/continuwuity/badges/stars.svg?style=flat)](https://codeberg.org/continuwuity/continuwuity/stars)
 
 [![GitHub Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fbadge-main.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+[![Forgejo Complement Tests](https://forgejo.ellis.link/continuwuation/continuwuity/actions/workflows/complement.yml/badge.svg)](https://forgejo.ellis.link/continuwuation/continuwuity/actions)
 [![Forgejo Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fbadge-main.json)](https://forgejo.ellis.link/continuwuation/continuwuity/actions)
+
+### Complement Test Status
+
+We track the health of the project through automated [Complement](https://github.com/matrix-org/complement) tests. 
+
+- **Current Status (main):** See the badge above for the latest results on the `main` branch.
+- **Commit-Specific History:** We are moving toward per-commit test tracking. You can view the status of a specific commit by accessing its JSON endpoint:
+  `https://raw.githubusercontent.com/gamesguru/continuwuity/_metadata/badges/badges/forgejo/commits/<COMMIT_HASH>.json`
+
+#### Roadmap for Test Transparency:
+1.  [✓] **Dynamic Branch Badges**: Real-time status for `main` and feature branches.
+2.  [✓] **Historical Commit Tracking**: JSON ledger of test results for every CI run.
+3.  [ ] **README Commit Dashboard**: A dedicated page or section showing a grid of recent commit health.
+4.  [ ] **PR Integration**: Automated comments in Pull Requests with detailed Complement failure reports.
 
 ### Why does this exist?
 

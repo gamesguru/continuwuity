@@ -152,6 +152,7 @@ jobs:
         id: version
         if: always()
         run: |
+          # Use raw version output from the binary
           VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
