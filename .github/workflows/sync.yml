@@ -18,7 +18,7 @@ jobs:
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
           if git fetch upstream main:upstream_main; then
             git checkout main
@@ -41,7 +41,7 @@ jobs:
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
           # Fetch upstream metadata branch
           if git fetch upstream _metadata/badges:upstream_metadata; then
@@ -69,7 +69,7 @@ jobs:
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
           if git fetch upstream main:upstream_main; then
             git checkout -B _metadata/forge.ellis.link/HEAD upstream_main
