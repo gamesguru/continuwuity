@@ -195,14 +195,14 @@ if head_hash:
     rows.append(f"""  <tr>
     <td valign="top">HEAD ({head_short})</td>
     <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2F{head_hash}.json&label=Tests&color=darkgrey" alt="Forgejo HEAD"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Frefs%2Fheads%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{head_hash}.json&label=Tests&color=darkgrey" alt="GitHub HEAD"></td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{head_hash}.json&label=Tests&color=darkgrey" alt="GitHub HEAD"></td>
   </tr>""")
 
 if head1_hash:
     rows.append(f"""  <tr>
     <td valign="top">HEAD~1 ({head1_short})</td>
     <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2F{head1_hash}.json&label=Tests&color=darkgrey" alt="Forgejo HEAD~1"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Frefs%2Fheads%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{head1_hash}.json&label=Tests&color=darkgrey" alt="GitHub HEAD~1"></td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{head1_hash}.json&label=Tests&color=darkgrey" alt="GitHub HEAD~1"></td>
   </tr>""")
 
 for tag in tags:
@@ -212,7 +212,7 @@ for tag in tags:
         rows.append(f"""  <tr>
     <td valign="top">{tag} ({tag_short})</td>
     <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2F{tag_hash}.json&label=Tests&color=darkgrey" alt="Forgejo {tag}"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Frefs%2Fheads%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{tag_hash}.json&label=Tests&color=darkgrey" alt="GitHub {tag}"></td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{tag_hash}.json&label=Tests&color=darkgrey" alt="GitHub {tag}"></td>
   </tr>""")
 
 readme_path = "../../README.md"
