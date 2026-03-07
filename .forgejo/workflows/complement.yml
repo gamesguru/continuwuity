@@ -34,8 +34,8 @@ jobs:
             git init
             git remote add origin ${{ forge.server_url }}/${{ forge.repository }}
           fi
-          git fetch --depth 1 origin ${{ forge.sha }}
-          git checkout FETCH_HEAD
+          git fetch --depth 1 origin main
+          git checkout main
           git fetch --tags --force
 
       - name: Download conduwuit artifact
