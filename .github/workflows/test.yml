@@ -333,6 +333,8 @@ jobs:
   # macOS dev shakeout
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   mac-devfriendly:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_PR_CHECKS_MAC_DEVFRIENDLY != ''
     runs-on: macos-latest
     env:
@@ -361,7 +363,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           env-vars: PROFILE
 
-      - name: Verify basic Make targets (Read-Only)
+      - name: Verify basic Make targets (read-only)
         run: |
           make help
           make vars
