@@ -25,6 +25,7 @@ jobs:
     env:
       RUSTC_WRAPPER: ccache
       PROFILE: release
+      FEATURES: "direct_tls"
 
     steps:
       - name: Slim Checkout
@@ -155,6 +156,7 @@ jobs:
           fail_count: ${{ steps.summary.outputs.fail || 0 }}
           skip_count: ${{ steps.summary.outputs.skip || 0 }}
           version_string: ${{ steps.version.outputs.version }}
+          features: ${{ env.FEATURES }}
           actor: ${{ forge.actor || github.actor }}
           binary_path: target/latest/conduwuit
 

@@ -83,6 +83,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       PROFILE: release
+      FEATURES: "direct_tls"
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: ${{ matrix.arch == 'arm64' && '16' || '0' }}
 
@@ -244,6 +245,7 @@ jobs:
           fail_count: ${{ steps.results.outputs.fail || 0 }}
           skip_count: ${{ steps.results.outputs.skip || 0 }}
           version_string: ${{ steps.version.outputs.version }}
+          features: ${{ env.FEATURES }}
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
 
@@ -399,16 +401,14 @@ jobs:
         run: go install gotest.tools/gotestsum@latest
 
       - name: Capture baseline stats
-        run: VERBOSE=1 make complement/stats > baseline_stats.txt || true
+        run: VERBOSE=1 make complement/stats > baseline_stats.txt
 
       - name: Run Complement tests
-        continue-on-error: true
         run: |
           ./bin/complement ./complement-src
 
       - name: Compare results with baseline
-        if: always()
         run: |
-          VERBOSE=1 make complement/stats > new_stats.txt || true
+          VERBOSE=1 make complement/stats > new_stats.txt
           echo "=== Changes from baseline ==="
-          diff --color=always -u baseline_stats.txt new_stats.txt || true
+          diff --color=always -u baseline_stats.txt new_stats.txt

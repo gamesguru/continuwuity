@@ -17,6 +17,9 @@ inputs:
   binary_path:
     description: "Path to the tested binary"
     default: "target/debug/conduwuit"
+  features:
+    description: "Space-separated list of cargo features used for this build"
+    default: ""
 
 runs:
   using: "composite"
@@ -34,6 +37,7 @@ runs:
         VERSION_STRING="${{ inputs.version_string }}"
         ACTOR="${{ inputs.actor }}"
         BINARY_PATH="${{ inputs.binary_path }}"
+        FEATURES="${{ inputs.features }}"
         COMMIT_HASH="${GITHUB_SHA:-unknown}"
         RUN_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
         RUN_ID="${COMMIT_HASH}-${RUN_DATE}"
@@ -66,8 +70,9 @@ runs:
         jq -n -c --arg run_id "$RUN_ID" --arg run_date "$RUN_DATE" --arg commit_hash "$COMMIT_HASH" \
           --arg branch "$BRANCH_NAME" --arg author_name "$ACTOR" --arg provider "$PROVIDER" \
           --arg binary_sha256 "$BIN_SHA" --arg version_string "$VERSION_STRING" \
+          --arg features "$FEATURES" \
           --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" \
-          '{run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, binary_sha256: $binary_sha256, version_string: $version_string, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
+          '{run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, binary_sha256: $binary_sha256, version_string: $version_string, features: $features, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
         jq -c --arg run_id "$RUN_ID" '. + {run_id: $run_id}' /tmp/run.jsonl >> run_details.jsonl
 
         # Import and generate badges
@@ -75,7 +80,7 @@ runs:
         COLOR="green"; [ "$SKIP" -gt 0 ] && COLOR="yellow"; [ "$FAIL" -gt 0 ] && COLOR="red"
         mkdir -p "badges/$PROVIDER/commits"
         BADGE=$(jq -n --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" --arg color "$COLOR" \
-          '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}')
+          '{schemaVersion: 1, label: "Complement Tests", message: "$pass pass, $skip skip, $fail fail", color: $color}')
         echo "$BADGE" > "badges/$PROVIDER/badge-${BRANCH_NAME}.json"
         echo "$BADGE" > "badges/$PROVIDER/commits/${COMMIT_HASH}.json"
 

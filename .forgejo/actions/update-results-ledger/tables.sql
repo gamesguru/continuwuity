@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS runs (
     host_info text,
     binary_sha256 text,
     version_string text,
+    features text,
     passed_count integer,
     skipped_count integer,
     failed_count integer,
