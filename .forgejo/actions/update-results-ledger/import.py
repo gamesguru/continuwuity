@@ -160,9 +160,9 @@ if github_output:
     cur = db.cursor()
     # Get the previous run on the same branch
     cur.execute("""
-        SELECT passed_count, failed_count, skipped_count 
-        FROM runs 
-        ORDER BY run_date DESC 
+        SELECT passed_count, failed_count, skipped_count
+        FROM runs
+        ORDER BY run_date DESC
         LIMIT 1 OFFSET 1
     """)
     prev_run = cur.fetchone()
