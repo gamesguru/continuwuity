@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS runs (
     passed_count integer,
     skipped_count integer,
     failed_count integer,
+    prev_hash text,
     row_hash text
 );
 

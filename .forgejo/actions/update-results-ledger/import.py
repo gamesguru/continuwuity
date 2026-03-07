@@ -5,8 +5,8 @@ import hashlib
 
 INSERT_RUN = """
 INSERT
-    OR IGNORE INTO runs (run_id, run_date, commit_hash, branch, author_name, provider, host_info, binary_sha256, version_string, features, passed_count, skipped_count, failed_count, row_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    OR IGNORE INTO runs (run_id, run_date, commit_hash, branch, author_name, provider, host_info, binary_sha256, version_string, features, passed_count, skipped_count, failed_count, prev_hash, row_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 INSERT_RUN_DETAILS = """
@@ -62,8 +62,18 @@ if os.path.exists("runs.jsonl"):
                 if not line:
                     continue
                 d = json.loads(line)
+
+                # Get the last hash for chaining
+                cur = db.cursor()
+                cur.execute("SELECT row_hash FROM runs ORDER BY run_date DESC, rowid DESC LIMIT 1")
+                res = cur.fetchone()
+                prev_hash = res[0] if res else "0" * 64
+
                 # Deterministic hashing: remove nulls, sort keys, strip whitespace
                 clean_d = {k: v for k, v in d.items() if v is not None}
+                # Include prev_hash in the data to be hashed
+                clean_d["prev_hash"] = prev_hash
+
                 canonical_str = json.dumps(
                     clean_d, separators=(",", ":"), sort_keys=True
                 )
@@ -85,6 +95,7 @@ if os.path.exists("runs.jsonl"):
                         d.get("passed_count"),
                         d.get("skipped_count"),
                         d.get("failed_count"),
+                        prev_hash,
                         row_hash,
                     ),
                 )
