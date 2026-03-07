@@ -221,7 +221,10 @@ complement/stats: ##H Check local test stats from tests/test_results/complement/
 	echo "○ Skipped: $$SKIP"; \
 	echo "---------------------------"; \
 	echo "Total:     $$TOTAL"; \
-	echo ""
+	echo ""; \
+	echo "JSON file (on main) last modified by: "; \
+	git log -1 --format="%an (%ad) %H"
+
 
 .PHONY: complement/run
 complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
