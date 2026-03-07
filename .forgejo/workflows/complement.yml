@@ -29,7 +29,6 @@ jobs:
     steps:
       - name: Slim Checkout
         run: |
-
           # Use raw git to avoid Node-based checkout action
           if [ ! -d ".git" ]; then
             git init
@@ -41,7 +40,6 @@ jobs:
 
       - name: Download and verify conduwuit bundle
         run: |
-
           ARTIFACT_URL="${{ github.event.inputs.artifact_url }}"
 
           # If the user pasted a github.com web UI URL, convert it to the API endpoint
@@ -77,12 +75,10 @@ jobs:
 
       - name: Version check
         run: |
-
           ./target/latest/conduwuit --version | tee target/latest/conduwuit.version
 
       - name: Checkout Complement
         run: |
-
           # Manual checkout of complement to avoid Node overhead
           if [ ! -d "complement-src" ]; then
             git clone --depth 1 https://github.com/matrix-org/complement complement-src
@@ -92,7 +88,6 @@ jobs:
 
       - name: Build Complement Docker image
         run: |
-
           ls -l target/latest/conduwuit
           DOCKER_BUILDKIT=1 docker buildx build \
             --build-arg BINARY_PATH=./target/latest/conduwuit \
@@ -106,20 +101,17 @@ jobs:
       - name: Run Complement tests
         continue-on-error: true
         run: |
-
           mkdir -p tests/test_results/complement/
           ./bin/complement ./complement-src
 
       - name: Compare results with baseline
         run: |
-
           VERBOSE=1 make complement/stats > new_stats.txt || true
           echo "=== Changes from baseline ==="
           diff --color=always -u baseline_stats.txt new_stats.txt || true
 
       - name: Debug Results
         run: |
-
           echo "Checking results directory:"
           ls -la tests/test_results/complement/
           echo "Log file size:"
@@ -130,7 +122,6 @@ jobs:
       - name: Summarize results
         id: summary
         run: |
-
           RESULTS="tests/test_results/complement/test_results.jsonl"
           if [ -f "$RESULTS" ]; then
             PASS=$(grep -c '"Action":"pass"' "$RESULTS" || true)
@@ -146,7 +137,6 @@ jobs:
       - name: Get conduwuit version
         id: version
         run: |
-
           # Use raw version output from the binary
           VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
