@@ -22,7 +22,7 @@ jobs:
           git merge upstream/main --no-edit || exit 1
           git push origin main
 
-  results:
+  metadata:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -34,27 +34,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
-          git fetch upstream _metadata/results:upstream_results || true
-          git checkout _metadata/results || git checkout -b _metadata/results
-          git merge upstream_results --no-edit || exit 1
-          git push origin _metadata/results
-
-  badges:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
-          git fetch upstream badges:upstream_badges || true
-          git checkout badges || git checkout -b badges
-          git merge upstream_badges --no-edit || exit 1
-          git push origin badges
+          git fetch upstream _metadata/badges:upstream_metadata || true
+          git checkout _metadata/badges || git checkout -b _metadata/badges
+          git merge upstream_metadata --no-edit || exit 1
+          git push origin _metadata/badges
 
   forge-head:
     runs-on: ubuntu-latest
