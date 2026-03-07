@@ -74,8 +74,8 @@ jobs:
           PUBKEY: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}
         run: |
           echo "Verifying GPG signature..."
-          echo "Debug: Secret length is ${#PUBKEY}"
-          echo "$PUBKEY" | gpg --batch --import || true
+          echo "$PUBKEY" | tee key.asc
+          gpg --import key.asc
           gpg --list-keys
           gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
           echo "OK. GPG signature verified."
