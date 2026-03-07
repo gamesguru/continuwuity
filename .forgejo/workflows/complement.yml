@@ -38,7 +38,7 @@ jobs:
           git checkout FETCH_HEAD
           git fetch --tags --force
 
-      - name: Download and verify conduwuit bundle
+      - name: Download conduwuit bundle
         run: |
           ARTIFACT_URL="${{ github.event.inputs.artifact_url }}"
 
@@ -55,21 +55,28 @@ jobs:
           echo "Downloading bundle from: $ARTIFACT_URL"
           curl -L -o target/${{ env.PROFILE }}/bundle.zip -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
+      - name: SHA256 sum check (zip bundle verification)
+        run: |
           # Log SHA256 of the bundle
           sha256sum target/${{ env.PROFILE }}/bundle.zip
 
+      - name: Extract conduwuit bundle
+        run: |
           echo "Unzipping bundle..."
           unzip -o target/${{ env.PROFILE }}/bundle.zip -d target/${{ env.PROFILE }}/
           rm target/${{ env.PROFILE }}/bundle.zip
-
           chmod +x target/${{ env.PROFILE }}/conduwuit
 
-          # Mandatory GPG signature verification
+      - name: GPG signature check (binary verification)
+        run: |
           echo "Verifying GPG signature..."
-          echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --batch --import
+          echo "${{ secrets.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}" | gpg --batch --import
           gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
-          echo "✅ GPG signature verified."
+          echo "OK. GPG signature verified."
 
+
+      - name: Post-verification setup
+        run: |
           mkdir -p target/latest
           ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
 
