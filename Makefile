@@ -193,7 +193,7 @@ complement/build: ##H Build conduwuit docker image for Complement testing
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
 	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
-	docker buildx build \
+	DOCKER_BUILDKIT=1 docker buildx build \
 		--build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
 		--build-arg BINARY_PATH=target/latest/conduwuit \
 		-t $(COMPLEMENT_IMAGE) \

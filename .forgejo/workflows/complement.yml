@@ -120,7 +120,7 @@ jobs:
       - name: Build Complement Docker image
         run: |
           ls -l target/latest/conduwuit
-          docker buildx build \
+          DOCKER_BUILDKIT=1 docker buildx build \
             --build-arg BINARY_PATH=./target/latest/conduwuit \
             -t continuwuity:complement \
             -f ./docker/complement.Dockerfile \

@@ -171,7 +171,7 @@ jobs:
           cache-dependency-path: complement-src/go.sum
 
       - name: Build Complement Docker image
-        run: docker buildx build --build-arg BINARY_PATH=target/latest/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile --load .
+        run: DOCKER_BUILDKIT=1 docker buildx build --build-arg BINARY_PATH=target/latest/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile --load .
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -216,6 +216,13 @@ jobs:
           echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
+      - name: Get conduwuit version
+        id: version
+        if: always()
+        run: |
+          VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Update Results Ledger
         uses: ./.forgejo/actions/update-results-ledger
         with:
@@ -223,7 +230,7 @@ jobs:
           pass_count: ${{ steps.results.outputs.pass || 0 }}
           fail_count: ${{ steps.results.outputs.fail || 0 }}
           skip_count: ${{ steps.results.outputs.skip || 0 }}
-          version_string: ${{ github.sha }}
+          version_string: ${{ steps.version.outputs.version }}
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
 
@@ -377,7 +384,7 @@ jobs:
           cache-dependency-path: complement-src/go.sum
 
       - name: Build Complement Docker image
-        run: docker buildx build --build-arg BINARY_PATH=target/latest/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile --load .
+        run: DOCKER_BUILDKIT=1 docker buildx build --build-arg BINARY_PATH=target/latest/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile --load .
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
@@ -422,6 +429,13 @@ jobs:
           echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
+      - name: Get conduwuit version
+        id: version
+        if: always()
+        run: |
+          VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Update Results Ledger
         if: always()
         uses: ./.forgejo/actions/update-results-ledger
@@ -430,7 +444,7 @@ jobs:
           pass_count: ${{ steps.results.outputs.pass || 0 }}
           fail_count: ${{ steps.results.outputs.fail || 0 }}
           skip_count: ${{ steps.results.outputs.skip || 0 }}
-          version_string: ${{ github.sha }}
+          version_string: ${{ steps.version.outputs.version }}
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
 
