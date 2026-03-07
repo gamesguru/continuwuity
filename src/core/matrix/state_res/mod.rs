@@ -36,12 +36,11 @@ pub use self::{
 	room_version::RoomVersion,
 };
 use crate::{
-	debug, debug_error, err,
+	debug, debug_error, err, info,
 	matrix::{Event, StateKey},
 	state_res::room_version::StateResolutionVersion,
 	trace,
 	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, WidebandExt},
-	warn,
 };
 
 /// A mapping of event type and state_key to some value `T`, usually an
@@ -691,7 +690,7 @@ where
 					ev.clone(),
 				);
 			} else {
-				warn!(event_id = aid.as_str(), "missing auth event");
+				info!(event_id = aid.as_str(), "missing auth event");
 			}
 		}
 
@@ -755,7 +754,7 @@ where
 			},
 			| Ok(false) => {
 				// synapse passes here on AuthError. We do not add this event to resolved_state.
-				warn!("event {} failed the authentication check", event.event_id());
+				info!("event {} failed the authentication check", event.event_id());
 			},
 			| Err(e) => {
 				debug_error!("event {} failed the authentication check: {e}", event.event_id());

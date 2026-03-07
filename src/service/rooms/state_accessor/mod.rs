@@ -3,11 +3,12 @@ mod server_can;
 mod state;
 mod user_can;
 
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{Result, err};
+use conduwuit::{Pdu, Result, SyncMutex, err, utils::math::usize_from_f64};
 use database::Map;
+use lru_cache::LruCache;
 use ruma::{
 	EventEncryptionAlgorithm, JsOption, OwnedRoomAliasId, RoomId, UserId,
 	events::{
@@ -33,7 +34,11 @@ use crate::{Dep, rooms};
 pub struct Service {
 	services: Services,
 	db: Data,
+	room_state_cache: SyncMutex<RoomStateLruCache>,
 }
+
+type RoomStateCacheKey = (ruma::OwnedRoomId, StateEventType, String);
+type RoomStateLruCache = LruCache<RoomStateCacheKey, Option<Pdu>>;
 
 struct Services {
 	short: Dep<rooms::short::Service>,
@@ -50,6 +55,9 @@ struct Data {
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
+		let config = &args.server.config;
+		let cache_capacity =
+			f64::from(config.stateinfo_cache_capacity) * config.cache_capacity_modifier;
 		Ok(Arc::new(Self {
 			services: Services {
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
@@ -62,8 +70,17 @@ impl crate::Service for Service {
 			db: Data {
 				shorteventid_shortstatehash: args.db["shorteventid_shortstatehash"].clone(),
 			},
+			room_state_cache: LruCache::new(usize_from_f64(cache_capacity)?).into(),
 		}))
 	}
+
+	async fn memory_usage(&self, out: &mut (dyn Write + Send)) -> Result {
+		let cache_len = self.room_state_cache.lock().len();
+		writeln!(out, "room_state_cache: {cache_len}")?;
+		Ok(())
+	}
+
+	async fn clear_cache(&self) { self.room_state_cache.lock().clear(); }
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
@@ -161,5 +178,18 @@ impl Service {
 		self.room_state_get(room_id, &StateEventType::RoomEncryption, "")
 			.await
 			.is_ok()
+	}
+
+	pub fn invalidate_room_state(
+		&self,
+		room_id: &RoomId,
+		event_type: &StateEventType,
+		state_key: &str,
+	) {
+		self.room_state_cache.lock().remove(&(
+			room_id.to_owned(),
+			event_type.clone(),
+			state_key.to_owned(),
+		));
 	}
 }

@@ -131,6 +131,12 @@ pub enum Error {
 	#[error("uiaa")]
 	Uiaa(ruma::api::client::uiaa::UiaaInfo),
 
+	// federation / remote
+	#[error("Federation timeout: {0}")]
+	FederationTimeout(ruma::OwnedServerName),
+	#[error("Federation connection error: {0}")]
+	FederationConnection(ruma::OwnedServerName),
+
 	// unique / untyped
 	#[error("{0}")]
 	Err(Cow<'static, str>),
@@ -159,6 +165,9 @@ impl Error {
 	pub fn message(&self) -> String {
 		match self {
 			| Self::Federation(origin, error) => format!("Answer from {origin}: {error}"),
+			| Self::FederationTimeout(origin) => format!("Federation timeout for {origin}"),
+			| Self::FederationConnection(origin) =>
+				format!("Federation connection error for {origin}"),
 			| Self::Ruma(error) => response::ruma_error_message(error),
 			| _ => format!("{self}"),
 		}
@@ -191,6 +200,8 @@ impl Error {
 			| Self::Reqwest(error) => error.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
 			| Self::Conflict(_) => StatusCode::CONFLICT,
 			| Self::Io(error) => response::io_error_code(error.kind()),
+			| Self::FederationTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
+			| Self::FederationConnection(_) => StatusCode::BAD_GATEWAY,
 			| Self::Uiaa(_) => StatusCode::UNAUTHORIZED,
 			| _ => StatusCode::INTERNAL_SERVER_ERROR,
 		}
@@ -202,6 +213,31 @@ impl Error {
 	/// Result where Ok(None) is instead Err(e) if e.is_not_found().
 	#[inline]
 	pub fn is_not_found(&self) -> bool { self.status_code() == http::StatusCode::NOT_FOUND }
+
+	/// Returns true if the error is a "missing token" error.
+	#[inline]
+	pub fn is_missing_token(&self) -> bool {
+		matches!(self.kind(), ruma::api::client::error::ErrorKind::MissingToken)
+	}
+
+	/// Returns true if the error is a service-interrupted error (e.g.
+	/// shutdown).
+	#[inline]
+	pub fn is_interrupted(&self) -> bool {
+		match self {
+			| Self::Io(error) => error.kind() == std::io::ErrorKind::Interrupted,
+			| _ => false,
+		}
+	}
+
+	/// Returns true if the error is a DNS timeout error.
+	#[inline]
+	pub fn is_dns_timeout(&self) -> bool {
+		match self {
+			| Self::Err(error) => error.starts_with("DNS timeout:"),
+			| _ => false,
+		}
+	}
 }
 
 impl std::fmt::Debug for Error {

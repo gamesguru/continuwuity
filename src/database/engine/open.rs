@@ -4,7 +4,7 @@ use std::{
 	sync::{Arc, atomic::AtomicU32},
 };
 
-use conduwuit::{Result, debug, implement, info, warn};
+use conduwuit::{Result, debug, implement, warn};
 use rocksdb::{ColumnFamilyDescriptor, Options};
 
 use super::{
@@ -37,7 +37,7 @@ pub(crate) async fn open(ctx: Arc<Context>, desc: &[Descriptor]) -> Result<Arc<S
 	debug!("Opening database...");
 	let db = Db::open_cf_descriptors(&db_opts, path, cfds).or_else(or_else)?;
 
-	info!(
+	warn!(
 		columns = num_cfds,
 		sequence = %db.latest_sequence_number(),
 		time = ?load_time.elapsed(),

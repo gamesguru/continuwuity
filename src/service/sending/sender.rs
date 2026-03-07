@@ -10,7 +10,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit_core::{
-	Error, Event, Result, at, debug, err, error,
+	Error, Event, Result, at, debug, err, error, info,
 	result::LogErr,
 	trace,
 	utils::{
@@ -866,7 +866,7 @@ impl Service {
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {
 			if let Err(e) = result {
-				warn!(
+				info!(
 					%txn_id, %server,
 					"error sending PDU {event_id} to remote server: {e:?}"
 				);

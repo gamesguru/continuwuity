@@ -16,7 +16,10 @@ pub(super) use conduwuit_service::state::State;
 use http::{Uri, uri};
 
 use self::handler::RouterExt;
-pub(super) use self::{args::Args as Ruma, response::RumaResponse};
+pub(crate) use self::{
+	args::{Args as Ruma, OptionalArgs as OptionalRuma},
+	response::RumaResponse,
+};
 use crate::{admin, client, server};
 
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
@@ -60,6 +63,10 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::set_room_account_data_route)
 		.ruma_route(&client::get_global_account_data_route)
 		.ruma_route(&client::get_room_account_data_route)
+		.route("/_matrix/client/r0/user/{user_id}/account_data/{event_type}", any(client::delete_global_account_data_route))
+		.route("/_matrix/client/v3/user/{user_id}/account_data/{event_type}", any(client::delete_global_account_data_route))
+		.route("/_matrix/client/r0/user/{user_id}/rooms/{room_id}/account_data/{event_type}", any(client::delete_room_account_data_route))
+		.route("/_matrix/client/v3/user/{user_id}/rooms/{room_id}/account_data/{event_type}", any(client::delete_room_account_data_route))
 		.ruma_route(&client::set_displayname_route)
 		.ruma_route(&client::get_displayname_route)
 		.ruma_route(&client::set_avatar_url_route)
@@ -149,12 +156,12 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::search_events_route)
 		.ruma_route(&client::turn_server_route)
 		.ruma_route(&client::send_event_to_device_route)
-		.ruma_route(&client::create_content_route)
-		.ruma_route(&client::get_content_thumbnail_route)
-		.ruma_route(&client::get_content_route)
-		.ruma_route(&client::get_content_as_filename_route)
-		.ruma_route(&client::get_media_preview_route)
-		.ruma_route(&client::get_media_config_route)
+		.ruma_route_path(&client::create_content_route, "/_matrix/client/v1/media/upload")
+		.ruma_route_path(&client::get_content_thumbnail_route, "/_matrix/client/v1/media/thumbnail/{server_name}/{media_id}")
+		.ruma_route_path(&client::get_content_route, "/_matrix/client/v1/media/download/{server_name}/{media_id}")
+		.ruma_route_path(&client::get_content_as_filename_route, "/_matrix/client/v1/media/download/{server_name}/{media_id}/{file_name}")
+		.ruma_route_path(&client::get_media_preview_route, "/_matrix/client/v1/media/preview_url")
+		.ruma_route_path(&client::get_media_config_route, "/_matrix/client/v1/media/config")
 		.ruma_route(&client::get_devices_route)
 		.ruma_route(&client::get_device_route)
 		.ruma_route(&client::update_device_route)
@@ -246,11 +253,24 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 
 	if config.allow_legacy_media {
 		router = router
-			.ruma_route(&client::get_media_config_legacy_route)
-			.ruma_route(&client::get_media_preview_legacy_route)
-			.ruma_route(&client::get_content_legacy_route)
-			.ruma_route(&client::get_content_as_filename_legacy_route)
-			.ruma_route(&client::get_content_thumbnail_legacy_route)
+			.route("/_matrix/media/v3/config", get(client::get_media_config_legacy_legacy_route))
+			.route("/_matrix/media/v3/upload", post(client::create_content_legacy_route))
+			.route(
+				"/_matrix/media/v3/download/{server_name}/{media_id}",
+				get(client::get_content_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/media/v3/download/{server_name}/{media_id}/{file_name}",
+				get(client::get_content_as_filename_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/media/v3/thumbnail/{server_name}/{media_id}",
+				get(client::get_content_thumbnail_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/media/v3/preview_url",
+				get(client::get_media_preview_legacy_legacy_route),
+			)
 			.route("/_matrix/media/v1/config", get(client::get_media_config_legacy_legacy_route))
 			.route("/_matrix/media/v1/upload", post(client::create_content_legacy_route))
 			.route(
@@ -268,10 +288,55 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			.route(
 				"/_matrix/media/v1/thumbnail/{server_name}/{media_id}",
 				get(client::get_content_thumbnail_legacy_legacy_route),
+			)
+			.route("/_matrix/media/r0/config", get(client::get_media_config_legacy_legacy_route))
+			.route("/_matrix/media/r0/upload", post(client::create_content_legacy_route))
+			.route(
+				"/_matrix/media/r0/preview_url",
+				get(client::get_media_preview_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/media/r0/download/{server_name}/{media_id}",
+				get(client::get_content_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/media/r0/download/{server_name}/{media_id}/{file_name}",
+				get(client::get_content_as_filename_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/media/r0/thumbnail/{server_name}/{media_id}",
+				get(client::get_content_thumbnail_legacy_legacy_route),
+			)
+			// /_matrix/client/r0/media/* aliases for clients that use the client prefix
+			// with the r0 version instead of /_matrix/media/r0/* or /_matrix/client/v1/media/*
+			.route(
+				"/_matrix/client/r0/media/thumbnail/{server_name}/{media_id}",
+				get(client::get_content_thumbnail_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/download/{server_name}/{media_id}",
+				get(client::get_content_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/download/{server_name}/{media_id}/{file_name}",
+				get(client::get_content_as_filename_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/config",
+				get(client::get_media_config_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/preview_url",
+				get(client::get_media_preview_legacy_legacy_route),
+			)
+			.route(
+				"/_matrix/client/r0/media/upload",
+				post(client::create_content_legacy_route),
 			);
 	} else {
 		router = router
 			.route("/_matrix/media/v1/{*path}", any(legacy_media_disabled))
+			.route("/_matrix/media/v3/upload", any(legacy_media_disabled))
 			.route("/_matrix/media/v3/config", any(legacy_media_disabled))
 			.route("/_matrix/media/v3/download/{*path}", any(legacy_media_disabled))
 			.route("/_matrix/media/v3/thumbnail/{*path}", any(legacy_media_disabled))

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use conduwuit::{
-	Result, debug_warn, utils,
+	Result, utils,
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
@@ -36,6 +36,15 @@ impl Data {
 	}
 
 	pub(super) async fn get_presence(&self, user_id: &UserId) -> Result<(u64, PresenceEvent)> {
+		let (count, presence) = self.get_presence_raw(user_id).await?;
+		let event = presence
+			.to_presence_event(user_id, &self.services.users)
+			.await;
+
+		Ok((count, event))
+	}
+
+	pub(super) async fn get_presence_raw(&self, user_id: &UserId) -> Result<(u64, Presence)> {
 		let count = self
 			.userid_presenceid
 			.get(user_id)
@@ -44,11 +53,9 @@ impl Data {
 
 		let key = presenceid_key(count, user_id);
 		let bytes = self.presenceid_presence.get(&key).await?;
-		let event = Presence::from_json_bytes(&bytes)?
-			.to_presence_event(user_id, &self.services.users)
-			.await;
+		let presence = Presence::from_json_bytes(&bytes)?;
 
-		Ok((count, event))
+		Ok((count, presence))
 	}
 
 	pub(super) async fn set_presence(
@@ -59,23 +66,23 @@ impl Data {
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
 	) -> Result<()> {
-		let last_presence = self.get_presence(user_id).await;
+		let last_presence = self.get_presence_raw(user_id).await;
 		let state_changed = match last_presence {
 			| Err(_) => true,
-			| Ok(ref presence) => presence.1.content.presence != *presence_state,
+			| Ok(ref presence) => presence.1.state != *presence_state,
+		};
+
+		let currently_active_changed = match last_presence {
+			| Err(_) => true,
+			| Ok(ref presence) =>
+				currently_active.is_some_and(|active| active != presence.1.currently_active),
 		};
 
 		let status_msg_changed = match last_presence {
 			| Err(_) => true,
 			| Ok(ref last_presence) => {
-				let old_msg = last_presence
-					.1
-					.content
-					.status_msg
-					.clone()
-					.unwrap_or_default();
-
-				let new_msg = status_msg.clone().unwrap_or_default();
+				let old_msg = last_presence.1.status_msg.as_deref().unwrap_or_default();
+				let new_msg = status_msg.as_deref().unwrap_or_default();
 
 				new_msg != old_msg
 			},
@@ -84,8 +91,7 @@ impl Data {
 		let now = utils::millis_since_unix_epoch();
 		let last_last_active_ts = match last_presence {
 			| Err(_) => 0,
-			| Ok((_, ref presence)) =>
-				now.saturating_sub(presence.content.last_active_ago.unwrap_or_default().into()),
+			| Ok((_, ref presence)) => presence.last_active_ts,
 		};
 
 		let last_active_ts = match last_active_ago {
@@ -93,12 +99,9 @@ impl Data {
 			| Some(last_active_ago) => now.saturating_sub(last_active_ago.into()),
 		};
 
-		// TODO: tighten for state flicker?
-		if !status_msg_changed && !state_changed && last_active_ts < last_last_active_ts {
-			debug_warn!(
-				"presence spam {user_id:?} last_active_ts:{last_active_ts:?} < \
-				 {last_last_active_ts:?}",
-			);
+		let changed = state_changed || status_msg_changed || currently_active_changed;
+
+		if !changed && last_active_ts < last_last_active_ts.saturating_add(100) {
 			return Ok(());
 		}
 

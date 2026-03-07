@@ -17,13 +17,14 @@ use crate::rooms::{
 };
 
 #[implement(super::Service)]
-pub(super) async fn upgrade_outlier_to_timeline_pdu<Pdu>(
+pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	&self,
 	incoming_pdu: PduEvent,
 	val: BTreeMap<String, CanonicalJsonValue>,
 	create_event: &Pdu,
 	origin: &ServerName,
 	room_id: &RoomId,
+	is_historical: bool,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -152,16 +153,17 @@ where
 		event_id = %incoming_pdu.event_id,
 		"Performing soft-fail check"
 	);
-	let mut soft_fail = match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
-		| (false, _) => true,
-		| (true, None) => false,
-		| (true, Some(redact_id)) =>
-			!self
-				.services
-				.state_accessor
-				.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
-				.await?,
-	};
+	let mut soft_fail =
+		match (is_historical || auth_check, incoming_pdu.redacts_id(&room_version_id)) {
+			| (false, _) => true,
+			| (true, None) => false,
+			| (true, Some(redact_id)) =>
+				!self
+					.services
+					.state_accessor
+					.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
+					.await?,
+		};
 
 	// 13. Use state resolution to find new room state
 
@@ -249,7 +251,7 @@ where
 			.await?;
 	}
 
-	if !soft_fail {
+	if !is_historical && !soft_fail {
 		// Don't call the below checks on events that have already soft-failed, there's
 		// no reason to re-calculate that.
 		// 14-pre. If the event is not a state event, ask the policy server about it
@@ -304,10 +306,45 @@ where
 				soft_fail = true;
 			}
 		}
+
+		// 14. Check if the event passes auth based on the "current state" of the room,
+		//     if not soft fail it
+		if !soft_fail {
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				"Performing step 14 auth check"
+			);
+			let auth_check = state_res::event_auth::auth_check(
+				&room_version,
+				&incoming_pdu,
+				None, // third-party invite
+				|ty, sk| {
+					let ty = ty.clone();
+					let sk = sk.to_owned();
+					let room_id = room_id.to_owned();
+					async move {
+						self.services
+							.state_accessor
+							.room_state_get(&room_id, &ty, &sk)
+							.await
+							.ok()
+					}
+				},
+				create_event.as_pdu(),
+			)
+			.await
+			.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+
+			if !auth_check {
+				warn!(
+					event_id = %incoming_pdu.event_id,
+					"Event has failed step 14 auth check with current state of the room"
+				);
+				soft_fail = true;
+			}
+		}
 	}
 
-	// 14. Check if the event passes auth based on the "current state" of the room,
-	//     if not soft fail it
 	if soft_fail {
 		info!(
 			event_id = %incoming_pdu.event_id,

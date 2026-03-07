@@ -1,21 +1,17 @@
 use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{RoomVersion, debug};
+use conduwuit::{RoomVersion, debug, info, warn};
 use conduwuit_core::{
 	Event, PduEvent, Result, err,
-	result::FlatOk,
 	state_res::{self, StateMap},
 	utils::{
 		IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash,
 		stream::{BroadbandExt, TryIgnore},
 	},
-	warn,
 };
 use conduwuit_database::{Deserialized, Ignore, Interfix, Map};
-use futures::{
-	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::join_all, pin_mut,
-};
+use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::join_all};
 use ruma::{
 	EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId, UserId,
 	events::{
@@ -99,53 +95,121 @@ impl Service {
 		room_id: &RoomId,
 		shortstatehash: u64,
 		statediffnew: Arc<CompressedState>,
-		_statediffremoved: Arc<CompressedState>,
+		statediffremoved: Arc<CompressedState>,
 		state_lock: &RoomMutexGuard,
 	) -> Result {
-		let event_ids = statediffnew
+		info!(
+			%room_id,
+			%shortstatehash,
+			added = ?statediffnew.len(),
+			removed = ?statediffremoved.len(),
+			"force_state"
+		);
+		self.set_room_state(room_id, shortstatehash, state_lock);
+
+		statediffnew
 			.iter()
 			.stream()
-			.map(|&new| parse_compressed_state_event(new).1)
-			.then(|shorteventid| {
-				self.services
+			.broad_then(|&new| async move {
+				let (shortstatekey, shorteventid) = parse_compressed_state_event(new);
+				if let Ok((event_type, state_key)) = self
+					.services
 					.short
-					.get_eventid_from_short::<Box<_>>(shorteventid)
+					.get_statekey_from_short(shortstatekey)
+					.await
+				{
+					self.services.state_accessor.invalidate_room_state(
+						room_id,
+						&event_type,
+						&state_key,
+					);
+
+					if event_type == StateEventType::RoomMember
+						|| event_type == StateEventType::SpaceChild
+					{
+						let Ok(event_id) = self
+							.services
+							.short
+							.get_eventid_from_short::<Box<_>>(shorteventid)
+							.await
+						else {
+							return true;
+						};
+
+						if let Ok(pdu) = self.services.timeline.get_pdu(&event_id).await {
+							match pdu.kind {
+								| TimelineEventType::RoomMember => {
+									if let Some(user_id) =
+										pdu.state_key.as_ref().and_then(|k| UserId::parse(k).ok())
+									{
+										if let Err(e) = self
+											.services
+											.state_cache
+											.update_membership(room_id, user_id, &pdu, false)
+											.await
+										{
+											warn!(%room_id, %user_id, "Failed to update membership cache in force_state: {e:?}");
+										}
+
+										// Also invalidate the state accessor cache for this
+										// user's membership just in case it wasn't in
+										// the diff (e.g. if we just joined/knocked)
+										self.services.state_accessor.invalidate_room_state(
+											room_id,
+											&StateEventType::RoomMember,
+											user_id.as_str(),
+										);
+									}
+								},
+								| TimelineEventType::SpaceChild => {
+									self.services
+										.spaces
+										.roomid_spacehierarchy_cache
+										.lock()
+										.await
+										.remove(room_id);
+								},
+								| _ => {},
+							}
+						}
+					}
+				}
+				true
 			})
-			.ignore_err();
+			.for_each(|_| async {})
+			.await;
 
-		pin_mut!(event_ids);
-		while let Some(event_id) = event_ids.next().await {
-			let Ok(pdu) = self.services.timeline.get_pdu(&event_id).await else {
-				continue;
-			};
+		statediffremoved
+			.iter()
+			.stream()
+			.broad_all(|&removed| async move {
+				let (shortstatekey, _) = parse_compressed_state_event(removed);
+				if let Ok((event_type, state_key)) = self
+					.services
+					.short
+					.get_statekey_from_short(shortstatekey)
+					.await
+				{
+					self.services.state_accessor.invalidate_room_state(
+						room_id,
+						&event_type,
+						&state_key,
+					);
 
-			match pdu.kind {
-				| TimelineEventType::RoomMember => {
-					let Some(user_id) = pdu.state_key.as_ref().map(UserId::parse).flat_ok()
-					else {
-						continue;
-					};
-
-					self.services
-						.state_cache
-						.update_membership(room_id, user_id, &pdu, false)
-						.await?;
-				},
-				| TimelineEventType::SpaceChild => {
-					self.services
-						.spaces
-						.roomid_spacehierarchy_cache
-						.lock()
-						.await
-						.remove(room_id);
-				},
-				| _ => continue,
-			}
-		}
+					if event_type == StateEventType::SpaceChild {
+						self.services
+							.spaces
+							.roomid_spacehierarchy_cache
+							.lock()
+							.await
+							.remove(room_id);
+					}
+				}
+				true
+			})
+			.await;
 
 		self.services.state_cache.update_joined_count(room_id).await;
-
-		self.set_room_state(room_id, shortstatehash, state_lock);
 
 		Ok(())
 	}
@@ -368,6 +432,16 @@ impl Service {
 			.await
 			.map(|content: RoomCreateEventContent| content.room_version)
 			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
+	}
+
+	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
+		const KEY_LEN: usize = size_of::<ShortEventId>();
+
+		self.db
+			.shorteventid_shortstatehash
+			.aqry::<KEY_LEN, _>(&shorteventid)
+			.await
+			.deserialized()
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {

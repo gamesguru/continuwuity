@@ -52,16 +52,6 @@ pub(crate) async fn invite_user_route(
 
 	match &body.recipient {
 		| invite_user::v3::InvitationRecipient::UserId { user_id: recipient_user } => {
-			let sender_filter_level = services
-				.users
-				.invite_filter_level(recipient_user, sender_user)
-				.await;
-
-			if !matches!(sender_filter_level, FilterLevel::Allow) {
-				// drop invites if the sender has the recipient filtered
-				return Ok(invite_user::v3::Response {});
-			}
-
 			if let Ok(target_user_membership) = services
 				.rooms
 				.state_accessor

@@ -59,9 +59,9 @@ impl Resolver {
 		opts.timeout = Duration::from_secs(config.dns_timeout);
 		opts.attempts = config.dns_attempts as usize;
 		opts.try_tcp_on_error = config.dns_tcp_fallback;
-		opts.num_concurrent_reqs = 1;
+		opts.num_concurrent_reqs = 3;
 		opts.edns0 = true;
-		opts.case_randomization = true;
+		opts.case_randomization = false;
 		opts.ip_strategy = match config.ip_lookup_strategy {
 			| 1 => hickory_resolver::config::LookupIpStrategy::Ipv4Only,
 			| 2 => hickory_resolver::config::LookupIpStrategy::Ipv6Only,

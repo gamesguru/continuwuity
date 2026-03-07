@@ -9,7 +9,7 @@ pub mod server;
 
 pub mod admin;
 
-pub(crate) use self::router::{Ruma, RumaResponse, State};
+pub(crate) use self::router::{OptionalRuma, Ruma, RumaResponse, State};
 
 conduwuit::mod_ctor! {}
 conduwuit::mod_dtor! {}

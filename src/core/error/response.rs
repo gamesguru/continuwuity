@@ -15,7 +15,7 @@ use crate::error;
 impl axum::response::IntoResponse for Error {
 	fn into_response(self) -> axum::response::Response {
 		let status = self.status_code();
-		if status.is_server_error() {
+		if status == StatusCode::INTERNAL_SERVER_ERROR {
 			error!(
 				error = %self,
 				error_debug = ?self,
@@ -23,9 +23,15 @@ impl axum::response::IntoResponse for Error {
 				status = %status,
 				"Server error"
 			);
+		} else if status.is_server_error() {
+			crate::warn!(
+				error = %self,
+				kind = ?self.kind(),
+				status = %status,
+				"Server error"
+			);
 		} else if status.is_client_error() {
-			use crate::debug_error;
-			debug_error!(
+			crate::debug_warn!(
 				error = %self,
 				kind = ?self.kind(),
 				status = %status,

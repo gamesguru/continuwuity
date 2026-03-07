@@ -28,7 +28,7 @@ use ruma::{
 		},
 	},
 };
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 
 use crate::{Dep, account_data, globals, media::MXC_LENGTH, rooms, rooms::state::RoomMutexGuard};
 
@@ -147,7 +147,12 @@ impl crate::Service for Service {
 				},
 				sig = signals.recv() => match sig {
 					Ok(sig) => self.handle_signal(sig).await,
-					Err(_) => continue,
+					Err(broadcast::error::RecvError::Lagged(_)) => {
+						continue;
+					},
+					Err(broadcast::error::RecvError::Closed) => {
+						break;
+					},
 				},
 			}
 		}
@@ -369,7 +374,12 @@ impl Service {
 
 	async fn process_command(&self, command: CommandInput) -> ProcessorResult {
 		let handle_guard = self.handle.read().await;
-		let handle = handle_guard.as_ref().expect("Admin module is not loaded");
+		let Some(handle) = handle_guard.as_ref() else {
+			return Err(CommandOutput::text_plain(
+				"Admin command handler is not yet loaded. The server may still be booting or \
+				 the admin module failed to load.",
+			));
+		};
 
 		let services = self
 			.services

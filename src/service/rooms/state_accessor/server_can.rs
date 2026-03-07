@@ -1,4 +1,4 @@
-use conduwuit::{implement, utils::stream::ReadyExt, warn};
+use conduwuit::{debug_warn, implement, utils::stream::ReadyExt};
 use futures::StreamExt;
 use ruma::{
 	EventId, RoomId, ServerName,
@@ -19,10 +19,12 @@ pub async fn server_can_see_event(
 	event_id: &EventId,
 ) -> bool {
 	let Ok(shortstatehash) = self.pdu_shortstatehash(event_id).await else {
-		warn!(
+		debug_warn!(
 			"Unable to visibility check event {} in room {} for server {}: shortstatehash not \
 			 found",
-			event_id, room_id, origin
+			event_id,
+			room_id,
+			origin
 		);
 		return false;
 	};

@@ -46,15 +46,39 @@ pub(super) async fn check(&self) -> Result {
 		join!(world_readable, server_in_room, server_can_see, acl_check);
 
 	if !acl_check {
-		return Err!(Request(Forbidden("Server access denied.")));
+		return Err!(Request(Forbidden(warn!(
+			%self.origin,
+			%self.room_id,
+			"Server access denied by ACL."
+		))));
 	}
 
 	if !world_readable && !server_in_room {
-		return Err!(Request(Forbidden("Server is not in room.")));
+		return Err!(Request(Forbidden(warn!(
+			%self.origin,
+			%self.room_id,
+			"Server is not in room and room is not world-readable."
+		))));
 	}
 
 	if server_can_see.is_some_and(is_false!()) {
-		return Err!(Request(Forbidden("Server is not allowed to see event.")));
+		let event_id = self.event_id.expect("server_can_see implies event_id");
+		let event_type = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu(event_id)
+			.await
+			.ok()
+			.map(|pdu| pdu.kind.to_string());
+
+		return Err!(Request(Forbidden(info!(
+			%self.origin,
+			%self.room_id,
+			%event_id,
+			?event_type,
+			"Server is not allowed to see event."
+		))));
 	}
 
 	Ok(())

@@ -18,11 +18,13 @@ use conduwuit::{
 	},
 	warn,
 };
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt, future::ready};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
-	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
-	api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
+	OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomId, RoomVersionId,
+	api::federation::event::get_room_state,
+	events::{AnyStateEvent, StateEventType},
+	serde::Raw,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -92,6 +94,239 @@ pub(super) async fn parse_pdu(&self) -> Result {
 		},
 	}
 	.await
+}
+
+#[admin_command]
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
+	let pdu_json = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu_json(&event_id)
+		.await
+		.map_err(|_| err!("PDU not found in database."))?;
+
+	let pdu: PduEvent = serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
+	let room_id = pdu
+		.room_id()
+		.ok_or_else(|| err!("PDU has no room_id."))?
+		.to_owned();
+
+	let create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.map_err(|_| err!("Failed to find create event for room."))?;
+
+	let origin = pdu
+		.origin
+		.clone()
+		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+	self.services
+		.rooms
+		.event_handler
+		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id, true)
+		.await?;
+
+	self.write_str("Successfully rescued PDU.").await
+}
+
+#[admin_command]
+pub(super) async fn list_outliers(
+	&self,
+	room: Option<OwnedRoomOrAliasId>,
+	sender: Option<OwnedUserId>,
+	limit: Option<usize>,
+) -> Result {
+	let limit = limit.unwrap_or(100);
+
+	let room_id = if let Some(room) = room {
+		Some(self.services.rooms.alias.resolve(&room).await?)
+	} else {
+		None
+	};
+
+	let mut outliers: Vec<(OwnedEventId, PduEvent)> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| {
+			let room_match = room_id
+				.as_ref()
+				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
+			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+			ready(room_match && sender_match)
+		})
+		.collect()
+		.await;
+
+	// Sort by origin_server_ts
+	outliers.sort_by_key(|(_, pdu)| pdu.origin_server_ts);
+
+	let mut count = 0_usize;
+	let mut body = String::new();
+	for (event_id, pdu) in outliers {
+		if count >= limit {
+			writeln!(body, "--- Stopped after {limit} entries ---")?;
+			break;
+		}
+
+		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
+		let sender = pdu.sender();
+		let kind = pdu.kind.to_string();
+		let ts = pdu.origin_server_ts;
+		writeln!(
+			body,
+			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: {kind}"
+		)?;
+		count = count.saturating_add(1);
+	}
+
+	if body.is_empty() {
+		return Err!("No outliers found.");
+	}
+
+	self.write_str(&format!("Outliers:\n```\n{body}\n```"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn purge_outliers(
+	&self,
+	room: Option<OwnedRoomOrAliasId>,
+	sender: Option<OwnedUserId>,
+	all: bool,
+) -> Result {
+	if room.is_none() && sender.is_none() && !all {
+		return Err!("You must specify a room, a sender, or use --all to purge outliers.");
+	}
+
+	let room_id = if let Some(room) = room {
+		Some(self.services.rooms.alias.resolve(&room).await?)
+	} else {
+		None
+	};
+
+	let outliers: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| {
+			let room_match = room_id
+				.as_ref()
+				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
+			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+			ready(room_match && sender_match)
+		})
+		.map(|(event_id, _)| event_id)
+		.collect()
+		.await;
+
+	let count = outliers.len();
+	for event_id in outliers {
+		self.services.rooms.outlier.remove_outlier(&event_id);
+	}
+
+	self.write_str(&format!("Purged {count} outliers.")).await
+}
+
+#[admin_command]
+pub(super) async fn view_extremities(&self, room: OwnedRoomOrAliasId) -> Result {
+	let room_id = self.services.rooms.alias.resolve(&room).await?;
+	let extremities: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let num = extremities.len();
+	let mut body = String::new();
+	for event_id in extremities {
+		let pdu = self.services.rooms.timeline.get_pdu(&event_id).await;
+		match pdu {
+			| Ok(pdu) => {
+				let ts = pdu.origin_server_ts;
+				let sender = pdu.sender();
+				writeln!(body, "{event_id}\tTS: {ts}\tSender: {sender}")?;
+			},
+			| Err(_) => {
+				writeln!(body, "{event_id}\tERROR: PDU not found in timeline")?;
+			},
+		}
+	}
+
+	self.write_str(&format!("Room {room_id} has {num} extremities:\n```\n{body}\n```"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
+	let mut outliers: Vec<PduEvent> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| ready(pdu.room_id().is_some_and(|r| r == room_id)))
+		.map(|(_, pdu)| pdu)
+		.collect()
+		.await;
+
+	// Sort by origin_server_ts
+	outliers.sort_by_key(|pdu| pdu.origin_server_ts);
+
+	let mut count = 0_usize;
+	for pdu in outliers {
+		let event_id = pdu.event_id().to_owned();
+		let pdu_json = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_json(&event_id)
+			.await
+			.map_err(|_| err!("PDU not found in database."))?;
+
+		let create_event = self
+			.services
+			.rooms
+			.state_accessor
+			.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+			.await
+			.map_err(|_| err!("Failed to find create event for room."))?;
+
+		let origin = pdu
+			.origin
+			.clone()
+			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+		if self
+			.services
+			.rooms
+			.event_handler
+			.upgrade_outlier_to_timeline_pdu(
+				pdu,
+				pdu_json,
+				&create_event,
+				&origin,
+				&room_id,
+				true,
+			)
+			.await
+			.is_ok()
+		{
+			count = count.saturating_add(1);
+		}
+	}
+
+	self.write_str(&format!("Rescued {count} PDUs in room {room_id}."))
+		.await
 }
 
 #[admin_command]

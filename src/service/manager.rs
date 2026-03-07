@@ -1,6 +1,6 @@
 use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
-use conduwuit::{Err, Error, Result, Server, debug, debug_warn, error, trace, utils::time, warn};
+use conduwuit::{Err, Error, Result, Server, debug, error, info, trace, utils::time, warn};
 use futures::{FutureExt, TryFutureExt};
 use tokio::{
 	sync::{Mutex, MutexGuard},
@@ -34,9 +34,12 @@ impl Manager {
 	}
 
 	pub(super) async fn poll(&self) -> Result<()> {
-		if let Some(manager) = &mut *self.manager.lock().await {
+		let mut lock = self.manager.lock().await;
+		if let Some(manager) = &mut *lock {
 			trace!("Polling service manager...");
-			return manager.await?;
+			let res = manager.await;
+			*lock = None;
+			return res.map_err(Error::from).and_then(|res| res);
 		}
 
 		Ok(())
@@ -45,7 +48,7 @@ impl Manager {
 	pub(super) async fn start(self: Arc<Self>) -> Result<()> {
 		let mut workers = self.workers.lock().await;
 
-		debug!("Starting service manager...");
+		info!("Starting service manager...");
 		let self_ = self.clone();
 		_ = self.manager.lock().await.insert(
 			self.server
@@ -63,7 +66,7 @@ impl Manager {
 			.map(|arc| arc.expect("services available for manager startup"))
 			.collect();
 
-		debug!("Starting service workers...");
+		info!("Starting service workers...");
 		for service in services {
 			self.start_worker(&mut workers, &service).await?;
 		}
@@ -132,7 +135,7 @@ impl Manager {
 		error!("service {name:?} aborted: {error}");
 
 		if !self.server.running() {
-			debug_warn!("service {name:?} error ignored on shutdown.");
+			warn!("service {name:?} error ignored on shutdown.");
 			return Ok(());
 		}
 
@@ -160,7 +163,7 @@ impl Manager {
 			);
 		}
 
-		debug!("Service {:?} worker starting...", service.name());
+		info!("Service {:?} worker starting...", service.name());
 		workers.spawn_on(worker(service.clone()), self.server.runtime());
 
 		Ok(())

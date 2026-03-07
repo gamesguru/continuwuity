@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use conduwuit::{Result, implement, matrix::PduEvent};
+use conduwuit::{Result, implement, matrix::PduEvent, utils::stream::TryIgnore};
 use database::{Deserialized, Json, Map};
-use ruma::{CanonicalJsonObject, EventId};
+use futures::Stream;
+use ruma::{CanonicalJsonObject, EventId, OwnedEventId};
 
 pub struct Service {
 	db: Data,
@@ -44,9 +45,22 @@ pub async fn get_pdu_outlier(&self, event_id: &EventId) -> Result<PduEvent> {
 		.deserialized()
 }
 
+#[implement(Service)]
+pub fn stream(&self) -> impl Stream<Item = (OwnedEventId, PduEvent)> + Send + '_ {
+	self.db
+		.eventid_outlierpdu
+		.stream::<OwnedEventId, PduEvent>()
+		.ignore_err()
+}
+
 /// Append the PDU as an outlier.
 #[implement(Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
 pub fn add_pdu_outlier(&self, event_id: &EventId, pdu: &CanonicalJsonObject) {
 	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
 }
+
+/// Remove the PDU from the outlier tree.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub fn remove_outlier(&self, event_id: &EventId) { self.db.eventid_outlierpdu.remove(event_id); }
