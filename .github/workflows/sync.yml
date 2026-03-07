@@ -7,6 +7,7 @@ on:
 
 jobs:
   main:
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_SYNC_MAIN != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -23,6 +24,7 @@ jobs:
           git push origin main
 
   metadata:
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_SYNC_METADATA != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -40,6 +42,7 @@ jobs:
           git push origin _metadata/badges
 
   forge-head:
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_SYNC_FORGE_HEAD != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
