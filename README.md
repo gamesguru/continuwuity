@@ -21,9 +21,9 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 
 [![Codeberg](https://img.shields.io/badge/Codeberg-mirror-2185D0?style=flat&logo=codeberg&labelColor=fff)](https://codeberg.org/continuwuity/continuwuity) [![Stars](https://codeberg.org/continuwuity/continuwuity/badges/stars.svg?style=flat)](https://codeberg.org/continuwuity/continuwuity/stars)
 
-[![GitHub Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fbadge-main.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
-[![Forgejo Complement Tests](https://forgejo.ellis.link/continuwuation/continuwuity/actions/workflows/complement.yml/badge.svg)](https://forgejo.ellis.link/continuwuation/continuwuity/actions)
-[![Forgejo Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fbadge-main.json)](https://forgejo.ellis.link/continuwuation/continuwuity/actions)
+[![GitHub Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fbadge-main.json)](https://github.com/continuwuity/continuwuity/actions/workflows/test.yml)
+[![Forgejo Complement Tests](https://forgejo.ellis.link/gamesguru/continuwuity/actions/workflows/complement.yml/badge.svg)](https://forgejo.ellis.link/gamesguru/continuwuity/actions)
+[![Forgejo Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fbadge-main.json)](https://forgejo.ellis.link/gamesguru/continuwuity/actions)
 
 ### Complement Test Status
 

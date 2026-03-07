@@ -153,7 +153,7 @@ jobs:
   cpu-arm64-pi5:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
-    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 != ''
+    if: github.ref == 'refs/heads/main' && vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 != ''
     runs-on: ${{ matrix.os }}
     env:
       PROFILE: release-max-perf
