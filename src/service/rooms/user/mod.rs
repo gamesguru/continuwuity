@@ -15,6 +15,8 @@ struct Data {
 	db: Arc<Database>,
 	userroomid_notificationcount: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
+	#[allow(dead_code)]
+	// TODO: remove this redundant field once a migration moves the data to its own map
 	roomuserid_lastnotificationread: Arc<Map>,
 	roomsynctoken_shortstatehash: Arc<Map>,
 }
@@ -54,9 +56,7 @@ pub fn reset_notification_counts(&self, user_id: &UserId, room_id: &RoomId) {
 
 	let roomuser_id = (room_id, user_id);
 	let count = self.services.globals.next_count().unwrap();
-	self.db
-		.roomuserid_lastnotificationread
-		.put(roomuser_id, count);
+	self.db.userroomid_highlightcount.put(roomuser_id, count);
 }
 
 #[implement(Service)]
@@ -85,7 +85,7 @@ pub async fn highlight_count(&self, user_id: &UserId, room_id: &RoomId) -> u64 {
 pub async fn last_notification_read(&self, user_id: &UserId, room_id: &RoomId) -> u64 {
 	let key = (room_id, user_id);
 	self.db
-		.roomuserid_lastnotificationread
+		.userroomid_highlightcount
 		.qry(&key)
 		.await
 		.deserialized()
