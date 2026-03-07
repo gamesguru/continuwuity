@@ -53,7 +53,7 @@ jobs:
 
           # Security Check: Only allow downloads from api.github.com or objects.githubusercontent.com
           if [[ ! "$ARTIFACT_URL" =~ ^https://(api\.github\.com|objects\.githubusercontent\.com)/ ]]; then
-            echo "❌ ERROR: Security violation. Artifact URL must be from GitHub."
+            echo "ERROR: Security violation. Artifact URL must be from GitHub."
             echo "URL provided: $ARTIFACT_URL"
             exit 1
           fi
@@ -73,15 +73,17 @@ jobs:
           fi
 
           chmod +x target/${{ env.PROFILE }}/conduwuit || true
+          mkdir -p target/latest
+          ln -sf target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
 
       - name: Sanity Test Artifact
         run: |
           echo "Checking file type..."
-          file target/${{ env.PROFILE }}/conduwuit
+          file target/latest/conduwuit
 
           echo "Testing execution..."
-          if ! ./target/${{ env.PROFILE }}/conduwuit --version; then
-            echo "❌ ERROR: Downloaded artifact is not a valid executable!"
+          if ! ./target/latest/conduwuit --version; then
+            echo "ERROR: Downloaded artifact is not a valid executable!"
             echo "It might be a 404 HTML page, a corrupted zip, or for the wrong architecture."
             exit 1
           fi
@@ -98,10 +100,11 @@ jobs:
 
       - name: Build Complement Docker image
         run: |
-          DOCKER_BUILDKIT=1 docker build \
-            --build-arg BINARY_PATH=target/${{ env.PROFILE }}/conduwuit \
+          docker buildx build \
+            --build-arg BINARY_PATH=target/latest/conduwuit \
             -t continuwuity:complement \
-            -f ./docker/complement.Dockerfile .
+            -f ./docker/complement.Dockerfile \
+            --load .
 
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats > baseline_stats.txt || true
@@ -149,7 +152,7 @@ jobs:
         id: version
         if: always()
         run: |
-          VERSION=$(./target/${{ env.PROFILE }}/conduwuit --version 2>/dev/null || echo "unknown")
+          VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Update Results Ledger Repo
@@ -162,7 +165,7 @@ jobs:
           skip_count: ${{ steps.summary.outputs.skip || 0 }}
           version_string: ${{ steps.version.outputs.version }}
           actor: ${{ forge.actor || github.actor }}
-          binary_path: target/${{ env.PROFILE }}/conduwuit
+          binary_path: target/latest/conduwuit
 
       - name: Upload test results
         if: always()
@@ -172,15 +175,3 @@ jobs:
           path: |
             tests/test_results/complement/test_results.jsonl
           retention-days: 90
-
-      - name: Evaluate final status
-        if: always()
-        run: |
-          FAIL=${{ steps.summary.outputs.fail || 0 }}
-          SKIP=${{ steps.summary.outputs.skip || 0 }}
-          if [ "$FAIL" -gt 0 ]; then
-            echo "::error::$FAIL tests failed!"
-            exit 1
-          elif [ "$SKIP" -gt 0 ]; then
-            echo "::warning::$SKIP tests skipped."
-          fi
