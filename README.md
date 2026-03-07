@@ -23,7 +23,15 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 
 Working reference:
 
-[![Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub-badge.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+[![Working](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub-badge.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+
+Trials:
+
+[![Trial 1 (Branch _metadata/badges)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+
+[![Trial 2 (Branch refs/heads/_metadata/badges)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Frefs%2Fheads%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+
+[![Trial 3 (Branch badges path github/commits...)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
 
 <table border="0">
   <tr>
