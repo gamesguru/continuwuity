@@ -84,10 +84,19 @@ runs:
 
         # Generate badges
         if [ "$FAIL" -gt 0 ]; then COLOR="red"; elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"; else COLOR="green"; fi
-        mkdir -p "badges/$PROVIDER/commits"
+        mkdir -p "badges/$PROVIDER/commits" "badges/$PROVIDER/refs"
         BADGE=$(jq -n --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" --arg color "$COLOR" \
           '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}')
+
+        # Branch badge
         echo "$BADGE" > "badges/$PROVIDER/badge-${BRANCH_NAME}.json"
+
+        # Version/Tag badge
+        if [ -n "$VERSION_STRING" ]; then
+          echo "$BADGE" > "badges/$PROVIDER/refs/${VERSION_STRING}.json"
+        fi
+
+        # Commit badge
         echo "$BADGE" > "badges/$PROVIDER/commits/${COMMIT_HASH}.json"
 
         # Commit and Push
