@@ -1,27 +1,29 @@
 CREATE TABLE IF NOT EXISTS runs (
-    run_id text PRIMARY KEY,
+    version_string text,
+    binary_sha256 text,
+    run_id text,
     run_date text,
+    features text,
     commit_hash text,
     branch text,
     author_name text,
     provider text,
     host_info text,
-    binary_sha256 text,
-    version_string text,
-    features text,
     passed_count integer,
     skipped_count integer,
     failed_count integer,
     prev_hash text,
-    row_hash text
+    row_hash text,
+    PRIMARY KEY (version_string, run_id)
 );
 
 CREATE TABLE IF NOT EXISTS run_details (
+    version_string text,
     run_id text,
     file_name text,
     status text,
     row_hash text,
-    UNIQUE (run_id, file_name)
+    UNIQUE (version_string, run_id, file_name)
 );
 
 CREATE TABLE IF NOT EXISTS test_scores (

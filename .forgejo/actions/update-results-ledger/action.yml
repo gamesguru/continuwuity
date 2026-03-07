@@ -38,7 +38,9 @@ runs:
         ACTOR="${{ inputs.actor }}"
         BINARY_PATH="${{ inputs.binary_path }}"
         FEATURES="${{ inputs.features }}"
-        COMMIT_HASH="${GITHUB_SHA:-unknown}"
+        # Attempt to extract commit hash from the binary version string
+        BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
+        COMMIT_HASH="${BIN_VER_HASH:-${GITHUB_SHA:-unknown}}"
         RUN_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
         RUN_ID="${COMMIT_HASH}-${RUN_DATE}"
         PROVIDER=$([ -n "$FORGEJO_URL" ] && echo "forgejo" || echo "github")
@@ -72,8 +74,9 @@ runs:
           --arg binary_sha256 "$BIN_SHA" --arg version_string "$VERSION_STRING" \
           --arg features "$FEATURES" \
           --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" \
-          '{run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, binary_sha256: $binary_sha256, version_string: $version_string, features: $features, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
-        jq -c --arg run_id "$RUN_ID" '. + {run_id: $run_id}' /tmp/run.jsonl >> run_details.jsonl
+          '{version_string: $version_string, binary_sha256: $binary_sha256, run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, features: $features, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
+
+        jq -c --arg version_string "$VERSION_STRING" --arg run_id "$RUN_ID" '. + {version_string: $version_string, run_id: $run_id}' /tmp/run.jsonl >> run_details.jsonl
 
         # Import and generate badges
         make import
@@ -84,8 +87,21 @@ runs:
         echo "$BADGE" > "badges/$PROVIDER/badge-${BRANCH_NAME}.json"
         echo "$BADGE" > "badges/$PROVIDER/commits/${COMMIT_HASH}.json"
 
-        # Commit and Push
+        # Commit and Push (with retry for concurrent builds)
         git add .
         if git commit -m "Add test results for ${COMMIT_HASH} [skip ci]"; then
-          git push origin HEAD:_metadata/badges --force
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          until git push origin HEAD:_metadata/badges; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
+              echo "Failed to push after $MAX_RETRIES attempts."
+              exit 1
+            fi
+            echo "Push failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+            # Random sleep between 1 and 5 seconds to avoid thundering herd
+            sleep $(( (RANDOM % 5) + 1 ))
+            # Fetch and rebase to integrate changes from other concurrent runners
+            git pull --rebase origin _metadata/badges
+          done
         fi
