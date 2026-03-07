@@ -54,7 +54,10 @@ jobs:
           fi
 
           mkdir -p target/${{ env.PROFILE }}
-          echo "Downloading bundle from: $ARTIFACT_URL"
+          echo "Downloading bundle from:"
+          echo ""
+          echo "$ARTIFACT_URL"
+          echo ""
           curl -L -o target/${{ env.PROFILE }}/bundle.zip -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
       - name: SHA256 sum check (zip bundle verification)
