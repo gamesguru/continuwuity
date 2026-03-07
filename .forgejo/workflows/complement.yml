@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       artifact_url:
-        description: "URL to the conduwuit artifact (binary or zip)"
+        description: "URL to zipped conduwuit binary"
         required: true
         type: string
 
@@ -54,7 +54,10 @@ jobs:
           fi
 
           mkdir -p target/${{ env.PROFILE }}
-          echo "Downloading bundle from: $ARTIFACT_URL"
+          echo "Downloading bundle from:"
+          echo ""
+          echo "$ARTIFACT_URL"
+          echo ""
           curl -L -o target/${{ env.PROFILE }}/bundle.zip -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
       - name: SHA256 sum check (zip bundle validation)
@@ -69,6 +72,16 @@ jobs:
           unzip -o target/${{ env.PROFILE }}/bundle.zip -d target/${{ env.PROFILE }}/
           rm target/${{ env.PROFILE }}/bundle.zip
           chmod +x target/${{ env.PROFILE }}/conduwuit
+
+      - name: Reject oversized (non-release?) binaries
+        run: |
+          BINARY="target/${{ env.PROFILE }}/conduwuit"
+          SIZE_MB=$(( $(stat -c%s "$BINARY") / 1048576 ))
+          echo "Binary size: ${SIZE_MB} MB"
+          if [ "$SIZE_MB" -gt 125 ]; then
+            echo "FATAL: Binary is ${SIZE_MB} MB (>125 MB). Likely a debug build -- aborting."
+            exit 1
+          fi
 
       - name: GPG signature check (binary verification)
         env:
@@ -93,7 +106,6 @@ jobs:
       - name: Get conduwuit version
         id: version
         run: |
-          # Use raw version output from the binary
           VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
           echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
 
