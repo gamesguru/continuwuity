@@ -5,13 +5,13 @@ import hashlib
 
 INSERT_RUN = """
 INSERT
-    OR IGNORE INTO runs (version_string, binary_sha256, run_id, run_date, features, commit_hash, branch, author_name, provider, host_info, passed_count, skipped_count, failed_count, prev_hash, row_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    OR IGNORE INTO runs (version_string, binary_sha256, run_date, features, commit_hash, branch, author_name, provider, host_info, passed_count, skipped_count, failed_count, prev_hash, row_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 INSERT_RUN_DETAILS = """
 INSERT
-    OR IGNORE INTO run_details (version_string, run_id, file_name, status, row_hash)
+    OR IGNORE INTO run_details (version_string, run_date, file_name, status, row_hash)
         VALUES (?, ?, ?, ?, ?);
 """
 
@@ -90,7 +90,6 @@ if os.path.exists("runs.jsonl"):
                     (
                         d.get("version_string"),
                         d.get("binary_sha256"),
-                        d.get("run_id"),
                         d.get("run_date"),
                         d.get("features"),
                         d.get("commit_hash"),
@@ -129,7 +128,7 @@ if os.path.exists("run_details.jsonl"):
                 cur = db.cursor()
                 cur.execute(
                     INSERT_RUN_DETAILS,
-                    (d.get("version_string"), d.get("run_id"), file_name, status, row_hash),
+                    (d.get("version_string"), d.get("run_date"), file_name, status, row_hash),
                 )
 
                 if cur.rowcount > 0:
