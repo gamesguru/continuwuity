@@ -74,7 +74,6 @@ jobs:
           gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
           echo "OK. GPG signature verified."
 
-
       - name: Post-verification setup
         run: |
           mkdir -p target/latest
