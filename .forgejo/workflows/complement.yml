@@ -71,9 +71,10 @@ jobs:
 
       - name: GPG signature check (binary verification)
         env:
-          PUBKEY: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}
+          PUBKEY: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}
         run: |
           echo "Verifying GPG signature..."
+          echo "Debug: Key length is ${#PUBKEY}"
           echo "$PUBKEY" | tee key.asc
           gpg --import key.asc
           gpg --list-keys
