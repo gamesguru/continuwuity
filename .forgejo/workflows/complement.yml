@@ -72,8 +72,10 @@ jobs:
       - name: GPG signature check (binary verification)
         run: |
           echo "Verifying GPG signature..."
-          echo "${{ secrets.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}" | gpg --batch --import || true
-          gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit || true
+          KEY="${{ secrets.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}"
+          echo "Debug: Secret length is ${#KEY}"
+          echo "$KEY" | gpg --batch --import
+          gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
           echo "OK. GPG signature verified."
 
       - name: Post-verification setup
