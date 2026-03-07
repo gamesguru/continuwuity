@@ -32,6 +32,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        set -x  # echo commands for debugging
 
         PASS="${{ inputs.pass_count }}"
         FAIL="${{ inputs.fail_count }}"
