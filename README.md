@@ -33,6 +33,12 @@ Trials:
 
 [![Trial 3 (Branch badges path github/commits...)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
 
+[![Trial 4 (Forgejo raw path like GitHub trial 3)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbadges%2Fforgejo%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
+
+[![Trial 5 (Forgejo raw path github provider checkout)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
+
+[![Trial 6 (Forgejo raw path without badges repo)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fforgejo%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
+
 <table border="0">
   <tr>
     <td valign="top"><b>Version</b></td>
