@@ -106,7 +106,7 @@ jobs:
         run: |
           ls -l target/latest/conduwuit
           DOCKER_BUILDKIT=1 docker buildx build \
-            --build-arg BINARY_PATH=./target/latest/conduwuit \
+            --build-arg BINARY_PATH=target/latest/conduwuit \
             -t continuwuity:complement \
             -f ./docker/complement.Dockerfile \
             --load .
