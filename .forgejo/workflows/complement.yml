@@ -72,11 +72,14 @@ jobs:
       - name: GPG signature check (binary verification)
         env:
           PUBKEY: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}
+          PUBKEY_ID: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY_ID }}
         run: |
           echo "Verifying GPG signature..."
           echo "Debug: Key length is ${#PUBKEY}"
           echo "$PUBKEY" | tee key.asc
           gpg --import key.asc
+          # Trust the imported key
+          echo "${PUBKEY_ID}:6:" | gpg --import-ownertrust
           gpg --list-keys
           gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
           echo "OK. GPG signature verified."
