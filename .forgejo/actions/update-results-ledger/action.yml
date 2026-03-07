@@ -25,6 +25,7 @@ runs:
   using: "composite"
   steps:
     - name: Process and push results
+      id: import
       shell: bash
       run: |
         JSONL="${{ inputs.results_file }}"
@@ -44,7 +45,7 @@ runs:
         RUN_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
         RUN_ID="${COMMIT_HASH}-${RUN_DATE}"
         PROVIDER=$([ -n "$FORGEJO_URL" ] && echo "forgejo" || echo "github")
-        BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} || echo "main")
+        BRANCH_NAME=$(echo "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-main}}" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
         [ -z "$BRANCH_NAME" ] && BRANCH_NAME="main"
 
         # SHA256 calculation
@@ -77,6 +78,9 @@ runs:
           '{version_string: $version_string, binary_sha256: $binary_sha256, run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, features: $features, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
 
         jq -c --arg version_string "$VERSION_STRING" --arg run_id "$RUN_ID" '. + {version_string: $version_string, run_id: $run_id}' /tmp/run.jsonl >> run_details.jsonl
+
+        # Import test results
+        make import
 
         # Generate badges
         if [ "$FAIL" -gt 0 ]; then COLOR="red"; elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"; else COLOR="green"; fi

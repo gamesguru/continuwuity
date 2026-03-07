@@ -21,8 +21,8 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 
 [![Codeberg](https://img.shields.io/badge/Codeberg-mirror-2185D0?style=flat&logo=codeberg&labelColor=fff)](https://codeberg.org/continuwuity/continuwuity) [![Stars](https://codeberg.org/continuwuity/continuwuity/badges/stars.svg?style=flat)](https://codeberg.org/continuwuity/continuwuity/stars)
 
-[![GitHub Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fbadge-main.json)](https://github.com/continuwuity/continuwuity/actions/workflows/test.yml)
-[![Forgejo Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fbadge-main.json)](https://forgejo.ellis.link/gamesguru/continuwuity/actions)
+[![GitHub Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fbadge-main.json&label=Tests&color=darkgrey)](https://github.com/continuwuity/continuwuity/actions/workflows/test.yml)
+[![Forgejo Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fbadge-main.json&label=Tests&color=darkgrey)](https://forgejo.ellis.link/gamesguru/continuwuity/actions)
 
 ### Why does this exist?
 
@@ -128,10 +128,10 @@ We track the health of the project through automated [Complement](https://github
 
 #### Roadmap for Test Transparency:
 
-1.  [✓] **Dynamic Branch Badges**: Real-time status for `main` and feature branches.
-2.  [✓] **Historical Commit Tracking**: JSON ledger of test results for every CI run.
-3.  [ ] **README Commit Dashboard**: A dedicated page or section showing a grid of recent commit health.
-4.  [ ] **PR Integration**: Automated comments in Pull Requests with detailed Complement failure reports.
+1. [✓] **Dynamic Branch Badges**: Real-time status for `main` and feature branches.
+2. [✓] **Historical Commit Tracking**: JSON ledger of test results for every CI run.
+3. [✓] **README Commit Dashboard**: A dedicated page or section showing a grid of recent commit health.
+4. [✓] **PR Integration**: Automated comments in Pull Requests with detailed Complement failure reports.
 
 <!-- ANCHOR: footer -->
 
