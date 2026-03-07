@@ -1,0 +1,22 @@
+name: Sync Metadata
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04-avx512
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions[bot]@users.noreply.forgejo.org"
+          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git fetch upstream _metadata/results:upstream_metadata || true
+          git checkout _metadata/results || git checkout -b _metadata/results
+          git merge upstream_metadata --no-edit || exit 1
+          git push origin _metadata/results

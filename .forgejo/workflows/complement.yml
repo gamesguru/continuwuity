@@ -24,6 +24,7 @@ jobs:
 
     env:
       RUSTC_WRAPPER: ccache
+      PROFILE: release
 
     steps:
       - name: Slim Checkout
@@ -57,29 +58,29 @@ jobs:
             exit 1
           fi
 
-          mkdir -p target/debug
+          mkdir -p target/${{ env.PROFILE }}
           echo "Downloading artifact from:"
           echo "$ARTIFACT_URL"
-          curl -L -o target/debug/artifact_download -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
+          curl -L -o target/${{ env.PROFILE }}/artifact_download -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
           # Check if it's a zip file
-          if file target/debug/artifact_download | grep -q 'Zip archive data'; then
+          if file target/${{ env.PROFILE }}/artifact_download | grep -q 'Zip archive data'; then
             echo "Unzipping artifact..."
-            unzip -o target/debug/artifact_download -d target/debug/
-            rm target/debug/artifact_download
+            unzip -o target/${{ env.PROFILE }}/artifact_download -d target/${{ env.PROFILE }}/
+            rm target/${{ env.PROFILE }}/artifact_download
           else
-            mv target/debug/artifact_download target/debug/conduwuit
+            mv target/${{ env.PROFILE }}/artifact_download target/${{ env.PROFILE }}/conduwuit
           fi
 
-          chmod +x target/debug/conduwuit || true
+          chmod +x target/${{ env.PROFILE }}/conduwuit || true
 
       - name: Sanity Test Artifact
         run: |
           echo "Checking file type..."
-          file target/debug/conduwuit
+          file target/${{ env.PROFILE }}/conduwuit
 
           echo "Testing execution..."
-          if ! ./target/debug/conduwuit --version; then
+          if ! ./target/${{ env.PROFILE }}/conduwuit --version; then
             echo "❌ ERROR: Downloaded artifact is not a valid executable!"
             echo "It might be a 404 HTML page, a corrupted zip, or for the wrong architecture."
             exit 1
@@ -98,7 +99,7 @@ jobs:
       - name: Build Complement Docker image
         run: |
           DOCKER_BUILDKIT=1 docker build \
-            --build-arg BINARY_PATH=target/debug/conduwuit \
+            --build-arg BINARY_PATH=target/${{ env.PROFILE }}/conduwuit \
             -t continuwuity:complement \
             -f ./docker/complement.Dockerfile .
 
@@ -148,7 +149,7 @@ jobs:
         id: version
         if: always()
         run: |
-          VERSION=$(./target/debug/conduwuit --version 2>/dev/null || echo "unknown")
+          VERSION=$(./target/${{ env.PROFILE }}/conduwuit --version 2>/dev/null || echo "unknown")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Update Results Ledger Repo
@@ -161,6 +162,7 @@ jobs:
           skip_count: ${{ steps.summary.outputs.skip || 0 }}
           version_string: ${{ steps.version.outputs.version }}
           actor: ${{ forge.actor || github.actor }}
+          binary_path: target/${{ env.PROFILE }}/conduwuit
 
       - name: Upload test results
         if: always()
