@@ -368,6 +368,31 @@ pub struct Config {
 	#[serde(default = "default_max_fetch_prev_events")]
 	pub max_fetch_prev_events: u16,
 
+	/// How many incoming federation transactions the server is willing to be
+	/// processing at any given time before it becomes overloaded and starts
+	/// rejecting further transactions until some slots become available.
+	///
+	/// Setting this value too low or too high may result in unstable
+	/// federation, and setting it too high may cause runaway resource usage.
+	///
+	/// default: 150
+	#[serde(default = "default_max_concurrent_inbound_transactions")]
+	pub max_concurrent_inbound_transactions: usize,
+
+	/// Maximum age (in seconds) for cached federation transaction responses.
+	/// Entries older than this will be removed during cleanup.
+	///
+	/// default: 7200 (2 hours)
+	#[serde(default = "default_transaction_id_cache_max_age_secs")]
+	pub transaction_id_cache_max_age_secs: u64,
+
+	/// Maximum number of cached federation transaction responses.
+	/// When the cache exceeds this limit, older entries will be removed.
+	///
+	/// default: 8192
+	#[serde(default = "default_transaction_id_cache_max_entries")]
+	pub transaction_id_cache_max_entries: usize,
+
 	/// Default/base connection timeout (seconds). This is used only by URL
 	/// previews and update/news endpoint checks.
 	///
@@ -584,18 +609,24 @@ pub struct Config {
 	pub yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse: bool,
 
 	/// A static registration token that new users will have to provide when
-	/// creating an account. If unset and `allow_registration` is true,
-	/// you must set
-	/// `yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse`
-	/// to true to allow open registration without any conditions.
-	///
-	/// If you do not want to set a static token, the `!admin token` commands
-	/// may also be used to manage registration tokens.
+	/// creating an account. This token does not supersede tokens from other
+	/// sources, such as the `!admin token` command or the
+	/// `registration_token_file` configuration option.
 	///
 	/// example: "o&^uCtes4HPf0Vu@F20jQeeWE7"
 	///
 	/// display: sensitive
 	pub registration_token: Option<String>,
+
+	/// A path to a file containing static registration tokens, one per line.
+	/// Tokens in this file do not supersede tokens from other sources, such as
+	/// the `!admin token` command or the `registration_token` configuration
+	/// option.
+	///
+	/// The file will be read once, when Continuwuity starts. It is not
+	/// currently reread when the server configuration is reloaded. If the file
+	/// cannot be read, Continuwuity will fail to start.
+	pub registration_token_file: Option<PathBuf>,
 
 	/// The public site key for reCaptcha. If this is provided, reCaptcha
 	/// becomes required during registration. If both captcha *and*
@@ -652,12 +683,6 @@ pub struct Config {
 	/// is inherently false.
 	#[serde(default)]
 	pub allow_public_room_directory_over_federation: bool,
-
-	/// Set this to true to allow your server's public room directory to be
-	/// queried without client authentication (access token) through the Client
-	/// APIs. Set this to false to protect against /publicRooms spiders.
-	#[serde(default)]
-	pub allow_public_room_directory_without_auth: bool,
 
 	/// Allow guests/unauthenticated users to access TURN credentials.
 	///
@@ -2057,6 +2082,16 @@ pub struct Config {
 	pub allow_invalid_tls_certificates_yes_i_know_what_the_fuck_i_am_doing_with_this_and_i_know_this_is_insecure:
 		bool,
 
+	/// Forcibly disables first-run mode.
+	///
+	/// This is intended to be used for Complement testing to allow the test
+	/// suite to register users, because first-run mode interferes with open
+	/// registration.
+	///
+	/// display: hidden
+	#[serde(default)]
+	pub force_disable_first_run_mode: bool,
+
 	/// display: nested
 	#[serde(default)]
 	pub ldap: LdapConfig,
@@ -2069,6 +2104,12 @@ pub struct Config {
 	/// display: nested
 	#[serde(default)]
 	pub blurhashing: BlurhashConfig,
+
+	/// Configuration for MatrixRTC (MSC4143) transport discovery.
+	/// display: nested
+	#[serde(default)]
+	pub matrix_rtc: MatrixRtcConfig,
+
 	#[serde(flatten)]
 	#[allow(clippy::zero_sized_map_values)]
 	// this is a catchall, the map shouldn't be zero at runtime
@@ -2134,17 +2175,16 @@ pub struct WellKnownConfig {
 	/// listed.
 	pub support_mxid: Option<OwnedUserId>,
 
-	/// A list of MatrixRTC foci URLs which will be served as part of the
-	/// MSC4143 client endpoint at /.well-known/matrix/client.  If you're
-	/// setting up livekit, you'd want something like:
-	/// rtc_focus_server_urls = [
-	///     { type = "livekit", livekit_service_url = "https://livekit.example.com" },
-	/// ]
+	/// **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
 	///
-	/// To disable, set this to be an empty vector (`[]`).
+	/// A list of MatrixRTC foci URLs which will be served as part of the
+	/// MSC4143 client endpoint at /.well-known/matrix/client.
+	///
+	/// This option is deprecated and will be removed in a future release.
+	/// Please migrate to the new `[global.matrix_rtc]` config section.
 	///
 	/// default: []
-	#[serde(default = "default_rtc_focus_urls")]
+	#[serde(default)]
 	pub rtc_focus_server_urls: Vec<RtcFocusInfo>,
 }
 
@@ -2171,6 +2211,43 @@ pub struct BlurhashConfig {
 	/// default: 33554432
 	#[serde(default = "default_blurhash_max_raw_size")]
 	pub blurhash_max_raw_size: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[config_example_generator(filename = "conduwuit-example.toml", section = "global.matrix_rtc")]
+pub struct MatrixRtcConfig {
+	/// A list of MatrixRTC foci (transports) which will be served via the
+	/// MSC4143 RTC transports endpoint at
+	/// `/_matrix/client/v1/rtc/transports`. If you're setting up livekit,
+	/// you'd want something like:
+	/// ```toml
+	/// [global.matrix_rtc]
+	/// foci = [
+	///     { type = "livekit", livekit_service_url = "https://livekit.example.com" },
+	/// ]
+	/// ```
+	///
+	/// To disable, set this to an empty list (`[]`).
+	///
+	/// default: []
+	#[serde(default)]
+	pub foci: Vec<RtcFocusInfo>,
+}
+
+impl MatrixRtcConfig {
+	/// Returns the effective foci, falling back to the deprecated
+	/// `rtc_focus_server_urls` if the new config is empty.
+	#[must_use]
+	pub fn effective_foci<'a>(
+		&'a self,
+		deprecated_foci: &'a [RtcFocusInfo],
+	) -> &'a [RtcFocusInfo] {
+		if !self.foci.is_empty() {
+			&self.foci
+		} else {
+			deprecated_foci
+		}
+	}
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -2366,6 +2443,7 @@ const DEPRECATED_KEYS: &[&str] = &[
 	"well_known_support_email",
 	"well_known_support_mxid",
 	"registration_token_file",
+	"well_known.rtc_focus_server_urls",
 ];
 
 impl Config {
@@ -2548,6 +2626,12 @@ fn default_pusher_idle_timeout() -> u64 { 15 }
 
 fn default_max_fetch_prev_events() -> u16 { 192_u16 }
 
+fn default_max_concurrent_inbound_transactions() -> usize { 150 }
+
+fn default_transaction_id_cache_max_age_secs() -> u64 { 60 * 60 * 2 }
+
+fn default_transaction_id_cache_max_entries() -> usize { 8192 }
+
 fn default_tracing_flame_filter() -> String {
 	cfg!(debug_assertions)
 		.then_some("trace,h2=off")
@@ -2642,9 +2726,6 @@ fn default_rocksdb_stats_level() -> u8 { 1 }
 #[must_use]
 #[inline]
 pub fn default_default_room_version() -> RoomVersionId { RoomVersionId::V11 }
-
-#[must_use]
-pub fn default_rtc_focus_urls() -> Vec<RtcFocusInfo> { vec![] }
 
 fn default_ip_range_denylist() -> Vec<String> {
 	vec![

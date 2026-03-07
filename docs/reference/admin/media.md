@@ -27,7 +27,7 @@ default.
   * Delete all remote and local media from 3 days ago, up until now:
 
     `!admin media delete-past-remote-media -a 3d
--yes-i-want-to-delete-local-media`
+--yes-i-want-to-delete-local-media`
 
 ## `!admin media delete-all-from-user`
 
@@ -39,4 +39,4 @@ Deletes all remote media from the specified remote server. This will always igno
 
 ## `!admin media delete-url-preview`
 
-Deletes a cached URL preview, forcing it to be re-fetched on the next request
+Deletes a cached URL preview, forcing it to be re-fetched. Use --all to purge all cached URL previews

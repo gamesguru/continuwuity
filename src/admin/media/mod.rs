@@ -40,7 +40,7 @@ pub enum MediaCommand {
 	///   * Delete all remote and local media from 3 days ago, up until now:
 	///
 	///     `!admin media delete-past-remote-media -a 3d
-	///-yes-i-want-to-delete-local-media`
+	///--yes-i-want-to-delete-local-media`
 	#[command(verbatim_doc_comment)]
 	DeletePastRemoteMedia {
 		/// The relative time (e.g. 30s, 5m, 7d) from now within which to
@@ -109,10 +109,15 @@ pub enum MediaCommand {
 		height: u32,
 	},
 
-	/// Deletes a cached URL preview, forcing it to be re-fetched on the
-	///   next request.
+	/// Deletes a cached URL preview, forcing it to be re-fetched.
+	/// Use --all to purge all cached URL previews.
 	DeleteUrlPreview {
-		/// The URL to clear from the preview cache
-		url: String,
+		/// The URL to clear from the saved preview data
+		#[arg(required_unless_present = "all")]
+		url: Option<String>,
+
+		/// Purge all cached URL previews
+		#[arg(long, conflicts_with = "url")]
+		all: bool,
 	},
 }

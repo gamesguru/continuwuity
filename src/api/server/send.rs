@@ -1,27 +1,33 @@
-use std::{collections::BTreeMap, net::IpAddr, time::Instant};
+use std::{
+	collections::{BTreeMap, HashMap, HashSet},
+	net::IpAddr,
+	time::{Duration, Instant},
+};
 
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
 	Err, Error, Result, debug, debug_warn, err, error,
 	result::LogErr,
+	state_res::lexicographical_topological_sort,
 	trace,
 	utils::{
 		IterStream, ReadyExt, millis_since_unix_epoch,
 		stream::{BroadbandExt, TryBroadbandExt, automatic_width},
 	},
-	warn,
 };
 use conduwuit_service::{
 	Services,
 	sending::{EDU_LIMIT, PDU_LIMIT},
 };
 use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use http::StatusCode;
 use itertools::Itertools;
 use ruma::{
-	CanonicalJsonObject, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName, UserId,
+	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedUserId,
+	RoomId, ServerName, UserId,
 	api::{
-		client::error::ErrorKind,
+		client::error::{ErrorKind, ErrorKind::LimitExceeded},
 		federation::transactions::{
 			edu::{
 				DeviceListUpdateContent, DirectDeviceContent, Edu, PresenceContent,
@@ -32,9 +38,16 @@ use ruma::{
 		},
 	},
 	events::receipt::{ReceiptEvent, ReceiptEventContent, ReceiptType},
+	int,
 	serde::Raw,
 	to_device::DeviceIdOrAllDevices,
+	uint,
 };
+use service::transactions::{
+	FederationTxnState, TransactionError, TxnKey, WrappedTransactionResponse,
+};
+use tokio::sync::watch::{Receiver, Sender};
+use tracing::instrument;
 
 use crate::Ruma;
 
@@ -44,15 +57,6 @@ type Pdu = (OwnedRoomId, OwnedEventId, CanonicalJsonObject);
 /// # `PUT /_matrix/federation/v1/send/{txnId}`
 ///
 /// Push EDUs and PDUs to this server.
-#[tracing::instrument(
-	name = "txn",
-	level = "debug",
-	skip_all,
-	fields(
-		%client,
-		origin = body.origin().as_str()
-	),
-)]
 pub(crate) async fn send_transaction_message_route(
 	State(services): State<crate::State>,
 	InsecureClientIp(client): InsecureClientIp,
@@ -76,16 +80,73 @@ pub(crate) async fn send_transaction_message_route(
 		)));
 	}
 
-	let txn_start_time = Instant::now();
-	trace!(
-		pdus = body.pdus.len(),
-		edus = body.edus.len(),
-		elapsed = ?txn_start_time.elapsed(),
-		id = %body.transaction_id,
-		origin = %body.origin(),
-		"Starting txn",
-	);
+	let txn_key = (body.origin().to_owned(), body.transaction_id.clone());
 
+	// Atomically check cache, join active, or start new transaction
+	match services
+		.transactions
+		.get_or_start_federation_txn(txn_key.clone())?
+	{
+		| FederationTxnState::Cached(response) => {
+			// Already responded
+			Ok(response)
+		},
+		| FederationTxnState::Active(receiver) => {
+			// Another thread is processing
+			wait_for_result(receiver).await
+		},
+		| FederationTxnState::Started { receiver, sender } => {
+			// We're the first, spawn the processing task
+			services
+				.server
+				.runtime()
+				.spawn(process_inbound_transaction(services, body, client, txn_key, sender));
+			// and wait for it
+			wait_for_result(receiver).await
+		},
+	}
+}
+
+async fn wait_for_result(
+	mut recv: Receiver<WrappedTransactionResponse>,
+) -> Result<send_transaction_message::v1::Response> {
+	if tokio::time::timeout(Duration::from_secs(50), recv.changed())
+		.await
+		.is_err()
+	{
+		// Took too long, return 429 to encourage the sender to try again
+		return Err(Error::BadRequest(
+			LimitExceeded { retry_after: None },
+			"Transaction is being still being processed. Please try again later.",
+		));
+	}
+	let value = recv.borrow_and_update();
+	match value.clone() {
+		| Some(Ok(response)) => Ok(response),
+		| Some(Err(err)) => Err(transaction_error_to_response(&err)),
+		| None => Err(Error::Request(
+			ErrorKind::Unknown,
+			"Transaction processing failed unexpectedly".into(),
+			StatusCode::INTERNAL_SERVER_ERROR,
+		)),
+	}
+}
+
+#[instrument(
+	skip_all,
+	fields(
+		id = ?body.transaction_id.as_str(),
+		origin = ?body.origin()
+	)
+)]
+async fn process_inbound_transaction(
+	services: crate::State,
+	body: Ruma<send_transaction_message::v1::Request>,
+	client: IpAddr,
+	txn_key: TxnKey,
+	sender: Sender<WrappedTransactionResponse>,
+) {
+	let txn_start_time = Instant::now();
 	let pdus = body
 		.pdus
 		.iter()
@@ -102,40 +163,79 @@ pub(crate) async fn send_transaction_message_route(
 		.filter_map(Result::ok)
 		.stream();
 
-	let results = handle(&services, &client, body.origin(), txn_start_time, pdus, edus).await?;
+	debug!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction",);
+	let results = match handle(&services, &client, body.origin(), pdus, edus).await {
+		| Ok(results) => results,
+		| Err(err) => {
+			fail_federation_txn(services, &txn_key, &sender, err);
+			return;
+		},
+	};
+
+	for (id, result) in &results {
+		if let Err(e) = result {
+			if matches!(e, Error::BadRequest(ErrorKind::NotFound, _)) {
+				debug_warn!("Incoming PDU failed {id}: {e:?}");
+			}
+		}
+	}
 
 	debug!(
 		pdus = body.pdus.len(),
 		edus = body.edus.len(),
 		elapsed = ?txn_start_time.elapsed(),
-		id = %body.transaction_id,
-		origin = %body.origin(),
-		"Finished txn",
+		"Finished processing transaction"
 	);
-	for (id, result) in &results {
-		if let Err(e) = result {
-			if matches!(e, Error::BadRequest(ErrorKind::NotFound, _)) {
-				warn!("Incoming PDU failed {id}: {e:?}");
-			}
-		}
-	}
 
-	Ok(send_transaction_message::v1::Response {
+	let response = send_transaction_message::v1::Response {
 		pdus: results
 			.into_iter()
 			.map(|(e, r)| (e, r.map_err(error::sanitized_message)))
 			.collect(),
-	})
+	};
+
+	services
+		.transactions
+		.finish_federation_txn(txn_key, sender, response);
 }
 
+/// Handles a failed federation transaction by sending the error through
+/// the channel and cleaning up the transaction state. This allows waiters to
+/// receive an appropriate error response.
+fn fail_federation_txn(
+	services: crate::State,
+	txn_key: &TxnKey,
+	sender: &Sender<WrappedTransactionResponse>,
+	err: TransactionError,
+) {
+	debug!("Transaction failed: {err}");
+
+	// Remove from active state so the transaction can be retried
+	services.transactions.remove_federation_txn(txn_key);
+
+	// Send the error to any waiters
+	if let Err(e) = sender.send(Some(Err(err))) {
+		debug_warn!("Failed to send transaction error to receivers: {e}");
+	}
+}
+
+/// Converts a TransactionError into an appropriate HTTP error response.
+fn transaction_error_to_response(err: &TransactionError) -> Error {
+	match err {
+		| TransactionError::ShuttingDown => Error::Request(
+			ErrorKind::Unknown,
+			"Server is shutting down, please retry later".into(),
+			StatusCode::SERVICE_UNAVAILABLE,
+		),
+	}
+}
 async fn handle(
 	services: &Services,
 	client: &IpAddr,
 	origin: &ServerName,
-	started: Instant,
 	pdus: impl Stream<Item = Pdu> + Send,
 	edus: impl Stream<Item = Edu> + Send,
-) -> Result<ResolvedMap> {
+) -> std::result::Result<ResolvedMap, TransactionError> {
 	// group pdus by room
 	let pdus = pdus
 		.collect()
@@ -152,7 +252,7 @@ async fn handle(
 		.into_iter()
 		.try_stream()
 		.broad_and_then(|(room_id, pdus): (_, Vec<_>)| {
-			handle_room(services, client, origin, started, room_id, pdus.into_iter())
+			handle_room(services, client, origin, room_id, pdus.into_iter())
 				.map_ok(Vec::into_iter)
 				.map_ok(IterStream::try_stream)
 		})
@@ -169,14 +269,51 @@ async fn handle(
 	Ok(results)
 }
 
+/// Attempts to build a localised directed acyclic graph out of the given PDUs,
+/// returning them in a topologically sorted order.
+///
+/// This is used to attempt to process PDUs in an order that respects their
+/// dependencies, however it is ultimately the sender's responsibility to send
+/// them in a processable order, so this is just a best effort attempt. It does
+/// not account for power levels or other tie breaks.
+async fn build_local_dag(
+	pdu_map: &HashMap<OwnedEventId, CanonicalJsonObject>,
+) -> Result<Vec<OwnedEventId>> {
+	debug_assert!(pdu_map.len() >= 2, "needless call to build_local_dag with less than 2 PDUs");
+	let mut dag: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+
+	for (event_id, value) in pdu_map {
+		let prev_events = value
+			.get("prev_events")
+			.expect("pdu must have prev_events")
+			.as_array()
+			.expect("prev_events must be an array")
+			.iter()
+			.map(|v| {
+				OwnedEventId::parse(v.as_str().expect("prev_events values must be strings"))
+					.expect("prev_events must be valid event IDs")
+			})
+			.collect::<HashSet<OwnedEventId>>();
+
+		dag.insert(event_id.clone(), prev_events);
+	}
+	lexicographical_topological_sort(&dag, &|_| async {
+		// Note: we don't bother fetching power levels because that would massively slow
+		// this function down. This is a best-effort attempt to order events correctly
+		// for processing, however ultimately that should be the sender's job.
+		Ok((int!(0), MilliSecondsSinceUnixEpoch(uint!(0))))
+	})
+	.await
+	.map_err(|e| err!("failed to resolve local graph: {e}"))
+}
+
 async fn handle_room(
 	services: &Services,
 	_client: &IpAddr,
 	origin: &ServerName,
-	txn_start_time: Instant,
 	room_id: OwnedRoomId,
 	pdus: impl Iterator<Item = Pdu> + Send,
-) -> Result<Vec<(OwnedEventId, Result)>> {
+) -> std::result::Result<Vec<(OwnedEventId, Result)>, TransactionError> {
 	let _room_lock = services
 		.rooms
 		.event_handler
@@ -185,27 +322,40 @@ async fn handle_room(
 		.await;
 
 	let room_id = &room_id;
-	pdus.try_stream()
-		.and_then(|(_, event_id, value)| async move {
-			services.server.check_running()?;
-			let pdu_start_time = Instant::now();
-			let result = services
-				.rooms
-				.event_handler
-				.handle_incoming_pdu(origin, room_id, &event_id, value, true)
-				.await
-				.map(|_| ());
-
-			debug!(
-				pdu_elapsed = ?pdu_start_time.elapsed(),
-				txn_elapsed = ?txn_start_time.elapsed(),
-				"Finished PDU {event_id}",
-			);
-
-			Ok((event_id, result))
+	let pdu_map: HashMap<OwnedEventId, CanonicalJsonObject> = pdus
+		.into_iter()
+		.map(|(_, event_id, value)| (event_id, value))
+		.collect();
+	// Try to sort PDUs by their dependencies, but fall back to arbitrary order on
+	// failure (e.g., cycles). This is best-effort; proper ordering is the sender's
+	// responsibility.
+	let sorted_event_ids = if pdu_map.len() >= 2 {
+		build_local_dag(&pdu_map).await.unwrap_or_else(|e| {
+			debug_warn!("Failed to build local DAG for room {room_id}: {e}");
+			pdu_map.keys().cloned().collect()
 		})
-		.try_collect()
-		.await
+	} else {
+		pdu_map.keys().cloned().collect()
+	};
+	let mut results = Vec::with_capacity(sorted_event_ids.len());
+	for event_id in sorted_event_ids {
+		let value = pdu_map
+			.get(&event_id)
+			.expect("sorted event IDs must be from the original map")
+			.clone();
+		services
+			.server
+			.check_running()
+			.map_err(|_| TransactionError::ShuttingDown)?;
+		let result = services
+			.rooms
+			.event_handler
+			.handle_incoming_pdu(origin, room_id, &event_id, value, true)
+			.await
+			.map(|_| ());
+		results.push((event_id, result));
+	}
+	Ok(results)
 }
 
 async fn handle_edu(services: &Services, client: &IpAddr, origin: &ServerName, edu: Edu) {
@@ -478,8 +628,8 @@ async fn handle_edu_direct_to_device(
 
 	// Check if this is a new transaction id
 	if services
-		.transaction_ids
-		.existing_txnid(sender, None, message_id)
+		.transactions
+		.get_client_txn(sender, None, message_id)
 		.await
 		.is_ok()
 	{
@@ -498,8 +648,8 @@ async fn handle_edu_direct_to_device(
 
 	// Save transaction id with empty data
 	services
-		.transaction_ids
-		.add_txnid(sender, None, message_id, &[]);
+		.transactions
+		.add_client_txnid(sender, None, message_id, &[]);
 }
 
 async fn handle_edu_direct_to_device_user<Event: Send + Sync>(

@@ -24,6 +24,7 @@ pub fn name() -> &'static str { BRANDING }
 #[inline]
 #[must_use]
 pub fn version() -> &'static str { VERSION.get_or_init(init_version) }
+
 #[inline]
 pub fn version_ua() -> &'static str { VERSION_UA.get_or_init(init_version_ua) }
 
@@ -41,12 +42,13 @@ pub fn git_remote_commit_url() -> &'static str {
 #[must_use]
 pub fn user_agent() -> &'static str { USER_AGENT.get_or_init(init_user_agent) }
 
-fn init_user_agent() -> String { format!("{}/{} (bot; +{WEBSITE})", name(), version_ua()) }
-
+#[inline]
 pub fn user_agent_media() -> &'static str { USER_AGENT_MEDIA.get_or_init(init_user_agent_media) }
 
+fn init_user_agent() -> String { format!("{}/{} (bot; +{WEBSITE})", name(), version_ua()) }
+
 fn init_user_agent_media() -> String {
-	format!("{}/{} (embedbot - facebookexternalhit/1.1; +{WEBSITE})", name(), version_ua())
+	format!("{}/{} (embedbot; facebookexternalhit/1.1; +{WEBSITE})", name(), version_ua())
 }
 
 fn init_version_ua() -> String {

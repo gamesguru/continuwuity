@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use conduwuit::{Err, Result};
+use conduwuit::{Err, Result, utils::response::LimitReadExt};
 use futures::StreamExt;
 use ruma::{OwnedRoomId, OwnedServerName, OwnedUserId};
 
@@ -30,12 +30,15 @@ pub(super) async fn incoming_federation(&self) -> Result {
 			.federation_handletime
 			.read();
 
-		let mut msg = format!("Handling {} incoming pdus:\n", map.len());
+		let mut msg = format!(
+			"Handling {} incoming PDUs across {} active transactions:\n",
+			map.len(),
+			self.services.transactions.txn_active_handle_count()
+		);
 		for (r, (e, i)) in map.iter() {
 			let elapsed = i.elapsed();
 			writeln!(msg, "{} {}: {}m{}s", r, e, elapsed.as_secs() / 60, elapsed.as_secs() % 60)?;
 		}
-
 		msg
 	};
 
@@ -52,7 +55,15 @@ pub(super) async fn fetch_support_well_known(&self, server_name: OwnedServerName
 		.send()
 		.await?;
 
-	let text = response.text().await?;
+	let text = response
+		.limit_read_text(
+			self.services
+				.config
+				.max_request_size
+				.try_into()
+				.expect("u64 fits into usize"),
+		)
+		.await?;
 
 	if text.is_empty() {
 		return Err!("Response text/body is empty.");
