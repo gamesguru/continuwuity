@@ -69,11 +69,25 @@ jobs:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: make build
 
+      - name: Import GPG key
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        continue-on-error: true
+
+      - name: Sign binary
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
+        continue-on-error: true
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-${{ matrix.profile }}-${{ matrix.os }}
-          path: target/latest/conduwuit
+          path: |
+            target/latest/conduwuit
+            target/latest/conduwuit.asc
           retention-days: 90
 
   # NOTE: Currently just for Ubuntu 22/24 Skylake-optimized builds (avx512 or avx2)
@@ -141,11 +155,25 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
         run: make build
 
+      - name: Import GPG key
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        continue-on-error: true
+
+      - name: Sign binary
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
+        continue-on-error: true
+
       - name: Upload binary (${{ steps.cpu.outputs.target }})
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-skylake-${{ matrix.os }}
-          path: target/latest/conduwuit
+          path: |
+            target/latest/conduwuit
+            target/latest/conduwuit.asc
           retention-days: 60
 
   # NOTE: Max performance build targeting ARM64 (specifically Raspberry Pi 5 / Cortex-A76)
@@ -208,9 +236,23 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
         run: make build
 
+      - name: Import GPG key
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        continue-on-error: true
+
+      - name: Sign binary
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
+        continue-on-error: true
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-arm64-pi5-${{ matrix.os }}
-          path: target/latest/conduwuit
+          path: |
+            target/latest/conduwuit
+            target/latest/conduwuit.asc
           retention-days: 60

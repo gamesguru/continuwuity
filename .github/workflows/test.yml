@@ -132,11 +132,30 @@ jobs:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: SKIP_CONFIRM=1 make build PROFILE=${{ env.PROFILE }} CARGO_FLAGS="--profile ${{ env.PROFILE }} --features direct_tls"
 
+      - name: Import GPG key
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        continue-on-error: true
+
+      - name: Sign binary
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          if [ -n "${{ secrets.GPG_PRIVATE_KEY }}" ]; then
+            gpg --batch --yes --detach-sign --armor target/latest/conduwuit
+          else
+            echo "GPG_PRIVATE_KEY not set, skipping signing."
+          fi
+        continue-on-error: true
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-${{ env.PROFILE }}-direct_tls-${{ matrix.os }}
-          path: target/latest/conduwuit
+          path: |
+            target/latest/conduwuit
+            target/latest/conduwuit.asc
           retention-days: 60
 
       - name: Checkout Complement

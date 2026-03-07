@@ -63,6 +63,19 @@ jobs:
           echo "$ARTIFACT_URL"
           curl -L -o target/${{ env.PROFILE }}/artifact_download -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
+          # Download signature (assuming it's available at .asc suffix or part of the zip)
+          # If it's a zip from GitHub artifacts, it might not have the .asc inside unless we put it there.
+          # Our build workflows now upload .asc files alongside the binary.
+          SIG_URL="${ARTIFACT_URL%.zip}.asc"
+          if [[ "$ARTIFACT_URL" == *"/zip" ]]; then
+             # For GitHub API zip downloads, we need to find the actual binary artifact's signature.
+             # This is a bit complex for a shell script, so we'll try to download it if possible.
+             SIG_URL="${ARTIFACT_URL%/zip}.asc" 
+          fi
+
+          echo "Attempting to download signature from: $SIG_URL"
+          curl -fL -o target/${{ env.PROFILE }}/conduwuit.asc -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$SIG_URL"
+
           # Check if it's a zip file
           if file target/${{ env.PROFILE }}/artifact_download | grep -q 'Zip archive data'; then
             echo "Unzipping artifact..."
@@ -73,6 +86,12 @@ jobs:
           fi
 
           chmod +x target/${{ env.PROFILE }}/conduwuit || true
+
+          # Mandatory GPG signature verification
+          echo "Verifying GPG signature..."
+          echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --batch --import
+          gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
+          echo "OK. GPG signature verified."
           mkdir -p target/latest
           ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
 
@@ -87,7 +106,7 @@ jobs:
             echo "It might be a 404 HTML page, a corrupted zip, or for the wrong architecture."
             exit 1
           fi
-          echo "✅ Artifact is a valid executable."
+          echo "Artifact is a valid executable."
 
       - name: Checkout Complement
         run: |
@@ -100,8 +119,9 @@ jobs:
 
       - name: Build Complement Docker image
         run: |
+          ls -l target/latest/conduwuit
           docker buildx build \
-            --build-arg BINARY_PATH=target/latest/conduwuit \
+            --build-arg BINARY_PATH=./target/latest/conduwuit \
             -t continuwuity:complement \
             -f ./docker/complement.Dockerfile \
             --load .
@@ -116,14 +136,12 @@ jobs:
           ./bin/complement ./complement-src
 
       - name: Compare results with baseline
-        if: always()
         run: |
           VERBOSE=1 make complement/stats > new_stats.txt || true
           echo "=== Changes from baseline ==="
           diff --color=always -u baseline_stats.txt new_stats.txt || true
 
       - name: Debug Results
-        if: always()
         run: |
           echo "Checking results directory:"
           ls -la tests/test_results/complement/
@@ -134,7 +152,6 @@ jobs:
 
       - name: Summarize results
         id: summary
-        if: always()
         run: |
           RESULTS="tests/test_results/complement/test_results.jsonl"
           if [ -f "$RESULTS" ]; then
@@ -150,14 +167,12 @@ jobs:
 
       - name: Get conduwuit version
         id: version
-        if: always()
         run: |
           # Use raw version output from the binary
           VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Update Results Ledger Repo
-        if: always()
         uses: ./.forgejo/actions/update-results-ledger
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -169,7 +184,6 @@ jobs:
           binary_path: target/latest/conduwuit
 
       - name: Upload test results
-        if: always()
         uses: forgejo/upload-artifact@v4
         with:
           name: complement-results
