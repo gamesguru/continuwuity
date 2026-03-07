@@ -14,7 +14,7 @@ pub trait LogDebugErr<T, E: Debug> {
 	where
 		Self: Sized,
 	{
-		self.err_debug_log(Level::WARN)
+		self.err_debug_log(Level::ERROR)
 	}
 }
 

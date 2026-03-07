@@ -6,18 +6,11 @@
 # ============================================= #
 [global]
 address = "0.0.0.0"
-allow_guest_registration = true
-allow_federation = true
 allow_device_name_federation = true
+allow_guest_registration = true
 allow_public_room_directory_over_federation = true
-allow_inbound_profile_lookup_federation_requests = true
-allow_incoming_presence = true
-allow_outgoing_presence = true
-allow_local_presence = true
 allow_registration = true
-database_path = "/var/lib/continuwuity"
-# By default we use warn, only for failures/debugging verbose (Forge UI can't handle 75 MB+ of logs)
-# log = "warn"
+database_path = "/database"
 log = "trace,h2=debug,hyper=debug,conduwuit_database=warn,conduwuit_service::manager=info,conduwuit_api::router=error,conduwuit_router=error,tower_http=error"
 port = [8008, 8448]
 trusted_servers = []

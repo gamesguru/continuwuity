@@ -400,6 +400,7 @@ pub(super) async fn delete_url_preview(&self, url: Option<String>, all: bool) ->
 	}
 
 	let url = url.expect("clap enforces url is required unless --all");
+
 	self.services.media.remove_url_preview(&url).await?;
 
 	self.write_str(&format!("Deleted cached URL preview for: {url}"))
