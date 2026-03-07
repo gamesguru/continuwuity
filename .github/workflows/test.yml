@@ -371,6 +371,23 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
         run: SKIP_CONFIRM=1 make build PROFILE=${{ env.PROFILE }} CARGO_FLAGS="--profile ${{ env.PROFILE }} --features direct_tls"
 
+      - name: Import GPG key
+        if: github.ref == 'refs/heads/main'
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        continue-on-error: true
+
+      - name: Sign binary
+        if: github.ref == 'refs/heads/main'
+        run: |
+          if [ -n "${{ secrets.GPG_PRIVATE_KEY }}" ]; then
+            gpg --batch --yes --detach-sign --armor target/latest/conduwuit
+          else
+            echo "GPG_PRIVATE_KEY not set, skipping signing."
+          fi
+        continue-on-error: true
+
       - name: Checkout Complement
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
