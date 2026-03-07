@@ -2,6 +2,10 @@ import sqlite3
 import json
 import os
 import hashlib
+import subprocess
+import re
+import subprocess
+import re
 
 INSERT_RUN = """
 INSERT
@@ -52,7 +56,8 @@ WHERE
 """
 
 db = sqlite3.connect("ledger.db")
-db.executescript(open("tables.sql").read())
+if os.path.exists("tables.sql"):
+    db.executescript(open("tables.sql").read())
 
 # NOTE: The database `ledger.db` is ephemeral and not tracked in git.
 # It is rebuilt organically from `runs.jsonl` and `run_details.jsonl`
@@ -153,7 +158,7 @@ github_output = os.environ.get("GITHUB_OUTPUT")
 
 if github_output:
     cur = db.cursor()
-    # Get the previous run on the same branch (excluding the current one)
+    # Get the previous run on the same branch
     cur.execute("""
         SELECT passed_count, failed_count, skipped_count 
         FROM runs 
@@ -167,20 +172,64 @@ if github_output:
             f.write(f"prev_fail={prev_run[1]}\n")
             f.write(f"prev_skip={prev_run[2]}\n")
 
-    # Get the 5 most recent tags (defined as runs with short version strings, e.g. v0.5.6)
-    # Since Forgejo doesn't natively expose 'tag' as a column, we can do a LIKE query
-    # or just sort older runs. Wait, the user has 'version_string' = 'v0.5.6' vs 'v0.5.6+123~abc'.
-    cur.execute("""
-        SELECT version_string, passed_count, failed_count, skipped_count 
-        FROM runs 
-        WHERE version_string NOT LIKE '%+%' AND version_string NOT LIKE '%~%'
-        ORDER BY run_date DESC 
-        LIMIT 5
-    """)
-    tags = cur.fetchall()
-    if tags:
-        tags_json = json.dumps(
-            [{"version": t[0], "pass": t[1], "fail": t[2], "skip": t[3]} for t in tags]
-        )
-        with open(github_output, "a") as f:
-            f.write(f"historical_tags={tags_json}\n")
+
+def run_cmd(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, text=True).strip()
+    except Exception:
+        return ""
+
+
+head_hash = run_cmd("git rev-parse HEAD")
+head_short = run_cmd("git rev-parse --short HEAD") or "unknown"
+head1_hash = run_cmd("git rev-parse HEAD~1")
+head1_short = run_cmd("git rev-parse --short HEAD~1") or "pending"
+
+tags_output = run_cmd("git tag --sort=-creatordate --merged main")
+tags = [t for t in tags_output.split("\n") if t.strip() and not ("+" in t or "~" in t)][
+    :5
+]
+
+rows = []
+if head_hash:
+    rows.append(f"""  <tr>
+    <td valign="top">HEAD ({head_short})</td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2F{head_hash}.json&label=Tests&color=darkgrey" alt="Forgejo HEAD"></td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{head_hash}.json&label=Tests&color=darkgrey" alt="GitHub HEAD"></td>
+  </tr>""")
+
+if head1_hash:
+    rows.append(f"""  <tr>
+    <td valign="top">HEAD~1 ({head1_short})</td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2F{head1_hash}.json&label=Tests&color=darkgrey" alt="Forgejo HEAD~1"></td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{head1_hash}.json&label=Tests&color=darkgrey" alt="GitHub HEAD~1"></td>
+  </tr>""")
+
+for tag in tags:
+    tag_hash = run_cmd(f"git rev-list -n 1 {tag}")
+    if tag_hash:
+        rows.append(f"""  <tr>
+    <td valign="top">{tag}</td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2F{tag_hash}.json&label=Tests&color=darkgrey" alt="Forgejo {tag}"></td>
+    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F{tag_hash}.json&label=Tests&color=darkgrey" alt="GitHub {tag}"></td>
+  </tr>""")
+
+readme_path = "../../README.md"
+if os.path.exists(readme_path):
+    with open(readme_path, "r") as f:
+        readme_content = f.read()
+
+    new_table = f"""<table border="0">
+  <tr>
+    <td valign="top"><b>Version</b></td>
+    <td valign="top"><b>Forgejo</b></td>
+    <td valign="top"><b>GitHub</b></td>
+  </tr>
+{chr(10).join(rows)}
+</table>"""
+
+    pattern = r'<table border="0">.*?</table>'
+    updated_readme = re.sub(pattern, new_table, readme_content, flags=re.DOTALL)
+
+    with open(readme_path, "w") as f:
+        f.write(updated_readme)

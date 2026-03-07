@@ -49,7 +49,8 @@ jobs:
             REPO="${BASH_REMATCH[2]}"
             ARTIFACT_ID="${BASH_REMATCH[4]}"
             ARTIFACT_URL="https://api.github.com/repos/$OWNER/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
-            echo "Converted Web URL to API URL: $ARTIFACT_URL"
+            echo "Converted Web URL to API URL:"
+            echo $ARTIFACT_URL
           fi
 
           mkdir -p target/${{ env.PROFILE }}

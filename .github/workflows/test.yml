@@ -148,10 +148,10 @@ jobs:
       - name: Sign binary
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          if [ -n "${{ secrets.GPG_PRIVATE_KEY }}" ]; then
+          if [ -n "${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}" ]; then
             gpg --batch --yes --detach-sign --armor target/latest/conduwuit
           else
-            echo "GPG_PRIVATE_KEY not set, skipping signing."
+            echo "C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY not set, skipping signing."
           fi
         continue-on-error: true
 
