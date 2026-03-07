@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
-set -x
+# set -x  # for debugging
 
 # The root path where complement is available.
 COMPLEMENT_SRC="${COMPLEMENT_SRC:-$1}"
