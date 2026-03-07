@@ -24,21 +24,6 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 [![GitHub Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fbadge-main.json)](https://github.com/continuwuity/continuwuity/actions/workflows/test.yml)
 [![Forgejo Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fbadge-main.json)](https://forgejo.ellis.link/gamesguru/continuwuity/actions)
 
-### Complement Test Status
-
-We track the health of the project through automated [Complement](https://github.com/matrix-org/complement) tests.
-
-- **Current Status (main):** See the badge above for the latest results on the `main` branch.
-- **Commit-Specific History:** We are moving toward per-commit test tracking. You can view the status of a specific commit by accessing its JSON endpoint:
-  `https://raw.githubusercontent.com/gamesguru/continuwuity/_metadata/badges/badges/forgejo/commits/<COMMIT_HASH>.json`
-
-#### Roadmap for Test Transparency:
-
-1.  [✓] **Dynamic Branch Badges**: Real-time status for `main` and feature branches.
-2.  [✓] **Historical Commit Tracking**: JSON ledger of test results for every CI run.
-3.  [ ] **README Commit Dashboard**: A dedicated page or section showing a grid of recent commit health.
-4.  [ ] **PR Integration**: Automated comments in Pull Requests with detailed Complement failure reports.
-
 ### Why does this exist?
 
 The original conduwuit project has been archived and is no longer maintained. Rather than letting this Rust-based Matrix homeserver disappear, a group of community contributors have forked the project to continue its development, fix outstanding issues, and add new features.
@@ -132,6 +117,21 @@ When incorporating code from other forks:
 - Attribution will be given to original authors and forks
 - We prioritize stability and compatibility when evaluating external contributions
 - Features that align with our project goals will be given priority consideration
+
+### Complement Test Status
+
+We track the health of the project through automated [Complement](https://github.com/matrix-org/complement) tests.
+
+- **Current Status (main):** See the badge above for the latest results on the `main` branch.
+- **Commit-Specific History:** We are moving toward per-commit test tracking. You can view the status of a specific commit by accessing its JSON endpoint:
+  `https://raw.githubusercontent.com/gamesguru/continuwuity/_metadata/badges/badges/forgejo/commits/<COMMIT_HASH>.json`
+
+#### Roadmap for Test Transparency:
+
+1.  [✓] **Dynamic Branch Badges**: Real-time status for `main` and feature branches.
+2.  [✓] **Historical Commit Tracking**: JSON ledger of test results for every CI run.
+3.  [ ] **README Commit Dashboard**: A dedicated page or section showing a grid of recent commit health.
+4.  [ ] **PR Integration**: Automated comments in Pull Requests with detailed Complement failure reports.
 
 <!-- ANCHOR: footer -->
 
