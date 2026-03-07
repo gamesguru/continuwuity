@@ -57,9 +57,10 @@ jobs:
           echo "Downloading bundle from: $ARTIFACT_URL"
           curl -L -o target/${{ env.PROFILE }}/bundle.zip -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
-      - name: SHA256 sum check (zip bundle verification)
+      - name: SHA256 sum check (zip bundle validation)
         run: |
-          # Log SHA256 of the bundle
+          # Log sha256
+          echo "expected sha256: ${{ github.event.inputs.artifact_sha256 }}"
           sha256sum target/${{ env.PROFILE }}/bundle.zip
 
       - name: Extract conduwuit bundle
@@ -89,9 +90,12 @@ jobs:
           mkdir -p target/latest
           ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
 
-      - name: Version check
+      - name: Get conduwuit version
+        id: version
         run: |
-          ./target/latest/conduwuit --version | tee target/latest/conduwuit.version
+          # Use raw version output from the binary
+          VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
+          echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
 
       - name: Checkout Complement
         run: |
@@ -99,12 +103,16 @@ jobs:
           if [ ! -d "complement-src" ]; then
             git clone --depth 1 https://github.com/matrix-org/complement complement-src
           else
-            cd complement-src && git fetch --depth 1 && git checkout FETCH_HEAD && cd ..
+            cd complement-src \
+            && git fetch --depth 1 \
+            && git checkout FETCH_HEAD \
+            && cd ..
           fi
 
       - name: Build Complement Docker image
         run: |
           ls -l target/latest/conduwuit
+          # Using buildx and buildkit are supposedly better
           DOCKER_BUILDKIT=1 docker buildx build \
             --build-arg BINARY_PATH=target/latest/conduwuit \
             -t continuwuity:complement \
@@ -112,30 +120,22 @@ jobs:
             --load .
 
       - name: Capture baseline stats
-        run: VERBOSE=1 make complement/stats > baseline_stats.txt || true
+        run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
 
-      - name: Run Complement tests
+      - name: Run Complement tests (currently xfailing ~200 tests)
         continue-on-error: true
         run: |
           mkdir -p tests/test_results/complement/
           ./bin/complement ./complement-src
 
       - name: Compare results with baseline
-        run: |
-          VERBOSE=1 make complement/stats > new_stats.txt || true
-          echo "=== Changes from baseline ==="
-          diff --color=always -u baseline_stats.txt new_stats.txt || true
+        run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 make complement/stats)
 
-      - name: Debug Results
-        run: |
-          echo "Checking results directory:"
-          ls -la tests/test_results/complement/
-          echo "Log file size:"
-          stat -c%s tests/test_results/complement/test_logs.jsonl || echo "Log missing"
-          echo "Results file size:"
-          stat -c%s tests/test_results/complement/test_results.jsonl || echo "Results missing"
+      - name: Peek at results directory (log file sizes)
+        continue-on-error: true
+        run: ls -lah tests/test_results/complement/
 
-      - name: Summarize results
+      - name: Collect results (prepare data)
         id: summary
         run: |
           RESULTS="tests/test_results/complement/test_results.jsonl"
@@ -144,20 +144,13 @@ jobs:
             FAIL=$(grep -c '"Action":"fail"' "$RESULTS" || true)
             SKIP=$(grep -c '"Action":"skip"' "$RESULTS" || true)
             TOTAL=$((PASS + FAIL + SKIP))
-            echo "pass=$PASS" >> $GITHUB_OUTPUT
-            echo "fail=$FAIL" >> $GITHUB_OUTPUT
-            echo "skip=$SKIP" >> $GITHUB_OUTPUT
-            echo "total=$TOTAL" >> $GITHUB_OUTPUT
+            echo "pass=$PASS" | tee -a $GITHUB_OUTPUT
+            echo "fail=$FAIL" | tee -a $GITHUB_OUTPUT
+            echo "skip=$SKIP" | tee -a $GITHUB_OUTPUT
+            echo "total=$TOTAL" | tee -a $GITHUB_OUTPUT
           fi
 
-      - name: Get conduwuit version
-        id: version
-        run: |
-          # Use raw version output from the binary
-          VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update Results Ledger Repo
+      - name: Update test results ledger and upload to repo
         uses: ./.forgejo/actions/update-results-ledger
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -168,11 +161,3 @@ jobs:
           features: ${{ env.FEATURES }}
           actor: ${{ forge.actor || github.actor }}
           binary_path: target/latest/conduwuit
-
-      - name: Upload test results
-        uses: forgejo/upload-artifact@v4
-        with:
-          name: complement-results
-          path: |
-            tests/test_results/complement/test_results.jsonl
-          retention-days: 90
