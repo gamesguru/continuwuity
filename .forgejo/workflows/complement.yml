@@ -29,6 +29,7 @@ jobs:
     steps:
       - name: Slim Checkout
         run: |
+
           # Use raw git to avoid Node-based checkout action
           if [ ! -d ".git" ]; then
             git init
@@ -38,8 +39,9 @@ jobs:
           git checkout FETCH_HEAD
           git fetch --tags --force
 
-      - name: Download conduwuit artifact
+      - name: Download and verify conduwuit bundle
         run: |
+
           ARTIFACT_URL="${{ github.event.inputs.artifact_url }}"
 
           # If the user pasted a github.com web UI URL, convert it to the API endpoint
@@ -51,68 +53,36 @@ jobs:
             echo "Converted Web URL to API URL: $ARTIFACT_URL"
           fi
 
-          # Security Check: Only allow downloads from api.github.com or objects.githubusercontent.com
-          if [[ ! "$ARTIFACT_URL" =~ ^https://(api\.github\.com|objects\.githubusercontent\.com)/ ]]; then
-            echo "ERROR: Security violation. Artifact URL must be from GitHub."
-            echo "URL provided: $ARTIFACT_URL"
-            exit 1
-          fi
-
           mkdir -p target/${{ env.PROFILE }}
-          echo "Downloading artifact from:"
-          echo "$ARTIFACT_URL"
-          curl -L -o target/${{ env.PROFILE }}/artifact_download -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
+          echo "Downloading bundle from: $ARTIFACT_URL"
+          curl -L -o target/${{ env.PROFILE }}/bundle.zip -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
 
-          # SHA256 Verification via GitHub API
-          if [[ "$ARTIFACT_URL" =~ /actions/artifacts/([0-9]+)/zip ]]; then
-            ARTIFACT_ID="${BASH_REMATCH[1]}"
-            REPO_URL=$(echo "$ARTIFACT_URL" | sed 's|/actions/artifacts/.*||')
-            API_URL="${REPO_URL}/actions/artifacts/${ARTIFACT_ID}"
-            echo "Verifying SHA256 via API: $API_URL"
-            # GitHub API doesn't provide the SHA256 of the zip directly in this endpoint easily without more complex parsing,
-            # but we can check if we can get it or at least log the API metadata.
-            # Most importantly, we verify the zip we just downloaded.
-            sha256sum target/${{ env.PROFILE }}/artifact_download
-          fi
+          # Log SHA256 of the bundle
+          sha256sum target/${{ env.PROFILE }}/bundle.zip
 
-          # Download signature (assuming it's available at .asc suffix or part of the zip)
-          # If it's a zip from GitHub artifacts, it might not have the .asc inside unless we put it there.
-          # Our build workflows now upload .asc files alongside the binary.
-          SIG_URL="${ARTIFACT_URL%.zip}.asc"
-          if [[ "$ARTIFACT_URL" == *"/zip" ]]; then
-             # For GitHub API zip downloads, we need to find the actual binary artifact's signature.
-             # This is a bit complex for a shell script, so we'll try to download it if possible.
-             SIG_URL="${ARTIFACT_URL%/zip}.asc"
-          fi
+          echo "Unzipping bundle..."
+          unzip -o target/${{ env.PROFILE }}/bundle.zip -d target/${{ env.PROFILE }}/
+          rm target/${{ env.PROFILE }}/bundle.zip
 
-          echo "Attempting to download signature from: $SIG_URL"
-          curl -fL -o target/${{ env.PROFILE }}/conduwuit.asc -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$SIG_URL"
-
-          # Check if it's a zip file
-          if file target/${{ env.PROFILE }}/artifact_download | grep -q 'Zip archive data'; then
-            echo "Unzipping artifact..."
-            unzip -o target/${{ env.PROFILE }}/artifact_download -d target/${{ env.PROFILE }}/
-            rm target/${{ env.PROFILE }}/artifact_download
-          else
-            mv target/${{ env.PROFILE }}/artifact_download target/${{ env.PROFILE }}/conduwuit
-          fi
-
-          chmod +x target/${{ env.PROFILE }}/conduwuit || true
+          chmod +x target/${{ env.PROFILE }}/conduwuit
 
           # Mandatory GPG signature verification
           echo "Verifying GPG signature..."
           echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --batch --import
           gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
-          echo "OK. GPG signature verified."
+          echo "✅ GPG signature verified."
+
           mkdir -p target/latest
           ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
 
       - name: Version check
         run: |
+
           ./target/latest/conduwuit --version | tee target/latest/conduwuit.version
 
       - name: Checkout Complement
         run: |
+
           # Manual checkout of complement to avoid Node overhead
           if [ ! -d "complement-src" ]; then
             git clone --depth 1 https://github.com/matrix-org/complement complement-src
@@ -122,6 +92,7 @@ jobs:
 
       - name: Build Complement Docker image
         run: |
+
           ls -l target/latest/conduwuit
           DOCKER_BUILDKIT=1 docker buildx build \
             --build-arg BINARY_PATH=./target/latest/conduwuit \
@@ -135,17 +106,20 @@ jobs:
       - name: Run Complement tests
         continue-on-error: true
         run: |
+
           mkdir -p tests/test_results/complement/
           ./bin/complement ./complement-src
 
       - name: Compare results with baseline
         run: |
+
           VERBOSE=1 make complement/stats > new_stats.txt || true
           echo "=== Changes from baseline ==="
           diff --color=always -u baseline_stats.txt new_stats.txt || true
 
       - name: Debug Results
         run: |
+
           echo "Checking results directory:"
           ls -la tests/test_results/complement/
           echo "Log file size:"
@@ -156,6 +130,7 @@ jobs:
       - name: Summarize results
         id: summary
         run: |
+
           RESULTS="tests/test_results/complement/test_results.jsonl"
           if [ -f "$RESULTS" ]; then
             PASS=$(grep -c '"Action":"pass"' "$RESULTS" || true)
@@ -171,6 +146,7 @@ jobs:
       - name: Get conduwuit version
         id: version
         run: |
+
           # Use raw version output from the binary
           VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
