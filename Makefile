@@ -210,7 +210,7 @@ complement/stats: ##H Check local test stats from tests/test_results/complement/
 	echo "Total:     $$TOTAL"; \
 	echo ""; \
 	echo "JSON file (on main) last modified by: "; \
-	git log -1 --format="%an (%ad) %H"
+	git log -1 --format="%an (%ad) %H" origin/main
 
 
 .PHONY: complement/run
