@@ -59,8 +59,6 @@ standard = [
 	"systemd",
 	"url_preview",
 	"zstd_compression",
-    "sentry_telemetry",
-    "otlp_telemetry",
 	"console",
 ]
 full = [
