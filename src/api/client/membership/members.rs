@@ -1,6 +1,6 @@
 use axum::extract::State;
 use conduwuit::{
-	Err, Event, Pdu, PduCount, Result, at, err,
+	Err, Event, Result, at,
 	utils::{
 		future::TryExtExt,
 		stream::{BroadbandExt, ReadyExt},
@@ -41,47 +41,6 @@ pub(crate) async fn get_member_events_route(
 		.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));
-	}
-
-	if let Some(at) = body.at.as_deref() {
-		let pdu_count: PduCount = at
-			.parse()
-			.map_err(|_| err!(Request(InvalidParam("Invalid 'at' token."))))?;
-
-		let mut pdus_rev = services
-			.rooms
-			.timeline
-			.pdus_rev(&body.room_id, Some(pdu_count))
-			.boxed();
-
-		let Some(Ok((_, pdu))) = pdus_rev.next().await else {
-			return Err!(Request(NotFound("Point in time not found in timeline.")));
-		};
-
-		let shortstatehash = services
-			.rooms
-			.state_accessor
-			.pdu_shortstatehash(pdu.event_id())
-			.await?;
-
-		// Collect into Vec<Pdu> to avoid HRTB/opaque-type conflicts with
-		// room_state_full's impl Event stream used later in this function.
-		let all_pdus: Vec<Pdu> = services
-			.rooms
-			.state_accessor
-			.state_full_pdus(shortstatehash)
-			.map(Event::into_pdu)
-			.collect()
-			.await;
-
-		let chunk = all_pdus
-			.into_iter()
-			.filter(|pdu| *pdu.kind() == ruma::events::TimelineEventType::RoomMember)
-			.filter_map(|pdu| membership_filter(pdu, membership, not_membership))
-			.map(Event::into_format)
-			.collect();
-
-		return Ok(get_member_events::v3::Response { chunk });
 	}
 
 	Ok(get_member_events::v3::Response {
