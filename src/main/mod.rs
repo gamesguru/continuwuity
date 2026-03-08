@@ -24,6 +24,12 @@ pub fn run() -> Result<()> {
 	panic::init();
 
 	let args = clap::parse();
+
+	if args.version_verbose {
+		println!("{}", conduwuit_build_metadata::verbose_version());
+		return Ok(());
+	}
+
 	run_with_args(&args)
 }
 
