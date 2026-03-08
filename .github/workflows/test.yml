@@ -18,10 +18,11 @@ jobs:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_PR_CHECKS_CLIPPY_CHECKS != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       PROFILE: dev-quick
-      ROCKSDB_LIB_DIR: /usr/lib/x86_64-linux-gnu
+      ROCKSDB_LIB_DIR: /usr/local/lib
+      LD_LIBRARY_PATH: /usr/local/lib
 
     steps:
       - uses: actions/checkout@v4
@@ -40,10 +41,29 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
-            librocksdb-dev \
             clang \
             libclang-dev \
             llvm-dev
+
+      - name: Cache RocksDB
+        id: rocksdb-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/librocksdb*
+          key: rocksdb-10.5.1-ubuntu-24.04
+
+      - name: Build RocksDB 10.5.1
+        if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
+          cd /tmp/rocksdb
+          make shared_lib -j$(nproc)
+          sudo make install-shared PREFIX=/usr/local
+          sudo ldconfig
+
+      - name: Install RocksDB from cache
+        if: steps.rocksdb-cache.outputs.cache-hit == 'true'
+        run: sudo ldconfig
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -84,7 +104,8 @@ jobs:
     env:
       PROFILE: release
       FEATURES: "direct_tls"
-      ROCKSDB_LIB_DIR: /usr/lib/x86_64-linux-gnu
+      ROCKSDB_LIB_DIR: /usr/local/lib
+      LD_LIBRARY_PATH: /usr/local/lib
 
     strategy:
       fail-fast: false
@@ -118,10 +139,29 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
-            librocksdb-dev \
             clang \
             libclang-dev \
             llvm-dev
+
+      - name: Cache RocksDB
+        id: rocksdb-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/librocksdb*
+          key: rocksdb-10.5.1-${{ matrix.os }}
+
+      - name: Build RocksDB 10.5.1
+        if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
+          cd /tmp/rocksdb
+          make shared_lib -j$(nproc)
+          sudo make install-shared PREFIX=/usr/local
+          sudo ldconfig
+
+      - name: Install RocksDB from cache
+        if: steps.rocksdb-cache.outputs.cache-hit == 'true'
+        run: sudo ldconfig
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
