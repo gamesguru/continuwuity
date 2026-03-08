@@ -14,6 +14,7 @@ endif
 
 # Example .env:
 # #!/bin/bash
+# export ROCKSDB_LIB_DIR=/usr/lib
 # export OS_VERSION=ubuntu-24.04
 # export GH_REPO=gamesguru/continuwuity
 # export SKIP_CONFIRM=1
@@ -81,38 +82,18 @@ vars: ##H Print debug info
 # Development commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.PHONY: cargo/lock-init
-cargo/lock-init:	##H Init or fully upgrade the lockfile (wipes it)
-	cargo generate-lockfile
-	@echo "OK."
-
-.PHONY: cargo/lock-update
-cargo/lock-update: ##H Update Cargo.lock minimally to match Cargo.toml
-	@echo "Updating Cargo.lock..."
-	cargo metadata --format-version 1 --no-deps > /dev/null
-	@echo "OK."
-
-.PHONY: cargo/sync
-cargo/sync: ##H Sync Cargo.lock with origin/main and refresh minimally
-	@echo "Synchronizing Cargo.lock..."
-	git restore --source origin/main Cargo.lock
-	cargo metadata --format-version 1 --no-deps > /dev/null
-	@echo "OK."
-
-.PHONY: profiles
-profiles: ##H List available cargo profiles
-	# NOTE: not authoritative — see Cargo.toml for definitive profiles.
-	@grep "^\[profile\." Cargo.toml \
-		| sed 's/\[profile\.//;s/\]//' \
-		| grep -v 'package' \
-		| grep -v 'build-override' \
-		| sort
-
 PROFILE ?=
 p ?=
 CRATE ?=
 CARGO_SCOPE ?= $(if $(p),-p $(p),$(if $(CRATE),-p $(CRATE),--workspace))
 CARGO_FLAGS ?= --profile $(PROFILE)
+
+
+.PHONY: cargo/lock-init
+cargo/lock-init:	##H Init or fully upgrade the lockfile (wipes it)
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo generate-lockfile
+	@echo "OK."
+
 
 # For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
 RUSTFLAGS ?=
@@ -142,13 +123,13 @@ format: ##H Run pre-commit hooks/formatters
 lint:	##H Lint code
 	@echo "Lint code? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
 test:	##H Run tests
 	@echo "Run tests? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	cargo test $(CARGO_SCOPE) --features full --locked --profile $(PROFILE) --all-targets
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo test $(CARGO_SCOPE) --features full --locked --profile $(PROFILE) --all-targets
 
 
 ROCKSDB_LIB_DIR ?=
@@ -182,8 +163,12 @@ clean:	##H Clean build directory for current profile
 build-docs:	##H Regenerate docs (admin commands, etc.)
 	@echo "Regenerate docs with PROFILE='$(PROFILE)'?"
 	@$(MAKE) _confirm
-	cargo run -p xtask --profile $(PROFILE) -- generate-docs
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo run -p xtask --profile $(PROFILE) -- generate-docs
 
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Complement (build docker, stats, run... also used by CI)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 COMPLEMENT_DIR ?=
 COMPLEMENT_IMAGE ?= continuwuity:complement
