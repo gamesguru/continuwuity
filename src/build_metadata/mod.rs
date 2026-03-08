@@ -23,3 +23,24 @@ pub static GIT_REMOTE_WEB_URL: Option<&str> = option_env!("GIT_REMOTE_WEB_URL");
 pub static GIT_REMOTE_COMMIT_URL: Option<&str> = option_env!("GIT_REMOTE_COMMIT_URL");
 pub static GIT_REMOTE_URL: Option<&str> = option_env!("GIT_REMOTE_URL");
 pub static GIT_BRANCH: Option<&str> = option_env!("GIT_BRANCH");
+
+#[must_use]
+pub fn verbose_version() -> String {
+	let semver = env!("CARGO_PKG_VERSION");
+	let fields = [
+		("version", Some(semver)),
+		("version_extra", VERSION_EXTRA),
+		("commit", GIT_COMMIT_HASH),
+		("commit_short", GIT_COMMIT_HASH_SHORT),
+		("branch", GIT_BRANCH),
+		("remote_url", GIT_REMOTE_URL),
+		("remote_web_url", GIT_REMOTE_WEB_URL),
+		("remote_commit_url", GIT_REMOTE_COMMIT_URL),
+	];
+
+	fields
+		.iter()
+		.map(|(k, v)| format!("{k}: {}", v.unwrap_or("(unknown)")))
+		.collect::<Vec<_>>()
+		.join("\n")
+}

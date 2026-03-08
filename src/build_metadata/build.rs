@@ -1,6 +1,8 @@
 #[path = "src/git.rs"]
 mod git;
 
+static GIT_BRANCH_MAIN: &str = "main";
+
 fn get_env(env_var: &str) -> Option<String> {
 	match std::env::var(env_var) {
 		| Ok(val) if !val.is_empty() => Some(val),
@@ -9,10 +11,6 @@ fn get_env(env_var: &str) -> Option<String> {
 }
 
 fn main() {
-	// built gets the default crate from the workspace. Not sure if this is intended
-	// behavior, but it's what we want.
-	// built::write_built_file().expect("Failed to acquire build-time information");
-
 	// --- Git Information ---
 	let mut commit_hash = None;
 	let mut commit_hash_short = None;
@@ -33,7 +31,7 @@ fn main() {
 	}
 
 	if get_env("CONTINUWUITY_VERSION_EXTRA").is_none() {
-		let desc = std::env::var("GIT_DESCRIBE").ok().or_else(git::description);
+		let desc = git::description();
 		let mut extra = vec![desc.unwrap_or_else(|| {
 			commit_hash_short
 				.clone()
@@ -43,7 +41,7 @@ fn main() {
 			.or_else(|| git::run(&["rev-parse", "--abbrev-ref", "HEAD"]))
 		{
 			println!("cargo:rustc-env=GIT_BRANCH={b}");
-			extra.push(format!("b={b}"));
+			extra.extend(git::branch_tag(&b, GIT_BRANCH_MAIN));
 		}
 		extra.retain(|s| !s.is_empty());
 		println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={}", extra.join(","));
@@ -96,7 +94,6 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=GIT_COMMIT_HASH_SHORT");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_URL");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_COMMIT_URL");
-	println!("cargo:rerun-if-env-changed=GIT_DESCRIBE");
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_VERSION_EXTRA");
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_BRANCH");
 }
