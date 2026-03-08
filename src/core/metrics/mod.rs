@@ -1,8 +1,9 @@
 use std::sync::atomic::AtomicU32;
 
 use tokio::runtime;
+#[cfg(feature = "tokio_metrics")]
 use tokio_metrics::TaskMonitor;
-#[cfg(tokio_unstable)]
+#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 use tokio_metrics::{RuntimeIntervals, RuntimeMonitor};
 
 pub struct Metrics {
@@ -10,12 +11,13 @@ pub struct Metrics {
 
 	runtime_metrics: Option<runtime::RuntimeMetrics>,
 
+	#[cfg(feature = "tokio_metrics")]
 	task_monitor: Option<TaskMonitor>,
 
-	#[cfg(tokio_unstable)]
+	#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 	_runtime_monitor: Option<RuntimeMonitor>,
 
-	#[cfg(tokio_unstable)]
+	#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 	runtime_intervals: std::sync::Mutex<Option<RuntimeIntervals>>,
 
 	// TODO: move stats
@@ -27,10 +29,10 @@ pub struct Metrics {
 impl Metrics {
 	#[must_use]
 	pub fn new(runtime: Option<runtime::Handle>) -> Self {
-		#[cfg(tokio_unstable)]
+		#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 		let runtime_monitor = runtime.as_ref().map(RuntimeMonitor::new);
 
-		#[cfg(tokio_unstable)]
+		#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 		let runtime_intervals = runtime_monitor.as_ref().map(RuntimeMonitor::intervals);
 
 		Self {
@@ -38,12 +40,13 @@ impl Metrics {
 
 			runtime_metrics: runtime.as_ref().map(runtime::Handle::metrics),
 
+			#[cfg(feature = "tokio_metrics")]
 			task_monitor: runtime.map(|_| TaskMonitor::new()),
 
-			#[cfg(tokio_unstable)]
+			#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 			_runtime_monitor: runtime_monitor,
 
-			#[cfg(tokio_unstable)]
+			#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 			runtime_intervals: std::sync::Mutex::new(runtime_intervals),
 
 			requests_handle_active: AtomicU32::new(0),
@@ -52,7 +55,7 @@ impl Metrics {
 		}
 	}
 
-	#[cfg(tokio_unstable)]
+	#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 	pub fn runtime_interval(&self) -> Option<tokio_metrics::RuntimeMetrics> {
 		self.runtime_intervals
 			.lock()
@@ -63,6 +66,7 @@ impl Metrics {
 	}
 
 	#[inline]
+	#[cfg(feature = "tokio_metrics")]
 	pub fn task_root(&self) -> Option<&TaskMonitor> { self.task_monitor.as_ref() }
 
 	#[inline]
