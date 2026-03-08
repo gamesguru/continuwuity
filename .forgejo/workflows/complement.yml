@@ -25,9 +25,16 @@ jobs:
     env:
       RUSTC_WRAPPER: ccache
       PROFILE: release
-      FEATURES: "direct_tls"
 
     steps:
+      - name: Enforce main branch only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "This workflow must be run from the main branch."
+          echo "It does NOT build the source revision, but takes a URL to a built binary."
+          echo "Consult the relevant YAML workflow file for compatibility versioning."
+          exit 1
+
       - name: Slim Checkout
         run: |
           # Use raw git to avoid Node-based checkout action
@@ -64,14 +71,15 @@ jobs:
         run: |
           # Log sha256
           echo "expected sha256: ${{ github.event.inputs.artifact_sha256 }}"
+          echo "comparing sums..."
           sha256sum target/${{ env.PROFILE }}/bundle.zip
+          echo "OK."
 
       - name: Extract conduwuit bundle
         run: |
           echo "Unzipping bundle..."
           unzip -o target/${{ env.PROFILE }}/bundle.zip -d target/${{ env.PROFILE }}/
           rm target/${{ env.PROFILE }}/bundle.zip
-          chmod +x target/${{ env.PROFILE }}/conduwuit
 
       - name: Reject oversized (non-release?) binaries
         run: |
@@ -100,6 +108,9 @@ jobs:
 
       - name: Post-verification setup
         run: |
+          echo "Marking file as executable"
+          chmod +x target/${{ env.PROFILE }}/conduwuit
+          echo "Creating symlink to ./target/latest/"
           mkdir -p target/latest
           ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
 
@@ -170,6 +181,7 @@ jobs:
           fail_count: ${{ steps.summary.outputs.fail || 0 }}
           skip_count: ${{ steps.summary.outputs.skip || 0 }}
           version_string: ${{ steps.version.outputs.version }}
-          features: ${{ env.FEATURES }}
+          # TODO: collect features and full git hash from binary verbose output
+          features: ${{ env.FEATURES || "unknown" }}
           actor: ${{ forge.actor || github.actor }}
           binary_path: target/latest/conduwuit
