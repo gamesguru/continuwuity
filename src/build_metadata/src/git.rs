@@ -35,6 +35,16 @@ fn format(s: &str) -> String {
 	}
 }
 
+/// Returns `Some("b=<branch>")` for non-default branches, `None` for the
+/// default branch (suppressed from version strings).
+pub(crate) fn branch_tag(branch: &str, default_branch: &str) -> Option<String> {
+	if branch == default_branch {
+		None
+	} else {
+		Some(format!("b={branch}"))
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::format;
@@ -100,5 +110,21 @@ mod tests {
 		assert_eq!(format("v1.0.0-alpha.1-10-g1234567"), "1.0.0-alpha.1+10~1234567");
 		// Pre-release tag with dirty and commits
 		assert_eq!(format("v1.0.0-rc1-5-gabcdef0-dirty"), "1.0.0-rc1+5~abcdef0-dirty");
+	}
+
+	#[test]
+	fn test_branch_tag() {
+		use super::branch_tag;
+
+		// Default branch is suppressed
+		assert_eq!(branch_tag("main", "main"), None);
+		// Non-default branches are shown
+		assert_eq!(branch_tag("develop", "main"), Some("b=develop".into()));
+		assert_eq!(branch_tag("feature/foo", "main"), Some("b=feature/foo".into()));
+		// HEAD (detached) is shown
+		assert_eq!(branch_tag("HEAD", "main"), Some("b=HEAD".into()));
+		// Custom default branch
+		assert_eq!(branch_tag("master", "master"), None);
+		assert_eq!(branch_tag("main", "master"), Some("b=main".into()));
 	}
 }
