@@ -28,7 +28,7 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: ${{ github.event.inputs.runner || 'ubuntu-22.04-avx512-heliohost' }}
+    runs-on: ${{ github.event.inputs.runner }}
 
     env:
       RUSTC_WRAPPER: ccache
