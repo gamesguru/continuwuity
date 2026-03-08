@@ -14,7 +14,7 @@ endif
 
 # Example .env:
 # #!/bin/bash
-# export ROCKSDB_LIB_DIR=/usr/lib
+# export ROCKSDB_LIB_DIR=/usr/local/lib
 # export OS_VERSION=ubuntu-24.04
 # export GH_REPO=gamesguru/continuwuity
 # export SKIP_CONFIRM=1
