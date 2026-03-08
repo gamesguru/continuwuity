@@ -28,17 +28,17 @@ pub struct Metrics {
 
 impl Metrics {
 	#[must_use]
-	pub fn new(runtime: Option<runtime::Handle>) -> Self {
+	pub fn new(runtime: Option<&runtime::Handle>) -> Self {
 		#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
-		let runtime_monitor = runtime.as_ref().map(RuntimeMonitor::new);
+		let runtime_monitor = runtime.as_ref().map(|rt| RuntimeMonitor::new(*rt));
 
 		#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 		let runtime_intervals = runtime_monitor.as_ref().map(RuntimeMonitor::intervals);
 
 		Self {
-			_runtime: runtime.clone(),
+			_runtime: runtime.cloned(),
 
-			runtime_metrics: runtime.as_ref().map(runtime::Handle::metrics),
+			runtime_metrics: runtime.map(runtime::Handle::metrics),
 
 			#[cfg(feature = "tokio_metrics")]
 			task_monitor: runtime.map(|_| TaskMonitor::new()),
