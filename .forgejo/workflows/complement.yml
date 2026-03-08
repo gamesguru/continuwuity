@@ -20,11 +20,10 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: ubuntu-22.04-avx512
+    runs-on: ubuntu-22.04-avx512-heliohost
 
     env:
       RUSTC_WRAPPER: ccache
-      PROFILE: release
 
     steps:
       - name: Enforce main branch only
@@ -182,6 +181,6 @@ jobs:
           skip_count: ${{ steps.summary.outputs.skip || 0 }}
           version_string: ${{ steps.version.outputs.version }}
           # TODO: collect features and full git hash from binary verbose output
-          features: ${{ env.FEATURES || "unknown" }}
+          features: ${{ env.FEATURES || 'unknown' }}
           actor: ${{ forge.actor || github.actor }}
           binary_path: target/latest/conduwuit
