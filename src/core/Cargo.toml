@@ -52,6 +52,7 @@ release_max_log_level = [
 	"log/release_max_level_info",
 ]
 sentry_telemetry = []
+tokio_metrics = ["dep:tokio-metrics"]
 zstd_compression = [
     "reqwest/zstd",
 ]
@@ -106,6 +107,7 @@ tikv-jemalloc-ctl.workspace = true
 tikv-jemalloc-sys.optional = true
 tikv-jemalloc-sys.workspace = true
 tokio.workspace = true
+tokio-metrics.optional = true
 tokio-metrics.workspace = true
 toml.workspace = true
 tracing-core.workspace = true

@@ -64,6 +64,9 @@ release_max_log_level = [
 	"log/max_level_trace",
 	"log/release_max_level_info",
 ]
+tokio_metrics = [
+	"conduwuit-core/tokio_metrics",
+]
 zstd_compression = [
 	"conduwuit-api/zstd_compression",
 	"conduwuit-core/zstd_compression",

@@ -66,9 +66,13 @@ standard = [
 full = [
     "standard",
     # "hardened_malloc", # Conflicts with jemalloc
+]
+
+local_profiling = [
     "jemalloc_prof",
     "perf_measurements",
     "tokio_console",
+    "tokio_metrics",
 ]
 
 blurhashing = [
@@ -172,6 +176,11 @@ journald = [ # This is a stub on non-unix platforms
 tokio_console = [
 	"dep:console-subscriber",
 	"tokio/tracing",
+]
+tokio_metrics = [
+    "dep:tokio-metrics",
+    "conduwuit-core/tokio_metrics",
+    "conduwuit-admin/tokio_metrics",
 ]
 url_preview = [
 	"conduwuit-service/url_preview",
