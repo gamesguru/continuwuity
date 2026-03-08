@@ -20,7 +20,7 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: ubuntu-22.04-avx512
+    runs-on: ubuntu-22.04-avx512-heliohost
 
     env:
       RUSTC_WRAPPER: ccache
