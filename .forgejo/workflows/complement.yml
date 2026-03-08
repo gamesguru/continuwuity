@@ -8,6 +8,14 @@ on:
         description: "URL to zipped conduwuit binary"
         required: true
         type: string
+      runner:
+        description: "Runner label"
+        required: false
+        type: choice
+        default: ubuntu-22.04-avx512-heliohost
+        options:
+          - ubuntu-22.04-avx512-heliohost
+          - ubuntu-24.04-avx512-heliohost
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,7 +28,7 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: ubuntu-22.04-avx512-heliohost
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-22.04-avx512-heliohost' }}
 
     env:
       RUSTC_WRAPPER: ccache
@@ -162,9 +170,9 @@ jobs:
         run: |
           RESULTS="tests/test_results/complement/test_results.jsonl"
           if [ -f "$RESULTS" ]; then
-            PASS=$(grep -c '"Action":"pass"' "$RESULTS" || true)
-            FAIL=$(grep -c '"Action":"fail"' "$RESULTS" || true)
-            SKIP=$(grep -c '"Action":"skip"' "$RESULTS" || true)
+            PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
+            FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' "$RESULTS")
+            SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' "$RESULTS")
             TOTAL=$((PASS + FAIL + SKIP))
             echo "pass=$PASS" | tee -a $GITHUB_OUTPUT
             echo "fail=$FAIL" | tee -a $GITHUB_OUTPUT
