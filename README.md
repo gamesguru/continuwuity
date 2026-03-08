@@ -39,49 +39,6 @@ Trials:
 
 [![Trial 6 (Forgejo raw path without badges repo)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fforgejo%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
 
-<table border="0">
-  <tr>
-    <td valign="top"><b>Version</b></td>
-    <td valign="top"><b>Forgejo</b></td>
-    <td valign="top"><b>GitHub</b></td>
-  </tr>
-  <tr>
-    <td valign="top">HEAD (a7db2d7)</td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json&label=Tests&color=darkgrey" alt="Forgejo HEAD"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json&label=Tests&color=darkgrey" alt="GitHub HEAD"></td>
-  </tr>
-  <tr>
-    <td valign="top">HEAD~1 (b991d9e)</td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2Fb991d9eff024d87a586392c0612df5ad5052a34c.json&label=Tests&color=darkgrey" alt="Forgejo HEAD~1"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fb991d9eff024d87a586392c0612df5ad5052a34c.json&label=Tests&color=darkgrey" alt="GitHub HEAD~1"></td>
-  </tr>
-  <tr>
-    <td valign="top">v0.5.6</td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2Fe2f6440447e7bf361fd32f860450dedd14be2fc7.json&label=Tests&color=darkgrey" alt="Forgejo v0.5.6"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fe2f6440447e7bf361fd32f860450dedd14be2fc7.json&label=Tests&color=darkgrey" alt="GitHub v0.5.6"></td>
-  </tr>
-  <tr>
-    <td valign="top">v0.5.5</td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2Fee618471b5354db612c9b2b49fa8fa78ac1f66b7.json&label=Tests&color=darkgrey" alt="Forgejo v0.5.5"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fee618471b5354db612c9b2b49fa8fa78ac1f66b7.json&label=Tests&color=darkgrey" alt="GitHub v0.5.5"></td>
-  </tr>
-  <tr>
-    <td valign="top">v0.5.4</td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2Fa6b22e85669956e6fa9e20ef48854d9c33a11503.json&label=Tests&color=darkgrey" alt="Forgejo v0.5.4"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fa6b22e85669956e6fa9e20ef48854d9c33a11503.json&label=Tests&color=darkgrey" alt="GitHub v0.5.4"></td>
-  </tr>
-  <tr>
-    <td valign="top">v0.5.3</td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2F6c390f41a981619a232de6ada01df8fa2722677a.json&label=Tests&color=darkgrey" alt="Forgejo v0.5.3"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F6c390f41a981619a232de6ada01df8fa2722677a.json&label=Tests&color=darkgrey" alt="GitHub v0.5.3"></td>
-  </tr>
-  <tr>
-    <td valign="top">v0.5.2</td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fforgejo%2Fcommits%2F46bc6a237c0ff570587c247ff0d6c2c74117a3cc.json&label=Tests&color=darkgrey" alt="Forgejo v0.5.2"></td>
-    <td valign="top"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2F46bc6a237c0ff570587c247ff0d6c2c74117a3cc.json&label=Tests&color=darkgrey" alt="GitHub v0.5.2"></td>
-  </tr>
-</table>
-
 ### Why does this exist?
 
 The original conduwuit project has been archived and is no longer maintained. Rather than letting this Rust-based Matrix homeserver disappear, a group of community contributors have forked the project to continue its development, fix outstanding issues, and add new features.
