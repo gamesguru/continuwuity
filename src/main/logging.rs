@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+#[cfg(feature = "otlp_telemetry")]
+use conduwuit_core::warn;
 use conduwuit_core::{
 	Result,
 	config::Config,
 	debug_warn, err,
 	log::{ConsoleFormat, ConsoleWriter, LogLevelReloadHandles, capture, fmt_span},
 	result::UnwrapOrErr,
-	warn,
 };
 #[cfg(feature = "otlp_telemetry")]
 use opentelemetry::trace::TracerProvider;
