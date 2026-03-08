@@ -153,12 +153,12 @@ jobs:
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
 
       - name: Run Complement tests (currently xfailing ~200 tests)
-        continue-on-error: true
         run: |
           mkdir -p tests/test_results/complement/
           ./bin/complement ./complement-src
 
       - name: Compare results with baseline
+        continue-on-error: true
         run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 make complement/stats)
 
       - name: Peek at results directory (log file sizes)

@@ -182,11 +182,11 @@ jobs:
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
 
       - name: Build and run Complement tests
-        continue-on-error: true
         run: |
           ./bin/complement ./complement-src
 
       - name: Compare results with baseline
+        continue-on-error: true
         run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 make complement/stats)
 
       - name: Upload test logs
