@@ -151,12 +151,14 @@ test:	##H Run tests
 	cargo test $(CARGO_SCOPE) --features full --locked --profile $(PROFILE) --all-targets
 
 
+ROCKSDB_LIB_DIR ?=
+
 .PHONY: build
 build:	##H Build with selected profile
 	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
 	@echo "Build this profile? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	cargo build --features full --locked $(CARGO_FLAGS)
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo build --features full --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
 	# ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest

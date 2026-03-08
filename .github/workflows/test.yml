@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PROFILE: dev-quick
+      ROCKSDB_LIB_DIR: /usr/lib/x86_64-linux-gnu
 
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +40,7 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            librocksdb-dev \
             clang \
             libclang-dev \
             llvm-dev
@@ -82,6 +84,7 @@ jobs:
     env:
       PROFILE: release
       FEATURES: "direct_tls"
+      ROCKSDB_LIB_DIR: /usr/lib/x86_64-linux-gnu
 
     strategy:
       fail-fast: false
@@ -115,6 +118,7 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            librocksdb-dev \
             clang \
             libclang-dev \
             llvm-dev
