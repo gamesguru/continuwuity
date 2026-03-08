@@ -28,7 +28,7 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: ${{ github.event.inputs.runner }}
+    runs-on: ${{ inputs.runner }}
 
     env:
       RUSTC_WRAPPER: ccache
