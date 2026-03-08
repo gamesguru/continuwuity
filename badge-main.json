@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "Complement Tests",
-  "message": "490 pass, 8 skip, 242 fail",
-  "color": "red"
+  "message": "0 pass, 0 skip, 0 fail",
+  "color": "green"
 }
