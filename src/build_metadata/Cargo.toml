@@ -24,7 +24,6 @@ crate-type = [
 [dependencies]
 
 [build-dependencies]
-built = { version = "0.8", features = [] }
 
 [lints]
 workspace = true

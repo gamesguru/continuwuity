@@ -97,5 +97,43 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_VERSION_EXTRA");
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_BRANCH");
 
-	built::write_built_file().expect("Failed to acquire build-time information");
+	// Host info
+	println!("cargo:rustc-env=HOST_OS={}", std::env::consts::OS);
+	println!("cargo:rustc-env=HOST_ARCH={}", std::env::consts::ARCH);
+
+	// Build profile and environment variables passed by Cargo to the build script
+	if let Ok(profile) = std::env::var("PROFILE") {
+		println!("cargo:rustc-env=PROFILE={profile}");
+	}
+	if let Ok(opt_level) = std::env::var("OPT_LEVEL") {
+		println!("cargo:rustc-env=OPT_LEVEL={opt_level}");
+	}
+	if let Ok(debug) = std::env::var("DEBUG") {
+		println!("cargo:rustc-env=DEBUG={debug}");
+	}
+	if let Ok(target) = std::env::var("TARGET") {
+		println!("cargo:rustc-env=TARGET={target}");
+	}
+	if let Ok(host) = std::env::var("HOST") {
+		println!("cargo:rustc-env=HOST={host}");
+	}
+
+	// Target Configuration Variables
+	if let Ok(endian) = std::env::var("CARGO_CFG_TARGET_ENDIAN") {
+		println!("cargo:rustc-env=CFG_ENDIAN={endian}");
+	}
+	if let Ok(ptr_width) = std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH") {
+		println!("cargo:rustc-env=CFG_POINTER_WIDTH={ptr_width}");
+	}
+	if let Ok(env) = std::env::var("CARGO_CFG_TARGET_ENV") {
+		println!("cargo:rustc-env=CFG_ENV={env}");
+	}
+
+	// Rustc Version
+	if let Ok(rustc) = std::process::Command::new("rustc").arg("--version").output() {
+		println!(
+			"cargo:rustc-env=RUSTC_VERSION={}",
+			String::from_utf8_lossy(&rustc.stdout).trim()
+		);
+	}
 }

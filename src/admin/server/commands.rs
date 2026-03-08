@@ -166,29 +166,25 @@ pub(super) async fn list_features(&self) -> Result {
 		.copied()
 		.unwrap_or(&[]);
 
-	let mut features = String::new();
-
+	let mut active_features = Vec::new();
 	for feature in available_features {
-		let active = enabled_features.contains(feature);
-		let emoji = if active { "✅" } else { "❌" };
-		let remark = if active { "[enabled]" } else { "" };
-		writeln!(features, "{emoji} {feature} {remark}")?;
+		if enabled_features.contains(feature) {
+			active_features.push(*feature);
+		}
 	}
 
-	self.write_str(&features).await
+	self.write_str(&active_features.join(", ")).await
 }
 
 #[admin_command]
 pub(super) async fn build_info(&self) -> Result {
-	use conduwuit::build_metadata::built;
-
 	let mut info = String::new();
 
 	// Version information
 	writeln!(info, "# Build Information\n")?;
-	writeln!(info, "**Version:** {}", built::PKG_VERSION)?;
-	writeln!(info, "**Package:** {}", built::PKG_NAME)?;
-	writeln!(info, "**Description:** {}", built::PKG_DESCRIPTION)?;
+	writeln!(info, "**Version:** {}", env!("CARGO_PKG_VERSION"))?;
+	writeln!(info, "**Package:** {}", env!("CARGO_PKG_NAME"))?;
+	writeln!(info, "**Description:** {}", env!("CARGO_PKG_DESCRIPTION"))?;
 
 	// Git information
 	writeln!(info, "\n## Git Information\n")?;
@@ -207,34 +203,43 @@ pub(super) async fn build_info(&self) -> Result {
 
 	// Build environment
 	writeln!(info, "\n## Build Environment\n")?;
-	writeln!(info, "**Profile:** {}", built::PROFILE)?;
-	writeln!(info, "**Optimization Level:** {}", built::OPT_LEVEL)?;
-	writeln!(info, "**Debug:** {}", built::DEBUG)?;
-	writeln!(info, "**Target:** {}", built::TARGET)?;
-	writeln!(info, "**Host:** {}", built::HOST)?;
+	if let Some(profile) = conduwuit::build_metadata::PROFILE {
+		writeln!(info, "**Profile:** {profile}")?;
+	}
+	if let Some(opt) = conduwuit::build_metadata::OPT_LEVEL {
+		writeln!(info, "**Optimization Level:** {opt}")?;
+	}
+	if let Some(debug) = conduwuit::build_metadata::DEBUG {
+		writeln!(info, "**Debug:** {debug}")?;
+	}
+	if let Some(target) = conduwuit::build_metadata::TARGET {
+		writeln!(info, "**Target:** {target}")?;
+	}
+	if let Some(host) = conduwuit::build_metadata::HOST {
+		writeln!(info, "**Host:** {host}")?;
+	}
 
 	// Rust compiler information
 	writeln!(info, "\n## Compiler Information\n")?;
-	writeln!(info, "**Rustc Version:** {}", built::RUSTC_VERSION)?;
-	if !built::RUSTDOC_VERSION.is_empty() {
-		writeln!(info, "**Rustdoc Version:** {}", built::RUSTDOC_VERSION)?;
+	if let Some(rustc) = conduwuit::build_metadata::RUSTC_VERSION {
+		writeln!(info, "**Rustc Version:** {rustc}")?;
 	}
 
 	// Target configuration
 	writeln!(info, "\n## Target Configuration\n")?;
-	writeln!(info, "**Architecture:** {}", built::CFG_TARGET_ARCH)?;
-	writeln!(info, "**OS:** {}", built::CFG_OS)?;
-	writeln!(info, "**Family:** {}", built::CFG_FAMILY)?;
-	writeln!(info, "**Endianness:** {}", built::CFG_ENDIAN)?;
-	writeln!(info, "**Pointer Width:** {} bits", built::CFG_POINTER_WIDTH)?;
-	if !built::CFG_ENV.is_empty() {
-		writeln!(info, "**Environment:** {}", built::CFG_ENV)?;
+	writeln!(info, "**Architecture:** {}", std::env::consts::ARCH)?;
+	writeln!(info, "**OS:** {}", std::env::consts::OS)?;
+	writeln!(info, "**Family:** {}", std::env::consts::FAMILY)?;
+	if let Some(endian) = conduwuit::build_metadata::CFG_ENDIAN {
+		writeln!(info, "**Endianness:** {endian}")?;
 	}
-
-	// CI information
-	if let Some(ci) = built::CI_PLATFORM {
-		writeln!(info, "\n## CI Platform\n")?;
-		writeln!(info, "**Platform:** {ci}")?;
+	if let Some(ptr_width) = conduwuit::build_metadata::CFG_POINTER_WIDTH {
+		writeln!(info, "**Pointer Width:** {ptr_width} bits")?;
+	}
+	if let Some(env) = conduwuit::build_metadata::CFG_ENV {
+		if !env.is_empty() {
+			writeln!(info, "**Environment:** {env}")?;
+		}
 	}
 
 	self.write_str(&info).await
