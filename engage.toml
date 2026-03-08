@@ -1,3 +1,6 @@
+# Optional env vars (export before running engage):
+#   ROCKSDB_LIB_DIR=/usr/local/lib  — headers/linkers for development, faster builds!!
+#   LD_LIBRARY_PATH=/usr/local/lib  — runtime library (you likely do not need this)
 interpreter = ["bash", "-euo", "pipefail", "-c"]
 
 [[task]]
