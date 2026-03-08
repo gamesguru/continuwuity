@@ -124,7 +124,7 @@ jobs:
       - name: Get conduwuit version
         id: version
         run: |
-          VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
+          VERSION=$(./target/latest/conduwuit --version)
           echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
 
       - name: Checkout Complement
