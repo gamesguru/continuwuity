@@ -1,9 +1,4 @@
-use std::{
-	env,
-	fmt::Write,
-	fs,
-	path::Path,
-};
+use std::{env, fmt::Write, fs, path::Path};
 
 fn main() {
 	println!("cargo:rerun-if-changed=Cargo.toml");
