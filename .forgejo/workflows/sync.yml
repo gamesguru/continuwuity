@@ -25,47 +25,74 @@ jobs:
 
       - name: Sync main
         run: |
+          echo "::group::Sync main"
+          echo "Fetching from github..."
           if git fetch github main; then
+            echo "Fetching from origin..."
             git fetch origin main || true
             if git show-ref --verify --quiet refs/remotes/origin/main; then
+              echo "Checking out main..."
               git checkout -B main origin/main
+              echo "Merging..."
               git merge FETCH_HEAD --no-edit || exit 1
             else
+              echo "Creating main..."
               git checkout -b main FETCH_HEAD
             fi
-            git push origin main
+            echo "Pushing..."
+            git push origin main --no-verify
+            echo "Done."
           else
             echo "Failed to fetch GitHub main."
             exit 1
           fi
+          echo "::endgroup::"
 
       - name: Sync dev
         run: |
+          echo "::group::Sync dev"
+          echo "Fetching from github..."
           if git fetch github dev; then
+            echo "Fetching from origin..."
             git fetch origin dev || true
             if git show-ref --verify --quiet refs/remotes/origin/dev; then
+              echo "Checking out dev..."
               git checkout -B dev origin/dev
+              echo "Merging..."
               git merge FETCH_HEAD --no-edit || exit 1
             else
+              echo "Creating dev..."
               git checkout -b dev FETCH_HEAD
             fi
-            git push origin dev
+            echo "Pushing..."
+            git push origin dev --no-verify
+            echo "Done."
           else
             echo "Failed to fetch GitHub dev."
             exit 1
           fi
+          echo "::endgroup::"
 
       - name: Sync metadata
         run: |
+          echo "::group::Sync metadata"
+          echo "Fetching from github..."
           if git fetch github _metadata/badges; then
+            echo "Fetching from origin..."
             git fetch origin _metadata/badges || true
             if git show-ref --verify --quiet refs/remotes/origin/_metadata/badges; then
+              echo "Checking out metadata..."
               git checkout -B _metadata/badges origin/_metadata/badges
+              echo "Merging..."
               git merge FETCH_HEAD --no-edit --allow-unrelated-histories || exit 1
             else
+              echo "Creating metadata..."
               git checkout -b _metadata/badges FETCH_HEAD
             fi
-            git push origin _metadata/badges
+            echo "Pushing..."
+            git push origin _metadata/badges --no-verify
+            echo "Done."
           else
             echo "GitHub _metadata/badges not found, skipping."
           fi
+          echo "::endgroup::"
