@@ -67,14 +67,17 @@ cpu-info: ##H Print CPU info relevant to target-cpu=native
 	@rustc -vV | grep host
 	@echo "=== rustc Native CPU ==="
 	@rustc --print=cfg -C target-cpu=native 2>/dev/null | grep target_feature | sort
-	@echo "=== CPU Flags (from /proc/cpuinfo) ==="
+	@echo "=== CPU Flags [from /proc/cpuinfo] ==="
 	@grep -m1 'flags' /proc/cpuinfo 2>/dev/null | tr ' ' '\n' | grep -E 'avx|sse|aes|bmi|fma|popcnt|lzcnt|sha|pclmul' | sort
 
 .PHONY: vars
 vars: ##H Print debug info
 	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
 	@echo "... computing version."
-	@printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
+	@ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
 		"$$(cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
 
 
@@ -91,6 +94,9 @@ CARGO_FLAGS ?= --profile $(PROFILE)
 
 .PHONY: cargo/lock-init
 cargo/lock-init:	##H Init or fully upgrade the lockfile (wipes it)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo generate-lockfile
 	@echo "OK."
 
@@ -118,18 +124,28 @@ _confirm:
 .PHONY: format
 format: ##H Run pre-commit hooks/formatters
 	pre-commit run --all-files
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		cargo fix $(CARGO_SCOPE) --allow-dirty --allow-no-vcs
 
 .PHONY: lint
 lint:	##H Lint code
 	@echo "Lint code? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo clippy $(CARGO_SCOPE) --no-default-features --locked --no-deps --profile $(PROFILE) -- -D warnings
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		cargo clippy $(CARGO_SCOPE) --no-default-features --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
 test:	##H Run tests
 	@echo "Run tests? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo test $(CARGO_SCOPE) --no-default-features --locked --profile $(PROFILE) --all-targets
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		cargo test $(CARGO_SCOPE) --no-default-features --locked --profile $(PROFILE) --all-targets
 
 
 ROCKSDB_LIB_DIR ?= /usr/local/lib
@@ -167,7 +183,10 @@ clean:	##H Clean build directory for current profile
 build-docs:	##H Regenerate docs (admin commands, etc.)
 	@echo "Regenerate docs with PROFILE='$(PROFILE)'?"
 	@$(MAKE) _confirm
-	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo run -p xtask --profile $(PROFILE) --no-default-features -- generate-docs
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		cargo run -p xtask --profile $(PROFILE) --no-default-features -- generate-docs
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
