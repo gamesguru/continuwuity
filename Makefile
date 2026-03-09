@@ -16,16 +16,16 @@ endif
 #!/bin/bash
 # export ROCKSDB_INCLUDE_DIR=/usr/local/include
 # export ROCKSDB_LIB_DIR=/usr/local/lib
-# export LD_LIBRARY_PATH=$ROCKSDB_LIB_DIR:$LD_LIBRARY_PATH
+# export LD_LIBRARY_PATH=${ROCKSDB_LIB_DIR}:${LD_LIBRARY_PATH}
 # #export CPU_TARGET=skylake
 # export OS_VERSION=ubuntu-24.04
-# export GH_REPO=<...>/continuwuity
+# export GH_REPO=.../continuwuity
 # export SKIP_CONFIRM=1
 # export PROFILE=dev-quick
 # # export PROFILE=release-high-perf
 # # export RUSTFLAGS="-C target-cpu=native"
 # # export RUSTFLAGS="-C target-cpu=skylake"
-# export COMPLEMENT_DIR="/<...>/complement-suite"
+# export COMPLEMENT_DIR="/.../complement-suite"
 # export CONDUWUIT_CONFIG="/<...>/etc/conduwuit/conduwuit.toml"
 # export CONDUWUIT_DATABASE_PATH=/var/lib/conduwuit-v18
 
@@ -133,7 +133,7 @@ _confirm:
 .PHONY: format
 format: ##H Run pre-commit hooks/formatters
 	pre-commit run --all-files
-	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+#	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		cargo fix $(CARGO_SCOPE) $(CARGO_FLAGS) --features default --allow-dirty --allow-no-vcs
