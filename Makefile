@@ -139,7 +139,10 @@ build:	##H Build with selected profile
 	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
 	@echo "Build this profile? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo build --no-default-features --locked $(CARGO_FLAGS)
+	ROCKSDB_INCLUDE_DIR=/usr/local/include \
+		ROCKSDB_LIB_DIR=/usr/local/lib \
+		LD_LIBRARY_PATH=$$ROCKSDB_LIB_DIR:$$LD_LIBRARY_PATH \
+		cargo build --no-default-features --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
 	# ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
