@@ -3,7 +3,7 @@ name: PR Checks
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -170,6 +170,9 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
+      - name: Build Complement Docker image
+        run: make complement/docker
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -177,16 +180,8 @@ jobs:
           path: |
             target/latest/conduwuit
             target/latest/conduwuit.asc
+            target/latest/lib/
           retention-days: 60
-
-      # - name: Set up Go
-      #   uses: actions/setup-go@v5
-      #   with:
-      #     go-version: "1.22"
-      #     cache-dependency-path: complement-src/go.sum
-
-      # - name: Install gotestsum
-      #   run: go install gotest.tools/gotestsum@latest
 
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
@@ -197,8 +192,14 @@ jobs:
           repository: matrix-org/complement
           path: complement-src
 
-      - name: Build Complement Docker image
-        run: make complement/docker
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: complement-src/go.sum
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
 
       - name: Run Complement tests
         run: |

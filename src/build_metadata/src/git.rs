@@ -37,6 +37,7 @@ fn format(s: &str) -> String {
 
 /// Returns `Some("b=<branch>")` for non-default branches, `None` for the
 /// default branch (suppressed from version strings).
+#[allow(dead_code)]
 pub(crate) fn branch_tag(branch: &str, default_branch: &str) -> Option<String> {
 	if branch == default_branch {
 		None

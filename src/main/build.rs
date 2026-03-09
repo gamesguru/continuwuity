@@ -6,7 +6,7 @@ fn main() {
 	let mut enabled_features = Vec::new();
 	for (key, _) in env::vars() {
 		if let Some(f) = key.strip_prefix("CARGO_FEATURE_") {
-			let feature = f.to_lowercase();
+			let feature = f.to_lowercase().replace('_', "-");
 			if feature != "default" {
 				enabled_features.push(feature);
 			}
@@ -44,7 +44,7 @@ fn main() {
 ",
 	);
 	for f in &enabled_features {
-		let _ = writeln!(out, "    \"{f}\",");
+		writeln!(out, "    \"{f}\",").unwrap();
 	}
 	out.push_str("];\n\n");
 
@@ -53,9 +53,8 @@ fn main() {
 ",
 	);
 	for f in &available_features {
-		let _ = writeln!(out, "    \"{f}\",");
+		writeln!(out, "    \"{f}\",").unwrap();
 	}
 	out.push_str("];\n");
-
 	fs::write(&dest_path, out).unwrap();
 }

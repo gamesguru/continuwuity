@@ -63,5 +63,7 @@ export CONTINUWUITY_TLS__CERTS="/$SERVER_NAME.crt"
 export CONTINUWUITY_SERVER_NAME="$SERVER_NAME"
 
 echo "Starting Continuwuity with SERVER_NAME=$SERVER_NAME"
-# Start continuwuity
-/usr/local/bin/conduwuit --config /etc/continuwuity/config.toml
+chown -R ${CONDUWUIT_UID}:${CONDUWUIT_GID} "/$SERVER_NAME.key" "/$SERVER_NAME.crt"
+
+# Drop root privileges and start continuwuity as the host UID
+exec setpriv --reuid=${CONDUWUIT_UID} --regid=${CONDUWUIT_GID} --clear-groups /usr/local/bin/conduwuit --config /etc/continuwuity/config.toml

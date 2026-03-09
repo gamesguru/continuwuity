@@ -3,9 +3,9 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 env:
@@ -54,6 +54,7 @@ jobs:
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}
+          arch: haswell
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -163,8 +164,6 @@ jobs:
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
-
-
       - name: Build (${{ steps.cpu.outputs.target }})
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -202,7 +201,7 @@ jobs:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: github.ref == 'refs/heads/main' && vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 != ''
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}-arm
     env:
       PROFILE: release-max-perf
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
@@ -217,8 +216,8 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-22.04-arm
-          - ubuntu-24.04-arm
+          - ubuntu-22.04
+          - ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -242,6 +241,7 @@ jobs:
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}
+          arch: cortex-a76
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master

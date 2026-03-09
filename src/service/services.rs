@@ -1,7 +1,7 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug, debug_info, info, trace, utils::stream::IterStream,
+	Result, Server, SyncRwLock, debug, debug_info, info, trace, utils::stream::IterStream, warn,
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -125,29 +125,33 @@ impl Services {
 	}
 
 	pub async fn start(self: &Arc<Self>) -> Result<Arc<Self>> {
-		debug_info!("Starting services...");
+		info!("Starting services...");
 
 		self.admin.set_services(Some(Arc::clone(self)).as_ref());
-		super::migrations::migrations(self).await?;
-		self.manager
-			.lock()
-			.await
-			.insert(Manager::new(self))
-			.clone()
-			.start()
-			.await?;
 
-		// reset dormant online/away statuses to offline, and set the server user as
-		// online
+		warn!(
+			"Running database migrations... This may take a while depending on the database \
+			 size."
+		);
+		super::migrations::migrations(self).await?;
+
+		info!("Starting service manager...");
+		let manager = {
+			let mut lock = self.manager.lock().await;
+			let manager = Manager::new(self);
+			_ = lock.insert(Arc::clone(&manager));
+			manager
+		};
+
+		info!("Starting service workers...");
+		manager.start().await?;
+
+		// reset dormant online/away statuses to offline on startup
 		if self.server.config.allow_local_presence {
-			self.presence.unset_all_presence().await;
-			_ = self
-				.presence
-				.ping_presence(&self.globals.server_user, &ruma::presence::PresenceState::Online)
-				.await;
+			info!("Local presence statuses will be reset in the background.");
 		}
 
-		debug_info!("Services startup complete.");
+		info!("Services startup complete.");
 
 		Ok(Arc::clone(self))
 	}
@@ -199,11 +203,11 @@ impl Services {
 			.await
 	}
 
-	fn interrupt(&self) {
-		debug!("Interrupting services...");
+	pub fn interrupt(&self) {
+		warn!("Interrupting services...");
 		for (name, (service, ..)) in self.service.read().iter() {
 			if let Some(service) = service.upgrade() {
-				trace!("Interrupting {name}");
+				debug!("Interrupting {name}");
 				service.interrupt();
 			}
 		}

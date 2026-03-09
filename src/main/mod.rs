@@ -37,7 +37,17 @@ pub fn run() -> Result<()> {
 	let args = clap::parse();
 
 	if args.version_verbose {
-		println!("{}", conduwuit_build_metadata::verbose_version());
+		let mut output = conduwuit_build_metadata::verbose_version();
+
+		let enabled = build_features::ENABLED_FEATURES;
+		output.push_str("\nenabled_features: ");
+		output.push_str(&enabled.join(", "));
+
+		let available = build_features::AVAILABLE_FEATURES;
+		output.push_str("\navailable_features: ");
+		output.push_str(&available.join(", "));
+
+		println!("{output}");
 		return Ok(());
 	}
 
