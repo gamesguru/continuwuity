@@ -18,13 +18,17 @@ jobs:
       - name: Configure Git
         env:
           TOKEN: ${{ secrets.FORGEJO_TOKEN || github.token }}
+          GPG_PASSPHRASE: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
         run: |
           git config user.name "continuwuity CI"
           git config user.email "noreply@continuwuity.org"
           git config checkout.defaultRemote origin
           git config commit.gpgsign true
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            git config gpg.program "gpg --batch --pinentry-mode loopback --passphrase $GPG_PASSPHRASE"
+          fi
 
-          # Ensure origin uses the token for pushing back to Forgejo
+          # Re-configure origin with token for authenticated push
           SERVER_URL="${{ github.server_url }}"
           HOST="${SERVER_URL#https://}"
           git remote set-url origin https://x-access-token:$TOKEN@$HOST/${{ github.repository }}.git
@@ -32,93 +36,23 @@ jobs:
           git remote add github https://github.com/gamesguru/continuwuity.git
 
       - name: Sync main
-        run: |
-          echo "::group::Sync main"
-          echo "Fetching from github..."
-          if git fetch github main; then
-            echo "Fetching from origin..."
-            git fetch origin main || true
-            if git show-ref --verify --quiet refs/remotes/origin/main; then
-              echo "Checking out main..."
-              git checkout -B main origin/main
-              echo "Merging..."
-              MERGE_OUTPUT=$(git merge FETCH_HEAD --no-edit)
-              echo "$MERGE_OUTPUT"
-              if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
-                echo "Pushing..."
-                git push origin main --no-verify
-              else
-                echo "No changes to push."
-              fi
-            else
-              echo "Creating main..."
-              git checkout -b main FETCH_HEAD
-              git push origin main --no-verify
-            fi
-            echo "Done."
-          else
-            echo "Failed to fetch GitHub main."
-            exit 1
-          fi
-          echo "::endgroup::"
+        uses: ./.github/actions/git-sync
+        with:
+          branch: main
+          source_remote: github
+          dest_remote: origin
 
       - name: Sync dev
-        run: |
-          echo "::group::Sync dev"
-          echo "Fetching from github..."
-          if git fetch github dev; then
-            echo "Fetching from origin..."
-            git fetch origin dev || true
-            if git show-ref --verify --quiet refs/remotes/origin/dev; then
-              echo "Checking out dev..."
-              git checkout -B dev origin/dev
-              echo "Merging..."
-              MERGE_OUTPUT=$(git merge FETCH_HEAD --no-edit)
-              echo "$MERGE_OUTPUT"
-              if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
-                echo "Pushing..."
-                git push origin dev --no-verify
-              else
-                echo "No changes to push."
-              fi
-            else
-              echo "Creating dev..."
-              git checkout -b dev FETCH_HEAD
-              git push origin dev --no-verify
-            fi
-            echo "Done."
-          else
-            echo "Failed to fetch GitHub dev."
-            exit 1
-          fi
-          echo "::endgroup::"
+        uses: ./.github/actions/git-sync
+        with:
+          branch: dev
+          source_remote: github
+          dest_remote: origin
 
       - name: Sync metadata
-        run: |
-          echo "::group::Sync metadata"
-          echo "Fetching from github..."
-          if git fetch github _metadata/badges; then
-            echo "Fetching from origin..."
-            git fetch origin _metadata/badges || true
-            if git show-ref --verify --quiet refs/remotes/origin/_metadata/badges; then
-              echo "Checking out metadata..."
-              git checkout -B _metadata/badges origin/_metadata/badges
-              echo "Merging..."
-              MERGE_OUTPUT=$(git merge FETCH_HEAD --no-edit --allow-unrelated-histories)
-              echo "$MERGE_OUTPUT"
-              if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
-                echo "Pushing..."
-                git push origin _metadata/badges --no-verify
-              else
-                echo "No changes to push."
-              fi
-            else
-              echo "Creating metadata..."
-              git checkout -b _metadata/badges FETCH_HEAD
-              git push origin _metadata/badges --no-verify
-            fi
-            echo "Done."
-          else
-            echo "GitHub _metadata/badges not found, skipping."
-          fi
-          echo "::endgroup::"
+        uses: ./.github/actions/git-sync
+        with:
+          branch: _metadata/badges
+          source_remote: github
+          dest_remote: origin
+          allow_unrelated: "true"
