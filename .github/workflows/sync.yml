@@ -1,4 +1,3 @@
----
 name: Sync
 
 on:
@@ -20,12 +19,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config checkout.defaultRemote origin
           git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
       - name: Sync main
         run: |
           if git fetch upstream main; then
-            git checkout main
+            git checkout -B main origin/main
             git merge FETCH_HEAD --no-edit || exit 1
             git push origin main
           else
@@ -36,7 +36,7 @@ jobs:
       - name: Sync dev
         run: |
           if git fetch upstream dev; then
-            git checkout dev
+            git checkout -B dev origin/dev
             git merge FETCH_HEAD --no-edit || exit 1
             git push origin dev
           else
@@ -50,7 +50,7 @@ jobs:
             if ! git show-ref --verify --quiet refs/heads/_metadata/badges; then
               git checkout -b _metadata/badges FETCH_HEAD
             else
-              git checkout _metadata/badges
+              git checkout -B _metadata/badges origin/_metadata/badges
               git merge FETCH_HEAD --no-edit || exit 1
             fi
             git push origin _metadata/badges

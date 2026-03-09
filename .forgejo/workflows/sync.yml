@@ -1,9 +1,8 @@
----
 name: Sync
 
 on:
   schedule:
-    - cron: "*/60 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -18,22 +17,29 @@ jobs:
         run: |
           git config user.name "forgejo-actions[bot]"
           git config user.email "forgejo-actions@noreply.localhost"
+          git config checkout.defaultRemote origin
           git remote add github https://github.com/gamesguru/continuwuity.git
 
       - name: Sync main
         run: |
           if git fetch github main; then
-            git checkout main
+            git checkout -B main origin/main
             git merge FETCH_HEAD --no-edit || exit 1
             git push origin main
+          else
+            echo "Failed to fetch GitHub main."
+            exit 1
           fi
 
       - name: Sync dev
         run: |
           if git fetch github dev; then
-            git checkout dev
+            git checkout -B dev origin/dev
             git merge FETCH_HEAD --no-edit || exit 1
             git push origin dev
+          else
+            echo "Failed to fetch GitHub dev."
+            exit 1
           fi
 
       - name: Sync metadata
@@ -42,8 +48,10 @@ jobs:
             if ! git show-ref --verify --quiet refs/heads/_metadata/badges; then
               git checkout -b _metadata/badges FETCH_HEAD
             else
-              git checkout _metadata/badges
+              git checkout -B _metadata/badges origin/_metadata/badges
               git merge FETCH_HEAD --no-edit || exit 1
             fi
             git push origin _metadata/badges
+          else
+            echo "GitHub _metadata/badges not found, skipping."
           fi
