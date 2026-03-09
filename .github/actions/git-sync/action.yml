@@ -1,3 +1,4 @@
+---
 name: "Git Sync"
 description: "Syncs branches between remotes via merge or force push"
 inputs:

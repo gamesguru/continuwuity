@@ -1,7 +1,11 @@
 ---
 name: "Setup RocksDB"
-description: "Downloads or builds and caches RocksDB 10.5.1"
+description: "Downloads or builds and caches RocksDB"
 inputs:
+  version:
+    description: "RocksDB version to use"
+    required: true
+    default: "10.5.1"
   cache-key:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
@@ -17,15 +21,16 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: ~/.local
-        key: rocksdb-10.5.1-${{ inputs.arch }}-${{ inputs.cache-key }}
+        key: rocksdb-${{ inputs.version }}-${{ inputs.arch }}-${{ inputs.cache-key }}
 
     - name: Try download from Release
+      id: download
       if: steps.rocksdb-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        VERSION="10.5.1"
+        VERSION="${{ inputs.version }}"
         TAG="rocksdb-${VERSION}"
         FILENAME="rocksdb-${VERSION}-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
 
@@ -34,8 +39,10 @@ runs:
           echo "Successfully downloaded pre-built RocksDB"
           mkdir -p ~/.local
           tar -xzvf "$FILENAME" -C ~/.local
+          echo "found=true" >> $GITHUB_OUTPUT
         else
           echo "Pre-built RocksDB not found in releases"
+          echo "found=false" >> $GITHUB_OUTPUT
         fi
 
     - name: Build RocksDB (fallback)
@@ -71,15 +78,15 @@ runs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        VERSION="10.5.1"
+        VERSION="${{ inputs.version }}"
         TAG="rocksdb-${VERSION}"
         FILENAME="rocksdb-${VERSION}-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
 
         # Only upload if the file doesn't exist in the release yet
-        if ! gh release view "$TAG" --repo "${{ github.repository }}" | grep -q "$FILENAME"; then
+        if ! gh release view "$TAG" --repo "${{ github.repository }}" 2>/dev/null | grep -q "$FILENAME"; then
           echo "Promoting RocksDB to release $TAG..."
           tar -czvf "$FILENAME" -C ~/.local .
-          gh release create "$TAG" --title "RocksDB ${VERSION} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" --prerelease || true
+          gh release create "$TAG" --title "RocksDB ${VERSION} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
           gh release upload "$TAG" "$FILENAME" --clobber
         else
           echo "$FILENAME already exists in release."
@@ -93,8 +100,8 @@ runs:
         echo "LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
     - name: Save cache
-      if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+      if: steps.rocksdb-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'
       uses: actions/cache/save@v4
       with:
         path: ~/.local
-        key: rocksdb-10.5.1-${{ inputs.arch }}-${{ inputs.cache-key }}
+        key: rocksdb-${{ inputs.version }}-${{ inputs.arch }}-${{ inputs.cache-key }}

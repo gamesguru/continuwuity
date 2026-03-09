@@ -1,3 +1,4 @@
+---
 name: Build RocksDB Releases
 
 on:
@@ -63,5 +64,5 @@ jobs:
           FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
 
           # Create release if it doesn't exist, then upload
-          gh release create "$TAG" --title "RocksDB ${{ github.event.inputs.version }} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" --prerelease || true
+          gh release create "$TAG" --title "RocksDB ${{ github.event.inputs.version }} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
           gh release upload "$TAG" "$FILENAME" --clobber
