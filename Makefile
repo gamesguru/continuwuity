@@ -204,8 +204,6 @@ build-docs:     ##H Regenerate docs (admin commands, etc.)
 
 COMPLEMENT_DIR ?=
 COMPLEMENT_IMAGE ?= continuwuity:complement
-COMPLEMENT_DIR ?=
-COMPLEMENT_IMAGE ?= continuwuity:complement
 COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
 
 .PHONY: complement/build
@@ -239,9 +237,7 @@ complement/docker: ##H Build docker image from existing binary
 complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
 	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
 	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
-	@cd $(COMPLEMENT_DIR) && \
-	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
-	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
+	./bin/complement $(COMPLEMENT_DIR)
 
 
 .PHONY: complement/stats
