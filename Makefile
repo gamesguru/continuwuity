@@ -78,7 +78,7 @@ vars: ##H Print debug info
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$$(cargo run -p conduwuit_build_metadata --no-default-features --bin conduwuit-version --quiet)"
+		"$$(cargo run -p conduwuit_build_metadata --features default --bin conduwuit-version --quiet)"
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -127,7 +127,7 @@ format: ##H Run pre-commit hooks/formatters
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo fix $(CARGO_SCOPE) --no-default-features --allow-dirty --allow-no-vcs
+		cargo fix $(CARGO_SCOPE) --features default --allow-dirty --allow-no-vcs
 
 .PHONY: lint
 lint:	##H Lint code
@@ -136,7 +136,7 @@ lint:	##H Lint code
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo clippy $(CARGO_SCOPE) --no-default-features --locked --no-deps --profile $(PROFILE) -- -D warnings
+		cargo clippy $(CARGO_SCOPE) --features default --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
 test:	##H Run tests
@@ -145,7 +145,7 @@ test:	##H Run tests
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo test $(CARGO_SCOPE) --no-default-features --locked --profile $(PROFILE) --all-targets
+		cargo test $(CARGO_SCOPE) --features default --locked --profile $(PROFILE) --all-targets
 
 
 ROCKSDB_LIB_DIR ?= /usr/local/lib
@@ -159,7 +159,7 @@ build:	##H Build with selected profile
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo build --no-default-features --locked $(CARGO_FLAGS)
+		cargo build --features default --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
 	# ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
@@ -173,7 +173,7 @@ clean:	##H Clean build directory for current profile
 	@$(MAKE) _confirm
 	-find target -name '*conduwuit*' -exec rm -r {} \;
 # Old logic, wipes it out too much, results in slow builds
-# 	cargo clean --no-default-features --profile $(PROFILE)
+# 	cargo clean --features default --profile $(PROFILE)
 # 	@echo "Also remove debian build?"
 # 	@$(MAKE) _confirm
 # 	rm -rf target/debian
@@ -186,17 +186,16 @@ build-docs:	##H Regenerate docs (admin commands, etc.)
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo run -p xtask --profile $(PROFILE) --no-default-features -- generate-docs
+		cargo run -p xtask --profile $(PROFILE) --features default -- generate-docs
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Complement (build docker, stats, run... also used by CI)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-COMPLEMENT_DIR ?= $(CURDIR)/.tmp/complement
+COMPLEMENT_DIR ?=
 COMPLEMENT_IMAGE ?= continuwuity:complement
 COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
-COMPLEMENT_TARGETS ?= ./tests/...
 
 .PHONY: complement/build
 complement/build: ##H Build conduwuit docker image for Complement testing
@@ -244,13 +243,12 @@ complement/stats: ##H Check local test stats from tests/test_results/complement/
 
 
 .PHONY: complement/run
-complement/run: ##H Run Complement docker tests locally
-	@if [ ! -d "$(COMPLEMENT_DIR)" ]; then \
-		echo "COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist. Auto-cloning matrix-org/complement..."; \
-		git clone --depth 1 https://github.com/matrix-org/complement "$(COMPLEMENT_DIR)"; \
-	fi
+complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
+	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
 	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
-	@COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) ./bin/complement "$(COMPLEMENT_DIR)"
+	@cd $(COMPLEMENT_DIR) && \
+	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
+	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
 
 
 
