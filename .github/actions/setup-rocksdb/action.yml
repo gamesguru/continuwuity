@@ -25,7 +25,10 @@ runs:
         git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
         cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
         make clean
-        DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
+        PORTABLE=1 \
+          DISABLE_JEMALLOC=1 \
+          EXTRA_CXXFLAGS="-Wno-error=unused-parameter"\
+          make shared_lib -j$(nproc)
         mkdir -p ~/.local
         make install-shared PREFIX=~/.local
 
