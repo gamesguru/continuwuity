@@ -26,7 +26,7 @@ runs:
         make clean
         DISABLE_JEMALLOC=0 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
         mkdir -p ~/.local/rocksdb
-        make install-shared INSTALL_PATH=~/.local/rocksdb
+        make install-shared PREFIX=~/.local/rocksdb
 
     - name: Export Paths
       shell: bash
