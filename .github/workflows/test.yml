@@ -45,25 +45,10 @@ jobs:
             libclang-dev \
             llvm-dev
 
-      - name: Cache RocksDB
-        id: rocksdb-cache
-        uses: actions/cache@v4
+      - name: Setup RocksDB
+        uses: ./.github/actions/setup-rocksdb
         with:
-          path: /usr/local/lib/librocksdb*
-          key: rocksdb-10.5.1-ubuntu-24.04
-
-      - name: Build RocksDB 10.5.1
-        if: steps.rocksdb-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
-          cd /tmp/rocksdb
-          EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
-          sudo make install-shared PREFIX=/usr/local
-          sudo ldconfig
-
-      - name: Install RocksDB from cache
-        if: steps.rocksdb-cache.outputs.cache-hit == 'true'
-        run: sudo ldconfig
+          cache-key: ubuntu-24.04
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -143,25 +128,10 @@ jobs:
             libclang-dev \
             llvm-dev
 
-      - name: Cache RocksDB
-        id: rocksdb-cache
-        uses: actions/cache@v4
+      - name: Setup RocksDB
+        uses: ./.github/actions/setup-rocksdb
         with:
-          path: /usr/local/lib/librocksdb*
-          key: rocksdb-10.5.1-${{ matrix.os }}
-
-      - name: Build RocksDB 10.5.1
-        if: steps.rocksdb-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
-          cd /tmp/rocksdb
-          EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
-          sudo make install-shared PREFIX=/usr/local
-          sudo ldconfig
-
-      - name: Install RocksDB from cache
-        if: steps.rocksdb-cache.outputs.cache-hit == 'true'
-        run: sudo ldconfig
+          cache-key: ${{ matrix.os }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master

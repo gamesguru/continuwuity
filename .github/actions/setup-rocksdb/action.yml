@@ -1,0 +1,31 @@
+name: 'Setup RocksDB'
+description: 'Builds and caches RocksDB 10.5.1 from source'
+inputs:
+  cache-key:
+    description: 'Unique cache key suffix (e.g. ubuntu-24.04)'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cache RocksDB
+      id: rocksdb-cache
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/lib/librocksdb*
+        key: rocksdb-10.5.1-${{ inputs.cache-key }}
+
+    - name: Build RocksDB 10.5.1
+      if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
+        cd /tmp/rocksdb
+        EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
+        sudo make install-shared PREFIX=/usr/local
+        sudo ldconfig
+
+    - name: Install RocksDB from cache
+      if: steps.rocksdb-cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: sudo ldconfig
