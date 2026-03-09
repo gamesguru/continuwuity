@@ -6,7 +6,6 @@ use conduwuit_core::{
 	debug_warn, err,
 	log::{ConsoleFormat, ConsoleWriter, LogLevelReloadHandles, capture, fmt_span},
 	result::UnwrapOrErr,
-	warn,
 };
 #[cfg(feature = "otlp_telemetry")]
 use opentelemetry::trace::TracerProvider;
