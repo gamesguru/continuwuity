@@ -12,21 +12,24 @@ runs:
       id: rocksdb-cache
       uses: actions/cache@v4
       with:
-        path: /usr/local/lib/librocksdb*
+        path: ~/.local-rocksdb
         key: rocksdb-10.5.1-${{ inputs.cache-key }}
 
-    - name: Build RocksDB 10.5.1
+    - name: Build RocksDB (from fork)
       if: steps.rocksdb-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
-        cd /tmp/rocksdb
+        # We MUST clone the fork because it contains custom C API patches
+        # not present in upstream Facebook RocksDB (e.g. rocksdb_livefiles_column_family_name)
+        git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
+        cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
         make clean
         DISABLE_JEMALLOC=0 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
-        sudo make install-shared PREFIX=/usr/local
-        sudo ldconfig
+        mkdir -p ~/.local-rocksdb
+        make install-shared INSTALL_PATH=~/.local-rocksdb
 
-    - name: Install RocksDB from cache (sync ldconfig)
-      if: steps.rocksdb-cache.outputs.cache-hit == 'true'
+    - name: Export Paths
       shell: bash
-      run: sudo ldconfig
+      run: |
+        echo "ROCKSDB_LIB_DIR=$HOME/.local-rocksdb/lib" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=$HOME/.local-rocksdb/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV

@@ -53,7 +53,7 @@ jobs:
       - name: Setup RocksDB
         uses: ./.github/actions/setup-rocksdb
         with:
-          cache-key: haswell-${{ matrix.os }}
+          cache-key: ${{ matrix.os }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -139,7 +139,7 @@ jobs:
       - name: Setup RocksDB
         uses: ./.github/actions/setup-rocksdb
         with:
-          cache-key: skylake-${{ matrix.os }}
+          cache-key: ${{ matrix.os }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -240,7 +240,7 @@ jobs:
       - name: Setup RocksDB
         uses: ./.github/actions/setup-rocksdb
         with:
-          cache-key: arm64-${{ matrix.os }}
+          cache-key: ${{ matrix.os }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
