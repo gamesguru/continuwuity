@@ -8,9 +8,9 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Cache RocksDB
+    - name: Restore cache
       id: rocksdb-cache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: ~/.local-rocksdb
         key: rocksdb-10.5.1-${{ inputs.cache-key }}
@@ -25,11 +25,18 @@ runs:
         cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
         make clean
         DISABLE_JEMALLOC=0 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
-        mkdir -p ~/.local-rocksdb
-        make install-shared INSTALL_PATH=~/.local-rocksdb
+        mkdir -p ~/.local/rocksdb
+        make install-shared INSTALL_PATH=~/.local/rocksdb
 
     - name: Export Paths
       shell: bash
       run: |
-        echo "ROCKSDB_LIB_DIR=$HOME/.local-rocksdb/lib" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=$HOME/.local-rocksdb/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+        echo "ROCKSDB_LIB_DIR=$HOME/.local/rocksdb/lib" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=$HOME/.local/rocksdb/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+    - name: Save cache
+      if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.local/rocksdb
+        key: rocksdb-10.5.1-${{ inputs.cache-key }}
