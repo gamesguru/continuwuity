@@ -150,6 +150,9 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.arch == 'arm64' && '-C target-cpu=cortex-a76' || '' }}
         run: SKIP_CONFIRM=1 make build PROFILE=${{ env.PROFILE }} CARGO_FLAGS="--profile ${{ env.PROFILE }} --features direct_tls"
 
+      - name: Sanity check binary
+        run: ./target/latest/conduwuit --version
+
       - name: Import GPG key
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: crazy-max/ghaction-import-gpg@v6
