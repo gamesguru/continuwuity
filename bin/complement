@@ -1,38 +1,56 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+# set -x  # for debugging
 
 # The root path where complement is available.
 COMPLEMENT_SRC="${COMPLEMENT_SRC:-$1}"
 
 # A `.jsonl` file to write test logs to
-LOG_FILE="${2:-tests/test_results/complement/test_logs.jsonl}"
+LOG_FILE="${2:-${LOG_FILE:-tests/test_results/complement/test_logs.jsonl}}"
 
 # A `.jsonl` file to write test results to
-RESULTS_FILE="${3:-tests/test_results/complement/test_results.jsonl}"
+RESULTS_FILE="${3:-${RESULTS_FILE:-tests/test_results/complement/test_results.jsonl}}"
 
 # The base docker image to use for complement tests
 # You can build the default with `docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .`
 # after running `cargo build`. Only the debug binary is used.
 COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 
-# Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
-SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*"|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
+# A regex for tests to run.
+RUN_TESTS="${COMPLEMENT_RUN:-.}"
+
+# Ensure paths are absolute so they don't break when we change directory
+COMPLEMENT_SRC="$(realpath -m "$COMPLEMENT_SRC")"
+LOG_FILE="$(realpath -m "$LOG_FILE")"
+RESULTS_FILE="$(realpath -m "$RESULTS_FILE")"
 
 # $COMPLEMENT_SRC needs to be a directory to Complement source code
-if [ -f "$COMPLEMENT_SRC" ]; then
+if [ ! -d "$COMPLEMENT_SRC" ]; then
     echo "\$COMPLEMENT_SRC must be a directory/path to Complement source code"
     exit 1
 fi
 
-# quick test to make sure we can actually write to $LOG_FILE and $RESULTS_FILE
-touch $LOG_FILE && rm -v $LOG_FILE
-touch $RESULTS_FILE && rm -v $RESULTS_FILE
-
 toplevel="$(git rev-parse --show-toplevel)"
-
 pushd "$toplevel" > /dev/null
 
+# Cleanup leftover Complement containers and images
+cleanup_complement_containers() {
+    local containers
+    containers=$(docker ps -a --filter "name=complement_" -q)
+    if [ -n "$containers" ]; then
+        echo "Cleaning up leftover Complement containers..."
+        echo "$containers" | xargs -r docker rm -f
+    fi
+
+    # TODO: perhaps also prune images here?
+}
+trap cleanup_complement_containers EXIT
+
+
+# Ensure result files exist even if tests fail to start
+touch "$LOG_FILE"
+touch "$RESULTS_FILE"
 
 echo ""
 echo "running go test with:"
@@ -40,28 +58,63 @@ echo "\$COMPLEMENT_SRC: $COMPLEMENT_SRC"
 echo "\$COMPLEMENT_BASE_IMAGE: $COMPLEMENT_BASE_IMAGE"
 echo "\$RESULTS_FILE: $RESULTS_FILE"
 echo "\$LOG_FILE: $LOG_FILE"
+echo "\$RUN_TESTS: $RUN_TESTS"
 echo ""
 
-# Determine the test runner
-GOTEST="go test -json"
-command -v gotestsum >/dev/null 2>&1 && GOTEST="gotestsum --format testname --jsonfile $LOG_FILE --"
+# Determine the test runner and output handling
+HAS_GOTESTSUM=false
+if command -v gotestsum >/dev/null 2>&1; then
+    HAS_GOTESTSUM=true
+    echo "gotestsum installed: true"
+    gotestsum --version
+else
+    echo "gotestsum installed: false"
+fi
+
+# Common flags for both test runners
+TEST_FLAGS=(
+    # -tags "conduwuit_blacklist"
+    # -skip "$SKIPPED_COMPLEMENT_TESTS"
+    -run "$RUN_TESTS"
+    -timeout 1h
+    -count=1
+    ./tests/...
+)
 
 # It's okay (likely, even) that `go test` exits nonzero
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
 set +o pipefail
-env \
-    -C "$COMPLEMENT_SRC" \
-    COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-    $GOTEST -tags="conduwuit_blacklist" -skip="$SKIPPED_COMPLEMENT_TESTS" -v -timeout 1h ./tests/... | tee "$LOG_FILE"
-set -o pipefail
+if [ "$HAS_GOTESTSUM" = true ]; then
+    # gotestsum writes full JSON logs
+    # We ignore the exit code because we post-process the logs even on failure.
+    (env \
+        -C "$COMPLEMENT_SRC" \
+        COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
+        gotestsum --format pkgname --hide-summary=output \
+            --jsonfile "$LOG_FILE" \
+            -- "${TEST_FLAGS[@]}" || true)
+else
+    # We ignore the exit code because we post-process the logs even on failure.
+    (env \
+        -C "$COMPLEMENT_SRC" \
+        COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
+        go test -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || true)
+fi
 
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
-jq -s -c 'sort_by(.Test)[]' < "$LOG_FILE" | jq -c '
-    select(
-        (.Action == "pass" or .Action == "fail" or .Action == "skip")
-        and .Test != null
-    ) | {Action: .Action, Test: .Test}
-    ' > "$RESULTS_FILE"
+# This ensures we have a consistent results file for the CI parser.
+if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+    jq -s -c 'sort_by(.Test)[]' < "$LOG_FILE" | jq -c '
+        select(
+            (.Action == "pass" or .Action == "fail" or .Action == "skip")
+            and .Test != null
+        ) | {Action: .Action, Test: .Test}
+        ' > "$RESULTS_FILE"
+    echo "processed $(wc -l < "$RESULTS_FILE") results into $RESULTS_FILE"
+else
+    echo "Warning: $LOG_FILE is missing or empty. No results processed."
+fi
+set -o pipefail
 
 echo ""
 echo ""
