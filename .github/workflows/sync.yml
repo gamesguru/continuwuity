@@ -20,12 +20,35 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
-          if git fetch upstream main:upstream_main; then
+          if git fetch upstream main; then
             git checkout main
-            git merge upstream_main --no-edit || exit 1
+            git merge FETCH_HEAD --no-edit || exit 1
             git push origin main
           else
             echo "Failed to fetch upstream main."
+            exit 1
+          fi
+
+  dev:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
+
+          if git fetch upstream dev; then
+            git checkout dev
+            git merge FETCH_HEAD --no-edit || exit 1
+            git push origin dev
+          else
+            echo "Failed to fetch upstream dev."
             exit 1
           fi
 
@@ -44,13 +67,13 @@ jobs:
           git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
           # Fetch upstream metadata branch
-          if git fetch upstream _metadata/badges:upstream_metadata; then
+          if git fetch upstream _metadata/badges; then
             # If local branch doesn't exist, create it from upstream
             if ! git show-ref --verify --quiet refs/heads/_metadata/badges; then
-              git checkout -b _metadata/badges upstream_metadata
+              git checkout -b _metadata/badges FETCH_HEAD
             else
               git checkout _metadata/badges
-              git merge upstream_metadata --no-edit || exit 1
+              git merge FETCH_HEAD --no-edit || exit 1
             fi
             git push origin _metadata/badges
           else
@@ -71,8 +94,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
-          if git fetch upstream main:upstream_main; then
-            git checkout -B _metadata/forge.ellis.link/HEAD upstream_main
+          if git fetch upstream main; then
+            git checkout -B _metadata/forge.ellis.link/HEAD FETCH_HEAD
             git push origin _metadata/forge.ellis.link/HEAD --force
           else
             echo "Failed to fetch upstream main."
