@@ -1,8 +1,8 @@
-name: 'Setup RocksDB'
-description: 'Builds and caches RocksDB 10.5.1 from source'
+name: "Setup RocksDB"
+description: "Builds and caches RocksDB 10.5.1 from source"
 inputs:
   cache-key:
-    description: 'Unique cache key suffix (e.g. ubuntu-24.04)'
+    description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
 
 runs:

@@ -75,8 +75,10 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          ROCKSDB_LIB_DIR: /usr/lib/x86_64-linux-gnu
         run: make build
+
+      - name: Sanity check binary
+        run: ./target/latest/conduwuit --version
 
       - name: Import GPG key
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -170,8 +172,10 @@ jobs:
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
-          ROCKSDB_LIB_DIR: /usr/lib/x86_64-linux-gnu
         run: make build
+
+      - name: Sanity check binary
+        run: ./target/latest/conduwuit --version
 
       - name: Import GPG key
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -260,8 +264,10 @@ jobs:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
-          ROCKSDB_LIB_DIR: /usr/lib/aarch64-linux-gnu
         run: make build
+
+      - name: Sanity check binary
+        run: ./target/latest/conduwuit --version
 
       - name: Import GPG key
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

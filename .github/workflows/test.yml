@@ -21,8 +21,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PROFILE: dev-quick
-      ROCKSDB_LIB_DIR: /usr/local/lib
-      LD_LIBRARY_PATH: /usr/local/lib
 
     steps:
       - uses: actions/checkout@v4
@@ -89,8 +87,6 @@ jobs:
     env:
       PROFILE: release
       FEATURES: "direct_tls"
-      ROCKSDB_LIB_DIR: /usr/local/lib
-      LD_LIBRARY_PATH: /usr/local/lib
 
     strategy:
       fail-fast: false
