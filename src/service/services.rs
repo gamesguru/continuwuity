@@ -129,7 +129,10 @@ impl Services {
 
 		self.admin.set_services(Some(Arc::clone(self)).as_ref());
 
-		info!("Running database migrations...");
+		warn!(
+			"Running database migrations... This may take a while depending on the database \
+			 size."
+		);
 		super::migrations::migrations(self).await?;
 
 		info!("Starting service manager...");
