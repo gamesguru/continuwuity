@@ -1,6 +1,6 @@
 ---
 name: "Setup RocksDB"
-description: "Builds and caches RocksDB 10.5.1 from source"
+description: "Downloads or builds and caches RocksDB 10.5.1"
 inputs:
   cache-key:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
@@ -19,27 +19,43 @@ runs:
         path: ~/.local
         key: rocksdb-10.5.1-${{ inputs.arch }}-${{ inputs.cache-key }}
 
-    - name: Build RocksDB (from fork)
+    - name: Try download from Release
       if: steps.rocksdb-cache.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
-        # We MUST clone the fork because it contains custom C API patches
-        # not present in upstream Facebook RocksDB (e.g. rocksdb_livefiles_column_family_name)
+        VERSION="10.5.1"
+        TAG="rocksdb-${VERSION}"
+        FILENAME="rocksdb-${VERSION}-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
+
+        echo "Attempting to download pre-built RocksDB using gh CLI"
+        if gh release download "$TAG" --pattern "$FILENAME" --repo "${{ github.repository }}"; then
+          echo "Successfully downloaded pre-built RocksDB"
+          mkdir -p ~/.local
+          tar -xzvf "$FILENAME" -C ~/.local
+          echo "downloaded=true" >> $GITHUB_ENV
+        else
+          echo "Pre-built RocksDB not found or download failed, falling back to source build"
+          echo "downloaded=false" >> $GITHUB_ENV
+        fi
+
+    - name: Build RocksDB (from fork fallback)
+      if: steps.rocksdb-cache.outputs.cache-hit != 'true' && env.downloaded == 'false'
+      shell: bash
+      run: |
         git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
         cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
         make clean
 
-        # Determine compiler flag: ARM uses -mcpu, x86 uses -march
         if [[ "${{ inputs.arch }}" == "cortex-a76" ]]; then
-          EXTRA_FLAGS="-mcpu=cortex-a76"
+          EXTRA_FLAGS="-march=armv8.2-a+crc"
+        elif [[ "${{ inputs.arch }}" == x86-64-v* ]]; then
+          EXTRA_FLAGS="-march=${{ inputs.arch }} -mpclmul"
         else
           EXTRA_FLAGS="-march=${{ inputs.arch }}"
         fi
 
-        # We must set PORTABLE=1 so RocksDB doesn't automatically inject -march=native
-        # which would cause cache poisoning across heterogeneous GitHub runners.
-        # We pass EXTRA_FLAGS to both CFLAGS and CXXFLAGS to ensure all source files (C and C++)
-        # are compiled with the correct ISA extensions enabled.
         DISABLE_JEMALLOC=1 PORTABLE=1 \
           EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
           EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \

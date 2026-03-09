@@ -1,0 +1,65 @@
+name: Build RocksDB Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "RocksDB version"
+        required: true
+        default: "10.5.1"
+
+jobs:
+  build:
+    name: Build RocksDB (${{ matrix.arch }}, ${{ matrix.os }})
+    runs-on: heliohost-sync
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        arch: [haswell, x86-64-v3, x86-64-v4]
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            clang \
+            libclang-dev \
+            llvm-dev
+
+      - name: Build RocksDB
+        shell: bash
+        run: |
+          git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
+          cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
+
+          if [[ "${{ matrix.arch }}" == x86-64-v* ]]; then
+            EXTRA_FLAGS="-march=${{ matrix.arch }} -mpclmul"
+          else
+            EXTRA_FLAGS="-march=${{ matrix.arch }}"
+          fi
+
+          DISABLE_JEMALLOC=1 PORTABLE=1 \
+            EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
+            EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
+            make shared_lib -j$(nproc)
+
+          mkdir -p rocksdb-release/lib rocksdb-release/include
+          make install-shared PREFIX=$(pwd)/rocksdb-release
+
+          tar -czvf ../../../rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz -C rocksdb-release .
+
+      - name: Create/Upload Release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="rocksdb-${{ github.event.inputs.version }}"
+          FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+
+          # Create release if it doesn't exist, then upload
+          gh release create "$TAG" --title "RocksDB ${{ github.event.inputs.version }} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
+          gh release upload "$TAG" "$FILENAME" --clobber
