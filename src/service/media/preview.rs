@@ -108,7 +108,7 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
 pub async fn download_image(&self, url: &str) -> Result<UrlPreviewData> {
-	use conduwuit::utils::random_string;
+	use conduwuit::utils::{random_string, response::LimitReadExt};
 	use image::ImageReader;
 	use ruma::Mxc;
 
@@ -162,6 +162,7 @@ pub async fn download_image(&self, _url: &str) -> Result<UrlPreviewData> {
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
 async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
+	use conduwuit::utils::response::LimitReadExt;
 	use webpage::HTML;
 
 	let client = &self.services.client.url_preview;
