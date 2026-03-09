@@ -35,6 +35,17 @@ fn format(s: &str) -> String {
 	}
 }
 
+/// Returns `Some("b=<branch>")` for non-default branches, `None` for the
+/// default branch (suppressed from version strings).
+#[allow(dead_code)]
+pub(crate) fn branch_tag(branch: &str, default_branch: &str) -> Option<String> {
+	if branch == default_branch {
+		None
+	} else {
+		Some(format!("b={branch}"))
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::format;
@@ -44,11 +55,77 @@ mod tests {
 		assert_eq!(format("v0.5.5-26-g23701cf0-dirty"), "0.5.5+26~23701cf0-dirty");
 		assert_eq!(format("v0.5.5-26-g23701cf0"), "0.5.5+26~23701cf0");
 		assert_eq!(format("0.5.5-26-g23701cf0"), "0.5.5+26~23701cf0");
-		// Shallow clone / no tags / just hash (e.g. from git describe --always)
+		// Shallow clone / no tags / just grafted hash (e.g. git describe --always)
 		assert_eq!(format("abc1234"), "abc1234");
 		assert_eq!(format("abc1234-dirty"), "abc1234-dirty");
 		assert_eq!(format("v0.5.5-beta-g23701cf0"), "0.5.5-beta~23701cf0");
 		// Tag names containing "-g" should not be corrupted
 		assert_eq!(format("v1.0.0-gamma-g1234abc"), "1.0.0-gamma~1234abc");
+	}
+
+	#[test]
+	fn test_format_exact_tag() {
+		// Exact tag match (HEAD is the tagged commit, no commits after)
+		assert_eq!(format("v0.5.6"), "0.5.6");
+		assert_eq!(format("0.5.6"), "0.5.6");
+		assert_eq!(format("v1.0.0"), "1.0.0");
+	}
+
+	#[test]
+	fn test_format_single_commit_after_tag() {
+		// Only 1 commit after tag
+		assert_eq!(format("v0.5.6-1-gabc1234"), "0.5.6+1~abc1234");
+	}
+
+	#[test]
+	fn test_format_exact_tag_dirty() {
+		// Exact tag but dirty working tree
+		assert_eq!(format("v0.5.6-dirty"), "0.5.6-dirty");
+	}
+
+	#[test]
+	fn test_format_empty_and_whitespace() {
+		assert_eq!(format(""), "");
+		assert_eq!(format("  "), "");
+		assert_eq!(format("  v0.5.5-26-g23701cf0  "), "0.5.5+26~23701cf0");
+	}
+
+	#[test]
+	fn test_format_long_hash() {
+		// Full 40-char SHA-1 hashes (git describe --long --always)
+		assert_eq!(
+			format("abc1234def5678abc1234def5678abc1234def5678"),
+			"abc1234def5678abc1234def5678abc1234def5678"
+		);
+		// Full describe with 40-char hash
+		assert_eq!(
+			format("v0.5.5-1-gabc1234def5678abc1234def5678abc1234def5678"),
+			"0.5.5+1~abc1234def5678abc1234def5678abc1234def5678"
+		);
+	}
+
+	#[test]
+	fn test_format_prerelease_variants() {
+		// Pre-release tags with commits after
+		assert_eq!(format("v1.0.0-rc1-5-gabcdef0"), "1.0.0-rc1+5~abcdef0");
+		assert_eq!(format("v1.0.0-alpha.1-10-g1234567"), "1.0.0-alpha.1+10~1234567");
+		// Pre-release tag with dirty and commits
+		assert_eq!(format("v1.0.0-rc1-5-gabcdef0-dirty"), "1.0.0-rc1+5~abcdef0-dirty");
+	}
+
+	#[test]
+	fn test_branch_tag() {
+		use super::branch_tag;
+
+		// Default branch is suppressed
+		assert_eq!(branch_tag("main", "main"), None);
+		// Non-default branches are shown
+		assert_eq!(branch_tag("develop", "main"), Some("b=develop".into()));
+		assert_eq!(branch_tag("feature/foo", "main"), Some("b=feature/foo".into()));
+		// HEAD (detached) is shown
+		assert_eq!(branch_tag("HEAD", "main"), Some("b=HEAD".into()));
+		// Custom default branch
+		assert_eq!(branch_tag("master", "master"), None);
+		assert_eq!(branch_tag("main", "master"), Some("b=main".into()));
 	}
 }

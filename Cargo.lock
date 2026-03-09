@@ -895,6 +895,7 @@ dependencies = [
  "conduwuit_build_metadata",
  "conduwuit_core",
  "conduwuit_database",
+ "conduwuit_macros",
  "conduwuit_router",
  "conduwuit_service",
  "console-subscriber",
@@ -949,6 +950,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "conduwuit_core",
+ "conduwuit_macros",
  "conduwuit_service",
  "const-str",
  "futures",
@@ -1042,6 +1044,7 @@ version = "0.5.6"
 dependencies = [
  "async-channel",
  "conduwuit_core",
+ "conduwuit_macros",
  "const-str",
  "futures",
  "log",
@@ -1076,6 +1079,7 @@ dependencies = [
  "conduwuit_admin",
  "conduwuit_api",
  "conduwuit_core",
+ "conduwuit_macros",
  "conduwuit_service",
  "conduwuit_web",
  "const-str",
@@ -1109,6 +1113,7 @@ dependencies = [
  "bytes",
  "conduwuit_core",
  "conduwuit_database",
+ "conduwuit_macros",
  "const-str",
  "either",
  "futures",
@@ -1722,7 +1727,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2414,7 +2419,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tokio",
  "tower-service",
  "tracing",
@@ -3776,7 +3781,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3813,9 +3818,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4357,7 +4362,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

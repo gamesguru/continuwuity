@@ -8,7 +8,7 @@
 use std::time::SystemTime;
 
 use conduwuit::{Err, Result, debug, err};
-use conduwuit_core::{implement, utils::response::LimitReadExt};
+use conduwuit_core::implement;
 use ipaddress::IPAddress;
 use serde::Serialize;
 use url::Url;
@@ -72,7 +72,7 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 	}
 
 	let client = &self.services.client.url_preview;
-	let response = client.get(url.as_str()).send().await?;
+	let response = client.head(url.as_str()).send().await?;
 
 	debug!(%url, "URL preview response headers: {:?}", response.headers());
 
@@ -95,9 +95,8 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 		.map_err(|e| err!(Request(Unknown("Unknown or invalid Content-Type header: {e}"))))?;
 
 	let data = match content_type {
-		| html if html.starts_with("text/html") =>
-			self.parse_html(url.as_str(), response).await?,
-		| img if img.starts_with("image/") => self.parse_image(url.as_str(), response).await?,
+		| html if html.starts_with("text/html") => self.download_html(url.as_str()).await?,
+		| img if img.starts_with("image/") => self.download_image(url.as_str()).await?,
 		| _ => return Err!(Request(Unknown("Unsupported Content-Type"))),
 	};
 
@@ -109,22 +108,17 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
 pub async fn download_image(&self, url: &str) -> Result<UrlPreviewData> {
-	let response = self.services.client.url_preview.get(url).send().await?;
-	self.parse_image(url, response).await
-}
-
-#[cfg(feature = "url_preview")]
-#[implement(Service)]
-pub async fn parse_image(
-	&self,
-	_url: &str,
-	response: reqwest::Response,
-) -> Result<UrlPreviewData> {
-	use conduwuit::utils::random_string;
+	use conduwuit::utils::{random_string, response::LimitReadExt};
 	use image::ImageReader;
 	use ruma::Mxc;
 
-	let image = response
+	let image = self
+		.services
+		.client
+		.url_preview
+		.get(url)
+		.send()
+		.await?
 		.limit_read(
 			self.services
 				.server
@@ -165,22 +159,17 @@ pub async fn download_image(&self, _url: &str) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
 }
 
-#[cfg(not(feature = "url_preview"))]
-#[implement(Service)]
-pub async fn parse_image(
-	&self,
-	_url: &str,
-	_response: reqwest::Response,
-) -> Result<UrlPreviewData> {
-	Err!(FeatureDisabled("url_preview"))
-}
-
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
-async fn parse_html(&self, url: &str, response: reqwest::Response) -> Result<UrlPreviewData> {
+async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
+	use conduwuit::utils::response::LimitReadExt;
 	use webpage::HTML;
 
-	let body = response
+	let client = &self.services.client.url_preview;
+	let body = client
+		.get(url)
+		.send()
+		.await?
 		.limit_read_text(
 			self.services
 				.server
@@ -210,7 +199,7 @@ async fn parse_html(&self, url: &str, response: reqwest::Response) -> Result<Url
 
 #[cfg(not(feature = "url_preview"))]
 #[implement(Service)]
-async fn parse_html(&self, _url: &str, _response: reqwest::Response) -> Result<UrlPreviewData> {
+async fn download_html(&self, _url: &str) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
 }
 
