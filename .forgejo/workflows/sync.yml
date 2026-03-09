@@ -6,70 +6,43 @@ on:
   workflow_dispatch:
 
 jobs:
-  main:
+  sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
-      - run: |
+
+      - name: Configure Git
+        run: |
           git config user.name "forgejo-actions[bot]"
           git config user.email "forgejo-actions@noreply.localhost"
           git remote add github https://github.com/gamesguru/continuwuity.git
 
-          if git fetch github main:github_main; then
+      - name: Sync main
+        run: |
+          if git fetch github main; then
             git checkout main
-            git merge github_main --no-edit || exit 1
+            git merge FETCH_HEAD --no-edit || exit 1
             git push origin main
-          else
-            echo "Failed to fetch GitHub main."
-            exit 1
           fi
 
-  dev:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: dev
-          fetch-depth: 0
-      - run: |
-          git config user.name "forgejo-actions[bot]"
-          git config user.email "forgejo-actions@noreply.localhost"
-          git remote add github https://github.com/gamesguru/continuwuity.git
-
-          if git fetch github dev:github_dev; then
+      - name: Sync dev
+        run: |
+          if git fetch github dev; then
             git checkout dev
-            git merge github_dev --no-edit || exit 1
+            git merge FETCH_HEAD --no-edit || exit 1
             git push origin dev
-          else
-            echo "Failed to fetch GitHub dev."
-            exit 1
           fi
 
-  metadata:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - run: |
-          git config user.name "forgejo-actions[bot]"
-          git config user.email "forgejo-actions@noreply.localhost"
-          git remote add github https://github.com/gamesguru/continuwuity.git
-
-          # Fetch GitHub metadata branch
-          if git fetch github _metadata/badges:github_metadata; then
-            # If local branch doesn't exist, create it from upstream
+      - name: Sync metadata
+        run: |
+          if git fetch github _metadata/badges; then
             if ! git show-ref --verify --quiet refs/heads/_metadata/badges; then
-              git checkout -b _metadata/badges github_metadata
+              git checkout -b _metadata/badges FETCH_HEAD
             else
               git checkout _metadata/badges
-              git merge github_metadata --no-edit || exit 1
+              git merge FETCH_HEAD --no-edit || exit 1
             fi
             git push origin _metadata/badges
-          else
-            echo "GitHub _metadata/badges not found, skipping."
           fi

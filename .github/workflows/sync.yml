@@ -6,20 +6,23 @@ on:
   workflow_dispatch:
 
 jobs:
-  main:
+  sync:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
-      - run: |
+
+      - name: Configure Git
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
+      - name: Sync main
+        run: |
           if git fetch upstream main; then
             git checkout main
             git merge FETCH_HEAD --no-edit || exit 1
@@ -29,20 +32,8 @@ jobs:
             exit 1
           fi
 
-  dev:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: dev
-          fetch-depth: 0
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
-
+      - name: Sync dev
+        run: |
           if git fetch upstream dev; then
             git checkout dev
             git merge FETCH_HEAD --no-edit || exit 1
@@ -52,23 +43,9 @@ jobs:
             exit 1
           fi
 
-  metadata:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
-
-          # Fetch upstream metadata branch
+      - name: Sync metadata
+        run: |
           if git fetch upstream _metadata/badges; then
-            # If local branch doesn't exist, create it from upstream
             if ! git show-ref --verify --quiet refs/heads/_metadata/badges; then
               git checkout -b _metadata/badges FETCH_HEAD
             else
@@ -80,24 +57,12 @@ jobs:
             echo "Upstream _metadata/badges not found, skipping."
           fi
 
-  forge-head:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
-
+      - name: Sync forge-head
+        run: |
           if git fetch upstream main; then
             git checkout -B _metadata/forge.ellis.link/HEAD FETCH_HEAD
             git push origin _metadata/forge.ellis.link/HEAD --force
           else
-            echo "Failed to fetch upstream main."
+            echo "Failed to fetch upstream main for forge-head."
             exit 1
           fi
