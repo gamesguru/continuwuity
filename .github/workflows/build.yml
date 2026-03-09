@@ -143,7 +143,6 @@ jobs:
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_SKYLAKE != ''
     runs-on: ${{ matrix.os }}
     env:
-      PROFILE: release-max-perf
       ROCKSDB_LIB_DIR: /usr/local/lib
       LD_LIBRARY_PATH: /usr/local/lib
 
@@ -153,6 +152,8 @@ jobs:
         os:
           - ubuntu-22.04
           - ubuntu-24.04
+        profile:
+          - release-max-perf
 
     steps:
       - uses: actions/checkout@v4
@@ -195,10 +196,12 @@ jobs:
       - name: Debug checks
         run: make vars cpu-info
         env:
+          PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
       - name: Build (${{ steps.cpu.outputs.target }})
         env:
+          PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
         run: make build
@@ -268,7 +271,6 @@ jobs:
     if: github.ref == 'refs/heads/main' && vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 != ''
     runs-on: ${{ matrix.os }}-arm
     env:
-      PROFILE: release-max-perf
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: 16
       ROCKSDB_LIB_DIR: /usr/local/lib
@@ -283,6 +285,8 @@ jobs:
         os:
           - ubuntu-22.04
           - ubuntu-24.04
+        profile:
+          - release-max-perf
 
     steps:
       - uses: actions/checkout@v4
@@ -320,9 +324,12 @@ jobs:
 
       - name: Debug checks
         run: make vars cpu-info
+        env:
+          PROFILE: ${{ matrix.profile }}
 
       - name: Build (cortex-a76)
         env:
+          PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
@@ -353,7 +360,7 @@ jobs:
           # Copy libs
           cp target/latest/lib/*.so* release-assets/lib/ || true
 
-          # Include headers if they exist
+          # Include headers if they exist (RocksDB etc)
           if [ -d "$HOME/.local/include" ]; then
             cp -r $HOME/.local/include/* release-assets/include/ || true
           fi

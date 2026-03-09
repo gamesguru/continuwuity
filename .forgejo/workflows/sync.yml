@@ -16,16 +16,11 @@ jobs:
           git fetch --unshallow || true
 
       - name: Configure Git
-        env:
-          GPG_PASSPHRASE: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
         run: |
-          git config user.name "forgejo-actions[bot]"
+          git config user.name "continuwuity CI"
           git config user.email "noreply@continuwuity.org"
           git config checkout.defaultRemote origin
           git config commit.gpgsign true
-          if [ -n "$GPG_PASSPHRASE" ]; then
-            git config gpg.program "gpg --batch --pinentry-mode loopback --passphrase $GPG_PASSPHRASE"
-          fi
           git remote add github https://github.com/gamesguru/continuwuity.git
 
       - name: Sync main

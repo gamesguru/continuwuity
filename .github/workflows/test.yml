@@ -90,7 +90,6 @@ jobs:
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_PR_CHECKS_COMPLEMENT_TESTS != ''
     runs-on: ${{ matrix.os }}
     env:
-      PROFILE: release
       FEATURES: "direct_tls"
 
     strategy:
@@ -99,8 +98,10 @@ jobs:
         include:
           - arch: amd64
             os: ubuntu-22.04
+            profile: release-max-perf
           - arch: amd64
             os: ubuntu-24.04
+            profile: release-max-perf
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
     # and pushing the generated github-badge.json to the badges branch
@@ -115,8 +116,8 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
 
-      - name: Fetch tags manually
-        run: git fetch --tags --force
+      - name: Fetch tags and origin/main for comparison
+        run: git fetch --tags --force && git fetch origin HEAD
 
       - name: Install system dependencies
         run: |
@@ -152,7 +153,7 @@ jobs:
       - name: Build conduwuit for Complement
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: SKIP_CONFIRM=1 make build PROFILE=${{ env.PROFILE }} CARGO_FLAGS="--profile ${{ env.PROFILE }} --features direct_tls"
+        run: SKIP_CONFIRM=1 make build PROFILE=${{ matrix.profile }} CARGO_FLAGS="--profile ${{ matrix.profile }} --features direct_tls"
 
       - name: Sanity check binary
         run: ./target/latest/conduwuit --version
@@ -169,12 +170,12 @@ jobs:
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
       - name: Build Complement Docker image
-        run: make complement/docker
+        run: make complement/docker PROFILE=${{ matrix.profile }}
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-${{ env.PROFILE }}-direct_tls-${{ matrix.os }}
+          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.os }}
           path: |
             target/latest/conduwuit
             target/latest/conduwuit.asc
@@ -276,7 +277,7 @@ jobs:
 
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
-              `**Commit:** `${context.payload.pull_request.head.ref}` (`${context.payload.pull_request.head.sha.substring(0, 7)}`)`,
+              `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
               '',
               '| Status | Count |',
               '|--------|-------|',
