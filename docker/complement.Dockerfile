@@ -12,7 +12,7 @@ RUN chmod +x /usr/local/bin/conduwuit /usr/local/bin/complement-entrypoint.sh
 ARG UID=1000
 ARG GID=1000
 RUN groupadd -g ${GID} conduwuit || true && useradd -u ${UID} -g ${GID} -m conduwuit || true
-RUN chown -R conduwuit:conduwuit /etc/continuwuity /var/lib/continuwuity
+RUN chown -R ${UID}:${GID} /etc/continuwuity /var/lib/continuwuity
 USER ${UID}:${GID}
 
 #HEALTHCHECK --interval=30s --timeout=5s CMD curl --fail http://localhost:8008/_continuwuity/server_version || exit 1

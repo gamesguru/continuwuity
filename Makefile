@@ -193,9 +193,10 @@ build-docs:	##H Regenerate docs (admin commands, etc.)
 # Complement (build docker, stats, run... also used by CI)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-COMPLEMENT_DIR ?=
+COMPLEMENT_DIR ?= $(CURDIR)/.tmp/complement
 COMPLEMENT_IMAGE ?= continuwuity:complement
 COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
+COMPLEMENT_TARGETS ?= ./tests/...
 
 .PHONY: complement/build
 complement/build: ##H Build conduwuit docker image for Complement testing
@@ -243,12 +244,13 @@ complement/stats: ##H Check local test stats from tests/test_results/complement/
 
 
 .PHONY: complement/run
-complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
-	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
+complement/run: ##H Run Complement docker tests locally
+	@if [ ! -d "$(COMPLEMENT_DIR)" ]; then \
+		echo "COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist. Auto-cloning matrix-org/complement..."; \
+		git clone --depth 1 https://github.com/matrix-org/complement "$(COMPLEMENT_DIR)"; \
+	fi
 	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
-	@cd $(COMPLEMENT_DIR) && \
-	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
-	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
+	@COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) ./bin/complement "$(COMPLEMENT_DIR)"
 
 
 
