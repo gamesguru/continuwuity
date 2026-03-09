@@ -94,14 +94,47 @@ jobs:
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
         continue-on-error: true
 
+      - name: Package Assets
+        run: |
+          mkdir -p release-assets/bin release-assets/lib release-assets/include
+          cp target/latest/conduwuit release-assets/bin/
+          [ -f target/latest/conduwuit.asc ] && cp target/latest/conduwuit.asc release-assets/bin/
+
+          # Copy libs (filtering out system libs)
+          cp target/latest/lib/*.so* release-assets/lib/ || true
+
+          # Include headers if they exist (RocksDB etc)
+          if [ -d "$HOME/.local/include" ]; then
+            cp -r $HOME/.local/include/* release-assets/include/ || true
+          fi
+
+          tar -czvf conduwuit-${{ matrix.profile }}-${{ matrix.os }}-bin.tar.gz -C release-assets/bin .
+          tar -czvf conduwuit-${{ matrix.profile }}-${{ matrix.os }}-libs.tar.gz -C release-assets/lib .
+          tar -czvf conduwuit-${{ matrix.profile }}-${{ matrix.os }}-headers.tar.gz -C release-assets/include .
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-${{ matrix.profile }}-${{ matrix.os }}
-          path: |
-            target/latest/conduwuit
-            target/latest/conduwuit.asc
+          path: conduwuit-${{ matrix.profile }}-${{ matrix.os }}-*.tar.gz
           retention-days: 90
+
+      - name: Publish Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use the branch name or tag for the release name
+          TAG_NAME="${{ github.ref_name }}"
+          [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
+
+          gh release create "$TAG_NAME" \
+            --title "Build: ${TAG_NAME}" \
+            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
+            --prerelease || true
+
+          gh release upload "$TAG_NAME" conduwuit-${{ matrix.profile }}-${{ matrix.os }}-*.tar.gz --clobber
 
   # NOTE: Currently just for Ubuntu 22/24 Skylake-optimized builds (avx512 or avx2)
   cpu-skylake:
@@ -186,14 +219,46 @@ jobs:
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
         continue-on-error: true
 
+      - name: Package Assets
+        run: |
+          mkdir -p release-assets/bin release-assets/lib release-assets/include
+          cp target/latest/conduwuit release-assets/bin/
+          [ -f target/latest/conduwuit.asc ] && cp target/latest/conduwuit.asc release-assets/bin/
+
+          # Copy libs
+          cp target/latest/lib/*.so* release-assets/lib/ || true
+
+          # Include headers if they exist
+          if [ -d "$HOME/.local/include" ]; then
+            cp -r $HOME/.local/include/* release-assets/include/ || true
+          fi
+
+          tar -czvf conduwuit-skylake-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-bin.tar.gz -C release-assets/bin .
+          tar -czvf conduwuit-skylake-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-libs.tar.gz -C release-assets/lib .
+          tar -czvf conduwuit-skylake-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-headers.tar.gz -C release-assets/include .
+
       - name: Upload binary (${{ steps.cpu.outputs.target }})
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-skylake-${{ matrix.os }}
-          path: |
-            target/latest/conduwuit
-            target/latest/conduwuit.asc
+          name: conduwuit-skylake-${{ matrix.os }}-${{ steps.cpu.outputs.target }}
+          path: conduwuit-skylake-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-*.tar.gz
           retention-days: 60
+
+      - name: Publish Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
+
+          gh release create "$TAG_NAME" \
+            --title "Build: ${TAG_NAME}" \
+            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
+            --prerelease || true
+
+          gh release upload "$TAG_NAME" conduwuit-skylake-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-*.tar.gz --clobber
 
   # NOTE: Max performance build targeting ARM64 (specifically Raspberry Pi 5 / Cortex-A76)
   # configured for 16K page sizes via a 64K jemalloc override.
@@ -279,11 +344,43 @@ jobs:
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
         continue-on-error: true
 
+      - name: Package Assets
+        run: |
+          mkdir -p release-assets/bin release-assets/lib release-assets/include
+          cp target/latest/conduwuit release-assets/bin/
+          [ -f target/latest/conduwuit.asc ] && cp target/latest/conduwuit.asc release-assets/bin/
+
+          # Copy libs
+          cp target/latest/lib/*.so* release-assets/lib/ || true
+
+          # Include headers if they exist
+          if [ -d "$HOME/.local/include" ]; then
+            cp -r $HOME/.local/include/* release-assets/include/ || true
+          fi
+
+          tar -czvf conduwuit-arm64-pi5-${{ matrix.os }}-bin.tar.gz -C release-assets/bin .
+          tar -czvf conduwuit-arm64-pi5-${{ matrix.os }}-libs.tar.gz -C release-assets/lib .
+          tar -czvf conduwuit-arm64-pi5-${{ matrix.os }}-headers.tar.gz -C release-assets/include .
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: conduwuit-arm64-pi5-${{ matrix.os }}
-          path: |
-            target/latest/conduwuit
-            target/latest/conduwuit.asc
+          path: conduwuit-arm64-pi5-${{ matrix.os }}-*.tar.gz
           retention-days: 60
+
+      - name: Publish Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
+
+          gh release create "$TAG_NAME" \
+            --title "Build: ${TAG_NAME}" \
+            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
+            --prerelease || true
+
+          gh release upload "$TAG_NAME" conduwuit-arm64-pi5-${{ matrix.os }}-*.tar.gz --clobber

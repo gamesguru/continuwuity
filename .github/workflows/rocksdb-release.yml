@@ -44,7 +44,7 @@ jobs:
             EXTRA_FLAGS="-march=${{ matrix.arch }}"
           fi
 
-          DISABLE_JEMALLOC=1 PORTABLE=1 \
+          DISABLE_JEMALLOC=1 \
             EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
             EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
             make shared_lib -j$(nproc)
@@ -63,5 +63,5 @@ jobs:
           FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
 
           # Create release if it doesn't exist, then upload
-          gh release create "$TAG" --title "RocksDB ${{ github.event.inputs.version }} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
+          gh release create "$TAG" --title "RocksDB ${{ github.event.inputs.version }} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" --prerelease || true
           gh release upload "$TAG" "$FILENAME" --clobber

@@ -11,15 +11,23 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Slim Checkout
+        shell: bash
+        run: |
+          git clone --depth 1 ${{ github.server_url }}/${{ github.repository }}.git .
+          git fetch --unshallow || true
 
       - name: Configure Git
+        env:
+          GPG_PASSPHRASE: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "noreply@continuwuity.org"
           git config checkout.defaultRemote origin
+          git config commit.gpgsign true
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            git config gpg.program "gpg --batch --pinentry-mode loopback --passphrase $GPG_PASSPHRASE"
+          fi
           git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
       - name: Sync main

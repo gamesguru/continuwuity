@@ -42,7 +42,7 @@ jobs:
             EXTRA_FLAGS="-march=${{ matrix.arch }}"
           fi
 
-          DISABLE_JEMALLOC=1 PORTABLE=1 \
+          DISABLE_JEMALLOC=1 \
             EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
             EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
             make shared_lib -j$(nproc)

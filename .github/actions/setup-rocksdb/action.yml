@@ -44,10 +44,15 @@ runs:
       if: steps.rocksdb-cache.outputs.cache-hit != 'true' && env.downloaded == 'false'
       shell: bash
       run: |
+        # We MUST clone the fork because it contains custom C API patches
+        # not present in upstream Facebook RocksDB (e.g. rocksdb_livefiles_column_family_name)
         git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
         cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
         make clean
 
+        # Determine compiler flag: ARM uses -march (compatible with cortex-a76), x86 uses -march
+        # We explicitly add -mpclmul for x86-64-v3+ as it's often not enabled by default
+        # but is required by RocksDB's checksum optimizations.
         if [[ "${{ inputs.arch }}" == "cortex-a76" ]]; then
           EXTRA_FLAGS="-march=armv8.2-a+crc"
         elif [[ "${{ inputs.arch }}" == x86-64-v* ]]; then
@@ -56,12 +61,28 @@ runs:
           EXTRA_FLAGS="-march=${{ inputs.arch }}"
         fi
 
-        DISABLE_JEMALLOC=1 PORTABLE=1 \
+        # We pass EXTRA_FLAGS to both CFLAGS and CXXFLAGS to ensure all source files (C and C++)
+        # are compiled with the correct ISA extensions enabled.
+        DISABLE_JEMALLOC=1 \
           EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
           EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
           make shared_lib -j$(nproc)
         mkdir -p ~/.local
         make install-shared PREFIX=~/.local
+
+    - name: Upload to Release (on-demand)
+      if: steps.rocksdb-cache.outputs.cache-hit != 'true' && env.downloaded == 'false'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        VERSION="10.5.1"
+        TAG="rocksdb-${VERSION}"
+        FILENAME="rocksdb-${VERSION}-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
+        tar -czvf "$FILENAME" -C ~/.local .
+        # Ensure release exists, then upload the new asset
+        gh release create "$TAG" --title "RocksDB ${VERSION} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" --prerelease || true
+        gh release upload "$TAG" "$FILENAME" --clobber
 
     - name: Export Paths
       shell: bash
