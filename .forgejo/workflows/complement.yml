@@ -140,14 +140,7 @@ jobs:
           fi
 
       - name: Build Complement Docker image
-        run: |
-          ls -l target/latest/conduwuit
-          # Using buildx and buildkit are supposedly better
-          DOCKER_BUILDKIT=1 docker buildx build \
-            --build-arg BINARY_PATH=target/latest/conduwuit \
-            -t continuwuity:complement \
-            -f ./docker/complement.Dockerfile \
-            --load .
+        run: make complement/docker
 
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt

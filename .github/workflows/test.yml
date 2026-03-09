@@ -179,28 +179,28 @@ jobs:
             target/latest/conduwuit.asc
           retention-days: 60
 
+      # - name: Set up Go
+      #   uses: actions/setup-go@v5
+      #   with:
+      #     go-version: "1.22"
+      #     cache-dependency-path: complement-src/go.sum
+
+      # - name: Install gotestsum
+      #   run: go install gotest.tools/gotestsum@latest
+
+      - name: Capture baseline stats
+        run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
+
       - name: Checkout Complement
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: matrix-org/complement
           path: complement-src
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-          cache-dependency-path: complement-src/go.sum
-
       - name: Build Complement Docker image
-        run: DOCKER_BUILDKIT=1 docker buildx build --build-arg BINARY_PATH=target/latest/conduwuit -t continuwuity:complement -f ./docker/complement.Dockerfile --load .
+        run: make complement/docker
 
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@latest
-
-      - name: Capture baseline stats
-        run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
-
-      - name: Build and run Complement tests
+      - name: Run Complement tests
         run: |
           ./bin/complement ./complement-src
 
