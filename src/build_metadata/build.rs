@@ -38,6 +38,7 @@ fn main() {
 				.unwrap_or_else(|| "unknown".into())
 		})];
 		if let Some(b) = get_env("CONTINUWUITY_BRANCH")
+			.or_else(|| get_env("GITHUB_REF_NAME"))
 			.or_else(|| git::run(&["rev-parse", "--abbrev-ref", "HEAD"]))
 		{
 			println!("cargo:rustc-env=GIT_BRANCH={b}");
