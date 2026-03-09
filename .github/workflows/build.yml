@@ -19,6 +19,9 @@ jobs:
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_HASWELL != ''
     runs-on: ${{ matrix.os }}
+    env:
+      ROCKSDB_LIB_DIR: /usr/local/lib
+      LD_LIBRARY_PATH: /usr/local/lib
 
     strategy:
       fail-fast: false
@@ -43,10 +46,29 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
-            librocksdb-dev \
             clang \
             libclang-dev \
             llvm-dev
+
+      - name: Cache RocksDB
+        id: rocksdb-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/librocksdb*
+          key: rocksdb-10.5.1-haswell-${{ matrix.os }}
+
+      - name: Build RocksDB 10.5.1
+        if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
+          cd /tmp/rocksdb
+          EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
+          sudo make install-shared PREFIX=/usr/local
+          sudo ldconfig
+
+      - name: Install RocksDB from cache
+        if: steps.rocksdb-cache.outputs.cache-hit == 'true'
+        run: sudo ldconfig
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -101,6 +123,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       PROFILE: release-max-perf
+      ROCKSDB_LIB_DIR: /usr/local/lib
+      LD_LIBRARY_PATH: /usr/local/lib
 
     strategy:
       fail-fast: false
@@ -123,10 +147,29 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
-            librocksdb-dev \
             clang \
             libclang-dev \
             llvm-dev
+
+      - name: Cache RocksDB
+        id: rocksdb-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/librocksdb*
+          key: rocksdb-10.5.1-skylake-${{ matrix.os }}
+
+      - name: Build RocksDB 10.5.1
+        if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
+          cd /tmp/rocksdb
+          EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
+          sudo make install-shared PREFIX=/usr/local
+          sudo ldconfig
+
+      - name: Install RocksDB from cache
+        if: steps.rocksdb-cache.outputs.cache-hit == 'true'
+        run: sudo ldconfig
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -193,6 +236,8 @@ jobs:
       PROFILE: release-max-perf
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: 16
+      ROCKSDB_LIB_DIR: /usr/local/lib
+      LD_LIBRARY_PATH: /usr/local/lib
 
     # Ubuntu 22.04 uses glibc 2.35 (compatible)
     # Raspberry Pi uses glibc 2.36
@@ -218,10 +263,29 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
-            librocksdb-dev \
             clang \
             libclang-dev \
             llvm-dev
+
+      - name: Cache RocksDB
+        id: rocksdb-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/librocksdb*
+          key: rocksdb-10.5.1-arm64-${{ matrix.os }}
+
+      - name: Build RocksDB 10.5.1
+        if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
+          cd /tmp/rocksdb
+          EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
+          sudo make install-shared PREFIX=/usr/local
+          sudo ldconfig
+
+      - name: Install RocksDB from cache
+        if: steps.rocksdb-cache.outputs.cache-hit == 'true'
+        run: sudo ldconfig
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
