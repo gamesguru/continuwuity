@@ -14,7 +14,7 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: ~/.local
-        key: rocksdb-10.5.1-${{ inputs.cache-key }}
+        key: rocksdb-10.5.1-${{ inputs.arch }}-${{ inputs.cache-key }}
 
     - name: Build RocksDB (from fork)
       if: steps.rocksdb-cache.outputs.cache-hit != 'true'
@@ -25,10 +25,8 @@ runs:
         git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
         cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
         make clean
-        PORTABLE=1 \
-          DISABLE_JEMALLOC=1 \
-          EXTRA_CXXFLAGS="-Wno-error=unused-parameter"\
-          make shared_lib -j$(nproc)
+        # another option is: PORTABLE=1
+        DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
         mkdir -p ~/.local
         make install-shared PREFIX=~/.local
 
@@ -44,4 +42,4 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: ~/.local
-        key: rocksdb-10.5.1-${{ inputs.cache-key }}
+        key: rocksdb-10.5.1-${{ inputs.arch }}-${{ inputs.cache-key }}

@@ -138,10 +138,21 @@ jobs:
             libclang-dev \
             llvm-dev
 
+      - name: Detect best CPU target
+        id: cpu
+        run: |
+          if grep -q avx512f /proc/cpuinfo 2>/dev/null; then
+            echo "target=x86-64-v4" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=x86-64-v3" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Detected target: $(grep target= "$GITHUB_OUTPUT" | cut -d= -f2)"
+
       - name: Setup RocksDB
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}
+          arch: ${{ steps.cpu.outputs.target }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -158,15 +169,7 @@ jobs:
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
-      - name: Detect best CPU target
-        id: cpu
-        run: |
-          if grep -q avx512f /proc/cpuinfo 2>/dev/null; then
-            echo "target=skylake-avx512" >> "$GITHUB_OUTPUT"
-          else
-            echo "target=skylake" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Detected target: $(grep target= "$GITHUB_OUTPUT" | cut -d= -f2)"
+
 
       - name: Build (${{ steps.cpu.outputs.target }})
         env:
