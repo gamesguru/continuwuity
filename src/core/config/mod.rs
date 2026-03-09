@@ -2807,9 +2807,9 @@ fn default_client_request_timeout() -> u64 { 180 }
 
 fn default_client_response_timeout() -> u64 { 120 }
 
-fn default_client_shutdown_timeout() -> u64 { 15 }
+fn default_client_shutdown_timeout() -> u64 { 10 }
 
-fn default_sender_shutdown_timeout() -> u64 { 5 }
+fn default_sender_shutdown_timeout() -> u64 { 3 }
 
 // blurhashing defaults recommended by https://blurha.sh/
 // 2^25
