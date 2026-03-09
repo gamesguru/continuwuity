@@ -1,4 +1,9 @@
-use std::{env, fs, path::Path};
+use std::{
+	env,
+	fmt::Write,
+	fs,
+	path::Path,
+};
 
 fn main() {
 	println!("cargo:rerun-if-changed=Cargo.toml");
@@ -29,7 +34,7 @@ fn main() {
 		if in_features && !line.is_empty() && !line.starts_with('#') {
 			if let Some((feat, _)) = line.split_once('=') {
 				let feat = feat.trim();
-				available_features.push(feat.to_string());
+				available_features.push(feat.to_owned());
 			}
 		}
 	}
@@ -44,8 +49,7 @@ fn main() {
 ",
 	);
 	for f in &enabled_features {
-		out.push_str(&format!("    \"{}\"", f));
-		out.push_str(",\n");
+		let _ = writeln!(out, "    \"{f}\",");
 	}
 	out.push_str("];\n\n");
 
@@ -54,8 +58,7 @@ fn main() {
 ",
 	);
 	for f in &available_features {
-		out.push_str(&format!("    \"{}\"", f));
-		out.push_str(",\n");
+		let _ = writeln!(out, "    \"{f}\",");
 	}
 	out.push_str("];\n");
 
