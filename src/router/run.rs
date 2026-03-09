@@ -8,7 +8,7 @@ use std::{
 };
 
 use axum_server::Handle as ServerHandle;
-use conduwuit::{Error, Result, Server, debug, debug_error, debug_info, error, info, warn};
+use conduwuit::{Error, Result, Server, debug, debug_error, debug_info, error, info};
 use futures::FutureExt;
 use service::Services;
 use tokio::{
@@ -32,7 +32,7 @@ pub(crate) async fn run(services: Arc<Services>) -> Result<()> {
 	let (tx, _) = broadcast::channel::<()>(1);
 	let sigs = server
 		.runtime()
-		.spawn(signal(services.clone(), tx.clone(), handle.clone()));
+		.spawn(signal(server.clone(), tx.clone(), handle.clone()));
 
 	let mut listener =
 		server
@@ -96,7 +96,7 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 	// Check that Services and Database will drop as expected, The complex of Arc's
 	// used for various components can easily lead to references being held
 	// somewhere improperly; this can hang shutdowns.
-	info!("Closing database...");
+	debug!("Cleaning up...");
 	let db = Arc::downgrade(&services.db);
 	if let Err(services) = Arc::try_unwrap(services) {
 		debug_error!(
@@ -105,56 +105,30 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 		);
 	}
 
-	// Give async tasks a chance to release their references before reporting.
-	let mut remaining = Weak::strong_count(&db);
-	if remaining > 0 {
-		use tokio::time::{Duration, sleep, timeout};
-
-		info!(
-			"{} dangling references to Database, allowing them 5 seconds to close cleanly",
-			remaining
-		);
-		timeout(Duration::from_secs(5), async {
-			loop {
-				sleep(Duration::from_millis(25)).await;
-				if Weak::strong_count(&db) == 0 {
-					break;
-				}
-			}
-		})
-		.await
-		.ok();
-		remaining = Weak::strong_count(&db);
-	}
-
-	if remaining > 0 {
-		warn!(
-			"{remaining} database connections are still held by running background tasks (this \
-			 is harmless, likely pending network requests). The system will now exit."
+	if Weak::strong_count(&db) > 0 {
+		debug_error!(
+			"{} dangling references to Database after shutdown",
+			Weak::strong_count(&db)
 		);
 	}
 
-	warn!("Shutdown complete.");
+	info!("Shutdown complete.");
 	Ok(())
 }
 
 #[tracing::instrument(skip_all, level = "info")]
-async fn signal(services: Arc<Services>, tx: Sender<()>, handle: axum_server::Handle) {
-	services
-		.server
+async fn signal(server: Arc<Server>, tx: Sender<()>, handle: axum_server::Handle) {
+	server
 		.clone()
 		.until_shutdown()
-		.then(move |()| handle_shutdown(services, tx, handle))
+		.then(move |()| handle_shutdown(server, tx, handle))
 		.await;
 }
 
-async fn handle_shutdown(services: Arc<Services>, tx: Sender<()>, handle: axum_server::Handle) {
-	let server = &services.server;
+async fn handle_shutdown(server: Arc<Server>, tx: Sender<()>, handle: axum_server::Handle) {
 	if let Err(e) = tx.send(()) {
 		error!("failed sending shutdown transaction to channel: {e}");
 	}
-
-	services.interrupt();
 
 	let timeout = server.config.client_shutdown_timeout;
 	let timeout = Duration::from_secs(timeout);

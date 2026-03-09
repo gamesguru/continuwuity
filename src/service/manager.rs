@@ -1,6 +1,6 @@
 use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
-use conduwuit::{Err, Error, Result, Server, debug, error, info, trace, utils::time, warn};
+use conduwuit::{Err, Error, Result, Server, debug, debug_warn, error, info, trace, utils::time, warn};
 use futures::{FutureExt, TryFutureExt};
 use tokio::{
 	sync::{Mutex, MutexGuard},
@@ -34,12 +34,9 @@ impl Manager {
 	}
 
 	pub(super) async fn poll(&self) -> Result<()> {
-		let mut lock = self.manager.lock().await;
-		if let Some(manager) = &mut *lock {
+		if let Some(manager) = &mut *self.manager.lock().await {
 			trace!("Polling service manager...");
-			let res = manager.await;
-			*lock = None;
-			return res.map_err(Error::from).and_then(|res| res);
+			return manager.await?;
 		}
 
 		Ok(())
@@ -135,7 +132,7 @@ impl Manager {
 		error!("service {name:?} aborted: {error}");
 
 		if !self.server.running() {
-			warn!("service {name:?} error ignored on shutdown.");
+			debug_warn!("service {name:?} error ignored on shutdown.");
 			return Ok(());
 		}
 
