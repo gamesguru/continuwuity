@@ -123,13 +123,13 @@ format: ##H Run pre-commit hooks/formatters
 lint:	##H Lint code
 	@echo "Lint code? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo clippy $(CARGO_SCOPE) --no-default-features --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
 test:	##H Run tests
 	@echo "Run tests? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo test $(CARGO_SCOPE) --features full --locked --profile $(PROFILE) --all-targets
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo test $(CARGO_SCOPE) --no-default-features --locked --profile $(PROFILE) --all-targets
 
 
 ROCKSDB_LIB_DIR ?=
@@ -139,7 +139,7 @@ build:	##H Build with selected profile
 	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
 	@echo "Build this profile? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo build --features full --locked $(CARGO_FLAGS)
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo build --no-default-features --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
 	# ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
@@ -163,7 +163,7 @@ clean:	##H Clean build directory for current profile
 build-docs:	##H Regenerate docs (admin commands, etc.)
 	@echo "Regenerate docs with PROFILE='$(PROFILE)'?"
 	@$(MAKE) _confirm
-	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo run -p xtask --profile $(PROFILE) -- generate-docs
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo run -p xtask --profile $(PROFILE) --no-default-features -- generate-docs
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

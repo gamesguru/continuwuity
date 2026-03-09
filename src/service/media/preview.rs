@@ -9,6 +9,7 @@ use std::time::SystemTime;
 
 use conduwuit::{Err, Result, debug, err};
 use conduwuit_core::implement;
+#[cfg(feature = "url_preview")]
 use conduwuit_core::utils::response::LimitReadExt;
 use ipaddress::IPAddress;
 use serde::Serialize;
