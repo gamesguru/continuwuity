@@ -43,10 +43,15 @@ jobs:
             libclang-dev \
             llvm-dev
 
+      - name: Detect best CPU target
+        id: cpu
+        uses: ./.github/actions/get-cpu-target
+
       - name: Setup RocksDB
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ubuntu-24.04
+          arch: ${{ steps.cpu.outputs.target }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -124,10 +129,15 @@ jobs:
             libclang-dev \
             llvm-dev
 
+      - name: Detect best CPU target
+        id: cpu
+        uses: ./.github/actions/get-cpu-target
+
       - name: Setup RocksDB
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}
+          arch: ${{ steps.cpu.outputs.target }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
