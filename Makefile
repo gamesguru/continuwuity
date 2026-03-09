@@ -198,27 +198,43 @@ COMPLEMENT_IMAGE ?= continuwuity:complement
 COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
 
 .PHONY: complement/build
-complement/build: ##H Build conduwuit docker image for Complement testing
+complement/build: ##H Build conduwuit w direct_tls
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
-	$(MAKE) complement/docker
 
 .PHONY: complement/docker
-complement/docker: ##H Build Complement Docker image from existing binary
+complement/docker: ##H Build docker image from existing binary
+	@echo "Copying dynamically linked libraries to target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/..."
+	@mkdir -p target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib && rm -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/*
+	@LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$(LD_LIBRARY_PATH)" \
+		ldd target/latest/conduwuit | awk '/=> \// {print $$3}' \
+		| grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|ld-linux|libdl\.so|libpthread\.so|librt\.so' \
+		| xargs -I {} cp "{}" target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/ || true
+	@rm -rf target/latest/lib
+	@ln -sfn ../$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib target/latest/lib
 	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
 	DOCKER_BUILDKIT=1 docker buildx build \
 		--build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
 		--build-arg BINARY_PATH=target/latest/conduwuit \
+		--build-arg LIB_PATH=target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib \
 		--build-arg UID=$(shell id -u) \
 		--build-arg GID=$(shell id -g) \
 		-t $(COMPLEMENT_IMAGE) \
 		-f ./docker/complement.Dockerfile \
 		--load .
 
+.PHONY: complement/run
+complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
+	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
+	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
+	@cd $(COMPLEMENT_DIR) && \
+	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
+	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
+
 
 .PHONY: complement/stats
-complement/stats: ##H Check local test stats from tests/test_results/complement/test_results.jsonl
+complement/stats: ##H Check local test stats
 	@test -f "tests/test_results/complement/test_results.jsonl" || (echo "ERROR: tests/test_results/complement/test_results.jsonl does not exist" && exit 1)
 	@echo "Parsing Complement test results..."
 	@PASS=$$(jq -s '[.[] | select(.Action == "pass")] | length' tests/test_results/complement/test_results.jsonl); \
@@ -241,14 +257,11 @@ complement/stats: ##H Check local test stats from tests/test_results/complement/
 	echo "JSON file (on main) last modified by: "; \
 	git log -1 --format="%an (%ad) %H" origin/main
 
-
-.PHONY: complement/run
-complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
-	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
-	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
-	@cd $(COMPLEMENT_DIR) && \
-	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
-	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
+.PHONY: complement/logs
+complement/logs: ##H Tail logs for all running and future Complement containers
+	@echo "Tailing logs for Complement containers (Press Ctrl+C to stop)..."
+	@docker ps -q --filter "name=complement_" | xargs -r -n 1 docker logs -f & \
+	docker events --filter 'event=start' --format '{{.Actor.Attributes.name}}' | grep --line-buffered "^complement_" | xargs -r -I {} sh -c 'echo "--- Tailing {} ---"; docker logs -f {} &' ; wait
 
 
 
