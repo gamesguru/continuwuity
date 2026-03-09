@@ -183,10 +183,16 @@ complement/build: ##H Build conduwuit docker image for Complement testing
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
+	$(MAKE) complement/docker
+
+.PHONY: complement/docker
+complement/docker: ##H Build Complement Docker image from existing binary
 	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
 	DOCKER_BUILDKIT=1 docker buildx build \
 		--build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
 		--build-arg BINARY_PATH=target/latest/conduwuit \
+		--build-arg UID=$(shell id -u) \
+		--build-arg GID=$(shell id -g) \
 		-t $(COMPLEMENT_IMAGE) \
 		-f ./docker/complement.Dockerfile \
 		--load .

@@ -1,11 +1,19 @@
-FROM ubuntu:latest
+ARG BASE_IMAGE=ubuntu:latest
+FROM ${BASE_IMAGE}
 EXPOSE 8008
 EXPOSE 8448
 RUN apt-get update && apt-get install -y ca-certificates liburing2 && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /etc/continuwuity /var/lib/continuwuity /usr/local/bin/
 COPY complement/complement-entrypoint.sh /usr/local/bin/complement-entrypoint.sh
 COPY complement/complement.config.toml /etc/continuwuity/config.toml
-COPY target/debug/conduwuit /usr/local/bin/conduwuit
+ARG BINARY_PATH=target/debug/conduwuit
+COPY ${BINARY_PATH} /usr/local/bin/conduwuit
 RUN chmod +x /usr/local/bin/conduwuit /usr/local/bin/complement-entrypoint.sh
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} conduwuit || true && useradd -u ${UID} -g ${GID} -m conduwuit || true
+RUN chown -R conduwuit:conduwuit /etc/continuwuity /var/lib/continuwuity
+USER ${UID}:${GID}
+
 #HEALTHCHECK --interval=30s --timeout=5s CMD curl --fail http://localhost:8008/_continuwuity/server_version || exit 1
 ENTRYPOINT ["/usr/local/bin/complement-entrypoint.sh"]
