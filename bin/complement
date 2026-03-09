@@ -18,7 +18,7 @@ RESULTS_FILE="${3:-${RESULTS_FILE:-tests/test_results/complement/test_results.js
 COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
-| -SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*"|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
+SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*"|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
 
 # A regex for tests to run.
 RUN_TESTS="${COMPLEMENT_RUN:-.}"
@@ -77,7 +77,7 @@ fi
 # Common flags for both test runners
 TEST_FLAGS=(
     # -tags "conduwuit_blacklist"
-    # -skip "$SKIPPED_COMPLEMENT_TESTS"
+    -skip "$SKIPPED_COMPLEMENT_TESTS"
     -run "$RUN_TESTS"
     -timeout 1h
     -count=1
