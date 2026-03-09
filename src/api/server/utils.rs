@@ -46,28 +46,15 @@ pub(super) async fn check(&self) -> Result {
 		join!(world_readable, server_in_room, server_can_see, acl_check);
 
 	if !acl_check {
-		return Err!(Request(Forbidden(warn!(
-			%self.origin,
-			%self.room_id,
-			"Server access denied by ACL."
-		))));
+		return Err!(Request(Forbidden("Server access denied.")));
 	}
 
 	if !world_readable && !server_in_room {
-		return Err!(Request(Forbidden(warn!(
-			%self.origin,
-			%self.room_id,
-			"Server is not in room and room is not world-readable."
-		))));
+		return Err!(Request(Forbidden("Server is not in room.")));
 	}
 
 	if server_can_see.is_some_and(is_false!()) {
-		return Err!(Request(Forbidden(warn!(
-			%self.origin,
-			%self.room_id,
-			?self.event_id,
-			"Server is not allowed to see event."
-		))));
+		return Err!(Request(Forbidden("Server is not allowed to see event.")));
 	}
 
 	Ok(())
