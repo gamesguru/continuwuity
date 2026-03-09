@@ -38,7 +38,12 @@ runs:
 
         # We must set PORTABLE=1 so RocksDB doesn't automatically inject -march=native
         # which would cause cache poisoning across heterogeneous GitHub runners.
-        DISABLE_JEMALLOC=1 PORTABLE=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" make shared_lib -j$(nproc)
+        # We pass EXTRA_FLAGS to both CFLAGS and CXXFLAGS to ensure all source files (C and C++)
+        # are compiled with the correct ISA extensions enabled.
+        DISABLE_JEMALLOC=1 PORTABLE=1 \
+          EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
+          EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
+          make shared_lib -j$(nproc)
         mkdir -p ~/.local
         make install-shared PREFIX=~/.local
 

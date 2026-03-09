@@ -23,8 +23,13 @@ jobs:
       - name: Sync main
         run: |
           if git fetch github main; then
-            git checkout -B main origin/main
-            git merge FETCH_HEAD --no-edit || exit 1
+            git fetch origin main || true
+            if git show-ref --verify --quiet refs/remotes/origin/main; then
+              git checkout -B main origin/main
+              git merge FETCH_HEAD --no-edit || exit 1
+            else
+              git checkout -b main FETCH_HEAD
+            fi
             git push origin main
           else
             echo "Failed to fetch GitHub main."
@@ -34,8 +39,13 @@ jobs:
       - name: Sync dev
         run: |
           if git fetch github dev; then
-            git checkout -B dev origin/dev
-            git merge FETCH_HEAD --no-edit || exit 1
+            git fetch origin dev || true
+            if git show-ref --verify --quiet refs/remotes/origin/dev; then
+              git checkout -B dev origin/dev
+              git merge FETCH_HEAD --no-edit || exit 1
+            else
+              git checkout -b dev FETCH_HEAD
+            fi
             git push origin dev
           else
             echo "Failed to fetch GitHub dev."
@@ -45,11 +55,12 @@ jobs:
       - name: Sync metadata
         run: |
           if git fetch github _metadata/badges; then
-            if ! git show-ref --verify --quiet refs/heads/_metadata/badges; then
-              git checkout -b _metadata/badges FETCH_HEAD
-            else
+            git fetch origin _metadata/badges || true
+            if git show-ref --verify --quiet refs/remotes/origin/_metadata/badges; then
               git checkout -B _metadata/badges origin/_metadata/badges
-              git merge FETCH_HEAD --no-edit || exit 1
+              git merge FETCH_HEAD --no-edit --allow-unrelated-histories || exit 1
+            else
+              git checkout -b _metadata/badges FETCH_HEAD
             fi
             git push origin _metadata/badges
           else
