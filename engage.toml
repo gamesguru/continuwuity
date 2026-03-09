@@ -1,8 +1,9 @@
 # Optional env vars (export before running engage):
-# After rocksdb compile+install, export ROCKSDB_LIB_DIR to every cargo build, fmt, test, clippy, etc
-#   ROCKSDB_LIB_DIR=/usr/local/lib
-# When building RocksDB for the first tim on older clang versions, you may need this flag to bypass a warning:
-#   CXXFLAGS="-Wno-error=unused-parameter"
+# After rocksdb compile+install, export these to every cargo build, fmt, test, clippy:
+# ROCKSDB_INCLUDE_DIR=/usr/local/include
+# ROCKSDB_LIB_DIR=/usr/local/lib
+# LD_LIBRARY_PATH=$ROCKSDB_LIB_DIR:$LD_LIBRARY_PATH
+
 interpreter = ["bash", "-euo", "pipefail", "-c"]
 
 [[task]]
