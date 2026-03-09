@@ -37,16 +37,13 @@ pushd "$toplevel" > /dev/null
 # Cleanup leftover Complement containers and images
 cleanup_complement_containers() {
     local containers
-    containers=$(docker ps -a --filter "name=complement_" -q 2>/dev/null || true)
+    containers=$(docker ps -a --filter "name=complement_" -q)
     if [ -n "$containers" ]; then
         echo "Cleaning up leftover Complement containers..."
-        echo "$containers" | xargs -r docker rm -f 2>/dev/null || true
+        echo "$containers" | xargs -r docker rm -f
     fi
-    # Remove per-test images
-    docker images --filter "reference=localhost/complement" -q 2>/dev/null \
-        | xargs -r docker rmi -f 2>/dev/null || true
-    # Remove dangling/old images
-    docker image prune -f 2>/dev/null || true
+
+    # TODO: perhaps also prune images here?
 }
 trap cleanup_complement_containers EXIT
 
