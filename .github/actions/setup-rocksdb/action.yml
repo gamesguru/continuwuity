@@ -1,0 +1,45 @@
+---
+name: "Setup RocksDB"
+description: "Builds and caches RocksDB 10.5.1 from source"
+inputs:
+  cache-key:
+    description: "Unique cache key suffix (e.g. ubuntu-24.04)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Restore cache
+      id: rocksdb-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.local
+        key: rocksdb-10.5.1-${{ inputs.arch }}-${{ inputs.cache-key }}
+
+    - name: Build RocksDB (from fork)
+      if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        # We MUST clone the fork because it contains custom C API patches
+        # not present in upstream Facebook RocksDB (e.g. rocksdb_livefiles_column_family_name)
+        git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
+        cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
+        make clean
+        # another option is: PORTABLE=1
+        DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
+        mkdir -p ~/.local
+        make install-shared PREFIX=~/.local
+
+    - name: Export Paths
+      shell: bash
+      run: |
+        echo "ROCKSDB_INCLUDE_DIR=$HOME/.local/include" >> $GITHUB_ENV
+        echo "ROCKSDB_LIB_DIR=$HOME/.local/lib" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+    - name: Save cache
+      if: steps.rocksdb-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.local
+        key: rocksdb-10.5.1-${{ inputs.arch }}-${{ inputs.cache-key }}

@@ -1,0 +1,20 @@
+---
+name: "Get CPU Target"
+description: "Detects optimal x86-64 microarchitecture for given runner"
+outputs:
+  target:
+    description: "The targeted CPU arch (i.e., x86-64-avx2)"
+    value: ${{ steps.cpu.outputs.target }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Detect best CPU target
+      id: cpu
+      shell: bash
+      run: |
+        if grep -q avx512f /proc/cpuinfo 2>/dev/null; then
+          echo "target=x86-64-avx512" >> "$GITHUB_OUTPUT"
+        else
+          echo "target=x86-64-avx2" >> "$GITHUB_OUTPUT"
+        fi
