@@ -19,11 +19,19 @@ jobs:
           git fetch --unshallow || true
 
       - name: Configure Git
+        env:
+          TOKEN: ${{ github.token }}
         run: |
           git config user.name "continuwuity CI"
           git config user.email "noreply@continuwuity.org"
           git config checkout.defaultRemote origin
           git config commit.gpgsign true
+
+          # Re-configure origin with token for authenticated push
+          SERVER_URL="${{ github.server_url }}"
+          HOST="${SERVER_URL#https://}"
+          git remote set-url origin https://x-access-token:$TOKEN@$HOST/${{ github.repository }}.git
+
           git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
 
       - name: Sync main
@@ -37,13 +45,19 @@ jobs:
               echo "Checking out main..."
               git checkout -B main origin/main
               echo "Merging..."
-              git merge FETCH_HEAD --no-edit || exit 1
+              MERGE_OUTPUT=$(git merge FETCH_HEAD --no-edit)
+              echo "$MERGE_OUTPUT"
+              if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
+                echo "Pushing..."
+                git push origin main --no-verify
+              else
+                echo "No changes to push."
+              fi
             else
               echo "Creating main..."
               git checkout -b main FETCH_HEAD
+              git push origin main --no-verify
             fi
-            echo "Pushing..."
-            git push origin main --no-verify
             echo "Done."
           else
             echo "Failed to fetch upstream main."
@@ -62,13 +76,19 @@ jobs:
               echo "Checking out dev..."
               git checkout -B dev origin/dev
               echo "Merging..."
-              git merge FETCH_HEAD --no-edit || exit 1
+              MERGE_OUTPUT=$(git merge FETCH_HEAD --no-edit)
+              echo "$MERGE_OUTPUT"
+              if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
+                echo "Pushing..."
+                git push origin dev --no-verify
+              else
+                echo "No changes to push."
+              fi
             else
               echo "Creating dev..."
               git checkout -b dev FETCH_HEAD
+              git push origin dev --no-verify
             fi
-            echo "Pushing..."
-            git push origin dev --no-verify
             echo "Done."
           else
             echo "Failed to fetch upstream dev."
@@ -87,12 +107,19 @@ jobs:
               echo "Checking out metadata..."
               git checkout -B _metadata/badges origin/_metadata/badges
               echo "Merging..."
-              git merge FETCH_HEAD --no-edit --allow-unrelated-histories || exit 1
+              MERGE_OUTPUT=$(git merge FETCH_HEAD --no-edit --allow-unrelated-histories)
+              echo "$MERGE_OUTPUT"
+              if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
+                echo "Pushing..."
+                git push origin _metadata/badges --no-verify
+              else
+                echo "No changes to push."
+              fi
             else
+              echo "Creating metadata..."
               git checkout -b _metadata/badges FETCH_HEAD
+              git push origin _metadata/badges --no-verify
             fi
-            echo "Pushing..."
-            git push origin _metadata/badges --no-verify
             echo "Done."
           else
             echo "Upstream _metadata/badges not found, skipping."
