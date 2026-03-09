@@ -34,6 +34,22 @@ fi
 toplevel="$(git rev-parse --show-toplevel)"
 pushd "$toplevel" > /dev/null
 
+# Cleanup leftover Complement containers and images
+cleanup_complement_containers() {
+    local containers
+    containers=$(docker ps -a --filter "name=complement_" -q 2>/dev/null || true)
+    if [ -n "$containers" ]; then
+        echo "Cleaning up leftover Complement containers..."
+        echo "$containers" | xargs -r docker rm -f 2>/dev/null || true
+    fi
+    # Remove per-test images
+    docker images --filter "reference=localhost/complement" -q 2>/dev/null \
+        | xargs -r docker rmi -f 2>/dev/null || true
+    # Remove dangling/old images
+    docker image prune -f 2>/dev/null || true
+}
+trap cleanup_complement_containers EXIT
+
 
 # Ensure result files exist even if tests fail to start
 touch "$LOG_FILE"
