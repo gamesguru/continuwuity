@@ -130,7 +130,10 @@ fn main() {
 	}
 
 	// Rustc Version
-	if let Ok(rustc) = std::process::Command::new("rustc").arg("--version").output() {
+	if let Ok(rustc) = std::process::Command::new("rustc")
+		.arg("--version")
+		.output()
+	{
 		println!(
 			"cargo:rustc-env=RUSTC_VERSION={}",
 			String::from_utf8_lossy(&rustc.stdout).trim()

@@ -3,8 +3,6 @@
 extern crate conduwuit_core as conduwuit;
 extern crate rust_rocksdb as rocksdb;
 
-
-
 conduwuit::mod_ctor! {}
 conduwuit::mod_dtor! {}
 
