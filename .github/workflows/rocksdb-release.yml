@@ -1,4 +1,3 @@
----
 name: Build RocksDB Releases
 
 on:
@@ -12,12 +11,12 @@ on:
 jobs:
   build:
     name: Build RocksDB (${{ matrix.arch }}, ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}${{ matrix.arch == 'cortex-a76' && '-arm' || '' }}
+    runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
-        arch: [haswell, x86-64-v3, x86-64-v4, cortex-a76]
+        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
 
     steps:
       - name: Install system dependencies
@@ -37,12 +36,13 @@ jobs:
           git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
           cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
 
-          if [[ "${{ matrix.arch }}" == "cortex-a76" ]]; then
+          ARCH="${{ matrix.arch }}"
+          if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
-          elif [[ "${{ matrix.arch }}" == x86-64-v* ]]; then
-            EXTRA_FLAGS="-march=${{ matrix.arch }} -mpclmul"
+          elif [[ "$ARCH" == x86-64-v* ]]; then
+            EXTRA_FLAGS="-march=$ARCH -mpclmul"
           else
-            EXTRA_FLAGS="-march=${{ matrix.arch }}"
+            EXTRA_FLAGS="-march=$ARCH"
           fi
 
           DISABLE_JEMALLOC=1 \
@@ -51,9 +51,18 @@ jobs:
             make shared_lib -j$(nproc)
 
           mkdir -p rocksdb-release/lib rocksdb-release/include
-          make install-shared PREFIX=$(pwd)/rocksdb-release
+          make install-sharedPREFIX=$(pwd)/rocksdb-release
 
-          tar -czvf ../../../rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz -C rocksdb-release .
+          FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          tar -czvf "../../../$FILENAME" -C rocksdb-release .
+          cd ../../..
+          sha256sum "$FILENAME" > "$FILENAME.sha256"
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
 
       - name: Create/Upload Release
         shell: bash
@@ -63,6 +72,15 @@ jobs:
           TAG="rocksdb-${{ github.event.inputs.version }}"
           FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
 
-          # Create release if it doesn't exist, then upload
+          # Create release if it doesn't exist
           gh release create "$TAG" --title "RocksDB ${{ github.event.inputs.version }} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
+
+          # Upload tarball
           gh release upload "$TAG" "$FILENAME" --clobber
+
+          # Update/Upload signed checksums (cumulative)
+          gh release download "$TAG" --pattern "SHA256SUMS*" || true
+          cat "$FILENAME.sha256" >> SHA256SUMS
+          sort -u SHA256SUMS -o SHA256SUMS
+          gpg --batch --yes --clearsign --output SHA256SUMS.asc SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS SHA256SUMS.asc --clobber

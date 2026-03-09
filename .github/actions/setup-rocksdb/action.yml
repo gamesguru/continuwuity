@@ -10,7 +10,7 @@ inputs:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
   arch:
-    description: "Target architecture cache segregation tag (e.g. haswell, x86-64-v3, cortex-a76)"
+    description: "Target architecture tag (e.g. x86-64-v3, x86-64-v4, arm64-cortex-a76)"
     required: true
 
 runs:
@@ -24,7 +24,6 @@ runs:
         key: rocksdb-${{ inputs.version }}-${{ inputs.arch }}-${{ inputs.cache-key }}
 
     - name: Try download from Release
-      id: download
       if: steps.rocksdb-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
@@ -35,14 +34,19 @@ runs:
         FILENAME="rocksdb-${VERSION}-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
 
         echo "Attempting to download pre-built RocksDB using gh CLI"
-        if gh release download "$TAG" --pattern "$FILENAME" --repo "${{ github.repository }}"; then
-          echo "Successfully downloaded pre-built RocksDB"
-          mkdir -p ~/.local
-          tar -xzvf "$FILENAME" -C ~/.local
-          echo "found=true" >> $GITHUB_OUTPUT
+        # Download tarball and the central signed sums
+        if gh release download "$TAG" --pattern "$FILENAME" --pattern "SHA256SUMS*" --repo "${{ github.repository }}"; then
+          echo "Verifying checksum..."
+          if grep "$FILENAME" SHA256SUMS | sha256sum --check; then
+            echo "Successfully verified and downloaded pre-built RocksDB"
+            mkdir -p ~/.local
+            tar -xzvf "$FILENAME" -C ~/.local
+          else
+            echo "Checksum verification failed!"
+            exit 1
+          fi
         else
           echo "Pre-built RocksDB not found in releases"
-          echo "found=false" >> $GITHUB_OUTPUT
         fi
 
     - name: Build RocksDB (fallback)
@@ -54,12 +58,13 @@ runs:
           cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
           make clean
 
-          if [[ "${{ inputs.arch }}" == "cortex-a76" ]]; then
+          ARCH="${{ inputs.arch }}"
+          if [[ "$ARCH" == "arm64-cortex-a76" || "$ARCH" == "cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
-          elif [[ "${{ inputs.arch }}" == x86-64-v* ]]; then
-            EXTRA_FLAGS="-march=${{ inputs.arch }} -mpclmul"
+          elif [[ "$ARCH" == x86-64-v* ]]; then
+            EXTRA_FLAGS="-march=$ARCH -mpclmul"
           else
-            EXTRA_FLAGS="-march=${{ inputs.arch }}"
+            EXTRA_FLAGS="-march=$ARCH"
           fi
 
           DISABLE_JEMALLOC=1 \
@@ -77,6 +82,8 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
+        GPG_PRIVATE_KEY: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
+        GPG_PASSPHRASE: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
       run: |
         VERSION="${{ inputs.version }}"
         TAG="rocksdb-${VERSION}"
@@ -86,8 +93,20 @@ runs:
         if ! gh release view "$TAG" --repo "${{ github.repository }}" 2>/dev/null | grep -q "$FILENAME"; then
           echo "Promoting RocksDB to release $TAG..."
           tar -czvf "$FILENAME" -C ~/.local .
+          sha256sum "$FILENAME" > "$FILENAME.sha256"
+
           gh release create "$TAG" --title "RocksDB ${VERSION} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
           gh release upload "$TAG" "$FILENAME" --clobber
+
+          # Update central signed checksums
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+            gh release download "$TAG" --pattern "SHA256SUMS*" || true
+            cat "$FILENAME.sha256" >> SHA256SUMS
+            sort -u SHA256SUMS -o SHA256SUMS
+            echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback --clearsign --output SHA256SUMS.asc SHA256SUMS
+            gh release upload "$TAG" SHA256SUMS SHA256SUMS.asc --clobber
+          fi
         else
           echo "$FILENAME already exists in release."
         fi
@@ -100,7 +119,7 @@ runs:
         echo "LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
     - name: Save cache
-      if: steps.rocksdb-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'
+      if: steps.rocksdb-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: ~/.local
