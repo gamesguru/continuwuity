@@ -34,6 +34,10 @@ runs:
         [ -z "$DST_BRANCH" ] && DST_BRANCH="$BRANCH"
         MODE="${{ inputs.mode }}"
 
+        # Identify the branch that actually contains our action code
+        # so we can restore it if switching to a "degenerate" branch
+        ACTION_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
         echo "::group::Sync $BRANCH to $DST/$DST_BRANCH ($MODE)"
 
         echo "Fetching $BRANCH from $SRC..."
@@ -41,6 +45,9 @@ runs:
           if [[ "$MODE" == "force" ]]; then
             echo "Updating $DST_BRANCH branch (force)..."
             git checkout -B "$DST_BRANCH" FETCH_HEAD
+            # Restore action files so subsequent steps don't fail
+            git checkout "$ACTION_BRANCH" -- .github/actions/git-sync/ || true
+
             echo "Pushing to $DST..."
             git push "$DST" "$DST_BRANCH" --force --no-verify
           else
@@ -50,12 +57,12 @@ runs:
             if git show-ref --verify --quiet "refs/remotes/$DST/$DST_BRANCH"; then
               echo "Checking out $DST_BRANCH..."
               git checkout -B "$DST_BRANCH" "$DST/$DST_BRANCH"
-              echo "Merging..."
+              # Restore action files
+              git checkout "$ACTION_BRANCH" -- .github/actions/git-sync/ || true
 
+              echo "Merging..."
               ARGS="--no-edit"
-              if [[ "${{ inputs.allow_unrelated }}" == "true" ]]; then
-                ARGS="$ARGS --allow-unrelated-histories"
-              fi
+              [[ "${{ inputs.allow_unrelated }}" == "true" ]] && ARGS="$ARGS --allow-unrelated-histories"
 
               MERGE_OUTPUT=$(git merge FETCH_HEAD $ARGS)
               echo "$MERGE_OUTPUT"
@@ -69,6 +76,7 @@ runs:
             else
               echo "Creating $DST_BRANCH from $SRC/$BRANCH..."
               git checkout -b "$DST_BRANCH" FETCH_HEAD
+              git checkout "$ACTION_BRANCH" -- .github/actions/git-sync/ || true
               git push "$DST" "$DST_BRANCH" --no-verify
             fi
           fi
@@ -77,5 +85,4 @@ runs:
           echo "Failed to fetch $BRANCH from $SRC."
           exit 1
         fi
-
         echo "::endgroup::"
