@@ -5,6 +5,10 @@ inputs:
   cache-key:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
+  arch:
+    description: "Target architecture cache segregation tag"
+    required: true
+    default: "portable"
 
 runs:
   using: "composite"
