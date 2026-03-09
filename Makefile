@@ -124,7 +124,7 @@ _confirm:
 .PHONY: format
 format: ##H Run pre-commit hooks/formatters
 	pre-commit run --all-files
-	#ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+#	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		cargo fix $(CARGO_SCOPE) $(CARGO_FLAGS) --features default --allow-dirty --allow-no-vcs

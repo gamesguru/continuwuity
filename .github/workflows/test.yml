@@ -170,6 +170,9 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
+      - name: Build Complement Docker image
+        run: make complement/docker
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -177,6 +180,7 @@ jobs:
           path: |
             target/latest/conduwuit
             target/latest/conduwuit.asc
+            target/latest/lib/
           retention-days: 60
 
       - name: Capture baseline stats
@@ -196,9 +200,6 @@ jobs:
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
-
-      - name: Build Complement Docker image
-        run: make complement/docker
 
       - name: Run Complement tests
         run: |

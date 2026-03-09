@@ -6,9 +6,8 @@ inputs:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
   arch:
-    description: "Target architecture cache segregation tag"
+    description: "Target architecture cache segregation tag (e.g. haswell, x86-64-v3, cortex-a76)"
     required: true
-    default: "portable"
 
 runs:
   using: "composite"
@@ -29,9 +28,19 @@ runs:
         git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
         cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
         make clean
-        # another option is: PORTABLE=1
-        DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
+
+        # Determine compiler flag: ARM uses -mcpu, x86 uses -march
+        if [[ "${{ inputs.arch }}" == "cortex-a76" ]]; then
+          EXTRA_FLAGS="-mcpu=cortex-a76"
+        else
+          EXTRA_FLAGS="-march=${{ inputs.arch }}"
+        fi
+
+        # We must set PORTABLE=1 so RocksDB doesn't automatically inject -march=native
+        # which would cause cache poisoning across heterogeneous GitHub runners.
+        DISABLE_JEMALLOC=1 PORTABLE=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" make shared_lib -j$(nproc)
         mkdir -p ~/.local
+        make install-shared PREFIX=~/.local
         make install-shared PREFIX=~/.local
 
     - name: Export Paths
