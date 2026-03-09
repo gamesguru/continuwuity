@@ -4,8 +4,6 @@ use std::sync::{Arc, atomic::Ordering};
 
 use conduwuit_core::{debug_info, error};
 
-
-
 mod clap;
 mod deadlock;
 mod logging;
@@ -27,8 +25,12 @@ use server::Server;
 pub use crate::clap::Args;
 
 pub fn run() -> Result<()> {
-	conduwuit_core::info::introspection::ENABLED_FEATURES.set(build_features::ENABLED_FEATURES).ok();
-	conduwuit_core::info::introspection::AVAILABLE_FEATURES.set(build_features::AVAILABLE_FEATURES).ok();
+	conduwuit_core::info::introspection::ENABLED_FEATURES
+		.set(build_features::ENABLED_FEATURES)
+		.ok();
+	conduwuit_core::info::introspection::AVAILABLE_FEATURES
+		.set(build_features::AVAILABLE_FEATURES)
+		.ok();
 
 	panic::init();
 
