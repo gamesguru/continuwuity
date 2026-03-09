@@ -1,3 +1,4 @@
+---
 name: Sync
 
 on:
@@ -12,7 +13,11 @@ jobs:
       - name: Slim Checkout
         shell: bash
         run: |
-          git clone --depth 1 ${{ github.server_url }}/${{ github.repository }}.git .
+          # Clone into a temporary directory then move files to current dir
+          # to ensure .github/actions/... is found correctly by the runner
+          git clone --depth 1 ${{ github.server_url }}/${{ github.repository }}.git .tmp_repo
+          mv .tmp_repo/* .tmp_repo/.* . 2>/dev/null || true
+          rm -rf .tmp_repo
           git fetch --unshallow || true
 
       - name: Configure Git

@@ -91,21 +91,48 @@ runs:
 
         # Only upload if the file doesn't exist in the release yet
         if ! gh release view "$TAG" --repo "${{ github.repository }}" 2>/dev/null | grep -q "$FILENAME"; then
+          # Increased random sleep to mitigate race conditions with parallel jobs
+          sleep $(( RANDOM % 30 ))
+
           echo "Promoting RocksDB to release $TAG..."
           tar -czvf "$FILENAME" -C ~/.local .
           sha256sum "$FILENAME" > "$FILENAME.sha256"
 
-          gh release create "$TAG" --title "RocksDB ${VERSION} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
-          gh release upload "$TAG" "$FILENAME" --clobber
+          # Create release (ignore error if it exists)
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "RocksDB ${VERSION} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
+          fi
+
+          # Upload with retry logic and backoff
+          for i in {1..5}; do
+            echo "Upload attempt $i..."
+            if gh release upload "$TAG" "$FILENAME" --clobber --repo "${{ github.repository }}"; then
+              echo "Upload successful."
+              break
+            fi
+            echo "Upload failed, retrying in 10s..."
+            sleep 10
+          done
 
           # Update central signed checksums
           if [ -n "$GPG_PRIVATE_KEY" ]; then
             printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
-            gh release download "$TAG" --pattern "SHA256SUMS*" || true
-            cat "$FILENAME.sha256" >> SHA256SUMS
-            sort -u SHA256SUMS -o SHA256SUMS
-            echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback --clearsign --output SHA256SUMS.asc SHA256SUMS
-            gh release upload "$TAG" SHA256SUMS SHA256SUMS.asc --clobber
+
+            for i in {1..5}; do
+              echo "Checksums update attempt $i..."
+              gh release download "$TAG" --pattern "SHA256SUMS*" --repo "${{ github.repository }}" || true
+              touch SHA256SUMS
+              cat "$FILENAME.sha256" >> SHA256SUMS
+              sort -u SHA256SUMS -o SHA256SUMS
+              echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback --clearsign --output SHA256SUMS.asc SHA256SUMS
+
+              if gh release upload "$TAG" SHA256SUMS SHA256SUMS.asc --clobber --repo "${{ github.repository }}"; then
+                echo "Checksums upload successful."
+                break
+              fi
+              echo "Checksums upload failed, retrying..."
+              sleep 10
+            done
           fi
         else
           echo "$FILENAME already exists in release."

@@ -105,7 +105,7 @@ jobs:
           # Copy libs (filtering out system libs)
           cp target/latest/lib/*.so* release-assets/lib/ || true
 
-          # Include headers if they exist (RocksDB etc)
+          # Include headers if they exist
           if [ -d "$HOME/.local/include" ]; then
             cp -r $HOME/.local/include/* release-assets/include/ || true
           fi
@@ -184,7 +184,7 @@ jobs:
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}
-          arch: ${{ steps.cpu.outputs.target }}
+          arch: x86-64-v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -206,7 +206,7 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v4
         run: make build
 
       - name: Sanity check binary
@@ -239,15 +239,15 @@ jobs:
             cp -r $HOME/.local/include/* release-assets/include/ || true
           fi
 
-          tar -czvf conduwuit-x86-64-v4-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-bin.tar.gz -C release-assets/bin .
-          tar -czvf conduwuit-x86-64-v4-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-libs.tar.gz -C release-assets/lib .
-          tar -czvf conduwuit-x86-64-v4-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-headers.tar.gz -C release-assets/include .
+          tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}-bin.tar.gz -C release-assets/bin .
+          tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}-libs.tar.gz -C release-assets/lib .
+          tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}-headers.tar.gz -C release-assets/include .
 
       - name: Upload binary (${{ steps.cpu.outputs.target }})
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-x86-64-v4-${{ matrix.os }}-${{ steps.cpu.outputs.target }}
-          path: conduwuit-x86-64-v4-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-*.tar.gz
+          name: conduwuit-x86-64-v4-${{ matrix.os }}
+          path: conduwuit-x86-64-v4-${{ matrix.os }}-*.tar.gz
           retention-days: 60
 
       - name: Publish Release
@@ -256,6 +256,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Use the branch name or tag for the release name
           TAG_NAME="${{ github.ref_name }}"
           [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
 
@@ -264,12 +265,12 @@ jobs:
             --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
             --prerelease || true
 
-          gh release upload "$TAG_NAME" conduwuit-x86-64-v4-${{ steps.cpu.outputs.target }}-${{ matrix.os }}-*.tar.gz --clobber
+          gh release upload "$TAG_NAME" conduwuit-x86-64-v4-${{ matrix.os }}-*.tar.gz --clobber
 
   # NOTE: Max performance build targeting ARM64 (specifically Raspberry Pi 5 / Cortex-A76)
   # configured for 16K page sizes via a 64K jemalloc override.
   cpu-arm64-pi5:
-    name: Build / arm64-pi5 (${{ matrix.os }}, release-max-perf)
+    name: Build / arm64-cortex-a76 (${{ matrix.os }}, release-max-perf)
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: github.ref == 'refs/heads/main' && vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 != ''
@@ -364,20 +365,20 @@ jobs:
           # Copy libs
           cp target/latest/lib/*.so* release-assets/lib/ || true
 
-          # Include headers if they exist (RocksDB etc)
+          # Include headers if they exist
           if [ -d "$HOME/.local/include" ]; then
             cp -r $HOME/.local/include/* release-assets/include/ || true
           fi
 
-          tar -czvf conduwuit-arm64-pi5-${{ matrix.os }}-bin.tar.gz -C release-assets/bin .
-          tar -czvf conduwuit-arm64-pi5-${{ matrix.os }}-libs.tar.gz -C release-assets/lib .
-          tar -czvf conduwuit-arm64-pi5-${{ matrix.os }}-headers.tar.gz -C release-assets/include .
+          tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}-bin.tar.gz -C release-assets/bin .
+          tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}-libs.tar.gz -C release-assets/lib .
+          tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}-headers.tar.gz -C release-assets/include .
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-arm64-pi5-${{ matrix.os }}
-          path: conduwuit-arm64-pi5-${{ matrix.os }}-*.tar.gz
+          name: conduwuit-arm64-cortex-a76-${{ matrix.os }}
+          path: conduwuit-arm64-cortex-a76-${{ matrix.os }}-*.tar.gz
           retention-days: 60
 
       - name: Publish Release
@@ -386,6 +387,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Use the branch name or tag for the release name
           TAG_NAME="${{ github.ref_name }}"
           [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
 
@@ -394,4 +396,4 @@ jobs:
             --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
             --prerelease || true
 
-          gh release upload "$TAG_NAME" conduwuit-arm64-pi5-${{ matrix.os }}-*.tar.gz --clobber
+          gh release upload "$TAG_NAME" conduwuit-arm64-cortex-a76-${{ matrix.os }}-*.tar.gz --clobber
