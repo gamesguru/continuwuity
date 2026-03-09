@@ -57,7 +57,7 @@ jobs:
         run: |
           git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
           cd /tmp/rocksdb
-          make shared_lib -j$(nproc)
+          EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
           sudo make install-shared PREFIX=/usr/local
           sudo ldconfig
 
@@ -155,7 +155,7 @@ jobs:
         run: |
           git clone --depth 1 --branch v10.5.1 https://github.com/facebook/rocksdb /tmp/rocksdb
           cd /tmp/rocksdb
-          make shared_lib -j$(nproc)
+          EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib -j$(nproc)
           sudo make install-shared PREFIX=/usr/local
           sudo ldconfig
 
