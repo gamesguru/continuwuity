@@ -202,6 +202,7 @@ impl Error {
 			| Self::Io(error) => response::io_error_code(error.kind()),
 			| Self::FederationTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
 			| Self::FederationConnection(_) => StatusCode::BAD_GATEWAY,
+			| Self::Uiaa(_) => StatusCode::UNAUTHORIZED,
 			| _ => StatusCode::INTERNAL_SERVER_ERROR,
 		}
 	}

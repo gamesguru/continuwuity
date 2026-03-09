@@ -79,7 +79,7 @@ runs:
 
     - name: Login to builtin registry
       if: ${{ env.BUILTIN_REGISTRY_ENABLED == 'true' }}
-      uses: docker/login-action@v3
+      uses: docker/login-action@v4
       with:
         registry: ${{ env.BUILTIN_REGISTRY }}
         username: ${{ inputs.registry_user }}
@@ -87,7 +87,7 @@ runs:
 
     - name: Extract metadata (labels, annotations) for Docker
       id: meta
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@v6
       with:
         images: ${{ inputs.images }}
         # default labels & annotations: https://github.com/docker/metadata-action/blob/master/src/meta.ts#L509

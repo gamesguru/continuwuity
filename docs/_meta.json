@@ -34,6 +34,11 @@
         "name": "troubleshooting",
         "label": "Troubleshooting"
     },
+    {
+        "type": "dir",
+        "name": "advanced",
+        "label": "Advanced"
+    },
     "security",
     {
         "type": "dir-section-header",
@@ -63,6 +68,11 @@
         "type": "file",
         "label": "Configuration Reference",
         "name": "/reference/config"
+    },
+    {
+        "type": "file",
+        "label": "Environment Variables",
+        "name": "/reference/environment-variables"
     },
     {
         "type": "dir",
