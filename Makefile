@@ -78,7 +78,7 @@ vars: ##H Print debug info
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$$(cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
+		"$$(cargo run -p conduwuit_build_metadata --no-default-features --bin conduwuit-version --quiet)"
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -127,7 +127,7 @@ format: ##H Run pre-commit hooks/formatters
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo fix $(CARGO_SCOPE) --allow-dirty --allow-no-vcs
+		cargo fix $(CARGO_SCOPE) --no-default-features --allow-dirty --allow-no-vcs
 
 .PHONY: lint
 lint:	##H Lint code
@@ -173,7 +173,7 @@ clean:	##H Clean build directory for current profile
 	@$(MAKE) _confirm
 	-find target -name '*conduwuit*' -exec rm -r {} \;
 # Old logic, wipes it out too much, results in slow builds
-# 	cargo clean --profile $(PROFILE)
+# 	cargo clean --no-default-features --profile $(PROFILE)
 # 	@echo "Also remove debian build?"
 # 	@$(MAKE) _confirm
 # 	rm -rf target/debian
