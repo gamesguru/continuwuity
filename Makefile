@@ -217,7 +217,7 @@ clean:  ##H Clean build directory
 	@echo "Clean everything?"
 	@$(MAKE) _confirm
 	cargo clean
-	-rm -rf target/latest target/debug
+#	-rm -rf target/latest target/debug
 # Old logic, wipes it out too much, results in slow builds
 #       cargo clean --features default --profile $(PROFILE)
 #       @echo "Also remove debian build?"

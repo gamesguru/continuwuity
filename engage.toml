@@ -194,3 +194,13 @@ depends = ["cargo/default"]
 script = """
 git diff --exit-code conduwuit-example.toml
 """
+
+[[task]]
+name = "complement"
+group = "tests"
+script = """
+docker build -t conduwuit-complement -f docker/Dockerfile .
+git clone https://github.com/matrix-org/complement.git || true
+cd complement
+COMPLEMENT_BASE_IMAGE=conduwuit-complement go test -tags conduwuit -count=1 ./tests/...
+"""
