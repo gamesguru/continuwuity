@@ -1,2 +1,14 @@
 [alias]
 xtask = "run --package xtask --"
+
+#
+# You may need to install "mold", a more efficient linker than ld or cc
+# Linux
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# ARM/Aarch64 (Raspberry Pi)
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
