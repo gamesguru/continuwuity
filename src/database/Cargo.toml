@@ -43,7 +43,7 @@ zstd_compression = [
 	"rust-rocksdb/zstd",
 ]
 bindgen-static = [
-    "rust-rocksdb/static"
+    "rust-rocksdb/mt_static"
 ]
 bindgen-runtime = [
     "rust-rocksdb/bindgen-runtime"
