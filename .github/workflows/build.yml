@@ -19,7 +19,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       ROCKSDB_LIB_DIR: /usr/local/lib
-      LD_LIBRARY_PATH: /usr/local/lib
 
     strategy:
       fail-fast: false
@@ -75,35 +74,17 @@ jobs:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v3
-        run: make build
+        run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
         run: ./target/latest/conduwuit --version
-
-      - name: Import GPG key
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
-        continue-on-error: true
-
-      - name: Sign binary
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
-        continue-on-error: true
 
       - name: Package Assets
         run: |
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
-          [ -f target/latest/conduwuit.asc ] && cp target/latest/conduwuit.asc release-assets/bin/
-          # Copy libs
-          cp target/latest/lib/*.so* release-assets/lib/ || true
-          # Include headers if they exist (RocksDB etc)
-          if [ -d "$HOME/.local/include" ]; then
-            cp -r $HOME/.local/include/* release-assets/include/ || true
-          fi
+          # Include the static .a library
+          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/bin/ || cp target/release/libconduwuit.a release-assets/bin/ || true
           tar -czvf conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
@@ -134,7 +115,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       ROCKSDB_LIB_DIR: /usr/local/lib
-      LD_LIBRARY_PATH: /usr/local/lib
 
     strategy:
       fail-fast: false
@@ -194,35 +174,17 @@ jobs:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v4
-        run: make build
+        run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
         run: ./target/latest/conduwuit --version
-
-      - name: Import GPG key
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
-        continue-on-error: true
-
-      - name: Sign binary
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
-        continue-on-error: true
 
       - name: Package Assets
         run: |
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
-          [ -f target/latest/conduwuit.asc ] && cp target/latest/conduwuit.asc release-assets/bin/
-          # Copy libs
-          cp target/latest/lib/*.so* release-assets/lib/ || true
-          # Include headers if they exist
-          if [ -d "$HOME/.local/include" ]; then
-            cp -r $HOME/.local/include/* release-assets/include/ || true
-          fi
+          # Include the static .a library
+          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/bin/ || cp target/release/libconduwuit.a release-assets/bin/ || true
           tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary (${{ steps.cpu.outputs.target }})
@@ -256,7 +218,6 @@ jobs:
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: 16
       ROCKSDB_LIB_DIR: /usr/local/lib
-      LD_LIBRARY_PATH: /usr/local/lib
 
     # Ubuntu 22.04 uses glibc 2.35 (compatible)
     # Raspberry Pi uses glibc 2.36
@@ -315,35 +276,17 @@ jobs:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
-        run: make build
+        run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
         run: ./target/latest/conduwuit --version
-
-      - name: Import GPG key
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
-        continue-on-error: true
-
-      - name: Sign binary
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
-        continue-on-error: true
 
       - name: Package Assets
         run: |
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
-          [ -f target/latest/conduwuit.asc ] && cp target/latest/conduwuit.asc release-assets/bin/
-          # Copy libs
-          cp target/latest/lib/*.so* release-assets/lib/ || true
-          # Include headers if they exist (RocksDB etc)
-          if [ -d "$HOME/.local/include" ]; then
-            cp -r $HOME/.local/include/* release-assets/include/ || true
-          fi
+          # Include the static .a library
+          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/bin/ || cp target/release/libconduwuit.a release-assets/bin/ || true
           tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary

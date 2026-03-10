@@ -17,6 +17,7 @@ build = "build.rs"
 path = "mod.rs"
 crate-type = [
 	"rlib",
+	"staticlib",
 #	"dylib",
 ]
 
@@ -45,7 +46,7 @@ assets = [
 default = [
     "standard",
     "release_max_log_level",
-	"bindgen-runtime", # replace with bindgen-static on alpine
+	"bindgen-runtime", # Use runtime libclang for dev builds
 ]
 standard = [
     "blurhashing",

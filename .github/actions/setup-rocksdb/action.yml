@@ -48,8 +48,8 @@ runs:
     - name: Build RocksDB (fallback)
       shell: bash
       run: |
-        if [ ! -f "$HOME/.local/lib/librocksdb.so" ]; then
-          echo "RocksDB not found in cache or releases, building from source..."
+        if [ ! -f "$HOME/.local/lib/librocksdb.a" ]; then
+          echo "Static RocksDB not found in cache or releases, building from source..."
           git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
           cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
           make clean
@@ -66,11 +66,11 @@ runs:
           DISABLE_JEMALLOC=1 \
             EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
             EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
-            make shared_lib -j$(nproc)
+            make static_lib -j$(nproc)
           mkdir -p ~/.local
-          make install-shared PREFIX=~/.local
+          make install-static PREFIX=~/.local
         else
-          echo "RocksDB already present (from cache or download)"
+          echo "Static RocksDB already present (from cache or download)"
         fi
 
     - name: Upload to Release (Promotion)
@@ -115,7 +115,6 @@ runs:
       run: |
         echo "ROCKSDB_INCLUDE_DIR=$HOME/.local/include" >> $GITHUB_ENV
         echo "ROCKSDB_LIB_DIR=$HOME/.local/lib" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
     - name: Save cache
       if: steps.rocksdb-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'

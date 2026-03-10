@@ -3,7 +3,7 @@ name: "Get CPU Target"
 description: "Detects optimal x86-64 microarchitecture for given runner"
 outputs:
   target:
-    description: "Target CPU arch (x86-64-v4 [avx512] or x86-64-v3 [avx2])"
+    description: "Target arch (x86-64-v4 [avx512], x86-64-v3 [avx2], or x86-64-v2)"
     value: ${{ steps.cpu.outputs.target }}
 
 runs:
@@ -15,6 +15,8 @@ runs:
       run: |
         if grep -q avx512f /proc/cpuinfo 2>/dev/null; then
           echo "target=x86-64-v4" >> "$GITHUB_OUTPUT"
-        else
+        elif grep -q avx2 /proc/cpuinfo 2>/dev/null; then
           echo "target=x86-64-v3" >> "$GITHUB_OUTPUT"
+        else
+          echo "target=x86-64-v2" >> "$GITHUB_OUTPUT"
         fi

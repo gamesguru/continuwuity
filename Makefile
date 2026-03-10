@@ -160,20 +160,39 @@ test:   ##H Run tests
 ROCKSDB_LIB_DIR ?= /usr/local/lib
 ROCKSDB_INCLUDE_DIR ?= /usr/local/include
 
+# Default features to use for the build
+# We use bindgen-runtime by default to use the system libclang.so for building.
+# Bundling RocksDB statically can be enabled via features.
+FEATURES ?= standard,release_max_log_level,bindgen-runtime
+
 .PHONY: build
 build:  ##H Build with selected profile
 	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
-	@echo "Build this profile? PROFILE='$(PROFILE)'"
+	@echo "Build this profile? PROFILE='$(PROFILE)' FEATURES='$(FEATURES)'"
 	@$(MAKE) _confirm
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
-		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo build --features default --locked $(CARGO_FLAGS)
+		cargo build --features $(FEATURES) --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
-	# ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
 	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
 	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/debug/conduwuit
+
+
+.PHONY: build-bundled
+build-bundled: ##H Build a bundled binary (Static RocksDB, Dynamic Clang)
+	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-static"
+
+
+.PHONY: build-dynamic
+build-dynamic: ##H Build with shared library (requires librocksdb.so at runtime)
+	LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-runtime"
+
+
+.PHONY: release
+release: ##H Build a production-ready bundled binary (High-performance, Static RocksDB)
+	$(MAKE) build PROFILE=release-max-perf FEATURES="$(FEATURES),conduwuit-database/bindgen-static"
 
 
 .PHONY: clean
