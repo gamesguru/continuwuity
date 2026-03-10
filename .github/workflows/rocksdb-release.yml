@@ -1,4 +1,3 @@
----
 name: Build RocksDB Releases
 
 on:
@@ -56,14 +55,6 @@ jobs:
 
           FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           tar -czvf "../../../$FILENAME" -C rocksdb-release .
-          cd ../../..
-          sha256sum "$FILENAME" > "$FILENAME.sha256"
-
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
 
       - name: Create/Upload Release
         shell: bash
@@ -78,10 +69,3 @@ jobs:
 
           # Upload tarball
           gh release upload "$TAG" "$FILENAME" --clobber
-
-          # Update/Upload signed checksums (cumulative)
-          gh release download "$TAG" --pattern "SHA256SUMS*" || true
-          cat "$FILENAME.sha256" >> SHA256SUMS
-          sort -u SHA256SUMS -o SHA256SUMS
-          gpg --batch --yes --clearsign --output SHA256SUMS.asc SHA256SUMS
-          gh release upload "$TAG" SHA256SUMS SHA256SUMS.asc --clobber

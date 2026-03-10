@@ -262,7 +262,7 @@ complement/stats: ##H Check local test stats
 	echo "Total:     $$TOTAL"; \
 	echo ""; \
 	echo "JSON file (on main) last modified by: "; \
-	git log -1 --format="%an (%ad) %H" origin/main
+	git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
 
 .PHONY: complement/logs
 complement/logs: ##H Tail logs for all running and future Complement containers

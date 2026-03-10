@@ -29,8 +29,8 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
 
-      - name: Fetch tags manually
-        run: git fetch --tags --force
+      - name: Fetch tags and origin/main for comparison
+        run: git fetch --tags --force && git fetch origin HEAD && git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
 
       - name: Install system dependencies
         run: |
@@ -117,7 +117,7 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch tags and origin/main for comparison
-        run: git fetch --tags --force && git fetch origin HEAD
+        run: git fetch --tags --force && git fetch origin HEAD && git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
 
       - name: Install system dependencies
         run: |
@@ -277,7 +277,7 @@ jobs:
 
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
-              `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
+              `**Commit:** `${context.payload.pull_request.head.ref}` (`${context.payload.pull_request.head.sha.substring(0, 7)}`)`,
               '',
               '| Status | Count |',
               '|--------|-------|',
