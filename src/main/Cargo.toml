@@ -45,7 +45,6 @@ assets = [
 default = [
     "standard",
     "release_max_log_level",
-	"bindgen-runtime", # replace with bindgen-static on alpine
 ]
 standard = [
     "blurhashing",
@@ -189,8 +188,6 @@ conduwuit_mods = [
     "conduwuit-core/conduwuit_mods",
 ]
 bindgen-static = [
-    # "bindgen/static"
-    # "clang-sys/static"
     "conduwuit-database/bindgen-static"
 ]
 bindgen-runtime = [
