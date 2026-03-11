@@ -61,9 +61,9 @@ jobs:
                 local filename="${dep}-${version}-${arch}-${os}.tar.gz"
                 if ! echo "$EXISTING" | grep -qF "$filename"; then
                   matrix=$(echo "$matrix" | jq -c ". + [{\"arch\": \"$arch\", \"os\": \"$os\"}]")
-                  echo "-> $filename not found, will build"
+                  echo "-> $filename not found, will build" >&2
                 else
-                  echo "✓ $filename exists, skipping"
+                  echo "* $filename exists, skipping" >&2
                 fi
               done
             done
