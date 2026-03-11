@@ -1,12 +1,18 @@
 # Debugging Rust apps
 
 You can debug Rust applications running remotely over SSH using tools like
-`gdb` (GNU Debugger) on the command line or an IDE like JetBrains RustRover.
+`rust-gdb` (a wrapper around the GNU Debugger) on the command line or an IDE
+like JetBrains RustRover.
 
-## Debugging with GDB over SSH
+## Debugging with rust-gdb over SSH
 
-To debug remotely using `gdb`, you'll need `gdb` installed on the remote
-machine and your application compiled with debug symbols (`cargo build`).
+To debug remotely using the command line, it is highly recommended to use
+`rust-gdb` instead of plain `gdb`. `rust-gdb` automatically loads Rust-specific
+pretty-printers so that types like `String`, `Vec`, and `Option` are displayed
+clearly.
+
+You'll need `gdb` installed on the remote machine (as `rust-gdb` wraps it)
+and your application compiled with debug symbols (`cargo build`).
 
 1. **Connect via SSH:**
    Connect to your remote server where the application will run.
@@ -15,20 +21,20 @@ machine and your application compiled with debug symbols (`cargo build`).
     ssh user@remote_host
     ```
 
-2. **Start the application with GDB:**
-   Navigate to your project directory on the remote machine and start `gdb`
-   with your executable.
+2. **Start the application with rust-gdb:**
+   Navigate to your project directory on the remote machine and start
+   `rust-gdb` with your executable.
 
-    **Important:** Run `gdb` as the `conduwuit` user (not `root`) to avoid
+    **Important:** Run `rust-gdb` as the `conduwuit` user (not `root`) to avoid
     mixed file ownership on your database `.sst` files, which risks forcing
     RocksDB to do extra work.
 
     ```bash
-    sudo -u conduwuit gdb ./target/debug/continuwuity
+    sudo -u conduwuit rust-gdb ./target/debug/continuwuity
     ```
 
 3. **Set breakpoints:**
-   Inside the `gdb` prompt, you can set breakpoints using the `break` or `b`
+   Inside the `(gdb)` prompt, you can set breakpoints using the `break` or `b`
    command followed by the file and line number, or the function name.
 
     ```gdb
