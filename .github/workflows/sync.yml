@@ -17,8 +17,8 @@ jobs:
         run: |
           git clone --depth 1 ${{ github.server_url }}/${{ github.repository }}.git .tmp_repo
           # Move files to root but keep a stable copy of the sync action
-          mkdir -p .github/actions/git-sync
-          cp .tmp_repo/.github/actions/git-sync/action.yml .github/actions/git-sync/
+          mkdir -p .github/actions_stable/git-sync
+          cp .tmp_repo/.github/actions/git-sync/action.yml .github/actions_stable/git-sync/
           mv .tmp_repo/* .tmp_repo/.* . 2>/dev/null || true
           rm -rf .tmp_repo
           git fetch --unshallow || true
@@ -45,21 +45,21 @@ jobs:
           git remote add github https://github.com/gamesguru/continuwuity.git
 
       - name: "Sync main [from forge: continuwuation/continuwuity]"
-        uses: ./.github/actions/git-sync
+        uses: ./.github/actions_stable/git-sync
         with:
           branch: main
           source_remote: upstream
           dest_remote: origin
 
       # - name: "Sync main [from github: gamesguru/continuwuity]"
-      #   uses: ./.github/actions/git-sync
+      #   uses: ./.github/actions_stable/git-sync
       #   with:
       #     source_branch: main
       #     source_remote: github
       #     dest_remote: origin
 
       - name: "Sync forge-head [from forge: continuwuation/continuwuity]"
-        uses: ./.github/actions/git-sync
+        uses: ./.github/actions_stable/git-sync
         with:
           source_branch: main
           dest_branch: _metadata/refs/remotes/upstream/main
@@ -68,7 +68,7 @@ jobs:
           mode: force
 
       - name: "Sync badges [from github: gamesguru/continuwuity]"
-        uses: ./.github/actions/git-sync
+        uses: ./.github/actions_stable/git-sync
         with:
           source_branch: _metadata/badges
           source_remote: github
