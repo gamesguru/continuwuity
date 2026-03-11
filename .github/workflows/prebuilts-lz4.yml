@@ -2,6 +2,9 @@
 name: Build Prebuilts (lz4)
 
 on:
+  push:
+    branches: [main, dev]
+    paths: [".github/workflows/prebuilts-lz4.yml"]
   workflow_dispatch:
     inputs:
       version:

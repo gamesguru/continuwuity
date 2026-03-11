@@ -2,6 +2,9 @@
 name: Build Prebuilts (zstd)
 
 on:
+  push:
+    branches: [main, dev]
+    paths: [".github/workflows/prebuilts-zstd.yml"]
   workflow_dispatch:
     inputs:
       version:
