@@ -4,6 +4,10 @@ xtask = "run --package xtask --"
 [build]
 rustc-wrapper = "sccache"
 
+[env]
+ROCKSDB_LIB_DIR = "/usr/local/lib"
+ROCKSDB_INCLUDE_DIR = "/usr/local/include"
+
 #
 # You may need to install "mold", a more efficient linker than ld or cc
 # Linux
