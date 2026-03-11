@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PROFILE: dev-quick
+      RUSTC_WRAPPER: sccache
 
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +42,9 @@ jobs:
             liburing-dev \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            mold \
+            sccache
 
       - name: Detect best CPU target
         id: cpu
@@ -91,6 +94,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       FEATURES: "direct_tls"
+      RUSTC_WRAPPER: sccache
 
     strategy:
       fail-fast: false
@@ -128,7 +132,9 @@ jobs:
             liburing-dev \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            mold \
+            sccache
 
       - name: Detect best CPU target
         id: cpu
@@ -153,6 +159,7 @@ jobs:
       - name: Build conduwuit for Complement
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: SKIP_CONFIRM=1 make build PROFILE=${{ matrix.profile }} CARGO_FLAGS="--profile ${{ matrix.profile }} --features direct_tls"
 
       - name: Sanity check binary

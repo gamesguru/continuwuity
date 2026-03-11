@@ -19,6 +19,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       ROCKSDB_LIB_DIR: /usr/local/lib
+      RUSTC_WRAPPER: sccache
 
     strategy:
       fail-fast: false
@@ -45,7 +46,9 @@ jobs:
             liburing-dev \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            mold \
+            sccache
 
       - name: Setup RocksDB
         uses: ./.github/actions/setup-rocksdb
@@ -73,6 +76,7 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v3
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
@@ -115,6 +119,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       ROCKSDB_LIB_DIR: /usr/local/lib
+      RUSTC_WRAPPER: sccache
 
     strategy:
       fail-fast: false
@@ -141,7 +146,9 @@ jobs:
             liburing-dev \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            mold \
+            sccache
 
       - name: Detect best CPU target
         id: cpu
@@ -173,6 +180,7 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v4
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
@@ -218,6 +226,7 @@ jobs:
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: 16
       ROCKSDB_LIB_DIR: /usr/local/lib
+      RUSTC_WRAPPER: sccache
 
     # Ubuntu 22.04 uses glibc 2.35 (compatible)
     # Raspberry Pi uses glibc 2.36
@@ -247,7 +256,9 @@ jobs:
             liburing-dev \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            mold \
+            sccache
 
       - name: Setup RocksDB
         uses: ./.github/actions/setup-rocksdb
@@ -274,6 +285,7 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
