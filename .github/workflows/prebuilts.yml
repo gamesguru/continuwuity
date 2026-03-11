@@ -1,0 +1,350 @@
+---
+name: Prebuild
+
+on:
+  push:
+    branches: [main, _metadata/prebuilts/github-trigger]
+  workflow_dispatch:
+    inputs:
+      rocksdb_version:
+        description: "RocksDB Version Tag"
+        required: true
+        default: "10.5.1"
+      jemalloc_version:
+        description: "jemalloc Version Tag"
+        required: true
+        default: "5.3.0"
+      lz4_version:
+        description: "lz4 Version Tag"
+        required: true
+        default: "1.9.4"
+      zstd_version:
+        description: "zstd Version Tag"
+        required: true
+        default: "1.5.6"
+      release_tag:
+        description: "Target GitHub Release Tag"
+        required: true
+        default: "v0.5"
+
+env:
+  ROCKSDB_DEFAULT_VERSION: "10.5.1"
+  JEMALLOC_DEFAULT_VERSION: "5.3.0"
+  LZ4_DEFAULT_VERSION: "1.9.4"
+  ZSTD_DEFAULT_VERSION: "1.5.6"
+  DEFAULT_RELEASE_TAG: "v0.5"
+
+jobs:
+  build-rocksdb:
+    name: Build RocksDB (${{ matrix.arch }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            cmake \
+            autoconf \
+            automake \
+            libtool \
+            wget \
+            git
+
+      - name: Build
+        shell: bash
+        run: |
+          STAGING_DIR="$(pwd)/prebuilts"
+          mkdir -p "$STAGING_DIR/include" "$STAGING_DIR/lib"
+          export PREFIX="$STAGING_DIR"
+          export PKG_CONFIG_PATH="$STAGING_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CFLAGS="-fPIC -I$STAGING_DIR/include"
+          export CXXFLAGS="-fPIC -I$STAGING_DIR/include"
+          export LDFLAGS="-L$STAGING_DIR/lib"
+
+          ARCH="${{ matrix.arch }}"
+          if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
+            EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == x86-64-v* ]]; then
+            EXTRA_FLAGS="-march=$ARCH -mpclmul"
+          else
+            EXTRA_FLAGS="-march=$ARCH"
+          fi
+
+          export EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS"
+          export EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS"
+          export DISABLE_JEMALLOC=1
+
+          cd /tmp
+          git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git rust-rocksdb
+          cd rust-rocksdb/librocksdb-sys/rocksdb
+
+          make shared_lib static_lib -j$(nproc)
+          make install-shared PREFIX="$STAGING_DIR"
+          make install-static PREFIX="$STAGING_DIR"
+
+          cd "$STAGING_DIR"
+          VERSION="${{ github.event.inputs.rocksdb_version }}"
+          VERSION="${VERSION:-$ROCKSDB_DEFAULT_VERSION}"
+          TAR_FILENAME="rocksdb-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          tar -czvf "../$TAR_FILENAME" .
+
+      - name: Upload Artifact Storage
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocksdb_${{ matrix.arch }}_${{ matrix.os }}
+          path: "*.tar.gz"
+          retention-days: 1
+
+  build-jemalloc:
+    name: Build jemalloc (${{ matrix.arch }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            cmake \
+            autoconf \
+            automake \
+            libtool \
+            wget \
+            git
+
+      - name: Build
+        shell: bash
+        run: |
+          STAGING_DIR="$(pwd)/prebuilts"
+          mkdir -p "$STAGING_DIR/include" "$STAGING_DIR/lib"
+          export PREFIX="$STAGING_DIR"
+          export PKG_CONFIG_PATH="$STAGING_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CFLAGS="-fPIC -I$STAGING_DIR/include"
+          export CXXFLAGS="-fPIC -I$STAGING_DIR/include"
+          export LDFLAGS="-L$STAGING_DIR/lib"
+
+          ARCH="${{ matrix.arch }}"
+          if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
+            EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == x86-64-v* ]]; then
+            EXTRA_FLAGS="-march=$ARCH -mpclmul"
+          else
+            EXTRA_FLAGS="-march=$ARCH"
+          fi
+          export CFLAGS="$CFLAGS $EXTRA_FLAGS"
+          export CXXFLAGS="$CXXFLAGS $EXTRA_FLAGS"
+
+          cd /tmp
+          VERSION="${{ github.event.inputs.jemalloc_version }}"
+          VERSION="${VERSION:-$JEMALLOC_DEFAULT_VERSION}"
+          git clone -b $VERSION https://github.com/jemalloc/jemalloc.git
+          cd jemalloc
+          ./autogen.sh
+          ./configure --prefix="$STAGING_DIR" --disable-shared --with-jemalloc-prefix=_rjem_ --with-private-namespace=_rjem_
+          make -j$(nproc) && make install_lib_static install_include
+
+          cd "$STAGING_DIR"
+          TAR_FILENAME="jemalloc-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          tar -czvf "../$TAR_FILENAME" .
+
+      - name: Upload Artifact Storage
+        uses: actions/upload-artifact@v4
+        with:
+          name: jemalloc_${{ matrix.arch }}_${{ matrix.os }}
+          path: "*.tar.gz"
+          retention-days: 1
+
+  build-lz4:
+    name: Build lz4 (${{ matrix.arch }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            git
+
+      - name: Build
+        shell: bash
+        run: |
+          STAGING_DIR="$(pwd)/prebuilts"
+          mkdir -p "$STAGING_DIR/include" "$STAGING_DIR/lib"
+          export PREFIX="$STAGING_DIR"
+          export PKG_CONFIG_PATH="$STAGING_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CFLAGS="-fPIC -I$STAGING_DIR/include"
+          export CXXFLAGS="-fPIC -I$STAGING_DIR/include"
+          export LDFLAGS="-L$STAGING_DIR/lib"
+
+          ARCH="${{ matrix.arch }}"
+          if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
+            EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == x86-64-v* ]]; then
+            EXTRA_FLAGS="-march=$ARCH -mpclmul"
+          else
+            EXTRA_FLAGS="-march=$ARCH"
+          fi
+          export CFLAGS="$CFLAGS $EXTRA_FLAGS"
+          export CXXFLAGS="$CXXFLAGS $EXTRA_FLAGS"
+
+          cd /tmp
+          VERSION="${{ github.event.inputs.lz4_version }}"
+          VERSION="${VERSION:-$LZ4_DEFAULT_VERSION}"
+          git clone -b v${VERSION} https://github.com/lz4/lz4.git
+          cd lz4
+          make -j$(nproc) BUILD_SHARED=no PREFIX="$STAGING_DIR" install
+
+          cd "$STAGING_DIR"
+          TAR_FILENAME="lz4-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          tar -czvf "../$TAR_FILENAME" .
+
+      - name: Upload Artifact Storage
+        uses: actions/upload-artifact@v4
+        with:
+          name: lz4_${{ matrix.arch }}_${{ matrix.os }}
+          path: "*.tar.gz"
+          retention-days: 1
+
+  build-zstd:
+    name: Build zstd (${{ matrix.arch }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            git
+
+      - name: Build
+        shell: bash
+        run: |
+          STAGING_DIR="$(pwd)/prebuilts"
+          mkdir -p "$STAGING_DIR/include" "$STAGING_DIR/lib"
+          export PREFIX="$STAGING_DIR"
+          export PKG_CONFIG_PATH="$STAGING_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CFLAGS="-fPIC -I$STAGING_DIR/include"
+          export CXXFLAGS="-fPIC -I$STAGING_DIR/include"
+          export LDFLAGS="-L$STAGING_DIR/lib"
+
+          ARCH="${{ matrix.arch }}"
+          if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
+            EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == x86-64-v* ]]; then
+            EXTRA_FLAGS="-march=$ARCH -mpclmul"
+          else
+            EXTRA_FLAGS="-march=$ARCH"
+          fi
+          export CFLAGS="$CFLAGS $EXTRA_FLAGS"
+          export CXXFLAGS="$CXXFLAGS $EXTRA_FLAGS"
+
+          cd /tmp
+          VERSION="${{ github.event.inputs.zstd_version }}"
+          VERSION="${VERSION:-$ZSTD_DEFAULT_VERSION}"
+          git clone -b v${VERSION} https://github.com/facebook/zstd.git
+          cd zstd
+          make -j$(nproc) lib-mt PREFIX="$STAGING_DIR"
+          cp lib/libzstd.a "$STAGING_DIR/lib/"
+          cp lib/zstd*.h "$STAGING_DIR/include/"
+
+          cd "$STAGING_DIR"
+          TAR_FILENAME="zstd-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          tar -czvf "../$TAR_FILENAME" .
+
+      - name: Upload Artifact Storage
+        uses: actions/upload-artifact@v4
+        with:
+          name: zstd_${{ matrix.arch }}_${{ matrix.os }}
+          path: "*.tar.gz"
+          retention-days: 1
+
+  publish:
+    name: Publish
+    needs: [build-rocksdb, build-jemalloc, build-lz4, build-zstd]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: prebuilts_download
+          merge-multiple: true
+
+      - name: Create/Upload Release Artifact
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Providing context for creating the release
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -e
+          RELEASE_TAG="${{ github.event.inputs.release_tag }}"
+          RELEASE_TAG="${RELEASE_TAG:-$DEFAULT_RELEASE_TAG}"
+          TAG="$RELEASE_TAG"
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Prebuilts $RELEASE_TAG" --notes "Automated pre-built libraries for CI" || true
+          fi
+
+          cd prebuilts_download
+          echo "Uploading all prebuilt artifacts..."
+          for file in *.tar.gz; do
+            if [ ! -f "$file" ]; then
+              echo "No artifacts found to upload."
+              exit 1
+            fi
+
+            echo "Uploading $file..."
+            for i in {1..5}; do
+              if gh release upload "$TAG" "$file" --clobber; then
+                echo "Successfully uploaded $file"
+                break
+              fi
+              echo "Upload failed for $file, retrying in 10s..."
+              sleep 10
+              if [ "$i" -eq 5 ]; then
+                echo "Error: Failed to upload $file after 5 attempts."
+                exit 1
+              fi
+            done
+          done
+          echo "All artifacts uploaded successfully."

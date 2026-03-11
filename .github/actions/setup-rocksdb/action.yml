@@ -22,7 +22,7 @@ runs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        TAG="prebuilts-${{ inputs.release_tag }}"
+        TAG="${{ inputs.release_tag }}"
         PATTERN="*-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
 
         echo "Attempting to download prebuilts using gh CLI"
@@ -58,7 +58,7 @@ runs:
         if [ -z "$(ls -A ~/.local/lib 2>/dev/null)" ]; then
           echo "Error: Static Prebuilts not found in cache or releases."
           echo "Please ensure the 'Build Prebuilts' workflow has completed for this combination."
-          echo "Tag: prebuilts-${{ inputs.version }} - Arch: ${{ inputs.arch }} - OS: ${{ inputs.cache-key }}"
+          echo "Tag: ${{ inputs.release_tag }} - Arch: ${{ inputs.arch }} - OS: ${{ inputs.cache-key }}"
           exit 1
         fi
         echo "Static Prebuilts are present."
@@ -80,4 +80,4 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: ~/.local
-        key: prebuilts-${{ inputs.version }}-${{ inputs.arch }}-${{ inputs.cache-key }}
+        key: prebuilts-${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
