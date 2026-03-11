@@ -3,7 +3,7 @@ name: Build Prebuilts (lz4)
 
 on:
   push:
-    branches: [main, dev]
+    branches: [_metadata/prebuilts/github-trigger]
     paths: [".github/workflows/prebuilts-lz4.yml"]
   workflow_dispatch:
     inputs:
@@ -15,6 +15,10 @@ on:
         description: "Target GitHub Release Tag"
         required: true
         default: "v0.5"
+
+env:
+  DEFAULT_VERSION: "1.9.4"
+  DEFAULT_RELEASE_TAG: "v0.5"
 
 jobs:
   build-lz4:
@@ -66,7 +70,8 @@ jobs:
           make -j$(nproc) BUILD_SHARED=no PREFIX="$STAGING_DIR" install
 
           cd "$STAGING_DIR"
-          TAR_FILENAME="lz4-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          export VERSION="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          TAR_FILENAME="lz4-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           tar -czvf "../$TAR_FILENAME" .
 
       - name: Create/Upload Release Artifact
@@ -74,13 +79,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.inputs.release_tag }}"
-          FILENAME="lz4-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          VERSION="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          RELEASE_TAG="${{ github.event.inputs.release_tag || env.DEFAULT_RELEASE_TAG }}"
+          TAG="$RELEASE_TAG"
+          FILENAME="lz4-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
 
           sleep $(( RANDOM % 30 ))
 
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "Prebuilts ${{ github.event.inputs.release_tag }}" --notes "Automated pre-built libraries for CI" || true
+            gh release create "$TAG" --title "Prebuilts $RELEASE_TAG" --notes "Automated pre-built libraries for CI" || true
           fi
 
           for i in {1..5}; do

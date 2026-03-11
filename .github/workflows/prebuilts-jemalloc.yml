@@ -3,8 +3,7 @@ name: Build Prebuilts (jemalloc)
 
 on:
   push:
-    branches: [main, dev]
-    paths: [".github/workflows/prebuilts-jemalloc.yml"]
+    branches: [_metadata/prebuilts/github-trigger]
   workflow_dispatch:
     inputs:
       version:
@@ -15,6 +14,10 @@ on:
         description: "Target GitHub Release Tag"
         required: true
         default: "v0.5"
+
+env:
+  DEFAULT_VERSION: "5.3.0"
+  DEFAULT_RELEASE_TAG: "v0.5"
 
 jobs:
   build-jemalloc:
@@ -73,7 +76,8 @@ jobs:
           make -j$(nproc) && make install_lib_static install_include
 
           cd "$STAGING_DIR"
-          TAR_FILENAME="jemalloc-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          export VERSION="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          TAR_FILENAME="jemalloc-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           tar -czvf "../$TAR_FILENAME" .
 
       - name: Create/Upload Release Artifact
@@ -81,13 +85,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.inputs.release_tag }}"
-          FILENAME="jemalloc-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          VERSION="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          RELEASE_TAG="${{ github.event.inputs.release_tag || env.DEFAULT_RELEASE_TAG }}"
+          TAG="$RELEASE_TAG"
+          FILENAME="jemalloc-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
 
           sleep $(( RANDOM % 30 ))
 
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "Prebuilts ${{ github.event.inputs.release_tag }}" --notes "Automated pre-built libraries for CI" || true
+            gh release create "$TAG" --title "Prebuilts $RELEASE_TAG" --notes "Automated pre-built libraries for CI" || true
           fi
 
           for i in {1..5}; do

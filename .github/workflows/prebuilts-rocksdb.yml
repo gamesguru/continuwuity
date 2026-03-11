@@ -3,8 +3,7 @@ name: Build Prebuilts (RocksDB)
 
 on:
   push:
-    branches: [main, dev]
-    paths: [".github/workflows/prebuilts-rocksdb.yml"]
+    branches: [_metadata/prebuilts/github-trigger]
   workflow_dispatch:
     inputs:
       version:
@@ -15,6 +14,10 @@ on:
         description: "Target GitHub Release Tag"
         required: true
         default: "v0.5"
+
+env:
+  DEFAULT_VERSION: "10.5.1"
+  DEFAULT_RELEASE_TAG: "v0.5"
 
 jobs:
   build-rocksdb:
@@ -76,7 +79,8 @@ jobs:
           make install-static PREFIX="$STAGING_DIR"
 
           cd "$STAGING_DIR"
-          TAR_FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          export VERSION="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          TAR_FILENAME="rocksdb-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           tar -czvf "../$TAR_FILENAME" .
 
       - name: Create/Upload Release Artifact
@@ -84,13 +88,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.event.inputs.release_tag }}"
-          FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          VERSION="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          RELEASE_TAG="${{ github.event.inputs.release_tag || env.DEFAULT_RELEASE_TAG }}"
+          TAG="$RELEASE_TAG"
+          FILENAME="rocksdb-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
 
           sleep $(( RANDOM % 30 ))
 
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "Prebuilts ${{ github.event.inputs.release_tag }}" --notes "Automated pre-built libraries for CI" || true
+            gh release create "$TAG" --title "Prebuilts $RELEASE_TAG" --notes "Automated pre-built libraries for CI" || true
           fi
 
           for i in {1..5}; do
