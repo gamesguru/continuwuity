@@ -31,7 +31,7 @@ runs:
           if [ "$(ls -A /tmp/prebuilts_download)" ]; then
             echo "Successfully downloaded prebuilts"
             for archive in /tmp/prebuilts_download/*.tar.gz; do
-              tar -xzvf "$archive" -C /usr/local
+              sudo tar -xzvf "$archive" -C /usr/local
             done
             echo "found=true" >> $GITHUB_OUTPUT
           else
