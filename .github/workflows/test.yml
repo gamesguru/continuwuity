@@ -76,7 +76,7 @@ jobs:
           env-vars: PROFILE
 
       - name: Debug checks
-        run: make vars doctor cpu-info
+        run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars doctor cpu-info
       - name: Format
         run: make format
 
