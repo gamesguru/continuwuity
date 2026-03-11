@@ -47,7 +47,7 @@ jobs:
       - name: "Sync main [from forge: continuwuation/continuwuity]"
         uses: ./.github/actions_stable/git-sync
         with:
-          branch: main
+          source_branch: main
           source_remote: upstream
           dest_remote: origin
 
