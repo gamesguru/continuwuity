@@ -22,18 +22,21 @@ prebuild-rocksdb:
     #!/usr/bin/env bash
     set -e
     VER=$(cargo pkgid rust-librocksdb-sys | cut -d'@' -f2 | cut -d'+' -f2)
-    TAG="v$VER"
+    # The fork tag is continuwuity-v0.5.0
+    TAG="continuwuity-v0.5.0"
     mkdir -p /usr/local/build
     if [ -d "/usr/local/build/rocksdb" ]; then
         CURRENT=$(cd /usr/local/build/rocksdb && git describe --tags --exact-match 2>/dev/null || echo "none")
         if [ "$CURRENT" != "$TAG" ]; then
-            echo "RocksDB version mismatch (Current: $CURRENT, Required: $TAG). Re-cloning..."
-            rm -rf /usr/local/build/rocksdb
+            echo "RocksDB version mismatch (Current: $CURRENT, Required: $TAG). Please manually rm -rf /usr/local/build/rocksdb to rebuild."
+            exit 1
         fi
     fi
     if [ ! -d "/usr/local/build/rocksdb" ]; then
-        echo "Cloning RocksDB $TAG..."
-        git clone --depth 1 --branch $TAG https://github.com/facebook/rocksdb.git /usr/local/build/rocksdb
+        echo "Cloning rust-rocksdb $TAG..."
+        git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /tmp/rust-rocksdb-src
+        mv /tmp/rust-rocksdb-src/librocksdb-sys/rocksdb /usr/local/build/rocksdb
+        rm -rf /tmp/rust-rocksdb-src
     fi
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb && env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib static_lib -j$(nproc)
@@ -55,8 +58,8 @@ prebuild-jemalloc:
     if [ -d "/usr/local/build/tikv-jemalloc" ]; then
         CURRENT=$(cd /usr/local/build/tikv-jemalloc && git rev-parse HEAD 2>/dev/null || echo "none")
         if [ "$CURRENT" != "$COMMIT" ] && [ "${CURRENT:0:7}" != "${COMMIT:0:7}" ]; then
-            echo "jemalloc commit mismatch. Re-cloning..."
-            rm -rf /usr/local/build/tikv-jemalloc
+            echo "jemalloc commit mismatch (Current: $CURRENT, Required: $COMMIT). Please manually rm -rf /usr/local/build/tikv-jemalloc to rebuild."
+            exit 1
         fi
     fi
     if [ ! -d "/usr/local/build/tikv-jemalloc" ]; then
@@ -66,13 +69,14 @@ prebuild-jemalloc:
     fi
     echo "Building jemalloc..."
     cd /usr/local/build/tikv-jemalloc
-    [ -f Makefile ] || ./autogen.sh
-    make
+    [ -f configure ] || ./autogen.sh
+    [ -f Makefile ] || ./configure --prefix=/usr/local
+    make -j$(nproc)
 
 # Install jemalloc globally (requires sudo)
 install-jemalloc:
     @echo "Installing jemalloc to /usr/local... (Requires sudo)"
-    cd /usr/local/build/tikv-jemalloc && sudo make install
+    cd /usr/local/build/tikv-jemalloc && sudo make install_lib_static install_lib_shared install_include
     sudo ldconfig
 
 # Pre-build zstd
@@ -85,8 +89,8 @@ prebuild-zstd:
     if [ -d "/usr/local/build/zstd" ]; then
         CURRENT=$(cd /usr/local/build/zstd && git describe --tags --exact-match 2>/dev/null || echo "none")
         if [ "$CURRENT" != "$TAG" ]; then
-            echo "zstd version mismatch. Re-cloning..."
-            rm -rf /usr/local/build/zstd
+            echo "zstd version mismatch. Please manually rm -rf /usr/local/build/zstd to rebuild."
+            exit 1
         fi
     fi
     if [ ! -d "/usr/local/build/zstd" ]; then
@@ -112,8 +116,8 @@ prebuild-lz4:
     if [ -d "/usr/local/build/lz4" ]; then
         CURRENT=$(cd /usr/local/build/lz4 && git describe --tags --exact-match 2>/dev/null || echo "none")
         if [ "$CURRENT" != "$TAG" ]; then
-            echo "lz4 version mismatch. Re-cloning..."
-            rm -rf /usr/local/build/lz4
+            echo "lz4 version mismatch. Please manually rm -rf /usr/local/build/lz4 to rebuild."
+            exit 1
         fi
     fi
     if [ ! -d "/usr/local/build/lz4" ]; then
