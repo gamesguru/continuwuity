@@ -6,11 +6,6 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
-  SKIP_CONFIRM: 1
-
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -46,45 +41,24 @@ jobs:
           HOST="${SERVER_URL#https://}"
           git remote set-url origin https://x-access-token:$TOKEN@$HOST/${{ github.repository }}.git
 
-          git remote add upstream https://forgejo.ellis.link/gamesguru/continuwuity.git
-          git remote add ellis https://github.com/continuwuity/continuwuity.git
+          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          git remote add github https://github.com/gamesguru/continuwuity.git
 
-      - name: Sync main (from ellis)
+      # - name: "Sync main [from forge: continuwuation/continuwuity]"
+      #   uses: ./.github/actions/git-sync
+      #   with:
+      #     branch: main
+      #     source_remote: upstream
+      #     dest_remote: origin
+
+      - name: "Sync main [from github: gamesguru/continuwuity]"
         uses: ./.github/actions/git-sync
         with:
           branch: main
-          source_remote: ellis
+          source_remote: github
           dest_remote: origin
 
-      - name: Sync main (from forge)
-        uses: ./.github/actions/git-sync
-        with:
-          branch: main
-          source_remote: upstream
-          dest_remote: origin
-
-      - name: Sync main (to forge)
-        uses: ./.github/actions/git-sync
-        with:
-          branch: main
-          source_remote: origin
-          dest_remote: upstream
-
-      - name: Sync dev (from forge)
-        uses: ./.github/actions/git-sync
-        with:
-          branch: dev
-          source_remote: upstream
-          dest_remote: origin
-
-      - name: Sync dev (to forge)
-        uses: ./.github/actions/git-sync
-        with:
-          branch: dev
-          source_remote: origin
-          dest_remote: upstream
-
-      - name: Sync metadata
+      - name: "Sync metadata [from forge: continuwuation/continuwuity]"
         uses: ./.github/actions/git-sync
         with:
           branch: _metadata/badges
@@ -92,11 +66,11 @@ jobs:
           dest_remote: origin
           allow_unrelated: "true"
 
-      - name: Sync forge-head
+      - name: "Sync forge-head [from forge: continuwuation/continuwuity]"
         uses: ./.github/actions/git-sync
         with:
           branch: main
-          dest_branch: _metadata/forge.ellis.link/HEAD
+          dest_branch: _metadata/refs/remotes/upstream/main
           source_remote: upstream
           dest_remote: origin
           mode: force
