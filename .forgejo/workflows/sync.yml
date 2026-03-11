@@ -47,30 +47,30 @@ jobs:
       - name: "Sync main [from forge: continuwuation/continuwuity]"
         uses: ./.github/actions/git-sync
         with:
-          branch: main
+          source_branch: main
           source_remote: upstream
           dest_remote: origin
 
-      # - name: "Sync main [from ellis-gg: gamesguru/continuwuity]"
+      # - name: "Sync main [from forge: continuwuation/continuwuity]"
       #   uses: ./.github/actions/git-sync
       #   with:
       #     branch: main
       #     source_remote: ellis-gg
       #     dest_remote: origin
 
-      - name: "Sync metadata [from ellis-gg: gamesguru/continuwuity]"
-        uses: ./.github/actions/git-sync
-        with:
-          branch: _metadata/badges
-          source_remote: ellis-gg
-          dest_remote: origin
-          allow_unrelated: "true"
-
       - name: "Sync forge-head [from: continuwuation/continuwuity]"
         uses: ./.github/actions/git-sync
         with:
-          branch: main
+          source_branch: main
           dest_branch: _metadata/refs/remotes/upstream/main
           source_remote: upstream
           dest_remote: origin
           mode: force
+
+      - name: "Sync metadata/badges [from ellis-gg: gamesguru/continuwuity]"
+        uses: ./.github/actions/git-sync
+        with:
+          source_branch: _metadata/badges
+          source_remote: ellis-gg
+          dest_remote: origin
+          allow_unrelated: "true"

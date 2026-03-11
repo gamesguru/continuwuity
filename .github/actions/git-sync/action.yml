@@ -2,7 +2,7 @@
 name: "Git Sync"
 description: "Syncs branches between remotes via merge or force push"
 inputs:
-  branch:
+  source_branch:
     description: "Source branch name"
     required: true
   source_remote:
@@ -12,7 +12,7 @@ inputs:
     description: "Remote to push to"
     required: true
   dest_branch:
-    description: "Target branch name (defaults to branch)"
+    description: "Target branch name (defaults to source_branch)"
     required: false
   mode:
     description: "Sync mode: merge or force"
@@ -27,7 +27,8 @@ runs:
     - name: Sync
       shell: bash
       run: |
-        BRANCH="${{ inputs.branch }}"
+        ORIG_HEAD=$(git rev-parse HEAD)
+        BRANCH="${{ inputs.source_branch }}"
         SRC="${{ inputs.source_remote }}"
         DST="${{ inputs.dest_remote }}"
         DST_BRANCH="${{ inputs.dest_branch }}"
