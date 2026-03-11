@@ -3,6 +3,7 @@ xtask = "run --package xtask --"
 
 [build]
 rustc-wrapper = "sccache"
+rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/local/lib"]
 
 [env]
 ROCKSDB_LIB_DIR = "/usr/local/lib"
