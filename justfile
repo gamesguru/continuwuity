@@ -159,3 +159,22 @@ profile-mem-analyze:
 # Clean up jemalloc dump files
 profile-mem-clean:
     rm -f jeprof.out.* heap_profile.svg
+
+# --- Compile-time Profiling ---
+
+# Profile cargo build times
+profile-build-times:
+    cargo build --release --timings
+    @echo "Report saved to target/cargo-timings/"
+
+# Analyze binary size by crates
+profile-build-bloat-crates:
+    cargo bloat --release --crates
+
+# Analyze binary size by functions
+profile-build-bloat-functions:
+    cargo bloat --release -n 20
+
+# Analyze generic instantiation (Monomorphization)
+profile-build-llvm-lines:
+    cargo llvm-lines --release
