@@ -1,10 +1,8 @@
 [alias]
 xtask = "run --package xtask --"
 
-[build]
-rustc-wrapper = "sccache"
-
 [env]
+RUSTC_WRAPPER = { value = "sccache", force = false }
 ROCKSDB_LIB_DIR = { value = "/usr/local/lib", force = false }
 ROCKSDB_INCLUDE_DIR = { value = "/usr/local/include", force = false }
 PKG_CONFIG_PATH = { value = "/usr/local/lib/pkgconfig", force = false }
