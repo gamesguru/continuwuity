@@ -102,3 +102,11 @@ node_modules/
 # Rspress
 doc_build/
 .rspress/
+
+# professor
+/.tmp/
+.~*
+._*
+~$*
+*.swp
+
