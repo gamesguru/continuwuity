@@ -207,8 +207,8 @@ jobs:
           git clone -b $VERSION https://github.com/jemalloc/jemalloc.git
           cd jemalloc
           ./autogen.sh
-          ./configure --prefix="$STAGING_DIR" --disable-shared
-          make -j$(nproc) && make install_lib_static install_include
+          ./configure --prefix="$STAGING_DIR"
+          make -j$(nproc) && make install_lib_static install_lib_shared install_include
 
           cd "$STAGING_DIR"
           TAR_FILENAME="jemalloc-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
