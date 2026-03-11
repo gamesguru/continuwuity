@@ -35,14 +35,60 @@ env:
   DEFAULT_RELEASE_TAG: "v0.5"
 
 jobs:
+  check-existing:
+    name: Check existing artifacts
+    runs-on: ubuntu-24.04
+    outputs:
+      rocksdb: ${{ steps.check.outputs.rocksdb }}
+      jemalloc: ${{ steps.check.outputs.jemalloc }}
+      lz4: ${{ steps.check.outputs.lz4 }}
+      zstd: ${{ steps.check.outputs.zstd }}
+    steps:
+      - name: Determine builds needed
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ github.event.inputs.release_tag }}"
+          TAG="${TAG:-$DEFAULT_RELEASE_TAG}"
+          EXISTING=$(gh release view "$TAG" --json assets -q ".assets[].name" 2>/dev/null || true)
+
+          check_dep() {
+            local dep="$1" version="$2" matrix="[]"
+            for arch in x86-64-v3 x86-64-v4 arm64-cortex-a76; do
+              for os in ubuntu-22.04 ubuntu-24.04; do
+                local filename="${dep}-${version}-${arch}-${os}.tar.gz"
+                if ! echo "$EXISTING" | grep -qF "$filename"; then
+                  matrix=$(echo "$matrix" | jq -c ". + [{\"arch\": \"$arch\", \"os\": \"$os\"}]")
+                  echo "-> $filename not found, will build"
+                else
+                  echo "✓ $filename exists, skipping"
+                fi
+              done
+            done
+            echo "$matrix"
+          }
+
+          ROCKSDB_V="${{ github.event.inputs.rocksdb_version }}"
+          JEMALLOC_V="${{ github.event.inputs.jemalloc_version }}"
+          LZ4_V="${{ github.event.inputs.lz4_version }}"
+          ZSTD_V="${{ github.event.inputs.zstd_version }}"
+
+          echo "rocksdb=$(check_dep rocksdb "${ROCKSDB_V:-$ROCKSDB_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
+          echo "jemalloc=$(check_dep jemalloc "${JEMALLOC_V:-$JEMALLOC_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
+          echo "lz4=$(check_dep lz4 "${LZ4_V:-$LZ4_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
+          echo "zstd=$(check_dep zstd "${ZSTD_V:-$ZSTD_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
+
   build-rocksdb:
     name: Build RocksDB (${{ matrix.arch }}, ${{ matrix.os }})
+    needs: [check-existing]
+    if: needs.check-existing.outputs.rocksdb != '[]'
     runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
-        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+        include: ${{ fromJSON(needs.check-existing.outputs.rocksdb) }}
 
     steps:
       - name: Install system dependencies
@@ -108,12 +154,13 @@ jobs:
 
   build-jemalloc:
     name: Build jemalloc (${{ matrix.arch }}, ${{ matrix.os }})
+    needs: [check-existing]
+    if: needs.check-existing.outputs.jemalloc != '[]'
     runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
-        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+        include: ${{ fromJSON(needs.check-existing.outputs.jemalloc) }}
 
     steps:
       - name: Install system dependencies
@@ -176,12 +223,13 @@ jobs:
 
   build-lz4:
     name: Build lz4 (${{ matrix.arch }}, ${{ matrix.os }})
+    needs: [check-existing]
+    if: needs.check-existing.outputs.lz4 != '[]'
     runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
-        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+        include: ${{ fromJSON(needs.check-existing.outputs.lz4) }}
 
     steps:
       - name: Install system dependencies
@@ -237,12 +285,13 @@ jobs:
 
   build-zstd:
     name: Build zstd (${{ matrix.arch }}, ${{ matrix.os }})
+    needs: [check-existing]
+    if: needs.check-existing.outputs.zstd != '[]'
     runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
-        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+        include: ${{ fromJSON(needs.check-existing.outputs.zstd) }}
 
     steps:
       - name: Install system dependencies
@@ -300,7 +349,8 @@ jobs:
 
   publish:
     name: Publish
-    needs: [build-rocksdb, build-jemalloc, build-lz4, build-zstd]
+    needs: [check-existing, build-rocksdb, build-jemalloc, build-lz4, build-zstd]
+    if: "!cancelled()"
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
@@ -325,14 +375,14 @@ jobs:
             gh release create "$TAG" --title "Prebuilts $RELEASE_TAG" --notes "Automated pre-built libraries for CI" || true
           fi
 
+          if [ ! -d prebuilts_download ] || ! ls prebuilts_download/*.tar.gz 1>/dev/null 2>&1; then
+            echo "No new artifacts to upload, all builds were skipped."
+            exit 0
+          fi
+
           cd prebuilts_download
           echo "Uploading all prebuilt artifacts..."
           for file in *.tar.gz; do
-            if [ ! -f "$file" ]; then
-              echo "No artifacts found to upload."
-              exit 1
-            fi
-
             echo "Uploading $file..."
             for i in {1..5}; do
               if gh release upload "$TAG" "$file" --clobber; then
