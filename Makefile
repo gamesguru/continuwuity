@@ -145,7 +145,7 @@ lint:   ##H Lint code
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo clippy $(CARGO_SCOPE) --features default --locked --all-targets --timings --no-deps --profile $(PROFILE) -- -D warnings
+		cargo clippy $(CARGO_SCOPE) --features default --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
 test:   ##H Run tests
@@ -172,6 +172,11 @@ build:  ##H Build with selected profile
 	@$(MAKE) _confirm
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
+		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
+		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l snappy -l z -l bz2 -l lz4 -l zstd -l numa -l tbb -l uring -l stdc++ $$RUSTFLAGS" \
 		cargo build --features $(FEATURES) --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
@@ -180,26 +185,41 @@ build:  ##H Build with selected profile
 
 
 .PHONY: build-bundled
-build-bundled: ##H Build a bundled binary (Static RocksDB, Dynamic Clang)
+build-bundled: ##H Build a bundled binary (Static RocksDB)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+	LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+	LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+	ROCKSDB_STATIC=1 \
+	ROCKSDB_LIB_STATIC=1 \
 	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-static"
 
 
 .PHONY: build-dynamic
 build-dynamic: ##H Build with shared library (requires librocksdb.so at runtime)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 	LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-runtime"
 
 
 .PHONY: release
 release: ##H Build a production-ready bundled binary (High-performance, Static RocksDB)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+	LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+	LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+	ROCKSDB_STATIC=1 \
+	ROCKSDB_LIB_STATIC=1 \
 	$(MAKE) build PROFILE=release-max-perf FEATURES="$(FEATURES),conduwuit-database/bindgen-static"
 
 
 .PHONY: clean
-clean:  ##H Clean build directory for current profile
-	@echo "Clean the '$(PROFILE)' build directory?"
+clean:  ##H Clean build directory
+	@echo "Clean everything?"
 	@$(MAKE) _confirm
-	-find target -name '*conduwuit*' -exec rm -r {} \;
+	cargo clean
+#	-rm -rf target/latest target/debug
 # Old logic, wipes it out too much, results in slow builds
 #       cargo clean --features default --profile $(PROFILE)
 #       @echo "Also remove debian build?"

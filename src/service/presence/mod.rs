@@ -116,6 +116,11 @@ impl Service {
 	pub async fn ping_presence(&self, user_id: &UserId, new_state: &PresenceState) -> Result<()> {
 		const REFRESH_TIMEOUT: u64 = 60 * 1000;
 
+		// I am working on an unrelated PR. But just seeing this is making me cringe.
+		// TODO: Do not read or set presence from the DB if it is unchanged
+		// (i.e., cached). Probably 90% or more of status updates are redundant and
+		// can be processed much more efficiently in RAM than by making multiple
+		// unconditional, barbaric DB calls!
 		let last_presence = self.db.get_presence(user_id).await;
 		let state_changed = match last_presence {
 			| Err(_) => true,
@@ -139,6 +144,8 @@ impl Service {
 
 		let last_active_ago = UInt::new(0);
 		let currently_active = *new_state == PresenceState::Online;
+		// TODO: As above, this makes a dumb, unconditional DB call. Please implement
+		// a basic LRU.
 		self.set_presence(user_id, new_state, Some(currently_active), last_active_ago, status_msg)
 			.await
 	}
