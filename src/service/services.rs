@@ -1,7 +1,8 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug, debug_info, error, info, trace, utils::stream::IterStream, warn,
+	Result, Server, SyncRwLock, debug, debug_info, error, info, trace, utils::stream::IterStream,
+	warn,
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryStreamExt};
