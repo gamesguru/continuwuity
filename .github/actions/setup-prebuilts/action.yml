@@ -1,6 +1,6 @@
 ---
 name: "Setup Prebuilts"
-description: "Downloads and caches Prebuilt Libraries (RocksDB, jemalloc, Snappy, etc.)"
+description: "Downloads and caches Prebuilt Libraries (RocksDB, jemalloc, etc)"
 inputs:
   release_tag:
     description: "Release tag (e.g. v0.5)"
@@ -30,9 +30,8 @@ runs:
         if gh release download "$TAG" --pattern "$PATTERN" --dir /tmp/prebuilts_download --repo "${{ github.repository }}"; then
           if [ "$(ls -A /tmp/prebuilts_download)" ]; then
             echo "Successfully downloaded prebuilts"
-            mkdir -p ~/.local
             for archive in /tmp/prebuilts_download/*.tar.gz; do
-              tar -xzvf "$archive" -C ~/.local
+              tar -xzvf "$archive" -C /usr/local
             done
             echo "found=true" >> $GITHUB_OUTPUT
           else
@@ -49,13 +48,13 @@ runs:
       id: prebuilts-cache
       uses: actions/cache/restore@v4
       with:
-        path: ~/.local
+        path: /usr/local
         key: prebuilts-${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
 
     - name: Verify Prebuilts Configuration
       shell: bash
       run: |
-        if [ -z "$(ls -A ~/.local/lib 2>/dev/null)" ]; then
+        if [ -z "$(ls -A /usr/local/lib/librocksdb* 2>/dev/null)" ]; then
           echo "Error: Static Prebuilts not found in cache or releases."
           echo "Please ensure the 'Build Prebuilts' workflow has completed for this combination."
           echo "Tag: ${{ inputs.release_tag }} - Arch: ${{ inputs.arch }} - OS: ${{ inputs.cache-key }}"
@@ -66,18 +65,18 @@ runs:
     - name: Export Paths
       shell: bash
       run: |
-        echo "ROCKSDB_INCLUDE_DIR=$HOME/.local/include" >> $GITHUB_ENV
-        echo "ROCKSDB_LIB_DIR=$HOME/.local/lib" >> $GITHUB_ENV
+        echo "ROCKSDB_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
+        echo "ROCKSDB_LIB_DIR=/usr/local/lib" >> $GITHUB_ENV
         # Try both libjemalloc.a and libjemalloc_pic.a as jemalloc fallback sometimes builds with pic suffix
-        if [ -f "$HOME/.local/lib/libjemalloc.a" ]; then
-          echo "JEMALLOC_OVERRIDE=$HOME/.local/lib/libjemalloc.a" >> $GITHUB_ENV
-        elif [ -f "$HOME/.local/lib/libjemalloc_pic.a" ]; then
-          echo "JEMALLOC_OVERRIDE=$HOME/.local/lib/libjemalloc_pic.a" >> $GITHUB_ENV
+        if [ -f "/usr/local/lib/libjemalloc.a" ]; then
+          echo "JEMALLOC_OVERRIDE=/usr/local/lib/libjemalloc.a" >> $GITHUB_ENV
+        elif [ -f "/usr/local/lib/libjemalloc_pic.a" ]; then
+          echo "JEMALLOC_OVERRIDE=/usr/local/lib/libjemalloc_pic.a" >> $GITHUB_ENV
         fi
 
     - name: Save cache
       if: steps.prebuilts-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'
       uses: actions/cache/save@v4
       with:
-        path: ~/.local
+        path: /usr/local
         key: prebuilts-${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}

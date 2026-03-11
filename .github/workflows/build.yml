@@ -53,7 +53,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Setup RocksDB and Jemalloc
-        uses: ./.github/actions/setup-rocksdb
+        uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ${{ matrix.os }}
           arch: x86-64-v3
@@ -83,7 +83,7 @@ jobs:
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
-        run: ./target/latest/conduwuit --version
+        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
 
       - name: Package Assets
         run: |
@@ -159,7 +159,7 @@ jobs:
         uses: ./.github/actions/get-cpu-target
 
       - name: Setup RocksDB and Jemalloc
-        uses: ./.github/actions/setup-rocksdb
+        uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ${{ matrix.os }}
           arch: x86-64-v4
@@ -189,7 +189,7 @@ jobs:
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
-        run: ./target/latest/conduwuit --version
+        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
 
       - name: Package Assets
         run: |
@@ -267,7 +267,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Setup RocksDB and Jemalloc
-        uses: ./.github/actions/setup-rocksdb
+        uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ${{ matrix.os }}
           arch: arm64-cortex-a76
@@ -297,7 +297,7 @@ jobs:
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
-        run: ./target/latest/conduwuit --version
+        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
 
       - name: Package Assets
         run: |

@@ -739,8 +739,8 @@ split-debuginfo = "unpacked"
 # NOTE: for smaller binaries on disk, put: strip = "symbols"
 [profile.dev-quick]
 inherits = "dev"
-opt-level = 1
-debug = 0
+opt-level = 0
+debug = "full"
 strip = "none"
 lto = "off"
 codegen-units = 16

@@ -53,7 +53,7 @@ jobs:
         uses: ./.github/actions/get-cpu-target
 
       - name: Setup RocksDB and Jemalloc
-        uses: ./.github/actions/setup-rocksdb
+        uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ubuntu-24.04
           arch: ${{ steps.cpu.outputs.target }}
@@ -103,10 +103,10 @@ jobs:
         include:
           - arch: amd64
             os: ubuntu-22.04
-            profile: release-max-perf
+            profile: release
           - arch: amd64
             os: ubuntu-24.04
-            profile: release-max-perf
+            profile: release
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
     # and pushing the generated github-badge.json to the badges branch
@@ -145,7 +145,7 @@ jobs:
         uses: ./.github/actions/get-cpu-target
 
       - name: Setup RocksDB and Jemalloc
-        uses: ./.github/actions/setup-rocksdb
+        uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ${{ matrix.os }}
           arch: ${{ steps.cpu.outputs.target }}
