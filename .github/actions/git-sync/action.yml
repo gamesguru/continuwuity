@@ -27,7 +27,6 @@ runs:
     - name: Sync
       shell: bash
       run: |
-        ORIG_HEAD=$(git rev-parse HEAD)
         BRANCH="${{ inputs.source_branch }}"
         SRC="${{ inputs.source_remote }}"
         DST="${{ inputs.dest_remote }}"
