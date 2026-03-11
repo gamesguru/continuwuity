@@ -48,10 +48,11 @@ jobs:
           DISABLE_JEMALLOC=1 \
             EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
             EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
-            make shared_lib -j$(nproc)
+            make shared_lib static_lib -j$(nproc)
 
           mkdir -p rocksdb-release/lib rocksdb-release/include
-          make install-sharedPREFIX=$(pwd)/rocksdb-release
+          make install-shared PREFIX=$(pwd)/rocksdb-release
+          make install-static PREFIX=$(pwd)/rocksdb-release
 
           FILENAME="rocksdb-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           tar -czvf "../../../$FILENAME" -C rocksdb-release .
