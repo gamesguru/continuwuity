@@ -207,7 +207,7 @@ jobs:
           git clone -b $VERSION https://github.com/jemalloc/jemalloc.git
           cd jemalloc
           ./autogen.sh
-          ./configure --prefix="$STAGING_DIR" --disable-shared --with-jemalloc-prefix=_rjem_ --with-private-namespace=_rjem_
+          ./configure --prefix="$STAGING_DIR" --disable-shared
           make -j$(nproc) && make install_lib_static install_include
 
           cd "$STAGING_DIR"
