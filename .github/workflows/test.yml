@@ -21,7 +21,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PROFILE: dev-quick
-      RUSTC_WRAPPER: sccache
 
     steps:
       - uses: actions/checkout@v4
@@ -40,17 +39,20 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            libbz2-dev \
             clang \
             libclang-dev \
             llvm-dev \
-            mold \
-            sccache
+            mold
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Detect best CPU target
         id: cpu
         uses: ./.github/actions/get-cpu-target
 
-      - name: Setup RocksDB
+      - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ubuntu-24.04
@@ -94,7 +96,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       FEATURES: "direct_tls"
-      RUSTC_WRAPPER: sccache
 
     strategy:
       fail-fast: false
@@ -130,17 +131,20 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            libbz2-dev \
             clang \
             libclang-dev \
             llvm-dev \
-            mold \
-            sccache
+            mold
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Detect best CPU target
         id: cpu
         uses: ./.github/actions/get-cpu-target
 
-      - name: Setup RocksDB
+      - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}

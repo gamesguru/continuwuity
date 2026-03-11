@@ -19,7 +19,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       ROCKSDB_LIB_DIR: /usr/local/lib
-      RUSTC_WRAPPER: sccache
 
     strategy:
       fail-fast: false
@@ -44,13 +43,16 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            libbz2-dev \
             clang \
             libclang-dev \
             llvm-dev \
-            mold \
-            sccache
+            mold
 
-      - name: Setup RocksDB
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}
@@ -119,7 +121,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       ROCKSDB_LIB_DIR: /usr/local/lib
-      RUSTC_WRAPPER: sccache
 
     strategy:
       fail-fast: false
@@ -144,17 +145,20 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            libbz2-dev \
             clang \
             libclang-dev \
             llvm-dev \
-            mold \
-            sccache
+            mold
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Detect best CPU target
         id: cpu
         uses: ./.github/actions/get-cpu-target
 
-      - name: Setup RocksDB
+      - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}
@@ -226,7 +230,6 @@ jobs:
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: 16
       ROCKSDB_LIB_DIR: /usr/local/lib
-      RUSTC_WRAPPER: sccache
 
     # Ubuntu 22.04 uses glibc 2.35 (compatible)
     # Raspberry Pi uses glibc 2.36
@@ -254,13 +257,16 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            libbz2-dev \
             clang \
             libclang-dev \
             llvm-dev \
-            mold \
-            sccache
+            mold
 
-      - name: Setup RocksDB
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-rocksdb
         with:
           cache-key: ${{ matrix.os }}
