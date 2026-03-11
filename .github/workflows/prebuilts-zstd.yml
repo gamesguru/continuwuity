@@ -1,0 +1,93 @@
+---
+name: Build Prebuilts (zstd)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Library version tag"
+        required: true
+        default: "1.5.6"
+      release_tag:
+        description: "Target GitHub Release Tag"
+        required: true
+        default: "v0.5"
+
+jobs:
+  build-zstd:
+    name: Build zstd (${{ matrix.arch }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        arch: [x86-64-v3, x86-64-v4, arm64-cortex-a76]
+
+    steps:
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            git
+
+      - name: Build zstd
+        shell: bash
+        run: |
+          STAGING_DIR="$(pwd)/prebuilts"
+          mkdir -p "$STAGING_DIR/include" "$STAGING_DIR/lib"
+          export PREFIX="$STAGING_DIR"
+          export PKG_CONFIG_PATH="$STAGING_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CFLAGS="-fPIC -I$STAGING_DIR/include"
+          export CXXFLAGS="-fPIC -I$STAGING_DIR/include"
+          export LDFLAGS="-L$STAGING_DIR/lib"
+
+          ARCH="${{ matrix.arch }}"
+          if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
+            EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == x86-64-v* ]]; then
+            EXTRA_FLAGS="-march=$ARCH -mpclmul"
+          else
+            EXTRA_FLAGS="-march=$ARCH"
+          fi
+          export CFLAGS="$CFLAGS $EXTRA_FLAGS"
+          export CXXFLAGS="$CXXFLAGS $EXTRA_FLAGS"
+
+          cd /tmp
+          git clone -b v1.5.6 https://github.com/facebook/zstd.git
+          cd zstd
+          make -j$(nproc) lib-mt PREFIX="$STAGING_DIR"
+          cp lib/libzstd.a "$STAGING_DIR/lib/"
+          cp lib/zstd*.h "$STAGING_DIR/include/"
+
+          cd "$STAGING_DIR"
+          TAR_FILENAME="zstd-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+          tar -czvf "../$TAR_FILENAME" .
+
+      - name: Create/Upload Release Artifact
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.release_tag }}"
+          FILENAME="zstd-${{ github.event.inputs.version }}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
+
+          sleep $(( RANDOM % 30 ))
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Prebuilts ${{ github.event.inputs.release_tag }}" --notes "Automated pre-built libraries for CI" || true
+          fi
+
+          for i in {1..5}; do
+            echo "Upload attempt $i..."
+            if gh release upload "$TAG" "../$FILENAME" --clobber; then
+              echo "Upload successful."
+              break
+            fi
+            echo "Upload failed, retrying in 10s..."
+            sleep 10
+          done

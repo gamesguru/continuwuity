@@ -1,11 +1,11 @@
 ---
-name: "Setup RocksDB"
-description: "Downloads or builds and caches RocksDB"
+name: "Setup Prebuilts"
+description: "Downloads and caches Prebuilt Libraries (RocksDB, jemalloc, Snappy, etc.)"
 inputs:
-  version:
-    description: "RocksDB version to use"
+  release_tag:
+    description: "Release tag (e.g. v0.5)"
     required: true
-    default: "10.5.1"
+    default: "v0.5"
   cache-key:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
@@ -22,103 +22,62 @@ runs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        VERSION="${{ inputs.version }}"
-        TAG="rocksdb-${VERSION}"
-        FILENAME="rocksdb-${VERSION}-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
+        TAG="prebuilts-${{ inputs.release_tag }}"
+        PATTERN="*-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
 
-        echo "Attempting to download pre-built RocksDB using gh CLI"
-        if gh release download "$TAG" --pattern "$FILENAME" --repo "${{ github.repository }}"; then
-          echo "Successfully downloaded pre-built RocksDB"
-          mkdir -p ~/.local
-          tar -xzvf "$FILENAME" -C ~/.local
-          echo "found=true" >> $GITHUB_OUTPUT
+        echo "Attempting to download prebuilts using gh CLI"
+        mkdir -p /tmp/prebuilts_download
+        if gh release download "$TAG" --pattern "$PATTERN" --dir /tmp/prebuilts_download --repo "${{ github.repository }}"; then
+          if [ "$(ls -A /tmp/prebuilts_download)" ]; then
+            echo "Successfully downloaded prebuilts"
+            mkdir -p ~/.local
+            for archive in /tmp/prebuilts_download/*.tar.gz; do
+              tar -xzvf "$archive" -C ~/.local
+            done
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "No prebuilts found matching pattern"
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
         else
-          echo "Pre-built RocksDB not found in releases"
+          echo "Prebuilts not found in releases"
           echo "found=false" >> $GITHUB_OUTPUT
         fi
 
     - name: Restore cache
       if: steps.download.outputs.found == 'false'
-      id: rocksdb-cache
+      id: prebuilts-cache
       uses: actions/cache/restore@v4
       with:
         path: ~/.local
-        key: rocksdb-${{ inputs.version }}-${{ inputs.arch }}-${{ inputs.cache-key }}
+        key: prebuilts-${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
 
-    - name: Build RocksDB (fallback)
+    - name: Verify Prebuilts Configuration
       shell: bash
       run: |
-        if [ ! -f "$HOME/.local/lib/librocksdb.a" ]; then
-          echo "Static RocksDB not found in cache or releases, building from source..."
-          git clone --recursive https://github.com/zaidoon1/rust-rocksdb.git /tmp/rust-rocksdb
-          cd /tmp/rust-rocksdb/librocksdb-sys/rocksdb
-          make clean
-
-          ARCH="${{ inputs.arch }}"
-          if [[ "$ARCH" == "arm64-cortex-a76" || "$ARCH" == "cortex-a76" ]]; then
-            EXTRA_FLAGS="-march=armv8.2-a+crc"
-          elif [[ "$ARCH" == x86-64-v* ]]; then
-            EXTRA_FLAGS="-march=$ARCH -mpclmul"
-          else
-            EXTRA_FLAGS="-march=$ARCH"
-          fi
-
-          DISABLE_JEMALLOC=1 \
-            EXTRA_CFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
-            EXTRA_CXXFLAGS="-Wno-error=unused-parameter $EXTRA_FLAGS" \
-            make static_lib -j$(nproc)
-          mkdir -p ~/.local
-          make install-static PREFIX=~/.local
-        else
-          echo "Static RocksDB already present (from cache or download)"
+        if [ -z "$(ls -A ~/.local/lib 2>/dev/null)" ]; then
+          echo "Error: Static Prebuilts not found in cache or releases."
+          echo "Please ensure the 'Build Prebuilts' workflow has completed for this combination."
+          echo "Tag: prebuilts-${{ inputs.version }} - Arch: ${{ inputs.arch }} - OS: ${{ inputs.cache-key }}"
+          exit 1
         fi
-
-    - name: Upload to Release (Promotion)
-      if: github.event_name != 'pull_request' && steps.download.outputs.found == 'false'
-      shell: bash
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      run: |
-        VERSION="${{ inputs.version }}"
-        TAG="rocksdb-${VERSION}"
-        FILENAME="rocksdb-${VERSION}-${{ inputs.arch }}-${{ inputs.cache-key }}.tar.gz"
-
-        # Increased random sleep to mitigate race conditions with parallel jobs
-        sleep $(( RANDOM % 30 ))
-
-        # Only upload if the file doesn't exist in the release yet
-        if ! gh release view "$TAG" --repo "${{ github.repository }}" 2>/dev/null | grep -q "$FILENAME"; then
-          echo "Promoting RocksDB to release $TAG..."
-          tar -czvf "$FILENAME" -C ~/.local .
-
-          # Create release (ignore error if it exists)
-          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "RocksDB ${VERSION} Pre-builts" --notes "Automated pre-built RocksDB binaries for CI" || true
-          fi
-
-          # Upload with retry logic and backoff
-          for i in {1..5}; do
-            echo "Upload attempt $i..."
-            if gh release upload "$TAG" "$FILENAME" --repo "${{ github.repository }}"; then
-              echo "Upload successful."
-              break
-            fi
-            echo "Upload failed, retrying in 10s..."
-            sleep 10
-          done
-        else
-          echo "$FILENAME already exists in release."
-        fi
+        echo "Static Prebuilts are present."
 
     - name: Export Paths
       shell: bash
       run: |
         echo "ROCKSDB_INCLUDE_DIR=$HOME/.local/include" >> $GITHUB_ENV
         echo "ROCKSDB_LIB_DIR=$HOME/.local/lib" >> $GITHUB_ENV
+        # Try both libjemalloc.a and libjemalloc_pic.a as jemalloc fallback sometimes builds with pic suffix
+        if [ -f "$HOME/.local/lib/libjemalloc.a" ]; then
+          echo "JEMALLOC_OVERRIDE=$HOME/.local/lib/libjemalloc.a" >> $GITHUB_ENV
+        elif [ -f "$HOME/.local/lib/libjemalloc_pic.a" ]; then
+          echo "JEMALLOC_OVERRIDE=$HOME/.local/lib/libjemalloc_pic.a" >> $GITHUB_ENV
+        fi
 
     - name: Save cache
-      if: steps.rocksdb-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'
+      if: steps.prebuilts-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'
       uses: actions/cache/save@v4
       with:
         path: ~/.local
-        key: rocksdb-${{ inputs.version }}-${{ inputs.arch }}-${{ inputs.cache-key }}
+        key: prebuilts-${{ inputs.version }}-${{ inputs.arch }}-${{ inputs.cache-key }}
