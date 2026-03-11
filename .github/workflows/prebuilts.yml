@@ -3,7 +3,7 @@ name: Prebuild
 
 on:
   push:
-    branches: [main, _metadata/prebuilts/github-trigger]
+    branches: [_metadata/prebuilts/github-trigger]
   workflow_dispatch:
     inputs:
       rocksdb_version:
