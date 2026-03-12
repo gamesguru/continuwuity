@@ -643,6 +643,10 @@ where
 
 	trace!(map = ?auth_events.keys().collect::<Vec<_>>(), "fetched auth events");
 
+	// Cache auth check for some event
+	let _auth_check_cache: moka::sync::Cache<OwnedEventId, bool> =
+		moka::sync::Cache::builder().max_capacity(10_000).build();
+
 	let auth_events = &auth_events;
 	// NOTE: in state resolution v2.1, auth checks should start with an empty state
 	// map. It is the caller's job to do this. Previously, this function would
