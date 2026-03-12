@@ -167,6 +167,8 @@ impl Data {
 		self.userid_presenceid.remove(user_id);
 	}
 
+	pub(super) fn clear_cache(&self) { self.cache.write().clear(); }
+
 	#[inline]
 	pub(super) fn presence_since(
 		&self,

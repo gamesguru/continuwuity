@@ -56,6 +56,8 @@ impl crate::Service for Service {
 		}))
 	}
 
+	async fn clear_cache(&self) { self.db.clear_cache(); }
+
 	async fn worker(self: Arc<Self>) -> Result<()> {
 		let receiver = self.timer_channel.1.clone();
 
