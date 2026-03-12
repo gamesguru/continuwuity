@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use conduwuit::{
-	Error, Result, Server, checked, debug, debug_warn, error, info, result::LogErr, trace,
+	Error, Result, Server, checked, debug, debug_warn, error, info, result::LogErr, trace, utils,
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
@@ -107,23 +107,24 @@ impl Service {
 			.await
 	}
 
-	/// Pings the presence of the given user in the given room, setting the
-	/// specified state.
-	// TODO: this is called on every profile update, read marker, typing notif,
-	// etc. Each call does a DB read here, then set_presence does another
-	// internally. An in-memory presence cache would eliminate most of these.
+	/// Pings the presence of the given user, setting the specified state.
+	///
+	/// Fetches previous state, then passes it to avoid redundant DB read in
+	/// `set_presence`
 	pub async fn ping_presence(&self, user_id: &UserId, new_state: &PresenceState) -> Result<()> {
 		const REFRESH_TIMEOUT: u64 = 60 * 1000;
 
-		let last_presence = self.db.get_presence(user_id).await;
+		// Raw payload is smaller/cheaper in memory
+		let last_presence = self.db.get_presence_raw(user_id).await;
 		let state_changed = match last_presence {
 			| Err(_) => true,
-			| Ok((_, ref presence)) => presence.content.presence != *new_state,
+			| Ok((_, ref presence)) => presence.state != *new_state,
 		};
 
+		let now = utils::millis_since_unix_epoch();
 		let last_last_active_ago = match last_presence {
 			| Err(_) => 0_u64,
-			| Ok((_, ref presence)) => presence.content.last_active_ago.map_or(0, UInt::into),
+			| Ok((_, ref presence)) => now.saturating_sub(presence.last_active_ts),
 		};
 
 		if !state_changed && last_last_active_ago < REFRESH_TIMEOUT {
@@ -131,17 +132,33 @@ impl Service {
 		}
 
 		let status_msg = match last_presence {
-			| Ok((_, ref presence)) => presence.content.status_msg.clone(),
+			| Ok((_, ref presence)) => presence.status_msg.clone(),
 			| Err(_) => None,
 		};
 
 		let last_active_ago = UInt::new(0);
 		let currently_active = *new_state == PresenceState::Online;
-		self.set_presence(user_id, new_state, Some(currently_active), last_active_ago, status_msg)
-			.await
+		let _cork = self.services.db.cork();
+		self.db
+			.set_presence(
+				user_id,
+				new_state,
+				Some(currently_active),
+				last_active_ago,
+				status_msg,
+				last_presence.ok(),
+			)
+			.await?;
+
+		self.schedule_timeout(user_id, new_state)?;
+
+		Ok(())
 	}
 
 	/// Adds a presence event which will be saved until a new event replaces it.
+	///
+	/// External callers for APIs and federation. Previous state fetch if
+	/// unknown.
 	pub async fn set_presence(
 		&self,
 		user_id: &UserId,
@@ -167,6 +184,13 @@ impl Service {
 			)
 			.await?;
 
+		self.schedule_timeout(user_id, presence_state)?;
+
+		Ok(())
+	}
+
+	/// Schedules a presence timeout timer for the given user if applicable.
+	fn schedule_timeout(&self, user_id: &UserId, presence_state: &PresenceState) -> Result<()> {
 		if (self.timeout_remote_users || self.services.globals.user_is_local(user_id))
 			&& user_id != self.services.globals.server_user
 		{
@@ -209,30 +233,36 @@ impl Service {
 			.collect::<Vec<OwnedUserId>>()
 			.await
 		{
-			let presence = self.db.get_presence(user_id).await;
+			let raw = self.db.get_presence_raw(user_id).await;
 
-			let presence = match presence {
-				| Ok((_, ref presence)) => &presence.content,
+			let (count, presence) = match raw {
+				| Ok((count, ref presence)) => (count, presence),
 				| _ => continue,
 			};
 
 			if !matches!(
-				presence.presence,
+				presence.state,
 				PresenceState::Unavailable | PresenceState::Online | PresenceState::Busy
 			) {
 				trace!(%user_id, ?presence, "Skipping user");
 				continue;
 			}
 
+			let now = utils::millis_since_unix_epoch();
+			let last_active_ago =
+				UInt::new_saturating(now.saturating_sub(presence.last_active_ts));
+
 			trace!(%user_id, ?presence, "Resetting presence to offline");
 
 			if self
+				.db
 				.set_presence(
 					user_id,
 					&PresenceState::Offline,
 					Some(false),
-					presence.last_active_ago,
+					Some(last_active_ago),
 					presence.status_msg.clone(),
+					Some((count, presence.clone())),
 				)
 				.await
 				.inspect_err(|e| {
@@ -278,13 +308,17 @@ impl Service {
 		let mut presence_state = PresenceState::Offline;
 		let mut last_active_ago = None;
 		let mut status_msg = None;
+		let mut previous = None;
 
-		let presence_event = self.get_presence(user_id).await;
+		let raw = self.db.get_presence_raw(user_id).await;
 
-		if let Ok(presence_event) = presence_event {
-			presence_state = presence_event.content.presence;
-			last_active_ago = presence_event.content.last_active_ago;
-			status_msg = presence_event.content.status_msg;
+		if let Ok((count, ref presence)) = raw {
+			presence_state = presence.state.clone();
+			let now = utils::millis_since_unix_epoch();
+			last_active_ago =
+				Some(UInt::new_saturating(now.saturating_sub(presence.last_active_ts)));
+			status_msg = presence.status_msg.clone();
+			previous = Some((count, presence.clone()));
 		}
 
 		let new_state = match (&presence_state, last_active_ago.map(u64::from)) {
@@ -301,8 +335,19 @@ impl Service {
 		);
 
 		if let Some(new_state) = new_state {
-			self.set_presence(user_id, &new_state, Some(false), last_active_ago, status_msg)
+			let _cork = self.services.db.cork();
+			self.db
+				.set_presence(
+					user_id,
+					&new_state,
+					Some(false),
+					last_active_ago,
+					status_msg,
+					previous,
+				)
 				.await?;
+
+			self.schedule_timeout(user_id, &new_state)?;
 		}
 
 		Ok(())
