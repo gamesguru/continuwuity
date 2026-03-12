@@ -12,7 +12,7 @@ license = "Apache-2.0"
 # See also `rust-toolchain.toml`
 readme = "README.md"
 repository = "https://forgejo.ellis.link/continuwuation/continuwuity"
-version = "0.5.5"
+version = "0.5.6"
 
 [workspace.metadata.crane]
 name = "conduwuit"
@@ -144,6 +144,7 @@ features = [
     "socks",
     "hickory-dns",
     "http2",
+    "stream",
 ]
 
 [workspace.dependencies.serde]
@@ -158,7 +159,7 @@ features = ["raw_value"]
 
 # Used for appservice registration files
 [workspace.dependencies.serde-saphyr]
-version = "0.0.19"
+version = "0.0.21"
 
 # Used to load forbidden room/user regex from config
 [workspace.dependencies.serde_regex]
@@ -343,7 +344,7 @@ version = "0.1.2"
 [workspace.dependencies.ruma]
 git = "https://forgejo.ellis.link/continuwuation/ruwuma"
 #branch = "conduwuit-changes"
-rev = "a4b5e89f4951c87e903ef224c2d1c2c4ef1ebeaf"
+rev = "bb12ed288a31a23aa11b10ba0fad22b7f985eb88"
 features = [
     "compat",
     "rand",
@@ -363,6 +364,7 @@ features = [
     "unstable-msc2870",
     "unstable-msc3026",
     "unstable-msc3061",
+    "unstable-msc3814",
     "unstable-msc3245",
     "unstable-msc3266",
     "unstable-msc3381", # polls
@@ -381,6 +383,7 @@ features = [
     "unstable-pdu",
     "unstable-msc4155",
     "unstable-msc4143", # livekit well_known response
+    "unstable-msc4284"
 ]
 
 [workspace.dependencies.rust-rocksdb]
