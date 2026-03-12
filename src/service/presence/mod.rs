@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use conduwuit::{
-	Error, Result, Server, checked, debug, debug_warn, error, result::LogErr, trace,
+	Error, Result, Server, checked, debug, debug_warn, error, info, result::LogErr, trace,
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
@@ -61,6 +61,7 @@ impl crate::Service for Service {
 		// Reset all local user presence on server start
 		let startup_task = if self.services.server.config.allow_local_presence {
 			let self_ = Arc::clone(&self);
+			// hold the handle (if not none) so we can gracefully close upon abrupt SIGINT
 			Some(self.services.server.runtime().spawn(async move {
 				self_.unset_all_presence().await;
 				_ = self_
@@ -203,7 +204,9 @@ impl Service {
 
 	// Unset online/unavailable presence to offline on startup
 	pub async fn unset_all_presence(&self) {
+		info!("Resetting presence for local users...");
 		let _cork = self.services.db.cork();
+		let mut reset = 0_usize;
 
 		for user_id in &self
 			.services
@@ -246,7 +249,11 @@ impl Service {
 						 offline: {e}"
 					);
 				});
+
+			reset = reset.saturating_add(1);
 		}
+
+		info!("Presence reset complete: {reset} users set to offline.");
 	}
 
 	/// Returns the most recent presence updates that happened after the event
