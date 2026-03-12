@@ -392,6 +392,7 @@ rev = "61d9d23872197e9ace4a477f2617d5c9f50ecb23"
 default-features = false
 features = [
     "multi-threaded-cf",
+    "mt_static",
     "lz4",
     "zstd",
     "bzip2",
@@ -715,7 +716,6 @@ opt-level = 0
 panic = "unwind"
 debug-assertions = true
 incremental = true
-split-debuginfo = "unpacked"
 #rustflags = [
 #	'--cfg', 'conduwuit_mods',
 #	'-Ztime-passes',
@@ -733,18 +733,6 @@ split-debuginfo = "unpacked"
 #	'-Clink-arg=-Wl,-z,keep-text-section-prefix',
 #	'-Clink-arg=-Wl,-z,lazy',
 #]
-
-# Dev/testing build with fast compile time, decent runtime performance.
-# Here, "quick" refers to compile time, not runtime speed.
-# NOTE: for smaller binaries on disk, put: strip = "symbols"
-[profile.dev-quick]
-inherits = "dev"
-opt-level = 0
-debug = "full"
-strip = "none"
-lto = "off"
-codegen-units = 16
-incremental = true
 
 [profile.dev.package.conduwuit_core]
 inherits = "dev"
