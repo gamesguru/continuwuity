@@ -161,9 +161,8 @@ ROCKSDB_LIB_DIR ?= /usr/local/lib
 ROCKSDB_INCLUDE_DIR ?= /usr/local/include
 
 # Default features to use for the build
-# We use bindgen-runtime by default to use the system libclang.so for building.
 # Bundling RocksDB statically can be enabled via features.
-FEATURES ?= standard,release_max_log_level,bindgen-runtime
+FEATURES ?= standard
 
 .PHONY: build
 build:  ##H Build with selected profile
@@ -200,7 +199,7 @@ build-dynamic: ##H Build with shared library (requires librocksdb.so at runtime)
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 	LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-runtime"
+	$(MAKE) build FEATURES="$(FEATURES)"
 
 
 .PHONY: release

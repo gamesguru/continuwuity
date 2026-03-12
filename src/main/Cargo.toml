@@ -46,7 +46,7 @@ assets = [
 default = [
     "standard",
     "release_max_log_level",
-	"bindgen-runtime", # Use runtime libclang for dev builds
+	# "bindgen-runtime", # replace with bindgen-static on alpine
 ]
 standard = [
     "blurhashing",
