@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use conduwuit::{
-	Result, debug_warn, utils,
+	Result, SyncRwLock, debug_warn, utils,
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
 use futures::Stream;
-use ruma::{UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
+use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
 
 use super::Presence;
 use crate::{Dep, globals, users};
@@ -14,6 +14,7 @@ use crate::{Dep, globals, users};
 pub(crate) struct Data {
 	presenceid_presence: Arc<Map>,
 	userid_presenceid: Arc<Map>,
+	cache: SyncRwLock<HashMap<OwnedUserId, (u64, PresenceEvent)>>,
 	services: Services,
 }
 
@@ -28,6 +29,7 @@ impl Data {
 		Self {
 			presenceid_presence: db["presenceid_presence"].clone(),
 			userid_presenceid: db["userid_presenceid"].clone(),
+			cache: SyncRwLock::new(HashMap::new()),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
@@ -36,6 +38,14 @@ impl Data {
 	}
 
 	pub(super) async fn get_presence(&self, user_id: &UserId) -> Result<(u64, PresenceEvent)> {
+		// Check in-memory cache first to avoid redundant DB reads
+		// TODO: caching the full PresenceEvent means displayname/avatar can go
+		// stale after profile changes; consider caching only the raw Presence
+		// payload and building the event on demand, or invalidate on profile update.
+		if let Some(cached) = self.cache.read().get(user_id) {
+			return Ok(cached.clone());
+		}
+
 		let count = self
 			.userid_presenceid
 			.get(user_id)
@@ -48,6 +58,10 @@ impl Data {
 			.to_presence_event(user_id, &self.services.users)
 			.await;
 
+		self.cache
+			.write()
+			.insert(user_id.to_owned(), (count, event.clone()));
+
 		Ok((count, event))
 	}
 
@@ -59,6 +73,8 @@ impl Data {
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
 	) -> Result<()> {
+		// TODO: callers like ping_presence already read this; consider accepting
+		// optional previous state param to avoid the redundant DB round-trip
 		let last_presence = self.get_presence(user_id).await;
 		let state_changed = match last_presence {
 			| Err(_) => true,
@@ -121,6 +137,9 @@ impl Data {
 		self.presenceid_presence.raw_put(key, Json(presence));
 		self.userid_presenceid.raw_put(user_id, count);
 
+		// TODO: consider bounding cache size (moka LRU?)
+		self.cache.write().remove(user_id);
+
 		if let Ok((last_count, _)) = last_presence {
 			let key = presenceid_key(last_count, user_id);
 			self.presenceid_presence.remove(&key);
@@ -130,6 +149,8 @@ impl Data {
 	}
 
 	pub(super) async fn remove_presence(&self, user_id: &UserId) {
+		self.cache.write().remove(user_id);
+
 		let Ok(count) = self
 			.userid_presenceid
 			.get(user_id)
@@ -143,6 +164,8 @@ impl Data {
 		self.presenceid_presence.remove(&key);
 		self.userid_presenceid.remove(user_id);
 	}
+
+	pub(super) fn clear_cache(&self) { self.cache.write().clear(); }
 
 	#[inline]
 	pub(super) fn presence_since(
