@@ -1,9 +1,11 @@
+use std::cmp::{Ordering, Reverse};
+
 use axum::extract::State;
-use conduwuit::{Err, Event, Result, matrix::pdu::PduCount, warn};
+use conduwuit::{Err, Event, Result, debug_info, matrix::pdu::PduCount, warn};
 use futures::StreamExt;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, UInt,
-	api::client::push::{get_notifications, get_notifications::v3 as r},
+	api::client::push::{get_notifications, get_notifications::v3 as notif_route_v3},
 	events::{
 		AnySyncTimelineEvent, GlobalAccountDataEventType, StateEventType,
 		push_rules::PushRulesEvent, room::power_levels::RoomPowerLevelsEventContent,
@@ -14,6 +16,24 @@ use ruma::{
 
 use crate::Ruma;
 
+/// Wrapper to order notifications by timestamp for the min-heap.
+#[derive(Debug)]
+struct NotificationItem(notif_route_v3::Notification);
+
+impl PartialEq for NotificationItem {
+	fn eq(&self, other: &Self) -> bool { self.0.ts == other.0.ts }
+}
+
+impl Eq for NotificationItem {}
+
+impl PartialOrd for NotificationItem {
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+
+impl Ord for NotificationItem {
+	fn cmp(&self, other: &Self) -> Ordering { self.0.ts.cmp(&other.0.ts) }
+}
+
 /// # `GET /_matrix/client/v3/notifications`
 ///
 /// Get notifications for the user.
@@ -23,28 +43,9 @@ pub(crate) async fn get_notifications_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_notifications::v3::Request>,
 ) -> Result<get_notifications::v3::Response> {
-	use std::{cmp::Reverse, collections::BinaryHeap, time::Instant};
+	use std::{collections::BinaryHeap, time::Instant};
 
-	// Wrapper to order notifications by timestamp
-	#[derive(Debug)]
-	struct NotificationItem(r::Notification);
-
-	impl PartialEq for NotificationItem {
-		fn eq(&self, other: &Self) -> bool { self.0.ts == other.0.ts }
-	}
-
-	impl Eq for NotificationItem {}
-
-	impl PartialOrd for NotificationItem {
-		fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-			Some(self.cmp(other))
-		}
-	}
-
-	impl Ord for NotificationItem {
-		fn cmp(&self, other: &Self) -> std::cmp::Ordering { self.0.ts.cmp(&other.0.ts) }
-	}
-
+	#[cfg(debug_assertions)]
 	let started = Instant::now();
 
 	let max_limit = services.server.config.notification_max_limit_per_request;
@@ -69,7 +70,9 @@ pub(crate) async fn get_notifications_route(
 	let limit_usize = limit.try_into().unwrap_or(usize::MAX);
 	let mut notifications: BinaryHeap<Reverse<NotificationItem>> =
 		BinaryHeap::with_capacity(limit_usize);
+	#[cfg(debug_assertions)]
 	let mut total_scanned: usize = 0;
+	#[cfg(debug_assertions)]
 	let mut rooms_scanned: usize = 0;
 
 	// Get user's push rules
@@ -101,18 +104,22 @@ pub(crate) async fn get_notifications_route(
 			continue;
 		}
 
-		// Skip rooms the user is no longer joined to (stale notification
-		// counts can persist after leaving a room)
+		// Clean up and skip rooms the user left (stale notification counts can linger)
 		if !services
 			.rooms
 			.state_cache
 			.is_joined(sender_user, &room_id)
 			.await
 		{
+			services
+				.rooms
+				.user
+				.reset_notification_counts(sender_user, &room_id);
+
 			continue;
 		}
 
-		// Get the last read receipt for this room (as PDU count)
+		// Get the last read receipt for current room (as PDU count)
 		let last_read = services
 			.rooms
 			.user
@@ -127,43 +134,28 @@ pub(crate) async fn get_notifications_route(
 			.await
 			.unwrap_or_default();
 
-		// Iterate over PDUs, reverse scan should be the fastest.
-		// Cap per-room scan depth to prevent abuse from deep pagination.
+		// Iterate over PDUs, cap per-room scan depth to prevent overload
 		let max_pdus_per_room = services.server.config.notification_max_pdus_per_room;
 		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
+		#[cfg(not(debug_assertions))]
+		let mut scanned: usize = 0;
+		#[cfg(debug_assertions)]
 		let mut scanned: usize = 0;
 
-		// optimization: we can stop once we have enough notifications and current pdu
-		// is older than the oldest one in our list
+		// optimization: stop if we have enough notifications and current pdu
+		// is older than any in our list
 		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
 			scanned = scanned.saturating_add(1);
-			if max_pdus_per_room > 0 && scanned > max_pdus_per_room {
+			if (max_pdus_per_room > 0 && scanned > max_pdus_per_room)
+				|| pdu_count <= PduCount::Normal(last_read)
+			{
 				break;
 			}
 
-			if pdu_count <= PduCount::Normal(last_read) {
-				break;
-			}
-
-			// Skip events strictly newer than our start_ts (pagination)
-			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX) {
-				continue;
-			}
-
-			// Optimization: if we have enough notifications, check if this PDU is older
-			// than the oldest one we have. If it is, then all subsequent PDUs in this
-			// room will be even older, so we can skip the rest of the room.
-			// We check this BEFORE the expensive push rule calculation.
-			if notifications.len() >= limit_usize {
-				if let Some(Reverse(oldest_kept)) = notifications.peek() {
-					if pdu.origin_server_ts <= oldest_kept.0.ts.0 {
-						break;
-					}
-				}
-			}
-
-			// Skip events sent by the user themselves
-			if pdu.sender == *sender_user {
+			// Skip events newer than start_ts or sent by our user
+			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX)
+				|| pdu.sender == *sender_user
+			{
 				continue;
 			}
 
@@ -175,18 +167,15 @@ pub(crate) async fn get_notifications_route(
 				.get_actions(sender_user, &ruleset, &power_levels, &pdu_raw, &room_id)
 				.await;
 
-			let mut notify = false;
-
-			for action in actions {
-				if matches!(action, &Action::Notify) {
-					notify = true;
-				}
-			}
-
-			if notify {
+			// Look for notifications
+			if actions
+				.iter()
+				.any(|action| matches!(action, &Action::Notify))
+			{
 				let event: Raw<AnySyncTimelineEvent> = pdu_raw;
 
-				let notification_item = NotificationItem(r::Notification {
+				// Prepare each item
+				let notification_item = NotificationItem(notif_route_v3::Notification {
 					actions: actions.to_vec(),
 					event,
 					profile_tag: None,
@@ -196,20 +185,22 @@ pub(crate) async fn get_notifications_route(
 				});
 
 				if notifications.len() >= limit_usize {
-					// We already checked if this is newer than the oldest kept above.
-					// So we just pop the oldest before pushing this one.
+					// Heap is full; evict oldest to make room for this newer one
 					notifications.pop();
 				}
 				notifications.push(Reverse(notification_item));
 			}
 		}
-		total_scanned = total_scanned.saturating_add(scanned);
-		rooms_scanned = rooms_scanned.saturating_add(1);
+		#[cfg(debug_assertions)]
+		{
+			total_scanned = total_scanned.saturating_add(scanned);
+			rooms_scanned = rooms_scanned.saturating_add(1);
+		}
 	}
 
 	// Capture heap stats before consuming
+	#[cfg(debug_assertions)]
 	let heap_count = notifications.len();
-	let heap_bytes = size_of_val(notifications.as_slice());
 
 	// Convert heap to vector and sort by timestamp descending (newest first)
 	let mut notifications: Vec<_> = notifications
@@ -224,17 +215,103 @@ pub(crate) async fn get_notifications_route(
 		None
 	};
 
-	let elapsed = started.elapsed();
-	conduwuit::debug!(
-		"built notification heap: {} items for {} in {:.3}s (used {} bytes, scanned {} PDUs in \
-		 {} rooms)",
-		heap_count,
-		sender_user,
-		elapsed.as_secs_f64(),
-		heap_bytes,
-		total_scanned,
-		rooms_scanned,
-	);
+	// TODO: remove this (and above) debug_assertions once we know things are stable
+	#[cfg(debug_assertions)]
+	{
+		let elapsed = started.elapsed();
+		debug_info!(
+			"built notification heap: {} items for {} in {:.3}s (scanned {} PDUs in {} rooms)",
+			heap_count,
+			sender_user,
+			elapsed.as_secs_f64(),
+			total_scanned,
+			rooms_scanned,
+		);
+	}
 
 	Ok(get_notifications::v3::Response { next_token, notifications })
+}
+
+/// Unit tests for notification endpoint and supporting functions
+
+#[cfg(test)]
+mod tests {
+	use std::cmp::Reverse;
+
+	use ruma::{
+		MilliSecondsSinceUnixEpoch, OwnedRoomId, UInt,
+		api::client::push::get_notifications::v3 as notif_route_v3, events::AnySyncTimelineEvent,
+		serde::Raw,
+	};
+
+	use super::NotificationItem;
+
+	fn make_item(ts_millis: u64) -> NotificationItem {
+		// Minimally viable timeline event (m.room.message)
+		let json = serde_json::json!({
+			"type": "m.room.message",
+			"content": {"msgtype": "m.text", "body": "test"},
+			"sender": "@alice:example.com",
+			"event_id": "$test",
+			"origin_server_ts": ts_millis,
+		});
+
+		let event: Raw<AnySyncTimelineEvent> =
+			Raw::from_json(serde_json::value::to_raw_value(&json).unwrap());
+
+		NotificationItem(notif_route_v3::Notification {
+			actions: Vec::new(),
+			event,
+			profile_tag: None,
+			read: false,
+			room_id: OwnedRoomId::try_from("!test:example.com").unwrap(),
+			ts: MilliSecondsSinceUnixEpoch(UInt::new(ts_millis).unwrap()),
+		})
+	}
+
+	#[test]
+	fn ordering_newer_is_greater() {
+		let older = make_item(1000);
+		let newer = make_item(2000);
+		assert!(newer > older);
+	}
+
+	#[test]
+	fn ordering_equal_timestamps() {
+		let a = make_item(5000);
+		let b = make_item(5000);
+		assert_eq!(a, b);
+	}
+
+	#[test]
+	fn min_heap_evicts_oldest() {
+		use std::collections::BinaryHeap;
+
+		let mut heap: BinaryHeap<Reverse<NotificationItem>> = BinaryHeap::new();
+		let limit = 2;
+
+		// Push three items; evict when at capacity
+		for ts in [1000, 3000, 2000] {
+			let item = make_item(ts);
+			if heap.len() >= limit {
+				heap.pop(); // evict oldest (smallest ts)
+			}
+			heap.push(Reverse(item));
+		}
+
+		// Heap should contain two newest: 2000 and 3000
+		let mut timestamps: Vec<u64> = heap
+			.into_sorted_vec()
+			.into_iter()
+			.map(|Reverse(item)| {
+				let ts: u64 = item.0.ts.0.into();
+				ts
+			})
+			.collect();
+
+		// Reversing output back to chronological
+		timestamps.reverse();
+
+		assert_eq!(timestamps, vec![2000, 3000]);
+	}
 }
