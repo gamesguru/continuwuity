@@ -70,6 +70,8 @@ impl Data {
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
 	) -> Result<()> {
+		// TODO: callers like ping_presence already read this; consider accepting
+		// optional previous state param to avoid the redundant DB round-trip
 		let last_presence = self.get_presence(user_id).await;
 		let state_changed = match last_presence {
 			| Err(_) => true,

@@ -126,6 +126,9 @@ impl Service {
 
 	/// Pings the presence of the given user in the given room, setting the
 	/// specified state.
+	// TODO: this is called on every profile update, read marker, typing notif,
+	// etc. Each call does a DB read here, then set_presence does another
+	// internally. An in-memory presence cache would eliminate most of these.
 	pub async fn ping_presence(&self, user_id: &UserId, new_state: &PresenceState) -> Result<()> {
 		const REFRESH_TIMEOUT: u64 = 60 * 1000;
 

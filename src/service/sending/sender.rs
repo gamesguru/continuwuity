@@ -572,6 +572,9 @@ impl Service {
 	}
 
 	/// Look for presence
+	// TODO: presence_since streams the whole table from DB per server, and
+	// server_sees_user hits the DB per user to check shared rooms. Consider
+	// caching which servers each user is visible to, so we skip the DB call.
 	#[tracing::instrument(
 		name = "presence",
 		level = "trace",
