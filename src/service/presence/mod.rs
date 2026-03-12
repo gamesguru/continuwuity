@@ -1,7 +1,7 @@
 mod data;
 mod presence;
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use conduwuit::{
@@ -11,7 +11,7 @@ use database::Database;
 use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
 use loole::{Receiver, Sender};
 use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 
 use self::{data::Data, presence::Presence};
 use crate::{Dep, globals, users};
@@ -71,18 +71,25 @@ impl crate::Service for Service {
 			None
 		};
 
-		// Scheduled timers to auto-demote idle users (online -> unavailable -> offline)
+		// Timers scheduled to auto-demote idle users (online -> unavailable -> offline)
 		let mut presence_timers = FuturesUnordered::new();
+		let mut scheduled_at: HashMap<OwnedUserId, Instant> = HashMap::new();
 		while !receiver.is_closed() {
 			tokio::select! {
-				Some(user_id) = presence_timers.next() => {
-					self.process_presence_timer(&user_id).await.log_err().ok();
+				Some((user_id, created_at)) = presence_timers.next() => {
+					// Only process latest timer, avoid overhead of whole list (they may have many updates in the queue)
+					if scheduled_at.get(&user_id) == Some(&created_at) {
+						scheduled_at.remove(&user_id);
+						self.process_presence_timer(&user_id).await.log_err().ok();
+					}
 				},
 				event = receiver.recv_async() => match event {
 					Err(_) => break,
 					Ok((user_id, timeout)) => {
+						let now = Instant::now();
+						scheduled_at.insert(user_id.clone(), now);
 						debug!("Adding timer {}: {user_id} timeout:{timeout:?}", presence_timers.len());
-						presence_timers.push(presence_timer(user_id, timeout));
+						presence_timers.push(presence_timer(user_id, timeout, now));
 					},
 				},
 			}
@@ -300,8 +307,14 @@ impl Service {
 	}
 }
 
-async fn presence_timer(user_id: OwnedUserId, timeout: Duration) -> OwnedUserId {
+async fn presence_timer(
+	user_id: OwnedUserId,
+	timeout: Duration,
+	created_at: Instant,
+) -> (OwnedUserId, Instant) {
+	// wait
 	sleep(timeout).await;
 
-	user_id
+	// return user and timer creation. calling loop will discard oldest
+	(user_id, created_at)
 }
