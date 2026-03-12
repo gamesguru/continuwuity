@@ -120,9 +120,13 @@ impl crate::Service for Service {
 			}
 		}
 
-		// Gracefully handle abrupt SIGINT during startup/presence reset
+		// If still running, wait for the startup task to finish; otherwise abort it
 		if let Some(task) = startup_task {
-			_ = task.await;
+			if self.services.server.running() {
+				_ = task.await;
+			} else {
+				task.abort();
+			}
 		}
 
 		Ok(())
@@ -260,7 +264,7 @@ impl Service {
 
 			trace!(%user_id, ?presence, "Resetting presence to offline");
 
-			_ = self
+			if self
 				.set_presence(
 					user_id,
 					&PresenceState::Offline,
@@ -275,9 +279,11 @@ impl Service {
 						"{user_id} has invalid presence in database and failed to reset it to \
 						 offline: {e}"
 					);
-				});
-
-			reset = reset.saturating_add(1);
+				})
+				.is_ok()
+			{
+				reset = reset.saturating_add(1);
+			}
 		}
 
 		info!("Presence reset complete: {reset} users set to offline.");

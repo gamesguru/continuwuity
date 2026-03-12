@@ -39,6 +39,9 @@ impl Data {
 
 	pub(super) async fn get_presence(&self, user_id: &UserId) -> Result<(u64, PresenceEvent)> {
 		// Check in-memory cache first to avoid redundant DB reads
+		// TODO: caching the full PresenceEvent means displayname/avatar can go
+		// stale after profile changes; consider caching only the raw Presence
+		// payload and building the event on demand, or invalidate on profile update.
 		if let Some(cached) = self.cache.read().get(user_id) {
 			return Ok(cached.clone());
 		}
@@ -134,7 +137,9 @@ impl Data {
 		self.presenceid_presence.raw_put(key, Json(presence));
 		self.userid_presenceid.raw_put(user_id, count);
 
-		// Invalidate cache so next read picks up the new data
+		// TODO: invalidating after DB write leaves a tiny stale-read window;
+		// consider invalidating before the write or updating atomically.
+		// Also consider bounding the cache size (e.g., moka LRU) for large servers.
 		self.cache.write().remove(user_id);
 
 		if let Ok((last_count, _)) = last_presence {
