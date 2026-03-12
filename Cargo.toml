@@ -395,6 +395,7 @@ features = [
     "lz4",
     "zstd",
     "bzip2",
+    "snappy",
 ]
 
 [workspace.dependencies.sha2]
