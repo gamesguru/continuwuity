@@ -58,6 +58,20 @@ impl crate::Service for Service {
 	async fn worker(self: Arc<Self>) -> Result<()> {
 		let receiver = self.timer_channel.1.clone();
 
+		// Reset all local user presence on server start
+		let startup_task = if self.services.server.config.allow_local_presence {
+			let self_ = Arc::clone(&self);
+			Some(self.services.server.runtime().spawn(async move {
+				self_.unset_all_presence().await;
+				_ = self_
+					.ping_presence(&self_.services.globals.server_user, &PresenceState::Online)
+					.await;
+			}))
+		} else {
+			None
+		};
+
+		// Scheduled timers to auto-demote idle users (online -> unavailable -> offline)
 		let mut presence_timers = FuturesUnordered::new();
 		while !receiver.is_closed() {
 			tokio::select! {
@@ -72,6 +86,11 @@ impl crate::Service for Service {
 					},
 				},
 			}
+		}
+
+		// Gracefully handle abrupt SIGINT during startup/presence reset
+		if let Some(task) = startup_task {
+			_ = task.await;
 		}
 
 		Ok(())
