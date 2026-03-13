@@ -142,6 +142,15 @@ impl Services {
 			manager
 		};
 
+		// Reset all local user presence on server start
+		if self.server.config.allow_local_presence {
+			self.presence.unset_all_presence().await;
+			_ = self
+				.presence
+				.ping_presence(&self.globals.server_user, &ruma::presence::PresenceState::Online)
+				.await;
+		}
+
 		info!("Starting service workers...");
 		manager.start().await?;
 

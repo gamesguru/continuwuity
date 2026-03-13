@@ -60,20 +60,6 @@ impl crate::Service for Service {
 	async fn worker(self: Arc<Self>) -> Result<()> {
 		let receiver = self.timer_channel.1.clone();
 
-		// Reset all local user presence on server start
-		let startup_task = if self.services.server.config.allow_local_presence {
-			let self_ = Arc::clone(&self);
-			// hold the handle (if not none) so we can gracefully close upon abrupt SIGINT
-			Some(self.services.server.runtime().spawn(async move {
-				self_.unset_all_presence().await;
-				_ = self_
-					.ping_presence(&self_.services.globals.server_user, &PresenceState::Online)
-					.await;
-			}))
-		} else {
-			None
-		};
-
 		// Timers scheduled to auto-demote idle users (online -> unavailable -> offline)
 		let mut presence_timers = FuturesUnordered::new();
 		let mut scheduled_at: HashMap<OwnedUserId, Instant> = HashMap::new();
@@ -95,15 +81,6 @@ impl crate::Service for Service {
 						presence_timers.push(presence_timer(user_id, timeout, now));
 					},
 				},
-			}
-		}
-
-		// If still running, wait for the startup task to finish; otherwise abort it
-		if let Some(task) = startup_task {
-			if self.services.server.running() {
-				_ = task.await;
-			} else {
-				task.abort();
 			}
 		}
 
@@ -146,8 +123,7 @@ impl Service {
 
 		let last_last_active_ago = match last_presence {
 			| Err(_) => 0_u64,
-			| Ok((_, ref presence)) =>
-				presence.content.last_active_ago.unwrap_or_default().into(),
+			| Ok((_, ref presence)) => presence.content.last_active_ago.map_or(0, UInt::into),
 		};
 
 		if !state_changed && last_last_active_ago < REFRESH_TIMEOUT {
@@ -156,7 +132,7 @@ impl Service {
 
 		let status_msg = match last_presence {
 			| Ok((_, ref presence)) => presence.content.status_msg.clone(),
-			| Err(_) => Some(String::new()),
+			| Err(_) => None,
 		};
 
 		let last_active_ago = UInt::new(0);
@@ -179,8 +155,16 @@ impl Service {
 			| &_ => state,
 		};
 
+		let _cork = self.services.db.cork();
 		self.db
-			.set_presence(user_id, presence_state, currently_active, last_active_ago, status_msg)
+			.set_presence(
+				user_id,
+				presence_state,
+				currently_active,
+				last_active_ago,
+				status_msg,
+				None,
+			)
 			.await?;
 
 		if (self.timeout_remote_users || self.services.globals.user_is_local(user_id))
