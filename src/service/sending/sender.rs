@@ -578,46 +578,46 @@ impl Service {
 	#[tracing::instrument(
 		name = "presence",
 		level = "trace",
-		skip(self, server_name, max_edu_count)
+		skip(self, server_name, _since, max_edu_count)
 	)]
 	async fn select_edus_presence(
 		&self,
 		server_name: &ServerName,
-		since: (u64, u64),
+		_since: (u64, u64),
 		max_edu_count: &AtomicU64,
 	) -> Option<EduBuf> {
-		let presence_since = self.services.presence.presence_since(since.0);
+		let (_, mut users) = self.services.presence.pending_updates.remove(server_name)?;
 
-		pin_mut!(presence_since);
-		let mut presence_updates = HashMap::<OwnedUserId, PresenceUpdate>::new();
-		while let Some((user_id, count, presence_bytes)) = presence_since.next().await {
-			if count > since.1 {
-				break;
-			}
+		if users.is_empty() {
+			return None;
+		}
 
-			max_edu_count.fetch_max(count, Ordering::Relaxed);
-			if !self.services.globals.user_is_local(user_id) {
-				continue;
-			}
-
-			if !self
-				.services
-				.state_cache
-				.server_sees_user(server_name, user_id)
-				.await
-			{
-				continue;
-			}
-
-			let Ok(presence_event) = self
+		let mut presence_updates = Vec::with_capacity(users.len().min(SELECT_PRESENCE_LIMIT));
+		let mut attempted_users = Vec::with_capacity(SELECT_PRESENCE_LIMIT);
+		let mut max_presence_count = 0;
+		for user_id in users.iter().cloned().take(SELECT_PRESENCE_LIMIT) {
+			attempted_users.push(user_id.clone());
+			let Ok((presence_count, presence_event)) = self
 				.services
 				.presence
-				.from_json_bytes_to_event(presence_bytes, user_id)
+				.get_presence_with_count(&user_id)
 				.await
 				.log_err()
 			else {
 				continue;
 			};
+
+			// Send-time visibility check. Only send to servers that still see the user.
+			if !self
+				.services
+				.state_cache
+				.server_sees_user(server_name, &user_id)
+				.await
+			{
+				continue;
+			}
+
+			max_presence_count = max_presence_count.max(presence_count);
 
 			let update = PresenceUpdate {
 				user_id: user_id.into(),
@@ -630,19 +630,40 @@ impl Service {
 					.unwrap_or_else(|| uint!(0)),
 			};
 
-			presence_updates.insert(user_id.into(), update);
+			presence_updates.push(update);
 			if presence_updates.len() >= SELECT_PRESENCE_LIMIT {
 				break;
 			}
+		}
+
+		// Update the global EDU cursor so that if we only send presence updates,
+		// the cursor still moves forward. This prevents the server from repeatedly
+		// scanning historical events for other EDU types (like typing or receipts).
+		if max_presence_count > 0 {
+			max_edu_count.fetch_max(max_presence_count, Ordering::Relaxed);
+		}
+
+		// remove only the users we attempted to process from this batch
+		if !attempted_users.is_empty() {
+			let attempted_users_set: HashSet<_> = attempted_users.iter().collect();
+			users.retain(|user_id| !attempted_users_set.contains(user_id));
+		}
+
+		// put any remaining users in line for next batch
+		if !users.is_empty() {
+			self.services
+				.presence
+				.pending_updates
+				.entry(server_name.to_owned())
+				.or_default()
+				.extend(users);
 		}
 
 		if presence_updates.is_empty() {
 			return None;
 		}
 
-		let presence_content = Edu::Presence(PresenceContent {
-			push: presence_updates.into_values().collect(),
-		});
+		let presence_content = Edu::Presence(PresenceContent { push: presence_updates });
 
 		let mut buf = EduBuf::new();
 		serde_json::to_writer(&mut buf, &presence_content)

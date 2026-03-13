@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use conduwuit::{
 	Result, debug_warn, utils,
@@ -34,14 +34,11 @@ impl Data {
 		)
 		.expect("valid cache size");
 
-		let cache_tti = Duration::from_secs(config.presence_cache_tti);
-
 		Self {
 			presenceid_presence: args.db["presenceid_presence"].clone(),
 			userid_presenceid: args.db["userid_presenceid"].clone(),
 			cache: MokaCache::builder()
 				.max_capacity(cache_capacity as u64)
-				.time_to_idle(cache_tti)
 				.build(),
 			locks: MutexMap::new(),
 			services: Services {
@@ -51,8 +48,8 @@ impl Data {
 		}
 	}
 
-	/// Returns the raw cached presence (without profile data), fetching from
-	/// DB and populating the cache if needed.
+	/// Returns raw cached presence (w/o profile data), fetching from
+	/// DB and populating cache if necessary.
 	pub(super) async fn get_presence_raw(&self, user_id: &UserId) -> Result<(u64, Presence)> {
 		if let Some(cached) = self.cache.get(&user_id.to_owned()) {
 			return Ok(cached);
@@ -74,9 +71,7 @@ impl Data {
 		Ok((count, presence))
 	}
 
-	/// Returns the full presence event for a user, building the
-	/// `PresenceEvent` (including profile data) on demand from the cached raw
-	/// presence payload.
+	/// Returns the full `PresenceEvent` (including profile data from aux cache)
 	pub(super) async fn get_presence(&self, user_id: &UserId) -> Result<(u64, PresenceEvent)> {
 		let (count, presence) = self.get_presence_raw(user_id).await?;
 		let event = presence
