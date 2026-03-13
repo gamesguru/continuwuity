@@ -578,12 +578,12 @@ impl Service {
 	#[tracing::instrument(
 		name = "presence",
 		level = "trace",
-		skip(self, server_name, _since, max_edu_count)
+		skip(self, server_name, since, max_edu_count)
 	)]
 	async fn select_edus_presence(
 		&self,
 		server_name: &ServerName,
-		_since: (u64, u64),
+		since: (u64, u64),
 		max_edu_count: &AtomicU64,
 	) -> Option<EduBuf> {
 		let (_, mut users) = self.services.presence.pending_updates.remove(server_name)?;
@@ -596,7 +596,6 @@ impl Service {
 		let mut attempted_users = Vec::with_capacity(SELECT_PRESENCE_LIMIT);
 		let mut max_presence_count = 0;
 		for user_id in users.iter().cloned().take(SELECT_PRESENCE_LIMIT) {
-			attempted_users.push(user_id.clone());
 			let Ok((presence_count, presence_event)) = self
 				.services
 				.presence
@@ -604,8 +603,18 @@ impl Service {
 				.await
 				.log_err()
 			else {
+				attempted_users.push(user_id.clone());
 				continue;
 			};
+
+			// Don't advance the EDU cursor past the snapshot upper bound.
+			// Users with presence_count beyond this window are left in the
+			// pending queue to be retried in a later transaction.
+			if presence_count > since.1 {
+				continue;
+			}
+
+			attempted_users.push(user_id.clone());
 
 			// Send-time visibility check. Only send to servers that still see the user.
 			if !self
