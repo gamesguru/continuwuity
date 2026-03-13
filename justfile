@@ -15,7 +15,7 @@ init-prebuild:
     @echo "Done. You can now run prebuild commands."
 
 # Install all pre-built C/C++ dependencies
-install-all: install-rocksdb install-jemalloc install-zstd install-lz4
+install-all: install-rocksdb install-jemalloc install-zstd install-lz4 install-snappy
 
 # Pre-build RocksDB shared and statically
 prebuild-rocksdb:
@@ -131,6 +131,40 @@ prebuild-lz4:
 install-lz4:
     @echo "Installing lz4 to /usr/local... (Requires sudo)"
     cd /usr/local/build/lz4 && sudo make install PREFIX=/usr/local
+    sudo ldconfig
+
+# Pre-build snappy
+prebuild-snappy:
+    #!/usr/bin/env bash
+    set -e
+    TAG="1.2.1"
+    mkdir -p /usr/local/build
+    if [ -d "/usr/local/build/snappy" ]; then
+        CURRENT=$(cd /usr/local/build/snappy && git describe --tags --exact-match 2>/dev/null || echo "none")
+        if [ "$CURRENT" != "$TAG" ]; then
+            echo "snappy version mismatch. Please manually rm -rf /usr/local/build/snappy to rebuild."
+            exit 1
+        fi
+    fi
+    if [ ! -d "/usr/local/build/snappy" ]; then
+        echo "Cloning snappy $TAG..."
+        git clone --depth 1 --branch $TAG https://github.com/google/snappy.git /usr/local/build/snappy
+    fi
+    echo "Building snappy..."
+    cd /usr/local/build/snappy
+    mkdir -p build_static && cd build_static
+    cmake -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    make -j$(nproc)
+    cd ..
+    mkdir -p build_shared && cd build_shared
+    cmake -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    make -j$(nproc)
+
+# Install snappy globally (requires sudo)
+install-snappy:
+    @echo "Installing snappy to /usr/local... (Requires sudo)"
+    cd /usr/local/build/snappy/build_static && sudo make install
+    cd /usr/local/build/snappy/build_shared && sudo make install
     sudo ldconfig
 
 # --- CPU Profiling ---
