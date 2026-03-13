@@ -266,6 +266,19 @@ pub struct Config {
 	#[serde(default = "default_roomid_spacehierarchy_cache_capacity")]
 	pub roomid_spacehierarchy_cache_capacity: u32,
 
+	/// Maximum entries stored in the presence RAM cache.
+	///
+	/// default: varies by system
+	#[serde(default = "default_presence_cache_capacity")]
+	pub presence_cache_capacity: u32,
+
+	/// Time in seconds for entries in the presence cache to live after being
+	/// last accessed.
+	///
+	/// default: 900 (15 minutes)
+	#[serde(default = "default_presence_cache_tti")]
+	pub presence_cache_tti: u64,
+
 	/// Maximum entries stored in DNS memory-cache. The size of an entry may
 	/// vary so please take care if raising this value excessively. Only
 	/// decrease this when using an external DNS cache. Please note that
@@ -2564,6 +2577,12 @@ fn default_servernameevent_data_cache_capacity() -> u32 {
 fn default_stateinfo_cache_capacity() -> u32 { parallelism_scaled_u32(100) }
 
 fn default_roomid_spacehierarchy_cache_capacity() -> u32 { parallelism_scaled_u32(1000) }
+
+fn default_presence_cache_capacity() -> u32 {
+	parallelism_scaled_u32(8_192).saturating_add(8_192)
+}
+
+fn default_presence_cache_tti() -> u64 { 60 * 15 }
 
 fn default_dns_cache_entries() -> u32 { 32768 }
 

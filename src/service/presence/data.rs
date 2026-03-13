@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use conduwuit::{
-	Result, debug_warn, utils,
-	utils::{ReadyExt, stream::TryIgnore},
+	Result, SyncMutex, debug_warn, utils,
+	utils::{ReadyExt, mutex_map::MutexMap, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
 use futures::Stream;
-use ruma::{UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
+use lru_cache::LruCache;
+use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
 
 use super::Presence;
 use crate::{Dep, globals, users};
@@ -14,6 +15,8 @@ use crate::{Dep, globals, users};
 pub(crate) struct Data {
 	presenceid_presence: Arc<Map>,
 	userid_presenceid: Arc<Map>,
+	cache: SyncMutex<LruCache<OwnedUserId, (u64, Presence)>>,
+	locks: MutexMap<OwnedUserId, ()>,
 	services: Services,
 }
 
@@ -24,10 +27,18 @@ struct Services {
 
 impl Data {
 	pub(super) fn new(args: &crate::Args<'_>) -> Self {
-		let db = &args.db;
+		let config = &args.server.config;
+		let cache_capacity = config.presence_cache_capacity;
+		let cache_capacity = utils::math::usize_from_f64(
+			f64::from(cache_capacity) * config.cache_capacity_modifier,
+		)
+		.expect("valid cache size");
+
 		Self {
-			presenceid_presence: db["presenceid_presence"].clone(),
-			userid_presenceid: db["userid_presenceid"].clone(),
+			presenceid_presence: args.db["presenceid_presence"].clone(),
+			userid_presenceid: args.db["userid_presenceid"].clone(),
+			cache: SyncMutex::new(LruCache::new(cache_capacity)),
+			locks: MutexMap::new(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
@@ -35,7 +46,13 @@ impl Data {
 		}
 	}
 
-	pub(super) async fn get_presence(&self, user_id: &UserId) -> Result<(u64, PresenceEvent)> {
+	/// Returns the raw cached presence (without profile data), fetching from
+	/// DB and populating the cache if needed.
+	pub(super) async fn get_presence_raw(&self, user_id: &UserId) -> Result<(u64, Presence)> {
+		if let Some(cached) = self.cache.lock().get_mut(user_id) {
+			return Ok(cached.clone());
+		}
+
 		let count = self
 			.userid_presenceid
 			.get(user_id)
@@ -44,7 +61,21 @@ impl Data {
 
 		let key = presenceid_key(count, user_id);
 		let bytes = self.presenceid_presence.get(&key).await?;
-		let event = Presence::from_json_bytes(&bytes)?
+		let presence = Presence::from_json_bytes(&bytes)?;
+
+		self.cache
+			.lock()
+			.insert(user_id.to_owned(), (count, presence.clone()));
+
+		Ok((count, presence))
+	}
+
+	/// Returns the full presence event for a user, building the
+	/// `PresenceEvent` (including profile data) on demand from the cached raw
+	/// presence payload.
+	pub(super) async fn get_presence(&self, user_id: &UserId) -> Result<(u64, PresenceEvent)> {
+		let (count, presence) = self.get_presence_raw(user_id).await?;
+		let event = presence
 			.to_presence_event(user_id, &self.services.users)
 			.await;
 
@@ -58,22 +89,20 @@ impl Data {
 		currently_active: Option<bool>,
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
+		_previous: Option<(u64, Presence)>,
 	) -> Result<()> {
-		let last_presence = self.get_presence(user_id).await;
+		let _lock = self.locks.lock(user_id).await;
+
+		let last_presence = self.get_presence_raw(user_id).await;
 		let state_changed = match last_presence {
 			| Err(_) => true,
-			| Ok(ref presence) => presence.1.content.presence != *presence_state,
+			| Ok(ref presence) => presence.1.state != *presence_state,
 		};
 
 		let status_msg_changed = match last_presence {
 			| Err(_) => true,
 			| Ok(ref last_presence) => {
-				let old_msg = last_presence
-					.1
-					.content
-					.status_msg
-					.clone()
-					.unwrap_or_default();
+				let old_msg = last_presence.1.status_msg.clone().unwrap_or_default();
 
 				let new_msg = status_msg.clone().unwrap_or_default();
 
@@ -84,8 +113,7 @@ impl Data {
 		let now = utils::millis_since_unix_epoch();
 		let last_last_active_ts = match last_presence {
 			| Err(_) => 0,
-			| Ok((_, ref presence)) =>
-				now.saturating_sub(presence.content.last_active_ago.unwrap_or_default().into()),
+			| Ok((_, ref presence)) => presence.last_active_ts,
 		};
 
 		let last_active_ts = match last_active_ago {
@@ -118,8 +146,12 @@ impl Data {
 		let count = self.services.globals.next_count()?;
 		let key = presenceid_key(count, user_id);
 
-		self.presenceid_presence.raw_put(key, Json(presence));
+		self.presenceid_presence.raw_put(key, Json(&presence));
 		self.userid_presenceid.raw_put(user_id, count);
+
+		self.cache
+			.lock()
+			.insert(user_id.to_owned(), (count, presence));
 
 		if let Ok((last_count, _)) = last_presence {
 			let key = presenceid_key(last_count, user_id);
@@ -130,6 +162,9 @@ impl Data {
 	}
 
 	pub(super) async fn remove_presence(&self, user_id: &UserId) {
+		let _lock = self.locks.lock(user_id).await;
+		self.cache.lock().remove(user_id);
+
 		let Ok(count) = self
 			.userid_presenceid
 			.get(user_id)
@@ -143,6 +178,8 @@ impl Data {
 		self.presenceid_presence.remove(&key);
 		self.userid_presenceid.remove(user_id);
 	}
+
+	pub(super) fn clear_cache(&self) { self.cache.lock().clear(); }
 
 	#[inline]
 	pub(super) fn presence_since(

@@ -202,6 +202,15 @@
 #
 #roomid_spacehierarchy_cache_capacity = varies by system
 
+# Maximum entries stored in the presence RAM cache.
+#
+#presence_cache_capacity = varies by system
+
+# Time in seconds for entries in the presence cache to live after being
+# last accessed.
+#
+#presence_cache_tti = 900 (15 minutes)
+
 # Maximum entries stored in DNS memory-cache. The size of an entry may
 # vary so please take care if raising this value excessively. Only
 # decrease this when using an external DNS cache. Please note that
