@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+# set -x  # for debugging
 
 # The root path where complement is available.
-COMPLEMENT_SRC="${COMPLEMENT_SRC:-$1}"
+COMPLEMENT_SRC="${COMPLEMENT_SRC:-"$1"}"
 
 # A `.jsonl` file to write test logs to
-LOG_FILE="${2:-${LOG_FILE:-tests/test_results/complement/test_logs.jsonl}}"
+LOG_FILE="${2:-"${LOG_FILE:-tests/test_results/complement/test_logs.jsonl}"}"
 
 # A `.jsonl` file to write test results to
-RESULTS_FILE="${3:-${RESULTS_FILE:-tests/test_results/complement/test_results.jsonl}}"
+RESULTS_FILE="${3:-"${RESULTS_FILE:-tests/test_results/complement/test_results.jsonl}"}"
 
 # The base docker image to use for complement tests
 # You can build the default with `docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .`
@@ -17,7 +18,9 @@ RESULTS_FILE="${3:-${RESULTS_FILE:-tests/test_results/complement/test_results.js
 COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
-SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
+# This can be overridden by environment variable
+DEFAULT_SKIPPED_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*"|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
+SKIPPED_COMPLEMENT_TESTS="${SKIPPED_COMPLEMENT_TESTS:-"$DEFAULT_SKIPPED_TESTS"}"
 
 # A regex for tests to run.
 RUN_TESTS="${COMPLEMENT_RUN:-.}"
@@ -35,6 +38,19 @@ fi
 
 toplevel="$(git rev-parse --show-toplevel)"
 pushd "$toplevel" > /dev/null
+
+# Cleanup leftover Complement containers and images
+cleanup_complement_containers() {
+    local containers
+    containers=$(docker ps -a --filter "name=complement_" -q)
+    if [ -n "$containers" ]; then
+        echo "Cleaning up leftover Complement containers..."
+        echo "$containers" | xargs -r docker rm -f
+    fi
+
+    # TODO: perhaps also prune images here?
+}
+trap cleanup_complement_containers EXIT
 
 
 # Ensure result files exist even if tests fail to start
@@ -62,7 +78,7 @@ fi
 
 # Common flags for both test runners
 TEST_FLAGS=(
-    -tags "conduwuit_blacklist"
+    # -tags "conduwuit_blacklist"
     -skip "$SKIPPED_COMPLEMENT_TESTS"
     -run "$RUN_TESTS"
     -timeout 1h
@@ -93,12 +109,7 @@ fi
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
 # This ensures we have a consistent results file for the CI parser.
 if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
-    jq -s -c 'sort_by(.Test)[]' < "$LOG_FILE" | jq -c '
-        select(
-            (.Action == "pass" or .Action == "fail" or .Action == "skip")
-            and .Test != null
-        ) | {Action: .Action, Test: .Test}
-        ' > "$RESULTS_FILE"
+    jq -s -c 'sort_by(.Test)[]' < "$LOG_FILE" | jq -c 'select((.Action == "pass" or .Action == "fail" or .Action == "skip") and .Test != null) | {Action: .Action, Test: .Test}' > "$RESULTS_FILE"
     echo "processed $(wc -l < "$RESULTS_FILE") results into $RESULTS_FILE"
 else
     echo "Warning: $LOG_FILE is missing or empty. No results processed."

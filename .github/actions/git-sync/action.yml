@@ -1,0 +1,81 @@
+---
+name: "Git Sync"
+description: "Syncs branches between remotes via merge or force push"
+inputs:
+  source_branch:
+    description: "Source branch name"
+    required: true
+  source_remote:
+    description: "Remote to fetch from"
+    required: true
+  dest_remote:
+    description: "Remote to push to"
+    required: true
+  dest_branch:
+    description: "Target branch name (defaults to source_branch)"
+    required: false
+  mode:
+    description: "Sync mode: merge or force"
+    default: "merge"
+  allow_unrelated:
+    description: "Allow unrelated histories during merge"
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Sync
+      shell: bash
+      run: |
+        BRANCH="${{ inputs.source_branch }}"
+        SRC="${{ inputs.source_remote }}"
+        DST="${{ inputs.dest_remote }}"
+        DST_BRANCH="${{ inputs.dest_branch }}"
+        [ -z "$DST_BRANCH" ] && DST_BRANCH="$BRANCH"
+        MODE="${{ inputs.mode }}"
+
+        echo "::group::Sync $BRANCH to $DST/$DST_BRANCH ($MODE)"
+
+        echo "Fetching $BRANCH from $SRC..."
+        if git fetch "$SRC" "$BRANCH"; then
+          if [[ "$MODE" == "force" ]]; then
+            echo "Updating $DST_BRANCH branch (force)..."
+            git checkout -B "$DST_BRANCH" FETCH_HEAD
+            echo "Pushing to $DST..."
+            git push "$DST" "$DST_BRANCH" --force --no-verify
+          else
+            echo "Fetching $DST_BRANCH from $DST..."
+            git fetch "$DST" "$DST_BRANCH" || true
+
+            if git show-ref --verify --quiet "refs/remotes/$DST/$DST_BRANCH"; then
+              echo "Checking out $DST_BRANCH..."
+              git checkout -B "$DST_BRANCH" "$DST/$DST_BRANCH"
+              echo "Merging..."
+
+              ARGS="--no-edit"
+              if [[ "${{ inputs.allow_unrelated }}" == "true" ]]; then
+                ARGS="$ARGS --allow-unrelated-histories"
+              fi
+
+              MERGE_OUTPUT=$(git merge FETCH_HEAD $ARGS)
+              echo "$MERGE_OUTPUT"
+
+              if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
+                echo "Pushing to $DST..."
+                git push "$DST" "$DST_BRANCH" --no-verify
+              else
+                echo "No changes to push."
+              fi
+            else
+              echo "Creating $DST_BRANCH from $SRC/$BRANCH..."
+              git checkout -b "$DST_BRANCH" FETCH_HEAD
+              git push "$DST" "$DST_BRANCH" --no-verify
+            fi
+          fi
+          echo "Done."
+        else
+          echo "Failed to fetch $BRANCH from $SRC."
+          exit 1
+        fi
+
+        echo "::endgroup::"

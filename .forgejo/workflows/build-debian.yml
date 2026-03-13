@@ -143,9 +143,9 @@ jobs:
 
           dpkg -s continuwuity
 
-          [ -f /usr/bin/conduwuit ] && echo "✅ Binary installed successfully"
-          [ -f /usr/lib/systemd/system/conduwuit.service ] && echo "✅ Systemd service installed"
-          [ -f /etc/conduwuit/conduwuit.toml ] && echo "✅ Config file installed"
+          [ -f /usr/bin/conduwuit ] && echo "✓ Binary installed successfully"
+          [ -f /usr/lib/systemd/system/conduwuit.service ] && echo "✓ Systemd service installed"
+          [ -f /etc/conduwuit/conduwuit.toml ] && echo "✓ Config file installed"
 
       - name: Upload deb artifact
         uses: forgejo/upload-artifact@v4

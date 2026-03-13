@@ -139,6 +139,8 @@ impl Service {
 
 		let last_active_ago = UInt::new(0);
 		let currently_active = *new_state == PresenceState::Online;
+		// TODO: As above, this makes a dumb, unconditional DB call. Please implement
+		// a basic LRU.
 		self.set_presence(user_id, new_state, Some(currently_active), last_active_ago, status_msg)
 			.await
 	}

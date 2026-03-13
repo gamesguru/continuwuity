@@ -1,8 +1,12 @@
+---
 name: "Update Results Ledger"
-description: "Parses test results, computes binary SHA, and updates the _metadata/results branch"
+description: "Appends test results to runs.jsonl and updates badge-main.json on the orphan results branch"
 inputs:
+  target_branch:
+    description: "Orphan branch to store results on"
+    default: "_metadata/badges"
   github_token:
-    description: "Token for pushing to the repository"
+    description: "Token for authenticated push (GITHUB_TOKEN or equivalent)"
     required: true
   pass_count:
     required: true
@@ -10,8 +14,6 @@ inputs:
     required: true
   skip_count:
     required: true
-  results_file:
-    default: "tests/test_results/complement/test_results.jsonl"
   version_string:
     required: true
   actor:
@@ -19,15 +21,18 @@ inputs:
   binary_path:
     description: "Path to the tested binary"
     default: "target/debug/conduwuit"
+  features:
+    description: "Space-separated list of cargo features used for this build"
+    default: ""
 
 runs:
   using: "composite"
   steps:
-    - name: Process and push results
+    - name: Append results and update badge
       shell: bash
       run: |
-        JSONL="${{ inputs.results_file }}"
-        if [ ! -f "$JSONL" ]; then echo "⚠️ No test results found."; exit 0; fi
+        set -euo pipefail
+        set -x  # echo commands for debugging
 
         PASS="${{ inputs.pass_count }}"
         FAIL="${{ inputs.fail_count }}"
@@ -35,96 +40,120 @@ runs:
         VERSION_STRING="${{ inputs.version_string }}"
         ACTOR="${{ inputs.actor }}"
         BINARY_PATH="${{ inputs.binary_path }}"
+        FEATURES="${{ inputs.features }}"
 
-        # Compute SHA256
-        if [ -f "$BINARY_PATH" ]; then
-          BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
-        else
-          BIN_SHA="unknown"
-        fi
-
-        PROVIDER=$([ -n "$FORGEJO_URL" ] && echo "forgejo" || echo "github")
-        OS_INFO=$(lsb_release -ds 2>/dev/null || echo "Unknown OS")
-        HOST_INFO="$OS_INFO ($(hostname))"
-
-        BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} || echo "main")
-        if [ -z "$BRANCH_NAME" ]; then BRANCH_NAME="main"; fi
-        COMMIT_HASH="${GITHUB_SHA:-unknown}"
+        # Extract commit hash from version string, fall back to env
+        BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
+        COMMIT_HASH="${BIN_VER_HASH:-${GITHUB_SHA:-unknown}}"
         RUN_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
         RUN_ID="${COMMIT_HASH}-${RUN_DATE}"
+        PROVIDER=$([ -n "${FORGEJO_URL:-}" ] && echo "forgejo" || echo "github")
+        BRANCH_NAME=$(echo "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-main}}" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+        [ -z "$BRANCH_NAME" ] && BRANCH_NAME="main"
 
-        # Copy the test file to a safe place
-        cp "$JSONL" /tmp/current_run.jsonl
-        # Copy helper scripts
-        cp .forgejo/actions/update-results-ledger/tables.sql /tmp/tables.sql
-        cp .forgejo/actions/update-results-ledger/import.py /tmp/import.py
-        cp .forgejo/actions/update-results-ledger/Makefile /tmp/Makefile
+        # SHA256 of the tested binary
+        BIN_SHA="unknown"
+        [ -f "$BINARY_PATH" ] && BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
+
+        # --- Work on the orphan branch via worktree ---
+        LEDGER_DIR="/tmp/ledger-$$"
 
         git config --global user.name "CI Runner"
         git config --global user.email "runner@ci.local"
 
-        # Set URL to HTTPS so we don't hang on SSH prompts in the runner
-        git remote set-url origin https://${{ inputs.github_token }}@forgejo.ellis.link/gamesguru/continuwuity.git || true
-
-        git fetch origin _metadata/results || true
-        git checkout _metadata/results
-
-        # Restore helpers into the branch
-        cp /tmp/tables.sql .
-        cp /tmp/import.py .
-        cp /tmp/Makefile .
-
-        # Ensure we never commit the DB
-        echo "ledger.db" >> .gitignore
-
-        if [ ! -f runs.jsonl ]; then touch runs.jsonl; fi
-        if [ ! -f run_details.jsonl ]; then touch run_details.jsonl; fi
-
-        # Append new run info to JSONL
-        jq -n -c \
-          --arg run_id "$RUN_ID" --arg run_date "$RUN_DATE" --arg commit_hash "$COMMIT_HASH" \
-          --arg branch "$BRANCH_NAME" --arg author_name "$ACTOR" --arg provider "$PROVIDER" \
-          --arg host_info "$HOST_INFO" --arg binary_sha256 "$BIN_SHA" \
-          --arg version_string "$VERSION_STRING" \
-          --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" \
-          '{run_id: $run_id, run_date: $run_date, commit_hash: $commit_hash, branch: $branch, author_name: $author_name, provider: $provider, host_info: $host_info, binary_sha256: $binary_sha256, version_string: $version_string, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}' >> runs.jsonl
-
-        # Append all test events
-        jq -c --arg run_id "$RUN_ID" '. + {run_id: $run_id}' /tmp/current_run.jsonl >> run_details.jsonl
-
-        # Verify SQL import works
-        make import
-
-        # Generate badges
-        if [ "$FAIL" -gt 0 ]; then COLOR="red"; elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"; else COLOR="green"; fi
-        mkdir -p badges
-        jq -n --arg pass "$PASS" --arg skip "$SKIP" --arg fail "$FAIL" --arg color "$COLOR" \
-          '{schemaVersion: 1, label: "Complement Tests", message: "\($pass) pass, \($skip) skip, \($fail) fail", color: $color}' > "badges/badge-${BRANCH_NAME}.json"
-
-        git add .gitignore tables.sql Makefile import.py runs.jsonl run_details.jsonl badges/
-        if git commit -m "Add test results for ${COMMIT_HASH} [skip ci]"; then
-          # Retry loop for concurrent pushes
-          max_retries=5
-          count=0
-          while [ $count -lt $max_retries ]; do
-            if git push origin HEAD:_metadata/results; then
-              echo "Successfully pushed ledger updates."
-              break
-            else
-              echo "Push failed due to remote changes. Pulling with rebase and retrying..."
-              # Create a tracking branch so pull works correctly
-              git branch -f _metadata/results HEAD
-              git checkout _metadata/results
-              # Pull remote changes securely
-              git pull --rebase origin _metadata/results
-              count=$((count + 1))
-            fi
-          done
-
-          if [ $count -eq $max_retries ]; then
-            echo "Failed to push ledger updates after $max_retries attempts due to heavy concurrency."
-            exit 1
-          fi
-        else
-          echo "Nothing to commit."
+        # Configure token-based auth for push
+        REPO_URL=$(git remote get-url origin)
+        if [[ "$REPO_URL" == https://* ]]; then
+          # Insert token into HTTPS URL for authenticated push
+          AUTHED_URL=$(echo "$REPO_URL" | sed "s|https://|https://token:${{ inputs.github_token }}@|")
+          git remote set-url origin "$AUTHED_URL"
         fi
+
+        TARGET_BRANCH="${{ inputs.target_branch }}"
+
+        # Fetch the orphan branch using the full refspec
+        if git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
+          git worktree add "$LEDGER_DIR" "origin/${TARGET_BRANCH}"
+        else
+          # Branch doesn't exist yet — create it as a new orphan
+          git worktree add --detach "$LEDGER_DIR"
+          cd "$LEDGER_DIR"
+          git checkout --orphan "${TARGET_BRANCH}"
+          git rm -rf . 2>/dev/null || true
+          echo "ledger.db" > .gitignore
+          cd -
+        fi
+
+        cd "$LEDGER_DIR"
+
+        # Ensure files exist
+        touch runs.jsonl
+
+        # Append run summary
+        jq -n -c \
+          --arg run_id "$RUN_ID" \
+          --arg run_date "$RUN_DATE" \
+          --arg commit_hash "$COMMIT_HASH" \
+          --arg branch "$BRANCH_NAME" \
+          --arg author_name "$ACTOR" \
+          --arg provider "$PROVIDER" \
+          --arg binary_sha256 "$BIN_SHA" \
+          --arg version_string "$VERSION_STRING" \
+          --arg features "$FEATURES" \
+          --arg pass "$PASS" \
+          --arg skip "$SKIP" \
+          --arg fail "$FAIL" \
+          '{
+            run_id: $run_id,
+            run_date: $run_date,
+            commit_hash: $commit_hash,
+            branch: $branch,
+            author_name: $author_name,
+            provider: $provider,
+            version_string: $version_string,
+            features: $features,
+            binary_sha256: $binary_sha256,
+            passed_count: ($pass|tonumber),
+            skipped_count: ($skip|tonumber),
+            failed_count: ($fail|tonumber)
+          }' >> runs.jsonl
+
+        # Generate badge JSON (shields.io endpoint schema)
+        if [ "$FAIL" -gt 0 ]; then COLOR="red"
+        elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"
+        else COLOR="green"
+        fi
+
+        # shields.io compatible schema
+        jq -n \
+          --arg pass "$PASS" \
+          --arg skip "$SKIP" \
+          --arg fail "$FAIL" \
+          --arg color "$COLOR" \
+          '{
+            schemaVersion: 1,
+            label: "Complement Tests",
+            message: "\($pass) pass, \($skip) skip, \($fail) fail",
+            color: $color
+          }' > badge-main.json
+
+        # Commit and push, retrying
+        git add runs.jsonl badge-main.json
+        if git commit -m "Results for ${COMMIT_HASH} (${PROVIDER}) [skip ci]"; then
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          until git push origin "HEAD:refs/heads/${TARGET_BRANCH}"; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
+              echo "Failed to push after $MAX_RETRIES attempts."
+              exit 1
+            fi
+            echo "Push failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+            sleep $(( (RANDOM % 5) + 1 ))
+            git pull --rebase origin "refs/heads/${TARGET_BRANCH}"
+          done
+        fi
+
+        # Cleanup
+        cd -
+        git worktree remove "$LEDGER_DIR" --force 2>/dev/null || true

@@ -72,7 +72,7 @@ pub(super) async fn check(&self) -> Result {
 			.ok()
 			.map(|pdu| pdu.kind.to_string());
 
-		return Err!(Request(Forbidden(info!(
+		return Err!(Request(Forbidden(warn!(
 			%self.origin,
 			%self.room_id,
 			%event_id,

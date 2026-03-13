@@ -445,8 +445,7 @@ impl super::Service {
 					Ok(())
 				},
 				| ProtoErrorKind::Timeout => {
-					debug!(%host, %qtype, "DNS timeout: {e}");
-					Err!(debug!(%host, %qtype, "DNS timeout: {e}"))
+					Err!(warn!(%host, %qtype, "DNS timeout: {e}"))
 				},
 				| ProtoErrorKind::NoConnections => {
 					error!(

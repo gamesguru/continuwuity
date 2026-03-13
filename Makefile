@@ -13,12 +13,22 @@ ifneq (,$(wildcard ./.env))
 endif
 
 # Example .env:
-# #!/bin/bash
+#!/bin/bash
+# export ROCKSDB_INCLUDE_DIR=/usr/local/include
+# export ROCKSDB_LIB_DIR=/usr/local/lib
+# export LD_LIBRARY_PATH=${ROCKSDB_LIB_DIR}:${LD_LIBRARY_PATH}
+# #export CPU_TARGET=skylake
 # export OS_VERSION=ubuntu-24.04
-# export GH_REPO=gamesguru/continuwuity
+# export GH_REPO=.../continuwuity
 # export SKIP_CONFIRM=1
 # export PROFILE=dev-quick
-# export RUSTFLAGS="-C target-cpu=native"
+# # export PROFILE=release-high-perf
+# # export RUSTFLAGS="-C target-cpu=native"
+# # export RUSTFLAGS="-C target-cpu=skylake"
+# export COMPLEMENT_DIR="/.../complement-suite"
+# export CONDUWUIT_CONFIG="/<...>/etc/conduwuit/conduwuit.toml"
+# export CONDUWUIT_DATABASE_PATH=/var/lib/conduwuit-v18
+
 
 
 # [CONFIG] Auto-discover vars defined in Makefiles (not env-inherited)
@@ -57,7 +67,7 @@ doctor: ##H Output version info for required tools
 	git fetch --all --tags --dry-run
 
 .PHONY: cpu-info
-cpu-info: ##H Print CPU info relevant to target-cpu=native
+cpu-info: ##H Print CPU info relevant to native target-cpu
 	@echo "=== CPU Model ==="
 	@grep -m1 'model name' /proc/cpuinfo 2>/dev/null || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown"
 	@echo "=== Architecture ==="
@@ -66,53 +76,39 @@ cpu-info: ##H Print CPU info relevant to target-cpu=native
 	@rustc -vV | grep host
 	@echo "=== rustc Native CPU ==="
 	@rustc --print=cfg -C target-cpu=native 2>/dev/null | grep target_feature | sort
-	@echo "=== CPU Flags (from /proc/cpuinfo) ==="
+	@echo "=== CPU Flags [from /proc/cpuinfo] ==="
 	@grep -m1 'flags' /proc/cpuinfo 2>/dev/null | tr ' ' '\n' | grep -E 'avx|sse|aes|bmi|fma|popcnt|lzcnt|sha|pclmul' | sort
 
 .PHONY: vars
 vars: ##H Print debug info
 	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
 	@echo "... computing version."
-	@printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$$(cargo run -p conduwuit_build_metadata --bin conduwuit-version --quiet)"
+	@ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
+		"$$(cargo run -p conduwuit_build_metadata --bin version --quiet)"
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Development commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.PHONY: cargo/lock-init
-cargo/lock-init:	##H Init or fully upgrade the lockfile (wipes it)
-	cargo generate-lockfile
-	@echo "OK."
-
-.PHONY: cargo/lock-update
-cargo/lock-update: ##H Update Cargo.lock minimally to match Cargo.toml
-	@echo "Updating Cargo.lock..."
-	cargo metadata --format-version 1 --no-deps > /dev/null
-	@echo "OK."
-
-.PHONY: cargo/sync
-cargo/sync: ##H Sync Cargo.lock with origin/main and refresh minimally
-	@echo "Synchronizing Cargo.lock..."
-	git restore --source origin/main Cargo.lock
-	cargo metadata --format-version 1 --no-deps > /dev/null
-	@echo "OK."
-
-.PHONY: profiles
-profiles: ##H List available cargo profiles
-	# NOTE: not authoritative — see Cargo.toml for definitive profiles.
-	@grep "^\[profile\." Cargo.toml \
-		| sed 's/\[profile\.//;s/\]//' \
-		| grep -v 'package' \
-		| grep -v 'build-override' \
-		| sort
-
 PROFILE ?=
 p ?=
 CRATE ?=
 CARGO_SCOPE ?= $(if $(p),-p $(p),$(if $(CRATE),-p $(CRATE),--workspace))
 CARGO_FLAGS ?= --profile $(PROFILE)
+
+
+.PHONY: cargo/lock-init
+cargo/lock-init:        ##H Init or fully upgrade the lockfile (wipes it)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo generate-lockfile
+	@echo "OK."
+
 
 # For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
 RUSTFLAGS ?=
@@ -137,67 +133,154 @@ _confirm:
 .PHONY: format
 format: ##H Run pre-commit hooks/formatters
 	pre-commit run --all-files
+#	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		cargo fix $(CARGO_SCOPE) $(CARGO_FLAGS) --features default --allow-dirty --allow-no-vcs
 
 .PHONY: lint
-lint:	##H Lint code
+lint:   ##H Lint code
 	@echo "Lint code? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	cargo clippy --verbose $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		cargo clippy --verbose $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
-test:	##H Run tests
+test:   ##H Run tests
 	@echo "Run tests? PROFILE='$(PROFILE)'"
 	@$(MAKE) _confirm
-	cargo test --verbose $(CARGO_SCOPE) --features full --locked --profile $(PROFILE) --all-targets
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		cargo test --verbose $(CARGO_SCOPE) --features full --locked --all-targets --timings --profile $(PROFILE)
 
+
+ROCKSDB_LIB_DIR ?= /usr/local/lib
+ROCKSDB_INCLUDE_DIR ?= /usr/local/include
+
+# Default features to use for the build
+# We use bindgen-runtime by default to use the system libclang.so for building.
+# Bundling RocksDB statically can be enabled via features.
+FEATURES ?= standard,release_max_log_level,bindgen-runtime
 
 .PHONY: build
-build:	##H Build with selected profile
+build:  ##H Build with selected profile
 	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
-	@echo "Build this profile? PROFILE='$(PROFILE)'"
+	@echo "Build this profile? PROFILE='$(PROFILE)' FEATURES='$(FEATURES)'"
 	@$(MAKE) _confirm
-	cargo build --verbose --features full --locked $(CARGO_FLAGS)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
+		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
+		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
+		cargo build --verbose --features $(FEATURES) --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
-	# ln -sfnT $(if $(filter $(PROFILE),dev test),debug,$(PROFILE)) target/latest
 	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
 	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/debug/conduwuit
 
 
+.PHONY: build-bundled
+build-bundled: ##H Build a bundled binary (Static RocksDB)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+	LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+	LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+	ROCKSDB_STATIC=1 \
+	ROCKSDB_LIB_STATIC=1 \
+	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-static"
+
+
+.PHONY: build-dynamic
+build-dynamic: ##H Build with shared library (requires librocksdb.so at runtime)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+	LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-runtime"
+
+
+.PHONY: release
+release: ##H Build a production-ready bundled binary (High-performance, Static RocksDB)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+	LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+	LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+	ROCKSDB_STATIC=1 \
+	ROCKSDB_LIB_STATIC=1 \
+	$(MAKE) build PROFILE=release-max-perf FEATURES="$(FEATURES),conduwuit-database/bindgen-static"
+
+
 .PHONY: clean
-clean:	##H Clean build directory for current profile
-	@echo "Clean the '$(PROFILE)' build directory?"
+clean:  ##H Clean build directory
+	@echo "Clean everything?"
 	@$(MAKE) _confirm
-	-find target -name '*conduwuit*' -exec rm -r {} \;
+	cargo clean
+#	-rm -rf target/latest target/debug
 # Old logic, wipes it out too much, results in slow builds
-# 	cargo clean --profile $(PROFILE)
-# 	@echo "Also remove debian build?"
-# 	@$(MAKE) _confirm
-# 	rm -rf target/debian
+#       cargo clean --features default --profile $(PROFILE)
+#       @echo "Also remove debian build?"
+#       @$(MAKE) _confirm
+#       rm -rf target/debian
 
 
 .PHONY: build-docs
-build-docs:	##H Regenerate docs (admin commands, etc.)
+build-docs:     ##H Regenerate docs (admin commands, etc.)
 	@echo "Regenerate docs with PROFILE='$(PROFILE)'?"
 	@$(MAKE) _confirm
-	cargo run -p xtask --profile $(PROFILE) -- generate-docs
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		cargo run -p xtask --profile $(PROFILE) -- generate-docs
 
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Complement (build docker, stats, run... also used by CI)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 COMPLEMENT_DIR ?=
 COMPLEMENT_IMAGE ?= continuwuity:complement
 COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
 
 .PHONY: complement/build
-complement/build: ##H Build conduwuit docker image for Complement testing
+complement/build: ##H Build conduwuit w direct_tls
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
 	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
+
+.PHONY: complement/docker
+complement/docker: ##H Build docker image from existing binary
+	@echo "Copying dynamically linked libraries to target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/..."
+	@mkdir -p target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib && rm -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/*
+	@LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$(LD_LIBRARY_PATH)" \
+		ldd target/latest/conduwuit | awk '/=> \// {print $$3}' \
+		| grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|ld-linux|libdl\.so|libpthread\.so|librt\.so' \
+		| xargs -I {} cp "{}" target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/ || true
+	@rm -rf target/latest/lib
+	@ln -sfn ../$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib target/latest/lib
 	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
-	docker build --build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) -t $(COMPLEMENT_IMAGE) -f ./docker/complement.Dockerfile .
+	DOCKER_BUILDKIT=1 docker buildx build \
+		--build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
+		--build-arg BINARY_PATH=target/latest/conduwuit \
+		--build-arg LIB_PATH=target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib \
+		--build-arg UID=$(shell id -u) \
+		--build-arg GID=$(shell id -g) \
+		-t $(COMPLEMENT_IMAGE) \
+		-f ./docker/complement.Dockerfile \
+		--load .
+
+.PHONY: complement/run
+complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
+	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
+	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
+	./bin/complement $(COMPLEMENT_DIR)
 
 
 .PHONY: complement/stats
-complement/stats: ##H Check local test stats from tests/test_results/complement/test_results.jsonl
+complement/stats: ##H Check local test stats
 	@test -f "tests/test_results/complement/test_results.jsonl" || (echo "ERROR: tests/test_results/complement/test_results.jsonl does not exist" && exit 1)
 	@echo "Parsing Complement test results..."
 	@PASS=$$(jq -s '[.[] | select(.Action == "pass")] | length' tests/test_results/complement/test_results.jsonl); \
@@ -216,15 +299,15 @@ complement/stats: ##H Check local test stats from tests/test_results/complement/
 	echo "○ Skipped: $$SKIP"; \
 	echo "---------------------------"; \
 	echo "Total:     $$TOTAL"; \
-	echo ""
+	echo ""; \
+	echo "JSON file (on main) last modified by: "; \
+	git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
 
-.PHONY: complement/run
-complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
-	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
-	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
-	@cd $(COMPLEMENT_DIR) && \
-	COMPLEMENT_BASE_IMAGE=$(COMPLEMENT_IMAGE) \
-	gotestsum --format testname --hide-summary=output --jsonfile $(CURDIR)/.tmp/complement_results_$$(date +%s).jsonl -- -tags conduwuit -timeout 15m -count=1 ./tests/... | tee $(CURDIR)/.tmp/complement_run_$$(date +%s).log
+.PHONY: complement/logs
+complement/logs: ##H Tail logs for all running and future Complement containers
+	@echo "Tailing logs for Complement containers (Press Ctrl+C to stop)..."
+	@docker ps -q --filter "name=complement_" | xargs -r -n 1 docker logs -f & \
+	docker events --filter 'event=start' --format '{{.Actor.Attributes.name}}' | grep --line-buffered "^complement_" | xargs -r -I {} sh -c 'echo "--- Tailing {} ---"; docker logs -f {} &' ; wait
 
 
 
@@ -262,7 +345,7 @@ RUN ?=
 N_RUNS ?= 6
 
 .PHONY: download
-download:	##H Download CI binary (use RUN=... to pick a specific run)
+download:	##H Download CI binary (set RUN to a specific RunID)
 	# Testing whether GH_REPO is set
 	test "$(GH_REPO)"
 	# Testing whether ARTIFACT related vars are set

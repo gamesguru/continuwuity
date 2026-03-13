@@ -3,9 +3,9 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 env:
@@ -14,11 +14,11 @@ env:
   SKIP_CONFIRM: 1
 
 jobs:
-  cpu-haswell:
-    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
-    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+  cpu-x86-64-v3:
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_HASWELL != ''
     runs-on: ${{ matrix.os }}
+    env:
+      ROCKSDB_LIB_DIR: /usr/local/lib
 
     strategy:
       fail-fast: false
@@ -28,7 +28,6 @@ jobs:
           - ubuntu-24.04
         profile:
           - release-max-perf
-          - dev
 
     steps:
       - uses: actions/checkout@v4
@@ -44,9 +43,20 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            libbz2-dev \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            mold
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Setup RocksDB and Jemalloc
+        uses: ./.github/actions/setup-prebuilts
+        with:
+          cache-key: ${{ matrix.os }}
+          arch: x86-64-v3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -59,7 +69,7 @@ jobs:
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
 
       - name: Debug checks
-        run: make vars cpu-info
+        run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -68,23 +78,49 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: make build
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v3
+        run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
+
+      - name: Sanity check binary
+        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
+
+      - name: Package Assets
+        run: |
+          mkdir -p release-assets/bin release-assets/lib release-assets/include
+          cp target/latest/conduwuit release-assets/bin/
+          # Include the static .a library
+          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          tar -czvf conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-${{ matrix.profile }}-${{ matrix.os }}
-          path: target/${{ matrix.profile == 'dev' && 'debug' || matrix.profile }}/conduwuit
+          name: conduwuit-x86-64-v3-${{ matrix.os }}
+          path: conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz
           retention-days: 90
 
-  # NOTE: Currently just for Ubuntu 22/24 Skylake-optimized builds (avx512 or avx2)
-  cpu-skylake:
-    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
-    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+      - name: Publish Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use the branch name or tag for the release name
+          TAG_NAME="${{ github.ref_name }}"
+          [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
+          gh release create "$TAG_NAME" \
+            --title "Build: ${TAG_NAME}" \
+            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
+            --prerelease || true
+          gh release upload "$TAG_NAME" conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz --clobber
+
+  # NOTE: Currently just for Ubuntu 22/24 microarchitecture optimized builds (avx512 or avx2)
+  cpu-x86-64-v4:
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_SKYLAKE != ''
     runs-on: ${{ matrix.os }}
     env:
-      PROFILE: release-max-perf
+      ROCKSDB_LIB_DIR: /usr/local/lib
 
     strategy:
       fail-fast: false
@@ -92,6 +128,8 @@ jobs:
         os:
           - ubuntu-22.04
           - ubuntu-24.04
+        profile:
+          - release-max-perf
 
     steps:
       - uses: actions/checkout@v4
@@ -107,9 +145,24 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            libbz2-dev \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            mold
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Detect best CPU target
+        id: cpu
+        uses: ./.github/actions/get-cpu-target
+
+      - name: Setup RocksDB and Jemalloc
+        uses: ./.github/actions/setup-prebuilts
+        with:
+          cache-key: ${{ matrix.os }}
+          arch: x86-64-v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -122,44 +175,61 @@ jobs:
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
 
       - name: Debug checks
-        run: make vars cpu-info
+        run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
         env:
+          PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-
-      - name: Detect best CPU target
-        id: cpu
-        run: |
-          if grep -q avx512f /proc/cpuinfo 2>/dev/null; then
-            echo "target=skylake-avx512" >> "$GITHUB_OUTPUT"
-          else
-            echo "target=skylake" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Detected target: $(grep target= "$GITHUB_OUTPUT" | cut -d= -f2)"
 
       - name: Build (${{ steps.cpu.outputs.target }})
         env:
+          PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ steps.cpu.outputs.target }}
-        run: make build
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v4
+        run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
+
+      - name: Sanity check binary
+        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
+
+      - name: Package Assets
+        run: |
+          mkdir -p release-assets/bin release-assets/lib release-assets/include
+          cp target/latest/conduwuit release-assets/bin/
+          # Include the static .a library
+          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary (${{ steps.cpu.outputs.target }})
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-skylake-${{ matrix.os }}
-          path: target/${{ env.PROFILE }}/conduwuit
+          name: conduwuit-x86-64-v4-${{ matrix.os }}
+          path: conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz
           retention-days: 60
+
+      - name: Publish Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use the branch name or tag for the release name
+          TAG_NAME="${{ github.ref_name }}"
+          [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
+          gh release create "$TAG_NAME" \
+            --title "Build: ${TAG_NAME}" \
+            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
+            --prerelease || true
+          gh release upload "$TAG_NAME" conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz --clobber
 
   # NOTE: Max performance build targeting ARM64 (specifically Raspberry Pi 5 / Cortex-A76)
   # configured for 16K page sizes via a 64K jemalloc override.
-  cpu-arm64-pi5:
-    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
-    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
-    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 != ''
-    runs-on: ${{ matrix.os }}
+  cpu-arm64-cortex-a76:
+    if: github.ref == 'refs/heads/main' && vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 != ''
+    runs-on: ${{ matrix.os }}-arm
     env:
-      PROFILE: release-max-perf
       # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
       JEMALLOC_SYS_WITH_LG_PAGE: 16
+      ROCKSDB_LIB_DIR: /usr/local/lib
 
     # Ubuntu 22.04 uses glibc 2.35 (compatible)
     # Raspberry Pi uses glibc 2.36
@@ -168,8 +238,10 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-22.04-arm
-          - ubuntu-24.04-arm
+          - ubuntu-22.04
+          - ubuntu-24.04
+        profile:
+          - release-max-perf
 
     steps:
       - uses: actions/checkout@v4
@@ -185,9 +257,20 @@ jobs:
             build-essential \
             pkg-config \
             liburing-dev \
+            libbz2-dev \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            mold
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Setup RocksDB and Jemalloc
+        uses: ./.github/actions/setup-prebuilts
+        with:
+          cache-key: ${{ matrix.os }}
+          arch: arm64-cortex-a76
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -201,18 +284,48 @@ jobs:
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
 
       - name: Debug checks
-        run: make vars cpu-info
+        run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
+        env:
+          PROFILE: ${{ matrix.profile }}
 
       - name: Build (cortex-a76)
         env:
+          PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
-        run: make build
+        run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
+
+      - name: Sanity check binary
+        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
+
+      - name: Package Assets
+        run: |
+          mkdir -p release-assets/bin release-assets/lib release-assets/include
+          cp target/latest/conduwuit release-assets/bin/
+          # Include the static .a library
+          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-arm64-pi5-${{ matrix.os }}
-          path: target/${{ env.PROFILE }}/conduwuit
+          name: conduwuit-arm64-cortex-a76-${{ matrix.os }}
+          path: conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz
           retention-days: 60
+
+      - name: Publish Release
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use the branch name or tag for the release name
+          TAG_NAME="${{ github.ref_name }}"
+          [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
+          gh release create "$TAG_NAME" \
+            --title "Build: ${TAG_NAME}" \
+            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
+            --prerelease || true
+          gh release upload "$TAG_NAME" conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz --clobber

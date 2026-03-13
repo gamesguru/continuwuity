@@ -1,7 +1,7 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug_info, info, trace,
+	Result, Server, SyncRwLock, debug, debug_info, error, info, trace,
 	utils::{
 		ReadyExt,
 		stream::{BroadbandExt, IterStream},
@@ -133,10 +133,13 @@ impl Services {
 		info!("Starting services...");
 
 		self.admin.set_services(Some(Arc::clone(self)).as_ref());
-
-		info!("Running database migrations...");
-		super::migrations::migrations(self).await?;
-
+		warn!(
+			"Running database migrations... This may take a while depending on the database \
+			 size."
+		);
+		super::migrations::migrations(self)
+			.await
+			.inspect_err(|e| error!("Migrations failed: {e}"))?;
 		info!("Starting service manager...");
 		let manager = {
 			let mut lock = self.manager.lock().await;

@@ -1,6 +1,8 @@
 #[path = "src/git.rs"]
 mod git;
 
+static GIT_BRANCH_MAIN: &str = "main";
+
 fn get_env(env_var: &str) -> Option<String> {
 	match std::env::var(env_var) {
 		| Ok(val) if !val.is_empty() => Some(val),
@@ -9,10 +11,6 @@ fn get_env(env_var: &str) -> Option<String> {
 }
 
 fn main() {
-	// built gets the default crate from the workspace. Not sure if this is intended
-	// behavior, but it's what we want.
-	// built::write_built_file().expect("Failed to acquire build-time information");
-
 	// --- Git Information ---
 	let mut commit_hash = None;
 	let mut commit_hash_short = None;
@@ -33,27 +31,18 @@ fn main() {
 	}
 
 	if get_env("CONTINUWUITY_VERSION_EXTRA").is_none() {
-		let desc = std::env::var("GIT_DESCRIBE").ok().or_else(git::description);
+		let desc = git::description();
 		let mut extra = vec![desc.unwrap_or_else(|| {
 			commit_hash_short
 				.clone()
 				.unwrap_or_else(|| "unknown".into())
 		})];
-		if let Ok(ver) = std::env::var("CARGO_PKG_VERSION") {
-			if let Some(stripped) = extra[0].strip_prefix(&ver) {
-				#[allow(clippy::assigning_clones)]
-				{
-					extra[0] = stripped.trim_start_matches(['+', '-']).to_owned();
-				}
-			}
-		}
 		if let Some(b) = get_env("CONTINUWUITY_BRANCH")
+			.or_else(|| get_env("GITHUB_REF_NAME"))
 			.or_else(|| git::run(&["rev-parse", "--abbrev-ref", "HEAD"]))
 		{
 			println!("cargo:rustc-env=GIT_BRANCH={b}");
-			if b != "main" && b != "master" {
-				extra.push(format!("b={b}"));
-			}
+			extra.extend(git::branch_tag(&b, GIT_BRANCH_MAIN));
 		}
 		extra.retain(|s| !s.is_empty());
 		println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={}", extra.join(","));
@@ -106,7 +95,49 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=GIT_COMMIT_HASH_SHORT");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_URL");
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_COMMIT_URL");
-	println!("cargo:rerun-if-env-changed=GIT_DESCRIBE");
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_VERSION_EXTRA");
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_BRANCH");
+
+	// Host info
+	println!("cargo:rustc-env=HOST_OS={}", std::env::consts::OS);
+	println!("cargo:rustc-env=HOST_ARCH={}", std::env::consts::ARCH);
+
+	// Build profile and environment variables passed by Cargo to the build script
+	if let Ok(profile) = std::env::var("PROFILE") {
+		println!("cargo:rustc-env=PROFILE={profile}");
+	}
+	if let Ok(opt_level) = std::env::var("OPT_LEVEL") {
+		println!("cargo:rustc-env=OPT_LEVEL={opt_level}");
+	}
+	if let Ok(debug) = std::env::var("DEBUG") {
+		println!("cargo:rustc-env=DEBUG={debug}");
+	}
+	if let Ok(target) = std::env::var("TARGET") {
+		println!("cargo:rustc-env=TARGET={target}");
+	}
+	if let Ok(host) = std::env::var("HOST") {
+		println!("cargo:rustc-env=HOST={host}");
+	}
+
+	// Target Configuration Variables
+	if let Ok(endian) = std::env::var("CARGO_CFG_TARGET_ENDIAN") {
+		println!("cargo:rustc-env=CFG_ENDIAN={endian}");
+	}
+	if let Ok(ptr_width) = std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH") {
+		println!("cargo:rustc-env=CFG_POINTER_WIDTH={ptr_width}");
+	}
+	if let Ok(env) = std::env::var("CARGO_CFG_TARGET_ENV") {
+		println!("cargo:rustc-env=CFG_ENV={env}");
+	}
+
+	// Rustc Version
+	if let Ok(rustc) = std::process::Command::new("rustc")
+		.arg("--version")
+		.output()
+	{
+		println!(
+			"cargo:rustc-env=RUSTC_VERSION={}",
+			String::from_utf8_lossy(&rustc.stdout).trim()
+		);
+	}
 }

@@ -11,10 +11,13 @@ repository.workspace = true
 version.workspace = true
 metadata.crane.workspace = true
 
+build = "build.rs"
+
 [lib]
 path = "mod.rs"
 crate-type = [
 	"rlib",
+	"staticlib",
 #	"dylib",
 ]
 
@@ -43,7 +46,7 @@ assets = [
 default = [
     "standard",
     "release_max_log_level",
-	"bindgen-runtime", # replace with bindgen-static on alpine
+	"bindgen-runtime", # Use runtime libclang for dev builds
 ]
 standard = [
     "blurhashing",
@@ -59,16 +62,18 @@ standard = [
 	"systemd",
 	"url_preview",
 	"zstd_compression",
-    "sentry_telemetry",
-    "otlp_telemetry",
 	"console",
 ]
 full = [
     "standard",
     # "hardened_malloc", # Conflicts with jemalloc
+]
+
+local_profiling = [
     "jemalloc_prof",
     "perf_measurements",
     "tokio_console",
+    "tokio_metrics",
 ]
 
 blurhashing = [
@@ -173,6 +178,11 @@ tokio_console = [
 	"dep:console-subscriber",
 	"tokio/tracing",
 ]
+tokio_metrics = [
+    "dep:tokio-metrics",
+    "conduwuit-core/tokio_metrics",
+    "conduwuit-admin/tokio_metrics",
+]
 url_preview = [
 	"conduwuit-service/url_preview",
 ]
@@ -207,8 +217,10 @@ conduwuit-database.workspace = true
 conduwuit-router.workspace = true
 conduwuit-service.workspace = true
 conduwuit-build-metadata.workspace = true
+conduwuit-macros.workspace = true
 
 clap.workspace = true
+
 console-subscriber.optional = true
 console-subscriber.workspace = true
 const-str.workspace = true

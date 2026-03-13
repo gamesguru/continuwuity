@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{fmt::Write, path::PathBuf, sync::Arc};
 
 use conduwuit::{
 	Err, Result,
@@ -152,4 +152,95 @@ pub(super) async fn shutdown(&self) -> Result {
 	self.services.server.shutdown()?;
 
 	self.write_str("Shutting down server...").await
+}
+
+#[admin_command]
+pub(super) async fn list_features(&self) -> Result {
+	let enabled_features = conduwuit::info::introspection::ENABLED_FEATURES
+		.get()
+		.copied()
+		.unwrap_or(&[]);
+
+	let available_features = conduwuit::info::introspection::AVAILABLE_FEATURES
+		.get()
+		.copied()
+		.unwrap_or(&[]);
+
+	let mut active_features = Vec::new();
+	for feature in available_features {
+		if enabled_features.contains(feature) {
+			active_features.push(*feature);
+		}
+	}
+
+	self.write_str(&active_features.join(", ")).await
+}
+
+#[admin_command]
+pub(super) async fn build_info(&self) -> Result {
+	let mut info = String::new();
+
+	// Version information
+	writeln!(info, "# Build Information\n")?;
+	writeln!(info, "**Version:** {}", env!("CARGO_PKG_VERSION"))?;
+	writeln!(info, "**Package:** {}", env!("CARGO_PKG_NAME"))?;
+	writeln!(info, "**Description:** {}", env!("CARGO_PKG_DESCRIPTION"))?;
+
+	// Git information
+	writeln!(info, "\n## Git Information\n")?;
+	if let Some(hash) = conduwuit::build_metadata::GIT_COMMIT_HASH {
+		writeln!(info, "**Commit Hash:** {hash}")?;
+	}
+	if let Some(hash) = conduwuit::build_metadata::GIT_COMMIT_HASH_SHORT {
+		writeln!(info, "**Commit Hash (short):** {hash}")?;
+	}
+	if let Some(url) = conduwuit::build_metadata::GIT_REMOTE_WEB_URL {
+		writeln!(info, "**Repository:** {url}")?;
+	}
+	if let Some(url) = conduwuit::build_metadata::GIT_REMOTE_COMMIT_URL {
+		writeln!(info, "**Commit URL:** {url}")?;
+	}
+
+	// Build environment
+	writeln!(info, "\n## Build Environment\n")?;
+	if let Some(profile) = conduwuit::build_metadata::PROFILE {
+		writeln!(info, "**Profile:** {profile}")?;
+	}
+	if let Some(opt) = conduwuit::build_metadata::OPT_LEVEL {
+		writeln!(info, "**Optimization Level:** {opt}")?;
+	}
+	if let Some(debug) = conduwuit::build_metadata::DEBUG {
+		writeln!(info, "**Debug:** {debug}")?;
+	}
+	if let Some(target) = conduwuit::build_metadata::TARGET {
+		writeln!(info, "**Target:** {target}")?;
+	}
+	if let Some(host) = conduwuit::build_metadata::HOST {
+		writeln!(info, "**Host:** {host}")?;
+	}
+
+	// Rust compiler information
+	writeln!(info, "\n## Compiler Information\n")?;
+	if let Some(rustc) = conduwuit::build_metadata::RUSTC_VERSION {
+		writeln!(info, "**Rustc Version:** {rustc}")?;
+	}
+
+	// Target configuration
+	writeln!(info, "\n## Target Configuration\n")?;
+	writeln!(info, "**Architecture:** {}", std::env::consts::ARCH)?;
+	writeln!(info, "**OS:** {}", std::env::consts::OS)?;
+	writeln!(info, "**Family:** {}", std::env::consts::FAMILY)?;
+	if let Some(endian) = conduwuit::build_metadata::CFG_ENDIAN {
+		writeln!(info, "**Endianness:** {endian}")?;
+	}
+	if let Some(ptr_width) = conduwuit::build_metadata::CFG_POINTER_WIDTH {
+		writeln!(info, "**Pointer Width:** {ptr_width} bits")?;
+	}
+	if let Some(env) = conduwuit::build_metadata::CFG_ENV {
+		if !env.is_empty() {
+			writeln!(info, "**Environment:** {env}")?;
+		}
+	}
+
+	self.write_str(&info).await
 }

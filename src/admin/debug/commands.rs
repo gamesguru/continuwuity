@@ -1028,7 +1028,7 @@ pub(super) async fn runtime_metrics(&self) -> Result {
 		.await
 }
 
-#[cfg(tokio_unstable)]
+#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 #[admin_command]
 pub(super) async fn runtime_interval(&self) -> Result {
 	let out = self.services.server.metrics.runtime_interval().map_or_else(
@@ -1039,10 +1039,10 @@ pub(super) async fn runtime_interval(&self) -> Result {
 	self.write_str(&out).await
 }
 
-#[cfg(not(tokio_unstable))]
+#[cfg(not(all(tokio_unstable, feature = "tokio_metrics")))]
 #[admin_command]
 pub(super) async fn runtime_interval(&self) -> Result {
-	self.write_str("Runtime metrics require building with `tokio_unstable`.")
+	self.write_str("Runtime metrics require building with `tokio_unstable` and `tokio_metrics`.")
 		.await
 }
 

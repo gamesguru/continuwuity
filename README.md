@@ -6,8 +6,6 @@
 
 [![Chat on Matrix](https://img.shields.io/matrix/continuwuity%3Acontinuwuity.org?server_fqdn=matrix.continuwuity.org&fetchMode=summary&logo=matrix)](https://matrix.to/#/#continuwuity:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org) [![Join the space](https://img.shields.io/matrix/space%3Acontinuwuity.org?server_fqdn=matrix.continuwuity.org&fetchMode=summary&logo=matrix&label=space)](https://matrix.to/#/#space:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org)
 
-
-
 <!-- ANCHOR_END: catchphrase -->
 
 [continuwuity] is a Matrix homeserver written in Rust.
@@ -17,13 +15,29 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 
 [![forgejo.ellis.link](https://img.shields.io/badge/Ellis%20Git-main+packages-green?style=flat&logo=forgejo&labelColor=fff)](https://forgejo.ellis.link/continuwuation/continuwuity) [![Stars](https://forgejo.ellis.link/continuwuation/continuwuity/badges/stars.svg?style=flat)](https://forgejo.ellis.link/continuwuation/continuwuity/stars) [![Issues](https://forgejo.ellis.link/continuwuation/continuwuity/badges/issues/open.svg?style=flat)](https://forgejo.ellis.link/continuwuation/continuwuity/issues?state=open) [![Pull Requests](https://forgejo.ellis.link/continuwuation/continuwuity/badges/pulls/open.svg?style=flat)](https://forgejo.ellis.link/continuwuation/continuwuity/pulls?state=open)
 
-[![GitHub](https://img.shields.io/badge/GitHub-mirror-blue?style=flat&logo=github&labelColor=fff&logoColor=24292f)](https://github.com/continuwuity/continuwuity) [![Stars](https://img.shields.io/github/stars/continuwuity/continuwuity?style=flat)](https://github.com/continuwuity/continuwuity/stargazers) [![PR Checks](https://github.com/continuwuity/continuwuity/actions/workflows/test.yml/badge.svg)](https://github.com/continuwuity/continuwuity/actions/workflows/test.yml)
+[![GitHub](https://img.shields.io/badge/GitHub-mirror-blue?style=flat&logo=github&labelColor=fff&logoColor=24292f)](https://github.com/continuwuity/continuwuity) [![Stars](https://img.shields.io/github/stars/continuwuity/continuwuity?style=flat)](https://github.com/continuwuity/continuwuity/stargazers)
 
 [![GitLab](https://img.shields.io/badge/GitLab-mirror-blue?style=flat&logo=gitlab&labelColor=fff)](https://gitlab.com/continuwuity/continuwuity) [![Stars](https://img.shields.io/gitlab/stars/continuwuity/continuwuity?style=flat)](https://gitlab.com/continuwuity/continuwuity/-/starrers)
 
 [![Codeberg](https://img.shields.io/badge/Codeberg-mirror-2185D0?style=flat&logo=codeberg&labelColor=fff)](https://codeberg.org/continuwuity/continuwuity) [![Stars](https://codeberg.org/continuwuity/continuwuity/badges/stars.svg?style=flat)](https://codeberg.org/continuwuity/continuwuity/stars)
 
-[![Complement Tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub-badge.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+Working reference:
+
+[![Working](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub-badge.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+
+Trials:
+
+[![Trial 1 (Branch _metadata/badges)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+
+[![Trial 2 (Branch refs/heads/_metadata/badges)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Frefs%2Fheads%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+
+[![Trial 3 (Branch badges path github/commits...)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
+
+[![Trial 4 (Forgejo raw path like GitHub trial 3)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbadges%2Fforgejo%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
+
+[![Trial 5 (Forgejo raw path github provider checkout)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
+
+[![Trial 6 (Forgejo raw path without badges repo)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fforgejo%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
 
 ### Why does this exist?
 
@@ -62,12 +76,13 @@ Continuwuity aims to:
 Check out the [documentation](https://continuwuity.org) for installation instructions.
 
 If you want to try it out as a user, we have some partnered homeservers you can use:
-* You can head over to [https://federated.nexus](https://federated.nexus/) in your browser.
-  * Hit the `Apply to Join` button. Once your request has been accepted, you will receive an email with your username and password.
-  * Head over to [https://app.federated.nexus](https://app.federated.nexus/) and you can sign in there, or use any other matrix chat client you wish elsewhere.
-  * Your username for matrix will be in the form of `@username:federated.nexus`, however you can simply use the `username` part to log in. Your password is your password.
 
-* There's also [https://continuwuity.rocks/](https://continuwuity.rocks/). You can register a new account using Cinny via [this convenient link](https://app.cinny.in/register/continuwuity.rocks), or you can use Element or another matrix client *that supports registration*.
+- You can head over to [https://federated.nexus](https://federated.nexus/) in your browser.
+    - Hit the `Apply to Join` button. Once your request has been accepted, you will receive an email with your username and password.
+    - Head over to [https://app.federated.nexus](https://app.federated.nexus/) and you can sign in there, or use any other matrix chat client you wish elsewhere.
+    - Your username for matrix will be in the form of `@username:federated.nexus`, however you can simply use the `username` part to log in. Your password is your password.
+
+- There's also [https://continuwuity.rocks/](https://continuwuity.rocks/). You can register a new account using Cinny via [this convenient link](https://app.cinny.in/register/continuwuity.rocks), or you can use Element or another matrix client _that supports registration_.
 
 ### What are we working on?
 
@@ -106,7 +121,6 @@ We haven't written up a guide on migrating from incompatible homeservers yet. Re
 
 The main branch is always green!
 
-
 ### Policy on pulling from other forks
 
 We welcome contributions from other forks of conduwuit, subject to our review process.
@@ -119,6 +133,21 @@ When incorporating code from other forks:
 - We prioritize stability and compatibility when evaluating external contributions
 - Features that align with our project goals will be given priority consideration
 
+### Complement Test Status
+
+We track the health of the project through automated [Complement](https://github.com/matrix-org/complement) tests.
+
+- **Current Status (main):** See the badge above for the latest results on the `main` branch.
+- **Commit-Specific History:** We are moving toward per-commit test tracking. You can view the status of a specific commit by accessing its JSON endpoint:
+  `https://raw.githubusercontent.com/gamesguru/continuwuity/_metadata/badges/badges/forgejo/commits/<COMMIT_HASH>.json`
+
+#### Roadmap for Test Transparency:
+
+1. [✓] **Dynamic Branch Badges**: Real-time status for `main` and feature branches.
+2. [✓] **Historical Commit Tracking**: JSON ledger of test results for every CI run.
+3. [✓] **README Commit Dashboard**: A dedicated page or section showing a grid of recent commit health.
+4. [✓] **PR Integration**: Automated comments in Pull Requests with detailed Complement failure reports.
+
 <!-- ANCHOR: footer -->
 
 #### Contact
@@ -126,6 +155,5 @@ When incorporating code from other forks:
 Join our [Matrix room](https://matrix.to/#/#continuwuity:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org) and [space](https://matrix.to/#/#space:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org) to chat with us about the project!
 
 <!-- ANCHOR_END: footer -->
-
 
 [continuwuity]: https://forgejo.ellis.link/continuwuation/continuwuity
