@@ -16,7 +16,7 @@ use database::Database;
 use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
 use loole::{Receiver, Sender};
 use ruma::{
-	OwnedRoomId, OwnedServerName, OwnedUserId, UInt, UserId, events::presence::PresenceEvent,
+	OwnedServerName, OwnedUserId, UInt, UserId, events::presence::PresenceEvent,
 	presence::PresenceState,
 };
 use tokio::time::{Instant, sleep};
@@ -393,23 +393,23 @@ impl Service {
 			return Ok(());
 		}
 
-		let rooms: Vec<OwnedRoomId> = self
-			.services
-			.state_cache
-			.rooms_joined(user_id)
-			.map(ToOwned::to_owned)
-			.collect()
-			.await;
-
 		// Batch up servers
 		let mut servers = HashSet::new();
-		for room_id in rooms {
+
+		// Iterate rooms by stream is probably fastest here
+		let mut joined_rooms = self.services.state_cache.rooms_joined(user_id);
+		while let Some(room_id) = joined_rooms.next().await {
 			let mut room_servers = self.services.state_cache.room_servers(&room_id);
 			while let Some(server) = room_servers.next().await {
 				if !self.services.globals.server_is_ours(server) {
 					servers.insert(server.to_owned());
 				}
 			}
+		}
+
+		// If there are no remote servers, nothing to send
+		if servers.is_empty() {
+			return Ok(());
 		}
 
 		// Add any pending presence updates
