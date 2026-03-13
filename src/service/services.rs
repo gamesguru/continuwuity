@@ -1,7 +1,7 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug, debug_info, error, info, trace,
+	Result, Server, SyncRwLock, debug_info, error, info, trace,
 	utils::{
 		ReadyExt,
 		stream::{BroadbandExt, IterStream},
