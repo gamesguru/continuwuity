@@ -43,85 +43,21 @@ jobs:
           exit 1
 
       - name: Slim Checkout
-        run: |
-          # Use raw git to avoid Node-based checkout action
-          if [ ! -d ".git" ]; then
-            git init
-            git remote add origin ${{ forge.server_url }}/${{ forge.repository }}
-          fi
-          git fetch --depth 1 origin ${{ forge.sha }}
-          git checkout FETCH_HEAD
-          git fetch --tags --force && git fetch origin HEAD
-          # TODO: this belongs lower down? after the summary/delta report (with colored diff)
-          git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+        uses: ./.forgejo/actions/slim-checkout
+        with:
+          repository: ${{ forge.repository || github.repository }}
+          sha: ${{ forge.sha || github.sha }}
+          server_url: ${{ forge.server_url || github.server_url }}
 
-      - name: Download conduwuit bundle
-        run: |
-          ARTIFACT_URL="${{ github.event.inputs.artifact_url }}"
-
-          # If the user pasted a github.com web UI URL, convert it to the API endpoint
-          if [[ "$ARTIFACT_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/(suites|actions/runs)/[^/]+/artifacts/([^/]+) ]]; then
-            OWNER="${BASH_REMATCH[1]}"
-            REPO="${BASH_REMATCH[2]}"
-            ARTIFACT_ID="${BASH_REMATCH[4]}"
-            ARTIFACT_URL="https://api.github.com/repos/$OWNER/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
-            echo "Converted Web URL to API URL:"
-            echo $ARTIFACT_URL
-          fi
-
-          mkdir -p target/${{ env.PROFILE }}
-          echo "Downloading bundle from:"
-          echo ""
-          echo "$ARTIFACT_URL"
-          echo ""
-          curl -L -o target/${{ env.PROFILE }}/bundle.zip -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
-
-      - name: SHA256 sum check (zip bundle validation)
-        run: |
-          # Log sha256
-          echo "expected sha256: ${{ github.event.inputs.artifact_sha256 }}"
-          echo "comparing sums..."
-          sha256sum target/${{ env.PROFILE }}/bundle.zip
-          echo "OK."
-
-      - name: Extract conduwuit bundle
-        run: |
-          echo "Unzipping bundle..."
-          unzip -o target/${{ env.PROFILE }}/bundle.zip -d target/${{ env.PROFILE }}/
-          rm target/${{ env.PROFILE }}/bundle.zip
-
-      - name: Reject oversized (non-release?) binaries
-        run: |
-          BINARY="target/${{ env.PROFILE }}/conduwuit"
-          SIZE_MB=$(( $(stat -c%s "$BINARY") / 1048576 ))
-          echo "Binary size: ${SIZE_MB} MB"
-          if [ "$SIZE_MB" -gt 125 ]; then
-            echo "FATAL: Binary is ${SIZE_MB} MB (>125 MB). Likely a debug build -- aborting."
-            exit 1
-          fi
-
-      - name: GPG signature check (binary verification)
-        env:
-          PUBKEY: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}
-          PUBKEY_ID: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY_ID }}
-        run: |
-          echo "Verifying GPG signature..."
-          echo "Debug: Key length is ${#PUBKEY}"
-          echo "$PUBKEY" | tee key.asc
-          gpg --import key.asc
-          # Trust the imported key
-          echo "${PUBKEY_ID}:6:" | gpg --import-ownertrust
-          gpg --list-keys
-          gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
-          echo "OK. GPG signature verified."
-
-      - name: Post-verification setup
-        run: |
-          echo "Marking file as executable"
-          chmod +x target/${{ env.PROFILE }}/conduwuit
-          echo "Creating symlink to ./target/latest/"
-          mkdir -p target/latest
-          ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
+      - name: Install conduwuit Artifact
+        uses: ./.forgejo/actions/install-conduwuit-artifact
+        with:
+          artifact_url: ${{ github.event.inputs.artifact_url }}
+          artifact_sha256: ${{ github.event.inputs.artifact_sha256 }}
+          github_token: ${{ secrets.C10Y_GITHUB_TOKEN }}
+          profile: ${{ env.PROFILE }}
+          gpg_public_key: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}
+          gpg_public_key_id: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY_ID }}
 
       - name: Get conduwuit version
         id: version

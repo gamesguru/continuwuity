@@ -1,0 +1,29 @@
+name: "Slim Checkout"
+description: "Checkout the repository without using Node.js"
+inputs:
+  repository:
+    description: "Repository to checkout"
+    default: ${{ forge.repository || github.repository }}
+  sha:
+    description: "SHA to checkout"
+    default: ${{ forge.sha || github.sha }}
+  server_url:
+    description: "Server URL to checkout"
+    default: ${{ forge.server_url || github.server_url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Slim Checkout
+      shell: bash
+      run: |
+        # Use raw git to avoid Node-based checkout action
+        if [ ! -d ".git" ]; then
+          git init
+          git remote add origin ${{ inputs.server_url }}/${{ inputs.repository }}
+        fi
+        git fetch --depth 1 origin ${{ inputs.sha }}
+        git checkout FETCH_HEAD
+        git fetch --tags --force && git fetch origin HEAD
+        # TODO: this belongs lower down? after the summary/delta report (with colored diff)
+        git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl

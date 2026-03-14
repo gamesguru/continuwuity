@@ -1,0 +1,98 @@
+name: "Install conduwuit Artifact"
+description: "Downloads, verifies, and installs a conduwuit binary artifact"
+inputs:
+  artifact_url:
+    description: "URL to zipped conduwuit binary"
+    required: true
+  artifact_sha256:
+    description: "Expected SHA256 sum of the zip bundle"
+    required: true
+  github_token:
+    description: "GitHub token for authentication (needed for some API artifact URLs)"
+    required: true
+  profile:
+    description: "Build profile (e.g. debug, release)"
+    default: "debug"
+  gpg_public_key:
+    description: "GPG Public Key for verifying the binary"
+    required: true
+  gpg_public_key_id:
+    description: "GPG Public Key ID for trusting the key"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Download conduwuit bundle
+      shell: bash
+      run: |
+        ARTIFACT_URL="${{ inputs.artifact_url }}"
+
+        # If the user pasted a github.com web UI URL, convert it to the API endpoint
+        if [[ "$ARTIFACT_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/(suites|actions/runs)/[^/]+/artifacts/([^/]+) ]]; then
+          OWNER="${BASH_REMATCH[1]}"
+          REPO="${BASH_REMATCH[2]}"
+          ARTIFACT_ID="${BASH_REMATCH[4]}"
+          ARTIFACT_URL="https://api.github.com/repos/$OWNER/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
+          echo "Converted Web URL to API URL:"
+          echo $ARTIFACT_URL
+        fi
+
+        mkdir -p target/${{ inputs.profile }}
+        echo "Downloading bundle from:"
+        echo ""
+        echo "$ARTIFACT_URL"
+        echo ""
+        curl -L -o target/${{ inputs.profile }}/bundle.zip -H "Authorization: Bearer ${{ inputs.github_token }}" "$ARTIFACT_URL"
+
+    - name: SHA256 sum check (zip bundle validation)
+      shell: bash
+      run: |
+        # Log sha256
+        echo "expected sha256: ${{ inputs.artifact_sha256 }}"
+        echo "comparing sums..."
+        sha256sum target/${{ inputs.profile }}/bundle.zip
+        echo "OK."
+
+    - name: Extract conduwuit bundle
+      shell: bash
+      run: |
+        echo "Unzipping bundle..."
+        unzip -o target/${{ inputs.profile }}/bundle.zip -d target/${{ inputs.profile }}/
+        rm target/${{ inputs.profile }}/bundle.zip
+
+    - name: Reject oversized (non-release?) binaries
+      shell: bash
+      run: |
+        BINARY="target/${{ inputs.profile }}/conduwuit"
+        SIZE_MB=$(( $(stat -c%s "$BINARY") / 1048576 ))
+        echo "Binary size: ${SIZE_MB} MB"
+        if [ "$SIZE_MB" -gt 125 ]; then
+          echo "FATAL: Binary is ${SIZE_MB} MB (>125 MB). Likely a debug build -- aborting."
+          exit 1
+        fi
+
+    - name: GPG signature check (binary verification)
+      shell: bash
+      env:
+        PUBKEY: ${{ inputs.gpg_public_key }}
+        PUBKEY_ID: ${{ inputs.gpg_public_key_id }}
+      run: |
+        echo "Verifying GPG signature..."
+        echo "Debug: Key length is ${#PUBKEY}"
+        echo "$PUBKEY" | tee key.asc
+        gpg --import key.asc
+        # Trust the imported key
+        echo "${PUBKEY_ID}:6:" | gpg --import-ownertrust
+        gpg --list-keys
+        gpg --batch --verify target/${{ inputs.profile }}/conduwuit.asc target/${{ inputs.profile }}/conduwuit
+        echo "OK. GPG signature verified."
+
+    - name: Post-verification setup
+      shell: bash
+      run: |
+        echo "Marking file as executable"
+        chmod +x target/${{ inputs.profile }}/conduwuit
+        echo "Creating symlink to ./target/latest/"
+        mkdir -p target/latest
+        ln -f target/${{ inputs.profile }}/conduwuit target/latest/conduwuit
