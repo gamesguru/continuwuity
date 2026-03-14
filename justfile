@@ -14,27 +14,11 @@ init-prebuild:
     sudo chown -R $USER:$USER /usr/local/build
     @echo "Done. You can now run prebuild commands."
 
+# Pre-build all C/C++ dependencies
+prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-rocksdb prebuild-snappy prebuild-zstd
+
 # Install all pre-built C/C++ dependencies
-install-all: install-rocksdb install-jemalloc install-zstd install-lz4 install-snappy
-
-# Pre-build RocksDB shared and statically
-prebuild-rocksdb:
-    #!/usr/bin/env bash
-    set -e
-    TAG="continuwuity-v0.5.0"
-    mkdir -p /usr/local/build
-    echo "Cloning rocksdb $TAG..."
-    [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /usr/local/build/rocksdb || true
-    echo "Building RocksDB..."
-    cd /usr/local/build/rocksdb && env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib static_lib -j$(nproc)
-
-# Install RocksDB globally (requires sudo)
-install-rocksdb:
-    @echo "Installing RocksDB to /usr/local... (Requires sudo)"
-    cd /usr/local/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local
-    cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
-    sudo ldconfig
-    @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
+install-all: install-jemalloc install-lz4 install-rocksdb install-snappy install-zstd
 
 # Pre-build jemalloc
 prebuild-jemalloc:
@@ -57,26 +41,6 @@ install-jemalloc:
     cd /usr/local/build/jemalloc && sudo make install_lib_static install_lib_shared install_include
     sudo ldconfig
 
-# Pre-build zstd
-prebuild-zstd:
-    #!/usr/bin/env bash
-    set -e
-    VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
-    TAG="v$VER"
-    mkdir -p /usr/local/build
-    echo "Cloning zstd $TAG..."
-    [ ! -d "/usr/local/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd || true
-    echo "Building zstd..."
-    cd /usr/local/build/zstd
-    git checkout $TAG
-    make lib-release -j$(nproc)
-
-# Install zstd globally (requires sudo)
-install-zstd:
-    @echo "Installing zstd to /usr/local... (Requires sudo)"
-    cd /usr/local/build/zstd && sudo make install -C lib PREFIX=/usr/local
-    sudo ldconfig
-
 # Pre-build lz4
 prebuild-lz4:
     #!/usr/bin/env bash
@@ -97,6 +61,25 @@ install-lz4:
     cd /usr/local/build/lz4 && sudo make install PREFIX=/usr/local
     sudo ldconfig
 
+# Pre-build RocksDB shared and statically
+prebuild-rocksdb:
+    #!/usr/bin/env bash
+    set -e
+    TAG="continuwuity-v0.5.0"
+    mkdir -p /usr/local/build
+    echo "Cloning rocksdb $TAG..."
+    [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /usr/local/build/rocksdb || true
+    echo "Building RocksDB..."
+    cd /usr/local/build/rocksdb && env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib static_lib -j$(nproc)
+
+# Install RocksDB globally (requires sudo)
+install-rocksdb:
+    @echo "Installing RocksDB to /usr/local... (Requires sudo)"
+    cd /usr/local/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local
+    cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
+    sudo ldconfig
+    @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
+
 # Pre-build snappy
 prebuild-snappy:
     #!/usr/bin/env bash
@@ -108,12 +91,13 @@ prebuild-snappy:
     echo "Building snappy..."
     cd /usr/local/build/snappy
     git checkout $TAG
+    sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
     mkdir -p build_static && cd build_static
-    cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    cmake -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
     cd ..
     mkdir -p build_shared && cd build_shared
-    cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    cmake -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
 
 # Install snappy globally (requires sudo)
@@ -121,6 +105,26 @@ install-snappy:
     @echo "Installing snappy to /usr/local... (Requires sudo)"
     cd /usr/local/build/snappy/build_static && sudo make install
     cd /usr/local/build/snappy/build_shared && sudo make install
+    sudo ldconfig
+
+# Pre-build zstd
+prebuild-zstd:
+    #!/usr/bin/env bash
+    set -e
+    VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
+    TAG="v$VER"
+    mkdir -p /usr/local/build
+    echo "Cloning zstd $TAG..."
+    [ ! -d "/usr/local/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd || true
+    echo "Building zstd..."
+    cd /usr/local/build/zstd
+    git checkout $TAG
+    make lib-release -j$(nproc)
+
+# Install zstd globally (requires sudo)
+install-zstd:
+    @echo "Installing zstd to /usr/local... (Requires sudo)"
+    cd /usr/local/build/zstd && sudo make install -C lib PREFIX=/usr/local
     sudo ldconfig
 
 # --- CPU Profiling ---
