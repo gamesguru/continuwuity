@@ -2,11 +2,15 @@
 name: Complement Tests
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
   workflow_dispatch:
     inputs:
       artifact_url:
         description: "URL to zipped conduwuit binary"
-        required: true
+        required: false
         type: string
       runner:
         description: "Runner label"
@@ -34,22 +38,28 @@ jobs:
       RUSTC_WRAPPER: ccache
 
     steps:
-      - name: Enforce main branch only
-        if: github.ref != 'refs/heads/main'
-        run: |
-          echo "This workflow must be run from the main branch."
-          echo "It does NOT build the source revision, but takes a URL to a built binary."
-          echo "Consult the relevant YAML workflow file for compatibility versioning."
-          exit 1
-
-      - name: Slim Checkout
-        uses: ./.forgejo/actions/slim-checkout
+      - name: Checkout
+        uses: ./.forgejo/actions/checkout
         with:
           repository: ${{ forge.repository || github.repository }}
           sha: ${{ forge.sha || github.sha }}
           server_url: ${{ forge.server_url || github.server_url }}
 
-      - name: Install conduwuit Artifact
+      - name: Setup Rust (for build from source)
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_BUILD == 'true' || (github.event_name != 'workflow_dispatch' && vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != 'true') }}
+        uses: ./.forgejo/actions/setup-rust
+        with:
+          github-token: ${{ secrets.GH_PUBLIC_RO }}
+
+      - name: Build conduwuit (from source)
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_BUILD == 'true' || (github.event_name != 'workflow_dispatch' && vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != 'true') }}
+        run: |
+          cargo build --profile ${{ env.PROFILE }} --bin conduwuit
+          mkdir -p target/latest
+          ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
+
+      - name: Install conduwuit Artifact (from zip box)
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.artifact_url != '') }}
         uses: ./.forgejo/actions/install-conduwuit-artifact
         with:
           artifact_url: ${{ github.event.inputs.artifact_url }}
