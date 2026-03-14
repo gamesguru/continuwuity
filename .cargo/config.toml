@@ -15,9 +15,15 @@ LD_LIBRARY_PATH = { value = "/usr/local/lib", force = false }
 # Linux
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/local/lib"] #, "-C", "link-arg=-fuse-ld=mold"]
+rustflags = [
+    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
+]
 
 # ARM/Aarch64 (Raspberry Pi)
 [target.aarch64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/local/lib"] #, "-C", "link-arg=-fuse-ld=mold"]
+rustflags = [
+    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
+]
