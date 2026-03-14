@@ -87,10 +87,10 @@ jobs:
           fi
 
       - name: Build Complement Docker image
-        run: make complement/docker
+        run: just ci-complement-docker
 
       - name: Capture baseline stats
-        run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
+        run: VERBOSE=1 just ci-complement-stats | tee baseline_stats.txt
 
       - name: Run Complement tests (currently xfailing ~200 tests)
         run: |
@@ -99,7 +99,7 @@ jobs:
 
       - name: Compare results with baseline
         continue-on-error: true
-        run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 make complement/stats)
+        run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 just ci-complement-stats)
 
       - name: Peek at results directory (log file sizes)
         continue-on-error: true
