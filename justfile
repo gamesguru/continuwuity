@@ -21,23 +21,11 @@ install-all: install-rocksdb install-jemalloc install-zstd install-lz4 install-s
 prebuild-rocksdb:
     #!/usr/bin/env bash
     set -e
-    VER=$(cargo pkgid rust-librocksdb-sys | cut -d'@' -f2 | cut -d'+' -f2)
-    # The fork tag is continuwuity-v0.5.0
     TAG="continuwuity-v0.5.0"
     mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/rocksdb" ]; then
-        CURRENT=$(cd /usr/local/build/rocksdb && git describe --tags --exact-match 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$TAG" ]; then
-            echo "RocksDB version mismatch (Current: $CURRENT, Required: $TAG). Please manually rm -rf /usr/local/build/rocksdb to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/rocksdb" ]; then
-        echo "Cloning rust-rocksdb $TAG..."
-        git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /tmp/rust-rocksdb-src
-        mv /tmp/rust-rocksdb-src/librocksdb-sys/rocksdb /usr/local/build/rocksdb
-        rm -rf /tmp/rust-rocksdb-src
-    fi
+    echo "Cloning rust-rocksdb $TAG..."
+    [ ! -d "/tmp/rust-rocksdb-src" ] && [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /tmp/rust-rocksdb-src || true
+    [ -d "/tmp/rust-rocksdb-src" ] && mv /tmp/rust-rocksdb-src/librocksdb-sys/rocksdb /usr/local/build/rocksdb && rm -rf /tmp/rust-rocksdb-src || true
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb && env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib static_lib -j$(nproc)
 
@@ -55,19 +43,11 @@ prebuild-jemalloc:
     set -e
     TAG="5.3.0"
     mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/jemalloc" ]; then
-        CURRENT=$(cd /usr/local/build/jemalloc && git describe --tags --exact-match 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$TAG" ]; then
-            echo "jemalloc version mismatch (Current: $CURRENT, Required: $TAG). Please manually rm -rf /usr/local/build/jemalloc to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/jemalloc" ]; then
-        echo "Cloning jemalloc $TAG..."
-        git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git /usr/local/build/jemalloc
-    fi
+    echo "Cloning jemalloc $TAG..."
+    [ ! -d "/usr/local/build/jemalloc" ] && git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git /usr/local/build/jemalloc || true
     echo "Building jemalloc..."
     cd /usr/local/build/jemalloc
+    git checkout $TAG
     [ -f configure ] || ./autogen.sh
     [ -f Makefile ] || ./configure --prefix=/usr/local
     make -j$(nproc)
@@ -85,19 +65,12 @@ prebuild-zstd:
     VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
     TAG="v$VER"
     mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/zstd" ]; then
-        CURRENT=$(cd /usr/local/build/zstd && git describe --tags --exact-match 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$TAG" ]; then
-            echo "zstd version mismatch. Please manually rm -rf /usr/local/build/zstd to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/zstd" ]; then
-        echo "Cloning zstd $TAG..."
-        git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd
-    fi
+    echo "Cloning zstd $TAG..."
+    [ ! -d "/usr/local/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd || true
     echo "Building zstd..."
-    cd /usr/local/build/zstd && make lib-release -j$(nproc)
+    cd /usr/local/build/zstd
+    git checkout $TAG
+    make lib-release -j$(nproc)
 
 # Install zstd globally (requires sudo)
 install-zstd:
@@ -112,19 +85,12 @@ prebuild-lz4:
     VER=$(cargo pkgid lz4-sys | cut -d'@' -f2 | grep -o 'lz4-[0-9.]*' | cut -d '-' -f2)
     TAG="v$VER"
     mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/lz4" ]; then
-        CURRENT=$(cd /usr/local/build/lz4 && git describe --tags --exact-match 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$TAG" ]; then
-            echo "lz4 version mismatch. Please manually rm -rf /usr/local/build/lz4 to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/lz4" ]; then
-        echo "Cloning lz4 $TAG..."
-        git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git /usr/local/build/lz4
-    fi
+    echo "Cloning lz4 $TAG..."
+    [ ! -d "/usr/local/build/lz4" ] && git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git /usr/local/build/lz4 || true
     echo "Building lz4..."
-    cd /usr/local/build/lz4 && make lib -j$(nproc)
+    cd /usr/local/build/lz4
+    git checkout $TAG
+    make lib -j$(nproc)
 
 # Install lz4 globally (requires sudo)
 install-lz4:
@@ -138,19 +104,11 @@ prebuild-snappy:
     set -e
     TAG="1.2.1"
     mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/snappy" ]; then
-        CURRENT=$(cd /usr/local/build/snappy && git describe --tags --exact-match 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$TAG" ]; then
-            echo "snappy version mismatch. Please manually rm -rf /usr/local/build/snappy to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/snappy" ]; then
-        echo "Cloning snappy $TAG..."
-        git clone --depth 1 --branch $TAG https://github.com/google/snappy.git /usr/local/build/snappy
-    fi
+    echo "Cloning snappy $TAG..."
+    [ ! -d "/usr/local/build/snappy" ] && git clone --depth 1 --branch $TAG https://github.com/google/snappy.git /usr/local/build/snappy || true
     echo "Building snappy..."
     cd /usr/local/build/snappy
+    git checkout $TAG
     mkdir -p build_static && cd build_static
     cmake -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
@@ -190,7 +148,7 @@ profile-runtime-mem *args:
 
 # Generate heap_profile.svg from collected jemalloc dumps
 profile-runtime-mem-analyze:
-    jeprof --svg ./target/release/conduwuit jeprof.out.* > heap_profile.svg
+    jeprof --svg ./target/release/conduwuit jeprof.out.*
     @echo "Saved heap_profile.svg"
 
 # Clean up jemalloc dump files
@@ -217,46 +175,48 @@ profile-build-llvm-lines:
     cargo llvm-lines --profile ${PROFILE:-release} -p conduwuit --lib
 
 # Extracts the workspace version from Cargo.toml
-version := `grep -m1 "^version = " Cargo.toml | cut -d "\"" -f 2`
+version := `grep -m1 "^version = " Cargo.toml | cut -d \" -f 2`
 
 # Builds liburing
 prebuild-liburing:
-    @echo "Cloning and building liburing (attempting to match project version {{version}})..."
-    git clone https://github.com/axboe/liburing.git /tmp/liburing
-    -cd /tmp/liburing && git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
-    cd /tmp/liburing && ./configure && make -j$(nproc)
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p /usr/local/build
+    echo "Cloning and building liburing (attempting to match project version {{version}})"...
+    [ ! -d "/usr/local/build/liburing" ] && git clone https://github.com/axboe/liburing.git /usr/local/build/liburing || true
+    cd /usr/local/build/liburing
+    git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
+    ./configure
+    make -j$(nproc)
 
 # Installs liburing
 install-liburing:
     @echo "Installing liburing (requires sudo)..."
-    cd /tmp/liburing && sudo make install
-    rm -rf /tmp/liburing
+    cd /usr/local/build/liburing && sudo make install
     @echo "Done! You might need to run 'sudo ldconfig' to update library cache."
-
-# Start gdbserver for lightweight remote debugging (POC)
-# Usage: just remote-debug /path/to/conduwuit.toml
-remote-debug config="conduwuit-example.toml":
-    @echo "Starting gdbserver on :1234 using config: {{config}}"
-    sudo -u conduwuit gdbserver :1234 ./target/debug/continuwuity --config {{config}}
-
-
-# -----------------------------------------------------------------------------
-# Dependency: bzip2
-# -----------------------------------------------------------------------------
 
 # Builds bzip2
 prebuild-bzip2:
-    @echo "Cloning and building bzip2..."
-    git clone git://sourceware.org/git/bzip2.git /tmp/bzip2
-    cd /tmp/bzip2 && make -f Makefile-libbz2_so
-    cd /tmp/bzip2 && make
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p /usr/local/build
+    echo "Cloning and building bzip2..."
+    [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
+    cd /usr/local/build/bzip2
+    make -f Makefile-libbz2_so
+    make
 
 # Installs bzip2
 install-bzip2:
     @echo "Installing bzip2 (requires sudo)..."
-    cd /tmp/bzip2 && sudo make install PREFIX=/usr/local
-    cd /tmp/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
-    cd /tmp/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
+    cd /usr/local/build/bzip2 && sudo make install PREFIX=/usr/local
+    cd /usr/local/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
+    cd /usr/local/build/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
     sudo ldconfig
-    rm -rf /tmp/bzip2
     @echo "Done! Installed libbz2.so to /usr/local/lib"
+
+# Start gdbserver for lightweight remote debugging (POC)
+# Usage: just remote-debug-poc /path/to/conduwuit.toml
+remote-debug-poc config="conduwuit-example.toml":
+    @echo "Starting gdbserver on :1234 using config: {{config}}"
+    sudo -u conduwuit gdbserver :1234 ./target/debug/continuwuity --config {{config}}
