@@ -216,3 +216,48 @@ profile-build-bloat-functions:
 # Analyze generic instantiation (Monomorphization)
 profile-build-llvm-lines:
     cargo llvm-lines --profile ${PROFILE:-release} -p conduwuit --lib
+
+# Extracts the workspace version from Cargo.toml
+version := `grep -m1 "^version = " Cargo.toml | cut -d "\"" -f 2`
+
+# Builds liburing
+prebuild-liburing:
+    @echo "Cloning and building liburing (attempting to match project version {{version}})..."
+    git clone https://github.com/axboe/liburing.git /tmp/liburing
+    -cd /tmp/liburing && git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
+    cd /tmp/liburing && ./configure && make -j$(nproc)
+
+# Installs liburing
+install-liburing:
+    @echo "Installing liburing (requires sudo)..."
+    cd /tmp/liburing && sudo make install
+    rm -rf /tmp/liburing
+    @echo "Done! You might need to run 'sudo ldconfig' to update library cache."
+
+# Start gdbserver for lightweight remote debugging (POC)
+# Usage: just remote-debug /path/to/conduwuit.toml
+remote-debug config="conduwuit-example.toml":
+    @echo "Starting gdbserver on :1234 using config: {{config}}"
+    sudo -u conduwuit gdbserver :1234 ./target/debug/continuwuity --config {{config}}
+
+
+# -----------------------------------------------------------------------------
+# Dependency: bzip2
+# -----------------------------------------------------------------------------
+
+# Builds bzip2
+prebuild-bzip2:
+    @echo "Cloning and building bzip2..."
+    git clone git://sourceware.org/git/bzip2.git /tmp/bzip2
+    cd /tmp/bzip2 && make -f Makefile-libbz2_so
+    cd /tmp/bzip2 && make
+
+# Installs bzip2
+install-bzip2:
+    @echo "Installing bzip2 (requires sudo)..."
+    cd /tmp/bzip2 && sudo make install PREFIX=/usr/local
+    cd /tmp/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
+    cd /tmp/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
+    sudo ldconfig
+    rm -rf /tmp/bzip2
+    @echo "Done! Installed libbz2.so to /usr/local/lib"
