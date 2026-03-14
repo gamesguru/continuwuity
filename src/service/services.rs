@@ -1,7 +1,7 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug, debug_info, info, trace, utils::stream::IterStream,
+	Result, Server, SyncRwLock, debug, debug_info, error, info, trace, utils::stream::IterStream,
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -130,23 +130,21 @@ impl Services {
 		self.admin.set_services(Some(Arc::clone(self)).as_ref());
 
 		info!("Running database migrations...");
-		super::migrations::migrations(self).await?;
+		super::migrations::migrations(self)
+			.await
+			.inspect_err(|e| error!("Migrations failed: {e}"))?;
 
 		info!("Starting service manager...");
-		let manager = {
-			let mut lock = self.manager.lock().await;
-			let manager = Manager::new(self);
-			_ = lock.insert(Arc::clone(&manager));
-			manager
-		};
-
-		info!("Starting service workers...");
-		manager.start().await?;
+		let manager = Manager::new(self);
+		*self.manager.lock().await = Some(Arc::clone(&manager));
 
 		// reset dormant online/away statuses to offline on startup
 		if self.server.config.allow_local_presence {
 			info!("Local presence statuses will be reset in the background.");
 		}
+
+		info!("Starting service workers...");
+		manager.start().await?;
 
 		info!("Services startup complete.");
 
