@@ -90,12 +90,12 @@ jobs:
         run: just ci-complement-docker
 
       - name: Capture baseline stats
-        run: VERBOSE=1 just ci-complement-stats | tee baseline_stats.txt
+        env:
+          VERBOSE: 1
+        run: just ci-complement-stats | tee baseline_stats.txt
 
       - name: Run Complement tests (currently xfailing ~200 tests)
-        run: |
-          mkdir -p tests/test_results/complement/
-          ./bin/complement ./complement-src
+        run: ./bin/complement ./complement-src
 
       - name: Compare results with baseline
         continue-on-error: true

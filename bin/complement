@@ -54,6 +54,7 @@ trap cleanup_complement_containers EXIT
 
 
 # Ensure result files exist even if tests fail to start
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$RESULTS_FILE")"
 touch "$LOG_FILE"
 touch "$RESULTS_FILE"
 
