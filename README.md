@@ -21,23 +21,9 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 
 [![Codeberg](https://img.shields.io/badge/Codeberg-mirror-2185D0?style=flat&logo=codeberg&labelColor=fff)](https://codeberg.org/continuwuity/continuwuity) [![Stars](https://codeberg.org/continuwuity/continuwuity/badges/stars.svg?style=flat)](https://codeberg.org/continuwuity/continuwuity/stars)
 
-Working reference:
+[![Complement Tests (Upstream)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadge-main.json)](https://forgejo.ellis.link/gamesguru/continuwuity/actions/workflows/complement.yml)
+[![Complement Tests (Fork)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main.json)](https://github.com/gamesguru/continuwuity/actions/workflows/complement.yml)
 
-[![Working](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub-badge.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
-
-Trials:
-
-[![Trial 1 (Branch _metadata/badges)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
-
-[![Trial 2 (Branch refs/heads/_metadata/badges)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Frefs%2Fheads%2F_metadata%2Fbadges%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
-
-[![Trial 3 (Branch badges path github/commits...)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://github.com/gamesguru/continuwuity/actions/workflows/test.yml)
-
-[![Trial 4 (Forgejo raw path like GitHub trial 3)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbadges%2Fforgejo%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
-
-[![Trial 5 (Forgejo raw path github provider checkout)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbadges%2Fgithub%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
-
-[![Trial 6 (Forgejo raw path without badges repo)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fforgejo%2Fcommits%2Fa7db2d7204ff4605b916d93a7026d4507c3f2694.json)](https://forgejo.ellis.link/continuwuation/continuwuity)
 ### Why does this exist?
 
 The original conduwuit project has been archived and is no longer maintained. Rather than letting this Rust-based Matrix homeserver disappear, a group of community contributors have forked the project to continue its development, fix outstanding issues, and add new features.
