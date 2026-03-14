@@ -15,10 +15,10 @@ init-prebuild:
     @echo "Done. You can now run prebuild commands."
 
 # Pre-build all C/C++ dependencies
-prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-rocksdb prebuild-snappy prebuild-zstd
+prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebuild-zstd prebuild-rocksdb
 
 # Install all pre-built C/C++ dependencies
-install-all: install-jemalloc install-lz4 install-rocksdb install-snappy install-zstd
+install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb
 
 # Pre-build jemalloc
 prebuild-jemalloc:
@@ -70,7 +70,9 @@ prebuild-rocksdb:
     echo "Cloning rocksdb $TAG..."
     [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /usr/local/build/rocksdb || true
     echo "Building RocksDB..."
-    cd /usr/local/build/rocksdb && env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib static_lib -j$(nproc)
+    cd /usr/local/build/rocksdb
+    git checkout $TAG
+    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" make shared_lib static_lib -j$(nproc)
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
@@ -79,6 +81,12 @@ install-rocksdb:
     cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
     sudo ldconfig
     @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
+
+# Clean RocksDB build directory
+clean-rocksdb:
+    @echo "Cleaning RocksDB build directory..."
+    cd /usr/local/build/rocksdb && make clean
+    rm -f /usr/local/build/rocksdb/make_config.mk
 
 # Pre-build snappy
 prebuild-snappy:
