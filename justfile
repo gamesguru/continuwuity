@@ -231,3 +231,10 @@ install-bzip2:
 remote-debug-poc config="conduwuit-example.toml":
     @echo "Starting gdbserver on :1234 using config: {{config}}"
     sudo -u conduwuit gdbserver :1234 ./target/debug/conduwuit --config {{config}}
+
+# Install the conduwuit binary to a specified directory (default: ~/.cargo/bin)
+install bin_dir="~/.cargo/bin":
+    @echo "Installing conduwuit to {{bin_dir}}..."
+    mkdir -p {{bin_dir}}
+    install -m 755 target/debug/conduwuit {{bin_dir}}/conduwuit
+    @echo "Done!"
