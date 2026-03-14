@@ -14,61 +14,23 @@ init-prebuild:
     sudo chown -R $USER:$USER /usr/local/build
     @echo "Done. You can now run prebuild commands."
 
+# Pre-build all C/C++ dependencies
+prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebuild-zstd prebuild-rocksdb
+
 # Install all pre-built C/C++ dependencies
-install-all: install-rocksdb install-jemalloc install-zstd install-lz4 install-snappy install-bzip2
-
-# Pre-build RocksDB shared and statically
-prebuild-rocksdb:
-    #!/usr/bin/env bash
-    set -e
-    VER=$(cargo pkgid rust-librocksdb-sys | cut -d'@' -f2 | cut -d'+' -f2)
-    # The fork tag is continuwuity-v0.5.0
-    TAG="continuwuity-v0.5.0"
-    mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/rocksdb" ]; then
-        CURRENT=$(cd /usr/local/build/rocksdb && git describe --tags --exact-match 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$TAG" ]; then
-            echo "RocksDB version mismatch (Current: $CURRENT, Required: $TAG). Please manually rm -rf /usr/local/build/rocksdb to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/rocksdb" ]; then
-        echo "Cloning rust-rocksdb $TAG..."
-        git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /tmp/rust-rocksdb-src
-        mv /tmp/rust-rocksdb-src/librocksdb-sys/rocksdb /usr/local/build/rocksdb
-        rm -rf /tmp/rust-rocksdb-src
-    fi
-    echo "Building RocksDB..."
-    cd /usr/local/build/rocksdb && env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib static_lib -j$(nproc)
-
-# Install RocksDB globally (requires sudo)
-install-rocksdb:
-    @echo "Installing RocksDB to /usr/local... (Requires sudo)"
-    cd /usr/local/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local
-    cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
-    sudo ldconfig
-    @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
+install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb
 
 # Pre-build jemalloc
 prebuild-jemalloc:
     #!/usr/bin/env bash
     set -e
-    COMMIT=$(cargo pkgid tikv-jemalloc-sys | cut -d'@' -f2 | grep -o 'g[0-9a-f]*' | head -n 1 | cut -c 2-)
+    TAG="5.3.0"
     mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/tikv-jemalloc" ]; then
-        CURRENT=$(cd /usr/local/build/tikv-jemalloc && git rev-parse HEAD 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$COMMIT" ] && [ "${CURRENT:0:7}" != "${COMMIT:0:7}" ]; then
-            echo "jemalloc commit mismatch (Current: $CURRENT, Required: $COMMIT). Please manually rm -rf /usr/local/build/tikv-jemalloc to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/tikv-jemalloc" ]; then
-        echo "Cloning tikv-jemalloc..."
-        git clone https://github.com/tikv/jemalloc.git /usr/local/build/tikv-jemalloc
-        cd /usr/local/build/tikv-jemalloc && git checkout $COMMIT
-    fi
+    echo "Cloning jemalloc $TAG..."
+    [ ! -d "/usr/local/build/jemalloc" ] && git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git /usr/local/build/jemalloc || true
     echo "Building jemalloc..."
-    cd /usr/local/build/tikv-jemalloc
+    cd /usr/local/build/jemalloc
+    git checkout $TAG
     [ -f configure ] || ./autogen.sh
     [ -f Makefile ] || ./configure --prefix=/usr/local
     make -j$(nproc)
@@ -76,34 +38,7 @@ prebuild-jemalloc:
 # Install jemalloc globally (requires sudo)
 install-jemalloc:
     @echo "Installing jemalloc to /usr/local... (Requires sudo)"
-    cd /usr/local/build/tikv-jemalloc && sudo make install_lib_static install_lib_shared install_include
-    sudo ldconfig
-
-# Pre-build zstd
-prebuild-zstd:
-    #!/usr/bin/env bash
-    set -e
-    VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
-    TAG="v$VER"
-    mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/zstd" ]; then
-        CURRENT=$(cd /usr/local/build/zstd && git describe --tags --exact-match 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$TAG" ]; then
-            echo "zstd version mismatch. Please manually rm -rf /usr/local/build/zstd to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/zstd" ]; then
-        echo "Cloning zstd $TAG..."
-        git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd
-    fi
-    echo "Building zstd..."
-    cd /usr/local/build/zstd && make lib-release -j$(nproc)
-
-# Install zstd globally (requires sudo)
-install-zstd:
-    @echo "Installing zstd to /usr/local... (Requires sudo)"
-    cd /usr/local/build/zstd && sudo make install -C lib PREFIX=/usr/local
+    cd /usr/local/build/jemalloc && sudo make install_lib_static install_lib_shared install_include
     sudo ldconfig
 
 # Pre-build lz4
@@ -113,19 +48,12 @@ prebuild-lz4:
     VER=$(cargo pkgid lz4-sys | cut -d'@' -f2 | grep -o 'lz4-[0-9.]*' | cut -d '-' -f2)
     TAG="v$VER"
     mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/lz4" ]; then
-        CURRENT=$(cd /usr/local/build/lz4 && git describe --tags --exact-match 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$TAG" ]; then
-            echo "lz4 version mismatch. Please manually rm -rf /usr/local/build/lz4 to rebuild."
-            exit 1
-        fi
-    fi
-    if [ ! -d "/usr/local/build/lz4" ]; then
-        echo "Cloning lz4 $TAG..."
-        git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git /usr/local/build/lz4
-    fi
+    echo "Cloning lz4 $TAG..."
+    [ ! -d "/usr/local/build/lz4" ] && git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git /usr/local/build/lz4 || true
     echo "Building lz4..."
-    cd /usr/local/build/lz4 && make lib -j$(nproc)
+    cd /usr/local/build/lz4
+    git checkout $TAG
+    make lib -j$(nproc)
 
 # Install lz4 globally (requires sudo)
 install-lz4:
@@ -133,42 +61,79 @@ install-lz4:
     cd /usr/local/build/lz4 && sudo make install PREFIX=/usr/local
     sudo ldconfig
 
+# Pre-build RocksDB shared and statically
+prebuild-rocksdb:
+    #!/usr/bin/env bash
+    set -e
+    TAG="continuwuity-v0.5.0"
+    mkdir -p /usr/local/build
+    echo "Cloning rocksdb $TAG..."
+    [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /usr/local/build/rocksdb || true
+    echo "Building RocksDB..."
+    cd /usr/local/build/rocksdb
+    git checkout $TAG
+    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" make shared_lib static_lib -j$(nproc)
+
+# Install RocksDB globally (requires sudo)
+install-rocksdb:
+    @echo "Installing RocksDB to /usr/local... (Requires sudo)"
+    cd /usr/local/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local
+    cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
+    sudo ldconfig
+    @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
+
+# Clean RocksDB build directory
+clean-rocksdb:
+    @echo "Cleaning RocksDB build directory..."
+    cd /usr/local/build/rocksdb && make clean
+    rm -f /usr/local/build/rocksdb/make_config.mk
+
 # Pre-build snappy
 prebuild-snappy:
     #!/usr/bin/env bash
     set -e
+    TAG="1.2.1"
     mkdir -p /usr/local/build
-    echo "Cloning and building snappy..."
-    [ ! -d "/usr/local/build/snappy" ] && git clone --depth 1 https://github.com/google/snappy.git /usr/local/build/snappy || true
+    echo "Cloning snappy $TAG..."
+    [ ! -d "/usr/local/build/snappy" ] && git clone --depth 1 --branch $TAG https://github.com/google/snappy.git /usr/local/build/snappy || true
+    echo "Building snappy..."
     cd /usr/local/build/snappy
-    cmake -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF .
+    git checkout $TAG
+    sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
+    mkdir -p build_static && cd build_static
+    cmake -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    make -j$(nproc)
+    cd ..
+    mkdir -p build_shared && cd build_shared
+    cmake -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
 
-# Install snappy
+# Install snappy globally (requires sudo)
 install-snappy:
-    @echo "Installing snappy (requires sudo)..."
-    cd /usr/local/build/snappy && sudo make install
+    @echo "Installing snappy to /usr/local... (Requires sudo)"
+    cd /usr/local/build/snappy/build_static && sudo make install
+    cd /usr/local/build/snappy/build_shared && sudo make install
     sudo ldconfig
 
-# Pre-build bzip2
-prebuild-bzip2:
+# Pre-build zstd
+prebuild-zstd:
     #!/usr/bin/env bash
     set -e
+    VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
+    TAG="v$VER"
     mkdir -p /usr/local/build
-    echo "Cloning and building bzip2..."
-    [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
-    cd /usr/local/build/bzip2
-    make -f Makefile-libbz2_so
-    make
+    echo "Cloning zstd $TAG..."
+    [ ! -d "/usr/local/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd || true
+    echo "Building zstd..."
+    cd /usr/local/build/zstd
+    git checkout $TAG
+    make lib-release -j$(nproc)
 
-# Installs bzip2
-install-bzip2:
-    @echo "Installing bzip2 (requires sudo)..."
-    cd /usr/local/build/bzip2 && sudo make install PREFIX=/usr/local
-    cd /usr/local/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
-    cd /usr/local/build/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
+# Install zstd globally (requires sudo)
+install-zstd:
+    @echo "Installing zstd to /usr/local... (Requires sudo)"
+    cd /usr/local/build/zstd && sudo make install -C lib PREFIX=/usr/local
     sudo ldconfig
-    @echo "Done! Installed libbz2.so to /usr/local/lib"
 
 # --- CPU Profiling ---
 
@@ -194,7 +159,7 @@ profile-runtime-mem *args:
 
 # Generate heap_profile.svg from collected jemalloc dumps
 profile-runtime-mem-analyze:
-    jeprof --svg ./target/release/conduwuit jeprof.out.* > heap_profile.svg
+    jeprof --svg ./target/release/conduwuit jeprof.out.*
     @echo "Saved heap_profile.svg"
 
 # Clean up jemalloc dump files
@@ -219,6 +184,47 @@ profile-build-bloat-functions:
 # Analyze generic instantiation (Monomorphization)
 profile-build-llvm-lines:
     cargo llvm-lines --profile ${PROFILE:-release} -p conduwuit --lib
+
+# Extracts the workspace version from Cargo.toml
+version := `grep -m1 "^version = " Cargo.toml | cut -d \" -f 2`
+
+# Builds liburing
+prebuild-liburing:
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p /usr/local/build
+    echo "Cloning and building liburing (attempting to match project version {{version}})"...
+    [ ! -d "/usr/local/build/liburing" ] && git clone https://github.com/axboe/liburing.git /usr/local/build/liburing || true
+    cd /usr/local/build/liburing
+    git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
+    ./configure
+    make -j$(nproc)
+
+# Installs liburing
+install-liburing:
+    @echo "Installing liburing (requires sudo)..."
+    cd /usr/local/build/liburing && sudo make install
+    @echo "Done! You might need to run 'sudo ldconfig' to update library cache."
+
+# Builds bzip2
+prebuild-bzip2:
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p /usr/local/build
+    echo "Cloning and building bzip2..."
+    [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
+    cd /usr/local/build/bzip2
+    make -f Makefile-libbz2_so
+    make
+
+# Installs bzip2
+install-bzip2:
+    @echo "Installing bzip2 (requires sudo)..."
+    cd /usr/local/build/bzip2 && sudo make install PREFIX=/usr/local
+    cd /usr/local/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
+    cd /usr/local/build/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
+    sudo ldconfig
+    @echo "Done! Installed libbz2.so to /usr/local/lib"
 
 # Start gdbserver for lightweight remote debugging (POC)
 # Usage: just remote-debug-poc /path/to/conduwuit.toml
