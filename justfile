@@ -15,7 +15,7 @@ init-prebuild:
     @echo "Done. You can now run prebuild commands."
 
 # Install all pre-built C/C++ dependencies
-install-all: install-rocksdb install-jemalloc install-zstd install-lz4
+install-all: install-rocksdb install-jemalloc install-zstd install-lz4 install-snappy install-bzip2
 
 # Pre-build RocksDB shared and statically
 prebuild-rocksdb:
@@ -133,6 +133,43 @@ install-lz4:
     cd /usr/local/build/lz4 && sudo make install PREFIX=/usr/local
     sudo ldconfig
 
+# Pre-build snappy
+prebuild-snappy:
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p /usr/local/build
+    echo "Cloning and building snappy..."
+    [ ! -d "/usr/local/build/snappy" ] && git clone --depth 1 https://github.com/google/snappy.git /usr/local/build/snappy || true
+    cd /usr/local/build/snappy
+    cmake -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF .
+    make -j$(nproc)
+
+# Install snappy
+install-snappy:
+    @echo "Installing snappy (requires sudo)..."
+    cd /usr/local/build/snappy && sudo make install
+    sudo ldconfig
+
+# Pre-build bzip2
+prebuild-bzip2:
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p /usr/local/build
+    echo "Cloning and building bzip2..."
+    [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
+    cd /usr/local/build/bzip2
+    make -f Makefile-libbz2_so
+    make
+
+# Installs bzip2
+install-bzip2:
+    @echo "Installing bzip2 (requires sudo)..."
+    cd /usr/local/build/bzip2 && sudo make install PREFIX=/usr/local
+    cd /usr/local/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
+    cd /usr/local/build/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
+    sudo ldconfig
+    @echo "Done! Installed libbz2.so to /usr/local/lib"
+
 # --- CPU Profiling ---
 
 # Run CPU flamegraph profiling (requires sudo for perf)
@@ -182,3 +219,9 @@ profile-build-bloat-functions:
 # Analyze generic instantiation (Monomorphization)
 profile-build-llvm-lines:
     cargo llvm-lines --profile ${PROFILE:-release} -p conduwuit --lib
+
+# Start gdbserver for lightweight remote debugging (POC)
+# Usage: just remote-debug-poc /path/to/conduwuit.toml
+remote-debug-poc config="conduwuit-example.toml":
+    @echo "Starting gdbserver on :1234 using config: {{config}}"
+    sudo -u conduwuit gdbserver :1234 ./target/debug/continuwuity --config {{config}}
