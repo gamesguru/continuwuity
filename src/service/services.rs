@@ -138,11 +138,6 @@ impl Services {
 		let manager = Manager::new(self);
 		*self.manager.lock().await = Some(Arc::clone(&manager));
 
-		// reset dormant online/away statuses to offline on startup
-		if self.server.config.allow_local_presence {
-			info!("Local presence statuses will be reset in the background.");
-		}
-
 		info!("Starting service workers...");
 		manager.start().await?;
 
