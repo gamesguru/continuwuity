@@ -23,9 +23,8 @@ prebuild-rocksdb:
     set -e
     TAG="continuwuity-v0.5.0"
     mkdir -p /usr/local/build
-    echo "Cloning rust-rocksdb $TAG..."
-    [ ! -d "/tmp/rust-rocksdb-src" ] && [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /tmp/rust-rocksdb-src || true
-    [ -d "/tmp/rust-rocksdb-src" ] && mv /tmp/rust-rocksdb-src/librocksdb-sys/rocksdb /usr/local/build/rocksdb && rm -rf /tmp/rust-rocksdb-src || true
+    echo "Cloning rocksdb $TAG..."
+    [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /usr/local/build/rocksdb || true
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb && env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-Wno-error=unused-parameter" make shared_lib static_lib -j$(nproc)
 
