@@ -132,7 +132,7 @@ runs:
           --arg color "$COLOR" \
           '{
             schemaVersion: 1,
-            label: "Complement Tests",
+            label: "Complement Tests (${PROVIDER})",
             message: "\($pass) pass, \($skip) skip, \($fail) fail",
             color: $color
           }' > badge-main.json

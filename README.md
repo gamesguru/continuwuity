@@ -21,8 +21,9 @@ It's the official community continuation of the [conduwuit](https://github.com/g
 
 [![Codeberg](https://img.shields.io/badge/Codeberg-mirror-2185D0?style=flat&logo=codeberg&labelColor=fff)](https://codeberg.org/continuwuity/continuwuity) [![Stars](https://codeberg.org/continuwuity/continuwuity/badges/stars.svg?style=flat)](https://codeberg.org/continuwuity/continuwuity/stars)
 
-[![Complement Tests (Upstream)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadge-main.json)](https://forgejo.ellis.link/gamesguru/continuwuity/actions/workflows/complement.yml)
-[![Complement Tests (Fork)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main.json)](https://github.com/gamesguru/continuwuity/actions/workflows/complement.yml)
+[![Complement Tests (Forgejo)](https://img.shields.io/endpoint?url=https%3A%2F%2Fforgejo.ellis.link%2Fgamesguru%2Fcontinuwuity%2Fraw%2Fbranch%2F_metadata%2Fbadges%2Fbadge-main.json)](https://forgejo.ellis.link/gamesguru/continuwuity/actions?workflow=complement.yml)
+
+[![Complement Tests (GitHub)](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main.json)](https://github.com/gamesguru/continuwuity/actions/workflows/complement.yml)
 
 ### Why does this exist?
 
