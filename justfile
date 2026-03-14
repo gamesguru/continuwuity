@@ -53,22 +53,21 @@ install-rocksdb:
 prebuild-jemalloc:
     #!/usr/bin/env bash
     set -e
-    COMMIT=$(cargo pkgid tikv-jemalloc-sys | cut -d'@' -f2 | grep -o 'g[0-9a-f]*' | head -n 1 | cut -c 2-)
+    TAG="5.3.0"
     mkdir -p /usr/local/build
-    if [ -d "/usr/local/build/tikv-jemalloc" ]; then
-        CURRENT=$(cd /usr/local/build/tikv-jemalloc && git rev-parse HEAD 2>/dev/null || echo "none")
-        if [ "$CURRENT" != "$COMMIT" ] && [ "${CURRENT:0:7}" != "${COMMIT:0:7}" ]; then
-            echo "jemalloc commit mismatch (Current: $CURRENT, Required: $COMMIT). Please manually rm -rf /usr/local/build/tikv-jemalloc to rebuild."
+    if [ -d "/usr/local/build/jemalloc" ]; then
+        CURRENT=$(cd /usr/local/build/jemalloc && git describe --tags --exact-match 2>/dev/null || echo "none")
+        if [ "$CURRENT" != "$TAG" ]; then
+            echo "jemalloc version mismatch (Current: $CURRENT, Required: $TAG). Please manually rm -rf /usr/local/build/jemalloc to rebuild."
             exit 1
         fi
     fi
-    if [ ! -d "/usr/local/build/tikv-jemalloc" ]; then
-        echo "Cloning tikv-jemalloc..."
-        git clone https://github.com/tikv/jemalloc.git /usr/local/build/tikv-jemalloc
-        cd /usr/local/build/tikv-jemalloc && git checkout $COMMIT
+    if [ ! -d "/usr/local/build/jemalloc" ]; then
+        echo "Cloning jemalloc $TAG..."
+        git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git /usr/local/build/jemalloc
     fi
     echo "Building jemalloc..."
-    cd /usr/local/build/tikv-jemalloc
+    cd /usr/local/build/jemalloc
     [ -f configure ] || ./autogen.sh
     [ -f Makefile ] || ./configure --prefix=/usr/local
     make -j$(nproc)
@@ -76,7 +75,7 @@ prebuild-jemalloc:
 # Install jemalloc globally (requires sudo)
 install-jemalloc:
     @echo "Installing jemalloc to /usr/local... (Requires sudo)"
-    cd /usr/local/build/tikv-jemalloc && sudo make install_lib_static install_lib_shared install_include
+    cd /usr/local/build/jemalloc && sudo make install_lib_static install_lib_shared install_include
     sudo ldconfig
 
 # Pre-build zstd
