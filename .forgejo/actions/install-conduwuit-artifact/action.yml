@@ -1,3 +1,4 @@
+---
 name: "Install conduwuit Artifact"
 description: "Downloads, verifies, and installs a conduwuit binary artifact"
 inputs:

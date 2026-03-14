@@ -24,7 +24,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  SKIP_CONFIRM: 1
   # Absolute paths for Rust tools on the host VPS
   CARGO: /opt/rust/cargo/bin/cargo
   RUSTUP: /opt/rust/cargo/bin/rustup

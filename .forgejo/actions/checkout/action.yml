@@ -18,14 +18,14 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Checkout (Node.js actions/checkout)
+    - name: Checkout
       if: ${{ inputs.use_slim_checkout != 'true' }}
       uses: actions/checkout@v4
       with:
         repository: ${{ inputs.repository }}
         ref: ${{ inputs.sha }}
 
-    - name: Slim Checkout (git commands)
+    - name: Slim Checkout
       if: ${{ inputs.use_slim_checkout == 'true' }}
       shell: bash
       run: |
@@ -36,6 +36,3 @@ runs:
         fi
         git fetch --depth 1 origin ${{ inputs.sha }}
         git checkout FETCH_HEAD
-        git fetch --tags --force && git fetch origin HEAD
-        # TODO: this belongs lower down? after the summary/delta report (with colored diff)
-        git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
