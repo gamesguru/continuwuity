@@ -1,0 +1,148 @@
+---
+name: Complement Tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      artifact_url:
+        description: "URL to zipped conduwuit binary"
+        required: false
+        type: string
+      runner:
+        description: "Runner label"
+        required: false
+        type: choice
+        default: c10y-forge-runner-complement-1
+        options:
+          - c10y-forge-runner-complement-1
+          - c10y-forge-runner-complement-2
+          - c10y-forge-runner-complement-3
+          - c10y-forge-runner-complement-4
+          - c10y-forge-runner-complement-5
+
+env:
+  PROFILE: release
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Absolute paths for Rust tools on the host VPS
+  CARGO: /opt/rust/cargo/bin/cargo
+  RUSTUP: /opt/rust/cargo/bin/rustup
+  PATH: /opt/rust/cargo/bin:/home/forgejo-runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+jobs:
+  complement-tests:
+    if: vars.C10Y_ENABLE_FORGE_WORKFLOW_COMPLEMENT_TESTS != ''
+    runs-on: ${{ inputs.runner || vars.C10Y_CONFIG_WORKFLOW_RUNNER }}
+
+    env:
+      RUSTC_WRAPPER: sccache
+
+    steps:
+      - name: Checkout
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_USE_SLIM_CHECKOUT == '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ forge.repository || github.repository }}
+          ref: ${{ forge.sha || github.sha }}
+
+      - name: Slim Checkout
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_USE_SLIM_CHECKOUT != '' }}
+        shell: bash
+        run: |
+          # Use raw git to avoid Node-based checkout action
+          if [ ! -d ".git" ]; then
+            git init
+            git remote add origin ${{ forge.server_url || github.server_url }}/${{ forge.repository || github.repository }}
+          fi
+          git fetch --depth 1 origin ${{ forge.sha || github.sha }}
+          git checkout FETCH_HEAD
+          git fetch --tags --force
+
+      - name: Setup Rust (for build from source)
+        if: vars.C10Y_CONFIG_WORKFLOW_BUILD != '' || (vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD == '' && github.event.inputs.artifact_url == '')
+        uses: ./.forgejo/actions/setup-rust
+        with:
+          github-token: ${{ secrets.GH_PUBLIC_RO }}
+
+      - name: Build conduwuit (from source)
+        if: vars.C10Y_CONFIG_WORKFLOW_BUILD != '' || (vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD == '' && github.event.inputs.artifact_url == '')
+        run: |
+          cargo build --profile ${{ env.PROFILE }} --bin conduwuit
+          mkdir -p target/latest
+          ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
+
+      - name: Install conduwuit Artifact (from zip box)
+        if: vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != '' || github.event.inputs.artifact_url != ''
+        uses: ./.forgejo/actions/install-conduwuit-artifact
+        with:
+          artifact_url: ${{ github.event.inputs.artifact_url }}
+          artifact_sha256: ${{ github.event.inputs.artifact_sha256 }}
+          github_token: ${{ secrets.C10Y_GITHUB_TOKEN || secrets.FORGEJO_TOKEN || secrets.GITHUB_TOKEN || github.token }}
+          profile: ${{ env.PROFILE }}
+          gpg_public_key: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}
+          gpg_public_key_id: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY_ID }}
+      - name: Get conduwuit version
+        id: version
+        run: |
+          VERSION=$(./target/latest/conduwuit --version)
+          echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
+
+      - name: Checkout Complement
+        run: |
+          # Manual checkout of complement to avoid Node overhead
+          if [ ! -d "complement-src" ]; then
+            git clone --depth 1 https://github.com/matrix-org/complement complement-src
+          else
+            cd complement-src \
+            && git fetch --depth 1 \
+            && git checkout FETCH_HEAD \
+            && cd ..
+          fi
+
+      - name: Build Complement Docker image
+        run: just ci-complement-docker
+
+      - name: Capture baseline stats
+        run: VERBOSE=1 just ci-complement-stats | tee baseline_stats.txt
+
+      - name: Run Complement tests (currently xfailing ~200 tests)
+        run: |
+          mkdir -p tests/test_results/complement/
+          ./bin/complement ./complement-src
+
+      - name: Compare results with baseline
+        continue-on-error: true
+        run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 just ci-complement-stats)
+
+      - name: Peek at results directory (log file sizes)
+        continue-on-error: true
+        run: ls -lah tests/test_results/complement/
+
+      - name: Collect results (prepare data)
+        id: summary
+        run: |
+          RESULTS="tests/test_results/complement/test_results.jsonl"
+          if [ -f "$RESULTS" ]; then
+            PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
+            FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' "$RESULTS")
+            SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' "$RESULTS")
+            TOTAL=$((PASS + FAIL + SKIP))
+            echo "pass=$PASS" | tee -a $GITHUB_OUTPUT
+            echo "fail=$FAIL" | tee -a $GITHUB_OUTPUT
+            echo "skip=$SKIP" | tee -a $GITHUB_OUTPUT
+            echo "total=$TOTAL" | tee -a $GITHUB_OUTPUT
+          fi
+
+      - name: Update test results ledger and upload to repo
+        uses: ./.forgejo/actions/update-results-ledger
+        with:
+          github_token: ${{ secrets.FORGEJO_TOKEN || secrets.GITHUB_TOKEN || github.token }}
+          pass_count: ${{ steps.summary.outputs.pass || 0 }}
+          fail_count: ${{ steps.summary.outputs.fail || 0 }}
+          skip_count: ${{ steps.summary.outputs.skip || 0 }}
+          version_string: ${{ steps.version.outputs.version }}
+          # TODO: collect features and full git hash from binary verbose output
+          features: ${{ env.FEATURES || 'unknown' }}
+          actor: ${{ forge.actor || github.actor }}
+          binary_path: target/latest/conduwuit
