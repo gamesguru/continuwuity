@@ -180,7 +180,14 @@ pub(crate) async fn get_notifications_route(
 				});
 
 				if notifications.len() >= limit_usize {
-					// Heap is full; evict oldest to make room for this newer one
+					// Heap is full; only evict the current oldest item if this one is newer.
+					// Since `pdus` are iterated newest→oldest, once we see an item that is
+					// not newer than the heap minimum, we can stop scanning this room.
+					if let Some(Reverse(oldest)) = notifications.peek() {
+						if notification_item.0.ts <= oldest.0.ts {
+							break;
+						}
+					}
 					notifications.pop();
 				}
 				notifications.push(Reverse(notification_item));
