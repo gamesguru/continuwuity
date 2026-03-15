@@ -1,7 +1,7 @@
 use std::cmp::{Ordering, Reverse};
 
 use axum::extract::State;
-use conduwuit::{Err, Event, Result, debug_info, matrix::pdu::PduCount, warn};
+use conduwuit::{Err, Event, Result, matrix::pdu::PduCount, warn};
 use futures::StreamExt;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, UInt,
@@ -43,10 +43,7 @@ pub(crate) async fn get_notifications_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_notifications::v3::Request>,
 ) -> Result<get_notifications::v3::Response> {
-	use std::{collections::BinaryHeap, time::Instant};
-
-	#[cfg(debug_assertions)]
-	let started = Instant::now();
+	use std::collections::BinaryHeap;
 
 	let max_limit = services.server.config.notification_max_limit_per_request;
 
@@ -70,10 +67,6 @@ pub(crate) async fn get_notifications_route(
 	let limit_usize = limit.try_into().unwrap_or(usize::MAX);
 	let mut notifications: BinaryHeap<Reverse<NotificationItem>> =
 		BinaryHeap::with_capacity(limit_usize);
-	#[cfg(debug_assertions)]
-	let mut total_scanned: usize = 0;
-	#[cfg(debug_assertions)]
-	let mut rooms_scanned: usize = 0;
 
 	// Get user's push rules
 	let global_account_data = services
@@ -137,9 +130,6 @@ pub(crate) async fn get_notifications_route(
 		// Iterate over PDUs, cap per-room scan depth to prevent overload
 		let max_pdus_per_room = services.server.config.notification_max_pdus_per_room;
 		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
-		#[cfg(not(debug_assertions))]
-		let mut scanned: usize = 0;
-		#[cfg(debug_assertions)]
 		let mut scanned: usize = 0;
 
 		// optimization: stop if we have enough notifications and current pdu
@@ -191,16 +181,7 @@ pub(crate) async fn get_notifications_route(
 				notifications.push(Reverse(notification_item));
 			}
 		}
-		#[cfg(debug_assertions)]
-		{
-			total_scanned = total_scanned.saturating_add(scanned);
-			rooms_scanned = rooms_scanned.saturating_add(1);
-		}
 	}
-
-	// Capture heap stats before consuming
-	#[cfg(debug_assertions)]
-	let heap_count = notifications.len();
 
 	// Convert heap to vector and sort by timestamp descending (newest first)
 	let mut notifications: Vec<_> = notifications
@@ -214,20 +195,6 @@ pub(crate) async fn get_notifications_route(
 	} else {
 		None
 	};
-
-	// TODO: remove this (and above) debug_assertions once we know things are stable
-	#[cfg(debug_assertions)]
-	{
-		let elapsed = started.elapsed();
-		debug_info!(
-			"built notification heap: {} items for {} in {:.3}s (scanned {} PDUs in {} rooms)",
-			heap_count,
-			sender_user,
-			elapsed.as_secs_f64(),
-			total_scanned,
-			rooms_scanned,
-		);
-	}
 
 	Ok(get_notifications::v3::Response { next_token, notifications })
 }
