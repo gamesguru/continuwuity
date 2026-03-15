@@ -110,7 +110,7 @@ prebuild-rocksdb:
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb
     git checkout $TAG
-    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" make shared_lib static_lib -j$(nproc)
+    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=1 make shared_lib static_lib -j$(nproc)
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
