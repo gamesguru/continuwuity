@@ -129,6 +129,10 @@ pub(crate) async fn get_notifications_route(
 
 		// Iterate over PDUs, cap per-room scan depth to prevent overload
 		let max_pdus_per_room = services.server.config.notification_max_pdus_per_room;
+		// A value of 0 disables notifications; avoid unbounded per-room scans.
+		if max_pdus_per_room == 0 {
+			continue;
+		}
 		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
 		let mut scanned: usize = 0;
 
@@ -136,7 +140,7 @@ pub(crate) async fn get_notifications_route(
 		// is older than any in our list
 		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
 			scanned = scanned.saturating_add(1);
-			if (max_pdus_per_room > 0 && scanned > max_pdus_per_room)
+			if scanned > max_pdus_per_room
 				|| pdu_count <= PduCount::Normal(last_read)
 			{
 				break;
