@@ -42,7 +42,9 @@ impl crate::Service for Service {
 			.unwrap_or_else(|| conduwuit::version::user_agent_media().to_owned());
 
 		Ok(Arc::new(Self {
-			default: base(config)?.build()?,
+			default: base(config)?
+				.dns_resolver(resolver.resolver.clone())
+				.build()?,
 
 			url_preview: base(config)
 				.and_then(|builder| {
@@ -58,7 +60,6 @@ impl crate::Service for Service {
 			extern_media: base(config)?
 				.dns_resolver(resolver.resolver.clone())
 				.redirect(redirect::Policy::limited(3))
-				.user_agent(conduwuit::version::user_agent_media())
 				.build()?,
 
 			well_known: base(config)?
@@ -142,6 +143,7 @@ impl crate::Service for Service {
 
 fn base(config: &Config) -> Result<reqwest::ClientBuilder> {
 	let mut builder = reqwest::Client::builder()
+		.hickory_dns(true)
 		.connect_timeout(Duration::from_secs(config.request_conn_timeout))
 		.read_timeout(Duration::from_secs(config.request_timeout))
 		.timeout(Duration::from_secs(config.request_total_timeout))
