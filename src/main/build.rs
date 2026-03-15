@@ -1,7 +1,7 @@
 fn main() {
 	println!("cargo:rerun-if-changed=Cargo.toml");
 
-	// Embed the dynamic library paths into the final binary so users don't need LD_LIBRARY_PATH
+	// Embed dynamic lib path in binary so users don't need LD_LIBRARY_PATH
 	let mut rpaths = std::collections::HashSet::new();
 
 	if let Ok(lib_dir) = std::env::var("ROCKSDB_LIB_DIR") {
