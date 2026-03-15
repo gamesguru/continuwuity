@@ -24,7 +24,7 @@ install-all: install-jemalloc install-lz4 install-snappy install-zstd install-ro
 prebuild-liburing:
     #!/usr/bin/env bash
     set -e
-    mkdir -p /usr/local/build
+    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning and building liburing (attempting to match project version {{version}})"...
     [ ! -d "/usr/local/build/liburing" ] && git clone https://github.com/axboe/liburing.git /usr/local/build/liburing || true
     cd /usr/local/build/liburing
@@ -42,7 +42,7 @@ install-liburing:
 prebuild-bzip2:
     #!/usr/bin/env bash
     set -e
-    mkdir -p /usr/local/build
+    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning and building bzip2..."
     [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
     cd /usr/local/build/bzip2
@@ -63,7 +63,7 @@ prebuild-jemalloc:
     #!/usr/bin/env bash
     set -e
     TAG="5.3.0"
-    mkdir -p /usr/local/build
+    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning jemalloc $TAG..."
     [ ! -d "/usr/local/build/jemalloc" ] && git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git /usr/local/build/jemalloc || true
     echo "Building jemalloc..."
@@ -85,7 +85,7 @@ prebuild-lz4:
     set -e
     VER=$(cargo pkgid lz4-sys | cut -d'@' -f2 | grep -o 'lz4-[0-9.]*' | cut -d '-' -f2)
     TAG="v$VER"
-    mkdir -p /usr/local/build
+    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning lz4 $TAG..."
     [ ! -d "/usr/local/build/lz4" ] && git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git /usr/local/build/lz4 || true
     echo "Building lz4..."
@@ -104,7 +104,7 @@ prebuild-rocksdb:
     #!/usr/bin/env bash
     set -e
     TAG="continuwuity-v0.5.0"
-    mkdir -p /usr/local/build
+    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning rocksdb $TAG..."
     [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /usr/local/build/rocksdb || true
     echo "Building RocksDB..."
@@ -125,7 +125,7 @@ prebuild-snappy:
     #!/usr/bin/env bash
     set -e
     TAG="1.2.1"
-    mkdir -p /usr/local/build
+    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning snappy $TAG..."
     [ ! -d "/usr/local/build/snappy" ] && git clone --depth 1 --branch $TAG https://github.com/google/snappy.git /usr/local/build/snappy || true
     echo "Building snappy..."
@@ -153,7 +153,7 @@ prebuild-zstd:
     set -e
     VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
     TAG="v$VER"
-    mkdir -p /usr/local/build
+    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning zstd $TAG..."
     [ ! -d "/usr/local/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd || true
     echo "Building zstd..."
