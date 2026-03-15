@@ -31,7 +31,7 @@ env:
 
 jobs:
   complement-tests:
-    if: vars.C10Y_ENABLE_FORGE_WORKFLOW_COMPLEMENT_TESTS == 'true'
+    if: vars.C10Y_ENABLE_FORGE_WORKFLOW_COMPLEMENT_TESTS != ''
     runs-on: ${{ inputs.runner }}
 
     env:
@@ -46,20 +46,20 @@ jobs:
           server_url: ${{ forge.server_url || github.server_url }}
 
       - name: Setup Rust (for build from source)
-        if: ${{ (vars.C10Y_CONFIG_WORKFLOW_BUILD == 'true' || (github.event_name != 'workflow_dispatch' && vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != 'true')) && !contains(inputs.runner, 'heliohost') }}
+        if: ${{ (vars.C10Y_CONFIG_WORKFLOW_BUILD != '' || (github.event_name != 'workflow_dispatch' && vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD == '')) && !contains(inputs.runner, 'heliohost') }}
         uses: ./.forgejo/actions/setup-rust
         with:
           github-token: ${{ secrets.GH_PUBLIC_RO }}
 
       - name: Build conduwuit (from source)
-        if: ${{ vars.C10Y_CONFIG_WORKFLOW_BUILD == 'true' || (github.event_name != 'workflow_dispatch' && vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != 'true') }}
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_BUILD != '' || (github.event_name != 'workflow_dispatch' && vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD == '') }}
         run: |
           cargo build --profile ${{ env.PROFILE }} --bin conduwuit
           mkdir -p target/latest
           ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
 
       - name: Install conduwuit Artifact (from zip box)
-        if: ${{ vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.artifact_url != '') }}
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != '' || (github.event_name == 'workflow_dispatch' && github.event.inputs.artifact_url != '') }}
         uses: ./.forgejo/actions/install-conduwuit-artifact
         with:
           artifact_url: ${{ github.event.inputs.artifact_url }}
@@ -90,9 +90,7 @@ jobs:
         run: just ci-complement-docker
 
       - name: Capture baseline stats
-        env:
-         SKIP_CONFIRM: 1
-        run: just ci-complement-stats | tee baseline_stats.txt
+        run: VERBOSE=1 just ci-complement-stats | tee baseline_stats.txt
 
       - name: Run Complement tests (currently xfailing ~200 tests)
         run: |
