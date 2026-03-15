@@ -18,7 +18,6 @@ allow_registration = true
 database_path = "/var/lib/continuwuity"
 # By default we use warn, only for failures/debugging verbose (Forge UI can't handle 75 MB+ of logs)
 log = "warn"
-# For debugging only, uncomment to enable extremely verbose logging:
 # log = "trace,h2=debug,hyper=debug,conduwuit_database=warn,conduwuit_service::manager=info,conduwuit_api::router=error,conduwuit_router=error,tower_http=error"
 port = [8008, 8448]
 trusted_servers = []
