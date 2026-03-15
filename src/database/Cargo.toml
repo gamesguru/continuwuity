@@ -53,7 +53,6 @@ bindgen-runtime = [
 [dependencies]
 async-channel.workspace = true
 conduwuit-core.workspace = true
-conduwuit-macros.workspace = true
 const-str.workspace = true
 
 futures.workspace = true

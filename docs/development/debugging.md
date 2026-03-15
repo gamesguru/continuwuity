@@ -30,7 +30,7 @@ and your application compiled with debug symbols (`cargo build`).
     RocksDB to do extra work.
 
     ```bash
-    sudo -u conduwuit rust-gdb ./target/debug/continuwuity
+    sudo -u conduwuit rust-gdb ./target/debug/conduwuit
     ```
 
 3. **Set breakpoints:**
@@ -39,7 +39,7 @@ and your application compiled with debug symbols (`cargo build`).
 
     ```gdb
     (gdb) break src/main/main.rs:10
-    (gdb) break continuwuity::main
+    (gdb) break conduwuit::main
     ```
 
 4. **Run the application:**

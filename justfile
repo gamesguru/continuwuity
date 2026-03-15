@@ -159,7 +159,7 @@ profile-runtime-mem *args:
 
 # Generate heap_profile.svg from collected jemalloc dumps
 profile-runtime-mem-analyze:
-    jeprof --svg ./target/release/conduwuit jeprof.out.*
+    jeprof --svg ./target/release/conduwuit jeprof.out.* > heap_profile.svg
     @echo "Saved heap_profile.svg"
 
 # Clean up jemalloc dump files

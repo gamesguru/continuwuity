@@ -200,7 +200,9 @@ name = "complement"
 group = "tests"
 script = """
 docker build -t conduwuit-complement -f docker/Dockerfile .
-git clone https://github.com/matrix-org/complement.git || true
+[ -d complement/.git ] || git clone --depth 1 https://github.com/matrix-org/complement.git
+git -C complement fetch --depth 1 origin
+git -C complement reset --hard FETCH_HEAD
 cd complement
 COMPLEMENT_BASE_IMAGE=conduwuit-complement go test -tags conduwuit -count=1 ./tests/...
 """

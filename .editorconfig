@@ -36,6 +36,3 @@ indent_style = space
 
 [Makefile]
 indent_style = tab
-
-[[bash]]
-indent_style=tab
