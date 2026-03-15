@@ -97,6 +97,7 @@ fn main() {
 	println!("cargo:rerun-if-env-changed=GIT_REMOTE_COMMIT_URL");
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_VERSION_EXTRA");
 	println!("cargo:rerun-if-env-changed=CONTINUWUITY_BRANCH");
+	println!("cargo:rerun-if-env-changed=GITHUB_REF_NAME");
 
 	// Host info
 	println!("cargo:rustc-env=HOST_OS={}", std::env::consts::OS);
