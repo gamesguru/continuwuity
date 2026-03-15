@@ -32,7 +32,7 @@ env:
 jobs:
   complement-tests:
     if: vars.C10Y_ENABLE_FORGE_WORKFLOW_COMPLEMENT_TESTS != ''
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner || vars.C10Y_CONFIG_WORKFLOW_RUNNER }}
 
     env:
       RUSTC_WRAPPER: ccache
