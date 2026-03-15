@@ -1,3 +1,9 @@
+# Optional env vars (export before running engage):
+# After rocksdb compile+install, export these to every cargo build, fmt, test, clippy:
+# ROCKSDB_INCLUDE_DIR=/usr/local/include
+# ROCKSDB_LIB_DIR=/usr/local/lib
+# LD_LIBRARY_PATH=$ROCKSDB_LIB_DIR:$LD_LIBRARY_PATH
+
 interpreter = ["bash", "-euo", "pipefail", "-c"]
 
 [[task]]
@@ -187,4 +193,16 @@ group = "tests"
 depends = ["cargo/default"]
 script = """
 git diff --exit-code conduwuit-example.toml
+"""
+
+[[task]]
+name = "complement"
+group = "tests"
+script = """
+docker build -t conduwuit-complement -f docker/Dockerfile .
+[ -d complement/.git ] || git clone --depth 1 https://github.com/matrix-org/complement.git
+git -C complement fetch --depth 1 origin
+git -C complement reset --hard FETCH_HEAD
+cd complement
+COMPLEMENT_BASE_IMAGE=conduwuit-complement go test -tags conduwuit -count=1 ./tests/...
 """
