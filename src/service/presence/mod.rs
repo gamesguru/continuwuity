@@ -1,16 +1,24 @@
 mod data;
 mod presence;
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+	collections::{HashMap, HashSet},
+	sync::Arc,
+	time::Duration,
+};
 
 use async_trait::async_trait;
 use conduwuit::{
 	Error, Result, Server, checked, debug, debug_warn, error, info, result::LogErr, trace, utils,
 };
+use dashmap::DashMap;
 use database::Database;
 use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
 use loole::{Receiver, Sender};
-use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
+use ruma::{
+	OwnedServerName, OwnedUserId, UInt, UserId, events::presence::PresenceEvent,
+	presence::PresenceState,
+};
 use tokio::time::{Instant, sleep};
 
 use self::{data::Data, presence::Presence};
@@ -18,6 +26,7 @@ use crate::{Dep, globals, users};
 
 pub struct Service {
 	timer_channel: (Sender<TimerType>, Receiver<TimerType>),
+	pub(super) pending_updates: DashMap<OwnedServerName, HashSet<OwnedUserId>>,
 	timeout_remote_users: bool,
 	idle_timeout: u64,
 	offline_timeout: u64,
@@ -30,6 +39,8 @@ struct Services {
 	db: Arc<Database>,
 	globals: Dep<globals::Service>,
 	users: Dep<users::Service>,
+	sending: Dep<crate::sending::Service>,
+	state_cache: Dep<crate::rooms::state_cache::Service>,
 }
 
 type TimerType = (OwnedUserId, Duration);
@@ -42,6 +53,7 @@ impl crate::Service for Service {
 		let offline_timeout_s = config.presence_offline_timeout_s;
 		Ok(Arc::new(Self {
 			timer_channel: loole::unbounded(),
+			pending_updates: DashMap::new(),
 			timeout_remote_users: config.presence_timeout_remote_users,
 			idle_timeout: checked!(idle_timeout_s * 1_000)?,
 			offline_timeout: checked!(offline_timeout_s * 1_000)?,
@@ -51,6 +63,9 @@ impl crate::Service for Service {
 				db: args.db.clone(),
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
+				sending: args.depend::<crate::sending::Service>("sending"),
+				state_cache: args
+					.depend::<crate::rooms::state_cache::Service>("rooms::state_cache"),
 			},
 		}))
 	}
@@ -107,10 +122,22 @@ impl Service {
 			.await
 	}
 
+	/// Returns user's latest presence event, along with stream ID.
+	#[inline]
+	pub async fn get_presence_with_count(
+		&self,
+		user_id: &UserId,
+	) -> Result<(u64, PresenceEvent)> {
+		self.db.get_presence(user_id).await
+	}
+
 	/// Pings the presence of the given user, setting the specified state.
-	///
-	/// Fetches previous state, then passes it to avoid redundant DB read in
-	/// `set_presence`
+	// TODO: this is called on every profile update, read marker, typing notif,
+	// etc. Each call still performs a presence lookup here and additional work
+	// in set_presence (including constructing PresenceEvent and any related
+	// profile/presence updates), even though get_presence may now be served
+	// from an in-memory cache rather than always hitting the DB. Consider
+	// reducing how often this is invoked or caching the derived data.
 	pub async fn ping_presence(&self, user_id: &UserId, new_state: &PresenceState) -> Result<()> {
 		const REFRESH_TIMEOUT: u64 = 60 * 1000;
 
@@ -151,6 +178,7 @@ impl Service {
 			.await?;
 
 		self.schedule_timeout(user_id, new_state)?;
+		self.notify_presence_change(user_id).await.log_err().ok();
 
 		Ok(())
 	}
@@ -185,6 +213,7 @@ impl Service {
 			.await?;
 
 		self.schedule_timeout(user_id, presence_state)?;
+		self.notify_presence_change(user_id).await.log_err().ok();
 
 		Ok(())
 	}
@@ -348,7 +377,57 @@ impl Service {
 				.await?;
 
 			self.schedule_timeout(user_id, &new_state)?;
+			self.notify_presence_change(user_id).await.log_err().ok();
 		}
+
+		Ok(())
+	}
+
+	/// Intelligently batches user presence updates to remote servers
+	async fn notify_presence_change(&self, user_id: &UserId) -> Result<()> {
+		if !self.services.globals.user_is_local(user_id) {
+			return Ok(());
+		}
+
+		if !self.services.server.config.allow_outgoing_presence {
+			return Ok(());
+		}
+
+		// Batch up servers
+		let mut servers = HashSet::new();
+
+		// Iterate rooms by stream is probably fastest here
+		let mut joined_rooms = self.services.state_cache.rooms_joined(user_id);
+		while let Some(room_id) = joined_rooms.next().await {
+			let mut room_servers = self.services.state_cache.room_servers(&room_id);
+			while let Some(server) = room_servers.next().await {
+				if !self.services.globals.server_is_ours(server) {
+					servers.insert(server.to_owned());
+				}
+			}
+		}
+
+		// If there are no remote servers, nothing to send
+		if servers.is_empty() {
+			return Ok(());
+		}
+
+		// Add any pending presence updates
+		for server in &servers {
+			self.pending_updates
+				.entry(server.clone())
+				.or_default()
+				.insert(user_id.to_owned());
+		}
+
+		// Wake up sender
+		let server_refs = servers.iter().map(AsRef::as_ref);
+		self.services
+			.sending
+			.flush_servers(futures::stream::iter(server_refs))
+			.await
+			.log_err()
+			.ok();
 
 		Ok(())
 	}
