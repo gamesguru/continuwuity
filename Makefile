@@ -85,11 +85,8 @@ vars: ##H Print debug info
 	@echo "... computing version."
 	@BIN_PATH="target/$(if $(PROFILE),$(PROFILE),debug)/conduwuit"; \
 	if [ -x "$$BIN_PATH" ]; then \
-		ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
-		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
-		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$$($$BIN_PATH --version-verbose)"; \
+		VERSION_OUT=$$(env LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH" $$BIN_PATH -V); \
+		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" "$${VERSION_OUT:-($$BIN_PATH failed to run)}"; \
 	else \
 		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" "(Run 'make build' to compile binary for full version)"; \
 	fi
