@@ -31,6 +31,7 @@ env:
 
 jobs:
   complement-tests:
+    if: vars.C10Y_ENABLE_FORGE_WORKFLOW_COMPLEMENT_TESTS == 'true'
     runs-on: ${{ inputs.runner }}
 
     env:
@@ -45,7 +46,7 @@ jobs:
           server_url: ${{ forge.server_url || github.server_url }}
 
       - name: Setup Rust (for build from source)
-        if: ${{ vars.C10Y_CONFIG_WORKFLOW_BUILD == 'true' || (github.event_name != 'workflow_dispatch' && vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != 'true') }}
+        if: ${{ (vars.C10Y_CONFIG_WORKFLOW_BUILD == 'true' || (github.event_name != 'workflow_dispatch' && vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != 'true')) && !contains(inputs.runner, 'heliohost') }}
         uses: ./.forgejo/actions/setup-rust
         with:
           github-token: ${{ secrets.GH_PUBLIC_RO }}
