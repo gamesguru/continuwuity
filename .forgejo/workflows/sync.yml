@@ -8,7 +8,7 @@ on:
 
 jobs:
   sync:
-    runs-on: heliohost-sync
+    runs-on: ${{ vars.C10Y_CONFIG_WORKFLOW_RUNNER_SYNC }}
     permissions:
       contents: write
     steps:
