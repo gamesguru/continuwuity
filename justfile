@@ -230,4 +230,4 @@ install-bzip2:
 # Usage: just remote-debug-poc /path/to/conduwuit.toml
 remote-debug-poc config="conduwuit-example.toml":
     @echo "Starting gdbserver on :1234 using config: {{config}}"
-    sudo -u conduwuit gdbserver :1234 ./target/debug/continuwuity --config {{config}}
+    sudo -u conduwuit gdbserver :1234 ./target/debug/conduwuit --config {{config}}
