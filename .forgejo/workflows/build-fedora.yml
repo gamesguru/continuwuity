@@ -189,9 +189,9 @@ jobs:
           rpm -qa | grep continuwuity
 
           # Check that the binary exists
-          [ -f /usr/bin/conduwuit ] && echo "✓ Binary installed successfully"
-          [ -f /usr/lib/systemd/system/conduwuit.service ] && echo "✓ Systemd service installed"
-          [ -f /etc/conduwuit/conduwuit.toml ] && echo "✓ Config file installed"
+          [ -f /usr/bin/conduwuit ] && echo "✅ Binary installed successfully"
+          [ -f /usr/lib/systemd/system/conduwuit.service ] && echo "✅ Systemd service installed"
+          [ -f /etc/conduwuit/conduwuit.toml ] && echo "✅ Config file installed"
 
       - name: List built packages
         run: |
@@ -311,7 +311,7 @@ jobs:
             "https://forgejo.ellis.link/api/packages/continuwuation/rpm/$GROUP/upload?sign=true"
 
           echo ""
-          echo "✓ Published binary RPM to: https://forgejo.ellis.link/continuwuation/-/packages/rpm/continuwuity/"
+          echo "✅ Published binary RPM to: https://forgejo.ellis.link/continuwuation/-/packages/rpm/continuwuity/"
           echo "Group: $GROUP"
 
           # Upload debug RPMs to separate group
@@ -350,7 +350,7 @@ jobs:
                 "https://forgejo.ellis.link/api/packages/continuwuation/rpm/${GROUP}-debug/upload?sign=true"
             done
 
-            echo "✓ Published debug RPMs to group: ${GROUP}-debug"
+            echo "✅ Published debug RPMs to group: ${GROUP}-debug"
           fi
 
           # Also upload the SRPM to separate group
@@ -386,5 +386,5 @@ jobs:
               -T "$SRPM" \
               "https://forgejo.ellis.link/api/packages/continuwuation/rpm/${GROUP}-src/upload?sign=true"
 
-            echo "✓ Published source RPM to group: ${GROUP}-src"
+            echo "✅ Published source RPM to group: ${GROUP}-src"
           fi

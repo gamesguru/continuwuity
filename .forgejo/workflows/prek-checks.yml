@@ -38,7 +38,7 @@ jobs:
       - name: Check Rust formatting
         run: |
           cargo +nightly fmt --all -- --check && \
-            echo "✓ Formatting check passed" || \
+            echo "✅ Formatting check passed" || \
             exit 1
 
   clippy-and-tests:

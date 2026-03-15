@@ -35,7 +35,7 @@ runs:
       if: inputs.dpkg-arch != ''
       shell: bash
       run: |
-        echo "[Build] Adding ${{ inputs.dpkg-arch }} architecture"
+        echo "🏗️ Adding ${{ inputs.dpkg-arch }} architecture"
         sudo dpkg --add-architecture ${{ inputs.dpkg-arch }}
 
         # Restrict default sources to amd64
@@ -49,11 +49,11 @@ runs:
         deb [arch=${{ inputs.dpkg-arch }}] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse
         EOF
 
-        echo "✓ Architecture ${{ inputs.dpkg-arch }} configured"
+        echo "✅ Architecture ${{ inputs.dpkg-arch }} configured"
 
     - name: Start LLVM cache group
       shell: bash
-      run: echo "::group::[Package] Restoring LLVM cache"
+      run: echo "::group::📦 Restoring LLVM cache"
 
     - name: Check for LLVM cache
       id: cache
@@ -79,7 +79,7 @@ runs:
       id: llvm-setup
       shell: bash
       run: |
-        echo "[Search] Checking for LLVM ${{ inputs.llvm-version }}..."
+        echo "🔍 Checking for LLVM ${{ inputs.llvm-version }}..."
 
         # Check both binaries and libraries exist
         if [ -f "/usr/bin/clang-${{ inputs.llvm-version }}" ] && \
@@ -88,21 +88,21 @@ runs:
            ([ -f "/usr/lib/x86_64-linux-gnu/libLLVM.so.${{ inputs.llvm-version }}.1" ] || \
             [ -f "/usr/lib/x86_64-linux-gnu/libLLVM-${{ inputs.llvm-version }}.so.1" ] || \
             [ -f "/usr/lib/llvm-${{ inputs.llvm-version }}/lib/libLLVM.so" ]); then
-          echo "✓ LLVM ${{ inputs.llvm-version }} found and verified"
+          echo "✅ LLVM ${{ inputs.llvm-version }} found and verified"
           echo "needs-install=false" >> $GITHUB_OUTPUT
         else
-          echo "[Package] LLVM ${{ inputs.llvm-version }} not found or incomplete - installing..."
+          echo "📦 LLVM ${{ inputs.llvm-version }} not found or incomplete - installing..."
 
-          echo "::group::[Config] Installing LLVM ${{ inputs.llvm-version }}"
+          echo "::group::🔧 Installing LLVM ${{ inputs.llvm-version }}"
           wget -O - https://apt.llvm.org/llvm.sh | bash -s -- ${{ inputs.llvm-version }}
           echo "::endgroup::"
 
           if [ ! -f "/usr/bin/clang-${{ inputs.llvm-version }}" ]; then
-            echo "✗ Failed to install LLVM ${{ inputs.llvm-version }}"
+            echo "❌ Failed to install LLVM ${{ inputs.llvm-version }}"
             exit 1
           fi
 
-          echo "✓ Installed LLVM ${{ inputs.llvm-version }}"
+          echo "✅ Installed LLVM ${{ inputs.llvm-version }}"
           echo "needs-install=true" >> $GITHUB_OUTPUT
         fi
 
@@ -112,11 +112,11 @@ runs:
       run: |
         # Update APT if LLVM was cached (installer script already does apt-get update)
         if [[ "${{ steps.llvm-setup.outputs.needs-install }}" != "true" ]]; then
-          echo "::group::[Package] Running apt-get update (LLVM cached, extra packages needed)"
+          echo "::group::📦 Running apt-get update (LLVM cached, extra packages needed)"
           sudo apt-get update
           echo "::endgroup::"
         fi
-        echo "::group::[Package] Installing additional packages"
+        echo "::group::📦 Installing additional packages"
 
     - name: Install additional packages
       if: inputs.extra-packages != ''
@@ -134,7 +134,7 @@ runs:
       id: configure
       shell: bash
       run: |
-        echo "::group::[Config] Configuring LLVM ${{ inputs.llvm-version }} environment"
+        echo "::group::🔧 Configuring LLVM ${{ inputs.llvm-version }} environment"
 
         # Create symlinks
         sudo ln -sf "/usr/bin/clang-${{ inputs.llvm-version }}" /usr/bin/clang
@@ -164,4 +164,4 @@ runs:
         # Set output
         echo "version=${{ inputs.llvm-version }}" >> $GITHUB_OUTPUT
         echo "::endgroup::"
-        echo "✓ LLVM ready: $(clang --version | head -1)"
+        echo "✅ LLVM ready: $(clang --version | head -1)"
