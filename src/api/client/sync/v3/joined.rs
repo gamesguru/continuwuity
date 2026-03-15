@@ -703,12 +703,14 @@ async fn check_joined_since_last_sync(
 			.await
 			.ok();
 
-		// If we can resolve the previous membership event, check if it was Join.
-		// If we couldn't resolve it (None), default to false (not a fresh join)
-		// to avoid spuriously sending limited timelines on every sync.
-		let joined_since_last_sync = membership_during_previous_sync.as_ref().is_some_and(
-			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
-		) && membership_during_current_sync.as_ref().is_some_and(
+		// If we can resolve the previous membership event, check if it was NOT Join.
+		// If we couldn't resolve it (None), default to true (assuming a fresh join)
+		// because treating it as false causes missing state events.
+		let joined_since_last_sync = membership_during_previous_sync
+			.as_ref()
+			.map_or(true, |content: &RoomMemberEventContent| {
+				content.membership != MembershipState::Join
+			}) && membership_during_current_sync.as_ref().is_some_and(
 			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
 		);
 
