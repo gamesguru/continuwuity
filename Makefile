@@ -163,7 +163,7 @@ ROCKSDB_INCLUDE_DIR ?= /usr/local/include
 # Default features to use for the build
 # We use bindgen-runtime by default to use the system libclang.so for building.
 # Bundling RocksDB statically can be enabled via features.
-FEATURES ?= standard,release_max_log_level,bindgen-runtime
+FEATURES ?= standard,console,url_preview,release_max_log_level,bindgen-runtime
 
 .PHONY: build
 build:  ##H Build with selected profile
@@ -177,7 +177,7 @@ build:  ##H Build with selected profile
 		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
 		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
 # 		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
-		cargo build --verbose --features $(FEATURES) --locked $(CARGO_FLAGS)
+		cargo build --features $(FEATURES) --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
 	-ln -f target/$(if $(CARGO_BUILD_TARGET),$(CARGO_BUILD_TARGET)/)$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
