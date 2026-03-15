@@ -110,7 +110,7 @@ prebuild-rocksdb:
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb
     git checkout $TAG
-    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="-I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" make shared_lib static_lib -j$(nproc)
+    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=1 make shared_lib static_lib -j$(nproc)
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
@@ -239,25 +239,25 @@ ci-complement-docker:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    echo "Copying dynamically linked libraries to target/${PROFILE}/lib/..."
-    mkdir -p target/${PROFILE}/lib && rm -f target/${PROFILE}/lib/*
+    echo "Copying dynamically linked libraries to target/{{PROFILE}}/lib/..."
+    mkdir -p target/{{PROFILE}}/lib && rm -f target/{{PROFILE}}/lib/*
 
     LD_LIBRARY_PATH="${ROCKSDB_LIB_DIR:-}:$(echo ${LD_LIBRARY_PATH:-})" \
         ldd target/latest/conduwuit | awk '/=> \// {print $3}' \
         | grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|ld-linux|libdl\.so|libpthread\.so|librt\.so' \
-        | xargs -I {} cp "{}" target/${PROFILE}/lib/ || true
+        | xargs -I {} cp "{}" target/{{PROFILE}}/lib/ || true
 
     rm -rf target/latest/lib
-    ln -sfn ../${PROFILE}/lib target/latest/lib
+    ln -sfn ../{{PROFILE}}/lib target/latest/lib
 
-    echo "Building Complement Docker image using base image: ${COMPLEMENT_BASE_IMAGE}..."
+    echo "Building Complement Docker image using base image: {{COMPLEMENT_BASE_IMAGE}}..."
     DOCKER_BUILDKIT=1 docker buildx build \
-            --build-arg BASE_IMAGE=${COMPLEMENT_BASE_IMAGE} \
+            --build-arg BASE_IMAGE={{COMPLEMENT_BASE_IMAGE}} \
             --build-arg BINARY_PATH=target/latest/conduwuit \
-            --build-arg LIB_PATH=target/${PROFILE}/lib \
+            --build-arg LIB_PATH=target/{{PROFILE}}/lib \
             --build-arg UID="$(id -u)" \
             --build-arg GID="$(id -g)" \
-            -t ${COMPLEMENT_IMAGE} \
+            -t {{COMPLEMENT_IMAGE}} \
             -f ./docker/complement.Dockerfile \
             --load .
 

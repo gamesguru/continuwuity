@@ -145,7 +145,7 @@ lint:   ##H Lint code
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo clippy $(CARGO_SCOPE) --features default --locked --no-deps --profile $(PROFILE) -- -D warnings
+		cargo clippy --verbose $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
 test:   ##H Run tests
@@ -154,7 +154,7 @@ test:   ##H Run tests
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo test $(CARGO_SCOPE) --features default --locked --all-targets --timings --profile $(PROFILE)
+		cargo test --verbose $(CARGO_SCOPE) --features full --locked --all-targets --timings --profile $(PROFILE)
 
 
 ROCKSDB_LIB_DIR ?= /usr/local/lib
@@ -163,7 +163,7 @@ ROCKSDB_INCLUDE_DIR ?= /usr/local/include
 # Default features to use for the build
 # We use bindgen-runtime by default to use the system libclang.so for building.
 # Bundling RocksDB statically can be enabled via features.
-FEATURES ?= standard,release_max_log_level,bindgen-runtime
+FEATURES ?= standard,console,url_preview,release_max_log_level,bindgen-runtime
 
 .PHONY: build
 build:  ##H Build with selected profile
@@ -180,8 +180,8 @@ build:  ##H Build with selected profile
 		cargo build --features $(FEATURES) --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
-	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
-	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/debug/conduwuit
+	-ln -f target/$(if $(CARGO_BUILD_TARGET),$(CARGO_BUILD_TARGET)/)$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
+	-ln -f target/$(if $(CARGO_BUILD_TARGET),$(CARGO_BUILD_TARGET)/)$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/debug/conduwuit
 
 
 .PHONY: build-bundled
@@ -353,8 +353,10 @@ download:	##H Download CI binary (set RUN to a specific RunID)
 	@mkdir -p target/ci
 	# Checking version of old binary, if it exists
 	@-./target/ci/conduwuit -V
-	@rm -f target/ci/conduwuit
+	@rm -rf target/ci/*
 	gh run download $(RUN) -R $(GH_REPO) -n $(ARTIFACT) -D target/ci
+	tar -xzf target/ci/$(ARTIFACT).tar.gz -C target/ci
+	@mv target/ci/bin/conduwuit target/ci/conduwuit
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
