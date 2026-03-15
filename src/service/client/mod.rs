@@ -42,9 +42,7 @@ impl crate::Service for Service {
 			.unwrap_or_else(|| conduwuit::version::user_agent_media().to_owned());
 
 		Ok(Arc::new(Self {
-			default: base(config)?
-				.dns_resolver(resolver.resolver.clone())
-				.build()?,
+			default: base(config)?.build()?,
 
 			url_preview: base(config)
 				.and_then(|builder| {
