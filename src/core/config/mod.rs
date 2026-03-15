@@ -1330,6 +1330,7 @@ pub struct Config {
 	/// `GET /_matrix/client/v3/notifications` endpoint. Clients may request
 	/// a lower limit, but never higher than this value. Current implementation
 	/// may strain CPU. Set to 0 to disable the endpoint and return a quick 404.
+	/// Currently disabled by default. Sensible defaults are 24, 100, etc.
 	///
 	/// default: 0
 	#[serde(default = "default_notification_max_limit_per_request")]
@@ -2683,7 +2684,7 @@ pub fn default_log_span_events() -> String { "none".into() }
 
 fn default_notification_push_path() -> String { "/_matrix/push/v1/notify".to_owned() }
 
-fn default_notification_max_limit_per_request() -> usize { 100 }
+fn default_notification_max_limit_per_request() -> usize { 0 }
 
 fn default_notification_max_pdus_per_room() -> usize { 5000 }
 

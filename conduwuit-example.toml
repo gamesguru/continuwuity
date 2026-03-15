@@ -1134,6 +1134,7 @@
 # `GET /_matrix/client/v3/notifications` endpoint. Clients may request
 # a lower limit, but never higher than this value. Current implementation
 # may strain CPU. Set to 0 to disable the endpoint and return a quick 404.
+# Currently disabled by default. Sensible defaults are 24, 100, etc.
 #
 #notification_max_limit_per_request = 0
 
