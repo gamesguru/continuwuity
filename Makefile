@@ -98,7 +98,7 @@ PROFILE ?=
 p ?=
 CRATE ?=
 CARGO_SCOPE ?= $(if $(p),-p $(p),$(if $(CRATE),-p $(CRATE),--workspace))
-CARGO_FLAGS ?= --profile $(PROFILE)
+CARGO_FLAGS ?= $(if $(PROFILE),--profile $(PROFILE),)
 
 
 .PHONY: cargo/lock-init
