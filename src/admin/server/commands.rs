@@ -182,9 +182,9 @@ pub(super) async fn build_info(&self) -> Result {
 
 	// Version information
 	writeln!(info, "# Build Information\n")?;
-	writeln!(info, "**Version:** {}", env!("CARGO_PKG_VERSION"))?;
-	writeln!(info, "**Package:** {}", env!("CARGO_PKG_NAME"))?;
-	writeln!(info, "**Description:** {}", env!("CARGO_PKG_DESCRIPTION"))?;
+	writeln!(info, "**Version:** {}", conduwuit::version())?;
+	writeln!(info, "**Package:** {}", conduwuit::name())?;
+	writeln!(info, "**Description:** {}", conduwuit::description())?;
 
 	// Git information
 	writeln!(info, "\n## Git Information\n")?;
