@@ -1,5 +1,5 @@
 # List available commands
-default:
+_help:
     @just --list
 
 # --- Pre-building C/C++ Libraries ---
@@ -19,6 +19,44 @@ prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebu
 
 # Install all pre-built C/C++ dependencies
 install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb
+
+# Builds liburing
+prebuild-liburing:
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p /usr/local/build
+    echo "Cloning and building liburing (attempting to match project version {{version}})"...
+    [ ! -d "/usr/local/build/liburing" ] && git clone https://github.com/axboe/liburing.git /usr/local/build/liburing || true
+    cd /usr/local/build/liburing
+    git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
+    ./configure
+    make -j$(nproc)
+
+# Installs liburing
+install-liburing:
+    @echo "Installing liburing (requires sudo)..."
+    cd /usr/local/build/liburing && sudo make install
+    @echo "Done! You might need to run 'sudo ldconfig' to update library cache."
+
+# Builds bzip2
+prebuild-bzip2:
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p /usr/local/build
+    echo "Cloning and building bzip2..."
+    [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
+    cd /usr/local/build/bzip2
+    make -f Makefile-libbz2_so
+    make
+
+# Installs bzip2
+install-bzip2:
+    @echo "Installing bzip2 (requires sudo)..."
+    cd /usr/local/build/bzip2 && sudo make install PREFIX=/usr/local
+    cd /usr/local/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
+    cd /usr/local/build/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
+    sudo ldconfig
+    @echo "Done! Installed libbz2.so to /usr/local/lib"
 
 # Pre-build jemalloc
 prebuild-jemalloc:
@@ -81,12 +119,6 @@ install-rocksdb:
     cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
     sudo ldconfig
     @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
-
-# Clean RocksDB build directory
-clean-rocksdb:
-    @echo "Cleaning RocksDB build directory..."
-    cd /usr/local/build/rocksdb && make clean
-    rm -f /usr/local/build/rocksdb/make_config.mk
 
 # Pre-build snappy
 prebuild-snappy:
@@ -186,48 +218,79 @@ profile-build-llvm-lines:
     cargo llvm-lines --profile ${PROFILE:-release} -p conduwuit --lib
 
 # Extracts the workspace version from Cargo.toml
-version := `grep -m1 "^version = " Cargo.toml | cut -d \" -f 2`
-
-# Builds liburing
-prebuild-liburing:
-    #!/usr/bin/env bash
-    set -e
-    mkdir -p /usr/local/build
-    echo "Cloning and building liburing (attempting to match project version {{version}})"...
-    [ ! -d "/usr/local/build/liburing" ] && git clone https://github.com/axboe/liburing.git /usr/local/build/liburing || true
-    cd /usr/local/build/liburing
-    git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
-    ./configure
-    make -j$(nproc)
-
-# Installs liburing
-install-liburing:
-    @echo "Installing liburing (requires sudo)..."
-    cd /usr/local/build/liburing && sudo make install
-    @echo "Done! You might need to run 'sudo ldconfig' to update library cache."
-
-# Builds bzip2
-prebuild-bzip2:
-    #!/usr/bin/env bash
-    set -e
-    mkdir -p /usr/local/build
-    echo "Cloning and building bzip2..."
-    [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
-    cd /usr/local/build/bzip2
-    make -f Makefile-libbz2_so
-    make
-
-# Installs bzip2
-install-bzip2:
-    @echo "Installing bzip2 (requires sudo)..."
-    cd /usr/local/build/bzip2 && sudo make install PREFIX=/usr/local
-    cd /usr/local/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
-    cd /usr/local/build/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
-    sudo ldconfig
-    @echo "Done! Installed libbz2.so to /usr/local/lib"
+version := "$(grep -m1 '^version = ' Cargo.toml | cut -d \" -f 2)"
 
 # Start gdbserver for lightweight remote debugging (POC)
 # Usage: just remote-debug-poc /path/to/conduwuit.toml
 remote-debug-poc config="conduwuit-example.toml":
     @echo "Starting gdbserver on :1234 using config: {{config}}"
     sudo -u conduwuit gdbserver :1234 ./target/debug/continuwuity --config {{config}}
+
+# -----------------------------------------------------------------------------
+# Complement CI
+# -----------------------------------------------------------------------------
+
+COMPLEMENT_IMAGE := env_var_or_default("COMPLEMENT_IMAGE", "continuwuity:complement")
+COMPLEMENT_BASE_IMAGE := env_var_or_default("COMPLEMENT_BASE_IMAGE", "ubuntu:latest")
+PROFILE := env_var_or_default("PROFILE", "release")
+
+# Build docker image from existing binary
+ci-complement-docker:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "Copying dynamically linked libraries to target/${PROFILE}/lib/..."
+    mkdir -p target/${PROFILE}/lib && rm -f target/${PROFILE}/lib/*
+
+    LD_LIBRARY_PATH="${ROCKSDB_LIB_DIR:-}:$(echo ${LD_LIBRARY_PATH:-})" \
+        ldd target/latest/conduwuit | awk '/=> \// {print $3}' \
+        | grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|ld-linux|libdl\.so|libpthread\.so|librt\.so' \
+        | xargs -I {} cp "{}" target/${PROFILE}/lib/ || true
+
+    rm -rf target/latest/lib
+    ln -sfn ../${PROFILE}/lib target/latest/lib
+
+    echo "Building Complement Docker image using base image: ${COMPLEMENT_BASE_IMAGE}..."
+    DOCKER_BUILDKIT=1 docker buildx build \
+            --build-arg BASE_IMAGE=${COMPLEMENT_BASE_IMAGE} \
+            --build-arg BINARY_PATH=target/latest/conduwuit \
+            --build-arg LIB_PATH=target/${PROFILE}/lib \
+            --build-arg UID="$(id -u)" \
+            --build-arg GID="$(id -g)" \
+            -t ${COMPLEMENT_IMAGE} \
+            -f ./docker/complement.Dockerfile \
+            --load .
+
+# Aggregates test results generated by complement
+ci-complement-stats:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    RESULTS="tests/test_results/complement/test_results.jsonl"
+    if [ ! -f "$RESULTS" ]; then
+        echo "ERROR: $RESULTS does not exist"
+        exit 1
+    fi
+
+    echo "Parsing Complement test results..."
+    PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
+    FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' "$RESULTS")
+    SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' "$RESULTS")
+    TOTAL=$((PASS + FAIL + SKIP))
+
+    echo ""
+    if [ "$FAIL" -gt 0 ] && [ "${VERBOSE:-0}" = "1" ]; then
+        echo "Failed Tests:"
+        jq -r 'select(.Action == "fail") | .Test' "$RESULTS" | sort -u
+        echo ""
+    fi
+
+    echo "=== Complement Test Stats ==="
+    echo "✓ Passed:  $PASS"
+    echo "✗ Failed:  $FAIL"
+    echo "⚠ Skipped: $SKIP"
+    echo "Overall:   $TOTAL tests"
+
+    echo ""
+    echo "Last modified by:"
+    git log -5 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl

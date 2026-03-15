@@ -130,9 +130,10 @@ runs:
           --arg skip "$SKIP" \
           --arg fail "$FAIL" \
           --arg color "$COLOR" \
+          --arg provider_name "$PROVIDER" \
           '{
             schemaVersion: 1,
-            label: "Complement Tests",
+            label: "Complement Tests (\($provider_name))",
             message: "\($pass) pass, \($skip) skip, \($fail) fail",
             color: $color
           }' > badge-main.json
