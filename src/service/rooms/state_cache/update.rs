@@ -214,6 +214,10 @@ pub fn mark_as_joined(&self, user_id: &UserId, room_id: &RoomId) {
 	self.db.userroomid_joined.insert(&userroom_id, []);
 	self.db.roomuserid_joined.insert(&roomuser_id, []);
 
+	// #779: record in memory so the sync handler can find this room even if
+	// the DB prefix iterator misses it due to snapshot isolation.
+	self.mark_recently_joined(user_id, room_id);
+
 	self.db.userroomid_invitestate.remove(&userroom_id);
 	self.db.roomuserid_invitecount.remove(&roomuser_id);
 	self.db.userroomid_invitesender.remove(&userroom_id);

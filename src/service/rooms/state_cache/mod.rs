@@ -1,7 +1,10 @@
 mod update;
 mod via;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+	collections::{HashMap, HashSet},
+	sync::Arc,
+};
 
 use conduwuit::{
 	Pdu, Result, SyncRwLock, implement,
@@ -21,6 +24,7 @@ use crate::{Dep, account_data, appservice::RegistrationInfo, config, globals, ro
 
 pub struct Service {
 	appservice_in_room_cache: AppServiceInRoomCache,
+	recently_joined: RecentlyJoinedCache,
 	services: Services,
 	db: Data,
 }
@@ -54,12 +58,14 @@ struct Data {
 }
 
 type AppServiceInRoomCache = SyncRwLock<HashMap<OwnedRoomId, HashMap<String, bool>>>;
+type RecentlyJoinedCache = SyncRwLock<HashMap<OwnedUserId, HashSet<OwnedRoomId>>>;
 type StrippedStateEventItem = (OwnedRoomId, Vec<Raw<AnyStrippedStateEvent>>);
 
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			appservice_in_room_cache: SyncRwLock::new(HashMap::new()),
+			recently_joined: SyncRwLock::new(HashMap::new()),
 			services: Services {
 				account_data: args.depend::<account_data::Service>("account_data"),
 				config: args.depend::<config::Service>("config"),
@@ -91,6 +97,23 @@ impl crate::Service for Service {
 	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+}
+
+#[implement(Service)]
+pub fn mark_recently_joined(&self, user_id: &UserId, room_id: &RoomId) {
+	self.recently_joined
+		.write()
+		.entry(user_id.to_owned())
+		.or_default()
+		.insert(room_id.to_owned());
+}
+
+#[implement(Service)]
+pub fn take_recently_joined(&self, user_id: &UserId) -> HashSet<OwnedRoomId> {
+	self.recently_joined
+		.write()
+		.remove(user_id)
+		.unwrap_or_default()
 }
 
 #[implement(Service)]
