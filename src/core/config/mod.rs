@@ -2586,7 +2586,7 @@ fn default_dns_attempts() -> u16 { 10 }
 
 fn default_dns_timeout() -> u64 { 10 }
 
-fn default_ip_lookup_strategy() -> u8 { 1 }
+fn default_ip_lookup_strategy() -> u8 { 5 }
 
 fn default_max_request_size() -> usize {
 	20 * 1024 * 1024 // Default to 20 MB
