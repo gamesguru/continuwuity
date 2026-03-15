@@ -98,7 +98,7 @@ PROFILE ?=
 p ?=
 CRATE ?=
 CARGO_SCOPE ?= $(if $(p),-p $(p),$(if $(CRATE),-p $(CRATE),--workspace))
-CARGO_FLAGS ?= $(if $(PROFILE),--profile $(PROFILE),)
+CARGO_FLAGS ?= $(if $(PROFILE),--profile $(PROFILE))
 
 
 .PHONY: cargo/lock-init
@@ -336,8 +336,8 @@ CPU_TARGET ?=
 OS_VERSION ?=
 
 GH_ARTIFACT_NAME ?= conduwuit
-GH_ARTIFACT_SUFFIX ?= $(CPU_TARGET)-$(OS_VERSION)
-ARTIFACT ?= $(if $(and $(CPU_TARGET),$(OS_VERSION)),$(GH_ARTIFACT_NAME)$(GH_ARTIFACT_SUFFIX),)
+GH_ARTIFACT_SUFFIX ?= $(if $(and $(CPU_TARGET),$(OS_VERSION)),-$(CPU_TARGET)-$(OS_VERSION))
+ARTIFACT ?= $(if $(GH_ARTIFACT_SUFFIX),$(GH_ARTIFACT_NAME)$(GH_ARTIFACT_SUFFIX))
 
 RUN ?=
 N_RUNS ?= 6

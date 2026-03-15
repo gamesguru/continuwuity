@@ -46,9 +46,6 @@ pub fn verbose_version() -> String {
 		("commit", GIT_COMMIT_HASH),
 		("commit_short", GIT_COMMIT_HASH_SHORT),
 		("branch", GIT_BRANCH),
-		("remote_url", GIT_REMOTE_URL),
-		("remote_web_url", GIT_REMOTE_WEB_URL),
-		("remote_commit_url", GIT_REMOTE_COMMIT_URL),
 	];
 
 	fields

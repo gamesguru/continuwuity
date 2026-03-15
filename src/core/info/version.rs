@@ -21,6 +21,10 @@ static USER_AGENT_MEDIA: OnceLock<String> = OnceLock::new();
 pub fn name() -> &'static str { BRANDING }
 
 #[inline]
+#[must_use]
+pub fn description() -> &'static str { env!("CARGO_PKG_DESCRIPTION") }
+
+#[inline]
 pub fn version() -> &'static str { VERSION.get_or_init(init_version) }
 
 #[inline]
