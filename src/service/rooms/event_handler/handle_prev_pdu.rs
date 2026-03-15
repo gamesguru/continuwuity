@@ -77,7 +77,7 @@ where
 			.remove(room_id);
 	}};
 
-	self.upgrade_outlier_to_timeline_pdu(pdu, json, create_event, origin, room_id)
+	self.upgrade_outlier_to_timeline_pdu(pdu, json, create_event, origin, room_id, true)
 		.await?;
 
 	debug!(

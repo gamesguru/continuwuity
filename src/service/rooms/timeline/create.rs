@@ -247,7 +247,10 @@ pub async fn create_hash_and_sign_event(
 	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
 
 	if !auth_check {
-		return Err!(Request(Forbidden("Event is not authorized.")));
+		return Err!(Request(Forbidden(warn!(
+			"Event is not authorized. kind: {}, state_key: {:?}, sender: {}",
+			pdu.kind, pdu.state_key, pdu.sender
+		))));
 	}
 	trace!(
 		"Event {} in room {} is authorized",

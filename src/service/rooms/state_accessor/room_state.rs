@@ -85,11 +85,48 @@ pub async fn room_state_get(
 	event_type: &StateEventType,
 	state_key: &str,
 ) -> Result<Pdu> {
-	self.services
-		.state
-		.get_room_shortstatehash(room_id)
-		.and_then(|shortstatehash| self.state_get(shortstatehash, event_type, state_key))
-		.await
+	let cache_key = (room_id.to_owned(), event_type.clone(), state_key.to_owned());
+
+	if let Some(Some(cached)) = self.room_state_cache.lock().get_mut(&cache_key) {
+		return Ok(cached.clone());
+	}
+
+	let shortstatehash = self.services.state.get_room_shortstatehash(room_id).await?;
+
+	if *event_type == StateEventType::RoomMember {
+		conduwuit::debug!(
+			%room_id,
+			%state_key,
+			?shortstatehash,
+			"room_state_get(RoomMember)"
+		);
+	}
+
+	let result = self.state_get(shortstatehash, event_type, state_key).await;
+
+	if let Ok(pdu) = &result {
+		if *event_type == StateEventType::RoomMember {
+			if let Ok(member) =
+				pdu.get_content::<ruma::events::room::member::RoomMemberEventContent>()
+			{
+				conduwuit::debug!(
+					%room_id,
+					%state_key,
+					?shortstatehash,
+					membership = ?member.membership,
+					"room_state_get(RoomMember) -> Success"
+				);
+			}
+		}
+		self.room_state_cache
+			.lock()
+			.insert(cache_key, Some(pdu.clone()));
+		// Note: we intentionally do not cache negative results (None) because
+		// state can arrive shortly after (e.g. during room joins) and caching
+		// a miss would suppress the correct result until eviction.
+	}
+
+	result
 }
 
 /// Returns all state keys for the given `room_id` and `event_type`.

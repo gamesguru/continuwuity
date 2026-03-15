@@ -752,10 +752,18 @@ impl Service {
 
 		if let Some(master_key) = master_key {
 			let (master_key_key, _) = parse_master_key(user_id, master_key)?;
+			let mut master_key_val: serde_json::Value =
+				serde_json::from_str(master_key.json().get()).unwrap();
+
+			if let Ok(old_key) = self.db.keyid_key.get(&master_key_key).await {
+				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
+					merge_signatures(&mut master_key_val, &old_key);
+				}
+			}
 
 			self.db
 				.keyid_key
-				.insert(&master_key_key, master_key.json().get().as_bytes());
+				.insert(&master_key_key, serde_json::to_vec(&master_key_val).unwrap());
 
 			self.db
 				.userid_masterkeyid
@@ -764,13 +772,15 @@ impl Service {
 
 		// Self-signing key
 		if let Some(self_signing_key) = self_signing_key {
-			let mut self_signing_key_ids = self_signing_key
-				.deserialize()
-				.map_err(|e| err!(Request(InvalidParam("Invalid self signing key: {e:?}"))))?
-				.keys
-				.into_values();
+			let mut self_signing_key_val: serde_json::Value =
+				serde_json::from_str(self_signing_key.json().get()).unwrap();
 
-			let self_signing_key_id = self_signing_key_ids.next().ok_or(Error::BadRequest(
+			let self_signing_key_obj = self_signing_key
+				.deserialize()
+				.map_err(|e| err!(Request(InvalidParam("Invalid self signing key: {e:?}"))))?;
+
+			let mut self_signing_key_ids = self_signing_key_obj.keys.values();
+			let self_signing_key_pub = self_signing_key_ids.next().ok_or(Error::BadRequest(
 				ErrorKind::InvalidParam,
 				"Self signing key contained no key.",
 			))?;
@@ -783,11 +793,18 @@ impl Service {
 			}
 
 			let mut self_signing_key_key = prefix.clone();
-			self_signing_key_key.extend_from_slice(self_signing_key_id.as_bytes());
+			self_signing_key_key.extend_from_slice(self_signing_key_pub.as_bytes());
 
-			self.db
-				.keyid_key
-				.insert(&self_signing_key_key, self_signing_key.json().get().as_bytes());
+			if let Ok(old_key) = self.db.keyid_key.get(&self_signing_key_key).await {
+				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
+					merge_signatures(&mut self_signing_key_val, &old_key);
+				}
+			}
+
+			self.db.keyid_key.insert(
+				&self_signing_key_key,
+				serde_json::to_vec(&self_signing_key_val).unwrap(),
+			);
 
 			self.db
 				.userid_selfsigningkeyid
@@ -796,12 +813,22 @@ impl Service {
 
 		// User-signing key
 		if let Some(user_signing_key) = user_signing_key {
-			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
+			let mut user_signing_key_val: serde_json::Value =
+				serde_json::from_str(user_signing_key.json().get()).unwrap();
 
+			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 			let user_signing_key_key = (user_id, &user_signing_key_id);
-			self.db
-				.keyid_key
-				.put_raw(user_signing_key_key, user_signing_key.json().get().as_bytes());
+
+			if let Ok(old_key) = self.db.keyid_key.qry(&user_signing_key_key).await {
+				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
+					merge_signatures(&mut user_signing_key_val, &old_key);
+				}
+			}
+
+			self.db.keyid_key.put_raw(
+				user_signing_key_key,
+				serde_json::to_vec(&user_signing_key_val).unwrap(),
+			);
 
 			self.db
 				.userid_usersigningkeyid
@@ -1480,6 +1507,29 @@ pub fn parse_user_signing_key(user_signing_key: &Raw<CrossSigningKey>) -> Result
 	}
 
 	Ok(user_signing_key_id)
+}
+
+fn merge_signatures(new: &mut serde_json::Value, old: &serde_json::Value) {
+	if let (Some(new_sigs), Some(old_sigs)) = (
+		new.get_mut("signatures").and_then(|v| v.as_object_mut()),
+		old.get("signatures").and_then(|v| v.as_object()),
+	) {
+		for (user, sigs) in old_sigs {
+			if let Some(sigs) = sigs.as_object() {
+				let new_user_sigs = new_sigs
+					.entry(user.clone())
+					.or_insert_with(|| json!({}))
+					.as_object_mut()
+					.expect("signatures for a user must be an object");
+
+				for (key, val) in sigs {
+					if !new_user_sigs.contains_key(key) {
+						new_user_sigs.insert(key.clone(), val.clone());
+					}
+				}
+			}
+		}
+	}
 }
 
 /// Ensure that a user only sees signatures from themselves and the target user

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use conduwuit_core::{
 	Error, Result,
 	config::Config,
-	info,
 	log::Log,
 	utils::{stream, sys},
+	warn,
 };
 use tokio::{runtime, sync::Mutex};
 
@@ -59,7 +59,7 @@ impl Server {
 		let (_old_width, _new_width) = stream::set_width(config.stream_width_default);
 		let (_old_amp, _new_amp) = stream::set_amplification(config.stream_amplification);
 
-		info!(
+		warn!(
 			server_name = %config.server_name,
 			database_path = ?config.database_path,
 			log_levels = %config.log,

@@ -2,7 +2,11 @@ use axum::extract::State;
 use conduwuit::{
 	Err, Result,
 	matrix::pdu::PduBuilder,
-	utils::{IterStream, future::TryExtExt, stream::TryIgnore},
+	utils::{
+		IterStream,
+		future::TryExtExt,
+		stream::{BroadbandExt, TryIgnore},
+	},
 	warn,
 };
 use conduwuit_service::Services;
@@ -312,7 +316,7 @@ pub async fn update_displayname(
 	)
 	.await;
 
-	if displayname == current_displayname {
+	if current_displayname == displayname {
 		return;
 	}
 
@@ -402,15 +406,24 @@ pub async fn update_all_rooms(
 	all_joined_rooms: Vec<(PduBuilder, &OwnedRoomId)>,
 	user_id: &UserId,
 ) {
-	for (pdu_builder, room_id) in all_joined_rooms {
-		let state_lock = services.rooms.state.mutex.lock(room_id).await;
-		if let Err(e) = services
-			.rooms
-			.timeline
-			.build_and_append_pdu(pdu_builder, user_id, Some(room_id), &state_lock)
-			.await
-		{
-			warn!(%user_id, %room_id, "Failed to update/send new profile join membership update in room: {e}");
-		}
-	}
+	all_joined_rooms
+		.into_iter()
+		.stream()
+		.broad_then(|(pdu_builder, room_id)| async move {
+			let state_lock = services.rooms.state.mutex.lock(room_id).await;
+			if let Err(e) = services
+				.rooms
+				.timeline
+				.build_and_append_pdu(pdu_builder, user_id, Some(room_id), &state_lock)
+				.await
+			{
+				warn!(
+					%user_id,
+					%room_id,
+					"Failed to update/send new profile join membership update in room: {e}"
+				);
+			}
+		})
+		.collect::<()>()
+		.await;
 }

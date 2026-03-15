@@ -200,6 +200,10 @@
 
 # This item is undocumented. Please contribute documentation for it.
 #
+#shortstatehash_cache_capacity = varies by system
+
+# This item is undocumented. Please contribute documentation for it.
+#
 #roomid_spacehierarchy_cache_capacity = varies by system
 
 # Maximum entries stored in DNS memory-cache. The size of an entry may

@@ -4,8 +4,8 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer, err,
-	implement, info, trace, utils::stream::IterStream, warn,
+	Err, Event, PduEvent, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer,
+	err, implement, info, trace, utils::stream::IterStream, warn,
 };
 use futures::{
 	FutureExt, TryFutureExt, TryStreamExt,
@@ -18,8 +18,8 @@ use ruma::{
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
 };
-use tracing::debug;
 
+// use tracing::debug; (Removed)
 use crate::rooms::timeline::{RawPduId, pdu_fits};
 
 async fn should_rescind_invite(
@@ -289,7 +289,7 @@ pub async fn handle_incoming_pdu<'a>(
 			.remove(room_id);
 	}};
 
-	self.upgrade_outlier_to_timeline_pdu(incoming_pdu, val, create_event, origin, room_id)
+	self.upgrade_outlier_to_timeline_pdu(incoming_pdu, val, create_event, origin, room_id, false)
 		.boxed()
 		.await
 }

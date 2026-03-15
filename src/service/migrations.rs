@@ -32,7 +32,7 @@ use crate::{Services, media, rooms::short::ShortStateHash};
 /// - If database is opened at lesser version we apply migrations up to this.
 ///   Note that named-feature migrations may also be performed when opening at
 ///   equal or lesser version. These are expected to be backward-compatible.
-pub(crate) const DATABASE_VERSION: u64 = 18;
+pub(crate) const DATABASE_VERSION: u64 = 19;
 
 pub(crate) async fn migrations(services: &Services) -> Result<()> {
 	let users_count = services.users.count().await;
@@ -204,6 +204,14 @@ async fn migrate(services: &Services) -> Result<()> {
 		info!("Migration: Bumped database version to 18");
 	}
 
+	if services.globals.db.database_version().await < 19 {
+		if let Err(e) = services.db.db.drop_cf("roomsynctoken_shortstatehash") {
+			debug_warn!("drop_cf roomsynctoken_shortstatehash: {e:?}");
+		}
+		services.globals.db.bump_database_version(19);
+		warn!("Migration: Bumped database version to 19");
+	}
+
 	if db["global"]
 		.get(POPULATED_USERROOMID_LEFTSTATE_TABLE_MARKER)
 		.await
@@ -296,7 +304,7 @@ async fn migrate(services: &Services) -> Result<()> {
 		}
 	}
 
-	info!("Loaded RocksDB database with schema version {DATABASE_VERSION}");
+	warn!("Loaded RocksDB database with schema version {DATABASE_VERSION}");
 
 	Ok(())
 }

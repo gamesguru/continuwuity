@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use conduwuit::{
-	Err, PduCount, PduEvent, Result, at, err,
-	result::NotFound,
-	utils::{self, stream::TryReadyExt},
+	Err, PduCount, PduEvent, Result, at, err, result::NotFound, utils::stream::TryReadyExt,
 };
-use database::{Database, Deserialized, Json, KeyVal, Map};
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
-use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, api::Direction};
+use database::{Database, Deserialized, Get, Json, KeyVal, Map};
+use futures::{
+	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::select_ok, pin_mut,
+};
+use ruma::{CanonicalJsonObject, EventId, OwnedEventId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
@@ -16,8 +16,6 @@ pub(super) struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
-	userroomid_highlightcount: Arc<Map>,
-	userroomid_notificationcount: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
 }
@@ -35,8 +33,6 @@ impl Data {
 			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
 			pduid_pdu: db["pduid_pdu"].clone(),
-			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
-			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
 			db: args.db.clone(),
 			services: Services {
 				short: args.depend::<rooms::short::Service>("rooms::short"),
@@ -68,7 +64,7 @@ impl Data {
 			.try_next()
 			.await?
 			.map(at!(1))
-			.ok_or_else(|| err!(Request(NotFound("no PDU's found in room"))))
+			.ok_or_else(|| err!(Request(NotFound("no PDUs found in room"))))
 	}
 
 	/// Returns the `count` of this pdu's id.
@@ -114,6 +110,28 @@ impl Data {
 		let pduid = self.get_pdu_id(event_id).await?;
 
 		self.pduid_pdu.get(&pduid).await.deserialized()
+	}
+
+	pub(super) fn multi_get_pdu_ids<'a, S>(
+		&'a self,
+		event_ids: S,
+	) -> impl Stream<Item = Result<RawPduId>> + Send + 'a
+	where
+		S: Stream<Item = OwnedEventId> + Send + 'a,
+	{
+		event_ids
+			.get(&self.eventid_pduid)
+			.map(|handle| handle.map(|h| RawPduId::from(&*h)))
+	}
+
+	pub(super) fn multi_get_pdus<'a, S>(
+		&'a self,
+		pdu_ids: S,
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a
+	where
+		S: Stream<Item = RawPduId> + Send + 'a,
+	{
+		pdu_ids.get(&self.pduid_pdu).map(Deserialized::deserialized)
 	}
 
 	/// Like get_non_outlier_pdu(), but without the expense of fetching and
@@ -251,27 +269,60 @@ impl Data {
 		Ok((pdu_id.pdu_count(), pdu))
 	}
 
-	pub(super) fn increment_notification_counts(
-		&self,
-		room_id: &RoomId,
-		notifies: Vec<OwnedUserId>,
-		highlights: Vec<OwnedUserId>,
-	) {
-		let _cork = self.db.cork();
+	pub(super) async fn prev_timeline_count(&self, before: &PduId) -> Result<PduCount> {
+		let before_pdu =
+			Self::pdu_count_to_id(before.shortroomid, before.shorteventid, Direction::Backward);
 
-		for user in notifies {
-			let mut userroom_id = user.as_bytes().to_vec();
-			userroom_id.push(0xFF);
-			userroom_id.extend_from_slice(room_id.as_bytes());
-			increment(&self.userroomid_notificationcount, &userroom_id);
-		}
+		let prefix = before_pdu.shortroomid();
+		let pdu_ids = self
+			.pduid_pdu
+			.rev_keys_raw_from(&before_pdu)
+			.ready_try_take_while(move |pdu_bytes: &&[u8]| Ok(pdu_bytes.starts_with(&prefix)))
+			.ready_and_then(|pdu_bytes: &[u8]| {
+				let pdu_id = RawPduId::from(pdu_bytes);
+				Ok(pdu_id.pdu_count())
+			});
 
-		for user in highlights {
-			let mut userroom_id = user.as_bytes().to_vec();
-			userroom_id.push(0xFF);
-			userroom_id.extend_from_slice(room_id.as_bytes());
-			increment(&self.userroomid_highlightcount, &userroom_id);
-		}
+		pin_mut!(pdu_ids);
+		pdu_ids
+			.try_next()
+			.await?
+			.ok_or_else(|| err!(Request(NotFound("No earlier PDUs found in room"))))
+	}
+
+	pub(super) async fn next_timeline_count(&self, after: &PduId) -> Result<PduCount> {
+		let after_pdu =
+			Self::pdu_count_to_id(after.shortroomid, after.shorteventid, Direction::Forward);
+
+		let prefix = after_pdu.shortroomid();
+		let pdu_ids = self
+			.pduid_pdu
+			.keys_raw_from(&after_pdu)
+			.ready_try_take_while(move |pdu_bytes: &&[u8]| Ok(pdu_bytes.starts_with(&prefix)))
+			.ready_and_then(|pdu_bytes: &[u8]| {
+				let pdu_id = RawPduId::from(pdu_bytes);
+				Ok(pdu_id.pdu_count())
+			});
+
+		pin_mut!(pdu_ids);
+		pdu_ids
+			.try_next()
+			.await?
+			.ok_or_else(|| err!(Request(NotFound("No more PDUs found in room"))))
+	}
+
+	fn pdu_count_to_id(
+		shortroomid: ShortRoomId,
+		shorteventid: PduCount,
+		dir: Direction,
+	) -> RawPduId {
+		// +1 so we don't send the base event
+		let pdu_id = PduId {
+			shortroomid,
+			shorteventid: shorteventid.saturating_inc(dir),
+		};
+
+		pdu_id.into()
 	}
 
 	async fn count_to_id(
@@ -287,19 +338,6 @@ impl Data {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-		// +1 so we don't send the base event
-		let pdu_id = PduId {
-			shortroomid,
-			shorteventid: shorteventid.saturating_inc(dir),
-		};
-
-		Ok(pdu_id.into())
+		Ok(Self::pdu_count_to_id(shortroomid, shorteventid, dir))
 	}
-}
-
-//TODO: this is an ABA
-fn increment(db: &Arc<Map>, key: &[u8]) {
-	let old = db.get_blocking(key);
-	let new = utils::increment(old.ok().as_deref());
-	db.insert(key, new);
 }

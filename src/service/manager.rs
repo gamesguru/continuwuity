@@ -34,11 +34,9 @@ impl Manager {
 	}
 
 	pub(super) async fn poll(&self) -> Result<()> {
-		let mut lock = self.manager.lock().await;
-		if let Some(manager) = &mut *lock {
+		if let Some(manager) = &mut *self.manager.lock().await {
 			trace!("Polling service manager...");
 			let res = manager.await;
-			*lock = None;
 			return res.map_err(Error::from).and_then(|res| res);
 		}
 

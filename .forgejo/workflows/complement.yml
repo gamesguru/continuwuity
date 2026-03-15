@@ -22,6 +22,7 @@ on:
           - c10y-forge-runner-complement-5
 
 env:
+  PROFILE: release
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   # Absolute paths for Rust tools on the host VPS

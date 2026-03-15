@@ -67,7 +67,7 @@ runs:
       uses: ./.forgejo/actions/rust-toolchain
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
+      uses: docker/setup-buildx-action@v3
       with:
         # Use persistent BuildKit if BUILDKIT_ENDPOINT is set (e.g. tcp://buildkit:8125)
         driver: ${{ env.BUILDKIT_ENDPOINT != '' && 'remote' || 'docker-container' }}
@@ -152,7 +152,7 @@ runs:
 
     - name: inject cache into docker
       if: ${{ env.BUILDKIT_ENDPOINT == '' }}
-      uses: https://github.com/reproducible-containers/buildkit-cache-dance@v3.3.2
+      uses: https://github.com/reproducible-containers/buildkit-cache-dance@v3.3.0
       with:
         cache-map: |
           {

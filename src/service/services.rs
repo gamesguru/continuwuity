@@ -1,7 +1,11 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug, debug_info, error, info, trace, utils::stream::IterStream,
+	Result, Server, SyncRwLock, debug_info, error, info, trace,
+	utils::{
+		ReadyExt,
+		stream::{BroadbandExt, IterStream},
+	},
 	warn,
 };
 use database::Database;
@@ -136,7 +140,6 @@ impl Services {
 		super::migrations::migrations(self)
 			.await
 			.inspect_err(|e| error!("Migrations failed: {e}"))?;
-
 		info!("Starting service manager...");
 		let manager = {
 			let mut lock = self.manager.lock().await;
@@ -189,9 +192,10 @@ impl Services {
 
 	pub async fn clear_cache(&self) {
 		self.services()
-			.for_each(|service| async move {
+			.broad_then(|service| async move {
 				service.clear_cache().await;
 			})
+			.ready_for_each(|()| ())
 			.await;
 	}
 
@@ -209,7 +213,7 @@ impl Services {
 		warn!("Interrupting services...");
 		for (name, (service, ..)) in self.service.read().iter() {
 			if let Some(service) = service.upgrade() {
-				debug!("Interrupting {name}");
+				info!("Interrupting {name}");
 				service.interrupt();
 			}
 		}

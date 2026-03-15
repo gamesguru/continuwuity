@@ -12,8 +12,8 @@ use conduwuit::{
 	state_res::lexicographical_topological_sort,
 	trace,
 	utils::{
-		IterStream, ReadyExt, millis_since_unix_epoch,
-		stream::{BroadbandExt, TryBroadbandExt, automatic_width},
+		IterStream, millis_since_unix_epoch,
+		stream::{TryBroadbandExt, automatic_width},
 	},
 };
 use conduwuit_service::{
@@ -110,7 +110,7 @@ pub(crate) async fn send_transaction_message_route(
 async fn wait_for_result(
 	mut recv: Receiver<WrappedTransactionResponse>,
 ) -> Result<send_transaction_message::v1::Response> {
-	if tokio::time::timeout(Duration::from_secs(50), recv.changed())
+	if tokio::time::timeout(Duration::from_secs(120), recv.changed())
 		.await
 		.is_err()
 	{
@@ -147,13 +147,20 @@ async fn process_inbound_transaction(
 	sender: Sender<WrappedTransactionResponse>,
 ) {
 	let txn_start_time = Instant::now();
-	let pdus = body
-		.pdus
-		.iter()
-		.stream()
-		.broad_then(|pdu| services.rooms.event_handler.parse_incoming_pdu(pdu))
-		.inspect_err(|e| debug_warn!("Could not parse PDU: {e}"))
-		.ready_filter_map(Result::ok);
+
+	// Keep transaction writes corked here; append_pdu() already performs the flush.
+	// Batch all database writes in this transaction into a single WAL flush
+	let _cork = services.db.cork_and_flush();
+
+	let mut pdus = Vec::with_capacity(body.pdus.len());
+	for pdu in &body.pdus {
+		if let Ok(pdu) = services.rooms.event_handler.parse_incoming_pdu(pdu).await {
+			pdus.push(pdu);
+		} else {
+			debug_warn!("Could not parse PDU");
+		}
+	}
+	let pdus = pdus.into_iter().stream();
 
 	let edus = body
 		.edus
@@ -359,6 +366,9 @@ async fn handle_room(
 }
 
 async fn handle_edu(services: &Services, client: &IpAddr, origin: &ServerName, edu: Edu) {
+	if services.server.check_running().is_err() {
+		return;
+	}
 	match edu {
 		| Edu::Presence(presence) if services.server.config.allow_incoming_presence =>
 			handle_edu_presence(services, client, origin, presence).await,

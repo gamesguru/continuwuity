@@ -288,7 +288,7 @@ jobs:
 
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
-              `**Commit:** `${context.payload.pull_request.head.ref}` (`${context.payload.pull_request.head.sha.substring(0, 7)}`)`,
+              `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
               '',
               '| Status | Count |',
               '|--------|-------|',

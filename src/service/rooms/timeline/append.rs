@@ -168,6 +168,13 @@ where
 		} else {
 			error!("Invalid unsigned type in pdu.");
 		}
+
+		// Invalidate cached room state for this event type+key
+		self.services.state_accessor.invalidate_room_state(
+			room_id,
+			&pdu.kind().to_string().into(),
+			state_key,
+		);
 	}
 
 	// We must keep track of all events that have been referenced.
@@ -193,7 +200,8 @@ where
 
 	self.services
 		.user
-		.reset_notification_counts(pdu.sender(), room_id);
+		.reset_notification_counts(pdu.sender(), room_id)
+		.await;
 
 	let count2 = PduCount::Normal(self.services.globals.next_count().unwrap());
 	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: count2 }.into();
@@ -278,6 +286,7 @@ where
 			highlights.push(user.clone());
 		}
 
+		// TODO: replace with future
 		self.services
 			.pusher
 			.get_pushkeys(user)
@@ -285,13 +294,15 @@ where
 				self.services
 					.sending
 					.send_pdu_push(&pdu_id, user, push_key.to_owned())
-					.expect("TODO: replace with future");
+					.ok();
 			})
 			.await;
 	}
 
-	self.db
-		.increment_notification_counts(room_id, notifies, highlights);
+	self.services
+		.user
+		.increment_notification_counts(room_id, notifies, highlights)
+		.await;
 
 	match *pdu.kind() {
 		| TimelineEventType::RoomRedaction => {

@@ -1,4 +1,4 @@
-use conduwuit::{implement, utils::stream::ReadyExt, warn};
+use conduwuit::{Event, debug_warn, implement, utils::stream::ReadyExt};
 use futures::StreamExt;
 use ruma::{
 	EventId, RoomId, ServerName,
@@ -18,11 +18,37 @@ pub async fn server_can_see_event(
 	room_id: &RoomId,
 	event_id: &EventId,
 ) -> bool {
+	let Ok(pdu) = self.services.timeline.get_pdu(event_id).await else {
+		debug_warn!(
+			"Unable to visibility check event {} in room {} for server {}: pdu not found",
+			event_id,
+			room_id,
+			origin
+		);
+		return false;
+	};
+
+	if pdu.sender().server_name() == origin {
+		return true;
+	}
+
+	if pdu.kind() == &ruma::events::TimelineEventType::RoomMember {
+		if let Some(state_key) = pdu.state_key() {
+			if let Ok(user_id) = <&ruma::UserId>::try_from(state_key) {
+				if user_id.server_name() == origin {
+					return true;
+				}
+			}
+		}
+	}
+
 	let Ok(shortstatehash) = self.pdu_shortstatehash(event_id).await else {
-		warn!(
+		debug_warn!(
 			"Unable to visibility check event {} in room {} for server {}: shortstatehash not \
 			 found",
-			event_id, room_id, origin
+			event_id,
+			room_id,
+			origin
 		);
 		return false;
 	};
