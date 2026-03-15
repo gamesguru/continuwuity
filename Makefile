@@ -83,11 +83,16 @@ cpu-info: ##H Print CPU info relevant to native target-cpu
 vars: ##H Print debug info
 	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
 	@echo "... computing version."
-	@ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+	@BIN_PATH="target/$(if $(PROFILE),$(PROFILE),debug)/conduwuit"; \
+	if [ -x "$$BIN_PATH" ]; then \
+		ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$$(cargo run --quiet -- --version-verbose)"
+		"$$($$BIN_PATH --version-verbose)"; \
+	else \
+		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" "(Run 'make build' to compile binary for full version)"; \
+	fi
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
