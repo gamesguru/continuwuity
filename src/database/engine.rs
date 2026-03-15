@@ -90,7 +90,7 @@ impl Engine {
 
 	#[tracing::instrument(level = "debug", skip_all)]
 	pub fn flush(&self) -> Result {
-		info!("Flushing database WAL...");
+		debug!("Flushing database WAL...");
 		result(DBCommon::flush_wal(&self.db, false))
 	}
 
