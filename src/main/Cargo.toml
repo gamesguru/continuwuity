@@ -11,6 +11,8 @@ repository.workspace = true
 version.workspace = true
 metadata.crane.workspace = true
 
+build = "build.rs"
+
 [lib]
 path = "mod.rs"
 crate-type = [
