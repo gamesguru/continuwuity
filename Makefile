@@ -145,7 +145,7 @@ lint:   ##H Lint code
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo clippy --verbose $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
+		cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
 
 .PHONY: test
 test:   ##H Run tests
@@ -154,7 +154,7 @@ test:   ##H Run tests
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo test --verbose $(CARGO_SCOPE) --features full --locked --all-targets --timings --profile $(PROFILE)
+		cargo test $(CARGO_SCOPE) --features full --locked --all-targets --timings --profile $(PROFILE)
 
 
 ROCKSDB_LIB_DIR ?= /usr/local/lib
