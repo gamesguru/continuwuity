@@ -88,11 +88,11 @@ impl Data {
 		currently_active: Option<bool>,
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
-		_previous: Option<(u64, Presence)>,
+		previous: Option<(u64, Presence)>,
 	) -> Result<()> {
 		let _lock = self.locks.lock(user_id).await;
 
-		let last_presence = if let Some(prev) = _previous {
+		let last_presence = if let Some(prev) = previous {
 			Ok(prev)
 		} else {
 			self.get_presence_raw(user_id).await
