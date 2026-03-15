@@ -3,6 +3,42 @@ use std::{env, fmt::Write, fs, path::Path};
 fn main() {
 	println!("cargo:rerun-if-changed=Cargo.toml");
 
+	// Embed dynamic lib paths in final binary so users don't need LD_LIBRARY_PATH
+	let mut rpaths = std::collections::HashSet::new();
+
+	if let Ok(lib_dir) = env::var("ROCKSDB_LIB_DIR") {
+		println!("cargo:rerun-if-env-changed=ROCKSDB_LIB_DIR");
+		rpaths.insert(lib_dir);
+	}
+	if let Ok(lib_dir) = env::var("SNAPPY_LIB_DIR") {
+		println!("cargo:rerun-if-env-changed=SNAPPY_LIB_DIR");
+		rpaths.insert(lib_dir);
+	}
+	if let Ok(lib_dir) = env::var("ZSTD_LIB_DIR") {
+		println!("cargo:rerun-if-env-changed=ZSTD_LIB_DIR");
+		rpaths.insert(lib_dir);
+	}
+	if let Ok(lib_dir) = env::var("BZIP2_LIB_DIR") {
+		println!("cargo:rerun-if-env-changed=BZIP2_LIB_DIR");
+		rpaths.insert(lib_dir);
+	}
+	if let Ok(lib_dir) = env::var("LZ4_LIB_DIR") {
+		println!("cargo:rerun-if-env-changed=LZ4_LIB_DIR");
+		rpaths.insert(lib_dir);
+	}
+	if let Ok(jemalloc) = env::var("JEMALLOC_OVERRIDE") {
+		println!("cargo:rerun-if-env-changed=JEMALLOC_OVERRIDE");
+		if let Some(parent) = Path::new(&jemalloc).parent() {
+			if let Some(dir) = parent.to_str() {
+				rpaths.insert(dir.to_owned());
+			}
+		}
+	}
+
+	for rpath in rpaths {
+		println!("cargo:rustc-link-arg=-Wl,-rpath,{rpath}");
+	}
+
 	let cargo_toml = fs::read_to_string("Cargo.toml").unwrap();
 	let mut available_features = Vec::new();
 	let mut in_features = false;
