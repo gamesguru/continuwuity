@@ -96,6 +96,16 @@ runs:
       shell: bash
       id: rust-setup
       run: |
+        # Check if we should exit early natively because rust is already installed
+        if command -v rustc &> /dev/null; then
+          CURRENT_VERSION=$(rustc --version | cut -d' ' -f2)
+          if [[ -z "${{ inputs.rust-version }}" ]] || [[ "$CURRENT_VERSION" == *"${{ inputs.rust-version }}"* ]]; then
+            echo "✓ Rust is already installed natively! ($CURRENT_VERSION)"
+            echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        fi
+
         # Install rustup if not already cached
         if ! command -v rustup &> /dev/null; then
           echo "::group::[Package] Installing rustup"
