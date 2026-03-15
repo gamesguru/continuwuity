@@ -40,8 +40,8 @@ impl Drop for Cork {
 		}
 
 		if self.db.uncork() {
-			let sync = self.db.pending_sync.swap(false, Ordering::Relaxed);
-			let flush = self.db.pending_flush.swap(false, Ordering::Relaxed);
+			let sync = self.db.pending_sync.swap(false, Ordering::Acquire);
+			let flush = self.db.pending_flush.swap(false, Ordering::Acquire);
 
 			if sync {
 				self.db.sync().ok();
