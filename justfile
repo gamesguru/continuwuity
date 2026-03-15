@@ -169,9 +169,14 @@ install-zstd:
 
 # --- CPU Profiling ---
 
-# Run CPU flamegraph profiling (requires sudo for perf)
+# Run CPU flamegraph profiling on release build (requires sudo for perf)
 profile-runtime-cpu *args:
     cargo flamegraph --root --features local_profiling --bin conduwuit -- {{args}}
+    @echo "Flamegraph saved to flamegraph.svg"
+
+# Run CPU flamegraph profiling on dev build (requires sudo for perf)
+profile-runtime-cpu-dev *args:
+    cargo flamegraph --root --dev --features local_profiling --bin conduwuit -- {{args}}
     @echo "Flamegraph saved to flamegraph.svg"
 
 # --- Async & I/O Profiling ---
@@ -216,6 +221,24 @@ profile-build-bloat-functions:
 # Analyze generic instantiation (Monomorphization)
 profile-build-llvm-lines:
     cargo llvm-lines --profile ${PROFILE:-release} -p conduwuit --lib
+
+# --- Cross Compilation ---
+
+# Cross-compile using cargo-zigbuild for specific glibc versions
+# Usage: just build-cross-compile <target-glibc-version> <cpu-arch>
+# Example: just build-cross-compile 2.36 skylake
+build-cross-compile glibc_version="2.36" cpu_arch="skylake":
+    @echo "Building for glibc {{glibc_version}} with CPU target {{cpu_arch}} using cargo-zigbuild..."
+    @if ! command -v cargo-zigbuild >/dev/null 2>&1; then \
+        echo "Error: cargo-zigbuild is not installed. Run: cargo install cargo-zigbuild"; \
+        exit 1; \
+    fi
+    @if ! command -v zig >/dev/null 2>&1; then \
+        echo "Error: zig is not installed. Run: sudo pacman -S zig (or your package manager's equivalent)"; \
+        exit 1; \
+    fi
+    rustup target add x86_64-unknown-linux-gnu
+    env RUSTFLAGS="-C target-cpu={{cpu_arch}}" cargo zigbuild --release --target x86_64-unknown-linux-gnu.{{glibc_version}}
 
 # Extracts the workspace version from Cargo.toml
 version := "$(grep -m1 '^version = ' Cargo.toml | cut -d \" -f 2)"
