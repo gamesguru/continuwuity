@@ -1331,7 +1331,7 @@ pub struct Config {
 	/// a lower limit, but never higher than this value. Current implementation
 	/// may strain CPU. Set to 0 to disable the endpoint and return a quick 404.
 	///
-	/// default: 100
+	/// default: 0
 	#[serde(default = "default_notification_max_limit_per_request")]
 	pub notification_max_limit_per_request: usize,
 
