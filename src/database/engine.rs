@@ -98,10 +98,10 @@ impl Engine {
 	pub(crate) fn cork(&self) { self.corks.fetch_add(1, Ordering::Relaxed); }
 
 	#[inline]
-	pub(crate) fn uncork(&self) { self.corks.fetch_sub(1, Ordering::AcqRel); }
+	pub(crate) fn uncork(&self) -> bool { self.corks.fetch_sub(1, Ordering::AcqRel) == 1 }
 
 	#[inline]
-	pub fn corked(&self) -> bool { self.corks.load(Ordering::Relaxed) > 0 }
+	pub fn corked(&self) -> bool { self.corks.load(Ordering::Acquire) > 0 }
 
 	/// Query for database property by null-terminated name which is expected to
 	/// have a result with an integer representation. This is intended for
