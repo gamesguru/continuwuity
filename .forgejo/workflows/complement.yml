@@ -16,10 +16,10 @@ on:
         description: "Runner label"
         required: false
         type: choice
-        default: ubuntu-22.04-avx512-heliohost
+        default: ${{ vars.C10Y_CONFIG_WORKFLOW_RUNNER_1 }}
         options:
-          - ubuntu-22.04-avx512-heliohost
-          - ubuntu-24.04-avx512-heliohost
+          - ${{ vars.C10Y_CONFIG_WORKFLOW_RUNNER_1 }}
+          - ${{ vars.C10Y_CONFIG_WORKFLOW_RUNNER_2 }}
 
 env:
   CARGO_TERM_COLOR: always
