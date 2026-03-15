@@ -150,7 +150,7 @@ async fn process_inbound_transaction(
 
 	// Keep transaction writes corked here; append_pdu() already performs the flush.
 	// Batch all database writes in this transaction into a single WAL flush
-	let _cork = services.db.cork();
+	let _cork = services.db.cork_and_flush();
 
 	let mut pdus = Vec::with_capacity(body.pdus.len());
 	for pdu in &body.pdus {
