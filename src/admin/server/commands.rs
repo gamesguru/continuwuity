@@ -178,6 +178,7 @@ pub(super) async fn list_features(&self) -> Result {
 
 #[admin_command]
 pub(super) async fn build_info(&self) -> Result {
+	self.bail_restricted()?;
 	let mut info = String::new();
 
 	// Version information
