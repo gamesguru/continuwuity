@@ -16,10 +16,13 @@ on:
         description: "Runner label"
         required: false
         type: choice
-        default: ${{ vars.C10Y_CONFIG_WORKFLOW_RUNNER_1 }}
+        default: c10y-forge-runner-complement-1
         options:
-          - ${{ vars.C10Y_CONFIG_WORKFLOW_RUNNER_1 }}
-          - ${{ vars.C10Y_CONFIG_WORKFLOW_RUNNER_2 }}
+          - c10y-forge-runner-complement-1
+          - c10y-forge-runner-complement-2
+          - c10y-forge-runner-complement-3
+          - c10y-forge-runner-complement-4
+          - c10y-forge-runner-complement-5
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,7 +38,7 @@ jobs:
     runs-on: ${{ inputs.runner || vars.C10Y_CONFIG_WORKFLOW_RUNNER }}
 
     env:
-      RUSTC_WRAPPER: ccache
+      RUSTC_WRAPPER: sccache
 
     steps:
       - name: Checkout
