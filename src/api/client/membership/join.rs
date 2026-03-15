@@ -620,7 +620,7 @@ async fn join_room_by_id_helper_remote(
 				.await;
 
 			info!("Going through send_join response room_state");
-			let cork = services.db.cork();
+			let cork = services.db.cork_and_flush();
 			let state: HashMap<u64, OwnedEventId> = send_join_response
 				.room_state
 				.state
@@ -697,7 +697,7 @@ async fn join_room_by_id_helper_remote(
 			drop(cork);
 
 			info!("Going through send_join response auth_chain");
-			let cork = services.db.cork();
+			let cork = services.db.cork_and_flush();
 			send_join_response
 				.room_state
 				.auth_chain

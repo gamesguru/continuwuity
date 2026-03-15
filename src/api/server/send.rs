@@ -148,8 +148,8 @@ async fn process_inbound_transaction(
 ) {
 	let txn_start_time = Instant::now();
 
-	// Batch all database writes in this transaction to avoid massive WAL flushing
-	let _cork = services.db.cork();
+	// Batch all database writes in this transaction into a single WAL flush
+	let _cork = services.db.cork_and_flush();
 
 	let mut pdus = Vec::with_capacity(body.pdus.len());
 	for pdu in &body.pdus {
