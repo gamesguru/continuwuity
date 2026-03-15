@@ -238,10 +238,10 @@ build-cross-compile glibc_version="2.36" cpu_arch="skylake":
         exit 1; \
     fi
     rustup target add x86_64-unknown-linux-gnu
-    env RUSTFLAGS="-C target-cpu={{cpu_arch}}" cargo zigbuild --release --target x86_64-unknown-linux-gnu.{{glibc_version}}
+    env RUSTFLAGS="-C target-cpu={{cpu_arch}}" cargo zigbuild --profile ${PROFILE:-dev} --target x86_64-unknown-linux-gnu.{{glibc_version}}
 
 # Extracts the workspace version from Cargo.toml
-version := "$(grep -m1 '^version = ' Cargo.toml | cut -d \" -f 2)"
+version := `grep -m1 '^version = ' Cargo.toml | cut -d '"' -f 2`
 
 # Start gdbserver for lightweight remote debugging (POC)
 # Usage: just remote-debug-poc /path/to/conduwuit.toml
