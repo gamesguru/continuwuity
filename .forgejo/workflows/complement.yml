@@ -2,17 +2,29 @@
 name: Complement Tests
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       artifact_url:
-        description: "URL to the conduwuit artifact (binary or zip)"
-        required: true
+        description: "URL to zipped conduwuit binary"
+        required: false
         type: string
+      runner:
+        description: "Runner label"
+        required: false
+        type: choice
+        default: c10y-forge-runner-complement-1
+        options:
+          - c10y-forge-runner-complement-1
+          - c10y-forge-runner-complement-2
+          - c10y-forge-runner-complement-3
+          - c10y-forge-runner-complement-4
+          - c10y-forge-runner-complement-5
 
 env:
+  PROFILE: release
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  SKIP_CONFIRM: 1
   # Absolute paths for Rust tools on the host VPS
   CARGO: /opt/rust/cargo/bin/cargo
   RUSTUP: /opt/rust/cargo/bin/rustup
@@ -20,69 +32,61 @@ env:
 
 jobs:
   complement-tests:
-    runs-on: ubuntu-22.04-avx512
+    if: vars.C10Y_ENABLE_FORGE_WORKFLOW_COMPLEMENT_TESTS != ''
+    runs-on: ${{ inputs.runner || vars.C10Y_CONFIG_WORKFLOW_RUNNER }}
 
     env:
-      RUSTC_WRAPPER: ccache
-      PROFILE: release
-      FEATURES: "direct_tls"
+      RUSTC_WRAPPER: sccache
 
     steps:
+      - name: Checkout
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_USE_SLIM_CHECKOUT == '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ forge.repository || github.repository }}
+          ref: ${{ forge.sha || github.sha }}
+
       - name: Slim Checkout
+        if: ${{ vars.C10Y_CONFIG_WORKFLOW_USE_SLIM_CHECKOUT != '' }}
+        shell: bash
         run: |
           # Use raw git to avoid Node-based checkout action
           if [ ! -d ".git" ]; then
             git init
-            git remote add origin ${{ forge.server_url }}/${{ forge.repository }}
+            git remote add origin ${{ forge.server_url || github.server_url }}/${{ forge.repository || github.repository }}
           fi
-          git fetch --depth 1 origin ${{ forge.sha }}
+          git fetch --depth 1 origin ${{ forge.sha || github.sha }}
           git checkout FETCH_HEAD
           git fetch --tags --force
 
-      - name: Download conduwuit bundle
+      - name: Setup Rust (for build from source)
+        if: vars.C10Y_CONFIG_WORKFLOW_BUILD != '' || (vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD == '' && github.event.inputs.artifact_url == '')
+        uses: ./.forgejo/actions/setup-rust
+        with:
+          github-token: ${{ secrets.GH_PUBLIC_RO }}
+
+      - name: Build conduwuit (from source)
+        if: vars.C10Y_CONFIG_WORKFLOW_BUILD != '' || (vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD == '' && github.event.inputs.artifact_url == '')
         run: |
-          ARTIFACT_URL="${{ github.event.inputs.artifact_url }}"
-
-          # If the user pasted a github.com web UI URL, convert it to the API endpoint
-          if [[ "$ARTIFACT_URL" =~ ^https://github\.com/([^/]+)/([^/]+)/(suites|actions/runs)/[^/]+/artifacts/([^/]+) ]]; then
-            OWNER="${BASH_REMATCH[1]}"
-            REPO="${BASH_REMATCH[2]}"
-            ARTIFACT_ID="${BASH_REMATCH[4]}"
-            ARTIFACT_URL="https://api.github.com/repos/$OWNER/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
-            echo "Converted Web URL to API URL: $ARTIFACT_URL"
-          fi
-
-          mkdir -p target/${{ env.PROFILE }}
-          echo "Downloading bundle from: $ARTIFACT_URL"
-          curl -L -o target/${{ env.PROFILE }}/bundle.zip -H "Authorization: Bearer ${{ secrets.C10Y_GITHUB_TOKEN }}" "$ARTIFACT_URL"
-
-      - name: SHA256 sum check (zip bundle verification)
-        run: |
-          # Log SHA256 of the bundle
-          sha256sum target/${{ env.PROFILE }}/bundle.zip
-
-      - name: Extract conduwuit bundle
-        run: |
-          echo "Unzipping bundle..."
-          unzip -o target/${{ env.PROFILE }}/bundle.zip -d target/${{ env.PROFILE }}/
-          rm target/${{ env.PROFILE }}/bundle.zip
-          chmod +x target/${{ env.PROFILE }}/conduwuit
-
-      - name: GPG signature check (binary verification)
-        run: |
-          echo "Verifying GPG signature..."
-          echo "${{ secrets.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}" | gpg --batch --import
-          gpg --batch --verify target/${{ env.PROFILE }}/conduwuit.asc target/${{ env.PROFILE }}/conduwuit
-          echo "OK. GPG signature verified."
-
-      - name: Post-verification setup
-        run: |
+          cargo build --profile ${{ env.PROFILE }} --bin conduwuit
           mkdir -p target/latest
           ln -f target/${{ env.PROFILE }}/conduwuit target/latest/conduwuit
 
-      - name: Version check
+      - name: Install conduwuit Artifact (from zip box)
+        if: vars.C10Y_CONFIG_WORKFLOW_DOWNLOAD != '' || github.event.inputs.artifact_url != ''
+        uses: ./.forgejo/actions/install-conduwuit-artifact
+        with:
+          artifact_url: ${{ github.event.inputs.artifact_url }}
+          artifact_sha256: ${{ github.event.inputs.artifact_sha256 }}
+          github_token: ${{ secrets.C10Y_GITHUB_TOKEN || secrets.FORGEJO_TOKEN || secrets.GITHUB_TOKEN || github.token }}
+          profile: ${{ env.PROFILE }}
+          gpg_public_key: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY }}
+          gpg_public_key_id: ${{ vars.C10Y_BINARY_RELEASE_GPG_PUBLIC_KEY_ID }}
+      - name: Get conduwuit version
+        id: version
         run: |
-          ./target/latest/conduwuit --version | tee target/latest/conduwuit.version
+          VERSION=$(./target/latest/conduwuit --version)
+          echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
 
       - name: Checkout Complement
         run: |
@@ -90,80 +94,55 @@ jobs:
           if [ ! -d "complement-src" ]; then
             git clone --depth 1 https://github.com/matrix-org/complement complement-src
           else
-            cd complement-src && git fetch --depth 1 && git checkout FETCH_HEAD && cd ..
+            cd complement-src \
+            && git fetch --depth 1 \
+            && git checkout FETCH_HEAD \
+            && cd ..
           fi
 
       - name: Build Complement Docker image
-        run: |
-          ls -l target/latest/conduwuit
-          DOCKER_BUILDKIT=1 docker buildx build \
-            --build-arg BINARY_PATH=./target/latest/conduwuit \
-            -t continuwuity:complement \
-            -f ./docker/complement.Dockerfile \
-            --load .
+        run: just ci-complement-docker
 
       - name: Capture baseline stats
-        run: VERBOSE=1 make complement/stats > baseline_stats.txt || true
+        run: VERBOSE=1 just ci-complement-stats | tee baseline_stats.txt
 
-      - name: Run Complement tests
-        continue-on-error: true
+      - name: Run Complement tests (currently xfailing ~200 tests)
         run: |
           mkdir -p tests/test_results/complement/
           ./bin/complement ./complement-src
 
       - name: Compare results with baseline
-        run: |
-          VERBOSE=1 make complement/stats > new_stats.txt || true
-          echo "=== Changes from baseline ==="
-          diff --color=always -u baseline_stats.txt new_stats.txt || true
+        continue-on-error: true
+        run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 just ci-complement-stats)
 
-      - name: Debug Results
-        run: |
-          echo "Checking results directory:"
-          ls -la tests/test_results/complement/
-          echo "Log file size:"
-          stat -c%s tests/test_results/complement/test_logs.jsonl || echo "Log missing"
-          echo "Results file size:"
-          stat -c%s tests/test_results/complement/test_results.jsonl || echo "Results missing"
+      - name: Peek at results directory (log file sizes)
+        continue-on-error: true
+        run: ls -lah tests/test_results/complement/
 
-      - name: Summarize results
+      - name: Collect results (prepare data)
         id: summary
         run: |
           RESULTS="tests/test_results/complement/test_results.jsonl"
           if [ -f "$RESULTS" ]; then
-            PASS=$(grep -c '"Action":"pass"' "$RESULTS" || true)
-            FAIL=$(grep -c '"Action":"fail"' "$RESULTS" || true)
-            SKIP=$(grep -c '"Action":"skip"' "$RESULTS" || true)
+            PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
+            FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' "$RESULTS")
+            SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' "$RESULTS")
             TOTAL=$((PASS + FAIL + SKIP))
-            echo "pass=$PASS" >> $GITHUB_OUTPUT
-            echo "fail=$FAIL" >> $GITHUB_OUTPUT
-            echo "skip=$SKIP" >> $GITHUB_OUTPUT
-            echo "total=$TOTAL" >> $GITHUB_OUTPUT
+            echo "pass=$PASS" | tee -a $GITHUB_OUTPUT
+            echo "fail=$FAIL" | tee -a $GITHUB_OUTPUT
+            echo "skip=$SKIP" | tee -a $GITHUB_OUTPUT
+            echo "total=$TOTAL" | tee -a $GITHUB_OUTPUT
           fi
 
-      - name: Get conduwuit version
-        id: version
-        run: |
-          # Use raw version output from the binary
-          VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update Results Ledger Repo
+      - name: Update test results ledger and upload to repo
         uses: ./.forgejo/actions/update-results-ledger
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.FORGEJO_TOKEN || secrets.GITHUB_TOKEN || github.token }}
           pass_count: ${{ steps.summary.outputs.pass || 0 }}
           fail_count: ${{ steps.summary.outputs.fail || 0 }}
           skip_count: ${{ steps.summary.outputs.skip || 0 }}
           version_string: ${{ steps.version.outputs.version }}
-          features: ${{ env.FEATURES }}
+          # TODO: collect features and full git hash from binary verbose output
+          features: ${{ env.FEATURES || 'unknown' }}
           actor: ${{ forge.actor || github.actor }}
           binary_path: target/latest/conduwuit
-
-      - name: Upload test results
-        uses: forgejo/upload-artifact@v4
-        with:
-          name: complement-results
-          path: |
-            tests/test_results/complement/test_results.jsonl
-          retention-days: 90
