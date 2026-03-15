@@ -73,6 +73,8 @@ runs:
         elif [ -f "/usr/local/lib/libjemalloc_pic.a" ]; then
           echo "JEMALLOC_OVERRIDE=/usr/local/lib/libjemalloc_pic.a" >> $GITHUB_ENV
         fi
+        # Expose the explicitly pulled shared '.so' objects to dynamic linkers in runners
+        echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/lib" | tee -a $GITHUB_ENV
 
     - name: Save cache
       if: steps.prebuilts-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'

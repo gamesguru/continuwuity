@@ -297,6 +297,8 @@ jobs:
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
+        env:
+          LD_LIBRARY_PATH: /usr/local/lib
         run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
 
       - name: Package Assets
