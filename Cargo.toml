@@ -746,6 +746,11 @@ lto = "off"
 codegen-units = 16
 incremental = true
 
+[profile.dev-quick.package.'*']
+opt-level = 1
+codegen-units = 16
+debug = 0
+
 [profile.dev.package.conduwuit_core]
 inherits = "dev"
 [profile.dev.package.conduwuit]

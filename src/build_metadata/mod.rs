@@ -57,3 +57,17 @@ pub fn verbose_version() -> String {
 		.collect::<Vec<_>>()
 		.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_verbose_version_has_underscores() {
+		let version_info = verbose_version();
+		assert!(
+			version_info.contains('_'),
+			"Verbose version should contain underscores in its keys, got: {version_info}"
+		);
+	}
+}
