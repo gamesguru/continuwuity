@@ -87,7 +87,7 @@ vars: ##H Print debug info
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$$(cargo run -p conduwuit_build_metadata --bin version --quiet)"
+		"$$(cargo run --quiet -- --version-verbose)"
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
