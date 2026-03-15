@@ -119,7 +119,7 @@ async fn load_timeline(
 	};
 
 	// Return at most `limit` PDUs from the stream
-	let pdus = pdu_stream
+	let mut pdus = pdu_stream
 		.by_ref()
 		.take(limit)
 		.ready_fold(VecDeque::with_capacity(limit), |mut pdus, item| {
@@ -127,6 +127,29 @@ async fn load_timeline(
 			pdus
 		})
 		.await;
+
+	if !pdus.is_empty() {
+		let mut event_to_count = std::collections::HashMap::new();
+		let events: Vec<_> = pdus
+			.into_iter()
+			.map(|(count, pdu)| {
+				event_to_count.insert(pdu.event_id.clone(), count);
+				pdu
+			})
+			.collect();
+
+		let sorted_events = conduwuit::matrix::dag::sort_topologically(events);
+
+		pdus = sorted_events
+			.into_iter()
+			.map(|pdu| {
+				let count = event_to_count
+					.remove(&pdu.event_id)
+					.expect("event count exists");
+				(count, pdu)
+			})
+			.collect();
+	}
 
 	// The timeline is limited if there are still more PDUs in the stream
 	let limited = pdu_stream.next().await.is_some();
