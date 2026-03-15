@@ -56,7 +56,7 @@ runs:
         [ -f "$BINARY_PATH" ] && BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
 
         # --- Work on the orphan branch via worktree ---
-        LEDGER_DIR="/tmp/ledger-$$"
+        LEDGER_DIR="$(mktemp -d)"
 
         git config --global user.name "CI Runner"
         git config --global user.email "runner@ci.local"
@@ -158,3 +158,4 @@ runs:
         # Cleanup
         cd -
         git worktree remove "$LEDGER_DIR" --force 2>/dev/null || true
+        rm -rf "$LEDGER_DIR"
