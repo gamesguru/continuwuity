@@ -6,6 +6,7 @@ fn main() {
 	let mut enabled_features = Vec::new();
 	for (key, _) in env::vars() {
 		if let Some(f) = key.strip_prefix("CARGO_FEATURE_") {
+			println!("cargo:rerun-if-env-changed={key}");
 			let feature = f.to_lowercase().replace('_', "-");
 			if feature != "default" {
 				enabled_features.push(feature);
