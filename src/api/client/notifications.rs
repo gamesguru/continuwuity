@@ -53,7 +53,8 @@ pub(crate) async fn get_notifications_route(
 	}
 
 	let limit = body.limit.unwrap_or_else(|| UInt::new(10).unwrap());
-	let limit = std::cmp::min(limit, UInt::try_from(max_limit).unwrap());
+	let max_limit_uint = UInt::try_from(max_limit).unwrap_or(UInt::MAX);
+	let limit = std::cmp::min(limit, max_limit_uint);
 	let start_ts = body
 		.from
 		.as_ref()
