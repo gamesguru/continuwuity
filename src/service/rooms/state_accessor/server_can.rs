@@ -1,4 +1,4 @@
-use conduwuit::{debug_warn, implement, utils::stream::ReadyExt, Event};
+use conduwuit::{Event, debug_warn, implement, utils::stream::ReadyExt};
 use futures::StreamExt;
 use ruma::{
 	EventId, RoomId, ServerName,
