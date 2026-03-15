@@ -19,11 +19,12 @@ pub use ::smallstr;
 pub use ::smallvec;
 pub use ::toml;
 pub use ::tracing;
+pub use conduwuit_build_metadata as build_metadata;
 pub use config::Config;
 pub use error::Error;
 pub use info::{
 	version,
-	version::{name, version},
+	version::{description, name, version},
 };
 pub use matrix::{
 	Event, EventTypeExt, Pdu, PduCount, PduEvent, PduId, RoomVersion, pdu, state_res,

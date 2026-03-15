@@ -913,6 +913,7 @@ dependencies = [
  "conduwuit_build_metadata",
  "conduwuit_core",
  "conduwuit_database",
+ "conduwuit_macros",
  "conduwuit_router",
  "conduwuit_service",
  "console-subscriber",
@@ -967,6 +968,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "conduwuit_core",
+ "conduwuit_macros",
  "conduwuit_service",
  "const-str",
  "futures",
@@ -991,9 +993,6 @@ dependencies = [
 [[package]]
 name = "conduwuit_build_metadata"
 version = "0.5.6"
-dependencies = [
- "built",
-]
 
 [[package]]
 name = "conduwuit_core"
@@ -1063,6 +1062,7 @@ version = "0.5.6"
 dependencies = [
  "async-channel",
  "conduwuit_core",
+ "conduwuit_macros",
  "const-str",
  "futures",
  "log",
@@ -1097,6 +1097,7 @@ dependencies = [
  "conduwuit_admin",
  "conduwuit_api",
  "conduwuit_core",
+ "conduwuit_macros",
  "conduwuit_service",
  "conduwuit_web",
  "const-str",
@@ -1130,6 +1131,7 @@ dependencies = [
  "bytes",
  "conduwuit_core",
  "conduwuit_database",
+ "conduwuit_macros",
  "const-str",
  "either",
  "futures",

@@ -11,6 +11,8 @@ repository.workspace = true
 version.workspace = true
 metadata.crane.workspace = true
 
+build = "build.rs"
+
 [lib]
 path = "mod.rs"
 crate-type = [
@@ -43,22 +45,24 @@ assets = [
 default = [
     "standard",
     "release_max_log_level",
-	"bindgen-runtime", # replace with bindgen-static on alpine
 ]
-standard = [
-    "blurhashing",
+minimal = [
 	"brotli_compression",
-	"element_hacks",
 	"gzip_compression",
 	"io_uring",
 	"jemalloc",
 	"jemalloc_conf",
 	"journald",
+	"systemd",
+	"zstd_compression",
+]
+standard = [
+    "minimal",
+    "blurhashing",
+	"element_hacks",
 	"ldap",
 	"media_thumbnail",
-	"systemd",
 	"url_preview",
-	"zstd_compression",
     "sentry_telemetry",
     "otlp_telemetry",
 	"console",
@@ -187,8 +191,6 @@ conduwuit_mods = [
     "conduwuit-core/conduwuit_mods",
 ]
 bindgen-static = [
-    # "bindgen/static"
-    # "clang-sys/static"
     "conduwuit-database/bindgen-static"
 ]
 bindgen-runtime = [
@@ -207,8 +209,10 @@ conduwuit-database.workspace = true
 conduwuit-router.workspace = true
 conduwuit-service.workspace = true
 conduwuit-build-metadata.workspace = true
+conduwuit-macros.workspace = true
 
 clap.workspace = true
+
 console-subscriber.optional = true
 console-subscriber.workspace = true
 const-str.workspace = true

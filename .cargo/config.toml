@@ -1,2 +1,10 @@
 [alias]
 xtask = "run --package xtask --"
+
+[env]
+ROCKSDB_INCLUDE_DIR = { value = "/usr/local/include", force = false }
+ROCKSDB_LIB_DIR = { value = "/usr/local/lib", force = false }
+SNAPPY_LIB_DIR = { value = "/usr/local/lib", force = false }
+ZSTD_LIB_DIR = { value = "/usr/local/lib", force = false }
+BZIP2_LIB_DIR = { value = "/usr/local/lib", force = false }
+LZ4_LIB_DIR = { value = "/usr/local/lib", force = false }

@@ -1,7 +1,3 @@
-pub mod built {
-	include!(concat!(env!("OUT_DIR"), "/built.rs"));
-}
-
 pub static GIT_COMMIT_HASH: Option<&str> = option_env!("GIT_COMMIT_HASH");
 
 pub static GIT_COMMIT_HASH_SHORT: Option<&str> = option_env!("GIT_COMMIT_HASH_SHORT");
@@ -25,5 +21,50 @@ pub fn version_tag() -> Option<&'static str> {
 
 pub static GIT_REMOTE_WEB_URL: Option<&str> = option_env!("GIT_REMOTE_WEB_URL");
 pub static GIT_REMOTE_COMMIT_URL: Option<&str> = option_env!("GIT_REMOTE_COMMIT_URL");
+pub static GIT_REMOTE_URL: Option<&str> = option_env!("GIT_REMOTE_URL");
+pub static GIT_BRANCH: Option<&str> = option_env!("GIT_BRANCH");
+pub static RUSTC_VERSION: Option<&str> = option_env!("RUSTC_VERSION");
+pub static HOST_OS: Option<&str> = option_env!("HOST_OS");
+pub static HOST_ARCH: Option<&str> = option_env!("HOST_ARCH");
 
-// TODO: Mark dirty builds within the version string
+pub static PROFILE: Option<&str> = option_env!("PROFILE");
+pub static OPT_LEVEL: Option<&str> = option_env!("OPT_LEVEL");
+pub static DEBUG: Option<&str> = option_env!("DEBUG");
+pub static TARGET: Option<&str> = option_env!("TARGET");
+pub static HOST: Option<&str> = option_env!("HOST");
+
+pub static CFG_ENDIAN: Option<&str> = option_env!("CFG_ENDIAN");
+pub static CFG_POINTER_WIDTH: Option<&str> = option_env!("CFG_POINTER_WIDTH");
+pub static CFG_ENV: Option<&str> = option_env!("CFG_ENV");
+
+#[must_use]
+pub fn verbose_version() -> String {
+	let semver = env!("CARGO_PKG_VERSION");
+	let fields = [
+		("version", Some(semver)),
+		("version_extra", VERSION_EXTRA),
+		("commit", GIT_COMMIT_HASH),
+		("commit_short", GIT_COMMIT_HASH_SHORT),
+		("branch", GIT_BRANCH),
+	];
+
+	fields
+		.iter()
+		.map(|(k, v)| format!("{k}: {}", v.unwrap_or("(unknown)")))
+		.collect::<Vec<_>>()
+		.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_verbose_version_has_underscores() {
+		let version_info = verbose_version();
+		assert!(
+			version_info.contains('_'),
+			"Verbose version should contain underscores in its keys, got: {version_info}"
+		);
+	}
+}
