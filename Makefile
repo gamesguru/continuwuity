@@ -180,8 +180,8 @@ build:  ##H Build with selected profile
 		cargo build --verbose --features $(FEATURES) --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
-	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
-	-ln -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/debug/conduwuit
+	-ln -f target/$(if $(CARGO_BUILD_TARGET),$(CARGO_BUILD_TARGET)/)$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
+	-ln -f target/$(if $(CARGO_BUILD_TARGET),$(CARGO_BUILD_TARGET)/)$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/debug/conduwuit
 
 
 .PHONY: build-bundled

@@ -84,7 +84,9 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=x86-64-v3
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+          CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v3
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard,console"
 
       - name: Sanity check binary
@@ -95,7 +97,7 @@ jobs:
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
           # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          cp target/x86_64-unknown-linux-gnu/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
           tar -czvf conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
@@ -195,7 +197,9 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=x86-64-v4
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+          CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v4
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard,console"
 
       - name: Sanity check binary
@@ -206,7 +210,7 @@ jobs:
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
           # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          cp target/x86_64-unknown-linux-gnu/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
           tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary (${{ steps.cpu.outputs.target }})
@@ -308,7 +312,9 @@ jobs:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=cortex-a76
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+          CARGO_BUILD_TARGET: aarch64-unknown-linux-gnu
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard,console"
 
       - name: Sanity check binary
