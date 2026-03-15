@@ -147,6 +147,10 @@ async fn process_inbound_transaction(
 	sender: Sender<WrappedTransactionResponse>,
 ) {
 	let txn_start_time = Instant::now();
+
+	// Batch all database writes in this transaction to avoid massive WAL flushing
+	let _cork = services.db.cork();
+
 	let mut pdus = Vec::with_capacity(body.pdus.len());
 	for pdu in &body.pdus {
 		if let Ok(pdu) = services.rooms.event_handler.parse_incoming_pdu(pdu).await {
