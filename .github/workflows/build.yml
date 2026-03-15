@@ -84,8 +84,7 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=x86-64-v3
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v3
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=x86-64-v3
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
@@ -196,8 +195,7 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=x86-64-v4
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v4
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=x86-64-v4
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
@@ -309,9 +307,8 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=cortex-a76
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C target-cpu=cortex-a76
         run: make build CARGO_FLAGS="--profile ${{ matrix.profile }} --features bindgen-static,standard"
 
       - name: Sanity check binary
