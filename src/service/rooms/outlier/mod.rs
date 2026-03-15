@@ -50,3 +50,9 @@ pub async fn get_pdu_outlier(&self, event_id: &EventId) -> Result<PduEvent> {
 pub fn add_pdu_outlier(&self, event_id: &EventId, pdu: &CanonicalJsonObject) {
 	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
 }
+
+/// Returns a stream of outlier PDUs.
+#[implement(Service)]
+pub fn stream(&self) -> impl futures::Stream<Item = Result<(ruma::OwnedEventId, PduEvent)>> + '_ {
+	self.db.eventid_outlierpdu.stream()
+}

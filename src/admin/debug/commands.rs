@@ -18,15 +18,18 @@ use conduwuit::{
 	},
 	warn,
 };
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt, pin_mut};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
 	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
 	api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
 };
-use service::rooms::{
-	short::{ShortEventId, ShortRoomId},
-	state_compressor::HashSetCompressStateEvent,
+use service::{
+	admin::InvocationSource,
+	rooms::{
+		short::{ShortEventId, ShortRoomId},
+		state_compressor::HashSetCompressStateEvent,
+	},
 };
 use tracing_subscriber::EnvFilter;
 
@@ -875,4 +878,67 @@ pub(super) async fn trim_memory(&self) -> Result {
 	conduwuit::alloc::trim(None)?;
 
 	writeln!(self, "done").await
+}
+
+#[admin_command]
+pub(super) async fn list_outliers(&self, room_id: OwnedRoomId) -> Result {
+	// Restrict to the admin room so normal users can't dump room-scoped event IDs
+	self.bail_restricted()?;
+	let stream = self.services.rooms.outlier.stream();
+	pin_mut!(stream);
+
+	let mut count: u64 = 0;
+	let mut yield_count: u64 = 0;
+	let mut local_outliers = Vec::new();
+
+	// TODO: Find a better way to iterate eventually
+	while let Some(res) = stream.next().await {
+		let (_, pdu) = res?;
+
+		// check for matching room id
+		if pdu.room_id.as_ref().is_some_and(|id| *id == room_id) {
+			if pdu
+				.event_id
+				.as_str()
+				.contains(self.services.globals.server_name().as_str())
+			{
+				local_outliers.push(pdu.event_id);
+			} else {
+				let out = format!("{}\n", pdu.event_id);
+				self.write_str(&out).await?;
+			}
+			count = count.saturating_add(1);
+
+			// update console output every 100 events
+			if count.is_multiple_of(100) && self.source == InvocationSource::Console {
+				self.flush().await?;
+			}
+		}
+
+		// yield periodically, to potentially higher priority tasks
+		yield_count = yield_count.saturating_add(1);
+		if yield_count.is_multiple_of(1000) {
+			tokio::task::yield_now().await;
+		}
+	}
+
+	// print events belonging to admin's server with higher precedence
+	for event_id in local_outliers {
+		let out = format!("{event_id}\n");
+		self.write_str(&out).await?;
+	}
+
+	let out = format!("Found {count} outlier PDUs for room {room_id}.");
+	self.write_str(&out).await
+}
+
+#[admin_command]
+pub(super) async fn backfill_timestamp_index(&self, room_id: OwnedRoomId) -> Result {
+	self.services
+		.rooms
+		.timeline
+		.backfill_timestamp_index(&room_id)
+		.await?;
+	let out = format!("Successfully backfilled timestamp index for room {room_id}.");
+	self.write_str(&out).await
 }

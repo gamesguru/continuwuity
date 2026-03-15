@@ -40,6 +40,12 @@ impl Context<'_> {
 		})
 	}
 
+	pub(crate) fn flush(&self) -> impl Future<Output = Result> + Send + '_ {
+		self.output
+			.lock()
+			.then(async move |mut output| output.flush().map_err(Into::into).await)
+	}
+
 	/// Get the sender as a string, or service user ID if not available
 	pub(crate) fn sender_or_service_user(&self) -> &UserId {
 		self.sender
