@@ -135,12 +135,8 @@ impl Services {
 			.inspect_err(|e| error!("Migrations failed: {e}"))?;
 
 		info!("Starting service manager...");
-		let manager = {
-			let mut lock = self.manager.lock().await;
-			let manager = Manager::new(self);
-			_ = lock.insert(Arc::clone(&manager));
-			manager
-		};
+		let manager = Manager::new(self);
+		*self.manager.lock().await = Some(Arc::clone(&manager));
 
 		// Reset all local user presence on server start
 		if self.server.config.allow_local_presence {
