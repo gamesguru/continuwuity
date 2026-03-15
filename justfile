@@ -238,6 +238,7 @@ PROFILE := env_var_or_default("PROFILE", "release")
 ci-complement-docker:
     #!/usr/bin/env bash
     set -euo pipefail
+    PROFILE="${PROFILE:-{{PROFILE}}}"
 
     echo "Copying dynamically linked libraries to target/${PROFILE}/lib/..."
     mkdir -p target/${PROFILE}/lib && rm -f target/${PROFILE}/lib/*
