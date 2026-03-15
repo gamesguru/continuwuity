@@ -1,10 +1,7 @@
 use std::{
 	collections::BTreeSet,
 	path::Path,
-	sync::{
-		Arc,
-		atomic::{AtomicBool, AtomicU32},
-	},
+	sync::{Arc, atomic::AtomicU32},
 };
 
 use conduwuit::{Result, debug, implement, warn};
@@ -56,8 +53,6 @@ pub(crate) async fn open(ctx: Arc<Context>, desc: &[Descriptor]) -> Result<Arc<S
 		ctx: ctx.clone(),
 		checksums: config.rocksdb_checksums,
 		corks: AtomicU32::new(0),
-		pending_flush: AtomicBool::new(false),
-		pending_sync: AtomicBool::new(false),
 	}))
 }
 
