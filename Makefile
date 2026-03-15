@@ -83,7 +83,7 @@ cpu-info: ##H Print CPU info relevant to native target-cpu
 vars: ##H Print debug info
 	@$(foreach v, $(VARS), printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "$(v)" "$($(v))";)
 	@echo "... computing version."
-	@BIN_PATH="target/$(if $(PROFILE),$(PROFILE),debug)/conduwuit"; \
+	@BIN_PATH="target/$(if $(filter $(PROFILE),dev test),debug,$(if $(PROFILE),$(PROFILE),debug))/conduwuit"; \
 	if [ -x "$$BIN_PATH" ]; then \
 		VERSION_OUT=$$(env LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH" $$BIN_PATH -V); \
 		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" "$${VERSION_OUT:-($$BIN_PATH failed to run)}"; \
