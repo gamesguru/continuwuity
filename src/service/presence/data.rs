@@ -92,7 +92,11 @@ impl Data {
 	) -> Result<()> {
 		let _lock = self.locks.lock(user_id).await;
 
-		let last_presence = self.get_presence_raw(user_id).await;
+		let last_presence = if let Some(prev) = _previous {
+			Ok(prev)
+		} else {
+			self.get_presence_raw(user_id).await
+		};
 
 		let state_changed = match last_presence {
 			| Err(_) => true,
