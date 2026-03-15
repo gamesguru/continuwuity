@@ -38,9 +38,10 @@ runs:
 
         echo "Fetching $BRANCH from $SRC..."
         if git fetch "$SRC" "$BRANCH"; then
+          SRC_COMMIT=$(git rev-parse FETCH_HEAD)
           if [[ "$MODE" == "force" ]]; then
             echo "Updating $DST_BRANCH branch (force)..."
-            git checkout -B "$DST_BRANCH" FETCH_HEAD
+            git checkout -B "$DST_BRANCH" "$SRC_COMMIT"
             echo "Pushing to $DST..."
             git push "$DST" "$DST_BRANCH" --force --no-verify
           else
@@ -57,7 +58,7 @@ runs:
                 ARGS="$ARGS --allow-unrelated-histories"
               fi
 
-              MERGE_OUTPUT=$(git merge FETCH_HEAD $ARGS)
+              MERGE_OUTPUT=$(git merge "$SRC_COMMIT" $ARGS)
               echo "$MERGE_OUTPUT"
 
               if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
@@ -68,7 +69,7 @@ runs:
               fi
             else
               echo "Creating $DST_BRANCH from $SRC/$BRANCH..."
-              git checkout -b "$DST_BRANCH" FETCH_HEAD
+              git checkout -b "$DST_BRANCH" "$SRC_COMMIT"
               git push "$DST" "$DST_BRANCH" --no-verify
             fi
           fi
