@@ -327,7 +327,7 @@ jobs:
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
           # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          cp target/aarch64-unknown-linux-gnu/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
           tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
