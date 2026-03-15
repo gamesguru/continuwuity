@@ -4,7 +4,7 @@ fn main() {
 	println!("cargo:rerun-if-changed=Cargo.toml");
 
 	// Embed dynamic lib paths in final binary so users don't need LD_LIBRARY_PATH
-	let mut rpaths = std::collections::HashSet::new();
+	let mut rpaths = std::collections::BTreeSet::new();
 
 	if let Ok(lib_dir) = env::var("ROCKSDB_LIB_DIR") {
 		println!("cargo:rerun-if-env-changed=ROCKSDB_LIB_DIR");
