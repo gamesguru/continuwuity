@@ -13,7 +13,7 @@ use std::{
 	ffi::CStr,
 	sync::{
 		Arc,
-		atomic::{AtomicU32, Ordering},
+		atomic::{AtomicBool, AtomicU32, Ordering},
 	},
 };
 
@@ -35,6 +35,8 @@ pub struct Engine {
 	pub(crate) ctx: Arc<Context>,
 	pub(crate) checksums: bool,
 	corks: AtomicU32,
+	pub(crate) pending_flush: AtomicBool,
+	pub(crate) pending_sync: AtomicBool,
 }
 
 pub(crate) type Db = DBWithThreadMode<MultiThreaded>;
@@ -98,7 +100,7 @@ impl Engine {
 	pub(crate) fn cork(&self) { self.corks.fetch_add(1, Ordering::Relaxed); }
 
 	#[inline]
-	pub(crate) fn uncork(&self) { self.corks.fetch_sub(1, Ordering::Relaxed); }
+	pub(crate) fn uncork(&self) -> bool { self.corks.fetch_sub(1, Ordering::Relaxed) == 1 }
 
 	#[inline]
 	pub fn corked(&self) -> bool { self.corks.load(Ordering::Relaxed) > 0 }

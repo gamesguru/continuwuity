@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 
 use crate::{Database, Engine};
 
@@ -32,12 +32,22 @@ impl Cork {
 
 impl Drop for Cork {
 	fn drop(&mut self) {
-		self.db.uncork();
 		if self.flush {
-			self.db.flush().ok();
+			self.db.pending_flush.store(true, Ordering::Relaxed);
 		}
 		if self.sync {
-			self.db.sync().ok();
+			self.db.pending_sync.store(true, Ordering::Relaxed);
+		}
+
+		if self.db.uncork() {
+			let sync = self.db.pending_sync.swap(false, Ordering::Relaxed);
+			let flush = self.db.pending_flush.swap(false, Ordering::Relaxed);
+
+			if sync {
+				self.db.sync().ok();
+			} else if flush {
+				self.db.flush().ok();
+			}
 		}
 	}
 }
