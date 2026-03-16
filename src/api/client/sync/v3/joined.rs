@@ -377,8 +377,12 @@ async fn fetch_shortstatehashes(
 			| Ok(hash) => {
 				last_sync_end_shortstatehash = Some(hash);
 			},
+			| Err(conduwuit::Error::BadRequest(ErrorKind::NotFound, _)) => {
+				debug_warn!("Token cache missed (NotFound)");
+			},
 			| Err(e) => {
-				debug_warn!("Token cache missed: {}", e);
+				// Actual database error
+				return Err(e);
 			},
 		}
 
