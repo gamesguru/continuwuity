@@ -381,7 +381,6 @@ features = [
     "unstable-msc4210", # remove legacy mentions
     "unstable-extensible-events",
     "unstable-pdu",
-    "unstable-msc4155",
     "unstable-msc4143", # livekit well_known response
     "unstable-msc4284"
 ]
