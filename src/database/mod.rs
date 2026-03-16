@@ -81,12 +81,12 @@ impl Database {
 	/// All operations that go through [`transaction::TRANSACTION_BATCH`]
 	/// (currently [`Map::insert`] and [`Map::remove`]) are buffered into a
 	/// single [`WriteBatch`](rocksdb::WriteBatchWithTransaction). If the
-	/// closure returns `Ok`, that batch is written atomically; if it returns
-	/// an error the batch is dropped without being written (rollback).
+	/// closure returns `Ok`, that batch is committed atomically; if it
+	/// returns an error the batch is dropped without writing (rollback).
 	///
 	/// Other write paths that bypass [`transaction::TRANSACTION_BATCH`]
-	/// (such as direct `write_opt`/`put_cf_opt` calls or `insert_batch`)
-	/// are **not** included in this batch and will commit immediately even
+	/// (i.e., direct `write_opt`/`put_cf_opt` calls or `insert_batch`)
+	/// are NOT included in this batch and WILL commit immediately, even
 	/// when invoked inside the closure. Callers must ensure they only use
 	/// transaction-aware APIs inside this method if they require atomicity.
 	///
@@ -94,8 +94,7 @@ impl Database {
 	/// [`Database::transaction`] from within another `transaction` closure
 	/// will cause a panic at runtime (via an internal assertion) instead of
 	/// creating a new independent batch. Callers must avoid invoking this
-	/// method reentrantly and should structure their code to use a single
-	/// outer transaction when atomicity is required.
+	/// method reentrantly and should use a single outer transaction.
 	pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
 	where
 		F: FnOnce() -> Fut,
@@ -125,20 +124,18 @@ impl Database {
 			self.db.flush().expect("database flush error");
 		}
 
-		// Mark as committed immediately after a successful write and flush. If flush()
-		// panics, we want to run on_rollback closures.
+		// Mark as committed immediately after successful write and flush. If flush()
+		// panics, we run `on_rollback` closures.
 		batch_guard.committed = true;
 
-		// Move the on-commit closures out of the mutex-protected struct, then drop
-		// the guard before executing them to avoid holding the mutex during arbitrary
-		// callback execution.
+		// Move on-commit closures out of mutex-protected struct, then drop the guard
+		// (before executing them, to avoid holding mutex during arbitrary callbacks).
 		let wake_closures = std::mem::take(&mut batch_guard.on_commit);
 		drop(batch_guard);
 
 		for wake_closure in wake_closures {
-			// Ensure that a panic in one on-commit hook does not prevent subsequent
-			// hooks from running, and does not unwind past this point after the
-			// transaction has already been committed.
+			// Ensure panic in one on-commit hook does not prevent a subsequent hook from
+			// running, and does not unwind past this point if the txn is committed.
 			if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 				wake_closure();
 			})) {
@@ -154,9 +151,9 @@ impl Database {
 		Ok(res)
 	}
 
-	/// Adds a closure to be executed after the current transaction successfully
-	/// commits. Returns true if the closure was successfully added to a
-	/// transaction, false if there is no active transaction.
+	/// Adds a closure to execute after the current txn successfully commits.
+	/// Returns true if the closure was successfully added to a transaction,
+	/// false if there is no active transaction.
 	pub fn push_on_commit<F>(&self, f: F) -> bool
 	where
 		F: FnOnce() + Send + 'static,

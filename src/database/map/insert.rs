@@ -222,7 +222,7 @@ where
 			.db
 			.put_cf_opt(&self.cf(), key, val, write_options)
 			.or_else(or_else)
-			.expect("database insert error");
+			.expect("database insert::txn-cowardly error");
 
 		if !self.db.corked() {
 			self.db.flush().expect("database flush error");

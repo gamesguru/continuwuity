@@ -697,15 +697,15 @@ async fn join_room_by_id_helper_remote(
 				)
 				.await?;
 
-			info!("Setting final room state for new room");
 			// We set the room state after inserting the pdu for state consistency
+			info!("Setting final room state for new room");
 			services
 				.rooms
 				.state
 				.set_room_state(room_id, statehash_after_join, &state_lock);
 
 			// Now we force the state into cache. If this is done earlier, the membership
-			// change can trigger a sync which fails to find the room state.
+			// change can trigger a sync which fails to find the room state (issue #779).
 			debug!("Forcing state for new room");
 			services
 				.rooms

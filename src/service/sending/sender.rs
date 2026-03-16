@@ -515,6 +515,7 @@ impl Service {
 		max_edu_count: &AtomicU64,
 		num: &mut usize,
 	) -> ReceiptMap {
+		// Range filter receipts
 		let receipts =
 			self.services
 				.read_receipt
@@ -583,6 +584,7 @@ impl Service {
 		since: (u64, u64),
 		max_edu_count: &AtomicU64,
 	) -> Option<EduBuf> {
+		// Range filter raw presences
 		let presence_since = self
 			.services
 			.presence

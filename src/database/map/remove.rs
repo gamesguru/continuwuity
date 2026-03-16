@@ -59,7 +59,7 @@ where
 			.db
 			.delete_cf_opt(&self.cf(), key, write_options)
 			.or_else(or_else)
-			.expect("database remove error");
+			.expect("database remove::txn-cowardly error");
 
 		if !self.db.corked() {
 			self.db.flush().expect("database flush error");
