@@ -375,10 +375,11 @@ async fn fetch_shortstatehashes(
 			.await
 		{
 			| Ok(hash) => {
+				warn!(%room_id, %last_sync_end_count, %hash, "token cache HIT");
 				last_sync_end_shortstatehash = Some(hash);
 			},
 			| Err(conduwuit::Error::BadRequest(ErrorKind::NotFound, _)) => {
-				debug_warn!("Token cache missed (NotFound)");
+				warn!(%room_id, %last_sync_end_count, "token cache MISS");
 			},
 			| Err(e) => {
 				// Actual database error
@@ -621,7 +622,7 @@ async fn check_joined_since_last_sync(
 				syncing_user.as_str(),
 			)
 			.await
-			.inspect_err(|_| debug_warn!("User has no previous membership"))
+			.inspect_err(|e| warn!(%syncing_user, %last_sync_end_shortstatehash, "User has no previous membership: {e}"))
 			.ok(),
 		| None => None,
 	};
