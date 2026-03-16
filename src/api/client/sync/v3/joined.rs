@@ -607,23 +607,50 @@ async fn build_notification_counts(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn check_joined_since_last_sync(
 	services: &Services,
-	ShortStateHashes { last_sync_end_shortstatehash, .. }: ShortStateHashes,
+	ShortStateHashes {
+		last_sync_end_shortstatehash,
+		current_shortstatehash,
+	}: ShortStateHashes,
 	SyncContext { syncing_user, .. }: SyncContext<'_>,
 ) -> Result<bool> {
 	// fetch the syncing user's membership event during the last sync.
 	// this will be None if `previous_sync_end_shortstatehash` is None.
 	let membership_during_previous_sync = match last_sync_end_shortstatehash {
-		| Some(last_sync_end_shortstatehash) => services
-			.rooms
-			.state_accessor
-			.state_get_content(
-				last_sync_end_shortstatehash,
-				&StateEventType::RoomMember,
-				syncing_user.as_str(),
-			)
-			.await
-			.inspect_err(|e| warn!(%syncing_user, %last_sync_end_shortstatehash, "User has no previous membership: {e}"))
-			.ok(),
+		| Some(last_sync_end_shortstatehash) => {
+			let result = services
+				.rooms
+				.state_accessor
+				.state_get_content(
+					last_sync_end_shortstatehash,
+					&StateEventType::RoomMember,
+					syncing_user.as_str(),
+				)
+				.await;
+
+			match result {
+				| Ok(content) => Some(content),
+				| Err(_) => {
+					// The cached state hash doesn't include the user's membership.
+					// Fall back to checking the current room state — if the user IS
+					// joined in the current state, they're not a new join (the cached
+					// hash is just stale/corrupted from the force_state bug).
+					debug_warn!(
+						%syncing_user, %last_sync_end_shortstatehash,
+						"Membership not found in cached state, falling back to current state"
+					);
+					services
+						.rooms
+						.state_accessor
+						.state_get_content(
+							current_shortstatehash,
+							&StateEventType::RoomMember,
+							syncing_user.as_str(),
+						)
+						.await
+						.ok()
+				},
+			}
+		},
 		| None => None,
 	};
 
