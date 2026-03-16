@@ -249,6 +249,11 @@ remote-debug-poc config="conduwuit-example.toml":
     @echo "Starting gdbserver on :1234 using config: {{config}}"
     sudo -u conduwuit gdbserver :1234 ./target/debug/continuwuity --config {{config}}
 
+# Run Complement tests (requires complement-src)
+# Usage: just complement TestName
+complement args=".":
+    env COMPLEMENT_RUN="{{args}}" ./bin/complement ./complement-src
+
 # -----------------------------------------------------------------------------
 # Complement CI
 # -----------------------------------------------------------------------------
