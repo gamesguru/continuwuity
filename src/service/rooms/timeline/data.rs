@@ -257,7 +257,6 @@ impl Data {
 		let prefix = after_pdu.shortroomid();
 		let mut stream = self.pduid_pdu.raw_stream_from(after_pdu);
 
-		let _ = stream.next().await; // skip the current element
 		let result = stream
 			.next()
 			.await

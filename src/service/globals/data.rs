@@ -94,7 +94,8 @@ impl Data {
 		if let Some(first_in_flight) = lock.first() {
 			// If there are transactions in flight, clients should not sync past the
 			// lowest sequence number currently held by an uncommitted transaction.
-			return *first_in_flight;
+			// NOTE: Hopefully safe to return one less than earliest in-flight seq num.
+			return first_in_flight.saturating_sub(1);
 		}
 
 		current
