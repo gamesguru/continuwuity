@@ -261,7 +261,15 @@ impl Data {
 			.next()
 			.await
 			.ok_or_else(|| err!(Request(NotFound("No next PDU found"))))?;
-		let (next_pdu_id, _) = result?;
+		let (mut next_pdu_id, _) = result?;
+
+		if next_pdu_id.as_ref() == after_pdu.as_ref() {
+			let result = stream
+				.next()
+				.await
+				.ok_or_else(|| err!(Request(NotFound("No next PDU found"))))?;
+			(next_pdu_id, _) = result?;
+		}
 
 		if !next_pdu_id.starts_with(&prefix) {
 			return Err!(Request(NotFound("No next PDU found in this room")));
