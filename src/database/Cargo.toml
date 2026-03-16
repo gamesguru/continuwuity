@@ -67,6 +67,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 figment.workspace = true
+tempfile = "3.27.0"
 
 [lints]
 workspace = true
