@@ -386,33 +386,10 @@ async fn fetch_shortstatehashes(
 			},
 		}
 
-		// If cache missed, calculate statelessly
-		if last_sync_end_shortstatehash.is_none() {
-			match services
-				.rooms
-				.timeline
-				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
-				.await
-			{
-				| Ok(hash) => {
-					last_sync_end_shortstatehash = Some(hash);
-				},
-				| Err(conduwuit::Error::BadRequest(ErrorKind::NotFound, _)) => {
-					// Expected behavior for idle rooms (no events after
-					// last_sync_end_count)
-				},
-				| Err(e) => {
-					// Actual database error
-					return Err(e);
-				},
-			}
-		}
-
-		// For idle rooms where next_shortstatehash returned NotFound, fall back
-		// to current_shortstatehash because the state hasn't changed.
-		if last_sync_end_shortstatehash.is_none() {
-			last_sync_end_shortstatehash = Some(current_shortstatehash);
-		}
+		// If the token cache missed, this means the user was NOT in this room
+		// during their last sync (newly joined room). Leave
+		// `last_sync_end_shortstatehash` as None so the fresh-join path is
+		// taken (in check_joined_since_last_sync and build_state_events).
 	}
 
 	/*
