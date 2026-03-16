@@ -908,6 +908,7 @@ mod tests {
 	fn test_joined_since_last_sync() {
 		let join_content = RoomMemberEventContent::new(MembershipState::Join);
 		let leave_content = RoomMemberEventContent::new(MembershipState::Leave);
+		let invite_content = RoomMemberEventContent::new(MembershipState::Invite);
 
 		// test matrix: (previous_membership, current_membership, expected_result)
 		let cases = vec![
@@ -917,14 +918,25 @@ mod tests {
 			(None, Some(&join_content), true),
 			// Case 3: rejoined room (previously left, now joined) -> SHOULD BE TRUE
 			(Some(&leave_content), Some(&join_content), true),
-			// Case 4: left room (was joined, now left) -> SHOULD BE FALSE
+			// Case 4: joined from invite (previously invited, now joined) -> SHOULD BE TRUE
+			(Some(&invite_content), Some(&join_content), true),
+			// Case 5: left room (was joined, now left) -> SHOULD BE FALSE
 			(Some(&join_content), Some(&leave_content), false),
-			// Case 5: corrupted cache fallback (user is joined currently, but NOT in corrupted
-			// previous state) This is covered by Case 2. If the user was joined, but
-			// `state_get_content` fails (returning None), they are treated as a new join
-			// unless we fall back to current state. The fallback logic (not tested here)
-			// pulls current state. BUT, if they REALLY are a new join, it's correct
-			// to treat `None -> Join` as `true`.
+			// Case 6 (THE BUG WE FIXED): The corrupted database state.
+			// What happened in the database:
+			// 1. User joins. `force_state` overwrites the room state to BEFORE the join.
+			// 2. Next sync: `last_sync_end_shortstatehash` points to this corrupted pre-join
+			//    state.
+			// 3. We look up previous membership in that pre-join state. It returns `None` (user
+			//    wasn't there yet).
+			// 4. We look up current membership. Since the cache correctly says they are joined,
+			//    we fetch current state, which MIGHT have recovered or we fall back. Assuming it
+			//    sees `Join`.
+			// So `prev = None`, `curr = Some(Join)`.
+			// The logic MUST treat this as `true` (treat it as a new join) so the client gets
+			// the full timeline. This is identical to Case 2. The old `is_some_and` logic
+			// returned `false` here, suppressing the timeline and causing the "timeline for
+			// newly joined room is empty" bug!
 		];
 
 		for (prev, curr, expected) in cases {
@@ -936,16 +948,17 @@ mod tests {
 
 			assert_eq!(result, expected, "Failed for prev={prev:?}, curr={curr:?}");
 
-			// Demonstrate why the old `is_some_and` was broken for Case 2 (real new joins):
+			// Demonstrate why the old `is_some_and` was broken for Case 2 and Case 6 (real
+			// new joins / corrupted state):
 			let old_result = prev.is_some_and(|content: &RoomMemberEventContent| {
 				content.membership != MembershipState::Join
 			}) && curr.is_some_and(|content: &RoomMemberEventContent| {
 				content.membership == MembershipState::Join
 			});
 
-			if prev.is_none() && curr.is_some() {
-				// The old logic returned `false` for real new joins!
-				assert_eq!(old_result, false);
+			if prev.is_none() && curr.is_some_and(|c| c.membership == MembershipState::Join) {
+				// The old logic returned `false` for real new joins and our corrupted state!
+				assert_eq!(old_result, false, "Old logic should have failed here");
 			}
 		}
 	}
