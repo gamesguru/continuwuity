@@ -611,13 +611,18 @@ async fn check_joined_since_last_sync(
 		last_sync_end_shortstatehash,
 		current_shortstatehash,
 	}: ShortStateHashes,
-	SyncContext { syncing_user, .. }: SyncContext<'_>,
+	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
 ) -> Result<bool> {
-	// fetch the syncing user's membership event during the last sync.
-	// this will be None if `previous_sync_end_shortstatehash` is None.
-	let membership_during_previous_sync = match last_sync_end_shortstatehash {
-		| Some(last_sync_end_shortstatehash) => {
-			let result = services
+	// TODO: If the requesting user got state-reset out of the room, this
+	// will be `true` when it shouldn't be. this function should never be called
+	// in that situation, but it may be if the membership cache didn't get updated.
+	// the root cause of this needs to be addressed
+	let joined_since_last_sync = if let Some(_last_sync_end_count) = last_sync_end_count {
+		// Incremental sync
+		// fetch the syncing user's membership event during the last sync.
+		// this will be None if `previous_sync_end_shortstatehash` is None.
+		let membership_during_previous_sync = match last_sync_end_shortstatehash {
+			| Some(last_sync_end_shortstatehash) => services
 				.rooms
 				.state_accessor
 				.state_get_content(
@@ -625,47 +630,45 @@ async fn check_joined_since_last_sync(
 					&StateEventType::RoomMember,
 					syncing_user.as_str(),
 				)
-				.await;
+				.await
+				.inspect_err(|_| debug_warn!("User has no previous membership"))
+				.ok(),
+			| None => None,
+		};
 
-			match result {
-				| Ok(content) => Some(content),
-				| Err(_) => {
-					// The cached state hash doesn't include the user's membership.
-					// Fall back to checking the current room state — if the user IS
-					// joined in the current state, they're not a new join (the cached
-					// hash is just stale/corrupted from the force_state bug).
-					debug_warn!(
-						%syncing_user, %last_sync_end_shortstatehash,
-						"Membership not found in cached state, falling back to current state"
-					);
-					services
-						.rooms
-						.state_accessor
-						.state_get_content(
-							current_shortstatehash,
-							&StateEventType::RoomMember,
-							syncing_user.as_str(),
-						)
-						.await
-						.ok()
-				},
-			}
-		},
-		| None => None,
+		let membership_during_current_sync: Option<RoomMemberEventContent> = services
+			.rooms
+			.state_accessor
+			.state_get_content(
+				current_shortstatehash,
+				&StateEventType::RoomMember,
+				syncing_user.as_str(),
+			)
+			.await
+			.ok();
+
+		// If we can resolve the previous membership event, check if it was Join.
+		// If we couldn't resolve it (None), default to false (not a fresh join)
+		// to avoid spuriously sending limited timelines on every sync.
+		let joined_since_last_sync = membership_during_previous_sync.as_ref().is_some_and(
+			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
+		) && membership_during_current_sync.as_ref().is_some_and(
+			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
+		);
+
+		if joined_since_last_sync && membership_during_previous_sync.is_some() {
+			warn!(
+				user_joined_since_last_sync = syncing_user.as_str(),
+				?last_sync_end_shortstatehash,
+				membership = ?membership_during_previous_sync,
+			);
+		}
+
+		joined_since_last_sync
+	} else {
+		// Initial sync
+		false
 	};
-
-	// TODO: If the requesting user got state-reset out of the room, this
-	// will be `true` when it shouldn't be. this function should never be called
-	// in that situation, but it may be if the membership cache didn't get updated.
-	// the root cause of this needs to be addressed
-	let joined_since_last_sync =
-		membership_during_previous_sync.is_none_or(|content: RoomMemberEventContent| {
-			content.membership != MembershipState::Join
-		});
-
-	if joined_since_last_sync {
-		trace!("user joined since last sync");
-	}
 
 	Ok(joined_since_last_sync)
 }
