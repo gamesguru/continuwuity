@@ -457,8 +457,6 @@ mod transaction_tests {
 
 	#[tokio::test]
 	async fn test_database_transaction_e2e() {
-		use tempfile::TempDir;
-
 		// Figment is a configuration library used to merge multiple sources
 		// (like the .toml file and environment variables) into the Config struct.
 		use conduwuit::{
@@ -466,6 +464,7 @@ mod transaction_tests {
 			log::{Log, LogLevelReloadHandles, capture},
 		};
 		use figment::Figment;
+		use tempfile::TempDir;
 
 		let temp_dir = TempDir::new().expect("Failed to create temporary database directory");
 		let db_path = temp_dir.path().to_path_buf();
