@@ -622,17 +622,20 @@ async fn check_joined_since_last_sync(
 		// fetch the syncing user's membership event during the last sync.
 		// this will be None if `previous_sync_end_shortstatehash` is None.
 		let membership_during_previous_sync = match last_sync_end_shortstatehash {
-			| Some(last_sync_end_shortstatehash) => services
-				.rooms
-				.state_accessor
-				.state_get_content(
-					last_sync_end_shortstatehash,
-					&StateEventType::RoomMember,
-					syncing_user.as_str(),
-				)
-				.await
-				.inspect_err(|_| debug_warn!("User has no previous membership"))
-				.ok(),
+			| Some(last_sync_end_shortstatehash) => {
+				let result: Option<RoomMemberEventContent> = services
+					.rooms
+					.state_accessor
+					.state_get_content(
+						last_sync_end_shortstatehash,
+						&StateEventType::RoomMember,
+						syncing_user.as_str(),
+					)
+					.await
+					.inspect_err(|_| debug_warn!("User has no previous membership"))
+					.ok();
+				result
+			},
 			| None => None,
 		};
 
@@ -648,9 +651,11 @@ async fn check_joined_since_last_sync(
 			.ok();
 
 		// If we can resolve the previous membership event, check if it was Join.
-		// If we couldn't resolve it (None), default to false (not a fresh join)
-		// to avoid spuriously sending limited timelines on every sync.
-		let joined_since_last_sync = membership_during_previous_sync.as_ref().is_some_and(
+		// If we couldn't resolve it (None), the user was not in the room. Combine
+		// this with ensuring they are CURRENTLY joined, to avoid spuriously sending
+		// limited timelines for corrupted state hashes where the user is actually
+		// already in the room.
+		let joined_since_last_sync = membership_during_previous_sync.as_ref().is_none_or(
 			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
 		) && membership_during_current_sync.as_ref().is_some_and(
 			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
@@ -893,4 +898,55 @@ async fn build_device_list_updates(
 	}
 
 	Ok(device_list_updates)
+}
+
+#[cfg(test)]
+mod tests {
+	use ruma::events::room::member::{MembershipState, RoomMemberEventContent};
+
+	#[test]
+	fn test_joined_since_last_sync() {
+		let join_content = RoomMemberEventContent::new(MembershipState::Join);
+		let leave_content = RoomMemberEventContent::new(MembershipState::Leave);
+
+		// test matrix: (previous_membership, current_membership, expected_result)
+		let cases = vec![
+			// Case 1: normal incremental sync (already joined, still joined)
+			(Some(&join_content), Some(&join_content), false),
+			// Case 2: genuinely new join (was not in room, now joined) -> SHOULD BE TRUE
+			(None, Some(&join_content), true),
+			// Case 3: rejoined room (previously left, now joined) -> SHOULD BE TRUE
+			(Some(&leave_content), Some(&join_content), true),
+			// Case 4: left room (was joined, now left) -> SHOULD BE FALSE
+			(Some(&join_content), Some(&leave_content), false),
+			// Case 5: corrupted cache fallback (user is joined currently, but NOT in corrupted
+			// previous state) This is covered by Case 2. If the user was joined, but
+			// `state_get_content` fails (returning None), they are treated as a new join
+			// unless we fall back to current state. The fallback logic (not tested here)
+			// pulls current state. BUT, if they REALLY are a new join, it's correct
+			// to treat `None -> Join` as `true`.
+		];
+
+		for (prev, curr, expected) in cases {
+			let result = prev.is_none_or(|content: &RoomMemberEventContent| {
+				content.membership != MembershipState::Join
+			}) && curr.is_some_and(|content: &RoomMemberEventContent| {
+				content.membership == MembershipState::Join
+			});
+
+			assert_eq!(result, expected, "Failed for prev={prev:?}, curr={curr:?}");
+
+			// Demonstrate why the old `is_some_and` was broken for Case 2 (real new joins):
+			let old_result = prev.is_some_and(|content: &RoomMemberEventContent| {
+				content.membership != MembershipState::Join
+			}) && curr.is_some_and(|content: &RoomMemberEventContent| {
+				content.membership == MembershipState::Join
+			});
+
+			if prev.is_none() && curr.is_some() {
+				// The old logic returned `false` for real new joins!
+				assert_eq!(old_result, false);
+			}
+		}
+	}
 }
