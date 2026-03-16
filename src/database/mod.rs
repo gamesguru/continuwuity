@@ -213,10 +213,7 @@ mod transaction_tests {
 	use super::*;
 
 	#[tokio::test]
-	#[should_panic(
-		expected = "Nested Database::transaction() calls are not supported and break atomicity."
-	)]
-	async fn test_transaction_batch_rejects_nested_scope() {
+	async fn test_transaction_batch_try_with_rejects_nested_scope() {
 		// Mock config and database initialization.
 		// Testing this directly is tricky because Database::load requires
 		// setting up proper args, config, and RocksDB directories but we
@@ -228,10 +225,11 @@ mod transaction_tests {
 		// Here we simulate being inside an existing transaction batch:
 		transaction::TRANSACTION_BATCH
 			.scope(batch, async {
-				// Calling it again from inside the scope should trigger the assert!
+				// Calling it again from inside the scope should fail, since nested
+				// transaction batches are not supported and would break atomicity.
 				assert!(
 					transaction::TRANSACTION_BATCH.try_with(|_| ()).is_err(),
-					"Nested Database::transaction() calls are not supported and break atomicity."
+					"Nested transaction batches are not supported and break atomicity."
 				);
 			})
 			.await;
@@ -459,7 +457,7 @@ mod transaction_tests {
 
 	#[tokio::test]
 	async fn test_database_transaction_e2e() {
-		use std::fs;
+		use tempfile::TempDir;
 
 		// Figment is a configuration library used to merge multiple sources
 		// (like the .toml file and environment variables) into the Config struct.
@@ -469,9 +467,8 @@ mod transaction_tests {
 		};
 		use figment::Figment;
 
-		let db_path = std::path::Path::new(".tmp").join("test_db_transaction_e2e");
-		let _ = fs::remove_dir_all(&db_path);
-		fs::create_dir_all(&db_path).unwrap();
+		let temp_dir = TempDir::new().expect("Failed to create temporary database directory");
+		let db_path = temp_dir.path().to_path_buf();
 
 		let config = Figment::new()
 			.merge(("server_name", "example.com"))
