@@ -419,10 +419,11 @@ pub(crate) async fn build_sync_events(
 	// #779: rooms_joined() uses a RocksDB prefix iterator that may miss
 	// recently-joined rooms due to snapshot isolation. Check the in-memory
 	// recently-joined set for any rooms that fell through.
-	let recently_joined = services
-		.rooms
-		.state_cache
-		.take_recently_joined(syncing_user);
+	let recently_joined = services.rooms.state_cache.recently_joined_rooms(
+		syncing_user,
+		current_count,
+		last_sync_end_count,
+	);
 	for room_id in recently_joined {
 		if joined_rooms.contains_key(&room_id)
 			|| left_rooms.contains_key(&room_id)

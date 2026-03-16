@@ -107,8 +107,9 @@ pub(super) async fn load_joined_room(
 	};
 
 	// TODO: This flag indicates that the user either joined the room since the last
-	// sync or has never synced it before. Callers currently ignore this value but it
-	// is returned for potential future use (e.g. first-join behavior or optimizations).
+	// sync or has never synced it before. Callers currently ignore this value but
+	// it is returned for potential future use (e.g. first-join behavior or
+	// optimizations).
 	let joined_or_first_sync = joined_since_last_sync || never_synced;
 
 	Ok((joined_room, device_list_updates, joined_or_first_sync))
