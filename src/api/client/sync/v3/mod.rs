@@ -434,7 +434,10 @@ pub(crate) async fn build_sync_events(
 		if let Ok((room, updates, _)) = load_joined_room(services, context, room_id.clone()).await
 		{
 			device_list_updates.merge(updates);
-			joined_rooms.insert(room_id, room);
+
+			if !room.is_empty() {
+				joined_rooms.insert(room_id, room);
+			}
 		}
 	}
 

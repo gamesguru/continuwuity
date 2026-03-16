@@ -106,7 +106,12 @@ pub(super) async fn load_joined_room(
 		unread_thread_notifications: BTreeMap::new(),
 	};
 
-	Ok((joined_room, device_list_updates, joined_since_last_sync || never_synced))
+	// TODO: This flag indicates that the user either joined the room since the last
+	// sync or has never synced it before. Callers currently ignore this value but it
+	// is returned for potential future use (e.g. first-join behavior or optimizations).
+	let joined_or_first_sync = joined_since_last_sync || never_synced;
+
+	Ok((joined_room, device_list_updates, joined_or_first_sync))
 }
 
 /// Collect changes to the syncing user's account data events.
@@ -277,15 +282,27 @@ async fn build_state_and_timeline(
 	let needs_injection = (joined_since_last_sync || never_synced) && timeline.pdus.is_empty();
 
 	if joined_since_last_sync || never_synced || needs_injection {
-		warn!(
-			"#779 room={}: joined_since={} never_synced={} timeline={} state={} inject={}",
-			room_id,
-			joined_since_last_sync,
-			never_synced,
-			timeline.pdus.len(),
-			state_events.len(),
-			needs_injection
-		);
+		if needs_injection {
+			warn!(
+				"#779 room={}: joined_since={} never_synced={} timeline={} state={} inject={}",
+				room_id,
+				joined_since_last_sync,
+				never_synced,
+				timeline.pdus.len(),
+				state_events.len(),
+				needs_injection
+			);
+		} else {
+			debug_warn!(
+				"#779 room={}: joined_since={} never_synced={} timeline={} state={} inject={}",
+				room_id,
+				joined_since_last_sync,
+				never_synced,
+				timeline.pdus.len(),
+				state_events.len(),
+				needs_injection
+			);
+		}
 	}
 
 	let mut state_events = state_events;
@@ -301,7 +318,14 @@ async fn build_state_and_timeline(
 			)
 			.await
 		{
-			state_events.push(membership_pdu);
+			// Avoid duplicating the same membership event in state_events.
+			let already_present = state_events
+				.iter()
+				.any(|event| event.event_id == membership_pdu.event_id);
+
+			if !already_present {
+				state_events.push(membership_pdu);
+			}
 		}
 	}
 
