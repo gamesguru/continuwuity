@@ -666,7 +666,7 @@ async fn join_room_by_id_helper_remote(
 		.db
 		.transaction(|| async move {
 			let HashSetCompressStateEvent {
-				shortstatehash: statehash_before_join,
+				shortstatehash: _statehash_before_join,
 				added,
 				removed,
 			} = services
@@ -710,7 +710,7 @@ async fn join_room_by_id_helper_remote(
 			services
 				.rooms
 				.state
-				.force_state(room_id, statehash_before_join, added, removed, &state_lock)
+				.force_state(room_id, statehash_after_join, added, removed, &state_lock)
 				.await?;
 
 			debug!("Updating joined counts for new room");
