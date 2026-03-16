@@ -377,6 +377,13 @@ async fn fetch_shortstatehashes(
 				.await
 				.ok();
 		}
+
+		// For idle rooms where next_shortstatehash returned None (no events after
+		// last_sync_end_count), fall back to current_shortstatehash. The state
+		// hasn't changed so current == last_sync_end.
+		if last_sync_end_shortstatehash.is_none() {
+			last_sync_end_shortstatehash = Some(current_shortstatehash);
+		}
 	}
 
 	/*
