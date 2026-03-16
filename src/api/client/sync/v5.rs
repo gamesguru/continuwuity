@@ -9,24 +9,17 @@ use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
 	Err, Error, Result, at, error, extract_variant, is_equal_to,
-	matrix::{Event, TypeStateKey, pdu::PduCount},
+	matrix::{Event, TypeStateKey, pdu::PduCount, presence::PresenceEvent},
 	trace,
 	utils::{
 		BoolExt, FutureBoolExt, IterStream, ReadyExt, TryFutureExtExt,
-		future::ReadyEqExt,
+		future::{ReadyEqExt, TryExtExt},
 		math::{ruma_from_usize, usize_from_ruma},
 		stream::WidebandExt,
 	},
 	warn,
 };
-use conduwuit_core::{
-	err, info,
-	matrix::presence::PresenceEvent,
-	utils::{
-		MutexMap, TryExtExt,
-		stream::{BroadbandExt, Tools},
-	},
-};
+use conduwuit_core::err;
 use conduwuit_service::{Services, rooms::read_receipt::pack_receipts, sync::into_snake_key};
 use futures::{
 	FutureExt, Stream, StreamExt, TryFutureExt,
