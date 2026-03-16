@@ -252,7 +252,7 @@ remote-debug-poc config="conduwuit-example.toml":
 # Run Complement tests (requires complement-src)
 # Usage: just complement TestName
 complement args=".":
-    env COMPLEMENT_RUN="{{args}}" ./bin/complement ./complement-src
+    env COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_RUN="{{args}}" ./bin/complement ./complement-src
 
 # -----------------------------------------------------------------------------
 # Complement CI
