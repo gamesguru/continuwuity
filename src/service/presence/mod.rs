@@ -230,6 +230,7 @@ impl Service {
 		since: u64,
 		to: Option<u64>,
 	) -> impl Stream<Item = (&UserId, u64, &[u8])> + Send + '_ {
+		// Optionally filter by/until endpoint, "to"
 		self.db.presence_since(since, to)
 	}
 

@@ -150,6 +150,7 @@ impl Data {
 		since: u64,
 		to: Option<u64>,
 	) -> impl Stream<Item = (&UserId, u64, &[u8])> + Send + '_ {
+		// Filter by temporal range (since -> to)
 		self.presenceid_presence
 			.raw_stream()
 			.ignore_err()

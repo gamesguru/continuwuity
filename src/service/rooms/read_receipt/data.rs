@@ -73,6 +73,7 @@ impl Data {
 		let after_since = since.saturating_add(1); // +1 so we don't send the event at since
 		let first_possible_edu = (room_id, after_since);
 
+		// Get receipts up til "to"
 		self.readreceiptid_readreceipt
 			.stream_from(&first_possible_edu)
 			.ignore_err()

@@ -24,8 +24,10 @@ impl Drop for TransactionContext {
 	fn drop(&mut self) {
 		if !self.committed {
 			let rollback_closures = std::mem::take(&mut self.on_rollback);
+			// Run the rollback closures since we didn't commit!
 			for closure in rollback_closures {
 				if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(closure)) {
+					// Hack at introspection/reflection
 					let msg = e
 						.downcast_ref::<&'static str>()
 						.copied()
@@ -56,8 +58,8 @@ where
 		.is_ok()
 }
 
-/// Adds a closure to execute if the current transaction fails (rolls back) or
-/// panics. Returns true if closure added to a txn, false if no txn active.
+/// Adds a closure to execute if current txn fails (rolls back) or panics.
+/// Returns true if closure added to a txn, false if no txn active.
 pub fn push_on_rollback<F>(f: F) -> bool
 where
 	F: FnOnce() + Send + 'static,

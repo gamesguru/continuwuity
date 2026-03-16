@@ -45,10 +45,10 @@ where
 	let write_options = &self.write_options;
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
 		.try_with(|batch| {
-			// `lock` is structurally safe here. The transaction scope strictly
-			// contains the batch locally within the current execution sequence.
-			// `std::sync::Mutex` is perfectly fine since adding to a `WriteBatch`
-			// does not do I/O and will never block the async runtime.
+			// `lock` is safe since the txn scope strictly contains the batch locally
+			// within the current execution sequence.
+			// `std::sync::Mutex` is also fine since adding to a `WriteBatch`
+			// does not do I/O and will not block the async runtime.
 			let mut batch_guard = batch.lock().expect("Transaction batch mutex poisoned");
 			batch_guard.batch.delete_cf(&self.cf(), key.as_ref());
 		})

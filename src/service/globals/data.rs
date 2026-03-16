@@ -28,6 +28,7 @@ impl Data {
 		let mut lock = self.counter.write();
 		let counter: &mut u64 = &mut lock;
 		if self.in_flight_txn_counts.read().is_empty() {
+			// Although, this may be more risky than devs-only worth seeing
 			debug_assert!(
 				*counter == Self::stored_count(&self.global).unwrap_or_default(),
 				"counter mismatch"
@@ -46,23 +47,23 @@ impl Data {
 		let in_flight = self.in_flight_txn_counts.clone();
 		let in_flight_rollback = self.in_flight_txn_counts.clone();
 
+		// Open the txn
 		let in_txn = self.db.push_on_commit(move || {
 			in_flight.write().remove(&count);
 		});
 
 		if in_txn {
 			let global_rollback = self.global.clone();
-			// Register a fallback hook to ensure the token doesn't get stuck indefinitely
-			// if the transaction block errors and the batch gets rolled back.
+			// Register fallback/rollback hook so token doesn't get stuck
 			database::transaction::push_on_rollback(move || {
 				in_flight_rollback.write().remove(&count);
-				// Expose the rolled-back count to the DB directly (outside the transaction
-				// batch) so it is permanently skipped on restart, preventing clients from
-				// missing reused events.
+				// Expose rollback count to the DB directly (outside txn batch),
+				// so it is permanently skipped on restart, and clients will
+				// see it as a reused event.
 				global_rollback.insert(COUNTER, count.to_be_bytes());
 			});
 		} else {
-			// If not inside a transaction, the write happened synchronously
+			// If NOT in a txn, the write was synchronous
 			self.in_flight_txn_counts.write().remove(&count);
 		}
 
@@ -85,10 +86,9 @@ impl Data {
 	///
 	/// If there are any counts currently held by uncommitted transactions, this
 	/// returns one less than the smallest such count; otherwise it returns the
-	/// current global count. This provides read/write isolation against the
+	/// current global count. Read/write isolation is provided against the
 	/// global sequence counter, preventing `/sync` from advancing past events
-	/// that have grabbed a sequence number but haven't yet been written to the
-	/// database (the "ghost event" sequence race, #779).
+	/// assigned a sequence number but not yet committed to the DB.
 	pub fn current_count_in_flight(&self) -> u64 {
 		let current = self.current_count();
 
@@ -96,7 +96,7 @@ impl Data {
 		if let Some(first_in_flight) = lock.first() {
 			// If there are transactions in flight, clients should not sync past the
 			// lowest sequence number currently held by an uncommitted transaction.
-			// Return one less than the earliest in-flight sequence number.
+			// NOTE: Hopefully safe to return one less than earliest in-flight seq num.
 			return first_in_flight.saturating_sub(1);
 		}
 

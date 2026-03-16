@@ -675,10 +675,9 @@ async fn join_room_by_id_helper_remote(
 				.save_state(room_id, Arc::new(compressed))
 				.await?;
 
-			// We append to state before appending the pdu, so we don't have a moment in
-			// time with the pdu without its state. If append_pdu fails, the state will
-			// have been updated but the pdu will not exist — a subsequent retry or state
-			// reset will reconcile this.
+			// We append to state before appending the pdu, so we avoid a "stateless" PDU
+			// hot potato situation. If append_pdu fails, the state will have been updated
+			// but the pdu will not exist — retrying or resetting state solves this.
 			let statehash_after_join = services
 				.rooms
 				.state
@@ -699,17 +698,14 @@ async fn join_room_by_id_helper_remote(
 				.await?;
 
 			info!("Setting final room state for new room");
-			// We set the room state after inserting the pdu, so that we never have a moment
-			// in time where events in the current room state do not exist
+			// We set the room state after inserting the pdu for state consistency
 			services
 				.rooms
 				.state
 				.set_room_state(room_id, statehash_after_join, &state_lock);
 
-			// Now that the room state is fully saved and the PDU is appended, we can safely
-			// force the state into the caches. If this is done earlier, the user's
-			// membership change will trigger a sync which will fail to find the room
-			// state.
+			// Now we force the state into cache. If this is done earlier, the membership
+			// change can trigger a sync which fails to find the room state.
 			debug!("Forcing state for new room");
 			services
 				.rooms
