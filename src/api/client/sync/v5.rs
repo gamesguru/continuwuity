@@ -9,11 +9,11 @@ use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
 	Err, Error, Result, at, error, extract_variant, is_equal_to,
-	matrix::{Event, TypeStateKey, pdu::PduCount, presence::PresenceEvent},
+	matrix::{Event, TypeStateKey, pdu::PduCount},
 	trace,
 	utils::{
 		BoolExt, FutureBoolExt, IterStream, ReadyExt, TryFutureExtExt,
-		future::{ReadyEqExt, TryExtExt},
+		future::ReadyEqExt,
 		math::{ruma_from_usize, usize_from_ruma},
 		stream::WidebandExt,
 	},
@@ -856,9 +856,7 @@ where
 			.await
 			.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))?;
 
-		let mut since_shortstatehash = None;
-
-		since_shortstatehash = services
+		let since_shortstatehash = services
 			.rooms
 			.timeline
 			.prev_shortstatehash(room_id, PduCount::Normal(globalsince.saturating_add(1)))
