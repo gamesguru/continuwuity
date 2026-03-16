@@ -697,6 +697,26 @@ async fn join_room_by_id_helper_remote(
 				)
 				.await?;
 
+			let mut added = Arc::unwrap_or_clone(added);
+			added.insert(
+				services
+					.rooms
+					.state_compressor
+					.compress_state_event(
+						services
+							.rooms
+							.short
+							.get_or_create_shortstatekey(
+								&StateEventType::RoomMember,
+								sender_user.as_str(),
+							)
+							.await,
+						&parsed_join_pdu.event_id,
+					)
+					.await,
+			);
+			let added = Arc::new(added);
+
 			// We set the room state after inserting the pdu for state consistency
 			info!("Setting final room state for new room");
 			services
