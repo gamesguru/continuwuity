@@ -90,7 +90,7 @@ impl Data {
 	/// global sequence counter, preventing `/sync` from advancing past events
 	/// assigned a sequence number but not yet committed to the DB.
 	pub fn current_count_in_flight(&self) -> u64 {
-		let current = self.current_count();
+		let current = *self.counter.read();
 
 		let lock = self.in_flight_txn_counts.read();
 		if let Some(first_in_flight) = lock.first() {

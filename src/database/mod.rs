@@ -180,14 +180,11 @@ mod transaction_tests {
 	use super::*;
 
 	#[tokio::test]
-	#[should_panic(
-		expected = "Nested Database::transaction() calls are not supported and break atomicity."
-	)]
-	async fn test_nested_transaction_panics() {
+	async fn test_transaction_batch_rejects_nested_scope() {
 		// Mock config and database initialization.
 		// Testing this directly is tricky because Database::load requires
 		// setting up proper args, config, and RocksDB directories but we
-		// can also just simulate the try_with panic manually to verify the
+		// can also just simulate the try_with behaviour manually to verify the
 		// transaction scope behaviour.
 
 		let batch = Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
@@ -195,10 +192,10 @@ mod transaction_tests {
 		// Here we simulate being inside an existing transaction batch:
 		transaction::TRANSACTION_BATCH
 			.scope(batch, async {
-				// Calling it again from inside the scope should trigger the assert!
+				// Attempting to open another batch from inside the scope must fail.
 				assert!(
 					transaction::TRANSACTION_BATCH.try_with(|_| ()).is_err(),
-					"Nested Database::transaction() calls are not supported and break atomicity."
+					"TRANSACTION_BATCH should reject nested scopes to preserve atomicity."
 				);
 			})
 			.await;
