@@ -7,7 +7,7 @@
 
 use std::time::SystemTime;
 
-use conduwuit::{Err, Result, debug, err, utils::response::LimitReadExt};
+use conduwuit::{Err, Result, debug, err};
 use conduwuit_core::implement;
 use ipaddress::IPAddress;
 #[cfg(feature = "url_preview")]
@@ -16,6 +16,8 @@ use serde::Serialize;
 use url::Url;
 
 use super::Service;
+#[cfg(feature = "url_preview")]
+use crate::conduwuit::utils::response::LimitReadExt;
 
 #[derive(Serialize, Default)]
 pub struct UrlPreviewData {

@@ -113,6 +113,15 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "state_partial_rooms",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "state_partial_events",
+		val_size_hint: Some(0),
+		..descriptor::RANDOM
+	},
+	Descriptor {
 		name: "pduid_pdu",
 		cache_disp: CacheDisp::SharedWith("eventid_outlierpdu"),
 		key_size_hint: Some(16),

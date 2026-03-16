@@ -17,7 +17,7 @@ RESULTS_FILE="${3:-tests/test_results/complement/test_results.jsonl}"
 COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
-SKIPPED_COMPLEMENT_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*"|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
+SKIPPED_COMPLEMENT_TESTS='TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
 
 # $COMPLEMENT_SRC needs to be a directory to Complement source code
 if [ -f "$COMPLEMENT_SRC" ]; then

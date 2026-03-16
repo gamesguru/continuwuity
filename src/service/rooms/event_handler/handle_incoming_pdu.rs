@@ -127,6 +127,9 @@ pub async fn handle_incoming_pdu<'a>(
 	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
 		return Ok(Some(pdu_id));
 	}
+	if self.processed_pdu_cache.contains_key(event_id) {
+		return Ok(None);
+	}
 	if !pdu_fits(&mut value.clone()) {
 		warn!(
 			"dropping incoming PDU {event_id} in room {room_id} from {origin} because it \
@@ -291,5 +294,8 @@ pub async fn handle_incoming_pdu<'a>(
 
 	self.upgrade_outlier_to_timeline_pdu(incoming_pdu, val, create_event, origin, room_id)
 		.boxed()
+		.inspect_ok(|_| {
+			self.processed_pdu_cache.insert(event_id.to_owned(), ());
+		})
 		.await
 }

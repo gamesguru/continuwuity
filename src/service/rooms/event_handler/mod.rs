@@ -25,6 +25,7 @@ use crate::{Dep, globals, rooms, sending, server_keys};
 pub struct Service {
 	pub mutex_federation: RoomMutexMap,
 	pub federation_handletime: SyncRwLock<HandleTimeMap>,
+	pub(crate) processed_pdu_cache: moka::sync::Cache<OwnedEventId, ()>,
 	services: Services,
 }
 
@@ -54,6 +55,7 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			mutex_federation: RoomMutexMap::new(),
 			federation_handletime: HandleTimeMap::new().into(),
+			processed_pdu_cache: moka::sync::Cache::builder().max_capacity(100_000).build(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				sending: args.depend::<sending::Service>("sending"),
@@ -114,7 +116,7 @@ fn check_room_id<Pdu: Event>(room_id: &RoomId, pdu: &Pdu) -> Result {
 	Ok(())
 }
 
-fn get_room_version_id<Pdu: Event>(create_event: &Pdu) -> Result<RoomVersionId> {
+pub(crate) fn get_room_version_id<Pdu: Event>(create_event: &Pdu) -> Result<RoomVersionId> {
 	let content: RoomCreateEventContent = create_event.get_content()?;
 	let room_version = content.room_version;
 

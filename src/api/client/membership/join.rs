@@ -465,7 +465,8 @@ async fn join_room_by_id_helper_remote(
 	let send_join_request = federation::membership::create_join_event::v2::Request {
 		room_id: room_id.to_owned(),
 		event_id: event_id.clone(),
-		omit_members: false,
+
+		omit_members: services.server.config.fast_joins,
 		pdu: services
 			.sending
 			.convert_to_outgoing_federation_event(join_event.clone())
@@ -715,6 +716,15 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_join, &state_lock);
+
+	// Deal with partial joins
+	if send_join_response.room_state.members_omitted {
+		info!("Room {room_id} joined with omitted members (MSC3902). Marking as partial state.");
+		services
+			.rooms
+			.state_partial
+			.mark_as_partial(room_id, &remote_server);
+	}
 
 	Ok(())
 }
