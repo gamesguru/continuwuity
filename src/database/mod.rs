@@ -120,18 +120,34 @@ impl Database {
 			.write_opt(&batch_guard.batch, &write_options)
 			.or_else(or_else)?;
 
+		// Mark as committed immediately after successful write.
+		batch_guard.committed = true;
+
+		// Move closures out of mutex-protected struct, then drop the guard
+		// (before executing them, to avoid holding mutex during arbitrary callbacks).
+		let wake_closures = std::mem::take(&mut batch_guard.on_commit);
+		let finish_closures = std::mem::take(&mut batch_guard.on_finish);
+		_ = std::mem::take(&mut batch_guard.on_rollback);
+		drop(batch_guard);
+
+		for finish_closure in finish_closures {
+			// Ensure that a panic in one finish hook does not prevent subsequent hooks
+			// from running, and does not unwind past this point after the transaction
+			// has already been committed.
+			if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(finish_closure))
+			{
+				let msg = e
+					.downcast_ref::<&'static str>()
+					.copied()
+					.or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+					.unwrap_or("Box<dyn Any>");
+				tracing::error!("on_finish hook panicked: {}", msg);
+			}
+		}
+
 		if !self.db.corked() {
 			self.db.flush().expect("database flush error");
 		}
-
-		// Mark as committed immediately after successful write and flush. If flush()
-		// panics, we run `on_rollback` closures.
-		batch_guard.committed = true;
-
-		// Move on-commit closures out of mutex-protected struct, then drop the guard
-		// (before executing them, to avoid holding mutex during arbitrary callbacks).
-		let wake_closures = std::mem::take(&mut batch_guard.on_commit);
-		drop(batch_guard);
 
 		for wake_closure in wake_closures {
 			// Ensure panic in one on-commit hook does not prevent a subsequent hook from
