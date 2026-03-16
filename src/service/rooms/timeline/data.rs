@@ -251,6 +251,24 @@ impl Data {
 		Ok((pdu_id.pdu_count(), pdu))
 	}
 
+	pub(super) async fn next_timeline_count(&self, after_pdu: &RawPduId) -> Result<PduCount> {
+		let prefix = after_pdu.shortroomid();
+		let mut stream = self.pduid_pdu.raw_stream_from(after_pdu);
+
+		let _ = stream.next().await; // skip the current element
+		let (next_pdu_id, _) = stream
+			.next()
+			.await
+			.ok_or_else(|| err!(Request(NotFound("No next PDU found"))))?;
+
+		if !next_pdu_id.starts_with(&prefix) {
+			return Err!(Request(NotFound("No next PDU found in this room")));
+		}
+
+		let next_pdu_id: RawPduId = next_pdu_id.into();
+		Ok(next_pdu_id.pdu_count())
+	}
+
 	pub(super) fn increment_notification_counts(
 		&self,
 		room_id: &RoomId,

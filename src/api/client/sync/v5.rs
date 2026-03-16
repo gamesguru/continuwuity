@@ -841,26 +841,29 @@ where
 		services
 			.users
 			.keys_changed(sender_user, Some(globalsince), None)
+			.keys_changed(sender_user, globalsince, None)
 			.map(ToOwned::to_owned)
 			.collect::<Vec<_>>()
 			.await,
 	);
 
 	for room_id in all_joined_rooms {
-		let Ok(current_shortstatehash) =
-			services.rooms.state.get_room_shortstatehash(room_id).await
-		else {
-			error!("Room {room_id} has no state");
-			continue;
-		};
-
-		let since_shortstatehash = services
+		// the room state currently.
+		let current_shortstatehash = services
 			.rooms
-			.user
-			.get_token_shortstatehash(room_id, globalsince)
-			.await
-			.ok();
+			.state
+			.get_room_shortstatehash(room_id)
+			.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))?;
 
+		let mut since_shortstatehash = None;
+		if let Some(globalsince) = globalsince {
+			since_shortstatehash = services
+				.rooms
+				.timeline
+				.prev_shortstatehash(room_id, PduCount::Normal(globalsince.saturating_add(1)))
+				.await
+				.ok();
+		}
 		let encrypted_room = services
 			.rooms
 			.state_accessor

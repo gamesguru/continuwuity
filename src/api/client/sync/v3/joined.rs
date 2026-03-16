@@ -359,23 +359,18 @@ async fn fetch_shortstatehashes(
 		.get_room_shortstatehash(room_id)
 		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
 
-	// the room state as of the end of the last sync.
-	// this will be None if we are doing an initial sync or if we just joined this
-	// room.
+	// the room state as of the end of the last sync, computed statelessly from
+	// the timeline. shorteventid_shortstatehash maps each event to the state
+	// BEFORE that event, so next_shortstatehash(N) finds the first event after N
+	// and returns its pre-state = the correct post-state at count N.
+	// For idle rooms (no events after N), it fails and we fall back to
+	// current_shortstatehash since the state hasn't changed.
 	let last_sync_end_shortstatehash =
 		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
-			// look up the shortstatehash saved by the last sync's call to
-			// `associate_token_shortstatehash`
 			services
 				.rooms
-				.user
-				.get_token_shortstatehash(room_id, last_sync_end_count)
-				.inspect_err(move |_| {
-					debug_warn!(
-						token = last_sync_end_count,
-						"Room has no shortstatehash for this token"
-					);
-				})
+				.timeline
+				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
 				.ok()
 		}))
 		.map(Option::flatten)
@@ -383,6 +378,12 @@ async fn fetch_shortstatehashes(
 
 	let (current_shortstatehash, last_sync_end_shortstatehash) =
 		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
+
+	// For idle rooms where next_shortstatehash returned None (no events after
+	// last_sync_end_count), fall back to current_shortstatehash. The state
+	// hasn't changed so current == last_sync_end.
+	let last_sync_end_shortstatehash = last_sync_end_shortstatehash
+		.or_else(|| last_sync_end_count.map(|_| current_shortstatehash));
 
 	/*
 	associate the `current_count` with the `current_shortstatehash`, so we can
