@@ -1,7 +1,10 @@
 mod update;
 mod via;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+	collections::{HashMap, HashSet},
+	sync::Arc,
+};
 
 use conduwuit::{
 	Pdu, Result, SyncRwLock, implement,
@@ -21,6 +24,7 @@ use crate::{Dep, account_data, appservice::RegistrationInfo, config, globals, ro
 
 pub struct Service {
 	appservice_in_room_cache: AppServiceInRoomCache,
+	recently_joined: RecentlyJoinedCache,
 	services: Services,
 	db: Data,
 }
@@ -53,13 +57,20 @@ struct Data {
 	userroomid_invitesender: Arc<Map>,
 }
 
+// NOTE: This constant is reserved for enforcing a per-user room bound at usage
+// sites. The cache type still stores a HashSet per user; insertion logic should
+// respect this cap.
+const RECENTLY_JOINED_MAX_ROOMS_PER_USER: usize = 256;
+
 type AppServiceInRoomCache = SyncRwLock<HashMap<OwnedRoomId, HashMap<String, bool>>>;
+type RecentlyJoinedCache = SyncRwLock<HashMap<OwnedUserId, HashMap<OwnedRoomId, u64>>>;
 type StrippedStateEventItem = (OwnedRoomId, Vec<Raw<AnyStrippedStateEvent>>);
 
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			appservice_in_room_cache: SyncRwLock::new(HashMap::new()),
+			recently_joined: SyncRwLock::new(HashMap::new()),
 			services: Services {
 				account_data: args.depend::<account_data::Service>("account_data"),
 				config: args.depend::<config::Service>("config"),
@@ -91,6 +102,57 @@ impl crate::Service for Service {
 	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+}
+
+#[implement(Service)]
+pub fn mark_recently_joined(&self, user_id: &UserId, room_id: &RoomId) {
+	if !self.services.globals.user_is_local(user_id) {
+		return;
+	}
+
+	let current_count = self.services.globals.current_count().unwrap_or(0);
+
+	self.recently_joined
+		.write()
+		.entry(user_id.to_owned())
+		.or_default()
+		.insert(room_id.to_owned(), current_count);
+}
+
+#[implement(Service)]
+pub fn recently_joined_rooms(
+	&self,
+	user_id: &UserId,
+	current_count: u64,
+	last_sync_end_count: Option<u64>,
+) -> HashSet<OwnedRoomId> {
+	let mut cache = self.recently_joined.write();
+	let Some(rooms) = cache.get_mut(user_id) else {
+		return HashSet::new();
+	};
+
+	// Clean up rooms that are older than last_sync_end_count, because the DB
+	// iterator will definitely find them in any future sync.
+	if let Some(last_sync) = last_sync_end_count {
+		rooms.retain(|_, join_count| *join_count > last_sync);
+	}
+
+	// Enforce the per-user room limit to prevent memory leaks
+	if rooms.len() > RECENTLY_JOINED_MAX_ROOMS_PER_USER {
+		rooms.clear();
+	}
+
+	let result: HashSet<OwnedRoomId> = rooms
+		.iter()
+		.filter(|(_, join_count)| **join_count <= current_count)
+		.map(|(room_id, _)| room_id.clone())
+		.collect();
+
+	if rooms.is_empty() {
+		cache.remove(user_id);
+	}
+
+	result
 }
 
 #[implement(Service)]
