@@ -55,7 +55,7 @@ impl Data {
 		if in_txn {
 			let global_rollback = self.global.clone();
 			// Register fallback/rollback hook so token doesn't get stuck
-			database::transaction::push_on_rollback(move || {
+			self.db.push_on_rollback(move || {
 				in_flight_rollback.write().remove(&count);
 				// Expose rollback count to the DB directly (outside txn batch),
 				// so it is permanently skipped on restart, and clients will

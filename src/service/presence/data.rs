@@ -5,7 +5,7 @@ use conduwuit::{
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use ruma::{UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
 
 use super::Presence;
@@ -150,14 +150,21 @@ impl Data {
 		since: u64,
 		to: Option<u64>,
 	) -> impl Stream<Item = (&UserId, u64, &[u8])> + Send + '_ {
-		// Filter by temporal range (since -> to)
+		// Start from the first possible key with count = since + 1.
+		let from = since.saturating_add(1).to_be_bytes();
+		let upper = to.unwrap_or(u64::MAX);
+
 		self.presenceid_presence
-			.raw_stream()
+			.raw_stream_from(&from)
 			.ignore_err()
+			// Stop iterating once we pass the requested upper bound.
+			.take_while(move |(key, _)| {
+				let count = presenceid_parse(key).map(|(count, _)| count).unwrap_or(upper);
+				futures::future::ready(count <= upper)
+			})
 			.ready_filter_map(move |(key, presence)| {
 				let (count, user_id) = presenceid_parse(key).ok()?;
-				(count > since && to.is_none_or(|to| count <= to))
-					.then_some((user_id, count, presence))
+				(count > since).then_some((user_id, count, presence))
 			})
 	}
 }

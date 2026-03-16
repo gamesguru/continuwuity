@@ -160,6 +160,16 @@ impl Database {
 	{
 		transaction::push_on_commit(f)
 	}
+
+	/// Adds a closure to execute if the current transaction is rolled back.
+	/// Returns true if the closure was successfully added to a transaction,
+	/// false if there is no active transaction.
+	pub fn push_on_rollback<F>(&self, f: F) -> bool
+	where
+		F: FnOnce() + Send + 'static,
+	{
+		transaction::push_on_rollback(f)
+	}
 }
 
 impl Index<&str> for Database {
@@ -238,6 +248,61 @@ mod transaction_tests {
 				);
 			})
 			.await;
+	}
+
+	#[tokio::test]
+	async fn test_on_commit_executes_on_success() {
+		let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let ran_clone = ran.clone();
+
+		let batch = Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+		transaction::TRANSACTION_BATCH
+			.scope(batch.clone(), async move {
+				transaction::push_on_commit(move || {
+					ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+				});
+			})
+			.await;
+
+		// Simulation of successful Database::transaction completion
+		{
+			let mut guard = batch.lock().unwrap();
+			guard.committed = true;
+			let wake_closures = std::mem::take(&mut guard.on_commit);
+			drop(guard);
+			for wake_closure in wake_closures {
+				wake_closure();
+			}
+		}
+
+		assert!(
+			ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Commit closure should run when simulated commit occurs"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_on_commit_does_not_run_on_rollback() {
+		let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let ran_clone = ran.clone();
+
+		{
+			let batch =
+				Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+			transaction::TRANSACTION_BATCH
+				.scope(batch.clone(), async move {
+					transaction::push_on_commit(move || {
+						ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+					});
+				})
+				.await;
+			// batch goes out of scope and drops TransactionContext (rollback)
+		}
+
+		assert!(
+			!ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Commit closure should NOT run when transaction rolls back"
+		);
 	}
 
 	#[tokio::test]
