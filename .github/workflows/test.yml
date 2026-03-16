@@ -221,7 +221,7 @@ jobs:
 
       - name: Compare FULL results with baseline
         continue-on-error: true
-        run: git diff tests/test_results/complement/test_results.jsonl
+        run: git diff --color=always tests/test_results/complement/test_results.jsonl
 
       - name: Upload test logs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
