@@ -198,19 +198,22 @@ where
 	V: AsRef<[u8]>,
 {
 	let write_options = &self.write_options;
-
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
 		.try_with(|batch| {
-			// blocking_lock is structurally safe here since TRANSACTION_BATCH
-			// is task_local! and only accessed consecutively within the same
-			// async task. Falling back with try_lock would silently break atomicity.
+			// `lock` is structurally safe here. The transaction scope strictly
+			// contains the batch locally within the current execution sequence.
+			// `std::sync::Mutex` is perfectly fine since adding to a `WriteBatch`
+			// does not do I/O and will never block the async runtime.
 			let mut batch_guard = batch.lock().expect("Transaction batch mutex poisoned");
-			let (batch, closures) = &mut *batch_guard;
-			batch.put_cf(&self.cf(), key.as_ref(), val.as_ref());
+			batch_guard
+				.batch
+				.put_cf(&self.cf(), key.as_ref(), val.as_ref());
 
 			let watchers = self.watchers.clone();
 			let key_owned = key.as_ref().to_vec();
-			closures.push(Box::new(move || watchers.wake(&key_owned)));
+			batch_guard
+				.on_commit
+				.push(Box::new(move || watchers.wake(&key_owned)));
 		})
 		.is_ok();
 

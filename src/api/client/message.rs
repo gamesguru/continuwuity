@@ -229,10 +229,11 @@ where
 		.max()
 		.unwrap_or_else(PduCount::max);
 
-	let receipts = services
-		.rooms
-		.read_receipt
-		.readreceipts_since(lazy_loading_context.room_id, Some(oldest.into_unsigned()));
+	let receipts = services.rooms.read_receipt.readreceipts_since(
+		lazy_loading_context.room_id,
+		Some(oldest.into_unsigned()),
+		Some(newest.into_unsigned()),
+	);
 
 	pin_mut!(receipts);
 	let witness: MemberSet = events

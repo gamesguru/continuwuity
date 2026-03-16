@@ -148,13 +148,15 @@ impl Data {
 	pub(super) fn presence_since(
 		&self,
 		since: u64,
+		to: Option<u64>,
 	) -> impl Stream<Item = (&UserId, u64, &[u8])> + Send + '_ {
 		self.presenceid_presence
 			.raw_stream()
 			.ignore_err()
 			.ready_filter_map(move |(key, presence)| {
 				let (count, user_id) = presenceid_parse(key).ok()?;
-				(count > since).then_some((user_id, count, presence))
+				(count > since && to.is_none_or(|to| count <= to))
+					.then_some((user_id, count, presence))
 			})
 	}
 }

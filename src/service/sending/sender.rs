@@ -515,10 +515,10 @@ impl Service {
 		max_edu_count: &AtomicU64,
 		num: &mut usize,
 	) -> ReceiptMap {
-		let receipts = self
-			.services
-			.read_receipt
-			.readreceipts_since(room_id, Some(since.0));
+		let receipts =
+			self.services
+				.read_receipt
+				.readreceipts_since(room_id, Some(since.0), Some(since.1));
 
 		pin_mut!(receipts);
 		let mut read = BTreeMap::<OwnedUserId, ReceiptData>::new();
@@ -583,7 +583,10 @@ impl Service {
 		since: (u64, u64),
 		max_edu_count: &AtomicU64,
 	) -> Option<EduBuf> {
-		let presence_since = self.services.presence.presence_since(since.0);
+		let presence_since = self
+			.services
+			.presence
+			.presence_since(since.0, Some(since.1));
 
 		pin_mut!(presence_since);
 		let mut presence_updates = HashMap::<OwnedUserId, PresenceUpdate>::new();

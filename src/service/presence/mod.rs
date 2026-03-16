@@ -228,8 +228,9 @@ impl Service {
 	pub fn presence_since(
 		&self,
 		since: u64,
+		to: Option<u64>,
 	) -> impl Stream<Item = (&UserId, u64, &[u8])> + Send + '_ {
-		self.db.presence_since(since)
+		self.db.presence_since(since, to)
 	}
 
 	#[inline]

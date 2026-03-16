@@ -65,6 +65,7 @@ impl Data {
 		&'a self,
 		room_id: &'a RoomId,
 		since: u64,
+		to: Option<u64>,
 	) -> impl Stream<Item = ReceiptItem> + Send + 'a {
 		type Key<'a> = (&'a RoomId, u64, &'a UserId);
 		type KeyVal<'a> = (Key<'a>, CanonicalJsonObject);
@@ -75,7 +76,9 @@ impl Data {
 		self.readreceiptid_readreceipt
 			.stream_from(&first_possible_edu)
 			.ignore_err()
-			.ready_take_while(move |((r, ..), _): &KeyVal<'_>| *r == room_id)
+			.ready_take_while(move |((r, count, ..), _): &KeyVal<'_>| {
+				*r == room_id && to.is_none_or(|to| *count <= to)
+			})
 			.map(move |((_, count, user_id), mut json): KeyVal<'_>| {
 				json.remove("room_id");
 
