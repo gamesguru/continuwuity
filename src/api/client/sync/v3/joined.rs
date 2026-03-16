@@ -133,7 +133,12 @@ async fn build_account_data(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn build_ephemeral(
 	services: &Services,
-	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
+	SyncContext {
+		syncing_user,
+		last_sync_end_count,
+		current_count,
+		..
+	}: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<Ephemeral> {
 	// note: some of the futures below are boxed. this is because, without the box,
@@ -145,7 +150,7 @@ async fn build_ephemeral(
 	let receipt_events = services
 		.rooms
 		.read_receipt
-		.readreceipts_since(room_id, last_sync_end_count)
+		.readreceipts_since(room_id, last_sync_end_count, Some(current_count))
 		.filter_map(async |(read_user, _, edu)| {
 			let is_ignored = services
 				.users

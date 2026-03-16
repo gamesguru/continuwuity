@@ -38,7 +38,7 @@ pub(super) async fn process(subcommand: PresenceCommand, context: &Context<'_>) 
 			let timer = tokio::time::Instant::now();
 			let results: Vec<(_, _, _)> = services
 				.presence
-				.presence_since(since)
+				.presence_since(since, None)
 				.map(|(user_id, count, bytes)| (user_id.to_owned(), count, bytes.to_vec()))
 				.collect()
 				.await;

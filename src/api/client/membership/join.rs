@@ -662,59 +662,67 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	debug!("Saving compressed state");
-	let HashSetCompressStateEvent {
-		shortstatehash: statehash_before_join,
-		added,
-		removed,
-	} = services
-		.rooms
-		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
-		.await?;
-
-	debug!("Forcing state for new room");
 	services
-		.rooms
-		.state
-		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
+		.db
+		.transaction(|| async move {
+			let HashSetCompressStateEvent {
+				shortstatehash: statehash_before_join,
+				added,
+				removed,
+			} = services
+				.rooms
+				.state_compressor
+				.save_state(room_id, Arc::new(compressed))
+				.await?;
+
+			// We append to state before appending the pdu, so we avoid a "stateless" PDU
+			// hot potato situation. If append_pdu fails, the state will have been updated
+			// but the pdu will not exist — retrying or resetting state solves this.
+			let statehash_after_join = services
+				.rooms
+				.state
+				.append_to_state(&parsed_join_pdu, room_id)
+				.await?;
+
+			info!("Appending new room join event");
+			services
+				.rooms
+				.timeline
+				.append_pdu(
+					&parsed_join_pdu,
+					join_event,
+					once(parsed_join_pdu.event_id.borrow()),
+					&state_lock,
+					room_id,
+				)
+				.await?;
+
+			// We set the room state after inserting the pdu for state consistency
+			info!("Setting final room state for new room");
+			services
+				.rooms
+				.state
+				.set_room_state(room_id, statehash_after_join, &state_lock);
+
+			// Now we force the state into cache. If this is done earlier, the membership
+			// change can trigger a sync which fails to find the room state (issue #779).
+			debug!("Forcing state for new room");
+			services
+				.rooms
+				.state
+				.force_state(room_id, statehash_before_join, added, removed, &state_lock)
+				.await?;
+
+			debug!("Updating joined counts for new room");
+			services
+				.rooms
+				.state_cache
+				.update_joined_count(room_id)
+				.await;
+
+			Ok(())
+		})
 		.await?;
-
-	debug!("Updating joined counts for new room");
-	services
-		.rooms
-		.state_cache
-		.update_joined_count(room_id)
-		.await;
-
-	// We append to state before appending the pdu, so we don't have a moment in
-	// time with the pdu without it's state. This is okay because append_pdu can't
-	// fail.
-	let statehash_after_join = services
-		.rooms
-		.state
-		.append_to_state(&parsed_join_pdu, room_id)
-		.await?;
-
-	info!("Appending new room join event");
-	services
-		.rooms
-		.timeline
-		.append_pdu(
-			&parsed_join_pdu,
-			join_event,
-			once(parsed_join_pdu.event_id.borrow()),
-			&state_lock,
-			room_id,
-		)
-		.await?;
-
-	info!("Setting final room state for new room");
-	// We set the room state after inserting the pdu, so that we never have a moment
-	// in time where events in the current room state do not exist
-	services
-		.rooms
-		.state
-		.set_room_state(room_id, statehash_after_join, &state_lock);
 
 	Ok(())
 }
@@ -793,6 +801,7 @@ async fn join_room_by_id_helper_local(
 		remote_servers = %servers.len(),
 		"Could not join room locally, attempting remote join",
 	);
+
 	join_room_by_id_helper_remote(services, sender_user, room_id, reason, servers, state_lock)
 		.await
 }

@@ -141,72 +141,119 @@ pub async fn leave_room(
 			)
 			.await;
 
-		match user_member_event_content {
-			| Ok(content) => {
-				services
-					.rooms
-					.timeline
-					.build_and_append_pdu(
-						PduBuilder::state(user_id.to_string(), &RoomMemberEventContent {
-							membership: MembershipState::Leave,
-							reason,
-							join_authorized_via_users_server: None,
-							is_direct: None,
-							..content
-						}),
-						user_id,
-						Some(room_id),
-						&state_lock,
-					)
-					.await?;
+		let should_return_early = services
+			.db
+			.transaction(|| async move {
+				match user_member_event_content {
+					| Ok(content) => {
+						// This prepending and anti-fallback context safely sends the final state
+						// down
+						services
+							.rooms
+							.timeline
+							.build_and_append_pdu(
+								PduBuilder::state(user_id.to_string(), &RoomMemberEventContent {
+									membership: MembershipState::Leave,
+									reason,
+									join_authorized_via_users_server: None,
+									is_direct: None,
+									..content
+								}),
+								user_id,
+								Some(room_id),
+								&state_lock,
+							)
+							.await?;
 
-				// `build_and_append_pdu` calls `mark_as_left` internally, so we return early.
-				return Ok(());
-			},
-			| Err(_) => {
-				// an exception to case 3 is if the user isn't even in the room they're trying
-				// to leave. this can happen if the client's caching is wrong.
-				debug_warn!(
-					"Trying to leave a room you are not a member of, marking room as left \
-					 locally."
+						// build_and_append_pdu calls mark_as_left. Avoids fallback logic below.
+						services
+							.rooms
+							.state_cache
+							.update_joined_count(room_id)
+							.await;
+
+						Ok(true)
+					},
+					| Err(_) => Ok(false),
+				}
+			})
+			.await?;
+
+		if should_return_early {
+			return Ok(());
+		}
+
+		// an exception to case 3 is if the user isn't even in the room they're trying
+		// to leave. this can happen if the client's caching is wrong.
+		debug_warn!(
+			"Trying to leave a room you are not a member of, marking room as left locally."
+		);
+
+		// return existing leave state, if one exists. `mark_as_left` then updates
+		// the `roomuserid_leftcount` table, making the leave come down sync again.
+		services
+			.rooms
+			.state_cache
+			.left_state(user_id, room_id)
+			.await
+			.inspect_err(|err| {
+				// `left_state` may return an Err if the user *is* in the room they're
+				// trying to leave, but cache incorrectly lists them as joined.
+				// In this situation we save a `None` to `roomuserid_leftcount`,
+				// which sends an effective "dummy leave" event to the client.
+				warn!(
+					?err,
+					"Trying to leave room not cached as leave, sending dummy leave event to \
+					 client"
 				);
+			})
+			.unwrap_or_default()
+	};
 
-				// return the existing leave state, if one exists. `mark_as_left` will then
-				// update the `roomuserid_leftcount` table, making the leave come down sync
-				// again.
+	// At this point `leave_pdu` has already been determined. If it is `Some`,
+	// we persist that PDU; if it is `None`, we STILL mark the user as left and
+	// update the joined count so others can make an appropriate dummy leave.
+	if let Some(leave_pdu_opt) = leave_pdu {
+		services
+			.db
+			.transaction(|| async move {
 				services
 					.rooms
 					.state_cache
-					.left_state(user_id, room_id)
-					.await
-					.inspect_err(|err| {
-						// `left_state` may return an Err if the user _is_ in the room they're
-						// trying to leave, but the membership cache is incorrect and
-						// they're cached as being joined. In this situation
-						// we save a `None` to the `roomuserid_leftcount` table, which generates
-						// and sends a dummy leave to the client.
-						warn!(
-							?err,
-							"Trying to leave room not cached as leave, sending dummy leave \
-							 event to client"
-						);
-					})
-					.unwrap_or_default()
-			},
-		}
-	};
+					.mark_as_left(user_id, room_id, Some(leave_pdu_opt))
+					.await;
 
-	services
-		.rooms
-		.state_cache
-		.mark_as_left(user_id, room_id, leave_pdu)
-		.await;
+				services
+					.rooms
+					.state_cache
+					.update_joined_count(room_id)
+					.await;
 
-	services
-		.rooms
-		.state_cache
-		.update_joined_count(room_id)
-		.await;
+				Ok(())
+			})
+			.await?;
+	} else {
+		// Even if leave_pdu is None, we require marking as left & updating counts.
+		services
+			.db
+			.transaction(|| async move {
+				// Last fall through/fallback case
+				services
+					.rooms
+					.state_cache
+					.mark_as_left(user_id, room_id, None)
+					.await;
+
+				services
+					.rooms
+					.state_cache
+					.update_joined_count(room_id)
+					.await;
+
+				Ok(())
+			})
+			.await?;
+	}
 
 	Ok(())
 }

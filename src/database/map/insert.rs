@@ -198,17 +198,38 @@ where
 	V: AsRef<[u8]>,
 {
 	let write_options = &self.write_options;
-	self.db
-		.db
-		.put_cf_opt(&self.cf(), key, val, write_options)
-		.or_else(or_else)
-		.expect("database insert error");
+	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
+		.try_with(|batch| {
+			// `lock` is safe since the txn scope strictly contains the batch locally
+			// within the current execution sequence.
+			// `std::sync::Mutex` is also fine since adding to a `WriteBatch`
+			// does not do I/O and will not block the async runtime.
+			let mut batch_guard = batch.lock().expect("Transaction batch mutex poisoned");
+			batch_guard
+				.batch
+				.put_cf(&self.cf(), key.as_ref(), val.as_ref());
 
-	if !self.db.corked() {
-		self.db.flush().expect("database flush error");
+			let watchers = self.watchers.clone();
+			let key_owned = key.as_ref().to_vec();
+			batch_guard
+				.on_commit
+				.push(Box::new(move || watchers.wake(&key_owned)));
+		})
+		.is_ok();
+
+	if !appended_to_txn {
+		self.db
+			.db
+			.put_cf_opt(&self.cf(), key, val, write_options)
+			.or_else(or_else)
+			.expect("database insert::txn-cowardly error");
+
+		if !self.db.corked() {
+			self.db.flush().expect("database flush error");
+		}
+
+		self.watchers.wake(key.as_ref());
 	}
-
-	self.watchers.wake(key.as_ref());
 }
 
 #[implement(super::Map)]
