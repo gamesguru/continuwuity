@@ -21,9 +21,14 @@ use futures::{
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
-	api::client::sync::sync_events::{
-		UnreadNotificationsCount,
-		v3::{Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline},
+	api::client::{
+		error::ErrorKind,
+		sync::sync_events::{
+			UnreadNotificationsCount,
+			v3::{
+				Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline,
+			},
+		},
 	},
 	events::{
 		AnyRawAccountDataEvent, StateEventType,
@@ -362,25 +367,45 @@ async fn fetch_shortstatehashes(
 
 	let mut last_sync_end_shortstatehash = None;
 	if let Some(last_sync_end_count) = last_sync_end_count {
-		last_sync_end_shortstatehash = services
+		// First try the cache lookup
+		match services
 			.rooms
 			.user
 			.get_token_shortstatehash(room_id, last_sync_end_count)
 			.await
-			.ok();
+		{
+			| Ok(hash) => {
+				last_sync_end_shortstatehash = Some(hash);
+			},
+			| Err(e) => {
+				debug_warn!("Token cache missed: {}", e);
+			},
+		}
 
+		// If cache missed, calculate statelessly
 		if last_sync_end_shortstatehash.is_none() {
-			last_sync_end_shortstatehash = services
+			match services
 				.rooms
 				.timeline
 				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
 				.await
-				.ok();
+			{
+				| Ok(hash) => {
+					last_sync_end_shortstatehash = Some(hash);
+				},
+				| Err(conduwuit::Error::BadRequest(ErrorKind::NotFound, _)) => {
+					// Expected behavior for idle rooms (no events after
+					// last_sync_end_count)
+				},
+				| Err(e) => {
+					// Actual database error
+					return Err(e);
+				},
+			}
 		}
 
-		// For idle rooms where next_shortstatehash returned None (no events after
-		// last_sync_end_count), fall back to current_shortstatehash. The state
-		// hasn't changed so current == last_sync_end.
+		// For idle rooms where next_shortstatehash returned NotFound, fall back
+		// to current_shortstatehash because the state hasn't changed.
 		if last_sync_end_shortstatehash.is_none() {
 			last_sync_end_shortstatehash = Some(current_shortstatehash);
 		}
