@@ -2,8 +2,8 @@ use std::{fmt::Debug, mem};
 
 use bytes::Bytes;
 use conduwuit::{
-	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_warn, err, implement,
-	trace, utils::response::LimitReadExt,
+	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, err, implement, info, trace,
+	utils::response::LimitReadExt,
 };
 use http::{HeaderValue, header::AUTHORIZATION};
 use ipaddress::IPAddress;
@@ -196,10 +196,11 @@ async fn into_http_response(
 
 	debug!("Got {status:?} for {method} {url}");
 	if !status.is_success() {
-		return Err(Error::Federation(
-			dest.to_owned(),
-			RumaError::from_http_response(http_response),
-		));
+		let error = RumaError::from_http_response(http_response);
+		if status.is_server_error() {
+			info!(%dest, %status, "Federation request failed: {error:?}");
+		}
+		return Err(Error::Federation(dest.to_owned(), error));
 	}
 
 	Ok(http_response)
@@ -214,13 +215,13 @@ fn handle_error(
 ) -> Result {
 	if e.is_timeout() {
 		e = e.without_url();
-		debug_warn!(dest = ?dest, "{e:?}");
+		info!("Federation request to {dest} timed out: {e:?}");
 		return Err(Error::FederationTimeout(dest.to_owned()));
 	}
 
 	if e.is_connect() {
 		e = e.without_url();
-		debug_warn!(dest = ?dest, "{e:?}");
+		info!(%dest, "Federation connection failed: {e:?}");
 		return Err(Error::FederationConnection(dest.to_owned()));
 	}
 

@@ -118,13 +118,15 @@ impl super::Service {
 
 	async fn actual_dest_2(&self, dest: &ServerName, cache: bool, pos: usize) -> Result<FedDest> {
 		debug!("2: Hostname with included port");
-		let (host, port) = dest.as_str().split_at(pos);
-		self.conditional_query_and_cache(host, port.parse::<u16>().unwrap_or(8448), cache)
-			.await?;
+		let (host, port_str) = dest.as_str().split_at(pos);
+		let port = port_str[1..].parse::<u16>().unwrap_or(8448);
+		self.conditional_query_and_cache(host, port, cache).await?;
 
 		Ok(FedDest::Named(
 			host.to_owned(),
-			port.try_into().unwrap_or_else(|_| FedDest::default_port()),
+			port_str
+				.try_into()
+				.unwrap_or_else(|_| FedDest::default_port()),
 		))
 	}
 
