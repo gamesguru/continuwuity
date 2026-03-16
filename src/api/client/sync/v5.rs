@@ -854,7 +854,7 @@ where
 			.state
 			.get_room_shortstatehash(room_id)
 			.await
-			.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))?;
+			.map_err(|e| err!(Database(error!("Room {room_id} has no state: {e}"))))?;
 
 		let since_shortstatehash = services
 			.rooms

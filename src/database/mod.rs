@@ -549,6 +549,6 @@ mod transaction_tests {
 
 		// Cleanup
 		drop(db);
-		let _ = fs::remove_dir_all(&db_path);
+		let _ = std::fs::remove_dir_all(&db_path);
 	}
 }

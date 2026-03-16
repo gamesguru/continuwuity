@@ -57,7 +57,7 @@ impl Data {
 			self.db.push_on_rollback(move || {
 				// Expose rollback count to the DB directly (outside txn batch),
 				// so it is permanently skipped on restart, and clients will
-				// see it as a reused event.
+				// not see this sequence number reused.
 				global_rollback.insert(COUNTER, count.to_be_bytes());
 			});
 		} else {
