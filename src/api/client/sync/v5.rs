@@ -19,6 +19,14 @@ use conduwuit::{
 	},
 	warn,
 };
+use conduwuit_core::{
+	err, info,
+	matrix::presence::PresenceEvent,
+	utils::{
+		MutexMap, TryExtExt,
+		stream::{BroadbandExt, Tools},
+	},
+};
 use conduwuit_service::{Services, rooms::read_receipt::pack_receipts, sync::into_snake_key};
 use futures::{
 	FutureExt, Stream, StreamExt, TryFutureExt,
@@ -841,7 +849,6 @@ where
 		services
 			.users
 			.keys_changed(sender_user, Some(globalsince), None)
-			.keys_changed(sender_user, globalsince, None)
 			.map(ToOwned::to_owned)
 			.collect::<Vec<_>>()
 			.await,
@@ -853,17 +860,18 @@ where
 			.rooms
 			.state
 			.get_room_shortstatehash(room_id)
+			.await
 			.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))?;
 
 		let mut since_shortstatehash = None;
-		if let Some(globalsince) = globalsince {
-			since_shortstatehash = services
-				.rooms
-				.timeline
-				.prev_shortstatehash(room_id, PduCount::Normal(globalsince.saturating_add(1)))
-				.await
-				.ok();
-		}
+
+		since_shortstatehash = services
+			.rooms
+			.timeline
+			.prev_shortstatehash(room_id, PduCount::Normal(globalsince.saturating_add(1)))
+			.await
+			.ok();
+
 		let encrypted_room = services
 			.rooms
 			.state_accessor

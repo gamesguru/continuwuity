@@ -6,7 +6,9 @@ use conduwuit::{
 	utils::{self, stream::TryReadyExt},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
+use futures::{
+	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::select_ok, pin_mut,
+};
 use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
@@ -256,10 +258,11 @@ impl Data {
 		let mut stream = self.pduid_pdu.raw_stream_from(after_pdu);
 
 		let _ = stream.next().await; // skip the current element
-		let (next_pdu_id, _) = stream
+		let result = stream
 			.next()
 			.await
 			.ok_or_else(|| err!(Request(NotFound("No next PDU found"))))?;
+		let (next_pdu_id, _) = result?;
 
 		if !next_pdu_id.starts_with(&prefix) {
 			return Err!(Request(NotFound("No next PDU found in this room")));
