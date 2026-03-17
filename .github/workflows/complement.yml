@@ -214,6 +214,7 @@ jobs:
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
           os: ${{ matrix.os }}
+          test_results_path: tests/test_results/complement/test_results.jsonl
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
@@ -239,7 +240,7 @@ jobs:
 
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
-              `**Commit:** `${context.payload.pull_request.head.ref}` (`${context.payload.pull_request.head.sha.substring(0, 7)}`)`,
+              `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
               '',
               '| Status | Count |',
               '|--------|-------|',

@@ -27,6 +27,10 @@ inputs:
   os:
     description: "Host operating system used for testing"
     default: "unknown"
+  test_results_path:
+    description: "Path to test_results.jsonl for extracting failed test lists"
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -45,6 +49,7 @@ runs:
         BINARY_PATH="${{ inputs.binary_path }}"
         FEATURES="${{ inputs.features }}"
         HOST_OS="${{ inputs.os }}"
+        TEST_RESULTS="${{ inputs.test_results_path }}"
 
         # Extract commit hash from version string, fall back to env
         BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
@@ -92,6 +97,11 @@ runs:
 
         # Ensure files exist
         touch runs.jsonl
+        mkdir -p runs_data
+
+        if [ -n "$TEST_RESULTS" ] && [ -f "$GITHUB_WORKSPACE/$TEST_RESULTS" ]; then
+          cp "$GITHUB_WORKSPACE/$TEST_RESULTS" "runs_data/${COMMIT_HASH}.jsonl"
+        fi
 
         # Append run summary
         jq -n -c \
