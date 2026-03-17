@@ -83,5 +83,12 @@ jobs:
       - name: Test
         run: make test
 
+      - name: DNS Integration Test (Respects /etc/hosts)
+        env:
+          CONDUWUIT_TEST_DNS_HOST: conduwuit.test
+        run: |
+          echo "127.0.0.1 conduwuit.test" | sudo tee -a /etc/hosts
+          cargo test --quiet --package conduwuit_service --lib resolver::tests::test_dns_resolution_integration
+
       - name: Lint
         run: make lint

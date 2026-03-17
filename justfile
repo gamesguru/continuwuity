@@ -222,6 +222,12 @@ profile-build-bloat-functions:
 profile-build-llvm-lines:
     cargo llvm-lines --profile ${PROFILE:-release} -p conduwuit --lib
 
+# --- Build targets ---
+
+# Build dev (default,console,url_preview)
+build-dev:
+    cargo build --profile dev --features default,console,url_preview
+
 # --- Cross Compilation ---
 
 # Cross-compile using cargo-zigbuild for specific glibc versions
