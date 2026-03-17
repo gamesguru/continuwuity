@@ -3,7 +3,7 @@ name: "Setup Prebuilts"
 description: "Downloads and caches Prebuilt Libraries (RocksDB, jemalloc, etc)"
 inputs:
   release_tag:
-    description: "Release tag (e.g. v0.5)"
+    description: "Release tag (e.g. prebuilts-v0.5)"
     required: true
     default: "v0.5"
   cache-key:
