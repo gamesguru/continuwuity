@@ -139,7 +139,15 @@ pub fn recently_joined_rooms(
 
 	// Enforce the per-user room limit to prevent memory leaks
 	if rooms.len() > RECENTLY_JOINED_MAX_ROOMS_PER_USER {
-		rooms.clear();
+		let overflow = rooms.len() - RECENTLY_JOINED_MAX_ROOMS_PER_USER;
+		let mut oldest: Vec<_> = rooms
+			.iter()
+			.map(|(room_id, join_count)| (room_id.clone(), *join_count))
+			.collect();
+		oldest.sort_unstable_by_key(|(_, join_count)| *join_count);
+		for (room_id, _) in oldest.into_iter().take(overflow) {
+			rooms.remove(&room_id);
+		}
 	}
 
 	let result: HashSet<OwnedRoomId> = rooms
