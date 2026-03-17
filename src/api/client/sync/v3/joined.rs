@@ -346,6 +346,8 @@ struct ShortStateHashes {
 	current_shortstatehash: ShortStateHash,
 	/// The state of the syncing room at the end of the last sync.
 	last_sync_end_shortstatehash: Option<ShortStateHash>,
+	/// The new state hash to write to the token cache for the current sync end.
+	next_hash: Option<ShortStateHash>,
 }
 
 /// Fetch the current_shortstatehash and last_sync_end_shortstatehash.
@@ -355,27 +357,43 @@ async fn fetch_shortstatehashes(
 	SyncContext { last_sync_end_count, current_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<ShortStateHashes> {
-	// The absolute latest room state.
-	let mut current_shortstatehash = services
-		.rooms
-		.state
-		.get_room_shortstatehash(room_id)
-		.await
-		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))?;
-
-	// If the latest state hash was created AFTER our watermark, we must walk
-	// backwards to find the state as it existed at the watermark.
-	while current_shortstatehash > current_count {
+	// the room state at the end of this sync range.
+	// next_shortstatehash(N) finds the first event after N and returns its
+	// pre-state = the correct post-state at count N.
+	// For idle rooms (no events after current_count), it fails and we fall back to
+	// the global current state since the state hasn't changed.
+	let current_hash = async {
 		match services
 			.rooms
 			.timeline
-			.prev_shortstatehash(room_id, PduCount::Normal(current_shortstatehash))
+			.next_shortstatehash(room_id, PduCount::Normal(current_count))
 			.await
 		{
-			| Ok(prev_hash) => current_shortstatehash = prev_hash,
-			| Err(_) => break, // No more history
+			| Ok(h) => Ok(h),
+			| Err(_) => services
+				.rooms
+				.state
+				.get_room_shortstatehash(room_id)
+				.await
+				.map_err(|_| err!(Database(error!("Room {room_id} has no state")))),
 		}
-	}
+	};
+
+	// the room state as of the end of the last sync.
+	let next_hash = async {
+		let hash = match last_sync_end_count {
+			| Some(last_sync_end_count) => services
+				.rooms
+				.timeline
+				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
+				.await
+				.ok(),
+			| None => None,
+		};
+		Ok::<_, conduwuit::Error>(hash)
+	};
+
+	let (current_shortstatehash, next_hash) = try_join(current_hash, next_hash).await?;
 
 	let mut last_sync_end_shortstatehash = None;
 	if let Some(last_sync_end_count) = last_sync_end_count {
@@ -406,22 +424,25 @@ async fn fetch_shortstatehashes(
 	}
 
 	/*
-	associate the `current_count` with the `current_shortstatehash`, so we can
+	associate the `current_count` with the `next_hash`, so we can
 	use it on the next sync as the `last_sync_end_shortstatehash`.
 
 	TODO: the table written to by this call grows extremely fast, gaining one new entry for each
 	joined room on _every single sync request_. we need to find a better way to remember the shortstatehash
 	between syncs.
 	*/
-	services
-		.rooms
-		.user
-		.associate_token_shortstatehash(room_id, current_count, current_shortstatehash)
-		.await;
+	if let Some(next_hash) = next_hash {
+		services
+			.rooms
+			.user
+			.associate_token_shortstatehash(room_id, current_count, next_hash)
+			.await;
+	}
 
 	Ok(ShortStateHashes {
 		current_shortstatehash,
 		last_sync_end_shortstatehash,
+		next_hash,
 	})
 }
 
