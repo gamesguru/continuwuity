@@ -5,7 +5,7 @@ inputs:
   release_tag:
     description: "Release tag (e.g. prebuilts-v0.5)"
     required: true
-    default: "v0.5"
+    default: "prebuilts-v0.5"
   cache-key:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
@@ -49,7 +49,7 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: /usr/local
-        key: prebuilts-${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
+        key: ${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
 
     - name: Verify Prebuilts Configuration
       shell: bash
@@ -81,4 +81,4 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: /usr/local
-        key: prebuilts-${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
+        key: ${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
