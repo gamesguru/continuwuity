@@ -703,26 +703,6 @@ async fn knock_room_helper_remote(
 		.state
 		.set_room_state(room_id, statehash_after_knock, &state_lock);
 
-	let mut added = Arc::unwrap_or_clone(added);
-	added.insert(
-		services
-			.rooms
-			.state_compressor
-			.compress_state_event(
-				services
-					.rooms
-					.short
-					.get_or_create_shortstatekey(
-						&StateEventType::RoomMember,
-						sender_user.as_str(),
-					)
-					.await,
-				&parsed_knock_pdu.event_id,
-			)
-			.await,
-	);
-	let added = Arc::new(added);
-
 	debug!("Forcing state for new room");
 	services
 		.rooms

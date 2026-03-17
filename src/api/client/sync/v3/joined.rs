@@ -621,9 +621,9 @@ async fn check_joined_since_last_sync(
 		// Incremental sync
 		// fetch the syncing user's membership event during the last sync.
 		// this will be None if `previous_sync_end_shortstatehash` is None.
-		let membership_during_previous_sync = match last_sync_end_shortstatehash {
-			| Some(last_sync_end_shortstatehash) => {
-				match services
+		let membership_during_previous_sync =
+			if let Some(last_sync_end_shortstatehash) = last_sync_end_shortstatehash {
+				services
 					.rooms
 					.state_accessor
 					.state_get_content::<RoomMemberEventContent>(
@@ -632,50 +632,23 @@ async fn check_joined_since_last_sync(
 						syncing_user.as_str(),
 					)
 					.await
-				{
-					| Ok(content) => Some(content),
-					| Err(e) if e.is_not_found() => {
-						debug_warn!("User has no previous membership");
-						None
-					},
-					| Err(e) => return Err(e),
-				}
-			},
-			| None => None,
-		};
+					.inspect_err(|_| debug_warn!("User has no previous membership"))
+					.ok()
+			} else {
+				None
+			};
 
-		let membership_during_current_sync: Option<RoomMemberEventContent> = match services
-			.rooms
-			.state_accessor
-			.state_get_content(
-				current_shortstatehash,
-				&StateEventType::RoomMember,
-				syncing_user.as_str(),
-			)
-			.await
-		{
-			| Ok(content) => Some(content),
-			| Err(e) if e.is_not_found() => None,
-			| Err(e) => return Err(e),
-		};
+		// TODO: If the requesting user got state-reset out of the room, this
+		// will be `true` when it shouldn't be. this function should never be called
+		// in that situation, but it may be if the membership cache didn't get updated.
+		// the root cause of this needs to be addressed
+		let joined_since_last_sync =
+			membership_during_previous_sync.is_none_or(|content: RoomMemberEventContent| {
+				content.membership != MembershipState::Join
+			});
 
-		// If we can resolve the previous membership event, check if it was Join.
-		// If we couldn't resolve it (None), the user was not in the room. Combine
-		// this with ensuring they are CURRENTLY joined, to avoid spuriously sending
-		// limited timelines for corrupted state hashes where the user is actually
-		// already in the room.
-		let joined_since_last_sync = membership_during_previous_sync.as_ref().is_none_or(
-			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
-		) && membership_during_current_sync.as_ref().is_some_and(
-			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
-		);
-
-		if joined_since_last_sync && membership_during_previous_sync.is_some() {
-			warn!(
-				user_joined_since_last_sync = syncing_user.as_str(),
-				?last_sync_end_shortstatehash,
-				membership = ?membership_during_previous_sync,
-			);
+		if joined_since_last_sync {
+			trace!("user joined since last sync");
 		}
 
 		joined_since_last_sync
@@ -919,56 +892,26 @@ mod tests {
 		let leave_content = RoomMemberEventContent::new(MembershipState::Leave);
 		let invite_content = RoomMemberEventContent::new(MembershipState::Invite);
 
-		// test matrix: (previous_membership, current_membership, expected_result)
+		// test matrix: (previous_membership, expected_result)
+		// We do not need a `current_membership` because `joined.rs` is only called
+		// for rooms the user is currently joined to.
 		let cases = vec![
 			// Case 1: normal incremental sync (already joined, still joined)
-			(Some(&join_content), Some(&join_content), false),
+			(Some(&join_content), false),
 			// Case 2: genuinely new join (was not in room, now joined) -> SHOULD BE TRUE
-			(None, Some(&join_content), true),
+			(None, true),
 			// Case 3: rejoined room (previously left, now joined) -> SHOULD BE TRUE
-			(Some(&leave_content), Some(&join_content), true),
+			(Some(&leave_content), true),
 			// Case 4: joined from invite (previously invited, now joined) -> SHOULD BE TRUE
-			(Some(&invite_content), Some(&join_content), true),
-			// Case 5: left room (was joined, now left) -> SHOULD BE FALSE
-			(Some(&join_content), Some(&leave_content), false),
-			// Case 6 (THE BUG WE FIXED): The corrupted database state.
-			// What happened in the database:
-			// 1. User joins. `force_state` overwrites the room state to BEFORE the join.
-			// 2. Next sync: `last_sync_end_shortstatehash` points to this corrupted pre-join
-			//    state.
-			// 3. We look up previous membership in that pre-join state. It returns `None` (user
-			//    wasn't there yet).
-			// 4. We look up current membership. Since the cache correctly says they are joined,
-			//    we fetch current state, which MIGHT have recovered or we fall back. Assuming it
-			//    sees `Join`.
-			// So `prev = None`, `curr = Some(Join)`.
-			// The logic MUST treat this as `true` (treat it as a new join) so the client gets
-			// the full timeline. This is identical to Case 2. The old `is_some_and` logic
-			// returned `false` here, suppressing the timeline and causing the "timeline for
-			// newly joined room is empty" bug!
+			(Some(&invite_content), true),
 		];
 
-		for (prev, curr, expected) in cases {
+		for (prev, expected) in cases {
 			let result = prev.is_none_or(|content: &RoomMemberEventContent| {
 				content.membership != MembershipState::Join
-			}) && curr.is_some_and(|content: &RoomMemberEventContent| {
-				content.membership == MembershipState::Join
 			});
 
-			assert_eq!(result, expected, "Failed for prev={prev:?}, curr={curr:?}");
-
-			// Demonstrate why the old `is_some_and` was broken for Case 2 and Case 6 (real
-			// new joins / corrupted state):
-			let old_result = prev.is_some_and(|content: &RoomMemberEventContent| {
-				content.membership != MembershipState::Join
-			}) && curr.is_some_and(|content: &RoomMemberEventContent| {
-				content.membership == MembershipState::Join
-			});
-
-			if prev.is_none() && curr.is_some_and(|c| c.membership == MembershipState::Join) {
-				// The old logic returned `false` for real new joins and our corrupted state!
-				assert_eq!(old_result, false, "Old logic should have failed here");
-			}
+			assert_eq!(result, expected, "Failed for prev={prev:?}");
 		}
 	}
 }
