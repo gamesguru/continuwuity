@@ -45,6 +45,15 @@ jobs:
           dest_remote: origin
           mode: merge
 
+      - name: "Sync main-upstream [from forge: continuwuation/continuwuity]"
+        uses: ./.github/actions/git-sync
+        with:
+          source_branch: main
+          dest_branch: main-upstream
+          source_remote: upstream
+          dest_remote: origin
+          mode: merge
+
       # - name: "Sync main [from github: gamesguru/continuwuity]"
       #   uses: ./.github/actions/git-sync
       #   with:
