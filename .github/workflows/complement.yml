@@ -28,10 +28,10 @@ jobs:
         include:
           - arch: amd64
             os: ubuntu-22.04
-            profile: release
+            profile: dev
           - arch: amd64
             os: ubuntu-24.04
-            profile: release
+            profile: dev
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
     # and pushing the generated github-badge.json to the badges branch
