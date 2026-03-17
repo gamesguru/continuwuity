@@ -213,6 +213,7 @@ jobs:
           features: ${{ env.FEATURES }}
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
+          provider_override: ${{ github.ref_name == 'main-upstream' && 'Forge' || '' }}
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
