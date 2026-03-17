@@ -13,9 +13,9 @@ LOG_FILE="${2:-"${LOG_FILE:-tests/test_results/complement/test_logs.jsonl}"}"
 RESULTS_FILE="${3:-"${RESULTS_FILE:-tests/test_results/complement/test_results.jsonl}"}"
 
 # The base docker image to use for complement tests
-# You can build the default with `docker build -t conduwuit:complement -f ./docker/complement.Dockerfile .`
+# You can build the default with `docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .`
 # after running `cargo build`. Only the debug binary is used.
-COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-conduwuit:complement}"
+COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
 # This can be overridden by environment variable
