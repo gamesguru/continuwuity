@@ -59,7 +59,7 @@ pub(super) async fn auth(
 	let expected_ping_metadata =
 		&ruma::api::client::appservice::request_ping::v1::Request::METADATA;
 
-	let stack_var = 0u8;
+	let stack_var = 0_u8;
 	if request.parts.uri.path().contains("/login") {
 		tracing::info!(
 			"AUTH_DEBUG: URI: {} {}, Metadata ptr: {:p}, Stack pointer: {:p}, Expected login \
