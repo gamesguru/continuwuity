@@ -19,16 +19,16 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    name: "[Build] Build and Deploy"
+    name: 🏗️ Build and Deploy
     runs-on: ubuntu-latest
 
     steps:
-      - name: "[Setup] Node.js"
+      - name: 📦 Setup Node.js
         uses: https://github.com/actions/setup-node@v6
         with:
           node-version: "22"
 
-      - name: "[Build] Clone, setup, and build Element Web"
+      - name: 🔨 Clone, setup, and build Element Web
         run: |
           echo "Cloning Element Web..."
           git clone https://github.com/maunium/element-web
@@ -72,7 +72,7 @@ jobs:
           echo "Checking for build output..."
           ls -la webapp/
 
-      - name: "[Config] Create config.json"
+      - name: ⚙️ Create config.json
         run: |
           cat <<EOF > ./element-web/webapp/config.json
           {
@@ -108,17 +108,17 @@ jobs:
           echo "Created ./element-web/webapp/config.json"
           cat ./element-web/webapp/config.json
 
-      - name: "[Upload] Upload Artifact"
+      - name: 📤 Upload Artifact
         uses: forgejo/upload-artifact@v4
         with:
           name: element-web
           path: ./element-web/webapp/
           retention-days: 14
 
-      - name: "[Setup] Install Wrangler"
+      - name: 🛠️ Install Wrangler
         run: npm install --save-dev wrangler@latest
 
-      - name: "[Deploy] Deploy to Cloudflare Pages"
+      - name: 🚀 Deploy to Cloudflare Pages
         if: vars.CLOUDFLARE_PROJECT_NAME != ''
         id: deploy
         uses: https://github.com/cloudflare/wrangler-action@v3

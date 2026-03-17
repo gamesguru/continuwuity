@@ -26,11 +26,11 @@ server_name=\"example.com\"`.
 Note that the config is parsed as TOML, and shells like bash will remove quotes.
 So unfortunately it is required to escape quotes if the config option takes a
 string. This does not apply to options that take booleans or numbers:
-- `--option allow_registration=true` works ✓
-- `-O max_request_size=99999999` works ✓
-- `-O server_name=example.com` does not work ✗
-- `--option log=\"debug\"` works ✓
-- `--option server_name='"example.com'"` works ✓
+- `--option allow_registration=true` works ✅
+- `-O max_request_size=99999999` works ✅
+- `-O server_name=example.com` does not work ❌
+- `--option log=\"debug\"` works ✅
+- `--option server_name='"example.com'"` works ✅
 
 ## Execute commandline flag
 

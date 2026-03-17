@@ -19,16 +19,27 @@ COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
 # This can be overridden by environment variable
-DEFAULT_SKIPPED_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomState/Parallel/GET_/publicRooms_lists.*"|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
+DEFAULT_SKIPPED_TESTS='TestPartialStateJoin.*|TestRoomDeleteAlias/Parallel/Regular_users_can_add_and_delete_aliases_when_m.*|TestRoomDeleteAlias/Parallel/Can_delete_canonical_alias|TestUnbanViaInvite.*|TestRoomDeleteAlias/Parallel/Users_with_sufficient_power-level_can_delete_other.*'
 SKIPPED_COMPLEMENT_TESTS="${SKIPPED_COMPLEMENT_TESTS:-"$DEFAULT_SKIPPED_TESTS"}"
 
 # A regex for tests to run.
 RUN_TESTS="${COMPLEMENT_RUN:-.}"
 
+# Parallelism for tests. Default to 2 to improve stability on high-core machines.
+COMPLEMENT_PARALLEL="${COMPLEMENT_PARALLEL:-2}"
+
 # Ensure paths are absolute so they don't break when we change directory
 COMPLEMENT_SRC="$(realpath -m "$COMPLEMENT_SRC")"
 LOG_FILE="$(realpath -m "$LOG_FILE")"
 RESULTS_FILE="$(realpath -m "$RESULTS_FILE")"
+
+if [ "$RUN_TESTS" != "." ]; then
+    # Use a unique results file for partial runs to avoid clobbering the main one
+    suffix=$(echo "$RUN_TESTS" | sed 's/[^a-zA-Z0-9]/_/g' | cut -c 1-32)
+    LOG_FILE="${LOG_FILE%.jsonl}.$suffix.jsonl"
+    RESULTS_FILE="${RESULTS_FILE%.jsonl}.$suffix.jsonl"
+    echo "Partial run detected: results will be saved to $RESULTS_FILE"
+fi
 
 # $COMPLEMENT_SRC needs to be a directory to Complement source code
 if [ ! -d "$COMPLEMENT_SRC" ]; then
@@ -82,6 +93,8 @@ TEST_FLAGS=(
     # -tags "conduwuit_blacklist"
     -skip "$SKIPPED_COMPLEMENT_TESTS"
     -run "$RUN_TESTS"
+    -p "$COMPLEMENT_PARALLEL"
+    -parallel "$COMPLEMENT_PARALLEL"
     -timeout 1h
     -count=1
     ./tests/...

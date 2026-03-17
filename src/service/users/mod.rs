@@ -9,6 +9,7 @@ use conduwuit::result::LogErr;
 use conduwuit::{
 	Err, Error, Result, Server, debug_warn, err, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
+	warn,
 };
 #[cfg(feature = "ldap")]
 use conduwuit_core::{debug, error};
@@ -156,7 +157,7 @@ impl Service {
 		sender_user: &UserId,
 		recipient_user: &UserId,
 	) -> FilterLevel {
-		if self.user_is_ignored(sender_user, recipient_user).await {
+		let level = if self.user_is_ignored(sender_user, recipient_user).await {
 			FilterLevel::Ignore
 		} else {
 			self.services
@@ -167,7 +168,10 @@ impl Service {
 					config.content.user_filter_level(sender_user)
 				})
 				.unwrap_or(FilterLevel::Allow)
-		}
+		};
+
+		warn!(%sender_user, %recipient_user, ?level, "invite_filter_level");
+		level
 	}
 
 	/// Check if a user is an admin

@@ -37,16 +37,16 @@ runs:
       run: |
         mkdir -p /tmp/digests
         digest="${{ inputs.digest }}"
-        echo "[Search] Build step digest output: '$digest'"
+        echo "🔍 Build step digest output: '$digest'"
         if [[ -z "$digest" ]]; then
-          echo "✗ ERROR: No digest found from build step"
+          echo "❌ ERROR: No digest found from build step"
           exit 1
         fi
         digest_file="/tmp/digests/${digest#sha256:}"
-        echo "[Dir] Creating digest file: $digest_file"
+        echo "📁 Creating digest file: $digest_file"
         touch "$digest_file"
-        echo "✓ Digest file created successfully"
-        echo "[Info] Contents of /tmp/digests:"
+        echo "✅ Digest file created successfully"
+        echo "📋 Contents of /tmp/digests:"
         ls -la /tmp/digests/
 
     - name: Rename extracted binary

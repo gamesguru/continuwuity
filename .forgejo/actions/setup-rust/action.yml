@@ -61,7 +61,7 @@ runs:
 
     - name: Start registry/toolchain restore group
       shell: bash
-      run: echo "::group::[Package] Restoring registry and toolchain caches"
+      run: echo "::group::📦 Restoring registry and toolchain caches"
 
     - name: Cache toolchain binaries
       id: toolchain-cache
@@ -96,29 +96,19 @@ runs:
       shell: bash
       id: rust-setup
       run: |
-        # Check if we should exit early natively because rust is already installed
-        if command -v rustc &> /dev/null; then
-          CURRENT_VERSION=$(rustc --version | cut -d' ' -f2)
-          if [[ -z "${{ inputs.rust-version }}" ]] || [[ "$CURRENT_VERSION" == *"${{ inputs.rust-version }}"* ]]; then
-            echo "✓ Rust is already installed natively! ($CURRENT_VERSION)"
-            echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-        fi
-
         # Install rustup if not already cached
         if ! command -v rustup &> /dev/null; then
-          echo "::group::[Package] Installing rustup"
+          echo "::group::📦 Installing rustup"
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain none
           source "$CARGO_HOME/env"
           echo "::endgroup::"
         else
-          echo "✓ rustup already available"
+          echo "✅ rustup already available"
         fi
 
         # Setup the appropriate Rust version
         if [[ -n "${{ inputs.rust-version }}" ]]; then
-          echo "::group::[Package] Setting up Rust ${{ inputs.rust-version }}"
+          echo "::group::📦 Setting up Rust ${{ inputs.rust-version }}"
           # Set override first to prevent rust-toolchain.toml from auto-installing
           rustup override set ${{ inputs.rust-version }} 2>/dev/null || true
 
@@ -129,7 +119,7 @@ runs:
             rustup toolchain install ${{ inputs.rust-version }} --profile minimal -c cargo,clippy,rustfmt
           fi
         else
-          echo "::group::[Package] Setting up Rust from rust-toolchain.toml"
+          echo "::group::📦 Setting up Rust from rust-toolchain.toml"
           rustup show
         fi
 
@@ -142,19 +132,19 @@ runs:
       if: inputs.rust-components != ''
       shell: bash
       run: |
-        echo "[Package] Installing components: ${{ inputs.rust-components }}"
+        echo "📦 Installing components: ${{ inputs.rust-components }}"
         rustup component add ${{ inputs.rust-components }}
 
     - name: Install Rust target
       if: inputs.rust-target != ''
       shell: bash
       run: |
-        echo "[Package] Installing target: ${{ inputs.rust-target }}"
+        echo "📦 Installing target: ${{ inputs.rust-target }}"
         rustup target add ${{ inputs.rust-target }}
 
     - name: Start build cache restore group
       shell: bash
-      run: echo "::group::[Package] Restoring build cache"
+      run: echo "::group::📦 Restoring build cache"
 
     - name: Setup sccache
       uses: https://git.tomfos.tr/tom/sccache-action@v1
@@ -207,26 +197,26 @@ runs:
 
         # Install cargo-binstall for fast binary installations
         if command -v cargo-binstall &> /dev/null; then
-          echo "✓ cargo-binstall already available"
+          echo "✅ cargo-binstall already available"
         else
-          echo "::group::[Package] Installing cargo-binstall"
+          echo "::group::📦 Installing cargo-binstall"
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
           echo "::endgroup::"
         fi
 
         if command -v prek &> /dev/null; then
-          echo "✓ prek already available"
+          echo "✅ prek already available"
         else
-          echo "::group::[Package] Installing prek"
+          echo "::group::📦 Installing prek"
           # prek isn't regularly published to crates.io, so we use git source
           cargo-binstall -y --no-symlinks --git https://github.com/j178/prek prek
           echo "::endgroup::"
         fi
 
         if command -v timelord &> /dev/null; then
-          echo "✓ timelord already available"
+          echo "✅ timelord already available"
         else
-          echo "::group::[Package] Installing timelord"
+          echo "::group::📦 Installing timelord"
           cargo-binstall -y --no-symlinks timelord-cli
           echo "::endgroup::"
         fi
@@ -243,14 +233,14 @@ runs:
         # Configure incremental compilation GC
         # If we restored from old cache (partial hit), clean up aggressively
         if [[ "${{ steps.build-cache.outputs.cache-hit }}" != "true" ]]; then
-          echo "[Cache] Partial cache hit - enabling cache cleanup"
+          echo "♻️ Partial cache hit - enabling cache cleanup"
           echo "CARGO_INCREMENTAL_GC_THRESHOLD=5" >> $GITHUB_ENV
         fi
 
     - name: Output version and summary
       shell: bash
       run: |
-        echo "[Info] Setup complete:"
+        echo "📋 Setup complete:"
         echo "  Rust: $(rustc --version)"
         echo "  Cargo: $(cargo --version)"
         echo "  prek: $(prek --version 2>/dev/null || echo 'installed')"
