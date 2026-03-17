@@ -24,14 +24,14 @@ use futures::{
 	future::{OptionFuture, join3, join4, join5},
 };
 use ruma::{
-	DeviceId, OwnedUserId, RoomId, UserId,
+	DeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId,
 	api::client::{
 		filter::FilterDefinition,
 		sync::sync_events::{
 			self, DeviceLists,
 			v3::{
 				Filter, GlobalAccountData, InviteState, InvitedRoom, KnockState, KnockedRoom,
-				Presence, Rooms, ToDevice,
+				LeftRoom, Presence, Rooms, ToDevice,
 			},
 		},
 		uiaa::UiaaResponse,
@@ -292,7 +292,6 @@ pub(crate) async fn build_sync_events(
 				(joined_rooms, all_updates)
 			},
 		);
-
 	let left_rooms = services
 		.rooms
 		.state_cache
@@ -304,13 +303,12 @@ pub(crate) async fn build_sync_events(
 				| Ok(Some(left_room)) => Some((room_id, left_room)),
 				| Ok(None) => None,
 				| Err(err) => {
-					warn!(?err, %room_id, "error loading joined room");
+					warn!(?err, %room_id, "error loading left room");
 					None
 				},
 			}
 		})
-		.collect();
-
+		.collect::<BTreeMap<OwnedRoomId, LeftRoom>>();
 	let invited_rooms = services
 		.rooms
 		.state_cache
@@ -415,8 +413,33 @@ pub(crate) async fn build_sync_events(
 	let (account_data, ephemeral, device_one_time_keys_count, keys_changed, rooms) = top;
 	let ((), to_device_events, presence_updates) = ephemeral;
 	let (joined_rooms, left_rooms, invited_rooms, knocked_rooms) = rooms;
-	let (joined_rooms, mut device_list_updates) = joined_rooms;
+	let (mut joined_rooms, mut device_list_updates) = joined_rooms;
 	device_list_updates.changed.extend(keys_changed);
+
+	// #779: rooms_joined() uses a RocksDB prefix iterator that may miss
+	// recently-joined rooms due to snapshot isolation. Check the in-memory
+	// recently-joined set for any rooms that fell through.
+	let recently_joined = services.rooms.state_cache.recently_joined_rooms(
+		syncing_user,
+		current_count,
+		last_sync_end_count,
+	);
+	for room_id in recently_joined {
+		if joined_rooms.contains_key(&room_id)
+			|| left_rooms.contains_key(&room_id)
+			|| invited_rooms.contains_key(&room_id)
+		{
+			continue;
+		}
+		warn!("#779: loading recently-joined room {room_id} missed by iterator");
+		if let Ok((room, updates)) = load_joined_room(services, context, room_id.clone()).await {
+			device_list_updates.merge(updates);
+
+			if !room.is_empty() {
+				joined_rooms.insert(room_id, room);
+			}
+		}
+	}
 
 	let response = sync_events::v3::Response {
 		account_data: GlobalAccountData { events: account_data },
