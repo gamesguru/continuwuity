@@ -55,6 +55,24 @@ pub(super) async fn auth(
 	json_body: Option<&CanonicalJsonValue>,
 	metadata: &Metadata,
 ) -> Result<Auth> {
+	let expected_login_metadata = &ruma::api::client::session::login::v3::Request::METADATA;
+	let expected_ping_metadata =
+		&ruma::api::client::appservice::request_ping::v1::Request::METADATA;
+
+	let stack_var = 0u8;
+	if request.parts.uri.path().contains("/login") {
+		tracing::info!(
+			"AUTH_DEBUG: URI: {} {}, Metadata ptr: {:p}, Stack pointer: {:p}, Expected login \
+			 ptr: {:p}, Expected ping ptr: {:p}",
+			&request.parts.method,
+			&request.parts.uri,
+			metadata,
+			&stack_var,
+			expected_login_metadata,
+			expected_ping_metadata,
+		);
+	}
+
 	let bearer: Option<TypedHeader<Authorization<Bearer>>> =
 		request.parts.extract().await.unwrap_or(None);
 	let token = match &bearer {
