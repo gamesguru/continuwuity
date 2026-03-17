@@ -2032,3 +2032,13 @@
 # web->synapseHTTPAntispam->authorization
 #
 #secret =
+
+#[global.experimental_features]
+
+# MSC3266: room previews
+#
+#msc3266_enabled = false
+
+# MSC4222: state_after in sync v2
+#
+#msc4222_enabled = false

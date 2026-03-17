@@ -2112,6 +2112,11 @@ pub struct Config {
 	#[serde(default)]
 	pub matrix_rtc: MatrixRtcConfig,
 
+	/// Experimental features
+	/// display: nested
+	#[serde(default)]
+	pub experimental_features: ExperimentalConfig,
+
 	#[serde(flatten)]
 	#[allow(clippy::zero_sized_map_values)]
 	// this is a catchall, the map shouldn't be zero at runtime
@@ -2432,6 +2437,22 @@ pub struct DraupnirConfig {
 	/// The authentication secret defined in
 	/// web->synapseHTTPAntispam->authorization
 	pub secret: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[config_example_generator(
+	filename = "conduwuit-example.toml",
+	section = "global.experimental_features",
+	optional = "true"
+)]
+pub struct ExperimentalConfig {
+	/// MSC3266: room previews
+	#[serde(default)]
+	pub msc3266_enabled: bool,
+
+	/// MSC4222: state_after in sync v2
+	#[serde(default)]
+	pub msc4222_enabled: bool,
 }
 
 const DEPRECATED_KEYS: &[&str] = &[
