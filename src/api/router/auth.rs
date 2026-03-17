@@ -173,10 +173,20 @@ pub(super) async fn auth(
 				ErrorKind::Unauthorized,
 				"Only server signatures should be used on this endpoint.",
 			)),
-		| (AuthScheme::AppserviceToken, Token::User(_)) => Err(Error::BadRequest(
-			ErrorKind::Unauthorized,
-			"Only appservice access tokens should be used on this endpoint.",
-		)),
+		| (AuthScheme::AppserviceToken, Token::User(_)) => {
+			tracing::error!(
+				"AUTH_CORRUPTION_DETECTED: metadata.authentication is AppserviceToken but token \
+				 is User. URI: {} {}, Metadata pointer: {:p}, Authentication scheme: {:?}",
+				&request.parts.method,
+				&request.parts.uri,
+				metadata,
+				metadata.authentication,
+			);
+			Err(Error::BadRequest(
+				ErrorKind::Unauthorized,
+				"Only appservice access tokens should be used on this endpoint.",
+			))
+		},
 		| (AuthScheme::None, Token::Invalid) => {
 			// OpenID federation endpoint uses a query param with the same name, drop this
 			// once query params for user auth are removed from the spec. This is
