@@ -15,7 +15,7 @@ RESULTS_FILE="${3:-"${RESULTS_FILE:-tests/test_results/complement/test_results.j
 # The base docker image to use for complement tests
 # You can build the default with `docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .`
 # after running `cargo build`. Only the debug binary is used.
-COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
+COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-conduwuit:complement}"
 
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
 # This can be overridden by environment variable
@@ -90,7 +90,7 @@ fi
 
 # Common flags for both test runners
 TEST_FLAGS=(
-    # -tags "conduwuit_blacklist"
+    -tags "conduwuit_blacklist"
     -skip "$SKIPPED_COMPLEMENT_TESTS"
     -run "$RUN_TESTS"
     -p "$COMPLEMENT_PARALLEL"
