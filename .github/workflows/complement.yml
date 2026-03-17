@@ -18,7 +18,7 @@ jobs:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
     if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_COMPLEMENT_TESTS_COMPLEMENT_TESTS != ''
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}${{ matrix.arch == 'arm64' && '-arm' || '' }}
     env:
       FEATURES: "direct_tls"
 
@@ -30,6 +30,18 @@ jobs:
             os: ubuntu-22.04
             profile: release
           - arch: amd64
+            os: ubuntu-24.04
+            profile: release
+          - arch: arm64
+            prebuilt_arch: arm64-cortex-a76
+            target_cpu: cortex-a76
+            jemalloc_lg_page: 16
+            os: ubuntu-22.04
+            profile: release
+          - arch: arm64
+            prebuilt_arch: arm64-cortex-a76
+            target_cpu: cortex-a76
+            jemalloc_lg_page: 16
             os: ubuntu-24.04
             profile: release
 
@@ -67,13 +79,14 @@ jobs:
 
       - name: Detect best CPU target
         id: cpu
+        if: matrix.arch == 'amd64'
         uses: ./.github/actions/get-cpu-target
 
       - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ${{ matrix.os }}
-          arch: ${{ steps.cpu.outputs.target }}
+          arch: ${{ matrix.prebuilt_arch || steps.cpu.outputs.target }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -89,6 +102,8 @@ jobs:
         env:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
+          JEMALLOC_SYS_WITH_LG_PAGE: ${{ matrix.jemalloc_lg_page || '' }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.target_cpu != '' && format('-C target-cpu={0}', matrix.target_cpu) || '' }}
         run: SKIP_CONFIRM=1 make build PROFILE=${{ matrix.profile }} CARGO_FLAGS="--profile ${{ matrix.profile }} --features direct_tls"
 
       - name: Sanity check binary
@@ -111,7 +126,7 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.os }}
+          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}
           path: |
             target/latest/conduwuit
             target/latest/conduwuit.asc
@@ -136,6 +151,10 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@latest
 
+      - name: Configure Docker Network Firewall
+        run: |
+          sudo ufw allow in on br-+ comment "(from Matrix Complement testing) Allow traffic from custom Docker networks to the host machine (host.docker.internal)" || true
+
       - name: Run Complement tests
         run: |
           ./bin/complement ./complement-src
@@ -151,7 +170,7 @@ jobs:
       - name: Upload test logs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: complement-logs-${{ matrix.os }}
+          name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}
           path: |
             tests/test_results/complement/test_results.jsonl
             tests/test_results/complement/test_logs.jsonl
