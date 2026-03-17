@@ -43,7 +43,7 @@ jobs:
           source_branch: main
           source_remote: upstream
           dest_remote: origin
-          mode: force
+          mode: merge
 
       # - name: "Sync main [from github: gamesguru/continuwuity]"
       #   uses: ./.github/actions/git-sync
