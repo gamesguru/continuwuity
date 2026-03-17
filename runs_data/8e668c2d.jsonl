@@ -484,8 +484,8 @@
 {"Action":"fail","Test":"TestRelationsPagination"}
 {"Action":"fail","Test":"TestRelationsPaginationSync"}
 {"Action":"pass","Test":"TestRemoteAliasRequestsUnderstandUnicode"}
-{"Action":"fail","Test":"TestRemotePngThumbnail"}
-{"Action":"fail","Test":"TestRemotePngThumbnail/test_/_matrix/client/v1/media_endpoint"}
+{"Action":"pass","Test":"TestRemotePngThumbnail"}
+{"Action":"pass","Test":"TestRemotePngThumbnail/test_/_matrix/client/v1/media_endpoint"}
 {"Action":"pass","Test":"TestRemotePngThumbnail/test_/_matrix/media/v3_endpoint"}
 {"Action":"fail","Test":"TestRemotePresence"}
 {"Action":"fail","Test":"TestRemotePresence/Presence_changes_are_also_reported_to_remote_room_members"}
@@ -694,7 +694,7 @@
 {"Action":"pass","Test":"TestToDeviceMessages"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/good_connectivity"}
-{"Action":"pass","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity"}
+{"Action":"fail","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation/stopped_server"}
 {"Action":"fail","Test":"TestTxnIdWithRefreshToken"}
 {"Action":"fail","Test":"TestTxnIdempotency"}
