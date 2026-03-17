@@ -2,24 +2,13 @@ use std::sync::{Arc, Mutex};
 
 use rocksdb::WriteBatchWithTransaction;
 
+#[derive(Default)]
 pub struct TransactionContext {
 	pub batch: WriteBatchWithTransaction<false>,
 	pub on_commit: Vec<Box<dyn FnOnce() + Send>>,
 	pub on_rollback: Vec<Box<dyn FnOnce() + Send>>,
 	pub on_finish: Vec<Box<dyn FnOnce() + Send>>,
 	pub committed: bool,
-}
-
-impl Default for TransactionContext {
-	fn default() -> Self {
-		Self {
-			batch: Default::default(),
-			on_commit: Vec::new(),
-			on_rollback: Vec::new(),
-			on_finish: Vec::new(),
-			committed: false,
-		}
-	}
 }
 
 impl Drop for TransactionContext {
@@ -33,7 +22,7 @@ impl Drop for TransactionContext {
 					let msg = e
 						.downcast_ref::<&'static str>()
 						.copied()
-						.or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+						.or_else(|| e.downcast_ref::<String>().map(String::as_str))
 						.unwrap_or("Box<dyn Any>");
 					tracing::error!("on_rollback hook panicked: {}", msg);
 				}
@@ -46,7 +35,7 @@ impl Drop for TransactionContext {
 				let msg = e
 					.downcast_ref::<&'static str>()
 					.copied()
-					.or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+					.or_else(|| e.downcast_ref::<String>().map(String::as_str))
 					.unwrap_or("Box<dyn Any>");
 				tracing::error!("on_finish hook panicked: {}", msg);
 			}

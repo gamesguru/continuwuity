@@ -203,7 +203,7 @@ impl Service {
 		debug_info!("Resetting presence for active users...");
 		let mut reset = 0_usize;
 
-		let mut presence_stream = Box::pin(self.db.presence_since(0));
+		let mut presence_stream = Box::pin(self.db.presence_since(0, None));
 		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
 			if !self.services.server.running() {
 				info!("Shutdown requested during presence reset.");

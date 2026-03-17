@@ -263,7 +263,7 @@ impl Data {
 			.ok_or_else(|| err!(Request(NotFound("No next PDU found"))))?;
 		let (mut next_pdu_id, _) = result?;
 
-		if &*next_pdu_id == after_pdu.as_bytes() {
+		if next_pdu_id == after_pdu.as_bytes() {
 			let result = stream
 				.next()
 				.await

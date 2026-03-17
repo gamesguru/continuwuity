@@ -139,7 +139,7 @@ impl Database {
 				let msg = e
 					.downcast_ref::<&'static str>()
 					.copied()
-					.or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+					.or_else(|| e.downcast_ref::<String>().map(String::as_str))
 					.unwrap_or("Box<dyn Any>");
 				tracing::error!("on_finish hook panicked: {}", msg);
 			}
@@ -158,7 +158,7 @@ impl Database {
 				let msg = e
 					.downcast_ref::<&'static str>()
 					.copied()
-					.or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+					.or_else(|| e.downcast_ref::<String>().map(String::as_str))
 					.unwrap_or("Box<dyn Any>");
 				tracing::error!("on_commit hook panicked: {}", msg);
 			}

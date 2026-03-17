@@ -141,43 +141,41 @@ pub async fn leave_room(
 			)
 			.await;
 
-		let should_return_early = services
-			.db
-			.transaction(|| async move {
-				match user_member_event_content {
-					| Ok(content) => {
-						// This prepending and anti-fallback context safely sends the final state
-						// down
-						services
-							.rooms
-							.timeline
-							.build_and_append_pdu(
-								PduBuilder::state(user_id.to_string(), &RoomMemberEventContent {
-									membership: MembershipState::Leave,
-									reason,
-									join_authorized_via_users_server: None,
-									is_direct: None,
-									..content
-								}),
-								user_id,
-								Some(room_id),
-								&state_lock,
-							)
-							.await?;
+		let should_return_early = Box::pin(services.db.transaction(|| async move {
+			match user_member_event_content {
+				| Ok(content) => {
+					// This prepending and anti-fallback context safely sends the final state
+					// down
+					services
+						.rooms
+						.timeline
+						.build_and_append_pdu(
+							PduBuilder::state(user_id.to_string(), &RoomMemberEventContent {
+								membership: MembershipState::Leave,
+								reason,
+								join_authorized_via_users_server: None,
+								is_direct: None,
+								..content
+							}),
+							user_id,
+							Some(room_id),
+							&state_lock,
+						)
+						.await?;
 
-						// build_and_append_pdu calls mark_as_left. Avoids fallback logic below.
-						services
-							.rooms
-							.state_cache
-							.update_joined_count(room_id)
-							.await;
+					// build_and_append_pdu calls mark_as_left. Avoids fallback logic below.
+					services
+						.rooms
+						.state_cache
+						.update_joined_count(room_id)
+						.await;
 
-						Ok(true)
-					},
-					| Err(_) => Ok(false),
-				}
-			})
-			.await?;
+					Ok(true)
+				},
+				| Err(_) => Ok(false),
+			}
+		}))
+		.await?;
 
 		if should_return_early {
 			return Ok(());

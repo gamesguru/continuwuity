@@ -830,8 +830,15 @@ async fn join_room_by_id_helper_local(
 		"Could not join room locally, attempting remote join",
 	);
 
-	join_room_by_id_helper_remote(services, sender_user, room_id, reason, servers, state_lock)
-		.await
+	Box::pin(join_room_by_id_helper_remote(
+		services,
+		sender_user,
+		room_id,
+		reason,
+		servers,
+		state_lock,
+	))
+	.await
 }
 
 async fn make_join_request(
