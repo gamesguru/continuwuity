@@ -213,6 +213,8 @@ jobs:
           features: ${{ env.FEATURES }}
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
+          os: ${{ matrix.os }}
+          test_results_path: tests/test_results/complement/test_results.jsonl
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'

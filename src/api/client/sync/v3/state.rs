@@ -127,7 +127,7 @@ pub(super) async fn build_state_incremental<'a>(
 		let last_pdu_of_last_sync = services
 			.rooms
 			.timeline
-			.pdus_rev(room_id, Some(last_sync_end_count.saturating_add(1)))
+			.pdus_rev(room_id, Some(last_sync_end_count.saturating_add(1)), None)
 			.boxed()
 			.next()
 			.await
@@ -265,12 +265,7 @@ pub(super) async fn build_state_incremental<'a>(
 	// finally, fetch the PDU contents and collect them into a vec
 	let state_diff_pdus = state_diff
 		.broad_filter_map(|event_id| async move {
-			services
-				.rooms
-				.timeline
-				.get_non_outlier_pdu(&event_id)
-				.await
-				.ok()
+			services.rooms.timeline.get_pdu(&event_id).await.ok()
 		})
 		.collect::<Vec<_>>()
 		.await;

@@ -662,9 +662,9 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	debug!("Saving compressed state");
-	let (statehash_before_join, added, removed) = services
+	services
 		.db
-		.transaction(|| async {
+		.transaction(|| async move {
 			let HashSetCompressStateEvent {
 				shortstatehash: statehash_before_join,
 				added,
@@ -675,58 +675,82 @@ async fn join_room_by_id_helper_remote(
 				.save_state(room_id, Arc::new(compressed))
 				.await?;
 
-			Ok((statehash_before_join, added, removed))
+			// We must set the room state so append_to_state knows the room's parent state.
+			// Otherwise it will generate an amputated state containing only the join event.
+			info!("Setting room state before appending PDU");
+			services
+				.rooms
+				.state
+				.set_room_state(room_id, statehash_before_join, &state_lock);
+
+			// We append to state before appending the pdu, so we avoid a "stateless" PDU
+			// hot potato situation. If append_pdu fails, the state will have been updated
+			// but the pdu will not exist — retrying or resetting state solves this.
+			let statehash_after_join = services
+				.rooms
+				.state
+				.append_to_state(&parsed_join_pdu, room_id)
+				.await?;
+
+			info!("Appending new room join event");
+			services
+				.rooms
+				.timeline
+				.append_pdu(
+					&parsed_join_pdu,
+					join_event,
+					once(parsed_join_pdu.event_id.borrow()),
+					&state_lock,
+					room_id,
+				)
+				.await?;
+
+			let mut added = Arc::unwrap_or_clone(added);
+			added.insert(
+				services
+					.rooms
+					.state_compressor
+					.compress_state_event(
+						services
+							.rooms
+							.short
+							.get_or_create_shortstatekey(
+								&StateEventType::RoomMember,
+								sender_user.as_str(),
+							)
+							.await,
+						&parsed_join_pdu.event_id,
+					)
+					.await,
+			);
+			let added = Arc::new(added);
+
+			// We set the room state after inserting the pdu for state consistency
+			info!("Setting final room state for new room");
+			services
+				.rooms
+				.state
+				.set_room_state(room_id, statehash_after_join, &state_lock);
+
+			// Now we force the state into cache. If this is done earlier, the membership
+			// change can trigger a sync which fails to find the room state (issue #779).
+			debug!("Forcing state for new room");
+			services
+				.rooms
+				.state
+				.force_state(room_id, statehash_after_join, added, removed, &state_lock)
+				.await?;
+
+			debug!("Updating joined counts for new room");
+			services
+				.rooms
+				.state_cache
+				.update_joined_count(room_id)
+				.await;
+
+			Ok(())
 		})
 		.await?;
-
-	// We append to state before appending the pdu, so we don't have a moment in
-	// time with the pdu without its state. If append_pdu fails, the state will
-	// have been updated but the pdu will not exist — a subsequent retry or state
-	// reset will reconcile this.
-	let statehash_after_join = services
-		.rooms
-		.state
-		.append_to_state(&parsed_join_pdu, room_id)
-		.await?;
-
-	info!("Appending new room join event");
-	services
-		.rooms
-		.timeline
-		.append_pdu(
-			&parsed_join_pdu,
-			join_event,
-			once(parsed_join_pdu.event_id.borrow()),
-			&state_lock,
-			room_id,
-		)
-		.await?;
-
-	info!("Setting final room state for new room");
-	// We set the room state after inserting the pdu, so that we never have a moment
-	// in time where events in the current room state do not exist
-	services
-		.rooms
-		.state
-		.set_room_state(room_id, statehash_after_join, &state_lock);
-
-	// Now that the room state is fully saved and the PDU is appended, we can safely
-	// force the state into the caches. If this is done earlier, the user's
-	// membership change will trigger a sync which will fail to find the room
-	// state.
-	debug!("Forcing state for new room");
-	services
-		.rooms
-		.state
-		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
-		.await?;
-
-	debug!("Updating joined counts for new room");
-	services
-		.rooms
-		.state_cache
-		.update_joined_count(room_id)
-		.await;
 
 	Ok(())
 }
@@ -806,9 +830,6 @@ async fn join_room_by_id_helper_local(
 		"Could not join room locally, attempting remote join",
 	);
 
-	// `Box::pin` is required here to break the future recursion cycle between
-	// `join_room_by_id_helper_local` and `join_room_by_id_helper_remote`.
-	// Removing it results in an infinite size future and an E0733 compile error.
 	Box::pin(join_room_by_id_helper_remote(
 		services,
 		sender_user,

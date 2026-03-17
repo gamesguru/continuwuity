@@ -659,12 +659,14 @@ async fn knock_room_helper_remote(
 		.save_state(room_id, Arc::new(compressed))
 		.await?;
 
-	debug!("Forcing state for new room");
+	// We must set the room state so append_to_state knows the room's parent state.
+	// Otherwise it will generate an amputated state containing only the knock
+	// event.
+	info!("Setting room state before appending PDU");
 	services
 		.rooms
 		.state
-		.force_state(room_id, statehash_before_knock, added, removed, &state_lock)
-		.await?;
+		.set_room_state(room_id, statehash_before_knock, &state_lock);
 
 	let statehash_after_knock = services
 		.rooms
@@ -700,6 +702,13 @@ async fn knock_room_helper_remote(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_knock, &state_lock);
+
+	debug!("Forcing state for new room");
+	services
+		.rooms
+		.state
+		.force_state(room_id, statehash_after_knock, added, removed, &state_lock)
+		.await?;
 
 	Ok(())
 }

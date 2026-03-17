@@ -81,18 +81,20 @@ impl Database {
 	/// All operations that go through [`transaction::TRANSACTION_BATCH`]
 	/// (currently [`Map::insert`] and [`Map::remove`]) are buffered into a
 	/// single [`WriteBatch`](rocksdb::WriteBatchWithTransaction). If the
-	/// closure returns `Ok`, that batch is written atomically; if it returns
-	/// an error the batch is dropped without being written (rollback).
+	/// closure returns `Ok`, that batch is committed atomically; if it
+	/// returns an error the batch is dropped without writing (rollback).
 	///
 	/// Other write paths that bypass [`transaction::TRANSACTION_BATCH`]
-	/// (such as direct `write_opt`/`put_cf_opt` calls or `insert_batch`)
-	/// are **not** included in this batch and will commit immediately even
+	/// (i.e., direct `write_opt`/`put_cf_opt` calls or `insert_batch`)
+	/// are NOT included in this batch and WILL commit immediately, even
 	/// when invoked inside the closure. Callers must ensure they only use
 	/// transaction-aware APIs inside this method if they require atomicity.
 	///
-	/// **Note:** Nested transactions are not supported. Calling `transaction`
-	/// inside another `transaction` closure will shadow the outer batch,
-	/// splitting operations across two independent writes.
+	/// **Note:** Nested transactions are not supported. Calling
+	/// [`Database::transaction`] from within another `transaction` closure
+	/// will cause a panic at runtime (via an internal assertion) instead of
+	/// creating a new independent batch. Callers must avoid invoking this
+	/// method reentrantly and should use a single outer transaction.
 	pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
 	where
 		F: FnOnce() -> Fut,
@@ -100,15 +102,12 @@ impl Database {
 	{
 		use std::sync::Mutex;
 
-		use rocksdb::WriteBatchWithTransaction;
-
 		assert!(
 			transaction::TRANSACTION_BATCH.try_with(|_| ()).is_err(),
 			"Nested Database::transaction() calls are not supported and break atomicity."
 		);
 
-		let batch =
-			Arc::new(Mutex::new((WriteBatchWithTransaction::<false>::default(), Vec::new())));
+		let batch = Arc::new(Mutex::new(transaction::TransactionContext::default()));
 
 		let res = transaction::TRANSACTION_BATCH
 			.scope(batch.clone(), async { f().await })
@@ -118,18 +117,84 @@ impl Database {
 		let write_options = map::write_options_default(&self.db);
 		self.db
 			.db
-			.write_opt(&batch_guard.0, &write_options)
+			.write_opt(&batch_guard.batch, &write_options)
 			.or_else(or_else)?;
+
+		// Mark as committed immediately after successful write.
+		batch_guard.committed = true;
+
+		// Move closures out of mutex-protected struct, then drop the guard
+		// (before executing them, to avoid holding mutex during arbitrary callbacks).
+		let wake_closures = std::mem::take(&mut batch_guard.on_commit);
+		let finish_closures = std::mem::take(&mut batch_guard.on_finish);
+		_ = std::mem::take(&mut batch_guard.on_rollback);
+		drop(batch_guard);
+
+		for finish_closure in finish_closures {
+			// Ensure that a panic in one finish hook does not prevent subsequent hooks
+			// from running, and does not unwind past this point after the transaction
+			// has already been committed.
+			if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(finish_closure))
+			{
+				let msg = e
+					.downcast_ref::<&'static str>()
+					.copied()
+					.or_else(|| e.downcast_ref::<String>().map(String::as_str))
+					.unwrap_or("Box<dyn Any>");
+				tracing::error!("on_finish hook panicked: {}", msg);
+			}
+		}
 
 		if !self.db.corked() {
 			self.db.flush().expect("database flush error");
 		}
 
-		for wake_closure in batch_guard.1.drain(..) {
-			wake_closure();
+		for wake_closure in wake_closures {
+			// Ensure panic in one on-commit hook does not prevent a subsequent hook from
+			// running, and does not unwind past this point if the txn is committed.
+			if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				wake_closure();
+			})) {
+				let msg = e
+					.downcast_ref::<&'static str>()
+					.copied()
+					.or_else(|| e.downcast_ref::<String>().map(String::as_str))
+					.unwrap_or("Box<dyn Any>");
+				tracing::error!("on_commit hook panicked: {}", msg);
+			}
 		}
 
 		Ok(res)
+	}
+
+	/// Adds a closure to execute after the current txn successfully commits.
+	/// Returns true if the closure was successfully added to a transaction,
+	/// false if there is no active transaction.
+	pub fn push_on_commit<F>(&self, f: F) -> bool
+	where
+		F: FnOnce() + Send + 'static,
+	{
+		transaction::push_on_commit(f)
+	}
+
+	/// Adds a closure to execute if the current transaction is rolled back.
+	/// Returns true if the closure was successfully added to a transaction,
+	/// false if there is no active transaction.
+	pub fn push_on_rollback<F>(&self, f: F) -> bool
+	where
+		F: FnOnce() + Send + 'static,
+	{
+		transaction::push_on_rollback(f)
+	}
+
+	/// Adds a closure to execute when the transaction finishes (commits or
+	/// rolls back). Returns true if the closure was successfully added to a
+	/// transaction, false if there is no active transaction.
+	pub fn push_on_finish<F>(&self, f: F) -> bool
+	where
+		F: FnOnce() + Send + 'static,
+	{
+		transaction::push_on_finish(f)
 	}
 }
 
@@ -148,30 +213,335 @@ mod transaction_tests {
 	use super::*;
 
 	#[tokio::test]
-	#[should_panic(
-		expected = "Nested Database::transaction() calls are not supported and break atomicity."
-	)]
-	async fn test_nested_transaction_panics() {
-		// Mock config and database initialization.
-		// Testing this directly is tricky because Database::load requires
-		// setting up proper args, config, and RocksDB directories but we
-		// can also just simulate the try_with panic manually to verify the
-		// transaction scope behaviour.
+	async fn test_try_with_succeeds_inside_scope() {
+		// Verify that try_with returns Ok inside a scope, which is how
+		// Database::transaction detects nesting.
+		let batch = Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
 
-		let batch = Arc::new(std::sync::Mutex::new((
-			rocksdb::WriteBatchWithTransaction::<false>::default(),
-			Vec::new(),
-		)));
-
-		// Here we simulate being inside an existing transaction batch:
 		transaction::TRANSACTION_BATCH
 			.scope(batch, async {
-				// Calling it again from inside the scope should trigger the assert!
 				assert!(
-					transaction::TRANSACTION_BATCH.try_with(|_| ()).is_err(),
-					"Nested Database::transaction() calls are not supported and break atomicity."
+					transaction::TRANSACTION_BATCH.try_with(|_| ()).is_ok(),
+					"try_with should succeed inside a scope"
 				);
 			})
 			.await;
+	}
+
+	#[tokio::test]
+	async fn test_push_on_commit_queues_closures() {
+		let batch = Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+
+		// Simulate being inside a transaction
+		transaction::TRANSACTION_BATCH
+			.scope(batch.clone(), async {
+				let success = transaction::push_on_commit(|| {});
+
+				assert!(success, "push_on_commit inside transaction should succeed");
+
+				let guard = batch.lock().unwrap();
+				assert_eq!(
+					guard.on_commit.len(),
+					1,
+					"Closure should be queued in the transaction batch"
+				);
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn test_push_on_rollback_queues_closures() {
+		let batch = Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+
+		// Simulate being inside a transaction
+		transaction::TRANSACTION_BATCH
+			.scope(batch.clone(), async {
+				let success = transaction::push_on_rollback(|| {});
+
+				assert!(success, "push_on_rollback inside transaction should succeed");
+
+				let guard = batch.lock().unwrap();
+				assert_eq!(
+					guard.on_rollback.len(),
+					1,
+					"Rollback closure should be queued in the transaction batch"
+				);
+			})
+			.await;
+	}
+
+	#[tokio::test]
+	async fn test_on_commit_executes_on_success() {
+		let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let ran_clone = ran.clone();
+
+		let batch = Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+		transaction::TRANSACTION_BATCH
+			.scope(batch.clone(), async move {
+				transaction::push_on_commit(move || {
+					ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+				});
+			})
+			.await;
+
+		// Simulation of successful Database::transaction completion
+		{
+			let mut guard = batch.lock().unwrap();
+			guard.committed = true;
+			let wake_closures = std::mem::take(&mut guard.on_commit);
+			drop(guard);
+			for wake_closure in wake_closures {
+				wake_closure();
+			}
+		}
+
+		assert!(
+			ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Commit closure should run when simulated commit occurs"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_on_commit_does_not_run_on_rollback() {
+		let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let ran_clone = ran.clone();
+
+		{
+			let batch =
+				Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+			transaction::TRANSACTION_BATCH
+				.scope(batch.clone(), async move {
+					transaction::push_on_commit(move || {
+						ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+					});
+				})
+				.await;
+			// batch goes out of scope and drops TransactionContext (rollback)
+		}
+
+		assert!(
+			!ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Commit closure should NOT run when transaction rolls back"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_on_rollback_executes_on_drop() {
+		let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let ran_clone = ran.clone();
+
+		{
+			let batch =
+				Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+			transaction::TRANSACTION_BATCH
+				.scope(batch.clone(), async move {
+					transaction::push_on_rollback(move || {
+						ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+					});
+				})
+				.await;
+			// batch goes out of scope here and drops TransactionContext
+		}
+
+		assert!(
+			ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Rollback closure should run when TransactionContext is dropped without being \
+			 committed"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_on_rollback_does_not_run_if_committed() {
+		let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let ran_clone = ran.clone();
+
+		{
+			let batch =
+				Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+			transaction::TRANSACTION_BATCH
+				.scope(batch.clone(), async move {
+					transaction::push_on_rollback(move || {
+						ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+					});
+
+					let mut guard = batch.lock().unwrap();
+					guard.committed = true;
+				})
+				.await;
+		}
+
+		assert!(
+			!ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Rollback closure should NOT run when TransactionContext is dropped after being \
+			 committed"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_on_finish_executes_on_success() {
+		let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let ran_clone = ran.clone();
+
+		{
+			let batch =
+				Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+			transaction::TRANSACTION_BATCH
+				.scope(batch.clone(), async move {
+					transaction::push_on_finish(move || {
+						ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+					});
+				})
+				.await;
+
+			// Simulation of successful Database::transaction completion
+			{
+				let mut guard = batch.lock().unwrap();
+				guard.committed = true;
+			}
+			// batch goes out of scope and drops TransactionContext
+		}
+
+		assert!(
+			ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Finish closure should run when simulated commit occurs"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_on_finish_executes_on_rollback() {
+		let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let ran_clone = ran.clone();
+
+		{
+			let batch =
+				Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
+			transaction::TRANSACTION_BATCH
+				.scope(batch.clone(), async move {
+					transaction::push_on_finish(move || {
+						ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+					});
+				})
+				.await;
+			// batch goes out of scope here and drops TransactionContext
+			// (rollback)
+		}
+
+		assert!(
+			ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Finish closure should run when transaction rolls back"
+		);
+	}
+
+	#[test]
+	fn test_push_on_commit_outside_transaction() {
+		// Outside of any transaction::TRANSACTION_BATCH scope
+		let success = transaction::push_on_commit(|| {});
+
+		assert!(!success, "push_on_commit outside transaction should return false");
+	}
+
+	#[test]
+	fn test_push_on_rollback_outside_transaction() {
+		// Outside of any transaction::TRANSACTION_BATCH scope
+		let success = transaction::push_on_rollback(|| {});
+
+		assert!(!success, "push_on_rollback outside transaction should return false");
+	}
+
+	#[tokio::test]
+	async fn test_database_transaction_e2e() {
+		// Figment is a configuration library used to merge multiple sources
+		// (like the .toml file and environment variables) into the Config struct.
+		use conduwuit::{
+			Config, Server,
+			log::{Log, LogLevelReloadHandles, capture},
+		};
+		use figment::Figment;
+		use tempfile::TempDir;
+
+		let temp_dir = TempDir::new().expect("Failed to create temporary database directory");
+		let db_path = temp_dir.path().to_path_buf();
+
+		let config = Figment::new()
+			.merge(("server_name", "example.com"))
+			.merge(("database_path", db_path.to_str().unwrap()))
+			.extract::<Config>()
+			.expect("Failed to create config");
+
+		let log = Log {
+			reload: LogLevelReloadHandles::default(),
+			capture: Arc::new(capture::State::default()),
+		};
+
+		let server = Arc::new(Server::new(config, None, log));
+		let db = Database::open(&server)
+			.await
+			.expect("Failed to open database");
+
+		let commit_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let rollback_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+		// Successful transaction
+		{
+			let commit_ran_clone = commit_ran.clone();
+			let rollback_ran_clone = rollback_ran.clone();
+			db.transaction(|| async {
+				db.push_on_commit(move || {
+					commit_ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+				});
+				db.push_on_rollback(move || {
+					rollback_ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+				});
+				Ok::<(), conduwuit::Error>(())
+			})
+			.await
+			.unwrap();
+		}
+
+		assert!(
+			commit_ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Commit hook should have run"
+		);
+		assert!(
+			!rollback_ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Rollback hook should NOT have run"
+		);
+
+		// Rollback transaction
+		commit_ran.store(false, std::sync::atomic::Ordering::SeqCst);
+		rollback_ran.store(false, std::sync::atomic::Ordering::SeqCst);
+
+		{
+			let commit_ran_clone = commit_ran.clone();
+			let rollback_ran_clone = rollback_ran.clone();
+			let res = db
+				.transaction(|| async {
+					db.push_on_commit(move || {
+						commit_ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+					});
+					db.push_on_rollback(move || {
+						rollback_ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+					});
+					Err::<(), conduwuit::Error>(conduwuit::err!(Request(Forbidden(
+						"test rollback"
+					))))
+				})
+				.await;
+
+			assert!(res.is_err());
+		}
+
+		assert!(
+			!commit_ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Commit hook should NOT have run on error"
+		);
+		assert!(
+			rollback_ran.load(std::sync::atomic::Ordering::SeqCst),
+			"Rollback hook should have run on error"
+		);
+
+		// Cleanup
+		drop(db);
+		let _ = std::fs::remove_dir_all(&db_path);
 	}
 }

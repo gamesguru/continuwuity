@@ -40,13 +40,15 @@ pub(crate) async fn room_initial_sync_route(
 		.map_ok(Event::into_format)
 		.try_collect::<Vec<_>>();
 
+	let state_count = services.globals.current_count()?;
+
 	// Events are returned in body
 
 	let limit = LIMIT_MAX;
 	let events = services
 		.rooms
 		.timeline
-		.pdus_rev(room_id, None)
+		.pdus_rev(room_id, None, Some(conduwuit::PduCount::Normal(state_count)))
 		.try_take(limit)
 		.and_then(async |mut pdu| {
 			pdu.1.set_unsigned(body.sender_user.as_deref());

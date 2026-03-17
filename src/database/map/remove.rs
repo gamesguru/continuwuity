@@ -43,15 +43,14 @@ where
 	K: AsRef<[u8]> + ?Sized + Debug,
 {
 	let write_options = &self.write_options;
-
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
 		.try_with(|batch| {
-			// blocking_lock is structurally safe here since TRANSACTION_BATCH
-			// is task_local! and only accessed consecutively within the same
-			// async task. Falling back with try_lock would silently break atomicity.
+			// `lock` is safe since the txn scope strictly contains the batch locally
+			// within the current execution sequence.
+			// `std::sync::Mutex` is also fine since adding to a `WriteBatch`
+			// does not do I/O and will not block the async runtime.
 			let mut batch_guard = batch.lock().expect("Transaction batch mutex poisoned");
-			let (batch, _closures) = &mut *batch_guard;
-			batch.delete_cf(&self.cf(), key.as_ref());
+			batch_guard.batch.delete_cf(&self.cf(), key.as_ref());
 		})
 		.is_ok();
 
@@ -60,7 +59,7 @@ where
 			.db
 			.delete_cf_opt(&self.cf(), key, write_options)
 			.or_else(or_else)
-			.expect("database remove error");
+			.expect("database remove::txn-cowardly error");
 
 		if !self.db.corked() {
 			self.db.flush().expect("database flush error");

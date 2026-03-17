@@ -84,6 +84,9 @@ impl Service {
 	pub fn current_count(&self) -> Result<u64> { Ok(self.db.current_count()) }
 
 	#[inline]
+	pub fn current_count_in_flight(&self) -> Result<u64> { Ok(self.db.current_count_in_flight()) }
+
+	#[inline]
 	pub fn server_name(&self) -> &ServerName { self.server.name.as_ref() }
 
 	pub fn allow_public_room_directory_over_federation(&self) -> bool {

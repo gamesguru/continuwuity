@@ -16,14 +16,19 @@ use conduwuit::{
 };
 use conduwuit_service::Services;
 use futures::{
-	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join, join3, join4, try_join, try_join3},
+	FutureExt, StreamExt,
+	future::{join, join3, join4, try_join, try_join3},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
-	api::client::sync::sync_events::{
-		UnreadNotificationsCount,
-		v3::{Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline},
+	api::client::{
+		error::ErrorKind,
+		sync::sync_events::{
+			UnreadNotificationsCount,
+			v3::{
+				Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline,
+			},
+		},
 	},
 	events::{
 		AnyRawAccountDataEvent, StateEventType,
@@ -133,7 +138,12 @@ async fn build_account_data(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn build_ephemeral(
 	services: &Services,
-	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
+	SyncContext {
+		syncing_user,
+		last_sync_end_count,
+		current_count,
+		..
+	}: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<Ephemeral> {
 	// note: some of the futures below are boxed. this is because, without the box,
@@ -145,7 +155,7 @@ async fn build_ephemeral(
 	let receipt_events = services
 		.rooms
 		.read_receipt
-		.readreceipts_since(room_id, last_sync_end_count)
+		.readreceipts_since(room_id, last_sync_end_count, Some(current_count))
 		.filter_map(async |(read_user, _, edu)| {
 			let is_ignored = services
 				.users
@@ -262,7 +272,7 @@ async fn build_state_and_timeline(
 	let (state_events, notification_counts, joined_since_last_sync) = try_join3(
 		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
+		check_joined_since_last_sync(services, room_id, shortstatehashes, sync_context),
 	)
 	.await?;
 
@@ -345,39 +355,66 @@ async fn fetch_shortstatehashes(
 	SyncContext { last_sync_end_count, current_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<ShortStateHashes> {
-	// the room state currently.
-	// TODO: this should be the room state as of `current_count`, but there's no way
-	// to get that right now.
-	let current_shortstatehash = services
+	// The absolute latest room state.
+	let latest_shortstatehash = services
 		.rooms
 		.state
 		.get_room_shortstatehash(room_id)
-		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
+		.await
+		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))?;
 
-	// the room state as of the end of the last sync.
-	// this will be None if we are doing an initial sync or if we just joined this
-	// room.
-	let last_sync_end_shortstatehash =
-		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
-			// look up the shortstatehash saved by the last sync's call to
-			// `associate_token_shortstatehash`
-			services
-				.rooms
-				.user
-				.get_token_shortstatehash(room_id, last_sync_end_count)
-				.inspect_err(move |_| {
-					debug_warn!(
-						token = last_sync_end_count,
-						"Room has no shortstatehash for this token"
-					);
-				})
-				.ok()
-		}))
-		.map(Option::flatten)
-		.map(Ok);
+	// Find the latest PDU in the room that is within our watermark.
+	let watermarked_pdu = services
+		.rooms
+		.timeline
+		.pdus_rev(room_id, Some(PduCount::Normal(current_count)), None)
+		.ignore_err()
+		.boxed()
+		.next()
+		.await;
 
-	let (current_shortstatehash, last_sync_end_shortstatehash) =
-		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
+	// Use the state hash from the watermarked PDU, or fallback to the latest
+	// if no PDU is found (which shouldn't happen for a joined room unless
+	// it's a fresh join that we are clamping).
+	let mut current_shortstatehash = latest_shortstatehash;
+	if let Some((_, pdu)) = watermarked_pdu {
+		if let Ok(hash) = services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(&pdu.event_id)
+			.await
+		{
+			current_shortstatehash = hash;
+		}
+	}
+
+	let mut last_sync_end_shortstatehash = None;
+	if let Some(last_sync_end_count) = last_sync_end_count {
+		// First try the cache lookup
+		match services
+			.rooms
+			.user
+			.get_token_shortstatehash(room_id, last_sync_end_count)
+			.await
+		{
+			| Ok(hash) => {
+				warn!(%room_id, %last_sync_end_count, %hash, "token cache HIT");
+				last_sync_end_shortstatehash = Some(hash);
+			},
+			| Err(conduwuit::Error::BadRequest(ErrorKind::NotFound, _)) => {
+				warn!(%room_id, %last_sync_end_count, "token cache MISS");
+			},
+			| Err(e) => {
+				// Actual database error
+				return Err(e);
+			},
+		}
+
+		// If the token cache missed, this means the user was NOT in this room
+		// during their last sync (newly joined room). Leave
+		// `last_sync_end_shortstatehash` as None so the fresh-join path is
+		// taken (in check_joined_since_last_sync and build_state_events).
+	}
 
 	/*
 	associate the `current_count` with the `current_shortstatehash`, so we can
@@ -593,38 +630,70 @@ async fn build_notification_counts(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn check_joined_since_last_sync(
 	services: &Services,
-	ShortStateHashes { last_sync_end_shortstatehash, .. }: ShortStateHashes,
-	SyncContext { syncing_user, .. }: SyncContext<'_>,
+	room_id: &RoomId,
+	ShortStateHashes {
+		last_sync_end_shortstatehash,
+		current_shortstatehash,
+	}: ShortStateHashes,
+	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
 ) -> Result<bool> {
-	// fetch the syncing user's membership event during the last sync.
-	// this will be None if `previous_sync_end_shortstatehash` is None.
-	let membership_during_previous_sync = match last_sync_end_shortstatehash {
-		| Some(last_sync_end_shortstatehash) => services
-			.rooms
-			.state_accessor
-			.state_get_content(
-				last_sync_end_shortstatehash,
-				&StateEventType::RoomMember,
-				syncing_user.as_str(),
-			)
-			.await
-			.inspect_err(|_| debug_warn!("User has no previous membership"))
-			.ok(),
-		| None => None,
-	};
-
 	// TODO: If the requesting user got state-reset out of the room, this
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
 	// the root cause of this needs to be addressed
-	let joined_since_last_sync =
-		membership_during_previous_sync.is_none_or(|content: RoomMemberEventContent| {
-			content.membership != MembershipState::Join
-		});
+	let joined_since_last_sync = if let Some(_last_sync_end_count) = last_sync_end_count {
+		// Incremental sync
+		// fetch the syncing user's membership event during the last sync.
+		// this will be None if `previous_sync_end_shortstatehash` is None.
+		let membership_during_previous_sync = match last_sync_end_shortstatehash {
+			| Some(last_sync_end_shortstatehash) => services
+				.rooms
+				.state_accessor
+				.state_get_content(
+					last_sync_end_shortstatehash,
+					&StateEventType::RoomMember,
+					syncing_user.as_str(),
+				)
+				.await
+				.inspect_err(|_| debug_warn!("User has no previous membership"))
+				.ok(),
+			| None => None,
+		};
 
-	if joined_since_last_sync {
-		trace!("user joined since last sync");
-	}
+		let membership_during_current_sync: Option<RoomMemberEventContent> = services
+			.rooms
+			.state_accessor
+			.state_get_content(
+				current_shortstatehash,
+				&StateEventType::RoomMember,
+				syncing_user.as_str(),
+			)
+			.await
+			.ok();
+
+		// If we can resolve the previous membership event, check if it was NOT Join.
+		// If we couldn't resolve it (None), default to true (assuming a fresh join)
+		// because treating it as false causes missing state events.
+		let joined_since_last_sync = membership_during_previous_sync.as_ref().is_none_or(
+			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
+		) && membership_during_current_sync.as_ref().is_some_and(
+			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
+		);
+
+		if joined_since_last_sync && membership_during_previous_sync.is_some() {
+			warn!(
+				%room_id,
+				user_joined_since_last_sync = syncing_user.as_str(),
+				?last_sync_end_shortstatehash,
+				membership = ?membership_during_previous_sync,
+			);
+		}
+
+		joined_since_last_sync
+	} else {
+		// Initial sync
+		false
+	};
 
 	Ok(joined_since_last_sync)
 }
@@ -849,4 +918,42 @@ async fn build_device_list_updates(
 	}
 
 	Ok(device_list_updates)
+}
+
+#[cfg(test)]
+mod tests {
+	use ruma::events::room::member::{MembershipState, RoomMemberEventContent};
+
+	#[test]
+	fn test_joined_since_last_sync() {
+		let join_content = RoomMemberEventContent::new(MembershipState::Join);
+		let leave_content = RoomMemberEventContent::new(MembershipState::Leave);
+		let invite_content = RoomMemberEventContent::new(MembershipState::Invite);
+
+		// test matrix: (previous_membership, current_membership, expected_result)
+		let cases = vec![
+			// Case 1: normal incremental sync (already joined, still joined)
+			(Some(&join_content), Some(&join_content), false),
+			// Case 2: genuinely new join (was not in room, now joined) -> SHOULD BE TRUE
+			(None, Some(&join_content), true),
+			// Case 3: rejoined room (previously left, now joined) -> SHOULD BE TRUE
+			(Some(&leave_content), Some(&join_content), true),
+			// Case 4: joined from invite (previously invited, now joined) -> SHOULD BE TRUE
+			(Some(&invite_content), Some(&join_content), true),
+			// Case 5: left room (was joined, now left) -> SHOULD BE FALSE
+			(Some(&join_content), Some(&leave_content), false),
+			// Case 6: corrupted database state (not in room previously, but not joined now)
+			(None, Some(&leave_content), false),
+		];
+
+		for (prev, curr, expected) in cases {
+			let result = prev.is_none_or(|content: &RoomMemberEventContent| {
+				content.membership != MembershipState::Join
+			}) && curr.is_some_and(|content: &RoomMemberEventContent| {
+				content.membership == MembershipState::Join
+			});
+
+			assert_eq!(result, expected, "Failed for prev={prev:?}, curr={curr:?}");
+		}
+	}
 }
