@@ -1,6 +1,6 @@
 ---
 name: "Git Sync"
-description: "Syncs branches between remotes via merge or force push"
+description: "Syncs branches between remotes via merge, rebase, or force push"
 inputs:
   source_branch:
     description: "Source branch name"
@@ -15,7 +15,7 @@ inputs:
     description: "Target branch name (defaults to source_branch)"
     required: false
   mode:
-    description: "Sync mode: merge or force"
+    description: "Sync mode: merge, force, or rebase"
     default: "merge"
   allow_unrelated:
     description: "Allow unrelated histories during merge"
@@ -39,40 +39,38 @@ runs:
         echo "Fetching $BRANCH from $SRC..."
         if git fetch "$SRC" "$BRANCH"; then
           SRC_COMMIT=$(git rev-parse FETCH_HEAD)
+
+          # Determine Sync Command & Push Flags
           if [[ "$MODE" == "force" ]]; then
-            echo "Updating $DST_BRANCH branch (force)..."
-            git checkout -B "$DST_BRANCH" "$SRC_COMMIT"
-            echo "Pushing to $DST..."
-            git push "$DST" "$DST_BRANCH" --force --no-verify
+            CMD="reset --hard"
+            PUSH_FLAGS="--force"
+          elif [[ "$MODE" == "rebase" ]]; then
+            CMD="rebase"
+            PUSH_FLAGS="--force-with-lease"
           else
-            echo "Fetching $DST_BRANCH from $DST..."
-            git fetch "$DST" "$DST_BRANCH" || true
-
-            if git show-ref --verify --quiet "refs/remotes/$DST/$DST_BRANCH"; then
-              echo "Checking out $DST_BRANCH..."
-              git checkout -B "$DST_BRANCH" "$DST/$DST_BRANCH"
-              echo "Merging..."
-
-              ARGS="--no-edit"
-              if [[ "${{ inputs.allow_unrelated }}" == "true" ]]; then
-                ARGS="$ARGS --allow-unrelated-histories"
-              fi
-
-              MERGE_OUTPUT=$(git -c commit.gpgsign=false merge "$SRC_COMMIT" $ARGS)
-              echo "$MERGE_OUTPUT"
-
-              if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
-                echo "Pushing to $DST..."
-                git push "$DST" "$DST_BRANCH" --no-verify
-              else
-                echo "No changes to push."
-              fi
-            else
-              echo "Creating $DST_BRANCH from $SRC/$BRANCH..."
-              git checkout -b "$DST_BRANCH" "$SRC_COMMIT"
-              git push "$DST" "$DST_BRANCH" --no-verify
+            # merge mode
+            CMD="merge --ff --no-edit"
+            if [[ "${{ inputs.allow_unrelated }}" == "true" ]]; then
+              CMD="$CMD --allow-unrelated-histories"
             fi
+            PUSH_FLAGS=""
           fi
+
+          # Sync: Checkout dest (or create if missing) -> Apply -> Push
+          echo "Fetching $DST_BRANCH from $DST..."
+          git fetch "$DST" "$DST_BRANCH" || true
+
+          if git show-ref --verify --quiet "refs/remotes/$DST/$DST_BRANCH"; then
+            echo "Checking out and syncing $DST_BRANCH..."
+            git checkout -B "$DST_BRANCH" "$DST/$DST_BRANCH"
+            git -c commit.gpgsign=false $CMD "$SRC_COMMIT"
+          else
+            echo "Creating $DST_BRANCH from $SRC/$BRANCH..."
+            git checkout -b "$DST_BRANCH" "$SRC_COMMIT"
+          fi
+
+          echo "Pushing to $DST..."
+          git push "$DST" "$DST_BRANCH" $PUSH_FLAGS --no-verify
           echo "Done."
         else
           echo "Failed to fetch $BRANCH from $SRC."
