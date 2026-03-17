@@ -348,7 +348,7 @@ async fn allowed_to_send_state_event(
 							.resolve_alias(&alias)
 							.await
 							.map_err(|e| {
-								err!(Request(Unknown("Failed resolving alias \"{alias}\": {e}")))
+								err!(Request(BadAlias("Failed resolving alias \"{alias}\": {e}")))
 							})?;
 
 						if alias_room_id != room_id {

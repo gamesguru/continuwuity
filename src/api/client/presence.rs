@@ -84,6 +84,15 @@ pub(crate) async fn get_presence_route(
 				presence: presence.content.presence,
 			})
 		},
-		| _ => Err!(Request(NotFound("Presence state for this user was not found"))),
+		| _ => {
+			// No presence set yet — return a default offline presence per spec.
+			// The spec doesn't mandate 404 here; returning offline is reasonable.
+			Ok(get_presence::v3::Response {
+				presence: ruma::presence::PresenceState::Offline,
+				status_msg: None,
+				currently_active: None,
+				last_active_ago: None,
+			})
+		},
 	}
 }

@@ -1,0 +1,38 @@
+---
+name: "Checkout"
+description: "Checkout the repository, optionally using a slim git-only checkout to avoid Node.js"
+inputs:
+  repository:
+    description: "Repository to checkout"
+    default: ${{ forge.repository || github.repository }}
+  sha:
+    description: "SHA to checkout"
+    default: ${{ forge.sha || github.sha }}
+  server_url:
+    description: "Server URL to checkout"
+    default: ${{ forge.server_url || github.server_url }}
+  use_slim_checkout:
+    description: "Whether to avoid using actions/checkout and use git directly"
+    default: ${{ vars.C10Y_CONFIG_WORKFLOW_USE_SLIM_CHECKOUT || 'false' }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout
+      if: ${{ inputs.use_slim_checkout != 'true' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.sha }}
+
+    - name: Slim Checkout
+      if: ${{ inputs.use_slim_checkout == 'true' }}
+      shell: bash
+      run: |
+        # Use raw git to avoid Node-based checkout action
+        if [ ! -d ".git" ]; then
+          git init
+          git remote add origin ${{ inputs.server_url }}/${{ inputs.repository }}
+        fi
+        git fetch --depth 1 origin ${{ inputs.sha }}
+        git checkout FETCH_HEAD

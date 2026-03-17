@@ -49,7 +49,7 @@ pub struct Server {
 
 impl Server {
 	#[must_use]
-	pub fn new(config: Config, runtime: Option<runtime::Handle>, log: Log) -> Self {
+	pub fn new(config: Config, runtime: Option<&runtime::Handle>, log: Log) -> Self {
 		Self {
 			name: config.server_name.clone(),
 			config: config::Manager::new(config),
@@ -57,7 +57,7 @@ impl Server {
 			stopping: AtomicBool::new(false),
 			reloading: AtomicBool::new(false),
 			restarting: AtomicBool::new(false),
-			runtime: runtime.clone(),
+			runtime: runtime.cloned(),
 			signal: broadcast::channel::<&'static str>(1).0,
 			log,
 			metrics: Metrics::new(runtime),
