@@ -61,7 +61,12 @@ export CONTINUWUITY_TLS__KEY="/$SERVER_NAME.key"
 export CONTINUWUITY_TLS__CERTS="/$SERVER_NAME.crt"
 # And who it is
 export CONTINUWUITY_SERVER_NAME="$SERVER_NAME"
+# Ensure each test node gets an isolated database to prevent reuse errors
+export CONDUWUIT_DATABASE_PATH="/var/lib/continuwuity/$SERVER_NAME"
 
 echo "Starting Continuwuity with SERVER_NAME=$SERVER_NAME"
-# Start continuwuity
-/usr/local/bin/conduwuit --config /etc/continuwuity/config.toml
+mkdir -p "$CONDUWUIT_DATABASE_PATH"
+chown -R ${CONDUWUIT_UID}:${CONDUWUIT_GID} "/$SERVER_NAME.key" "/$SERVER_NAME.crt" "$CONDUWUIT_DATABASE_PATH"
+
+# Drop root privileges and start continuwuity as the host UID
+exec setpriv --reuid=${CONDUWUIT_UID} --regid=${CONDUWUIT_GID} --clear-groups /usr/local/bin/conduwuit --config /etc/continuwuity/config.toml

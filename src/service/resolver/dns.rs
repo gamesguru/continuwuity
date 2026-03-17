@@ -23,7 +23,7 @@ type ResolvingResult = Result<Addrs, Box<dyn std::error::Error + Send + Sync>>;
 
 impl Resolver {
 	#[allow(clippy::as_conversions, clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-	pub(super) fn build(server: &Arc<Server>, cache: Arc<Cache>) -> Result<Arc<Self>> {
+	pub(crate) fn build(server: &Arc<Server>, cache: Arc<Cache>) -> Result<Arc<Self>> {
 		let config = &server.config;
 		let (sys_conf, mut opts) = hickory_resolver::system_conf::read_system_conf()
 			.map_err(|e| err!(error!("Failed to configure DNS resolver from system: {e}")))?;
@@ -51,6 +51,7 @@ impl Resolver {
 		}
 
 		opts.cache_size = config.dns_cache_entries as usize;
+		opts.use_hosts_file = hickory_resolver::config::ResolveHosts::Always;
 		opts.preserve_intermediates = true;
 		opts.negative_min_ttl = Some(Duration::from_secs(config.dns_min_ttl_nxdomain));
 		opts.negative_max_ttl = Some(Duration::from_secs(60 * 60 * 24 * 30));
@@ -59,7 +60,7 @@ impl Resolver {
 		opts.timeout = Duration::from_secs(config.dns_timeout);
 		opts.attempts = config.dns_attempts as usize;
 		opts.try_tcp_on_error = config.dns_tcp_fallback;
-		opts.num_concurrent_reqs = 1;
+		opts.num_concurrent_reqs = 3;
 		opts.edns0 = true;
 		opts.case_randomization = true;
 		opts.ip_strategy = match config.ip_lookup_strategy {

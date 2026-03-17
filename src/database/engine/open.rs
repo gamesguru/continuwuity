@@ -35,6 +35,9 @@ pub(crate) async fn open(ctx: Arc<Context>, desc: &[Descriptor]) -> Result<Arc<S
 	}
 
 	debug!("Opening database...");
+	warn!(
+		"Opening the database... This may temporarily block to replay WAL or perform migrations."
+	);
 	let db = Db::open_cf_descriptors(&db_opts, path, cfds).or_else(or_else)?;
 
 	info!(

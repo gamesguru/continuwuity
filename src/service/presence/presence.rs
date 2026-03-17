@@ -12,10 +12,10 @@ use crate::users;
 /// specification.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(super) struct Presence {
-	state: PresenceState,
-	currently_active: bool,
-	last_active_ts: u64,
-	status_msg: Option<String>,
+	pub(super) state: PresenceState,
+	pub(super) currently_active: bool,
+	pub(super) last_active_ts: u64,
+	pub(super) status_msg: Option<String>,
 }
 
 impl Presence {

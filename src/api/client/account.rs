@@ -315,18 +315,25 @@ pub(crate) async fn register_route(
 
 	// Populate required UIAA flows
 
-	if services.firstrun.is_first_run() {
-		// Registration token forced while in first-run mode
+	let open_registration = services
+		.config
+		.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse;
+
+	if services.firstrun.is_first_run() && !open_registration {
+		// Registration token forced while in first-run mode, unless the admin
+		// has explicitly opted into open registration, in which case we fall
+		// through to the dummy-auth path below.
 		uiaainfo.flows.push(AuthFlow {
 			stages: vec![AuthType::RegistrationToken],
 		});
 	} else {
-		if services
-			.registration_tokens
-			.iterate_tokens()
-			.next()
-			.await
-			.is_some()
+		if !open_registration
+			&& services
+				.registration_tokens
+				.iterate_tokens()
+				.next()
+				.await
+				.is_some()
 		{
 			// Registration token required
 			uiaainfo.flows.push(AuthFlow {
@@ -353,10 +360,7 @@ pub(crate) async fn register_route(
 			// Registration isn't _disabled_, but there's no captcha configured and no
 			// registration tokens currently set. Bail out by default unless open
 			// registration was explicitly enabled.
-			if !services
-				.config
-				.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse
-			{
+			if !open_registration {
 				return Err!(Request(Forbidden(
 					"This server is not accepting registrations at this time."
 				)));

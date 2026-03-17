@@ -9,7 +9,7 @@ use ruma::{
 	},
 	events::{
 		AnyGlobalAccountDataEventContent, AnyRoomAccountDataEventContent,
-		GlobalAccountDataEventType, RoomAccountDataEventType,
+		RoomAccountDataEventType,
 	},
 	serde::Raw,
 };
@@ -123,12 +123,6 @@ async fn set_account_data(
 		return Err!(Request(BadJson(
 			"This endpoint cannot be used for marking a room as fully read (setting \
 			 m.fully_read)"
-		)));
-	}
-
-	if event_type_s == GlobalAccountDataEventType::PushRules.to_cow_str() {
-		return Err!(Request(BadJson(
-			"This endpoint cannot be used for setting/configuring push rules."
 		)));
 	}
 

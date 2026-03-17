@@ -15,15 +15,42 @@ mod sentry;
 mod server;
 mod signal;
 
+pub mod build_features {
+	include!(concat!(env!("OUT_DIR"), "/features.rs"));
+}
+
 pub use conduwuit_core::{Error, Result};
 use server::Server;
 
 pub use crate::clap::Args;
 
 pub fn run() -> Result<()> {
+	conduwuit_core::info::introspection::ENABLED_FEATURES
+		.set(build_features::ENABLED_FEATURES)
+		.ok();
+	conduwuit_core::info::introspection::AVAILABLE_FEATURES
+		.set(build_features::AVAILABLE_FEATURES)
+		.ok();
+
 	panic::init();
 
 	let args = clap::parse();
+
+	if args.version_verbose {
+		let mut output = conduwuit_build_metadata::verbose_version();
+
+		let enabled = build_features::ENABLED_FEATURES;
+		output.push_str("\nenabled_features: ");
+		output.push_str(&enabled.join(", "));
+
+		let available = build_features::AVAILABLE_FEATURES;
+		output.push_str("\navailable_features: ");
+		output.push_str(&available.join(", "));
+
+		println!("{output}");
+		return Ok(());
+	}
+
 	run_with_args(&args)
 }
 

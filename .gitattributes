@@ -85,3 +85,7 @@ Cargo.lock text
 
 # Text files where line endings should be preserved
 *.patch    -text
+
+# custom merge strategies for non-code files
+# NOTE: places "ours" (the current branch) above "theirs" (the incoming branch), may be undesired behavior for a ledger
+/*.jsonl   merge=union
