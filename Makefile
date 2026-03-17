@@ -242,7 +242,7 @@ build-docs:     ##H Regenerate docs (admin commands, etc.)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 COMPLEMENT_DIR ?=
-COMPLEMENT_IMAGE ?= conduwuit:complement
+COMPLEMENT_IMAGE ?= continuwuity:complement
 COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
 
 .PHONY: complement/build
