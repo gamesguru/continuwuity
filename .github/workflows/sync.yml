@@ -52,7 +52,7 @@ jobs:
           dest_branch: main-upstream
           source_remote: upstream
           dest_remote: origin
-          mode: merge
+          mode: rebase
 
       # - name: "Sync main [from github: gamesguru/continuwuity]"
       #   uses: ./.github/actions/git-sync
