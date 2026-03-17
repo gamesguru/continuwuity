@@ -264,7 +264,7 @@ complement args=".":
 # Complement CI
 # -----------------------------------------------------------------------------
 
-COMPLEMENT_IMAGE := env_var_or_default("COMPLEMENT_IMAGE", "continuwuity:complement")
+COMPLEMENT_IMAGE := env_var_or_default("COMPLEMENT_IMAGE", "conduwuit:complement")
 COMPLEMENT_BASE_IMAGE := env_var_or_default("COMPLEMENT_BASE_IMAGE", "ubuntu:latest")
 PROFILE := env_var_or_default("PROFILE", "release")
 
