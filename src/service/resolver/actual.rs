@@ -117,7 +117,12 @@ impl super::Service {
 		Ok(host_port)
 	}
 
-	async fn actual_dest_2(&self, dest: &ServerName, cache: bool, pos: usize) -> Result<FedDest> {
+	async fn actual_dest_2(
+		&self,
+		dest: &ServerName,
+		_cache: bool,
+		pos: usize,
+	) -> Result<FedDest> {
 		debug!("2: Hostname with included port");
 		let (host, port_str) = dest.as_str().split_at(pos);
 
@@ -160,7 +165,7 @@ impl super::Service {
 
 	async fn actual_dest_3_2(
 		&self,
-		cache: bool,
+		_cache: bool,
 		delegated: String,
 		pos: usize,
 	) -> Result<FedDest> {
@@ -203,7 +208,7 @@ impl super::Service {
 		Ok(add_port_to_hostname(&delegated))
 	}
 
-	async fn actual_dest_3_4(&self, cache: bool, delegated: String) -> Result<FedDest> {
+	async fn actual_dest_3_4(&self, _cache: bool, delegated: String) -> Result<FedDest> {
 		debug!("3.4: No SRV records, just use the hostname from .well-known");
 		Ok(add_port_to_hostname(&delegated))
 	}
@@ -237,7 +242,7 @@ impl super::Service {
 		Ok(add_port_to_hostname(host))
 	}
 
-	async fn actual_dest_5(&self, dest: &ServerName, cache: bool) -> Result<FedDest> {
+	async fn actual_dest_5(&self, dest: &ServerName, _cache: bool) -> Result<FedDest> {
 		debug!("5: No SRV record found");
 		Ok(add_port_to_hostname(dest.as_str()))
 	}
