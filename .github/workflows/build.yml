@@ -190,7 +190,17 @@ jobs:
 
       - name: Sanity check binary
         continue-on-error: true
-        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
+        shell: bash
+        run: |
+          if grep -q "avx512f" /proc/cpuinfo && \
+             grep -q "avx512dq" /proc/cpuinfo && \
+             grep -q "avx512bw" /proc/cpuinfo && \
+             grep -q "avx512vl" /proc/cpuinfo; then
+            ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
+          else
+            echo "Skipping binary sanity check: CPU does not support all required AVX-512 flags (F, DQ, BW, VL)."
+            echo "This is expected on most GitHub Actions runners for x86-64-v4 builds."
+          fi
 
       - name: Package Assets
         run: |
