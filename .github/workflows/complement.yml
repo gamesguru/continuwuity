@@ -152,7 +152,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: complement-logs-${{ matrix.os }}
-          path: tests/test_results/complement/test_results.jsonl
+          path: |
+            tests/test_results/complement/test_results.jsonl
+            tests/test_results/complement/test_logs.jsonl
           retention-days: 90
 
       - name: Parse Complement results
