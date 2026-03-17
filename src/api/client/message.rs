@@ -122,14 +122,14 @@ pub(crate) async fn get_message_events_route(
 		| Direction::Forward => services
 			.rooms
 			.timeline
-			.pdus(room_id, Some(from))
+			.pdus(room_id, Some(from), None)
 			.ignore_err()
 			.boxed(),
 
 		| Direction::Backward => services
 			.rooms
 			.timeline
-			.pdus_rev(room_id, Some(from))
+			.pdus_rev(room_id, Some(from), None)
 			.ignore_err()
 			.boxed(),
 	};
@@ -229,10 +229,11 @@ where
 		.max()
 		.unwrap_or_else(PduCount::max);
 
-	let receipts = services
-		.rooms
-		.read_receipt
-		.readreceipts_since(lazy_loading_context.room_id, Some(oldest.into_unsigned()));
+	let receipts = services.rooms.read_receipt.readreceipts_since(
+		lazy_loading_context.room_id,
+		Some(oldest.into_unsigned()),
+		Some(newest.into_unsigned()),
+	);
 
 	pin_mut!(receipts);
 	let witness: MemberSet = events

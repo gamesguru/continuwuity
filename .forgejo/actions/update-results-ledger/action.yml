@@ -24,6 +24,13 @@ inputs:
   features:
     description: "Space-separated list of cargo features used for this build"
     default: ""
+  os:
+    description: "Host operating system used for testing"
+    default: "unknown"
+  test_results_path:
+    description: "Path to test_results.jsonl for extracting failed test lists"
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -41,6 +48,8 @@ runs:
         ACTOR="${{ inputs.actor }}"
         BINARY_PATH="${{ inputs.binary_path }}"
         FEATURES="${{ inputs.features }}"
+        HOST_OS="${{ inputs.os }}"
+        TEST_RESULTS="${{ inputs.test_results_path }}"
 
         # Extract commit hash from version string, fall back to env
         BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
@@ -88,6 +97,12 @@ runs:
 
         # Ensure files exist
         touch runs.jsonl
+        mkdir -p runs_data
+
+        if [ -n "$TEST_RESULTS" ] && [ -f "$GITHUB_WORKSPACE/$TEST_RESULTS" ]; then
+          cp "$GITHUB_WORKSPACE/$TEST_RESULTS" "runs_data/${COMMIT_HASH}.jsonl"
+          git add "runs_data/${COMMIT_HASH}.jsonl"
+        fi
 
         # Append run summary
         jq -n -c \
@@ -100,6 +115,7 @@ runs:
           --arg binary_sha256 "$BIN_SHA" \
           --arg version_string "$VERSION_STRING" \
           --arg features "$FEATURES" \
+          --arg host_os "$HOST_OS" \
           --arg pass "$PASS" \
           --arg skip "$SKIP" \
           --arg fail "$FAIL" \
@@ -112,6 +128,7 @@ runs:
             provider: $provider,
             version_string: $version_string,
             features: $features,
+            host_os: $host_os,
             binary_sha256: $binary_sha256,
             passed_count: ($pass|tonumber),
             skipped_count: ($skip|tonumber),

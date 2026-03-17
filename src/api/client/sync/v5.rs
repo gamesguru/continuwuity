@@ -19,6 +19,7 @@ use conduwuit::{
 	},
 	warn,
 };
+use conduwuit_core::err;
 use conduwuit_service::{Services, rooms::read_receipt::pack_receipts, sync::into_snake_key};
 use futures::{
 	FutureExt, Stream, StreamExt, TryFutureExt,
@@ -479,7 +480,7 @@ where
 		let mut receipts: Vec<Raw<AnySyncEphemeralRoomEvent>> = services
 			.rooms
 			.read_receipt
-			.readreceipts_since(room_id, Some(*roomsince))
+			.readreceipts_since(room_id, Some(*roomsince), Some(next_batch))
 			.filter_map(|(read_user, _ts, v)| async move {
 				services
 					.users
@@ -847,17 +848,18 @@ where
 	);
 
 	for room_id in all_joined_rooms {
-		let Ok(current_shortstatehash) =
-			services.rooms.state.get_room_shortstatehash(room_id).await
-		else {
-			error!("Room {room_id} has no state");
-			continue;
-		};
+		// the room state currently.
+		let current_shortstatehash = services
+			.rooms
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.map_err(|e| err!(Database(error!("Room {room_id} has no state: {e}"))))?;
 
 		let since_shortstatehash = services
 			.rooms
-			.user
-			.get_token_shortstatehash(room_id, globalsince)
+			.timeline
+			.prev_shortstatehash(room_id, PduCount::Normal(globalsince.saturating_add(1)))
 			.await
 			.ok();
 

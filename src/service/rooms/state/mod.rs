@@ -370,6 +370,17 @@ impl Service {
 			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
 	}
 
+	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
+		const KEY_LEN: usize = size_of::<ShortEventId>();
+
+		self.db
+			.shorteventid_shortstatehash
+			.aqry::<KEY_LEN, _>(&shorteventid)
+			.await
+			.deserialized()
+			.inspect_err(|e| debug!("get_shortstatehash: shorteventid={shorteventid} {e}"))
+	}
+
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
 		self.db
 			.roomid_shortstatehash

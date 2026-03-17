@@ -6,7 +6,9 @@ use conduwuit::{
 	utils::{self, stream::TryReadyExt},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
+use futures::{
+	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::select_ok, pin_mut,
+};
 use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
@@ -46,7 +48,7 @@ impl Data {
 
 	#[inline]
 	pub(super) async fn last_timeline_count(&self, room_id: &RoomId) -> Result<PduCount> {
-		let pdus_rev = self.pdus_rev(room_id, PduCount::max());
+		let pdus_rev = self.pdus_rev(room_id, PduCount::max(), None);
 
 		pin_mut!(pdus_rev);
 		let last_count = pdus_rev
@@ -61,7 +63,7 @@ impl Data {
 
 	#[inline]
 	pub(super) async fn latest_pdu_in_room(&self, room_id: &RoomId) -> Result<PduEvent> {
-		let pdus_rev = self.pdus_rev(room_id, PduCount::max());
+		let pdus_rev = self.pdus_rev(room_id, PduCount::max(), None);
 
 		pin_mut!(pdus_rev);
 		pdus_rev
@@ -215,6 +217,7 @@ impl Data {
 		&'a self,
 		room_id: &'a RoomId,
 		until: PduCount,
+		to: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.count_to_id(room_id, until, Direction::Backward)
 			.map_ok(move |current| {
@@ -223,6 +226,9 @@ impl Data {
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.ready_and_then(Self::from_json_slice)
+					.try_filter(move |(count, _)| {
+						futures::future::ready(to.is_none_or(|to| *count <= to))
+					})
 			})
 			.try_flatten_stream()
 	}
@@ -231,6 +237,7 @@ impl Data {
 		&'a self,
 		room_id: &'a RoomId,
 		from: PduCount,
+		to: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.count_to_id(room_id, from, Direction::Forward)
 			.map_ok(move |current| {
@@ -239,6 +246,9 @@ impl Data {
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.ready_and_then(Self::from_json_slice)
+					.try_filter(move |(count, _)| {
+						futures::future::ready(to.is_none_or(|to| *count <= to))
+					})
 			})
 			.try_flatten_stream()
 	}
@@ -249,6 +259,32 @@ impl Data {
 		let pdu = serde_json::from_slice::<PduEvent>(pdu)?;
 
 		Ok((pdu_id.pdu_count(), pdu))
+	}
+
+	pub(super) async fn next_timeline_count(&self, after_pdu: &RawPduId) -> Result<PduCount> {
+		let prefix = after_pdu.shortroomid();
+		let mut stream = self.pduid_pdu.raw_stream_from(after_pdu);
+
+		let result = stream
+			.next()
+			.await
+			.ok_or_else(|| err!(Request(NotFound("No next PDU found"))))?;
+		let (mut next_pdu_id, _) = result?;
+
+		if next_pdu_id == after_pdu.as_bytes() {
+			let result = stream
+				.next()
+				.await
+				.ok_or_else(|| err!(Request(NotFound("No next PDU found"))))?;
+			(next_pdu_id, _) = result?;
+		}
+
+		if !next_pdu_id.starts_with(&prefix) {
+			return Err!(Request(NotFound("No next PDU found in this room")));
+		}
+
+		let next_pdu_id: RawPduId = next_pdu_id.into();
+		Ok(next_pdu_id.pdu_count())
 	}
 
 	pub(super) fn increment_notification_counts(

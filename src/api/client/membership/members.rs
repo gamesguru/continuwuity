@@ -51,7 +51,7 @@ pub(crate) async fn get_member_events_route(
 		let mut pdus_rev = services
 			.rooms
 			.timeline
-			.pdus_rev(&body.room_id, Some(pdu_count))
+			.pdus_rev(&body.room_id, Some(pdu_count), None)
 			.boxed();
 
 		let Some(Ok((_, pdu))) = pdus_rev.next().await else {

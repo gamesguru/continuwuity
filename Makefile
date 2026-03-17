@@ -163,7 +163,7 @@ ROCKSDB_INCLUDE_DIR ?= /usr/local/include
 # Default features to use for the build
 # We use bindgen-runtime by default to use the system libclang.so for building.
 # Bundling RocksDB statically can be enabled via features.
-FEATURES ?= standard,console,url_preview,release_max_log_level,bindgen-runtime
+FEATURES ?= standard,console,url_preview,release_max_log_level,bindgen-runtime,direct_tls
 
 .PHONY: build
 build:  ##H Build with selected profile

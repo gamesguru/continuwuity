@@ -203,7 +203,7 @@ impl Service {
 		debug_info!("Resetting presence for active users...");
 		let mut reset = 0_usize;
 
-		let mut presence_stream = Box::pin(self.db.presence_since(0));
+		let mut presence_stream = Box::pin(self.db.presence_since(0, None));
 		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
 			if !self.services.server.running() {
 				info!("Shutdown requested during presence reset.");
@@ -258,8 +258,10 @@ impl Service {
 	pub fn presence_since(
 		&self,
 		since: u64,
+		to: Option<u64>,
 	) -> impl Stream<Item = (&UserId, u64, &[u8])> + Send + '_ {
-		self.db.presence_since(since)
+		// Optionally filter by/until endpoint, "to"
+		self.db.presence_since(since, to)
 	}
 
 	#[inline]

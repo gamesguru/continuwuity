@@ -10,7 +10,7 @@ use std::{fmt::Write, sync::Arc};
 use async_trait::async_trait;
 pub use conduwuit_core::matrix::pdu::{PduId, RawPduId};
 use conduwuit_core::{
-	Result, Server, at, err,
+	Result, Server, at, debug, err,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduEvent},
@@ -28,7 +28,8 @@ use serde::Deserialize;
 use self::data::Data;
 pub use self::{create::pdu_fits, data::PdusIterItem};
 use crate::{
-	Dep, account_data, admin, appservice, globals, pusher, rooms, sending, server_keys, users,
+	Dep, account_data, admin, appservice, globals, pusher, rooms, rooms::short::ShortStateHash,
+	sending, server_keys, users,
 };
 
 // Update Relationships
@@ -138,7 +139,7 @@ impl Service {
 
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub async fn first_item_in_room(&self, room_id: &RoomId) -> Result<(PduCount, impl Event)> {
-		let pdus = self.pdus(room_id, None);
+		let pdus = self.pdus(room_id, None, None);
 
 		pin_mut!(pdus);
 		pdus.try_next()
@@ -233,7 +234,7 @@ impl Service {
 		&'a self,
 		room_id: &'a RoomId,
 	) -> impl Stream<Item = PdusIterItem> + Send + 'a {
-		self.pdus(room_id, None).ignore_err()
+		self.pdus(room_id, None, None).ignore_err()
 	}
 
 	/// Reverse iteration starting after `until`.
@@ -242,9 +243,10 @@ impl Service {
 		&'a self,
 		room_id: &'a RoomId,
 		until: Option<PduCount>,
+		to: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.db
-			.pdus_rev(room_id, until.unwrap_or_else(PduCount::max))
+			.pdus_rev(room_id, until.unwrap_or_else(PduCount::max), to)
 	}
 
 	/// Forward iteration starting after `from`.
@@ -253,7 +255,67 @@ impl Service {
 		&'a self,
 		room_id: &'a RoomId,
 		from: Option<PduCount>,
+		to: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.db.pdus(room_id, from.unwrap_or_else(PduCount::min))
+		self.db
+			.pdus(room_id, from.unwrap_or_else(PduCount::min), to)
+	}
+
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub async fn prev_shortstatehash(
+		&self,
+		room_id: &RoomId,
+		before: PduCount,
+	) -> Result<ShortStateHash> {
+		let mut pdus_rev = Box::pin(self.pdus_rev(room_id, Some(before), None));
+		let (_, before_pdu) = pdus_rev
+			.try_next()
+			.await?
+			.ok_or_else(|| err!(Request(NotFound("No PDU found previous to {before:?}"))))?;
+
+		let shorteventid = self
+			.services
+			.short
+			.get_or_create_shorteventid(&before_pdu.event_id)
+			.await;
+
+		self.services.state.get_shortstatehash(shorteventid).await
+	}
+
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub async fn next_shortstatehash(
+		&self,
+		room_id: &RoomId,
+		after: PduCount,
+	) -> Result<ShortStateHash> {
+		let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+
+		let after_pdu = PduId { shortroomid, shorteventid: after };
+
+		let next_count = self
+			.db
+			.next_timeline_count(&after_pdu.into())
+			.await
+			.inspect_err(|e| {
+				debug!("next_shortstatehash: no next event after {after:?} in {room_id}: {e}");
+			})?;
+
+		let next_pdu = PduId { shortroomid, shorteventid: next_count };
+
+		let event_id = self
+			.get_pdu_from_id(&next_pdu.into())
+			.await
+			.inspect_err(|e| {
+				debug!("next_shortstatehash: failed to get PDU for {next_count:?}: {e}");
+			})?
+			.event_id;
+
+		let shorteventid = self
+			.services
+			.short
+			.get_or_create_shorteventid(&event_id)
+			.await;
+
+		self.services.state.get_shortstatehash(shorteventid).await
 	}
 }
