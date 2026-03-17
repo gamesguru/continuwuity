@@ -1,5 +1,6 @@
-{"Action":"fail","Test":"TestSync"}
-{"Action":"fail","Test":"TestSyncFilter"}
-{"Action":"fail","Test":"TestSyncLeaveSection"}
+{"Action":"pass","Test":"TestSync"}
+{"Action":"pass","Test":"TestSync/parallel"}
+{"Action":"pass","Test":"TestSyncFilter"}
+{"Action":"pass","Test":"TestSyncLeaveSection"}
 {"Action":"fail","Test":"TestSyncOmitsStateChangeOnFilteredEvents"}
 {"Action":"fail","Test":"TestSyncTimelineGap"}
