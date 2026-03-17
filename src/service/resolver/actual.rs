@@ -72,7 +72,9 @@ impl super::Service {
 				if let Some(pos) = dest.as_str().find(':') {
 					self.actual_dest_2(dest, cache, pos).await?
 				} else {
-					_ = self.conditional_query_and_cache(dest.as_str(), 8448, true).await;
+					_ = self
+						.conditional_query_and_cache(dest.as_str(), 8448, true)
+						.await;
 					self.services.server.check_running()?;
 					match self.request_well_known(dest.as_str()).await? {
 						| Some(delegated) =>
@@ -179,13 +181,14 @@ impl super::Service {
 	) -> Result<FedDest> {
 		debug!("3.3: SRV lookup successful");
 		let force_port = overrider.port();
-		_ = self.conditional_query_and_cache_override(
-			&delegated,
-			&overrider.hostname(),
-			force_port.unwrap_or(8448),
-			cache,
-		)
-		.await;
+		_ = self
+			.conditional_query_and_cache_override(
+				&delegated,
+				&overrider.hostname(),
+				force_port.unwrap_or(8448),
+				cache,
+			)
+			.await;
 
 		if let Some(port) = force_port {
 			return Ok(FedDest::Named(
@@ -213,13 +216,14 @@ impl super::Service {
 	) -> Result<FedDest> {
 		debug!("4: No .well-known; SRV record found");
 		let force_port = overrider.port();
-		_ = self.conditional_query_and_cache_override(
-			host,
-			&overrider.hostname(),
-			force_port.unwrap_or(8448),
-			cache,
-		)
-		.await;
+		_ = self
+			.conditional_query_and_cache_override(
+				host,
+				&overrider.hostname(),
+				force_port.unwrap_or(8448),
+				cache,
+			)
+			.await;
 
 		if let Some(port) = force_port {
 			let port = format!(":{port}");
