@@ -58,7 +58,7 @@ runs:
                 ARGS="$ARGS --allow-unrelated-histories"
               fi
 
-              MERGE_OUTPUT=$(git merge "$SRC_COMMIT" $ARGS)
+              MERGE_OUTPUT=$(git -c commit.gpgsign=false merge "$SRC_COMMIT" $ARGS)
               echo "$MERGE_OUTPUT"
 
               if [[ "$MERGE_OUTPUT" != "Already up to date." ]]; then
