@@ -298,10 +298,24 @@ complement/stats: ##H Check local test stats
 	echo "✗ Failed:  $$FAIL"; \
 	echo "○ Skipped: $$SKIP"; \
 	echo "---------------------------"; \
-	echo "Total:     $$TOTAL"; \
+	echo "Σ Total:   $$TOTAL"; \
 	echo ""; \
 	echo "JSON file (on main) last modified by: "; \
 	git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+
+.PHONY: complement/diff
+complement/diff: ##H Diff local results against branch baseline (requires REF=git-ref)
+	@test -n "$(REF)" || { echo "ERROR: REF variable is required (e.g. make complement/diff REF=HEAD~1)"; exit 1; }
+	@SHA=$$(git rev-parse $(REF)) && \
+	git show-ref --quiet github/_metadata/badges || { echo "ERROR: branch github/_metadata/badges missing. Run: git fetch github _metadata/badges"; exit 1; } && \
+	FILE=$$(git ls-tree -r github/_metadata/badges --name-only | grep -E "runs_data/($${SHA:0:8}|$$SHA)\.jsonl" | head -n 1) && \
+	if [ -z "$$FILE" ]; then \
+		echo "ERROR: could not find results for $$SHA (or $${SHA:0:8}) in github/_metadata/badges"; \
+		exit 1; \
+	fi; \
+	diff -u --color tests/test_results/complement/test_results.jsonl <(git show github/_metadata/badges:$$FILE)
+
+
 
 .PHONY: complement/logs
 complement/logs: ##H Tail logs for all running and future Complement containers
