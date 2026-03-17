@@ -599,7 +599,7 @@
 {"Action":"pass","Test":"TestRoomMembers/Parallel/POST_/rooms/:room_id/invite_can_send_an_invite"}
 {"Action":"pass","Test":"TestRoomMembers/Parallel/POST_/rooms/:room_id/join_can_join_a_room"}
 {"Action":"pass","Test":"TestRoomMembers/Parallel/POST_/rooms/:room_id/leave_can_leave_a_room"}
-{"Action":"pass","Test":"TestRoomMembers/Parallel/Test_that_we_can_be_reinvited_to_a_room_we_created"}
+{"Action":"fail","Test":"TestRoomMembers/Parallel/Test_that_we_can_be_reinvited_to_a_room_we_created"}
 {"Action":"pass","Test":"TestRoomMessagesLazyLoading"}
 {"Action":"pass","Test":"TestRoomMessagesLazyLoadingLocalUser"}
 {"Action":"pass","Test":"TestRoomReadMarkers"}
