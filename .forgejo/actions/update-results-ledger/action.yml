@@ -143,7 +143,7 @@ runs:
 
         # Commit and push, retrying
         git add runs.jsonl
-        if git commit -m "Results for ${COMMIT_HASH} (${PROVIDER}) [skip ci]"; then
+        if git -c commit.gpgsign=false commit -m "Results for ${COMMIT_HASH} (${PROVIDER}) [skip ci]"; then
           MAX_RETRIES=5
           RETRY_COUNT=0
           until git push origin "HEAD:refs/heads/${TARGET_BRANCH}"; do
