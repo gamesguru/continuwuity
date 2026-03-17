@@ -623,18 +623,23 @@ async fn check_joined_since_last_sync(
 		// this will be None if `previous_sync_end_shortstatehash` is None.
 		let membership_during_previous_sync = match last_sync_end_shortstatehash {
 			| Some(last_sync_end_shortstatehash) => {
-				let result: Option<RoomMemberEventContent> = services
+				match services
 					.rooms
 					.state_accessor
-					.state_get_content(
+					.state_get_content::<RoomMemberEventContent>(
 						last_sync_end_shortstatehash,
 						&StateEventType::RoomMember,
 						syncing_user.as_str(),
 					)
 					.await
-					.inspect_err(|_| debug_warn!("User has no previous membership"))
-					.ok();
-				result
+				{
+					| Ok(content) => Some(content),
+					| Err(e) if e.is_not_found() => {
+						debug_warn!("User has no previous membership");
+						None
+					},
+					| Err(e) => return Err(e),
+				}
 			},
 			| None => None,
 		};

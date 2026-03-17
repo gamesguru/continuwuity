@@ -237,11 +237,12 @@ mod transaction_tests {
 
 		transaction::TRANSACTION_BATCH
 			.scope(batch, async {
-				// This simulates the guard check from Database::transaction
-				assert!(
-					transaction::TRANSACTION_BATCH.try_with(|_| ()).is_err(),
-					"Nested Database::transaction() calls are not supported and break atomicity."
-				);
+				// This simulates a nested Database::transaction call which should panic
+				let mut db = Database {
+					db: Arc::clone(&super::transaction_tests::get_db().db),
+					maps: std::collections::HashMap::new(),
+				};
+				let _ = db.transaction(|| async { Ok(()) }).await;
 			})
 			.await;
 	}
