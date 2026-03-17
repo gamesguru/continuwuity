@@ -28,10 +28,10 @@ jobs:
         include:
           - arch: amd64
             os: ubuntu-22.04
-            profile: dev
+            profile: release
           - arch: amd64
             os: ubuntu-24.04
-            profile: dev
+            profile: release
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
     # and pushing the generated github-badge.json to the badges branch
@@ -192,6 +192,7 @@ jobs:
           features: ${{ env.FEATURES }}
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
+          os: ${{ matrix.os }}
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
