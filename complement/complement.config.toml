@@ -17,7 +17,7 @@ allow_local_presence = true
 allow_registration = true
 database_path = "/var/lib/continuwuity"
 # By default we use warn, only for failures/debugging verbose (Forge UI can't handle 75 MB+ of logs)
-log = "warn"
+log = "debug"
 # log = "trace,h2=debug,hyper=debug,conduwuit_database=warn,conduwuit_service::manager=info,conduwuit_api::router=error,conduwuit_router=error,tower_http=error"
 port = [8008, 8448]
 trusted_servers = []
@@ -51,6 +51,8 @@ request_conn_timeout = 60
 request_timeout = 120
 well_known_conn_timeout = 60
 well_known_timeout = 60
+federation_conn_timeout = 60
+federation_timeout = 120
 federation_idle_timeout = 300
 sender_timeout = 300
 sender_idle_timeout = 300
