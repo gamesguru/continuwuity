@@ -58,6 +58,14 @@ jobs:
       #     source_remote: github
       #     dest_remote: origin
 
+      # - name: "Sync badges [from github: gamesguru/continuwuity]"
+      #   uses: ./.github/actions_stable/git-sync
+      #   with:
+      #     source_branch: _metadata/badges
+      #     source_remote: github
+      #     dest_remote: origin
+      #     allow_unrelated: "true"
+
       - name: "Sync forge-head [from forge: continuwuation/continuwuity]"
         uses: ./.github/actions_stable/git-sync
         with:
@@ -66,11 +74,3 @@ jobs:
           source_remote: upstream
           dest_remote: origin
           mode: force
-
-      - name: "Sync badges [from github: gamesguru/continuwuity]"
-        uses: ./.github/actions_stable/git-sync
-        with:
-          source_branch: _metadata/badges
-          source_remote: github
-          dest_remote: origin
-          allow_unrelated: "true"
