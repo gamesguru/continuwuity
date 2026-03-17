@@ -650,7 +650,7 @@ async fn knock_room_helper_remote(
 
 	debug!("Saving compressed state");
 	let HashSetCompressStateEvent {
-		shortstatehash: _statehash_before_knock,
+		shortstatehash: statehash_before_knock,
 		added,
 		removed,
 	} = services
@@ -658,6 +658,15 @@ async fn knock_room_helper_remote(
 		.state_compressor
 		.save_state(room_id, Arc::new(compressed))
 		.await?;
+
+	// We must set the room state so append_to_state knows the room's parent state.
+	// Otherwise it will generate an amputated state containing only the knock
+	// event.
+	info!("Setting room state before appending PDU");
+	services
+		.rooms
+		.state
+		.set_room_state(room_id, statehash_before_knock, &state_lock);
 
 	let statehash_after_knock = services
 		.rooms

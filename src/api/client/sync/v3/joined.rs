@@ -644,7 +644,7 @@ async fn check_joined_since_last_sync(
 			| None => None,
 		};
 
-		let membership_during_current_sync: Option<RoomMemberEventContent> = services
+		let membership_during_current_sync: Option<RoomMemberEventContent> = match services
 			.rooms
 			.state_accessor
 			.state_get_content(
@@ -653,7 +653,11 @@ async fn check_joined_since_last_sync(
 				syncing_user.as_str(),
 			)
 			.await
-			.ok();
+		{
+			| Ok(content) => Some(content),
+			| Err(e) if e.is_not_found() => None,
+			| Err(e) => return Err(e),
+		};
 
 		// If we can resolve the previous membership event, check if it was Join.
 		// If we couldn't resolve it (None), the user was not in the room. Combine

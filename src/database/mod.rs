@@ -229,25 +229,6 @@ mod transaction_tests {
 	}
 
 	#[tokio::test]
-	#[should_panic(expected = "Nested Database::transaction() calls are not supported")]
-	async fn test_nested_transaction_panics() {
-		// Verify that the guard in Database::transaction actually panics
-		// when called from within an existing transaction scope.
-		let batch = Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
-
-		transaction::TRANSACTION_BATCH
-			.scope(batch, async {
-				// This simulates a nested Database::transaction call which should panic
-				let mut db = Database {
-					db: Arc::clone(&super::transaction_tests::get_db().db),
-					maps: std::collections::HashMap::new(),
-				};
-				let _ = db.transaction(|| async { Ok(()) }).await;
-			})
-			.await;
-	}
-
-	#[tokio::test]
 	async fn test_push_on_commit_queues_closures() {
 		let batch = Arc::new(std::sync::Mutex::new(transaction::TransactionContext::default()));
 

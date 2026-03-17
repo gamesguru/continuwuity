@@ -666,7 +666,7 @@ async fn join_room_by_id_helper_remote(
 		.db
 		.transaction(|| async move {
 			let HashSetCompressStateEvent {
-				shortstatehash: _statehash_before_join,
+				shortstatehash: statehash_before_join,
 				added,
 				removed,
 			} = services
@@ -674,6 +674,14 @@ async fn join_room_by_id_helper_remote(
 				.state_compressor
 				.save_state(room_id, Arc::new(compressed))
 				.await?;
+
+			// We must set the room state so append_to_state knows the room's parent state.
+			// Otherwise it will generate an amputated state containing only the join event.
+			info!("Setting room state before appending PDU");
+			services
+				.rooms
+				.state
+				.set_room_state(room_id, statehash_before_join, &state_lock);
 
 			// We append to state before appending the pdu, so we avoid a "stateless" PDU
 			// hot potato situation. If append_pdu fails, the state will have been updated
