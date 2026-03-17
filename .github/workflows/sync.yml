@@ -1,0 +1,79 @@
+---
+name: Sync
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Configure Git
+        env:
+          TOKEN: ${{ github.token }}
+          GPG_PASSPHRASE: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
+        run: |
+          git config user.name "continuwuity CI"
+          git config user.email "noreply@continuwuity.org"
+          git config commit.gpgsign true
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            git config gpg.program "gpg --batch --pinentry-mode loopback --passphrase $GPG_PASSPHRASE"
+          fi
+
+          # Re-configure origin with token for authenticated push
+          SERVER_URL="${{ github.server_url }}"
+          HOST="${SERVER_URL#https://}"
+          git remote set-url origin https://x-access-token:$TOKEN@$HOST/${{ github.repository }}.git
+
+          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+
+      - name: "Sync main [from forge: continuwuation/continuwuity]"
+        uses: ./.github/actions/git-sync
+        with:
+          source_branch: main
+          source_remote: upstream
+          dest_remote: origin
+          mode: merge
+
+      - name: "Sync main-upstream [from forge: continuwuation/continuwuity]"
+        uses: ./.github/actions/git-sync
+        with:
+          source_branch: main
+          dest_branch: main-upstream
+          source_remote: upstream
+          dest_remote: origin
+          mode: rebase
+
+      # - name: "Sync main [from github: gamesguru/continuwuity]"
+      #   uses: ./.github/actions/git-sync
+      #   with:
+      #     source_branch: main
+      #     source_remote: github
+      #     dest_remote: origin
+
+      # - name: "Sync badges [from github: gamesguru/continuwuity]"
+      #   uses: ./.github/actions/git-sync
+      #   with:
+      #     source_branch: _metadata/badges
+      #     source_remote: github
+      #     dest_remote: origin
+      #     allow_unrelated: "true"
+
+      - name: "Sync forge-head [from forge: continuwuation/continuwuity]"
+        uses: ./.github/actions/git-sync
+        with:
+          source_branch: main
+          dest_branch: _metadata/refs/remotes/upstream/main
+          source_remote: upstream
+          dest_remote: origin
+          mode: force

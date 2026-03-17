@@ -1,0 +1,80 @@
+---
+name: "Git Sync"
+description: "Syncs branches between remotes via merge, rebase, or force push"
+inputs:
+  source_branch:
+    description: "Source branch name"
+    required: true
+  source_remote:
+    description: "Remote to fetch from"
+    required: true
+  dest_remote:
+    description: "Remote to push to"
+    required: true
+  dest_branch:
+    description: "Target branch name (defaults to source_branch)"
+    required: false
+  mode:
+    description: "Sync mode: merge, force, or rebase"
+    default: "merge"
+  allow_unrelated:
+    description: "Allow unrelated histories during merge"
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Sync
+      shell: bash
+      run: |
+        BRANCH="${{ inputs.source_branch }}"
+        SRC="${{ inputs.source_remote }}"
+        DST="${{ inputs.dest_remote }}"
+        DST_BRANCH="${{ inputs.dest_branch }}"
+        [ -z "$DST_BRANCH" ] && DST_BRANCH="$BRANCH"
+        MODE="${{ inputs.mode }}"
+
+        echo "::group::Sync $BRANCH to $DST/$DST_BRANCH ($MODE)"
+
+        echo "Fetching $BRANCH from $SRC..."
+        if git fetch "$SRC" "$BRANCH"; then
+          SRC_COMMIT=$(git rev-parse FETCH_HEAD)
+
+          # Determine Sync Command & Push Flags
+          if [[ "$MODE" == "force" ]]; then
+            CMD="reset --hard"
+            PUSH_FLAGS="--force"
+          elif [[ "$MODE" == "rebase" ]]; then
+            CMD="rebase"
+            PUSH_FLAGS="--force-with-lease"
+          else
+            # merge mode
+            CMD="merge --ff --no-edit"
+            if [[ "${{ inputs.allow_unrelated }}" == "true" ]]; then
+              CMD="$CMD --allow-unrelated-histories"
+            fi
+            PUSH_FLAGS=""
+          fi
+
+          # Sync: Checkout dest (or create if missing) -> Apply -> Push
+          echo "Fetching $DST_BRANCH from $DST..."
+          git fetch "$DST" "$DST_BRANCH" || true
+
+          if git show-ref --verify --quiet "refs/remotes/$DST/$DST_BRANCH"; then
+            echo "Checking out and syncing $DST_BRANCH..."
+            git checkout -B "$DST_BRANCH" "$DST/$DST_BRANCH"
+            git -c commit.gpgsign=false $CMD "$SRC_COMMIT"
+          else
+            echo "Creating $DST_BRANCH from $SRC/$BRANCH..."
+            git checkout -b "$DST_BRANCH" "$SRC_COMMIT"
+          fi
+
+          echo "Pushing to $DST..."
+          git push "$DST" "$DST_BRANCH" $PUSH_FLAGS --no-verify
+          echo "Done."
+        else
+          echo "Failed to fetch $BRANCH from $SRC."
+          exit 1
+        fi
+
+        echo "::endgroup::"
