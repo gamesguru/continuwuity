@@ -27,6 +27,10 @@ pub struct Args {
 	#[arg(long)]
 	pub version_verbose: bool,
 
+	/// Resolve a hostname using the internal async resolver and exit.
+	#[arg(long, value_name = "HOSTNAME")]
+	pub debug_dns: Option<String>,
+
 	/// Override a configuration variable using TOML 'key=value' syntax
 	#[arg(long, short('O'))]
 	pub option: Vec<String>,
