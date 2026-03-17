@@ -347,6 +347,7 @@ struct ShortStateHashes {
 	/// The state of the syncing room at the end of the last sync.
 	last_sync_end_shortstatehash: Option<ShortStateHash>,
 	/// The new state hash to write to the token cache for the current sync end.
+	#[allow(dead_code)]
 	next_hash: Option<ShortStateHash>,
 }
 
@@ -503,6 +504,7 @@ async fn build_state_events(
 	let ShortStateHashes {
 		current_shortstatehash,
 		last_sync_end_shortstatehash,
+		..
 	} = shortstatehashes;
 
 	// the spec states that the `state` property only includes state events up to
@@ -644,6 +646,7 @@ async fn check_joined_since_last_sync(
 	ShortStateHashes {
 		last_sync_end_shortstatehash,
 		current_shortstatehash,
+		..
 	}: ShortStateHashes,
 	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
 ) -> Result<bool> {
