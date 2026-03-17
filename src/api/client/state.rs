@@ -342,19 +342,18 @@ async fn allowed_to_send_state_event(
 					}
 
 					for alias in aliases {
-						let (alias_room_id, _) = services
-							.rooms
-							.alias
-							.resolve_alias(&alias)
-							.await
-							.map_err(|e| {
-								err!(Request(BadAlias("Failed resolving alias \"{alias}\": {e}")))
-							})?;
+						let Ok((alias_room_id, _)) =
+							services.rooms.alias.resolve_alias(&alias).await
+						else {
+							return Err!(Request(BadAlias(debug_warn!(
+								"Failed resolving alias \"{alias}\"."
+							))));
+						};
 
 						if alias_room_id != room_id {
-							return Err!(Request(BadAlias(
+							return Err!(Request(BadAlias(debug_warn!(
 								"Room alias {alias} does not belong to room {room_id}"
-							)));
+							))));
 						}
 					}
 				},
