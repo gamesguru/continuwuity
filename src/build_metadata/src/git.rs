@@ -14,7 +14,7 @@ pub(crate) fn run(args: &[&str]) -> Option<String> {
 pub(crate) fn description() -> Option<String> {
 	// --always fallback handles shallow clones (no tags) by returning the short
 	// hash
-	let s = run(&["describe", "--tags", "--always", "--dirty"])?;
+	let s = run(&["describe", "--tags", "--match", "v*", "--always", "--dirty"])?;
 	Some(format(&s))
 }
 
