@@ -119,27 +119,30 @@ runs:
           }' >> runs.jsonl
 
         # Generate badge JSON (shields.io endpoint schema)
-        if [ "$FAIL" -gt 0 ]; then COLOR="red"
-        elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"
-        else COLOR="green"
+        if [ "$BRANCH_NAME" = "main" ]; then
+          if [ "$FAIL" -gt 0 ]; then COLOR="red"
+          elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"
+          else COLOR="green"
+          fi
+
+          # shields.io compatible schema
+          jq -n \
+            --arg pass "$PASS" \
+            --arg skip "$SKIP" \
+            --arg fail "$FAIL" \
+            --arg color "$COLOR" \
+            --arg provider_name "$PROVIDER" \
+            '{
+              schemaVersion: 1,
+              label: "Complement Tests (\($provider_name))",
+              message: "\($pass) pass, \($skip) skip, \($fail) fail",
+              color: $color
+            }' > badge-main.json
+          git add badge-main.json
         fi
 
-        # shields.io compatible schema
-        jq -n \
-          --arg pass "$PASS" \
-          --arg skip "$SKIP" \
-          --arg fail "$FAIL" \
-          --arg color "$COLOR" \
-          --arg provider_name "$PROVIDER" \
-          '{
-            schemaVersion: 1,
-            label: "Complement Tests (\($provider_name))",
-            message: "\($pass) pass, \($skip) skip, \($fail) fail",
-            color: $color
-          }' > badge-main.json
-
         # Commit and push, retrying
-        git add runs.jsonl badge-main.json
+        git add runs.jsonl
         if git commit -m "Results for ${COMMIT_HASH} (${PROVIDER}) [skip ci]"; then
           MAX_RETRIES=5
           RETRY_COUNT=0
