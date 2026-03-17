@@ -25,6 +25,9 @@ SKIPPED_COMPLEMENT_TESTS="${SKIPPED_COMPLEMENT_TESTS:-"$DEFAULT_SKIPPED_TESTS"}"
 # A regex for tests to run.
 RUN_TESTS="${COMPLEMENT_RUN:-.}"
 
+# Parallelism for tests. Default to 2 to improve stability on high-core machines.
+COMPLEMENT_PARALLEL="${COMPLEMENT_PARALLEL:-2}"
+
 # Ensure paths are absolute so they don't break when we change directory
 COMPLEMENT_SRC="$(realpath -m "$COMPLEMENT_SRC")"
 LOG_FILE="$(realpath -m "$LOG_FILE")"
@@ -90,6 +93,8 @@ TEST_FLAGS=(
     # -tags "conduwuit_blacklist"
     -skip "$SKIPPED_COMPLEMENT_TESTS"
     -run "$RUN_TESTS"
+    -p "$COMPLEMENT_PARALLEL"
+    -parallel "$COMPLEMENT_PARALLEL"
     -timeout 1h
     -count=1
     ./tests/...
