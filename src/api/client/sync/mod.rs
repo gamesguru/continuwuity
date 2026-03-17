@@ -71,7 +71,7 @@ async fn load_timeline(
 			services
 				.rooms
 				.timeline
-				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
+				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)), None)
 				.ignore_err()
 				.ready_take_while(move |&(pducount, _)| pducount > starting_count)
 				.map(move |mut pdu| {
@@ -97,7 +97,7 @@ async fn load_timeline(
 			services
 				.rooms
 				.timeline
-				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
+				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)), None)
 				.ignore_err()
 				.map(move |mut pdu| {
 					pdu.1.set_unsigned(Some(sender_user));

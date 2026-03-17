@@ -122,14 +122,14 @@ pub(crate) async fn get_message_events_route(
 		| Direction::Forward => services
 			.rooms
 			.timeline
-			.pdus(room_id, Some(from))
+			.pdus(room_id, Some(from), None)
 			.ignore_err()
 			.boxed(),
 
 		| Direction::Backward => services
 			.rooms
 			.timeline
-			.pdus_rev(room_id, Some(from))
+			.pdus_rev(room_id, Some(from), None)
 			.ignore_err()
 			.boxed(),
 	};

@@ -272,7 +272,7 @@ async fn build_state_and_timeline(
 	let (state_events, notification_counts, joined_since_last_sync) = try_join3(
 		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
+		check_joined_since_last_sync(services, room_id, shortstatehashes, sync_context),
 	)
 	.await?;
 
@@ -355,15 +355,27 @@ async fn fetch_shortstatehashes(
 	SyncContext { last_sync_end_count, current_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<ShortStateHashes> {
-	// the room state currently.
-	// TODO: this should be the room state as of `current_count`, but there's no way
-	// to get that right now.
-	let current_shortstatehash = services
+	// The absolute latest room state.
+	let mut current_shortstatehash = services
 		.rooms
 		.state
 		.get_room_shortstatehash(room_id)
 		.await
 		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))?;
+
+	// If the latest state hash was created AFTER our watermark, we must walk
+	// backwards to find the state as it existed at the watermark.
+	while current_shortstatehash > current_count {
+		match services
+			.rooms
+			.timeline
+			.prev_shortstatehash(room_id, PduCount::Normal(current_shortstatehash))
+			.await
+		{
+			| Ok(prev_hash) => current_shortstatehash = prev_hash,
+			| Err(_) => break, // No more history
+		}
+	}
 
 	let mut last_sync_end_shortstatehash = None;
 	if let Some(last_sync_end_count) = last_sync_end_count {
@@ -907,26 +919,30 @@ mod tests {
 		let leave_content = RoomMemberEventContent::new(MembershipState::Leave);
 		let invite_content = RoomMemberEventContent::new(MembershipState::Invite);
 
-		// test matrix: (previous_membership, expected_result)
-		// We do not need a `current_membership` because `joined.rs` is only called
-		// for rooms the user is currently joined to.
+		// test matrix: (previous_membership, current_membership, expected_result)
 		let cases = vec![
 			// Case 1: normal incremental sync (already joined, still joined)
-			(Some(&join_content), false),
+			(Some(&join_content), Some(&join_content), false),
 			// Case 2: genuinely new join (was not in room, now joined) -> SHOULD BE TRUE
-			(None, true),
+			(None, Some(&join_content), true),
 			// Case 3: rejoined room (previously left, now joined) -> SHOULD BE TRUE
-			(Some(&leave_content), true),
+			(Some(&leave_content), Some(&join_content), true),
 			// Case 4: joined from invite (previously invited, now joined) -> SHOULD BE TRUE
-			(Some(&invite_content), true),
+			(Some(&invite_content), Some(&join_content), true),
+			// Case 5: left room (was joined, now left) -> SHOULD BE FALSE
+			(Some(&join_content), Some(&leave_content), false),
+			// Case 6: corrupted database state (not in room previously, but not joined now)
+			(None, Some(&leave_content), false),
 		];
 
-		for (prev, expected) in cases {
+		for (prev, curr, expected) in cases {
 			let result = prev.is_none_or(|content: &RoomMemberEventContent| {
 				content.membership != MembershipState::Join
+			}) && curr.is_some_and(|content: &RoomMemberEventContent| {
+				content.membership == MembershipState::Join
 			});
 
-			assert_eq!(result, expected, "Failed for prev={prev:?}");
+			assert_eq!(result, expected, "Failed for prev={prev:?}, curr={curr:?}");
 		}
 	}
 }

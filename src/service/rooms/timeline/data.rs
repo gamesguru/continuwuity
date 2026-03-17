@@ -48,7 +48,7 @@ impl Data {
 
 	#[inline]
 	pub(super) async fn last_timeline_count(&self, room_id: &RoomId) -> Result<PduCount> {
-		let pdus_rev = self.pdus_rev(room_id, PduCount::max());
+		let pdus_rev = self.pdus_rev(room_id, PduCount::max(), None);
 
 		pin_mut!(pdus_rev);
 		let last_count = pdus_rev
@@ -63,7 +63,7 @@ impl Data {
 
 	#[inline]
 	pub(super) async fn latest_pdu_in_room(&self, room_id: &RoomId) -> Result<PduEvent> {
-		let pdus_rev = self.pdus_rev(room_id, PduCount::max());
+		let pdus_rev = self.pdus_rev(room_id, PduCount::max(), None);
 
 		pin_mut!(pdus_rev);
 		pdus_rev
@@ -217,6 +217,7 @@ impl Data {
 		&'a self,
 		room_id: &'a RoomId,
 		until: PduCount,
+		to: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.count_to_id(room_id, until, Direction::Backward)
 			.map_ok(move |current| {
@@ -225,6 +226,9 @@ impl Data {
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.ready_and_then(Self::from_json_slice)
+					.try_filter(move |(count, _)| {
+						futures::future::ready(to.is_none_or(|to| *count <= to))
+					})
 			})
 			.try_flatten_stream()
 	}
@@ -233,6 +237,7 @@ impl Data {
 		&'a self,
 		room_id: &'a RoomId,
 		from: PduCount,
+		to: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.count_to_id(room_id, from, Direction::Forward)
 			.map_ok(move |current| {
@@ -241,6 +246,9 @@ impl Data {
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.ready_and_then(Self::from_json_slice)
+					.try_filter(move |(count, _)| {
+						futures::future::ready(to.is_none_or(|to| *count <= to))
+					})
 			})
 			.try_flatten_stream()
 	}

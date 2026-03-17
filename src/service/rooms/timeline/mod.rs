@@ -139,7 +139,7 @@ impl Service {
 
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub async fn first_item_in_room(&self, room_id: &RoomId) -> Result<(PduCount, impl Event)> {
-		let pdus = self.pdus(room_id, None);
+		let pdus = self.pdus(room_id, None, None);
 
 		pin_mut!(pdus);
 		pdus.try_next()
@@ -234,7 +234,7 @@ impl Service {
 		&'a self,
 		room_id: &'a RoomId,
 	) -> impl Stream<Item = PdusIterItem> + Send + 'a {
-		self.pdus(room_id, None).ignore_err()
+		self.pdus(room_id, None, None).ignore_err()
 	}
 
 	/// Reverse iteration starting after `until`.
@@ -243,9 +243,10 @@ impl Service {
 		&'a self,
 		room_id: &'a RoomId,
 		until: Option<PduCount>,
+		to: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.db
-			.pdus_rev(room_id, until.unwrap_or_else(PduCount::max))
+			.pdus_rev(room_id, until.unwrap_or_else(PduCount::max), to)
 	}
 
 	/// Forward iteration starting after `from`.
@@ -254,8 +255,10 @@ impl Service {
 		&'a self,
 		room_id: &'a RoomId,
 		from: Option<PduCount>,
+		to: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.db.pdus(room_id, from.unwrap_or_else(PduCount::min))
+		self.db
+			.pdus(room_id, from.unwrap_or_else(PduCount::min), to)
 	}
 
 	#[tracing::instrument(skip(self), level = "debug")]
@@ -264,7 +267,7 @@ impl Service {
 		room_id: &RoomId,
 		before: PduCount,
 	) -> Result<ShortStateHash> {
-		let mut pdus_rev = Box::pin(self.pdus_rev(room_id, Some(before)));
+		let mut pdus_rev = Box::pin(self.pdus_rev(room_id, Some(before), None));
 		let (_, before_pdu) = pdus_rev
 			.try_next()
 			.await?
