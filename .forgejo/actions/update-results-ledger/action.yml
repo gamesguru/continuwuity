@@ -101,6 +101,7 @@ runs:
 
         if [ -n "$TEST_RESULTS" ] && [ -f "$GITHUB_WORKSPACE/$TEST_RESULTS" ]; then
           cp "$GITHUB_WORKSPACE/$TEST_RESULTS" "runs_data/${COMMIT_HASH}.jsonl"
+          git add "runs_data/${COMMIT_HASH}.jsonl"
         fi
 
         # Append run summary
