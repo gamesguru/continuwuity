@@ -24,6 +24,9 @@ inputs:
   features:
     description: "Space-separated list of cargo features used for this build"
     default: ""
+  provider_override:
+    description: "Override the provider name (Forge, GitHub, etc)"
+    default: ""
 
 runs:
   using: "composite"
@@ -41,13 +44,15 @@ runs:
         ACTOR="${{ inputs.actor }}"
         BINARY_PATH="${{ inputs.binary_path }}"
         FEATURES="${{ inputs.features }}"
+        PROVIDER_OVERRIDE="${{ inputs.provider_override }}"
 
         # Extract commit hash from version string, fall back to env
         BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
         COMMIT_HASH="${BIN_VER_HASH:-${GITHUB_SHA:-unknown}}"
         RUN_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
         RUN_ID="${COMMIT_HASH}-${RUN_DATE}"
-        PROVIDER=$([ -n "${FORGEJO_URL:-}" ] && echo "Forge" || echo "GitHub")
+        PROVIDER="${PROVIDER_OVERRIDE}"
+        [ -z "$PROVIDER" ] && PROVIDER=$([ -n "${FORGEJO_URL:-}" ] && echo "Forge" || echo "GitHub")
         BRANCH_NAME=$(echo "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-main}}" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
         [ -z "$BRANCH_NAME" ] && BRANCH_NAME="main"
 
