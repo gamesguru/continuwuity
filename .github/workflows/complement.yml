@@ -3,7 +3,7 @@ name: Complement Tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, main-upstream, dev]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -203,7 +203,7 @@ jobs:
 
       - name: Update Results Ledger
         if: always()
-        uses: ./.forgejo/actions/update-results-ledger
+        uses: ./.github/actions/update-results-ledger
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           pass_count: ${{ steps.results.outputs.pass || 0 }}
