@@ -4,9 +4,20 @@ set -euo pipefail
 # bin/db-shell
 # Quick access to the Continuwuity results database.
 
-# Default to the remote PROD connection on the obfuscated port 5433
-# unless DATABASE_URL is already set.
-DB_TARGET=${DATABASE_URL:-"postgresql://git@nutra.tk:5433/c10y"}
+# Source .env if it exists to get credentials
+if [ -f ".env" ]; then
+	# shellcheck disable=SC1091
+	source .env
+fi
+
+# We require DATABASE_URL to be set in .env or the environment
+if [ -z "${DATABASE_URL:-}" ]; then
+	echo "Error: DATABASE_URL is not set."
+	echo "Please add 'export DATABASE_URL=\"postgresql://git:password@nutra.tk:5433/c10y?sslmode=disable\"' to your .env file."
+	exit 1
+fi
+
+DB_TARGET="$DATABASE_URL"
 
 # If mTLS certificates exist in the standard location, automatically use them
 if [ -f "$HOME/.postgresql/root.crt" ] && [ -f "$HOME/.postgresql/postgresql.crt" ]; then
@@ -16,5 +27,6 @@ if [ -f "$HOME/.postgresql/root.crt" ] && [ -f "$HOME/.postgresql/postgresql.crt
 	export PGSSLROOTCERT="$HOME/.postgresql/root.crt"
 fi
 
-echo "→ Connecting to: $DB_TARGET"
+# Print connection info with password masked
+echo "→ Connecting to: $(echo "$DB_TARGET" | sed 's/:[^@]*@/:***@/')"
 exec psql "$DB_TARGET" "$@"
