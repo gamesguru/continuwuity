@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# import_history.sh (Optimized Native JSON Ingest)
-# Ingests historical JSONL data directly into PostgreSQL using jsonb.
+# import_history.sh (Simplified Bulk Ingest)
+# Ingests historical JSONL data directly into PostgreSQL.
 
 LEDGER_DIR=${1:-""}
 TEMP_DIR=""
@@ -16,26 +16,22 @@ if [ -z "$LEDGER_DIR" ]; then
   LEDGER_DIR="$TEMP_DIR"
 fi
 
-# Ensure tables and views exist
 SQL_FILE="$(dirname "$0")/tables.sql"
 if [ -f "$SQL_FILE" ]; then
     echo "✓ Ensuring tables and views exist..."
     psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
 fi
 
-echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
+echo "✓ Starting historical import into '$DB_TARGET'..."
 
-# 1. Bulk Ingest Summaries via JSONB
+# 1. Bulk Ingest Summaries (using a temp table for de-duplication)
 echo "→ Ingesting run summaries..."
 psql "$DB_TARGET" <<EOF
 CREATE TEMP TABLE tmp_runs_json (j jsonb);
 \copy tmp_runs_json FROM '$LEDGER_DIR/runs.jsonl' csv quote e'\x01' delimiter e'\x02';
 
-INSERT INTO runs (run_id, run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
 SELECT
-    CASE WHEN (j->>'run_id') ~ '^[0-9a-f]{64}$' THEN (j->>'run_id')
-         ELSE encode(sha256((j->>'run_id')::bytea), 'hex')
-    END,
     (j->>'run_date')::timestamptz,
     (j->>'commit_hash'),
     (j->>'upstream_commit'),
@@ -52,11 +48,11 @@ SELECT
     (j->'skipped_count')::int,
     (j->'failed_count')::int
 FROM tmp_runs_json
-ON CONFLICT (run_id, arch, os) DO NOTHING;
+ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;
 EOF
 
-# 2. Bulk Ingest Details via JSONB
-echo "→ Ingesting test details (streaming)..."
+# 2. Bulk Ingest Details
+echo "→ Ingesting test details..."
 psql "$DB_TARGET" <<EOF
 CREATE TEMP TABLE tmp_details_json (j jsonb);
 \copy tmp_details_json FROM STDIN csv quote e'\x01' delimiter e'\x02';
@@ -77,4 +73,4 @@ ON CONFLICT (run_id, test_name) DO NOTHING;
 EOF
 
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
-echo "✓ Bulk import complete."
+echo "✓ Import complete."
