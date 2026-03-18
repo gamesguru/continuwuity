@@ -225,19 +225,6 @@ jobs:
           pg_ca_crt: ${{ secrets.C10Y_PG_ROOT_CA }}
           pg_client_crt: ${{ secrets.C10Y_PG_CLIENT_CERT }}
           pg_client_key: ${{ secrets.C10Y_PG_CLIENT_KEY }}
-          run_date: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
-          commit_hash: ${{ github.sha }}
-          upstream_commit: ${{ steps.ledger.outputs.upstream_commit }}
-          branch: ${{ github.head_ref || github.ref_name }}
-          author_name: ${{ github.actor }}
-          actor: ${{ github.actor }}
-          arch: ${{ matrix.arch }}
-          os: ${{ matrix.os }}
-          version_string: ${{ steps.version.outputs.version }}
-          features: ${{ env.FEATURES }}
-          pass_count: ${{ steps.results.outputs.pass || 0 }}
-          skip_count: ${{ steps.results.outputs.skip || 0 }}
-          fail_count: ${{ steps.results.outputs.fail || 0 }}
           results_file: "tests/test_results/complement/test_results.jsonl"
 
       - name: Post Complement results to PR
