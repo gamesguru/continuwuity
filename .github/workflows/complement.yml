@@ -72,7 +72,8 @@ jobs:
             clang \
             libclang-dev \
             llvm-dev \
-            mold
+            mold \
+            postgresql-client
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -213,6 +214,28 @@ jobs:
           features: ${{ env.FEATURES }}
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
+
+      - name: Ingest results into PostgreSQL
+        if: always()
+        uses: ./.github/actions/postgres
+        with:
+          database_url: ${{ secrets.C10Y_POSTGRES_URL }}
+          pg_root_ca: ${{ secrets.C10Y_PG_ROOT_CA }}
+          pg_client_cert: ${{ secrets.C10Y_PG_CLIENT_CERT }}
+          pg_client_key: ${{ secrets.C10Y_PG_CLIENT_KEY }}
+          run_date: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          commit_hash: ${{ github.sha }}
+          branch: ${{ github.head_ref || github.ref_name }}
+          author_name: ${{ github.actor }}
+          actor: ${{ github.actor }}
+          arch: ${{ matrix.arch }}
+          os: ${{ matrix.os }}
+          version_string: ${{ steps.version.outputs.version }}
+          features: ${{ env.FEATURES }}
+          pass_count: ${{ steps.results.outputs.pass || 0 }}
+          skip_count: ${{ steps.results.outputs.skip || 0 }}
+          fail_count: ${{ steps.results.outputs.fail || 0 }}
+          results_file: "tests/test_results/complement/test_results.jsonl"
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'

@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS runs (
     binary_sha256 text,
     passed_count integer,
     skipped_count integer,
-    failed_count integer
+    failed_count integer,
+    -- Ensure we don't ingest the same machine's report for the same run twice.
+    UNIQUE NULLS NOT DISTINCT (run_id, arch, os)
 );
 
 -- Create run_details table
@@ -24,7 +26,9 @@ CREATE TABLE IF NOT EXISTS run_details (
     id serial PRIMARY KEY,
     run_id integer REFERENCES runs (id) ON DELETE CASCADE, -- Links to the specific machine run
     test_name text NOT NULL,
-    status text NOT NULL
+    status text NOT NULL,
+    -- Ensure we don't ingest the same test result for the same machine run twice.
+    UNIQUE (run_id, test_name)
 );
 
 -- Create index for performance

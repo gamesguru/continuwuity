@@ -5,8 +5,17 @@ inputs:
   database_url:
     description: "PostgreSQL Connection URL (postgresql://user:password@host:port/dbname)"
     required: true
+  pg_root_ca:
+    description: "Optional: PEM encoded Root CA certificate for mTLS"
+    default: ""
+  pg_client_cert:
+    description: "Optional: PEM encoded Client certificate for mTLS"
+    default: ""
+  pg_client_key:
+    description: "Optional: PEM encoded Client key for mTLS"
+    default: ""
   run_id:
-    description: "Unique identifier for this run. If 'auto' or empty, a 256-bit hex derived from GITHUB_RUN_ID is used to be consistent across matrix jobs."
+    description: "Unique identifier for this run. If 'auto' or empty, a 256-bit hex derived from GITHUB_RUN_ID is used."
     default: "auto"
   run_date:
     description: "Date/time of the run"
@@ -60,6 +69,17 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Setup mTLS Certificates
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.pg_root_ca }}" ]; then
+          mkdir -p "$HOME/.postgresql"
+          echo "${{ inputs.pg_root_ca }}" > "$HOME/.postgresql/root.crt"
+          echo "${{ inputs.pg_client_cert }}" > "$HOME/.postgresql/postgresql.crt"
+          echo "${{ inputs.pg_client_key }}" > "$HOME/.postgresql/postgresql.key"
+          chmod 0600 "$HOME/.postgresql/postgresql.key"
+        fi
+
     - name: Ensure Tables Exist
       shell: bash
       run: |
@@ -71,9 +91,6 @@ runs:
       run: |
         INPUT_ID="${{ inputs.run_id }}"
         if [ "$INPUT_ID" = "auto" ] || [ -z "$INPUT_ID" ]; then
-          # Generate a 256-bit hex derived from the CI run/attempt.
-          # This ensures it's shared across all 4-6 matrix jobs for the same workflow run.
-          # If GITHUB_RUN_ID is not available, we fall back to random for safety.
           SEED="${{ github.run_id }}-${{ github.run_attempt }}"
           if [ -z "${{ github.run_id }}" ]; then
             NEW_ID=$(head -c 32 /dev/urandom | xxd -p -c 32)
@@ -81,19 +98,14 @@ runs:
             NEW_ID=$(echo -n "$SEED" | sha256sum | awk '{print $1}')
           fi
           echo "run_id=$NEW_ID" >> "$GITHUB_OUTPUT"
-          echo "Shared Run ID (Group): $NEW_ID"
         else
           echo "run_id=$INPUT_ID" >> "$GITHUB_OUTPUT"
-          echo "Using provided Run ID (Group): $INPUT_ID"
         fi
 
     - name: Ingest Run Summary
       id: ingest_summary
       shell: bash
       run: |
-        # Use jq to build the INSERT statement for the runs table
-        # We capture the generated PK (id) for the next step.
-
         FINAL_RUN_ID="${{ steps.prepare_id.outputs.run_id }}"
 
         QUERY=$(jq -n -r \
@@ -115,23 +127,28 @@ runs:
           --arg fail "${{ inputs.fail_count }}" \
           ' "INSERT INTO runs (run_id, run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
              VALUES (" + ($run_id | @sh) + ", " + ($run_date | @sh) + ", " + ($commit_hash | @sh) + ", " + (if $upstream == "" then "NULL" else ($upstream | @sh) end) + ", " + ($branch | @sh) + ", " + ($author_name | @sh) + ", " + ($actor | @sh) + ", " + ($provider | @sh) + ", " + ($arch | @sh) + ", " + ($os | @sh) + ", " + ($version_string | @sh) + ", " + ($features | @sh) + ", " + ($binary_sha256 | @sh) + ", " + $pass + ", " + $skip + ", " + $fail + ")
+             ON CONFLICT (run_id, arch, os) DO NOTHING
              RETURNING id;" ')
 
         PK_ID=$(echo "$QUERY" | psql -t -A "${{ inputs.database_url }}")
         echo "machine_pk=$PK_ID" >> "$GITHUB_OUTPUT"
-        echo "Machine-specific PK: $PK_ID"
 
     - name: Ingest Run Details
       shell: bash
       run: |
         RESULTS_FILE="${{ inputs.results_file }}"
         MACHINE_PK="${{ steps.ingest_summary.outputs.machine_pk }}"
+
+        if [ -z "$MACHINE_PK" ]; then
+          echo "Machine run already exists in DB. Skipping details ingestion."
+          exit 0
+        fi
+
         if [ ! -f "$RESULTS_FILE" ]; then
           echo "Results file not found: $RESULTS_FILE"
           exit 0
         fi
 
-        # Convert JSONL to SQL INSERT statements, wrap in a transaction, and pipe to psql
         (
           echo "BEGIN;"
           jq -r --arg machine_pk "$MACHINE_PK" '
