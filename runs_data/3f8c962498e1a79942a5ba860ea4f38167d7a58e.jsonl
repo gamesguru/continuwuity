@@ -453,7 +453,7 @@
 {"Action":"fail","Test":"TestPushSync"}
 {"Action":"fail","Test":"TestPushSync/Adding_a_push_rule_wakes_up_an_incremental_/sync"}
 {"Action":"pass","Test":"TestPushSync/Disabling_a_push_rule_wakes_up_an_incremental_/sync"}
-{"Action":"pass","Test":"TestPushSync/Enabling_a_push_rule_wakes_up_an_incremental_/sync"}
+{"Action":"fail","Test":"TestPushSync/Enabling_a_push_rule_wakes_up_an_incremental_/sync"}
 {"Action":"pass","Test":"TestPushSync/Push_rules_come_down_in_an_initial_/sync"}
 {"Action":"pass","Test":"TestPushSync/Setting_actions_for_a_push_rule_wakes_up_an_incremental_/sync"}
 {"Action":"pass","Test":"TestRedact"}
@@ -681,7 +681,7 @@
 {"Action":"pass","Test":"TestSyncTimelineGap/full"}
 {"Action":"pass","Test":"TestSyncTimelineGap/incremental"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting"}
-{"Action":"pass","Test":"TestThreadReceiptsInSyncMSC4102"}
+{"Action":"fail","Test":"TestThreadReceiptsInSyncMSC4102"}
 {"Action":"fail","Test":"TestThreadSubscriptions"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_create_automatic_subscription_to_a_thread"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_subscribe_to_and_unsubscribe_from_a_thread"}
