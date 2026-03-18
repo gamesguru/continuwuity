@@ -90,3 +90,6 @@ LEFT JOIN LATERAL (
     WHERE rd.run_id = r.id
 ) counts ON TRUE
 WHERE r.n_pass > 0 AND counts.run_total > 0;
+
+-- Ensure read-only users can query the view and raw tables even after they get recreated by CI
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO public;
