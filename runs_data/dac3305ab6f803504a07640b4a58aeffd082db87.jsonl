@@ -681,7 +681,7 @@
 {"Action":"pass","Test":"TestSyncTimelineGap/full"}
 {"Action":"pass","Test":"TestSyncTimelineGap/incremental"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting"}
-{"Action":"pass","Test":"TestThreadReceiptsInSyncMSC4102"}
+{"Action":"fail","Test":"TestThreadReceiptsInSyncMSC4102"}
 {"Action":"fail","Test":"TestThreadSubscriptions"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_create_automatic_subscription_to_a_thread"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_subscribe_to_and_unsubscribe_from_a_thread"}
@@ -696,7 +696,7 @@
 {"Action":"pass","Test":"TestToDeviceMessages"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/good_connectivity"}
-{"Action":"pass","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity"}
+{"Action":"fail","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation/stopped_server"}
 {"Action":"fail","Test":"TestTxnIdWithRefreshToken"}
 {"Action":"fail","Test":"TestTxnIdempotency"}
