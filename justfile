@@ -337,55 +337,5 @@ ci-complement-stats:
 # Usage:
 #   just ci-query-failures limit=5 order=run_date asc sha=c56ea1dc
 ci-query-failures +args="":
-    #!/usr/bin/env python3
-    import sys
-    import re
-    import os
-    import subprocess
-    import time
-
-    args_str = "{{args}}"
-
-    # Get the local machine's timezone offset (e.g. "-04:00") to send to Postgres over SSH
-    tz_raw = time.strftime('%z')
-    if tz_raw:
-        # Postgres expects POSIX offsets where West of UTC is positive.
-        # Python's %z is ISO 8601 (West is negative). So we invert the sign.
-        sign = '+' if tz_raw[0] == '-' else '-'
-        tz_sql = f"{sign}{tz_raw[1:3]}:{tz_raw[3:]}"
-    else:
-        tz_sql = "+00:00"
-
-    # Defaults
-    sha = "all"
-    limit = "15"
-    order = "run_date DESC, n_pass DESC"
-
-    # Extract sha
-    sha_match = re.search(r'sha=([^\s]+)', args_str)
-    if sha_match:
-        sha = sha_match.group(1)
-        args_str = args_str.replace(sha_match.group(0), '')
-
-    # Extract limit
-    limit_match = re.search(r'limit=([0-9]+)', args_str)
-    if limit_match:
-        limit = limit_match.group(1)
-        args_str = args_str.replace(limit_match.group(0), '')
-
-    # Extract order (it takes whatever is left if it starts with order=)
-    order_match = re.search(r'order=(.+?)(?:$| sha=| limit=)', args_str + ' ')
-    if order_match:
-        order = order_match.group(1).strip()
-
-    if sha == "all":
-        query = f"SELECT version_string, to_char(run_date AT TIME ZONE '{tz_sql}', 'YYYY-MM-DD HH24:MI:SS') as run_date, (n_pass + n_skip + n_fail) as n_total, n_pass, n_skip, n_fail, new_pass, new_fail, os, arch, new_failures_list FROM v_run_regressions ORDER BY {order} LIMIT {limit};"
-    else:
-        query = f"SELECT version_string, to_char(run_date AT TIME ZONE '{tz_sql}', 'YYYY-MM-DD HH24:MI:SS') as run_date, (n_pass + n_skip + n_fail) as n_total, n_pass, n_skip, n_fail, new_pass, new_fail, os, arch, new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '{sha}%' OR upstream_sha LIKE '{sha}%' ORDER BY {order} LIMIT {limit};"
-
-    print(f"Executing Query: {query}")
-
-    # Execute the db-shell script with the query
-    env = os.environ.copy()
-    env["PAGER"] = "less -X -F -S"
-    subprocess.run(["./bin/db-shell", "-c", query], env=env)
+    #!/usr/bin/env bash
+    ./.github/actions/postgres/ci-query-failures.py {{args}}
