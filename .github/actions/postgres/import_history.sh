@@ -20,7 +20,6 @@ fi
 SQL_FILE="$(dirname "$0")/tables.sql"
 if [ -f "$SQL_FILE" ]; then
     echo "✓ Applying fresh schema from $SQL_FILE..."
-    # We force a drop of the tables to ensure standardized column names are applied
     psql "$DB_TARGET" -c "DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE;" > /dev/null
     psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
 fi
@@ -43,25 +42,39 @@ FROM b
 ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;
 EOF
 
-# 2. Bulk Ingest Test Details
-echo "→ Ingesting test details (streaming all files)..."
-(
-  for f in "$LEDGER_DIR/runs_data"/*.jsonl; do
+# 2. Bulk Ingest Test Details (Injecting metadata from filenames)
+echo "→ Consolidating and ingesting test details..."
+ALL_DETAILS=$(mktemp)
+for f in "$LEDGER_DIR/runs_data"/*.jsonl; do
     [ -f "$f" ] || continue
-    cat "$f"
-  done
-) | psql "$DB_TARGET" <<'EOF'
+    BASENAME=$(basename "$f" .jsonl)
+
+    # Filename format can be <hash> or <hash>-<arch>-<os>
+    COMMIT=$(echo "$BASENAME" | cut -d'-' -f1)
+    ARCH=$(echo "$BASENAME" | cut -d'-' -f2)
+    OS=$(echo "$BASENAME" | cut -d'-' -f3)
+
+    # If cut didn't find dashes, ARCH/OS will equal COMMIT. Fix that.
+    [ "$ARCH" == "$COMMIT" ] && ARCH=""
+    [ "$OS" == "$COMMIT" ] && OS=""
+
+    # Inject the metadata into the JSON stream for the database join
+    jq -c --arg h "$COMMIT" --arg a "$ARCH" --arg o "$OS" '. + {commit: $h, arch: $a, os: $o}' "$f" >> "$ALL_DETAILS"
+done
+
+psql "$DB_TARGET" <<EOF
 CREATE TEMP TABLE t (j jsonb);
-\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';
+\copy t FROM '$ALL_DETAILS' csv quote e'\x01' delimiter e'\x02';
 
 INSERT INTO run_details (run_id, test_name, status)
 SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
 FROM t
 JOIN runs r ON r.commit_hash = (t.j->>'commit')
-           AND r.arch IS NOT DISTINCT FROM (t.j->>'arch')
-           AND r.os IS NOT DISTINCT FROM (t.j->>'os')
+           AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'),''))
+           AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'),''))
 ON CONFLICT (run_id, test_name) DO NOTHING;
 EOF
 
+rm -f "$ALL_DETAILS"
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
-echo "✓ Import complete."
+echo "✓ Bulk import complete."

@@ -6,7 +6,7 @@ DROP VIEW IF EXISTS v_run_deltas CASCADE;
 DROP VIEW IF EXISTS v_run_regressions CASCADE;
 DROP VIEW IF EXISTS v_run_baselines CASCADE;
 
--- Create runs table (Standardized column names)
+-- Create runs table
 CREATE TABLE IF NOT EXISTS runs (
     id serial PRIMARY KEY,
     run_date timestamp with time zone NOT NULL,
@@ -47,7 +47,6 @@ CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 
 -- Baseline Logic: Finds the BEST run (highest pass count) on origin/main or main-upstream
--- This is the fixed "Master Baseline" we compare everything against.
 CREATE OR REPLACE VIEW v_run_baselines AS
 WITH stable_scores AS (
     SELECT
@@ -71,7 +70,7 @@ SELECT
 FROM
     runs r;
 
--- Final Combined Regressions View (Standardized column names)
+-- Final Combined Regressions View
 CREATE OR REPLACE VIEW v_run_regressions AS
 SELECT
     r.id,
@@ -85,7 +84,7 @@ SELECT
     r.n_pass,
     r.n_fail,
     r.n_skip,
-    -- new_fail (tests that fail now but didn't in the best main baseline)
+    -- new_fail (New Failures vs Best Baseline)
     (
         SELECT count(rd.test_name)
         FROM run_details rd
@@ -93,7 +92,7 @@ SELECT
         LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id AND bd.test_name = rd.test_name
         WHERE rd.run_id = r.id AND rd.status = 'fail' AND (bd.status IS NULL OR bd.status != 'fail')
     ) AS new_fail,
-    -- new_pass (tests that pass now but didn't in the best main baseline)
+    -- new_pass (New Passes vs Best Baseline)
     (
         SELECT count(rd.test_name)
         FROM run_details rd
@@ -101,7 +100,7 @@ SELECT
         LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id AND bd.test_name = rd.test_name
         WHERE rd.run_id = r.id AND rd.status = 'pass' AND (bd.status IS NULL OR bd.status != 'pass')
     ) AS new_pass,
-    -- new_skip (tests that are skipped now but weren't in the best main baseline)
+    -- new_skip (New Skips vs Best Baseline)
     (
         SELECT count(rd.test_name)
         FROM run_details rd
@@ -111,8 +110,7 @@ SELECT
     ) AS new_skip,
     -- New Failures List
     (
-        SELECT string_agg(rd.test_name, E'
-')
+        SELECT string_agg(rd.test_name, E'\n')
         FROM run_details rd
         JOIN v_run_baselines rb ON rb.target_run_id = r.id
         LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id AND bd.test_name = rd.test_name
