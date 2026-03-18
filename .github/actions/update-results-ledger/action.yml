@@ -61,6 +61,18 @@ runs:
         BIN_SHA="unknown"
         [ -f "$BINARY_PATH" ] && BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
 
+        # Determine Author Name and Upstream Commit (for main-upstream)
+        UPSTREAM_COMMIT=""
+        if [ "$BRANCH_NAME" = "main-upstream" ] && [ "$COMMIT_HASH" != "unknown" ]; then
+          # On main-upstream, COMMIT_HASH is the merge commit.
+          # We want the actual upstream commit, which is the first non-merge parent.
+          UPSTREAM_COMMIT=$(git log -1 --format='%P' "$COMMIT_HASH" | awk '{print $2}')
+          [ -z "$UPSTREAM_COMMIT" ] && UPSTREAM_COMMIT="$COMMIT_HASH"
+          AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" || echo "$ACTOR")
+        else
+          AUTHOR_NAME=$(git log -1 --format='%an' "$COMMIT_HASH" || echo "$ACTOR")
+        fi
+
         # --- Work on the orphan branch via worktree ---
         LEDGER_DIR="/tmp/ledger-$$"
 
@@ -90,6 +102,13 @@ runs:
           cd -
         fi
 
+        # Save the full results data
+        RESULTS_FILE="tests/test_results/complement/test_results.jsonl"
+        if [ -f "$RESULTS_FILE" ]; then
+          mkdir -p "$LEDGER_DIR/runs_data"
+          cp "$RESULTS_FILE" "$LEDGER_DIR/runs_data/${COMMIT_HASH}.jsonl"
+        fi
+
         cd "$LEDGER_DIR"
 
         # Ensure files exist
@@ -100,8 +119,10 @@ runs:
           --arg run_id "$RUN_ID" \
           --arg run_date "$RUN_DATE" \
           --arg commit_hash "$COMMIT_HASH" \
+          --arg upstream_commit "$UPSTREAM_COMMIT" \
           --arg branch "$BRANCH_NAME" \
-          --arg author_name "$ACTOR" \
+          --arg author_name "$AUTHOR_NAME" \
+          --arg actor "$ACTOR" \
           --arg provider "$PROVIDER" \
           --arg binary_sha256 "$BIN_SHA" \
           --arg version_string "$VERSION_STRING" \
@@ -113,8 +134,10 @@ runs:
             run_id: $run_id,
             run_date: $run_date,
             commit_hash: $commit_hash,
+            upstream_commit: (if $upstream_commit == "" then null else $upstream_commit end),
             branch: $branch,
             author_name: $author_name,
+            actor: $actor,
             provider: $provider,
             version_string: $version_string,
             features: $features,
@@ -148,7 +171,8 @@ runs:
         fi
 
         # Commit and push, retrying
-        git add runs.jsonl
+        git add runs.jsonl runs_data/ 2>/dev/null || true
+
         if git -c commit.gpgsign=false commit -m "Results for ${COMMIT_HASH} (${PROVIDER}) [skip ci]"; then
           MAX_RETRIES=5
           RETRY_COUNT=0
