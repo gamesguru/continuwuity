@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # bin/db-shell
-# Quick access to the Continuwuity results database.
+# Quick access to the Continuwuity results database via SSH Tunnel.
 
 # Source .env if it exists
 if [ -f ".env" ]; then
@@ -10,8 +10,9 @@ if [ -f ".env" ]; then
     source .env
 fi
 
-# Fallback to direct remote connection with sslmode=disable
-DB_TARGET=${DATABASE_URL:-"postgresql://git@nutra.tk:5433/c10y?sslmode=disable"}
+# Default to the local tunnel entry point (port 5433)
+# To start the tunnel: ssh -C -N -L 5433:127.0.0.1:5432 gg@nutra.tk
+DB_TARGET=${DATABASE_URL:-"postgresql://git@localhost:5433/c10y?sslmode=disable"}
 
-echo "→ Connecting: $(echo "$DB_TARGET" | sed 's/:[^@]*@/:***@/')"
+echo "→ Connecting via SSH Tunnel: $(echo "$DB_TARGET" | sed 's/:[^@]*@/:***@/')"
 exec psql "$DB_TARGET" "$@"
