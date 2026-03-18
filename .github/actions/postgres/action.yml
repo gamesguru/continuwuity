@@ -1,13 +1,10 @@
 ---
 name: "Ingest Run Data into PostgreSQL"
-description: "Setup tables and sync recent CI run history into a PostgreSQL database"
+description: "Setup tables and bulk sync recent CI run history into a PostgreSQL database"
 
 inputs:
   database_url:
     description: "PostgreSQL Connection URL"
-    required: true
-  results_file:
-    description: "Path to current test_results.jsonl"
     required: true
   target_branch:
     description: "Branch where results ledger is stored"
@@ -36,40 +33,37 @@ runs:
           exit 1
         fi
 
-        # 1. Bulk Ingest Run Summaries
-        SYNC_RUNS_SQL="
+        # 1. Bulk Ingest Run Summaries (Metadata)
+        cat "$TEMP_LEDGER/runs.jsonl" | psql "${{ inputs.database_url }}" <<'EOF'
           CREATE TEMP TABLE b (j jsonb);
           \copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';
-          INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+          INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, n_pass, n_skip, n_fail)
           SELECT
-            (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit')::text, (j->>'branch'),
+            (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
             (j->>'author_name'), (j->>'actor'), (j->>'provider'), (j->>'arch'), (j->>'os'),
             (j->>'version_string'), (j->>'features'), (j->>'binary_sha256'),
             (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
           FROM b
-          ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
-
-        cat "$TEMP_LEDGER/runs.jsonl" | psql "${{ inputs.database_url }}" -c "$SYNC_RUNS_SQL"
+          ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;
+EOF
 
         # 2. Bulk Ingest Test Details
         echo "→ Syncing test details for the last 100 runs..."
-        SYNC_DETAILS_SQL="
+        (
+          for f in "$TEMP_LEDGER/runs_data"/*.jsonl; do
+            [ -f "$f" ] || continue
+            cat "$f"
+          done
+        ) | psql "${{ inputs.database_url }}" <<'EOF'
           CREATE TEMP TABLE t (j jsonb);
           \copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';
-
           INSERT INTO run_details (run_id, test_name, status)
           SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
           FROM t
           JOIN runs r ON r.commit_hash = (t.j->>'commit')
                      AND r.arch IS NOT DISTINCT FROM (t.j->>'arch')
                      AND r.os IS NOT DISTINCT FROM (t.j->>'os')
-          ON CONFLICT (run_id, test_name) DO NOTHING;"
-
-        (
-          for f in "$TEMP_LEDGER/runs_data"/*.jsonl; do
-            [ -f "$f" ] || continue
-            cat "$f"
-          done
-        ) | psql "${{ inputs.database_url }}" -c "$SYNC_DETAILS_SQL"
+          ON CONFLICT (run_id, test_name) DO NOTHING;
+EOF
 
         rm -rf "$TEMP_LEDGER"

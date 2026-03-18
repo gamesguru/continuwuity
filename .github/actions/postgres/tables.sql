@@ -1,13 +1,12 @@
----
 -- tables.sql
 -- Relational schema for Continuwuity CI runs.
 
--- Drop views first to allow column/logic updates
+-- Drop views to allow column/logic updates
 DROP VIEW IF EXISTS v_run_deltas CASCADE;
 DROP VIEW IF EXISTS v_run_regressions CASCADE;
 DROP VIEW IF EXISTS v_run_baselines CASCADE;
 
--- Create runs table
+-- Create runs table (Standardized column names)
 CREATE TABLE IF NOT EXISTS runs (
     id serial PRIMARY KEY,
     run_date timestamp with time zone NOT NULL,
@@ -22,13 +21,12 @@ CREATE TABLE IF NOT EXISTS runs (
     version_string text,
     features text,
     binary_sha256 text,
-    passed_count integer DEFAULT 0,
-    skipped_count integer DEFAULT 0,
-    failed_count integer DEFAULT 0
+    n_pass integer DEFAULT 0,
+    n_skip integer DEFAULT 0,
+    n_fail integer DEFAULT 0
 );
 
--- Unique index to distinguish every machine run, including re-runs at different times
--- Composite key: (commit_hash, run_date, arch, os)
+-- Unique index to prevent duplicate machine reports
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_machine_run
 ON runs (commit_hash, run_date, arch, os) NULLS NOT DISTINCT;
 
@@ -40,7 +38,7 @@ CREATE TABLE IF NOT EXISTS run_details (
     status text NOT NULL
 );
 
--- Ensure we don't log the same test twice for the same machine run
+-- Ensure we don't log the same test twice for the same run
 CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test
 ON run_details (run_id, test_name);
 
@@ -48,23 +46,24 @@ ON run_details (run_id, test_name);
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 
--- Baseline Logic: Finds the BEST run (highest pass count) on a stable branch
+-- Baseline Logic: Finds the BEST run (highest pass count) on origin/main or main-upstream
+-- This is the fixed "Master Baseline" we compare everything against.
 CREATE OR REPLACE VIEW v_run_baselines AS
 WITH stable_scores AS (
     SELECT
         id,
         arch,
         os,
-        passed_count,
+        n_pass,
         ROW_NUMBER() OVER (
             PARTITION BY arch, os
-            ORDER BY passed_count DESC, run_date DESC
+            ORDER BY n_pass DESC, run_date DESC
         ) as rank
     FROM
         runs
     WHERE
         branch IN ('main', 'main-upstream', 'main_upstream')
-        AND passed_count > 0
+        AND n_pass > 0
 )
 SELECT
     r.id AS target_run_id,
@@ -72,7 +71,7 @@ SELECT
 FROM
     runs r;
 
--- Final Combined Regressions View
+-- Final Combined Regressions View (Standardized column names)
 CREATE OR REPLACE VIEW v_run_regressions AS
 SELECT
     r.id,
@@ -83,36 +82,37 @@ SELECT
     r.branch,
     r.arch,
     r.os,
-    r.passed_count,
-    r.failed_count,
-    r.skipped_count,
-    -- n_fail (New Failures)
+    r.n_pass,
+    r.n_fail,
+    r.n_skip,
+    -- new_fail (tests that fail now but didn't in the best main baseline)
     (
         SELECT count(rd.test_name)
         FROM run_details rd
         JOIN v_run_baselines rb ON rb.target_run_id = r.id
         LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id AND bd.test_name = rd.test_name
         WHERE rd.run_id = r.id AND rd.status = 'fail' AND (bd.status IS NULL OR bd.status != 'fail')
-    ) AS n_fail,
-    -- n_pass (New Passes)
+    ) AS new_fail,
+    -- new_pass (tests that pass now but didn't in the best main baseline)
     (
         SELECT count(rd.test_name)
         FROM run_details rd
         JOIN v_run_baselines rb ON rb.target_run_id = r.id
         LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id AND bd.test_name = rd.test_name
         WHERE rd.run_id = r.id AND rd.status = 'pass' AND (bd.status IS NULL OR bd.status != 'pass')
-    ) AS n_pass,
-    -- n_skip (New Skips)
+    ) AS new_pass,
+    -- new_skip (tests that are skipped now but weren't in the best main baseline)
     (
         SELECT count(rd.test_name)
         FROM run_details rd
         JOIN v_run_baselines rb ON rb.target_run_id = r.id
         LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id AND bd.test_name = rd.test_name
         WHERE rd.run_id = r.id AND rd.status = 'skip' AND (bd.status IS NULL OR bd.status != 'skip')
-    ) AS n_skip,
+    ) AS new_skip,
     -- New Failures List
     (
-        SELECT string_agg(rd.test_name, E'\n')
+        SELECT string_agg(rd.test_name, E'
+')
         FROM run_details rd
         JOIN v_run_baselines rb ON rb.target_run_id = r.id
         LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id AND bd.test_name = rd.test_name
@@ -121,4 +121,4 @@ SELECT
 FROM
     runs r
 WHERE
-    r.passed_count > 0;
+    r.n_pass > 0;
