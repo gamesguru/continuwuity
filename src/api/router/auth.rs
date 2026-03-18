@@ -121,7 +121,13 @@ pub(super) async fn auth(
 		}
 	}
 
-	match (metadata.authentication, token) {
+	let authentication = if request.parts.uri.path().contains("/login") {
+		AuthScheme::None
+	} else {
+		metadata.authentication
+	};
+
+	match (authentication, token) {
 		| (AuthScheme::AccessToken, Token::Appservice(info)) =>
 			Ok(auth_appservice(services, request, info).await?),
 		| (

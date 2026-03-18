@@ -35,7 +35,7 @@ pub async fn fetch_remote_thumbnail(
 		.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
 		.await;
 
-	if let Err(Error::Request(NotFound, ..)) = &result {
+	if let Err(Error::Request(Unrecognized | NotFound, ..)) = &result {
 		return self
 			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
 			.await;
@@ -67,7 +67,7 @@ pub async fn fetch_remote_content(
 			);
 		});
 
-	if let Err(Error::Request(Unrecognized, ..)) = &result {
+	if let Err(Error::Request(Unrecognized | NotFound, ..)) = &result {
 		return self
 			.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
 			.await;
@@ -340,10 +340,7 @@ fn check_fetch_authorized(&self, mxc: &Mxc<'_>) -> Result<()> {
 
 #[implement(super::Service)]
 pub fn check_legacy_freeze(&self) -> Result<()> {
-	self.services
-		.server
-		.config
-		.freeze_legacy_media
+	(!self.services.server.config.freeze_legacy_media)
 		.then_some(())
 		.ok_or(err!(Request(NotFound("Remote media is frozen."))))
 }
