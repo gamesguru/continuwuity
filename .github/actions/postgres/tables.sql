@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS runs (
     failed_count integer
 );
 
--- Ensure uniqueness for runs (handles NULL arch/os correctly in PG 15+)
+-- Ensure uniqueness for runs
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_run ON runs (run_id, arch, os) NULLS NOT DISTINCT;
 
 -- Create run_details table
@@ -35,45 +35,158 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test ON run_details (ru
 
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
+
 CREATE INDEX IF NOT EXISTS idx_runs_run_id ON runs (run_id);
 
--- View for Run Regressions (New Failures vs Main)
-CREATE OR REPLACE VIEW v_run_regressions AS
-WITH baseline AS (
-    -- For each unique (arch, os), find the ID of the latest 'main' run
-    SELECT DISTINCT ON (arch, os)
-        id, arch, os
-    FROM runs
-    WHERE branch = 'main'
-    ORDER BY arch, os, run_date DESC
-)
+-- Baseline Logic CTE (shared by views)
+CREATE OR REPLACE VIEW v_run_baselines AS
+WITH stable_branches AS (
+    SELECT
+        id,
+        run_date,
+        arch,
+        os,
+        branch
+    FROM
+        runs
+    WHERE
+        branch IN ('main', 'main-upstream', 'main_upstream'))
 SELECT
-    r.id,
-    r.run_id,
-    r.version_string,
-    r.run_date,
-    r.branch,
-    r.arch,
-    r.os,
-    r.failed_count as total_failed,
-    -- Count tests that fail in current run but did NOT fail in the latest main run
+    r.id AS target_run_id,
     (
-        SELECT count(rd.test_name)
-        FROM run_details rd
-        LEFT JOIN baseline b ON b.arch IS NOT DISTINCT FROM r.arch AND b.os IS NOT DISTINCT FROM r.os
-        LEFT JOIN run_details bd ON bd.run_id = b.id AND bd.test_name = rd.test_name
-        WHERE rd.run_id = r.id
-          AND rd.status = 'fail'
-          AND (bd.status IS NULL OR bd.status != 'fail')
-    ) as n_failed_new,
-    -- Aggregated list of new failures
+        SELECT
+            s.id
+        FROM
+            stable_branches s
+        WHERE
+            s.arch IS NOT DISTINCT FROM r.arch
+            AND s.os IS NOT DISTINCT FROM r.os
+            AND ((r.branch IN ('main', 'main-upstream', 'main_upstream')
+                    AND s.run_date < r.run_date)
+                OR (r.branch NOT IN ('main', 'main-upstream', 'main_upstream')
+                    AND s.run_date <= r.run_date))
+        ORDER BY
+            s.run_date DESC
+        LIMIT 1) AS baseline_id
+FROM
+    runs r;
+
+-- View for Run Regressions (New Failures)
+CREATE OR REPLACE VIEW v_run_regressions AS
+SELECT
+    r.*,
     (
-        SELECT string_agg(rd.test_name, E'\n')
-        FROM run_details rd
-        LEFT JOIN baseline b ON b.arch IS NOT DISTINCT FROM r.arch AND b.os IS NOT DISTINCT FROM r.os
-        LEFT JOIN run_details bd ON bd.run_id = b.id AND bd.test_name = rd.test_name
-        WHERE rd.run_id = r.id
-          AND rd.status = 'fail'
-          AND (bd.status IS NULL OR bd.status != 'fail')
-    ) as new_failures_list
-FROM runs r;
+        SELECT
+            count(rd.test_name)
+        FROM
+            run_details rd
+            JOIN v_run_baselines rb ON rb.target_run_id = r.id
+            LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id
+                AND bd.test_name = rd.test_name
+        WHERE
+            rd.run_id = r.id
+            AND rd.status = 'fail'
+            AND (bd.status IS NULL
+                OR bd.status != 'fail')) AS n_failed_new,
+    (
+        SELECT
+            string_agg(rd.test_name, '\n')
+        FROM
+            run_details rd
+            JOIN v_run_baselines rb ON rb.target_run_id = r.id
+            LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id
+                AND bd.test_name = rd.test_name
+        WHERE
+            rd.run_id = r.id
+            AND rd.status = 'fail'
+            AND (bd.status IS NULL
+                OR bd.status != 'fail')) AS new_failures_list
+FROM
+    runs r;
+
+-- View for Run Improvements (Newly Passing)
+CREATE OR REPLACE VIEW v_run_improvements AS
+SELECT
+    r.*,
+    (
+        SELECT
+            count(rd.test_name)
+        FROM
+            run_details rd
+            JOIN v_run_baselines rb ON rb.target_run_id = r.id
+            LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id
+                AND bd.test_name = rd.test_name
+        WHERE
+            rd.run_id = r.id
+            AND rd.status = 'pass'
+            AND (bd.status IS NULL
+                OR bd.status != 'pass')) AS n_passed_new,
+    (
+        SELECT
+            string_agg(rd.test_name, '\n')
+        FROM
+            run_details rd
+            JOIN v_run_baselines rb ON rb.target_run_id = r.id
+            LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id
+                AND bd.test_name = rd.test_name
+        WHERE
+            rd.run_id = r.id
+            AND rd.status = 'pass'
+            AND (bd.status IS NULL
+                OR bd.status != 'pass')) AS new_passes_list
+FROM
+    runs r;
+
+-- View for Run Skips (Newly Skipped)
+CREATE OR REPLACE VIEW v_run_skips AS
+SELECT
+    r.*,
+    (
+        SELECT
+            count(rd.test_name)
+        FROM
+            run_details rd
+            JOIN v_run_baselines rb ON rb.target_run_id = r.id
+            LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id
+                AND bd.test_name = rd.test_name
+        WHERE
+            rd.run_id = r.id
+            AND rd.status = 'skip'
+            AND (bd.status IS NULL
+                OR bd.status != 'skip')) AS n_skipped_new,
+    (
+        SELECT
+            string_agg(rd.test_name, '\n')
+        FROM
+            run_details rd
+            JOIN v_run_baselines rb ON rb.target_run_id = r.id
+            LEFT JOIN run_details bd ON bd.run_id = rb.baseline_id
+                AND bd.test_name = rd.test_name
+        WHERE
+            rd.run_id = r.id
+            AND rd.status = 'skip'
+            AND (bd.status IS NULL
+                OR bd.status != 'skip')) AS new_skips_list
+FROM
+    runs r;
+
+-- Consolidated Delta View (Regressions, Improvements, and Skips)
+CREATE OR REPLACE VIEW v_run_deltas AS
+SELECT
+    reg.id,
+    reg.run_id,
+    reg.version_string,
+    reg.run_date,
+    reg.branch,
+    reg.arch,
+    reg.os,
+    reg.n_failed_new,
+    imp.n_passed_new,
+    skp.n_skipped_new,
+    reg.new_failures_list,
+    imp.new_passes_list,
+    skp.new_skips_list
+FROM
+    v_run_regressions reg
+    JOIN v_run_improvements imp ON reg.id = imp.id
+    JOIN v_run_skips skp ON reg.id = skp.id;
