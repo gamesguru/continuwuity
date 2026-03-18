@@ -1,6 +1,6 @@
 ---
 name: "Ingest Run Data into PostgreSQL"
-description: "Setup tables and ingest CI run details into a PostgreSQL database"
+description: "Setup tables and ingest CI run details with automatic backfill of recent history"
 
 inputs:
   database_url:
@@ -63,6 +63,9 @@ inputs:
   results_file:
     description: "Path to test_results.jsonl"
     required: true
+  target_branch:
+    description: "Branch where results ledger is stored"
+    default: "_metadata/badges"
 
 runs:
   using: "composite"
@@ -84,11 +87,10 @@ runs:
         psql "${{ inputs.database_url }}" \
           -f "${{ github.action_path }}/tables.sql"
 
-    - name: Ingest Run Summary
+    - name: Ingest Current Run Summary
       id: ingest_summary
       shell: bash
       run: |
-        # Construct JSON payload with one entry per line for readability
         JSON=$(jq -n -c \
           --arg rd "${{ inputs.run_date }}" \
           --arg ch "${{ inputs.commit_hash }}" \
@@ -123,7 +125,6 @@ runs:
             failed_count: ($fl|tonumber)
           }')
 
-        # Ingest summary using multi-line SQL for readability
         INSERT_SQL="
           INSERT INTO runs (
             run_date, commit_hash, upstream_commit, branch, author_name,
@@ -153,7 +154,6 @@ runs:
         PK_ID=$(psql "${{ inputs.database_url }}" -t -A -c "$INSERT_SQL" | head -n 1)
 
         if [ -z "$PK_ID" ]; then
-          # Fallback lookup handles NULLs correctly
           LOOKUP_SQL="
             SELECT id FROM runs
             WHERE commit_hash = '${{ inputs.commit_hash }}'
@@ -165,14 +165,12 @@ runs:
 
         echo "machine_pk=$PK_ID" >> "$GITHUB_OUTPUT"
 
-    - name: Ingest Run Details
+    - name: Ingest Current Run Details
       shell: bash
       run: |
         MACHINE_PK="${{ steps.ingest_summary.outputs.machine_pk }}"
         [ -z "$MACHINE_PK" ] && exit 0
 
-        # Use simple pipe to psql to avoid YAML heredoc sensitivity
-        # SQL logic split for maximum readability
         DETAILS_SQL="
           CREATE TEMP TABLE t (j jsonb);
           \copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';
@@ -182,3 +180,28 @@ runs:
           ON CONFLICT (run_id, test_name) DO NOTHING;"
 
         cat "${{ inputs.results_file }}" | psql "${{ inputs.database_url }}" -c "$DETAILS_SQL"
+
+    - name: Backfill Recent History (Last 100 Runs)
+      shell: bash
+      run: |
+        TEMP_LEDGER=$(mktemp -d)
+        TARGET_BRANCH="${{ inputs.target_branch }}"
+        echo "→ Checking recent history for missing entries..."
+
+        git clone --depth 100 --branch "$TARGET_BRANCH" https://github.com/${{ github.repository }} "$TEMP_LEDGER" > /dev/null 2>&1 || exit 0
+        [ ! -f "$TEMP_LEDGER/runs.jsonl" ] && exit 0
+
+        SYNC_SQL="
+          CREATE TEMP TABLE b (j jsonb);
+          \copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';
+          INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+          SELECT
+            (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
+            (j->>'author_name'), (j->>'actor'), (j->>'provider'), (j->>'arch'), (j->>'os'),
+            (j->>'version_string'), (j->>'features'), (j->>'binary_sha256'),
+            (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
+          FROM b
+          ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
+
+        cat "$TEMP_LEDGER/runs.jsonl" | psql "${{ inputs.database_url }}" -c "$SYNC_SQL"
+        rm -rf "$TEMP_LEDGER"
