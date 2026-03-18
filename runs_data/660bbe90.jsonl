@@ -455,7 +455,7 @@
 {"Action":"pass","Test":"TestPushSync/Disabling_a_push_rule_wakes_up_an_incremental_/sync"}
 {"Action":"pass","Test":"TestPushSync/Enabling_a_push_rule_wakes_up_an_incremental_/sync"}
 {"Action":"pass","Test":"TestPushSync/Push_rules_come_down_in_an_initial_/sync"}
-{"Action":"fail","Test":"TestPushSync/Setting_actions_for_a_push_rule_wakes_up_an_incremental_/sync"}
+{"Action":"pass","Test":"TestPushSync/Setting_actions_for_a_push_rule_wakes_up_an_incremental_/sync"}
 {"Action":"pass","Test":"TestRedact"}
 {"Action":"pass","Test":"TestRedact/Event_content_is_redacted"}
 {"Action":"pass","Test":"TestRegistration"}
@@ -520,7 +520,7 @@
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoin/Join_should_fail_with_mangled_join_rules"}
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoin/Join_should_succeed_when_invited"}
 {"Action":"fail","Test":"TestRestrictedRoomsRemoteJoin/Join_should_succeed_when_joined_to_allowed_room"}
-{"Action":"fail","Test":"TestRestrictedRoomsRemoteJoinFailOver"}
+{"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinFailOver"}
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinFailOverInMSC3787Room"}
 {"Action":"fail","Test":"TestRestrictedRoomsRemoteJoinInMSC3787Room"}
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinInMSC3787Room/Join_should_fail_initially"}
@@ -681,7 +681,7 @@
 {"Action":"pass","Test":"TestSyncTimelineGap/full"}
 {"Action":"pass","Test":"TestSyncTimelineGap/incremental"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting"}
-{"Action":"pass","Test":"TestThreadReceiptsInSyncMSC4102"}
+{"Action":"fail","Test":"TestThreadReceiptsInSyncMSC4102"}
 {"Action":"fail","Test":"TestThreadSubscriptions"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_create_automatic_subscription_to_a_thread"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_subscribe_to_and_unsubscribe_from_a_thread"}
