@@ -12,38 +12,44 @@ fi
 
 SSH_TARGET=${DB_SSH_TARGET:-"git@nutra.tk"}
 
-# If they provide a URL in .env, use it! Otherwise fallback.
-DB_TARGET=${DATABASE_URL:-"postgresql://gitreadonly@127.0.0.1:5432/c10y"}
-
-# Force nutra.tk to 127.0.0.1 because we are tunneling
-DB_TARGET="${DB_TARGET//nutra.tk/127.0.0.1}"
+# If they provide a URL in .env, use it! Otherwise default to the Nginx proxy on 5433
+DB_TARGET=${DATABASE_URL:-"postgresql://gitreadonly@nutra.tk:5433/c10y"}
 
 # Mask password for safe echo
 SAFE_TARGET=$(echo "$DB_TARGET" | sed 's/:[^@/]*@/:***@/')
 
 # Automatically detect if we are already on the database server
 if [[ "$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "")" == *"vps76"* ]] || [[ "$SSH_TARGET" == "local" ]]; then
-	echo "→ Connecting locally using '$SAFE_TARGET'..."
-	exec psql "$DB_TARGET" "$@"
+    # If running locally, rewrite public host to localhost for speed
+    LOCAL_TARGET="${DB_TARGET//nutra.tk:5433/127.0.0.1:5432}"
+    echo "→ Connecting locally using '$(echo "$LOCAL_TARGET" | sed 's/:[^@/]*@/:***@/')'..."
+    exec psql "$LOCAL_TARGET" "$@"
+elif [[ "$DB_TARGET" == *"127.0.0.1"* ]] || [[ "$DB_TARGET" == *"localhost"* ]]; then
+    echo "→ Opening temporary SSH tunnel to $SSH_TARGET..."
+
+    # Extract port from URL to bind tunnel to the correct local port
+    LOCAL_PORT=$(echo "$DB_TARGET" | sed -n 's/.*:\([0-9]*\)\/.*/\1/p')
+    LOCAL_PORT=${LOCAL_PORT:-5432}
+
+    # Open SSH tunnel in the background
+    ssh -f -N -M -S /tmp/c10y-db-socket -L "$LOCAL_PORT:127.0.0.1:5432" "$SSH_TARGET"
+
+    echo "→ Connecting via local SSH tunnel using '$SAFE_TARGET'..."
+
+    # Run psql locally (turn off set -e so we can safely clean up the socket after)
+    set +e
+    if [ $# -eq 0 ]; then
+        psql "$DB_TARGET"
+    else
+        psql "$DB_TARGET" "$@"
+    fi
+    EXIT_CODE=$?
+
+    # Close and clean up the background SSH tunnel
+    ssh -S /tmp/c10y-db-socket -O exit "$SSH_TARGET" 2>/dev/null
+
+    exit $EXIT_CODE
 else
-	echo "→ Opening temporary SSH tunnel to $SSH_TARGET..."
-
-	# Open SSH tunnel in the background using the exact default Postgres port (5432)
-	ssh -f -N -M -S /tmp/c10y-db-socket -L 5432:127.0.0.1:5432 "$SSH_TARGET"
-
-	echo "→ Connecting via local tunnel using '$SAFE_TARGET'..."
-
-	# Run psql locally (turn off set -e so we can safely clean up the socket after)
-	set +e
-	if [ $# -eq 0 ]; then
-		psql "$DB_TARGET"
-	else
-		psql "$DB_TARGET" "$@"
-	fi
-	EXIT_CODE=$?
-
-	# Close and clean up the background SSH tunnel
-	ssh -S /tmp/c10y-db-socket -O exit "$SSH_TARGET" 2>/dev/null
-
-	exit $EXIT_CODE
+    echo "→ Connecting directly via Nginx proxy using '$SAFE_TARGET'..."
+    exec psql "$DB_TARGET" "$@"
 fi
