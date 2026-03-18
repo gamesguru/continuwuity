@@ -70,17 +70,17 @@ SELECT
     counts.run_total,
     (counts.run_total - (SELECT COUNT(*) FROM master_baseline)) as diff_total,
     -- Calculate deltas vs Master Baseline
-    counts.new_fail,
     counts.new_pass,
     counts.new_skip,
+    counts.new_fail,
     counts.new_failures_list
 FROM runs r
 LEFT JOIN LATERAL (
     SELECT
         COUNT(*) as run_total,
-        COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_fail,
         COUNT(*) FILTER (WHERE rd.status = 'pass' AND (mb.status IS NULL OR mb.status != 'pass')) as new_pass,
         COUNT(*) FILTER (WHERE rd.status = 'skip' AND (mb.status IS NULL OR mb.status != 'skip')) as new_skip,
+        COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_fail,
         STRING_AGG(rd.test_name, E'\n') FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_failures_list
     FROM run_details rd
     LEFT JOIN master_baseline mb ON mb.test_name = rd.test_name

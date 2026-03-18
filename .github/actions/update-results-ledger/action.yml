@@ -84,8 +84,11 @@ runs:
 
         # Determine Author Name and Upstream Commit
         if [ "$COMMIT_HASH" != "unknown" ]; then
-          # Find the second parent of the most recent merge commit
-          UPSTREAM_COMMIT=$(git log -1 --merges --format='%P' "$COMMIT_HASH" | awk '{print $2}')
+          # Fetch true upstream main to find the definitive merge base
+          UPSTREAM_URL="https://forgejo.ellis.link/continuwuation/continuwuity.git"
+          if git fetch "$UPSTREAM_URL" main 2>/dev/null; then
+            UPSTREAM_COMMIT=$(git merge-base FETCH_HEAD "$COMMIT_HASH" 2>/dev/null || echo "")
+          fi
           [ -z "$UPSTREAM_COMMIT" ] && UPSTREAM_COMMIT="$COMMIT_HASH"
           AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" 2>/dev/null || echo "${ACTOR:-unknown}")
         else

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # bin/db-shell
-# Quick access to the Continuwuity results database via SSH Tunnel.
+# Quick access to the Continuwuity results database directly via SSH or locally.
 
 # Source .env if it exists
 if [ -f ".env" ]; then
@@ -10,9 +10,17 @@ if [ -f ".env" ]; then
     source .env
 fi
 
-# Default to the local tunnel entry point (port 5433)
-# To start the tunnel: ssh -C -N -L 5433:127.0.0.1:5432 gg@nutra.tk
-DB_TARGET=${DATABASE_URL:-"postgresql://git@localhost:5433/c10y?sslmode=disable"}
+SSH_TARGET=${DB_SSH_TARGET:-"git@nutra.tk"}
+DB_NAME=${DB_NAME:-"c10y"}
+DB_USER=${DB_USER:-"git"}
 
-echo "→ Connecting via SSH Tunnel: $(echo "$DB_TARGET" | sed 's/:[^@]*@/:***@/')"
-exec psql "$DB_TARGET" "$@"
+# Automatically detect if we are already on the database server
+if [[ "$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "")" == *"vps76"* ]] || [[ "$SSH_TARGET" == "local" ]]; then
+    echo "→ Connecting locally to $DB_NAME..."
+    exec psql -U "$DB_USER" "$DB_NAME" "$@"
+else
+    echo "→ Connecting directly via SSH to $SSH_TARGET..."
+    # Securely escape all arguments so the remote shell doesn't split the SQL query
+    printf -v QUOTED_ARGS '%q ' "$@"
+    exec ssh -t "$SSH_TARGET" "psql -U $DB_USER $DB_NAME $QUOTED_ARGS"
+fi
