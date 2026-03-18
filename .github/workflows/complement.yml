@@ -240,7 +240,7 @@ jobs:
         if: always()
         uses: ./.github/actions/postgres
         with:
-          database_url: "postgresql://git@localhost:5433/c10y?sslmode=disable"
+          database_url: "postgresql://git@localhost:5433/c10y"
           results_file: "tests/test_results/complement/test_results.jsonl"
 
 
