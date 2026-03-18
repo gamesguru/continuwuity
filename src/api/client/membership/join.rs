@@ -401,18 +401,9 @@ async fn join_room_by_id_helper_remote(
 
 	let join_authorized_via_users_server = {
 		use RoomVersionId::*;
-		if !matches!(room_version_id, V1 | V2 | V3 | V4 | V5 | V6 | V7) {
-			join_event_stub
-				.get("content")
-				.map(|s| {
-					s.as_object()?
-						.get("join_authorised_via_users_server")?
-						.as_str()
-				})
-				.and_then(|s| OwnedUserId::try_from(s.unwrap_or_default()).ok())
-		} else {
-			None
-		}
+		matches!(room_version_id, V1 | V2 | V3 | V4 | V5 | V6 | V7)
+			.then_some(None)
+			.flatten()
 	};
 
 	join_event_stub.insert(

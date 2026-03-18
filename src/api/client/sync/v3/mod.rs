@@ -25,13 +25,19 @@ use futures::{
 };
 use ruma::{
 	DeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId,
-	api::client::{
-		filter::FilterDefinition,
-		sync::sync_events::{
-			self, DeviceLists,
-			v3::{Filter, InviteState, InvitedRoom, KnockState, KnockedRoom, LeftRoom},
+	api::{
+		OutgoingResponse,
+		client::{
+			filter::FilterDefinition,
+			sync::sync_events::{
+				self, DeviceLists,
+				v3::{
+					Filter, GlobalAccountData, InviteState, InvitedRoom, KnockState, KnockedRoom,
+					LeftRoom, Presence, Rooms, ToDevice,
+				},
+			},
+			uiaa::UiaaResponse,
 		},
-		uiaa::UiaaResponse,
 	},
 	events::{
 		AnyGlobalAccountDataEvent, AnyRawAccountDataEvent,
@@ -201,7 +207,7 @@ pub(crate) async fn sync_events_route(
 	let watcher = services.sync.watch(sender_user, sender_device);
 
 	let response = build_sync_events(&services, &body).await?;
-	if body.body.full_state || !response.is_null() {
+	if body.body.since.is_none() || body.body.full_state || !is_sync_response_empty(&response) {
 		return Ok(axum::Json(response).into_response());
 	}
 
@@ -214,6 +220,20 @@ pub(crate) async fn sync_events_route(
 	// Retry returning data
 	let response = build_sync_events(&services, &body).await?;
 	Ok(axum::Json(response).into_response())
+}
+
+fn is_sync_response_empty(val: &serde_json::Value) -> bool {
+	let Some(obj) = val.as_object() else {
+		return true;
+	};
+
+	let rooms_empty = obj.get("rooms").is_none();
+	let presence_empty = obj.get("presence").is_none();
+	let account_data_empty = obj.get("account_data").is_none();
+	let to_device_empty = obj.get("to_device").is_none();
+	let device_lists_empty = obj.get("device_lists").is_none();
+
+	rooms_empty && presence_empty && account_data_empty && to_device_empty && device_lists_empty
 }
 
 pub(crate) async fn build_sync_events(
@@ -413,28 +433,37 @@ pub(crate) async fn build_sync_events(
 	let mut device_list_updates: DeviceLists = device_list_updates.into();
 	device_list_updates.changed.extend(keys_changed);
 
-	let mut val = serde_json::json!({
-		"account_data": { "events": account_data },
-		"device_lists": device_list_updates,
-		"device_one_time_keys_count": device_one_time_keys_count,
-		"next_batch": current_count.to_string(),
-		"presence": {
-			"events": presence_updates
+	let ruma_response = sync_events::v3::Response {
+		next_batch: current_count.to_string(),
+		rooms: Rooms {
+			leave: left_rooms,
+			join: BTreeMap::new(), // Overridden below
+			invite: invited_rooms,
+			knock: knocked_rooms,
+		},
+		presence: Presence {
+			events: presence_updates
 				.into_iter()
 				.flat_map(IntoIterator::into_iter)
 				.map(|(sender, content)| PresenceEvent { content, sender })
 				.map(|ref event| Raw::new(event))
 				.filter_map(Result::ok)
-				.collect::<Vec<_>>(),
+				.collect(),
 		},
-		"rooms": {
-			"leave": left_rooms,
-			"join": {}, // Inserted below
-			"invite": invited_rooms,
-			"knock": knocked_rooms,
-		},
-		"to_device": { "events": to_device_events },
-	});
+		account_data: GlobalAccountData { events: account_data },
+		to_device: ToDevice { events: to_device_events },
+		device_lists: device_list_updates,
+		device_one_time_keys_count,
+		device_unused_fallback_key_types: None,
+	};
+
+	let mut val: serde_json::Value = serde_json::from_slice(
+		ruma_response
+			.try_into_http_response::<bytes::BytesMut>()
+			.expect("ruma response is valid")
+			.body(),
+	)
+	.expect("ruma response is valid JSON");
 
 	// Manually insert JoinedRoomMSC4222 data
 	if let Some(rooms) = val.get_mut("rooms").and_then(|r| r.get_mut("join")) {

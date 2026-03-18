@@ -45,18 +45,32 @@ use crate::client::{
 };
 
 #[derive(serde::Serialize)]
+pub(super) struct StateMSC4222 {
+	#[serde(default)]
+	pub(super) events: Vec<Raw<AnySyncStateEvent>>,
+}
+
+#[derive(serde::Serialize)]
 pub(super) struct JoinedRoomMSC4222 {
 	#[serde(flatten)]
 	pub(super) joined_room: JoinedRoom,
 
-	#[serde(skip_serializing_if = "Vec::is_empty")]
-	#[serde(default)]
-	pub(super) state_after: Vec<Raw<AnySyncStateEvent>>,
+	#[serde(rename = "state_after")]
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(super) state_after: Option<StateMSC4222>,
+
+	#[serde(rename = "org.matrix.msc4222.state_after")]
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(super) state_after_unstable: Option<StateMSC4222>,
 }
 
 impl JoinedRoomMSC4222 {
 	pub(super) fn is_empty(&self) -> bool {
-		self.joined_room.is_empty() && self.state_after.is_empty()
+		self.joined_room.is_empty()
+			&& self
+				.state_after
+				.as_ref()
+				.is_none_or(|s| s.events.is_empty())
 	}
 }
 
@@ -121,9 +135,17 @@ pub(super) async fn load_joined_room(
 		unread_thread_notifications: BTreeMap::new(),
 	};
 
+	let state_after = state_after
+		.into_iter()
+		.map(Event::into_format)
+		.collect::<Vec<_>>();
+
 	let joined_room_msc4222 = JoinedRoomMSC4222 {
 		joined_room,
-		state_after: state_after.into_iter().map(Event::into_format).collect(),
+		state_after: (!state_after.is_empty())
+			.then_some(StateMSC4222 { events: state_after.clone() }),
+		state_after_unstable: (!state_after.is_empty())
+			.then_some(StateMSC4222 { events: state_after }),
 	};
 
 	Ok((joined_room_msc4222, device_list_updates))
