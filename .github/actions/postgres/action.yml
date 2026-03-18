@@ -1,3 +1,4 @@
+---
 name: "Ingest Run Data into PostgreSQL"
 description: "Setup tables and ingest CI run details into a PostgreSQL database"
 
@@ -80,7 +81,8 @@ runs:
     - name: Ensure Tables Exist
       shell: bash
       run: |
-        psql "${{ inputs.database_url }}" -f "${{ github.action_path }}/tables.sql"
+        psql "${{ inputs.database_url }}" \
+          -f "${{ github.action_path }}/tables.sql"
 
     - name: Ingest Run Summary
       id: ingest_summary
@@ -103,27 +105,56 @@ runs:
           --arg pass "${{ inputs.pass_count }}" \
           --arg skip "${{ inputs.skip_count }}" \
           --arg fail "${{ inputs.fail_count }}" \
-          '{run_date: $run_date, commit_hash: $commit_hash, upstream_commit: $upstream, branch: $branch, author_name: $author_name, actor: $actor, provider: $provider, arch: $arch, os: $os, version_string: $version_string, features: $features, binary_sha256: $binary_sha256, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}')
+          '{
+            run_date: $run_date,
+            commit_hash: $commit_hash,
+            upstream_commit: $upstream,
+            branch: $branch,
+            author_name: $author_name,
+            actor: $actor,
+            provider: $provider,
+            arch: $arch,
+            os: $os,
+            version_string: $version_string,
+            features: $features,
+            binary_sha256: $binary_sha256,
+            passed_count: ($pass|tonumber),
+            skipped_count: ($skip|tonumber),
+            failed_count: ($fail|tonumber)
+          }')
 
-        PK_ID=$(psql "${{ inputs.database_url }}" -t -A -c "
-          INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+        SQL_STMT="INSERT INTO runs (
+            run_date, commit_hash, upstream_commit, branch, author_name,
+            actor, provider, arch, os, version_string, features,
+            binary_sha256, passed_count, skipped_count, failed_count
+          )
           SELECT
-            (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
-            (j->>'author_name'), (j->>'actor'), (j->>'provider'), (j->>'arch'), (j->>'os'),
+            (j->>'run_date')::timestamptz, (j->>'commit_hash'),
+            (j->>'upstream_commit'), (j->>'branch'), (j->>'author_name'),
+            (j->>'actor'), (j->>'provider'), (j->>'arch'), (j->>'os'),
             (j->>'version_string'), (j->>'features'), (j->>'binary_sha256'),
-            (j->>'passed_count')::int, (j->>'skipped_count')::int, (j->>'failed_count')::int
+            (j->>'passed_count')::int, (j->>'skipped_count')::int,
+            (j->>'failed_count')::int
           FROM (SELECT '$JSON_PAYLOAD'::jsonb as j) s
           ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING
-          RETURNING id;
-        " | head -n 1)
+          RETURNING id;"
+
+        PK_ID=$(psql "${{ inputs.database_url }}" -t -A -c "$SQL_STMT" | head -n 1)
 
         if [ -z "$PK_ID" ]; then
+            # Safe NULL-aware lookup
             PK_ID=$(psql "${{ inputs.database_url }}" -t -A -c "
               SELECT id FROM runs
               WHERE commit_hash = '${{ inputs.commit_hash }}'
               AND run_date = '${{ inputs.run_date }}'
-              AND arch IS NOT DISTINCT FROM (CASE WHEN '${{ inputs.arch }}' = '' THEN NULL ELSE '${{ inputs.arch }}' END)
-              AND os IS NOT DISTINCT FROM (CASE WHEN '${{ inputs.os }}' = '' THEN NULL ELSE '${{ inputs.os }}' END);" | head -n 1)
+              AND arch IS NOT DISTINCT FROM (
+                CASE WHEN '${{ inputs.arch }}' = '' THEN NULL
+                ELSE '${{ inputs.arch }}' END
+              )
+              AND os IS NOT DISTINCT FROM (
+                CASE WHEN '${{ inputs.os }}' = '' THEN NULL
+                ELSE '${{ inputs.os }}' END
+              );" | head -n 1)
         fi
 
         echo "machine_pk=$PK_ID" >> "$GITHUB_OUTPUT"
@@ -144,13 +175,11 @@ runs:
           exit 0
         fi
 
-        # Stream details via temporary jsonb table for performance and safety
-        psql "${{ inputs.database_url }}" <<EOF
-        CREATE TEMP TABLE tmp_details_ingest (j jsonb);
-        \copy tmp_details_ingest FROM '$RESULTS_FILE' csv quote e'\x01' delimiter e'\x02';
-
-        INSERT INTO run_details (run_id, test_name, status)
-        SELECT $MACHINE_PK, (j->>'Test'), (j->>'Action')
-        FROM tmp_details_ingest
-        ON CONFLICT (run_id, test_name) DO NOTHING;
-EOF
+        # Use -c instead of heredoc to avoid indentation/EOF issues in YAML
+        psql "${{ inputs.database_url }}" -c "
+          CREATE TEMP TABLE tmp_details_ingest (j jsonb);
+          \copy tmp_details_ingest FROM '$RESULTS_FILE' csv quote e'\x01' delimiter e'\x02';
+          INSERT INTO run_details (run_id, test_name, status)
+          SELECT $MACHINE_PK, (j->>'Test'), (j->>'Action')
+          FROM tmp_details_ingest
+          ON CONFLICT (run_id, test_name) DO NOTHING;"
