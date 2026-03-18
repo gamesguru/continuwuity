@@ -1,62 +1,41 @@
 ---
 name: "Ingest Run Data into PostgreSQL"
-description: "Setup tables and sync recent CI run history into a PostgreSQL database"
+description: "Setup tables and bulk sync recent CI run history into a PostgreSQL database"
 
 inputs:
   database_url:
     description: "PostgreSQL Connection URL"
     required: true
-  pg_ca_crt:
-    description: "Optional: PEM encoded CA certificate"
-    default: ""
-  pg_client_crt:
-    description: "Optional: PEM encoded Client certificate"
-    default: ""
-  pg_client_key:
-    description: "Optional: PEM encoded Client key"
-    default: ""
-  results_file:
-    description: "Path to current test_results.jsonl"
-    required: true
   target_branch:
     description: "Branch where results ledger is stored"
     default: "_metadata/badges"
 
-uns:
+runs:
   using: "composite"
   steps:
-    - name: Setup mTLS Certificates
-      shell: bash
-      run: |
-        if [ -n "${{ inputs.pg_ca_crt }}" ]; then
-          mkdir -p "$HOME/.postgresql"
-          echo "${{ inputs.pg_ca_crt }}" > "$HOME/.postgresql/root.crt"
-          echo "${{ inputs.pg_client_crt }}" > "$HOME/.postgresql/postgresql.crt"
-          echo "${{ inputs.pg_client_key }}" > "$HOME/.postgresql/postgresql.key"
-          chmod 0600 "$HOME/.postgresql/postgresql.key"
-        fi
-
     - name: Ensure Tables Exist
       shell: bash
       run: |
         psql "${{ inputs.database_url }}" \
           -f "${{ github.action_path }}/tables.sql"
 
-    - name: Sync Recent History (Last 100 Runs)
+    - name: Bulk Sync Recent History (Last 100 Runs)
       shell: bash
       run: |
         TEMP_LEDGER=$(mktemp -d)
         echo "→ Syncing last 100 runs from Git history..."
 
+        # Clone only the necessary branch and history depth
         git clone --depth 100 --branch "${{ inputs.target_branch }}" \
-          https://github.com/${{ github.repository }} "$TEMP_LEDGER" > /dev/null 2>&1 || exit 0
+          https://github.com/${{ github.repository }} "$TEMP_LEDGER" > /dev/null 2>&1
 
         if [ ! -f "$TEMP_LEDGER/runs.jsonl" ]; then
           echo "Error: Could not find runs.jsonl in history."
           exit 1
         fi
 
-        SYNC_SQL="
+        # 1. Bulk Ingest Run Summaries
+        SYNC_RUNS_SQL="
           CREATE TEMP TABLE b (j jsonb);
           \copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';
           INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
@@ -68,25 +47,25 @@ uns:
           FROM b
           ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
 
-        cat "$TEMP_LEDGER/runs.jsonl" | psql "${{ inputs.database_url }}" -c "$SYNC_SQL"
-        rm -rf "$TEMP_LEDGER"
+        cat "$TEMP_LEDGER/runs.jsonl" | psql "${{ inputs.database_url }}" -c "$SYNC_RUNS_SQL"
 
-    - name: Ingest Current Run Details
-      shell: bash
-      run: |
-        # We find the run we JUST synced by looking for the latest entry
-        # that was just added to the DB.
-
-        DETAILS_SQL="
+        # 2. Bulk Ingest Test Details for these 100 runs
+        echo "→ Syncing test details for the last 100 runs..."
+        SYNC_DETAILS_SQL="
           CREATE TEMP TABLE t (j jsonb);
           \copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';
-
           INSERT INTO run_details (run_id, test_name, status)
-          SELECT
-            (SELECT id FROM runs ORDER BY id DESC LIMIT 1),
-            (j->>'Test'),
-            (j->>'Action')
+          SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
           FROM t
+          JOIN runs r ON r.commit_hash = (t.j->>'commit')
           ON CONFLICT (run_id, test_name) DO NOTHING;"
 
-        cat "${{ inputs.results_file }}" | psql "${{ inputs.database_url }}" -c "$DETAILS_SQL"
+        (
+          for f in "$TEMP_LEDGER/runs_data"/*.jsonl; do
+            [ -f "$f" ] || continue
+            COMMIT=$(basename "$f" .jsonl)
+            jq -c --arg h "$COMMIT" '. + {commit: $h}' "$f"
+          done
+        ) | psql "${{ inputs.database_url }}" -c "$SYNC_DETAILS_SQL"
+
+        rm -rf "$TEMP_LEDGER"

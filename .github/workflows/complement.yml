@@ -226,6 +226,8 @@ jobs:
           pg_client_crt: ${{ secrets.C10Y_PG_CLIENT_CERT }}
           pg_client_key: ${{ secrets.C10Y_PG_CLIENT_KEY }}
           results_file: "tests/test_results/complement/test_results.jsonl"
+          arch: ${{ matrix.arch }}
+          os: ${{ matrix.os }}
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
