@@ -6,21 +6,44 @@ set -euo pipefail
 
 # Source .env if it exists
 if [ -f ".env" ]; then
-    # shellcheck disable=SC1091
-    source .env
+	# shellcheck disable=SC1091
+	source .env
 fi
 
 SSH_TARGET=${DB_SSH_TARGET:-"git@nutra.tk"}
-DB_NAME=${DB_NAME:-"c10y"}
-DB_USER=${DB_USER:-"git"}
+
+# If they provide a URL in .env, use it! Otherwise fallback.
+DB_TARGET=${DATABASE_URL:-"postgresql://gitreadonly@127.0.0.1:5432/c10y"}
+
+# Force nutra.tk to 127.0.0.1 because we are tunneling
+DB_TARGET="${DB_TARGET//nutra.tk/127.0.0.1}"
+
+# Mask password for safe echo
+SAFE_TARGET=$(echo "$DB_TARGET" | sed 's/:[^@/]*@/:***@/')
 
 # Automatically detect if we are already on the database server
 if [[ "$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "")" == *"vps76"* ]] || [[ "$SSH_TARGET" == "local" ]]; then
-    echo "→ Connecting locally to $DB_NAME..."
-    exec psql -U "$DB_USER" "$DB_NAME" "$@"
+	echo "→ Connecting locally using '$SAFE_TARGET'..."
+	exec psql "$DB_TARGET" "$@"
 else
-    echo "→ Connecting directly via SSH to $SSH_TARGET..."
-    # Securely escape all arguments so the remote shell doesn't split the SQL query
-    printf -v QUOTED_ARGS '%q ' "$@"
-    exec ssh -t "$SSH_TARGET" "psql -U $DB_USER $DB_NAME $QUOTED_ARGS"
+	echo "→ Opening temporary SSH tunnel to $SSH_TARGET..."
+
+	# Open SSH tunnel in the background using the exact default Postgres port (5432)
+	ssh -f -N -M -S /tmp/c10y-db-socket -L 5432:127.0.0.1:5432 "$SSH_TARGET"
+
+	echo "→ Connecting via local tunnel using '$SAFE_TARGET'..."
+
+	# Run psql locally (turn off set -e so we can safely clean up the socket after)
+	set +e
+	if [ $# -eq 0 ]; then
+		psql "$DB_TARGET"
+	else
+		psql "$DB_TARGET" "$@"
+	fi
+	EXIT_CODE=$?
+
+	# Close and clean up the background SSH tunnel
+	ssh -S /tmp/c10y-db-socket -O exit "$SSH_TARGET" 2>/dev/null
+
+	exit $EXIT_CODE
 fi

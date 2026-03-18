@@ -233,7 +233,7 @@ jobs:
           echo "${{ secrets.C10Y_SSH_KEY_PRIVATE }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p 22 nutra.tk >> ~/.ssh/known_hosts
-          ssh -C -N -L 5433:127.0.0.1:5432 gg@nutra.tk &
+          ssh -C -N -L 5433:127.0.0.1:5432 git@nutra.tk &
           sleep 5
 
       - name: Ingest results into PostgreSQL
@@ -241,7 +241,6 @@ jobs:
         uses: ./.github/actions/postgres
         with:
           database_url: "postgresql://git@localhost:5433/c10y"
-          results_file: "tests/test_results/complement/test_results.jsonl"
 
 
       - name: Post Complement results to PR

@@ -349,7 +349,7 @@ ci-query-failures +args="":
     # Get the local machine's timezone offset (e.g. "-04:00") to send to Postgres over SSH
     tz_raw = time.strftime('%z')
     if tz_raw:
-        # Postgres expects POSIX offsets where West of UTC is positive. 
+        # Postgres expects POSIX offsets where West of UTC is positive.
         # Python's %z is ISO 8601 (West is negative). So we invert the sign.
         sign = '+' if tz_raw[0] == '-' else '-'
         tz_sql = f"{sign}{tz_raw[1:3]}:{tz_raw[3:]}"
@@ -387,5 +387,5 @@ ci-query-failures +args="":
 
     # Execute the db-shell script with the query
     env = os.environ.copy()
-    env["PAGER"] = "cat"
+    env["PAGER"] = "less -X -F -S"
     subprocess.run(["./bin/db-shell", "-c", query], env=env)
