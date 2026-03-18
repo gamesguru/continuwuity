@@ -4,15 +4,20 @@ set -euo pipefail
 # bin/db-shell
 # Quick access to the Continuwuity results database.
 
-# Prioritize the full DATABASE_URL (for remote), fallback to local "c10y"
-DB_TARGET=${DATABASE_URL:-"c10y"}
+# Default to the remote dev.nutra.tk connection on the obfuscated port 5433
+# unless DATABASE_URL is already set.
+DB_TARGET=${DATABASE_URL:-"postgresql://git@dev.nutra.tk:5433/c10y"}
 
-# If mTLS certificates exist in the standard location, use them
+# If mTLS certificates exist in the standard location, automatically use them
 if [ -f "$HOME/.postgresql/root.crt" ] && [ -f "$HOME/.postgresql/postgresql.crt" ]; then
 	export PGSSLMODE="verify-ca"
 	export PGSSLCERT="$HOME/.postgresql/postgresql.crt"
 	export PGSSLKEY="$HOME/.postgresql/postgresql.key"
 	export PGSSLROOTCERT="$HOME/.postgresql/root.crt"
+
+	# If using mTLS, verify-full is safer if the cert matches the hostname
+	export PGSSLMODE="verify-full"
 fi
 
+echo "→ Connecting to: $DB_TARGET"
 exec psql "$DB_TARGET" "$@"
