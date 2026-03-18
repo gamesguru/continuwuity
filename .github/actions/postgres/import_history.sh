@@ -10,9 +10,13 @@ DB_TARGET=${DATABASE_URL:-"c10y"}
 
 if [ -z "$LEDGER_DIR" ]; then
   TEMP_DIR=$(mktemp -d -t c10y-import-XXXXXX)
-  echo "✓ No ledger directory provided. Cloning _metadata/badges branch..."
-  REPO_URL=$(git remote get-url origin 2>/dev/null || echo "")
-  git clone --depth 1 --branch _metadata/badges "$REPO_URL" "$TEMP_DIR" > /dev/null 2>&1
+  # The _metadata/badges branch is on GitHub
+  REPO_URL="https://github.com/gamesguru/continuwuity.git"
+  echo "✓ No ledger directory provided. Cloning _metadata/badges branch from $REPO_URL..."
+  if ! git clone --depth 1 --branch _metadata/badges "$REPO_URL" "$TEMP_DIR" > /dev/null 2>&1; then
+    echo "❌ Failed to clone _metadata/badges from $REPO_URL"
+    exit 1
+  fi
   LEDGER_DIR="$TEMP_DIR"
 fi
 
@@ -20,9 +24,21 @@ fi
 SQL_FILE="$(dirname "$0")/tables.sql"
 if [ -f "$SQL_FILE" ]; then
     echo "✓ Applying fresh schema from $SQL_FILE..."
-    psql "$DB_TARGET" -c "DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE;" > /dev/null
+    psql "$DB_TARGET" -c "DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE;" > /dev/null
     psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
 fi
+
+# Sync the Master Baseline from origin/main
+echo "→ Syncing Master Baseline from origin/main..."
+(
+  echo "CREATE TEMP TABLE mb (j jsonb);"
+  echo "\copy mb FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+  git show origin/main:tests/test_results/complement/test_results.jsonl
+  echo "\."
+  echo "INSERT INTO master_baseline (test_name, status)
+        SELECT (j->>'Test'), (j->>'Action') FROM mb
+        ON CONFLICT (test_name) DO UPDATE SET status = EXCLUDED.status;"
+) | psql "$DB_TARGET" > /dev/null
 
 echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
 
@@ -35,7 +51,7 @@ CREATE TEMP TABLE b (j jsonb);
 INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, n_pass, n_skip, n_fail)
 SELECT
     (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
-    (j->>'author_name'), (j->>'actor'), (j->>'provider'), (j->>'arch'), (j->>'os'),
+    (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
     (j->>'version_string'), (j->>'features'), (j->>'binary_sha256'),
     (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
 FROM b
@@ -44,37 +60,34 @@ EOF
 
 # 2. Bulk Ingest Test Details (Injecting metadata from filenames)
 echo "→ Consolidating and ingesting test details..."
-ALL_DETAILS=$(mktemp)
-for f in "$LEDGER_DIR/runs_data"/*.jsonl; do
+(
+  echo "CREATE TEMP TABLE t (j jsonb);"
+  echo "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+  for f in "$LEDGER_DIR/runs_data"/*.jsonl; do
     [ -f "$f" ] || continue
     BASENAME=$(basename "$f" .jsonl)
-
-    # Filename format can be <hash> or <hash>-<arch>-<os>
-    COMMIT=$(echo "$BASENAME" | cut -d'-' -f1)
-    ARCH=$(echo "$BASENAME" | cut -d'-' -f2)
-    OS=$(echo "$BASENAME" | cut -d'-' -f3)
-
-    # If cut didn't find dashes, ARCH/OS will equal COMMIT. Fix that.
-    [ "$ARCH" == "$COMMIT" ] && ARCH=""
-    [ "$OS" == "$COMMIT" ] && OS=""
-
-    # Inject the metadata into the JSON stream for the database join
-    jq -c --arg h "$COMMIT" --arg a "$ARCH" --arg o "$OS" '. + {commit: $h, arch: $a, os: $o}' "$f" >> "$ALL_DETAILS"
-done
-
-psql "$DB_TARGET" <<EOF
-CREATE TEMP TABLE t (j jsonb);
-\copy t FROM '$ALL_DETAILS' csv quote e'\x01' delimiter e'\x02';
-
-INSERT INTO run_details (run_id, test_name, status)
-SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
-FROM t
-JOIN runs r ON r.commit_hash = (t.j->>'commit')
-           AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'),''))
-           AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'),''))
-ON CONFLICT (run_id, test_name) DO NOTHING;
-EOF
-
-rm -f "$ALL_DETAILS"
+    if [[ "$BASENAME" == *-* ]]; then
+      COMMIT=$(echo "$BASENAME" | cut -d'-' -f1)
+      ARCH=$(echo "$BASENAME" | cut -d'-' -f2)
+      OS=$(echo "$BASENAME" | cut -d'-' -f3-)
+    else
+      COMMIT="$BASENAME"
+      ARCH=""
+      OS=""
+    fi
+    jq -c --arg h "$COMMIT" --arg a "$ARCH" --arg o "$OS" \
+       '. + {commit: (if .commit then .commit else $h end),
+             arch: (if .arch then .arch else $a end),
+             os: (if .os then .os else $o end)}' "$f"
+  done
+  echo "\."
+  echo "INSERT INTO run_details (run_id, test_name, status)
+        SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
+        FROM t
+        JOIN runs r ON r.commit_hash = (t.j->>'commit')
+                   AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'),''))
+                   AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'),''))
+        ON CONFLICT (run_id, test_name) DO NOTHING;"
+) | psql "$DB_TARGET"
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
 echo "✓ Bulk import complete."

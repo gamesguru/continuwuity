@@ -145,3 +145,5 @@ jobs:
           features: ${{ env.FEATURES || 'unknown' }}
           actor: ${{ forge.actor || github.actor }}
           binary_path: target/latest/conduwuit
+          arch: ${{ matrix.arch || 'amd64' }}
+          os: ${{ matrix.os || 'linux' }}

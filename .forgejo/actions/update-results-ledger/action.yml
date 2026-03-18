@@ -24,6 +24,12 @@ inputs:
   features:
     description: "Space-separated list of cargo features used for this build"
     default: ""
+  arch:
+    description: "Architecture"
+    default: ""
+  os:
+    description: "Operating System"
+    default: ""
 
 runs:
   using: "composite"
@@ -41,10 +47,19 @@ runs:
         ACTOR="${{ inputs.actor }}"
         BINARY_PATH="${{ inputs.binary_path }}"
         FEATURES="${{ inputs.features }}"
+        ARCH="${{ inputs.arch }}"
+        OS="${{ inputs.os }}"
 
         # Extract commit hash from version string, fall back to env
         BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
         COMMIT_HASH="${BIN_VER_HASH:-${GITHUB_SHA:-unknown}}"
+
+        # Use full hash by default if possible
+        if [ "$COMMIT_HASH" != "unknown" ]; then
+          FULL_HASH=$(git rev-parse "$COMMIT_HASH" 2>/dev/null || echo "$COMMIT_HASH")
+          COMMIT_HASH="$FULL_HASH"
+        fi
+
         RUN_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
         RUN_ID="${COMMIT_HASH}-${RUN_DATE}"
         PROVIDER=$([ -n "${FORGEJO_URL:-}" ] && echo "forgejo" || echo "github")
@@ -54,6 +69,17 @@ runs:
         # SHA256 of the tested binary
         BIN_SHA="unknown"
         [ -f "$BINARY_PATH" ] && BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
+
+        # Determine Author Name and Upstream Commit
+        if [ "$COMMIT_HASH" != "unknown" ]; then
+          # Find the second parent of the most recent merge commit
+          UPSTREAM_COMMIT=$(git log -1 --merges --format='%P' "$COMMIT_HASH" | awk '{print $2}')
+          [ -z "$UPSTREAM_COMMIT" ] && UPSTREAM_COMMIT="$COMMIT_HASH"
+          AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" || echo "$ACTOR")
+        else
+          UPSTREAM_COMMIT=""
+          AUTHOR_NAME="$ACTOR"
+        fi
 
         # --- Work on the orphan branch via worktree ---
         LEDGER_DIR="/tmp/ledger-$$"
@@ -84,6 +110,19 @@ runs:
           cd -
         fi
 
+        # Save the full results data uniquely per machine.
+        # We inject the commit, arch, and os into EVERY line of the JSONL.
+        RESULTS_FILE="tests/test_results/complement/test_results.jsonl"
+        if [ -f "$RESULTS_FILE" ]; then
+          mkdir -p "$LEDGER_DIR/runs_data"
+          SAFE_ARCH=$(echo "$ARCH" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+          SAFE_OS=$(echo "$OS" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+
+          jq -c --arg h "$COMMIT_HASH" --arg a "$ARCH" --arg o "$OS" \
+            '. + {commit: $h, arch: $a, os: $o}' "$RESULTS_FILE" \
+            > "$LEDGER_DIR/runs_data/${COMMIT_HASH}-${SAFE_ARCH}-${SAFE_OS}.jsonl"
+        fi
+
         cd "$LEDGER_DIR"
 
         # Ensure files exist
@@ -94,9 +133,12 @@ runs:
           --arg run_id "$RUN_ID" \
           --arg run_date "$RUN_DATE" \
           --arg commit_hash "$COMMIT_HASH" \
+          --arg upstream_commit "$UPSTREAM_COMMIT" \
           --arg branch "$BRANCH_NAME" \
-          --arg author_name "$ACTOR" \
+          --arg author_name "$AUTHOR_NAME" \
           --arg provider "$PROVIDER" \
+          --arg arch "$ARCH" \
+          --arg os "$OS" \
           --arg binary_sha256 "$BIN_SHA" \
           --arg version_string "$VERSION_STRING" \
           --arg features "$FEATURES" \
@@ -107,9 +149,12 @@ runs:
             run_id: $run_id,
             run_date: $run_date,
             commit_hash: $commit_hash,
+            upstream_commit: (if $upstream_commit == "" then null else $upstream_commit end),
             branch: $branch,
             author_name: $author_name,
             provider: $provider,
+            arch: $arch,
+            os: $os,
             version_string: $version_string,
             features: $features,
             binary_sha256: $binary_sha256,
@@ -142,7 +187,7 @@ runs:
         fi
 
         # Commit and push, retrying
-        git add runs.jsonl
+        git add runs.jsonl runs_data/ 2>/dev/null || true
         if git -c commit.gpgsign=false commit -m "Results for ${COMMIT_HASH} (${PROVIDER}) [skip ci]"; then
           MAX_RETRIES=5
           RETRY_COUNT=0

@@ -19,6 +19,20 @@ runs:
         psql "${{ inputs.database_url }}" \
           -f "${{ github.action_path }}/tables.sql"
 
+    - name: Sync Master Baseline
+      shell: bash
+      run: |
+        echo "→ Syncing Master Baseline from origin/main..."
+        (
+          echo "CREATE TEMP TABLE mb (j jsonb);"
+          echo "\copy mb FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+          git show origin/main:tests/test_results/complement/test_results.jsonl
+          echo "\."
+          echo "INSERT INTO master_baseline (test_name, status)
+                SELECT (j->>'Test'), (j->>'Action') FROM mb
+                ON CONFLICT (test_name) DO UPDATE SET status = EXCLUDED.status;"
+        ) | psql "${{ inputs.database_url }}" > /dev/null
+
     - name: Bulk Sync History
       shell: bash
       run: |
@@ -34,33 +48,36 @@ runs:
         fi
 
         # 1. Ingest Summaries
-        cat "$TEMP_LEDGER/runs.jsonl" | psql "${{ inputs.database_url }}" -c "
-          CREATE TEMP TABLE b (j jsonb);
-          \copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';
-          INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, n_pass, n_skip, n_fail)
-          SELECT
-            (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
-            (j->>'author_name'), (j->>'actor'), (j->>'provider'), (j->>'arch'), (j->>'os'),
-            (j->>'version_string'), (j->>'features'), (j->>'binary_sha256'),
-            (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
-          FROM b ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
+        (
+          echo "CREATE TEMP TABLE b (j jsonb);"
+          echo "\copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+          cat "$TEMP_LEDGER/runs.jsonl"
+          echo "\."
+          echo "INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, n_pass, n_skip, n_fail)
+                SELECT
+                  (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
+                  (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
+                  (j->>'version_string'), (j->>'features'), (j->>'binary_sha256'),
+                  (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
+                FROM b ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
+        ) | psql "${{ inputs.database_url }}"
 
-        # 2. Consolidate and Ingest Test Details
+        # 2. Ingest Test Details
         echo "→ Consolidating and ingesting test details..."
-        ALL_DETAILS=$(mktemp)
-        for f in "$TEMP_LEDGER/runs_data"/*.jsonl; do
-            [ -f "$f" ] || continue
-            cat "$f" >> "$ALL_DETAILS"
-        done
+        (
+          echo "CREATE TEMP TABLE t (j jsonb);"
+          echo "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+          for f in "$TEMP_LEDGER/runs_data"/*.jsonl; do
+              [ -f "$f" ] || continue
+              cat "$f"
+          done
+          echo "\."
+          echo "INSERT INTO run_details (run_id, test_name, status)
+                SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
+                FROM t JOIN runs r ON r.commit_hash = (t.j->>'commit')
+                  AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
+                  AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
+                ON CONFLICT (run_id, test_name) DO NOTHING;"
+        ) | psql "${{ inputs.database_url }}"
 
-        cat "$ALL_DETAILS" | psql "${{ inputs.database_url }}" -c "
-          CREATE TEMP TABLE t (j jsonb);
-          \copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';
-          INSERT INTO run_details (run_id, test_name, status)
-          SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
-          FROM t JOIN runs r ON r.commit_hash = (t.j->>'commit')
-            AND r.arch IS NOT DISTINCT FROM (t.j->>'arch')
-            AND r.os IS NOT DISTINCT FROM (t.j->>'os')
-          ON CONFLICT (run_id, test_name) DO NOTHING;"
-
-        rm -rf "$TEMP_LEDGER" "$ALL_DETAILS"
+        rm -rf "$TEMP_LEDGER"

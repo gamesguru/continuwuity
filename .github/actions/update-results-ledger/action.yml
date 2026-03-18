@@ -82,16 +82,15 @@ runs:
         BIN_SHA="unknown"
         [ -f "$BINARY_PATH" ] && BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
 
-        # Determine Author Name and Upstream Commit (for main-upstream)
-        UPSTREAM_COMMIT=""
-        if [ "$BRANCH_NAME" = "main-upstream" ] && [ "$COMMIT_HASH" != "unknown" ]; then
-          # On main-upstream, COMMIT_HASH is the merge commit.
-          # We want the actual upstream commit, which is the first non-merge parent.
-          UPSTREAM_COMMIT=$(git log -1 --format='%P' "$COMMIT_HASH" | awk '{print $2}')
+        # Determine Author Name and Upstream Commit
+        if [ "$COMMIT_HASH" != "unknown" ]; then
+          # Find the second parent of the most recent merge commit
+          UPSTREAM_COMMIT=$(git log -1 --merges --format='%P' "$COMMIT_HASH" | awk '{print $2}')
           [ -z "$UPSTREAM_COMMIT" ] && UPSTREAM_COMMIT="$COMMIT_HASH"
-          AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" || echo "$ACTOR")
+          AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" 2>/dev/null || echo "${ACTOR:-unknown}")
         else
-          AUTHOR_NAME=$(git log -1 --format='%an' "$COMMIT_HASH" || echo "$ACTOR")
+          UPSTREAM_COMMIT=""
+          AUTHOR_NAME="${ACTOR:-unknown}"
         fi
 
         echo "upstream_commit=$UPSTREAM_COMMIT" >> "$GITHUB_OUTPUT"
