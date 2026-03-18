@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# import_history.sh
-# Ingests historical data from the orphan results branch into PostgreSQL.
+# import_history.sh (Optimized Native JSON Ingest)
+# Ingests historical JSONL data directly into PostgreSQL using jsonb.
 
 LEDGER_DIR=${1:-""}
 TEMP_DIR=""
@@ -17,90 +17,60 @@ if [ -z "$LEDGER_DIR" ]; then
 fi
 
 SQL_FILE="$(dirname "$0")/tables.sql"
-if [ -f "$SQL_FILE" ]; then
-    psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
-fi
+[ -f "$SQL_FILE" ] && psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
 
-echo "✓ Starting historical import into '$DB_TARGET'..."
+echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
 
-while IFS= read -r line; do
-  COMMIT_HASH=$(echo "$line" | jq -r '.commit_hash')
-  RAW_RUN_ID=$(echo "$line" | jq -r '.run_id')
-  ARCH=$(echo "$line" | jq -r '.arch // empty')
-  OS=$(echo "$line" | jq -r '.os // empty')
+# 1. Bulk Ingest Summaries via JSONB
+echo "→ Ingesting run summaries..."
+psql "$DB_TARGET" <<EOF
+CREATE TEMP TABLE tmp_runs_json (j jsonb);
+\copy tmp_runs_json FROM '$LEDGER_DIR/runs.jsonl' csv quote e'\x01' delimiter e'\x02';
 
-  if [[ ! "$RAW_RUN_ID" =~ ^[0-9a-f]{64}$ ]]; then
-    FINAL_RUN_ID=$(echo -n "$RAW_RUN_ID" | sha256sum | awk '{print $1}')
-  else
-    FINAL_RUN_ID="$RAW_RUN_ID"
-  fi
+INSERT INTO runs (run_id, run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+SELECT
+    CASE WHEN (j->>'run_id') ~ '^[0-9a-f]{64}$' THEN (j->>'run_id')
+         ELSE encode(sha256((j->>'run_id')::bytea), 'hex')
+    END,
+    (j->>'run_date')::timestamptz,
+    (j->>'commit_hash'),
+    (j->>'upstream_commit'),
+    (j->>'branch'),
+    (j->>'author_name'),
+    (j->>'actor'),
+    (j->>'provider'),
+    (j->>'arch'),
+    (j->>'os'),
+    (j->>'version_string'),
+    (j->>'features'),
+    (j->>'binary_sha256'),
+    (j->'passed_count')::int,
+    (j->'skipped_count')::int,
+    (j->'failed_count')::int
+FROM tmp_runs_json
+ON CONFLICT (run_id, arch, os) DO NOTHING;
+EOF
 
-  # 1. Attempt the summary insert
-  # We use a helper to double up single quotes for PG and wrap in single quotes.
-  # Using double quotes for the outer jq string makes handling internal single quotes easier.
-  QUERY=$(echo "$line" | jq -r --arg final_id "$FINAL_RUN_ID" '
-    def sql_esc(v): if v == null or v == "" then "NULL" else ("'\''" + (v | tostring | gsub("'\''"; "'\'''\''")) + "'\''") end;
-    "INSERT INTO runs (run_id, run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
-     VALUES (" +
-        sql_esc($final_id) + ", " +
-        sql_esc(.run_date) + ", " +
-        sql_esc(.commit_hash) + ", " +
-        sql_esc(.upstream_commit) + ", " +
-        sql_esc(.branch) + ", " +
-        sql_esc(.author_name) + ", " +
-        sql_esc(.actor) + ", " +
-        sql_esc(.provider) + ", " +
-        sql_esc(.arch) + ", " +
-        sql_esc(.os) + ", " +
-        sql_esc(.version_string) + ", " +
-        sql_esc(.features) + ", " +
-        sql_esc(.binary_sha256) + ", " +
-        (.passed_count | tostring) + ", " +
-        (.skipped_count | tostring) + ", " +
-        (.failed_count | tostring) +
-     ")
-     ON CONFLICT (run_id, arch, os) DO NOTHING
-     RETURNING id;"
-  ')
+# 2. Bulk Ingest Details via JSONB
+echo "→ Ingesting test details (streaming)..."
+psql "$DB_TARGET" <<EOF
+CREATE TEMP TABLE tmp_details_json (j jsonb);
+\copy tmp_details_json FROM STDIN csv quote e'\x01' delimiter e'\x02';
+$(
+  for f in "$LEDGER_DIR/runs_data"/*.jsonl; do
+    [ -f "$f" ] || continue
+    COMMIT=$(basename "$f" .jsonl)
+    jq -c --arg h "$COMMIT" '. + {commit: $h}' "$f"
+  done
+)
+\.
 
-  # Run the query and capture only the ID
-  PK_ID=$(echo "$QUERY" | psql -t -A "$DB_TARGET" 2>/tmp/pg_err | head -n 1 || true)
-
-  if [ -z "$PK_ID" ] || [[ ! "$PK_ID" =~ ^[0-9]+$ ]]; then
-    if [ -s /tmp/pg_err ]; then
-       echo "  ✗ ERROR on $FINAL_RUN_ID: $(cat /tmp/pg_err)"
-       continue
-    fi
-    # If PK_ID is empty but no error, it likely already existed. Fetch it.
-    PK_ID=$(psql "$DB_TARGET" -t -A -c "
-      SELECT id FROM runs
-      WHERE run_id = '${FINAL_RUN_ID}'
-      AND arch IS NOT DISTINCT FROM (CASE WHEN '${ARCH}' = '' THEN NULL ELSE '${ARCH}' END)
-      AND os IS NOT DISTINCT FROM (CASE WHEN '${OS}' = '' THEN NULL ELSE '${OS}' END);" | head -n 1)
-  fi
-
-  if [ -z "$PK_ID" ] || [[ ! "$PK_ID" =~ ^[0-9]+$ ]]; then
-    echo "  ✗ ERROR: Could not find or create numeric PK for $FINAL_RUN_ID ($ARCH/$OS). Got: '$PK_ID'"
-    continue
-  fi
-
-  echo "→ Ingesting details for $FINAL_RUN_ID ($ARCH/$OS)..."
-
-  DETAILS_FILE="$LEDGER_DIR/runs_data/${COMMIT_HASH}.jsonl"
-  if [ -f "$DETAILS_FILE" ]; then
-    (
-      echo "BEGIN;"
-      jq -r --arg pk "$PK_ID" '
-        def sql_esc(v): "'\''" + (v | tostring | gsub("'\''"; "'\'''\''")) + "'\''";
-        "INSERT INTO run_details (run_id, test_name, status) VALUES (" + $pk + ", " + sql_esc(.Test) + ", " + sql_esc(.Action) + ") ON CONFLICT (run_id, test_name) DO NOTHING;"
-      ' "$DETAILS_FILE"
-      echo "COMMIT;"
-    ) | psql "$DB_TARGET" > /dev/null
-  else
-    echo "  ⌒ No details file found for commit $COMMIT_HASH."
-  fi
-
-done < "$LEDGER_DIR/runs.jsonl"
+INSERT INTO run_details (run_id, test_name, status)
+SELECT r.id, (d.j->>'Test'), (d.j->>'Action')
+FROM tmp_details_json d
+JOIN runs r ON r.commit_hash = (d.j->>'commit')
+ON CONFLICT (run_id, test_name) DO NOTHING;
+EOF
 
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
-echo "✓ Import complete."
+echo "✓ Bulk import complete."

@@ -125,12 +125,36 @@ runs:
           --arg pass "${{ inputs.pass_count }}" \
           --arg skip "${{ inputs.skip_count }}" \
           --arg fail "${{ inputs.fail_count }}" \
-          ' "INSERT INTO runs (run_id, run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
-             VALUES (" + ($run_id | @sh) + ", " + ($run_date | @sh) + ", " + ($commit_hash | @sh) + ", " + (if $upstream == "" then "NULL" else ($upstream | @sh) end) + ", " + ($branch | @sh) + ", " + ($author_name | @sh) + ", " + ($actor | @sh) + ", " + ($provider | @sh) + ", " + ($arch | @sh) + ", " + ($os | @sh) + ", " + ($version_string | @sh) + ", " + ($features | @sh) + ", " + ($binary_sha256 | @sh) + ", " + $pass + ", " + $skip + ", " + $fail + ")
+          ' def sql_esc(v): if v == null or v == "" then "NULL" else ("'" + (v | tostring | gsub("'" ; "'"'"'") ) + "'" ) end;
+            "INSERT INTO runs (run_id, run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+             VALUES (" +
+                sql_esc($run_id) + ", " +
+                sql_esc($run_date) + ", " +
+                sql_esc($commit_hash) + ", " +
+                sql_esc($upstream) + ", " +
+                sql_esc($branch) + ", " +
+                sql_esc($author_name) + ", " +
+                sql_esc($actor) + ", " +
+                sql_esc($provider) + ", " +
+                sql_esc($arch) + ", " +
+                sql_esc($os) + ", " +
+                sql_esc($version_string) + ", " +
+                sql_esc($features) + ", " +
+                sql_esc($binary_sha256) + ", " +
+                $pass + ", " + $skip + ", " + $fail + ")
              ON CONFLICT (run_id, arch, os) DO NOTHING
-             RETURNING id;" ')
+             RETURNING id;' ")
 
-        PK_ID=$(echo "$QUERY" | psql -t -A "${{ inputs.database_url }}")
+        PK_ID=$(echo "$QUERY" | psql -t -A "${{ inputs.database_url }}" | head -n 1)
+
+        if [ -z "$PK_ID" ]; then
+            PK_ID=$(psql "${{ inputs.database_url }}" -t -A -c "
+              SELECT id FROM runs
+              WHERE run_id = '${FINAL_RUN_ID}'
+              AND arch IS NOT DISTINCT FROM (CASE WHEN '${{ inputs.arch }}' = '' THEN NULL ELSE '${{ inputs.arch }}' END)
+              AND os IS NOT DISTINCT FROM (CASE WHEN '${{ inputs.os }}' = '' THEN NULL ELSE '${{ inputs.os }}' END);" | head -n 1)
+        fi
+
         echo "machine_pk=$PK_ID" >> "$GITHUB_OUTPUT"
 
     - name: Ingest Run Details
@@ -139,8 +163,8 @@ runs:
         RESULTS_FILE="${{ inputs.results_file }}"
         MACHINE_PK="${{ steps.ingest_summary.outputs.machine_pk }}"
 
-        if [ -z "$MACHINE_PK" ]; then
-          echo "Machine run already exists in DB. Skipping details ingestion."
+        if [ -z "$MACHINE_PK" ] || [[ ! "$MACHINE_PK" =~ ^[0-9]+$ ]]; then
+          echo "Machine run could not be found or created. Skipping details ingestion."
           exit 0
         fi
 
@@ -151,8 +175,9 @@ runs:
 
         (
           echo "BEGIN;"
-          jq -r --arg machine_pk "$MACHINE_PK" '
-            "INSERT INTO run_details (run_id, test_name, status) VALUES (" + $machine_pk + ", " + (.Test | @sh) + ", " + (.Action | @sh) + ");"
+          jq -r --arg pk "$MACHINE_PK" '
+            def sql_esc(v): "'\''" + (v | tostring | gsub("'" ; "'"'"'"'")) + "'\''";
+            "INSERT INTO run_details (run_id, test_name, status) VALUES (" + $pk + ", " + sql_esc(.Test) + ", " + sql_esc(.Action) + ") ON CONFLICT (run_id, test_name) DO NOTHING;"
           ' "$RESULTS_FILE"
           echo "COMMIT;"
         ) | psql "${{ inputs.database_url }}"

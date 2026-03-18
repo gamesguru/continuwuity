@@ -1,7 +1,7 @@
 -- Create runs table
 CREATE TABLE IF NOT EXISTS runs (
     id serial PRIMARY KEY,
-    run_id text NOT NULL, -- Shared across machines in a matrix
+    run_id text NOT NULL,
     run_date timestamp with time zone NOT NULL,
     commit_hash text NOT NULL,
     upstream_commit text,
@@ -16,21 +16,23 @@ CREATE TABLE IF NOT EXISTS runs (
     binary_sha256 text,
     passed_count integer,
     skipped_count integer,
-    failed_count integer,
-    -- Ensure we don't ingest the same machine's report for the same run twice.
-    UNIQUE NULLS NOT DISTINCT (run_id, arch, os)
+    failed_count integer
 );
+
+-- Ensure uniqueness for runs (handles NULL arch/os correctly in PG 15+)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_run ON runs (run_id, arch, os) NULLS NOT DISTINCT;
 
 -- Create run_details table
 CREATE TABLE IF NOT EXISTS run_details (
     id serial PRIMARY KEY,
-    run_id integer REFERENCES runs (id) ON DELETE CASCADE, -- Links to the specific machine run
+    run_id integer REFERENCES runs (id) ON DELETE CASCADE,
     test_name text NOT NULL,
-    status text NOT NULL,
-    -- Ensure we don't ingest the same test result for the same machine run twice.
-    UNIQUE (run_id, test_name)
+    status text NOT NULL
 );
 
--- Create index for performance
+-- Ensure uniqueness for test results
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test ON run_details (run_id, test_name);
+
+-- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_run_id ON runs (run_id);
