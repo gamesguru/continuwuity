@@ -399,11 +399,24 @@ async fn join_room_by_id_helper_remote(
 			)))
 		})?;
 
-	let join_authorized_via_users_server = {
-		use RoomVersionId::*;
-		matches!(room_version_id, V1 | V2 | V3 | V4 | V5 | V6 | V7)
-			.then_some(None)
-			.flatten()
+	let join_authorized_via_users_server = if !matches!(
+		room_version_id,
+		RoomVersionId::V1
+			| RoomVersionId::V2
+			| RoomVersionId::V3
+			| RoomVersionId::V4
+			| RoomVersionId::V5
+			| RoomVersionId::V6
+			| RoomVersionId::V7
+	) {
+		join_event_stub
+			.get("content")
+			.and_then(|s| s.as_object())
+			.and_then(|o| o.get("join_authorised_via_users_server"))
+			.and_then(|v| v.as_str())
+			.and_then(|s| OwnedUserId::try_from(s).ok())
+	} else {
+		None
 	};
 
 	join_event_stub.insert(
