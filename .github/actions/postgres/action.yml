@@ -1,0 +1,141 @@
+name: "Ingest Run Data into PostgreSQL"
+description: "Setup tables and ingest CI run details into a PostgreSQL database"
+
+inputs:
+  database_url:
+    description: "PostgreSQL Connection URL (postgresql://user:password@host:port/dbname)"
+    required: true
+  run_id:
+    description: "Unique identifier for this run. If 'auto' or empty, a 256-bit hex derived from GITHUB_RUN_ID is used to be consistent across matrix jobs."
+    default: "auto"
+  run_date:
+    description: "Date/time of the run"
+    required: true
+  commit_hash:
+    description: "Commit hash tested"
+    required: true
+  upstream_commit:
+    description: "Upstream commit hash (optional)"
+    default: ""
+  branch:
+    description: "Branch name"
+    default: ""
+  author_name:
+    description: "Author name"
+    default: ""
+  actor:
+    description: "Actor who triggered the run"
+    default: ""
+  provider:
+    description: "CI Provider (GitHub/Forge)"
+    default: ""
+  arch:
+    description: "Architecture (e.g., amd64, arm64)"
+    default: ""
+  os:
+    description: "Operating System (e.g., ubuntu-22.04)"
+    default: ""
+  version_string:
+    description: "Version string"
+    default: ""
+  features:
+    description: "Cargo features"
+    default: ""
+  binary_sha256:
+    description: "Binary SHA256"
+    default: ""
+  pass_count:
+    description: "Passed tests count"
+    required: true
+  skip_count:
+    description: "Skipped tests count"
+    required: true
+  fail_count:
+    description: "Failed tests count"
+    required: true
+  results_file:
+    description: "Path to test_results.jsonl"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Ensure Tables Exist
+      shell: bash
+      run: |
+        psql "${{ inputs.database_url }}" -f "${{ github.action_path }}/tables.sql"
+
+    - name: Prepare Run ID
+      id: prepare_id
+      shell: bash
+      run: |
+        INPUT_ID="${{ inputs.run_id }}"
+        if [ "$INPUT_ID" = "auto" ] || [ -z "$INPUT_ID" ]; then
+          # Generate a 256-bit hex derived from the CI run/attempt.
+          # This ensures it's shared across all 4-6 matrix jobs for the same workflow run.
+          # If GITHUB_RUN_ID is not available, we fall back to random for safety.
+          SEED="${{ github.run_id }}-${{ github.run_attempt }}"
+          if [ -z "${{ github.run_id }}" ]; then
+            NEW_ID=$(head -c 32 /dev/urandom | xxd -p -c 32)
+          else
+            NEW_ID=$(echo -n "$SEED" | sha256sum | awk '{print $1}')
+          fi
+          echo "run_id=$NEW_ID" >> "$GITHUB_OUTPUT"
+          echo "Shared Run ID (Group): $NEW_ID"
+        else
+          echo "run_id=$INPUT_ID" >> "$GITHUB_OUTPUT"
+          echo "Using provided Run ID (Group): $INPUT_ID"
+        fi
+
+    - name: Ingest Run Summary
+      id: ingest_summary
+      shell: bash
+      run: |
+        # Use jq to build the INSERT statement for the runs table
+        # We capture the generated PK (id) for the next step.
+
+        FINAL_RUN_ID="${{ steps.prepare_id.outputs.run_id }}"
+
+        QUERY=$(jq -n -r \
+          --arg run_id "$FINAL_RUN_ID" \
+          --arg run_date "${{ inputs.run_date }}" \
+          --arg commit_hash "${{ inputs.commit_hash }}" \
+          --arg upstream "${{ inputs.upstream_commit }}" \
+          --arg branch "${{ inputs.branch }}" \
+          --arg author_name "${{ inputs.author_name }}" \
+          --arg actor "${{ inputs.actor }}" \
+          --arg provider "${{ inputs.provider }}" \
+          --arg arch "${{ inputs.arch }}" \
+          --arg os "${{ inputs.os }}" \
+          --arg version_string "${{ inputs.version_string }}" \
+          --arg features "${{ inputs.features }}" \
+          --arg binary_sha256 "${{ inputs.binary_sha256 }}" \
+          --arg pass "${{ inputs.pass_count }}" \
+          --arg skip "${{ inputs.skip_count }}" \
+          --arg fail "${{ inputs.fail_count }}" \
+          ' "INSERT INTO runs (run_id, run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+             VALUES (" + ($run_id | @sh) + ", " + ($run_date | @sh) + ", " + ($commit_hash | @sh) + ", " + (if $upstream == "" then "NULL" else ($upstream | @sh) end) + ", " + ($branch | @sh) + ", " + ($author_name | @sh) + ", " + ($actor | @sh) + ", " + ($provider | @sh) + ", " + ($arch | @sh) + ", " + ($os | @sh) + ", " + ($version_string | @sh) + ", " + ($features | @sh) + ", " + ($binary_sha256 | @sh) + ", " + $pass + ", " + $skip + ", " + $fail + ")
+             RETURNING id;" ')
+
+        PK_ID=$(echo "$QUERY" | psql -t -A "${{ inputs.database_url }}")
+        echo "machine_pk=$PK_ID" >> "$GITHUB_OUTPUT"
+        echo "Machine-specific PK: $PK_ID"
+
+    - name: Ingest Run Details
+      shell: bash
+      run: |
+        RESULTS_FILE="${{ inputs.results_file }}"
+        MACHINE_PK="${{ steps.ingest_summary.outputs.machine_pk }}"
+        if [ ! -f "$RESULTS_FILE" ]; then
+          echo "Results file not found: $RESULTS_FILE"
+          exit 0
+        fi
+
+        # Convert JSONL to SQL INSERT statements, wrap in a transaction, and pipe to psql
+        (
+          echo "BEGIN;"
+          jq -r --arg machine_pk "$MACHINE_PK" '
+            "INSERT INTO run_details (run_id, test_name, status) VALUES (" + $machine_pk + ", " + (.Test | @sh) + ", " + (.Action | @sh) + ");"
+          ' "$RESULTS_FILE"
+          echo "COMMIT;"
+        ) | psql "${{ inputs.database_url }}"
