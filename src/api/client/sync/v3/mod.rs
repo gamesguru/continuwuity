@@ -21,19 +21,28 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join3},
+	future::{OptionFuture, join3, join4},
 };
 use ruma::{
-	DeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId,
-	api::client::{
-		filter::FilterDefinition,
-		sync::sync_events::{
-			self, DeviceLists,
-			v3::{Filter, InviteState, InvitedRoom, KnockState, KnockedRoom, LeftRoom},
+	DeviceId, OwnedUserId, RoomId, UserId,
+	api::{
+		OutgoingResponse,
+		client::{
+			filter::FilterDefinition,
+			sync::sync_events::{
+				self, DeviceLists,
+				v3::{
+					Filter, GlobalAccountData, InviteState, InvitedRoom, KnockState, KnockedRoom,
+					Presence, Rooms, ToDevice,
+				},
+			},
+			uiaa::UiaaResponse,
 		},
-		uiaa::UiaaResponse,
 	},
-	events::{AnyGlobalAccountDataEvent, AnyRawAccountDataEvent, presence::PresenceEventContent},
+	events::{
+		AnyGlobalAccountDataEvent, AnyRawAccountDataEvent,
+		presence::{PresenceEvent, PresenceEventContent},
+	},
 	serde::Raw,
 };
 use service::rooms::lazy_loading::{self, MemberSet, Options as _};
@@ -276,7 +285,7 @@ pub(crate) async fn build_sync_events(
 			let joined_room = load_joined_room(services, context, room_id.clone()).await;
 
 			match joined_room {
-				| Ok((room, updates)) => Some((room_id, room, updates)),
+				| Ok((room, state_after, updates)) => Some((room_id, room, state_after, updates)),
 				| Err(err) => {
 					warn!(?err, %room_id, "error loading joined room");
 					None
@@ -284,19 +293,23 @@ pub(crate) async fn build_sync_events(
 			}
 		})
 		.ready_fold(
-			(BTreeMap::new(), DeviceListUpdates::new()),
-			|(mut joined_rooms, mut all_updates), (room_id, joined_room, updates)| {
+			(BTreeMap::new(), BTreeMap::new(), DeviceListUpdates::new()),
+			|(mut joined_rooms, mut joined_state_after, mut all_updates),
+			 (room_id, joined_room, state_after, updates)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() {
-					joined_rooms.insert(room_id, joined_room);
+				if !joined_room.is_empty() || context.last_sync_end_count.is_none() {
+					joined_rooms.insert(room_id.clone(), joined_room);
+					if !state_after.is_empty() {
+						joined_state_after.insert(room_id, state_after);
+					}
 				}
 
-				(joined_rooms, all_updates)
+				(joined_rooms, joined_state_after, all_updates)
 			},
 		);
 
-	let left_rooms: BTreeMap<OwnedRoomId, LeftRoom> = services
+	let left_rooms = services
 		.rooms
 		.state_cache
 		.rooms_left(syncing_user)
@@ -304,7 +317,7 @@ pub(crate) async fn build_sync_events(
 			let left_room = load_left_room(services, context, room_id.clone(), leave_pdu).await;
 
 			match left_room {
-				| Ok(Some(left_room)) => Some((room_id, left_room)),
+				| Ok(Some((room, state_after))) => Some((room_id, room, state_after)),
 				| Ok(None) => None,
 				| Err(err) => {
 					warn!(?err, %room_id, "error loading joined room");
@@ -312,8 +325,16 @@ pub(crate) async fn build_sync_events(
 				},
 			}
 		})
-		.collect()
-		.await;
+		.fold(
+			(BTreeMap::new(), BTreeMap::new()),
+			|(mut left_rooms, mut left_state_after), (room_id, left_room, state_after)| async move {
+				left_rooms.insert(room_id.clone(), left_room);
+				if !state_after.is_empty() {
+					left_state_after.insert(room_id, state_after);
+				}
+				(left_rooms, left_state_after)
+			},
+		);
 
 	let invited_rooms = services
 		.rooms
@@ -368,10 +389,11 @@ pub(crate) async fn build_sync_events(
 			knocked_rooms
 		});
 
-	let (joined_rooms, invited_rooms, knocked_rooms) =
-		join3(joined_rooms, invited_rooms, knocked_rooms).await;
+	let (joined_rooms, left_rooms, invited_rooms, knocked_rooms) =
+		join4(joined_rooms, left_rooms, invited_rooms, knocked_rooms).await;
 
-	let (joined_rooms, device_list_updates) = joined_rooms;
+	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
+	let (left_rooms, left_state_after) = left_rooms;
 
 	let presence_updates: OptionFuture<_> = services
 		.config
@@ -424,62 +446,63 @@ pub(crate) async fn build_sync_events(
 	let mut device_list_updates: DeviceLists = device_list_updates.into();
 	device_list_updates.changed.extend(keys_changed);
 
-	let mut rooms = serde_json::Map::new();
-	if !left_rooms.is_empty() {
-		rooms.insert("leave".to_owned(), serde_json::to_value(left_rooms).unwrap());
-	}
-	if !joined_rooms.is_empty() {
-		let mut join = serde_json::Map::new();
-		for (room_id, joined_room) in joined_rooms {
-			join.insert(room_id.to_string(), serde_json::to_value(joined_room).unwrap());
-		}
-		rooms.insert("join".to_owned(), serde_json::Value::Object(join));
-	}
-	if !invited_rooms.is_empty() {
-		rooms.insert("invite".to_owned(), serde_json::to_value(invited_rooms).unwrap());
-	}
-	if !knocked_rooms.is_empty() {
-		rooms.insert("knock".to_owned(), serde_json::to_value(knocked_rooms).unwrap());
-	}
-
-	let mut val = serde_json::json!({
-		"next_batch": current_count.to_string(),
-		"device_one_time_keys_count": device_one_time_keys_count,
-	});
-
-	let obj = val.as_object_mut().unwrap();
-
-	if !rooms.is_empty() {
-		obj.insert("rooms".to_owned(), serde_json::Value::Object(rooms));
-	}
-
-	if !account_data.is_empty() {
-		obj.insert("account_data".to_owned(), serde_json::json!({ "events": account_data }));
-	}
-
-	if !device_list_updates.is_empty() {
-		obj.insert("device_lists".to_owned(), serde_json::to_value(device_list_updates).unwrap());
-	}
-
-	if !to_device_events.is_empty() {
-		obj.insert("to_device".to_owned(), serde_json::json!({ "events": to_device_events }));
-	}
-
-	if let Some(presence) = presence_updates {
-		if !presence.is_empty() {
-			let events = presence
+	let ruma_response = sync_events::v3::Response {
+		next_batch: current_count.to_string(),
+		rooms: Rooms {
+			leave: left_rooms,
+			join: joined_rooms,
+			invite: invited_rooms,
+			knock: knocked_rooms,
+		},
+		presence: Presence {
+			events: presence_updates
 				.into_iter()
-				.map(|(sender, content)| {
-					serde_json::json!({
-						"type": "m.presence",
-						"sender": sender,
-						"content": content,
-					})
-				})
-				.collect::<Vec<_>>();
+				.flat_map(IntoIterator::into_iter)
+				.map(|(sender, content)| PresenceEvent { content, sender })
+				.map(|ref event| Raw::new(event))
+				.filter_map(Result::ok)
+				.collect(),
+		},
+		account_data: GlobalAccountData { events: account_data },
+		to_device: ToDevice { events: to_device_events },
+		device_lists: device_list_updates,
+		device_one_time_keys_count,
+		device_unused_fallback_key_types: None,
+	};
 
-			if !events.is_empty() {
-				obj.insert("presence".to_owned(), serde_json::json!({ "events": events }));
+	let mut val: serde_json::Value = serde_json::from_slice(
+		ruma_response
+			.try_into_http_response::<bytes::BytesMut>()
+			.expect("ruma response is valid")
+			.body(),
+	)
+	.expect("ruma response is valid JSON");
+
+	// Manually insert state_after data for MSC4222
+	if let Some(join) = val.get_mut("rooms").and_then(|r| r.get_mut("join")) {
+		for (room_id, state_after) in joined_state_after {
+			if let Some(room) = join.get_mut(room_id.as_str()) {
+				let state_after_obj = serde_json::json!({ "events": state_after });
+				room.as_object_mut()
+					.unwrap()
+					.insert("state_after".to_owned(), state_after_obj.clone());
+				room.as_object_mut()
+					.unwrap()
+					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
+			}
+		}
+	}
+
+	if let Some(leave) = val.get_mut("rooms").and_then(|r| r.get_mut("leave")) {
+		for (room_id, state_after) in left_state_after {
+			if let Some(room) = leave.get_mut(room_id.as_str()) {
+				let state_after_obj = serde_json::json!({ "events": state_after });
+				room.as_object_mut()
+					.unwrap()
+					.insert("state_after".to_owned(), state_after_obj.clone());
+				room.as_object_mut()
+					.unwrap()
+					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
 			}
 		}
 	}

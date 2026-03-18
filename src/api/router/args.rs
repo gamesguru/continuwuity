@@ -100,7 +100,10 @@ where
 				|| request.parts.method == http::Method::DELETE)
 			&& !request.parts.uri.path().contains("/media/")
 		{
-			return Err(err!(Request(NotJson("Request body is not valid JSON"))));
+			if std::str::from_utf8(&request.body).is_err() {
+				return Err(err!(Request(NotJson("Request body is not valid UTF-8"))));
+			}
+			return Err(err!(Request(BadJson("Invalid JSON body"))));
 		}
 
 		// while very unusual and really shouldn't be recommended, Synapse accepts POST
