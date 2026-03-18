@@ -52,4 +52,6 @@ where
 	if !self.db.corked() {
 		self.db.flush().expect("database flush error");
 	}
+
+	self.watchers.wake(key.as_ref());
 }
