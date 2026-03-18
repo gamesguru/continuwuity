@@ -226,17 +226,22 @@ jobs:
           arch: ${{ matrix.arch }}
           os: ${{ matrix.os }}
 
+      - name: Establish SSH Tunnel
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.C10Y_SSH_KEY_PRIVATE }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 22 nutra.tk >> ~/.ssh/known_hosts
+          ssh -C -N -L 5433:127.0.0.1:5432 gg@nutra.tk &
+          sleep 5
+
       - name: Ingest results into PostgreSQL
         if: always()
         uses: ./.github/actions/postgres
         with:
           database_url: ${{ secrets.C10Y_POSTGRES_URL }}
-          pg_ca_crt: ${{ secrets.C10Y_PG_ROOT_CA }}
-          pg_client_crt: ${{ secrets.C10Y_PG_CLIENT_CERT }}
-          pg_client_key: ${{ secrets.C10Y_PG_CLIENT_KEY }}
           results_file: "tests/test_results/complement/test_results.jsonl"
-          arch: ${{ matrix.arch }}
-          os: ${{ matrix.os }}
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'

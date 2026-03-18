@@ -2,11 +2,23 @@
 set -euo pipefail
 
 # bin/db-shell
-# Quick access to the Continuwuity results database via SSH Tunnel.
+# Quick access to the Continuwuity results database.
 
-# Default to the local tunnel entry point (port 5433)
-# To start the tunnel: ssh -C -N -L 5433:127.0.0.1:5432 gg@nutra.tk
-DB_TARGET=${DATABASE_URL:-"postgresql://git@localhost:5433/c10y"}
+# Source .env if it exists
+if [ -f ".env" ]; then
+    # shellcheck disable=SC1091
+    source .env
+fi
 
-echo "→ Connecting via SSH Tunnel: $(echo "$DB_TARGET" | sed 's/:[^@]*@/:***@/')"
+# Fallback to direct remote SSL connection if no DATABASE_URL is set
+DB_TARGET=${DATABASE_URL:-"postgresql://git@nutra.tk:5433/c10y?sslmode=verify-full"}
+
+# If mTLS certificates exist locally, automatically use them
+if [ -f "$HOME/.postgresql/root.crt" ] && [ -f "$HOME/.postgresql/postgresql.crt" ]; then
+    export PGSSLCERT="$HOME/.postgresql/postgresql.crt"
+    export PGSSLKEY="$HOME/.postgresql/postgresql.key"
+    export PGSSLROOTCERT="$HOME/.postgresql/root.crt"
+fi
+
+echo "→ Connecting: $(echo "$DB_TARGET" | sed 's/:[^@]*@/:***@/')"
 exec psql "$DB_TARGET" "$@"

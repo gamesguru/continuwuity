@@ -1,16 +1,19 @@
 ---
 name: "Ingest Run Data into PostgreSQL"
-description: "Setup tables and bulk sync recent CI run history into a PostgreSQL database"
+description: "Setup tables and sync recent CI run history into a PostgreSQL database"
 
 inputs:
   database_url:
     description: "PostgreSQL Connection URL"
     required: true
+  results_file:
+    description: "Path to current test_results.jsonl"
+    required: true
   target_branch:
     description: "Branch where results ledger is stored"
     default: "_metadata/badges"
 
-uns:
+runs:
   using: "composite"
   steps:
     - name: Ensure Tables Exist
@@ -19,7 +22,7 @@ uns:
         psql "${{ inputs.database_url }}" \
           -f "${{ github.action_path }}/tables.sql"
 
-    - name: Bulk Sync Recent History (Last 100 Runs)
+    - name: Sync Recent History (Last 100 Runs)
       shell: bash
       run: |
         TEMP_LEDGER=$(mktemp -d)
