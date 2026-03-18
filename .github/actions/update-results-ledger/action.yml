@@ -45,6 +45,13 @@ runs:
         # Extract commit hash from version string, fall back to env
         BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
         COMMIT_HASH="${BIN_VER_HASH:-${GITHUB_SHA:-unknown}}"
+
+        # Use full hash by default if possible
+        if [ "$COMMIT_HASH" != "unknown" ]; then
+          FULL_HASH=$(git rev-parse "$COMMIT_HASH" 2>/dev/null || echo "$COMMIT_HASH")
+          COMMIT_HASH="$FULL_HASH"
+        fi
+
         RUN_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
         RUN_ID="${COMMIT_HASH}-${RUN_DATE}"
         BRANCH_NAME=$(echo "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-main}}" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
