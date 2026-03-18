@@ -28,22 +28,22 @@ jobs:
         include:
           - arch: amd64
             os: ubuntu-22.04
-            profile: release
+            profile: release-quick
           - arch: amd64
             os: ubuntu-24.04
-            profile: release
+            profile: release-quick
           - arch: arm64
             prebuilt_arch: arm64-cortex-a76
             target_cpu: cortex-a76
             jemalloc_lg_page: 16
             os: ubuntu-22.04
-            profile: release
+            profile: release-quick
           - arch: arm64
             prebuilt_arch: arm64-cortex-a76
             target_cpu: cortex-a76
             jemalloc_lg_page: 16
             os: ubuntu-24.04
-            profile: release
+            profile: release-quick
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
     # and pushing the generated github-badge.json to the badges branch
@@ -182,11 +182,11 @@ jobs:
         run: |
           RESULTS="tests/test_results/complement/test_results.jsonl"
 
-          # Inject arch and os into the JSONL file itself.
+          # Inject arch, os, and profile into the JSONL file itself.
           # We use a temp file to avoid reading/writing to the same file.
           TEMP_RESULTS=$(mktemp)
-          jq -c --arg a "${{ matrix.arch }}" --arg o "${{ matrix.os }}" \
-            '. + {arch: $a, os: $o}' "$RESULTS" > "$TEMP_RESULTS"
+          jq -c --arg a "${{ matrix.arch }}" --arg o "${{ matrix.os }}" --arg p "${{ matrix.profile }}" \
+            '. + {arch: $a, os: $o, profile: $p}' "$RESULTS" > "$TEMP_RESULTS"
           mv "$TEMP_RESULTS" "$RESULTS"
 
           PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
@@ -225,6 +225,7 @@ jobs:
           binary_path: target/latest/conduwuit
           arch: ${{ matrix.arch }}
           os: ${{ matrix.os }}
+          profile: ${{ matrix.profile }}
 
       - name: Ingest results into PostgreSQL
         if: always()
@@ -252,18 +253,21 @@ jobs:
 
           # Just wrap the composite action logic directly here or pass the key?
           # Actually, since the composite action runs its own bash shells, aliases won't pass down.
-          # The cleanest way is to use ssh-agent.
+          # The cleanest way is to use ssh-agent and export it to GITHUB_ENV for future steps.
           eval $(ssh-agent -s)
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+
           if [ -n "$SSH_PASSPHRASE" ]; then
-             echo "echo $SSH_PASSPHRASE" > /tmp/askpass.sh
+             echo "echo \$SSH_PASSPHRASE" > /tmp/askpass.sh
              chmod +x /tmp/askpass.sh
              DISPLAY=1 SSH_ASKPASS=/tmp/askpass.sh ssh-add ~/.ssh/id_ed25519 < /dev/null
           else
              ssh-add ~/.ssh/id_ed25519
           fi
 
-          # Now any `ssh` command will automatically authenticate!
-
+          # Add the server key to known_hosts to prevent interactive prompts
+          ssh-keyscan -p 22 nutra.tk >> ~/.ssh/known_hosts
       - name: Run Postgres Ingestion
         if: always()
         uses: ./.github/actions/postgres
