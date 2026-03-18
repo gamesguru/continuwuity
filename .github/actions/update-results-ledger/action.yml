@@ -24,11 +24,23 @@ inputs:
   features:
     description: "Space-separated list of cargo features used for this build"
     default: ""
+  arch:
+    description: "Architecture"
+    default: ""
+  os:
+    description: "Operating System"
+    default: ""
+
+outputs:
+  upstream_commit:
+    description: "The calculated upstream commit hash"
+    value: ${{ steps.append.outputs.upstream_commit }}
 
 runs:
   using: "composite"
   steps:
     - name: Append results and update badge
+      id: append
       shell: bash
       run: |
         set -euo pipefail
@@ -41,6 +53,8 @@ runs:
         ACTOR="${{ inputs.actor }}"
         BINARY_PATH="${{ inputs.binary_path }}"
         FEATURES="${{ inputs.features }}"
+        ARCH="${{ inputs.arch }}"
+        OS="${{ inputs.os }}"
 
         # Extract commit hash from version string, fall back to env
         BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
@@ -79,6 +93,8 @@ runs:
         else
           AUTHOR_NAME=$(git log -1 --format='%an' "$COMMIT_HASH" || echo "$ACTOR")
         fi
+
+        echo "upstream_commit=$UPSTREAM_COMMIT" >> "$GITHUB_OUTPUT"
 
         # --- Work on the orphan branch via worktree ---
         LEDGER_DIR="/tmp/ledger-$$"
@@ -131,6 +147,8 @@ runs:
           --arg author_name "$AUTHOR_NAME" \
           --arg actor "$ACTOR" \
           --arg provider "$PROVIDER" \
+          --arg arch "$ARCH" \
+          --arg os "$OS" \
           --arg binary_sha256 "$BIN_SHA" \
           --arg version_string "$VERSION_STRING" \
           --arg features "$FEATURES" \
@@ -146,6 +164,8 @@ runs:
             author_name: $author_name,
             actor: $actor,
             provider: $provider,
+            arch: $arch,
+            os: $os,
             version_string: $version_string,
             features: $features,
             binary_sha256: $binary_sha256,

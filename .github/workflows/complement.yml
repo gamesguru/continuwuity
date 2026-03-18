@@ -214,6 +214,8 @@ jobs:
           features: ${{ env.FEATURES }}
           actor: ${{ github.actor }}
           binary_path: target/latest/conduwuit
+          arch: ${{ matrix.arch }}
+          os: ${{ matrix.os }}
 
       - name: Ingest results into PostgreSQL
         if: always()
@@ -225,6 +227,7 @@ jobs:
           pg_client_key: ${{ secrets.C10Y_PG_CLIENT_KEY }}
           run_date: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
           commit_hash: ${{ github.sha }}
+          upstream_commit: ${{ steps.ledger.outputs.upstream_commit }}
           branch: ${{ github.head_ref || github.ref_name }}
           author_name: ${{ github.actor }}
           actor: ${{ github.actor }}
