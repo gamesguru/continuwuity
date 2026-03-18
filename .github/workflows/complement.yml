@@ -226,21 +226,49 @@ jobs:
           arch: ${{ matrix.arch }}
           os: ${{ matrix.os }}
 
-      - name: Establish SSH Tunnel
+      - name: Ingest results into PostgreSQL
         if: always()
+        env:
+          SSH_PASSPHRASE: ${{ secrets.C10Y_SSH_KEY_PRIVATE_PASSPHRASE || '' }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.C10Y_SSH_KEY_PRIVATE }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p 22 nutra.tk >> ~/.ssh/known_hosts
-          ssh -C -N -L 5433:127.0.0.1:5432 git@nutra.tk &
-          sleep 5
 
-      - name: Ingest results into PostgreSQL
+          # Use ssh-agent to load the key (handles passphrases via DISPLAY workaround or expect if needed,
+          # but usually CI keys are passwordless. If it has a password, sshpass can feed it)
+          if [ -n "$SSH_PASSPHRASE" ]; then
+            sudo apt-get update && sudo apt-get install -y sshpass
+            export SSH_ASKPASS_REQUIRE=force
+            export SSH_ASKPASS_CMD="echo $SSH_PASSPHRASE"
+            # Actually, standard sshpass is easier:
+            alias ssh="sshpass -P passphrase -p '$SSH_PASSPHRASE' ssh -i ~/.ssh/id_ed25519"
+          else
+            alias ssh="ssh -i ~/.ssh/id_ed25519"
+          fi
+
+          # To make alias work in bash script
+          shopt -s expand_aliases
+
+          # Just wrap the composite action logic directly here or pass the key?
+          # Actually, since the composite action runs its own bash shells, aliases won't pass down.
+          # The cleanest way is to use ssh-agent.
+          eval $(ssh-agent -s)
+          if [ -n "$SSH_PASSPHRASE" ]; then
+             echo "echo $SSH_PASSPHRASE" > /tmp/askpass.sh
+             chmod +x /tmp/askpass.sh
+             DISPLAY=1 SSH_ASKPASS=/tmp/askpass.sh ssh-add ~/.ssh/id_ed25519 < /dev/null
+          else
+             ssh-add ~/.ssh/id_ed25519
+          fi
+
+          # Now any `ssh` command will automatically authenticate!
+
+      - name: Run Postgres Ingestion
         if: always()
         uses: ./.github/actions/postgres
         with:
-          database_url: "postgresql://git@localhost:5433/c10y"
+          ssh_target: "git@nutra.tk"
 
 
       - name: Post Complement results to PR

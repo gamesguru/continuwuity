@@ -3,8 +3,8 @@ name: "Ingest Run Data into PostgreSQL"
 description: "Setup tables and bulk sync recent CI run history into a PostgreSQL database"
 
 inputs:
-  database_url:
-    description: "PostgreSQL Connection URL"
+  ssh_target:
+    description: "SSH connection string (e.g., git@nutra.tk)"
     required: true
   target_branch:
     description: "Branch where results ledger is stored"
@@ -16,8 +16,7 @@ runs:
     - name: Ensure Tables Exist
       shell: bash
       run: |
-        psql "${{ inputs.database_url }}" \
-          -f "${{ github.action_path }}/tables.sql"
+        cat "${{ github.action_path }}/tables.sql" | ssh -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
 
     - name: Sync Master Baseline
       shell: bash
@@ -31,7 +30,7 @@ runs:
           echo "INSERT INTO master_baseline (test_name, status)
                 SELECT (j->>'Test'), (j->>'Action') FROM mb
                 ON CONFLICT (test_name) DO UPDATE SET status = EXCLUDED.status;"
-        ) | psql "${{ inputs.database_url }}" > /dev/null
+        ) | ssh -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y" > /dev/null
 
     - name: Bulk Sync History
       shell: bash
@@ -60,7 +59,7 @@ runs:
                   (j->>'version_string'), (j->>'features'), (j->>'binary_sha256'),
                   (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
                 FROM b ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
-        ) | psql "${{ inputs.database_url }}"
+        ) | ssh -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
 
         # 2. Ingest Test Details
         echo "→ Consolidating and ingesting test details..."
@@ -78,6 +77,6 @@ runs:
                   AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
                   AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
                 ON CONFLICT (run_id, test_name) DO NOTHING;"
-        ) | psql "${{ inputs.database_url }}"
+        ) | ssh -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
 
         rm -rf "$TEMP_LEDGER"
