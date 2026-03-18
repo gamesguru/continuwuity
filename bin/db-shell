@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# bin/db-shell
+# Quick access to the Continuwuity results database.
+
+# Prioritize the full DATABASE_URL (for remote), fallback to local "c10y"
+DB_TARGET=${DATABASE_URL:-"c10y"}
+
+# If mTLS certificates exist in the standard location, use them
+if [ -f "$HOME/.postgresql/root.crt" ] && [ -f "$HOME/.postgresql/postgresql.crt" ]; then
+	export PGSSLMODE="verify-ca"
+	export PGSSLCERT="$HOME/.postgresql/postgresql.crt"
+	export PGSSLKEY="$HOME/.postgresql/postgresql.key"
+	export PGSSLROOTCERT="$HOME/.postgresql/root.crt"
+fi
+
+exec psql "$DB_TARGET" "$@"

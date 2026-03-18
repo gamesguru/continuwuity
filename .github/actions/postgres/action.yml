@@ -5,14 +5,14 @@ inputs:
   database_url:
     description: "PostgreSQL Connection URL"
     required: true
-  pg_root_ca:
-    description: "Optional: PEM encoded Root CA certificate"
+  pg_ca_crt:
+    description: "Optional: PEM encoded CA certificate (ca.crt)"
     default: ""
-  pg_client_cert:
-    description: "Optional: PEM encoded Client certificate"
+  pg_client_crt:
+    description: "Optional: PEM encoded Client certificate (client.crt)"
     default: ""
   pg_client_key:
-    description: "Optional: PEM encoded Client key"
+    description: "Optional: PEM encoded Client key (client.key)"
     default: ""
   run_date:
     description: "Date/time of the run"
@@ -69,10 +69,10 @@ runs:
     - name: Setup mTLS Certificates
       shell: bash
       run: |
-        if [ -n "${{ inputs.pg_root_ca }}" ]; then
+        if [ -n "${{ inputs.pg_ca_crt }}" ]; then
           mkdir -p "$HOME/.postgresql"
-          echo "${{ inputs.pg_root_ca }}" > "$HOME/.postgresql/root.crt"
-          echo "${{ inputs.pg_client_cert }}" > "$HOME/.postgresql/postgresql.crt"
+          echo "${{ inputs.pg_ca_crt }}" > "$HOME/.postgresql/root.crt"
+          echo "${{ inputs.pg_client_crt }}" > "$HOME/.postgresql/postgresql.crt"
           echo "${{ inputs.pg_client_key }}" > "$HOME/.postgresql/postgresql.key"
           chmod 0600 "$HOME/.postgresql/postgresql.key"
         fi
@@ -86,8 +86,8 @@ runs:
       id: ingest_summary
       shell: bash
       run: |
-        # Use simple positional sql_esc to avoid complex JQ mangling
-        QUERY=$(jq -n -r \
+        # Use native PostgreSQL JSON parsing to avoid bash/jq escaping hell
+        JSON_PAYLOAD=$(jq -n -c \
           --arg run_date "${{ inputs.run_date }}" \
           --arg commit_hash "${{ inputs.commit_hash }}" \
           --arg upstream "${{ inputs.upstream_commit }}" \
@@ -103,26 +103,19 @@ runs:
           --arg pass "${{ inputs.pass_count }}" \
           --arg skip "${{ inputs.skip_count }}" \
           --arg fail "${{ inputs.fail_count }}" \
-          ' def sql_esc(v): if v == null or v == "" then "NULL" else ("'" + (v | tostring | gsub("'" ; "'"'"'"'")) + "'") end;
-            "INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
-             VALUES (" +
-                sql_esc($run_date) + ", " +
-                sql_esc($commit_hash) + ", " +
-                sql_esc($upstream) + ", " +
-                sql_esc($branch) + ", " +
-                sql_esc($author_name) + ", " +
-                sql_esc($actor) + ", " +
-                sql_esc($provider) + ", " +
-                sql_esc($arch) + ", " +
-                sql_esc($os) + ", " +
-                sql_esc($version_string) + ", " +
-                sql_esc($features) + ", " +
-                sql_esc($binary_sha256) + ", " +
-                $pass + ", " + $skip + ", " + $fail + ")
-             ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING
-             RETURNING id;" ')
+          '{run_date: $run_date, commit_hash: $commit_hash, upstream_commit: $upstream, branch: $branch, author_name: $author_name, actor: $actor, provider: $provider, arch: $arch, os: $os, version_string: $version_string, features: $features, binary_sha256: $binary_sha256, passed_count: ($pass|tonumber), skipped_count: ($skip|tonumber), failed_count: ($fail|tonumber)}')
 
-        PK_ID=$(echo "$QUERY" | psql -t -A "${{ inputs.database_url }}" | head -n 1)
+        PK_ID=$(psql "${{ inputs.database_url }}" -t -A -c "
+          INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+          SELECT
+            (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
+            (j->>'author_name'), (j->>'actor'), (j->>'provider'), (j->>'arch'), (j->>'os'),
+            (j->>'version_string'), (j->>'features'), (j->>'binary_sha256'),
+            (j->>'passed_count')::int, (j->>'skipped_count')::int, (j->>'failed_count')::int
+          FROM (SELECT '$JSON_PAYLOAD'::jsonb as j) s
+          ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING
+          RETURNING id;
+        " | head -n 1)
 
         if [ -z "$PK_ID" ]; then
             PK_ID=$(psql "${{ inputs.database_url }}" -t -A -c "
@@ -146,12 +139,18 @@ runs:
           exit 0
         fi
 
-        (
-          echo "BEGIN;"
-          jq -r --arg pk "$MACHINE_PK" \
-          '
-            def sql_esc(v): "'" + (v | tostring | gsub("'" ; "'"'"'"'"')) + "'";
-            "INSERT INTO run_details (run_id, test_name, status) VALUES (" + $pk + ", " + sql_esc(.Test) + ", " + sql_esc(.Action) + ") ON CONFLICT (run_id, test_name) DO NOTHING;"
-          ' "$RESULTS_FILE"
-          echo "COMMIT;"
-        ) | psql "${{ inputs.database_url }}"
+        if [ ! -f "$RESULTS_FILE" ]; then
+          echo "Results file not found: $RESULTS_FILE"
+          exit 0
+        fi
+
+        # Stream details via temporary jsonb table for performance and safety
+        psql "${{ inputs.database_url }}" <<EOF
+        CREATE TEMP TABLE tmp_details_ingest (j jsonb);
+        \copy tmp_details_ingest FROM '$RESULTS_FILE' csv quote e'\x01' delimiter e'\x02';
+
+        INSERT INTO run_details (run_id, test_name, status)
+        SELECT $MACHINE_PK, (j->>'Test'), (j->>'Action')
+        FROM tmp_details_ingest
+        ON CONFLICT (run_id, test_name) DO NOTHING;
+EOF

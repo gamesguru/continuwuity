@@ -220,8 +220,8 @@ jobs:
         uses: ./.github/actions/postgres
         with:
           database_url: ${{ secrets.C10Y_POSTGRES_URL }}
-          pg_root_ca: ${{ secrets.C10Y_PG_ROOT_CA }}
-          pg_client_cert: ${{ secrets.C10Y_PG_CLIENT_CERT }}
+          pg_ca_crt: ${{ secrets.C10Y_PG_ROOT_CA }}
+          pg_client_crt: ${{ secrets.C10Y_PG_CLIENT_CERT }}
           pg_client_key: ${{ secrets.C10Y_PG_CLIENT_KEY }}
           run_date: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
           commit_hash: ${{ github.sha }}
