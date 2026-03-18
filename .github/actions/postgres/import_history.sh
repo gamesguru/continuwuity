@@ -16,8 +16,12 @@ if [ -z "$LEDGER_DIR" ]; then
   LEDGER_DIR="$TEMP_DIR"
 fi
 
+# Ensure tables and views exist
 SQL_FILE="$(dirname "$0")/tables.sql"
-[ -f "$SQL_FILE" ] && psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
+if [ -f "$SQL_FILE" ]; then
+    echo "✓ Ensuring tables and views exist..."
+    psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
+fi
 
 echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
 
