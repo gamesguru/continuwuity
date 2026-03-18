@@ -10,15 +10,8 @@ if [ -f ".env" ]; then
     source .env
 fi
 
-# Fallback to direct remote SSL connection if no DATABASE_URL is set
-DB_TARGET=${DATABASE_URL:-"postgresql://git@nutra.tk:5433/c10y?sslmode=verify-full"}
-
-# If mTLS certificates exist locally, automatically use them
-if [ -f "$HOME/.postgresql/root.crt" ] && [ -f "$HOME/.postgresql/postgresql.crt" ]; then
-    export PGSSLCERT="$HOME/.postgresql/postgresql.crt"
-    export PGSSLKEY="$HOME/.postgresql/postgresql.key"
-    export PGSSLROOTCERT="$HOME/.postgresql/root.crt"
-fi
+# Fallback to direct remote connection with sslmode=disable
+DB_TARGET=${DATABASE_URL:-"postgresql://git@nutra.tk:5433/c10y?sslmode=disable"}
 
 echo "→ Connecting: $(echo "$DB_TARGET" | sed 's/:[^@]*@/:***@/')"
 exec psql "$DB_TARGET" "$@"
