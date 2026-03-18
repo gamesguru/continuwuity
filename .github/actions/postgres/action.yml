@@ -3,20 +3,17 @@ description: "Setup tables and ingest CI run details into a PostgreSQL database"
 
 inputs:
   database_url:
-    description: "PostgreSQL Connection URL (postgresql://user:password@host:port/dbname)"
+    description: "PostgreSQL Connection URL"
     required: true
   pg_root_ca:
-    description: "Optional: PEM encoded Root CA certificate for mTLS"
+    description: "Optional: PEM encoded Root CA certificate"
     default: ""
   pg_client_cert:
-    description: "Optional: PEM encoded Client certificate for mTLS"
+    description: "Optional: PEM encoded Client certificate"
     default: ""
   pg_client_key:
-    description: "Optional: PEM encoded Client key for mTLS"
+    description: "Optional: PEM encoded Client key"
     default: ""
-  run_id:
-    description: "Unique identifier for this run. If 'auto' or empty, a 256-bit hex derived from GITHUB_RUN_ID is used."
-    default: "auto"
   run_date:
     description: "Date/time of the run"
     required: true
@@ -24,7 +21,7 @@ inputs:
     description: "Commit hash tested"
     required: true
   upstream_commit:
-    description: "Upstream commit hash (optional)"
+    description: "Upstream commit hash"
     default: ""
   branch:
     description: "Branch name"
@@ -36,13 +33,13 @@ inputs:
     description: "Actor who triggered the run"
     default: ""
   provider:
-    description: "CI Provider (GitHub/Forge)"
+    description: "CI Provider"
     default: ""
   arch:
-    description: "Architecture (e.g., amd64, arm64)"
+    description: "Architecture"
     default: ""
   os:
-    description: "Operating System (e.g., ubuntu-22.04)"
+    description: "Operating System"
     default: ""
   version_string:
     description: "Version string"
@@ -85,31 +82,12 @@ runs:
       run: |
         psql "${{ inputs.database_url }}" -f "${{ github.action_path }}/tables.sql"
 
-    - name: Prepare Run ID
-      id: prepare_id
-      shell: bash
-      run: |
-        INPUT_ID="${{ inputs.run_id }}"
-        if [ "$INPUT_ID" = "auto" ] || [ -z "$INPUT_ID" ]; then
-          SEED="${{ github.run_id }}-${{ github.run_attempt }}"
-          if [ -z "${{ github.run_id }}" ]; then
-            NEW_ID=$(head -c 32 /dev/urandom | xxd -p -c 32)
-          else
-            NEW_ID=$(echo -n "$SEED" | sha256sum | awk '{print $1}')
-          fi
-          echo "run_id=$NEW_ID" >> "$GITHUB_OUTPUT"
-        else
-          echo "run_id=$INPUT_ID" >> "$GITHUB_OUTPUT"
-        fi
-
     - name: Ingest Run Summary
       id: ingest_summary
       shell: bash
       run: |
-        FINAL_RUN_ID="${{ steps.prepare_id.outputs.run_id }}"
-
+        # Use simple positional sql_esc to avoid complex JQ mangling
         QUERY=$(jq -n -r \
-          --arg run_id "$FINAL_RUN_ID" \
           --arg run_date "${{ inputs.run_date }}" \
           --arg commit_hash "${{ inputs.commit_hash }}" \
           --arg upstream "${{ inputs.upstream_commit }}" \
@@ -125,10 +103,9 @@ runs:
           --arg pass "${{ inputs.pass_count }}" \
           --arg skip "${{ inputs.skip_count }}" \
           --arg fail "${{ inputs.fail_count }}" \
-          ' def sql_esc(v): if v == null or v == "" then "NULL" else ("'" + (v | tostring | gsub("'" ; "'"'"'") ) + "'" ) end;
-            "INSERT INTO runs (run_id, run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
+          ' def sql_esc(v): if v == null or v == "" then "NULL" else ("'" + (v | tostring | gsub("'" ; "'"'"'"'")) + "'") end;
+            "INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, binary_sha256, passed_count, skipped_count, failed_count)
              VALUES (" +
-                sql_esc($run_id) + ", " +
                 sql_esc($run_date) + ", " +
                 sql_esc($commit_hash) + ", " +
                 sql_esc($upstream) + ", " +
@@ -142,15 +119,16 @@ runs:
                 sql_esc($features) + ", " +
                 sql_esc($binary_sha256) + ", " +
                 $pass + ", " + $skip + ", " + $fail + ")
-             ON CONFLICT (run_id, arch, os) DO NOTHING
-             RETURNING id;' ")
+             ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING
+             RETURNING id;" ')
 
         PK_ID=$(echo "$QUERY" | psql -t -A "${{ inputs.database_url }}" | head -n 1)
 
         if [ -z "$PK_ID" ]; then
             PK_ID=$(psql "${{ inputs.database_url }}" -t -A -c "
               SELECT id FROM runs
-              WHERE run_id = '${FINAL_RUN_ID}'
+              WHERE commit_hash = '${{ inputs.commit_hash }}'
+              AND run_date = '${{ inputs.run_date }}'
               AND arch IS NOT DISTINCT FROM (CASE WHEN '${{ inputs.arch }}' = '' THEN NULL ELSE '${{ inputs.arch }}' END)
               AND os IS NOT DISTINCT FROM (CASE WHEN '${{ inputs.os }}' = '' THEN NULL ELSE '${{ inputs.os }}' END);" | head -n 1)
         fi
@@ -164,19 +142,15 @@ runs:
         MACHINE_PK="${{ steps.ingest_summary.outputs.machine_pk }}"
 
         if [ -z "$MACHINE_PK" ] || [[ ! "$MACHINE_PK" =~ ^[0-9]+$ ]]; then
-          echo "Machine run could not be found or created. Skipping details ingestion."
-          exit 0
-        fi
-
-        if [ ! -f "$RESULTS_FILE" ]; then
-          echo "Results file not found: $RESULTS_FILE"
+          echo "Machine run could not be linked. Skipping details ingestion."
           exit 0
         fi
 
         (
           echo "BEGIN;"
-          jq -r --arg pk "$MACHINE_PK" '
-            def sql_esc(v): "'\''" + (v | tostring | gsub("'" ; "'"'"'"'")) + "'\''";
+          jq -r --arg pk "$MACHINE_PK" \
+          '
+            def sql_esc(v): "'" + (v | tostring | gsub("'" ; "'"'"'"'"')) + "'";
             "INSERT INTO run_details (run_id, test_name, status) VALUES (" + $pk + ", " + sql_esc(.Test) + ", " + sql_esc(.Action) + ") ON CONFLICT (run_id, test_name) DO NOTHING;"
           ' "$RESULTS_FILE"
           echo "COMMIT;"
