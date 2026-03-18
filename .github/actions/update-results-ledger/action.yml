@@ -30,6 +30,9 @@ inputs:
   os:
     description: "Operating System"
     default: ""
+  profile:
+    description: "Build profile (e.g. release, debug, release-quick)"
+    default: ""
 
 outputs:
   upstream_commit:
@@ -55,6 +58,7 @@ runs:
         FEATURES="${{ inputs.features }}"
         ARCH="${{ inputs.arch }}"
         OS="${{ inputs.os }}"
+        PROFILE="${{ inputs.profile }}"
 
         # Extract commit hash from version string, fall back to env
         BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
@@ -134,10 +138,11 @@ runs:
           mkdir -p "$LEDGER_DIR/runs_data"
           SAFE_ARCH=$(echo "$ARCH" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
           SAFE_OS=$(echo "$OS" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+          SAFE_PROFILE=$(echo "$PROFILE" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
 
-          jq -c --arg h "$COMMIT_HASH" --arg a "$ARCH" --arg o "$OS" \
-            '. + {commit: $h, arch: $a, os: $o}' "$RESULTS_FILE" \
-            > "$LEDGER_DIR/runs_data/${COMMIT_HASH}-${SAFE_ARCH}-${SAFE_OS}.jsonl"
+          jq -c --arg h "$COMMIT_HASH" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" \
+            '. + {commit: $h, arch: $a, os: $o, profile: $p}' "$RESULTS_FILE" \
+            > "$LEDGER_DIR/runs_data/${COMMIT_HASH}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}.jsonl"
         fi
 
         cd "$LEDGER_DIR"
@@ -157,6 +162,7 @@ runs:
           --arg provider "$PROVIDER" \
           --arg arch "$ARCH" \
           --arg os "$OS" \
+          --arg profile "$PROFILE" \
           --arg binary_sha256 "$BIN_SHA" \
           --arg version_string "$VERSION_STRING" \
           --arg features "$FEATURES" \
@@ -174,6 +180,7 @@ runs:
             provider: $provider,
             arch: $arch,
             os: $os,
+            profile: $profile,
             version_string: $version_string,
             features: $features,
             binary_sha256: $binary_sha256,

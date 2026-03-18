@@ -660,6 +660,17 @@ inherits = "release"
 debug = "full"
 strip = "none"
 
+# fast compile time, decent runtime, no debug asserts, but still debuggable
+[profile.release-quick]
+inherits = "release"
+opt-level = 1
+debug = "full"
+strip = "none"
+debug-assertions = false
+incremental = true
+lto = "off"
+
+
 [profile.release-high-perf]
 inherits = "release"
 lto = "fat"
