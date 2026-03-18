@@ -39,7 +39,7 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Append results and update badge
+    - name: "Append results and update badge"
       id: append
       shell: bash
       run: |
@@ -125,11 +125,17 @@ runs:
           cd -
         fi
 
-        # Save the full results data
+        # Save the full results data uniquely per machine.
+        # We inject the commit, arch, and os into EVERY line of the JSONL.
         RESULTS_FILE="tests/test_results/complement/test_results.jsonl"
         if [ -f "$RESULTS_FILE" ]; then
           mkdir -p "$LEDGER_DIR/runs_data"
-          cp "$RESULTS_FILE" "$LEDGER_DIR/runs_data/${COMMIT_HASH}.jsonl"
+          SAFE_ARCH=$(echo "$ARCH" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+          SAFE_OS=$(echo "$OS" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+
+          jq -c --arg h "$COMMIT_HASH" --arg a "$ARCH" --arg o "$OS" \
+            '. + {commit: $h, arch: $a, os: $o}' "$RESULTS_FILE" \
+            > "$LEDGER_DIR/runs_data/${COMMIT_HASH}-${SAFE_ARCH}-${SAFE_OS}.jsonl"
         fi
 
         cd "$LEDGER_DIR"

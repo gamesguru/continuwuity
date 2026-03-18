@@ -181,16 +181,25 @@ jobs:
         id: results
         run: |
           RESULTS="tests/test_results/complement/test_results.jsonl"
+
+          # Inject arch and os into the JSONL file itself.
+          # We use a temp file to avoid reading/writing to the same file.
+          TEMP_RESULTS=$(mktemp)
+          jq -c --arg a "${{ matrix.arch }}" --arg o "${{ matrix.os }}" \
+            '. + {arch: $a, os: $o}' "$RESULTS" > "$TEMP_RESULTS"
+          mv "$TEMP_RESULTS" "$RESULTS"
+
           PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
           FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' "$RESULTS")
           SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' "$RESULTS")
           TOTAL=$((PASS + FAIL + SKIP))
-          FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' "$RESULTS" | sort -u)
+          FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' "$RESULTS" \
+            | sort -u)
 
           echo "pass=$PASS" >> "$GITHUB_OUTPUT"
           echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
           echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
           echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
@@ -199,9 +208,9 @@ jobs:
         id: version
         if: always()
         run: |
-          VERSION=$(./target/latest/conduwuit --version 2>/dev/null || echo "unknown")
+          VERSION=$(./target/latest/conduwuit --version 2>/dev/null \
+            || echo "unknown")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Update Results Ledger
         if: always()
         uses: ./.github/actions/update-results-ledger

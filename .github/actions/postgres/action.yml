@@ -10,7 +10,7 @@ inputs:
     description: "Branch where results ledger is stored"
     default: "_metadata/badges"
 
-runs:
+uns:
   using: "composite"
   steps:
     - name: Ensure Tables Exist
@@ -25,9 +25,8 @@ runs:
         TEMP_LEDGER=$(mktemp -d)
         echo "→ Syncing last 100 runs from Git history..."
 
-        # Clone only the necessary branch and history depth
         git clone --depth 100 --branch "${{ inputs.target_branch }}" \
-          https://github.com/${{ github.repository }} "$TEMP_LEDGER" > /dev/null 2>&1
+          https://github.com/${{ github.repository }} "$TEMP_LEDGER" > /dev/null 2>&1 || exit 0
 
         if [ ! -f "$TEMP_LEDGER/runs.jsonl" ]; then
           echo "Error: Could not find runs.jsonl in history."
@@ -49,22 +48,24 @@ runs:
 
         cat "$TEMP_LEDGER/runs.jsonl" | psql "${{ inputs.database_url }}" -c "$SYNC_RUNS_SQL"
 
-        # 2. Bulk Ingest Test Details for these 100 runs
+        # 2. Bulk Ingest Test Details
         echo "→ Syncing test details for the last 100 runs..."
         SYNC_DETAILS_SQL="
           CREATE TEMP TABLE t (j jsonb);
           \copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';
+
           INSERT INTO run_details (run_id, test_name, status)
           SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
           FROM t
           JOIN runs r ON r.commit_hash = (t.j->>'commit')
+                     AND r.arch IS NOT DISTINCT FROM (t.j->>'arch')
+                     AND r.os IS NOT DISTINCT FROM (t.j->>'os')
           ON CONFLICT (run_id, test_name) DO NOTHING;"
 
         (
           for f in "$TEMP_LEDGER/runs_data"/*.jsonl; do
             [ -f "$f" ] || continue
-            COMMIT=$(basename "$f" .jsonl)
-            jq -c --arg h "$COMMIT" '. + {commit: $h}' "$f"
+            cat "$f"
           done
         ) | psql "${{ inputs.database_url }}" -c "$SYNC_DETAILS_SQL"
 
