@@ -99,7 +99,7 @@ features = [
 [workspace.dependencies.axum-extra]
 version = "0.12.0"
 default-features = false
-features = ["typed-header", "tracing"]
+features = ["typed-header", "tracing", "cookie"]
 
 [workspace.dependencies.axum-server]
 version = "0.7.2"
@@ -981,3 +981,6 @@ needless_raw_string_hashes = "allow"
 
 # TODO: Enable this lint & fix all instances
 collapsible_if = "allow"
+
+# TODO: break these apart
+cognitive_complexity = "allow"
