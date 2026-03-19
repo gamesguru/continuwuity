@@ -106,7 +106,7 @@ jobs:
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
           JEMALLOC_SYS_WITH_LG_PAGE: ${{ matrix.jemalloc_lg_page || '' }}
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.target_cpu != '' && format('-C target-cpu={0}', matrix.target_cpu) || '' }}
-        run: SKIP_CONFIRM=1 make build PROFILE=${{ matrix.profile }} CARGO_FLAGS="--profile ${{ matrix.profile }} --features direct_tls"
+        run: SKIP_CONFIRM=1 make build PROFILE=${{ matrix.profile }} CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features direct_tls"
 
       - name: Sanity check binary
         run: ./target/latest/conduwuit --version
