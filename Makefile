@@ -87,7 +87,7 @@ vars: ##H Print debug info
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		printf "$(STYLE_CYAN)%-25s$(STYLE_RESET) %s\n" "VERSION" \
-		"$$(cargo run -p conduwuit_build_metadata --bin version --quiet)"
+		"$$(cargo run $(CARGO_FLAGS) -p conduwuit_build_metadata --bin version --quiet)"
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -98,7 +98,7 @@ PROFILE ?=
 p ?=
 CRATE ?=
 CARGO_SCOPE ?= $(if $(p),-p $(p),$(if $(CRATE),-p $(CRATE),--workspace))
-CARGO_FLAGS ?= --profile $(PROFILE)
+CARGO_FLAGS ?= $(if $(PROFILE),--profile $(PROFILE),) --config Cargo.custom.toml
 
 
 .PHONY: cargo/lock-init
@@ -145,7 +145,7 @@ lint:   ##H Lint code
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps --profile $(PROFILE) -- -D warnings
+		cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps $(CARGO_FLAGS) -- -D warnings
 
 .PHONY: test
 test:   ##H Run tests
@@ -154,7 +154,7 @@ test:   ##H Run tests
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo test $(CARGO_SCOPE) --features full --locked --all-targets --timings --profile $(PROFILE)
+		cargo test $(CARGO_SCOPE) --features full --locked --all-targets --timings $(CARGO_FLAGS)
 
 
 ROCKSDB_LIB_DIR ?= /usr/local/lib
@@ -234,7 +234,7 @@ build-docs:     ##H Regenerate docs (admin commands, etc.)
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo run -p xtask --profile $(PROFILE) -- generate-docs
+		cargo run -p xtask $(CARGO_FLAGS) -- generate-docs
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -249,7 +249,7 @@ COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
 complement/build: ##H Build conduwuit w direct_tls
 	@echo "Building conduwuit binary with direct_tls feature for Complement..."
 	@$(MAKE) _confirm
-	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--profile $(PROFILE) --features direct_tls"
+	$(MAKE) build PROFILE=$(PROFILE) CARGO_FLAGS="--config Cargo.custom.toml --profile $(PROFILE) --features direct_tls"
 
 .PHONY: complement/docker
 complement/docker: ##H Build docker image from existing binary
