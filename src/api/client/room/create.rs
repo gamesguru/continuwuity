@@ -183,9 +183,10 @@ pub(crate) async fn create_room_route(
 						})?,
 					);
 				},
-				| _ => {
+				| V11 | V12 => {
 					// V11+ removed the "creator" key
 				},
+				| _ => (),
 			}
 			content.insert(
 				"room_version".into(),

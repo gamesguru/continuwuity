@@ -143,7 +143,8 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			get(client::get_state_events_for_empty_key_route)
 				.put(client::send_state_event_for_empty_key_route),
 		)
-		.ruma_route(&client::sync_events_route)
+		.route("/_matrix/client/r0/sync", get(client::sync_events_route))
+		.route("/_matrix/client/v3/sync", get(client::sync_events_route))
 		.ruma_route(&client::sync_events_v5_route)
 		.ruma_route(&client::get_context_route)
 		.ruma_route(&client::get_message_events_route)
