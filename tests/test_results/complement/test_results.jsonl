@@ -107,8 +107,8 @@
 {"Action":"pass","Test":"TestDelayedEvents/parallel/cannot_cancel_a_delayed_event_without_a_matching_delay_ID"}
 {"Action":"pass","Test":"TestDelayedEvents/parallel/cannot_restart_a_delayed_event_without_a_matching_delay_ID"}
 {"Action":"pass","Test":"TestDelayedEvents/parallel/cannot_send_a_delayed_event_without_a_matching_delay_ID"}
-{"Action":"fail","Test":"TestDeletingDeviceRemovesDeviceLocalNotificationSettings"}
-{"Action":"fail","Test":"TestDeletingDeviceRemovesDeviceLocalNotificationSettings/Deleting_a_user's_device_should_delete_any_local_notification_settings_entries_from_their_account_data"}
+{"Action":"pass","Test":"TestDeletingDeviceRemovesDeviceLocalNotificationSettings"}
+{"Action":"pass","Test":"TestDeletingDeviceRemovesDeviceLocalNotificationSettings/Deleting_a_user's_device_should_delete_any_local_notification_settings_entries_from_their_account_data"}
 {"Action":"pass","Test":"TestDemotingUsersViaUsersDefault"}
 {"Action":"fail","Test":"TestDeviceListUpdates"}
 {"Action":"fail","Test":"TestDeviceListUpdates/when_joining_a_room_with_a_local_user"}
@@ -675,10 +675,10 @@
 {"Action":"pass","Test":"TestSyncLeaveSection/Left_rooms_appear_in_the_leave_section_of_full_state_sync"}
 {"Action":"pass","Test":"TestSyncLeaveSection/Left_rooms_appear_in_the_leave_section_of_sync"}
 {"Action":"pass","Test":"TestSyncLeaveSection/Newly_left_rooms_appear_in_the_leave_section_of_incremental_sync"}
-{"Action":"pass","Test":"TestSyncOmitsStateChangeOnFilteredEvents"}
-{"Action":"pass","Test":"TestSyncTimelineGap"}
-{"Action":"pass","Test":"TestSyncTimelineGap/full"}
-{"Action":"pass","Test":"TestSyncTimelineGap/incremental"}
+{"Action":"fail","Test":"TestSyncOmitsStateChangeOnFilteredEvents"}
+{"Action":"fail","Test":"TestSyncTimelineGap"}
+{"Action":"fail","Test":"TestSyncTimelineGap/full"}
+{"Action":"fail","Test":"TestSyncTimelineGap/incremental"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting"}
 {"Action":"fail","Test":"TestThreadReceiptsInSyncMSC4102"}
 {"Action":"fail","Test":"TestThreadSubscriptions"}

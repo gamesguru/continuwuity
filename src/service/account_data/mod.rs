@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use conduwuit::{
-	Err, Result, err, implement, info,
+	Err, Result, err, implement,
 	utils::{ReadyExt, result::LogErr, stream::TryIgnore},
 };
 use database::{Deserialized, Handle, Ignore, Json, Map};
@@ -88,7 +88,6 @@ pub async fn delete(
 	user_id: &UserId,
 	event_type: &str,
 ) -> Result<()> {
-	info!("Deleting account data for {user_id}: {event_type}");
 	let key = (room_id, user_id, event_type);
 	if let Ok(prev) = self.db.roomusertype_roomuserdataid.qry(&key).await {
 		self.db.roomuserdataid_accountdata.remove(&prev);
