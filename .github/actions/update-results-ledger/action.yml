@@ -87,17 +87,17 @@ runs:
         [ -f "$BINARY_PATH" ] && BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
 
         # Determine Author Name and Upstream Commit
+        UPSTREAM_COMMIT=""
+        AUTHOR_NAME=""
         if [ "$COMMIT_HASH" != "unknown" ]; then
           # Fetch true upstream main to find the definitive merge base
           UPSTREAM_URL="https://forgejo.ellis.link/continuwuation/continuwuity.git"
           if git fetch "$UPSTREAM_URL" main 2>/dev/null; then
             UPSTREAM_COMMIT=$(git merge-base FETCH_HEAD "$COMMIT_HASH" 2>/dev/null || echo "")
           fi
-          [ -z "$UPSTREAM_COMMIT" ] && UPSTREAM_COMMIT="$COMMIT_HASH"
-          AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" 2>/dev/null || echo "${ACTOR:-unknown}")
-        else
-          UPSTREAM_COMMIT=""
-          AUTHOR_NAME="${ACTOR:-unknown}"
+          if [ -n "$UPSTREAM_COMMIT" ]; then
+            AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" 2>/dev/null || echo "")
+          fi
         fi
 
         echo "upstream_commit=$UPSTREAM_COMMIT" >> "$GITHUB_OUTPUT"

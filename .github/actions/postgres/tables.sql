@@ -58,7 +58,7 @@ SELECT
     r.version_string,
     r.run_date,
     r.commit_hash,
-    COALESCE(r.upstream_commit, r.commit_hash) AS upstream_sha,
+    r.upstream_commit AS upstream_sha,
     r.author_name,
     r.actor,
     r.branch,
