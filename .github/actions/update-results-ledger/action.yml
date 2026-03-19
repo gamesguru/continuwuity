@@ -24,11 +24,26 @@ inputs:
   features:
     description: "Space-separated list of cargo features used for this build"
     default: ""
+  arch:
+    description: "Architecture"
+    default: ""
+  os:
+    description: "Operating System"
+    default: ""
+  profile:
+    description: "Build profile (e.g. release, debug, release-quick)"
+    default: ""
+
+outputs:
+  upstream_commit:
+    description: "The calculated upstream commit hash"
+    value: ${{ steps.append.outputs.upstream_commit }}
 
 runs:
   using: "composite"
   steps:
-    - name: Append results and update badge
+    - name: "Append results and update badge"
+      id: append
       shell: bash
       run: |
         set -euo pipefail
@@ -41,6 +56,9 @@ runs:
         ACTOR="${{ inputs.actor }}"
         BINARY_PATH="${{ inputs.binary_path }}"
         FEATURES="${{ inputs.features }}"
+        ARCH="${{ inputs.arch }}"
+        OS="${{ inputs.os }}"
+        PROFILE="${{ inputs.profile }}"
 
         # Extract commit hash from version string, fall back to env
         BIN_VER_HASH=$(echo "$VERSION_STRING" | sed -n 's/.*~\([0-9a-f]\{7,\}\).*/\1/p')
@@ -68,17 +86,21 @@ runs:
         BIN_SHA="unknown"
         [ -f "$BINARY_PATH" ] && BIN_SHA=$(sha256sum "$BINARY_PATH" | awk '{print $1}')
 
-        # Determine Author Name and Upstream Commit (for main-upstream)
+        # Determine Author Name and Upstream Commit
         UPSTREAM_COMMIT=""
-        if [ "$BRANCH_NAME" = "main-upstream" ] && [ "$COMMIT_HASH" != "unknown" ]; then
-          # On main-upstream, COMMIT_HASH is the merge commit.
-          # We want the actual upstream commit, which is the first non-merge parent.
-          UPSTREAM_COMMIT=$(git log -1 --format='%P' "$COMMIT_HASH" | awk '{print $2}')
-          [ -z "$UPSTREAM_COMMIT" ] && UPSTREAM_COMMIT="$COMMIT_HASH"
-          AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" || echo "$ACTOR")
-        else
-          AUTHOR_NAME=$(git log -1 --format='%an' "$COMMIT_HASH" || echo "$ACTOR")
+        AUTHOR_NAME=""
+        if [ "$COMMIT_HASH" != "unknown" ]; then
+          # Fetch true upstream main to find the definitive merge base
+          UPSTREAM_URL="https://forgejo.ellis.link/continuwuation/continuwuity.git"
+          if git fetch "$UPSTREAM_URL" main 2>/dev/null; then
+            UPSTREAM_COMMIT=$(git merge-base FETCH_HEAD "$COMMIT_HASH" 2>/dev/null || echo "")
+          fi
+          if [ -n "$UPSTREAM_COMMIT" ]; then
+            AUTHOR_NAME=$(git log -1 --format='%an' "$UPSTREAM_COMMIT" 2>/dev/null || echo "")
+          fi
         fi
+
+        echo "upstream_commit=$UPSTREAM_COMMIT" >> "$GITHUB_OUTPUT"
 
         # --- Work on the orphan branch via worktree ---
         LEDGER_DIR="/tmp/ledger-$$"
@@ -109,11 +131,18 @@ runs:
           cd -
         fi
 
-        # Save the full results data
+        # Save the full results data uniquely per machine.
+        # We inject the commit, arch, and os into EVERY line of the JSONL.
         RESULTS_FILE="tests/test_results/complement/test_results.jsonl"
         if [ -f "$RESULTS_FILE" ]; then
           mkdir -p "$LEDGER_DIR/runs_data"
-          cp "$RESULTS_FILE" "$LEDGER_DIR/runs_data/${COMMIT_HASH}.jsonl"
+          SAFE_ARCH=$(echo "$ARCH" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+          SAFE_OS=$(echo "$OS" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+          SAFE_PROFILE=$(echo "$PROFILE" | sed 's/[^a-zA-Z0-9.\-_]/_/g')
+
+          jq -c --arg h "$COMMIT_HASH" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" \
+            '. + {commit: $h, arch: $a, os: $o, profile: $p}' "$RESULTS_FILE" \
+            > "$LEDGER_DIR/runs_data/${COMMIT_HASH}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}.jsonl"
         fi
 
         cd "$LEDGER_DIR"
@@ -131,6 +160,9 @@ runs:
           --arg author_name "$AUTHOR_NAME" \
           --arg actor "$ACTOR" \
           --arg provider "$PROVIDER" \
+          --arg arch "$ARCH" \
+          --arg os "$OS" \
+          --arg profile "$PROFILE" \
           --arg binary_sha256 "$BIN_SHA" \
           --arg version_string "$VERSION_STRING" \
           --arg features "$FEATURES" \
@@ -146,6 +178,9 @@ runs:
             author_name: $author_name,
             actor: $actor,
             provider: $provider,
+            arch: $arch,
+            os: $os,
+            profile: $profile,
             version_string: $version_string,
             features: $features,
             binary_sha256: $binary_sha256,
