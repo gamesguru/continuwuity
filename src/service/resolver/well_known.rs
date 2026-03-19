@@ -12,6 +12,8 @@ pub(super) async fn request_well_known(&self, dest: &str) -> Result<Option<Strin
 		|| dest.starts_with("localhost")
 		|| dest.starts_with("127.0.0.1")
 		|| dest.starts_with("[::1]")
+		|| dest.starts_with("hs1")
+		|| dest.starts_with("hs2")
 	{
 		format!("http://{dest}/.well-known/matrix/server")
 	} else {

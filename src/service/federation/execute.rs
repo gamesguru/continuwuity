@@ -93,9 +93,11 @@ where
 		| Ok(response) =>
 			self.handle_response::<T>(dest, actual, &method, &url, response)
 				.await,
-		| Err(error) =>
+		| Err(error) => {
+			conduwuit::warn!("Federation request to {url} failed: {error:?}");
 			Err(handle_error(dest, actual, &method, &url, error)
-				.expect_err("always returns error")),
+				.expect_err("always returns error"))
+		},
 	}
 }
 
@@ -318,12 +320,15 @@ where
 {
 	const VERSIONS: [MatrixVersion; 1] = [MatrixVersion::V1_11];
 
+	let url = actual.string();
+	if url.contains(".well-known") {
+		conduwuit::warn!("Well-known federation request to: {url}");
+	} else {
+		conduwuit::warn!("Federation request to: {url}");
+	}
+
 	let http_request = request
-		.try_into_http_request::<Vec<u8>>(
-			actual.string().as_str(),
-			SendAccessToken::None,
-			&VERSIONS,
-		)
+		.try_into_http_request::<Vec<u8>>(url.as_str(), SendAccessToken::None, &VERSIONS)
 		.map_err(|e| err!(BadServerResponse("Invalid destination: {e:?}")))?;
 
 	Ok(http_request)

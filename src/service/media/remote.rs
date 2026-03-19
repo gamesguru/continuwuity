@@ -9,10 +9,7 @@ use ruma::{
 	Mxc, ServerName, UserId,
 	api::{
 		OutgoingRequest,
-		client::{
-			error::ErrorKind::{NotFound, Unrecognized},
-			media,
-		},
+		client::{error::ErrorKind, media},
 		federation,
 		federation::authenticated_media::{Content, FileOrLocation},
 	},
@@ -35,7 +32,11 @@ pub async fn fetch_remote_thumbnail(
 		.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
 		.await;
 
-	if let Err(Error::Request(Unrecognized | NotFound, ..)) = &result {
+	if let Err(Error::Request(
+		ErrorKind::Unrecognized { .. } | ErrorKind::NotFound { .. } | ErrorKind::Forbidden { .. },
+		..,
+	)) = &result
+	{
 		return self
 			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
 			.await;
@@ -67,7 +68,11 @@ pub async fn fetch_remote_content(
 			);
 		});
 
-	if let Err(Error::Request(Unrecognized | NotFound, ..)) = &result {
+	if let Err(Error::Request(
+		ErrorKind::Unrecognized { .. } | ErrorKind::NotFound { .. } | ErrorKind::Forbidden { .. },
+		..,
+	)) = &result
+	{
 		return self
 			.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
 			.await;

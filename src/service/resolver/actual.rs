@@ -30,8 +30,10 @@ impl ActualDest {
 			|| s.contains("://localhost")
 			|| s.contains("://127.0.0.1")
 			|| s.contains("://[::1]")
+			|| s.contains("://hs1")
+			|| s.contains("://hs2")
 		{
-			s.replace("https://", "http://")
+			s.replace("https://", "http://").replace(":8448", ":8008")
 		} else {
 			s
 		}
