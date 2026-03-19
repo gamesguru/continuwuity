@@ -138,8 +138,10 @@ pub fn recently_joined_rooms(
 	}
 
 	// Enforce the per-user room limit to prevent memory leaks
-	if rooms.len() > RECENTLY_JOINED_MAX_ROOMS_PER_USER {
-		let overflow = rooms.len() - RECENTLY_JOINED_MAX_ROOMS_PER_USER;
+	let overflow = rooms
+		.len()
+		.saturating_sub(RECENTLY_JOINED_MAX_ROOMS_PER_USER);
+	if overflow > 0 {
 		let mut oldest: Vec<_> = rooms
 			.iter()
 			.map(|(room_id, join_count)| (room_id.clone(), *join_count))
