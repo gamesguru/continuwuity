@@ -1,0 +1,21 @@
+# fast compile time, decent runtime, no debug asserts, but still debuggable
+[profile.release-quick]
+inherits = "release"
+opt-level = 1
+debug = "full"
+strip = "none"
+debug-assertions = false
+incremental = true
+lto = "off"
+
+# Dev/testing build with fast compile time, decent runtime performance.
+# Here, "quick" refers to compile time, not runtime speed.
+# NOTE: for smaller binaries on disk, put: strip = "symbols"
+[profile.dev-quick]
+inherits = "dev"
+opt-level = 0
+debug = "full"
+strip = "none"
+lto = "off"
+codegen-units = 16
+incremental = true
