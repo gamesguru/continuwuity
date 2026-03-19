@@ -22,7 +22,20 @@ pub(crate) struct ActualDest {
 
 impl ActualDest {
 	#[inline]
-	pub(crate) fn string(&self) -> String { self.dest.https_string() }
+	pub(crate) fn string(&self) -> String {
+		let s = self.dest.https_string();
+		if s.contains("://172.")
+			|| s.contains("://10.")
+			|| s.contains("://192.168.")
+			|| s.contains("://localhost")
+			|| s.contains("://127.0.0.1")
+			|| s.contains("://[::1]")
+		{
+			s.replace("https://", "http://")
+		} else {
+			s
+		}
+	}
 }
 
 impl super::Service {

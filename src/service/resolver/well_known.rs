@@ -7,8 +7,11 @@ use conduwuit::{
 pub(super) async fn request_well_known(&self, dest: &str) -> Result<Option<String>> {
 	trace!("Requesting well known for {dest}");
 	let url = if dest.starts_with("172.")
+		|| dest.starts_with("10.")
+		|| dest.starts_with("192.168.")
 		|| dest.starts_with("localhost")
 		|| dest.starts_with("127.0.0.1")
+		|| dest.starts_with("[::1]")
 	{
 		format!("http://{dest}/.well-known/matrix/server")
 	} else {

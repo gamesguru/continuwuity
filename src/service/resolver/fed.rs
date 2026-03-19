@@ -43,8 +43,8 @@ pub(crate) fn add_port_to_hostname(dest: &str) -> FedDest {
 impl FedDest {
 	pub(crate) fn https_string(&self) -> String {
 		match self {
-			| Self::Literal(addr) => format!("http://{addr}"),
-			| Self::Named(host, port) => format!("http://{host}{port}"),
+			| Self::Literal(addr) => format!("https://{addr}"),
+			| Self::Named(host, port) => format!("https://{host}{port}"),
 		}
 	}
 
