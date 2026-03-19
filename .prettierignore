@@ -1,5 +1,6 @@
 complement*/
 target/
+.mypy_cache
 # old manual list
 .forgejo/actions/sccache/action.yml
 .forgejo/actions/setup-llvm-with-apt/action.yml

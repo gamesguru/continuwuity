@@ -264,7 +264,7 @@ complement args=".":
 # Complement CI
 # -----------------------------------------------------------------------------
 
-COMPLEMENT_IMAGE := env_var_or_default("COMPLEMENT_IMAGE", "conduwuit:complement")
+COMPLEMENT_IMAGE := env_var_or_default("COMPLEMENT_IMAGE", "continuwuity:complement")
 COMPLEMENT_BASE_IMAGE := env_var_or_default("COMPLEMENT_BASE_IMAGE", "ubuntu:latest")
 PROFILE := env_var_or_default("PROFILE", "release")
 
@@ -328,3 +328,14 @@ ci-complement-stats:
     echo ""
     echo "Last modified by:"
     git log -5 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+
+# -----------------------------------------------------------------------------
+# CI Database Queries
+# -----------------------------------------------------------------------------
+
+# Query the CI run regressions view via DB shell.
+# Usage:
+#   just ci-query-failures limit=5 order=run_date asc sha=c56ea1dc
+ci-query-failures +args="":
+    #!/usr/bin/env bash
+    ./.github/actions/postgres/ci-query-failures.py {{args}}

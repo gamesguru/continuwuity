@@ -3,7 +3,8 @@ mod remote;
 use std::sync::Arc;
 
 use conduwuit::{
-	Err, Event, Result, err,
+	Err, Result, err,
+	matrix::Event,
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Ignore, Interfix, Map};

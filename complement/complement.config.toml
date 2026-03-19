@@ -59,3 +59,7 @@ force_disable_first_run_mode = true
 
 [global.tls]
 dual_protocol = true
+
+[global.experimental_features]
+msc3266_enabled = true
+msc4222_enabled = true

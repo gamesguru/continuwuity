@@ -68,6 +68,10 @@ pub struct Config {
 	///
 	/// Also see the `[global.well_known]` config section at the very bottom.
 	///
+	/// If `client` is not set under `[global.well_known]`, the server name will
+	/// be used as the base domain for user-facing links (such as password
+	/// reset links) created by Continuwuity.
+	///
 	/// Examples of delegation:
 	/// - https://continuwuity.org/.well-known/matrix/server
 	/// - https://continuwuity.org/.well-known/matrix/client
@@ -2098,6 +2102,13 @@ pub struct Config {
 	#[serde(default)]
 	pub force_disable_first_run_mode: bool,
 
+	/// Allow search engines and crawlers to index Continuwuity's built-in
+	/// webpages served under the `/_continuwuity/` prefix.
+	///
+	/// default: false
+	#[serde(default)]
+	pub allow_web_indexing: bool,
+
 	/// display: nested
 	#[serde(default)]
 	pub ldap: LdapConfig,
@@ -2115,6 +2126,11 @@ pub struct Config {
 	/// display: nested
 	#[serde(default)]
 	pub matrix_rtc: MatrixRtcConfig,
+
+	/// Experimental features
+	/// display: nested
+	#[serde(default)]
+	pub experimental_features: ExperimentalConfig,
 
 	#[serde(flatten)]
 	#[allow(clippy::zero_sized_map_values)]
@@ -2436,6 +2452,22 @@ pub struct DraupnirConfig {
 	/// The authentication secret defined in
 	/// web->synapseHTTPAntispam->authorization
 	pub secret: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[config_example_generator(
+	filename = "conduwuit-example.toml",
+	section = "global.experimental_features",
+	optional = "true"
+)]
+pub struct ExperimentalConfig {
+	/// MSC3266: room previews
+	#[serde(default)]
+	pub msc3266_enabled: bool,
+
+	/// MSC4222: state_after in sync v2
+	#[serde(default)]
+	pub msc4222_enabled: bool,
 }
 
 const DEPRECATED_KEYS: &[&str] = &[

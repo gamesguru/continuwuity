@@ -16,8 +16,8 @@ use conduwuit::{
 };
 use conduwuit_service::Services;
 use futures::{
-	FutureExt, StreamExt,
-	future::{join, join3, join4, try_join, try_join3},
+	FutureExt, StreamExt, TryFutureExt,
+	future::{OptionFuture, join, join3, join4, try_join, try_join3, try_join4},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -26,7 +26,7 @@ use ruma::{
 		v3::{Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline},
 	},
 	events::{
-		AnyRawAccountDataEvent, StateEventType,
+		AnyRawAccountDataEvent, AnySyncStateEvent, StateEventType,
 		TimelineEventType::*,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
@@ -58,7 +58,7 @@ pub(super) async fn load_joined_room(
 	services: &Services,
 	sync_context: SyncContext<'_>,
 	ref room_id: OwnedRoomId,
-) -> Result<(JoinedRoom, DeviceListUpdates)> {
+) -> Result<(JoinedRoom, Vec<Raw<AnySyncStateEvent>>, DeviceListUpdates)> {
 	/*
 	Building a sync response involves many steps which all depend on each other.
 	To parallelize the process as much as possible, each step is divided into its own function,
@@ -70,6 +70,7 @@ pub(super) async fn load_joined_room(
 		ephemeral,
 		StateAndTimeline {
 			state_events,
+			state_after,
 			timeline,
 			summary,
 			notification_counts,
@@ -108,7 +109,12 @@ pub(super) async fn load_joined_room(
 		unread_thread_notifications: BTreeMap::new(),
 	};
 
-	Ok((joined_room, device_list_updates))
+	let state_after = state_after
+		.into_iter()
+		.map(Event::into_format)
+		.collect::<Vec<_>>();
+
+	Ok((joined_room, state_after, device_list_updates))
 }
 
 /// Collect changes to the syncing user's account data events.
@@ -244,6 +250,7 @@ async fn build_ephemeral(
 /// computed from them.
 struct StateAndTimeline {
 	state_events: Vec<PduEvent>,
+	state_after: Vec<PduEvent>,
 	timeline: Timeline,
 	summary: Option<RoomSummary>,
 	notification_counts: Option<UnreadNotificationsCount>,
@@ -265,7 +272,7 @@ async fn build_state_and_timeline(
 	let timeline =
 		build_timeline(services, sync_context, room_id, joined_since_last_sync).await?;
 
-	let (state_events, notification_counts) = try_join(
+	let (state_events, state_after, notification_counts) = try_join3(
 		build_state_events(
 			services,
 			sync_context,
@@ -274,6 +281,7 @@ async fn build_state_and_timeline(
 			&timeline,
 			joined_since_last_sync,
 		),
+		build_state_after(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
 	)
 	.await?;
@@ -354,6 +362,7 @@ async fn build_state_and_timeline(
 
 	Ok(StateAndTimeline {
 		state_events,
+		state_after,
 		timeline: Timeline {
 			limited,
 			prev_batch: prev_batch.as_ref().map(ToString::to_string),
@@ -590,6 +599,36 @@ async fn build_state_events(
 			.boxed()
 			.await,
 	}
+}
+
+/// Calculate the state events after the timeline for MSC4222.
+async fn build_state_after(
+	services: &Services,
+	sync_context: SyncContext<'_>,
+	room_id: &RoomId,
+	shortstatehashes: ShortStateHashes,
+	timeline: &TimelinePdus,
+) -> Result<Vec<PduEvent>> {
+	if !services.config.experimental_features.msc4222_enabled {
+		return Ok(Vec::new());
+	}
+
+	let SyncContext { syncing_user, .. } = sync_context;
+	let ShortStateHashes { current_shortstatehash, .. } = shortstatehashes;
+
+	// the user IDs of members whose membership needs to be sent to the client, if
+	// lazy-loading is enabled.
+	let lazily_loaded_members =
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders()).await;
+
+	build_state_initial(
+		services,
+		syncing_user,
+		current_shortstatehash,
+		lazily_loaded_members.as_ref(),
+	)
+	.boxed()
+	.await
 }
 
 /// Compute the number of unread notifications in this room.

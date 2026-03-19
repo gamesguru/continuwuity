@@ -99,7 +99,7 @@ features = [
 [workspace.dependencies.axum-extra]
 version = "0.12.0"
 default-features = false
-features = ["typed-header", "tracing"]
+features = ["typed-header", "tracing", "cookie"]
 
 [workspace.dependencies.axum-server]
 version = "0.7.2"
@@ -715,7 +715,6 @@ opt-level = 0
 panic = "unwind"
 debug-assertions = true
 incremental = true
-split-debuginfo = "unpacked"
 #rustflags = [
 #	'--cfg', 'conduwuit_mods',
 #	'-Ztime-passes',
@@ -733,18 +732,6 @@ split-debuginfo = "unpacked"
 #	'-Clink-arg=-Wl,-z,keep-text-section-prefix',
 #	'-Clink-arg=-Wl,-z,lazy',
 #]
-
-# Dev/testing build with fast compile time, decent runtime performance.
-# Here, "quick" refers to compile time, not runtime speed.
-# NOTE: for smaller binaries on disk, put: strip = "symbols"
-[profile.dev-quick]
-inherits = "dev"
-opt-level = 0
-debug = "full"
-strip = "none"
-lto = "off"
-codegen-units = 16
-incremental = true
 
 [profile.dev.package.conduwuit_core]
 inherits = "dev"
@@ -981,3 +968,6 @@ needless_raw_string_hashes = "allow"
 
 # TODO: Enable this lint & fix all instances
 collapsible_if = "allow"
+
+# TODO: break these apart
+cognitive_complexity = "allow"

@@ -1,6 +1,6 @@
-use std::{convert::AsRef, fmt::Debug, io::Write};
+use std::{convert::AsRef, fmt::Debug};
 
-use conduwuit::{arrayvec::ArrayVec, implement};
+use conduwuit::implement;
 use serde::Serialize;
 
 use crate::{keyval::KeyBuf, ser, util::or_else};
@@ -12,36 +12,22 @@ where
 	K: Serialize + Debug,
 {
 	let mut buf = KeyBuf::new();
-	self.bdel(key, &mut buf);
+	let key = ser::serialize(&mut buf, key).expect("failed to serialize deletion key");
+	self.remove_raw(key);
 }
 
 #[implement(super::Map)]
 #[inline]
-pub fn adel<const MAX: usize, K>(&self, key: K)
-where
-	K: Serialize + Debug,
-{
-	let mut buf = ArrayVec::<u8, MAX>::new();
-	self.bdel(key, &mut buf);
-}
-
-#[implement(super::Map)]
-#[tracing::instrument(skip(self, buf), level = "trace")]
-pub fn bdel<K, B>(&self, key: K, buf: &mut B)
-where
-	K: Serialize + Debug,
-	B: Write + AsRef<[u8]>,
-{
-	let key = ser::serialize(buf, key).expect("failed to serialize deletion key");
-	self.remove(key);
-}
-
-#[implement(super::Map)]
-#[tracing::instrument(skip(self, key), fields(%self), level = "trace")]
 pub fn remove<K>(&self, key: &K)
 where
 	K: AsRef<[u8]> + ?Sized + Debug,
 {
+	self.remove_raw(key.as_ref());
+}
+
+#[implement(super::Map)]
+#[inline]
+pub fn remove_raw(&self, key: &[u8]) {
 	let write_options = &self.write_options;
 
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
@@ -66,4 +52,6 @@ where
 			self.db.flush().expect("database flush error");
 		}
 	}
+
+	self.watchers.wake(key);
 }

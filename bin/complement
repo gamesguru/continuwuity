@@ -15,7 +15,7 @@ RESULTS_FILE="${3:-"${RESULTS_FILE:-tests/test_results/complement/test_results.j
 # The base docker image to use for complement tests
 # You can build the default with `docker build -t continuwuity:complement -f ./docker/complement.Dockerfile .`
 # after running `cargo build`. Only the debug binary is used.
-COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-conduwuit:complement}"
+COMPLEMENT_BASE_IMAGE="${COMPLEMENT_BASE_IMAGE:-continuwuity:complement}"
 
 # Complement tests that are skipped due to flakiness/reliability issues or we don't implement such features and won't for a long time
 # This can be overridden by environment variable
@@ -27,6 +27,16 @@ RUN_TESTS="${COMPLEMENT_RUN:-.}"
 
 # Parallelism for tests. Default to 2 to improve stability on high-core machines.
 COMPLEMENT_PARALLEL="${COMPLEMENT_PARALLEL:-2}"
+
+# On Linux, host.docker.internal doesn't work by default.
+# We try to detect the docker0 bridge IP and use it.
+if [[ "$OSTYPE" == "linux-gnu"* ]] && [ -z "${COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT:-}" ]; then
+    BRIDGE_IP=$(ip addr show docker0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -n1)
+    if [ -n "$BRIDGE_IP" ]; then
+        echo "Detected Docker bridge IP: $BRIDGE_IP. Setting COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT=$BRIDGE_IP"
+        export COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT="$BRIDGE_IP"
+    fi
+fi
 
 # Ensure paths are absolute so they don't break when we change directory
 COMPLEMENT_SRC="$(realpath -m "$COMPLEMENT_SRC")"

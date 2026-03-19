@@ -152,11 +152,26 @@ pub async fn get_raw(
 	kind: &str,
 ) -> Result<Handle<'_>> {
 	let key = (room_id, user_id, kind.to_owned());
-	self.db
+	let handle = self
+		.db
 		.roomusertype_roomuserdataid
 		.qry(&key)
 		.and_then(|roomuserdataid| self.db.roomuserdataid_accountdata.get(&roomuserdataid))
-		.await
+		.await?;
+
+	// MSC3890: Treat empty content as deleted/not found
+	let data: serde_json::Value = serde_json::from_slice(&handle)
+		.map_err(|e| err!(Database("Invalid account data in database: {e}")))?;
+
+	if data
+		.get("content")
+		.and_then(serde_json::Value::as_object)
+		.is_some_and(serde_json::Map::is_empty)
+	{
+		return Err!(Request(NotFound("Data not found (tombstoned).")));
+	}
+
+	Ok(handle)
 }
 
 /// Returns all changes to the account data that happened after `since`.

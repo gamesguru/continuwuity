@@ -25,6 +25,10 @@
 #
 # Also see the `[global.well_known]` config section at the very bottom.
 #
+# If `client` is not set under `[global.well_known]`, the server name will
+# be used as the base domain for user-facing links (such as password
+# reset links) created by Continuwuity.
+#
 # Examples of delegation:
 # - https://continuwuity.org/.well-known/matrix/server
 # - https://continuwuity.org/.well-known/matrix/client
@@ -1803,6 +1807,11 @@
 #
 #config_reload_signal = true
 
+# Allow search engines and crawlers to index Continuwuity's built-in
+# webpages served under the `/_continuwuity/` prefix.
+#
+#allow_web_indexing = false
+
 [global.tls]
 
 # Path to a valid TLS certificate file.
@@ -2036,3 +2045,13 @@
 # web->synapseHTTPAntispam->authorization
 #
 #secret =
+
+#[global.experimental_features]
+
+# MSC3266: room previews
+#
+#msc3266_enabled = false
+
+# MSC4222: state_after in sync v2
+#
+#msc4222_enabled = false

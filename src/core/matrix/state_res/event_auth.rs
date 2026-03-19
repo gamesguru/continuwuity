@@ -628,7 +628,23 @@ where
 	EV: Event + Send + Sync,
 {
 	if v.explicitly_privilege_room_creators {
-		c.contains(user_id)
+		if c.contains(user_id) {
+			return true;
+		}
+
+		// Fallback to checking the create event content directly if the BTreeSet is
+		// incomplete
+		if let Ok(content) = from_json_str::<RoomCreateContentFields>(ce.content().get()) {
+			if ce.sender() == user_id {
+				return true;
+			}
+			if let Some(additional_creators) = content.additional_creators {
+				return additional_creators
+					.iter()
+					.any(|c| c.deserialize().is_ok_and(|c| c == *user_id));
+			}
+		}
+		false
 	} else if v.use_room_create_sender && !have_pls {
 		ce.sender() == user_id
 	} else if !have_pls {
@@ -1224,6 +1240,7 @@ fn can_send_event(event: &impl Event, ple: Option<&impl Event>, user_level: Int)
 }
 
 /// Confirm that the event sender has the required power levels.
+#[allow(clippy::cognitive_complexity)]
 fn check_power_levels(
 	room_version: &RoomVersion,
 	power_event: &impl Event,

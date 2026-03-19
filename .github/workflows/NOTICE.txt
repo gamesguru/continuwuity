@@ -1,4 +1,0 @@
-GitHub workflows are not typically used by the core maintainers but are
-provided as a convenience to help facilitate open-source development
-and collaboration. You must enable each run by configuring a variable
-on GitHub's website. This ensures runners do not run by default.
