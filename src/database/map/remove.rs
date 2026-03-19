@@ -37,7 +37,7 @@ pub fn remove_raw(&self, key: &[u8]) {
 			// async task. Falling back with try_lock would silently break atomicity.
 			let mut batch_guard = batch.lock().expect("Transaction batch mutex poisoned");
 			let (batch, _closures) = &mut *batch_guard;
-			batch.delete_cf(&self.cf(), key.as_ref());
+			batch.delete_cf(&self.cf(), key);
 		})
 		.is_ok();
 

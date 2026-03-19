@@ -117,6 +117,20 @@ pub async fn remove(
 	Ok(())
 }
 
+#[implement(Service)]
+pub async fn delete_all(
+	&self,
+	room_id: Option<&RoomId>,
+	user_id: &UserId,
+	event_types: &[&str],
+) -> Result<()> {
+	for event_type in event_types {
+		self.remove(room_id, user_id, (*event_type).into()).await?;
+	}
+
+	Ok(())
+}
+
 /// Searches the room account data for a specific kind.
 #[implement(Service)]
 pub async fn get_global<T>(&self, user_id: &UserId, kind: GlobalAccountDataEventType) -> Result<T>
