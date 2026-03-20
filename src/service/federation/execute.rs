@@ -316,7 +316,7 @@ fn into_http_request<T>(actual: &ActualDest, request: T) -> Result<http::Request
 where
 	T: OutgoingRequest + Send,
 {
-	const VERSIONS: [MatrixVersion; 1] = [MatrixVersion::V1_11];
+	const VERSIONS: [MatrixVersion; 2] = [MatrixVersion::V1_11, MatrixVersion::V1_0];
 
 	let http_request = request
 		.try_into_http_request::<Vec<u8>>(
