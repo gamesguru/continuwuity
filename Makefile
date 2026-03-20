@@ -1,5 +1,5 @@
 SHELL=/bin/bash
-.DEFAULT_GOAL=help
+.DEFAULT_GOAL=_help
 
 # [CONFIG] Suppresses annoying "make[1]: Entering directory" messages
 MAKEFLAGS += --no-print-directory
@@ -9,7 +9,7 @@ ifneq (,$(wildcard ./.env))
 	include .env
 	export
 	# Strip double quotes from .env values (annoying disagreement between direnv, dotenv)
-	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
+	RUSTFLAGS := $(subst \",,$(RUSTFLAGS))
 endif
 
 # Example .env:
@@ -42,12 +42,6 @@ STYLE_RESET := $(shell tput sgr0 2>/dev/null || echo -e "\033[0m")
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Meta/help commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.PHONY: help
-help: ##H Show this help, list available targets
-	@grep -hE '^[a-zA-Z0-9_\/-]+:.*?##H .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-20s$(STYLE_RESET) %s\n", $$1, $$2}'
-
 
 .PHONY: doctor
 doctor: ##H Output version info for required tools
@@ -108,6 +102,20 @@ cargo/lock-init:        ##H Init or fully upgrade the lockfile (wipes it)
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo generate-lockfile
 	@echo "OK."
+
+
+.PHONY: profiles
+profiles: ##H List available cargo profiles
+# NOTE: not authoritative — see Cargo.toml for definitive profiles.
+	@grep "^\[profile\." Cargo.toml Cargo.custom.toml 2>/dev/null \
+		| sed 's/.*\[profile\.//;s/\]//' \
+		| grep -v 'package' \
+		| grep -v 'build-override' \
+		| sort
+
+.PHONY: features
+features: ##H List available cargo features
+	@awk '/^\[features\]/{flag=1; next} /^\[.*\]/{flag=0} flag && /^[^ #\t=]+ =/ {gsub(/ =.*/, ""); print}' src/main/Cargo.toml | sort
 
 
 # For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
@@ -436,3 +444,13 @@ install:	##H Install (executed on VPS)
 .PHONY: restart
 restart:    ##H Restart service (using systemctl)
 	sudo systemctl restart $(C10Y_SERV)
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Help command (messes up vim/sublime syntax, so stuck at end)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.PHONY: _help
+_help: ##H Show this help, list available targets
+	@grep -hE '^[a-zA-Z0-9_\/-]+:.*?##H .*$$' $(MAKEFILE_LIST) \
+		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-20s$(STYLE_RESET) %s\n", $$1, $$2}'
