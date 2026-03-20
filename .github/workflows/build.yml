@@ -12,11 +12,15 @@ on:
         description: 'Cargo profile to build'
         type: choice
         options:
-          - release-max-perf
-          - release-high-perf
-          - release
-          - dev-quick
+          - bench
           - dev
+          - dev-quick
+          - release
+          - release-debuginfo
+          - release-high-perf
+          - release-max-perf
+          - release-quick
+          - test
         default: 'release-max-perf'
       features:
         description: 'Cargo features to enable (comma-separated). e.g., default,url_preview,console'
