@@ -76,7 +76,7 @@ jobs:
             postgresql-client
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
 
       - name: Detect best CPU target
         id: cpu
@@ -113,7 +113,7 @@ jobs:
 
       - name: Import GPG key
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6
         with:
           gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
@@ -126,7 +126,7 @@ jobs:
         run: make complement/docker PROFILE=${{ matrix.profile }}
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}
           path: |
@@ -145,7 +145,7 @@ jobs:
           path: complement-src
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.22"
           cache-dependency-path: complement-src/go.sum

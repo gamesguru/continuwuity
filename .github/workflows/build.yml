@@ -30,7 +30,7 @@ jobs:
           - release-max-perf
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
@@ -50,7 +50,7 @@ jobs:
             mold
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
 
       - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-prebuilts
@@ -95,7 +95,7 @@ jobs:
           tar -czvf conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conduwuit-x86-64-v3-${{ matrix.os }}
           path: conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz
@@ -133,7 +133,7 @@ jobs:
           - release-max-perf
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
@@ -153,7 +153,7 @@ jobs:
             mold
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
 
       - name: Detect best CPU target
         id: cpu
@@ -213,7 +213,7 @@ jobs:
           tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary (${{ steps.cpu.outputs.target }})
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conduwuit-x86-64-v4-${{ matrix.os }}
           path: conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz
@@ -257,7 +257,7 @@ jobs:
           - release-max-perf
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
@@ -277,7 +277,7 @@ jobs:
             mold
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
 
       - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-prebuilts
@@ -324,7 +324,7 @@ jobs:
           tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conduwuit-arm64-cortex-a76-${{ matrix.os }}
           path: conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz
