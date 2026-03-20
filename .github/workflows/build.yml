@@ -7,6 +7,21 @@ on:
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Cargo profile to build'
+        type: choice
+        options:
+          - release-max-perf
+          - release-high-perf
+          - release
+          - dev-quick
+          - dev
+        default: 'release-max-perf'
+      features:
+        description: 'Cargo features to enable (comma-separated). e.g., default,url_preview,console'
+        type: string
+        default: 'default,url_preview,console'
 
 env:
   CARGO_TERM_COLOR: always
@@ -69,19 +84,30 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
 
+      - name: Resolve Configuration
+        id: config
+        run: |
+          PROFILE="${{ inputs.profile || matrix.profile }}"
+          FEATURES="bindgen-static,standard"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            FEATURES="${{ inputs.features }}"
+          fi
+          echo "profile=$PROFILE" >> $GITHUB_OUTPUT
+          echo "features=$FEATURES" >> $GITHUB_OUTPUT
+
       - name: Debug checks
         run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
         env:
-          PROFILE: ${{ matrix.profile }}
+          PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
       - name: Build
         env:
-          PROFILE: ${{ matrix.profile }}
+          PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v3
-        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features bindgen-static,standard"
+        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ steps.config.outputs.profile }} --features ${{ steps.config.outputs.features }}"
 
       - name: Sanity check binary
         run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
@@ -91,7 +117,7 @@ jobs:
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
           # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          cp target/${{ steps.config.outputs.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
           tar -czvf conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
@@ -176,19 +202,30 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
 
+      - name: Resolve Configuration
+        id: config
+        run: |
+          PROFILE="${{ inputs.profile || matrix.profile }}"
+          FEATURES="bindgen-static,standard"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            FEATURES="${{ inputs.features }}"
+          fi
+          echo "profile=$PROFILE" >> $GITHUB_OUTPUT
+          echo "features=$FEATURES" >> $GITHUB_OUTPUT
+
       - name: Debug checks
         run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
         env:
-          PROFILE: ${{ matrix.profile }}
+          PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
       - name: Build (${{ steps.cpu.outputs.target }})
         env:
-          PROFILE: ${{ matrix.profile }}
+          PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v4
-        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features bindgen-static,standard"
+        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ steps.config.outputs.profile }} --features ${{ steps.config.outputs.features }}"
 
       - name: Sanity check binary
         continue-on-error: true
@@ -209,7 +246,7 @@ jobs:
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
           # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          cp target/${{ steps.config.outputs.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
           tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary (${{ steps.cpu.outputs.target }})
@@ -296,19 +333,30 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
 
+      - name: Resolve Configuration
+        id: config
+        run: |
+          PROFILE="${{ inputs.profile || matrix.profile }}"
+          FEATURES="bindgen-static,standard"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            FEATURES="${{ inputs.features }}"
+          fi
+          echo "profile=$PROFILE" >> $GITHUB_OUTPUT
+          echo "features=$FEATURES" >> $GITHUB_OUTPUT
+
       - name: Debug checks
         run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
         env:
-          PROFILE: ${{ matrix.profile }}
+          PROFILE: ${{ steps.config.outputs.profile }}
 
       - name: Build (cortex-a76)
         env:
-          PROFILE: ${{ matrix.profile }}
+          PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
           # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
-        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features bindgen-static,standard"
+        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ steps.config.outputs.profile }} --features ${{ steps.config.outputs.features }}"
 
       - name: Sanity check binary
         env:
@@ -320,7 +368,7 @@ jobs:
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
           # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          cp target/${{ steps.config.outputs.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
           tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
