@@ -405,11 +405,14 @@ async fn join_room_by_id_helper_remote(
 
 					match response {
 						| Ok(response) => {
+							let Ok(canonical) = to_canonical_object(&response.event) else {
+								return Ok(None);
+							};
 							if let Err(e) = validate_remote_member_event_stub(
 								&MembershipState::Join,
 								sender_user,
 								room_id,
-								&to_canonical_object(&response.event).ok()?,
+								&canonical,
 							) {
 								warn!(
 									"make_join response from {remote_server} failed validation: \
@@ -417,25 +420,40 @@ async fn join_room_by_id_helper_remote(
 								);
 								let mut le = last_error.lock().await;
 								update_last_error(&mut le, e);
-								return None;
+								return Ok(None);
 							}
-							Some((remote_server, response))
+							Ok(Some((remote_server, response)))
 						},
 						| Err(e) => {
 							warn!("{remote_server} failed to make_join: {e}.");
+
+							let should_abort = matches!(
+								e.kind(),
+								ErrorKind::Forbidden { .. }
+									| ErrorKind::IncompatibleRoomVersion { .. }
+							);
+
+							if should_abort {
+								return Err(e);
+							}
+
 							let mut le = last_error.lock().await;
 							update_last_error(&mut le, e);
-							None
+							Ok(None)
 						},
 					}
 				}
 			}
-		})
-		.ready_filter_map(std::convert::identity);
+		});
 
 	pin_mut!(discovery);
 
-	while let Some((remote_server, make_join_response)) = discovery.next().await {
+	while let Some(res) = discovery.next().await {
+		let (remote_server, make_join_response) = match res {
+			| Ok(Some(data)) => data,
+			| Ok(None) => continue,
+			| Err(e) => return Err(e),
+		};
 		let room_version_id = make_join_response.room_version.unwrap_or(RoomVersionId::V1);
 		if !services.server.supported_room_version(&room_version_id) {
 			warn!(
