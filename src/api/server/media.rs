@@ -9,7 +9,7 @@ use ruma::{
 	},
 };
 
-use crate::OptionalRuma as Ruma;
+use crate::Ruma;
 
 /// # `GET /_matrix/federation/v1/media/download/{mediaId}`
 ///

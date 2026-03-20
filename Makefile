@@ -185,7 +185,7 @@ build:  ##H Build with selected profile
 		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
 		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
 # 		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
-		cargo build --no-default-features --features $(FEATURES) --locked $(CARGO_FLAGS)
+		cargo build --features $(FEATURES) --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
 	-ln -f target/$(if $(CARGO_BUILD_TARGET),$(CARGO_BUILD_TARGET)/)$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit

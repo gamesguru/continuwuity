@@ -30,7 +30,7 @@ use super::{
 	},
 	room_version::RoomVersion,
 };
-use crate::{debug, error, info, trace, warn};
+use crate::{debug, error, trace, warn};
 
 // FIXME: field extracting could be bundled for `content`
 #[derive(Deserialize)]
@@ -466,7 +466,7 @@ where
 	let membership_state = membership_state.deserialize()?;
 
 	if !matches!(membership_state, MembershipState::Join) {
-		info!(
+		warn!(
 			%sender,
 			?membership_state,
 			"sender cannot send events without being joined to the room"
@@ -530,7 +530,7 @@ where
 		};
 
 		if sender_power_level < invite_level {
-			info!(
+			warn!(
 				%sender,
 				has=%sender_power_level,
 				required=%invite_level,
@@ -547,7 +547,7 @@ where
 	// level, reject If the event has a state_key that starts with an @ and does
 	// not match the sender, reject.
 	if !can_send_event(incoming_event, power_levels_event.as_ref(), sender_power_level) {
-		info!(
+		warn!(
 			%sender,
 			event_type=?incoming_event.kind(),
 			"sender cannot send event"
@@ -860,7 +860,7 @@ where
 				false
 			} else if target_user_current_membership == MembershipState::Ban {
 				// If the sender is banned, reject.
-				info!(
+				warn!(
 					%sender,
 					membership_event_id = ?target_user_membership_event_id,
 					"sender cannot join as they are banned from the room"
@@ -1122,7 +1122,7 @@ where
 		},
 		| MembershipState::Ban =>
 			if !sender_is_joined {
-				info!(
+				warn!(
 					%sender,
 					?sender_membership_event_id,
 					"sender cannot ban another user as they are not joined to the room",
