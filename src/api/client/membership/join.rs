@@ -15,7 +15,6 @@ use conduwuit::{
 	utils::{
 		self, TryFutureExtExt, shuffle,
 		stream::{BroadbandExt, IterStream, ReadyExt},
-		to_canonical_object,
 	},
 	warn,
 };
