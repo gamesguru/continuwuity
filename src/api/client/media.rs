@@ -221,7 +221,7 @@ pub(crate) async fn get_content_as_filename_route(
 		content,
 		content_type,
 		content_disposition,
-	} = match fetch_file(&services, &mxc, Some(user), body.timeout_ms, Some(&body.filename)).await {
+	} = match fetch_file(&services, &mxc, Some(user), body.timeout_ms, None).await {
 		| Ok(meta) => meta,
 		| Err(conduwuit::Error::Io(e)) => match e.kind() {
 			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
