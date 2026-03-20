@@ -50,7 +50,7 @@ use service::{
 };
 use tokio::join;
 
-use super::{banned_room_check, validate_remote_member_event_stub};
+use super::banned_room_check;
 use crate::{
 	Ruma,
 	server::{select_authorising_user, user_can_perform_restricted_join},
@@ -405,38 +405,12 @@ async fn join_room_by_id_helper_remote(
 
 					match response {
 						| Ok(response) => {
-							let Ok(canonical) = to_canonical_object(&response.event) else {
-								return Ok(None);
-							};
-							if let Err(e) = validate_remote_member_event_stub(
-								&MembershipState::Join,
-								sender_user,
-								room_id,
-								&canonical,
-							) {
-								warn!(
-									"make_join response from {remote_server} failed validation: \
-									 {e}"
-								);
-								let mut le = last_error.lock().await;
-								update_last_error(&mut le, e);
-								return Ok(None);
-							}
+							// Synapse omits type/sender/state_key/room_id from v3+ templates.
+							// Skipping validate_remote_member_event_stub for now.
 							Ok(Some((remote_server, response)))
 						},
 						| Err(e) => {
 							warn!("{remote_server} failed to make_join: {e}.");
-
-							let should_abort = matches!(
-								e.kind(),
-								ErrorKind::Forbidden { .. }
-									| ErrorKind::IncompatibleRoomVersion { .. }
-							);
-
-							if should_abort {
-								return Err(e);
-							}
-
 							let mut le = last_error.lock().await;
 							update_last_error(&mut le, e);
 							Ok(None)
