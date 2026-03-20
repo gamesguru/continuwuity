@@ -1,0 +1,10 @@
+{"Action":"fail","Test":"TestMediaWithoutFileName"}
+{"Action":"fail","Test":"TestMediaWithoutFileName/parallel"}
+{"Action":"pass","Test":"TestMediaWithoutFileName/parallel/Can_download_without_a_file_name_locally"}
+{"Action":"fail","Test":"TestMediaWithoutFileName/parallel/Can_download_without_a_file_name_over_federation"}
+{"Action":"pass","Test":"TestMediaWithoutFileName/parallel/Can_upload_without_a_file_name"}
+{"Action":"pass","Test":"TestMediaWithoutFileNameCSMediaV1"}
+{"Action":"pass","Test":"TestMediaWithoutFileNameCSMediaV1/parallel"}
+{"Action":"pass","Test":"TestMediaWithoutFileNameCSMediaV1/parallel/Can_download_without_a_file_name_locally"}
+{"Action":"pass","Test":"TestMediaWithoutFileNameCSMediaV1/parallel/Can_download_without_a_file_name_over_federation"}
+{"Action":"pass","Test":"TestMediaWithoutFileNameCSMediaV1/parallel/Can_upload_without_a_file_name"}
