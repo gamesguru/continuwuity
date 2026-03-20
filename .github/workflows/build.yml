@@ -22,10 +22,134 @@ on:
           - release-quick
           - test
         default: 'release-max-perf'
-      features:
-        description: 'Cargo features to enable (comma-separated). e.g., default,url_preview,console'
-        type: string
-        default: 'default,url_preview,console'
+      feat_bindgen_runtime:
+        description: 'Feature: bindgen-runtime'
+        type: boolean
+        default: false
+      feat_bindgen_static:
+        description: 'Feature: bindgen-static'
+        type: boolean
+        default: false
+      feat_blurhashing:
+        description: 'Feature: blurhashing'
+        type: boolean
+        default: false
+      feat_brotli_compression:
+        description: 'Feature: brotli_compression'
+        type: boolean
+        default: false
+      feat_conduwuit_mods:
+        description: 'Feature: conduwuit_mods'
+        type: boolean
+        default: false
+      feat_console:
+        description: 'Feature: console'
+        type: boolean
+        default: true
+      feat_default:
+        description: 'Feature: default'
+        type: boolean
+        default: true
+      feat_direct_tls:
+        description: 'Feature: direct_tls'
+        type: boolean
+        default: false
+      feat_element_hacks:
+        description: 'Feature: element_hacks'
+        type: boolean
+        default: false
+      feat_full:
+        description: 'Feature: full'
+        type: boolean
+        default: false
+      feat_gzip_compression:
+        description: 'Feature: gzip_compression'
+        type: boolean
+        default: false
+      feat_hardened_malloc:
+        description: 'Feature: hardened_malloc'
+        type: boolean
+        default: false
+      feat_http3:
+        description: 'Feature: http3'
+        type: boolean
+        default: false
+      feat_io_uring:
+        description: 'Feature: io_uring'
+        type: boolean
+        default: false
+      feat_jemalloc:
+        description: 'Feature: jemalloc'
+        type: boolean
+        default: false
+      feat_jemalloc_conf:
+        description: 'Feature: jemalloc_conf'
+        type: boolean
+        default: false
+      feat_jemalloc_prof:
+        description: 'Feature: jemalloc_prof'
+        type: boolean
+        default: false
+      feat_jemalloc_stats:
+        description: 'Feature: jemalloc_stats'
+        type: boolean
+        default: false
+      feat_journald:
+        description: 'Feature: journald'
+        type: boolean
+        default: false
+      feat_ldap:
+        description: 'Feature: ldap'
+        type: boolean
+        default: false
+      feat_local_profiling:
+        description: 'Feature: local_profiling'
+        type: boolean
+        default: false
+      feat_media_thumbnail:
+        description: 'Feature: media_thumbnail'
+        type: boolean
+        default: false
+      feat_otlp_telemetry:
+        description: 'Feature: otlp_telemetry'
+        type: boolean
+        default: false
+      feat_perf_measurements:
+        description: 'Feature: perf_measurements'
+        type: boolean
+        default: false
+      feat_release_max_log_level:
+        description: 'Feature: release_max_log_level'
+        type: boolean
+        default: false
+      feat_sentry_telemetry:
+        description: 'Feature: sentry_telemetry'
+        type: boolean
+        default: false
+      feat_standard:
+        description: 'Feature: standard'
+        type: boolean
+        default: false
+      feat_systemd:
+        description: 'Feature: systemd'
+        type: boolean
+        default: false
+      feat_tokio_console:
+        description: 'Feature: tokio_console'
+        type: boolean
+        default: false
+      feat_tokio_metrics:
+        description: 'Feature: tokio_metrics'
+        type: boolean
+        default: false
+      feat_url_preview:
+        description: 'Feature: url_preview'
+        type: boolean
+        default: true
+      feat_zstd_compression:
+        description: 'Feature: zstd_compression'
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -94,7 +218,40 @@ jobs:
           PROFILE="${{ inputs.profile || matrix.profile }}"
           FEATURES="bindgen-static,standard"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            FEATURES="${{ inputs.features }}"
+            F=()
+            [ "${{ inputs.feat_bindgen_runtime }}" == "true" ] && F+=("bindgen-runtime")
+            [ "${{ inputs.feat_bindgen_static }}" == "true" ] && F+=("bindgen-static")
+            [ "${{ inputs.feat_blurhashing }}" == "true" ] && F+=("blurhashing")
+            [ "${{ inputs.feat_brotli_compression }}" == "true" ] && F+=("brotli_compression")
+            [ "${{ inputs.feat_conduwuit_mods }}" == "true" ] && F+=("conduwuit_mods")
+            [ "${{ inputs.feat_console }}" == "true" ] && F+=("console")
+            [ "${{ inputs.feat_default }}" == "true" ] && F+=("default")
+            [ "${{ inputs.feat_direct_tls }}" == "true" ] && F+=("direct_tls")
+            [ "${{ inputs.feat_element_hacks }}" == "true" ] && F+=("element_hacks")
+            [ "${{ inputs.feat_full }}" == "true" ] && F+=("full")
+            [ "${{ inputs.feat_gzip_compression }}" == "true" ] && F+=("gzip_compression")
+            [ "${{ inputs.feat_hardened_malloc }}" == "true" ] && F+=("hardened_malloc")
+            [ "${{ inputs.feat_http3 }}" == "true" ] && F+=("http3")
+            [ "${{ inputs.feat_io_uring }}" == "true" ] && F+=("io_uring")
+            [ "${{ inputs.feat_jemalloc }}" == "true" ] && F+=("jemalloc")
+            [ "${{ inputs.feat_jemalloc_conf }}" == "true" ] && F+=("jemalloc_conf")
+            [ "${{ inputs.feat_jemalloc_prof }}" == "true" ] && F+=("jemalloc_prof")
+            [ "${{ inputs.feat_jemalloc_stats }}" == "true" ] && F+=("jemalloc_stats")
+            [ "${{ inputs.feat_journald }}" == "true" ] && F+=("journald")
+            [ "${{ inputs.feat_ldap }}" == "true" ] && F+=("ldap")
+            [ "${{ inputs.feat_local_profiling }}" == "true" ] && F+=("local_profiling")
+            [ "${{ inputs.feat_media_thumbnail }}" == "true" ] && F+=("media_thumbnail")
+            [ "${{ inputs.feat_otlp_telemetry }}" == "true" ] && F+=("otlp_telemetry")
+            [ "${{ inputs.feat_perf_measurements }}" == "true" ] && F+=("perf_measurements")
+            [ "${{ inputs.feat_release_max_log_level }}" == "true" ] && F+=("release_max_log_level")
+            [ "${{ inputs.feat_sentry_telemetry }}" == "true" ] && F+=("sentry_telemetry")
+            [ "${{ inputs.feat_standard }}" == "true" ] && F+=("standard")
+            [ "${{ inputs.feat_systemd }}" == "true" ] && F+=("systemd")
+            [ "${{ inputs.feat_tokio_console }}" == "true" ] && F+=("tokio_console")
+            [ "${{ inputs.feat_tokio_metrics }}" == "true" ] && F+=("tokio_metrics")
+            [ "${{ inputs.feat_url_preview }}" == "true" ] && F+=("url_preview")
+            [ "${{ inputs.feat_zstd_compression }}" == "true" ] && F+=("zstd_compression")
+            FEATURES=$(IFS=,; echo "${F[*]}")
           fi
           echo "profile=$PROFILE" >> $GITHUB_OUTPUT
           echo "features=$FEATURES" >> $GITHUB_OUTPUT
@@ -212,7 +369,40 @@ jobs:
           PROFILE="${{ inputs.profile || matrix.profile }}"
           FEATURES="bindgen-static,standard"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            FEATURES="${{ inputs.features }}"
+            F=()
+            [ "${{ inputs.feat_bindgen_runtime }}" == "true" ] && F+=("bindgen-runtime")
+            [ "${{ inputs.feat_bindgen_static }}" == "true" ] && F+=("bindgen-static")
+            [ "${{ inputs.feat_blurhashing }}" == "true" ] && F+=("blurhashing")
+            [ "${{ inputs.feat_brotli_compression }}" == "true" ] && F+=("brotli_compression")
+            [ "${{ inputs.feat_conduwuit_mods }}" == "true" ] && F+=("conduwuit_mods")
+            [ "${{ inputs.feat_console }}" == "true" ] && F+=("console")
+            [ "${{ inputs.feat_default }}" == "true" ] && F+=("default")
+            [ "${{ inputs.feat_direct_tls }}" == "true" ] && F+=("direct_tls")
+            [ "${{ inputs.feat_element_hacks }}" == "true" ] && F+=("element_hacks")
+            [ "${{ inputs.feat_full }}" == "true" ] && F+=("full")
+            [ "${{ inputs.feat_gzip_compression }}" == "true" ] && F+=("gzip_compression")
+            [ "${{ inputs.feat_hardened_malloc }}" == "true" ] && F+=("hardened_malloc")
+            [ "${{ inputs.feat_http3 }}" == "true" ] && F+=("http3")
+            [ "${{ inputs.feat_io_uring }}" == "true" ] && F+=("io_uring")
+            [ "${{ inputs.feat_jemalloc }}" == "true" ] && F+=("jemalloc")
+            [ "${{ inputs.feat_jemalloc_conf }}" == "true" ] && F+=("jemalloc_conf")
+            [ "${{ inputs.feat_jemalloc_prof }}" == "true" ] && F+=("jemalloc_prof")
+            [ "${{ inputs.feat_jemalloc_stats }}" == "true" ] && F+=("jemalloc_stats")
+            [ "${{ inputs.feat_journald }}" == "true" ] && F+=("journald")
+            [ "${{ inputs.feat_ldap }}" == "true" ] && F+=("ldap")
+            [ "${{ inputs.feat_local_profiling }}" == "true" ] && F+=("local_profiling")
+            [ "${{ inputs.feat_media_thumbnail }}" == "true" ] && F+=("media_thumbnail")
+            [ "${{ inputs.feat_otlp_telemetry }}" == "true" ] && F+=("otlp_telemetry")
+            [ "${{ inputs.feat_perf_measurements }}" == "true" ] && F+=("perf_measurements")
+            [ "${{ inputs.feat_release_max_log_level }}" == "true" ] && F+=("release_max_log_level")
+            [ "${{ inputs.feat_sentry_telemetry }}" == "true" ] && F+=("sentry_telemetry")
+            [ "${{ inputs.feat_standard }}" == "true" ] && F+=("standard")
+            [ "${{ inputs.feat_systemd }}" == "true" ] && F+=("systemd")
+            [ "${{ inputs.feat_tokio_console }}" == "true" ] && F+=("tokio_console")
+            [ "${{ inputs.feat_tokio_metrics }}" == "true" ] && F+=("tokio_metrics")
+            [ "${{ inputs.feat_url_preview }}" == "true" ] && F+=("url_preview")
+            [ "${{ inputs.feat_zstd_compression }}" == "true" ] && F+=("zstd_compression")
+            FEATURES=$(IFS=,; echo "${F[*]}")
           fi
           echo "profile=$PROFILE" >> $GITHUB_OUTPUT
           echo "features=$FEATURES" >> $GITHUB_OUTPUT
@@ -343,7 +533,40 @@ jobs:
           PROFILE="${{ inputs.profile || matrix.profile }}"
           FEATURES="bindgen-static,standard"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            FEATURES="${{ inputs.features }}"
+            F=()
+            [ "${{ inputs.feat_bindgen_runtime }}" == "true" ] && F+=("bindgen-runtime")
+            [ "${{ inputs.feat_bindgen_static }}" == "true" ] && F+=("bindgen-static")
+            [ "${{ inputs.feat_blurhashing }}" == "true" ] && F+=("blurhashing")
+            [ "${{ inputs.feat_brotli_compression }}" == "true" ] && F+=("brotli_compression")
+            [ "${{ inputs.feat_conduwuit_mods }}" == "true" ] && F+=("conduwuit_mods")
+            [ "${{ inputs.feat_console }}" == "true" ] && F+=("console")
+            [ "${{ inputs.feat_default }}" == "true" ] && F+=("default")
+            [ "${{ inputs.feat_direct_tls }}" == "true" ] && F+=("direct_tls")
+            [ "${{ inputs.feat_element_hacks }}" == "true" ] && F+=("element_hacks")
+            [ "${{ inputs.feat_full }}" == "true" ] && F+=("full")
+            [ "${{ inputs.feat_gzip_compression }}" == "true" ] && F+=("gzip_compression")
+            [ "${{ inputs.feat_hardened_malloc }}" == "true" ] && F+=("hardened_malloc")
+            [ "${{ inputs.feat_http3 }}" == "true" ] && F+=("http3")
+            [ "${{ inputs.feat_io_uring }}" == "true" ] && F+=("io_uring")
+            [ "${{ inputs.feat_jemalloc }}" == "true" ] && F+=("jemalloc")
+            [ "${{ inputs.feat_jemalloc_conf }}" == "true" ] && F+=("jemalloc_conf")
+            [ "${{ inputs.feat_jemalloc_prof }}" == "true" ] && F+=("jemalloc_prof")
+            [ "${{ inputs.feat_jemalloc_stats }}" == "true" ] && F+=("jemalloc_stats")
+            [ "${{ inputs.feat_journald }}" == "true" ] && F+=("journald")
+            [ "${{ inputs.feat_ldap }}" == "true" ] && F+=("ldap")
+            [ "${{ inputs.feat_local_profiling }}" == "true" ] && F+=("local_profiling")
+            [ "${{ inputs.feat_media_thumbnail }}" == "true" ] && F+=("media_thumbnail")
+            [ "${{ inputs.feat_otlp_telemetry }}" == "true" ] && F+=("otlp_telemetry")
+            [ "${{ inputs.feat_perf_measurements }}" == "true" ] && F+=("perf_measurements")
+            [ "${{ inputs.feat_release_max_log_level }}" == "true" ] && F+=("release_max_log_level")
+            [ "${{ inputs.feat_sentry_telemetry }}" == "true" ] && F+=("sentry_telemetry")
+            [ "${{ inputs.feat_standard }}" == "true" ] && F+=("standard")
+            [ "${{ inputs.feat_systemd }}" == "true" ] && F+=("systemd")
+            [ "${{ inputs.feat_tokio_console }}" == "true" ] && F+=("tokio_console")
+            [ "${{ inputs.feat_tokio_metrics }}" == "true" ] && F+=("tokio_metrics")
+            [ "${{ inputs.feat_url_preview }}" == "true" ] && F+=("url_preview")
+            [ "${{ inputs.feat_zstd_compression }}" == "true" ] && F+=("zstd_compression")
+            FEATURES=$(IFS=,; echo "${F[*]}")
           fi
           echo "profile=$PROFILE" >> $GITHUB_OUTPUT
           echo "features=$FEATURES" >> $GITHUB_OUTPUT
