@@ -192,4 +192,16 @@ impl Service {
 			state_key.to_owned(),
 		));
 	}
+
+	pub fn update_room_state(
+		&self,
+		room_id: &RoomId,
+		event_type: &StateEventType,
+		state_key: &str,
+		pdu: Pdu,
+	) {
+		self.room_state_cache
+			.lock()
+			.insert((room_id.to_owned(), event_type.clone(), state_key.to_owned()), Some(pdu));
+	}
 }
