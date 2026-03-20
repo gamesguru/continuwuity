@@ -164,6 +164,9 @@ pub(crate) async fn get_content_legacy_route(
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
 				debug_info!(%mxc, "Fetching remote media via authenticated federation fallback");
+				if services.server.config.freeze_legacy_media {
+					return Err!(Request(NotFound("Remote media is frozen.")));
+				}
 				let FileMeta {
 					content,
 					content_type,
@@ -264,6 +267,9 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
 				debug_info!(%mxc, "Fetching remote media via authenticated federation fallback");
+				if services.server.config.freeze_legacy_media {
+					return Err!(Request(NotFound("Remote media is frozen.")));
+				}
 				let FileMeta {
 					content,
 					content_type,
@@ -364,6 +370,9 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
 				debug_info!(%mxc, "Fetching remote thumbnail via authenticated federation fallback");
+				if services.server.config.freeze_legacy_media {
+					return Err!(Request(NotFound("Remote media is frozen.")));
+				}
 				let FileMeta {
 					content,
 					content_type,
@@ -373,9 +382,7 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 					.fetch_remote_thumbnail(&mxc, None, None, body.timeout_ms, &dim)
 					.await
 					.map_err(|e| {
-						err!(Request(NotFound(
-							debug_warn!(%mxc, "Fetching thumbnail failed: {e:?}")
-						)))
+						err!(Request(NotFound(debug_warn!(%mxc, "Fetching media failed: {e:?}"))))
 					})?;
 
 				let content_disposition = make_content_disposition(
