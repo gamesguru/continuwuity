@@ -217,11 +217,13 @@ pub(crate) async fn get_content_as_filename_route(
 		media_id: &body.media_id,
 	};
 
+	let filename = (!body.filename.is_empty()).then_some(body.filename.as_str());
+
 	let FileMeta {
 		content,
 		content_type,
 		content_disposition,
-	} = match fetch_file(&services, &mxc, Some(user), body.timeout_ms, Some(&body.filename)).await {
+	} = match fetch_file(&services, &mxc, Some(user), body.timeout_ms, filename).await {
 		| Ok(meta) => meta,
 		| Err(conduwuit::Error::Io(e)) => match e.kind() {
 			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
