@@ -4,7 +4,10 @@ use conduwuit::{
 	Err, Error, Result, debug_warn, err, implement,
 	utils::{content_disposition::make_content_disposition, response::LimitReadExt},
 };
-use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue};
+use http::{
+	StatusCode,
+	header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue},
+};
 use ruma::{
 	Mxc, ServerName, UserId,
 	api::{
@@ -67,13 +70,35 @@ pub async fn fetch_remote_content(
 			);
 		});
 
-	if let Err(Error::Request(Unrecognized | NotFound, ..)) = &result {
+	if should_fallback_to_unauthenticated(&result, user.is_none()) {
 		return self
 			.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
 			.await;
 	}
 
 	result
+}
+
+fn should_fallback_to_unauthenticated(
+	result: &Result<FileMeta>,
+	allow_broad_fallback: bool,
+) -> bool {
+	match result {
+		| Err(Error::Request(Unrecognized | NotFound, ..)) => true,
+		| Err(error) if allow_broad_fallback =>
+			error.status_code().is_server_error()
+				|| matches!(
+					error.status_code(),
+					StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT
+				) || matches!(
+				error,
+				Error::Reqwest(_)
+					| Error::Federation(_, _)
+					| Error::FederationTimeout(_)
+					| Error::FederationConnection(_)
+			),
+		| _ => false,
+	}
 }
 
 #[implement(super::Service)]
