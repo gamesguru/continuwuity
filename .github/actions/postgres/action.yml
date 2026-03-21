@@ -9,6 +9,9 @@ inputs:
   target_branch:
     description: "Branch where results ledger is stored"
     default: "_metadata/badges"
+  database_url:
+    description: "Postgres connection string"
+    required: true
 
 env:
   DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
@@ -18,11 +21,15 @@ runs:
   steps:
     - name: Ensure Tables Exist
       shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database_url }}
       run: |
         cat "${{ github.action_path }}/tables.sql" | ssh -C -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
 
     - name: Sync Master Baseline
       shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database_url }}
       run: |
         echo "→ Syncing Master Baseline from origin/main..."
         (
@@ -37,6 +44,8 @@ runs:
 
     - name: Bulk Sync History
       shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database_url }}
       run: |
         TEMP_LEDGER=$(mktemp -d)
         echo "→ Syncing last 100 runs from Git history..."

@@ -272,10 +272,12 @@ jobs:
         uses: ./.github/actions/postgres
         with:
           ssh_target: "git@nutra.tk"
+          database_url: ${{ secrets.C10Y_POSTGRES_URL }}
 
       - name: Query updated Postgres stats
         env:
           PAGER: cat
+          DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
         run: python3 .github/actions/postgres/ci-query-failures.py
 
       - name: Post Complement results to PR
