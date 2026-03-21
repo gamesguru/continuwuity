@@ -13,9 +13,6 @@ inputs:
     description: "Postgres connection string"
     required: true
 
-env:
-  DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
-
 runs:
   using: "composite"
   steps:
