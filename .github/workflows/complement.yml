@@ -275,6 +275,9 @@ jobs:
         with:
           ssh_target: "git@nutra.tk"
 
+      - name: Query updated Postgres stats
+        run: just ci-query-failures
+
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
