@@ -73,5 +73,5 @@ print(f"\nExecuting Query:\n{query}\n")
 
 # Execute the db-shell script with the query
 env = os.environ.copy()
-env["PAGER"] = env["PAGER"] or "less -X -F -S"
+env["PAGER"] = env.get("PAGER") or "less -X -F -S"
 subprocess.run(["./bin/db-shell", "-c", query], env=env)
