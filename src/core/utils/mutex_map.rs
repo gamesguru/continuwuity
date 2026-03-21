@@ -9,8 +9,12 @@ pub struct MutexMap<Key, Val> {
 	map: Map<Key, Val>,
 }
 
-pub struct Guard<Key, Val> {
+pub struct Guard<Key, Val>
+where
+	Key: Clone + Eq + Hash,
+{
 	map: Map<Key, Val>,
+	key: Key,
 	val: Omg<Val>,
 }
 
@@ -47,6 +51,7 @@ where
 
 		Guard::<Key, Val> {
 			map: Arc::clone(&self.map),
+			key: k.try_into().expect("failed to construct key"),
 			val: val.lock_owned().await,
 		}
 	}
@@ -67,6 +72,7 @@ where
 
 		Ok(Guard::<Key, Val> {
 			map: Arc::clone(&self.map),
+			key: k.try_into().expect("failed to construct key"),
 			val: val.try_lock_owned().map_err(|_| err!("would yield"))?,
 		})
 	}
@@ -88,6 +94,7 @@ where
 
 		Ok(Guard::<Key, Val> {
 			map: Arc::clone(&self.map),
+			key: k.try_into().expect("failed to construct key"),
 			val: val.try_lock_owned().map_err(|_| err!("would yield"))?,
 		})
 	}
@@ -110,13 +117,20 @@ where
 	fn default() -> Self { Self::new() }
 }
 
-impl<Key, Val> Drop for Guard<Key, Val> {
+impl<Key, Val> Drop for Guard<Key, Val>
+where
+	Key: Clone + Eq + Hash,
+{
 	#[tracing::instrument(name = "unlock", level = "trace", skip_all)]
 	fn drop(&mut self) {
 		if Arc::strong_count(Omg::mutex(&self.val)) <= 2 {
-			self.map.lock().retain(|_, val| {
-				!Arc::ptr_eq(val, Omg::mutex(&self.val)) || Arc::strong_count(val) > 2
-			});
+			let mut map = self.map.lock();
+			if let std::collections::hash_map::Entry::Occupied(e) = map.entry(self.key.clone()) {
+				if Arc::ptr_eq(e.get(), Omg::mutex(&self.val)) && Arc::strong_count(e.get()) <= 2
+				{
+					e.remove();
+				}
+			}
 		}
 	}
 }
