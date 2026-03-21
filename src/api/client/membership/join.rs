@@ -573,7 +573,7 @@ async fn join_room_by_id_helper_remote(
 		.then(|pdu| {
 			services
 				.server_keys
-				.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+				.validate_and_add_event_id(pdu, &room_version_id)
 				.inspect_err(|e| {
 					debug_warn!("Could not validate send_join response room_state event: {e:?}");
 				})
@@ -621,7 +621,7 @@ async fn join_room_by_id_helper_remote(
 		.then(|pdu| {
 			services
 				.server_keys
-				.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+				.validate_and_add_event_id(pdu, &room_version_id)
 		})
 		.ready_filter_map(Result::ok)
 		.ready_for_each(|(event_id, value)| {
