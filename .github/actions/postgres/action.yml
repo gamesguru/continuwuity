@@ -10,6 +10,9 @@ inputs:
     description: "Branch where results ledger is stored"
     default: "_metadata/badges"
 
+env:
+  DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
+
 runs:
   using: "composite"
   steps:
