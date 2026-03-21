@@ -789,6 +789,26 @@ async fn join_room_by_id_helper_remote(
 				.append_to_state(&parsed_join_pdu, room_id)
 				.await?;
 
+			let mut added = Arc::unwrap_or_clone(added);
+			if let Some(state_key) = &parsed_join_pdu.state_key {
+				let shortstatekey = services
+					.rooms
+					.short
+					.get_or_create_shortstatekey(
+						&parsed_join_pdu.kind.to_string().into(),
+						state_key,
+					)
+					.await;
+				added.insert(
+					services
+						.rooms
+						.state_compressor
+						.compress_state_event(shortstatekey, &parsed_join_pdu.event_id)
+						.await,
+				);
+			}
+			let added = Arc::new(added);
+
 			info!("Appending new room join event");
 			services
 				.rooms
