@@ -61,9 +61,9 @@ release_max_log_level = [
 	"conduwuit-database/release_max_log_level",
 	"conduwuit-service/release_max_log_level",
 	"tracing/max_level_trace",
-	"tracing/release_max_level_info",
+	"tracing/release_max_level_debug",
 	"log/max_level_trace",
-	"log/release_max_level_info",
+	"log/release_max_level_debug",
 ]
 tokio_metrics = [
 	"conduwuit-core/tokio_metrics",

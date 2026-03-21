@@ -146,9 +146,9 @@ perf_measurements = [
 # genreating code for log level filters that users will generally not use (debug and trace)
 release_max_log_level = [
 	"tracing/max_level_trace",
-	"tracing/release_max_level_info",
+	"tracing/release_max_level_debug",
 	"log/max_level_trace",
-	"log/release_max_level_info",
+	"log/release_max_level_debug",
 	"conduwuit-admin/release_max_log_level",
 	"conduwuit-api/release_max_log_level",
 	"conduwuit-core/release_max_log_level",
