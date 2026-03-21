@@ -217,6 +217,44 @@ where
 		.map(Arc::new)
 		.await;
 
+	// 14. Check if the event passes auth based on the "current state" of the room,
+	//     if not soft fail it. We run this BEFORE forcing the new room state, so
+	//     `room_state_get` sees the state prior to this event.
+	if !is_historical && !soft_fail {
+		debug!(
+			event_id = %incoming_pdu.event_id,
+			"Performing step 14 auth check"
+		);
+		let auth_check_current = state_res::event_auth::auth_check(
+			&room_version,
+			&incoming_pdu,
+			None, // third-party invite
+			|ty, sk| {
+				let ty = ty.clone();
+				let sk = sk.to_owned();
+				let room_id = room_id.to_owned();
+				async move {
+					self.services
+						.state_accessor
+						.room_state_get(&room_id, &ty, &sk)
+						.await
+						.ok()
+				}
+			},
+			create_event.as_pdu(),
+		)
+		.await
+		.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+
+		if !auth_check_current {
+			warn!(
+				event_id = %incoming_pdu.event_id,
+				"Event has failed step 14 auth check with current state of the room"
+			);
+			soft_fail = true;
+		}
+	}
+
 	if incoming_pdu.state_key().is_some() {
 		debug!("Event is a state-event. Deriving new room state");
 
@@ -307,42 +345,7 @@ where
 			}
 		}
 
-		// 14. Check if the event passes auth based on the "current state" of the room,
-		//     if not soft fail it
-		if !soft_fail {
-			debug!(
-				event_id = %incoming_pdu.event_id,
-				"Performing step 14 auth check"
-			);
-			let auth_check = state_res::event_auth::auth_check(
-				&room_version,
-				&incoming_pdu,
-				None, // third-party invite
-				|ty, sk| {
-					let ty = ty.clone();
-					let sk = sk.to_owned();
-					let room_id = room_id.to_owned();
-					async move {
-						self.services
-							.state_accessor
-							.room_state_get(&room_id, &ty, &sk)
-							.await
-							.ok()
-					}
-				},
-				create_event.as_pdu(),
-			)
-			.await
-			.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
-
-			if !auth_check {
-				warn!(
-					event_id = %incoming_pdu.event_id,
-					"Event has failed step 14 auth check with current state of the room"
-				);
-				soft_fail = true;
-			}
-		}
+		// 14-pre and redaction soft-fail checks finish here.
 	}
 
 	if soft_fail {
