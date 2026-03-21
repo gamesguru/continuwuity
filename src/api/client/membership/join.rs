@@ -625,7 +625,7 @@ async fn join_room_by_id_helper_remote(
 						let room_version_id = room_version_id.clone();
 						async move {
 							server_keys
-								.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+								.validate_and_add_event_id(pdu, &room_version_id)
 								.inspect_err(|e| {
 									debug_warn!(
 										"Could not validate send_join response room_state \
@@ -702,7 +702,7 @@ async fn join_room_by_id_helper_remote(
 						let room_version_id = room_version_id.clone();
 						async move {
 							server_keys
-								.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+								.validate_and_add_event_id(pdu, &room_version_id)
 								.ok()
 								.await
 						}
