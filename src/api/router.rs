@@ -158,7 +158,6 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::search_events_route)
 		.ruma_route(&client::turn_server_route)
 		.ruma_route(&client::send_event_to_device_route)
-		.ruma_route(&client::create_content_route)
 		.ruma_route_path(&client::create_content_route, "/_matrix/client/v1/media/upload")
 		.ruma_route(&client::get_content_thumbnail_route)
 		.ruma_route(&client::get_content_route)
