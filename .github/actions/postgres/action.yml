@@ -12,6 +12,8 @@ inputs:
 
 runs:
   using: "composite"
+  env:
+    DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
   steps:
     - name: Ensure Tables Exist
       shell: bash
