@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use conduwuit::{Err, Event, Pdu, Result, implement, is_not_empty, utils::ReadyExt, warn};
+use conduwuit::{Err, Event, Pdu, Result, debug, implement, is_not_empty, utils::ReadyExt, warn};
 use database::{Json, serialize_key};
 use futures::StreamExt;
 use ruma::{
@@ -354,7 +354,7 @@ pub async fn mark_as_invited(
 	let userroom_id = (user_id, room_id);
 	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
 
-	warn!(%user_id, %room_id, %sender_user, "marking as invited");
+	debug!(%user_id, %room_id, %sender_user, "marking as invited");
 	self.db
 		.userroomid_invitestate
 		.raw_put(&userroom_id, Json(last_state.unwrap_or_default()));
