@@ -51,7 +51,7 @@ impl Resolver {
 		}
 
 		opts.cache_size = config.dns_cache_entries as usize;
-		opts.use_hosts_file = hickory_resolver::config::ResolveHosts::Always;
+
 		opts.preserve_intermediates = true;
 		opts.negative_min_ttl = Some(Duration::from_secs(config.dns_min_ttl_nxdomain));
 		opts.negative_max_ttl = Some(Duration::from_secs(60 * 60 * 24 * 30));
