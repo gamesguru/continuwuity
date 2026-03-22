@@ -8,8 +8,8 @@ MAKEFLAGS += --no-print-directory
 ifneq (,$(wildcard ./.env))
 	include .env
 	export
-	# Strip double quotes from .env values (annoying disagreement between direnv, dotenv)
-	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
+# 	# Strip double quotes from .env values (annoying disagreement between direnv, dotenv)
+# 	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
 endif
 
 # Example .env:
@@ -173,6 +173,8 @@ ROCKSDB_INCLUDE_DIR ?= /usr/local/include
 # Bundling RocksDB statically can be enabled via features.
 FEATURES ?= standard,console,url_preview,release_max_log_level,bindgen-runtime
 
+# RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS"
+
 .PHONY: build
 build:  ##H Build with selected profile
 	# NOTE: for a build that works best and ONLY for your CPU: export RUSTFLAGS=-C target-cpu=native
@@ -184,7 +186,6 @@ build:  ##H Build with selected profile
 		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
 		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
 		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
-# 		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
 		cargo build --features $(FEATURES) --locked $(CARGO_FLAGS)
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug

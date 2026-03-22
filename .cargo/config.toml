@@ -2,7 +2,7 @@
 xtask = "run --package xtask --"
 
 [env]
-RUSTC_WRAPPER = { value = "sccache", force = false }
+#RUSTC_WRAPPER = { value = "sccache", force = false }
 ROCKSDB_LIB_DIR = { value = "/usr/local/lib", force = false }
 ROCKSDB_INCLUDE_DIR = { value = "/usr/local/include", force = false }
 PKG_CONFIG_PATH = { value = "/usr/local/lib/pkgconfig", force = false }
@@ -16,7 +16,9 @@ LD_LIBRARY_PATH = { value = "/usr/local/lib", force = false }
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
 rustflags = [
-    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "split-debuginfo=unpacked",
+    "-C", "prefer-dynamic",
+    "-Z", "linker-features=-lld",
     "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
 ]
 
@@ -24,6 +26,8 @@ rustflags = [
 [target.aarch64-unknown-linux-gnu]
 linker = "clang"
 rustflags = [
-    "-C", "link-arg=-fuse-ld=mold",
+    "-C", "split-debuginfo=unpacked",
+    "-C", "prefer-dynamic",
+    "-Z", "linker-features=-lld",
     "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
 ]
