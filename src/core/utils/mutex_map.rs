@@ -9,7 +9,11 @@ pub struct MutexMap<Key, Val> {
 	map: Map<Key, Val>,
 }
 
-pub struct Guard<Key: Eq + Hash, Val> {
+pub struct Guard<Key, Val>
+where
+	Key: Clone + Eq + Hash + Send,
+	Val: Default + Send,
+{
 	key: Key,
 	map: Map<Key, Val>,
 	val: Omg<Val>,
@@ -107,7 +111,11 @@ where
 	fn default() -> Self { Self::new() }
 }
 
-impl<Key: Eq + Hash, Val> Drop for Guard<Key, Val> {
+impl<Key, Val> Drop for Guard<Key, Val>
+where
+	Key: Clone + Eq + Hash + Send,
+	Val: Default + Send,
+{
 	#[tracing::instrument(name = "unlock", level = "trace", skip_all)]
 	fn drop(&mut self) {
 		if Arc::strong_count(Omg::mutex(&self.val)) <= 2 {
