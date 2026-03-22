@@ -348,6 +348,9 @@ pub(crate) async fn visibility_filter(
 ) -> Option<PdusIterItem> {
 	let (_, pdu) = &item;
 
+	if services.users.is_admin(user_id).await {
+		return Some(item);
+	}
 	services
 		.rooms
 		.state_accessor

@@ -3,36 +3,44 @@ use std::{
 	fmt::Write as _,
 };
 
-use api::client::{full_user_deactivate, join_room_by_id_helper, leave_room, remote_leave_room};
+use api::client::{
+	full_user_deactivate, join_room_by_id_helper, leave_all_rooms, leave_room, remote_leave_room,
+	update_avatar_url, update_displayname,
+};
 use conduwuit::{
-	Err, Result, debug_warn, error, info,
+	Err, Result, debug, debug_warn, error, info,
 	matrix::{Event, pdu::PduBuilder},
 	utils::{self, ReadyExt},
 	warn,
 };
+use conduwuit_macros::admin_command;
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, UserId,
+	Int, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomId,
+	UserId,
 	events::{
 		RoomAccountDataEventType, StateEventType,
 		room::{
+			create::RoomCreateEventContent,
+			member::{MembershipState, RoomMemberEventContent},
 			power_levels::{RoomPowerLevels, RoomPowerLevelsEventContent},
 			redaction::RoomRedactionEventContent,
 		},
 		tag::{TagEvent, TagEventContent, TagInfo},
 	},
+	int,
 };
 
 use crate::{
-	admin_command, get_room_info,
-	utils::{parse_active_local_user_id, parse_local_user_id},
+	get_room_info,
+	utils::{parse_active_local_user_id, parse_local_user_id, parse_user_id},
 };
 
 const AUTO_GEN_PASSWORD_LENGTH: usize = 25;
 const BULK_JOIN_REASON: &str = "Bulk force joining this room as initiated by the server admin.";
 
 #[admin_command]
-pub(super) async fn list_users(&self) -> Result {
+pub(crate) async fn list_users(&self) -> Result {
 	let users: Vec<_> = self
 		.services
 		.users
@@ -175,7 +183,12 @@ pub(super) async fn create_user(&self, username: String, password: Option<String
 }
 
 #[admin_command]
-pub(super) async fn deactivate(&self, no_leave_rooms: bool, user_id: String) -> Result {
+pub(super) async fn deactivate(
+	&self,
+	no_leave_rooms: bool,
+	user_id: String,
+	redact: bool,
+) -> Result {
 	// Validate user id
 	let user_id = parse_local_user_id(self.services, &user_id)?;
 
@@ -184,13 +197,16 @@ pub(super) async fn deactivate(&self, no_leave_rooms: bool, user_id: String) -> 
 		return Err!("Not allowed to deactivate the server service account.",);
 	}
 
+	info!("Deactivating user {user_id}...");
 	self.services.users.deactivate_account(&user_id).await?;
 
+	if redact {
+		info!("Redacting user {user_id} before deactivation");
+		self.services.users.redact_user(&user_id).boxed().await?;
+	}
+
 	if !no_leave_rooms {
-		self.services
-			.admin
-			.send_text(&format!("Making {user_id} leave all rooms after deactivation..."))
-			.await;
+		info!("Making {user_id} leave all rooms after deactivation");
 
 		let all_joined_rooms: Vec<OwnedRoomId> = self
 			.services
@@ -201,12 +217,65 @@ pub(super) async fn deactivate(&self, no_leave_rooms: bool, user_id: String) -> 
 			.collect()
 			.await;
 
+		// Rescind any invites they may have sent
+		info!("Rescinding any invites sent by {user_id}");
+		for room_id in &all_joined_rooms {
+			let invitees = self
+				.services
+				.rooms
+				.state_cache
+				.room_members_invited(room_id)
+				.collect::<Vec<_>>()
+				.await;
+			for invitee in invitees {
+				// Try to kick the users
+				info!("Rescinding invite for {invitee} in room {room_id}");
+				let lock = self.services.rooms.state.mutex.lock(room_id).await;
+				self.services
+					.rooms
+					.timeline
+					.build_and_append_pdu(
+						PduBuilder::state(
+							String::from(invitee.as_str()),
+							&RoomMemberEventContent {
+								membership: MembershipState::Leave,
+								..RoomMemberEventContent::new(MembershipState::Leave)
+							},
+						),
+						&user_id,
+						Some(room_id),
+						&lock,
+					)
+					.await
+					.ok();
+				drop(lock);
+			}
+		}
 		full_user_deactivate(self.services, &user_id, &all_joined_rooms)
 			.boxed()
 			.await?;
 	}
 
 	self.write_str(&format!("User {user_id} has been deactivated"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn redact_user(&self, user_id: String) -> Result {
+	// Validate user id
+	let user_id = parse_local_user_id(self.services, &user_id)?;
+
+	if user_id == self.services.globals.server_user {
+		return Err!("Not allowed to redact the server service account.",);
+	}
+
+	if !self.services.users.exists(&user_id).await {
+		return Err!("User {user_id} does not exist.");
+	}
+
+	self.services.users.redact_user(&user_id).boxed().await?;
+
+	self.write_str(&format!("User {user_id} has been redacted."))
 		.await
 }
 
@@ -405,6 +474,10 @@ pub(super) async fn deactivate_all(&self, no_leave_rooms: bool, force: bool) -> 
 					full_user_deactivate(self.services, &user_id, &all_joined_rooms)
 						.boxed()
 						.await?;
+					update_displayname(self.services, &user_id, None, &all_joined_rooms).await;
+					update_avatar_url(self.services, &user_id, None, None, &all_joined_rooms)
+						.await;
+					leave_all_rooms(self.services, &user_id).await;
 				}
 			},
 		}
@@ -942,6 +1015,232 @@ pub(super) async fn redact_event(&self, event_id: OwnedEventId) -> Result {
 		"Successfully redacted event. Redaction event ID: {redaction_event_id}"
 	))
 	.await
+}
+
+#[admin_command]
+pub(super) async fn create_dm(&self, user_id: String) -> Result {
+	let user_id = parse_user_id(self.services, &user_id)?;
+	let admin_room = self.services.admin.get_admin_room().await?;
+
+	if !self.services.users.exists(&user_id).await {
+		return Err!("User {user_id} does not exist.");
+	}
+
+	let mut server_admins = vec![self.services.globals.server_user.clone()];
+	let mut stream = self.services.rooms.state_cache.room_members(&admin_room);
+	while let Some(user) = stream.next().await {
+		if !server_admins.contains(&user.to_owned()) {
+			server_admins.push(user.to_owned());
+		}
+	}
+
+	// Create new room, invite admins, invite user
+	let room_id = RoomId::new(self.services.globals.server_name());
+
+	let _short_id = self
+		.services
+		.rooms
+		.short
+		.get_or_create_shortroomid(&room_id)
+		.await;
+
+	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
+
+	// m.room.create
+	debug!(
+		user_id = %user_id,
+		room_id = %room_id,
+		"Creating new DM room"
+	);
+	self.services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomCreateEventContent::new_v11()),
+			&self.services.globals.server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.boxed()
+		.await?;
+
+	// Get service user to join
+	debug!(
+		room_id = %room_id,
+		"Joining service user to new DM room"
+	);
+	self.services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(self.services.globals.server_user.as_str()),
+				&RoomMemberEventContent {
+					displayname: Some(format!(
+						"{} Service User",
+						self.services.globals.server_name()
+					)),
+					..RoomMemberEventContent::new(MembershipState::Join)
+				},
+			),
+			&self.services.globals.server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.boxed()
+		.await?;
+
+	// m.room.power_levels
+	debug!(
+		room_id = %room_id,
+		"Setting initial power levels for new DM room"
+	);
+	self.services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomPowerLevelsEventContent {
+				invite: int!(100),
+				redact: int!(100),
+				users: server_admins
+					.iter()
+					.map(|user| (user.to_owned(), 100.into()))
+					.collect::<BTreeMap<_, Int>>(),
+				events: BTreeMap::from([("m.room.redaction".into(), 100.into())]),
+				..RoomPowerLevelsEventContent::default()
+			}),
+			&self.services.globals.server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.boxed()
+		.await?;
+
+	let mut service_can_leave = false;
+	// invite admins
+	for admin in server_admins.clone() {
+		if admin == self.services.globals.server_user {
+			continue; // skip the service user
+		}
+		debug!(
+			room_id = %room_id,
+			admin = %admin,
+			"Inviting server admin to new DM room"
+		);
+		self.services
+			.rooms
+			.timeline
+			.build_and_append_pdu(
+				PduBuilder::state(
+					String::from(admin.as_str()),
+					&RoomMemberEventContent::new(MembershipState::Invite),
+				),
+				&self.services.globals.server_user,
+				Some(&room_id),
+				&state_lock,
+			)
+			.boxed()
+			.await?;
+		if self.services.globals.user_is_local(&admin) {
+			// automatically force join them
+			let content = RoomMemberEventContent {
+				displayname: self.services.users.displayname(&admin).await.ok(),
+				avatar_url: self.services.users.avatar_url(&admin).await.ok(),
+				..RoomMemberEventContent::new(MembershipState::Join)
+			};
+			debug!(
+				room_id = %room_id,
+				admin = %admin,
+				"Automatically joining server admin to new DM room"
+			);
+			self.services
+				.rooms
+				.timeline
+				.build_and_append_pdu(
+					PduBuilder::state(String::from(admin.as_str()), &content),
+					&admin,
+					Some(&room_id),
+					&state_lock,
+				)
+				.boxed()
+				.await?;
+			service_can_leave = true;
+		}
+	}
+
+	// invite user
+	if !server_admins.contains(&user_id) {
+		let user_membership = &RoomMemberEventContent {
+			avatar_url: self.services.users.avatar_url(&user_id).await.ok(),
+			displayname: self.services.users.displayname(&user_id).await.ok(),
+			is_direct: Some(true),
+			..RoomMemberEventContent::new(MembershipState::Invite)
+		};
+		debug!(room_id=%room_id, user_id=%user_id, "Inviting user to new DM room");
+		self.services
+			.rooms
+			.timeline
+			.build_and_append_pdu(
+				PduBuilder::state(String::from(user_id.as_str()), user_membership),
+				&self.services.globals.server_user,
+				Some(&room_id),
+				&state_lock,
+			)
+			.boxed()
+			.await?;
+		if self.services.globals.user_is_local(&user_id) {
+			debug!(
+				room_id = %room_id,
+				user_id = %user_id,
+				"Adding user to new DM room"
+			);
+			self.services
+				.rooms
+				.timeline
+				.build_and_append_pdu(
+					PduBuilder::state(String::from(user_id.as_str()), &RoomMemberEventContent {
+						membership: MembershipState::Join,
+						..user_membership.clone()
+					}),
+					&user_id,
+					Some(&room_id),
+					&state_lock,
+				)
+				.boxed()
+				.await?;
+			service_can_leave = true;
+		}
+	}
+
+	if service_can_leave {
+		// Leave the service user
+		debug!(
+			room_id = %room_id,
+			"Service user leaving new DM room"
+		);
+		self.services
+			.rooms
+			.timeline
+			.build_and_append_pdu(
+				PduBuilder::state(
+					String::from(self.services.globals.server_user.as_str()),
+					&RoomMemberEventContent::new(MembershipState::Leave),
+				),
+				&self.services.globals.server_user,
+				Some(&room_id),
+				&state_lock,
+			)
+			.boxed()
+			.await?;
+	}
+	drop(state_lock); // drop the lock before we send the message
+
+	self.write_str(
+		&format!(
+			"Created new room with {user_id} and invited all server admins: https://matrix.to/#/{room_id}?via={}",
+			self.services.globals.server_name()
+		)
+	).await
 }
 
 #[admin_command]

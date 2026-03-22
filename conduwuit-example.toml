@@ -1808,6 +1808,11 @@
 #
 #allow_web_indexing = false
 
+# (continuwuity.rocks) Room IDs that, when joined, will automatically lock
+# users.
+#
+#auto_lock_on_join = []
+
 [global.tls]
 
 # Path to a valid TLS certificate file.

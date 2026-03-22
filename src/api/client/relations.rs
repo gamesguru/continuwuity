@@ -216,6 +216,9 @@ async fn visibility_filter<Pdu: Event + Send + Sync>(
 ) -> Option<(PduCount, Pdu)> {
 	let (_, pdu) = &item;
 
+	if services.users.is_admin(sender_user).await {
+		return Some(item);
+	}
 	services
 		.rooms
 		.state_accessor

@@ -6,6 +6,7 @@ pub mod lazy_loading;
 pub mod metadata;
 pub mod outlier;
 pub mod pdu_metadata;
+pub mod ratelimiter;
 pub mod read_receipt;
 pub mod search;
 pub mod short;
@@ -42,4 +43,5 @@ pub struct Service {
 	pub timeline: Arc<timeline::Service>,
 	pub typing: Arc<typing::Service>,
 	pub user: Arc<user::Service>,
+	pub ratelimiter: Arc<ratelimiter::Service>,
 }

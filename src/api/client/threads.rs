@@ -38,12 +38,16 @@ pub(crate) async fn get_threads_route(
 		.await?
 		.take(limit)
 		.filter_map(|(count, pdu)| async move {
-			services
-				.rooms
-				.state_accessor
-				.user_can_see_event(body.sender_user(), &body.room_id, &pdu.event_id)
-				.await
-				.then_some((count, pdu))
+			if services.users.is_admin(body.sender_user()).await {
+				Some((count, pdu))
+			} else {
+				services
+					.rooms
+					.state_accessor
+					.user_can_see_event(body.sender_user(), &body.room_id, &pdu.event_id)
+					.await
+					.then_some((count, pdu))
+			}
 		})
 		.then(|(count, mut pdu)| async move {
 			if let Err(e) = services

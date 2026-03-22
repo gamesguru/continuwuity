@@ -58,6 +58,17 @@ pub(crate) async fn kick_user_route(
 			&state_lock,
 		)
 		.await?;
+	services
+		.admin
+		.send_text(&format!(
+			"User {} was kicked from room {} by {sender_user}: {}",
+			body.user_id,
+			body.room_id,
+			body.reason
+				.clone()
+				.unwrap_or_else(|| "No reason provided".to_owned())
+		))
+		.await;
 
 	drop(state_lock);
 

@@ -1,14 +1,20 @@
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Result, debug_error, err, info,
+	Err, Error, Result, debug_error, err, info,
 	matrix::{event::gen_event_id_canonical_json, pdu::PduBuilder},
 	warn,
 };
 use futures::FutureExt;
 use ruma::{
 	RoomId, UserId,
-	api::{client::membership::invite_user, federation::membership::create_invite},
+	api::{
+		client::{
+			error::{ErrorKind, RetryAfter::Delay},
+			membership::invite_user,
+		},
+		federation::membership::create_invite,
+	},
 	events::{
 		invite_permission_config::FilterLevel,
 		room::member::{MembershipState, RoomMemberEventContent},
@@ -120,6 +126,19 @@ pub(crate) async fn invite_helper(
 		);
 		return Err!(Request(Forbidden("Invite blocked by antispam service.")));
 	}
+	let is_admin = services.users.is_admin(sender_user).await;
+	if !is_admin
+		&& let Some(reset_after) = services
+			.rooms
+			.ratelimiter
+			.reset_after(sender_user.to_owned(), room_id.to_owned())
+	{
+		return Err(Error::Request(
+			ErrorKind::LimitExceeded { retry_after: Some(Delay(reset_after)) },
+			"You are sending events too quickly. Please wait before trying again.".into(),
+			http::StatusCode::TOO_MANY_REQUESTS,
+		));
+	}
 
 	if !services.globals.user_is_local(recipient_user) {
 		let (pdu, pdu_json, invite_room_state) = {
@@ -197,7 +216,20 @@ pub(crate) async fn invite_helper(
 				err!(Request(InvalidParam("Could not accept incoming PDU as timeline event.")))
 			})?;
 
-		return services.sending.send_pdu_room(room_id, &pdu_id).await;
+		let result = services.sending.send_pdu_room(room_id, &pdu_id).await;
+		if result.is_ok() {
+			services
+				.admin
+				.notice(&format!("{sender_user} invited {recipient_user} to {room_id}"))
+				.await;
+			if !is_admin {
+				services
+					.rooms
+					.ratelimiter
+					.hit(sender_user.to_owned(), room_id.to_owned());
+			}
+		}
+		return result;
 	}
 
 	if !services
@@ -234,6 +266,16 @@ pub(crate) async fn invite_helper(
 		.await?;
 
 	drop(state_lock);
+	services
+		.admin
+		.notice(&format!("{sender_user} invited {recipient_user} to {room_id}"))
+		.await;
+	if !is_admin {
+		services
+			.rooms
+			.ratelimiter
+			.hit(sender_user.to_owned(), room_id.to_owned());
+	}
 
 	Ok(())
 }

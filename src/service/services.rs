@@ -108,6 +108,7 @@ impl Services {
 				timeline: build!(rooms::timeline::Service),
 				typing: build!(rooms::typing::Service),
 				user: build!(rooms::user::Service),
+				ratelimiter: build!(rooms::ratelimiter::Service),
 			},
 			federation: build!(federation::Service),
 			sending: build!(sending::Service),

@@ -244,3 +244,17 @@ pub(super) async fn build_info(&self) -> Result {
 
 	self.write_str(&info).await
 }
+
+#[admin_command]
+pub(super) async fn kill_registration(&self) -> Result {
+	self.services.globals.set_registration_killed(true);
+
+	self.write_str("Registration temporarily disabled.").await
+}
+
+#[admin_command]
+pub(super) async fn restore_registration(&self) -> Result {
+	self.services.globals.set_registration_killed(false);
+
+	self.write_str("Registration re-permitted.").await
+}

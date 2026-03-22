@@ -18,6 +18,7 @@ pub struct Service {
 	pub server_user: OwnedUserId,
 	pub admin_alias: OwnedRoomAliasId,
 	pub turn_secret: String,
+	pub registration_killswitch: Arc<SyncRwLock<bool>>,
 }
 
 type RateLimitState = (Instant, u32); // Time if last failed try, number of failed tries
@@ -52,6 +53,7 @@ impl crate::Service for Service {
 			)
 			.expect("@conduit:server_name is valid"),
 			turn_secret,
+			registration_killswitch: Arc::new(SyncRwLock::new(false)),
 		}))
 	}
 
@@ -159,5 +161,11 @@ impl Service {
 	#[inline]
 	pub fn server_is_ours(&self, server_name: &ServerName) -> bool {
 		server_name == self.server_name()
+	}
+
+	pub fn registration_killed(&self) -> bool { *self.registration_killswitch.read() }
+
+	pub fn set_registration_killed(&self, killed: bool) {
+		*self.registration_killswitch.write() = killed;
 	}
 }

@@ -58,4 +58,12 @@ pub enum ServerCommand {
 
 	/// Build information
 	BuildInfo {},
+
+	/// Temporarily disable registration entirely
+	/// This is intended to be used in an emergency, and will break appservices.
+	KillRegistration,
+
+	/// Resets the registration killswitch, allowing new users to register
+	/// again.
+	RestoreRegistration,
 }

@@ -127,7 +127,30 @@ pub(crate) async fn report_event_route(
 		report_type: "event".to_owned(),
 		reason: body.reason.clone(),
 	};
-	services.admin.send_message(build_report(report)).await.ok();
+	services
+		.admin
+		.send_loud_message(build_report(report))
+		.await
+		.ok();
+
+	let pdu_json = pdu.to_canonical_object();
+	let mut body = services
+		.admin
+		.text_or_file(RoomMessageEventContent::notice_markdown(format!(
+			"```json\n{}\n```",
+			serde_json::to_string_pretty(&pdu_json).expect("valid JSON content")
+		)))
+		.await;
+	if body.msgtype.msgtype() == "m.file" {
+		// Was too large, strip the codeblock
+		body = services
+			.admin
+			.text_or_file(RoomMessageEventContent::notice_markdown(
+				serde_json::to_string_pretty(&pdu_json).expect("valid JSON content"),
+			))
+			.await;
+	}
+	services.admin.send_message(body).await.ok();
 
 	Ok(report_content::v3::Response {})
 }
@@ -172,7 +195,11 @@ pub(crate) async fn report_user_route(
 		body.reason.as_deref().unwrap_or("")
 	);
 
-	services.admin.send_message(build_report(report)).await.ok();
+	services
+		.admin
+		.send_loud_message(build_report(report))
+		.await
+		.ok();
 
 	Ok(report_user::v3::Response {})
 }
@@ -204,6 +231,12 @@ async fn is_event_report_valid(
 		return Err!(Request(
 			InvalidParam("Reason too long, should be 750 characters or fewer",)
 		));
+	}
+
+	if pdu.is_redacted() {
+		return Err!(Request(NotFound(
+			"Cannot report a redacted event (server does not support unredacting)"
+		)));
 	}
 
 	if !services
