@@ -41,11 +41,19 @@ impl Console {
 	}
 
 	pub(super) async fn handle_signal(self: &Arc<Self>, sig: &'static str) {
+		use std::io::IsTerminal;
+
 		if !self.server.running() {
 			self.interrupt();
 		} else if sig == "SIGINT" {
-			self.interrupt_command();
-			self.start().await;
+			let running = self.worker_join.lock().is_some();
+			if running {
+				self.interrupt_command();
+			} else if std::io::stdout().is_terminal() {
+				self.start().await;
+			} else {
+				self.server.shutdown().unwrap_or_else(error::default_log);
+			}
 		}
 	}
 
