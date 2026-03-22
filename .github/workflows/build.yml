@@ -283,4 +283,11 @@ jobs:
           TAG_NAME="${{ github.ref_name }}"
           [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
           gh release create "$TAG_NAME" --title "Build: ${TAG_NAME}" --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" --prerelease || true
-          gh release upload "$TAG_NAME" conduwuit-${{ matrix.arch }}-${{ matrix.os }}.tar.gz --clobber
+          for i in {1..5}; do
+            if gh release upload "$TAG_NAME" conduwuit-${{ matrix.arch }}-${{ matrix.os }}.tar.gz --clobber; then
+              echo "Successfully uploaded artifact"
+              break
+            fi
+            echo "Upload failed, retrying in 10s..."
+            sleep 10
+          done
