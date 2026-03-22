@@ -868,7 +868,7 @@ async fn make_join_request(
 				},
 				| ErrorKind::Forbidden { .. } => {
 					warn!("{remote_server} refuses to let us join: {e}.");
-					return Err(e);
+					continue;
 				},
 				| ErrorKind::NotFound => {
 					info!(
