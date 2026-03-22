@@ -108,7 +108,10 @@ impl Console {
 		self.output
 			.write_text_on(
 				&mut std::io::stdout(),
-				"\"help\" for help, ^D to exit the console, ^\\ to stop the server\n",
+				concat!(
+					"\"help\" for help, ^D to exit the console, ^\\ to stop the server\n",
+					"^W to clear word, ctrl-left/right to skip words\n"
+				),
 			)
 			.ok();
 
@@ -142,6 +145,8 @@ impl Console {
 		let self_ = Arc::clone(self);
 		readline.set_tab_completer(move |line| self_.tab_complete(line));
 		self.set_history(&mut readline);
+
+		std::io::Write::flush(&mut std::io::stdout()).ok();
 
 		let future = readline.readline();
 
