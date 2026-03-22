@@ -11,6 +11,7 @@ use conduwuit_core::{
 		pdu::{PduCount, PduEvent, PduId, RawPduId},
 	},
 	utils::{self, ReadyExt},
+	warn,
 };
 use futures::StreamExt;
 use ruma::{

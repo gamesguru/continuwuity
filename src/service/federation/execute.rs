@@ -198,7 +198,7 @@ async fn into_http_response(
 	if !status.is_success() {
 		let error = RumaError::from_http_response(http_response);
 		if status.is_server_error() {
-			info!(%dest, %status, "Federation request failed: {error:?}");
+			info!(%dest, %method, %url, %status, "Federation request failed: {error:?}");
 		}
 		return Err(Error::Federation(dest.to_owned(), error));
 	}
@@ -215,13 +215,13 @@ fn handle_error(
 ) -> Result {
 	if e.is_timeout() {
 		e = e.without_url();
-		info!("Federation request to {dest} timed out: {e:?}");
+		info!(%method, %url, "Federation request to {dest} timed out: {e:?}");
 		return Err(Error::FederationTimeout(dest.to_owned()));
 	}
 
 	if e.is_connect() {
 		e = e.without_url();
-		info!(%dest, "Federation connection failed: {e:?}");
+		info!(%dest, %method, %url, "Federation connection failed: {e:?}");
 		return Err(Error::FederationConnection(dest.to_owned()));
 	}
 
