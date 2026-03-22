@@ -84,18 +84,18 @@ impl Engine {
 
 	pub fn sync(&self) -> Result {
 		if tracing::Span::current().is_none() {
-			trace!("Syncing database WAL...");
-		} else {
 			info!("Syncing database WAL...");
+		} else {
+			trace!("Syncing database WAL...");
 		}
 		result(DBCommon::flush_wal(&self.db, true))
 	}
 
 	pub fn flush(&self) -> Result {
 		if tracing::Span::current().is_none() {
-			trace!("Flushing database WAL...");
-		} else {
 			info!("Flushing database WAL...");
+		} else {
+			trace!("Flushing database WAL...");
 		}
 		result(DBCommon::flush_wal(&self.db, false))
 	}
