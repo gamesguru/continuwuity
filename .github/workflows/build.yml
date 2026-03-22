@@ -232,6 +232,23 @@ jobs:
           PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
 
+      - name: Debug Environment & Prebuilts
+        run: |
+          echo "--- Downloaded Prebuilts Info ---"
+          for lib in librocksdb libjemalloc liblz4 libzstd; do
+            echo ">> $lib"
+            file /usr/local/lib/$lib.so* || true
+            nm -D /usr/local/lib/$lib.so* | grep " T " | head -n 5 || true
+          done
+          echo "--- Runner CPU Info ---"
+          grep "model name" /proc/cpuinfo | head -n 1 || true
+          grep "flags" /proc/cpuinfo | head -n 1 || true
+          grep "Features" /proc/cpuinfo | head -n 1 || true
+          echo "--- Build Environment ---"
+          echo "OS: ${{ matrix.os }}"
+          echo "Arch: ${{ matrix.arch }}"
+          echo "Detected CPU Target: ${{ steps.cpu.outputs.target }}"
+
       - name: Build
         env:
           PROFILE: ${{ steps.config.outputs.profile }}
@@ -242,7 +259,6 @@ jobs:
         run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ steps.config.outputs.profile }} --features ${{ steps.config.outputs.features }}"
 
       - name: Sanity check binary
-        continue-on-error: true
         env:
           LD_LIBRARY_PATH: /usr/local/lib
         run: |
@@ -251,12 +267,12 @@ jobs:
                grep -q "avx512dq" /proc/cpuinfo && \
                grep -q "avx512bw" /proc/cpuinfo && \
                grep -q "avx512vl" /proc/cpuinfo; then
-              ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
+              ./tests/sanity_check.sh ./target/latest/conduwuit
             else
               echo "Skipping binary sanity check: CPU does not support all required AVX-512 flags (F, DQ, BW, VL)."
             fi
           else
-            ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
+            ./tests/sanity_check.sh ./target/latest/conduwuit
           fi
 
       - name: Package Assets
