@@ -75,9 +75,6 @@ jobs:
             mold \
             postgresql-client
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
-
       - name: Detect best CPU target
         id: cpu
         if: matrix.arch == 'amd64'
@@ -121,6 +118,7 @@ jobs:
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
           JEMALLOC_SYS_WITH_LG_PAGE: ${{ matrix.jemalloc_lg_page || '' }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.target_cpu != '' && format('-C target-cpu={0}', matrix.target_cpu) || '' }}
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.target_cpu != '' && format('-C target-cpu={0}', matrix.target_cpu) || '' }}
         run: SKIP_CONFIRM=1 make build PROFILE=${{ matrix.profile }} CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features direct_tls"
 

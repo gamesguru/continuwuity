@@ -170,7 +170,11 @@ impl Service {
 				.unwrap_or(FilterLevel::Allow)
 		};
 
-		warn!(%sender_user, %recipient_user, ?level, "invite_filter_level");
+		if matches!(level, FilterLevel::Allow) {
+			debug!(%sender_user, %recipient_user, ?level, "invite_filter_level");
+		} else {
+			warn!(%sender_user, %recipient_user, ?level, "invite_filter_level");
+		}
 		level
 	}
 
