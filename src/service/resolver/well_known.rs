@@ -7,8 +7,13 @@ use conduwuit::{
 pub(super) async fn request_well_known(&self, dest: &str) -> Result<Option<String>> {
 	trace!("Requesting well known for {dest}");
 	// TODO: rewrite into ruma
-	let url = reqwest::Url::parse(format!("https://{dest}/.well-known/matrix/server").as_str())
-		.expect("invalid dest in resolver::well_known request_well_known");
+	let url = match reqwest::Url::parse(&format!("https://{dest}/.well-known/matrix/server")) {
+		| Ok(url) => url,
+		| Err(error) => {
+			debug!(?dest, ?error, "Invalid well-known URL");
+			return Ok(None);
+		},
+	};
 	let response = self
 		.services
 		.client

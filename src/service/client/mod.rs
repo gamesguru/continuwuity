@@ -2,7 +2,6 @@ use std::{sync::Arc, time::Duration};
 
 use conduwuit::{Config, Result, err, implement, trace};
 use either::Either;
-use futures::FutureExt;
 use ipaddress::IPAddress;
 use regex::RegexSet;
 use reqwest::redirect;
@@ -64,7 +63,6 @@ impl Service {
 		}
 	}
 
-	#[cfg(not(feature = "no_client_matcher_based_on_hosts"))]
 	fn insecure_client(&self, client_type: &ClientType) -> &reqwest::Client {
 		match client_type {
 			| ClientType::Default => &self.default_no_tls_validation,
@@ -79,7 +77,6 @@ impl Service {
 		}
 	}
 
-	#[cfg(not(feature = "no_client_matcher_based_on_hosts"))]
 	#[must_use]
 	pub fn get_client(&self, client_type: &ClientType, url: &reqwest::Url) -> &reqwest::Client {
 		if self.no_tls_validation_host_regex.is_match(
@@ -90,12 +87,6 @@ impl Service {
 		} else {
 			self.secure_client(client_type)
 		}
-	}
-
-	#[cfg(feature = "secure_http_clients_only")]
-	#[must_use]
-	pub fn get_client(&self, client_type: &ClientType, url: &reqwest::Url) -> &reqwest::Client {
-		self.secure_client(client_type)
 	}
 }
 
@@ -127,203 +118,192 @@ impl crate::Service for Service {
 			.collect::<Result<_, String>>()
 			.map_err(|e| err!(Config("ip_range_denylist", e)))?;
 
-		let init = move || -> Result<Self> {
-			Ok(Self {
-				no_tls_validation_host_regex: config
-					.insecure_skip_tls_validation_for_servers
-					.clone(),
-				default: base(config)?
-					.dns_resolver(resolver.resolver.clone())
-					.build()?,
+		Ok(Arc::new(Self {
+			no_tls_validation_host_regex: config.insecure_skip_tls_validation_for_servers.clone(),
+			default: base(config)?
+				.dns_resolver(resolver.resolver.clone())
+				.build()?,
 
-				url_preview: base(config)
-					.and_then(|builder| {
-						builder_interface(builder, url_preview_bind_iface.as_deref())
-					})?
-					.local_address(url_preview_bind_addr)
-					.dns_resolver(resolver.resolver.clone())
-					.timeout(Duration::from_secs(config.url_preview_timeout))
-					.redirect(redirect::Policy::limited(3))
-					.user_agent(url_preview_user_agent)
-					.build()?,
+			url_preview: base(config)
+				.and_then(|builder| {
+					builder_interface(builder, url_preview_bind_iface.as_deref())
+				})?
+				.local_address(url_preview_bind_addr)
+				.dns_resolver(resolver.resolver.clone())
+				.timeout(Duration::from_secs(config.url_preview_timeout))
+				.redirect(redirect::Policy::limited(3))
+				.user_agent(url_preview_user_agent.clone())
+				.build()?,
 
-				extern_media: base(config)?
-					.dns_resolver(resolver.resolver.clone())
-					.redirect(redirect::Policy::limited(3))
-					.build()?,
+			extern_media: base(config)?
+				.dns_resolver(resolver.resolver.clone())
+				.redirect(redirect::Policy::limited(3))
+				.build()?,
 
-				well_known: base(config)?
-					.dns_resolver(resolver.resolver.clone())
-					.connect_timeout(Duration::from_secs(config.well_known_conn_timeout))
-					.read_timeout(Duration::from_secs(config.well_known_timeout))
-					.timeout(Duration::from_secs(config.well_known_timeout))
-					.pool_max_idle_per_host(0)
-					.redirect(redirect::Policy::limited(4))
-					.build()?,
+			well_known: base(config)?
+				.dns_resolver(resolver.resolver.clone())
+				.connect_timeout(Duration::from_secs(config.well_known_conn_timeout))
+				.read_timeout(Duration::from_secs(config.well_known_timeout))
+				.timeout(Duration::from_secs(config.well_known_timeout))
+				.pool_max_idle_per_host(0)
+				.redirect(redirect::Policy::limited(4))
+				.build()?,
 
-				federation: base(config)?
-					.dns_resolver(resolver.resolver.hooked.clone())
-					.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
-					.read_timeout(Duration::from_secs(config.federation_timeout))
-					.timeout(Duration::from_secs(
-						config
-							.federation_timeout
-							.saturating_add(config.federation_conn_timeout),
-					))
-					.pool_max_idle_per_host(config.federation_idle_per_host.into())
-					.pool_idle_timeout(Duration::from_secs(config.federation_idle_timeout))
-					.redirect(redirect::Policy::limited(3))
-					.build()?,
+			federation: base(config)?
+				.dns_resolver(resolver.resolver.hooked.clone())
+				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
+				.read_timeout(Duration::from_secs(config.federation_timeout))
+				.timeout(Duration::from_secs(
+					config
+						.federation_timeout
+						.saturating_add(config.federation_conn_timeout),
+				))
+				.pool_max_idle_per_host(config.federation_idle_per_host.into())
+				.pool_idle_timeout(Duration::from_secs(config.federation_idle_timeout))
+				.redirect(redirect::Policy::limited(3))
+				.build()?,
 
-				synapse: base(config)?
-					.dns_resolver(resolver.resolver.hooked.clone())
-					.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
-					.read_timeout(Duration::from_secs(
-						config.federation_timeout.saturating_mul(6),
-					))
-					.timeout(Duration::from_secs(
-						config
-							.federation_timeout
-							.saturating_mul(6)
-							.saturating_add(config.federation_conn_timeout),
-					))
-					.pool_max_idle_per_host(0)
-					.redirect(redirect::Policy::limited(3))
-					.build()?,
+			synapse: base(config)?
+				.dns_resolver(resolver.resolver.hooked.clone())
+				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
+				.read_timeout(Duration::from_secs(config.federation_timeout.saturating_mul(6)))
+				.timeout(Duration::from_secs(
+					config
+						.federation_timeout
+						.saturating_mul(6)
+						.saturating_add(config.federation_conn_timeout),
+				))
+				.pool_max_idle_per_host(0)
+				.redirect(redirect::Policy::limited(3))
+				.build()?,
 
-				sender: base(config)?
-					.dns_resolver(resolver.resolver.hooked.clone())
-					.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
-					.read_timeout(Duration::from_secs(config.sender_timeout))
-					.timeout(Duration::from_secs(config.sender_timeout))
-					.pool_max_idle_per_host(1)
-					.pool_idle_timeout(Duration::from_secs(config.sender_idle_timeout))
-					.redirect(redirect::Policy::limited(2))
-					.build()?,
+			sender: base(config)?
+				.dns_resolver(resolver.resolver.hooked.clone())
+				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
+				.read_timeout(Duration::from_secs(config.sender_timeout))
+				.timeout(Duration::from_secs(config.sender_timeout))
+				.pool_max_idle_per_host(1)
+				.pool_idle_timeout(Duration::from_secs(config.sender_idle_timeout))
+				.redirect(redirect::Policy::limited(2))
+				.build()?,
 
-				appservice: base(config)?
-					.dns_resolver(resolver.resolver.clone())
-					.connect_timeout(Duration::from_secs(5))
-					.read_timeout(Duration::from_secs(config.appservice_timeout))
-					.timeout(Duration::from_secs(config.appservice_timeout))
-					.pool_max_idle_per_host(1)
-					.pool_idle_timeout(Duration::from_secs(config.appservice_idle_timeout))
-					.redirect(redirect::Policy::limited(2))
-					.build()?,
+			appservice: base(config)?
+				.dns_resolver(resolver.resolver.clone())
+				.connect_timeout(Duration::from_secs(5))
+				.read_timeout(Duration::from_secs(config.appservice_timeout))
+				.timeout(Duration::from_secs(config.appservice_timeout))
+				.pool_max_idle_per_host(1)
+				.pool_idle_timeout(Duration::from_secs(config.appservice_idle_timeout))
+				.redirect(redirect::Policy::limited(2))
+				.build()?,
 
-				pusher: base(config)?
-					.dns_resolver(resolver.resolver.clone())
-					.connect_timeout(Duration::from_secs(config.pusher_conn_timeout))
-					.timeout(Duration::from_secs(config.pusher_timeout))
-					.pool_max_idle_per_host(1)
-					.pool_idle_timeout(Duration::from_secs(config.pusher_idle_timeout))
-					.redirect(redirect::Policy::limited(2))
-					.build()?,
+			pusher: base(config)?
+				.dns_resolver(resolver.resolver.clone())
+				.connect_timeout(Duration::from_secs(config.pusher_conn_timeout))
+				.timeout(Duration::from_secs(config.pusher_timeout))
+				.pool_max_idle_per_host(1)
+				.pool_idle_timeout(Duration::from_secs(config.pusher_idle_timeout))
+				.redirect(redirect::Policy::limited(2))
+				.build()?,
 
-				// insecure versions of the clients above
-				default_no_tls_validation: base(config)?
-					.danger_accept_invalid_certs(true)
-					.dns_resolver(resolver.resolver.clone())
-					.build()?,
+			// insecure versions of the clients above
+			default_no_tls_validation: base(config)?
+				.danger_accept_invalid_certs(true)
+				.dns_resolver(resolver.resolver.clone())
+				.build()?,
 
-				url_preview_no_tls_validation: base(config)
-					.and_then(|builder| {
-						builder_interface(builder, url_preview_bind_iface.as_deref())
-					})?
-					.danger_accept_invalid_certs(true)
-					.local_address(url_preview_bind_addr)
-					.dns_resolver(resolver.resolver.clone())
-					.timeout(Duration::from_secs(config.url_preview_timeout))
-					.redirect(redirect::Policy::limited(3))
-					.build()?,
+			url_preview_no_tls_validation: base(config)
+				.and_then(|builder| {
+					builder_interface(builder, url_preview_bind_iface.as_deref())
+				})?
+				.danger_accept_invalid_certs(true)
+				.local_address(url_preview_bind_addr)
+				.dns_resolver(resolver.resolver.clone())
+				.timeout(Duration::from_secs(config.url_preview_timeout))
+				.redirect(redirect::Policy::limited(3))
+				.user_agent(url_preview_user_agent)
+				.build()?,
 
-				extern_media_no_tls_validation: base(config)?
-					.danger_accept_invalid_certs(true)
-					.dns_resolver(resolver.resolver.clone())
-					.redirect(redirect::Policy::limited(3))
-					.build()?,
+			extern_media_no_tls_validation: base(config)?
+				.danger_accept_invalid_certs(true)
+				.dns_resolver(resolver.resolver.clone())
+				.redirect(redirect::Policy::limited(3))
+				.build()?,
 
-				well_known_no_tls_validation: base(config)?
-					.danger_accept_invalid_certs(true)
-					.dns_resolver(resolver.resolver.clone())
-					.connect_timeout(Duration::from_secs(config.well_known_conn_timeout))
-					.read_timeout(Duration::from_secs(config.well_known_timeout))
-					.timeout(Duration::from_secs(config.well_known_timeout))
-					.pool_max_idle_per_host(0)
-					.redirect(redirect::Policy::limited(4))
-					.build()?,
+			well_known_no_tls_validation: base(config)?
+				.danger_accept_invalid_certs(true)
+				.dns_resolver(resolver.resolver.clone())
+				.connect_timeout(Duration::from_secs(config.well_known_conn_timeout))
+				.read_timeout(Duration::from_secs(config.well_known_timeout))
+				.timeout(Duration::from_secs(config.well_known_timeout))
+				.pool_max_idle_per_host(0)
+				.redirect(redirect::Policy::limited(4))
+				.build()?,
 
-				federation_no_tls_validation: base(config)?
-					.danger_accept_invalid_certs(true)
-					.dns_resolver(resolver.resolver.hooked.clone())
-					.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
-					.read_timeout(Duration::from_secs(config.federation_timeout))
-					.timeout(Duration::from_secs(
-						config
-							.federation_timeout
-							.saturating_add(config.federation_conn_timeout),
-					))
-					.pool_max_idle_per_host(config.federation_idle_per_host.into())
-					.pool_idle_timeout(Duration::from_secs(config.federation_idle_timeout))
-					.redirect(redirect::Policy::limited(3))
-					.build()?,
+			federation_no_tls_validation: base(config)?
+				.danger_accept_invalid_certs(true)
+				.dns_resolver(resolver.resolver.hooked.clone())
+				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
+				.read_timeout(Duration::from_secs(config.federation_timeout))
+				.timeout(Duration::from_secs(
+					config
+						.federation_timeout
+						.saturating_add(config.federation_conn_timeout),
+				))
+				.pool_max_idle_per_host(config.federation_idle_per_host.into())
+				.pool_idle_timeout(Duration::from_secs(config.federation_idle_timeout))
+				.redirect(redirect::Policy::limited(3))
+				.build()?,
 
-				synapse_no_tls_validation: base(config)?
-					.danger_accept_invalid_certs(true)
-					.dns_resolver(resolver.resolver.hooked.clone())
-					.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
-					.read_timeout(Duration::from_secs(
-						config.federation_timeout.saturating_mul(6),
-					))
-					.timeout(Duration::from_secs(
-						config
-							.federation_timeout
-							.saturating_mul(6)
-							.saturating_add(config.federation_conn_timeout),
-					))
-					.pool_max_idle_per_host(0)
-					.redirect(redirect::Policy::limited(3))
-					.build()?,
+			synapse_no_tls_validation: base(config)?
+				.danger_accept_invalid_certs(true)
+				.dns_resolver(resolver.resolver.hooked.clone())
+				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
+				.read_timeout(Duration::from_secs(config.federation_timeout.saturating_mul(6)))
+				.timeout(Duration::from_secs(
+					config
+						.federation_timeout
+						.saturating_mul(6)
+						.saturating_add(config.federation_conn_timeout),
+				))
+				.pool_max_idle_per_host(0)
+				.redirect(redirect::Policy::limited(3))
+				.build()?,
 
-				sender_no_tls_validation: base(config)?
-					.danger_accept_invalid_certs(true)
-					.dns_resolver(resolver.resolver.hooked.clone())
-					.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
-					.read_timeout(Duration::from_secs(config.sender_timeout))
-					.timeout(Duration::from_secs(config.sender_timeout))
-					.pool_max_idle_per_host(1)
-					.pool_idle_timeout(Duration::from_secs(config.sender_idle_timeout))
-					.redirect(redirect::Policy::limited(2))
-					.build()?,
+			sender_no_tls_validation: base(config)?
+				.danger_accept_invalid_certs(true)
+				.dns_resolver(resolver.resolver.hooked.clone())
+				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
+				.read_timeout(Duration::from_secs(config.sender_timeout))
+				.timeout(Duration::from_secs(config.sender_timeout))
+				.pool_max_idle_per_host(1)
+				.pool_idle_timeout(Duration::from_secs(config.sender_idle_timeout))
+				.redirect(redirect::Policy::limited(2))
+				.build()?,
 
-				appservice_no_tls_validation: base(config)?
-					.danger_accept_invalid_certs(true)
-					.dns_resolver(resolver.resolver.clone())
-					.connect_timeout(Duration::from_secs(5))
-					.read_timeout(Duration::from_secs(config.appservice_timeout))
-					.timeout(Duration::from_secs(config.appservice_timeout))
-					.pool_max_idle_per_host(1)
-					.pool_idle_timeout(Duration::from_secs(config.appservice_idle_timeout))
-					.redirect(redirect::Policy::limited(2))
-					.build()?,
+			appservice_no_tls_validation: base(config)?
+				.danger_accept_invalid_certs(true)
+				.dns_resolver(resolver.resolver.clone())
+				.connect_timeout(Duration::from_secs(5))
+				.read_timeout(Duration::from_secs(config.appservice_timeout))
+				.timeout(Duration::from_secs(config.appservice_timeout))
+				.pool_max_idle_per_host(1)
+				.pool_idle_timeout(Duration::from_secs(config.appservice_idle_timeout))
+				.redirect(redirect::Policy::limited(2))
+				.build()?,
 
-				pusher_no_tls_validation: base(config)?
-					.danger_accept_invalid_certs(true)
-					.dns_resolver(resolver.resolver.clone())
-					.connect_timeout(Duration::from_secs(config.pusher_conn_timeout))
-					.timeout(Duration::from_secs(config.pusher_timeout))
-					.pool_max_idle_per_host(1)
-					.pool_idle_timeout(Duration::from_secs(config.pusher_idle_timeout))
-					.redirect(redirect::Policy::limited(2))
-					.build()?,
+			pusher_no_tls_validation: base(config)?
+				.danger_accept_invalid_certs(true)
+				.dns_resolver(resolver.resolver.clone())
+				.connect_timeout(Duration::from_secs(config.pusher_conn_timeout))
+				.timeout(Duration::from_secs(config.pusher_timeout))
+				.pool_max_idle_per_host(1)
+				.pool_idle_timeout(Duration::from_secs(config.pusher_idle_timeout))
+				.redirect(redirect::Policy::limited(2))
+				.build()?,
 
-				cidr_range_denylist,
-			})
-		};
-
-		Box::pin(async move { Ok(Arc::new(init()?)) })
-			.now_or_never()
-			.expect("not actually async")
+			cidr_range_denylist,
+		}))
 	}
 
 	fn name(&self) -> &str { service::make_name(std::module_path!()) }

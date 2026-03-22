@@ -288,8 +288,9 @@ async fn handle_location(
 
 #[implement(super::Service)]
 async fn location_request(&self, location: &str) -> Result<FileMeta> {
-	let url = reqwest::Url::parse(location)
-		.expect("service->media->remote->location_request: invalid url");
+	let url = reqwest::Url::parse(location).map_err(|error| {
+		err!(Request(NotFound(debug_warn!(?location, ?error, "Invalid media location URL"))))
+	})?;
 	let response = self
 		.services
 		.client
