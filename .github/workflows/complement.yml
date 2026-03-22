@@ -84,7 +84,7 @@ jobs:
         uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ${{ matrix.os }}
-          arch: ${{ matrix.prebuilt_arch || steps.cpu.outputs.target }}
+          arch: ${{ matrix.prebuilt_arch != '' && matrix.prebuilt_arch || steps.cpu.outputs.target }}
 
       - name: Install Rust toolchain
         run: rustup show
