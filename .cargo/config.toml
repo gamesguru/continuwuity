@@ -17,7 +17,7 @@ LD_LIBRARY_PATH = { value = "/usr/local/lib", force = false }
 linker = "clang"
 rustflags = [
     # "-C", "split-debuginfo=unpacked",
-    "-C", "prefer-dynamic",
+    # "-C", "prefer-dynamic",
     "-C", "link-arg=-fuse-ld=mold",
     "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
 ]
@@ -27,7 +27,7 @@ rustflags = [
 linker = "clang"
 rustflags = [
     # "-C", "split-debuginfo=unpacked",
-    "-C", "prefer-dynamic",
+    # "-C", "prefer-dynamic",
     "-C", "link-arg=-fuse-ld=mold",
     "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
 ]
