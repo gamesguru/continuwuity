@@ -227,6 +227,12 @@
 # NXDOMAIN's are assumed to not be returning to the federation and
 # aggressively cached rather than constantly rechecked.
 #
+# Note: For massive system-level bandwidth savings, it's highly recommended
+# you install a dedicated localized caching resolver explicitly on your host
+# (such as Unbound, dnsmasq, or systemd-resolved) rather than forwarding
+# directly to public resolvers (like 1.1.1.1). This ensures aggressive
+# NXDomain/NoData lookups are caught efficiently at the OS level.
+#
 # Defaults to 3 days as these are *very rarely* false negatives.
 #
 #dns_min_ttl_nxdomain = 259200
@@ -732,6 +738,12 @@
 #trusted_server_batch_size = 1024
 
 # Max log level for continuwuity. Allows debug, info, warn, or error.
+#
+# You can append specific module filters or custom targets to this string
+# to selectively elevate or demote logs using the RUST_LOG syntax.
+# For example, noisy federation networking events are hidden (opt-in) by
+# default. To view them alongside the standard "info" logs, you can use:
+# log = "info,federation=debug"
 #
 # See also:
 # https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
