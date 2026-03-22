@@ -261,7 +261,6 @@ jobs:
         run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ steps.config.outputs.profile }} --features ${{ steps.config.outputs.features }} --target ${{ matrix.target }}"
 
       - name: Sanity check binary
-        continue-on-error: true
         env:
           LD_LIBRARY_PATH: /usr/local/lib
         run: |
