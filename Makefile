@@ -341,6 +341,28 @@ GH_REPO ?=
 
 GH_CACHE_KEY ?=
 
+PREBUILT_TAG ?= prebuilts-v0.5
+
+.PHONY: download/prebuilts
+download/prebuilts: ##H Download prebuilt libraries from GitHub Release
+	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
+	@test "$(CPU_TARGET)" || (echo "ERROR: CPU_TARGET is not set (e.g. x86-64-v3). Add CPU_TARGET=... to .env" && exit 1)
+	@test "$(OS_VERSION)" || (echo "ERROR: OS_VERSION is not set (e.g. ubuntu-24.04). Add OS_VERSION=... to .env" && exit 1)
+	@echo "Downloading prebuilts for $(CPU_TARGET) on $(OS_VERSION) from $(PREBUILT_TAG)..."
+	@mkdir -p .tmp/prebuilts && rm -rf .tmp/prebuilts/*
+	@if gh release download $(PREBUILT_TAG) -R $(GH_REPO) -p "*-$(CPU_TARGET)-$(OS_VERSION).tar.gz" -D .tmp/prebuilts --clobber; then \
+		for f in .tmp/prebuilts/*.tar.gz; do \
+			echo "Extracting $$f to /usr/local..."; \
+			sudo tar -xzvf "$$f" -C /usr/local; \
+		done; \
+		sudo ldconfig; \
+		echo "Prebuilts installed."; \
+	else \
+		echo "ERROR: Failed to download prebuilts. Check tag, repo, and pattern."; \
+		exit 1; \
+	fi
+	@rm -rf .tmp/prebuilts
+
 .PHONY: download/clear-cache
 download/clear-cache: ##H Delete GitHub Actions caches
 	# Testing you have explicitly set GH_CACHE_KEY

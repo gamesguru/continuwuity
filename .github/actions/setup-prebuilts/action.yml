@@ -10,7 +10,7 @@ inputs:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
   arch:
-    description: "Target architecture tag (e.g. x86-64-v3, x86-64-v4, arm64-cortex-a76)"
+    description: "Target architecture tag (e.g. x86-64-v2, x86-64-v3, x86-64-v4, arm64-generic, arm64-cortex-a76)"
     required: true
 
 runs:

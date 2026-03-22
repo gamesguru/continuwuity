@@ -56,7 +56,7 @@ jobs:
 
           check_dep() {
             local dep="$1" version="$2" matrix="[]"
-            for arch in x86-64-v2 x86-64-v3 x86-64-v4 arm64-cortex-a76; do
+            for arch in x86-64-v2 x86-64-v3 x86-64-v4 arm64-generic arm64-cortex-a76; do
               for os in ubuntu-22.04 ubuntu-24.04; do
                 local filename="${dep}-${version}-${arch}-${os}.tar.gz"
                 if ! echo "$EXISTING" | grep -qF "$filename"; then
@@ -107,6 +107,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -165,6 +167,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -223,6 +227,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -279,6 +285,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
