@@ -227,11 +227,12 @@
 # NXDOMAIN's are assumed to not be returning to the federation and
 # aggressively cached rather than constantly rechecked.
 #
-# Note: For massive system-level bandwidth savings, it's highly recommended
-# you install a dedicated localized caching resolver explicitly on your host
-# (such as Unbound, dnsmasq, or systemd-resolved) rather than forwarding
-# directly to public resolvers (like 1.1.1.1). This ensures aggressive
-# NXDomain/NoData lookups are caught efficiently at the OS level.
+# Note: For massive system-level bandwidth savings, it's highly
+# recommended you install a dedicated localized caching resolver
+# explicitly on your host (such as Unbound, dnsmasq, or systemd-resolved)
+# rather than forwarding directly to public resolvers (like 1.1.1.1).
+# This ensures aggressive NXDomain/NoData lookups are caught efficiently
+# at the OS level.
 #
 # Defaults to 3 days as these are *very rarely* false negatives.
 #

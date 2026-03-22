@@ -215,13 +215,13 @@ fn handle_error(
 ) -> Result {
 	if e.is_timeout() {
 		e = e.without_url();
-		info!(%method, %url, "Federation request to {dest} timed out: {e:?}");
+		debug!(target: "federation", %method, %url, "Federation request to {dest} timed out: {e:?}");
 		return Err(Error::FederationTimeout(dest.to_owned()));
 	}
 
 	if e.is_connect() {
 		e = e.without_url();
-		info!(%dest, %method, %url, "Federation connection failed: {e:?}");
+		debug!(target: "federation", %dest, %method, %url, "Federation connection failed: {e:?}");
 		return Err(Error::FederationConnection(dest.to_owned()));
 	}
 
