@@ -198,10 +198,32 @@ jobs:
           echo "pass=$PASS" >> "$GITHUB_OUTPUT"
           echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-          echo "total=$total" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
           echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
           echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
+
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Complement Test Results (\${{ matrix.arch }} \${{ matrix.os }})
+          | Status | Count |
+          |--------|-------|
+          | ✓ Pass | $PASS |
+          | ✗ Fail | $FAIL |
+          | ⌒ Skip | $SKIP |
+          | **Total** | **$TOTAL** |
+          EOF
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$FAILED_TESTS" ]; then
+            echo "<details><summary>Failed Tests ($FAIL)</summary>" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`text" >> "$GITHUB_STEP_SUMMARY"
+            echo "$FAILED_TESTS" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No failing tests recorded." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Get conduwuit version
         id: version
