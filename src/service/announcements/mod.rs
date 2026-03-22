@@ -133,7 +133,11 @@ impl Service {
 		let response = self
 			.services
 			.client
-			.default
+			.get_client(
+				&client::ClientType::Default,
+				&reqwest::Url::parse(CHECK_FOR_ANNOUNCEMENTS_URL)
+					.expect("Cant parse static string 'CHECK_FOR_ANNOUNCEMENT_URL'"),
+			)
 			.get(CHECK_FOR_ANNOUNCEMENTS_URL)
 			.send()
 			.await?

@@ -1,8 +1,8 @@
 use std::fmt::Write;
 
-use conduwuit::{Err, Result, utils::response::LimitReadExt};
+use conduwuit::{Err, Result};
 use futures::StreamExt;
-use ruma::{OwnedRoomId, OwnedServerName, OwnedUserId};
+use ruma::{OwnedRoomId, OwnedServerName, OwnedUserId, api::client::discovery::discover_support};
 
 use crate::{admin_command, get_room_info};
 
@@ -47,50 +47,20 @@ pub(super) async fn incoming_federation(&self) -> Result {
 
 #[admin_command]
 pub(super) async fn fetch_support_well_known(&self, server_name: OwnedServerName) -> Result {
+	let request = discover_support::Request {};
 	let response = self
 		.services
-		.client
-		.default
-		.get(format!("https://{server_name}/.well-known/matrix/support"))
-		.send()
+		.federation
+		.execute_synapse(&server_name, request)
 		.await?;
-
-	let text = response
-		.limit_read_text(
-			self.services
-				.config
-				.max_request_size
-				.try_into()
-				.expect("u64 fits into usize"),
-		)
-		.await?;
-
-	if text.is_empty() {
-		return Err!("Response text/body is empty.");
-	}
-
-	if text.len() > 1500 {
-		return Err!(
-			"Response text/body is over 1500 characters, assuming no support well-known.",
-		);
-	}
-
-	let json: serde_json::Value = match serde_json::from_str(&text) {
-		| Ok(json) => json,
-		| Err(_) => {
-			return Err!("Response text/body is not valid JSON.",);
-		},
-	};
-
-	let pretty_json: String = match serde_json::to_string_pretty(&json) {
-		| Ok(json) => json,
-		| Err(_) => {
-			return Err!("Response text/body is not valid JSON.",);
-		},
-	};
-
-	self.write_str(&format!("Got JSON response:\n\n```json\n{pretty_json}\n```"))
-		.await
+	// simple unwrap since this info got extracted from json so unless theres a bug
+	// in the extractor this will always succeed
+	let contacts = serde_json::to_string_pretty(&response.contacts).unwrap();
+	let support_page = serde_json::to_string_pretty(&response.support_page).unwrap();
+	self.write_str(&format!(
+		"Got response:\n\n```\nContacts: {contacts}\nSupport Page: {support_page}\n```"
+	))
+	.await
 }
 
 #[admin_command]

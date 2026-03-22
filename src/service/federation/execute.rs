@@ -7,7 +7,7 @@ use conduwuit::{
 };
 use http::{HeaderValue, header::AUTHORIZATION};
 use ipaddress::IPAddress;
-use reqwest::{Client, Method, Request, Response, Url};
+use reqwest::{Method, Request, Response, Url};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, ServerName, ServerSigningKeyId,
 	api::{
@@ -17,7 +17,7 @@ use ruma::{
 	serde::Base64,
 };
 
-use crate::resolver::actual::ActualDest;
+use crate::{client::ClientType, resolver::actual::ActualDest};
 
 /// Sends a request to a federation server
 #[implement(super::Service)]
@@ -26,8 +26,8 @@ pub async fn execute<T>(&self, dest: &ServerName, request: T) -> Result<T::Incom
 where
 	T: OutgoingRequest + Debug + Send,
 {
-	let client = &self.services.client.federation;
-	self.execute_on(client, dest, request).await
+	self.execute_on(&ClientType::Federation, dest, request)
+		.await
 }
 
 /// Like execute() but with a very large timeout
@@ -41,8 +41,7 @@ pub async fn execute_synapse<T>(
 where
 	T: OutgoingRequest + Debug + Send,
 {
-	let client = &self.services.client.synapse;
-	self.execute_on(client, dest, request).await
+	self.execute_on(&ClientType::Synapse, dest, request).await
 }
 
 #[implement(super::Service)]
@@ -53,7 +52,7 @@ where
 	)]
 pub async fn execute_on<T>(
 	&self,
-	client: &Client,
+	client: &ClientType,
 	dest: &ServerName,
 	request: T,
 ) -> Result<T::IncomingResponse>
@@ -80,7 +79,7 @@ async fn perform<T>(
 	dest: &ServerName,
 	actual: &ActualDest,
 	request: Request,
-	client: &Client,
+	client_type: &ClientType,
 ) -> Result<T::IncomingResponse>
 where
 	T: OutgoingRequest + Send,
@@ -89,6 +88,7 @@ where
 	let method = request.method().clone();
 
 	debug!(%method, %url, "Sending request");
+	let client = self.services.client.get_client(client_type, &url);
 	match client.execute(request).await {
 		| Ok(response) =>
 			self.handle_response::<T>(dest, actual, &method, &url, response)

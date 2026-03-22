@@ -15,7 +15,6 @@ use ipaddress::IPAddress;
 #[cfg(feature = "url_preview")]
 use ruma::OwnedMxcUri;
 use serde::Serialize;
-use url::Url;
 
 use super::Service;
 
@@ -65,7 +64,7 @@ pub async fn set_url_preview(&self, url: &str, data: &UrlPreviewData) -> Result<
 }
 
 #[implement(Service)]
-pub async fn get_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
+pub async fn get_url_preview(&self, url: &reqwest::Url) -> Result<UrlPreviewData> {
 	if let Ok(preview) = self.db.get_url_preview(url.as_str()).await {
 		return Ok(preview);
 	}
@@ -80,15 +79,20 @@ pub async fn get_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 }
 
 #[implement(Service)]
-async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
+async fn request_url_preview(&self, url: &reqwest::Url) -> Result<UrlPreviewData> {
 	if let Ok(ip) = IPAddress::parse(url.host_str().expect("URL previously validated")) {
 		if !self.services.client.valid_cidr_range(&ip) {
 			return Err!(Request(Forbidden("Requesting from this address is forbidden")));
 		}
 	}
 
-	let client = &self.services.client.url_preview;
-	let response = client.head(url.as_str()).send().await?;
+	let response = self
+		.services
+		.client
+		.get_client(&crate::client::ClientType::UrlPreview, url)
+		.head(url.as_str())
+		.send()
+		.await?;
 
 	debug!(%url, "URL preview response headers: {:?}", response.headers());
 
@@ -111,10 +115,10 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 		.map_err(|e| err!(Request(Unknown("Unknown or invalid Content-Type header: {e}"))))?;
 
 	let data = match content_type {
-		| html if html.starts_with("text/html") => self.download_html(url.as_str()).await?,
-		| img if img.starts_with("image/") => self.download_image(url.as_str(), None).await?,
-		| video if video.starts_with("video/") => self.download_video(url.as_str(), None).await?,
-		| audio if audio.starts_with("audio/") => self.download_audio(url.as_str(), None).await?,
+		| html if html.starts_with("text/html") => self.download_html(url).await?,
+		| img if img.starts_with("image/") => self.download_image(url, None).await?,
+		| video if video.starts_with("video/") => self.download_video(url, None).await?,
+		| audio if audio.starts_with("audio/") => self.download_audio(url, None).await?,
 		| _ => return Err!(Request(Unknown("Unsupported Content-Type"))),
 	};
 
@@ -127,7 +131,7 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 #[implement(Service)]
 pub async fn download_image(
 	&self,
-	url: &str,
+	url: &reqwest::Url,
 	preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	use conduwuit::utils::random_string;
@@ -139,8 +143,8 @@ pub async fn download_image(
 	let image = self
 		.services
 		.client
-		.url_preview
-		.get(url)
+		.get_client(&crate::client::ClientType::UrlPreview, url)
+		.get(url.to_owned())
 		.send()
 		.await?
 		.limit_read(
@@ -152,7 +156,6 @@ pub async fn download_image(
 				.expect("u64 should fit in usize"),
 		)
 		.await?;
-
 	let mxc = Mxc {
 		server_name: self.services.globals.server_name(),
 		media_id: &random_string(super::MXC_LENGTH),
@@ -182,7 +185,7 @@ pub async fn download_image(
 #[implement(Service)]
 pub async fn download_video(
 	&self,
-	url: &str,
+	url: &reqwest::Url,
 	preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	let mut preview_data = preview_data.unwrap_or_default();
@@ -200,7 +203,7 @@ pub async fn download_video(
 #[implement(Service)]
 pub async fn download_audio(
 	&self,
-	url: &str,
+	url: &reqwest::Url,
 	preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	let mut preview_data = preview_data.unwrap_or_default();
@@ -216,12 +219,18 @@ pub async fn download_audio(
 
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
-pub async fn download_media(&self, url: &str) -> Result<(OwnedMxcUri, usize)> {
+pub async fn download_media(&self, url: &reqwest::Url) -> Result<(OwnedMxcUri, usize)> {
 	use conduwuit::utils::random_string;
 	use http::header::CONTENT_TYPE;
 	use ruma::Mxc;
 
-	let response = self.services.client.url_preview.get(url).send().await?;
+	let response = self
+		.services
+		.client
+		.get_client(&crate::client::ClientType::UrlPreview, url)
+		.get(url.to_owned())
+		.send()
+		.await?;
 	let content_type = response.headers().get(CONTENT_TYPE).cloned();
 	let media = response
 		.limit_read(
@@ -250,7 +259,7 @@ pub async fn download_media(&self, url: &str) -> Result<(OwnedMxcUri, usize)> {
 #[implement(Service)]
 pub async fn download_image(
 	&self,
-	_url: &str,
+	_url: &reqwest::Url,
 	_preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
@@ -260,7 +269,7 @@ pub async fn download_image(
 #[implement(Service)]
 pub async fn download_video(
 	&self,
-	_url: &str,
+	_url: &reqwest::Url,
 	_preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
@@ -270,7 +279,7 @@ pub async fn download_video(
 #[implement(Service)]
 pub async fn download_audio(
 	&self,
-	_url: &str,
+	_url: &reqwest::Url,
 	_preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
@@ -278,47 +287,55 @@ pub async fn download_audio(
 
 #[cfg(not(feature = "url_preview"))]
 #[implement(Service)]
-pub async fn download_media(&self, _url: &str) -> Result<UrlPreviewData> {
+pub async fn download_media(&self, _url: &reqwest::Url) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
 }
 
 #[cfg(feature = "url_preview")]
 #[implement(Service)]
-async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
+async fn download_html(&self, url: &reqwest::Url) -> Result<UrlPreviewData> {
 	use webpage::HTML;
 
-	let client = &self.services.client.url_preview;
-	let body = client
-		.get(url)
+	let body = self
+		.services
+		.client
+		.get_client(&crate::client::ClientType::UrlPreview, url)
+		.get(url.to_owned())
 		.send()
 		.await?
 		.limit_read_text(
 			self.services
-				.server
-				.config
-				.max_request_size
+				.globals
+				.url_preview_max_spider_size()
 				.try_into()
 				.expect("u64 should fit in usize"),
 		)
 		.await?;
-	let Ok(html) = HTML::from_string(body.clone(), Some(url.to_owned())) else {
+
+	let Ok(html) = HTML::from_string(body, Some(url.to_string())) else {
 		return Err!(Request(Unknown("Failed to parse HTML")));
 	};
 
 	let mut preview_data = UrlPreviewData::default();
 
 	if let Some(obj) = html.opengraph.images.first() {
-		preview_data = self.download_image(&obj.url, Some(preview_data)).await?;
+		if let Ok(url) = reqwest::Url::parse(&obj.url) {
+			preview_data = self.download_image(&url, Some(preview_data)).await?;
+		}
 	}
 
 	if let Some(obj) = html.opengraph.videos.first() {
-		preview_data = self.download_video(&obj.url, Some(preview_data)).await?;
-		preview_data.video_width = obj.properties.get("width").and_then(|v| v.parse().ok());
-		preview_data.video_height = obj.properties.get("height").and_then(|v| v.parse().ok());
+		if let Ok(url) = reqwest::Url::parse(&obj.url) {
+			preview_data = self.download_video(&url, Some(preview_data)).await?;
+			preview_data.video_width = obj.properties.get("width").and_then(|v| v.parse().ok());
+			preview_data.video_height = obj.properties.get("height").and_then(|v| v.parse().ok());
+		}
 	}
 
 	if let Some(obj) = html.opengraph.audios.first() {
-		preview_data = self.download_audio(&obj.url, Some(preview_data)).await?;
+		if let Ok(url) = reqwest::Url::parse(&obj.url) {
+			preview_data = self.download_audio(&url, Some(preview_data)).await?;
+		}
 	}
 
 	let props = html.opengraph.properties;
@@ -332,12 +349,12 @@ async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
 
 #[cfg(not(feature = "url_preview"))]
 #[implement(Service)]
-async fn download_html(&self, _url: &str) -> Result<UrlPreviewData> {
+async fn download_html(&self, _url: &reqwest::Url) -> Result<UrlPreviewData> {
 	Err!(FeatureDisabled("url_preview"))
 }
 
 #[implement(Service)]
-pub fn url_preview_allowed(&self, url: &Url) -> bool {
+pub fn url_preview_allowed(&self, url: &reqwest::Url) -> bool {
 	if ["http", "https"]
 		.iter()
 		.all(|&scheme| scheme != url.scheme().to_lowercase())
