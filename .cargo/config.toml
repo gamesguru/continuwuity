@@ -18,7 +18,7 @@ linker = "clang"
 rustflags = [
     "-C", "split-debuginfo=unpacked",
     "-C", "prefer-dynamic",
-    "-Z", "linker-features=-lld",
+    "-C", "link-arg=-fuse-ld=mold",
     "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
 ]
 
@@ -28,6 +28,6 @@ linker = "clang"
 rustflags = [
     "-C", "split-debuginfo=unpacked",
     "-C", "prefer-dynamic",
-    "-Z", "linker-features=-lld",
+    "-C", "link-arg=-fuse-ld=mold",
     "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
 ]
