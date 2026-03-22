@@ -92,9 +92,17 @@ impl Console {
 		debug!("session starting");
 
 		self.output
-			.print_inline(&format!("**conduwuit {}** admin console\n", conduwuit::version()));
+			.write_inline_on(
+				&mut std::io::stdout(),
+				&format!("**conduwuit {}** admin console\n", conduwuit::version()),
+			)
+			.ok();
 		self.output
-			.print_text("\"help\" for help, ^D to exit the console, ^\\ to stop the server\n");
+			.write_text_on(
+				&mut std::io::stdout(),
+				"\"help\" for help, ^D to exit the console, ^\\ to stop the server\n",
+			)
+			.ok();
 
 		while self.server.running() {
 			match self.readline().await {
@@ -176,11 +184,15 @@ impl Console {
 
 	fn output_err(self: Arc<Self>, output_content: &RoomMessageEventContent) {
 		let output = configure_output_err(self.output.clone());
-		output.print_text(output_content.body());
+		output
+			.write_text_on(&mut std::io::stdout(), output_content.body())
+			.ok();
 	}
 
 	fn output(self: Arc<Self>, output_content: &RoomMessageEventContent) {
-		self.output.print_text(output_content.body());
+		self.output
+			.write_text_on(&mut std::io::stdout(), output_content.body())
+			.ok();
 	}
 
 	fn set_history(&self, readline: &mut Readline) {
@@ -207,12 +219,12 @@ impl Console {
 /// Standalone/static markdown printer for errors.
 pub fn print_err(markdown: &str) {
 	let output = configure_output_err(MadSkin::default_dark());
-	output.print_text(markdown);
+	output.write_text_on(&mut std::io::stdout(), markdown).ok();
 }
 /// Standalone/static markdown printer.
 pub fn print(markdown: &str) {
 	let output = configure_output(MadSkin::default_dark());
-	output.print_text(markdown);
+	output.write_text_on(&mut std::io::stdout(), markdown).ok();
 }
 
 fn configure_output_err(mut output: MadSkin) -> MadSkin {

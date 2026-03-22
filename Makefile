@@ -9,7 +9,7 @@ ifneq (,$(wildcard ./.env))
 	include .env
 	export
 	# Strip double quotes from .env values (annoying disagreement between direnv, dotenv)
-	RUSTFLAGS := $(subst \",,$(RUSTFLAGS))
+	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
 endif
 
 # Example .env:

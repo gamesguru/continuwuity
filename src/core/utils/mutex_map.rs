@@ -9,7 +9,7 @@ pub struct MutexMap<Key, Val> {
 	map: Map<Key, Val>,
 }
 
-pub struct Guard<Key, Val> {
+pub struct Guard<Key: Eq + Hash, Val> {
 	key: Key,
 	map: Map<Key, Val>,
 	val: Omg<Val>,
@@ -40,12 +40,7 @@ where
 		<Key as TryFrom<&'a K>>::Error: Debug,
 	{
 		let key: Key = k.try_into().expect("failed to construct key");
-		let val = self
-			.map
-			.lock()
-			.entry(key.clone())
-			.or_default()
-			.clone();
+		let val = self.map.lock().entry(key.clone()).or_default().clone();
 
 		Guard::<Key, Val> {
 			key,
@@ -62,12 +57,7 @@ where
 		<Key as TryFrom<&'a K>>::Error: Debug,
 	{
 		let key: Key = k.try_into().expect("failed to construct key");
-		let val = self
-			.map
-			.lock()
-			.entry(key.clone())
-			.or_default()
-			.clone();
+		let val = self.map.lock().entry(key.clone()).or_default().clone();
 
 		Ok(Guard::<Key, Val> {
 			key,
@@ -117,7 +107,7 @@ where
 	fn default() -> Self { Self::new() }
 }
 
-impl<Key, Val> Drop for Guard<Key, Val> {
+impl<Key: Eq + Hash, Val> Drop for Guard<Key, Val> {
 	#[tracing::instrument(name = "unlock", level = "trace", skip_all)]
 	fn drop(&mut self) {
 		if Arc::strong_count(Omg::mutex(&self.val)) <= 2 {
