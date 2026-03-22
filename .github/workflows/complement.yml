@@ -77,6 +77,9 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
+        env:
+          # Suppresses the noisy sccache cache-hit summary on the Github UI
+          GITHUB_STEP_SUMMARY: /dev/null
 
       - name: Detect best CPU target
         id: cpu
