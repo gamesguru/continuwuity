@@ -10,6 +10,7 @@ pub struct MutexMap<Key, Val> {
 }
 
 pub struct Guard<Key, Val> {
+	key: Key,
 	map: Map<Key, Val>,
 	val: Omg<Val>,
 }
@@ -38,14 +39,16 @@ where
 		Key: TryFrom<&'a K>,
 		<Key as TryFrom<&'a K>>::Error: Debug,
 	{
+		let key: Key = k.try_into().expect("failed to construct key");
 		let val = self
 			.map
 			.lock()
-			.entry(k.try_into().expect("failed to construct key"))
+			.entry(key.clone())
 			.or_default()
 			.clone();
 
 		Guard::<Key, Val> {
+			key,
 			map: Arc::clone(&self.map),
 			val: val.lock_owned().await,
 		}
@@ -58,14 +61,16 @@ where
 		Key: TryFrom<&'a K>,
 		<Key as TryFrom<&'a K>>::Error: Debug,
 	{
+		let key: Key = k.try_into().expect("failed to construct key");
 		let val = self
 			.map
 			.lock()
-			.entry(k.try_into().expect("failed to construct key"))
+			.entry(key.clone())
 			.or_default()
 			.clone();
 
 		Ok(Guard::<Key, Val> {
+			key,
 			map: Arc::clone(&self.map),
 			val: val.try_lock_owned().map_err(|_| err!("would yield"))?,
 		})
@@ -78,15 +83,17 @@ where
 		Key: TryFrom<&'a K>,
 		<Key as TryFrom<&'a K>>::Error: Debug,
 	{
+		let key: Key = k.try_into().expect("failed to construct key");
 		let val = self
 			.map
 			.try_lock()
 			.ok_or_else(|| err!("would block"))?
-			.entry(k.try_into().expect("failed to construct key"))
+			.entry(key.clone())
 			.or_default()
 			.clone();
 
 		Ok(Guard::<Key, Val> {
+			key,
 			map: Arc::clone(&self.map),
 			val: val.try_lock_owned().map_err(|_| err!("would yield"))?,
 		})
@@ -114,9 +121,7 @@ impl<Key, Val> Drop for Guard<Key, Val> {
 	#[tracing::instrument(name = "unlock", level = "trace", skip_all)]
 	fn drop(&mut self) {
 		if Arc::strong_count(Omg::mutex(&self.val)) <= 2 {
-			self.map.lock().retain(|_, val| {
-				!Arc::ptr_eq(val, Omg::mutex(&self.val)) || Arc::strong_count(val) > 2
-			});
+			self.map.lock().remove(&self.key);
 		}
 	}
 }
