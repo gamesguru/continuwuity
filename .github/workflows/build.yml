@@ -172,7 +172,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config liburing-dev \
-            libbz2-dev clang libclang-dev llvm-dev mold
+            libbz2-dev clang libclang-dev llvm-dev mold gdb
 
       - name: Setup sccache
         if: vars.C10Y_ENABLE_SCCACHE != ''

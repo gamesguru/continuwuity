@@ -26,10 +26,14 @@ Complement tests have been added, as well functionality for these:
 
 .. code-block:: text
 
-    ✓  tests/msc3890 (9.129s)
-    ✓  tests/msc3967 (9.445s)
-    ✓  tests/msc4155 (19.007s)
-    ✓  tests/msc4222 (11.685s)
+   ✓  tests/msc3890 (9.129s)
+   ✓  tests/msc3967 (9.445s)
+   ✓  tests/msc4155 (19.007s)
+   ✓  tests/msc4222 (11.685s)
+
+   MSC3266
+   MSC3890
+   MSC4289
 
 
 Chats to join (my fork)

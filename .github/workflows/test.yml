@@ -43,7 +43,8 @@ jobs:
             clang \
             libclang-dev \
             llvm-dev \
-            mold
+            mold \
+            gdb
 
       - name: Setup sccache
         if: vars.C10Y_ENABLE_SCCACHE != ''

@@ -73,6 +73,7 @@ jobs:
             libclang-dev \
             llvm-dev \
             mold \
+            gdb \
             postgresql-client
 
       - name: Setup sccache

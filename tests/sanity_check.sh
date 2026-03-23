@@ -3,14 +3,54 @@ set -e
 
 BINARY="${1:-./target/latest/conduwuit}"
 
+diagnose_binary() {
+	local exit_code=$1
+	local cmd_name=$2
+	echo "!!! Sanity check failed for $cmd_name (Exit code: $exit_code) !!!"
+
+	if [[ $exit_code -eq 132 ]] || [[ $exit_code -eq 136 ]]; then
+		local signal_name="Illegal instruction (SIGILL)"
+		[[ $exit_code -eq 136 ]] && signal_name="Floating point exception (SIGFPE)"
+		echo "Detected $signal_name - Diagnostic Info Below:"
+		echo "--- Binary Info ---"
+		file "$BINARY" || true
+		ldd "$BINARY" || true
+		echo "--- CPU Flags ---"
+		grep -m1 "^flags" /proc/cpuinfo || echo "Flags not found in /proc/cpuinfo"
+
+		if command -v gdb >/dev/null 2>&1; then
+			echo "--- GDB Backtrace & Disassembly ---"
+			gdb -batch -ex "run" -ex "bt" -ex "layout asm" -ex "info registers" --args "$BINARY" --version || true
+		else
+			echo "GDB not found, attempting objdump of entry point..."
+			objdump -d "$BINARY" | head -n 20 || true
+		fi
+
+		echo "--- Prebuilt Library Info ---"
+		for lib in /usr/local/lib/librocksdb.so /usr/local/lib/libjemalloc.so; do
+			if [ -f "$lib" ]; then
+				echo ">> $lib"
+				file "$lib" || true
+				readelf -V "$lib" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -n1 || true
+			fi
+		done
+	fi
+}
+
 if [ ! -f "$BINARY" ]; then
 	echo "Error: Binary not found at $BINARY"
 	exit 1
 fi
 
 echo "Running basic version checks..."
-"$BINARY" --version
-"$BINARY" --version-verbose
+if ! "$BINARY" --version; then
+	diagnose_binary $? "--version"
+	exit 1
+fi
+
+if ! "$BINARY" --version-verbose; then
+	diagnose_binary $? "--version-verbose"
+fi
 
 echo "Creating dummy config for DB/startup test..."
 cat <<'EOF' >/tmp/conduwuit-sanity.toml
@@ -33,8 +73,9 @@ success=false
 while [ $elapsed -lt $timeout ]; do
 	# Check if process is still alive
 	if ! kill -0 $PID 2>/dev/null; then
-		echo "x conduwuit process crashed during startup!"
-		wait $PID || true
+		wait $PID || exit_code=$?
+		echo "x conduwuit process crashed during startup! (Exit code: ${exit_code:-0})"
+		diagnose_binary ${exit_code:-0} "background process"
 		exit 1
 	fi
 
