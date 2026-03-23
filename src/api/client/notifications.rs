@@ -14,7 +14,10 @@ use ruma::{
 	serde::Raw,
 };
 
-use crate::Ruma;
+use crate::{
+	Ruma,
+	client::message::{ignored_filter, visibility_filter},
+};
 
 /// Wrapper to order notifications by timestamp for the min-heap.
 #[derive(Debug)]
@@ -152,6 +155,16 @@ pub(crate) async fn get_notifications_route(
 				continue;
 			}
 
+			let item = (pdu_count, pdu);
+			let item = match visibility_filter(&services, item, sender_user).await {
+				| Some(item) => item,
+				| None => continue,
+			};
+			let (_, pdu) = match ignored_filter(&services, item, sender_user).await {
+				| Some(item) => item,
+				| None => continue,
+			};
+
 			// Check push rules to see if this event should notify
 			let pdu_raw: Raw<AnySyncTimelineEvent> = pdu.to_format();
 
@@ -179,11 +192,9 @@ pub(crate) async fn get_notifications_route(
 
 				if notifications.len() >= limit_usize {
 					// Heap is full; only evict the current oldest item if this one is newer.
-					// Since `pdus` are iterated newest→oldest, once we see an item that is
-					// not newer than the heap minimum, we can stop scanning this room.
 					if let Some(Reverse(oldest)) = notifications.peek() {
 						if notification_item.0.ts <= oldest.0.ts {
-							break;
+							continue;
 						}
 					}
 					notifications.pop();
