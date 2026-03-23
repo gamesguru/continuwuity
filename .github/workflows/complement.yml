@@ -107,7 +107,7 @@ jobs:
         run: |
           echo "--- Downloaded Prebuilts Info ---"
           for lib in librocksdb libjemalloc liblz4 libzstd; do
-            echo "| tee -a $lib"
+            echo ">> $lib"
             file /usr/local/lib/$lib.so* || true
             nm -D /usr/local/lib/$lib.so* | grep " T " | head -n 5 || true
           done
@@ -221,7 +221,7 @@ jobs:
           echo "pass=$PASS" | tee -a "$GITHUB_OUTPUT"
           echo "fail=$FAIL" | tee -a "$GITHUB_OUTPUT"
           echo "skip=$SKIP" | tee -a "$GITHUB_OUTPUT"
-          echo "total=$total" | tee -a "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" | tee -a "$GITHUB_OUTPUT"
           echo "failed_tests<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$FAILED_TESTS" | tee -a "$GITHUB_OUTPUT"
           echo "EOF" | tee -a "$GITHUB_OUTPUT"
