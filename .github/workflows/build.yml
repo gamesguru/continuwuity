@@ -238,7 +238,7 @@ jobs:
           echo "--- Downloaded Prebuilts Info ---"
           for lib in librocksdb libjemalloc liblz4 libzstd; do
             echo ">> $lib"
-            LIB_PATH=$(ls /usr/local/lib/$lib.so* | head -n 1)
+            LIB_PATH="$(ls /usr/local/lib/$lib.so* 2>/dev/null | head -n 1 || true)"
             file "$LIB_PATH" || true
             nm -D "$LIB_PATH" | grep " T " | head -n 5 || true
             echo "Max GLIBC version required: $(readelf -V "$LIB_PATH" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -n1 || echo 'N/A')"
