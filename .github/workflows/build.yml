@@ -247,9 +247,9 @@ jobs:
           ldd --version | head -n 1 || true
           FLAGS=$(grep -m1 '^flags' /proc/cpuinfo || echo "")
           echo "Model: $(grep -m1 'model name' /proc/cpuinfo || echo 'unknown')"
-          echo "v4 Support (AVX512F,BW,CD,DQ,VL): $(echo "$FLAGS" | grep -qw avx512f && echo 'YES' || echo 'NO')"
-          echo "v3 Support (AVX2,BMI1,BMI2,FMA,MOVBE): $(echo "$FLAGS" | grep -qw avx2 && echo 'YES' || echo 'NO')"
-          echo "v2 Support (SSE4.2,SSSE3,POPCNT): $(echo "$FLAGS" | grep -qw sse4_2 && echo 'YES' || echo 'NO')"
+          echo "v4 Support (AVX512F,BW,CD,DQ,VL): $(if echo "$FLAGS" | grep -qw avx512f && echo "$FLAGS" | grep -qw avx512bw && echo "$FLAGS" | grep -qw avx512cd && echo "$FLAGS" | grep -qw avx512dq && echo "$FLAGS" | grep -qw avx512vl; then echo 'YES'; else echo 'NO'; fi)"
+          echo "v3 Support (AVX2,BMI1,BMI2,FMA,MOVBE): $(if echo "$FLAGS" | grep -qw avx2 && echo "$FLAGS" | grep -qw bmi1 && echo "$FLAGS" | grep -qw bmi2 && echo "$FLAGS" | grep -qw fma && echo "$FLAGS" | grep -qw movbe; then echo 'YES'; else echo 'NO'; fi)"
+          echo "v2 Support (SSE4.2,SSSE3,POPCNT): $(if echo "$FLAGS" | grep -qw sse4_2 && echo "$FLAGS" | grep -qw ssse3 && echo "$FLAGS" | grep -qw popcnt; then echo 'YES'; else echo 'NO'; fi)"
           echo "--- Build Environment ---"
           echo "OS: ${{ matrix.os }}"
           echo "Arch: ${{ matrix.arch }}"

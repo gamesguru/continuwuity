@@ -43,14 +43,16 @@ if [ ! -f "$BINARY" ]; then
 fi
 
 echo "Running basic version checks..."
-if ! "$BINARY" --version; then
-	diagnose_binary $? "--version"
+"$BINARY" --version || {
+	exit_code=$?
+	diagnose_binary $exit_code "--version"
 	exit 1
-fi
+}
 
-if ! "$BINARY" --version-verbose; then
-	diagnose_binary $? "--version-verbose"
-fi
+"$BINARY" --version-verbose || {
+	exit_code=$?
+	diagnose_binary $exit_code "--version-verbose"
+}
 
 echo "Creating dummy config for DB/startup test..."
 cat <<'EOF' >/tmp/conduwuit-sanity.toml
