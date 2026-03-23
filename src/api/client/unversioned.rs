@@ -45,11 +45,11 @@ pub(crate) async fn get_supported_versions_route(
 	]);
 
 	if services.config.experimental_features.msc3266_enabled {
-		unstable_features.insert("org.matrix.msc3266".to_owned(), true); /* room summaries (https://github.com/matrix-org/matrix-spec-proposals/pull/3266) */
+		unstable_features.insert("org.matrix.msc3266".to_owned(), true); /* room previews (https://github.com/matrix-org/matrix-spec-proposals/pull/3266) */
 	}
 
 	if services.config.experimental_features.msc4222_enabled {
-		unstable_features.insert("org.matrix.msc4222".to_owned(), true); /* require UI Auth for device deletion (https://github.com/matrix-org/matrix-spec-proposals/pull/4222) */
+		unstable_features.insert("org.matrix.msc4222".to_owned(), true); /* state_after in sync v2 (https://github.com/matrix-org/matrix-spec-proposals/pull/4222) */
 	}
 
 	let resp = get_supported_versions::Response {
