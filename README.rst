@@ -26,6 +26,7 @@ Complement tests have been added, as well functionality for these:
 
 .. code-block:: text
 
+    ✓  tests/msc3266 (7.234s)
     ✓  tests/msc3890 (9.129s)
     ✓  tests/msc3967 (9.445s)
     ✓  tests/msc4155 (19.007s)
