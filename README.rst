@@ -26,19 +26,18 @@ Complement tests have been added, as well functionality for these:
 
 .. code-block:: text
 
-   ✓  tests/msc3890 (9.129s)
-   ✓  tests/msc3967 (9.445s)
-   ✓  tests/msc4155 (19.007s)
-   ✓  tests/msc4222 (11.685s)
+   ✓  tests/msc3890 (9.129s) [Remotely silence local notifications]
+   ✓  tests/msc3967 (9.445s) [Do not require UIA when uploading cross-signing keys]
+   ✓  tests/msc4155 (19.007s) [Invite filtering]
+   ✓  tests/msc4222 (11.685s) [Adding `state_after` to `/sync`]
 
-   MSC3266
-   MSC3890
-   MSC4289
+   ✓ MSC3266 [Room summaries]
+   ✓ MSC3890 [Remotely silence local notifications]
+   ✓ MSC4289 [Explicitly privilege room creators]
 
    TODO:
 
-   - MSC3266 (Room summaries)
-   - MSC4108 (QR Code login)
+   - MSC4108 [QR Code login]
    - other complement failures relevant to continuwuity
 
 Chats to join (my fork)
