@@ -35,6 +35,11 @@ Complement tests have been added, as well functionality for these:
    MSC3890
    MSC4289
 
+   TODO:
+
+   - MSC3266 (Room summaries)
+   - MSC4108 (QR Code login)
+   - other complement failures relevant to continuwuity
 
 Chats to join (my fork)
 ~~~~~~~~~~~~~~~~~~~~~~~
