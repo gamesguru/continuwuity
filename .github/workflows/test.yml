@@ -70,20 +70,41 @@ jobs:
       - name: Install pre-commit
         run: pip install pre-commit
 
-      - name: Debug checks
-        run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars doctor cpu-info
+      - name: Debug Environment & Prebuilts
+        run: |
+          echo "--- Downloaded Prebuilts Info ---"
+          for lib in librocksdb libjemalloc liblz4 libzstd; do
+            echo ">> $lib"
+            LIB_PATH=$(ls /usr/local/lib/$lib.so* | head -n 1)
+            file "$LIB_PATH" || true
+            nm -D "$LIB_PATH" | grep " T " | head -n 5 || true
+            echo "Max GLIBC version required: $(readelf -V "$LIB_PATH" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -n1 || echo 'N/A')"
+          done
+          echo "--- Runner Info ---"
+          ldd --version | head -n 1 || true
+          FLAGS=$(grep -m1 '^flags' /proc/cpuinfo || echo "")
+          echo "Model: $(grep -m1 'model name' /proc/cpuinfo || echo 'unknown')"
+          echo "v4 Support (AVX512F,BW,CD,DQ,VL): $(echo "$FLAGS" | grep -qw avx512f && echo 'YES' || echo 'NO')"
+          echo "v3 Support (AVX2,BMI1,BMI2,FMA,MOVBE): $(echo "$FLAGS" | grep -qw avx2 && echo 'YES' || echo 'NO')"
+          echo "v2 Support (SSE4.2,SSSE3,POPCNT): $(echo "$FLAGS" | grep -qw sse4_2 && echo 'YES' || echo 'NO')"
+          echo "--- Build Environment ---"
       - name: Format
         run: make format
 
       - name: Test
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,/usr/local/lib -C target-cpu=${{ steps.cpu.outputs.target }}
         run: make test
 
       - name: DNS Integration Test (Respects /etc/hosts)
         env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,/usr/local/lib -C target-cpu=${{ steps.cpu.outputs.target }}
           CONDUWUIT_TEST_DNS_HOST: conduwuit.test
         run: |
           echo "127.0.0.1 conduwuit.test" | sudo tee -a /etc/hosts
           cargo test --quiet --package conduwuit_service --lib resolver::tests::test_dns_resolution_integration
 
       - name: Lint
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,/usr/local/lib -C target-cpu=${{ steps.cpu.outputs.target }}
         run: make lint

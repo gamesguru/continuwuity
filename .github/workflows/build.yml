@@ -238,13 +238,18 @@ jobs:
           echo "--- Downloaded Prebuilts Info ---"
           for lib in librocksdb libjemalloc liblz4 libzstd; do
             echo ">> $lib"
-            file /usr/local/lib/$lib.so* || true
-            nm -D /usr/local/lib/$lib.so* | grep " T " | head -n 5 || true
+            LIB_PATH=$(ls /usr/local/lib/$lib.so* | head -n 1)
+            file "$LIB_PATH" || true
+            nm -D "$LIB_PATH" | grep " T " | head -n 5 || true
+            echo "Max GLIBC version required: $(readelf -V "$LIB_PATH" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -n1 || echo 'N/A')"
           done
-          echo "--- Runner CPU Info ---"
-          grep "model name" /proc/cpuinfo | head -n 1 || true
-          grep "flags" /proc/cpuinfo | head -n 1 || true
-          grep "Features" /proc/cpuinfo | head -n 1 || true
+          echo "--- Runner Info ---"
+          ldd --version | head -n 1 || true
+          FLAGS=$(grep -m1 '^flags' /proc/cpuinfo || echo "")
+          echo "Model: $(grep -m1 'model name' /proc/cpuinfo || echo 'unknown')"
+          echo "v4 Support (AVX512F,BW,CD,DQ,VL): $(echo "$FLAGS" | grep -qw avx512f && echo 'YES' || echo 'NO')"
+          echo "v3 Support (AVX2,BMI1,BMI2,FMA,MOVBE): $(echo "$FLAGS" | grep -qw avx2 && echo 'YES' || echo 'NO')"
+          echo "v2 Support (SSE4.2,SSSE3,POPCNT): $(echo "$FLAGS" | grep -qw sse4_2 && echo 'YES' || echo 'NO')"
           echo "--- Build Environment ---"
           echo "OS: ${{ matrix.os }}"
           echo "Arch: ${{ matrix.arch }}"
@@ -254,9 +259,8 @@ jobs:
         env:
           PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          RUSTFLAGS: -C link-arg=-fuse-ld=mold
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ matrix.cpu }}
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ matrix.cpu }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,/usr/local/lib -C target-cpu=${{ matrix.cpu }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,/usr/local/lib -C target-cpu=${{ matrix.cpu }}
           CARGO_BUILD_TARGET: ${{ matrix.target }}
         run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ steps.config.outputs.profile }} --features ${{ steps.config.outputs.features }} --target ${{ matrix.target }}"
 
