@@ -156,13 +156,11 @@ pub(crate) async fn get_notifications_route(
 			}
 
 			let item = (pdu_count, pdu);
-			let item = match visibility_filter(&services, item, sender_user).await {
-				| Some(item) => item,
-				| None => continue,
+			let Some(item) = visibility_filter(&services, item, sender_user).await else {
+				continue;
 			};
-			let (_, pdu) = match ignored_filter(&services, item, sender_user).await {
-				| Some(item) => item,
-				| None => continue,
+			let Some((_, pdu)) = ignored_filter(&services, item, sender_user).await else {
+				continue;
 			};
 
 			// Check push rules to see if this event should notify
