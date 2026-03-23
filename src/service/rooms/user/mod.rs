@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use conduwuit::{Result, implement};
+use conduwuit::{Result, implement, warn};
 use database::{Database, Deserialized, Map};
-use ruma::{RoomId, UserId};
+use futures::StreamExt;
+use ruma::{OwnedRoomId, OwnedUserId, RoomId, UserId};
 
 use crate::{Dep, globals, rooms, rooms::short::ShortStateHash};
 
@@ -56,6 +57,24 @@ pub fn reset_notification_counts(&self, user_id: &UserId, room_id: &RoomId) {
 	self.db
 		.roomuserid_lastnotificationread
 		.put(roomuser_id, count);
+}
+
+#[implement(Service)]
+pub fn stream_notification_counts<'a>(
+	&'a self,
+	user_id: &'a UserId,
+) -> impl futures::Stream<Item = (Result<OwnedRoomId>, u64)> + Send + 'a {
+	let prefix = (user_id, database::Interfix);
+	self.db
+		.userroomid_notificationcount
+		.stream_prefix::<(OwnedUserId, OwnedRoomId), u64, _>(&prefix)
+		.map(|res| match res {
+			| Ok(((_user_id, room_id), count)) => (Ok(room_id), count),
+			| Err(e) => {
+				warn!("Failed to stream notification counts: {e}");
+				(Err(e), 0)
+			},
+		})
 }
 
 #[implement(Service)]

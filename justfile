@@ -1,5 +1,5 @@
 # List available commands
-_help:
+default:
     @just --list
 
 # --- Pre-building C/C++ Libraries ---
