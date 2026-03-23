@@ -21,10 +21,15 @@ use crate::{
 
 /// Wrapper to order notifications by timestamp for the min-heap.
 #[derive(Debug)]
-struct NotificationItem(notif_route_v3::Notification);
+struct NotificationItem {
+	notification: notif_route_v3::Notification,
+	pdu_count: PduCount,
+}
 
 impl PartialEq for NotificationItem {
-	fn eq(&self, other: &Self) -> bool { self.0.ts == other.0.ts }
+	fn eq(&self, other: &Self) -> bool {
+		self.notification.ts == other.notification.ts && self.pdu_count == other.pdu_count
+	}
 }
 
 impl Eq for NotificationItem {}
@@ -34,7 +39,12 @@ impl PartialOrd for NotificationItem {
 }
 
 impl Ord for NotificationItem {
-	fn cmp(&self, other: &Self) -> Ordering { self.0.ts.cmp(&other.0.ts) }
+	fn cmp(&self, other: &Self) -> Ordering {
+		match self.notification.ts.cmp(&other.notification.ts) {
+			| Ordering::Equal => self.pdu_count.cmp(&other.pdu_count),
+			| other => other,
+		}
+	}
 }
 
 /// # `GET /_matrix/client/v3/notifications`
@@ -178,20 +188,23 @@ pub(crate) async fn get_notifications_route(
 			{
 				let event: Raw<AnySyncTimelineEvent> = pdu_raw;
 
-				// Prepare each item
-				let notification_item = NotificationItem(notif_route_v3::Notification {
-					actions: actions.to_vec(),
-					event,
-					profile_tag: None,
-					read: false,
-					room_id: room_id.clone(),
-					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
-				});
+				// Prepare each item, carrying `pdu_count` for stable ordering/pagination
+				let notification_item = NotificationItem {
+					notification: notif_route_v3::Notification {
+						actions: actions.to_vec(),
+						event,
+						profile_tag: None,
+						read: false,
+						room_id: room_id.clone(),
+						ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
+					},
+					pdu_count,
+				};
 
 				if notifications.len() >= limit_usize {
 					// Heap is full; only evict the current oldest item if this one is newer.
 					if let Some(Reverse(oldest)) = notifications.peek() {
-						if notification_item.0.ts <= oldest.0.ts {
+						if notification_item.cmp(oldest) <= Ordering::Equal {
 							continue;
 						}
 					}
@@ -202,19 +215,37 @@ pub(crate) async fn get_notifications_route(
 		}
 	}
 
-	// Convert heap to vector and sort by timestamp descending (newest first)
-	let mut notifications: Vec<_> = notifications
+	// Convert heap to vector and sort by timestamp descending (newest first),
+	// using `pdu_count` as a tie-breaker for stable ordering.
+	let mut notification_items: Vec<_> = notifications
 		.into_iter()
-		.map(|Reverse(item)| item.0)
+		.map(|Reverse(item)| item)
 		.collect();
-	// TODO: is this necessary to sort by timestamp rather than PDU?
-	notifications.sort_by(|a, b| b.ts.cmp(&a.ts));
 
-	let next_token = if notifications.len() >= limit_usize {
-		notifications.last().map(|n| n.ts.0.to_string())
+	notification_items.sort_by(|a, b| match b.notification.ts.cmp(&a.notification.ts) {
+		| Ordering::Equal => b.pdu_count.cmp(&a.pdu_count),
+		| other => other,
+	});
+
+	let next_token = if notification_items.len() >= limit_usize {
+		// Use debug-formatting for pdu_count if Display is not implemented
+		notification_items.last().map(|n| {
+			if let PduCount::Normal(c) = n.pdu_count {
+				format!("{}:n{}", n.notification.ts.0, c)
+			} else if let PduCount::Backfilled(c) = n.pdu_count {
+				format!("{}:b{}", n.notification.ts.0, c)
+			} else {
+				format!("{}:{:?}", n.notification.ts.0, n.pdu_count)
+			}
+		})
 	} else {
 		None
 	};
+
+	let notifications = notification_items
+		.into_iter()
+		.map(|item| item.notification)
+		.collect();
 
 	Ok(get_notifications::v3::Response { next_token, notifications })
 }
@@ -246,14 +277,17 @@ mod tests {
 		let event: Raw<AnySyncTimelineEvent> =
 			Raw::from_json(serde_json::value::to_raw_value(&json).unwrap());
 
-		NotificationItem(notif_route_v3::Notification {
-			actions: Vec::new(),
-			event,
-			profile_tag: None,
-			read: false,
-			room_id: OwnedRoomId::try_from("!test:example.com").unwrap(),
-			ts: MilliSecondsSinceUnixEpoch(UInt::new(ts_millis).unwrap()),
-		})
+		NotificationItem {
+			notification: notif_route_v3::Notification {
+				actions: Vec::new(),
+				event,
+				profile_tag: None,
+				read: false,
+				room_id: OwnedRoomId::try_from("!test:example.com").unwrap(),
+				ts: MilliSecondsSinceUnixEpoch(UInt::new(ts_millis).unwrap()),
+			},
+			pdu_count: conduwuit::matrix::pdu::PduCount::Normal(0),
+		}
 	}
 
 	#[test]
@@ -291,7 +325,7 @@ mod tests {
 			.into_sorted_vec()
 			.into_iter()
 			.map(|Reverse(item)| {
-				let ts: u64 = item.0.ts.0.into();
+				let ts: u64 = item.notification.ts.0.into();
 				ts
 			})
 			.collect();
