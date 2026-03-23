@@ -198,6 +198,7 @@ pub(crate) async fn get_notifications_route(
 		.into_iter()
 		.map(|Reverse(item)| item.0)
 		.collect();
+	// TODO: is this necessary to sort by timestamp rather than PDU?
 	notifications.sort_by(|a, b| b.ts.cmp(&a.ts));
 
 	let next_token = if notifications.len() >= limit_usize {
