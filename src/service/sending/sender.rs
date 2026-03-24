@@ -628,13 +628,6 @@ impl Service {
 				continue;
 			};
 
-			// Don't advance the EDU cursor past the snapshot upper bound.
-			// Users with presence_count beyond this window are left in the
-			// pending queue to be retried in a later transaction.
-			if presence_count > since.1 {
-				continue;
-			}
-
 			attempted_users.push(user_id.clone());
 
 			// Send-time visibility check. Only send to servers that still see the user.
@@ -647,7 +640,10 @@ impl Service {
 				continue;
 			}
 
-			max_presence_count = max_presence_count.max(presence_count);
+			// We don't want to advance the global EDU cursor past the snapshot upper bound
+			// because that could skip other EDU types. But we can still send the latest
+			// presence for this user right now.
+			max_presence_count = max_presence_count.max(presence_count.min(since.1));
 
 			let update = PresenceUpdate {
 				user_id,

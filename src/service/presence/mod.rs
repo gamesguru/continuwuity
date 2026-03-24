@@ -123,6 +123,7 @@ impl crate::Service for Service {
 
 			// Periodic tally
 			if Instant::now() >= next_tally {
+				presence_timers.retain(|_, task| !task.is_finished());
 				info!(
 					"presence stats: {} active timers, {} received",
 					presence_timers.len(),
