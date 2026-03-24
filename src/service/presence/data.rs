@@ -223,7 +223,7 @@ impl Data {
 		since: u64,
 	) -> impl Stream<Item = (&UserId, u64, &[u8])> + Send + '_ {
 		self.presenceid_presence
-			.raw_stream()
+			.raw_stream_from(&(since.saturating_add(1)).to_be_bytes())
 			.ignore_err()
 			.ready_filter_map(move |(key, presence)| {
 				let (count, user_id) = presenceid_parse(key).ok()?;
