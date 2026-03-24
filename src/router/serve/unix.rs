@@ -12,7 +12,7 @@ use axum::{
 	extract::{Request, connect_info::IntoMakeServiceWithConnectInfo},
 };
 use conduwuit::{
-	Err, Result, Server, debug, debug_error, info, result::UnwrapInfallible, trace, warn,
+	Err, Result, Server, debug, debug_error, result::UnwrapInfallible, trace, warn,
 };
 use hyper::{body::Incoming, service::service_fn};
 use hyper_util::{
