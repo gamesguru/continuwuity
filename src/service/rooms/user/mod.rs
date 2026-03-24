@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use conduwuit::{Result, implement, warn};
+use conduwuit::{Result, implement};
 use database::{Database, Deserialized, Map};
 use futures::StreamExt;
 use ruma::{OwnedRoomId, OwnedUserId, RoomId, UserId};
