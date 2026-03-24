@@ -392,6 +392,17 @@ impl Service {
 
 		let (device_changes, receipts, presence) = join!(device_changes, receipts, presence);
 
+		if !device_changes.is_empty() {
+			self.stats.outgoing_device_lists.fetch_add(
+				device_changes.len().try_into().unwrap_or(u64::MAX),
+				Ordering::Relaxed,
+			);
+		}
+
+		if receipts.is_some() {
+			self.stats.outgoing_receipts.fetch_add(1, Ordering::Relaxed);
+		}
+
 		let mut events = device_changes;
 		events.extend(presence.into_iter().flatten());
 		events.extend(receipts.into_iter().flatten());

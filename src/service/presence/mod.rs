@@ -272,7 +272,8 @@ impl Service {
 
 			jobs.push(async move {
 				if let Err(e) = self
-					.set_presence(
+					.db
+					.set_presence_silent(
 						&user_id,
 						&PresenceState::Offline,
 						Some(false),

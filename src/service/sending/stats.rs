@@ -36,9 +36,9 @@ impl FederationStats {
 		}
 
 		info!(
-			"federation stats: {txns} txns ({pdus} PDUs, {edus} general EDUs, \
-			 {presence} presence, {receipts} receipts, {device_lists} device lists, \
-			 {to_device} to-device, {typing} typing), {errors} errors"
+			"federation stats: {txns} txns ({pdus} PDUs, {edus} general EDUs, {presence} \
+			 presence, {receipts} receipts, {device_lists} device lists, {to_device} to-device, \
+			 {typing} typing), {errors} errors"
 		);
 
 		true
