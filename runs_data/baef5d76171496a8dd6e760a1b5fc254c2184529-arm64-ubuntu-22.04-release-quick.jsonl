@@ -681,7 +681,7 @@
 {"Action":"pass","Test":"TestSyncTimelineGap/full","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"baef5d76171496a8dd6e760a1b5fc254c2184529"}
 {"Action":"pass","Test":"TestSyncTimelineGap/incremental","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"baef5d76171496a8dd6e760a1b5fc254c2184529"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"baef5d76171496a8dd6e760a1b5fc254c2184529"}
-{"Action":"fail","Test":"TestThreadReceiptsInSyncMSC4102","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"baef5d76171496a8dd6e760a1b5fc254c2184529"}
+{"Action":"pass","Test":"TestThreadReceiptsInSyncMSC4102","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"baef5d76171496a8dd6e760a1b5fc254c2184529"}
 {"Action":"fail","Test":"TestThreadSubscriptions","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"baef5d76171496a8dd6e760a1b5fc254c2184529"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_create_automatic_subscription_to_a_thread","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"baef5d76171496a8dd6e760a1b5fc254c2184529"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_subscribe_to_and_unsubscribe_from_a_thread","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"baef5d76171496a8dd6e760a1b5fc254c2184529"}
