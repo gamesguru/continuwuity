@@ -5,8 +5,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use conduwuit::{
-	Error, Result, Server, checked, debug, debug_info, debug_warn, error, info, result::LogErr,
-	utils, warn,
+	Error, Result, Server, checked, debug, debug_info, error, info, result::LogErr, utils, warn,
 };
 use dashmap::DashMap;
 use database::Database;
@@ -277,14 +276,13 @@ impl Service {
 
 	// Unset online/unavailable presence to offline on startup
 	pub async fn unset_all_presence(&self) {
-		use futures::{StreamExt, stream::FuturesUnordered};
+		use futures::StreamExt;
 
 		debug_info!("Resetting presence for active users...");
 		let mut reset = 0_usize;
-		let mut jobs = FuturesUnordered::new();
 
 		let mut presence_stream = Box::pin(self.db.presence_since(0));
-		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
+		while let Some((user_id, count, bytes)) = presence_stream.next().await {
 			if !self.services.server.running() {
 				info!("Shutdown requested during presence reset.");
 				break;
@@ -296,7 +294,7 @@ impl Service {
 				continue;
 			}
 
-			let Ok(presence) = Presence::from_json_bytes(bytes) else {
+			let Ok(mut presence) = Presence::from_json_bytes(bytes) else {
 				continue;
 			};
 
@@ -308,43 +306,14 @@ impl Service {
 			}
 
 			let user_id = user_id.to_owned();
-			let now = utils::millis_since_unix_epoch();
-			let last_active_ago =
-				Some(UInt::new_saturating(now.saturating_sub(presence.last_active_ts)));
+
+			presence.state = PresenceState::Offline;
+			presence.currently_active = false;
 
 			reset = reset.saturating_add(1);
 
-			let status_msg = presence.status_msg.clone();
-
-			jobs.push(async move {
-				if let Err(e) = self
-					.db
-					.set_presence_silent(
-						&user_id,
-						&PresenceState::Offline,
-						Some(false),
-						last_active_ago,
-						status_msg,
-					)
-					.await
-				{
-					debug_warn!(
-						?user_id,
-						"Failed to reset presence for {user_id} to offline: {e}"
-					);
-				}
-			});
-
-			if jobs.len() >= 100 {
-				while jobs.next().await == Some(()) {
-					if jobs.len() < 50 {
-						break;
-					}
-				}
-			}
+			self.db.set_offline_fast(&user_id, count, presence);
 		}
-
-		while jobs.next().await == Some(()) {}
 
 		warn!("Presence reset complete: {reset} users reset to offline.");
 	}

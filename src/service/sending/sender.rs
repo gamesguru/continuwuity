@@ -161,11 +161,30 @@ impl Service {
 	async fn handle_response_ok<'a>(
 		&'a self,
 		dest: &Destination,
-		_futures: &mut SendingFutures<'a>,
+		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
 		let _cork = self.db.db.cork();
 		self.db.delete_all_active_requests_for(dest).await;
+
+		let mut has_pdu = false;
+		let mut new_events = Vec::new();
+
+		let mut stream = self.db.queued_requests(dest).take(DEQUEUE_LIMIT);
+		while let Some((k, e)) = stream.next().await {
+			if matches!(e, SendingEvent::Pdu(_)) {
+				has_pdu = true;
+			}
+			new_events.push((k, e));
+		}
+
+		if !new_events.is_empty() && has_pdu {
+			// Immediately send the critical PDUs without trailing cooldown!
+			self.db.mark_as_active(new_events.iter());
+			let new_events_vec = new_events.into_iter().map(|(_, e)| e).collect();
+			futures.push(self.send_events(dest.clone(), new_events_vec));
+			return;
+		}
 
 		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now()));
 
@@ -302,7 +321,10 @@ impl Service {
 		new_events: Vec<QueueItem>, // Events we want to send: event and full key
 		statuses: &mut CurTransactionStatus,
 	) -> Result<Option<Vec<SendingEvent>>> {
-		let (allow, retry) = self.select_events_current(dest, statuses)?;
+		let has_pdu = new_events
+			.iter()
+			.any(|(_, e)| matches!(e, SendingEvent::Pdu(_)));
+		let (allow, retry) = self.select_events_current(dest, statuses, has_pdu)?;
 
 		// Nothing can be done for this remote, bail out.
 		if !allow {
@@ -349,6 +371,7 @@ impl Service {
 		&self,
 		dest: &Destination,
 		statuses: &mut CurTransactionStatus,
+		has_pdu: bool,
 	) -> Result<(bool, bool)> {
 		let (mut allow, mut retry) = (true, false);
 		statuses
@@ -371,7 +394,7 @@ impl Service {
 					allow = false; // already running
 				},
 				TransactionStatus::Cooldown(time) => {
-					if time.elapsed() < Duration::from_millis(1500) {
+					if !has_pdu && time.elapsed() < Duration::from_millis(1500) {
 						allow = false;
 					} else {
 						*e = TransactionStatus::Running;
