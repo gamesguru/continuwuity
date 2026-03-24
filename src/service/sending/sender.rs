@@ -610,7 +610,13 @@ impl Service {
 		let mut presence_updates = Vec::with_capacity(users.len().min(SELECT_PRESENCE_LIMIT));
 		let mut attempted_users = Vec::with_capacity(SELECT_PRESENCE_LIMIT);
 		let mut max_presence_count = 0;
-		for user_id in users.iter().take(SELECT_PRESENCE_LIMIT).cloned() {
+		let mut loop_count = 0_usize;
+		for user_id in users.iter().cloned() {
+			loop_count = loop_count.saturating_add(1);
+			if loop_count > SELECT_PRESENCE_LIMIT * 5 {
+				break;
+			}
+
 			let Ok((presence_count, presence_event)) = self
 				.services
 				.presence

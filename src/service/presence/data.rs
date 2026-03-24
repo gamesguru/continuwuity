@@ -204,12 +204,16 @@ impl Data {
 		let key = presenceid_key(count, user_id);
 
 		// Overwrite the existing DB key silently
-		self.presenceid_presence.raw_put(key, Json(presence));
+		self.presenceid_presence.raw_put(key, Json(&presence));
 
 		// Only write to userid_presenceid if we actually generated a new count.
 		if is_new {
 			self.userid_presenceid.raw_put(user_id, count);
 		}
+
+		self.cache
+			.insert(user_id.to_owned(), (count, presence))
+			.await;
 
 		Ok(())
 	}

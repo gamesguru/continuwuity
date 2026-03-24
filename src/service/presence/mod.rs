@@ -1,11 +1,7 @@
 mod data;
 mod presence;
 
-use std::{
-	collections::{HashMap, HashSet},
-	sync::Arc,
-	time::Duration,
-};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use conduwuit::{
@@ -14,13 +10,13 @@ use conduwuit::{
 };
 use dashmap::DashMap;
 use database::Database;
-use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
+use futures::{Stream, StreamExt, TryFutureExt};
 use loole::{Receiver, Sender};
 use ruma::{
 	OwnedServerName, OwnedUserId, UInt, UserId, events::presence::PresenceEvent,
 	presence::PresenceState,
 };
-use tokio::time::{Instant, sleep};
+use tokio::time::Instant;
 
 use self::{data::Data, presence::Presence};
 use crate::{Dep, globals, users};
@@ -90,35 +86,39 @@ impl crate::Service for Service {
 		};
 
 		// Timers scheduled to auto-demote idle users (online -> unavailable -> offline)
-		let mut presence_timers = FuturesUnordered::new();
-		let mut scheduled_at: HashMap<OwnedUserId, Instant> = HashMap::new();
+		let mut presence_timers =
+			std::collections::HashMap::<OwnedUserId, tokio::task::JoinHandle<()>>::new();
 		let mut events_received: u64 = 0;
 		let mut next_tally = Instant::now()
 			.checked_add(Duration::from_secs(300))
 			.unwrap_or_else(Instant::now);
 
 		while !receiver.is_closed() {
-			tokio::select! {
-				Some((user_id, created_at)) = presence_timers.next() => {
-					// Only process latest timer, avoid overhead of whole list
-					if scheduled_at.get(&user_id) == Some(&created_at) {
-						scheduled_at.remove(&user_id);
-						self.process_presence_timer(&user_id).await.log_err().ok();
+			let event = receiver.recv_async().await;
+			match event {
+				| Err(_) => break,
+				| Ok((user_id, Some(timeout))) => {
+					events_received = events_received.saturating_add(1);
+					let self_clone = Arc::clone(&self);
+					let user_id_clone = user_id.clone();
+
+					let new_task = self.services.server.runtime().spawn(async move {
+						tokio::time::sleep(timeout).await;
+						self_clone
+							.process_presence_timer(&user_id_clone)
+							.await
+							.log_err()
+							.ok();
+					});
+
+					if let Some(old_task) = presence_timers.insert(user_id, new_task) {
+						old_task.abort();
 					}
 				},
-				event = receiver.recv_async() => match event {
-					Err(_) => break,
-					Ok((user_id, Some(timeout))) => {
-						events_received = events_received.saturating_add(1);
-						let now = Instant::now();
-						scheduled_at.insert(user_id.clone(), now);
-						debug!("Adding timer {}: {user_id} timeout:{timeout:?}", presence_timers.len());
-						presence_timers.push(presence_timer(user_id, timeout, now));
+				| Ok((user_id, None)) =>
+					if let Some(task) = presence_timers.remove(&user_id) {
+						task.abort();
 					},
-					Ok((user_id, None)) => {
-						scheduled_at.remove(&user_id);
-					},
-				}
 			}
 
 			// Periodic tally
@@ -460,15 +460,4 @@ impl Service {
 
 		Ok(())
 	}
-}
-async fn presence_timer(
-	user_id: OwnedUserId,
-	timeout: Duration,
-	created_at: Instant,
-) -> (OwnedUserId, Instant) {
-	// wait
-	sleep(timeout).await;
-
-	// return user and timer creation. calling loop will discard oldest
-	(user_id, created_at)
 }
