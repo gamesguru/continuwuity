@@ -843,6 +843,15 @@ impl Service {
 			return Ok(Destination::Federation(server));
 		}
 
+		// Track federation stats
+		self.stats
+			.outgoing_pdus
+			.fetch_add(pdus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
+		self.stats
+			.outgoing_edus
+			.fetch_add(edus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
+		self.stats.outgoing_txns.fetch_add(1, Ordering::Relaxed);
+
 		let preimage = pdus
 			.iter()
 			.map(|raw| raw.get().as_bytes())
@@ -874,7 +883,10 @@ impl Service {
 		}
 
 		match result {
-			| Err(error) => Err((Destination::Federation(server), error)),
+			| Err(error) => {
+				self.stats.outgoing_errors.fetch_add(1, Ordering::Relaxed);
+				Err((Destination::Federation(server), error))
+			},
 			| Ok(_) => Ok(Destination::Federation(server)),
 		}
 	}
