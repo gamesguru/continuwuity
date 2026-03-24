@@ -399,20 +399,24 @@ async fn join_room_by_id_helper_remote(
 			)))
 		})?;
 
-	let join_authorized_via_users_server = {
-		use RoomVersionId::*;
-		if !matches!(room_version_id, V1 | V2 | V3 | V4 | V5 | V6 | V7) {
-			join_event_stub
-				.get("content")
-				.map(|s| {
-					s.as_object()?
-						.get("join_authorised_via_users_server")?
-						.as_str()
-				})
-				.and_then(|s| OwnedUserId::try_from(s.unwrap_or_default()).ok())
-		} else {
-			None
-		}
+	let join_authorized_via_users_server = if !matches!(
+		room_version_id,
+		RoomVersionId::V1
+			| RoomVersionId::V2
+			| RoomVersionId::V3
+			| RoomVersionId::V4
+			| RoomVersionId::V5
+			| RoomVersionId::V6
+			| RoomVersionId::V7
+	) {
+		join_event_stub
+			.get("content")
+			.and_then(|s| s.as_object())
+			.and_then(|o| o.get("join_authorised_via_users_server"))
+			.and_then(|v| v.as_str())
+			.and_then(|s| OwnedUserId::try_from(s).ok())
+	} else {
+		None
 	};
 
 	join_event_stub.insert(
@@ -569,7 +573,7 @@ async fn join_room_by_id_helper_remote(
 		.then(|pdu| {
 			services
 				.server_keys
-				.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+				.validate_and_add_event_id(pdu, &room_version_id)
 				.inspect_err(|e| {
 					debug_warn!("Could not validate send_join response room_state event: {e:?}");
 				})
@@ -617,7 +621,7 @@ async fn join_room_by_id_helper_remote(
 		.then(|pdu| {
 			services
 				.server_keys
-				.validate_and_add_event_id_no_fetch(pdu, &room_version_id)
+				.validate_and_add_event_id(pdu, &room_version_id)
 		})
 		.ready_filter_map(Result::ok)
 		.ready_for_each(|(event_id, value)| {
@@ -804,6 +808,7 @@ async fn make_join_request(
 	servers: &[OwnedServerName],
 ) -> Result<(federation::membership::prepare_join_event::v1::Response, OwnedServerName)> {
 	let mut make_join_counter: usize = 1;
+	let mut last_error = None;
 
 	for remote_server in servers {
 		if services.globals.server_is_ours(remote_server) {
@@ -842,42 +847,48 @@ async fn make_join_request(
 				}
 				return Ok((response, remote_server.clone()));
 			},
-			| Err(e) => match e.kind() {
-				| ErrorKind::UnableToAuthorizeJoin => {
-					info!(
-						"{remote_server} was unable to verify the joining user satisfied \
-						 restricted join requirements: {e}. Will continue trying."
-					);
-				},
-				| ErrorKind::UnableToGrantJoin => {
-					info!(
-						"{remote_server} believes the joining user satisfies restricted join \
-						 rules, but is unable to authorise a join for us. Will continue trying."
-					);
-				},
-				| ErrorKind::IncompatibleRoomVersion { room_version } => {
-					warn!(
-						"{remote_server} reports the room we are trying to join is \
-						 v{room_version}, which we do not support."
-					);
-					return Err(e);
-				},
-				| ErrorKind::Forbidden { .. } => {
-					warn!("{remote_server} refuses to let us join: {e}.");
-					return Err(e);
-				},
-				| ErrorKind::NotFound => {
-					info!(
-						"{remote_server} does not know about {room_id}: {e}. Will continue \
-						 trying."
-					);
-				},
-				| _ => {
-					info!("{remote_server} failed to make_join: {e}. Will continue trying.");
-				},
+			| Err(e) => {
+				match e.kind() {
+					| ErrorKind::UnableToAuthorizeJoin => {
+						info!(
+							"{remote_server} was unable to verify the joining user satisfied \
+							 restricted join requirements: {e}. Will continue trying."
+						);
+					},
+					| ErrorKind::UnableToGrantJoin => {
+						info!(
+							"{remote_server} believes the joining user satisfies restricted \
+							 join rules, but is unable to authorise a join for us. Will \
+							 continue trying."
+						);
+					},
+					| ErrorKind::IncompatibleRoomVersion { room_version } => {
+						warn!(
+							"{remote_server} reports the room we are trying to join is \
+							 v{room_version}, which we do not support."
+						);
+						return Err(e);
+					},
+					| ErrorKind::Forbidden { .. } => {
+						warn!("{remote_server} refuses to let us join: {e}.");
+					},
+					| ErrorKind::NotFound => {
+						info!(
+							"{remote_server} does not know about {room_id}: {e}. Will continue \
+							 trying."
+						);
+					},
+					| _ => {
+						info!("{remote_server} failed to make_join: {e}. Will continue trying.");
+					},
+				}
+				last_error = Some(e);
 			},
 		}
 	}
 	info!("All {} servers were unable to assist in joining {room_id} :(", servers.len());
+	if let Some(e) = last_error {
+		return Err(e);
+	}
 	Err!(BadServerResponse("No server available to assist in joining."))
 }

@@ -369,7 +369,12 @@ impl Service {
 
 	async fn process_command(&self, command: CommandInput) -> ProcessorResult {
 		let handle_guard = self.handle.read().await;
-		let handle = handle_guard.as_ref().expect("Admin module is not loaded");
+		let Some(handle) = handle_guard.as_ref() else {
+			return Err(CommandOutput::text_plain(
+				"Admin command handler is not yet loaded. The server may still be booting or \
+				 the admin module failed to load.",
+			));
+		};
 
 		let services = self
 			.services

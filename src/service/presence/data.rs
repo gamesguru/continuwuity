@@ -38,7 +38,7 @@ impl Data {
 			presenceid_presence: args.db["presenceid_presence"].clone(),
 			userid_presenceid: args.db["userid_presenceid"].clone(),
 			cache: MokaCache::builder()
-				.max_capacity(cache_capacity as u64)
+				.max_capacity(cache_capacity.try_into().expect("valid cache capacity"))
 				.build(),
 			locks: MutexMap::new(),
 			services: Services {
@@ -92,7 +92,7 @@ impl Data {
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
 	) -> Result<()> {
-		let _lock = self.locks.lock(user_id).await;
+		let lock = self.locks.lock(user_id).await;
 
 		let last_presence = self.get_presence_raw(user_id).await;
 
@@ -160,13 +160,62 @@ impl Data {
 			self.presenceid_presence.remove(&key);
 		}
 
-		drop(_lock);
+		drop(lock);
+
+		Ok(())
+	}
+
+	pub(super) async fn set_presence_silent(
+		&self,
+		user_id: &UserId,
+		presence_state: &PresenceState,
+		currently_active: Option<bool>,
+		last_active_ago: Option<UInt>,
+		status_msg: Option<String>,
+	) -> Result<()> {
+		let last_presence = self.get_presence(user_id).await;
+		let now = utils::millis_since_unix_epoch();
+		let last_active_ts = match last_active_ago {
+			| None => now,
+			| Some(last_active_ago) => now.saturating_sub(last_active_ago.into()),
+		};
+
+		let status_msg = if status_msg.as_ref().is_some_and(String::is_empty) {
+			None
+		} else {
+			status_msg
+		};
+
+		let presence = Presence::new(
+			presence_state.to_owned(),
+			currently_active.unwrap_or(false),
+			last_active_ts,
+			status_msg,
+		);
+
+		// MAGIC: Keep the existing channel count to completely mask this update from
+		// the federation sender and sync streams, totally eliminating startup DoS
+		// bursts
+		let (count, is_new) = match last_presence {
+			| Ok((last_count, _)) => (last_count, false),
+			| Err(_) => (self.services.globals.next_count()?, true),
+		};
+
+		let key = presenceid_key(count, user_id);
+
+		// Overwrite the existing DB key silently
+		self.presenceid_presence.raw_put(key, Json(presence));
+
+		// Only write to userid_presenceid if we actually generated a new count.
+		if is_new {
+			self.userid_presenceid.raw_put(user_id, count);
+		}
 
 		Ok(())
 	}
 
 	pub(super) async fn remove_presence(&self, user_id: &UserId) {
-		let _lock = self.locks.lock(user_id).await;
+		let lock = self.locks.lock(user_id).await;
 
 		self.cache.invalidate(&user_id.to_owned()).await;
 
@@ -183,7 +232,7 @@ impl Data {
 		self.presenceid_presence.remove(&key);
 		self.userid_presenceid.remove(user_id);
 
-		drop(_lock);
+		drop(lock);
 	}
 
 	pub(super) fn clear_cache(&self) { self.cache.invalidate_all(); }

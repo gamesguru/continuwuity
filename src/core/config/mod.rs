@@ -68,6 +68,10 @@ pub struct Config {
 	///
 	/// Also see the `[global.well_known]` config section at the very bottom.
 	///
+	/// If `client` is not set under `[global.well_known]`, the server name will
+	/// be used as the base domain for user-facing links (such as password
+	/// reset links) created by Continuwuity.
+	///
 	/// Examples of delegation:
 	/// - https://continuwuity.org/.well-known/matrix/server
 	/// - https://continuwuity.org/.well-known/matrix/client
@@ -296,6 +300,13 @@ pub struct Config {
 	/// This value is critical for the server to federate efficiently.
 	/// NXDOMAIN's are assumed to not be returning to the federation and
 	/// aggressively cached rather than constantly rechecked.
+	///
+	/// Note: For massive system-level bandwidth savings, it's highly
+	/// recommended you install a dedicated localized caching resolver
+	/// explicitly on your host (such as Unbound, dnsmasq, or systemd-resolved)
+	/// rather than forwarding directly to public resolvers (like 1.1.1.1).
+	/// This ensures aggressive NXDomain/NoData lookups are caught efficiently
+	/// at the OS level.
 	///
 	/// Defaults to 3 days as these are *very rarely* false negatives.
 	///
@@ -883,14 +894,20 @@ pub struct Config {
 
 	/// Max log level for continuwuity. Allows debug, info, warn, or error.
 	///
+	/// You can append specific module filters or custom targets to this string
+	/// to selectively elevate or demote logs using the RUST_LOG syntax.
+	/// For example, noisy federation networking events are hidden (opt-in) by
+	/// default. To view them alongside the standard "info" logs, you can use:
+	/// log = "info,federation=debug"
+	///
 	/// See also:
 	/// https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
 	///
 	/// **Caveat**:
-	/// For release builds, the tracing crate is configured to only implement
-	/// levels higher than error to avoid unnecessary overhead in the compiled
-	/// binary from trace macros. For debug builds, this restriction is not
-	/// applied.
+	/// For release builds, the tracing crate is configured at compile-time to
+	/// automatically strip out `debug` and `trace` macros (compiling only
+	/// `info` and above) to avoid unnecessary overhead in the binary
+	/// execution. For debug builds, this restriction is not applied.
 	///
 	/// default: "info"
 	#[serde(default = "default_log")]
@@ -1504,6 +1521,11 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_legacy_media: bool,
 
+	/// Disallow remote legacy media downloading. If set to true, requests for
+	/// remote media using legacy endpoints will be rejected. This is useful
+	/// for stopping unauthenticated abusive media traffic (e.g. from malicious
+	/// apps or scripts hitting the legacy endpoints) from forcing the server
+	/// to fetch and cache things. Local media is still served.
 	#[serde(default = "true_fn")]
 	pub freeze_legacy_media: bool,
 
@@ -2095,6 +2117,13 @@ pub struct Config {
 	#[serde(default)]
 	pub force_disable_first_run_mode: bool,
 
+	/// Allow search engines and crawlers to index Continuwuity's built-in
+	/// webpages served under the `/_continuwuity/` prefix.
+	///
+	/// default: false
+	#[serde(default)]
+	pub allow_web_indexing: bool,
+
 	/// display: nested
 	#[serde(default)]
 	pub ldap: LdapConfig,
@@ -2112,6 +2141,11 @@ pub struct Config {
 	/// display: nested
 	#[serde(default)]
 	pub matrix_rtc: MatrixRtcConfig,
+
+	/// Experimental features
+	/// display: nested
+	#[serde(default)]
+	pub experimental_features: ExperimentalConfig,
 
 	#[serde(flatten)]
 	#[allow(clippy::zero_sized_map_values)]
@@ -2433,6 +2467,22 @@ pub struct DraupnirConfig {
 	/// The authentication secret defined in
 	/// web->synapseHTTPAntispam->authorization
 	pub secret: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[config_example_generator(
+	filename = "conduwuit-example.toml",
+	section = "global.experimental_features",
+	optional = "true"
+)]
+pub struct ExperimentalConfig {
+	/// MSC3266: room previews
+	#[serde(default)]
+	pub msc3266_enabled: bool,
+
+	/// MSC4222: state_after in sync v2
+	#[serde(default)]
+	pub msc4222_enabled: bool,
 }
 
 const DEPRECATED_KEYS: &[&str] = &[
@@ -2817,9 +2867,9 @@ fn default_client_request_timeout() -> u64 { 180 }
 
 fn default_client_response_timeout() -> u64 { 120 }
 
-fn default_client_shutdown_timeout() -> u64 { 15 }
+fn default_client_shutdown_timeout() -> u64 { 10 }
 
-fn default_sender_shutdown_timeout() -> u64 { 5 }
+fn default_sender_shutdown_timeout() -> u64 { 3 }
 
 // blurhashing defaults recommended by https://blurha.sh/
 // 2^25

@@ -12,7 +12,7 @@ license = "Apache-2.0"
 # See also `rust-toolchain.toml`
 readme = "README.md"
 repository = "https://forgejo.ellis.link/continuwuation/continuwuity"
-version = "0.5.6"
+version = "0.5.7-alpha.1"
 
 [workspace.metadata.crane]
 name = "conduwuit"
@@ -99,7 +99,7 @@ features = [
 [workspace.dependencies.axum-extra]
 version = "0.12.0"
 default-features = false
-features = ["typed-header", "tracing"]
+features = ["typed-header", "tracing", "cookie"]
 
 [workspace.dependencies.axum-server]
 version = "0.7.2"
@@ -352,7 +352,7 @@ version = "6.1.0"
 [workspace.dependencies.ruma]
 git = "https://forgejo.ellis.link/continuwuation/ruwuma"
 #branch = "conduwuit-changes"
-rev = "bb12ed288a31a23aa11b10ba0fad22b7f985eb88"
+rev = "a97b91adcc012ef04991d823b8b5a79c6686ae48"
 features = [
     "compat",
     "rand",
@@ -389,7 +389,6 @@ features = [
     "unstable-msc4210", # remove legacy mentions
     "unstable-extensible-events",
     "unstable-pdu",
-    "unstable-msc4155",
     "unstable-msc4143", # livekit well_known response
     "unstable-msc4284"
 ]
@@ -400,10 +399,10 @@ rev = "61d9d23872197e9ace4a477f2617d5c9f50ecb23"
 default-features = false
 features = [
     "multi-threaded-cf",
-    "mt_static",
     "lz4",
     "zstd",
     "bzip2",
+    "snappy",
 ]
 
 [workspace.dependencies.sha2]
@@ -557,9 +556,6 @@ version = "1.0.2"
 version = "0.12.0"
 default-features = false
 features = ["sync", "tls-rustls", "rustls-provider"]
-
-[workspace.dependencies.resolv-conf]
-version = "0.7.5"
 
 [workspace.dependencies.yansi]
 version = "1.0.1"
@@ -977,3 +973,6 @@ needless_raw_string_hashes = "allow"
 
 # TODO: Enable this lint & fix all instances
 collapsible_if = "allow"
+
+# TODO: break these apart
+cognitive_complexity = "allow"

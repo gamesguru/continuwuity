@@ -9,7 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use conduwuit::{
-	Error, Result, Server, checked, debug, debug_warn, error, info, result::LogErr, trace, utils,
+	Error, Result, Server, checked, debug, debug_info, debug_warn, error, info, result::LogErr,
+	utils,
 };
 use dashmap::DashMap;
 use database::Database;
@@ -43,7 +44,7 @@ struct Services {
 	state_cache: Dep<crate::rooms::state_cache::Service>,
 }
 
-type TimerType = (OwnedUserId, Duration);
+type TimerType = (OwnedUserId, Option<Duration>);
 
 #[async_trait]
 impl crate::Service for Service {
@@ -75,13 +76,31 @@ impl crate::Service for Service {
 	async fn worker(self: Arc<Self>) -> Result<()> {
 		let receiver = self.timer_channel.1.clone();
 
+		// Resetting dormant online/away statuses to offline on startup
+		let startup_task = if self.services.server.config.allow_local_presence {
+			let self_ = Arc::clone(&self);
+			Some(self.services.server.runtime().spawn(async move {
+				self_.unset_all_presence().await;
+				_ = self_
+					.ping_presence(&self_.services.globals.server_user, &PresenceState::Online)
+					.await;
+			}))
+		} else {
+			None
+		};
+
 		// Timers scheduled to auto-demote idle users (online -> unavailable -> offline)
 		let mut presence_timers = FuturesUnordered::new();
 		let mut scheduled_at: HashMap<OwnedUserId, Instant> = HashMap::new();
+		let mut events_received: u64 = 0;
+		let mut next_tally = Instant::now()
+			.checked_add(Duration::from_secs(300))
+			.unwrap_or_else(Instant::now);
+
 		while !receiver.is_closed() {
 			tokio::select! {
 				Some((user_id, created_at)) = presence_timers.next() => {
-					// Only process latest timer, avoid overhead of whole list (they may have many updates in the queue)
+					// Only process latest timer, avoid overhead of whole list
 					if scheduled_at.get(&user_id) == Some(&created_at) {
 						scheduled_at.remove(&user_id);
 						self.process_presence_timer(&user_id).await.log_err().ok();
@@ -89,14 +108,35 @@ impl crate::Service for Service {
 				},
 				event = receiver.recv_async() => match event {
 					Err(_) => break,
-					Ok((user_id, timeout)) => {
+					Ok((user_id, Some(timeout))) => {
+						events_received = events_received.saturating_add(1);
 						let now = Instant::now();
 						scheduled_at.insert(user_id.clone(), now);
 						debug!("Adding timer {}: {user_id} timeout:{timeout:?}", presence_timers.len());
 						presence_timers.push(presence_timer(user_id, timeout, now));
 					},
-				},
+					Ok((user_id, None)) => {
+						scheduled_at.remove(&user_id);
+					},
+				}
 			}
+
+			// Periodic tally
+			if Instant::now() >= next_tally {
+				info!(
+					"presence stats: {} active timers, {} received",
+					presence_timers.len(),
+					events_received
+				);
+				events_received = 0;
+				next_tally = Instant::now()
+					.checked_add(Duration::from_secs(300))
+					.unwrap_or_else(Instant::now);
+			}
+		}
+
+		if let Some(task) = startup_task {
+			_ = task.await;
 		}
 
 		Ok(())
@@ -141,7 +181,7 @@ impl Service {
 	pub async fn ping_presence(&self, user_id: &UserId, new_state: &PresenceState) -> Result<()> {
 		const REFRESH_TIMEOUT: u64 = 60 * 1000;
 
-		// Raw payload is smaller/cheaper in memory
+		// Raw payload is smaller/cheaper in memory (and hits the fast MokaCache)
 		let last_presence = self.db.get_presence_raw(user_id).await;
 		let state_changed = match last_presence {
 			| Err(_) => true,
@@ -216,7 +256,7 @@ impl Service {
 
 			self.timer_channel
 				.0
-				.send((user_id.to_owned(), Duration::from_secs(timeout)))
+				.send((user_id.to_owned(), Some(Duration::from_secs(timeout))))
 				.map_err(|e| {
 					error!("Failed to add presence timer: {}", e);
 					Error::bad_database("Failed to add presence timer")
@@ -236,63 +276,76 @@ impl Service {
 
 	// Unset online/unavailable presence to offline on startup
 	pub async fn unset_all_presence(&self) {
-		info!("Resetting presence for local users...");
-		let _cork = self.services.db.cork();
+		use futures::{StreamExt, stream::FuturesUnordered};
+
+		debug_info!("Resetting presence for active users...");
 		let mut reset = 0_usize;
+		let mut jobs = FuturesUnordered::new();
 
-		for user_id in &self
-			.services
-			.users
-			.list_local_users()
-			.map(ToOwned::to_owned)
-			.collect::<Vec<OwnedUserId>>()
-			.await
-		{
-			let raw = self.db.get_presence_raw(user_id).await;
+		let mut presence_stream = Box::pin(self.db.presence_since(0));
+		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
+			if !self.services.server.running() {
+				info!("Shutdown requested during presence reset.");
+				break;
+			}
 
-			let (_count, presence) = match raw {
-				| Ok((count, ref presence)) => (count, presence),
-				| _ => continue,
+			if !self.services.globals.user_is_local(user_id)
+				|| user_id == self.services.globals.server_user
+			{
+				continue;
+			}
+
+			let Ok(presence) = Presence::from_json_bytes(bytes) else {
+				continue;
 			};
 
 			if !matches!(
 				presence.state,
 				PresenceState::Unavailable | PresenceState::Online | PresenceState::Busy
 			) {
-				trace!(%user_id, ?presence, "Skipping user");
 				continue;
 			}
 
+			let user_id = user_id.to_owned();
 			let now = utils::millis_since_unix_epoch();
 			let last_active_ago =
-				UInt::new_saturating(now.saturating_sub(presence.last_active_ts));
+				Some(UInt::new_saturating(now.saturating_sub(presence.last_active_ts)));
 
-			trace!(%user_id, ?presence, "Resetting presence to offline");
+			reset = reset.saturating_add(1);
 
-			if self
-				.db
-				.set_presence(
-					user_id,
-					&PresenceState::Offline,
-					Some(false),
-					Some(last_active_ago),
-					presence.status_msg.clone(),
-				)
-				.await
-				.inspect_err(|e| {
+			let status_msg = presence.status_msg.clone();
+
+			jobs.push(async move {
+				if let Err(e) = self
+					.db
+					.set_presence_silent(
+						&user_id,
+						&PresenceState::Offline,
+						Some(false),
+						last_active_ago,
+						status_msg,
+					)
+					.await
+				{
 					debug_warn!(
-						?presence,
-						"{user_id} has invalid presence in database and failed to reset it to \
-						 offline: {e}"
+						?user_id,
+						"Failed to reset presence for {user_id} to offline: {e}"
 					);
-				})
-				.is_ok()
-			{
-				reset = reset.saturating_add(1);
+				}
+			});
+
+			if jobs.len() >= 100 {
+				while jobs.next().await == Some(()) {
+					if jobs.len() < 50 {
+						break;
+					}
+				}
 			}
 		}
 
-		info!("Presence reset complete: {reset} users set to offline.");
+		while jobs.next().await == Some(()) {}
+
+		info!("Presence reset complete: {reset} users reset to offline.");
 	}
 
 	/// Returns the most recent presence updates that happened after the event
@@ -330,7 +383,7 @@ impl Service {
 			let now = utils::millis_since_unix_epoch();
 			last_active_ago =
 				Some(UInt::new_saturating(now.saturating_sub(presence.last_active_ts)));
-			status_msg = presence.status_msg.clone();
+			status_msg.clone_from(&presence.status_msg);
 		}
 
 		let new_state = match (&presence_state, last_active_ago.map(u64::from)) {
@@ -375,7 +428,7 @@ impl Service {
 		// Iterate rooms by stream is probably fastest here
 		let mut joined_rooms = self.services.state_cache.rooms_joined(user_id);
 		while let Some(room_id) = joined_rooms.next().await {
-			let mut room_servers = self.services.state_cache.room_servers(&room_id);
+			let mut room_servers = self.services.state_cache.room_servers(room_id);
 			while let Some(server) = room_servers.next().await {
 				if !self.services.globals.server_is_ours(server) {
 					servers.insert(server.to_owned());
@@ -408,7 +461,6 @@ impl Service {
 		Ok(())
 	}
 }
-
 async fn presence_timer(
 	user_id: OwnedUserId,
 	timeout: Duration,

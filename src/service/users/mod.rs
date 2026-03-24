@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 #[cfg(feature = "ldap")]
 use conduwuit::result::LogErr;
 use conduwuit::{
-	Err, Error, Result, Server, debug_warn, err, is_equal_to, trace,
+	Err, Error, Result, Server, debug_warn, err, info, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
 };
 #[cfg(feature = "ldap")]
@@ -156,7 +156,7 @@ impl Service {
 		sender_user: &UserId,
 		recipient_user: &UserId,
 	) -> FilterLevel {
-		if self.user_is_ignored(sender_user, recipient_user).await {
+		let level = if self.user_is_ignored(sender_user, recipient_user).await {
 			FilterLevel::Ignore
 		} else {
 			self.services
@@ -167,7 +167,10 @@ impl Service {
 					config.content.user_filter_level(sender_user)
 				})
 				.unwrap_or(FilterLevel::Allow)
-		}
+		};
+
+		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");
+		level
 	}
 
 	/// Check if a user is an admin
@@ -484,6 +487,7 @@ impl Service {
 
 	/// Removes a device from a user.
 	pub async fn remove_device(&self, user_id: &UserId, device_id: &DeviceId) {
+		info!("Removing device {device_id} for user {user_id}");
 		// Remove dehydrated device if this is the dehydrated device
 		let _: Result<_> = self
 			.remove_dehydrated_device(user_id, Some(device_id))
@@ -509,6 +513,16 @@ impl Service {
 		// TODO: Remove onetimekeys
 
 		increment(&self.db.userid_devicelistversion, user_id.as_bytes());
+
+		// Remove MSC3890 local notification settings for this device
+		self.services
+			.account_data
+			.delete_all(None, user_id, &[
+				&format!("org.matrix.msc3890.local_notification_settings.{device_id}"),
+				&format!("m.local_notification_settings.{device_id}"),
+			])
+			.await
+			.ok();
 
 		self.db.userdeviceid_metadata.del(userdeviceid);
 		self.mark_device_key_update(user_id).await;

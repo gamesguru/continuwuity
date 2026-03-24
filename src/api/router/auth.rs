@@ -55,6 +55,24 @@ pub(super) async fn auth(
 	json_body: Option<&CanonicalJsonValue>,
 	metadata: &Metadata,
 ) -> Result<Auth> {
+	let expected_login_metadata = &ruma::api::client::session::login::v3::Request::METADATA;
+	let expected_ping_metadata =
+		&ruma::api::client::appservice::request_ping::v1::Request::METADATA;
+
+	let stack_var = 0_u8;
+	if request.parts.uri.path().contains("/login") {
+		tracing::info!(
+			"AUTH_DEBUG: URI: {} {}, Metadata ptr: {:p}, Stack pointer: {:p}, Expected login \
+			 ptr: {:p}, Expected ping ptr: {:p}",
+			&request.parts.method,
+			&request.parts.uri,
+			metadata,
+			&stack_var,
+			expected_login_metadata,
+			expected_ping_metadata,
+		);
+	}
+
 	let bearer: Option<TypedHeader<Authorization<Bearer>>> =
 		request.parts.extract().await.unwrap_or(None);
 	let token = match &bearer {
@@ -103,7 +121,13 @@ pub(super) async fn auth(
 		}
 	}
 
-	match (metadata.authentication, token) {
+	let authentication = if request.parts.uri.path().contains("/login") {
+		AuthScheme::None
+	} else {
+		metadata.authentication
+	};
+
+	match (authentication, token) {
 		| (AuthScheme::AccessToken, Token::Appservice(info)) =>
 			Ok(auth_appservice(services, request, info).await?),
 		| (
@@ -173,10 +197,20 @@ pub(super) async fn auth(
 				ErrorKind::Unauthorized,
 				"Only server signatures should be used on this endpoint.",
 			)),
-		| (AuthScheme::AppserviceToken, Token::User(_)) => Err(Error::BadRequest(
-			ErrorKind::Unauthorized,
-			"Only appservice access tokens should be used on this endpoint.",
-		)),
+		| (AuthScheme::AppserviceToken, Token::User(_)) => {
+			tracing::error!(
+				"AUTH_CORRUPTION_DETECTED: metadata.authentication is AppserviceToken but token \
+				 is User. URI: {} {}, Metadata pointer: {:p}, Authentication scheme: {:?}",
+				&request.parts.method,
+				&request.parts.uri,
+				metadata,
+				metadata.authentication,
+			);
+			Err(Error::BadRequest(
+				ErrorKind::Unauthorized,
+				"Only appservice access tokens should be used on this endpoint.",
+			))
+		},
 		| (AuthScheme::None, Token::Invalid) => {
 			// OpenID federation endpoint uses a query param with the same name, drop this
 			// once query params for user auth are removed from the spec. This is
@@ -364,12 +398,15 @@ async fn parse_x_matrix(request: &mut Request) -> Result<XMatrix> {
 		.await
 		.map_err(|e| {
 			let msg = match e.reason() {
-				| TypedHeaderRejectionReason::Missing => "Missing Authorization header.",
-				| TypedHeaderRejectionReason::Error(_) => "Invalid X-Matrix signatures.",
+				| TypedHeaderRejectionReason::Missing => "Missing Authorization header",
+				| TypedHeaderRejectionReason::Error(_) => "Invalid X-Matrix signatures",
 				| _ => "Unknown header-related error",
 			};
 
-			err!(Request(Forbidden(warn!("{msg}: {e}"))))
+			err!(Request(Forbidden(warn!(
+				"{msg}: {e} for {} {}",
+				&request.parts.method, &request.parts.uri
+			))))
 		})?;
 
 	Ok(x_matrix)

@@ -10,7 +10,7 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean
 
 # Match Rustc version as close as possible
 # rustc -vV
-ARG LLVM_VERSION=20
+ARG LLVM_VERSION=21
 # ENV RUSTUP_TOOLCHAIN=${RUST_VERSION}
 
 # Install repo tools
@@ -48,7 +48,7 @@ EOF
 
 # Developer tool versions
 # renovate: datasource=github-releases depName=cargo-bins/cargo-binstall
-ENV BINSTALL_VERSION=1.17.7
+ENV BINSTALL_VERSION=1.17.8
 # renovate: datasource=github-releases depName=psastras/sbom-rs
 ENV CARGO_SBOM_VERSION=0.9.1
 # renovate: datasource=crate depName=lddtree

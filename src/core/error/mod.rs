@@ -4,7 +4,7 @@ mod panic;
 mod response;
 mod serde;
 
-use std::{any::Any, borrow::Cow, convert::Infallible, sync::PoisonError};
+use std::{any::Any, borrow::Cow, convert::Infallible, error::Error as _, sync::PoisonError};
 
 pub use self::{err::visit, log::*};
 
@@ -66,8 +66,8 @@ pub enum Error {
 	Poison(Cow<'static, str>),
 	#[error("Regex error: {0}")]
 	Regex(#[from] regex::Error),
-	#[error("Request error: {0}")]
-	Reqwest(#[from] reqwest::Error),
+	#[error("{0}")]
+	Reqwest(#[source] FormattedReqwestError),
 	#[error("{0}")]
 	SerdeDe(Cow<'static, str>),
 	#[error("{0}")]
@@ -131,6 +131,12 @@ pub enum Error {
 	#[error("uiaa")]
 	Uiaa(ruma::api::client::uiaa::UiaaInfo),
 
+	// federation / remote
+	#[error("Federation timeout: {0}")]
+	FederationTimeout(ruma::OwnedServerName),
+	#[error("Federation connection error: {0}")]
+	FederationConnection(ruma::OwnedServerName),
+
 	// unique / untyped
 	#[error("{0}")]
 	Err(Cow<'static, str>),
@@ -159,6 +165,9 @@ impl Error {
 	pub fn message(&self) -> String {
 		match self {
 			| Self::Federation(origin, error) => format!("Answer from {origin}: {error}"),
+			| Self::FederationTimeout(origin) => format!("Federation timeout for {origin}"),
+			| Self::FederationConnection(origin) =>
+				format!("Federation connection error for {origin}"),
 			| Self::Ruma(error) => response::ruma_error_message(error),
 			| _ => format!("{self}"),
 		}
@@ -191,6 +200,8 @@ impl Error {
 			| Self::Reqwest(error) => error.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
 			| Self::Conflict(_) => StatusCode::CONFLICT,
 			| Self::Io(error) => response::io_error_code(error.kind()),
+			| Self::FederationTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
+			| Self::FederationConnection(_) => StatusCode::BAD_GATEWAY,
 			| Self::Uiaa(_) => StatusCode::UNAUTHORIZED,
 			| _ => StatusCode::INTERNAL_SERVER_ERROR,
 		}
@@ -236,3 +247,41 @@ pub fn infallible(_e: &Infallible) {
 #[must_use]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sanitized_message(e: Error) -> String { e.sanitized_message() }
+
+#[derive(Debug)]
+pub struct FormattedReqwestError(reqwest::Error);
+
+impl std::ops::Deref for FormattedReqwestError {
+	type Target = reqwest::Error;
+
+	fn deref(&self) -> &Self::Target { &self.0 }
+}
+
+impl std::error::Error for FormattedReqwestError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { self.0.source() }
+}
+
+impl std::fmt::Display for FormattedReqwestError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		if let Some(hyper_error) = self.0.source()
+			&& hyper_error.is::<hyper_util::client::legacy::Error>()
+			&& let Some(real_error) = hyper_error.source()
+		{
+			if let Some(real_reason) = real_error.source() {
+				write!(f, "{real_error}: {real_reason}")
+			} else {
+				write!(f, "{real_error}")
+			}
+		} else {
+			write!(f, "Request error: {}", &self.0)
+		}
+	}
+}
+
+impl From<reqwest::Error> for FormattedReqwestError {
+	fn from(err: reqwest::Error) -> Self { Self(err) }
+}
+
+impl From<reqwest::Error> for Error {
+	fn from(err: reqwest::Error) -> Self { Self::Reqwest(err.into()) }
+}

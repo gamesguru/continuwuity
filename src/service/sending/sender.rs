@@ -392,9 +392,24 @@ impl Service {
 
 		let (device_changes, receipts, presence) = join!(device_changes, receipts, presence);
 
+		// Collect them all
+		let receipts = receipts.flatten();
+		let presence = presence.flatten();
+
+		if !device_changes.is_empty() {
+			self.stats.outgoing_device_lists.fetch_add(
+				device_changes.len().try_into().unwrap_or(u64::MAX),
+				Ordering::Relaxed,
+			);
+		}
+
+		if receipts.is_some() {
+			self.stats.outgoing_receipts.fetch_add(1, Ordering::Relaxed);
+		}
+
 		let mut events = device_changes;
-		events.extend(presence.into_iter().flatten());
-		events.extend(receipts.into_iter().flatten());
+		events.extend(presence);
+		events.extend(receipts);
 
 		Ok((events, max_edu_count.load(Ordering::Acquire)))
 	}
@@ -672,6 +687,10 @@ impl Service {
 			return None;
 		}
 
+		self.stats
+			.outgoing_presence
+			.fetch_add(presence_updates.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
+
 		let presence_content = Edu::Presence(PresenceContent { push: presence_updates });
 
 		let mut buf = EduBuf::new();
@@ -876,6 +895,41 @@ impl Service {
 			return Ok(Destination::Federation(server));
 		}
 
+		let mut typing = 0_u64;
+		let mut to_device = 0_u64;
+		let mut unknown = 0_u64;
+
+		for edu in &edus {
+			match edu.deserialize() {
+				| Ok(Edu::Typing(_)) => typing = typing.saturating_add(1),
+				| Ok(Edu::DirectToDevice(_)) => to_device = to_device.saturating_add(1),
+				| Ok(Edu::Presence(_) | Edu::Receipt(_) | Edu::DeviceListUpdate(_)) => {},
+				| _ => unknown = unknown.saturating_add(1),
+			}
+		}
+
+		if typing > 0 {
+			self.stats
+				.outgoing_typing
+				.fetch_add(typing, Ordering::Relaxed);
+		}
+		if to_device > 0 {
+			self.stats
+				.outgoing_to_device
+				.fetch_add(to_device, Ordering::Relaxed);
+		}
+		if unknown > 0 {
+			self.stats
+				.outgoing_edus
+				.fetch_add(unknown, Ordering::Relaxed);
+		}
+
+		// Track federation stats
+		self.stats
+			.outgoing_pdus
+			.fetch_add(pdus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
+		self.stats.outgoing_txns.fetch_add(1, Ordering::Relaxed);
+
 		let preimage = pdus
 			.iter()
 			.map(|raw| raw.get().as_bytes())
@@ -907,7 +961,10 @@ impl Service {
 		}
 
 		match result {
-			| Err(error) => Err((Destination::Federation(server), error)),
+			| Err(error) => {
+				self.stats.outgoing_errors.fetch_add(1, Ordering::Relaxed);
+				Err((Destination::Federation(server), error))
+			},
 			| Ok(_) => Ok(Destination::Federation(server)),
 		}
 	}

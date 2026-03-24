@@ -230,8 +230,4 @@ where
 		.write_opt(&batch, write_options)
 		.or_else(or_else)
 		.expect("database insert batch error");
-
-	if !self.db.corked() {
-		self.db.flush().expect("database flush error");
-	}
 }

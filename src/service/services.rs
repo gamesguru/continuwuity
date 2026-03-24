@@ -12,8 +12,8 @@ use crate::{
 	account_data, admin, announcements, antispam, appservice, client, config, emergency,
 	federation, firstrun, globals, key_backups,
 	manager::Manager,
-	media, moderation, presence, pusher, registration_tokens, resolver, rooms, sending,
-	server_keys,
+	media, moderation, password_reset, presence, pusher, registration_tokens, resolver, rooms,
+	sending, server_keys,
 	service::{self, Args, Map, Service},
 	sync, transactions, uiaa, users,
 };
@@ -28,6 +28,7 @@ pub struct Services {
 	pub globals: Arc<globals::Service>,
 	pub key_backups: Arc<key_backups::Service>,
 	pub media: Arc<media::Service>,
+	pub password_reset: Arc<password_reset::Service>,
 	pub presence: Arc<presence::Service>,
 	pub pusher: Arc<pusher::Service>,
 	pub registration_tokens: Arc<registration_tokens::Service>,
@@ -82,6 +83,7 @@ impl Services {
 			globals: build!(globals::Service),
 			key_backups: build!(key_backups::Service),
 			media: build!(media::Service),
+			password_reset: build!(password_reset::Service),
 			presence: build!(presence::Service),
 			pusher: build!(pusher::Service),
 			registration_tokens: build!(registration_tokens::Service),
@@ -129,22 +131,25 @@ impl Services {
 		info!("Starting services...");
 
 		self.admin.set_services(Some(Arc::clone(self)).as_ref());
-		info!("Running database migrations... This may take time depending on database size.");
+		warn!(
+			"Running database migrations... This may take a while depending on the database \
+			 size."
+		);
 		super::migrations::migrations(self)
 			.await
 			.inspect_err(|e| error!("Migrations failed: {e}"))?;
 
 		info!("Starting service manager...");
-		let manager = Manager::new(self);
-		*self.manager.lock().await = Some(Arc::clone(&manager));
+		let manager = {
+			let mut lock = self.manager.lock().await;
+			let manager = Manager::new(self);
+			_ = lock.insert(Arc::clone(&manager));
+			manager
+		};
 
-		// Reset all local user presence on server start
+		// reset dormant online/away statuses to offline on startup
 		if self.server.config.allow_local_presence {
-			self.presence.unset_all_presence().await;
-			_ = self
-				.presence
-				.ping_presence(&self.globals.server_user, &ruma::presence::PresenceState::Online)
-				.await;
+			info!("Local presence statuses will be reset in the background.");
 		}
 
 		info!("Starting service workers...");

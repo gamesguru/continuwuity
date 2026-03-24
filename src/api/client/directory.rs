@@ -418,7 +418,7 @@ async fn public_rooms_chunk(services: &Services, room_id: OwnedRoomId) -> Public
 		avatar_url: avatar_url.into_option().unwrap_or_default().url,
 		canonical_alias,
 		guest_can_join,
-		join_rule: join_rule.unwrap_or_default(),
+		join_rule: join_rule.unwrap_or(PublicRoomJoinRule::Public),
 		name,
 		num_joined_members: num_joined_members
 			.map(TryInto::try_into)
