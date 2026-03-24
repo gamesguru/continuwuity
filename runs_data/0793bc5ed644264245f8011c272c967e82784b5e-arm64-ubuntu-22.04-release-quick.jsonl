@@ -696,7 +696,7 @@
 {"Action":"pass","Test":"TestToDeviceMessages","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"0793bc5ed644264245f8011c272c967e82784b5e"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"0793bc5ed644264245f8011c272c967e82784b5e"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/good_connectivity","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"0793bc5ed644264245f8011c272c967e82784b5e"}
-{"Action":"fail","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"0793bc5ed644264245f8011c272c967e82784b5e"}
+{"Action":"pass","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"0793bc5ed644264245f8011c272c967e82784b5e"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation/stopped_server","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"0793bc5ed644264245f8011c272c967e82784b5e"}
 {"Action":"fail","Test":"TestTxnIdWithRefreshToken","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"0793bc5ed644264245f8011c272c967e82784b5e"}
 {"Action":"fail","Test":"TestTxnIdempotency","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"0793bc5ed644264245f8011c272c967e82784b5e"}
