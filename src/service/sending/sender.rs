@@ -863,19 +863,16 @@ impl Service {
 			return Ok(Destination::Federation(server));
 		}
 
-		let mut typing = 0;
-		let mut to_device = 0;
-		let mut unknown = 0;
+		let mut typing = 0_u64;
+		let mut to_device = 0_u64;
+		let mut unknown = 0_u64;
 
 		for edu in &edus {
 			match edu.deserialize() {
-				| Ok(ruma::api::federation::transactions::edu::Edu::Typing(_)) => typing += 1,
-				| Ok(ruma::api::federation::transactions::edu::Edu::DirectToDevice(_)) =>
-					to_device += 1,
-				| Ok(ruma::api::federation::transactions::edu::Edu::Presence(_))
-				| Ok(ruma::api::federation::transactions::edu::Edu::Receipt(_))
-				| Ok(ruma::api::federation::transactions::edu::Edu::DeviceListUpdate(_)) => {},
-				| _ => unknown += 1,
+				| Ok(Edu::Typing(_)) => typing = typing.saturating_add(1),
+				| Ok(Edu::DirectToDevice(_)) => to_device = to_device.saturating_add(1),
+				| Ok(Edu::Presence(_) | Edu::Receipt(_) | Edu::DeviceListUpdate(_)) => {},
+				| _ => unknown = unknown.saturating_add(1),
 			}
 		}
 
