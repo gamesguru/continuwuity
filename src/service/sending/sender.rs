@@ -10,7 +10,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit_core::{
-	Error, Event, Result, at, debug, err, error,
+	Error, Event, Result, debug, err, error,
 	result::LogErr,
 	trace,
 	utils::{
@@ -57,6 +57,7 @@ enum TransactionStatus {
 	Running,
 	Failed(u32, Instant), // number of times failed, time of last failure
 	Retrying(u32),        // number of times failed
+	Cooldown(Instant),
 }
 
 type SendingError = (Destination, Error);
@@ -149,6 +150,9 @@ impl Service {
 				| TransactionStatus::Failed(..) => {
 					panic!("Request that was not even running failed?!")
 				},
+				| TransactionStatus::Cooldown(..) => {
+					panic!("Request in cooldown failed?!")
+				},
 			}
 		});
 	}
@@ -157,29 +161,31 @@ impl Service {
 	async fn handle_response_ok<'a>(
 		&'a self,
 		dest: &Destination,
-		futures: &mut SendingFutures<'a>,
+		_futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
 		let _cork = self.db.db.cork();
 		self.db.delete_all_active_requests_for(dest).await;
 
-		// Find events that have been added since starting the last request
-		let new_events = self
-			.db
-			.queued_requests(dest)
-			.take(DEQUEUE_LIMIT)
-			.collect::<Vec<_>>()
-			.await;
+		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now()));
 
-		// Insert any pdus we found
-		if !new_events.is_empty() {
-			self.db.mark_as_active(new_events.iter());
-
-			let new_events_vec = new_events.into_iter().map(at!(1)).collect();
-			futures.push(self.send_events(dest.clone(), new_events_vec));
-		} else {
-			statuses.remove(dest);
-		}
+		let dest_clone = dest.clone();
+		let sender = self
+			.channels
+			.get(self.shard_id(dest))
+			.expect("channel")
+			.0
+			.clone();
+		self.server.runtime().spawn(async move {
+			tokio::time::sleep(Duration::from_millis(1500)).await;
+			sender
+				.send(Msg {
+					dest: dest_clone,
+					event: SendingEvent::Flush,
+					queue_id: Vec::new(),
+				})
+				.ok();
+		});
 	}
 
 	#[allow(clippy::needless_pass_by_ref_mut)]
@@ -190,7 +196,19 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
-		let iv = vec![(msg.queue_id, msg.event)];
+		let mut iv = vec![(msg.queue_id, msg.event)];
+
+		if matches!(iv[0].1, SendingEvent::Flush) {
+			let _cork = self.db.db.cork();
+			let queued = self
+				.db
+				.queued_requests(&msg.dest)
+				.take(DEQUEUE_LIMIT)
+				.collect::<Vec<_>>()
+				.await;
+			iv.extend(queued);
+		}
+
 		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
 				futures.push(self.send_events(msg.dest, events));
@@ -351,6 +369,13 @@ impl Service {
 				},
 				TransactionStatus::Running | TransactionStatus::Retrying(_) => {
 					allow = false; // already running
+				},
+				TransactionStatus::Cooldown(time) => {
+					if time.elapsed() < Duration::from_millis(1500) {
+						allow = false;
+					} else {
+						*e = TransactionStatus::Running;
+					}
 				},
 			})
 			.or_insert(TransactionStatus::Running);

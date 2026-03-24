@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use conduwuit::{
 	Result, debug_warn, utils,
-	utils::{ReadyExt, mutex_map::MutexMap, stream::TryIgnore},
+	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
 use futures::Stream;
-use moka::future::Cache as MokaCache;
-use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
+use moka::sync::Cache;
+use ruma::{UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
 
 use super::Presence;
 use crate::{Dep, globals, users};
@@ -15,8 +15,7 @@ use crate::{Dep, globals, users};
 pub(crate) struct Data {
 	presenceid_presence: Arc<Map>,
 	userid_presenceid: Arc<Map>,
-	cache: MokaCache<OwnedUserId, (u64, Presence)>,
-	locks: MutexMap<OwnedUserId, ()>,
+	presence_cache: Cache<ruma::OwnedUserId, Arc<(u64, Presence)>>,
 	services: Services,
 }
 
@@ -27,20 +26,18 @@ struct Services {
 
 impl Data {
 	pub(super) fn new(args: &crate::Args<'_>) -> Self {
-		let config = &args.server.config;
-		let cache_capacity = config.presence_cache_capacity;
-		let cache_capacity = utils::math::usize_from_f64(
-			f64::from(cache_capacity) * config.cache_capacity_modifier,
-		)
-		.expect("valid cache size");
+		let db = &args.db;
+
+		let cache_capacity =
+			utils::math::usize_from_f64(100_000.0 * args.server.config.cache_capacity_modifier)
+				.expect("valid cache size")
+				.try_into()
+				.unwrap_or(100_000);
 
 		Self {
-			presenceid_presence: args.db["presenceid_presence"].clone(),
-			userid_presenceid: args.db["userid_presenceid"].clone(),
-			cache: MokaCache::builder()
-				.max_capacity(cache_capacity.try_into().expect("valid cache capacity"))
-				.build(),
-			locks: MutexMap::new(),
+			presenceid_presence: db["presenceid_presence"].clone(),
+			userid_presenceid: db["userid_presenceid"].clone(),
+			presence_cache: Cache::builder().max_capacity(cache_capacity).build(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
@@ -48,13 +45,9 @@ impl Data {
 		}
 	}
 
-	/// Returns raw cached presence (w/o profile data), fetching from
-	/// DB and populating cache if necessary.
 	pub(super) async fn get_presence_raw(&self, user_id: &UserId) -> Result<(u64, Presence)> {
-		let owned_user_id = user_id.to_owned();
-
-		if let Some(cached) = self.cache.get(&owned_user_id).await {
-			return Ok(cached);
+		if let Some(cached) = self.presence_cache.get(&user_id.to_owned()) {
+			return Ok((*cached).clone());
 		}
 
 		let count = self
@@ -67,22 +60,19 @@ impl Data {
 		let bytes = self.presenceid_presence.get(&key).await?;
 		let presence = Presence::from_json_bytes(&bytes)?;
 
-		self.cache
-			.insert(owned_user_id, (count, presence.clone()))
-			.await;
+		self.presence_cache
+			.insert(user_id.to_owned(), Arc::new((count, presence.clone())));
 
 		Ok((count, presence))
 	}
 
-	/// Returns the full `PresenceEvent` (including profile data from aux cache)
 	pub(super) async fn get_presence(&self, user_id: &UserId) -> Result<(u64, PresenceEvent)> {
-		let (count, presence) = self.get_presence_raw(user_id).await?;
-		let event = presence
-			.to_presence_event(user_id, &self.services.users)
-			.await;
-
-		Ok((count, event))
+		let raw = self.get_presence_raw(user_id).await?;
+		let event = raw.1.to_presence_event(user_id, &self.services.users).await;
+		Ok((raw.0, event))
 	}
+
+	pub(super) fn clear_cache(&self) { self.presence_cache.invalidate_all(); }
 
 	pub(super) async fn set_presence(
 		&self,
@@ -92,10 +82,7 @@ impl Data {
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
 	) -> Result<()> {
-		let lock = self.locks.lock(user_id).await;
-
 		let last_presence = self.get_presence_raw(user_id).await;
-
 		let state_changed = match last_presence {
 			| Err(_) => true,
 			| Ok(ref presence) => presence.1.state != *presence_state,
@@ -151,16 +138,13 @@ impl Data {
 		self.presenceid_presence.raw_put(key, Json(&presence));
 		self.userid_presenceid.raw_put(user_id, count);
 
-		self.cache
-			.insert(user_id.to_owned(), (count, presence))
-			.await;
+		self.presence_cache
+			.insert(user_id.to_owned(), Arc::new((count, presence)));
 
 		if let Ok((last_count, _)) = last_presence {
 			let key = presenceid_key(last_count, user_id);
 			self.presenceid_presence.remove(&key);
 		}
-
-		drop(lock);
 
 		Ok(())
 	}
@@ -173,7 +157,7 @@ impl Data {
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
 	) -> Result<()> {
-		let last_presence = self.get_presence(user_id).await;
+		let last_presence = self.get_presence_raw(user_id).await;
 		let now = utils::millis_since_unix_epoch();
 		let last_active_ts = match last_active_ago {
 			| None => now,
@@ -206,23 +190,19 @@ impl Data {
 		// Overwrite the existing DB key silently
 		self.presenceid_presence.raw_put(key, Json(&presence));
 
+		self.presence_cache
+			.insert(user_id.to_owned(), Arc::new((count, presence)));
+
 		// Only write to userid_presenceid if we actually generated a new count.
 		if is_new {
 			self.userid_presenceid.raw_put(user_id, count);
 		}
 
-		self.cache
-			.insert(user_id.to_owned(), (count, presence))
-			.await;
-
 		Ok(())
 	}
 
 	pub(super) async fn remove_presence(&self, user_id: &UserId) {
-		let lock = self.locks.lock(user_id).await;
-
-		self.cache.invalidate(&user_id.to_owned()).await;
-
+		self.presence_cache.invalidate(&user_id.to_owned());
 		let Ok(count) = self
 			.userid_presenceid
 			.get(user_id)
@@ -235,11 +215,7 @@ impl Data {
 		let key = presenceid_key(count, user_id);
 		self.presenceid_presence.remove(&key);
 		self.userid_presenceid.remove(user_id);
-
-		drop(lock);
 	}
-
-	pub(super) fn clear_cache(&self) { self.cache.invalidate_all(); }
 
 	#[inline]
 	pub(super) fn presence_since(
