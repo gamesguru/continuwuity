@@ -11,9 +11,7 @@ use axum::{
 	Router,
 	extract::{Request, connect_info::IntoMakeServiceWithConnectInfo},
 };
-use conduwuit::{
-	Err, Result, Server, debug, debug_error, result::UnwrapInfallible, trace, warn,
-};
+use conduwuit::{Err, Result, Server, debug, debug_error, result::UnwrapInfallible, trace, warn};
 use hyper::{body::Incoming, service::service_fn};
 use hyper_util::{
 	rt::{TokioExecutor, TokioIo},
