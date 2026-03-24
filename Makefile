@@ -399,8 +399,12 @@ download:	##H Download CI binary (set RUN to a specific RunID)
 	@-./target/ci/conduwuit -V
 	@rm -rf target/ci/*
 	gh run download $(RUN) -R $(GH_REPO) -n $(ARTIFACT) -D target/ci
-	tar -xzf target/ci/$(ARTIFACT).tar.gz -C target/ci
-	@mv target/ci/bin/conduwuit target/ci/conduwuit
+	-@if [ -f "target/ci/$(ARTIFACT).tar.gz" ]; then \
+		tar -xzf "target/ci/$(ARTIFACT).tar.gz" -C target/ci; \
+	fi
+	-@if [ -f "target/ci/bin/conduwuit" ]; then \
+		mv target/ci/bin/conduwuit target/ci/conduwuit; \
+	fi
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V

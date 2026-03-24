@@ -38,9 +38,5 @@ pub fn remove_raw(&self, key: &[u8]) {
 		.or_else(or_else)
 		.expect("database remove error");
 
-	if !self.db.corked() {
-		self.db.flush().expect("database flush error");
-	}
-
 	self.watchers.wake(key);
 }

@@ -198,7 +198,7 @@ async fn into_http_response(
 	if !status.is_success() {
 		let error = RumaError::from_http_response(http_response);
 		if status.is_server_error() {
-			info!(%dest, %method, %url, %status, "Federation request failed: {error:?}");
+			info!(%dest, %method, %url, %status, "Federation request failed: {error}");
 		}
 		return Err(Error::Federation(dest.to_owned(), error));
 	}

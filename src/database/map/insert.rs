@@ -204,10 +204,6 @@ where
 		.or_else(or_else)
 		.expect("database insert error");
 
-	if !self.db.corked() {
-		self.db.flush().expect("database flush error");
-	}
-
 	self.watchers.wake(key.as_ref());
 }
 
@@ -230,8 +226,4 @@ where
 		.write_opt(&batch, write_options)
 		.or_else(or_else)
 		.expect("database insert batch error");
-
-	if !self.db.corked() {
-		self.db.flush().expect("database flush error");
-	}
 }
