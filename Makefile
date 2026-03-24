@@ -410,6 +410,19 @@ download:	##H Download CI binary (set RUN to a specific RunID)
 	@./target/ci/conduwuit -V
 	@ln -sfn ci target/latest
 
+.PHONY: download/hash
+download/hash:	##H Download CI binary by Git commit hash (set HASH=)
+	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
+	@test "$(HASH)" || (echo "ERROR: HASH is not set (e.g., make download/hash HASH=bdbb016)" && exit 1)
+	@RUN_ID=$$(gh run list -R "$(GH_REPO)" --commit "$(HASH)" --json databaseId -q '.[0].databaseId') && \
+	if [ -z "$$RUN_ID" ] || [ "$$RUN_ID" = "null" ]; then \
+		echo "ERROR: Could not find any CI runs for commit $(HASH)"; \
+		exit 1; \
+	else \
+		echo "Found Run ID $$RUN_ID for commit $(HASH). Executing standard download..."; \
+		$(MAKE) download RUN="$$RUN_ID" ARTIFACT="$(ARTIFACT)"; \
+	fi
+
 .PHONY: download/list
 download/list:	##H List recent CI runs
 	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
