@@ -167,14 +167,7 @@ impl Service {
 		let currently_active = *new_state == PresenceState::Online;
 		let _cork = self.services.db.cork();
 		self.db
-			.set_presence(
-				user_id,
-				new_state,
-				Some(currently_active),
-				last_active_ago,
-				status_msg,
-				last_presence.ok(),
-			)
+			.set_presence(user_id, new_state, Some(currently_active), last_active_ago, status_msg)
 			.await?;
 
 		self.schedule_timeout(user_id, new_state)?;
@@ -202,14 +195,7 @@ impl Service {
 
 		let _cork = self.services.db.cork();
 		self.db
-			.set_presence(
-				user_id,
-				presence_state,
-				currently_active,
-				last_active_ago,
-				status_msg,
-				None,
-			)
+			.set_presence(user_id, presence_state, currently_active, last_active_ago, status_msg)
 			.await?;
 
 		self.schedule_timeout(user_id, presence_state)?;
@@ -264,7 +250,7 @@ impl Service {
 		{
 			let raw = self.db.get_presence_raw(user_id).await;
 
-			let (count, presence) = match raw {
+			let (_count, presence) = match raw {
 				| Ok((count, ref presence)) => (count, presence),
 				| _ => continue,
 			};
@@ -291,7 +277,6 @@ impl Service {
 					Some(false),
 					Some(last_active_ago),
 					presence.status_msg.clone(),
-					Some((count, presence.clone())),
 				)
 				.await
 				.inspect_err(|e| {
@@ -337,17 +322,15 @@ impl Service {
 		let mut presence_state = PresenceState::Offline;
 		let mut last_active_ago = None;
 		let mut status_msg = None;
-		let mut previous = None;
 
 		let raw = self.db.get_presence_raw(user_id).await;
 
-		if let Ok((count, ref presence)) = raw {
+		if let Ok((_count, ref presence)) = raw {
 			presence_state = presence.state.clone();
 			let now = utils::millis_since_unix_epoch();
 			last_active_ago =
 				Some(UInt::new_saturating(now.saturating_sub(presence.last_active_ts)));
 			status_msg = presence.status_msg.clone();
-			previous = Some((count, presence.clone()));
 		}
 
 		let new_state = match (&presence_state, last_active_ago.map(u64::from)) {
@@ -366,14 +349,7 @@ impl Service {
 		if let Some(new_state) = new_state {
 			let _cork = self.services.db.cork();
 			self.db
-				.set_presence(
-					user_id,
-					&new_state,
-					Some(false),
-					last_active_ago,
-					status_msg,
-					previous,
-				)
+				.set_presence(user_id, &new_state, Some(false), last_active_ago, status_msg)
 				.await?;
 
 			self.schedule_timeout(user_id, &new_state)?;

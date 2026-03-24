@@ -343,7 +343,10 @@ version = "0.1.2"
 [workspace.dependencies.moka]
 version = "0.12"
 default-features = false
-features = ["sync"]
+features = ["future"]
+
+[workspace.dependencies.dashmap]
+version = "6.1.0"
 
 # Used for matrix spec type definitions and helpers
 [workspace.dependencies.ruma]
