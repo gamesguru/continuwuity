@@ -58,7 +58,7 @@ pub(super) async fn load_joined_room(
 	services: &Services,
 	sync_context: SyncContext<'_>,
 	ref room_id: OwnedRoomId,
-) -> Result<(JoinedRoom, Vec<Raw<AnySyncStateEvent>>, DeviceListUpdates)> {
+) -> Result<(JoinedRoom, Vec<Raw<AnySyncStateEvent>>, DeviceListUpdates, bool)> {
 	/*
 	Building a sync response involves many steps which all depend on each other.
 	To parallelize the process as much as possible, each step is divided into its own function,
@@ -75,6 +75,8 @@ pub(super) async fn load_joined_room(
 			summary,
 			notification_counts,
 			device_list_updates,
+			joined_since_last_sync,
+			never_synced,
 		},
 	) = try_join3(
 		build_account_data(services, sync_context, room_id),
@@ -110,7 +112,12 @@ pub(super) async fn load_joined_room(
 		.map(Event::into_format)
 		.collect::<Vec<_>>();
 
-	Ok((joined_room, state_after, device_list_updates))
+	Ok((
+		joined_room,
+		state_after,
+		device_list_updates,
+		joined_since_last_sync || never_synced,
+	))
 }
 
 /// Collect changes to the syncing user's account data events.
@@ -251,6 +258,8 @@ struct StateAndTimeline {
 	summary: Option<RoomSummary>,
 	notification_counts: Option<UnreadNotificationsCount>,
 	device_list_updates: DeviceListUpdates,
+	joined_since_last_sync: bool,
+	never_synced: bool,
 }
 
 /// Compute changes to the room's state and timeline.
@@ -277,8 +286,43 @@ async fn build_state_and_timeline(
 	// the timeline should always include at least one PDU if the syncing user
 	// joined since the last sync, that being the syncing user's join event. if
 	// it's empty something is wrong.
-	if joined_since_last_sync && timeline.pdus.is_empty() {
-		debug_warn!("timeline for newly joined room is empty");
+	//
+	// #779 workaround: when the timeline is empty due to the non-atomic
+	// mark_as_joined DB race, inject the user's join membership event into
+	// the state so the sync response is never empty for a newly joined room.
+	// This ensures any client sees the membership transition.
+	// #779: a room is "never synced" if there's no saved shortstatehash for it
+	// at the last sync token — meaning the client has never seen this room.
+	let never_synced = shortstatehashes.last_sync_end_shortstatehash.is_none();
+	let needs_injection = (joined_since_last_sync || never_synced) && timeline.pdus.is_empty();
+
+	if joined_since_last_sync || never_synced || needs_injection {
+		warn!(
+			"#779 room={}: joined_since={} never_synced={} timeline={} state={} inject={}",
+			room_id,
+			joined_since_last_sync,
+			never_synced,
+			timeline.pdus.len(),
+			state_events.len(),
+			needs_injection
+		);
+	}
+
+	let mut state_events = state_events;
+	if needs_injection {
+		warn!("#779: injecting membership event for newly joined room");
+		if let Ok(membership_pdu) = services
+			.rooms
+			.state_accessor
+			.state_get(
+				shortstatehashes.current_shortstatehash,
+				&StateEventType::RoomMember,
+				sync_context.syncing_user.as_str(),
+			)
+			.await
+		{
+			state_events.push(membership_pdu);
+		}
 	}
 
 	let (summary, device_list_updates) = try_join(
@@ -335,6 +379,8 @@ async fn build_state_and_timeline(
 		summary,
 		notification_counts,
 		device_list_updates,
+		joined_since_last_sync,
+		never_synced: shortstatehashes.last_sync_end_shortstatehash.is_none(),
 	})
 }
 
