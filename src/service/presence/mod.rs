@@ -69,11 +69,17 @@ impl crate::Service for Service {
 
 		let mut presence_timers =
 			std::collections::HashMap::<OwnedUserId, tokio::task::JoinHandle<()>>::new();
+		let mut events_received: u64 = 0;
+		let mut next_tally = tokio::time::Instant::now()
+			.checked_add(Duration::from_secs(300))
+			.unwrap_or_else(tokio::time::Instant::now);
+
 		while !receiver.is_closed() {
 			let event = receiver.recv_async().await;
 			match event {
 				| Err(_) => break,
 				| Ok((user_id, Some(timeout))) => {
+					events_received = events_received.saturating_add(1);
 					let self_clone = Arc::clone(&self);
 					let user_id_clone = user_id.clone();
 
@@ -91,6 +97,19 @@ impl crate::Service for Service {
 					}
 				},
 				| Ok((_, None)) => {},
+			}
+
+			// Periodic tally
+			if tokio::time::Instant::now() >= next_tally {
+				info!(
+					"presence stats: {} active timers, {} received",
+					presence_timers.len(),
+					events_received
+				);
+				events_received = 0;
+				next_tally = tokio::time::Instant::now()
+					.checked_add(Duration::from_secs(300))
+					.unwrap_or_else(tokio::time::Instant::now);
 			}
 		}
 
