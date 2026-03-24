@@ -160,16 +160,20 @@ impl Data {
 		// MAGIC: Keep the existing channel count to completely mask this update from
 		// the federation sender and sync streams, totally eliminating startup DoS
 		// bursts
-		let count = match last_presence {
-			| Ok((last_count, _)) => last_count,
-			| Err(_) => self.services.globals.next_count()?,
+		let (count, is_new) = match last_presence {
+			| Ok((last_count, _)) => (last_count, false),
+			| Err(_) => (self.services.globals.next_count()?, true),
 		};
 
 		let key = presenceid_key(count, user_id);
 
 		// Overwrite the existing DB key silently
 		self.presenceid_presence.raw_put(key, Json(presence));
-		self.userid_presenceid.raw_put(user_id, count);
+
+		// Only write to userid_presenceid if we actually generated a new count.
+		if is_new {
+			self.userid_presenceid.raw_put(user_id, count);
+		}
 
 		Ok(())
 	}

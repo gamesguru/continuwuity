@@ -204,6 +204,10 @@ where
 		.or_else(or_else)
 		.expect("database insert error");
 
+	if !self.db.corked() {
+		self.db.flush().expect("database flush error");
+	}
+
 	self.watchers.wake(key.as_ref());
 }
 

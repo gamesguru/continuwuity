@@ -392,6 +392,10 @@ impl Service {
 
 		let (device_changes, receipts, presence) = join!(device_changes, receipts, presence);
 
+		// Collect them all
+		let receipts = receipts.flatten();
+		let presence = presence.flatten();
+
 		if !device_changes.is_empty() {
 			self.stats.outgoing_device_lists.fetch_add(
 				device_changes.len().try_into().unwrap_or(u64::MAX),
@@ -404,8 +408,8 @@ impl Service {
 		}
 
 		let mut events = device_changes;
-		events.extend(presence.into_iter().flatten());
-		events.extend(receipts.into_iter().flatten());
+		events.extend(presence);
+		events.extend(receipts);
 
 		Ok((events, max_edu_count.load(Ordering::Acquire)))
 	}

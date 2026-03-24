@@ -405,6 +405,10 @@ download:	##H Download CI binary (set RUN to a specific RunID)
 	-@if [ -f "target/ci/bin/conduwuit" ]; then \
 		mv target/ci/bin/conduwuit target/ci/conduwuit; \
 	fi
+	@if [ ! -f "target/ci/conduwuit" ]; then \
+		echo "ERROR: Expected binary target/ci/conduwuit not found after download/extract."; \
+		exit 1; \
+	fi
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
