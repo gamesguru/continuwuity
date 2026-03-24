@@ -898,10 +898,10 @@ pub struct Config {
 	/// https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
 	///
 	/// **Caveat**:
-	/// For release builds, the tracing crate is configured to only implement
-	/// levels higher than error to avoid unnecessary overhead in the compiled
-	/// binary from trace macros. For debug builds, this restriction is not
-	/// applied.
+	/// For release builds, the tracing crate is configured at compile-time to
+	/// automatically strip out `debug` and `trace` macros (compiling only
+	/// `info` and above) to avoid unnecessary overhead in the binary
+	/// execution. For debug builds, this restriction is not applied.
 	///
 	/// default: "info"
 	#[serde(default = "default_log")]
@@ -2445,14 +2445,14 @@ pub struct MeowlnirConfig {
 	/// The base URL on which to contact Meowlnir (before /_meowlnir/antispam).
 	///
 	/// Example: "http://127.0.0.1:29339"
-	pub base_url: Url,
+	pub base_url: Option<Url>,
 
 	/// The authentication secret defined in antispam->secret. Required for
 	/// continuwuity to talk to Meowlnir.
-	pub secret: String,
+	pub secret: Option<String>,
 
 	/// The management room for which to send requests
-	pub management_room: OwnedRoomId,
+	pub management_room: Option<OwnedRoomId>,
 
 	/// If enabled run all federated join attempts (both federated and local)
 	/// through the Meowlnir anti-spam checks.
@@ -2475,11 +2475,11 @@ pub struct DraupnirConfig {
 	/// The base URL on which to contact Draupnir (before /api/).
 	///
 	/// Example: "http://127.0.0.1:29339"
-	pub base_url: Url,
+	pub base_url: Option<Url>,
 
 	/// The authentication secret defined in
 	/// web->synapseHTTPAntispam->authorization
-	pub secret: String,
+	pub secret: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]

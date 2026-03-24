@@ -10,10 +10,13 @@ pub(super) const SIGNAL: &str = "SIGUSR2";
 #[implement(super::Service)]
 pub(super) async fn console_auto_start(&self) {
 	#[cfg(feature = "console")]
-	if self.services.server.config.admin_console_automatic {
-		// Allow more of the startup sequence to execute before spawning
-		tokio::task::yield_now().await;
-		self.console.start().await;
+	{
+		self.console.start_listener().await;
+		if self.services.server.config.admin_console_automatic {
+			// Allow more of the startup sequence to execute before spawning
+			tokio::task::yield_now().await;
+			self.console.start().await;
+		}
 	}
 }
 

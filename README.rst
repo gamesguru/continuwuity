@@ -1,8 +1,9 @@
-continuwuity
-============
+**************
+ continuwuity
+**************
 
 A community-driven `Matrix <https://matrix.org/>`__ homeserver in Rust
-----------------------------------------------------------------------
+######################################################################
 
 continuwuity is a Matrix homeserver written in Rust.
 It's the official community continuation of the `conduwuit <https://github.com/girlbossceo/conduwuit>`_ homeserver.
@@ -26,11 +27,19 @@ Complement tests have been added, as well functionality for these:
 
 .. code-block:: text
 
-    ✓  tests/msc3890 (9.129s)
-    ✓  tests/msc3967 (9.445s)
-    ✓  tests/msc4155 (19.007s)
-    ✓  tests/msc4222 (11.685s)
+   ✓  tests/msc3890 (9.129s) [Remotely silence local notifications]
+   ✓  tests/msc3967 (9.445s) [Do not require UIA when uploading cross-signing keys]
+   ✓  tests/msc4155 (19.007s) [Invite filtering]
+   ✓  tests/msc4222 (11.685s) [Adding `state_after` to `/sync`]
 
+   ✓ MSC3266 [Room summaries]
+   ✓ MSC3890 [Remotely silence local notifications]
+   ✓ MSC4289 [Explicitly privilege room creators]
+
+   TODO:
+
+   - MSC4108 [QR Code login]
+   - other complement failures relevant to continuwuity
 
     ENDPOINTS:
 
@@ -52,3 +61,8 @@ Chats to join (my fork)
 .. |comp_fg| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main-upstream.json
    :target: https://forgejo.ellis.link/gamesguru/continuwuity/actions?workflow=complement.yml&actor=0&status=0
    :alt: Complement Tests (Forge)
+
+License
+#######
+
+This project incorporates components licensed under the `Apache License 2.0 <LICENSE>`_ AND the `GNU Affero General Public License v3.0 <LICENSE-AGPL>`_. Because you must comply with both, the strong copyleft network requirements of the AGPL are enforced.

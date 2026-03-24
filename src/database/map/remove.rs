@@ -38,8 +38,10 @@ pub fn remove_raw(&self, key: &[u8]) {
 		.or_else(or_else)
 		.expect("database remove error");
 
+	// Honor corking semantics for remove operations: when not corked,
+	// ensure the delete is flushed in the same way as inserts.
 	if !self.db.corked() {
-		self.db.flush().expect("database flush error");
+		self.db.flush().expect("database flush error after remove");
 	}
 
 	self.watchers.wake(key);
