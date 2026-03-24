@@ -184,14 +184,9 @@ async fn into_http_response(
 	);
 
 	trace!("Waiting for response body...");
+	let body_bytes = response.limit_read(max_size).await?;
 	let http_response = http_response_builder
-		.body(
-			response
-				.limit_read(max_size)
-				.await
-				.unwrap_or_default()
-				.into(),
-		)
+		.body(body_bytes.into())
 		.expect("reqwest body is valid http body");
 
 	debug!("Got {status:?} for {method} {url}");
