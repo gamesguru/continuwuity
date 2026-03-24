@@ -198,10 +198,11 @@ impl Service {
 
 	// Unset online/unavailable presence to offline on startup
 	pub async fn unset_all_presence(&self) {
-		use futures::StreamExt;
+		use futures::{StreamExt, stream::FuturesUnordered};
 
 		debug_info!("Resetting presence for active users...");
 		let mut reset = 0_usize;
+		let mut jobs = FuturesUnordered::new();
 
 		let mut presence_stream = Box::pin(self.db.presence_since(0));
 		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
@@ -233,22 +234,31 @@ impl Service {
 				Some(UInt::new_saturating(now.saturating_sub(presence.last_active_ts)));
 
 			reset = reset.saturating_add(1);
-			_ = self
-				.set_presence(
-					&user_id,
-					&PresenceState::Offline,
-					Some(false),
-					last_active_ago,
-					presence.status_msg,
-				)
-				.await
-				.inspect_err(|e| {
-					debug_warn!(
-						?user_id,
-						"Failed to reset presence for {user_id} to offline: {e}"
-					);
-				});
+
+			let set_fut = self.set_presence(
+				&user_id,
+				&PresenceState::Offline,
+				Some(false),
+				last_active_ago,
+				presence.status_msg.clone(),
+			);
+
+			jobs.push(async move {
+				if let Err(e) = set_fut.await {
+					debug_warn!(?user_id, "Failed to reset presence for {user_id} to offline: {e}");
+				}
+			});
+
+			if jobs.len() >= 100 {
+				while let Some(()) = jobs.next().await {
+					if jobs.len() < 50 {
+						break;
+					}
+				}
+			}
 		}
+
+		while let Some(()) = jobs.next().await {}
 
 		info!("Presence reset complete: {reset} users reset to offline.");
 	}
