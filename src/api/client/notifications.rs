@@ -68,11 +68,30 @@ pub(crate) async fn get_notifications_route(
 	let limit = body.limit.unwrap_or_else(|| UInt::new(10).unwrap());
 	let max_limit_uint = UInt::try_from(max_limit).unwrap_or(UInt::MAX);
 	let limit = std::cmp::min(limit, max_limit_uint);
-	let start_ts = body
+	let (start_ts, start_pdu_count) = body
 		.from
-		.as_ref()
-		.and_then(|s| s.parse::<u64>().ok())
-		.unwrap_or(u64::MAX);
+		.as_deref()
+		.map(|s| {
+			let mut parts = s.split(':');
+			let ts = parts
+				.next()
+				.and_then(|ts| ts.parse::<u64>().ok())
+				.unwrap_or(u64::MAX);
+			let pdu_count = parts.next().and_then(|p| {
+				if let Some(c) = p.strip_prefix('n') {
+					if let Ok(c) = c.parse::<u64>() {
+						return Some(PduCount::Normal(c));
+					}
+				} else if let Some(c) = p.strip_prefix('b') {
+					if let Ok(c) = c.parse::<u64>() {
+						return Some(PduCount::Backfilled(c));
+					}
+				}
+				None
+			});
+			(ts, pdu_count)
+		})
+		.unwrap_or((u64::MAX, None));
 
 	let sender_user = body.sender_user();
 
@@ -158,11 +177,27 @@ pub(crate) async fn get_notifications_route(
 				break;
 			}
 
-			// Skip events newer than start_ts or sent by our user
-			if pdu.origin_server_ts >= UInt::new(start_ts).unwrap_or(UInt::MAX)
-				|| pdu.sender == *sender_user
-			{
+			// Skip events sent by our user
+			if pdu.sender == *sender_user {
 				continue;
+			}
+
+			// Skip events newer than or equal to start_ts/start_pdu_count
+			let pdu_ts = pdu.origin_server_ts;
+			let start_ts_uint = UInt::new(start_ts).unwrap_or(UInt::MAX);
+
+			if pdu_ts > start_ts_uint {
+				continue;
+			}
+			if pdu_ts == start_ts_uint {
+				if let Some(start_pdu) = start_pdu_count {
+					if pdu_count >= start_pdu {
+						continue;
+					}
+				} else {
+					// Fallback for old tokens: skip all events with exactly start_ts
+					continue;
+				}
 			}
 
 			let item = (pdu_count, pdu);
