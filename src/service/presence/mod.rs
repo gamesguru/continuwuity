@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use conduwuit::{
 	Error, Result, Server, checked, debug, debug_info, debug_warn, error, info, result::LogErr,
-	utils,
+	utils, warn,
 };
 use dashmap::DashMap;
 use database::Database;
@@ -345,7 +345,7 @@ impl Service {
 
 		while jobs.next().await == Some(()) {}
 
-		info!("Presence reset complete: {reset} users reset to offline.");
+		warn!("Presence reset complete: {reset} users reset to offline.");
 	}
 
 	/// Returns the most recent presence updates that happened after the event

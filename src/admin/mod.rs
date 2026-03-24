@@ -33,11 +33,13 @@ pub(crate) const PAGE_SIZE: usize = 100;
 conduwuit::mod_ctor! {}
 conduwuit::mod_dtor! {}
 
+pub use processor::complete;
+
 pub use crate::admin::AdminCommand;
 
 /// Install the admin command processor
 pub async fn init(admin_service: &service::admin::Service) {
-	_ = admin_service.complete.write().insert(processor::complete);
+	_ = admin_service.complete.write().insert(complete);
 	_ = admin_service
 		.handle
 		.write()
