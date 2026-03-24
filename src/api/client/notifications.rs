@@ -83,7 +83,7 @@ pub(crate) async fn get_notifications_route(
 						return Some(PduCount::Normal(c));
 					}
 				} else if let Some(c) = p.strip_prefix('b') {
-					if let Ok(c) = c.parse::<u64>() {
+					if let Ok(c) = c.parse::<i64>() {
 						return Some(PduCount::Backfilled(c));
 					}
 				}
@@ -263,15 +263,9 @@ pub(crate) async fn get_notifications_route(
 	});
 
 	let next_token = if notification_items.len() >= limit_usize {
-		// Use debug-formatting for pdu_count if Display is not implemented
-		notification_items.last().map(|n| {
-			if let PduCount::Normal(c) = n.pdu_count {
-				format!("{}:n{}", n.notification.ts.0, c)
-			} else if let PduCount::Backfilled(c) = n.pdu_count {
-				format!("{}:b{}", n.notification.ts.0, c)
-			} else {
-				format!("{}:{:?}", n.notification.ts.0, n.pdu_count)
-			}
+		notification_items.last().map(|n| match n.pdu_count {
+			| PduCount::Normal(c) => format!("{}:n{}", n.notification.ts.0, c),
+			| PduCount::Backfilled(c) => format!("{}:b{}", n.notification.ts.0, c),
 		})
 	} else {
 		None
@@ -369,5 +363,43 @@ mod tests {
 		timestamps.reverse();
 
 		assert_eq!(timestamps, vec![2000, 3000]);
+	}
+
+	#[test]
+	fn token_parsing_roundtrip() {
+		use conduwuit::matrix::pdu::PduCount;
+
+		let ts = 1_234_567_890;
+		let count_n = PduCount::Normal(10);
+		let count_b = PduCount::Backfilled(-5);
+
+		// Helper to format as our token
+		let token_n = format!("{}:n10", ts);
+		let token_b = format!("{}:b-5", ts);
+
+		// Parse back
+		let parse = |s: &str| {
+			let mut parts = s.split(':');
+			let ts = parts
+				.next()
+				.and_then(|ts| ts.parse::<u64>().ok())
+				.unwrap_or(u64::MAX);
+			let pdu_count = parts.next().and_then(|p| {
+				if let Some(c) = p.strip_prefix('n') {
+					if let Ok(c) = c.parse::<u64>() {
+						return Some(PduCount::Normal(c));
+					}
+				} else if let Some(c) = p.strip_prefix('b') {
+					if let Ok(c) = c.parse::<i64>() {
+						return Some(PduCount::Backfilled(c));
+					}
+				}
+				None
+			});
+			(ts, pdu_count)
+		};
+
+		assert_eq!(parse(&token_n), (ts, Some(count_n)));
+		assert_eq!(parse(&token_b), (ts, Some(count_b)));
 	}
 }
