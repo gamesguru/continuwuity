@@ -6,6 +6,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use conduwuit::{
 	Error, Result, Server, checked, debug, debug_info, debug_warn, error, info, result::LogErr,
+	warn,
 };
 use futures::{Stream, TryFutureExt};
 use loole::{Receiver, Sender};
@@ -104,7 +105,7 @@ impl crate::Service for Service {
 
 			// Periodic tally
 			if tokio::time::Instant::now() >= next_tally {
-				info!(
+				warn!(
 					"presence stats: {} active timers, {} received",
 					presence_timers.len(),
 					events_received
@@ -303,7 +304,7 @@ impl Service {
 
 		while jobs.next().await == Some(()) {}
 
-		info!("Presence reset complete: {reset} users reset to offline.");
+		warn!("Presence reset complete: {reset} users reset to offline.");
 	}
 
 	/// Returns the most recent presence updates that happened after the event

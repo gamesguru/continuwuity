@@ -924,6 +924,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parking_lot",
+ "rustyline-async",
  "sentry",
  "sentry-tower",
  "sentry-tracing",
