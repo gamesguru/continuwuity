@@ -350,7 +350,7 @@
 {"Action":"pass","Test":"TestMSC4291RoomIDAsHashOfCreateEvent_CannotSendCreateEvent","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"pass","Test":"TestMSC4291RoomIDAsHashOfCreateEvent_RoomIDIsOnCreateEvent","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"pass","Test":"TestMSC4291RoomIDAsHashOfCreateEvent_UpgradedRooms","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
-{"Action":"pass","Test":"TestMSC4297StateResolutionV2_1_includes_conflicted_subgraph","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
+{"Action":"fail","Test":"TestMSC4297StateResolutionV2_1_includes_conflicted_subgraph","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"fail","Test":"TestMSC4297StateResolutionV2_1_starts_from_empty_set","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"fail","Test":"TestMSC4308ThreadSubscriptionsSlidingSync","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"fail","Test":"TestMSC4308ThreadSubscriptionsSlidingSync/Receives_thread_subscriptions_over_incremental_sliding_sync","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
@@ -677,9 +677,9 @@
 {"Action":"pass","Test":"TestSyncLeaveSection/Left_rooms_appear_in_the_leave_section_of_sync","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"pass","Test":"TestSyncLeaveSection/Newly_left_rooms_appear_in_the_leave_section_of_incremental_sync","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"pass","Test":"TestSyncOmitsStateChangeOnFilteredEvents","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
-{"Action":"pass","Test":"TestSyncTimelineGap","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
-{"Action":"pass","Test":"TestSyncTimelineGap/full","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
-{"Action":"pass","Test":"TestSyncTimelineGap/incremental","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
+{"Action":"fail","Test":"TestSyncTimelineGap","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
+{"Action":"fail","Test":"TestSyncTimelineGap/full","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
+{"Action":"fail","Test":"TestSyncTimelineGap/incremental","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"pass","Test":"TestThreadReceiptsInSyncMSC4102","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"fail","Test":"TestThreadSubscriptions","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
@@ -696,7 +696,7 @@
 {"Action":"pass","Test":"TestToDeviceMessages","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/good_connectivity","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
-{"Action":"pass","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
+{"Action":"fail","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation/stopped_server","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"fail","Test":"TestTxnIdWithRefreshToken","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
 {"Action":"fail","Test":"TestTxnIdempotency","arch":"arm64","os":"ubuntu-22.04","profile":"release-quick","commit":"dd6fa1524a1f313906c40004b9f04d99be608fd0"}
