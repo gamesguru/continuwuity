@@ -70,10 +70,7 @@ pub fn stream_notification_counts<'a>(
 		.stream_prefix::<(OwnedUserId, OwnedRoomId), u64, _>(&prefix)
 		.map(|res| match res {
 			| Ok(((_user_id, room_id), count)) => (Ok(room_id), count),
-			| Err(e) => {
-				warn!("Failed to stream notification counts: {e}");
-				(Err(e), 0)
-			},
+			| Err(e) => (Err(e), 0),
 		})
 }
 
