@@ -32,6 +32,10 @@ Complement tests have been added, as well functionality for these:
     ✓  tests/msc4222 (11.685s)
 
 
+    ENDPOINTS:
+
+    - GET /_matrix/client/v3/notifications
+
 Chats to join (my fork)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
