@@ -863,13 +863,42 @@ impl Service {
 			return Ok(Destination::Federation(server));
 		}
 
+		let mut typing = 0;
+		let mut to_device = 0;
+		let mut unknown = 0;
+
+		for edu in &edus {
+			match edu.deserialize() {
+				| Ok(ruma::api::federation::transactions::edu::Edu::Typing(_)) => typing += 1,
+				| Ok(ruma::api::federation::transactions::edu::Edu::DirectToDevice(_)) =>
+					to_device += 1,
+				| Ok(ruma::api::federation::transactions::edu::Edu::Presence(_))
+				| Ok(ruma::api::federation::transactions::edu::Edu::Receipt(_))
+				| Ok(ruma::api::federation::transactions::edu::Edu::DeviceListUpdate(_)) => {},
+				| _ => unknown += 1,
+			}
+		}
+
+		if typing > 0 {
+			self.stats
+				.outgoing_typing
+				.fetch_add(typing, Ordering::Relaxed);
+		}
+		if to_device > 0 {
+			self.stats
+				.outgoing_to_device
+				.fetch_add(to_device, Ordering::Relaxed);
+		}
+		if unknown > 0 {
+			self.stats
+				.outgoing_edus
+				.fetch_add(unknown, Ordering::Relaxed);
+		}
+
 		// Track federation stats
 		self.stats
 			.outgoing_pdus
 			.fetch_add(pdus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
-		self.stats
-			.outgoing_edus
-			.fetch_add(edus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
 		self.stats.outgoing_txns.fetch_add(1, Ordering::Relaxed);
 
 		let preimage = pdus
