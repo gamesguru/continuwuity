@@ -17,7 +17,7 @@ use std::{
 	},
 };
 
-use conduwuit::{Err, Result, debug, info, warn};
+use conduwuit::{Err, Result, debug, info, trace, warn};
 use rocksdb::{
 	AsColumnFamilyRef, BoundColumnFamily, DBCommon, DBWithThreadMode, MultiThreaded,
 	WaitForCompactOptions,
@@ -82,15 +82,21 @@ impl Engine {
 		self.db.try_catch_up_with_primary().map_err(map_err)
 	}
 
-	#[tracing::instrument(level = "info", skip_all)]
 	pub fn sync(&self) -> Result {
-		info!("Syncing database WAL...");
+		if tracing::Span::current().is_none() {
+			info!("Syncing database WAL...");
+		} else {
+			trace!("Syncing database WAL...");
+		}
 		result(DBCommon::flush_wal(&self.db, true))
 	}
 
-	#[tracing::instrument(level = "debug", skip_all)]
 	pub fn flush(&self) -> Result {
-		info!("Flushing database WAL...");
+		if tracing::Span::current().is_none() {
+			info!("Flushing database WAL...");
+		} else {
+			trace!("Flushing database WAL...");
+		}
 		result(DBCommon::flush_wal(&self.db, false))
 	}
 

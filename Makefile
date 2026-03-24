@@ -1,5 +1,5 @@
 SHELL=/bin/bash
-.DEFAULT_GOAL=help
+.DEFAULT_GOAL=_help
 
 # [CONFIG] Suppresses annoying "make[1]: Entering directory" messages
 MAKEFLAGS += --no-print-directory
@@ -42,12 +42,6 @@ STYLE_RESET := $(shell tput sgr0 2>/dev/null || echo -e "\033[0m")
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Meta/help commands
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.PHONY: help
-help: ##H Show this help, list available targets
-	@grep -hE '^[a-zA-Z0-9_\/-]+:.*?##H .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-20s$(STYLE_RESET) %s\n", $$1, $$2}'
-
 
 .PHONY: doctor
 doctor: ##H Output version info for required tools
@@ -108,6 +102,20 @@ cargo/lock-init:        ##H Init or fully upgrade the lockfile (wipes it)
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 	ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) cargo generate-lockfile
 	@echo "OK."
+
+
+.PHONY: profiles
+profiles: ##H List available cargo profiles
+# NOTE: not authoritative — see Cargo.toml for definitive profiles.
+	@grep "^\[profile\." Cargo.toml Cargo.custom.toml 2>/dev/null \
+		| sed 's/.*\[profile\.//;s/\]//' \
+		| grep -v 'package' \
+		| grep -v 'build-override' \
+		| sort
+
+.PHONY: features
+features: ##H List available cargo features
+	@awk '/^\[features\]/{flag=1; next} /^\[.*\]/{flag=0} flag && /^[^ #\t=]+ =/ {gsub(/ =.*/, ""); print}' src/main/Cargo.toml | sort
 
 
 # For native, highly-optimized builds that work only for you cpu: -C target-cpu=native
@@ -333,6 +341,28 @@ GH_REPO ?=
 
 GH_CACHE_KEY ?=
 
+PREBUILT_TAG ?= prebuilts-v0.5
+
+.PHONY: download/prebuilts
+download/prebuilts: ##H Download prebuilt libraries from GitHub Release
+	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
+	@test "$(CPU_TARGET)" || (echo "ERROR: CPU_TARGET is not set (e.g. x86-64-v3). Add CPU_TARGET=... to .env" && exit 1)
+	@test "$(OS_VERSION)" || (echo "ERROR: OS_VERSION is not set (e.g. ubuntu-24.04). Add OS_VERSION=... to .env" && exit 1)
+	@echo "Downloading prebuilts for $(CPU_TARGET) on $(OS_VERSION) from $(PREBUILT_TAG)..."
+	@mkdir -p .tmp/prebuilts && rm -rf .tmp/prebuilts/*
+	@if gh release download $(PREBUILT_TAG) -R $(GH_REPO) -p "*-$(CPU_TARGET)-$(OS_VERSION).tar.gz" -D .tmp/prebuilts --clobber; then \
+		for f in .tmp/prebuilts/*.tar.gz; do \
+			echo "Extracting $$f to /usr/local..."; \
+			sudo tar -xzvf "$$f" -C /usr/local; \
+		done; \
+		sudo ldconfig; \
+		echo "Prebuilts installed."; \
+	else \
+		echo "ERROR: Failed to download prebuilts. Check tag, repo, and pattern."; \
+		exit 1; \
+	fi
+	@rm -rf .tmp/prebuilts
+
 .PHONY: download/clear-cache
 download/clear-cache: ##H Delete GitHub Actions caches
 	# Testing you have explicitly set GH_CACHE_KEY
@@ -436,3 +466,13 @@ install:	##H Install (executed on VPS)
 .PHONY: restart
 restart:    ##H Restart service (using systemctl)
 	sudo systemctl restart $(C10Y_SERV)
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Help command (messes up vim/sublime syntax, so stuck at end)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.PHONY: _help
+_help: ##H Show this help, list available targets
+	@grep -hE '^[a-zA-Z0-9_\/-]+:.*?##H .*$$' $(MAKEFILE_LIST) \
+		| awk 'BEGIN {FS = ":.*?##H "}; {printf "$(STYLE_CYAN)%-20s$(STYLE_RESET) %s\n", $$1, $$2}'

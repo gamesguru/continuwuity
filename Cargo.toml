@@ -344,7 +344,7 @@ version = "0.1.2"
 [workspace.dependencies.ruma]
 git = "https://forgejo.ellis.link/continuwuation/ruwuma"
 #branch = "conduwuit-changes"
-rev = "bb12ed288a31a23aa11b10ba0fad22b7f985eb88"
+rev = "a97b91adcc012ef04991d823b8b5a79c6686ae48"
 features = [
     "compat",
     "rand",
@@ -548,9 +548,6 @@ version = "1.0.2"
 version = "0.12.0"
 default-features = false
 features = ["sync", "tls-rustls", "rustls-provider"]
-
-[workspace.dependencies.resolv-conf]
-version = "0.7.5"
 
 [workspace.dependencies.yansi]
 version = "1.0.1"

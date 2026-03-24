@@ -56,7 +56,7 @@ jobs:
 
           check_dep() {
             local dep="$1" version="$2" matrix="[]"
-            for arch in x86-64-v2 x86-64-v3 x86-64-v4 arm64-cortex-a76; do
+            for arch in x86-64-v2 x86-64-v3 x86-64-v4 arm64-generic arm64-cortex-a76; do
               for os in ubuntu-22.04 ubuntu-24.04; do
                 local filename="${dep}-${version}-${arch}-${os}.tar.gz"
                 if ! echo "$EXISTING" | grep -qF "$filename"; then
@@ -92,7 +92,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
@@ -107,6 +107,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -130,7 +132,7 @@ jobs:
           sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/rocksdb lib/librocksdb*
 
       - name: Upload Artifact Storage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rocksdb_${{ matrix.arch }}_${{ matrix.os }}
           path: "*.tar.gz"
@@ -148,7 +150,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
@@ -165,6 +167,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -188,7 +192,7 @@ jobs:
           sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/jemalloc lib/libjemalloc*
 
       - name: Upload Artifact Storage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jemalloc_${{ matrix.arch }}_${{ matrix.os }}
           path: "*.tar.gz"
@@ -206,7 +210,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
@@ -223,6 +227,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -246,7 +252,7 @@ jobs:
           sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/lz4* lib/liblz4*
 
       - name: Upload Artifact Storage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: lz4_${{ matrix.arch }}_${{ matrix.os }}
           path: "*.tar.gz"
@@ -264,7 +270,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
@@ -279,6 +285,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -302,7 +310,7 @@ jobs:
           sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/zstd* lib/libzstd*
 
       - name: Upload Artifact Storage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: zstd_${{ matrix.arch }}_${{ matrix.os }}
           path: "*.tar.gz"
@@ -315,7 +323,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: prebuilts_download
           merge-multiple: true

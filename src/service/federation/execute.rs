@@ -198,7 +198,7 @@ async fn into_http_response(
 	if !status.is_success() {
 		let error = RumaError::from_http_response(http_response);
 		if status.is_server_error() {
-			info!(%dest, %status, "Federation request failed: {error:?}");
+			info!(%dest, %method, %url, %status, "Federation request failed: {error:?}");
 		}
 		return Err(Error::Federation(dest.to_owned(), error));
 	}
@@ -215,13 +215,13 @@ fn handle_error(
 ) -> Result {
 	if e.is_timeout() {
 		e = e.without_url();
-		info!("Federation request to {dest} timed out: {e:?}");
+		debug!(target: "federation", %method, %url, "Federation request to {dest} timed out: {e:?}");
 		return Err(Error::FederationTimeout(dest.to_owned()));
 	}
 
 	if e.is_connect() {
 		e = e.without_url();
-		info!(%dest, "Federation connection failed: {e:?}");
+		debug!(target: "federation", %dest, %method, %url, "Federation connection failed: {e:?}");
 		return Err(Error::FederationConnection(dest.to_owned()));
 	}
 
@@ -316,7 +316,7 @@ fn into_http_request<T>(actual: &ActualDest, request: T) -> Result<http::Request
 where
 	T: OutgoingRequest + Send,
 {
-	const VERSIONS: [MatrixVersion; 1] = [MatrixVersion::V1_11];
+	const VERSIONS: [MatrixVersion; 2] = [MatrixVersion::V1_11, MatrixVersion::V1_0];
 
 	let http_request = request
 		.try_into_http_request::<Vec<u8>>(

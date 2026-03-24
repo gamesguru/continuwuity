@@ -11,6 +11,7 @@ use conduwuit_core::{
 		pdu::{PduCount, PduEvent, PduId, RawPduId},
 	},
 	utils::{self, ReadyExt},
+	warn,
 };
 use futures::StreamExt;
 use ruma::{
@@ -282,10 +283,13 @@ where
 			.pusher
 			.get_pushkeys(user)
 			.ready_for_each(|push_key| {
-				self.services
-					.sending
-					.send_pdu_push(&pdu_id, user, push_key.to_owned())
-					.expect("TODO: replace with future");
+				if let Err(e) =
+					self.services
+						.sending
+						.send_pdu_push(&pdu_id, user, push_key.to_owned())
+				{
+					warn!("Failed to queue push notification: {e}");
+				}
 			})
 			.await;
 	}
