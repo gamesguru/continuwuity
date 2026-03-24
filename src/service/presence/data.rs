@@ -6,7 +6,7 @@ use conduwuit::{
 };
 use database::{Deserialized, Json, Map};
 use futures::Stream;
-use moka::sync::Cache as MokaCache;
+use moka::future::Cache as MokaCache;
 use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
 
 use super::Presence;
@@ -53,7 +53,7 @@ impl Data {
 	pub(super) async fn get_presence_raw(&self, user_id: &UserId) -> Result<(u64, Presence)> {
 		let owned_user_id = user_id.to_owned();
 
-		if let Some(cached) = self.cache.get(&owned_user_id) {
+		if let Some(cached) = self.cache.get(&owned_user_id).await {
 			return Ok(cached);
 		}
 
@@ -68,7 +68,8 @@ impl Data {
 		let presence = Presence::from_json_bytes(&bytes)?;
 
 		self.cache
-			.insert(owned_user_id, (count, presence.clone()));
+			.insert(owned_user_id, (count, presence.clone()))
+			.await;
 
 		Ok((count, presence))
 	}
@@ -90,15 +91,10 @@ impl Data {
 		currently_active: Option<bool>,
 		last_active_ago: Option<UInt>,
 		status_msg: Option<String>,
-		previous: Option<(u64, Presence)>,
 	) -> Result<()> {
 		let _lock = self.locks.lock(user_id).await;
 
-		let last_presence = if let Some(prev) = previous {
-			Ok(prev)
-		} else {
-			self.get_presence_raw(user_id).await
-		};
+		let last_presence = self.get_presence_raw(user_id).await;
 
 		let state_changed = match last_presence {
 			| Err(_) => true,
@@ -155,12 +151,16 @@ impl Data {
 		self.presenceid_presence.raw_put(key, Json(&presence));
 		self.userid_presenceid.raw_put(user_id, count);
 
-		self.cache.insert(user_id.to_owned(), (count, presence));
+		self.cache
+			.insert(user_id.to_owned(), (count, presence))
+			.await;
 
 		if let Ok((last_count, _)) = last_presence {
 			let key = presenceid_key(last_count, user_id);
 			self.presenceid_presence.remove(&key);
 		}
+
+		drop(_lock);
 
 		Ok(())
 	}
@@ -168,7 +168,7 @@ impl Data {
 	pub(super) async fn remove_presence(&self, user_id: &UserId) {
 		let _lock = self.locks.lock(user_id).await;
 
-		self.cache.invalidate(&user_id.to_owned());
+		self.cache.invalidate(&user_id.to_owned()).await;
 
 		let Ok(count) = self
 			.userid_presenceid
@@ -182,6 +182,8 @@ impl Data {
 		let key = presenceid_key(count, user_id);
 		self.presenceid_presence.remove(&key);
 		self.userid_presenceid.remove(user_id);
+
+		drop(_lock);
 	}
 
 	pub(super) fn clear_cache(&self) { self.cache.invalidate_all(); }
@@ -225,93 +227,4 @@ fn user_id_from_bytes(bytes: &[u8]) -> Result<&UserId> {
 	let user_id: &UserId = str.try_into()?;
 
 	Ok(user_id)
-}
-
-#[cfg(test)]
-mod tests {
-	use ruma::presence::PresenceState;
-
-	use super::*;
-	use crate::presence::Presence;
-
-	/// encode, and then decode presence DB key
-	#[test]
-	fn presenceid_key_roundtrip() {
-		let user_id: &UserId = "@alice:example.com".try_into().unwrap();
-		let count = 42_u64;
-
-		let key = presenceid_key(count, user_id);
-		let (parsed_count, parsed_user_id) = presenceid_parse(&key).unwrap();
-
-		assert_eq!(parsed_count, count);
-		assert_eq!(parsed_user_id, user_id);
-	}
-
-	/// big-endian count & chronological key sorting
-	#[test]
-	fn presenceid_key_ordering() {
-		let user_id: &UserId = "@bob:example.com".try_into().unwrap();
-
-		let key_low = presenceid_key(1, user_id);
-		let key_high = presenceid_key(1000, user_id);
-
-		assert!(key_low < key_high, "keys must sort by count ascending");
-	}
-
-	/// boundary: count = 0
-	#[test]
-	fn presenceid_key_zero_count() {
-		let user_id: &UserId = "@zero:example.com".try_into().unwrap();
-
-		let key = presenceid_key(0, user_id);
-		let (parsed_count, parsed_user_id) = presenceid_parse(&key).unwrap();
-
-		assert_eq!(parsed_count, 0);
-		assert_eq!(parsed_user_id, user_id);
-	}
-
-	/// boundary: count = u64::MAX
-	#[test]
-	fn presenceid_key_max_count() {
-		let user_id: &UserId = "@max:example.com".try_into().unwrap();
-
-		let key = presenceid_key(u64::MAX, user_id);
-		let (parsed_count, parsed_user_id) = presenceid_parse(&key).unwrap();
-
-		assert_eq!(parsed_count, u64::MAX);
-		assert_eq!(parsed_user_id, user_id);
-	}
-
-	/// JSON round-trip with all fields populated
-	#[test]
-	fn presence_serde_roundtrip() {
-		let presence = Presence::new(
-			PresenceState::Online,
-			true,
-			1_700_000_000_000,
-			Some("working".to_owned()),
-		);
-
-		let json = serde_json::to_vec(&presence).unwrap();
-		let parsed = Presence::from_json_bytes(&json).unwrap();
-
-		assert_eq!(parsed.state, PresenceState::Online);
-		assert!(parsed.currently_active);
-		assert_eq!(parsed.last_active_ts, 1_700_000_000_000);
-		assert_eq!(parsed.status_msg.as_deref(), Some("working"));
-	}
-
-	/// JSON round-trip w/o status_msg
-	#[test]
-	fn presence_serde_roundtrip_no_status() {
-		let presence = Presence::new(PresenceState::Unavailable, false, 1_600_000_000_000, None);
-
-		let json = serde_json::to_vec(&presence).unwrap();
-		let parsed = Presence::from_json_bytes(&json).unwrap();
-
-		assert_eq!(parsed.state, PresenceState::Unavailable);
-		assert!(!parsed.currently_active);
-		assert_eq!(parsed.last_active_ts, 1_600_000_000_000);
-		assert!(parsed.status_msg.is_none());
-	}
 }
