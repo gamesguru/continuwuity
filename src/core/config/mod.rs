@@ -899,7 +899,7 @@ pub struct Config {
 	///
 	/// **Caveat**:
 	/// For release builds, the tracing crate is configured to only implement
-	/// levels higher than error to avoid unnecessary overhead in the compiled
+	/// levels lower than debug to avoid unnecessary overhead in the compiled
 	/// binary from trace macros. For debug builds, this restriction is not
 	/// applied.
 	///
