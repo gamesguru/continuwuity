@@ -3,7 +3,7 @@ name: PR Checks
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -55,6 +55,10 @@ jobs:
       - name: Detect best CPU target
         id: cpu
         uses: ./.github/actions/get-cpu-target
+
+      - name: Export CPU target env vars
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ steps.cpu.outputs.target }}" | tee -a $GITHUB_ENV
 
       - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-prebuilts
