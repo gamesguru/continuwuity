@@ -76,7 +76,6 @@ impl crate::Service for Service {
 				| Ok((user_id, Some(timeout))) => {
 					let self_clone = Arc::clone(&self);
 					let user_id_clone = user_id.clone();
-					let sender_clone = self.timer_channel.0.clone();
 
 					let new_task = self.services.server.runtime().spawn(async move {
 						tokio::time::sleep(timeout).await;
@@ -85,18 +84,18 @@ impl crate::Service for Service {
 							.await
 							.log_err()
 							.ok();
-						_ = sender_clone.send((user_id_clone, None)); // Signal completion
 					});
 
 					if let Some(old_task) = presence_timers.insert(user_id, new_task) {
 						old_task.abort();
 					}
 				},
-				| Ok((user_id, None)) => {
-					// Timer finished, remove its handle
-					presence_timers.remove(&user_id);
-				},
+				| Ok((_, None)) => {},
 			}
+		}
+
+		for (_, handle) in presence_timers {
+			handle.abort();
 		}
 
 		if let Some(task) = startup_task {

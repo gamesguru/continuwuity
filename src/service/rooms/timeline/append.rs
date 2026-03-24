@@ -116,7 +116,7 @@ where
 	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
 {
 	// Coalesce database writes for the remainder of this scope.
-	let _cork = self.db.db.cork();
+	// NOTE: Explicit flush removed; WAL handles it asynchronously
 
 	let shortroomid = self
 		.services
