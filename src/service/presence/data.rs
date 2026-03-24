@@ -51,7 +51,9 @@ impl Data {
 	/// Returns raw cached presence (w/o profile data), fetching from
 	/// DB and populating cache if necessary.
 	pub(super) async fn get_presence_raw(&self, user_id: &UserId) -> Result<(u64, Presence)> {
-		if let Some(cached) = self.cache.get(&user_id.to_owned()) {
+		let owned_user_id = user_id.to_owned();
+
+		if let Some(cached) = self.cache.get(&owned_user_id) {
 			return Ok(cached);
 		}
 
@@ -66,7 +68,7 @@ impl Data {
 		let presence = Presence::from_json_bytes(&bytes)?;
 
 		self.cache
-			.insert(user_id.to_owned(), (count, presence.clone()));
+			.insert(owned_user_id, (count, presence.clone()));
 
 		Ok((count, presence))
 	}
