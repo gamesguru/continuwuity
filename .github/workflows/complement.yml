@@ -89,12 +89,17 @@ jobs:
           cache-key: ${{ matrix.os }}
           arch: ${{ matrix.prebuilt_arch != '' && matrix.prebuilt_arch || steps.cpu.outputs.target }}
 
+      - name: Export CPU target env vars
+        if: matrix.arch == 'amd64'
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ steps.cpu.outputs.target }}" | tee -a $GITHUB_ENV
+
       - name: Install Rust toolchain
         run: rustup show
 
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
         with:
-          shared-key: ${{ matrix.os }}-${{ matrix.arch }}
+          shared-key: ${{ matrix.os }}-${{ matrix.arch }}-${{ steps.cpu.outputs.target || 'generic' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
 
@@ -213,13 +218,13 @@ jobs:
           FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' "$RESULTS" \
             | sort -u)
 
-          echo "pass=$PASS" >> "$GITHUB_OUTPUT"
-          echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
-          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-          echo "total=$total" >> "$GITHUB_OUTPUT"
-          echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "pass=$PASS" | tee -a "$GITHUB_OUTPUT"
+          echo "fail=$FAIL" | tee -a "$GITHUB_OUTPUT"
+          echo "skip=$SKIP" | tee -a "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" | tee -a "$GITHUB_OUTPUT"
+          echo "failed_tests<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$FAILED_TESTS" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
 
       - name: Get conduwuit version
         id: version
@@ -227,7 +232,7 @@ jobs:
         run: |
           VERSION=$(./target/latest/conduwuit --version 2>/dev/null \
             || echo "unknown")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
       - name: Update Results Ledger
         if: always()
         uses: ./.github/actions/update-results-ledger
@@ -272,8 +277,8 @@ jobs:
           # Actually, since the composite action runs its own bash shells, aliases won't pass down.
           # The cleanest way is to use ssh-agent and export it to GITHUB_ENV for future steps.
           eval $(ssh-agent -s)
-          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
-          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" | tee -a $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" | tee -a $GITHUB_ENV
 
           if [ -n "$SSH_PASSPHRASE" ]; then
              echo "echo \$SSH_PASSPHRASE" > /tmp/askpass.sh
@@ -284,7 +289,7 @@ jobs:
           fi
 
           # Add the server key to known_hosts to prevent interactive prompts
-          ssh-keyscan -p 22 nutra.tk >> ~/.ssh/known_hosts
+          ssh-keyscan -p 22 nutra.tk | tee -a ~/.ssh/known_hosts
       - name: Run Postgres Ingestion
         if: always()
         uses: ./.github/actions/postgres

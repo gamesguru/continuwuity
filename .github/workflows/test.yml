@@ -54,6 +54,10 @@ jobs:
         id: cpu
         uses: ./.github/actions/get-cpu-target
 
+      - name: Export CPU target env vars
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ steps.cpu.outputs.target }}" | tee -a $GITHUB_ENV
+
       - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-prebuilts
         with:
