@@ -898,10 +898,10 @@ pub struct Config {
 	/// https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
 	///
 	/// **Caveat**:
-	/// For release builds, the tracing crate is configured to only implement
-	/// levels higher than error to avoid unnecessary overhead in the compiled
-	/// binary from trace macros. For debug builds, this restriction is not
-	/// applied.
+	/// For release builds, the tracing crate is configured at compile-time to
+	/// automatically strip out `debug` and `trace` macros (compiling only
+	/// `info` and above) to avoid unnecessary overhead in the binary
+	/// execution. For debug builds, this restriction is not applied.
 	///
 	/// default: "info"
 	#[serde(default = "default_log")]
