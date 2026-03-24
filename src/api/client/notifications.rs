@@ -68,30 +68,26 @@ pub(crate) async fn get_notifications_route(
 	let limit = body.limit.unwrap_or_else(|| UInt::new(10).unwrap());
 	let max_limit_uint = UInt::try_from(max_limit).unwrap_or(UInt::MAX);
 	let limit = std::cmp::min(limit, max_limit_uint);
-	let (start_ts, start_pdu_count) = body
-		.from
-		.as_deref()
-		.map(|s| {
-			let mut parts = s.split(':');
-			let ts = parts
-				.next()
-				.and_then(|ts| ts.parse::<u64>().ok())
-				.unwrap_or(u64::MAX);
-			let pdu_count = parts.next().and_then(|p| {
-				if let Some(c) = p.strip_prefix('n') {
-					if let Ok(c) = c.parse::<u64>() {
-						return Some(PduCount::Normal(c));
-					}
-				} else if let Some(c) = p.strip_prefix('b') {
-					if let Ok(c) = c.parse::<i64>() {
-						return Some(PduCount::Backfilled(c));
-					}
+	let (start_ts, start_pdu_count) = body.from.as_deref().map_or((u64::MAX, None), |s| {
+		let mut parts = s.split(':');
+		let ts = parts
+			.next()
+			.and_then(|ts| ts.parse::<u64>().ok())
+			.unwrap_or(u64::MAX);
+		let pdu_count = parts.next().and_then(|p| {
+			if let Some(c) = p.strip_prefix('n') {
+				if let Ok(c) = c.parse::<u64>() {
+					return Some(PduCount::Normal(c));
 				}
-				None
-			});
-			(ts, pdu_count)
-		})
-		.unwrap_or((u64::MAX, None));
+			} else if let Some(c) = p.strip_prefix('b') {
+				if let Ok(c) = c.parse::<i64>() {
+					return Some(PduCount::Backfilled(c));
+				}
+			}
+			None
+		});
+		(ts, pdu_count)
+	});
 
 	let sender_user = body.sender_user();
 
