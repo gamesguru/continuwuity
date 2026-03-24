@@ -147,7 +147,7 @@ async fn init(server: &Arc<Server>) -> Result<UnixListener> {
 		return Err!("Failed to set socket {path:?} permissions: {e}");
 	}
 
-	info!("Listening at {path:?}");
+	warn!("Listening at {path:?}");
 
 	Ok(listener.unwrap())
 }
