@@ -71,6 +71,10 @@ pub(crate) async fn get_member_events_route(
 			.state_accessor
 			.state_full_pdus(shortstatehash)
 			.map(Event::into_pdu)
+			.then(|p| async move {
+				tokio::task::yield_now().await;
+				p
+			})
 			.collect()
 			.await;
 
@@ -94,6 +98,10 @@ pub(crate) async fn get_member_events_route(
 			.map(at!(1))
 			.ready_filter_map(|pdu| membership_filter(pdu, membership, not_membership))
 			.map(Event::into_format)
+			.then(|p| async move {
+				tokio::task::yield_now().await;
+				p
+			})
 			.collect()
 			.boxed()
 			.await,
