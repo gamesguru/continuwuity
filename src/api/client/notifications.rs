@@ -212,37 +212,42 @@ pub(crate) async fn get_notifications_route(
 				.get_actions(sender_user, &ruleset, &power_levels, &pdu_raw, &room_id)
 				.await;
 
-			// Look for notifications
-			if actions
-				.iter()
-				.any(|action| matches!(action, &Action::Notify))
-			{
-				let event: Raw<AnySyncTimelineEvent> = pdu_raw;
+			let is_highlight = actions.iter().any(Action::is_highlight);
+			let is_notify = actions.iter().any(|a| matches!(a, Action::Notify));
 
-				// Prepare each item, carrying `pdu_count` for stable ordering/pagination
-				let notification_item = NotificationItem {
-					notification: notif_route_v3::Notification {
-						actions: actions.to_vec(),
-						event,
-						profile_tag: None,
-						read: false,
-						room_id: room_id.clone(),
-						ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
-					},
-					pdu_count,
-				};
-
-				if notifications.len() >= limit_usize {
-					// Heap is full; only evict the current oldest item if this one is newer.
-					if let Some(Reverse(oldest)) = notifications.peek() {
-						if notification_item.cmp(oldest) <= Ordering::Equal {
-							continue;
-						}
-					}
-					notifications.pop();
-				}
-				notifications.push(Reverse(notification_item));
+			if !is_notify {
+				continue;
 			}
+
+			if body.only.as_deref() == Some("highlight") && !is_highlight {
+				continue;
+			}
+
+			let event: Raw<AnySyncTimelineEvent> = pdu_raw;
+
+			// Prepare each item, carrying `pdu_count` for stable ordering/pagination
+			let notification_item = NotificationItem {
+				notification: notif_route_v3::Notification {
+					actions: actions.to_vec(),
+					event,
+					profile_tag: None,
+					read: false,
+					room_id: room_id.clone(),
+					ts: MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
+				},
+				pdu_count,
+			};
+
+			if notifications.len() >= limit_usize {
+				// Heap is full; only evict the current oldest item if this one is newer.
+				if let Some(Reverse(oldest)) = notifications.peek() {
+					if notification_item.cmp(oldest) <= Ordering::Equal {
+						continue;
+					}
+				}
+				notifications.pop();
+			}
+			notifications.push(Reverse(notification_item));
 		}
 	}
 
