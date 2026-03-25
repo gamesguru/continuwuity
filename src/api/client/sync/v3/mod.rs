@@ -516,9 +516,16 @@ async fn process_presence_updates(
 	last_sync_end_count: Option<u64>,
 	syncing_user: &UserId,
 ) -> PresenceUpdates {
+	// Skip presence on initial sync to avoid scanning the entire presence table
+	// (O(N×M) with user_sees_user checks). Clients will receive presence updates
+	// on the next incremental sync. This matches Synapse's behavior.
+	let Some(since) = last_sync_end_count else {
+		return PresenceUpdates::new();
+	};
+
 	services
 		.presence
-		.presence_since(last_sync_end_count.unwrap_or(0)) // send all presences on initial sync
+		.presence_since(since)
 		.filter(|(user_id, ..)| {
 			services
 				.rooms

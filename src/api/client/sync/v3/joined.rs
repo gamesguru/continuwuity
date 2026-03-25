@@ -544,6 +544,12 @@ async fn build_state_after(
 		return Ok(Vec::new());
 	}
 
+	// On initial sync, build_state_events already returns the full current state,
+	// so state_after would be redundant (same shortstatehash). Skip it.
+	if sync_context.last_sync_end_count.is_none() {
+		return Ok(Vec::new());
+	}
+
 	let SyncContext { syncing_user, .. } = sync_context;
 	let ShortStateHashes { current_shortstatehash, .. } = shortstatehashes;
 
