@@ -376,7 +376,10 @@ impl Service {
 				.await?;
 
 			self.schedule_timeout(user_id, &new_state)?;
-			self.notify_presence_change(user_id).await.log_err().ok();
+
+			// Do not notify for idle/offline transitions to prevent I/O storms.
+			// The sender will pick these up lazily on its next sweep.
+			// self.notify_presence_change(user_id).await.log_err().ok();
 		}
 
 		Ok(())
