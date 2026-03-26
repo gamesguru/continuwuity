@@ -72,9 +72,11 @@ async fn should_rescind_invite(
 				.get_field::<RoomMemberEventContent>("content")?
 				.is_some_and(|c| c.membership == MembershipState::Invite)
 		{
-			// The sender of the leave event must be either the target user (rejecting the invite)
-			// or the original inviter (rescinding the invite)
-			let inviter = event.get_field::<OwnedUserId>("sender")?.unwrap_or_else(|| target_user_id.clone());
+			// The sender of the leave event must be either the target user (rejecting the
+			// invite) or the original inviter (rescinding the invite)
+			let inviter = event
+				.get_field::<OwnedUserId>("sender")?
+				.unwrap_or_else(|| target_user_id.clone());
 			if sender == target_user_id || sender == inviter {
 				return Ok(Some((pdu_event, target_user_id)));
 			}
