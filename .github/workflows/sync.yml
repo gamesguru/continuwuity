@@ -33,18 +33,19 @@ jobs:
           git config user.name "nutra-bot"
           git config user.email "services@nutra.tk"
 
-          # Re-configure origin with token for authenticated push
+          # Rename origin (GitHub) to github and re-configure with token for authenticated push
           SERVER_URL="${{ github.server_url }}"
           HOST="${SERVER_URL#https://}"
-          git remote set-url origin https://x-access-token:$TOKEN@$HOST/${{ github.repository }}.git
+          git remote set-url origin "https://x-access-token:$TOKEN@$HOST/${{ github.repository }}.git"
 
-          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          # origin is now Forgejo
+          git remote add forge https://forgejo.ellis.link/continuwuation/continuwuity.git
 
       - name: "Sync main [from forge: continuwuation/continuwuity]"
         uses: ./.github/actions/git-sync
         with:
           source_branch: main
-          source_remote: upstream
+          source_remote: forge
           dest_remote: origin
           mode: merge
           sync_tags: "true"
@@ -54,7 +55,7 @@ jobs:
         with:
           source_branch: main
           dest_branch: main-upstream
-          source_remote: upstream
+          source_remote: forge
           dest_remote: origin
           mode: rebase
 
@@ -78,6 +79,6 @@ jobs:
         with:
           source_branch: main
           dest_branch: _metadata/refs/remotes/upstream/main
-          source_remote: upstream
+          source_remote: forge
           dest_remote: origin
           mode: force
