@@ -63,12 +63,12 @@ runs:
           echo "\."
           echo "INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, profile, binary_sha256, n_pass, n_skip, n_fail)
                 SELECT
-                  (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
+                  (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'),
+                  CASE WHEN (j->>'branch') = 'main_upstream' THEN 'main-upstream' ELSE (j->>'branch') END,
                   (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
                   (j->>'version_string'), (j->>'features'), (j->>'profile'), (j->>'binary_sha256'),
                   (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
                 FROM b ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
-          echo "UPDATE runs SET branch = 'main-upstream' WHERE branch = 'main_upstream';"
         ) | ssh -C -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
 
         # 2. Ingest Test Details

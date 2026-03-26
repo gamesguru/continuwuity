@@ -37,11 +37,16 @@ for arg in sys.argv[1:]:
         if k == "like":
             like_str = v
         elif k == "limit":
-            limit = v
+            # Sanitize limit: digits only
+            if v.isdigit():
+                limit = v
         elif k == "order":
-            order = v
+            # Sanitize order: allow only safe characters/words
+            if re.match(r"^[a-zA-Z0-9_,. ]+$", v):
+                order = v
         elif k == "baseline":
-            baseline_branch = v
+            # Escape baseline: replace single quotes
+            baseline_branch = v.replace("'", "''")
         elif k == "show" and "passes" in v:
             show_passes = True
         elif k == "raw":
@@ -69,8 +74,17 @@ WITH custom_baseline AS (
 passes_col = ""
 passes_agg = ""
 if show_passes:
-    passes_col = ",\n    counts.new_passes_list"
-    passes_agg = ",\n        string_agg(rd.test_name, E'\n') FILTER (WHERE rd.status = 'pass'::text AND (mb.status IS NULL OR mb.status <> 'pass'::text)) AS new_passes_list"
+    # In raw mode, we use #01 as a newline placeholder to keep psql output single-line per record.
+    # In normal mode, we use E'\n' for readability.
+    nl = "#01" if raw_mode else "\n"
+    passes_col = f",\n    counts.new_passes_list"
+    passes_agg = f",\n        string_agg(rd.test_name, E'{nl}') FILTER (WHERE rd.status = 'pass'::text AND (mb.status IS NULL OR mb.status <> 'pass'::text)) AS new_passes_list"
+
+# Newline placeholder for failures
+nl_fail = "#01" if raw_mode else "\n"
+
+# In raw mode, ensure features is also single-line
+features_sql = "REPLACE(r.features, E'\n', '#01')" if raw_mode else "regexp_replace(r.features, '[ ,]+', E'\n', 'g')"
 
 query = f"""{baseline_cte}
 SELECT
@@ -83,7 +97,7 @@ SELECT
     counts.new_pass,
     counts.new_fail,
     r.profile,
-    regexp_replace(r.features, '[, ]+', E'\\n', 'g') AS features,
+    {features_sql} AS features,
     r.os,
     r.arch,
     counts.new_failures_list{passes_col}
@@ -93,7 +107,7 @@ LEFT JOIN LATERAL (
         count(*) AS run_total,
         count(*) FILTER (WHERE rd.status = 'pass'::text AND (mb.status IS NULL OR mb.status <> 'pass'::text)) AS new_pass,
         count(*) FILTER (WHERE rd.status = 'fail'::text AND (mb.status IS NULL OR mb.status <> 'fail'::text)) AS new_fail,
-        string_agg(rd.test_name, E'\\n') FILTER (WHERE rd.status = 'fail'::text AND (mb.status IS NULL OR mb.status <> 'fail'::text)) AS new_failures_list{passes_agg}
+        string_agg(rd.test_name, E'{nl_fail}') FILTER (WHERE rd.status = 'fail'::text AND (mb.status IS NULL OR mb.status <> 'fail'::text)) AS new_failures_list{passes_agg}
     FROM run_details rd
     LEFT JOIN {baseline_table} mb ON mb.test_name = rd.test_name
     WHERE rd.run_id = r.id
@@ -101,7 +115,9 @@ LEFT JOIN LATERAL (
 WHERE r.n_pass > 0 AND counts.run_total > 0"""
 
 if like_str != "all":
-    query += f"\nAND r.version_string LIKE '%{like_str}%'"
+    # Sanitize like_str
+    safe_like = like_str.replace("'", "''")
+    query += f"\nAND r.version_string LIKE '%{safe_like}%'"
 
 query += f"\nORDER BY\n    {order}\nLIMIT {limit};"
 
