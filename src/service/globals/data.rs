@@ -21,20 +21,25 @@ impl Data {
 		}
 	}
 
-	pub fn next_count(&self) -> Result<u64> {
+	pub fn next_count(&self) -> Result<u64> { self.next_count_batch(1).map(|start| start + 1) }
+
+	pub fn next_count_batch(&self, diff: u64) -> Result<u64> {
 		let _cork = self.db.cork();
 		let mut lock = self.counter.write();
 		let counter: &mut u64 = &mut lock;
+
+		#[cfg(debug_assertions)]
 		debug_assert!(
 			*counter == Self::stored_count(&self.global).unwrap_or_default(),
 			"counter mismatch"
 		);
 
-		*counter = counter.checked_add(1).unwrap_or(*counter);
+		let start = *counter;
+		*counter = counter.checked_add(diff).unwrap_or(*counter);
 
 		self.global.insert(COUNTER, counter.to_be_bytes());
 
-		Ok(*counter)
+		Ok(start)
 	}
 
 	#[inline]
