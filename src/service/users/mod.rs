@@ -205,7 +205,7 @@ impl Service {
 
 			if let Some(content) = config_content {
 				let mut level = content.user_filter_level(sender_user);
-				if content.enabled && level == FilterLevel::Allow {
+				if content.enabled {
 					let user_match = content
 						.allowed_users
 						.iter()
@@ -214,12 +214,13 @@ impl Service {
 						.allowed_servers
 						.iter()
 						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
-					if !user_match && !server_match {
-						if !content.allowed_users.is_empty()
-							|| !content.allowed_servers.is_empty()
-						{
-							level = FilterLevel::Block;
-						}
+
+					if user_match || server_match {
+						level = FilterLevel::Allow;
+					} else if !content.allowed_users.is_empty()
+						|| !content.allowed_servers.is_empty()
+					{
+						level = FilterLevel::Block;
 					}
 				}
 				level

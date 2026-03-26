@@ -215,8 +215,9 @@ pub async fn handle_incoming_pdu<'a>(
 						.await
 					{
 						if !pending_invite_state.is_empty() {
-							info!("Dropping invalid federated invite rescission from {sender}");
-							return Ok(None);
+							return Err!(Request(Forbidden(
+								"Dropping invalid federated invite rescission from {sender}"
+							)));
 						}
 					}
 				}
