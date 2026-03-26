@@ -1754,7 +1754,7 @@ pub struct Config {
 
 	/// User agent that is used specifically when fetching url previews.
 	///
-	/// default: "continuwuity/<version> (bot; +https://continuwuity.org)"
+	/// default: "guwitty/<version>"
 	pub url_preview_user_agent: Option<String>,
 
 	/// Determines whether audio and video files will be downloaded for URL
