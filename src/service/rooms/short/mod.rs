@@ -79,10 +79,41 @@ where
 		.stream()
 		.get(&self.db.eventid_shorteventid)
 		.zip(event_ids.into_iter().stream())
-		.map(|(result, event_id)| match result {
-			| Ok(ref short) => utils::u64_from_u8(short),
-			| Err(_) => self.create_shorteventid(event_id),
+		.ready_chunks(256)
+		.map(move |chunk| {
+			let missing_count = chunk.iter().filter(|(res, _)| res.is_err()).count() as u64;
+			let mut next_id = if missing_count > 0 {
+				self.services
+					.globals
+					.next_count_batch(missing_count)
+					.unwrap_or(0)
+			} else {
+				0
+			};
+
+			let mut results = Vec::with_capacity(chunk.len());
+			for (result, event_id) in chunk {
+				match result {
+					| Ok(ref short) => results.push(utils::u64_from_u8(short)),
+					| Err(_) => {
+						next_id += 1;
+						let short = next_id;
+
+						const BUFSIZE: usize = size_of::<ShortEventId>();
+						self.db
+							.eventid_shorteventid
+							.raw_aput::<BUFSIZE, _, _>(event_id, short);
+						self.db
+							.shorteventid_eventid
+							.aput_raw::<BUFSIZE, _, _>(short, event_id);
+
+						results.push(short);
+					},
+				}
+			}
+			IterStream::stream(results.into_iter())
 		})
+		.flatten_stream()
 }
 
 #[implement(Service)]
