@@ -402,7 +402,14 @@ async fn load_full_state(&self, shortstatehash: ShortStateHash) -> Result<Arc<Co
 		.state_compressor
 		.load_shortstatehash_info(shortstatehash)
 		.map_err(|e| err!(Database("Missing state IDs: {e}")))
-		.map_ok(|vec| vec.last().expect("at least one layer").full_state.clone())
+		.map_ok(|vec| {
+			vec.last()
+				.expect("at least one layer")
+				.full_state
+				.as_ref()
+				.expect("top layer must have full_state")
+				.clone()
+		})
 		.await
 }
 
