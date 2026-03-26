@@ -1162,7 +1162,7 @@
 # Maximum number of PDUs scanned per room when collecting
 # notifications. This prevents abuse from clients requesting
 # deeply-paginated notification history. Set to 0 to disable
-# notifications (returns 404).
+# notifications (returns empty results unless limited by other settings).
 #
 #notification_max_pdus_per_room = 5000
 
