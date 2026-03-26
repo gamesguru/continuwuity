@@ -4,13 +4,11 @@ use std::{
 	time::Duration,
 };
 
-use conduwuit::{
-	debug, debug_error, debug_warn, error, implement, info, result::FlatOk, trace, warn,
-};
+use conduwuit::{debug, debug_error, debug_warn, error, implement, info, trace, warn};
 use futures::{StreamExt, stream::FuturesUnordered};
 use ruma::{
-	CanonicalJsonObject, OwnedServerName, OwnedServerSigningKeyId, ServerName,
-	ServerSigningKeyId, api::federation::discovery::ServerSigningKeys, serde::Raw,
+	OwnedServerName, OwnedServerSigningKeyId, ServerName, ServerSigningKeyId,
+	api::federation::discovery::ServerSigningKeys,
 };
 use serde_json::value::RawValue as RawJsonValue;
 use tokio::time::{Instant, timeout_at};
@@ -180,6 +178,7 @@ async fn acquire_origin(
 		| Err(e) => debug_warn!(%origin, "timed out: {e}"),
 		| Ok(Err(e)) => debug_error!(%origin, "{e}"),
 		| Ok(Ok(server_keys)) => {
+			let server_keys: ServerSigningKeys = server_keys;
 			trace!(
 				%origin,
 				?key_ids,

@@ -81,7 +81,9 @@ where
 		.zip(event_ids.into_iter().stream())
 		.ready_chunks(256)
 		.map(move |chunk| {
-			let missing_count = chunk.iter().filter(|(res, _)| res.is_err()).count() as u64;
+			const BUFSIZE: usize = size_of::<ShortEventId>();
+			let missing_count =
+				u64::try_from(chunk.iter().filter(|(res, _)| res.is_err()).count()).unwrap_or(0);
 			let mut next_id = if missing_count > 0 {
 				self.services
 					.globals
@@ -96,10 +98,9 @@ where
 				match result {
 					| Ok(ref short) => results.push(utils::u64_from_u8(short)),
 					| Err(_) => {
-						next_id += 1;
-						let short = next_id;
+						let short = next_id.saturating_add(1);
+						next_id = short;
 
-						const BUFSIZE: usize = size_of::<ShortEventId>();
 						self.db
 							.eventid_shorteventid
 							.raw_aput::<BUFSIZE, _, _>(event_id, short);
@@ -113,7 +114,7 @@ where
 			}
 			IterStream::stream(results.into_iter())
 		})
-		.flatten_stream()
+		.flatten()
 }
 
 #[implement(Service)]
