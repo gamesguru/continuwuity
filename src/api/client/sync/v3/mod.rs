@@ -320,7 +320,7 @@ pub(crate) async fn build_sync_events(
 				| Ok(Some((room, state_after))) => Some((room_id, room, state_after)),
 				| Ok(None) => None,
 				| Err(err) => {
-					warn!(?err, %room_id, "error loading left room");
+					warn!(?err, %room_id, "error loading joined room");
 					None
 				},
 			}
