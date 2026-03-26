@@ -371,14 +371,18 @@ jobs:
           NF_UPSTREAM=$(echo "$OUT_UPSTREAM" | cut -d'|' -f13 | sed 's/#01/\n/g')
           NP_UPSTREAM=$(echo "$OUT_UPSTREAM" | cut -d'|' -f14 | sed 's/#01/\n/g')
           NF_UPSTREAM_COUNT=$(echo "$OUT_UPSTREAM" | cut -d'|' -f8)
+          NF_UPSTREAM_COUNT=${NF_UPSTREAM_COUNT:-0}
           NP_UPSTREAM_COUNT=$(echo "$OUT_UPSTREAM" | cut -d'|' -f7)
+          NP_UPSTREAM_COUNT=${NP_UPSTREAM_COUNT:-0}
 
           echo "Fetching deviations from main..."
           OUT_MAIN=$(python3 .github/actions/postgres/ci-query-failures.py like="${SHA}" limit=1 raw=1 show=passes baseline=main || true)
           NF_MAIN=$(echo "$OUT_MAIN" | cut -d'|' -f13 | sed 's/#01/\n/g')
           NP_MAIN=$(echo "$OUT_MAIN" | cut -d'|' -f14 | sed 's/#01/\n/g')
           NF_MAIN_COUNT=$(echo "$OUT_MAIN" | cut -d'|' -f8)
+          NF_MAIN_COUNT=${NF_MAIN_COUNT:-0}
           NP_MAIN_COUNT=$(echo "$OUT_MAIN" | cut -d'|' -f7)
+          NP_MAIN_COUNT=${NP_MAIN_COUNT:-0}
 
           echo "nf_upstream<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$NF_UPSTREAM" | tee -a "$GITHUB_OUTPUT"
@@ -414,14 +418,16 @@ jobs:
             fi
             echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
 
+            echo "<details><summary>Newly Passing Tests ($NP_UPSTREAM_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
             if [ "$NP_UPSTREAM_COUNT" -gt 0 ]; then
-                echo "<details><summary>Newly Passing Tests ($NP_UPSTREAM_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
-                echo "" | tee -a "$GITHUB_STEP_SUMMARY"
                 echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
                 echo "$NP_UPSTREAM" | tee -a "$GITHUB_STEP_SUMMARY"
                 echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
-                echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+                echo "_No newly passing tests recorded._" | tee -a "$GITHUB_STEP_SUMMARY"
             fi
+            echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
 
             echo "" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "### Deviations from main" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -436,14 +442,16 @@ jobs:
             fi
             echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
 
+            echo "<details><summary>Newly Passing Tests ($NP_MAIN_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
             if [ "$NP_MAIN_COUNT" -gt 0 ]; then
-                echo "<details><summary>Newly Passing Tests ($NP_MAIN_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
-                echo "" | tee -a "$GITHUB_STEP_SUMMARY"
                 echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
                 echo "$NP_MAIN" | tee -a "$GITHUB_STEP_SUMMARY"
                 echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
-                echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+                echo "_No newly passing tests recorded._" | tee -a "$GITHUB_STEP_SUMMARY"
             fi
+            echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Post Complement results to PR
