@@ -146,7 +146,7 @@ pub(crate) async fn create_room_route(
 					.users
 					.invite_filter_level(sender_user, recipient_user)
 					.await,
-				FilterLevel::Block | FilterLevel::Ignore
+				FilterLevel::Block
 			) {
 			return Err!(Request(Forbidden("{recipient_user} has blocked invites from you.")));
 		}

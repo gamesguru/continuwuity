@@ -343,7 +343,7 @@ pub async fn mark_as_invited(
 			.users
 			.invite_filter_level(sender_user, user_id)
 			.await,
-		FilterLevel::Block | FilterLevel::Ignore
+		FilterLevel::Block
 	) {
 		return Err!(Request(Forbidden("{user_id} has blocked invites from {sender_user}.")));
 	}

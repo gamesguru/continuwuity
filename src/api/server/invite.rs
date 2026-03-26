@@ -156,7 +156,7 @@ pub(crate) async fn create_invite_route(
 		.invite_filter_level(sender_user, &recipient_user)
 		.await;
 
-	if matches!(recipient_filter_level, FilterLevel::Block | FilterLevel::Ignore) {
+	if matches!(recipient_filter_level, FilterLevel::Block) {
 		return Err!(Request(Forbidden("{recipient_user} has blocked invites from you.")));
 	}
 
