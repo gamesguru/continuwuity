@@ -68,6 +68,7 @@ runs:
                   (j->>'version_string'), (j->>'features'), (j->>'profile'), (j->>'binary_sha256'),
                   (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
                 FROM b ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
+          echo "UPDATE runs SET branch = 'main-upstream' WHERE branch = 'main_upstream';"
         ) | ssh -C -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
 
         # 2. Ingest Test Details

@@ -58,8 +58,15 @@ jobs:
           fetch-tags: true
           fetch-depth: 0
 
-      - name: Fetch tags and origin/main for comparison
-        run: git fetch --tags --force && git fetch origin HEAD && git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+      - name: Fetch tags and baselines
+        run: |
+          git fetch --tags --force
+          git fetch origin main:origin/main || true
+          git fetch origin main-upstream:origin/main-upstream || true
+          echo "--- origin/main ---"
+          git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl || true
+          echo "--- origin/main-upstream ---"
+          git log -1 --format="%an (%ad) %H" origin/main-upstream -- tests/test_results/complement/test_results.jsonl || true
 
       - name: Install system dependencies
         run: |
@@ -156,6 +163,28 @@ jobs:
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
 
+      - name: Capture baseline stats (main)
+        run: |
+          mkdir -p tests/test_results/complement/
+          git show origin/main:tests/test_results/complement/test_results.jsonl > tests/test_results/complement/test_results.jsonl.main || echo "{}" > tests/test_results/complement/test_results.jsonl.main
+          # Temporarily swap in the main branch results to use the Makefile stats command
+          cp tests/test_results/complement/test_results.jsonl tests/test_results/complement/test_results.jsonl.bak || true
+          cp tests/test_results/complement/test_results.jsonl.main tests/test_results/complement/test_results.jsonl
+          VERBOSE=1 make complement/stats | tee baseline_stats_main.txt
+          # Restore the original file
+          mv tests/test_results/complement/test_results.jsonl.bak tests/test_results/complement/test_results.jsonl || true
+
+      - name: Capture baseline stats (main-upstream)
+        run: |
+          mkdir -p tests/test_results/complement/
+          git show origin/main-upstream:tests/test_results/complement/test_results.jsonl > tests/test_results/complement/test_results.jsonl.main-upstream || echo "{}" > tests/test_results/complement/test_results.jsonl.main-upstream
+          # Temporarily swap in the main-upstream branch results to use the Makefile stats command
+          cp tests/test_results/complement/test_results.jsonl tests/test_results/complement/test_results.jsonl.bak || true
+          cp tests/test_results/complement/test_results.jsonl.main-upstream tests/test_results/complement/test_results.jsonl
+          VERBOSE=1 make complement/stats | tee baseline_stats_main_upstream.txt
+          # Restore the original file
+          mv tests/test_results/complement/test_results.jsonl.bak tests/test_results/complement/test_results.jsonl || true
+
       - name: Checkout Complement
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -179,13 +208,32 @@ jobs:
         run: |
           ./bin/complement ./complement-src
 
-      - name: Compare results with baseline
+      - name: Compare results with baseline [1]
         continue-on-error: true
         run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 make complement/stats)
 
-      - name: Compare FULL results with baseline
+      - name: Compare FULL results with baseline [1]
         continue-on-error: true
         run: git diff --color=always tests/test_results/complement/test_results.jsonl
+
+      - name: Compare results with baseline [2] (main)
+        continue-on-error: true
+        run: diff --color=always -u baseline_stats_main.txt <(VERBOSE=1 make complement/stats)
+
+      - name: Compare FULL results with baseline [2] (main)
+        continue-on-error: true
+        run: |
+          # Use diff since git diff only works on indexed files
+          diff --color=always -u tests/test_results/complement/test_results.jsonl.main tests/test_results/complement/test_results.jsonl
+
+      - name: Compare results with baseline [3] (main-upstream)
+        continue-on-error: true
+        run: diff --color=always -u baseline_stats_main_upstream.txt <(VERBOSE=1 make complement/stats)
+
+      - name: Compare FULL results with baseline [3] (main-upstream)
+        continue-on-error: true
+        run: |
+          diff --color=always -u tests/test_results/complement/test_results.jsonl.main-upstream tests/test_results/complement/test_results.jsonl
 
       - name: Upload test logs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -314,34 +362,102 @@ jobs:
           DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
         run: |
           SHA="${{ github.event.pull_request.head.sha || github.sha }}"
-          ARCH="${{ matrix.arch }}"
-          OS="${{ matrix.os }}"
-          PROFILE="${{ matrix.profile }}"
 
-          # Fetch the newly failing tests for this specific run
-          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' LIMIT 1;" | sed 's/\\n/\n/g')
+          echo "Fetching deviations from main-upstream..."
+          # master_baseline is typically main-upstream. Use raw mode to get columns.
+          # Column 13: new_fail_list, Column 14: new_pass_list, Column 7: new_pass_count, Column 8: new_fail_count
+          # Note: We use sed to convert #01 back to newline for the multi-line output.
+          OUT_UPSTREAM=$(python3 .github/actions/postgres/ci-query-failures.py like="${SHA}" limit=1 raw=1 show=passes baseline=main-upstream || true)
+          NF_UPSTREAM=$(echo "$OUT_UPSTREAM" | cut -d'|' -f13 | sed 's/#01/\n/g')
+          NP_UPSTREAM=$(echo "$OUT_UPSTREAM" | cut -d'|' -f14 | sed 's/#01/\n/g')
+          NF_UPSTREAM_COUNT=$(echo "$OUT_UPSTREAM" | cut -d'|' -f8)
+          NP_UPSTREAM_COUNT=$(echo "$OUT_UPSTREAM" | cut -d'|' -f7)
 
-          echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
-          echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"
+          echo "Fetching deviations from main..."
+          OUT_MAIN=$(python3 .github/actions/postgres/ci-query-failures.py like="${SHA}" limit=1 raw=1 show=passes baseline=main || true)
+          NF_MAIN=$(echo "$OUT_MAIN" | cut -d'|' -f13 | sed 's/#01/\n/g')
+          NP_MAIN=$(echo "$OUT_MAIN" | cut -d'|' -f14 | sed 's/#01/\n/g')
+          NF_MAIN_COUNT=$(echo "$OUT_MAIN" | cut -d'|' -f8)
+          NP_MAIN_COUNT=$(echo "$OUT_MAIN" | cut -d'|' -f7)
+
+          echo "nf_upstream<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$NF_UPSTREAM" | tee -a "$GITHUB_OUTPUT"
           echo "EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "np_upstream<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$NP_UPSTREAM" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "nf_upstream_count=${NF_UPSTREAM_COUNT:-0}" | tee -a "$GITHUB_OUTPUT"
+          echo "np_upstream_count=${NP_UPSTREAM_COUNT:-0}" | tee -a "$GITHUB_OUTPUT"
 
-          # Count non-empty lines of new failures
-          NEW_FAILURES_COUNT=$(echo "$NEW_FAILURES" | grep -c '[^[:space:]]' || true)
-          if [ "$NEW_FAILURES_COUNT" -gt 0 ]; then
+          echo "nf_main<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$NF_MAIN" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "np_main<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$NP_MAIN" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "nf_main_count=${NF_MAIN_COUNT:-0}" | tee -a "$GITHUB_OUTPUT"
+          echo "np_main_count=${NP_MAIN_COUNT:-0}" | tee -a "$GITHUB_OUTPUT"
+
+          # Add to Step Summary
+          FAIL_COUNT=${{ steps.results.outputs.fail || 0 }}
+          if [ "$FAIL_COUNT" -gt 0 ]; then
             echo "" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "<details><summary>Newly Failed Tests ($NEW_FAILURES_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "### Deviations from main-upstream" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>Newly Failed Tests ($NF_UPSTREAM_COUNT / $FAIL_COUNT total)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "$NEW_FAILURES" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$NF_UPSTREAM_COUNT" -gt 0 ]; then
+                echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "$NF_UPSTREAM" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+                echo "_No newly failing tests recorded._" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
             echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+
+            if [ "$NP_UPSTREAM_COUNT" -gt 0 ]; then
+                echo "<details><summary>Newly Passing Tests ($NP_UPSTREAM_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "$NP_UPSTREAM" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "### Deviations from main" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>Newly Failed Tests ($NF_MAIN_COUNT / $FAIL_COUNT total)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$NF_MAIN_COUNT" -gt 0 ]; then
+                echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "$NF_MAIN" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+                echo "_No newly failing tests recorded._" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+
+            if [ "$NP_MAIN_COUNT" -gt 0 ]; then
+                echo "<details><summary>Newly Passing Tests ($NP_MAIN_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "$NP_MAIN" | tee -a "$GITHUB_STEP_SUMMARY"
+                echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+                echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
           fi
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
-          FAILED_TESTS: ${{ steps.new_failures.outputs.new_failures }}
+          NF_UPSTREAM: ${{ steps.new_failures.outputs.nf_upstream }}
+          NP_UPSTREAM: ${{ steps.new_failures.outputs.np_upstream }}
+          NF_UPSTREAM_COUNT: ${{ steps.new_failures.outputs.nf_upstream_count }}
+          NP_UPSTREAM_COUNT: ${{ steps.new_failures.outputs.np_upstream_count }}
+          NF_MAIN: ${{ steps.new_failures.outputs.nf_main }}
+          NP_MAIN: ${{ steps.new_failures.outputs.np_main }}
+          NF_MAIN_COUNT: ${{ steps.new_failures.outputs.nf_main_count }}
+          NP_MAIN_COUNT: ${{ steps.new_failures.outputs.np_main_count }}
         with:
           script: |
             const pass = ${{ steps.results.outputs.pass || 0 }};
@@ -350,14 +466,27 @@ jobs:
             const total = ${{ steps.results.outputs.total || 0 }};
             const arch = '${{ matrix.arch }}';
             const os = '${{ matrix.os }}';
-            const failedTestsRaw = process.env.FAILED_TESTS || '';
 
-            const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
-            let failedContent = 'No newly failing tests recorded.';
-            if (lines.length > 0) {
-              const list = lines.join('\n');
-              failedContent = '```\n' + list + '\n```';
-            }
+            const formatSection = (count, raw, title) => {
+              const lines = (raw || '').trim().split('\n').filter(l => l.length > 0);
+              let content = '_None._';
+              if (lines.length > 0) {
+                content = '```\n' + lines.join('\n') + '\n```';
+              }
+              return `<details><summary>${title} (${count})</summary>\n\n${content}\n\n</details>`;
+            };
+
+            const upstreamSection = [
+              '### Deviations from main-upstream',
+              formatSection(process.env.NF_UPSTREAM_COUNT, process.env.NF_UPSTREAM, 'Newly Failed Tests'),
+              formatSection(process.env.NP_UPSTREAM_COUNT, process.env.NP_UPSTREAM, 'Newly Passing Tests'),
+            ].join('\n');
+
+            const mainSection = [
+              '### Deviations from main',
+              formatSection(process.env.NF_MAIN_COUNT, process.env.NF_MAIN, 'Newly Failed Tests'),
+              formatSection(process.env.NP_MAIN_COUNT, process.env.NP_MAIN, 'Newly Passing Tests'),
+            ].join('\n');
 
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
@@ -370,11 +499,9 @@ jobs:
               `| ⌒ Skip | ${skip} |`,
               `| **Total** | **${total}** |`,
               '',
-              `<details><summary>Newly Failed Tests (${lines.length})</summary>`,
+              upstreamSection,
               '',
-              failedContent,
-              '',
-              '</details>',
+              mainSection,
             ].join('\n');
 
             const { data: comments } = await github.rest.issues.listComments({
