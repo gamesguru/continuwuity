@@ -81,6 +81,8 @@ where
 		.zip(event_ids.into_iter().stream())
 		.ready_chunks(256)
 		.map(move |chunk| {
+			use std::collections::HashMap;
+
 			const BUFSIZE: usize = size_of::<ShortEventId>();
 			let missing_count =
 				u64::try_from(chunk.iter().filter(|(res, _)| res.is_err()).count()).unwrap_or(0);
@@ -93,10 +95,20 @@ where
 				0
 			};
 
+			let mut seen = HashMap::with_capacity(chunk.len());
 			let mut results = Vec::with_capacity(chunk.len());
 			for (result, event_id) in chunk {
+				if let Some(&short) = seen.get(event_id) {
+					results.push(short);
+					continue;
+				}
+
 				match result {
-					| Ok(ref short) => results.push(utils::u64_from_u8(short)),
+					| Ok(ref short) => {
+						let short = utils::u64_from_u8(short);
+						seen.insert(event_id, short);
+						results.push(short);
+					},
 					| Err(_) => {
 						let short = next_id.saturating_add(1);
 						next_id = short;
@@ -108,11 +120,13 @@ where
 							.shorteventid_eventid
 							.aput_raw::<BUFSIZE, _, _>(short, event_id);
 
+						seen.insert(event_id, short);
 						results.push(short);
 					},
 				}
 			}
 			IterStream::stream(results.into_iter())
+		})
 		})
 		.flatten()
 }
