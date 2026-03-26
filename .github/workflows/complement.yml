@@ -362,12 +362,15 @@ jobs:
           DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
         run: |
           SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          ARCH="${{ matrix.arch }}"
+          OS="${{ matrix.os }}"
+          PROFILE="${{ matrix.profile }}"
 
           echo "Fetching deviations from main-upstream..."
           # master_baseline is typically main-upstream. Use raw mode to get columns.
           # Column 13: new_fail_list, Column 14: new_pass_list, Column 7: new_pass_count, Column 8: new_fail_count
           # Note: We use sed to convert #01 back to newline for the multi-line output.
-          OUT_UPSTREAM=$(python3 .github/actions/postgres/ci-query-failures.py like="${SHA}" limit=1 raw=1 show=passes baseline=main-upstream || true)
+          OUT_UPSTREAM=$(python3 .github/actions/postgres/ci-query-failures.py like="${SHA}" limit=1 raw=1 show=passes baseline=main-upstream arch="${ARCH}" os="${OS}" profile="${PROFILE}" || true)
           NF_UPSTREAM=$(echo "$OUT_UPSTREAM" | cut -d'|' -f13 | sed 's/#01/\n/g')
           NP_UPSTREAM=$(echo "$OUT_UPSTREAM" | cut -d'|' -f14 | sed 's/#01/\n/g')
           NF_UPSTREAM_COUNT=$(echo "$OUT_UPSTREAM" | cut -d'|' -f8)
@@ -376,7 +379,7 @@ jobs:
           NP_UPSTREAM_COUNT=${NP_UPSTREAM_COUNT:-0}
 
           echo "Fetching deviations from main..."
-          OUT_MAIN=$(python3 .github/actions/postgres/ci-query-failures.py like="${SHA}" limit=1 raw=1 show=passes baseline=main || true)
+          OUT_MAIN=$(python3 .github/actions/postgres/ci-query-failures.py like="${SHA}" limit=1 raw=1 show=passes baseline=main arch="${ARCH}" os="${OS}" profile="${PROFILE}" || true)
           NF_MAIN=$(echo "$OUT_MAIN" | cut -d'|' -f13 | sed 's/#01/\n/g')
           NP_MAIN=$(echo "$OUT_MAIN" | cut -d'|' -f14 | sed 's/#01/\n/g')
           NF_MAIN_COUNT=$(echo "$OUT_MAIN" | cut -d'|' -f8)
@@ -477,7 +480,10 @@ jobs:
 
             const formatSection = (count, raw, title) => {
               const lines = (raw || '').trim().split('\n').filter(l => l.length > 0);
-              let content = '_None._';
+              let content = 'No newly failing tests recorded.';
+              if (title.includes('Passing')) {
+                content = 'No newly passing tests recorded.';
+              }
               if (lines.length > 0) {
                 content = '```\n' + lines.join('\n') + '\n```';
               }
@@ -492,14 +498,13 @@ jobs:
               '### Deviations from main-upstream',
               formatSection(process.env.NF_UPSTREAM_COUNT, process.env.NF_UPSTREAM, 'Newly Failed Tests'),
               formatSection(process.env.NP_UPSTREAM_COUNT, process.env.NP_UPSTREAM, 'Newly Passing Tests'),
-            ].join('\n');
+            ].join('\n\n');
 
             const mainSection = [
               '### Deviations from main',
               formatSection(process.env.NF_MAIN_COUNT, process.env.NF_MAIN, 'Newly Failed Tests'),
               formatSection(process.env.NP_MAIN_COUNT, process.env.NP_MAIN, 'Newly Passing Tests'),
-            ].join('\n');
-
+            ].join('\n\n');
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
               `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
