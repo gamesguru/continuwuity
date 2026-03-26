@@ -59,7 +59,7 @@ runs:
         (
           echo "CREATE TEMP TABLE b (j jsonb);"
           echo "\copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';"
-          cat "$TEMP_LEDGER/runs.jsonl"
+          tail -n 100 "$TEMP_LEDGER/runs.jsonl" | tee "$TEMP_LEDGER/recent_runs.jsonl"
           echo "\."
           echo "INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, profile, binary_sha256, n_pass, n_skip, n_fail)
                 SELECT
@@ -72,13 +72,17 @@ runs:
         ) | ssh -C -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
 
         # 2. Ingest Test Details
-        echo "→ Consolidating and ingesting test details..."
+        echo "→ Consolidating and ingesting test details (limited to last 100 runs)..."
         (
           echo "CREATE TEMP TABLE t (j jsonb);"
           echo "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
-          for f in "$TEMP_LEDGER/runs_data"/*.jsonl; do
-              [ -f "$f" ] || continue
-              cat "$f"
+          # Map last 100 runs to their detail files (commit-arch-os.jsonl or commit.jsonl)
+          # We search for any files starting with the commit hashes from our 100 recent runs.
+          jq -r '.commit_hash' "$TEMP_LEDGER/recent_runs.jsonl" | sort -u | while read -r commit; do
+              for f in "$TEMP_LEDGER/runs_data/$commit"*.jsonl; do
+                  [ -f "$f" ] || continue
+                  cat "$f"
+              done
           done
           echo "\."
           echo "INSERT INTO run_details (run_id, test_name, status)
