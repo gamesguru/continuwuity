@@ -21,7 +21,7 @@ impl Data {
 		}
 	}
 
-	pub fn next_count(&self) -> Result<u64> { self.next_count_batch(1).map(|start| start + 1) }
+	pub fn next_count(&self) -> Result<u64> { self.next_count_batch(1).map(|start| start.saturating_add(1)) }
 
 	pub fn next_count_batch(&self, diff: u64) -> Result<u64> {
 		let _cork = self.db.cork();
