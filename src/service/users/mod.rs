@@ -22,9 +22,8 @@ use ruma::{
 	api::client::{device::Device, error::ErrorKind, filter::FilterDefinition},
 	encryption::{CrossSigningKey, DeviceKeys, OneTimeKey},
 	events::{
-		AnyToDeviceEvent, GlobalAccountDataEventType,
-		ignored_user_list::IgnoredUserListEvent,
-		invite_permission_config::{FilterLevel, InvitePermissionConfigEvent},
+		AnyToDeviceEvent, GlobalAccountDataEventType, ignored_user_list::IgnoredUserListEvent,
+		invite_permission_config::FilterLevel,
 	},
 	serde::Raw,
 	uint,
@@ -150,6 +149,26 @@ impl Service {
 			})
 	}
 
+	fn glob_match(glob: &str, target: &str) -> bool {
+		let mut regex_str = String::with_capacity(glob.len() * 2 + 2);
+		regex_str.push('^');
+		for c in glob.chars() {
+			match c {
+				| '*' => regex_str.push_str(".*"),
+				| '?' => regex_str.push('.'),
+				| '.' | '+' | '(' | ')' | '|' | '^' | '$' | '[' | ']' | '{' | '}' | '\\' => {
+					regex_str.push('\\');
+					regex_str.push(c);
+				},
+				| _ => regex_str.push(c),
+			}
+		}
+		regex_str.push('$');
+		regex::Regex::new(&regex_str)
+			.map(|re| re.is_match(target))
+			.unwrap_or(false)
+	}
+
 	/// Returns the recipient's filter level for an invite from the sender.
 	pub async fn invite_filter_level(
 		&self,
@@ -159,14 +178,54 @@ impl Service {
 		let level = if self.user_is_ignored(sender_user, recipient_user).await {
 			FilterLevel::Ignore
 		} else {
-			self.services
-				.account_data
-				.get_global(recipient_user, GlobalAccountDataEventType::InvitePermissionConfig)
-				.await
-				.map(|config: InvitePermissionConfigEvent| {
-					config.content.user_filter_level(sender_user)
-				})
-				.unwrap_or(FilterLevel::Allow)
+			let mut config_content = None;
+			for kind in
+				["m.invite_permission_config", "org.matrix.msc4155.invite_permission_config"]
+			{
+				if let Ok(raw) = self
+					.services
+					.account_data
+					.get_raw(None, recipient_user, kind)
+					.await
+				{
+					if let Ok(json) = raw.deserialized::<serde_json::Value>() {
+						if let Some(content) = json.get("content") {
+							use ruma::events::invite_permission_config::InvitePermissionConfigEventContent;
+							if let Ok(parsed) = serde_json::from_value::<
+								InvitePermissionConfigEventContent,
+							>(content.clone())
+							{
+								config_content = Some(parsed);
+								break;
+							}
+						}
+					}
+				}
+			}
+
+			if let Some(content) = config_content {
+				let mut level = content.user_filter_level(sender_user);
+				if content.enabled && level == FilterLevel::Allow {
+					let user_match = content
+						.allowed_users
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user.as_str()));
+					let server_match = content
+						.allowed_servers
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
+					if !user_match && !server_match {
+						if !content.allowed_users.is_empty()
+							|| !content.allowed_servers.is_empty()
+						{
+							level = FilterLevel::Block;
+						}
+					}
+				}
+				level
+			} else {
+				FilterLevel::Allow
+			}
 		};
 
 		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");

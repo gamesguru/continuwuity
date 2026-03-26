@@ -359,7 +359,7 @@ pub async fn join_room_by_id_helper(
 			| ruma::events::AnyStrippedStateEvent::RoomMember(m)
 				if m.state_key == sender_user.as_str()
 					&& m.content.membership == MembershipState::Invite =>
-				m.content.is_direct,
+				Some(m.content.is_direct),
 			| _ => None,
 		});
 
@@ -371,10 +371,12 @@ pub async fn join_room_by_id_helper(
 			.await
 		{
 			if member_event.membership == MembershipState::Invite {
-				is_direct = member_event.is_direct;
+				is_direct = Some(member_event.is_direct);
 			}
 		}
 	}
+
+	let is_direct = is_direct.flatten();
 
 	if server_in_room {
 		join_room_by_id_helper_local(
@@ -590,10 +592,6 @@ async fn join_room_by_id_helper_remote(
 		.get_or_create_shortroomid(room_id)
 		.await;
 
-	info!("Parsing join event");
-	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone())
-		.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?;
-
 	info!("Acquiring server signing keys for response events");
 	let resp_events = &send_join_response.room_state;
 	let resp_state = &resp_events.state;
@@ -671,6 +669,48 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	drop(cork);
+
+	let mut unsigned = join_event
+		.get("unsigned")
+		.and_then(|v| v.as_object())
+		.cloned()
+		.unwrap_or_default();
+
+	if let Some(shortstatekey) = services
+		.rooms
+		.short
+		.get_shortstatekey(&StateEventType::RoomMember, sender_user.as_str())
+		.await
+		.ok()
+	{
+		if let Some(prev_event_id) = state.get(&shortstatekey) {
+			if let Ok(prev_pdu) = services.rooms.timeline.get_pdu(prev_event_id).await {
+				if let Ok(prev_content) =
+					to_canonical_object(conduwuit::Event::get_content_as_value(&prev_pdu))
+				{
+					unsigned.insert(
+						"prev_content".to_owned(),
+						CanonicalJsonValue::Object(prev_content),
+					);
+				}
+				unsigned.insert(
+					"prev_sender".to_owned(),
+					CanonicalJsonValue::String(prev_pdu.sender.to_string()),
+				);
+				unsigned.insert(
+					"replaces_state".to_owned(),
+					CanonicalJsonValue::String(prev_pdu.event_id.to_string()),
+				);
+			}
+		}
+	}
+	if !unsigned.is_empty() {
+		join_event.insert("unsigned".to_owned(), CanonicalJsonValue::Object(unsigned));
+	}
+
+	info!("Parsing join event");
+	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone())
+		.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?;
 
 	debug!("Running send_join auth check");
 	let fetch_state = &state;
