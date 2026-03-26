@@ -676,12 +676,11 @@ async fn join_room_by_id_helper_remote(
 		.cloned()
 		.unwrap_or_default();
 
-	if let Some(shortstatekey) = services
+	if let Ok(shortstatekey) = services
 		.rooms
 		.short
 		.get_shortstatekey(&StateEventType::RoomMember, sender_user.as_str())
 		.await
-		.ok()
 	{
 		if let Some(prev_event_id) = state.get(&shortstatekey) {
 			if let Ok(prev_pdu) = services.rooms.timeline.get_pdu(prev_event_id).await {

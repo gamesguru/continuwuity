@@ -150,7 +150,7 @@ impl Service {
 	}
 
 	fn glob_match(glob: &str, target: &str) -> bool {
-		let mut regex_str = String::with_capacity(glob.len() * 2 + 2);
+		let mut regex_str = String::with_capacity(glob.len().saturating_mul(2).saturating_add(2));
 		regex_str.push('^');
 		for c in glob.chars() {
 			match c {

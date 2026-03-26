@@ -211,7 +211,7 @@ pub async fn handle_incoming_pdu<'a>(
 					if let Ok(pending_invite_state) = self
 						.services
 						.state_cache
-						.invite_state(&target_user, room_id)
+						.invite_state(target_user, room_id)
 						.await
 					{
 						if !pending_invite_state.is_empty() {
