@@ -54,7 +54,7 @@ pub fn remove_raw(&self, key: &[u8]) {
 		.try_with(|batch| {
 			let mut batch_guard = batch.try_lock().expect("Failed to lock transaction batch");
 			let (batch, _closures) = &mut *batch_guard;
-			batch.delete_cf(&self.cf(), key.as_ref());
+			batch.delete_cf(&self.cf(), key);
 		})
 		.is_ok();
 
