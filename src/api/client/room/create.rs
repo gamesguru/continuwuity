@@ -142,16 +142,14 @@ pub(crate) async fn create_room_route(
 		// the handlers for the individual /sync endpoints
 		if services.globals.user_is_local(recipient_user)
 			&& matches!(
-					services
-						.users
-						.invite_filter_level(sender_user, recipient_user)
-						.await,
-					FilterLevel::Block | FilterLevel::Ignore
-				) {
-				return Err!(Request(Forbidden(
-					"{recipient_user} has blocked invites from you."
-				)));
-			}
+				services
+					.users
+					.invite_filter_level(sender_user, recipient_user)
+					.await,
+				FilterLevel::Block | FilterLevel::Ignore
+			) {
+			return Err!(Request(Forbidden("{recipient_user} has blocked invites from you.")));
+		}
 
 		invitees.insert(recipient_user.clone());
 	}

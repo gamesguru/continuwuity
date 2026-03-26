@@ -343,9 +343,9 @@ pub async fn mark_as_invited(
 			.users
 			.invite_filter_level(sender_user, user_id)
 			.await,
-		FilterLevel::Block
+		FilterLevel::Block | FilterLevel::Ignore
 	) {
-		return Err!(Request(InviteBlocked("{user_id} has blocked invites from {sender_user}.")));
+		return Err!(Request(Forbidden("{user_id} has blocked invites from {sender_user}.")));
 	}
 
 	let roomuser_id = (room_id, user_id);
