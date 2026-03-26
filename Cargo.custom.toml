@@ -19,3 +19,8 @@ strip = "none"
 lto = "off"
 codegen-units = 16
 incremental = true
+
+[workspace.package]
+# I, Shane Jaroch, hereby add AGPL-3.0 to my repository (fork)'s license,
+# on the 23rd of March, 2026, this change intended to be temporary.
+license = "Apache-2.0 AND AGPL-3.0"

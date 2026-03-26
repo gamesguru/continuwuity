@@ -29,7 +29,6 @@ where
 #[inline]
 pub fn remove_raw(&self, key: &[u8]) {
 	let write_options = &self.write_options;
-
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
 		.try_with(|batch| {
 			// blocking_lock is structurally safe here since TRANSACTION_BATCH
@@ -48,8 +47,10 @@ pub fn remove_raw(&self, key: &[u8]) {
 			.or_else(or_else)
 			.expect("database remove error");
 
+		// Honor corking semantics for remove operations: when not corked,
+		// ensure the delete is flushed in the same way as inserts.
 		if !self.db.corked() {
-			self.db.flush().expect("database flush error");
+			self.db.flush().expect("database flush error after remove");
 		}
 	}
 

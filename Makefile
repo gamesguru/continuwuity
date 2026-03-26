@@ -9,7 +9,7 @@ ifneq (,$(wildcard ./.env))
 	include .env
 	export
 	# Strip double quotes from .env values (annoying disagreement between direnv, dotenv)
-	RUSTFLAGS := $(subst \",,$(RUSTFLAGS))
+	RUSTFLAGS := $(subst ",,$(RUSTFLAGS))
 endif
 
 # Example .env:
@@ -341,6 +341,28 @@ GH_REPO ?=
 
 GH_CACHE_KEY ?=
 
+PREBUILT_TAG ?= prebuilts-v0.5
+
+.PHONY: download/prebuilts
+download/prebuilts: ##H Download prebuilt libraries from GitHub Release
+	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
+	@test "$(CPU_TARGET)" || (echo "ERROR: CPU_TARGET is not set (e.g. x86-64-v3). Add CPU_TARGET=... to .env" && exit 1)
+	@test "$(OS_VERSION)" || (echo "ERROR: OS_VERSION is not set (e.g. ubuntu-24.04). Add OS_VERSION=... to .env" && exit 1)
+	@echo "Downloading prebuilts for $(CPU_TARGET) on $(OS_VERSION) from $(PREBUILT_TAG)..."
+	@mkdir -p .tmp/prebuilts && rm -rf .tmp/prebuilts/*
+	@if gh release download $(PREBUILT_TAG) -R $(GH_REPO) -p "*-$(CPU_TARGET)-$(OS_VERSION).tar.gz" -D .tmp/prebuilts --clobber; then \
+		for f in .tmp/prebuilts/*.tar.gz; do \
+			echo "Extracting $$f to /usr/local..."; \
+			sudo tar -xzvf "$$f" -C /usr/local; \
+		done; \
+		sudo ldconfig; \
+		echo "Prebuilts installed."; \
+	else \
+		echo "ERROR: Failed to download prebuilts. Check tag, repo, and pattern."; \
+		exit 1; \
+	fi
+	@rm -rf .tmp/prebuilts
+
 .PHONY: download/clear-cache
 download/clear-cache: ##H Delete GitHub Actions caches
 	# Testing you have explicitly set GH_CACHE_KEY
@@ -377,12 +399,33 @@ download:	##H Download CI binary (set RUN to a specific RunID)
 	@-./target/ci/conduwuit -V
 	@rm -rf target/ci/*
 	gh run download $(RUN) -R $(GH_REPO) -n $(ARTIFACT) -D target/ci
-	tar -xzf target/ci/$(ARTIFACT).tar.gz -C target/ci
-	@mv target/ci/bin/conduwuit target/ci/conduwuit
+	@if [ -f "target/ci/$(ARTIFACT).tar.gz" ]; then \
+		tar -xzf "target/ci/$(ARTIFACT).tar.gz" -C target/ci; \
+	fi
+	@if [ -f "target/ci/bin/conduwuit" ]; then \
+		mv target/ci/bin/conduwuit target/ci/conduwuit; \
+	fi
+	@if [ ! -f "target/ci/conduwuit" ]; then \
+		echo "ERROR: Expected binary target/ci/conduwuit not found after download/extract."; \
+		exit 1; \
+	fi
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
 	@ln -sfn ci target/latest
+
+.PHONY: download/hash
+download/hash:	##H Download CI binary by Git commit hash (set HASH=)
+	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
+	@test "$(HASH)" || (echo "ERROR: HASH is not set (e.g., make download/hash HASH=bdbb016)" && exit 1)
+	@RUN_ID=$$(gh run list -R "$(GH_REPO)" --commit "$(HASH)" --json databaseId -q '.[0].databaseId') && \
+	if [ -z "$$RUN_ID" ] || [ "$$RUN_ID" = "null" ]; then \
+		echo "ERROR: Could not find any CI runs for commit $(HASH)"; \
+		exit 1; \
+	else \
+		echo "Found Run ID $$RUN_ID for commit $(HASH). Executing standard download..."; \
+		$(MAKE) download RUN="$$RUN_ID" ARTIFACT="$(ARTIFACT)"; \
+	fi
 
 .PHONY: download/list
 download/list:	##H List recent CI runs

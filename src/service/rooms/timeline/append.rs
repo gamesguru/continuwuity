@@ -11,6 +11,7 @@ use conduwuit_core::{
 		pdu::{PduCount, PduEvent, PduId, RawPduId},
 	},
 	utils::{self, ReadyExt},
+	warn,
 };
 use futures::StreamExt;
 use ruma::{
@@ -115,7 +116,7 @@ where
 	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
 {
 	// Coalesce database writes for the remainder of this scope.
-	let _cork = self.db.db.cork_and_flush();
+	let _cork = self.db.db.cork();
 
 	let shortroomid = self
 		.services
@@ -292,10 +293,13 @@ where
 			.pusher
 			.get_pushkeys(user)
 			.ready_for_each(|push_key| {
-				self.services
-					.sending
-					.send_pdu_push(&pdu_id, user, push_key.to_owned())
-					.ok();
+				if let Err(e) =
+					self.services
+						.sending
+						.send_pdu_push(&pdu_id, user, push_key.to_owned())
+				{
+					warn!("Failed to queue push notification: {e}");
+				}
 			})
 			.await;
 	}

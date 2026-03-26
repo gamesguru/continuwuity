@@ -20,8 +20,38 @@ use crate::Ruma;
 /// Note: Unstable features are used while developing new features. Clients
 /// should avoid using unstable features in their stable releases
 pub(crate) async fn get_supported_versions_route(
+	State(services): State<crate::State>,
 	_body: Ruma<get_supported_versions::Request>,
 ) -> Result<get_supported_versions::Response> {
+	let mut unstable_features = BTreeMap::from_iter([
+		("org.matrix.e2e_cross_signing".to_owned(), true),
+		("org.matrix.msc2285.stable".to_owned(), true), /* private read receipts (https://github.com/matrix-org/matrix-spec-proposals/pull/2285) */
+		("uk.half-shot.msc2666.query_mutual_rooms".to_owned(), true), /* query mutual rooms (https://github.com/matrix-org/matrix-spec-proposals/pull/2666) */
+		("org.matrix.msc2836".to_owned(), true), /* threading/threads (https://github.com/matrix-org/matrix-spec-proposals/pull/2836) */
+		("org.matrix.msc2946".to_owned(), true), /* spaces/hierarchy summaries (https://github.com/matrix-org/matrix-spec-proposals/pull/2946) */
+		("org.matrix.msc3026.busy_presence".to_owned(), true), /* busy presence status (https://github.com/matrix-org/matrix-spec-proposals/pull/3026) */
+		("org.matrix.msc3814".to_owned(), true),               /* dehydrated devices */
+		("org.matrix.msc3827".to_owned(), true), /* filtering of /publicRooms by room type (https://github.com/matrix-org/matrix-spec-proposals/pull/3827) */
+		("org.matrix.msc3890".to_owned(), true), /* remotely toggle local notification settings (https://github.com/matrix-org/matrix-spec-proposals/pull/3890) */
+		("org.matrix.msc3952_intentional_mentions".to_owned(), true), /* intentional mentions (https://github.com/matrix-org/matrix-spec-proposals/pull/3952) */
+		("org.matrix.msc3916.stable".to_owned(), true), /* authenticated media (https://github.com/matrix-org/matrix-spec-proposals/pull/3916) */
+		("org.matrix.msc3967".to_owned(), true), /* do not require UIA when first uploading cross-signing keys (https://github.com/matrix-org/matrix-spec-proposals/pull/3967) */
+		("org.matrix.msc4180".to_owned(), true), /* stable flag for 3916 (https://github.com/matrix-org/matrix-spec-proposals/pull/4180) */
+		("uk.tcpip.msc4133".to_owned(), true), /* Extending User Profile API with Key:Value Pairs (https://github.com/matrix-org/matrix-spec-proposals/pull/4133) */
+		("us.cloke.msc4175".to_owned(), true), /* Profile field for user time zone (https://github.com/matrix-org/matrix-spec-proposals/pull/4175) */
+		("org.matrix.simplified_msc3575".to_owned(), true), /* Simplified Sliding sync (https://github.com/matrix-org/matrix-spec-proposals/pull/4186) */
+		("uk.timedout.msc4323".to_owned(), true), /* agnostic suspend (https://github.com/matrix-org/matrix-spec-proposals/pull/4323) */
+		("org.matrix.msc4155".to_owned(), true), /* invite filtering (https://github.com/matrix-org/matrix-spec-proposals/pull/4155) */
+	]);
+
+	if services.config.experimental_features.msc3266_enabled {
+		unstable_features.insert("org.matrix.msc3266".to_owned(), true); /* room previews (https://github.com/matrix-org/matrix-spec-proposals/pull/3266) */
+	}
+
+	if services.config.experimental_features.msc4222_enabled {
+		unstable_features.insert("org.matrix.msc4222".to_owned(), true); /* state_after in sync v2 (https://github.com/matrix-org/matrix-spec-proposals/pull/4222) */
+	}
+
 	let resp = get_supported_versions::Response {
 		versions: vec![
 			"r0.0.1".to_owned(),
@@ -43,24 +73,7 @@ pub(crate) async fn get_supported_versions_route(
 			"v1.13".to_owned(),
 			"v1.14".to_owned(),
 		],
-		unstable_features: BTreeMap::from_iter([
-			("org.matrix.e2e_cross_signing".to_owned(), true),
-			("org.matrix.msc2285.stable".to_owned(), true), /* private read receipts (https://github.com/matrix-org/matrix-spec-proposals/pull/2285) */
-			("uk.half-shot.msc2666.query_mutual_rooms".to_owned(), true), /* query mutual rooms (https://github.com/matrix-org/matrix-spec-proposals/pull/2666) */
-			("org.matrix.msc2836".to_owned(), true), /* threading/threads (https://github.com/matrix-org/matrix-spec-proposals/pull/2836) */
-			("org.matrix.msc2946".to_owned(), true), /* spaces/hierarchy summaries (https://github.com/matrix-org/matrix-spec-proposals/pull/2946) */
-			("org.matrix.msc3026.busy_presence".to_owned(), true), /* busy presence status (https://github.com/matrix-org/matrix-spec-proposals/pull/3026) */
-			("org.matrix.msc3814".to_owned(), true),               /* dehydrated devices */
-			("org.matrix.msc3827".to_owned(), true), /* filtering of /publicRooms by room type (https://github.com/matrix-org/matrix-spec-proposals/pull/3827) */
-			("org.matrix.msc3952_intentional_mentions".to_owned(), true), /* intentional mentions (https://github.com/matrix-org/matrix-spec-proposals/pull/3952) */
-			("org.matrix.msc3916.stable".to_owned(), true), /* authenticated media (https://github.com/matrix-org/matrix-spec-proposals/pull/3916) */
-			("org.matrix.msc4180".to_owned(), true), /* stable flag for 3916 (https://github.com/matrix-org/matrix-spec-proposals/pull/4180) */
-			("uk.tcpip.msc4133".to_owned(), true), /* Extending User Profile API with Key:Value Pairs (https://github.com/matrix-org/matrix-spec-proposals/pull/4133) */
-			("us.cloke.msc4175".to_owned(), true), /* Profile field for user time zone (https://github.com/matrix-org/matrix-spec-proposals/pull/4175) */
-			("org.matrix.simplified_msc3575".to_owned(), true), /* Simplified Sliding sync (https://github.com/matrix-org/matrix-spec-proposals/pull/4186) */
-			("uk.timedout.msc4323".to_owned(), true), /* agnostic suspend (https://github.com/matrix-org/matrix-spec-proposals/pull/4323) */
-			("org.matrix.msc4155".to_owned(), true), /* invite filtering (https://github.com/matrix-org/matrix-spec-proposals/pull/4155) */
-		]),
+		unstable_features,
 	};
 
 	Ok(resp)
