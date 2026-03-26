@@ -1758,7 +1758,7 @@ pub struct Config {
 
 	/// User agent that is used specifically when fetching url previews.
 	///
-	/// default: "facebookexternalhit/1.1"
+	/// default: "continuwuity/<version> (facebookexternalhit/1.1; +https://continuwuity.org/)"
 	pub url_preview_user_agent: Option<String>,
 
 	/// Determines whether audio and video files will be downloaded for URL
