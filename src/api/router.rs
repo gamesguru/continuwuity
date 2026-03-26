@@ -298,6 +298,10 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 				get(client::get_content_legacy_legacy_route),
 			)
 			.route(
+				"/_matrix/client/r0/media/download/{server_name}/{media_id}/",
+				get(redirect_download_no_filename),
+			)
+			.route(
 				"/_matrix/client/r0/media/download/{server_name}/{media_id}/{file_name}",
 				get(client::get_content_as_filename_legacy_legacy_route),
 			)
