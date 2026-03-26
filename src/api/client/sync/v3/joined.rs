@@ -17,7 +17,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join, join3, join4, try_join, try_join3, try_join4},
+	future::{OptionFuture, join, join3, try_join, try_join3},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -266,11 +266,20 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	let (state_events, state_after, notification_counts, joined_since_last_sync) = try_join4(
-		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
+	let joined_since_last_sync =
+		check_joined_since_last_sync(services, shortstatehashes, sync_context).await?;
+
+	let (state_events, state_after, notification_counts) = try_join3(
+		build_state_events(
+			services,
+			sync_context,
+			room_id,
+			shortstatehashes,
+			&timeline,
+			joined_since_last_sync,
+		),
 		build_state_after(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
 	)
 	.await?;
 
@@ -454,6 +463,7 @@ async fn build_state_events(
 	room_id: &RoomId,
 	shortstatehashes: ShortStateHashes,
 	timeline: &TimelinePdus,
+	joined_since_last_sync: bool,
 ) -> Result<Vec<PduEvent>> {
 	let SyncContext {
 		syncing_user,
@@ -501,7 +511,8 @@ async fn build_state_events(
 		is Some (meaning the syncing user didn't just join this room for the first time ever), and `full_state` is false,
 		then use `build_state_incremental`.
 		*/
-		| (Some(last_sync_end_count), Some(last_sync_end_shortstatehash)) if !full_state =>
+		| (Some(last_sync_end_count), Some(last_sync_end_shortstatehash))
+			if !full_state && !joined_since_last_sync =>
 			build_state_incremental(
 				services,
 				syncing_user,
