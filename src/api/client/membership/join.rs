@@ -347,10 +347,47 @@ pub async fn join_room_by_id_helper(
 		}
 	}
 
+	let mut is_direct = services
+		.rooms
+		.state_cache
+		.invite_state(sender_user, room_id)
+		.await
+		.unwrap_or_default()
+		.into_iter()
+		.filter_map(|e| e.deserialize().ok())
+		.find_map(|e| match e {
+			| ruma::events::AnyStrippedStateEvent::RoomMember(m)
+				if m.state_key == sender_user.as_str()
+					&& m.content.membership == MembershipState::Invite =>
+				m.content.is_direct,
+			| _ => None,
+		});
+
+	if is_direct.is_none() {
+		if let Ok(member_event) = services
+			.rooms
+			.state_accessor
+			.get_member(room_id, sender_user)
+			.await
+		{
+			if member_event.membership == MembershipState::Invite {
+				is_direct = member_event.is_direct;
+			}
+		}
+	}
+
 	if server_in_room {
-		join_room_by_id_helper_local(services, sender_user, room_id, reason, servers, state_lock)
-			.boxed()
-			.await?;
+		join_room_by_id_helper_local(
+			services,
+			sender_user,
+			room_id,
+			reason,
+			servers,
+			state_lock,
+			is_direct,
+		)
+		.boxed()
+		.await?;
 	} else {
 		// Ask a remote server if we are not participating in this room
 		join_room_by_id_helper_remote(
@@ -360,6 +397,7 @@ pub async fn join_room_by_id_helper(
 			reason,
 			servers,
 			state_lock,
+			is_direct,
 		)
 		.boxed()
 		.await?;
@@ -793,8 +831,16 @@ async fn join_room_by_id_helper_local(
 		remote_servers = %servers.len(),
 		"Could not join room locally, attempting remote join",
 	);
-	join_room_by_id_helper_remote(services, sender_user, room_id, reason, servers, state_lock)
-		.await
+	join_room_by_id_helper_remote(
+		services,
+		sender_user,
+		room_id,
+		reason,
+		servers,
+		state_lock,
+		is_direct,
+	)
+	.await
 }
 
 async fn make_join_request(
