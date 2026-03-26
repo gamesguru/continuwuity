@@ -198,6 +198,27 @@ pub async fn handle_incoming_pdu<'a>(
 					.await;
 				return Ok(None);
 			}
+
+			let state_key = value.get("state_key").and_then(|k| k.as_str());
+			let content_val = value.get("content").and_then(|v| v.as_object());
+			let membership = content_val
+				.and_then(|c| c.get("membership"))
+				.and_then(|m| m.as_str());
+			if membership == Some("leave") {
+				if let Some(target_user) = state_key.and_then(|k| UserId::parse(k).ok()) {
+					if let Ok(pending_invite_state) = self
+						.services
+						.state_cache
+						.invite_state(&target_user, room_id)
+						.await
+					{
+						if !pending_invite_state.is_empty() {
+							info!("Dropping invalid federated invite rescission from {sender}");
+							return Ok(None);
+						}
+					}
+				}
+			}
 		}
 
 		if meta_exists && is_room_member_event {
