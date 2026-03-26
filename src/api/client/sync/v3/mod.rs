@@ -516,32 +516,47 @@ async fn process_presence_updates(
 	last_sync_end_count: Option<u64>,
 	syncing_user: &UserId,
 ) -> PresenceUpdates {
-	// Skip presence on initial sync to avoid scanning the entire presence table
-	// (O(N×M) with user_sees_user checks). Clients will receive presence updates
-	// on the next incremental sync. This matches Synapse's behavior.
-	let Some(since) = last_sync_end_count else {
-		return PresenceUpdates::new();
-	};
+	if let Some(since) = last_sync_end_count {
+		services
+			.presence
+			.presence_since(since)
+			.filter(|(user_id, ..)| {
+				services
+					.rooms
+					.state_cache
+					.user_sees_user(syncing_user, user_id)
+			})
+			.filter_map(|(user_id, _, presence_bytes)| {
+				services
+					.presence
+					.from_json_bytes_to_event(presence_bytes, user_id)
+					.map_ok(move |event| (user_id, event))
+					.ok()
+			})
+			.map(|(user_id, event)| (user_id.to_owned(), event.content))
+			.collect()
+			.await
+	} else {
+		// Initial sync: fetch presence only for users sharing a room to avoid an
+		// O(N) presence scan. This is fully spec-compliant and very fast.
+		let mut shared_users = HashSet::new();
+		let mut joined_rooms = services.rooms.state_cache.rooms_joined(syncing_user);
+		while let Some(room_id) = joined_rooms.next().await {
+			let mut members = services.rooms.state_cache.room_members(room_id);
+			while let Some(member) = members.next().await {
+				shared_users.insert(member.to_owned());
+			}
+		}
 
-	services
-		.presence
-		.presence_since(since)
-		.filter(|(user_id, ..)| {
-			services
-				.rooms
-				.state_cache
-				.user_sees_user(syncing_user, user_id)
-		})
-		.filter_map(|(user_id, _, presence_bytes)| {
-			services
-				.presence
-				.from_json_bytes_to_event(presence_bytes, user_id)
-				.map_ok(move |event| (user_id, event))
-				.ok()
-		})
-		.map(|(user_id, event)| (user_id.to_owned(), event.content))
-		.collect()
-		.await
+		let mut updates = HashMap::new();
+		for user_id in shared_users {
+			if let Ok(presence_event) = services.presence.get_presence(&user_id).await {
+				updates.insert(user_id, presence_event.content);
+			}
+		}
+
+		updates
+	}
 }
 
 /// Using the provided sync context and an iterator of user IDs in the
