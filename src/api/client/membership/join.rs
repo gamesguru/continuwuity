@@ -375,6 +375,7 @@ async fn join_room_by_id_helper_remote(
 	reason: Option<String>,
 	servers: &[OwnedServerName],
 	state_lock: RoomMutexGuard,
+	is_direct: Option<bool>,
 ) -> Result {
 	info!("Joining {room_id} over federation.");
 
@@ -434,6 +435,7 @@ async fn join_room_by_id_helper_remote(
 			avatar_url: services.users.avatar_url(sender_user).await.ok(),
 			blurhash: services.users.blurhash(sender_user).await.ok(),
 			reason,
+			is_direct,
 			join_authorized_via_users_server: join_authorized_via_users_server.clone(),
 			..RoomMemberEventContent::new(MembershipState::Join)
 		})
@@ -723,6 +725,7 @@ async fn join_room_by_id_helper_local(
 	reason: Option<String>,
 	servers: &[OwnedServerName],
 	state_lock: RoomMutexGuard,
+	is_direct: Option<bool>,
 ) -> Result {
 	info!("Joining room locally");
 
@@ -760,6 +763,7 @@ async fn join_room_by_id_helper_local(
 		avatar_url: services.users.avatar_url(sender_user).await.ok(),
 		blurhash: services.users.blurhash(sender_user).await.ok(),
 		reason: reason.clone(),
+		is_direct,
 		join_authorized_via_users_server: auth_user,
 		..RoomMemberEventContent::new(MembershipState::Join)
 	};
