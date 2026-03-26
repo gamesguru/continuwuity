@@ -335,7 +335,7 @@ ci-complement-stats:
 
 # Query the CI run regressions view via DB shell.
 # Usage:
-#   just ci-query-failures limit=5 order=run_date asc like=guru/nightly
+#   just ci-query-failures limit=100 order=run_date asc like=branch_name
 ci-query-failures +args="":
     #!/usr/bin/env bash
     ./.github/actions/postgres/ci-query-failures.py {{args}}
