@@ -1,8 +1,6 @@
 #[path = "src/git.rs"]
 mod git;
 
-static GIT_BRANCH_MAIN: &str = "main";
-
 fn get_env(env_var: &str) -> Option<String> {
 	match std::env::var(env_var) {
 		| Ok(val) if !val.is_empty() => Some(val),
@@ -42,7 +40,7 @@ fn main() {
 			.or_else(|| git::run(&["rev-parse", "--abbrev-ref", "HEAD"]))
 		{
 			println!("cargo:rustc-env=GIT_BRANCH={b}");
-			extra.extend(git::branch_tag(&b, GIT_BRANCH_MAIN));
+			extra.push(format!("b={b}"));
 		}
 		extra.retain(|s| !s.is_empty());
 		println!("cargo:rustc-env=CONTINUWUITY_VERSION_EXTRA={}", extra.join(","));
