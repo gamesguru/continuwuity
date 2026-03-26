@@ -267,10 +267,6 @@ pub struct Config {
 	pub stateinfo_cache_capacity: u32,
 
 	/// default: varies by system
-	#[serde(default = "default_shortstatehash_cache_capacity")]
-	pub shortstatehash_cache_capacity: u32,
-
-	/// default: varies by system
 	#[serde(default = "default_roomid_spacehierarchy_cache_capacity")]
 	pub roomid_spacehierarchy_cache_capacity: u32,
 
@@ -1758,7 +1754,7 @@ pub struct Config {
 
 	/// User agent that is used specifically when fetching url previews.
 	///
-	/// default: "continuwuity/<version>"
+	/// default: "guwitty/<version>"
 	pub url_preview_user_agent: Option<String>,
 
 	/// Determines whether audio and video files will be downloaded for URL
@@ -2616,8 +2612,6 @@ fn default_servernameevent_data_cache_capacity() -> u32 {
 }
 
 fn default_stateinfo_cache_capacity() -> u32 { parallelism_scaled_u32(100) }
-
-fn default_shortstatehash_cache_capacity() -> u32 { parallelism_scaled_u32(1000) }
 
 fn default_roomid_spacehierarchy_cache_capacity() -> u32 { parallelism_scaled_u32(1000) }
 
