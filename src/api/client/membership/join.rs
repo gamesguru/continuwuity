@@ -359,7 +359,7 @@ pub async fn join_room_by_id_helper(
 			| ruma::events::AnyStrippedStateEvent::RoomMember(m)
 				if m.state_key == sender_user.as_str()
 					&& m.content.membership == MembershipState::Invite =>
-				m.content.is_direct,
+				Some(m.content.is_direct),
 			| _ => None,
 		});
 
@@ -371,10 +371,12 @@ pub async fn join_room_by_id_helper(
 			.await
 		{
 			if member_event.membership == MembershipState::Invite {
-				is_direct = member_event.is_direct;
+				is_direct = Some(member_event.is_direct);
 			}
 		}
 	}
+
+	let is_direct = is_direct.flatten();
 
 	if server_in_room {
 		join_room_by_id_helper_local(
