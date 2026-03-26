@@ -68,7 +68,7 @@ pub(super) async fn build_state_initial(
 				*/
 				let event_is_redundant = event_type == StateEventType::RoomMember
 					&& state_key.as_str() != sender_user.as_str()
-					&& !lazily_loaded_members.iter().any(|u| u.as_str() == state_key.as_str());
+					&& !state_key.as_str().try_into().is_ok_and(|user_id: &UserId| lazily_loaded_members.contains(user_id));
 
 				event_is_redundant.or_some(shorteventid)
 			} else {
