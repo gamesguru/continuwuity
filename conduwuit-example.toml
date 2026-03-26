@@ -25,6 +25,10 @@
 #
 # Also see the `[global.well_known]` config section at the very bottom.
 #
+# If `client` is not set under `[global.well_known]`, the server name will
+# be used as the base domain for user-facing links (such as password
+# reset links) created by Continuwuity.
+#
 # Examples of delegation:
 # - https://continuwuity.org/.well-known/matrix/server
 # - https://continuwuity.org/.well-known/matrix/client
@@ -223,6 +227,13 @@
 # NXDOMAIN's are assumed to not be returning to the federation and
 # aggressively cached rather than constantly rechecked.
 #
+# Note: For massive system-level bandwidth savings, it's highly
+# recommended you install a dedicated localized caching resolver
+# explicitly on your host (such as Unbound, dnsmasq, or systemd-resolved)
+# rather than forwarding directly to public resolvers (like 1.1.1.1).
+# This ensures aggressive NXDomain/NoData lookups are caught efficiently
+# at the OS level.
+#
 # Defaults to 3 days as these are *very rarely* false negatives.
 #
 #dns_min_ttl_nxdomain = 259200
@@ -289,6 +300,25 @@
 # This item is undocumented. Please contribute documentation for it.
 #
 #max_fetch_prev_events = 192
+
+# How many incoming federation transactions the server is willing to be
+# processing at any given time before it becomes overloaded and starts
+# rejecting further transactions until some slots become available.
+#
+# Setting this value too low or too high may result in unstable
+# federation, and setting it too high may cause runaway resource usage.
+#
+#max_concurrent_inbound_transactions = 150
+
+# Maximum age (in seconds) for cached federation transaction responses.
+# Entries older than this will be removed during cleanup.
+#
+#transaction_id_cache_max_age_secs = 7200 (2 hours)
+
+# Maximum number of cached federation transaction responses.
+# When the cache exceeds this limit, older entries will be removed.
+#
+#transaction_id_cache_max_entries = 8192
 
 # Default/base connection timeout (seconds). This is used only by URL
 # previews and update/news endpoint checks.
@@ -457,17 +487,24 @@
 #yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = false
 
 # A static registration token that new users will have to provide when
-# creating an account. If unset and `allow_registration` is true,
-# you must set
-# `yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse`
-# to true to allow open registration without any conditions.
-#
-# If you do not want to set a static token, the `!admin token` commands
-# may also be used to manage registration tokens.
+# creating an account. This token does not supersede tokens from other
+# sources, such as the `!admin token` command or the
+# `registration_token_file` configuration option.
 #
 # example: "o&^uCtes4HPf0Vu@F20jQeeWE7"
 #
 #registration_token =
+
+# A path to a file containing static registration tokens, one per line.
+# Tokens in this file do not supersede tokens from other sources, such as
+# the `!admin token` command or the `registration_token` configuration
+# option.
+#
+# The file will be read once, when Continuwuity starts. It is not
+# currently reread when the server configuration is reloaded. If the file
+# cannot be read, Continuwuity will fail to start.
+#
+#registration_token_file =
 
 # The public site key for reCaptcha. If this is provided, reCaptcha
 # becomes required during registration. If both captcha *and*
@@ -526,12 +563,6 @@
 # is inherently false.
 #
 #allow_public_room_directory_over_federation = false
-
-# Set this to true to allow your server's public room directory to be
-# queried without client authentication (access token) through the Client
-# APIs. Set this to false to protect against /publicRooms spiders.
-#
-#allow_public_room_directory_without_auth = false
 
 # Allow guests/unauthenticated users to access TURN credentials.
 #
@@ -709,14 +740,20 @@
 
 # Max log level for continuwuity. Allows debug, info, warn, or error.
 #
+# You can append specific module filters or custom targets to this string
+# to selectively elevate or demote logs using the RUST_LOG syntax.
+# For example, noisy federation networking events are hidden (opt-in) by
+# default. To view them alongside the standard "info" logs, you can use:
+# log = "info,federation=debug"
+#
 # See also:
 # https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
 #
 # **Caveat**:
-# For release builds, the tracing crate is configured to only implement
-# levels higher than error to avoid unnecessary overhead in the compiled
-# binary from trace macros. For debug builds, this restriction is not
-# applied.
+# For release builds, the tracing crate is configured at compile-time to
+# automatically strip out `debug` and `trace` macros (compiling only
+# `info` and above) to avoid unnecessary overhead in the binary
+# execution. For debug builds, this restriction is not applied.
 #
 #log = "info"
 
@@ -1272,7 +1309,11 @@
 #
 #allow_legacy_media = true
 
-# This item is undocumented. Please contribute documentation for it.
+# Disallow remote legacy media downloading. If set to true, requests for
+# remote media using legacy endpoints will be rejected. This is useful
+# for stopping unauthenticated abusive media traffic (e.g. from malicious
+# apps or scripts hitting the legacy endpoints) from forcing the server
+# to fetch and cache things. Local media is still served.
 #
 #freeze_legacy_media = true
 
@@ -1484,6 +1525,11 @@
 # User agent that is used specifically when fetching url previews.
 #
 #url_preview_user_agent = "continuwuity/<version> (bot; +https://continuwuity.org)"
+
+# Determines whether audio and video files will be downloaded for URL
+# previews.
+#
+#url_preview_allow_audio_video = false
 
 # List of forbidden room aliases and room IDs as strings of regex
 # patterns.
@@ -1770,6 +1816,11 @@
 #
 #config_reload_signal = true
 
+# Allow search engines and crawlers to index Continuwuity's built-in
+# webpages served under the `/_continuwuity/` prefix.
+#
+#allow_web_indexing = false
+
 [global.tls]
 
 # Path to a valid TLS certificate file.
@@ -1831,14 +1882,13 @@
 #
 #support_mxid =
 
-# A list of MatrixRTC foci URLs which will be served as part of the
-# MSC4143 client endpoint at /.well-known/matrix/client.  If you're
-# setting up livekit, you'd want something like:
-# rtc_focus_server_urls = [
-#     { type = "livekit", livekit_service_url = "https://livekit.example.com" },
-# ]
+# **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
 #
-# To disable, set this to be an empty vector (`[]`).
+# A list of MatrixRTC foci URLs which will be served as part of the
+# MSC4143 client endpoint at /.well-known/matrix/client.
+#
+# This option is deprecated and will be removed in a future release.
+# Please migrate to the new `[global.matrix_rtc]` config section.
 #
 #rtc_focus_server_urls = []
 
@@ -1859,6 +1909,23 @@
 # is 33.55MB. Setting it to 0 disables blurhashing.
 #
 #blurhash_max_raw_size = 33554432
+
+[global.matrix_rtc]
+
+# A list of MatrixRTC foci (transports) which will be served via the
+# MSC4143 RTC transports endpoint at
+# `/_matrix/client/v1/rtc/transports`. If you're setting up livekit,
+# you'd want something like:
+# ```toml
+# [global.matrix_rtc]
+# foci = [
+#     { type = "livekit", livekit_service_url = "https://livekit.example.com" },
+# ]
+# ```
+#
+# To disable, set this to an empty list (`[]`).
+#
+#foci = []
 
 [global.ldap]
 
@@ -1987,3 +2054,13 @@
 # web->synapseHTTPAntispam->authorization
 #
 #secret =
+
+#[global.experimental_features]
+
+# MSC3266: room previews
+#
+#msc3266_enabled = false
+
+# MSC4222: state_after in sync v2
+#
+#msc4222_enabled = false

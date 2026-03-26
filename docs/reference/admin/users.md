@@ -12,6 +12,10 @@ Create a new user
 
 Reset user password
 
+## `!admin users issue-password-reset-link`
+
+Issue a self-service password reset link for a user
+
 ## `!admin users deactivate`
 
 Deactivate a user

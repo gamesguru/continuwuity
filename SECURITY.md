@@ -8,9 +8,9 @@ We provide security updates for the following versions of Continuwuity:
 
 | Version        | Supported        |
 | -------------- |:----------------:|
-| Latest release |        ✅        |
-| Main branch    |        ✅        |
-| Older releases |        ❌        |
+| Latest release |        ✓        |
+| Main branch    |        ✓        |
+| Older releases |        ✗        |
 
 We may backport fixes to the previous release at our discretion, but we don't guarantee this.
 

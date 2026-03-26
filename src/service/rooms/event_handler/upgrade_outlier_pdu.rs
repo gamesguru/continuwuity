@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, collections::BTreeMap, iter::once, sync::Arc, time::Instant};
+use std::{borrow::Borrow, collections::BTreeMap, sync::Arc, time::Instant};
 
 use conduwuit::{
 	Err, Result, debug, debug_info, err, implement, info, is_equal_to,
@@ -111,6 +111,26 @@ where
 		return Err!(Request(Forbidden("Event has failed auth check with state at the event.")));
 	}
 
+	// 13. Use state resolution to find new room state
+
+	// We start looking at current room state now, so lets lock the room
+	trace!(
+		room_id = %room_id,
+		"Locking the room"
+	);
+	let state_lock = self.services.state.mutex.lock(room_id).await;
+
+	// Re-check if the PDU was added to the timeline while we were waiting for the
+	// lock
+	if let Ok(pduid) = self
+		.services
+		.timeline
+		.get_pdu_id(incoming_pdu.event_id())
+		.await
+	{
+		return Ok(Some(pduid));
+	}
+
 	debug!(
 		event_id = %incoming_pdu.event_id,
 		"Gathering auth events"
@@ -162,15 +182,6 @@ where
 				.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
 				.await?,
 	};
-
-	// 13. Use state resolution to find new room state
-
-	// We start looking at current room state now, so lets lock the room
-	trace!(
-		room_id = %room_id,
-		"Locking the room"
-	);
-	let state_lock = self.services.state.mutex.lock(room_id).await;
 
 	// Now we calculate the set of extremities this room has after the incoming
 	// event has been applied. We start with the previous extremities (aka leaves)
@@ -346,10 +357,7 @@ where
 	// We use the `state_at_event` instead of `state_after` so we accurately
 	// represent the state for this event.
 	trace!("Appending pdu to timeline");
-	let extremities = extremities
-		.iter()
-		.map(Borrow::borrow)
-		.chain(once(incoming_pdu.event_id()));
+	let extremities = extremities.iter().map(Borrow::borrow);
 	debug_assert!(extremities.clone().count() > 0, "extremities not empty");
 
 	let pdu_id = self

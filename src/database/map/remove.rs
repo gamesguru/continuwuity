@@ -33,15 +33,21 @@ where
 	B: Write + AsRef<[u8]>,
 {
 	let key = ser::serialize(buf, key).expect("failed to serialize deletion key");
-	self.remove(key);
+	self.remove_raw(key);
 }
 
 #[implement(super::Map)]
-#[tracing::instrument(skip(self, key), fields(%self), level = "trace")]
+#[inline]
 pub fn remove<K>(&self, key: &K)
 where
 	K: AsRef<[u8]> + ?Sized + Debug,
 {
+	self.remove_raw(key.as_ref());
+}
+
+#[implement(super::Map)]
+#[tracing::instrument(skip(self, key), fields(%self), level = "trace")]
+pub fn remove_raw(&self, key: &[u8]) {
 	let write_options = &self.write_options;
 
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
@@ -59,8 +65,12 @@ where
 			.or_else(or_else)
 			.expect("database remove error");
 
+		// Honor corking semantics for remove operations: when not corked,
+		// ensure the delete is flushed in the same way as inserts.
 		if !self.db.corked() {
-			self.db.flush().expect("database flush error");
+			self.db.flush().expect("database flush error after remove");
 		}
 	}
+
+	self.watchers.wake(key);
 }

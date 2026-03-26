@@ -369,7 +369,12 @@ impl Service {
 
 	async fn process_command(&self, command: CommandInput) -> ProcessorResult {
 		let handle_guard = self.handle.read().await;
-		let handle = handle_guard.as_ref().expect("Admin module is not loaded");
+		let Some(handle) = handle_guard.as_ref() else {
+			return Err(CommandOutput::text_plain(
+				"Admin command handler is not yet loaded. The server may still be booting or \
+				 the admin module failed to load.",
+			));
+		};
 
 		let services = self
 			.services
@@ -530,7 +535,12 @@ impl Service {
 		Ok(())
 	}
 
-	pub async fn is_admin_command<E>(&self, event: &E, body: &str) -> Option<InvocationSource>
+	pub async fn is_admin_command<E>(
+		&self,
+		event: &E,
+		body: &str,
+		sent_locally: bool,
+	) -> Option<InvocationSource>
 	where
 		E: Event + Send + Sync,
 	{
@@ -577,6 +587,15 @@ impl Service {
 
 			// Check if escaped commands are disabled in the config
 			if !self.services.server.config.admin_escape_commands {
+				return None;
+			}
+
+			// Escaped commands must be sent locally (via client API), not via federation
+			if !sent_locally {
+				conduwuit::warn!(
+					"Ignoring escaped admin command from {} that arrived via federation",
+					event.sender()
+				);
 				return None;
 			}
 

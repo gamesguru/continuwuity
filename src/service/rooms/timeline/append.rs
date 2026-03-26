@@ -11,6 +11,7 @@ use conduwuit_core::{
 		pdu::{PduCount, PduEvent, PduId, RawPduId},
 	},
 	utils::{self, ReadyExt},
+	warn,
 };
 use futures::StreamExt;
 use ruma::{
@@ -72,6 +73,26 @@ where
 		.append_pdu(pdu, pdu_json, new_room_leaves, state_lock, room_id)
 		.await?;
 
+	// Process admin commands for federation events
+	if *pdu.kind() == TimelineEventType::RoomMessage {
+		let content: ExtractBody = pdu.get_content()?;
+		if let Some(body) = content.body {
+			if let Some(source) = self
+				.services
+				.admin
+				.is_admin_command(pdu, &body, false)
+				.await
+			{
+				self.services.admin.command_with_sender(
+					body,
+					Some(pdu.event_id().into()),
+					source,
+					pdu.sender.clone().into(),
+				)?;
+			}
+		}
+	}
+
 	Ok(Some(pdu_id))
 }
 
@@ -95,7 +116,7 @@ where
 	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
 {
 	// Coalesce database writes for the remainder of this scope.
-	let _cork = self.db.db.cork_and_flush();
+	let _cork = self.db.db.cork();
 
 	let shortroomid = self
 		.services
@@ -262,10 +283,13 @@ where
 			.pusher
 			.get_pushkeys(user)
 			.ready_for_each(|push_key| {
-				self.services
-					.sending
-					.send_pdu_push(&pdu_id, user, push_key.to_owned())
-					.expect("TODO: replace with future");
+				if let Err(e) =
+					self.services
+						.sending
+						.send_pdu_push(&pdu_id, user, push_key.to_owned())
+				{
+					warn!("Failed to queue push notification: {e}");
+				}
 			})
 			.await;
 	}
@@ -334,15 +358,6 @@ where
 			let content: ExtractBody = pdu.get_content()?;
 			if let Some(body) = content.body {
 				self.services.search.index_pdu(shortroomid, &pdu_id, &body);
-
-				if let Some(source) = self.services.admin.is_admin_command(pdu, &body).await {
-					self.services.admin.command_with_sender(
-						body,
-						Some((pdu.event_id()).into()),
-						source,
-						pdu.sender.clone().into(),
-					)?;
-				}
 			}
 		},
 		| _ => {},

@@ -50,8 +50,8 @@ pub(crate) async fn send_message_event_route(
 
 	// Check if this is a new transaction id
 	if let Ok(response) = services
-		.transaction_ids
-		.existing_txnid(sender_user, sender_device, &body.txn_id)
+		.transactions
+		.get_client_txn(sender_user, sender_device, &body.txn_id)
 		.await
 	{
 		// The client might have sent a txnid of the /sendToDevice endpoint
@@ -92,7 +92,7 @@ pub(crate) async fn send_message_event_route(
 		)
 		.await?;
 
-	services.transaction_ids.add_txnid(
+	services.transactions.add_client_txnid(
 		sender_user,
 		sender_device,
 		&body.txn_id,

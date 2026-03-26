@@ -113,6 +113,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "passwordresettoken_info",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "pduid_pdu",
 		cache_disp: CacheDisp::SharedWith("eventid_outlierpdu"),
 		key_size_hint: Some(16),
@@ -360,6 +364,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "userid_blurhash",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userid_dehydrateddevice",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {

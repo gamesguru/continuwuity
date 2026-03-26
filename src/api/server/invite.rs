@@ -10,7 +10,10 @@ use conduwuit::{
 use ruma::{
 	CanonicalJsonValue, OwnedUserId, UserId,
 	api::{client::error::ErrorKind, federation::membership::create_invite},
-	events::room::member::{MembershipState, RoomMemberEventContent},
+	events::{
+		invite_permission_config::FilterLevel,
+		room::member::{MembershipState, RoomMemberEventContent},
+	},
 	serde::JsonObject,
 };
 
@@ -146,6 +149,15 @@ pub(crate) async fn create_invite_route(
 	if services.config.block_non_admin_invites && !services.users.is_admin(&recipient_user).await
 	{
 		return Err!(Request(Forbidden("This server does not allow room invites.")));
+	}
+
+	let recipient_filter_level = services
+		.users
+		.invite_filter_level(sender_user, &recipient_user)
+		.await;
+
+	if matches!(recipient_filter_level, FilterLevel::Block) {
+		return Err!(Request(InviteBlocked("{recipient_user} has blocked invites from you.")));
 	}
 
 	if let Err(e) = services

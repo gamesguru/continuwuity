@@ -134,7 +134,7 @@ pub async fn handle_incoming_pdu<'a>(
 		);
 		return Err!(Request(TooLarge("PDU is too large")));
 	}
-	trace!("processing incoming pdu from {origin} for room {room_id} with event id {event_id}");
+	trace!("processing incoming PDU from {origin} for room {room_id} with event id {event_id}");
 
 	// 1.1 Check we even know about the room
 	let meta_exists = self.services.metadata.exists(room_id).map(Ok);
@@ -164,7 +164,7 @@ pub async fn handle_incoming_pdu<'a>(
 		sender_acl_check.map(|o| o.unwrap_or(Ok(()))),
 	)
 	.await
-	.inspect_err(|e| debug_error!("failed to handle incoming PDU: {e}"))?;
+	.inspect_err(|e| debug_error!(%origin, "failed to handle incoming PDU {event_id}: {e}"))?;
 
 	if is_disabled {
 		return Err!(Request(Forbidden("Federation of this room is disabled by this server.")));
@@ -176,9 +176,12 @@ pub async fn handle_incoming_pdu<'a>(
 		.server_in_room(self.services.globals.server_name(), room_id)
 		.await
 	{
+		let is_room_member_event =
+			value.get("type").and_then(|t| t.as_str()) == Some("m.room.member");
+
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
-		if value.get("type").and_then(|t| t.as_str()) == Some("m.room.member") {
+		if is_room_member_event {
 			if let Some(pdu) =
 				should_rescind_invite(&self.services, &mut value.clone(), sender, room_id).await?
 			{
@@ -193,11 +196,21 @@ pub async fn handle_incoming_pdu<'a>(
 				return Ok(None);
 			}
 		}
-		info!(
-			%origin,
-			"Dropping inbound PDU for room we aren't participating in"
-		);
-		return Err!(Request(NotFound("This server is not participating in that room.")));
+
+		if meta_exists && is_room_member_event {
+			info!(
+				%origin,
+				%room_id,
+				"Accepting inbound membership PDU for known room before participation cache catches up"
+			);
+		} else {
+			info!(
+				%origin,
+				%room_id,
+				"Dropping inbound PDU for room we aren't participating in"
+			);
+			return Err!(Request(NotFound("This server is not participating in that room.")));
+		}
 	}
 
 	if !meta_exists {

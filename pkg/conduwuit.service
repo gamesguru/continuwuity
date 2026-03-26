@@ -3,14 +3,13 @@ Description=Continuwuity - Matrix homeserver
 Documentation=https://continuwuity.org/
 Wants=network-online.target
 After=network-online.target
-Alias=matrix-conduwuit.service
 
 [Service]
 DynamicUser=yes
 User=conduwuit
 Group=conduwuit
-Type=notify-reload
-ReloadSignal=SIGUSR1
+Type=notify
+ExecReload=/bin/kill -USR1 $MAINPID
 
 Environment="CONTINUWUITY_LOG_TO_JOURNALD=true"
 Environment="CONTINUWUITY_JOURNALD_IDENTIFIER=%N"
@@ -18,6 +17,7 @@ Environment="CONTINUWUITY_DATABASE_PATH=%S/conduwuit"
 Environment="CONTINUWUITY_CONFIG_RELOAD_SIGNAL=true"
 
 LoadCredential=conduwuit.toml:/etc/conduwuit/conduwuit.toml
+RefreshOnReload=yes
 
 ExecStart=/usr/bin/conduwuit --config ${CREDENTIALS_DIRECTORY}/conduwuit.toml
 
@@ -70,3 +70,4 @@ StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
+Alias=matrix-conduwuit.service

@@ -1,7 +1,8 @@
 use std::{any::Any, collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result, Server, SyncRwLock, debug, debug_info, info, trace, utils::stream::IterStream,
+	Result, Server, SyncRwLock, debug, debug_info, error, info, trace, utils::stream::IterStream,
+	warn,
 };
 use database::Database;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -11,10 +12,10 @@ use crate::{
 	account_data, admin, announcements, antispam, appservice, client, config, emergency,
 	federation, firstrun, globals, key_backups,
 	manager::Manager,
-	media, moderation, presence, pusher, registration_tokens, resolver, rooms, sending,
-	server_keys,
+	media, moderation, password_reset, presence, pusher, registration_tokens, resolver, rooms,
+	sending, server_keys,
 	service::{self, Args, Map, Service},
-	sync, transaction_ids, uiaa, users,
+	sync, transactions, uiaa, users,
 };
 
 pub struct Services {
@@ -27,6 +28,7 @@ pub struct Services {
 	pub globals: Arc<globals::Service>,
 	pub key_backups: Arc<key_backups::Service>,
 	pub media: Arc<media::Service>,
+	pub password_reset: Arc<password_reset::Service>,
 	pub presence: Arc<presence::Service>,
 	pub pusher: Arc<pusher::Service>,
 	pub registration_tokens: Arc<registration_tokens::Service>,
@@ -37,7 +39,7 @@ pub struct Services {
 	pub sending: Arc<sending::Service>,
 	pub server_keys: Arc<server_keys::Service>,
 	pub sync: Arc<sync::Service>,
-	pub transaction_ids: Arc<transaction_ids::Service>,
+	pub transactions: Arc<transactions::Service>,
 	pub uiaa: Arc<uiaa::Service>,
 	pub users: Arc<users::Service>,
 	pub moderation: Arc<moderation::Service>,
@@ -81,6 +83,7 @@ impl Services {
 			globals: build!(globals::Service),
 			key_backups: build!(key_backups::Service),
 			media: build!(media::Service),
+			password_reset: build!(password_reset::Service),
 			presence: build!(presence::Service),
 			pusher: build!(pusher::Service),
 			registration_tokens: build!(registration_tokens::Service),
@@ -110,7 +113,7 @@ impl Services {
 			sending: build!(sending::Service),
 			server_keys: build!(server_keys::Service),
 			sync: build!(sync::Service),
-			transaction_ids: build!(transaction_ids::Service),
+			transactions: build!(transactions::Service),
 			uiaa: build!(uiaa::Service),
 			users: build!(users::Service),
 			moderation: build!(moderation::Service),
@@ -125,29 +128,34 @@ impl Services {
 	}
 
 	pub async fn start(self: &Arc<Self>) -> Result<Arc<Self>> {
-		debug_info!("Starting services...");
+		info!("Starting services...");
 
 		self.admin.set_services(Some(Arc::clone(self)).as_ref());
-		super::migrations::migrations(self).await?;
-		self.manager
-			.lock()
+		warn!(
+			"Running database migrations... This may take a while depending on the database \
+			 size."
+		);
+		super::migrations::migrations(self)
 			.await
-			.insert(Manager::new(self))
-			.clone()
-			.start()
-			.await?;
+			.inspect_err(|e| error!("Migrations failed: {e}"))?;
 
-		// reset dormant online/away statuses to offline, and set the server user as
-		// online
+		info!("Starting service manager...");
+		let manager = {
+			let mut lock = self.manager.lock().await;
+			let manager = Manager::new(self);
+			_ = lock.insert(Arc::clone(&manager));
+			manager
+		};
+
+		info!("Starting service workers...");
+		manager.start().await?;
+
+		// reset dormant online/away statuses to offline on startup
 		if self.server.config.allow_local_presence {
-			self.presence.unset_all_presence().await;
-			_ = self
-				.presence
-				.ping_presence(&self.globals.server_user, &ruma::presence::PresenceState::Online)
-				.await;
+			info!("Local presence statuses will be reset in the background.");
 		}
 
-		debug_info!("Services startup complete.");
+		info!("Services startup complete.");
 
 		Ok(Arc::clone(self))
 	}
@@ -199,11 +207,11 @@ impl Services {
 			.await
 	}
 
-	fn interrupt(&self) {
-		debug!("Interrupting services...");
+	pub fn interrupt(&self) {
+		warn!("Interrupting services...");
 		for (name, (service, ..)) in self.service.read().iter() {
 			if let Some(service) = service.upgrade() {
-				trace!("Interrupting {name}");
+				debug!("Interrupting {name}");
 				service.interrupt();
 			}
 		}

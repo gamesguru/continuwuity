@@ -3,7 +3,8 @@ mod remote;
 use std::sync::Arc;
 
 use conduwuit::{
-	Err, Event, Result, err,
+	Err, Result, err,
+	matrix::Event,
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Ignore, Interfix, Map};
@@ -94,6 +95,12 @@ impl Service {
 
 	#[tracing::instrument(skip(self))]
 	pub async fn remove_alias(&self, alias: &RoomAliasId, user_id: &UserId) -> Result<()> {
+		if alias == self.services.globals.admin_alias
+			&& user_id != self.services.globals.server_user
+		{
+			return Err!(Request(Forbidden("Only the server user can remove this alias")));
+		}
+
 		if !self.user_can_remove_alias(alias, user_id).await? {
 			return Err!(Request(Forbidden("User is not permitted to remove this alias.")));
 		}

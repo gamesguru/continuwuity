@@ -22,25 +22,21 @@ Continuwuity uses pre-commit hooks to enforce various coding standards and catch
 - Validating YAML, JSON, and TOML files
 - Checking for merge conflicts
 
-You can run these checks locally by installing [prefligit](https://github.com/j178/prefligit):
+You can run these checks locally by installing [prek](https://github.com/j178/prek):
 
 
 ```bash
-# Requires UV: https://docs.astral.sh/uv/getting-started/installation/
-# Mac/linux: curl -LsSf https://astral.sh/uv/install.sh | sh
-# Windows: powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-# Install prefligit using cargo-binstall
-cargo binstall prefligit
+# Install prek using cargo-binstall
+cargo binstall prek
 
 # Install git hooks to run checks automatically
-prefligit install
+prek install
 
 # Run all checks
-prefligit --all-files
+prek --all-files
 ```
 
-Alternatively, you can use [pre-commit](https://pre-commit.com/):
+Alternatively, you can use [pre-commit][pre-commit]:
 ```bash
 # Requires python
 
@@ -54,7 +50,9 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-These same checks are run in CI via the prefligit-checks workflow to ensure consistency. These must pass before the PR is merged.
+These same checks are run in CI via the prek-checks workflow to ensure consistency. These must pass before the PR is merged.
+
+[pre-commit]: https://pre-commit.com/
 
 ### Running tests locally
 
@@ -113,7 +111,7 @@ Alternatively, you can build the documentation using `npm run docs:build` - the 
 
 ### Commit Messages
 
-Continuwuity follows the [Conventional Commits](https://www.conventionalcommits.org/) specification for commit messages. This provides a standardized format that makes the commit history more readable and enables automated tools to generate changelogs.
+Continuwuity follows the [Conventional Commits][conventional-commits] specification for commit messages. This provides a standardized format that makes the commit history more readable and enables automated tools to generate changelogs.
 
 The basic structure is:
 
@@ -172,6 +170,7 @@ Contribution by users who violate either of these code of conducts may not have
 their contributions accepted. This includes users who have been banned from
 continuwuity Matrix rooms for Code of Conduct violations.
 
+[conventional-commits]: https://www.conventionalcommits.org/
 [issues]: https://forgejo.ellis.link/continuwuation/continuwuity/issues
 [continuwuity-matrix]: https://matrix.to/#/#continuwuity:continuwuity.org?via=continuwuity.org&via=ellis.link&via=explodie.org&via=matrix.org
 [complement]: https://github.com/matrix-org/complement/
@@ -179,3 +178,32 @@ continuwuity Matrix rooms for Code of Conduct violations.
 [nodejs-download]: https://nodejs.org/en/download
 [rspress]: https://rspress.rs/
 [documentation.yml]: https://forgejo.ellis.link/continuwuation/continuwuity/src/branch/main/.forgejo/workflows/documentation.yml
+
+#### Writing news fragments
+
+In order to make writing our changelogs easier, we make use of [Towncrier]. Towncrier builds changelogs based on
+"news fragments", which are little markdown files in the `changelog.d/` directory that describe individual changes.
+
+When you make a pull request that changes functionality, fixes a bug, or adds documentation, please add a news fragment
+describing your change. The file name *MUST* be in the format of `{pull_request_number}.{type}`, where `{type}` is one
+of the following:
+
+- `feature` - for new features
+- `bugfix` - for bug fixes
+- `doc` - for documentation changes
+- `misc` - for other changes that don't fit the above categories
+
+For example:
+
+```bash
+$ echo "Fixed the quantum flux stabiliser. Contributed by @alice." > changelog.d/42.bugfix
+```
+
+(Note: If you want to credit yourself, you should reference your forgejo handle, however links to other platforms are also acceptable.)
+
+When the next release is made, Towncrier will automatically include your news fragment in the changelog.
+
+You can read more about writing news fragments in the [Towncrier tutorial][tt].
+
+[Towncrier]: https://towncrier.readthedocs.io/
+[tt]: https://towncrier.readthedocs.io/en/stable/tutorial.html#creating-news-fragments

@@ -1,5 +1,5 @@
 use conduwuit::{
-	Event, PduCount, PduEvent, Result, at, debug_warn,
+	Event, PduEvent, Result, at, debug_warn,
 	pdu::EventHash,
 	trace,
 	utils::{self, IterStream, future::ReadyEqExt, stream::WidebandExt as _},
@@ -8,7 +8,8 @@ use futures::{StreamExt, future::join};
 use ruma::{
 	EventId, OwnedRoomId, RoomId,
 	api::client::sync::sync_events::v3::{LeftRoom, RoomAccountData, State, Timeline},
-	events::{StateEventType, TimelineEventType},
+	events::{AnySyncStateEvent, StateEventType, TimelineEventType},
+	serde::Raw,
 	uint,
 };
 use serde_json::value::RawValue;
@@ -39,7 +40,7 @@ pub(super) async fn load_left_room(
 	sync_context: SyncContext<'_>,
 	ref room_id: OwnedRoomId,
 	leave_membership_event: Option<PduEvent>,
-) -> Result<Option<LeftRoom>> {
+) -> Result<Option<(LeftRoom, Vec<Raw<AnySyncStateEvent>>)>> {
 	let SyncContext {
 		syncing_user,
 		last_sync_end_count,
@@ -68,9 +69,13 @@ pub(super) async fn load_left_room(
 		return Ok(None);
 	}
 
-	// return early if this is an incremental sync, and we've already synced this
-	// leave to the user, and `include_leave` isn't set on the filter.
-	if !filter.room.include_leave && last_sync_end_count >= Some(left_count) {
+	// return early if:
+	// - this is an initial sync and the room filter doesn't include leaves, or
+	// - this is an incremental sync, and we've already synced the leave, and the
+	//   room filter doesn't include leaves
+	if last_sync_end_count.is_none_or(|last_sync_end_count| last_sync_end_count >= left_count)
+		&& !filter.room.include_leave
+	{
 		return Ok(None);
 	}
 
@@ -84,7 +89,7 @@ pub(super) async fn load_left_room(
 
 	let does_not_exist = services.rooms.metadata.exists(room_id).eq(&false).await;
 
-	let (timeline, state_events) = match leave_membership_event {
+	let (timeline, state_events, leave_shortstatehash) = match leave_membership_event {
 		| Some(leave_membership_event) if does_not_exist => {
 			/*
 			we have none PDUs with left beef for this room, likely because it was a rejected invite to a room
@@ -100,7 +105,7 @@ pub(super) async fn load_left_room(
 			}
 
 			trace!("syncing remote-assisted leave PDU");
-			(TimelinePdus::default(), vec![leave_membership_event])
+			(TimelinePdus::default(), vec![leave_membership_event], None)
 		},
 		| Some(leave_membership_event) => {
 			// we have this room in our DB, and can fetch the state and timeline from when
@@ -132,7 +137,7 @@ pub(super) async fn load_left_room(
 				)
 				.await?;
 
-			build_left_state_and_timeline(
+			let (timeline, state_events) = build_left_state_and_timeline(
 				services,
 				sync_context,
 				room_id,
@@ -140,7 +145,9 @@ pub(super) async fn load_left_room(
 				leave_shortstatehash,
 				prev_membership_event,
 			)
-			.await?
+			.await?;
+
+			(timeline, state_events, Some(leave_shortstatehash))
 		},
 		| None => {
 			/*
@@ -155,12 +162,39 @@ pub(super) async fn load_left_room(
 			}
 
 			trace!("syncing dummy leave event");
-			(TimelinePdus::default(), vec![create_dummy_leave_event(
+			(
+				TimelinePdus::default(),
+				vec![create_dummy_leave_event(services, sync_context, room_id)],
+				None,
+			)
+		},
+	};
+
+	let state_after = if services.config.experimental_features.msc4222_enabled {
+		if let Some(shortstatehash) = leave_shortstatehash {
+			let lazily_loaded_members = prepare_lazily_loaded_members(
 				services,
 				sync_context,
 				room_id,
-			)])
-		},
+				timeline.senders(),
+			)
+			.await;
+
+			build_state_initial(
+				services,
+				syncing_user,
+				shortstatehash,
+				lazily_loaded_members.as_ref(),
+			)
+			.await?
+			.into_iter()
+			.map(Event::into_format)
+			.collect()
+		} else {
+			Vec::new()
+		}
+	} else {
+		Vec::new()
 	};
 
 	let raw_timeline_pdus = timeline
@@ -174,17 +208,20 @@ pub(super) async fn load_left_room(
 		.collect::<Vec<_>>()
 		.await;
 
-	Ok(Some(LeftRoom {
-		account_data: RoomAccountData { events: Vec::new() },
-		timeline: Timeline {
-			limited: timeline.limited,
-			prev_batch: Some(current_count.to_string()),
-			events: raw_timeline_pdus,
+	Ok(Some((
+		LeftRoom {
+			account_data: RoomAccountData { events: Vec::new() },
+			timeline: Timeline {
+				limited: timeline.limited,
+				prev_batch: Some(current_count.to_string()),
+				events: raw_timeline_pdus,
+			},
+			state: State {
+				events: state_events.into_iter().map(Event::into_format).collect(),
+			},
 		},
-		state: State {
-			events: state_events.into_iter().map(Event::into_format).collect(),
-		},
-	}))
+		state_after,
+	)))
 }
 
 async fn build_left_state_and_timeline(
@@ -195,27 +232,13 @@ async fn build_left_state_and_timeline(
 	leave_shortstatehash: ShortStateHash,
 	prev_membership_event: PduEvent,
 ) -> Result<(TimelinePdus, Vec<PduEvent>)> {
-	let SyncContext {
-		syncing_user,
-		last_sync_end_count,
-		filter,
-		..
-	} = sync_context;
+	let SyncContext { syncing_user, filter, .. } = sync_context;
 
-	let timeline_start_count = if let Some(last_sync_end_count) = last_sync_end_count {
-		// for incremental syncs, start the timeline after `since`
-		PduCount::Normal(last_sync_end_count)
-	} else {
-		// for initial syncs, start the timeline after the previous membership
-		// event. we don't want to include the membership event itself
-		// because clients get confused when they see a `join`
-		// membership event in a `leave` room.
-		services
-			.rooms
-			.timeline
-			.get_pdu_count(&prev_membership_event.event_id)
-			.await?
-	};
+	let timeline_start_count = services
+		.rooms
+		.timeline
+		.get_pdu_count(&prev_membership_event.event_id)
+		.await?;
 
 	// end the timeline at the user's leave event
 	let timeline_end_count = services
