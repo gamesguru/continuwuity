@@ -35,17 +35,6 @@ fn format(s: &str) -> String {
 	}
 }
 
-/// Returns `Some("b=<branch>")` for non-default branches, `None` for the
-/// default branch or "HEAD" (suppressed from version strings).
-#[allow(dead_code)]
-pub(crate) fn branch_tag(branch: &str, default_branch: &str) -> Option<String> {
-	if branch == default_branch || branch == "HEAD" {
-		None
-	} else {
-		Some(format!("b={branch}"))
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::format;
@@ -117,15 +106,10 @@ mod tests {
 	fn test_branch_tag() {
 		use super::branch_tag;
 
-		// Default branch is suppressed
-		assert_eq!(branch_tag("main", "main"), None);
-		// Non-default branches are shown
-		assert_eq!(branch_tag("develop", "main"), Some("b=develop".into()));
-		assert_eq!(branch_tag("feature/foo", "main"), Some("b=feature/foo".into()));
-		// HEAD (detached) is suppressed
-		assert_eq!(branch_tag("HEAD", "main"), None);
-		// Custom default branch
-		assert_eq!(branch_tag("master", "master"), None);
-		assert_eq!(branch_tag("main", "master"), Some("b=main".into()));
+		assert_eq!(branch_tag("main"), Some("b=main".into()));
+		assert_eq!(branch_tag("develop"), Some("b=develop".into()));
+		assert_eq!(branch_tag("feature/foo"), Some("b=feature/foo".into()));
+		assert_eq!(branch_tag("HEAD"), Some("b=HEAD".into()));
+		assert_eq!(branch_tag("master"), Some("b=master".into()));
 	}
 }
