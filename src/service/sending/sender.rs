@@ -182,6 +182,7 @@ impl Service {
 			// Immediately send the critical PDUs without trailing cooldown!
 			self.db.mark_as_active(new_events.iter());
 			let new_events_vec = new_events.into_iter().map(|(_, e)| e).collect();
+			statuses.insert(dest.clone(), TransactionStatus::Running);
 			futures.push(self.send_events(dest.clone(), new_events_vec));
 			return;
 		}
