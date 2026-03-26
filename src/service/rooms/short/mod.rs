@@ -86,7 +86,7 @@ where
 				self.services
 					.globals
 					.next_count_batch(missing_count)
-					.unwrap_or(0)
+					.unwrap()
 			} else {
 				0
 			};
