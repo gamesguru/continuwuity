@@ -1,7 +1,6 @@
 use conduwuit_core::{Config, Result, error::Error};
 use rustyline_async::{Readline, ReadlineEvent};
-use tokio::
-{
+use tokio::{
 	io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
 	net::UnixStream,
 };
@@ -78,30 +77,30 @@ async fn async_run(config: &Config) -> Result<()> {
 				}
 
 				// Local client-side exit just drops the socket
-			if trimmed.eq_ignore_ascii_case("quit") {
-				break;
-			}
+				if trimmed.eq_ignore_ascii_case("quit") {
+					break;
+				}
 
-			if history.len() >= 50 {
-				history.pop_front();
-			}
-			history.push_back(line.clone());
+				if history.len() >= 50 {
+					history.pop_front();
+				}
+				history.push_back(line.clone());
 
-			// Send line to server
-			if let Err(_e) = stream_reader.get_mut().write_all(line.as_bytes()).await {
-				println!("Failed to write to socket");
-				break;
-			}
-			if let Err(_e) = stream_reader.get_mut().write_all(b"\n").await {
-				println!("Failed to write to socket");
-				break;
-			}
+				// Send line to server
+				if let Err(_e) = stream_reader.get_mut().write_all(line.as_bytes()).await {
+					println!("Failed to write to socket");
+					break;
+				}
+				if let Err(_e) = stream_reader.get_mut().write_all(b"\n").await {
+					println!("Failed to write to socket");
+					break;
+				}
 
-			// Await response from server OR Ctrl+C
-			// Since readline is dropped, tokio::signal::ctrl_c() will catch SIGINT
-			// correctly.
-			response_buf.clear();
-			tokio::select! {
+				// Await response from server OR Ctrl+C
+				// Since readline is dropped, tokio::signal::ctrl_c() will catch SIGINT
+				// correctly.
+				response_buf.clear();
+				tokio::select! {
 					res = stream_reader.read_until(b'\0', &mut response_buf) => {
 						match res {
 							| Ok(0) => {
