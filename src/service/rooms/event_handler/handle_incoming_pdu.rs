@@ -27,7 +27,7 @@ async fn should_rescind_invite(
 	content: &mut BTreeMap<String, CanonicalJsonValue>,
 	sender: &UserId,
 	room_id: &RoomId,
-) -> Result<Option<(PduEvent, OwnedUserId)>> {
+) -> Result<Option<PduEvent>> {
 	// We insert a bogus event ID since we can't actually calculate the right one
 	content.insert("event_id".to_owned(), CanonicalJsonValue::String("$rescind".to_owned()));
 	let pdu_event = serde_json::from_value::<PduEvent>(
@@ -36,15 +36,14 @@ async fn should_rescind_invite(
 	.map_err(|e| err!("invalid PDU: {e}"))?;
 
 	if pdu_event.room_id().is_none_or(|r| r != room_id)
-		|| pdu_event.sender() != sender
-		|| pdu_event.event_type() != &TimelineEventType::RoomMember
-		|| pdu_event.state_key().is_none_or(|v| v == sender.as_str())
+		&& pdu_event.sender() != sender
+		&& pdu_event.event_type() != &TimelineEventType::RoomMember
+		&& pdu_event.state_key().is_none_or(|v| v == sender.as_str())
 	{
 		return Ok(None);
 	}
 
-	let target_user_id = OwnedUserId::try_from(pdu_event.state_key().unwrap().to_owned())
-		.map_err(|e| err!("invalid target_user_id: {e}"))?;
+	let target_user_id = UserId::parse(pdu_event.state_key().unwrap())?;
 	if pdu_event
 		.get_content::<RoomMemberEventContent>()?
 		.membership
@@ -56,7 +55,7 @@ async fn should_rescind_invite(
 	// Does the target user have a pending invite?
 	let Ok(pending_invite_state) = services
 		.state_cache
-		.invite_state(&target_user_id, room_id)
+		.invite_state(target_user_id, room_id)
 		.await
 	else {
 		return Ok(None); // No pending invite, so nothing to rescind
@@ -65,21 +64,17 @@ async fn should_rescind_invite(
 		if event
 			.get_field::<String>("type")?
 			.is_some_and(|t| t == "m.room.member")
-			&& event
+			|| event
 				.get_field::<OwnedUserId>("state_key")?
-				.is_some_and(|s| s == target_user_id)
-			&& event
+				.is_some_and(|s| s == *target_user_id)
+			|| event
+				.get_field::<OwnedUserId>("sender")?
+				.is_some_and(|s| s == *sender)
+			|| event
 				.get_field::<RoomMemberEventContent>("content")?
 				.is_some_and(|c| c.membership == MembershipState::Invite)
 		{
-			// The sender of the leave event must be either the target user (rejecting the
-			// invite) or the original inviter (rescinding the invite)
-			let inviter = event
-				.get_field::<OwnedUserId>("sender")?
-				.unwrap_or_else(|| target_user_id.clone());
-			if sender == target_user_id || sender == inviter {
-				return Ok(Some((pdu_event, target_user_id)));
-			}
+			return Ok(Some(pdu_event));
 		}
 	}
 
@@ -186,41 +181,21 @@ pub async fn handle_incoming_pdu<'a>(
 
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
+		// Is this a federated invite rescind?
+		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
 		if is_room_member_event {
-			if let Some((pdu, target_user_id)) =
+			if let Some(pdu) =
 				should_rescind_invite(&self.services, &mut value.clone(), sender, room_id).await?
 			{
 				debug_info!(
-					"Invite to {room_id} for {target_user_id} appears to have been rescinded or \
-					 rejected by {sender}, marking as left"
+					"Invite to {room_id} appears to have been rescinded by {sender}, marking as \
+					 left"
 				);
 				self.services
 					.state_cache
-					.mark_as_left(&target_user_id, room_id, Some(pdu))
+					.mark_as_left(sender, room_id, Some(pdu))
 					.await;
 				return Ok(None);
-			}
-
-			let state_key = value.get("state_key").and_then(|k| k.as_str());
-			let content_val = value.get("content").and_then(|v| v.as_object());
-			let membership = content_val
-				.and_then(|c| c.get("membership"))
-				.and_then(|m| m.as_str());
-			if membership == Some("leave") {
-				if let Some(target_user) = state_key.and_then(|k| UserId::parse(k).ok()) {
-					if let Ok(pending_invite_state) = self
-						.services
-						.state_cache
-						.invite_state(target_user, room_id)
-						.await
-					{
-						if !pending_invite_state.is_empty() {
-							return Err!(Request(Forbidden(
-								"Dropping invalid federated invite rescission from {sender}"
-							)));
-						}
-					}
-				}
 			}
 		}
 

@@ -21,8 +21,8 @@ use conduwuit::{
 };
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedServerName,
-	OwnedUserId, RoomId, RoomVersionId, UserId,
+	CanonicalJsonObject, CanonicalJsonValue, OwnedRoomId, OwnedServerName, OwnedUserId, RoomId,
+	RoomVersionId, UserId,
 	api::{
 		client::{
 			error::ErrorKind,
@@ -670,70 +670,12 @@ async fn join_room_by_id_helper_remote(
 
 	drop(cork);
 
-	let mut unsigned = join_event
+	let unsigned = join_event
 		.get("unsigned")
 		.and_then(|v| v.as_object())
 		.cloned()
 		.unwrap_or_default();
 
-	if let Ok(shortstatekey) = services
-		.rooms
-		.short
-		.get_shortstatekey(&StateEventType::RoomMember, sender_user.as_str())
-		.await
-	{
-		let prev_pdu = if let Some(prev_event_id) = state.get(&shortstatekey) {
-			services.rooms.timeline.get_pdu(prev_event_id).await.ok()
-		} else {
-			None
-		};
-
-		let prev_pdu = match prev_pdu {
-			| Some(pdu) => Some(pdu),
-			| None => {
-				// Fallback to local invite state if missing from send_join response state
-				let pending_invites = services
-					.rooms
-					.state_cache
-					.invite_state(sender_user, room_id)
-					.await
-					.unwrap_or_default();
-
-				use utils::TryFutureExtExt;
-
-				IterStream::stream(pending_invites)
-					.filter_map(|raw| async move {
-						let event_id: OwnedEventId = raw.get_field("event_id").ok().flatten()?;
-						let pdu = services.rooms.timeline.get_pdu(&event_id).await.ok()?;
-						if pdu.state_key().is_some_and(|s| s == sender_user.as_str()) {
-							Some(pdu)
-						} else {
-							None
-						}
-					})
-					.boxed()
-					.next()
-					.await
-			},
-		};
-
-		if let Some(prev_pdu) = prev_pdu {
-			if let Ok(prev_content) =
-				to_canonical_object(conduwuit::Event::get_content_as_value(&prev_pdu))
-			{
-				unsigned
-					.insert("prev_content".to_owned(), CanonicalJsonValue::Object(prev_content));
-			}
-			unsigned.insert(
-				"prev_sender".to_owned(),
-				CanonicalJsonValue::String(prev_pdu.sender.to_string()),
-			);
-			unsigned.insert(
-				"replaces_state".to_owned(),
-				CanonicalJsonValue::String(prev_pdu.event_id.to_string()),
-			);
-		}
-	}
 	if !unsigned.is_empty() {
 		join_event.insert("unsigned".to_owned(), CanonicalJsonValue::Object(unsigned));
 	}

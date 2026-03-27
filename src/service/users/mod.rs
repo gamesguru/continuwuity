@@ -150,26 +150,6 @@ impl Service {
 			})
 	}
 
-	fn glob_match(glob: &str, target: &str) -> bool {
-		let mut regex_str = String::with_capacity(glob.len().saturating_mul(2).saturating_add(2));
-		regex_str.push('^');
-		for c in glob.chars() {
-			match c {
-				| '*' => regex_str.push_str(".*"),
-				| '?' => regex_str.push('.'),
-				| '.' | '+' | '(' | ')' | '|' | '^' | '$' | '[' | ']' | '{' | '}' | '\\' => {
-					regex_str.push('\\');
-					regex_str.push(c);
-				},
-				| _ => regex_str.push(c),
-			}
-		}
-		regex_str.push('$');
-		regex::Regex::new(&regex_str)
-			.map(|re| re.is_match(target))
-			.unwrap_or(false)
-	}
-
 	/// Returns the recipient's filter level for an invite from the sender.
 	pub async fn invite_filter_level(
 		&self,
@@ -179,7 +159,7 @@ impl Service {
 		let level = if self.user_is_ignored(sender_user, recipient_user).await {
 			FilterLevel::Ignore
 		} else {
-			let mut config_content = None;
+			let mut level = FilterLevel::Allow;
 			for kind in
 				["m.invite_permission_config", "org.matrix.msc4155.invite_permission_config"]
 			{
@@ -200,48 +180,14 @@ impl Service {
 								InvitePermissionConfigEventContent,
 							>(content_val.clone())
 							{
-								config_content = Some(parsed);
+								level = parsed.user_filter_level(sender_user);
 								break;
 							}
 						}
 					}
 				}
 			}
-
-			if let Some(content) = config_content {
-				let mut level = content.user_filter_level(sender_user);
-				if content.enabled {
-					let blocked_user = content
-						.blocked_users
-						.iter()
-						.any(|a| Self::glob_match(a, sender_user.as_str()));
-					let blocked_server = content
-						.blocked_servers
-						.iter()
-						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
-					let allowed_user = content
-						.allowed_users
-						.iter()
-						.any(|a| Self::glob_match(a, sender_user.as_str()));
-					let allowed_server = content
-						.allowed_servers
-						.iter()
-						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
-
-					if blocked_user || blocked_server {
-						level = FilterLevel::Block;
-					} else if allowed_user || allowed_server {
-						level = FilterLevel::Allow;
-					} else if !content.allowed_users.is_empty()
-						|| !content.allowed_servers.is_empty()
-					{
-						level = FilterLevel::Block;
-					}
-				}
-				level
-			} else {
-				FilterLevel::Allow
-			}
+			level
 		};
 
 		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");
