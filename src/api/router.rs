@@ -30,6 +30,7 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::get_register_available_route)
 		.ruma_route(&client::register_route)
 		.ruma_route(&client::notifications::get_notifications_route)
+		.ruma_route_at(&client::notifications::get_notifications_route, "/_matrix/client/r0/notifications")
 		.ruma_route(&client::get_login_types_route)
 		.ruma_route(&client::login_route)
 		.ruma_route(&client::login_token_route)
