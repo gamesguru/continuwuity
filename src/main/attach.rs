@@ -1,6 +1,7 @@
 use conduwuit_core::{Config, Result, error::Error};
 use rustyline_async::{Readline, ReadlineEvent};
-use tokio::{
+use tokio::
+{
 	io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
 	net::UnixStream,
 };
@@ -8,7 +9,11 @@ use tokio::{
 use crate::clap::{Args, update};
 
 pub(crate) fn run(args: &Args) -> Result<()> {
-	let config_paths = args.config.clone().unwrap_or_default();
+	let mut config_paths = args.config.clone().unwrap_or_default();
+	if config_paths.is_empty() {
+		config_paths.push("conduwuit.toml".into());
+	}
+
 	let config = Config::load(&config_paths)
 		.and_then(|raw| update(raw, args))
 		.and_then(|raw| Config::new(&raw))?;
@@ -17,8 +22,8 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 		.enable_all()
 		.build()
 		.map_err(|e| {
-			eprintln!("Failed to build tokio runtime for attach: {e}");
-			Error::bad_database("Failed to build tokio runtime")
+			eprintln!("Failed to initialize tokio runtime: {e:?}");
+			Error::bad_database("Failed to initialize tokio runtime")
 		})?;
 
 	runtime.block_on(async_run(&config))
@@ -36,9 +41,7 @@ async fn async_run(config: &Config) -> Result<()> {
 		},
 	};
 
-	// We suppress typical log output so it doesn't interrupt the user's terminal
-	// UI, unless they are using systemd or haven't configured logging to stdout.
-	// We'll just rely on the existing log suppressing rules if applicable, but
+	// We don't have a conduwuit instance here, so we can't use
 	// `conduwuit_core::Log`, we don't have any logs anyway!
 
 	println!("Connected to conduwuit admin console at {}", socket_path.display());
@@ -55,63 +58,94 @@ async fn async_run(config: &Config) -> Result<()> {
 	readline.set_tab_completer(conduwuit_admin::complete);
 
 	loop {
-		tokio::select! {
-			event = readline.readline() => {
-				match event {
-					Ok(ReadlineEvent::Line(line)) => {
-						let trimmed = line.trim();
-						if trimmed.is_empty() {
-							continue;
-						}
+		let event = readline.readline().await;
+		match event {
+			| Ok(ReadlineEvent::Line(line)) => {
+				let trimmed = line.trim();
+				if trimmed.is_empty() {
+					continue;
+				}
 
-						// Local client-side exit just drops the socket
-						if trimmed.eq_ignore_ascii_case("quit") {
-							break;
-						}
+				// Local client-side exit just drops the socket
+				if trimmed.eq_ignore_ascii_case("quit") {
+					break;
+				}
 
-						_ = readline.add_history_entry(line.clone());
+				_ = readline.add_history_entry(line.clone());
 
-						// Send line to server
-						if let Err(e) = stream_reader.get_mut().write_all(line.as_bytes()).await {
-							std::io::Write::write_all(&mut writer, format!("Failed to write to socket: {e}\r\n").as_bytes()).ok();
-							break;
-						}
-						if let Err(e) = stream_reader.get_mut().write_all(b"\n").await {
-							std::io::Write::write_all(&mut writer, format!("Failed to write to socket: {e}\r\n").as_bytes()).ok();
-							break;
-						}
+				// Clear the prompt line before sending to server and waiting
+				// This ensures job output starts at the beginning of the line
+				// and the prompt doesn't look "hung" while the server processes.
+				std::io::Write::write_all(&mut writer, b"\r\x1b[K").ok();
 
-						// Await response from server
-						response_buf.clear();
-						match stream_reader.read_until(b'\0', &mut response_buf).await {
-							Ok(0) => {
-								std::io::Write::write_all(&mut writer, b"Server disconnected.\r\n").ok();
-								break;
-							},
-							Ok(_) => {
-								if response_buf.ends_with(b"\0") {
-									response_buf.pop();
+				// Send line to server
+				if let Err(_e) = stream_reader.get_mut().write_all(line.as_bytes()).await {
+					std::io::Write::write_all(
+						&mut writer,
+						b"Failed to write to socket\r\n",
+					)
+					.ok();
+					break;
+				}
+				if let Err(_e) = stream_reader.get_mut().write_all(b"\n").await {
+					std::io::Write::write_all(
+						&mut writer,
+						b"Failed to write to socket\r\n",
+					)
+					.ok();
+					break;
+				}
+
+				// Await response from server OR Ctrl+C
+				response_buf.clear();
+				tokio::select! {
+					res = stream_reader.read_until(b'\0', &mut response_buf) => {
+							match res {
+								| Ok(0) => {
+											std::io::Write::write_all(&mut writer, b"Server disconnected.\r\n").ok();
+											break;
+								},
+								| Ok(_) => {
+											if response_buf.ends_with(b"\0") {
+													response_buf.pop();
+										}
+										let response_str = String::from_utf8_lossy(&response_buf);
+										if !response_str.is_empty() {
+													let formatted = conduwuit_service::admin::console::format(&response_str);
+													std::io::Write::write_all(&mut writer, formatted.as_bytes()).ok();
+										}
+										},
+									| Err(_e) => {
+											std::io::Write::write_all(&mut writer, b"Failed to read from socket\r\n").ok();
+											break;
+									}
 								}
-								let response_str = String::from_utf8_lossy(&response_buf);
-								if !response_str.is_empty() {
-									let formatted = conduwuit_service::admin::console::format(&response_str);
-									std::io::Write::write_all(&mut writer, formatted.as_bytes()).ok();
+						},
+					_ = tokio::signal::ctrl_c() => {
+							std::io::Write::write_all(&mut writer, b"Interrupted.\r\n").ok();
+							// Drop stream and reconnect to cancel server job
+							let new_stream = match UnixStream::connect(&socket_path).await {
+								| Ok(s) => s,
+								| Err(_e) => {
+									eprintln!("Failed to reconnect to console socket");
+									break;
 								}
-							},
-							Err(e) => {
-								std::io::Write::write_all(&mut writer, format!("Failed to read from socket: {e}\r\n").as_bytes()).ok();
-								break;
-							}
-						}
-					},
-					Ok(ReadlineEvent::Interrupted) => continue,
-					Ok(ReadlineEvent::Eof | ReadlineEvent::Quit) => break,
-					Err(e) => {
-						std::io::Write::write_all(&mut writer, format!("Console read error: {e}\r\n").as_bytes()).ok();
-						break;
+						};
+						stream = new_stream;
+						stream_reader = BufReader::new(&mut stream);
 					}
 				}
-			}
+			},
+			| Ok(ReadlineEvent::Interrupted) => continue,
+			| Ok(ReadlineEvent::Eof | ReadlineEvent::Quit) => break,
+			| Err(_e) => {
+				std::io::Write::write_all(
+					&mut writer,
+					b"Console read error\r\n",
+				)
+				.ok();
+				break;
+			},
 		}
 	}
 

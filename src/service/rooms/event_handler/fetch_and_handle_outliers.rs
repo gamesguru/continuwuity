@@ -71,6 +71,12 @@ where
 
 		let mut events_all = HashSet::with_capacity(todo_auth_events.len());
 		while let Some(next_id) = todo_auth_events.pop_front() {
+			let limit = self.services.server.config.max_fetch_prev_events;
+			if events_all.len() > limit.into() {
+				debug_warn!("Max auth event limit reached! Limit: {limit}");
+				break;
+			}
+
 			if let Some((time, tries)) = self
 				.services
 				.globals
