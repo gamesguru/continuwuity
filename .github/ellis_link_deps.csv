@@ -10,7 +10,7 @@ jemalloc,5.3.0,https://github.com/jemalloc/jemalloc.git,5.3.0
 liburing,2.9,https://github.com/axboe/liburing.git,liburing-2.9
 lz4,1.10.0,https://github.com/lz4/lz4.git,v1.10.0
 meowlnir-antispam,0.1.0,https://forgejo.ellis.link/continuwuation/ruwuma,a97b91adcc012ef04991d823b8b5a79c6686ae48
-rocksdb,10.10.1-fb,https://forgejo.ellis.link/continuwuation/rocksdb.git,463f47afceebfe088f6922420265546bd237f249
+rocksdb,10.10.fb,https://forgejo.ellis.link/continuwuation/rocksdb.git,463f47afceebfe088f6922420265546bd237f249
 ruma,0.10.1,https://forgejo.ellis.link/continuwuation/ruwuma,a97b91adcc012ef04991d823b8b5a79c6686ae48
 ruma-appservice-api,0.10.0,https://forgejo.ellis.link/continuwuation/ruwuma,a97b91adcc012ef04991d823b8b5a79c6686ae48
 ruma-client-api,0.18.0,https://forgejo.ellis.link/continuwuation/ruwuma,a97b91adcc012ef04991d823b8b5a79c6686ae48

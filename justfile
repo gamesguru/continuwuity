@@ -116,16 +116,23 @@ install-lz4:
 prebuild-rocksdb:
     #!/usr/bin/env bash
     set -e
+    # satisfy build_detect_platform if hostname is missing
+    if ! command -v hostname >/dev/null 2>&1; then
+        hostname() { uname -n; }
+        export -f hostname
+    fi
     TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4)
     REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning rocksdb $TAG..."
-    [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive $REPO /usr/local/build/rocksdb || true
+    if [ ! -d "/usr/local/build/rocksdb" ]; then
+        git clone --recursive $REPO /usr/local/build/rocksdb
+    fi
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb
-    git fetch --all --tags
+    git fetch origin
     git checkout $TAG
-    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=1 make shared_lib static_lib -j$(nproc)
+    env ROCKSDB_NO_FBCODE=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=1 make shared_lib static_lib -j$(nproc)
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
@@ -143,10 +150,12 @@ prebuild-snappy:
     REPO=$(grep "^snappy," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning snappy $TAG..."
-    [ ! -d "/usr/local/build/snappy" ] && git clone $REPO /usr/local/build/snappy || true
+    if [ ! -d "/usr/local/build/snappy" ]; then
+        git clone $REPO /usr/local/build/snappy
+    fi
     echo "Building snappy..."
     cd /usr/local/build/snappy
-    git fetch --all --tags
+    git fetch origin
     git checkout $TAG
     sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
     mkdir -p build_static && cd build_static
