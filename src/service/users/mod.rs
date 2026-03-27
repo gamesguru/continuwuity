@@ -22,8 +22,9 @@ use ruma::{
 	api::client::{device::Device, error::ErrorKind, filter::FilterDefinition},
 	encryption::{CrossSigningKey, DeviceKeys, OneTimeKey},
 	events::{
-		AnyToDeviceEvent, GlobalAccountDataEventType, ignored_user_list::IgnoredUserListEvent,
-		invite_permission_config::FilterLevel,
+		AnyToDeviceEvent, GlobalAccountDataEventType,
+		ignored_user_list::IgnoredUserListEvent,
+		invite_permission_config::{FilterLevel, InvitePermissionConfigEventContent},
 	},
 	serde::Raw,
 	uint,
@@ -188,12 +189,16 @@ impl Service {
 					.get_raw(None, recipient_user, kind)
 					.await
 				{
-					if let Ok(json) = raw.deserialized::<serde_json::Value>() {
-						if let Some(content) = json.get("content") {
-							use ruma::events::invite_permission_config::InvitePermissionConfigEventContent;
+					if let Ok(mut json) = raw.deserialized::<serde_json::Value>() {
+						if let Some(content_val) = json.get_mut("content") {
+							// MSC4155: Will ignore null fields
+							if let Some(obj) = content_val.as_object_mut() {
+								obj.retain(|_, v| !v.is_null());
+							}
+
 							if let Ok(parsed) = serde_json::from_value::<
 								InvitePermissionConfigEventContent,
-							>(content.clone())
+							>(content_val.clone())
 							{
 								config_content = Some(parsed);
 								break;
@@ -206,16 +211,26 @@ impl Service {
 			if let Some(content) = config_content {
 				let mut level = content.user_filter_level(sender_user);
 				if content.enabled {
-					let user_match = content
+					let blocked_user = content
+						.blocked_users
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user.as_str()));
+					let blocked_server = content
+						.blocked_servers
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
+					let allowed_user = content
 						.allowed_users
 						.iter()
 						.any(|a| Self::glob_match(a, sender_user.as_str()));
-					let server_match = content
+					let allowed_server = content
 						.allowed_servers
 						.iter()
 						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
 
-					if user_match || server_match {
+					if blocked_user || blocked_server {
+						level = FilterLevel::Block;
+					} else if allowed_user || allowed_server {
 						level = FilterLevel::Allow;
 					} else if !content.allowed_users.is_empty()
 						|| !content.allowed_servers.is_empty()
