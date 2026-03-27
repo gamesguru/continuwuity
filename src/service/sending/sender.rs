@@ -333,7 +333,7 @@ impl Service {
 		}
 
 		let _cork = self.db.db.cork();
-		let mut events = Vec::with_capacity(new_events.len().saturating_add(EDU_LIMIT));
+		let mut events = Vec::new();
 
 		// Must retry any previous transaction for this remote.
 		if retry {
