@@ -150,7 +150,7 @@ where
 
 	self.services
 		.short
-		.get_eventid_from_short(shorteventid)
+		.get_eventid_from_short::<Id>(shorteventid)
 		.await
 }
 
@@ -217,7 +217,7 @@ where
 
 	self.services
 		.short
-		.multi_get_eventid_from_short(shorteventids)
+		.multi_get_eventid_from_short::<Id, _>(shorteventids)
 		.zip(state_keys)
 		.ready_filter_map(|(eid, sk)| eid.map(move |eid| (sk, eid)).ok())
 }
@@ -257,7 +257,9 @@ pub fn state_keys_with_shortids<'a>(
 		.zip(shorteventids)
 		.ready_filter_map(|(res, id)| res.map(|res| (res, id)).ok())
 		.ready_filter_map(move |((event_type_, state_key), event_id)| {
-			event_type_.eq(event_type).then_some((state_key, event_id))
+			event_type_
+				.eq(event_type)
+				.then_some((state_key, event_id))
 		})
 }
 
@@ -370,7 +372,7 @@ where
 
 	self.services
 		.short
-		.multi_get_eventid_from_short(shorteventids)
+		.multi_get_eventid_from_short::<Id, _>(shorteventids)
 		.zip(shortstatekeys)
 		.ready_filter_map(|(event_id, shortstatekey)| Some((shortstatekey, event_id.ok()?)))
 }

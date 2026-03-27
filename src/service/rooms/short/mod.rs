@@ -1,18 +1,13 @@
-use std::{borrow::Borrow, fmt::Debug, mem::size_of_val, sync::Arc};
+use std::{fmt::Debug, mem::size_of_val, sync::Arc};
 
 pub use conduwuit::matrix::pdu::{ShortEventId, ShortId, ShortRoomId, ShortStateKey};
 use conduwuit::{
-	Result, err, implement,
-	matrix::StateKey,
-	pair_of,
-	utils::{self, IterStream, ReadyExt},
+	Result, implement,
+	utils::{self, IterStream},
 };
 use database::{Deserialized, Get, Map, Qry};
-use futures::{
-	Stream, StreamExt,
-	stream::{self},
-};
-use ruma::{EventId, OwnedEventId, RoomId, events::StateEventType};
+use futures::{Stream, StreamExt};
+use ruma::{EventId, RoomId, events::StateEventType};
 use serde::Deserialize;
 
 use crate::{Dep, globals};
@@ -89,7 +84,7 @@ where
 
 			for (result, event_id) in &chunk {
 				match result {
-					| Ok(ref short) => {
+					| Ok(short) => {
 						chunk_map.insert(event_id, utils::u64_from_u8(short));
 					},
 					| Err(_) => {
@@ -121,8 +116,8 @@ where
 				}
 
 				match result {
-					| Ok(ref short) => {
-						let short = utils::u64_from_u8(short);
+					| Ok(short) => {
+						let short = utils::u64_from_u8(&short);
 						seen.insert(event_id, short);
 						results.push(short);
 					},
@@ -158,21 +153,23 @@ pub async fn get_shorteventid(&self, event_id: &EventId) -> Result<ShortEventId>
 }
 
 #[implement(Service)]
-pub fn multi_get_shorteventid<'a, I>(
+pub fn multi_get_shorteventid<'a, S>(
 	&'a self,
-	event_ids: I,
+	event_ids: S,
 ) -> impl Stream<Item = Result<ShortEventId>> + Send + 'a
 where
-	I: Iterator<Item = &'a EventId> + Send + 'a,
+	S: Stream<Item = &'a EventId> + Send + 'a,
 {
 	event_ids
-		.stream()
 		.get(&self.db.eventid_shorteventid)
-		.map(|res| res.deserialized())
+		.map(Deserialized::deserialized)
 }
 
 #[implement(Service)]
-pub async fn get_eventid_from_short(&self, shorteventid: ShortEventId) -> Result<OwnedEventId> {
+pub async fn get_eventid_from_short<Id>(&self, shorteventid: ShortEventId) -> Result<Id>
+where
+	Id: for<'de> Deserialize<'de>,
+{
 	const BUFSIZE: usize = size_of::<ShortEventId>();
 	self.db
 		.shorteventid_eventid
@@ -182,18 +179,17 @@ pub async fn get_eventid_from_short(&self, shorteventid: ShortEventId) -> Result
 }
 
 #[implement(Service)]
-pub fn multi_get_eventid_from_short<'a, I>(
+pub fn multi_get_eventid_from_short<'a, Id, S>(
 	&'a self,
-	shorteventids: I,
-) -> impl Stream<Item = Result<OwnedEventId>> + Send + 'a
+	shorteventids: S,
+) -> impl Stream<Item = Result<Id>> + Send + 'a
 where
-	I: Iterator<Item = ShortEventId> + Send + 'a,
+	S: Stream<Item = ShortEventId> + Send + 'a,
+	Id: for<'de> Deserialize<'de> + Send + 'a,
 {
-	const BUFSIZE: usize = size_of::<ShortEventId>();
 	shorteventids
-		.stream()
-		.get_aqry::<BUFSIZE, _, _>(&self.db.shorteventid_eventid)
-		.map(|res| res.deserialized())
+		.qry(&self.db.shorteventid_eventid)
+		.map(Deserialized::deserialized)
 }
 
 #[implement(Service)]
@@ -243,27 +239,27 @@ pub async fn get_shortstatekey(
 }
 
 #[implement(Service)]
-pub fn multi_get_statekey_from_short<'a, I>(
+pub fn multi_get_statekey_from_short<'a, S>(
 	&'a self,
-	shortstatekeys: I,
-) -> impl Stream<Item = Result<(StateEventType, String)>> + Send + 'a
+	shortstatekeys: S,
+) -> impl Stream<Item = Result<(StateEventType, conduwuit::matrix::StateKey)>> + Send + 'a
 where
-	I: Iterator<Item = ShortStateKey> + Send + 'a,
+	S: Stream<Item = ShortStateKey> + Send + 'a,
 {
 	shortstatekeys
-		.stream()
-		.get(&self.db.shortstatekey_statekey)
-		.map(|res| res.deserialized())
+		.qry(&self.db.shortstatekey_statekey)
+		.map(Deserialized::deserialized)
 }
 
 #[implement(Service)]
 pub async fn get_statekey_from_short(
 	&self,
 	shortstatekey: ShortStateKey,
-) -> Result<(StateEventType, String)> {
+) -> Result<(StateEventType, conduwuit::matrix::StateKey)> {
+	const BUFSIZE: usize = size_of::<ShortStateKey>();
 	self.db
 		.shortstatekey_statekey
-		.get(&shortstatekey)
+		.aqry::<BUFSIZE, _>(&shortstatekey)
 		.await
 		.deserialized()
 }
@@ -285,17 +281,25 @@ pub async fn get_shortroomid(&self, room_id: &RoomId) -> Result<ShortRoomId> {
 }
 
 #[implement(Service)]
-pub async fn set_shortstatehash(&self, room_id: &RoomId, shortstatehash: ShortStateHash) {
-	self.db
-		.statehash_shortstatehash
-		.put(room_id, shortstatehash);
-}
+pub async fn get_or_create_shortstatehash(&self, state_hash: &[u8]) -> (ShortStateHash, bool) {
+	const BUFSIZE: usize = size_of::<ShortStateHash>();
 
-#[implement(Service)]
-pub async fn get_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
-	self.db
+	if let Ok(shortstatehash) = self
+		.db
 		.statehash_shortstatehash
-		.qry(room_id)
+		.get(state_hash)
 		.await
 		.deserialized()
+	{
+		return (shortstatehash, true);
+	}
+
+	let shortstatehash = self.services.globals.next_count().unwrap();
+	debug_assert!(size_of_val(&shortstatehash) == BUFSIZE, "buffer requirement changed");
+
+	self.db
+		.statehash_shortstatehash
+		.raw_aput::<BUFSIZE, _, _>(state_hash, shortstatehash);
+
+	(shortstatehash, false)
 }
