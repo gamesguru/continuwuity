@@ -21,8 +21,8 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 	let runtime = tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
-		.map_err(|e| {
-			eprintln!("Failed to initialize tokio runtime: {{e:?}}");
+		.map_err(|_e| {
+			eprintln!("Failed to initialize tokio runtime");
 			Error::bad_database("Failed to initialize tokio runtime")
 		})?;
 
@@ -35,7 +35,7 @@ async fn async_run(config: &Config) -> Result<()> {
 	let mut stream = match UnixStream::connect(&socket_path).await {
 		| Ok(s) => s,
 		| Err(e) => {
-			eprintln!("Failed to connect to console socket at {socket_path:?}: {e}");
+			eprintln!("Failed to connect to console socket at {}: {e}", socket_path.display());
 			eprintln!("Is the conduwuit server currently running?");
 			return Err(Error::bad_database("Failed to connect to server"));
 		},
@@ -52,8 +52,8 @@ async fn async_run(config: &Config) -> Result<()> {
 	let mut history = std::collections::VecDeque::<String>::new();
 
 	loop {
-		let (mut readline, mut writer) = Readline::new("uwu> ".to_owned()).map_err(|e| {
-			eprintln!("Failed to initialize readline: {{e:?}}");
+		let (mut readline, writer) = Readline::new("uwu> ".to_owned()).map_err(|e| {
+			eprintln!("Failed to initialize readline: {e:?}");
 			Error::bad_database("Failed to initialize readline")
 		})?;
 
@@ -98,56 +98,58 @@ async fn async_run(config: &Config) -> Result<()> {
 			}
 
 			// Await response from server OR Ctrl+C
-			// Since readline is dropped, tokio::signal::ctrl_c() will catch SIGINT correctly.
+			// Since readline is dropped, tokio::signal::ctrl_c() will catch SIGINT
+			// correctly.
 			response_buf.clear();
 			tokio::select! {
-				res = stream_reader.read_until(b'\0', &mut response_buf) => {
-					match res {
-						| Ok(0) => {
-							println!("Server disconnected.");
-							break;
-						},
-						| Ok(_) => {
-							if response_buf.ends_with(b"\0") {
-								response_buf.pop();
-							}
-							let response_str = String::from_utf8_lossy(&response_buf);
-							if !response_str.is_empty() {
-								let formatted = conduwuit_service::admin::console::format(&response_str);
-								print!("{formatted}");
-							}
-						},
-						| Err(_e) => {
-							println!("Failed to read from socket");
-							break;
+					res = stream_reader.read_until(b'\0', &mut response_buf) => {
+						match res {
+							| Ok(0) => {
+									println!("Server disconnected.");
+									break;
+							},
+							| Ok(_) => {
+								if response_buf.ends_with(b"\0") {
+									response_buf.pop();
+								}
+								let response_str = String::from_utf8_lossy(&response_buf);
+								if !response_str.is_empty() {
+									let formatted = conduwuit_service::admin::console::format(&response_str);
+									print!("{formatted}");
+								}
+							},
+							| Err(_e) => {
+								println!("Failed to read from socket");
+								break;
 						}
+						}
+					},
+					_ = tokio::signal::ctrl_c() => {
+						println!("Interrupted.");
+						// Drop stream and reconnect to cancel server job
+						let new_stream = match UnixStream::connect(&socket_path).await {
+							| Ok(s) => s,
+							| Err(_e) => {
+								eprintln!("Failed to reconnect to console socket");
+								break;
+							}
+						};
+						stream = new_stream;
+						stream_reader = BufReader::new(&mut stream);
 					}
-				},
-				_ = tokio::signal::ctrl_c() => {
-					println!("Interrupted.");
-					// Drop stream and reconnect to cancel server job
-					let new_stream = match UnixStream::connect(&socket_path).await {
-						| Ok(s) => s,
-						| Err(_e) => {
-							eprintln!("Failed to reconnect to console socket");
-							break;
-						}
-					};
-					stream = new_stream;
-					stream_reader = BufReader::new(&mut stream);
 				}
-			}
 			},
 			| Ok(ReadlineEvent::Interrupted) => continue,
 			| Ok(ReadlineEvent::Eof | ReadlineEvent::Quit) => break,
 			| Err(e) => {
-			println!("Console read error: {e}");
-			break;
+				println!("Console read error: {e}");
+				break;
 			},
-			}
+		}
 
-			// Small yield to let terminal state settle
-			tokio::task::yield_now().await;
-			}
+		// Small yield to let terminal state settle
+		tokio::task::yield_now().await;
+	}
+
 	Ok(())
 }
