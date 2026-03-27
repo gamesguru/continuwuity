@@ -257,9 +257,7 @@ pub fn state_keys_with_shortids<'a>(
 		.zip(shorteventids)
 		.ready_filter_map(|(res, id)| res.map(|res| (res, id)).ok())
 		.ready_filter_map(move |((event_type_, state_key), event_id)| {
-			event_type_
-				.eq(event_type)
-				.then_some((state_key, event_id))
+			event_type_.eq(event_type).then_some((state_key, event_id))
 		})
 }
 
