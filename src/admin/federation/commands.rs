@@ -42,7 +42,14 @@ pub(super) async fn incoming_federation(&self) -> Result {
 			writeln!(msg, "PDUs being handled:")?;
 			for (r, (e, i)) in map.iter() {
 				let elapsed = i.elapsed();
-				writeln!(msg, "  {} {}: {}m{}s", r, e, elapsed.as_secs() / 60, elapsed.as_secs() % 60)?;
+				writeln!(
+					msg,
+					"  {} {}: {}m{}s",
+					r,
+					e,
+					elapsed.as_secs() / 60,
+					elapsed.as_secs() % 60
+				)?;
 			}
 		}
 
