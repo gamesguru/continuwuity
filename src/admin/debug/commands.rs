@@ -124,7 +124,7 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 				if soft_failed {
 					msg.push_str("Outlier (Soft Failed / Rejected) PDU found in our database");
 				} else {
-					msg.push_str("Outlier (Pending / Floating) PDU found in our database");
+					msg.push_str("Outlier PDU found in our database");
 				}
 			} else {
 				msg.push_str("Timeline PDU found in our database");
