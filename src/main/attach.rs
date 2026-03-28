@@ -10,7 +10,20 @@ use crate::clap::{Args, update};
 pub(crate) fn run(args: &Args) -> Result<()> {
 	let mut config_paths = args.config.clone().unwrap_or_default();
 	if config_paths.is_empty() {
-		config_paths.push("conduwuit.toml".into());
+		let env_set = std::env::var("CONDUIT_CONFIG").is_ok()
+			|| std::env::var("CONDUWUIT_CONFIG").is_ok()
+			|| std::env::var("CONTINUWUITY_CONFIG").is_ok();
+
+		if std::path::Path::new("conduwuit.toml").exists() {
+			config_paths.push("conduwuit.toml".into());
+		} else if !env_set {
+			return Err(Error::Err(
+				"No config file found. Please specify a config path using the --config flag, \
+				 set CONDUWUIT_CONFIG, or run this command in a directory with a conduwuit.toml \
+				 file."
+					.into(),
+			));
+		}
 	}
 
 	let config = Config::load(&config_paths)
@@ -22,7 +35,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 		.build()
 		.map_err(|e| {
 			eprintln!("Failed to initialize tokio runtime: {e}");
-			Error::bad_database(format!("Failed to initialize tokio runtime: {e}"))
+			Error::Err(format!("Failed to initialize tokio runtime: {e}").into())
 		})?;
 
 	runtime.block_on(async_run(&config))
