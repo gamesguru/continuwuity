@@ -194,7 +194,9 @@ impl Service {
 			| Ok((_, ref presence)) => now.saturating_sub(presence.last_active_ts),
 		};
 
-		if !state_changed && last_last_active_ago < REFRESH_TIMEOUT {
+		if (!state_changed && last_last_active_ago < REFRESH_TIMEOUT)
+			|| (state_changed && last_last_active_ago < 5 * 1000)
+		{
 			return Ok(());
 		}
 
@@ -203,7 +205,7 @@ impl Service {
 			| Err(_) => None,
 		};
 
-		let last_active_ago = UInt::new(0);
+		let last_active_ago = Some(0_u64.try_into().unwrap());
 		let currently_active = *new_state == PresenceState::Online;
 		let _cork = self.services.db.cork();
 		self.db

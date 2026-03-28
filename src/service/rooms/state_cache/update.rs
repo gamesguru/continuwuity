@@ -116,6 +116,16 @@ pub async fn update_membership(
 			}
 
 			self.mark_as_joined(user_id, room_id);
+			self.room_members(room_id)
+				.ready_for_each(|other_user| {
+					let key = if user_id < other_user {
+						(user_id.to_owned(), other_user.to_owned())
+					} else {
+						(other_user.to_owned(), user_id.to_owned())
+					};
+					self.user_visibility_cache.invalidate(&key);
+				})
+				.await;
 			self.room_servers(room_id)
 				.ready_for_each(|server| {
 					self.server_visibility_cache
@@ -130,6 +140,16 @@ pub async fn update_membership(
 		},
 		| MembershipState::Leave | MembershipState::Ban => {
 			self.mark_as_left(user_id, room_id, Some(pdu.clone())).await;
+			self.room_members(room_id)
+				.ready_for_each(|other_user| {
+					let key = if user_id < other_user {
+						(user_id.to_owned(), other_user.to_owned())
+					} else {
+						(other_user.to_owned(), user_id.to_owned())
+					};
+					self.user_visibility_cache.invalidate(&key);
+				})
+				.await;
 			self.room_servers(room_id)
 				.ready_for_each(|server| {
 					self.server_visibility_cache
