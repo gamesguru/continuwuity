@@ -151,7 +151,6 @@ where
 							if let Ok(auth_event) =
 								serde_json::from_value::<OwnedEventId>(auth_event.clone().into())
 							{
-								next_auth_events.insert(auth_event.clone());
 								if !graph.contains_key(&auth_event)
 									&& !self.services.timeline.pdu_exists(&auth_event).await
 								{
@@ -215,7 +214,11 @@ where
 										}
 										.boxed(),
 									);
-									graph.insert(auth_event, HashSet::new());
+									graph.insert(auth_event.clone(), HashSet::new());
+								}
+
+								if graph.contains_key(&auth_event) {
+									next_auth_events.insert(auth_event);
 								}
 							}
 						}

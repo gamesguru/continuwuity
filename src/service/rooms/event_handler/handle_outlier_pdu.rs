@@ -57,10 +57,11 @@ where
 			};
 
 			// Skip the PDU if it is redacted and we already have it as an outlier event
-			if self.services.timeline.pdu_exists(event_id).await {
-				return Err!(Request(InvalidParam(
-					"Event was redacted and we already knew about it"
-				)));
+			if let (Ok(pdu), Ok(json)) = (
+				self.services.timeline.get_pdu(event_id).await,
+				self.services.timeline.get_pdu_json(event_id).await,
+			) {
+				return Ok((pdu, json));
 			}
 
 			obj

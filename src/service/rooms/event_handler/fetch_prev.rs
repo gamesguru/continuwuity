@@ -43,17 +43,22 @@ where
 	let num_ids = initial_set.clone().count();
 	let mut eventid_info = HashMap::new();
 	let mut graph: HashMap<OwnedEventId, _> = HashMap::with_capacity(num_ids);
+	let limit = self.services.server.config.max_fetch_prev_events;
 	let mut active_fetches = FuturesUnordered::new();
-	let mut fetching: HashSet<OwnedEventId> =
-		initial_set.clone().map(ToOwned::to_owned).collect();
+	let mut fetching: HashSet<OwnedEventId> = HashSet::new();
 
 	for id in initial_set {
+		if fetching.len() >= limit.into() {
+			break;
+		}
+
 		if self.services.pdu_metadata.is_event_soft_failed(id).await {
 			info!(target: "backfill", "Skipping known soft-failed event: {id}");
 			continue;
 		}
 
 		let id = id.to_owned();
+		fetching.insert(id.clone());
 		active_fetches.push(
 			async move {
 				let res = self
@@ -66,10 +71,13 @@ where
 	}
 
 	let mut amount: u64 = 0;
-	let limit = self.services.server.config.max_fetch_prev_events;
 
 	while let Some((prev_event_id, mut fetched)) = active_fetches.next().await {
 		self.services.server.check_running()?;
+
+		if amount >= limit.into() {
+			break;
+		}
 
 		match fetched.pop() {
 			| Some((pdu, mut json_opt)) => {
