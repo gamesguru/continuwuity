@@ -47,6 +47,8 @@ impl super::Service {
 			return Ok((result, true));
 		}
 
+		let _permit = self.semaphore.acquire().await;
+
 		self.resolve_actual_dest(server_name, true)
 			.inspect_ok(|result| self.cache.set_destination(server_name, result))
 			.map_ok(|result| (result, false))
