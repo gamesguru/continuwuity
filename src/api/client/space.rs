@@ -95,72 +95,83 @@ where
 
 	let mut rooms = Vec::with_capacity(limit);
 	let mut parents = BTreeSet::new();
-	while let Some((current_room, via)) = queue.pop_front() {
-		let summary = services
-			.rooms
-			.spaces
-			.get_summary_and_children_client(&current_room, suggested_only, sender_user, &via)
-			.await?;
+	while !queue.is_empty() && rooms.len() < limit {
+		let mut batch = Vec::new();
+		while let Some(item) = queue.pop_front() {
+			batch.push(item);
+			if batch.len() >= 10 || rooms.len().saturating_add(batch.len()) >= limit {
+				break;
+			}
+		}
 
-		match (summary, current_room == room_id) {
-			| (None | Some(SummaryAccessibility::Inaccessible), false) => {
-				// Just ignore other unavailable rooms
-			},
-			| (None, true) => {
-				return Err!(Request(Forbidden("The requested room was not found")));
-			},
-			| (Some(SummaryAccessibility::Inaccessible), true) => {
-				return Err!(Request(Forbidden("The requested room is inaccessible")));
-			},
-			| (Some(SummaryAccessibility::Accessible(summary)), _) => {
-				let populate = parents.len() >= short_room_ids.clone().count();
+		let fetches = batch.into_iter().map(|(current_room, via)| async move {
+			let summary = services
+				.rooms
+				.spaces
+				.get_summary_and_children_client(&current_room, suggested_only, sender_user, &via)
+				.await;
+			(current_room, summary)
+		});
 
-				let mut children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
-					.filter(|(room, _)| !parents.contains(room))
-					.rev()
-					.map(|(key, val)| (key, val.collect()))
-					.collect();
+		let results = futures::future::join_all(fetches).await;
 
-				if populate {
-					rooms.push(summary_to_chunk(summary.clone()));
-				} else {
-					children = children
-						.iter()
-						.rev()
-						.stream()
-						.skip_while(|(room, _)| {
-							services
-								.rooms
-								.short
-								.get_shortroomid(room)
-								.map_ok(|short| {
-									Some(&short) != short_room_ids.clone().nth(parents.len())
-								})
-								.unwrap_or_else(|_| false)
-						})
-						.map(Clone::clone)
-						.collect::<Vec<Entry>>()
-						.await
-						.into_iter()
-						.rev()
-						.collect();
-				}
+		for (current_room, summary) in results {
+			let summary = summary?;
 
-				if !populate && queue.is_empty() && children.is_empty() {
-					break;
-				}
+			match (summary, current_room == *room_id) {
+				| (None | Some(SummaryAccessibility::Inaccessible), false) => {
+					// Just ignore other unavailable rooms
+				},
+				| (None, true) => {
+					return Err!(Request(Forbidden("The requested room was not found")));
+				},
+				| (Some(SummaryAccessibility::Inaccessible), true) => {
+					return Err!(Request(Forbidden("The requested room is inaccessible")));
+				},
+				| (Some(SummaryAccessibility::Accessible(summary)), _) => {
+					let populate = parents.len() >= short_room_ids.clone().count();
 
-				parents.insert(current_room.clone());
-				if rooms.len() >= limit {
-					break;
-				}
+					let mut children: Vec<Entry> =
+						get_parent_children_via(&summary, suggested_only)
+							.filter(|(room, _)| !parents.contains(room))
+							.rev()
+							.map(|(key, val)| (key, val.collect()))
+							.collect();
 
-				if parents.len() > max_depth {
-					continue;
-				}
+					if populate {
+						rooms.push(summary_to_chunk(summary.clone()));
+					} else {
+						children = children
+							.iter()
+							.rev()
+							.stream()
+							.skip_while(|(room, _)| {
+								services
+									.rooms
+									.short
+									.get_shortroomid(room)
+									.map_ok(|short| {
+										Some(&short) != short_room_ids.clone().nth(parents.len())
+									})
+									.unwrap_or_else(|_| false)
+							})
+							.map(Clone::clone)
+							.collect::<Vec<Entry>>()
+							.await
+							.into_iter()
+							.rev()
+							.collect();
+					}
 
-				queue.extend(children);
-			},
+					parents.insert(current_room.clone());
+
+					if parents.len() > max_depth {
+						continue;
+					}
+
+					queue.extend(children);
+				},
+			}
 		}
 	}
 

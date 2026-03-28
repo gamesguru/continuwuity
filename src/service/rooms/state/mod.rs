@@ -193,12 +193,19 @@ impl Service {
 			let (statediffnew, statediffremoved) =
 				if let Some(parent_stateinfo) = states_parents.last() {
 					let statediffnew: CompressedState = state_ids_compressed
-						.difference(&parent_stateinfo.full_state)
+						.difference(
+							parent_stateinfo
+								.full_state
+								.as_ref()
+								.expect("top frame must have full_state"),
+						)
 						.copied()
 						.collect();
 
 					let statediffremoved: CompressedState = parent_stateinfo
 						.full_state
+						.as_ref()
+						.expect("top frame must have full_state")
 						.difference(&state_ids_compressed)
 						.copied()
 						.collect();
@@ -272,6 +279,8 @@ impl Service {
 					.last()
 					.map(|info| {
 						info.full_state
+							.as_ref()
+							.expect("top frame must have full_state")
 							.iter()
 							.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
 					})

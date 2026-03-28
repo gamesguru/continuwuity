@@ -150,7 +150,7 @@ where
 
 	self.services
 		.short
-		.get_eventid_from_short(shorteventid)
+		.get_eventid_from_short::<Id>(shorteventid)
 		.await
 }
 
@@ -217,7 +217,7 @@ where
 
 	self.services
 		.short
-		.multi_get_eventid_from_short(shorteventids)
+		.multi_get_eventid_from_short::<Id, _>(shorteventids)
 		.zip(state_keys)
 		.ready_filter_map(|(eid, sk)| eid.map(move |eid| (sk, eid)).ok())
 }
@@ -370,7 +370,7 @@ where
 
 	self.services
 		.short
-		.multi_get_eventid_from_short(shorteventids)
+		.multi_get_eventid_from_short::<Id, _>(shorteventids)
 		.zip(shortstatekeys)
 		.ready_filter_map(|(event_id, shortstatekey)| Some((shortstatekey, event_id.ok()?)))
 }
@@ -402,7 +402,14 @@ async fn load_full_state(&self, shortstatehash: ShortStateHash) -> Result<Arc<Co
 		.state_compressor
 		.load_shortstatehash_info(shortstatehash)
 		.map_err(|e| err!(Database("Missing state IDs: {e}")))
-		.map_ok(|vec| vec.last().expect("at least one layer").full_state.clone())
+		.map_ok(|vec| {
+			vec.last()
+				.expect("at least one layer")
+				.full_state
+				.as_ref()
+				.expect("top layer must have full_state")
+				.clone()
+		})
 		.await
 }
 

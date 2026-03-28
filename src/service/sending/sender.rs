@@ -10,7 +10,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit_core::{
-	Error, Event, Result, at, debug, err, error,
+	Error, Event, Result, debug, err, error,
 	result::LogErr,
 	trace,
 	utils::{
@@ -57,6 +57,7 @@ enum TransactionStatus {
 	Running,
 	Failed(u32, Instant), // number of times failed, time of last failure
 	Retrying(u32),        // number of times failed
+	Cooldown(Instant),
 }
 
 type SendingError = (Destination, Error);
@@ -149,6 +150,9 @@ impl Service {
 				| TransactionStatus::Failed(..) => {
 					panic!("Request that was not even running failed?!")
 				},
+				| TransactionStatus::Cooldown(..) => {
+					panic!("Request in cooldown failed?!")
+				},
 			}
 		});
 	}
@@ -163,23 +167,45 @@ impl Service {
 		let _cork = self.db.db.cork();
 		self.db.delete_all_active_requests_for(dest).await;
 
-		// Find events that have been added since starting the last request
-		let new_events = self
-			.db
-			.queued_requests(dest)
-			.take(DEQUEUE_LIMIT)
-			.collect::<Vec<_>>()
-			.await;
+		let mut has_pdu = false;
+		let mut new_events = Vec::new();
 
-		// Insert any pdus we found
-		if !new_events.is_empty() {
-			self.db.mark_as_active(new_events.iter());
-
-			let new_events_vec = new_events.into_iter().map(at!(1)).collect();
-			futures.push(self.send_events(dest.clone(), new_events_vec));
-		} else {
-			statuses.remove(dest);
+		let mut stream = self.db.queued_requests(dest).take(DEQUEUE_LIMIT);
+		while let Some((k, e)) = stream.next().await {
+			if matches!(e, SendingEvent::Pdu(_)) {
+				has_pdu = true;
+			}
+			new_events.push((k, e));
 		}
+
+		if !new_events.is_empty() && has_pdu {
+			// Immediately send the critical PDUs without trailing cooldown!
+			self.db.mark_as_active(new_events.iter());
+			let new_events_vec = new_events.into_iter().map(|(_, e)| e).collect();
+			statuses.insert(dest.clone(), TransactionStatus::Running);
+			futures.push(self.send_events(dest.clone(), new_events_vec));
+			return;
+		}
+
+		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now()));
+
+		let dest_clone = dest.clone();
+		let sender = self
+			.channels
+			.get(self.shard_id(dest))
+			.expect("channel")
+			.0
+			.clone();
+		self.server.runtime().spawn(async move {
+			tokio::time::sleep(Duration::from_millis(1500)).await;
+			sender
+				.send(Msg {
+					dest: dest_clone,
+					event: SendingEvent::Flush,
+					queue_id: Vec::new(),
+				})
+				.ok();
+		});
 	}
 
 	#[allow(clippy::needless_pass_by_ref_mut)]
@@ -190,7 +216,21 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
-		let iv = vec![(msg.queue_id, msg.event)];
+		let mut iv = vec![(msg.queue_id, msg.event)];
+
+		if matches!(iv[0].1, SendingEvent::Flush) {
+			iv.clear();
+
+			let _cork = self.db.db.cork();
+			let queued = self
+				.db
+				.queued_requests(&msg.dest)
+				.take(DEQUEUE_LIMIT)
+				.collect::<Vec<_>>()
+				.await;
+			iv.extend(queued);
+		}
+
 		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
 				futures.push(self.send_events(msg.dest, events));
@@ -284,7 +324,10 @@ impl Service {
 		new_events: Vec<QueueItem>, // Events we want to send: event and full key
 		statuses: &mut CurTransactionStatus,
 	) -> Result<Option<Vec<SendingEvent>>> {
-		let (allow, retry) = self.select_events_current(dest, statuses)?;
+		let has_pdu = new_events
+			.iter()
+			.any(|(_, e)| matches!(e, SendingEvent::Pdu(_)));
+		let (allow, retry) = self.select_events_current(dest, statuses, has_pdu)?;
 
 		// Nothing can be done for this remote, bail out.
 		if !allow {
@@ -331,6 +374,7 @@ impl Service {
 		&self,
 		dest: &Destination,
 		statuses: &mut CurTransactionStatus,
+		has_pdu: bool,
 	) -> Result<(bool, bool)> {
 		let (mut allow, mut retry) = (true, false);
 		statuses
@@ -351,6 +395,13 @@ impl Service {
 				},
 				TransactionStatus::Running | TransactionStatus::Retrying(_) => {
 					allow = false; // already running
+				},
+				TransactionStatus::Cooldown(time) => {
+					if !has_pdu && time.elapsed() < Duration::from_millis(1500) {
+						allow = false;
+					} else {
+						*e = TransactionStatus::Running;
+					}
 				},
 			})
 			.or_insert(TransactionStatus::Running);
@@ -587,10 +638,13 @@ impl Service {
 	}
 
 	/// Look for presence
+	// TODO: presence updates are batched per server via `pending_updates`,
+	// but server_sees_user still hits the DB per user to check shared rooms.
+	// Consider caching which servers each user is visible to, to avoid these DB calls.
 	#[tracing::instrument(
 		name = "presence",
 		level = "trace",
-		skip(self, server_name, max_edu_count)
+		skip(self, server_name, since, max_edu_count)
 	)]
 	async fn select_edus_presence(
 		&self,
@@ -598,42 +652,52 @@ impl Service {
 		since: (u64, u64),
 		max_edu_count: &AtomicU64,
 	) -> Option<EduBuf> {
-		let presence_since = self.services.presence.presence_since(since.0);
+		let (_, mut users) = self.services.presence.pending_updates.remove(server_name)?;
 
-		pin_mut!(presence_since);
-		let mut presence_updates =
-			HashMap::<OwnedUserId, PresenceUpdate>::with_capacity(SELECT_PRESENCE_LIMIT);
-		while let Some((user_id, count, presence_bytes)) = presence_since.next().await {
-			if count > since.1 {
+		if users.is_empty() {
+			return None;
+		}
+
+		let mut presence_updates = Vec::with_capacity(users.len().min(SELECT_PRESENCE_LIMIT));
+		let mut attempted_users = Vec::with_capacity(SELECT_PRESENCE_LIMIT);
+		let mut max_presence_count = 0;
+		let mut loop_count = 0_usize;
+		for user_id in users.iter().cloned() {
+			loop_count = loop_count.saturating_add(1);
+			if loop_count > SELECT_PRESENCE_LIMIT * 5 {
 				break;
 			}
 
-			max_edu_count.fetch_max(count, Ordering::Relaxed);
-			if !self.services.globals.user_is_local(user_id) {
+			let Ok((presence_count, presence_event)) = self
+				.services
+				.presence
+				.get_presence_with_count(&user_id)
+				.await
+				.log_err()
+			else {
+				attempted_users.push(user_id.clone());
 				continue;
-			}
+			};
 
+			attempted_users.push(user_id.clone());
+
+			// Send-time visibility check. Only send to servers that still see the user.
 			if !self
 				.services
 				.state_cache
-				.server_sees_user(server_name, user_id)
+				.server_sees_user(server_name, &user_id)
 				.await
 			{
 				continue;
 			}
 
-			let Ok(presence_event) = self
-				.services
-				.presence
-				.from_json_bytes_to_event(presence_bytes, user_id)
-				.await
-				.log_err()
-			else {
-				continue;
-			};
+			// We don't want to advance the global EDU cursor past the snapshot upper bound
+			// because that could skip other EDU types. But we can still send the latest
+			// presence for this user right now.
+			max_presence_count = max_presence_count.max(presence_count.min(since.1));
 
 			let update = PresenceUpdate {
-				user_id: user_id.into(),
+				user_id,
 				presence: presence_event.content.presence,
 				currently_active: presence_event.content.currently_active.unwrap_or(false),
 				status_msg: presence_event.content.status_msg,
@@ -643,10 +707,33 @@ impl Service {
 					.unwrap_or_else(|| uint!(0)),
 			};
 
-			presence_updates.insert(user_id.into(), update);
+			presence_updates.push(update);
 			if presence_updates.len() >= SELECT_PRESENCE_LIMIT {
 				break;
 			}
+		}
+
+		// Update the global EDU cursor so that if we only send presence updates,
+		// the cursor still moves forward. This prevents the server from repeatedly
+		// scanning historical events for other EDU types (like typing or receipts).
+		if max_presence_count > 0 {
+			max_edu_count.fetch_max(max_presence_count, Ordering::Relaxed);
+		}
+
+		// remove only the users we attempted to process from this batch
+		if !attempted_users.is_empty() {
+			let attempted_users_set: HashSet<_> = attempted_users.iter().collect();
+			users.retain(|user_id| !attempted_users_set.contains(user_id));
+		}
+
+		// put any remaining users in line for next batch
+		if !users.is_empty() {
+			self.services
+				.presence
+				.pending_updates
+				.entry(server_name.to_owned())
+				.or_default()
+				.extend(users);
 		}
 
 		if presence_updates.is_empty() {
@@ -657,9 +744,7 @@ impl Service {
 			.outgoing_presence
 			.fetch_add(presence_updates.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
 
-		let presence_content = Edu::Presence(PresenceContent {
-			push: presence_updates.into_values().collect(),
-		});
+		let presence_content = Edu::Presence(PresenceContent { push: presence_updates });
 
 		let mut buf = EduBuf::new();
 		serde_json::to_writer(&mut buf, &presence_content)

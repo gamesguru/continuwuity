@@ -70,15 +70,26 @@ jobs:
             echo "$matrix"
           }
 
-          ROCKSDB_V="${{ github.event.inputs.rocksdb_version }}"
-          JEMALLOC_V="${{ github.event.inputs.jemalloc_version }}"
-          LZ4_V="${{ github.event.inputs.lz4_version }}"
-          ZSTD_V="${{ github.event.inputs.zstd_version }}"
+          # Extract versions from CSV
+          CSV=".github/ellis_link_deps.csv"
+          get_ver() { grep "^$1," "$CSV" | cut -d',' -f2; }
 
-          echo "rocksdb=$(check_dep rocksdb "${ROCKSDB_V:-$ROCKSDB_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
-          echo "jemalloc=$(check_dep jemalloc "${JEMALLOC_V:-$JEMALLOC_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
-          echo "lz4=$(check_dep lz4 "${LZ4_V:-$LZ4_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
-          echo "zstd=$(check_dep zstd "${ZSTD_V:-$ZSTD_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
+          ROCKSDB_V="${{ github.event.inputs.rocksdb_version }}"
+          ROCKSDB_V="${ROCKSDB_V:-$(get_ver rocksdb)}"
+
+          JEMALLOC_V="${{ github.event.inputs.jemalloc_version }}"
+          JEMALLOC_V="${JEMALLOC_V:-$(get_ver jemalloc)}"
+
+          LZ4_V="${{ github.event.inputs.lz4_version }}"
+          LZ4_V="${LZ4_V:-$(get_ver lz4)}"
+
+          ZSTD_V="${{ github.event.inputs.zstd_version }}"
+          ZSTD_V="${ZSTD_V:-$(get_ver zstd)}"
+
+          echo "rocksdb=$(check_dep rocksdb "$ROCKSDB_V")" >> "$GITHUB_OUTPUT"
+          echo "jemalloc=$(check_dep jemalloc "$JEMALLOC_V")" >> "$GITHUB_OUTPUT"
+          echo "lz4=$(check_dep lz4 "$LZ4_V")" >> "$GITHUB_OUTPUT"
+          echo "zstd=$(check_dep zstd "$ZSTD_V")" >> "$GITHUB_OUTPUT"
 
   build-rocksdb:
     name: Build RocksDB (${{ matrix.arch }}, ${{ matrix.os }})

@@ -41,39 +41,50 @@ pub(super) async fn build_state_initial(
 	timeline_start_shortstatehash: ShortStateHash,
 	lazily_loaded_members: Option<&MemberSet>,
 ) -> Result<Vec<PduEvent>> {
-	// load the keys and event IDs of the state events at the start of the timeline
-	let (shortstatekeys, event_ids): (Vec<_>, Vec<_>) = services
+	// load the keys and short event IDs of the state events at the start of the
+	// timeline
+	let (shortstatekeys, shorteventids): (Vec<_>, Vec<_>) = services
 		.rooms
 		.state_accessor
-		.state_full_ids(timeline_start_shortstatehash)
+		.state_full_shortids(timeline_start_shortstatehash)
+		.ignore_err()
 		.unzip()
 		.await;
 
-	trace!("performing initial sync of {} state events", event_ids.len());
+	trace!("performing initial sync of {} state events", shorteventids.len());
 
-	services
+	let filtered_shorteventids: Vec<_> = services
 		.rooms
 		.short
 		// look up the full state keys
 		.multi_get_statekey_from_short(shortstatekeys.into_iter().stream())
-		.zip(event_ids.into_iter().stream())
+		.zip(shorteventids.into_iter().stream())
 		.ready_filter_map(|item| Some((item.0.ok()?, item.1)))
-		.ready_filter_map(|((event_type, state_key), event_id)| {
+		.ready_filter_map(|((event_type, state_key), shorteventid)| {
 			if let Some(lazily_loaded_members) = lazily_loaded_members {
 				/*
 				if lazy loading is enabled, filter out membership events which aren't for a user
 				included in `lazily_loaded_members` or for the user requesting the sync.
 				*/
 				let event_is_redundant = event_type == StateEventType::RoomMember
-					&& state_key.as_str().try_into().is_ok_and(|user_id: &UserId| {
-						sender_user != user_id && !lazily_loaded_members.contains(user_id)
-					});
+					&& state_key.as_str() != sender_user.as_str()
+					&& !state_key.as_str().try_into().is_ok_and(|user_id: &UserId| lazily_loaded_members.contains(user_id));
 
-				event_is_redundant.or_some(event_id)
+				event_is_redundant.or_some(shorteventid)
 			} else {
-				Some(event_id)
+				Some(shorteventid)
 			}
 		})
+		.collect()
+		.await;
+
+	services
+		.rooms
+		.short
+		.multi_get_eventid_from_short::<OwnedEventId, _>(
+			filtered_shorteventids.into_iter().stream(),
+		)
+		.ready_filter_map(Result::ok)
 		.broad_filter_map(|event_id: OwnedEventId| async move {
 			services.rooms.timeline.get_pdu(&event_id).await.ok()
 		})

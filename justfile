@@ -2,6 +2,9 @@
 _help:
     @just --list
 
+# Central metadata for C/C++ dependencies
+CSV := ".github/ellis_link_deps.csv"
+
 # --- Pre-building C/C++ Libraries ---
 # Note: Building these from source avoids Cargo constantly recompiling them
 # and trashing your target/ directory. After building, use the install commands
@@ -24,11 +27,14 @@ install-all: install-jemalloc install-lz4 install-snappy install-zstd install-ro
 prebuild-liburing:
     #!/usr/bin/env bash
     set -e
+    TAG=$(grep "^liburing," {{CSV}} | cut -d',' -f4)
+    REPO=$(grep "^liburing," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
-    echo "Cloning and building liburing (attempting to match project version {{version}})"...
-    [ ! -d "/usr/local/build/liburing" ] && git clone https://github.com/axboe/liburing.git /usr/local/build/liburing || true
+    echo "Cloning and building liburing $TAG..."
+    [ ! -d "/usr/local/build/liburing" ] && git clone $REPO /usr/local/build/liburing || true
     cd /usr/local/build/liburing
-    git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
+    git fetch --all --tags
+    git checkout $TAG
     ./configure
     make -j$(nproc)
 
@@ -42,10 +48,14 @@ install-liburing:
 prebuild-bzip2:
     #!/usr/bin/env bash
     set -e
+    TAG=$(grep "^bzip2," {{CSV}} | cut -d',' -f4)
+    REPO=$(grep "^bzip2," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
-    echo "Cloning and building bzip2..."
-    [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
+    echo "Cloning and building bzip2 $TAG..."
+    [ ! -d "/usr/local/build/bzip2" ] && git clone $REPO /usr/local/build/bzip2 || true
     cd /usr/local/build/bzip2
+    git fetch --all --tags
+    git checkout $TAG
     make -f Makefile-libbz2_so
     make
 
@@ -62,12 +72,14 @@ install-bzip2:
 prebuild-jemalloc:
     #!/usr/bin/env bash
     set -e
-    TAG="5.3.0"
+    TAG=$(grep "^jemalloc," {{CSV}} | cut -d',' -f4)
+    REPO=$(grep "^jemalloc," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning jemalloc $TAG..."
-    [ ! -d "/usr/local/build/jemalloc" ] && git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git /usr/local/build/jemalloc || true
+    [ ! -d "/usr/local/build/jemalloc" ] && git clone $REPO /usr/local/build/jemalloc || true
     echo "Building jemalloc..."
     cd /usr/local/build/jemalloc
+    git fetch --all --tags
     git checkout $TAG
     [ -f configure ] || ./autogen.sh
     [ -f Makefile ] || ./configure --prefix=/usr/local
@@ -83,13 +95,14 @@ install-jemalloc:
 prebuild-lz4:
     #!/usr/bin/env bash
     set -e
-    VER=$(cargo pkgid lz4-sys | cut -d'@' -f2 | grep -o 'lz4-[0-9.]*' | cut -d '-' -f2)
-    TAG="v$VER"
+    TAG=$(grep "^lz4," {{CSV}} | cut -d',' -f4)
+    REPO=$(grep "^lz4," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning lz4 $TAG..."
-    [ ! -d "/usr/local/build/lz4" ] && git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git /usr/local/build/lz4 || true
+    [ ! -d "/usr/local/build/lz4" ] && git clone $REPO /usr/local/build/lz4 || true
     echo "Building lz4..."
     cd /usr/local/build/lz4
+    git fetch --all --tags
     git checkout $TAG
     make lib -j$(nproc)
 
@@ -103,14 +116,23 @@ install-lz4:
 prebuild-rocksdb:
     #!/usr/bin/env bash
     set -e
-    TAG="continuwuity-v0.5.0"
+    # satisfy build_detect_platform if hostname is missing
+    if ! command -v hostname >/dev/null 2>&1; then
+        hostname() { uname -n; }
+        export -f hostname
+    fi
+    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4)
+    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning rocksdb $TAG..."
-    [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /usr/local/build/rocksdb || true
+    if [ ! -d "/usr/local/build/rocksdb" ]; then
+        git clone --recursive $REPO /usr/local/build/rocksdb
+    fi
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb
+    git fetch origin
     git checkout $TAG
-    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=1 make shared_lib static_lib -j$(nproc)
+    env ROCKSDB_NO_FBCODE=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=1 make shared_lib static_lib -j$(nproc)
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
@@ -124,12 +146,16 @@ install-rocksdb:
 prebuild-snappy:
     #!/usr/bin/env bash
     set -e
-    TAG="1.2.1"
+    TAG=$(grep "^snappy," {{CSV}} | cut -d',' -f4)
+    REPO=$(grep "^snappy," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning snappy $TAG..."
-    [ ! -d "/usr/local/build/snappy" ] && git clone --depth 1 --branch $TAG https://github.com/google/snappy.git /usr/local/build/snappy || true
+    if [ ! -d "/usr/local/build/snappy" ]; then
+        git clone $REPO /usr/local/build/snappy
+    fi
     echo "Building snappy..."
     cd /usr/local/build/snappy
+    git fetch origin
     git checkout $TAG
     sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
     mkdir -p build_static && cd build_static
@@ -151,13 +177,14 @@ install-snappy:
 prebuild-zstd:
     #!/usr/bin/env bash
     set -e
-    VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
-    TAG="v$VER"
+    TAG=$(grep "^zstd," {{CSV}} | cut -d',' -f4)
+    REPO=$(grep "^zstd," {{CSV}} | cut -d',' -f3)
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning zstd $TAG..."
-    [ ! -d "/usr/local/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd || true
+    [ ! -d "/usr/local/build/zstd" ] && git clone $REPO /usr/local/build/zstd || true
     echo "Building zstd..."
     cd /usr/local/build/zstd
+    git fetch --all --tags
     git checkout $TAG
     make lib-release -j$(nproc)
 

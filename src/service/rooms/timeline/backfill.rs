@@ -7,7 +7,7 @@ use conduwuit_core::{
 		event::Event,
 		pdu::{PduCount, PduId, RawPduId},
 	},
-	utils::{IterStream, ReadyExt},
+	utils::{IterStream, ReadyExt, stream::WidebandExt},
 	validated, warn,
 };
 use futures::{FutureExt, StreamExt};
@@ -130,7 +130,7 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				.stream(),
 		)
 		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
-		.filter_map(|server_name| async move {
+		.wide_filter_map(|server_name| async move {
 			self.services
 				.state_cache
 				.server_in_room(&server_name, room_id)
@@ -245,7 +245,7 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 				.stream(),
 		)
 		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
-		.filter_map(|server_name| async move {
+		.wide_filter_map(|server_name| async move {
 			self.services
 				.state_cache
 				.server_in_room(&server_name, room_id)

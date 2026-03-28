@@ -116,6 +116,12 @@ pub async fn update_membership(
 			}
 
 			self.mark_as_joined(user_id, room_id);
+			self.room_servers(room_id)
+				.ready_for_each(|server| {
+					self.server_visibility_cache
+						.invalidate(&(server.to_owned(), user_id.to_owned()));
+				})
+				.await;
 		},
 		| MembershipState::Invite => {
 			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
@@ -124,6 +130,12 @@ pub async fn update_membership(
 		},
 		| MembershipState::Leave | MembershipState::Ban => {
 			self.mark_as_left(user_id, room_id, Some(pdu.clone())).await;
+			self.room_servers(room_id)
+				.ready_for_each(|server| {
+					self.server_visibility_cache
+						.invalidate(&(server.to_owned(), user_id.to_owned()));
+				})
+				.await;
 		},
 		| _ => {},
 	}
@@ -172,12 +184,14 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 		.roomuserid_knockedcount
 		.raw_put(room_id, knockedcount);
 
+	let mut removed_servers = Vec::new();
 	self.room_servers(room_id)
 		.ready_for_each(|old_joined_server| {
 			if joined_servers.remove(old_joined_server) {
 				return;
 			}
 
+			removed_servers.push(old_joined_server.to_owned());
 			// Server not in room anymore
 			let roomserver_id = (room_id, old_joined_server);
 			let serverroom_id = (old_joined_server, room_id);
@@ -187,6 +201,15 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 		})
 		.await;
 
+	for removed_server in removed_servers {
+		self.room_members(room_id)
+			.ready_for_each(|user_id| {
+				self.server_visibility_cache
+					.invalidate(&(removed_server.clone(), user_id.to_owned()));
+			})
+			.await;
+	}
+
 	// Now only new servers are in joined_servers anymore
 	for server in &joined_servers {
 		let roomserver_id = (room_id, server);
@@ -194,6 +217,13 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 
 		self.db.roomserverids.put_raw(roomserver_id, []);
 		self.db.serverroomids.put_raw(serverroom_id, []);
+
+		self.room_members(room_id)
+			.ready_for_each(|user_id| {
+				self.server_visibility_cache
+					.invalidate(&(server.clone(), user_id.to_owned()));
+			})
+			.await;
 	}
 
 	self.appservice_in_room_cache.write().remove(room_id);

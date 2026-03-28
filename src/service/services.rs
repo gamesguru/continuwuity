@@ -147,13 +147,13 @@ impl Services {
 			manager
 		};
 
-		info!("Starting service workers...");
-		manager.start().await?;
-
 		// reset dormant online/away statuses to offline on startup
 		if self.server.config.allow_local_presence {
 			info!("Local presence statuses will be reset in the background.");
 		}
+
+		info!("Starting service workers...");
+		manager.start().await?;
 
 		info!("Services startup complete.");
 
