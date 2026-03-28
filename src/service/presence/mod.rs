@@ -207,14 +207,10 @@ impl Service {
 
 		let last_active_ago = UInt::new(0);
 		let currently_active = *new_state == PresenceState::Online;
-		self.set_presence(
-			user_id,
-			new_state,
-			Some(currently_active),
-			last_active_ago,
-			status_msg,
-		)
-		.await?;
+		let _cork = self.services.db.cork();
+		self.db
+			.set_presence(user_id, new_state, Some(currently_active), last_active_ago, status_msg)
+			.await?;
 
 		self.schedule_timeout(user_id, new_state)?;
 		self.notify_presence_change(user_id).await.log_err().ok();
