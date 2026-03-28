@@ -172,7 +172,11 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				// We assign counts such that the oldest PDU gets the largest count
 				// (smallest negative ID).
 				for (pdu, count) in pdus.into_iter().rev().zip(counts.into_iter().rev()) {
-					if let Err(e) = self.backfill_pdu(backfill_server, pdu, Some(count)).boxed().await {
+					if let Err(e) = self
+						.backfill_pdu(backfill_server, pdu, Some(count))
+						.boxed()
+						.await
+					{
 						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
 					}
 				}
