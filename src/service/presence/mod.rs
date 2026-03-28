@@ -195,7 +195,7 @@ impl Service {
 		};
 
 		if (!state_changed && last_last_active_ago < REFRESH_TIMEOUT)
-			|| (last_presence.is_ok() && state_changed && last_last_active_ago < 5 * 1000)
+			|| (last_presence.is_ok() && state_changed && last_last_active_ago < 1000)
 		{
 			return Ok(());
 		}
