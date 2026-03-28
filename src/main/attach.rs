@@ -133,6 +133,9 @@ async fn async_run(config: &Config) -> Result<()> {
 								break;
 							}
 						};
+						// Ensure the existing BufReader<&mut UnixStream> is dropped
+						// before moving a new UnixStream into `stream`.
+						drop(stream_reader);
 						stream = new_stream;
 						stream_reader = BufReader::new(&mut stream);
 					}
