@@ -70,17 +70,15 @@ fn descriptor_cf_options(
 		);
 	}
 
-	let mut opts = opts
-		.get_options_from_string("{{arena_block_size=2097152;}}")
+	opts.set_options_from_string("{{arena_block_size=2097152;}}")
 		.map_err(map_err)?;
 
 	#[cfg(debug_assertions)]
-	let opts = opts
-		.get_options_from_string(
-			"{{paranoid_checks=true;paranoid_file_checks=true;force_consistency_checks=true;\
-			 verify_sst_unique_id_in_manifest=true;}}",
-		)
-		.map_err(map_err)?;
+	opts.set_options_from_string(
+		"{{paranoid_checks=true;paranoid_file_checks=true;force_consistency_checks=true;\
+		 verify_sst_unique_id_in_manifest=true;}}",
+	)
+	.map_err(map_err)?;
 
 	Ok(opts)
 }
@@ -107,7 +105,7 @@ fn set_table_options(opts: &mut Options, desc: &Descriptor, cache: Option<&Cache
 		prepopulate,
 	);
 
-	let mut opts = opts.get_options_from_string(&string).map_err(map_err)?;
+	opts.set_options_from_string(&string).map_err(map_err)?;
 
 	opts.set_block_based_table_factory(&table);
 
