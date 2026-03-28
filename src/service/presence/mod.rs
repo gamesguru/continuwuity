@@ -205,12 +205,16 @@ impl Service {
 			| Err(_) => None,
 		};
 
-		let last_active_ago = Some(0_u64.try_into().unwrap());
+		let last_active_ago = UInt::new(0);
 		let currently_active = *new_state == PresenceState::Online;
-		let _cork = self.services.db.cork();
-		self.db
-			.set_presence(user_id, new_state, Some(currently_active), last_active_ago, status_msg)
-			.await?;
+		self.set_presence(
+			user_id,
+			new_state,
+			Some(currently_active),
+			last_active_ago,
+			status_msg,
+		)
+		.await?;
 
 		self.schedule_timeout(user_id, new_state)?;
 		self.notify_presence_change(user_id).await.log_err().ok();
