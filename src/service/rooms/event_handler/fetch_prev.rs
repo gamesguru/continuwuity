@@ -48,6 +48,11 @@ where
 		initial_set.clone().map(ToOwned::to_owned).collect();
 
 	for id in initial_set {
+		if self.services.pdu_metadata.is_event_soft_failed(id).await {
+			info!(target: "backfill", "Skipping known soft-failed event: {id}");
+			continue;
+		}
+
 		let id = id.to_owned();
 		active_fetches.push(
 			async move {
@@ -90,6 +95,16 @@ where
 						amount = amount.saturating_add(1);
 						for prev_prev in pdu.prev_events() {
 							if !graph.contains_key(prev_prev) && !fetching.contains(prev_prev) {
+								if self
+									.services
+									.pdu_metadata
+									.is_event_soft_failed(prev_prev)
+									.await
+								{
+									info!(target: "backfill", "Skipping known soft-failed prev event: {prev_prev}");
+									continue;
+								}
+
 								let prev_prev = prev_prev.to_owned();
 								fetching.insert(prev_prev.clone());
 								active_fetches.push(

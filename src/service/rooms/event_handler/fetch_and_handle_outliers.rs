@@ -49,6 +49,11 @@ where
 	trace!("Fetching {} outlier pdus", events.clone().count());
 
 	for id in events {
+		if self.services.pdu_metadata.is_event_soft_failed(id).await {
+			info!(target: "auth_chain", "Skipping known soft-failed outlier: {id}");
+			continue;
+		}
+
 		if let Ok(local_pdu) = self.services.timeline.get_pdu(id).await {
 			trace!("Found {id} in main timeline or outlier tree");
 			events_with_auth_events.push((id.to_owned(), Some(local_pdu), vec![]));
@@ -153,6 +158,16 @@ where
 								if !events_all.contains(&auth_event)
 									&& !self.services.timeline.pdu_exists(&auth_event).await
 								{
+									if self
+										.services
+										.pdu_metadata
+										.is_event_soft_failed(&auth_event)
+										.await
+									{
+										info!(target: "auth_chain", "Skipping known soft-failed auth event: {auth_event}");
+										continue;
+									}
+
 									let ratelimited = if let Some((time, tries)) = self
 										.services
 										.globals
