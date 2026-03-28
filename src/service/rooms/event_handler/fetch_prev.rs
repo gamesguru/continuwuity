@@ -50,7 +50,6 @@ where
 	for id in initial_set {
 		if self.services.pdu_metadata.is_event_soft_failed(id).await {
 			info!(target: "backfill", "Skipping known soft-failed event: {id}");
-			graph.insert(id.to_owned(), HashSet::new());
 			continue;
 		}
 
@@ -97,7 +96,6 @@ where
 									.await
 								{
 									info!(target: "backfill", "Skipping known soft-failed prev event: {prev_prev}");
-									graph.insert(prev_prev.to_owned(), HashSet::new());
 									continue;
 								}
 
