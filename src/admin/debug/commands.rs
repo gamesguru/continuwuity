@@ -113,11 +113,22 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 		| Err(_) => return Err!("PDU not found locally."),
 		| Ok(json) => {
 			let text = serde_json::to_string_pretty(&json)?;
-			let msg = if outlier {
-				"Outlier (Rejected / Soft Failed) PDU found in our database"
+			let mut msg = String::new();
+			if outlier {
+				let soft_failed = self
+					.services
+					.rooms
+					.pdu_metadata
+					.is_event_soft_failed(&event_id)
+					.await;
+				if soft_failed {
+					msg.push_str("Outlier (Soft Failed / Rejected) PDU found in our database");
+				} else {
+					msg.push_str("Outlier (State / Auth) PDU found in our database");
+				}
 			} else {
-				"PDU found in our database"
-			};
+				msg.push_str("Timeline PDU found in our database");
+			}
 			write!(self, "{msg}\n```json\n{text}\n```",)
 		},
 	}

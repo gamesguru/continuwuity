@@ -160,8 +160,39 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 			.await;
 		match response {
 			| Ok(response) => {
-				for pdu in response.pdus {
-					if let Err(e) = self.backfill_pdu(backfill_server, pdu).boxed().await {
+				let pdus = response.pdus;
+
+				// Pass 1: Handle outliers oldest-first order (avoid sequential auth stalls)
+				for pdu in pdus.iter().rev() {
+					match self.services.event_handler.parse_incoming_pdu(pdu).await {
+						| Ok((pdu_room_id, pdu_event_id, pdu_value)) => {
+							if let Err(e) = self
+								.services
+								.event_handler
+								.handle_outlier_pdu(
+									backfill_server,
+									&create_event,
+									&pdu_event_id,
+									&pdu_room_id,
+									pdu_value,
+									false,
+								)
+								.await
+							{
+								debug_warn!(
+									"Failed to handle backfilled outlier in room {room_id}: {e}"
+								);
+							}
+						},
+						| Err(e) => {
+							debug_warn!("Failed to parse backfilled pdu in room {room_id}: {e}");
+						},
+					}
+				}
+
+				// Pass 2: Handle timeline events newest-first (maintain timeline integrity)
+				for pdu in pdus {
+					if let Err(e) = self.backfill_pdu(backfill_server, pdu, None).boxed().await {
 						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
 					}
 				}
@@ -297,7 +328,12 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 
 #[implement(super::Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
-pub async fn backfill_pdu(&self, origin: &ServerName, pdu: Box<RawJsonValue>) -> Result<()> {
+pub async fn backfill_pdu(
+	&self,
+	origin: &ServerName,
+	pdu: Box<RawJsonValue>,
+	count: Option<u64>,
+) -> Result<()> {
 	let (room_id, event_id, value) = self.services.event_handler.parse_incoming_pdu(&pdu).await?;
 
 	// Lock so we cannot backfill the same pdu twice at the same time
@@ -328,7 +364,10 @@ pub async fn backfill_pdu(&self, origin: &ServerName, pdu: Box<RawJsonValue>) ->
 
 	let insert_lock = self.mutex_insert.lock(&room_id).await;
 
-	let count: i64 = self.services.globals.next_count().unwrap().try_into()?;
+	let count: i64 = match count {
+		| Some(count) => count.try_into()?,
+		| None => self.services.globals.next_count()?.try_into()?,
+	};
 
 	let pdu_id: RawPduId = PduId {
 		shortroomid,

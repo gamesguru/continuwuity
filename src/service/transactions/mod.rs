@@ -132,6 +132,17 @@ impl Service {
 			.count()
 	}
 
+	/// Returns keys of currently active (in-progress) transactions.
+	#[must_use]
+	pub fn txn_active_keys(&self) -> Vec<TxnKey> {
+		let state = self.federation_txn_state.read();
+		state
+			.iter()
+			.filter(|(_, v)| matches!(v, TxnState::Active(_)))
+			.map(|(k, _)| k.clone())
+			.collect()
+	}
+
 	pub fn add_client_txnid(
 		&self,
 		user_id: &UserId,

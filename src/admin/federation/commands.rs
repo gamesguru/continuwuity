@@ -30,15 +30,36 @@ pub(super) async fn incoming_federation(&self) -> Result {
 			.federation_handletime
 			.read();
 
+		let active_txns = self.services.transactions.txn_active_keys();
+
 		let mut msg = format!(
 			"Handling {} incoming PDUs across {} active transactions:\n",
 			map.len(),
-			self.services.transactions.txn_active_handle_count()
+			active_txns.len()
 		);
-		for (r, (e, i)) in map.iter() {
-			let elapsed = i.elapsed();
-			writeln!(msg, "{} {}: {}m{}s", r, e, elapsed.as_secs() / 60, elapsed.as_secs() % 60)?;
+
+		if !map.is_empty() {
+			writeln!(msg, "PDUs being handled:")?;
+			for (r, (e, i)) in map.iter() {
+				let elapsed = i.elapsed();
+				writeln!(
+					msg,
+					"  {} {}: {}m{}s",
+					r,
+					e,
+					elapsed.as_secs() / 60,
+					elapsed.as_secs() % 60
+				)?;
+			}
 		}
+
+		if !active_txns.is_empty() {
+			writeln!(msg, "\nActive Transactions:")?;
+			for (origin, txn_id) in active_txns {
+				writeln!(msg, "  {origin} {txn_id}")?;
+			}
+		}
+
 		msg
 	};
 

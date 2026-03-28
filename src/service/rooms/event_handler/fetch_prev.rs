@@ -1,13 +1,16 @@
 use std::{
-	collections::{BTreeMap, HashMap, HashSet, VecDeque},
+	collections::{BTreeMap, HashMap, HashSet},
 	iter::once,
 };
 
 use conduwuit::{
-	Event, PduEvent, Result, debug_warn, err, implement,
+	Event, PduEvent, Result, err, implement, info,
 	state_res::{self},
 };
-use futures::{FutureExt, future};
+use futures::{
+	FutureExt, future,
+	stream::{FuturesUnordered, StreamExt},
+};
 use ruma::{
 	CanonicalJsonValue, EventId, MilliSecondsSinceUnixEpoch, OwnedEventId, RoomId, ServerName,
 	int, uint,
@@ -40,34 +43,37 @@ where
 	let num_ids = initial_set.clone().count();
 	let mut eventid_info = HashMap::new();
 	let mut graph: HashMap<OwnedEventId, _> = HashMap::with_capacity(num_ids);
-	let mut todo_outlier_stack: VecDeque<OwnedEventId> =
-		initial_set.map(ToOwned::to_owned).collect();
+	let mut active_fetches = FuturesUnordered::new();
+	let mut fetching: HashSet<OwnedEventId> =
+		initial_set.clone().map(ToOwned::to_owned).collect();
 
-	let mut amount = 0;
+	for id in initial_set {
+		if self.services.pdu_metadata.is_event_soft_failed(id).await {
+			info!(target: "backfill", "Skipping known soft-failed event: {id}");
+			continue;
+		}
 
-	while let Some(prev_event_id) = todo_outlier_stack.pop_front() {
+		let id = id.to_owned();
+		active_fetches.push(
+			async move {
+				let res = self
+					.fetch_and_handle_outliers(origin, once(id.as_ref()), create_event, room_id)
+					.await;
+				(id, res)
+			}
+			.boxed(),
+		);
+	}
+
+	let mut amount: u64 = 0;
+	let limit = self.services.server.config.max_fetch_prev_events;
+
+	while let Some((prev_event_id, mut fetched)) = active_fetches.next().await {
 		self.services.server.check_running()?;
 
-		match self
-			.fetch_and_handle_outliers(
-				origin,
-				once(prev_event_id.as_ref()),
-				create_event,
-				room_id,
-			)
-			.boxed()
-			.await
-			.pop()
-		{
+		match fetched.pop() {
 			| Some((pdu, mut json_opt)) => {
 				check_room_id(room_id, &pdu)?;
-
-				let limit = self.services.server.config.max_fetch_prev_events;
-				if amount > limit {
-					debug_warn!("Max prev event limit reached! Limit: {limit}");
-					graph.insert(prev_event_id.clone(), HashSet::new());
-					continue;
-				}
 
 				if json_opt.is_none() {
 					json_opt = self
@@ -82,8 +88,39 @@ where
 					if pdu.origin_server_ts() > first_ts_in_room {
 						amount = amount.saturating_add(1);
 						for prev_prev in pdu.prev_events() {
-							if !graph.contains_key(prev_prev) {
-								todo_outlier_stack.push_back(prev_prev.to_owned());
+							if !graph.contains_key(prev_prev) && !fetching.contains(prev_prev) {
+								if self
+									.services
+									.pdu_metadata
+									.is_event_soft_failed(prev_prev)
+									.await
+								{
+									info!(target: "backfill", "Skipping known soft-failed prev event: {prev_prev}");
+									continue;
+								}
+
+								if amount >= limit.into() {
+									info!(target: "backfill", "Max prev event limit reached! Limit: {limit}");
+									graph.insert(prev_prev.to_owned(), HashSet::new());
+									continue;
+								}
+
+								let prev_prev = prev_prev.to_owned();
+								fetching.insert(prev_prev.clone());
+								active_fetches.push(
+									async move {
+										let res = self
+											.fetch_and_handle_outliers(
+												origin,
+												once(prev_prev.as_ref()),
+												create_event,
+												room_id,
+											)
+											.await;
+										(prev_prev, res)
+									}
+									.boxed(),
+								);
 							}
 						}
 
@@ -96,15 +133,15 @@ where
 						graph.insert(prev_event_id.clone(), HashSet::new());
 					}
 
-					eventid_info.insert(prev_event_id.clone(), (pdu, json));
+					eventid_info.insert(prev_event_id, (pdu, json));
 				} else {
 					// Get json failed, so this was not fetched over federation
-					graph.insert(prev_event_id.clone(), HashSet::new());
+					graph.insert(prev_event_id, HashSet::new());
 				}
 			},
 			| _ => {
 				// Fetch and handle failed
-				graph.insert(prev_event_id.clone(), HashSet::new());
+				graph.insert(prev_event_id, HashSet::new());
 			},
 		}
 	}

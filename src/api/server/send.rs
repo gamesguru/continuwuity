@@ -7,7 +7,7 @@ use std::{
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Error, Result, debug, debug_warn, err, error,
+	Err, Error, Result, debug, debug_warn, err, error, info,
 	result::LogErr,
 	state_res::lexicographical_topological_sort,
 	trace,
@@ -163,7 +163,7 @@ async fn process_inbound_transaction(
 		.filter_map(Result::ok)
 		.stream();
 
-	debug!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction",);
+	info!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction");
 	let results = match handle(&services, &client, body.origin(), pdus, edus).await {
 		| Ok(results) => results,
 		| Err(err) => {
@@ -180,7 +180,7 @@ async fn process_inbound_transaction(
 		}
 	}
 
-	debug!(
+	info!(
 		pdus = body.pdus.len(),
 		edus = body.edus.len(),
 		elapsed = ?txn_start_time.elapsed(),
