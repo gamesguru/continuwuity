@@ -32,6 +32,7 @@ use ruma::{
 		AnyStateEvent, StateEventType,
 		TimelineEventType::{self, *},
 		invite_permission_config::FilterLevel,
+		room::history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent},
 	},
 	serde::Raw,
 };
@@ -107,6 +108,26 @@ pub(crate) async fn get_message_events_route(
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
 
+	let currently_member = services
+		.rooms
+		.state_cache
+		.is_joined(sender_user, room_id)
+		.await;
+
+	let history_visibility = services
+		.rooms
+		.state_accessor
+		.room_state_get_content::<RoomHistoryVisibilityEventContent>(
+			room_id,
+			&StateEventType::RoomHistoryVisibility,
+			"",
+		)
+		.await
+		.map_or(HistoryVisibility::Shared, |c| c.history_visibility);
+
+	let skip_visibility_filter = history_visibility == HistoryVisibility::WorldReadable
+		|| (history_visibility == HistoryVisibility::Shared && currently_member);
+
 	if matches!(body.dir, Direction::Backward) {
 		services
 			.rooms
@@ -138,7 +159,13 @@ pub(crate) async fn get_message_events_route(
 		.ready_take_while(|(count, _)| Some(*count) != to)
 		.ready_filter_map(|item| event_filter(item, filter))
 		.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
-		.wide_filter_map(|item| visibility_filter(&services, item, sender_user))
+		.wide_filter_map(|item| {
+			if skip_visibility_filter {
+				Some(item)
+			} else {
+				visibility_filter(&services, item, sender_user)
+			}
+		})
 		.take(limit)
 		.then(async |mut pdu| {
 			pdu.1.set_unsigned(Some(sender_user));
