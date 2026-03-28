@@ -16,6 +16,7 @@ pub(super) struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
+	pduid_auditpdu: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
 	pub(super) db: Arc<Database>,
@@ -35,6 +36,7 @@ impl Data {
 			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
 			pduid_pdu: db["pduid_pdu"].clone(),
+			pduid_auditpdu: db["pduid_auditpdu"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
 			db: args.db.clone(),
@@ -206,6 +208,12 @@ impl Data {
 		self.pduid_pdu.raw_put(pdu_id, Json(pdu_json));
 
 		Ok(())
+	}
+
+	/// Store an unredacted copy of a PDU in the audit table before it is
+	/// redacted.  The key is identical to `pduid_pdu` so lookups are cheap.
+	pub(super) fn backup_pdu(&self, pdu_id: &RawPduId, pdu_json: &CanonicalJsonObject) {
+		self.pduid_auditpdu.raw_put(pdu_id, Json(pdu_json));
 	}
 
 	/// Returns an iterator over all events and their tokens in a room that
