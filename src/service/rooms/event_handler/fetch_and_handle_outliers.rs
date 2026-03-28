@@ -253,7 +253,8 @@ where
 			.unwrap_or_default();
 
 		let events_in_reverse_order: Vec<(OwnedEventId, CanonicalJsonObject)> = sorted
-			.into_iter().rev()
+			.into_iter()
+			.rev()
 			.filter_map(|id| fetched_info.remove(&id).map(|info| (id, info)))
 			.collect();
 
