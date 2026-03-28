@@ -159,11 +159,11 @@ pub(crate) async fn get_message_events_route(
 		.ready_take_while(|(count, _)| Some(*count) != to)
 		.ready_filter_map(|item| event_filter(item, filter))
 		.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
-		.wide_filter_map(|item| {
+		.wide_filter_map(async |item| {
 			if skip_visibility_filter {
 				Some(item)
 			} else {
-				visibility_filter(&services, item, sender_user)
+				visibility_filter(&services, item, sender_user).await
 			}
 		})
 		.take(limit)
