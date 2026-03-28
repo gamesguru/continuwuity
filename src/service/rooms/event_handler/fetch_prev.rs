@@ -89,15 +89,16 @@ where
 						amount = amount.saturating_add(1);
 						for prev_prev in pdu.prev_events() {
 							if !graph.contains_key(prev_prev) && !fetching.contains(prev_prev) {
-								if self
-									.services
-									.pdu_metadata
-									.is_event_soft_failed(prev_prev)
-									.await
-								{
-									info!(target: "backfill", "Skipping known soft-failed prev event: {prev_prev}");
-									continue;
-								}
+							if self
+								.services
+								.pdu_metadata
+								.is_event_soft_failed(prev_prev)
+								.await
+							{
+								info!(target: "backfill", "Skipping known soft-failed prev event: {prev_prev}");
+								graph.insert(prev_prev.to_owned(), HashSet::new());
+								continue;
+							}
 
 								if amount >= limit.into() {
 									info!(target: "backfill", "Max prev event limit reached! Limit: {limit}");

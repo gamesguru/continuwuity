@@ -250,10 +250,14 @@ where
 
 		let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
 			.await
-			.unwrap_or_default();
+			.unwrap_or_else(|e| {
+				warn!("lexicographical_topological_sort failed for {id}: {e}");
+				Vec::new()
+			});
 
 		let events_in_reverse_order: Vec<(OwnedEventId, CanonicalJsonObject)> = sorted
 			.into_iter()
+			.rev()
 			.filter_map(|id| fetched_info.remove(&id).map(|info| (id, info)))
 			.collect();
 

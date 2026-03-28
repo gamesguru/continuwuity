@@ -219,6 +219,7 @@ impl Service {
 		let mut iv = vec![(msg.queue_id, msg.event)];
 
 		if matches!(iv[0].1, SendingEvent::Flush) {
+			iv.clear();
 			let _cork = self.db.db.cork();
 			let queued = self
 				.db

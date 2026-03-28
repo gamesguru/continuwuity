@@ -28,11 +28,13 @@ impl Data {
 	pub(super) fn new(args: &crate::Args<'_>) -> Self {
 		let db = &args.db;
 
-		let cache_capacity =
-			utils::math::usize_from_f64(100_000.0 * args.server.config.cache_capacity_modifier)
-				.expect("valid cache size")
-				.try_into()
-				.unwrap_or(100_000);
+		let cache_capacity = utils::math::usize_from_f64(
+			(args.server.config.presence_cache_capacity as f64)
+				* args.server.config.cache_capacity_modifier,
+		)
+		.expect("valid cache size")
+		.try_into()
+		.unwrap_or(args.server.config.presence_cache_capacity);
 
 		Self {
 			presenceid_presence: db["presenceid_presence"].clone(),
