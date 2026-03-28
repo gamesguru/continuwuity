@@ -66,7 +66,8 @@ where
 		);
 	}
 
-	let mut amount = 0;
+	let mut amount: u64 = 0;
+	let limit = self.services.server.config.max_fetch_prev_events;
 
 	while let Some((prev_event_id, mut fetched)) = active_fetches.next().await {
 		self.services.server.check_running()?;
@@ -100,7 +101,7 @@ where
 									continue;
 								}
 
-								if amount >= limit {
+								if amount >= limit.into() {
 									info!(target: "backfill", "Max prev event limit reached! Limit: {limit}");
 									graph.insert(prev_prev.to_owned(), HashSet::new());
 									continue;

@@ -15,7 +15,7 @@ use crate::rooms::timeline::pdu_fits;
 
 #[implement(super::Service)]
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_outlier_pdu<'a, Pdu>(
+pub async fn handle_outlier_pdu<'a, Pdu>(
 	&self,
 	origin: &'a ServerName,
 	create_event: &'a Pdu,

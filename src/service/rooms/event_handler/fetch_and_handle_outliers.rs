@@ -1,18 +1,18 @@
 use std::{
-	collections::{BTreeMap, HashSet, hash_map},
+	collections::{BTreeMap, HashMap, HashSet, hash_map},
 	time::Instant,
 };
 
 use conduwuit::{
-	Event, PduEvent, debug, implement, info, matrix::event::gen_event_id_canonical_json, trace,
-	utils::continue_exponential_backoff_secs, warn,
+	Event, PduEvent, debug, implement, info, matrix::event::gen_event_id_canonical_json,
+	state_res, trace, utils::continue_exponential_backoff_secs, warn,
 };
 use futures::{
-	FutureExt,
+	FutureExt, future,
 	stream::{FuturesUnordered, StreamExt},
 };
 use ruma::{
-	CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
 	api::federation::event::get_event,
 };
 
@@ -60,8 +60,8 @@ where
 			continue;
 		}
 
-		let mut fetched_info = HashMap::new();
-		let mut graph = HashMap::with_capacity(32);
+		let mut fetched_info: HashMap<OwnedEventId, CanonicalJsonObject> = HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::with_capacity(32);
 		let mut active_fetches = FuturesUnordered::new();
 
 		let limit = self.services.server.config.max_fetch_prev_events;
@@ -233,21 +233,26 @@ where
 			}
 		}
 
-		let event_fetch = |event_id| {
+		let event_fetch = |event_id: OwnedEventId| {
 			let origin_server_ts = fetched_info
 				.get(&event_id)
 				.and_then(|info| info.get("origin_server_ts"))
-				.and_then(CanonicalJsonValue::as_u64)
-				.unwrap_or(0);
+				.and_then(CanonicalJsonValue::as_integer)
+				.map(i64::from)
+				.and_then(|i| ruma::UInt::try_from(i).ok())
+				.unwrap_or_else(|| ruma::uint!(0));
 
-			future::ready(Ok((ruma::int!(0), ruma::MilliSecondsSinceUnixEpoch::from_system_time(std::time::UNIX_EPOCH + std::time::Duration::from_millis(origin_server_ts)))))
+			future::ready(conduwuit_core::Result::Ok((
+				ruma::int!(0),
+				ruma::MilliSecondsSinceUnixEpoch(origin_server_ts),
+			)))
 		};
 
-		let sorted = ruma::state_res::lexicographical_topological_sort(&graph, &event_fetch)
+		let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
 			.await
 			.unwrap_or_default();
 
-		let events_in_reverse_order: Vec<_> = sorted
+		let events_in_reverse_order: Vec<(OwnedEventId, CanonicalJsonObject)> = sorted
 			.into_iter()
 			.filter_map(|id| fetched_info.remove(&id).map(|info| (id, info)))
 			.collect();
