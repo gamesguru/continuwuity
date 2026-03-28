@@ -60,8 +60,8 @@ where
 			continue;
 		}
 
-		let mut events_in_reverse_order = Vec::new();
-		let mut events_all = HashSet::with_capacity(32);
+		let mut fetched_info = HashMap::new();
+		let mut graph = HashMap::with_capacity(32);
 		let mut active_fetches = FuturesUnordered::new();
 
 		let limit = self.services.server.config.max_fetch_prev_events;
@@ -97,7 +97,7 @@ where
 					}
 					.boxed(),
 				);
-				events_all.insert(id.to_owned());
+				graph.insert(id.to_owned(), HashSet::new());
 			}
 		} else {
 			active_fetches.push(
@@ -115,15 +115,10 @@ where
 				}
 				.boxed(),
 			);
-			events_all.insert(id.to_owned());
+			graph.insert(id.to_owned(), HashSet::new());
 		}
 
 		while let Some((next_id, fetch_res)) = active_fetches.next().await {
-			if events_all.len() >= limit.into() {
-				info!(target: "auth_chain", "Max auth event limit reached! Limit: {limit}");
-				break;
-			}
-
 			match fetch_res {
 				| Ok(res) => {
 					debug!("Got {next_id} over federation from {origin}");
@@ -147,6 +142,7 @@ where
 						);
 					}
 
+					let mut next_auth_events = HashSet::new();
 					if let Some(auth_events) = value
 						.get("auth_events")
 						.and_then(CanonicalJsonValue::as_array)
@@ -155,7 +151,8 @@ where
 							if let Ok(auth_event) =
 								serde_json::from_value::<OwnedEventId>(auth_event.clone().into())
 							{
-								if !events_all.contains(&auth_event)
+								next_auth_events.insert(auth_event.clone());
+								if !graph.contains_key(&auth_event)
 									&& !self.services.timeline.pdu_exists(&auth_event).await
 								{
 									if self
@@ -192,9 +189,9 @@ where
 										continue;
 									}
 
-									if events_all.len() >= limit.into() {
+									if graph.len() >= limit.into() {
 										info!(target: "auth_chain", "Max auth event limit reached! Limit: {limit}");
-										break;
+										continue;
 									}
 
 									trace!(
@@ -218,7 +215,7 @@ where
 										}
 										.boxed(),
 									);
-									events_all.insert(auth_event);
+									graph.insert(auth_event, HashSet::new());
 								}
 							}
 						}
@@ -226,7 +223,8 @@ where
 						warn!("Auth event list invalid");
 					}
 
-					events_in_reverse_order.push((next_id, value));
+					graph.insert(next_id.clone(), next_auth_events);
+					fetched_info.insert(next_id, value);
 				},
 				| Err(e) => {
 					warn!("Failed to fetch auth event {next_id} from {origin}: {e}");
@@ -234,6 +232,25 @@ where
 				},
 			}
 		}
+
+		let event_fetch = |event_id| {
+			let origin_server_ts = fetched_info
+				.get(&event_id)
+				.and_then(|info| info.get("origin_server_ts"))
+				.and_then(CanonicalJsonValue::as_u64)
+				.unwrap_or(0);
+
+			future::ready(Ok((ruma::int!(0), ruma::MilliSecondsSinceUnixEpoch::from_system_time(std::time::UNIX_EPOCH + std::time::Duration::from_millis(origin_server_ts)))))
+		};
+
+		let sorted = ruma::state_res::lexicographical_topological_sort(&graph, &event_fetch)
+			.await
+			.unwrap_or_default();
+
+		let events_in_reverse_order: Vec<_> = sorted
+			.into_iter()
+			.filter_map(|id| fetched_info.remove(&id).map(|info| (id, info)))
+			.collect();
 
 		events_with_auth_events.push((id.to_owned(), None, events_in_reverse_order));
 	}

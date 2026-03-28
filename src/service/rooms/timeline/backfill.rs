@@ -161,22 +161,33 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 		match response {
 			| Ok(response) => {
 				let pdus = response.pdus;
-				let num_pdus = pdus.len();
-				let mut counts = Vec::with_capacity(num_pdus);
-				for _ in 0..num_pdus {
-					counts.push(self.services.globals.next_count()?);
-				}
 
-				// We process the PDUs in reverse (oldest first) so that auth events
-				// are already in the database when newer events are processed.
-				// We assign counts such that the oldest PDU gets the largest count
-				// (smallest negative ID).
-				for (pdu, count) in pdus.into_iter().rev().zip(counts.into_iter().rev()) {
+				// Pass 1: Handle as outliers in oldest-first order (avoids sequential auth stalls)
+				for pdu in pdus.iter().rev() {
 					if let Err(e) = self
-						.backfill_pdu(backfill_server, pdu, Some(count))
+						.services
+						.event_handler
+						.parse_incoming_pdu(pdu)
+						.and_then(|(room_id, event_id, value)| {
+							self.services.event_handler.handle_outlier_pdu(
+								backfill_server,
+								&create_event,
+								&event_id,
+								&room_id,
+								value,
+								false,
+							)
+						})
 						.boxed()
 						.await
 					{
+						debug_warn!("Failed to handle backfilled outlier in room {room_id}: {e}");
+					}
+				}
+
+				// Pass 2: Handle as timeline events in newest-first order (maintains timeline integrity)
+				for pdu in pdus {
+					if let Err(e) = self.backfill_pdu(backfill_server, pdu, None).boxed().await {
 						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
 					}
 				}

@@ -75,13 +75,6 @@ where
 			| Some((pdu, mut json_opt)) => {
 				check_room_id(room_id, &pdu)?;
 
-				let limit = self.services.server.config.max_fetch_prev_events;
-				if amount >= limit {
-					info!(target: "backfill", "Max prev event limit reached! Limit: {limit}");
-					graph.insert(prev_event_id, HashSet::new());
-					continue;
-				}
-
 				if json_opt.is_none() {
 					json_opt = self
 						.services
@@ -103,6 +96,12 @@ where
 									.await
 								{
 									info!(target: "backfill", "Skipping known soft-failed prev event: {prev_prev}");
+									graph.insert(prev_prev.to_owned(), HashSet::new());
+									continue;
+								}
+
+								if amount >= limit {
+									info!(target: "backfill", "Max prev event limit reached! Limit: {limit}");
 									graph.insert(prev_prev.to_owned(), HashSet::new());
 									continue;
 								}
