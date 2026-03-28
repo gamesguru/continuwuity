@@ -29,7 +29,7 @@ impl Data {
 		let db = &args.db;
 
 		let cache_capacity = utils::math::usize_from_f64(
-			(args.server.config.presence_cache_capacity as f64)
+			f64::from(args.server.config.presence_cache_capacity)
 				* args.server.config.cache_capacity_modifier,
 		)
 		.expect("valid cache size")
@@ -39,7 +39,7 @@ impl Data {
 		Self {
 			presenceid_presence: db["presenceid_presence"].clone(),
 			userid_presenceid: db["userid_presenceid"].clone(),
-			presence_cache: Cache::builder().max_capacity(cache_capacity).build(),
+			presence_cache: Cache::builder().max_capacity(cache_capacity.into()).build(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				users: args.depend::<users::Service>("users"),
