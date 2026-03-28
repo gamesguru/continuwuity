@@ -194,9 +194,7 @@ impl Service {
 			| Ok((_, ref presence)) => now.saturating_sub(presence.last_active_ts),
 		};
 
-		if (!state_changed && last_last_active_ago < REFRESH_TIMEOUT)
-			|| (last_presence.is_ok() && state_changed && last_last_active_ago < 1000)
-		{
+		if !state_changed && last_last_active_ago < REFRESH_TIMEOUT {
 			return Ok(());
 		}
 
