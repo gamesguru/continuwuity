@@ -1,6 +1,6 @@
 Package Name,Version,Repository URL,Git Revision
 async-channel,2.5.0,https://forgejo.ellis.link/continuwuation/async-channel,e990f0006b68dc9bace7a3c95fc90b5c4e44948d
-bzip2,1.0.8,git://sourceware.org/git/bzip2.git,bzip2-1.0.8
+bzip2,1.0.8,https://sourceware.org/git/bzip2.git,bzip2-1.0.8
 continuwuity-admin-api,0.1.0,https://forgejo.ellis.link/continuwuation/ruwuma,a97b91adcc012ef04991d823b8b5a79c6686ae48
 core_affinity,0.8.3,https://forgejo.ellis.link/continuwuation/core_affinity_rs,7c7a9dea35382743a63837cdd1d977efdb8f1b8a
 draupnir-antispam,0.1.0,https://forgejo.ellis.link/continuwuation/ruwuma,a97b91adcc012ef04991d823b8b5a79c6686ae48

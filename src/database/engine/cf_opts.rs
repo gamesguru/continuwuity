@@ -107,7 +107,7 @@ fn set_table_options(opts: &mut Options, desc: &Descriptor, cache: Option<&Cache
 		prepopulate,
 	);
 
-	let mut opts = opts.get_options_from_string(&string).map_err(map_err)?;
+	*opts = opts.get_options_from_string(&string).map_err(map_err)?;
 
 	opts.set_block_based_table_factory(&table);
 
