@@ -20,9 +20,9 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 	let runtime = tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
-		.map_err(|_e| {
-			eprintln!("Failed to initialize tokio runtime");
-			Error::bad_database("Failed to initialize tokio runtime")
+		.map_err(|e| {
+			eprintln!("Failed to initialize tokio runtime: {e}");
+			Error::bad_database(format!("Failed to initialize tokio runtime: {e}"))
 		})?;
 
 	runtime.block_on(async_run(&config))
