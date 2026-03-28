@@ -12,8 +12,8 @@ use crate::{
 	account_data, admin, announcements, antispam, appservice, client, config, emergency,
 	federation, firstrun, globals, key_backups,
 	manager::Manager,
-	media, moderation, password_reset, presence, pusher, registration_tokens, resolver, rooms,
-	sending, server_keys,
+	media, moderation, oidc, password_reset, presence, pusher, registration_tokens, resolver,
+	rooms, sending, server_keys,
 	service::{self, Args, Map, Service},
 	sync, transactions, uiaa, users,
 };
@@ -45,6 +45,7 @@ pub struct Services {
 	pub moderation: Arc<moderation::Service>,
 	pub announcements: Arc<announcements::Service>,
 	pub antispam: Arc<antispam::Service>,
+	pub oidc: Arc<oidc::Service>,
 
 	manager: Mutex<Option<Arc<Manager>>>,
 	pub(crate) service: Arc<Map>,
@@ -119,6 +120,7 @@ impl Services {
 			moderation: build!(moderation::Service),
 			announcements: build!(announcements::Service),
 			antispam: build!(antispam::Service),
+			oidc: build!(oidc::Service),
 
 			manager: Mutex::new(None),
 			service,

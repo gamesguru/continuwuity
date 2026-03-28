@@ -85,11 +85,15 @@ zstd_compression = [
 [dependencies]
 askama.workspace = true
 async-trait.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
 base64.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 conduwuit-core.workspace = true
 conduwuit-database.workspace = true
 conduwuit-macros.workspace = true
+conduwuit-oidc.workspace = true
 const-str.workspace = true
 
 either.workspace = true
@@ -130,6 +134,9 @@ yansi.workspace = true
 [target.'cfg(all(unix, target_os = "linux"))'.dependencies]
 sd-notify.workspace = true
 sd-notify.optional = true
+oxide-auth.workspace = true
+oxide-auth-async.workspace = true
+once_cell.workspace = true
 
 [lints]
 workspace = true

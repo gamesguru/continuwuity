@@ -1,0 +1,45 @@
+[package]
+name = "conduwuit_oidc"
+categories.workspace = true
+description.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[lib]
+path = "mod.rs"
+crate-type = [
+	"rlib",
+#	"dylib",
+]
+
+[features]
+
+[dependencies]
+askama = "0.14.0"
+
+async-trait.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+const-str.workspace = true
+chrono.workspace = true
+conduwuit-build-metadata.workspace = true
+conduwuit-core.workspace = true
+conduwuit-database.workspace = true
+once_cell.workspace = true
+oxide-auth.workspace = true
+oxide-auth-async.workspace = true
+percent-encoding.workspace = true
+rand.workspace = true
+ruma.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+futures.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

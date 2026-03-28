@@ -1,0 +1,160 @@
+use std::{borrow::Cow, str::FromStr};
+
+use askama::Template;
+use conduwuit_build_metadata::{GIT_REMOTE_COMMIT_URL, GIT_REMOTE_WEB_URL, version_tag};
+use oxide_auth::{
+	code_grant::authorization::Request as AuthorizationRequest, endpoint::QueryParameter,
+};
+use url::Url;
+
+use super::LoginQuery;
+use crate::OidcRequest;
+
+/// The parameters for the OIDC consent page template.
+#[derive(Template)]
+#[template(path = "consent.html.j2")]
+pub(crate) struct ConsentPageTemplate<'a> {
+	pub(crate) nonce: &'a str,
+	pub(crate) hostname: &'a str,
+	pub(crate) route: &'a str,
+	pub(crate) beneficiary: &'a str,
+	pub(crate) client_id: &'a str,
+	pub(crate) client_name: Option<&'a str>,
+	pub(crate) client_secret: Option<&'a str>,
+	pub(crate) redirect_uri: &'a str,
+	pub(crate) scope: &'a str,
+	pub(crate) state: &'a str,
+	pub(crate) code_challenge: &'a str,
+	pub(crate) code_challenge_method: &'a str,
+	pub(crate) response_type: &'a str,
+	pub(crate) response_mode: &'a str,
+}
+
+/// POST or GET parameters required for an OIDC authorization request.
+///
+/// If `allow` or `deny` are [Some], it's a consent allowance request.
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct AuthorizationQuery {
+	pub client_id: String,
+	pub client_name: Option<String>,
+	pub client_secret: Option<String>,
+	pub redirect_uri: Url,
+	pub scope: String,
+	pub state: String,
+	pub code_challenge: String,
+	pub code_challenge_method: String,
+	pub response_type: String,
+	pub response_mode: Option<String>,
+	pub username: Option<String>,
+	pub allow: Option<String>,
+	pub deny: Option<String>,
+}
+
+impl AuthorizationRequest for AuthorizationQuery {
+	fn valid(&self) -> bool { true }
+
+	fn client_id(&self) -> Option<Cow<'_, str>> { Some(self.client_id.as_str().into()) }
+
+	fn scope(&self) -> Option<Cow<'_, str>> { Some(self.scope.as_str().into()) }
+
+	fn state(&self) -> Option<Cow<'_, str>> { Some(self.state.as_str().into()) }
+
+	fn redirect_uri(&self) -> Option<Cow<'_, str>> { Some(self.redirect_uri.as_str().into()) }
+
+	fn response_type(&self) -> Option<Cow<'_, str>> { Some(self.response_type.as_str().into()) }
+
+	/// Matrix OIDC authentication doesn't use any authorization flow extension.
+	fn extension(&self, _key: &str) -> Option<Cow<'_, str>> { None }
+}
+
+#[derive(Debug)]
+pub enum AuthError {
+	NoQuery,
+	MissingField(String),
+	InvalidField(String),
+}
+
+impl TryFrom<&mut OidcRequest> for AuthorizationQuery {
+	type Error = AuthError;
+
+	fn try_from(value: &mut OidcRequest) -> Result<Self, Self::Error> {
+		Self::try_from(value.clone())
+	}
+}
+
+impl TryFrom<OidcRequest> for AuthorizationQuery {
+	type Error = AuthError;
+
+	fn try_from(value: OidcRequest) -> Result<Self, Self::Error> {
+		// Grab data from the query if present, if not from the body.
+		let query = value
+			.query()
+			.or_else(|| value.body())
+			.ok_or(AuthError::NoQuery)?;
+
+		let getopt = |key| query.unique_value(key).map(|s| s.to_string());
+		let get = |key| {
+			query
+				.unique_value(key)
+				.ok_or_else(|| AuthError::MissingField(key.into()))
+				.map(|s| s.to_string())
+		};
+
+		Ok(Self {
+			client_id: get("client_id")?,
+			client_name: getopt("client_name"),
+			client_secret: getopt("client_secret"),
+			redirect_uri: Url::from_str(&get("redirect_uri")?)
+				.map_err(|_| AuthError::InvalidField("redirect_uri".into()))?,
+			scope: get("scope")?,
+			state: get("state")?,
+			code_challenge: get("code_challenge")?,
+			code_challenge_method: get("code_challenge_method")?,
+			response_type: get("response_type")?,
+			// response_mode is not strictly needed : it must be the literal "fragment"
+			// when over https. It's required by the Matrix spec but Fractal doesn't provide it.
+			response_mode: getopt("response_mode").or_else(|| Some("fragment".to_owned())),
+			username: getopt("username"),
+			allow: getopt("allow"),
+			deny: getopt("deny"),
+		})
+	}
+}
+
+impl From<LoginQuery> for AuthorizationQuery {
+	/// Drops the `password` field on the way.
+	fn from(value: LoginQuery) -> Self {
+		let LoginQuery {
+			client_id,
+			client_name,
+			client_secret,
+			redirect_uri,
+			scope,
+			state,
+			code_challenge,
+			code_challenge_method,
+			response_type,
+			response_mode,
+			username,
+			allow,
+			deny,
+			..
+		} = value;
+
+		Self {
+			client_id,
+			client_name,
+			client_secret,
+			redirect_uri,
+			scope,
+			state,
+			code_challenge,
+			code_challenge_method,
+			response_type,
+			response_mode: Some(response_mode),
+			username: Some(username),
+			allow,
+			deny,
+		}
+	}
+}

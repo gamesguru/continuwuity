@@ -53,7 +53,7 @@ use crate::{Result, err, error::Error, utils::sys};
 ### For more information, see:
 ### https://continuwuity.org/configuration.html
 "#,
-	ignore = "config_paths catchall"
+	ignore = "config_paths catchall auth well_known tls blurhashing allow_invalid_tls_certificates_yes_i_know_what_the_fuck_i_am_doing_with_this_and_i_know_this_is_insecure"
 )]
 pub struct Config {
 	// Paths to config file(s). Not supposed to be set manually in the config file,
@@ -66,7 +66,8 @@ pub struct Config {
 	/// See the docs for reverse proxying and delegation:
 	/// https://continuwuity.org/deploying/generic.html#setting-up-the-reverse-proxy
 	///
-	/// Also see the `[global.well_known]` config section at the very bottom.
+	/// Also see the `[global.auth]` and `[global.well_known]` config sections
+	/// at the very bottom.
 	///
 	/// If `client` is not set under `[global.well_known]`, the server name will
 	/// be used as the base domain for user-facing links (such as password
@@ -111,6 +112,9 @@ pub struct Config {
 	/// display: nested
 	#[serde(default)]
 	pub tls: TlsConfig,
+
+	// external structure; separate section
+	pub auth: Option<AuthConfig>,
 
 	/// The UNIX socket continuwuity will listen on.
 	///
@@ -2167,6 +2171,25 @@ pub struct TlsConfig {
 	/// Whether to listen and allow for HTTP and HTTPS connections (insecure!)
 	#[serde(default)]
 	pub dual_protocol: bool,
+}
+
+#[allow(rustdoc::broken_intra_doc_links, rustdoc::bare_urls)]
+#[derive(Clone, Debug, Deserialize, Default)]
+#[config_example_generator(filename = "conduwuit-example.toml", section = "global.auth")]
+pub struct AuthConfig {
+	/// Use this homeserver as the OIDC authentication reference. It will
+	/// advertise itself as the OIDC authentication issuer to new clients,
+	/// and use the internal user database to answer on the advertised
+	/// endpoints. Note that the legacy Matrix authentication still will be
+	/// reachable.
+	/// Unset by default.
+	pub enable_oidc_login: bool,
+
+	/// Whether this homeserver should provide users with an account management
+	/// interface. Only used if `enable_oidc_login` is set. Note that the
+	/// endpoint is unimplemented at the moment.
+	/// Unset by default.
+	pub enable_oidc_account_management: bool,
 }
 
 #[allow(rustdoc::broken_intra_doc_links, rustdoc::bare_urls)]

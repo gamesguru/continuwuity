@@ -5,9 +5,11 @@ default-members = ["src/*"]
 
 [workspace.package]
 authors = ["Continuwuity Team and contributors <team@continuwuity.org>"]
+categories = ["network-programming"]
 description = "A Matrix homeserver written in Rust, the official continuation of the conduwuit homeserver."
 edition = "2024"
 homepage = "https://continuwuity.org/"
+keywords = ["chat", "matrix", "networking", "server", "uwu"]
 license = "Apache-2.0"
 # See also `rust-toolchain.toml`
 readme = "README.md"
@@ -99,7 +101,7 @@ features = [
 [workspace.dependencies.axum-extra]
 version = "0.12.0"
 default-features = false
-features = ["typed-header", "tracing", "cookie"]
+features = ["typed-header", "tracing", "cookie", "cookie-signed"]
 
 [workspace.dependencies.axum-server]
 version = "0.7.2"
@@ -382,6 +384,7 @@ features = [
     "unstable-extensible-events",
     "unstable-pdu",
     "unstable-msc4143", # livekit well_known response
+    "unstable-msc2965",
     "unstable-msc4284"
 ]
 
@@ -555,6 +558,21 @@ version = "1.0.1"
 [workspace.dependencies.askama]
 version = "0.15.0"
 
+[workspace.dependencies.resolv-conf]
+version = "0.7.5"
+
+[workspace.dependencies.oxide-auth]
+version = "0.6.1"
+
+[workspace.dependencies.oxide-auth-async]
+version = "0.2.1"
+
+[workspace.dependencies.once_cell]
+version = "1.21.3"
+
+[workspace.dependencies.percent-encoding]
+version = "2.3.1"
+
 #
 # Patches
 #
@@ -624,6 +642,11 @@ default-features = false
 [workspace.dependencies.conduwuit-macros]
 package = "conduwuit_macros"
 path = "src/macros"
+default-features = false
+
+[workspace.dependencies.conduwuit-oidc]
+package = "conduwuit_oidc"
+path = "src/oidc"
 default-features = false
 
 [workspace.dependencies.conduwuit-web]

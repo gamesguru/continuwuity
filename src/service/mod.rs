@@ -24,6 +24,7 @@ pub mod globals;
 pub mod key_backups;
 pub mod media;
 pub mod moderation;
+pub mod oidc;
 pub mod password_reset;
 pub mod presence;
 pub mod pusher;

@@ -116,6 +116,23 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::get_protocols_route)
 		.route("/_matrix/client/unstable/thirdparty/protocols",
 			get(client::get_protocols_route_unstable))
+		// MSC2965: OAuth 2.0 Authorization Server Metadata discovery.
+		.route("/_matrix/client/unstable/org.matrix.msc2965/auth_metadata",
+			get(client::get_auth_metadata))
+		// MSC2964: Usage of OAuth 2.0 authorization code grant and refresh token grant.
+		.route("/_matrix/client/unstable/org.matrix.msc2964/authorize",
+			get(client::authorize))
+		.route("/_matrix/client/unstable/org.matrix.msc2964/authorize",
+			post(client::authorize_consent))
+		.route("/_matrix/client/unstable/org.matrix.msc2964/login",
+			post(client::oidc_login))
+		.route("/_matrix/client/unstable/org.matrix.msc2964/token",
+			post(client::token))
+		.route("/_matrix/client/unstable/org.matrix.msc4254/revoke",
+			post(client::revoke))
+		// MSC2966: Usage of OAuth 2.0 Dynamic Client Registration in Matrix.
+		.route("/_matrix/client/unstable/org.matrix.msc2964/device/register",
+			post(client::register_client))
 		.ruma_route(&client::send_message_event_route)
 		.ruma_route(&client::send_state_event_for_key_route)
 		.ruma_route(&client::get_state_events_route)
