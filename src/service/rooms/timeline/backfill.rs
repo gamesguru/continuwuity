@@ -160,7 +160,9 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 			.await;
 		match response {
 			| Ok(response) => {
-				for pdu in response.pdus {
+				// We process the PDUs in reverse (oldest first) so that auth events
+				// are already in the database when newer events are processed.
+				for pdu in response.pdus.into_iter().rev() {
 					if let Err(e) = self.backfill_pdu(backfill_server, pdu).boxed().await {
 						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
 					}
