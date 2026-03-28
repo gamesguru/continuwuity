@@ -4,7 +4,7 @@ use std::{
 };
 
 use conduwuit::{
-	Event, PduEvent, Result, debug_warn, err, implement,
+	Event, PduEvent, Result, err, implement, info,
 	state_res::{self},
 };
 use futures::{
@@ -71,7 +71,7 @@ where
 
 				let limit = self.services.server.config.max_fetch_prev_events;
 				if amount >= limit {
-					debug_warn!("Max prev event limit reached! Limit: {limit}");
+					info!(target: "backfill", "Max prev event limit reached! Limit: {limit}");
 					graph.insert(prev_event_id, HashSet::new());
 					continue;
 				}

@@ -4,8 +4,8 @@ use std::{
 };
 
 use conduwuit::{
-	Event, PduEvent, debug, debug_warn, implement, matrix::event::gen_event_id_canonical_json,
-	trace, utils::continue_exponential_backoff_secs, warn,
+	Event, PduEvent, debug, implement, info, matrix::event::gen_event_id_canonical_json, trace,
+	utils::continue_exponential_backoff_secs, warn,
 };
 use futures::{
 	FutureExt,
@@ -63,13 +63,19 @@ where
 		if let Some((time, tries)) = self.services.globals.bad_event_ratelimiter.read().get(id) {
 			const MIN_DURATION: u64 = 60 * 2;
 			const MAX_DURATION: u64 = 60 * 60 * 8;
+			// These logs can be disabled with CONDUWUIT_LOG="auth_chain=off,backfill=off"
 			if continue_exponential_backoff_secs(
 				MIN_DURATION,
 				MAX_DURATION,
 				time.elapsed(),
 				*tries,
 			) {
-				debug_warn!(tried = ?*tries, elapsed = ?time.elapsed(), "Backing off from {id}");
+				info!(
+					target: "auth_chain",
+					tried = ?*tries,
+					elapsed = ?time.elapsed(),
+					"Backing off from {id} (ratelimited)"
+				);
 			} else {
 				active_fetches.push(
 					async move {
@@ -109,7 +115,7 @@ where
 
 		while let Some((next_id, fetch_res)) = active_fetches.next().await {
 			if events_all.len() >= limit.into() {
-				debug_warn!("Max auth event limit reached! Limit: {limit}");
+				info!(target: "auth_chain", "Max auth event limit reached! Limit: {limit}");
 				break;
 			}
 
@@ -167,14 +173,12 @@ where
 									};
 
 									if ratelimited {
-										trace!("Backing off from {auth_event} (auth event)");
+										info!(target: "auth_chain", "Backing off from {auth_event} (auth event ratelimited)");
 										continue;
 									}
 
 									if events_all.len() >= limit.into() {
-										debug_warn!(
-											"Max auth event limit reached! Limit: {limit}"
-										);
+										info!(target: "auth_chain", "Max auth event limit reached! Limit: {limit}");
 										break;
 									}
 
