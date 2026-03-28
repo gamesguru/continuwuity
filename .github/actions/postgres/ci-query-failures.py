@@ -91,13 +91,17 @@ passes_col = ""
 passes_agg = ""
 if show_passes:
     nl = "#01" if raw_mode else "\n"
-    passes_col = f",\n    counts.new_passes_list"
+    passes_col = ",\n    counts.new_passes_list"
     passes_agg = f",\n        string_agg(rd.test_name, E'{nl}') FILTER (WHERE rd.status = 'pass'::text AND (mb.status IS NULL OR mb.status <> 'pass'::text)) AS new_passes_list"
 
 nl_fail = "#01" if raw_mode else "\n"
-features_sql = "REPLACE(r.features, E'\n', '#01')" if raw_mode else "regexp_replace(r.features, '[ ,]+', E'\n', 'g')"
+features_sql = (
+    "REPLACE(r.features, E'\n', '#01')"
+    if raw_mode
+    else "regexp_replace(r.features, '[ ,]+', E'\n', 'g')"
+)
 
-query = f"{baseline_cte}
+query = f"""{baseline_cte}
 SELECT
     r.version_string,
     to_char(r.run_date AT TIME ZONE '{tz_sql}', 'YYYY-MM-DD HH24:MI:SS') AS run_date,
@@ -123,7 +127,8 @@ LEFT JOIN LATERAL (
     LEFT JOIN {baseline_table} mb ON mb.test_name = rd.test_name
     WHERE rd.run_id = r.id
 ) counts ON true
-WHERE r.n_pass > 0 AND counts.run_total > 0"
+WHERE r.n_pass > 0 AND counts.run_total > 0
+"""
 
 if like_str != "all":
     safe_like = like_str.replace("'", "''")
