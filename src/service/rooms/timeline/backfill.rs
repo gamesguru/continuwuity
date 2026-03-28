@@ -160,10 +160,19 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 			.await;
 		match response {
 			| Ok(response) => {
+				let pdus = response.pdus;
+				let num_pdus = pdus.len();
+				let mut counts = Vec::with_capacity(num_pdus);
+				for _ in 0..num_pdus {
+					counts.push(self.services.globals.next_count()?);
+				}
+
 				// We process the PDUs in reverse (oldest first) so that auth events
 				// are already in the database when newer events are processed.
-				for pdu in response.pdus.into_iter().rev() {
-					if let Err(e) = self.backfill_pdu(backfill_server, pdu).boxed().await {
+				// We assign counts such that the oldest PDU gets the largest count
+				// (smallest negative ID).
+				for (pdu, count) in pdus.into_iter().rev().zip(counts.into_iter().rev()) {
+					if let Err(e) = self.backfill_pdu(backfill_server, pdu, Some(count)).boxed().await {
 						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
 					}
 				}
@@ -299,7 +308,12 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 
 #[implement(super::Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
-pub async fn backfill_pdu(&self, origin: &ServerName, pdu: Box<RawJsonValue>) -> Result<()> {
+pub async fn backfill_pdu(
+	&self,
+	origin: &ServerName,
+	pdu: Box<RawJsonValue>,
+	count: Option<u64>,
+) -> Result<()> {
 	let (room_id, event_id, value) = self.services.event_handler.parse_incoming_pdu(&pdu).await?;
 
 	// Lock so we cannot backfill the same pdu twice at the same time
@@ -330,7 +344,10 @@ pub async fn backfill_pdu(&self, origin: &ServerName, pdu: Box<RawJsonValue>) ->
 
 	let insert_lock = self.mutex_insert.lock(&room_id).await;
 
-	let count: i64 = self.services.globals.next_count().unwrap().try_into()?;
+	let count: i64 = match count {
+		| Some(count) => count.try_into()?,
+		| None => self.services.globals.next_count()?.try_into()?,
+	};
 
 	let pdu_id: RawPduId = PduId {
 		shortroomid,
