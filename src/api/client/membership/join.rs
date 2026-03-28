@@ -699,8 +699,6 @@ async fn join_room_by_id_helper_remote(
 					.await
 					.unwrap_or_default();
 
-				use utils::TryFutureExtExt;
-
 				IterStream::stream(pending_invites)
 					.filter_map(|raw| async move {
 						let event_id: OwnedEventId = raw.get_field("event_id").ok().flatten()?;
@@ -900,7 +898,7 @@ async fn join_room_by_id_helper_local(
 		remote_servers = %servers.len(),
 		"Could not join room locally, attempting remote join",
 	);
-	join_room_by_id_helper_remote(
+	Box::pin(join_room_by_id_helper_remote(
 		services,
 		sender_user,
 		room_id,
@@ -908,7 +906,7 @@ async fn join_room_by_id_helper_local(
 		servers,
 		state_lock,
 		is_direct,
-	)
+	))
 	.await
 }
 
