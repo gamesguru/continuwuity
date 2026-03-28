@@ -11,8 +11,9 @@ use conduwuit::{
 };
 use database::{Deserialized, Ignore, Interfix, Map};
 use futures::{Stream, StreamExt, future::join5, pin_mut};
+use moka::sync::Cache;
 use ruma::{
-	OwnedRoomId, OwnedUserId, RoomId, ServerName, UserId,
+	OwnedRoomId, OwnedServerName, OwnedUserId, RoomId, ServerName, UserId,
 	events::{AnyStrippedStateEvent, room::member::MembershipState},
 	serde::Raw,
 };
@@ -21,6 +22,8 @@ use crate::{Dep, account_data, appservice::RegistrationInfo, config, globals, ro
 
 pub struct Service {
 	appservice_in_room_cache: AppServiceInRoomCache,
+	server_visibility_cache: Cache<(OwnedServerName, OwnedUserId), bool>,
+	user_visibility_cache: Cache<(OwnedUserId, OwnedUserId), bool>,
 	services: Services,
 	db: Data,
 }
@@ -60,6 +63,35 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			appservice_in_room_cache: SyncRwLock::new(HashMap::new()),
+			// Ugly way to build the cache with a dynamic capacity
+			server_visibility_cache: Cache::builder()
+				.max_capacity(
+					conduwuit::utils::math::usize_from_f64(
+						25_000.0
+							* args
+								.depend::<config::Service>("config")
+								.cache_capacity_modifier,
+					)
+					.unwrap_or(25_000)
+					.try_into()
+					.unwrap_or(25_000),
+				)
+				.time_to_idle(std::time::Duration::from_secs(5 * 60))
+				.build(),
+			user_visibility_cache: Cache::builder()
+				.max_capacity(
+					conduwuit::utils::math::usize_from_f64(
+						25_000.0
+							* args
+								.depend::<config::Service>("config")
+								.cache_capacity_modifier,
+					)
+					.unwrap_or(25_000)
+					.try_into()
+					.unwrap_or(25_000),
+				)
+				.time_to_idle(std::time::Duration::from_secs(5 * 60))
+				.build(),
 			services: Services {
 				account_data: args.depend::<account_data::Service>("account_data"),
 				config: args.depend::<config::Service>("config"),
@@ -183,19 +215,41 @@ pub fn server_rooms<'a>(
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn server_sees_user(&self, server: &ServerName, user_id: &UserId) -> bool {
-	self.server_rooms(server)
+	let key = (server.to_owned(), user_id.to_owned());
+	if let Some(sees) = self.server_visibility_cache.get(&key) {
+		return sees;
+	}
+
+	let sees = self
+		.server_rooms(server)
 		.any(|room_id| self.is_joined(user_id, room_id))
-		.await
+		.await;
+
+	self.server_visibility_cache.insert(key, sees);
+	sees
 }
 
 /// Returns true if user_a and user_b share at least one room.
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn user_sees_user(&self, user_a: &UserId, user_b: &UserId) -> bool {
+	let key = if user_a < user_b {
+		(user_a.to_owned(), user_b.to_owned())
+	} else {
+		(user_b.to_owned(), user_a.to_owned())
+	};
+
+	if let Some(sees) = self.user_visibility_cache.get(&key) {
+		return sees;
+	}
+
 	let get_shared_rooms = self.get_shared_rooms(user_a, user_b);
 
 	pin_mut!(get_shared_rooms);
-	get_shared_rooms.next().await.is_some()
+	let sees = get_shared_rooms.next().await.is_some();
+
+	self.user_visibility_cache.insert(key, sees);
+	sees
 }
 
 /// List the rooms common between two users

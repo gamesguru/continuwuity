@@ -658,6 +658,7 @@ async fn join_room_by_id_helper_remote(
 	}
 
 	info!("Compressing state from send_join");
+	let _cork = services.db.cork_and_flush();
 	let compressed: CompressedState = services
 		.rooms
 		.state_compressor

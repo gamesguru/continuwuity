@@ -47,7 +47,7 @@ struct StateDiff {
 #[derive(Clone, Default)]
 pub struct ShortStateInfo {
 	pub shortstatehash: ShortStateHash,
-	pub full_state: Arc<CompressedState>,
+	pub full_state: Option<Arc<CompressedState>>,
 	pub added: Arc<CompressedState>,
 	pub removed: Arc<CompressedState>,
 }
@@ -90,8 +90,10 @@ impl crate::Service for Service {
 			let ents = cache.iter().map(at!(1)).flat_map(|vec| vec.iter()).fold(
 				HashMap::new(),
 				|mut ents, ssi| {
-					for cs in &[&ssi.added, &ssi.removed, &ssi.full_state] {
-						ents.insert(Arc::as_ptr(cs), compressed_state_size(cs));
+					ents.insert(Arc::as_ptr(&ssi.added), compressed_state_size(&ssi.added));
+					ents.insert(Arc::as_ptr(&ssi.removed), compressed_state_size(&ssi.removed));
+					if let Some(ref fs) = ssi.full_state {
+						ents.insert(Arc::as_ptr(fs), compressed_state_size(fs));
 					}
 
 					ents
@@ -167,16 +169,25 @@ async fn new_shortstatehash_info(
 	let Some(parent) = parent else {
 		return Ok(vec![ShortStateInfo {
 			shortstatehash,
-			full_state: added.clone(),
+			full_state: Some(added.clone()),
 			added,
 			removed,
 		}]);
 	};
 
 	let mut stack = Box::pin(self.load_shortstatehash_info(parent)).await?;
-	let top = stack.last().expect("at least one frame");
+	let top = stack.last_mut().expect("at least one frame");
 
-	let mut full_state = (*top.full_state).clone();
+	let mut full_state = (**top
+		.full_state
+		.as_ref()
+		.expect("top frame must have full_state"))
+	.clone();
+
+	// Drop the full_state from the parent layer to save gigabytes of RAM
+	// on deeply nested room states.
+	top.full_state = None;
+
 	full_state.extend(added.iter().copied());
 
 	let removed = (*removed).clone();
@@ -188,7 +199,7 @@ async fn new_shortstatehash_info(
 		shortstatehash,
 		added,
 		removed: Arc::new(removed),
-		full_state: Arc::new(full_state),
+		full_state: Some(Arc::new(full_state)),
 	});
 
 	Ok(stack)
@@ -401,12 +412,19 @@ pub async fn save_state(
 
 	let (statediffnew, statediffremoved) = if let Some(parent_stateinfo) = states_parents.last() {
 		let statediffnew: CompressedState = new_state_ids_compressed
-			.difference(&parent_stateinfo.full_state)
+			.difference(
+				parent_stateinfo
+					.full_state
+					.as_ref()
+					.expect("top frame must have full_state"),
+			)
 			.copied()
 			.collect();
 
 		let statediffremoved: CompressedState = parent_stateinfo
 			.full_state
+			.as_ref()
+			.expect("top frame must have full_state")
 			.difference(&new_state_ids_compressed)
 			.copied()
 			.collect();
