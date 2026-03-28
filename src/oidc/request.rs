@@ -95,16 +95,16 @@ where
 		};
 
 		let (mut parts, body) = req.into_parts();
-		let query = Query::from_request_parts(&mut parts, state)
+		let query = Query::<NormalizedParameter>::from_request_parts(&mut parts, state)
 			.await
 			.ok()
-			.map(|q: Query<NormalizedParameter>| q.0);
+			.map(|q| q.0);
 
 		let req = Request::from_parts(parts, body);
-		let body = Form::from_request(req, state)
+		let body = Form::<NormalizedParameter>::from_request(req, state)
 			.await
 			.ok()
-			.map(|b: Form<NormalizedParameter>| b.0);
+			.map(|b| b.0);
 
 		// If the query is None or empty and the body has a request, copy it over
 		// because login forms are POST requests but OAuth flow expects
