@@ -40,7 +40,7 @@ impl crate::Service for Service {
 			cache: cache.clone(),
 			resolver: Resolver::build(args.server, cache)?,
 			resolving: MutexMap::new(),
-			semaphore: Semaphore::new(100),
+			semaphore: Semaphore::new(30),
 			services: Services {
 				server: args.server.clone(),
 				client: args.depend::<client::Service>("client"),
