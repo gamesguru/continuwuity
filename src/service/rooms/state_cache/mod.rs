@@ -233,6 +233,10 @@ pub async fn server_sees_user(&self, server: &ServerName, user_id: &UserId) -> b
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn user_sees_user(&self, user_a: &UserId, user_b: &UserId) -> bool {
+	if user_a == user_b {
+		return true;
+	}
+
 	let key = if user_a < user_b {
 		(user_a.to_owned(), user_b.to_owned())
 	} else {
@@ -280,6 +284,34 @@ pub fn room_members<'a>(
 		.keys_prefix(&prefix)
 		.ignore_err()
 		.map(|(_, user_id): (Ignore, &UserId)| user_id)
+}
+
+/// Invalidate user visibility cache for all users in the room.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn invalidate_user_visibility(&self, user_id: &UserId, room_id: &RoomId) {
+	self.room_members(room_id)
+		.ready_for_each(|other_user| {
+			let key = if user_id < other_user {
+				(user_id.to_owned(), other_user.to_owned())
+			} else {
+				(other_user.to_owned(), user_id.to_owned())
+			};
+			self.user_visibility_cache.invalidate(&key);
+		})
+		.await;
+}
+
+/// Invalidate server visibility cache for the user and all servers in the room.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn invalidate_server_visibility(&self, user_id: &UserId, room_id: &RoomId) {
+	self.room_servers(room_id)
+		.ready_for_each(|server| {
+			self.server_visibility_cache
+				.invalidate(&(server.to_owned(), user_id.to_owned()));
+		})
+		.await;
 }
 
 /// Returns the number of users which are currently in a room
