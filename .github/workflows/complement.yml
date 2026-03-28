@@ -362,6 +362,7 @@ jobs:
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
               `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
+              `**Logs:** [View / Download Logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               '',
               '| Status | Count |',
               '|--------|-------|',
