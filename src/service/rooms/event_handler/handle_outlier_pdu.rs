@@ -27,6 +27,16 @@ pub async fn handle_outlier_pdu<'a, Pdu>(
 where
 	Pdu: Event + Send + Sync,
 {
+	// Skip the PDU if we already have it
+	if let (Ok(pdu), Ok(json)) = (
+		self.services.timeline.get_pdu(event_id).await,
+		self.services.timeline.get_pdu_json(event_id).await,
+	) {
+		if pdu.room_id_or_hash() == *room_id {
+			return Ok((pdu, json));
+		}
+	}
+
 	if !pdu_fits(&mut value.clone()) {
 		warn!(
 			"dropping incoming PDU {event_id} in room {room_id} from {origin} because it \
@@ -34,13 +44,13 @@ where
 		);
 		return Err!(Request(TooLarge("PDU is too large")));
 	}
-	// 1. Remove unsigned field
+	// Remove unsigned field
 	value.remove("unsigned");
 
 	// TODO: For RoomVersion6 we must check that Raw<..> is canonical do we anywhere?: https://matrix.org/docs/spec/rooms/v6#canonical-json
 
-	// 2. Check signatures, otherwise drop
-	// 3. check content hash, redact if doesn't match
+	// Check signatures, otherwise drop
+	// check content hash, redact if doesn't match
 	let room_version_id = get_room_version_id(create_event)?;
 	let mut incoming_pdu = match self
 		.services
@@ -52,19 +62,8 @@ where
 		| Ok(ruma::signatures::Verified::Signatures) => {
 			// Redact
 			debug_info!("Calculated hash does not match (redaction): {event_id}");
-			let Ok(obj) = ruma::canonical_json::redact(value, &room_version_id, None) else {
-				return Err!(Request(InvalidParam("Redaction failed")));
-			};
-
-			// Skip the PDU if it is redacted and we already have it as an outlier event
-			if let (Ok(pdu), Ok(json)) = (
-				self.services.timeline.get_pdu(event_id).await,
-				self.services.timeline.get_pdu_json(event_id).await,
-			) {
-				return Ok((pdu, json));
-			}
-
-			obj
+			ruma::canonical_json::redact(value, &room_version_id, None)
+				.map_err(|_| err!(Request(InvalidParam("Redaction failed"))))?
 		},
 		| Err(e) => {
 			return Err!(Request(InvalidParam(debug_error!(

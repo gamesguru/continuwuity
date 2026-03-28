@@ -49,7 +49,10 @@ where
 
 	for id in initial_set {
 		if fetching.len() >= limit.into() {
-			break;
+			if !graph.contains_key(id) && !fetching.contains(id) {
+				graph.insert(id.to_owned(), HashSet::new());
+			}
+			continue;
 		}
 
 		if self.services.pdu_metadata.is_event_soft_failed(id).await {
@@ -74,10 +77,6 @@ where
 
 	while let Some((prev_event_id, mut fetched)) = active_fetches.next().await {
 		self.services.server.check_running()?;
-
-		if amount >= limit.into() {
-			break;
-		}
 
 		match fetched.pop() {
 			| Some((pdu, mut json_opt)) => {
