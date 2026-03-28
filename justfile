@@ -112,8 +112,14 @@ prebuild-rocksdb:
         hostname() { uname -n; }
         export -f hostname
     fi
-    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4)
-    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3)
+    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 || true)
+    if [ -z "$TAG" ]; then
+        TAG="continuwuity-v0.5.0"
+    fi
+    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 || true)
+    if [ -z "$REPO" ]; then
+        REPO="https://forgejo.ellis.link/continuwuation/rocksdb.git"
+    fi
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning rocksdb $TAG..."
     if [ ! -d "/usr/local/build/rocksdb" ]; then
@@ -136,7 +142,7 @@ install-rocksdb:
     @echo "Installing RocksDB to /usr/local... (Requires sudo)"
     cd /usr/local/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local
     cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
-    sudo cp ldb /usr/local/bin/ldb || true
+    sudo cp -p /usr/local/build/rocksdb/ldb /usr/local/bin/ldb
     sudo ldconfig
     @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
 
