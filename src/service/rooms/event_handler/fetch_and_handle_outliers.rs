@@ -59,48 +59,58 @@ where
 		let mut events_all = HashSet::with_capacity(32);
 		let mut active_fetches = FuturesUnordered::new();
 
-		active_fetches.push(
-			async move {
-				let id = id.to_owned();
-				let res = self
-					.services
-					.sending
-					.send_federation_request(origin, get_event::v1::Request {
-						event_id: id.clone(),
-						include_unredacted_content: None,
-					})
-					.await;
-				(id, res)
+		let limit = self.services.server.config.max_fetch_prev_events;
+		if let Some((time, tries)) = self.services.globals.bad_event_ratelimiter.read().get(id) {
+			const MIN_DURATION: u64 = 60 * 2;
+			const MAX_DURATION: u64 = 60 * 60 * 8;
+			if continue_exponential_backoff_secs(
+				MIN_DURATION,
+				MAX_DURATION,
+				time.elapsed(),
+				*tries,
+			) {
+				debug_warn!(tried = ?*tries, elapsed = ?time.elapsed(), "Backing off from {id}");
+			} else {
+				active_fetches.push(
+					async move {
+						let id = id.to_owned();
+						let res = self
+							.services
+							.sending
+							.send_federation_request(origin, get_event::v1::Request {
+								event_id: id.clone(),
+								include_unredacted_content: None,
+							})
+							.await;
+						(id, res)
+					}
+					.boxed(),
+				);
+				events_all.insert(id.to_owned());
 			}
-			.boxed(),
-		);
-		events_all.insert(id.to_owned());
+		} else {
+			active_fetches.push(
+				async move {
+					let id = id.to_owned();
+					let res = self
+						.services
+						.sending
+						.send_federation_request(origin, get_event::v1::Request {
+							event_id: id.clone(),
+							include_unredacted_content: None,
+						})
+						.await;
+					(id, res)
+				}
+				.boxed(),
+			);
+			events_all.insert(id.to_owned());
+		}
 
 		while let Some((next_id, fetch_res)) = active_fetches.next().await {
-			let limit = self.services.server.config.max_fetch_prev_events;
 			if events_all.len() >= limit.into() {
 				debug_warn!("Max auth event limit reached! Limit: {limit}");
 				break;
-			}
-
-			if let Some((time, tries)) = self
-				.services
-				.globals
-				.bad_event_ratelimiter
-				.read()
-				.get(&*next_id)
-			{
-				const MIN_DURATION: u64 = 60 * 2;
-				const MAX_DURATION: u64 = 60 * 60 * 8;
-				if continue_exponential_backoff_secs(
-					MIN_DURATION,
-					MAX_DURATION,
-					time.elapsed(),
-					*tries,
-				) {
-					debug_warn!(tried = ?*tries, elapsed = ?time.elapsed(), "Backing off from {next_id}");
-					continue;
-				}
 			}
 
 			match fetch_res {
@@ -137,6 +147,37 @@ where
 								if !events_all.contains(&auth_event)
 									&& !self.services.timeline.pdu_exists(&auth_event).await
 								{
+									let ratelimited = if let Some((time, tries)) = self
+										.services
+										.globals
+										.bad_event_ratelimiter
+										.read()
+										.get(&*auth_event)
+									{
+										const MIN_DURATION: u64 = 60 * 2;
+										const MAX_DURATION: u64 = 60 * 60 * 8;
+										continue_exponential_backoff_secs(
+											MIN_DURATION,
+											MAX_DURATION,
+											time.elapsed(),
+											*tries,
+										)
+									} else {
+										false
+									};
+
+									if ratelimited {
+										trace!("Backing off from {auth_event} (auth event)");
+										continue;
+									}
+
+									if events_all.len() >= limit.into() {
+										debug_warn!(
+											"Max auth event limit reached! Limit: {limit}"
+										);
+										break;
+									}
+
 									trace!(
 										"Found auth event id {auth_event} for event {next_id}"
 									);

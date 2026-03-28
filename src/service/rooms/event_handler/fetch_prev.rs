@@ -70,7 +70,7 @@ where
 				check_room_id(room_id, &pdu)?;
 
 				let limit = self.services.server.config.max_fetch_prev_events;
-				if amount > limit {
+				if amount >= limit {
 					debug_warn!("Max prev event limit reached! Limit: {limit}");
 					graph.insert(prev_event_id, HashSet::new());
 					continue;
