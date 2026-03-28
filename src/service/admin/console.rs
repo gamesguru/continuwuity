@@ -196,10 +196,21 @@ impl Console {
 						continue;
 					}
 
-					let result = self
-						.admin
-						.command_in_place(input, None, InvocationSource::Console)
-						.await;
+					let admin_future =
+						self.admin
+							.command_in_place(input, None, InvocationSource::Console);
+
+					tokio::pin!(admin_future);
+
+					let result = tokio::select! {
+						res = &mut admin_future => res,
+						res = reader.fill_buf() => {
+							match res {
+								| Ok([]) | Err(_) => return, // EOF or Error
+								| Ok(_) => admin_future.await,
+							}
+						}
+					};
 
 					let output_body = match result {
 						| Ok(Some(ref content)) | Err(ref content) => content.body(),
