@@ -527,7 +527,11 @@ async fn retroactively_fix_bad_data_from_roomuserid_joined(services: &Services) 
 
 		for user_id in &joined_members {
 			debug_info!("User is joined, marking as joined");
-			services.rooms.state_cache.mark_as_joined(user_id, room_id);
+			services
+				.rooms
+				.state_cache
+				.mark_as_joined(user_id, room_id)
+				.await;
 		}
 
 		for user_id in &non_joined_members {
