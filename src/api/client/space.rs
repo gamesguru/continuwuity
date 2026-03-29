@@ -1,5 +1,5 @@
 use std::{
-	collections::{BTreeSet, VecDeque},
+	collections::{BTreeSet, HashSet, VecDeque},
 	str::FromStr,
 };
 
@@ -14,7 +14,7 @@ use conduwuit_service::{
 		PaginationToken, SummaryAccessibility, get_parent_children_via, summary_to_chunk,
 	},
 };
-use futures::{StreamExt, future::OptionFuture, stream::FuturesUnordered};
+use futures::{StreamExt, future::OptionFuture};
 use ruma::{
 	OwnedRoomId, OwnedServerName, RoomId, UInt, UserId, api::client::space::get_hierarchy,
 };
@@ -94,85 +94,67 @@ where
 	.into();
 
 	let mut rooms = Vec::with_capacity(limit);
+
 	let mut parents = BTreeSet::new();
-	let mut active_fetches = FuturesUnordered::new();
-	let max_concurrent_fetches = 10;
+	let mut seen: HashSet<OwnedRoomId> = HashSet::new();
+	seen.insert(room_id.to_owned());
 
-	loop {
-		while active_fetches.len() < max_concurrent_fetches && !queue.is_empty() {
-			if rooms.len().saturating_add(active_fetches.len()) >= limit {
-				break;
-			}
-
-			if let Some((current_room, via)) = queue.pop_back() {
-				active_fetches.push(async move {
-					let summary = services
-						.rooms
-						.spaces
-						.get_summary_and_children_client(
-							&current_room,
-							suggested_only,
-							sender_user,
-							&via,
-						)
-						.await;
-
-					(current_room, summary)
-				});
-			}
-		}
-
-		if active_fetches.is_empty() {
+	while let Some((current_room, via)) = queue.pop_back() {
+		if rooms.len() >= limit {
 			break;
 		}
 
-		if let Some((current_room, summary_res)) = active_fetches.next().await {
-			let summary = match summary_res {
-				| Ok(s) => s,
-				| Err(e) => return Err(e),
-			};
+		let summary_res = services
+			.rooms
+			.spaces
+			.get_summary_and_children_client(&current_room, suggested_only, sender_user, &via)
+			.await;
 
-			match (summary, current_room == *room_id) {
-				| (None | Some(SummaryAccessibility::Inaccessible), false) => {
-					// Just ignore other unavailable rooms
-				},
-				| (None, true) => {
-					return Err!(Request(Forbidden("The requested room was not found")));
-				},
-				| (Some(SummaryAccessibility::Inaccessible), true) => {
-					return Err!(Request(Forbidden("The requested room is inaccessible")));
-				},
-				| (Some(SummaryAccessibility::Accessible(summary)), _) => {
-					let populate = parents.len() >= short_room_ids.clone().count();
+		let summary = match summary_res {
+			| Ok(s) => s,
+			| Err(e) => return Err(e),
+		};
 
-					let children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
-						.filter(|(room, _)| !parents.contains(room))
-						.rev()
-						.map(|(key, val)| (key, val.collect()))
-						.collect();
+		match (summary, current_room == *room_id) {
+			| (None | Some(SummaryAccessibility::Inaccessible), false) => {
+				// Just ignore other unavailable rooms
+			},
+			| (None, true) => {
+				return Err!(Request(Forbidden("The requested room was not found")));
+			},
+			| (Some(SummaryAccessibility::Inaccessible), true) => {
+				return Err!(Request(Forbidden("The requested room is inaccessible")));
+			},
+			| (Some(SummaryAccessibility::Accessible(summary)), _) => {
+				let populate = parents.len() >= short_room_ids.clone().count();
 
-					if populate {
-						rooms.push(summary_to_chunk(summary.clone()));
-					} else if let Some(target) = short_room_ids.clone().nth(parents.len()) {
-						for (room, _) in &children {
-							if let Ok(short) = services.rooms.short.get_shortroomid(room).await {
-								if short == *target {
-									// Found the room we were looking for in paginated state
-									break;
-								}
+				let children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
+					.filter(|(room, _)| seen.insert((*room).clone()))
+					.rev()
+					.map(|(key, val)| (key, val.collect()))
+					.collect();
+
+				if populate {
+					rooms.push(summary_to_chunk(summary.clone()));
+				} else if let Some(target) = short_room_ids.clone().nth(parents.len()) {
+					for (room, _) in &children {
+						if let Ok(short) = services.rooms.short.get_shortroomid(room).await {
+							if short == *target {
+								// Found the room we were looking for in paginated state
+								break;
 							}
 						}
 					}
+				}
 
-					parents.insert(current_room.clone());
+				parents.insert(current_room.clone());
 
-					if parents.len() > max_depth {
-						continue;
-					}
+				if parents.len() > max_depth {
+					continue;
+				}
 
-					queue.extend(children);
-				},
-			}
+				queue.extend(children);
+			},
 		}
 	}
 
