@@ -84,13 +84,38 @@ impl crate::Service for Service {
 			None
 		};
 
-		// Timers scheduled to auto-demote idle users (online -> unavailable -> offline)
 		let mut presence_timers =
 			std::collections::HashMap::<OwnedUserId, tokio::task::JoinHandle<()>>::new();
 		let mut events_received: u64 = 0;
 		let mut next_tally = Instant::now()
 			.checked_add(Duration::from_secs(300))
 			.unwrap_or_else(Instant::now);
+
+		let self_flush = Arc::clone(&self);
+		let flush_task = self.services.server.runtime().spawn(async move {
+			let mut interval = tokio::time::interval(Duration::from_secs(5));
+			loop {
+				interval.tick().await;
+				if !self_flush.services.server.running() {
+					break;
+				}
+
+				let servers: Vec<_> = self_flush
+					.pending_updates
+					.iter()
+					.map(|kv| kv.key().clone())
+					.collect();
+				if !servers.is_empty() {
+					let server_refs = servers.iter().map(AsRef::as_ref);
+					self_flush
+						.services
+						.sending
+						.flush_servers(futures::stream::iter(server_refs))
+						.await
+						.ok();
+				}
+			}
+		});
 
 		while !receiver.is_closed() {
 			let event = receiver.recv_async().await;
@@ -134,6 +159,8 @@ impl crate::Service for Service {
 					.unwrap_or_else(Instant::now);
 			}
 		}
+
+		flush_task.abort();
 
 		if let Some(task) = startup_task {
 			_ = task.await;
@@ -422,15 +449,7 @@ impl Service {
 				.insert(user_id.to_owned());
 		}
 
-		// Wake up sender
-		let server_refs = servers.iter().map(AsRef::as_ref);
-		self.services
-			.sending
-			.flush_servers(futures::stream::iter(server_refs))
-			.await
-			.log_err()
-			.ok();
-
+		// 5-sec flusher task in worker() broadcasts updates and wakes up sender
 		Ok(())
 	}
 }

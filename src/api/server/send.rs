@@ -409,7 +409,10 @@ async fn handle_edu_presence(
 			handle_edu_presence_update(services, origin, update)
 		});
 
-	if let Err(_) = tokio::time::timeout(Duration::from_secs(5), fut).await {
+	if tokio::time::timeout(Duration::from_secs(5), fut)
+		.await
+		.is_err()
+	{
 		debug_warn!(
 			"Congestion: presence updates from {} took longer than 5s, dropping remaining",
 			origin

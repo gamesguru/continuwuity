@@ -111,7 +111,7 @@ where
 				.get_summary_and_children_client(&current_room, suggested_only, sender_user, &via)
 				.await?;
 
-			conduwuit::Result::Ok((current_room, summary))
+			Ok::<_, conduwuit::Error>((current_room, summary))
 		});
 
 		let results = futures::future::try_join_all(fetches).await?;
