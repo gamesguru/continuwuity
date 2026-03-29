@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use conduwuit::{Result, SyncRwLock, err, utils};
+use conduwuit::{Result, SyncRwLock, utils};
 use database::{Database, Deserialized, Map};
 
 pub struct Data {
@@ -38,9 +38,7 @@ impl Data {
 		);
 
 		let start = *counter;
-		*counter = counter
-			.checked_add(diff)
-			.ok_or_else(|| err!(Arithmetic("Counter overflow")))?;
+		*counter = counter.checked_add(diff).unwrap_or(*counter);
 
 		self.global.insert(COUNTER, counter.to_be_bytes());
 
