@@ -183,6 +183,7 @@ pub(super) async fn load_left_room(
 			build_state_initial(
 				services,
 				syncing_user,
+				room_id,
 				shortstatehash,
 				lazily_loaded_members.as_ref(),
 			)
@@ -295,6 +296,7 @@ async fn build_left_state_and_timeline(
 	let mut state = build_state_initial(
 		services,
 		syncing_user,
+		room_id,
 		timeline_start_shortstatehash,
 		lazily_loaded_members.as_ref(),
 	)

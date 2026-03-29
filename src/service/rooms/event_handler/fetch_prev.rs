@@ -1,5 +1,5 @@
 use std::{
-	collections::{BTreeMap, HashMap, HashSet},
+	collections::{BTreeMap, HashMap, HashSet, VecDeque},
 	iter::once,
 };
 
@@ -46,36 +46,60 @@ where
 	let limit = self.services.server.config.max_fetch_prev_events;
 	let mut active_fetches = FuturesUnordered::new();
 	let mut fetching: HashSet<OwnedEventId> = HashSet::new();
+	let mut todo: VecDeque<OwnedEventId> = VecDeque::new();
 
 	for id in initial_set {
-		if fetching.len() >= limit.into() {
-			if !graph.contains_key(id) && !fetching.contains(id) {
-				graph.insert(id.to_owned(), HashSet::new());
-			}
-			continue;
-		}
-
-		if self.services.pdu_metadata.is_event_soft_failed(id).await {
-			info!(target: "backfill", "Skipping known soft-failed event: {id}");
-			continue;
-		}
-
-		let id = id.to_owned();
-		fetching.insert(id.clone());
-		active_fetches.push(
-			async move {
-				let res = self
-					.fetch_and_handle_outliers(origin, once(id.as_ref()), create_event, room_id)
-					.await;
-				(id, res)
-			}
-			.boxed(),
-		);
+		todo.push_back(id.to_owned());
 	}
 
 	let mut amount: u64 = 0;
+	loop {
+		// Fill active_fetches from todo up to concurrency limit and total budget
+		while active_fetches.len() < 16
+			&& !todo.is_empty()
+			&& amount.saturating_add(u64::try_from(active_fetches.len()).unwrap_or(u64::MAX))
+				< limit.into()
+		{
+			let id = todo.pop_front().expect("not empty");
+			if self.services.pdu_metadata.is_event_soft_failed(&id).await {
+				info!(target: "backfill", "Skipping known soft-failed event: {id}");
+				graph.insert(id, HashSet::new());
+				continue;
+			}
 
-	while let Some((prev_event_id, mut fetched)) = active_fetches.next().await {
+			if fetching.contains(&id) {
+				continue;
+			}
+
+			fetching.insert(id.clone());
+			active_fetches.push(
+				async move {
+					let res = self
+						.fetch_and_handle_outliers(
+							origin,
+							once(id.as_ref()),
+							create_event,
+							room_id,
+						)
+						.await;
+					(id, res)
+				}
+				.boxed(),
+			);
+		}
+
+		if active_fetches.is_empty() {
+			// If we still have todo items but active_fetches is empty, we hit the limit
+			for id in todo {
+				graph.insert(id, HashSet::new());
+			}
+			break;
+		}
+
+		let Some((prev_event_id, mut fetched)) = active_fetches.next().await else {
+			break;
+		};
+
 		self.services.server.check_running()?;
 
 		match fetched.pop() {
@@ -96,42 +120,7 @@ where
 						amount = amount.saturating_add(1);
 						for prev_prev in pdu.prev_events() {
 							if !graph.contains_key(prev_prev) && !fetching.contains(prev_prev) {
-								if self
-									.services
-									.pdu_metadata
-									.is_event_soft_failed(prev_prev)
-									.await
-								{
-									info!(target: "backfill", "Skipping known soft-failed prev event: {prev_prev}");
-									graph.insert(prev_prev.to_owned(), HashSet::new());
-									continue;
-								}
-
-								if amount.saturating_add(
-									u64::try_from(active_fetches.len()).unwrap_or(u64::MAX),
-								) >= limit.into()
-								{
-									info!(target: "backfill", "Max prev event limit reached! Limit: {limit}");
-									graph.insert(prev_prev.to_owned(), HashSet::new());
-									continue;
-								}
-
-								let prev_prev = prev_prev.to_owned();
-								fetching.insert(prev_prev.clone());
-								active_fetches.push(
-									async move {
-										let res = self
-											.fetch_and_handle_outliers(
-												origin,
-												once(prev_prev.as_ref()),
-												create_event,
-												room_id,
-											)
-											.await;
-										(prev_prev, res)
-									}
-									.boxed(),
-								);
+								todo.push_back(prev_prev.to_owned());
 							}
 						}
 

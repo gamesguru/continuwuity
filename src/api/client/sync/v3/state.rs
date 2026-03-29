@@ -7,7 +7,7 @@ use conduwuit::{
 		pdu::{PduCount, PduEvent},
 	},
 	utils::{
-		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
+		BoolExt, IterStream, ReadyExt,
 		stream::{BroadbandExt, TryIgnore},
 	},
 };
@@ -15,13 +15,55 @@ use conduwuit_service::{
 	Services,
 	rooms::{lazy_loading::MemberSet, short::ShortStateHash},
 };
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use itertools::Itertools;
 use ruma::{OwnedEventId, RoomId, UserId, events::StateEventType};
 use service::rooms::short::ShortEventId;
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::client::TimelinePdus;
+
+/// Helper to get a membership event for a user in a room with fallbacks.
+async fn get_member_pdu_best_effort(
+	services: &Services,
+	room_id: &RoomId,
+	user_id: &UserId,
+	shortstatehash: ShortStateHash,
+) -> Option<PduEvent> {
+	// Try provided shortstatehash (spec-compliant for the start of the timeline)
+	if let Ok(pdu) = services
+		.rooms
+		.state_accessor
+		.state_get(shortstatehash, &StateEventType::RoomMember, user_id.as_str())
+		.await
+	{
+		return Some(pdu);
+	}
+
+	// Try current room state (fallback if incomplete state at timeline start)
+	if let Ok(pdu) = services
+		.rooms
+		.state_accessor
+		.room_state_get(room_id, &StateEventType::RoomMember, user_id.as_str())
+		.await
+	{
+		debug!(%user_id, %room_id, "Lazy load: Found member in current room state (fallback)");
+		return Some(pdu);
+	}
+
+	// Try left_state if they are no longer in the room
+	if let Ok(Some(pdu)) = services
+		.rooms
+		.state_cache
+		.left_state(user_id, room_id)
+		.await
+	{
+		debug!(%user_id, %room_id, "Lazy load: Found member in left_state cache (fallback)");
+		return Some(pdu);
+	}
+
+	None
+}
 
 /// Calculate the state events to include in an initial sync response.
 ///
@@ -38,6 +80,7 @@ use crate::client::TimelinePdus;
 pub(super) async fn build_state_initial(
 	services: &Services,
 	sender_user: &UserId,
+	room_id: &RoomId,
 	timeline_start_shortstatehash: ShortStateHash,
 	lazily_loaded_members: Option<&MemberSet>,
 ) -> Result<Vec<PduEvent>> {
@@ -78,7 +121,7 @@ pub(super) async fn build_state_initial(
 		.collect()
 		.await;
 
-	services
+	let mut state_events = services
 		.rooms
 		.short
 		.multi_get_eventid_from_short::<OwnedEventId, _>(
@@ -88,9 +131,44 @@ pub(super) async fn build_state_initial(
 		.broad_filter_map(|event_id: OwnedEventId| async move {
 			services.rooms.timeline.get_pdu(&event_id).await.ok()
 		})
-		.collect()
-		.map(Ok)
-		.await
+		.collect::<Vec<_>>()
+		.await;
+
+	// if lazy loading is enabled, ensure ALL requested members are present.
+	// missing members is a common federated room issue w/ partial state history
+	if let Some(lazily_loaded_members) = lazily_loaded_members {
+		let missing_members: Vec<_> = lazily_loaded_members
+			.iter()
+			.stream()
+			.ready_filter(|user_id| {
+				let already_present = state_events.iter().any(|pdu| {
+					pdu.kind == StateEventType::RoomMember.into()
+						&& pdu.state_key.as_deref() == Some(user_id.as_str())
+				});
+				!already_present
+			})
+			.broad_filter_map(|user_id| async move {
+				get_member_pdu_best_effort(
+					services,
+					room_id,
+					user_id,
+					timeline_start_shortstatehash,
+				)
+				.await
+			})
+			.collect()
+			.await;
+
+		if !missing_members.is_empty() {
+			trace!(
+				"Added {} missing lazily loaded members to initial sync",
+				missing_members.len()
+			);
+			state_events.extend(missing_members);
+		}
+	}
+
+	Ok(state_events)
 }
 
 /// Calculate the state events to include in an incremental sync response.
@@ -186,16 +264,13 @@ pub(super) async fn build_state_incremental<'a>(
 							return None;
 						}
 
-						services
-							.rooms
-							.state_accessor
-							.state_get(
-								timeline_start_shortstatehash,
-								&StateEventType::RoomMember,
-								user_id.as_str(),
-							)
-							.ok()
-							.await
+						get_member_pdu_best_effort(
+							services,
+							room_id,
+							user_id,
+							timeline_start_shortstatehash,
+						)
+						.await
 					})
 					.collect()
 					.await;
