@@ -7,6 +7,10 @@ _help:
 # and trashing your target/ directory. After building, use the install commands
 # to make them available to Cargo, RustRover, and your system.
 
+
+# Central metadata for C/C++ dependencies
+CSV := ".github/ellis_link_deps.csv"
+
 # Initialize the global build directory
 init-prebuild:
     @echo "Creating /usr/local/build and assigning ownership to $USER... (Requires sudo)"
@@ -103,20 +107,42 @@ install-lz4:
 prebuild-rocksdb:
     #!/usr/bin/env bash
     set -e
-    TAG="continuwuity-v0.5.0"
+    # satisfy build_detect_platform if hostname is missing
+    if ! command -v hostname >/dev/null 2>&1; then
+        hostname() { uname -n; }
+        export -f hostname
+    fi
+    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 || true)
+    if [ -z "$TAG" ]; then
+        TAG="continuwuity-v0.5.0"
+    fi
+    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 || true)
+    if [ -z "$REPO" ]; then
+        REPO="https://forgejo.ellis.link/continuwuation/rocksdb.git"
+    fi
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning rocksdb $TAG..."
-    [ ! -d "/usr/local/build/rocksdb" ] && git clone --recursive --depth 1 --branch $TAG https://forgejo.ellis.link/continuwuation/rocksdb.git /usr/local/build/rocksdb || true
+    if [ ! -d "/usr/local/build/rocksdb" ]; then
+        git clone --recursive "$REPO" /usr/local/build/rocksdb
+    fi
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb
-    git checkout $TAG
-    env DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=1 make shared_lib static_lib -j$(nproc)
+    git fetch origin
+    git checkout "$TAG"
+
+    # Build core libraries explicitly WITHOUT RTTI
+    env ROCKSDB_NO_FBCODE=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
+
+    # Build ldb
+    # env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 DISABLE_SNAPPY=1 make ldb
+    env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 make ldb
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
     @echo "Installing RocksDB to /usr/local... (Requires sudo)"
     cd /usr/local/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local
     cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
+    sudo cp -p /usr/local/build/rocksdb/ldb /usr/local/bin/ldb
     sudo ldconfig
     @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
 
