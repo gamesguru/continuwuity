@@ -1,8 +1,9 @@
-continuwuity
-============
+**************
+ continuwuity
+**************
 
 A community-driven `Matrix <https://matrix.org/>`__ homeserver in Rust
-----------------------------------------------------------------------
+######################################################################
 
 continuwuity is a Matrix homeserver written in Rust.
 It's the official community continuation of the `conduwuit <https://github.com/girlbossceo/conduwuit>`_ homeserver.
@@ -13,30 +14,32 @@ It's the official community continuation of the `conduwuit <https://github.com/g
 
 |comp_fg|
 
-Why does this exist?
-~~~~~~~~~~~~~~~~~~~~
+Why the fork?
+~~~~~~~~~~~~~
 
-The original conduwuit project has been archived and is no longer maintained. Rather than letting this Rust-based Matrix homeserver disappear, a group of community contributors have forked the project to continue its development, fix outstanding issues, and add new features.
+I make too many changes and PRs, all of them non-breaking and additive (so, yes, it's fully backward-compatible).
 
-We aim to provide a stable, well-maintained alternative for current conduwuit users and welcome newcomers seeking a lightweight, efficient Matrix homeserver.
+I cannot realistically PR all of the improvements I make into the main repo, so I've set up this fork.
 
-What is Matrix?
-~~~~~~~~~~~~~~~
+The main branch is generally the most stable. Feature branches are best avoided unless talking to me first.
 
-`Matrix <https://matrix.org>`__ is an open, federated, and extensible network for decentralized communication. Users from any Matrix homeserver can chat with users from all other homeservers over federation. Matrix is designed to be extensible and built on top of. You can even use bridges such as Matrix Appservices to communicate with users outside of Matrix, like a community on Discord.
+Complement tests have been added, as well functionality for these:
 
-What are the project's goals?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code-block:: text
 
-Continuwuity aims to:
+   ✓  tests/msc3890 (9.129s) [Remotely silence local notifications]
+   ✓  tests/msc3967 (9.445s) [Do not require UIA when uploading cross-signing keys]
+   ✓  tests/msc4155 (19.007s) [Invite filtering]
+   ✓  tests/msc4222 (11.685s) [Adding `state_after` to `/sync`]
 
-* Maintain a stable, reliable Matrix homeserver implementation in Rust
-* Improve compatibility and specification compliance with the Matrix protocol
-* Fix bugs and performance issues from the original conduwuit
-* Add missing features needed by homeserver administrators
-* Provide comprehensive documentation and easy deployment options
-* Create a sustainable development model for long-term maintenance
-* Keep a lightweight, efficient codebase that can run on modest hardware
+   ✓ MSC3266 [Room summaries]
+   ✓ MSC3890 [Remotely silence local notifications]
+   ✓ MSC4289 [Explicitly privilege room creators]
+
+   TODO:
+
+   - MSC4108 [QR Code login]
+   - other complement failures relevant to continuwuity
 
 Chats to join (my fork)
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -45,19 +48,6 @@ Chats to join (my fork)
 * `#matrix-meta:nutra.tk <https://matrix.to/#/!DEQ3Gb1XlHZHTgNHNw:nutra.tk>`_ (Matrix/Meta talk)
 * `#matrix-testing:nutra.tk <https://matrix.to/#/!D1J4GsCJBfrgJ0aXT0:nutra.tk>`_ (Testing room)
 
-Can I migrate my data from x?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-* Conduwuit: Yes
-* Conduit: No, database is now incompatible
-* Tuwunel: Generally not
-* Grapevine: No, database is now incompatible
-* Dendrite: No
-* Synapse: No
-
-We haven't written up a guide on migrating from incompatible homeservers yet. Reach out to us if you need to do this!
-
-
 .. Substitutions for Badges
 
 .. |comp_gh| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main.json
@@ -65,5 +55,10 @@ We haven't written up a guide on migrating from incompatible homeservers yet. Re
    :alt: Complement Tests (GitHub)
 
 .. |comp_fg| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main-upstream.json
-   :target: https://github.com/gamesguru/continuwuity/actions/workflows/complement.yml?query=branch%3Amain-upstream
+   :target: https://forgejo.ellis.link/gamesguru/continuwuity/actions?workflow=complement.yml&actor=0&status=0
    :alt: Complement Tests (Forge)
+
+License
+#######
+
+This project incorporates components licensed under the `Apache License 2.0 <LICENSE>`_ AND the `GNU Affero General Public License v3.0 <LICENSE-AGPL>`_. Because you must comply with both, the strong copyleft network requirements of the AGPL are enforced.

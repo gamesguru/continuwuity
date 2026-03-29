@@ -145,6 +145,10 @@ pub struct Config {
 	/// engine API. To use this, set a database backup path that continuwuity
 	/// can write to.
 	///
+	/// If you are using systemd, you will need to add the path to
+	/// ReadWritePaths in the service file, preferably via a drop-in file
+	/// through `systemctl edit`.
+	///
 	/// For more information, see:
 	/// https://continuwuity.org/maintenance.html#backups
 	///
@@ -294,6 +298,13 @@ pub struct Config {
 	/// This value is critical for the server to federate efficiently.
 	/// NXDOMAIN's are assumed to not be returning to the federation and
 	/// aggressively cached rather than constantly rechecked.
+	///
+	/// Note: For massive system-level bandwidth savings, it's highly
+	/// recommended you install a dedicated localized caching resolver
+	/// explicitly on your host (such as Unbound, dnsmasq, or systemd-resolved)
+	/// rather than forwarding directly to public resolvers (like 1.1.1.1).
+	/// This ensures aggressive NXDomain/NoData lookups are caught efficiently
+	/// at the OS level.
 	///
 	/// Defaults to 3 days as these are *very rarely* false negatives.
 	///
@@ -881,14 +892,20 @@ pub struct Config {
 
 	/// Max log level for continuwuity. Allows debug, info, warn, or error.
 	///
+	/// You can append specific module filters or custom targets to this string
+	/// to selectively elevate or demote logs using the RUST_LOG syntax.
+	/// For example, noisy federation networking events are hidden (opt-in) by
+	/// default. To view them alongside the standard "info" logs, you can use:
+	/// log = "info,federation=debug"
+	///
 	/// See also:
 	/// https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
 	///
 	/// **Caveat**:
-	/// For release builds, the tracing crate is configured to only implement
-	/// levels higher than error to avoid unnecessary overhead in the compiled
-	/// binary from trace macros. For debug builds, this restriction is not
-	/// applied.
+	/// For release builds, the tracing crate is configured at compile-time to
+	/// automatically strip out `debug` and `trace` macros (compiling only
+	/// `info` and above) to avoid unnecessary overhead in the binary
+	/// execution. For debug builds, this restriction is not applied.
 	///
 	/// default: "info"
 	#[serde(default = "default_log")]
@@ -1741,7 +1758,7 @@ pub struct Config {
 
 	/// User agent that is used specifically when fetching url previews.
 	///
-	/// default: "continuwuity/<version> (bot; +https://continuwuity.org)"
+	/// default: "guwitty/<version>"
 	pub url_preview_user_agent: Option<String>,
 
 	/// Determines whether audio and video files will be downloaded for URL
@@ -2422,14 +2439,14 @@ pub struct MeowlnirConfig {
 	/// The base URL on which to contact Meowlnir (before /_meowlnir/antispam).
 	///
 	/// Example: "http://127.0.0.1:29339"
-	pub base_url: Url,
+	pub base_url: Option<Url>,
 
 	/// The authentication secret defined in antispam->secret. Required for
 	/// continuwuity to talk to Meowlnir.
-	pub secret: String,
+	pub secret: Option<String>,
 
 	/// The management room for which to send requests
-	pub management_room: OwnedRoomId,
+	pub management_room: Option<OwnedRoomId>,
 
 	/// If enabled run all federated join attempts (both federated and local)
 	/// through the Meowlnir anti-spam checks.
@@ -2452,11 +2469,11 @@ pub struct DraupnirConfig {
 	/// The base URL on which to contact Draupnir (before /api/).
 	///
 	/// Example: "http://127.0.0.1:29339"
-	pub base_url: Url,
+	pub base_url: Option<Url>,
 
 	/// The authentication secret defined in
 	/// web->synapseHTTPAntispam->authorization
-	pub secret: String,
+	pub secret: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]

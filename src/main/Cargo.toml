@@ -86,6 +86,7 @@ brotli_compression = [
 ]
 console = [
 	"conduwuit-service/console",
+	"dep:rustyline-async",
 ]
 direct_tls = [
     "conduwuit-router/direct_tls"
@@ -235,6 +236,8 @@ sentry.workspace = true
 tokio-metrics.optional = true
 tokio-metrics.workspace = true
 tokio.workspace = true
+rustyline-async.optional = true
+rustyline-async.workspace = true
 tracing-flame.optional = true
 tracing-flame.workspace = true
 tracing-opentelemetry.optional = true

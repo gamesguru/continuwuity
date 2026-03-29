@@ -15,6 +15,9 @@ mod sentry;
 mod server;
 mod signal;
 
+#[cfg(feature = "console")]
+mod attach;
+
 pub mod build_features {
 	include!(concat!(env!("OUT_DIR"), "/features.rs"));
 }
@@ -49,6 +52,11 @@ pub fn run() -> Result<()> {
 
 		println!("{output}");
 		return Ok(());
+	}
+
+	#[cfg(feature = "console")]
+	if args.attach {
+		return attach::run(&args);
 	}
 
 	run_with_args(&args)

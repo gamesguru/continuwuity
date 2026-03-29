@@ -3,7 +3,7 @@ name: PR Checks
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -45,12 +45,13 @@ jobs:
             llvm-dev \
             mold
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
-
       - name: Detect best CPU target
         id: cpu
         uses: ./.github/actions/get-cpu-target
+
+      - name: Export CPU target env vars
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ steps.cpu.outputs.target }}" | tee -a $GITHUB_ENV
 
       - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-prebuilts

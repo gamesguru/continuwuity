@@ -25,15 +25,15 @@ else:
     tz_sql = "+00:00"
 
 # Defaults
-sha = "all"
+like_str = "all"
 limit = "15"
 order = "run_date DESC, n_pass DESC"
 
-# Extract sha
-sha_match = re.search(r"sha=([^\s]+)", args_str)
-if sha_match:
-    sha = sha_match.group(1)
-    args_str = args_str.replace(sha_match.group(0), "")
+# Extract like
+like_match = re.search(r"like=([^\s]+)", args_str)
+if like_match:
+    like_str = like_match.group(1)
+    args_str = args_str.replace(like_match.group(0), "")
 
 # Extract limit
 limit_match = re.search(r"limit=([0-9]+)", args_str)
@@ -42,7 +42,7 @@ if limit_match:
     args_str = args_str.replace(limit_match.group(0), "")
 
 # Extract order (it takes whatever is left if it starts with order=)
-order_match = re.search(r"order=(.+?)(?:$| sha=| limit=)", args_str + " ")
+order_match = re.search(r"order=(.+?)(?:$| like=| limit=)", args_str + " ")
 if order_match:
     order = order_match.group(1).strip()
 
@@ -64,10 +64,10 @@ SELECT
 FROM
     v_run_regressions"""
 
-if sha == "all":
+if like_str == "all":
     query = f"{base_query}\nORDER BY\n    {order}\nLIMIT {limit}"
 else:
-    query = f"{base_query}\nWHERE\n    commit_hash LIKE '{sha}%'\n    OR upstream_sha LIKE '{sha}%'\nORDER BY\n    {order}\nLIMIT {limit}"
+    query = f"{base_query}\nWHERE\n    version_string LIKE '%{like_str}%'\nORDER BY\n    {order}\nLIMIT {limit}"
 
 print(f"\nExecuting Query:\n{query}\n")
 

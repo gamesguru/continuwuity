@@ -9,7 +9,6 @@ use conduwuit::result::LogErr;
 use conduwuit::{
 	Err, Error, Result, Server, debug_warn, err, info, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
-	warn,
 };
 #[cfg(feature = "ldap")]
 use conduwuit_core::{debug, error};
@@ -170,7 +169,7 @@ impl Service {
 				.unwrap_or(FilterLevel::Allow)
 		};
 
-		warn!(%sender_user, %recipient_user, ?level, "invite_filter_level");
+		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");
 		level
 	}
 
