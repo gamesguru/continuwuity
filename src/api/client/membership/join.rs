@@ -478,28 +478,34 @@ async fn join_room_by_id_helper_remote(
 				.expect("Timestamp is valid js_int value"),
 		),
 	);
-	let mut content = to_canonical_value(RoomMemberEventContent {
-		displayname: services.users.displayname(sender_user).await.ok(),
-		avatar_url: services.users.avatar_url(sender_user).await.ok(),
-		blurhash: services.users.blurhash(sender_user).await.ok(),
-		reason,
-		is_direct,
-		join_authorized_via_users_server: join_authorized_via_users_server.clone(),
-		..RoomMemberEventContent::new(MembershipState::Join)
-	})
-	.expect("event is valid, we just created it");
+        let mut content = to_canonical_value(RoomMemberEventContent {
+                displayname: services.users.displayname(sender_user).await.ok(),
+                avatar_url: services.users.avatar_url(sender_user).await.ok(),
+                blurhash: services.users.blurhash(sender_user).await.ok(),
+                reason,
+                is_direct: services
+                        .rooms
+                        .state_accessor
+                        .get_member(room_id, sender_user)
+                        .await
+                        .ok()
+                        .and_then(|m| m.is_direct),
+                join_authorized_via_users_server: join_authorized_via_users_server.clone(),
+                ..RoomMemberEventContent::new(MembershipState::Join)
+        })
+        .expect("event is valid, we just created it");
 
-	if let Some(CanonicalJsonValue::Object(custom)) = json_body {
-		if let CanonicalJsonValue::Object(ref mut map) = content {
-			for (k, v) in custom {
-				if !["reason", "third_party_signed", "server_name"].contains(&k.as_str()) {
-					map.entry(k.clone()).or_insert_with(|| v.clone());
-				}
-			}
-		}
-	}
+        if let Some(CanonicalJsonValue::Object(custom)) = json_body {
+                if let CanonicalJsonValue::Object(ref mut map) = content {
+                        for (k, v) in custom {
+                                if !["reason", "third_party_signed", "server_name"].contains(&k.as_str()) {
+                                        map.entry(k.clone()).or_insert_with(|| v.clone());
+                                }
+                        }
+                }
+        }
 
-	join_event_stub.insert("content".to_owned(), content);
+        join_event_stub.insert("content".to_owned(), content);
 
 	// We keep the "event_id" in the pdu only in v1 or
 	// v2 rooms
@@ -916,6 +922,13 @@ async fn join_room_by_id_helper_local(
 		displayname: services.users.displayname(sender_user).await.ok(),
 		avatar_url: services.users.avatar_url(sender_user).await.ok(),
 		blurhash: services.users.blurhash(sender_user).await.ok(),
+		is_direct: services
+			.rooms
+			.state_accessor
+			.get_member(room_id, sender_user)
+			.await
+			.ok()
+			.and_then(|m| m.is_direct),
 		reason: reason.clone(),
 		is_direct,
 		join_authorized_via_users_server: auth_user,
