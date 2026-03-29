@@ -223,7 +223,7 @@ impl Service {
 		let response = self
 			.services
 			.client
-			.get_client(&client::ClientType::UrlPreview, reqwest_request.url())
+			.get_client(&client::ClientType::Pusher, reqwest_request.url())
 			.execute(reqwest_request)
 			.await;
 

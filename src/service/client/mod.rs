@@ -79,12 +79,14 @@ impl Service {
 
 	#[must_use]
 	pub fn get_client(&self, client_type: &ClientType, url: &reqwest::Url) -> &reqwest::Client {
-		if self.no_tls_validation_host_regex.is_match(
-			url.host_str()
-				.expect("all urls being called externally MUST have a host"),
-		) {
-			self.insecure_client(client_type)
+		if let Some(host) = url.host_str() {
+			if self.no_tls_validation_host_regex.is_match(host) {
+				self.insecure_client(client_type)
+			} else {
+				self.secure_client(client_type)
+			}
 		} else {
+			// If the URL has no host, fall back to the secure client rather than panicking.
 			self.secure_client(client_type)
 		}
 	}

@@ -1815,7 +1815,7 @@
 # as this should not be a quick fix for your friends server having
 # invalid certs
 #
-#insecure_skip_tls_validation_for_servers = false
+#insecure_skip_tls_validation_for_servers = []
 
 [global.tls]
 

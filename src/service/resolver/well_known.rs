@@ -17,7 +17,7 @@ pub(super) async fn request_well_known(&self, dest: &str) -> Result<Option<Strin
 	let response = self
 		.services
 		.client
-		.get_client(&crate::client::ClientType::UrlPreview, &url)
+		.get_client(&crate::client::ClientType::WellKnown, &url)
 		.get(url)
 		.send()
 		.await;
