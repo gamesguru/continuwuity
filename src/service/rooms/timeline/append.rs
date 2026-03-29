@@ -186,23 +186,23 @@ where
 
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
-	let count1 = self.services.globals.next_count().unwrap();
+	let count = self.services.globals.next_count().unwrap();
+	let pdu_count = PduCount::Normal(count);
+	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+
+	// Insert pdu FIRST to ensure it's in the DB before any secondary writes
+	// unexpectedly wake the sync watcher.
+	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
 
 	// Mark as read first so the sending client doesn't get a notification even if
 	// appending fails
 	self.services
 		.read_receipt
-		.private_read_set(room_id, pdu.sender(), count1);
+		.private_read_set(room_id, pdu.sender(), count);
 
 	self.services
 		.user
 		.reset_notification_counts(pdu.sender(), room_id);
-
-	let count2 = PduCount::Normal(self.services.globals.next_count().unwrap());
-	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: count2 }.into();
-
-	// Insert pdu
-	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
 
 	drop(insert_lock);
 
@@ -373,7 +373,7 @@ where
 		if let Ok(related_pducount) = self.get_pdu_count(&content.relates_to.event_id).await {
 			self.services
 				.pdu_metadata
-				.add_relation(count2, related_pducount);
+				.add_relation(pdu_count, related_pducount);
 		}
 	}
 
@@ -385,7 +385,7 @@ where
 				if let Ok(related_pducount) = self.get_pdu_count(&in_reply_to.event_id).await {
 					self.services
 						.pdu_metadata
-						.add_relation(count2, related_pducount);
+						.add_relation(pdu_count, related_pducount);
 				}
 			},
 			| Relation::Thread(thread) => {
