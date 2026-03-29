@@ -109,15 +109,14 @@ where
 				.rooms
 				.spaces
 				.get_summary_and_children_client(&current_room, suggested_only, sender_user, &via)
-				.await;
-			(current_room, summary)
+				.await?;
+
+			conduwuit::Result::Ok((current_room, summary))
 		});
 
-		let results = futures::future::join_all(fetches).await;
+		let results = futures::future::try_join_all(fetches).await?;
 
 		for (current_room, summary) in results {
-			let summary = summary?;
-
 			match (summary, current_room == *room_id) {
 				| (None | Some(SummaryAccessibility::Inaccessible), false) => {
 					// Just ignore other unavailable rooms
