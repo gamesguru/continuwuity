@@ -180,6 +180,7 @@ impl crate::Service for Service {
 				.store(d_transactions, std::sync::atomic::Ordering::Relaxed);
 
 			conduwuit::warn!(
+				target: "stats",
 				"Network stats (Last 1m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
 				 latency) | DNS Resolver: {} reqs ({:.2}% fail, {:.2}ms avg latency) | Fed \
 				 Txns: {}",
