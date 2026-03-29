@@ -47,15 +47,14 @@ impl Data {
 		event: &ReceiptEvent,
 	) {
 		type Key<'a> = (&'a RoomId, u64, &'a UserId);
-		type KeyVal<'a> = (Key<'a>, CanonicalJsonObject);
 
 		// Remove old entry
-		let first_possible_key = (room_id, 0_u64);
+		let last_possible_key = (room_id, u64::MAX);
 		self.readreceiptid_readreceipt
-			.stream_from(&first_possible_key)
+			.rev_keys_from(&last_possible_key)
 			.ignore_err()
-			.ready_take_while(|((r, ..), _): &KeyVal<'_>| *r == room_id)
-			.ready_filter_map(|((_, count, u), _): KeyVal<'_>| (u == user_id).then_some(count))
+			.ready_take_while(|(r, ..): &Key<'_>| *r == room_id)
+			.ready_filter_map(|(_, count, u): Key<'_>| (u == user_id).then_some(count))
 			.ready_for_each(|count| {
 				self.readreceiptid_readreceipt
 					.del((room_id, count, user_id));

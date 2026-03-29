@@ -105,9 +105,7 @@ pub(super) async fn bump(&self, room_id: OwnedRoomId) -> Result {
 		..Default::default()
 	};
 
-	let server_user = format!("@conduwuit:{}", self.services.server.name);
-	let sender = <&ruma::UserId>::try_from(server_user.as_str())
-		.map_err(|_| conduwuit::err!(Database("Failed to create server user ID")))?;
+	let sender = &self.services.globals.server_user;
 
 	let event_id = self
 		.services

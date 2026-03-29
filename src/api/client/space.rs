@@ -1,5 +1,5 @@
 use std::{
-	collections::{BTreeSet, HashSet, VecDeque},
+	collections::{BTreeSet, VecDeque},
 	str::FromStr,
 };
 
@@ -96,10 +96,12 @@ where
 	let mut rooms = Vec::with_capacity(limit);
 
 	let mut parents = BTreeSet::new();
-	let mut seen: HashSet<OwnedRoomId> = HashSet::new();
-	seen.insert(room_id.to_owned());
 
 	while let Some((current_room, via)) = queue.pop_back() {
+		if parents.contains(&current_room) {
+			continue;
+		}
+
 		if rooms.len() >= limit {
 			break;
 		}
@@ -128,23 +130,44 @@ where
 			| (Some(SummaryAccessibility::Accessible(summary)), _) => {
 				let populate = parents.len() >= short_room_ids.clone().count();
 
-				let children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
-					.filter(|(room, _)| seen.insert((*room).clone()))
+				let mut children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
 					.rev()
 					.map(|(key, val)| (key, val.collect()))
 					.collect();
 
 				if populate {
 					rooms.push(summary_to_chunk(summary.clone()));
-				} else if let Some(target) = short_room_ids.clone().nth(parents.len()) {
-					for (room, _) in &children {
-						if let Ok(short) = services.rooms.short.get_shortroomid(room).await {
-							if short == *target {
-								// Found the room we were looking for in paginated state
-								break;
-							}
-						}
-					}
+				} else {
+					let s_ids = short_room_ids.clone();
+					let len = parents.len();
+					children = {
+						let mut valid = children
+							.iter()
+							.rev()
+							.stream()
+							.skip_while(move |(room, _)| {
+								let mut s_ids = s_ids.clone();
+								let target = s_ids.nth(len);
+								async move {
+									if let Ok(short) =
+										services.rooms.short.get_shortroomid(room).await
+									{
+										Some(&short) != target
+									} else {
+										false
+									}
+								}
+							})
+							.map(Clone::clone)
+							.collect::<Vec<Entry>>()
+							.await;
+						valid.reverse();
+						valid
+					};
+				}
+
+				if !populate && queue.is_empty() && children.is_empty() {
+					break;
 				}
 
 				parents.insert(current_room.clone());

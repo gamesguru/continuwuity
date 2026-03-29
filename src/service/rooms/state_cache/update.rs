@@ -189,29 +189,43 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 		})
 		.await;
 
-	for removed_server in removed_servers {
-		self.room_members(room_id)
-			.ready_for_each(|user_id| {
-				self.server_visibility_cache
-					.invalidate(&(removed_server.clone(), user_id.to_owned()));
-			})
-			.await;
-	}
+	if joinedcount > 100 {
+		if !removed_servers.is_empty() || !joined_servers.is_empty() {
+			self.server_visibility_cache.invalidate_all();
+		}
 
-	// Now only new servers are in joined_servers anymore
-	for server in &joined_servers {
-		let roomserver_id = (room_id, server);
-		let serverroom_id = (server, room_id);
+		for server in &joined_servers {
+			let roomserver_id = (room_id, server);
+			let serverroom_id = (server, room_id);
 
-		self.db.roomserverids.put_raw(roomserver_id, []);
-		self.db.serverroomids.put_raw(serverroom_id, []);
+			self.db.roomserverids.put_raw(roomserver_id, []);
+			self.db.serverroomids.put_raw(serverroom_id, []);
+		}
+	} else {
+		for removed_server in removed_servers {
+			self.room_members(room_id)
+				.ready_for_each(|user_id| {
+					self.server_visibility_cache
+						.invalidate(&(removed_server.clone(), user_id.to_owned()));
+				})
+				.await;
+		}
 
-		self.room_members(room_id)
-			.ready_for_each(|user_id| {
-				self.server_visibility_cache
-					.invalidate(&(server.clone(), user_id.to_owned()));
-			})
-			.await;
+		// Now only new servers are in joined_servers anymore
+		for server in &joined_servers {
+			let roomserver_id = (room_id, server);
+			let serverroom_id = (server, room_id);
+
+			self.db.roomserverids.put_raw(roomserver_id, []);
+			self.db.serverroomids.put_raw(serverroom_id, []);
+
+			self.room_members(room_id)
+				.ready_for_each(|user_id| {
+					self.server_visibility_cache
+						.invalidate(&(server.clone(), user_id.to_owned()));
+				})
+				.await;
+		}
 	}
 
 	self.appservice_in_room_cache.write().remove(room_id);

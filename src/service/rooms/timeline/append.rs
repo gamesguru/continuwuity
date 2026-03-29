@@ -133,12 +133,15 @@ where
 			.entry("unsigned".to_owned())
 			.or_insert_with(|| CanonicalJsonValue::Object(BTreeMap::default()))
 		{
-			let shortstatehash = self
-				.services
-				.state_accessor
-				.pdu_shortstatehash(pdu.event_id())
-				.await
-				.ok();
+			let shortstatehash = if let Some(prev_event) = pdu.prev_events().next() {
+				self.services
+					.state_accessor
+					.pdu_shortstatehash(prev_event)
+					.await
+					.ok()
+			} else {
+				None
+			};
 
 			if let Some(shortstatehash) = shortstatehash {
 				if let Ok(prev_state) = self
