@@ -203,6 +203,21 @@ build-bundled: ##H Build a bundled binary (Static RocksDB)
 	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-static"
 
 
+GLIBC_VERSION ?= 2.35
+CPU_TARGET ?= skylake
+
+.PHONY: build-cross
+build-cross: ##H Cross-compile for specific glibc and CPU (uses cargo-zigbuild)
+	@echo "Cross-compiling with PROFILE='$(PROFILE)' CPU_TARGET='$(CPU_TARGET)' GLIBC_VERSION='$(GLIBC_VERSION)'"
+	@$(MAKE) _confirm
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+		RUSTFLAGS="-C target-cpu=$(CPU_TARGET) $$RUSTFLAGS" \
+		cargo zigbuild --target x86_64-unknown-linux-gnu.$(GLIBC_VERSION) --features $(FEATURES) --locked $(CARGO_FLAGS)
+
+
 .PHONY: build-dynamic
 build-dynamic: ##H Build with shared library (requires librocksdb.so at runtime)
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
