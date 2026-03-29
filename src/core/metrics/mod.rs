@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU64};
 
 use tokio::runtime;
 #[cfg(feature = "tokio_metrics")]
@@ -24,6 +24,16 @@ pub struct Metrics {
 	pub requests_handle_active: AtomicU32,
 	pub requests_handle_finished: AtomicU32,
 	pub requests_panic: AtomicU32,
+
+	// Router aggregated metrics
+	pub requests_success: AtomicU64,
+	pub requests_fail: AtomicU64,
+	pub requests_time: AtomicU64,
+
+	// DNS aggregated metrics
+	pub dns_requests_success: AtomicU64,
+	pub dns_requests_fail: AtomicU64,
+	pub dns_requests_time: AtomicU64,
 }
 
 impl Metrics {
@@ -52,6 +62,14 @@ impl Metrics {
 			requests_handle_active: AtomicU32::new(0),
 			requests_handle_finished: AtomicU32::new(0),
 			requests_panic: AtomicU32::new(0),
+
+			requests_success: AtomicU64::new(0),
+			requests_fail: AtomicU64::new(0),
+			requests_time: AtomicU64::new(0),
+
+			dns_requests_success: AtomicU64::new(0),
+			dns_requests_fail: AtomicU64::new(0),
+			dns_requests_time: AtomicU64::new(0),
 		}
 	}
 

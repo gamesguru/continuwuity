@@ -486,6 +486,14 @@ pub struct Config {
 	#[serde(default = "default_federation_timeout")]
 	pub federation_timeout: u64,
 
+	/// Federation presence interval (seconds).
+	/// This is used to aggressively load-shed large incoming loops of presence
+	/// updates and batch outgoing presence changes.
+	///
+	/// default: 5
+	#[serde(default = "default_federation_presence_interval_s")]
+	pub federation_presence_interval_s: u64,
+
 	/// MSC4284 Policy server request timeout (seconds). Generally policy
 	/// servers should respond near instantly, however may slow down under
 	/// load. If a policy server doesn't respond in a short amount of time, the
@@ -2662,6 +2670,8 @@ fn default_well_known_timeout() -> u64 { 10 }
 fn default_federation_conn_timeout() -> u64 { 10 }
 
 fn default_federation_timeout() -> u64 { 60 }
+
+fn default_federation_presence_interval_s() -> u64 { 5 }
 
 fn default_policy_server_request_timeout() -> u64 { 10 }
 

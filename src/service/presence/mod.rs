@@ -93,7 +93,13 @@ impl crate::Service for Service {
 
 		let self_flush = Arc::clone(&self);
 		let flush_task = self.services.server.runtime().spawn(async move {
-			let mut interval = tokio::time::interval(Duration::from_secs(5));
+			let mut interval = tokio::time::interval(Duration::from_secs(
+				self_flush
+					.services
+					.server
+					.config
+					.federation_presence_interval_s,
+			));
 			loop {
 				interval.tick().await;
 				if !self_flush.services.server.running() {

@@ -58,4 +58,7 @@ pub enum ServerCommand {
 
 	/// Build information
 	BuildInfo {},
+
+	/// Print server diagnostics and metrics
+	Diagnostics {},
 }

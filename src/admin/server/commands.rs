@@ -244,3 +244,69 @@ pub(super) async fn build_info(&self) -> Result {
 
 	self.write_str(&info).await
 }
+
+#[admin_command]
+pub(super) async fn diagnostics(&self) -> Result {
+	let mut info = String::new();
+	let metrics = &self.services.server.metrics;
+
+	writeln!(info, "## Thread Pool")?;
+	writeln!(info, "**Workers:** {}", metrics.num_workers())?;
+
+	writeln!(info, "\n## Router Metrics")?;
+	writeln!(
+		info,
+		"**Active:** {}",
+		metrics
+			.requests_handle_active
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Finished:** {}",
+		metrics
+			.requests_handle_finished
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Panics:** {}",
+		metrics
+			.requests_panic
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+
+	writeln!(info, "\n## Aggregated Router Metrics")?;
+	writeln!(
+		info,
+		"**Success:** {}",
+		metrics
+			.requests_success
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Fail:** {}",
+		metrics
+			.requests_fail
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+
+	writeln!(info, "\n## Aggregated DNS Metrics")?;
+	writeln!(
+		info,
+		"**Success:** {}",
+		metrics
+			.dns_requests_success
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Fail:** {}",
+		metrics
+			.dns_requests_fail
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+
+	self.write_str(&info).await
+}

@@ -73,6 +73,112 @@ impl crate::Service for Service {
 
 	async fn clear_cache(&self) { self.bad_event_ratelimiter.write().clear(); }
 
+	async fn worker(self: Arc<Self>) -> Result<()> {
+		let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+
+		let mut last_http_success = 0;
+		let mut last_http_fail = 0;
+		let mut last_http_time = 0;
+
+		let mut last_dns_success = 0;
+		let mut last_dns_fail = 0;
+		let mut last_dns_time = 0;
+
+		loop {
+			interval.tick().await;
+			if !self.server.running() {
+				break;
+			}
+
+			let http_success = self
+				.server
+				.metrics
+				.requests_success
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let http_fail = self
+				.server
+				.metrics
+				.requests_fail
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let http_time = self
+				.server
+				.metrics
+				.requests_time
+				.load(std::sync::atomic::Ordering::Relaxed);
+
+			let dns_success = self
+				.server
+				.metrics
+				.dns_requests_success
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let dns_fail = self
+				.server
+				.metrics
+				.dns_requests_fail
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let dns_time = self
+				.server
+				.metrics
+				.dns_requests_time
+				.load(std::sync::atomic::Ordering::Relaxed);
+
+			let d_http_success = http_success.saturating_sub(last_http_success);
+			let d_http_fail = http_fail.saturating_sub(last_http_fail);
+			let d_http_time_us = http_time.saturating_sub(last_http_time);
+			let d_http_total = d_http_success.saturating_add(d_http_fail);
+
+			let (http_avg_latency_ms, http_fail_rate) = {
+				#[allow(clippy::as_conversions, clippy::cast_precision_loss)]
+				if d_http_total > 0 {
+					(
+						(d_http_time_us as f64 / d_http_total as f64) / 1000.0,
+						(d_http_fail as f64 / d_http_total as f64) * 100.0,
+					)
+				} else {
+					(0.0, 0.0)
+				}
+			};
+
+			let d_dns_success = dns_success.saturating_sub(last_dns_success);
+			let d_dns_fail = dns_fail.saturating_sub(last_dns_fail);
+			let d_dns_time_us = dns_time.saturating_sub(last_dns_time);
+			let d_dns_total = d_dns_success.saturating_add(d_dns_fail);
+
+			let (dns_avg_latency_ms, dns_fail_rate) = {
+				#[allow(clippy::as_conversions, clippy::cast_precision_loss)]
+				if d_dns_total > 0 {
+					(
+						(d_dns_time_us as f64 / d_dns_total as f64) / 1000.0,
+						(d_dns_fail as f64 / d_dns_total as f64) * 100.0,
+					)
+				} else {
+					(0.0, 0.0)
+				}
+			};
+
+			conduwuit::warn!(
+				"Metrics Report (Last 5m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
+				 latency) | DNS Resolver: {} reqs ({:.2}% fail, {:.2}ms avg latency)",
+				d_http_total,
+				http_fail_rate,
+				http_avg_latency_ms,
+				d_dns_total,
+				dns_fail_rate,
+				dns_avg_latency_ms
+			);
+
+			last_http_success = http_success;
+			last_http_fail = http_fail;
+			last_http_time = http_time;
+
+			last_dns_success = dns_success;
+			last_dns_fail = dns_fail;
+			last_dns_time = dns_time;
+		}
+
+		Ok(())
+	}
+
 	fn name(&self) -> &str { service::make_name(std::module_path!()) }
 }
 

@@ -409,13 +409,15 @@ async fn handle_edu_presence(
 			handle_edu_presence_update(services, origin, update)
 		});
 
-	if tokio::time::timeout(Duration::from_secs(5), fut)
+	let timeout = services.server.config.federation_presence_interval_s;
+	if tokio::time::timeout(Duration::from_secs(timeout), fut)
 		.await
 		.is_err()
 	{
-		debug_warn!(
-			"Congestion: presence updates from {} took longer than 5s, dropping remaining",
-			origin
+		info!(
+			%origin,
+			timeout,
+			"Congestion: presence updates took too long, dropping remaining"
 		);
 	}
 }

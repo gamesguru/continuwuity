@@ -382,6 +382,12 @@
 #
 #federation_timeout = 60
 
+# Federation presence interval (seconds).
+# This is used to aggressively load-shed large incoming loops of presence
+# updates and batch outgoing presence changes.
+#
+#federation_presence_interval_s = 5
+
 # MSC4284 Policy server request timeout (seconds). Generally policy
 # servers should respond near instantly, however may slow down under
 # load. If a policy server doesn't respond in a short amount of time, the

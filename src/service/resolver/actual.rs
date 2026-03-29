@@ -298,7 +298,7 @@ impl super::Service {
 		self.services.server.check_running()?;
 
 		debug!("querying IP for {untername:?} ({hostname:?}:{port})");
-		match self.resolver.resolver.lookup_ip(hostname.to_owned()).await {
+		match self.resolver.lookup_ip(hostname.to_owned()).await {
 			| Err(e) => Self::handle_resolve_error(&e, hostname, "IP"),
 			| Ok(override_ip) => {
 				self.cache.set_override(untername, &CachedOverride {
@@ -325,7 +325,7 @@ impl super::Service {
 
 			debug!("querying SRV for {hostname:?}");
 			let hostname = hostname.trim_end_matches('.');
-			match self.resolver.resolver.srv_lookup(hostname).await {
+			match self.resolver.srv_lookup(hostname).await {
 				| Err(e) => Self::handle_resolve_error(&e, hostname, "SRV")?,
 				| Ok(result) => {
 					return Ok(result.iter().next().map(|result| {

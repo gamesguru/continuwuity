@@ -83,9 +83,63 @@ impl Resolver {
 		}))
 	}
 
-	/// Clear the in-memory hickory-dns caches
 	#[inline]
 	pub fn clear_cache(&self) { self.resolver.clear_cache(); }
+
+	pub async fn lookup_ip<N: hickory_resolver::IntoName>(
+		&self,
+		name: N,
+	) -> core::result::Result<LookupIp, hickory_resolver::ResolveError> {
+		let start = tokio::time::Instant::now();
+		let result = self.resolver.lookup_ip(name).await;
+		let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+		self.server
+			.metrics
+			.dns_requests_time
+			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+
+		if result.is_err() {
+			self.server
+				.metrics
+				.dns_requests_fail
+				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		} else {
+			self.server
+				.metrics
+				.dns_requests_success
+				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		}
+
+		result
+	}
+
+	pub async fn srv_lookup<N: hickory_resolver::IntoName>(
+		&self,
+		name: N,
+	) -> core::result::Result<hickory_resolver::lookup::SrvLookup, hickory_resolver::ResolveError>
+	{
+		let start = tokio::time::Instant::now();
+		let result = self.resolver.srv_lookup(name).await;
+		let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+		self.server
+			.metrics
+			.dns_requests_time
+			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+
+		if result.is_err() {
+			self.server
+				.metrics
+				.dns_requests_fail
+				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		} else {
+			self.server
+				.metrics
+				.dns_requests_success
+				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		}
+
+		result
+	}
 }
 
 impl Resolve for Resolver {
@@ -139,13 +193,53 @@ async fn resolve_to_reqwest(
 	use std::{io, io::ErrorKind::Interrupted};
 
 	let handle_shutdown = || Box::new(io::Error::new(Interrupted, "Server shutting down"));
-	let handle_results =
-		|results: LookupIp| Box::new(results.into_iter().map(|ip| SocketAddr::new(ip, 0)));
+	let handle_results = |results: LookupIp| {
+		let addrs: Addrs = Box::new(results.into_iter().map(|ip| SocketAddr::new(ip, 0)));
+		addrs
+	};
 
-	tokio::select! {
-		results = resolver.lookup_ip(name.as_str()) => Ok(handle_results(results?)),
-		() = server.until_shutdown() => Err(handle_shutdown()),
+	let start = tokio::time::Instant::now();
+	let result = tokio::select! {
+		results = resolver.lookup_ip(name.as_str()) => {
+			match results {
+				Ok(results) => {
+					let res: ResolvingResult = Ok(handle_results(results));
+					let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+					server
+						.metrics
+						.dns_requests_time
+						.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+					server
+						.metrics
+						.dns_requests_success
+						.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+					res
+				},
+				Err(e) => {
+					let res: ResolvingResult = Err(Box::new(e));
+					res
+				}
+			}
+		},
+		() = server.until_shutdown() => {
+			let res: ResolvingResult = Err(handle_shutdown());
+			res
+		},
+	};
+
+	if result.is_err() {
+		let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+		server
+			.metrics
+			.dns_requests_time
+			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+		server
+			.metrics
+			.dns_requests_fail
+			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 	}
+
+	result
 }
 
 async fn cached_to_reqwest(cached: CachedOverride) -> ResolvingResult {
