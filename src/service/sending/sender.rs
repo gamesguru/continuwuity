@@ -115,14 +115,20 @@ impl Service {
 			.expect("Missing channel for sender worker");
 
 		while !receiver.is_closed() {
-			tokio::select! {
-				Some(response) = futures.next() => {
-					self.handle_response(response, futures, statuses).await;
-				},
-				request = receiver.recv_async() => match request {
-					Ok(request) => self.handle_request(request, futures, statuses).await,
-					Err(_) => return,
-				},
+			let has_space = futures.len() < 128;
+
+			if has_space {
+				tokio::select! {
+					Some(response) = futures.next() => {
+						self.handle_response(response, futures, statuses).await;
+					},
+					request = receiver.recv_async() => match request {
+						Ok(request) => self.handle_request(request, futures, statuses).await,
+						Err(_) => return,
+					},
+				}
+			} else if let Some(response) = futures.next().await {
+				self.handle_response(response, futures, statuses).await;
 			}
 		}
 	}

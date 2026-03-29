@@ -410,9 +410,10 @@ impl Service {
 
 			self.schedule_timeout(user_id, &new_state)?;
 
-			// Notify for idle/offline transitions so remote servers eventually
-			// see the updated presence state. Batching is handled inside
-			// `notify_presence_change` via `pending_updates`.
+			// We notify for idle/offline transitions so remote servers eventually
+			// see the updated presence state. We have capped the outbound concurrent
+			// sending futures to 128 per worker to ensure that this batching doesn't
+			// create an outbound I/O storm or deplete DNS resources.
 			self.notify_presence_change(user_id).await.log_err().ok();
 		}
 

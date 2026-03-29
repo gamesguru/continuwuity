@@ -74,7 +74,7 @@ impl crate::Service for Service {
 	async fn clear_cache(&self) { self.bad_event_ratelimiter.write().clear(); }
 
 	async fn worker(self: Arc<Self>) -> Result<()> {
-		let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+		let mut interval = tokio::time::interval(std::time::Duration::from_secs(60)); // 1 min
 
 		let mut last_http_success = 0;
 		let mut last_http_fail = 0;
@@ -83,6 +83,8 @@ impl crate::Service for Service {
 		let mut last_dns_success = 0;
 		let mut last_dns_fail = 0;
 		let mut last_dns_time = 0;
+
+		let mut last_transactions = 0;
 
 		loop {
 			interval.tick().await;
@@ -127,6 +129,11 @@ impl crate::Service for Service {
 			let d_http_time_us = http_time.saturating_sub(last_http_time);
 			let d_http_total = d_http_success.saturating_add(d_http_fail);
 
+			self.server
+				.metrics
+				.requests_rate_1m
+				.store(d_http_total, std::sync::atomic::Ordering::Relaxed);
+
 			let (http_avg_latency_ms, http_fail_rate) = {
 				#[allow(clippy::as_conversions, clippy::cast_precision_loss)]
 				if d_http_total > 0 {
@@ -144,6 +151,11 @@ impl crate::Service for Service {
 			let d_dns_time_us = dns_time.saturating_sub(last_dns_time);
 			let d_dns_total = d_dns_success.saturating_add(d_dns_fail);
 
+			self.server
+				.metrics
+				.dns_rate_1m
+				.store(d_dns_total, std::sync::atomic::Ordering::Relaxed);
+
 			let (dns_avg_latency_ms, dns_fail_rate) = {
 				#[allow(clippy::as_conversions, clippy::cast_precision_loss)]
 				if d_dns_total > 0 {
@@ -156,15 +168,28 @@ impl crate::Service for Service {
 				}
 			};
 
+			let transactions = self
+				.server
+				.metrics
+				.transactions_processed
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let d_transactions = transactions.saturating_sub(last_transactions);
+			self.server
+				.metrics
+				.transactions_rate_1m
+				.store(d_transactions, std::sync::atomic::Ordering::Relaxed);
+
 			conduwuit::warn!(
-				"Metrics Report (Last 5m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
-				 latency) | DNS Resolver: {} reqs ({:.2}% fail, {:.2}ms avg latency)",
+				"Metrics Report (Last 1m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
+				 latency) | DNS Resolver: {} reqs ({:.2}% fail, {:.2}ms avg latency) | Fed \
+				 Txns: {}",
 				d_http_total,
 				http_fail_rate,
 				http_avg_latency_ms,
 				d_dns_total,
 				dns_fail_rate,
-				dns_avg_latency_ms
+				dns_avg_latency_ms,
+				d_transactions
 			);
 
 			last_http_success = http_success;
@@ -174,6 +199,8 @@ impl crate::Service for Service {
 			last_dns_success = dns_success;
 			last_dns_fail = dns_fail;
 			last_dns_time = dns_time;
+
+			last_transactions = transactions;
 		}
 
 		Ok(())

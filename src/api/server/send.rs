@@ -164,6 +164,11 @@ async fn process_inbound_transaction(
 		.stream();
 
 	debug!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction");
+	services
+		.server
+		.metrics
+		.transactions_processed
+		.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 	let results = match handle(&services, &client, body.origin(), pdus, edus).await {
 		| Ok(results) => results,
 		| Err(err) => {

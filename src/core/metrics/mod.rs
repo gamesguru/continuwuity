@@ -34,6 +34,14 @@ pub struct Metrics {
 	pub dns_requests_success: AtomicU64,
 	pub dns_requests_fail: AtomicU64,
 	pub dns_requests_time: AtomicU64,
+
+	// Federation metrics
+	pub transactions_processed: AtomicU64,
+
+	// 1-minute rates
+	pub requests_rate_1m: AtomicU64,
+	pub dns_rate_1m: AtomicU64,
+	pub transactions_rate_1m: AtomicU64,
 }
 
 impl Metrics {
@@ -70,6 +78,11 @@ impl Metrics {
 			dns_requests_success: AtomicU64::new(0),
 			dns_requests_fail: AtomicU64::new(0),
 			dns_requests_time: AtomicU64::new(0),
+
+			transactions_processed: AtomicU64::new(0),
+			requests_rate_1m: AtomicU64::new(0),
+			dns_rate_1m: AtomicU64::new(0),
+			transactions_rate_1m: AtomicU64::new(0),
 		}
 	}
 

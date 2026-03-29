@@ -292,6 +292,22 @@ pub(super) async fn diagnostics(&self) -> Result {
 			.load(std::sync::atomic::Ordering::Relaxed)
 	)?;
 
+	writeln!(info, "\n## Federation Metrics")?;
+	writeln!(
+		info,
+		"**Transactions Processed:** {}",
+		metrics
+			.transactions_processed
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Transactions Last 1m:** {}",
+		metrics
+			.transactions_rate_1m
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+
 	writeln!(info, "\n## Aggregated DNS Metrics")?;
 	writeln!(
 		info,
