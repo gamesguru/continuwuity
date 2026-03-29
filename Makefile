@@ -217,7 +217,7 @@ build-cross: ##H Cross-compile for specific glibc and CPU (uses cargo-zigbuild)
 		RUSTFLAGS="-C target-cpu=$(CPU_TARGET) -C link-arg=-L/usr/lib -C link-arg=-L/usr/local/lib $$RUSTFLAGS" \
 		cargo zigbuild --target x86_64-unknown-linux-gnu.$(GLIBC_VERSION) \
 			--no-default-features \
-			--features standard,console,url_preview,bindgen-runtime \
+			--features $(FEATURES) \
 			--locked $(CARGO_FLAGS)
 
 

@@ -38,7 +38,7 @@ impl Data {
 		);
 
 		let start = *counter;
-		*counter = counter.checked_add(diff).unwrap_or(*counter);
+		*counter = counter.checked_add(diff).ok_or_else(|| conduwuit::err!(Arithmetic("Counter overflow")))?;
 
 		self.global.insert(COUNTER, counter.to_be_bytes());
 
