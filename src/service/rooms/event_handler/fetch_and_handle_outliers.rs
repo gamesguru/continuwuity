@@ -257,7 +257,11 @@ where
 				warn!("lexicographical_topological_sort failed for {id}: {e}");
 				// Fallback to ensuring we do not arbitrarily drop successfully fetched events
 				// if the graph has a cycle or is structurally broken by network truncation.
-				fetched_info.keys().cloned().collect()
+				{
+					let mut ids: Vec<_> = fetched_info.keys().cloned().collect();
+					ids.sort_unstable();
+					ids
+				}
 			});
 
 		let events_in_reverse_order: Vec<(OwnedEventId, CanonicalJsonObject)> = sorted
