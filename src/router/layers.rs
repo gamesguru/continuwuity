@@ -55,8 +55,8 @@ pub(crate) fn build(services: &Arc<Services>) -> Result<(Router, Guard)> {
 			TraceLayer::new_for_http()
 				.make_span_with(tracing_span::<_>)
 				.on_failure(DefaultOnFailure::new().level(Level::ERROR))
-				.on_request(DefaultOnRequest::new().level(Level::INFO))
-				.on_response(DefaultOnResponse::new().level(Level::INFO)),
+				.on_request(DefaultOnRequest::new().level(Level::DEBUG))
+				.on_response(DefaultOnResponse::new().level(Level::DEBUG)),
 		)
 		.layer(axum::middleware::from_fn_with_state(Arc::clone(services), request::handle))
 		.layer(SecureClientIpSource::ConnectInfo.into_extension())
@@ -210,7 +210,16 @@ fn tracing_span<T>(request: &http::Request<T>) -> tracing::Span {
 		.get::<MatchedPath>()
 		.map_or_else(|| request_path_str(request), truncated_matched_path);
 
+	let target = if path.starts_with("/_matrix/client") || path.starts_with("/_matrix/static") {
+		"conduwuit::client::access"
+	} else if path.starts_with("/_matrix/federation") {
+		"conduwuit::federation::access"
+	} else {
+		"conduwuit::router::access"
+	};
+
 	tracing::span! {
+		target: target,
 		parent: None,
 		debug::INFO_SPAN_LEVEL,
 		"router",
