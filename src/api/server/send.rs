@@ -180,12 +180,23 @@ async fn process_inbound_transaction(
 		}
 	}
 
-	info!(
-		pdus = body.pdus.len(),
-		edus = body.edus.len(),
-		elapsed = ?txn_start_time.elapsed(),
-		"Finished processing transaction"
-	);
+	let elapsed = txn_start_time.elapsed();
+	if elapsed < Duration::from_millis(50) {
+		info!(
+			target: "federation-nominal",
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Finished processing transaction"
+		);
+	} else {
+		info!(
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Finished processing transaction"
+		);
+	}
 
 	let response = send_transaction_message::v1::Response {
 		pdus: results
@@ -390,14 +401,20 @@ async fn handle_edu_presence(
 	origin: &ServerName,
 	presence: PresenceContent,
 ) {
-	presence
+	let fut = presence
 		.push
 		.into_iter()
 		.stream()
 		.for_each_concurrent(automatic_width(), |update| {
 			handle_edu_presence_update(services, origin, update)
-		})
-		.await;
+		});
+
+	if let Err(_) = tokio::time::timeout(Duration::from_secs(5), fut).await {
+		debug_warn!(
+			"Congestion: presence updates from {} took longer than 5s, dropping remaining",
+			origin
+		);
+	}
 }
 
 async fn handle_edu_presence_update(
