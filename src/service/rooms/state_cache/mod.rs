@@ -290,6 +290,10 @@ pub fn room_members<'a>(
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn invalidate_user_visibility(&self, user_id: &UserId, room_id: &RoomId) {
+	if self.room_joined_count(room_id).await.unwrap_or(0) > 100 {
+		return;
+	}
+
 	self.room_members(room_id)
 		.ready_for_each(|other_user| {
 			let key = if user_id < other_user {
@@ -306,6 +310,10 @@ pub async fn invalidate_user_visibility(&self, user_id: &UserId, room_id: &RoomI
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn invalidate_server_visibility(&self, user_id: &UserId, room_id: &RoomId) {
+	if self.room_joined_count(room_id).await.unwrap_or(0) > 100 {
+		return;
+	}
+
 	self.room_servers(room_id)
 		.ready_for_each(|server| {
 			self.server_visibility_cache

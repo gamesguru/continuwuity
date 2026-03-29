@@ -14,7 +14,7 @@ use conduwuit_service::{
 		PaginationToken, SummaryAccessibility, get_parent_children_via, summary_to_chunk,
 	},
 };
-use futures::{StreamExt, TryFutureExt, future::OptionFuture};
+use futures::{StreamExt, future::OptionFuture};
 use ruma::{
 	OwnedRoomId, OwnedServerName, RoomId, UInt, UserId, api::client::space::get_hierarchy,
 };
@@ -95,82 +95,57 @@ where
 
 	let mut rooms = Vec::with_capacity(limit);
 	let mut parents = BTreeSet::new();
-	while !queue.is_empty() && rooms.len() < limit {
-		let mut batch = Vec::new();
-		while let Some(item) = queue.pop_front() {
-			batch.push(item);
-			if batch.len() >= 10 || rooms.len().saturating_add(batch.len()) >= limit {
-				break;
-			}
+	while let Some((current_room, via)) = queue.pop_back() {
+		if rooms.len() >= limit {
+			break;
 		}
 
-		let fetches = batch.into_iter().map(|(current_room, via)| async move {
-			let summary = services
-				.rooms
-				.spaces
-				.get_summary_and_children_client(&current_room, suggested_only, sender_user, &via)
-				.await?;
+		let summary = services
+			.rooms
+			.spaces
+			.get_summary_and_children_client(&current_room, suggested_only, sender_user, &via)
+			.await?;
 
-			Ok::<_, conduwuit::Error>((current_room, summary))
-		});
+		match (summary, current_room == *room_id) {
+			| (None | Some(SummaryAccessibility::Inaccessible), false) => {
+				// Just ignore other unavailable rooms
+			},
+			| (None, true) => {
+				return Err!(Request(Forbidden("The requested room was not found")));
+			},
+			| (Some(SummaryAccessibility::Inaccessible), true) => {
+				return Err!(Request(Forbidden("The requested room is inaccessible")));
+			},
+			| (Some(SummaryAccessibility::Accessible(summary)), _) => {
+				let populate = parents.len() >= short_room_ids.clone().count();
 
-		let results = futures::future::try_join_all(fetches).await?;
+				let children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
+					.filter(|(room, _)| !parents.contains(room))
+					.rev()
+					.map(|(key, val)| (key, val.collect()))
+					.collect();
 
-		for (current_room, summary) in results {
-			match (summary, current_room == *room_id) {
-				| (None | Some(SummaryAccessibility::Inaccessible), false) => {
-					// Just ignore other unavailable rooms
-				},
-				| (None, true) => {
-					return Err!(Request(Forbidden("The requested room was not found")));
-				},
-				| (Some(SummaryAccessibility::Inaccessible), true) => {
-					return Err!(Request(Forbidden("The requested room is inaccessible")));
-				},
-				| (Some(SummaryAccessibility::Accessible(summary)), _) => {
-					let populate = parents.len() >= short_room_ids.clone().count();
-
-					let mut children: Vec<Entry> =
-						get_parent_children_via(&summary, suggested_only)
-							.filter(|(room, _)| !parents.contains(room))
-							.rev()
-							.map(|(key, val)| (key, val.collect()))
-							.collect();
-
-					if populate {
-						rooms.push(summary_to_chunk(summary.clone()));
-					} else {
-						children = children
-							.iter()
-							.rev()
-							.stream()
-							.skip_while(|(room, _)| {
-								services
-									.rooms
-									.short
-									.get_shortroomid(room)
-									.map_ok(|short| {
-										Some(&short) != short_room_ids.clone().nth(parents.len())
-									})
-									.unwrap_or_else(|_| false)
-							})
-							.map(Clone::clone)
-							.collect::<Vec<Entry>>()
-							.await
-							.into_iter()
-							.rev()
-							.collect();
+				if populate {
+					rooms.push(summary_to_chunk(summary.clone()));
+				} else if let Some(target) = short_room_ids.clone().nth(parents.len()) {
+					for (room, _) in &children {
+						if let Ok(short) = services.rooms.short.get_shortroomid(room).await {
+							if short == *target {
+								// Found the room we were looking for in paginated state
+								break;
+							}
+						}
 					}
+				}
 
-					parents.insert(current_room.clone());
+				parents.insert(current_room.clone());
 
-					if parents.len() > max_depth {
-						continue;
-					}
+				if parents.len() > max_depth {
+					continue;
+				}
 
-					queue.extend(children);
-				},
-			}
+				queue.extend(children);
+			},
 		}
 	}
 
