@@ -410,9 +410,10 @@ impl Service {
 
 			self.schedule_timeout(user_id, &new_state)?;
 
-			// Do not notify for idle/offline transitions to prevent I/O storms.
-			// The sender will pick these up lazily on its next sweep.
-			// self.notify_presence_change(user_id).await.log_err().ok();
+			// Notify for idle/offline transitions so remote servers eventually
+			// see the updated presence state. Batching is handled inside
+			// `notify_presence_change` via `pending_updates`.
+			self.notify_presence_change(user_id).await.log_err().ok();
 		}
 
 		Ok(())

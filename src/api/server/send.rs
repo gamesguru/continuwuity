@@ -163,7 +163,7 @@ async fn process_inbound_transaction(
 		.filter_map(Result::ok)
 		.stream();
 
-	info!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction");
+	debug!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction");
 	let results = match handle(&services, &client, body.origin(), pdus, edus).await {
 		| Ok(results) => results,
 		| Err(err) => {
@@ -182,7 +182,7 @@ async fn process_inbound_transaction(
 
 	let elapsed = txn_start_time.elapsed();
 	if elapsed < Duration::from_millis(50) {
-		info!(
+		debug!(
 			target: "federation-nominal",
 			pdus = body.pdus.len(),
 			edus = body.edus.len(),

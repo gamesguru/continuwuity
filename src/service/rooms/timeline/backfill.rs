@@ -161,36 +161,7 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 		match response {
 			| Ok(response) => {
 				let pdus = response.pdus;
-
-				// Pass 1: Handle outliers oldest-first order (avoid sequential auth stalls)
-				for pdu in pdus.iter().rev() {
-					match self.services.event_handler.parse_incoming_pdu(pdu).await {
-						| Ok((pdu_room_id, pdu_event_id, pdu_value)) => {
-							if let Err(e) = self
-								.services
-								.event_handler
-								.handle_outlier_pdu(
-									backfill_server,
-									&create_event,
-									&pdu_event_id,
-									&pdu_room_id,
-									pdu_value,
-									false,
-								)
-								.await
-							{
-								debug_warn!(
-									"Failed to handle backfilled outlier in room {room_id}: {e}"
-								);
-							}
-						},
-						| Err(e) => {
-							debug_warn!("Failed to parse backfilled pdu in room {room_id}: {e}");
-						},
-					}
-				}
-
-				// Pass 2: Handle timeline events newest-first (maintain timeline integrity)
+				// Handle timeline events newest-first (maintain timeline integrity)
 				for pdu in pdus {
 					if let Err(e) = self.backfill_pdu(backfill_server, pdu, None).boxed().await {
 						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");

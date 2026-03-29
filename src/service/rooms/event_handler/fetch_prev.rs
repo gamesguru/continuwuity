@@ -107,7 +107,10 @@ where
 									continue;
 								}
 
-								if amount >= limit.into() {
+								if amount.saturating_add(
+									u64::try_from(active_fetches.len()).unwrap_or(u64::MAX),
+								) >= limit.into()
+								{
 									info!(target: "backfill", "Max prev event limit reached! Limit: {limit}");
 									graph.insert(prev_prev.to_owned(), HashSet::new());
 									continue;
