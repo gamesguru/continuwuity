@@ -255,7 +255,9 @@ where
 			.await
 			.unwrap_or_else(|e| {
 				warn!("lexicographical_topological_sort failed for {id}: {e}");
-				Vec::new()
+				// Fallback to ensuring we do not arbitrarily drop successfully fetched events
+				// if the graph has a cycle or is structurally broken by network truncation.
+				fetched_info.keys().cloned().collect()
 			});
 
 		let events_in_reverse_order: Vec<(OwnedEventId, CanonicalJsonObject)> = sorted
