@@ -317,15 +317,6 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	// the token which may be passed to the messages endpoint to backfill room
-	// history. If the timeline is empty, fallback to the start of this sync window
-	// to ensure clients always have a valid topological pagination token.
-	let prev_batch = timeline
-		.pdus
-		.front()
-		.map(at!(0))
-		.or_else(|| sync_context.last_sync_end_count.map(PduCount::Normal));
-
 	// note: we usually indicate a limited timeline if the syncing user just joined
 	// the room to trigger backfill (Synapse behavior). However, if the room
 	// actually has ZERO timeline events (e.g., a space), forcing `limited: true`
@@ -342,6 +333,16 @@ async fn build_state_and_timeline(
 	} else {
 		timeline.limited || joined_since_last_sync
 	};
+
+	// the token which may be passed to the messages endpoint to backfill room
+	// history. If the timeline is empty, fallback to the start of this sync window
+	// to ensure clients always have a valid topological pagination token.
+	let prev_batch = timeline.pdus.front().map(at!(0)).or_else(|| {
+		limited
+			.then_some(())
+			.and(sync_context.last_sync_end_count)
+			.map(PduCount::Normal)
+	});
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
