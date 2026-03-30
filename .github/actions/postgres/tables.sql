@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 -- Unique index to prevent duplicate machine reports
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_machine_run
-ON runs (commit_hash, run_date, arch, os) NULLS NOT DISTINCT;
+ON runs (commit_hash, run_date, arch, os, profile) NULLS NOT DISTINCT;
 
 -- Create run_details table
 CREATE TABLE IF NOT EXISTS run_details (
@@ -76,7 +76,8 @@ SELECT
     counts.new_pass,
     counts.new_skip,
     counts.new_fail,
-    counts.new_failures_list
+    counts.new_failures_list,
+    counts.new_passes_list
 FROM runs r
 LEFT JOIN LATERAL (
     SELECT
@@ -84,7 +85,8 @@ LEFT JOIN LATERAL (
         COUNT(*) FILTER (WHERE rd.status = 'pass' AND (mb.status IS NULL OR mb.status != 'pass')) as new_pass,
         COUNT(*) FILTER (WHERE rd.status = 'skip' AND (mb.status IS NULL OR mb.status != 'skip')) as new_skip,
         COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_fail,
-        STRING_AGG(rd.test_name, E'\n') FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_failures_list
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_failures_list,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND (mb.status IS NULL OR mb.status != 'pass')) as new_passes_list
     FROM run_details rd
     LEFT JOIN master_baseline mb ON mb.test_name = rd.test_name
     WHERE rd.run_id = r.id

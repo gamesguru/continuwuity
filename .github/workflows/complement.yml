@@ -301,6 +301,8 @@ jobs:
         with:
           ssh_target: "git@nutra.tk"
           database_url: ${{ secrets.C10Y_POSTGRES_URL }}
+          setup_tables: ${{ github.ref == 'refs/heads/main' }}
+          rebuild_db: false
 
       - name: Query updated Postgres stats
         env:
