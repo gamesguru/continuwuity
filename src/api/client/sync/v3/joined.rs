@@ -105,6 +105,20 @@ pub(super) async fn load_joined_room(
 		unread_thread_notifications: BTreeMap::new(),
 	};
 
+	if !joined_room.is_empty() {
+		conduwuit::warn!(
+			"dbg: room {} is not empty. timeline: {} (limited: {}), state: {}, acc: {}, eph: {}, notif: {:?}, summary: {:?}",
+			room_id,
+			joined_room.timeline.events.len(),
+			joined_room.timeline.limited,
+			joined_room.state.events.len(),
+			joined_room.account_data.events.len(),
+			joined_room.ephemeral.events.len(),
+			joined_room.unread_notifications,
+			joined_room.summary.joined_member_count
+		);
+	}
+
 	let state_after = state_after
 		.into_iter()
 		.map(Event::into_format)
@@ -305,15 +319,7 @@ async fn build_state_and_timeline(
 	// the token which may be passed to the messages endpoint to backfill room
 	// history. If the timeline is empty, fallback to the start of this sync window
 	// to ensure clients always have a valid topological pagination token.
-	let prev_batch = timeline.pdus.front().map(at!(0)).map_or_else(
-		|| {
-			sync_context
-				.last_sync_end_count
-				.unwrap_or(sync_context.current_count)
-				.to_string()
-		},
-		|count| count.to_string(),
-	);
+	let prev_batch = timeline.pdus.front().map(at!(0));
 
 	// note: we usually indicate a limited timeline if the syncing user just joined
 	// the room to trigger backfill (Synapse behavior). However, if the room
@@ -349,7 +355,7 @@ async fn build_state_and_timeline(
 		state_after,
 		timeline: Timeline {
 			limited,
-			prev_batch: Some(prev_batch),
+			prev_batch: prev_batch.as_ref().map(ToString::to_string),
 			events: filtered_timeline,
 		},
 		summary,
