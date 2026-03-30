@@ -32,7 +32,16 @@ pub(super) async fn process(subcommand: AppserviceCommand, context: &Context<'_>
 		},
 		| AppserviceCommand::All => {
 			let timer = tokio::time::Instant::now();
-			let results: Vec<_> = services.appservice.iter_db_ids().try_collect().await?;
+			let mut db_ids = Box::pin(services.appservice.iter_db_ids());
+			let mut results = Vec::new();
+			let mut count = 0_u64;
+			while let Some(id) = db_ids.try_next().await? {
+				results.push(id);
+				count = count.saturating_add(1);
+				if count.is_multiple_of(1000) {
+					tokio::task::yield_now().await;
+				}
+			}
 			let query_time = timer.elapsed();
 
 			write!(context, "Query completed in {query_time:?}:\n\n```rs\n{results:#?}\n```")
