@@ -249,10 +249,7 @@ pub(super) async fn get_remote_pdu(
 	match self
 		.services
 		.sending
-		.send_federation_request(&server, ruma::api::federation::event::get_event::v1::Request {
-			event_id: event_id.clone(),
-			include_unredacted_content: None,
-		})
+		.send_federation_request(&server, get_event::v1::Request::new(event_id.clone(), None))
 		.await
 	{
 		| Err(e) => {
@@ -531,16 +528,18 @@ pub(super) async fn fetch_pdu(
 ) -> Result {
 	self.bail_restricted()?;
 
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+
 	let response = self
 		.services
 		.sending
-		.send_federation_request(&server, get_event::v1::Request { event_id })
+		.send_federation_request(&server, get_event::v1::Request::new(event_id, None))
 		.await?;
 
 	let (event_id, value) = self
 		.services
 		.server_keys
-		.decode_and_verify_json_dict(&response.pdu, &server, Instant::now())
+		.validate_and_add_event_id(&response.pdu, &room_version)
 		.await?;
 
 	let result = self
@@ -551,7 +550,7 @@ pub(super) async fn fetch_pdu(
 		.await?;
 
 	match result {
-		| Some(id) => write!(self, "Successfully fetched and persisted PDU: {id}"),
+		| Some(id) => write!(self, "Successfully fetched and persisted PDU: {id:?}"),
 		| None => write!(self, "PDU was already present or failed validation silently."),
 	}
 	.await

@@ -4,7 +4,7 @@ pub mod directory;
 pub mod event_handler;
 pub mod lazy_loading;
 pub mod metadata;
-mod monitor;
+pub mod monitor;
 pub mod outlier;
 pub mod pdu_metadata;
 pub mod read_receipt;

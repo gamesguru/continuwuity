@@ -1,22 +1,27 @@
 use std::{sync::Arc, time::Duration};
 
-use conduwuit::{Result, debug, info, warn};
-use futures::StreamExt;
+use conduwuit::{Event, Result, debug, info, warn};
+use futures::{FutureExt, StreamExt};
 use ruma::api::federation::event::get_room_state;
 
-use crate::Services;
+use crate::service::Dep;
 
 pub struct Service {
-	services: Services,
+	services: InnerServices,
 }
 
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
-			services: Services {
+			services: InnerServices {
 				server: args.server.clone(),
 				globals: args.depend::<crate::globals::Service>("globals"),
-				rooms: args.depend::<crate::rooms::Service>("rooms"),
+				metadata: args.depend::<crate::rooms::metadata::Service>("rooms::metadata"),
+				timeline: args.depend::<crate::rooms::timeline::Service>("rooms::timeline"),
+				state_cache: args
+					.depend::<crate::rooms::state_cache::Service>("rooms::state_cache"),
+				event_handler: args
+					.depend::<crate::rooms::event_handler::Service>("rooms::event_handler"),
 				sending: args.depend::<crate::sending::Service>("sending"),
 			},
 		}))
@@ -25,11 +30,14 @@ impl crate::Service for Service {
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
 
-struct Services {
+struct InnerServices {
 	server: Arc<conduwuit::Server>,
-	globals: crate::Dep<crate::globals::Service>,
-	rooms: crate::Dep<crate::rooms::Service>,
-	sending: crate::Dep<crate::sending::Service>,
+	globals: Dep<crate::globals::Service>,
+	metadata: Dep<crate::rooms::metadata::Service>,
+	timeline: Dep<crate::rooms::timeline::Service>,
+	state_cache: Dep<crate::rooms::state_cache::Service>,
+	event_handler: Dep<crate::rooms::event_handler::Service>,
+	sending: Dep<crate::sending::Service>,
 }
 
 impl Service {
@@ -44,11 +52,11 @@ impl Service {
 			}
 
 			debug!("Auto-Thumper: Scanning rooms for staleness...");
-			let rooms = self.services.rooms.metadata.iter_ids();
+			let rooms = self.services.metadata.iter_ids();
 			let mut room_stream = rooms.boxed();
 
 			while let Some(room_id) = room_stream.next().await {
-				if let Err(e) = self.check_room(room_id).await {
+				if let Err(e) = self.check_room(room_id).boxed().await {
 					debug!("Auto-Thumper: Error checking room {room_id}: {e}");
 				}
 				tokio::task::yield_now().await;
@@ -57,24 +65,21 @@ impl Service {
 	}
 
 	async fn check_room(&self, room_id: &ruma::RoomId) -> Result<()> {
-		let latest_pdu = self
-			.services
-			.rooms
-			.timeline
-			.latest_pdu_in_room(room_id)
-			.await?;
-		let now = std::time::SystemTime::now()
+		let latest_pdu = self.services.timeline.latest_pdu_in_room(room_id).await?;
+		let now: u64 = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
 			.expect("time went backwards")
-			.as_millis() as u64;
+			.as_millis()
+			.try_into()
+			.expect("time overflow");
 
 		let stale_threshold = 4 * 3600 * 1000; // 4 hours
-		if now.saturating_sub(latest_pdu.origin_server_ts().into()) < stale_threshold {
+		if now.saturating_sub(latest_pdu.origin_server_ts().get().into()) < stale_threshold {
 			return Ok(());
 		}
 
 		// Check if room has remote members
-		let mut remote_servers = self.services.rooms.state_cache.room_servers(room_id);
+		let mut remote_servers = self.services.state_cache.room_servers(room_id);
 		let Some(remote_server) = remote_servers
 			.next()
 			.await
@@ -84,9 +89,9 @@ impl Service {
 		};
 
 		warn!(
-			target: "backfill",
-			"Auto-Thumper: Room {room_id} is stagnant (latest PDU was {ts}ms ago). Thumping via {remote_server}...",
-			ts = now.saturating_sub(latest_pdu.origin_server_ts().into())
+			target: "forwardfill",
+			"Auto-Thumper: Room {room_id} is stagnant (latest PDU was {}ms ago). Thumping via {remote_server}...",
+			now.saturating_sub(latest_pdu.origin_server_ts().get().into())
 		);
 
 		// Trigger catchup by requesting remote state at our latest point.
@@ -103,14 +108,18 @@ impl Service {
 			.await?;
 
 		for pdu in response.pdus {
-			let (event_id, value) = self
-				.services
-				.rooms
-				.event_handler
-				.parse_incoming_pdu(&pdu)
-				.await?;
+			let (parsed_room_id, event_id, value) =
+				self.services.event_handler.parse_incoming_pdu(&pdu).await?;
+
+			if parsed_room_id != *room_id {
+				info!(
+					target: "forwardfill",
+					"Auto-Thumper: Server {remote_server} returned PDU for room {parsed_room_id} while thumping {room_id}"
+				);
+				continue;
+			}
+
 			self.services
-				.rooms
 				.event_handler
 				.handle_incoming_pdu(remote_server, room_id, &event_id, value, false)
 				.await?;
