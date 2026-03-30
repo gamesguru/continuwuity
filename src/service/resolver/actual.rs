@@ -367,9 +367,9 @@ impl super::Service {
 
 					Err!(error!(%host, %qtype, "DNS error: {e}"))
 				},
-				| _ => Err!(error!(%host, %qtype, "DNS error: {e}")),
+				| _ => Err!(warn!(%host, %qtype, "DNS error: {e}")),
 			},
-			| _ => Err!(error!(%host, %qtype, "DNS error: {e}")),
+			| _ => Err!(warn!(%host, %qtype, "DNS error: {e}")),
 		}
 	}
 

@@ -106,8 +106,9 @@ pub(super) async fn load_joined_room(
 	};
 
 	if !joined_room.is_empty() {
-		conduwuit::warn!(
-			"dbg: room {} is not empty. timeline: {} (limited: {}), state: {}, acc: {}, eph: {}, notif: {:?}, summary: {:?}",
+		conduwuit::debug!(
+			"room {} is not empty. timeline: {} (limited: {}), state: {}, acc: {}, eph: {}, \
+			 notif: {:?}, summary: {:?}",
 			room_id,
 			joined_room.timeline.events.len(),
 			joined_room.timeline.limited,
