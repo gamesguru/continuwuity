@@ -562,7 +562,7 @@ async fn prepare_lazily_loaded_members(
 
 	// filter the input members through `retain_lazy_members`, which
 	// contains the actual lazy loading logic.
-	let lazily_loaded_members =
+	let mut lazily_loaded_members =
 		OptionFuture::from(sync_context.lazy_loading_enabled().then(|| {
 			services
 				.rooms
@@ -570,6 +570,13 @@ async fn prepare_lazily_loaded_members(
 				.retain_lazy_members(timeline_members.collect(), lazy_loading_context)
 		}))
 		.await;
+
+	// Matrix spec requires that the syncing user's own membership event is always
+	// included in the state, even if it otherwise would not be included due to
+	// lazy-loading!
+	if let Some(members) = &mut lazily_loaded_members {
+		members.insert(sync_context.syncing_user.into());
+	}
 
 	lazily_loaded_members
 }

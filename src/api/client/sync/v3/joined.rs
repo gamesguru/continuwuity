@@ -320,7 +320,11 @@ async fn build_state_and_timeline(
 	// the token which may be passed to the messages endpoint to backfill room
 	// history. If the timeline is empty, fallback to the start of this sync window
 	// to ensure clients always have a valid topological pagination token.
-	let prev_batch = timeline.pdus.front().map(at!(0));
+	let prev_batch = timeline
+		.pdus
+		.front()
+		.map(at!(0))
+		.or_else(|| sync_context.last_sync_end_count.map(PduCount::Normal));
 
 	// note: we usually indicate a limited timeline if the syncing user just joined
 	// the room to trigger backfill (Synapse behavior). However, if the room
