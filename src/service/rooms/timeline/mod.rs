@@ -1,7 +1,6 @@
 mod append;
 mod backfill;
 mod build;
-mod bumper;
 mod create;
 mod data;
 mod redact;
@@ -129,19 +128,6 @@ impl crate::Service for Service {
 	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
-
-	async fn worker(self: Arc<Self>) -> Result<()> {
-		let interval = std::time::Duration::from_secs(60 * 60 * 12); // 12 hours
-		let mut timer = tokio::time::interval(interval);
-
-		loop {
-			timer.tick().await;
-
-			if let Err(e) = self.run_room_bumper().await {
-				warn!("Room bumper task failed: {e}");
-			}
-		}
-	}
 }
 
 impl Service {

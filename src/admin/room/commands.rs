@@ -97,11 +97,21 @@ pub(super) async fn bump(&self, room_id: OwnedRoomId) -> Result {
 		return Err!("We are not participating in the room / we don't know about the room ID.");
 	}
 
+	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
+
+	let pdu_builder = conduwuit::matrix::pdu::PduBuilder {
+		event_type: "org.matrix.dummy_event".into(),
+		content: serde_json::value::to_raw_value(&serde_json::json!({})).expect("valid json"),
+		..Default::default()
+	};
+
+	let sender = &self.services.globals.server_user;
+
 	let event_id = self
 		.services
 		.rooms
 		.timeline
-		.bump_room(&room_id)
+		.build_and_append_pdu(pdu_builder, sender, Some(&room_id), &state_lock)
 		.await
 		.map_err(|e| {
 			conduwuit::err!(Database("Failed appending dummy event into room timeline: {e}"))
