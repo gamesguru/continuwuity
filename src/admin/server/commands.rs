@@ -5,7 +5,7 @@ use conduwuit::{
 	utils::{stream::IterStream, time},
 	warn,
 };
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::admin_command;
 
@@ -81,11 +81,15 @@ pub(super) async fn clear_caches(&self) -> Result {
 
 #[admin_command]
 pub(super) async fn list_backups(&self) -> Result {
+	let db = Arc::clone(&self.services.db);
 	self.services
-		.db
-		.db
-		.backup_list()?
-		.try_stream()
+		.server
+		.runtime()
+		.spawn_blocking(move || db.db.backup_list().map(Iterator::collect::<Vec<_>>))
+		.await??
+		.into_iter()
+		.stream()
+		.map(Ok)
 		.try_for_each(|result| writeln!(self, "{result}"))
 		.await
 }
@@ -105,7 +109,14 @@ pub(super) async fn backup_database(&self) -> Result {
 		})
 		.await?;
 
-	let count = self.services.db.db.backup_count()?;
+	let db = Arc::clone(&self.services.db);
+	let count = self
+		.services
+		.server
+		.runtime()
+		.spawn_blocking(move || db.db.backup_count())
+		.await??;
+
 	self.write_str(&format!("{result}. Currently have {count} backups."))
 		.await
 }
