@@ -278,7 +278,10 @@ pub async fn handle_incoming_pdu<'a>(
 				prev_id,
 			)
 			.inspect_err(move |e| {
-				warn!("Prev {prev_id} failed: {e}");
+				warn!(
+					target: "event_handler",
+					"Prev PDU {prev_id} failed: {e}"
+				);
 				match self
 					.services
 					.globals

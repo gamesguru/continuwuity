@@ -144,6 +144,7 @@ where
 				graph.insert(prev_event_id, HashSet::new());
 			},
 		}
+		tokio::task::yield_now().await;
 	}
 
 	let event_fetch = |event_id| {

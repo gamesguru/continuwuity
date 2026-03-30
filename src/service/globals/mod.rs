@@ -179,18 +179,37 @@ impl crate::Service for Service {
 				.transactions_rate_1m
 				.store(d_transactions, std::sync::atomic::Ordering::Relaxed);
 
+			let presence = self
+				.server
+				.metrics
+				.presence_pending_updates
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let backfill = self
+				.server
+				.metrics
+				.federation_active_rooms
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let sending = self
+				.server
+				.metrics
+				.sending_queue_total
+				.load(std::sync::atomic::Ordering::Relaxed);
+
 			conduwuit::info!(
 				target: "stats",
 				"Network stats (Last 1m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
 				 latency) | DNS Resolver: {} reqs ({:.2}% fail, {:.2}ms avg latency) | Fed \
-				 Txns: {}",
+				 Txns: {} | Background: {} pres, {} bfill, {} send",
 				d_http_total,
 				http_fail_rate,
 				http_avg_latency_ms,
 				d_dns_total,
 				dns_fail_rate,
 				dns_avg_latency_ms,
-				d_transactions
+				d_transactions,
+				presence,
+				backfill,
+				sending
 			);
 
 			last_http_success = http_success;

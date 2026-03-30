@@ -130,6 +130,7 @@ impl Service {
 			} else if let Some(response) = futures.next().await {
 				self.handle_response(response, futures, statuses).await;
 			}
+			tokio::task::yield_now().await;
 		}
 	}
 
@@ -923,6 +924,13 @@ impl Service {
 		server: OwnedServerName,
 		events: Vec<SendingEvent>,
 	) -> SendingResult {
+		let _permit = self
+			.semaphore
+			.clone()
+			.acquire_owned()
+			.await
+			.expect("Semaphore should not be closed");
+
 		let pdus: Vec<_> = events
 			.iter()
 			.filter_map(|pdu| match pdu {

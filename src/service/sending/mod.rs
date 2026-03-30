@@ -40,6 +40,7 @@ pub struct Service {
 	server: Arc<Server>,
 	services: Services,
 	channels: Vec<(loole::Sender<Msg>, loole::Receiver<Msg>)>,
+	pub(super) semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 struct Services {
@@ -103,6 +104,7 @@ impl crate::Service for Service {
 				federation: args.depend::<federation::Service>("federation"),
 			},
 			channels: (0..num_senders).map(|_| loole::unbounded()).collect(),
+			semaphore: Arc::new(tokio::sync::Semaphore::new(128)),
 		}))
 	}
 
@@ -135,6 +137,13 @@ impl crate::Service for Service {
 		});
 
 		while let Some(ret) = senders.join_next_with_id().await {
+			self.server.metrics.sending_queue_total.store(
+				self.channels
+					.iter()
+					.map(|(s, _)| u64::try_from(s.len()).expect("failed conversion"))
+					.sum(),
+				std::sync::atomic::Ordering::Relaxed,
+			);
 			match ret {
 				| Ok((id, _)) => {
 					debug!(?id, "sender worker finished");
@@ -311,6 +320,13 @@ impl Service {
 	where
 		T: OutgoingRequest + Debug + Send,
 	{
+		let _permit = self
+			.semaphore
+			.clone()
+			.acquire_owned()
+			.await
+			.expect("Semaphore should not be closed");
+
 		self.services.federation.execute(dest, request).await
 	}
 
@@ -324,6 +340,13 @@ impl Service {
 	where
 		T: OutgoingRequest + Debug + Send,
 	{
+		let _permit = self
+			.semaphore
+			.clone()
+			.acquire_owned()
+			.await
+			.expect("Semaphore should not be closed");
+
 		self.services
 			.federation
 			.execute_synapse(dest, request)

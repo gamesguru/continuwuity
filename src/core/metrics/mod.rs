@@ -42,6 +42,11 @@ pub struct Metrics {
 	pub requests_rate_1m: AtomicU64,
 	pub dns_rate_1m: AtomicU64,
 	pub transactions_rate_1m: AtomicU64,
+
+	// Background metrics
+	pub presence_pending_updates: AtomicU64,
+	pub federation_active_rooms: AtomicU32,
+	pub sending_queue_total: AtomicU64,
 }
 
 impl Metrics {
@@ -83,6 +88,9 @@ impl Metrics {
 			requests_rate_1m: AtomicU64::new(0),
 			dns_rate_1m: AtomicU64::new(0),
 			transactions_rate_1m: AtomicU64::new(0),
+			presence_pending_updates: AtomicU64::new(0),
+			federation_active_rooms: AtomicU32::new(0),
+			sending_queue_total: AtomicU64::new(0),
 		}
 	}
 

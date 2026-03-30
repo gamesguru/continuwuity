@@ -106,6 +106,17 @@ impl crate::Service for Service {
 					break;
 				}
 
+				self_flush
+					.services
+					.server
+					.metrics
+					.presence_pending_updates
+					.store(
+						u64::try_from(self_flush.pending_updates.len())
+							.expect("failed conversion"),
+						std::sync::atomic::Ordering::Relaxed,
+					);
+
 				let servers: Vec<_> = self_flush
 					.pending_updates
 					.iter()
@@ -120,6 +131,7 @@ impl crate::Service for Service {
 						.await
 						.ok();
 				}
+				tokio::task::yield_now().await;
 			}
 		});
 
@@ -139,6 +151,8 @@ impl crate::Service for Service {
 							.await
 							.log_err()
 							.ok();
+
+						tokio::task::yield_now().await;
 					});
 
 					if let Some(old_task) = presence_timers.insert(user_id, new_task) {

@@ -324,5 +324,28 @@ pub(super) async fn diagnostics(&self) -> Result {
 			.load(std::sync::atomic::Ordering::Relaxed)
 	)?;
 
+	writeln!(info, "\n## Background Tasks")?;
+	writeln!(
+		info,
+		"**Presence Updates:** {}",
+		metrics
+			.presence_pending_updates
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Active Backfill Rooms:** {}",
+		metrics
+			.federation_active_rooms
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Outbound Sending Queue:** {}",
+		metrics
+			.sending_queue_total
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+
 	self.write_str(&info).await
 }
