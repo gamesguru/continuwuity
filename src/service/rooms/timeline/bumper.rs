@@ -78,7 +78,17 @@ impl Service {
 			..Default::default()
 		};
 
-		let sender = &self.services.globals.server_user;
+		let sender = self
+			.services
+			.state_cache
+			.room_members(room_id)
+			.ready_filter(|user| self.services.globals.user_is_local(user))
+			.next()
+			.await
+			.ok_or_else(|| {
+				conduwuit::err!(Request(Forbidden("No local users in room to send bump event")))
+			})?;
+
 		let event_id = self
 			.build_and_append_pdu(pdu_builder, sender, Some(room_id), &state_lock)
 			.await?;

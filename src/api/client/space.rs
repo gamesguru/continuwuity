@@ -96,9 +96,10 @@ where
 	let mut rooms = Vec::with_capacity(limit);
 
 	let mut parents = BTreeSet::new();
+	let mut visited = BTreeSet::new();
 
 	while let Some((current_room, via)) = queue.pop_back() {
-		if parents.contains(&current_room) {
+		if !visited.insert(current_room.clone()) {
 			continue;
 		}
 
@@ -154,7 +155,7 @@ where
 									{
 										Some(&short) != target
 									} else {
-										false
+										true
 									}
 								}
 							})

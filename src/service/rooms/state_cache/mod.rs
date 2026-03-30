@@ -76,7 +76,7 @@ impl crate::Service for Service {
 					.try_into()
 					.unwrap_or(25_000),
 				)
-				.time_to_idle(std::time::Duration::from_secs(5 * 60))
+				.time_to_live(std::time::Duration::from_secs(5 * 60))
 				.build(),
 			user_visibility_cache: Cache::builder()
 				.max_capacity(
@@ -90,7 +90,7 @@ impl crate::Service for Service {
 					.try_into()
 					.unwrap_or(25_000),
 				)
-				.time_to_idle(std::time::Duration::from_secs(5 * 60))
+				.time_to_live(std::time::Duration::from_secs(5 * 60))
 				.build(),
 			services: Services {
 				account_data: args.depend::<account_data::Service>("account_data"),
