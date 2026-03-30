@@ -321,7 +321,10 @@ where
 						pdus.push((pdu, Some(json)));
 					},
 				| Err(e) => {
-					warn!("Authentication of event {next_id} failed: {e:?}");
+					info!(
+						target: "auth_chain",
+						"Authentication of event {next_id} failed: {e:?}"
+					);
 					back_off(next_id);
 				},
 			}

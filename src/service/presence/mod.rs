@@ -154,9 +154,9 @@ impl crate::Service for Service {
 			// Periodic tally
 			if Instant::now() >= next_tally {
 				presence_timers.retain(|_, task| !task.is_finished());
-				warn!(
+				info!(
 					target: "stats",
-					"presence stats: {} active timers, {} received",
+					"Presence stats: {} active timers, {} received",
 					presence_timers.len(),
 					events_received
 				);

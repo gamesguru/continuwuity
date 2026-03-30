@@ -41,7 +41,6 @@ use crate::{
 	state_res::room_version::StateResolutionVersion,
 	trace,
 	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, WidebandExt},
-	warn,
 };
 
 /// A mapping of event type and state_key to some value `T`, usually an
@@ -692,7 +691,10 @@ where
 					ev.clone(),
 				);
 			} else {
-				warn!(event_id = aid.as_str(), "missing auth event");
+				info!(
+					target: "state_res",
+					event_id = aid.as_str(), "missing auth event"
+				);
 			}
 		}
 
