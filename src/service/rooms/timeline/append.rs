@@ -146,23 +146,21 @@ where
 					.await
 				{
 					unsigned
-						.entry("prev_content".to_owned())
-						.or_insert_with(|| {
-							CanonicalJsonValue::Object(
-								utils::to_canonical_object(prev_state.get_content_as_value())
-									.expect("Failed to convert prev_state to canonical JSON"),
-							)
-						});
-					unsigned.entry("prev_sender".to_owned()).or_insert_with(|| {
-						CanonicalJsonValue::String(prev_state.sender().to_string())
-					});
-					unsigned
-						.entry("replaces_state".to_owned())
-						.or_insert_with(|| {
-							CanonicalJsonValue::String(prev_state.event_id().to_string())
-						});
-				}
-			}
+					unsigned.insert(
+						"prev_content".to_owned(),
+						CanonicalJsonValue::Object(
+							utils::to_canonical_object(prev_state.get_content_as_value())
+								.expect("Failed to convert prev_state to canonical JSON"),
+						),
+					);
+					unsigned.insert(
+						"prev_sender".to_owned(),
+						CanonicalJsonValue::String(prev_state.sender().to_string()),
+					);
+					unsigned.insert(
+						"replaces_state".to_owned(),
+						CanonicalJsonValue::String(prev_state.event_id().to_string()),
+					);
 		} else {
 			error!("Invalid unsigned type in pdu.");
 		}
