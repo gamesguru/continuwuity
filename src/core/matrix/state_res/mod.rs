@@ -36,7 +36,7 @@ pub use self::{
 	room_version::RoomVersion,
 };
 use crate::{
-	debug, debug_error, err,
+	debug, debug_error, err, info,
 	matrix::{Event, StateKey},
 	state_res::room_version::StateResolutionVersion,
 	trace,
@@ -756,7 +756,10 @@ where
 			},
 			| Ok(false) => {
 				// synapse passes here on AuthError. We do not add this event to resolved_state.
-				warn!("event {} failed the authentication check", event.event_id());
+				info!(
+					target: "auth_chain",
+					"event {} failed the authentication check", event.event_id()
+				);
 			},
 			| Err(e) => {
 				debug_error!("event {} failed the authentication check: {e}", event.event_id());

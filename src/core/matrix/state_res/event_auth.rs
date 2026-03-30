@@ -30,7 +30,7 @@ use super::{
 	},
 	room_version::RoomVersion,
 };
-use crate::{debug, error, trace, warn};
+use crate::{debug, error, info, trace, warn};
 
 // FIXME: field extracting could be bundled for `content`
 #[derive(Deserialize)]
@@ -1070,7 +1070,8 @@ where
 					MembershipState::Join | MembershipState::Invite | MembershipState::Knock
 				);
 				if !allow {
-					warn!(
+					info!(
+						target: "auth_chain",
 						%sender,
 						current_membership_event_id=?target_user_membership_event_id,
 						current_membership=?target_user_current_membership,
@@ -1080,7 +1081,8 @@ where
 				trace!(sender=%sender, "allowing leave");
 				allow
 			} else if !sender_is_joined {
-				warn!(
+				info!(
+					target: "auth_chain",
 					%sender,
 					?sender_membership_event_id,
 					"sender cannot kick another user as they are not joined to the room",
@@ -1089,7 +1091,8 @@ where
 			} else if !(can_unban && can_kick) {
 				// If the target is banned, only a room creator or someone with ban power
 				// level can unban them
-				warn!(
+				info!(
+					target: "auth_chain",
 					%sender,
 					?target_user_membership_event_id,
 					?power_levels_event_id,
@@ -1097,7 +1100,8 @@ where
 				);
 				false
 			} else if !can_kick {
-				warn!(
+				info!(
+					target: "auth_chain",
 					%sender,
 					%target_user,
 					?target_user_membership_event_id,

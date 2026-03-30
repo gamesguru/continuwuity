@@ -230,7 +230,10 @@ where
 					fetched_info.insert(next_id, value);
 				},
 				| Err(e) => {
-					warn!("Failed to fetch auth event {next_id} from {origin}: {e}");
+					info!(
+						target: "auth_chain",
+						"Failed to fetch auth event {next_id} from {origin}: {e}"
+					);
 					back_off(next_id);
 				},
 			}
