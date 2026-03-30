@@ -853,6 +853,7 @@ where
 			if sender != target_user {
 				// If the sender does not match state_key, reject.
 				warn!(
+					target: "state_res",
 					%sender,
 					target_user = %target_user,
 					"sender cannot join on behalf of another user"
@@ -860,7 +861,8 @@ where
 				false
 			} else if target_user_current_membership == MembershipState::Ban {
 				// If the sender is banned, reject.
-				warn!(
+				info!(
+					target: "state_res",
 					%sender,
 					membership_event_id = ?target_user_membership_event_id,
 					"sender cannot join as they are banned from the room"
@@ -870,7 +872,8 @@ where
 				match join_rules {
 					| JoinRule::Invite =>
 						if !membership_allows_join {
-							warn!(
+							info!(
+								target: "state_res",
 								%sender,
 								membership_event_id = ?target_user_membership_event_id,
 								membership = ?target_user_current_membership,
@@ -882,12 +885,16 @@ where
 							true
 						},
 					| JoinRule::Knock if !room_version.allow_knocking => {
-						warn!("Join rule is knock but room version does not allow knocking");
+						warn!(
+							target: "state_res",
+							"Join rule is knock but room version does not allow knocking"
+						);
 						false
 					},
 					| JoinRule::Knock =>
 						if !membership_allows_join {
 							warn!(
+								target: "state_res",
 								%sender,
 								membership_event_id = ?target_user_membership_event_id,
 								membership=?target_user_current_membership,
@@ -901,6 +908,7 @@ where
 					| JoinRule::KnockRestricted(_) if !room_version.knock_restricted_join_rule =>
 					{
 						warn!(
+							target: "state_res",
 							"Join rule is knock_restricted but room version does not support it"
 						);
 						false
@@ -916,6 +924,7 @@ where
 							true
 						} else {
 							warn!(
+								target: "state_res",
 								%sender,
 								membership_event_id = ?target_user_membership_event_id,
 								membership=?target_user_current_membership,
@@ -938,6 +947,7 @@ where
 							true
 						} else {
 							warn!(
+								target: "state_res",
 								%sender,
 								membership_event_id = ?target_user_membership_event_id,
 								membership=?target_user_current_membership,
@@ -955,6 +965,7 @@ where
 					},
 					| _ => {
 						warn!(
+							target: "state_res",
 							join_rule=?join_rules,
 							"Join rule is unknown, or the rule's conditions were not met"
 						);
@@ -997,6 +1008,7 @@ where
 						MembershipState::Join | MembershipState::Ban
 					) {
 						warn!(
+							target: "state_res",
 							?target_user_membership_event_id,
 							?target_user_current_membership,
 							"cannot invite a user who is banned or already joined",
@@ -1009,6 +1021,7 @@ where
 								.is_some();
 						if !allow {
 							warn!(
+								target: "state_res",
 								%sender,
 								has=?sender_power,
 								required=?power_levels.invite,
@@ -1127,6 +1140,7 @@ where
 		| MembershipState::Ban =>
 			if !sender_is_joined {
 				warn!(
+					target: "auth_chain",
 					%sender,
 					?sender_membership_event_id,
 					"sender cannot ban another user as they are not joined to the room",
@@ -1138,6 +1152,7 @@ where
 						&& target_power < sender_power);
 				if !allow {
 					warn!(
+						target: "auth_chain",
 						%sender,
 						%target_user,
 						?target_user_membership_event_id,
@@ -1168,6 +1183,7 @@ where
 			} else if sender != target_user {
 				// 3. If `sender` does not match `state_key`, reject.
 				warn!(
+					target: "auth_chain",
 					%sender,
 					%target_user,
 					"sender cannot knock on behalf of another user",
@@ -1181,6 +1197,7 @@ where
 				//    allow.
 				// 5. Otherwise, reject.
 				warn!(
+					target: "auth_chain",
 					?target_user_membership_event_id,
 					?sender_membership,
 					"Knocking with a membership state of ban, invite or join is invalid",
@@ -1193,6 +1210,7 @@ where
 		},
 		| _ => {
 			warn!(
+				target: "auth_chain",
 				%sender,
 				?target_membership,
 				%target_user,
@@ -1231,6 +1249,7 @@ fn can_send_event(event: &impl Event, ple: Option<&impl Event>, user_level: Int)
 		&& event.state_key() != Some(event.sender().as_str())
 	{
 		warn!(
+			target: "auth_chain",
 			%user_level,
 			required=%event_type_power_level,
 			state_key=?event.state_key(),
@@ -1327,6 +1346,7 @@ fn check_power_levels(
 		// If the current value is equal to the sender's current power level, reject
 		if user != power_event.sender() && old_level == Some(&user_level) {
 			warn!(
+				target: "auth_chain",
 				?old_level,
 				?new_level,
 				?user,
@@ -1343,6 +1363,7 @@ fn check_power_levels(
 		let new_level_too_big = new_level > Some(&user_level);
 		if old_level_too_big {
 			warn!(
+				target: "auth_chain",
 				?old_level,
 				?new_level,
 				?user,
@@ -1354,6 +1375,7 @@ fn check_power_levels(
 		}
 		if new_level_too_big {
 			warn!(
+				target: "auth_chain",
 				?old_level,
 				?new_level,
 				?user,
@@ -1379,6 +1401,7 @@ fn check_power_levels(
 		let new_level_too_big = new_level > Some(&user_level);
 		if old_level_too_big {
 			warn!(
+				target: "auth_chain",
 				?old_level,
 				?new_level,
 				?ev_type,
@@ -1390,6 +1413,7 @@ fn check_power_levels(
 		}
 		if new_level_too_big {
 			warn!(
+				target: "auth_chain",
 				?old_level,
 				?new_level,
 				?ev_type,
@@ -1412,6 +1436,7 @@ fn check_power_levels(
 			let new_level_too_big = new_level > user_level;
 			if old_level_too_big || new_level_too_big {
 				warn!(
+					target: "auth_chain",
 					?old_level,
 					?new_level,
 					%user_level,
@@ -1442,6 +1467,7 @@ fn check_power_levels(
 
 			if old_level_too_big || new_level_too_big {
 				warn!(
+					target: "auth_chain",
 					?old_lvl,
 					?new_lvl,
 					%user_level,
