@@ -355,7 +355,7 @@ impl super::Service {
 					Ok(())
 				},
 				| ProtoErrorKind::Timeout => {
-					Err!(warn!(%host, %qtype, "DNS {e}"))
+					Err!(debug!(%host, %qtype, "DNS {e}"))
 				},
 				| ProtoErrorKind::NoConnections => {
 					error!(
@@ -365,9 +365,9 @@ impl super::Service {
 						 federation connectivity."
 					);
 
-					Err!(error!(%host, %qtype, "DNS error: {e}"))
+					Err!(debug!(%host, %qtype, "DNS error: {e}"))
 				},
-				| _ => Err!(warn!(%host, %qtype, "DNS error: {e}")),
+				| _ => Err!(debug!(%host, %qtype, "DNS error: {e}")),
 			},
 			| _ => Err!(warn!(%host, %qtype, "DNS error: {e}")),
 		}
