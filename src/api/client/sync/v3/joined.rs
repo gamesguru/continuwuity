@@ -319,15 +319,15 @@ async fn build_state_and_timeline(
 	// the room to trigger backfill (Synapse behavior). However, if the room
 	// actually has ZERO timeline events (e.g., a space), forcing `limited: true`
 	// causes clients to fail repeatedly to backfill.
-	let is_empty_room = services
+	let is_space = services
 		.rooms
-		.timeline
-		.last_timeline_count(room_id)
+		.state_accessor
+		.get_room_type(room_id)
 		.await
-		.is_ok_and(|count| count == PduCount::max());
+		.is_ok_and(|room_type| room_type == ruma::room::RoomType::Space);
 
 	let limited = if timeline.pdus.is_empty() {
-		timeline.limited || (joined_since_last_sync && !is_empty_room)
+		timeline.limited || (joined_since_last_sync && !is_space)
 	} else {
 		timeline.limited || joined_since_last_sync
 	};
