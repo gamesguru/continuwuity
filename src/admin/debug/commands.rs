@@ -22,7 +22,9 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
 	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
-	api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
+	api::federation::event::{get_event, get_room_state},
+	events::AnyStateEvent,
+	serde::Raw,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -518,6 +520,41 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 
 	let out = format!("{latest_pdu:?}");
 	self.write_str(&out).await
+}
+
+#[admin_command]
+pub(super) async fn fetch_pdu(
+	&self,
+	room_id: OwnedRoomId,
+	event_id: OwnedEventId,
+	server: OwnedServerName,
+) -> Result {
+	self.bail_restricted()?;
+
+	let response = self
+		.services
+		.sending
+		.send_federation_request(&server, get_event::v1::Request { event_id })
+		.await?;
+
+	let (event_id, value) = self
+		.services
+		.server_keys
+		.decode_and_verify_json_dict(&response.pdu, &server, Instant::now())
+		.await?;
+
+	let result = self
+		.services
+		.rooms
+		.event_handler
+		.handle_incoming_pdu(&server, &room_id, &event_id, value, false)
+		.await?;
+
+	match result {
+		| Some(id) => write!(self, "Successfully fetched and persisted PDU: {id}"),
+		| None => write!(self, "PDU was already present or failed validation silently."),
+	}
+	.await
 }
 
 #[admin_command]

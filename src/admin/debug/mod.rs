@@ -138,6 +138,19 @@ pub enum DebugCommand {
 		event_id: OwnedEventId,
 	},
 
+	/// Fetches a PDU from a remote server and attempts to verify/persist it.
+	///
+	/// This will fetch the PDU and all its missing ancestors from the
+	/// specified server, stitching the DAG back together.
+	FetchPdu {
+		/// The room ID
+		room_id: OwnedRoomId,
+		/// The event ID to fetch
+		event_id: OwnedEventId,
+		/// The server to fetch from
+		server: OwnedServerName,
+	},
+
 	/// Prints the very first PDU in the specified room (typically
 	///   m.room.create)
 	FirstPduInRoom {
