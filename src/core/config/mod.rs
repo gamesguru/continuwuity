@@ -21,12 +21,67 @@ use ruma::{
 	OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomVersionId,
 	api::client::discovery::{discover_homeserver::RtcFocusInfo, discover_support::ContactRole},
 };
-use serde::{Deserialize, de::IgnoredAny};
+use serde::{
+	Deserialize,
+	de::{self, Deserializer, IgnoredAny},
+};
 use url::Url;
 
 use self::proxy::ProxyConfig;
 pub use self::{check::check, manager::Manager};
 use crate::{Result, err, error::Error, utils::sys};
+
+/// Controls whether unredacted copies of redacted PDUs are preserved in an
+/// audit table for administrative review.
+///
+/// Accepts one of the following values:
+/// - `"none"` (default): No audit copies are saved.
+/// - `"local"`: Only save audit copies for PDUs whose sender is on this server.
+/// - `"all"`: Save audit copies for all redacted PDUs.
+/// - A list of server names: Save audit copies for PDUs whose sender belongs to
+///   one of the listed servers.
+#[derive(Clone, Debug, Default)]
+pub enum AuditCopies {
+	/// Do not persist any audit copies of redacted events.
+	#[default]
+	None,
+
+	/// Persist audit copies only for events sent by local users.
+	Local,
+
+	/// Persist audit copies for all redacted events.
+	All,
+
+	/// Persist audit copies for events sent by users on the specified servers.
+	Servers(Vec<OwnedServerName>),
+}
+
+impl<'de> Deserialize<'de> for AuditCopies {
+	fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		#[derive(Deserialize)]
+		#[serde(untagged)]
+		enum Raw {
+			Str(String),
+			List(Vec<OwnedServerName>),
+		}
+
+		match Raw::deserialize(deserializer)? {
+			| Raw::Str(s) => match s.to_lowercase().as_str() {
+				| "none" => Ok(Self::None),
+				| "local" => Ok(Self::Local),
+				| "all" => Ok(Self::All),
+				| other => Err(de::Error::custom(format!(
+					"invalid value for redactions_persist_audit_copies: \"{other}\". Expected \
+					 \"none\", \"local\", \"all\", or a list of server names."
+				))),
+			},
+			| Raw::List(servers) => Ok(Self::Servers(servers)),
+		}
+	}
+}
 
 /// All the config options for continuwuity.
 #[allow(clippy::struct_excessive_bools)]
@@ -2145,6 +2200,24 @@ pub struct Config {
 	#[serde(default)]
 	pub experimental_features: ExperimentalConfig,
 
+	/// Controls whether unredacted copies of redacted events are persisted
+	/// in a separate audit database table for administrative review.
+	///
+	/// Accepts one of the following values:
+	/// - `"none"` (default): No audit copies are saved.
+	/// - `"local"`: Only save audit copies for events sent by local users.
+	/// - `"all"`: Save audit copies for all redacted events.
+	/// - A list of server names (e.g. `["example.com", "other.org"]`): Save
+	///   audit copies for events sent by users on the listed servers.
+	///
+	/// In all cases the main event is still fully redacted per the Matrix
+	/// specification; this option only controls whether a pre-redaction
+	/// backup is kept.
+	///
+	/// default: "none"
+	#[serde(default = "default_redactions_persist_audit_copies")]
+	pub redactions_persist_audit_copies: AuditCopies,
+
 	#[serde(flatten)]
 	#[allow(clippy::zero_sized_map_values)]
 	// this is a catchall, the map shouldn't be zero at runtime
@@ -2880,3 +2953,5 @@ fn default_ldap_search_filter() -> String { "(objectClass=*)".to_owned() }
 fn default_ldap_uid_attribute() -> String { String::from("uid") }
 
 fn default_ldap_name_attribute() -> String { String::from("givenName") }
+
+fn default_redactions_persist_audit_copies() -> AuditCopies { AuditCopies::None }

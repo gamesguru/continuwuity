@@ -226,6 +226,12 @@ impl Service {
 		self.db.replace_pdu(pdu_id, pdu_json).await
 	}
 
+	/// Store an unredacted copy of a PDU in the audit table. Should be called
+	/// before `replace_pdu` when audit copy persistence is configured.
+	pub fn backup_pdu(&self, pdu_id: &RawPduId, pdu_json: &CanonicalJsonObject) {
+		self.db.backup_pdu(pdu_id, pdu_json);
+	}
+
 	/// Returns an iterator over all PDUs in a room. Unknown rooms produce no
 	/// items.
 	#[inline]

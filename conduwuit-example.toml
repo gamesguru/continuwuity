@@ -1825,6 +1825,22 @@
 #
 #allow_web_indexing = false
 
+# Controls whether unredacted copies of redacted events are persisted
+# in a separate audit database table for administrative review.
+#
+# Accepts one of the following values:
+# - `"none"` (default): No audit copies are saved.
+# - `"local"`: Only save audit copies for events sent by local users.
+# - `"all"`: Save audit copies for all redacted events.
+# - A list of server names (e.g. `["example.com", "other.org"]`): Save
+#   audit copies for events sent by users on the listed servers.
+#
+# In all cases the main event is still fully redacted per the Matrix
+# specification; this option only controls whether a pre-redaction
+# backup is kept.
+#
+#redactions_persist_audit_copies = "none"
+
 [global.tls]
 
 # Path to a valid TLS certificate file.
