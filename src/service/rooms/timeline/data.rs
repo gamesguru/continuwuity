@@ -271,7 +271,7 @@ impl Data {
 
 	pub(super) async fn prev_timeline_count(&self, before: &PduId) -> Result<PduCount> {
 		let before_pdu =
-			Self::pdu_count_to_id(before.shortroomid, before.shorteventid, Direction::Backward);
+			Self::pdu_count_to_id(before.shortroomid, before.shorteventid, Direction::Backward)?;
 
 		let prefix = before_pdu.shortroomid();
 		let pdu_ids = self
@@ -292,7 +292,7 @@ impl Data {
 
 	pub(super) async fn next_timeline_count(&self, after: &PduId) -> Result<PduCount> {
 		let after_pdu =
-			Self::pdu_count_to_id(after.shortroomid, after.shorteventid, Direction::Forward);
+			Self::pdu_count_to_id(after.shortroomid, after.shorteventid, Direction::Forward)?;
 
 		let prefix = after_pdu.shortroomid();
 		let pdu_ids = self
@@ -315,14 +315,15 @@ impl Data {
 		shortroomid: ShortRoomId,
 		shorteventid: PduCount,
 		dir: Direction,
-	) -> RawPduId {
-		// +1 so we don't send the base event
-		let pdu_id = PduId {
-			shortroomid,
-			shorteventid: shorteventid.saturating_inc(dir),
-		};
+	) -> Result<RawPduId> {
+		// inc/sub to make the query exclusive (don't return the base event)
+		let shorteventid = shorteventid
+			.checked_inc(dir)
+			.map_err(|_| err!(Request(NotFound("No more PDUs found in room"))))?;
 
-		pdu_id.into()
+		let pdu_id = PduId { shortroomid, shorteventid };
+
+		Ok(pdu_id.into())
 	}
 
 	async fn count_to_id(
@@ -338,6 +339,6 @@ impl Data {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-		Ok(Self::pdu_count_to_id(shortroomid, shorteventid, dir))
+		Self::pdu_count_to_id(shortroomid, shorteventid, dir)
 	}
 }

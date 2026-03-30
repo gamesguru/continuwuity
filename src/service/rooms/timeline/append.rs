@@ -145,7 +145,6 @@ where
 					.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
 					.await
 				{
-					unsigned
 					unsigned.insert(
 						"prev_content".to_owned(),
 						CanonicalJsonValue::Object(
@@ -161,17 +160,11 @@ where
 						"replaces_state".to_owned(),
 						CanonicalJsonValue::String(prev_state.event_id().to_string()),
 					);
+				}
+			}
 		} else {
 			error!("Invalid unsigned type in pdu.");
 		}
-
-		// Update cached room state for this event type+key
-		self.services.state_accessor.update_room_state(
-			room_id,
-			&pdu.kind().to_string().into(),
-			state_key,
-			pdu.clone(),
-		);
 	}
 
 	// We must keep track of all events that have been referenced.
@@ -205,6 +198,16 @@ where
 
 	// Insert pdu
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
+
+	// Update cached room state for this event type+key
+	if let Some(state_key) = pdu.state_key() {
+		self.services.state_accessor.update_room_state(
+			room_id,
+			&pdu.kind().to_string().into(),
+			state_key,
+			pdu.clone(),
+		);
+	}
 
 	drop(insert_lock);
 
