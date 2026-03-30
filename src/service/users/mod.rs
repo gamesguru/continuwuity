@@ -844,6 +844,12 @@ impl Service {
 			let mut master_key_val: serde_json::Value =
 				serde_json::from_str(master_key.json().get()).unwrap();
 
+			info!(
+				target: "cross_signing",
+				"Adding master cross-signing key for user {}",
+				user_id
+			);
+
 			if let Ok(old_key) = self.db.keyid_key.get(&master_key_key).await {
 				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
 					merge_signatures(&mut master_key_val, &old_key);
@@ -884,6 +890,12 @@ impl Service {
 			let mut self_signing_key_key = prefix.clone();
 			self_signing_key_key.extend_from_slice(self_signing_key_pub.as_bytes());
 
+			info!(
+				target: "cross_signing",
+				"Adding self-signing key for user {}",
+				user_id
+			);
+
 			if let Ok(old_key) = self.db.keyid_key.get(&self_signing_key_key).await {
 				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
 					merge_signatures(&mut self_signing_key_val, &old_key);
@@ -907,6 +919,12 @@ impl Service {
 
 			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 			let user_signing_key_key = (user_id, &user_signing_key_id);
+
+			info!(
+				target: "cross_signing",
+				"Adding user-signing key for user {}",
+				user_id
+			);
 
 			if let Ok(old_key) = self.db.keyid_key.qry(&user_signing_key_key).await {
 				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
@@ -967,6 +985,12 @@ impl Service {
 				err!(Database(debug_warn!("signatures in keyid_key for a user is invalid.")))
 			})?
 			.insert(signature.0, signature.1.into());
+
+		info!(
+			target: "cross_signing",
+			"User {} signed key {} of user {}",
+			sender_id, key_id, target_id
+		);
 
 		let key = (target_id, key_id);
 		self.db.keyid_key.put(key, Json(cross_signing_key));
@@ -1109,6 +1133,19 @@ impl Service {
 		event_type: &str,
 		content: serde_json::Value,
 	) {
+		if event_type.starts_with("m.key.verification.") {
+			let tx_id = content
+				.get("transaction_id")
+				.and_then(|v| v.as_str())
+				.unwrap_or("unknown");
+
+			info!(
+				target: "cross_signing",
+				"Verification event ({}) from {} to {}/{} (tx_id: {})",
+				event_type, sender, target_user_id, target_device_id, tx_id
+			);
+		}
+
 		let count = self.services.globals.next_count().unwrap();
 
 		let key = (target_user_id, target_device_id, count);
@@ -1613,6 +1650,11 @@ fn merge_signatures(new: &mut serde_json::Value, old: &serde_json::Value) {
 
 				for (key, val) in sigs {
 					if !new_user_sigs.contains_key(key) {
+						info!(
+							target: "cross_signing",
+							"Merging existing signature for user {} key {}",
+							user, key
+						);
 						new_user_sigs.insert(key.clone(), val.clone());
 					}
 				}
@@ -1645,6 +1687,12 @@ where
 				.map_err(|_| Error::bad_database("Invalid user ID in database."))?;
 			if sender_user == Some(user_id) || sid == user_id || allowed_signatures(sid) {
 				signatures.insert(user, signature);
+			} else {
+				info!(
+					target: "cross_signing",
+					"Dropped cross-signing signature for user {} (sender: {:?}, target: {})",
+					sid, sender_user, user_id
+				);
 			}
 		}
 	}
