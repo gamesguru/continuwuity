@@ -16,6 +16,20 @@ Reset user password
 
 Issue a self-service password reset link for a user
 
+## `!admin users get-email`
+
+Get a user's associated email address
+
+## `!admin users get-user-by-email`
+
+Get the user with the given email address
+
+## `!admin users change-email`
+
+Update or remove a user's email address.
+
+If `email` is not supplied, the user's existing address will be removed.
+
 ## `!admin users deactivate`
 
 Deactivate a user

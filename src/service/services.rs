@@ -10,12 +10,12 @@ use tokio::sync::Mutex;
 
 use crate::{
 	account_data, admin, announcements, antispam, appservice, client, config, emergency,
-	federation, firstrun, globals, key_backups,
+	federation, firstrun, globals, key_backups, mailer,
 	manager::Manager,
 	media, moderation, password_reset, presence, pusher, registration_tokens, resolver, rooms,
 	sending, server_keys,
 	service::{self, Args, Map, Service},
-	sync, transactions, uiaa, users,
+	sync, threepid, transactions, uiaa, users,
 };
 
 pub struct Services {
@@ -29,6 +29,7 @@ pub struct Services {
 	pub key_backups: Arc<key_backups::Service>,
 	pub media: Arc<media::Service>,
 	pub password_reset: Arc<password_reset::Service>,
+	pub mailer: Arc<mailer::Service>,
 	pub presence: Arc<presence::Service>,
 	pub pusher: Arc<pusher::Service>,
 	pub registration_tokens: Arc<registration_tokens::Service>,
@@ -40,6 +41,7 @@ pub struct Services {
 	pub server_keys: Arc<server_keys::Service>,
 	pub sync: Arc<sync::Service>,
 	pub transactions: Arc<transactions::Service>,
+	pub threepid: Arc<threepid::Service>,
 	pub uiaa: Arc<uiaa::Service>,
 	pub users: Arc<users::Service>,
 	pub moderation: Arc<moderation::Service>,
@@ -84,6 +86,7 @@ impl Services {
 			key_backups: build!(key_backups::Service),
 			media: build!(media::Service),
 			password_reset: build!(password_reset::Service),
+			mailer: build!(mailer::Service),
 			presence: build!(presence::Service),
 			pusher: build!(pusher::Service),
 			registration_tokens: build!(registration_tokens::Service),
@@ -113,6 +116,7 @@ impl Services {
 			sending: build!(sending::Service),
 			server_keys: build!(server_keys::Service),
 			sync: build!(sync::Service),
+			threepid: build!(threepid::Service),
 			transactions: build!(transactions::Service),
 			uiaa: build!(uiaa::Service),
 			users: build!(users::Service),
