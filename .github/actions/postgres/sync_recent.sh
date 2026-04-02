@@ -51,10 +51,11 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
       SAFE_OS=$(echo "$OS" | sed 's/[^a-zA-Z0-9._-]/_/g')
       SAFE_PROFILE=$(echo "$PROFILE" | sed 's/[^a-zA-Z0-9._-]/_/g')
 
-      FILENAME="runs_data/${COMMIT}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}.jsonl"
+      BASENAME="${COMMIT}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}.jsonl"
+      FILENAME="runs_data/${BASENAME}"
 
       # Check if file exists in the pre-cached list
-      if echo "$ALL_FILES" | grep -Fqx "$FILENAME" > /dev/null; then
+      if echo "$ALL_FILES" | grep -Fqx "$BASENAME" > /dev/null; then
           # Inject/Overwrite metadata from the summary record for robustness
           git show "FETCH_HEAD:$FILENAME" | \
             jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" \
