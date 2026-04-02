@@ -41,10 +41,26 @@ if limit_match:
     limit = limit_match.group(1)
     args_str = args_str.replace(limit_match.group(0), "")
 
+# Extract new_passes (Must be done before order parsing to avoid greedy capture)
+new_passes = False
+new_passes_match = re.search(r"new_passes=([^\s]*)", args_str, re.IGNORECASE)
+if new_passes_match:
+    val = new_passes_match.group(1).strip().lower()
+    if val in ("1", "true", "yes"):
+        new_passes = True
+    elif val in ("0", "false", "no", ""):
+        new_passes = False
+    args_str = args_str.replace(new_passes_match.group(0), "")
+
 # Extract order (it takes whatever is left if it starts with order=)
-order_match = re.search(r"order=(.+?)(?:$| like=| limit=)", args_str + " ")
+order_match = re.search(r"order=(.+?)(?:$| like=| limit=| new_passes=)", args_str + " ", re.IGNORECASE)
 if order_match:
     order = order_match.group(1).strip()
+
+if new_passes:
+    columns_tail = "new_failures_list,\n    new_passes_list"
+else:
+    columns_tail = "new_failures_list"
 
 base_query = f"""
 SELECT
@@ -57,10 +73,10 @@ SELECT
     new_pass,
     new_fail,
     profile,
-    regexp_replace(features, '[, ]+', E'\n', 'g') AS features,
+    regexp_replace(features, '[,\\s]+', E'\\n', 'g') AS features,
     os,
     arch,
-    new_failures_list
+    {columns_tail}
 FROM
     v_run_regressions"""
 

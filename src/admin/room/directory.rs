@@ -47,6 +47,7 @@ pub(super) async fn process(command: RoomDirectoryCommand, context: &Context<'_>
 				.collect()
 				.await;
 
+			let total_rooms = rooms.len();
 			rooms.sort_by_key(|r| r.1);
 			rooms.reverse();
 
@@ -67,7 +68,9 @@ pub(super) async fn process(command: RoomDirectoryCommand, context: &Context<'_>
 				.join("\n");
 
 			context
-				.write_str(&format!("Rooms (page {page}):\n```\n{body}\n```",))
+				.write_str(&format!(
+					"Rooms (Total: {total_rooms}, Page {page}):\n```\n{body}\n```",
+				))
 				.await
 		},
 	}

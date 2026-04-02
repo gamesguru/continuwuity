@@ -54,6 +54,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "email_localpart",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "eventid_outlierpdu",
 		cache_disp: CacheDisp::SharedWith("pduid_pdu"),
 		key_size_hint: Some(48),
@@ -98,6 +102,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "lazyloadedids",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "localpart_email",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {

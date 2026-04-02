@@ -2,14 +2,13 @@ use std::{mem, ops::Deref};
 
 use axum::{body::Body, extract::FromRequest};
 use bytes::{BufMut, Bytes, BytesMut};
-use conduwuit::{Error, Result, debug, debug_warn, err, trace, utils::string::EMPTY};
+use conduwuit::{Error, Result, debug, debug_warn, err, trace};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, DeviceId, OwnedDeviceId, OwnedServerName,
 	OwnedUserId, ServerName, UserId, api::IncomingRequest,
 };
-use service::Services;
 
-use super::{auth, auth::Auth, request, request::Request};
+use super::{auth, request, request::Request};
 use crate::{State, service::appservice::RegistrationInfo};
 
 /// Extractor for Ruma request structs (optional authentication)
@@ -68,15 +67,8 @@ where
 				| Err(e) => return Err(e),
 			};
 
-		let auth_ref = auth.as_ref().unwrap_or(&Auth {
-			origin: None,
-			sender_user: None,
-			sender_device: None,
-			appservice_info: None,
-		});
-
 		Ok(Self {
-			body: make_body::<T>(services, &mut request, json_body.as_mut(), auth_ref)?,
+			body: make_body::<T>(&mut request, json_body.as_mut())?,
 			origin: auth.as_ref().and_then(|a| a.origin.clone()),
 			sender_user: auth.as_ref().and_then(|a| a.sender_user.clone()),
 			sender_device: auth.as_ref().and_then(|a| a.sender_device.clone()),
@@ -200,7 +192,7 @@ where
 		}
 		let auth = auth::auth(services, &mut request, json_body.as_ref(), &T::METADATA).await?;
 		Ok(Self {
-			body: make_body::<T>(services, &mut request, json_body.as_mut(), &auth)?,
+			body: make_body::<T>(&mut request, json_body.as_mut())?,
 			origin: auth.origin,
 			sender_user: auth.sender_user,
 			sender_device: auth.sender_device,
@@ -210,16 +202,11 @@ where
 	}
 }
 
-fn make_body<T>(
-	services: &Services,
-	request: &mut Request,
-	json_body: Option<&mut CanonicalJsonValue>,
-	auth: &Auth,
-) -> Result<T>
+fn make_body<T>(request: &mut Request, json_body: Option<&mut CanonicalJsonValue>) -> Result<T>
 where
 	T: IncomingRequest,
 {
-	let body = take_body(services, request, json_body, auth);
+	let body = take_body(request, json_body);
 	let http_request = into_http_request(request, body);
 	T::try_from_http_request(http_request, &request.path)
 		.map_err(|e| err!(Request(BadJson(debug_warn!("{e}")))))
@@ -243,37 +230,10 @@ fn into_http_request(request: &Request, body: Bytes) -> hyper::Request<Bytes> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn take_body(
-	services: &Services,
-	request: &mut Request,
-	json_body: Option<&mut CanonicalJsonValue>,
-	auth: &Auth,
-) -> Bytes {
+fn take_body(request: &mut Request, json_body: Option<&mut CanonicalJsonValue>) -> Bytes {
 	let Some(CanonicalJsonValue::Object(json_body)) = json_body else {
 		return mem::take(&mut request.body);
 	};
-
-	let user_id = auth.sender_user.clone().unwrap_or_else(|| {
-		let server_name = services.globals.server_name();
-		UserId::parse_with_server_name(EMPTY, server_name).expect("valid user_id")
-	});
-
-	let uiaa_request = json_body
-		.get("auth")
-		.and_then(CanonicalJsonValue::as_object)
-		.and_then(|auth| auth.get("session"))
-		.and_then(CanonicalJsonValue::as_str)
-		.and_then(|session| {
-			services
-				.uiaa
-				.get_uiaa_request(&user_id, auth.sender_device.as_deref(), session)
-		});
-
-	if let Some(CanonicalJsonValue::Object(initial_request)) = uiaa_request {
-		for (key, value) in initial_request {
-			json_body.entry(key).or_insert(value);
-		}
-	}
 
 	let mut buf = BytesMut::new().writer();
 	serde_json::to_writer(&mut buf, &json_body).expect("value serialization can't fail");
