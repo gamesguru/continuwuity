@@ -82,7 +82,7 @@ pub(crate) async fn password_login(
 			.password_hash(lowercased_user_id)
 			.await
 			.map(|hash| (hash, lowercased_user_id))
-			.map_err(|_| err!(Request(Forbidden("Invalid identifier or password."))))?,
+			.map_err(|_| err!(Request(Forbidden("Wrong username or password."))))?,
 	};
 
 	if hash.is_empty() {
@@ -91,7 +91,7 @@ pub(crate) async fn password_login(
 
 	hash::verify_password(password, &hash)
 		.inspect_err(|e| debug_error!("{e}"))
-		.map_err(|_| err!(Request(Forbidden("Invalid identifier or password."))))?;
+		.map_err(|_| err!(Request(Forbidden("Wrong username or password."))))?;
 
 	Ok(user_id.to_owned())
 }
@@ -178,7 +178,7 @@ pub(crate) async fn handle_login(
 				.threepid
 				.get_localpart_for_email(&email)
 				.await
-				.ok_or_else(|| err!(Request(Forbidden("Invalid identifier or password"))))?
+				.ok_or_else(|| err!(Request(Forbidden("Wrong username or password"))))?
 		},
 		| (None, Some(user)) => user,
 		| _ => {
@@ -188,7 +188,7 @@ pub(crate) async fn handle_login(
 
 	let user_id =
 		UserId::parse_with_server_name(user_id_or_localpart, &services.config.server_name)
-			.map_err(|_| err!(Request(InvalidUsername("User ID is malformed"))))?;
+			.map_err(|e| err!(Request(InvalidUsername(warn!("Username is invalid: {e}")))))?;
 
 	let lowercased_user_id = UserId::parse_with_server_name(
 		user_id.localpart().to_lowercase(),
@@ -285,7 +285,7 @@ pub(crate) async fn login_route(
 						debug_warn!(?body.login_info, "Valid identifier or username was not provided (invalid or unsupported login type?)")
 					)));
 				}
-				.map_err(|_| err!(Request(InvalidUsername(warn!("User ID is malformed")))))?;
+				.map_err(|e| err!(Request(InvalidUsername(warn!("Username is invalid: {e}")))))?;
 
 			if !services.globals.user_is_local(&user_id) {
 				return Err!(Request(Unknown("User ID does not belong to this homeserver")));

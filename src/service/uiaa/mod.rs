@@ -357,7 +357,7 @@ impl Service {
 						} else {
 							return Err(StandardErrorBody {
 								kind: ErrorKind::forbidden(),
-								message: "Invalid identifier or password".to_owned(),
+								message: "Wrong username or password".to_owned(),
 							});
 						}
 					},
@@ -410,7 +410,7 @@ impl Service {
 				} else {
 					Err(StandardErrorBody {
 						kind: ErrorKind::forbidden(),
-						message: "Invalid identifier or password".to_owned(),
+						message: "Wrong username or password".to_owned(),
 					})
 				}
 			},
