@@ -496,7 +496,7 @@ async fn determine_registration_user_id(
 	is_guest: bool,
 	emergency_mode_enabled: bool,
 ) -> Result<OwnedUserId> {
-	if let Some(supplied_username) = supplied_username
+	if let Some(mut supplied_username) = supplied_username
 		&& !is_guest
 	{
 		// The user gets to pick their username. Do some validation to make sure it's
@@ -511,6 +511,8 @@ async fn determine_registration_user_id(
 		{
 			return Err!(Request(Forbidden("Username is forbidden")));
 		}
+
+		supplied_username = supplied_username.to_lowercase();
 
 		// Create and validate the user ID
 		let user_id = match UserId::parse_with_server_name(
