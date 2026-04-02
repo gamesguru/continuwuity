@@ -205,6 +205,26 @@ async fn migrate(services: &Services) -> Result<()> {
 	}
 
 	if services.globals.db.database_version().await < 19 {
+		let env_var_set = std::env::var_os("CONDUWUIT_ALLOW_V19_MIGRATION").is_some();
+		if !env_var_set {
+			use std::io::{IsTerminal, Write};
+			if std::io::stdin().is_terminal() {
+				println!(
+					"WARNING: The v19 migration is dangerous and drops the \
+					 'roomsynctoken_shortstatehash' column family."
+				);
+				print!("Type 'yes' to proceed: ");
+				let _ = std::io::stdout().flush();
+			}
+			let mut input = String::new();
+			if std::io::stdin().read_line(&mut input).is_err() || input.trim() != "yes" {
+				return Err!(Database(
+					"Aborting v19 migration. Please set CONDUWUIT_ALLOW_V19_MIGRATION=1 or \
+					 provide 'yes' via STDIN to apply."
+				));
+			}
+		}
+
 		if let Err(e) = services.db.db.drop_cf("roomsynctoken_shortstatehash") {
 			debug_warn!("drop_cf roomsynctoken_shortstatehash: {e:?}");
 		}
