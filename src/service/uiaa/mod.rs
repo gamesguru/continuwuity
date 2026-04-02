@@ -92,7 +92,7 @@ macro_rules! identity_update_fn {
 				Ok(())
 			} else {
 				Err(StandardErrorBody {
-					kind: ErrorKind::InvalidParam,
+					kind: ErrorKind::forbidden(),
 					message: $error.to_owned(),
 				})
 			}
