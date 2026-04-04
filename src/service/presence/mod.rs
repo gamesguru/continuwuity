@@ -23,6 +23,7 @@ use crate::{Dep, globals, users};
 pub struct Service {
 	timer_channel: (Sender<TimerType>, Receiver<TimerType>),
 	pub(super) pending_updates: DashMap<OwnedServerName, HashSet<OwnedUserId>>,
+	pub(super) queued_users: dashmap::DashSet<OwnedUserId>,
 	timeout_remote_users: bool,
 	idle_timeout: u64,
 	offline_timeout: u64,
@@ -50,6 +51,7 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			timer_channel: loole::unbounded(),
 			pending_updates: DashMap::new(),
+			queued_users: dashmap::DashSet::new(),
 			timeout_remote_users: config.presence_timeout_remote_users,
 			idle_timeout: checked!(idle_timeout_s * 1_000)?,
 			offline_timeout: checked!(offline_timeout_s * 1_000)?,
@@ -104,6 +106,29 @@ impl crate::Service for Service {
 				interval.tick().await;
 				if !self_flush.services.server.running() {
 					break;
+				}
+
+				let mut users: Vec<_> = Vec::new();
+				for entry in self_flush.queued_users.iter() {
+					users.push(entry.key().clone());
+				}
+				self_flush.queued_users.clear();
+
+				for user_id in users {
+					let mut joined_rooms = self_flush.services.state_cache.rooms_joined(&user_id);
+					while let Some(room_id) = joined_rooms.next().await {
+						let mut room_servers =
+							self_flush.services.state_cache.room_servers(room_id);
+						while let Some(server) = room_servers.next().await {
+							if !self_flush.services.globals.server_is_ours(server) {
+								self_flush
+									.pending_updates
+									.entry(server.to_owned())
+									.or_default()
+									.insert(user_id.clone());
+							}
+						}
+					}
 				}
 
 				self_flush
@@ -445,32 +470,7 @@ impl Service {
 			return Ok(());
 		}
 
-		// Batch up servers
-		let mut servers = HashSet::new();
-
-		// Iterate rooms by stream is probably fastest here
-		let mut joined_rooms = self.services.state_cache.rooms_joined(user_id);
-		while let Some(room_id) = joined_rooms.next().await {
-			let mut room_servers = self.services.state_cache.room_servers(room_id);
-			while let Some(server) = room_servers.next().await {
-				if !self.services.globals.server_is_ours(server) {
-					servers.insert(server.to_owned());
-				}
-			}
-		}
-
-		// If there are no remote servers, nothing to send
-		if servers.is_empty() {
-			return Ok(());
-		}
-
-		// Add any pending presence updates
-		for server in &servers {
-			self.pending_updates
-				.entry(server.clone())
-				.or_default()
-				.insert(user_id.to_owned());
-		}
+		self.queued_users.insert(user_id.to_owned());
 
 		// 5-sec flusher task in worker() broadcasts updates and wakes up sender
 		Ok(())

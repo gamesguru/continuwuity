@@ -335,6 +335,12 @@ impl Service {
 			.any(|(_, e)| matches!(e, SendingEvent::Pdu(_)));
 		let (allow, retry) = self.select_events_current(dest, statuses, has_pdu)?;
 
+		if (!allow || retry) && self.server.config.allow_outgoing_presence {
+			if let Destination::Federation(server_name) = dest {
+				self.services.presence.pending_updates.remove(server_name);
+			}
+		}
+
 		// Nothing can be done for this remote, bail out.
 		if !allow {
 			return Ok(None);
