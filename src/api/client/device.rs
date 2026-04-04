@@ -137,6 +137,10 @@ pub(crate) async fn delete_device_route(
 		return Ok(delete_device::v3::Response {});
 	}
 
+	if body.auth.is_none() && body.json_body.is_none() {
+		return Err!(Request(NotJson("Not json.")));
+	}
+
 	// Prompt the user to confirm with their password using UIAA
 	let _ = services
 		.uiaa
@@ -181,6 +185,10 @@ pub(crate) async fn delete_devices_route(
 		}
 
 		return Ok(delete_devices::v3::Response {});
+	}
+
+	if body.auth.is_none() && body.json_body.is_none() {
+		return Err!(Request(NotJson("Not json.")));
 	}
 
 	// Prompt the user to confirm with their password using UIAA

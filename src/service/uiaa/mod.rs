@@ -92,7 +92,7 @@ macro_rules! identity_update_fn {
 				Ok(())
 			} else {
 				Err(StandardErrorBody {
-					kind: ErrorKind::InvalidParam,
+					kind: ErrorKind::forbidden(),
 					message: $error.to_owned(),
 				})
 			}
@@ -268,6 +268,17 @@ impl Service {
 						*identity = updated_identity;
 					},
 					| Err(error) => {
+						if error.message == "User ID mismatch" {
+							return Err(Error::BadRequest(
+								ErrorKind::forbidden(),
+								"User ID mismatch",
+							));
+						} else if error.message == "Email mismatch" {
+							return Err(Error::BadRequest(
+								ErrorKind::forbidden(),
+								"Email mismatch",
+							));
+						}
 						info.auth_error = Some(error);
 					},
 				}
@@ -357,7 +368,7 @@ impl Service {
 						} else {
 							return Err(StandardErrorBody {
 								kind: ErrorKind::forbidden(),
-								message: "Invalid identifier or password".to_owned(),
+								message: "Wrong username or password".to_owned(),
 							});
 						}
 					},
@@ -410,7 +421,7 @@ impl Service {
 				} else {
 					Err(StandardErrorBody {
 						kind: ErrorKind::forbidden(),
-						message: "Invalid identifier or password".to_owned(),
+						message: "Wrong username or password".to_owned(),
 					})
 				}
 			},
