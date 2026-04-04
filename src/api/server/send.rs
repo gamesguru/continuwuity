@@ -369,6 +369,7 @@ async fn handle_room(
 	};
 	let mut results = Vec::with_capacity(sorted_event_ids.len());
 	for event_id in sorted_event_ids {
+		tokio::task::yield_now().await;
 		let value = pdu_map
 			.get(&event_id)
 			.expect("sorted event IDs must be from the original map")
@@ -446,6 +447,8 @@ async fn handle_edu_presence_update(
 	origin: &ServerName,
 	update: PresenceUpdate,
 ) {
+	tokio::task::yield_now().await;
+
 	if update.user_id.server_name() != origin {
 		debug_warn!(
 			%update.user_id, %origin,
