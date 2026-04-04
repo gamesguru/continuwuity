@@ -204,10 +204,13 @@ impl Service {
 			&& user_id != self.services.globals.server_user
 			&& self.services.server.running()
 		{
-			let timeout = match presence_state {
+			let mut timeout = match presence_state {
 				| PresenceState::Online => self.services.server.config.presence_idle_timeout_s,
 				| _ => self.services.server.config.presence_offline_timeout_s,
 			};
+
+			let jitter = rand::random_range(0..=timeout.max(10) / 10);
+			timeout = timeout.saturating_add(jitter);
 
 			self.timer_channel
 				.0
