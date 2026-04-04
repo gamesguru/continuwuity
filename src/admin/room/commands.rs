@@ -47,6 +47,7 @@ pub(super) async fn list_rooms(
 		.collect::<Vec<_>>()
 		.await;
 
+	let total_rooms = rooms.len();
 	rooms.sort_by_key(|r| r.1);
 	rooms.reverse();
 
@@ -72,7 +73,7 @@ pub(super) async fn list_rooms(
 		.collect::<Vec<_>>()
 		.join("\n");
 
-	self.write_str(&format!("Rooms ({}):\n```\n{body}\n```", rooms.len(),))
+	self.write_str(&format!("Rooms (Total: {total_rooms}, Page {page}):\n```\n{body}\n```"))
 		.await
 }
 

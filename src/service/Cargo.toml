@@ -94,6 +94,7 @@ const-str.workspace = true
 
 either.workspace = true
 futures.workspace = true
+governor.workspace = true
 hickory-resolver.workspace = true
 http.workspace = true
 image.workspace = true
@@ -106,6 +107,7 @@ log.workspace = true
 loole.workspace = true
 lru-cache.workspace = true
 moka = { workspace = true, features = ["sync"] }
+nonzero_ext.workspace = true
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true
@@ -128,6 +130,7 @@ blurhash.optional = true
 recaptcha-verify = { version = "0.2.0", default-features = false }
 dashmap.workspace = true
 yansi.workspace = true
+lettre.workspace = true
 
 [target.'cfg(all(unix, target_os = "linux"))'.dependencies]
 sd-notify.workspace = true
