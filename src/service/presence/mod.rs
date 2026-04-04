@@ -114,6 +114,14 @@ impl crate::Service for Service {
 				}
 				self_flush.queued_users.clear();
 
+				if users.len() > 50 {
+					info!(
+						target: "stats_verbose",
+						"Presence flush task collected {} local users for outbound federation",
+						users.len()
+					);
+				}
+
 				let mut room_users: std::collections::HashMap<
 					ruma::OwnedRoomId,
 					Vec<OwnedUserId>,
