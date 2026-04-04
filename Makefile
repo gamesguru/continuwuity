@@ -153,7 +153,7 @@ lint:   ##H Lint code
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps $(CARGO_FLAGS) -- -D warnings
+		cargo clippy $(CARGO_SCOPE) --locked --no-deps $(CARGO_FLAGS) -- -D warnings
 
 .PHONY: test
 test:   ##H Run tests
@@ -162,7 +162,7 @@ test:   ##H Run tests
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo test $(CARGO_SCOPE) --features full --locked --all-targets --timings $(CARGO_FLAGS)
+		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
 
 
 ROCKSDB_LIB_DIR ?= /usr/local/lib
@@ -171,7 +171,7 @@ ROCKSDB_INCLUDE_DIR ?= /usr/local/include
 # Default features to use for the build
 # We use bindgen-runtime by default to use the system libclang.so for building.
 # Bundling RocksDB statically can be enabled via features.
-FEATURES ?= standard,console,url_preview,release_max_log_level,bindgen-runtime
+FEATURES ?= console,url_preview
 
 .PHONY: build
 build:  ##H Build with selected profile
