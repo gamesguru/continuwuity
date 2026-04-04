@@ -41,7 +41,6 @@ assets = [
 
 [features]
 default = [
-    "standard",
     "release_max_log_level",
     "bindgen-runtime", # replace with bindgen-static on alpine
 ]
