@@ -114,18 +114,41 @@ impl crate::Service for Service {
 				}
 				self_flush.queued_users.clear();
 
+				let mut room_users: std::collections::HashMap<
+					ruma::OwnedRoomId,
+					Vec<OwnedUserId>,
+				> = std::collections::HashMap::new();
+
+				let mut iterations = 0_u8;
 				for user_id in users {
 					let mut joined_rooms = self_flush.services.state_cache.rooms_joined(&user_id);
 					while let Some(room_id) = joined_rooms.next().await {
-						let mut room_servers =
-							self_flush.services.state_cache.room_servers(room_id);
-						while let Some(server) = room_servers.next().await {
-							if !self_flush.services.globals.server_is_ours(server) {
-								self_flush
-									.pending_updates
-									.entry(server.to_owned())
-									.or_default()
-									.insert(user_id.clone());
+						iterations = iterations.wrapping_add(1);
+						if iterations == 0 {
+							tokio::task::yield_now().await;
+						}
+						room_users
+							.entry(room_id.to_owned())
+							.or_default()
+							.push(user_id.clone());
+					}
+				}
+
+				for (room_id, user_ids) in room_users {
+					let mut room_servers = self_flush.services.state_cache.room_servers(&room_id);
+					while let Some(server) = room_servers.next().await {
+						iterations = iterations.wrapping_add(1);
+						if iterations == 0 {
+							tokio::task::yield_now().await;
+						}
+						if !self_flush.services.globals.server_is_ours(server) {
+							let mut entry = self_flush
+								.pending_updates
+								.entry(server.to_owned())
+								.or_default();
+
+							for user_id in &user_ids {
+								entry.insert(user_id.clone());
 							}
 						}
 					}
@@ -353,9 +376,15 @@ impl Service {
 
 		debug_info!("Resetting presence for active users...");
 		let mut reset = 0_usize;
+		let mut iterations = 0_u8;
 
 		let mut presence_stream = Box::pin(self.db.presence_since(0));
 		while let Some((user_id, count, bytes)) = presence_stream.next().await {
+			iterations = iterations.wrapping_add(1);
+			if iterations == 0 {
+				tokio::task::yield_now().await;
+			}
+
 			if !self.services.server.running() {
 				info!("Shutdown requested during presence reset.");
 				break;
