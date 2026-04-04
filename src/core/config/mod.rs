@@ -2721,7 +2721,7 @@ fn default_federation_conn_timeout() -> u64 { 10 }
 
 fn default_federation_timeout() -> u64 { 60 }
 
-fn default_federation_presence_interval_s() -> u64 { 10 }
+fn default_federation_presence_interval_s() -> u64 { 5 }
 
 fn default_policy_server_request_timeout() -> u64 { 10 }
 
