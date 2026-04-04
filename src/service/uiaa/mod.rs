@@ -268,6 +268,17 @@ impl Service {
 						*identity = updated_identity;
 					},
 					| Err(error) => {
+						if error.message == "User ID mismatch" {
+							return Err(Error::BadRequest(
+								ErrorKind::forbidden(),
+								"User ID mismatch",
+							));
+						} else if error.message == "Email mismatch" {
+							return Err(Error::BadRequest(
+								ErrorKind::forbidden(),
+								"Email mismatch",
+							));
+						}
 						info.auth_error = Some(error);
 					},
 				}
