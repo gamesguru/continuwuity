@@ -41,6 +41,13 @@ if limit_match:
     limit = limit_match.group(1)
     args_str = args_str.replace(limit_match.group(0), "")
 
+# Extract baseline (can be a branch, commit hash, or run ID)
+baseline = None
+baseline_match = re.search(r"baseline=([a-zA-Z0-9_\-\.]+)", args_str)
+if baseline_match:
+    baseline = baseline_match.group(1)
+    args_str = args_str.replace(baseline_match.group(0), "")
+
 # Extract new_passes (Must be done before order parsing to avoid greedy capture)
 new_passes = False
 new_passes_match = re.search(r"new_passes=([^\s]*)", args_str, re.IGNORECASE)
@@ -62,23 +69,22 @@ if new_passes:
 else:
     columns_tail = "new_failures_list"
 
-base_query = f"""
-SELECT
-    version_string,
-    to_char(run_date AT TIME ZONE '{tz_sql}', 'YYYY-MM-DD HH24:MI:SS') AS run_date,
-    (n_pass + n_skip + n_fail) AS n_total,
-    n_pass,
-    n_skip,
-    n_fail,
-    new_pass,
-    new_fail,
-    profile,
-    regexp_replace(features, '[,\\s]+', E'\\n', 'g') AS features,
-    os,
-    arch,
-    {columns_tail}
-FROM
-    v_run_regressions"""
+if baseline:
+    # A specific commit/branch was requested as the baseline
+    baseline_run_filter = f"(b.commit_hash LIKE '{baseline}%' OR b.version_string LIKE '%{baseline}%' OR b.branch LIKE '%{baseline}%' OR b.id::text = '{baseline}')"
+else:
+    # Default to recent main/upstream
+    baseline_run_filter = "(b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream') OR b.version_string LIKE '%main%')"
+
+sql_file_path = os.path.join(os.path.dirname(__file__), "queries.sql")
+with open(sql_file_path, "r") as f:
+    base_query_template = f.read()
+
+base_query = base_query_template.format(
+    baseline_run_filter=baseline_run_filter,
+    tz_sql=tz_sql,
+    columns_tail=columns_tail
+)
 
 if like_str == "all":
     query = f"{base_query}\nORDER BY\n    {order}\nLIMIT {limit}"

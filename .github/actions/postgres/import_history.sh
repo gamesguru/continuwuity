@@ -28,18 +28,6 @@ if [ -f "$SQL_FILE" ]; then
     psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
 fi
 
-# Sync the Master Baseline from origin/main
-echo "→ Syncing Master Baseline from origin/main..."
-(
-  echo "CREATE TEMP TABLE mb (j jsonb);"
-  echo "\copy mb FROM STDIN csv quote e'\x01' delimiter e'\x02';"
-  git show origin/main:tests/test_results/complement/test_results.jsonl
-  echo "\."
-  echo "INSERT INTO master_baseline (test_name, status)
-        SELECT (j->>'Test'), (j->>'Action') FROM mb
-        ON CONFLICT (test_name) DO UPDATE SET status = EXCLUDED.status;"
-) | psql "$DB_TARGET" > /dev/null
-
 echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
 
 # 1. Bulk Ingest Run Summaries
