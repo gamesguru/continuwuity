@@ -144,7 +144,7 @@ jobs:
           VERSION="${{ github.event.inputs.rocksdb_version }}"
           VERSION="${VERSION:-$(grep "^rocksdb," "$CSV" | cut -d',' -f2)}"
           TAR_FILENAME="rocksdb-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
-          tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/rocksdb lib/librocksdb*
+          sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/rocksdb lib/librocksdb*
 
       - name: Upload Artifact Storage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -205,7 +205,7 @@ jobs:
           VERSION="${{ github.event.inputs.jemalloc_version }}"
           VERSION="${VERSION:-$(grep "^jemalloc," "$CSV" | cut -d',' -f2)}"
           TAR_FILENAME="jemalloc-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
-          tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/jemalloc lib/libjemalloc*
+          sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/jemalloc lib/libjemalloc*
 
       - name: Upload Artifact Storage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -266,7 +266,7 @@ jobs:
           VERSION="${{ github.event.inputs.lz4_version }}"
           VERSION="${VERSION:-$(grep "^lz4," "$CSV" | cut -d',' -f2)}"
           TAR_FILENAME="lz4-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
-          tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/lz4* lib/liblz4*
+          sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/lz4* lib/liblz4*
 
       - name: Upload Artifact Storage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -325,7 +325,7 @@ jobs:
           VERSION="${{ github.event.inputs.zstd_version }}"
           VERSION="${VERSION:-$(grep "^zstd," "$CSV" | cut -d',' -f2)}"
           TAR_FILENAME="zstd-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
-          tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/zstd* lib/libzstd*
+          sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/zstd* lib/libzstd*
 
       - name: Upload Artifact Storage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

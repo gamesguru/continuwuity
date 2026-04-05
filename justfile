@@ -42,7 +42,7 @@ prebuild-liburing:
 install-liburing:
     @echo "Installing liburing (requires sudo)..."
     cd /usr/local/uwu/build/liburing && sudo make install
-    @echo "Done! You might need to run 'sudo ldconfig' to update library cache."
+    @echo "Done!"
 
 # Builds bzip2
 prebuild-bzip2:
@@ -65,7 +65,6 @@ install-bzip2:
     cd /usr/local/uwu/build/bzip2 && sudo make install PREFIX=/usr/local/uwu
     cd /usr/local/uwu/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/uwu/lib/
     cd /usr/local/uwu/build/bzip2 && sudo ln -sf /usr/local/uwu/lib/libbz2.so.1.0.* /usr/local/uwu/lib/libbz2.so
-    sudo ldconfig
     @echo "Done! Installed libbz2.so to /usr/local/uwu/lib"
 
 # Pre-build jemalloc
@@ -89,7 +88,6 @@ prebuild-jemalloc:
 install-jemalloc:
     @echo "Installing jemalloc to /usr/local/uwu... (Requires sudo)"
     cd /usr/local/uwu/build/jemalloc && sudo make install_lib_static install_lib_shared install_include
-    sudo ldconfig
 
 # Pre-build lz4
 prebuild-lz4:
@@ -110,7 +108,6 @@ prebuild-lz4:
 install-lz4:
     @echo "Installing lz4 to /usr/local/uwu... (Requires sudo)"
     cd /usr/local/uwu/build/lz4 && sudo make install PREFIX=/usr/local/uwu
-    sudo ldconfig
 
 # Pre-build RocksDB shared and statically
 prebuild-rocksdb:
@@ -158,8 +155,7 @@ install-rocksdb:
     @echo "Installing RocksDB to /usr/local/uwu... (Requires sudo)"
     cd /usr/local/uwu/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local/uwu
     cd /usr/local/uwu/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local/uwu
-    sudo cp -p /usr/local/uwu/build/rocksdb/ldb /usr/local/uwu/bin/ldb
-    sudo ldconfig
+    sudo install -m 755 /usr/local/uwu/build/rocksdb/ldb /usr/local/uwu/bin/ldb
     @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/uwu/lib if Cargo doesn't see it."
 
 # Pre-build snappy
@@ -212,6 +208,7 @@ prebuild-zstd:
 install-zstd:
     @echo "Installing zstd to /usr/local/uwu... (Requires sudo)"
     cd /usr/local/uwu/build/zstd && sudo make install -C lib PREFIX=/usr/local/uwu
+    sudo ldconfig
 
 # --- CPU Profiling ---
 
