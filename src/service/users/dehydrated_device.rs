@@ -146,5 +146,10 @@ pub async fn get_dehydrated_device(&self, user_id: &UserId) -> Result<Dehydrated
 		.get(user_id)
 		.await
 		.deserialized()
-		.map_err(|_| conduwuit::Error::BadRequest(ruma::api::client::error::ErrorKind::NotFound, "No dehydrated device found."))
+		.map_err(|_| {
+			conduwuit::Error::BadRequest(
+				ruma::api::client::error::ErrorKind::NotFound,
+				"No dehydrated device found.",
+			)
+		})
 }
