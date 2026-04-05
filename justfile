@@ -212,7 +212,6 @@ prebuild-zstd:
 install-zstd:
     @echo "Installing zstd to /usr/local/uwu... (Requires sudo)"
     cd /usr/local/uwu/build/zstd && sudo make install -C lib PREFIX=/usr/local/uwu
-    sudo ldconfig
 
 # --- CPU Profiling ---
 
