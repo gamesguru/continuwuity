@@ -78,9 +78,6 @@ impl crate::Service for Service {
 			let self_ = Arc::clone(&self);
 			Some(self.services.server.runtime().spawn(async move {
 				self_.unset_all_presence().await;
-				_ = self_
-					.ping_presence(&self_.services.globals.server_user, &PresenceState::Online)
-					.await;
 			}))
 		} else {
 			None
@@ -173,11 +170,24 @@ impl crate::Service for Service {
 						std::sync::atomic::Ordering::Relaxed,
 					);
 
-				let servers: Vec<_> = self_flush
+				let mut servers: Vec<_> = self_flush
 					.pending_updates
 					.iter()
 					.map(|kv| kv.key().clone())
 					.collect();
+
+				// Prevent flooding the sender worker channels by limiting the number of
+				// servers flushed per tick.
+				servers.truncate(
+					self_flush
+						.services
+						.server
+						.config
+						.sender_workers
+						.max(1)
+						.saturating_mul(20),
+				);
+
 				if !servers.is_empty() {
 					let server_refs = servers.iter().map(AsRef::as_ref);
 					self_flush
