@@ -190,7 +190,13 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
-		let iv = vec![(msg.queue_id, msg.event)];
+		let _cork = self.db.db.cork();
+		let iv = self
+			.db
+			.queued_requests(&msg.dest)
+			.take(DEQUEUE_LIMIT)
+			.collect::<Vec<_>>()
+			.await;
 		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
 				futures.push(self.send_events(msg.dest, events));

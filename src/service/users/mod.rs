@@ -228,11 +228,14 @@ impl Service {
 						.iter()
 						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
 
-					if blocked_user || blocked_server {
-						level = FilterLevel::Block;
-					} else if allowed_user || allowed_server {
+					if allowed_user {
 						level = FilterLevel::Allow;
-					} else if !content.allowed_users.is_empty()
+					} else if blocked_user {
+						level = FilterLevel::Block;
+					} else if allowed_server {
+						level = FilterLevel::Allow;
+					} else if blocked_server
+						|| !content.allowed_users.is_empty()
 						|| !content.allowed_servers.is_empty()
 					{
 						level = FilterLevel::Block;
