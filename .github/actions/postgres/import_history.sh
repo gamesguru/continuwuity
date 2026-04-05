@@ -80,7 +80,8 @@ echo "→ Consolidating and ingesting test details..."
                    AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'),''))
                    AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'),''))
                    AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'),''))
-        ON CONFLICT (run_id, test_name) DO NOTHING;"
+        WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
+        ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
 ) | psql "$DB_TARGET"
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
 echo "✓ Bulk import complete."

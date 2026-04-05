@@ -70,7 +70,8 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
           AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
           AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
           AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'), ''))
-        ON CONFLICT (run_id, test_name) DO NOTHING;"
+        WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
+        ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
 ) | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"
 
 echo "✓ Incremental sync of last $LIMIT runs complete."
