@@ -153,8 +153,8 @@ prebuild-rocksdb:
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
     @echo "Installing RocksDB to /usr/local/uwu... (Requires sudo)"
-    cd /usr/local/uwu/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local/uwu
-    cd /usr/local/uwu/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local/uwu
+    cd /usr/local/uwu/build/rocksdb && sudo make install-shared PREFIX=/usr/local/uwu
+    cd /usr/local/uwu/build/rocksdb && sudo make install-static PREFIX=/usr/local/uwu
     sudo install -m 755 /usr/local/uwu/build/rocksdb/ldb /usr/local/uwu/bin/ldb
     sudo ldconfig
     @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/uwu/lib if Cargo doesn't see it."
