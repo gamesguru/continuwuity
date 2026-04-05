@@ -93,7 +93,14 @@ else:
 
 print(f"\nExecuting Query:\n{query}\n")
 
-# Execute the db-shell script with the query
+import sys
 env = os.environ.copy()
 env["PAGER"] = env.get("PAGER") or "less -X -F -S"
-subprocess.run(["./bin/db-shell", "-c", query], env=env)
+
+try:
+    subprocess.run(["./bin/db-shell", "-c", query], env=env)
+except KeyboardInterrupt:
+    pass
+finally:
+    if sys.stdin.isatty():
+        os.system("stty sane 2>/dev/null")
