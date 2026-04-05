@@ -24,7 +24,7 @@ pub async fn server_can_see_event(
 			 found",
 			event_id, room_id, origin
 		);
-		return false;
+		return true;
 	};
 
 	let history_visibility = self
