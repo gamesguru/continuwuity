@@ -141,6 +141,11 @@ prebuild-rocksdb:
     git fetch --all --tags
     git checkout "$TAG"
 
+    # Disable ccache auto-detection ONLY if we are already using sccache
+    if [[ "$CC" == *"sccache"* ]]; then
+        export USE_CCACHE=0
+    fi
+
     # Build core libraries explicitly WITHOUT RTTI
     env ROCKSDB_NO_FBCODE=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/uwu/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/uwu/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
 
