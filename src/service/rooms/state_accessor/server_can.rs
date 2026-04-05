@@ -3,7 +3,7 @@ use futures::StreamExt;
 use ruma::{
 	EventId, RoomId, ServerName,
 	events::{
-		StateEventType,
+		StateEventType, TimelineEventType,
 		room::history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent},
 	},
 };
@@ -18,13 +18,26 @@ pub async fn server_can_see_event(
 	room_id: &RoomId,
 	event_id: &EventId,
 ) -> bool {
+	if event_id.server_name() == Some(origin) {
+		return true;
+	}
+
+	if let Ok(pdu) = self.services.timeline.get_pdu(event_id).await {
+		if pdu.sender.server_name() == origin
+			|| pdu.origin.as_deref() == Some(origin)
+			|| pdu.kind == TimelineEventType::RoomCreate
+		{
+			return true;
+		}
+	}
+
 	let Ok(shortstatehash) = self.pdu_shortstatehash(event_id).await else {
 		warn!(
 			"Unable to visibility check event {} in room {} for server {}: shortstatehash not \
-			 found",
+			 found. Failing closed.",
 			event_id, room_id, origin
 		);
-		return true;
+		return false;
 	};
 
 	let history_visibility = self
@@ -34,25 +47,25 @@ pub async fn server_can_see_event(
 			c.history_visibility
 		});
 
-	let current_server_members = self
-		.services
-		.state_cache
-		.room_members(room_id)
-		.ready_filter(|member| member.server_name() == origin);
-
 	match history_visibility {
 		| HistoryVisibility::Invited => {
 			// Allow if any member on requesting server was AT LEAST invited, else deny
-			current_server_members
+			self.services
+				.state_cache
+				.room_members(room_id)
+				.ready_filter(|member| member.server_name() == origin)
 				.any(|member| self.user_was_invited(shortstatehash, member))
 				.await
 		},
 		| HistoryVisibility::Joined => {
-			// Allow if any member on requested server was joined, else deny
-			current_server_members
+			// Allow if any member on requesting server was joined, else deny
+			self.services
+				.state_cache
+				.room_members(room_id)
+				.ready_filter(|member| member.server_name() == origin)
 				.any(|member| self.user_was_joined(shortstatehash, member))
 				.await
 		},
-		| HistoryVisibility::WorldReadable | HistoryVisibility::Shared | _ => true,
+		| _ => true,
 	}
 }

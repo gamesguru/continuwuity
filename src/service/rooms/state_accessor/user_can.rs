@@ -104,8 +104,14 @@ pub async fn user_can_see_event(
 	room_id: &RoomId,
 	event_id: &EventId,
 ) -> bool {
+	if let Ok(pdu) = self.services.timeline.get_pdu(event_id).await {
+		if pdu.sender == user_id {
+			return true;
+		}
+	}
+
 	let Ok(shortstatehash) = self.pdu_shortstatehash(event_id).await else {
-		return true;
+		return self.services.state_cache.is_joined(user_id, room_id).await;
 	};
 
 	let currently_member = self.services.state_cache.is_joined(user_id, room_id).await;
