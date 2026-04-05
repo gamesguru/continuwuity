@@ -31,7 +31,8 @@ runs:
           if [ "$(ls -A /tmp/prebuilts_download)" ]; then
             echo "Successfully downloaded prebuilts"
             for archive in /tmp/prebuilts_download/*.tar.gz; do
-              sudo tar -xzvf "$archive" -C /usr/local
+              sudo mkdir -p /usr/local/uwu
+              sudo tar -xzvf "$archive" -C /usr/local/uwu
             done
             echo "found=true" >> $GITHUB_OUTPUT
           else
@@ -80,5 +81,5 @@ runs:
       if: steps.prebuilts-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'
       uses: actions/cache/save@v4
       with:
-        path: /usr/local
+        path: /usr/local/uwu
         key: ${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
