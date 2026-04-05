@@ -93,8 +93,8 @@ install-jemalloc:
 prebuild-lz4:
     #!/usr/bin/env bash
     set -e
-    TAG=$(grep "^lz4," {{CSV}} | cut -d',' -f4)
-    REPO=$(grep "^lz4," {{CSV}} | cut -d',' -f3)
+    TAG=$(grep "^lz4," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^lz4," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
     echo "Cloning lz4 $TAG..."
     [ ! -d "/usr/local/uwu/build/lz4" ] && git clone $REPO /usr/local/uwu/build/lz4 || true
@@ -118,7 +118,7 @@ prebuild-rocksdb:
         hostname() { uname -n; }
         export -f hostname
     fi
-    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 || true)
+    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 | tr -d '\r' || true)
     if [ -z "$TAG" ]; then
         TAG="continuwuity-v0.5.0"
     fi
