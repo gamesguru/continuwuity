@@ -555,6 +555,19 @@ version = "1.0.1"
 [workspace.dependencies.askama]
 version = "0.15.0"
 
+[workspace.dependencies.lettre]
+version = "0.11.19"
+default-features = false
+features = ["smtp-transport", "pool", "hostname", "builder", "rustls", "aws-lc-rs", "rustls-native-certs", "tokio1", "tokio1-rustls", "tracing", "serde"]
+
+[workspace.dependencies.governor]
+version = "0.10.4"
+default-features = false
+features = ["std"]
+
+[workspace.dependencies.nonzero_ext]
+version = "0.3.0"
+
 #
 # Patches
 #
@@ -915,7 +928,6 @@ fn_to_numeric_cast_any = "warn"
 format_push_string = "warn"
 get_unwrap = "warn"
 impl_trait_in_params = "warn"
-let_underscore_untyped = "warn"
 lossy_float_literal = "warn"
 mem_forget = "warn"
 missing_assert_message = "warn"

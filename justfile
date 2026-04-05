@@ -121,24 +121,39 @@ prebuild-rocksdb:
         hostname() { uname -n; }
         export -f hostname
     fi
-    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4)
-    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3)
+    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 || true)
+    if [ -z "$TAG" ]; then
+        TAG="continuwuity-v0.5.0"
+    fi
+    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 || true)
+    if [ -z "$REPO" ]; then
+        REPO="https://forgejo.ellis.link/continuwuation/rocksdb.git"
+    fi
     sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
     echo "Cloning rocksdb $TAG..."
     if [ ! -d "/usr/local/build/rocksdb" ]; then
-        git clone --recursive $REPO /usr/local/build/rocksdb
+        git clone --recursive "$REPO" /usr/local/build/rocksdb
     fi
     echo "Building RocksDB..."
     cd /usr/local/build/rocksdb
+
+    # Use --all --tags to support arbitrary commit hashes from the CSV
     git fetch --all --tags
-    git checkout $TAG
-    env ROCKSDB_NO_FBCODE=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=1 make shared_lib static_lib -j$(nproc)
+    git checkout "$TAG"
+
+    # Build core libraries explicitly WITHOUT RTTI
+    env ROCKSDB_NO_FBCODE=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
+
+    # Build ldb
+    # env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 DISABLE_SNAPPY=1 make ldb
+    env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 make ldb
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
     @echo "Installing RocksDB to /usr/local... (Requires sudo)"
     cd /usr/local/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local
     cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
+    sudo cp -p /usr/local/build/rocksdb/ldb /usr/local/bin/ldb
     sudo ldconfig
     @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
 
@@ -362,7 +377,7 @@ ci-complement-stats:
 
 # Query the CI run regressions view via DB shell.
 # Usage:
-#   just ci-query-failures limit=100 order=run_date asc like=branch_name
+#   just ci-query-failures limit=100 order=run_date asc like=branch_name baseline=123
 ci-query-failures +args="":
     #!/usr/bin/env bash
     ./.github/actions/postgres/ci-query-failures.py {{args}}

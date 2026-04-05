@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 -- Unique index to prevent duplicate machine reports
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_machine_run
-ON runs (commit_hash, run_date, arch, os) NULLS NOT DISTINCT;
+ON runs (commit_hash, run_date, arch, os, profile) NULLS NOT DISTINCT;
 
 -- Create run_details table
 CREATE TABLE IF NOT EXISTS run_details (
@@ -41,17 +41,11 @@ CREATE TABLE IF NOT EXISTS run_details (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test
 ON run_details (run_id, test_name);
 
--- Create a table for the Master Baseline (from origin/main files)
-CREATE TABLE IF NOT EXISTS master_baseline (
-    test_name text PRIMARY KEY,
-    status text NOT NULL
-);
-
 -- Performance indexes
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 
--- Combined Regressions View: Compares directly against the Master Baseline
+-- Combine Regressions View: Compares directly against the most recent 'main' baseline
 CREATE OR REPLACE VIEW v_run_regressions AS
 SELECT
     r.id,
@@ -69,24 +63,33 @@ SELECT
     r.n_pass,
     r.n_fail,
     r.n_skip,
-    (SELECT COUNT(*) FROM master_baseline) as baseline_total,
+    (SELECT COUNT(*) FROM run_details WHERE run_id = dbr.default_baseline_run_id) as baseline_total,
     counts.run_total,
-    (counts.run_total - (SELECT COUNT(*) FROM master_baseline)) as diff_total,
-    -- Calculate deltas vs Master Baseline
+    (counts.run_total - (SELECT COUNT(*) FROM run_details WHERE run_id = dbr.default_baseline_run_id)) as diff_total,
+    -- Calculate deltas vs Default Baseline
     counts.new_pass,
     counts.new_skip,
     counts.new_fail,
-    counts.new_failures_list
+    counts.new_failures_list,
+    counts.new_passes_list
 FROM runs r
+CROSS JOIN LATERAL (
+    SELECT id AS default_baseline_run_id FROM runs
+    WHERE branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
+    OR version_string LIKE '%main%'
+    ORDER BY run_date DESC
+    LIMIT 1
+) dbr
 LEFT JOIN LATERAL (
     SELECT
         COUNT(*) as run_total,
         COUNT(*) FILTER (WHERE rd.status = 'pass' AND (mb.status IS NULL OR mb.status != 'pass')) as new_pass,
         COUNT(*) FILTER (WHERE rd.status = 'skip' AND (mb.status IS NULL OR mb.status != 'skip')) as new_skip,
         COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_fail,
-        STRING_AGG(rd.test_name, E'\n') FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_failures_list
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail')) as new_failures_list,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND (mb.status IS NULL OR mb.status != 'pass')) as new_passes_list
     FROM run_details rd
-    LEFT JOIN master_baseline mb ON mb.test_name = rd.test_name
+    LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = dbr.default_baseline_run_id
     WHERE rd.run_id = r.id
 ) counts ON TRUE
 WHERE r.n_pass > 0 AND counts.run_total > 0;
