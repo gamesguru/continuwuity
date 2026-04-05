@@ -66,16 +66,16 @@ runs:
     - name: Export Paths
       shell: bash
       run: |
-        echo "ROCKSDB_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
-        echo "ROCKSDB_LIB_DIR=/usr/local/lib" >> $GITHUB_ENV
+        echo "ROCKSDB_INCLUDE_DIR=/usr/local/uwu/include" >> $GITHUB_ENV
+        echo "ROCKSDB_LIB_DIR=/usr/local/uwu/lib" >> $GITHUB_ENV
         # Try both libjemalloc.a and libjemalloc_pic.a as jemalloc fallback sometimes builds with pic suffix
-        if [ -f "/usr/local/lib/libjemalloc.a" ]; then
-          echo "JEMALLOC_OVERRIDE=/usr/local/lib/libjemalloc.a" >> $GITHUB_ENV
-        elif [ -f "/usr/local/lib/libjemalloc_pic.a" ]; then
-          echo "JEMALLOC_OVERRIDE=/usr/local/lib/libjemalloc_pic.a" >> $GITHUB_ENV
+        if [ -f "/usr/local/uwu/lib/libjemalloc.a" ]; then
+          echo "JEMALLOC_OVERRIDE=/usr/local/uwu/lib/libjemalloc.a" >> $GITHUB_ENV
+        elif [ -f "/usr/local/uwu/lib/libjemalloc_pic.a" ]; then
+          echo "JEMALLOC_OVERRIDE=/usr/local/uwu/lib/libjemalloc_pic.a" >> $GITHUB_ENV
         fi
         # Expose the explicitly pulled shared '.so' objects to dynamic linkers in runners
-        echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/lib" | tee -a $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/uwu/lib" | tee -a $GITHUB_ENV
 
     - name: Save cache
       if: steps.prebuilts-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'
