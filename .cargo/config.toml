@@ -3,12 +3,12 @@ xtask = "run --package xtask --"
 
 [env]
 RUSTC_WRAPPER = { value = "sccache", force = false }
-ROCKSDB_LIB_DIR = { value = "/usr/local/lib", force = false }
-ROCKSDB_INCLUDE_DIR = { value = "/usr/local/include", force = false }
-PKG_CONFIG_PATH = { value = "/usr/local/lib/pkgconfig", force = false }
+ROCKSDB_LIB_DIR = { value = "/usr/local/uwu/lib", force = false }
+ROCKSDB_INCLUDE_DIR = { value = "/usr/local/uwu/include", force = false }
+PKG_CONFIG_PATH = { value = "/usr/local/uwu/lib/pkgconfig", force = false }
 ZSTD_SYS_USE_PKG_CONFIG = { value = "1", force = false }
-JEMALLOC_OVERRIDE = { value = "/usr/local/lib/libjemalloc.so", force = false }
-LD_LIBRARY_PATH = { value = "/usr/local/lib", force = false }
+JEMALLOC_OVERRIDE = { value = "/usr/local/uwu/lib/libjemalloc.so", force = false }
+LD_LIBRARY_PATH = { value = "/usr/local/uwu/lib", force = false }
 
 #
 # You may need to install "mold", a more efficient linker than ld or cc
@@ -17,7 +17,7 @@ LD_LIBRARY_PATH = { value = "/usr/local/lib", force = false }
 linker = "clang"
 rustflags = [
     "-C", "link-arg=-fuse-ld=mold",
-    "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
+    "-C", "link-arg=-Wl,-rpath,/usr/local/uwu/lib"
 ]
 
 # ARM/Aarch64 (Raspberry Pi)
@@ -25,5 +25,5 @@ rustflags = [
 linker = "clang"
 rustflags = [
     "-C", "link-arg=-fuse-ld=mold",
-    "-C", "link-arg=-Wl,-rpath,/usr/local/lib"
+    "-C", "link-arg=-Wl,-rpath,/usr/local/uwu/lib"
 ]

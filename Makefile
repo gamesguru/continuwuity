@@ -356,7 +356,7 @@ GH_REPO ?=
 
 GH_CACHE_KEY ?=
 
-PREBUILT_TAG ?= prebuilts-v0.5
+PREBUILT_TAG ?= prebuilts-v0.5.7
 
 .PHONY: download/prebuilts
 download/prebuilts: ##H Download prebuilt libraries from GitHub Release

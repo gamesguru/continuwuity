@@ -3,9 +3,9 @@ name: "Setup Prebuilts"
 description: "Downloads and caches Prebuilt Libraries (RocksDB, jemalloc, etc)"
 inputs:
   release_tag:
-    description: "Release tag (e.g. prebuilts-v0.5)"
+    description: "Release tag (e.g. prebuilts-v0.5.7)"
     required: true
-    default: "prebuilts-v0.5"
+    default: "prebuilts-v0.5.7"
   cache-key:
     description: "Unique cache key suffix (e.g. ubuntu-24.04)"
     required: true
