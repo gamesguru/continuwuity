@@ -27,8 +27,8 @@ install-all: install-jemalloc install-lz4 install-snappy install-zstd install-ro
 prebuild-liburing:
     #!/usr/bin/env bash
     set -e
-    TAG=$(grep "^liburing," {{CSV}} | cut -d',' -f4)
-    REPO=$(grep "^liburing," {{CSV}} | cut -d',' -f3)
+    TAG=$(grep "^liburing," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^liburing," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
     echo "Cloning and building liburing $TAG..."
     [ ! -d "/usr/local/uwu/build/liburing" ] && git clone $REPO /usr/local/uwu/build/liburing || true
@@ -48,8 +48,8 @@ install-liburing:
 prebuild-bzip2:
     #!/usr/bin/env bash
     set -e
-    TAG=$(grep "^bzip2," {{CSV}} | cut -d',' -f4)
-    REPO=$(grep "^bzip2," {{CSV}} | cut -d',' -f3)
+    TAG=$(grep "^bzip2," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^bzip2," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
     echo "Cloning and building bzip2 $TAG..."
     [ ! -d "/usr/local/uwu/build/bzip2" ] && git clone $REPO /usr/local/uwu/build/bzip2 || true
@@ -71,8 +71,8 @@ install-bzip2:
 prebuild-jemalloc:
     #!/usr/bin/env bash
     set -e
-    TAG=$(grep "^jemalloc," {{CSV}} | cut -d',' -f4)
-    REPO=$(grep "^jemalloc," {{CSV}} | cut -d',' -f3)
+    TAG=$(grep "^jemalloc," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^jemalloc," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
     echo "Cloning jemalloc $TAG..."
     [ ! -d "/usr/local/uwu/build/jemalloc" ] && git clone $REPO /usr/local/uwu/build/jemalloc || true
@@ -122,7 +122,7 @@ prebuild-rocksdb:
     if [ -z "$TAG" ]; then
         TAG="continuwuity-v0.5.0"
     fi
-    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 || true)
+    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 | tr -d '\r' || true)
     if [ -z "$REPO" ]; then
         REPO="https://forgejo.ellis.link/continuwuation/rocksdb.git"
     fi
@@ -163,8 +163,8 @@ install-rocksdb:
 prebuild-snappy:
     #!/usr/bin/env bash
     set -e
-    TAG=$(grep "^snappy," {{CSV}} | cut -d',' -f4)
-    REPO=$(grep "^snappy," {{CSV}} | cut -d',' -f3)
+    TAG=$(grep "^snappy," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^snappy," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
     echo "Cloning snappy $TAG..."
     if [ ! -d "/usr/local/uwu/build/snappy" ]; then
@@ -194,8 +194,8 @@ install-snappy:
 prebuild-zstd:
     #!/usr/bin/env bash
     set -e
-    TAG=$(grep "^zstd," {{CSV}} | cut -d',' -f4)
-    REPO=$(grep "^zstd," {{CSV}} | cut -d',' -f3)
+    TAG=$(grep "^zstd," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^zstd," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
     echo "Cloning zstd $TAG..."
     [ ! -d "/usr/local/uwu/build/zstd" ] && git clone $REPO /usr/local/uwu/build/zstd || true
