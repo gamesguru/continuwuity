@@ -81,5 +81,5 @@ runs:
       if: steps.prebuilts-cache.outputs.cache-hit != 'true' && steps.download.outputs.found == 'false'
       uses: actions/cache/save@v4
       with:
-        path: /usr/local/uwu
+        path: /usr/local
         key: ${{ inputs.release_tag }}-${{ inputs.arch }}-${{ inputs.cache-key }}
