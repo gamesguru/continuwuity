@@ -7,11 +7,11 @@ use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 #[cfg(feature = "ldap")]
 use conduwuit::result::LogErr;
 use conduwuit::{
-	Err, Error, Result, Server, debug_warn, err, info, is_equal_to, trace,
+	Err, Error, Result, Server, debug, debug_warn, err, info, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
 };
 #[cfg(feature = "ldap")]
-use conduwuit_core::{debug, error};
+use conduwuit_core::error;
 use database::{Deserialized, Ignore, Interfix, Json, Map};
 use futures::{Stream, StreamExt, TryFutureExt};
 #[cfg(feature = "ldap")]
@@ -847,21 +847,37 @@ impl Service {
 			let mut master_key_val: serde_json::Value =
 				serde_json::from_str(master_key.json().get()).unwrap();
 
-			info!(
-				target: "cross_signing",
-				"Adding master cross-signing key for user {}",
-				user_id
-			);
+			let old_key = self
+				.db
+				.keyid_key
+				.get(&master_key_key)
+				.await
+				.ok()
+				.and_then(|old| serde_json::from_slice::<serde_json::Value>(&old).ok());
 
-			if let Ok(old_key) = self.db.keyid_key.get(&master_key_key).await {
-				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
-					merge_signatures(&mut master_key_val, &old_key);
-				}
+			if let Some(ref old_key) = old_key {
+				merge_signatures(&mut master_key_val, old_key);
 			}
 
-			self.db
-				.keyid_key
-				.insert(&master_key_key, serde_json::to_vec(&master_key_val).unwrap());
+			let new_key_vec = serde_json::to_vec(&master_key_val).unwrap();
+			if old_key
+				.as_ref()
+				.is_none_or(|old| serde_json::to_vec(old).unwrap() != new_key_vec)
+			{
+				info!(
+					target: "cross_signing",
+					"Adding master cross-signing key for user {}",
+					user_id
+				);
+			} else {
+				debug!(
+					target: "cross_signing",
+					"Master cross-signing key for user {} already exists",
+					user_id
+				);
+			}
+
+			self.db.keyid_key.insert(&master_key_key, new_key_vec);
 
 			self.db
 				.userid_masterkeyid
@@ -893,22 +909,37 @@ impl Service {
 			let mut self_signing_key_key = prefix.clone();
 			self_signing_key_key.extend_from_slice(self_signing_key_pub.as_bytes());
 
-			info!(
-				target: "cross_signing",
-				"Adding self-signing key for user {}",
-				user_id
-			);
+			let old_key = self
+				.db
+				.keyid_key
+				.get(&self_signing_key_key)
+				.await
+				.ok()
+				.and_then(|old| serde_json::from_slice::<serde_json::Value>(&old).ok());
 
-			if let Ok(old_key) = self.db.keyid_key.get(&self_signing_key_key).await {
-				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
-					merge_signatures(&mut self_signing_key_val, &old_key);
-				}
+			if let Some(ref old_key) = old_key {
+				merge_signatures(&mut self_signing_key_val, old_key);
 			}
 
-			self.db.keyid_key.insert(
-				&self_signing_key_key,
-				serde_json::to_vec(&self_signing_key_val).unwrap(),
-			);
+			let new_key_vec = serde_json::to_vec(&self_signing_key_val).unwrap();
+			if old_key
+				.as_ref()
+				.is_none_or(|old| serde_json::to_vec(old).unwrap() != new_key_vec)
+			{
+				info!(
+					target: "cross_signing",
+					"Adding self-signing key for user {}",
+					user_id
+				);
+			} else {
+				debug!(
+					target: "cross_signing",
+					"Self-signing key for user {} already exists",
+					user_id
+				);
+			}
+
+			self.db.keyid_key.insert(&self_signing_key_key, new_key_vec);
 
 			self.db
 				.userid_selfsigningkeyid
@@ -923,22 +954,37 @@ impl Service {
 			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 			let user_signing_key_key = (user_id, &user_signing_key_id);
 
-			info!(
-				target: "cross_signing",
-				"Adding user-signing key for user {}",
-				user_id
-			);
+			let old_key = self
+				.db
+				.keyid_key
+				.qry(&user_signing_key_key)
+				.await
+				.ok()
+				.and_then(|old| serde_json::from_slice::<serde_json::Value>(&old).ok());
 
-			if let Ok(old_key) = self.db.keyid_key.qry(&user_signing_key_key).await {
-				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
-					merge_signatures(&mut user_signing_key_val, &old_key);
-				}
+			if let Some(ref old_key) = old_key {
+				merge_signatures(&mut user_signing_key_val, old_key);
 			}
 
-			self.db.keyid_key.put_raw(
-				user_signing_key_key,
-				serde_json::to_vec(&user_signing_key_val).unwrap(),
-			);
+			let new_key_vec = serde_json::to_vec(&user_signing_key_val).unwrap();
+			if old_key
+				.as_ref()
+				.is_none_or(|old| serde_json::to_vec(old).unwrap() != new_key_vec)
+			{
+				info!(
+					target: "cross_signing",
+					"Adding user-signing key for user {}",
+					user_id
+				);
+			} else {
+				debug!(
+					target: "cross_signing",
+					"User-signing key for user {} already exists",
+					user_id
+				);
+			}
+
+			self.db.keyid_key.put_raw(user_signing_key_key, new_key_vec);
 
 			self.db
 				.userid_usersigningkeyid
@@ -1691,7 +1737,7 @@ where
 			if sender_user == Some(user_id) || sid == user_id || allowed_signatures(sid) {
 				signatures.insert(user, signature);
 			} else {
-				info!(
+				debug!(
 					target: "cross_signing",
 					"Dropped cross-signing signature for user {} (sender: {:?}, target: {})",
 					sid, sender_user, user_id
