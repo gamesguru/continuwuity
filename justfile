@@ -11,6 +11,9 @@ CSV := ".github/ellis_link_deps.csv"
 # to make them available to Cargo, RustRover, and your system.
 
 # Initialize the global build directory
+# Note: We intentionally do NOT register /usr/local/uwu/lib in the global
+# /etc/ld.so.conf.d/ to prevent shadowing system libraries (like zstd/lz4).
+# We expose it locally via .envrc and .cargo/config.toml instead.
 init-prebuild:
     @echo "Creating /usr/local/uwu/build and assigning ownership to $USER... (Requires sudo)"
     sudo mkdir -p /usr/local/uwu/build /usr/local/uwu/lib /usr/local/uwu/include /usr/local/uwu/bin
