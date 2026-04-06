@@ -70,7 +70,7 @@ fn descriptor_cf_options(
 		);
 	}
 
-	let mut opts = opts
+	let opts = opts
 		.get_options_from_string("{{arena_block_size=2097152;}}")
 		.map_err(map_err)?;
 
