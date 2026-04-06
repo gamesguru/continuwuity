@@ -83,8 +83,8 @@ prebuild-jemalloc:
     cd /usr/local/uwu/build/jemalloc
     git fetch --all --tags
     git checkout $TAG
-    [ -f configure ] || ./autogen.sh
-    [ -f Makefile ] || ./configure --prefix=/usr/local/uwu
+    [ -f configure ] || ./autogen.sh --prefix=/usr/local/uwu
+    grep -q "prefix = /usr/local/uwu" Makefile 2>/dev/null || ./configure --prefix=/usr/local/uwu
     make -j$(nproc)
 
 # Install jemalloc globally (requires sudo)
