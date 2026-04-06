@@ -1886,6 +1886,11 @@
 #
 #support_mxid =
 
+# PGP key URI for server support contacts, to be served as part of the
+# MSC1929 server support endpoint.
+#
+#support_pgp_key =
+
 # **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
 #
 # A list of MatrixRTC foci URLs which will be served as part of the

@@ -2214,6 +2214,10 @@ pub struct WellKnownConfig {
 	/// listed.
 	pub support_mxid: Option<OwnedUserId>,
 
+	/// PGP key URI for server support contacts, to be served as part of the
+	/// MSC1929 server support endpoint.
+	pub support_pgp_key: Option<String>,
+
 	/// **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
 	///
 	/// A list of MatrixRTC foci URLs which will be served as part of the
