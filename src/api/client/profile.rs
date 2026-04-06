@@ -142,13 +142,13 @@ pub(crate) async fn set_avatar_url_route(
 		.collect()
 		.await;
 
-	update_avatar_url(
+	Box::pin(update_avatar_url(
 		&services,
 		&body.user_id,
 		body.avatar_url.clone(),
 		body.blurhash.clone(),
 		&all_joined_rooms,
-	)
+	))
 	.await;
 
 	if services.config.allow_local_presence {

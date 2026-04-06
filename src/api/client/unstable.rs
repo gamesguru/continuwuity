@@ -127,7 +127,8 @@ pub(crate) async fn set_profile_key_route(
 			.collect()
 			.await;
 
-		update_avatar_url(&services, &body.user_id, Some(mxc), None, &all_joined_rooms).await;
+		Box::pin(update_avatar_url(&services, &body.user_id, Some(mxc), None, &all_joined_rooms))
+			.await;
 	} else {
 		services.users.set_profile_key(
 			&body.user_id,
@@ -188,7 +189,8 @@ pub(crate) async fn delete_profile_key_route(
 			.collect()
 			.await;
 
-		update_avatar_url(&services, &body.user_id, None, None, &all_joined_rooms).await;
+		Box::pin(update_avatar_url(&services, &body.user_id, None, None, &all_joined_rooms))
+			.await;
 	} else {
 		services
 			.users
