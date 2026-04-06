@@ -1,7 +1,7 @@
 # Optional env vars (export before running engage):
 # After rocksdb compile+install, export these to every cargo build, fmt, test, clippy:
-# ROCKSDB_INCLUDE_DIR=/usr/local/include
-# ROCKSDB_LIB_DIR=/usr/local/lib
+# ROCKSDB_INCLUDE_DIR=/usr/local/uwu/include
+# ROCKSDB_LIB_DIR=/usr/local/uwu/lib
 # LD_LIBRARY_PATH=$ROCKSDB_LIB_DIR:$LD_LIBRARY_PATH
 
 interpreter = ["bash", "-euo", "pipefail", "-c"]

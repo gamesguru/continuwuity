@@ -14,8 +14,8 @@ endif
 
 # Example .env:
 #!/bin/bash
-# export ROCKSDB_INCLUDE_DIR=/usr/local/include
-# export ROCKSDB_LIB_DIR=/usr/local/lib
+# export ROCKSDB_INCLUDE_DIR=/usr/local/uwu/include
+# export ROCKSDB_LIB_DIR=/usr/local/uwu/lib
 # export LD_LIBRARY_PATH=${ROCKSDB_LIB_DIR}:${LD_LIBRARY_PATH}
 # #export CPU_TARGET=skylake
 # export OS_VERSION=ubuntu-24.04
@@ -165,8 +165,8 @@ test:   ##H Run tests
 		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
 
 
-ROCKSDB_LIB_DIR ?= /usr/local/lib
-ROCKSDB_INCLUDE_DIR ?= /usr/local/include
+ROCKSDB_LIB_DIR ?= /usr/local/uwu/lib
+ROCKSDB_INCLUDE_DIR ?= /usr/local/uwu/include
 
 # Default features to use for the build
 # We use bindgen-runtime by default to use the system libclang.so for building.
@@ -485,7 +485,7 @@ C10Y_SERV ?= conduwuit.service
 
 # Configure these in .env if alternate path(s) are desired
 BUILD_BIN_DIR ?= target/latest
-DEPLOY_BIN_DIR ?= /usr/local/bin
+DEPLOY_BIN_DIR ?= /usr/local/uwu/bin
 
 BUILD_BIN ?= $(BUILD_BIN_DIR)/$(CONTINUWUITY)
 DEPLOY_BIN ?= $(DEPLOY_BIN_DIR)/$(CONTINUWUITY)

@@ -3,15 +3,15 @@ FROM ${BASE_IMAGE}
 EXPOSE 8008
 EXPOSE 8448
 RUN apt-get update && apt-get install -y ca-certificates liburing2 && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /etc/continuwuity /var/lib/continuwuity /usr/local/bin/
-COPY complement/complement-entrypoint.sh /usr/local/bin/complement-entrypoint.sh
+RUN mkdir -p /etc/continuwuity /var/lib/continuwuity /usr/local/uwu/bin/
+COPY complement/complement-entrypoint.sh /usr/local/uwu/bin/complement-entrypoint.sh
 COPY complement/complement.config.toml /etc/continuwuity/config.toml
 ARG BINARY_PATH=target/latest/conduwuit
 ARG LIB_PATH=target/latest/lib
-COPY ${BINARY_PATH} /usr/local/bin/conduwuit
-COPY ${LIB_PATH}/ /usr/local/lib/
-RUN ldconfig
-RUN chmod +x /usr/local/bin/conduwuit /usr/local/bin/complement-entrypoint.sh
+COPY ${BINARY_PATH} /usr/local/uwu/bin/conduwuit
+COPY ${LIB_PATH}/ /usr/local/uwu/lib/
+RUN ldconfig /usr/local/uwu/lib
+RUN chmod +x /usr/local/uwu/bin/conduwuit /usr/local/uwu/bin/complement-entrypoint.sh
 ARG UID=1000
 ARG GID=1000
 ENV CONDUWUIT_UID=${UID}
@@ -19,4 +19,4 @@ ENV CONDUWUIT_GID=${GID}
 RUN chown -R ${UID}:${GID} /etc/continuwuity /var/lib/continuwuity
 
 #HEALTHCHECK --interval=30s --timeout=5s CMD curl --fail http://localhost:8008/_continuwuity/server_version || exit 1
-ENTRYPOINT ["/usr/local/bin/complement-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/uwu/bin/complement-entrypoint.sh"]
