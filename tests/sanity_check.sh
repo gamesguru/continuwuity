@@ -21,7 +21,7 @@ port = 6167
 EOF
 
 echo "Starting conduwuit in the background..."
-export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="/usr/local/uwu/lib:$LD_LIBRARY_PATH"
 "$BINARY" -c /tmp/conduwuit-sanity.toml &
 PID=$!
 
