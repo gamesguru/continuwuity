@@ -367,8 +367,8 @@ download/prebuilts: ##H Download prebuilt libraries from GitHub Release
 	@mkdir -p .tmp/prebuilts && rm -rf .tmp/prebuilts/*
 	@if gh release download $(PREBUILT_TAG) -R $(GH_REPO) -p "*-$(CPU_TARGET)-$(OS_VERSION).tar.gz" -D .tmp/prebuilts --clobber; then \
 		for f in .tmp/prebuilts/*.tar.gz; do \
-			echo "Extracting $$f to /usr/local..."; \
-			sudo tar -xzvf "$$f" -C /usr/local; \
+			echo "Extracting $$f to /usr/local/uwu..."; \
+			sudo tar -xzvf "$$f" -C /usr/local/uwu; \
 		done; \
 		sudo ldconfig; \
 		echo "Prebuilts installed."; \
