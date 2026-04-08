@@ -1,14 +1,18 @@
 {
-  imports = [
-    ./continuwuity
-    ./rocksdb
-    ./rust.nix
-    ./uwulib
-  ];
-
+  self,
+  ...
+}:
+{
   perSystem =
-    { self', ... }:
     {
-      packages.default = self'.packages.continuwuity-default-bin;
+      pkgs,
+      craneLib,
+      ...
+    }:
+    {
+      packages = {
+        rocksdb = pkgs.callPackage ./rocksdb.nix { };
+        default = pkgs.callPackage ./continuwuity.nix { inherit self craneLib; };
+      };
     };
 }
