@@ -68,7 +68,7 @@ impl Server {
 		);
 
 		Ok(Arc::new(Self {
-			server: Arc::new(conduwuit_core::Server::new(config, runtime.cloned(), Log {
+			server: Arc::new(conduwuit_core::Server::new(config, runtime, Log {
 				reload: tracing_reload_handle,
 				capture,
 			})),
