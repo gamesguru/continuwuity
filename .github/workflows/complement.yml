@@ -63,7 +63,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update || true
           sudo apt-get install -y \
             build-essential \
             pkg-config \
@@ -266,7 +266,8 @@ jobs:
           # Use ssh-agent to load the key (handles passphrases via DISPLAY workaround or expect if needed,
           # but usually CI keys are passwordless. If it has a password, sshpass can feed it)
           if [ -n "$SSH_PASSPHRASE" ]; then
-            sudo apt-get update && sudo apt-get install -y sshpass
+            sudo apt-get update || true
+            sudo apt-get install -y sshpass
             export SSH_ASKPASS_REQUIRE=force
             export SSH_ASKPASS_CMD="echo $SSH_PASSPHRASE"
             # Actually, standard sshpass is easier:

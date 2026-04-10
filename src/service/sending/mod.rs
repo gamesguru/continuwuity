@@ -133,17 +133,18 @@ impl crate::Service for Service {
 			loop {
 				tokio::time::sleep(Duration::from_secs(300)).await;
 				stats_self.stats.report_and_reset();
+				stats_self.server.metrics.sending_queue_total.store(
+					stats_self
+						.channels
+						.iter()
+						.map(|(s, _)| u64::try_from(s.len()).expect("failed conversion"))
+						.sum(),
+					std::sync::atomic::Ordering::Relaxed,
+				);
 			}
 		});
 
 		while let Some(ret) = senders.join_next_with_id().await {
-			self.server.metrics.sending_queue_total.store(
-				self.channels
-					.iter()
-					.map(|(s, _)| u64::try_from(s.len()).expect("failed conversion"))
-					.sum(),
-				std::sync::atomic::Ordering::Relaxed,
-			);
 			match ret {
 				| Ok((id, _)) => {
 					debug!(?id, "sender worker finished");

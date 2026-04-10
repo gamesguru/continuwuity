@@ -51,7 +51,10 @@ impl Data {
 		self.readreceiptid_readreceipt
 			.rev_keys_from_raw(&last_possible_key)
 			.ignore_err()
-			.ready_take_while(|key| key.starts_with(room_id.as_bytes()))
+			.ready_take_while(|key| {
+				key.starts_with(room_id.as_bytes())
+					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
+			})
 			.ready_filter_map(|key| key.ends_with(user_id.as_bytes()).then_some(key))
 			.ready_for_each(|key| {
 				self.readreceiptid_readreceipt.remove_raw(key);

@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use conduwuit::{Event, Result, debug, info, warn};
+use conduwuit::{Event, Result, debug, info, utils::ReadyExt, warn};
 use futures::{FutureExt, StreamExt};
 use ruma::api::federation::event::get_room_state;
 
@@ -79,11 +79,13 @@ impl Service {
 		}
 
 		// Check if room has remote members
-		let mut remote_servers = self.services.state_cache.room_servers(room_id);
-		let Some(remote_server) = remote_servers
+		let Some(remote_server) = self
+			.services
+			.state_cache
+			.room_servers(room_id)
+			.ready_filter(|&s| s != self.services.globals.server_name())
 			.next()
 			.await
-			.filter(|&s| s != self.services.globals.server_name())
 		else {
 			return Ok(()); // Local-only or no other servers
 		};
