@@ -30,7 +30,10 @@ static WORKER_AFFINITY: OnceLock<bool> = OnceLock::new();
 static GC_ON_PARK: OnceLock<Option<bool>> = OnceLock::new();
 static GC_MUZZY: OnceLock<Option<bool>> = OnceLock::new();
 
-pub(super) fn new(args: &Args) -> Result<tokio::runtime::Runtime> {
+pub(super) fn new(
+	args: &Args,
+	config: &conduwuit_core::config::Config,
+) -> Result<tokio::runtime::Runtime> {
 	WORKER_AFFINITY
 		.set(args.worker_affinity)
 		.expect("set WORKER_AFFINITY from program argument");

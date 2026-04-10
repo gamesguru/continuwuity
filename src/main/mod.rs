@@ -17,6 +17,10 @@ mod sentry;
 mod server;
 mod signal;
 
+use conduwuit_core::config::Config;
+
+use crate::clap::update;
+
 #[cfg(feature = "console")]
 mod attach;
 
@@ -61,8 +65,13 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 	// Spawn deadlock detection thread
 	deadlock::spawn();
 
-	let runtime = runtime::new(args)?;
-	let server = Server::new(args, Some(runtime.handle()))?;
+	let config_paths = args.config.clone().unwrap_or_default();
+	let config = Config::load(&config_paths)
+		.and_then(|raw| update(raw, args))
+		.and_then(|raw| Config::new(&raw))?;
+
+	let runtime = runtime::new(args, &config)?;
+	let server = Server::new(config, Some(runtime.handle()))?;
 
 	runtime.spawn(signal::signal(server.clone()));
 	runtime.block_on(async_main(&server))?;

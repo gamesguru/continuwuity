@@ -203,6 +203,11 @@ pub struct Config {
 	)]
 	pub cache_capacity_modifier: f64,
 
+	/// Override the tokio worker_thread count.
+	///
+	/// default: varies by system
+	pub worker_threads: Option<usize>,
+
 	/// Set this to any float value in megabytes for continuwuity to tell the
 	/// database engine that this much memory is available for database read
 	/// caches.

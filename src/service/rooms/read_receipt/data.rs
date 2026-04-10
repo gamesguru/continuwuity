@@ -11,6 +11,7 @@ use ruma::{
 	events::{AnySyncEphemeralRoomEvent, receipt::ReceiptEvent},
 	serde::Raw,
 };
+use tokio::task::yield_now;
 
 use crate::{Dep, globals};
 
@@ -48,18 +49,30 @@ impl Data {
 	) {
 		// Remove old entry
 		let last_possible_key = (room_id, u64::MAX);
-		self.readreceiptid_readreceipt
+		let mut stream = self
+			.readreceiptid_readreceipt
 			.rev_keys_from_raw(&last_possible_key)
 			.ignore_err()
 			.ready_take_while(|key| {
 				key.starts_with(room_id.as_bytes())
 					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
-			})
-			.ready_filter_map(|key| key.ends_with(user_id.as_bytes()).then_some(key))
-			.ready_for_each(|key| {
+			});
+
+		let mut iterations: usize = 0;
+		while let Some(key) = stream.next().await {
+			// Short-circuit: Once we find the user's old receipt, remove it, STOP
+			if key.ends_with(user_id.as_bytes()) {
 				self.readreceiptid_readreceipt.remove_raw(key);
-			})
-			.await;
+				break;
+			}
+
+			// Yield to the executor every 100 iterations.
+			// Allows router to interleave client requests, prevents hangs
+			iterations = iterations.saturating_add(1);
+			if iterations.is_multiple_of(100) {
+				yield_now().await;
+			}
+		}
 
 		let count = self.services.globals.next_count().unwrap();
 		let latest_id = (room_id, count, user_id);
