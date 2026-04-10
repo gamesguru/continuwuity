@@ -18,9 +18,9 @@ PREFIX := env_var_or_default("PREFIX", "/usr/local/uwu")
 # /etc/ld.so.conf.d/ to prevent shadowing system libraries (like zstd/lz4).
 # We expose it locally via .envrc and .cargo/config.toml instead.
 init-prebuild:
-    @echo "Creating /usr/local/uwu/build and assigning ownership to $USER... (Requires sudo)"
-    sudo mkdir -p /usr/local/uwu/build /usr/local/uwu/lib /usr/local/uwu/include /usr/local/uwu/bin
-    sudo chown -R $USER:$USER /usr/local/uwu/build /usr/local/uwu/lib /usr/local/uwu/include /usr/local/uwu/bin
+    @echo "Creating {{PREFIX}}/build and assigning ownership to $USER... (Requires sudo)"
+    sudo mkdir -p {{PREFIX}}/build {{PREFIX}}/lib {{PREFIX}}/include {{PREFIX}}/bin
+    sudo chown -R $USER:$USER {{PREFIX}}/build {{PREFIX}}/lib {{PREFIX}}/include {{PREFIX}}/bin
     @echo "Done. You can now run prebuild commands."
 
 # Pre-build all C/C++ dependencies
@@ -35,20 +35,20 @@ prebuild-liburing:
     set -e
     TAG=$(grep "^liburing," {{CSV}} | cut -d',' -f4 | tr -d '\r')
     REPO=$(grep "^liburing," {{CSV}} | cut -d',' -f3 | tr -d '\r')
-    sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning and building liburing $TAG..."
-    [ ! -d "/usr/local/uwu/build/liburing" ] && git clone $REPO /usr/local/uwu/build/liburing || true
-    cd /usr/local/uwu/build/liburing
+    [ ! -d "{{PREFIX}}/build/liburing" ] && git clone $REPO {{PREFIX}}/build/liburing || true
+    cd {{PREFIX}}/build/liburing
     git fetch --all --tags
     git checkout $TAG
-    ./configure --prefix=/usr/local/uwu
+    ./configure --prefix={{PREFIX}}
     make -j$(nproc)
 
 # Installs liburing
 install-liburing:
     @echo "Installing liburing (requires sudo)..."
-    cd /usr/local/uwu/build/liburing && sudo make install
-    @echo "Done!"
+    cd {{PREFIX}}/build/liburing && sudo make install
+    @echo "Done! You might need to run 'sudo ldconfig' to update library cache."
 
 # Builds bzip2
 prebuild-bzip2:
@@ -56,10 +56,10 @@ prebuild-bzip2:
     set -e
     TAG=$(grep "^bzip2," {{CSV}} | cut -d',' -f4 | tr -d '\r')
     REPO=$(grep "^bzip2," {{CSV}} | cut -d',' -f3 | tr -d '\r')
-    sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning and building bzip2 $TAG..."
-    [ ! -d "/usr/local/uwu/build/bzip2" ] && git clone $REPO /usr/local/uwu/build/bzip2 || true
-    cd /usr/local/uwu/build/bzip2
+    [ ! -d "{{PREFIX}}/build/bzip2" ] && git clone $REPO {{PREFIX}}/build/bzip2 || true
+    cd {{PREFIX}}/build/bzip2
     git fetch --all --tags
     git checkout $TAG
     make -f Makefile-libbz2_so
@@ -68,10 +68,11 @@ prebuild-bzip2:
 # Installs bzip2
 install-bzip2:
     @echo "Installing bzip2 (requires sudo)..."
-    cd /usr/local/uwu/build/bzip2 && sudo make install PREFIX=/usr/local/uwu
-    cd /usr/local/uwu/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/uwu/lib/
-    cd /usr/local/uwu/build/bzip2 && sudo ln -sf /usr/local/uwu/lib/libbz2.so.1.0.* /usr/local/uwu/lib/libbz2.so
-    @echo "Done! Installed libbz2.so to /usr/local/uwu/lib"
+    cd {{PREFIX}}/build/bzip2 && sudo make install PREFIX={{PREFIX}}
+    cd {{PREFIX}}/build/bzip2 && sudo cp -f libbz2.so.1.0.* {{PREFIX}}/lib/
+    cd {{PREFIX}}/build/bzip2 && sudo ln -sf {{PREFIX}}/lib/libbz2.so.1.0.* {{PREFIX}}/lib/libbz2.so
+    sudo ldconfig
+    @echo "Done! Installed libbz2.so to {{PREFIX}}/lib"
 
 # Pre-build jemalloc
 prebuild-jemalloc:
@@ -79,21 +80,22 @@ prebuild-jemalloc:
     set -e
     TAG=$(grep "^jemalloc," {{CSV}} | cut -d',' -f4 | tr -d '\r')
     REPO=$(grep "^jemalloc," {{CSV}} | cut -d',' -f3 | tr -d '\r')
-    sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning jemalloc $TAG..."
-    [ ! -d "/usr/local/uwu/build/jemalloc" ] && git clone $REPO /usr/local/uwu/build/jemalloc || true
+    [ ! -d "{{PREFIX}}/build/jemalloc" ] && git clone $REPO {{PREFIX}}/build/jemalloc || true
     echo "Building jemalloc..."
-    cd /usr/local/uwu/build/jemalloc
+    cd {{PREFIX}}/build/jemalloc
     git fetch --all --tags
     git checkout $TAG
-    [ -f configure ] || ./autogen.sh --prefix=/usr/local/uwu
-    grep -q "prefix = /usr/local/uwu" Makefile 2>/dev/null || ./configure --prefix=/usr/local/uwu
+    [ -f configure ] || ./autogen.sh
+    [ -f Makefile ] || ./configure --prefix={{PREFIX}}
     make -j$(nproc)
 
 # Install jemalloc globally (requires sudo)
 install-jemalloc:
-    @echo "Installing jemalloc to /usr/local/uwu... (Requires sudo)"
-    cd /usr/local/uwu/build/jemalloc && sudo make install_lib_static install_lib_shared install_include
+    @echo "Installing jemalloc to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/jemalloc && sudo make install_lib_static install_lib_shared install_include
+    sudo ldconfig
 
 # Pre-build lz4
 prebuild-lz4:
@@ -101,19 +103,20 @@ prebuild-lz4:
     set -e
     TAG=$(grep "^lz4," {{CSV}} | cut -d',' -f4 | tr -d '\r')
     REPO=$(grep "^lz4," {{CSV}} | cut -d',' -f3 | tr -d '\r')
-    sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning lz4 $TAG..."
-    [ ! -d "/usr/local/uwu/build/lz4" ] && git clone $REPO /usr/local/uwu/build/lz4 || true
+    [ ! -d "{{PREFIX}}/build/lz4" ] && git clone $REPO {{PREFIX}}/build/lz4 || true
     echo "Building lz4..."
-    cd /usr/local/uwu/build/lz4
+    cd {{PREFIX}}/build/lz4
     git fetch --all --tags
     git checkout $TAG
     make lib -j$(nproc)
 
 # Install lz4 globally (requires sudo)
 install-lz4:
-    @echo "Installing lz4 to /usr/local/uwu... (Requires sudo)"
-    cd /usr/local/uwu/build/lz4 && sudo make install PREFIX=/usr/local/uwu
+    @echo "Installing lz4 to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/lz4 && sudo make install PREFIX={{PREFIX}}
+    sudo ldconfig
 
 # Pre-build RocksDB shared and statically
 prebuild-rocksdb:
@@ -132,13 +135,13 @@ prebuild-rocksdb:
     if [ -z "$REPO" ]; then
         REPO="https://forgejo.ellis.link/continuwuation/rocksdb.git"
     fi
-    sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning rocksdb $TAG..."
-    if [ ! -d "/usr/local/uwu/build/rocksdb" ]; then
-        git clone --recursive "$REPO" /usr/local/uwu/build/rocksdb
+    if [ ! -d "{{PREFIX}}/build/rocksdb" ]; then
+        git clone --recursive "$REPO" {{PREFIX}}/build/rocksdb
     fi
     echo "Building RocksDB..."
-    cd /usr/local/uwu/build/rocksdb
+    cd {{PREFIX}}/build/rocksdb
 
     # Use --all --tags to support arbitrary commit hashes from the CSV
     git fetch --all --tags
@@ -150,7 +153,7 @@ prebuild-rocksdb:
     fi
 
     # Build core libraries explicitly WITHOUT RTTI
-    env ROCKSDB_NO_FBCODE=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/uwu/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/uwu/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
+    env ROCKSDB_NO_FBCODE=1 ROCKSDB_DISABLE_BENCHMARK=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I{{PREFIX}}/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L{{PREFIX}}/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
 
     # Build ldb
     # env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 DISABLE_SNAPPY=1 make ldb
@@ -158,12 +161,12 @@ prebuild-rocksdb:
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
-    @echo "Installing RocksDB to /usr/local/uwu... (Requires sudo)"
-    cd /usr/local/uwu/build/rocksdb && sudo make install-shared PREFIX=/usr/local/uwu
-    cd /usr/local/uwu/build/rocksdb && sudo make install-static PREFIX=/usr/local/uwu
-    sudo install -m 755 /usr/local/uwu/build/rocksdb/ldb /usr/local/uwu/bin/ldb
+    @echo "Installing RocksDB to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/rocksdb && sudo make install-shared PREFIX={{PREFIX}}
+    cd {{PREFIX}}/build/rocksdb && sudo make install-static PREFIX={{PREFIX}}
+    sudo install -m 755 {{PREFIX}}/build/rocksdb/ldb {{PREFIX}}/bin/ldb
     sudo ldconfig
-    @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/uwu/lib if Cargo doesn't see it."
+    @echo "Remember to set ROCKSDB_LIB_DIR={{PREFIX}}/lib if Cargo doesn't see it."
 
 # Pre-build snappy
 prebuild-snappy:
@@ -171,29 +174,29 @@ prebuild-snappy:
     set -e
     TAG=$(grep "^snappy," {{CSV}} | cut -d',' -f4 | tr -d '\r')
     REPO=$(grep "^snappy," {{CSV}} | cut -d',' -f3 | tr -d '\r')
-    sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning snappy $TAG..."
-    if [ ! -d "/usr/local/uwu/build/snappy" ]; then
-        git clone $REPO /usr/local/uwu/build/snappy
+    if [ ! -d "{{PREFIX}}/build/snappy" ]; then
+        git clone $REPO {{PREFIX}}/build/snappy
     fi
     echo "Building snappy..."
-    cd /usr/local/uwu/build/snappy
+    cd {{PREFIX}}/build/snappy
     git fetch origin
     git checkout $TAG
     sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
     mkdir -p build_static && cd build_static
-    cmake -DCMAKE_INSTALL_PREFIX=/usr/local/uwu -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
     cd ..
     mkdir -p build_shared && cd build_shared
-    cmake -DCMAKE_INSTALL_PREFIX=/usr/local/uwu -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
 
 # Install snappy globally (requires sudo)
 install-snappy:
-    @echo "Installing snappy to /usr/local/uwu... (Requires sudo)"
-    cd /usr/local/uwu/build/snappy/build_static && sudo make install
-    cd /usr/local/uwu/build/snappy/build_shared && sudo make install
+    @echo "Installing snappy to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/snappy/build_static && sudo make install
+    cd {{PREFIX}}/build/snappy/build_shared && sudo make install
     sudo ldconfig
 
 # Pre-build zstd
@@ -202,19 +205,19 @@ prebuild-zstd:
     set -e
     TAG=$(grep "^zstd," {{CSV}} | cut -d',' -f4 | tr -d '\r')
     REPO=$(grep "^zstd," {{CSV}} | cut -d',' -f3 | tr -d '\r')
-    sudo mkdir -p /usr/local/uwu/build && sudo chown -R $USER:$USER /usr/local/uwu/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning zstd $TAG..."
-    [ ! -d "/usr/local/uwu/build/zstd" ] && git clone $REPO /usr/local/uwu/build/zstd || true
+    [ ! -d "{{PREFIX}}/build/zstd" ] && git clone $REPO {{PREFIX}}/build/zstd || true
     echo "Building zstd..."
-    cd /usr/local/uwu/build/zstd
+    cd {{PREFIX}}/build/zstd
     git fetch --all --tags
     git checkout $TAG
     make lib-release -j$(nproc)
 
 # Install zstd globally (requires sudo)
 install-zstd:
-    @echo "Installing zstd to /usr/local/uwu... (Requires sudo)"
-    cd /usr/local/uwu/build/zstd && sudo make install -C lib PREFIX=/usr/local/uwu
+    @echo "Installing zstd to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/zstd && sudo make install -C lib PREFIX={{PREFIX}}
     sudo ldconfig
 
 # --- CPU Profiling ---
