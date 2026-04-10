@@ -1101,7 +1101,7 @@ where
 					"sender cannot kick another user as they are not joined to the room",
 				);
 				false
-			} else if !(can_unban && can_kick) {
+			} else if !can_unban {
 				// If the target is banned, only a room creator or someone with ban power
 				// level can unban them
 				info!(
