@@ -9,10 +9,7 @@ use conduwuit_core::{
 };
 use tokio::{runtime, sync::Mutex};
 
-use crate::{
-	clap::{Args, update},
-	logging::TracingFlameGuard,
-};
+use crate::logging::TracingFlameGuard;
 
 /// Server runtime state; complete
 pub(crate) struct Server {

@@ -47,6 +47,11 @@ pub(super) fn new(
 		.expect("set GC_MUZZY from program argument");
 
 	let mut builder = Builder::new_multi_thread();
+
+	if let Some(worker_threads) = config.worker_threads {
+		builder.worker_threads(worker_threads);
+	}
+
 	builder
 		.enable_io()
 		.enable_time()
