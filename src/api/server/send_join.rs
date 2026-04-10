@@ -174,13 +174,14 @@ async fn create_join_event(
 				"Joining user did not pass restricted room's rules."
 			)));
 		}
-	}
 
-	trace!("Signing send_join event");
-	services
-		.server_keys
-		.hash_and_sign_event(&mut value, &room_version_id)
-		.map_err(|e| err!(Request(InvalidParam(warn!("Failed to sign send_join event: {e}")))))?;
+		services
+			.server_keys
+			.hash_and_sign_event(&mut value, &room_version_id)
+			.map_err(|e| {
+				err!(Request(InvalidParam(warn!("Failed to sign send_join event: {e}"))))
+			})?;
+	}
 
 	let mutex_lock = services
 		.rooms

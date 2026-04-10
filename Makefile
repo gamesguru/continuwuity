@@ -14,8 +14,9 @@ endif
 
 # Example .env:
 #!/bin/bash
-# export ROCKSDB_INCLUDE_DIR=/usr/local/include
-# export ROCKSDB_LIB_DIR=/usr/local/lib
+# export PREFIX=/usr/local
+# export ROCKSDB_INCLUDE_DIR=${PREFIX}/include
+# export ROCKSDB_LIB_DIR=${PREFIX}/lib
 # export LD_LIBRARY_PATH=${ROCKSDB_LIB_DIR}:${LD_LIBRARY_PATH}
 # #export CPU_TARGET=skylake
 # export OS_VERSION=ubuntu-24.04
@@ -165,8 +166,9 @@ test:   ##H Run tests
 		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
 
 
-ROCKSDB_LIB_DIR ?= /usr/local/lib
-ROCKSDB_INCLUDE_DIR ?= /usr/local/include
+PREFIX ?= /usr/local
+ROCKSDB_LIB_DIR ?= $(PREFIX)/lib
+ROCKSDB_INCLUDE_DIR ?= $(PREFIX)/include
 
 # Default features to use for the build
 # We use bindgen-runtime by default to use the system libclang.so for building.
@@ -370,8 +372,8 @@ download/prebuilts: ##H Download prebuilt libraries from GitHub Release
 	@mkdir -p .tmp/prebuilts && rm -rf .tmp/prebuilts/*
 	@if gh release download $(PREBUILT_TAG) -R $(GH_REPO) -p "*-$(CPU_TARGET)-$(OS_VERSION).tar.gz" -D .tmp/prebuilts --clobber; then \
 		for f in .tmp/prebuilts/*.tar.gz; do \
-			echo "Extracting $$f to /usr/local..."; \
-			sudo tar -xzvf "$$f" -C /usr/local; \
+			echo "Extracting $$f to $(PREFIX)..."; \
+			sudo tar -xzvf "$$f" -C $(PREFIX); \
 		done; \
 		sudo ldconfig; \
 		echo "Prebuilts installed."; \
@@ -488,7 +490,7 @@ C10Y_SERV ?= conduwuit.service
 
 # Configure these in .env if alternate path(s) are desired
 BUILD_BIN_DIR ?= target/latest
-DEPLOY_BIN_DIR ?= /usr/local/bin
+DEPLOY_BIN_DIR ?= $(PREFIX)/bin
 
 BUILD_BIN ?= $(BUILD_BIN_DIR)/$(CONTINUWUITY)
 DEPLOY_BIN ?= $(DEPLOY_BIN_DIR)/$(CONTINUWUITY)

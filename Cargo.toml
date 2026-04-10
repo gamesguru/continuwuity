@@ -159,7 +159,7 @@ features = ["raw_value"]
 
 # Used for appservice registration files
 [workspace.dependencies.serde-saphyr]
-version = "0.0.21"
+version = "0.0.23"
 
 # Used to load forbidden room/user regex from config
 [workspace.dependencies.serde_regex]
@@ -352,7 +352,7 @@ version = "6.1.0"
 [workspace.dependencies.ruma]
 git = "https://forgejo.ellis.link/continuwuation/ruwuma"
 #branch = "conduwuit-changes"
-rev = "a97b91adcc012ef04991d823b8b5a79c6686ae48"
+rev = "1415caf8a32af4d943580c5ea4e12be1974593c2"
 features = [
     "compat",
     "rand",
@@ -390,7 +390,8 @@ features = [
     "unstable-extensible-events",
     "unstable-pdu",
     "unstable-msc4143", # livekit well_known response
-    "unstable-msc4284"
+    "unstable-msc4284",
+    "unstable-msc4439", # pgp_key in .well_known/matrix/support
 ]
 
 [workspace.dependencies.rust-rocksdb]
@@ -566,7 +567,7 @@ version = "0.15.0"
 [workspace.dependencies.lettre]
 version = "0.11.19"
 default-features = false
-features = ["smtp-transport", "pool", "hostname", "builder", "rustls", "aws-lc-rs", "rustls-native-certs", "tokio1", "tokio1-rustls", "tracing", "serde"]
+features = ["smtp-transport", "pool", "hostname", "builder", "rustls", "rustls-native-certs", "tokio1", "ring", "tokio1-rustls", "tracing", "serde"]
 
 [workspace.dependencies.governor]
 version = "0.10.4"

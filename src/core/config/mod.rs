@@ -4,7 +4,7 @@ pub mod manager;
 pub mod proxy;
 
 use std::{
-	collections::{BTreeMap, BTreeSet},
+	collections::{BTreeMap, BTreeSet, HashMap},
 	net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 	path::PathBuf,
 };
@@ -22,7 +22,7 @@ use ruma::{
 	OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomVersionId,
 	api::client::discovery::{discover_homeserver::RtcFocusInfo, discover_support::ContactRole},
 };
-use serde::{Deserialize, de::IgnoredAny};
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 use url::Url;
 
 use self::proxy::ProxyConfig;
@@ -675,6 +675,20 @@ pub struct Config {
 	/// If this is omitted, captcha registration will not work,
 	/// even if `recaptcha_site_key` is set.
 	pub recaptcha_private_site_key: Option<String>,
+
+	/// Policy documents, such as terms and conditions or a privacy policy,
+	/// which users must agree to when registering an account.
+	///
+	/// Example:
+	/// ```ignore
+	/// [global.registration_terms.privacy_policy]
+	/// en = { name = "Privacy Policy", url = "https://homeserver.example/en/privacy_policy.html" }
+	/// es = { name = "Política de Privacidad", url = "https://homeserver.example/es/privacy_policy.html" }
+	/// ```
+	///
+	/// default: {}
+	#[serde(default)]
+	pub registration_terms: HashMap<String, HashMap<String, TermsDocument>>,
 
 	/// Controls whether encrypted rooms and events are allowed.
 	#[serde(default = "true_fn")]
@@ -2228,6 +2242,10 @@ pub struct WellKnownConfig {
 	/// listed.
 	pub support_mxid: Option<OwnedUserId>,
 
+	/// PGP key URI for server support contacts, to be served as part of the
+	/// MSC1929 server support endpoint.
+	pub support_pgp_key: Option<String>,
+
 	/// **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
 	///
 	/// A list of MatrixRTC foci URLs which will be served as part of the
@@ -2545,6 +2563,13 @@ pub struct SmtpConfig {
 	/// default: false
 	#[serde(default)]
 	pub require_email_for_token_registration: bool,
+}
+
+/// A policy document for use with a m.login.terms stage.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TermsDocument {
+	pub name: String,
+	pub url: String,
 }
 
 const DEPRECATED_KEYS: &[&str] = &[

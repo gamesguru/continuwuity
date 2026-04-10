@@ -2,6 +2,8 @@
 _help:
     @just --list
 
+PREFIX := env_var_or_default("PREFIX", "{{PREFIX}}")
+
 # --- Pre-building C/C++ Libraries ---
 # Note: Building these from source avoids Cargo constantly recompiling them
 # and trashing your target/ directory. After building, use the install commands
@@ -13,9 +15,9 @@ CSV := ".github/ellis_link_deps.csv"
 
 # Initialize the global build directory
 init-prebuild:
-    @echo "Creating /usr/local/build and assigning ownership to $USER... (Requires sudo)"
-    sudo mkdir -p /usr/local/build
-    sudo chown -R $USER:$USER /usr/local/build
+    @echo "Creating {{PREFIX}}/build and assigning ownership to $USER... (Requires sudo)"
+    sudo mkdir -p {{PREFIX}}/build
+    sudo chown -R $USER:$USER {{PREFIX}}/build
     @echo "Done. You can now run prebuild commands."
 
 # Pre-build all C/C++ dependencies
@@ -28,10 +30,10 @@ install-all: install-jemalloc install-lz4 install-snappy install-zstd install-ro
 prebuild-liburing:
     #!/usr/bin/env bash
     set -e
-    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning and building liburing (attempting to match project version {{version}})"...
-    [ ! -d "/usr/local/build/liburing" ] && git clone https://github.com/axboe/liburing.git /usr/local/build/liburing || true
-    cd /usr/local/build/liburing
+    [ ! -d "{{PREFIX}}/build/liburing" ] && git clone https://github.com/axboe/liburing.git {{PREFIX}}/build/liburing || true
+    cd {{PREFIX}}/build/liburing
     git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
     ./configure
     make -j$(nproc)
@@ -39,48 +41,48 @@ prebuild-liburing:
 # Installs liburing
 install-liburing:
     @echo "Installing liburing (requires sudo)..."
-    cd /usr/local/build/liburing && sudo make install
+    cd {{PREFIX}}/build/liburing && sudo make install
     @echo "Done! You might need to run 'sudo ldconfig' to update library cache."
 
 # Builds bzip2
 prebuild-bzip2:
     #!/usr/bin/env bash
     set -e
-    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning and building bzip2..."
-    [ ! -d "/usr/local/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git /usr/local/build/bzip2 || true
-    cd /usr/local/build/bzip2
+    [ ! -d "{{PREFIX}}/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git {{PREFIX}}/build/bzip2 || true
+    cd {{PREFIX}}/build/bzip2
     make -f Makefile-libbz2_so
     make
 
 # Installs bzip2
 install-bzip2:
     @echo "Installing bzip2 (requires sudo)..."
-    cd /usr/local/build/bzip2 && sudo make install PREFIX=/usr/local
-    cd /usr/local/build/bzip2 && sudo cp -f libbz2.so.1.0.* /usr/local/lib/
-    cd /usr/local/build/bzip2 && sudo ln -sf /usr/local/lib/libbz2.so.1.0.* /usr/local/lib/libbz2.so
+    cd {{PREFIX}}/build/bzip2 && sudo make install PREFIX={{PREFIX}}
+    cd {{PREFIX}}/build/bzip2 && sudo cp -f libbz2.so.1.0.* {{PREFIX}}/lib/
+    cd {{PREFIX}}/build/bzip2 && sudo ln -sf {{PREFIX}}/lib/libbz2.so.1.0.* {{PREFIX}}/lib/libbz2.so
     sudo ldconfig
-    @echo "Done! Installed libbz2.so to /usr/local/lib"
+    @echo "Done! Installed libbz2.so to {{PREFIX}}/lib"
 
 # Pre-build jemalloc
 prebuild-jemalloc:
     #!/usr/bin/env bash
     set -e
     TAG="5.3.0"
-    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning jemalloc $TAG..."
-    [ ! -d "/usr/local/build/jemalloc" ] && git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git /usr/local/build/jemalloc || true
+    [ ! -d "{{PREFIX}}/build/jemalloc" ] && git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git {{PREFIX}}/build/jemalloc || true
     echo "Building jemalloc..."
-    cd /usr/local/build/jemalloc
+    cd {{PREFIX}}/build/jemalloc
     git checkout $TAG
     [ -f configure ] || ./autogen.sh
-    [ -f Makefile ] || ./configure --prefix=/usr/local
+    [ -f Makefile ] || ./configure --prefix={{PREFIX}}
     make -j$(nproc)
 
 # Install jemalloc globally (requires sudo)
 install-jemalloc:
-    @echo "Installing jemalloc to /usr/local... (Requires sudo)"
-    cd /usr/local/build/jemalloc && sudo make install_lib_static install_lib_shared install_include
+    @echo "Installing jemalloc to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/jemalloc && sudo make install_lib_static install_lib_shared install_include
     sudo ldconfig
 
 # Pre-build lz4
@@ -89,18 +91,18 @@ prebuild-lz4:
     set -e
     VER=$(cargo pkgid lz4-sys | cut -d'@' -f2 | grep -o 'lz4-[0-9.]*' | cut -d '-' -f2)
     TAG="v$VER"
-    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning lz4 $TAG..."
-    [ ! -d "/usr/local/build/lz4" ] && git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git /usr/local/build/lz4 || true
+    [ ! -d "{{PREFIX}}/build/lz4" ] && git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git {{PREFIX}}/build/lz4 || true
     echo "Building lz4..."
-    cd /usr/local/build/lz4
+    cd {{PREFIX}}/build/lz4
     git checkout $TAG
     make lib -j$(nproc)
 
 # Install lz4 globally (requires sudo)
 install-lz4:
-    @echo "Installing lz4 to /usr/local... (Requires sudo)"
-    cd /usr/local/build/lz4 && sudo make install PREFIX=/usr/local
+    @echo "Installing lz4 to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/lz4 && sudo make install PREFIX={{PREFIX}}
     sudo ldconfig
 
 # Pre-build RocksDB shared and statically
@@ -120,18 +122,18 @@ prebuild-rocksdb:
     if [ -z "$REPO" ]; then
         REPO="https://forgejo.ellis.link/continuwuation/rocksdb.git"
     fi
-    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning rocksdb $TAG..."
-    if [ ! -d "/usr/local/build/rocksdb" ]; then
-        git clone --recursive "$REPO" /usr/local/build/rocksdb
+    if [ ! -d "{{PREFIX}}/build/rocksdb" ]; then
+        git clone --recursive "$REPO" {{PREFIX}}/build/rocksdb
     fi
     echo "Building RocksDB..."
-    cd /usr/local/build/rocksdb
+    cd {{PREFIX}}/build/rocksdb
     git fetch origin
     git checkout "$TAG"
 
     # Build core libraries explicitly WITHOUT RTTI
-    env ROCKSDB_NO_FBCODE=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I/usr/local/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L/usr/local/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
+    env ROCKSDB_NO_FBCODE=1 ROCKSDB_DISABLE_BENCHMARK=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I{{PREFIX}}/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L{{PREFIX}}/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
 
     # Build ldb
     # env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 DISABLE_SNAPPY=1 make ldb
@@ -139,23 +141,23 @@ prebuild-rocksdb:
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
-    @echo "Installing RocksDB to /usr/local... (Requires sudo)"
-    cd /usr/local/build/rocksdb && sudo make install-shared INSTALL_PATH=/usr/local
-    cd /usr/local/build/rocksdb && sudo make install-static INSTALL_PATH=/usr/local
-    sudo cp -p /usr/local/build/rocksdb/ldb /usr/local/bin/ldb
+    @echo "Installing RocksDB to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/rocksdb && sudo make install-shared INSTALL_PATH={{PREFIX}}
+    cd {{PREFIX}}/build/rocksdb && sudo make install-static INSTALL_PATH={{PREFIX}}
+    sudo cp -p {{PREFIX}}/build/rocksdb/ldb {{PREFIX}}/bin/ldb
     sudo ldconfig
-    @echo "Remember to set ROCKSDB_LIB_DIR=/usr/local/lib if Cargo doesn't see it."
+    @echo "Remember to set ROCKSDB_LIB_DIR={{PREFIX}}/lib if Cargo doesn't see it."
 
 # Pre-build snappy
 prebuild-snappy:
     #!/usr/bin/env bash
     set -e
     TAG="1.2.1"
-    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning snappy $TAG..."
-    [ ! -d "/usr/local/build/snappy" ] && git clone --depth 1 --branch $TAG https://github.com/google/snappy.git /usr/local/build/snappy || true
+    [ ! -d "{{PREFIX}}/build/snappy" ] && git clone --depth 1 --branch $TAG https://github.com/google/snappy.git {{PREFIX}}/build/snappy || true
     echo "Building snappy..."
-    cd /usr/local/build/snappy
+    cd {{PREFIX}}/build/snappy
     git checkout $TAG
     sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
     mkdir -p build_static && cd build_static
@@ -168,9 +170,9 @@ prebuild-snappy:
 
 # Install snappy globally (requires sudo)
 install-snappy:
-    @echo "Installing snappy to /usr/local... (Requires sudo)"
-    cd /usr/local/build/snappy/build_static && sudo make install
-    cd /usr/local/build/snappy/build_shared && sudo make install
+    @echo "Installing snappy to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/snappy/build_static && sudo make install
+    cd {{PREFIX}}/build/snappy/build_shared && sudo make install
     sudo ldconfig
 
 # Pre-build zstd
@@ -179,18 +181,18 @@ prebuild-zstd:
     set -e
     VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
     TAG="v$VER"
-    sudo mkdir -p /usr/local/build && sudo chown -R $USER:$USER /usr/local/build
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning zstd $TAG..."
-    [ ! -d "/usr/local/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git /usr/local/build/zstd || true
+    [ ! -d "{{PREFIX}}/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git {{PREFIX}}/build/zstd || true
     echo "Building zstd..."
-    cd /usr/local/build/zstd
+    cd {{PREFIX}}/build/zstd
     git checkout $TAG
     make lib-release -j$(nproc)
 
 # Install zstd globally (requires sudo)
 install-zstd:
-    @echo "Installing zstd to /usr/local... (Requires sudo)"
-    cd /usr/local/build/zstd && sudo make install -C lib PREFIX=/usr/local
+    @echo "Installing zstd to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/zstd && sudo make install -C lib PREFIX={{PREFIX}}
     sudo ldconfig
 
 # --- CPU Profiling ---
