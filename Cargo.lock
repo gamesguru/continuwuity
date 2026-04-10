@@ -948,10 +948,12 @@ dependencies = [
  "conduwuit_build_metadata",
  "conduwuit_core",
  "conduwuit_database",
+ "conduwuit_macros",
  "conduwuit_router",
  "conduwuit_service",
  "console-subscriber",
  "const-str",
+ "ctor",
  "hardened_malloc-rs",
  "log",
  "opentelemetry",
@@ -982,6 +984,7 @@ dependencies = [
  "conduwuit_macros",
  "conduwuit_service",
  "const-str",
+ "ctor",
  "futures",
  "lettre",
  "log",
@@ -1007,6 +1010,7 @@ dependencies = [
  "conduwuit_macros",
  "conduwuit_service",
  "const-str",
+ "ctor",
  "futures",
  "hmac",
  "http",
@@ -1030,6 +1034,9 @@ dependencies = [
 [[package]]
 name = "conduwuit_build_metadata"
 version = "0.5.7-alpha.1"
+dependencies = [
+ "cargo_metadata",
+]
 
 [[package]]
 name = "conduwuit_core"
@@ -1103,6 +1110,7 @@ dependencies = [
  "conduwuit_core",
  "conduwuit_macros",
  "const-str",
+ "ctor",
  "futures",
  "log",
  "minicbor",
@@ -1118,6 +1126,7 @@ dependencies = [
 name = "conduwuit_macros"
 version = "0.5.7-alpha.1"
 dependencies = [
+ "cargo_toml",
  "itertools 0.14.0",
  "proc-macro2",
  "quote",
@@ -1140,6 +1149,7 @@ dependencies = [
  "conduwuit_service",
  "conduwuit_web",
  "const-str",
+ "ctor",
  "futures",
  "http",
  "http-body-util",
@@ -1172,6 +1182,7 @@ dependencies = [
  "conduwuit_database",
  "conduwuit_macros",
  "const-str",
+ "ctor",
  "either",
  "futures",
  "governor",
