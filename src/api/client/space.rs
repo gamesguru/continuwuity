@@ -3,30 +3,24 @@ use std::{
 	str::FromStr,
 };
 
-use axum::extract::State;
-use conduwuit::{
-	Err, Result,
-	utils::{future::TryExtExt, stream::IterStream},
-};
-use conduwuit_service::{
-	Services,
-	rooms::spaces::{
-		PaginationToken, SummaryAccessibility, get_parent_children_via, summary_to_chunk,
-	},
+use axum::extract::State as AxumState;
+use conduwuit::{Err, Result, utils::stream::IterStream};
+use conduwuit_service::rooms::spaces::{
+	PaginationToken, SummaryAccessibility, get_parent_children_via, summary_to_chunk,
 };
 use futures::{StreamExt, future::OptionFuture};
 use ruma::{
 	OwnedRoomId, OwnedServerName, RoomId, UInt, UserId, api::client::space::get_hierarchy,
 };
 
-use crate::Ruma;
+use crate::{Ruma, router::State};
 
 /// # `GET /_matrix/client/v1/rooms/{room_id}/hierarchy`
 ///
 /// Paginates over the space tree in a depth-first manner to locate child rooms
 /// of a given space.
 pub(crate) async fn get_hierarchy_route(
-	State(services): State<crate::State>,
+	AxumState(services): AxumState<State>,
 	body: Ruma<get_hierarchy::v1::Request>,
 ) -> Result<get_hierarchy::v1::Response> {
 	let limit = body
@@ -54,7 +48,7 @@ pub(crate) async fn get_hierarchy_route(
 	}
 
 	get_client_hierarchy(
-		&services,
+		services,
 		body.sender_user(),
 		&body.room_id,
 		limit.try_into().unwrap_or(10),
@@ -68,7 +62,7 @@ pub(crate) async fn get_hierarchy_route(
 }
 
 async fn get_client_hierarchy<'a, ShortRoomIds>(
-	services: &Services,
+	services: State,
 	sender_user: &UserId,
 	room_id: &RoomId,
 	limit: usize,
@@ -138,14 +132,14 @@ where
 
 				let mut children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
 					.rev()
-					.map(|(key, val)| (key, val.collect(), depth + 1))
+					.map(|(key, val)| (key, val.collect(), depth.saturating_add(1)))
 					.collect();
 
 				if populate {
 					rooms.push(summary_to_chunk(summary.clone()));
 				} else {
 					let s_ids = short_room_ids.clone();
-					let len = path.len();
+					let len = depth;
 					children = {
 						let mut valid = children
 							.iter()
@@ -188,18 +182,16 @@ where
 	let next_batch: OptionFuture<_> = queue
 		.pop_back()
 		.map(|(room, _, depth)| {
-			let services = services.clone();
 			let mut path = path.clone();
 			async move {
 				path.truncate(depth);
 				path.push(room);
 
-				let next_short_room_ids: Vec<_> = path
+				let next_short_room_ids: Vec<u64> = path
 					.iter()
 					.stream()
-					.filter_map(|room_id| {
-						let services = services.clone();
-						async move { services.rooms.short.get_shortroomid(room_id).await.ok() }
+					.filter_map(|room_id| async move {
+						services.rooms.short.get_shortroomid(room_id).await.ok()
 					})
 					.collect()
 					.await;
