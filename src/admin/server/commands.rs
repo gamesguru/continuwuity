@@ -145,7 +145,7 @@ pub(super) async fn restart(&self, force: bool) -> Result {
 
 	if !force && current_exe_deleted() {
 		return Err!(
-			"The server cannot be restarted because the executable changed. If this is expected 
+			"The server cannot be restarted because the executable changed. If this is expected
 			 use --force to override."
 		);
 	}
@@ -171,7 +171,7 @@ pub(super) async fn list_features(&self) -> Result {
 		.lock()
 		.expect("locked")
 		.iter()
-		.flat_map(|(_, f)| f.iter())
+		.flat_map(|(_, f)| f.iter().map(|s| s.replace('_', "-")))
 		.collect::<Vec<_>>();
 
 	enabled_features.sort_unstable();
@@ -179,19 +179,25 @@ pub(super) async fn list_features(&self) -> Result {
 
 	let mut available_features = conduwuit::build_metadata::WORKSPACE_FEATURES
 		.iter()
-		.flat_map(|(_, f)| f.iter())
+		.flat_map(|(_, f)| f.iter().map(|s| s.replace('_', "-")))
 		.collect::<Vec<_>>();
 
 	available_features.sort_unstable();
 	available_features.dedup();
 
+	let disabled_features: Vec<_> = available_features
+		.into_iter()
+		.filter(|f| !enabled_features.contains(f))
+		.collect();
+
 	let mut features = String::new();
 
-	for feature in available_features {
-		let active = enabled_features.contains(&feature);
-		let emoji = if active { "✅" } else { "❌" };
-		let remark = if active { "[enabled]" } else { "" };
-		writeln!(features, "{emoji} {feature} {remark}")?;
+	for feature in enabled_features {
+		writeln!(features, "✓ {feature} [enabled]")?;
+	}
+
+	for feature in disabled_features {
+		writeln!(features, "x {feature}")?;
 	}
 
 	self.write_str(&features).await

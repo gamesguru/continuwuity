@@ -41,9 +41,9 @@ pub fn run() -> Result<()> {
 		output.push_str("\nenabled_features: ");
 		output.push_str(&enabled.join(", "));
 
-		let available = build_features::AVAILABLE_FEATURES;
-		output.push_str("\navailable_features: ");
-		output.push_str(&available.join(", "));
+		let disabled = build_features::DISABLED_FEATURES;
+		output.push_str("\ndisabled_features: ");
+		output.push_str(&disabled.join(", "));
 
 		println!("{output}");
 		return Ok(());
