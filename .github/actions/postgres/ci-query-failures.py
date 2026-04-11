@@ -100,7 +100,7 @@ env["PAGER"] = env.get("PAGER") or "less -X -F -S"
 try:
     subprocess.run(["./bin/db-shell", "-c", query], env=env)
 except KeyboardInterrupt:
-    pass
+    raise SystemExit(130)
 finally:
     if sys.stdin.isatty():
         os.system("stty sane 2>/dev/null")

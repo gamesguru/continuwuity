@@ -529,6 +529,17 @@ pub(super) async fn fetch_pdu(
 ) -> Result {
 	self.bail_restricted()?;
 
+	if !self.services.server.config.allow_federation {
+		return Err!("Federation is disabled on this homeserver.");
+	}
+
+	if server == self.services.globals.server_name() {
+		return Err!(
+			"Not allowed to send federation requests to ourselves. Please use `get-pdu` for \
+			 fetching local PDUs.",
+		);
+	}
+
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
 	let response = self
