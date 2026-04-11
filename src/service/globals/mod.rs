@@ -86,8 +86,13 @@ impl crate::Service for Service {
 
 		let mut last_transactions = 0;
 
+		let mut shutdown = self.server.signal.subscribe();
+
 		loop {
-			interval.tick().await;
+			tokio::select! {
+				_ = interval.tick() => {},
+				_ = shutdown.recv() => {},
+			}
 			if !self.server.running() {
 				break;
 			}

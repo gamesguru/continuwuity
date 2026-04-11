@@ -94,22 +94,27 @@ where
 			};
 
 			let mut results = Vec::with_capacity(chunk.len());
+			let mut new_allocations = std::collections::HashMap::new();
 			for (result, event_id) in chunk {
 				match result {
 					| Ok(ref short) => results.push(utils::u64_from_u8(short)),
-					| Err(_) => {
-						let short = next_id.saturating_add(1);
-						next_id = short;
+					| Err(_) =>
+						if let Some(&short) = new_allocations.get(event_id) {
+							results.push(short);
+						} else {
+							let short = next_id.saturating_add(1);
+							next_id = short;
 
-						self.db
-							.eventid_shorteventid
-							.raw_aput::<BUFSIZE, _, _>(event_id, short);
-						self.db
-							.shorteventid_eventid
-							.aput_raw::<BUFSIZE, _, _>(short, event_id);
+							self.db
+								.eventid_shorteventid
+								.raw_aput::<BUFSIZE, _, _>(event_id, short);
+							self.db
+								.shorteventid_eventid
+								.aput_raw::<BUFSIZE, _, _>(short, event_id);
 
-						results.push(short);
-					},
+							new_allocations.insert(event_id, short);
+							results.push(short);
+						},
 				}
 			}
 			IterStream::stream(results.into_iter())

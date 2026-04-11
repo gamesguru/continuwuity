@@ -106,10 +106,10 @@ impl crate::Service for Service {
 				}
 
 				let mut users: Vec<_> = Vec::new();
-				for entry in self_flush.queued_users.iter() {
-					users.push(entry.key().clone());
-				}
-				self_flush.queued_users.clear();
+				self_flush.queued_users.retain(|user_id| {
+					users.push(user_id.clone());
+					false
+				});
 
 				if users.len() > 50 {
 					info!(
@@ -248,6 +248,10 @@ impl crate::Service for Service {
 		}
 
 		flush_task.abort();
+
+		for (_, handle) in presence_timers {
+			handle.abort();
+		}
 
 		if let Some(task) = startup_task {
 			_ = task.await;
