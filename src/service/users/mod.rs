@@ -9,6 +9,7 @@ use conduwuit::result::LogErr;
 use conduwuit::{
 	Err, Error, Result, Server, debug, debug_warn, err, info, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
+	warn,
 };
 #[cfg(feature = "ldap")]
 use conduwuit_core::error;
@@ -845,7 +846,8 @@ impl Service {
 		if let Some(master_key) = master_key {
 			let (master_key_key, _) = parse_master_key(user_id, master_key)?;
 			let mut master_key_val: serde_json::Value =
-				serde_json::from_str(master_key.json().get()).unwrap();
+				serde_json::from_str(master_key.json().get())
+					.map_err(|e| err!(Database(debug_error!("Invalid master key JSON: {e}"))))?;
 
 			let old_key = self
 				.db
@@ -859,11 +861,13 @@ impl Service {
 				merge_signatures(&mut master_key_val, old_key);
 			}
 
-			let new_key_vec = serde_json::to_vec(&master_key_val).unwrap();
-			if old_key
-				.as_ref()
-				.is_none_or(|old| serde_json::to_vec(old).unwrap() != new_key_vec)
-			{
+			let new_key_vec = serde_json::to_vec(&master_key_val).map_err(|e| {
+				err!(Database(debug_error!("Failed to serialize master key: {e}")))
+			})?;
+
+			if old_key.as_ref().is_none_or(|old| {
+				serde_json::to_vec(old).is_ok_and(|old_vec| old_vec != new_key_vec)
+			}) {
 				info!(
 					target: "cross_signing",
 					"Adding master cross-signing key for user {}",
@@ -887,7 +891,9 @@ impl Service {
 		// Self-signing key
 		if let Some(self_signing_key) = self_signing_key {
 			let mut self_signing_key_val: serde_json::Value =
-				serde_json::from_str(self_signing_key.json().get()).unwrap();
+				serde_json::from_str(self_signing_key.json().get()).map_err(|e| {
+					err!(Database(debug_error!("Invalid self-signing key JSON: {e}")))
+				})?;
 
 			let self_signing_key_obj = self_signing_key
 				.deserialize()
@@ -921,11 +927,13 @@ impl Service {
 				merge_signatures(&mut self_signing_key_val, old_key);
 			}
 
-			let new_key_vec = serde_json::to_vec(&self_signing_key_val).unwrap();
-			if old_key
-				.as_ref()
-				.is_none_or(|old| serde_json::to_vec(old).unwrap() != new_key_vec)
-			{
+			let new_key_vec = serde_json::to_vec(&self_signing_key_val).map_err(|e| {
+				err!(Database(debug_error!("Failed to serialize self-signing key: {e}")))
+			})?;
+
+			if old_key.as_ref().is_none_or(|old| {
+				serde_json::to_vec(old).is_ok_and(|old_vec| old_vec != new_key_vec)
+			}) {
 				info!(
 					target: "cross_signing",
 					"Adding self-signing key for user {}",
@@ -949,7 +957,9 @@ impl Service {
 		// User-signing key
 		if let Some(user_signing_key) = user_signing_key {
 			let mut user_signing_key_val: serde_json::Value =
-				serde_json::from_str(user_signing_key.json().get()).unwrap();
+				serde_json::from_str(user_signing_key.json().get()).map_err(|e| {
+					err!(Database(debug_error!("Invalid user-signing key JSON: {e}")))
+				})?;
 
 			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 			let user_signing_key_key = (user_id, &user_signing_key_id);
@@ -966,11 +976,13 @@ impl Service {
 				merge_signatures(&mut user_signing_key_val, old_key);
 			}
 
-			let new_key_vec = serde_json::to_vec(&user_signing_key_val).unwrap();
-			if old_key
-				.as_ref()
-				.is_none_or(|old| serde_json::to_vec(old).unwrap() != new_key_vec)
-			{
+			let new_key_vec = serde_json::to_vec(&user_signing_key_val).map_err(|e| {
+				err!(Database(debug_error!("Failed to serialize user-signing key: {e}")))
+			})?;
+
+			if old_key.as_ref().is_none_or(|old| {
+				serde_json::to_vec(old).is_ok_and(|old_vec| old_vec != new_key_vec)
+			}) {
 				info!(
 					target: "cross_signing",
 					"Adding user-signing key for user {}",
@@ -1691,11 +1703,18 @@ fn merge_signatures(new: &mut serde_json::Value, old: &serde_json::Value) {
 	) {
 		for (user, sigs) in old_sigs {
 			if let Some(sigs) = sigs.as_object() {
-				let new_user_sigs = new_sigs
+				let Some(new_user_sigs) = new_sigs
 					.entry(user.clone())
 					.or_insert_with(|| json!({}))
 					.as_object_mut()
-					.expect("signatures for a user must be an object");
+				else {
+					warn!(
+						target: "cross_signing",
+						"Signatures for user {} in cross-signing key are not a JSON object. Skipping merge.",
+						user
+					);
+					continue;
+				};
 
 				for (key, val) in sigs {
 					if !new_user_sigs.contains_key(key) {

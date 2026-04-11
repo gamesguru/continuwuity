@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use conduwuit::{Event, Result, debug, info, utils::ReadyExt, warn};
 use futures::{FutureExt, StreamExt};
 use ruma::api::federation::event::get_room_state;
@@ -10,6 +11,7 @@ pub struct Service {
 	services: InnerServices,
 }
 
+#[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
@@ -26,6 +28,8 @@ impl crate::Service for Service {
 			},
 		}))
 	}
+
+	async fn worker(self: Arc<Self>) -> Result<()> { self.worker().await }
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }

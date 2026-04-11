@@ -194,6 +194,11 @@ impl Service {
 			return;
 		}
 
+		if new_events.is_empty() {
+			statuses.remove(dest);
+			return;
+		}
+
 		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now()));
 
 		let dest_clone = dest.clone();

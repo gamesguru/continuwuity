@@ -580,22 +580,14 @@ where
 					let json = serde_json::to_value(master_key).expect("to_value always works");
 					let raw = serde_json::from_value(json).expect("Raw::from_value always works");
 
-					if let Err(e) = services
+					services
 						.users
 						.add_cross_signing_keys(
 							&user, &raw, &None, &None,
 							false, /* Dont notify. A notification would trigger another key
 							       * request resulting in an endless loop */
 						)
-						.await
-					{
-						info!(
-							target: "cross_signing",
-							"Failed to store updated master key for user {}: {}",
-							user, e
-						);
-						continue;
-					}
+						.await?;
 
 					if let Some(raw) = raw {
 						master_keys.insert(user.clone(), raw);
