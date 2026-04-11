@@ -60,7 +60,7 @@ SELECT
     new_pass,
     new_fail,
     profile,
-    regexp_replace(features, '[,\\s]+', E'\n', 'g') AS features,
+    regexp_replace(btrim(features, ' ,'), '[,\\s]+', ' ', 'g') AS features,
     os,
     arch,
     {columns_tail}
