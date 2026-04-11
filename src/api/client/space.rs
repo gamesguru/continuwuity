@@ -74,7 +74,7 @@ where
 	ShortRoomIds: Iterator<Item = &'a u64> + Clone + Send + Sync + 'a,
 {
 	type Via = Vec<OwnedServerName>;
-	type Entry = (OwnedRoomId, Via, usize);
+	type Entry = (OwnedRoomId, Via, usize, bool);
 	type Rooms = VecDeque<Entry>;
 
 	let mut queue: Rooms = [(
@@ -85,6 +85,7 @@ where
 			.into_iter()
 			.collect(),
 		0,
+		true,
 	)]
 	.into();
 
@@ -93,13 +94,13 @@ where
 	let mut path = Vec::new();
 	let mut visited = BTreeSet::new();
 
-	while let Some((current_room, via, depth)) = queue.pop_back() {
+	while let Some((current_room, via, depth, on_token_path)) = queue.pop_back() {
 		if !visited.insert(current_room.clone()) {
 			continue;
 		}
 
 		if rooms.len() >= limit {
-			queue.push_back((current_room, via, depth));
+			queue.push_back((current_room, via, depth, on_token_path));
 			break;
 		}
 
@@ -128,39 +129,40 @@ where
 				path.truncate(depth);
 				path.push(current_room.clone());
 
-				let populate = path.len() > short_room_ids.clone().count();
+				let populate = !on_token_path || path.len() > short_room_ids.clone().count();
 
 				let mut children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
 					.rev()
-					.map(|(key, val)| (key, val.collect(), depth.saturating_add(1)))
+					.map(|(key, val)| (key, val.collect(), depth.saturating_add(1), false))
 					.collect();
 
 				if populate {
 					rooms.push(summary_to_chunk(summary.clone()));
 				} else {
-					let s_ids = short_room_ids.clone();
-					let len = depth;
+					let mut s_ids = short_room_ids.clone();
+					let target = s_ids.nth(depth);
 					children = {
-						let mut valid = children
-							.iter()
-							.rev()
-							.stream()
-							.skip_while(move |(room, ..)| {
-								let mut s_ids = s_ids.clone();
-								let target = s_ids.nth(len);
-								async move {
-									if let Ok(short) =
-										services.rooms.short.get_shortroomid(room).await
-									{
-										Some(&short) != target
-									} else {
-										true
+						let mut valid = vec![];
+						let mut reached_target = false;
+						for (room, via, child_depth, _) in children.iter().rev() {
+							if !reached_target {
+								if let Ok(short) =
+									services.rooms.short.get_shortroomid(room).await
+								{
+									if Some(&short) == target {
+										reached_target = true;
+										valid.push((
+											room.clone(),
+											via.clone(),
+											*child_depth,
+											true,
+										));
 									}
 								}
-							})
-							.map(Clone::clone)
-							.collect::<Vec<Entry>>()
-							.await;
+							} else {
+								valid.push((room.clone(), via.clone(), *child_depth, false));
+							}
+						}
 						valid.reverse();
 						valid
 					};
@@ -181,7 +183,7 @@ where
 
 	let next_batch: OptionFuture<_> = queue
 		.pop_back()
-		.map(|(room, _, depth)| {
+		.map(|(room, _, depth, _)| {
 			let mut path = path.clone();
 			async move {
 				path.truncate(depth);
