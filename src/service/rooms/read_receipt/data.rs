@@ -60,10 +60,8 @@ impl Data {
 
 		let mut iterations: usize = 0;
 		while let Some(key) = stream.next().await {
-			// Short-circuit: Once we find the user's old receipt, remove it, STOP
 			if key.ends_with(user_id.as_bytes()) {
 				self.readreceiptid_readreceipt.remove_raw(key);
-				break;
 			}
 
 			// Yield to the executor every 100 iterations.
