@@ -1,6 +1,6 @@
 use conduwuit::{Err, Result};
 use futures::StreamExt;
-use ruma::OwnedRoomId;
+use ruma::{OwnedRoomId, OwnedUserId};
 
 use crate::{PAGE_SIZE, admin_command, get_room_info};
 
@@ -82,4 +82,53 @@ pub(super) async fn exists(&self, room_id: OwnedRoomId) -> Result {
 	let result = self.services.rooms.metadata.exists(&room_id).await;
 
 	self.write_str(&format!("{result}")).await
+}
+
+#[admin_command]
+pub(super) async fn bump(&self, room_id: OwnedRoomId) -> Result {
+	self.bail_restricted()?;
+
+	if !self
+		.services
+		.rooms
+		.state_cache
+		.server_in_room(&self.services.server.name, &room_id)
+		.await
+	{
+		return Err!("We are not participating in the room / we don't know about the room ID.");
+	}
+
+	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
+
+	let pdu_builder = conduwuit::matrix::pdu::PduBuilder {
+		event_type: "org.matrix.dummy_event".into(),
+		content: serde_json::value::to_raw_value(&serde_json::json!({})).expect("valid json"),
+		..Default::default()
+	};
+
+	// Use an active local member as sender — server_user has no membership
+	// in rooms it didn't create, which causes M_FORBIDDEN on auth checks.
+	let sender: OwnedUserId = self
+		.services
+		.rooms
+		.state_cache
+		.active_local_users_in_room(&room_id)
+		.boxed()
+		.next()
+		.await
+		.map(ToOwned::to_owned)
+		.ok_or_else(|| conduwuit::err!("No local users in room {room_id} - cannot bump"))?;
+
+	let event_id = self
+		.services
+		.rooms
+		.timeline
+		.build_and_append_pdu(pdu_builder, &sender, Some(&room_id), &state_lock)
+		.await
+		.map_err(|e| {
+			conduwuit::err!(Database("Failed appending dummy event into room timeline: {e}"))
+		})?;
+
+	self.write_str(&format!("Successfully bumped room {room_id} with event {event_id}"))
+		.await
 }
