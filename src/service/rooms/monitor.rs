@@ -56,6 +56,9 @@ const PERIODIC_STALE_THRESHOLD_MS: u64 = 4 * 3600 * 1000; // 4 hours
 /// How often the periodic sweep runs.
 const SWEEP_INTERVAL_SECS: u64 = 3600; // every hour
 
+/// Maximum events per get_missing_events request.
+const BATCH_LIMIT: usize = 100;
+
 impl Service {
 	pub async fn worker(self: Arc<Self>) -> Result<()> {
 		if !self.services.server.config.allow_federation {
@@ -154,12 +157,7 @@ impl Service {
 			now.saturating_sub(latest_pdu.origin_server_ts().get().into())
 		);
 
-		// Collect our current state event IDs. These are events both sides of
-		// the federation know about. We pass them as `latest_events` so the
-		// remote walks backwards through the DAG from those anchor points and
-		// returns any timeline events that exist between them and our timeline
-		// tip (`earliest_events`) that we may have missed due to dropped
-		// federation transactions.
+		// Collect our current state event IDs as the DAG anchors.
 		let shortstatehash = self.services.state.get_room_shortstatehash(room_id).await?;
 		let state_event_ids: Vec<OwnedEventId> = self
 			.services
@@ -173,64 +171,113 @@ impl Service {
 			return Ok(());
 		}
 
-		let request = get_missing_events::v1::Request {
-			room_id: room_id.to_owned(),
-			limit: uint!(20),
-			min_depth: uint!(0),
-			earliest_events: vec![latest_pdu.event_id().to_owned()],
-			latest_events: state_event_ids,
-		};
+		// Use our timeline tip as the earliest_events anchor, updated after
+		// each batch so we paginate forward through the gap.
+		let mut earliest = vec![latest_pdu.event_id().to_owned()];
+		let mut total_fetched: usize = 0;
 
-		let response = self
-			.services
-			.sending
-			.send_federation_request(&target_server, request)
-			.await?;
+		for batch in 0_usize.. {
+			let request = get_missing_events::v1::Request {
+				room_id: room_id.to_owned(),
+				limit: uint!(100),
+				min_depth: uint!(0),
+				earliest_events: earliest.clone(),
+				latest_events: state_event_ids.clone(),
+			};
 
-		if response.events.is_empty() {
-			debug!(target: "forwardfill", "No missing events returned for {room_id}");
-			return Ok(());
-		}
-
-		info!(
-			target: "forwardfill",
-			"{} missing events returned for {room_id} from {target_server}",
-			response.events.len()
-		);
-
-		for pdu in response.events {
-			let (parsed_room_id, event_id, value) =
-				match self.services.event_handler.parse_incoming_pdu(&pdu).await {
-					| Ok(v) => v,
-					| Err(e) => {
-						debug!(
-							target: "forwardfill",
-							"Failed to parse PDU from {target_server}: {e}"
-						);
-						continue;
-					},
-				};
-
-			if parsed_room_id != *room_id {
-				info!(
-					target: "forwardfill",
-					"{target_server} returned PDU for room {parsed_room_id} while filling \
-					 {room_id}"
-				);
-				continue;
-			}
-
-			if let Err(e) = self
+			let response = match self
 				.services
-				.event_handler
-				.handle_incoming_pdu(&target_server, room_id, &event_id, value, false)
+				.sending
+				.send_federation_request(&target_server, request)
 				.await
 			{
-				debug!(
-					target: "forwardfill",
-					"Failed to handle PDU {event_id} from {target_server}: {e}"
-				);
+				| Ok(r) => r,
+				| Err(e) => {
+					warn!(
+						target: "forwardfill",
+						"Federation request failed for {room_id} via {target_server} \
+						 (batch {batch}): {e}"
+					);
+					break;
+				},
+			};
+
+			let count = response.events.len();
+			if count == 0 {
+				if batch == 0 {
+					debug!(
+						target: "forwardfill",
+						"No missing events returned for {room_id}"
+					);
+				}
+				break;
 			}
+
+			info!(
+				target: "forwardfill",
+				"{count} missing events returned for {room_id} from {target_server} \
+				 (batch {batch})"
+			);
+
+			let mut batch_handled: usize = 0;
+			for pdu in response.events {
+				let (parsed_room_id, event_id, value) =
+					match self.services.event_handler.parse_incoming_pdu(&pdu).await {
+						| Ok(v) => v,
+						| Err(e) => {
+							info!(
+								target: "forwardfill",
+								"Failed to parse PDU from {target_server}: {e}"
+							);
+							continue;
+						},
+					};
+
+				if parsed_room_id != *room_id {
+					info!(
+						target: "forwardfill",
+						"{target_server} returned PDU for room {parsed_room_id} while \
+						 filling {room_id}"
+					);
+					continue;
+				}
+
+				match self
+					.services
+					.event_handler
+					.handle_incoming_pdu(&target_server, room_id, &event_id, value, true)
+					.await
+				{
+					| Ok(_) => {
+						batch_handled = batch_handled.saturating_add(1);
+						// advance the pagination anchor
+						earliest = vec![event_id];
+					},
+					| Err(e) => {
+						info!(
+							target: "forwardfill",
+							"Failed to handle PDU {event_id} from {target_server}: {e}"
+						);
+					},
+				}
+			}
+
+			total_fetched = total_fetched.saturating_add(batch_handled);
+
+			// If we got fewer events than the limit, we're caught up
+			if count < BATCH_LIMIT {
+				break;
+			}
+
+			// yield between batches
+			tokio::task::yield_now().await;
+		}
+
+		if total_fetched > 0 {
+			info!(
+				target: "forwardfill",
+				"Forward-filled {total_fetched} events into {room_id} from {target_server}"
+			);
 		}
 
 		Ok(())
