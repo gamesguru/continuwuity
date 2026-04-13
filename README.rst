@@ -1,9 +1,8 @@
-**************
- continuwuity
-**************
+continuwuity
+============
 
 A community-driven `Matrix <https://matrix.org/>`__ homeserver in Rust
-######################################################################
+----------------------------------------------------------------------
 
 continuwuity is a Matrix homeserver written in Rust.
 It's the official community continuation of the `conduwuit <https://github.com/girlbossceo/conduwuit>`_ homeserver.
@@ -57,8 +56,3 @@ Chats to join (my fork)
 .. |comp_fg| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main-upstream.json
    :target: https://forgejo.ellis.link/gamesguru/continuwuity/actions?workflow=complement.yml&actor=0&status=0
    :alt: Complement Tests (Forge)
-
-License
-#######
-
-This project incorporates components licensed under the `Apache License 2.0 <LICENSE>`_ AND the `GNU Affero General Public License v3.0 <LICENSE-AGPL>`_. Because you must comply with both, the strong copyleft network requirements of the AGPL are enforced.
