@@ -4,6 +4,9 @@ _help:
 
 # Central metadata for C/C++ dependencies
 CSV := ".github/ellis_link_deps.csv"
+# Install dir
+# TODO: make this /usr/local/uwu10.10 for easier sed
+PREFIX := env_var_or_default("PREFIX", "/usr/local/uwu")
 
 # --- Pre-building C/C++ Libraries ---
 # Note: Building these from source avoids Cargo constantly recompiling them
