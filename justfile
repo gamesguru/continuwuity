@@ -2,7 +2,7 @@
 _help:
     @just --list
 
-PREFIX := env_var_or_default("PREFIX", "{{PREFIX}}")
+PREFIX := env_var_or_default("PREFIX", "/usr/local")
 
 # --- Pre-building C/C++ Libraries ---
 # Note: Building these from source avoids Cargo constantly recompiling them
