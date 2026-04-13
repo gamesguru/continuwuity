@@ -2810,7 +2810,7 @@ fn default_trusted_servers() -> Vec<OwnedServerName> {
 pub fn default_log() -> String {
 	cfg!(debug_assertions)
 		.then_some("debug")
-		.unwrap_or("info")
+		.unwrap_or("info,memory_serve=warn")
 		.to_owned()
 }
 

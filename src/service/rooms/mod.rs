@@ -4,7 +4,6 @@ pub mod directory;
 pub mod event_handler;
 pub mod lazy_loading;
 pub mod metadata;
-pub mod monitor;
 pub mod outlier;
 pub mod pdu_metadata;
 pub mod read_receipt;
@@ -43,5 +42,4 @@ pub struct Service {
 	pub timeline: Arc<timeline::Service>,
 	pub typing: Arc<typing::Service>,
 	pub user: Arc<user::Service>,
-	pub monitor: Arc<monitor::Service>,
 }

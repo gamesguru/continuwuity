@@ -833,7 +833,6 @@ async fn make_join_request(
 	servers: &[OwnedServerName],
 ) -> Result<(federation::membership::prepare_join_event::v1::Response, OwnedServerName)> {
 	let mut make_join_counter: usize = 1;
-	let mut last_error = None;
 
 	for remote_server in servers {
 		if services.globals.server_is_ours(remote_server) {
@@ -872,48 +871,40 @@ async fn make_join_request(
 				}
 				return Ok((response, remote_server.clone()));
 			},
-			| Err(e) => {
-				match e.kind() {
-					| ErrorKind::UnableToAuthorizeJoin => {
-						info!(
-							"{remote_server} was unable to verify the joining user satisfied \
-							 restricted join requirements: {e}. Will continue trying."
-						);
-					},
-					| ErrorKind::UnableToGrantJoin => {
-						info!(
-							"{remote_server} believes the joining user satisfies restricted \
-							 join rules, but is unable to authorise a join for us. Will \
-							 continue trying."
-						);
-					},
-					| ErrorKind::IncompatibleRoomVersion { room_version } => {
-						warn!(
-							"{remote_server} reports the room we are trying to join is \
-							 v{room_version}, which we do not support."
-						);
-						return Err(e);
-					},
-					| ErrorKind::Forbidden { .. } => {
-						warn!("{remote_server} refuses to let us join: {e}.");
-					},
-					| ErrorKind::NotFound => {
-						info!(
-							"{remote_server} does not know about {room_id}: {e}. Will continue \
-							 trying."
-						);
-					},
-					| _ => {
-						info!("{remote_server} failed to make_join: {e}. Will continue trying.");
-					},
-				}
-				last_error = Some(e);
+			| Err(e) => match e.kind() {
+				| ErrorKind::UnableToAuthorizeJoin => {
+					info!(
+						"{remote_server} was unable to verify the joining user satisfied \
+						 restricted join requirements: {e}. Will continue trying."
+					);
+				},
+				| ErrorKind::UnableToGrantJoin => {
+					info!(
+						"{remote_server} believes the joining user satisfies restricted join \
+						 rules, but is unable to authorise a join for us. Will continue trying."
+					);
+				},
+				| ErrorKind::IncompatibleRoomVersion { room_version } => {
+					warn!(
+						"{remote_server} reports the room we are trying to join is \
+						 v{room_version}, which we do not support."
+					);
+					return Err(e);
+				},
+				| ErrorKind::Forbidden { .. } => {
+					warn!("{remote_server} refuses to let us join: {e}.");
+				},
+				| ErrorKind::NotFound => {
+					info!(
+						"{remote_server} does not know about {room_id}: {e}. Will continue \
+						 trying."
+					);
+				},
+				| _ => {
+					info!("{remote_server} failed to make_join: {e}. Will continue trying.");
+				},
 			},
 		}
-	}
-	info!("All {} servers were unable to assist in joining {room_id} :(", servers.len());
-	if let Some(e) = last_error {
-		return Err(e);
 	}
 	Err!(BadServerResponse("No server available to assist in joining."))
 }

@@ -111,7 +111,6 @@ impl Services {
 				timeline: build!(rooms::timeline::Service),
 				typing: build!(rooms::typing::Service),
 				user: build!(rooms::user::Service),
-				monitor: build!(rooms::monitor::Service),
 			},
 			federation: build!(federation::Service),
 			sending: build!(sending::Service),
