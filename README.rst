@@ -1,8 +1,9 @@
-continuwuity
-============
+**************
+ continuwuity
+**************
 
 A community-driven `Matrix <https://matrix.org/>`__ homeserver in Rust
-----------------------------------------------------------------------
+######################################################################
 
 continuwuity is a Matrix homeserver written in Rust.
 It's the official community continuation of the `conduwuit <https://github.com/girlbossceo/conduwuit>`_ homeserver.
