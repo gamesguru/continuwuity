@@ -3,7 +3,7 @@ use std::{borrow::Borrow, collections::HashMap, iter::once, sync::Arc};
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Result, debug, debug_info, debug_warn, err, error, info, is_true,
+	Err, Error, Result, debug, debug_info, debug_warn, err, error, info, is_true,
 	matrix::{
 		StateKey,
 		event::{gen_event_id, gen_event_id_canonical_json},
@@ -833,6 +833,7 @@ async fn make_join_request(
 	servers: &[OwnedServerName],
 ) -> Result<(federation::membership::prepare_join_event::v1::Response, OwnedServerName)> {
 	let mut make_join_counter: usize = 1;
+	let mut last_rejection: Option<Error> = None;
 
 	for remote_server in servers {
 		if services.globals.server_is_ours(remote_server) {
@@ -893,6 +894,8 @@ async fn make_join_request(
 				},
 				| ErrorKind::Forbidden { .. } => {
 					warn!("{remote_server} refuses to let us join: {e}.");
+					// Keep this as the authoritative rejection to return later
+					last_rejection = Some(e);
 				},
 				| ErrorKind::NotFound => {
 					info!(
@@ -906,5 +909,12 @@ async fn make_join_request(
 			},
 		}
 	}
+
+	// If any server gave an authoritative rejection (e.g. Forbidden for
+	// knock rooms), return that instead of a generic error.
+	if let Some(rejection) = last_rejection {
+		return Err(rejection);
+	}
+
 	Err!(BadServerResponse("No server available to assist in joining."))
 }
