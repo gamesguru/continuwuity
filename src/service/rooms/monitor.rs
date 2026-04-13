@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use conduwuit::{Event, Result, debug, info, utils::ReadyExt, warn};
 use futures::{FutureExt, StreamExt};
-use ruma::api::federation::event::get_room_state;
+use ruma::{OwnedEventId, OwnedServerName, api::federation::event::get_missing_events, uint};
 
 use crate::service::Dep;
 
@@ -20,6 +20,9 @@ impl crate::Service for Service {
 				globals: args.depend::<crate::globals::Service>("globals"),
 				metadata: args.depend::<crate::rooms::metadata::Service>("rooms::metadata"),
 				timeline: args.depend::<crate::rooms::timeline::Service>("rooms::timeline"),
+				state: args.depend::<crate::rooms::state::Service>("rooms::state"),
+				state_accessor: args
+					.depend::<crate::rooms::state_accessor::Service>("rooms::state_accessor"),
 				state_cache: args
 					.depend::<crate::rooms::state_cache::Service>("rooms::state_cache"),
 				event_handler: args
@@ -39,6 +42,8 @@ struct InnerServices {
 	globals: Dep<crate::globals::Service>,
 	metadata: Dep<crate::rooms::metadata::Service>,
 	timeline: Dep<crate::rooms::timeline::Service>,
+	state: Dep<crate::rooms::state::Service>,
+	state_accessor: Dep<crate::rooms::state_accessor::Service>,
 	state_cache: Dep<crate::rooms::state_cache::Service>,
 	event_handler: Dep<crate::rooms::event_handler::Service>,
 	sending: Dep<crate::sending::Service>,
@@ -82,53 +87,118 @@ impl Service {
 			return Ok(());
 		}
 
-		// Check if room has remote members
-		let Some(remote_server) = self
-			.services
-			.state_cache
-			.room_servers(room_id)
-			.ready_filter(|&s| s != self.services.globals.server_name())
-			.next()
-			.await
-		else {
-			return Ok(()); // Local-only or no other servers
+		// Determine the best server to query: prefer the room's homeserver
+		// (authoritative), then fall back to any known remote participant.
+		let target_server: OwnedServerName = if let Some(hs) = room_id
+			.server_name()
+			.filter(|s| *s != self.services.globals.server_name())
+			.filter(|_| {
+				// We check participation synchronously below; use a placeholder
+				true
+			}) {
+			// Verify the room homeserver is actually participating
+			if self.services.state_cache.server_in_room(hs, room_id).await {
+				hs.to_owned()
+			} else {
+				self.services
+					.state_cache
+					.room_servers(room_id)
+					.ready_filter(|&s| s != self.services.globals.server_name())
+					.next()
+					.await
+					.map(ToOwned::to_owned)
+					.ok_or_else(|| conduwuit::err!("No remote servers in room {room_id}"))?
+			}
+		} else {
+			let Some(server) = self
+				.services
+				.state_cache
+				.room_servers(room_id)
+				.ready_filter(|&s| s != self.services.globals.server_name())
+				.next()
+				.await
+			else {
+				return Ok(()); // Local-only room, nothing to forward-fill
+			};
+			server.to_owned()
 		};
 
 		warn!(
 			target: "forwardfill",
-			"Auto-Thumper: Room {room_id} is stagnant (latest PDU was {}ms ago). Thumping via {remote_server}...",
+			"Room {room_id} is stagnant (latest PDU was {}ms ago). Checking for missing events via {target_server}...",
 			now.saturating_sub(latest_pdu.origin_server_ts().get().into())
 		);
 
-		// Trigger catchup by requesting remote state at our latest point.
-		// If we are behind, this will pull in missing PDUs.
-		let request = get_room_state::v1::Request {
+		// Collect our current state event IDs. These are events both sides of
+		// the federation know about. We pass them as `latest_events` so the
+		// remote walks backwards through the DAG from those anchor points and
+		// returns any timeline events that exist between them and our timeline
+		// tip (`earliest_events`) that we may have missed due to dropped
+		// federation transactions.
+		let shortstatehash = self.services.state.get_room_shortstatehash(room_id).await?;
+		let state_event_ids: Vec<OwnedEventId> = self
+			.services
+			.state_accessor
+			.state_full_ids(shortstatehash)
+			.map(|(_, event_id): (_, OwnedEventId)| event_id)
+			.collect()
+			.await;
+
+		if state_event_ids.is_empty() {
+			return Ok(());
+		}
+
+		let request = get_missing_events::v1::Request {
 			room_id: room_id.to_owned(),
-			event_id: latest_pdu.event_id().to_owned(),
+			limit: uint!(20),
+			min_depth: uint!(0),
+			earliest_events: vec![latest_pdu.event_id().to_owned()],
+			latest_events: state_event_ids,
 		};
 
 		let response = self
 			.services
 			.sending
-			.send_federation_request(remote_server, request)
+			.send_federation_request(&target_server, request)
 			.await?;
 
-		for pdu in response.pdus {
+		if response.events.is_empty() {
+			debug!(target: "forwardfill", "No missing events returned for {room_id}");
+			return Ok(());
+		}
+
+		info!(
+			target: "forwardfill",
+			"{} missing events returned for {room_id} from {target_server}",
+			response.events.len()
+		);
+
+		for pdu in response.events {
 			let (parsed_room_id, event_id, value) =
-				self.services.event_handler.parse_incoming_pdu(&pdu).await?;
+				match self.services.event_handler.parse_incoming_pdu(&pdu).await {
+					| Ok(v) => v,
+					| Err(e) => {
+						debug!(target: "forwardfill", "Failed to parse PDU from {target_server}: {e}");
+						continue;
+					},
+				};
 
 			if parsed_room_id != *room_id {
 				info!(
 					target: "forwardfill",
-					"Auto-Thumper: Server {remote_server} returned PDU for room {parsed_room_id} while thumping {room_id}"
+					"{target_server} returned PDU for room {parsed_room_id} while filling {room_id}"
 				);
 				continue;
 			}
 
-			self.services
+			if let Err(e) = self
+				.services
 				.event_handler
-				.handle_incoming_pdu(remote_server, room_id, &event_id, value, false)
-				.await?;
+				.handle_incoming_pdu(&target_server, room_id, &event_id, value, false)
+				.await
+			{
+				debug!(target: "forwardfill", "Failed to handle PDU {event_id} from {target_server}: {e}");
+			}
 		}
 
 		Ok(())

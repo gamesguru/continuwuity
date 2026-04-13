@@ -60,11 +60,4 @@ pub enum RoomCommand {
 	Exists {
 		room_id: OwnedRoomId,
 	},
-
-	/// Forcefully sends a dummy message to a room. This is useful for
-	/// triggering federation catchups and rescans if events were missed due to
-	/// network drops.
-	Bump {
-		room_id: OwnedRoomId,
-	},
 }
