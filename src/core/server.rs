@@ -150,7 +150,6 @@ impl Server {
 	#[inline]
 	pub fn is_ours(&self, name: &str) -> bool {
 		name == self.config.server_name
-			|| ruma::ServerName::parse(name)
-				.is_ok_and(|n| n.host() == self.name.host())
+			|| ruma::ServerName::parse(name).is_ok_and(|n| n.host() == self.name.host())
 	}
 }
