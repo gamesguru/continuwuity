@@ -318,6 +318,6 @@ impl Service {
 
 	#[inline]
 	pub fn server_is_ours(&self, server_name: &ServerName) -> bool {
-		server_name == self.server_name()
+		server_name == self.server_name() || server_name.host() == self.server_name().host()
 	}
 }
