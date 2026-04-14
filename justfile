@@ -185,11 +185,11 @@ prebuild-snappy:
     git checkout $TAG
     sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
     mkdir -p build_static && cd build_static
-    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    (unset CC CXX && cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..)
     make -j$(nproc)
     cd ..
     mkdir -p build_shared && cd build_shared
-    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    (unset CC CXX && cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..)
     make -j$(nproc)
 
 # Install snappy globally (requires sudo)
@@ -234,7 +234,7 @@ prebuild-aws-lc:
     git fetch --all --tags
     git checkout $TAG
     mkdir -p build && cd build
-    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_TESTING=OFF -DBUILD_LIBSSL=ON ..
+    (unset CC CXX && cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_TESTING=OFF -DBUILD_LIBSSL=ON ..)
     make -j$(nproc)
 
 # Install aws-lc globally (requires sudo)
