@@ -24,10 +24,10 @@ init-prebuild:
     @echo "Done. You can now run prebuild commands."
 
 # Pre-build all C/C++ dependencies
-prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebuild-zstd prebuild-rocksdb
+prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebuild-zstd prebuild-rocksdb prebuild-aws-lc
 
 # Install all pre-built C/C++ dependencies
-install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb
+install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb install-aws-lc
 
 # Builds liburing
 prebuild-liburing:
@@ -218,6 +218,29 @@ prebuild-zstd:
 install-zstd:
     @echo "Installing zstd to {{PREFIX}}... (Requires sudo)"
     cd {{PREFIX}}/build/zstd && sudo make install -C lib PREFIX={{PREFIX}}
+    sudo ldconfig
+
+# Pre-build aws-lc
+prebuild-aws-lc:
+    #!/usr/bin/env bash
+    set -e
+    TAG=$(grep "^aws-lc," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^aws-lc," {{CSV}} | cut -d',' -f3 | tr -d '\r')
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
+    echo "Cloning aws-lc $TAG..."
+    [ ! -d "{{PREFIX}}/build/aws-lc" ] && git clone $REPO {{PREFIX}}/build/aws-lc || true
+    echo "Building aws-lc..."
+    cd {{PREFIX}}/build/aws-lc
+    git fetch --all --tags
+    git checkout $TAG
+    mkdir -p build && cd build
+    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_TESTING=OFF -DBUILD_LIBSSL=ON ..
+    make -j$(nproc)
+
+# Install aws-lc globally (requires sudo)
+install-aws-lc:
+    @echo "Installing aws-lc to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/aws-lc/build && sudo make install
     sudo ldconfig
 
 # --- CPU Profiling ---

@@ -154,6 +154,8 @@ lint:   ##H Lint code
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		cargo clippy $(CARGO_SCOPE) --locked --no-deps $(CARGO_FLAGS) -- -D warnings
 
 .PHONY: test
@@ -163,6 +165,8 @@ test:   ##H Run tests
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
 
 
@@ -183,6 +187,8 @@ build:  ##H Build with selected profile
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
 		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
 #		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
