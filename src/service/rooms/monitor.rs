@@ -18,7 +18,6 @@ impl crate::Service for Service {
 			services: InnerServices {
 				server: args.server.clone(),
 				globals: args.depend::<crate::globals::Service>("globals"),
-				metadata: args.depend::<crate::rooms::metadata::Service>("rooms::metadata"),
 				timeline: args.depend::<crate::rooms::timeline::Service>("rooms::timeline"),
 				state_cache: args
 					.depend::<crate::rooms::state_cache::Service>("rooms::state_cache"),
@@ -37,7 +36,6 @@ impl crate::Service for Service {
 struct InnerServices {
 	server: Arc<conduwuit::Server>,
 	globals: Dep<crate::globals::Service>,
-	metadata: Dep<crate::rooms::metadata::Service>,
 	timeline: Dep<crate::rooms::timeline::Service>,
 	state_cache: Dep<crate::rooms::state_cache::Service>,
 	event_handler: Dep<crate::rooms::event_handler::Service>,
@@ -85,7 +83,8 @@ impl Service {
 	/// Scans all known rooms and fetches missing events for any that have been
 	/// idle longer than `stale_threshold_ms`.
 	async fn scan_all_rooms(&self, stale_threshold_ms: u64) {
-		let rooms = self.services.metadata.iter_ids();
+		let ours = self.services.globals.server_name();
+		let rooms = self.services.state_cache.server_rooms(ours);
 		let mut room_stream = rooms.boxed();
 
 		while let Some(room_id) = room_stream.next().await {
@@ -98,6 +97,18 @@ impl Service {
 	}
 
 	async fn check_room(&self, room_id: &ruma::RoomId, stale_threshold_ms: u64) -> Result<()> {
+		// Ensure we are actually participating in the room before we start
+		// probes that could lead to unauthorized make_leave requests.
+		let ours = self.services.globals.server_name();
+		if !self
+			.services
+			.state_cache
+			.server_in_room(ours, room_id)
+			.await
+		{
+			return Ok(());
+		}
+
 		let latest_pdu = self.services.timeline.latest_pdu_in_room(room_id).await?;
 		let now: u64 = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
@@ -114,7 +125,7 @@ impl Service {
 		// (authoritative), then fall back to any known remote participant.
 		let target_server: OwnedServerName = if let Some(hs) = room_id
 			.server_name()
-			.filter(|s| *s != self.services.globals.server_name())
+			.filter(|s| !self.services.globals.server_is_ours(s))
 		{
 			if self.services.state_cache.server_in_room(hs, room_id).await {
 				hs.to_owned()
@@ -122,7 +133,7 @@ impl Service {
 				self.services
 					.state_cache
 					.room_servers(room_id)
-					.ready_filter(|&s| s != self.services.globals.server_name())
+					.ready_filter(|&s| !self.services.globals.server_is_ours(s))
 					.next()
 					.await
 					.map(ToOwned::to_owned)
@@ -133,7 +144,7 @@ impl Service {
 				.services
 				.state_cache
 				.room_servers(room_id)
-				.ready_filter(|&s| s != self.services.globals.server_name())
+				.ready_filter(|&s| !self.services.globals.server_is_ours(s))
 				.next()
 				.await
 			else {
