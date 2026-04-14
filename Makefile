@@ -125,7 +125,7 @@ RUSTFLAGS ?=
 # Display crate compilation progress [X/Y] in nohup or no-tty environment.
 # Override or unset in .env to disable.
 export CARGO_TERM_PROGRESS_WHEN ?= auto
-export CARGO_TERM_PROGRESS_WIDTH ?= 80
+export CARGO_TERM_PROGRESS_WIDTH ?= 200
 
 # To suppress the confirmation prompt, add to your .env: SKIP_CONFIRM=1
 SKIP_CONFIRM ?=
