@@ -384,6 +384,15 @@ async fn handle_room(
 			.handle_incoming_pdu(origin, room_id, &event_id, value, true)
 			.await
 			.map(|_| ());
+
+		if let Err(ref e) = result {
+			assert!(
+				!e.status_code().is_server_error() && services.server.running(),
+				"Transient error processing incoming PDU, aborting transaction to force retry: \
+				 {e}"
+			);
+		}
+
 		results.push((event_id, result));
 	}
 	Ok(results)

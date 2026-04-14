@@ -440,6 +440,10 @@ impl Service {
 			reset = reset.saturating_add(1);
 
 			self.db.set_offline_fast(&user_id, count, presence);
+
+			// Broadcast offline transition to remotely clear federation backoff timers!
+			// This triggers the automated catch-up of missed events from downtime.
+			self.notify_presence_change(&user_id).await.log_err().ok();
 		}
 
 		warn!("Presence reset complete: {reset} users reset to offline.");

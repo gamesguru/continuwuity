@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use conduwuit::{Event, Result, debug, info, utils::ReadyExt, warn};
 use futures::{FutureExt, StreamExt};
-use ruma::{OwnedServerName, api::federation::event::get_missing_events, uint};
+use ruma::OwnedServerName;
 
 use crate::service::Dep;
 
@@ -50,9 +50,6 @@ const PERIODIC_STALE_THRESHOLD_MS: u64 = 4 * 3600 * 1000; // 4 hours
 
 /// How often the periodic sweep runs.
 const SWEEP_INTERVAL_SECS: u64 = 3600; // every hour
-
-/// Maximum events per get_missing_events request.
-const BATCH_LIMIT: usize = 100;
 
 impl Service {
 	pub async fn worker(self: Arc<Self>) -> Result<()> {
@@ -153,13 +150,23 @@ impl Service {
 		);
 
 		// 1. Probe the remote server for its forward extremities via a make_leave
-		//    template
-		let user_id_str = format!("@conduwuit:{}", self.services.globals.server_name());
-		let user_id = ruma::UserId::parse(&user_id_str).expect("valid user id");
+		//    template. We MUST use an active local user, or Synapse will return 403.
+		let Some(user_id) = self
+			.services
+			.state_cache
+			.active_local_users_in_room(room_id)
+			.boxed()
+			.next()
+			.await
+			.map(ToOwned::to_owned)
+		else {
+			return Ok(()); // We have no active local users, can't probe
+		};
+
 		let make_leave_request =
 			ruma::api::federation::membership::prepare_leave_event::v1::Request {
 				room_id: room_id.to_owned(),
-				user_id: user_id.into(),
+				user_id,
 			};
 
 		let make_leave_response = match self
@@ -234,18 +241,14 @@ impl Service {
 			missing_latest.len()
 		);
 
-		// Use our timeline tip as the earliest_events anchor, updated after
-		// each batch so we paginate forward through the gap.
-		let mut earliest = vec![latest_pdu.event_id().to_owned()];
-		let mut total_fetched: usize = 0;
-
-		for batch in 0_usize.. {
-			let request = get_missing_events::v1::Request {
-				room_id: room_id.to_owned(),
-				limit: uint!(100),
-				min_depth: uint!(0),
-				earliest_events: earliest.clone(),
-				latest_events: missing_latest.clone(),
+		// 3. Fetch the missing extremities and feed them to handle_incoming_pdu.
+		// Passing `true` for fetch_prev tells Conduwuit to automatically use its own
+		// robust native fetch_prev engine to stitch the DAG backwards!
+		let mut handled = 0_usize;
+		for event_id in missing_latest {
+			let request = ruma::api::federation::event::get_event::v1::Request {
+				event_id: event_id.clone(),
+				include_unredacted_content: None,
 			};
 
 			let response = match self
@@ -256,91 +259,42 @@ impl Service {
 			{
 				| Ok(r) => r,
 				| Err(e) => {
-					warn!(
-						target: "forwardfill",
-						"Federation request failed for {room_id} via {target_server} \
-						 (batch {batch}): {e}"
-					);
-					break;
+					warn!(target: "forwardfill", "Failed to fetch missing extremity {event_id}: {e}");
+					continue;
 				},
 			};
 
-			let count = response.events.len();
-			if count == 0 {
-				if batch == 0 {
-					debug!(
-						target: "forwardfill",
-						"No missing events returned for {room_id}"
-					);
-				}
-				break;
-			}
-
-			info!(
-				target: "forwardfill",
-				"{count} missing events returned for {room_id} from {target_server} \
-				 (batch {batch})"
-			);
-
-			let mut batch_handled: usize = 0;
-			for pdu in response.events {
-				let (parsed_room_id, event_id, value) =
-					match self.services.event_handler.parse_incoming_pdu(&pdu).await {
-						| Ok(v) => v,
-						| Err(e) => {
-							info!(
-								target: "forwardfill",
-								"Failed to parse PDU from {target_server}: {e}"
-							);
-							continue;
-						},
-					};
-
-				if parsed_room_id != *room_id {
-					info!(
-						target: "forwardfill",
-						"{target_server} returned PDU for room {parsed_room_id} while \
-						 filling {room_id}"
-					);
+			let (parsed_room_id, parsed_event_id, value) = match self
+				.services
+				.event_handler
+				.parse_incoming_pdu(&response.pdu)
+				.await
+			{
+				| Ok(v) => v,
+				| Err(e) => {
+					warn!(target: "forwardfill", "Failed to parse extremity {event_id}: {e}");
 					continue;
-				}
+				},
+			};
 
-				match self
-					.services
-					.event_handler
-					.handle_incoming_pdu(&target_server, room_id, &event_id, value, true)
-					.await
-				{
-					| Ok(_) => {
-						batch_handled = batch_handled.saturating_add(1);
-						// advance the pagination anchor
-						earliest = vec![event_id];
-					},
-					| Err(e) => {
-						info!(
-							target: "forwardfill",
-							"Failed to handle PDU {event_id} from {target_server}: {e}"
-						);
-					},
-				}
+			if parsed_room_id != *room_id {
+				continue;
 			}
 
-			total_fetched = total_fetched.saturating_add(batch_handled);
-
-			// If we got fewer events than the limit, we're caught up
-			if count < BATCH_LIMIT {
-				break;
+			if let Err(e) = self
+				.services
+				.event_handler
+				.handle_incoming_pdu(&target_server, room_id, &parsed_event_id, value, true)
+				.await
+			{
+				warn!(target: "forwardfill", "Failed to handle extremity {event_id}: {e}");
+			} else {
+				handled = handled.saturating_add(1);
 			}
-
-			// yield between batches
-			tokio::task::yield_now().await;
 		}
 
-		if total_fetched > 0 {
-			info!(
-				target: "forwardfill",
-				"Forward-filled {total_fetched} events into {room_id} from {target_server}"
-			);
+		if handled > 0 {
+			info!(target: "forwardfill", "Successfully forward-filled {room_id} via {handled} extremities");
 		}
 
 		Ok(())
