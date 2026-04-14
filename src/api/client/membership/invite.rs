@@ -61,8 +61,6 @@ pub(crate) async fn invite_user_route(
 				return Err!(Request(Forbidden(
 					"{recipient_user} has blocked invites from you."
 				)));
-			} else if matches!(recipient_filter_level, FilterLevel::Ignore) {
-				return Ok(invite_user::v3::Response {});
 			}
 
 			if let Ok(target_user_membership) = services

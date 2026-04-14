@@ -158,13 +158,6 @@ pub(crate) async fn create_invite_route(
 
 	if matches!(recipient_filter_level, FilterLevel::Block) {
 		return Err!(Request(Forbidden("{recipient_user} has blocked invites from you.")));
-	} else if matches!(recipient_filter_level, FilterLevel::Ignore) {
-		return Ok(create_invite::v2::Response {
-			event: services
-				.sending
-				.convert_to_outgoing_federation_event(signed_event)
-				.await,
-		});
 	}
 
 	if let Err(e) = services

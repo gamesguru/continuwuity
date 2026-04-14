@@ -209,39 +209,73 @@ impl Service {
 			}
 
 			if let Some(content) = config_content {
-				let mut level = content.user_filter_level(sender_user);
-				if content.enabled {
-					let blocked_user = content
-						.blocked_users
-						.iter()
-						.any(|a| Self::glob_match(a, sender_user.as_str()));
-					let blocked_server = content
-						.blocked_servers
-						.iter()
-						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
-					let allowed_user = content
-						.allowed_users
-						.iter()
-						.any(|a| Self::glob_match(a, sender_user.as_str()));
-					let allowed_server = content
-						.allowed_servers
-						.iter()
-						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
-
-					if allowed_user {
-						level = FilterLevel::Allow;
-					} else if blocked_user {
-						level = FilterLevel::Block;
-					} else if allowed_server {
-						level = FilterLevel::Allow;
-					} else if blocked_server
-						|| !content.allowed_users.is_empty()
-						|| !content.allowed_servers.is_empty()
-					{
-						level = FilterLevel::Block;
-					}
+				if !content.enabled {
+					return content.user_filter_level(sender_user);
 				}
-				level
+
+				let sender_user_s = sender_user.as_str();
+				let sender_server_s = sender_user.server_name().as_str();
+
+				let allowed_user = content
+					.allowed_users
+					.iter()
+					.any(|a| Self::glob_match(a, sender_user_s));
+				let ignored_user = content
+					.ignored_users
+					.iter()
+					.any(|a| Self::glob_match(a, sender_user_s));
+				let blocked_user = content
+					.blocked_users
+					.iter()
+					.any(|a| Self::glob_match(a, sender_user_s));
+
+				let allowed_server = content
+					.allowed_servers
+					.iter()
+					.any(|a| Self::glob_match(a, sender_server_s));
+				let ignored_server = content
+					.ignored_servers
+					.iter()
+					.any(|a| Self::glob_match(a, sender_server_s));
+				let blocked_server = content
+					.blocked_servers
+					.iter()
+					.any(|a| Self::glob_match(a, sender_server_s));
+
+				// MSC4155 Evaluation Order:
+				// 1. allowed_users
+				if allowed_user {
+					return FilterLevel::Allow;
+				}
+				// 2. ignored_users
+				if ignored_user {
+					return FilterLevel::Ignore;
+				}
+				// 3. blocked_users
+				if blocked_user {
+					return FilterLevel::Block;
+				}
+				// 4. allowed_servers
+				if allowed_server {
+					return FilterLevel::Allow;
+				}
+				// 5. ignored_servers
+				if ignored_server {
+					return FilterLevel::Ignore;
+				}
+				// 6. blocked_servers
+				if blocked_server {
+					return FilterLevel::Block;
+				}
+
+				// 7. Default behavior
+				// If any allowed_users or allowed_servers exist, we block everything else
+				if !content.allowed_users.is_empty() || !content.allowed_servers.is_empty() {
+					return FilterLevel::Block;
+				}
+
+				// Otherwise, we use Ruma's logic or Allow
+				content.user_filter_level(sender_user)
 			} else {
 				FilterLevel::Allow
 			}
