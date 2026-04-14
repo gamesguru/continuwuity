@@ -32,8 +32,8 @@ endif
 
 
 
-# [CONFIG] Auto-discover vars defined in Makefiles (not env-inherited)
-VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter file override command,$(origin $v)),$v)))
+# [CONFIG] Auto-discover vars defined in Makefiles and environment
+VARS = $(sort $(foreach v,$(.VARIABLES),$(if $(filter file override command environment environment\ override,$(origin $v)),$v)))
 
 # [ENUM] Styling / Colors
 STYLE_CYAN := $(shell tput setaf 6 2>/dev/null || echo -e "\033[36m")
@@ -166,8 +166,8 @@ test:   ##H Run tests
 		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
 
 
-ROCKSDB_LIB_DIR ?= $(PREFIX)/lib
-ROCKSDB_INCLUDE_DIR ?= $(PREFIX)/include
+ROCKSDB_LIB_DIR = $(PREFIX)/lib
+ROCKSDB_INCLUDE_DIR = $(PREFIX)/include
 
 # Default features to use for the build
 # We use bindgen-runtime by default to use the system libclang.so for building.
@@ -185,8 +185,9 @@ build:  ##H Build with selected profile
 		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
 		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
 		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
-# 		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
+#		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
 		cargo build --features $(FEATURES) --locked $(CARGO_FLAGS)
+
 	@echo "Build finished! Hard-linking '$(PROFILE)' binary to target/latest/"
 	mkdir -p target/latest target/debug
 	-ln -f target/$(if $(CARGO_BUILD_TARGET),$(CARGO_BUILD_TARGET)/)$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/conduwuit target/latest/conduwuit
@@ -486,7 +487,7 @@ C10Y_SERV ?= conduwuit.service
 
 # Configure these in .env if alternate path(s) are desired
 BUILD_BIN_DIR ?= target/latest
-DEPLOY_BIN_DIR ?= $(PREFIX)/bin
+DEPLOY_BIN_DIR = $(PREFIX)/bin
 
 BUILD_BIN ?= $(BUILD_BIN_DIR)/$(CONTINUWUITY)
 DEPLOY_BIN ?= $(DEPLOY_BIN_DIR)/$(CONTINUWUITY)
