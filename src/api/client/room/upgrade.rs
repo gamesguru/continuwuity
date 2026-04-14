@@ -93,6 +93,7 @@ pub(crate) async fn upgrade_room_route(
 			Some(&body.room_id),
 			&old_room_state_lock,
 		)
+		.boxed()
 		.await;
 
 	if let Err(_e) = tombstone_test_result {
@@ -417,6 +418,7 @@ pub(crate) async fn upgrade_room_route(
 				Some(&body.room_id),
 				&old_room_state_lock,
 			)
+			.boxed()
 			.await?;
 		drop(old_room_state_lock);
 	}

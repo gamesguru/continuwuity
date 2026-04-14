@@ -104,7 +104,7 @@ conduwuit-macros.workspace = true
 conduwuit-service.workspace = true
 conduwuit-web.workspace = true
 const-str.workspace = true
-
+ctor.workspace = true
 futures.workspace = true
 http.workspace = true
 http-body-util.workspace = true

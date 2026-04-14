@@ -28,31 +28,30 @@ fn main() {
 		}
 		if in_features && !line.is_empty() && !line.starts_with('#') {
 			if let Some((feat, _)) = line.split_once('=') {
-				let feat = feat.trim();
-				available_features.push(feat.to_owned());
+				let feat = feat.trim().replace('_', "-");
+				available_features.push(feat);
 			}
 		}
 	}
 	available_features.sort();
 
+	let disabled_features: Vec<_> = available_features
+		.into_iter()
+		.filter(|f| !enabled_features.contains(f))
+		.collect();
+
 	let out_dir = env::var_os("OUT_DIR").unwrap();
 	let dest_path = Path::new(&out_dir).join("features.rs");
 
 	let mut out = String::new();
-	out.push_str(
-		"pub const ENABLED_FEATURES: &[&str] = &[
-",
-	);
+	out.push_str("pub const ENABLED_FEATURES: &[&str] = &[\n");
 	for f in &enabled_features {
 		writeln!(out, "    \"{f}\",").unwrap();
 	}
 	out.push_str("];\n\n");
 
-	out.push_str(
-		"pub const AVAILABLE_FEATURES: &[&str] = &[
-",
-	);
-	for f in &available_features {
+	out.push_str("pub const DISABLED_FEATURES: &[&str] = &[\n");
+	for f in &disabled_features {
 		writeln!(out, "    \"{f}\",").unwrap();
 	}
 	out.push_str("];\n");

@@ -466,6 +466,7 @@ impl Service {
 					})
 				}
 			},
+			| AuthData::Terms(_) => Ok(AuthType::Terms),
 			| _ => Err(StandardErrorBody {
 				kind: ErrorKind::Unrecognized,
 				message: "Unsupported stage type".into(),
