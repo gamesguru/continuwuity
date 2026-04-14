@@ -732,16 +732,24 @@ where
 			)
 		};
 
-		let auth_result = auth_check(
-			room_version,
-			&event,
-			current_third_party,
-			fetch_state,
-			&fetch_state(&StateEventType::RoomCreate, "")
-				.await
-				.expect("create event must exist"),
-		)
-		.await;
+		let create_event = if *event.event_type() == TimelineEventType::RoomCreate {
+			event.clone()
+		} else {
+			match fetch_state(&StateEventType::RoomCreate, "").await {
+				| Some(ce) => ce,
+				| None => {
+					info!(
+						target: "auth_chain",
+						"event {} failed the authentication check (missing create event)", event.event_id()
+					);
+					continue;
+				},
+			}
+		};
+
+		let auth_result =
+			auth_check(room_version, &event, current_third_party, fetch_state, &create_event)
+				.await;
 
 		match auth_result {
 			| Ok(true) => {

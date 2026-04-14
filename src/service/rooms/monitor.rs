@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use conduwuit::{Event, Result, debug, info, utils::ReadyExt, warn};
 use futures::{FutureExt, StreamExt};
-use ruma::{OwnedEventId, OwnedServerName, api::federation::event::get_missing_events, uint};
+use ruma::{OwnedServerName, api::federation::event::get_missing_events, uint};
 
 use crate::service::Dep;
 
@@ -20,9 +20,6 @@ impl crate::Service for Service {
 				globals: args.depend::<crate::globals::Service>("globals"),
 				metadata: args.depend::<crate::rooms::metadata::Service>("rooms::metadata"),
 				timeline: args.depend::<crate::rooms::timeline::Service>("rooms::timeline"),
-				state: args.depend::<crate::rooms::state::Service>("rooms::state"),
-				state_accessor: args
-					.depend::<crate::rooms::state_accessor::Service>("rooms::state_accessor"),
 				state_cache: args
 					.depend::<crate::rooms::state_cache::Service>("rooms::state_cache"),
 				event_handler: args
@@ -42,8 +39,6 @@ struct InnerServices {
 	globals: Dep<crate::globals::Service>,
 	metadata: Dep<crate::rooms::metadata::Service>,
 	timeline: Dep<crate::rooms::timeline::Service>,
-	state: Dep<crate::rooms::state::Service>,
-	state_accessor: Dep<crate::rooms::state_accessor::Service>,
 	state_cache: Dep<crate::rooms::state_cache::Service>,
 	event_handler: Dep<crate::rooms::event_handler::Service>,
 	sending: Dep<crate::sending::Service>,
@@ -157,19 +152,87 @@ impl Service {
 			now.saturating_sub(latest_pdu.origin_server_ts().get().into())
 		);
 
-		// Collect our current state event IDs as the DAG anchors.
-		let shortstatehash = self.services.state.get_room_shortstatehash(room_id).await?;
-		let state_event_ids: Vec<OwnedEventId> = self
-			.services
-			.state_accessor
-			.state_full_ids(shortstatehash)
-			.map(|(_, event_id): (_, OwnedEventId)| event_id)
-			.collect()
-			.await;
+		// 1. Probe the remote server for its forward extremities via a make_leave
+		//    template
+		let user_id_str = format!("@conduwuit:{}", self.services.globals.server_name());
+		let user_id = ruma::UserId::parse(&user_id_str).expect("valid user id");
+		let make_leave_request =
+			ruma::api::federation::membership::prepare_leave_event::v1::Request {
+				room_id: room_id.to_owned(),
+				user_id: user_id.into(),
+			};
 
-		if state_event_ids.is_empty() {
+		let make_leave_response = match self
+			.services
+			.sending
+			.send_federation_request(&target_server, make_leave_request)
+			.await
+		{
+			| Ok(r) => r,
+			| Err(e) => {
+				warn!(
+					target: "forwardfill",
+					"make_leave probe failed for {room_id} via {target_server}: {e}"
+				);
+				return Ok(()); // abort if we can't get the forward extremities
+			},
+		};
+
+		let leave_event_stub = match serde_json::from_str::<ruma::CanonicalJsonObject>(
+			make_leave_response.event.get(),
+		) {
+			| Ok(s) => s,
+			| Err(e) => {
+				warn!(
+					target: "forwardfill",
+					"Invalid make_leave template from {target_server}: {e}"
+				);
+				return Ok(());
+			},
+		};
+
+		let remote_latest_events: Vec<ruma::OwnedEventId> = leave_event_stub
+			.get("prev_events")
+			.and_then(|v| v.as_array())
+			.map(|arr| {
+				arr.iter()
+					.filter_map(|v| {
+						v.as_str().and_then(|s| {
+							<&ruma::EventId>::try_from(s).ok().map(ToOwned::to_owned)
+						})
+					})
+					.collect()
+			})
+			.unwrap_or_default();
+
+		if remote_latest_events.is_empty() {
+			return Ok(()); // nothing to do
+		}
+
+		// 2. Filter remote_latest_events to only those we DON'T know.
+		// If we know all of them, the room isn't actually stale.
+		let mut missing_latest = Vec::new();
+		for event_id in remote_latest_events {
+			if !self.services.timeline.pdu_exists(&event_id).await {
+				missing_latest.push(event_id);
+			}
+		}
+
+		if missing_latest.is_empty() {
+			debug!(
+				target: "forwardfill",
+				"Room {room_id} is not actually stale; we have all forward extremities from \
+				 {target_server}."
+			);
 			return Ok(());
 		}
+
+		info!(
+			target: "forwardfill",
+			"Room {room_id} is actually stale! Discovered {} missing forward extremities from \
+			 {target_server}.",
+			missing_latest.len()
+		);
 
 		// Use our timeline tip as the earliest_events anchor, updated after
 		// each batch so we paginate forward through the gap.
@@ -182,7 +245,7 @@ impl Service {
 				limit: uint!(100),
 				min_depth: uint!(0),
 				earliest_events: earliest.clone(),
-				latest_events: state_event_ids.clone(),
+				latest_events: missing_latest.clone(),
 			};
 
 			let response = match self
