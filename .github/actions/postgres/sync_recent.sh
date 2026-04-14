@@ -55,7 +55,7 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
       FILENAME="runs_data/${BASENAME}"
 
       # Check if file exists in the pre-cached list
-      if echo "$ALL_FILES" | grep -Fqx "$BASENAME" > /dev/null; then
+      if grep -Fqx "$BASENAME" <<< "$ALL_FILES" > /dev/null; then
           # Inject/Overwrite metadata from the summary record for robustness
           git show "FETCH_HEAD:$FILENAME" | \
             jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" \
