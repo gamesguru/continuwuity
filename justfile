@@ -21,10 +21,10 @@ init-prebuild:
     @echo "Done. You can now run prebuild commands."
 
 # Pre-build all C/C++ dependencies
-prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebuild-zstd prebuild-rocksdb
+prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebuild-zstd prebuild-rocksdb prebuild-aws-lc
 
 # Install all pre-built C/C++ dependencies
-install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb
+install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb install-aws-lc
 
 # Builds liburing
 prebuild-liburing:
@@ -124,25 +124,32 @@ prebuild-rocksdb:
         hostname() { uname -n; }
         export -f hostname
     fi
-    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 || true)
+    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 | tr -d '\r' || true)
     if [ -z "$TAG" ]; then
-        TAG="continuwuity-v0.5.0"
+        TAG="v10.5.1"
     fi
-    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 || true)
+    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 | tr -d '\r' || true)
     if [ -z "$REPO" ]; then
-        REPO="https://forgejo.ellis.link/continuwuation/rocksdb.git"
+        REPO="https://github.com/facebook/rocksdb.git"
     fi
     sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning rocksdb $TAG..."
     if [ ! -d "{{PREFIX}}/build/rocksdb" ]; then
         git clone --recursive "$REPO" {{PREFIX}}/build/rocksdb
+    else
+        (cd {{PREFIX}}/build/rocksdb && git remote set-url origin "$REPO")
     fi
     echo "Building RocksDB..."
     cd {{PREFIX}}/build/rocksdb
 
     # Use --all --tags to support arbitrary commit hashes from the CSV
     git fetch --all --tags
-    git checkout "$TAG"
+    git reset --hard "$TAG"
+
+    # Disable ccache auto-detection ONLY if we are already using sccache
+    if [[ "$CC" == *"sccache"* ]]; then
+        export USE_CCACHE=0
+    fi
 
     # Clean build directory to avoid issues with stale dependency files
     # make clean
@@ -179,11 +186,22 @@ prebuild-snappy:
     git fetch origin
     git checkout $TAG
     sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
+    # Use sccache compiler launcher if available
+    if command -v sccache >/dev/null 2>&1; then
+        export CMAKE_C_COMPILER_LAUNCHER=sccache
+        export CMAKE_CXX_COMPILER_LAUNCHER=sccache
+        # Use explicit base compilers to avoid double-wrapping with sccache
+        export CC=cc
+        export CXX=c++
+    fi
+
     mkdir -p build_static && cd build_static
+    # rm -f CMakeCache.txt
     cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
     cd ..
     mkdir -p build_shared && cd build_shared
+    # rm -f CMakeCache.txt
     cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
 
@@ -213,6 +231,37 @@ prebuild-zstd:
 install-zstd:
     @echo "Installing zstd to {{PREFIX}}... (Requires sudo)"
     cd {{PREFIX}}/build/zstd && sudo make install -C lib PREFIX={{PREFIX}}
+    sudo ldconfig
+
+# Pre-build aws-lc
+prebuild-aws-lc:
+    #!/usr/bin/env bash
+    set -e
+    TAG=$(grep "^aws-lc," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^aws-lc," {{CSV}} | cut -d',' -f3 | tr -d '\r')
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
+    echo "Cloning aws-lc $TAG..."
+    [ ! -d "{{PREFIX}}/build/aws-lc" ] && git clone $REPO {{PREFIX}}/build/aws-lc || true
+    echo "Building aws-lc..."
+    cd {{PREFIX}}/build/aws-lc
+    git fetch --all --tags
+    git checkout $TAG
+    # aws-lc (boringssl) has issues with sccache wrapping during CMake checks
+    export NO_SCCACHE=1
+    unset CC
+    unset CXX
+    unset CMAKE_C_COMPILER_LAUNCHER
+    unset CMAKE_CXX_COMPILER_LAUNCHER
+
+    mkdir -p build && cd build
+    # rm -f CMakeCache.txt
+    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_TESTING=OFF -DBUILD_LIBSSL=ON ..
+    make -j$(nproc)
+
+# Install aws-lc globally (requires sudo)
+install-aws-lc:
+    @echo "Installing aws-lc to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/aws-lc/build && sudo make install
     sudo ldconfig
 
 # --- CPU Profiling ---
