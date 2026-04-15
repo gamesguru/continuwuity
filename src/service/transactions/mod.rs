@@ -32,12 +32,17 @@ pub enum TransactionError {
 	/// Server is shutting down - the sender should retry the entire
 	/// transaction.
 	ShuttingDown,
+
+	/// A transient error occurred during transaction processing.
+	/// The entire transaction should be retried.
+	Transient(String),
 }
 
 impl fmt::Display for TransactionError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
 			| Self::ShuttingDown => write!(f, "Server is shutting down"),
+			| Self::Transient(s) => write!(f, "Transient error: {s}"),
 		}
 	}
 }

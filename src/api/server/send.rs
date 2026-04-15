@@ -243,6 +243,11 @@ fn transaction_error_to_response(err: &TransactionError) -> Error {
 			"Server is shutting down, please retry later".into(),
 			StatusCode::SERVICE_UNAVAILABLE,
 		),
+		| TransactionError::Transient(e) => Error::Request(
+			ErrorKind::Unknown,
+			format!("Transient error, please retry: {e}").into(),
+			StatusCode::INTERNAL_SERVER_ERROR,
+		),
 	}
 }
 async fn handle(
@@ -386,11 +391,9 @@ async fn handle_room(
 			.map(|_| ());
 
 		if let Err(ref e) = result {
-			assert!(
-				!e.status_code().is_server_error() && services.server.running(),
-				"Transient error processing incoming PDU, aborting transaction to force retry: \
-				 {e}"
-			);
+			if e.status_code().is_server_error() && services.server.running() {
+				return Err(TransactionError::Transient(e.to_string()));
+			}
 		}
 
 		results.push((event_id, result));

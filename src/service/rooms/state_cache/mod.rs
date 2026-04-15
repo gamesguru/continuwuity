@@ -192,12 +192,22 @@ pub fn room_servers<'a>(
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn server_in_room<'a>(&'a self, server: &'a ServerName, room_id: &'a RoomId) -> bool {
 	let key = (server, room_id);
-	if self.db.serverroomids.qry(&key).await.is_ok() {
+	self.db.serverroomids.qry(&key).await.is_ok()
+}
+
+/// Returns true if the server is participating in the room (joined, invited, or
+/// knocked).
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "trace")]
+pub async fn server_is_participant<'a>(
+	&'a self,
+	server: &'a ServerName,
+	room_id: &'a RoomId,
+) -> bool {
+	if self.server_in_room(server, room_id).await {
 		return true;
 	}
 
-	// If the server is not "in" the room via joined members, check if it's
-	// "in" the room via invited or knocked members.
 	self.room_members_invited(room_id)
 		.chain(self.room_members_knocked(room_id))
 		.ready_any(|user| user.server_name() == server)
