@@ -156,6 +156,8 @@ lint:   ##H Lint code
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
 		cargo clippy $(CARGO_SCOPE) --locked --no-deps $(CARGO_FLAGS) -- -D warnings
 
 .PHONY: test
@@ -167,6 +169,8 @@ test:   ##H Run tests
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
 		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
 
 
@@ -190,6 +194,8 @@ build:  ##H Build with selected profile
 		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
 		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
 		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
 		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
 # 		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
@@ -222,11 +228,12 @@ build-cross: ##H Cross-compile for specific glibc and CPU (uses cargo-zigbuild)
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
 		RUSTFLAGS="-C target-cpu=$(CPU_TARGET) -C link-arg=-L/usr/lib -C link-arg=-L/usr/local/lib $$RUSTFLAGS" \
-		cargo zigbuild --target x86_64-unknown-linux-gnu.$(GLIBC_VERSION) \
-			--no-default-features \
-			--features $(FEATURES) \
-			--locked $(CARGO_FLAGS)
+		cargo zigbuild --target x86_64-unknown-linux-gnu.$(GLIBC_VERSION) --features $(FEATURES) --locked $(CARGO_FLAGS)
 
 
 .PHONY: build-dynamic
@@ -268,6 +275,10 @@ build-docs:     ##H Regenerate docs (admin commands, etc.)
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
 		cargo run -p xtask $(CARGO_FLAGS) -- generate-docs
 
 

@@ -2,13 +2,19 @@ use std::sync::Arc;
 
 use conduwuit::{
 	Result,
-	utils::{ReadyExt, stream::TryIgnore},
+	utils::{
+		ReadyExt,
+		stream::{TryIgnore, WidebandExt},
+	},
 };
 use database::{Deserialized, Json, Map};
 use futures::{Stream, StreamExt};
 use ruma::{
 	CanonicalJsonObject, OwnedUserId, RoomId, UserId,
-	events::{AnySyncEphemeralRoomEvent, receipt::ReceiptEvent},
+	events::{
+		AnySyncEphemeralRoomEvent,
+		receipt::{ReceiptEvent, ReceiptType},
+	},
 	serde::Raw,
 };
 use tokio::task::yield_now;
@@ -47,30 +53,56 @@ impl Data {
 		room_id: &RoomId,
 		event: &ReceiptEvent,
 	) {
-		// Remove old entry
+		let new_thread = event
+			.content
+			.0
+			.values()
+			.next()
+			.and_then(|types| types.get(&ReceiptType::Read))
+			.and_then(|users| users.get(user_id))
+			.map(|receipt| &receipt.thread);
+
+		// Remove old entry for the same thread
 		let last_possible_key = (room_id, u64::MAX);
-		let mut stream = self
-			.readreceiptid_readreceipt
-			.rev_keys_from_raw(&last_possible_key)
+		self.readreceiptid_readreceipt
+			.rev_stream_from_raw(&last_possible_key)
 			.ignore_err()
-			.ready_take_while(|key| {
+			.ready_take_while(|(key, _)| {
 				key.starts_with(room_id.as_bytes())
 					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
-			});
+			})
+			.ready_filter_map(|(key, value)| {
+				let user_id_bytes = user_id.as_bytes();
+				if key.ends_with(user_id_bytes)
+					&& key
+						.len()
+						.checked_sub(user_id_bytes.len())
+						.and_then(|len| len.checked_sub(1))
+						.and_then(|idx| key.get(idx))
+						== Some(&database::SEP)
+				{
+					let receipt = serde_json::from_slice::<ReceiptEvent>(value).ok()?;
+					let old_thread = receipt
+						.content
+						.0
+						.values()
+						.next()
+						.and_then(|types| types.get(&ReceiptType::Read))
+						.and_then(|users| users.get(user_id))
+						.map(|receipt| &receipt.thread);
 
-		let mut iterations: usize = 0;
-		while let Some(key) = stream.next().await {
-			if key.ends_with(user_id.as_bytes()) {
+					if old_thread == new_thread {
+						return Some(key);
+					}
+				}
+				None
+			})
+			.widen_then(100, |key| async move {
 				self.readreceiptid_readreceipt.remove_raw(key);
-			}
-
-			// Yield to the executor every 100 iterations.
-			// Allows router to interleave client requests, prevents hangs
-			iterations = iterations.saturating_add(1);
-			if iterations.is_multiple_of(100) {
 				yield_now().await;
-			}
-		}
+			})
+			.ready_for_each(|()| ())
+			.await;
 
 		let count = self.services.globals.next_count().unwrap();
 		let latest_id = (room_id, count, user_id);
