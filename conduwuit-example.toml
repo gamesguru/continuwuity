@@ -142,6 +142,10 @@
 #
 #cache_capacity_modifier = 1.0
 
+# Override the tokio worker_thread count.
+#
+#worker_threads = varies by system
+
 # Set this to any float value in megabytes for continuwuity to tell the
 # database engine that this much memory is available for database read
 # caches.
