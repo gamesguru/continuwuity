@@ -2,66 +2,90 @@
 
 This chapter describes various ways to configure Continuwuity.
 
-## Basics
+## Configuration file
 
-Continuwuity uses a config file for the majority of the settings, but also supports
-setting individual config options via commandline.
+Continuwuity uses a TOML config file for all of its settings. This is the recommended way to configure Continuwuity. Please refer to the [example config file](./reference/config.mdx) for all of these settings.
 
-Please refer to the [example config
-file](./reference/config.mdx) for all of those
-settings.
+You can specify the config file to be used by Continuwuity with the command-line flag `-c` or `--config`:
 
-The config file to use can be specified on the commandline when running
-Continuwuity by specifying the `-c`, `--config` flag. Alternatively, you can use
-the environment variable `CONTINUWUITY_CONFIG` to specify the config file to be
-used; see [the section on environment variables](#environment-variables) for
-more information.
+```bash
+./conduwuit -c /path/to/continuwuity.toml
+```
 
-## Option commandline flag
+Alternatively, you can use the environment variable `CONTINUWUITY_CONFIG` to specify the config file to be used; see [the section on environment variables](#environment-variables) for more information.
 
-Continuwuity supports setting individual config options in TOML format from the
-`-O` / `--option` flag. For example, you can set your server name via `-O
-server_name=\"example.com\"`.
+## Environment variables
 
-Note that the config is parsed as TOML, and shells like bash will remove quotes.
-So unfortunately it is required to escape quotes if the config option takes a
-string. This does not apply to options that take booleans or numbers:
+All of the options in the config file can also be specified by using environment variables. This is ideal for containerised deployments and infrastructure-as-code scenarios.
+
+The environment variable names are represented in all caps and prefixed with `CONTINUWUITY_`. They are mapped to config options in the ways demonstrated below:
+
+```bash
+# Top-level options (those inside the [global] section) are simply capitalised
+CONTINUWUITY_SERVER_NAME="matrix.example.com"
+CONTINUWUITY_PORT="8008"
+CONTINUWUITY_DATABASE_PATH="/var/lib/continuwuity"
+
+# Nested config sections use double underscores `__`
+
+# This maps to the `server` field of the [global.well_known] section in TOML
+CONTINUWUITY_WELL_KNOWN__SERVER="example.com:443"
+
+# This maps to the `base_url` field of the `[global.antispam.draupnir]` section in TOML
+CONTINUWUITY_ANTISPAM__DRAUPNIR__BASE_URL="https://draupnir.example.com"
+
+# Alternatively, you can pass a (quoted) struct to define an entire section
+# This maps to the [global.well_known] section
+CONTINUWUITY_WELL_KNOWN="{ client=https://example.com,server=example.com:443 }"
+```
+
+### Alternative prefixes
+
+For backwards compatibility, Continuwuity also supports the following environment variable prefixes, in order of descending priority:
+
+- `CONDUWUIT_*` (compatibility)
+- `CONDUIT_*` (legacy)
+
+As an example, the environment variable `CONTINUWUITY_CONFIG` can also be expressed as `CONDUWUIT_CONFIG` or `CONDUIT_CONFIG`.
+
+## Option command-line flag
+
+Continuwuity also supports setting individual config options in TOML format from the `-O` / `--option` flag. For example, you can set your server name via `-O server_name=\"example.com\"`.
+
+Note that the config is parsed as TOML, and shells like `bash` will remove quotes. Therefore, if the config option is a string, quote escapes must be properly handled. If the config option is a number or a boolean, this does not apply.
+
 - `--option allow_registration=true` works ✅
 - `-O max_request_size=99999999` works ✅
 - `-O server_name=example.com` does not work ❌
 - `--option log=\"debug\"` works ✅
 - `--option server_name='"example.com'"` works ✅
 
-## Execute commandline flag
+## Order of priority
 
-Continuwuity supports running admin commands on startup using the commandline
-argument `--execute`. The most notable use for this is to create an admin user
-on first startup.
+The above configuration methods are prioritised, in descending order, as below:
 
-The syntax of this is a standard admin command without the prefix such as
-`./conduwuit --execute "users create_user june"`
+- Command-line `-o`/`--option` flags
+- Environment variables
+    - `CONTINUWUITY_*` variables
+    - `CONDUWUIT_*` variables
+    - `CONDUIT_*` variables
+- Config file
 
-An example output of a success is:
-```
+Therefore, you can use environment variables or the options flags to override values in the config file.
+
+---
+
+## Executing startup commands
+
+Continuwuity supports running admin commands on startup using the command-line flag `--execute`. This is treated as a standard admin command, without the need for the `!admin` prefix. For example, to create a new user:
+
+```bash
+# Equivalent to `!admin users create_user june`
+./conduwuit --execute "users create_user june"
 INFO conduwuit_service::admin::startup: Startup command #0 completed:
 Created user with user_id: @june:girlboss.ceo and password: `<redacted>`
 ```
 
-This commandline argument can be paired with the `--option` flag.
+Alternatively, you can configure `CONTINUWUITY_ADMIN_EXECUTE` or the config file value `admin_execute` with a list of commands.
 
-## Environment variables
-
-All of the settings that are found in the config file can be specified by using
-environment variables. The environment variable names should be all caps and
-prefixed with `CONTINUWUITY_`.
-
-For example, if the setting you are changing is `max_request_size`, then the
-environment variable to set is `CONTINUWUITY_MAX_REQUEST_SIZE`.
-
-To modify config options not in the `[global]` context such as
-`[global.well_known]`, use the `__` suffix split:
-`CONTINUWUITY_WELL_KNOWN__SERVER`
-
-Conduit and conduwuit's environment variables are also supported for backwards
-compatibility, via the `CONDUIT_` and `CONDUWUIT_` prefixes respectively (e.g.
-`CONDUIT_SERVER_NAME`).
+This command-line argument can be paired with the `--option` flag.
