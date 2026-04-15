@@ -53,7 +53,7 @@ async fn create_leave_event(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), room_id)
+		.server_is_participant(services.globals.server_name(), room_id)
 		.await
 	{
 		info!(
