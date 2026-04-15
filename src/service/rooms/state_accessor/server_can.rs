@@ -34,7 +34,7 @@ pub async fn server_can_see_event(
 		return self
 			.services
 			.state_cache
-			.server_is_participant(origin, room_id)
+			.server_in_room(origin, room_id)
 			.await;
 	};
 

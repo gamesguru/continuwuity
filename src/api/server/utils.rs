@@ -41,7 +41,7 @@ pub(super) async fn check(&self) -> Result {
 		.services
 		.rooms
 		.state_cache
-		.server_is_participant(self.origin, self.room_id)
+		.server_in_room(self.origin, self.room_id)
 		.await;
 
 	if !server_in_room {

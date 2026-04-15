@@ -548,7 +548,7 @@ async fn handle_edu_receipt_room_user(
 	if !services
 		.rooms
 		.state_cache
-		.server_is_participant(origin, room_id)
+		.server_in_room(origin, room_id)
 		.await
 	{
 		debug_warn!(
