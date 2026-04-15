@@ -88,7 +88,7 @@ pub async fn leave_room(
 	let dont_have_room = services
 		.rooms
 		.state_cache
-		.server_is_participant(services.globals.server_name(), room_id)
+		.server_in_room(services.globals.server_name(), room_id)
 		.eq(&false);
 
 	let not_knocked = services
