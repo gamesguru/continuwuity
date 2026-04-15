@@ -173,6 +173,7 @@ pub(crate) async fn upload_signing_keys_route(
 	body: Ruma<upload_signing_keys::v3::Request>,
 ) -> Result<upload_signing_keys::v3::Response> {
 	let (sender_user, sender_device) = body.sender();
+
 	info!(
 		target: "cross_signing",
 		"Processing /keys/device_signing/upload request from {}/{}",
@@ -580,14 +581,22 @@ where
 					let json = serde_json::to_value(master_key).expect("to_value always works");
 					let raw = serde_json::from_value(json).expect("Raw::from_value always works");
 
-					services
+					if let Err(e) = services
 						.users
 						.add_cross_signing_keys(
 							&user, &raw, &None, &None,
 							false, /* Dont notify. A notification would trigger another key
 							       * request resulting in an endless loop */
 						)
-						.await?;
+						.await
+					{
+						info!(
+							target: "cross_signing",
+							"Failed to store updated master key for user {}: {}",
+							user, e
+						);
+						continue;
+					}
 
 					if let Some(raw) = raw {
 						master_keys.insert(user.clone(), raw);

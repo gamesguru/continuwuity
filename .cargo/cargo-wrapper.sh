@@ -6,7 +6,7 @@ shift
 
 CMD=("$RUSTC")
 
-if command -v sccache >/dev/null 2>&1; then
+if [[ -z "$NO_SCCACHE" ]] && command -v sccache >/dev/null 2>&1; then
     CMD=(sccache "$RUSTC")
 fi
 

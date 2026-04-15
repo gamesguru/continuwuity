@@ -849,6 +849,12 @@ impl Service {
 				serde_json::from_str(master_key.json().get())
 					.map_err(|e| err!(Database(debug_error!("Invalid master key JSON: {e}"))))?;
 
+			info!(
+				target: "cross_signing",
+				"Adding master cross-signing key for user {}",
+				user_id
+			);
+
 			let old_key = self
 				.db
 				.keyid_key
@@ -915,6 +921,12 @@ impl Service {
 			let mut self_signing_key_key = prefix.clone();
 			self_signing_key_key.extend_from_slice(self_signing_key_pub.as_bytes());
 
+			info!(
+				target: "cross_signing",
+				"Adding self-signing key for user {}",
+				user_id
+			);
+
 			let old_key = self
 				.db
 				.keyid_key
@@ -954,7 +966,6 @@ impl Service {
 				.insert(user_id.as_bytes(), &self_signing_key_key);
 		}
 
-		// User-signing key
 		if let Some(user_signing_key) = user_signing_key {
 			let mut user_signing_key_val: serde_json::Value =
 				serde_json::from_str(user_signing_key.json().get()).map_err(|e| {
@@ -963,6 +974,12 @@ impl Service {
 
 			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 			let user_signing_key_key = (user_id, &user_signing_key_id);
+
+			info!(
+				target: "cross_signing",
+				"Adding user-signing key for user {}",
+				user_id
+			);
 
 			let old_key = self
 				.db
@@ -1756,7 +1773,7 @@ where
 			if sender_user == Some(user_id) || sid == user_id || allowed_signatures(sid) {
 				signatures.insert(user, signature);
 			} else {
-				debug!(
+				info!(
 					target: "cross_signing",
 					"Dropped cross-signing signature for user {} (sender: {:?}, target: {})",
 					sid, sender_user, user_id

@@ -16,26 +16,29 @@ CSV := ".github/ellis_link_deps.csv"
 # Initialize the global build directory
 init-prebuild:
     @echo "Creating {{PREFIX}}/build and assigning ownership to $USER... (Requires sudo)"
-    sudo mkdir -p {{PREFIX}}/build
-    sudo chown -R $USER:$USER {{PREFIX}}/build
+    sudo mkdir -p {{PREFIX}}/build {{PREFIX}}/lib {{PREFIX}}/include {{PREFIX}}/bin
+    sudo chown -R $USER:$USER {{PREFIX}}/build {{PREFIX}}/lib {{PREFIX}}/include {{PREFIX}}/bin
     @echo "Done. You can now run prebuild commands."
 
 # Pre-build all C/C++ dependencies
-prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebuild-zstd prebuild-rocksdb
+prebuild-all: init-prebuild prebuild-jemalloc prebuild-lz4 prebuild-snappy prebuild-zstd prebuild-rocksdb prebuild-aws-lc
 
 # Install all pre-built C/C++ dependencies
-install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb
+install-all: install-jemalloc install-lz4 install-snappy install-zstd install-rocksdb install-aws-lc
 
 # Builds liburing
 prebuild-liburing:
     #!/usr/bin/env bash
     set -e
+    TAG=$(grep "^liburing," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^liburing," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
-    echo "Cloning and building liburing (attempting to match project version {{version}})"...
-    [ ! -d "{{PREFIX}}/build/liburing" ] && git clone https://github.com/axboe/liburing.git {{PREFIX}}/build/liburing || true
+    echo "Cloning and building liburing $TAG..."
+    [ ! -d "{{PREFIX}}/build/liburing" ] && git clone $REPO {{PREFIX}}/build/liburing || true
     cd {{PREFIX}}/build/liburing
-    git checkout liburing-{{version}} || echo "Warning: Tag liburing-{{version}} not found. Building from latest master instead."
-    ./configure
+    git fetch --all --tags
+    git checkout $TAG
+    ./configure --prefix={{PREFIX}}
     make -j$(nproc)
 
 # Installs liburing
@@ -48,10 +51,14 @@ install-liburing:
 prebuild-bzip2:
     #!/usr/bin/env bash
     set -e
+    TAG=$(grep "^bzip2," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^bzip2," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
-    echo "Cloning and building bzip2..."
-    [ ! -d "{{PREFIX}}/build/bzip2" ] && git clone git://sourceware.org/git/bzip2.git {{PREFIX}}/build/bzip2 || true
+    echo "Cloning and building bzip2 $TAG..."
+    [ ! -d "{{PREFIX}}/build/bzip2" ] && git clone $REPO {{PREFIX}}/build/bzip2 || true
     cd {{PREFIX}}/build/bzip2
+    git fetch --all --tags
+    git checkout $TAG
     make -f Makefile-libbz2_so
     make
 
@@ -68,12 +75,14 @@ install-bzip2:
 prebuild-jemalloc:
     #!/usr/bin/env bash
     set -e
-    TAG="5.3.0"
+    TAG=$(grep "^jemalloc," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^jemalloc," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning jemalloc $TAG..."
-    [ ! -d "{{PREFIX}}/build/jemalloc" ] && git clone --depth 1 --branch $TAG https://github.com/jemalloc/jemalloc.git {{PREFIX}}/build/jemalloc || true
+    [ ! -d "{{PREFIX}}/build/jemalloc" ] && git clone $REPO {{PREFIX}}/build/jemalloc || true
     echo "Building jemalloc..."
     cd {{PREFIX}}/build/jemalloc
+    git fetch --all --tags
     git checkout $TAG
     [ -f configure ] || ./autogen.sh
     [ -f Makefile ] || ./configure --prefix={{PREFIX}}
@@ -89,13 +98,14 @@ install-jemalloc:
 prebuild-lz4:
     #!/usr/bin/env bash
     set -e
-    VER=$(cargo pkgid lz4-sys | cut -d'@' -f2 | grep -o 'lz4-[0-9.]*' | cut -d '-' -f2)
-    TAG="v$VER"
+    TAG=$(grep "^lz4," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^lz4," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning lz4 $TAG..."
-    [ ! -d "{{PREFIX}}/build/lz4" ] && git clone --depth 1 --branch $TAG https://github.com/lz4/lz4.git {{PREFIX}}/build/lz4 || true
+    [ ! -d "{{PREFIX}}/build/lz4" ] && git clone $REPO {{PREFIX}}/build/lz4 || true
     echo "Building lz4..."
     cd {{PREFIX}}/build/lz4
+    git fetch --all --tags
     git checkout $TAG
     make lib -j$(nproc)
 
@@ -114,23 +124,35 @@ prebuild-rocksdb:
         hostname() { uname -n; }
         export -f hostname
     fi
-    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 || true)
+    TAG=$(grep "^rocksdb," {{CSV}} | cut -d',' -f4 | tr -d '\r' || true)
     if [ -z "$TAG" ]; then
-        TAG="continuwuity-v0.5.0"
+        TAG="v10.5.1"
     fi
-    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 || true)
+    REPO=$(grep "^rocksdb," {{CSV}} | cut -d',' -f3 | tr -d '\r' || true)
     if [ -z "$REPO" ]; then
-        REPO="https://forgejo.ellis.link/continuwuation/rocksdb.git"
+        REPO="https://github.com/facebook/rocksdb.git"
     fi
     sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning rocksdb $TAG..."
     if [ ! -d "{{PREFIX}}/build/rocksdb" ]; then
         git clone --recursive "$REPO" {{PREFIX}}/build/rocksdb
+    else
+        (cd {{PREFIX}}/build/rocksdb && git remote set-url origin "$REPO")
     fi
     echo "Building RocksDB..."
     cd {{PREFIX}}/build/rocksdb
-    git fetch origin
-    git checkout "$TAG"
+
+    # Use --all --tags to support arbitrary commit hashes from the CSV
+    git fetch --all --tags
+    git reset --hard "$TAG"
+
+    # Disable ccache auto-detection ONLY if we are already using sccache
+    if [[ "$CC" == *"sccache"* ]]; then
+        export USE_CCACHE=0
+    fi
+
+    # Clean build directory to avoid issues with stale dependency files
+    # make clean
 
     # Build core libraries explicitly WITHOUT RTTI
     env ROCKSDB_NO_FBCODE=1 ROCKSDB_DISABLE_BENCHMARK=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I{{PREFIX}}/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L{{PREFIX}}/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
@@ -142,9 +164,9 @@ prebuild-rocksdb:
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
     @echo "Installing RocksDB to {{PREFIX}}... (Requires sudo)"
-    cd {{PREFIX}}/build/rocksdb && sudo make install-shared INSTALL_PATH={{PREFIX}}
-    cd {{PREFIX}}/build/rocksdb && sudo make install-static INSTALL_PATH={{PREFIX}}
-    sudo cp -p {{PREFIX}}/build/rocksdb/ldb {{PREFIX}}/bin/ldb
+    cd {{PREFIX}}/build/rocksdb && sudo make install-shared PREFIX={{PREFIX}}
+    cd {{PREFIX}}/build/rocksdb && sudo make install-static PREFIX={{PREFIX}}
+    sudo install -m 755 {{PREFIX}}/build/rocksdb/ldb {{PREFIX}}/bin/ldb
     sudo ldconfig
     @echo "Remember to set ROCKSDB_LIB_DIR={{PREFIX}}/lib if Cargo doesn't see it."
 
@@ -152,20 +174,35 @@ install-rocksdb:
 prebuild-snappy:
     #!/usr/bin/env bash
     set -e
-    TAG="1.2.1"
+    TAG=$(grep "^snappy," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^snappy," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning snappy $TAG..."
-    [ ! -d "{{PREFIX}}/build/snappy" ] && git clone --depth 1 --branch $TAG https://github.com/google/snappy.git {{PREFIX}}/build/snappy || true
+    if [ ! -d "{{PREFIX}}/build/snappy" ]; then
+        git clone $REPO {{PREFIX}}/build/snappy
+    fi
     echo "Building snappy..."
     cd {{PREFIX}}/build/snappy
+    git fetch origin
     git checkout $TAG
     sed -i 's/cmake_minimum_required(VERSION 3.1)/cmake_minimum_required(VERSION 3.10)/' CMakeLists.txt
+    # Use sccache compiler launcher if available
+    if command -v sccache >/dev/null 2>&1; then
+        export CMAKE_C_COMPILER_LAUNCHER=sccache
+        export CMAKE_CXX_COMPILER_LAUNCHER=sccache
+        # Use explicit base compilers to avoid double-wrapping with sccache
+        export CC=cc
+        export CXX=c++
+    fi
+
     mkdir -p build_static && cd build_static
-    cmake -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    # rm -f CMakeCache.txt
+    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=OFF -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
     cd ..
     mkdir -p build_shared && cd build_shared
-    cmake -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
+    # rm -f CMakeCache.txt
+    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_SHARED_LIBS=ON -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF ..
     make -j$(nproc)
 
 # Install snappy globally (requires sudo)
@@ -179,13 +216,14 @@ install-snappy:
 prebuild-zstd:
     #!/usr/bin/env bash
     set -e
-    VER=$(cargo pkgid zstd-sys | cut -d'@' -f2 | grep -o 'zstd\.[0-9.]*' | cut -d '.' -f2-)
-    TAG="v$VER"
+    TAG=$(grep "^zstd," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^zstd," {{CSV}} | cut -d',' -f3 | tr -d '\r')
     sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
     echo "Cloning zstd $TAG..."
-    [ ! -d "{{PREFIX}}/build/zstd" ] && git clone --depth 1 --branch $TAG https://github.com/facebook/zstd.git {{PREFIX}}/build/zstd || true
+    [ ! -d "{{PREFIX}}/build/zstd" ] && git clone $REPO {{PREFIX}}/build/zstd || true
     echo "Building zstd..."
     cd {{PREFIX}}/build/zstd
+    git fetch --all --tags
     git checkout $TAG
     make lib-release -j$(nproc)
 
@@ -193,6 +231,37 @@ prebuild-zstd:
 install-zstd:
     @echo "Installing zstd to {{PREFIX}}... (Requires sudo)"
     cd {{PREFIX}}/build/zstd && sudo make install -C lib PREFIX={{PREFIX}}
+    sudo ldconfig
+
+# Pre-build aws-lc
+prebuild-aws-lc:
+    #!/usr/bin/env bash
+    set -e
+    TAG=$(grep "^aws-lc," {{CSV}} | cut -d',' -f4 | tr -d '\r')
+    REPO=$(grep "^aws-lc," {{CSV}} | cut -d',' -f3 | tr -d '\r')
+    sudo mkdir -p {{PREFIX}}/build && sudo chown -R $USER:$USER {{PREFIX}}/build
+    echo "Cloning aws-lc $TAG..."
+    [ ! -d "{{PREFIX}}/build/aws-lc" ] && git clone $REPO {{PREFIX}}/build/aws-lc || true
+    echo "Building aws-lc..."
+    cd {{PREFIX}}/build/aws-lc
+    git fetch --all --tags
+    git checkout $TAG
+    # aws-lc (boringssl) has issues with sccache wrapping during CMake checks
+    export NO_SCCACHE=1
+    unset CC
+    unset CXX
+    unset CMAKE_C_COMPILER_LAUNCHER
+    unset CMAKE_CXX_COMPILER_LAUNCHER
+
+    mkdir -p build && cd build
+    # rm -f CMakeCache.txt
+    cmake -DCMAKE_INSTALL_PREFIX={{PREFIX}} -DBUILD_TESTING=OFF -DBUILD_LIBSSL=ON ..
+    make -j$(nproc)
+
+# Install aws-lc globally (requires sudo)
+install-aws-lc:
+    @echo "Installing aws-lc to {{PREFIX}}... (Requires sudo)"
+    cd {{PREFIX}}/build/aws-lc/build && sudo make install
     sudo ldconfig
 
 # --- CPU Profiling ---
