@@ -18,39 +18,51 @@ nameserver 127.0.0.1
 
 ### For Docker users
 
-Docker bridge networks uses a non-performant resolver to intercept and respond to container hostnames, and **this should also be avoided**. Instead, mount a custom `/etc/resolv.conf` file into the container, and hardcode a resolver address to bypass Docker's.
+Docker bridge networks uses a non-performant resolver to intercept and respond to container hostnames, and **this should also be avoided**. Instead, use the `dns:` key in your `docker-compose.yml` or mount a custom `/etc/resolv.conf` file into the container to bypass Docker's internal resolver.
 
-It is recommended to run a dedicated resolver container for Continuwuity, as to separate from the host's resolver setup. To do this, create a custom bridge network and IP range, and explicitly define an IP address for the resolver container.
+It is recommended to run a dedicated resolver container (like Unbound) for Continuwuity. Our default `docker-compose.yml` includes an Unbound sidecar configured this way.
 
 <details>
 <summary>Example Docker deployment with unbound</summary>
 
 ```yaml title="docker-compose.yml"
-networks:
-  matrix_net:
-    ipam:
-      driver: default
-      config:
-        - subnet: "10.10.10.0/24"
-
 services:
     homeserver:
         # ...
-        volume:
-            - ./continuwuity-resolv.conf:/etc/resolv.conf:ro
+        dns:
+            - 10.10.10.20
+        networks:
+            - continuwuity_net
 
     unbound:
-        # ...
+        image: madnuttah/unbound:latest
+        restart: unless-stopped
         networks:
-            matrix_net:
+            continuwuity_net:
                 ipv4_address: 10.10.10.20
-```
 
-```txt title="continuwuity-resolv.conf"
-nameserver 10.10.10.20
+networks:
+    continuwuity_net:
+        ipam:
+            config:
+                - subnet: 10.10.10.0/24
 ```
 
 </details>
+
+### Fallback DNS
+
+If Continuwuity is running in an environment where no system nameservers can be found (common in `scratch` Docker images without a sidecar), it will use its internal fallback mechanism.
+
+By default, it uses **Quad9 (9.9.9.9)**, a privacy-respecting, non-logging resolver. You can override this in your configuration:
+
+```toml title="continuwuity.toml"
+[global]
+# List of fallback DNS servers
+dns_fallbacks = ["9.9.9.9", "1.1.1.1"]
+```
+
+**Note:** Fallbacks are only used if no system-level nameservers are available.
 
 ### For IPv4-only users
 

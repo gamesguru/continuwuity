@@ -7,9 +7,12 @@ services:
         command: /sbin/conduwuit
         ports:
             - 127.0.0.1:8008:8008
+        dns:
+            - 10.10.10.20
+        networks:
+            - continuwuity_net
         volumes:
             - db:/var/lib/continuwuity
-            - ./continuwuity-resolv.conf:/etc/resolv.conf # use custom resolvers rather than Docker's
             #- ./continuwuity.toml:/etc/continuwuity.toml
         environment:
             CONTINUWUITY_SERVER_NAME: example.com # EDIT THIS
@@ -26,6 +29,18 @@ services:
             #     server=example.com:443
             #     }
 
+    unbound:
+        image: madnuttah/unbound:latest
+        restart: unless-stopped
+        networks:
+            continuwuity_net:
+                ipv4_address: 10.10.10.20
+
+networks:
+    continuwuity_net:
+        ipam:
+            config:
+                - subnet: 10.10.10.0/24
 
 volumes:
     db:
