@@ -369,54 +369,14 @@ impl Service {
 	}
 
 	/// Returns the room's version.
-	/// Returns the room's version.
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub async fn get_room_version(&self, room_id: &RoomId) -> Result<RoomVersionId> {
-		if let Ok(content) = self
-			.services
+		self.services
 			.state_accessor
-			.room_state_get_content::<RoomCreateEventContent>(
-				room_id,
-				&StateEventType::RoomCreate,
-				"",
-			)
+			.room_state_get_content(room_id, &StateEventType::RoomCreate, "")
 			.await
-		{
-			return Ok(content.room_version);
-		}
-
-		// If we're not in the room, check if we have stripped state from an invite or
-		// knock
-		let mut users = Box::pin(
-			self.services
-				.state_cache
-				.active_local_users_in_room(room_id),
-		);
-		if let Some(user_id) = users.next().await {
-			let stripped_state = self
-				.services
-				.state_cache
-				.invite_state(user_id, room_id)
-				.await;
-			let stripped_state = match stripped_state {
-				| Ok(s) => Ok(s),
-				| Err(_) =>
-					self.services
-						.state_cache
-						.knock_state(user_id, room_id)
-						.await,
-			};
-
-			if let Ok(stripped_state) = stripped_state {
-				for event in stripped_state {
-					if let Ok(AnyStrippedStateEvent::RoomCreate(content)) = event.deserialize() {
-						return Ok(content.content.room_version);
-					}
-				}
-			}
-		}
-
-		Err(err!(Request(NotFound("No create event found for room {room_id}"))))
+			.map(|content: RoomCreateEventContent| content.room_version)
+			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
