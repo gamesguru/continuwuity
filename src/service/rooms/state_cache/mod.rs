@@ -232,7 +232,7 @@ pub fn server_rooms<'a>(
 
 /// Returns true if server can see user by sharing at least one room.
 #[implement(Service)]
-#[tracing::instrument(skip(self), level = "trace")]
+#[tracing::instrument(skip(self), level = "debug")]
 pub async fn server_sees_user(&self, server: &ServerName, user_id: &UserId) -> bool {
 	let key = (server.to_owned(), user_id.to_owned());
 	if let Some(sees) = self.server_visibility_cache.get(&key) {
@@ -241,7 +241,10 @@ pub async fn server_sees_user(&self, server: &ServerName, user_id: &UserId) -> b
 
 	let sees = self
 		.server_rooms(server)
-		.any(|room_id| self.is_joined(user_id, room_id))
+		.any(|room_id| async move {
+			self.is_invited_or_joined(user_id, room_id).await
+				|| self.is_knocked(user_id, room_id).await
+		})
 		.await;
 
 	self.server_visibility_cache.insert(key, sees);
@@ -616,6 +619,17 @@ pub async fn is_invited(&self, user_id: &UserId, room_id: &RoomId) -> bool {
 	self.db.userroomid_invitestate.qry(&key).await.is_ok()
 }
 
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "trace")]
+pub async fn is_invited_or_joined(&self, user_id: &UserId, room_id: &RoomId) -> bool {
+	self.is_joined(user_id, room_id).await || self.is_invited(user_id, room_id).await
+}
+
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "trace")]
+pub async fn is_knocked_or_joined(&self, user_id: &UserId, room_id: &RoomId) -> bool {
+	self.is_joined(user_id, room_id).await || self.is_knocked(user_id, room_id).await
+}
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn is_left(&self, user_id: &UserId, room_id: &RoomId) -> bool {

@@ -51,18 +51,14 @@ pub async fn server_can_see_event(
 			// Allow if any member on requesting server was AT LEAST invited, else deny
 			self.services
 				.state_cache
-				.room_members(room_id)
-				.ready_filter(|member| member.server_name() == origin)
-				.any(|member| self.user_was_invited(shortstatehash, member))
+				.server_is_participant(origin, room_id)
 				.await
 		},
 		| HistoryVisibility::Joined => {
 			// Allow if any member on requesting server was joined, else deny
 			self.services
 				.state_cache
-				.room_members(room_id)
-				.ready_filter(|member| member.server_name() == origin)
-				.any(|member| self.user_was_joined(shortstatehash, member))
+				.server_in_room(origin, room_id)
 				.await
 		},
 		| _ => true,
