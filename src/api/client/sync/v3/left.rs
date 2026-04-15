@@ -1,14 +1,21 @@
 use conduwuit::{
-	Event, PduEvent, Result, at, debug_warn,
+	Event, PduCount, PduEvent, Result, at, debug_warn, info,
 	pdu::EventHash,
 	trace,
-	utils::{self, IterStream, future::ReadyEqExt, stream::WidebandExt as _},
+	utils::{
+		self, IterStream,
+		future::ReadyEqExt,
+		stream::{ReadyExt, WidebandExt as _},
+	},
 };
-use futures::{StreamExt, future::join};
+use futures::{
+	StreamExt,
+	future::{OptionFuture, join},
+};
 use ruma::{
 	EventId, OwnedRoomId, RoomId,
 	api::client::sync::sync_events::v3::{LeftRoom, RoomAccountData, State, Timeline},
-	events::{AnySyncStateEvent, StateEventType, TimelineEventType},
+	events::{AnySyncStateEvent, AnySyncTimelineEvent, StateEventType, TimelineEventType},
 	serde::Raw,
 	uint,
 };
@@ -21,7 +28,7 @@ use crate::client::{
 		load_timeline,
 		v3::{
 			DEFAULT_TIMELINE_LIMIT, SyncContext, prepare_lazily_loaded_members,
-			state::build_state_initial,
+			state::{build_state_incremental, build_state_initial},
 		},
 	},
 };
@@ -87,6 +94,17 @@ pub(super) async fn load_left_room(
 		);
 	}
 
+	let last_sync_end_shortstatehash: OptionFuture<_> = last_sync_end_count
+		.map(|last_sync_end_count| {
+			services
+				.rooms
+				.user
+				.get_token_shortstatehash(room_id, last_sync_end_count)
+		})
+		.into();
+
+	let last_sync_end_shortstatehash = last_sync_end_shortstatehash.await.and_then(Result::ok);
+
 	let does_not_exist = services.rooms.metadata.exists(room_id).eq(&false).await;
 
 	let (timeline, state_events, leave_shortstatehash) = match leave_membership_event {
@@ -137,6 +155,14 @@ pub(super) async fn load_left_room(
 				)
 				.await?;
 
+			let last_sync_end_shortstatehash = if last_sync_end_shortstatehash.is_none()
+				&& last_sync_end_count.is_some_and(|c| c >= left_count)
+			{
+				Some(leave_shortstatehash)
+			} else {
+				last_sync_end_shortstatehash
+			};
+
 			let (timeline, state_events) = build_left_state_and_timeline(
 				services,
 				sync_context,
@@ -144,11 +170,13 @@ pub(super) async fn load_left_room(
 				leave_membership_event,
 				leave_shortstatehash,
 				prev_membership_event,
+				last_sync_end_shortstatehash,
 			)
 			.await?;
 
 			(timeline, state_events, Some(leave_shortstatehash))
 		},
+
 		| None => {
 			/*
 			no leave event was actually sent in this room, but we still need to pretend
@@ -197,16 +225,65 @@ pub(super) async fn load_left_room(
 		Vec::new()
 	};
 
-	let raw_timeline_pdus = timeline
+	// filter out ignored events from the timeline
+	let raw_timeline_pdus: Vec<Raw<AnySyncTimelineEvent>> = timeline
 		.pdus
 		.into_iter()
 		.stream()
-		// filter out ignored events from the timeline
 		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
+		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
+			let event_type = pdu.event_type().to_string();
+			let timeline_filter = &filter.room.timeline;
+
+			let types_ok = match &timeline_filter.types {
+				| Some(types) => types.contains(&event_type),
+				| None => true,
+			};
+
+			let not_types_ok = !timeline_filter.not_types.contains(&event_type);
+
+			let senders_ok = match &timeline_filter.senders {
+				| Some(senders) => senders.contains(&pdu.sender),
+				| None => true,
+			};
+
+			let not_senders_ok = !timeline_filter.not_senders.contains(&pdu.sender);
+
+			types_ok && not_types_ok && senders_ok && not_senders_ok
+		})
 		.map(at!(1))
 		.map(Event::into_format)
 		.collect::<Vec<_>>()
 		.await;
+
+	let state_events: Vec<Raw<AnySyncStateEvent>> = state_events
+		.into_iter()
+		.filter(|pdu| {
+			let event_type = pdu.event_type().to_string();
+			let state_filter = &filter.room.state;
+
+			let types_ok = match &state_filter.types {
+				| Some(types) => types.contains(&event_type),
+				| None => true,
+			};
+
+			let not_types_ok = !state_filter.not_types.contains(&event_type);
+
+			let senders_ok = match &state_filter.senders {
+				| Some(senders) => senders.contains(&pdu.sender),
+				| None => true,
+			};
+
+			let not_senders_ok = !state_filter.not_senders.contains(&pdu.sender);
+
+			types_ok && not_types_ok && senders_ok && not_senders_ok
+		})
+		.map(Event::into_format)
+		.collect();
+
+	if last_sync_end_count.is_some() && raw_timeline_pdus.is_empty() && state_events.is_empty() {
+		return Ok(None);
+	}
 
 	Ok(Some((
 		LeftRoom {
@@ -216,9 +293,7 @@ pub(super) async fn load_left_room(
 				prev_batch: Some(current_count.to_string()),
 				events: raw_timeline_pdus,
 			},
-			state: State {
-				events: state_events.into_iter().map(Event::into_format).collect(),
-			},
+			state: State { events: state_events },
 		},
 		state_after,
 	)))
@@ -231,14 +306,27 @@ async fn build_left_state_and_timeline(
 	leave_membership_event: PduEvent,
 	leave_shortstatehash: ShortStateHash,
 	prev_membership_event: PduEvent,
+	last_sync_end_shortstatehash: Option<ShortStateHash>,
 ) -> Result<(TimelinePdus, Vec<PduEvent>)> {
-	let SyncContext { syncing_user, filter, .. } = sync_context;
+	let SyncContext {
+		syncing_user,
+		last_sync_end_count,
+		filter,
+		..
+	} = sync_context;
 
-	let timeline_start_count = services
+	let join_count = services
 		.rooms
 		.timeline
 		.get_pdu_count(&prev_membership_event.event_id)
 		.await?;
+
+	// if this is an incremental sync, we only need to return events since the last
+	// sync.
+	let timeline_start_count = last_sync_end_count
+		.map(PduCount::Normal)
+		.filter(|&last_sync_end_count| last_sync_end_count > join_count)
+		.unwrap_or(join_count);
 
 	// end the timeline at the user's leave event
 	let timeline_end_count = services
@@ -277,9 +365,8 @@ async fn build_left_state_and_timeline(
 			}
 		}
 
-		// the timeline generally should not be empty (see the TODO further down),
-		// but in case it is we use `leave_shortstatehash` as the state to
-		// send
+		// the timeline generally should not be empty, but in case it is we use
+		// `leave_shortstatehash` as the state to send
 		leave_shortstatehash
 	};
 
@@ -289,16 +376,39 @@ async fn build_left_state_and_timeline(
 	let (timeline_start_shortstatehash, lazily_loaded_members) =
 		join(timeline_start_shortstatehash, lazily_loaded_members).await;
 
-	// TODO: calculate incremental state for incremental syncs.
-	// always calculating initial state _works_ but returns more data and does
-	// more processing than strictly necessary.
-	let mut state = build_state_initial(
-		services,
-		syncing_user,
-		timeline_start_shortstatehash,
-		lazily_loaded_members.as_ref(),
-	)
-	.await?;
+	// compute the state delta between the previous sync and this sync.
+	let state = match (last_sync_end_count, last_sync_end_shortstatehash) {
+		| (Some(last_sync_end_count), Some(last_sync_end_shortstatehash)) => {
+			let timeline_end_shortstatehash = services
+				.rooms
+				.state_accessor
+				.pdu_shortstatehash(leave_membership_event.event_id())
+				.await?;
+
+			build_state_incremental(
+				services,
+				syncing_user,
+				room_id,
+				PduCount::Normal(last_sync_end_count),
+				last_sync_end_shortstatehash,
+				timeline_start_shortstatehash,
+				timeline_end_shortstatehash,
+				&timeline,
+				lazily_loaded_members.as_ref(),
+			)
+			.await?
+		},
+		| _ =>
+			build_state_initial(
+				services,
+				syncing_user,
+				timeline_start_shortstatehash,
+				lazily_loaded_members.as_ref(),
+			)
+			.await?,
+	};
+
+	let mut state = state;
 
 	/*
 	remove membership events for the syncing user from state.
@@ -326,10 +436,28 @@ async fn build_left_state_and_timeline(
 
 	if let Some(index) = membership_event_index {
 		// the ordering of events in `state` does not matter
-		state.swap_remove(index);
+		// we only remove it if it is already in the timeline
+		if timeline
+			.pdus
+			.iter()
+			.any(|(_, timeline_pdu)| timeline_pdu.event_id == state[index].event_id)
+		{
+			state.swap_remove(index);
+		}
 	}
 
-	trace!(
+	let state: Vec<_> = state
+		.into_iter()
+		.filter(|pdu| {
+			!timeline
+				.pdus
+				.iter()
+				.any(|(_, timeline_pdu)| timeline_pdu.event_id == pdu.event_id)
+		})
+		.collect();
+
+	info!(
+		target: "conduwuit::api::client::sync",
 		%timeline_start_count,
 		%timeline_end_count,
 		"syncing {} timeline events (limited = {}) and {} state events",
