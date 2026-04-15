@@ -21,14 +21,14 @@ use conduwuit::{
 };
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, OwnedRoomId, OwnedServerName, OwnedUserId, RoomId,
-	RoomVersionId, UserId,
+	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedServerName,
+	OwnedUserId, RoomId, RoomVersionId, UserId,
 	api::{
 		client::{
 			error::ErrorKind,
 			membership::{join_room_by_id, join_room_by_id_or_alias},
 		},
-		federation::{self},
+		federation::{self, membership::create_join_event},
 	},
 	canonical_json::to_canonical_value,
 	events::{
@@ -376,6 +376,26 @@ async fn join_room_by_id_helper_remote(
 	servers: &[OwnedServerName],
 	state_lock: RoomMutexGuard,
 ) -> Result {
+	join_room_by_id_helper_remote_impl(
+		services,
+		sender_user,
+		room_id,
+		reason,
+		servers,
+		state_lock,
+	)
+	.boxed()
+	.await
+}
+
+async fn join_room_by_id_helper_remote_impl(
+	services: &Services,
+	sender_user: &UserId,
+	room_id: &RoomId,
+	reason: Option<String>,
+	servers: &[OwnedServerName],
+	state_lock: RoomMutexGuard,
+) -> Result {
 	info!("Joining {room_id} over federation.");
 
 	let (make_join_response, remote_server) =
@@ -473,7 +493,7 @@ async fn join_room_by_id_helper_remote(
 	let mut join_event = join_event_stub;
 
 	info!("Asking {remote_server} for send_join in room {room_id}");
-	let send_join_request = federation::membership::create_join_event::v2::Request {
+	let send_join_request = create_join_event::v2::Request {
 		room_id: room_id.to_owned(),
 		event_id: event_id.clone(),
 		omit_members: false,
@@ -571,20 +591,41 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	info!("Going through send_join response room_state");
+	let state = process_send_join_response(
+		services,
+		room_id,
+		&room_version_id,
+		&send_join_response.room_state,
+	)
+	.await;
+
+	debug!("Running send_join auth check");
+	verify_join_auth(services, &room_version_id, &parsed_join_pdu, &state).await?;
+
+	apply_join_state(services, room_id, &state, &parsed_join_pdu, join_event, &state_lock).await
+}
+
+async fn process_send_join_response(
+	services: &Services,
+	room_id: &RoomId,
+	room_version_id: &RoomVersionId,
+	room_state: &create_join_event::v2::RoomState,
+) -> HashMap<u64, OwnedEventId> {
 	let cork = services.db.cork_and_flush();
-	let state = send_join_response
-		.room_state
+	let state = room_state
 		.state
 		.iter()
 		.stream()
 		.then(|pdu| {
 			services
 				.server_keys
-				.validate_and_add_event_id(pdu, &room_version_id)
+				.validate_and_add_event_id(pdu, room_version_id)
 				.inspect_err(|e| {
 					debug_warn!("Could not validate send_join response room_state event: {e:?}");
 				})
-				.inspect(|_| debug!("Completed validating send_join response room_state event"))
+				.inspect(|_| {
+					debug!("Completed validating send_join response room_state event");
+				})
 		})
 		.ready_filter_map(Result::ok)
 		.fold(HashMap::new(), |mut state, (event_id, value)| async move {
@@ -620,15 +661,14 @@ async fn join_room_by_id_helper_remote(
 
 	info!("Going through send_join response auth_chain");
 	let cork = services.db.cork_and_flush();
-	send_join_response
-		.room_state
+	room_state
 		.auth_chain
 		.iter()
 		.stream()
 		.then(|pdu| {
 			services
 				.server_keys
-				.validate_and_add_event_id(pdu, &room_version_id)
+				.validate_and_add_event_id(pdu, room_version_id)
 		})
 		.ready_filter_map(Result::ok)
 		.ready_for_each(|(event_id, value)| {
@@ -639,18 +679,25 @@ async fn join_room_by_id_helper_remote(
 
 	drop(cork);
 
-	debug!("Running send_join auth check");
-	let fetch_state = &state;
+	state
+}
+
+async fn verify_join_auth(
+	services: &Services,
+	room_version_id: &RoomVersionId,
+	parsed_join_pdu: &PduEvent,
+	state: &HashMap<u64, OwnedEventId>,
+) -> Result {
 	let state_fetch = |k: StateEventType, s: StateKey| async move {
 		let shortstatekey = services.rooms.short.get_shortstatekey(&k, &s).await.ok()?;
 
-		let event_id = fetch_state.get(&shortstatekey)?;
+		let event_id = state.get(&shortstatekey)?;
 		services.rooms.timeline.get_pdu(event_id).await.ok()
 	};
 
 	let auth_check = state_res::event_auth::auth_check(
-		&state_res::RoomVersion::new(&room_version_id)?,
-		&parsed_join_pdu,
+		&state_res::RoomVersion::new(room_version_id)?,
+		parsed_join_pdu,
 		None, // TODO: third party invite
 		|k, s| state_fetch(k.clone(), s.into()),
 		&state_fetch(StateEventType::RoomCreate, "".into())
@@ -664,12 +711,27 @@ async fn join_room_by_id_helper_remote(
 		return Err!(Request(Forbidden("Auth check failed")));
 	}
 
+	Ok(())
+}
+
+async fn apply_join_state(
+	services: &Services,
+	room_id: &RoomId,
+	state: &HashMap<u64, OwnedEventId>,
+	parsed_join_pdu: &PduEvent,
+	join_event: CanonicalJsonObject,
+	state_lock: &RoomMutexGuard,
+) -> Result {
 	info!("Compressing state from send_join");
 	let _cork = services.db.cork_and_flush();
 	let compressed: CompressedState = services
 		.rooms
 		.state_compressor
-		.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, eid.borrow())))
+		.compress_state_events(
+			state
+				.iter()
+				.map(|(ssk, eid): (&u64, &OwnedEventId)| (ssk, eid.borrow())),
+		)
 		.collect()
 		.await;
 
@@ -688,7 +750,7 @@ async fn join_room_by_id_helper_remote(
 	services
 		.rooms
 		.state
-		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
+		.force_state(room_id, statehash_before_join, added, removed, state_lock)
 		.await?;
 
 	debug!("Updating joined counts for new room");
@@ -704,7 +766,7 @@ async fn join_room_by_id_helper_remote(
 	let statehash_after_join = services
 		.rooms
 		.state
-		.append_to_state(&parsed_join_pdu, room_id)
+		.append_to_state(parsed_join_pdu, room_id)
 		.await?;
 
 	info!("Appending new room join event");
@@ -712,10 +774,10 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.timeline
 		.append_pdu(
-			&parsed_join_pdu,
+			parsed_join_pdu,
 			join_event,
 			once(parsed_join_pdu.event_id.borrow()),
-			&state_lock,
+			state_lock,
 			room_id,
 		)
 		.await?;
@@ -726,7 +788,7 @@ async fn join_room_by_id_helper_remote(
 	services
 		.rooms
 		.state
-		.set_room_state(room_id, statehash_after_join, &state_lock);
+		.set_room_state(room_id, statehash_after_join, state_lock);
 
 	Ok(())
 }
