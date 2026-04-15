@@ -186,6 +186,11 @@ pub fn room_servers<'a>(
 		.keys_prefix(&prefix)
 		.ignore_err()
 		.map(|(_, server): (Ignore, &ServerName)| server)
+		.chain(
+			self.room_members_invited(room_id)
+				.chain(self.room_members_knocked(room_id))
+				.map(|user| user.server_name()),
+		)
 }
 
 #[implement(Service)]

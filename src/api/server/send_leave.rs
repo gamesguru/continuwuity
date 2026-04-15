@@ -58,7 +58,7 @@ async fn create_leave_event(
 	{
 		info!(
 			origin = origin.as_str(),
-			"Refusing to serve backfill for room we aren't participating in"
+			"Refusing to serve send_leave for room we aren't participating in"
 		);
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}

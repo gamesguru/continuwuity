@@ -43,6 +43,19 @@ async fn create_join_event(
 		.acl_check(origin, room_id)
 		.await?;
 
+	if !services
+		.rooms
+		.state_cache
+		.server_is_participant(services.globals.server_name(), room_id)
+		.await
+	{
+		info!(
+			origin = origin.as_str(),
+			"Refusing to serve send_join for room we aren't participating in"
+		);
+		return Err!(Request(NotFound("This server is not participating in that room.")));
+	}
+
 	// We need to return the state prior to joining, let's keep a reference to that
 	// here
 	let shortstatehash = services
