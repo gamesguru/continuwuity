@@ -18,7 +18,7 @@ nameserver 127.0.0.1
 
 ### For Docker users
 
-Docker bridge networks uses a non-performant resolver to intercept and respond to container hostnames, and **this should also be avoided**. Instead, use the `dns:` key in your `docker-compose.yml` or mount a custom `/etc/resolv.conf` file into the container to bypass Docker's internal resolver.
+Docker bridge networks use a non-performant resolver to intercept and respond to container hostnames, and **this should also be avoided**. Instead, use the `dns:` key in your `docker-compose.yml` or mount a custom `/etc/resolv.conf` file into the container to bypass Docker's internal resolver.
 
 It is recommended to run a dedicated resolver container (like Unbound) for Continuwuity. Our default `docker-compose.yml` includes an Unbound sidecar configured this way.
 

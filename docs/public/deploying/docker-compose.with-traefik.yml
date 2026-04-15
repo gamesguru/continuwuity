@@ -5,6 +5,10 @@ services:
     image: forgejo.ellis.link/continuwuation/continuwuity:latest
     restart: unless-stopped
     command: /sbin/conduwuit
+    depends_on:
+      - unbound
+    depends_on:
+      - unbound
     dns:
       - 10.10.10.20
     volumes:

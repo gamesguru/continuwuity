@@ -9,6 +9,8 @@ services:
             - 127.0.0.1:8008:8008
         dns:
             - 10.10.10.20
+        depends_on:
+            - unbound
         networks:
             - continuwuity_net
         volumes:

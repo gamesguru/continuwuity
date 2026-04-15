@@ -26,7 +26,8 @@ impl Resolver {
 	pub(crate) fn build(server: &Arc<Server>, cache: Arc<Cache>) -> Result<Arc<Self>> {
 		let config = &server.config;
 		let (sys_conf, mut opts) = hickory_resolver::system_conf::read_system_conf()
-			.unwrap_or_else(|_| {
+			.unwrap_or_else(|e| {
+				tracing::warn!("Failed to read system DNS configuration: {e}. Falling back to defaults.");
 				(
 					hickory_resolver::config::ResolverConfig::new(),
 					hickory_resolver::config::ResolverOpts::default(),
