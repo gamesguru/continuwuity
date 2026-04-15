@@ -8,7 +8,10 @@ use database::{Deserialized, Json, Map};
 use futures::{Stream, StreamExt};
 use ruma::{
 	CanonicalJsonObject, OwnedUserId, RoomId, UserId,
-	events::{AnySyncEphemeralRoomEvent, receipt::ReceiptEvent},
+	events::{
+		AnySyncEphemeralRoomEvent,
+		receipt::{ReceiptEvent, ReceiptType},
+	},
 	serde::Raw,
 };
 
@@ -46,14 +49,51 @@ impl Data {
 		room_id: &RoomId,
 		event: &ReceiptEvent,
 	) {
-		// Remove old entry
+		let new_thread = event
+			.content
+			.0
+			.values()
+			.next()
+			.and_then(|types| types.get(&ReceiptType::Read))
+			.and_then(|users| users.get(user_id))
+			.map(|receipt| &receipt.thread);
+
+		// Remove old entry for the same thread
 		let last_possible_key = (room_id, u64::MAX);
 		self.readreceiptid_readreceipt
-			.rev_keys_from_raw(&last_possible_key)
+			.rev_stream_from_raw(&last_possible_key)
 			.ignore_err()
-			.ready_take_while(|key| key.starts_with(room_id.as_bytes()))
-			.ready_filter_map(|key| key.ends_with(user_id.as_bytes()).then_some(key))
-			.ready_for_each(|key| self.readreceiptid_readreceipt.del(key))
+			.ready_take_while(|(key, _)| {
+				key.starts_with(room_id.as_bytes())
+					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
+			})
+			.ready_filter_map(|(key, value)| {
+				let user_id_bytes = user_id.as_bytes();
+				if key.ends_with(user_id_bytes)
+					&& key
+						.len()
+						.checked_sub(user_id_bytes.len())
+						.and_then(|len| len.checked_sub(1))
+						.and_then(|idx| key.get(idx))
+						== Some(&database::SEP)
+				{
+					let receipt = serde_json::from_slice::<ReceiptEvent>(value).ok()?;
+					let old_thread = receipt
+						.content
+						.0
+						.values()
+						.next()
+						.and_then(|types| types.get(&ReceiptType::Read))
+						.and_then(|users| users.get(user_id))
+						.map(|receipt| &receipt.thread);
+
+					if old_thread == new_thread {
+						return Some(key);
+					}
+				}
+				None
+			})
+			.ready_for_each(|key| self.readreceiptid_readreceipt.remove_raw(key))
 			.await;
 
 		let count = self.services.globals.next_count().unwrap();
