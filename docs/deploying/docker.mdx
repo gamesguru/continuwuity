@@ -64,22 +64,9 @@ See the [reference configuration](../reference/config) page for all config optio
 These examples include reverse proxy configurations for Matrix federation, which will route your Matrix domain (and optionally .well-known paths) to Continuwuity.
 
 :::note Docker DNS Performance
-Docker's default DNS resolver are known to [cause timeout issues](../troubleshooting#dns-issues) for Matrix federation. To bypass it and use a more performant resolver, mount a custom `/etc/resolv.conf` config file into the Continuwuity container.
+Docker's default DNS resolver is known to [cause timeout issues](../troubleshooting#dns-issues) for Matrix federation. To solve this, our recommended deployment method uses a dedicated **Unbound sidecar** container.
 
-```yaml title='docker-compose.yml'
-services:
-  homeserver:
-    # ...
-    volumes:
-      - ./continuwuity-resolv.conf:/etc/resolv.conf
-```
-
-```txt title='continuwuity-resolv.conf'
-nameserver 1.0.0.1
-nameserver 1.1.1.1
-```
-
-Consult the [**DNS tuning guide (recommended)**](../advanced/dns.mdx) for full solutions to this issue.
+Consult the [**DNS tuning guide (recommended)**](../advanced/dns.mdx) for more details.
 :::
 
 #### Caddy (using Caddyfile)
@@ -191,7 +178,9 @@ Test that your setup works by following these [instructions](./generic.mdx#how-d
 
 :::note For testing only
 The instructions below are only meant for a quick demo of Continuwuity.
-For production deployment, we recommend using [Docker Compose](#docker-compose)
+For production deployment, we recommend using [Docker Compose](#docker-compose) which includes a dedicated **Unbound sidecar** for high-performance DNS.
+
+Note: In this quick run mode, Continuwuity will use its built-in **DNS Fallbacks (Quad9)** to ensure federation works even without a sidecar.
 :::
 
 Get a working Continuwuity server with an admin user in four steps:
