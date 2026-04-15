@@ -189,7 +189,7 @@ pub fn room_servers<'a>(
 		.chain(
 			self.room_members_invited(room_id)
 				.chain(self.room_members_knocked(room_id))
-				.map(|user| user.server_name()),
+				.map(UserId::server_name),
 		)
 }
 

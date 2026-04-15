@@ -31,7 +31,7 @@ COMPLEMENT_PARALLEL="${COMPLEMENT_PARALLEL:-2}"
 # On Linux, host.docker.internal doesn't work by default.
 # We try to detect the docker0 bridge IP and use it.
 if [[ "$OSTYPE" == "linux-gnu"* ]] && [ -z "${COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT:-}" ]; then
-    BRIDGE_IP=$(ip addr show docker0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -n1)
+    BRIDGE_IP=$(ip addr show docker0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -n1 || true)
     if [ -n "$BRIDGE_IP" ]; then
         echo "Detected Docker bridge IP: $BRIDGE_IP. Setting COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT=$BRIDGE_IP"
         export COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT="$BRIDGE_IP"
@@ -113,23 +113,24 @@ TEST_FLAGS=(
 # It's okay (likely, even) that `go test` exits nonzero
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
 set +o pipefail
+TEST_EXIT_CODE=0
 if [ "$HAS_GOTESTSUM" = true ]; then
     # gotestsum writes full JSON logs
     # We ignore the exit code because we post-process the logs even on failure.
-    (env \
+    env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        gotestsum --format pkgname --hide-summary=output \
+        gotestsum --format standard-verbose --hide-summary=none \
             --jsonfile "$LOG_FILE" \
-            -- "${TEST_FLAGS[@]}" || true)
+            -- "${TEST_FLAGS[@]}" || TEST_EXIT_CODE=$?
 else
     # We ignore the exit code because we post-process the logs even on failure.
-    (env \
+    env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        go test -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || true)
+        go test -v -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || TEST_EXIT_CODE=$?
 fi
-
+set -o pipefail
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
 # This ensures we have a consistent results file for the CI parser.
 if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
@@ -153,3 +154,5 @@ echo "complement logs saved at $LOG_FILE"
 echo "complement results saved at $RESULTS_FILE"
 echo ""
 echo ""
+
+exit "$TEST_EXIT_CODE"

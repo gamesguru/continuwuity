@@ -1,5 +1,4 @@
-use conduwuit::{implement, utils::stream::ReadyExt};
-use futures::StreamExt;
+use conduwuit::implement;
 use ruma::{
 	EventId, RoomId, ServerName,
 	events::{

@@ -4,6 +4,7 @@ use conduwuit::{
 	Err, Event, PduEvent, Result, debug::INFO_SPAN_LEVEL, defer, implement,
 	utils::continue_exponential_backoff_secs,
 };
+use futures::FutureExt;
 use ruma::{CanonicalJsonValue, EventId, MilliSecondsSinceUnixEpoch, RoomId, ServerName};
 use tracing::debug;
 
@@ -78,6 +79,7 @@ where
 	}};
 
 	self.upgrade_outlier_to_timeline_pdu(pdu, json, create_event, origin, room_id)
+		.boxed()
 		.await?;
 
 	debug!(
