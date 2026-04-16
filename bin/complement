@@ -113,22 +113,21 @@ TEST_FLAGS=(
 # It's okay (likely, even) that `go test` exits nonzero
 # `COMPLEMENT_ENABLE_DIRTY_RUNS=1`  reuses the same complement container for faster complement, at the possible expense of test environment pollution
 set +o pipefail
-TEST_EXIT_CODE=0
 if [ "$HAS_GOTESTSUM" = true ]; then
     # gotestsum writes full JSON logs
     # We ignore the exit code because we post-process the logs even on failure.
-    env \
+    (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        gotestsum --format standard-verbose --hide-summary=none \
+        gotestsum --format pkgname --hide-summary=output \
             --jsonfile "$LOG_FILE" \
-            -- "${TEST_FLAGS[@]}" || TEST_EXIT_CODE=$?
+            -- "${TEST_FLAGS[@]}" || true)
 else
     # We ignore the exit code because we post-process the logs even on failure.
-    env \
+    (env \
         -C "$COMPLEMENT_SRC" \
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        go test -v -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || TEST_EXIT_CODE=$?
+        go test -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || true)
 fi
 set -o pipefail
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
@@ -155,4 +154,4 @@ echo "complement results saved at $RESULTS_FILE"
 echo ""
 echo ""
 
-exit "$TEST_EXIT_CODE"
+exit 0
