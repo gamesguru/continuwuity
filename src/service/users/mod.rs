@@ -949,7 +949,6 @@ impl Service {
 				.insert(user_id.as_bytes(), &self_signing_key_key);
 		}
 
-		// User-signing key
 		if let Some(user_signing_key) = user_signing_key {
 			let mut user_signing_key_val: serde_json::Value =
 				serde_json::from_str(user_signing_key.json().get()).unwrap();

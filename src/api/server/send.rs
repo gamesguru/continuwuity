@@ -517,7 +517,7 @@ async fn handle_edu_receipt_room_user(
 		.event_ids
 		.into_iter()
 		.stream()
-		.for_each_concurrent(automatic_width(), |event_id| async move {
+		.for_each(|event_id| async move {
 			let user_data = [(user_id.to_owned(), data.clone())];
 			let receipts = [(ReceiptType::Read, BTreeMap::from(user_data))];
 			let content = [(event_id.clone(), BTreeMap::from(receipts))];
