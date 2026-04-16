@@ -439,15 +439,25 @@ async fn build_left_state_and_timeline(
 			&& pdu.state_key() == Some(syncing_user.as_str())
 	});
 
+	let in_timeline = timeline.pdus.iter().any(|(_, timeline_pdu)| {
+		*timeline_pdu.event_type() == TimelineEventType::RoomMember
+			&& timeline_pdu.state_key() == Some(syncing_user.as_str())
+	});
+
 	if let Some(index) = membership_event_index {
-		// remove the syncing user's membership event from `state` if the timeline
-		// already contains a membership event for that user (for example, a leave)
-		if timeline.pdus.iter().any(|(_, timeline_pdu)| {
-			*timeline_pdu.event_type() == TimelineEventType::RoomMember
-				&& timeline_pdu.state_key() == Some(syncing_user.as_str())
-		}) {
+		if in_timeline {
+			// remove the syncing user's membership event from `state` if the timeline
+			// already contains a membership event for that user (for example, a leave)
 			state.swap_remove(index);
+		} else {
+			// otherwise, ensure the membership in state is the actual leave event
+			// so the client knows they have left, even if the timeline is empty/limited
+			state[index] = leave_membership_event;
 		}
+	} else if !in_timeline {
+		// if the user's membership is missing from both state and timeline,
+		// we must add it to state so the client knows they have left.
+		state.push(leave_membership_event);
 	}
 
 	let state: Vec<_> = state
