@@ -176,6 +176,7 @@ pub(super) async fn load_left_room(
 				leave_shortstatehash,
 				prev_membership_event,
 				last_sync_end_shortstatehash,
+				left_count,
 			)
 			.await?;
 
@@ -304,6 +305,7 @@ pub(super) async fn load_left_room(
 	)))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_left_state_and_timeline(
 	services: &Services,
 	sync_context: SyncContext<'_>,
@@ -312,6 +314,7 @@ async fn build_left_state_and_timeline(
 	leave_shortstatehash: ShortStateHash,
 	prev_membership_event: PduEvent,
 	last_sync_end_shortstatehash: Option<ShortStateHash>,
+	left_count: u64,
 ) -> Result<(TimelinePdus, Vec<PduEvent>)> {
 	let SyncContext {
 		syncing_user,
@@ -449,14 +452,16 @@ async fn build_left_state_and_timeline(
 			// remove the syncing user's membership event from `state` if the timeline
 			// already contains a membership event for that user (for example, a leave)
 			state.swap_remove(index);
-		} else {
+		} else if last_sync_end_count.is_none_or(|c| c < left_count) {
 			// otherwise, ensure the membership in state is the actual leave event
-			// so the client knows they have left, even if the timeline is empty/limited
+			// so the client knows they have left, even if the timeline is empty/limited.
+			// we only do this if we haven't synced the leave yet.
 			state[index] = leave_membership_event;
 		}
-	} else if !in_timeline {
+	} else if !in_timeline && last_sync_end_count.is_none_or(|c| c < left_count) {
 		// if the user's membership is missing from both state and timeline,
 		// we must add it to state so the client knows they have left.
+		// we only do this if we haven't synced the leave yet.
 		state.push(leave_membership_event);
 	}
 
