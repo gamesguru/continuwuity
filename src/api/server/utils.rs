@@ -37,18 +37,18 @@ pub(super) async fn check(&self) -> Result {
 		return Ok(());
 	}
 
-	let server_in_room = self
+	let server_is_participant = self
 		.services
 		.rooms
 		.state_cache
-		.server_in_room(self.origin, self.room_id)
+		.server_is_participant(self.origin, self.room_id)
 		.await;
 
-	if !server_in_room {
+	if !server_is_participant {
 		return Err!(Request(Forbidden(warn!(
 			%self.origin,
 			%self.room_id,
-			"Server is not in room and room is not world-readable."
+			"Server is not participating in room and room is not world-readable."
 		))));
 	}
 

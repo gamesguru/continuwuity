@@ -308,7 +308,7 @@ pub async fn join_room_by_id_helper(
 	let server_in_room = services
 		.rooms
 		.state_cache
-		.server_is_participant(services.globals.server_name(), room_id)
+		.server_in_room(services.globals.server_name(), room_id)
 		.await;
 
 	// Only check our known membership if we're already in the room.
