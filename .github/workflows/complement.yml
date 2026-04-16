@@ -176,6 +176,9 @@ jobs:
           sudo ufw allow in on br-+ comment "(from Matrix Complement testing) Allow traffic from custom Docker networks to the host machine (host.docker.internal)" || true
 
       - name: Run Complement tests
+        env:
+          CONDUWUIT_SENDER_TIMEOUT: 5
+          CONDUWUIT_SENDER_RETRY_BACKOFF_LIMIT: 5
         run: |
           ./bin/complement ./complement-src
 
