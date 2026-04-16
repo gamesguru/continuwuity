@@ -245,10 +245,7 @@ pub(super) async fn load_left_room(
 				| None => true,
 			};
 
-			let not_types_ok = !timeline_filter
-				.not_types
-				.iter()
-				.any(|ty| ty == event_type);
+			let not_types_ok = !timeline_filter.not_types.iter().any(|ty| ty == event_type);
 
 			let senders_ok = match &timeline_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),
@@ -443,13 +440,12 @@ async fn build_left_state_and_timeline(
 	});
 
 	if let Some(index) = membership_event_index {
-		// the ordering of events in `state` does not matter
-		// we only remove it if it is already in the timeline
-		if timeline
-			.pdus
-			.iter()
-			.any(|(_, timeline_pdu)| timeline_pdu.event_id == state[index].event_id)
-		{
+		// remove the syncing user's membership event from `state` if the timeline
+		// already contains a membership event for that user (for example, a leave)
+		if timeline.pdus.iter().any(|(_, timeline_pdu)| {
+			*timeline_pdu.event_type() == TimelineEventType::RoomMember
+				&& timeline_pdu.state_key() == Some(syncing_user.as_str())
+		}) {
 			state.swap_remove(index);
 		}
 	}
