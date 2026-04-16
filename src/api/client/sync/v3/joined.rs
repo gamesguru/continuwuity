@@ -314,7 +314,7 @@ async fn build_state_and_timeline(
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
-	let filtered_timeline = timeline
+	let filtered_timeline_pdus: Vec<PduEvent> = timeline
 		.pdus
 		.iter()
 		.stream()
@@ -340,11 +340,13 @@ async fn build_state_and_timeline(
 			types_ok && not_types_ok && senders_ok && not_senders_ok
 		})
 		.map(at!(1))
-		.map(Event::into_format)
 		.collect::<Vec<_>>()
 		.await;
 
-	let timeline_ids: HashSet<_> = timeline.pdus.iter().map(|(_, pdu)| &pdu.event_id).collect();
+	let timeline_ids: HashSet<_> = filtered_timeline_pdus
+		.iter()
+		.map(|pdu| &pdu.event_id)
+		.collect();
 
 	let state_events: Vec<_> = state_events
 		.into_iter()
@@ -357,7 +359,10 @@ async fn build_state_and_timeline(
 		timeline: Timeline {
 			limited,
 			prev_batch: prev_batch.as_ref().map(ToString::to_string),
-			events: filtered_timeline,
+			events: filtered_timeline_pdus
+				.into_iter()
+				.map(Event::into_format)
+				.collect(),
 		},
 		summary,
 		notification_counts,
