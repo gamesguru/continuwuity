@@ -94,6 +94,7 @@ test-conduit.toml
 rustc-ice-*
 
 # complement test logs are huge
+complement-src/
 tests/test_results/complement/test_logs.jsonl
 *.db
 
