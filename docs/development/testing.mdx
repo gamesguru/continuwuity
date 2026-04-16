@@ -26,6 +26,17 @@ If you're on macOS and need to build an image, run `nix build .#linux-complement
 We have a Complement fork as some tests have needed to be fixed. This can be found
 at [continuwuation/complement](https://forgejo.ellis.link/continuwuation/complement)
 
+### Troubleshooting
+
+#### Firewall (UFW)
+If you are running Complement locally and encounter cascading failures in federation tests (e.g. `TestInboundFederationProfile`, `TestOutboundFederationSend`) with errors about failing to fetch signing keys from `172.17.0.1` (the Docker gateway), your firewall may be blocking the containers from talking back to the host.
+
+You can allow this traffic on the Docker bridge interfaces by running:
+
+```bash
+sudo ufw allow in on br-+ comment "Allow traffic from custom Docker networks for Complement"
+```
+
 [ci-workflows]:
 https://forgejo.ellis.link/continuwuation/continuwuity/actions/?workflow=ci.yml&actor=0&status=1
 [complement]: https://github.com/matrix-org/complement
