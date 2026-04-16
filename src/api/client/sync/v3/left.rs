@@ -460,14 +460,12 @@ async fn build_left_state_and_timeline(
 		state.push(leave_membership_event);
 	}
 
+	let timeline_ids: std::collections::HashSet<_> =
+		timeline.pdus.iter().map(|(_, pdu)| &pdu.event_id).collect();
+
 	let state: Vec<_> = state
 		.into_iter()
-		.filter(|pdu| {
-			!timeline
-				.pdus
-				.iter()
-				.any(|(_, timeline_pdu)| timeline_pdu.event_id == pdu.event_id)
-		})
+		.filter(|pdu| !timeline_ids.contains(&pdu.event_id))
 		.collect();
 
 	info!(

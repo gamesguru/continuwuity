@@ -316,13 +316,40 @@ async fn build_state_and_timeline(
 	// AnySyncTimelineEvent type
 	let filtered_timeline = timeline
 		.pdus
-		.into_iter()
+		.iter()
 		.stream()
-		.wide_filter_map(|item| ignored_filter(services, item, sync_context.syncing_user))
+		.wide_filter_map(|item| ignored_filter(services, item.clone(), sync_context.syncing_user))
+		.ready_filter(|(_, pdu)| {
+			let event_type = pdu.event_type().to_string();
+			let timeline_filter = &sync_context.filter.room.timeline;
+
+			let types_ok = match &timeline_filter.types {
+				| Some(types) => types.contains(&event_type),
+				| None => true,
+			};
+
+			let not_types_ok = !timeline_filter.not_types.contains(&event_type);
+
+			let senders_ok = match &timeline_filter.senders {
+				| Some(senders) => senders.contains(&pdu.sender),
+				| None => true,
+			};
+
+			let not_senders_ok = !timeline_filter.not_senders.contains(&pdu.sender);
+
+			types_ok && not_types_ok && senders_ok && not_senders_ok
+		})
 		.map(at!(1))
 		.map(Event::into_format)
 		.collect::<Vec<_>>()
 		.await;
+
+	let timeline_ids: HashSet<_> = timeline.pdus.iter().map(|(_, pdu)| &pdu.event_id).collect();
+
+	let state_events: Vec<_> = state_events
+		.into_iter()
+		.filter(|pdu| !timeline_ids.contains(&pdu.event_id))
+		.collect();
 
 	Ok(StateAndTimeline {
 		state_events,
