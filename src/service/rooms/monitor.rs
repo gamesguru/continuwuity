@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use conduwuit::{Event, Result, debug, info, utils::ReadyExt, warn};
+use conduwuit::{Event, Result, debug, http, info, utils::ReadyExt, warn};
 use futures::{FutureExt, StreamExt};
 use ruma::OwnedServerName;
 
@@ -56,10 +56,11 @@ impl Service {
 		}
 
 		// --- Startup scan ---
-		// On boot, check every federated room unconditionally. This covers
-		// missed events from downtime, restarts, or network outages.
+		// On boot, check every federated room that hasn't had an event in the
+		// last 5 minutes. This covers missed events from downtime while avoiding
+		// immediate probes for rooms that were just active.
 		info!(target: "forwardfill", "Running startup forward-fill scan (all federated rooms)...");
-		self.scan_all_rooms(0).await;
+		self.scan_all_rooms(5 * 60 * 1000).await;
 		info!(target: "forwardfill", "Startup forward-fill scan complete.");
 
 		// --- Periodic sweep ---
@@ -153,7 +154,7 @@ impl Service {
 			server.to_owned()
 		};
 
-		warn!(
+		info!(
 			target: "forwardfill",
 			"Room {room_id} is stagnant (latest PDU was {}ms ago). Checking for missing \
 			 events via {target_server}...",
@@ -161,67 +162,111 @@ impl Service {
 		);
 
 		// 1. Probe the remote server for its forward extremities via a make_leave
-		//    template. We MUST use an active local user, or Synapse will return 403.
-		let Some(user_id) = self
+		//    template. We MUST use an active local user, or Synapse will return 403. If
+		//    we're de-synced and the remote thinks we're out, we try a make_join probe
+		//    as a fallback which also returns the extremity template.
+		let mut users = self
 			.services
 			.state_cache
 			.active_local_users_in_room(room_id)
-			.boxed()
-			.next()
-			.await
-			.map(ToOwned::to_owned)
-		else {
-			return Ok(()); // We have no active local users, can't probe
-		};
+			.boxed();
 
-		let make_leave_request =
-			ruma::api::federation::membership::prepare_leave_event::v1::Request {
-				room_id: room_id.to_owned(),
-				user_id,
+		let mut remote_latest_events: Vec<ruma::OwnedEventId> = Vec::new();
+		while let Some(user_id) = users.next().await {
+			let user_id = user_id.to_owned();
+			let make_leave_request =
+				ruma::api::federation::membership::prepare_leave_event::v1::Request {
+					room_id: room_id.to_owned(),
+					user_id: user_id.clone(),
+				};
+
+			let probe_response = match self
+				.services
+				.sending
+				.send_federation_request(&target_server, make_leave_request)
+				.await
+			{
+				| Ok(r) => Some(r.event),
+				| Err(e) if e.status_code() == http::StatusCode::FORBIDDEN => {
+					debug!(
+						target: "forwardfill",
+						"make_leave probe for {room_id} via {target_server} (user {user_id}) \
+						 was forbidden; trying make_join fallback..."
+					);
+					let make_join_request =
+						ruma::api::federation::membership::prepare_join_event::v1::Request {
+							room_id: room_id.to_owned(),
+							user_id: user_id.clone(),
+							ver: self.services.server.supported_room_versions().collect(),
+						};
+
+					match self
+						.services
+						.sending
+						.send_federation_request(&target_server, make_join_request)
+						.await
+					{
+						| Ok(r) => Some(r.event),
+						| Err(e) => {
+							debug!(
+								target: "forwardfill",
+								"make_leave and make_join probes both failed for {room_id} \
+								 via {target_server} (user {user_id}): {e}"
+							);
+							continue;
+						},
+					}
+				},
+				| Err(e) => {
+					if e.status_code() == http::StatusCode::NOT_FOUND {
+						debug!(
+							target: "forwardfill",
+							"Probe failed for {room_id} via {target_server} (not found): {e}"
+						);
+					} else {
+						warn!(
+							target: "forwardfill",
+							"Probe failed for {room_id} via {target_server}: {e}"
+						);
+					}
+					continue;
+				},
 			};
 
-		let make_leave_response = match self
-			.services
-			.sending
-			.send_federation_request(&target_server, make_leave_request)
-			.await
-		{
-			| Ok(r) => r,
-			| Err(e) => {
-				warn!(
-					target: "forwardfill",
-					"make_leave probe failed for {room_id} via {target_server}: {e}"
-				);
-				return Ok(()); // abort if we can't get the forward extremities
-			},
-		};
+			let Some(event_stub_raw) = probe_response else {
+				continue;
+			};
 
-		let leave_event_stub = match serde_json::from_str::<ruma::CanonicalJsonObject>(
-			make_leave_response.event.get(),
-		) {
-			| Ok(s) => s,
-			| Err(e) => {
-				warn!(
-					target: "forwardfill",
-					"Invalid make_leave template from {target_server}: {e}"
-				);
-				return Ok(());
-			},
-		};
+			let event_stub =
+				match serde_json::from_str::<ruma::CanonicalJsonObject>(event_stub_raw.get()) {
+					| Ok(s) => s,
+					| Err(e) => {
+						warn!(
+							target: "forwardfill",
+							"Invalid probe template from {target_server}: {e}"
+						);
+						continue;
+					},
+				};
 
-		let remote_latest_events: Vec<ruma::OwnedEventId> = leave_event_stub
-			.get("prev_events")
-			.and_then(|v| v.as_array())
-			.map(|arr| {
-				arr.iter()
-					.filter_map(|v| {
-						v.as_str().and_then(|s| {
-							<&ruma::EventId>::try_from(s).ok().map(ToOwned::to_owned)
+			remote_latest_events = event_stub
+				.get("prev_events")
+				.and_then(|v| v.as_array())
+				.map(|arr| {
+					arr.iter()
+						.filter_map(|v| {
+							v.as_str().and_then(|s| {
+								<&ruma::EventId>::try_from(s).ok().map(ToOwned::to_owned)
+							})
 						})
-					})
-					.collect()
-			})
-			.unwrap_or_default();
+						.collect()
+				})
+				.unwrap_or_default();
+
+			if !remote_latest_events.is_empty() {
+				break;
+			}
+		}
 
 		if remote_latest_events.is_empty() {
 			return Ok(()); // nothing to do
