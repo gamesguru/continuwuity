@@ -355,7 +355,7 @@ remote-debug-poc config="conduwuit-example.toml":
 # Run Complement tests (requires complement-src)
 # Usage: just complement TestName
 complement args=".":
-    env COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_RUN="{{args}}" ./bin/complement ./complement-src
+    env COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_RUN="{{args}}" RESULTS_DIR="{{env_var_or_default("COMPLEMENT_RESULTS_DIR", "tests/test_results/complement")}}" ./bin/complement ./complement-src
 
 # -----------------------------------------------------------------------------
 # Complement CI
@@ -397,7 +397,8 @@ ci-complement-stats:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    RESULTS="tests/test_results/complement/test_results.jsonl"
+    RESULTS_DIR="{{env_var_or_default("COMPLEMENT_RESULTS_DIR", "tests/test_results/complement")}}"
+    RESULTS="$RESULTS_DIR/test_results.jsonl"
     if [ ! -f "$RESULTS" ]; then
         echo "ERROR: $RESULTS does not exist"
         exit 1
