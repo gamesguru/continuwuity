@@ -103,8 +103,13 @@ pub(super) async fn load_left_room(
 		})
 		.into();
 
-	let last_sync_end_shortstatehash = last_sync_end_shortstatehash.await.and_then(Result::ok);
+	let last_sync_end_shortstatehash = last_sync_end_shortstatehash.await.and_then(|result| {
+		if let Err(error) = &result {
+			debug_warn!("Failed to get token shortstatehash for room {room_id}: {error}");
+		}
 
+		result.ok()
+	});
 	let does_not_exist = services.rooms.metadata.exists(room_id).eq(&false).await;
 
 	let (timeline, state_events, leave_shortstatehash) = match leave_membership_event {
@@ -232,15 +237,18 @@ pub(super) async fn load_left_room(
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
 		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
-			let event_type = pdu.event_type().to_string();
+			let event_type = pdu.event_type().as_ref();
 			let timeline_filter = &filter.room.timeline;
 
 			let types_ok = match &timeline_filter.types {
-				| Some(types) => types.contains(&event_type),
+				| Some(types) => types.iter().any(|ty| ty == event_type),
 				| None => true,
 			};
 
-			let not_types_ok = !timeline_filter.not_types.contains(&event_type);
+			let not_types_ok = !timeline_filter
+				.not_types
+				.iter()
+				.any(|ty| ty == event_type);
 
 			let senders_ok = match &timeline_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),
