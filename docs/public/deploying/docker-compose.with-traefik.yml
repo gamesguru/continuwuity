@@ -1,3 +1,4 @@
+---
 # Continuwuity - Behind Traefik Reverse Proxy
 
 services:
@@ -7,13 +8,11 @@ services:
     command: /sbin/conduwuit
     depends_on:
       - unbound
-    depends_on:
-      - unbound
     dns:
       - 10.10.10.20
     volumes:
       - db:/var/lib/continuwuity
-      #- ./continuwuity.toml:/etc/continuwuity.toml
+      # ./continuwuity.toml:/etc/continuwuity.toml
     networks:
       - proxy
       - continuwuity_net
@@ -28,7 +27,7 @@ services:
       CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
       CONTINUWUITY_ADDRESS: 0.0.0.0
       CONTINUWUITY_PORT: 8008 # This must match with traefik's loadbalancer label
-      #CONTINUWUITY_CONFIG: '/etc/continuwuity.toml' # Uncomment if you mapped config toml above
+      # CONTINUWUITY_CONFIG: '/etc/continuwuity.toml' # Uncomment if you mapped config toml above
 
       # Serve .well-known files to tell others to reach Continuwuity on port :443
       CONTINUWUITY_WELL_KNOWN: |
