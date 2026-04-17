@@ -21,8 +21,8 @@ use conduwuit::{
 };
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedServerName,
-	OwnedUserId, RoomId, RoomVersionId, UserId,
+	CanonicalJsonObject, CanonicalJsonValue, OwnedRoomId, OwnedServerName, OwnedUserId, RoomId,
+	RoomVersionId, UserId,
 	api::{
 		client::{
 			error::ErrorKind,
@@ -690,8 +690,8 @@ async fn join_room_by_id_helper_remote(
 			None
 		};
 
-		let prev_pdu = match prev_pdu {
-			| Some(pdu) => Some(pdu),
+		let (prev_pdu, mut prev_content, mut prev_sender, mut replaces_state) = match prev_pdu {
+			| Some(pdu) => (Some(pdu), None, None, None),
 			| None => {
 				// Fallback to local invite state if missing from send_join response state
 				let pending_invites = services
@@ -701,36 +701,41 @@ async fn join_room_by_id_helper_remote(
 					.await
 					.unwrap_or_default();
 
-				IterStream::stream(pending_invites)
-					.filter_map(|raw| async move {
-						let event_id: OwnedEventId = raw.get_field("event_id").ok().flatten()?;
-						let pdu = services.rooms.timeline.get_pdu(&event_id).await.ok()?;
-						if pdu.state_key().is_some_and(|s| s == sender_user.as_str()) {
-							Some(pdu)
-						} else {
-							None
+				let mut result = (None, None, None, None);
+				for raw in pending_invites {
+					if let Ok(Some(state_key)) = raw.get_field::<String>("state_key") {
+						if state_key == sender_user.as_str() {
+							result.1 = raw
+								.get_field::<CanonicalJsonObject>("content")
+								.ok()
+								.flatten();
+							result.2 = raw.get_field::<String>("sender").ok().flatten();
+							result.3 = raw.get_field::<String>("event_id").ok().flatten();
+							break;
 						}
-					})
-					.boxed()
-					.next()
-					.await
+					}
+				}
+				result
 			},
 		};
 
 		if let Some(prev_pdu) = prev_pdu {
-			if let Ok(prev_content) = to_canonical_object(Event::get_content_as_value(&prev_pdu))
-			{
-				unsigned
-					.insert("prev_content".to_owned(), CanonicalJsonValue::Object(prev_content));
+			if let Ok(content) = to_canonical_object(Event::get_content_as_value(&prev_pdu)) {
+				prev_content = Some(content);
 			}
-			unsigned.insert(
-				"prev_sender".to_owned(),
-				CanonicalJsonValue::String(prev_pdu.sender.to_string()),
-			);
-			unsigned.insert(
-				"replaces_state".to_owned(),
-				CanonicalJsonValue::String(prev_pdu.event_id.to_string()),
-			);
+			prev_sender = Some(prev_pdu.sender.to_string());
+			replaces_state = Some(prev_pdu.event_id.to_string());
+		}
+
+		if let Some(prev_content) = prev_content {
+			unsigned.insert("prev_content".to_owned(), CanonicalJsonValue::Object(prev_content));
+		}
+		if let Some(prev_sender) = prev_sender {
+			unsigned.insert("prev_sender".to_owned(), CanonicalJsonValue::String(prev_sender));
+		}
+		if let Some(replaces_state) = replaces_state {
+			unsigned
+				.insert("replaces_state".to_owned(), CanonicalJsonValue::String(replaces_state));
 		}
 	}
 	if !unsigned.is_empty() {

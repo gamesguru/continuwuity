@@ -80,6 +80,12 @@ async fn should_rescind_invite(
 			if sender == target_user_id || sender == inviter {
 				return Ok(Some((pdu_event, target_user_id)));
 			}
+
+			warn!(
+				"Sender {sender} attempted to rescind invite to {target_user_id} but is neither \
+				 the target nor the inviter ({inviter})"
+			);
+			return Err!(Request(Forbidden("You are not allowed to rescind this invitation.")));
 		}
 	}
 

@@ -210,7 +210,7 @@ impl Service {
 
 			if let Some(content) = config_content {
 				if !content.enabled {
-					return content.user_filter_level(sender_user);
+					return FilterLevel::Allow;
 				}
 
 				let sender_user_s = sender_user.as_str();

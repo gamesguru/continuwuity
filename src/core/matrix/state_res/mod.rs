@@ -938,7 +938,7 @@ fn is_power_event(event: &impl Event) -> bool {
 		| TimelineEventType::RoomCreate => event.state_key() == Some(""),
 		| TimelineEventType::RoomMember => {
 			if let Ok(content) = from_json_str::<RoomMemberEventContent>(event.content().get()) {
-				if [MembershipState::Leave, MembershipState::Ban].contains(&content.membership) {
+				if matches!(content.membership, MembershipState::Leave | MembershipState::Ban) {
 					return Some(event.sender().as_str()) != event.state_key();
 				}
 			}

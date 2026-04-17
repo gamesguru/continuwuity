@@ -1035,12 +1035,17 @@ where
 			} else {
 				true
 			};
+			let is_rescission = target_user_current_membership == MembershipState::Invite
+				&& target_user_membership_event
+					.as_ref()
+					.is_some_and(|ev| ev.sender() == sender);
+
 			let can_kick = if !matches!(
 				target_user_current_membership,
 				MembershipState::Ban | MembershipState::Leave
 			) {
-				if sender_creator {
-					// sender is a creator
+				if sender_creator || is_rescission {
+					// sender is a creator or the original inviter rescinding
 					true
 				} else if sender_power.filter(|&p| p >= &power_levels.kick).is_none() {
 					// sender lacks kick power level

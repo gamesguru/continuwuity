@@ -196,6 +196,22 @@ impl Service {
 						&state_key,
 					);
 
+					if event_type == StateEventType::RoomMember {
+						if let Ok(user_id) = UserId::parse(state_key.as_str()) {
+							// Invalidate the state accessor cache for this user's membership
+							self.services.state_accessor.invalidate_room_state(
+								room_id,
+								&StateEventType::RoomMember,
+								user_id.as_str(),
+							);
+
+							// We also need to update the state_cache index
+							// But we don't have the PDU here easily.
+							// However, update_joined_count below will handle
+							// the counts.
+						}
+					}
+
 					if event_type == StateEventType::SpaceChild {
 						self.services
 							.spaces
