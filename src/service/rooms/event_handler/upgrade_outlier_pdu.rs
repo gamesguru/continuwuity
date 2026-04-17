@@ -315,10 +315,10 @@ where
 				soft_fail = true;
 			}
 		}
-
-		// 14-pre and redaction soft-fail checks finish here.
 	}
 
+	// 14. Check if the event passes auth based on the "current state" of the room,
+	//     if not soft fail it
 	if soft_fail {
 		info!(
 			event_id = %incoming_pdu.event_id,

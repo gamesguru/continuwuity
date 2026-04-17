@@ -24,7 +24,7 @@ use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
 	OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomId, RoomVersionId,
 	api::federation::event::get_room_state,
-	events::{AnyStateEvent, StateEventType},
+	events::{AnyStateEvent, StateEventType, TimelineEventType},
 	serde::Raw,
 };
 use service::rooms::{
@@ -129,7 +129,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
 	self.services
 		.rooms
 		.event_handler
-		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id, true)
+		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id)
 		.await?;
 
 	self.write_str("Successfully rescued PDU.").await
@@ -280,8 +280,28 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 		.collect()
 		.await;
 
-	// Sort by origin_server_ts
+	// Sort by origin_server_ts to handle them in order
 	outliers.sort_by_key(|pdu| pdu.origin_server_ts);
+
+	// Find the create event first to use as the foundation
+	let mut create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.ok();
+
+	// If it's still missing, see if it's in our outlier list
+	if create_event.is_none() {
+		create_event = outliers
+			.iter()
+			.find(|pdu| pdu.kind == TimelineEventType::RoomCreate)
+			.cloned();
+	}
+
+	let create_event =
+		create_event.ok_or_else(|| err!("Failed to find create event for room."))?;
 
 	let mut count = 0_usize;
 	for pdu in outliers {
@@ -294,14 +314,6 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 			.await
 			.map_err(|_| err!("PDU not found in database."))?;
 
-		let create_event = self
-			.services
-			.rooms
-			.state_accessor
-			.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-			.await
-			.map_err(|_| err!("Failed to find create event for room."))?;
-
 		let origin = pdu
 			.origin
 			.clone()
@@ -311,18 +323,16 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 			.services
 			.rooms
 			.event_handler
-			.upgrade_outlier_to_timeline_pdu(
-				pdu,
-				pdu_json,
-				&create_event,
-				&origin,
-				&room_id,
-				true,
-			)
+			.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id)
 			.await
 			.is_ok()
 		{
 			count = count.saturating_add(1);
+		}
+
+		// Yield every 10 events to prevent blocking the executor too long
+		if count.is_multiple_of(10) {
+			tokio::task::yield_now().await;
 		}
 	}
 
