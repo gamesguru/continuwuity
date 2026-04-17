@@ -91,9 +91,10 @@ conduwuit-core.workspace = true
 conduwuit-database.workspace = true
 conduwuit-macros.workspace = true
 const-str.workspace = true
-
+ctor.workspace = true
 either.workspace = true
 futures.workspace = true
+governor.workspace = true
 hickory-resolver.workspace = true
 http.workspace = true
 image.workspace = true
@@ -105,6 +106,7 @@ ldap3.optional = true
 log.workspace = true
 loole.workspace = true
 lru-cache.workspace = true
+nonzero_ext.workspace = true
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true
@@ -126,6 +128,7 @@ blurhash.workspace = true
 blurhash.optional = true
 recaptcha-verify = { version = "0.2.0", default-features = false }
 yansi.workspace = true
+lettre.workspace = true
 
 [target.'cfg(all(unix, target_os = "linux"))'.dependencies]
 sd-notify.workspace = true

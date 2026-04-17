@@ -99,14 +99,22 @@ pub enum UsersCommand {
 #[admin_command]
 async fn get_shared_rooms(&self, user_a: OwnedUserId, user_b: OwnedUserId) -> Result {
 	let timer = tokio::time::Instant::now();
-	let result: Vec<_> = self
-		.services
-		.rooms
-		.state_cache
-		.get_shared_rooms(&user_a, &user_b)
-		.map(ToOwned::to_owned)
-		.collect()
-		.await;
+	let mut rooms = Box::pin(
+		self.services
+			.rooms
+			.state_cache
+			.get_shared_rooms(&user_a, &user_b),
+	);
+	let mut result = Vec::new();
+	let mut count = 0_u64;
+	while let Some(room_id) = rooms.next().await {
+		result.push(room_id.to_owned());
+		count = count.saturating_add(1);
+		if count.is_multiple_of(1000) {
+			tokio::task::yield_now().await;
+		}
+	}
+
 	let query_time = timer.elapsed();
 
 	self.write_str(&format!("Query completed in {query_time:?}:\n\n```rs\n{result:#?}\n```"))
@@ -203,7 +211,16 @@ async fn get_latest_backup(&self, user_id: OwnedUserId) -> Result {
 #[admin_command]
 async fn iter_users(&self) -> Result {
 	let timer = tokio::time::Instant::now();
-	let result: Vec<OwnedUserId> = self.services.users.stream().map(Into::into).collect().await;
+	let mut users = self.services.users.stream();
+	let mut result = Vec::new();
+	let mut count = 0_u64;
+	while let Some(user_id) = users.next().await {
+		result.push(user_id.to_owned());
+		count = count.saturating_add(1);
+		if count.is_multiple_of(1000) {
+			tokio::task::yield_now().await;
+		}
+	}
 
 	let query_time = timer.elapsed();
 
@@ -214,12 +231,16 @@ async fn iter_users(&self) -> Result {
 #[admin_command]
 async fn iter_users2(&self) -> Result {
 	let timer = tokio::time::Instant::now();
-	let result: Vec<_> = self.services.users.stream().collect().await;
-	let result: Vec<_> = result
-		.into_iter()
-		.map(ruma::UserId::as_bytes)
-		.map(String::from_utf8_lossy)
-		.collect();
+	let mut users = self.services.users.stream();
+	let mut result = Vec::new();
+	let mut count = 0_u64;
+	while let Some(user_id) = users.next().await {
+		result.push(String::from_utf8_lossy(user_id.as_bytes()).into_owned());
+		count = count.saturating_add(1);
+		if count.is_multiple_of(1000) {
+			tokio::task::yield_now().await;
+		}
+	}
 
 	let query_time = timer.elapsed();
 

@@ -290,6 +290,10 @@ async fn build_state_and_timeline(
 	let never_synced = shortstatehashes.last_sync_end_shortstatehash.is_none();
 	let needs_injection = (joined_since_last_sync || never_synced) && timeline.pdus.is_empty();
 
+	if joined_since_last_sync && timeline.pdus.is_empty() {
+		warn!(%room_id, "timeline for newly joined room is empty");
+	}
+
 	if joined_since_last_sync || never_synced || needs_injection {
 		if needs_injection {
 			warn!(

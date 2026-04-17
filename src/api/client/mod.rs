@@ -64,6 +64,7 @@ pub(super) use openid::*;
 pub(super) use presence::*;
 pub(super) use profile::*;
 pub use profile::{update_all_rooms, update_avatar_url, update_displayname};
+pub use push::recreate_push_rules_and_return;
 pub(super) use push::*;
 pub(super) use read_marker::*;
 pub(super) use redact::*;
@@ -92,6 +93,3 @@ const DEVICE_ID_LENGTH: usize = 10;
 
 /// generated user access token length
 const TOKEN_LENGTH: usize = 32;
-
-/// generated user session ID length
-const SESSION_ID_LENGTH: usize = service::uiaa::SESSION_ID_LENGTH;

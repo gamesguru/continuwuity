@@ -32,7 +32,7 @@ pub fn user_agent() -> &'static str { USER_AGENT.get_or_init(init_user_agent) }
 #[inline]
 pub fn user_agent_media() -> &'static str { USER_AGENT_MEDIA.get_or_init(init_user_agent_media) }
 
-fn init_user_agent() -> String { format!("{}/{} (bot; +{WEBSITE})", name(), version_ua()) }
+fn init_user_agent() -> String { format!("{}/{}", name(), version_ua()) }
 
 fn init_user_agent_media() -> String {
 	format!("{}/{} (embedbot; facebookexternalhit/1.1; +{WEBSITE})", name(), version_ua())

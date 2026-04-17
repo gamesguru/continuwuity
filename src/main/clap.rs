@@ -44,6 +44,11 @@ pub struct Args {
 	#[arg(long, num_args(0))]
 	pub console: bool,
 
+	#[cfg(feature = "console")]
+	/// Attach to the admin command console of a running conduwuit instance.
+	#[arg(short, long, num_args(0))]
+	pub attach: bool,
+
 	/// Execute console command automatically after startup.
 	#[arg(long)]
 	pub execute: Vec<String>,

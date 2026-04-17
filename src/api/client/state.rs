@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod tests;
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
@@ -58,6 +60,7 @@ pub(crate) async fn send_state_event_for_key_route(
 				None
 			},
 		)
+		.boxed()
 		.await?,
 	})
 }
@@ -194,6 +197,7 @@ async fn send_state_event_for_key_helper(
 	state_key: &str,
 	timestamp: Option<MilliSecondsSinceUnixEpoch>,
 ) -> Result<OwnedEventId> {
+	let json: &mut Raw<AnyStateEventContent> = &mut json.clone();
 	allowed_to_send_state_event(services, room_id, event_type, state_key, json).await?;
 	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 	let event_id = services
@@ -221,7 +225,7 @@ async fn allowed_to_send_state_event(
 	room_id: &RoomId,
 	event_type: &StateEventType,
 	state_key: &str,
-	json: &Raw<AnyStateEventContent>,
+	json: &mut Raw<AnyStateEventContent>,
 ) -> Result {
 	match event_type {
 		| StateEventType::RoomCreate => {
@@ -365,7 +369,7 @@ async fn allowed_to_send_state_event(
 			}
 		},
 		| StateEventType::RoomMember => match json.deserialize_as::<RoomMemberEventContent>() {
-			| Ok(membership_content) => {
+			| Ok(mut membership_content) => {
 				let Ok(state_key) = UserId::parse(state_key) else {
 					return Err!(Request(BadJson(
 						"Membership event has invalid or non-existent state key"
@@ -375,20 +379,24 @@ async fn allowed_to_send_state_event(
 				if let Some(authorising_user) =
 					membership_content.join_authorized_via_users_server
 				{
-					if membership_content.membership != MembershipState::Join {
-						return Err!(Request(BadJson(
-							"join_authorised_via_users_server is only for member joins"
-						)));
-					}
-
+					// join_authorized_via_users_server must be thrown away, if user is already a
+					// member of the room.
 					if services
 						.rooms
 						.state_cache
 						.is_joined(state_key, room_id)
 						.await
 					{
-						return Err!(Request(InvalidParam(
-							"{state_key} is already joined, an authorising user is not required."
+						membership_content.join_authorized_via_users_server = None;
+						*json = Raw::<AnyStateEventContent>::from_json_string(
+							serde_json::to_string(&membership_content)?,
+						)?;
+						return Ok(());
+					}
+
+					if membership_content.membership != MembershipState::Join {
+						return Err!(Request(BadJson(
+							"join_authorised_via_users_server is only for member joins"
 						)));
 					}
 

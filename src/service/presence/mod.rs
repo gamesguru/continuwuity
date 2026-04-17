@@ -6,11 +6,11 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use conduwuit::{
 	Error, Result, Server, checked, debug, debug_info, debug_warn, error, info, result::LogErr,
+	warn,
 };
-use futures::{Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
+use futures::{Stream, TryFutureExt};
 use loole::{Receiver, Sender};
 use ruma::{OwnedUserId, UInt, UserId, events::presence::PresenceEvent, presence::PresenceState};
-use tokio::time::sleep;
 
 use self::{data::Data, presence::Presence};
 use crate::{Dep, globals, users};
@@ -30,7 +30,7 @@ struct Services {
 	users: Dep<users::Service>,
 }
 
-type TimerType = (OwnedUserId, Duration);
+type TimerType = (OwnedUserId, Option<Duration>);
 
 #[async_trait]
 impl crate::Service for Service {
@@ -68,20 +68,57 @@ impl crate::Service for Service {
 			None
 		};
 
-		let mut presence_timers = FuturesUnordered::new();
+		let mut presence_timers =
+			std::collections::HashMap::<OwnedUserId, tokio::task::JoinHandle<()>>::new();
+		let mut events_received: u64 = 0;
+		let mut next_tally = tokio::time::Instant::now()
+			.checked_add(Duration::from_secs(300))
+			.unwrap_or_else(tokio::time::Instant::now);
+
 		while !receiver.is_closed() {
-			tokio::select! {
-				Some(user_id) = presence_timers.next() => {
-					self.process_presence_timer(&user_id).await.log_err().ok();
+			let event = receiver.recv_async().await;
+			match event {
+				| Err(_) => break,
+				| Ok((user_id, Some(timeout))) => {
+					events_received = events_received.saturating_add(1);
+					let self_clone = Arc::clone(&self);
+					let user_id_clone = user_id.clone();
+
+					let new_task = self.services.server.runtime().spawn(async move {
+						tokio::time::sleep(timeout).await;
+						self_clone
+							.process_presence_timer(&user_id_clone)
+							.await
+							.log_err()
+							.ok();
+					});
+
+					if let Some(old_task) = presence_timers.insert(user_id, new_task) {
+						old_task.abort();
+					}
 				},
-				event = receiver.recv_async() => match event {
-					Err(_) => break,
-					Ok((user_id, timeout)) => {
-						debug!("Adding timer {}: {user_id} timeout:{timeout:?}", presence_timers.len());
-						presence_timers.push(presence_timer(user_id, timeout));
+				| Ok((user_id, None)) =>
+					if let Some(task) = presence_timers.remove(&user_id) {
+						task.abort();
 					},
-				},
 			}
+
+			// Periodic tally
+			if tokio::time::Instant::now() >= next_tally {
+				warn!(
+					"presence stats: {} active timers, {} received",
+					presence_timers.len(),
+					events_received
+				);
+				events_received = 0;
+				next_tally = tokio::time::Instant::now()
+					.checked_add(Duration::from_secs(300))
+					.unwrap_or_else(tokio::time::Instant::now);
+			}
+		}
+
+		for (_, handle) in presence_timers {
+			handle.abort();
 		}
 
 		if let Some(task) = startup_task {
@@ -178,7 +215,7 @@ impl Service {
 
 			self.timer_channel
 				.0
-				.send((user_id.to_owned(), Duration::from_secs(timeout)))
+				.send((user_id.to_owned(), Some(Duration::from_secs(timeout))))
 				.map_err(|e| {
 					error!("Failed to add presence timer: {}", e);
 					Error::bad_database("Failed to add presence timer")
@@ -198,10 +235,11 @@ impl Service {
 
 	// Unset online/unavailable presence to offline on startup
 	pub async fn unset_all_presence(&self) {
-		use futures::StreamExt;
+		use futures::{StreamExt, stream::FuturesUnordered};
 
 		debug_info!("Resetting presence for active users...");
 		let mut reset = 0_usize;
+		let mut jobs = FuturesUnordered::new();
 
 		let mut presence_stream = Box::pin(self.db.presence_since(0));
 		while let Some((user_id, _count, bytes)) = presence_stream.next().await {
@@ -233,24 +271,40 @@ impl Service {
 				Some(UInt::new_saturating(now.saturating_sub(presence.last_active_ts)));
 
 			reset = reset.saturating_add(1);
-			_ = self
-				.set_presence(
-					&user_id,
-					&PresenceState::Offline,
-					Some(false),
-					last_active_ago,
-					presence.status_msg,
-				)
-				.await
-				.inspect_err(|e| {
+
+			let status_msg = presence.status_msg.clone();
+
+			jobs.push(async move {
+				if let Err(e) = self
+					.db
+					.set_presence_silent(
+						&user_id,
+						&PresenceState::Offline,
+						Some(false),
+						last_active_ago,
+						status_msg,
+					)
+					.await
+				{
 					debug_warn!(
 						?user_id,
 						"Failed to reset presence for {user_id} to offline: {e}"
 					);
-				});
+				}
+			});
+
+			if jobs.len() >= 100 {
+				while jobs.next().await == Some(()) {
+					if jobs.len() < 50 {
+						break;
+					}
+				}
+			}
 		}
 
-		info!("Presence reset complete: {reset} users reset to offline.");
+		while jobs.next().await == Some(()) {}
+
+		warn!("Presence reset complete: {reset} users reset to offline.");
 	}
 
 	/// Returns the most recent presence updates that happened after the event
@@ -309,10 +363,4 @@ impl Service {
 
 		Ok(())
 	}
-}
-
-async fn presence_timer(user_id: OwnedUserId, timeout: Duration) -> OwnedUserId {
-	sleep(timeout).await;
-
-	user_id
 }

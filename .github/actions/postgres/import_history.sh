@@ -4,9 +4,9 @@ set -euo pipefail
 # import_history.sh (Simplified Bulk Ingest - Fresh Rebuild)
 # Ingests historical JSONL data directly into PostgreSQL with a clean slate.
 
-LEDGER_DIR=${1:-""}
+LEDGER_DIR=${1:-}
 TEMP_DIR=""
-DB_TARGET=${DATABASE_URL:-"c10y"}
+DB_TARGET=${DATABASE_URL:-c10y}
 
 if [ -z "$LEDGER_DIR" ]; then
   TEMP_DIR=$(mktemp -d -t c10y-import-XXXXXX)
@@ -27,18 +27,6 @@ if [ -f "$SQL_FILE" ]; then
     psql "$DB_TARGET" -c "DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE;" > /dev/null
     psql "$DB_TARGET" -f "$SQL_FILE" > /dev/null
 fi
-
-# Sync the Master Baseline from origin/main
-echo "→ Syncing Master Baseline from origin/main..."
-(
-  echo "CREATE TEMP TABLE mb (j jsonb);"
-  echo "\copy mb FROM STDIN csv quote e'\x01' delimiter e'\x02';"
-  git show origin/main:tests/test_results/complement/test_results.jsonl
-  echo "\."
-  echo "INSERT INTO master_baseline (test_name, status)
-        SELECT (j->>'Test'), (j->>'Action') FROM mb
-        ON CONFLICT (test_name) DO UPDATE SET status = EXCLUDED.status;"
-) | psql "$DB_TARGET" > /dev/null
 
 echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
 
@@ -67,18 +55,22 @@ echo "→ Consolidating and ingesting test details..."
     [ -f "$f" ] || continue
     BASENAME=$(basename "$f" .jsonl)
     if [[ "$BASENAME" == *-* ]]; then
+      # Format: COMMIT-ARCH-OS-PROFILE
       COMMIT=$(echo "$BASENAME" | cut -d'-' -f1)
       ARCH=$(echo "$BASENAME" | cut -d'-' -f2)
-      OS=$(echo "$BASENAME" | cut -d'-' -f3-)
+      OS=$(echo "$BASENAME" | cut -d'-' -f3)
+      PROFILE=$(echo "$BASENAME" | cut -d'-' -f4-)
     else
       COMMIT="$BASENAME"
       ARCH=""
       OS=""
+      PROFILE=""
     fi
-    jq -c --arg h "$COMMIT" --arg a "$ARCH" --arg o "$OS" \
+    jq -c --arg h "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" \
        '. + {commit: (if .commit then .commit else $h end),
              arch: (if .arch then .arch else $a end),
-             os: (if .os then .os else $o end)}' "$f"
+             os: (if .os then .os else $o end),
+             profile: (if .profile then .profile else $p end)}' "$f"
   done
   echo "\."
   echo "INSERT INTO run_details (run_id, test_name, status)
@@ -87,6 +79,7 @@ echo "→ Consolidating and ingesting test details..."
         JOIN runs r ON r.commit_hash = (t.j->>'commit')
                    AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'),''))
                    AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'),''))
+                   AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'),''))
         ON CONFLICT (run_id, test_name) DO NOTHING;"
 ) | psql "$DB_TARGET"
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"

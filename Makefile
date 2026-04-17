@@ -14,8 +14,9 @@ endif
 
 # Example .env:
 #!/bin/bash
-# export ROCKSDB_INCLUDE_DIR=/usr/local/include
-# export ROCKSDB_LIB_DIR=/usr/local/lib
+# export PREFIX=/usr/local
+# export ROCKSDB_INCLUDE_DIR=${PREFIX}/include
+# export ROCKSDB_LIB_DIR=${PREFIX}/lib
 # export LD_LIBRARY_PATH=${ROCKSDB_LIB_DIR}:${LD_LIBRARY_PATH}
 # #export CPU_TARGET=skylake
 # export OS_VERSION=ubuntu-24.04
@@ -124,7 +125,7 @@ RUSTFLAGS ?=
 # Display crate compilation progress [X/Y] in nohup or no-tty environment.
 # Override or unset in .env to disable.
 export CARGO_TERM_PROGRESS_WHEN ?= auto
-export CARGO_TERM_PROGRESS_WIDTH ?= 80
+export CARGO_TERM_PROGRESS_WIDTH ?= 200
 
 # To suppress the confirmation prompt, add to your .env: SKIP_CONFIRM=1
 SKIP_CONFIRM ?=
@@ -153,7 +154,11 @@ lint:   ##H Lint code
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo clippy $(CARGO_SCOPE) --features full --locked --no-deps $(CARGO_FLAGS) -- -D warnings
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
+		cargo clippy $(CARGO_SCOPE) --locked --no-deps $(CARGO_FLAGS) -- -D warnings
 
 .PHONY: test
 test:   ##H Run tests
@@ -162,16 +167,21 @@ test:   ##H Run tests
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
-		cargo test $(CARGO_SCOPE) --features full --locked --all-targets --timings $(CARGO_FLAGS)
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
+		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
 
 
-ROCKSDB_LIB_DIR ?= /usr/local/lib
-ROCKSDB_INCLUDE_DIR ?= /usr/local/include
+PREFIX ?= /usr/local
+ROCKSDB_LIB_DIR ?= $(PREFIX)/lib
+ROCKSDB_INCLUDE_DIR ?= $(PREFIX)/include
 
 # Default features to use for the build
 # We use bindgen-runtime by default to use the system libclang.so for building.
 # Bundling RocksDB statically can be enabled via features.
-FEATURES ?= standard,console,url_preview,release_max_log_level,bindgen-runtime
+FEATURES ?= console,url_preview
 
 .PHONY: build
 build:  ##H Build with selected profile
@@ -182,6 +192,10 @@ build:  ##H Build with selected profile
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
 		ROCKSDB_STATIC=$(ROCKSDB_STATIC) \
 		ROCKSDB_LIB_STATIC=$(ROCKSDB_LIB_STATIC) \
 # 		RUSTFLAGS="-L $(ROCKSDB_LIB_DIR) -l z -l bz2 -l lz4 -l snappy -l zstd -l uring -l stdc++ $$RUSTFLAGS" \
@@ -201,6 +215,25 @@ build-bundled: ##H Build a bundled binary (Static RocksDB)
 	ROCKSDB_STATIC=1 \
 	ROCKSDB_LIB_STATIC=1 \
 	$(MAKE) build FEATURES="$(FEATURES),conduwuit-database/bindgen-static"
+
+
+GLIBC_VERSION ?= 2.35
+CPU_TARGET ?= skylake
+
+.PHONY: build-cross
+build-cross: ##H Cross-compile for specific glibc and CPU (uses cargo-zigbuild)
+	@echo "Cross-compiling with PROFILE='$(PROFILE)' CPU_TARGET='$(CPU_TARGET)' GLIBC_VERSION='$(GLIBC_VERSION)'"
+	@$(MAKE) _confirm
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
+		RUSTFLAGS="-C target-cpu=$(CPU_TARGET) $$RUSTFLAGS" \
+		cargo zigbuild --target x86_64-unknown-linux-gnu.$(GLIBC_VERSION) --features $(FEATURES) --locked $(CARGO_FLAGS)
 
 
 .PHONY: build-dynamic
@@ -242,6 +275,10 @@ build-docs:     ##H Regenerate docs (admin commands, etc.)
 	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
 		cargo run -p xtask $(CARGO_FLAGS) -- generate-docs
 
 
@@ -352,8 +389,8 @@ download/prebuilts: ##H Download prebuilt libraries from GitHub Release
 	@mkdir -p .tmp/prebuilts && rm -rf .tmp/prebuilts/*
 	@if gh release download $(PREBUILT_TAG) -R $(GH_REPO) -p "*-$(CPU_TARGET)-$(OS_VERSION).tar.gz" -D .tmp/prebuilts --clobber; then \
 		for f in .tmp/prebuilts/*.tar.gz; do \
-			echo "Extracting $$f to /usr/local..."; \
-			sudo tar -xzvf "$$f" -C /usr/local; \
+			echo "Extracting $$f to $(PREFIX)..."; \
+			sudo tar -xzvf "$$f" -C $(PREFIX); \
 		done; \
 		sudo ldconfig; \
 		echo "Prebuilts installed."; \
@@ -399,12 +436,33 @@ download:	##H Download CI binary (set RUN to a specific RunID)
 	@-./target/ci/conduwuit -V
 	@rm -rf target/ci/*
 	gh run download $(RUN) -R $(GH_REPO) -n $(ARTIFACT) -D target/ci
-	tar -xzf target/ci/$(ARTIFACT).tar.gz -C target/ci
-	@mv target/ci/bin/conduwuit target/ci/conduwuit
+	@if [ -f "target/ci/$(ARTIFACT).tar.gz" ]; then \
+		tar -xzf "target/ci/$(ARTIFACT).tar.gz" -C target/ci; \
+	fi
+	@if [ -f "target/ci/bin/conduwuit" ]; then \
+		mv target/ci/bin/conduwuit target/ci/conduwuit; \
+	fi
+	@if [ ! -f "target/ci/conduwuit" ]; then \
+		echo "ERROR: Expected binary target/ci/conduwuit not found after download/extract."; \
+		exit 1; \
+	fi
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
 	@ln -sfn ci target/latest
+
+.PHONY: download/hash
+download/hash:	##H Download CI binary by Git commit hash (set HASH=)
+	@test "$(GH_REPO)" || (echo "ERROR: GH_REPO is not set. Add GH_REPO=owner/repo to .env" && exit 1)
+	@test "$(HASH)" || (echo "ERROR: HASH is not set (e.g., make download/hash HASH=bdbb016)" && exit 1)
+	@RUN_ID=$$(gh run list -R "$(GH_REPO)" --commit "$(HASH)" --json databaseId -q '.[0].databaseId') && \
+	if [ -z "$$RUN_ID" ] || [ "$$RUN_ID" = "null" ]; then \
+		echo "ERROR: Could not find any CI runs for commit $(HASH)"; \
+		exit 1; \
+	else \
+		echo "Found Run ID $$RUN_ID for commit $(HASH). Executing standard download..."; \
+		$(MAKE) download RUN="$$RUN_ID" ARTIFACT="$(ARTIFACT)"; \
+	fi
 
 .PHONY: download/list
 download/list:	##H List recent CI runs
@@ -449,7 +507,7 @@ C10Y_SERV ?= conduwuit.service
 
 # Configure these in .env if alternate path(s) are desired
 BUILD_BIN_DIR ?= target/latest
-DEPLOY_BIN_DIR ?= /usr/local/bin
+DEPLOY_BIN_DIR ?= $(PREFIX)/bin
 
 BUILD_BIN ?= $(BUILD_BIN_DIR)/$(CONTINUWUITY)
 DEPLOY_BIN ?= $(DEPLOY_BIN_DIR)/$(CONTINUWUITY)

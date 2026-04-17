@@ -67,7 +67,7 @@ pub enum Error {
 	#[error("Regex error: {0}")]
 	Regex(#[from] regex::Error),
 	#[error("{0}")]
-	Reqwest(FormattedReqwestError),
+	Reqwest(#[source] FormattedReqwestError),
 	#[error("{0}")]
 	SerdeDe(Cow<'static, str>),
 	#[error("{0}")]

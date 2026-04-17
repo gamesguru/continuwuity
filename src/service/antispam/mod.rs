@@ -61,13 +61,17 @@ impl Service {
 		room_id: OwnedRoomId,
 	) -> Result<()> {
 		if let Some(config) = &self.services.config.antispam {
-			let result = if let Some(meowlnir) = &config.meowlnir {
+			let result = if let Some(meowlnir) = &config.meowlnir
+				&& let Some(base_url) = &meowlnir.base_url
+				&& let Some(secret) = &meowlnir.secret
+				&& let Some(room) = &meowlnir.management_room
+			{
 				debug!(?room_id, ?inviter, ?invitee, "Asking meowlnir for user_may_invite");
 				self.send_antispam_request(
-					meowlnir.base_url.as_str(),
-					&meowlnir.secret,
+					base_url.as_str(),
+					secret,
 					meowlnir_antispam::user_may_invite::v1::Request::new(
-						meowlnir.management_room.clone(),
+						room.clone(),
 						inviter,
 						invitee,
 						room_id,
@@ -77,11 +81,14 @@ impl Service {
 				.inspect(|_| debug!("meowlnir allowed the invite"))
 				.inspect_err(|e| debug!("meowlnir denied the invite: {e:?}"))
 				.map(|_| ())
-			} else if let Some(draupnir) = &config.draupnir {
+			} else if let Some(draupnir) = &config.draupnir
+				&& let Some(base_url) = &draupnir.base_url
+				&& let Some(secret) = &draupnir.secret
+			{
 				debug!(?room_id, ?inviter, ?invitee, "Asking draupnir for user_may_invite");
 				self.send_antispam_request(
-					draupnir.base_url.as_str(),
-					&draupnir.secret,
+					base_url.as_str(),
+					secret,
 					draupnir_antispam::user_may_invite::v1::Request::new(
 						room_id, inviter, invitee,
 					),
@@ -106,13 +113,17 @@ impl Service {
 		is_invited: bool,
 	) -> Result<()> {
 		if let Some(config) = &self.services.config.antispam {
-			let result = if let Some(meowlnir) = &config.meowlnir {
+			let result = if let Some(meowlnir) = &config.meowlnir
+				&& let Some(base_url) = &meowlnir.base_url
+				&& let Some(secret) = &meowlnir.secret
+				&& let Some(room) = &meowlnir.management_room
+			{
 				debug!(?room_id, ?user_id, ?is_invited, "Asking meowlnir for user_may_join_room");
 				self.send_antispam_request(
-					meowlnir.base_url.as_str(),
-					&meowlnir.secret,
+					base_url.as_str(),
+					secret,
 					meowlnir_antispam::user_may_join_room::v1::Request::new(
-						meowlnir.management_room.clone(),
+						room.clone(),
 						user_id,
 						room_id,
 						is_invited,
@@ -122,11 +133,14 @@ impl Service {
 				.inspect(|_| debug!("meowlnir allowed the join"))
 				.inspect_err(|e| debug!("meowlnir denied the join: {e:?}"))
 				.map(|_| ())
-			} else if let Some(draupnir) = &config.draupnir {
+			} else if let Some(draupnir) = &config.draupnir
+				&& let Some(base_url) = &draupnir.base_url
+				&& let Some(secret) = &draupnir.secret
+			{
 				debug!(?room_id, ?user_id, ?is_invited, "Asking draupnir for user_may_join_room");
 				self.send_antispam_request(
-					draupnir.base_url.as_str(),
-					&draupnir.secret,
+					base_url.as_str(),
+					secret,
 					draupnir_antispam::user_may_join_room::v1::Request::new(
 						user_id, room_id, is_invited,
 					),
@@ -150,13 +164,17 @@ impl Service {
 		room_id: OwnedRoomId,
 		user_id: OwnedUserId,
 	) -> Result<()> {
-		if let Some(Antispam { meowlnir: Some(meowlnir), .. }) = &self.services.config.antispam {
+		if let Some(Antispam { meowlnir: Some(meowlnir), .. }) = &self.services.config.antispam
+			&& let Some(base_url) = &meowlnir.base_url
+			&& let Some(secret) = &meowlnir.secret
+			&& let Some(room) = &meowlnir.management_room
+		{
 			debug!(?room_id, ?user_id, "Asking meowlnir for accept_make_join");
 			self.send_antispam_request(
-				meowlnir.base_url.as_str(),
-				&meowlnir.secret,
+				base_url.as_str(),
+				secret,
 				meowlnir_antispam::accept_make_join::v1::Request::new(
-					meowlnir.management_room.clone(),
+					room.clone(),
 					user_id,
 					room_id,
 				),
