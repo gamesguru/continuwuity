@@ -61,9 +61,13 @@ pub enum RoomCommand {
 		room_id: OwnedRoomId,
 	},
 
-	/// Forcefully send a dummy event into a room to trigger federation
-	/// catchup. Useful for recovering a specific stale room immediately.
+	/// Forcefully trigger federation sync/catchup in a room. Useful for
+	/// recovering a specific stale room immediately.
 	Bump {
-		room_id: OwnedRoomId,
+		room_id: Option<OwnedRoomId>,
+
+		/// Thump all stagnant federated rooms.
+		#[arg(long)]
+		all: bool,
 	},
 }

@@ -97,6 +97,7 @@ impl Data {
 				}
 				None
 			})
+			.take(1)
 			.widen_then(100, |key| async move {
 				self.readreceiptid_readreceipt.remove_raw(key);
 				yield_now().await;

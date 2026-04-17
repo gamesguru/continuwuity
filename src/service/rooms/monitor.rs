@@ -1,14 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use conduwuit::{Event, Result, debug, http, info, utils::ReadyExt, warn};
+use conduwuit::{Event, Result, debug, info, utils::ReadyExt, warn};
 use futures::{FutureExt, StreamExt};
 use ruma::OwnedServerName;
 
 use crate::service::Dep;
 
 pub struct Service {
-	services: InnerServices,
+	pub(crate) services: InnerServices,
 }
 
 #[async_trait]
@@ -33,13 +33,13 @@ impl crate::Service for Service {
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
 
-struct InnerServices {
-	server: Arc<conduwuit::Server>,
-	globals: Dep<crate::globals::Service>,
-	timeline: Dep<crate::rooms::timeline::Service>,
-	state_cache: Dep<crate::rooms::state_cache::Service>,
-	event_handler: Dep<crate::rooms::event_handler::Service>,
-	sending: Dep<crate::sending::Service>,
+pub(crate) struct InnerServices {
+	pub(crate) server: Arc<conduwuit::Server>,
+	pub(crate) globals: Dep<crate::globals::Service>,
+	pub(crate) timeline: Dep<crate::rooms::timeline::Service>,
+	pub(crate) state_cache: Dep<crate::rooms::state_cache::Service>,
+	pub(crate) event_handler: Dep<crate::rooms::event_handler::Service>,
+	pub(crate) sending: Dep<crate::sending::Service>,
 }
 
 /// How long a room must be idle before being considered stale during the
@@ -97,9 +97,15 @@ impl Service {
 		}
 	}
 
-	async fn check_room(&self, room_id: &ruma::RoomId, stale_threshold_ms: u64) -> Result<()> {
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub async fn check_room(
+		&self,
+		room_id: &ruma::RoomId,
+
+		stale_threshold_ms: u64,
+	) -> Result<()> {
 		// Ensure we are actually participating in the room before we start
-		// probes that could lead to unauthorized make_leave requests.
+		// probes that could lead to unauthorized make_join requests.
 		let ours = self.services.globals.server_name();
 		if !self
 			.services
@@ -154,17 +160,8 @@ impl Service {
 			server.to_owned()
 		};
 
-		info!(
-			target: "forwardfill",
-			"Room {room_id} is stagnant (latest PDU was {}ms ago). Checking for missing \
-			 events via {target_server}...",
-			now.saturating_sub(latest_pdu.origin_server_ts().get().into())
-		);
-
-		// 1. Probe the remote server for its forward extremities via a make_leave
-		//    template. We MUST use an active local user, or Synapse will return 403. If
-		//    we're de-synced and the remote thinks we're out, we try a make_join probe
-		//    as a fallback which also returns the extremity template.
+		// 1. Grab an active local user to use for the probe. We MUST use an active
+		// joined user, or Synapse will return 403.
 		let mut users = self
 			.services
 			.state_cache
@@ -174,61 +171,34 @@ impl Service {
 		let mut remote_latest_events: Vec<ruma::OwnedEventId> = Vec::new();
 		while let Some(user_id) = users.next().await {
 			let user_id = user_id.to_owned();
-			let make_leave_request =
-				ruma::api::federation::membership::prepare_leave_event::v1::Request {
+
+			info!(
+				target: "forwardfill",
+				"Room {room_id} is stagnant (latest PDU was {}ms ago). Probing {target_server} for extremities via {user_id}...",
+				now.saturating_sub(latest_pdu.origin_server_ts().get().into())
+			);
+
+			// 2. Probe the remote server for its forward extremities via a make_join
+			// template. This is the most reliable way to get the remote DAG tip.
+			let make_join_request =
+				ruma::api::federation::membership::prepare_join_event::v1::Request {
 					room_id: room_id.to_owned(),
 					user_id: user_id.clone(),
+					ver: self.services.server.supported_room_versions().collect(),
 				};
 
 			let probe_response = match self
 				.services
 				.sending
-				.send_federation_request(&target_server, make_leave_request)
+				.send_federation_request(&target_server, make_join_request)
 				.await
 			{
 				| Ok(r) => Some(r.event),
-				| Err(e) if e.status_code() == http::StatusCode::FORBIDDEN => {
-					debug!(
-						target: "forwardfill",
-						"make_leave probe for {room_id} via {target_server} (user {user_id}) \
-						 was forbidden; trying make_join fallback..."
-					);
-					let make_join_request =
-						ruma::api::federation::membership::prepare_join_event::v1::Request {
-							room_id: room_id.to_owned(),
-							user_id: user_id.clone(),
-							ver: self.services.server.supported_room_versions().collect(),
-						};
-
-					match self
-						.services
-						.sending
-						.send_federation_request(&target_server, make_join_request)
-						.await
-					{
-						| Ok(r) => Some(r.event),
-						| Err(e) => {
-							debug!(
-								target: "forwardfill",
-								"make_leave and make_join probes both failed for {room_id} \
-								 via {target_server} (user {user_id}): {e}"
-							);
-							continue;
-						},
-					}
-				},
 				| Err(e) => {
-					if e.status_code() == http::StatusCode::NOT_FOUND {
-						debug!(
-							target: "forwardfill",
-							"Probe failed for {room_id} via {target_server} (not found): {e}"
-						);
-					} else {
-						warn!(
-							target: "forwardfill",
-							"Probe failed for {room_id} via {target_server}: {e}"
-						);
-					}
+					warn!(
+						target: "forwardfill",
+						"Probe failed for {room_id} via {target_server} (user {user_id}): {e}"
+					);
 					continue;
 				},
 			};
@@ -269,10 +239,24 @@ impl Service {
 		}
 
 		if remote_latest_events.is_empty() {
-			return Ok(()); // nothing to do
+			if self
+				.services
+				.state_cache
+				.active_local_users_in_room(room_id)
+				.boxed()
+				.next()
+				.await
+				.is_none()
+			{
+				info!(
+					target: "forwardfill",
+					"Skipping stagnant room {room_id} due to no joined local users."
+				);
+			}
+			return Ok(());
 		}
 
-		// 2. Filter remote_latest_events to only those we DON'T know.
+		// 3. Filter remote_latest_events to only those we DON'T know.
 		// If we know all of them, the room isn't actually stale.
 		let mut missing_latest = Vec::new();
 		for event_id in remote_latest_events {
@@ -284,7 +268,7 @@ impl Service {
 		if missing_latest.is_empty() {
 			debug!(
 				target: "forwardfill",
-				"Room {room_id} is not actually stale; we have all forward extremities from \
+				"Room {room_id} is not actually stale; we have all forward extremities from
 				 {target_server}."
 			);
 			return Ok(());
@@ -292,12 +276,12 @@ impl Service {
 
 		info!(
 			target: "forwardfill",
-			"Room {room_id} is actually stale! Discovered {} missing forward extremities from \
+			"Room {room_id} is actually stale! Discovered {} missing forward extremities from
 			 {target_server}.",
 			missing_latest.len()
 		);
 
-		// 3. Fetch the missing extremities and feed them to handle_incoming_pdu.
+		// 4. Fetch the missing extremities and feed them to handle_incoming_pdu.
 		// Passing `true` for fetch_prev tells Conduwuit to automatically use its own
 		// robust native fetch_prev engine to stitch the DAG backwards!
 		let mut handled = 0_usize;
