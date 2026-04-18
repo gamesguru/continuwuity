@@ -316,7 +316,7 @@ complement/docker: ##H Build docker image from existing binary
 		-f ./docker/complement.Dockerfile \
 		--load .
 
-HOST_LIBS_MOUNTS := $(shell ldd target/latest/conduwuit | awk '/=> \/usr\/lib\// {print $$3}' | grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|libdl\.so|libpthread\.so|librt\.so' | awk '{print $$1":"$$1":ro"}' | paste -sd ';' - || true)
+HOST_LIBS_MOUNTS = $(shell LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$(LD_LIBRARY_PATH)" ldd target/latest/conduwuit | grep -E '=> /' | awk '{print $$3}' | grep -vE '^/usr/local/|libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|libdl\.so|libpthread\.so|librt\.so|ld-linux' | awk '{print $$1":"$$1":ro"}' | paste -sd ';' - || true)
 
 .PHONY: complement/run
 complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
