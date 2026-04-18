@@ -7,6 +7,8 @@ use serde_json::value::RawValue as RawJsonValue;
 
 type Parsed = (OwnedRoomId, OwnedEventId, CanonicalJsonObject);
 
+const MAX_AUTH_EVENTS_ROOM_ID_FALLBACK: usize = 10;
+
 #[implement(super::Service)]
 pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 	let value = serde_json::from_str::<CanonicalJsonObject>(pdu.get()).map_err(|e| {
@@ -46,20 +48,33 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 		}
 	} else {
 		// V12 non-create event without room_id
-		// Try to find it from auth_events
+		// Try to find it from auth_events, but do not allow untrusted input to
+		// trigger an unbounded number of sequential DB lookups.
+		let auth_events = value
+			.get("auth_events")
+			.and_then(|v| v.as_array())
+			.ok_or_else(|| err!(Request(InvalidParam("Missing room_id in PDU"))))?;
+
+		if auth_events.len() > MAX_AUTH_EVENTS_ROOM_ID_FALLBACK {
+			return Err!(Request(InvalidParam("Missing room_id in PDU")));
+		}
+
 		let mut found_room_id = None;
-		if let Some(auth_events) = value.get("auth_events").and_then(|v| v.as_array()) {
-			for auth_event_id in auth_events {
-				if let Some(auth_event_id) = auth_event_id.as_str() {
-					if let Ok(auth_event_id) = OwnedEventId::parse(auth_event_id) {
-						if let Ok(pdu) = self.services.timeline.get_pdu(&auth_event_id).await {
-							found_room_id = pdu.room_id().map(ToOwned::to_owned);
-							break;
+		for auth_event_id in auth_events {
+			if let Some(auth_event_id) = auth_event_id.as_str() {
+				if let Ok(auth_event_id) = OwnedEventId::parse(auth_event_id) {
+					if let Ok(pdu) = self.services.timeline.get_pdu(&auth_event_id).await {
+						found_room_id = pdu.room_id().map(ToOwned::to_owned);
+						if found_room_id.is_some() {
+							if found_room_id.is_some() {
+								break;
+							}
 						}
 					}
 				}
 			}
 		}
+
 		found_room_id.ok_or_else(|| err!(Request(InvalidParam("Missing room_id in PDU"))))?
 	};
 

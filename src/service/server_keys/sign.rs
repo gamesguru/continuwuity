@@ -18,10 +18,17 @@ pub fn hash_and_sign_event(
 	use conduwuit::matrix::state_res::RoomVersion;
 	use ruma::signatures::hash_and_sign_event;
 
-	// MSC4291: Omit room_id for v12+
+	let is_create_event = matches!(
+		object.get("type"),
+		Some(ruma::CanonicalJsonValue::String(event_type)) if event_type == "m.room.create"
+	);
+
+	// MSC4291: Omit room_id for m.room.create in v12+
 	if let Ok(rv) = RoomVersion::new(room_version) {
-		if rv.room_ids_as_hashes {
-			object.remove("room_id");
+		if rv.room_ids_as_hashes && is_create_event {
+			if object.get("type").and_then(|value| value.as_str()) == Some("m.room.create") {
+				object.remove("room_id");
+			}
 		}
 	}
 
