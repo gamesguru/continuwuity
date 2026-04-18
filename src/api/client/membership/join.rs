@@ -640,12 +640,16 @@ async fn join_room_by_id_helper_remote(
 		let shortstatekey = services.rooms.short.get_shortstatekey(&k, &s).await.ok()?;
 
 		let event_id = fetch_state.get(&shortstatekey)?;
-		services
-			.rooms
-			.timeline
-			.get_pdu_in_room(Some(room_id), event_id)
-			.await
-			.ok()
+		if matches!(k, StateEventType::RoomCreate) {
+			services.rooms.timeline.get_pdu(event_id).await.ok()
+		} else {
+			services
+				.rooms
+				.timeline
+				.get_pdu_in_room(Some(room_id), event_id)
+				.await
+				.ok()
+		}
 	};
 
 	let auth_check = state_res::event_auth::auth_check(
