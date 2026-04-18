@@ -5,7 +5,7 @@ use conduwuit::{
 	utils::{stream::IterStream, time},
 	warn,
 };
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::admin_command;
 
@@ -81,11 +81,15 @@ pub(super) async fn clear_caches(&self) -> Result {
 
 #[admin_command]
 pub(super) async fn list_backups(&self) -> Result {
+	let db = Arc::clone(&self.services.db);
 	self.services
-		.db
-		.db
-		.backup_list()?
-		.try_stream()
+		.server
+		.runtime()
+		.spawn_blocking(move || db.db.backup_list().map(Iterator::collect::<Vec<_>>))
+		.await??
+		.into_iter()
+		.stream()
+		.map(Ok)
 		.try_for_each(|result| writeln!(self, "{result}"))
 		.await
 }
@@ -105,7 +109,14 @@ pub(super) async fn backup_database(&self) -> Result {
 		})
 		.await?;
 
-	let count = self.services.db.db.backup_count()?;
+	let db = Arc::clone(&self.services.db);
+	let count = self
+		.services
+		.server
+		.runtime()
+		.spawn_blocking(move || db.db.backup_count())
+		.await??;
+
 	self.write_str(&format!("{result}. Currently have {count} backups."))
 		.await
 }
@@ -134,7 +145,7 @@ pub(super) async fn restart(&self, force: bool) -> Result {
 
 	if !force && current_exe_deleted() {
 		return Err!(
-			"The server cannot be restarted because the executable changed. If this is expected \
+			"The server cannot be restarted because the executable changed. If this is expected
 			 use --force to override."
 		);
 	}
@@ -156,24 +167,40 @@ pub(super) async fn shutdown(&self) -> Result {
 
 #[admin_command]
 pub(super) async fn list_features(&self) -> Result {
-	let enabled_features = conduwuit::info::introspection::ENABLED_FEATURES
-		.get()
-		.copied()
-		.unwrap_or(&[]);
+	let mut enabled_features = conduwuit::info::introspection::ENABLED_FEATURES
+		.lock()
+		.expect("locked")
+		.iter()
+		.flat_map(|(_, f)| f.iter().map(|s| s.replace('_', "-")))
+		.collect::<Vec<_>>();
 
-	let available_features = conduwuit::info::introspection::AVAILABLE_FEATURES
-		.get()
-		.copied()
-		.unwrap_or(&[]);
+	enabled_features.sort_unstable();
+	enabled_features.dedup();
 
-	let mut active_features = Vec::new();
-	for feature in available_features {
-		if enabled_features.contains(feature) {
-			active_features.push(*feature);
-		}
+	let mut available_features = conduwuit::build_metadata::WORKSPACE_FEATURES
+		.iter()
+		.flat_map(|(_, f)| f.iter().map(|s| s.replace('_', "-")))
+		.collect::<Vec<_>>();
+
+	available_features.sort_unstable();
+	available_features.dedup();
+
+	let disabled_features: Vec<_> = available_features
+		.into_iter()
+		.filter(|f| !enabled_features.contains(f))
+		.collect();
+
+	let mut features = String::new();
+
+	for feature in enabled_features {
+		writeln!(features, "✓ {feature} [enabled]")?;
 	}
 
-	self.write_str(&active_features.join(", ")).await
+	for feature in disabled_features {
+		writeln!(features, "x {feature}")?;
+	}
+
+	self.write_str(&features).await
 }
 
 #[admin_command]
