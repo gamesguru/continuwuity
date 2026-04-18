@@ -223,6 +223,7 @@ where
 							.state_cache
 							.room_members(&pdu.room_id_or_hash().ok_or_else(|| {
 								err!(Request(Forbidden("Event has no room_id")))
+
 							})?)
 							.ready_filter(|user| self.services.globals.user_is_local(user))
 							.ready_filter(|user| *user != target)
@@ -249,6 +250,7 @@ where
 							.state_cache
 							.room_members(&pdu.room_id_or_hash().ok_or_else(|| {
 								err!(Request(Forbidden("Event has no room_id")))
+
 							})?)
 							.ready_filter(|user| self.services.globals.user_is_local(user))
 							.ready_filter(|user| *user != target)

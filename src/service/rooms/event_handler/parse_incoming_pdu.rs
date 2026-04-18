@@ -1,5 +1,5 @@
 use conduwuit::{
-	Result, RoomVersion, err, implement, matrix::event::gen_event_id_canonical_json,
+	Event, Result, RoomVersion, err, implement, matrix::event::gen_event_id_canonical_json,
 	result::FlatOk,
 };
 use ruma::{CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, RoomVersionId};
@@ -42,7 +42,7 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 			OwnedRoomId::parse(event_id.as_str().replace('$', "!")).expect("valid room ID")
 		} else {
 			// V11 or below room, room_id must be present
-			return Err!(Request(InvalidParam("Invalid or missing room_id in pdu")));
+			return err!(Request(InvalidParam("Invalid or missing room_id in pdu")));
 		}
 	} else {
 		// V12 non-create event without room_id
@@ -51,7 +51,7 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 		if let Some(auth_events) = value.get("auth_events").and_then(|v| v.as_array()) {
 			for auth_event_id in auth_events {
 				if let Some(auth_event_id) = auth_event_id.as_str() {
-					if let Ok(auth_event_id) = ruma::OwnedEventId::parse(auth_event_id) {
+					if let Ok(auth_event_id) = OwnedEventId::parse(auth_event_id) {
 						if let Ok(pdu) = self.services.timeline.get_pdu(&auth_event_id).await {
 							found_room_id = pdu.room_id().map(ToOwned::to_owned);
 							break;

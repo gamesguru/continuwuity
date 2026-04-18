@@ -124,7 +124,7 @@ impl Event for Pdu {
 		} else {
 			// v12+
 			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			RoomId::parse(&constructed_hash).ok()
+			RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned)
 		}
 	}
 
@@ -192,7 +192,7 @@ impl Event for &Pdu {
 		} else {
 			// v12+
 			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			RoomId::parse(&constructed_hash).ok()
+			RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned)
 		}
 	}
 

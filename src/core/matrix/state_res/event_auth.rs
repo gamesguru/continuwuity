@@ -317,10 +317,10 @@ where
 	}
 
 	if let Some(ref pe) = power_levels_event {
-		if *pe.room_id().unwrap() != expected_room_id {
+		if pe.room_id() != expected_room_id.as_deref() {
 			warn!(
-				expected = %expected_room_id,
-				received = %pe.room_id().unwrap(),
+				expected = ?expected_room_id,
+				received = ?pe.room_id(),
 				"room_id of referenced power levels event does not match that of the m.room.create event"
 			);
 			return Ok(false);
@@ -437,16 +437,10 @@ where
 		},
 	};
 
-	if sender_member_event
-		.room_id()
-		.expect("we have a room ID for non create events")
-		!= expected_room_id
-	{
+	if sender_member_event.room_id() != expected_room_id.as_deref() {
 		warn!(
-			"room_id of incoming event ({}) does not match that of the m.room.create event ({})",
-			sender_member_event
-				.room_id()
-				.expect("event must have a room ID"),
+			"room_id of incoming event ({:?}) does not match that of the m.room.create event ({:?})",
+			sender_member_event.room_id(),
 			expected_room_id
 		);
 		return Ok(false);

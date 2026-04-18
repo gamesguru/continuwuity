@@ -815,7 +815,6 @@ impl Service {
 
 			let unread: UInt = if let Some(room_id) = pdu.room_id_or_hash() {
 				self.services
-					.rooms
 					.user
 					.notification_count(&user_id, &room_id)
 					.await
