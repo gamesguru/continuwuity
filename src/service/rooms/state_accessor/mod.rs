@@ -6,7 +6,7 @@ mod user_can;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use conduwuit::{Result, err};
+use conduwuit::{Pdu, Result, err};
 use database::Map;
 use ruma::{
 	EventEncryptionAlgorithm, JsOption, OwnedEventId, OwnedRoomAliasId, OwnedRoomId, RoomId,

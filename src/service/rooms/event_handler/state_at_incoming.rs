@@ -22,6 +22,7 @@ use crate::rooms::short::ShortStateHash;
 pub(super) async fn state_at_incoming_degree_one<Pdu>(
 	&self,
 	incoming_pdu: &Pdu,
+	room_id: &RoomId,
 ) -> Result<Option<HashMap<u64, OwnedEventId>>>
 where
 	Pdu: Event + Send + Sync,

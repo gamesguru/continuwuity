@@ -148,12 +148,12 @@ where
 					unsigned.insert(
 						"prev_content".to_owned(),
 						CanonicalJsonValue::Object(
-							utils::to_canonical_object(prev_state.get_content_as_value())
+							utils::to_canonical_object(prev_state.event.get_content_as_value())
 								.map_err(|e| {
-									err!(Database(error!(
-										"Failed to convert prev_state to canonical JSON: {e}",
-									)))
-								})?,
+								err!(Database(error!(
+									"Failed to convert prev_state to canonical JSON: {e}",
+								)))
+							})?,
 						),
 					);
 					unsigned.insert(
