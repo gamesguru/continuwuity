@@ -1,4 +1,5 @@
-use conduwuit::implement;
+use conduwuit::{implement, utils::stream::ReadyExt};
+use futures::StreamExt;
 use ruma::{
 	EventId, RoomId, ServerName,
 	events::{
@@ -50,14 +51,18 @@ pub async fn server_can_see_event(
 			// Allow if any member on requesting server was AT LEAST invited, else deny
 			self.services
 				.state_cache
-				.server_is_participant(origin, room_id)
+				.room_members(room_id)
+				.ready_filter(|member| member.server_name() == origin)
+				.any(|member| self.user_was_invited(shortstatehash, member))
 				.await
 		},
 		| HistoryVisibility::Joined => {
 			// Allow if any member on requesting server was joined, else deny
 			self.services
 				.state_cache
-				.server_in_room(origin, room_id)
+				.room_members(room_id)
+				.ready_filter(|member| member.server_name() == origin)
+				.any(|member| self.user_was_joined(shortstatehash, member))
 				.await
 		},
 		| _ => true,

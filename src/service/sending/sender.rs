@@ -229,12 +229,15 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 	) {
 		let _cork = self.db.db.cork();
-		let iv = self
-			.db
-			.queued_requests(&msg.dest)
-			.take(DEQUEUE_LIMIT)
-			.collect::<Vec<_>>()
-			.await;
+		let iv = if !matches!(msg.event, SendingEvent::Flush) {
+			vec![(msg.queue_id, msg.event)]
+		} else {
+			self.db
+				.queued_requests(&msg.dest)
+				.take(DEQUEUE_LIMIT)
+				.collect::<Vec<_>>()
+				.await
+		};
 
 		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
