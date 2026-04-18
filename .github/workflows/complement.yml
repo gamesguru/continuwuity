@@ -65,6 +65,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
           fetch-depth: 0
+          submodules: recursive
 
       - name: Fetch tags and origin/main for comparison
         run: git fetch --tags --force && git fetch origin HEAD && git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
@@ -164,12 +165,6 @@ jobs:
 
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
-
-      - name: Checkout Complement
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          repository: matrix-org/complement
-          path: complement-src
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
