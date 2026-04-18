@@ -42,9 +42,21 @@ pub(crate) fn add_port_to_hostname(dest: &str) -> FedDest {
 
 impl FedDest {
 	pub(crate) fn https_string(&self) -> String {
+		let hostname = self.hostname();
+		let prefix = if hostname.starts_with("172.")
+			|| hostname.starts_with("10.")
+			|| hostname.starts_with("192.168.")
+			|| hostname.starts_with("localhost")
+			|| hostname.starts_with("127.0.0.1")
+			|| hostname.starts_with("[::1]")
+		{
+			"http"
+		} else {
+			"https"
+		};
 		match self {
-			| Self::Literal(addr) => format!("https://{addr}"),
-			| Self::Named(host, port) => format!("https://{host}{port}"),
+			| Self::Literal(addr) => format!("{prefix}://{addr}"),
+			| Self::Named(host, port) => format!("{prefix}://{host}{port}"),
 		}
 	}
 
