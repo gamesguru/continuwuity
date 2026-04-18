@@ -51,7 +51,7 @@ where
 	let prev_pdu = self
 		.services
 		.timeline
-		.get_pdu(prev_event)
+		.get_pdu_in_room(Some(room_id), prev_event)
 		.await
 		.map_err(|e| err!(Database("Could not find prev event, but we know the state: {e:?}")))?;
 
@@ -118,7 +118,7 @@ where
 			.await?;
 
 	let Ok(new_state) = self
-		.state_resolution(room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
 		.boxed()
 		.await
 	else {

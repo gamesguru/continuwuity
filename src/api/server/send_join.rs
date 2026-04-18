@@ -224,7 +224,11 @@ async fn create_join_event(
 		.broad_filter_map(|event_id| async move {
 			if omit_members {
 				if let Ok(e) = event_id.as_ref() {
-					let pdu = services.rooms.timeline.get_pdu(e).await;
+					let pdu = services
+						.rooms
+						.timeline
+						.get_pdu_in_room(Some(room_id), e)
+						.await;
 					if pdu.is_ok_and(|p| p.kind().to_cow_str() == "m.room.member") {
 						trace!("omitting member event {e:?} from returned state");
 						// skip members

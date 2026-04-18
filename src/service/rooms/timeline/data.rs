@@ -111,9 +111,22 @@ impl Data {
 
 	/// Returns the pdu directly from `eventid_pduid` only.
 	pub(super) async fn get_non_outlier_pdu(&self, event_id: &EventId) -> Result<PduEvent> {
+		self.get_non_outlier_pdu_in_room(None, event_id).await
+	}
+
+	/// Returns the pdu directly from `eventid_pduid` only, populating room_id.
+	pub(super) async fn get_non_outlier_pdu_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		event_id: &EventId,
+	) -> Result<PduEvent> {
 		let pduid = self.get_pdu_id(event_id).await?;
 
-		self.pduid_pdu.get(&pduid).await.deserialized()
+		let mut pdu: PduEvent = self.pduid_pdu.get(&pduid).await.deserialized()?;
+		if pdu.room_id.is_none() {
+			pdu.room_id = room_id.map(ToOwned::to_owned);
+		}
+		Ok(pdu)
 	}
 
 	/// Like get_non_outlier_pdu(), but without the expense of fetching and
@@ -128,11 +141,28 @@ impl Data {
 	///
 	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.
 	pub(super) async fn get_pdu(&self, event_id: &EventId) -> Result<PduEvent> {
-		let accepted = self.get_non_outlier_pdu(event_id).boxed();
+		self.get_pdu_in_room(None, event_id).await
+	}
+
+	/// Returns the pdu, populating room_id.
+	///
+	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.
+	pub(super) async fn get_pdu_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		event_id: &EventId,
+	) -> Result<PduEvent> {
+		let accepted = self.get_non_outlier_pdu_in_room(room_id, event_id).boxed();
 		let outlier = self
 			.eventid_outlierpdu
 			.get(event_id)
-			.map(Deserialized::deserialized)
+			.map(move |handle| {
+				let mut pdu: PduEvent = handle.deserialized()?;
+				if pdu.room_id.is_none() {
+					pdu.room_id = room_id.map(ToOwned::to_owned);
+				}
+				Ok(pdu)
+			})
 			.boxed();
 
 		select_ok([accepted, outlier]).await.map(at!(0))
@@ -157,7 +187,22 @@ impl Data {
 	///
 	/// This does __NOT__ check the outliers `Tree`.
 	pub(super) async fn get_pdu_from_id(&self, pdu_id: &RawPduId) -> Result<PduEvent> {
-		self.pduid_pdu.get(pdu_id).await.deserialized()
+		self.get_pdu_from_id_in_room(None, pdu_id).await
+	}
+
+	/// Returns the pdu, populating room_id.
+	///
+	/// This does __NOT__ check the outliers `Tree`.
+	pub(super) async fn get_pdu_from_id_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		pdu_id: &RawPduId,
+	) -> Result<PduEvent> {
+		let mut pdu: PduEvent = self.pduid_pdu.get(pdu_id).await.deserialized()?;
+		if pdu.room_id.is_none() {
+			pdu.room_id = room_id.map(ToOwned::to_owned);
+		}
+		Ok(pdu)
 	}
 
 	/// Returns the pdu as a `BTreeMap<String, CanonicalJsonValue>`.
@@ -222,7 +267,7 @@ impl Data {
 				self.pduid_pdu
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(Self::from_json_slice)
+					.ready_and_then(move |kv| Self::parse_json_slice(Some(room_id), kv))
 			})
 			.try_flatten_stream()
 	}
@@ -238,15 +283,21 @@ impl Data {
 				self.pduid_pdu
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(Self::from_json_slice)
+					.ready_and_then(move |kv| Self::parse_json_slice(Some(room_id), kv))
 			})
 			.try_flatten_stream()
 	}
 
-	fn from_json_slice((pdu_id, pdu): KeyVal<'_>) -> Result<PdusIterItem> {
+	fn parse_json_slice(
+		room_id: Option<&RoomId>,
+		(pdu_id, pdu): KeyVal<'_>,
+	) -> Result<PdusIterItem> {
 		let pdu_id: RawPduId = pdu_id.into();
 
-		let pdu = serde_json::from_slice::<PduEvent>(pdu)?;
+		let mut pdu = serde_json::from_slice::<PduEvent>(pdu)?;
+		if pdu.room_id.is_none() {
+			pdu.room_id = room_id.map(ToOwned::to_owned);
+		}
 
 		Ok((pdu_id.pdu_count(), pdu))
 	}
