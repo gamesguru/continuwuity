@@ -29,21 +29,47 @@ jobs:
           - arch: amd64
             os: ubuntu-22.04
             profile: release-quick
+            room_version: "12"
           - arch: amd64
             os: ubuntu-24.04
             profile: release-quick
+            room_version: "12"
           - arch: arm64
             prebuilt_arch: arm64-cortex-a76
             target_cpu: cortex-a76
             jemalloc_lg_page: 16
             os: ubuntu-22.04
             profile: release-quick
+            room_version: "12"
           - arch: arm64
             prebuilt_arch: arm64-cortex-a76
             target_cpu: cortex-a76
             jemalloc_lg_page: 16
             os: ubuntu-24.04
             profile: release-quick
+            room_version: "12"
+          - arch: amd64
+            os: ubuntu-22.04
+            profile: release-quick
+            room_version: "11"
+          - arch: amd64
+            os: ubuntu-24.04
+            profile: release-quick
+            room_version: "11"
+          - arch: arm64
+            prebuilt_arch: arm64-cortex-a76
+            target_cpu: cortex-a76
+            jemalloc_lg_page: 16
+            os: ubuntu-22.04
+            profile: release-quick
+            room_version: "11"
+          - arch: arm64
+            prebuilt_arch: arm64-cortex-a76
+            target_cpu: cortex-a76
+            jemalloc_lg_page: 16
+            os: ubuntu-24.04
+            profile: release-quick
+            room_version: "11"
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
     # and pushing the generated github-badge.json to the badges branch
@@ -140,6 +166,9 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
+      - name: Configure Default Room Version
+        run: sed -i 's/default_room_version = "12"/default_room_version = "${{ matrix.room_version }}"/g' complement/complement.config.toml
+
       - name: Build Complement Docker image
         run: make complement/docker PROFILE=${{ matrix.profile }}
 
@@ -204,8 +233,8 @@ jobs:
           # Inject arch, os, and profile into the JSONL file itself.
           # We use a temp file to avoid reading/writing to the same file.
           TEMP_RESULTS=$(mktemp)
-          jq -c --arg a "${{ matrix.arch }}" --arg o "${{ matrix.os }}" --arg p "${{ matrix.profile }}" \
-            '. + {arch: $a, os: $o, profile: $p}' "$RESULTS" > "$TEMP_RESULTS"
+          jq -c --arg a "${{ matrix.arch }}" --arg o "${{ matrix.os }}" --arg p "${{ matrix.profile }}" --arg rv "${{ matrix.room_version }}" \
+            '. + {arch: $a, os: $o, profile: $p, room_version: $rv}' "$RESULTS" > "$TEMP_RESULTS"
           mv "$TEMP_RESULTS" "$RESULTS"
 
           PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
@@ -253,6 +282,7 @@ jobs:
           arch: ${{ matrix.arch }}
           os: ${{ matrix.os }}
           profile: ${{ matrix.profile }}
+          room_version: ${{ matrix.room_version }}
 
       - name: Ingest results into PostgreSQL
         if: always()
@@ -319,9 +349,10 @@ jobs:
           ARCH="${{ matrix.arch }}"
           OS="${{ matrix.os }}"
           PROFILE="${{ matrix.profile }}"
+          ROOM_VERSION="${{ matrix.room_version }}"
 
           # Fetch the newly failing tests for this specific run
-          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' LIMIT 1;" | sed 's/\\n/\n/g')
+          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' LIMIT 1;" | sed 's/\\n/\n/g')
 
           echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"
