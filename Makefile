@@ -345,13 +345,13 @@ complement/stats: ##H Check local test stats
 complement/diff: ##H Diff local results against branch baseline (requires REF=git-ref)
 	@test -n "$(REF)" || { echo "ERROR: REF variable is required (e.g. make complement/diff REF=HEAD~1)"; exit 1; }
 	@SHA=$$(git rev-parse $(REF)) && \
-	git show-ref --quiet github/_metadata/badges || { echo "ERROR: branch github/_metadata/badges missing. Run: git fetch github _metadata/badges"; exit 1; } && \
-	FILE=$$(git ls-tree -r github/_metadata/badges --name-only | grep -E "runs_data/($${SHA:0:8}|$$SHA)\.jsonl" | head -n 1) && \
+	git show-ref --quiet origin/_metadata/badges || { echo "ERROR: branch origin/_metadata/badges missing. Run: git fetch origin _metadata/badges"; exit 1; } && \
+	FILE=$$(git ls-tree -r origin/_metadata/badges --name-only | grep -E "runs_data/($${SHA:0:8}|$$SHA).*\.jsonl" | head -n 1) && \
 	if [ -z "$$FILE" ]; then \
-		echo "ERROR: could not find results for $$SHA (or $${SHA:0:8}) in github/_metadata/badges"; \
+		echo "ERROR: could not find results for $$SHA (or $${SHA:0:8}) in origin/_metadata/badges"; \
 		exit 1; \
 	fi; \
-	diff -u --color tests/test_results/complement/test_results.jsonl <(git show github/_metadata/badges:$$FILE)
+	diff -u --color tests/test_results/complement/test_results.jsonl <(git show origin/_metadata/badges:$$FILE)
 
 
 
