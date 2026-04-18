@@ -1,7 +1,7 @@
 use std::{borrow::Borrow, ops::Deref, sync::Arc};
 
 use conduwuit::{
-	Pdu, Result, at, err, implement,
+	Result, at, err, implement,
 	matrix::{Event, StateKey},
 	pair_of,
 	utils::{
@@ -66,7 +66,7 @@ where
 {
 	self.state_get(shortstatehash, event_type, state_key)
 		.await
-		.and_then(|event| event.event.get_content())
+		.and_then(|event| event.get_content())
 }
 
 #[implement(super::Service)]

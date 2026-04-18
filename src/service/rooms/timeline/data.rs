@@ -109,11 +109,6 @@ impl Data {
 			.map(|handle| RawPduId::from(&*handle))
 	}
 
-	/// Returns the pdu directly from `eventid_pduid` only.
-	pub(super) async fn get_non_outlier_pdu(&self, event_id: &EventId) -> Result<PduEvent> {
-		self.get_non_outlier_pdu_in_room(None, event_id).await
-	}
-
 	/// Returns the pdu directly from `eventid_pduid` only, populating room_id.
 	pub(super) async fn get_non_outlier_pdu_in_room(
 		&self,
@@ -135,13 +130,6 @@ impl Data {
 		let pduid = self.get_pdu_id(event_id).await?;
 
 		self.pduid_pdu.exists(&pduid).await
-	}
-
-	/// Returns the pdu.
-	///
-	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.
-	pub(super) async fn get_pdu(&self, event_id: &EventId) -> Result<PduEvent> {
-		self.get_pdu_in_room(None, event_id).await
 	}
 
 	/// Returns the pdu, populating room_id.
@@ -181,13 +169,6 @@ impl Data {
 		let outlier = self.outlier_pdu_exists(event_id).boxed();
 
 		select_ok([non_outlier, outlier]).await.map(at!(0))
-	}
-
-	/// Returns the pdu.
-	///
-	/// This does __NOT__ check the outliers `Tree`.
-	pub(super) async fn get_pdu_from_id(&self, pdu_id: &RawPduId) -> Result<PduEvent> {
-		self.get_pdu_from_id_in_room(None, pdu_id).await
 	}
 
 	/// Returns the pdu, populating room_id.
