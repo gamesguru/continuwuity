@@ -150,6 +150,9 @@ jobs:
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
 
+      - name: Set room version in complement config
+        run: sed -i 's/default_room_version = "12"/default_room_version = "${{ matrix.room_version }}"/' complement/complement.config.toml
+
       - name: Build Complement Docker image
         run: make complement/docker PROFILE=${{ matrix.profile }}
 
@@ -180,9 +183,6 @@ jobs:
           sudo ufw allow in on br-+ comment "(from Matrix Complement testing) Allow traffic from custom Docker networks to the host machine (host.docker.internal)" || true
 
       - name: Run Complement tests
-        env:
-          COMPLEMENT_SHARE_ENV_PREFIX: PASS_
-          PASS_CONDUWUIT_DEFAULT_ROOM_VERSION: ${{ matrix.room_version }}
         run: |
           make complement/run COMPLEMENT_DIR=./complement-src
 
