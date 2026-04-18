@@ -308,11 +308,13 @@ complement/docker: ##H Build docker image from existing binary
 		-f ./docker/complement.Dockerfile \
 		--load .
 
+HOST_LIBS_MOUNTS := $(shell ldd target/latest/conduwuit | awk '/=> \/usr\/lib\// {print $$3}' | grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|libdl\.so|libpthread\.so|librt\.so' | awk '{print $$1":"$$1":ro"}' | paste -sd ';' - || true)
+
 .PHONY: complement/run
 complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
 	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
 	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
-	COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" COMPLEMENT_HOST_MOUNTS="$(PREFIX)/lib:$(PREFIX)/lib:ro" ./bin/complement $(COMPLEMENT_DIR)
+	COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" COMPLEMENT_HOST_MOUNTS="$(PREFIX)/lib:$(PREFIX)/lib:ro;$(HOST_LIBS_MOUNTS)" ./bin/complement $(COMPLEMENT_DIR)
 
 
 .PHONY: complement/stats
