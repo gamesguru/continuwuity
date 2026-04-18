@@ -52,11 +52,15 @@ pub fn remove_raw(&self, key: &[u8]) {
 
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
 		.try_with(|batch| {
-			let mut batch_guard = batch.try_lock().expect("Failed to lock transaction batch");
-			let (batch, _closures) = &mut *batch_guard;
-			batch.delete_cf(&self.cf(), key);
+			if let Ok(mut batch_guard) = batch.try_lock() {
+				let (batch, _closures) = &mut *batch_guard;
+				batch.delete_cf(&self.cf(), key.as_ref());
+				true
+			} else {
+				false
+			}
 		})
-		.is_ok();
+		.unwrap_or(false);
 
 	if !appended_to_txn {
 		self.db

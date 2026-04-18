@@ -201,7 +201,7 @@ where
 
 	let appended_to_txn = crate::transaction::TRANSACTION_BATCH
 		.try_with(|batch| {
-			let mut batch_guard = batch.try_lock().expect("Failed to lock transaction batch");
+			let mut batch_guard = batch.blocking_lock();
 			let (batch, closures) = &mut *batch_guard;
 			batch.put_cf(&self.cf(), key.as_ref(), val.as_ref());
 
@@ -221,7 +221,6 @@ where
 		if !self.db.corked() {
 			self.db.flush().expect("database flush error");
 		}
-	} else {
 		self.watchers.wake(key.as_ref());
 	}
 }
