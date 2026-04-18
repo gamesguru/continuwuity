@@ -18,16 +18,11 @@ pub(crate) async fn get_event_route(
 	let event = services
 		.rooms
 		.timeline
-		.get_pdu_json(&body.event_id)
+		.get_pdu(&body.event_id)
 		.await
 		.map_err(|_| err!(Request(NotFound("Event not found."))))?;
 
-	let room_id: &RoomId = event
-		.get("room_id")
-		.and_then(|val| val.as_str())
-		.ok_or_else(|| err!(Database("Invalid event in database.")))?
-		.try_into()
-		.map_err(|_| err!(Database("Invalid room_id in event in database.")))?;
+	let room_id = event.room_id_or_hash();
 
 	AccessCheck {
 		services: &services,

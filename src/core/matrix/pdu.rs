@@ -116,10 +116,10 @@ impl Event for Pdu {
 	#[inline]
 	fn room_id_or_hash(&self) -> OwnedRoomId {
 		if *self.event_type() != TimelineEventType::RoomCreate {
-			return self
-				.room_id()
-				.expect("Event must have a room ID")
-				.to_owned();
+			return self.room_id().map(ToOwned::to_owned).unwrap_or_else(|| {
+				warn!("Event {} is missing room_id", self.event_id());
+				RoomId::new(ruma::server_name!("unknown")).to_owned()
+			});
 		}
 		if let Some(room_id) = &self.room_id {
 			// v1-v11
@@ -189,10 +189,10 @@ impl Event for &Pdu {
 	#[inline]
 	fn room_id_or_hash(&self) -> OwnedRoomId {
 		if *self.event_type() != TimelineEventType::RoomCreate {
-			return self
-				.room_id()
-				.expect("Event must have a room ID")
-				.to_owned();
+			return self.room_id().map(ToOwned::to_owned).unwrap_or_else(|| {
+				warn!("Event {} is missing room_id", self.event_id());
+				RoomId::new(ruma::server_name!("unknown")).to_owned()
+			});
 		}
 		if let Some(room_id) = &self.room_id {
 			// v1-v11

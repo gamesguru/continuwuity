@@ -1313,8 +1313,14 @@ fn check_power_levels(
 		let old_level = old_state.users.get(user);
 		let new_level = new_state.users.get(user);
 		if new_level.is_some() && creators.contains(user) {
-			warn!("creators cannot appear in the users list of m.room.power_levels");
-			return Some(false); // cannot alter creator power level
+			if new_level != Some(&Int::MAX) && new_level != Some(&int!(100)) {
+				warn!(
+					"creators cannot appear in the users list of m.room.power_levels with a \
+					 non-privileged power level"
+				);
+				return Some(false); // cannot alter creator power level
+			}
+			trace!("ignoring creator in users list with privileged power level");
 		}
 		if old_level.is_some() && new_level.is_some() && old_level == new_level {
 			continue;

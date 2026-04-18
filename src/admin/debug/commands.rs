@@ -41,17 +41,11 @@ pub(super) async fn echo(&self, message: Vec<String>) -> Result {
 
 #[admin_command]
 pub(super) async fn get_auth_chain(&self, event_id: OwnedEventId) -> Result {
-	let Ok(event) = self.services.rooms.timeline.get_pdu_json(&event_id).await else {
+	let Ok(event) = self.services.rooms.timeline.get_pdu(&event_id).await else {
 		return Err!("Event not found.");
 	};
 
-	let room_id_str = event
-		.get("room_id")
-		.and_then(CanonicalJsonValue::as_str)
-		.ok_or_else(|| err!(Database("Invalid event in database")))?;
-
-	let room_id = <&RoomId>::try_from(room_id_str)
-		.map_err(|_| err!(Database("Invalid room id field in event in database")))?;
+	let room_id = event.room_id_or_hash();
 
 	let start = Instant::now();
 	let count = self

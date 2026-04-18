@@ -17,13 +17,12 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 		.and_then(CanonicalJsonValue::as_str)
 		.ok_or_else(|| err!(Request(InvalidParam("Missing or invalid type in pdu"))))?;
 
-	let room_id: OwnedRoomId = if event_type != "m.room.create" {
-		value
-			.get("room_id")
-			.and_then(CanonicalJsonValue::as_str)
+	let room_id: OwnedRoomId = if let Some(room_id_val) = value.get("room_id") {
+		room_id_val
+			.as_str()
 			.map(OwnedRoomId::parse)
 			.flat_ok_or(err!(Request(InvalidParam("Invalid room_id in pdu"))))?
-	} else {
+	} else if event_type == "m.room.create" {
 		// v12 rooms might have no room_id in the create event. We'll need to check the
 		// content.room_version
 		let content = value
@@ -43,12 +42,25 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 			OwnedRoomId::parse(event_id.as_str().replace('$', "!")).expect("valid room ID")
 		} else {
 			// V11 or below room, room_id must be present
-			value
-				.get("room_id")
-				.and_then(CanonicalJsonValue::as_str)
-				.map(OwnedRoomId::parse)
-				.flat_ok_or(err!(Request(InvalidParam("Invalid or missing room_id in pdu"))))?
+			return Err!(Request(InvalidParam("Invalid or missing room_id in pdu")));
 		}
+	} else {
+		// V12 non-create event without room_id
+		// Try to find it from auth_events
+		let mut found_room_id = None;
+		if let Some(auth_events) = value.get("auth_events").and_then(|v| v.as_array()) {
+			for auth_event_id in auth_events {
+				if let Some(auth_event_id) = auth_event_id.as_str() {
+					if let Ok(auth_event_id) = ruma::OwnedEventId::parse(auth_event_id) {
+						if let Ok(pdu) = self.services.timeline.get_pdu(&auth_event_id).await {
+							found_room_id = pdu.room_id().map(ToOwned::to_owned);
+							break;
+						}
+					}
+				}
+			}
+		}
+		found_room_id.ok_or_else(|| err!(Request(InvalidParam("Missing room_id in PDU"))))?
 	};
 
 	let room_version_id = self

@@ -205,14 +205,17 @@ pub(crate) fn validate_remote_member_event_stub(
 		));
 	}
 
-	let Some(event_room_id) = event_stub.get("room_id") else {
+	if let Some(event_room_id) = event_stub.get("room_id") {
+		if event_room_id != &room_id.as_str() {
+			return Err!(BadServerResponse(
+				"Remote server returned member event with incorrect room_id"
+			));
+		}
+	} else if conduwuit::matrix::state_res::RoomVersion::new(&room_version_id)
+		.is_ok_and(|v| !v.room_ids_as_hashes)
+	{
 		return Err!(BadServerResponse(
 			"Remote server returned member event with missing room_id field"
-		));
-	};
-	if event_room_id != &room_id.as_str() {
-		return Err!(BadServerResponse(
-			"Remote server returned member event with incorrect room_id"
 		));
 	}
 
