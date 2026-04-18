@@ -13,6 +13,7 @@ WITH run_regs AS (
         r.n_fail,
         r.n_skip,
         r.profile,
+        r.room_version,
         r.features,
         r.os,
         r.arch,
