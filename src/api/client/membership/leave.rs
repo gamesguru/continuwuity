@@ -342,6 +342,7 @@ pub async fn remote_leave_room<S: ::std::hash::BuildHasher>(
 		&MembershipState::Leave,
 		user_id,
 		room_id,
+		&room_version_id,
 		&leave_event_stub,
 	)?;
 

@@ -14,7 +14,7 @@ use axum::extract::State;
 use conduwuit::{Err, Result, warn};
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	CanonicalJsonObject, OwnedRoomId, RoomId, ServerName, UserId,
+	CanonicalJsonObject, OwnedRoomId, RoomId, RoomVersionId, ServerName, UserId,
 	api::client::membership::joined_rooms,
 	events::{
 		StaticEventContent,
@@ -170,6 +170,7 @@ pub(crate) fn validate_remote_member_event_stub(
 	membership: &MembershipState,
 	user_id: &UserId,
 	room_id: &RoomId,
+	room_version_id: &RoomVersionId,
 	event_stub: &CanonicalJsonObject,
 ) -> Result<()> {
 	let Some(event_type) = event_stub.get("type") else {
@@ -211,7 +212,7 @@ pub(crate) fn validate_remote_member_event_stub(
 				"Remote server returned member event with incorrect room_id"
 			));
 		}
-	} else if conduwuit::matrix::state_res::RoomVersion::new(&room_version_id)
+	} else if conduwuit::matrix::state_res::RoomVersion::new(room_version_id)
 		.is_ok_and(|v| !v.room_ids_as_hashes)
 	{
 		return Err!(BadServerResponse(

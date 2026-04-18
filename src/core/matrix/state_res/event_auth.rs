@@ -439,7 +439,8 @@ where
 
 	if sender_member_event.room_id() != expected_room_id.as_deref() {
 		warn!(
-			"room_id of incoming event ({:?}) does not match that of the m.room.create event ({:?})",
+			"room_id of incoming event ({:?}) does not match that of the m.room.create event \
+			 ({:?})",
 			sender_member_event.room_id(),
 			expected_room_id
 		);

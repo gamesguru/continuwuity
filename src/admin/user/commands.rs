@@ -8,7 +8,7 @@ use api::client::{
 	remote_leave_room,
 };
 use conduwuit::{
-	Err, Result, debug_warn, error, info,
+	Err, Result, debug_warn, err, error, info,
 	matrix::{Event, pdu::PduBuilder},
 	utils::{self, ReadyExt},
 	warn,

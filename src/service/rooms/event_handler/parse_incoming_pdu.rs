@@ -1,5 +1,5 @@
 use conduwuit::{
-	Event, Result, RoomVersion, err, implement, matrix::event::gen_event_id_canonical_json,
+	Err, Event, Result, RoomVersion, err, implement, matrix::event::gen_event_id_canonical_json,
 	result::FlatOk,
 };
 use ruma::{CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, RoomVersionId};
@@ -42,7 +42,7 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 			OwnedRoomId::parse(event_id.as_str().replace('$', "!")).expect("valid room ID")
 		} else {
 			// V11 or below room, room_id must be present
-			return err!(Request(InvalidParam("Invalid or missing room_id in pdu")));
+			return Err!(Request(InvalidParam("Invalid or missing room_id in pdu")));
 		}
 	} else {
 		// V12 non-create event without room_id

@@ -1,6 +1,6 @@
 use axum::extract::State;
-use conduwuit::{Err, Result, err, info};
-use ruma::{MilliSecondsSinceUnixEpoch, RoomId, api::federation::event::get_event};
+use conduwuit::{Err, Event, Result, err, info, utils};
+use ruma::{MilliSecondsSinceUnixEpoch, api::federation::event::get_event};
 
 use super::AccessCheck;
 use crate::Ruma;
@@ -48,12 +48,14 @@ pub(crate) async fn get_event_route(
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
+	let event_json = utils::to_canonical_object(&event)?;
+
 	Ok(get_event::v1::Response {
 		origin: services.globals.server_name().to_owned(),
 		origin_server_ts: MilliSecondsSinceUnixEpoch::now(),
 		pdu: services
 			.sending
-			.convert_to_outgoing_federation_event(event)
+			.convert_to_outgoing_federation_event(event_json)
 			.await,
 	})
 }

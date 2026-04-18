@@ -21,9 +21,8 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use lettre::message::Mailbox;
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
-	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
-	api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
+	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
+	RoomVersionId, api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -54,7 +53,7 @@ pub(super) async fn get_auth_chain(&self, event_id: OwnedEventId) -> Result {
 		.services
 		.rooms
 		.auth_chain
-		.event_ids_iter(room_id, once(event_id.as_ref()))
+		.event_ids_iter(&room_id, once(event_id.as_ref()))
 		.ready_filter_map(Result::ok)
 		.count()
 		.await;

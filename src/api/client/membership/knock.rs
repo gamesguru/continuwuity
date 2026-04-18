@@ -407,6 +407,7 @@ async fn knock_room_helper_local(
 		&MembershipState::Knock,
 		sender_user,
 		room_id,
+		&room_version_id,
 		&knock_event_stub,
 	)?;
 
@@ -737,10 +738,12 @@ async fn make_knock_request(
 		trace!("make_knock response: {make_knock_response:?}");
 		make_knock_counter = make_knock_counter.saturating_add(1);
 		if let Ok(r) = &make_knock_response {
+			let room_version_id = &r.room_version;
 			if let Err(e) = validate_remote_member_event_stub(
 				&MembershipState::Knock,
 				sender_user,
 				room_id,
+				room_version_id,
 				&to_canonical_object(&r.event)?,
 			) {
 				warn!("make_knock response from {remote_server} failed validation: {e}");

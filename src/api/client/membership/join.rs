@@ -851,6 +851,7 @@ async fn make_join_request(
 					&MembershipState::Join,
 					sender_user,
 					room_id,
+					response.room_version.as_ref().unwrap_or(&RoomVersionId::V1),
 					&to_canonical_object(&response.event)?,
 				) {
 					warn!("make_join response from {remote_server} failed validation: {e}");
