@@ -50,7 +50,7 @@ openssl x509 \
   -in "/$SERVER_NAME.csr" \
   -CA /complement/ca/ca.crt \
   -CAkey /complement/ca/ca.key \
-  -CAcreateserial \
+  -CAserial /tmp/ca.srl -CAcreateserial \
   -out "/$SERVER_NAME.crt" \
   -days 1 \
   -sha256 \
