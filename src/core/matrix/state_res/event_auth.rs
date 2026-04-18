@@ -289,10 +289,10 @@ where
 	}
 	let expected_room_id = room_create_event.room_id_or_hash();
 
-	if incoming_event.room_id_or_hash() != expected_room_id {
+	if incoming_event.room_id() != expected_room_id.as_deref() {
 		warn!(
 			expected = ?expected_room_id,
-			received = ?incoming_event.room_id_or_hash(),
+			received = ?incoming_event.room_id(),
 			"room_id of incoming event does not match that of the m.room.create event",
 		);
 		return Ok(false);

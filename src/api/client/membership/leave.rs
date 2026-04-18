@@ -410,7 +410,7 @@ pub async fn remote_leave_room<S: ::std::hash::BuildHasher>(
 		.outlier
 		.add_pdu_outlier(&event_id, &leave_event);
 
-	let leave_pdu = Pdu::from_id_val(&event_id, leave_event).map_err(|e| {
+	let leave_pdu = Pdu::from_id_val(&event_id, leave_event, Some(room_id)).map_err(|e| {
 		err!(BadServerResponse("Invalid leave PDU received during federated leave: {e:?}"))
 	})?;
 

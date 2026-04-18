@@ -553,7 +553,7 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	info!("Parsing join event");
-	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone())
+	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone(), Some(room_id))
 		.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?;
 
 	info!("Acquiring server signing keys for response events");
@@ -583,7 +583,7 @@ async fn join_room_by_id_helper_remote(
 		})
 		.ready_filter_map(Result::ok)
 		.fold(HashMap::new(), |mut state, (event_id, value)| async move {
-			let pdu = match PduEvent::from_id_val(&event_id, value.clone()) {
+			let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id)) {
 				| Ok(pdu) => pdu,
 				| Err(e) => {
 					debug_warn!("Invalid PDU in send_join response: {e:?}: {value:#?}");

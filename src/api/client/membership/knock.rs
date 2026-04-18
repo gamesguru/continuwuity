@@ -476,8 +476,9 @@ async fn knock_room_helper_local(
 
 	info!("Parsing knock event");
 
-	let parsed_knock_pdu = PduEvent::from_id_val(&event_id, knock_event.clone())
-		.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
+	let parsed_knock_pdu =
+		PduEvent::from_id_val(&event_id, knock_event.clone(), Some(room_id))
+			.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
 
 	info!("Updating membership locally to knock state with provided stripped state events");
 	// TODO: this call does not appear to do anything because `update_membership`
@@ -598,8 +599,9 @@ async fn knock_room_helper_remote(
 		.await;
 
 	info!("Parsing knock event");
-	let parsed_knock_pdu = PduEvent::from_id_val(&event_id, knock_event.clone())
-		.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
+	let parsed_knock_pdu =
+		PduEvent::from_id_val(&event_id, knock_event.clone(), Some(room_id))
+			.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
 
 	info!("Going through send_knock response knock state events");
 	let state = send_knock_response

@@ -76,9 +76,15 @@ pub struct EventHash {
 }
 
 impl Pdu {
-	pub fn from_id_val(event_id: &EventId, mut json: CanonicalJsonObject) -> Result<Self> {
-		let event_id = CanonicalJsonValue::String(event_id.into());
-		json.insert("event_id".into(), event_id);
+	pub fn from_id_val(
+		event_id: &EventId,
+		mut json: CanonicalJsonObject,
+		room_id: Option<&RoomId>,
+	) -> Result<Self> {
+		json.insert("event_id".into(), CanonicalJsonValue::String(event_id.into()));
+		if let Some(room_id) = room_id {
+			json.insert("room_id".into(), CanonicalJsonValue::String(room_id.into()));
+		}
 		serde_json::to_value(json)
 			.and_then(serde_json::from_value)
 			.map_err(Into::into)
@@ -115,11 +121,8 @@ impl Event for Pdu {
 
 	#[inline]
 	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
-		if *self.event_type() != TimelineEventType::RoomCreate {
-			return self.room_id().map(ToOwned::to_owned);
-		}
 		if let Some(room_id) = &self.room_id {
-			// v1-v11
+			// v1-v11 (or v12 if internal_room_id was set)
 			Some(room_id.clone())
 		} else {
 			// v12+
@@ -183,11 +186,8 @@ impl Event for &Pdu {
 
 	#[inline]
 	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
-		if *self.event_type() != TimelineEventType::RoomCreate {
-			return self.room_id().map(ToOwned::to_owned);
-		}
 		if let Some(room_id) = &self.room_id {
-			// v1-v11
+			// v1-v11 (or v12 if internal_room_id was set)
 			Some(room_id.clone())
 		} else {
 			// v12+

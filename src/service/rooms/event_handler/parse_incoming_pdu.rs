@@ -84,8 +84,15 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 		.get_room_version(&room_id)
 		.await
 		.unwrap_or(RoomVersionId::V1);
-	let (event_id, value) = gen_event_id_canonical_json(pdu, &room_version_id).map_err(|e| {
-		err!(Request(InvalidParam("Could not convert event to canonical json: {e}")))
-	})?;
+	let (event_id, mut value) =
+		gen_event_id_canonical_json(pdu, &room_version_id).map_err(|e| {
+			err!(Request(InvalidParam("Could not convert event to canonical json: {e}")))
+		})?;
+
+	// MSC4291: ensure room_id is in our internal JSON representation
+	value
+		.entry("room_id".into())
+		.or_insert_with(|| CanonicalJsonValue::String(room_id.as_str().into()));
+
 	Ok((room_id, event_id, value))
 }
