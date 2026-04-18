@@ -122,13 +122,13 @@ impl Event for Pdu {
 	#[inline]
 	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
 		if let Some(room_id) = &self.room_id {
-			// v1-v11 (or v12 if internal_room_id was set)
-			Some(room_id.clone())
-		} else {
-			// v12+
-			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned)
+			return Some(room_id.clone());
 		}
+		if *self.event_type() == TimelineEventType::RoomCreate {
+			let constructed_hash = self.event_id.as_str().replace('$', "!");
+			return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
+		}
+		None
 	}
 
 	#[inline]
@@ -187,13 +187,13 @@ impl Event for &Pdu {
 	#[inline]
 	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
 		if let Some(room_id) = &self.room_id {
-			// v1-v11 (or v12 if internal_room_id was set)
-			Some(room_id.clone())
-		} else {
-			// v12+
-			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned)
+			return Some(room_id.clone());
 		}
+		if *self.event_type() == TimelineEventType::RoomCreate {
+			let constructed_hash = self.event_id.as_str().replace('$', "!");
+			return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
+		}
+		None
 	}
 
 	#[inline]
