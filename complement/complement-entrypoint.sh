@@ -69,4 +69,5 @@ mkdir -p "$CONDUWUIT_DATABASE_PATH"
 chown -R ${CONDUWUIT_UID}:${CONDUWUIT_GID} "/$SERVER_NAME.key" "/$SERVER_NAME.crt" "$CONDUWUIT_DATABASE_PATH"
 
 # Drop root privileges and start continuwuity as the host UID
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 exec setpriv --reuid=${CONDUWUIT_UID} --regid=${CONDUWUIT_GID} --clear-groups /usr/local/bin/conduwuit --config /etc/continuwuity/config.toml

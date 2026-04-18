@@ -7,9 +7,7 @@ RUN mkdir -p /etc/continuwuity /var/lib/continuwuity /usr/local/bin/
 COPY complement/complement-entrypoint.sh /usr/local/bin/complement-entrypoint.sh
 COPY complement/complement.config.toml /etc/continuwuity/config.toml
 ARG BINARY_PATH=target/latest/conduwuit
-ARG LIB_PATH=target/latest/lib
 COPY ${BINARY_PATH} /usr/local/bin/conduwuit
-COPY ${LIB_PATH}/ /usr/local/lib/
 RUN ldconfig
 RUN chmod +x /usr/local/bin/conduwuit /usr/local/bin/complement-entrypoint.sh
 ARG UID=1000
