@@ -298,14 +298,6 @@ complement/build: ##H Build conduwuit w direct_tls
 
 .PHONY: complement/docker
 complement/docker: ##H Build docker image from existing binary
-	@echo "Copying dynamically linked libraries to target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/..."
-	@mkdir -p target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib && rm -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/*
-	@LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$(LD_LIBRARY_PATH)" \
-		ldd target/latest/conduwuit | awk '/=> \// {print $$3}' \
-		| grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|ld-linux|libdl\.so|libpthread\.so|librt\.so' \
-		| xargs -I {} cp "{}" target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/ || true
-	@rm -rf target/latest/lib
-	@ln -sfn ../$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib target/latest/lib
 	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
 	DOCKER_BUILDKIT=1 docker buildx build \
 		--build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
@@ -322,7 +314,7 @@ HOST_LIBS_MOUNTS = $(shell LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$(LD_LIBRARY_PATH
 complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
 	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
 	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
-	COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" COMPLEMENT_HOST_MOUNTS="$(PREFIX)/lib:$(PREFIX)/lib:ro$(if $(HOST_LIBS_MOUNTS),;$(HOST_LIBS_MOUNTS))" ./bin/complement $(COMPLEMENT_DIR)
+	COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" COMPLEMENT_HOST_MOUNTS="$(PREFIX)/lib:$(PREFIX)/lib:ro$(if $(HOST_LIBS_MOUNTS),;$(HOST_LIBS_MOUNTS))" ./bin/complement $(COMPLEMENT_DIR)
 
 
 .PHONY: complement/stats

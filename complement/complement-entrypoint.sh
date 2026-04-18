@@ -70,4 +70,16 @@ chown -R ${CONDUWUIT_UID}:${CONDUWUIT_GID} "/$SERVER_NAME.key" "/$SERVER_NAME.cr
 
 # Drop root privileges and start continuwuity as the host UID
 export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+# Verify all dynamic libraries are resolvable before starting
+MISSING_LIBS=$(ldd /usr/local/bin/conduwuit 2>&1 | grep "not found" || true)
+if [ -n "$MISSING_LIBS" ]; then
+  echo "FATAL: Missing dynamic libraries (check COMPLEMENT_HOST_MOUNTS):"
+  echo "$MISSING_LIBS"
+  echo ""
+  echo "Mounted paths visible in /usr/local/lib:"
+  ls -la /usr/local/lib/ 2>/dev/null | head -20
+  exit 1
+fi
+
 exec setpriv --reuid=${CONDUWUIT_UID} --regid=${CONDUWUIT_GID} --clear-groups /usr/local/bin/conduwuit --config /etc/continuwuity/config.toml

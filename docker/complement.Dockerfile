@@ -8,7 +8,6 @@ COPY complement/complement-entrypoint.sh /usr/local/bin/complement-entrypoint.sh
 COPY complement/complement.config.toml /etc/continuwuity/config.toml
 ARG BINARY_PATH=target/latest/conduwuit
 COPY ${BINARY_PATH} /usr/local/bin/conduwuit
-RUN ldconfig
 RUN chmod +x /usr/local/bin/conduwuit /usr/local/bin/complement-entrypoint.sh
 ARG UID=1000
 ARG GID=1000
