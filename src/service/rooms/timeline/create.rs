@@ -311,10 +311,6 @@ pub async fn create_hash_and_sign_event(
 		let internal_room_id = pdu
 			.room_id_or_hash()
 			.ok_or_else(|| err!(Request(Forbidden("Event has no room_id"))))?;
-		pdu_json.insert(
-			"room_id".into(),
-			CanonicalJsonValue::String(internal_room_id.as_str().into()),
-		);
 		pdu.room_id = Some(internal_room_id);
 	}
 

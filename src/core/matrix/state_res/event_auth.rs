@@ -192,19 +192,20 @@ where
 		}
 
 		// If the domain of the room_id does not match the domain of the sender, reject
-		if incoming_event.room_id().is_some() {
-			let Some(room_id_server_name) = incoming_event.room_id().unwrap().server_name()
-			else {
-				warn!("legacy room ID has no server name");
-				return Ok(false);
-			};
-			if room_id_server_name != sender.server_name() {
-				warn!(
-					expected = %sender.server_name(),
-					received = %room_id_server_name,
-					"server name of legacy room ID does not match server name of sender"
-				);
-				return Ok(false);
+		if !room_version.room_ids_as_hashes {
+			if let Some(room_id) = incoming_event.room_id() {
+				let Some(room_id_server_name) = room_id.server_name() else {
+					warn!("legacy room ID has no server name");
+					return Ok(false);
+				};
+				if room_id_server_name != sender.server_name() {
+					warn!(
+						expected = %sender.server_name(),
+						received = %room_id_server_name,
+						"server name of legacy room ID does not match server name of sender"
+					);
+					return Ok(false);
+				}
 			}
 		}
 
@@ -289,10 +290,10 @@ where
 	}
 	let expected_room_id = room_create_event.room_id_or_hash();
 
-	if incoming_event.room_id() != expected_room_id.as_deref() {
+	if incoming_event.room_id_or_hash() != expected_room_id {
 		warn!(
 			expected = ?expected_room_id,
-			received = ?incoming_event.room_id(),
+			received = ?incoming_event.room_id_or_hash(),
 			"room_id of incoming event does not match that of the m.room.create event",
 		);
 		return Ok(false);
@@ -317,10 +318,10 @@ where
 	}
 
 	if let Some(ref pe) = power_levels_event {
-		if pe.room_id() != expected_room_id.as_deref() {
+		if pe.room_id_or_hash() != expected_room_id {
 			warn!(
 				expected = ?expected_room_id,
-				received = ?pe.room_id(),
+				received = ?pe.room_id_or_hash(),
 				"room_id of referenced power levels event does not match that of the m.room.create event"
 			);
 			return Ok(false);
@@ -437,11 +438,11 @@ where
 		},
 	};
 
-	if sender_member_event.room_id() != expected_room_id.as_deref() {
+	if sender_member_event.room_id_or_hash() != expected_room_id {
 		warn!(
 			"room_id of incoming event ({:?}) does not match that of the m.room.create event \
 			 ({:?})",
-			sender_member_event.room_id(),
+			sender_member_event.room_id_or_hash(),
 			expected_room_id
 		);
 		return Ok(false);

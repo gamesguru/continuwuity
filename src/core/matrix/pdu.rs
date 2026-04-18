@@ -10,8 +10,8 @@ mod unsigned;
 use std::cmp::Ordering;
 
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, MilliSecondsSinceUnixEpoch, OwnedEventId,
-	OwnedRoomId, OwnedServerName, OwnedUserId, RoomId, UInt, UserId, events::TimelineEventType,
+	CanonicalJsonObject, EventId, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId,
+	OwnedServerName, OwnedUserId, RoomId, UInt, UserId, events::TimelineEventType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue as RawJsonValue;
@@ -78,16 +78,17 @@ pub struct EventHash {
 impl Pdu {
 	pub fn from_id_val(
 		event_id: &EventId,
-		mut json: CanonicalJsonObject,
+		json: CanonicalJsonObject,
 		room_id: Option<&RoomId>,
 	) -> Result<Self> {
-		json.insert("event_id".into(), CanonicalJsonValue::String(event_id.into()));
-		if let Some(room_id) = room_id {
-			json.insert("room_id".into(), CanonicalJsonValue::String(room_id.into()));
+		let mut pdu: Self = serde_json::from_value(serde_json::to_value(json)?)?;
+		pdu.event_id = event_id.to_owned();
+		if pdu.room_id.is_none() {
+			if let Some(room_id) = room_id {
+				pdu.room_id = Some(room_id.to_owned());
+			}
 		}
-		serde_json::to_value(json)
-			.and_then(serde_json::from_value)
-			.map_err(Into::into)
+		Ok(pdu)
 	}
 }
 
