@@ -250,6 +250,7 @@ async fn knock_room_by_id_helper(
 				reason.clone(),
 				servers,
 				&None,
+				None,
 			)
 			.await
 			{

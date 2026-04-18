@@ -577,11 +577,8 @@ pub(super) async fn force_set_room_state_from_server(
 			continue;
 		};
 
-		let pdu =
 		let pdu = PduEvent::from_id_val(&event_id, value.clone(), None).map_err(|e| {
-			debug_error!(
-				"Invalid PDU in fetching remote room state PDUs response: {value:#?}"
-			);
+			debug_error!("Invalid PDU in fetching remote room state PDUs response: {value:#?}");
 			err!(BadServerResponse(debug_error!("Invalid PDU in send_join response: {e:?}")))
 		})?;
 		if pdu.room_id_or_hash().as_deref() != Some(room_id.as_ref()) {

@@ -32,6 +32,17 @@ where
 		.next()
 		.expect("at least one prev_event");
 
+	let prev_pdu = self
+		.services
+		.timeline
+		.get_pdu_in_room(Some(room_id), prev_event)
+		.await
+		.map_err(|e| err!(Database("Could not find prev event: {e:?}")))?;
+
+	if prev_pdu.room_id() != Some(room_id) {
+		return Err(err!(Database("prev_event is not in the same room")));
+	}
+
 	let Ok(prev_event_sstatehash) = self
 		.services
 		.state_accessor
@@ -49,18 +60,12 @@ where
 		.await;
 
 	debug!("Using cached state");
-	let prev_pdu = self
-		.services
-		.timeline
-		.get_pdu_in_room(Some(room_id), prev_event)
-		.await
-		.map_err(|e| err!(Database("Could not find prev event, but we know the state: {e:?}")))?;
 
 	if let Some(state_key) = &prev_pdu.state_key {
 		let shortstatekey = self
 			.services
 			.short
-			.get_or_create_shortstatekey(&prev_pdu.kind.to_string().into(), state_key)
+			.get_or_create_shortstatekey(&prev_pdu.kind().to_string().into(), state_key)
 			.await;
 
 		state.insert(shortstatekey, prev_event.to_owned());
@@ -90,8 +95,13 @@ where
 		.broad_and_then(|prev_eventid| {
 			self.services
 				.timeline
-				.get_pdu(prev_eventid)
-				.map_ok(move |prev_event| (prev_eventid, prev_event))
+				.get_pdu_in_room(Some(room_id), prev_eventid)
+				.and_then(move |prev_event| async move {
+					if prev_event.room_id() != Some(room_id) {
+						return Err(err!(Database("prev_event is not in the same room")));
+					}
+					Ok((prev_eventid, prev_event))
+				})
 		})
 		.broad_and_then(|(prev_eventid, prev_event)| {
 			self.services
