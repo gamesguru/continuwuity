@@ -358,7 +358,9 @@ complement args=".":
     #!/usr/bin/env bash
     set -euo pipefail
     HOST_LIBS=$(ldd target/latest/conduwuit | awk '/=> \/usr\/lib\// {print $3}' | grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|libdl\.so|libpthread\.so|librt\.so' | awk '{print $1":"$1":ro"}' | paste -sd ';' - || true)
-    env COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_BASE_IMAGE="continuwuity:complement" COMPLEMENT_HOST_MOUNTS="{{PREFIX}}/lib:{{PREFIX}}/lib:ro;${HOST_LIBS}" COMPLEMENT_RUN="{{args}}" ./bin/complement ./complement-src
+    MOUNTS="{{PREFIX}}/lib:{{PREFIX}}/lib:ro"
+    if [ -n "$HOST_LIBS" ]; then MOUNTS="$MOUNTS;$HOST_LIBS"; fi
+    env COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_BASE_IMAGE="continuwuity:complement" COMPLEMENT_HOST_MOUNTS="$MOUNTS" COMPLEMENT_RUN="{{args}}" ./bin/complement ./complement-src
 
 # -----------------------------------------------------------------------------
 # Complement CI
