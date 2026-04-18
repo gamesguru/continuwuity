@@ -78,12 +78,14 @@ pub(crate) async fn get_backfill_route(
 			.pdus_rev(&body.room_id, Some(from.saturating_add(1)))
 			.try_take(limit)
 			.try_filter_map(|(_, pdu)| async move {
-				Ok(services
+				let room_id = pdu.room_id_or_hash()?;
+				services
 					.rooms
 					.state_accessor
-					.server_can_see_event(body.origin(), &pdu.room_id_or_hash(), &pdu.event_id)
+					.server_can_see_event(body.origin(), &room_id, &pdu.event_id)
 					.await
-					.then_some(pdu))
+					.then_some(pdu)
+					.map(Ok)
 			})
 			.and_then(async |mut pdu| {
 				// Strip the transaction ID, as that is private

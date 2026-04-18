@@ -26,10 +26,14 @@ impl super::Service {
 			return Ok(None);
 		}
 
+		let room_id = pdu
+			.room_id_or_hash()
+			.ok_or_else(|| err!(Database("Event has no room_id")))?;
+
 		let relations = self
 			.get_relations(
 				user_id,
-				&pdu.room_id_or_hash(),
+				&room_id,
 				pdu.event_id(),
 				conduwuit::PduCount::max(),
 				MAX_BUNDLED_RELATIONS,
@@ -148,14 +152,17 @@ impl super::Service {
 					}
 				},
 			};
-			if let Some(pdu) = next
-				&& self
-					.services
-					.state_accessor
-					.user_can_see_event(user_id, &pdu.room_id_or_hash(), pdu.event_id())
-					.await
-			{
-				result = Some(pdu);
+			if let Some(pdu) = next {
+				if let Some(room_id) = pdu.room_id_or_hash() {
+					if self
+						.services
+						.state_accessor
+						.user_can_see_event(user_id, &room_id, pdu.event_id())
+						.await
+					{
+						result = Some(pdu);
+					}
+				}
 			}
 		}
 

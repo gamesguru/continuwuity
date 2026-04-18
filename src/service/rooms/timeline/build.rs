@@ -36,7 +36,9 @@ pub async fn build_and_append_pdu(
 		.create_hash_and_sign_event(pdu_builder, sender, room_id, state_lock)
 		.await?;
 
-	let room_id = pdu.room_id_or_hash();
+	let room_id = pdu
+		.room_id_or_hash()
+		.ok_or_else(|| err!(Request(Forbidden("Event has no room_id"))))?;
 	if self.services.admin.is_admin_room(&room_id).await {
 		self.check_pdu_for_admin_room(&pdu, sender).boxed().await?;
 	}
@@ -216,15 +218,17 @@ where
 						))));
 					}
 
-					let count = self
-						.services
-						.state_cache
-						.room_members(&pdu.room_id_or_hash())
-						.ready_filter(|user| self.services.globals.user_is_local(user))
-						.ready_filter(|user| *user != target)
-						.boxed()
-						.count()
-						.await;
+					let count =
+						self.services
+							.state_cache
+							.room_members(&pdu.room_id_or_hash().ok_or_else(|| {
+								err!(Request(Forbidden("Event has no room_id")))
+							})?)
+							.ready_filter(|user| self.services.globals.user_is_local(user))
+							.ready_filter(|user| *user != target)
+							.boxed()
+							.count()
+							.await;
 
 					if count < 2 {
 						return Err!(Request(Forbidden(error!(
@@ -240,15 +244,17 @@ where
 						))));
 					}
 
-					let count = self
-						.services
-						.state_cache
-						.room_members(&pdu.room_id_or_hash())
-						.ready_filter(|user| self.services.globals.user_is_local(user))
-						.ready_filter(|user| *user != target)
-						.boxed()
-						.count()
-						.await;
+					let count =
+						self.services
+							.state_cache
+							.room_members(&pdu.room_id_or_hash().ok_or_else(|| {
+								err!(Request(Forbidden("Event has no room_id")))
+							})?)
+							.ready_filter(|user| self.services.globals.user_is_local(user))
+							.ready_filter(|user| *user != target)
+							.boxed()
+							.count()
+							.await;
 
 					if count < 2 {
 						return Err!(Request(Forbidden(error!(

@@ -226,15 +226,20 @@ pub async fn create_event(
 	let room_id_or_hash = pdu.room_id_or_hash();
 	let create_pdu = match &pdu.kind {
 		| TimelineEventType::RoomCreate => None,
-		| _ => Some(
-			self.services
-				.state_accessor
-				.room_state_get(&room_id_or_hash, &StateEventType::RoomCreate, "")
-				.await
-				.map_err(|e| {
-					err!(Request(Forbidden(warn!("Failed to fetch room create event: {e}"))))
-				})?,
-		),
+		| _ => {
+			let room_id = room_id_or_hash.ok_or_else(|| {
+				err!(Request(Forbidden(warn!("Failed to determine room ID for event"))))
+			})?;
+			Some(
+				self.services
+					.state_accessor
+					.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+					.await
+					.map_err(|e| {
+						err!(Request(Forbidden(warn!("Failed to fetch room create event: {e}"))))
+					})?,
+			)
+		},
 	};
 	let create_event = match &pdu.kind {
 		| TimelineEventType::RoomCreate => &pdu,

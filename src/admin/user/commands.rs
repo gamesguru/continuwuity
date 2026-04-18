@@ -915,14 +915,12 @@ pub(super) async fn redact_event(&self, event_id: OwnedEventId) -> Result {
 		self.services.globals.server_name()
 	);
 
+	let room_id = event
+		.room_id_or_hash()
+		.ok_or_else(|| err!(Database("Event has no room_id")))?;
+
 	let redaction_event_id = {
-		let state_lock = self
-			.services
-			.rooms
-			.state
-			.mutex
-			.lock(&event.room_id_or_hash())
-			.await;
+		let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
 
 		self.services
 			.rooms
@@ -936,7 +934,7 @@ pub(super) async fn redact_event(&self, event_id: OwnedEventId) -> Result {
 					})
 				},
 				event.sender(),
-				Some(&event.room_id_or_hash()),
+				Some(&room_id),
 				&state_lock,
 			)
 			.await?

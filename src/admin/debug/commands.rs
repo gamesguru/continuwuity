@@ -45,7 +45,9 @@ pub(super) async fn get_auth_chain(&self, event_id: OwnedEventId) -> Result {
 		return Err!("Event not found.");
 	};
 
-	let room_id = event.room_id_or_hash();
+	let room_id = event
+		.room_id_or_hash()
+		.ok_or_else(|| err!(Database("Event has no room_id")))?;
 
 	let start = Instant::now();
 	let count = self

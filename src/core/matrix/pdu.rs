@@ -114,22 +114,17 @@ impl Event for Pdu {
 	fn room_id(&self) -> Option<&RoomId> { self.room_id.as_deref() }
 
 	#[inline]
-	fn room_id_or_hash(&self) -> OwnedRoomId {
+	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
 		if *self.event_type() != TimelineEventType::RoomCreate {
-			return self.room_id().map(ToOwned::to_owned).unwrap_or_else(|| {
-				warn!("Event {} is missing room_id", self.event_id());
-				RoomId::new(ruma::server_name!("unknown")).to_owned()
-			});
+			return self.room_id().map(ToOwned::to_owned);
 		}
 		if let Some(room_id) = &self.room_id {
 			// v1-v11
-			room_id.clone()
+			Some(room_id.clone())
 		} else {
 			// v12+
 			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			RoomId::parse(&constructed_hash)
-				.expect("event ID can be parsed")
-				.to_owned()
+			RoomId::parse(&constructed_hash).ok()
 		}
 	}
 
@@ -187,22 +182,17 @@ impl Event for &Pdu {
 	fn room_id(&self) -> Option<&RoomId> { self.room_id.as_ref().map(AsRef::as_ref) }
 
 	#[inline]
-	fn room_id_or_hash(&self) -> OwnedRoomId {
+	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
 		if *self.event_type() != TimelineEventType::RoomCreate {
-			return self.room_id().map(ToOwned::to_owned).unwrap_or_else(|| {
-				warn!("Event {} is missing room_id", self.event_id());
-				RoomId::new(ruma::server_name!("unknown")).to_owned()
-			});
+			return self.room_id().map(ToOwned::to_owned);
 		}
 		if let Some(room_id) = &self.room_id {
 			// v1-v11
-			room_id.clone()
+			Some(room_id.clone())
 		} else {
 			// v12+
 			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			RoomId::parse(&constructed_hash)
-				.expect("event ID can be parsed")
-				.to_owned()
+			RoomId::parse(&constructed_hash).ok()
 		}
 	}
 

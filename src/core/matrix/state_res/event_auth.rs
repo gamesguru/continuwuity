@@ -289,13 +289,11 @@ where
 	}
 	let expected_room_id = room_create_event.room_id_or_hash();
 
-	if incoming_event.room_id().expect("event must have a room ID") != expected_room_id {
+	if incoming_event.room_id_or_hash() != expected_room_id {
 		warn!(
-			expected = %expected_room_id,
-			received = %incoming_event.room_id().unwrap(),
-			"room_id of incoming event ({}) does not match that of the m.room.create event ({})",
-			incoming_event.room_id().unwrap(),
-			expected_room_id,
+			expected = ?expected_room_id,
+			received = ?incoming_event.room_id_or_hash(),
+			"room_id of incoming event does not match that of the m.room.create event",
 		);
 		return Ok(false);
 	}

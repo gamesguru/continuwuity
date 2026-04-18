@@ -22,12 +22,14 @@ pub(crate) async fn get_event_route(
 		.await
 		.map_err(|_| err!(Request(NotFound("Event not found."))))?;
 
-	let room_id = event.room_id_or_hash();
+	let room_id = event
+		.room_id_or_hash()
+		.ok_or_else(|| err!(Request(NotFound("Event has no room_id."))))?;
 
 	AccessCheck {
 		services: &services,
 		origin: body.origin(),
-		room_id,
+		room_id: &room_id,
 		event_id: Some(&body.event_id),
 	}
 	.check()
@@ -36,7 +38,7 @@ pub(crate) async fn get_event_route(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), room_id)
+		.server_in_room(services.globals.server_name(), &room_id)
 		.await
 	{
 		info!(

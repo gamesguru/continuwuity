@@ -813,13 +813,17 @@ impl Service {
 					|ev: PushRulesEvent| ev.content.global,
 				);
 
-			let unread: UInt = self
-				.services
-				.user
-				.notification_count(&user_id, &pdu.room_id_or_hash())
-				.await
-				.try_into()
-				.expect("notification count can't go that high");
+			let unread: UInt = if let Some(room_id) = pdu.room_id_or_hash() {
+				self.services
+					.rooms
+					.user
+					.notification_count(&user_id, &room_id)
+					.await
+					.try_into()
+					.expect("notification count can't go that high")
+			} else {
+				uint!(0)
+			};
 
 			let _response = self
 				.services

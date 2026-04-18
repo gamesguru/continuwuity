@@ -49,7 +49,7 @@ pub(crate) async fn get_event_authorization_route(
 		.await
 		.map_err(|_| Error::BadRequest(ErrorKind::NotFound, "Event not found."))?;
 
-	if event.room_id_or_hash() != body.room_id {
+	if event.room_id_or_hash().as_deref() != Some(&body.room_id) {
 		return Err!(Request(NotFound("Event does not belong to this room.")));
 	}
 
