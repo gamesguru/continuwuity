@@ -1,5 +1,5 @@
 use conduwuit::{
-	Event, PduEvent, Result, at, debug_warn,
+	Event, PduCount, PduEvent, Result, at, debug_warn,
 	pdu::EventHash,
 	trace,
 	utils::{self, IterStream, future::ReadyEqExt, stream::WidebandExt as _},
@@ -104,8 +104,33 @@ pub(super) async fn load_left_room(
 				return Ok(None);
 			}
 
+			// the global count as of the moment the user left the room
+			let Some(left_count) = services
+				.rooms
+				.state_cache
+				.get_left_count(room_id, syncing_user)
+				.await
+				.ok()
+			else {
+				return Ok(None);
+			};
+
+			// return early if we've already synced the leave
+			if last_sync_end_count
+				.is_some_and(|last_sync_end_count| last_sync_end_count >= left_count)
+			{
+				return Ok(None);
+			}
+
 			trace!("syncing remote-assisted leave PDU");
-			(TimelinePdus::default(), vec![leave_membership_event], None)
+			(
+				TimelinePdus {
+					pdus: vec![(PduCount::max(), leave_membership_event)].into(),
+					limited: false,
+				},
+				Vec::new(),
+				None,
+			)
 		},
 		| Some(leave_membership_event) => {
 			// we have this room in our DB, and can fetch the state and timeline from when

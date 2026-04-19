@@ -122,11 +122,11 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 	let pdu_json = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
 	let text = serde_json::to_string_pretty(&pdu_json)?;
 
-	let mut msg = String::new();
+	let mut status = String::new();
 	if in_timeline && in_outlier {
-		msg.push_str("PDU found in BOTH Timeline and Outlier tables (STUCK STATE)");
+		status.push_str("STUCK STATE (Both Timeline and Outlier tables)");
 	} else if in_timeline {
-		msg.push_str("Timeline PDU found in our database");
+		status.push_str("Timeline PDU");
 	} else {
 		let soft_failed = self
 			.services
@@ -135,13 +135,13 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 			.is_event_soft_failed(&event_id)
 			.await;
 		if soft_failed {
-			msg.push_str("Outlier (Soft Failed / Rejected) PDU found in our database");
+			status.push_str("Outlier (Soft Failed / Rejected) PDU");
 		} else {
-			msg.push_str("Outlier PDU found in our database");
+			status.push_str("Outlier PDU");
 		}
 	}
 
-	let out = format!("{msg}\n```json\n{text}\n```");
+	let out = format!("Status: {status}\n\n```json\n{text}\n```");
 	self.write_str(&out).await
 }
 
@@ -608,13 +608,22 @@ pub(super) async fn list_outliers(
 			break;
 		}
 
+		let is_stuck = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok();
 		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
 		let sender = pdu.sender();
 		let kind = pdu.kind.to_string();
 		let ts = pdu.origin_server_ts;
+		let stuck_flag = if is_stuck { " [STUCK]" } else { "" };
 		writeln!(
 			body,
-			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: {kind}"
+			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: \
+			 {kind}{stuck_flag}"
 		)?;
 		count = count.saturating_add(1);
 	}
@@ -710,10 +719,8 @@ pub(super) async fn purge_outliers(
 		}
 	}
 
-	self.write_str(&format!(
-		"Purged {purged} stuck outliers, skipped {skipped} un-rescued outliers."
-	))
-	.await
+	self.write_str(&format!("Purged {purged} outliers, skipped {skipped} un-rescued outliers."))
+		.await
 }
 
 #[admin_command]
@@ -889,16 +896,6 @@ pub(super) async fn force_set_room_state_from_server(
 ) -> Result {
 	self.bail_restricted()?;
 
-	if !self
-		.services
-		.rooms
-		.state_cache
-		.server_in_room(&self.services.server.name, &room_id)
-		.await
-	{
-		return Err!("We are not participating in the room / we don't know about the room ID.");
-	}
-
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
 		| None => self
@@ -907,12 +904,23 @@ pub(super) async fn force_set_room_state_from_server(
 			.timeline
 			.latest_pdu_in_room(&room_id)
 			.await
-			.map_err(|_| err!(Database("Failed to find the latest PDU in database")))?
+			.map_err(|_| {
+				err!(Request(InvalidParam(
+					"Room is unknown or has no timeline; you must specify an event ID with \
+					 --at-event to bootstrap."
+				)))
+			})?
 			.event_id()
 			.to_owned(),
 	};
 
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version(&room_id)
+		.await
+		.unwrap_or(RoomVersionId::V11);
 
 	let mut state: HashMap<u64, OwnedEventId> = HashMap::new();
 
@@ -951,15 +959,23 @@ pub(super) async fn force_set_room_state_from_server(
 			continue;
 		};
 
+		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
+			info!(
+				"PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier \
+				 addition"
+			);
+		} else {
+			info!("PDU {event_id} NOT in timeline, adding as outlier");
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value);
+		}
+
 		let pdu = PduEvent::from_id_val(&event_id, value.clone()).map_err(|e| {
 			debug_error!("Invalid PDU in fetching remote room state PDUs response: {value:#?}");
 			err!(BadServerResponse(debug_error!("Invalid PDU in send_join response: {e:?}")))
 		})?;
-
-		self.services
-			.rooms
-			.outlier
-			.add_pdu_outlier(&event_id, &value);
 
 		if let Some(state_key) = &pdu.state_key {
 			let shortstatekey = self
@@ -983,12 +999,19 @@ pub(super) async fn force_set_room_state_from_server(
 			continue;
 		};
 
-		self.services
-			.rooms
-			.outlier
-			.add_pdu_outlier(&event_id, &value);
+		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
+			info!(
+				"Auth PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier \
+				 addition"
+			);
+		} else {
+			info!("Auth PDU {event_id} NOT in timeline, adding as outlier");
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value);
+		}
 	}
-
 	info!("Resolving new room state");
 	let new_room_state = self
 		.services

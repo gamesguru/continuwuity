@@ -1,6 +1,5 @@
 use conduwuit::{
 	Result, RoomVersion, err, implement, matrix::event::gen_event_id_canonical_json,
-	result::FlatOk,
 };
 use ruma::{CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, RoomVersionId};
 use serde_json::value::RawValue as RawJsonValue;
@@ -17,38 +16,34 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 		.and_then(CanonicalJsonValue::as_str)
 		.ok_or_else(|| err!(Request(InvalidParam("Missing or invalid type in pdu"))))?;
 
-	let room_id: OwnedRoomId = if event_type != "m.room.create" {
-		value
-			.get("room_id")
-			.and_then(CanonicalJsonValue::as_str)
-			.map(OwnedRoomId::parse)
-			.flat_ok_or(err!(Request(InvalidParam("Invalid room_id in pdu"))))?
-	} else {
-		// v12 rooms might have no room_id in the create event. We'll need to check the
-		// content.room_version
-		let content = value
-			.get("content")
-			.and_then(CanonicalJsonValue::as_object)
-			.ok_or_else(|| err!(Request(InvalidParam("Missing or invalid content in pdu"))))?;
-		let room_version = content
-			.get("room_version")
-			.and_then(CanonicalJsonValue::as_str)
-			.unwrap_or("1");
-		let vi = RoomVersionId::try_from(room_version).unwrap_or(RoomVersionId::V1);
-		let vf = RoomVersion::new(&vi).expect("supported room version");
-		if vf.room_ids_as_hashes {
-			let (event_id, _) = gen_event_id_canonical_json(pdu, &vi).map_err(|e| {
-				err!(Request(InvalidParam("Could not convert event to canonical json: {e}")))
-			})?;
-			OwnedRoomId::parse(event_id.as_str().replace('$', "!")).expect("valid room ID")
-		} else {
-			// V11 or below room, room_id must be present
-			value
-				.get("room_id")
+	let room_id: OwnedRoomId = match value.get("room_id").and_then(CanonicalJsonValue::as_str) {
+		| Some(room_id) => OwnedRoomId::parse(room_id)
+			.map_err(|_| err!(Request(InvalidParam("Invalid room_id in pdu"))))?,
+		| None if event_type == "m.room.create" => {
+			// v12 rooms might have no room_id in the create event. We'll need to check the
+			// content.room_version
+			let content = value
+				.get("content")
+				.and_then(CanonicalJsonValue::as_object)
+				.ok_or_else(|| {
+					err!(Request(InvalidParam("Missing or invalid content in pdu")))
+				})?;
+			let room_version = content
+				.get("room_version")
 				.and_then(CanonicalJsonValue::as_str)
-				.map(OwnedRoomId::parse)
-				.flat_ok_or(err!(Request(InvalidParam("Invalid or missing room_id in pdu"))))?
-		}
+				.unwrap_or("1");
+			let vi = RoomVersionId::try_from(room_version).unwrap_or(RoomVersionId::V1);
+			let vf = RoomVersion::new(&vi).expect("supported room version");
+			if vf.room_ids_as_hashes {
+				let (event_id, _) = gen_event_id_canonical_json(pdu, &vi).map_err(|e| {
+					err!(Request(InvalidParam("Could not convert event to canonical json: {e}")))
+				})?;
+				OwnedRoomId::parse(event_id.as_str().replace('$', "!")).expect("valid room ID")
+			} else {
+				return Err(err!(Request(InvalidParam("Missing room_id in pdu"))));
+			}
+		},
+		| None => return Err(err!(Request(InvalidParam("Missing room_id in pdu")))),
 	};
 
 	let room_version_id = self

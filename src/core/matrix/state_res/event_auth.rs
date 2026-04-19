@@ -192,9 +192,8 @@ where
 		}
 
 		// If the domain of the room_id does not match the domain of the sender, reject
-		if incoming_event.room_id().is_some() {
-			let Some(room_id_server_name) = incoming_event.room_id().unwrap().server_name()
-			else {
+		if let Some(room_id) = incoming_event.room_id() {
+			let Some(room_id_server_name) = room_id.server_name() else {
 				warn!("legacy room ID has no server name");
 				return Ok(false);
 			};

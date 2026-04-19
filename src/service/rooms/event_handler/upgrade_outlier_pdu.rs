@@ -1,4 +1,9 @@
-use std::{borrow::Borrow, collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+	borrow::Borrow,
+	collections::{BTreeMap, HashMap},
+	sync::Arc,
+	time::Instant,
+};
 
 use conduwuit::{
 	Err, Result, debug, debug_info, err, implement, info, is_equal_to,
@@ -8,7 +13,10 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
-use ruma::{CanonicalJsonValue, RoomId, ServerName, events::StateEventType};
+use ruma::{
+	CanonicalJsonValue, OwnedEventId, RoomId, ServerName,
+	events::{StateEventType, TimelineEventType},
+};
 
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
@@ -62,58 +70,67 @@ where
 	//     backwards extremities doing all the checks in this list starting at 1.
 	//     These are not timeline events.
 
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Resolving state at event"
-	);
-	let mut state_at_incoming_event = if incoming_pdu.prev_events().count() == 1 {
-		self.state_at_incoming_degree_one(&incoming_pdu).await?
-	} else {
-		self.state_at_incoming_resolved(&incoming_pdu, room_id, &room_version_id)
-			.await?
-	};
-
-	if state_at_incoming_event.is_none() {
-		state_at_incoming_event = self
-			.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
-			.await?;
-	}
-
-	let state_at_incoming_event =
-		state_at_incoming_event.expect("we always set this to some above");
-
 	let room_version = to_room_version(&room_version_id);
 
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Performing auth check to upgrade"
-	);
-	// 11. Check the auth of the event passes based on the state of the event
-	let state_fetch_state = &state_at_incoming_event;
-	let state_fetch = |k: StateEventType, s: StateKey| async move {
-		let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
+	let state_at_incoming_event: HashMap<u64, OwnedEventId> =
+		if incoming_pdu.kind == TimelineEventType::RoomCreate {
+			HashMap::new()
+		} else {
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				"Resolving state at event"
+			);
+			let mut state_at_incoming_event = if incoming_pdu.prev_events().count() == 1 {
+				self.state_at_incoming_degree_one(&incoming_pdu).await?
+			} else {
+				self.state_at_incoming_resolved(&incoming_pdu, room_id, &room_version_id)
+					.await?
+			};
 
-		let event_id = state_fetch_state.get(&shortstatekey)?;
-		self.services.timeline.get_pdu(event_id).await.ok()
-	};
+			if state_at_incoming_event.is_none() {
+				state_at_incoming_event = self
+					.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
+					.await?;
+			}
 
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Running initial auth check"
-	);
-	let auth_check = state_res::event_auth::auth_check(
-		&room_version,
-		&incoming_pdu,
-		None, // TODO: third party invite
-		|ty, sk| state_fetch(ty.clone(), sk.into()),
-		create_event.as_pdu(),
-	)
-	.await
-	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+			let state_at_incoming_event =
+				state_at_incoming_event.expect("we always set this to some above");
 
-	if !auth_check {
-		return Err!(Request(Forbidden("Event has failed auth check with state at the event.")));
-	}
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				"Performing auth check to upgrade"
+			);
+			// 11. Check the auth of the event passes based on the state of the event
+			let state_fetch_state = &state_at_incoming_event;
+			let state_fetch = |k: StateEventType, s: StateKey| async move {
+				let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
+
+				let event_id = state_fetch_state.get(&shortstatekey)?;
+				self.services.timeline.get_pdu(event_id).await.ok()
+			};
+
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				"Running initial auth check"
+			);
+			let auth_check = state_res::event_auth::auth_check(
+				&room_version,
+				&incoming_pdu,
+				None, // TODO: third party invite
+				|ty, sk| state_fetch(ty.clone(), sk.into()),
+				create_event.as_pdu(),
+			)
+			.await
+			.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+
+			if !auth_check {
+				return Err!(Request(Forbidden(
+					"Event has failed auth check with state at the event."
+				)));
+			}
+
+			state_at_incoming_event
+		};
 
 	// 13. Use state resolution to find new room state
 

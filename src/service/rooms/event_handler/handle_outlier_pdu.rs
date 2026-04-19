@@ -98,14 +98,10 @@ where
 	}
 
 	// Fetch any missing ones & reject invalid ones
-	let missing_auth_events = if auth_events_known {
-		pdu_event
-			.auth_events()
-			.filter(|id| !auth_events.contains_key(*id))
-			.collect::<Vec<_>>()
-	} else {
-		pdu_event.auth_events().collect::<Vec<_>>()
-	};
+	let missing_auth_events = pdu_event
+		.auth_events()
+		.filter(|id| !auth_events.contains_key(*id))
+		.collect::<Vec<_>>();
 	if !missing_auth_events.is_empty() || !auth_events_known {
 		debug_info!(
 			"Fetching {} missing auth events for outlier event {event_id}",
@@ -125,28 +121,16 @@ where
 	} else {
 		debug!("No missing auth events for outlier event {event_id}");
 	}
-	// reject if we are still missing some
-	let still_missing = pdu_event
-		.auth_events()
-		.filter(|id| !auth_events.contains_key(*id))
-		.collect::<Vec<_>>();
-	if !still_missing.is_empty() {
-		return Err!(Request(InvalidParam(
-			"Could not fetch all auth events for outlier event {event_id}, still missing: \
-			 {still_missing:?}"
-		)));
-	}
 
-	// 6. Reject "due to auth events" if the event doesn't pass auth based on the
-	//    auth events
-	debug!("Checking based on auth events");
+	// Build map of auth events and reject if we are still missing some
 	let mut auth_events_by_key: HashMap<_, _> = HashMap::with_capacity(auth_events.len());
-	// Build map of auth events
 	for id in pdu_event.auth_events() {
-		let auth_event = auth_events
-			.get(id)
-			.expect("we just checked that we have all auth events")
-			.to_owned();
+		let Some(auth_event) = auth_events.get(id).map(ToOwned::to_owned) else {
+			return Err!(Request(InvalidParam(debug_error!(
+				"Could not fetch all auth events for outlier event {event_id}, still missing: \
+				 {id}"
+			))));
+		};
 
 		check_room_id(room_id, &auth_event)?;
 
@@ -170,12 +154,14 @@ where
 		}
 	}
 
-	// The original create event must be in the auth events
-	if !matches!(
-		auth_events_by_key.get(&(StateEventType::RoomCreate, String::new().into())),
-		Some(_) | None
-	) {
-		return Err!(Request(InvalidParam("Incoming event refers to wrong create event.")));
+	// The original create event must be in the auth events for v11 and below rooms.
+	// For v12+, it is not in auth_events but its ID is inferred from the room ID.
+	if !to_room_version(&room_version_id).room_ids_as_hashes {
+		if !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into())) {
+			return Err!(Request(InvalidParam(
+				"Incoming event missing m.room.create in auth events"
+			)));
+		}
 	}
 
 	let state_fetch = |ty: &StateEventType, sk: &str| {
