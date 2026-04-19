@@ -32,15 +32,32 @@ pub async fn server_can_see_event(
 	}
 
 	let Ok(shortstatehash) = self.pdu_shortstatehash(&event_id).await else {
+		// Fallback: If we don't know the state at the event, use current room
+		// visibility
 		if self.is_world_readable(&room_id).await {
 			return true;
 		}
 
-		return self
+		let server_is_participant = self
 			.services
 			.state_cache
 			.server_is_participant(&origin, &room_id)
 			.await;
+
+		if server_is_participant {
+			let history_visibility = self
+				.state_get_content_current(&room_id, &StateEventType::RoomHistoryVisibility, "")
+				.await
+				.map_or(HistoryVisibility::Shared, |c: RoomHistoryVisibilityEventContent| {
+					c.history_visibility
+				});
+
+			if history_visibility == HistoryVisibility::Shared {
+				return true;
+			}
+		}
+
+		return server_is_participant;
 	};
 
 	let history_visibility = self
@@ -52,7 +69,14 @@ pub async fn server_can_see_event(
 
 	match history_visibility {
 		| HistoryVisibility::WorldReadable => true,
-		| HistoryVisibility::Shared | HistoryVisibility::Invited => {
+		| HistoryVisibility::Shared => {
+			// Spec: all servers whose users have joined the room can see all history
+			self.services
+				.state_cache
+				.server_is_participant(&origin, &room_id)
+				.await
+		},
+		| HistoryVisibility::Invited => {
 			// Allow if any member on requesting server was AT LEAST invited at that state
 			let members: Vec<ruma::OwnedUserId> = self
 				.services
