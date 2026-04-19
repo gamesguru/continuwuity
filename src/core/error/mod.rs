@@ -182,6 +182,7 @@ impl Error {
 			| Self::Federation(_, error) | Self::Ruma(error) =>
 				response::ruma_error_kind(error).clone(),
 			| Self::BadRequest(kind, ..) | Self::Request(kind, ..) => kind.clone(),
+			| Self::Json(_) | Self::SerdeDe(_) => ruma::api::client::error::ErrorKind::BadJson,
 			| Self::FeatureDisabled(..) => FeatureDisabled,
 			| _ => Unknown,
 		}
@@ -202,7 +203,9 @@ impl Error {
 			| Self::Mxc(_)
 			| Self::Mxid(_)
 			| Self::JsParseInt(_)
-			| Self::JsTryFromInt(_) => StatusCode::BAD_REQUEST,
+			| Self::JsTryFromInt(_)
+			| Self::Json(_)
+			| Self::SerdeDe(_) => StatusCode::BAD_REQUEST,
 			| Self::Reqwest(error) => error.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
 			| Self::Conflict(_) => StatusCode::CONFLICT,
 			| Self::Io(error) => response::io_error_code(error.kind()),
