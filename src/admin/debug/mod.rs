@@ -73,6 +73,21 @@ pub enum DebugCommand {
 		room_id: OwnedRoomId,
 	},
 
+	/// Purge all outlier PDUs matching the filters.
+	PurgeOutliers {
+		/// Filter outliers to a specific room
+		#[arg(short, long)]
+		room_id: Option<OwnedRoomOrAliasId>,
+
+		/// Filter outliers to a specific sender
+		#[arg(short, long)]
+		sender: Option<OwnedUserId>,
+
+		/// Purge ALL outliers in the database.
+		#[arg(long)]
+		all: bool,
+	},
+
 	/// Get the room DAG as a list of PDUs in a range.
 	GetRoomDag {
 		/// Room ID

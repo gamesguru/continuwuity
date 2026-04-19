@@ -654,6 +654,47 @@ pub(super) async fn view_extremities(&self, room: OwnedRoomOrAliasId) -> Result 
 }
 
 #[admin_command]
+pub(super) async fn purge_outliers(
+	&self,
+	room_id: Option<OwnedRoomOrAliasId>,
+	sender: Option<OwnedUserId>,
+	all: bool,
+) -> Result {
+	if room_id.is_none() && sender.is_none() && !all {
+		return Err!("You must specify a room, a sender, or use --all to purge outliers.");
+	}
+
+	let room_id = if let Some(room) = room_id {
+		Some(self.services.rooms.alias.resolve(&room).await?)
+	} else {
+		None
+	};
+
+	let outliers: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
+			let room_match = room_id
+				.as_ref()
+				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
+			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+			ready(room_match && sender_match)
+		})
+		.map(|(event_id, _)| event_id)
+		.collect()
+		.await;
+
+	let count = outliers.len();
+	for event_id in outliers {
+		self.services.rooms.outlier.remove_outlier(&event_id);
+	}
+
+	self.write_str(&format!("Purged {count} outliers.")).await
+}
+
+#[admin_command]
 pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 	self.bail_restricted()?;
 

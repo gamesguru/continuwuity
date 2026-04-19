@@ -35,6 +35,10 @@ where
 		.get_pdu_id(incoming_pdu.event_id())
 		.await
 	{
+		self.services
+			.outlier
+			.remove_outlier(incoming_pdu.event_id());
+
 		return Ok(Some(pduid));
 	}
 
