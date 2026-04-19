@@ -76,6 +76,20 @@ impl Database {
 
 	#[inline]
 	pub fn keys(&self) -> impl Iterator<Item = &MapsKey> + Send + '_ { self.maps.keys() }
+
+	#[tracing::instrument(skip(self))]
+	pub async fn flush_and_close(self) {
+		conduwuit::info!("Exclusive database lock acquired. Flushing to disk...");
+		let _ = self.db.sort();
+		let _ = self.db.sync();
+	}
+
+	#[tracing::instrument(skip(self))]
+	pub async fn force_flush_and_close(&self) {
+		conduwuit::warn!("Force flushing database via shared reference...");
+		let _ = self.db.sort();
+		let _ = self.db.sync();
+	}
 }
 
 impl Index<&str> for Database {
