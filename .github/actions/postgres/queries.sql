@@ -44,7 +44,7 @@ WITH run_regs AS (
                   AND b2.os IS NOT DISTINCT FROM r.os
                   AND b2.arch IS NOT DISTINCT FROM r.arch
                   AND b2.profile IS NOT DISTINCT FROM r.profile
-                  AND b2.room_version IS NOT DISTINCT FROM r.room_version
+                  AND COALESCE(b2.room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
                 ORDER BY b2.run_date DESC LIMIT 1
             )
         WHERE rd.run_id = r.id
