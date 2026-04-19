@@ -91,7 +91,17 @@ impl Manager {
 					manager.abort();
 
 					// Now it is completely safe to lock and abort the inner workers.
-					self.workers.lock().await.abort_all();
+					let mut workers = self.workers.lock().await;
+					workers.abort_all();
+
+					// PRO-TIP: Drain the JoinSet with a short bounded timeout!
+					// This waits a fraction of a second for Tokio to actually drop
+					// the aborted tasks' memory and their Arc references, preventing
+					// false alarms in try_unwrap().
+					let _ = tokio::time::timeout(Duration::from_millis(1000), async {
+						while workers.join_next().await.is_some() {}
+					})
+					.await;
 				},
 			}
 		}

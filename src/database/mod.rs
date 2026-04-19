@@ -80,15 +80,24 @@ impl Database {
 	#[tracing::instrument(skip(self))]
 	pub async fn flush_and_close(self) {
 		conduwuit::info!("Exclusive database lock acquired. Flushing to disk...");
-		let _ = self.db.sort();
-		let _ = self.db.sync();
+		tokio::task::spawn_blocking(move || {
+			let _ = self.db.sort();
+			let _ = self.db.sync();
+		})
+		.await
+		.expect("Failed to flush database on shutdown");
 	}
 
 	#[tracing::instrument(skip(self))]
 	pub async fn force_flush_and_close(&self) {
 		conduwuit::warn!("Force flushing database via shared reference...");
-		let _ = self.db.sort();
-		let _ = self.db.sync();
+		let db = self.db.clone();
+		tokio::task::spawn_blocking(move || {
+			let _ = db.sort();
+			let _ = db.sync();
+		})
+		.await
+		.expect("Failed to force flush database");
 	}
 }
 
