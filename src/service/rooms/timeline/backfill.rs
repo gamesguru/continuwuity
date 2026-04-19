@@ -347,9 +347,7 @@ pub async fn backfill_pdu(
 	.into();
 
 	// Insert pdu
-	self.db
-		.prepend_backfill_pdu(&pdu_id, &event_id, &value)
-		.await;
+	self.db.prepend_backfill_pdu(&pdu_id, &event_id, &value);
 
 	drop(insert_lock);
 
