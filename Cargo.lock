@@ -1091,7 +1091,6 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-metrics",
- "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-core",
