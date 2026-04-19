@@ -32,10 +32,14 @@ pub async fn server_can_see_event(
 	}
 
 	let Ok(shortstatehash) = self.pdu_shortstatehash(&event_id).await else {
+		if self.is_world_readable(&room_id).await {
+			return true;
+		}
+
 		return self
 			.services
 			.state_cache
-			.server_in_room(&origin, &room_id)
+			.server_is_participant(&origin, &room_id)
 			.await;
 	};
 
@@ -48,20 +52,13 @@ pub async fn server_can_see_event(
 
 	match history_visibility {
 		| HistoryVisibility::WorldReadable => true,
-		| HistoryVisibility::Shared => {
-			// Allow if the server is currently participating in the room
-			self.services
-				.state_cache
-				.server_is_participant(&origin, &room_id)
-				.await
-		},
-		| HistoryVisibility::Invited => {
+		| HistoryVisibility::Shared | HistoryVisibility::Invited => {
 			// Allow if any member on requesting server was AT LEAST invited at that state
 			let members: Vec<ruma::OwnedUserId> = self
 				.services
 				.state_cache
-				.room_members_invited(&room_id)
-				.chain(self.services.state_cache.room_members(&room_id))
+				.room_useroncejoined(&room_id)
+				.chain(self.services.state_cache.room_members_invited(&room_id))
 				.map(ToOwned::to_owned)
 				.collect()
 				.await;
@@ -81,7 +78,7 @@ pub async fn server_can_see_event(
 			let members: Vec<ruma::OwnedUserId> = self
 				.services
 				.state_cache
-				.room_members(&room_id)
+				.room_useroncejoined(&room_id)
 				.map(ToOwned::to_owned)
 				.collect()
 				.await;
