@@ -904,20 +904,28 @@ pub(super) async fn force_set_room_state_from_server(
 
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
-		| None => self
-			.services
-			.rooms
-			.timeline
-			.latest_pdu_in_room(&room_id)
-			.await
-			.map_err(|_| {
-				err!(Request(InvalidParam(
-					"Room is unknown or has no timeline; you must specify an event ID with \
+		| None => {
+			if !self
+				.services
+				.rooms
+				.state_cache
+				.server_is_participant(&self.services.server.name, &room_id)
+				.await
+			{
+				return Err!(Request(InvalidParam(
+					"We are not participating in the room; you must specify an event ID with \
 					 --at-event to bootstrap."
-				)))
-			})?
-			.event_id()
-			.to_owned(),
+				)));
+			}
+			self.services
+				.rooms
+				.timeline
+				.latest_pdu_in_room(&room_id)
+				.await
+				.map_err(|_| err!(Database("Failed to find the latest PDU in database")))?
+				.event_id()
+				.to_owned()
+		},
 	};
 
 	let room_version = self

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use conduwuit::{
 	Result, implement,
-	matrix::PduEvent,
-	utils::stream::{ReadyExt, TryIgnore},
+	matrix::{Event, PduEvent},
+	utils::stream::{BroadbandExt, ReadyExt, TryIgnore},
 };
 use database::{Deserialized, Json, Map};
 use futures::Stream;
@@ -105,7 +105,7 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 		.await
 		.deserialized::<PduEvent>()
 	{
-		if let Some(room_id) = pdu.room_id() {
+		if let Some(room_id) = pdu.room_id.as_deref() {
 			let mut key = room_id.as_bytes().to_vec();
 			key.push(0xFF);
 			key.extend_from_slice(event_id.as_bytes());
