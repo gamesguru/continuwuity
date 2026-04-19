@@ -41,7 +41,6 @@ assets = [
 
 [features]
 default = [
-    "standard",
     "release_max_log_level",
     "bindgen-runtime", # replace with bindgen-static on alpine
 ]
@@ -215,8 +214,10 @@ conduwuit-database.workspace = true
 conduwuit-router.workspace = true
 conduwuit-service.workspace = true
 conduwuit-build-metadata.workspace = true
+conduwuit-macros.workspace = true
 
 clap.workspace = true
+ctor.workspace = true
 console-subscriber.optional = true
 console-subscriber.workspace = true
 const-str.workspace = true

@@ -35,6 +35,8 @@ pub use utils::{implement, result, result::Result};
 
 pub use crate as conduwuit_core;
 
+conduwuit_macros::introspect_crate! {}
+
 #[cfg(any(not(conduwuit_mods), not(feature = "conduwuit_mods")))]
 pub mod mods {
 	#[macro_export]

@@ -80,7 +80,7 @@ conduwuit-core.workspace = true
 conduwuit-macros.workspace = true
 conduwuit-service.workspace = true
 const-str.workspace = true
-
+ctor.workspace = true
 futures.workspace = true
 hmac.workspace = true
 http.workspace = true
@@ -88,6 +88,7 @@ http-body-util.workspace = true
 hyper.workspace = true
 ipaddress.workspace = true
 itertools.workspace = true
+lettre.workspace = true
 log.workspace = true
 rand.workspace = true
 reqwest.workspace = true

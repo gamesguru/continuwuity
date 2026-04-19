@@ -4,6 +4,8 @@
 extern crate conduwuit_core as conduwuit;
 extern crate conduwuit_service as service;
 
+conduwuit_macros::introspect_crate! {}
+
 pub mod client;
 pub mod router;
 pub mod server;

@@ -1,0 +1,94 @@
+name: Checks / Changelog
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-changelog:
+    name: Check changelog is added
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout: .
+
+      - name: Check for changelog entry
+        id: check_files
+        run: |
+          git fetch origin ${GITHUB_BASE_REF}
+
+          # Check for Added (A) or Modified (M) files in changelog.d
+          CHANGELOG_CHANGES=$(git diff --name-status origin/${GITHUB_BASE_REF}...HEAD -- changelog.d/)
+
+          SRC_CHANGES=$(git diff --name-status origin/${GITHUB_BASE_REF}...HEAD -- src/)
+
+          echo "Changes in changelog.d/:"
+          echo "$CHANGELOG_CHANGES"
+          echo "Changes in src/:"
+          echo "$SRC_CHANGES"
+
+          if echo "$CHANGELOG_CHANGES" | grep -q "^[AM]"; then
+            echo "has_changelog=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changelog=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -n "$SRC_CHANGES" ]; then
+            echo "src_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "src_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Manage PR Labels
+        uses: https://github.com/actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          HAS_CHANGELOG: ${{ steps.check_files.outputs.has_changelog }}
+          SRC_CHANGED: ${{ steps.check_files.outputs.src_changed }}
+        with:
+          script: |
+            const hasChangelog = process.env.HAS_CHANGELOG === 'true';
+            const srcChanged = process.env.SRC_CHANGED === 'true';
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const currentLabels = pullRequest.labels.map(l => l.name);
+
+            if (hasChangelog) {
+              console.log('PR has changelog');
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['Changelog/Added'],
+              });
+            } else if (currentLabels.includes('Changelog/None')) {
+              console.log('PR has Changelog/None label, skipping.');
+            } else if (srcChanged) {
+              console.log('PR is missing changelog');
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['Changelog/Missing'],
+              });
+              core.setFailed("Missing changelog entry (detected)");
+            } else if (currentLabels.includes('Changelog/Missing')) {
+              core.setFailed("Missing changelog entry (label)");
+            } else {
+              console.log('Changelog not needed');
+              // Changelog is probably not needed
+            }

@@ -1,6 +1,9 @@
 [alias]
 xtask = "run --package xtask --"
 
+[build]
+rustc-wrapper = ".cargo/cargo-wrapper.sh"
+
 [env]
 RUSTC_WRAPPER = { value = "sccache", force = false }
 ROCKSDB_LIB_DIR = { value = "/usr/local/lib", force = false }

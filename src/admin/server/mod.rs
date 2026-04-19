@@ -54,8 +54,8 @@ pub enum ServerCommand {
 	Shutdown,
 
 	/// List features built into the server
-	ListFeatures {},
+	ListFeatures,
 
 	/// Build information
-	BuildInfo {},
+	BuildInfo,
 }

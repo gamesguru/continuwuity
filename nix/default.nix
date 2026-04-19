@@ -1,11 +1,10 @@
 {
   imports = [
-    ./checks
+    ./rust.nix
+    ./crane.nix
     ./packages
-    ./shells
-    ./tests
-
-    ./hydra.nix
+    ./devshell.nix
     ./fmt.nix
+    ./rocksdb-updater.nix
   ];
 }

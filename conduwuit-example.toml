@@ -95,6 +95,10 @@
 # engine API. To use this, set a database backup path that continuwuity
 # can write to.
 #
+# If you are using systemd, you will need to add the path to
+# ReadWritePaths in the service file, preferably via a drop-in file
+# through `systemctl edit`.
+#
 # For more information, see:
 # https://continuwuity.org/maintenance.html#backups
 #
@@ -526,6 +530,18 @@
 #
 #recaptcha_private_site_key =
 
+# Policy documents, such as terms and conditions or a privacy policy,
+# which users must agree to when registering an account.
+#
+# Example:
+# ```ignore
+# [global.registration_terms.privacy_policy]
+# en = { name = "Privacy Policy", url = "https://homeserver.example/en/privacy_policy.html" }
+# es = { name = "Política de Privacidad", url = "https://homeserver.example/es/privacy_policy.html" }
+# ```
+#
+#registration_terms = {}
+
 # Controls whether encrypted rooms and events are allowed.
 #
 #allow_encryption = true
@@ -610,7 +626,7 @@
 # Set to false to disable users from joining or creating room versions
 # that aren't officially supported by continuwuity.
 #
-# continuwuity officially supports room versions 6 - 11.
+# continuwuity officially supports room versions 6 - 12.
 #
 # continuwuity has slightly experimental (though works fine in practice)
 # support for versions 3 - 5.
@@ -622,9 +638,9 @@
 # rather than an integer. Forgetting the quotes will make the server fail
 # to start!
 #
-# Per spec, room version "11" is the default.
+# Per spec, room version "12" is the default.
 #
-#default_room_version = "11"
+#default_room_version = "12"
 
 # Enable OpenTelemetry OTLP tracing export. This replaces the deprecated
 # Jaeger exporter. Traces will be sent via OTLP to a collector (such as
@@ -1410,6 +1426,20 @@
 #
 #ignore_messages_from_server_names = []
 
+# List of server names that continuwuity will deprioritize (try last) when
+# a client requests to join a room.
+#
+# This can be used to potentially speed up room join requests, by
+# deprioritizing sending join requests through servers that are known to
+# be large or slow.
+#
+# continuwuity will still send join requests to servers in this list if
+# the room couldn't be joined via other servers it federates with.
+#
+# example: ["example.com"]
+#
+#deprioritize_joins_through_servers = []
+
 # Send messages from users that the user has ignored to the client.
 #
 # There is no way for clients to receive messages sent while a user was
@@ -1524,7 +1554,7 @@
 
 # User agent that is used specifically when fetching url previews.
 #
-#url_preview_user_agent = "continuwuity/<version> (bot; +https://continuwuity.org)"
+#url_preview_user_agent = "guwitty/<version>"
 
 # Determines whether audio and video files will be downloaded for URL
 # previews.
@@ -1882,6 +1912,11 @@
 #
 #support_mxid =
 
+# PGP key URI for server support contacts, to be served as part of the
+# MSC1929 server support endpoint.
+#
+#support_pgp_key =
+
 # **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
 #
 # A list of MatrixRTC foci URLs which will be served as part of the
@@ -2064,3 +2099,41 @@
 # MSC4222: state_after in sync v2
 #
 #msc4222_enabled = false
+
+#[global.smtp]
+
+# A `smtp://`` URI which will be used to connect to a mail server.
+# Uncommenting the [global.smtp] group and setting this option enables
+# features which depend on the ability to send email,
+# such as self-service password resets.
+#
+# For most modern mail servers, format the URI like this:
+# 	`smtps://username:password@hostname:port`
+# Note that you will need to URL-encode the username and password. If your
+# username _is_ your email address, you will need to replace the `@` with
+# `%40`.
+#
+# For a guide on the accepted URI syntax, consult Lettre's documentation:
+# https://docs.rs/lettre/latest/lettre/transport/smtp/struct.AsyncSmtpTransport.html#method.from_url
+#
+#connection_uri =
+
+# The outgoing address which will be used for sending emails.
+#
+# For a syntax guide, see https://datatracker.ietf.org/doc/html/rfc2822#section-3.4
+#
+# ...or if you don't want to read the RFC, for some reason:
+# - `Name <address@domain.org>` to specify a sender name
+# - `address@domain.org` to not use a name
+#
+#sender =
+
+# Whether to require that users provide an email address when they
+# register.
+#
+#require_email_for_registration = false
+
+# Whether to require that users who register with a registration token
+# provide an email address.
+#
+#require_email_for_token_registration = false

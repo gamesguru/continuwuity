@@ -75,9 +75,6 @@ jobs:
             mold \
             postgresql-client
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a # v0.0.9
-
       - name: Detect best CPU target
         id: cpu
         if: matrix.arch == 'amd64'
@@ -226,6 +223,14 @@ jobs:
           echo "$FAILED_TESTS" | tee -a "$GITHUB_OUTPUT"
           echo "EOF" | tee -a "$GITHUB_OUTPUT"
 
+          echo "### Complement Test Results (${{ matrix.arch }} ${{ matrix.os }})" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| Status | Count |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ✓ Pass | $PASS |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ✗ Fail | $FAIL |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ⌒ Skip | $SKIP |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| **Total** | **$TOTAL** |" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Get conduwuit version
         id: version
         if: always()
@@ -296,6 +301,8 @@ jobs:
         with:
           ssh_target: "git@nutra.tk"
           database_url: ${{ secrets.C10Y_POSTGRES_URL }}
+          setup_tables: ${{ github.ref == 'refs/heads/main' }}
+          rebuild_db: false
 
       - name: Query updated Postgres stats
         env:
@@ -303,11 +310,40 @@ jobs:
           DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
         run: python3 .github/actions/postgres/ci-query-failures.py
 
+      - name: Get newly failing tests
+        id: new_failures
+        env:
+          DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          ARCH="${{ matrix.arch }}"
+          OS="${{ matrix.os }}"
+          PROFILE="${{ matrix.profile }}"
+
+          # Fetch the newly failing tests for this specific run
+          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' LIMIT 1;" | sed 's/\\n/\n/g')
+
+          echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+
+          # Count non-empty lines of new failures
+          NEW_FAILURES_COUNT=$(echo "$NEW_FAILURES" | grep -c '[^[:space:]]' || true)
+          if [ "$NEW_FAILURES_COUNT" -gt 0 ]; then
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>Newly Failed Tests ($NEW_FAILURES_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$NEW_FAILURES" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
-          FAILED_TESTS: ${{ steps.results.outputs.failed_tests }}
+          FAILED_TESTS: ${{ steps.new_failures.outputs.new_failures }}
         with:
           script: |
             const pass = ${{ steps.results.outputs.pass || 0 }};
@@ -319,7 +355,7 @@ jobs:
             const failedTestsRaw = process.env.FAILED_TESTS || '';
 
             const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
-            let failedContent = 'No failing tests recorded.';
+            let failedContent = 'No newly failing tests recorded.';
             if (lines.length > 0) {
               const list = lines.join('\n');
               failedContent = '```\n' + list + '\n```';
@@ -336,7 +372,7 @@ jobs:
               `| ⌒ Skip | ${skip} |`,
               `| **Total** | **${total}** |`,
               '',
-              `<details><summary>Failed Tests (${fail})</summary>`,
+              `<details><summary>Newly Failed Tests (${lines.length})</summary>`,
               '',
               failedContent,
               '',

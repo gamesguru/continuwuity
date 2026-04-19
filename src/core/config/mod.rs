@@ -4,7 +4,7 @@ pub mod manager;
 pub mod proxy;
 
 use std::{
-	collections::{BTreeMap, BTreeSet},
+	collections::{BTreeMap, BTreeSet, HashMap},
 	net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
 	path::PathBuf,
 };
@@ -16,12 +16,13 @@ use either::{
 };
 use figment::providers::{Env, Format, Toml};
 pub use figment::{Figment, value::Value as FigmentValue};
+use lettre::message::Mailbox;
 use regex::RegexSet;
 use ruma::{
 	OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomVersionId,
 	api::client::discovery::{discover_homeserver::RtcFocusInfo, discover_support::ContactRole},
 };
-use serde::{Deserialize, de::IgnoredAny};
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 use url::Url;
 
 use self::proxy::ProxyConfig;
@@ -144,6 +145,10 @@ pub struct Config {
 	/// continuwuity supports online database backups using RocksDB's Backup
 	/// engine API. To use this, set a database backup path that continuwuity
 	/// can write to.
+	///
+	/// If you are using systemd, you will need to add the path to
+	/// ReadWritePaths in the service file, preferably via a drop-in file
+	/// through `systemctl edit`.
 	///
 	/// For more information, see:
 	/// https://continuwuity.org/maintenance.html#backups
@@ -657,6 +662,20 @@ pub struct Config {
 	/// even if `recaptcha_site_key` is set.
 	pub recaptcha_private_site_key: Option<String>,
 
+	/// Policy documents, such as terms and conditions or a privacy policy,
+	/// which users must agree to when registering an account.
+	///
+	/// Example:
+	/// ```ignore
+	/// [global.registration_terms.privacy_policy]
+	/// en = { name = "Privacy Policy", url = "https://homeserver.example/en/privacy_policy.html" }
+	/// es = { name = "Política de Privacidad", url = "https://homeserver.example/es/privacy_policy.html" }
+	/// ```
+	///
+	/// default: {}
+	#[serde(default)]
+	pub registration_terms: HashMap<String, HashMap<String, TermsDocument>>,
+
 	/// Controls whether encrypted rooms and events are allowed.
 	#[serde(default = "true_fn")]
 	pub allow_encryption: bool,
@@ -741,7 +760,7 @@ pub struct Config {
 	/// Set to false to disable users from joining or creating room versions
 	/// that aren't officially supported by continuwuity.
 	///
-	/// continuwuity officially supports room versions 6 - 11.
+	/// continuwuity officially supports room versions 6 - 12.
 	///
 	/// continuwuity has slightly experimental (though works fine in practice)
 	/// support for versions 3 - 5.
@@ -753,15 +772,18 @@ pub struct Config {
 	/// rather than an integer. Forgetting the quotes will make the server fail
 	/// to start!
 	///
-	/// Per spec, room version "11" is the default.
+	/// Per spec, room version "12" is the default.
 	///
-	/// default: "11"
+	/// default: "12"
 	#[serde(default = "default_default_room_version")]
 	pub default_room_version: RoomVersionId,
 
 	/// display: nested
 	#[serde(default)]
 	pub well_known: WellKnownConfig,
+
+	/// display: nested
+	pub smtp: Option<SmtpConfig>,
 
 	/// Enable OpenTelemetry OTLP tracing export. This replaces the deprecated
 	/// Jaeger exporter. Traces will be sent via OTLP to a collector (such as
@@ -1626,6 +1648,22 @@ pub struct Config {
 	#[serde(default, with = "serde_regex")]
 	pub ignore_messages_from_server_names: RegexSet,
 
+	/// List of server names that continuwuity will deprioritize (try last) when
+	/// a client requests to join a room.
+	///
+	/// This can be used to potentially speed up room join requests, by
+	/// deprioritizing sending join requests through servers that are known to
+	/// be large or slow.
+	///
+	/// continuwuity will still send join requests to servers in this list if
+	/// the room couldn't be joined via other servers it federates with.
+	///
+	/// example: ["example.com"]
+	///
+	/// default: []
+	#[serde(default = "Vec::new")]
+	pub deprioritize_joins_through_servers: Vec<OwnedServerName>,
+
 	/// Send messages from users that the user has ignored to the client.
 	///
 	/// There is no way for clients to receive messages sent while a user was
@@ -1754,7 +1792,7 @@ pub struct Config {
 
 	/// User agent that is used specifically when fetching url previews.
 	///
-	/// default: "continuwuity/<version> (bot; +https://continuwuity.org)"
+	/// default: "guwitty/<version>"
 	pub url_preview_user_agent: Option<String>,
 
 	/// Determines whether audio and video files will be downloaded for URL
@@ -2206,6 +2244,10 @@ pub struct WellKnownConfig {
 	/// listed.
 	pub support_mxid: Option<OwnedUserId>,
 
+	/// PGP key URI for server support contacts, to be served as part of the
+	/// MSC1929 server support endpoint.
+	pub support_pgp_key: Option<String>,
+
 	/// **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
 	///
 	/// A list of MatrixRTC foci URLs which will be served as part of the
@@ -2477,6 +2519,59 @@ pub struct ExperimentalConfig {
 	/// MSC4222: state_after in sync v2
 	#[serde(default)]
 	pub msc4222_enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[config_example_generator(
+	filename = "conduwuit-example.toml",
+	section = "global.smtp",
+	optional = "true"
+)]
+pub struct SmtpConfig {
+	/// A `smtp://`` URI which will be used to connect to a mail server.
+	/// Uncommenting the [global.smtp] group and setting this option enables
+	/// features which depend on the ability to send email,
+	/// such as self-service password resets.
+	///
+	/// For most modern mail servers, format the URI like this:
+	/// 	`smtps://username:password@hostname:port`
+	/// Note that you will need to URL-encode the username and password. If your
+	/// username _is_ your email address, you will need to replace the `@` with
+	/// `%40`.
+	///
+	/// For a guide on the accepted URI syntax, consult Lettre's documentation:
+	/// https://docs.rs/lettre/latest/lettre/transport/smtp/struct.AsyncSmtpTransport.html#method.from_url
+	pub connection_uri: String,
+
+	/// The outgoing address which will be used for sending emails.
+	///
+	/// For a syntax guide, see https://datatracker.ietf.org/doc/html/rfc2822#section-3.4
+	///
+	/// ...or if you don't want to read the RFC, for some reason:
+	/// - `Name <address@domain.org>` to specify a sender name
+	/// - `address@domain.org` to not use a name
+	pub sender: Mailbox,
+
+	/// Whether to require that users provide an email address when they
+	/// register.
+	///
+	/// default: false
+	#[serde(default)]
+	pub require_email_for_registration: bool,
+
+	/// Whether to require that users who register with a registration token
+	/// provide an email address.
+	///
+	/// default: false
+	#[serde(default)]
+	pub require_email_for_token_registration: bool,
+}
+
+/// A policy document for use with a m.login.terms stage.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TermsDocument {
+	pub name: String,
+	pub url: String,
 }
 
 const DEPRECATED_KEYS: &[&str] = &[
@@ -2772,7 +2867,7 @@ fn default_rocksdb_stats_level() -> u8 { 1 }
 // I know, it's a great name
 #[must_use]
 #[inline]
-pub fn default_default_room_version() -> RoomVersionId { RoomVersionId::V11 }
+pub fn default_default_room_version() -> RoomVersionId { RoomVersionId::V12 }
 
 fn default_ip_range_denylist() -> Vec<String> {
 	vec![
