@@ -13,6 +13,7 @@ WITH run_regs AS (
         r.n_fail,
         r.n_skip,
         r.profile,
+        r.room_version,
         r.features,
         r.os,
         r.arch,
@@ -43,6 +44,7 @@ WITH run_regs AS (
                   AND b2.os IS NOT DISTINCT FROM r.os
                   AND b2.arch IS NOT DISTINCT FROM r.arch
                   AND b2.profile IS NOT DISTINCT FROM r.profile
+                  AND COALESCE(b2.room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
                 ORDER BY b2.run_date DESC LIMIT 1
             )
         WHERE rd.run_id = r.id
@@ -60,6 +62,7 @@ SELECT
     new_pass,
     new_fail,
     profile,
+    room_version,
     regexp_replace(features, '[,\\s]+', E'\n', 'g') AS features,
     os,
     arch,

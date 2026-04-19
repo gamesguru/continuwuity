@@ -115,7 +115,12 @@ impl Service {
 
 		pin_mut!(event_ids);
 		while let Some(event_id) = event_ids.next().await {
-			let Ok(pdu) = self.services.timeline.get_pdu(&event_id).await else {
+			let Ok(pdu) = self
+				.services
+				.timeline
+				.get_pdu_in_room(Some(room_id), &event_id)
+				.await
+			else {
 				continue;
 			};
 
