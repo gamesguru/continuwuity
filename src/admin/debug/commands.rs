@@ -482,7 +482,7 @@ pub(super) async fn first_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 		.services
 		.rooms
 		.state_cache
-		.server_in_room(&self.services.server.name, &room_id)
+		.server_is_participant(&self.services.server.name, &room_id)
 		.await
 	{
 		return Err!("We are not participating in the room / we don't know about the room ID.",);
@@ -509,7 +509,7 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 		.services
 		.rooms
 		.state_cache
-		.server_in_room(&self.services.server.name, &room_id)
+		.server_is_participant(&self.services.server.name, &room_id)
 		.await
 	{
 		return Err!("We are not participating in the room / we don't know about the room ID.");

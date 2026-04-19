@@ -81,7 +81,11 @@ pub(crate) async fn get_backfill_route(
 				Ok(services
 					.rooms
 					.state_accessor
-					.server_can_see_event(body.origin(), &pdu.room_id_or_hash(), &pdu.event_id)
+					.server_can_see_event(
+						body.origin().to_owned(),
+						pdu.room_id_or_hash(),
+						pdu.event_id.clone(),
+					)
 					.await
 					.then_some(pdu))
 			})

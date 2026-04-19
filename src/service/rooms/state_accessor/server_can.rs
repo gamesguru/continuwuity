@@ -1,7 +1,7 @@
 use conduwuit::implement;
 use futures::StreamExt;
 use ruma::{
-	EventId, RoomId, ServerName,
+	OwnedEventId, OwnedRoomId, OwnedServerName,
 	events::{
 		StateEventType, TimelineEventType,
 		room::history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent},
@@ -14,28 +14,28 @@ use ruma::{
 #[tracing::instrument(skip_all, level = "trace")]
 pub async fn server_can_see_event(
 	&self,
-	origin: &ServerName,
-	room_id: &RoomId,
-	event_id: &EventId,
+	origin: OwnedServerName,
+	room_id: OwnedRoomId,
+	event_id: OwnedEventId,
 ) -> bool {
-	if event_id.server_name() == Some(origin) {
+	if event_id.server_name() == Some(&origin) {
 		return true;
 	}
 
-	if let Ok(pdu) = self.services.timeline.get_pdu(event_id).await {
+	if let Ok(pdu) = self.services.timeline.get_pdu(&event_id).await {
 		if pdu.sender.server_name() == origin
-			|| pdu.origin.as_deref() == Some(origin)
+			|| pdu.origin.as_deref() == Some(&origin)
 			|| pdu.kind == TimelineEventType::RoomCreate
 		{
 			return true;
 		}
 	}
 
-	let Ok(shortstatehash) = self.pdu_shortstatehash(event_id).await else {
+	let Ok(shortstatehash) = self.pdu_shortstatehash(&event_id).await else {
 		return self
 			.services
 			.state_cache
-			.server_in_room(origin, room_id)
+			.server_in_room(&origin, &room_id)
 			.await;
 	};
 
@@ -53,8 +53,8 @@ pub async fn server_can_see_event(
 			let members: Vec<ruma::OwnedUserId> = self
 				.services
 				.state_cache
-				.room_members_invited(room_id)
-				.chain(self.services.state_cache.room_members(room_id))
+				.room_members_invited(&room_id)
+				.chain(self.services.state_cache.room_members(&room_id))
 				.map(ToOwned::to_owned)
 				.collect()
 				.await;
@@ -74,7 +74,7 @@ pub async fn server_can_see_event(
 			let members: Vec<ruma::OwnedUserId> = self
 				.services
 				.state_cache
-				.room_members(room_id)
+				.room_members(&room_id)
 				.map(ToOwned::to_owned)
 				.collect()
 				.await;

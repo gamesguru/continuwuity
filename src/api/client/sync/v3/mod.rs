@@ -340,7 +340,7 @@ pub(crate) async fn build_sync_events(
 		.rooms
 		.state_cache
 		.rooms_invited(syncing_user)
-		.wide_filter_map(async |(room_id, invite_state)| {
+		.wide_filter_map(|(room_id, invite_state)| async move {
 			if is_ignored_invite(services, syncing_user, &room_id).await {
 				None
 			} else {

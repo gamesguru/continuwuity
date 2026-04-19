@@ -150,7 +150,7 @@ where
 	let control_events: Vec<_> = all_conflicted
 		.iter()
 		.stream()
-		.wide_filter_map(async |id| {
+		.wide_filter_map(|id| async move {
 			is_power_event_id(id, &event_fetch)
 				.await
 				.then_some(id.clone())
