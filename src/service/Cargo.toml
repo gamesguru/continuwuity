@@ -132,6 +132,7 @@ dashmap.workspace = true
 yansi.workspace = true
 linkify = "0.10.0"
 lettre.workspace = true
+tokio-util = "0.7.18"
 
 [target.'cfg(all(unix, target_os = "linux"))'.dependencies]
 sd-notify.workspace = true
