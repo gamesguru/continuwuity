@@ -543,6 +543,14 @@ pub struct Config {
 	#[serde(default = "default_sender_idle_timeout")]
 	pub sender_idle_timeout: u64,
 
+	/// Federation sender transaction retry backoff base (seconds). This is
+	/// the minimum delay before the first retry after a failed transaction.
+	/// Subsequent retries use quadratic backoff: base × tries².
+	///
+	/// default: 5
+	#[serde(default = "default_sender_retry_backoff_base")]
+	pub sender_retry_backoff_base: u64,
+
 	/// Federation sender transaction retry backoff limit (seconds).
 	///
 	/// default: 86400
@@ -2778,6 +2786,8 @@ fn default_federation_idle_per_host() -> u16 { 1 }
 fn default_sender_timeout() -> u64 { 180 }
 
 fn default_sender_idle_timeout() -> u64 { 180 }
+
+fn default_sender_retry_backoff_base() -> u64 { 5 }
 
 fn default_sender_retry_backoff_limit() -> u64 { 86400 }
 

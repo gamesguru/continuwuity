@@ -144,17 +144,25 @@ impl Service {
 	) {
 		match response {
 			| Ok(dest) => self.handle_response_ok(&dest, futures, statuses).await,
-			| Err((dest, e)) => Self::handle_response_err(dest, statuses, &e),
+			| Err((dest, e)) => self.handle_response_err(dest, statuses, &e),
 		}
 	}
 
-	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
+	fn handle_response_err(
+		&self,
+		dest: Destination,
+		statuses: &mut CurTransactionStatus,
+		e: &Error,
+	) {
 		debug!(dest = ?dest, "{e:?}");
-		statuses.entry(dest).and_modify(|e| {
+		let mut tries = 1_u32;
+		statuses.entry(dest.clone()).and_modify(|e| {
 			*e = match e {
 				| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
-				| &mut TransactionStatus::Retrying(ref n) =>
-					TransactionStatus::Failed(n.saturating_add(1), Instant::now()),
+				| &mut TransactionStatus::Retrying(ref n) => {
+					tries = n.saturating_add(1);
+					TransactionStatus::Failed(tries, Instant::now())
+				},
 				| TransactionStatus::Failed(..) => {
 					panic!("Request that was not even running failed?!")
 				},
@@ -162,6 +170,32 @@ impl Service {
 					panic!("Request in cooldown failed?!")
 				},
 			}
+		});
+
+		// Schedule a delayed retry after the backoff period
+		let base = self.server.config.sender_retry_backoff_base;
+		let max = self.server.config.sender_retry_backoff_limit;
+		let delay_secs = base
+			.saturating_mul(tries.into())
+			.saturating_mul(tries.into())
+			.min(max);
+
+		let sender = self
+			.channels
+			.get(self.shard_id(&dest))
+			.expect("channel")
+			.0
+			.clone();
+
+		self.server.runtime().spawn(async move {
+			tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+			sender
+				.send(Msg {
+					dest,
+					event: SendingEvent::Flush,
+					queue_id: Vec::new(),
+				})
+				.ok();
 		});
 	}
 
@@ -397,7 +431,7 @@ impl Service {
 			.and_modify(|e| match e {
 				TransactionStatus::Failed(tries, time) => {
 					// Fail if a request has failed recently (exponential backoff)
-					let min = self.server.config.sender_timeout;
+					let min = self.server.config.sender_retry_backoff_base;
 					let max = self.server.config.sender_retry_backoff_limit;
 					if continue_exponential_backoff_secs(min, max, time.elapsed(), *tries)
 						&& !matches!(dest, Destination::Appservice(_))
