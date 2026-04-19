@@ -100,43 +100,49 @@ pub(super) async fn parse_pdu(&self) -> Result {
 
 #[admin_command]
 pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
-	let mut outlier = false;
-	let mut pdu_json = self
+	let in_timeline = self
 		.services
 		.rooms
 		.timeline
-		.get_non_outlier_pdu_json(&event_id)
-		.await;
+		.get_pdu_id(&event_id)
+		.await
+		.is_ok();
+	let in_outlier = self
+		.services
+		.rooms
+		.outlier
+		.get_pdu_outlier(&event_id)
+		.await
+		.is_ok();
 
-	if pdu_json.is_err() {
-		outlier = true;
-		pdu_json = self.services.rooms.timeline.get_pdu_json(&event_id).await;
+	if !in_timeline && !in_outlier {
+		return Err!("PDU not found locally.");
 	}
 
-	match pdu_json {
-		| Err(_) => return Err!("PDU not found locally."),
-		| Ok(json) => {
-			let text = serde_json::to_string_pretty(&json)?;
-			let mut msg = String::new();
-			if outlier {
-				let soft_failed = self
-					.services
-					.rooms
-					.pdu_metadata
-					.is_event_soft_failed(&event_id)
-					.await;
-				if soft_failed {
-					msg.push_str("Outlier (Soft Failed / Rejected) PDU found in our database");
-				} else {
-					msg.push_str("Outlier PDU found in our database");
-				}
-			} else {
-				msg.push_str("Timeline PDU found in our database");
-			}
-			write!(self, "{msg}\n```json\n{text}\n```",)
-		},
+	let pdu_json = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
+	let text = serde_json::to_string_pretty(&pdu_json)?;
+
+	let mut msg = String::new();
+	if in_timeline && in_outlier {
+		msg.push_str("PDU found in BOTH Timeline and Outlier tables (STUCK STATE)");
+	} else if in_timeline {
+		msg.push_str("Timeline PDU found in our database");
+	} else {
+		let soft_failed = self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_soft_failed(&event_id)
+			.await;
+		if soft_failed {
+			msg.push_str("Outlier (Soft Failed / Rejected) PDU found in our database");
+		} else {
+			msg.push_str("Outlier PDU found in our database");
+		}
 	}
-	.await
+
+	let out = format!("{msg}\n```json\n{text}\n```");
+	self.write_str(&out).await
 }
 
 #[admin_command]
