@@ -26,6 +26,7 @@ pub(crate) const DEFAULT_BUMP_TYPES: &[TimelineEventType; 6] =
 #[derive(Default)]
 pub(crate) struct TimelinePdus {
 	pub pdus: VecDeque<(PduCount, PduEvent)>,
+	pub prev_batch: Option<PduCount>,
 	pub limited: bool,
 }
 
@@ -128,6 +129,11 @@ async fn load_timeline(
 		})
 		.await;
 
+	// capture the count of the absolute earliest PDU in the stream as the
+	// prev_batch token. This must be determined before topological sort changes
+	// the order of the PDUs.
+	let prev_batch = pdus.front().map(|(count, _)| *count);
+
 	if !pdus.is_empty() {
 		let mut event_to_count = std::collections::HashMap::new();
 		let events: Vec<_> = pdus
@@ -162,7 +168,7 @@ async fn load_timeline(
 		limited,
 	);
 
-	Ok(TimelinePdus { pdus, limited })
+	Ok(TimelinePdus { pdus, prev_batch, limited })
 }
 
 async fn share_encrypted_room(

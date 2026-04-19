@@ -898,11 +898,7 @@ pub(super) async fn list_outliers(&self, room_id: OwnedRoomId) -> Result {
 
 		// check for matching room id
 		if pdu.room_id.as_ref().is_some_and(|id| *id == room_id) {
-			if pdu
-				.event_id
-				.as_str()
-				.contains(self.services.globals.server_name().as_str())
-			{
+			if pdu.sender.server_name() == self.services.globals.server_name() {
 				local_outliers.push(pdu.event_id);
 			} else {
 				let out = format!("{}\n", pdu.event_id);

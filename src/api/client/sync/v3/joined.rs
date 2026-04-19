@@ -304,7 +304,7 @@ async fn build_state_and_timeline(
 
 	// the token which may be passed to the messages endpoint to backfill room
 	// history
-	let prev_batch = timeline.pdus.front().map(at!(0));
+	let prev_batch = timeline.prev_batch;
 
 	// note: we always indicate a limited timeline if the syncing user just joined
 	// the room, to indicate to the client that it should request backfill (and to
