@@ -38,7 +38,11 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 				let (event_id, _) = gen_event_id_canonical_json(pdu, &vi).map_err(|e| {
 					err!(Request(InvalidParam("Could not convert event to canonical json: {e}")))
 				})?;
-				OwnedRoomId::parse(event_id.as_str().replace('$', "!")).expect("valid room ID")
+				OwnedRoomId::parse(event_id.as_str().replace('$', "!")).map_err(|e| {
+					err!(BadServerResponse(
+						"Could not derive valid room ID from v12 event_id: {e}"
+					))
+				})?
 			} else {
 				return Err(err!(Request(InvalidParam("Missing room_id in pdu"))));
 			}
