@@ -47,17 +47,19 @@ pub async fn server_can_see_event(
 		});
 
 	match history_visibility {
-		| HistoryVisibility::Invited => {
-			// Allow if any member on requesting server was AT LEAST invited, else deny
+		| HistoryVisibility::WorldReadable => true,
+		| HistoryVisibility::Shared | HistoryVisibility::Invited => {
+			// Allow if any member on requesting server is AT LEAST invited, else deny
 			self.services
 				.state_cache
 				.room_members(room_id)
+				.chain(self.services.state_cache.room_members_invited(room_id))
 				.ready_filter(|member| member.server_name() == origin)
 				.any(|member| self.user_was_invited(shortstatehash, member))
 				.await
 		},
 		| HistoryVisibility::Joined => {
-			// Allow if any member on requesting server was joined, else deny
+			// Allow if any member on requesting server is joined, else deny
 			self.services
 				.state_cache
 				.room_members(room_id)

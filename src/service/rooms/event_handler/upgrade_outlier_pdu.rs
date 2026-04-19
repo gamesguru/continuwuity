@@ -45,7 +45,8 @@ where
 	{
 		self.services
 			.outlier
-			.remove_outlier(incoming_pdu.event_id());
+			.remove_outlier(incoming_pdu.event_id())
+			.await;
 
 		return Ok(Some(pduid));
 	}

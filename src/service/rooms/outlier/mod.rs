@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
-use conduwuit::{Result, implement, matrix::PduEvent, utils::stream::TryIgnore};
+use conduwuit::{
+	Result, implement,
+	matrix::PduEvent,
+	utils::stream::{ReadyExt, TryIgnore},
+};
 use database::{Deserialized, Json, Map};
 use futures::Stream;
-use ruma::{CanonicalJsonObject, EventId, OwnedEventId};
+use ruma::{CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId};
 
 pub struct Service {
 	db: Data,
@@ -11,6 +15,7 @@ pub struct Service {
 
 struct Data {
 	eventid_outlierpdu: Arc<Map>,
+	roomid_outliereventid: Arc<Map>,
 }
 
 impl crate::Service for Service {
@@ -18,6 +23,7 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			db: Data {
 				eventid_outlierpdu: args.db["eventid_outlierpdu"].clone(),
+				roomid_outliereventid: args.db["roomid_outliereventid"].clone(),
 			},
 		}))
 	}
@@ -53,14 +59,58 @@ pub fn stream(&self) -> impl Stream<Item = (OwnedEventId, PduEvent)> + Send + '_
 		.ignore_err()
 }
 
+#[implement(Service)]
+pub fn room_stream<'a>(
+	&'a self,
+	room_id: &'a RoomId,
+) -> impl Stream<Item = (OwnedEventId, PduEvent)> + Send + 'a {
+	self.db
+		.roomid_outliereventid
+		.stream_from::<Vec<u8>, OwnedEventId, _>(room_id)
+		.ignore_err()
+		.ready_take_while(move |(k, _): &(_, _)| k.starts_with(room_id.as_bytes()))
+		.ready_filter_map(|(_, v): (_, OwnedEventId)| Some(v))
+		.broad_filter_map(move |event_id: OwnedEventId| async move {
+			let pdu = self.get_pdu_outlier(&event_id).await.ok()?;
+			Some((event_id, pdu))
+		})
+}
+
 /// Append the PDU as an outlier.
 #[implement(Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
 pub fn add_pdu_outlier(&self, event_id: &EventId, pdu: &CanonicalJsonObject) {
 	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
+
+	if let Some(room_id) = pdu
+		.get("room_id")
+		.and_then(CanonicalJsonValue::as_str)
+		.and_then(|r| <&RoomId>::try_from(r).ok())
+	{
+		let mut key = room_id.as_bytes().to_vec();
+		key.push(0xFF);
+		key.extend_from_slice(event_id.as_bytes());
+		self.db.roomid_outliereventid.insert(&key, event_id);
+	}
 }
 
 /// Remove the PDU from the outlier tree.
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
-pub fn remove_outlier(&self, event_id: &EventId) { self.db.eventid_outlierpdu.remove(event_id); }
+pub async fn remove_outlier(&self, event_id: &EventId) {
+	if let Ok(pdu) = self
+		.db
+		.eventid_outlierpdu
+		.get(event_id)
+		.await
+		.deserialized::<PduEvent>()
+	{
+		if let Some(room_id) = pdu.room_id() {
+			let mut key = room_id.as_bytes().to_vec();
+			key.push(0xFF);
+			key.extend_from_slice(event_id.as_bytes());
+			self.db.roomid_outliereventid.remove(key);
+		}
+	}
+	self.db.eventid_outlierpdu.remove(event_id);
+}

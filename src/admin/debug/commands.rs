@@ -576,26 +576,30 @@ pub(super) async fn list_outliers(
 ) -> Result {
 	let limit = limit.unwrap_or(100);
 
-	let room_id = if let Some(room) = room_id {
-		Some(self.services.rooms.alias.resolve(&room).await?)
+	let mut outliers: Vec<(OwnedEventId, PduEvent)> = if let Some(room) = room_id {
+		let room_id = self.services.rooms.alias.resolve(&room).await?;
+		self.services
+			.rooms
+			.outlier
+			.room_stream(&room_id)
+			.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
+				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+				ready(sender_match)
+			})
+			.collect()
+			.await
 	} else {
-		None
+		self.services
+			.rooms
+			.outlier
+			.stream()
+			.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
+				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+				ready(sender_match)
+			})
+			.collect()
+			.await
 	};
-
-	let mut outliers: Vec<(OwnedEventId, PduEvent)> = self
-		.services
-		.rooms
-		.outlier
-		.stream()
-		.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
-			let room_match = room_id
-				.as_ref()
-				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
-			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
-			ready(room_match && sender_match)
-		})
-		.collect()
-		.await;
 
 	// Sort by origin_server_ts
 	outliers.sort_by_key(|(_, pdu)| pdu.origin_server_ts);
@@ -679,27 +683,32 @@ pub(super) async fn purge_outliers(
 		return Err!("You must specify a room, a sender, or use --all to purge outliers.");
 	}
 
-	let room_id = if let Some(room) = room_id {
-		Some(self.services.rooms.alias.resolve(&room).await?)
+	let outliers: Vec<OwnedEventId> = if let Some(room) = room_id {
+		let room_id = self.services.rooms.alias.resolve(&room).await?;
+		self.services
+			.rooms
+			.outlier
+			.room_stream(&room_id)
+			.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
+				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+				ready(sender_match)
+			})
+			.map(|(event_id, _)| event_id)
+			.collect()
+			.await
 	} else {
-		None
+		self.services
+			.rooms
+			.outlier
+			.stream()
+			.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
+				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+				ready(sender_match)
+			})
+			.map(|(event_id, _)| event_id)
+			.collect()
+			.await
 	};
-
-	let outliers: Vec<OwnedEventId> = self
-		.services
-		.rooms
-		.outlier
-		.stream()
-		.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
-			let room_match = room_id
-				.as_ref()
-				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
-			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
-			ready(room_match && sender_match)
-		})
-		.map(|(event_id, _)| event_id)
-		.collect()
-		.await;
 
 	let mut purged = 0_usize;
 	let mut skipped = 0_usize;
@@ -712,7 +721,7 @@ pub(super) async fn purge_outliers(
 			.await
 			.is_ok()
 		{
-			self.services.rooms.outlier.remove_outlier(&event_id);
+			self.services.rooms.outlier.remove_outlier(&event_id).await;
 			purged = purged.saturating_add(1);
 		} else {
 			skipped = skipped.saturating_add(1);
@@ -731,10 +740,7 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 		.services
 		.rooms
 		.outlier
-		.stream()
-		.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
-			ready(pdu.room_id().is_some_and(|r| r == room_id))
-		})
+		.room_stream(&room_id)
 		.map(|(_, pdu)| pdu)
 		.collect()
 		.await;
