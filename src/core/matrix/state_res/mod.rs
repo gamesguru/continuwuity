@@ -95,6 +95,7 @@ where
 {
 	use RoomVersionId::*;
 	let stateres_version = match room_version {
+		| V1 => StateResolutionVersion::V1,
 		| V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 | V11 => StateResolutionVersion::V2,
 		| _ => StateResolutionVersion::V2_1,
 	};
