@@ -176,9 +176,12 @@ pub async fn handle_incoming_pdu<'a>(
 		.server_in_room(self.services.globals.server_name(), room_id)
 		.await
 	{
+		let is_room_member_event =
+			value.get("type").and_then(|t| t.as_str()) == Some("m.room.member");
+
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
-		if value.get("type").and_then(|t| t.as_str()) == Some("m.room.member") {
+		if is_room_member_event {
 			if let Some(pdu) =
 				should_rescind_invite(&self.services, &mut value.clone(), sender, room_id).await?
 			{
@@ -193,12 +196,21 @@ pub async fn handle_incoming_pdu<'a>(
 				return Ok(None);
 			}
 		}
-		info!(
-			%origin,
-			%room_id,
-			"Dropping inbound PDU for room we aren't participating in"
-		);
-		return Err!(Request(NotFound("This server is not participating in that room.")));
+
+		if meta_exists && is_room_member_event {
+			info!(
+				%origin,
+				%room_id,
+				"Accepting inbound membership PDU for known room before participation cache catches up"
+			);
+		} else {
+			info!(
+				%origin,
+				%room_id,
+				"Dropping inbound PDU for room we aren't participating in"
+			);
+			return Err!(Request(NotFound("This server is not participating in that room.")));
+		}
 	}
 
 	if !meta_exists {

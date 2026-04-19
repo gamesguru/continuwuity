@@ -1,0 +1,50 @@
+---
+name: "Ingest Run Data into PostgreSQL"
+description: "Setup tables and bulk sync recent CI run history into a PostgreSQL database"
+
+inputs:
+  ssh_target:
+    description: "SSH connection string (e.g., git@nutra.tk)"
+    required: true
+  target_branch:
+    description: "Branch where results ledger is stored"
+    default: "_metadata/badges"
+  database_url:
+    description: "Postgres connection string"
+    required: true
+  setup_tables:
+    description: "Whether to run schema setup (tables.sql)"
+    default: "false"
+  rebuild_db:
+    description: "Whether to run a full historical rebuild (import_history.sh)"
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Full Database Rebuild
+      if: inputs.rebuild_db == 'true'
+      shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database_url }}
+      run: |
+        echo "⚠ Running FULL database rebuild from history..."
+        "${{ github.action_path }}/import_history.sh"
+
+    - name: Ensure Tables Exist
+      if: inputs.setup_tables == 'true' && inputs.rebuild_db != 'true'
+      shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database_url }}
+      run: |
+        cat "${{ github.action_path }}/tables.sql" | ssh -C -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
+
+    - name: Bulk Sync History
+      shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database_url }}
+        SSH_TARGET: ${{ inputs.ssh_target }}
+        TARGET_BRANCH: ${{ inputs.target_branch }}
+      run: |
+        # Ingest Recent Summaries and Test Details via optimized script
+        "${{ github.action_path }}/sync_recent.sh" 100

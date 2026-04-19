@@ -4,7 +4,10 @@ use conduwuit::{
 	Err, Error, Result, debug_warn, err, implement,
 	utils::{content_disposition::make_content_disposition, response::LimitReadExt},
 };
-use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue};
+use http::{
+	StatusCode,
+	header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue},
+};
 use ruma::{
 	Mxc, ServerName, UserId,
 	api::{
@@ -35,7 +38,7 @@ pub async fn fetch_remote_thumbnail(
 		.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
 		.await;
 
-	if let Err(Error::Request(NotFound, ..)) = &result {
+	if let Err(Error::Request(Unrecognized | NotFound, ..)) = &result {
 		return self
 			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
 			.await;
@@ -67,13 +70,35 @@ pub async fn fetch_remote_content(
 			);
 		});
 
-	if let Err(Error::Request(Unrecognized, ..)) = &result {
+	if should_fallback_to_unauthenticated(&result, user.is_none()) {
 		return self
 			.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
 			.await;
 	}
 
 	result
+}
+
+fn should_fallback_to_unauthenticated(
+	result: &Result<FileMeta>,
+	allow_broad_fallback: bool,
+) -> bool {
+	match result {
+		| Err(Error::Request(Unrecognized | NotFound, ..)) => true,
+		| Err(error) if allow_broad_fallback =>
+			error.status_code().is_server_error()
+				|| matches!(
+					error.status_code(),
+					StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT
+				) || matches!(
+				error,
+				Error::Reqwest(_)
+					| Error::Federation(_, _)
+					| Error::FederationTimeout(_)
+					| Error::FederationConnection(_)
+			),
+		| _ => false,
+	}
 }
 
 #[implement(super::Service)]
@@ -323,89 +348,6 @@ where
 }
 
 #[implement(super::Service)]
-#[allow(deprecated)]
-pub async fn fetch_remote_thumbnail_legacy(
-	&self,
-	body: &media::get_content_thumbnail::v3::Request,
-) -> Result<media::get_content_thumbnail::v3::Response> {
-	let mxc = Mxc {
-		server_name: &body.server_name,
-		media_id: &body.media_id,
-	};
-
-	self.check_legacy_freeze()?;
-	self.check_fetch_authorized(&mxc)?;
-	let response = self
-		.services
-		.sending
-		.send_federation_request(mxc.server_name, media::get_content_thumbnail::v3::Request {
-			allow_remote: body.allow_remote,
-			height: body.height,
-			width: body.width,
-			method: body.method.clone(),
-			server_name: body.server_name.clone(),
-			media_id: body.media_id.clone(),
-			timeout_ms: body.timeout_ms,
-			allow_redirect: body.allow_redirect,
-			animated: body.animated,
-		})
-		.await?;
-
-	let dim = Dim::from_ruma(body.width, body.height, body.method.clone())?;
-	self.upload_thumbnail(
-		&mxc,
-		None,
-		None,
-		response.content_type.as_deref(),
-		&dim,
-		&response.file,
-	)
-	.await?;
-
-	Ok(response)
-}
-
-#[implement(super::Service)]
-#[allow(deprecated)]
-pub async fn fetch_remote_content_legacy(
-	&self,
-	mxc: &Mxc<'_>,
-	allow_redirect: bool,
-	timeout_ms: Duration,
-) -> Result<media::get_content::v3::Response, Error> {
-	self.check_legacy_freeze()?;
-	self.check_fetch_authorized(mxc)?;
-	let response = self
-		.services
-		.sending
-		.send_federation_request(mxc.server_name, media::get_content::v3::Request {
-			allow_remote: true,
-			server_name: mxc.server_name.into(),
-			media_id: mxc.media_id.into(),
-			timeout_ms,
-			allow_redirect,
-		})
-		.await?;
-
-	let content_disposition = make_content_disposition(
-		response.content_disposition.as_ref(),
-		response.content_type.as_deref(),
-		None,
-	);
-
-	self.create(
-		mxc,
-		None,
-		Some(&content_disposition),
-		response.content_type.as_deref(),
-		&response.file,
-	)
-	.await?;
-
-	Ok(response)
-}
-
-#[implement(super::Service)]
 fn check_fetch_authorized(&self, mxc: &Mxc<'_>) -> Result<()> {
 	if self
 		.services
@@ -422,11 +364,8 @@ fn check_fetch_authorized(&self, mxc: &Mxc<'_>) -> Result<()> {
 }
 
 #[implement(super::Service)]
-fn check_legacy_freeze(&self) -> Result<()> {
-	self.services
-		.server
-		.config
-		.freeze_legacy_media
+pub fn check_legacy_freeze(&self) -> Result<()> {
+	(!self.services.server.config.freeze_legacy_media)
 		.then_some(())
 		.ok_or(err!(Request(NotFound("Remote media is frozen."))))
 }

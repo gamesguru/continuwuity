@@ -7,7 +7,7 @@ use conduwuit::{
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	CanonicalJsonObject, RoomId, RoomVersionId,
+	CanonicalJsonObject, OwnedUserId, RoomId, RoomVersionId,
 	api::client::{error::ErrorKind, room::upgrade_room},
 	events::{
 		StateEventType, TimelineEventType,
@@ -93,6 +93,7 @@ pub(crate) async fn upgrade_room_route(
 			Some(&body.room_id),
 			&old_room_state_lock,
 		)
+		.boxed()
 		.await;
 
 	if let Err(_e) = tombstone_test_result {
@@ -137,6 +138,7 @@ pub(crate) async fn upgrade_room_route(
 				Some(&body.room_id),
 				&state_lock,
 			)
+			.boxed()
 			.await?;
 		// Change lock to replacement room
 		drop(state_lock);
@@ -160,6 +162,8 @@ pub(crate) async fn upgrade_room_route(
 		tombstone_event_id,
 	));
 
+	let additional_creators = create_event_content.get("additional_creators").cloned();
+
 	// Send a m.room.create event containing a predecessor field and the applicable
 	// room_version
 	{
@@ -174,11 +178,18 @@ pub(crate) async fn upgrade_room_route(
 					})?,
 				);
 			},
-			| _ => {
-				// "creator" key no longer exists in V11 rooms
+			| V11 | V12 => {
+				// "creator" key no longer exists in V11+ rooms
 				create_event_content.remove("creator");
 			},
-			// TODO(hydra): additional_creators
+			| _ => (),
+		}
+	}
+
+	if room_features.explicitly_privilege_room_creators {
+		if let Some(additional_creators) = additional_creators.as_ref() {
+			create_event_content
+				.insert("additional_creators".into(), additional_creators.clone());
 		}
 	}
 
@@ -287,16 +298,27 @@ pub(crate) async fn upgrade_room_route(
 			}
 			// If this is a power levels event, and the new room version has creators,
 			// we need to make sure they dont appear in the users block of power levels.
-			if *event_type == StateEventType::RoomPowerLevels {
-				// TODO(v12): additional creators
-				let creators = vec![sender_user];
+			if *event_type == StateEventType::RoomPowerLevels
+				&& room_features.explicitly_privilege_room_creators
+			{
 				let mut power_levels_event_content: RoomPowerLevelsEventContent =
 					serde_json::from_str(event_content.get()).map_err(|_| {
 						err!(Request(BadJson("Power levels event content is not valid")))
 					})?;
-				for creator in creators {
-					power_levels_event_content.users.remove(creator);
+
+				power_levels_event_content.users.remove(sender_user);
+				if let Some(additional_creators) = additional_creators.as_ref() {
+					if let Some(additional_creators) = additional_creators.as_array() {
+						for creator in additional_creators {
+							if let Some(creator) = creator.as_str() {
+								if let Ok(creator) = OwnedUserId::parse(creator) {
+									power_levels_event_content.users.remove(&creator);
+								}
+							}
+						}
+					}
 				}
+
 				event_content = to_raw_value(&power_levels_event_content)
 					.expect("event is valid, we just deserialized and modified it");
 			}
@@ -396,6 +418,7 @@ pub(crate) async fn upgrade_room_route(
 				Some(&body.room_id),
 				&old_room_state_lock,
 			)
+			.boxed()
 			.await?;
 		drop(old_room_state_lock);
 	}

@@ -36,19 +36,6 @@ async fn create_join_event(
 	if !services.rooms.metadata.exists(room_id).await {
 		return Err!(Request(NotFound("Room is unknown to this server.")));
 	}
-	if !services
-		.rooms
-		.state_cache
-		.server_in_room(services.globals.server_name(), room_id)
-		.await
-	{
-		info!(
-			origin = origin.as_str(),
-			"Refusing to serve send_join for room we aren't participating in"
-		);
-		return Err!(Request(NotFound("This server is not participating in that room.")));
-	}
-
 	// ACL check origin server
 	services
 		.rooms
@@ -187,13 +174,14 @@ async fn create_join_event(
 				"Joining user did not pass restricted room's rules."
 			)));
 		}
-	}
 
-	trace!("Signing send_join event");
-	services
-		.server_keys
-		.hash_and_sign_event(&mut value, &room_version_id)
-		.map_err(|e| err!(Request(InvalidParam(warn!("Failed to sign send_join event: {e}")))))?;
+		services
+			.server_keys
+			.hash_and_sign_event(&mut value, &room_version_id)
+			.map_err(|e| {
+				err!(Request(InvalidParam(warn!("Failed to sign send_join event: {e}"))))
+			})?;
+	}
 
 	let mutex_lock = services
 		.rooms

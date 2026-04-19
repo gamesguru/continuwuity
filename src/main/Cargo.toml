@@ -41,34 +41,37 @@ assets = [
 
 [features]
 default = [
-    "standard",
     "release_max_log_level",
-	"bindgen-runtime", # replace with bindgen-static on alpine
+    "bindgen-runtime", # replace with bindgen-static on alpine
 ]
 standard = [
     "blurhashing",
-	"brotli_compression",
-	"element_hacks",
-	"gzip_compression",
-	"io_uring",
-	"jemalloc",
-	"jemalloc_conf",
-	"journald",
-	"ldap",
-	"media_thumbnail",
-	"systemd",
-	"url_preview",
-	"zstd_compression",
-    "sentry_telemetry",
-    "otlp_telemetry",
-	"console",
+    "brotli_compression",
+    "gzip_compression",
+    "io_uring",
+    "jemalloc",
+    "jemalloc_conf",
+    "media_thumbnail",
+    "zstd_compression",
 ]
 full = [
     "standard",
+    "console",
+    "element_hacks",
+    "journald",
+    "ldap",
+    "otlp_telemetry",
+    "sentry_telemetry",
+    "systemd",
+    "url_preview",
     # "hardened_malloc", # Conflicts with jemalloc
+]
+
+local_profiling = [
     "jemalloc_prof",
     "perf_measurements",
     "tokio_console",
+    "tokio_metrics",
 ]
 
 blurhashing = [
@@ -82,6 +85,7 @@ brotli_compression = [
 ]
 console = [
 	"conduwuit-service/console",
+	"dep:rustyline-async",
 ]
 direct_tls = [
     "conduwuit-router/direct_tls"
@@ -173,6 +177,11 @@ tokio_console = [
 	"dep:console-subscriber",
 	"tokio/tracing",
 ]
+tokio_metrics = [
+    "dep:tokio-metrics",
+    "conduwuit-core/tokio_metrics",
+    "conduwuit-admin/tokio_metrics",
+]
 url_preview = [
 	"conduwuit-service/url_preview",
 ]
@@ -187,8 +196,6 @@ conduwuit_mods = [
     "conduwuit-core/conduwuit_mods",
 ]
 bindgen-static = [
-    # "bindgen/static"
-    # "clang-sys/static"
     "conduwuit-database/bindgen-static"
 ]
 bindgen-runtime = [
@@ -207,8 +214,10 @@ conduwuit-database.workspace = true
 conduwuit-router.workspace = true
 conduwuit-service.workspace = true
 conduwuit-build-metadata.workspace = true
+conduwuit-macros.workspace = true
 
 clap.workspace = true
+ctor.workspace = true
 console-subscriber.optional = true
 console-subscriber.workspace = true
 const-str.workspace = true
@@ -228,6 +237,8 @@ sentry.workspace = true
 tokio-metrics.optional = true
 tokio-metrics.workspace = true
 tokio.workspace = true
+rustyline-async.optional = true
+rustyline-async.workspace = true
 tracing-flame.optional = true
 tracing-flame.workspace = true
 tracing-opentelemetry.optional = true

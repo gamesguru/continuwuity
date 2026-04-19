@@ -7,8 +7,8 @@
 
 use std::sync::OnceLock;
 
-static BRANDING: &str = "continuwuity";
-static WEBSITE: &str = "https://continuwuity.org";
+static BRANDING: &str = "guwitty";
+static WEBSITE: &str = "https://nutra.tk";
 static SEMANTIC: &str = env!("CARGO_PKG_VERSION");
 
 static VERSION: OnceLock<String> = OnceLock::new();
@@ -32,7 +32,7 @@ pub fn user_agent() -> &'static str { USER_AGENT.get_or_init(init_user_agent) }
 #[inline]
 pub fn user_agent_media() -> &'static str { USER_AGENT_MEDIA.get_or_init(init_user_agent_media) }
 
-fn init_user_agent() -> String { format!("{}/{} (bot; +{WEBSITE})", name(), version_ua()) }
+fn init_user_agent() -> String { format!("{}/{}", name(), version_ua()) }
 
 fn init_user_agent_media() -> String {
 	format!("{}/{} (embedbot; facebookexternalhit/1.1; +{WEBSITE})", name(), version_ua())

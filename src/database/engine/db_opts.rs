@@ -28,10 +28,10 @@ pub(crate) fn db_options(config: &Config, env: &Env, row_cache: &Cache) -> Resul
 	opts.set_max_background_jobs(num_threads::<i32>(config)?);
 	opts.set_max_subcompactions(num_threads::<u32>(config)?);
 	opts.set_avoid_unnecessary_blocking_io(true);
-	opts.set_max_file_opening_threads(0);
+	opts.set_max_file_opening_threads(num_threads::<i32>(config)?);
 
 	// IO
-	opts.set_manual_wal_flush(true);
+	opts.set_manual_wal_flush(false);
 	opts.set_atomic_flush(config.rocksdb_atomic_flush);
 	opts.set_enable_pipelined_write(!config.rocksdb_atomic_flush);
 	if config.rocksdb_direct_io {

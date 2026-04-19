@@ -4,6 +4,8 @@ use std::sync::{Arc, atomic::Ordering};
 
 use conduwuit_core::{debug_info, error};
 
+conduwuit_macros::introspect_crate! {}
+
 mod clap;
 mod deadlock;
 mod logging;
@@ -15,6 +17,13 @@ mod sentry;
 mod server;
 mod signal;
 
+#[cfg(feature = "console")]
+mod attach;
+
+pub mod build_features {
+	include!(concat!(env!("OUT_DIR"), "/features.rs"));
+}
+
 pub use conduwuit_core::{Error, Result};
 use server::Server;
 
@@ -24,6 +33,27 @@ pub fn run() -> Result<()> {
 	panic::init();
 
 	let args = clap::parse();
+
+	if args.version_verbose {
+		let mut output = conduwuit_build_metadata::verbose_version();
+
+		let enabled = build_features::ENABLED_FEATURES;
+		output.push_str("\nenabled_features: ");
+		output.push_str(&enabled.join(", "));
+
+		let disabled = build_features::DISABLED_FEATURES;
+		output.push_str("\ndisabled_features: ");
+		output.push_str(&disabled.join(", "));
+
+		println!("{output}");
+		return Ok(());
+	}
+
+	#[cfg(feature = "console")]
+	if args.attach {
+		return attach::run(&args);
+	}
+
 	run_with_args(&args)
 }
 

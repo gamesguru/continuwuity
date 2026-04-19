@@ -18,5 +18,5 @@ pub(crate) fn build(services: &Arc<Services>) -> (Router, Guard) {
 }
 
 async fn not_found(_uri: Uri) -> impl IntoResponse {
-	Error::Request(ErrorKind::Unrecognized, "Not Found".into(), StatusCode::NOT_FOUND)
+	Error::Request(ErrorKind::Unrecognized, "not found :(".into(), StatusCode::NOT_FOUND)
 }

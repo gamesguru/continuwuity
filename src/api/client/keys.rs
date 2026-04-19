@@ -5,9 +5,8 @@ use std::{
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Error, Result, debug, debug_warn, err,
+	Err, Error, Result, debug, debug_warn, err, info,
 	result::NotFound,
-	utils,
 	utils::{IterStream, stream::WidebandExt},
 };
 use conduwuit_service::{Services, users::parse_master_key};
@@ -22,7 +21,6 @@ use ruma::{
 				upload_signatures::{self},
 				upload_signing_keys,
 			},
-			uiaa::{AuthFlow, AuthType, UiaaInfo},
 		},
 		federation,
 	},
@@ -30,8 +28,8 @@ use ruma::{
 	serde::Raw,
 };
 use serde_json::json;
+use service::uiaa::Identity;
 
-use super::SESSION_ID_LENGTH;
 use crate::Ruma;
 
 /// # `POST /_matrix/client/r0/keys/upload`
@@ -176,14 +174,11 @@ pub(crate) async fn upload_signing_keys_route(
 ) -> Result<upload_signing_keys::v3::Response> {
 	let (sender_user, sender_device) = body.sender();
 
-	// UIAA
-	let mut uiaainfo = UiaaInfo {
-		flows: vec![AuthFlow { stages: vec![AuthType::Password] }],
-		completed: Vec::new(),
-		params: Box::default(),
-		session: None,
-		auth_error: None,
-	};
+	info!(
+		target: "cross_signing",
+		"Processing /keys/device_signing/upload request from {}/{}",
+		sender_user, sender_device
+	);
 
 	match check_for_new_keys(
 		services,
@@ -207,32 +202,10 @@ pub(crate) async fn upload_signing_keys_route(
 			// Some of the keys weren't found, so we let them upload
 		},
 		| _ => {
-			match &body.auth {
-				| Some(auth) => {
-					let (worked, uiaainfo) = services
-						.uiaa
-						.try_auth(sender_user, sender_device, auth, &uiaainfo)
-						.await?;
-
-					if !worked {
-						return Err(Error::Uiaa(uiaainfo));
-					}
-					// Success!
-				},
-				| _ => match body.json_body.as_ref() {
-					| Some(json) => {
-						uiaainfo.session = Some(utils::random_string(SESSION_ID_LENGTH));
-						services
-							.uiaa
-							.create(sender_user, sender_device, &uiaainfo, json);
-
-						return Err(Error::Uiaa(uiaainfo));
-					},
-					| _ => {
-						return Err(Error::BadRequest(ErrorKind::NotJson, "Not json."));
-					},
-				},
-			}
+			let _ = services
+				.uiaa
+				.authenticate_password(&body.auth, Some(Identity::from_user_id(sender_user)))
+				.await?;
 		},
 	}
 
@@ -246,6 +219,12 @@ pub(crate) async fn upload_signing_keys_route(
 			true, // notify so that other users see the new keys
 		)
 		.await?;
+
+	info!(
+		target: "cross_signing",
+		"Successfully processed /keys/device_signing/upload from {}",
+		sender_user
+	);
 
 	Ok(upload_signing_keys::v3::Response {})
 }
@@ -340,9 +319,13 @@ pub(crate) async fn upload_signatures_route(
 
 	for (user_id, keys) in &body.signed_keys {
 		for (key_id, key) in keys {
-			let Ok(key) = serde_json::to_value(key)
-				.inspect_err(|e| debug_warn!(%key_id, "Invalid \"key\" JSON: {e}"))
-			else {
+			let Ok(key) = serde_json::to_value(key).inspect_err(|e| {
+				info!(
+					target: "cross_signing",
+					"Invalid key in JSON from {} for {} / {}: {}",
+					sender_user, user_id, key_id, e
+				);
+			}) else {
 				continue;
 			};
 
@@ -368,8 +351,13 @@ pub(crate) async fn upload_signatures_route(
 					.users
 					.sign_key(user_id, key_id, signature, sender_user)
 					.await
-					.inspect_err(|e| debug_warn!("{e}"))
-				{
+					.inspect_err(|e| {
+						info!(
+							target: "cross_signing",
+							"Failed to sign key {} of {} by {}: {}",
+							key_id, user_id, sender_user, e
+						);
+					}) {
 					continue;
 				}
 			}
@@ -560,26 +548,56 @@ where
 		match response {
 			| Ok(response) => {
 				for (user, master_key) in response.master_keys {
-					let (master_key_id, mut master_key) = parse_master_key(&user, &master_key)?;
+					let (master_key_id, mut master_key) =
+						match parse_master_key(&user, &master_key) {
+							| Ok(parsed) => parsed,
+							| Err(e) => {
+								info!(
+									target: "cross_signing",
+									"Failed to parse master key for user {} from server {}: {}",
+									user, server, e
+								);
+								continue;
+							},
+						};
 
 					if let Ok(our_master_key) = services
 						.users
 						.get_key(&master_key_id, sender_user, &user, &allowed_signatures)
 						.await
 					{
-						let (_, mut our_master_key) = parse_master_key(&user, &our_master_key)?;
-						master_key.signatures.append(&mut our_master_key.signatures);
+						if let Ok((_, mut our_master_key)) =
+							parse_master_key(&user, &our_master_key)
+						{
+							master_key.signatures.append(&mut our_master_key.signatures);
+						} else {
+							info!(
+								target: "cross_signing",
+								"Failed to parse our own master key for user {} during federation update",
+								user
+							);
+						}
 					}
 					let json = serde_json::to_value(master_key).expect("to_value always works");
 					let raw = serde_json::from_value(json).expect("Raw::from_value always works");
-					services
+
+					if let Err(e) = services
 						.users
 						.add_cross_signing_keys(
 							&user, &raw, &None, &None,
 							false, /* Dont notify. A notification would trigger another key
 							       * request resulting in an endless loop */
 						)
-						.await?;
+						.await
+					{
+						info!(
+							target: "cross_signing",
+							"Failed to store updated master key for user {}: {}",
+							user, e
+						);
+						continue;
+					}
+
 					if let Some(raw) = raw {
 						master_keys.insert(user.clone(), raw);
 					}

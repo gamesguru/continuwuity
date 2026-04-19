@@ -237,6 +237,9 @@ pub enum DebugCommand {
 		room_id: OwnedRoomId,
 	},
 
+	/// Send a test email to the invoking admin's email address
+	SendTestEmail,
+
 	/// Developer test stubs
 	#[command(subcommand)]
 	#[allow(non_snake_case)]

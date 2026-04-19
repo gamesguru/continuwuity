@@ -2,8 +2,8 @@ use std::{fmt::Debug, mem};
 
 use bytes::Bytes;
 use conduwuit::{
-	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_warn, err, implement,
-	trace, utils::response::LimitReadExt,
+	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, err, implement, trace,
+	utils::response::LimitReadExt,
 };
 use http::{HeaderValue, header::AUTHORIZATION};
 use ipaddress::IPAddress;
@@ -94,7 +94,8 @@ where
 			self.handle_response::<T>(dest, actual, &method, &url, response)
 				.await,
 		| Err(error) =>
-			Err(handle_error(actual, &method, &url, error).expect_err("always returns error")),
+			Err(handle_error(dest, actual, &method, &url, error)
+				.expect_err("always returns error")),
 	}
 }
 
@@ -183,37 +184,43 @@ async fn into_http_response(
 	);
 
 	trace!("Waiting for response body...");
+	let body_bytes = response.limit_read(max_size).await?;
 	let http_response = http_response_builder
-		.body(
-			response
-				.limit_read(max_size)
-				.await
-				.unwrap_or_default()
-				.into(),
-		)
+		.body(body_bytes.into())
 		.expect("reqwest body is valid http body");
 
 	debug!("Got {status:?} for {method} {url}");
 	if !status.is_success() {
-		return Err(Error::Federation(
-			dest.to_owned(),
-			RumaError::from_http_response(http_response),
-		));
+		let error = RumaError::from_http_response(http_response);
+		if status.is_server_error() {
+			debug!(target: "federation", %dest, %method, %url, %status, "Federation request failed: {error}");
+		}
+		return Err(Error::Federation(dest.to_owned(), error));
 	}
 
 	Ok(http_response)
 }
 
 fn handle_error(
+	dest: &ServerName,
 	actual: &ActualDest,
 	method: &Method,
 	url: &Url,
 	mut e: reqwest::Error,
 ) -> Result {
-	if e.is_timeout() || e.is_connect() {
+	if e.is_timeout() {
 		e = e.without_url();
-		debug_warn!("{e:?}");
-	} else if e.is_redirect() {
+		debug!(target: "federation", %method, %url, "Federation request to {dest} timed out: {e:?}");
+		return Err(Error::FederationTimeout(dest.to_owned()));
+	}
+
+	if e.is_connect() {
+		e = e.without_url();
+		debug!(target: "federation", %dest, %method, %url, "Federation connection failed: {e:?}");
+		return Err(Error::FederationConnection(dest.to_owned()));
+	}
+
+	if e.is_redirect() {
 		debug_error!(
 			%method,
 			%url,
@@ -304,7 +311,7 @@ fn into_http_request<T>(actual: &ActualDest, request: T) -> Result<http::Request
 where
 	T: OutgoingRequest + Send,
 {
-	const VERSIONS: [MatrixVersion; 1] = [MatrixVersion::V1_11];
+	const VERSIONS: [MatrixVersion; 2] = [MatrixVersion::V1_11, MatrixVersion::V1_0];
 
 	let http_request = request
 		.try_into_http_request::<Vec<u8>>(

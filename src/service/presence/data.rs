@@ -129,6 +129,55 @@ impl Data {
 		Ok(())
 	}
 
+	pub(super) async fn set_presence_silent(
+		&self,
+		user_id: &UserId,
+		presence_state: &PresenceState,
+		currently_active: Option<bool>,
+		last_active_ago: Option<UInt>,
+		status_msg: Option<String>,
+	) -> Result<()> {
+		let last_presence = self.get_presence(user_id).await;
+		let now = utils::millis_since_unix_epoch();
+		let last_active_ts = match last_active_ago {
+			| None => now,
+			| Some(last_active_ago) => now.saturating_sub(last_active_ago.into()),
+		};
+
+		let status_msg = if status_msg.as_ref().is_some_and(String::is_empty) {
+			None
+		} else {
+			status_msg
+		};
+
+		let presence = Presence::new(
+			presence_state.to_owned(),
+			currently_active.unwrap_or(false),
+			last_active_ts,
+			status_msg,
+		);
+
+		// MAGIC: Keep the existing channel count to completely mask this update from
+		// the federation sender and sync streams, totally eliminating startup DoS
+		// bursts
+		let (count, is_new) = match last_presence {
+			| Ok((last_count, _)) => (last_count, false),
+			| Err(_) => (self.services.globals.next_count()?, true),
+		};
+
+		let key = presenceid_key(count, user_id);
+
+		// Overwrite the existing DB key silently
+		self.presenceid_presence.raw_put(key, Json(presence));
+
+		// Only write to userid_presenceid if we actually generated a new count.
+		if is_new {
+			self.userid_presenceid.raw_put(user_id, count);
+		}
+
+		Ok(())
+	}
+
 	pub(super) async fn remove_presence(&self, user_id: &UserId) {
 		let Ok(count) = self
 			.userid_presenceid

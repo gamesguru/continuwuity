@@ -41,11 +41,19 @@ impl Console {
 	}
 
 	pub(super) async fn handle_signal(self: &Arc<Self>, sig: &'static str) {
+		use std::io::IsTerminal;
+
 		if !self.server.running() {
 			self.interrupt();
 		} else if sig == "SIGINT" {
-			self.interrupt_command();
-			self.start().await;
+			let running = self.worker_join.lock().is_some();
+			if running {
+				self.interrupt_command();
+			} else if std::io::stdout().is_terminal() {
+				self.start().await;
+			} else {
+				self.server.shutdown().unwrap_or_else(error::default_log);
+			}
 		}
 	}
 
@@ -55,6 +63,11 @@ impl Console {
 			let self_ = Arc::clone(self);
 			_ = worker_join.insert(self.server.runtime().spawn(self_.worker()));
 		}
+	}
+
+	pub async fn start_listener(self: &Arc<Self>) {
+		let self_ = Arc::clone(self);
+		self.server.runtime().spawn(self_.socket_worker());
 	}
 
 	pub async fn close(self: &Arc<Self>) {
@@ -92,9 +105,20 @@ impl Console {
 		debug!("session starting");
 
 		self.output
-			.print_inline(&format!("**conduwuit {}** admin console\n", conduwuit::version()));
+			.write_inline_on(
+				&mut std::io::stdout(),
+				&format!("**conduwuit {}** admin console\n", conduwuit::version()),
+			)
+			.ok();
 		self.output
-			.print_text("\"help\" for help, ^D to exit the console, ^\\ to stop the server\n");
+			.write_text_on(
+				&mut std::io::stdout(),
+				concat!(
+					"\"help\" for help, ^D to exit the console, ^\\ to stop the server\n",
+					"^W to clear word, ctrl-left/right to skip words\n"
+				),
+			)
+			.ok();
 
 		while self.server.running() {
 			match self.readline().await {
@@ -119,6 +143,91 @@ impl Console {
 		self.worker_join.lock().take();
 	}
 
+	#[tracing::instrument(skip_all, name = "console_socket", level = "trace")]
+	async fn socket_worker(self: Arc<Self>) {
+		let socket_path = self.server.config.database_path.join("console.sock");
+		_ = tokio::fs::remove_file(&socket_path).await;
+
+		let listener = match tokio::net::UnixListener::bind(&socket_path) {
+			| Ok(l) => l,
+			| Err(e) => {
+				error!("Failed to bind console socket at {socket_path:?}: {e}");
+				return;
+			},
+		};
+
+		use std::os::unix::fs::PermissionsExt;
+		if let Ok(meta) = tokio::fs::metadata(&socket_path).await {
+			let mut perms = meta.permissions();
+			// e.g. self.server.config.unix_socket_perms
+			perms.set_mode(self.server.config.unix_socket_perms);
+			_ = tokio::fs::set_permissions(&socket_path, perms).await;
+		}
+
+		while self.server.running() {
+			match listener.accept().await {
+				| Ok((mut stream, _)) => {
+					let self_ = Arc::clone(&self);
+					self.server.runtime().spawn(async move {
+						self_.handle_connection(&mut stream).await;
+					});
+				},
+				| Err(e) => {
+					error!("Console socket accept error: {e}");
+					break;
+				},
+			}
+		}
+	}
+
+	async fn handle_connection(self: Arc<Self>, stream: &mut tokio::net::UnixStream) {
+		use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+		let (reader, mut writer) = stream.split();
+		let mut reader = BufReader::new(reader);
+		let mut line = String::new();
+
+		while self.server.running() {
+			line.clear();
+			match reader.read_line(&mut line).await {
+				| Ok(0) | Err(_) => break, // EOF or Error
+				| Ok(_) => {
+					let input = line.trim().to_owned();
+					if input.is_empty() {
+						continue;
+					}
+
+					let admin_future =
+						self.admin
+							.command_in_place(input, None, InvocationSource::Console);
+
+					tokio::pin!(admin_future);
+
+					let result = tokio::select! {
+						res = &mut admin_future => res,
+						res = reader.fill_buf() => {
+							match res {
+								| Ok([]) | Err(_) => return, // EOF or Error
+								| Ok(_) => admin_future.await,
+							}
+						}
+					};
+
+					let output_body = match result {
+						| Ok(Some(ref content)) | Err(ref content) => content.body(),
+						| Ok(None) => "",
+					};
+
+					if writer.write_all(output_body.as_bytes()).await.is_err() {
+						break;
+					}
+					if writer.write_all(b"\0").await.is_err() {
+						break;
+					}
+				},
+			}
+		}
+	}
+
 	async fn readline(self: &Arc<Self>) -> Result<ReadlineEvent, ReadlineError> {
 		let _suppression = (!is_systemd_mode()).then(|| log::Suppress::new(&self.server));
 
@@ -126,6 +235,8 @@ impl Console {
 		let self_ = Arc::clone(self);
 		readline.set_tab_completer(move |line| self_.tab_complete(line));
 		self.set_history(&mut readline);
+
+		std::io::Write::flush(&mut std::io::stdout()).ok();
 
 		let future = readline.readline();
 
@@ -176,11 +287,15 @@ impl Console {
 
 	fn output_err(self: Arc<Self>, output_content: &RoomMessageEventContent) {
 		let output = configure_output_err(self.output.clone());
-		output.print_text(output_content.body());
+		output
+			.write_text_on(&mut std::io::stdout(), output_content.body())
+			.ok();
 	}
 
 	fn output(self: Arc<Self>, output_content: &RoomMessageEventContent) {
-		self.output.print_text(output_content.body());
+		self.output
+			.write_text_on(&mut std::io::stdout(), output_content.body())
+			.ok();
 	}
 
 	fn set_history(&self, readline: &mut Readline) {
@@ -207,12 +322,19 @@ impl Console {
 /// Standalone/static markdown printer for errors.
 pub fn print_err(markdown: &str) {
 	let output = configure_output_err(MadSkin::default_dark());
-	output.print_text(markdown);
+	output.write_text_on(&mut std::io::stdout(), markdown).ok();
 }
 /// Standalone/static markdown printer.
 pub fn print(markdown: &str) {
 	let output = configure_output(MadSkin::default_dark());
-	output.print_text(markdown);
+	output.write_text_on(&mut std::io::stdout(), markdown).ok();
+}
+
+/// Standalone markdown string formatter for attach.
+#[must_use]
+pub fn format(markdown: &str) -> String {
+	let output = configure_output(MadSkin::default_dark());
+	format!("{}", output.text(markdown, None))
 }
 
 fn configure_output_err(mut output: MadSkin) -> MadSkin {
