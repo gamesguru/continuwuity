@@ -10,18 +10,18 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean
 
 # Match Rustc version as close as possible
 # rustc -vV
-ARG LLVM_VERSION=20
+ARG LLVM_VERSION=21
 # ENV RUSTUP_TOOLCHAIN=${RUST_VERSION}
 
 # Install repo tools
 # Line one: compiler tools
-# Line two: curl, for downloading binaries
+# Line two: curl, for downloading binaries and wget because llvm.sh is broken with curl
 # Line three: for xx-verify
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y \
     pkg-config make jq \
-    curl git software-properties-common \
+    wget curl git software-properties-common \
     file
 
 # LLVM packages
@@ -48,7 +48,7 @@ EOF
 
 # Developer tool versions
 # renovate: datasource=github-releases depName=cargo-bins/cargo-binstall
-ENV BINSTALL_VERSION=1.17.7
+ENV BINSTALL_VERSION=1.18.1
 # renovate: datasource=github-releases depName=psastras/sbom-rs
 ENV CARGO_SBOM_VERSION=0.9.1
 # renovate: datasource=crate depName=lddtree

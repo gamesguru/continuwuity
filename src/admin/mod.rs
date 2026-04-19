@@ -3,6 +3,8 @@
 #![allow(clippy::enum_glob_use)]
 #![allow(clippy::too_many_arguments)]
 
+conduwuit_macros::introspect_crate! {}
+
 pub(crate) mod admin;
 pub(crate) mod context;
 pub(crate) mod processor;
@@ -33,11 +35,13 @@ pub(crate) const PAGE_SIZE: usize = 100;
 conduwuit::mod_ctor! {}
 conduwuit::mod_dtor! {}
 
+pub use processor::complete;
+
 pub use crate::admin::AdminCommand;
 
 /// Install the admin command processor
 pub async fn init(admin_service: &service::admin::Service) {
-	_ = admin_service.complete.write().insert(processor::complete);
+	_ = admin_service.complete.write().insert(complete);
 	_ = admin_service
 		.handle
 		.write()

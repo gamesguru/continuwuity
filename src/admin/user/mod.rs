@@ -29,6 +29,30 @@ pub enum UserCommand {
 		password: Option<String>,
 	},
 
+	/// Issue a self-service password reset link for a user.
+	IssuePasswordResetLink {
+		/// Username of the user who may use the link
+		username: String,
+	},
+
+	/// Get a user's associated email address.
+	GetEmail {
+		user_id: String,
+	},
+
+	/// Get the user with the given email address.
+	GetUserByEmail {
+		email: String,
+	},
+
+	/// Update or remove a user's email address.
+	///
+	/// If `email` is not supplied, the user's existing address will be removed.
+	ChangeEmail {
+		user_id: String,
+		email: Option<String>,
+	},
+
 	/// Deactivate a user
 	///
 	/// User will be removed from all rooms by default.
@@ -232,5 +256,11 @@ pub enum UserCommand {
 
 		#[arg(long)]
 		yes_i_want_to_do_this: bool,
+	},
+
+	/// Resets the push-rules (notification settings) of the target user to the
+	/// server defaults.
+	ResetPushRules {
+		user_id: String,
 	},
 }

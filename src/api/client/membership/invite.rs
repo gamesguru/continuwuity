@@ -52,14 +52,15 @@ pub(crate) async fn invite_user_route(
 
 	match &body.recipient {
 		| invite_user::v3::InvitationRecipient::UserId { user_id: recipient_user } => {
-			let sender_filter_level = services
+			let recipient_filter_level = services
 				.users
-				.invite_filter_level(recipient_user, sender_user)
+				.invite_filter_level(sender_user, recipient_user)
 				.await;
 
-			if !matches!(sender_filter_level, FilterLevel::Allow) {
-				// drop invites if the sender has the recipient filtered
-				return Ok(invite_user::v3::Response {});
+			if matches!(recipient_filter_level, FilterLevel::Block) {
+				return Err!(Request(InviteBlocked(
+					"{recipient_user} has blocked invites from you."
+				)));
 			}
 
 			if let Ok(target_user_membership) = services
@@ -70,23 +71,6 @@ pub(crate) async fn invite_user_route(
 			{
 				if target_user_membership.membership == MembershipState::Ban {
 					return Err!(Request(Forbidden("User is banned from this room.")));
-				}
-			}
-
-			// check for blocked invites if the recipient is a local user.
-			if services.globals.user_is_local(recipient_user) {
-				let recipient_filter_level = services
-					.users
-					.invite_filter_level(sender_user, recipient_user)
-					.await;
-
-				// ignored invites aren't handled here
-				// since the recipient's membership should still be changed to `invite`.
-				// they're filtered out in the individual /sync handlers.
-				if matches!(recipient_filter_level, FilterLevel::Block) {
-					return Err!(Request(InviteBlocked(
-						"{recipient_user} has blocked invites from you."
-					)));
 				}
 			}
 

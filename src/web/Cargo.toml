@@ -2,6 +2,7 @@
 name = "conduwuit_web"
 description.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 readme.workspace = true
 repository.workspace = true
@@ -20,12 +21,25 @@ crate-type = [
 [dependencies]
 conduwuit-build-metadata.workspace = true
 conduwuit-service.workspace = true
+conduwuit-core.workspace = true
+async-trait.workspace = true
 askama.workspace = true
 axum.workspace = true
+axum-extra.workspace = true
+base64.workspace = true
 futures.workspace = true
 tracing.workspace = true
 rand.workspace = true
+ruma.workspace = true
 thiserror.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+memory-serve = "2.1.0"
+validator = { version = "0.20.0", features = ["derive"] }
+tower-sec-fetch = { version = "0.1.2", features = ["tracing"] }
+
+[build-dependencies]
+memory-serve = "2.1.0"
 
 [lints]
 workspace = true

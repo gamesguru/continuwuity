@@ -78,7 +78,6 @@ impl Service {
 		let room_version = crate::rooms::event_handler::get_room_version_id(&create_pdu)?;
 
 		let room_id = room_id.to_owned();
-		let remote_server = remote_server.to_owned();
 
 		// Process auth chain events first.
 		// event_handler natively supports pulling outliers via `handle_incoming_pdu`

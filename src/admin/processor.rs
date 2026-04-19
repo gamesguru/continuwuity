@@ -30,7 +30,7 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use crate::{admin, admin::AdminCommand, context::Context};
 
 #[must_use]
-pub(super) fn complete(line: &str) -> String { complete_command(AdminCommand::command(), line) }
+pub fn complete(line: &str) -> String { complete_command(AdminCommand::command(), line) }
 
 #[must_use]
 pub(super) fn dispatch(services: Arc<Services>, command: CommandInput) -> ProcessorFuture {
@@ -203,13 +203,35 @@ fn complete_command(mut cmd: clap::Command, line: &str) -> String {
 				continue 'token;
 			} else if name.starts_with(&token) {
 				// partial match; add to choices
-				choice.push(name);
+				choice.push(name.to_owned());
+			}
+		}
+
+		// Tab completion for dashed flags
+		for arg in cmd_.get_arguments() {
+			if let Some(long) = arg.get_long() {
+				let name = format!("--{long}");
+				if name == token {
+					ret.push(token);
+					continue 'token;
+				} else if name.starts_with(&token) {
+					choice.push(name);
+				}
+			}
+			if let Some(short) = arg.get_short() {
+				let name = format!("-{short}");
+				if name == token {
+					ret.push(token);
+					continue 'token;
+				} else if name.starts_with(&token) {
+					choice.push(name);
+				}
 			}
 		}
 
 		if choice.len() == 1 {
 			// One choice. Add extra space because it's complete
-			let choice = *choice.first().expect("only choice");
+			let choice = choice.first().unwrap();
 			ret.push(choice.to_owned());
 			ret.push(String::new());
 		} else if choice.is_empty() {
@@ -217,7 +239,8 @@ fn complete_command(mut cmd: clap::Command, line: &str) -> String {
 			ret.push(token);
 		} else {
 			// Find the common prefix
-			ret.push(common_prefix(&choice).into());
+			let choice_refs: Vec<&str> = choice.iter().map(String::as_str).collect();
+			ret.push(common_prefix(&choice_refs).into());
 		}
 
 		// Return from completion

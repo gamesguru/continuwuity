@@ -19,6 +19,7 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, TryStreamExt};
+use lettre::message::Mailbox;
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
 	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
@@ -793,7 +794,7 @@ pub(super) async fn runtime_metrics(&self) -> Result {
 		.await
 }
 
-#[cfg(tokio_unstable)]
+#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 #[admin_command]
 pub(super) async fn runtime_interval(&self) -> Result {
 	let out = self.services.server.metrics.runtime_interval().map_or_else(
@@ -804,10 +805,10 @@ pub(super) async fn runtime_interval(&self) -> Result {
 	self.write_str(&out).await
 }
 
-#[cfg(not(tokio_unstable))]
+#[cfg(not(all(tokio_unstable, feature = "tokio_metrics")))]
 #[admin_command]
 pub(super) async fn runtime_interval(&self) -> Result {
-	self.write_str("Runtime metrics require building with `tokio_unstable`.")
+	self.write_str("Runtime metrics require building with `tokio_unstable` and `tokio_metrics`.")
 		.await
 }
 
@@ -875,4 +876,32 @@ pub(super) async fn trim_memory(&self) -> Result {
 	conduwuit::alloc::trim(None)?;
 
 	writeln!(self, "done").await
+}
+
+#[admin_command]
+pub(super) async fn send_test_email(&self) -> Result {
+	self.bail_restricted()?;
+
+	let mailer = self.services.mailer.expect_mailer()?;
+	let Some(sender) = self.sender else {
+		return Err!("No sender user provided in context");
+	};
+
+	let Some(email) = self
+		.services
+		.threepid
+		.get_email_for_localpart(sender.localpart())
+		.await
+	else {
+		return Err!("{} has no associated email address", sender);
+	};
+
+	mailer
+		.send(Mailbox::new(None, email.clone()), service::mailer::messages::Test)
+		.await?;
+
+	self.write_str(&format!("Test email successfully sent to {email}"))
+		.await?;
+
+	Ok(())
 }

@@ -25,6 +25,10 @@
 #
 # Also see the `[global.well_known]` config section at the very bottom.
 #
+# If `client` is not set under `[global.well_known]`, the server name will
+# be used as the base domain for user-facing links (such as password
+# reset links) created by Continuwuity.
+#
 # Examples of delegation:
 # - https://continuwuity.org/.well-known/matrix/server
 # - https://continuwuity.org/.well-known/matrix/client
@@ -90,6 +94,10 @@
 # continuwuity supports online database backups using RocksDB's Backup
 # engine API. To use this, set a database backup path that continuwuity
 # can write to.
+#
+# If you are using systemd, you will need to add the path to
+# ReadWritePaths in the service file, preferably via a drop-in file
+# through `systemctl edit`.
 #
 # For more information, see:
 # https://continuwuity.org/maintenance.html#backups
@@ -222,6 +230,13 @@
 # This value is critical for the server to federate efficiently.
 # NXDOMAIN's are assumed to not be returning to the federation and
 # aggressively cached rather than constantly rechecked.
+#
+# Note: For massive system-level bandwidth savings, it's highly
+# recommended you install a dedicated localized caching resolver
+# explicitly on your host (such as Unbound, dnsmasq, or systemd-resolved)
+# rather than forwarding directly to public resolvers (like 1.1.1.1).
+# This ensures aggressive NXDomain/NoData lookups are caught efficiently
+# at the OS level.
 #
 # Defaults to 3 days as these are *very rarely* false negatives.
 #
@@ -515,6 +530,18 @@
 #
 #recaptcha_private_site_key =
 
+# Policy documents, such as terms and conditions or a privacy policy,
+# which users must agree to when registering an account.
+#
+# Example:
+# ```ignore
+# [global.registration_terms.privacy_policy]
+# en = { name = "Privacy Policy", url = "https://homeserver.example/en/privacy_policy.html" }
+# es = { name = "Política de Privacidad", url = "https://homeserver.example/es/privacy_policy.html" }
+# ```
+#
+#registration_terms = {}
+
 # Controls whether encrypted rooms and events are allowed.
 #
 #allow_encryption = true
@@ -599,7 +626,7 @@
 # Set to false to disable users from joining or creating room versions
 # that aren't officially supported by continuwuity.
 #
-# continuwuity officially supports room versions 6 - 11.
+# continuwuity officially supports room versions 6 - 12.
 #
 # continuwuity has slightly experimental (though works fine in practice)
 # support for versions 3 - 5.
@@ -611,9 +638,9 @@
 # rather than an integer. Forgetting the quotes will make the server fail
 # to start!
 #
-# Per spec, room version "11" is the default.
+# Per spec, room version "12" is the default.
 #
-#default_room_version = "11"
+#default_room_version = "12"
 
 # Enable OpenTelemetry OTLP tracing export. This replaces the deprecated
 # Jaeger exporter. Traces will be sent via OTLP to a collector (such as
@@ -729,14 +756,20 @@
 
 # Max log level for continuwuity. Allows debug, info, warn, or error.
 #
+# You can append specific module filters or custom targets to this string
+# to selectively elevate or demote logs using the RUST_LOG syntax.
+# For example, noisy federation networking events are hidden (opt-in) by
+# default. To view them alongside the standard "info" logs, you can use:
+# log = "info,federation=debug"
+#
 # See also:
 # https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives
 #
 # **Caveat**:
-# For release builds, the tracing crate is configured to only implement
-# levels higher than error to avoid unnecessary overhead in the compiled
-# binary from trace macros. For debug builds, this restriction is not
-# applied.
+# For release builds, the tracing crate is configured at compile-time to
+# automatically strip out `debug` and `trace` macros (compiling only
+# `info` and above) to avoid unnecessary overhead in the binary
+# execution. For debug builds, this restriction is not applied.
 #
 #log = "info"
 
@@ -1300,7 +1333,11 @@
 #
 #allow_legacy_media = true
 
-# This item is undocumented. Please contribute documentation for it.
+# Disallow remote legacy media downloading. If set to true, requests for
+# remote media using legacy endpoints will be rejected. This is useful
+# for stopping unauthenticated abusive media traffic (e.g. from malicious
+# apps or scripts hitting the legacy endpoints) from forcing the server
+# to fetch and cache things. Local media is still served.
 #
 #freeze_legacy_media = true
 
@@ -1396,6 +1433,20 @@
 # "69dollarfortnitecards"]
 #
 #ignore_messages_from_server_names = []
+
+# List of server names that continuwuity will deprioritize (try last) when
+# a client requests to join a room.
+#
+# This can be used to potentially speed up room join requests, by
+# deprioritizing sending join requests through servers that are known to
+# be large or slow.
+#
+# continuwuity will still send join requests to servers in this list if
+# the room couldn't be joined via other servers it federates with.
+#
+# example: ["example.com"]
+#
+#deprioritize_joins_through_servers = []
 
 # Send messages from users that the user has ignored to the client.
 #
@@ -1511,7 +1562,7 @@
 
 # User agent that is used specifically when fetching url previews.
 #
-#url_preview_user_agent = "continuwuity/<version> (bot; +https://continuwuity.org)"
+#url_preview_user_agent = "guwitty/<version>"
 
 # Determines whether audio and video files will be downloaded for URL
 # previews.
@@ -1803,6 +1854,11 @@
 #
 #config_reload_signal = true
 
+# Allow search engines and crawlers to index Continuwuity's built-in
+# webpages served under the `/_continuwuity/` prefix.
+#
+#allow_web_indexing = false
+
 [global.tls]
 
 # Path to a valid TLS certificate file.
@@ -1863,6 +1919,11 @@
 # listed.
 #
 #support_mxid =
+
+# PGP key URI for server support contacts, to be served as part of the
+# MSC1929 server support endpoint.
+#
+#support_pgp_key =
 
 # **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
 #
@@ -2036,3 +2097,51 @@
 # web->synapseHTTPAntispam->authorization
 #
 #secret =
+
+#[global.experimental_features]
+
+# MSC3266: room previews
+#
+#msc3266_enabled = false
+
+# MSC4222: state_after in sync v2
+#
+#msc4222_enabled = false
+
+#[global.smtp]
+
+# A `smtp://`` URI which will be used to connect to a mail server.
+# Uncommenting the [global.smtp] group and setting this option enables
+# features which depend on the ability to send email,
+# such as self-service password resets.
+#
+# For most modern mail servers, format the URI like this:
+# 	`smtps://username:password@hostname:port`
+# Note that you will need to URL-encode the username and password. If your
+# username _is_ your email address, you will need to replace the `@` with
+# `%40`.
+#
+# For a guide on the accepted URI syntax, consult Lettre's documentation:
+# https://docs.rs/lettre/latest/lettre/transport/smtp/struct.AsyncSmtpTransport.html#method.from_url
+#
+#connection_uri =
+
+# The outgoing address which will be used for sending emails.
+#
+# For a syntax guide, see https://datatracker.ietf.org/doc/html/rfc2822#section-3.4
+#
+# ...or if you don't want to read the RFC, for some reason:
+# - `Name <address@domain.org>` to specify a sender name
+# - `address@domain.org` to not use a name
+#
+#sender =
+
+# Whether to require that users provide an email address when they
+# register.
+#
+#require_email_for_registration = false
+
+# Whether to require that users who register with a registration token
+# provide an email address.
+#
+#require_email_for_token_registration = false

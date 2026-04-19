@@ -1,6 +1,9 @@
 # Local build and dev artifacts
 target/
 !target/debug/conduwuit
+!target/latest/conduwuit
+!target/*/lib
+!target/latest/lib
 
 # Docker files
 Dockerfile*
@@ -26,3 +29,4 @@ rustfmt.toml
 
 # Documentation
 #*.md
+complement-src/

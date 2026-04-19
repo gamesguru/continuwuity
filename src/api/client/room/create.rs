@@ -49,7 +49,6 @@ use crate::{Ruma, client::invite_helper};
 /// - Send events listed in initial state
 /// - Send events implied by `name` and `topic`
 /// - Send invite events
-#[allow(clippy::large_stack_frames)]
 #[allow(clippy::cognitive_complexity)]
 pub(crate) async fn create_room_route(
 	State(services): State<crate::State>,
@@ -183,9 +182,10 @@ pub(crate) async fn create_room_route(
 						})?,
 					);
 				},
-				| _ => {
+				| V11 | V12 => {
 					// V11+ removed the "creator" key
 				},
+				| _ => (),
 			}
 			content.insert(
 				"room_version".into(),

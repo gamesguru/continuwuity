@@ -1,0 +1,420 @@
+---
+name: Complement Tests
+
+on:
+  push:
+    branches: [main, main-upstream]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  SKIP_CONFIRM: 1
+
+jobs:
+  complement-tests:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_COMPLEMENT_TESTS_COMPLEMENT_TESTS != ''
+    runs-on: ${{ matrix.os }}${{ matrix.arch == 'arm64' && '-arm' || '' }}
+    env:
+      FEATURES: "direct_tls"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-22.04
+            profile: release-quick
+          - arch: amd64
+            os: ubuntu-24.04
+            profile: release-quick
+          - arch: arm64
+            prebuilt_arch: arm64-cortex-a76
+            target_cpu: cortex-a76
+            jemalloc_lg_page: 16
+            os: ubuntu-22.04
+            profile: release-quick
+          - arch: arm64
+            prebuilt_arch: arm64-cortex-a76
+            target_cpu: cortex-a76
+            jemalloc_lg_page: 16
+            os: ubuntu-24.04
+            profile: release-quick
+
+    # For writing/updating PR comments on running test totals (# pass/fail/skip)
+    # and pushing the generated github-badge.json to the badges branch
+    permissions:
+      pull-requests: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Fetch tags and origin/main for comparison
+        run: git fetch --tags --force && git fetch origin HEAD && git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            libbz2-dev \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            mold \
+            postgresql-client
+
+      - name: Detect best CPU target
+        id: cpu
+        if: matrix.arch == 'amd64'
+        uses: ./.github/actions/get-cpu-target
+
+      - name: Setup RocksDB and Jemalloc
+        uses: ./.github/actions/setup-prebuilts
+        with:
+          cache-key: ${{ matrix.os }}
+          arch: ${{ matrix.prebuilt_arch != '' && matrix.prebuilt_arch || steps.cpu.outputs.target }}
+
+      - name: Export CPU target env vars
+        if: matrix.arch == 'amd64'
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ steps.cpu.outputs.target }}" | tee -a $GITHUB_ENV
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
+        with:
+          shared-key: ${{ matrix.os }}-${{ matrix.arch }}-${{ steps.cpu.outputs.target || 'generic' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
+
+      - name: Debug Environment & Prebuilts
+        run: |
+          echo "--- Downloaded Prebuilts Info ---"
+          for lib in librocksdb libjemalloc liblz4 libzstd; do
+            echo ">> $lib"
+            file /usr/local/lib/$lib.so* || true
+            nm -D /usr/local/lib/$lib.so* | grep " T " | head -n 5 || true
+          done
+          echo "--- Runner CPU Info ---"
+          grep "model name" /proc/cpuinfo | head -n 1 || true
+          grep "flags" /proc/cpuinfo | head -n 1 || true
+          grep "Features" /proc/cpuinfo | head -n 1 || true
+          echo "--- Build Environment ---"
+          echo "OS: ${{ matrix.os }}"
+          echo "Arch: ${{ matrix.arch }}"
+          echo "Prebuilt Arch: ${{ matrix.prebuilt_arch }}"
+          echo "Detected CPU Target: ${{ steps.cpu.outputs.target }}"
+
+      - name: Build conduwuit for Complement
+        env:
+          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+          JEMALLOC_SYS_WITH_LG_PAGE: ${{ matrix.jemalloc_lg_page || '' }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ${{ matrix.target_cpu != '' && format('-C target-cpu={0}', matrix.target_cpu) || '' }}
+        run: SKIP_CONFIRM=1 make build PROFILE=${{ matrix.profile }} CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features direct_tls"
+
+      - name: Sanity check binary
+        run: ./tests/sanity_check.sh ./target/latest/conduwuit
+
+      - name: Import GPG key
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6
+        with:
+          gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
+
+      - name: Sign binary
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
+
+      - name: Build Complement Docker image
+        run: make complement/docker PROFILE=${{ matrix.profile }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}
+          path: |
+            target/latest/conduwuit
+            target/latest/conduwuit.asc
+            target/latest/lib/
+          retention-days: 60
+
+      - name: Capture baseline stats
+        run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
+
+      - name: Checkout Complement
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: matrix-org/complement
+          path: complement-src
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: complement-src/go.sum
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Configure Docker Network Firewall
+        run: |
+          sudo ufw allow in on br-+ comment "(from Matrix Complement testing) Allow traffic from custom Docker networks to the host machine (host.docker.internal)" || true
+
+      - name: Run Complement tests
+        run: |
+          ./bin/complement ./complement-src
+
+      - name: Compare results with baseline
+        continue-on-error: true
+        run: diff --color=always -u baseline_stats.txt <(VERBOSE=1 make complement/stats)
+
+      - name: Compare FULL results with baseline
+        continue-on-error: true
+        run: git diff --color=always tests/test_results/complement/test_results.jsonl
+
+      - name: Upload test logs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}
+          path: |
+            tests/test_results/complement/test_results.jsonl
+            tests/test_results/complement/test_logs.jsonl
+          retention-days: 90
+
+      - name: Parse Complement results
+        id: results
+        run: |
+          RESULTS="tests/test_results/complement/test_results.jsonl"
+
+          # Inject arch, os, and profile into the JSONL file itself.
+          # We use a temp file to avoid reading/writing to the same file.
+          TEMP_RESULTS=$(mktemp)
+          jq -c --arg a "${{ matrix.arch }}" --arg o "${{ matrix.os }}" --arg p "${{ matrix.profile }}" \
+            '. + {arch: $a, os: $o, profile: $p}' "$RESULTS" > "$TEMP_RESULTS"
+          mv "$TEMP_RESULTS" "$RESULTS"
+
+          PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
+          FAIL=$(jq -s '[.[] | select(.Action == "fail")] | length' "$RESULTS")
+          SKIP=$(jq -s '[.[] | select(.Action == "skip")] | length' "$RESULTS")
+          TOTAL=$((PASS + FAIL + SKIP))
+          FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' "$RESULTS" \
+            | sort -u)
+
+          echo "pass=$PASS" | tee -a "$GITHUB_OUTPUT"
+          echo "fail=$FAIL" | tee -a "$GITHUB_OUTPUT"
+          echo "skip=$SKIP" | tee -a "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" | tee -a "$GITHUB_OUTPUT"
+          echo "failed_tests<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$FAILED_TESTS" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+
+          echo "### Complement Test Results (${{ matrix.arch }} ${{ matrix.os }})" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| Status | Count |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ✓ Pass | $PASS |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ✗ Fail | $FAIL |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ⌒ Skip | $SKIP |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| **Total** | **$TOTAL** |" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Get conduwuit version
+        id: version
+        if: always()
+        run: |
+          VERSION=$(./target/latest/conduwuit --version 2>/dev/null \
+            || echo "unknown")
+          echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
+      - name: Update Results Ledger
+        if: always()
+        uses: ./.github/actions/update-results-ledger
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pass_count: ${{ steps.results.outputs.pass || 0 }}
+          fail_count: ${{ steps.results.outputs.fail || 0 }}
+          skip_count: ${{ steps.results.outputs.skip || 0 }}
+          version_string: ${{ steps.version.outputs.version }}
+          features: ${{ env.FEATURES }}
+          actor: ${{ github.actor }}
+          binary_path: target/latest/conduwuit
+          arch: ${{ matrix.arch }}
+          os: ${{ matrix.os }}
+          profile: ${{ matrix.profile }}
+
+      - name: Ingest results into PostgreSQL
+        if: always()
+        env:
+          SSH_PASSPHRASE: ${{ secrets.C10Y_SSH_KEY_PRIVATE_PASSPHRASE || '' }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.C10Y_SSH_KEY_PRIVATE }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          # Use ssh-agent to load the key (handles passphrases via DISPLAY workaround or expect if needed,
+          # but usually CI keys are passwordless. If it has a password, sshpass can feed it)
+          if [ -n "$SSH_PASSPHRASE" ]; then
+            sudo apt-get update && sudo apt-get install -y sshpass
+            export SSH_ASKPASS_REQUIRE=force
+            export SSH_ASKPASS_CMD="echo $SSH_PASSPHRASE"
+            # Actually, standard sshpass is easier:
+            alias ssh="sshpass -P passphrase -p '$SSH_PASSPHRASE' ssh -i ~/.ssh/id_ed25519"
+          else
+            alias ssh="ssh -i ~/.ssh/id_ed25519"
+          fi
+
+          # To make alias work in bash script
+          shopt -s expand_aliases
+
+          # Just wrap the composite action logic directly here or pass the key?
+          # Actually, since the composite action runs its own bash shells, aliases won't pass down.
+          # The cleanest way is to use ssh-agent and export it to GITHUB_ENV for future steps.
+          eval $(ssh-agent -s)
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" | tee -a $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" | tee -a $GITHUB_ENV
+
+          if [ -n "$SSH_PASSPHRASE" ]; then
+             echo "echo \$SSH_PASSPHRASE" > /tmp/askpass.sh
+             chmod +x /tmp/askpass.sh
+             DISPLAY=1 SSH_ASKPASS=/tmp/askpass.sh ssh-add ~/.ssh/id_ed25519 < /dev/null
+          else
+             ssh-add ~/.ssh/id_ed25519
+          fi
+
+          # Add the server key to known_hosts to prevent interactive prompts
+          ssh-keyscan -p 22 nutra.tk | tee -a ~/.ssh/known_hosts
+      - name: Run Postgres Ingestion
+        if: always()
+        uses: ./.github/actions/postgres
+        with:
+          ssh_target: "git@nutra.tk"
+          database_url: ${{ secrets.C10Y_POSTGRES_URL }}
+          setup_tables: ${{ github.ref == 'refs/heads/main' }}
+          rebuild_db: false
+
+      - name: Query updated Postgres stats
+        env:
+          PAGER: cat
+          DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
+        run: python3 .github/actions/postgres/ci-query-failures.py
+
+      - name: Get newly failing tests
+        id: new_failures
+        env:
+          DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          ARCH="${{ matrix.arch }}"
+          OS="${{ matrix.os }}"
+          PROFILE="${{ matrix.profile }}"
+
+          # Fetch the newly failing tests for this specific run
+          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' LIMIT 1;" | sed 's/\\n/\n/g')
+
+          echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+
+          # Count non-empty lines of new failures
+          NEW_FAILURES_COUNT=$(echo "$NEW_FAILURES" | grep -c '[^[:space:]]' || true)
+          if [ "$NEW_FAILURES_COUNT" -gt 0 ]; then
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>Newly Failed Tests ($NEW_FAILURES_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$NEW_FAILURES" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Post Complement results to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          FAILED_TESTS: ${{ steps.new_failures.outputs.new_failures }}
+        with:
+          script: |
+            const pass = ${{ steps.results.outputs.pass || 0 }};
+            const fail = ${{ steps.results.outputs.fail || 0 }};
+            const skip = ${{ steps.results.outputs.skip || 0 }};
+            const total = ${{ steps.results.outputs.total || 0 }};
+            const arch = '${{ matrix.arch }}';
+            const os = '${{ matrix.os }}';
+            const failedTestsRaw = process.env.FAILED_TESTS || '';
+
+            const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
+            let failedContent = 'No newly failing tests recorded.';
+            if (lines.length > 0) {
+              const list = lines.join('\n');
+              failedContent = '```\n' + list + '\n```';
+            }
+
+            let currentRun = [
+              `## Complement Test Results (${arch} ${os})`,
+              `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
+              '',
+              '| Status | Count |',
+              '|--------|-------|',
+              `| ✓ Pass | ${pass} |`,
+              `| ✗ Fail | ${fail} |`,
+              `| ⌒ Skip | ${skip} |`,
+              `| **Total** | **${total}** |`,
+              '',
+              `<details><summary>Newly Failed Tests (${lines.length})</summary>`,
+              '',
+              failedContent,
+              '',
+              '</details>',
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const marker = `<!-- complement-test-results-${arch}-${os} -->`;
+            const existing = comments.find(c =>
+              c.body && c.body.includes(marker)
+            );
+
+            let body = currentRun + '\n\n' + marker;
+
+            if (existing) {
+              let oldBody = existing.body.replace(marker, '').replace(`## Complement Test Results (${arch} ${os})`, '').trim();
+              if (oldBody.length > 0) {
+                const maxPreviousRuns = 6;
+                let parts = oldBody.split('<details><summary>Previous Runs</summary>');
+                if (parts.length > maxPreviousRuns + 1) {
+                  parts = parts.slice(0, maxPreviousRuns + 1);
+                  oldBody = parts.join('<details><summary>Previous Runs</summary>');
+                  oldBody += '\n\n' + '</details>\n\n'.repeat(maxPreviousRuns).trim();
+                }
+                body = currentRun + '\n\n<details><summary>Previous Runs</summary>\n\n' + oldBody + '\n\n</details>\n\n' + marker;
+              }
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

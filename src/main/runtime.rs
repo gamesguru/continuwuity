@@ -84,7 +84,7 @@ fn enable_histogram(builder: &mut Builder, args: &Args) {
 		.metrics_poll_time_histogram_configuration(linear);
 }
 
-#[cfg(tokio_unstable)]
+#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
 #[tracing::instrument(name = "stop", level = "info", skip_all)]
 pub(super) fn shutdown(server: &Arc<Server>, runtime: tokio::runtime::Runtime) {
 	use conduwuit_core::event;
@@ -104,7 +104,7 @@ pub(super) fn shutdown(server: &Arc<Server>, runtime: tokio::runtime::Runtime) {
 	event!(LEVEL, ?runtime_metrics, "Final runtime metrics");
 }
 
-#[cfg(not(tokio_unstable))]
+#[cfg(not(all(tokio_unstable, feature = "tokio_metrics")))]
 #[tracing::instrument(name = "stop", level = "info", skip_all)]
 pub(super) fn shutdown(server: &Arc<Server>, runtime: tokio::runtime::Runtime) {
 	wait_shutdown(server, runtime);

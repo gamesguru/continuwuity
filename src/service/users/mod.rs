@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 #[cfg(feature = "ldap")]
 use conduwuit::result::LogErr;
 use conduwuit::{
-	Err, Error, Result, Server, debug_warn, err, is_equal_to, trace,
+	Err, Error, Result, Server, debug_warn, err, info, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
 };
 #[cfg(feature = "ldap")]
@@ -156,7 +156,7 @@ impl Service {
 		sender_user: &UserId,
 		recipient_user: &UserId,
 	) -> FilterLevel {
-		if self.user_is_ignored(sender_user, recipient_user).await {
+		let level = if self.user_is_ignored(sender_user, recipient_user).await {
 			FilterLevel::Ignore
 		} else {
 			self.services
@@ -167,7 +167,10 @@ impl Service {
 					config.content.user_filter_level(sender_user)
 				})
 				.unwrap_or(FilterLevel::Allow)
-		}
+		};
+
+		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");
+		level
 	}
 
 	/// Check if a user is an admin
@@ -484,6 +487,7 @@ impl Service {
 
 	/// Removes a device from a user.
 	pub async fn remove_device(&self, user_id: &UserId, device_id: &DeviceId) {
+		info!("Removing device {device_id} for user {user_id}");
 		// Remove dehydrated device if this is the dehydrated device
 		let _: Result<_> = self
 			.remove_dehydrated_device(user_id, Some(device_id))
@@ -509,6 +513,16 @@ impl Service {
 		// TODO: Remove onetimekeys
 
 		increment(&self.db.userid_devicelistversion, user_id.as_bytes());
+
+		// Remove MSC3890 local notification settings for this device
+		self.services
+			.account_data
+			.delete_all(None, user_id, &[
+				&format!("org.matrix.msc3890.local_notification_settings.{device_id}"),
+				&format!("m.local_notification_settings.{device_id}"),
+			])
+			.await
+			.ok();
 
 		self.db.userdeviceid_metadata.del(userdeviceid);
 		self.mark_device_key_update(user_id).await;
@@ -753,6 +767,12 @@ impl Service {
 		if let Some(master_key) = master_key {
 			let (master_key_key, _) = parse_master_key(user_id, master_key)?;
 
+			info!(
+				target: "cross_signing",
+				"Adding master cross-signing key for user {}",
+				user_id
+			);
+
 			self.db
 				.keyid_key
 				.insert(&master_key_key, master_key.json().get().as_bytes());
@@ -785,6 +805,12 @@ impl Service {
 			let mut self_signing_key_key = prefix.clone();
 			self_signing_key_key.extend_from_slice(self_signing_key_id.as_bytes());
 
+			info!(
+				target: "cross_signing",
+				"Adding self-signing key for user {}",
+				user_id
+			);
+
 			self.db
 				.keyid_key
 				.insert(&self_signing_key_key, self_signing_key.json().get().as_bytes());
@@ -794,11 +820,17 @@ impl Service {
 				.insert(user_id.as_bytes(), &self_signing_key_key);
 		}
 
-		// User-signing key
 		if let Some(user_signing_key) = user_signing_key {
 			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 
 			let user_signing_key_key = (user_id, &user_signing_key_id);
+
+			info!(
+				target: "cross_signing",
+				"Adding user-signing key for user {}",
+				user_id
+			);
+
 			self.db
 				.keyid_key
 				.put_raw(user_signing_key_key, user_signing_key.json().get().as_bytes());
@@ -993,6 +1025,19 @@ impl Service {
 		event_type: &str,
 		content: serde_json::Value,
 	) {
+		if event_type.starts_with("m.key.verification.") {
+			let tx_id = content
+				.get("transaction_id")
+				.and_then(|v| v.as_str())
+				.unwrap_or("unknown");
+
+			info!(
+				target: "cross_signing",
+				"Verification event ({}) from {} to {}/{} (tx_id: {})",
+				event_type, sender, target_user_id, target_device_id, tx_id
+			);
+		}
+
 		let count = self.services.globals.next_count().unwrap();
 
 		let key = (target_user_id, target_device_id, count);
@@ -1506,6 +1551,12 @@ where
 				.map_err(|_| Error::bad_database("Invalid user ID in database."))?;
 			if sender_user == Some(user_id) || sid == user_id || allowed_signatures(sid) {
 				signatures.insert(user, signature);
+			} else {
+				info!(
+					target: "cross_signing",
+					"Dropped cross-signing signature for user {} (sender: {:?}, target: {})",
+					sid, sender_user, user_id
+				);
 			}
 		}
 	}

@@ -23,6 +23,14 @@ pub struct Args {
 	/// Path to the config TOML file (optional)
 	pub config: Option<Vec<PathBuf>>,
 
+	/// Print verbose build metadata and exit.
+	#[arg(long)]
+	pub version_verbose: bool,
+
+	/// Resolve a hostname using the internal async resolver and exit.
+	#[arg(long, value_name = "HOSTNAME")]
+	pub debug_dns: Option<String>,
+
 	/// Override a configuration variable using TOML 'key=value' syntax
 	#[arg(long, short('O'))]
 	pub option: Vec<String>,
@@ -35,6 +43,11 @@ pub struct Args {
 	/// Activate admin command console automatically after startup.
 	#[arg(long, num_args(0))]
 	pub console: bool,
+
+	#[cfg(feature = "console")]
+	/// Attach to the admin command console of a running conduwuit instance.
+	#[arg(short, long, num_args(0))]
+	pub attach: bool,
 
 	/// Execute console command automatically after startup.
 	#[arg(long)]

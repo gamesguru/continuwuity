@@ -28,7 +28,8 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
         .ruma_route(&client::appservice_ping)
 		.ruma_route(&client::get_supported_versions_route)
 		.ruma_route(&client::get_register_available_route)
-		.ruma_route(&client::register_route)
+		.ruma_route(&client::register::register_route)
+		.ruma_route(&client::register::request_registration_token_via_email_route)
 		.ruma_route(&client::get_login_types_route)
 		.ruma_route(&client::login_route)
 		.ruma_route(&client::login_token_route)
@@ -36,10 +37,13 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::logout_route)
 		.ruma_route(&client::logout_all_route)
 		.ruma_route(&client::change_password_route)
+		.ruma_route(&client::request_password_change_token_via_email_route)
 		.ruma_route(&client::deactivate_route)
-		.ruma_route(&client::third_party_route)
-		.ruma_route(&client::request_3pid_management_token_via_email_route)
-		.ruma_route(&client::request_3pid_management_token_via_msisdn_route)
+		.ruma_route(&client::threepid::third_party_route)
+		.ruma_route(&client::threepid::request_3pid_management_token_via_email_route)
+		.ruma_route(&client::threepid::request_3pid_management_token_via_msisdn_route)
+		.ruma_route(&client::threepid::add_3pid_route)
+		.ruma_route(&client::threepid::delete_3pid_route)
 		.ruma_route(&client::check_registration_token_validity)
 		.ruma_route(&client::get_capabilities_route)
 		.ruma_route(&client::get_pushrules_all_route)
@@ -97,7 +101,8 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::get_alias_route)
 		.ruma_route(&client::join_room_by_id_route)
 		.ruma_route(&client::join_room_by_id_or_alias_route)
-		.ruma_route(&client::joined_members_route)
+		.route("/_matrix/client/v3/rooms/{room_id}/joined_members", get(client::joined_members_route))
+		.route("/_matrix/client/r0/rooms/{room_id}/joined_members", get(client::joined_members_route))
 		.ruma_route(&client::knock_room_route)
 		.ruma_route(&client::leave_room_route)
 		.ruma_route(&client::forget_room_route)
@@ -142,7 +147,8 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			get(client::get_state_events_for_empty_key_route)
 				.put(client::send_state_event_for_empty_key_route),
 		)
-		.ruma_route(&client::sync_events_route)
+		.route("/_matrix/client/r0/sync", get(client::sync_events_route))
+		.route("/_matrix/client/v3/sync", get(client::sync_events_route))
 		.ruma_route(&client::sync_events_v5_route)
 		.ruma_route(&client::get_context_route)
 		.ruma_route(&client::get_message_events_route)
@@ -153,6 +159,22 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::get_content_thumbnail_route)
 		.ruma_route(&client::get_content_route)
 		.ruma_route(&client::get_content_as_filename_route)
+		.route(
+			"/_matrix/client/v1/media/download/{server_name}/{media_id}/",
+			get(redirect_download_no_filename),
+		)
+		.route(
+			"/_matrix/client/v3/media/download/{server_name}/{media_id}/",
+			get(redirect_download_no_filename),
+		)
+		.route(
+			"/_matrix/media/v3/download/{server_name}/{media_id}/",
+			get(redirect_download_no_filename),
+		)
+		.route(
+			"/_matrix/media/r0/download/{server_name}/{media_id}/",
+			get(redirect_download_no_filename),
+		)
 		.ruma_route(&client::get_media_preview_route)
 		.ruma_route(&client::get_media_config_route)
 		.ruma_route(&client::get_devices_route)
@@ -283,6 +305,28 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 	}
 
 	router
+}
+
+async fn redirect_download_no_filename(uri: Uri) -> impl IntoResponse {
+	let path = uri.path().trim_end_matches('/');
+	let query = uri.query().unwrap_or_default();
+
+	let path_and_query = if query.is_empty() {
+		path.to_owned()
+	} else {
+		format!("{path}?{query}")
+	};
+
+	let path_and_query = uri::PathAndQuery::from_str(&path_and_query)
+		.expect("Failed to build PathAndQuery for media download redirect URI");
+
+	let uri = uri::Builder::new()
+		.path_and_query(path_and_query)
+		.build()
+		.expect("Failed to build URI for redirect")
+		.to_string();
+
+	Redirect::temporary(&uri)
 }
 
 async fn redirect_legacy_preview(uri: Uri) -> impl IntoResponse {

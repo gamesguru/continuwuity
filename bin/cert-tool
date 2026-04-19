@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# bin/cert-tool
+# Utilities for checking and generating mTLS certificates for PostgreSQL/Nginx.
+
+CERT_DIR="./.tmp/github-action-certs"
+mkdir -p "$CERT_DIR"
+
+check_certs() {
+    echo "--- Certificate Status ---"
+    for f in ca.crt server.crt client.crt; do
+        if [ -f "$CERT_DIR/$f" ]; then
+            echo "✓ $f: $(openssl x509 -in "$CERT_DIR/$f" -noout -subject -issuer -enddate | tr '\n' ' ')"
+        else
+            echo "✗ $f: MISSING"
+        fi
+    done
+}
+
+regen_certs() {
+    echo "--- Regenerating mTLS Stack ---"
+
+    # 1. Generate CA
+    openssl gened25519 > "$CERT_DIR/ca.key"
+    openssl req -x509 -new -nodes -key "$CERT_DIR/ca.key" -sha256 -days 3650 \
+        -subj "/C=US/ST=State/L=City/O=Continuwuity/CN=Continuwuity-CA" \
+        -out "$CERT_DIR/ca.crt"
+
+    # 2. Generate Server Cert (for Nginx)
+    openssl gened25519 > "$CERT_DIR/server.key"
+    openssl req -new -key "$CERT_DIR/server.key" \
+        -subj "/C=US/ST=State/L=City/O=Continuwuity/CN=nutra.tk" \
+        -out "$CERT_DIR/server.csr"
+
+    # Sign server cert
+    openssl x509 -req -in "$CERT_DIR/server.csr" -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" \
+        -CAcreateserial -out "$CERT_DIR/server.crt" -days 365 -sha256
+
+    # 3. Generate Client Cert (for CI/Dev)
+    openssl gened25519 > "$CERT_DIR/client.key"
+    openssl req -new -key "$CERT_DIR/client.key" \
+        -subj "/C=US/ST=State/L=City/O=Continuwuity/CN=ci-client" \
+        -out "$CERT_DIR/client.csr"
+
+    # Sign client cert
+    openssl x509 -req -in "$CERT_DIR/client.csr" -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" \
+        -CAcreateserial -out "$CERT_DIR/client.crt" -days 365 -sha256
+
+    echo "✓ Success! Certs are in $CERT_DIR"
+    echo "  Update your ~/.postgresql/ with these files to use direct mTLS."
+}
+
+case "${1:-check}" in
+    check) check_certs ;;
+    regen) regen_certs ;;
+    *) echo "Usage: $0 [check|regen]" ;;
+esac

@@ -1,0 +1,87 @@
+---
+name: PR Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  SKIP_CONFIRM: 1
+
+jobs:
+  clippy-checks:
+    # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
+    # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
+    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_PR_CHECKS_CLIPPY_CHECKS != ''
+    runs-on: ubuntu-24.04
+    env:
+      PROFILE: dev-quick
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Fetch tags and origin/main for comparison
+        run: git fetch --tags --force && git fetch origin HEAD && git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            liburing-dev \
+            libbz2-dev \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            mold
+
+      - name: Detect best CPU target
+        id: cpu
+        uses: ./.github/actions/get-cpu-target
+
+      - name: Export CPU target env vars
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ steps.cpu.outputs.target }}" | tee -a $GITHUB_ENV
+
+      - name: Setup RocksDB and Jemalloc
+        uses: ./.github/actions/setup-prebuilts
+        with:
+          cache-key: ubuntu-24.04
+          arch: ${{ steps.cpu.outputs.target }}
+
+      - name: Install Rust toolchain
+        run: rustup show && rustup component add clippy rustfmt
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt --component clippy
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Debug checks
+        run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars doctor cpu-info
+      - name: Format
+        run: make format
+
+      - name: Test
+        run: make test
+
+      - name: DNS Integration Test (Respects /etc/hosts)
+        env:
+          CONDUWUIT_TEST_DNS_HOST: conduwuit.test
+        run: |
+          echo "127.0.0.1 conduwuit.test" | sudo tee -a /etc/hosts
+          cargo test --quiet --package conduwuit_service --lib resolver::tests::test_dns_resolution_integration
+
+      - name: Lint
+        run: make lint

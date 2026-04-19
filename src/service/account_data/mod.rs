@@ -81,6 +81,48 @@ pub async fn update(
 	Ok(())
 }
 
+#[implement(Service)]
+pub async fn delete(
+	&self,
+	room_id: Option<&RoomId>,
+	user_id: &UserId,
+	event_type: &str,
+) -> Result<()> {
+	let key = (room_id, user_id, event_type);
+	if let Ok(prev) = self.db.roomusertype_roomuserdataid.qry(&key).await {
+		self.db.roomuserdataid_accountdata.remove(&prev);
+	}
+
+	let data = serde_json::json!({
+		"type": event_type,
+		"content": {},
+	});
+
+	let count = self.services.globals.next_count().unwrap();
+	let roomuserdataid = (room_id, user_id, count, event_type);
+	self.db
+		.roomuserdataid_accountdata
+		.put(roomuserdataid, Json(&data));
+
+	self.db.roomusertype_roomuserdataid.put(key, roomuserdataid);
+
+	Ok(())
+}
+
+#[implement(Service)]
+pub async fn delete_all(
+	&self,
+	room_id: Option<&RoomId>,
+	user_id: &UserId,
+	event_types: &[&str],
+) -> Result<()> {
+	for event_type in event_types {
+		self.delete(room_id, user_id, event_type).await?;
+	}
+
+	Ok(())
+}
+
 /// Searches the room account data for a specific kind.
 #[implement(Service)]
 pub async fn get_global<T>(&self, user_id: &UserId, kind: GlobalAccountDataEventType) -> Result<T>
@@ -116,11 +158,26 @@ pub async fn get_raw(
 	kind: &str,
 ) -> Result<Handle<'_>> {
 	let key = (room_id, user_id, kind.to_owned());
-	self.db
+	let handle = self
+		.db
 		.roomusertype_roomuserdataid
 		.qry(&key)
 		.and_then(|roomuserdataid| self.db.roomuserdataid_accountdata.get(&roomuserdataid))
-		.await
+		.await?;
+
+	// MSC3890: Treat empty content as deleted/not found
+	let data: serde_json::Value = serde_json::from_slice(&handle)
+		.map_err(|e| err!(Database("Invalid account data in database: {e}")))?;
+
+	if data
+		.get("content")
+		.and_then(serde_json::Value::as_object)
+		.is_some_and(serde_json::Map::is_empty)
+	{
+		return Err!(Request(NotFound("Data not found (tombstoned).")));
+	}
+
+	Ok(handle)
 }
 
 /// Returns all changes to the account data that happened after `since`.

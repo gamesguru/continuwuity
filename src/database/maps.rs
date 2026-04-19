@@ -54,6 +54,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "email_localpart",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "eventid_outlierpdu",
 		cache_disp: CacheDisp::SharedWith("pduid_pdu"),
 		key_size_hint: Some(48),
@@ -101,6 +105,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "localpart_email",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "mediaid_file",
 		..descriptor::RANDOM_SMALL
 	},
@@ -120,6 +128,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		name: "state_partial_events",
 		val_size_hint: Some(0),
 		..descriptor::RANDOM
+	},
+	Descriptor {
+		name: "passwordresettoken_info",
+		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "pduid_pdu",
