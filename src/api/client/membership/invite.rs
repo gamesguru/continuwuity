@@ -1,24 +1,21 @@
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Result, err,
+	Err, Result, debug_error, err, info,
 	matrix::{event::gen_event_id_canonical_json, pdu::PduBuilder},
 	warn,
 };
 use conduwuit_service::Services;
 use futures::FutureExt;
 use ruma::{
-	api::{client::membership::invite_user, federation::membership::create_invite},
+	api::client::membership::invite_user, federation::membership::create_invite,
 	events::{
 		invite_permission_config::FilterLevel,
-		room::{
-			member::{MembershipState, RoomMemberEventContent},
-			third_party_invite::RoomThirdPartyInviteEventContent,
-		},
+		room::member::{MembershipState, RoomMemberEventContent},
 	},
 };
 
-use crate::Ruma;
+use crate::{Ruma, client::membership::banned_room_check};
 
 /// # `POST /_matrix/client/v3/rooms/{roomId}/invite`
 ///
@@ -30,11 +27,32 @@ pub(crate) async fn invite_user_route(
 ) -> Result<invite_user::v3::Response> {
 	let sender_user = body.sender_user();
 
+	if services.users.is_suspended(sender_user).await? {
+		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
+	}
+
+	if !services.users.is_admin(sender_user).await && services.config.block_non_admin_invites {
+		debug_error!(
+			"User {sender_user} is not an admin and attempted to send an invite to room {}",
+			&body.room_id
+		);
+		return Err!(Request(Forbidden("Invites are not allowed on this server.")));
+	}
+
 	if let Some(appservice) = &body.appservice_info {
-		if !appservice.is_user_in_namespace(sender_user) {
+		if !appservice.is_user_match(sender_user) {
 			return Err!(Request(Forbidden("User is not in your namespace.")));
 		}
 	}
+
+	banned_room_check(
+		&services,
+		sender_user,
+		Some(&body.room_id),
+		body.room_id.server_name(),
+		client_ip,
+	)
+	.await?;
 
 	match &body.recipient {
 		| invite_user::v3::InvitationRecipient::UserId { user_id: recipient_user } => {
@@ -75,33 +93,9 @@ pub(crate) async fn invite_user_route(
 			.boxed()
 			.await?;
 
-			Ok(invite_user::v3::Response {})
+			Ok(invite_user::v3::Response {{}})
 		},
-		| invite_user::v3::InvitationRecipient::ThirdPartyId(invite) => {
-			let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
-
-			let content = RoomThirdPartyInviteEventContent {
-				display_name: invite.display_name.clone(),
-				public_key: invite.public_key.clone(),
-				public_keys: invite.public_keys.clone(),
-				key_validity_url: invite.key_validity_url.clone(),
-			};
-
-			services
-				.rooms
-				.timeline
-				.build_and_append_pdu(
-					PduBuilder::state(invite.token.clone(), &content),
-					sender_user,
-					Some(&body.room_id),
-					&state_lock,
-				)
-				.await?;
-
-			drop(state_lock);
-
-			Ok(invite_user::v3::Response {})
-		},
+		| _ => Err!(Request(NotFound("User not found."))),
 	}
 }
 
@@ -115,6 +109,10 @@ pub(crate) async fn invite_helper(
 	is_direct: bool,
 ) -> Result<()> {
 	if services.config.block_non_admin_invites && !services.users.is_admin(sender_user).await {
+		info!(
+			"User {sender_user} is not an admin and attempted to send an invite to room
+			 {room_id}"
+		);
 		return Err!(Request(Forbidden("Invites are not allowed for non-admin users.")));
 	}
 
@@ -124,8 +122,10 @@ pub(crate) async fn invite_helper(
 		.await
 	{
 		warn!(
-			"Invite from {} to {} in room {} blocked by antispam: {e:?}",
-			sender_user, recipient_user, room_id
+			"Invite from {} to {} in room {} blocked by antispam: {{e:?}}",
+			sender_user,
+			recipient_user,
+			room_id
 		);
 		return Err!(Request(Forbidden("Invite blocked by antispam service.")));
 	}
@@ -143,7 +143,7 @@ pub(crate) async fn invite_helper(
 
 			let (pdu, pdu_json) = services
 				.rooms
-				.timeline
+				timeline
 				.create_hash_and_sign_event(
 					PduBuilder::state(recipient_user.to_string(), &content),
 					sender_user,
@@ -185,13 +185,13 @@ pub(crate) async fn invite_helper(
 		// hashes checks
 		let (event_id, value) = gen_event_id_canonical_json(&response.event, &room_version_id)
 			.map_err(|e| {
-				err!(Request(BadJson(warn!("Could not convert event to canonical JSON: {e}"))))
+				err!(Request(BadJson(warn!("Could not convert event to canonical JSON: {{e}}"))))
 			})?;
 
 		if pdu.event_id != event_id {
 			return Err!(Request(BadJson(warn!(
 				%pdu.event_id, %event_id,
-				"Server {} sent event with wrong event ID",
+				"Server {{}} sent event with wrong event ID",
 				recipient_user.server_name()
 			))));
 		}
@@ -233,7 +233,7 @@ pub(crate) async fn invite_helper(
 
 	services
 		.rooms
-		.timeline
+		timeline
 		.build_and_append_pdu(
 			PduBuilder::state(recipient_user.to_string(), &content),
 			sender_user,
