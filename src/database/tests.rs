@@ -6,7 +6,7 @@ use conduwuit::{
 	arrayvec::ArrayVec,
 	ruma::{EventId, RoomId, UserId, serde::Raw},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
 	Ignore, Interfix, de, ser,
@@ -546,4 +546,74 @@ fn serde_tuple_option_none_none_none() {
 
 	assert_eq!(None, cc.0);
 	assert_eq!(bb, cc);
+}
+
+#[test]
+fn ser_enum_unit() {
+	#[derive(Debug, Serialize, Deserialize, PartialEq)]
+	enum Foo {
+		Bar,
+		Baz,
+	}
+
+	let b = serialize_to_vec((Foo::Bar,)).expect("failed to serialize enum unit");
+	assert_eq!(b, b"Bar");
+
+	let d: (Foo,) = de::from_slice(&b).expect("failed to deserialize enum unit");
+	assert_eq!(d.0, Foo::Bar);
+}
+
+#[test]
+fn ser_enum_newtype() {
+	#[derive(Debug, Serialize, Deserialize, PartialEq)]
+	enum Foo {
+		Bar(String),
+	}
+
+	let b = serialize_to_vec((Foo::Bar("baz".to_owned()),))
+		.expect("failed to serialize enum newtype");
+	// Newtype variant should be "Bar\xFFbaz"
+	let mut expected = b"Bar".to_vec();
+	expected.push(0xFF);
+	expected.extend_from_slice(b"baz");
+	assert_eq!(b, expected);
+
+	let d: (Foo,) = de::from_slice(&b).expect("failed to deserialize enum newtype");
+	assert_eq!(d.0, Foo::Bar("baz".to_owned()));
+}
+
+#[test]
+fn ser_enum_tuple() {
+	#[derive(Debug, Serialize, Deserialize, PartialEq)]
+	enum Foo {
+		Bar(String, u64),
+	}
+
+	let b = serialize_to_vec((Foo::Bar("baz".to_owned(), 123),))
+		.expect("failed to serialize enum tuple");
+	// Tuple variant should be "Bar\xFFbaz\xFF\x00\x00\x00\x00\x00\x00\x00\x7b"
+	let mut expected = b"Bar".to_vec();
+	expected.push(0xFF);
+	expected.extend_from_slice(b"baz");
+	expected.push(0xFF);
+	expected.extend_from_slice(&123_u64.to_be_bytes());
+	assert_eq!(b, expected);
+
+	let d: (Foo,) = de::from_slice(&b).expect("failed to deserialize enum tuple");
+	assert_eq!(d.0, Foo::Bar("baz".to_owned(), 123));
+}
+
+#[test]
+fn ser_bool() {
+	let b = serialize_to_vec(true).expect("failed to serialize bool");
+	assert_eq!(b, b"\x01");
+
+	let d: bool = de::from_slice(&b).expect("failed to deserialize bool");
+	assert!(d);
+
+	let b = serialize_to_vec(false).expect("failed to serialize bool");
+	assert_eq!(b, b"\x00");
+
+	let d: bool = de::from_slice(&b).expect("failed to deserialize bool");
+	assert!(!d);
 }
