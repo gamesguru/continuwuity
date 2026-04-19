@@ -1,5 +1,5 @@
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet},
 	fmt::Write,
 	iter::once,
 	time::{Instant, SystemTime},
@@ -11,9 +11,9 @@ use conduwuit::{
 		Event,
 		pdu::{PduEvent, PduId, RawPduId},
 	},
-	trace, utils,
+	state_res, trace, utils,
 	utils::{
-		stream::{IterStream, ReadyExt},
+		stream::{BroadbandExt, IterStream, ReadyExt},
 		string::EMPTY,
 	},
 	warn,
@@ -741,7 +741,7 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 		.rooms
 		.outlier
 		.room_stream(&room_id)
-		.broad_filter_map(|(event_id, pdu)| async move {
+		.broad_filter_map(|(event_id, pdu): (OwnedEventId, PduEvent)| async move {
 			let json = self
 				.services
 				.rooms
@@ -774,8 +774,8 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 	let event_fetch = |event_id: OwnedEventId| {
 		let ts = outliers
 			.get(&event_id)
-			.map_or(ruma::uint!(0), |(p, _)| p.origin_server_ts);
-		ready(Ok((ruma::int!(0), ruma::MilliSecondsSinceUnixEpoch(ts))))
+			.map_or_else(|| ruma::uint!(0), |(p, _)| p.origin_server_ts);
+		ready(Ok::<_, state_res::Error>((ruma::int!(0), ruma::MilliSecondsSinceUnixEpoch(ts))))
 	};
 
 	let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
@@ -860,13 +860,12 @@ pub(super) async fn rescue_room_all(&self) -> Result {
 
 	let mut total_rescued = 0_usize;
 	for room_id in room_ids {
-		if let Ok(res) = self.rescue_room(room_id.clone()).await {
-			// Extract count from the response string if possible, or just log
+		if self.rescue_room(room_id).boxed().await.is_ok() {
 			total_rescued = total_rescued.saturating_add(1);
 		}
 	}
 
-	self.write_str(&format!("Finished rescue attempt for {} rooms.", total_rescued))
+	self.write_str(&format!("Finished rescue attempt for {total_rescued} rooms."))
 		.await
 }
 
