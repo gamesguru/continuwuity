@@ -83,8 +83,9 @@ conduwuit-database.workspace = true
 conduwuit-macros.workspace = true
 conduwuit-service.workspace = true
 const-str.workspace = true
-
+ctor.workspace = true
 futures.workspace = true
+lettre.workspace = true
 log.workspace = true
 ruma.workspace = true
 serde_json.workspace = true

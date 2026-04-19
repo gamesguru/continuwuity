@@ -10,7 +10,6 @@ use conduwuit_service::{
 	Services,
 	media::{CACHE_CONTROL_IMMUTABLE, CORP_CROSS_ORIGIN, Dim, FileMeta, MXC_LENGTH},
 };
-use reqwest::Url;
 use ruma::{
 	Mxc, UserId,
 	api::client::{
@@ -269,7 +268,7 @@ pub(crate) async fn get_media_preview_route(
 	let sender_user = body.sender_user();
 
 	let url = &body.url;
-	let url = Url::parse(&body.url).map_err(|e| {
+	let url = conduwuit_service::media::parse_preview_url(&body.url).map_err(|e| {
 		err!(Request(InvalidParam(
 			debug_warn!(%sender_user, %url, "Requested URL is not valid: {e}")
 		)))

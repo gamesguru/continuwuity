@@ -767,6 +767,12 @@ impl Service {
 		if let Some(master_key) = master_key {
 			let (master_key_key, _) = parse_master_key(user_id, master_key)?;
 
+			info!(
+				target: "cross_signing",
+				"Adding master cross-signing key for user {}",
+				user_id
+			);
+
 			self.db
 				.keyid_key
 				.insert(&master_key_key, master_key.json().get().as_bytes());
@@ -799,6 +805,12 @@ impl Service {
 			let mut self_signing_key_key = prefix.clone();
 			self_signing_key_key.extend_from_slice(self_signing_key_id.as_bytes());
 
+			info!(
+				target: "cross_signing",
+				"Adding self-signing key for user {}",
+				user_id
+			);
+
 			self.db
 				.keyid_key
 				.insert(&self_signing_key_key, self_signing_key.json().get().as_bytes());
@@ -808,11 +820,17 @@ impl Service {
 				.insert(user_id.as_bytes(), &self_signing_key_key);
 		}
 
-		// User-signing key
 		if let Some(user_signing_key) = user_signing_key {
 			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 
 			let user_signing_key_key = (user_id, &user_signing_key_id);
+
+			info!(
+				target: "cross_signing",
+				"Adding user-signing key for user {}",
+				user_id
+			);
+
 			self.db
 				.keyid_key
 				.put_raw(user_signing_key_key, user_signing_key.json().get().as_bytes());
@@ -1007,6 +1025,19 @@ impl Service {
 		event_type: &str,
 		content: serde_json::Value,
 	) {
+		if event_type.starts_with("m.key.verification.") {
+			let tx_id = content
+				.get("transaction_id")
+				.and_then(|v| v.as_str())
+				.unwrap_or("unknown");
+
+			info!(
+				target: "cross_signing",
+				"Verification event ({}) from {} to {}/{} (tx_id: {})",
+				event_type, sender, target_user_id, target_device_id, tx_id
+			);
+		}
+
 		let count = self.services.globals.next_count().unwrap();
 
 		let key = (target_user_id, target_device_id, count);
@@ -1520,6 +1551,12 @@ where
 				.map_err(|_| Error::bad_database("Invalid user ID in database."))?;
 			if sender_user == Some(user_id) || sid == user_id || allowed_signatures(sid) {
 				signatures.insert(user, signature);
+			} else {
+				info!(
+					target: "cross_signing",
+					"Dropped cross-signing signature for user {} (sender: {:?}, target: {})",
+					sid, sender_user, user_id
+				);
 			}
 		}
 	}

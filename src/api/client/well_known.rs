@@ -2,7 +2,7 @@ use axum::{Json, extract::State, response::IntoResponse};
 use conduwuit::{Error, Result};
 use ruma::api::client::{
 	discovery::{
-		discover_homeserver::{self, HomeserverInfo, SlidingSyncProxyInfo},
+		discover_homeserver::{self, HomeserverInfo},
 		discover_support::{self, Contact},
 	},
 	error::ErrorKind,
@@ -23,9 +23,9 @@ pub(crate) async fn well_known_client(
 	};
 
 	Ok(discover_homeserver::Response {
-		homeserver: HomeserverInfo { base_url: client_url.clone() },
+		homeserver: HomeserverInfo { base_url: client_url },
 		identity_server: None,
-		sliding_sync_proxy: Some(SlidingSyncProxyInfo { url: client_url }),
+		sliding_sync_proxy: None,
 		tile_server: None,
 		rtc_foci: services
 			.config
@@ -71,6 +71,7 @@ pub(crate) async fn well_known_support(
 
 	let email_address = services.config.well_known.support_email.clone();
 	let matrix_id = services.config.well_known.support_mxid.clone();
+	let pgp_key = services.config.well_known.support_pgp_key.clone();
 
 	// TODO: support defining multiple contacts in the config
 	let mut contacts: Vec<Contact> = vec![];
@@ -88,6 +89,7 @@ pub(crate) async fn well_known_support(
 			role: role_value.clone(),
 			email_address: email_address.clone(),
 			matrix_id: matrix_id.clone(),
+			pgp_key: pgp_key.clone(),
 		});
 	}
 
@@ -104,6 +106,7 @@ pub(crate) async fn well_known_support(
 				role: role_value.clone(),
 				email_address: None,
 				matrix_id: Some(user_id.to_owned()),
+				pgp_key: None,
 			});
 		}
 	}
