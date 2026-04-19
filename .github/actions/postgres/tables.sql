@@ -67,6 +67,7 @@ SELECT
     r.os,
     r.features,
     r.profile,
+    r.room_version,
     r.n_pass,
     r.n_fail,
     r.n_skip,
@@ -82,8 +83,9 @@ SELECT
 FROM runs r
 CROSS JOIN LATERAL (
     SELECT id AS default_baseline_run_id FROM runs
-    WHERE branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
-    OR version_string LIKE '%main%'
+    WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
+    OR version_string LIKE '%main%')
+    AND (room_version = r.room_version OR (room_version IS NULL AND r.room_version IS NULL))
     ORDER BY run_date DESC
     LIMIT 1
 ) dbr
