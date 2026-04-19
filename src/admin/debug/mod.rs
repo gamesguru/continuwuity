@@ -73,7 +73,11 @@ pub enum DebugCommand {
 		room_id: OwnedRoomId,
 	},
 
-	/// Purge all outlier PDUs matching the filters.
+	/// Purge outlier PDUs that already exist in our timeline.
+	///
+	/// This is a safe cleanup command that resolves "stuck" state where an
+	/// event exists in both the timeline and outlier tables. It will NOT
+	/// delete outliers that haven't been rescued yet.
 	PurgeOutliers {
 		/// Filter outliers to a specific room
 		#[arg(short, long)]

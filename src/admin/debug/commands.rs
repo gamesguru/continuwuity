@@ -692,12 +692,28 @@ pub(super) async fn purge_outliers(
 		.collect()
 		.await;
 
-	let count = outliers.len();
+	let mut purged = 0_usize;
+	let mut skipped = 0_usize;
 	for event_id in outliers {
-		self.services.rooms.outlier.remove_outlier(&event_id);
+		if self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok()
+		{
+			self.services.rooms.outlier.remove_outlier(&event_id);
+			purged = purged.saturating_add(1);
+		} else {
+			skipped = skipped.saturating_add(1);
+		}
 	}
 
-	self.write_str(&format!("Purged {count} outliers.")).await
+	self.write_str(&format!(
+		"Purged {purged} stuck outliers, skipped {skipped} un-rescued outliers."
+	))
+	.await
 }
 
 #[admin_command]
