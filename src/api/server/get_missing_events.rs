@@ -85,7 +85,7 @@ pub(crate) async fn get_missing_events_route(
 			.server_can_see_event(
 				body.origin().to_owned(),
 				body.room_id.clone(),
-				pdu.event_id().clone(),
+				pdu.event_id().to_owned(),
 			)
 			.await
 		{

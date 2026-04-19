@@ -48,8 +48,15 @@ pub async fn server_can_see_event(
 
 	match history_visibility {
 		| HistoryVisibility::WorldReadable => true,
-		| HistoryVisibility::Shared | HistoryVisibility::Invited => {
-			// Allow if any member on requesting server is AT LEAST invited, else deny
+		| HistoryVisibility::Shared => {
+			// Allow if the server is currently participating in the room
+			self.services
+				.state_cache
+				.server_is_participant(&origin, &room_id)
+				.await
+		},
+		| HistoryVisibility::Invited => {
+			// Allow if any member on requesting server was AT LEAST invited at that state
 			let members: Vec<ruma::OwnedUserId> = self
 				.services
 				.state_cache
@@ -70,7 +77,7 @@ pub async fn server_can_see_event(
 			false
 		},
 		| HistoryVisibility::Joined => {
-			// Allow if any member on requesting server is joined, else deny
+			// Allow if any member on requesting server was joined at that state
 			let members: Vec<ruma::OwnedUserId> = self
 				.services
 				.state_cache

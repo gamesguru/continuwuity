@@ -57,7 +57,11 @@ pub(super) async fn check(&self) -> Result {
 			.services
 			.rooms
 			.state_accessor
-			.server_can_see_event(self.origin.to_owned(), self.room_id.clone(), event_id.clone())
+			.server_can_see_event(
+				self.origin.to_owned(),
+				self.room_id.to_owned(),
+				event_id.to_owned(),
+			)
 			.await;
 
 		if !can_see {
