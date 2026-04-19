@@ -18,19 +18,20 @@ use conduwuit::{
 	},
 	warn,
 };
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt, future::ready};
 use lettre::message::Mailbox;
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
-	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
+	OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomId, RoomVersionId,
 	api::federation::event::{get_event, get_room_state},
-	events::AnyStateEvent,
+	events::{AnyStateEvent, StateEventType, TimelineEventType},
 	serde::Raw,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
 	state_compressor::HashSetCompressStateEvent,
 };
+use tokio::io::AsyncWriteExt as _;
 use tracing_subscriber::EnvFilter;
 
 use crate::admin_command;
@@ -434,7 +435,7 @@ pub(super) async fn change_log_level(&self, filter: Option<String>, reset: bool)
 pub(super) async fn verify_json(&self) -> Result {
 	if self.body.len() < 2
 		|| !self.body[0].trim().starts_with("```")
-		|| self.body.last().unwrap_or(&"").trim() != "```"
+		|| self.body.last().unwrap_or(&EMPTY).trim() != "```"
 	{
 		return Err!("Expected code block in command body. Add --help for details.");
 	}
@@ -518,6 +519,253 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 
 	let out = format!("{latest_pdu:?}");
 	self.write_str(&out).await
+}
+
+#[admin_command]
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
+	self.bail_restricted()?;
+
+	let pdu_json = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu_json(&event_id)
+		.await
+		.map_err(|_| err!("PDU not found in database."))?;
+
+	let pdu: PduEvent = serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
+	let room_id = pdu
+		.room_id()
+		.ok_or_else(|| err!("PDU has no room_id."))?
+		.to_owned();
+
+	let create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.map_err(|_| err!("Failed to find create event for room."))?;
+
+	let origin = pdu
+		.origin
+		.clone()
+		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+	self.services
+		.rooms
+		.event_handler
+		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id)
+		.await?;
+
+	self.write_str("Successfully rescued PDU.").await
+}
+
+#[admin_command]
+pub(super) async fn list_outliers(
+	&self,
+	room_id: Option<OwnedRoomOrAliasId>,
+	sender: Option<OwnedUserId>,
+	limit: Option<usize>,
+) -> Result {
+	let limit = limit.unwrap_or(100);
+
+	let room_id = if let Some(room) = room_id {
+		Some(self.services.rooms.alias.resolve(&room).await?)
+	} else {
+		None
+	};
+
+	let mut outliers: Vec<(OwnedEventId, PduEvent)> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
+			let room_match = room_id
+				.as_ref()
+				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
+			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+			ready(room_match && sender_match)
+		})
+		.collect()
+		.await;
+
+	// Sort by origin_server_ts
+	outliers.sort_by_key(|(_, pdu)| pdu.origin_server_ts);
+
+	let mut count = 0_usize;
+	let mut body = String::new();
+	for (event_id, pdu) in outliers {
+		if count >= limit {
+			writeln!(body, "--- Stopped after {limit} entries ---")?;
+			break;
+		}
+
+		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
+		let sender = pdu.sender();
+		let kind = pdu.kind.to_string();
+		let ts = pdu.origin_server_ts;
+		writeln!(
+			body,
+			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: {kind}"
+		)?;
+		count = count.saturating_add(1);
+	}
+
+	if body.is_empty() {
+		return Err!("No outliers found.");
+	}
+
+	self.write_str(&format!("Outliers:\n```\n{body}\n```"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn view_extremities(&self, room: OwnedRoomOrAliasId) -> Result {
+	let room_id = self.services.rooms.alias.resolve(&room).await?;
+	let extremities: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let num = extremities.len();
+	let mut body = String::new();
+	for event_id in extremities {
+		let pdu = self.services.rooms.timeline.get_pdu(&event_id).await;
+		match pdu {
+			| Ok(pdu) => {
+				let ts = pdu.origin_server_ts;
+				let sender = pdu.sender();
+				writeln!(body, "{event_id}\tTS: {ts}\tSender: {sender}")?;
+			},
+			| Err(_) => {
+				writeln!(body, "{event_id}\tERROR: PDU not found in timeline")?;
+			},
+		}
+	}
+
+	self.write_str(&format!("Room {room_id} has {num} extremities:\n```\n{body}\n```"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
+	self.bail_restricted()?;
+
+	let mut outliers: Vec<PduEvent> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
+			ready(pdu.room_id().is_some_and(|r| r == room_id))
+		})
+		.map(|(_, pdu)| pdu)
+		.collect()
+		.await;
+
+	// Sort by origin_server_ts to handle them in order
+	outliers.sort_by_key(|pdu| pdu.origin_server_ts);
+
+	// Find the create event first to use as the foundation
+	let mut create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.ok();
+
+	// If it's still missing, see if it's in our outlier list
+	if create_event.is_none() {
+		create_event = outliers
+			.iter()
+			.find(|pdu| pdu.kind == TimelineEventType::RoomCreate)
+			.cloned();
+	}
+
+	let create_event =
+		create_event.ok_or_else(|| err!("Failed to find create event for room."))?;
+
+	let mut count = 0_usize;
+	for pdu in outliers {
+		let event_id = pdu.event_id().to_owned();
+		let pdu_json = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_json(&event_id)
+			.await
+			.map_err(|_| err!("PDU not found in database."))?;
+
+		let origin = pdu
+			.origin
+			.clone()
+			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+		if self
+			.services
+			.rooms
+			.event_handler
+			.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id)
+			.await
+			.is_ok()
+		{
+			count = count.saturating_add(1);
+		}
+
+		// Yield every 10 events to prevent blocking the executor too long
+		if count.is_multiple_of(10) {
+			tokio::task::yield_now().await;
+		}
+	}
+
+	self.write_str(&format!("Rescued {count} PDUs in room {room_id}."))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn get_room_dag(
+	&self,
+	room_id: OwnedRoomOrAliasId,
+	start: u64,
+	end: i64,
+) -> Result {
+	self.bail_restricted()?;
+
+	let room_id = self.services.rooms.alias.resolve(&room_id).await?;
+	let pdus = self.services.rooms.timeline.all_pdus(&room_id);
+	futures::pin_mut!(pdus);
+
+	let mut i = 0_u64;
+	let mut count = 0_u64;
+	let path = format!("/tmp/dag-{room_id}-{start}.jsonl");
+	let mut file = tokio::fs::File::create(&path)
+		.await
+		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
+
+	while let Some((_, pdu)) = pdus.next().await {
+		if i >= start {
+			let json = serde_json::to_string(&pdu)?;
+			file.write_all(json.as_bytes()).await?;
+			file.write_all(b"\n").await?;
+			count = count.saturating_add(1);
+		}
+		i = i.saturating_add(1);
+		if let Ok(end) = u64::try_from(end) {
+			if i > end {
+				break;
+			}
+		}
+	}
+
+	self.write_str(&format!("Successfully wrote {count} PDUs to {path}"))
+		.await
 }
 
 #[admin_command]
