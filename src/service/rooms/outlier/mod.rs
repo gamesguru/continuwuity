@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use conduwuit::{
 	Result, implement,
-	matrix::{Event, PduEvent},
+	matrix::PduEvent,
 	utils::stream::{BroadbandExt, ReadyExt, TryIgnore},
 };
 use database::{Deserialized, Json, Map};
@@ -109,7 +109,7 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 			let mut key = room_id.as_bytes().to_vec();
 			key.push(0xFF);
 			key.extend_from_slice(event_id.as_bytes());
-			self.db.roomid_outliereventid.remove(key);
+			self.db.roomid_outliereventid.remove(&key);
 		}
 	}
 	self.db.eventid_outlierpdu.remove(event_id);

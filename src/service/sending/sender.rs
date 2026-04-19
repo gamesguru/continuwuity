@@ -238,7 +238,7 @@ impl Service {
 			let mut stream = self
 				.db
 				.queued_requests(&msg.dest)
-				.take(DEQUEUE_LIMIT - iv.len());
+				.take(DEQUEUE_LIMIT.saturating_sub(iv.len()));
 			while let Some((k, e)) = stream.next().await {
 				if !iv.iter().any(|(ik, _)| *ik == k) {
 					iv.push((k, e));
