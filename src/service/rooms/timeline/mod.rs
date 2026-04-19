@@ -195,7 +195,7 @@ impl Service {
 
 	/// Checks if all PDUs exist directly in the timeline (non-outlier).
 	#[inline]
-	pub async fn non_outlier_pdus_exist<'a, I>(&self, mut event_ids: I) -> bool
+	pub async fn non_outlier_pdus_exist<'a, I>(&self, event_ids: I) -> bool
 	where
 		I: Iterator<Item = &'a EventId> + Send,
 	{

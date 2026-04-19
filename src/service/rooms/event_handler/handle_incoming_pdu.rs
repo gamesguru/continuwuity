@@ -260,11 +260,6 @@ pub async fn handle_incoming_pdu<'a>(
 		return Ok(None);
 	}
 
-	// 8. if not timeline event: stop
-	if !is_timeline_event {
-		return Ok(None);
-	}
-
 	// Skip old events
 	let first_ts_in_room = self
 		.services
