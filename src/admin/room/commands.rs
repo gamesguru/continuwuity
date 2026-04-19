@@ -128,7 +128,7 @@ pub(super) async fn bump(&self, room_id: Option<OwnedRoomId>, all: bool) -> Resu
 		.services
 		.rooms
 		.state_cache
-		.server_in_room(&self.services.server.name, &room_id)
+		.server_is_participant(&self.services.server.name, &room_id)
 		.await
 	{
 		return Err!("We are not participating in the room / we don't know about the room ID.");
