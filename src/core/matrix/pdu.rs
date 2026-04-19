@@ -85,10 +85,15 @@ impl Pdu {
 			"event_id".into(),
 			ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
 		);
-		let pdu: Self = serde_json::from_value(serde_json::to_value(json)?)?;
+		let mut pdu: Self = serde_json::from_value(serde_json::to_value(json)?)?;
+		pdu.event_id = event_id.to_owned();
 
-		if pdu.room_id.is_none() && pdu.kind != TimelineEventType::RoomCreate {
-			return Err(crate::err!(Request(InvalidParam("Event is missing room_id"))));
+		if pdu.room_id.is_none() {
+			if let Some(room_id) = room_id {
+				pdu.room_id = Some(room_id.to_owned());
+			} else if pdu.kind != TimelineEventType::RoomCreate {
+				return Err(crate::err!(Request(InvalidParam("Event is missing room_id"))));
+			}
 		}
 
 		// Validate the PDU belongs to the expected room if one is specified
