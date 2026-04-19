@@ -8,7 +8,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::FutureExt;
 use ruma::{
-	api::client::membership::invite_user, federation::membership::create_invite,
+	api::{client::membership::invite_user, federation::membership::create_invite},
 	events::{
 		invite_permission_config::FilterLevel,
 		room::member::{MembershipState, RoomMemberEventContent},
@@ -93,7 +93,7 @@ pub(crate) async fn invite_user_route(
 			.boxed()
 			.await?;
 
-			Ok(invite_user::v3::Response {{}})
+			Ok(invite_user::v3::Response {})
 		},
 		| _ => Err!(Request(NotFound("User not found."))),
 	}
@@ -122,10 +122,8 @@ pub(crate) async fn invite_helper(
 		.await
 	{
 		warn!(
-			"Invite from {} to {} in room {} blocked by antispam: {{e:?}}",
-			sender_user,
-			recipient_user,
-			room_id
+			"Invite from {} to {} in room {} blocked by antispam: {e:?}",
+			sender_user, recipient_user, room_id
 		);
 		return Err!(Request(Forbidden("Invite blocked by antispam service.")));
 	}
@@ -143,7 +141,7 @@ pub(crate) async fn invite_helper(
 
 			let (pdu, pdu_json) = services
 				.rooms
-				timeline
+				.timeline
 				.create_hash_and_sign_event(
 					PduBuilder::state(recipient_user.to_string(), &content),
 					sender_user,
@@ -185,13 +183,13 @@ pub(crate) async fn invite_helper(
 		// hashes checks
 		let (event_id, value) = gen_event_id_canonical_json(&response.event, &room_version_id)
 			.map_err(|e| {
-				err!(Request(BadJson(warn!("Could not convert event to canonical JSON: {{e}}"))))
+				err!(Request(BadJson(warn!("Could not convert event to canonical JSON: {e}"))))
 			})?;
 
 		if pdu.event_id != event_id {
 			return Err!(Request(BadJson(warn!(
 				%pdu.event_id, %event_id,
-				"Server {{}} sent event with wrong event ID",
+				"Server {} sent event with wrong event ID",
 				recipient_user.server_name()
 			))));
 		}
@@ -201,10 +199,11 @@ pub(crate) async fn invite_helper(
 			.event_handler
 			.handle_incoming_pdu(recipient_user.server_name(), room_id, &event_id, value, true)
 			.boxed()
-			.await?
-			.ok_or_else(|| {
-				err!(Request(InvalidParam("Could not accept incoming PDU as timeline event.")))
-			})?;
+			.await?;
+
+		let pdu_id = pdu_id.ok_or_else(|| {
+			err!(Request(InvalidParam("Could not accept incoming PDU as timeline event.")))
+		})?;
 
 		return services.sending.send_pdu_room(room_id, &pdu_id).await;
 	}
@@ -233,7 +232,7 @@ pub(crate) async fn invite_helper(
 
 	services
 		.rooms
-		timeline
+		.timeline
 		.build_and_append_pdu(
 			PduBuilder::state(recipient_user.to_string(), &content),
 			sender_user,
