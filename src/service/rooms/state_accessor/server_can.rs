@@ -45,15 +45,19 @@ pub async fn server_can_see_event(
 			.await;
 
 		if server_is_participant {
-			let history_visibility = self
-				.state_get_content_current(&room_id, &StateEventType::RoomHistoryVisibility, "")
-				.await
-				.map_or(HistoryVisibility::Shared, |c: RoomHistoryVisibilityEventContent| {
-					c.history_visibility
-				});
+			if let Ok(shortstatehash) =
+				self.services.state.get_room_shortstatehash(&room_id).await
+			{
+				let history_visibility = self
+					.state_get_content(shortstatehash, &StateEventType::RoomHistoryVisibility, "")
+					.await
+					.map_or(HistoryVisibility::Shared, |c: RoomHistoryVisibilityEventContent| {
+						c.history_visibility
+					});
 
-			if history_visibility == HistoryVisibility::Shared {
-				return true;
+				if history_visibility == HistoryVisibility::Shared {
+					return true;
+				}
 			}
 		}
 
