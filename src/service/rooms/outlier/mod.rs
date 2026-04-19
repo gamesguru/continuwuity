@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use conduwuit::{
-	Result, implement,
+	Result, implement, info,
 	matrix::PduEvent,
 	utils::stream::{BroadbandExt, ReadyExt, TryIgnore},
 };
@@ -9,13 +9,20 @@ use database::{Deserialized, Json, Map};
 use futures::Stream;
 use ruma::{CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId};
 
+use crate::{Dep, rooms};
+
 pub struct Service {
 	db: Data,
+	services: Services,
 }
 
 struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	roomid_outliereventid: Arc<Map>,
+}
+
+struct Services {
+	timeline: Dep<rooms::timeline::Service>,
 }
 
 impl crate::Service for Service {
@@ -24,6 +31,9 @@ impl crate::Service for Service {
 			db: Data {
 				eventid_outlierpdu: args.db["eventid_outlierpdu"].clone(),
 				roomid_outliereventid: args.db["roomid_outliereventid"].clone(),
+			},
+			services: Services {
+				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 			},
 		}))
 	}
@@ -113,4 +123,48 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 		}
 	}
 	self.db.eventid_outlierpdu.remove(event_id);
+}
+
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "info")]
+pub async fn startup_janitor(&self) {
+	use futures::StreamExt;
+
+	let mut count = 0_usize;
+	let mut room_index_count = 0_usize;
+
+	info!("Starting outlier janitor...");
+
+	// Clean up stale entries in roomid_outliereventid index
+	let mut room_index = self
+		.db
+		.roomid_outliereventid
+		.stream::<Vec<u8>, OwnedEventId>();
+	while let Some(Ok((key, event_id))) = room_index.next().await {
+		if self.services.timeline.pdu_exists(&event_id).await {
+			self.db.roomid_outliereventid.remove(&key);
+			room_index_count = room_index_count.saturating_add(1);
+		}
+	}
+
+	// Clean up stale entries in eventid_outlierpdu
+	let mut outliers = self
+		.db
+		.eventid_outlierpdu
+		.stream::<OwnedEventId, PduEvent>();
+	while let Some(Ok((event_id, _))) = outliers.next().await {
+		if self.services.timeline.pdu_exists(&event_id).await {
+			self.db.eventid_outlierpdu.remove(&event_id);
+			count = count.saturating_add(1);
+		}
+	}
+
+	if count > 0 || room_index_count > 0 {
+		info!(
+			"Outlier janitor finished. Cleaned up {count} stale outliers and {room_index_count} \
+			 stale room index entries."
+		);
+	} else {
+		info!("Outlier janitor finished. No stale outliers found.");
+	}
 }

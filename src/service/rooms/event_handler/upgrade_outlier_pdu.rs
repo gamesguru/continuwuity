@@ -403,5 +403,10 @@ where
 		"Accepted",
 	);
 
+	self.services
+		.outlier
+		.remove_outlier(incoming_pdu.event_id())
+		.await;
+
 	Ok(pdu_id)
 }

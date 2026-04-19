@@ -736,17 +736,51 @@ pub(super) async fn purge_outliers(
 pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 	self.bail_restricted()?;
 
-	let mut outliers: Vec<PduEvent> = self
+	let outliers: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = self
 		.services
 		.rooms
 		.outlier
 		.room_stream(&room_id)
-		.map(|(_, pdu)| pdu)
+		.broad_filter_map(|(event_id, pdu)| async move {
+			let json = self
+				.services
+				.rooms
+				.timeline
+				.get_pdu_json(&event_id)
+				.await
+				.ok()?;
+			Some((event_id, (pdu, json)))
+		})
 		.collect()
 		.await;
 
-	// Sort by origin_server_ts to handle them in order
-	outliers.sort_by_key(|pdu| pdu.origin_server_ts);
+	if outliers.is_empty() {
+		return self.write_str("No outliers found in this room.").await;
+	}
+
+	// Build the graph for topological sort
+	let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
+		HashMap::with_capacity(outliers.len());
+	for (event_id, (pdu, _)) in &outliers {
+		let mut parents = HashSet::new();
+		for prev_id in pdu.prev_events() {
+			if outliers.contains_key(prev_id) {
+				parents.insert(prev_id.to_owned());
+			}
+		}
+		graph.insert(event_id.clone(), parents);
+	}
+
+	let event_fetch = |event_id: OwnedEventId| {
+		let ts = outliers
+			.get(&event_id)
+			.map_or(ruma::uint!(0), |(p, _)| p.origin_server_ts);
+		ready(Ok((ruma::int!(0), ruma::MilliSecondsSinceUnixEpoch(ts))))
+	};
+
+	let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
+		.await
+		.map_err(|e| err!(Database("Failed to sort outliers: {e:?}")))?;
 
 	// Find the create event first to use as the foundation
 	let mut create_event = self
@@ -760,24 +794,17 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 	// If it's still missing, see if it's in our outlier list
 	if create_event.is_none() {
 		create_event = outliers
-			.iter()
-			.find(|pdu| pdu.kind == TimelineEventType::RoomCreate)
-			.cloned();
+			.values()
+			.find(|(pdu, _)| pdu.kind == TimelineEventType::RoomCreate)
+			.map(|(pdu, _)| pdu.clone());
 	}
 
 	let create_event =
 		create_event.ok_or_else(|| err!("Failed to find create event for room."))?;
 
 	let mut count = 0_usize;
-	for pdu in outliers {
-		let event_id = pdu.event_id().to_owned();
-		let pdu_json = self
-			.services
-			.rooms
-			.timeline
-			.get_pdu_json(&event_id)
-			.await
-			.map_err(|_| err!("PDU not found in database."))?;
+	for event_id in sorted {
+		let (pdu, pdu_json) = outliers.get(&event_id).expect("in sorted list");
 
 		let origin = pdu
 			.origin
@@ -788,7 +815,13 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 			.services
 			.rooms
 			.event_handler
-			.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id)
+			.upgrade_outlier_to_timeline_pdu(
+				pdu.clone(),
+				pdu_json.clone(),
+				&create_event,
+				&origin,
+				&room_id,
+			)
 			.await
 			.is_ok()
 		{

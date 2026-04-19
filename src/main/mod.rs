@@ -1,4 +1,5 @@
 #![type_length_limit = "49152"] //TODO: reduce me
+#![deny(unused_must_use)]
 
 use std::sync::{Arc, atomic::Ordering};
 

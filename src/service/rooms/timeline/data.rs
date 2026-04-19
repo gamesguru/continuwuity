@@ -14,6 +14,7 @@ use crate::{Dep, rooms, rooms::short::ShortRoomId};
 
 pub(super) struct Data {
 	eventid_outlierpdu: Arc<Map>,
+	roomid_outliereventid: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
@@ -33,6 +34,7 @@ impl Data {
 		let db = &args.db;
 		Self {
 			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
+			roomid_outliereventid: db["roomid_outliereventid"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
 			pduid_pdu: db["pduid_pdu"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
@@ -179,7 +181,7 @@ impl Data {
 
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(pdu.event_id.as_bytes(), pdu_id);
-		self.eventid_outlierpdu.remove(pdu.event_id.as_bytes());
+		self.remove_outlier(pdu.event_id(), pdu.room_id.as_deref());
 	}
 
 	pub(super) fn prepend_backfill_pdu(
@@ -190,6 +192,22 @@ impl Data {
 	) {
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(event_id, pdu_id);
+
+		let room_id = json
+			.get("room_id")
+			.and_then(ruma::CanonicalJsonValue::as_str)
+			.and_then(|r| <&RoomId>::try_from(r).ok());
+
+		self.remove_outlier(event_id, room_id);
+	}
+
+	fn remove_outlier(&self, event_id: &EventId, room_id: Option<&RoomId>) {
+		if let Some(room_id) = room_id {
+			let mut key = room_id.as_bytes().to_vec();
+			key.push(0xFF);
+			key.extend_from_slice(event_id.as_bytes());
+			self.roomid_outliereventid.remove(&key);
+		}
 		self.eventid_outlierpdu.remove(event_id);
 	}
 
