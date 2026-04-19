@@ -26,9 +26,7 @@ pub fn hash_and_sign_event(
 	// MSC4291: Omit room_id for m.room.create in v12+
 	if let Ok(rv) = RoomVersion::new(room_version) {
 		if rv.room_ids_as_hashes && is_create_event {
-			if object.get("type").and_then(|value| value.as_str()) == Some("m.room.create") {
-				object.remove("room_id");
-			}
+			object.remove("room_id");
 		}
 	}
 

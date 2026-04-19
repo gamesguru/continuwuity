@@ -64,11 +64,9 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 			if let Some(auth_event_id) = auth_event_id.as_str() {
 				if let Ok(auth_event_id) = OwnedEventId::parse(auth_event_id) {
 					if let Ok(pdu) = self.services.timeline.get_pdu(&auth_event_id).await {
-						found_room_id = pdu.room_id().map(ToOwned::to_owned);
-						if found_room_id.is_some() {
-							if found_room_id.is_some() {
-								break;
-							}
+						if let Some(room_id) = pdu.room_id_or_hash() {
+							found_room_id = Some(room_id);
+							break;
 						}
 					}
 				}
