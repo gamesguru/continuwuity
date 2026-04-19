@@ -283,12 +283,10 @@ impl Service {
 						return FilterLevel::Block;
 					}
 				}
-
-				// Otherwise, we use Ruma's logic or Allow
-				content.user_filter_level(sender_user)
-			} else {
-				FilterLevel::Allow
 			}
+
+			// Default behavior: Allow if no rules matched or if config is disabled
+			FilterLevel::Allow
 		};
 
 		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");

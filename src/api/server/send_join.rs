@@ -13,7 +13,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use ruma::{
-	CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName,
+	OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName,
 	api::federation::membership::create_join_event,
 	events::{
 		StateEventType,
@@ -283,7 +283,15 @@ async fn create_join_event(
 	Ok(create_join_event::v2::RoomState {
 		auth_chain,
 		state,
-		event: to_raw_value(&CanonicalJsonValue::Object(value)).ok(),
+		event: to_raw_value(
+			&services
+				.rooms
+				.timeline
+				.get_pdu_json(&event_id)
+				.await
+				.unwrap_or(value),
+		)
+		.ok(),
 		members_omitted: omit_members,
 		servers_in_room,
 	})
