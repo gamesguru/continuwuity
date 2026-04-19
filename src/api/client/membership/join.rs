@@ -435,6 +435,13 @@ async fn join_room_by_id_helper_remote(
 			displayname: services.users.displayname(sender_user).await.ok(),
 			avatar_url: services.users.avatar_url(sender_user).await.ok(),
 			blurhash: services.users.blurhash(sender_user).await.ok(),
+			is_direct: services
+				.rooms
+				.state_accessor
+				.get_member(room_id, sender_user)
+				.await
+				.ok()
+				.and_then(|m| m.is_direct),
 			reason,
 			join_authorized_via_users_server: join_authorized_via_users_server.clone(),
 			..RoomMemberEventContent::new(MembershipState::Join)
@@ -769,6 +776,13 @@ async fn join_room_by_id_helper_local(
 		displayname: services.users.displayname(sender_user).await.ok(),
 		avatar_url: services.users.avatar_url(sender_user).await.ok(),
 		blurhash: services.users.blurhash(sender_user).await.ok(),
+		is_direct: services
+			.rooms
+			.state_accessor
+			.get_member(room_id, sender_user)
+			.await
+			.ok()
+			.and_then(|m| m.is_direct),
 		reason: reason.clone(),
 		join_authorized_via_users_server: auth_user,
 		..RoomMemberEventContent::new(MembershipState::Join)
