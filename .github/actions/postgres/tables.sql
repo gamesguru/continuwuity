@@ -22,12 +22,13 @@ CREATE TABLE IF NOT EXISTS runs (
     binary_sha256 text,
     n_pass integer DEFAULT 0,
     n_skip integer DEFAULT 0,
-    n_fail integer DEFAULT 0
+    n_fail integer DEFAULT 0,
+    room_version text
 );
 
 -- Unique index to prevent duplicate machine reports
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_machine_run
-ON runs (commit_hash, run_date, arch, os, profile) NULLS NOT DISTINCT;
+ON runs (commit_hash, run_date, arch, os, profile, room_version) NULLS NOT DISTINCT;
 
 -- Create run_details table
 CREATE TABLE IF NOT EXISTS run_details (
@@ -58,6 +59,7 @@ SELECT
     r.branch,
     r.arch,
     r.os,
+    r.room_version,
     r.features,
     r.profile,
     r.n_pass,
@@ -75,8 +77,9 @@ SELECT
 FROM runs r
 CROSS JOIN LATERAL (
     SELECT id AS default_baseline_run_id FROM runs
-    WHERE branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
-    OR version_string LIKE '%main%'
+    WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
+    OR version_string LIKE '%main%')
+    AND room_version IS NOT DISTINCT FROM r.room_version
     ORDER BY run_date DESC
     LIMIT 1
 ) dbr

@@ -348,10 +348,12 @@ pub(crate) async fn visibility_filter(
 ) -> Option<PdusIterItem> {
 	let (_, pdu) = &item;
 
+	let room_id = pdu.room_id_or_hash()?;
+
 	services
 		.rooms
 		.state_accessor
-		.user_can_see_event(user_id, &pdu.room_id_or_hash(), pdu.event_id())
+		.user_can_see_event(user_id, &room_id, pdu.event_id())
 		.await
 		.then_some(item)
 }

@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use conduwuit::{Result, err};
+use conduwuit_core::Pdu;
 use database::Map;
 use ruma::{
-	EventEncryptionAlgorithm, JsOption, OwnedRoomAliasId, RoomId, UserId,
+	EventEncryptionAlgorithm, JsOption, OwnedEventId, OwnedRoomAliasId, RoomId, UserId,
 	events::{
 		StateEventType,
 		room::{
@@ -28,7 +29,7 @@ use ruma::{
 	room::RoomType,
 };
 
-use crate::{Dep, rooms};
+use crate::{Dep, rooms, rooms::short::ShortStateHash};
 
 pub struct Service {
 	services: Services,
@@ -161,5 +162,31 @@ impl Service {
 		self.room_state_get(room_id, &StateEventType::RoomEncryption, "")
 			.await
 			.is_ok()
+	}
+
+	pub async fn state_get(
+		&self,
+		shortstatehash: ShortStateHash,
+		event_type: &StateEventType,
+		state_key: &str,
+	) -> Result<Pdu> {
+		self.state_get_in_room(None, shortstatehash, event_type, state_key)
+			.await
+	}
+
+	pub async fn state_get_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		shortstatehash: ShortStateHash,
+		event_type: &StateEventType,
+		state_key: &str,
+	) -> Result<Pdu> {
+		let event_id: OwnedEventId = self
+			.state_get_id(shortstatehash, event_type, state_key)
+			.await?;
+		self.services
+			.timeline
+			.get_pdu_in_room(room_id, &event_id)
+			.await
 	}
 }
