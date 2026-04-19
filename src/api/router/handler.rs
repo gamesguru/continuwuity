@@ -20,10 +20,6 @@ pub(in super::super) trait RouterExt {
 	fn ruma_route<H, T>(self, handler: &'static H) -> Self
 	where
 		H: RumaHandler<T>;
-
-	fn ruma_route_at<H, T>(self, handler: &'static H, path: &str) -> Self
-	where
-		H: RumaHandler<T>;
 }
 
 impl RouterExt for Router<State> {
@@ -32,13 +28,6 @@ impl RouterExt for Router<State> {
 		H: RumaHandler<T>,
 	{
 		handler.add_routes(self)
-	}
-
-	fn ruma_route_at<H, T>(self, handler: &'static H, path: &str) -> Self
-	where
-		H: RumaHandler<T>,
-	{
-		handler.add_route(self, path)
 	}
 }
 
