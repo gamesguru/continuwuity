@@ -187,6 +187,26 @@ impl Service {
 		self.db.get_non_outlier_pdu(event_id).await
 	}
 
+	/// Checks if pdu exists directly in the timeline (non-outlier).
+	#[inline]
+	pub async fn non_outlier_pdu_exists(&self, event_id: &EventId) -> bool {
+		self.db.non_outlier_pdu_exists(event_id).await.is_ok()
+	}
+
+	/// Checks if all PDUs exist directly in the timeline (non-outlier).
+	#[inline]
+	pub async fn non_outlier_pdus_exist<'a, I>(&self, mut event_ids: I) -> bool
+	where
+		I: Iterator<Item = &'a EventId> + Send,
+	{
+		for event_id in event_ids {
+			if !self.non_outlier_pdu_exists(event_id).await {
+				return false;
+			}
+		}
+		true
+	}
+
 	/// Returns the pdu.
 	///
 	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.

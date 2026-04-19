@@ -181,10 +181,11 @@ impl Data {
 
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(pdu.event_id.as_bytes(), pdu_id);
-		self.remove_outlier(pdu.event_id(), pdu.room_id.as_deref());
+		self.remove_outlier(&pdu.event_id, pdu.room_id.as_deref())
+			.await;
 	}
 
-	pub(super) fn prepend_backfill_pdu(
+	pub(super) async fn prepend_backfill_pdu(
 		&self,
 		pdu_id: &RawPduId,
 		event_id: &EventId,
@@ -198,10 +199,10 @@ impl Data {
 			.and_then(ruma::CanonicalJsonValue::as_str)
 			.and_then(|r| <&RoomId>::try_from(r).ok());
 
-		self.remove_outlier(event_id, room_id);
+		self.remove_outlier(event_id, room_id).await;
 	}
 
-	fn remove_outlier(&self, event_id: &EventId, room_id: Option<&RoomId>) {
+	async fn remove_outlier(&self, event_id: &EventId, room_id: Option<&RoomId>) {
 		if let Some(room_id) = room_id {
 			let mut key = room_id.as_bytes().to_vec();
 			key.push(0xFF);

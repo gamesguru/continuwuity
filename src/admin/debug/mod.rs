@@ -78,6 +78,7 @@ pub enum DebugCommand {
 	/// This is a safe cleanup command that resolves "stuck" state where an
 	/// event exists in both the timeline and outlier tables. It will NOT
 	/// delete outliers that haven't been rescued yet.
+	#[command(alias("purge-stuck"))]
 	PurgeOutliers {
 		/// Filter outliers to a specific room
 		#[arg(short, long)]
@@ -91,6 +92,9 @@ pub enum DebugCommand {
 		#[arg(long)]
 		all: bool,
 	},
+
+	/// Attempts to "rescue" all outlier PDUs in ALL rooms.
+	RescueRoomAll,
 
 	/// Get the room DAG as a list of PDUs in a range.
 	GetRoomDag {

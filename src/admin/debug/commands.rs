@@ -839,6 +839,38 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 }
 
 #[admin_command]
+pub(super) async fn rescue_room_all(&self) -> Result {
+	self.bail_restricted()?;
+
+	let mut room_ids = HashSet::new();
+	let mut outliers = self.services.rooms.outlier.stream();
+
+	while let Some((_, pdu)) = outliers.next().await {
+		if let Some(room_id) = pdu.room_id() {
+			room_ids.insert(room_id.to_owned());
+		}
+	}
+
+	if room_ids.is_empty() {
+		return self.write_str("No outliers found in any room.").await;
+	}
+
+	self.write_str(&format!("Found outliers in {} rooms. Starting rescue...", room_ids.len()))
+		.await?;
+
+	let mut total_rescued = 0_usize;
+	for room_id in room_ids {
+		if let Ok(res) = self.rescue_room(room_id.clone()).await {
+			// Extract count from the response string if possible, or just log
+			total_rescued = total_rescued.saturating_add(1);
+		}
+	}
+
+	self.write_str(&format!("Finished rescue attempt for {} rooms.", total_rescued))
+		.await
+}
+
+#[admin_command]
 pub(super) async fn get_room_dag(
 	&self,
 	room_id: OwnedRoomOrAliasId,

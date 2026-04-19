@@ -235,9 +235,30 @@ pub async fn handle_incoming_pdu<'a>(
 		.room_state_get(room_id, &StateEventType::RoomCreate, "")
 		.await?);
 
-	let (incoming_pdu, val) = self
-		.handle_outlier_pdu(origin, create_event, event_id, room_id, value, false)
-		.await?;
+	// Hybrid path: If dependencies exist, bypass outlier staging (fast-path).
+	// Otherwise, stage as an outlier (staging-path).
+	let (incoming_pdu, val) = if is_timeline_event {
+		let pdu_event = PduEvent::from_id_val(event_id, value.clone())?;
+		if self
+			.services
+			.timeline
+			.non_outlier_pdus_exist(pdu_event.prev_events().map(AsRef::as_ref))
+			.await
+		{
+			(pdu_event, value)
+		} else {
+			self.handle_outlier_pdu(origin, create_event, event_id, room_id, value, false)
+				.await?
+		}
+	} else {
+		self.handle_outlier_pdu(origin, create_event, event_id, room_id, value, false)
+			.await?
+	};
+
+	// 8. if not timeline event: stop
+	if !is_timeline_event {
+		return Ok(None);
+	}
 
 	// 8. if not timeline event: stop
 	if !is_timeline_event {
