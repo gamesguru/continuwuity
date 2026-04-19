@@ -230,22 +230,15 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 	) {
 		let _cork = self.db.db.cork();
-		let mut iv = Vec::with_capacity(DEQUEUE_LIMIT);
-		if !matches!(msg.event, SendingEvent::Flush) {
-			iv.push((msg.queue_id, msg.event));
-		}
-
-		if iv.len() < DEQUEUE_LIMIT {
-			let mut stream = self
-				.db
+		let iv = if !matches!(msg.event, SendingEvent::Flush) {
+			vec![(msg.queue_id, msg.event)]
+		} else {
+			self.db
 				.queued_requests(&msg.dest)
-				.take(DEQUEUE_LIMIT.saturating_sub(iv.len()));
-			while let Some((k, e)) = stream.next().await {
-				if !iv.iter().any(|(ik, _)| *ik == k) {
-					iv.push((k, e));
-				}
-			}
-		}
+				.take(DEQUEUE_LIMIT)
+				.collect::<Vec<_>>()
+				.await
+		};
 
 		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
