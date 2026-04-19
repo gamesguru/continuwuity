@@ -294,10 +294,7 @@ pub(super) async fn load_left_room(
 				| None => true,
 			};
 
-			let not_senders_ok = match &timeline_filter.not_senders {
-				| Some(not_senders) => !not_senders.contains(&pdu.sender),
-				| None => true,
-			};
+			let not_senders_ok = !timeline_filter.not_senders.contains(&pdu.sender);
 
 			types_ok && not_types_ok && senders_ok && not_senders_ok
 		})
@@ -357,10 +354,7 @@ pub(super) async fn load_left_room(
 				| None => true,
 			};
 
-			let not_senders_ok = match &state_filter.not_senders {
-				| Some(not_senders) => !not_senders.contains(&pdu.sender),
-				| None => true,
-			};
+			let not_senders_ok = !state_filter.not_senders.contains(&pdu.sender);
 
 			types_ok && not_types_ok && senders_ok && not_senders_ok
 		})
