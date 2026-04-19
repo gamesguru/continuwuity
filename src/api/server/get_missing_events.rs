@@ -53,18 +53,9 @@ pub(crate) async fn get_missing_events_route(
 	let mut queue: VecDeque<OwnedEventId> = VecDeque::from(body.latest_events.clone());
 	let mut results: Vec<Box<RawValue>> = Vec::with_capacity(limit);
 	let mut seen: HashSet<OwnedEventId> = HashSet::from_iter(body.earliest_events.clone());
+	seen.extend(body.latest_events.clone());
 
 	while let Some(next_event_id) = queue.pop_front() {
-		if seen.contains(&next_event_id) {
-			trace!(%next_event_id, "already seen event, skipping");
-			continue;
-		}
-
-		if results.len() >= limit {
-			debug!(%next_event_id, "reached limit of events to return, breaking");
-			break;
-		}
-
 		let mut pdu = match services.rooms.timeline.get_pdu(&next_event_id).await {
 			| Ok(pdu) => pdu,
 			| Err(e) => {
@@ -94,25 +85,25 @@ pub(crate) async fn get_missing_events_route(
 			prev_events = ?pdu.prev_events().collect::<Vec<_>>(),
 			"adding event to results and queueing prev events"
 		);
-		queue.extend(pdu.prev_events.clone());
-		seen.insert(next_event_id.clone());
-		if body.latest_events.contains(&next_event_id) {
-			continue; // Don't include latest_events in results,
-			// but do include their prev_events in the queue
+		for prev_event_id in pdu.prev_events() {
+			if seen.insert(prev_event_id.to_owned()) {
+				queue.push_back(prev_event_id.to_owned());
+			}
 		}
-		results.push(
-			services
-				.sending
-				.convert_to_outgoing_federation_event(to_canonical_object(pdu)?)
-				.await,
-		);
-		trace!(
-			%next_event_id,
-			queue_len = queue.len(),
-			seen_len = seen.len(),
-			results_len = results.len(),
-			"event added to results"
-		);
+
+		if !body.latest_events.contains(&next_event_id) {
+			results.push(
+				services
+					.sending
+					.convert_to_outgoing_federation_event(to_canonical_object(pdu)?)
+					.await,
+			);
+		}
+
+		if results.len() >= limit {
+			debug!(%next_event_id, "reached limit of events to return, breaking");
+			break;
+		}
 	}
 
 	if !queue.is_empty() {

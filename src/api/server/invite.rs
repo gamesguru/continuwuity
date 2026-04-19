@@ -2,103 +2,37 @@ use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use base64::{Engine as _, engine::general_purpose};
 use conduwuit::{
-	Err, Error, PduEvent, Result, err, error,
+	Err, PduEvent, Result, err, error,
 	matrix::{Event, event::gen_event_id},
-	utils::{self, hash::sha256},
+	utils::hash::sha256,
 	warn,
 };
 use ruma::{
-	CanonicalJsonValue, OwnedUserId, UserId,
-	api::{client::error::ErrorKind, federation::membership::create_invite},
-	events::{
-		invite_permission_config::FilterLevel,
-		room::member::{MembershipState, RoomMemberEventContent},
-	},
+	CanonicalJsonObject, CanonicalJsonValue, OwnedUserId, UserId,
+	api::federation::membership::create_invite, events::invite_permission_config::FilterLevel,
 	serde::JsonObject,
 };
 
-use crate::Ruma;
-
-/// # `PUT /_matrix/federation/v2/invite/{roomId}/{eventId}`
+/// # `POST /_matrix/federation/v2/invite/{roomId}/{eventId}`
 ///
-/// Invites a remote user to a room.
-#[tracing::instrument(skip_all, fields(%client), name = "invite", level = "info")]
+/// The recipient's server SHOULD return a 200 OK response to the sender's
+/// server, but MUST NOT notify the recipient of the invite.
 pub(crate) async fn create_invite_route(
 	State(services): State<crate::State>,
-	InsecureClientIp(client): InsecureClientIp,
-	body: Ruma<create_invite::v2::Request>,
+	InsecureClientIp(_client_ip): InsecureClientIp,
+	body: crate::Ruma<create_invite::v2::Request>,
 ) -> Result<create_invite::v2::Response> {
-	// ACL check origin
-	services
-		.rooms
-		.event_handler
-		.acl_check(body.origin(), &body.room_id)
-		.await?;
+	let mut signed_event: CanonicalJsonObject = serde_json::from_str(body.event.get())
+		.map_err(|e| err!(Request(BadJson("Invalid invite event PDU: {e}"))))?;
 
-	if !services.server.supported_room_version(&body.room_version) {
-		return Err(Error::BadRequest(
-			ErrorKind::IncompatibleRoomVersion { room_version: body.room_version.clone() },
-			"Server does not support this room version.",
-		));
-	}
-
-	if let Some(server) = body.room_id.server_name() {
-		if services.moderation.is_remote_server_forbidden(server) {
-			return Err!(Request(Forbidden("Server is banned on this homeserver.")));
-		}
-	}
-
-	if services
-		.moderation
-		.is_remote_server_forbidden(body.origin())
-	{
-		warn!(
-			"Received federated/remote invite from banned server {} for room ID {}. Rejecting.",
-			body.origin(),
-			body.room_id
-		);
-
-		return Err!(Request(Forbidden("Server is banned on this homeserver.")));
-	}
-
-	let mut signed_event = utils::to_canonical_object(&body.event)
-		.map_err(|_| err!(Request(InvalidParam("Invite event is invalid."))))?;
-
-	// Ensure this is a membership event
-	if signed_event
-		.get("type")
-		.expect("event must have a type")
-		.as_str()
-		.expect("type must be a string")
-		!= "m.room.member"
-	{
-		return Err!(Request(BadJson(
-			"Not allowed to send non-membership event to invite endpoint."
-		)));
-	}
-
-	let content: RoomMemberEventContent = serde_json::from_value(
-		signed_event
-			.get("content")
-			.ok_or_else(|| err!(Request(BadJson("Event missing content property"))))?
-			.clone()
-			.into(),
-	)
-	.map_err(|e| err!(Request(BadJson(warn!("Event content is empty or invalid: {e}")))))?;
-
-	// Ensure this is an invite membership event
-	if content.membership != MembershipState::Invite {
-		return Err!(Request(BadJson(
-			"Not allowed to send a non-invite membership event to invite endpoint."
-		)));
-	}
-
-	// Ensure the sending user isn't a lying bozo
+	// Ensure the sender's server matches the origin server
 	let sender_server = signed_event
 		.get("sender")
-		.try_into()
-		.map(UserId::server_name)
-		.map_err(|e| err!(Request(InvalidParam("Invalid sender property: {e}"))))?;
+		.and_then(CanonicalJsonValue::as_str)
+		.and_then(|sender| UserId::parse(sender).ok())
+		.map(|user_id| user_id.server_name().to_owned())
+		.ok_or_else(|| err!(Request(InvalidParam("Invalid sender property"))))?;
+
 	if sender_server != body.origin() {
 		return Err!(Request(Forbidden("Sender's server does not match the origin server.",)));
 	}
@@ -106,9 +40,10 @@ pub(crate) async fn create_invite_route(
 	// Ensure the target user belongs to this server
 	let recipient_user: OwnedUserId = signed_event
 		.get("state_key")
-		.try_into()
+		.and_then(CanonicalJsonValue::as_str)
+		.and_then(|state_key| UserId::parse(state_key).ok())
 		.map(UserId::to_owned)
-		.map_err(|e| err!(Request(InvalidParam("Invalid state_key property: {e}"))))?;
+		.ok_or_else(|| err!(Request(InvalidParam("Invalid state_key property"))))?;
 
 	if !services
 		.globals
@@ -137,8 +72,9 @@ pub(crate) async fn create_invite_route(
 
 	let sender_user: &UserId = signed_event
 		.get("sender")
-		.try_into()
-		.map_err(|e| err!(Request(InvalidParam("Invalid sender property: {e}"))))?;
+		.and_then(CanonicalJsonValue::as_str)
+		.and_then(|sender| UserId::parse(sender).ok())
+		.ok_or_else(|| err!(Request(InvalidParam("Invalid sender property"))))?;
 
 	if services.rooms.metadata.is_banned(&body.room_id).await
 		&& !services.users.is_admin(&recipient_user).await
@@ -156,8 +92,21 @@ pub(crate) async fn create_invite_route(
 		.invite_filter_level(sender_user, &recipient_user)
 		.await;
 
-	if matches!(recipient_filter_level, FilterLevel::Block) {
-		return Err!(Request(Forbidden("{recipient_user} has blocked invites from you.")));
+	match recipient_filter_level {
+		| FilterLevel::Block => {
+			return Err!(Request(InviteBlocked(
+				"{recipient_user} has blocked invites from you."
+			)));
+		},
+		| FilterLevel::Ignore => {
+			return Ok(create_invite::v2::Response {
+				event: services
+					.sending
+					.convert_to_outgoing_federation_event(signed_event)
+					.await,
+			});
+		},
+		| FilterLevel::Allow => {},
 	}
 
 	if let Err(e) = services
