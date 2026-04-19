@@ -720,7 +720,17 @@ async fn join_room_by_id_helper_remote(
 		};
 
 		if let Some(prev_pdu) = prev_pdu {
-			if let Ok(content) = to_canonical_object(Event::get_content_as_value(&prev_pdu)) {
+			if let Ok(mut content) = to_canonical_object(Event::get_content_as_value(&prev_pdu)) {
+				// MSC: Preserve is_direct flag in prev_content
+				if let Some(unsigned) = prev_pdu.unsigned() {
+					if let Ok(unsigned_obj) =
+						serde_json::from_str::<CanonicalJsonObject>(unsigned.get())
+					{
+						if let Some(is_direct) = unsigned_obj.get("is_direct") {
+							content.insert("is_direct".to_owned(), is_direct.clone());
+						}
+					}
+				}
 				prev_content = Some(content);
 			}
 			prev_sender = Some(prev_pdu.sender.to_string());

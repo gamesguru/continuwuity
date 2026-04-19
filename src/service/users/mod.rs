@@ -151,8 +151,14 @@ impl Service {
 	}
 
 	fn glob_match(glob: &str, target: &str) -> bool {
+		let has_wildcard = glob.contains('*') || glob.contains('?');
 		let mut regex_str = String::with_capacity(glob.len().saturating_mul(2).saturating_add(2));
-		regex_str.push('^');
+		if !has_wildcard {
+			regex_str.push_str(".*");
+		} else {
+			regex_str.push('^');
+		}
+
 		for c in glob.chars() {
 			match c {
 				| '*' => regex_str.push_str(".*"),
@@ -164,7 +170,13 @@ impl Service {
 				| _ => regex_str.push(c),
 			}
 		}
-		regex_str.push('$');
+
+		if !has_wildcard {
+			regex_str.push_str(".*");
+		} else {
+			regex_str.push('$');
+		}
+
 		regex::Regex::new(&regex_str)
 			.map(|re| re.is_match(target))
 			.unwrap_or(false)
@@ -244,25 +256,25 @@ impl Service {
 					if allowed_user {
 						return FilterLevel::Allow;
 					}
-					// 2. ignored_users
-					if ignored_user {
-						return FilterLevel::Ignore;
-					}
-					// 3. blocked_users
+					// 2. blocked_users
 					if blocked_user {
 						return FilterLevel::Block;
+					}
+					// 3. ignored_users
+					if ignored_user {
+						return FilterLevel::Ignore;
 					}
 					// 4. allowed_servers
 					if allowed_server {
 						return FilterLevel::Allow;
 					}
-					// 5. ignored_servers
-					if ignored_server {
-						return FilterLevel::Ignore;
-					}
-					// 6. blocked_servers
+					// 5. blocked_servers
 					if blocked_server {
 						return FilterLevel::Block;
+					}
+					// 6. ignored_servers
+					if ignored_server {
+						return FilterLevel::Ignore;
 					}
 
 					// 7. Default behavior
