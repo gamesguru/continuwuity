@@ -21,9 +21,8 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use lettre::message::Mailbox;
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
-	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId,
-	api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
+	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
+	RoomVersionId, api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -41,24 +40,20 @@ pub(super) async fn echo(&self, message: Vec<String>) -> Result {
 
 #[admin_command]
 pub(super) async fn get_auth_chain(&self, event_id: OwnedEventId) -> Result {
-	let Ok(event) = self.services.rooms.timeline.get_pdu_json(&event_id).await else {
+	let Ok(event) = self.services.rooms.timeline.get_pdu(&event_id).await else {
 		return Err!("Event not found.");
 	};
 
-	let room_id_str = event
-		.get("room_id")
-		.and_then(CanonicalJsonValue::as_str)
-		.ok_or_else(|| err!(Database("Invalid event in database")))?;
-
-	let room_id = <&RoomId>::try_from(room_id_str)
-		.map_err(|_| err!(Database("Invalid room id field in event in database")))?;
+	let room_id = event
+		.room_id_or_hash()
+		.ok_or_else(|| err!(Database("Event has no room_id")))?;
 
 	let start = Instant::now();
 	let count = self
 		.services
 		.rooms
 		.auth_chain
-		.event_ids_iter(room_id, once(event_id.as_ref()))
+		.event_ids_iter(&room_id, once(event_id.as_ref()))
 		.ready_filter_map(Result::ok)
 		.count()
 		.await;
@@ -582,11 +577,13 @@ pub(super) async fn force_set_room_state_from_server(
 			continue;
 		};
 
-		let pdu = PduEvent::from_id_val(&event_id, value.clone()).map_err(|e| {
+		let pdu = PduEvent::from_id_val(&event_id, value.clone(), None).map_err(|e| {
 			debug_error!("Invalid PDU in fetching remote room state PDUs response: {value:#?}");
 			err!(BadServerResponse(debug_error!("Invalid PDU in send_join response: {e:?}")))
 		})?;
-
+		if pdu.room_id_or_hash().as_deref() != Some(room_id.as_ref()) {
+			return Err!(BadServerResponse("Remote room_state PDU belongs to a different room"));
+		}
 		self.services
 			.rooms
 			.outlier

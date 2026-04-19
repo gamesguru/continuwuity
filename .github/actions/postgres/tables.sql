@@ -22,12 +22,13 @@ CREATE TABLE IF NOT EXISTS runs (
     binary_sha256 text,
     n_pass integer DEFAULT 0,
     n_skip integer DEFAULT 0,
-    n_fail integer DEFAULT 0
+    n_fail integer DEFAULT 0,
+    room_version text
 );
 
 -- Unique index to prevent duplicate machine reports
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_machine_run
-ON runs (commit_hash, run_date, arch, os, profile) NULLS NOT DISTINCT;
+ON runs (commit_hash, run_date, arch, os, profile, room_version) NULLS NOT DISTINCT;
 
 -- Create run_details table
 CREATE TABLE IF NOT EXISTS run_details (
@@ -58,6 +59,7 @@ SELECT
     r.branch,
     r.arch,
     r.os,
+    r.room_version,
     r.features,
     r.profile,
     r.n_pass,
