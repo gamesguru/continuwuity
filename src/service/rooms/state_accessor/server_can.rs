@@ -31,36 +31,34 @@ pub async fn server_can_see_event(
 		}
 	}
 
-	let Ok(shortstatehash) = self.pdu_shortstatehash(&event_id).await else {
-		// Fallback: If we don't know the state at the event, use current room
-		// visibility
-		if self.is_world_readable(&room_id).await {
-			return true;
-		}
+	// Fast path: check current room visibility
+	if self.is_world_readable(&room_id).await {
+		return true;
+	}
 
-		let server_is_participant = self
-			.services
-			.state_cache
-			.server_is_participant(&origin, &room_id)
-			.await;
+	let server_is_participant = self
+		.services
+		.state_cache
+		.server_is_participant(&origin, &room_id)
+		.await;
 
-		if server_is_participant {
-			if let Ok(shortstatehash) =
-				self.services.state.get_room_shortstatehash(&room_id).await
-			{
-				let history_visibility = self
-					.state_get_content(shortstatehash, &StateEventType::RoomHistoryVisibility, "")
-					.await
-					.map_or(HistoryVisibility::Shared, |c: RoomHistoryVisibilityEventContent| {
-						c.history_visibility
-					});
+	if server_is_participant {
+		if let Ok(shortstatehash) = self.services.state.get_room_shortstatehash(&room_id).await {
+			let history_visibility = self
+				.state_get_content(shortstatehash, &StateEventType::RoomHistoryVisibility, "")
+				.await
+				.map_or(HistoryVisibility::Shared, |c: RoomHistoryVisibilityEventContent| {
+					c.history_visibility
+				});
 
-				if history_visibility == HistoryVisibility::Shared {
-					return true;
-				}
+			if history_visibility == HistoryVisibility::Shared {
+				return true;
 			}
 		}
+	}
 
+	// Fallback to strict historical check
+	let Ok(shortstatehash) = self.pdu_shortstatehash(&event_id).await else {
 		return server_is_participant;
 	};
 
@@ -75,10 +73,7 @@ pub async fn server_can_see_event(
 		| HistoryVisibility::WorldReadable => true,
 		| HistoryVisibility::Shared => {
 			// Spec: all servers whose users have joined the room can see all history
-			self.services
-				.state_cache
-				.server_is_participant(&origin, &room_id)
-				.await
+			server_is_participant
 		},
 		| HistoryVisibility::Invited => {
 			// Allow if any member on requesting server was AT LEAST invited at that state
