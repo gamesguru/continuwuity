@@ -917,7 +917,7 @@ impl Service {
 		let result = self
 			.services
 			.federation
-			.execute_on(&self.services.client.sender, &server, request)
+			.execute_on(&crate::client::ClientType::Sender, &server, request)
 			.await;
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {

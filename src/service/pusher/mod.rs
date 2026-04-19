@@ -220,7 +220,12 @@ impl Service {
 			}
 		}
 
-		let response = self.services.client.pusher.execute(reqwest_request).await;
+		let response = self
+			.services
+			.client
+			.get_client(&client::ClientType::Pusher, reqwest_request.url())
+			.execute(reqwest_request)
+			.await;
 
 		match response {
 			| Ok(mut response) => {

@@ -1851,6 +1851,15 @@
 #
 #allow_web_indexing = false
 
+# a regular expression for destinations whose tls certificates are NOT
+# checked
+#
+# This is useful for overlay networks like TOR/I2P. This is not documented
+# as this should not be a quick fix for your friends server having
+# invalid certs
+#
+#insecure_skip_tls_validation_for_servers = []
+
 [global.tls]
 
 # Path to a valid TLS certificate file.

@@ -40,7 +40,13 @@ impl Service {
 		T: ruma::api::OutgoingRequest + Debug + Send,
 	{
 		sending::antispam::send_antispam_request(
-			&self.services.client.appservice,
+			self.services.client.get_client(
+				&client::ClientType::Appservice,
+				&reqwest::Url::parse(base_url).expect(
+					"service::antispam: send_antispam_request: failed to parse base_url as \
+					 reqwest::Url",
+				),
+			),
 			base_url,
 			secret,
 			request,

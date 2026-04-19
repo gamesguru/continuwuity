@@ -2156,6 +2156,15 @@ pub struct Config {
 	#[serde(default)]
 	pub allow_web_indexing: bool,
 
+	/// a regular expression for destinations whose tls certificates are NOT
+	/// checked
+	///
+	/// This is useful for overlay networks like TOR/I2P. This is not documented
+	/// as this should not be a quick fix for your friends server having
+	/// invalid certs
+	#[serde(default, with = "serde_regex")]
+	pub insecure_skip_tls_validation_for_servers: RegexSet,
+
 	/// display: nested
 	#[serde(default)]
 	pub ldap: LdapConfig,

@@ -60,12 +60,19 @@ where
 
 	let reqwest_request = reqwest::Request::try_from(http_request)?;
 
-	let client = &self.services.client.appservice;
-
-	let mut response = client.execute(reqwest_request).await.map_err(|e| {
-		warn!("Could not send request to appservice \"{}\" at {dest}: {e:?}", registration.id);
-		e
-	})?;
+	let mut response = self
+		.services
+		.client
+		.get_client(&crate::client::ClientType::Appservice, reqwest_request.url())
+		.execute(reqwest_request)
+		.await
+		.map_err(|e| {
+			warn!(
+				"Could not send request to appservice \"{}\" at {dest}: {e:?}",
+				registration.id
+			);
+			e
+		})?;
 
 	// reqwest::Response -> http::Response conversion
 	let status = response.status();
