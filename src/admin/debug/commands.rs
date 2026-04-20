@@ -1492,15 +1492,24 @@ pub(super) async fn repair_dag(
 	drop(latest);
 
 	while let Some(event_id) = queue.pop_front() {
-		if seen.contains(&event_id)
-			|| self
-				.services
-				.rooms
-				.timeline
-				.get_pdu_json(&event_id)
-				.await
-				.is_ok()
-		{
+		let is_in_timeline = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok();
+		let is_soft_failed = self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_soft_failed(&event_id)
+			.await;
+
+		// If we already have it in the timeline and it is NOT soft-failed, we can skip
+		// it. Otherwise, we need to treat it as a "hole" or "broken link" and ensure
+		// its ancestors are healthy.
+		if seen.contains(&event_id) || (is_in_timeline && !is_soft_failed) {
 			continue;
 		}
 
