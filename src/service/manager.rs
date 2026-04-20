@@ -74,48 +74,22 @@ impl Manager {
 	}
 
 	pub(super) async fn stop(&self) {
-		if let Some(mut manager) = self.manager.lock().await.take() {
+		if let Some(manager) = self.manager.lock().await.take() {
 			debug!("Waiting for service manager...");
 
-			match tokio::time::timeout(Duration::from_secs(10), &mut manager).await {
-				| Ok(result) => match result {
-					| Ok(Ok(())) => {
-						info!("All workers shut down gracefully.");
-					},
-					| Ok(Err(e)) => {
-						error!("Manager shutdown error: {e:?}");
-					},
-					| Err(e) => {
-						error!("Manager shutdown error: {e:?}");
-					},
+			// Workers already implement graceful shutdown via interrupt()
+			// (channel close) and their own internal drain timeouts (e.g.
+			// sender_shutdown_timeout). We must NOT hard-abort them or we
+			// lose in-flight transactions. Just await completion.
+			match manager.await {
+				| Ok(Ok(())) => {
+					info!("All workers shut down gracefully.");
 				},
-				| Err(_) => {
-					error!("Shutdown timeout hit! Aborting supervisor and remaining workers...");
-
-					// Abort the supervisor task so it can eventually release the
-					// `self.workers` mutex, but do not wait indefinitely for that to
-					// happen here.
-					manager.abort();
-
-					match tokio::time::timeout(Duration::from_secs(1), self.workers.lock()).await
-					{
-						| Ok(mut workers) => {
-							workers.abort_all();
-
-							// Drain the JoinSet with a short bounded timeout so Tokio
-							// can drop the aborted tasks' memory and Arc references.
-							let _ = tokio::time::timeout(Duration::from_millis(1000), async {
-								while workers.join_next().await.is_some() {}
-							})
-							.await;
-						},
-						| Err(_) => {
-							error!(
-								"Timed out waiting for worker set lock after aborting \
-								 supervisor; remaining workers may still be shutting down."
-							);
-						},
-					}
+				| Ok(Err(e)) => {
+					error!("Manager shutdown error: {e:?}");
+				},
+				| Err(e) => {
+					error!("Manager task error: {e:?}");
 				},
 			}
 		}
