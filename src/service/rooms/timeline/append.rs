@@ -294,14 +294,15 @@ where
 			.await;
 	}
 
+	let (notifies_len, highlights_len) = (notifies.len(), highlights.len());
 	self.db
-		.increment_notification_counts(room_id, notifies.clone(), highlights.clone());
+		.increment_notification_counts(room_id, notifies, highlights);
 
-	if !notifies.is_empty() || !highlights.is_empty() {
+	if notifies_len > 0 || highlights_len > 0 {
 		conduwuit::debug!(
 			%room_id,
-			notifies = notifies.len(),
-			highlights = highlights.len(),
+			notifies = notifies_len,
+			highlights = highlights_len,
 			targets = push_target.len(),
 			"push notifications"
 		);

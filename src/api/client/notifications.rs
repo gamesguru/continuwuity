@@ -1,7 +1,7 @@
 use std::cmp::{Ordering, Reverse};
 
 use axum::extract::State;
-use conduwuit::{Err, Result, matrix::pdu::PduCount, warn};
+use conduwuit::{Err, Event, Result, matrix::pdu::PduCount, warn};
 use futures::StreamExt;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, UInt,
@@ -88,6 +88,7 @@ pub(crate) async fn get_notifications_route(
 		});
 		(ts, pdu_count)
 	});
+	let start_ts_uint = UInt::new(start_ts).unwrap_or(UInt::MAX);
 
 	let sender_user = body.sender_user();
 
@@ -112,9 +113,9 @@ pub(crate) async fn get_notifications_route(
 	let mut rooms_stream =
 		std::pin::pin!(services.rooms.user.stream_notification_counts(sender_user));
 
-	while let Some((room_id, count)) = rooms_stream.next().await {
-		let room_id = match room_id {
-			| Ok(room_id) => room_id,
+	while let Some(result) = rooms_stream.next().await {
+		let (room_id, count) = match result {
+			| Ok((room_id, count)) => (room_id, count),
 			| Err(e) => {
 				warn!("Failed to get room_id from notification stream: {e}");
 				continue;
@@ -169,14 +170,14 @@ pub(crate) async fn get_notifications_route(
 		// is older than any in our list
 		loop {
 			let (pdu_count, pdu) = match pdus.next().await {
-				Some(Ok((pdu_count, pdu))) => (pdu_count, pdu),
-				Some(Err(error)) => {
+				| Some(Ok((pdu_count, pdu))) => (pdu_count, pdu),
+				| Some(Err(error)) => {
 					warn!(
 						"Failed to read notification PDU while scanning room {room_id}: {error}"
 					);
 					continue;
 				},
-				None => break,
+				| None => break,
 			};
 			scanned = scanned.saturating_add(1);
 			if scanned > max_pdus_per_room || pdu_count <= PduCount::Normal(last_read) {
@@ -190,7 +191,6 @@ pub(crate) async fn get_notifications_route(
 
 			// Skip events newer than or equal to start_ts/start_pdu_count
 			let pdu_ts = pdu.origin_server_ts;
-			let start_ts_uint = UInt::new(start_ts).unwrap_or(UInt::MAX);
 
 			if pdu_ts > start_ts_uint {
 				continue;
