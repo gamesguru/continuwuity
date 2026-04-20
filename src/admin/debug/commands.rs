@@ -898,6 +898,26 @@ pub(super) async fn rescue_room(
 }
 
 #[admin_command]
+pub(super) async fn reorder_timeline(&self, room_id: OwnedRoomId) -> Result {
+	self.bail_restricted()?;
+
+	self.write_str(&format!("Reordering timeline for {room_id} by origin_server_ts..."))
+		.await?;
+
+	let count = self
+		.services
+		.rooms
+		.timeline
+		.reorder_timeline(&room_id)
+		.await?;
+
+	self.write_str(&format!(
+		"Reordered {count} PDUs in room {room_id}. Clients should re-sync this room."
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn get_room_dag(
 	&self,
 	room_id: OwnedRoomOrAliasId,
@@ -1610,8 +1630,20 @@ pub(super) async fn heal_room(
 			.await?;
 	}
 
-	// Phase 4: Resync state from the remote server
-	self.write_str("Phase 4: Resyncing room state from server...")
+	// Phase 4: Reorder timeline by origin_server_ts so auth checks work correctly
+	self.write_str("Phase 4: Reordering timeline by timestamp...")
+		.await?;
+	let reordered = self
+		.services
+		.rooms
+		.timeline
+		.reorder_timeline(&room_id)
+		.await?;
+	self.write_str(&format!("Phase 4: Reordered {reordered} PDUs."))
+		.await?;
+
+	// Phase 5: Resync state from the remote server
+	self.write_str("Phase 5: Resyncing room state from server...")
 		.await?;
 	Box::pin(self.force_set_room_state_from_server(room_id, server, None)).await
 }

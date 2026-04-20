@@ -138,6 +138,15 @@ pub enum DebugCommand {
 		dry_run: bool,
 	},
 
+	/// Reorder the timeline for a room by origin_server_ts.
+	///
+	/// Fixes anachronisms caused by rescued outliers being appended at the
+	/// end of the timeline instead of in chronological order.
+	ReorderTimeline {
+		/// The room ID.
+		room_id: OwnedRoomId,
+	},
+
 	/// Get the room DAG as a list of PDUs in a range.
 	GetRoomDag {
 		/// Room ID

@@ -176,6 +176,93 @@ impl Service {
 		self.db.reindex_timeline(room_id).await
 	}
 
+	/// Reorder the timeline for a room using topological sort.
+	///
+	/// Reads all PDUs, builds the DAG from `prev_events`, performs
+	/// Kahn's topological sort (via `lexicographical_topological_sort`)
+	/// with `origin_server_ts` as tiebreaker, then re-inserts with fresh
+	/// sequential `PduCount::Normal` values. This fixes anachronisms
+	/// caused by rescued outliers being appended at the end of the
+	/// timeline.
+	pub async fn reorder_timeline(&self, room_id: &RoomId) -> Result<usize> {
+		use std::collections::{HashMap, HashSet};
+
+		use conduwuit_core::matrix::state_res;
+		use futures::future::ready;
+
+		let shortroomid = self
+			.services
+			.short
+			.get_shortroomid(room_id)
+			.await
+			.map_err(|_| err!(Database("Room does not exist")))?;
+
+		let _cork = self.db.db.cork();
+
+		// Collect all PDUs from the timeline
+		let mut entries: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = HashMap::new();
+		{
+			let pdus = self.pdus(room_id, None);
+			pin_mut!(pdus);
+			while let Some((_, pdu)) = pdus.try_next().await? {
+				if let Ok(json) = self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
+					let eid = pdu.event_id.clone();
+					entries.insert(eid, (pdu, json));
+				}
+			}
+		}
+
+		if entries.is_empty() {
+			return Ok(0);
+		}
+
+		// Build the DAG graph for topological sort
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
+			HashMap::with_capacity(entries.len());
+		for (event_id, (pdu, _)) in &entries {
+			let mut parents = HashSet::new();
+			for prev_id in pdu.prev_events() {
+				if entries.contains_key(prev_id) {
+					parents.insert(prev_id.to_owned());
+				}
+			}
+			graph.insert(event_id.clone(), parents);
+		}
+
+		// Topological sort with origin_server_ts as tiebreaker
+		let event_fetch = |event_id: OwnedEventId| {
+			let ts = entries
+				.get(&event_id)
+				.map_or_else(|| ruma::uint!(0), |(p, _)| p.origin_server_ts);
+			ready(Ok::<_, state_res::Error>((
+				ruma::int!(0),
+				ruma::MilliSecondsSinceUnixEpoch(ts),
+			)))
+		};
+
+		let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
+			.await
+			.map_err(|e| err!(Database("Failed to sort timeline: {e:?}")))?;
+
+		// Remove old timeline entries
+		for event_id in &sorted {
+			self.db.remove_from_timeline(event_id).await;
+		}
+
+		// Re-insert in topological order with fresh PduCount values
+		let count = sorted.len();
+		for event_id in &sorted {
+			let (pdu, json) = entries.get(event_id).expect("in sorted list");
+			let new_count = self.services.globals.next_count()?;
+			let pdu_count = PduCount::Normal(new_count);
+			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+
+			self.db.append_pdu(&pdu_id, pdu, json, pdu_count).await;
+		}
+
+		Ok(count)
+	}
+
 	/// Returns the json of a pdu.
 	#[inline]
 	pub async fn get_non_outlier_pdu_json(
