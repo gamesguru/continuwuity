@@ -102,8 +102,11 @@ pub fn add_pdu_outlier(&self, event_id: &EventId, pdu: &CanonicalJsonObject) {
 		.and_then(|r| <&RoomId>::try_from(r).ok())
 		.map(ToOwned::to_owned)
 		.or_else(|| {
-			let is_create = pdu.get("type").and_then(CanonicalJsonValue::as_str) == Some("m.room.create");
-			is_create.then(|| event_id.as_str().replace("$", "!")).and_then(|r| OwnedRoomId::parse(r).ok())
+			let is_create =
+				pdu.get("type").and_then(CanonicalJsonValue::as_str) == Some("m.room.create");
+			is_create
+				.then(|| event_id.as_str().replace('$', "!"))
+				.and_then(|r| OwnedRoomId::parse(r).ok())
 		});
 
 	if let Some(room_id) = room_id {
