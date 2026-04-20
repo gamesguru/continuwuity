@@ -353,37 +353,6 @@ pub async fn join_room_by_id_helper(
 		}
 	}
 
-	let mut is_direct = services
-		.rooms
-		.state_cache
-		.invite_state(sender_user, room_id)
-		.await
-		.unwrap_or_default()
-		.into_iter()
-		.filter_map(|e| e.deserialize().ok())
-		.find_map(|e| match e {
-			| ruma::events::AnyStrippedStateEvent::RoomMember(m)
-				if m.state_key == sender_user.as_str()
-					&& m.content.membership == MembershipState::Invite =>
-				Some(m.content.is_direct),
-			| _ => None,
-		});
-
-	if is_direct.is_none() {
-		if let Ok(member_event) = services
-			.rooms
-			.state_accessor
-			.get_member(room_id, sender_user)
-			.await
-		{
-			if member_event.membership == MembershipState::Invite {
-				is_direct = Some(member_event.is_direct);
-			}
-		}
-	}
-
-	let is_direct = is_direct.flatten();
-
 	if server_in_room {
 		join_room_by_id_helper_local(
 			services,
@@ -392,7 +361,6 @@ pub async fn join_room_by_id_helper(
 			reason,
 			servers,
 			state_lock,
-			is_direct,
 			json_body,
 		)
 		.boxed()
@@ -406,7 +374,6 @@ pub async fn join_room_by_id_helper(
 			reason,
 			servers,
 			state_lock,
-			is_direct,
 			json_body,
 		)
 		.boxed()
@@ -883,7 +850,6 @@ async fn join_room_by_id_helper_local(
 	reason: Option<String>,
 	servers: &[OwnedServerName],
 	state_lock: RoomMutexGuard,
-	is_direct: Option<bool>,
 	json_body: Option<&CanonicalJsonValue>,
 ) -> Result {
 	info!("Joining room locally");
@@ -988,7 +954,6 @@ async fn join_room_by_id_helper_local(
 		reason,
 		servers,
 		state_lock,
-		is_direct,
 		json_body,
 	))
 	.await
