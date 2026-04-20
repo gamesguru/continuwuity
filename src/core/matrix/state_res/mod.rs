@@ -102,7 +102,7 @@ where
 	debug!(version = ?stateres_version, "State resolution starting");
 
 	// Split non-conflicting and conflicting state
-	let (unconflicted, conflicting) = separate(state_sets.into_iter());
+	let (mut unconflicted, mut conflicting) = separate(state_sets.into_iter());
 
 	debug!(count = unconflicted.len(), "non-conflicting events");
 	trace!(map = ?unconflicted, "non-conflicting events");
@@ -110,6 +110,15 @@ where
 	if conflicting.is_empty() {
 		debug!("no conflicting state found");
 		return Ok(unconflicted);
+	}
+
+	if stateres_version == StateResolutionVersion::V2_1 {
+		// MSC4297: For room versions > 11, the "clean" state is the empty set,
+		// and the "conflicting" state is the set of all state events in the set of
+		// states to resolve.
+		for (k, v) in unconflicted.drain() {
+			conflicting.insert(k, vec![v]);
+		}
 	}
 
 	debug!(count = conflicting.len(), "conflicting events");
@@ -132,7 +141,20 @@ where
 	// synapse says `full_set = {eid for eid in full_conflicted_set if eid in
 	// event_map}`
 	// Hydra: Also consider the conflicted state subgraph
-	let all_conflicted: HashSet<_> = get_auth_chain_diff(auth_chain_sets)
+	let auth_diff_stream = if stateres_version == StateResolutionVersion::V2_1 {
+		auth_chain_sets
+			.iter()
+			.flatten()
+			.cloned()
+			.collect::<HashSet<_>>()
+			.into_iter()
+			.stream()
+			.boxed()
+	} else {
+		get_auth_chain_diff(&auth_chain_sets).boxed()
+	};
+
+	let all_conflicted: HashSet<_> = auth_diff_stream
 		.chain(conflicting.into_values().flatten().stream())
 		.broad_filter_map(async |id| event_exists(id.clone()).await.then_some(id))
 		.chain(conflicted_state_subgraph.into_iter().stream())
