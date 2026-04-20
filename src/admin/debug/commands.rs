@@ -18,6 +18,7 @@ use conduwuit::{
 	},
 	warn,
 };
+use conduwuit_service::rooms::event_handler::upgrade_outlier_pdu::UpgradeOptions;
 use futures::{FutureExt, StreamExt, TryStreamExt, future::ready, pin_mut};
 use lettre::message::Mailbox;
 use ruma::{
@@ -569,8 +570,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Re
 			&create_event,
 			&origin,
 			&room_id,
-			force,
-			false,
+			UpgradeOptions { force, nuclear: false },
 		)
 		.await?;
 
@@ -913,7 +913,7 @@ pub(super) async fn get_room_dag(
 
 	let room_id = self.services.rooms.alias.resolve(&room_id).await?;
 	let pdus = self.services.rooms.timeline.all_pdus(&room_id);
-	futures::pin_mut!(pdus);
+	pin_mut!(pdus);
 
 	let mut i = 0_u64;
 	let mut count = 0_u64;

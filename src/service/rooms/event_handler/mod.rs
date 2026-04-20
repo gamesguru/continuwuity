@@ -9,7 +9,7 @@ mod parse_incoming_pdu;
 mod policy_server;
 mod resolve_state;
 mod state_at_incoming;
-mod upgrade_outlier_pdu;
+pub mod upgrade_outlier_pdu;
 
 use std::{collections::HashMap, fmt::Write, sync::Arc, time::Instant};
 

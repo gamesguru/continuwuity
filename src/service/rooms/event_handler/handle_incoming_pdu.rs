@@ -324,8 +324,7 @@ pub async fn handle_incoming_pdu<'a>(
 		create_event,
 		origin,
 		room_id,
-		false,
-		false,
+		UpgradeOptions { force: false, nuclear: false },
 	)
 	.boxed()
 	.await
