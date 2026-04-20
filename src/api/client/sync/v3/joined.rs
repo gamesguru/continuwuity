@@ -259,6 +259,7 @@ struct StateAndTimeline {
 
 /// Compute changes to the room's state and timeline.
 #[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all)]
 async fn build_state_and_timeline(
 	services: &Services,
 	sync_context: SyncContext<'_>,
@@ -323,10 +324,6 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	// the token which may be passed to the messages endpoint to backfill room
-	// history
-	let prev_batch = timeline.pdus.front().map(at!(0));
-
 	let user_has_join_event_in_sync = timeline
 		.pdus
 		.iter()
@@ -342,11 +339,32 @@ async fn build_state_and_timeline(
 				.is_ok_and(|c: RoomMemberEventContent| c.membership == MembershipState::Join)
 		});
 
-	// note: we always indicate a limited timeline if the syncing user just joined
-	// the room, to indicate to the client that it should request backfill (and to
-	// copy Synapse's behavior). for federated room joins, the `timeline` will
-	// usually only include the syncing user's join event.
-	let limited = timeline.limited || joined_since_last_sync || user_has_join_event_in_sync;
+	// note: we usually indicate a limited timeline if the syncing user just joined
+	// the room to trigger backfill (Synapse behavior). However, if the room
+	// actually has ZERO timeline events (e.g., a space), forcing `limited: true`
+	// causes clients to fail repeatedly to backfill.
+	let is_space = services
+		.rooms
+		.state_accessor
+		.get_room_type(room_id)
+		.await
+		.is_ok_and(|room_type| room_type == ruma::room::RoomType::Space);
+
+	let limited = if timeline.pdus.is_empty() {
+		timeline.limited || ((joined_since_last_sync || user_has_join_event_in_sync) && !is_space)
+	} else {
+		timeline.limited || joined_since_last_sync || user_has_join_event_in_sync
+	};
+
+	// the token which may be passed to the messages endpoint to backfill room
+	// history. If the timeline is empty, fallback to the start of this sync window
+	// to ensure clients always have a valid topological pagination token.
+	let prev_batch = timeline.pdus.front().map(at!(0)).or_else(|| {
+		limited
+			.then_some(())
+			.and(sync_context.last_sync_end_count)
+			.map(PduCount::Normal)
+	});
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
