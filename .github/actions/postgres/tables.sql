@@ -45,6 +45,8 @@ ON run_details (run_id, test_name);
 -- Performance indexes
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
+CREATE INDEX IF NOT EXISTS idx_run_details_test_run_status ON run_details (test_name, run_id, status);
+CREATE INDEX IF NOT EXISTS idx_runs_branch_date ON runs (branch, run_date DESC);
 
 -- Combine Regressions View: Compares directly against the most recent 'main' baseline
 CREATE OR REPLACE VIEW v_run_regressions AS

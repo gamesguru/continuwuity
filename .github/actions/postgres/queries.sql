@@ -63,7 +63,7 @@ SELECT
     new_fail,
     profile,
     room_version,
-    regexp_replace(features, '[,\\s]+', E'\n', 'g') AS features,
+    regexp_replace(features, '[,\\s]+', ', ', 'g') AS features,
     os,
     arch,
     {columns_tail}
