@@ -10,7 +10,7 @@ use conduwuit::{Pdu, Result, SyncMutex, err, utils::math::usize_from_f64};
 use database::Map;
 use lru_cache::LruCache;
 use ruma::{
-	EventEncryptionAlgorithm, JsOption, OwnedRoomAliasId, RoomId, UserId,
+	EventEncryptionAlgorithm, JsOption, OwnedEventId, OwnedRoomAliasId, RoomId, UserId,
 	events::{
 		StateEventType,
 		room::{
@@ -29,7 +29,7 @@ use ruma::{
 	room::RoomType,
 };
 
-use crate::{Dep, rooms};
+use crate::{Dep, rooms, rooms::short::ShortStateHash};
 
 pub struct Service {
 	services: Services,
@@ -203,5 +203,31 @@ impl Service {
 		self.room_state_cache
 			.lock()
 			.insert((room_id.to_owned(), event_type.clone(), state_key.to_owned()), Some(pdu));
+	}
+
+	pub async fn state_get(
+		&self,
+		shortstatehash: ShortStateHash,
+		event_type: &StateEventType,
+		state_key: &str,
+	) -> Result<Pdu> {
+		self.state_get_in_room(None, shortstatehash, event_type, state_key)
+			.await
+	}
+
+	pub async fn state_get_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		shortstatehash: ShortStateHash,
+		event_type: &StateEventType,
+		state_key: &str,
+	) -> Result<Pdu> {
+		let event_id: OwnedEventId = self
+			.state_get_id(shortstatehash, event_type, state_key)
+			.await?;
+		self.services
+			.timeline
+			.get_pdu_in_room(room_id, &event_id)
+			.await
 	}
 }

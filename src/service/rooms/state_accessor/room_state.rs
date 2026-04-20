@@ -102,7 +102,9 @@ pub async fn room_state_get(
 		);
 	}
 
-	let result = self.state_get(shortstatehash, event_type, state_key).await;
+	let result = self
+		.state_get_in_room(Some(room_id), shortstatehash, event_type, state_key)
+		.await;
 
 	if let Ok(pdu) = &result {
 		if *event_type == StateEventType::RoomMember {

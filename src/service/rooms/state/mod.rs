@@ -136,7 +136,12 @@ impl Service {
 							return true;
 						};
 
-						if let Ok(pdu) = self.services.timeline.get_pdu(&event_id).await {
+						if let Ok(pdu) = self
+							.services
+							.timeline
+							.get_pdu_in_room(Some(room_id), &event_id)
+							.await
+						{
 							match pdu.kind {
 								| TimelineEventType::RoomMember => {
 									if let Some(user_id) =
@@ -556,7 +561,7 @@ impl Service {
 			.broad_filter_map(|((ty, sk), event_id): (_, OwnedEventId)| async move {
 				self.services
 					.timeline
-					.get_pdu(&event_id)
+					.get_pdu_in_room(Some(room_id), &event_id)
 					.await
 					.map(move |pdu| (((*ty).clone(), (*sk).clone()), pdu))
 					.inspect_err(|e| warn!("Failed to get auth event {event_id}: {e:?}"))

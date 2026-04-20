@@ -207,7 +207,17 @@ impl Service {
 	/// Returns the pdu.
 	#[inline]
 	pub async fn get_non_outlier_pdu(&self, event_id: &EventId) -> Result<PduEvent> {
-		self.db.get_non_outlier_pdu(event_id).await
+		self.db.get_non_outlier_pdu_in_room(None, event_id).await
+	}
+
+	/// Returns the pdu, populating room_id.
+	#[inline]
+	pub async fn get_non_outlier_pdu_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		event_id: &EventId,
+	) -> Result<PduEvent> {
+		self.db.get_non_outlier_pdu_in_room(room_id, event_id).await
 	}
 
 	/// Returns the pdu.
@@ -215,7 +225,19 @@ impl Service {
 	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.
 	#[inline]
 	pub async fn get_pdu(&self, event_id: &EventId) -> Result<PduEvent> {
-		self.db.get_pdu(event_id).await
+		self.db.get_pdu_in_room(None, event_id).await
+	}
+
+	/// Returns the pdu, populating room_id.
+	///
+	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.
+	#[inline]
+	pub async fn get_pdu_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		event_id: &EventId,
+	) -> Result<PduEvent> {
+		self.db.get_pdu_in_room(room_id, event_id).await
 	}
 
 	/// Returns the pdu.
@@ -223,7 +245,19 @@ impl Service {
 	/// This does __NOT__ check the outliers `Tree`.
 	#[inline]
 	pub async fn get_pdu_from_id(&self, pdu_id: &RawPduId) -> Result<PduEvent> {
-		self.db.get_pdu_from_id(pdu_id).await
+		self.db.get_pdu_from_id_in_room(None, pdu_id).await
+	}
+
+	/// Returns the pdu, populating room_id.
+	///
+	/// This does __NOT__ check the outliers `Tree`.
+	#[inline]
+	pub async fn get_pdu_from_id_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		pdu_id: &RawPduId,
+	) -> Result<PduEvent> {
+		self.db.get_pdu_from_id_in_room(room_id, pdu_id).await
 	}
 
 	/// Returns the pdu as a `BTreeMap<String, CanonicalJsonValue>`.
@@ -244,12 +278,13 @@ impl Service {
 
 	pub fn multi_get_pdus<'a, S>(
 		&'a self,
+		room_id: Option<&'a RoomId>,
 		pdu_ids: S,
 	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a
 	where
 		S: Stream<Item = RawPduId> + Send + 'a,
 	{
-		self.db.multi_get_pdus(pdu_ids)
+		self.db.multi_get_pdus(room_id, pdu_ids)
 	}
 
 	/// Returns the shortstatehash of the room at the event directly preceding

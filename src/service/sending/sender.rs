@@ -9,6 +9,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use conduwuit::info;
 use conduwuit_core::{
 	Error, Event, Result, at, debug, err, error,
 	result::LogErr,
@@ -819,13 +820,16 @@ impl Service {
 					|ev: PushRulesEvent| ev.content.global,
 				);
 
-			let unread: UInt = self
-				.services
-				.user
-				.notification_count(&user_id, &pdu.room_id_or_hash())
-				.await
-				.try_into()
-				.expect("notification count can't go that high");
+			let unread: UInt = if let Some(room_id) = pdu.room_id_or_hash() {
+				self.services
+					.user
+					.notification_count(&user_id, &room_id)
+					.await
+					.try_into()
+					.expect("notification count can't go that high")
+			} else {
+				uint!(0)
+			};
 
 			let _response = self
 				.services
@@ -927,9 +931,12 @@ impl Service {
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {
 			if let Err(e) = result {
-				warn!(
-					%txn_id, %server,
-					"error sending PDU {event_id} to remote server: {e:?}"
+				info!(
+					%txn_id,
+					%server,
+					%event_id,
+					remote_error=?e,
+					"remote server encountered an error while processing an event"
 				);
 			}
 		}
