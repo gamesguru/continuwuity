@@ -44,6 +44,10 @@ pub enum DebugCommand {
 	RescuePdu {
 		/// An event ID (a $ followed by the base64 reference hash)
 		event_id: OwnedEventId,
+
+		/// If set, bypasses strict auth checks.
+		#[arg(short, long)]
+		force: bool,
 	},
 
 	/// List all outlier PDUs in our database.
@@ -71,6 +75,10 @@ pub enum DebugCommand {
 	RescueRoom {
 		/// The room ID.
 		room_id: OwnedRoomId,
+
+		/// If set, bypasses strict auth checks.
+		#[arg(short, long)]
+		force: bool,
 	},
 
 	/// Purge outlier PDUs that already exist in our timeline.

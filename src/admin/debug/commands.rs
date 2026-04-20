@@ -524,7 +524,7 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -563,7 +563,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
 	self.services
 		.rooms
 		.event_handler
-		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id)
+		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id, force)
 		.await?;
 
 	self.write_str("Successfully rescued PDU.").await
@@ -735,7 +735,7 @@ pub(super) async fn purge_outliers(
 }
 
 #[admin_command]
-pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
+pub(super) async fn rescue_room(&self, room_id: OwnedRoomId, force: bool) -> Result {
 	self.bail_restricted()?;
 
 	let outliers: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = self
@@ -813,6 +813,18 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 			.clone()
 			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
+		// Un-soft-fail the event so we can attempt to rescue it
+		self.services
+			.rooms
+			.pdu_metadata
+			.unmark_event_soft_failed(&event_id);
+
+		// Un-soft-fail the event so we can attempt to rescue it
+		self.services
+			.rooms
+			.pdu_metadata
+			.unmark_event_soft_failed(&event_id);
+
 		if self
 			.services
 			.rooms
@@ -823,6 +835,7 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
 				&create_event,
 				&origin,
 				&room_id,
+				force,
 			)
 			.await
 			.is_ok()
@@ -862,7 +875,7 @@ pub(super) async fn rescue_room_all(&self) -> Result {
 
 	let mut total_rescued = 0_usize;
 	for room_id in room_ids {
-		if self.rescue_room(room_id).boxed().await.is_ok() {
+		if self.rescue_room(room_id, false).boxed().await.is_ok() {
 			total_rescued = total_rescued.saturating_add(1);
 		}
 	}

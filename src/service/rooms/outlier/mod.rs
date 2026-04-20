@@ -96,11 +96,18 @@ pub fn room_stream<'a>(
 pub fn add_pdu_outlier(&self, event_id: &EventId, pdu: &CanonicalJsonObject) {
 	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
 
-	if let Some(room_id) = pdu
+	let room_id = pdu
 		.get("room_id")
 		.and_then(CanonicalJsonValue::as_str)
 		.and_then(|r| <&RoomId>::try_from(r).ok())
-	{
+		.map(ToOwned::to_owned)
+		.or_else(|| {
+			let is_create = pdu.get("type").and_then(CanonicalJsonValue::as_str) == Some("m.room.create");
+			is_create.then(|| event_id.as_str().replace("$", "!")).and_then(|r| OwnedRoomId::parse(r).ok())
+		});
+
+	if let Some(room_id) = room_id {
+		let room_id: &RoomId = &room_id;
 		let mut key = room_id.as_bytes().to_vec();
 		key.push(0xFF);
 		key.extend_from_slice(event_id.as_bytes());

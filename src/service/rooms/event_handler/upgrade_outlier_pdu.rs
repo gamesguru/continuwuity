@@ -32,6 +32,7 @@ pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	create_event: &Pdu,
 	origin: &ServerName,
 	room_id: &RoomId,
+	force: bool,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -125,7 +126,7 @@ where
 			.await
 			.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
-			if !auth_check {
+			if !auth_check && !force {
 				return Err!(Request(Forbidden(
 					"Event has failed auth check with state at the event."
 				)));
@@ -196,7 +197,7 @@ where
 		"Performing soft-fail check"
 	);
 	let mut soft_fail = match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
-		| (false, _) => true,
+		| (false, _) => !force,
 		| (true, None) => false,
 		| (true, Some(redact_id)) =>
 			!self
