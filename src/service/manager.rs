@@ -74,25 +74,10 @@ impl Manager {
 	}
 
 	pub(super) async fn stop(&self) {
-		if let Some(mut manager) = self.manager.lock().await.take() {
+		if let Some(manager) = self.manager.lock().await.take() {
 			debug!("Waiting for service manager...");
-
-			match tokio::time::timeout(Duration::from_secs(10), &mut manager).await {
-				| Ok(result) =>
-					if let Err(e) = result {
-						error!("Manager shutdown error: {e:?}");
-					} else {
-						info!("All workers shut down gracefully.");
-					},
-				| Err(_) => {
-					error!("Shutdown timeout hit! Aborting supervisor and remaining workers...");
-
-					// Abort the supervisor task so it releases the `self.workers` Mutex!
-					manager.abort();
-
-					// Now it is completely safe to lock and abort the inner workers.
-					self.workers.lock().await.abort_all();
-				},
+			if let Err(e) = manager.await {
+				error!("Manager shutdown error: {e:?}");
 			}
 		}
 	}

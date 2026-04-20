@@ -119,7 +119,6 @@ url.workspace = true
 parking_lot.workspace = true
 lock_api.workspace = true
 hyper-util.workspace = true
-tokio-util = "0.7.18"
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

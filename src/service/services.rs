@@ -52,7 +52,6 @@ pub struct Services {
 	pub(crate) service: Arc<Map>,
 	pub server: Arc<Server>,
 	pub db: Arc<Database>,
-	pub shutdown: tokio_util::sync::CancellationToken,
 }
 
 impl Services {
@@ -130,7 +129,6 @@ impl Services {
 			service,
 			server,
 			db,
-			shutdown: tokio_util::sync::CancellationToken::new(),
 		}))
 	}
 
