@@ -83,6 +83,10 @@ pub enum DebugCommand {
 		/// If set, forcefully re-processes existing timeline PDUs.
 		#[arg(long)]
 		nuclear: bool,
+
+		/// If set, rescues outliers in ALL rooms.
+		#[arg(long)]
+		all: bool,
 	},
 
 	/// Purge outlier PDUs that already exist in our timeline.
@@ -105,9 +109,6 @@ pub enum DebugCommand {
 		all: bool,
 	},
 
-	/// Attempts to "rescue" all outlier PDUs in ALL rooms.
-	RescueRoomAll,
-
 	/// Emergency command to re-import outliers from a JSONL file.
 	ImportOutliers {
 		/// The raw JSONL content.
@@ -122,21 +123,19 @@ pub enum DebugCommand {
 		server: OwnedServerName,
 	},
 
-	/// Fetches all missing auth chain events and repairs the room state.
-	RepairDag {
+	/// Heals a room by rescuing local outliers, fetching genuinely missing
+	/// events from federation, and resyncing state.
+	HealRoom {
 		/// The room ID.
 		room_id: OwnedRoomId,
-		/// The server to fetch from.
+		/// The server to fetch from for missing history.
 		server: OwnedServerName,
-
-		/// If set, only list missing events without fetching or rescuing.
-		#[arg(short, long)]
-		dry_run: bool,
-
-		/// If set, forcefully deletes local timeline PDUs and re-fetches them
-		/// to fix sorting/depths.
+		/// If set, forcefully re-processes existing timeline PDUs.
 		#[arg(long)]
 		nuclear: bool,
+		/// If set, only scans for gaps without making changes.
+		#[arg(long)]
+		dry_run: bool,
 	},
 
 	/// Get the room DAG as a list of PDUs in a range.

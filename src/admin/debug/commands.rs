@@ -748,8 +748,45 @@ pub(super) async fn rescue_room(
 	room_id: OwnedRoomId,
 	force: bool,
 	nuclear: bool,
+	all: bool,
 ) -> Result {
 	self.bail_restricted()?;
+
+	if all {
+		let mut room_ids: HashSet<OwnedRoomId> = HashSet::new();
+		let mut outliers = self.services.rooms.outlier.stream();
+
+		while let Some((_, pdu)) = outliers.next().await {
+			if let Some(room_id) = pdu.room_id() {
+				room_ids.insert(room_id.to_owned());
+			}
+		}
+		drop(outliers);
+
+		if room_ids.is_empty() {
+			return self.write_str("No outliers found in any room.").await;
+		}
+
+		self.write_str(&format!(
+			"Found outliers in {} rooms. Starting rescue...",
+			room_ids.len()
+		))
+		.await?;
+
+		let mut total_rescued = 0_usize;
+		for room_id in room_ids {
+			if Box::pin(self.rescue_room(room_id, force, nuclear, false))
+				.await
+				.is_ok()
+			{
+				total_rescued = total_rescued.saturating_add(1);
+			}
+		}
+
+		return self
+			.write_str(&format!("Finished rescue attempt for {total_rescued} rooms."))
+			.await;
+	}
 
 	let outliers: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = self
 		.services
@@ -832,12 +869,6 @@ pub(super) async fn rescue_room(
 			.pdu_metadata
 			.unmark_event_soft_failed(&event_id);
 
-		// Un-soft-fail the event so we can attempt to rescue it
-		self.services
-			.rooms
-			.pdu_metadata
-			.unmark_event_soft_failed(&event_id);
-
 		if self
 			.services
 			.rooms
@@ -863,42 +894,6 @@ pub(super) async fn rescue_room(
 	}
 
 	self.write_str(&format!("Rescued {count} PDUs in room {room_id}."))
-		.await
-}
-
-#[admin_command]
-pub(super) async fn rescue_room_all(&self) -> Result {
-	self.bail_restricted()?;
-
-	let mut room_ids = HashSet::new();
-	let mut outliers = self.services.rooms.outlier.stream();
-
-	while let Some((_, pdu)) = outliers.next().await {
-		if let Some(room_id) = pdu.room_id() {
-			room_ids.insert(room_id.to_owned());
-		}
-	}
-
-	if room_ids.is_empty() {
-		return self.write_str("No outliers found in any room.").await;
-	}
-
-	self.write_str(&format!("Found outliers in {} rooms. Starting rescue...", room_ids.len()))
-		.await?;
-
-	let mut total_rescued = 0_usize;
-	for room_id in room_ids {
-		if self
-			.rescue_room(room_id, false, false)
-			.boxed()
-			.await
-			.is_ok()
-		{
-			total_rescued = total_rescued.saturating_add(1);
-		}
-	}
-
-	self.write_str(&format!("Finished rescue attempt for {total_rescued} rooms."))
 		.await
 }
 
@@ -1480,110 +1475,144 @@ pub(super) async fn compare_room_state(
 }
 
 #[admin_command]
-pub(super) async fn repair_dag(
+pub(super) async fn heal_room(
 	&self,
 	room_id: OwnedRoomId,
 	server: OwnedServerName,
-	dry_run: bool,
 	nuclear: bool,
+	dry_run: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
+	// Phase 1: Rescue existing local outliers first (no network)
+	if !dry_run {
+		self.write_str(&format!("Phase 1: Rescuing local outliers in {room_id}..."))
+			.await?;
+		Box::pin(self.rescue_room(room_id.clone(), true, nuclear, false)).await?;
+	} else {
+		self.write_str(&format!("Phase 1: [dry-run] Would rescue local outliers in {room_id}"))
+			.await?;
+	}
+
+	// Phase 2: Walk the DAG to find genuinely missing events
+	self.write_str("Phase 2: Scanning DAG for gaps...").await?;
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
-	let latest = self
+	let latest_event_id = self
 		.services
 		.rooms
 		.timeline
 		.latest_pdu_in_room(&room_id)
+		.await?
+		.event_id()
+		.to_owned();
+
+	let latest = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu(&latest_event_id)
 		.await?;
 
-	self.write_str(&format!(
-		"Starting topological repair for {room_id} using {server} (dry_run: {dry_run}, nuclear: \
-		 {nuclear})..."
-	))
-	.await?;
-
 	let mut queue: std::collections::VecDeque<OwnedEventId> =
-		latest.auth_events().map(ToOwned::to_owned).collect();
-	queue.extend(latest.prev_events().map(ToOwned::to_owned));
-
+		latest.prev_events().map(ToOwned::to_owned).collect();
+	queue.extend(latest.auth_events().map(ToOwned::to_owned));
+	let mut seen = HashSet::<OwnedEventId>::new();
 	let mut fetched = 0_usize;
-	let mut seen = HashSet::new();
+	let mut local_found = 0_usize;
 	drop(latest);
 
 	while let Some(event_id) = queue.pop_front() {
-		let is_in_timeline = self
-			.services
-			.rooms
-			.timeline
-			.get_pdu_id(&event_id)
-			.await
-			.is_ok();
-		let is_soft_failed = self
-			.services
-			.rooms
-			.pdu_metadata
-			.is_event_soft_failed(&event_id)
-			.await;
+		if seen.contains(&event_id) {
+			continue;
+		}
+		seen.insert(event_id.clone());
 
-		// NUCLEAR MODE: If nuclear is set, we ignore that we have it in the timeline
-		// and re-process it.
-		let should_skip = if nuclear {
-			false
-		} else {
-			is_in_timeline && !is_soft_failed
-		};
-
-		if seen.contains(&event_id) || should_skip {
+		// Check local sources: timeline first, then outlier table
+		if let Ok(pdu) = self.services.rooms.timeline.get_pdu(&event_id).await {
+			// Already in timeline — just walk its parents (no fetch needed)
+			local_found = local_found.saturating_add(1);
+			if nuclear {
+				queue.extend(pdu.prev_events().map(ToOwned::to_owned));
+				queue.extend(pdu.auth_events().map(ToOwned::to_owned));
+			}
 			continue;
 		}
 
-		conduwuit::debug!("Fetching missing event {event_id}");
-		if let Ok(response) = self
+		// Check outlier table
+		if let Ok(pdu) = self.services.rooms.outlier.get_pdu_outlier(&event_id).await {
+			// Present locally as outlier — walk parents, rescue will handle it
+			local_found = local_found.saturating_add(1);
+			queue.extend(pdu.prev_events().map(ToOwned::to_owned));
+			queue.extend(pdu.auth_events().map(ToOwned::to_owned));
+			continue;
+		}
+
+		if dry_run {
+			fetched = fetched.saturating_add(1);
+			continue;
+		}
+
+		// Genuinely missing — fetch from federation
+		let Ok(response) = self
 			.services
 			.sending
 			.send_federation_request(&server, get_event::v1::Request::new(event_id.clone(), None))
 			.await
-		{
-			let Ok((eid, value)) = self
-				.services
-				.server_keys
-				.validate_and_add_event_id(&response.pdu, &room_version)
-				.await
-			else {
-				continue;
-			};
+		else {
+			continue;
+		};
 
-			let Ok(pdu) = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))
-			else {
-				continue;
-			};
+		let Ok((eid, value)) = self
+			.services
+			.server_keys
+			.validate_and_add_event_id(&response.pdu, &room_version)
+			.await
+		else {
+			continue;
+		};
 
-			if !dry_run {
-				self.services
-					.rooms
-					.outlier
-					.add_pdu_outlier(&eid, &value, Some(&room_id));
-			}
+		let Ok(pdu) = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref())) else {
+			continue;
+		};
 
-			queue.extend(pdu.auth_events().map(ToOwned::to_owned));
-			queue.extend(pdu.prev_events().map(ToOwned::to_owned));
-			fetched = fetched.saturating_add(1);
-			seen.insert(eid);
+		self.services
+			.rooms
+			.outlier
+			.add_pdu_outlier(&eid, &value, Some(&room_id));
+		queue.extend(pdu.prev_events().map(ToOwned::to_owned));
+		queue.extend(pdu.auth_events().map(ToOwned::to_owned));
+		fetched = fetched.saturating_add(1);
+
+		// Yield periodically to avoid blocking the executor
+		if fetched.is_multiple_of(10) {
+			tokio::task::yield_now().await;
 		}
 	}
 
-	self.write_str(&format!("Found {fetched} events to fetch/rescue."))
-		.await?;
+	self.write_str(&format!(
+		"Phase 2: Scanned {seen} events ({local_found} local, {fetched} {action})",
+		seen = seen.len(),
+		action = if dry_run { "would fetch" } else { "fetched" },
+	))
+	.await?;
 
 	if dry_run {
 		return self.write_str("Dry run complete. No changes made.").await;
 	}
 
-	self.write_str("Starting topological rescue...").await?;
-	Box::pin(self.rescue_room(room_id.clone(), true, nuclear)).await?;
+	// Phase 3: Rescue any newly-fetched outliers
+	if fetched > 0 {
+		self.write_str(&format!("Phase 3: Fetched {fetched} missing events, rescuing..."))
+			.await?;
+		Box::pin(self.rescue_room(room_id.clone(), true, nuclear, false)).await?;
+	} else {
+		self.write_str("Phase 3: No missing events found (DAG is complete locally).")
+			.await?;
+	}
 
-	self.write_str("Resyncing state...").await?;
+	// Phase 4: Resync state from the remote server
+	self.write_str("Phase 4: Resyncing room state from server...")
+		.await?;
 	Box::pin(self.force_set_room_state_from_server(room_id, server, None)).await
 }
 
