@@ -120,7 +120,7 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 				count.saturating_sub(1)
 			);
 			// Force flush via the shared reference anyway to protect the WAL
-			dangling_arc.force_flush_and_close().await;
+			dangling_arc.force_flush().await;
 		},
 	}
 

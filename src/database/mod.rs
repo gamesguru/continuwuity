@@ -97,8 +97,12 @@ impl Database {
 		}
 	}
 
+	/// Best-effort flush via a shared reference. This does **not** close or
+	/// tear down the database engine—it only sorts and syncs the WAL to disk.
+	/// Used as a fallback when exclusive ownership (`try_unwrap`) could not be
+	/// obtained due to dangling `Arc` references.
 	#[tracing::instrument(skip(self))]
-	pub async fn force_flush_and_close(&self) {
+	pub async fn force_flush(&self) {
 		conduwuit::warn!("Force flushing database via shared reference...");
 		let db = self.db.clone();
 		let (sort_result, sync_result) = tokio::task::spawn_blocking(move || {
