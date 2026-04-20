@@ -80,16 +80,22 @@ sql_file_path = os.path.join(os.path.dirname(__file__), "queries.sql")
 with open(sql_file_path, "r") as f:
     base_query_template = f.read()
 
+prefetch_limit = str(int(limit) * 4)
+
+if like_str == "all":
+    like_filter = ""
+else:
+    like_filter = f" AND r.version_string LIKE '%{like_str}%'"
+
 base_query = base_query_template.format(
     baseline_run_filter=baseline_run_filter,
     tz_sql=tz_sql,
-    columns_tail=columns_tail
+    columns_tail=columns_tail,
+    prefetch_limit=prefetch_limit,
+    like_filter=like_filter
 )
 
-if like_str == "all":
-    query = f"{base_query}\nORDER BY\n    {order}\nLIMIT {limit}"
-else:
-    query = f"{base_query}\nWHERE\n    version_string LIKE '%{like_str}%'\nORDER BY\n    {order}\nLIMIT {limit}"
+query = f"{base_query}\nORDER BY\n    {order}\nLIMIT {limit}"
 
 print(f"\nExecuting Query:\n{query}\n")
 

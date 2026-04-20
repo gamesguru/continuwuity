@@ -4,7 +4,20 @@ Created on Sat Apr 04 13:21:17 2026
 @author: shane
 */
 
-WITH run_regs AS (
+WITH baseline_commit AS (
+    SELECT b.commit_hash
+    FROM runs b
+    WHERE {baseline_run_filter}
+    ORDER BY b.run_date DESC LIMIT 1
+),
+recent_runs AS (
+    SELECT *
+    FROM runs r
+    WHERE r.n_pass > 0{like_filter}
+    ORDER BY r.run_date DESC
+    LIMIT {prefetch_limit}
+),
+run_regs AS (
     SELECT
         r.id,
         r.version_string,
@@ -23,7 +36,7 @@ WITH run_regs AS (
         counts.new_fail,
         counts.new_failures_list,
         counts.new_passes_list
-    FROM runs r
+    FROM recent_runs r
     LEFT JOIN LATERAL (
         SELECT
             COUNT(*) as run_total,
@@ -36,11 +49,7 @@ WITH run_regs AS (
         LEFT JOIN run_details mb ON mb.test_name = rd.test_name
             AND mb.run_id = (
                 SELECT b2.id FROM runs b2
-                WHERE b2.commit_hash = (
-                    SELECT b.commit_hash FROM runs b
-                    WHERE {baseline_run_filter}
-                    ORDER BY b.run_date DESC LIMIT 1
-                )
+                WHERE b2.commit_hash = (SELECT commit_hash FROM baseline_commit)
                   AND b2.os IS NOT DISTINCT FROM r.os
                   AND b2.arch IS NOT DISTINCT FROM r.arch
                   AND b2.profile IS NOT DISTINCT FROM r.profile
@@ -49,7 +58,7 @@ WITH run_regs AS (
             )
         WHERE rd.run_id = r.id
     ) counts ON TRUE
-    WHERE r.n_pass > 0 AND counts.run_total > 0
+    WHERE counts.run_total > 0
 )
 SELECT
     id AS run_id,
