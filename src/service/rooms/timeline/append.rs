@@ -145,12 +145,21 @@ where
 					.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
 					.await
 				{
+					let mut content_obj =
+						utils::to_canonical_object(prev_state.get_content_as_value())
+							.expect("Failed to convert prev_state to canonical JSON");
+
+					if let Some(is_direct) = prev_state.get_unsigned_as_value().get("is_direct") {
+						if let Ok(canon_val) =
+							serde_json::from_value::<CanonicalJsonValue>(is_direct.clone())
+						{
+							content_obj.insert("is_direct".to_owned(), canon_val);
+						}
+					}
+
 					unsigned.insert(
 						"prev_content".to_owned(),
-						CanonicalJsonValue::Object(
-							utils::to_canonical_object(prev_state.get_content_as_value())
-								.expect("Failed to convert prev_state to canonical JSON"),
-						),
+						CanonicalJsonValue::Object(content_obj),
 					);
 					unsigned.insert(
 						"prev_sender".to_owned(),
