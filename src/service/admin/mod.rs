@@ -469,15 +469,22 @@ impl Service {
 			return Ok(());
 		};
 
-		let response_sender = if self.is_admin_room(pdu.room_id().unwrap()).await {
+		let response_sender = if self
+			.is_admin_room(&pdu.room_id_or_hash().expect("has room ID"))
+			.await
+		{
 			&self.services.globals.server_user
 		} else {
 			pdu.sender()
 		};
 
-		self.respond_to_room(content, pdu.room_id().unwrap(), response_sender)
-			.boxed()
-			.await
+		self.respond_to_room(
+			content,
+			&pdu.room_id_or_hash().expect("has room ID"),
+			response_sender,
+		)
+		.boxed()
+		.await
 	}
 
 	async fn respond_to_room(

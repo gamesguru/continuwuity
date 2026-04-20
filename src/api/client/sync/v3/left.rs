@@ -1,5 +1,5 @@
 use conduwuit::{
-	Event, PduCount, PduEvent, Result, at, debug_warn,
+	Event, PduCount, PduEvent, Result, debug_warn,
 	pdu::EventHash,
 	trace,
 	utils::{self, IterStream, future::ReadyEqExt, stream::WidebandExt as _},
@@ -89,7 +89,7 @@ pub(super) async fn load_left_room(
 
 	let does_not_exist = services.rooms.metadata.exists(room_id).eq(&false).await;
 
-	let (timeline, state_events, leave_shortstatehash) = match leave_membership_event {
+	let (timeline, state_events, leave_shortstatehash) = match leave_membership_event.clone() {
 		| Some(leave_membership_event) if does_not_exist => {
 			/*
 			we have none PDUs with left beef for this room, likely because it was a rejected invite to a room
@@ -223,28 +223,43 @@ pub(super) async fn load_left_room(
 		Vec::new()
 	};
 
-	let raw_timeline_pdus = timeline
-		.pdus
+	let mut raw_timeline_pdus = Vec::with_capacity(timeline.pdus.len());
+	let mut in_timeline = false;
+
+	let TimelinePdus { pdus, limited } = timeline;
+
+	let mut stream = pdus
 		.into_iter()
 		.stream()
 		// filter out ignored events from the timeline
-		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
-		.map(at!(1))
-		.map(Event::into_format)
-		.collect::<Vec<_>>()
-		.await;
+		.wide_filter_map(|item| ignored_filter(services, item, syncing_user));
+
+	while let Some((_, pdu)) = stream.next().await {
+		if pdu.event_type() == &TimelineEventType::RoomMember
+			&& pdu.state_key() == Some(syncing_user.as_str())
+		{
+			in_timeline = true;
+		}
+		raw_timeline_pdus.push(pdu.into_format());
+	}
+
+	let mut state_events_raw: Vec<_> = state_events.into_iter().map(Event::into_format).collect();
+
+	if !in_timeline && last_sync_end_count.is_none_or(|c| c < left_count) {
+		if let Some(leave_pdu) = leave_membership_event {
+			state_events_raw.push(leave_pdu.into_format());
+		}
+	}
 
 	Ok(Some((
 		LeftRoom {
 			account_data: RoomAccountData { events: Vec::new() },
 			timeline: Timeline {
-				limited: timeline.limited,
+				limited,
 				prev_batch: Some(current_count.to_string()),
 				events: raw_timeline_pdus,
 			},
-			state: State {
-				events: state_events.into_iter().map(Event::into_format).collect(),
-			},
+			state: State { events: state_events_raw },
 		},
 		state_after,
 	)))

@@ -21,13 +21,13 @@ echo "→ Streaming last $LIMIT run summaries..."
   echo "\copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';"
   git show "FETCH_HEAD:runs.jsonl" | tail -n "$LIMIT"
   echo "\."
-  echo "INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, profile, binary_sha256, n_pass, n_skip, n_fail)
+  echo "INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, profile, binary_sha256, n_pass, n_skip, n_fail, room_version)
         SELECT
           (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
           (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
           (j->>'version_string'), (j->>'features'), (j->>'profile'), (j->>'binary_sha256'),
-          (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int
-        FROM b ON CONFLICT (commit_hash, run_date, arch, os) DO NOTHING;"
+          (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, (j->>'room_version')
+        FROM b ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version) DO NOTHING;"
 ) | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"
 
 # 2. Ingest Recent Test Details
@@ -46,20 +46,22 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
       ARCH=$(echo "$run_json" | jq -r '.arch')
       OS=$(echo "$run_json" | jq -r '.os')
       PROFILE=$(echo "$run_json" | jq -r '.profile // ""')
+      ROOM_VERSION=$(echo "$run_json" | jq -r '.room_version // ""')
 
       SAFE_ARCH=$(echo "$ARCH" | sed 's/[^a-zA-Z0-9._-]/_/g')
       SAFE_OS=$(echo "$OS" | sed 's/[^a-zA-Z0-9._-]/_/g')
       SAFE_PROFILE=$(echo "$PROFILE" | sed 's/[^a-zA-Z0-9._-]/_/g')
+      SAFE_ROOM_VERSION=$(echo "$ROOM_VERSION" | sed 's/[^a-zA-Z0-9._-]/_/g')
 
-      BASENAME="${COMMIT}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}.jsonl"
+      BASENAME="${COMMIT}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}-${SAFE_ROOM_VERSION}.jsonl"
       FILENAME="runs_data/${BASENAME}"
 
       # Check if file exists in the pre-cached list
       if grep -Fqx "$BASENAME" <<< "$ALL_FILES" > /dev/null; then
           # Inject/Overwrite metadata from the summary record for robustness
           git show "FETCH_HEAD:$FILENAME" | \
-            jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" \
-            '. + {commit: $c, arch: $a, os: $o, profile: $p}'
+            jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" \
+            '. + {commit: $c, arch: $a, os: $o, profile: $p, room_version: $rv}'
       fi
   done
 
@@ -70,6 +72,7 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
           AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
           AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
           AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'), ''))
+          AND r.room_version IS NOT DISTINCT FROM (NULLIF((t.j->>'room_version'), ''))
         WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
 ) | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"

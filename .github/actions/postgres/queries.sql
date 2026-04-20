@@ -13,6 +13,7 @@ WITH run_regs AS (
         r.n_fail,
         r.n_skip,
         r.profile,
+        r.room_version,
         r.features,
         r.os,
         r.arch,
@@ -32,12 +33,19 @@ WITH run_regs AS (
             STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND (mb_run_id.id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'fail'))) as new_failures_list,
             STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND (mb_run_id.id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'pass'))) as new_passes_list
         FROM run_details rd
-        LEFT JOIN LATERAL (
-            SELECT b2.id FROM runs b2
-            WHERE b2.commit_hash = (
-                SELECT b.commit_hash FROM runs b
-                WHERE {baseline_run_filter}
-                ORDER BY b.run_date DESC LIMIT 1
+        LEFT JOIN run_details mb ON mb.test_name = rd.test_name
+            AND mb.run_id = (
+                SELECT b2.id FROM runs b2
+                WHERE b2.commit_hash = (
+                    SELECT b.commit_hash FROM runs b
+                    WHERE {baseline_run_filter}
+                    ORDER BY b.run_date DESC LIMIT 1
+                )
+                  AND b2.os IS NOT DISTINCT FROM r.os
+                  AND b2.arch IS NOT DISTINCT FROM r.arch
+                  AND b2.profile IS NOT DISTINCT FROM r.profile
+                  AND COALESCE(b2.room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+                ORDER BY b2.run_date DESC LIMIT 1
             )
               AND b2.os IS NOT DISTINCT FROM r.os
               AND b2.arch IS NOT DISTINCT FROM r.arch
@@ -60,6 +68,7 @@ SELECT
     new_pass,
     new_fail,
     profile,
+    room_version,
     regexp_replace(btrim(features, ' ,'), '[,\\s]+', ' ', 'g') AS features,
     os,
     arch,

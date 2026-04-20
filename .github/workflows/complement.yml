@@ -27,23 +27,31 @@ jobs:
       matrix:
         include:
           - arch: amd64
+            os: ubuntu-24.04
+            profile: release-quick
+            room_version: "12"
+          - arch: amd64
             os: ubuntu-22.04
             profile: release-quick
+            room_version: "12"
+          - arch: arm64
+            prebuilt_arch: arm64-cortex-a76
+            target_cpu: cortex-a76
+            jemalloc_lg_page: 16
+            os: ubuntu-24.04
+            profile: release-quick
+            room_version: "12"
           - arch: amd64
             os: ubuntu-24.04
             profile: release-quick
-          - arch: arm64
-            prebuilt_arch: arm64-cortex-a76
-            target_cpu: cortex-a76
-            jemalloc_lg_page: 16
-            os: ubuntu-22.04
-            profile: release-quick
+            room_version: "11"
           - arch: arm64
             prebuilt_arch: arm64-cortex-a76
             target_cpu: cortex-a76
             jemalloc_lg_page: 16
             os: ubuntu-24.04
             profile: release-quick
+            room_version: "11"
 
     # For writing/updating PR comments on running test totals (# pass/fail/skip)
     # and pushing the generated github-badge.json to the badges branch
@@ -57,6 +65,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
           fetch-depth: 0
+          submodules: recursive
 
       - name: Fetch tags and origin/main for comparison
         run: git fetch --tags --force && git fetch origin HEAD && git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
@@ -140,6 +149,8 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
+
+
       - name: Build Complement Docker image
         run: make complement/docker PROFILE=${{ matrix.profile }}
 
@@ -155,12 +166,6 @@ jobs:
 
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
-
-      - name: Checkout Complement
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          repository: matrix-org/complement
-          path: complement-src
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -179,8 +184,10 @@ jobs:
         env:
           CONDUWUIT_SENDER_TIMEOUT: 5
           CONDUWUIT_SENDER_RETRY_BACKOFF_LIMIT: 5
+          COMPLEMENT_SHARE_ENV_PREFIX: PASS_
+          PASS_CONDUWUIT_DEFAULT_ROOM_VERSION: '"${{ matrix.room_version }}"'
         run: |
-          ./bin/complement ./complement-src
+          make complement/run COMPLEMENT_DIR=./complement-src
 
       - name: Compare results with baseline
         continue-on-error: true
@@ -207,8 +214,8 @@ jobs:
           # Inject arch, os, and profile into the JSONL file itself.
           # We use a temp file to avoid reading/writing to the same file.
           TEMP_RESULTS=$(mktemp)
-          jq -c --arg a "${{ matrix.arch }}" --arg o "${{ matrix.os }}" --arg p "${{ matrix.profile }}" \
-            '. + {arch: $a, os: $o, profile: $p}' "$RESULTS" > "$TEMP_RESULTS"
+          jq -c --arg a "${{ matrix.arch }}" --arg o "${{ matrix.os }}" --arg p "${{ matrix.profile }}" --arg rv "${{ matrix.room_version }}" \
+            '. + {arch: $a, os: $o, profile: $p, room_version: $rv}' "$RESULTS" > "$TEMP_RESULTS"
           mv "$TEMP_RESULTS" "$RESULTS"
 
           PASS=$(jq -s '[.[] | select(.Action == "pass")] | length' "$RESULTS")
@@ -256,6 +263,7 @@ jobs:
           arch: ${{ matrix.arch }}
           os: ${{ matrix.os }}
           profile: ${{ matrix.profile }}
+          room_version: ${{ matrix.room_version }}
 
       - name: Ingest results into PostgreSQL
         if: always()
@@ -305,7 +313,7 @@ jobs:
         with:
           ssh_target: "git@nutra.tk"
           database_url: ${{ secrets.C10Y_POSTGRES_URL }}
-          setup_tables: ${{ github.ref == 'refs/heads/main' }}
+          setup_tables: false
           rebuild_db: false
 
       - name: Query updated Postgres stats
@@ -323,9 +331,10 @@ jobs:
           ARCH="${{ matrix.arch }}"
           OS="${{ matrix.os }}"
           PROFILE="${{ matrix.profile }}"
+          ROOM_VERSION="${{ matrix.room_version }}"
 
           # Fetch the newly failing tests for this specific run
-          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' LIMIT 1;" | sed 's/\\n/\n/g')
+          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' LIMIT 1;" | sed 's/\\n/\n/g')
 
           echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"

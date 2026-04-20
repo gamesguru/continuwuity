@@ -298,30 +298,23 @@ complement/build: ##H Build conduwuit w direct_tls
 
 .PHONY: complement/docker
 complement/docker: ##H Build docker image from existing binary
-	@echo "Copying dynamically linked libraries to target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/..."
-	@mkdir -p target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib && rm -f target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/*
-	@LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$(LD_LIBRARY_PATH)" \
-		ldd target/latest/conduwuit | awk '/=> \// {print $$3}' \
-		| grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|ld-linux|libdl\.so|libpthread\.so|librt\.so' \
-		| xargs -I {} cp "{}" target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib/ || true
-	@rm -rf target/latest/lib
-	@ln -sfn ../$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib target/latest/lib
 	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
 	DOCKER_BUILDKIT=1 docker buildx build \
 		--build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
 		--build-arg BINARY_PATH=target/latest/conduwuit \
-		--build-arg LIB_PATH=target/$(if $(filter $(PROFILE),dev test),debug,$(PROFILE))/lib \
 		--build-arg UID=$(shell id -u) \
 		--build-arg GID=$(shell id -g) \
 		-t $(COMPLEMENT_IMAGE) \
 		-f ./docker/complement.Dockerfile \
 		--load .
 
+HOST_LIBS_MOUNTS = $(shell LD_LIBRARY_PATH="$(ROCKSDB_LIB_DIR):$(LD_LIBRARY_PATH)" ldd target/latest/conduwuit | grep -E '=> /' | awk '{print $$3}' | grep -vE '^/usr/local/|libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|libdl\.so|libpthread\.so|librt\.so|ld-linux' | awk '{print $$1":"$$1":ro"}' | paste -sd ';' - || true)
+
 .PHONY: complement/run
 complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR)
 	@test -d "$(COMPLEMENT_DIR)" || (echo "ERROR: COMPLEMENT_DIR ($(COMPLEMENT_DIR)) does not exist" && exit 1)
 	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
-	COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" ./bin/complement $(COMPLEMENT_DIR)
+	COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" COMPLEMENT_HOST_MOUNTS="$(PREFIX)/lib:$(PREFIX)/lib:ro$(if $(HOST_LIBS_MOUNTS),;$(HOST_LIBS_MOUNTS))" ./bin/complement $(COMPLEMENT_DIR)
 
 
 .PHONY: complement/stats
@@ -352,13 +345,13 @@ complement/stats: ##H Check local test stats
 complement/diff: ##H Diff local results against branch baseline (requires REF=git-ref)
 	@test -n "$(REF)" || { echo "ERROR: REF variable is required (e.g. make complement/diff REF=HEAD~1)"; exit 1; }
 	@SHA=$$(git rev-parse $(REF)) && \
-	git show-ref --quiet github/_metadata/badges || { echo "ERROR: branch github/_metadata/badges missing. Run: git fetch github _metadata/badges"; exit 1; } && \
-	FILE=$$(git ls-tree -r github/_metadata/badges --name-only | grep -E "runs_data/($${SHA:0:8}|$$SHA)\.jsonl" | head -n 1) && \
+	git show-ref --quiet origin/_metadata/badges || { echo "ERROR: branch origin/_metadata/badges missing. Run: git fetch origin _metadata/badges"; exit 1; } && \
+	FILE=$$(git ls-tree -r origin/_metadata/badges --name-only | grep -E "runs_data/($${SHA:0:8}|$$SHA).*\.jsonl" | head -n 1) && \
 	if [ -z "$$FILE" ]; then \
-		echo "ERROR: could not find results for $$SHA (or $${SHA:0:8}) in github/_metadata/badges"; \
+		echo "ERROR: could not find results for $$SHA (or $${SHA:0:8}) in origin/_metadata/badges"; \
 		exit 1; \
 	fi; \
-	diff -u --color tests/test_results/complement/test_results.jsonl <(git show github/_metadata/badges:$$FILE)
+	diff -u --color tests/test_results/complement/test_results.jsonl <(git show origin/_metadata/badges:$$FILE)
 
 
 

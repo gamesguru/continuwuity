@@ -32,7 +32,7 @@ where
 		self.services.timeline.get_pdu(event_id).await,
 		self.services.timeline.get_pdu_json(event_id).await,
 	) {
-		if pdu.room_id_or_hash() == *room_id {
+		if pdu.room_id_or_hash().as_deref() == Some(room_id) {
 			return Ok((pdu, json));
 		}
 	}
@@ -154,16 +154,16 @@ where
 		}
 	}
 
-	// The original create event must be in the auth events for v11 and below rooms.
-	// For v12+, it is not in auth_events but its ID is inferred from the room ID.
-	if !to_room_version(&room_version_id).room_ids_as_hashes
-		&& pdu_event.kind != TimelineEventType::RoomCreate
+	// The original create event must be in the auth events for v11 and below.
+	// The create event itself has an empty auth_events array (it's the DAG root).
+	// For v12+, create is not required in auth_events.
+	if pdu_event.kind != TimelineEventType::RoomCreate
+		&& !to_room_version(&room_version_id).room_ids_as_hashes
+		&& !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into()))
 	{
-		if !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into())) {
-			return Err!(Request(InvalidParam(
-				"Incoming event missing m.room.create in auth events"
-			)));
-		}
+		return Err!(Request(InvalidParam(
+			"Incoming event missing m.room.create in auth events"
+		)));
 	}
 
 	let state_fetch = |ty: &StateEventType, sk: &str| {

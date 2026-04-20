@@ -130,6 +130,7 @@ blurhash.optional = true
 recaptcha-verify = { version = "0.2.0", default-features = false }
 dashmap.workspace = true
 yansi.workspace = true
+linkify = "0.10.0"
 lettre.workspace = true
 
 [target.'cfg(all(unix, target_os = "linux"))'.dependencies]

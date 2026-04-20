@@ -27,8 +27,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 
 -- Unique index to prevent duplicate machine reports
-DROP INDEX IF EXISTS idx_runs_unique_machine_run;
-CREATE UNIQUE INDEX idx_runs_unique_machine_run
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_machine_run
 ON runs (commit_hash, run_date, arch, os, profile, room_version) NULLS NOT DISTINCT;
 
 -- Create run_details table
@@ -65,6 +64,7 @@ SELECT
     r.branch,
     r.arch,
     r.os,
+    r.room_version,
     r.features,
     r.profile,
     r.room_version,
@@ -85,7 +85,7 @@ CROSS JOIN LATERAL (
     SELECT id AS default_baseline_run_id FROM runs
     WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
     OR version_string LIKE '%main%')
-    AND (room_version = r.room_version OR (room_version IS NULL AND r.room_version IS NULL))
+    AND room_version IS NOT DISTINCT FROM r.room_version
     ORDER BY run_date DESC
     LIMIT 1
 ) dbr

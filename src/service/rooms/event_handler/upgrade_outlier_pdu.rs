@@ -82,7 +82,8 @@ where
 				"Resolving state at event"
 			);
 			let mut state_at_incoming_event = if incoming_pdu.prev_events().count() == 1 {
-				self.state_at_incoming_degree_one(&incoming_pdu).await?
+				self.state_at_incoming_degree_one(&incoming_pdu, room_id)
+					.await?
 			} else {
 				self.state_at_incoming_resolved(&incoming_pdu, room_id, &room_version_id)
 					.await?

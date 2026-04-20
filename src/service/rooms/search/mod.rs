@@ -127,7 +127,11 @@ pub async fn search_pdus<'a>(
 		.wide_filter_map(move |pdu| async move {
 			self.services
 				.state_accessor
-				.user_can_see_event(query.user_id?, pdu.room_id().unwrap(), pdu.event_id())
+				.user_can_see_event(
+					query.user_id?,
+					&pdu.room_id_or_hash().expect("has room ID"),
+					pdu.event_id(),
+				)
 				.await
 				.then_some(pdu)
 		})

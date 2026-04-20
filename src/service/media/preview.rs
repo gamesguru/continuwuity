@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 #[cfg(feature = "url_preview")]
 use conduwuit::utils::response::LimitReadExt;
-use conduwuit::{Err, Result, debug, err};
+use conduwuit::{Err, Result, debug, err, info};
 use conduwuit_core::implement;
 use ipaddress::IPAddress;
 #[cfg(feature = "url_preview")]
@@ -19,7 +19,7 @@ use url::Url;
 
 use super::Service;
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Clone)]
 pub struct UrlPreviewData {
 	#[serde(skip_serializing_if = "Option::is_none", rename(serialize = "og:title"))]
 	pub title: Option<String>,
@@ -61,6 +61,13 @@ pub async fn set_url_preview(&self, url: &str, data: &UrlPreviewData) -> Result<
 	let now = SystemTime::now()
 		.duration_since(SystemTime::UNIX_EPOCH)
 		.expect("valid system time");
+	info!(
+		%url,
+		title = ?data.title,
+		description = ?data.description.as_ref().map(String::len),
+		image_dimensions = ?data.image_width.zip(data.image_height),
+		"URL preview successfully generated",
+	);
 	self.db.set_url_preview(url, data, now)
 }
 
@@ -88,7 +95,28 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 	}
 
 	let client = &self.services.client.url_preview;
-	let response = client.head(url.as_str()).send().await?;
+	let mut response = client.head(url.as_str()).send().await?;
+
+	if let Err(e) = response.error_for_status_ref() {
+		if let Some(status) = e.status() {
+			if status == reqwest::StatusCode::METHOD_NOT_ALLOWED
+				|| status == reqwest::StatusCode::FORBIDDEN
+				|| status == reqwest::StatusCode::NOT_IMPLEMENTED
+			{
+				debug!(%url, "URL preview HEAD probe returned {status}, falling back to GET");
+				let mut req = client.get(url.as_str());
+				if status == reqwest::StatusCode::FORBIDDEN {
+					req =
+						req.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent());
+				}
+				response = req.send().await?;
+			}
+		}
+	}
+
+	if let Err(e) = response.error_for_status_ref() {
+		return Err!(Request(Unknown(error!("HTTP {e} fetching URL preview probe"))));
+	}
 
 	debug!(%url, "URL preview response headers: {:?}", response.headers());
 
@@ -112,12 +140,14 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 		.to_str()
 		.map_err(|e| err!(Request(Unknown("Unknown or invalid Content-Type header: {e}"))))?;
 
-	let data = match content_type {
-		| html if html.starts_with("text/html") => self.download_html(url.as_str()).await?,
-		| img if img.starts_with("image/") => self.download_image(url.as_str(), None).await?,
-		| video if video.starts_with("video/") => self.download_video(url.as_str(), None).await?,
-		| audio if audio.starts_with("audio/") => self.download_audio(url.as_str(), None).await?,
-		| _ => return Err!(Request(Unknown("Unsupported Content-Type"))),
+	let data = match classify_content_type(content_type) {
+		| Some(MediaType::Html) => self.download_html(url.as_str()).await?,
+		| Some(MediaType::Image) => self.download_image(url.as_str(), None).await?,
+		| Some(MediaType::Video) => self.download_video(url.as_str(), None).await?,
+		| Some(MediaType::Audio) => self.download_audio(url.as_str(), None).await?,
+		| None => {
+			return Err!(Request(Unknown(error!("Unsupported Content-Type: {content_type}"))));
+		},
 	};
 
 	self.set_url_preview(url.as_str(), &data).await?;
@@ -133,18 +163,29 @@ pub async fn download_image(
 	preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	use conduwuit::utils::random_string;
-	use image::{DynamicImage, ImageFormat, ImageReader, imageops::FilterType};
+	use image::{ImageFormat, ImageReader, imageops::FilterType};
 	use ruma::Mxc;
 
 	let mut preview_data = preview_data.unwrap_or_default();
 
-	let mut image = self
-		.services
-		.client
-		.url_preview
-		.get(url)
-		.send()
-		.await?
+	let mut response = self.services.client.url_preview.get(url).send().await?;
+
+	if response.status() == reqwest::StatusCode::FORBIDDEN {
+		response = self
+			.services
+			.client
+			.url_preview
+			.get(url)
+			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.send()
+			.await?;
+	}
+
+	if let Err(e) = response.error_for_status_ref() {
+		return Err!(Request(Unknown(error!("HTTP {e} fetching image"))));
+	}
+
+	let mut image = response
 		.limit_read(
 			self.services
 				.server
@@ -157,27 +198,39 @@ pub async fn download_image(
 
 	let mut width = None;
 	let mut height = None;
-	if let Ok(reader) = ImageReader::new(std::io::Cursor::new(&image)).with_guessed_format() {
+
+	let cursor = std::io::Cursor::new(&image);
+	if let Ok(reader) = ImageReader::new(cursor).with_guessed_format() {
 		if let Ok(dim) = reader.into_dimensions() {
 			width = Some(dim.0);
 			height = Some(dim.1);
-		}
-	}
 
-	if let (Some(w), Some(h)) = (width, height) {
-		if w > 600 || h > 600 {
-			if let Ok(dyn_image) = ImageReader::new(std::io::Cursor::new(&image))
-				.with_guessed_format()?
-				.decode()
-			{
-				let thumbnail = dyn_image.thumbnail_exact(600, 600);
-				let mut buffer = std::io::Cursor::new(Vec::new());
-				thumbnail.write_to(&mut buffer, ImageFormat::Png)?;
-				image = buffer.into_inner();
-				width = Some(thumbnail.width());
-				height = Some(thumbnail.height());
+			// Dynamically scale down massive URL preview images to 250x250 limits
+			// to avoid gigabytes of raw 4K database hoarding.
+			if dim.0 > 250 || dim.1 > 250 {
+				if let Ok(img) = image::load_from_memory(&image) {
+					let resized = img.resize(250, 250, FilterType::CatmullRom);
+					let mut cursor = std::io::Cursor::new(Vec::new());
+
+					if resized
+						.write_to(&mut cursor, image::ImageFormat::Jpeg)
+						.is_ok()
+					{
+						image = cursor.into_inner();
+						width = Some(resized.width());
+						height = Some(resized.height());
+					}
+				}
 			}
+		} else {
+			return Err!(Request(Unknown(
+				"URL preview image metadata invalid or inherently unparsable"
+			)));
 		}
+	} else {
+		return Err!(Request(Unknown(
+			"URL preview image buffer failed to guess its own target format"
+		)));
 	}
 
 	let mxc = Mxc {
@@ -188,8 +241,8 @@ pub async fn download_image(
 	self.create(&mxc, None, None, None, &image).await?;
 
 	preview_data.image = Some(mxc.to_string());
-	preview_data.image_width = width;
-	preview_data.image_height = height;
+	preview_data.image_width = width.or(preview_data.image_width);
+	preview_data.image_height = height.or(preview_data.image_height);
 
 	Ok(preview_data)
 }
@@ -237,7 +290,22 @@ pub async fn download_media(&self, url: &str) -> Result<(OwnedMxcUri, usize)> {
 	use http::header::CONTENT_TYPE;
 	use ruma::Mxc;
 
-	let response = self.services.client.url_preview.get(url).send().await?;
+	let mut response = self.services.client.url_preview.get(url).send().await?;
+
+	if response.status() == reqwest::StatusCode::FORBIDDEN {
+		response = self
+			.services
+			.client
+			.url_preview
+			.get(url)
+			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.send()
+			.await?;
+	}
+
+	if let Err(e) = response.error_for_status_ref() {
+		return Err!(Request(Unknown(error!("HTTP {e} fetching media blob"))));
+	}
 	let content_type = response.headers().get(CONTENT_TYPE).cloned();
 	let media = response
 		.limit_read(
@@ -304,10 +372,21 @@ async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
 	use webpage::HTML;
 
 	let client = &self.services.client.url_preview;
-	let body = client
-		.get(url)
-		.send()
-		.await?
+	let mut response = client.get(url).send().await?;
+
+	if response.status() == reqwest::StatusCode::FORBIDDEN {
+		response = client
+			.get(url)
+			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.send()
+			.await?;
+	}
+
+	if let Err(e) = response.error_for_status_ref() {
+		return Err!(Request(Unknown(error!("HTTP {e} fetching HTML text"))));
+	}
+
+	let body = response
 		.limit_read_text(
 			self.services
 				.server
@@ -324,7 +403,13 @@ async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
 	let mut preview_data = UrlPreviewData::default();
 
 	if let Some(obj) = html.opengraph.images.first() {
-		preview_data = self.download_image(&obj.url, Some(preview_data)).await?;
+		if let Ok(data_with_img) = self
+			.download_image(&obj.url, Some(preview_data.clone()))
+			.await
+		{
+			preview_data = data_with_img;
+			preview_data = apply_opengraph_dimensions(preview_data, obj);
+		}
 	}
 
 	if let Some(obj) = html.opengraph.videos.first() {
@@ -433,7 +518,7 @@ pub fn url_preview_allowed(&self, url: &Url) -> bool {
 				| Some((_, root_domain)) => {
 					if denylist_domain_explicit.contains(&root_domain.to_owned()) {
 						debug!(
-							"Root domain {} is not allowed by \
+							"Root domain {} is not allowed by \n\t\t\t\t\t\t \
 							 url_preview_domain_explicit_denylist (check 1/3)",
 							&root_domain
 						);
@@ -443,7 +528,7 @@ pub fn url_preview_allowed(&self, url: &Url) -> bool {
 					if allowlist_domain_explicit.contains(&root_domain.to_owned()) {
 						debug!(
 							"Root domain {} is allowed by url_preview_domain_explicit_allowlist \
-							 (check 2/3)",
+							 \n\t\t\t\t\t (check 2/3)",
 							&root_domain
 						);
 						return true;
@@ -455,7 +540,7 @@ pub fn url_preview_allowed(&self, url: &Url) -> bool {
 					{
 						debug!(
 							"Root domain {} is allowed by url_preview_domain_contains_allowlist \
-							 (check 3/3)",
+							 \n\t\t\t\t\t (check 3/3)",
 							&root_domain
 						);
 						return true;
@@ -466,4 +551,62 @@ pub fn url_preview_allowed(&self, url: &Url) -> bool {
 	}
 
 	false
+}
+
+pub fn parse_preview_url(url_str: &str) -> std::result::Result<Url, url::ParseError> {
+	let finder = linkify::LinkFinder::new();
+	let clean_url = finder.links(url_str).next().map_or(url_str, |l| l.as_str());
+
+	match Url::parse(clean_url) {
+		| Ok(url) => Ok(url),
+		| Err(url::ParseError::RelativeUrlWithoutBase) => {
+			let mut with_schema = String::with_capacity(clean_url.len().saturating_add(8));
+			with_schema.push_str("https://");
+			with_schema.push_str(clean_url);
+
+			let final_url = finder
+				.links(&with_schema)
+				.next()
+				.map_or(with_schema.as_str(), |l| l.as_str());
+
+			Url::parse(final_url)
+		},
+		| Err(e) => Err(e),
+	}
+}
+#[cfg(feature = "url_preview")]
+pub(super) fn apply_opengraph_dimensions(
+	mut preview_data: UrlPreviewData,
+	obj: &webpage::OpengraphObject,
+) -> UrlPreviewData {
+	preview_data.image_width = preview_data
+		.image_width
+		.or_else(|| obj.properties.get("width").and_then(|v| v.parse().ok()));
+	preview_data.image_height = preview_data
+		.image_height
+		.or_else(|| obj.properties.get("height").and_then(|v| v.parse().ok()));
+	preview_data
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum MediaType {
+	Html,
+	Image,
+	Video,
+	Audio,
+}
+
+pub(super) fn classify_content_type(content_type: &str) -> Option<MediaType> {
+	let lower = content_type.to_lowercase();
+	if lower.starts_with("text/html") || lower.starts_with("application/xhtml+xml") {
+		Some(MediaType::Html)
+	} else if lower.starts_with("image/") {
+		Some(MediaType::Image)
+	} else if lower.starts_with("video/") {
+		Some(MediaType::Video)
+	} else if lower.starts_with("audio/") {
+		Some(MediaType::Audio)
+	} else {
+		None
+	}
 }
