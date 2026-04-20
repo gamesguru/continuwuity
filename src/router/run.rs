@@ -91,6 +91,9 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 	sd_notify::notify(&[sd_notify::NotifyState::Stopping])
 		.expect("failed to notify systemd of stopping state");
 
+	// Cork the database (prevent new transactions from starting)
+	services.db.db.cork();
+
 	// Fire the global cancellation token (tell cooperative workers to stop)
 	services.shutdown.cancel();
 

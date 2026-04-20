@@ -93,10 +93,10 @@ impl Engine {
 	}
 
 	#[inline]
-	pub(crate) fn cork(&self) { self.corks.fetch_add(1, Ordering::Relaxed); }
+	pub fn cork(&self) { self.corks.fetch_add(1, Ordering::Relaxed); }
 
 	#[inline]
-	pub(crate) fn uncork(&self) { self.corks.fetch_sub(1, Ordering::Relaxed); }
+	pub fn uncork(&self) { self.corks.fetch_sub(1, Ordering::Relaxed); }
 
 	#[inline]
 	pub fn corked(&self) -> bool { self.corks.load(Ordering::Relaxed) > 0 }
