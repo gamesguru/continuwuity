@@ -202,12 +202,7 @@ where
 	let pdu_count = PduCount::Normal(count);
 	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
-	// Insert pdu FIRST to ensure it's in the DB before any secondary writes
-	// unexpectedly wake the sync watcher.
-	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
-
-	// Mark as read first so the sending client doesn't get a notification even if
-	// appending fails
+	// Mark as read first so the sync watcher uses the correct receipt
 	self.services
 		.read_receipt
 		.private_read_set(room_id, pdu.sender(), count);
@@ -215,6 +210,10 @@ where
 	self.services
 		.user
 		.reset_notification_counts(pdu.sender(), room_id);
+
+	// Insert pdu FIRST to ensure it's in the DB before any secondary writes
+	// unexpectedly wake the sync watcher.
+	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
 
 	drop(insert_lock);
 

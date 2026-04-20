@@ -77,18 +77,15 @@ pub async fn server_can_see_event(
 		},
 		| HistoryVisibility::Invited => {
 			// Allow if any member on requesting server was AT LEAST invited at that state
-			let members: Vec<ruma::OwnedUserId> = self
+			let mut members = self
 				.services
 				.state_cache
 				.room_useroncejoined(&room_id)
-				.chain(self.services.state_cache.room_members_invited(&room_id))
-				.map(ToOwned::to_owned)
-				.collect()
-				.await;
+				.chain(self.services.state_cache.room_members_invited(&room_id));
 
-			for member in members {
+			while let Some(member) = members.next().await {
 				if member.server_name() == origin
-					&& self.user_was_invited(shortstatehash, &member).await
+					&& self.user_was_invited(shortstatehash, member).await
 				{
 					return true;
 				}
@@ -98,17 +95,11 @@ pub async fn server_can_see_event(
 		},
 		| HistoryVisibility::Joined => {
 			// Allow if any member on requesting server was joined at that state
-			let members: Vec<ruma::OwnedUserId> = self
-				.services
-				.state_cache
-				.room_useroncejoined(&room_id)
-				.map(ToOwned::to_owned)
-				.collect()
-				.await;
+			let mut members = self.services.state_cache.room_useroncejoined(&room_id);
 
-			for member in members {
+			while let Some(member) = members.next().await {
 				if member.server_name() == origin
-					&& self.user_was_joined(shortstatehash, &member).await
+					&& self.user_was_joined(shortstatehash, member).await
 				{
 					return true;
 				}

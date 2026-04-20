@@ -321,20 +321,29 @@ impl Service {
 	where
 		T: OutgoingRequest + Debug + Send,
 	{
-		let _permit = self
-			.semaphore
-			.clone()
-			.acquire_owned()
+		self.send_federation_request_on(&self.services.client.federation, dest, request)
 			.await
-			.expect("Semaphore should not be closed");
-
-		self.services.federation.execute(dest, request).await
 	}
 
 	/// Like send_federation_request() but with a very large timeout
 	#[inline]
 	pub async fn send_synapse_request<T>(
 		&self,
+		dest: &ServerName,
+		request: T,
+	) -> Result<T::IncomingResponse>
+	where
+		T: OutgoingRequest + Debug + Send,
+	{
+		self.send_federation_request_on(&self.services.client.synapse, dest, request)
+			.await
+	}
+
+	/// Sends a request to a federation server on a specific client
+	#[inline]
+	pub async fn send_federation_request_on<T>(
+		&self,
+		client: &reqwest::Client,
 		dest: &ServerName,
 		request: T,
 	) -> Result<T::IncomingResponse>
@@ -350,7 +359,7 @@ impl Service {
 
 		self.services
 			.federation
-			.execute_synapse(dest, request)
+			.execute_on(client, dest, request)
 			.await
 	}
 

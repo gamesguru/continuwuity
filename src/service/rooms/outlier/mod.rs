@@ -74,11 +74,14 @@ pub fn room_stream<'a>(
 	&'a self,
 	room_id: &'a RoomId,
 ) -> impl Stream<Item = (OwnedEventId, PduEvent)> + Send + 'a {
+	let mut prefix = room_id.as_bytes().to_vec();
+	prefix.push(0xFF);
+
 	self.db
 		.roomid_outliereventid
-		.stream_from::<Vec<u8>, OwnedEventId, _>(room_id)
+		.stream_from::<Vec<u8>, OwnedEventId, _>(&prefix)
 		.ignore_err()
-		.ready_take_while(move |(k, _): &(_, _)| k.starts_with(room_id.as_bytes()))
+		.ready_take_while(move |(k, _): &(Vec<u8>, _)| k.starts_with(&prefix))
 		.ready_filter_map(|(_, v): (_, OwnedEventId)| Some(v))
 		.broad_filter_map(move |event_id: OwnedEventId| async move {
 			let pdu = self.get_pdu_outlier(&event_id).await.ok()?;

@@ -967,13 +967,6 @@ impl Service {
 		server: OwnedServerName,
 		events: Vec<SendingEvent>,
 	) -> SendingResult {
-		let _permit = self
-			.semaphore
-			.clone()
-			.acquire_owned()
-			.await
-			.expect("Semaphore should not be closed");
-
 		let pdus: Vec<_> = events
 			.iter()
 			.filter_map(|pdu| match pdu {
@@ -1051,9 +1044,7 @@ impl Service {
 		};
 
 		let result = self
-			.services
-			.federation
-			.execute_on(&self.services.client.sender, &server, request)
+			.send_federation_request_on(&self.services.client.sender, &server, request)
 			.await;
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {

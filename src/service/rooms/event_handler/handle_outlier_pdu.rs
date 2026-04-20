@@ -7,7 +7,7 @@ use conduwuit::{
 use futures::future::ready;
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
-	events::StateEventType,
+	events::{StateEventType, TimelineEventType},
 };
 
 use super::{check_room_id, get_room_version_id, to_room_version};
@@ -156,7 +156,9 @@ where
 
 	// The original create event must be in the auth events for v11 and below rooms.
 	// For v12+, it is not in auth_events but its ID is inferred from the room ID.
-	if !to_room_version(&room_version_id).room_ids_as_hashes {
+	if !to_room_version(&room_version_id).room_ids_as_hashes
+		&& pdu_event.kind != TimelineEventType::RoomCreate
+	{
 		if !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into())) {
 			return Err!(Request(InvalidParam(
 				"Incoming event missing m.room.create in auth events"

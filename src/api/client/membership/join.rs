@@ -704,7 +704,9 @@ async fn verify_join_auth(
 		|k, s| state_fetch(k.clone(), s.into()),
 		&state_fetch(StateEventType::RoomCreate, "".into())
 			.await
-			.expect("create event is missing from send_join auth"),
+			.ok_or_else(|| {
+				err!(BadServerResponse("create event is missing from send_join auth"))
+			})?,
 	)
 	.await
 	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;

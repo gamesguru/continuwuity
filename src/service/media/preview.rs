@@ -92,6 +92,8 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 
 	debug!(%url, "URL preview response headers: {:?}", response.headers());
 
+	response.error_for_status_ref()?;
+
 	if let Some(remote_addr) = response.remote_addr() {
 		debug!(%url, "URL preview response remote address: {:?}", remote_addr);
 
@@ -131,12 +133,12 @@ pub async fn download_image(
 	preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	use conduwuit::utils::random_string;
-	use image::ImageReader;
+	use image::{DynamicImage, ImageFormat, ImageReader, imageops::FilterType};
 	use ruma::Mxc;
 
 	let mut preview_data = preview_data.unwrap_or_default();
 
-	let image = self
+	let mut image = self
 		.services
 		.client
 		.url_preview
@@ -153,6 +155,31 @@ pub async fn download_image(
 		)
 		.await?;
 
+	let mut width = None;
+	let mut height = None;
+	if let Ok(reader) = ImageReader::new(std::io::Cursor::new(&image)).with_guessed_format() {
+		if let Ok(dim) = reader.into_dimensions() {
+			width = Some(dim.0);
+			height = Some(dim.1);
+		}
+	}
+
+	if let (Some(w), Some(h)) = (width, height) {
+		if w > 600 || h > 600 {
+			if let Ok(dyn_image) = ImageReader::new(std::io::Cursor::new(&image))
+				.with_guessed_format()?
+				.decode()
+			{
+				let thumbnail = dyn_image.thumbnail_exact(600, 600);
+				let mut buffer = std::io::Cursor::new(Vec::new());
+				thumbnail.write_to(&mut buffer, ImageFormat::Png)?;
+				image = buffer.into_inner();
+				width = Some(thumbnail.width());
+				height = Some(thumbnail.height());
+			}
+		}
+	}
+
 	let mxc = Mxc {
 		server_name: self.services.globals.server_name(),
 		media_id: &random_string(super::MXC_LENGTH),
@@ -161,19 +188,8 @@ pub async fn download_image(
 	self.create(&mxc, None, None, None, &image).await?;
 
 	preview_data.image = Some(mxc.to_string());
-	if preview_data.image_height.is_none() || preview_data.image_width.is_none() {
-		let cursor = std::io::Cursor::new(&image);
-		let (width, height) = match ImageReader::new(cursor).with_guessed_format() {
-			| Err(_) => (None, None),
-			| Ok(reader) => match reader.into_dimensions() {
-				| Err(_) => (None, None),
-				| Ok((width, height)) => (Some(width), Some(height)),
-			},
-		};
-
-		preview_data.image_width = width;
-		preview_data.image_height = height;
-	}
+	preview_data.image_width = width;
+	preview_data.image_height = height;
 
 	Ok(preview_data)
 }
