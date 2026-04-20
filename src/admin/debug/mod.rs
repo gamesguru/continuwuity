@@ -79,6 +79,10 @@ pub enum DebugCommand {
 		/// If set, bypasses strict auth checks.
 		#[arg(short, long)]
 		force: bool,
+
+		/// If set, forcefully re-processes existing timeline PDUs.
+		#[arg(long)]
+		nuclear: bool,
 	},
 
 	/// Purge outlier PDUs that already exist in our timeline.

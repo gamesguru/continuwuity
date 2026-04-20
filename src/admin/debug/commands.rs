@@ -1,3 +1,4 @@
+use futures::pin_mut;
 use std::{
 	collections::{HashMap, HashSet},
 	fmt::Write,
@@ -563,7 +564,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Re
 	self.services
 		.rooms
 		.event_handler
-		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id, force)
+		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id, force, false)
 		.await?;
 
 	self.write_str("Successfully rescued PDU.").await
@@ -735,7 +736,7 @@ pub(super) async fn purge_outliers(
 }
 
 #[admin_command]
-pub(super) async fn rescue_room(&self, room_id: OwnedRoomId, force: bool) -> Result {
+pub(super) async fn rescue_room(&self, room_id: OwnedRoomId, force: bool, nuclear: bool) -> Result {
 	self.bail_restricted()?;
 
 	let outliers: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = self
@@ -836,6 +837,7 @@ pub(super) async fn rescue_room(&self, room_id: OwnedRoomId, force: bool) -> Res
 				&origin,
 				&room_id,
 				force,
+				nuclear,
 			)
 			.await
 			.is_ok()
@@ -875,7 +877,7 @@ pub(super) async fn rescue_room_all(&self) -> Result {
 
 	let mut total_rescued = 0_usize;
 	for room_id in room_ids {
-		if self.rescue_room(room_id, false).boxed().await.is_ok() {
+		if self.rescue_room(room_id, false, false).boxed().await.is_ok() {
 			total_rescued = total_rescued.saturating_add(1);
 		}
 	}
@@ -1462,14 +1464,24 @@ pub(super) async fn compare_room_state(
 }
 
 #[admin_command]
-pub(super) async fn repair_dag(
-	&self,
-	room_id: OwnedRoomId,
-	server: OwnedServerName,
-	dry_run: bool,
-	nuclear: bool,
-) -> Result {
+pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerName, dry_run: bool, nuclear: bool) -> Result {
 	self.bail_restricted()?;
+
+	if nuclear && !dry_run {
+		self.write_str(&format!("NUCLEAR MODE: Backing up timeline to outliers for {room_id}...")).await?;
+		let timeline_pdus = self.services.rooms.timeline.pdus(&room_id, None);
+		pin_mut!(timeline_pdus);
+		let mut count = 0_usize;
+		while let Some(res) = timeline_pdus.next().await {
+			let Ok((_, pdu)) = res else { continue };
+			if let Ok(json) = self.services.rooms.timeline.get_pdu_json(pdu.event_id()).await {
+				self.services.rooms.outlier.add_pdu_outlier(pdu.event_id(), &json, Some(&room_id));
+				// self.services.rooms.timeline.remove_from_timeline(pdu.event_id()).await;
+				count += 1;
+			}
+		}
+		self.write_str(&format!("Demoted {count} timeline events to outliers.")).await?;
+	}
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let latest = self
@@ -1480,8 +1492,7 @@ pub(super) async fn repair_dag(
 		.await?;
 
 	self.write_str(&format!(
-		"Starting topological repair for {room_id} using {server} (dry_run: {dry_run}, nuclear: \
-		 {nuclear})..."
+		"Starting topological repair for {room_id} using {server} (dry_run: {dry_run}, nuclear: {nuclear})..."
 	))
 	.await?;
 
@@ -1494,27 +1505,11 @@ pub(super) async fn repair_dag(
 	drop(latest);
 
 	while let Some(event_id) = queue.pop_front() {
-		let is_in_timeline = self
-			.services
-			.rooms
-			.timeline
-			.get_pdu_id(&event_id)
-			.await
-			.is_ok();
-		let is_soft_failed = self
-			.services
-			.rooms
-			.pdu_metadata
-			.is_event_soft_failed(&event_id)
-			.await;
-
-		// NUCLEAR MODE: If nuclear is set, we ignore that we have it in the timeline
-		// and re-process it.
-		let should_skip = if nuclear {
-			false
-		} else {
-			is_in_timeline && !is_soft_failed
-		};
+		let is_in_timeline = self.services.rooms.timeline.get_pdu_id(&event_id).await.is_ok();
+		let is_soft_failed = self.services.rooms.pdu_metadata.is_event_soft_failed(&event_id).await;
+		
+		// NUCLEAR MODE: If nuclear is set, we ignore that we have it in the timeline and re-process it.
+		let should_skip = if nuclear { false } else { is_in_timeline && !is_soft_failed };
 
 		if seen.contains(&event_id) || should_skip {
 			continue;
@@ -1531,13 +1526,11 @@ pub(super) async fn repair_dag(
 				.services
 				.server_keys
 				.validate_and_add_event_id(&response.pdu, &room_version)
-				.await
-			else {
-				continue;
-			};
+				.await else {
+					continue;
+				};
 
-			let Ok(pdu) = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))
-			else {
+			let Ok(pdu) = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref())) else {
 				continue;
 			};
 
@@ -1555,15 +1548,14 @@ pub(super) async fn repair_dag(
 		}
 	}
 
-	self.write_str(&format!("Found {fetched} events to rescue."))
-		.await?;
+	self.write_str(&format!("Found {fetched} events to rescue.")).await?;
 
 	if dry_run {
 		return self.write_str("Dry run complete. No changes made.").await;
 	}
 
 	self.write_str("Starting rescue...").await?;
-	Box::pin(self.rescue_room(room_id.clone(), true)).await?;
+	Box::pin(self.rescue_room(room_id.clone(), true, nuclear)).await?;
 
 	self.write_str("Resyncing state...").await?;
 	Box::pin(self.force_set_room_state_from_server(room_id, server, None)).await

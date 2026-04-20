@@ -99,6 +99,13 @@ impl Data {
 
 		self.pduid_pdu.get(&pduid).await.deserialized()
 	}
+	pub(super) async fn remove_from_timeline(&self, event_id: &EventId) {
+		if let Ok(pduid) = self.get_pdu_id(event_id).await {
+			self.pduid_pdu.remove(&pduid);
+			self.eventid_pduid.remove(event_id);
+		}
+	}
+
 
 	/// Returns the pdu's id.
 	#[inline]

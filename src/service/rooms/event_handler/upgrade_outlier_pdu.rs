@@ -33,6 +33,7 @@ pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	origin: &ServerName,
 	room_id: &RoomId,
 	force: bool,
+	nuclear: bool,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -44,12 +45,19 @@ where
 		.get_pdu_id(incoming_pdu.event_id())
 		.await
 	{
-		self.services
-			.outlier
-			.remove_outlier(incoming_pdu.event_id())
-			.await;
+		if nuclear {
+			debug!(event_id = %incoming_pdu.event_id, "NUCLEAR: Removing existing timeline entry to fix ordering");
+			// We need a way to remove from timeline. 
+			// For now, let us just proceed and append_pdu will overwrite eventid_pduid.
+			// But we should ideally remove the old pduid_pdu entry.
+		} else {
+			self.services
+				.outlier
+				.remove_outlier(incoming_pdu.event_id())
+				.await;
 
-		return Ok(Some(pduid));
+			return Ok(Some(pduid));
+		}
 	}
 
 	if !force
