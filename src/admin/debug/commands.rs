@@ -1469,18 +1469,8 @@ pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerN
 
 	if nuclear && !dry_run {
 		self.write_str(&format!("NUCLEAR MODE: Backing up timeline to outliers for {room_id}...")).await?;
-		let timeline_pdus = self.services.rooms.timeline.pdus(&room_id, None);
-		pin_mut!(timeline_pdus);
-		let mut count = 0_usize;
-		while let Some(res) = timeline_pdus.next().await {
-			let Ok((_, pdu)) = res else { continue };
-			if let Ok(json) = self.services.rooms.timeline.get_pdu_json(pdu.event_id()).await {
-				self.services.rooms.outlier.add_pdu_outlier(pdu.event_id(), &json, Some(&room_id));
-				// self.services.rooms.timeline.remove_from_timeline(pdu.event_id()).await;
-				count += 1;
-			}
-		}
-		self.write_str(&format!("Demoted {count} timeline events to outliers.")).await?;
+		let count = self.services.rooms.timeline.backup_room_to_outliers(&room_id).await?;
+		self.write_str(&format!("Backed up {count} timeline events to outliers.")).await?;
 	}
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
@@ -1548,13 +1538,13 @@ pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerN
 		}
 	}
 
-	self.write_str(&format!("Found {fetched} events to rescue.")).await?;
+	self.write_str(&format!("Found {fetched} events to fetch/rescue.")).await?;
 
 	if dry_run {
 		return self.write_str("Dry run complete. No changes made.").await;
 	}
 
-	self.write_str("Starting rescue...").await?;
+	self.write_str("Starting topological rescue...").await?;
 	Box::pin(self.rescue_room(room_id.clone(), true, nuclear)).await?;
 
 	self.write_str("Resyncing state...").await?;

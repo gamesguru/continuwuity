@@ -169,6 +169,11 @@ impl Service {
 	pub async fn remove_from_timeline(&self, event_id: &EventId) {
 		self.db.remove_from_timeline(event_id).await;
 	}
+	#[inline]
+	pub async fn backup_room_to_outliers(&self, room_id: &RoomId) -> Result<usize> {
+		self.db.backup_room_to_outliers(room_id).await
+	}
+
 
 
 	/// Returns the json of a pdu.

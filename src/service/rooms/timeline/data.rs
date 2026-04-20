@@ -99,6 +99,24 @@ impl Data {
 
 		self.pduid_pdu.get(&pduid).await.deserialized()
 	}
+
+
+	pub(super) async fn backup_room_to_outliers(&self, room_id: &RoomId) -> Result<usize> {
+		let mut count = 0;
+		let pdus = self.pdus(room_id, PduCount::min());
+		pin_mut!(pdus);
+		
+		while let Some((_, pdu)) = pdus.try_next().await? {
+			if let Ok(json) = self.get_non_outlier_pdu_json(&pdu.event_id).await {
+				self.eventid_outlierpdu.raw_put(&pdu.event_id, Json(&json));
+				count += 1;
+			}
+		}
+		Ok(count)
+	}
+
+
+
 	pub(super) async fn remove_from_timeline(&self, event_id: &EventId) {
 		if let Ok(pduid) = self.get_pdu_id(event_id).await {
 			self.pduid_pdu.remove(&pduid);
