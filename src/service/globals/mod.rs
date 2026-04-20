@@ -15,6 +15,7 @@ pub struct Service {
 	server: Arc<Server>,
 
 	pub bad_event_ratelimiter: Arc<SyncRwLock<HashMap<OwnedEventId, RateLimitState>>>,
+	pub bad_server_ratelimiter: Arc<SyncRwLock<HashMap<OwnedServerName, RateLimitState>>>,
 	pub server_user: OwnedUserId,
 	pub admin_alias: OwnedRoomAliasId,
 	pub turn_secret: String,
@@ -44,6 +45,7 @@ impl crate::Service for Service {
 			db,
 			server: args.server.clone(),
 			bad_event_ratelimiter: Arc::new(SyncRwLock::new(HashMap::new())),
+			bad_server_ratelimiter: Arc::new(SyncRwLock::new(HashMap::new())),
 			admin_alias: OwnedRoomAliasId::try_from(format!("#admins:{}", &args.server.name))
 				.expect("#admins:server_name is valid alias name"),
 			server_user: UserId::parse_with_server_name(
@@ -66,12 +68,26 @@ impl crate::Service for Service {
 			},
 		);
 
+		let (bsr_count, bsr_bytes) = self.bad_server_ratelimiter.read().iter().fold(
+			(0_usize, 0_usize),
+			|(mut count, mut bytes), (server_name, _)| {
+				bytes = bytes.saturating_add(server_name.capacity());
+				bytes = bytes.saturating_add(size_of::<RateLimitState>());
+				count = count.saturating_add(1);
+				(count, bytes)
+			},
+		);
+
 		writeln!(out, "bad_event_ratelimiter: {ber_count} ({})", pretty(ber_bytes))?;
+		writeln!(out, "bad_server_ratelimiter: {bsr_count} ({})", pretty(bsr_bytes))?;
 
 		Ok(())
 	}
 
-	async fn clear_cache(&self) { self.bad_event_ratelimiter.write().clear(); }
+	async fn clear_cache(&self) {
+		self.bad_event_ratelimiter.write().clear();
+		self.bad_server_ratelimiter.write().clear();
+	}
 
 	fn name(&self) -> &str { service::make_name(std::module_path!()) }
 }
