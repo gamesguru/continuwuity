@@ -52,7 +52,7 @@ where
 		return Ok(Some(pduid));
 	}
 
-	if self
+	if !force && self
 		.services
 		.pdu_metadata
 		.is_event_soft_failed(incoming_pdu.event_id())
@@ -84,20 +84,29 @@ where
 			);
 			let mut state_at_incoming_event = if incoming_pdu.prev_events().count() == 1 {
 				self.state_at_incoming_degree_one(&incoming_pdu, room_id)
-					.await?
+					.await
+					.ok()
+					.flatten()
 			} else {
 				self.state_at_incoming_resolved(&incoming_pdu, room_id, &room_version_id)
-					.await?
+					.await
+					.ok()
+					.flatten()
 			};
 
 			if state_at_incoming_event.is_none() {
 				state_at_incoming_event = self
 					.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
-					.await?;
+					.await
+					.ok()
+					.flatten();
 			}
 
-			let state_at_incoming_event =
-				state_at_incoming_event.expect("we always set this to some above");
+			if state_at_incoming_event.is_none() && !force {
+				return Err!(Request(Unknown("Could not find state at event")));
+			}
+
+			let state_at_incoming_event = state_at_incoming_event.unwrap_or_default();
 
 			debug!(
 				event_id = %incoming_pdu.event_id,
