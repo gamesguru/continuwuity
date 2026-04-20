@@ -1462,7 +1462,12 @@ pub(super) async fn compare_room_state(
 }
 
 #[admin_command]
-pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerName) -> Result {
+pub(super) async fn repair_dag(
+	&self,
+	room_id: OwnedRoomId,
+	server: OwnedServerName,
+	dry_run: bool,
+) -> Result {
 	self.bail_restricted()?;
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
@@ -1473,11 +1478,14 @@ pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerN
 		.latest_pdu_in_room(&room_id)
 		.await?;
 
-	self.write_str(&format!("Starting recursive repair for {room_id} using {server}..."))
-		.await?;
+	self.write_str(&format!(
+		"Starting topological repair for {room_id} using {server} (dry_run: {dry_run})..."
+	))
+	.await?;
 
 	let mut queue: std::collections::VecDeque<OwnedEventId> =
 		latest.auth_events().map(ToOwned::to_owned).collect();
+	queue.extend(latest.prev_events().map(ToOwned::to_owned));
 
 	let mut fetched = 0_usize;
 	let mut seen = HashSet::new();
@@ -1496,34 +1504,52 @@ pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerN
 			continue;
 		}
 
-		conduwuit::debug!("Fetching missing auth event {event_id}");
+		conduwuit::debug!("Fetching missing event {event_id}");
 		if let Ok(response) = self
 			.services
 			.sending
 			.send_federation_request(&server, get_event::v1::Request::new(event_id.clone(), None))
 			.await
 		{
-			let (eid, value) = self
+			let Ok((eid, value)) = self
 				.services
 				.server_keys
 				.validate_and_add_event_id(&response.pdu, &room_version)
-				.await?;
+				.await
+			else {
+				continue;
+			};
 
-			let pdu = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))?;
+			let Ok(pdu) = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))
+			else {
+				continue;
+			};
 
-			self.services
-				.rooms
-				.outlier
-				.add_pdu_outlier(&eid, &value, Some(&room_id));
+			if !dry_run {
+				self.services
+					.rooms
+					.outlier
+					.add_pdu_outlier(&eid, &value, Some(&room_id));
+			}
+
 			queue.extend(pdu.auth_events().map(ToOwned::to_owned));
+			queue.extend(pdu.prev_events().map(ToOwned::to_owned));
 			fetched = fetched.saturating_add(1);
 			seen.insert(eid);
 		}
 	}
 
-	self.write_str(&format!("Fetched {fetched} missing auth events. Re-running force-set..."))
+	self.write_str(&format!("Found {fetched} events to rescue."))
 		.await?;
 
+	if dry_run {
+		return self.write_str("Dry run complete. No changes made.").await;
+	}
+
+	self.write_str("Starting rescue...").await?;
+	Box::pin(self.rescue_room(room_id.clone(), true)).await?;
+
+	self.write_str("Resyncing state...").await?;
 	Box::pin(self.force_set_room_state_from_server(room_id, server, None)).await
 }
 

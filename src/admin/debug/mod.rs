@@ -124,6 +124,10 @@ pub enum DebugCommand {
 		room_id: OwnedRoomId,
 		/// The server to fetch from.
 		server: OwnedServerName,
+
+		/// If set, only list missing events without fetching or rescuing.
+		#[arg(short, long)]
+		dry_run: bool,
 	},
 
 	/// Get the room DAG as a list of PDUs in a range.

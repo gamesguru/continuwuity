@@ -147,6 +147,9 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "info")]
 pub async fn startup_janitor(&self) {
+	info!("Outlier janitor is disabled.");
+	return;
+
 	use futures::StreamExt;
 
 	let mut count = 0_usize;
