@@ -1042,10 +1042,7 @@ where
 			} else {
 				true
 			};
-			let can_kick = if !matches!(
-				target_user_current_membership,
-				MembershipState::Ban | MembershipState::Leave
-			) {
+			let can_kick = if target_user_current_membership != MembershipState::Leave {
 				if sender_creator {
 					// sender is a creator
 					true
