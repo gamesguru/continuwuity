@@ -554,6 +554,12 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
 		.clone()
 		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
+	// Un-soft-fail the event so we can attempt to rescue it
+	self.services
+		.rooms
+		.pdu_metadata
+		.unmark_event_soft_failed(&event_id);
+
 	self.services
 		.rooms
 		.event_handler

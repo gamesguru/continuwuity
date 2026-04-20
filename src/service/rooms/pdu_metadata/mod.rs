@@ -140,4 +140,10 @@ impl Service {
 	pub async fn is_event_soft_failed(&self, event_id: &EventId) -> bool {
 		self.db.is_event_soft_failed(event_id).await
 	}
+
+	#[inline]
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub fn unmark_event_soft_failed(&self, event_id: &EventId) {
+		self.db.unmark_event_soft_failed(event_id);
+	}
 }

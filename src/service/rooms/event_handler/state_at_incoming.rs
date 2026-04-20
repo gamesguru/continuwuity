@@ -32,15 +32,17 @@ where
 		.next()
 		.expect("at least one prev_event");
 
-	let prev_pdu = self
+	let Ok(prev_pdu) = self
 		.services
 		.timeline
 		.get_pdu_in_room(Some(room_id), prev_event)
 		.await
-		.map_err(|e| err!(Database("Could not find prev event: {e:?}")))?;
+	else {
+		return Ok(None);
+	};
 
 	if prev_pdu.room_id() != Some(room_id) {
-		return Err(err!(Database("prev_event is not in the same room")));
+		return Ok(None);
 	}
 
 	let Ok(prev_event_sstatehash) = self

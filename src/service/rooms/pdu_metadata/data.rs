@@ -121,4 +121,8 @@ impl Data {
 	pub(super) async fn is_event_soft_failed(&self, event_id: &EventId) -> bool {
 		self.softfailedeventids.get(event_id).await.is_ok()
 	}
+
+	pub(super) fn unmark_event_soft_failed(&self, event_id: &EventId) {
+		self.softfailedeventids.remove(event_id);
+	}
 }
