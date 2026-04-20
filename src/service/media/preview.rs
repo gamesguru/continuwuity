@@ -196,8 +196,7 @@ pub async fn download_image(
 		)
 		.await?;
 
-	let mut width = None;
-	let mut height = None;
+	let (mut width, mut height);
 
 	let cursor = std::io::Cursor::new(&image);
 	if let Ok(reader) = ImageReader::new(cursor).with_guessed_format() {
