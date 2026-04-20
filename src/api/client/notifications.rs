@@ -1,7 +1,7 @@
 use std::cmp::{Ordering, Reverse};
 
 use axum::extract::State;
-use conduwuit::{Err, Event, Result, matrix::pdu::PduCount, warn};
+use conduwuit::{Err, Result, matrix::pdu::PduCount, warn};
 use futures::StreamExt;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, UInt,
@@ -160,14 +160,24 @@ pub(crate) async fn get_notifications_route(
 		let max_pdus_per_room = services.server.config.notification_max_pdus_per_room;
 		// A value of 0 disables notifications; avoid unbounded per-room scans.
 		if max_pdus_per_room == 0 {
-			continue;
+			return Err!(Request(NotFound("Notifications are disabled.")));
 		}
 		let mut pdus = std::pin::pin!(services.rooms.timeline.pdus_rev(&room_id, None));
 		let mut scanned: usize = 0;
 
 		// optimization: stop if we have enough notifications and current pdu
 		// is older than any in our list
-		while let Some(Ok((pdu_count, pdu))) = pdus.next().await {
+		loop {
+			let (pdu_count, pdu) = match pdus.next().await {
+				Some(Ok((pdu_count, pdu))) => (pdu_count, pdu),
+				Some(Err(error)) => {
+					warn!(
+						"Failed to read notification PDU while scanning room {room_id}: {error}"
+					);
+					continue;
+				},
+				None => break,
+			};
 			scanned = scanned.saturating_add(1);
 			if scanned > max_pdus_per_room || pdu_count <= PduCount::Normal(last_read) {
 				break;

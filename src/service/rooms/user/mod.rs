@@ -63,15 +63,12 @@ pub fn reset_notification_counts(&self, user_id: &UserId, room_id: &RoomId) {
 pub fn stream_notification_counts<'a>(
 	&'a self,
 	user_id: &'a UserId,
-) -> impl futures::Stream<Item = (Result<OwnedRoomId>, u64)> + Send + 'a {
+) -> impl futures::Stream<Item = Result<(OwnedRoomId, u64)>> + Send + 'a {
 	let prefix = (user_id, database::Interfix);
 	self.db
 		.userroomid_notificationcount
 		.stream_prefix::<(OwnedUserId, OwnedRoomId), u64, _>(&prefix)
-		.map(|res| match res {
-			| Ok(((_user_id, room_id), count)) => (Ok(room_id), count),
-			| Err(e) => (Err(e), 0),
-		})
+		.map(|res| res.map(|((_user_id, room_id), count)| (room_id, count)))
 }
 
 #[implement(Service)]
