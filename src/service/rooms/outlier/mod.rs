@@ -13,6 +13,7 @@ use crate::{Dep, rooms};
 
 pub struct Service {
 	db: Data,
+	#[allow(dead_code)]
 	services: Services,
 }
 
@@ -22,6 +23,7 @@ struct Data {
 }
 
 struct Services {
+	#[allow(dead_code)]
 	timeline: Dep<rooms::timeline::Service>,
 }
 
@@ -135,6 +137,7 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 		.deserialized::<PduEvent>()
 	{
 		if let Some(room_id) = pdu.room_id.as_deref() {
+			let room_id: &RoomId = room_id;
 			let mut key = room_id.as_bytes().to_vec();
 			key.push(0xFF);
 			key.extend_from_slice(event_id.as_bytes());
@@ -148,86 +151,4 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 #[tracing::instrument(skip(self), level = "info")]
 pub async fn startup_janitor(&self) {
 	info!("Outlier janitor is disabled.");
-	return;
-
-	use futures::StreamExt;
-
-	let mut count = 0_usize;
-	let mut room_index_count = 0_usize;
-
-	info!("Starting outlier janitor...");
-
-	// Clean up stale entries in roomid_outliereventid index
-	// and migrate old-format keys to new format (with 0xFF separator)
-	let mut room_index = self.db.roomid_outliereventid.raw_stream();
-	while let Some(Ok((key, value))) = room_index.next().await {
-		let Ok(event_id_str) = std::str::from_utf8(value) else {
-			continue;
-		};
-		let Ok(event_id) = OwnedEventId::try_from(event_id_str) else {
-			continue;
-		};
-
-		if self
-			.services
-			.timeline
-			.non_outlier_pdu_exists(&event_id)
-			.await
-		{
-			self.db.roomid_outliereventid.remove(key);
-			room_index_count = room_index_count.saturating_add(1);
-			continue;
-		}
-
-		// Migration: if key doesn't contain 0xFF, it's the old format
-		if !key.contains(&0xFF) {
-			if let Ok(pdu) = self.get_pdu_outlier(&event_id).await {
-				let room_id = pdu.room_id.clone().or_else(|| {
-					(pdu.kind == ruma::events::TimelineEventType::RoomCreate)
-						.then(|| pdu.event_id.as_str().replace('$', "!"))
-						.and_then(|r| OwnedRoomId::parse(r).ok())
-				});
-
-				if let Some(room_id) = room_id {
-					let mut new_key = room_id.as_bytes().to_vec();
-					new_key.push(0xFF);
-					new_key.extend_from_slice(event_id.as_bytes());
-
-					if new_key != key {
-						self.db.roomid_outliereventid.raw_put(&new_key, value);
-						self.db.roomid_outliereventid.remove(key);
-						conduwuit::debug!("Migrated outlier index key for {event_id}");
-					}
-				}
-			}
-		}
-	}
-
-	// Clean up stale entries in eventid_outlierpdu
-	let mut outliers = self.db.eventid_outlierpdu.raw_stream();
-	while let Some(Ok((event_id_bytes, _))) = outliers.next().await {
-		let Ok(event_id_str) = std::str::from_utf8(event_id_bytes) else {
-			continue;
-		};
-		let Ok(event_id) = OwnedEventId::try_from(event_id_str) else {
-			continue;
-		};
-		if self
-			.services
-			.timeline
-			.non_outlier_pdu_exists(&event_id)
-			.await
-		{
-			self.db.eventid_outlierpdu.remove(event_id_bytes);
-			count = count.saturating_add(1);
-		}
-	}
-
-	if count > 0 || room_index_count > 0 {
-		info!(
-			"Outlier janitor finished. Cleaned up {count} stale outliers and {room_index_count} 			 stale room index entries."
-		);
-	} else {
-		info!("Outlier janitor finished. No stale outliers found.");
-	}
 }
