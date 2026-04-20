@@ -128,6 +128,11 @@ pub enum DebugCommand {
 		/// If set, only list missing events without fetching or rescuing.
 		#[arg(short, long)]
 		dry_run: bool,
+
+		/// If set, forcefully deletes local timeline PDUs and re-fetches them
+		/// to fix sorting/depths.
+		#[arg(long)]
+		nuclear: bool,
 	},
 
 	/// Get the room DAG as a list of PDUs in a range.

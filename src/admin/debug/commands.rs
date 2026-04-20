@@ -1467,6 +1467,7 @@ pub(super) async fn repair_dag(
 	room_id: OwnedRoomId,
 	server: OwnedServerName,
 	dry_run: bool,
+	nuclear: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -1479,7 +1480,8 @@ pub(super) async fn repair_dag(
 		.await?;
 
 	self.write_str(&format!(
-		"Starting topological repair for {room_id} using {server} (dry_run: {dry_run})..."
+		"Starting topological repair for {room_id} using {server} (dry_run: {dry_run}, nuclear: \
+		 {nuclear})..."
 	))
 	.await?;
 
@@ -1506,10 +1508,15 @@ pub(super) async fn repair_dag(
 			.is_event_soft_failed(&event_id)
 			.await;
 
-		// If we already have it in the timeline and it is NOT soft-failed, we can skip
-		// it. Otherwise, we need to treat it as a "hole" or "broken link" and ensure
-		// its ancestors are healthy.
-		if seen.contains(&event_id) || (is_in_timeline && !is_soft_failed) {
+		// NUCLEAR MODE: If nuclear is set, we ignore that we have it in the timeline
+		// and re-process it.
+		let should_skip = if nuclear {
+			false
+		} else {
+			is_in_timeline && !is_soft_failed
+		};
+
+		if seen.contains(&event_id) || should_skip {
 			continue;
 		}
 
