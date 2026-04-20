@@ -1378,3 +1378,158 @@ pub(super) async fn send_test_email(&self) -> Result {
 
 	Ok(())
 }
+
+
+#[admin_command]
+pub(super) async fn compare_room_state(
+	&self,
+	room_id: OwnedRoomId,
+	server: OwnedServerName,
+) -> Result {
+	self.bail_restricted()?;
+
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let response = self
+		.services
+		.sending
+		.send_federation_request(&server, get_room_state::v1::Request {
+			room_id: room_id.clone(),
+			event_id: self
+				.services
+				.rooms
+				.timeline
+				.latest_pdu_in_room(&room_id)
+				.await?
+				.event_id()
+				.to_owned(),
+		})
+		.await?;
+
+	let mut remote_state = HashSet::new();
+	for pdu in &response.pdus {
+		let (event_id, _) = self
+			.services
+			.server_keys
+			.validate_and_add_event_id(pdu, &room_version)
+			.await?;
+		remote_state.insert(event_id);
+	}
+
+	let local_state_hash = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(&room_id)
+		.await?;
+	let local_state: HashSet<_> = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full_ids(local_state_hash)
+		.map(|(_, id)| id)
+		.collect()
+		.await;
+
+	let missing_locally: Vec<_> = remote_state.difference(&local_state).collect();
+	let extra_locally_count = local_state.difference(&remote_state).count();
+
+	self.write_str(&format!(
+		"Room State Comparison for {room_id} vs {server}:\n- Missing locally: {}\n- Extra 		 locally: {}\n\nMissing IDs:\n```\n{:#?}\n```",
+		missing_locally.len(),
+		extra_locally_count,
+		missing_locally
+	))
+	.await
+}
+
+#[admin_command]
+pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerName) -> Result {
+	self.bail_restricted()?;
+
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let latest = self
+		.services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await?;
+
+	self.write_str(&format!("Starting recursive repair for {room_id} using {server}...")).await?;
+
+	let mut queue: std::collections::VecDeque<OwnedEventId> =
+		latest.auth_events().map(ToOwned::to_owned).collect();
+
+	let mut fetched = 0_usize;
+	let mut seen = HashSet::new();
+	drop(latest);
+
+	while let Some(event_id) = queue.pop_front() {
+		if seen.contains(&event_id)
+			|| self
+				.services
+				.rooms
+				.timeline
+				.get_pdu_json(&event_id)
+				.await
+				.is_ok()
+		{
+			continue;
+		}
+
+		conduwuit::debug!("Fetching missing auth event {event_id}");
+		if let Ok(response) = self
+			.services
+			.sending
+			.send_federation_request(&server, get_event::v1::Request::new(event_id.clone(), None))
+			.await
+		{
+			let (eid, value) = self
+				.services
+				.server_keys
+				.validate_and_add_event_id(&response.pdu, &room_version)
+				.await?;
+
+			let pdu = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))?;
+
+			self.services.rooms.outlier.add_pdu_outlier(&eid, &value);
+			queue.extend(pdu.auth_events().map(ToOwned::to_owned));
+			fetched = fetched.saturating_add(1);
+			seen.insert(eid);
+		}
+	}
+
+	self.write_str(&format!("Fetched {fetched} missing auth events. Re-running force-set...")).await?;
+
+	Box::pin(self.force_set_room_state_from_server(room_id, server, None)).await
+}
+
+#[admin_command]
+pub(super) async fn import_outliers(&self, jsonl: String) -> Result {
+	self.bail_restricted()?;
+	let mut count = 0_usize;
+
+	for line in jsonl.lines() {
+		if line.trim().is_empty() {
+			continue;
+		}
+
+		let pdu: CanonicalJsonObject = serde_json::from_str(line).map_err(|e| {
+			err!(
+				"Failed to parse PDU JSON: {e:?}. Make sure it's valid JSON on each line of the \
+				 code block."
+			)
+		})?;
+
+		let event_id = pdu
+			.get("event_id")
+			.and_then(ruma::CanonicalJsonValue::as_str)
+			.and_then(|id| OwnedEventId::parse(id).ok())
+			.ok_or_else(|| err!("Missing or invalid event_id in PDU JSON"))?;
+
+		self.services.rooms.outlier.add_pdu_outlier(&event_id, &pdu);
+		count = count.saturating_add(1);
+	}
+
+	self.write_str(&format!("Successfully imported {count} outliers."))
+		.await
+}

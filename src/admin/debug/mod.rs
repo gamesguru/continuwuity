@@ -96,6 +96,12 @@ pub enum DebugCommand {
 	/// Attempts to "rescue" all outlier PDUs in ALL rooms.
 	RescueRoomAll,
 
+	/// Emergency command to re-import outliers from a JSONL file.
+	ImportOutliers {
+		/// The raw JSONL content.
+		jsonl: String,
+	},
+
 	/// Compares local room state with a remote server.
 	CompareRoomState {
 		/// The room ID.
