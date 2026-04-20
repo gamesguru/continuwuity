@@ -8,6 +8,8 @@ use futures::FutureExt;
 use ruma::{CanonicalJsonValue, EventId, MilliSecondsSinceUnixEpoch, RoomId, ServerName};
 use tracing::debug;
 
+use crate::rooms::event_handler::upgrade_outlier_pdu::UpgradeOptions;
+
 #[implement(super::Service)]
 #[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
@@ -78,9 +80,16 @@ where
 			.remove(room_id);
 	}};
 
-	self.upgrade_outlier_to_timeline_pdu(pdu, json, create_event, origin, room_id, false, false)
-		.boxed()
-		.await?;
+	self.upgrade_outlier_to_timeline_pdu(
+		pdu,
+		json,
+		create_event,
+		origin,
+		room_id,
+		UpgradeOptions { force: false, nuclear: false },
+	)
+	.boxed()
+	.await?;
 
 	debug!(
 		elapsed = ?start_time.elapsed(),

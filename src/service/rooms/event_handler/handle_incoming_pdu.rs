@@ -20,7 +20,10 @@ use ruma::{
 };
 use tracing::debug;
 
-use crate::rooms::timeline::{RawPduId, pdu_fits};
+use crate::rooms::{
+	event_handler::upgrade_outlier_pdu::UpgradeOptions,
+	timeline::{RawPduId, pdu_fits},
+};
 
 async fn should_rescind_invite(
 	services: &crate::rooms::event_handler::Services,

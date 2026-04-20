@@ -19,6 +19,11 @@ use ruma::{
 };
 
 use super::{get_room_version_id, to_room_version};
+
+pub struct UpgradeOptions {
+	pub force: bool,
+	pub nuclear: bool,
+}
 use crate::rooms::{
 	state_compressor::{CompressedState, HashSetCompressStateEvent},
 	timeline::RawPduId,
@@ -32,8 +37,7 @@ pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	create_event: &Pdu,
 	origin: &ServerName,
 	room_id: &RoomId,
-	force: bool,
-	nuclear: bool,
+	options: UpgradeOptions,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -45,7 +49,7 @@ where
 		.get_pdu_id(incoming_pdu.event_id())
 		.await
 	{
-		if nuclear {
+		if options.nuclear {
 			debug!(event_id = %incoming_pdu.event_id, "NUCLEAR: Removing existing timeline entry to fix ordering");
 			// We need a way to remove from timeline.
 			// For now, let us just proceed and append_pdu will overwrite
@@ -61,7 +65,7 @@ where
 		}
 	}
 
-	if !force
+	if !options.force
 		&& self
 			.services
 			.pdu_metadata
@@ -104,7 +108,7 @@ where
 					.flatten()
 			};
 
-			if state_at_incoming_event.is_none() && !force {
+			if state_at_incoming_event.is_none() && !options.force {
 				state_at_incoming_event = self
 					.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
 					.await
@@ -112,7 +116,7 @@ where
 					.flatten();
 			}
 
-			if state_at_incoming_event.is_none() && !force {
+			if state_at_incoming_event.is_none() && !options.force {
 				return Err!(Request(Unknown("Could not find state at event")));
 			}
 
@@ -145,7 +149,7 @@ where
 			.await
 			.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
-			if !auth_check && !force {
+			if !auth_check && !options.force {
 				return Err!(Request(Forbidden(
 					"Event has failed auth check with state at the event."
 				)));
@@ -216,7 +220,7 @@ where
 		"Performing soft-fail check"
 	);
 	let mut soft_fail = match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
-		| (false, _) => !force,
+		| (false, _) => !options.force,
 		| (true, None) => false,
 		| (true, Some(redact_id)) =>
 			!self
@@ -285,7 +289,7 @@ where
 			state_after.insert(shortstatekey, event_id.to_owned());
 		}
 
-		if !force {
+		if !options.force {
 			let new_room_state = self
 				.resolve_state(room_id, &room_version_id, state_after)
 				.await?;

@@ -15,6 +15,7 @@ use crate::{Dep, rooms, rooms::short::ShortRoomId};
 pub(super) struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
+	roomid_outliereventid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
@@ -35,6 +36,7 @@ impl Data {
 			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
 			pduid_pdu: db["pduid_pdu"].clone(),
+			roomid_outliereventid: db["roomid_outliereventid"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
 			db: args.db.clone(),
@@ -101,12 +103,11 @@ impl Data {
 	}
 
 	pub(super) async fn reindex_timeline(&self, room_id: &RoomId) -> Result<usize> {
-		let mut count = 0;
+		let mut count = 0_usize;
 		let pdus = self.pdus(room_id, PduCount::min());
 		pin_mut!(pdus);
 
 		while let Some((_, pdu)) = pdus.try_next().await? {
-			// Use chronological keys: [room_id, 0xFF, timestamp, event_id]
 			let mut key = room_id.as_bytes().to_vec();
 			key.push(0xFF);
 			let ts: u64 = pdu.origin_server_ts.into();
@@ -115,9 +116,9 @@ impl Data {
 
 			if let Ok(json) = self.get_non_outlier_pdu_json(&pdu.event_id).await {
 				self.eventid_outlierpdu.raw_put(&pdu.event_id, Json(&json));
-				// We reuse eventid_outlierpdu as a generic outlier store.
-				// Sorting will happen during the rescue-room phase.
-				count += 1;
+				self.roomid_outliereventid
+					.raw_put::<&[u8], [u8; 0]>(&key, []);
+				count = count.saturating_add(1);
 			}
 		}
 		Ok(count)
