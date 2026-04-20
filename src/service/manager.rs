@@ -80,16 +80,24 @@ impl Manager {
 			// Workers already implement graceful shutdown via interrupt()
 			// (channel close) and their own internal drain timeouts (e.g.
 			// sender_shutdown_timeout). We must NOT hard-abort them or we
-			// lose in-flight transactions. Just await completion.
-			match manager.await {
-				| Ok(Ok(())) => {
+			// lose in-flight transactions. A generous safety-net timeout
+			// guards against workers that never exit; on expiry we warn
+			// and let the caller proceed to drop Services and force-flush.
+			match tokio::time::timeout(Duration::from_secs(30), manager).await {
+				| Ok(Ok(Ok(()))) => {
 					info!("All workers shut down gracefully.");
 				},
-				| Ok(Err(e)) => {
+				| Ok(Ok(Err(e))) => {
 					error!("Manager shutdown error: {e:?}");
 				},
-				| Err(e) => {
+				| Ok(Err(e)) => {
 					error!("Manager task error: {e:?}");
+				},
+				| Err(_) => {
+					warn!(
+						"Shutdown safety timeout reached; some workers may still be running. \
+						 Proceeding with database flush."
+					);
 				},
 			}
 		}
