@@ -725,22 +725,16 @@ where
 			}
 		}
 
-		auth_types
-			.iter()
-			.stream()
-			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
-			.filter_map(|(key, ev_id)| async move {
+		// MSC4297: auth_state must include events from resolved_state for V2.1
+		for key in &auth_types {
+			if let Some(ev_id) = resolved_state.get(key) {
 				if let Some(event) = auth_events.get(ev_id) {
-					Some((key, event.clone()))
-				} else {
-					Some((key, fetch_event(ev_id.clone()).await?))
+					auth_state.insert(key.to_owned(), event.clone());
+				} else if let Some(event) = fetch_event(ev_id.clone()).await {
+					auth_state.insert(key.to_owned(), event);
 				}
-			})
-			.ready_for_each(|(key, event)| {
-				//TODO: synapse checks "rejected_reason" is None here
-				auth_state.insert(key.to_owned(), event);
-			})
-			.await;
+			}
+		}
 		trace!(map = ?auth_state.keys().collect::<Vec<_>>(), event_id = event.event_id().as_str(), "auth state for event");
 
 		debug!(event_id = event.event_id().as_str(), "Running auth checks");
