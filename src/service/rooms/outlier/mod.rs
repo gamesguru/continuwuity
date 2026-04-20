@@ -143,13 +143,11 @@ pub async fn startup_janitor(&self) {
 	// and migrate old-format keys to new format (with 0xFF separator)
 	let mut room_index = self.db.roomid_outliereventid.raw_stream();
 	while let Some(Ok((key, value))) = room_index.next().await {
-		let event_id_str = match std::str::from_utf8(value) {
-			| Ok(s) => s,
-			| Err(_) => continue,
+		let Ok(event_id_str) = std::str::from_utf8(value) else {
+			continue;
 		};
-		let event_id = match OwnedEventId::try_from(event_id_str) {
-			| Ok(id) => id,
-			| Err(_) => continue,
+		let Ok(event_id) = OwnedEventId::try_from(event_id_str) else {
+			continue;
 		};
 
 		if self
@@ -190,13 +188,11 @@ pub async fn startup_janitor(&self) {
 	// Clean up stale entries in eventid_outlierpdu
 	let mut outliers = self.db.eventid_outlierpdu.raw_stream();
 	while let Some(Ok((event_id_bytes, _))) = outliers.next().await {
-		let event_id_str = match std::str::from_utf8(event_id_bytes) {
-			| Ok(s) => s,
-			| Err(_) => continue,
+		let Ok(event_id_str) = std::str::from_utf8(event_id_bytes) else {
+			continue;
 		};
-		let event_id = match OwnedEventId::try_from(event_id_str) {
-			| Ok(id) => id,
-			| Err(_) => continue,
+		let Ok(event_id) = OwnedEventId::try_from(event_id_str) else {
+			continue;
 		};
 		if self
 			.services
