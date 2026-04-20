@@ -278,15 +278,13 @@ impl Service {
 					}
 
 					// 7. Default behavior
-					// If any allowed_users or allowed_servers exist, we block everything else
-					if !content.allowed_users.is_empty() || !content.allowed_servers.is_empty() {
-						return FilterLevel::Block;
-					}
+					content.user_filter_level(sender_user)
+				} else {
+					FilterLevel::Allow
 				}
+			} else {
+				FilterLevel::Allow
 			}
-
-			// Default behavior: Allow if no rules matched or if config is disabled
-			FilterLevel::Allow
 		};
 
 		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");

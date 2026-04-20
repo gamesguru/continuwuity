@@ -176,7 +176,13 @@ pub async fn create_event(
 				.await
 			{
 				if !unsigned.contains_key("prev_content") {
-					unsigned.insert("prev_content".to_owned(), prev_pdu.get_content_as_value());
+					let mut content = prev_pdu.get_content_as_value();
+					if let Some(is_direct) = prev_pdu.get_unsigned_as_value().get("is_direct") {
+						if let Some(map) = content.as_object_mut() {
+							map.insert("is_direct".to_owned(), is_direct.clone());
+						}
+					}
+					unsigned.insert("prev_content".to_owned(), content);
 				}
 				unsigned
 					.insert("prev_sender".to_owned(), serde_json::to_value(prev_pdu.sender())?);
