@@ -40,7 +40,7 @@ use crate::{
 	matrix::{Event, StateKey},
 	state_res::room_version::StateResolutionVersion,
 	trace,
-	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, WidebandExt},
+	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryWidebandExt, WidebandExt},
 };
 
 /// A mapping of event type and state_key to some value `T`, usually an
@@ -634,7 +634,7 @@ where
 
 	let events_to_check: Vec<_> = events_to_check
 		.map(Result::Ok)
-		.broad_and_then(async |event_id| {
+		.wide_and_then(async |event_id: &EventId| {
 			fetch_event(event_id.to_owned())
 				.await
 				.ok_or_else(|| Error::NotFound(format!("Failed to find {event_id}")))
