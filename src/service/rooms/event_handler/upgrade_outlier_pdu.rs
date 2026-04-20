@@ -95,7 +95,7 @@ where
 					.flatten()
 			};
 
-			if state_at_incoming_event.is_none() {
+			if state_at_incoming_event.is_none() && !force {
 				state_at_incoming_event = self
 					.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
 					.await
@@ -276,22 +276,24 @@ where
 			state_after.insert(shortstatekey, event_id.to_owned());
 		}
 
-		let new_room_state = self
-			.resolve_state(room_id, &room_version_id, state_after)
-			.await?;
+		if !force {
+			let new_room_state = self
+				.resolve_state(room_id, &room_version_id, state_after)
+				.await?;
 
-		// Set the new room state to the resolved state
-		debug!("Forcing new room state");
-		let HashSetCompressStateEvent { shortstatehash, added, removed } = self
-			.services
-			.state_compressor
-			.save_state(room_id, new_room_state)
-			.await?;
+			// Set the new room state to the resolved state
+			debug!("Forcing new room state");
+			let HashSetCompressStateEvent { shortstatehash, added, removed } = self
+				.services
+				.state_compressor
+				.save_state(room_id, new_room_state)
+				.await?;
 
-		self.services
-			.state
-			.force_state(room_id, shortstatehash, added, removed, &state_lock)
-			.await?;
+			self.services
+				.state
+				.force_state(room_id, shortstatehash, added, removed, &state_lock)
+				.await?;
+		}
 	}
 
 	if !soft_fail {
