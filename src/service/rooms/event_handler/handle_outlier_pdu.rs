@@ -188,9 +188,11 @@ where
 	trace!("Validation successful.");
 
 	// 7. Persist the event as an outlier.
-	self.services
-		.outlier
-		.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu);
+	self.services.outlier.add_pdu_outlier(
+		pdu_event.event_id(),
+		&incoming_pdu,
+		pdu_event.room_id.as_deref(),
+	);
 
 	trace!("Added pdu as outlier.");
 

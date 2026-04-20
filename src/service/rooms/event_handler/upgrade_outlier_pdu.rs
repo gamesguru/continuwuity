@@ -52,11 +52,12 @@ where
 		return Ok(Some(pduid));
 	}
 
-	if !force && self
-		.services
-		.pdu_metadata
-		.is_event_soft_failed(incoming_pdu.event_id())
-		.await
+	if !force
+		&& self
+			.services
+			.pdu_metadata
+			.is_event_soft_failed(incoming_pdu.event_id())
+			.await
 	{
 		return Err!(Request(InvalidParam("Event has been soft failed")));
 	}

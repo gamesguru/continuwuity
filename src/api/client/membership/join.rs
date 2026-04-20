@@ -620,7 +620,10 @@ async fn join_room_by_id_helper_remote(
 				);
 				return state;
 			}
-			services.rooms.outlier.add_pdu_outlier(&event_id, &value);
+			services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value, Some(room_id));
 			if let Some(state_key) = &pdu.state_key {
 				let shortstatekey = services
 					.rooms
@@ -651,7 +654,10 @@ async fn join_room_by_id_helper_remote(
 		.ready_filter_map(Result::ok)
 		.ready_for_each(|(event_id, value)| {
 			trace!(%event_id, "Adding PDU as an outlier from send_join auth_chain");
-			services.rooms.outlier.add_pdu_outlier(&event_id, &value);
+			services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value, Some(room_id));
 		})
 		.await;
 

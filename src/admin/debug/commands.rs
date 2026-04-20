@@ -1074,7 +1074,7 @@ pub(super) async fn force_set_room_state_from_server(
 			self.services
 				.rooms
 				.outlier
-				.add_pdu_outlier(&event_id, &value);
+				.add_pdu_outlier(&event_id, &value, Some(&room_id));
 		}
 
 		if let Some(state_key) = &pdu.state_key {
@@ -1109,7 +1109,7 @@ pub(super) async fn force_set_room_state_from_server(
 			self.services
 				.rooms
 				.outlier
-				.add_pdu_outlier(&event_id, &value);
+				.add_pdu_outlier(&event_id, &value, Some(&room_id));
 		}
 	}
 	info!("Resolving new room state");
@@ -1511,7 +1511,10 @@ pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerN
 
 			let pdu = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))?;
 
-			self.services.rooms.outlier.add_pdu_outlier(&eid, &value);
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&eid, &value, Some(&room_id));
 			queue.extend(pdu.auth_events().map(ToOwned::to_owned));
 			fetched = fetched.saturating_add(1);
 			seen.insert(eid);
@@ -1547,7 +1550,10 @@ pub(super) async fn import_outliers(&self, jsonl: String) -> Result {
 			.and_then(|id| OwnedEventId::parse(id).ok())
 			.ok_or_else(|| err!("Missing or invalid event_id in PDU JSON"))?;
 
-		self.services.rooms.outlier.add_pdu_outlier(&event_id, &pdu);
+		self.services
+			.rooms
+			.outlier
+			.add_pdu_outlier(&event_id, &pdu, None);
 		count = count.saturating_add(1);
 	}
 

@@ -93,7 +93,12 @@ pub fn room_stream<'a>(
 /// Append the PDU as an outlier.
 #[implement(Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
-pub fn add_pdu_outlier(&self, event_id: &EventId, pdu: &CanonicalJsonObject) {
+pub fn add_pdu_outlier(
+	&self,
+	event_id: &EventId,
+	pdu: &CanonicalJsonObject,
+	room_id: Option<&RoomId>,
+) {
 	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
 
 	let room_id = pdu

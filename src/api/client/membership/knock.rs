@@ -640,7 +640,10 @@ async fn knock_room_helper_remote(
 			.get_or_create_shortstatekey(&event_type, &state_key)
 			.await;
 
-		services.rooms.outlier.add_pdu_outlier(&event_id, &event);
+		services
+			.rooms
+			.outlier
+			.add_pdu_outlier(&event_id, &event, Some(&room_id));
 		state_map.insert(shortstatekey, event_id.clone());
 	}
 
