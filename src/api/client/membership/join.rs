@@ -424,7 +424,6 @@ async fn join_room_by_id_helper_remote(
 	reason: Option<String>,
 	servers: &[OwnedServerName],
 	state_lock: RoomMutexGuard,
-	is_direct: Option<bool>,
 	json_body: Option<&CanonicalJsonValue>,
 ) -> Result {
 	info!("Joining {room_id} over federation.");
