@@ -170,8 +170,8 @@ impl Service {
 		self.db.remove_from_timeline(event_id).await;
 	}
 	#[inline]
-	pub async fn backup_room_to_outliers(&self, room_id: &RoomId) -> Result<usize> {
-		self.db.backup_room_to_outliers(room_id).await
+	pub async fn reindex_timeline(&self, room_id: &RoomId) -> Result<usize> {
+		self.db.reindex_timeline(room_id).await
 	}
 
 

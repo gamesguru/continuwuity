@@ -1467,11 +1467,7 @@ pub(super) async fn compare_room_state(
 pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerName, dry_run: bool, nuclear: bool) -> Result {
 	self.bail_restricted()?;
 
-	if nuclear && !dry_run {
-		self.write_str(&format!("NUCLEAR MODE: Backing up timeline to outliers for {room_id}...")).await?;
-		let count = self.services.rooms.timeline.backup_room_to_outliers(&room_id).await?;
-		self.write_str(&format!("Backed up {count} timeline events to outliers.")).await?;
-	}
+
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let latest = self
