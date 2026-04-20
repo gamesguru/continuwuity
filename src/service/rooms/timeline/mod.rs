@@ -165,16 +165,16 @@ impl Service {
 	pub async fn get_pdu_json(&self, event_id: &EventId) -> Result<CanonicalJsonObject> {
 		self.db.get_pdu_json(event_id).await
 	}
+
 	#[inline]
 	pub async fn remove_from_timeline(&self, event_id: &EventId) {
 		self.db.remove_from_timeline(event_id).await;
 	}
+
 	#[inline]
 	pub async fn reindex_timeline(&self, room_id: &RoomId) -> Result<usize> {
 		self.db.reindex_timeline(room_id).await
 	}
-
-
 
 	/// Returns the json of a pdu.
 	#[inline]

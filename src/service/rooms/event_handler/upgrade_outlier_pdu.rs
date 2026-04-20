@@ -47,9 +47,10 @@ where
 	{
 		if nuclear {
 			debug!(event_id = %incoming_pdu.event_id, "NUCLEAR: Removing existing timeline entry to fix ordering");
-			// We need a way to remove from timeline. 
-			// For now, let us just proceed and append_pdu will overwrite eventid_pduid.
-			// But we should ideally remove the old pduid_pdu entry.
+			// We need a way to remove from timeline.
+			// For now, let us just proceed and append_pdu will overwrite
+			// eventid_pduid. But we should ideally remove the old pduid_pdu
+			// entry.
 		} else {
 			self.services
 				.outlier
