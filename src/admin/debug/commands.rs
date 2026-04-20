@@ -1379,7 +1379,6 @@ pub(super) async fn send_test_email(&self) -> Result {
 	Ok(())
 }
 
-
 #[admin_command]
 pub(super) async fn compare_room_state(
 	&self,
@@ -1434,7 +1433,8 @@ pub(super) async fn compare_room_state(
 	let extra_locally_count = local_state.difference(&remote_state).count();
 
 	self.write_str(&format!(
-		"Room State Comparison for {room_id} vs {server}:\n- Missing locally: {}\n- Extra 		 locally: {}\n\nMissing IDs:\n```\n{:#?}\n```",
+		"Room State Comparison for {room_id} vs {server}:\n- Missing locally: {}\n- Extra \
+		 locally: {}\n\nMissing IDs:\n```\n{:#?}\n```",
 		missing_locally.len(),
 		extra_locally_count,
 		missing_locally
@@ -1454,7 +1454,8 @@ pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerN
 		.latest_pdu_in_room(&room_id)
 		.await?;
 
-	self.write_str(&format!("Starting recursive repair for {room_id} using {server}...")).await?;
+	self.write_str(&format!("Starting recursive repair for {room_id} using {server}..."))
+		.await?;
 
 	let mut queue: std::collections::VecDeque<OwnedEventId> =
 		latest.auth_events().map(ToOwned::to_owned).collect();
@@ -1498,7 +1499,8 @@ pub(super) async fn repair_dag(&self, room_id: OwnedRoomId, server: OwnedServerN
 		}
 	}
 
-	self.write_str(&format!("Fetched {fetched} missing auth events. Re-running force-set...")).await?;
+	self.write_str(&format!("Fetched {fetched} missing auth events. Re-running force-set..."))
+		.await?;
 
 	Box::pin(self.force_set_room_state_from_server(room_id, server, None)).await
 }
