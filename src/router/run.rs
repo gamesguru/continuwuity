@@ -112,14 +112,12 @@ pub(crate) async fn stop(services: Arc<Services>) -> Result<()> {
 			info!("Database safely closed.");
 		},
 		| Err(dangling_arc) => {
-			let count = Arc::strong_count(&dangling_arc);
-			error!(
-				"CRITICAL: {} dangling database references remain! A spawned task completely \
-				 escaped the JoinSet and ignored the abort signal. Forcing flush via shared \
-				 reference...",
-				count.saturating_sub(1)
+			let count = Arc::strong_count(&dangling_arc).saturating_sub(1);
+			warn!(
+				"{count} dangling database reference(s) remain (likely from an in-flight admin \
+				 command or untracked task). Forcing WAL flush via shared reference..."
 			);
-			// Force flush via the shared reference anyway to protect the WAL
+			// Best-effort flush via the shared reference to protect the WAL
 			dangling_arc.force_flush().await;
 		},
 	}
