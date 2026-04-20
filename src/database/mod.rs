@@ -80,13 +80,16 @@ impl Database {
 	#[tracing::instrument(skip(self))]
 	pub async fn flush_and_close(self) {
 		conduwuit::info!("Exclusive database lock acquired. Flushing to disk...");
-		let (sort_result, sync_result) = tokio::task::spawn_blocking(move || {
+		let Ok((sort_result, sync_result)) = tokio::task::spawn_blocking(move || {
 			let sort_result = self.db.sort();
 			let sync_result = self.db.sync();
 			(sort_result, sync_result)
 		})
 		.await
-		.expect("Failed to flush database on shutdown");
+		else {
+			conduwuit::error!("spawn_blocking failed during database flush");
+			return;
+		};
 
 		if let Err(error) = sort_result {
 			conduwuit::error!("Failed to sort database during shutdown flush: {error}");
@@ -105,13 +108,16 @@ impl Database {
 	pub async fn force_flush(&self) {
 		conduwuit::warn!("Force flushing database via shared reference...");
 		let db = self.db.clone();
-		let (sort_result, sync_result) = tokio::task::spawn_blocking(move || {
+		let Ok((sort_result, sync_result)) = tokio::task::spawn_blocking(move || {
 			let sort_result = db.sort();
 			let sync_result = db.sync();
 			(sort_result, sync_result)
 		})
 		.await
-		.expect("Failed to force flush database");
+		else {
+			conduwuit::error!("spawn_blocking failed during forced database flush");
+			return;
+		};
 
 		if let Err(error) = sort_result {
 			conduwuit::error!("Failed to sort database during forced flush: {error}");

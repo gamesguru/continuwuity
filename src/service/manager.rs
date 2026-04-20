@@ -92,21 +92,30 @@ impl Manager {
 				| Err(_) => {
 					error!("Shutdown timeout hit! Aborting supervisor and remaining workers...");
 
-					// Abort the supervisor task so it releases the `self.workers` Mutex!
+					// Abort the supervisor task so it can eventually release the
+					// `self.workers` mutex, but do not wait indefinitely for that to
+					// happen here.
 					manager.abort();
 
-					// Now it is completely safe to lock and abort the inner workers.
-					let mut workers = self.workers.lock().await;
-					workers.abort_all();
+					match tokio::time::timeout(Duration::from_secs(1), self.workers.lock()).await
+					{
+						| Ok(mut workers) => {
+							workers.abort_all();
 
-					// PRO-TIP: Drain the JoinSet with a short bounded timeout!
-					// This waits a fraction of a second for Tokio to actually drop
-					// the aborted tasks' memory and their Arc references, preventing
-					// false alarms in try_unwrap().
-					let _ = tokio::time::timeout(Duration::from_millis(1000), async {
-						while workers.join_next().await.is_some() {}
-					})
-					.await;
+							// Drain the JoinSet with a short bounded timeout so Tokio
+							// can drop the aborted tasks' memory and Arc references.
+							let _ = tokio::time::timeout(Duration::from_millis(1000), async {
+								while workers.join_next().await.is_some() {}
+							})
+							.await;
+						},
+						| Err(_) => {
+							error!(
+								"Timed out waiting for worker set lock after aborting \
+								 supervisor; remaining workers may still be shutting down."
+							);
+						},
+					}
 				},
 			}
 		}
