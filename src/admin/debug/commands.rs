@@ -910,6 +910,161 @@ pub(super) async fn force_set_room_state_from_server(
 }
 
 #[admin_command]
+pub(super) async fn compare_room_state(
+	&self,
+	room_id: OwnedRoomId,
+	server_name: OwnedServerName,
+) -> Result {
+	self.bail_restricted()?;
+
+	if !self
+		.services
+		.rooms
+		.state_cache
+		.server_in_room(&self.services.server.name, &room_id)
+		.await
+	{
+		return Err!("We are not participating in the room / we don't know about the room ID.");
+	}
+
+	let local_state: HashMap<_, _> = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_full_pdus(&room_id)
+		.map_ok(|event| {
+			(
+				(event.kind().to_string().into(), event.state_key().map(ToOwned::to_owned)),
+				event.event_id().to_owned(),
+			)
+		})
+		.try_collect()
+		.await?;
+
+	let remote_state_response = self
+		.services
+		.sending
+		.send_federation_request(&server_name, get_room_state::v1::Request {
+			room_id: room_id.clone(),
+			event_id: self
+				.services
+				.rooms
+				.timeline
+				.latest_pdu_in_room(&room_id)
+				.await
+				.map_err(|_| err!(Database("Failed to find the latest PDU in database")))?
+				.event_id()
+				.to_owned(),
+		})
+		.await?;
+
+	let mut remote_state = HashMap::new();
+	for pdu in remote_state_response.pdus {
+		if let Ok(event) = serde_json::from_str::<CanonicalJsonObject>(pdu.get()) {
+			if let (Some(kind), Some(state_key), Some(event_id)) = (
+				event.get("type").and_then(|v| v.as_str()),
+				event.get("state_key").and_then(|v| v.as_str()),
+				event.get("event_id").and_then(|v| v.as_str()),
+			) {
+				if let Ok(parsed_id) = OwnedEventId::parse(event_id) {
+					remote_state.insert(
+						(TimelineEventType::from(kind), Some(state_key.to_owned())),
+						parsed_id,
+					);
+				}
+			}
+		}
+	}
+
+	let mut differences = String::new();
+	for (key, local_event_id) in &local_state {
+		match remote_state.get(key) {
+			| Some(remote_event_id) =>
+				if local_event_id != remote_event_id {
+					writeln!(
+						&mut differences,
+						"Mismatch for {key:?}: local={local_event_id}, remote={remote_event_id}"
+					)?;
+				},
+			| None => {
+				writeln!(&mut differences, "Local only: {key:?} ({local_event_id})")?;
+			},
+		}
+	}
+
+	for (key, remote_event_id) in &remote_state {
+		if !local_state.contains_key(key) {
+			writeln!(&mut differences, "Remote only: {key:?} ({remote_event_id})")?;
+		}
+	}
+
+	if differences.is_empty() {
+		self.write_str("Room state matches the remote server perfectly.")
+			.await
+	} else {
+		self.write_str(&format!("Room state differences:\n```\n{differences}\n```"))
+			.await
+	}
+}
+
+#[admin_command]
+pub(super) async fn repair_dag(&self, room_id: OwnedRoomId) -> Result {
+	self.bail_restricted()?;
+
+	let mut extremities = std::collections::HashSet::new();
+
+	let mut it = Box::pin(self.services.rooms.timeline.pdus_rev(&room_id, None));
+	let mut all_events = Vec::new();
+	let mut count = 0_usize;
+	while let Some(Ok((_, pdu))) = it.next().await {
+		all_events.push(pdu.event_id().to_owned());
+		count = count.saturating_add(1);
+		if count >= 200 {
+			break;
+		}
+	}
+
+	let mut has_next = std::collections::HashSet::new();
+	let mut it2 = Box::pin(self.services.rooms.timeline.pdus_rev(&room_id, None));
+	let mut count2 = 0_usize;
+	while let Some(Ok((_, pdu))) = it2.next().await {
+		for prev in &pdu.prev_events {
+			has_next.insert(prev.to_owned());
+		}
+		count2 = count2.saturating_add(1);
+		if count2 >= 200 {
+			break;
+		}
+	}
+
+	for ev in &all_events {
+		if !has_next.contains(ev) {
+			extremities.insert(ev.clone());
+		}
+	}
+
+	if extremities.is_empty() {
+		if let Some(ev) = all_events.first() {
+			extremities.insert(ev.clone());
+		}
+	}
+
+	let state_lock = self.services.rooms.state.mutex.lock(&*room_id).await;
+
+	self.services
+		.rooms
+		.state
+		.set_forward_extremities(&room_id, extremities.iter().map(|id| &**id), &state_lock)
+		.await;
+
+	self.write_str(&format!(
+		"Successfully recalculated forward extremities. Found {} new extremities.",
+		extremities.len()
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn get_signing_keys(
 	&self,
 	server_name: Option<OwnedServerName>,

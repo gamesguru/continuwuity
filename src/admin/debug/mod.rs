@@ -226,6 +226,21 @@ pub enum DebugCommand {
 		event_id: Option<OwnedEventId>,
 	},
 
+	/// Compares the room state of our local copy of the specified
+	/// room, with the copy the specified remote server says.
+	CompareRoomState {
+		/// The impacted room ID
+		room_id: OwnedRoomId,
+		/// The server we will use to query the room state for
+		server_name: OwnedServerName,
+	},
+
+	/// Recalculates the forward extremities of a room.
+	RepairDag {
+		/// The impacted room ID
+		room_id: OwnedRoomId,
+	},
+
 	/// Runs a server name through Continuwuity's true destination resolution
 	///   process
 	///
