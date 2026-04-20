@@ -151,7 +151,7 @@ where
 			.stream()
 			.boxed()
 	} else {
-		get_auth_chain_diff(&auth_chain_sets).boxed()
+		get_auth_chain_diff(auth_chain_sets).boxed()
 	};
 
 	let all_conflicted: HashSet<_> = auth_diff_stream

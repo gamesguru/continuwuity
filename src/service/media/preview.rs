@@ -212,10 +212,7 @@ pub async fn download_image(
 					let resized = img.resize(250, 250, FilterType::CatmullRom);
 					let mut cursor = std::io::Cursor::new(Vec::new());
 
-					if resized
-						.write_to(&mut cursor, image::ImageFormat::Jpeg)
-						.is_ok()
-					{
+					if resized.write_to(&mut cursor, ImageFormat::Jpeg).is_ok() {
 						image = cursor.into_inner();
 						width = Some(resized.width());
 						height = Some(resized.height());
