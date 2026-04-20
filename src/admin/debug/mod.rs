@@ -96,6 +96,22 @@ pub enum DebugCommand {
 	/// Attempts to "rescue" all outlier PDUs in ALL rooms.
 	RescueRoomAll,
 
+	/// Compares local room state with a remote server.
+	CompareRoomState {
+		/// The room ID.
+		room_id: OwnedRoomId,
+		/// The server to compare with.
+		server: OwnedServerName,
+	},
+
+	/// Fetches all missing auth chain events and repairs the room state.
+	RepairDag {
+		/// The room ID.
+		room_id: OwnedRoomId,
+		/// The server to fetch from.
+		server: OwnedServerName,
+	},
+
 	/// Get the room DAG as a list of PDUs in a range.
 	GetRoomDag {
 		/// Room ID
