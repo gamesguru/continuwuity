@@ -544,6 +544,8 @@ where
 		warn!(
 			%sender,
 			event_type=?incoming_event.kind(),
+			%sender_power_level,
+			power_levels_event_id=?power_levels_event.as_ref().map(|e| e.event_id().to_owned()),
 			"sender cannot send event"
 		);
 		return Ok(false);
