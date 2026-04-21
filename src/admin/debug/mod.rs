@@ -127,6 +127,19 @@ pub enum DebugCommand {
 		server: OwnedServerName,
 	},
 
+	/// Compares room state between two different remote servers.
+	CompareRemoteState {
+		/// The room ID.
+		room_id: OwnedRoomId,
+		/// The first server to compare.
+		server1: OwnedServerName,
+		/// The second server to compare.
+		server2: OwnedServerName,
+		/// The event ID to use as a reference point. Will be found
+		/// automatically if not provided.
+		event_id: Option<OwnedEventId>,
+	},
+
 	/// Heals a room by rescuing local outliers, fetching genuinely missing
 	/// events from federation, and resyncing state.
 	HealRoom {

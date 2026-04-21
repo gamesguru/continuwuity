@@ -118,13 +118,12 @@ impl Count {
 	#[must_use]
 	pub fn saturating_sub(self, sub: u64) -> Self {
 		match self {
-			| Self::Normal(i) => {
+			| Self::Normal(i) =>
 				if let Some(res) = i.checked_sub(sub) {
 					Self::Normal(res)
 				} else {
 					Self::Backfilled(0_i64.saturating_sub(sub.saturating_sub(i) as i64))
-				}
-			},
+				},
 			| Self::Backfilled(i) => Self::Backfilled(i.saturating_sub(sub as i64)),
 		}
 	}

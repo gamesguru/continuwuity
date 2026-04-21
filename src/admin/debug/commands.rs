@@ -1614,6 +1614,102 @@ pub(super) async fn compare_room_state(
 }
 
 #[admin_command]
+pub(super) async fn compare_remote_state(
+	&self,
+	room_id: OwnedRoomId,
+	server1: OwnedServerName,
+	server2: OwnedServerName,
+	at_event: Option<OwnedEventId>,
+) -> Result {
+	self.bail_restricted()?;
+
+	let at_event_id = match at_event {
+		| Some(event_id) => event_id,
+		| None => self
+			.services
+			.rooms
+			.timeline
+			.latest_pdu_in_room(&room_id)
+			.await?
+			.event_id()
+			.to_owned(),
+	};
+
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+
+	// Fetch state from both servers at the same reference PDU
+	let (response1, response2) = futures::join!(
+		self.services
+			.sending
+			.send_federation_request(&server1, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: at_event_id.clone(),
+			}),
+		self.services
+			.sending
+			.send_federation_request(&server2, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: at_event_id,
+			}),
+	);
+
+	let (response1, response2) = (response1?, response2?);
+
+	let mut state1 = HashMap::new();
+	for pdu in &response1.pdus {
+		let (event_id, value) = self
+			.services
+			.server_keys
+			.validate_and_add_event_id(pdu, &room_version)
+			.await?;
+
+		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
+		if let Some(state_key) = &pdu.state_key {
+			state1.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+		}
+	}
+
+	let mut state2 = HashMap::new();
+	for pdu in &response2.pdus {
+		let (event_id, value) = self
+			.services
+			.server_keys
+			.validate_and_add_event_id(pdu, &room_version)
+			.await?;
+
+		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
+		if let Some(state_key) = &pdu.state_key {
+			state2.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+		}
+	}
+
+	let mut only_on_server1 = Vec::new();
+	for (key, event_id) in &state1 {
+		if state2.get(key) != Some(event_id) {
+			only_on_server1.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+		}
+	}
+
+	let mut only_on_server2 = Vec::new();
+	for (key, event_id) in &state2 {
+		if state1.get(key) != Some(event_id) {
+			only_on_server2.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+		}
+	}
+
+	self.write_str(&format!(
+		"Remote State Comparison for {room_id}:\n- {server1} vs {server2}\n- Only on {server1}: \
+		 {}\n- Only on {server2}: {}\n\nIDs only on {server1}:\n```\n{:#?}\n```\n\nIDs only on \
+		 {server2}:\n```\n{:#?}\n```",
+		only_on_server1.len(),
+		only_on_server2.len(),
+		only_on_server1,
+		only_on_server2
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn heal_room(
 	&self,
 	room_id: OwnedRoomId,
