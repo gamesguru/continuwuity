@@ -56,7 +56,7 @@ impl Data {
 			.await?
 			.map(at!(0))
 			.filter(|&count| matches!(count, PduCount::Normal(_)))
-			.unwrap_or_else(PduCount::max);
+			.unwrap_or_else(PduCount::min);
 
 		Ok(last_count)
 	}
@@ -260,8 +260,21 @@ impl Data {
 		let pdu: PduEvent = self.pduid_pdu.get(pdu_id).await.deserialized()?;
 
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-				return Err!(Database("PDU does not belong to room {expected_room}"));
+			let actual_room = pdu.room_id_or_hash();
+			if let Some(actual_room) = actual_room {
+				if actual_room != expected_room {
+					return Err!(Database(
+						"PDU does belong to room {actual_room} (expected {expected_room})"
+					));
+				}
+			} else {
+				// Room version 3 and later: PDU JSON does not contain room_id.
+				// Verify room association by comparing ShortRoomId from pdu_id.
+				let expected_shortroomid =
+					self.services.short.get_shortroomid(expected_room).await?;
+				if pdu_id.shortroomid() != expected_shortroomid.to_be_bytes() {
+					return Err!(Database("PDU does not belong to room {expected_room}"));
+				}
 			}
 		}
 
@@ -330,7 +343,7 @@ impl Data {
 				self.pduid_pdu
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(move |kv| Self::parse_json_slice(Some(room_id), kv))
+					.ready_and_then(move |kv| Self::parse_json_slice(None, kv))
 			})
 			.try_flatten_stream()
 	}
@@ -346,7 +359,7 @@ impl Data {
 				self.pduid_pdu
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(move |kv| Self::parse_json_slice(Some(room_id), kv))
+					.ready_and_then(move |kv| Self::parse_json_slice(None, kv))
 			})
 			.try_flatten_stream()
 	}
@@ -359,10 +372,17 @@ impl Data {
 		let pdu = serde_json::from_slice::<PduEvent>(pdu)?;
 
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-				return Err(conduwuit::err!(Database(
-					"PDU does not belong to expected room {expected_room}"
-				)));
+			let actual_room = pdu.room_id_or_hash();
+			if let Some(actual_room) = actual_room {
+				if actual_room != expected_room {
+					return Err(conduwuit::err!(Database(
+						"PDU does belong to room {actual_room} (expected {expected_room})"
+					)));
+				}
+			} else {
+				// Room version 3 and later: PDU JSON does not contain room_id.
+				// We do not have ShortRoomId here for the expected room, but
+				// we are called from an iterator that already filtered by it.
 			}
 		}
 
