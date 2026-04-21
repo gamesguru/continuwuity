@@ -1101,6 +1101,7 @@ pub(super) async fn force_set_room_state_from_server(
 	room_id: OwnedRoomId,
 	server_name: OwnedServerName,
 	at_event: Option<OwnedEventId>,
+	overwrite: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -1235,6 +1236,27 @@ pub(super) async fn force_set_room_state_from_server(
 			.outlier
 			.add_pdu_outlier(&event_id, &value, Some(&room_id));
 	}
+
+	let new_room_state = if overwrite {
+		info!("Resolving new room state (ABSOLUTE OVERRIDE)");
+		use std::borrow::Borrow;
+		let compressed: conduwuit_service::rooms::state_compressor::CompressedState = self
+			.services
+			.rooms
+			.state_compressor
+			.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, (*eid).borrow())))
+			.collect()
+			.await;
+		std::sync::Arc::new(compressed)
+	} else {
+		info!("Resolving new room state (state-res)");
+		self.services
+			.rooms
+			.event_handler
+			.resolve_state(&room_id, &room_version, state)
+			.await?
+	};
+
 	info!("Compressing new room state");
 	let HashSetCompressStateEvent {
 		shortstatehash: short_state_hash,
@@ -1244,12 +1266,12 @@ pub(super) async fn force_set_room_state_from_server(
 		.services
 		.rooms
 		.state_compressor
-		.save_state(room_id.clone().as_ref(), state)
+		.save_state(room_id.clone().as_ref(), new_room_state)
 		.await?;
 
 	let state_lock = self.services.rooms.state.mutex.lock(&*room_id).await;
 
-	info!("Forcing new room state (ABSOLUTE OVERRIDE)");
+	info!("Forcing new room state");
 	self.services
 		.rooms
 		.state
@@ -1737,7 +1759,7 @@ pub(super) async fn heal_room(
 	// Phase 5: Resync state from the remote server
 	self.write_str("Phase 5: Resyncing room state from server...")
 		.await?;
-	Box::pin(self.force_set_room_state_from_server(room_id, server, None)).await
+	Box::pin(self.force_set_room_state_from_server(room_id, server, None, nuclear)).await
 }
 
 #[admin_command]

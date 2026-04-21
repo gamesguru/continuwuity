@@ -316,6 +316,8 @@ pub enum DebugCommand {
 		/// The event ID of the latest known PDU in the room. Will be found
 		/// automatically if not provided.
 		event_id: Option<OwnedEventId>,
+		#[arg(short, long)]
+		overwrite: bool,
 	},
 
 	/// Runs a server name through Continuwuity's true destination resolution
