@@ -664,6 +664,7 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	drop(cork);
+	drop(send_join_response);
 
 	let mut unsigned = join_event
 		.get("unsigned")
@@ -809,39 +810,55 @@ async fn join_room_by_id_helper_remote(
 		shortstatehash: statehash_before_join,
 		added,
 		removed,
-	} = services
-		.rooms
-		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
-		.await?;
+	} = Box::pin(
+		services
+			.rooms
+			.state_compressor
+			.save_state(room_id, Arc::new(compressed)),
+	)
+	.await?;
 
 	// We append the PDU first. If this fails, we haven't mutated the room state
 	// yet.
 	info!("Appending new room join event");
-	let _pdu_id = services
-		.rooms
-		.timeline
-		.append_pdu(
-			&parsed_join_pdu,
-			join_event,
-			once(parsed_join_pdu.event_id.borrow()),
-			&state_lock,
-			room_id,
-		)
-		.await?;
+	let _pdu_id = Box::pin(services.rooms.timeline.append_pdu(
+		&parsed_join_pdu,
+		join_event,
+		once(parsed_join_pdu.event_id.borrow()),
+		&state_lock,
+		room_id,
+	))
+	.await?;
 
 	debug!("Forcing state for new room");
-	services
-		.rooms
-		.state
-		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
-		.await?;
+	Box::pin(services.rooms.state.force_state(
+		room_id,
+		statehash_before_join,
+		added,
+		removed,
+		&state_lock,
+	))
+	.await?;
 
-	let statehash_after_join = services
-		.rooms
-		.state
-		.append_to_state(&parsed_join_pdu, room_id)
-		.await?;
+	// Nightly moved append_pdu before force_state, which causes force_state
+	// to overwrite the state_cache with the remote state's membership (e.g.
+	// invite). We MUST update our membership to join again so the user sees the
+	// room in /sync.
+	Box::pin(services.rooms.state_cache.update_membership(
+		room_id,
+		sender_user,
+		&parsed_join_pdu,
+		true,
+	))
+	.await?;
+
+	let statehash_after_join = Box::pin(
+		services
+			.rooms
+			.state
+			.append_to_state(&parsed_join_pdu, room_id),
+	)
+	.await?;
 
 	info!("Setting final room state for new room");
 	// We set the room state after inserting the pdu, so that we never have a moment

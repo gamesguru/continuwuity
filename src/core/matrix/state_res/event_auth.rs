@@ -1311,22 +1311,25 @@ fn check_power_levels(
 	for user in user_levels_to_check {
 		let old_level = old_state.users.get(user);
 		let new_level = new_state.users.get(user);
+		if new_level.is_some() && creators.contains(user) {
+			if new_level != Some(&Int::MAX) {
+				warn!(
+					"creators cannot appear in the users list of m.room.power_levels with a \
+					 non-privileged power level"
+				);
+				return Some(false); // cannot alter creator power level
+			}
+			trace!("ignoring creator in users list with privileged power level");
+			continue;
+		}
 		if old_level.is_some() && new_level.is_some() && old_level == new_level {
 			continue;
 		}
 
-		let effective_old_level =
-			if room_version.explicitly_privilege_room_creators && creators.contains(user) {
-				&Int::MAX
-			} else {
-				old_level.unwrap_or(&old_state.users_default)
-			};
-
 		// If the current value is equal to the sender's current power level, reject
-		if user != power_event.sender() && effective_old_level == &user_level {
+		if user != power_event.sender() && old_level == Some(&user_level) {
 			warn!(
 				?old_level,
-				?effective_old_level,
 				?new_level,
 				?user,
 				%user_level,
@@ -1338,12 +1341,11 @@ fn check_power_levels(
 
 		// If the current value is higher than the sender's current power level, reject
 		// If the new value is higher than the sender's current power level, reject
-		let old_level_too_big = effective_old_level > &user_level;
-		let new_level_too_big = new_level.unwrap_or(&new_state.users_default) > &user_level;
+		let old_level_too_big = old_level > Some(&user_level);
+		let new_level_too_big = new_level > Some(&user_level);
 		if old_level_too_big {
 			warn!(
 				?old_level,
-				?effective_old_level,
 				?new_level,
 				?user,
 				%user_level,
@@ -1355,7 +1357,6 @@ fn check_power_levels(
 		if new_level_too_big {
 			warn!(
 				?old_level,
-				?effective_old_level,
 				?new_level,
 				?user,
 				%user_level,
