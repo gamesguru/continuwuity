@@ -99,10 +99,10 @@ impl Service {
 		room_id: &RoomId,
 		shortstatehash: u64,
 		statediffnew: Arc<CompressedState>,
-		_statediffremoved: Arc<CompressedState>,
+		statediffremoved: Arc<CompressedState>,
 		state_lock: &RoomMutexGuard,
 	) -> Result {
-		let event_ids = statediffnew
+		let new_event_ids = statediffnew
 			.iter()
 			.stream()
 			.map(|&new| parse_compressed_state_event(new).1)
@@ -113,14 +113,26 @@ impl Service {
 			})
 			.ignore_err();
 
-		pin_mut!(event_ids);
-		while let Some(event_id) = event_ids.next().await {
+		let removed_event_ids = statediffremoved
+			.iter()
+			.stream()
+			.map(|&old| parse_compressed_state_event(old).1)
+			.then(|shorteventid| {
+				self.services
+					.short
+					.get_eventid_from_short::<Box<_>>(shorteventid)
+			})
+			.ignore_err();
+
+		pin_mut!(new_event_ids);
+		while let Some(event_id) = new_event_ids.next().await {
 			let Ok(pdu) = self
 				.services
 				.timeline
 				.get_pdu_in_room(Some(room_id), &event_id)
 				.await
 			else {
+				warn!("Failed to fetch PDU {event_id} for new state during force_state");
 				continue;
 			};
 
@@ -135,6 +147,59 @@ impl Service {
 						.state_cache
 						.update_membership(room_id, user_id, &pdu, false)
 						.await?;
+				},
+				| TimelineEventType::SpaceChild => {
+					self.services
+						.spaces
+						.roomid_spacehierarchy_cache
+						.lock()
+						.await
+						.remove(room_id);
+				},
+				| _ => continue,
+			}
+		}
+
+		pin_mut!(removed_event_ids);
+		while let Some(event_id) = removed_event_ids.next().await {
+			// When state is removed, we might need to update caches or memberships
+			// that are no longer current.
+			let Ok(pdu) = self
+				.services
+				.timeline
+				.get_pdu_in_room(Some(room_id), &event_id)
+				.await
+			else {
+				// This is common for removed state as it might be from a branch we don't have
+				continue;
+			};
+
+			match pdu.kind {
+				| TimelineEventType::RoomMember => {
+					let Some(user_id) = pdu.state_key.as_ref().map(UserId::parse).flat_ok()
+					else {
+						continue;
+					};
+
+					// If this member event is removed, we must re-sync membership
+					// from the NEW state to update the cache correctly.
+					if let Ok(new_pdu) = self
+						.services
+						.state_accessor
+						.room_state_get(room_id, &StateEventType::RoomMember, user_id.as_str())
+						.await
+					{
+						self.services
+							.state_cache
+							.update_membership(room_id, user_id, &new_pdu, false)
+							.await?;
+					} else {
+						// User is no longer in the room at all in the new state
+						self.services
+							.state_cache
+							.mark_as_left(user_id, room_id, None)
+							.await;
+					}
 				},
 				| TimelineEventType::SpaceChild => {
 					self.services

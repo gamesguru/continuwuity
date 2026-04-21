@@ -1546,14 +1546,18 @@ pub(super) async fn compare_room_state(
 		})
 		.await?;
 
-	let mut remote_state = HashSet::new();
+	let mut remote_state = HashMap::new();
 	for pdu in &response.pdus {
-		let (event_id, _) = self
+		let (event_id, value) = self
 			.services
 			.server_keys
 			.validate_and_add_event_id(pdu, &room_version)
 			.await?;
-		remote_state.insert(event_id);
+
+		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
+		if let Some(state_key) = &pdu.state_key {
+			remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+		}
 	}
 
 	let local_state_hash = self
@@ -1562,17 +1566,28 @@ pub(super) async fn compare_room_state(
 		.state
 		.get_room_shortstatehash(&room_id)
 		.await?;
-	let local_state: HashSet<_> = self
+	let local_state: HashMap<_, _> = self
 		.services
 		.rooms
 		.state_accessor
-		.state_full_ids(local_state_hash)
-		.map(|(_, id)| id)
+		.state_full(local_state_hash)
+		.map(|((ty, sk), pdu)| ((ty.to_string(), sk.to_string()), pdu.event_id().to_owned()))
 		.collect()
 		.await;
 
-	let missing_locally: Vec<_> = remote_state.difference(&local_state).collect();
-	let extra_locally: Vec<_> = local_state.difference(&remote_state).collect();
+	let mut missing_locally = Vec::new();
+	for (key, event_id) in &remote_state {
+		if local_state.get(key) != Some(event_id) {
+			missing_locally.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+		}
+	}
+
+	let mut extra_locally = Vec::new();
+	for (key, event_id) in &local_state {
+		if remote_state.get(key) != Some(event_id) {
+			extra_locally.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+		}
+	}
 
 	self.write_str(&format!(
 		"Room State Comparison for {room_id} vs {server}:\n- Missing locally: {}\n- Extra \
