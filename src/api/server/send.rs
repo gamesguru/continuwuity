@@ -310,9 +310,11 @@ async fn build_local_dag(
 			.as_array()
 			.expect("prev_events must be an array")
 			.iter()
-			.map(|v| {
-				OwnedEventId::parse(v.as_str().expect("prev_events values must be strings"))
-					.expect("prev_events must be valid event IDs")
+			.filter_map(|v| {
+				let event_id =
+					OwnedEventId::parse(v.as_str().expect("prev_events values must be strings"))
+						.expect("prev_events must be valid event IDs");
+				pdu_map.contains_key(&event_id).then_some(event_id)
 			})
 			.collect::<HashSet<OwnedEventId>>();
 
