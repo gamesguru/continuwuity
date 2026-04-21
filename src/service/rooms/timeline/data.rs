@@ -152,8 +152,24 @@ impl Data {
 
 		// Enforce cross-room boundary: verify the PDU belongs to the expected room
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-				return Err!(Database("PDU {event_id} does not belong to room {expected_room}"));
+			let actual_room = pdu.room_id_or_hash();
+			if let Some(actual_room) = actual_room {
+				if actual_room != expected_room {
+					return Err!(Database(
+						"PDU {event_id} does belong to room {actual_room} (expected \
+						 {expected_room})"
+					));
+				}
+			} else {
+				// Room version 3 and later: PDU JSON does not contain room_id.
+				// Verify room association by comparing ShortRoomId from pdu_id.
+				let expected_shortroomid =
+					self.services.short.get_shortroomid(expected_room).await?;
+				if pduid.shortroomid() != expected_shortroomid.to_be_bytes() {
+					return Err!(Database(
+						"PDU {event_id} does not belong to room {expected_room}"
+					));
+				}
 			}
 		}
 
@@ -181,15 +197,32 @@ impl Data {
 		let outlier = self
 			.eventid_outlierpdu
 			.get(event_id)
-			.map(move |handle| {
+			.then(move |handle| async move {
+				let handle = handle?;
 				let pdu: PduEvent = handle.deserialized()?;
 
 				// Enforce cross-room boundary
 				if let Some(expected_room) = room_id {
-					if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-						return Err(conduwuit::err!(Database(
-							"Outlier PDU {event_id} does not belong to room {expected_room}"
-						)));
+					let actual_room = pdu.room_id_or_hash();
+					if let Some(actual_room) = actual_room {
+						if actual_room != expected_room {
+							return Err(conduwuit::err!(Database(
+								"Outlier PDU {event_id} does belong to room {actual_room} \
+								 (expected {expected_room})"
+							)));
+						}
+					} else {
+						// Room version 3 and later: PDU JSON does not contain room_id.
+						// Verify room association via roomid_outliereventid table.
+						let mut key = expected_room.as_bytes().to_vec();
+						key.push(0xFF);
+						key.extend_from_slice(event_id.as_bytes());
+						if self.roomid_outliereventid.exists(&key).await.is_err() {
+							return Err(conduwuit::err!(Database(
+								"Outlier PDU {event_id} is not associated with room \
+								 {expected_room}"
+							)));
+						}
 					}
 				}
 

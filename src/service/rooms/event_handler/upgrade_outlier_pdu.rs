@@ -23,6 +23,7 @@ use super::{get_room_version_id, to_room_version};
 pub struct UpgradeOptions {
 	pub force: bool,
 	pub nuclear: bool,
+	pub rescue: bool,
 }
 use crate::rooms::{
 	state_compressor::{CompressedState, HashSetCompressStateEvent},
@@ -273,8 +274,13 @@ where
 		.map(Arc::new)
 		.await;
 
-	if incoming_pdu.state_key().is_some() {
-		debug!("Event is a state-event. Deriving new room state");
+	let is_state_event = incoming_pdu.state_key().is_some();
+	if is_state_event || options.rescue {
+		if is_state_event {
+			debug!("Event is a state-event. Deriving new room state");
+		} else {
+			debug!("Rescuing non-state event. Deriving new room state to update extremities");
+		}
 
 		// We also add state after incoming event to the fork states
 		let mut state_after = state_at_incoming_event.clone();
@@ -289,7 +295,7 @@ where
 			state_after.insert(shortstatekey, event_id.to_owned());
 		}
 
-		if !options.force {
+		if !options.force || options.rescue {
 			let new_room_state = self
 				.resolve_state(room_id, &room_version_id, state_after)
 				.await?;

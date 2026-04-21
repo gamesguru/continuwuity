@@ -87,6 +87,10 @@ pub enum DebugCommand {
 		/// If set, rescues outliers in ALL rooms.
 		#[arg(long)]
 		all: bool,
+
+		/// If set, includes the last N timeline PDUs for re-processing.
+		#[arg(long)]
+		timeline_limit: Option<usize>,
 	},
 
 	/// Purge outlier PDUs that already exist in our timeline.

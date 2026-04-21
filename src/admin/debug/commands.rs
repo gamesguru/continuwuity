@@ -570,7 +570,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Re
 			&create_event,
 			&origin,
 			&room_id,
-			UpgradeOptions { force, nuclear: false },
+			UpgradeOptions { force, nuclear: false, rescue: true },
 		)
 		.await?;
 
@@ -749,6 +749,7 @@ pub(super) async fn rescue_room(
 	force: bool,
 	nuclear: bool,
 	all: bool,
+	timeline_limit: Option<usize>,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -756,9 +757,18 @@ pub(super) async fn rescue_room(
 		let mut room_ids: HashSet<OwnedRoomId> = HashSet::new();
 		let mut outliers = self.services.rooms.outlier.stream();
 
-		while let Some((_, pdu)) = outliers.next().await {
+		while let Some((_event_id, pdu)) = outliers.next().await {
 			if let Some(room_id) = pdu.room_id() {
 				room_ids.insert(room_id.to_owned());
+			} else {
+				// V3+ rooms: PDU JSON doesn't contain room_id.
+				// We need a way to find the room association.
+				// For --all, we might have to scan roomid_outliereventid.
+				// But we can also just try to find it from the event_id if it's
+				// a create event, or just ignore for now as it's expensive.
+				if let Some(room_id) = pdu.room_id_or_hash() {
+					room_ids.insert(room_id);
+				}
 			}
 		}
 		drop(outliers);
@@ -775,7 +785,7 @@ pub(super) async fn rescue_room(
 
 		let mut total_rescued = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(self.rescue_room(room_id, force, nuclear, false))
+			if Box::pin(self.rescue_room(room_id, force, nuclear, false, None))
 				.await
 				.is_ok()
 			{
@@ -788,7 +798,7 @@ pub(super) async fn rescue_room(
 			.await;
 	}
 
-	let outliers: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = self
+	let mut outliers: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = self
 		.services
 		.rooms
 		.outlier
@@ -806,6 +816,32 @@ pub(super) async fn rescue_room(
 		.collect()
 		.await;
 
+	if let Some(limit) = timeline_limit {
+		self.write_str(&format!("Including last {limit} timeline PDUs for re-processing..."))
+			.await?;
+		let timeline_pdus: Vec<(OwnedEventId, PduEvent)> = self
+			.services
+			.rooms
+			.timeline
+			.all_pdus(&room_id)
+			.collect::<Vec<_>>()
+			.await
+			.into_iter()
+			.rev()
+			.take(limit)
+			.map(|(_, pdu)| (pdu.event_id().to_owned(), pdu))
+			.collect();
+
+		for (event_id, pdu) in timeline_pdus {
+			if outliers.contains_key(&event_id) {
+				continue;
+			}
+			if let Ok(json) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
+				outliers.insert(event_id, (pdu, json));
+			}
+		}
+	}
+
 	if outliers.is_empty() {
 		return self.write_str("No outliers found in this room.").await;
 	}
@@ -816,17 +852,24 @@ pub(super) async fn rescue_room(
 	for (event_id, (pdu, _)) in &outliers {
 		let mut parents = HashSet::new();
 		for prev_id in pdu.prev_events() {
-			if outliers.contains_key(prev_id) {
-				parents.insert(prev_id.to_owned());
-			}
+			parents.insert(prev_id.to_owned());
 		}
 		graph.insert(event_id.clone(), parents);
 	}
 
 	let event_fetch = |event_id: OwnedEventId| {
-		let ts = outliers
-			.get(&event_id)
-			.map_or_else(|| ruma::uint!(0), |(p, _)| p.origin_server_ts);
+		let pdu = if let Some((p, _)) = outliers.get(&event_id) {
+			Some(p.clone())
+		} else {
+			self.services
+				.rooms
+				.timeline
+				.get_pdu(&event_id)
+				.now_or_never()
+				.and_then(Result::ok)
+		};
+
+		let ts = pdu.map_or_else(|| ruma::uint!(0), |p| p.origin_server_ts);
 		ready(Ok::<_, state_res::Error>((ruma::int!(0), ruma::MilliSecondsSinceUnixEpoch(ts))))
 	};
 
@@ -879,7 +922,7 @@ pub(super) async fn rescue_room(
 				&create_event,
 				&origin,
 				&room_id,
-				UpgradeOptions { force, nuclear },
+				UpgradeOptions { force, nuclear, rescue: true },
 			)
 			.await
 			.is_ok()
@@ -1099,16 +1142,16 @@ pub(super) async fn force_set_room_state_from_server(
 
 		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
 			info!(
-				"PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier \
-				 addition"
+				"PDU {event_id} already in timeline (pdu_id={pdu_id:?}), adding as outlier for \
+				 potential re-rescue"
 			);
 		} else {
 			info!("PDU {event_id} NOT in timeline, adding as outlier");
-			self.services
-				.rooms
-				.outlier
-				.add_pdu_outlier(&event_id, &value, Some(&room_id));
 		}
+		self.services
+			.rooms
+			.outlier
+			.add_pdu_outlier(&event_id, &value, Some(&room_id));
 
 		if let Some(state_key) = &pdu.state_key {
 			let shortstatekey = self
@@ -1134,16 +1177,16 @@ pub(super) async fn force_set_room_state_from_server(
 
 		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
 			info!(
-				"Auth PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier \
-				 addition"
+				"Auth PDU {event_id} already in timeline (pdu_id={pdu_id:?}), adding as outlier \
+				 for potential re-rescue"
 			);
 		} else {
 			info!("Auth PDU {event_id} NOT in timeline, adding as outlier");
-			self.services
-				.rooms
-				.outlier
-				.add_pdu_outlier(&event_id, &value, Some(&room_id));
 		}
+		self.services
+			.rooms
+			.outlier
+			.add_pdu_outlier(&event_id, &value, Some(&room_id));
 	}
 	info!("Resolving new room state");
 	let new_room_state = self
@@ -1508,7 +1551,7 @@ pub(super) async fn heal_room(
 	if !dry_run {
 		self.write_str(&format!("Phase 1: Rescuing local outliers in {room_id}..."))
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), true, nuclear, false)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), true, nuclear, false, None)).await?;
 	} else {
 		self.write_str(&format!("Phase 1: [dry-run] Would rescue local outliers in {room_id}"))
 			.await?;
@@ -1624,7 +1667,7 @@ pub(super) async fn heal_room(
 	if fetched > 0 {
 		self.write_str(&format!("Phase 3: Fetched {fetched} missing events, rescuing..."))
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), true, nuclear, false)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), true, nuclear, false, None)).await?;
 	} else {
 		self.write_str("Phase 3: No missing events found (DAG is complete locally).")
 			.await?;
