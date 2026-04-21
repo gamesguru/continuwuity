@@ -251,6 +251,9 @@ impl Service {
 						.iter()
 						.any(|a| Self::glob_match(a, sender_server_s));
 
+					let allowlist_is_empty =
+						content.allowed_users.is_empty() && content.allowed_servers.is_empty();
+
 					// MSC4155 Evaluation Order:
 					// 1. allowed_users
 					if allowed_user {
@@ -277,7 +280,14 @@ impl Service {
 						return FilterLevel::Ignore;
 					}
 
-					// 7. Default behavior
+					// 7. Strict allowlist fallback:
+					// If the allowlist is not empty and we didn't find a match, the user is
+					// blocked.
+					if !allowlist_is_empty {
+						return FilterLevel::Block;
+					}
+
+					// 8. Default behavior
 					content.user_filter_level(sender_user)
 				} else {
 					FilterLevel::Allow
