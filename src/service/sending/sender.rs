@@ -179,6 +179,13 @@ impl Service {
 		let delay_secs = delay_secs.min(max);
 		let delay = Duration::from_secs(delay_secs);
 
+		info!(
+			dest = ?dest,
+			?tries,
+			?delay,
+			"Federation transaction failed, backing off"
+		);
+
 		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now() + delay));
 
 		let sender = self
@@ -448,7 +455,13 @@ impl Service {
 					allow = false; // already running
 				},
 				TransactionStatus::Cooldown(time) => {
-					if Instant::now() < *time {
+					let now = Instant::now();
+					if now < *time {
+						debug!(
+							dest = ?dest,
+							remaining = ?(*time - now),
+							"Skipping destination in backoff/cooldown"
+						);
 						allow = false;
 					} else {
 						*e = TransactionStatus::Running;
