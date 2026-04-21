@@ -32,7 +32,7 @@ use serde_json::from_str as from_json_str;
 use self::power_levels::PowerLevelsContentFields;
 pub use self::{
 	error::Error,
-	event_auth::{auth_check, auth_types_for_event},
+	event_auth::{RoomCreateContentFields, auth_check, auth_types_for_event},
 	room_version::RoomVersion,
 };
 use crate::{

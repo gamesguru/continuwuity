@@ -45,12 +45,12 @@ struct RoomMemberContentFields {
 }
 
 #[derive(Deserialize)]
-struct RoomCreateContentFields {
-	room_version: Option<Raw<RoomVersionId>>,
-	creator: Option<Raw<IgnoredAny>>,
-	additional_creators: Option<Vec<Raw<OwnedUserId>>>,
+pub struct RoomCreateContentFields {
+	pub room_version: Option<Raw<RoomVersionId>>,
+	pub creator: Option<Raw<IgnoredAny>>,
+	pub additional_creators: Option<Vec<Raw<OwnedUserId>>>,
 	#[serde(rename = "m.federate", default = "ruma::serde::default_true")]
-	federate: bool,
+	pub federate: bool,
 }
 
 /// For the given event `kind` what are the relevant auth events that are needed
