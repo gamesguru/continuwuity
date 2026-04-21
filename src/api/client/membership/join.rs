@@ -863,7 +863,7 @@ async fn join_room_by_id_helper_local(
 		remote_servers = %servers.len(),
 		"Could not join room locally, attempting remote join",
 	);
-	join_room_by_id_helper_remote(
+	Box::pin(join_room_by_id_helper_remote(
 		services,
 		sender_user,
 		room_id,
@@ -871,7 +871,7 @@ async fn join_room_by_id_helper_local(
 		servers,
 		state_lock,
 		json_body,
-	)
+	))
 	.await
 }
 
