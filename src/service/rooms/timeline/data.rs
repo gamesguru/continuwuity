@@ -337,7 +337,7 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, until, Direction::Backward)
+		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.pduid_pdu
@@ -353,7 +353,7 @@ impl Data {
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, from, Direction::Forward)
+		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.pduid_pdu
@@ -416,7 +416,7 @@ impl Data {
 		&self,
 		room_id: &RoomId,
 		shorteventid: PduCount,
-		dir: Direction,
+		_dir: Direction,
 	) -> Result<RawPduId> {
 		let shortroomid: ShortRoomId = self
 			.services
@@ -425,11 +425,7 @@ impl Data {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-		// +1 so we don't send the base event
-		let pdu_id = PduId {
-			shortroomid,
-			shorteventid: shorteventid.saturating_inc(dir),
-		};
+		let pdu_id = PduId { shortroomid, shorteventid };
 
 		Ok(pdu_id.into())
 	}

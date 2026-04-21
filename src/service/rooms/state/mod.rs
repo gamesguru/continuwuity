@@ -47,6 +47,7 @@ struct Services {
 	state_accessor: Dep<rooms::state_accessor::Service>,
 	state_compressor: Dep<rooms::state_compressor::Service>,
 	timeline: Dep<rooms::timeline::Service>,
+	outlier: Dep<rooms::outlier::Service>,
 }
 
 struct Data {
@@ -73,6 +74,7 @@ impl crate::Service for Service {
 				state_compressor: args
 					.depend::<rooms::state_compressor::Service>("rooms::state_compressor"),
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
+				outlier: args.depend::<rooms::outlier::Service>("rooms::outlier"),
 			},
 			db: Data {
 				shorteventid_shortstatehash: args.db["shorteventid_shortstatehash"].clone(),
@@ -162,15 +164,28 @@ impl Service {
 
 		pin_mut!(removed_event_ids);
 		while let Some(event_id) = removed_event_ids.next().await {
-			// When state is removed, we might need to update caches or memberships
-			// that are no longer current.
+			// When state is removed, we demote it to an outlier instead of deleting it.
+			// This keeps the PDU locally but removes it from the official room state.
+			let pdu_json = self.services.timeline.get_pdu_json(&event_id).await;
+			if let Ok(pdu_json) = &pdu_json {
+				self.services
+					.outlier
+					.add_pdu_outlier(&event_id, pdu_json, Some(room_id));
+				self.services.timeline.remove_from_timeline(&event_id).await;
+			}
+
 			let Ok(pdu) = self
 				.services
 				.timeline
 				.get_pdu_in_room(Some(room_id), &event_id)
 				.await
+				.or_else(|_| {
+					pdu_json.and_then(|j| {
+						PduEvent::from_id_val(&event_id, j, Some(room_id.as_ref()))
+							.map_err(|e| err!(Database("Invalid PDU: {e:?}")))
+					})
+				})
 			else {
-				// This is common for removed state as it might be from a branch we don't have
 				continue;
 			};
 
@@ -181,8 +196,7 @@ impl Service {
 						continue;
 					};
 
-					// If this member event is removed, we must re-sync membership
-					// from the NEW state to update the cache correctly.
+					// Re-sync membership from the NEW state to update the cache correctly.
 					if let Ok(new_pdu) = self
 						.services
 						.state_accessor
