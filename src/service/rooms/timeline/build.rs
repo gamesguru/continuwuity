@@ -115,6 +115,15 @@ pub async fn build_and_append_pdu(
 	let statehashid = self.services.state.append_to_state(&pdu, &room_id).await?;
 	trace!("State hash ID for {room_id}: {statehashid:?}");
 
+	let _cork = self.db.db.cork();
+
+	// We set the room state after inserting the pdu, so that we never have a moment
+	// in time where events in the current room state do not exist
+	trace!("Setting room state for room {room_id}");
+	self.services
+		.state
+		.set_room_state(&room_id, statehashid, state_lock);
+
 	trace!("Generating raw ID for PDU {}", pdu.event_id());
 	let pdu_id = self
 		.append_pdu(
@@ -148,13 +157,6 @@ pub async fn build_and_append_pdu(
 			}
 		}
 	}
-
-	// We set the room state after inserting the pdu, so that we never have a moment
-	// in time where events in the current room state do not exist
-	trace!("Setting room state for room {room_id}");
-	self.services
-		.state
-		.set_room_state(&room_id, statehashid, state_lock);
 
 	let mut servers: HashSet<OwnedServerName> = self
 		.services
