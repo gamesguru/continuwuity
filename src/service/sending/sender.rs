@@ -186,7 +186,12 @@ impl Service {
 			"Federation transaction failed, backing off"
 		);
 
-		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now() + delay));
+		statuses.insert(
+			dest.clone(),
+			TransactionStatus::Cooldown(
+				Instant::now().checked_add(delay).expect("Instant overflow"),
+			),
+		);
 
 		let sender = self
 			.channels
@@ -243,7 +248,12 @@ impl Service {
 		}
 
 		let delay = Duration::from_millis(500);
-		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now() + delay));
+		statuses.insert(
+			dest.clone(),
+			TransactionStatus::Cooldown(
+				Instant::now().checked_add(delay).expect("Instant overflow"),
+			),
+		);
 
 		let dest_clone = dest.clone();
 		let sender = self
@@ -459,7 +469,7 @@ impl Service {
 					if now < *time {
 						debug!(
 							dest = ?dest,
-							remaining = ?(*time - now),
+							remaining = ?time.saturating_duration_since(now),
 							"Skipping destination in backoff/cooldown"
 						);
 						allow = false;

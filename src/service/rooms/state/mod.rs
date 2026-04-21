@@ -181,7 +181,7 @@ impl Service {
 				.await
 				.or_else(|_| {
 					pdu_json.and_then(|j| {
-						PduEvent::from_id_val(&event_id, j, Some(room_id.as_ref()))
+						PduEvent::from_id_val(&event_id, j, Some(room_id))
 							.map_err(|e| err!(Database("Invalid PDU: {e:?}")))
 					})
 				})

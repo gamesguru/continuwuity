@@ -308,10 +308,14 @@ where
 				.save_state(room_id, new_room_state)
 				.await?;
 
-			self.services
-				.state
-				.force_state(room_id, shortstatehash, added, removed, &state_lock)
-				.await?;
+			Box::pin(self.services.state.force_state(
+				room_id,
+				shortstatehash,
+				added,
+				removed,
+				&state_lock,
+			))
+			.await?;
 		}
 	}
 
