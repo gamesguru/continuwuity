@@ -9,20 +9,21 @@ use database::{Deserialized, Json, Map};
 use futures::Stream;
 use ruma::{CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, RoomId};
 
-use crate::{Dep, rooms};
+use crate::{Dep, globals, rooms};
 
 pub struct Service {
 	db: Data,
-	#[allow(dead_code)]
 	services: Services,
 }
 
 struct Data {
 	eventid_outlierpdu: Arc<Map>,
+	eventid_receivecount: Arc<Map>,
 	roomid_outliereventid: Arc<Map>,
 }
 
 struct Services {
+	globals: Dep<globals::Service>,
 	#[allow(dead_code)]
 	timeline: Dep<rooms::timeline::Service>,
 }
@@ -32,9 +33,11 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			db: Data {
 				eventid_outlierpdu: args.db["eventid_outlierpdu"].clone(),
+				eventid_receivecount: args.db["eventid_receivecount"].clone(),
 				roomid_outliereventid: args.db["roomid_outliereventid"].clone(),
 			},
 			services: Services {
+				globals: args.depend::<globals::Service>("globals"),
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 			},
 		}))
@@ -92,6 +95,29 @@ pub fn room_stream<'a>(
 		})
 }
 
+/// Returns the receive_count for an event, if it has been stamped.
+#[implement(Service)]
+pub async fn get_receive_count(&self, event_id: &EventId) -> Result<u64> {
+	self.db
+		.eventid_receivecount
+		.get(event_id)
+		.await
+		.deserialized()
+}
+
+/// Stamp an event with its receive order, if not already stamped.
+/// This is write-once: rescue, reorder, and table moves never change it.
+#[implement(Service)]
+pub fn stamp_receive_count(&self, event_id: &EventId) {
+	if self.db.eventid_receivecount.get_blocking(event_id).is_err() {
+		if let Ok(count) = self.services.globals.next_count() {
+			self.db
+				.eventid_receivecount
+				.insert(event_id, count.to_be_bytes());
+		}
+	}
+}
+
 /// Append the PDU as an outlier.
 #[implement(Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
@@ -101,6 +127,9 @@ pub fn add_pdu_outlier(
 	pdu: &CanonicalJsonObject,
 	room_id: Option<&RoomId>,
 ) {
+	// Stamp receive order (write-once, never mutated by rescue/reorder)
+	self.stamp_receive_count(event_id);
+
 	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
 
 	let room_id = pdu

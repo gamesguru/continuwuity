@@ -81,6 +81,7 @@ struct Services {
 	search: Dep<rooms::search::Service>,
 	spaces: Dep<rooms::spaces::Service>,
 	event_handler: Dep<rooms::event_handler::Service>,
+	outlier: Dep<rooms::outlier::Service>,
 }
 
 type RoomMutexMap = MutexMap<OwnedRoomId, ()>;
@@ -112,6 +113,7 @@ impl crate::Service for Service {
 				threads: args.depend::<rooms::threads::Service>("rooms::threads"),
 				search: args.depend::<rooms::search::Service>("rooms::search"),
 				spaces: args.depend::<rooms::spaces::Service>("rooms::spaces"),
+				outlier: args.depend::<rooms::outlier::Service>("rooms::outlier"),
 				event_handler: args
 					.depend::<rooms::event_handler::Service>("rooms::event_handler"),
 			},

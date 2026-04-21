@@ -215,6 +215,9 @@ where
 	// unexpectedly wake the sync watcher.
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
 
+	// Stamp receive order (write-once — outlier-first events already have this)
+	self.services.outlier.stamp_receive_count(pdu.event_id());
+
 	drop(insert_lock);
 
 	// See if the event matches any known pushers via power level
