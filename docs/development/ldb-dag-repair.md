@@ -1,10 +1,8 @@
 # Semi-Manual DAG Repair with `ldb`
 
-RocksDB ships with a CLI tool called `ldb` that can inspect and mutate column
-families directly.  This guide shows how to diagnose and fix timeline
-anachronisms caused by out-of-order outlier rescues without starting the server.
+RocksDB ships with a CLI tool called `ldb` that can inspect and mutate column families directly. This guide shows how to diagnose and fix timeline anachronisms caused by out-of-order outlier rescues without starting the server.
 
-> **⚠️ WARNING**: Back up your database before any manual mutation.
+> **⚠ WARNING**: Back up your database before any manual mutation.
 > ```bash
 > cp -r /path/to/continuwuity_db /path/to/continuwuity_db.bak
 > ```
@@ -13,10 +11,10 @@ anachronisms caused by out-of-order outlier rescues without starting the server.
 
 ```bash
 # ldb is part of the rocksdb-tools package (or built from source)
-apt install rocksdb-tools    # Debian/Ubuntu
-pacman -S rocksdb            # Arch (includes ldb)
+apt install rocksdb-tools # Debian/Ubuntu
+pacman -S rocksdb # Arch (includes ldb)
 
-DB=/path/to/continuwuity_db  # your database path
+DB=/path/to/continuwuity_db # your database path
 ```
 
 ---
@@ -33,10 +31,10 @@ The relevant ones for DAG repair:
 
 | Column Family | Key Format | Value | Purpose |
 |---|---|---|---|
-| `pduid_pdu` | `shortroomid(8B) \|\| pducount(8B)` | PDU JSON | Timeline events (ordered) |
-| `eventid_pduid` | event_id string | `shortroomid(8B) \|\| pducount(8B)` | Event ID → timeline position |
+| `pduid_pdu` | `shortroomid(8B) || pducount(8B)` | PDU JSON | Timeline events (ordered) |
+| `eventid_pduid` | event_id string | `shortroomid(8B) || pducount(8B)` | Event ID → timeline position |
 | `eventid_outlierpdu` | event_id string | PDU JSON | Quarantined outlier events |
-| `roomid_outliereventid` | `room_id \|\| 0xFF \|\| event_id` | event_id | Room → outlier index |
+| `roomid_outliereventid` | `room_id || 0xFF || event_id` | event_id | Room → outlier index |
 | `eventid_receivecount` | event_id string | u64 big-endian (8B) | Immutable receive order |
 
 ---
@@ -52,7 +50,7 @@ ldb get --db="$DB" \
   --key="!yourRoomId:server.tld"
 ```
 
-The value is an 8-byte big-endian integer.  Note it as hex for prefix scans.
+The value is an 8-byte big-endian integer. Note it as hex for prefix scans.
 
 ---
 
@@ -67,9 +65,7 @@ ldb scan --db="$DB" \
   --max_keys=50
 ```
 
-Each key is `shortroomid(8B) || pducount(8B)`.  The values are JSON.
-Look at `origin_server_ts` in each PDU to spot anachronisms (e.g., a January
-event appearing after April events).
+Each key is `shortroomid(8B) || pducount(8B)`. The values are JSON. Look at `origin_server_ts` in each PDU to spot anachronisms (e.g., a January event appearing after April events).
 
 ---
 
@@ -100,14 +96,13 @@ ldb get --db="$DB" \
   --hex
 ```
 
-The value is an 8-byte big-endian u64.  Lower = received earlier.
+The value is an 8-byte big-endian u64. Lower = received earlier.
 
 ---
 
 ## 6. Manual Reorder Process
 
-If the admin commands aren't available (server won't start, etc.), you can
-reorder manually:
+If the admin commands aren't available (server won't start, etc.), you can reorder manually:
 
 ### Step 1: Export timeline PDUs
 
@@ -148,8 +143,7 @@ ldb delete --db="$DB" \
 
 ### Step 4: Re-insert in sorted order
 
-For each PDU in sorted order, construct a new key with an incrementing
-pducount and write it back:
+For each PDU in sorted order, construct a new key with an incrementing pducount and write it back:
 
 ```bash
 # new_key = shortroomid(8B) || new_pducount(8B, big-endian)
@@ -165,8 +159,8 @@ ldb put --db="$DB" \
   --value="<new_hex_key>"
 ```
 
-> **⚠️ IMPORTANT**: The new pducount values must be higher than the current
-> global counter to avoid collisions.  Check the `global` column family for the
+> **⚠ IMPORTANT**: The new pducount values must be higher than the current
+> global counter to avoid collisions. Check the `global` column family for the
 > current counter value first.
 
 ---
@@ -200,7 +194,7 @@ ldb delete --db="$DB" \
 
 ldb delete --db="$DB" \
   --column_family=roomid_outliereventid \
-  --key="!yourRoomId:server.tld\xff\$eventId"
+  --key="!yourRoomId:server.tld\xff$eventId"
 ```
 
 ---
@@ -209,7 +203,7 @@ ldb delete --db="$DB" \
 
 If the server can start, use the built-in commands instead:
 
-```
+```bash
 # Fix a single room's timeline ordering
 debug reorder-timeline !roomId:server.tld
 
