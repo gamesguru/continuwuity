@@ -122,6 +122,7 @@ pub(crate) async fn join_room_by_id_route(
 		body.reason.clone(),
 		&servers,
 		&body.appservice_info,
+		body.json_body.as_ref(),
 	)
 	.boxed()
 	.await
@@ -144,6 +145,7 @@ pub(crate) async fn join_room_by_id_or_alias_route(
 ) -> Result<join_room_by_id_or_alias::v3::Response> {
 	let sender_user = body.sender_user();
 	let appservice_info = &body.appservice_info;
+	let json_body = body.json_body.clone();
 	let body = &body.body;
 	if services.users.is_suspended(sender_user).await? {
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
@@ -250,6 +252,7 @@ pub(crate) async fn join_room_by_id_or_alias_route(
 		body.reason.clone(),
 		&servers,
 		appservice_info,
+		json_body.as_ref(),
 	)
 	.boxed()
 	.await?;
@@ -264,6 +267,7 @@ pub async fn join_room_by_id_helper(
 	reason: Option<String>,
 	servers: &[OwnedServerName],
 	appservice_info: &Option<RegistrationInfo>,
+	json_body: Option<&CanonicalJsonValue>,
 ) -> Result<join_room_by_id::v3::Response> {
 	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 
@@ -350,9 +354,17 @@ pub async fn join_room_by_id_helper(
 	}
 
 	if server_in_room {
-		join_room_by_id_helper_local(services, sender_user, room_id, reason, servers, state_lock)
-			.boxed()
-			.await?;
+		join_room_by_id_helper_local(
+			services,
+			sender_user,
+			room_id,
+			reason,
+			servers,
+			state_lock,
+			json_body,
+		)
+		.boxed()
+		.await?;
 	} else {
 		// Ask a remote server if we are not participating in this room
 		join_room_by_id_helper_remote(
@@ -362,6 +374,7 @@ pub async fn join_room_by_id_helper(
 			reason,
 			servers,
 			state_lock,
+			json_body,
 		)
 		.boxed()
 		.await?;
@@ -377,6 +390,7 @@ async fn join_room_by_id_helper_remote(
 	reason: Option<String>,
 	servers: &[OwnedServerName],
 	state_lock: RoomMutexGuard,
+	json_body: Option<&CanonicalJsonValue>,
 ) -> Result {
 	info!("Joining {room_id} over federation.");
 
@@ -429,18 +443,27 @@ async fn join_room_by_id_helper_remote(
 				.expect("Timestamp is valid js_int value"),
 		),
 	);
-	join_event_stub.insert(
-		"content".to_owned(),
-		to_canonical_value(RoomMemberEventContent {
-			displayname: services.users.displayname(sender_user).await.ok(),
-			avatar_url: services.users.avatar_url(sender_user).await.ok(),
-			blurhash: services.users.blurhash(sender_user).await.ok(),
-			reason,
-			join_authorized_via_users_server: join_authorized_via_users_server.clone(),
-			..RoomMemberEventContent::new(MembershipState::Join)
-		})
-		.expect("event is valid, we just created it"),
-	);
+	let mut content = to_canonical_value(RoomMemberEventContent {
+		displayname: services.users.displayname(sender_user).await.ok(),
+		avatar_url: services.users.avatar_url(sender_user).await.ok(),
+		blurhash: services.users.blurhash(sender_user).await.ok(),
+		reason,
+		join_authorized_via_users_server: join_authorized_via_users_server.clone(),
+		..RoomMemberEventContent::new(MembershipState::Join)
+	})
+	.expect("event is valid, we just created it");
+
+	if let Some(CanonicalJsonValue::Object(custom)) = json_body {
+		if let CanonicalJsonValue::Object(ref mut map) = content {
+			for (k, v) in custom {
+				if !["reason", "third_party_signed", "server_name"].contains(&k.as_str()) {
+					map.entry(k.clone()).or_insert_with(|| v.clone());
+				}
+			}
+		}
+	}
+
+	join_event_stub.insert("content".to_owned(), content);
 
 	// We keep the "event_id" in the pdu only in v1 or
 	// v2 rooms
@@ -553,7 +576,7 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	info!("Parsing join event");
-	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone())
+	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone(), Some(room_id))
 		.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?;
 
 	info!("Acquiring server signing keys for response events");
@@ -583,7 +606,7 @@ async fn join_room_by_id_helper_remote(
 		})
 		.ready_filter_map(Result::ok)
 		.fold(HashMap::new(), |mut state, (event_id, value)| async move {
-			let pdu = match PduEvent::from_id_val(&event_id, value.clone()) {
+			let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id)) {
 				| Ok(pdu) => pdu,
 				| Err(e) => {
 					debug_warn!("Invalid PDU in send_join response: {e:?}: {value:#?}");
@@ -640,7 +663,16 @@ async fn join_room_by_id_helper_remote(
 		let shortstatekey = services.rooms.short.get_shortstatekey(&k, &s).await.ok()?;
 
 		let event_id = fetch_state.get(&shortstatekey)?;
-		services.rooms.timeline.get_pdu(event_id).await.ok()
+		if matches!(k, StateEventType::RoomCreate) {
+			services.rooms.timeline.get_pdu(event_id).await.ok()
+		} else {
+			services
+				.rooms
+				.timeline
+				.get_pdu_in_room(Some(room_id), event_id)
+				.await
+				.ok()
+		}
 	};
 
 	let auth_check = state_res::event_auth::auth_check(
@@ -740,6 +772,7 @@ async fn join_room_by_id_helper_local(
 	reason: Option<String>,
 	servers: &[OwnedServerName],
 	state_lock: RoomMutexGuard,
+	json_body: Option<&CanonicalJsonValue>,
 ) -> Result {
 	info!("Joining room locally");
 
@@ -781,16 +814,30 @@ async fn join_room_by_id_helper_local(
 		..RoomMemberEventContent::new(MembershipState::Join)
 	};
 
+	let mut content = serde_json::to_value(content).expect("failed to serialize member event");
+	if let Some(CanonicalJsonValue::Object(custom)) = json_body {
+		if let serde_json::Value::Object(ref mut map) = content {
+			for (k, v) in custom {
+				if !["reason", "third_party_signed", "server_name"].contains(&k.as_str()) {
+					map.entry(k.clone())
+						.or_insert_with(|| serde_json::to_value(v).expect("valid json"));
+				}
+			}
+		}
+	}
+
+	let builder = PduBuilder {
+		event_type: StateEventType::RoomMember.into(),
+		content: serde_json::value::to_raw_value(&content).expect("valid JSON"),
+		state_key: Some(sender_user.to_string().into()),
+		..Default::default()
+	};
+
 	// Try normal join first
 	let Err(error) = services
 		.rooms
 		.timeline
-		.build_and_append_pdu(
-			PduBuilder::state(sender_user.to_string(), &content),
-			sender_user,
-			Some(room_id),
-			&state_lock,
-		)
+		.build_and_append_pdu(builder, sender_user, Some(room_id), &state_lock)
 		.await
 	else {
 		info!("Joined room locally");
@@ -822,6 +869,7 @@ async fn join_room_by_id_helper_local(
 		reason,
 		servers,
 		state_lock,
+		json_body,
 	))
 	.await
 }
@@ -865,6 +913,7 @@ async fn make_join_request(
 					&MembershipState::Join,
 					sender_user,
 					room_id,
+					response.room_version.as_ref().unwrap_or(&RoomVersionId::V1),
 					&to_canonical_object(&response.event)?,
 				) {
 					warn!("make_join response from {remote_server} failed validation: {e}");

@@ -668,7 +668,11 @@ where
 		let mut auth_state = StateMap::new();
 		if room_version.room_ids_as_hashes {
 			trace!("room version uses hashed IDs, manually fetching create event");
-			let create_event_id_raw = event.room_id_or_hash().as_str().replace('!', "$");
+			let room_id = event
+				.room_id_or_hash()
+				.ok_or_else(|| Error::InvalidPdu("Event has no room_id".into()))?;
+
+			let create_event_id_raw = room_id.as_str().replace('!', "$");
 			let create_event_id = EventId::parse(&create_event_id_raw).map_err(|e| {
 				Error::InvalidPdu(format!(
 					"Failed to parse create event ID from room ID/hash: {e}"

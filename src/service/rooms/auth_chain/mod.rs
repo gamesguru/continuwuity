@@ -190,7 +190,12 @@ async fn get_auth_chain_inner(
 	while let Some(event_id) = todo.pop_front() {
 		trace!(%event_id, "processing auth event");
 
-		match self.services.timeline.get_pdu(&event_id).await {
+		match self
+			.services
+			.timeline
+			.get_pdu_in_room(Some(room_id), &event_id)
+			.await
+		{
 			| Err(e) => {
 				debug_error!(%event_id, ?e, "Could not find pdu mentioned in auth events");
 			},
