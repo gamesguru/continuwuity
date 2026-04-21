@@ -18,7 +18,6 @@ use conduwuit::{
 	},
 	warn,
 };
-use conduwuit_service::rooms::event_handler::upgrade_outlier_pdu::UpgradeOptions;
 use futures::{FutureExt, StreamExt, TryStreamExt, future::ready, pin_mut};
 use lettre::message::Mailbox;
 use ruma::{
@@ -525,7 +524,7 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Result {
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, _force: bool) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -561,18 +560,13 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Re
 		.pdu_metadata
 		.unmark_event_soft_failed(&event_id);
 
-	self.services
-		.rooms
-		.event_handler
-		.upgrade_outlier_to_timeline_pdu(
-			pdu,
-			pdu_json,
-			&create_event,
-			&origin,
-			&room_id,
-			UpgradeOptions { force, nuclear: false, rescue: true },
-		)
-		.await?;
+	Box::pin(
+		self.services
+			.rooms
+			.event_handler
+			.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id),
+	)
+	.await?;
 
 	self.write_str("Successfully rescued PDU.").await
 }
@@ -746,8 +740,8 @@ pub(super) async fn purge_outliers(
 pub(super) async fn rescue_room(
 	&self,
 	room_id: OwnedRoomId,
-	force: bool,
-	nuclear: bool,
+	_force: bool,
+	_nuclear: bool,
 	all: bool,
 	timeline_limit: Option<usize>,
 ) -> Result {
@@ -785,7 +779,7 @@ pub(super) async fn rescue_room(
 
 		let mut total_rescued = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(self.rescue_room(room_id, force, nuclear, false, None))
+			if Box::pin(self.rescue_room(room_id, _force, _nuclear, false, None))
 				.await
 				.is_ok()
 			{
@@ -912,20 +906,20 @@ pub(super) async fn rescue_room(
 			.pdu_metadata
 			.unmark_event_soft_failed(&event_id);
 
-		if self
-			.services
-			.rooms
-			.event_handler
-			.upgrade_outlier_to_timeline_pdu(
-				pdu.clone(),
-				pdu_json.clone(),
-				&create_event,
-				&origin,
-				&room_id,
-				UpgradeOptions { force, nuclear, rescue: true },
-			)
-			.await
-			.is_ok()
+		if Box::pin(
+			self.services
+				.rooms
+				.event_handler
+				.upgrade_outlier_to_timeline_pdu(
+					pdu.clone(),
+					pdu_json.clone(),
+					&create_event,
+					&origin,
+					&room_id,
+				),
+		)
+		.await
+		.is_ok()
 		{
 			count = count.saturating_add(1);
 		}
@@ -1073,19 +1067,13 @@ pub(super) async fn fetch_pdu(
 	let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
 		.map_err(|e| err!(Database("Invalid PDU: {e:?}")))?;
 
-	let result = self
-		.services
-		.rooms
-		.event_handler
-		.upgrade_outlier_to_timeline_pdu(
-			pdu,
-			value,
-			&create_event,
-			&server,
-			&room_id,
-			UpgradeOptions { force: true, nuclear: true, rescue: true },
-		)
-		.await?;
+	let result = Box::pin(
+		self.services
+			.rooms
+			.event_handler
+			.upgrade_outlier_to_timeline_pdu(pdu, value, &create_event, &server, &room_id),
+	)
+	.await?;
 
 	match result {
 		| Some(id) => write!(self, "Successfully fetched and rescued PDU: {id:?}"),

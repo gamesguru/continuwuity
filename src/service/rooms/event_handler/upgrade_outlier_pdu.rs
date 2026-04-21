@@ -1,9 +1,4 @@
-use std::{
-	borrow::Borrow,
-	collections::{BTreeMap, HashMap},
-	sync::Arc,
-	time::Instant,
-};
+use std::{borrow::Borrow, collections::BTreeMap, sync::Arc, time::Instant};
 
 use conduwuit::{
 	Err, Result, debug, debug_info, err, implement, info, is_equal_to,
@@ -13,18 +8,9 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
-use ruma::{
-	CanonicalJsonValue, OwnedEventId, RoomId, ServerName,
-	events::{StateEventType, TimelineEventType},
-};
+use ruma::{CanonicalJsonValue, RoomId, ServerName, events::StateEventType};
 
 use super::{get_room_version_id, to_room_version};
-
-pub struct UpgradeOptions {
-	pub force: bool,
-	pub nuclear: bool,
-	pub rescue: bool,
-}
 use crate::rooms::{
 	state_compressor::{CompressedState, HashSetCompressStateEvent},
 	timeline::RawPduId,
@@ -38,7 +24,6 @@ pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	create_event: &Pdu,
 	origin: &ServerName,
 	room_id: &RoomId,
-	options: UpgradeOptions,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -50,28 +35,14 @@ where
 		.get_pdu_id(incoming_pdu.event_id())
 		.await
 	{
-		if options.nuclear {
-			debug!(event_id = %incoming_pdu.event_id, "NUCLEAR: Removing existing timeline entry to fix ordering");
-			self.services
-				.timeline
-				.remove_from_timeline(incoming_pdu.event_id())
-				.await;
-		} else {
-			self.services
-				.outlier
-				.remove_outlier(incoming_pdu.event_id())
-				.await;
-
-			return Ok(Some(pduid));
-		}
+		return Ok(Some(pduid));
 	}
 
-	if !options.force
-		&& self
-			.services
-			.pdu_metadata
-			.is_event_soft_failed(incoming_pdu.event_id())
-			.await
+	if self
+		.services
+		.pdu_metadata
+		.is_event_soft_failed(incoming_pdu.event_id())
+		.await
 	{
 		return Err!(Request(InvalidParam("Event has been soft failed")));
 	}
@@ -87,77 +58,59 @@ where
 	//     backwards extremities doing all the checks in this list starting at 1.
 	//     These are not timeline events.
 
+	debug!(
+		event_id = %incoming_pdu.event_id,
+		"Resolving state at event"
+	);
+	let mut state_at_incoming_event = if incoming_pdu.prev_events().count() == 1 {
+		self.state_at_incoming_degree_one(&incoming_pdu, room_id)
+			.await?
+	} else {
+		self.state_at_incoming_resolved(&incoming_pdu, room_id, &room_version_id)
+			.await?
+	};
+
+	if state_at_incoming_event.is_none() {
+		state_at_incoming_event = self
+			.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
+			.await?;
+	}
+
+	let state_at_incoming_event =
+		state_at_incoming_event.expect("we always set this to some above");
+
 	let room_version = to_room_version(&room_version_id);
 
-	let state_at_incoming_event: HashMap<u64, OwnedEventId> =
-		if incoming_pdu.kind == TimelineEventType::RoomCreate {
-			HashMap::new()
-		} else {
-			debug!(
-				event_id = %incoming_pdu.event_id,
-				"Resolving state at event"
-			);
-			let mut state_at_incoming_event = if incoming_pdu.prev_events().count() == 1 {
-				self.state_at_incoming_degree_one(&incoming_pdu, room_id)
-					.await
-					.ok()
-					.flatten()
-			} else {
-				self.state_at_incoming_resolved(&incoming_pdu, room_id, &room_version_id)
-					.await
-					.ok()
-					.flatten()
-			};
+	debug!(
+		event_id = %incoming_pdu.event_id,
+		"Performing auth check to upgrade"
+	);
+	// 11. Check the auth of the event passes based on the state of the event
+	let state_fetch_state = &state_at_incoming_event;
+	let state_fetch = |k: StateEventType, s: StateKey| async move {
+		let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
 
-			if state_at_incoming_event.is_none() && !options.force {
-				state_at_incoming_event = self
-					.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
-					.await
-					.ok()
-					.flatten();
-			}
+		let event_id = state_fetch_state.get(&shortstatekey)?;
+		self.services.timeline.get_pdu(event_id).await.ok()
+	};
 
-			if state_at_incoming_event.is_none() && !options.force {
-				return Err!(Request(Unknown("Could not find state at event")));
-			}
+	debug!(
+		event_id = %incoming_pdu.event_id,
+		"Running initial auth check"
+	);
+	let auth_check = state_res::event_auth::auth_check(
+		&room_version,
+		&incoming_pdu,
+		None, // TODO: third party invite
+		|ty, sk| state_fetch(ty.clone(), sk.into()),
+		create_event.as_pdu(),
+	)
+	.await
+	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
-			let state_at_incoming_event = state_at_incoming_event.unwrap_or_default();
-
-			debug!(
-				event_id = %incoming_pdu.event_id,
-				"Performing auth check to upgrade"
-			);
-			// 11. Check the auth of the event passes based on the state of the event
-			let state_fetch_state = &state_at_incoming_event;
-			let state_fetch = |k: StateEventType, s: StateKey| async move {
-				let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
-
-				let event_id = state_fetch_state.get(&shortstatekey)?;
-				self.services.timeline.get_pdu(event_id).await.ok()
-			};
-
-			debug!(
-				event_id = %incoming_pdu.event_id,
-				"Running initial auth check"
-			);
-			let auth_check = state_res::event_auth::auth_check(
-				&room_version,
-				&incoming_pdu,
-				None, // TODO: third party invite
-				|ty, sk| state_fetch(ty.clone(), sk.into()),
-				create_event.as_pdu(),
-			)
-			.await
-			.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
-
-			if !auth_check && !options.force {
-				return Err!(Request(Forbidden(
-					"Event has failed auth check with state at the event."
-				)));
-			}
-
-			state_at_incoming_event
-		};
+	if !auth_check {
+		return Err!(Request(Forbidden("Event has failed auth check with state at the event.")));
+	}
 
 	// 13. Use state resolution to find new room state
 
@@ -221,7 +174,7 @@ where
 		"Performing soft-fail check"
 	);
 	let mut soft_fail = match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
-		| (false, _) => !options.force,
+		| (false, _) => true,
 		| (true, None) => false,
 		| (true, Some(redact_id)) =>
 			!self
@@ -274,13 +227,8 @@ where
 		.map(Arc::new)
 		.await;
 
-	let is_state_event = incoming_pdu.state_key().is_some();
-	if is_state_event || options.rescue {
-		if is_state_event {
-			debug!("Event is a state-event. Deriving new room state");
-		} else {
-			debug!("Rescuing non-state event. Deriving new room state to update extremities");
-		}
+	if incoming_pdu.state_key().is_some() {
+		debug!("Event is a state-event. Deriving new room state");
 
 		// We also add state after incoming event to the fork states
 		let mut state_after = state_at_incoming_event.clone();
@@ -295,28 +243,22 @@ where
 			state_after.insert(shortstatekey, event_id.to_owned());
 		}
 
-		if !options.force || options.rescue {
-			let new_room_state = self
-				.resolve_state(room_id, &room_version_id, state_after)
-				.await?;
-
-			// Set the new room state to the resolved state
-			debug!("Forcing new room state");
-			let HashSetCompressStateEvent { shortstatehash, added, removed } = self
-				.services
-				.state_compressor
-				.save_state(room_id, new_room_state)
-				.await?;
-
-			Box::pin(self.services.state.force_state(
-				room_id,
-				shortstatehash,
-				added,
-				removed,
-				&state_lock,
-			))
+		let new_room_state = self
+			.resolve_state(room_id, &room_version_id, state_after)
 			.await?;
-		}
+
+		// Set the new room state to the resolved state
+		debug!("Forcing new room state");
+		let HashSetCompressStateEvent { shortstatehash, added, removed } = self
+			.services
+			.state_compressor
+			.save_state(room_id, new_room_state)
+			.await?;
+
+		self.services
+			.state
+			.force_state(room_id, shortstatehash, added, removed, &state_lock)
+			.await?;
 	}
 
 	if !soft_fail {
@@ -432,12 +374,6 @@ where
 			room_id,
 		)
 		.await?;
-
-	// Successfully added to timeline, remove from outliers
-	self.services
-		.outlier
-		.remove_outlier(incoming_pdu.event_id())
-		.await;
 
 	// Event has passed all auth/stateres checks
 	drop(state_lock);

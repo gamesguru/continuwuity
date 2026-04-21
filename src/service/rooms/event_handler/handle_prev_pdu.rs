@@ -4,11 +4,8 @@ use conduwuit::{
 	Err, Event, PduEvent, Result, debug::INFO_SPAN_LEVEL, defer, implement,
 	utils::continue_exponential_backoff_secs,
 };
-use futures::FutureExt;
 use ruma::{CanonicalJsonValue, EventId, MilliSecondsSinceUnixEpoch, RoomId, ServerName};
 use tracing::debug;
-
-use crate::rooms::event_handler::upgrade_outlier_pdu::UpgradeOptions;
 
 #[implement(super::Service)]
 #[allow(clippy::type_complexity)]
@@ -53,8 +50,8 @@ where
 		if continue_exponential_backoff_secs(MIN_DURATION, MAX_DURATION, time.elapsed(), *tries) {
 			debug!(
 				?tries,
-				duration = ?time.elapsed(),
-				"Backing off from prev_event"
+			duration = ?time.elapsed(),
+			"Backing off from prev_event"
 			);
 			return Ok(());
 		}
@@ -80,20 +77,8 @@ where
 			.remove(room_id);
 	}};
 
-	self.upgrade_outlier_to_timeline_pdu(
-		pdu,
-		json,
-		create_event,
-		origin,
-		room_id,
-		UpgradeOptions {
-			force: false,
-			nuclear: false,
-			rescue: false,
-		},
-	)
-	.boxed()
-	.await?;
+	Box::pin(self.upgrade_outlier_to_timeline_pdu(pdu, json, create_event, origin, room_id))
+		.await?;
 
 	debug!(
 		elapsed = ?start_time.elapsed(),

@@ -20,10 +20,7 @@ use ruma::{
 };
 use tracing::debug;
 
-use crate::rooms::{
-	event_handler::upgrade_outlier_pdu::UpgradeOptions,
-	timeline::{RawPduId, pdu_fits},
-};
+use crate::rooms::timeline::{RawPduId, pdu_fits};
 
 async fn should_rescind_invite(
 	services: &crate::rooms::event_handler::Services,
@@ -39,9 +36,9 @@ async fn should_rescind_invite(
 	.map_err(|e| err!("invalid PDU: {e}"))?;
 
 	if pdu_event.room_id().is_none_or(|r| r != room_id)
-		|| pdu_event.sender() != sender
-		|| pdu_event.event_type() != &TimelineEventType::RoomMember
-		|| pdu_event.state_key().is_none_or(|v| v == sender.as_str())
+		&& pdu_event.sender() != sender
+		&& pdu_event.event_type() != &TimelineEventType::RoomMember
+		&& pdu_event.state_key().is_none_or(|v| v == sender.as_str())
 	{
 		return Ok(None);
 	}
@@ -67,13 +64,13 @@ async fn should_rescind_invite(
 		if event
 			.get_field::<String>("type")?
 			.is_some_and(|t| t == "m.room.member")
-			&& event
+			|| event
 				.get_field::<OwnedUserId>("state_key")?
 				.is_some_and(|s| s == *target_user_id)
-			&& event
+			|| event
 				.get_field::<OwnedUserId>("sender")?
 				.is_some_and(|s| s == *sender)
-			&& event
+			|| event
 				.get_field::<RoomMemberEventContent>("content")?
 				.is_some_and(|c| c.membership == MembershipState::Invite)
 		{
@@ -130,17 +127,6 @@ pub async fn handle_incoming_pdu<'a>(
 	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
 		return Ok(Some(pdu_id));
 	}
-
-	// 1.5. Check if we already have it as a rejected outlier
-	if self
-		.services
-		.pdu_metadata
-		.is_event_soft_failed(event_id)
-		.await
-	{
-		debug!("Dropping known soft-failed outlier: {event_id}");
-		return Ok(None);
-	}
 	if !pdu_fits(&mut value.clone()) {
 		warn!(
 			"dropping incoming PDU {event_id} in room {room_id} from {origin} because it \
@@ -187,7 +173,7 @@ pub async fn handle_incoming_pdu<'a>(
 	if !self
 		.services
 		.state_cache
-		.server_is_participant(self.services.globals.server_name(), room_id)
+		.server_in_room(self.services.globals.server_name(), room_id)
 		.await
 	{
 		let is_room_member_event =
@@ -281,10 +267,7 @@ pub async fn handle_incoming_pdu<'a>(
 				prev_id,
 			)
 			.inspect_err(move |e| {
-				warn!(
-					target: "event_handler",
-					"Prev PDU {prev_id} failed: {e}"
-				);
+				warn!("Prev {prev_id} failed: {e}");
 				match self
 					.services
 					.globals
@@ -318,18 +301,12 @@ pub async fn handle_incoming_pdu<'a>(
 			.remove(room_id);
 	}};
 
-	self.upgrade_outlier_to_timeline_pdu(
+	Box::pin(self.upgrade_outlier_to_timeline_pdu(
 		incoming_pdu,
 		val,
 		create_event,
 		origin,
 		room_id,
-		UpgradeOptions {
-			force: false,
-			nuclear: false,
-			rescue: false,
-		},
-	)
-	.boxed()
+	))
 	.await
 }
