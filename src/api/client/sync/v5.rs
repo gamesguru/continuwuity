@@ -960,11 +960,11 @@ where
 						.room_members(room_id)
 						// Don't send key updates from the sender to the sender
 						.ready_filter(|user_id| sender_user != *user_id)
-						// Only send keys if the sender doesn't share an encrypted room with the target
+						// Only send keys if the sender doesn't share a room with the target
 						// already
-						.filter_map(|user_id| {
-							share_encrypted_room(services, sender_user, user_id, Some(room_id))
-								.map(|res| res.or_some(user_id.to_owned()))
+						.filter_map(|user_id| async move {
+							(!shares_a_room(services, sender_user, user_id, Some(room_id)).await)
+								.then(|| user_id.to_owned())
 						})
 						.collect::<Vec<_>>()
 						.await,
@@ -985,12 +985,11 @@ where
 	}
 
 	for user_id in left_encrypted_users {
-		let dont_share_encrypted_room =
-			!share_encrypted_room(services, sender_user, &user_id, None).await;
+		let dont_shares_a_room = !shares_a_room(services, sender_user, &user_id, None).await;
 
-		// If the user doesn't share an encrypted room with the target anymore, we need
+		// If the user doesn't share a room with the target anymore, we need
 		// to tell them
-		if dont_share_encrypted_room {
+		if dont_shares_a_room {
 			device_list_left.insert(user_id);
 		}
 	}

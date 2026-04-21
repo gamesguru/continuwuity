@@ -97,6 +97,7 @@ rustc-ice-*
 complement-src/
 tests/test_results/complement/test_logs.jsonl
 *.db
+*.zip
 
 # Node
 node_modules/

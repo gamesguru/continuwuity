@@ -931,7 +931,7 @@ async fn build_device_list_updates(
 		..
 	}: SyncContext<'_>,
 	room_id: &RoomId,
-	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
+	ShortStateHashes { .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
 	joined_since_last_sync: bool,

@@ -322,6 +322,10 @@ pub(crate) async fn create_room_route(
 				}
 			}
 		}
+		// For v12+ rooms, creators MUST NOT be in the power levels users map.
+		for creator in &creators {
+			power_levels_to_grant.remove(creator);
+		}
 	} else {
 		power_levels_to_grant.insert(sender_user.to_owned(), int!(100));
 		creators.clear(); // If this vec is not empty, default_power_levels_content will
