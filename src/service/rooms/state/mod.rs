@@ -231,6 +231,23 @@ impl Service {
 
 		self.set_room_state(room_id, shortstatehash, state_lock);
 
+		// Reset extremities to the events in the new state to break the anchor to the
+		// old fork
+		let new_extremities: Vec<OwnedEventId> = self
+			.services
+			.state_accessor
+			.state_full_ids(shortstatehash)
+			.map(|(_, id)| id)
+			.collect()
+			.await;
+
+		self.set_forward_extremities(
+			room_id,
+			new_extremities.iter().map(|id| id.as_ref()),
+			state_lock,
+		)
+		.await;
+
 		Ok(())
 	}
 

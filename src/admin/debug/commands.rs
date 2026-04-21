@@ -1239,7 +1239,6 @@ pub(super) async fn force_set_room_state_from_server(
 
 	let new_room_state = if overwrite {
 		info!("Resolving new room state (ABSOLUTE OVERRIDE)");
-		use std::borrow::Borrow;
 		let compressed: conduwuit_service::rooms::state_compressor::CompressedState = self
 			.services
 			.rooms
