@@ -1235,14 +1235,6 @@ pub(super) async fn force_set_room_state_from_server(
 			.outlier
 			.add_pdu_outlier(&event_id, &value, Some(&room_id));
 	}
-	info!("Resolving new room state");
-	let new_room_state = self
-		.services
-		.rooms
-		.event_handler
-		.resolve_state(&room_id, &room_version, state)
-		.await?;
-
 	info!("Compressing new room state");
 	let HashSetCompressStateEvent {
 		shortstatehash: short_state_hash,
@@ -1252,12 +1244,12 @@ pub(super) async fn force_set_room_state_from_server(
 		.services
 		.rooms
 		.state_compressor
-		.save_state(room_id.clone().as_ref(), new_room_state)
+		.save_state(room_id.clone().as_ref(), state)
 		.await?;
 
 	let state_lock = self.services.rooms.state.mutex.lock(&*room_id).await;
 
-	info!("Forcing new room state");
+	info!("Forcing new room state (ABSOLUTE OVERRIDE)");
 	self.services
 		.rooms
 		.state
