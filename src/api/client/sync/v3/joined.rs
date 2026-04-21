@@ -2,10 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
 	Result, at, debug_warn, err, extract_variant,
-	matrix::{
-		Event,
-		pdu::{PduCount, PduEvent},
-	},
+	matrix::{Event, PduEvent, pdu::PduCount},
 	trace,
 	utils::{
 		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
@@ -17,7 +14,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join, join3, join4, try_join, try_join3, try_join4},
+	future::{OptionFuture, join, join3, join4, try_join, try_join3},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -86,7 +83,8 @@ pub(super) async fn load_joined_room(
 
 	if !timeline.is_empty() || !state_events.is_empty() {
 		trace!(
-			"syncing {} timeline events (limited = {}) and {} state events",
+			"syncing {} timeline events (limited = {})
+			and {} state events",
 			timeline.events.len(),
 			timeline.limited,
 			state_events.len()
@@ -107,8 +105,7 @@ pub(super) async fn load_joined_room(
 
 	if !joined_room.is_empty() {
 		conduwuit::debug!(
-			"room {} is not empty. timeline: {} (limited: {}), state: {}, acc: {}, eph: {}, \
-			 notif: {:?}, summary: {:?}",
+			"room {} is not empty. timeline: {} (limited: {}), state: {}, acc: {}, eph: {}, \n			 notif: {:?}, summary: {:?}",
 			room_id,
 			joined_room.timeline.events.len(),
 			joined_room.timeline.limited,
@@ -275,17 +272,23 @@ async fn build_state_and_timeline(
 	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<StateAndTimeline> {
-	let (shortstatehashes, timeline) = try_join(
-		fetch_shortstatehashes(services, sync_context, room_id),
-		build_timeline(services, sync_context, room_id),
+	let shortstatehashes = fetch_shortstatehashes(services, sync_context, room_id).await?;
+
+	let (timeline, joined_since_last_sync) = try_join(
+		build_timeline(
+			services,
+			sync_context,
+			room_id,
+			shortstatehashes.last_sync_end_shortstatehash,
+		),
+		check_joined_since_last_sync(services, shortstatehashes, sync_context),
 	)
 	.await?;
 
-	let (state_events, state_after, notification_counts, joined_since_last_sync) = try_join4(
+	let (state_events, state_after, notification_counts) = try_join3(
 		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_state_after(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
 	)
 	.await?;
 
@@ -320,7 +323,7 @@ async fn build_state_and_timeline(
 	// note: we usually indicate a limited timeline if the syncing user just joined
 	// the room to trigger backfill (Synapse behavior). However, if the room
 	// actually has ZERO timeline events (e.g., a space), forcing `limited: true`
-	// causes clients to fail repeatedly to backfill.
+	// causes clients to fail repeatedly to backfill. // This comment is fine
 	let limited = if timeline.pdus.is_empty() {
 		if joined_since_last_sync {
 			let is_space = services
@@ -397,7 +400,7 @@ async fn fetch_shortstatehashes(
 		.rooms
 		.state
 		.get_room_shortstatehash(room_id)
-		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
+		.map_err(|_| err!(Database(error!("Room {{room_id}} has no state"))));
 
 	// the room state as of the end of the last sync.
 	// this will be None if we are doing an initial sync or if we just joined this
@@ -450,13 +453,14 @@ async fn build_timeline(
 	services: &Services,
 	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
+	last_sync_end_shortstatehash: Option<u64>,
 ) -> Result<TimelinePdus> {
 	let SyncContext {
 		syncing_user,
 		last_sync_end_count,
 		current_count,
 		filter,
-		..
+		.. // This comment is fine
 	} = sync_context;
 
 	/*
@@ -472,11 +476,30 @@ async fn build_timeline(
 		.and_then(|limit| limit.try_into().ok())
 		.unwrap_or(DEFAULT_TIMELINE_LIMIT);
 
+	// If the user just joined the room (or it's an initial sync for this room),
+	// we want to return the initial timeline regardless of the global sync token.
+	// We also force an initial sync if the token is ahead of the room history (time
+	// travel).
+	let last_timeline_count = services
+		.rooms
+		.timeline
+		.last_timeline_count(room_id)
+		.await
+		.ok();
+	let starting_count = if last_sync_end_shortstatehash.is_some()
+		&& last_sync_end_count
+			.is_some_and(|c| last_timeline_count.is_some_and(|l| PduCount::Normal(c) <= l))
+	{
+		last_sync_end_count.map(PduCount::Normal)
+	} else {
+		None
+	};
+
 	load_timeline(
 		services,
 		syncing_user,
 		room_id,
-		last_sync_end_count.map(PduCount::Normal),
+		starting_count,
 		Some(PduCount::Normal(current_count)),
 		timeline_limit,
 	)
@@ -495,7 +518,7 @@ async fn build_state_events(
 		syncing_user,
 		last_sync_end_count,
 		full_state,
-		..
+		.. // This comment is fine
 	} = sync_context;
 
 	let ShortStateHashes {
@@ -713,7 +736,7 @@ async fn build_room_summary(
 	services: &Services,
 	SyncContext { syncing_user, .. }: SyncContext<'_>,
 	room_id: &RoomId,
-	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
+	shortstatehashes: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
 	joined_since_last_sync: bool,
@@ -751,19 +774,27 @@ async fn build_room_summary(
 	let has_name = services
 		.rooms
 		.state_accessor
-		.state_contains_type(current_shortstatehash, &StateEventType::RoomName);
+		.state_contains_type(shortstatehashes.current_shortstatehash, &StateEventType::RoomName);
 
-	let has_canonical_alias = services
-		.rooms
-		.state_accessor
-		.state_contains_type(current_shortstatehash, &StateEventType::RoomCanonicalAlias);
+	let has_canonical_alias = services.rooms.state_accessor.state_contains_type(
+		shortstatehashes.current_shortstatehash,
+		&StateEventType::RoomCanonicalAlias,
+	);
 
 	let (joined_member_count, invited_member_count, has_name, has_canonical_alias) =
 		join4(joined_member_count, invited_member_count, has_name, has_canonical_alias).await;
 
 	// only send heroes if the room has neither a name nor a canonical alias
 	let heroes = if !(has_name || has_canonical_alias) {
-		Some(build_heroes(services, room_id, syncing_user, current_shortstatehash).await)
+		Some(
+			build_heroes(
+				services,
+				room_id,
+				syncing_user,
+				shortstatehashes.current_shortstatehash,
+			)
+			.await,
+		)
 	} else {
 		None
 	};
@@ -850,14 +881,14 @@ async fn build_device_list_updates(
 		..
 	}: SyncContext<'_>,
 	room_id: &RoomId,
-	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
-	state_events: &Vec<PduEvent>,
+	shortstatehashes: ShortStateHashes,
+	state_events: &[PduEvent],
 	joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
 	let is_encrypted_room = services
 		.rooms
 		.state_accessor
-		.state_get(current_shortstatehash, &StateEventType::RoomEncryption, "")
+		.state_get(shortstatehashes.current_shortstatehash, &StateEventType::RoomEncryption, "")
 		.is_ok();
 
 	// initial syncs don't include device updates, and rooms which aren't encrypted
@@ -891,7 +922,7 @@ async fn build_device_list_updates(
 			let Some(user_id): Option<OwnedUserId> = state_event
 				.state_key
 				.as_ref()
-				.and_then(|key| key.parse().ok())
+				.and_then(|key| key.parse::<OwnedUserId>().ok())
 			else {
 				continue;
 			};

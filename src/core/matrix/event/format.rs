@@ -36,6 +36,7 @@ impl<'a, E: Event> From<Ref<'a, E>> for Raw<AnySyncTimelineEvent> {
 		if let Some(state_key) = event.state_key() {
 			json["state_key"] = json!(state_key);
 		}
+
 		if let Some(unsigned) = event.unsigned() {
 			json["unsigned"] = json!(unsigned);
 		}
