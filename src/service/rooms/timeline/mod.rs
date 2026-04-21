@@ -224,9 +224,7 @@ impl Service {
 		for (event_id, (pdu, _)) in &entries {
 			let mut parents = HashSet::new();
 			for prev_id in pdu.prev_events() {
-				if entries.contains_key(prev_id) {
-					parents.insert(prev_id.to_owned());
-				}
+				parents.insert(prev_id.to_owned());
 			}
 			graph.insert(event_id.clone(), parents);
 		}

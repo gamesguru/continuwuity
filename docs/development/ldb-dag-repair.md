@@ -69,14 +69,18 @@ Each key is `shortroomid(8B) || pducount(8B)`. The values are JSON. Look at `ori
 
 ---
 
-## 4. Scan Outlier Events for a Room
+### 4. Scan Outlier Events for a Room
+
+If a rescue is successful, the events will be moved from the outlier tables to the timeline tables. In a healthy room, these tables should be empty.
 
 ```bash
 # List outlier event IDs for a room
+# Should return nothing if all are rescued
 ldb scan --db="$DB" \
   --column_family=roomid_outliereventid \
   --from="!yourRoomId:server.tld\xff" \
   --max_keys=100
+```
 
 # Get a specific outlier's PDU JSON
 ldb get --db="$DB" \

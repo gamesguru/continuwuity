@@ -1,7 +1,7 @@
-use conduwuit::implement;
+use conduwuit::{Event, implement};
 use futures::StreamExt;
 use ruma::{
-	OwnedEventId, OwnedRoomId, OwnedServerName,
+	OwnedEventId, OwnedRoomId, OwnedServerName, UserId,
 	events::{
 		StateEventType, TimelineEventType,
 		room::history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent},
@@ -26,6 +26,11 @@ pub async fn server_can_see_event(
 		if pdu.sender.server_name() == origin
 			|| pdu.origin.as_deref() == Some(&origin)
 			|| pdu.kind == TimelineEventType::RoomCreate
+			|| (pdu.kind == TimelineEventType::RoomMember
+				&& pdu
+					.state_key()
+					.and_then(|k| UserId::parse(k).ok())
+					.is_some_and(|u| u.server_name() == origin))
 		{
 			return true;
 		}

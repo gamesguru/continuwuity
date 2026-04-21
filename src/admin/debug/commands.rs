@@ -941,8 +941,38 @@ pub(super) async fn rescue_room(
 }
 
 #[admin_command]
-pub(super) async fn reorder_timeline(&self, room_id: OwnedRoomId) -> Result {
+pub(super) async fn reorder_timeline(&self, room_id: OwnedRoomId, all: bool) -> Result {
 	self.bail_restricted()?;
+
+	if all {
+		let mut room_ids: Vec<OwnedRoomId> = Vec::new();
+		let mut rooms = self.services.rooms.metadata.iter_ids();
+		while let Some(room_id) = rooms.next().await {
+			room_ids.push(room_id.to_owned());
+		}
+		drop(rooms);
+
+		self.write_str(&format!("Reordering timeline for {} rooms...", room_ids.len()))
+			.await?;
+
+		let mut count = 0_usize;
+		for room_id in room_ids {
+			if self
+				.services
+				.rooms
+				.timeline
+				.reorder_timeline(&room_id)
+				.await
+				.is_ok()
+			{
+				count = count.saturating_add(1);
+			}
+		}
+
+		return self
+			.write_str(&format!("Reordered timeline for {count} rooms. Clients should re-sync."))
+			.await;
+	}
 
 	self.write_str(&format!("Reordering timeline for {room_id} by origin_server_ts..."))
 		.await?;
@@ -1033,16 +1063,33 @@ pub(super) async fn fetch_pdu(
 		.validate_and_add_event_id(&response.pdu, &room_version)
 		.await?;
 
+	let create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await?;
+
+	let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
+		.map_err(|e| err!(Database("Invalid PDU: {e:?}")))?;
+
 	let result = self
 		.services
 		.rooms
 		.event_handler
-		.handle_incoming_pdu(&server, &room_id, &event_id, value, false)
+		.upgrade_outlier_to_timeline_pdu(
+			pdu,
+			value,
+			&create_event,
+			&server,
+			&room_id,
+			UpgradeOptions { force: true, nuclear: true, rescue: true },
+		)
 		.await?;
 
 	match result {
-		| Some(id) => write!(self, "Successfully fetched and persisted PDU: {id:?}"),
-		| None => write!(self, "PDU was already present or failed validation silently."),
+		| Some(id) => write!(self, "Successfully fetched and rescued PDU: {id:?}"),
+		| None => write!(self, "PDU was already present or promoted successfully."),
 	}
 	.await
 }
@@ -1525,14 +1572,15 @@ pub(super) async fn compare_room_state(
 		.await;
 
 	let missing_locally: Vec<_> = remote_state.difference(&local_state).collect();
-	let extra_locally_count = local_state.difference(&remote_state).count();
+	let extra_locally: Vec<_> = local_state.difference(&remote_state).collect();
 
 	self.write_str(&format!(
 		"Room State Comparison for {room_id} vs {server}:\n- Missing locally: {}\n- Extra \
-		 locally: {}\n\nMissing IDs:\n```\n{:#?}\n```",
+		 locally: {}\n\nMissing IDs:\n```\n{:#?}\n```\n\nExtra IDs:\n```\n{:#?}\n```",
 		missing_locally.len(),
-		extra_locally_count,
-		missing_locally
+		extra_locally.len(),
+		missing_locally,
+		extra_locally
 	))
 	.await
 }
@@ -1676,14 +1724,8 @@ pub(super) async fn heal_room(
 	// Phase 4: Reorder timeline by origin_server_ts so auth checks work correctly
 	self.write_str("Phase 4: Reordering timeline by timestamp...")
 		.await?;
-	let reordered = self
-		.services
-		.rooms
-		.timeline
-		.reorder_timeline(&room_id)
-		.await?;
-	self.write_str(&format!("Phase 4: Reordered {reordered} PDUs."))
-		.await?;
+	Box::pin(self.reorder_timeline(room_id.clone(), false)).await?;
+	self.write_str("Phase 4: Reordered timeline.").await?;
 
 	// Phase 5: Resync state from the remote server
 	self.write_str("Phase 5: Resyncing room state from server...")

@@ -149,6 +149,10 @@ pub enum DebugCommand {
 	ReorderTimeline {
 		/// The room ID.
 		room_id: OwnedRoomId,
+
+		/// If set, reorders timeline in ALL rooms.
+		#[arg(long)]
+		all: bool,
 	},
 
 	/// Get the room DAG as a list of PDUs in a range.

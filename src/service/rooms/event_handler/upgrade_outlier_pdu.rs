@@ -52,10 +52,10 @@ where
 	{
 		if options.nuclear {
 			debug!(event_id = %incoming_pdu.event_id, "NUCLEAR: Removing existing timeline entry to fix ordering");
-			// We need a way to remove from timeline.
-			// For now, let us just proceed and append_pdu will overwrite
-			// eventid_pduid. But we should ideally remove the old pduid_pdu
-			// entry.
+			self.services
+				.timeline
+				.remove_from_timeline(incoming_pdu.event_id())
+				.await;
 		} else {
 			self.services
 				.outlier
@@ -428,6 +428,12 @@ where
 			room_id,
 		)
 		.await?;
+
+	// Successfully added to timeline, remove from outliers
+	self.services
+		.outlier
+		.remove_outlier(incoming_pdu.event_id())
+		.await;
 
 	// Event has passed all auth/stateres checks
 	drop(state_lock);
