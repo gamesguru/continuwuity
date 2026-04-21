@@ -169,16 +169,17 @@ impl Service {
 				| TransactionStatus::Cooldown(..) => {
 					panic!("Request in cooldown failed?!")
 				},
-			}
+			};
 		});
 
 		// Schedule a delayed retry after the backoff period
 		let base = self.server.config.sender_retry_backoff_base;
 		let max = self.server.config.sender_retry_backoff_limit;
-		let delay_secs = base
-			.saturating_mul(tries.into())
-			.saturating_mul(tries.into())
-			.min(max);
+		let delay_secs = base.saturating_mul(2_u64.saturating_pow(tries.saturating_sub(1)));
+		let delay_secs = delay_secs.min(max);
+		let delay = Duration::from_secs(delay_secs);
+
+		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now() + delay));
 
 		let sender = self
 			.channels
@@ -188,7 +189,7 @@ impl Service {
 			.clone();
 
 		self.server.runtime().spawn(async move {
-			tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+			tokio::time::sleep(delay).await;
 			sender
 				.send(Msg {
 					dest,
@@ -234,7 +235,8 @@ impl Service {
 			return;
 		}
 
-		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now()));
+		let delay = Duration::from_millis(500);
+		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now() + delay));
 
 		let dest_clone = dest.clone();
 		let sender = self
@@ -244,7 +246,7 @@ impl Service {
 			.0
 			.clone();
 		self.server.runtime().spawn(async move {
-			tokio::time::sleep(Duration::from_millis(1500)).await;
+			tokio::time::sleep(delay).await;
 			sender
 				.send(Msg {
 					dest: dest_clone,
@@ -423,7 +425,7 @@ impl Service {
 		&self,
 		dest: &Destination,
 		statuses: &mut CurTransactionStatus,
-		has_pdu: bool,
+		_has_pdu: bool,
 	) -> Result<(bool, bool)> {
 		let (mut allow, mut retry) = (true, false);
 		statuses
@@ -446,7 +448,7 @@ impl Service {
 					allow = false; // already running
 				},
 				TransactionStatus::Cooldown(time) => {
-					if !has_pdu && time.elapsed() < Duration::from_millis(1500) {
+					if Instant::now() < *time {
 						allow = false;
 					} else {
 						*e = TransactionStatus::Running;
