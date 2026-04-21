@@ -3,7 +3,11 @@ use std::{convert::AsRef, fmt::Debug, io::Write};
 use conduwuit::{arrayvec::ArrayVec, implement};
 use serde::Serialize;
 
-use crate::{keyval::KeyBuf, ser, util::or_else};
+use crate::{
+	keyval::KeyBuf,
+	ser,
+	util::{RawRef, or_else},
+};
 
 #[implement(super::Map)]
 #[inline]
@@ -42,7 +46,7 @@ pub fn remove<K>(&self, key: &K)
 where
 	K: AsRef<[u8]> + ?Sized + Debug,
 {
-	self.remove_raw(key.as_ref());
+	self.remove_raw(key.as_raw());
 }
 
 #[implement(super::Map)]
@@ -54,7 +58,7 @@ pub fn remove_raw(&self, key: &[u8]) {
 		.try_with(|batch| {
 			if let Ok(mut batch_guard) = batch.try_lock() {
 				let (batch, _closures) = &mut *batch_guard;
-				batch.delete_cf(&self.cf(), key.as_ref());
+				batch.delete_cf(&self.cf(), key);
 				true
 			} else {
 				false
