@@ -151,14 +151,8 @@ impl Service {
 	}
 
 	fn glob_match(glob: &str, target: &str) -> bool {
-		let has_wildcard = glob.contains('*') || glob.contains('?');
 		let mut regex_str = String::with_capacity(glob.len().saturating_mul(2).saturating_add(2));
-		if !has_wildcard {
-			regex_str.push_str(".*");
-		} else {
-			regex_str.push('^');
-		}
-
+		regex_str.push('^');
 		for c in glob.chars() {
 			match c {
 				| '*' => regex_str.push_str(".*"),
@@ -170,12 +164,7 @@ impl Service {
 				| _ => regex_str.push(c),
 			}
 		}
-
-		if !has_wildcard {
-			regex_str.push_str(".*");
-		} else {
-			regex_str.push('$');
-		}
+		regex_str.push('$');
 
 		regex::Regex::new(&regex_str)
 			.map(|re| re.is_match(target))

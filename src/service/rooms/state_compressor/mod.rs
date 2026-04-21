@@ -437,7 +437,7 @@ pub async fn save_state(
 #[tracing::instrument(skip(self), level = "debug", name = "get")]
 async fn get_statediff(&self, shortstatehash: ShortStateHash) -> Result<StateDiff> {
 	const BUFSIZE: usize = size_of::<ShortStateHash>();
-	const STRIDE: usize = size_of::<ShortId>();
+	const STRIDE: usize = size_of::<ShortStateHash>();
 
 	let value = self
 		.db
@@ -448,40 +448,30 @@ async fn get_statediff(&self, shortstatehash: ShortStateHash) -> Result<StateDif
 			err!(Database("Failed to find StateDiff from short {shortstatehash:?}: {e}"))
 		})?;
 
-	let parent = utils::u64_from_bytes(&value[0..STRIDE])
+	let parent = utils::u64_from_bytes(&value[0..size_of::<u64>()])
 		.ok()
 		.take_if(|parent| *parent != 0);
 
 	debug_assert!(value.len().is_multiple_of(STRIDE), "value not aligned to stride");
+	let _num_values = value.len() / STRIDE;
 
 	let mut add_mode = true;
 	let mut added = CompressedState::new();
 	let mut removed = CompressedState::new();
 
 	let mut i = STRIDE;
-	while i < value.len() {
-		if add_mode
-			&& value.len() >= i.saturating_add(STRIDE)
-			&& value[i..i.saturating_add(STRIDE)] == 0_u64.to_be_bytes()
-		{
+	while let Some(v) = value.get(i..i.saturating_add(STRIDE.saturating_mul(2))) {
+		if add_mode && v.starts_with(&0_u64.to_be_bytes()) {
 			add_mode = false;
 			i = i.saturating_add(STRIDE);
 			continue;
 		}
-
-		let next_event_idx = i.saturating_add(STRIDE.saturating_mul(2));
-		if value.len() >= next_event_idx {
-			let v: CompressedStateEvent = value[i..next_event_idx].try_into()?;
-			if add_mode {
-				added.insert(v);
-			} else {
-				removed.insert(v);
-			}
-			i = next_event_idx;
+		if add_mode {
+			added.insert(v.try_into()?);
 		} else {
-			// This should not happen if data is well-formed
-			break;
+			removed.insert(v.try_into()?);
 		}
+		i = i.saturating_add(STRIDE.saturating_mul(2));
 	}
 
 	Ok(StateDiff {

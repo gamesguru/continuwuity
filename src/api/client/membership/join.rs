@@ -698,10 +698,23 @@ async fn join_room_by_id_helper_remote(
 				for raw in pending_invites {
 					if let Ok(Some(state_key)) = raw.get_field::<String>("state_key") {
 						if state_key == sender_user.as_str() {
-							result.1 = raw
+							let mut content = raw
 								.get_field::<CanonicalJsonObject>("content")
 								.ok()
 								.flatten();
+
+							// Preserve is_direct from invite unsigned
+							if let Some(ref mut content) = content {
+								if let Ok(Some(unsigned)) =
+									raw.get_field::<CanonicalJsonObject>("unsigned")
+								{
+									if let Some(is_direct) = unsigned.get("is_direct") {
+										content.insert("is_direct".to_owned(), is_direct.clone());
+									}
+								}
+							}
+
+							result.1 = content;
 							result.2 = raw.get_field::<String>("sender").ok().flatten();
 							result.3 = raw.get_field::<String>("event_id").ok().flatten();
 							break;
