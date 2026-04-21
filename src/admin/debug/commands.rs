@@ -1243,7 +1243,7 @@ pub(super) async fn force_set_room_state_from_server(
 			.services
 			.rooms
 			.state_compressor
-			.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, (*eid).borrow())))
+			.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, (*eid).as_ref())))
 			.collect()
 			.await;
 		std::sync::Arc::new(compressed)
