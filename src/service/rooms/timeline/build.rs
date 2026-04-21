@@ -223,7 +223,7 @@ where
 						))));
 					}
 
-					let count = self
+					let _count = self
 						.services
 						.state_cache
 						.room_members(&room_id) // Avoid redundant re-evaluation
@@ -232,6 +232,17 @@ where
 						.boxed()
 						.count()
 						.await;
+					let count =
+						self.services
+							.state_cache
+							.room_members(&pdu.room_id_or_hash().ok_or_else(|| {
+								err!(Request(Forbidden("Event has no room_id")))
+							})?)
+							.ready_filter(|user| self.services.globals.user_is_local(user))
+							.ready_filter(|user| *user != target)
+							.boxed()
+							.count()
+							.await;
 
 					if count < 2 {
 						return Err!(Request(Forbidden(error!(
@@ -247,7 +258,7 @@ where
 						))));
 					}
 
-					let count = self
+					let _count = self
 						.services
 						.state_cache
 						.room_members(&room_id) // Avoid redundant re-evaluation
@@ -256,6 +267,17 @@ where
 						.boxed()
 						.count()
 						.await;
+					let count =
+						self.services
+							.state_cache
+							.room_members(&pdu.room_id_or_hash().ok_or_else(|| {
+								err!(Request(Forbidden("Event has no room_id")))
+							})?)
+							.ready_filter(|user| self.services.globals.user_is_local(user))
+							.ready_filter(|user| *user != target)
+							.boxed()
+							.count()
+							.await;
 
 					if count < 2 {
 						return Err!(Request(Forbidden(error!(

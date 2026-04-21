@@ -1307,15 +1307,19 @@ fn check_power_levels(
 	for user in user_levels_to_check {
 		let old_level = old_state.users.get(user);
 		let new_level = new_state.users.get(user);
-
-		if room_version.explicitly_privilege_room_creators && creators.contains(user) {
-			if new_level.is_some() {
-				warn!("creators cannot appear in the users list of m.room.power_levels");
+		if new_level.is_some() && creators.contains(user) {
+			if new_level != Some(&Int::MAX) {
+				warn!(
+					"creators cannot appear in the users list of m.room.power_levels with a \
+					 non-privileged power level"
+				);
 				return Err(Error::InvalidPdu(
-					"creators cannot appear in the users list of m.room.power_levels".to_owned(),
+					"creators cannot appear in the users list of m.room.power_levels with a \
+					 non-privileged power level"
+						.to_owned(),
 				));
 			}
-			trace!("ignoring creator in users list (correctly missing)");
+			trace!("ignoring creator in users list with privileged power level");
 			continue;
 		}
 

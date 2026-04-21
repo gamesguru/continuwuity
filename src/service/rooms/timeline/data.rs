@@ -106,14 +106,20 @@ impl Data {
 	}
 
 	/// Returns the pdu directly from `eventid_pduid` only.
-	/// If `room_id` is provided, validates the PDU belongs to that room.
+	/// Populates room_id if missing and validates the PDU belongs to that room.
 	pub(super) async fn get_non_outlier_pdu_in_room(
 		&self,
 		room_id: Option<&RoomId>,
 		event_id: &EventId,
 	) -> Result<PduEvent> {
 		let pduid = self.get_pdu_id(event_id).await?;
-		let pdu: PduEvent = self.pduid_pdu.get(&pduid).await.deserialized()?;
+		let mut pdu: PduEvent = self.pduid_pdu.get(&pduid).await.deserialized()?;
+
+		if pdu.room_id.is_none() {
+			if let Some(room_id) = room_id {
+				pdu.room_id = Some(room_id.to_owned());
+			}
+		}
 
 		// Enforce cross-room boundary: verify the PDU belongs to the expected room
 		if let Some(expected_room) = room_id {
@@ -146,7 +152,13 @@ impl Data {
 		S: Stream<Item = RawPduId> + Send + 'a,
 	{
 		pdu_ids.get(&self.pduid_pdu).map(move |res| {
-			let pdu: PduEvent = res.deserialized()?;
+			let mut pdu: PduEvent = res.deserialized()?;
+			if pdu.room_id.is_none() {
+				if let Some(room_id) = room_id {
+					pdu.room_id = Some(room_id.to_owned());
+				}
+			}
+
 			if let Some(expected_room) = room_id {
 				if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
 					return Err!(Database("PDU does not belong to room {expected_room}"));
@@ -164,7 +176,7 @@ impl Data {
 		self.pduid_pdu.exists(&pduid).await
 	}
 
-	/// Returns the pdu.
+	/// Returns the pdu, populating room_id.
 	///
 	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.
 	/// If `room_id` is provided, validates the PDU belongs to that room.
@@ -178,7 +190,13 @@ impl Data {
 			.eventid_outlierpdu
 			.get(event_id)
 			.map(move |handle| {
-				let pdu: PduEvent = handle.deserialized()?;
+				let mut pdu: PduEvent = handle.deserialized()?;
+
+				if pdu.room_id.is_none() {
+					if let Some(room_id) = room_id {
+						pdu.room_id = Some(room_id.to_owned());
+					}
+				}
 
 				// Enforce cross-room boundary
 				if let Some(expected_room) = room_id {
@@ -211,7 +229,7 @@ impl Data {
 		select_ok([non_outlier, outlier]).await.map(at!(0))
 	}
 
-	/// Returns the pdu.
+	/// Returns the pdu, populating room_id.
 	///
 	/// This does __NOT__ check the outliers `Tree`.
 	/// If `room_id` is provided, validates the PDU belongs to that room.
@@ -220,7 +238,13 @@ impl Data {
 		room_id: Option<&RoomId>,
 		pdu_id: &RawPduId,
 	) -> Result<PduEvent> {
-		let pdu: PduEvent = self.pduid_pdu.get(pdu_id).await.deserialized()?;
+		let mut pdu: PduEvent = self.pduid_pdu.get(pdu_id).await.deserialized()?;
+
+		if pdu.room_id.is_none() {
+			if let Some(room_id) = room_id {
+				pdu.room_id = Some(room_id.to_owned());
+			}
+		}
 
 		if let Some(expected_room) = room_id {
 			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
@@ -319,7 +343,13 @@ impl Data {
 		(pdu_id, pdu): KeyVal<'_>,
 	) -> Result<PdusIterItem> {
 		let pdu_id: RawPduId = pdu_id.into();
-		let pdu = serde_json::from_slice::<PduEvent>(pdu)?;
+		let mut pdu = serde_json::from_slice::<PduEvent>(pdu)?;
+
+		if pdu.room_id.is_none() {
+			if let Some(room_id) = room_id {
+				pdu.room_id = Some(room_id.to_owned());
+			}
+		}
 
 		if let Some(expected_room) = room_id {
 			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {

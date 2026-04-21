@@ -181,7 +181,7 @@ impl Service {
 				}
 				true
 			})
-			.for_each(|_| async {})
+			.ready_for_each(|_| {})
 			.await;
 
 		statediffremoved
