@@ -243,7 +243,7 @@ impl Service {
 
 		self.set_forward_extremities(
 			room_id,
-			new_extremities.iter().map(std::convert::AsRef::as_ref),
+			new_extremities.iter().map(AsRef::as_ref),
 			state_lock,
 		)
 		.await;
