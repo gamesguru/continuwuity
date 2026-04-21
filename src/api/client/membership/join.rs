@@ -791,7 +791,10 @@ async fn join_room_by_id_helper_remote(
 			.expect("create event is missing from send_join auth"),
 	)
 	.await
-	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
+	.map_err(|e| match e {
+		| state_res::Error::InvalidPdu(msg) => err!(Request(BadJson(warn!("{msg}")))),
+		| _ => err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))),
+	})?;
 
 	if !auth_check {
 		return Err!(Request(Forbidden("Auth check failed")));

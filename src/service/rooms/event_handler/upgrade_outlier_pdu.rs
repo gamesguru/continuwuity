@@ -106,7 +106,10 @@ where
 		create_event.as_pdu(),
 	)
 	.await
-	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+	.map_err(|e| match e {
+		| state_res::Error::InvalidPdu(msg) => err!(Request(BadJson(warn!("{msg}")))),
+		| _ => err!(Request(Forbidden("Auth check failed: {e:?}"))),
+	})?;
 
 	if !auth_check {
 		return Err!(Request(Forbidden("Event has failed auth check with state at the event.")));
@@ -166,7 +169,10 @@ where
 		create_event.as_pdu(),
 	)
 	.await
-	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+	.map_err(|e| match e {
+		| state_res::Error::InvalidPdu(msg) => err!(Request(BadJson(warn!("{msg}")))),
+		| _ => err!(Request(Forbidden("Auth check failed: {e:?}"))),
+	})?;
 
 	// Soft fail check before doing state res
 	debug!(

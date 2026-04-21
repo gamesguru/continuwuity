@@ -47,7 +47,7 @@ use ruma::{
 };
 use service::rooms::lazy_loading::{self, MemberSet, Options as _};
 
-use super::{load_timeline, share_encrypted_room};
+use super::{load_timeline, shares_a_room};
 use crate::{
 	Ruma, RumaResponse,
 	client::{

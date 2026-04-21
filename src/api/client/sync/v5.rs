@@ -39,7 +39,7 @@ use ruma::{
 	uint,
 };
 
-use super::share_encrypted_room;
+use super::shares_a_room;
 use crate::{
 	Ruma,
 	client::{
@@ -929,7 +929,7 @@ where
 								match content.membership {
 									| MembershipState::Join => {
 										// A new user joined an encrypted room
-										if !share_encrypted_room(
+										if !shares_a_room(
 											services,
 											sender_user,
 											user_id,

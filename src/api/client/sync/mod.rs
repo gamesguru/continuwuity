@@ -7,7 +7,7 @@ use conduwuit::{
 	Event, PduCount, Result, debug_warn, err,
 	matrix::pdu::PduEvent,
 	ref_at, trace,
-	utils::stream::{BroadbandExt, ReadyExt, TryIgnore, WidebandExt},
+	utils::stream::{ReadyExt, TryIgnore, WidebandExt},
 };
 use conduwuit_service::Services;
 use futures::StreamExt;
@@ -142,7 +142,7 @@ async fn load_timeline(
 	Ok(TimelinePdus { pdus, limited })
 }
 
-async fn share_encrypted_room(
+async fn shares_a_room(
 	services: &Services,
 	sender_user: &UserId,
 	user_id: &UserId,
@@ -152,14 +152,6 @@ async fn share_encrypted_room(
 		.rooms
 		.state_cache
 		.get_shared_rooms(sender_user, user_id)
-		.ready_filter(|&room_id| Some(room_id) != ignore_room)
-		.map(ToOwned::to_owned)
-		.broad_any(|other_room_id| async move {
-			services
-				.rooms
-				.state_accessor
-				.is_encrypted_room(&other_room_id)
-				.await
-		})
+		.ready_any(|room_id| Some(room_id) != ignore_room)
 		.await
 }

@@ -262,7 +262,10 @@ pub async fn create_event(
 		create_event,
 	)
 	.await
-	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
+	.map_err(|e| match e {
+		| state_res::Error::InvalidPdu(msg) => err!(Request(BadJson(warn!("{msg}")))),
+		| _ => err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))),
+	})?;
 
 	if !auth_check {
 		return Err!(Request(Forbidden(warn!(
