@@ -2584,7 +2584,6 @@ const DEPRECATED_KEYS: &[&str] = &[
 	"well_known_support_role",
 	"well_known_support_email",
 	"well_known_support_mxid",
-	"registration_token_file",
 	"well_known.rtc_focus_server_urls",
 ];
 
