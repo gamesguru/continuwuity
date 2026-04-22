@@ -285,6 +285,21 @@ pub struct Config {
 	#[serde(default = "default_dns_cache_entries")]
 	pub dns_cache_entries: u32,
 
+	/// Fallback DNS nameservers to use if the system configuration is
+	/// missing or empty (e.g. in a 'scratch' Docker image).
+	///
+	/// These are used only as a last resort. For performance and reliability,
+	/// it is strongly recommended to use an Unbound sidecar (as provided
+	/// in our default docker-compose.yml) instead of relying on these
+	/// fallbacks.
+	///
+	/// For privacy and security, we default to Quad9 (9.9.9.9), a
+	/// non-logging and privacy-respecting public resolver.
+	///
+	/// default: ["9.9.9.9"]
+	#[serde(default = "default_dns_fallbacks")]
+	pub dns_fallbacks: Vec<String>,
+
 	/// Minimum time-to-live in seconds for entries in the DNS cache. The
 	/// default may appear high to most administrators; this is by design as the
 	/// majority of NXDOMAINs are correct for a long time (e.g. the server is no
@@ -2711,6 +2726,8 @@ fn default_stateinfo_cache_capacity() -> u32 { parallelism_scaled_u32(100) }
 fn default_roomid_spacehierarchy_cache_capacity() -> u32 { parallelism_scaled_u32(1000) }
 
 fn default_dns_cache_entries() -> u32 { 32768 }
+
+fn default_dns_fallbacks() -> Vec<String> { vec!["9.9.9.9".to_owned()] }
 
 fn default_dns_min_ttl() -> u64 { 60 * 180 }
 

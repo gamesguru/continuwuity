@@ -218,6 +218,19 @@
 #
 #dns_cache_entries = 32768
 
+# Fallback DNS nameservers to use if the system configuration is
+# missing or empty (e.g. in a 'scratch' Docker image).
+#
+# These are used only as a last resort. For performance and reliability,
+# it is strongly recommended to use an Unbound sidecar (as provided
+# in our default docker-compose.yml) instead of relying on these
+# fallbacks.
+#
+# For privacy and security, we default to Quad9 (9.9.9.9), a
+# non-logging and privacy-respecting public resolver.
+#
+#dns_fallbacks = ["9.9.9.9"]
+
 # Minimum time-to-live in seconds for entries in the DNS cache. The
 # default may appear high to most administrators; this is by design as the
 # majority of NXDOMAINs are correct for a long time (e.g. the server is no

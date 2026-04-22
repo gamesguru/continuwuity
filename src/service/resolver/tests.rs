@@ -69,3 +69,31 @@ async fn test_dns_resolution_integration() {
 		);
 	}
 }
+
+#[tokio::test]
+async fn test_dns_fallback_logic() {
+	// Simulate missing system configuration (common in scratch containers)
+	let _sys_conf = hickory_resolver::config::ResolverConfig::new();
+	let mut opts = hickory_resolver::config::ResolverOpts::default();
+	opts.use_hosts_file = hickory_resolver::config::ResolveHosts::Always;
+
+	// This mimics our logic in Resolver::build when nameservers.is_empty()
+	let mut conf = hickory_resolver::config::ResolverConfig::new();
+
+	// Use Quad9 fallback (simulating config.dns_fallbacks)
+	let fallback_addr: std::net::SocketAddr = "9.9.9.9:53".parse().unwrap();
+	let ns = hickory_resolver::config::NameServerConfig::new(
+		fallback_addr,
+		hickory_resolver::proto::xfer::Protocol::Udp,
+	);
+	conf.add_name_server(ns);
+
+	let rt_prov = hickory_resolver::proto::runtime::TokioRuntimeProvider::new();
+	let conn_prov = hickory_resolver::name_server::TokioConnectionProvider::new(rt_prov);
+	let builder = hickory_resolver::TokioResolver::builder_with_config(conf, conn_prov);
+	let resolver = builder.build();
+
+	// Test resolving a well-known public domain via our fallback
+	let result = resolver.lookup_ip("google.com").await;
+	assert!(result.is_ok(), "Failed to resolve google.com via fallback: {:?}", result.err());
+}

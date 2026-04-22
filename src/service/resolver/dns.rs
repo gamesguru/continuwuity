@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use conduwuit::{Result, Server, err};
+use conduwuit::{Result, Server};
 use futures::FutureExt;
 use hickory_resolver::{TokioResolver, lookup_ip::LookupIp};
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
@@ -26,7 +26,15 @@ impl Resolver {
 	pub(crate) fn build(server: &Arc<Server>, cache: Arc<Cache>) -> Result<Arc<Self>> {
 		let config = &server.config;
 		let (sys_conf, mut opts) = hickory_resolver::system_conf::read_system_conf()
-			.map_err(|e| err!(error!("Failed to configure DNS resolver from system: {e}")))?;
+			.unwrap_or_else(|e| {
+				tracing::warn!(
+					"Failed to read system DNS configuration: {e}. Falling back to defaults."
+				);
+				(
+					hickory_resolver::config::ResolverConfig::new(),
+					hickory_resolver::config::ResolverOpts::default(),
+				)
+			});
 
 		let mut conf = hickory_resolver::config::ResolverConfig::new();
 
@@ -38,9 +46,32 @@ impl Resolver {
 			conf.add_search(sys_conf.clone());
 		}
 
-		for sys_conf in sys_conf.name_servers() {
-			let mut ns = sys_conf.clone();
+		let mut nameservers = sys_conf.name_servers().to_vec();
 
+		if nameservers.is_empty() {
+			tracing::warn!(
+				"No nameservers found in system configuration. Using fallbacks: {:?}",
+				config.dns_fallbacks
+			);
+			for fallback in &config.dns_fallbacks {
+				let addr = if let Ok(socket_addr) = fallback.parse::<SocketAddr>() {
+					socket_addr
+				} else if let Ok(ip_addr) = fallback.parse::<std::net::IpAddr>() {
+					SocketAddr::new(ip_addr, 53)
+				} else {
+					tracing::error!("Invalid fallback DNS address: {}", fallback);
+					continue;
+				};
+
+				let ns = hickory_resolver::config::NameServerConfig::new(
+					addr,
+					hickory_resolver::proto::xfer::Protocol::Udp,
+				);
+				nameservers.push(ns);
+			}
+		}
+
+		for mut ns in nameservers {
 			if config.query_over_tcp_only {
 				ns.protocol = hickory_resolver::proto::xfer::Protocol::Tcp;
 			}

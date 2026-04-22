@@ -1,3 +1,4 @@
+---
 # Continuwuity - Behind Traefik Reverse Proxy
 
 services:
@@ -5,12 +6,16 @@ services:
     image: forgejo.ellis.link/continuwuation/continuwuity:latest
     restart: unless-stopped
     command: /sbin/conduwuit
+    depends_on:
+      - unbound
+    dns:
+      - 10.10.10.20
     volumes:
       - db:/var/lib/continuwuity
-      - ./continuwuity-resolv.conf:/etc/resolv.conf # use custom resolvers rather than Docker's
-      #- ./continuwuity.toml:/etc/continuwuity.toml
+      # ./continuwuity.toml:/etc/continuwuity.toml
     networks:
       - proxy
+      - continuwuity_net
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.continuwuity.rule=(Host(`example.com`))"
@@ -22,7 +27,7 @@ services:
       CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
       CONTINUWUITY_ADDRESS: 0.0.0.0
       CONTINUWUITY_PORT: 8008 # This must match with traefik's loadbalancer label
-      #CONTINUWUITY_CONFIG: '/etc/continuwuity.toml' # Uncomment if you mapped config toml above
+      # CONTINUWUITY_CONFIG: '/etc/continuwuity.toml' # Uncomment if you mapped config toml above
 
       # Serve .well-known files to tell others to reach Continuwuity on port :443
       CONTINUWUITY_WELL_KNOWN: |
@@ -76,9 +81,20 @@ services:
       TRAEFIK_PROVIDERS_DOCKER_ENDPOINT: "unix:///var/run/docker.sock"
       TRAEFIK_PROVIDERS_DOCKER_EXPOSEDBYDEFAULT: false
 
+  unbound:
+    image: madnuttah/unbound:latest
+    restart: unless-stopped
+    networks:
+      continuwuity_net:
+        ipv4_address: 10.10.10.20
+
 volumes:
   db:
   acme:
 
 networks:
   proxy:
+  continuwuity_net:
+    ipam:
+      config:
+        - subnet: 10.10.10.0/24
