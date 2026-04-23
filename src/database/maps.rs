@@ -121,6 +121,15 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "state_partial_rooms",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "state_partial_events",
+		val_size_hint: Some(0),
+		..descriptor::RANDOM
+	},
+	Descriptor {
 		name: "passwordresettoken_info",
 		..descriptor::RANDOM_SMALL
 	},
