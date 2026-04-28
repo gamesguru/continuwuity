@@ -2,17 +2,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Result, RoomVersion, debug, debug_info, debug_warn, err, info,
+	Err, Error, Result, RoomVersion, debug, debug_info, debug_warn, err, info,
 	matrix::{StateKey, pdu::PduBuilder},
 	trace, warn,
 };
 use conduwuit_service::{Services, appservice::RegistrationInfo};
 use futures::FutureExt;
 use ruma::{
-	CanonicalJsonObject, Int, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomVersionId,
-	api::client::room::{self, create_room},
+	CanonicalJsonObject, CanonicalJsonValue, Int, MilliSecondsSinceUnixEpoch, OwnedRoomAliasId,
+	OwnedRoomId, OwnedUserId, RoomAliasId, RoomId, RoomVersionId, UserId,
+	api::{
+		client::room::{self, create_room},
+		error::ErrorKind::Forbidden,
+	},
+	assign,
 	events::{
-		TimelineEventType,
+		AnyStateEventContent, StateEventType, TimelineEventType,
 		invite_permission_config::FilterLevel,
 		room::{
 			canonical_alias::RoomCanonicalAliasEventContent,
@@ -431,37 +436,42 @@ pub(crate) async fn create_room_route(
 
 	// 6. Events listed in initial_state
 	for event in &body.initial_state {
-		let mut pdu_builder = event.deserialize_as::<PduBuilder>().map_err(|e| {
-			err!(Request(InvalidParam(warn!("Invalid initial state event: {e:?}"))))
+		let event_type: StateEventType = event.get_field("type")?.ok_or_else(|| {
+			err!(Request(InvalidParam(warn!(
+				r#"Invalid initial state event: missing "type" field "#
+			))))
 		})?;
 
-		debug_info!("Room creation initial state event: {event:?}");
+		let content: Raw<AnyStateEventContent> =
+			event.get_field("content")?.ok_or_else(|| {
+				err!(Request(InvalidParam(warn!(
+					r#"Invalid initial state event: missing "content" field "#
+				))))
+			})?;
 
-		// client/appservice workaround: if a user sends an initial_state event with a
-		// state event in there with the content of literally `{}` (not null or empty
-		// string), let's just skip it over and warn.
-		if pdu_builder.content.get().eq("{}") {
-			debug_warn!("skipping empty initial state event with content of `{{}}`: {event:?}");
-			debug_warn!("content: {}", pdu_builder.content.get());
-			continue;
-		}
+		let state_key: String = event.get_field("state_key")?.unwrap_or_default();
 
-		// Implicit state key defaults to ""
-		pdu_builder.state_key.get_or_insert_with(StateKey::new);
-
-		// Silently skip encryption events if they are not allowed
-		if pdu_builder.event_type == TimelineEventType::RoomEncryption
-			&& !services.config.allow_encryption
-		{
-			continue;
-		}
-
-		services
+		match services
 			.rooms
 			.timeline
-			.build_and_append_pdu(pdu_builder, sender_user, Some(&room_id), &state_lock)
+			.send_state_event_for_key_helper(
+				sender_user,
+				&room_id,
+				&state_lock,
+				&event_type,
+				&content,
+				&state_key,
+				None,
+			)
 			.boxed()
-			.await?;
+			.await
+		{
+			| Err(Error::Request(Forbidden, ..)) => {
+				// Silently skip forbidden events
+				continue;
+			},
+			| r => r,
+		}?;
 	}
 
 	// 7. Events implied by name and topic
