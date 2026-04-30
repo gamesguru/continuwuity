@@ -7,7 +7,10 @@ use conduwuit::{
 use futures::{StreamExt, future::join};
 use ruma::{
 	EventId, OwnedRoomId, RoomId,
-	api::client::sync::sync_events::v3::{LeftRoom, RoomAccountData, State, Timeline},
+	api::client::sync::sync_events::v3::{
+		LeftRoom, RoomAccountData, State, StateEvents, Timeline,
+	},
+	assign,
 	events::{AnySyncStateEvent, StateEventType, TimelineEventType},
 	serde::Raw,
 	uint,
@@ -226,15 +229,15 @@ pub(super) async fn load_left_room(
 	}
 
 	Ok(Some((
-		LeftRoom {
-			account_data: RoomAccountData { events: Vec::new() },
-			timeline: Timeline {
+		assign!(LeftRoom::new(), {
+			account_data: RoomAccountData::new(),
+			timeline: assign!(Timeline::new(), {
 				limited,
 				prev_batch: Some(current_count.to_string()),
 				events: raw_timeline_pdus,
-			},
-			state: State { events: state_events_raw },
-		},
+			}),
+			state: State::Before(StateEvents::with_events(state_events_raw)),
+		}),
 		state_after,
 	)))
 }
@@ -365,7 +368,7 @@ fn create_dummy_leave_event(
 	// clients. perhaps a database table could be created to hold these dummy
 	// events, or they could be stored as outliers?
 	PduEvent {
-		event_id: EventId::new(services.globals.server_name()),
+		event_id: EventId::new_v1(services.globals.server_name()),
 		sender: syncing_user.to_owned(),
 		origin: None,
 		origin_server_ts: utils::millis_since_unix_epoch()

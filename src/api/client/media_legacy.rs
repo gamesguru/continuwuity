@@ -6,14 +6,15 @@ use conduwuit::{
 	Err, Result, debug_info, err,
 	utils::{content_disposition::make_content_disposition, math::ruma_from_usize},
 };
-use conduwuit_service::media::{CACHE_CONTROL_IMMUTABLE, CORP_CROSS_ORIGIN, Dim, FileMeta};
+use conduwuit_service::media::{CORP_CROSS_ORIGIN, Dim, FileMeta};
 use ruma::{
-	Mxc,
 	api::client::media::{
 		create_content, get_content, get_content_as_filename, get_content_thumbnail,
 		get_media_config, get_media_preview,
 	},
+	assign,
 };
+use service::media::mxc::Mxc;
 
 use crate::{Ruma, RumaResponse, client::create_content_route};
 
@@ -24,9 +25,9 @@ pub(crate) async fn get_media_config_legacy_route(
 	State(services): State<crate::State>,
 	_body: Ruma<get_media_config::v3::Request>,
 ) -> Result<get_media_config::v3::Response> {
-	Ok(get_media_config::v3::Response {
-		upload_size: ruma_from_usize(services.server.config.max_request_size),
-	})
+	Ok(get_media_config::v3::Response::new(ruma_from_usize(
+		services.server.config.max_request_size,
+	)))
 }
 
 /// # `GET /_matrix/media/v1/config`
@@ -152,13 +153,16 @@ pub(crate) async fn get_content_legacy_route(
 				None,
 			);
 
-			Ok(get_content::v3::Response {
-				file: content.expect("entire file contents"),
-				content_type: content_type.map(Into::into),
-				content_disposition: Some(content_disposition),
-				cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-				cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-			})
+			Ok(assign!(
+				get_content::v3::Response::new(
+					content.expect("entire file contents"),
+					content_type.unwrap_or_default(),
+					content_disposition,
+				),
+				{
+					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
+				}
+			))
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
@@ -186,13 +190,11 @@ pub(crate) async fn get_content_legacy_route(
 					return Err!(Request(NotFound("Media not found.")));
 				};
 
-				Ok(get_content::v3::Response {
+				Ok(get_content::v3::Response::new(
 					file,
-					content_type: content_type.map(Into::into),
-					content_disposition: Some(content_disposition),
-					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-				})
+					content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
+					content_disposition,
+				))
 			} else {
 				Err!(Request(NotFound("Media not found.")))
 			},
@@ -253,13 +255,15 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 				Some(&body.filename),
 			);
 
-			Ok(get_content_as_filename::v3::Response {
-				file: content.expect("entire file contents"),
-				content_type: content_type.map(Into::into),
-				content_disposition: Some(content_disposition),
-				cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-				cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-			})
+			Ok(assign!(get_content_as_filename::v3::Response::new(
+					content.expect("entire file contents"),
+					content_type.unwrap_or_default(),
+					content_disposition,
+				),
+				{
+					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
+				}
+			))
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
@@ -287,13 +291,11 @@ pub(crate) async fn get_content_as_filename_legacy_route(
 					return Err!(Request(NotFound("Media not found.")));
 				};
 
-				Ok(get_content_as_filename::v3::Response {
+				Ok(get_content_as_filename::v3::Response::new(
 					file,
-					content_type: content_type.map(Into::into),
-					content_disposition: Some(content_disposition),
-					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-				})
+					content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
+					content_disposition,
+				))
 			} else {
 				Err!(Request(NotFound("Media not found.")))
 			},
@@ -354,13 +356,16 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 				None,
 			);
 
-			Ok(get_content_thumbnail::v3::Response {
-				file: content.expect("entire file contents"),
-				content_type: content_type.map(Into::into),
-				cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-				cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-				content_disposition: Some(content_disposition),
-			})
+			Ok(assign!(
+				get_content_thumbnail::v3::Response::new(
+					content.expect("entire file contents"),
+					content_type.unwrap_or_default(),
+					content_disposition,
+				),
+				{
+					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.to_owned()),
+				}
+			))
 		},
 		| _ =>
 			if !services.globals.server_is_ours(&body.server_name) && body.allow_remote {
@@ -388,13 +393,11 @@ pub(crate) async fn get_content_thumbnail_legacy_route(
 					return Err!(Request(NotFound("Media not found.")));
 				};
 
-				Ok(get_content_thumbnail::v3::Response {
+				Ok(get_content_thumbnail::v3::Response::new(
 					file,
-					content_type: content_type.map(Into::into),
-					cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-					cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
-					content_disposition: Some(content_disposition),
-				})
+					content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
+					content_disposition,
+				))
 			} else {
 				Err!(Request(NotFound("Media not found.")))
 			},

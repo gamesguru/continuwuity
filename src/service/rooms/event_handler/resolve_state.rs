@@ -11,7 +11,7 @@ use conduwuit::{
 	utils::stream::{IterStream, ReadyExt, TryWidebandExt, WidebandExt},
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
-use ruma::{OwnedEventId, RoomId, RoomVersionId};
+use ruma::{OwnedEventId, RoomId, room_version_rules::RoomVersionRules};
 
 use crate::rooms::state_compressor::CompressedState;
 
@@ -20,7 +20,7 @@ use crate::rooms::state_compressor::CompressedState;
 pub async fn resolve_state(
 	&self,
 	room_id: &RoomId,
-	room_version_id: &RoomVersionId,
+	room_version_rules: &RoomVersionRules,
 	incoming_state: HashMap<u64, OwnedEventId>,
 ) -> Result<Arc<CompressedState>> {
 	trace!("Loading current room state ids");
@@ -71,7 +71,7 @@ pub async fn resolve_state(
 
 	trace!("Resolving state");
 	let state = self
-		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(room_id, room_version_rules, fork_states.iter(), &auth_chain_sets)
 		.boxed()
 		.await?;
 
@@ -104,7 +104,7 @@ pub async fn resolve_state(
 pub async fn state_resolution<'a, StateSets>(
 	&'a self,
 	room_id: &RoomId,
-	room_version: &'a RoomVersionId,
+	room_version_rules: &'a RoomVersionRules,
 	state_sets: StateSets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId>],
 ) -> Result<StateMap<OwnedEventId>>
@@ -113,7 +113,13 @@ where
 {
 	let event_fetch = |event_id| self.event_fetch(Some(room_id), event_id);
 	let event_exists = |event_id| self.event_exists(event_id);
-	state_res::resolve(room_version, state_sets, auth_chain_sets, &event_fetch, &event_exists)
-		.map_err(|e| err!(error!("State resolution failed: {e:?}")))
-		.await
+	state_res::resolve(
+		room_version_rules,
+		state_sets,
+		auth_chain_sets,
+		&event_fetch,
+		&event_exists,
+	)
+	.map_err(|e| err!(error!("State resolution failed: {e:?}")))
+	.await
 }

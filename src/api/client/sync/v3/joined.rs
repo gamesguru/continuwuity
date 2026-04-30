@@ -23,17 +23,21 @@ use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
 	api::client::sync::sync_events::{
 		UnreadNotificationsCount,
-		v3::{Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline},
+		v3::{
+			Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, StateEvents,
+			Timeline,
+		},
 	},
+	assign,
 	events::{
-		AnyRawAccountDataEvent, AnySyncStateEvent, StateEventType,
+		AnySyncStateEvent, StateEventType,
 		TimelineEventType::*,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
 	serde::Raw,
 	uint,
 };
-use service::rooms::short::ShortStateHash;
+use service::{account_data::AnyRawAccountDataEvent, rooms::short::ShortStateHash};
 
 use super::{load_timeline, share_encrypted_room};
 use crate::client::{
@@ -93,17 +97,15 @@ pub(super) async fn load_joined_room(
 		);
 	}
 
-	let joined_room = JoinedRoom {
+	let joined_room = assign!(JoinedRoom::new(), {
 		account_data,
 		summary: summary.unwrap_or_default(),
 		unread_notifications: notification_counts.unwrap_or_default(),
 		timeline,
-		state: RoomState {
-			events: state_events.into_iter().map(Event::into_format).collect(),
-		},
+		state: RoomState::Before(StateEvents::with_events(state_events.into_iter().map(Event::into_format).collect())),
 		ephemeral,
 		unread_thread_notifications: BTreeMap::new(),
-	};
+	});
 
 	let state_after = state_after
 		.into_iter()
@@ -132,7 +134,7 @@ async fn build_account_data(
 		.collect()
 		.await;
 
-	Ok(RoomAccountData { events: account_data_changes })
+	Ok(assign!(RoomAccountData::new(), { events: account_data_changes }))
 }
 
 /// Collect new ephemeral events.
@@ -239,7 +241,7 @@ async fn build_ephemeral(
 	edus.extend(typing_event);
 	edus.extend(private_read_event);
 
-	Ok(Ephemeral { events: edus })
+	Ok(assign!(Ephemeral::new(), { events: edus }))
 }
 
 /// A struct to hold the state events, timeline, and other data which is
@@ -327,11 +329,11 @@ async fn build_state_and_timeline(
 	Ok(StateAndTimeline {
 		state_events,
 		state_after,
-		timeline: Timeline {
+		timeline: assign!(Timeline::new(), {
 			limited,
 			prev_batch: prev_batch.as_ref().map(ToString::to_string),
 			events: filtered_timeline,
-		},
+		}),
 		summary,
 		notification_counts,
 		device_list_updates,
@@ -619,10 +621,10 @@ async fn build_notification_counts(
 
 		trace!(%notification_count, %highlight_count, "syncing new notification counts");
 
-		Ok(Some(UnreadNotificationsCount {
+		Ok(Some(assign!(UnreadNotificationsCount::new(), {
 			notification_count: Some(notification_count),
 			highlight_count: Some(highlight_count),
-		}))
+		})))
 	} else {
 		Ok(None)
 	}
@@ -737,13 +739,13 @@ async fn build_room_summary(
 		"syncing updated summary"
 	);
 
-	Ok(Some(RoomSummary {
+	Ok(Some(assign!(RoomSummary::new(), {
 		heroes: heroes
 			.map(|heroes| heroes.into_iter().collect())
 			.unwrap_or_default(),
 		joined_member_count: Some(ruma_from_u64(joined_member_count)),
 		invited_member_count: Some(ruma_from_u64(invited_member_count)),
-	}))
+	})))
 }
 
 /// Fetch the user IDs to include in the `m.heroes` property of the room
@@ -757,18 +759,10 @@ async fn build_heroes(
 	const MAX_HERO_COUNT: usize = 5;
 
 	// fetch joined members from the state cache first
-	let joined_members_stream = services
-		.rooms
-		.state_cache
-		.room_members(room_id)
-		.map(ToOwned::to_owned);
+	let joined_members_stream = services.rooms.state_cache.room_members(room_id);
 
 	// then fetch invited members
-	let invited_members_stream = services
-		.rooms
-		.state_cache
-		.room_members_invited(room_id)
-		.map(ToOwned::to_owned);
+	let invited_members_stream = services.rooms.state_cache.room_members_invited(room_id);
 
 	// then as a last resort fetch every membership event
 	let all_members_stream = services
@@ -835,7 +829,6 @@ async fn build_device_list_updates(
 		.users
 		.room_keys_changed(room_id, last_sync_end_count, Some(current_count))
 		.map(at!(0))
-		.map(ToOwned::to_owned)
 		.ready_for_each(|user_id| {
 			device_list_updates.changed.insert(user_id);
 		})

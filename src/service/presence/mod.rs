@@ -258,10 +258,7 @@ impl Service {
 				continue;
 			};
 
-			if !matches!(
-				presence.state,
-				PresenceState::Unavailable | PresenceState::Online | PresenceState::Busy
-			) {
+			if !matches!(presence.state, PresenceState::Unavailable | PresenceState::Online) {
 				continue;
 			}
 

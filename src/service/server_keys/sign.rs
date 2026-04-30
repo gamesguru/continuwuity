@@ -1,5 +1,5 @@
 use conduwuit::{Result, implement};
-use ruma::{CanonicalJsonObject, RoomVersionId};
+use ruma::{CanonicalJsonObject, room_version_rules::RoomVersionRules};
 
 #[implement(super::Service)]
 pub fn sign_json(&self, object: &mut CanonicalJsonObject) -> Result {
@@ -13,9 +13,8 @@ pub fn sign_json(&self, object: &mut CanonicalJsonObject) -> Result {
 pub fn hash_and_sign_event(
 	&self,
 	object: &mut CanonicalJsonObject,
-	room_version: &RoomVersionId,
+	room_version_rules: &RoomVersionRules,
 ) -> Result {
-	use conduwuit::matrix::state_res::RoomVersion;
 	use ruma::signatures::hash_and_sign_event;
 
 	let is_create_event = matches!(
@@ -24,12 +23,13 @@ pub fn hash_and_sign_event(
 	);
 
 	// MSC4291: Omit room_id for m.room.create in v12+
-	if let Ok(rv) = RoomVersion::new(room_version) {
-		if rv.room_ids_as_hashes && is_create_event {
-			object.remove("room_id");
-		}
+	if room_version_rules.room_id_format == ruma::room_version_rules::RoomIdFormatVersion::V2
+		&& is_create_event
+	{
+		object.remove("room_id");
 	}
 
 	let server_name = self.services.globals.server_name().as_str();
-	hash_and_sign_event(server_name, self.keypair(), object, room_version).map_err(Into::into)
+	hash_and_sign_event(server_name, self.keypair(), object, &room_version_rules.redaction)
+		.map_err(Into::into)
 }

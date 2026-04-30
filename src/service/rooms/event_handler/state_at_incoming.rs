@@ -11,7 +11,7 @@ use conduwuit::{
 	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, TryWidebandExt},
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
-use ruma::{OwnedEventId, RoomId, RoomVersionId};
+use ruma::{OwnedEventId, RoomId, room_version_rules::RoomVersionRules};
 
 use crate::rooms::short::ShortStateHash;
 
@@ -83,7 +83,7 @@ pub(super) async fn state_at_incoming_resolved<Pdu>(
 	&self,
 	incoming_pdu: &Pdu,
 	room_id: &RoomId,
-	room_version_id: &RoomVersionId,
+	room_version_rules: &RoomVersionRules,
 ) -> Result<Option<HashMap<u64, OwnedEventId>>>
 where
 	Pdu: Event + Send + Sync,
@@ -129,7 +129,7 @@ where
 			.await?;
 
 	let Ok(new_state) = self
-		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(room_id, room_version_rules, fork_states.iter(), &auth_chain_sets)
 		.boxed()
 		.await
 	else {

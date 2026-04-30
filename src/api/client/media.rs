@@ -8,10 +8,10 @@ use conduwuit::{
 };
 use conduwuit_service::{
 	Services,
-	media::{CACHE_CONTROL_IMMUTABLE, CORP_CROSS_ORIGIN, Dim, FileMeta, MXC_LENGTH},
+	media::{Dim, FileMeta, MXC_LENGTH},
 };
 use ruma::{
-	Mxc, UserId,
+	UserId,
 	api::client::{
 		authenticated_media::{
 			get_content, get_content_as_filename, get_content_thumbnail, get_media_config,
@@ -19,7 +19,9 @@ use ruma::{
 		},
 		media::create_content,
 	},
+	assign,
 };
+use service::media::mxc::Mxc;
 
 use crate::Ruma;
 
@@ -28,9 +30,9 @@ pub(crate) async fn get_media_config_route(
 	State(services): State<crate::State>,
 	_body: Ruma<get_media_config::v1::Request>,
 ) -> Result<get_media_config::v1::Response> {
-	Ok(get_media_config::v1::Response {
-		upload_size: ruma_from_usize(services.server.config.max_request_size),
-	})
+	Ok(get_media_config::v1::Response::new(ruma_from_usize(
+		services.server.config.max_request_size,
+	)))
 }
 
 /// # `POST /_matrix/media/v3/upload`
@@ -80,10 +82,9 @@ pub(crate) async fn create_content_route(
 			.flatten()
 	});
 
-	Ok(create_content::v3::Response {
-		content_uri: mxc.to_string().into(),
+	Ok(assign!(create_content::v3::Response::new(mxc.to_string().into()), {
 		blurhash: blurhash.flatten(),
-	})
+	}))
 }
 
 /// # `GET /_matrix/client/v1/media/thumbnail/{serverName}/{mediaId}`
@@ -112,7 +113,7 @@ pub(crate) async fn get_content_thumbnail_route(
 		content,
 		content_type,
 		content_disposition,
-	} = match fetch_thumbnail(&services, &mxc, Some(user), body.timeout_ms, &dim).await {
+	} = match fetch_thumbnail_meta(&services, &mxc, Some(user), body.timeout_ms, &dim).await {
 		| Ok(meta) => meta,
 		| Err(conduwuit::Error::Io(e)) => match e.kind() {
 			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
@@ -132,13 +133,14 @@ pub(crate) async fn get_content_thumbnail_route(
 		return Err!(Request(NotFound("Media not found.")));
 	};
 
-	Ok(get_content_thumbnail::v1::Response {
+	let content_disposition =
+		make_content_disposition(content_disposition.as_ref(), content_type.as_deref(), None);
+
+	Ok(get_content_thumbnail::v1::Response::new(
 		file,
-		content_type: content_type.map(Into::into),
-		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
+		content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
 		content_disposition,
-	})
+	))
 }
 
 /// # `GET /_matrix/client/v1/media/download/{serverName}/{mediaId}`
@@ -166,7 +168,7 @@ pub(crate) async fn get_content_route(
 		content,
 		content_type,
 		content_disposition,
-	} = match fetch_file(&services, &mxc, Some(user), body.timeout_ms, None).await {
+	} = match fetch_file_meta(&services, &mxc, Some(user), body.timeout_ms).await {
 		| Ok(meta) => meta,
 		| Err(conduwuit::Error::Io(e)) => match e.kind() {
 			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
@@ -186,13 +188,14 @@ pub(crate) async fn get_content_route(
 		return Err!(Request(NotFound("Media not found.")));
 	};
 
-	Ok(get_content::v1::Response {
+	let content_disposition =
+		make_content_disposition(content_disposition.as_ref(), content_type.as_deref(), None);
+
+	Ok(get_content::v1::Response::new(
 		file,
-		content_type: content_type.map(Into::into),
-		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
+		content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
 		content_disposition,
-	})
+	))
 }
 
 /// # `GET /_matrix/client/v1/media/download/{serverName}/{mediaId}/{fileName}`
@@ -216,13 +219,13 @@ pub(crate) async fn get_content_as_filename_route(
 		media_id: &body.media_id,
 	};
 
-	let filename = (!body.filename.is_empty()).then_some(body.filename.as_str());
+	let _filename = (!body.filename.is_empty()).then_some(body.filename.as_str());
 
 	let FileMeta {
 		content,
 		content_type,
 		content_disposition,
-	} = match fetch_file(&services, &mxc, Some(user), body.timeout_ms, filename).await {
+	} = match fetch_file_meta(&services, &mxc, Some(user), body.timeout_ms).await {
 		| Ok(meta) => meta,
 		| Err(conduwuit::Error::Io(e)) => match e.kind() {
 			| std::io::ErrorKind::NotFound => return Err!(Request(NotFound("Media not found."))),
@@ -242,13 +245,17 @@ pub(crate) async fn get_content_as_filename_route(
 		return Err!(Request(NotFound("Media not found.")));
 	};
 
-	Ok(get_content_as_filename::v1::Response {
+	let content_disposition = make_content_disposition(
+		content_disposition.as_ref(),
+		content_type.as_deref(),
+		Some(&body.filename),
+	);
+
+	Ok(get_content_as_filename::v1::Response::new(
 		file,
-		content_type: content_type.map(Into::into),
-		cross_origin_resource_policy: Some(CORP_CROSS_ORIGIN.into()),
-		cache_control: Some(CACHE_CONTROL_IMMUTABLE.into()),
+		content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
 		content_disposition,
-	})
+	))
 }
 
 /// # `GET /_matrix/client/v1/media/preview_url`
@@ -297,58 +304,6 @@ pub(crate) async fn get_media_preview_route(
 				debug_error!(%sender_user, %url, "Failed to parse URL preview: {error}")
 			)))
 		})
-}
-
-async fn fetch_thumbnail(
-	services: &Services,
-	mxc: &Mxc<'_>,
-	user: Option<&UserId>,
-	timeout_ms: Duration,
-	dim: &Dim,
-) -> Result<FileMeta> {
-	let FileMeta {
-		content,
-		content_type,
-		content_disposition,
-	} = fetch_thumbnail_meta(services, mxc, user, timeout_ms, dim).await?;
-
-	let content_disposition = Some(make_content_disposition(
-		content_disposition.as_ref(),
-		content_type.as_deref(),
-		None,
-	));
-
-	Ok(FileMeta {
-		content,
-		content_type,
-		content_disposition,
-	})
-}
-
-async fn fetch_file(
-	services: &Services,
-	mxc: &Mxc<'_>,
-	user: Option<&UserId>,
-	timeout_ms: Duration,
-	filename: Option<&str>,
-) -> Result<FileMeta> {
-	let FileMeta {
-		content,
-		content_type,
-		content_disposition,
-	} = fetch_file_meta(services, mxc, user, timeout_ms).await?;
-
-	let content_disposition = Some(make_content_disposition(
-		content_disposition.as_ref(),
-		content_type.as_deref(),
-		filename,
-	));
-
-	Ok(FileMeta {
-		content,
-		content_type,
-		content_disposition,
-	})
 }
 
 async fn fetch_thumbnail_meta(

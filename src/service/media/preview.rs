@@ -18,6 +18,8 @@ use serde::Serialize;
 use url::Url;
 
 use super::Service;
+#[cfg(feature = "url_preview")]
+use crate::media::mxc::Mxc;
 
 #[derive(Serialize, Default, Clone)]
 pub struct UrlPreviewData {
@@ -162,7 +164,8 @@ pub async fn download_image(
 ) -> Result<UrlPreviewData> {
 	use conduwuit::utils::random_string;
 	use image::ImageReader;
-	use ruma::Mxc;
+
+	use crate::media::mxc::Mxc;
 
 	let mut preview_data = preview_data.unwrap_or_default();
 
@@ -289,7 +292,6 @@ pub async fn download_audio(
 pub async fn download_media(&self, url: &str) -> Result<(OwnedMxcUri, usize)> {
 	use conduwuit::utils::random_string;
 	use http::header::CONTENT_TYPE;
-	use ruma::Mxc;
 
 	let mut response = self.services.client.url_preview.get(url).send().await?;
 

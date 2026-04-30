@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use axum::{Json, extract::State, response::IntoResponse};
 use conduwuit::Result;
 use futures::StreamExt;
-use ruma::api::client::discovery::get_supported_versions;
+use ruma::{api::client::discovery::get_supported_versions, assign};
 
 use crate::Ruma;
 
@@ -52,33 +52,31 @@ pub(crate) async fn get_supported_versions_route(
 		unstable_features.insert("org.matrix.msc4222".to_owned(), true); /* state_after in sync v2 (https://github.com/matrix-org/matrix-spec-proposals/pull/4222) */
 	}
 
-	let resp = get_supported_versions::Response {
-		versions: vec![
-			"r0.0.1".to_owned(),
-			"r0.1.0".to_owned(),
-			"r0.2.0".to_owned(),
-			"r0.3.0".to_owned(),
-			"r0.4.0".to_owned(),
-			"r0.5.0".to_owned(),
-			"r0.6.0".to_owned(),
-			"r0.6.1".to_owned(),
-			"v1.1".to_owned(),
-			"v1.2".to_owned(),
-			"v1.3".to_owned(),
-			"v1.4".to_owned(),
-			"v1.5".to_owned(),
-			"v1.8".to_owned(),
-			"v1.11".to_owned(),
-			"v1.12".to_owned(),
-			"v1.13".to_owned(),
-			"v1.14".to_owned(),
-		],
+	let versions = vec![
+		"r0.0.1".to_owned(),
+		"r0.1.0".to_owned(),
+		"r0.2.0".to_owned(),
+		"r0.3.0".to_owned(),
+		"r0.4.0".to_owned(),
+		"r0.5.0".to_owned(),
+		"r0.6.0".to_owned(),
+		"r0.6.1".to_owned(),
+		"v1.1".to_owned(),
+		"v1.2".to_owned(),
+		"v1.3".to_owned(),
+		"v1.4".to_owned(),
+		"v1.5".to_owned(),
+		"v1.8".to_owned(),
+		"v1.11".to_owned(),
+		"v1.12".to_owned(),
+		"v1.13".to_owned(),
+		"v1.14".to_owned(),
+	];
+
+	Ok(assign!(get_supported_versions::Response::new(versions), {
 		unstable_features,
-	};
-
-	Ok(resp)
+	}))
 }
-
 /// # `GET /_conduwuit/server_version`
 ///
 /// Conduwuit-specific API to get the server version, results akin to

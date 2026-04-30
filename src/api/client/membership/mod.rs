@@ -47,15 +47,14 @@ pub(crate) async fn joined_rooms_route(
 	State(services): State<crate::State>,
 	body: Ruma<joined_rooms::v3::Request>,
 ) -> Result<joined_rooms::v3::Response> {
-	Ok(joined_rooms::v3::Response {
-		joined_rooms: services
-			.rooms
-			.state_cache
-			.rooms_joined(body.sender_user())
-			.map(ToOwned::to_owned)
-			.collect()
-			.await,
-	})
+	let joined_rooms = services
+		.rooms
+		.state_cache
+		.rooms_joined(body.sender_user())
+		.collect()
+		.await;
+
+	Ok(joined_rooms::v3::Response::new(joined_rooms))
 }
 
 /// Checks if the room is banned in any way possible and the sender user is not
@@ -217,9 +216,20 @@ pub(crate) fn validate_remote_member_event_stub(
 				"Remote server returned member event with incorrect room_id"
 			));
 		}
-	} else if conduwuit::matrix::state_res::RoomVersion::new(room_version_id)
-		.is_ok_and(|v| !v.room_ids_as_hashes)
-	{
+	} else if matches!(
+		room_version_id,
+		RoomVersionId::V1
+			| RoomVersionId::V2
+			| RoomVersionId::V3
+			| RoomVersionId::V4
+			| RoomVersionId::V5
+			| RoomVersionId::V6
+			| RoomVersionId::V7
+			| RoomVersionId::V8
+			| RoomVersionId::V9
+			| RoomVersionId::V10
+			| RoomVersionId::V11
+	) {
 		return Err!(BadServerResponse(
 			"Remote server returned member event with missing room_id field"
 		));
