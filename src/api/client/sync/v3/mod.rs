@@ -498,6 +498,17 @@ pub(crate) async fn build_sync_events(
 					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
 			}
 		}
+
+		// Ensure that the standard 'state' key is present even if it was omitted by
+		// Ruma's serialization (due to being empty), as some clients (and Complement)
+		// expect it.
+		for room in join.as_object_mut().unwrap().values_mut() {
+			if room.get("state").is_none() {
+				room.as_object_mut()
+					.unwrap()
+					.insert("state".to_owned(), serde_json::json!({ "events": [] }));
+			}
+		}
 	}
 
 	if let Some(leave) = val.get_mut("rooms").and_then(|r| r.get_mut("leave")) {

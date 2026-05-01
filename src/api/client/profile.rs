@@ -8,7 +8,8 @@ use ruma::{
 	UserId,
 	api::{
 		client::profile::{
-			delete_profile_field, get_profile, get_profile_field, set_profile_field,
+			delete_profile_field, get_avatar_url, get_display_name, get_profile,
+			get_profile_field, set_avatar_url, set_display_name, set_profile_field,
 		},
 		federation,
 	},
@@ -37,6 +38,105 @@ pub(crate) async fn get_profile_route(
 	};
 
 	Ok(get_profile::v3::Response::from_iter(profile))
+}
+
+pub(crate) async fn get_displayname_route(
+	State(services): State<crate::State>,
+	body: Ruma<get_display_name::v3::Request>,
+) -> Result<get_display_name::v3::Response> {
+	let value =
+		fetch_profile_field(&services, &body.user_id, ProfileFieldName::DisplayName).await?;
+	let displayname = value.and_then(|v| {
+		if let Value::String(s) = v.value().clone().into_owned() {
+			Some(s)
+		} else {
+			None
+		}
+	});
+
+	Ok(assign!(get_display_name::v3::Response::default(), { displayname }))
+}
+
+pub(crate) async fn set_displayname_route(
+	State(services): State<crate::State>,
+	body: Ruma<set_display_name::v3::Request>,
+) -> Result<set_display_name::v3::Response> {
+	let sender_user = body.sender_user();
+	if services.users.is_suspended(sender_user).await? {
+		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
+	}
+
+	if body.user_id != *sender_user
+		&& !(body.appservice_info.is_some() || services.admin.user_is_admin(sender_user).await)
+	{
+		return Err!(Request(Forbidden("You may not change other users' profile data.")));
+	}
+
+	if !services.globals.user_is_local(&body.user_id) {
+		return Err!(Request(InvalidParam("You may not change a remote user's profile data.")));
+	}
+
+	let value = ProfileFieldValue::new(
+		ProfileFieldName::DisplayName.as_str(),
+		body.displayname
+			.clone()
+			.map_or(Value::Null, Value::String),
+	)
+	.expect("displayname field value should be valid");
+
+	set_profile_field(&services, &body.user_id, ProfileFieldChange::Set(value)).await?;
+
+	Ok(set_display_name::v3::Response::new())
+}
+
+pub(crate) async fn get_avatar_url_route(
+	State(services): State<crate::State>,
+	body: Ruma<get_avatar_url::v3::Request>,
+) -> Result<get_avatar_url::v3::Response> {
+	let value =
+		fetch_profile_field(&services, &body.user_id, ProfileFieldName::AvatarUrl).await?;
+	let avatar_url = value.and_then(|v| {
+		if let Value::String(s) = v.value().clone().into_owned() {
+			Some(s.into())
+		} else {
+			None
+		}
+	});
+
+	Ok(assign!(get_avatar_url::v3::Response::default(), { avatar_url }))
+}
+
+pub(crate) async fn set_avatar_url_route(
+	State(services): State<crate::State>,
+	body: Ruma<set_avatar_url::v3::Request>,
+) -> Result<set_avatar_url::v3::Response> {
+	let sender_user = body.sender_user();
+	if services.users.is_suspended(sender_user).await? {
+		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
+	}
+
+	if body.user_id != *sender_user
+		&& !(body.appservice_info.is_some() || services.admin.user_is_admin(sender_user).await)
+	{
+		return Err!(Request(Forbidden("You may not change other users' profile data.")));
+	}
+
+	if !services.globals.user_is_local(&body.user_id) {
+		return Err!(Request(InvalidParam("You may not change a remote user's profile data.")));
+	}
+
+	let value = ProfileFieldValue::new(
+		ProfileFieldName::AvatarUrl.as_str(),
+		body.avatar_url
+			.as_ref()
+			.map(ToString::to_string)
+			.map_or(Value::Null, Value::String),
+	)
+	.expect("avatar_url field value should be valid");
+
+	set_profile_field(&services, &body.user_id, ProfileFieldChange::Set(value)).await?;
+
+	Ok(set_avatar_url::v3::Response::new())
 }
 
 pub(crate) async fn get_profile_field_route(

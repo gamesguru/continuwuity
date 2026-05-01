@@ -15,10 +15,6 @@ pub(crate) async fn get_hierarchy_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_hierarchy::v1::Request>,
 ) -> Result<get_hierarchy::v1::Response> {
-	// We don't do pagination for this route (and therefore ignore `limit`), since
-	// there's no reasonable way to handle a space hierarchy changing during
-	// pagination.
-
 	let max_depth = body
 		.max_depth
 		.map(|max_depth| max_depth.min(UInt::from(MAX_MAX_DEPTH)));
@@ -35,8 +31,33 @@ pub(crate) async fn get_hierarchy_route(
 		.await?;
 
 	match hierarchy {
-		| Accessibility::Accessible(rooms) =>
-			Ok(assign!(get_hierarchy::v1::Response::new(), { rooms: rooms })),
+		| Accessibility::Accessible(rooms) => {
+			let limit = body
+				.limit
+				.map_or(100, u64::from)
+				.min(1000)
+				.try_into()
+				.unwrap_or(usize::MAX);
+
+			let from = body
+				.from
+				.as_ref()
+				.and_then(|s| s.parse::<usize>().ok())
+				.unwrap_or(0);
+
+			let next_batch = if from.saturating_add(limit) < rooms.len() {
+				Some(from.saturating_add(limit).to_string())
+			} else {
+				None
+			};
+
+			let rooms = rooms.into_iter().skip(from).take(limit).collect();
+
+			Ok(assign!(get_hierarchy::v1::Response::new(), {
+				rooms,
+				next_batch,
+			}))
+		},
 		| Accessibility::Inaccessible => {
 			Err!(Request(Forbidden("You may not preview this room."), FORBIDDEN))
 		},

@@ -92,6 +92,7 @@ features = [
     "http2",
     "json",
     "matched-path",
+    "query",
     "tokio",
     "tracing",
 ]

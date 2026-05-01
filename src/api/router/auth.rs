@@ -1,21 +1,29 @@
 use std::any::{Any, TypeId};
 
 use conduwuit::{Err, Result, err};
-use ruma::{
-	OwnedDeviceId, OwnedServerName, OwnedUserId, UserId,
-	api::{
+use ruma::
+{
+	OwnedDeviceId,
+	OwnedServerName,
+	OwnedUserId,
+	UserId,
+	api::
+	{
 		IncomingRequest,
-		auth_scheme::{
-			AccessToken, AccessTokenOptional, AppserviceToken, AppserviceTokenOptional,
-			AuthScheme, NoAccessToken, NoAuthentication,
+		auth_scheme::
+		{
+			AccessToken,
+			AccessTokenOptional,
+			AppserviceToken,
+			AppserviceTokenOptional,
+			AuthScheme,
+			NoAccessToken,
+			NoAuthentication,
 		},
 		federation::authentication::ServerSignatures,
 	},
 };
-use service::{
-	Services,
-	server_keys::{PubKeyMap, PubKeys},
-};
+use service::Services;
 
 use crate::{router::args::AuthQueryParams, service::appservice::RegistrationInfo};
 
@@ -28,35 +36,14 @@ pub(super) struct Auth {
 }
 
 pub(super) trait CheckAuth: AuthScheme {
+	#[allow(clippy::manual_async_fn)]
 	fn authenticate<R: IncomingRequest + Any, B: AsRef<[u8]> + Sync>(
 		services: &Services,
 		incoming_request: &hyper::Request<B>,
 		query: AuthQueryParams,
-	) -> impl Future<Output = Result<Auth>> + Send {
-		async move {
-			let stack_var = 0_u8;
-			if incoming_request.uri().path().contains("/login") {
-				tracing::info!(
-					"AUTH_DEBUG: URI: {} {}, Stack pointer: {:p}",
-					incoming_request.method(),
-					incoming_request.uri(),
-					&stack_var,
-				);
-			}
+	) -> impl Future<Output = Result<Auth>> + Send;
 
-			let route = TypeId::of::<R>();
-
-			let output = Self::extract_authentication(incoming_request).map_err(|err| {
-				err!(Request(Unauthorized(warn!(
-					"Failed to extract authorization: {}",
-					err.into()
-				))))
-			})?;
-
-			Self::verify(services, output, incoming_request, query, route).await
-		}
-	}
-
+	#[allow(clippy::manual_async_fn)]
 	fn verify<B: AsRef<[u8]> + Sync>(
 		services: &Services,
 		output: Self::Output,
@@ -67,76 +54,120 @@ pub(super) trait CheckAuth: AuthScheme {
 }
 
 impl CheckAuth for ServerSignatures {
-	async fn verify<B: AsRef<[u8]> + Sync>(
+	#[allow(clippy::manual_async_fn)]
+	fn authenticate<R: IncomingRequest + Any, B: AsRef<[u8]> + Sync>(
+		services: &Services,
+		incoming_request: &hyper::Request<B>,
+		query: AuthQueryParams,
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			let route = TypeId::of::<R>();
+
+			let output = Self::extract_authentication(incoming_request).map_err(|err| {
+				err!(Request(Unauthorized(warn!("Failed to extract signatures: {:?}", err))))
+			})?;
+
+			Self::verify(services, output, incoming_request, query, route).await
+		}
+	}
+
+	#[allow(clippy::manual_async_fn)]
+	fn verify<B: AsRef<[u8]> + Sync>(
 		services: &Services,
 		output: Self::Output,
 		request: &hyper::Request<B>,
 		_query: AuthQueryParams,
 		_route: TypeId,
-	) -> Result<Auth> {
-		let destination = services.globals.server_name();
-		if output
-			.destination
-			.as_ref()
-			.is_some_and(|supplied_destination| supplied_destination != destination)
-		{
-			return Err!(Request(Unauthorized("Destination mismatch.")));
-		}
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			use service::server_keys::{PubKeyMap, PubKeys};
 
-		let key = services
-			.server_keys
-			.get_verify_key(&output.origin, &output.key)
-			.await
-			.map_err(|e| {
-				err!(Request(Unauthorized(warn!("Failed to fetch signing keys: {e}"))))
-			})?;
+			let destination = services.globals.server_name();
+			if output
+				.destination
+				.as_ref()
+				.is_some_and(|supplied_destination| supplied_destination != destination) {
+				return Err!(Request(Unauthorized("Destination mismatch.")));
+			}
 
-		let keys: PubKeys = [(output.key.to_string(), key.key)].into();
-		let keys: PubKeyMap = [(output.origin.as_str().into(), keys)].into();
+			let key = services
+				.server_keys
+				.get_verify_key(&output.origin, &output.key)
+				.await
+				.map_err(|e| {
+					err!(Request(Unauthorized(warn!("Failed to fetch signing keys: {e}"))))
+				})?;
 
-		match output.verify_request(request, destination, &keys) {
-			| Ok(()) => Ok(Auth {
-				origin: Some(output.origin.clone()),
-				..Default::default()
-			}),
-			| Err(err) =>
-				Err!(Request(Unauthorized(warn!("Failed to verify X-Matrix header: {err}")))),
+			let keys: PubKeys = [(output.key.to_string(), key.key)].into();
+			let keys: PubKeyMap = [(output.origin.as_str().into(), keys)].into();
+
+			match output.verify_request(request, destination, &keys) {
+				| Ok(()) => Ok(Auth {
+					origin: Some(output.origin.clone()),
+					..Default::default()
+				}),
+				| Err(err) =>
+					Err!(Request(Unauthorized(warn!("Failed to verify X-Matrix header: {err}")))),
+			}
 		}
 	}
 }
 
 impl CheckAuth for AccessToken {
-	async fn verify<B: AsRef<[u8]> + Sync>(
+	#[allow(clippy::manual_async_fn)]
+	fn authenticate<R: IncomingRequest + Any, B: AsRef<[u8]> + Sync>(
+		services: &Services,
+		incoming_request: &hyper::Request<B>,
+		query: AuthQueryParams,
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			let route = TypeId::of::<R>();
+
+			let output = Self::extract_authentication(incoming_request).map_err(|err| {
+				let err_str = format!("{err:?}");
+				if err_str.contains("NoToken") || err_str.contains("Missing") {
+					err!(Request(MissingToken("No access token found, but this endpoint requires one.")))
+				} else {
+					err!(Request(Unauthorized(warn!("Failed to extract authorization: {:?}", err))))
+				}
+			})?;
+
+			Self::verify(services, output, incoming_request, query, route).await
+		}
+	}
+
+	#[allow(clippy::manual_async_fn)]
+	fn verify<B: AsRef<[u8]> + Sync>(
 		services: &Services,
 		output: Self::Output,
 		_request: &hyper::Request<B>,
 		query: AuthQueryParams,
 		route: TypeId,
-	) -> Result<Auth> {
-		// Check for appservice tokens first
-
-		let (sender_user, sender_device, appservice_info) = {
-			if let Ok((sender_user, sender_device)) =
-				services.users.find_from_token(&output).await
-			{
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			// Check for user tokens first
+			if let Ok((sender_user, sender_device)) = services.users.find_from_token(&output).await {
 				// Locked users can only use /logout and /logout/all
 				if services
 					.users
 					.is_locked(&sender_user)
 					.await
-					.is_ok_and(std::convert::identity)
-				{
+					.is_ok_and(std::convert::identity) {
 					if !(route == TypeId::of::<ruma::api::client::session::logout::v3::Request>()
-						|| route
-							== TypeId::of::<ruma::api::client::session::logout_all::v3::Request>(
-							)) {
+						|| route == TypeId::of::<ruma::api::client::session::logout_all::v3::Request>()) {
 						return Err!(Request(Unauthorized("Your account is locked.")));
 					}
 				}
 
-				(Some(sender_user), Some(sender_device), None)
-			} else if let Ok(appservice_info) = services.appservice.find_from_token(&output).await
-			{
+				return Ok(Auth {
+					sender_user: Some(sender_user),
+					sender_device: Some(sender_device),
+					..Default::default()
+				});
+			}
+
+			// Fall back to appservice tokens
+			if let Ok(appservice_info) = services.appservice.find_from_token(&output).await {
 				let Ok(sender_user) = query.user_id.clone().map_or_else(
 					|| {
 						UserId::parse_with_server_name(
@@ -154,120 +185,242 @@ impl CheckAuth for AccessToken {
 				}
 
 				// MSC3202/MSC4190: Handle device_id masquerading for appservices.
-				// The device_id can be provided via `device_id` or
-				// `org.matrix.msc3202.device_id` query parameter.
-				let sender_device =
-					if let Some(device_id) = query.device_id.as_deref().map(Into::into) {
-						// Verify the device exists for this user
-						if services
-							.users
-							.get_device_metadata(&sender_user, device_id)
-							.await
-							.is_err()
-						{
-							return Err!(Request(Forbidden(
-								"Device does not exist for user or appservice cannot masquerade \
-								 as this device."
-							)));
-						}
+				let sender_device = if let Some(device_id) = query.device_id.as_deref().map(Into::into) {
+					if services
+						.users
+						.get_device_metadata(&sender_user, device_id)
+						.await
+						.is_err() {
+						return Err!(Request(Forbidden("Device does not exist for user or appservice cannot masquerade as this device.")));
+					}
 
-						Some(device_id.to_owned())
-					} else {
-						None
-					};
+					Some(device_id.to_owned())
+				} else {
+					None
+				};
 
-				(Some(sender_user), sender_device, Some(appservice_info))
-			} else {
-				return Err!(Request(Unauthorized("Invalid access token.")));
+				return Ok(Auth {
+					sender_user: Some(sender_user),
+					sender_device,
+					appservice_info: Some(appservice_info),
+					..Default::default()
+				});
 			}
-		};
 
-		Ok(Auth {
-			sender_user,
-			sender_device,
-			appservice_info,
-			..Default::default()
-		})
+			Err!(Request(Unauthorized("Invalid access token.")))
+		}
 	}
 }
 
 impl CheckAuth for AccessTokenOptional {
-	async fn verify<B: AsRef<[u8]> + Sync>(
+	#[allow(clippy::manual_async_fn)]
+	fn authenticate<R: IncomingRequest + Any, B: AsRef<[u8]> + Sync>(
+		services: &Services,
+		incoming_request: &hyper::Request<B>,
+		query: AuthQueryParams,
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			let route = TypeId::of::<R>();
+
+			let output = Self::extract_authentication(incoming_request).map_err(|err| {
+				err!(Request(Unauthorized(warn!("Failed to extract optional authorization: {:?}", err))))
+			})?;
+
+			<Self as CheckAuth>::verify(services, output, incoming_request, query, route).await
+		}
+	}
+
+	#[allow(clippy::manual_async_fn)]
+	fn verify<B: AsRef<[u8]> + Sync>(
 		services: &Services,
 		output: Self::Output,
 		request: &hyper::Request<B>,
 		query: AuthQueryParams,
 		route: TypeId,
-	) -> Result<Auth> {
-		match output {
-			| Some(token) =>
-				<AccessToken as CheckAuth>::verify(services, token, request, query, route).await,
-			| None => Ok(Auth::default()),
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			match output {
+				| Some(token) =>
+					<AccessToken as CheckAuth>::verify(services, token, request, query, route).await,
+				| None => Ok(Auth::default()),
+			}
 		}
 	}
 }
 
 impl CheckAuth for AppserviceToken {
-	async fn verify<B: AsRef<[u8]> + Sync>(
+	#[allow(clippy::manual_async_fn)]
+	fn authenticate<R: IncomingRequest + Any, B: AsRef<[u8]> + Sync>(
+		services: &Services,
+		incoming_request: &hyper::Request<B>,
+		query: AuthQueryParams,
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			let route = TypeId::of::<R>();
+
+			let output = Self::extract_authentication(incoming_request).map_err(|err| {
+				err!(Request(Unauthorized(warn!("Failed to extract appservice authorization: {:?}", err))))
+			})?;
+
+			Self::verify(services, output, incoming_request, query, route).await
+		}
+	}
+
+	#[allow(clippy::manual_async_fn)]
+	fn verify<B: AsRef<[u8]> + Sync>(
 		services: &Services,
 		output: Self::Output,
 		_request: &hyper::Request<B>,
-		_query: AuthQueryParams,
+		query: AuthQueryParams,
 		_route: TypeId,
-	) -> Result<Auth> {
-		let Ok(appservice_info) = services.appservice.find_from_token(&output).await else {
-			return Err!(Request(Unauthorized("Invalid appservice token.")));
-		};
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			let Ok(appservice_info) = services.appservice.find_from_token(&output).await else {
+				return Err!(Request(Unauthorized("Invalid appservice token.")));
+			};
 
-		Ok(Auth {
-			appservice_info: Some(appservice_info),
-			..Default::default()
-		})
+			let Ok(sender_user) = query.user_id.clone().map_or_else(
+				|| {
+					UserId::parse_with_server_name(
+						appservice_info.registration.sender_localpart.as_str(),
+						services.globals.server_name(),
+					)
+				},
+				UserId::parse,
+			) else {
+				return Err!(Request(InvalidUsername("Username is invalid.")));
+			};
+
+			if !appservice_info.is_user_match(&sender_user) {
+				return Err!(Request(Exclusive("User is not in namespace.")));
+			}
+
+			// MSC3202/MSC4190: Handle device_id masquerading for appservices.
+			let sender_device = if let Some(device_id) = query.device_id.as_deref().map(Into::into) {
+				if services
+					.users
+					.get_device_metadata(&sender_user, device_id)
+					.await
+					.is_err() {
+					return Err!(Request(Forbidden("Device does not exist for user or appservice cannot masquerade as this device.")));
+				}
+
+				Some(device_id.to_owned())
+			} else {
+				None
+			};
+
+			Ok(Auth {
+				sender_user: Some(sender_user),
+				sender_device,
+				appservice_info: Some(appservice_info),
+				..Default::default()
+			})
+		}
 	}
 }
 
 impl CheckAuth for AppserviceTokenOptional {
-	async fn verify<B: AsRef<[u8]> + Sync>(
+	#[allow(clippy::manual_async_fn)]
+	fn authenticate<R: IncomingRequest + Any, B: AsRef<[u8]> + Sync>(
+		services: &Services,
+		incoming_request: &hyper::Request<B>,
+		query: AuthQueryParams,
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			let route = TypeId::of::<R>();
+
+			let output = Self::extract_authentication(incoming_request).map_err(|err| {
+				err!(Request(Unauthorized(warn!("Failed to extract optional appservice authorization: {:?}", err))))
+			})?;
+
+			<Self as CheckAuth>::verify(services, output, incoming_request, query, route).await
+		}
+	}
+
+	#[allow(clippy::manual_async_fn)]
+	fn verify<B: AsRef<[u8]> + Sync>(
 		services: &Services,
 		output: Self::Output,
 		request: &hyper::Request<B>,
 		query: AuthQueryParams,
 		route: TypeId,
-	) -> Result<Auth> {
-		match output {
-			| Some(token) =>
-				<AppserviceToken as CheckAuth>::verify(services, token, request, query, route)
-					.await,
-			| None => Ok(Auth::default()),
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			match output {
+				| Some(token) =>
+					<AppserviceToken as CheckAuth>::verify(services, token, request, query, route)
+						.await,
+				| None => Ok(Auth::default()),
+			}
 		}
 	}
 }
 
 impl CheckAuth for NoAuthentication {
-	async fn verify<B: AsRef<[u8]> + Sync>(
+	#[allow(clippy::manual_async_fn)]
+	fn authenticate<R: IncomingRequest + Any, B: AsRef<[u8]> + Sync>(
+		services: &Services,
+		incoming_request: &hyper::Request<B>,
+		query: AuthQueryParams,
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			let route = TypeId::of::<R>();
+			Self::verify(services, (), incoming_request, query, route).await
+		}
+	}
+
+	#[allow(clippy::manual_async_fn)]
+	fn verify<B: AsRef<[u8]> + Sync>(
 		_services: &Services,
 		_output: Self::Output,
 		_request: &hyper::Request<B>,
 		_query: AuthQueryParams,
 		_route: TypeId,
-	) -> Result<Auth> {
-		Ok(Auth::default())
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			Ok(Auth::default())
+		}
 	}
 }
 
 impl CheckAuth for NoAccessToken {
-	async fn verify<B: AsRef<[u8]> + Sync>(
+	#[allow(clippy::manual_async_fn)]
+	fn authenticate<R: IncomingRequest + Any, B: AsRef<[u8]> + Sync>(
 		services: &Services,
-		_output: Self::Output,
-		request: &hyper::Request<B>,
+		incoming_request: &hyper::Request<B>,
 		query: AuthQueryParams,
-		route: TypeId,
-	) -> Result<Auth> {
-		// We handle these the same as AccessTokenOptional
-		let token = AccessTokenOptional::extract_authentication(request).map_err(|err| {
-			err!(Request(Unauthorized(warn!("Failed to extract authorization: {}", err))))
-		})?;
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			let route = TypeId::of::<R>();
 
-		<AccessTokenOptional as CheckAuth>::verify(services, token, request, query, route).await
+			// We handle these the same as AccessTokenOptional
+			let token =
+				AccessTokenOptional::extract_authentication(incoming_request).map_err(|err| {
+					err!(Request(Unauthorized(warn!("Failed to extract authorization for NoAccessToken: {:?}", err))))
+				})?;
+
+			<AccessTokenOptional as CheckAuth>::verify(
+				services,
+				token,
+				incoming_request,
+				query,
+				route,
+			)
+			.await
+		}
+	}
+
+	#[allow(clippy::manual_async_fn)]
+	fn verify<B: AsRef<[u8]> + Sync>(
+		_services: &Services,
+		_output: Self::Output,
+		_request: &hyper::Request<B>,
+		_query: AuthQueryParams,
+		_route: TypeId,
+	) -> impl Future<Output = Result<Auth>> + Send {
+		async move {
+			panic!("NoAccessToken::verify should not be called, use authenticate instead")
+		}
 	}
 }

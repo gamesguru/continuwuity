@@ -6,16 +6,11 @@ use conduwuit_core::{
 	Event, PduEvent, Result, err,
 	result::FlatOk,
 	state_res::{self, StateMap},
-	utils::{
-		IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash,
-		stream::{BroadbandExt, TryIgnore},
-	},
+	utils::{IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash, stream::TryIgnore},
 	warn,
 };
 use conduwuit_database::{Deserialized, Ignore, Interfix, Map};
-use futures::{
-	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::join_all, pin_mut,
-};
+use futures::{Stream, StreamExt, TryStreamExt, future::join_all, pin_mut};
 use ruma::{
 	EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId, UserId,
 	api::federation::membership::RawStrippedState,
@@ -416,10 +411,6 @@ impl Service {
 		content: &serde_json::value::RawValue,
 		room_version_rules: &RoomVersionRules,
 	) -> Result<StateMap<PduEvent>> {
-		let Ok(shortstatehash) = self.get_room_shortstatehash(room_id).await else {
-			return Ok(HashMap::new());
-		};
-
 		let auth_types = state_res::auth_types_for_event(
 			kind,
 			sender,
@@ -427,50 +418,24 @@ impl Service {
 			content,
 			room_version_rules,
 		)?;
-		debug!(?auth_types, "Auth types for event");
-		let sauthevents: HashMap<_, _> = auth_types
-			.iter()
-			.stream()
-			.broad_filter_map(|(event_type, state_key)| {
-				self.services
-					.short
-					.get_shortstatekey(event_type, state_key)
-					.map_ok(move |ssk| (ssk, (event_type, state_key)))
-					.map(Result::ok)
-			})
-			.collect()
-			.await;
-		debug!(?sauthevents, "Auth events to fetch");
 
-		let (state_keys, event_ids): (Vec<_>, Vec<_>) = self
-			.services
-			.state_accessor
-			.state_full_shortids(shortstatehash)
-			.ready_filter_map(Result::ok)
-			.ready_filter_map(|(shortstatekey, shorteventid)| {
-				sauthevents
-					.get(&shortstatekey)
-					.map(|(ty, sk)| ((ty, sk), shorteventid))
-			})
-			.unzip()
-			.await;
-		debug!(?state_keys, ?event_ids, "Auth events found in state");
-		self.services
-			.short
-			.multi_get_eventid_from_short(event_ids.into_iter().stream())
-			.zip(state_keys.into_iter().stream())
-			.ready_filter_map(|(event_id, (ty, sk))| Some(((ty, sk), event_id.ok()?)))
-			.broad_filter_map(|((ty, sk), event_id): (_, OwnedEventId)| async move {
-				self.services
-					.timeline
-					.get_pdu(&event_id)
-					.await
-					.map(move |pdu| (((*ty).clone(), (*sk).clone()), pdu))
-					.inspect_err(|e| warn!("Failed to get auth event {event_id}: {e:?}"))
-					.ok()
-			})
-			.collect()
-			.map(Ok)
-			.await
+		debug!(?auth_types, "Auth types for event");
+
+		let mut auth_events = HashMap::with_capacity(auth_types.len());
+
+		for (event_type, state_key) in auth_types {
+			if let Ok(pdu) = self
+				.services
+				.state_accessor
+				.room_state_get(room_id, &event_type, &state_key)
+				.await
+			{
+				auth_events.insert((event_type, state_key), pdu);
+			}
+		}
+
+		debug!(auth_events_count = auth_events.len(), "Auth events found in state");
+
+		Ok(auth_events)
 	}
 }
