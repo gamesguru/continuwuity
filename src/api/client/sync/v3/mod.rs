@@ -356,8 +356,14 @@ pub(crate) async fn build_sync_events(
 				.await
 				.ok();
 
-			// only sync this invite if it was sent after the last /sync call
-			if last_sync_end_count < invite_count {
+			// only sync this invite if it was sent after the last /sync call, or if this is
+			// an initial sync.
+			//
+			// note: we used to omit invites if they hadn't changed, but this causes
+			// problems with some clients and Complement's MustSyncUntil which expect
+			// the invite to persist in the sync response until it's accepted or
+			// rejected.
+			if last_sync_end_count < invite_count || last_sync_end_count.is_none() || full_state {
 				let invited_room = assign!(InvitedRoom::new(), {
 					invite_state: InviteState::from(invite_state),
 				});
@@ -379,8 +385,9 @@ pub(crate) async fn build_sync_events(
 				.await
 				.ok();
 
-			// only sync this knock if it was sent after the last /sync call
-			if last_sync_end_count < knock_count {
+			// only sync this knock if it was sent after the last /sync call, or if this is
+			// an initial sync.
+			if last_sync_end_count < knock_count || last_sync_end_count.is_none() || full_state {
 				let knocked_room = assign!(KnockedRoom::new(), {
 					knock_state: assign!(KnockState::new(), { events: knock_state }),
 				});

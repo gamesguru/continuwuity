@@ -143,7 +143,7 @@ pub(crate) async fn upgrade_room_route(
 					StateKey::new(),
 					&RoomTombstoneEventContent::new(
 						"This room has been replaced".to_owned(),
-						replacement_room.unwrap().to_owned(),
+						replacement_room_tmp.to_owned(),
 					),
 				),
 				sender_user,
@@ -379,7 +379,7 @@ pub(crate) async fn upgrade_room_route(
 
 		services.rooms.alias.set_alias(
 			&alias,
-			replacement_room.as_ref().unwrap(),
+			replacement_room.as_ref().unwrap_or(replacement_room_tmp),
 			sender_user,
 		)?;
 	}
@@ -437,7 +437,10 @@ pub(crate) async fn upgrade_room_route(
 					StateKey::new(),
 					&RoomTombstoneEventContent::new(
 						"This room has been replaced".to_owned(),
-						replacement_room.as_ref().unwrap().to_owned(),
+						replacement_room
+							.as_ref()
+							.unwrap_or(replacement_room_tmp)
+							.to_owned(),
 					),
 				),
 				sender_user,
@@ -475,7 +478,7 @@ pub(crate) async fn upgrade_room_route(
 		debug!(
 			"Updating space {space_id} child event for room {} to {}",
 			&body.room_id,
-			replacement_room.as_ref().unwrap()
+			replacement_room.as_ref().unwrap_or(replacement_room_tmp)
 		);
 		// First, drop the space's child event
 		let state_lock = services.rooms.state.mutex.lock(space_id.as_str()).await;
@@ -501,14 +504,17 @@ pub(crate) async fn upgrade_room_route(
 		// Now, add a new child event for the replacement room
 		debug!(
 			"Adding space child event for room {} in space {space_id}",
-			replacement_room.as_ref().unwrap()
+			replacement_room.as_ref().unwrap_or(replacement_room_tmp)
 		);
 		services
 			.rooms
 			.timeline
 			.build_and_append_pdu(
 				PartialPdu::state(
-					replacement_room.as_ref().unwrap().as_str(),
+					replacement_room
+						.as_ref()
+						.unwrap_or(replacement_room_tmp)
+						.as_str(),
 					&assign!(SpaceChildEventContent::new(vec![sender_user.server_name().to_owned()]), {
 						order: child.order,
 						suggested: child.suggested,
@@ -524,11 +530,16 @@ pub(crate) async fn upgrade_room_route(
 		debug!(
 			"Finished updating space {space_id} child event for room {} to {}",
 			&body.room_id,
-			replacement_room.as_ref().unwrap()
+			replacement_room.as_ref().unwrap_or(replacement_room_tmp)
 		);
 		drop(state_lock);
 	}
 
 	// Return the replacement room id
-	Ok(upgrade_room::v3::Response::new(replacement_room.as_ref().unwrap().to_owned()))
+	Ok(upgrade_room::v3::Response::new(
+		replacement_room
+			.as_ref()
+			.unwrap_or(replacement_room_tmp)
+			.to_owned(),
+	))
 }
