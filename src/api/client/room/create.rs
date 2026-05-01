@@ -583,7 +583,7 @@ fn default_power_levels_content(
 		let json: JsonObject = serde_json::from_str(power_level_content_override.json().get())
 			.map_err(|e| err!(Request(BadJson("Invalid power_level_content_override: {e:?}"))))?;
 
-		if conduwuit::RoomVersion::new(room_version_id)?.explicitly_privilege_room_creators {
+		if RoomVersion::new(room_version_id)?.explicitly_privilege_room_creators {
 			if let Some(users) = json.get("users").and_then(|u| u.as_object()) {
 				for creator in creators {
 					if users.contains_key(creator.as_str()) {

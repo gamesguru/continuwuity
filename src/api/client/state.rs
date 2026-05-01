@@ -3,7 +3,7 @@ mod tests;
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	Err, Result, err,
+	Err, Result, RoomVersion, err,
 	matrix::{Event, pdu::PduBuilder},
 };
 use conduwuit_service::Services;
@@ -151,7 +151,7 @@ pub(crate) async fn get_state_events_for_key_route(
 	// Inject creators into power levels for RV11+
 	if body.event_type == StateEventType::RoomPowerLevels && body.state_key.is_empty() {
 		let room_version_id = services.rooms.state.get_room_version(&body.room_id).await?;
-		let room_version = conduwuit::RoomVersion::new(&room_version_id)?;
+		let room_version = RoomVersion::new(&room_version_id)?;
 
 		if room_version.explicitly_privilege_room_creators {
 			if let Ok(room_create) = services
@@ -167,7 +167,7 @@ pub(crate) async fn get_state_events_for_key_route(
 				creators.insert(room_create.sender().to_owned());
 				if let Some(additional_creators) = create_content.additional_creators {
 					for creator in additional_creators {
-						if let Ok(creator) = creator.deserialize::<ruma::OwnedUserId>() {
+						if let Ok(creator) = creator.deserialize_as::<ruma::OwnedUserId>() {
 							creators.insert(creator);
 						}
 					}
@@ -191,23 +191,19 @@ pub(crate) async fn get_state_events_for_key_route(
 		.is_some_and(|f| f.to_lowercase().eq("event"));
 
 	Ok(get_state_events_for_key::v3::Response {
-		content: (!event_format)
-			.then(|| Raw::new(&event_content))
-			.transpose()?,
-		event: event_format
-			.then(|| {
-				Raw::new(&json!({
-					"content": event_content,
-					"event_id": event.event_id(),
-					"origin_server_ts": event.origin_server_ts(),
-					"room_id": event.room_id_or_hash(),
-					"sender": event.sender(),
-					"state_key": event.state_key(),
-					"type": event.kind(),
-					"unsigned": event.unsigned(),
-				}))
+		content: (!event_format).then_some(event_content.clone()),
+		event: event_format.then(|| {
+			json!({
+				"content": event_content,
+				"event_id": event.event_id(),
+				"origin_server_ts": event.origin_server_ts(),
+				"room_id": event.room_id_or_hash(),
+				"sender": event.sender(),
+				"state_key": event.state_key(),
+				"type": event.kind(),
+				"unsigned": event.unsigned(),
 			})
-			.transpose()?,
+		}),
 	})
 }
 ///

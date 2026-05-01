@@ -26,6 +26,7 @@ use ruma::{
 	},
 	push::{Action, Ruleset, Tweak},
 };
+use serde_json::value::to_raw_value;
 
 use super::{ExtractBody, ExtractRelatesTo, ExtractRelatesToEventId, RoomMutexGuard};
 use crate::{appservice::NamespaceRegex, rooms::state_compressor::CompressedState};
@@ -210,11 +211,16 @@ where
 
 	// Update cached room state for this event type+key
 	if let Some(state_key) = pdu.state_key() {
+		let mut pdu = pdu.clone();
+		if let Some(unsigned) = pdu_json.get("unsigned") {
+			pdu.unsigned = Some(to_raw_value(unsigned)?);
+		}
+
 		self.services.state_accessor.update_room_state(
 			room_id,
 			&pdu.kind().to_string().into(),
 			state_key,
-			pdu.clone(),
+			pdu,
 		);
 	}
 
