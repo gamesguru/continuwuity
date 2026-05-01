@@ -524,7 +524,11 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, _force: bool) -> Result {
+pub(super) async fn rescue_pdu(
+	&self,
+	event_id: OwnedEventId,
+	#[allow(unused_variables)] force: bool,
+) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -740,8 +744,8 @@ pub(super) async fn purge_outliers(
 pub(super) async fn rescue_room(
 	&self,
 	room_id: OwnedRoomId,
-	_force: bool,
-	_nuclear: bool,
+	#[allow(unused_variables)] force: bool,
+	#[allow(unused_variables)] nuclear: bool,
 	all: bool,
 	timeline_limit: Option<usize>,
 ) -> Result {
@@ -779,7 +783,7 @@ pub(super) async fn rescue_room(
 
 		let mut total_rescued = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(self.rescue_room(room_id, _force, _nuclear, false, None))
+			if Box::pin(self.rescue_room(room_id, force, nuclear, false, None))
 				.await
 				.is_ok()
 			{
