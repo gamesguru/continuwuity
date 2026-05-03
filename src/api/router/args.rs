@@ -3,7 +3,7 @@ use std::ops::Deref;
 use axum::{
 	RequestExt, RequestPartsExt,
 	body::Body,
-	extract::{FromRequest, Path, Query},
+	extract::{FromRequest, Path},
 };
 use conduwuit::{Error, Result, err};
 use ruma::{
@@ -131,7 +131,13 @@ where
 
 		// Extract the query parameters and path
 		let Path(path): Path<Vec<String>> = parts.extract().await?;
-		let Query(auth_query): Query<AuthQueryParams> = parts.extract().await?;
+		let auth_query: AuthQueryParams = parts
+			.uri
+			.query()
+			.map(serde_html_form::from_str)
+			.transpose()
+			.map_err(|e| err!(Request(BadJson(debug_warn!("Invalid query parameters: {e}")))))?
+			.unwrap_or_else(|| AuthQueryParams { user_id: None, device_id: None });
 
 		// Assemble a new request from the read body and parts
 		let request = hyper::Request::from_parts(parts, body);

@@ -96,6 +96,7 @@ rustc-ice-*
 # complement test logs are huge
 tests/test_results/complement/test_logs.jsonl
 *.db
+tests/test_results/complement/backups
 
 # Node
 node_modules/

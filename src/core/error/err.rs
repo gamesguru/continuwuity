@@ -60,6 +60,16 @@ macro_rules! err {
 		)
 	};
 
+	(Request(UnknownToken($($args:tt)+))) => {
+		$crate::error::Error::Request(
+			$crate::ruma::api::error::ErrorKind::UnknownToken(
+				$crate::ruma::api::error::UnknownTokenErrorData::new(),
+			),
+			$crate::format_maybe!($($args)+),
+			$crate::http::StatusCode::UNAUTHORIZED,
+		)
+	};
+
 	(Request($variant:ident($level:ident!($($args:tt)+)))) => {{
 		let mut buf = String::new();
 		$crate::error::Error::Request(

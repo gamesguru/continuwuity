@@ -1,24 +1,13 @@
 use std::any::{Any, TypeId};
 
 use conduwuit::{Err, Result, err};
-use ruma::
-{
-	OwnedDeviceId,
-	OwnedServerName,
-	OwnedUserId,
-	UserId,
-	api::
-	{
+use ruma::{
+	OwnedDeviceId, OwnedServerName, OwnedUserId, UserId,
+	api::{
 		IncomingRequest,
-		auth_scheme::
-		{
-			AccessToken,
-			AccessTokenOptional,
-			AppserviceToken,
-			AppserviceTokenOptional,
-			AuthScheme,
-			NoAccessToken,
-			NoAuthentication,
+		auth_scheme::{
+			AccessToken, AccessTokenOptional, AppserviceToken, AppserviceTokenOptional,
+			AuthScheme, NoAccessToken, NoAuthentication,
 		},
 		federation::authentication::ServerSignatures,
 	},
@@ -86,7 +75,8 @@ impl CheckAuth for ServerSignatures {
 			if output
 				.destination
 				.as_ref()
-				.is_some_and(|supplied_destination| supplied_destination != destination) {
+				.is_some_and(|supplied_destination| supplied_destination != destination)
+			{
 				return Err!(Request(Unauthorized("Destination mismatch.")));
 			}
 
@@ -126,9 +116,14 @@ impl CheckAuth for AccessToken {
 			let output = Self::extract_authentication(incoming_request).map_err(|err| {
 				let err_str = format!("{err:?}");
 				if err_str.contains("NoToken") || err_str.contains("Missing") {
-					err!(Request(MissingToken("No access token found, but this endpoint requires one.")))
+					err!(Request(MissingToken(
+						"No access token found, but this endpoint requires one."
+					)))
 				} else {
-					err!(Request(Unauthorized(warn!("Failed to extract authorization: {:?}", err))))
+					err!(Request(Unauthorized(warn!(
+						"Failed to extract authorization: {:?}",
+						err
+					))))
 				}
 			})?;
 
@@ -146,15 +141,20 @@ impl CheckAuth for AccessToken {
 	) -> impl Future<Output = Result<Auth>> + Send {
 		async move {
 			// Check for user tokens first
-			if let Ok((sender_user, sender_device)) = services.users.find_from_token(&output).await {
+			if let Ok((sender_user, sender_device)) =
+				services.users.find_from_token(&output).await
+			{
 				// Locked users can only use /logout and /logout/all
 				if services
 					.users
 					.is_locked(&sender_user)
 					.await
-					.is_ok_and(std::convert::identity) {
+					.is_ok_and(std::convert::identity)
+				{
 					if !(route == TypeId::of::<ruma::api::client::session::logout::v3::Request>()
-						|| route == TypeId::of::<ruma::api::client::session::logout_all::v3::Request>()) {
+						|| route
+							== TypeId::of::<ruma::api::client::session::logout_all::v3::Request>(
+							)) {
 						return Err!(Request(Unauthorized("Your account is locked.")));
 					}
 				}
@@ -185,19 +185,24 @@ impl CheckAuth for AccessToken {
 				}
 
 				// MSC3202/MSC4190: Handle device_id masquerading for appservices.
-				let sender_device = if let Some(device_id) = query.device_id.as_deref().map(Into::into) {
-					if services
-						.users
-						.get_device_metadata(&sender_user, device_id)
-						.await
-						.is_err() {
-						return Err!(Request(Forbidden("Device does not exist for user or appservice cannot masquerade as this device.")));
-					}
+				let sender_device =
+					if let Some(device_id) = query.device_id.as_deref().map(Into::into) {
+						if services
+							.users
+							.get_device_metadata(&sender_user, device_id)
+							.await
+							.is_err()
+						{
+							return Err!(Request(Forbidden(
+								"Device does not exist for user or appservice cannot masquerade \
+								 as this device."
+							)));
+						}
 
-					Some(device_id.to_owned())
-				} else {
-					None
-				};
+						Some(device_id.to_owned())
+					} else {
+						None
+					};
 
 				return Ok(Auth {
 					sender_user: Some(sender_user),
@@ -207,7 +212,7 @@ impl CheckAuth for AccessToken {
 				});
 			}
 
-			Err!(Request(Unauthorized("Invalid access token.")))
+			Err!(Request(UnknownToken("Invalid access token.")))
 		}
 	}
 }
@@ -223,7 +228,10 @@ impl CheckAuth for AccessTokenOptional {
 			let route = TypeId::of::<R>();
 
 			let output = Self::extract_authentication(incoming_request).map_err(|err| {
-				err!(Request(Unauthorized(warn!("Failed to extract optional authorization: {:?}", err))))
+				err!(Request(Unauthorized(warn!(
+					"Failed to extract optional authorization: {:?}",
+					err
+				))))
 			})?;
 
 			<Self as CheckAuth>::verify(services, output, incoming_request, query, route).await
@@ -241,7 +249,8 @@ impl CheckAuth for AccessTokenOptional {
 		async move {
 			match output {
 				| Some(token) =>
-					<AccessToken as CheckAuth>::verify(services, token, request, query, route).await,
+					<AccessToken as CheckAuth>::verify(services, token, request, query, route)
+						.await,
 				| None => Ok(Auth::default()),
 			}
 		}
@@ -259,7 +268,10 @@ impl CheckAuth for AppserviceToken {
 			let route = TypeId::of::<R>();
 
 			let output = Self::extract_authentication(incoming_request).map_err(|err| {
-				err!(Request(Unauthorized(warn!("Failed to extract appservice authorization: {:?}", err))))
+				err!(Request(Unauthorized(warn!(
+					"Failed to extract appservice authorization: {:?}",
+					err
+				))))
 			})?;
 
 			Self::verify(services, output, incoming_request, query, route).await
@@ -276,7 +288,7 @@ impl CheckAuth for AppserviceToken {
 	) -> impl Future<Output = Result<Auth>> + Send {
 		async move {
 			let Ok(appservice_info) = services.appservice.find_from_token(&output).await else {
-				return Err!(Request(Unauthorized("Invalid appservice token.")));
+				return Err!(Request(UnknownToken("Invalid appservice token.")));
 			};
 
 			let Ok(sender_user) = query.user_id.clone().map_or_else(
@@ -296,19 +308,24 @@ impl CheckAuth for AppserviceToken {
 			}
 
 			// MSC3202/MSC4190: Handle device_id masquerading for appservices.
-			let sender_device = if let Some(device_id) = query.device_id.as_deref().map(Into::into) {
-				if services
-					.users
-					.get_device_metadata(&sender_user, device_id)
-					.await
-					.is_err() {
-					return Err!(Request(Forbidden("Device does not exist for user or appservice cannot masquerade as this device.")));
-				}
+			let sender_device =
+				if let Some(device_id) = query.device_id.as_deref().map(Into::into) {
+					if services
+						.users
+						.get_device_metadata(&sender_user, device_id)
+						.await
+						.is_err()
+					{
+						return Err!(Request(Forbidden(
+							"Device does not exist for user or appservice cannot masquerade as \
+							 this device."
+						)));
+					}
 
-				Some(device_id.to_owned())
-			} else {
-				None
-			};
+					Some(device_id.to_owned())
+				} else {
+					None
+				};
 
 			Ok(Auth {
 				sender_user: Some(sender_user),
@@ -331,7 +348,10 @@ impl CheckAuth for AppserviceTokenOptional {
 			let route = TypeId::of::<R>();
 
 			let output = Self::extract_authentication(incoming_request).map_err(|err| {
-				err!(Request(Unauthorized(warn!("Failed to extract optional appservice authorization: {:?}", err))))
+				err!(Request(Unauthorized(warn!(
+					"Failed to extract optional appservice authorization: {:?}",
+					err
+				))))
 			})?;
 
 			<Self as CheckAuth>::verify(services, output, incoming_request, query, route).await
@@ -378,9 +398,7 @@ impl CheckAuth for NoAuthentication {
 		_query: AuthQueryParams,
 		_route: TypeId,
 	) -> impl Future<Output = Result<Auth>> + Send {
-		async move {
-			Ok(Auth::default())
-		}
+		async move { Ok(Auth::default()) }
 	}
 }
 
@@ -397,7 +415,10 @@ impl CheckAuth for NoAccessToken {
 			// We handle these the same as AccessTokenOptional
 			let token =
 				AccessTokenOptional::extract_authentication(incoming_request).map_err(|err| {
-					err!(Request(Unauthorized(warn!("Failed to extract authorization for NoAccessToken: {:?}", err))))
+					err!(Request(Unauthorized(warn!(
+						"Failed to extract authorization for NoAccessToken: {:?}",
+						err
+					))))
 				})?;
 
 			<AccessTokenOptional as CheckAuth>::verify(
@@ -419,8 +440,6 @@ impl CheckAuth for NoAccessToken {
 		_query: AuthQueryParams,
 		_route: TypeId,
 	) -> impl Future<Output = Result<Auth>> + Send {
-		async move {
-			panic!("NoAccessToken::verify should not be called, use authenticate instead")
-		}
+		async move { panic!("NoAccessToken::verify should not be called, use authenticate instead") }
 	}
 }

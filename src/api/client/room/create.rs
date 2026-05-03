@@ -85,21 +85,24 @@ pub(crate) async fn create_room_route(
 	};
 	let room_version_rules = room_version.rules().unwrap();
 
-	let room_id: Option<OwnedRoomId> = match room_version_rules.room_id_format {
-		| RoomIdFormatVersion::V1 => {
-			// Check for custom room ID field
-			if let Some(CanonicalJsonValue::String(room_id)) =
-				body.json_body.as_ref().unwrap().get("room_id")
-			{
-				Some(
-					RoomId::parse(room_id)
-						.map_err(|_| err!(Request(BadJson("Malformed custom room ID"))))?,
-				)
-			} else {
-				Some(RoomId::new_v1(services.globals.server_name()))
-			}
-		},
-		| _ => None,
+	let room_version_is_v2 = room_version_rules.room_id_format == RoomIdFormatVersion::V2
+		|| room_version == RoomVersionId::V11
+		|| room_version == RoomVersionId::V12;
+
+	let room_id: Option<OwnedRoomId> = if !room_version_is_v2 {
+		// Check for custom room ID field
+		if let Some(CanonicalJsonValue::String(room_id)) =
+			body.json_body.as_ref().unwrap().get("room_id")
+		{
+			Some(
+				RoomId::parse(room_id)
+					.map_err(|_| err!(Request(BadJson("Malformed custom room ID"))))?,
+			)
+		} else {
+			Some(RoomId::new_v1(services.globals.server_name()))
+		}
+	} else {
+		None
 	};
 
 	// check if room ID doesn't already exist instead of erroring on auth check

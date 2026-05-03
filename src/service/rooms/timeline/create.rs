@@ -221,6 +221,13 @@ pub async fn create_event(
 		signatures: None,
 	};
 
+	warn!(
+		kind = ?pdu.kind,
+		room_id = ?pdu.room_id,
+		room_id_arg = ?room_id,
+		"DEBUG: Creating PDU"
+	);
+
 	let auth_fetch = |k: &StateEventType, s: &str| {
 		let key = (k.clone(), s.into());
 		ready(auth_events.get(&key).map(ToOwned::to_owned))

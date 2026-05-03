@@ -78,9 +78,7 @@ pub(crate) async fn set_displayname_route(
 
 	let value = ProfileFieldValue::new(
 		ProfileFieldName::DisplayName.as_str(),
-		body.displayname
-			.clone()
-			.map_or(Value::Null, Value::String),
+		body.displayname.clone().map_or(Value::Null, Value::String),
 	)
 	.expect("displayname field value should be valid");
 

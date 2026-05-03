@@ -70,7 +70,11 @@ pub fn auth_types_for_event(
 		return Ok(vec![]);
 	}
 
-	let mut auth_types = if room_version.room_id_format == RoomIdFormatVersion::V2 {
+	let room_version_is_v2 = room_version.room_id_format == RoomIdFormatVersion::V2
+		|| room_version.version == RoomVersionId::V11
+		|| room_version.version == RoomVersionId::V12;
+
+	let mut auth_types = if room_version_is_v2 {
 		vec![
 			(StateEventType::RoomPowerLevels, StateKey::new()),
 			(StateEventType::RoomMember, sender.as_str().into()),
@@ -306,15 +310,19 @@ where
 		return Ok(false);
 	}
 
+	let room_version_is_v2 = room_version.room_id_format == RoomIdFormatVersion::V2
+		|| room_version.version == RoomVersionId::V11
+		|| room_version.version == RoomVersionId::V12;
+
 	// If the create event is referenced in the event's auth events, and this is a
 	// v12 room, reject
 	let claims_create_event = incoming_event
 		.auth_events()
 		.any(|id| id == room_create_event.event_id());
-	if room_version.room_id_format == RoomIdFormatVersion::V2 && claims_create_event {
+	if room_version_is_v2 && claims_create_event {
 		warn!("event incorrectly references m.room.create event in auth events");
 		return Ok(false);
-	} else if !(room_version.room_id_format == RoomIdFormatVersion::V2) && !claims_create_event {
+	} else if !room_version_is_v2 && !claims_create_event {
 		// If the create event is not referenced in the event's auth events, and this is
 		// a v11 room, reject
 		warn!(
@@ -338,7 +346,7 @@ where
 	// If the create event content has the field m.federate set to false and the
 	// sender domain of the event does not match the sender domain of the create
 	// event, reject.
-	if !(room_version.room_id_format == RoomIdFormatVersion::V2)
+	if !room_version_is_v2
 		&& !room_create_content.federate
 		&& room_create_event.sender().server_name() != incoming_event.sender().server_name()
 	{

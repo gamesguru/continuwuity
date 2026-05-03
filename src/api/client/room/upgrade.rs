@@ -4,6 +4,7 @@ use axum::extract::State;
 use conduwuit::{
 	Err, Error, Event, Result, debug, err, info,
 	matrix::{StateKey, pdu::PartialPdu},
+	warn,
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
@@ -113,7 +114,19 @@ pub(crate) async fn upgrade_room_route(
 		.new_version
 		.rules()
 		.expect("new room version should have defined rules");
-	let replacement_room_owned = if room_version_rules.room_id_format != RoomIdFormatVersion::V2 {
+
+	let room_version_is_v2 = room_version_rules.room_id_format == RoomIdFormatVersion::V2
+		|| body.new_version == RoomVersionId::V11
+		|| body.new_version == RoomVersionId::V12;
+
+	warn!(
+		version = ?body.new_version,
+		format = ?room_version_rules.room_id_format,
+		is_v2 = ?room_version_is_v2,
+		"DEBUG: Room upgrade version and format"
+	);
+
+	let replacement_room_owned = if !room_version_is_v2 {
 		Some(RoomId::new_v1(services.globals.server_name()))
 	} else {
 		None
@@ -131,7 +144,7 @@ pub(crate) async fn upgrade_room_route(
 		.await;
 
 	// For pre-v12 rooms, send tombstone before creating replacement room
-	let tombstone_event_id = if room_version_rules.room_id_format != RoomIdFormatVersion::V2 {
+	let tombstone_event_id = if !room_version_is_v2 {
 		let state_lock = services.rooms.state.mutex.lock(body.room_id.as_str()).await;
 		// Send a m.room.tombstone event to the old room to indicate that it is not
 		// intended to be used any further
@@ -260,19 +273,18 @@ pub(crate) async fn upgrade_room_route(
 		.boxed()
 		.await?;
 	let create_id = create_event_id.as_str().replace('$', "!");
-	let (replacement_room, state_lock) =
-		if room_version_rules.room_id_format == RoomIdFormatVersion::V2 {
-			let parsed_room_id = RoomId::parse(&create_id)?;
-			let lock = services
-				.rooms
-				.state
-				.mutex
-				.lock(parsed_room_id.as_str())
-				.await;
-			(Some(parsed_room_id), lock)
-		} else {
-			(replacement_room.map(ToOwned::to_owned), state_lock)
-		};
+	let (replacement_room, state_lock) = if room_version_is_v2 {
+		let parsed_room_id = RoomId::parse(&create_id)?;
+		let lock = services
+			.rooms
+			.state
+			.mutex
+			.lock(parsed_room_id.as_str())
+			.await;
+		(Some(parsed_room_id), lock)
+	} else {
+		(replacement_room.map(ToOwned::to_owned), state_lock)
+	};
 
 	// Join the new room
 	services
@@ -425,7 +437,7 @@ pub(crate) async fn upgrade_room_route(
 	drop(state_lock);
 
 	// For v12 rooms, send tombstone AFTER creating replacement room
-	if room_version_rules.room_id_format == RoomIdFormatVersion::V2 {
+	if room_version_is_v2 {
 		let old_room_state_lock = services.rooms.state.mutex.lock(body.room_id.as_str()).await;
 		// For v12 rooms, no event reference in predecessor due to cyclic dependency -
 		// could best effort one maybe?

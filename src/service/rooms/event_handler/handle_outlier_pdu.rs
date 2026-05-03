@@ -172,11 +172,16 @@ where
 		}
 	}
 
+	let room_version_is_v2 = room_version_rules.room_id_format
+		== ruma::room_version_rules::RoomIdFormatVersion::V2
+		|| room_version_rules.version == ruma::RoomVersionId::V11
+		|| room_version_rules.version == ruma::RoomVersionId::V12;
+
 	// The original create event must be in the auth events for v11 and below.
 	// The create event itself has an empty auth_events array (it's the DAG root).
 	// For v12+, create is not required in auth_events.
 	if pdu_event.event_type() != &TimelineEventType::RoomCreate
-		&& pdu_event.room_id().is_some()
+		&& !room_version_is_v2
 		&& !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into()))
 	{
 		return Err!(Request(InvalidParam(
