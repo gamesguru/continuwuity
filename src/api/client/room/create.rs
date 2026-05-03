@@ -88,7 +88,6 @@ pub(crate) async fn create_room_route(
 	let room_version_rules = room_version.rules().unwrap();
 
 	let room_version_is_v2 = room_version_rules.room_id_format == RoomIdFormatVersion::V2
-		|| room_version == RoomVersionId::V11
 		|| room_version == RoomVersionId::V12;
 
 	let room_id: Option<OwnedRoomId> = if !room_version_is_v2 {

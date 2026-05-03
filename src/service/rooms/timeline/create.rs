@@ -59,17 +59,22 @@ pub fn pdu_fits(owned_obj: &mut CanonicalJsonObject) -> bool {
 
 /// Pulls the room version ID out of the given (create) event.
 fn room_version_from_event(
-	room_id: OwnedRoomId,
+	_room_id: OwnedRoomId,
 	event_type: &TimelineEventType,
 	content: &RawValue,
 ) -> Result<RoomVersionId> {
-	if event_type == &TimelineEventType::RoomCreate {
+	if *event_type == TimelineEventType::RoomCreate || event_type.to_string() == "m.room.create" {
 		let content: RoomCreateEventContent = serde_json::from_str(content.get())?;
 		Ok(content.room_version)
 	} else {
+		warn!(
+			?event_type,
+			event_type_str = %event_type.to_string(),
+			"DEBUG: Rejecting non-create event during version extraction"
+		);
 		Err(Error::InconsistentRoomState(
 			"non-create event for room of unknown version",
-			room_id,
+			_room_id,
 		))
 	}
 }
@@ -100,17 +105,15 @@ pub async fn create_event(
 	let room_version = match room_id {
 		| Some(room_id) => {
 			trace!(%room_id, "Looking up existing room ID");
-			self.services
-				.state
-				.get_room_version(room_id)
-				.await
-				.or_else(|_| {
-					room_version_from_event(
-						room_id.to_owned(),
-						&event_type.clone(),
-						&content.clone(),
-					)
-				})?
+			match self.services.state.get_room_version(room_id).await {
+				| Ok(v) => v,
+				| Err(_) if event_type.to_string() == "m.room.create" => room_version_from_event(
+					room_id.to_owned(),
+					&event_type.clone(),
+					&content.clone(),
+				)?,
+				| Err(e) => return Err(e),
+			}
 		},
 		| None => {
 			trace!("No room ID, assuming room creation");
@@ -190,10 +193,9 @@ pub async fn create_event(
 	}
 
 	let room_version_is_v2 = room_version_rules.room_id_format == RoomIdFormatVersion::V2
-		|| room_version == RoomVersionId::V11
 		|| room_version == RoomVersionId::V12;
 
-	let mut pdu = PduEvent {
+	let pdu = PduEvent {
 		event_id: ruma::event_id!("$thiswillbefilledinlater").into(),
 		room_id: if room_version_is_v2 {
 			None
@@ -250,26 +252,29 @@ pub async fn create_event(
 			let room_id = room_id_or_hash.ok_or_else(|| {
 				err!(Request(Forbidden(warn!("Failed to determine room ID for event"))))
 			})?;
-			Some(
-				self.services
-					.state_accessor
-					.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-					.await
-					.map_err(|e| {
-						err!(Request(Forbidden(warn!("Failed to fetch room create event: {e}"))))
-					})?,
-			)
+
+			// Try state cache first
+			if let Ok(pdu) = self
+				.services
+				.state_accessor
+				.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+				.await
+			{
+				Some(pdu)
+			} else {
+				// Fallback: look in auth_events map (bootstrap)
+				auth_events
+					.get(&(StateEventType::RoomCreate, String::new().into()))
+					.map(ToOwned::to_owned)
+			}
 		},
 	};
 	let create_event = match &pdu.kind {
 		| TimelineEventType::RoomCreate => &pdu,
-		| _ => create_pdu.as_ref().unwrap().as_pdu(),
+		| _ => create_pdu.as_ref().map(PduEvent::as_pdu).ok_or_else(|| {
+			err!(Request(Forbidden(warn!("Failed to fetch room create event"))))
+		})?,
 	};
-
-	warn!(
-		create_event_id = %create_event.event_id(),
-		"DEBUG: Auth checking with create event"
-	);
 
 	let auth_check = state_res::event_auth::auth_check(
 		&room_version_rules,
