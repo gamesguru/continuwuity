@@ -113,7 +113,7 @@ pub(crate) async fn upgrade_room_route(
 		.new_version
 		.rules()
 		.expect("new room version should have defined rules");
-	let replacement_room_owned = if room_version_rules.room_id_format == RoomIdFormatVersion::V2 {
+	let replacement_room_owned = if room_version_rules.room_id_format != RoomIdFormatVersion::V2 {
 		Some(RoomId::new_v1(services.globals.server_name()))
 	} else {
 		None
