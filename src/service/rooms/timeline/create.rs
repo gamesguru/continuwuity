@@ -225,6 +225,7 @@ pub async fn create_event(
 		kind = ?pdu.kind,
 		room_id = ?pdu.room_id,
 		room_id_arg = ?room_id,
+		auth_events = ?pdu.auth_events,
 		"DEBUG: Creating PDU"
 	);
 

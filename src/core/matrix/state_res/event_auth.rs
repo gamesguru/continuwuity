@@ -317,8 +317,14 @@ where
 	let claims_create_event = incoming_event
 		.auth_events()
 		.any(|id| id == room_create_event.event_id());
+
 	if room_version_is_v2 && claims_create_event {
-		warn!("event incorrectly references m.room.create event in auth events");
+		warn!(
+			event_id = %incoming_event.event_id(),
+			create_event_id = %room_create_event.event_id(),
+			auth_events = ?incoming_event.auth_events().collect::<Vec<_>>(),
+			"event incorrectly references m.room.create event in auth events"
+		);
 		return Ok(false);
 	} else if !room_version_is_v2 && !claims_create_event {
 		// If the create event is not referenced in the event's auth events, and this is
