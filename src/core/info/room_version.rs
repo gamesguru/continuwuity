@@ -4,7 +4,7 @@ use std::iter::once;
 
 use ruma::{RoomVersionId, api::client::discovery::get_capabilities::v3::RoomVersionStability};
 
-use crate::{at, is_equal_to};
+use crate::at;
 
 /// Supported and stable room versions
 pub const STABLE_ROOM_VERSIONS: &[RoomVersionId] = &[
@@ -26,7 +26,15 @@ type RoomVersion = (RoomVersionId, RoomVersionStability);
 impl crate::Server {
 	#[inline]
 	pub fn supported_room_version(&self, version: &RoomVersionId) -> bool {
-		self.supported_room_versions().any(is_equal_to!(*version))
+		let supported = self.supported_room_versions().any(|v| &v == version);
+		if !supported {
+			crate::warn!(
+				requested = ?version,
+				available = ?self.supported_room_versions().collect::<Vec<_>>(),
+				"DEBUG: Unsupported room version check"
+			);
+		}
+		supported
 	}
 
 	#[inline]

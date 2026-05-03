@@ -16,7 +16,7 @@ use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId,
 	UserId,
 	events::{StateEventType, TimelineEventType, room::create::RoomCreateEventContent},
-	room_version_rules::RoomVersionRules,
+	room_version_rules::{RoomIdFormatVersion, RoomVersionRules},
 	uint,
 };
 use serde_json::value::{RawValue, to_raw_value};
@@ -189,9 +189,17 @@ pub async fn create_event(
 		}
 	}
 
-	let pdu = PduEvent {
+	let room_version_is_v2 = room_version_rules.room_id_format == RoomIdFormatVersion::V2
+		|| room_version == RoomVersionId::V11
+		|| room_version == RoomVersionId::V12;
+
+	let mut pdu = PduEvent {
 		event_id: ruma::event_id!("$thiswillbefilledinlater").into(),
-		room_id: room_id.map(ToOwned::to_owned),
+		room_id: if room_version_is_v2 {
+			None
+		} else {
+			room_id.map(ToOwned::to_owned)
+		},
 		sender: sender.to_owned(),
 		origin: None,
 		origin_server_ts: timestamp.map_or_else(
@@ -226,6 +234,7 @@ pub async fn create_event(
 		room_id = ?pdu.room_id,
 		room_id_arg = ?room_id,
 		auth_events = ?pdu.auth_events,
+		content = ?pdu.content,
 		"DEBUG: Creating PDU"
 	);
 

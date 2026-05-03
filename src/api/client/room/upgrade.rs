@@ -8,7 +8,7 @@ use conduwuit::{
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	CanonicalJsonObject, RoomId, RoomVersionId,
+	CanonicalJsonObject, CanonicalJsonValue, OwnedUserId, RoomId, RoomVersionId, UserId,
 	api::{client::room::upgrade_room, error::ErrorKind},
 	assign,
 	events::{
@@ -109,21 +109,14 @@ pub(crate) async fn upgrade_room_route(
 
 	drop(old_room_state_lock);
 
-	// Create a replacement room
 	let room_version_rules = body
 		.new_version
 		.rules()
 		.expect("new room version should have defined rules");
 
 	let room_version_is_v2 = room_version_rules.room_id_format == RoomIdFormatVersion::V2
+		|| body.new_version == RoomVersionId::V11
 		|| body.new_version == RoomVersionId::V12;
-
-	warn!(
-		version = ?body.new_version,
-		format = ?room_version_rules.room_id_format,
-		is_v2 = ?room_version_is_v2,
-		"DEBUG: Room upgrade version and format"
-	);
 
 	let replacement_room_owned = if !room_version_is_v2 {
 		Some(RoomId::new_v1(services.globals.server_name()))
@@ -135,6 +128,30 @@ pub(crate) async fn upgrade_room_route(
 		| Some(v) => v,
 		| None => &RoomId::new_v1(services.globals.server_name()),
 	};
+
+	warn!(
+		old_room_id = %body.room_id,
+		new_version = ?body.new_version,
+		room_version_is_v2 = ?room_version_is_v2,
+		"DEBUG: Starting room upgrade"
+	);
+
+	warn!(
+		version = ?body.new_version,
+		format = ?room_version_rules.room_id_format,
+		is_v2 = ?room_version_is_v2,
+		"DEBUG: Room upgrade version and format"
+	);
+
+	warn!(
+		replacement_room_tmp = %replacement_room_tmp,
+		"DEBUG: Replacement room ID tmp"
+	);
+
+	warn!(
+		json_body = ?body.json_body,
+		"DEBUG: Room upgrade request body"
+	);
 
 	let _short_id = services
 		.rooms
@@ -194,7 +211,52 @@ pub(crate) async fn upgrade_room_route(
 		}))
 	};
 
-	let additional_creators = create_event_content.get("additional_creators").cloned();
+	warn!(
+		json_body = ?body.json_body,
+		"DEBUG: Room upgrade request body"
+	);
+
+	// MSC4289: Handle additional creators
+	let mut additional_creators: Vec<OwnedUserId> = Vec::new();
+
+	// Pull from old room first
+	if let Some(old_creators) = create_event_content
+		.get("additional_creators")
+		.and_then(CanonicalJsonValue::as_array)
+	{
+		for creator in old_creators {
+			if let Some(creator) = creator.as_str() {
+				if let Ok(user_id) = UserId::parse(creator) {
+					additional_creators.push(user_id);
+				}
+			}
+		}
+	}
+
+	// Pull from request body (MSC4289)
+	if let Some(new_creators) = body
+		.json_body
+		.as_ref()
+		.and_then(|b| b.get("additional_creators"))
+		.and_then(CanonicalJsonValue::as_array)
+	{
+		for creator in new_creators {
+			if let Some(creator) = creator.as_str() {
+				if let Ok(user_id) = UserId::parse(creator) {
+					if !additional_creators.contains(&user_id) {
+						additional_creators.push(user_id);
+					}
+				}
+			}
+		}
+	}
+
+	let additional_creators = additional_creators; // Re-bind for logging
+	warn!(
+		count = additional_creators.len(),
+		creators = ?additional_creators,
+		"DEBUG: Final additional creators for upgrade"
+	);
 
 	// Send a m.room.create event containing a predecessor field and the applicable
 	// room_version
@@ -222,9 +284,14 @@ pub(crate) async fn upgrade_room_route(
 		.authorization
 		.explicitly_privilege_room_creators
 	{
-		if let Some(additional_creators) = additional_creators.as_ref() {
-			create_event_content
-				.insert("additional_creators".into(), additional_creators.clone());
+		if !additional_creators.is_empty() {
+			create_event_content.insert(
+				"additional_creators".into(),
+				json!(additional_creators).try_into().map_err(|e| {
+					info!("Error forming creation event: {e}");
+					Error::BadRequest(ErrorKind::BadJson, "Error forming creation event")
+				})?,
+			);
 		}
 	}
 
@@ -339,16 +406,8 @@ pub(crate) async fn upgrade_room_route(
 					})?;
 
 				power_levels_event_content.users.remove(sender_user);
-				if let Some(additional_creators) = additional_creators.as_ref() {
-					if let Some(additional_creators) = additional_creators.as_array() {
-						for creator in additional_creators {
-							if let Some(creator) = creator.as_str() {
-								if let Ok(creator) = ruma::UserId::parse(creator) {
-									power_levels_event_content.users.remove(&creator);
-								}
-							}
-						}
-					}
+				for creator in &additional_creators {
+					power_levels_event_content.users.remove(creator);
 				}
 
 				event_content = to_raw_value(&power_levels_event_content)

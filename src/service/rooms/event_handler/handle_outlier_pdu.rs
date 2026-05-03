@@ -176,7 +176,10 @@ where
 		== ruma::room_version_rules::RoomIdFormatVersion::V2
 		|| create_event
 			.get_content::<ruma::events::room::create::RoomCreateEventContent>()
-			.is_ok_and(|c| c.room_version == ruma::RoomVersionId::V12);
+			.is_ok_and(|c| {
+				c.room_version == ruma::RoomVersionId::V11
+					|| c.room_version == ruma::RoomVersionId::V12
+			});
 
 	// The original create event must be in the auth events for v11 and below.
 	// The create event itself has an empty auth_events array (it's the DAG root).

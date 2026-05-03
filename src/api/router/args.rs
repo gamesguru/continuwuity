@@ -129,6 +129,12 @@ where
 		// Make a JSON copy of the body for use in handlers
 		let mut json_body = serde_json::from_slice::<CanonicalJsonObject>(&body).ok();
 
+		if json_body.is_some() {
+			tracing::debug!("DEBUG: Parsed request body into json_body");
+		} else if !body.is_empty() {
+			tracing::warn!("DEBUG: Failed to parse request body into json_body");
+		}
+
 		// Extract the query parameters and path
 		let Path(path): Path<Vec<String>> = parts.extract().await?;
 		let auth_query: AuthQueryParams = parts

@@ -660,7 +660,9 @@ where
 		trace!(list = ?auth_types, event_id = event.event_id().as_str(), "auth types for event");
 
 		let mut auth_state = StateMap::new();
-		if room_version.room_id_format == RoomIdFormatVersion::V2 {
+		if room_version.room_id_format == RoomIdFormatVersion::V2
+			|| std::ptr::eq(room_version, &RoomVersionRules::V12)
+		{
 			trace!("room version uses hashed IDs, manually fetching create event");
 			let room_id = event
 				.room_id_or_hash()

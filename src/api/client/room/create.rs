@@ -73,19 +73,22 @@ pub(crate) async fn create_room_route(
 	}
 
 	let room_version = match body.room_version.clone() {
-		| Some(room_version) =>
+		| Some(room_version) => {
+			warn!(requested = ?room_version, "DEBUG: createRoom requested version");
 			if services.server.supported_room_version(&room_version) {
 				room_version
 			} else {
 				return Err!(Request(UnsupportedRoomVersion(
 					"This server does not support that room version."
 				)));
-			},
+			}
+		},
 		| None => services.server.config.default_room_version.clone(),
 	};
 	let room_version_rules = room_version.rules().unwrap();
 
 	let room_version_is_v2 = room_version_rules.room_id_format == RoomIdFormatVersion::V2
+		|| room_version == RoomVersionId::V11
 		|| room_version == RoomVersionId::V12;
 
 	let room_id: Option<OwnedRoomId> = if !room_version_is_v2 {
@@ -174,7 +177,7 @@ pub(crate) async fn create_room_route(
 		| _ => None,
 	};
 
-	let create_content = match &body.creation_content {
+	let mut create_content = match &body.creation_content {
 		| Some(content) => {
 			use RoomVersionId::*;
 
@@ -222,6 +225,15 @@ pub(crate) async fn create_room_route(
 			content
 		},
 	};
+
+	// Pull additional_creators from top-level body if present (MSC4289)
+	if let Some(CanonicalJsonValue::Array(additional_creators)) = body
+		.json_body
+		.as_ref()
+		.and_then(|b| b.get("additional_creators"))
+	{
+		create_content.insert("additional_creators".into(), additional_creators.clone().into());
+	}
 
 	let state_lock = match room_id.clone() {
 		| Some(room_id) => {

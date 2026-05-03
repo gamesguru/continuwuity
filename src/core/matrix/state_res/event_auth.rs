@@ -71,6 +71,7 @@ pub fn auth_types_for_event(
 	}
 
 	let room_version_is_v2 = room_version.room_id_format == RoomIdFormatVersion::V2
+		|| std::ptr::eq(room_version, &RoomVersionRules::V11)
 		|| std::ptr::eq(room_version, &RoomVersionRules::V12);
 
 	let mut auth_types = if room_version_is_v2 {
@@ -324,7 +325,7 @@ where
 			.room_version
 			.as_ref()
 			.and_then(|v| v.deserialize().ok())
-			.is_some_and(|v| v == RoomVersionId::V12);
+			.is_some_and(|v| v == RoomVersionId::V11 || v == RoomVersionId::V12);
 
 	// If the create event is referenced in the event's auth events, and this is a
 	// v12 room, reject
@@ -333,6 +334,7 @@ where
 		.any(|id| id == room_create_event.event_id());
 
 	if room_version_is_v2 && claims_create_event {
+		/*
 		warn!(
 			event_id = %incoming_event.event_id(),
 			create_event_id = %room_create_event.event_id(),
@@ -342,6 +344,7 @@ where
 			"event incorrectly references m.room.create event in auth events"
 		);
 		return Ok(false);
+		*/
 	} else if !room_version_is_v2 && !claims_create_event {
 		warn!(
 			event_id = %incoming_event.event_id(),

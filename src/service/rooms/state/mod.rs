@@ -302,7 +302,7 @@ impl Service {
 		room_id: &RoomId,
 	) -> Vec<RawStrippedState>
 	where
-		E: Event + Send + Sync,
+		E: Event + Send + Sync + serde::Serialize,
 		&'a E: Event + Send,
 	{
 		let cells = [
@@ -311,7 +311,8 @@ impl Service {
 			(&StateEventType::RoomCanonicalAlias, ""),
 			(&StateEventType::RoomName, ""),
 			(&StateEventType::RoomAvatar, ""),
-			(&StateEventType::RoomMember, event.sender().as_str()), // Add recommended events
+			(&StateEventType::RoomMember, event.sender().as_str()),
+			(&StateEventType::RoomMember, event.state_key().unwrap_or_default()),
 			(&StateEventType::RoomEncryption, ""),
 			(&StateEventType::RoomTopic, ""),
 		];
@@ -322,12 +323,19 @@ impl Service {
 				.room_state_get(room_id, event_type, state_key)
 		});
 
-		join_all(fetches)
+		let mut stripped = join_all(fetches)
 			.await
 			.into_iter()
 			.filter_map(Result::ok)
 			.map(|pdu| RawStrippedState::Pdu(serde_json::value::to_raw_value(&pdu).unwrap()))
-			.collect()
+			.collect::<Vec<_>>();
+
+		// Always include the current event if it's a state event
+		if event.state_key().is_some() {
+			stripped.push(RawStrippedState::Pdu(serde_json::value::to_raw_value(event).unwrap()));
+		}
+
+		stripped
 	}
 
 	/// Set the state hash to a new version, but does not update state_cache.
