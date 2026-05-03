@@ -257,7 +257,12 @@ pub async fn create_event(
 		| _ => create_pdu.as_ref().unwrap().as_pdu(),
 	};
 
-	let auth_check = state_res::auth_check(
+	warn!(
+		create_event_id = %create_event.event_id(),
+		"DEBUG: Auth checking with create event"
+	);
+
+	let auth_check = state_res::event_auth::auth_check(
 		&room_version_rules,
 		&pdu,
 		None, // TODO: third_party_invite

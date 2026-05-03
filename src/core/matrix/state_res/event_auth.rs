@@ -70,8 +70,8 @@ pub fn auth_types_for_event(
 		return Ok(vec![]);
 	}
 
-	let room_version_is_v2 = std::ptr::eq(room_version, &RoomVersionRules::V12)
-		|| room_version.room_id_format == RoomIdFormatVersion::V2;
+	let room_version_is_v2 = room_version.room_id_format == RoomIdFormatVersion::V2
+		|| std::ptr::eq(room_version, &RoomVersionRules::V12);
 
 	let mut auth_types = if room_version_is_v2 {
 		vec![
@@ -85,6 +85,14 @@ pub fn auth_types_for_event(
 			(StateEventType::RoomCreate, StateKey::new()),
 		]
 	};
+
+	warn!(
+		?kind,
+		?sender,
+		is_v2 = ?room_version_is_v2,
+		auth_types_count = auth_types.len(),
+		"DEBUG: Auth types for event"
+	);
 
 	if kind == &TimelineEventType::RoomMember {
 		#[derive(Deserialize)]
@@ -309,8 +317,14 @@ where
 		return Ok(false);
 	}
 
-	let room_version_is_v2 = std::ptr::eq(room_version, &RoomVersionRules::V12)
-		|| room_version.room_id_format == RoomIdFormatVersion::V2;
+	let room_create_content: RoomCreateContentFields =
+		from_json_str(room_create_event.content().get())?;
+	let room_version_is_v2 = room_version.room_id_format == RoomIdFormatVersion::V2
+		|| room_create_content
+			.room_version
+			.as_ref()
+			.and_then(|v| v.deserialize().ok())
+			.is_some_and(|v| v == RoomVersionId::V12);
 
 	// If the create event is referenced in the event's auth events, and this is a
 	// v12 room, reject
@@ -323,14 +337,18 @@ where
 			event_id = %incoming_event.event_id(),
 			create_event_id = %room_create_event.event_id(),
 			auth_events = ?incoming_event.auth_events().collect::<Vec<_>>(),
+			room_version_is_v2 = ?room_version_is_v2,
+			room_id_format = ?room_version.room_id_format,
 			"event incorrectly references m.room.create event in auth events"
 		);
 		return Ok(false);
 	} else if !room_version_is_v2 && !claims_create_event {
-		// If the create event is not referenced in the event's auth events, and this is
-		// a v11 room, reject
 		warn!(
-			missing = %room_create_event.event_id(),
+			event_id = %incoming_event.event_id(),
+			create_event_id = %room_create_event.event_id(),
+			auth_events = ?incoming_event.auth_events().collect::<Vec<_>>(),
+			room_version_is_v2 = ?room_version_is_v2,
+			room_id_format = ?room_version.room_id_format,
 			"event incorrectly did not reference an m.room.create in its auth events"
 		);
 		return Ok(false);
