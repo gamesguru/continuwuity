@@ -379,7 +379,7 @@ pub(crate) async fn upgrade_room_route(
 
 		services.rooms.alias.set_alias(
 			&alias,
-			replacement_room.as_ref().unwrap_or(replacement_room_tmp),
+			replacement_room.as_deref().unwrap_or(replacement_room_tmp),
 			sender_user,
 		)?;
 	}
@@ -438,7 +438,7 @@ pub(crate) async fn upgrade_room_route(
 					&RoomTombstoneEventContent::new(
 						"This room has been replaced".to_owned(),
 						replacement_room
-							.as_ref()
+							.as_deref()
 							.unwrap_or(replacement_room_tmp)
 							.to_owned(),
 					),
@@ -478,7 +478,7 @@ pub(crate) async fn upgrade_room_route(
 		debug!(
 			"Updating space {space_id} child event for room {} to {}",
 			&body.room_id,
-			replacement_room.as_ref().unwrap_or(replacement_room_tmp)
+			replacement_room.as_deref().unwrap_or(replacement_room_tmp)
 		);
 		// First, drop the space's child event
 		let state_lock = services.rooms.state.mutex.lock(space_id.as_str()).await;
@@ -504,7 +504,7 @@ pub(crate) async fn upgrade_room_route(
 		// Now, add a new child event for the replacement room
 		debug!(
 			"Adding space child event for room {} in space {space_id}",
-			replacement_room.as_ref().unwrap_or(replacement_room_tmp)
+			replacement_room.as_deref().unwrap_or(replacement_room_tmp)
 		);
 		services
 			.rooms
@@ -512,7 +512,7 @@ pub(crate) async fn upgrade_room_route(
 			.build_and_append_pdu(
 				PartialPdu::state(
 					replacement_room
-						.as_ref()
+						.as_deref()
 						.unwrap_or(replacement_room_tmp)
 						.as_str(),
 					&assign!(SpaceChildEventContent::new(vec![sender_user.server_name().to_owned()]), {
@@ -530,7 +530,7 @@ pub(crate) async fn upgrade_room_route(
 		debug!(
 			"Finished updating space {space_id} child event for room {} to {}",
 			&body.room_id,
-			replacement_room.as_ref().unwrap_or(replacement_room_tmp)
+			replacement_room.as_deref().unwrap_or(replacement_room_tmp)
 		);
 		drop(state_lock);
 	}
@@ -538,7 +538,7 @@ pub(crate) async fn upgrade_room_route(
 	// Return the replacement room id
 	Ok(upgrade_room::v3::Response::new(
 		replacement_room
-			.as_ref()
+			.as_deref()
 			.unwrap_or(replacement_room_tmp)
 			.to_owned(),
 	))

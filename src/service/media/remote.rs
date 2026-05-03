@@ -190,7 +190,7 @@ async fn fetch_thumbnail_unauthenticated(
 		file,
 		content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
 		content_disposition.unwrap_or_else(|| {
-			make_content_disposition(None, None, mxc.media_id.as_str().into())
+			make_content_disposition(None, None, mxc.media_id.into())
 		}),
 	);
 
@@ -226,7 +226,7 @@ async fn fetch_content_unauthenticated(
 		file,
 		content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
 		content_disposition.unwrap_or_else(|| {
-			make_content_disposition(None, None, mxc.media_id.as_str().into())
+			make_content_disposition(None, None, mxc.media_id.into())
 		}),
 	);
 
