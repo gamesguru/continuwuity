@@ -137,7 +137,7 @@ where
 			.map(serde_html_form::from_str)
 			.transpose()
 			.map_err(|e| err!(Request(BadJson(debug_warn!("Invalid query parameters: {e}")))))?
-			.unwrap_or_else(|| AuthQueryParams { user_id: None, device_id: None });
+			.unwrap_or(AuthQueryParams { user_id: None, device_id: None });
 
 		// Assemble a new request from the read body and parts
 		let request = hyper::Request::from_parts(parts, body);

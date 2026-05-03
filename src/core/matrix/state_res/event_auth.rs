@@ -70,9 +70,8 @@ pub fn auth_types_for_event(
 		return Ok(vec![]);
 	}
 
-	let room_version_is_v2 = room_version.room_id_format == RoomIdFormatVersion::V2
-		|| room_version.version == RoomVersionId::V11
-		|| room_version.version == RoomVersionId::V12;
+	let room_version_is_v2 = std::ptr::eq(room_version, &RoomVersionRules::V12)
+		|| room_version.room_id_format == RoomIdFormatVersion::V2;
 
 	let mut auth_types = if room_version_is_v2 {
 		vec![
@@ -310,9 +309,8 @@ where
 		return Ok(false);
 	}
 
-	let room_version_is_v2 = room_version.room_id_format == RoomIdFormatVersion::V2
-		|| room_version.version == RoomVersionId::V11
-		|| room_version.version == RoomVersionId::V12;
+	let room_version_is_v2 = std::ptr::eq(room_version, &RoomVersionRules::V12)
+		|| room_version.room_id_format == RoomIdFormatVersion::V2;
 
 	// If the create event is referenced in the event's auth events, and this is a
 	// v12 room, reject
