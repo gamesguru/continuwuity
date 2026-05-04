@@ -200,7 +200,7 @@ jobs:
       - name: Upload test logs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}
+          name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}-v${{ matrix.room_version }}
           path: |
             tests/test_results/complement/test_results.jsonl
             tests/test_results/complement/test_logs.jsonl
