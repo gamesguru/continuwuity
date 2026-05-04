@@ -367,7 +367,6 @@ impl Service {
 			.room_state_get_content(room_id, &StateEventType::RoomCreate, "")
 			.await
 			.map(|content: RoomCreateEventContent| content.room_version)
-			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
@@ -424,8 +423,9 @@ impl Service {
 		content: &serde_json::value::RawValue,
 		room_version_rules: &RoomVersionRules,
 	) -> Result<StateMap<PduEvent>> {
-		let Ok(shortstatehash) = self.get_room_shortstatehash(room_id).await else {
-			return Ok(HashMap::new());
+		let shortstatehash = match self.get_room_shortstatehash(room_id).await {
+			| Ok(s) => s,
+			| Err(_) => return Ok(HashMap::new()),
 		};
 
 		let auth_types = state_res::auth_types_for_event(

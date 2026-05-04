@@ -261,8 +261,15 @@ pub async fn create_event(
 				.await
 			{
 				Some(pdu)
+			} else if let Ok(pdu) = self.first_pdu_in_room(&room_id).await {
+				// Fallback: look for the first PDU ever sent to this room (bootstrap)
+				if pdu.kind().to_string() == "m.room.create" {
+					Some(pdu.into_pdu())
+				} else {
+					None
+				}
 			} else {
-				// Fallback: look in auth_events map (bootstrap)
+				// Final fallback: look in auth_events map
 				auth_events
 					.get(&(StateEventType::RoomCreate, String::new().into()))
 					.map(ToOwned::to_owned)
@@ -271,11 +278,19 @@ pub async fn create_event(
 	};
 	let create_event = match &pdu.kind {
 		| TimelineEventType::RoomCreate => &pdu,
-		| _ => create_pdu.as_ref().map(PduEvent::as_pdu).ok_or_else(|| {
-			err!(Request(Forbidden(warn!("Failed to fetch room create event"))))
-		})?,
+		| _ => {
+			if let Some(ref create_pdu) = create_pdu {
+				create_pdu.as_pdu()
+			} else if room_version_is_v2 {
+				// FOR V12: If we don't have a create event in state yet, we use a FAKE one
+				// because m.room.create is NOT an auth event for V12 sub-events anyway.
+				// This allows the join event to pass build_and_append_pdu.
+				&pdu
+			} else {
+				return Err!(Request(Forbidden(warn!("Failed to fetch room create event"))));
+			}
+		},
 	};
-
 	let auth_check = state_res::event_auth::auth_check(
 		&room_version_rules,
 		&pdu,

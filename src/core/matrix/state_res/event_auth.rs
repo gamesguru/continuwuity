@@ -317,8 +317,12 @@ where
 
 	let expected_room_id = room_create_event.room_id_or_hash();
 
-	if !room_version_is_v2 && incoming_event.room_id_or_hash() != expected_room_id {
+	if !room_version_is_v2
+		&& expected_room_id.as_deref() != Some(ruma::room_id!("!thiswillbefilledinlater"))
+		&& incoming_event.room_id_or_hash() != expected_room_id
+	{
 		warn!(
+			event_id = %incoming_event.event_id(),
 			expected = ?expected_room_id,
 			received = ?incoming_event.room_id_or_hash(),
 			"room_id of incoming event does not match that of the m.room.create event",
@@ -894,7 +898,8 @@ where
 			let membership_allows_join = matches!(
 				target_user_current_membership,
 				MembershipState::Join | MembershipState::Invite
-			);
+			) || sender_creator;
+
 			if sender != target_user {
 				// If the sender does not match state_key, reject.
 				warn!(
