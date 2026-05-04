@@ -20,10 +20,10 @@ CREATE TABLE IF NOT EXISTS runs (
     features text,
     profile text,
     binary_sha256 text,
-    room_version text,
     n_pass integer DEFAULT 0,
     n_skip integer DEFAULT 0,
-    n_fail integer DEFAULT 0
+    n_fail integer DEFAULT 0,
+    room_version text
 );
 
 -- Unique index to prevent duplicate machine reports
@@ -37,11 +37,6 @@ CREATE TABLE IF NOT EXISTS run_details (
     test_name text NOT NULL,
     status text NOT NULL
 );
-
--- Optimization: Disable sequence caching to prevent jumps of 100 in IDs
--- (Standard Postgres behavior for serial/identity columns in some environments)
-ALTER SEQUENCE IF EXISTS runs_id_seq CACHE 1;
-ALTER SEQUENCE IF EXISTS run_details_id_seq CACHE 1;
 
 -- Ensure we don't log the same test twice for the same run
 CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test
@@ -67,7 +62,6 @@ SELECT
     r.room_version,
     r.features,
     r.profile,
-    r.room_version,
     r.n_pass,
     r.n_fail,
     r.n_skip,
@@ -92,11 +86,11 @@ CROSS JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT
         COUNT(*) as run_total,
-        COUNT(*) FILTER (WHERE rd.status = 'pass' AND (dbr.default_baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'pass'))) as new_pass,
-        COUNT(*) FILTER (WHERE rd.status = 'skip' AND (dbr.default_baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'skip'))) as new_skip,
-        COUNT(*) FILTER (WHERE rd.status = 'fail' AND (dbr.default_baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'fail'))) as new_fail,
-        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND (dbr.default_baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'fail'))) as new_failures_list,
-        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND (dbr.default_baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'pass'))) as new_passes_list
+        COUNT(*) FILTER (WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass') as new_pass,
+        COUNT(*) FILTER (WHERE rd.status = 'skip' AND mb.status IS NOT NULL AND mb.status != 'skip') as new_skip,
+        COUNT(*) FILTER (WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail') as new_fail,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail') as new_failures_list,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass') as new_passes_list
     FROM run_details rd
     LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = dbr.default_baseline_run_id
     WHERE rd.run_id = r.id
