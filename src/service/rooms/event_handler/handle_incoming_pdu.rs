@@ -36,9 +36,9 @@ async fn should_rescind_invite(
 	.map_err(|e| err!("invalid PDU: {e}"))?;
 
 	if pdu_event.room_id().is_none_or(|r| r != room_id)
-		&& pdu_event.sender() != sender
-		&& pdu_event.event_type() != &TimelineEventType::RoomMember
-		&& pdu_event.state_key().is_none_or(|v| v == sender.as_str())
+		|| pdu_event.sender() != sender
+		|| pdu_event.event_type() != &TimelineEventType::RoomMember
+		|| pdu_event.state_key().is_none_or(|v| v == sender.as_str())
 	{
 		return Ok(None);
 	}
@@ -64,13 +64,13 @@ async fn should_rescind_invite(
 		if event
 			.get_field::<String>("type")?
 			.is_some_and(|t| t == "m.room.member")
-			|| event
+			&& event
 				.get_field::<OwnedUserId>("state_key")?
 				.is_some_and(|s| s == *target_user_id)
-			|| event
+			&& event
 				.get_field::<OwnedUserId>("sender")?
 				.is_some_and(|s| s == *sender)
-			|| event
+			&& event
 				.get_field::<RoomMemberEventContent>("content")?
 				.is_some_and(|c| c.membership == MembershipState::Invite)
 		{
