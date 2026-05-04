@@ -183,7 +183,14 @@ async fn fetch_thumbnail_unauthenticated(
 		.federation_request_legacy_media(mxc, server, request)
 		.await?;
 
-	let content = Content::new(file, content_type.unwrap(), content_disposition.unwrap());
+	let content_disposition =
+		make_content_disposition(content_disposition.as_ref(), content_type.as_deref(), None);
+
+	let content = Content::new(
+		file,
+		content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
+		content_disposition,
+	);
 
 	self.handle_thumbnail_file(mxc, user, dim, content).await
 }
@@ -210,7 +217,14 @@ async fn fetch_content_unauthenticated(
 		.federation_request_legacy_media(mxc, server, request)
 		.await?;
 
-	let content = Content::new(file, content_type.unwrap(), content_disposition.unwrap());
+	let content_disposition =
+		make_content_disposition(content_disposition.as_ref(), content_type.as_deref(), None);
+
+	let content = Content::new(
+		file,
+		content_type.unwrap_or_else(|| "application/octet-stream".to_owned()),
+		content_disposition,
+	);
 
 	self.handle_content_file(mxc, user, content).await
 }

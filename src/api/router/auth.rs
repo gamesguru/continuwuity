@@ -47,8 +47,8 @@ pub(super) trait CheckAuth: AuthScheme {
 			let route = TypeId::of::<R>();
 
 			let output = Self::extract_authentication(incoming_request).map_err(|err| {
-				err!(Request(Unauthorized(warn!(
-					"Failed to extract authorization: {}",
+				err!(Request(MissingToken(warn!(
+					"Missing or invalid access token: {}",
 					err.into()
 				))))
 			})?;

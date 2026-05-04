@@ -565,6 +565,23 @@ fn default_power_levels_content(
 		}))
 		.unwrap();
 
+	// Ensure spec-required default power level keys are always present in the
+	// serialized output. Ruma 0.15+ may omit these when they equal their defaults.
+	let defaults = power_levels_content.as_object_mut().unwrap();
+	defaults.entry("ban").or_insert(serde_json::json!(50));
+	defaults.entry("kick").or_insert(serde_json::json!(50));
+	defaults.entry("invite").or_insert(serde_json::json!(0));
+	defaults.entry("redact").or_insert(serde_json::json!(50));
+	defaults
+		.entry("state_default")
+		.or_insert(serde_json::json!(50));
+	defaults
+		.entry("events_default")
+		.or_insert(serde_json::json!(0));
+	defaults
+		.entry("users_default")
+		.or_insert(serde_json::json!(0));
+
 	// secure proper defaults of sensitive/dangerous permissions that moderators
 	// (power level 50) should not have easy access to
 	power_levels_content["events"]["m.room.power_levels"] =
