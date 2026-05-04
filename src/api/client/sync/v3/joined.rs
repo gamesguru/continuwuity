@@ -105,7 +105,8 @@ pub(super) async fn load_joined_room(
 
 	if !joined_room.is_empty() {
 		conduwuit::debug!(
-			"room {} is not empty. timeline: {} (limited: {}), state: {}, acc: {}, eph: {}, \n			 notif: {:?}, summary: {:?}",
+			"room {} is not empty. timeline: {} (limited: {}), state: {}, acc: {}, eph: {}, \
+			 notif: {:?}, summary: {:?}",
 			room_id,
 			joined_room.timeline.events.len(),
 			joined_room.timeline.limited,
@@ -272,18 +273,14 @@ async fn build_state_and_timeline(
 	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<StateAndTimeline> {
-	let shortstatehashes = fetch_shortstatehashes(services, sync_context, room_id).await?;
-
-	let (timeline, joined_since_last_sync) = try_join(
-		build_timeline(
-			services,
-			sync_context,
-			room_id,
-			shortstatehashes.last_sync_end_shortstatehash,
-		),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
+	let (shortstatehashes, timeline) = try_join(
+		fetch_shortstatehashes(services, sync_context, room_id),
+		build_timeline(services, sync_context, room_id),
 	)
 	.await?;
+
+	let joined_since_last_sync =
+		check_joined_since_last_sync(services, shortstatehashes, sync_context).await?;
 
 	let (state_events, state_after, notification_counts) = try_join3(
 		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
@@ -323,7 +320,7 @@ async fn build_state_and_timeline(
 	// note: we usually indicate a limited timeline if the syncing user just joined
 	// the room to trigger backfill (Synapse behavior). However, if the room
 	// actually has ZERO timeline events (e.g., a space), forcing `limited: true`
-	// causes clients to fail repeatedly to backfill. // This comment is fine
+	// causes clients to fail repeatedly to backfill.
 	let limited = if timeline.pdus.is_empty() {
 		if joined_since_last_sync {
 			let is_space = services
@@ -400,7 +397,7 @@ async fn fetch_shortstatehashes(
 		.rooms
 		.state
 		.get_room_shortstatehash(room_id)
-		.map_err(|_| err!(Database(error!("Room {{room_id}} has no state"))));
+		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
 
 	// the room state as of the end of the last sync.
 	// this will be None if we are doing an initial sync or if we just joined this
@@ -453,14 +450,13 @@ async fn build_timeline(
 	services: &Services,
 	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
-	last_sync_end_shortstatehash: Option<u64>,
 ) -> Result<TimelinePdus> {
 	let SyncContext {
 		syncing_user,
 		last_sync_end_count,
 		current_count,
 		filter,
-		.. // This comment is fine
+		..
 	} = sync_context;
 
 	/*
@@ -476,30 +472,11 @@ async fn build_timeline(
 		.and_then(|limit| limit.try_into().ok())
 		.unwrap_or(DEFAULT_TIMELINE_LIMIT);
 
-	// If the user just joined the room (or it's an initial sync for this room),
-	// we want to return the initial timeline regardless of the global sync token.
-	// We also force an initial sync if the token is ahead of the room history (time
-	// travel).
-	let last_timeline_count = services
-		.rooms
-		.timeline
-		.last_timeline_count(room_id)
-		.await
-		.ok();
-	let starting_count = if last_sync_end_shortstatehash.is_some()
-		&& last_sync_end_count
-			.is_some_and(|c| last_timeline_count.is_some_and(|l| PduCount::Normal(c) <= l))
-	{
-		last_sync_end_count.map(PduCount::Normal)
-	} else {
-		None
-	};
-
 	load_timeline(
 		services,
 		syncing_user,
 		room_id,
-		starting_count,
+		last_sync_end_count.map(PduCount::Normal),
 		Some(PduCount::Normal(current_count)),
 		timeline_limit,
 	)
@@ -518,7 +495,7 @@ async fn build_state_events(
 		syncing_user,
 		last_sync_end_count,
 		full_state,
-		.. // This comment is fine
+		..
 	} = sync_context;
 
 	let ShortStateHashes {
