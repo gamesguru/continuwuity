@@ -522,7 +522,7 @@
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoin/Join_should_fail_with_mangled_join_rules","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","commit":"ec1bb66953d0ad58346e3c0fef1226e58a23c6f0"}
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoin/Join_should_succeed_when_invited","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","commit":"ec1bb66953d0ad58346e3c0fef1226e58a23c6f0"}
 {"Action":"fail","Test":"TestRestrictedRoomsRemoteJoin/Join_should_succeed_when_joined_to_allowed_room","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","commit":"ec1bb66953d0ad58346e3c0fef1226e58a23c6f0"}
-{"Action":"fail","Test":"TestRestrictedRoomsRemoteJoinFailOver","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","commit":"ec1bb66953d0ad58346e3c0fef1226e58a23c6f0"}
+{"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinFailOver","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","commit":"ec1bb66953d0ad58346e3c0fef1226e58a23c6f0"}
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinFailOverInMSC3787Room","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","commit":"ec1bb66953d0ad58346e3c0fef1226e58a23c6f0"}
 {"Action":"fail","Test":"TestRestrictedRoomsRemoteJoinInMSC3787Room","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","commit":"ec1bb66953d0ad58346e3c0fef1226e58a23c6f0"}
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinInMSC3787Room/Join_should_fail_initially","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","commit":"ec1bb66953d0ad58346e3c0fef1226e58a23c6f0"}
