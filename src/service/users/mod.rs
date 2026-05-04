@@ -1270,21 +1270,20 @@ impl Service {
 	{
 		type Key<'a> = (&'a UserId, &'a DeviceId, u64);
 
-		if let Some(until) = until.into() {
-			let from = (user_id, device_id, 0);
+		let until = until.into().unwrap_or(u64::MAX);
+		let from = (user_id, device_id, 0);
 
-			self.db
-				.todeviceid_events
-				.stream_from(&from)
-				.ignore_err()
-				.ready_take_while(move |((user_id_, device_id_, count), _): &(Key<'_>, _)| {
-					user_id == *user_id_ && device_id == *device_id_ && *count <= until
-				})
-				.ready_for_each(|(key, _): (Key<'_>, serde_json::Value)| {
-					self.db.todeviceid_events.del(key);
-				})
-				.await;
-		}
+		self.db
+			.todeviceid_events
+			.stream_from(&from)
+			.ignore_err()
+			.ready_take_while(move |((user_id_, device_id_, count), _): &(Key<'_>, _)| {
+				user_id == *user_id_ && device_id == *device_id_ && *count <= until
+			})
+			.ready_for_each(|(key, _): (Key<'_>, serde_json::Value)| {
+				self.db.todeviceid_events.del(key);
+			})
+			.await;
 	}
 
 	/// Updates device metadata and increments the device list version.
