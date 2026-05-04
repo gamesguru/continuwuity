@@ -442,7 +442,7 @@ impl Service {
 		&self,
 		dest: &Destination,
 		statuses: &mut CurTransactionStatus,
-		_has_pdu: bool,
+		has_pdu: bool,
 	) -> Result<(bool, bool)> {
 		let (mut allow, mut retry) = (true, false);
 		statuses
@@ -466,7 +466,7 @@ impl Service {
 				},
 				TransactionStatus::Cooldown(time) => {
 					let now = Instant::now();
-					if now < *time {
+					if !has_pdu && now < *time {
 						debug!(
 							dest = ?dest,
 							remaining = ?time.saturating_duration_since(now),
