@@ -32,7 +32,9 @@ pub(crate) async fn kick_user_route(
 				MembershipState::Invite | MembershipState::Join | MembershipState::Knock
 			)
 		}) {
-		return Err!(Request(Forbidden("You cannot kick users who are not in the room.")));
+		// Match Synapse's behaviour: return 200 without state changes for
+		// users who are already not in the room, instead of erroring.
+		return Ok(kick_user::v3::Response::new());
 	}
 
 	services
