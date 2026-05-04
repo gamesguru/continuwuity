@@ -336,21 +336,10 @@ where
 		.auth_events()
 		.any(|id| id == room_create_event.event_id());
 
-	if room_version_is_v2 && claims_create_event {
-		/*
-		warn!(
-			event_id = %incoming_event.event_id(),
-			create_event_id = %room_create_event.event_id(),
-			auth_events = ?incoming_event.auth_events().collect::<Vec<_>>(),
-			room_version_is_v2 = ?room_version_is_v2,
-			room_id_format = ?room_version.room_id_format,
-			"event incorrectly references m.room.create event in auth events"
-		);
-		return Ok(false);
-		*/
-	} else if !room_version_is_v2
+	if !room_version_is_v2
 		&& !claims_create_event
 		&& incoming_event.event_type().to_string() != "m.room.create"
+		&& expected_room_id.as_deref() != Some(ruma::room_id!("!thiswillbefilledinlater"))
 	{
 		warn!(
 			event_id = %incoming_event.event_id(),
@@ -364,7 +353,7 @@ where
 	}
 
 	if let Some(ref pe) = power_levels_event {
-		if pe.room_id_or_hash() != expected_room_id {
+		if !room_version_is_v2 && pe.room_id_or_hash() != expected_room_id {
 			warn!(
 				expected = ?expected_room_id,
 				received = ?pe.room_id_or_hash(),
