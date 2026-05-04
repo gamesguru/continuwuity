@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use conduwuit::{
-	Err, Event, PduCount, PduEvent, Result, at, err, info,
+	Err, Event, PduCount, PduEvent, Result, at, err,
 	result::NotFound,
 	utils::{self, stream::TryReadyExt},
 };
@@ -337,20 +337,13 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		info!(%room_id, %until, "Starting reverse timeline scan");
-		self.count_to_id(room_id, until, Direction::Backward)
+		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.pduid_pdu
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(move |kv| {
-						let result = Self::parse_json_slice(None, kv);
-						if let Ok((ref count, ref pdu)) = result {
-							info!(%room_id, %count, event_id = %pdu.event_id, "Returning PDU from reverse scan");
-						}
-						result
-					})
+					.ready_and_then(move |kv| Self::parse_json_slice(None, kv))
 			})
 			.try_flatten_stream()
 	}
@@ -360,20 +353,13 @@ impl Data {
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		info!(%room_id, %from, "Starting forward timeline scan");
 		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.pduid_pdu
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(move |kv| {
-						let result = Self::parse_json_slice(None, kv);
-						if let Ok((ref count, ref pdu)) = result {
-							info!(%room_id, %count, event_id = %pdu.event_id, "Returning PDU from forward scan");
-						}
-						result
-					})
+					.ready_and_then(move |kv| Self::parse_json_slice(None, kv))
 			})
 			.try_flatten_stream()
 	}
