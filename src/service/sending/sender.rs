@@ -186,13 +186,6 @@ impl Service {
 			"Federation transaction failed, backing off"
 		);
 
-		statuses.insert(
-			dest.clone(),
-			TransactionStatus::Cooldown(
-				Instant::now().checked_add(delay).expect("Instant overflow"),
-			),
-		);
-
 		let sender = self
 			.channels
 			.get(self.shard_id(&dest))
