@@ -848,13 +848,17 @@ pub(super) async fn rescue_room(
 		return self.write_str("No outliers found in this room.").await;
 	}
 
-	// Build the graph for topological sort
+	// Build the graph for topological sort.
+	// Only include prev_events that exist in our outlier set to avoid events
+	// being dropped from the sort output due to unresolvable parents.
 	let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
 		HashMap::with_capacity(outliers.len());
 	for (event_id, (pdu, _)) in &outliers {
 		let mut parents = HashSet::new();
 		for prev_id in pdu.prev_events() {
-			parents.insert(prev_id.to_owned());
+			if outliers.contains_key(prev_id) {
+				parents.insert(prev_id.to_owned());
+			}
 		}
 		graph.insert(event_id.clone(), parents);
 	}

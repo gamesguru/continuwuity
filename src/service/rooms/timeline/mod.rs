@@ -218,13 +218,19 @@ impl Service {
 			return Ok(0);
 		}
 
-		// Build the DAG graph for topological sort
+		// Build the DAG graph for topological sort.
+		// IMPORTANT: Only include prev_events that are actually in our entries map.
+		// Events referencing missing prev_events (outliers, federation gaps) would
+		// otherwise get stuck with non-zero outdegree and be silently dropped from
+		// the sort output — then permanently deleted from the timeline.
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
 			HashMap::with_capacity(entries.len());
 		for (event_id, (pdu, _)) in &entries {
 			let mut parents = HashSet::new();
 			for prev_id in pdu.prev_events() {
-				parents.insert(prev_id.to_owned());
+				if entries.contains_key(prev_id) {
+					parents.insert(prev_id.to_owned());
+				}
 			}
 			graph.insert(event_id.clone(), parents);
 		}
