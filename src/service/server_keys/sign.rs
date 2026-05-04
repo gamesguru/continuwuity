@@ -17,15 +17,8 @@ pub fn hash_and_sign_event(
 ) -> Result {
 	use ruma::signatures::hash_and_sign_event;
 
-	let is_create_event = matches!(
-		object.get("type"),
-		Some(ruma::CanonicalJsonValue::String(event_type)) if event_type == "m.room.create"
-	);
-
-	// MSC4291: Omit room_id for m.room.create in v12+
-	if room_version_rules.room_id_format == ruma::room_version_rules::RoomIdFormatVersion::V2
-		&& is_create_event
-	{
+	// MSC4291: room_id is not part of any event's canonical JSON in v12+
+	if room_version_rules.room_id_format == ruma::room_version_rules::RoomIdFormatVersion::V2 {
 		object.remove("room_id");
 	}
 

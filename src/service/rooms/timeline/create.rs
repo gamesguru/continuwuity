@@ -197,11 +197,7 @@ pub async fn create_event(
 
 	let pdu = PduEvent {
 		event_id: ruma::event_id!("$thiswillbefilledinlater").into(),
-		room_id: if room_version_is_v2 {
-			None
-		} else {
-			room_id.map(ToOwned::to_owned)
-		},
+		room_id: room_id.map(ToOwned::to_owned),
 		sender: sender.to_owned(),
 		origin: None,
 		origin_server_ts: timestamp.map_or_else(
