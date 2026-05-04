@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt::Write, sync::Arc};
 use async_trait::async_trait;
 use conduwuit::debug;
 use conduwuit_core::{
-	Event, PduEvent, Result, err,
+	Event, PduEvent, Result,
 	result::FlatOk,
 	state_res::{self, StateMap},
 	utils::{
@@ -423,9 +423,8 @@ impl Service {
 		content: &serde_json::value::RawValue,
 		room_version_rules: &RoomVersionRules,
 	) -> Result<StateMap<PduEvent>> {
-		let shortstatehash = match self.get_room_shortstatehash(room_id).await {
-			| Ok(s) => s,
-			| Err(_) => return Ok(HashMap::new()),
+		let Ok(shortstatehash) = self.get_room_shortstatehash(room_id).await else {
+			return Ok(HashMap::new());
 		};
 
 		let auth_types = state_res::auth_types_for_event(

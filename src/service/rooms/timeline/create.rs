@@ -59,7 +59,7 @@ pub fn pdu_fits(owned_obj: &mut CanonicalJsonObject) -> bool {
 
 /// Pulls the room version ID out of the given (create) event.
 fn room_version_from_event(
-	_room_id: OwnedRoomId,
+	room_id: OwnedRoomId,
 	event_type: &TimelineEventType,
 	content: &RawValue,
 ) -> Result<RoomVersionId> {
@@ -74,7 +74,7 @@ fn room_version_from_event(
 		);
 		Err(Error::InconsistentRoomState(
 			"non-create event for room of unknown version",
-			_room_id,
+			room_id,
 		))
 	}
 }
