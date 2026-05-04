@@ -723,6 +723,13 @@ async fn join_room_by_id_helper_remote(
 		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
 		.await?;
 
+	debug!("Updating joined counts for new room");
+	services
+		.rooms
+		.state_cache
+		.update_joined_count(room_id)
+		.await;
+
 	// We append to state before appending the pdu, so we don't have a moment in
 	// time with the pdu without it's state. This is okay because append_pdu can't
 	// fail.
@@ -731,8 +738,6 @@ async fn join_room_by_id_helper_remote(
 		.state
 		.append_to_state(&parsed_join_pdu, room_id)
 		.await?;
-
-	let _cork = services.db.cork();
 
 	info!("Appending new room join event");
 	services
@@ -754,13 +759,6 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_join, &state_lock);
-
-	debug!("Updating joined counts for new room");
-	services
-		.rooms
-		.state_cache
-		.update_joined_count(room_id)
-		.await;
 
 	Ok(())
 }

@@ -24,8 +24,8 @@ use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use http::StatusCode;
 use itertools::Itertools;
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, MilliSecondsSinceUnixEpoch, OwnedEventId,
-	OwnedRoomId, OwnedUserId, RoomId, ServerName, UInt, UserId,
+	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedUserId,
+	RoomId, ServerName, UserId,
 	api::{
 		client::error::{ErrorKind, ErrorKind::LimitExceeded},
 		federation::transactions::{
@@ -310,27 +310,19 @@ async fn build_local_dag(
 			.as_array()
 			.expect("prev_events must be an array")
 			.iter()
-			.filter_map(|v| {
-				let event_id =
-					OwnedEventId::parse(v.as_str().expect("prev_events values must be strings"))
-						.expect("prev_events must be valid event IDs");
-				pdu_map.contains_key(&event_id).then_some(event_id)
+			.map(|v| {
+				OwnedEventId::parse(v.as_str().expect("prev_events values must be strings"))
+					.expect("prev_events must be valid event IDs")
 			})
 			.collect::<HashSet<OwnedEventId>>();
 
 		dag.insert(event_id.clone(), prev_events);
 	}
-	lexicographical_topological_sort(&dag, &|event_id: OwnedEventId| async move {
-		let value = pdu_map.get(&event_id).expect("event_id must be in pdu_map");
-
-		let ts = value
-			.get("origin_server_ts")
-			.and_then(CanonicalJsonValue::as_integer)
-			.and_then(|i| u64::try_from(i64::from(i)).ok())
-			.and_then(|u| UInt::try_from(u).ok())
-			.map_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)), MilliSecondsSinceUnixEpoch);
-
-		Ok((int!(0), ts))
+	lexicographical_topological_sort(&dag, &|_| async {
+		// Note: we don't bother fetching power levels because that would massively slow
+		// this function down. This is a best-effort attempt to order events correctly
+		// for processing, however ultimately that should be the sender's job.
+		Ok((int!(0), MilliSecondsSinceUnixEpoch(uint!(0))))
 	})
 	.await
 	.map_err(|e| err!("failed to resolve local graph: {e}"))
