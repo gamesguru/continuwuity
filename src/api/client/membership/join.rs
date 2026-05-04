@@ -309,11 +309,26 @@ pub async fn join_room_by_id_helper(
 		return Err!(Request(Forbidden("You are not allowed to join this room.")));
 	}
 
-	let server_in_room = services
+	let mut server_in_room = services
 		.rooms
 		.state_cache
 		.server_in_room(services.globals.server_name(), room_id)
 		.await;
+
+	// If we think we're in the room but it has no state, the room is in a
+	// zombie state from a previous failed join. Force the remote path so
+	// state gets bootstrapped properly.
+	if server_in_room
+		&& services
+			.rooms
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.is_err()
+	{
+		warn!("Room {room_id} has no state despite server_in_room=true, forcing remote join");
+		server_in_room = false;
+	}
 
 	// Only check our known membership if we're already in the room.
 	// See: https://forgejo.ellis.link/continuwuation/continuwuity/issues/855
@@ -508,7 +523,7 @@ async fn join_room_by_id_helper_remote(
 	{
 		| Ok(response) => response,
 		| Err(e) => {
-			error!("send_join failed: {e}");
+			error!("send_join failed: {e:?}");
 			return Err(e);
 		},
 	};

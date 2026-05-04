@@ -592,6 +592,7 @@ pub(super) async fn list_outliers(
 				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
 				ready(sender_match)
 			})
+			.take(limit.saturating_add(1))
 			.collect()
 			.await
 	} else {
@@ -603,6 +604,7 @@ pub(super) async fn list_outliers(
 				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
 				ready(sender_match)
 			})
+			.take(limit.saturating_add(1))
 			.collect()
 			.await
 	};

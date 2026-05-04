@@ -716,9 +716,30 @@ pub(super) async fn force_leave_room(
 		return Err!("{user_id} is not joined in the room");
 	}
 
-	leave_room(self.services, &user_id, &room_id, None)
+	match leave_room(self.services, &user_id, &room_id, None)
 		.boxed()
-		.await?;
+		.await
+	{
+		| Ok(()) => {},
+		| Err(e) => {
+			// leave_room failed (likely zombie room with no state from a failed join).
+			// Fall back to directly clearing the membership cache.
+			warn!(
+				"leave_room failed for {user_id} in {room_id}: {e}. Falling back to direct \
+				 membership removal."
+			);
+			self.services
+				.rooms
+				.state_cache
+				.mark_as_left(&user_id, &room_id, None)
+				.await;
+			self.services
+				.rooms
+				.state_cache
+				.update_joined_count(&room_id)
+				.await;
+		},
+	}
 
 	self.write_str(&format!("{user_id} has left {room_id}.",))
 		.await
