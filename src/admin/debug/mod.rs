@@ -157,6 +157,9 @@ pub enum DebugCommand {
 		/// If set, only scans for gaps without making changes.
 		#[arg(long)]
 		dry_run: bool,
+		/// If set, purges stuck outliers after healing.
+		#[arg(long)]
+		purge_after: bool,
 	},
 
 	/// Reorder the timeline for a room by origin_server_ts.

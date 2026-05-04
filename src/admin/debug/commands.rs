@@ -524,11 +524,7 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(
-	&self,
-	event_id: OwnedEventId,
-	#[allow(unused_variables)] force: bool,
-) -> Result {
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -558,11 +554,13 @@ pub(super) async fn rescue_pdu(
 		.clone()
 		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
-	// Un-soft-fail the event so we can attempt to rescue it
-	self.services
-		.rooms
-		.pdu_metadata
-		.unmark_event_soft_failed(&event_id);
+	// Only un-soft-fail when --force is passed
+	if force {
+		self.services
+			.rooms
+			.pdu_metadata
+			.unmark_event_soft_failed(&event_id);
+	}
 
 	Box::pin(
 		self.services
@@ -744,8 +742,8 @@ pub(super) async fn purge_outliers(
 pub(super) async fn rescue_room(
 	&self,
 	room_id: OwnedRoomId,
-	#[allow(unused_variables)] force: bool,
-	#[allow(unused_variables)] nuclear: bool,
+	force: bool,
+	nuclear: bool,
 	all: bool,
 	timeline_limit: Option<usize>,
 ) -> Result {
@@ -895,20 +893,66 @@ pub(super) async fn rescue_room(
 	let create_event =
 		create_event.ok_or_else(|| err!("Failed to find create event for room."))?;
 
+	// Build a map of current timeline state events for supersession checks.
+	// For each (event_type, state_key) we track (origin_server_ts, depth, event_id)
+	// to determine which event is "newer" using the same 3 tiebreakers as
+	// state resolution: origin_server_ts, then depth, then event_id.
+	let mut current_state: HashMap<(String, String), (ruma::UInt, ruma::UInt, OwnedEventId)> =
+		HashMap::new();
+	if let Ok(state_hash) = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(&room_id)
+		.await
+	{
+		let state_pdus = self.services.rooms.state_accessor.state_full(state_hash);
+		pin_mut!(state_pdus);
+		while let Some(((event_type, state_key), event)) = state_pdus.next().await {
+			let eid = event.event_id().to_owned();
+			// Fetch the full PduEvent for depth access
+			if let Ok(full_pdu) = self.services.rooms.timeline.get_pdu(&eid).await {
+				current_state.insert(
+					(event_type.to_string(), state_key.to_string()),
+					(full_pdu.origin_server_ts, full_pdu.depth, eid),
+				);
+			}
+		}
+	}
+
 	let mut count = 0_usize;
+	let mut skipped = 0_usize;
 	for event_id in sorted {
 		let (pdu, pdu_json) = outliers.get(&event_id).expect("in sorted list");
+
+		// Skip state events that are superseded by a newer event already in the
+		// timeline for the same (event_type, state_key). Uses 3 tiebreakers:
+		// origin_server_ts, depth, event_id (matching state-res ordering).
+		if let Some(state_key) = &pdu.state_key {
+			let key = (pdu.kind.to_string(), state_key.to_string());
+			if let Some((curr_ts, curr_depth, curr_eid)) = current_state.get(&key) {
+				let dominated = (pdu.origin_server_ts, pdu.depth, &pdu.event_id)
+					< (*curr_ts, *curr_depth, curr_eid);
+				if dominated {
+					skipped = skipped.saturating_add(1);
+					continue;
+				}
+			}
+		}
 
 		let origin = pdu
 			.origin
 			.clone()
 			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
-		// Un-soft-fail the event so we can attempt to rescue it
-		self.services
-			.rooms
-			.pdu_metadata
-			.unmark_event_soft_failed(&event_id);
+		// Only un-soft-fail when --force is passed; otherwise previously
+		// rejected events stay rejected to prevent infinite rescue loops.
+		if force {
+			self.services
+				.rooms
+				.pdu_metadata
+				.unmark_event_soft_failed(&event_id);
+		}
 
 		if Box::pin(
 			self.services
@@ -926,6 +970,13 @@ pub(super) async fn rescue_room(
 		.is_ok()
 		{
 			count = count.saturating_add(1);
+			// Update current_state so subsequent events can compare against
+			// the just-rescued event
+			if let Some(state_key) = &pdu.state_key {
+				let key = (pdu.kind.to_string(), state_key.to_string());
+				current_state
+					.insert(key, (pdu.origin_server_ts, pdu.depth, pdu.event_id.clone()));
+			}
 		}
 
 		// Yield every 10 events to prevent blocking the executor too long
@@ -934,8 +985,12 @@ pub(super) async fn rescue_room(
 		}
 	}
 
-	self.write_str(&format!("Rescued {count} PDUs in room {room_id}."))
-		.await
+	let msg = if skipped > 0 {
+		format!("Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded).")
+	} else {
+		format!("Rescued {count} PDUs in room {room_id}.")
+	};
+	self.write_str(&msg).await
 }
 
 #[admin_command]
@@ -1726,14 +1781,16 @@ pub(super) async fn heal_room(
 	server: OwnedServerName,
 	nuclear: bool,
 	dry_run: bool,
+	purge_after: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
 	// Phase 1: Rescue existing local outliers first (no network)
+	// Only pass force=true when nuclear is set; otherwise respect auth checks
 	if !dry_run {
 		self.write_str(&format!("Phase 1: Rescuing local outliers in {room_id}..."))
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), true, nuclear, false, None)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
 	} else {
 		self.write_str(&format!("Phase 1: [dry-run] Would rescue local outliers in {room_id}"))
 			.await?;
@@ -1849,7 +1906,7 @@ pub(super) async fn heal_room(
 	if fetched > 0 {
 		self.write_str(&format!("Phase 3: Fetched {fetched} missing events, rescuing..."))
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), true, nuclear, false, None)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
 	} else {
 		self.write_str("Phase 3: No missing events found (DAG is complete locally).")
 			.await?;
@@ -1864,7 +1921,17 @@ pub(super) async fn heal_room(
 	// Phase 5: Resync state from the remote server
 	self.write_str("Phase 5: Resyncing room state from server...")
 		.await?;
-	Box::pin(self.force_set_room_state_from_server(room_id, server, None, nuclear)).await
+	Box::pin(self.force_set_room_state_from_server(room_id.clone(), server, None, nuclear))
+		.await?;
+
+	// Phase 6: Purge stuck outliers (events that now exist in both tables)
+	if purge_after {
+		self.write_str("Phase 6: Purging stuck outliers...").await?;
+		let room_alias = OwnedRoomOrAliasId::from(room_id);
+		Box::pin(self.purge_outliers(Some(room_alias), None, false)).await?;
+	}
+
+	Ok(())
 }
 
 #[admin_command]
