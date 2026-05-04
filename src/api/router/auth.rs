@@ -1,4 +1,7 @@
-use std::any::{Any, TypeId};
+use std::{
+	any::{Any, TypeId},
+	future::Future,
+};
 
 use conduwuit::{Err, Result, err};
 use ruma::{
@@ -440,6 +443,10 @@ impl CheckAuth for NoAccessToken {
 		_query: AuthQueryParams,
 		_route: TypeId,
 	) -> impl Future<Output = Result<Auth>> + Send {
-		async move { panic!("NoAccessToken::verify should not be called, use authenticate instead") }
+		async move {
+			Err!(Request(Unknown(warn!(
+				"NoAccessToken::verify should not be called, use authenticate instead"
+			))))
+		}
 	}
 }

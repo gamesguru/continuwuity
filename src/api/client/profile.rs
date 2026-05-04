@@ -67,7 +67,11 @@ pub(crate) async fn set_displayname_route(
 	}
 
 	if body.user_id != *sender_user
-		&& !(body.appservice_info.is_some() || services.admin.user_is_admin(sender_user).await)
+		&& !(body
+			.appservice_info
+			.as_ref()
+			.is_some_and(|info| info.is_user_match(&body.user_id))
+			|| services.admin.user_is_admin(sender_user).await)
 	{
 		return Err!(Request(Forbidden("You may not change other users' profile data.")));
 	}
@@ -76,13 +80,18 @@ pub(crate) async fn set_displayname_route(
 		return Err!(Request(InvalidParam("You may not change a remote user's profile data.")));
 	}
 
-	let value = ProfileFieldValue::new(
-		ProfileFieldName::DisplayName.as_str(),
-		body.displayname.clone().map_or(Value::Null, Value::String),
-	)
-	.expect("displayname field value should be valid");
+	let change = match body.displayname.clone() {
+		| Some(displayname) => ProfileFieldChange::Set(
+			ProfileFieldValue::new(
+				ProfileFieldName::DisplayName.as_str(),
+				Value::String(displayname),
+			)
+			.expect("displayname field value should be valid"),
+		),
+		| None => ProfileFieldChange::Delete(ProfileFieldName::DisplayName),
+	};
 
-	set_profile_field(&services, &body.user_id, ProfileFieldChange::Set(value)).await?;
+	set_profile_field(&services, &body.user_id, change).await?;
 
 	Ok(set_display_name::v3::Response::new())
 }
@@ -114,7 +123,11 @@ pub(crate) async fn set_avatar_url_route(
 	}
 
 	if body.user_id != *sender_user
-		&& !(body.appservice_info.is_some() || services.admin.user_is_admin(sender_user).await)
+		&& !(body
+			.appservice_info
+			.as_ref()
+			.is_some_and(|info| info.is_user_match(&body.user_id))
+			|| services.admin.user_is_admin(sender_user).await)
 	{
 		return Err!(Request(Forbidden("You may not change other users' profile data.")));
 	}
@@ -123,16 +136,18 @@ pub(crate) async fn set_avatar_url_route(
 		return Err!(Request(InvalidParam("You may not change a remote user's profile data.")));
 	}
 
-	let value = ProfileFieldValue::new(
-		ProfileFieldName::AvatarUrl.as_str(),
-		body.avatar_url
-			.as_ref()
-			.map(ToString::to_string)
-			.map_or(Value::Null, Value::String),
-	)
-	.expect("avatar_url field value should be valid");
+	let change = match body.avatar_url.clone() {
+		| Some(avatar_url) => ProfileFieldChange::Set(
+			ProfileFieldValue::new(
+				ProfileFieldName::AvatarUrl.as_str(),
+				Value::String(avatar_url.to_string()),
+			)
+			.expect("avatar_url field value should be valid"),
+		),
+		| None => ProfileFieldChange::Delete(ProfileFieldName::AvatarUrl),
+	};
 
-	set_profile_field(&services, &body.user_id, ProfileFieldChange::Set(value)).await?;
+	set_profile_field(&services, &body.user_id, change).await?;
 
 	Ok(set_avatar_url::v3::Response::new())
 }
@@ -156,7 +171,11 @@ pub(crate) async fn set_profile_field_route(
 	}
 
 	if body.user_id != *sender_user
-		&& !(body.appservice_info.is_some() || services.admin.user_is_admin(sender_user).await)
+		&& !(body
+			.appservice_info
+			.as_ref()
+			.is_some_and(|info| info.is_user_match(&body.user_id))
+			|| services.admin.user_is_admin(sender_user).await)
 	{
 		return Err!(Request(Forbidden("You may not change other users' profile data.")));
 	}
@@ -181,7 +200,11 @@ pub(crate) async fn delete_profile_field_route(
 	}
 
 	if body.user_id != *sender_user
-		&& !(body.appservice_info.is_some() || services.admin.user_is_admin(sender_user).await)
+		&& !(body
+			.appservice_info
+			.as_ref()
+			.is_some_and(|info| info.is_user_match(&body.user_id))
+			|| services.admin.user_is_admin(sender_user).await)
 	{
 		return Err!(Request(Forbidden("You may not change other users' profile data.")));
 	}

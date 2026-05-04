@@ -363,7 +363,11 @@ pub(crate) async fn build_sync_events(
 			// problems with some clients and Complement's MustSyncUntil which expect
 			// the invite to persist in the sync response until it's accepted or
 			// rejected.
-			if last_sync_end_count < invite_count || last_sync_end_count.is_none() || full_state {
+			if last_sync_end_count < invite_count
+				|| last_sync_end_count.is_none()
+				|| full_state
+				|| invite_count.is_some()
+			{
 				let invited_room = assign!(InvitedRoom::new(), {
 					invite_state: InviteState::from(invite_state),
 				});
@@ -497,23 +501,23 @@ pub(crate) async fn build_sync_events(
 		for (room_id, state_after) in joined_state_after {
 			if let Some(room) = join.get_mut(room_id.as_str()) {
 				let state_after_obj = serde_json::json!({ "events": state_after });
-				room.as_object_mut()
-					.unwrap()
-					.insert("state_after".to_owned(), state_after_obj.clone());
-				room.as_object_mut()
-					.unwrap()
-					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
+				if let Some(room_obj) = room.as_object_mut() {
+					room_obj.insert("state_after".to_owned(), state_after_obj.clone());
+					room_obj.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
+				}
 			}
 		}
 
 		// Ensure that the standard 'state' key is present even if it was omitted by
 		// Ruma's serialization (due to being empty), as some clients (and Complement)
 		// expect it.
-		for room in join.as_object_mut().unwrap().values_mut() {
-			if room.get("state").is_none() {
-				room.as_object_mut()
-					.unwrap()
-					.insert("state".to_owned(), serde_json::json!({ "events": [] }));
+		if let Some(join_obj) = join.as_object_mut() {
+			for room in join_obj.values_mut() {
+				if room.get("state").is_none() {
+					if let Some(room_obj) = room.as_object_mut() {
+						room_obj.insert("state".to_owned(), serde_json::json!({ "events": [] }));
+					}
+				}
 			}
 		}
 	}
@@ -522,12 +526,10 @@ pub(crate) async fn build_sync_events(
 		for (room_id, state_after) in left_state_after {
 			if let Some(room) = leave.get_mut(room_id.as_str()) {
 				let state_after_obj = serde_json::json!({ "events": state_after });
-				room.as_object_mut()
-					.unwrap()
-					.insert("state_after".to_owned(), state_after_obj.clone());
-				room.as_object_mut()
-					.unwrap()
-					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
+				if let Some(room_obj) = room.as_object_mut() {
+					room_obj.insert("state_after".to_owned(), state_after_obj.clone());
+					room_obj.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
+				}
 			}
 		}
 	}

@@ -1,5 +1,5 @@
 use axum::extract::State;
-use conduwuit::{Err, Result};
+use conduwuit::{Err, Result, err};
 use ruma::{UInt, api::client::space::get_hierarchy, assign};
 use service::rooms::summary::Accessibility;
 
@@ -39,11 +39,12 @@ pub(crate) async fn get_hierarchy_route(
 				.try_into()
 				.unwrap_or(usize::MAX);
 
-			let from = body
-				.from
-				.as_ref()
-				.and_then(|s| s.parse::<usize>().ok())
-				.unwrap_or(0);
+			let from = match body.from.as_deref() {
+				| Some(s) => s.parse::<usize>().map_err(|_| {
+					err!(Request(InvalidParam("Invalid 'from' pagination token.")))
+				})?,
+				| None => 0,
+			};
 
 			let next_batch = if from.saturating_add(limit) < rooms.len() {
 				Some(from.saturating_add(limit).to_string())

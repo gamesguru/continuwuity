@@ -8,7 +8,7 @@ use conduwuit_core::{
 	state_res::{self, StateMap},
 	utils::{
 		IterStream, MutexMap, MutexMapGuard, ReadyExt, calculate_hash,
-		stream::{BroadbandExt, TryIgnore},
+		stream::{BroadbandExt, TryIgnore, WidebandExt},
 	},
 	warn,
 };
@@ -468,7 +468,7 @@ impl Service {
 			.multi_get_eventid_from_short(event_ids.into_iter().stream())
 			.zip(state_keys.into_iter().stream())
 			.ready_filter_map(|(event_id, (ty, sk))| Some(((ty, sk), event_id.ok()?)))
-			.broad_filter_map(|((ty, sk), event_id): (_, OwnedEventId)| async move {
+			.wide_filter_map(async |((ty, sk), event_id): (_, OwnedEventId)| {
 				self.services
 					.timeline
 					.get_pdu(&event_id)

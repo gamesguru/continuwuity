@@ -132,7 +132,7 @@ where
 		if json_body.is_some() {
 			tracing::debug!("DEBUG: Parsed request body into json_body");
 		} else if !body.is_empty() {
-			tracing::warn!("DEBUG: Failed to parse request body into json_body");
+			tracing::debug!("DEBUG: Failed to parse request body into json_body");
 		}
 
 		// Extract the query parameters and path

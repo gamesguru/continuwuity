@@ -4,7 +4,7 @@ use axum::extract::State;
 use conduwuit::{
 	Err, Error, Event, Result, debug, err, info,
 	matrix::{StateKey, pdu::PartialPdu},
-	warn,
+	trace,
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
@@ -128,26 +128,26 @@ pub(crate) async fn upgrade_room_route(
 		| None => &RoomId::new_v1(services.globals.server_name()),
 	};
 
-	warn!(
+	debug!(
 		old_room_id = %body.room_id,
 		new_version = ?body.new_version,
 		room_version_is_v2 = ?room_version_is_v2,
 		"DEBUG: Starting room upgrade"
 	);
 
-	warn!(
+	debug!(
 		version = ?body.new_version,
 		format = ?room_version_rules.room_id_format,
 		is_v2 = ?room_version_is_v2,
 		"DEBUG: Room upgrade version and format"
 	);
 
-	warn!(
+	debug!(
 		replacement_room_tmp = %replacement_room_tmp,
 		"DEBUG: Replacement room ID tmp"
 	);
 
-	warn!(
+	trace!(
 		json_body = ?body.json_body,
 		"DEBUG: Room upgrade request body"
 	);
@@ -210,7 +210,7 @@ pub(crate) async fn upgrade_room_route(
 		}))
 	};
 
-	warn!(
+	trace!(
 		json_body = ?body.json_body,
 		"DEBUG: Room upgrade request body"
 	);
@@ -251,7 +251,7 @@ pub(crate) async fn upgrade_room_route(
 	}
 
 	let additional_creators = additional_creators; // Re-bind for logging
-	warn!(
+	trace!(
 		count = additional_creators.len(),
 		creators = ?additional_creators,
 		"DEBUG: Final additional creators for upgrade"
