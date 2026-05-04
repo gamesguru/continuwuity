@@ -118,7 +118,10 @@ impl CheckAuth for AccessToken {
 
 			let output = Self::extract_authentication(incoming_request).map_err(|err| {
 				let err_str = format!("{err:?}");
-				if err_str.contains("NoToken") || err_str.contains("Missing") {
+				if err_str.contains("NoToken")
+					|| err_str.contains("Missing")
+					|| err_str.contains("no access token")
+				{
 					err!(Request(MissingToken(
 						"No access token found, but this endpoint requires one."
 					)))

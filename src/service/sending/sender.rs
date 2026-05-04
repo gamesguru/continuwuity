@@ -947,9 +947,19 @@ impl Service {
 			.and_then(|val| RoomId::parse(val.as_str()?).ok())
 		{
 			match self.services.state.get_room_version(&room_id).await {
-				| Ok(room_version_id) => match room_version_id {
-					| RoomVersionId::V1 | RoomVersionId::V2 => {},
-					| _ => _ = pdu_json.remove("event_id"),
+				| Ok(room_version_id) => {
+					match room_version_id {
+						| RoomVersionId::V1 | RoomVersionId::V2 => {},
+						| _ => _ = pdu_json.remove("event_id"),
+					}
+					// MSC4291/v12: room_id is not part of the PDU wire format
+					if let Some(rules) = room_version_id.rules() {
+						if rules.room_id_format
+							== ruma::room_version_rules::RoomIdFormatVersion::V2
+						{
+							pdu_json.remove("room_id");
+						}
+					}
 				},
 				| Err(_) => _ = pdu_json.remove("event_id"),
 			}

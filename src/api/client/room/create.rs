@@ -578,6 +578,30 @@ fn default_power_levels_content(
 		}))
 		.unwrap();
 
+	// Ensure required power level keys are always present even if Ruma's
+	// serialization skips them when they equal the defaults
+	if power_levels_content.get("ban").is_none() {
+		power_levels_content["ban"] = serde_json::to_value(50).unwrap();
+	}
+	if power_levels_content.get("kick").is_none() {
+		power_levels_content["kick"] = serde_json::to_value(50).unwrap();
+	}
+	if power_levels_content.get("redact").is_none() {
+		power_levels_content["redact"] = serde_json::to_value(50).unwrap();
+	}
+	if power_levels_content.get("invite").is_none() {
+		power_levels_content["invite"] = serde_json::to_value(0).unwrap();
+	}
+	if power_levels_content.get("state_default").is_none() {
+		power_levels_content["state_default"] = serde_json::to_value(50).unwrap();
+	}
+	if power_levels_content.get("events_default").is_none() {
+		power_levels_content["events_default"] = serde_json::to_value(0).unwrap();
+	}
+	if power_levels_content.get("users_default").is_none() {
+		power_levels_content["users_default"] = serde_json::to_value(0).unwrap();
+	}
+
 	// secure proper defaults of sensitive/dangerous permissions that moderators
 	// (power level 50) should not have easy access to
 	power_levels_content["events"]["m.room.power_levels"] =

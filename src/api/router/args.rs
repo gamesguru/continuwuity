@@ -146,12 +146,32 @@ where
 			.unwrap_or(AuthQueryParams { user_id: None, device_id: None });
 
 		// Assemble a new request from the read body and parts
-		let request = hyper::Request::from_parts(parts, body);
+		let mut request = hyper::Request::from_parts(parts, body);
 
 		// Check authentication
 		let auth =
 			R::Authentication::authenticate::<R, bytes::Bytes>(services, &request, auth_query)
 				.await?;
+
+		// while very unusual and really shouldn't be recommended, Synapse accepts POST
+		// requests with a completely empty body. very old clients, libraries, and some
+		// appservices still call APIs like /join like this. so let's just default to
+		// empty object `{}` to copy synapse's behaviour
+		if request.body().is_empty()
+			&& (request.method() == http::Method::POST
+				|| request.method() == http::Method::PUT
+				|| request.method() == http::Method::DELETE)
+			&& !request.uri().path().contains("/media/")
+		{
+			tracing::debug!(
+				"received a {} request with an empty body, defaulting/assuming to {{}} like \
+				 Synapse does",
+				request.method()
+			);
+			let (parts, _) = request.into_parts();
+			request = hyper::Request::from_parts(parts, bytes::Bytes::from_static(b"{}"));
+			json_body = Some(serde_json::from_str("{}").expect("empty object is valid JSON"));
+		}
 
 		// Deserialize the body
 		let body = R::try_from_http_request(request.clone(), &path)
@@ -169,24 +189,6 @@ where
 				return Err(err!(Request(NotJson("Request body is not valid UTF-8"))));
 			}
 			return Err(err!(Request(BadJson("Invalid JSON body"))));
-		}
-
-		// while very unusual and really shouldn't be recommended, Synapse accepts POST
-		// requests with a completely empty body. very old clients, libraries, and some
-		// appservices still call APIs like /join like this. so let's just default to
-		// empty object `{}` to copy synapse's behaviour
-		if json_body.is_none()
-			&& request.body().is_empty()
-			&& (request.method() == http::Method::POST
-				|| request.method() == http::Method::PUT
-				|| request.method() == http::Method::DELETE)
-		{
-			tracing::warn!(
-				"received a {} request with an empty body, defaulting/assuming to {{}} like \
-				 Synapse does",
-				request.method()
-			);
-			json_body = Some(serde_json::from_str("{}").expect("empty object is valid JSON"));
 		}
 
 		Ok(Self {
