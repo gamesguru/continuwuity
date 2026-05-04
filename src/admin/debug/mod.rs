@@ -125,6 +125,10 @@ pub enum DebugCommand {
 		room_id: OwnedRoomId,
 		/// The server to compare with.
 		server: OwnedServerName,
+		/// The event ID to query state at. If not provided, uses the latest
+		/// local event.
+		#[arg(long)]
+		at_event: Option<OwnedEventId>,
 	},
 
 	/// Compares room state between two different remote servers.

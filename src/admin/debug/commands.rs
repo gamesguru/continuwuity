@@ -1531,25 +1531,43 @@ pub(super) async fn compare_room_state(
 	&self,
 	room_id: OwnedRoomId,
 	server: OwnedServerName,
+	at_event: Option<OwnedEventId>,
 ) -> Result {
 	self.bail_restricted()?;
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
-	let response = self
+	let at_event_id = match at_event {
+		| Some(event_id) => event_id,
+		| None => self
+			.services
+			.rooms
+			.timeline
+			.latest_pdu_in_room(&room_id)
+			.await?
+			.event_id()
+			.to_owned(),
+	};
+
+	let response = match self
 		.services
 		.sending
 		.send_federation_request(&server, get_room_state::v1::Request {
 			room_id: room_id.clone(),
-			event_id: self
-				.services
-				.rooms
-				.timeline
-				.latest_pdu_in_room(&room_id)
-				.await?
-				.event_id()
-				.to_owned(),
+			event_id: at_event_id.clone(),
 		})
-		.await?;
+		.await
+	{
+		| Ok(r) => r,
+		| Err(e) => {
+			return self
+				.write_str(&format!(
+					"Failed to fetch state from {server} at event {at_event_id}: {e}\n\nThe \
+					 remote server may not have this event. Try specifying a known-shared event \
+					 with --at-event, or compare with a different server.",
+				))
+				.await;
+		},
+	};
 
 	let mut remote_state = HashMap::new();
 	for pdu in &response.pdus {
