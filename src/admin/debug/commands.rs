@@ -684,6 +684,7 @@ pub(super) async fn purge_outliers(
 	room_id: Option<OwnedRoomOrAliasId>,
 	sender: Option<OwnedUserId>,
 	all: bool,
+	force: bool,
 ) -> Result {
 	if room_id.is_none() && sender.is_none() && !all {
 		return Err!("You must specify a room, a sender, or use --all to purge outliers.");
@@ -727,6 +728,11 @@ pub(super) async fn purge_outliers(
 			.await
 			.is_ok()
 		{
+			// Duplicate: exists in both outlier and timeline tables
+			self.services.rooms.outlier.remove_outlier(&event_id).await;
+			purged = purged.saturating_add(1);
+		} else if force {
+			// Force-remove un-rescued outlier
 			self.services.rooms.outlier.remove_outlier(&event_id).await;
 			purged = purged.saturating_add(1);
 		} else {
@@ -1928,7 +1934,7 @@ pub(super) async fn heal_room(
 	if purge_after {
 		self.write_str("Phase 6: Purging stuck outliers...").await?;
 		let room_alias = OwnedRoomOrAliasId::from(room_id);
-		Box::pin(self.purge_outliers(Some(room_alias), None, false)).await?;
+		Box::pin(self.purge_outliers(Some(room_alias), None, false, false)).await?;
 	}
 
 	Ok(())

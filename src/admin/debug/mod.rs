@@ -111,6 +111,10 @@ pub enum DebugCommand {
 		/// Purge ALL outliers in the database.
 		#[arg(long)]
 		all: bool,
+
+		/// Force-remove even un-rescued outliers (use with caution).
+		#[arg(long)]
+		force: bool,
 	},
 
 	/// Emergency command to re-import outliers from a JSONL file.
