@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
 	Result, at, debug_warn, err, extract_variant,
-	matrix::{Event, PduEvent, pdu::PduCount},
+	matrix::{
+		Event,
+		pdu::{PduCount, PduEvent},
+	},
 	trace,
 	utils::{
 		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
@@ -14,7 +17,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join, join3, join4, try_join, try_join3},
+	future::{OptionFuture, join, join3, join4, try_join, try_join3, try_join4},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -83,8 +86,7 @@ pub(super) async fn load_joined_room(
 
 	if !timeline.is_empty() || !state_events.is_empty() {
 		trace!(
-			"syncing {} timeline events (limited = {})
-			and {} state events",
+			"syncing {} timeline events (limited = {}) and {} state events",
 			timeline.events.len(),
 			timeline.limited,
 			state_events.len()
@@ -279,13 +281,11 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	let joined_since_last_sync =
-		check_joined_since_last_sync(services, shortstatehashes, sync_context).await?;
-
-	let (state_events, state_after, notification_counts) = try_join3(
+	let (state_events, state_after, notification_counts, joined_since_last_sync) = try_join4(
 		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_state_after(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
+		check_joined_since_last_sync(services, shortstatehashes, sync_context),
 	)
 	.await?;
 
@@ -713,7 +713,7 @@ async fn build_room_summary(
 	services: &Services,
 	SyncContext { syncing_user, .. }: SyncContext<'_>,
 	room_id: &RoomId,
-	shortstatehashes: ShortStateHashes,
+	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
 	joined_since_last_sync: bool,
@@ -751,27 +751,19 @@ async fn build_room_summary(
 	let has_name = services
 		.rooms
 		.state_accessor
-		.state_contains_type(shortstatehashes.current_shortstatehash, &StateEventType::RoomName);
+		.state_contains_type(current_shortstatehash, &StateEventType::RoomName);
 
-	let has_canonical_alias = services.rooms.state_accessor.state_contains_type(
-		shortstatehashes.current_shortstatehash,
-		&StateEventType::RoomCanonicalAlias,
-	);
+	let has_canonical_alias = services
+		.rooms
+		.state_accessor
+		.state_contains_type(current_shortstatehash, &StateEventType::RoomCanonicalAlias);
 
 	let (joined_member_count, invited_member_count, has_name, has_canonical_alias) =
 		join4(joined_member_count, invited_member_count, has_name, has_canonical_alias).await;
 
 	// only send heroes if the room has neither a name nor a canonical alias
 	let heroes = if !(has_name || has_canonical_alias) {
-		Some(
-			build_heroes(
-				services,
-				room_id,
-				syncing_user,
-				shortstatehashes.current_shortstatehash,
-			)
-			.await,
-		)
+		Some(build_heroes(services, room_id, syncing_user, current_shortstatehash).await)
 	} else {
 		None
 	};
@@ -858,14 +850,14 @@ async fn build_device_list_updates(
 		..
 	}: SyncContext<'_>,
 	room_id: &RoomId,
-	shortstatehashes: ShortStateHashes,
-	state_events: &[PduEvent],
+	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
+	state_events: &Vec<PduEvent>,
 	joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
 	let is_encrypted_room = services
 		.rooms
 		.state_accessor
-		.state_get(shortstatehashes.current_shortstatehash, &StateEventType::RoomEncryption, "")
+		.state_get(current_shortstatehash, &StateEventType::RoomEncryption, "")
 		.is_ok();
 
 	// initial syncs don't include device updates, and rooms which aren't encrypted
@@ -899,7 +891,7 @@ async fn build_device_list_updates(
 			let Some(user_id): Option<OwnedUserId> = state_event
 				.state_key
 				.as_ref()
-				.and_then(|key| key.parse::<OwnedUserId>().ok())
+				.and_then(|key| key.parse().ok())
 			else {
 				continue;
 			};
