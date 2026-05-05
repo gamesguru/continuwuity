@@ -1,4 +1,9 @@
-use std::{borrow::Borrow, collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+	borrow::Borrow,
+	collections::{BTreeMap, HashMap},
+	sync::Arc,
+	time::Instant,
+};
 
 use conduwuit::{
 	Err, Result, debug, debug_info, err, implement, info, is_equal_to,
@@ -84,7 +89,15 @@ where
 	}
 
 	if state_at_incoming_event.is_none() {
-		return Err!(Request(Unknown("Could not find state at event")));
+		if skip_soft_fail {
+			warn!(
+				event_id = %incoming_pdu.event_id,
+				"Could not find state at event, but skip_soft_fail is set — using empty state"
+			);
+			state_at_incoming_event = Some(HashMap::new());
+		} else {
+			return Err!(Request(Unknown("Could not find state at event")));
+		}
 	}
 
 	let state_at_incoming_event = state_at_incoming_event.unwrap_or_default();
@@ -119,7 +132,16 @@ where
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
 	if !auth_check {
-		return Err!(Request(Forbidden("Event has failed auth check with state at the event.")));
+		if skip_soft_fail {
+			warn!(
+				event_id = %incoming_pdu.event_id,
+				"Event failed auth check against state-at-event, but skip_soft_fail is set — continuing"
+			);
+		} else {
+			return Err!(Request(Forbidden(
+				"Event has failed auth check with state at the event."
+			)));
+		}
 	}
 
 	// 13. Use state resolution to find new room state
@@ -269,10 +291,14 @@ where
 			.save_state(room_id, new_room_state)
 			.await?;
 
-		self.services
-			.state
-			.force_state(room_id, shortstatehash, added, removed, &state_lock)
-			.await?;
+		Box::pin(self.services.state.force_state(
+			room_id,
+			shortstatehash,
+			added,
+			removed,
+			&state_lock,
+		))
+		.await?;
 	}
 
 	if !soft_fail {

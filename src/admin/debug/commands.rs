@@ -960,14 +960,18 @@ pub(super) async fn rescue_room(
 		// Skip state events that are superseded by a newer event already in the
 		// timeline for the same (event_type, state_key). Uses 3 tiebreakers:
 		// origin_server_ts, depth, event_id (matching state-res ordering).
-		if let Some(state_key) = &pdu.state_key {
-			let key = (pdu.kind.to_string(), state_key.to_string());
-			if let Some((curr_ts, curr_depth, curr_eid)) = current_state.get(&key) {
-				let dominated = (pdu.origin_server_ts, pdu.depth, &pdu.event_id)
-					< (*curr_ts, *curr_depth, curr_eid);
-				if dominated {
-					skipped = skipped.saturating_add(1);
-					continue;
+		// When --force is set, skip this check to allow historical state events
+		// to be inserted for complete timeline history.
+		if !force {
+			if let Some(state_key) = &pdu.state_key {
+				let key = (pdu.kind.to_string(), state_key.to_string());
+				if let Some((curr_ts, curr_depth, curr_eid)) = current_state.get(&key) {
+					let dominated = (pdu.origin_server_ts, pdu.depth, &pdu.event_id)
+						< (*curr_ts, *curr_depth, curr_eid);
+					if dominated {
+						skipped = skipped.saturating_add(1);
+						continue;
+					}
 				}
 			}
 		}
