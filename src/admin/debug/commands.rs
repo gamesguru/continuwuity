@@ -2099,6 +2099,11 @@ pub(super) async fn heal_room(
 	Box::pin(self.force_set_room_state_from_server(room_id.clone(), server, None, nuclear))
 		.await?;
 
+	// Phase 5b: Rescue any outliers created by Phase 5's state resync
+	self.write_str("Phase 5b: Rescuing state outliers from resync...")
+		.await?;
+	Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
+
 	// Phase 6: Purge stuck outliers (events that now exist in both tables)
 	if purge_after {
 		self.write_str("Phase 6: Purging stuck outliers...").await?;
