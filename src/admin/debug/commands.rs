@@ -1327,16 +1327,15 @@ pub(super) async fn force_set_room_state_from_server(
 
 		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
 			info!(
-				"PDU {event_id} already in timeline (pdu_id={pdu_id:?}), adding as outlier for \
-				 potential re-rescue"
+				"PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier insert"
 			);
 		} else {
 			info!("PDU {event_id} NOT in timeline, adding as outlier");
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value, Some(&room_id));
 		}
-		self.services
-			.rooms
-			.outlier
-			.add_pdu_outlier(&event_id, &value, Some(&room_id));
 
 		if let Some(state_key) = &pdu.state_key {
 			let shortstatekey = self
@@ -1362,16 +1361,16 @@ pub(super) async fn force_set_room_state_from_server(
 
 		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
 			info!(
-				"Auth PDU {event_id} already in timeline (pdu_id={pdu_id:?}), adding as outlier \
-				 for potential re-rescue"
+				"Auth PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier \
+				 insert"
 			);
 		} else {
 			info!("Auth PDU {event_id} NOT in timeline, adding as outlier");
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value, Some(&room_id));
 		}
-		self.services
-			.rooms
-			.outlier
-			.add_pdu_outlier(&event_id, &value, Some(&room_id));
 	}
 
 	let new_room_state = if overwrite {

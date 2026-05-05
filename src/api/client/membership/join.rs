@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, collections::HashMap, iter::once, sync::Arc};
+use std::{borrow::Borrow, collections::HashMap, iter::once, sync::Arc, time::Duration};
 
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
@@ -927,34 +927,38 @@ async fn make_join_request(
 	room_id: &RoomId,
 	servers: &[OwnedServerName],
 ) -> Result<(federation::membership::prepare_join_event::v1::Response, OwnedServerName)> {
-	let mut make_join_counter: usize = 1;
+	const MAX_SERVERS_TO_TRY: usize = 5;
+	const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+	let mut make_join_counter: usize = 0;
 	let mut last_error = None;
 
-	for remote_server in servers {
+	for remote_server in servers.iter().take(MAX_SERVERS_TO_TRY) {
 		if services.globals.server_is_ours(remote_server) {
 			continue;
 		}
+		make_join_counter = make_join_counter.saturating_add(1);
 		info!(
-			"Asking {remote_server} for make_join (attempt {make_join_counter}/{})",
-			servers.len()
+			"Asking {remote_server} for make_join (attempt \
+			 {make_join_counter}/{MAX_SERVERS_TO_TRY})",
 		);
-		let make_join_response = services
-			.sending
-			.send_federation_request(
+		let make_join_response = tokio::time::timeout(
+			REQUEST_TIMEOUT,
+			services.sending.send_federation_request(
 				remote_server,
 				federation::membership::prepare_join_event::v1::Request {
 					room_id: room_id.to_owned(),
 					user_id: sender_user.to_owned(),
 					ver: services.server.supported_room_versions().collect(),
 				},
-			)
-			.await;
+			),
+		)
+		.await;
 
 		trace!("make_join response: {:?}", make_join_response);
-		make_join_counter = make_join_counter.saturating_add(1);
 
 		match make_join_response {
-			| Ok(response) => {
+			| Ok(Ok(response)) => {
 				info!("Received make_join response from {remote_server}");
 				if let Err(e) = validate_remote_member_event_stub(
 					&MembershipState::Join,
@@ -968,7 +972,7 @@ async fn make_join_request(
 				}
 				return Ok((response, remote_server.clone()));
 			},
-			| Err(e) => {
+			| Ok(Err(e)) => {
 				match e.kind() {
 					| ErrorKind::UnableToAuthorizeJoin => {
 						info!(
@@ -1005,9 +1009,12 @@ async fn make_join_request(
 				}
 				last_error = Some(e);
 			},
+			| Err(_elapsed) => {
+				info!("{remote_server} timed out for make_join. Will continue trying.");
+			},
 		}
 	}
-	info!("All {} servers were unable to assist in joining {room_id} :(", servers.len());
+	info!("All {make_join_counter} servers tried were unable to assist in joining {room_id} :(");
 	if let Some(e) = last_error {
 		return Err(e);
 	}
