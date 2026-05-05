@@ -712,7 +712,7 @@ async fn join_room_by_id_helper_remote(
 		return Err!(Request(Forbidden("Auth check failed")));
 	}
 
-	info!("Compressing state from send_join");
+	info!("Compressing state from send_join ({} state events)", state.len());
 	let compressed: CompressedState = services
 		.rooms
 		.state_compressor
@@ -720,7 +720,7 @@ async fn join_room_by_id_helper_remote(
 		.collect()
 		.await;
 
-	debug!("Saving compressed state");
+	info!("Saving compressed state ({} compressed events)", compressed.len());
 	let HashSetCompressStateEvent {
 		shortstatehash: statehash_before_join,
 		added,
@@ -731,14 +731,14 @@ async fn join_room_by_id_helper_remote(
 		.save_state(room_id, Arc::new(compressed))
 		.await?;
 
-	debug!("Forcing state for new room");
+	info!("Forcing state for new room (shortstatehash={statehash_before_join})");
 	services
 		.rooms
 		.state
 		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
 		.await?;
 
-	debug!("Updating joined counts for new room");
+	info!("Updating joined counts for new room");
 	services
 		.rooms
 		.state_cache

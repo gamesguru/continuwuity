@@ -721,24 +721,32 @@ pub(super) async fn purge_outliers(
 
 	let mut purged = 0_usize;
 	let mut skipped = 0_usize;
-	for event_id in outliers {
-		if self
+	for event_id in &outliers {
+		if force {
+			// Force-remove: skip the timeline lookup entirely
+			self.services.rooms.outlier.remove_outlier(event_id).await;
+			purged = purged.saturating_add(1);
+		} else if self
 			.services
 			.rooms
 			.timeline
-			.get_pdu_id(&event_id)
+			.get_pdu_id(event_id)
 			.await
 			.is_ok()
 		{
 			// Duplicate: exists in both outlier and timeline tables
-			self.services.rooms.outlier.remove_outlier(&event_id).await;
-			purged = purged.saturating_add(1);
-		} else if force {
-			// Force-remove un-rescued outlier
-			self.services.rooms.outlier.remove_outlier(&event_id).await;
+			self.services.rooms.outlier.remove_outlier(event_id).await;
 			purged = purged.saturating_add(1);
 		} else {
 			skipped = skipped.saturating_add(1);
+		}
+
+		let total = purged.saturating_add(skipped);
+		if total % 10_000 == 0 && total > 0 {
+			info!(
+				"Purge progress: {purged} purged, {skipped} skipped of {} total",
+				outliers.len()
+			);
 		}
 	}
 

@@ -393,6 +393,18 @@ pub enum DebugCommand {
 		level: Option<i32>,
 	},
 
+	/// Re-broadcast stored read receipts for a room to all participating
+	/// servers (or a specific server). Useful for recovering lost receipts
+	/// after federation downtime.
+	ResendReceipts {
+		/// The room ID to resend receipts for.
+		room_id: OwnedRoomId,
+
+		/// Optional: only send to this specific server.
+		#[arg(short, long)]
+		server: Option<OwnedServerName>,
+	},
+
 	/// Send a test email to the invoking admin's email address
 	SendTestEmail,
 
