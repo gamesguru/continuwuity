@@ -134,8 +134,12 @@ async fn handle_response<T>(
 where
 	T: OutgoingRequest + Send,
 {
-	const HUGE_ENDPOINTS: [&str; 2] =
-		["/_matrix/federation/v2/send_join/", "/_matrix/federation/v2/state/"];
+	const HUGE_ENDPOINTS: [&str; 4] = [
+		"/_matrix/federation/v2/send_join/",
+		"/_matrix/federation/v2/state/",
+		"/_matrix/federation/v1/state/",
+		"/_matrix/federation/v1/state_ids/",
+	];
 	let size_limit: u64 = if HUGE_ENDPOINTS.iter().any(|e| url.path().starts_with(e)) {
 		// Some federation endpoints can return huge response bodies, so we'll bump the
 		// limit for those endpoints specifically.
