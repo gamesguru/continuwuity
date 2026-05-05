@@ -1826,19 +1826,28 @@ pub(super) async fn compare_remote_state(
 ) -> Result {
 	self.bail_restricted()?;
 
+	// Try to resolve at_event: explicit > local timeline > error
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
-		| None => self
-			.services
-			.rooms
-			.timeline
-			.latest_pdu_in_room(&room_id)
-			.await?
-			.event_id()
-			.to_owned(),
+		| None => {
+			// Fall back to local timeline if we know the room
+			match self
+				.services
+				.rooms
+				.timeline
+				.latest_pdu_in_room(&room_id)
+				.await
+			{
+				| Ok(pdu) => pdu.event_id().to_owned(),
+				| Err(_) => {
+					return Err!(Request(NotFound(
+						"Room not known locally. Provide an --at-event ID to compare remote \
+						 state for rooms this server hasn't joined."
+					)));
+				},
+			}
+		},
 	};
-
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
 	// Fetch state from both servers at the same reference PDU
 	let (response1, response2) = futures::join!(
@@ -1857,6 +1866,34 @@ pub(super) async fn compare_remote_state(
 	);
 
 	let (response1, response2) = (response1?, response2?);
+
+	// Determine room version: try local first, fall back to remote create event
+	let room_version = match self.services.rooms.state.get_room_version(&room_id).await {
+		| Ok(v) => v,
+		| Err(_) => {
+			// Extract from m.room.create in server1's response
+			let mut found_version = None;
+			for pdu_raw in &response1.pdus {
+				let value: serde_json::Value = serde_json::from_str(pdu_raw.get())?;
+				if value.get("type").and_then(|t| t.as_str()) == Some("m.room.create") {
+					// Room version from content.room_version, default to "1"
+					let version_str = value
+						.get("content")
+						.and_then(|c| c.get("room_version"))
+						.and_then(|v| v.as_str())
+						.unwrap_or("1");
+					found_version =
+						Some(RoomVersionId::try_from(version_str).unwrap_or(RoomVersionId::V11));
+					break;
+				}
+			}
+			found_version.ok_or_else(|| {
+				err!(
+					"Could not determine room version from remote state (no m.room.create found)"
+				)
+			})?
+		},
+	};
 
 	let mut state1 = HashMap::new();
 	for pdu in &response1.pdus {
