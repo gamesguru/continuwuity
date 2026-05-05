@@ -524,7 +524,7 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Result {
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool, skip_soft_fail: bool) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -555,7 +555,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Re
 		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
 	// Only un-soft-fail when --force is passed
-	if force {
+	if force || skip_soft_fail {
 		self.services
 			.rooms
 			.pdu_metadata
@@ -566,7 +566,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Re
 		self.services
 			.rooms
 			.event_handler
-			.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id),
+			.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id, skip_soft_fail),
 	)
 	.await?;
 
@@ -742,7 +742,7 @@ pub(super) async fn purge_outliers(
 		}
 
 		let total = purged.saturating_add(skipped);
-		if total % 10_000 == 0 && total > 0 {
+		if total.is_multiple_of(10_000) && total > 0 {
 			info!(
 				"Purge progress: {purged} purged, {skipped} skipped of {} total",
 				outliers.len()
@@ -984,6 +984,7 @@ pub(super) async fn rescue_room(
 					&create_event,
 					&origin,
 					&room_id,
+					false,
 				),
 		)
 		.await
@@ -1150,7 +1151,7 @@ pub(super) async fn fetch_pdu(
 		self.services
 			.rooms
 			.event_handler
-			.upgrade_outlier_to_timeline_pdu(pdu, value, &create_event, &server, &room_id),
+			.upgrade_outlier_to_timeline_pdu(pdu, value, &create_event, &server, &room_id, false),
 	)
 	.await?;
 
@@ -1629,7 +1630,7 @@ pub(super) async fn resend_receipts(
 		};
 
 		// Keep only the latest per user (stream is ordered by count ascending)
-		latest_receipts.insert(user_id.to_owned(), (event_id, receipt));
+		latest_receipts.insert(user_id.clone(), (event_id, receipt));
 	}
 
 	if latest_receipts.is_empty() {

@@ -48,6 +48,12 @@ pub enum DebugCommand {
 		/// If set, bypasses strict auth checks.
 		#[arg(short, long)]
 		force: bool,
+
+		/// If set, skips the soft-fail check against current room state.
+		/// Use for late-arriving events that are valid at their DAG position
+		/// but conflict with current state.
+		#[arg(long)]
+		skip_soft_fail: bool,
 	},
 
 	/// List all outlier PDUs in our database.

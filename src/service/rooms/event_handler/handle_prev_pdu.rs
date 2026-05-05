@@ -77,7 +77,7 @@ where
 			.remove(room_id);
 	}};
 
-	Box::pin(self.upgrade_outlier_to_timeline_pdu(pdu, json, create_event, origin, room_id))
+	Box::pin(self.upgrade_outlier_to_timeline_pdu(pdu, json, create_event, origin, room_id, false))
 		.await?;
 
 	debug!(

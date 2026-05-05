@@ -24,6 +24,7 @@ pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	create_event: &Pdu,
 	origin: &ServerName,
 	room_id: &RoomId,
+	skip_soft_fail: bool,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -182,15 +183,19 @@ where
 		event_id = %incoming_pdu.event_id,
 		"Performing soft-fail check"
 	);
-	let mut soft_fail = match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
-		| (false, _) => true,
-		| (true, None) => false,
-		| (true, Some(redact_id)) =>
-			!self
-				.services
-				.state_accessor
-				.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
-				.await?,
+	let mut soft_fail = if skip_soft_fail {
+		false
+	} else {
+		match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
+			| (false, _) => true,
+			| (true, None) => false,
+			| (true, Some(redact_id)) =>
+				!self
+					.services
+					.state_accessor
+					.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
+					.await?,
+		}
 	};
 
 	// Now we calculate the set of extremities this room has after the incoming
