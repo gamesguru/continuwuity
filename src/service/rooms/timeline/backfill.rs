@@ -362,3 +362,56 @@ pub async fn backfill_pdu(
 	debug!("Prepended backfill pdu");
 	Ok(())
 }
+
+/// Promote an outlier event directly into the timeline as a backfill PDU.
+/// This skips all auth checks — the caller is responsible for ensuring
+/// the event is valid (e.g. it came from a send_join response).
+#[implement(super::Service)]
+pub async fn promote_outlier(
+	&self,
+	room_id: &RoomId,
+	event_id: &EventId,
+) -> Result<()> {
+	// Skip if already in timeline
+	if self.get_pdu_id(event_id).await.is_ok() {
+		return Ok(());
+	}
+
+	let value = self
+		.services
+		.outlier
+		.get_outlier_pdu_json(event_id)
+		.await?;
+
+	let pdu: PduEvent = serde_json::from_value(
+		serde_json::to_value(&value).map_err(|e| err!(Database("Bad outlier JSON: {e:?}")))?
+	).map_err(|e| err!(Database("Bad outlier PDU: {e:?}")))?;
+
+	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+
+	let insert_lock = self.mutex_insert.lock(room_id).await;
+
+	let count: i64 = self.services.globals.next_count()?.try_into()?;
+
+	let pdu_id: RawPduId = PduId {
+		shortroomid,
+		shorteventid: PduCount::Backfilled(validated!(0 - count)),
+	}
+	.into();
+
+	self.db.prepend_backfill_pdu(&pdu_id, event_id, &value);
+
+	drop(insert_lock);
+
+	if pdu.kind == TimelineEventType::RoomMessage {
+		let content: ExtractBody = pdu.get_content()?;
+		if let Some(body) = content.body {
+			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
+		}
+	}
+
+	// Remove from outlier room index
+	self.services.outlier.remove_outlier(event_id).await;
+
+	Ok(())
+}
