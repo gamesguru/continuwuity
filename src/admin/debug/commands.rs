@@ -1574,6 +1574,111 @@ pub(super) async fn trim_memory(&self) -> Result {
 }
 
 #[admin_command]
+pub(super) async fn resend_receipts(
+	&self,
+	room_id: OwnedRoomId,
+	server: Option<OwnedServerName>,
+) -> Result {
+	use std::collections::BTreeMap;
+
+	use ruma::{
+		OwnedEventId,
+		api::federation::transactions::edu::{Edu, ReceiptContent, ReceiptData, ReceiptMap},
+		events::{AnySyncEphemeralRoomEvent, receipt::ReceiptType},
+	};
+
+	// Collect latest receipt per local user in this room
+	let mut latest_receipts: BTreeMap<
+		OwnedUserId,
+		(OwnedEventId, ruma::events::receipt::Receipt),
+	> = BTreeMap::new();
+
+	let receipts = self
+		.services
+		.rooms
+		.read_receipt
+		.readreceipts_since(&room_id, None);
+
+	pin_mut!(receipts);
+	while let Some((user_id, _count, raw_receipt)) = receipts.next().await {
+		// Only resend our local users' receipts
+		if !self.services.globals.server_is_ours(user_id.server_name()) {
+			continue;
+		}
+
+		let Ok(event) =
+			serde_json::from_str::<AnySyncEphemeralRoomEvent>(raw_receipt.json().get())
+		else {
+			continue;
+		};
+
+		let AnySyncEphemeralRoomEvent::Receipt(r) = event else {
+			continue;
+		};
+
+		let Some((event_id, mut receipt_types)) = r.content.0.into_iter().next() else {
+			continue;
+		};
+
+		let Some(users) = receipt_types.remove(&ReceiptType::Read) else {
+			continue;
+		};
+
+		let Some(receipt) = users.into_iter().next().map(|(_, r)| r) else {
+			continue;
+		};
+
+		// Keep only the latest per user (stream is ordered by count ascending)
+		latest_receipts.insert(user_id.to_owned(), (event_id, receipt));
+	}
+
+	if latest_receipts.is_empty() {
+		return self
+			.write_str("No local user receipts found for this room.")
+			.await;
+	}
+
+	// Build the receipt EDU
+	let mut read = BTreeMap::new();
+	for (user_id, (event_id, receipt)) in &latest_receipts {
+		read.insert(user_id.clone(), ReceiptData {
+			data: receipt.clone(),
+			event_ids: vec![event_id.clone()],
+		});
+	}
+
+	let receipt_map = ReceiptMap { read };
+	let receipts_content = BTreeMap::from([(room_id.clone(), receipt_map)]);
+	let edu = Edu::Receipt(ReceiptContent { receipts: receipts_content });
+
+	let mut buf = conduwuit_service::sending::EduBuf::new();
+	serde_json::to_writer(&mut buf, &edu)
+		.map_err(|e| err!("Failed to serialize receipt EDU: {e}"))?;
+
+	// Send to specific server or all participating servers
+	if let Some(ref target_server) = server {
+		self.services.sending.send_edu_server(target_server, buf)?;
+		self.write_str(&format!(
+			"Resent {} receipt(s) for room {} to server {}.",
+			latest_receipts.len(),
+			room_id,
+			target_server
+		))
+		.await?;
+	} else {
+		self.services.sending.send_edu_room(&room_id, buf).await?;
+		self.write_str(&format!(
+			"Resent {} receipt(s) for room {} to all participating servers.",
+			latest_receipts.len(),
+			room_id
+		))
+		.await?;
+	}
+
+	Ok(())
+}
+
+#[admin_command]
 pub(super) async fn send_test_email(&self) -> Result {
 	self.bail_restricted()?;
 
