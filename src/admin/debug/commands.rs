@@ -1081,6 +1081,64 @@ pub(super) async fn reorder_timeline(&self, room_id: OwnedRoomId, all: bool) -> 
 }
 
 #[admin_command]
+pub(super) async fn promote_outliers(&self, room_id: OwnedRoomId) -> Result {
+	self.bail_restricted()?;
+
+	let outlier_ids: Vec<_> = self
+		.services
+		.rooms
+		.outlier
+		.room_stream(&room_id)
+		.map(|(event_id, _pdu)| event_id)
+		.collect()
+		.await;
+
+	let total = outlier_ids.len();
+	self.write_str(&format!("Promoting {total} outliers to timeline for {room_id}..."))
+		.await?;
+
+	let mut promoted = 0_usize;
+	let mut failed = 0_usize;
+	for event_id in &outlier_ids {
+		match self
+			.services
+			.rooms
+			.timeline
+			.promote_outlier(&room_id, event_id)
+			.await
+		{
+			| Ok(()) => {
+				promoted = promoted.saturating_add(1);
+			},
+			| Err(e) => {
+				info!("Failed to promote outlier {event_id}: {e:?}");
+				failed = failed.saturating_add(1);
+			},
+		}
+	}
+
+	self.write_str(&format!(
+		"Promoted {promoted} outliers, {failed} failed out of {total} total for {room_id}. \
+		 Clients should re-sync."
+	))
+	.await
+}
+
+#[admin_command]
+pub(super) async fn purge_outlier(&self, event_id: OwnedEventId) -> Result {
+	self.bail_restricted()?;
+
+	self.services
+		.rooms
+		.outlier
+		.remove_outlier(&event_id)
+		.await;
+
+	self.write_str(&format!("Purged outlier {event_id}"))
+		.await
+}
+
+#[admin_command]
 pub(super) async fn get_room_dag(
 	&self,
 	room_id: OwnedRoomOrAliasId,
@@ -1767,12 +1825,21 @@ pub(super) async fn compare_room_state(
 	};
 
 	let mut remote_state = HashMap::new();
+	let mut skipped = 0_usize;
 	for pdu in &response.pdus {
-		let (event_id, value) = self
+		let (event_id, value) = match self
 			.services
 			.server_keys
 			.validate_and_add_event_id(pdu, &room_version)
-			.await?;
+			.await
+		{
+			| Ok(r) => r,
+			| Err(e) => {
+				warn!("Skipping PDU with bad signature: {e}");
+				skipped = skipped.saturating_add(1);
+				continue;
+			},
+		};
 
 		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
 		if let Some(state_key) = &pdu.state_key {

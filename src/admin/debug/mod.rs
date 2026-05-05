@@ -185,6 +185,22 @@ pub enum DebugCommand {
 		all: bool,
 	},
 
+	/// Promote all outlier events in a room to backfill timeline PDUs.
+	///
+	/// This skips auth checks and directly inserts outliers into the timeline.
+	/// Useful for rooms where the join flow stored events as outliers
+	/// instead of timeline PDUs.
+	PromoteOutliers {
+		/// The room ID.
+		room_id: OwnedRoomId,
+	},
+
+	/// Purge a specific outlier event by event ID.
+	PurgeOutlier {
+		/// The event ID to purge.
+		event_id: OwnedEventId,
+	},
+
 	/// Get the room DAG as a list of PDUs in a range.
 	GetRoomDag {
 		/// Room ID
