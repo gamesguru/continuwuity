@@ -694,10 +694,10 @@
 {"Action":"fail","Test":"TestThreadedReceipts","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
 {"Action":"fail","Test":"TestThreadsEndpoint","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
 {"Action":"pass","Test":"TestToDeviceMessages","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
-{"Action":"pass","Test":"TestToDeviceMessagesOverFederation","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
+{"Action":"fail","Test":"TestToDeviceMessagesOverFederation","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/good_connectivity","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
-{"Action":"pass","Test":"TestToDeviceMessagesOverFederation/stopped_server","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
+{"Action":"fail","Test":"TestToDeviceMessagesOverFederation/stopped_server","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
 {"Action":"fail","Test":"TestTxnIdWithRefreshToken","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
 {"Action":"fail","Test":"TestTxnIdempotency","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
 {"Action":"pass","Test":"TestTxnIdempotencyScopedToDevice","arch":"amd64","os":"ubuntu-22.04","profile":"release-quick","room_version":"12","commit":"a5dfd80105a274933d205321983f0b31324d06bf"}
