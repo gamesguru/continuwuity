@@ -1896,28 +1896,42 @@ pub(super) async fn compare_remote_state(
 	};
 
 	let mut state1 = HashMap::new();
+	let mut verify_errors1 = 0_usize;
 	for pdu in &response1.pdus {
-		let (event_id, value) = self
+		let Ok((event_id, value)) = self
 			.services
 			.server_keys
 			.validate_and_add_event_id(pdu, &room_version)
-			.await?;
+			.await
+		else {
+			verify_errors1 = verify_errors1.saturating_add(1);
+			continue;
+		};
 
-		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
+		let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
+			continue;
+		};
 		if let Some(state_key) = &pdu.state_key {
 			state1.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
 		}
 	}
 
 	let mut state2 = HashMap::new();
+	let mut verify_errors2 = 0_usize;
 	for pdu in &response2.pdus {
-		let (event_id, value) = self
+		let Ok((event_id, value)) = self
 			.services
 			.server_keys
 			.validate_and_add_event_id(pdu, &room_version)
-			.await?;
+			.await
+		else {
+			verify_errors2 = verify_errors2.saturating_add(1);
+			continue;
+		};
 
-		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
+		let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
+			continue;
+		};
 		if let Some(state_key) = &pdu.state_key {
 			state2.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
 		}
@@ -1937,10 +1951,19 @@ pub(super) async fn compare_remote_state(
 		}
 	}
 
+	let verify_note = if verify_errors1 > 0 || verify_errors2 > 0 {
+		format!(
+			"\n\nNote: {verify_errors1} events from {server1} and {verify_errors2} from \
+			 {server2} skipped (signature verification failed)"
+		)
+	} else {
+		String::new()
+	};
+
 	self.write_str(&format!(
 		"Remote State Comparison for {room_id}:\n- {server1} vs {server2}\n- Only on {server1}: \
 		 {}\n- Only on {server2}: {}\n\nIDs only on {server1}:\n```\n{:#?}\n```\n\nIDs only on \
-		 {server2}:\n```\n{:#?}\n```",
+		 {server2}:\n```\n{:#?}\n```{verify_note}",
 		only_on_server1.len(),
 		only_on_server2.len(),
 		only_on_server1,
