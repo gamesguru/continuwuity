@@ -1173,6 +1173,118 @@ pub(super) async fn get_room_dag(
 }
 
 #[admin_command]
+pub(super) async fn get_remote_dag(
+	&self,
+	room_id: OwnedRoomId,
+	server: OwnedServerName,
+	limit: usize,
+) -> Result {
+	self.bail_restricted()?;
+
+	if !self.services.server.config.allow_federation {
+		return Err!("Federation is disabled on this homeserver.");
+	}
+
+	if server == self.services.globals.server_name() {
+		return Err!("Cannot fetch from ourselves. Use get-room-dag instead.");
+	}
+
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+
+	// Start from the latest local event in the room
+	let latest = self
+		.services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await?;
+
+	let path = format!("/tmp/remote-dag-{room_id}-{server}.jsonl");
+	let mut file = tokio::fs::File::create(&path)
+		.await
+		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
+
+	let mut seen = HashSet::<OwnedEventId>::new();
+	let mut queue = vec![latest.event_id().to_owned()];
+	let mut total = 0_usize;
+	let batch_size = ruma::uint!(100);
+
+	self.write_str(&format!("Fetching DAG from {server} for {room_id} (limit: {limit})..."))
+		.await?;
+
+	while !queue.is_empty() && total < limit {
+		let request = ruma::api::federation::backfill::get_backfill::v1::Request {
+			room_id: room_id.clone(),
+			v: queue.clone(),
+			limit: batch_size,
+		};
+
+		let response = match self
+			.services
+			.sending
+			.send_federation_request(&server, request)
+			.await
+		{
+			| Ok(r) => r,
+			| Err(e) => {
+				self.write_str(&format!("Federation request failed: {e}"))
+					.await?;
+				break;
+			},
+		};
+
+		if response.pdus.is_empty() {
+			break;
+		}
+
+		queue.clear();
+
+		for raw_pdu in &response.pdus {
+			let Ok((event_id, value)) = self
+				.services
+				.server_keys
+				.validate_and_add_event_id(raw_pdu, &room_version)
+				.await
+			else {
+				continue;
+			};
+
+			if seen.contains(&event_id) {
+				continue;
+			}
+			seen.insert(event_id.clone());
+
+			let Ok(pdu) = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
+			else {
+				continue;
+			};
+
+			let json = serde_json::to_string(&pdu)?;
+			file.write_all(json.as_bytes()).await?;
+			file.write_all(b"\n").await?;
+			total = total.saturating_add(1);
+
+			// Add prev_events to the queue for next iteration
+			for prev in pdu.prev_events() {
+				if !seen.contains(prev) {
+					queue.push(prev.to_owned());
+				}
+			}
+
+			if total >= limit {
+				break;
+			}
+		}
+
+		// Yield to avoid blocking
+		tokio::task::yield_now().await;
+	}
+
+	self.write_str(&format!("Successfully fetched {total} PDUs from {server} to {path}"))
+		.await
+}
+
+#[admin_command]
 pub(super) async fn fetch_pdu(
 	&self,
 	room_id: OwnedRoomId,

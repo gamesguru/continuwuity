@@ -221,6 +221,20 @@ pub enum DebugCommand {
 		end: i64,
 	},
 
+	/// Fetch a room's DAG from a remote server via federation backfill API
+	/// and write it to a JSONL file.
+	GetRemoteDag {
+		/// Room ID
+		room_id: OwnedRoomId,
+
+		/// Remote server to fetch from
+		server: OwnedServerName,
+
+		/// Maximum number of events to fetch (default: 100)
+		#[arg(long, default_value = "100")]
+		limit: usize,
+	},
+
 	/// Retrieve and print a PDU by PduId from the Continuwuity database
 	GetShortPdu {
 		/// Shortroomid integer
