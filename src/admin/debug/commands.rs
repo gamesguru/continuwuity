@@ -996,7 +996,7 @@ pub(super) async fn rescue_room(
 					&create_event,
 					&origin,
 					&room_id,
-					false,
+					nuclear,
 				),
 		)
 		.await
