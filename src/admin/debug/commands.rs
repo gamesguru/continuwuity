@@ -524,7 +524,12 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool, skip_soft_fail: bool) -> Result {
+pub(super) async fn rescue_pdu(
+	&self,
+	event_id: OwnedEventId,
+	force: bool,
+	skip_soft_fail: bool,
+) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -566,7 +571,14 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool, skip_
 		self.services
 			.rooms
 			.event_handler
-			.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id, skip_soft_fail),
+			.upgrade_outlier_to_timeline_pdu(
+				pdu,
+				pdu_json,
+				&create_event,
+				&origin,
+				&room_id,
+				skip_soft_fail,
+			),
 	)
 	.await?;
 
