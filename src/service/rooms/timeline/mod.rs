@@ -203,15 +203,39 @@ impl Service {
 
 		// Collect all PDUs from the timeline
 		let mut entries: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = HashMap::new();
+		let mut dropped = 0_usize;
 		{
 			let pdus = self.pdus(room_id, None);
 			pin_mut!(pdus);
 			while let Some((_, pdu)) = pdus.try_next().await? {
-				if let Ok(json) = self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
-					let eid = pdu.event_id.clone();
-					entries.insert(eid, (pdu, json));
-				}
+				// Try non-outlier JSON first, fall back to any JSON (including outlier)
+				let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
+					| Ok(json) => json,
+					| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
+						| Ok(json) => {
+							warn!(
+								event_id = %pdu.event_id,
+								"PDU in timeline had no non-outlier JSON, recovered from outlier table"
+							);
+							json
+						},
+						| Err(_) => {
+							warn!(
+								event_id = %pdu.event_id,
+								"PDU in timeline has no JSON anywhere — cannot reorder, skipping"
+							);
+							dropped = dropped.saturating_add(1);
+							continue;
+						},
+					},
+				};
+				let eid = pdu.event_id.clone();
+				entries.insert(eid, (pdu, json));
 			}
+		}
+
+		if dropped > 0 {
+			warn!("{dropped} PDUs had no JSON and were skipped during reorder");
 		}
 
 		if entries.is_empty() {
