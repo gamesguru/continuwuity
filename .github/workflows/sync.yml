@@ -51,6 +51,7 @@ jobs:
           sync_tags: "true"
 
       - name: "Sync main-upstream [from forge: continuwuation/continuwuity]"
+        if: vars.C10Y_GITHUB_WORKFLOW_SYNC_MAIN_UPSTREAM_STEP_ENABLED != ''
         uses: ./.github/actions/git-sync
         with:
           source_branch: main
