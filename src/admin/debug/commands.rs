@@ -2038,15 +2038,19 @@ pub(super) async fn compare_remote_state(
 }
 
 #[admin_command]
+#[allow(clippy::fn_params_excessive_bools)]
 pub(super) async fn heal_room(
 	&self,
 	room_id: OwnedRoomId,
 	server: OwnedServerName,
 	nuclear: bool,
-	dry_run: bool,
+	execute: bool,
+	resync_state: bool,
 	purge_after: bool,
 ) -> Result {
 	self.bail_restricted()?;
+
+	let dry_run = !execute;
 
 	// Phase 1: Rescue existing local outliers first (no network)
 	// Only pass force=true when nuclear is set; otherwise respect auth checks
@@ -2162,7 +2166,9 @@ pub(super) async fn heal_room(
 	.await?;
 
 	if dry_run {
-		return self.write_str("Dry run complete. No changes made.").await;
+		return self
+			.write_str("Dry run complete. No changes made. Pass --execute to apply.")
+			.await;
 	}
 
 	// Phase 3: Rescue any newly-fetched outliers
@@ -2181,16 +2187,21 @@ pub(super) async fn heal_room(
 	Box::pin(self.reorder_timeline(room_id.clone(), false)).await?;
 	self.write_str("Phase 4: Reordered timeline.").await?;
 
-	// Phase 5: Resync state from the remote server
-	self.write_str("Phase 5: Resyncing room state from server...")
-		.await?;
-	Box::pin(self.force_set_room_state_from_server(room_id.clone(), server, None, nuclear))
-		.await?;
+	// Phase 5: Resync state from the remote server (opt-in)
+	if resync_state {
+		self.write_str("Phase 5: Resyncing room state from server...")
+			.await?;
+		Box::pin(self.force_set_room_state_from_server(room_id.clone(), server, None, nuclear))
+			.await?;
 
-	// Phase 5b: Rescue any outliers created by Phase 5's state resync
-	self.write_str("Phase 5b: Rescuing state outliers from resync...")
-		.await?;
-	Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
+		// Phase 5b: Rescue any outliers created by Phase 5's state resync
+		self.write_str("Phase 5b: Rescuing state outliers from resync...")
+			.await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
+	} else {
+		self.write_str("Phase 5: Skipped state resync (pass --resync-state to enable).")
+			.await?;
+	}
 
 	// Phase 6: Purge stuck outliers (events that now exist in both tables)
 	if purge_after {

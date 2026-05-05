@@ -155,7 +155,10 @@ pub enum DebugCommand {
 	},
 
 	/// Heals a room by rescuing local outliers, fetching genuinely missing
-	/// events from federation, and resyncing state.
+	/// events from federation, and optionally resyncing state.
+	///
+	/// By default this is a dry-run that only reports what would be done.
+	/// Pass --execute to actually make changes.
 	HealRoom {
 		/// The room ID.
 		room_id: OwnedRoomId,
@@ -164,9 +167,14 @@ pub enum DebugCommand {
 		/// If set, forcefully re-processes existing timeline PDUs.
 		#[arg(long)]
 		nuclear: bool,
-		/// If set, only scans for gaps without making changes.
+		/// Actually execute changes. Without this flag, only a dry-run
+		/// summary is printed.
 		#[arg(long)]
-		dry_run: bool,
+		execute: bool,
+		/// If set, also resyncs room state from the remote server
+		/// (Phase 5). This is expensive and usually unnecessary.
+		#[arg(long)]
+		resync_state: bool,
 		/// If set, purges stuck outliers after healing.
 		#[arg(long)]
 		purge_after: bool,
