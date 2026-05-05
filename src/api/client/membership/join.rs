@@ -732,12 +732,13 @@ async fn join_room_by_id_helper_remote(
 		.await?;
 
 	info!("Forcing state for new room (shortstatehash={statehash_before_join})");
-	Box::pin(
-		services
-			.rooms
-			.state
-			.force_state(room_id, statehash_before_join, added, removed, &state_lock),
-	)
+	Box::pin(services.rooms.state.force_state(
+		room_id,
+		statehash_before_join,
+		added,
+		removed,
+		&state_lock,
+	))
 	.await?;
 
 	info!("Updating joined counts for new room");

@@ -367,25 +367,18 @@ pub async fn backfill_pdu(
 /// This skips all auth checks — the caller is responsible for ensuring
 /// the event is valid (e.g. it came from a send_join response).
 #[implement(super::Service)]
-pub async fn promote_outlier(
-	&self,
-	room_id: &RoomId,
-	event_id: &EventId,
-) -> Result<()> {
+pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Result<()> {
 	// Skip if already in timeline
 	if self.get_pdu_id(event_id).await.is_ok() {
 		return Ok(());
 	}
 
-	let value = self
-		.services
-		.outlier
-		.get_outlier_pdu_json(event_id)
-		.await?;
+	let value = self.services.outlier.get_outlier_pdu_json(event_id).await?;
 
 	let pdu: PduEvent = serde_json::from_value(
-		serde_json::to_value(&value).map_err(|e| err!(Database("Bad outlier JSON: {e:?}")))?
-	).map_err(|e| err!(Database("Bad outlier PDU: {e:?}")))?;
+		serde_json::to_value(&value).map_err(|e| err!(Database("Bad outlier JSON: {e:?}")))?,
+	)
+	.map_err(|e| err!(Database("Bad outlier PDU: {e:?}")))?;
 
 	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
 

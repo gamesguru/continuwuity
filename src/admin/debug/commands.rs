@@ -1128,14 +1128,9 @@ pub(super) async fn promote_outliers(&self, room_id: OwnedRoomId) -> Result {
 pub(super) async fn purge_outlier(&self, event_id: OwnedEventId) -> Result {
 	self.bail_restricted()?;
 
-	self.services
-		.rooms
-		.outlier
-		.remove_outlier(&event_id)
-		.await;
+	self.services.rooms.outlier.remove_outlier(&event_id).await;
 
-	self.write_str(&format!("Purged outlier {event_id}"))
-		.await
+	self.write_str(&format!("Purged outlier {event_id}")).await
 }
 
 #[admin_command]
