@@ -863,16 +863,22 @@ impl Service {
 			.await
 			.map_err(|_| err!(Request(InvalidParam("Tried to sign nonexistent key"))))?
 			.deserialized()
-			.map_err(|e| err!(Database(debug_warn!("key in keyid_key is invalid: {e:?}"))))?;
+			.map_err(|e| err!(Database(info!("key in keyid_key is invalid: {e:?}"))))?;
 
 		let signatures = cross_signing_key
-			.get_mut("signatures")
-			.ok_or_else(|| {
-				err!(Database(debug_warn!("key in keyid_key has no signatures field")))
-			})?
+			.as_object_mut()
+			.ok_or_else(|| err!(Database(info!("key in keyid_key is not an object"))))?
+			.entry("signatures")
+			.or_insert_with(|| {
+				info!(
+					target: "cross_signing",
+					"Key {key_id} of {target_id} has no signatures field, initializing empty"
+				);
+				serde_json::json!({})
+			})
 			.as_object_mut()
 			.ok_or_else(|| {
-				err!(Database(debug_warn!("key in keyid_key has invalid signatures field.")))
+				err!(Database(info!("key in keyid_key has invalid signatures field.")))
 			})?
 			.entry(sender_id.to_string())
 			.or_insert_with(|| serde_json::Map::new().into());
@@ -880,7 +886,7 @@ impl Service {
 		signatures
 			.as_object_mut()
 			.ok_or_else(|| {
-				err!(Database(debug_warn!("signatures in keyid_key for a user is invalid.")))
+				err!(Database(info!("signatures in keyid_key for a user is invalid.")))
 			})?
 			.insert(signature.0, signature.1.into());
 
