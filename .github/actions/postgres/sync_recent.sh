@@ -109,54 +109,70 @@ echo "→ Streaming $NEED new run detail files..."
 
 	echo "\."
 	cat <<'SQL'
-INSERT INTO run_details (run_id, test_name, status)
-SELECT DISTINCT ON (r.id, (t.j->>'Test')) r.id, (t.j->>'Test'), (t.j->>'Action')
-FROM t JOIN runs r ON r.commit_hash = (t.j->>'commit')
-  AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
-  AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
-  AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'), ''))
-  AND r.room_version IS NOT DISTINCT FROM (NULLIF((t.j->>'room_version'), ''))
-  AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(NULLIF((t.j->>'features'), ''), '')
-WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
-ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
+	-- Map the distinct run configurations in the temp table to actual run IDs
+	CREATE TEMP TABLE newly_ingested_runs AS
+	SELECT DISTINCT r.id AS run_id
+	FROM (
+		SELECT DISTINCT
+			(j->>'commit') AS commit_hash,
+			(NULLIF((j->>'arch'), '')) AS arch,
+			(NULLIF((j->>'os'), '')) AS os,
+			(NULLIF((j->>'profile'), '')) AS profile,
+			(NULLIF((j->>'room_version'), '')) AS room_version,
+			(NULLIF((j->>'features'), '')) AS features
+		FROM t
+	) nt
+	JOIN runs r ON r.commit_hash = nt.commit_hash
+		AND r.arch IS NOT DISTINCT FROM nt.arch
+		AND r.os IS NOT DISTINCT FROM nt.os
+		AND r.profile IS NOT DISTINCT FROM nt.profile
+		AND r.room_version IS NOT DISTINCT FROM nt.room_version
+		AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(nt.features, ' ,'), '[,\s]+', ' ', 'g'), '');
 
--- Incremental ever_passed: scoped to only the newly ingested runs
-INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
-SELECT
-    rd.test_name,
-    COALESCE(r.room_version, '11'),
-    MAX(r.run_date)::date::text,
-    (ARRAY_AGG(r.commit_hash ORDER BY r.run_date DESC))[1],
-    (ARRAY_AGG(r.branch ORDER BY r.run_date DESC))[1],
-    ARRAY_AGG(DISTINCT r.branch) FILTER (WHERE r.branch IS NOT NULL)
-FROM run_details rd
-JOIN runs r ON rd.run_id = r.id
-WHERE rd.status = 'pass'
-  AND EXISTS (
-    SELECT 1 FROM t
-    WHERE r.commit_hash = (t.j->>'commit')
-      AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
-      AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
-      AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'), ''))
-      AND r.room_version IS NOT DISTINCT FROM (NULLIF((t.j->>'room_version'), ''))
-      AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(NULLIF((t.j->>'features'), ''), '')
-  )
-GROUP BY rd.test_name, COALESCE(r.room_version, '11')
-ON CONFLICT (test_name, rv) DO UPDATE SET
-    last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed),
-    last_commit = CASE
-        WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
-        THEN EXCLUDED.last_commit ELSE ever_passed.last_commit END,
-    last_branch = CASE
-        WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
-        THEN EXCLUDED.last_branch ELSE ever_passed.last_branch END,
-    branches = (
-        SELECT ARRAY_AGG(DISTINCT b ORDER BY b)
-        FROM UNNEST(ever_passed.branches || EXCLUDED.branches) AS b
-        WHERE b IS NOT NULL
-    );
+	CREATE UNIQUE INDEX idx_newly_ingested_runs ON newly_ingested_runs (run_id);
 
-SELECT pg_advisory_unlock(42);
+	INSERT INTO run_details (run_id, test_name, status)
+	SELECT DISTINCT ON (r.id, (t.j->>'Test')) r.id, (t.j->>'Test'), (t.j->>'Action')
+	FROM t
+	JOIN runs r ON r.commit_hash = (t.j->>'commit')
+		AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
+		AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
+		AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'), ''))
+		AND r.room_version IS NOT DISTINCT FROM (NULLIF((t.j->>'room_version'), ''))
+		AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(NULLIF((t.j->>'features'), ''), '')
+	WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
+		AND r.id IN (SELECT run_id FROM newly_ingested_runs)
+	ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
+
+	-- Incremental ever_passed: scoped to only the newly ingested runs
+	INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
+	SELECT
+			rd.test_name,
+			COALESCE(r.room_version, '11'),
+			MAX(r.run_date)::date::text,
+			(ARRAY_AGG(r.commit_hash ORDER BY r.run_date DESC))[1],
+			(ARRAY_AGG(r.branch ORDER BY r.run_date DESC))[1],
+			ARRAY_AGG(DISTINCT r.branch) FILTER (WHERE r.branch IS NOT NULL)
+	FROM run_details rd
+	JOIN runs r ON rd.run_id = r.id
+	WHERE rd.status = 'pass'
+		AND r.id IN (SELECT run_id FROM newly_ingested_runs)
+	GROUP BY rd.test_name, COALESCE(r.room_version, '11')
+	ON CONFLICT (test_name, rv) DO UPDATE SET
+			last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed),
+			last_commit = CASE
+					WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
+					THEN EXCLUDED.last_commit ELSE ever_passed.last_commit END,
+			last_branch = CASE
+					WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
+					THEN EXCLUDED.last_branch ELSE ever_passed.last_branch END,
+			branches = (
+					SELECT ARRAY_AGG(DISTINCT b ORDER BY b)
+					FROM UNNEST(ever_passed.branches || EXCLUDED.branches) AS b
+					WHERE b IS NOT NULL
+			);
+
+	SELECT pg_advisory_unlock(42);
 SQL
 ) | psql_remote
 

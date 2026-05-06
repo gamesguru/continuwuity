@@ -186,16 +186,16 @@ impl Service {
 		// messages) are retried after backoff even when no new PDUs arrive.
 		// If the remote gave us an explicit M_LIMIT_EXCEEDED retry_after, honor it
 		// instead of our own exponential backoff.
+		let base = self.server.config.sender_retry_backoff_base;
 		let max = self.server.config.sender_retry_backoff_limit;
 		let delay = retry_after_delay(e).unwrap_or_else(|| {
 			Duration::from_secs(
-				2_u64
-					.saturating_mul(
-						1_u64
-							.checked_shl(tries.saturating_sub(1))
-							.unwrap_or(u64::MAX),
-					)
-					.min(max),
+				base.saturating_mul(
+					1_u64
+						.checked_shl(tries.saturating_sub(1))
+						.unwrap_or(u64::MAX),
+				)
+				.min(max),
 			)
 		});
 
