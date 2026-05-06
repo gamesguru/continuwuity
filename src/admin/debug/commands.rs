@@ -1885,6 +1885,118 @@ pub(super) async fn resend_receipts(
 }
 
 #[admin_command]
+pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
+	use conduwuit::PduCount;
+
+	self.bail_restricted()?;
+
+	let pdus = self
+		.services
+		.rooms
+		.timeline
+		.pdus(&room_id, Some(PduCount::min()));
+
+	pin_mut!(pdus);
+	let mut repaired = 0_usize;
+	let mut skipped = 0_usize;
+	let mut errors = 0_usize;
+
+	while let Some(Ok((_count, pdu))) = pdus.next().await {
+		// Only state events have prev_content
+		let Some(state_key) = pdu.state_key() else {
+			continue;
+		};
+
+		let event_id = pdu.event_id();
+
+		// Get the stored JSON
+		let Ok(mut pdu_json) = self.services.rooms.timeline.get_pdu_json(event_id).await else {
+			errors = errors.saturating_add(1);
+			continue;
+		};
+
+		// Look up the state snapshot at this event (state before this event's
+		// changes), which is what set_event_state() stored.
+		let Ok(shortstatehash) = self
+			.services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(event_id)
+			.await
+		else {
+			skipped = skipped.saturating_add(1);
+			continue;
+		};
+
+		// Get or create the unsigned object
+		let unsigned = pdu_json.entry("unsigned".to_owned()).or_insert_with(|| {
+			ruma::CanonicalJsonValue::Object(std::collections::BTreeMap::new())
+		});
+
+		let ruma::CanonicalJsonValue::Object(unsigned) = unsigned else {
+			errors = errors.saturating_add(1);
+			continue;
+		};
+
+		// Remove old (possibly wrong) prev_content fields
+		unsigned.remove("prev_content");
+		unsigned.remove("prev_sender");
+		unsigned.remove("replaces_state");
+
+		// Look up the correct previous state event
+		if let Ok(prev_state) = self
+			.services
+			.rooms
+			.state_accessor
+			.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
+			.await
+		{
+			if let Ok(content_obj) = utils::to_canonical_object(prev_state.get_content_as_value())
+			{
+				unsigned.insert(
+					"prev_content".to_owned(),
+					ruma::CanonicalJsonValue::Object(content_obj),
+				);
+				unsigned.insert(
+					"prev_sender".to_owned(),
+					ruma::CanonicalJsonValue::String(prev_state.sender().to_string()),
+				);
+				unsigned.insert(
+					"replaces_state".to_owned(),
+					ruma::CanonicalJsonValue::String(prev_state.event_id().to_string()),
+				);
+			}
+		}
+
+		// Write back
+		let pdu_id = self.services.rooms.timeline.get_pdu_id(event_id).await?;
+		if let Err(e) = self
+			.services
+			.rooms
+			.timeline
+			.replace_pdu(&pdu_id, &pdu_json)
+			.await
+		{
+			warn!("Failed to replace PDU {event_id}: {e}");
+			errors = errors.saturating_add(1);
+			continue;
+		}
+
+		repaired = repaired.saturating_add(1);
+
+		if repaired.is_multiple_of(1000) {
+			info!("Repair progress: {repaired} state events repaired so far");
+		}
+	}
+
+	self.write_str(&format!(
+		"Repair complete for room {room_id}: {repaired} state events repaired, {skipped} \
+		 skipped (no state snapshot), {errors} errors"
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn send_test_email(&self) -> Result {
 	self.bail_restricted()?;
 

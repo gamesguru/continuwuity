@@ -469,6 +469,16 @@ pub enum DebugCommand {
 		output: Option<String>,
 	},
 
+	/// Repair the `unsigned` field (prev_content, prev_sender, replaces_state)
+	/// for state events in a room's timeline.
+	///
+	/// This fixes persistent corruption where prev_content contained the
+	/// event's own content instead of the actual previous state.
+	RepairUnsigned {
+		/// The room ID to repair.
+		room_id: OwnedRoomId,
+	},
+
 	/// Send a test email to the invoking admin's email address
 	SendTestEmail,
 
