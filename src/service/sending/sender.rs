@@ -353,7 +353,7 @@ impl Service {
 	}
 
 	#[tracing::instrument(
-		name = "select",,
+		name = "select",
 		level = "debug",
 		skip_all,
 		fields(
