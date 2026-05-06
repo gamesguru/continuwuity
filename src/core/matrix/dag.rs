@@ -19,14 +19,14 @@ where
 	let mut in_degree: BTreeMap<OwnedEventId, usize> = BTreeMap::new();
 	let mut adjacency_list: BTreeMap<OwnedEventId, Vec<OwnedEventId>> = BTreeMap::new();
 
-	// 1. Collect all events and initialize structures
+	// Collect all events and initialize structures
 	for event in events {
 		let event_id = event.event_id().to_owned();
 		in_degree.insert(event_id.clone(), 0);
 		events_by_id.insert(event_id, event);
 	}
 
-	// 2. Build graph edges. Only consider edges between events within the batch.
+	// Build graph edges. Only consider edges between events within the batch.
 	for (event_id, event) in &events_by_id {
 		for prev_event_id in event.prev_events() {
 			let prev_event_id_owned = prev_event_id.to_owned();
@@ -43,7 +43,7 @@ where
 		}
 	}
 
-	// 3. Find initial nodes with no incoming edges (in-degree == 0)
+	// Find initial nodes with no incoming edges (in-degree == 0)
 	// To ensure deterministic tie-breaking, we use a BTreeSet.
 	// The tuple is (origin_server_ts, event_id)
 	let mut zero_in_degree = BTreeSet::new();
@@ -57,7 +57,7 @@ where
 
 	let mut sorted_events = Vec::with_capacity(events_by_id.len());
 
-	// 4. Kahn's Algorithm
+	// Kahn's Algorithm
 	while let Some(first) = zero_in_degree.pop_first() {
 		let event_id = first.1;
 
@@ -80,7 +80,7 @@ where
 		}
 	}
 
-	// 5. Handle potential cycles (Matrix DAGs shouldn't have them, but for safety)
+	// Handle potential cycles (Matrix DAGs shouldn't have them, but for safety)
 	// Any remaining events in `events_by_id` are part of a cycle.
 	// We can just append them sorted by ts, id.
 	if !events_by_id.is_empty() {
