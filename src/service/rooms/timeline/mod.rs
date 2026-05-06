@@ -292,8 +292,9 @@ impl Service {
 			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
 			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
 			if i.saturating_add(1).is_multiple_of(10000) {
-				// Drop and re-cork to flush this batch
+				// Drop and re-cork to flush, then yield to let compaction breathe
 				drop(cork.take());
+				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 				cork = Some(self.db.db.cork());
 				info!(
 					"reorder_timeline: removed {}/{} entries...",
@@ -326,13 +327,18 @@ impl Service {
 
 			self.db.append_pdu(&pdu_id, pdu, json, pdu_count).await;
 			if i.saturating_add(1).is_multiple_of(10000) {
-				// Drop and re-cork to flush this batch
+				// Drop and re-cork to flush, then yield to let compaction breathe
 				drop(cork.take());
+				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 				cork = Some(self.db.db.cork());
 				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
 			}
 		}
+		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		drop(cork.take());
+		let final_sync = self.db.db.cork_and_sync();
+		drop(final_sync);
+		info!("reorder_timeline: complete, {count} events reordered and synced to disk");
 
 		Ok(count)
 	}
