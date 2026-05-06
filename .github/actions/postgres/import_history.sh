@@ -74,7 +74,7 @@ echo "→ Consolidating and ingesting test details..."
 	done
 	echo "\."
 	echo "INSERT INTO run_details (run_id, test_name, status)
-        SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
+        SELECT DISTINCT ON (r.id, (t.j->>'Test')) r.id, (t.j->>'Test'), (t.j->>'Action')
         FROM t
         JOIN runs r ON r.commit_hash = (t.j->>'commit')
                    AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'),''))
