@@ -246,13 +246,28 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
-		let iv = vec![(msg.queue_id, msg.event)];
+		let _cork = self.db.db.cork();
+		let is_flush = matches!(msg.event, SendingEvent::Flush);
+		let iv = if !is_flush {
+			vec![(msg.queue_id, msg.event)]
+		} else {
+			self.db
+				.queued_requests(&msg.dest)
+				.take(DEQUEUE_LIMIT)
+				.collect::<Vec<_>>()
+				.await
+		};
+
 		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
 				futures.push(self.send_events(msg.dest, events));
 			} else {
 				statuses.remove(&msg.dest);
 			}
+		} else if is_flush {
+			// Flush was rejected (e.g., backoff still active due to timer
+			// jitter). Re-schedule so the retry isn't permanently lost.
+			self.reschedule_flush(msg.dest);
 		}
 	}
 
