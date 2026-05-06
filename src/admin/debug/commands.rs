@@ -1115,6 +1115,12 @@ pub(super) async fn promote_outliers(&self, room_id: OwnedRoomId) -> Result {
 				failed = failed.saturating_add(1);
 			},
 		}
+
+		let done = promoted.saturating_add(failed);
+		if done.is_multiple_of(100) {
+			self.write_str(&format!("Progress: {done}/{total} ({promoted} ok, {failed} err)"))
+				.await?;
+		}
 	}
 
 	self.write_str(&format!(
