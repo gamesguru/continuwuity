@@ -299,10 +299,20 @@ impl Service {
 
 		// Re-insert in topological order with fresh PduCount values
 		let count = sorted.len();
-		info!("reorder_timeline: re-inserting {count} events in order...");
+		let batch_start = self
+			.services
+			.globals
+			.next_count_batch(u64::try_from(count).unwrap_or(u64::MAX))?;
+		info!(
+			"reorder_timeline: re-inserting {count} events in order (counter range \
+			 {batch_start}..{})...",
+			batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
+		);
 		for (i, event_id) in sorted.iter().enumerate() {
 			let (_, pdu, json) = entries.get(event_id).expect("in sorted list");
-			let new_count = self.services.globals.next_count()?;
+			let new_count = batch_start
+				.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
+				.saturating_add(1);
 			let pdu_count = PduCount::Normal(new_count);
 			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
