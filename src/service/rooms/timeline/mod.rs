@@ -10,7 +10,7 @@ use std::{fmt::Write, sync::Arc};
 use async_trait::async_trait;
 pub use conduwuit_core::matrix::pdu::{PduId, RawPduId};
 use conduwuit_core::{
-	Result, Server, at, err,
+	Result, Server, at, err, info,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduEvent},
@@ -202,12 +202,14 @@ impl Service {
 		let _cork = self.db.db.cork();
 
 		// Collect all PDUs from the timeline
-		let mut entries: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = HashMap::new();
+		info!("reorder_timeline: reading all PDUs from timeline...");
+		let mut entries: HashMap<OwnedEventId, (PduCount, PduEvent, CanonicalJsonObject)> =
+			HashMap::new();
 		let mut dropped = 0_usize;
 		{
 			let pdus = self.pdus(room_id, None);
 			pin_mut!(pdus);
-			while let Some((_, pdu)) = pdus.try_next().await? {
+			while let Some((count, pdu)) = pdus.try_next().await? {
 				// Try non-outlier JSON first, fall back to any JSON (including outlier)
 				let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
 					| Ok(json) => json,
@@ -230,13 +232,18 @@ impl Service {
 					},
 				};
 				let eid = pdu.event_id.clone();
-				entries.insert(eid, (pdu, json));
+				entries.insert(eid, (count, pdu, json));
+				if entries.len().is_multiple_of(10000) {
+					info!("reorder_timeline: read {} PDUs so far...", entries.len());
+				}
 			}
 		}
 
 		if dropped > 0 {
 			warn!("{dropped} PDUs had no JSON and were skipped during reorder");
 		}
+
+		info!("reorder_timeline: collected {} PDUs ({dropped} dropped)", entries.len());
 
 		if entries.is_empty() {
 			return Ok(0);
@@ -249,7 +256,7 @@ impl Service {
 		// the sort output — then permanently deleted from the timeline.
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
 			HashMap::with_capacity(entries.len());
-		for (event_id, (pdu, _)) in &entries {
+		for (event_id, (_, pdu, _)) in &entries {
 			let mut parents = HashSet::new();
 			for prev_id in pdu.prev_events() {
 				if entries.contains_key(prev_id) {
@@ -260,10 +267,11 @@ impl Service {
 		}
 
 		// Topological sort with origin_server_ts as tiebreaker
+		info!("reorder_timeline: topological sort of {} events...", graph.len());
 		let event_fetch = |event_id: OwnedEventId| {
 			let ts = entries
 				.get(&event_id)
-				.map_or_else(|| ruma::uint!(0), |(p, _)| p.origin_server_ts);
+				.map_or_else(|| ruma::uint!(0), |(_, p, _)| p.origin_server_ts);
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
 				ruma::MilliSecondsSinceUnixEpoch(ts),
@@ -274,20 +282,34 @@ impl Service {
 			.await
 			.map_err(|e| err!(Database("Failed to sort timeline: {e:?}")))?;
 
+		info!("reorder_timeline: sorted {} events, removing old entries...", sorted.len());
 		// Remove old timeline entries
-		for event_id in &sorted {
-			self.db.remove_from_timeline(event_id).await;
+		for (i, event_id) in sorted.iter().enumerate() {
+			let (old_count, ..) = entries.get(event_id).expect("in sorted list");
+			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
+			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
+			if i.saturating_add(1).is_multiple_of(10000) {
+				info!(
+					"reorder_timeline: removed {}/{} entries...",
+					i.saturating_add(1),
+					sorted.len()
+				);
+			}
 		}
 
 		// Re-insert in topological order with fresh PduCount values
 		let count = sorted.len();
-		for event_id in &sorted {
-			let (pdu, json) = entries.get(event_id).expect("in sorted list");
+		info!("reorder_timeline: re-inserting {count} events in order...");
+		for (i, event_id) in sorted.iter().enumerate() {
+			let (_, pdu, json) = entries.get(event_id).expect("in sorted list");
 			let new_count = self.services.globals.next_count()?;
 			let pdu_count = PduCount::Normal(new_count);
 			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
 			self.db.append_pdu(&pdu_id, pdu, json, pdu_count).await;
+			if i.saturating_add(1).is_multiple_of(10000) {
+				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
+			}
 		}
 
 		Ok(count)

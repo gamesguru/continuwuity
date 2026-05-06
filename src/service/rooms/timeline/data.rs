@@ -131,6 +131,12 @@ impl Data {
 		}
 	}
 
+	/// Remove timeline entry when pdu_id is known (avoids DB lookup).
+	pub(super) fn remove_from_timeline_by_id(&self, pdu_id: &RawPduId, event_id: &EventId) {
+		self.pduid_pdu.remove(pdu_id);
+		self.eventid_pduid.remove(event_id);
+	}
+
 	/// Returns the pdu's id.
 	#[inline]
 	pub(super) async fn get_pdu_id(&self, event_id: &EventId) -> Result<RawPduId> {
