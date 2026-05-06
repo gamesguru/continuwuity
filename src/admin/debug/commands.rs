@@ -1117,9 +1117,8 @@ pub(super) async fn promote_outliers(&self, room_id: OwnedRoomId) -> Result {
 		}
 
 		let done = promoted.saturating_add(failed);
-		if done.is_multiple_of(100) {
-			self.write_str(&format!("Progress: {done}/{total} ({promoted} ok, {failed} err)"))
-				.await?;
+		if done.is_multiple_of(10000) {
+			info!(target: "promote_outliers", "Progress: {done}/{total} ({promoted} ok, {failed} err)");
 		}
 	}
 
@@ -2405,9 +2404,7 @@ pub(super) async fn federation_request(
 	// Parse the URL path to determine which federation endpoint to call
 	// Currently supports: /_matrix/federation/v1/state/{roomId}
 	if let Some(rest) = url_path.strip_prefix("/_matrix/federation/v1/state/") {
-		let (room_id_str, event_id_str) = if let Some(idx) = rest.find('?') {
-			let room_part = &rest[..idx];
-			let query = &rest[idx + 1..];
+		let (room_id_str, event_id_str) = if let Some((room_part, query)) = rest.split_once('?') {
 			let event_id = query.strip_prefix("event_id=").unwrap_or(query);
 			(room_part, Some(event_id))
 		} else {
@@ -2454,11 +2451,12 @@ pub(super) async fn federation_request(
 			))
 			.await
 		} else {
+			let truncated = pretty.get(..4096).unwrap_or(&pretty);
 			self.write_str(&format!(
 				"Received {} state PDUs and {} auth chain events\n\n{}",
 				response.pdus.len(),
 				response.auth_chain.len(),
-				&pretty[..pretty.len().min(4096)]
+				truncated
 			))
 			.await
 		}
