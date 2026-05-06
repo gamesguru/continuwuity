@@ -386,6 +386,9 @@ pub enum DebugCommand {
 		event_id: Option<OwnedEventId>,
 		#[arg(short, long)]
 		overwrite: bool,
+		/// Dump the raw federation state response to a JSON file
+		#[arg(long)]
+		output: Option<String>,
 	},
 
 	/// Runs a server name through Continuwuity's true destination resolution
@@ -447,6 +450,23 @@ pub enum DebugCommand {
 		/// Optional: only send to this specific server.
 		#[arg(short, long)]
 		server: Option<OwnedServerName>,
+	},
+
+	/// Make a raw federation API request to a remote server and print/save
+	/// the response. Useful for debugging and capturing test fixtures.
+	///
+	/// Example: debug federation-request matrix.org
+	///   /_matrix/federation/v1/state/!room:server?event_id=$event
+	FederationRequest {
+		/// Target server name
+		server_name: OwnedServerName,
+
+		/// Federation API path (e.g. /_matrix/federation/v1/state/!room:server)
+		url_path: String,
+
+		/// Save response body to file
+		#[arg(short, long)]
+		output: Option<String>,
 	},
 
 	/// Send a test email to the invoking admin's email address

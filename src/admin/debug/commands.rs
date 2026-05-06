@@ -1357,6 +1357,7 @@ pub(super) async fn force_set_room_state_from_server(
 	server_name: OwnedServerName,
 	at_event: Option<OwnedEventId>,
 	overwrite: bool,
+	output: Option<String>,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -1396,6 +1397,7 @@ pub(super) async fn force_set_room_state_from_server(
 
 	let mut state: HashMap<u64, OwnedEventId> = HashMap::new();
 
+	let at_event_id_str = at_event_id.to_string();
 	let remote_state_response = self
 		.services
 		.sending
@@ -1404,6 +1406,24 @@ pub(super) async fn force_set_room_state_from_server(
 			event_id: at_event_id,
 		})
 		.await?;
+
+	if let Some(ref path) = output {
+		info!("Dumping federation state response to {path}");
+		let dump = serde_json::json!({
+			"room_id": room_id,
+			"server_name": server_name,
+			"event_id": at_event_id_str,
+			"pdus": remote_state_response.pdus,
+			"auth_chain": remote_state_response.auth_chain,
+		});
+		std::fs::write(path, serde_json::to_string_pretty(&dump).unwrap_or_default())
+			.map_err(|e| err!(Database("Failed to write output file: {e:?}")))?;
+		info!(
+			"Dumped {} state PDUs and {} auth chain events",
+			remote_state_response.pdus.len(),
+			remote_state_response.auth_chain.len()
+		);
+	}
 
 	for pdu in remote_state_response.pdus.clone() {
 		match self
@@ -2309,8 +2329,14 @@ pub(super) async fn heal_room(
 	if resync_state {
 		self.write_str("Phase 5: Resyncing room state from server...")
 			.await?;
-		Box::pin(self.force_set_room_state_from_server(room_id.clone(), server, None, nuclear))
-			.await?;
+		Box::pin(self.force_set_room_state_from_server(
+			room_id.clone(),
+			server,
+			None,
+			nuclear,
+			None,
+		))
+		.await?;
 
 		// Phase 5b: Rescue any outliers created by Phase 5's state resync
 		self.write_str("Phase 5b: Rescuing state outliers from resync...")
@@ -2363,4 +2389,83 @@ pub(super) async fn import_outliers(&self, jsonl: String) -> Result {
 
 	self.write_str(&format!("Successfully imported {count} outliers."))
 		.await
+}
+
+#[admin_command]
+pub(super) async fn federation_request(
+	&self,
+	server_name: OwnedServerName,
+	url_path: String,
+	output: Option<String>,
+) -> Result {
+	use conduwuit::info;
+
+	self.bail_restricted()?;
+
+	// Parse the URL path to determine which federation endpoint to call
+	// Currently supports: /_matrix/federation/v1/state/{roomId}
+	if let Some(rest) = url_path.strip_prefix("/_matrix/federation/v1/state/") {
+		let (room_id_str, event_id_str) = if let Some(idx) = rest.find('?') {
+			let room_part = &rest[..idx];
+			let query = &rest[idx + 1..];
+			let event_id = query.strip_prefix("event_id=").unwrap_or(query);
+			(room_part, Some(event_id))
+		} else {
+			(rest, None)
+		};
+
+		let room_id: OwnedRoomId = room_id_str
+			.parse()
+			.map_err(|e| err!("Invalid room ID: {e:?}"))?;
+
+		let event_id: OwnedEventId = event_id_str
+			.ok_or_else(|| err!("event_id query parameter is required"))?
+			.parse()
+			.map_err(|e| err!("Invalid event ID: {e:?}"))?;
+
+		info!("Fetching federation state for {room_id} at {event_id} from {server_name}");
+
+		let response = self
+			.services
+			.sending
+			.send_federation_request(&server_name, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: event_id.clone(),
+			})
+			.await?;
+
+		let dump = serde_json::json!({
+			"room_id": room_id,
+			"server_name": server_name,
+			"event_id": event_id.to_string(),
+			"pdus": response.pdus,
+			"auth_chain": response.auth_chain,
+		});
+
+		let pretty = serde_json::to_string_pretty(&dump).unwrap_or_default();
+
+		if let Some(ref path) = output {
+			std::fs::write(path, &pretty)
+				.map_err(|e| err!("Failed to write output file: {e:?}"))?;
+			self.write_str(&format!(
+				"Saved {} state PDUs and {} auth chain events to {path}",
+				response.pdus.len(),
+				response.auth_chain.len()
+			))
+			.await
+		} else {
+			self.write_str(&format!(
+				"Received {} state PDUs and {} auth chain events\n\n{}",
+				response.pdus.len(),
+				response.auth_chain.len(),
+				&pretty[..pretty.len().min(4096)]
+			))
+			.await
+		}
+	} else {
+		Err!(
+			"Unsupported federation endpoint: {url_path}\n\nSupported endpoints:\n  \
+			 /_matrix/federation/v1/state/!room:server?event_id=$event"
+		)
+	}
 }
