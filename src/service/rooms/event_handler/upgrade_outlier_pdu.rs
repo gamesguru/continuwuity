@@ -263,47 +263,10 @@ where
 		.map(Arc::new)
 		.await;
 
-	if incoming_pdu.state_key().is_some() {
-		debug!("Event is a state-event. Deriving new room state");
-
-		// We also add state after incoming event to the fork states
-		let mut state_after = state_at_incoming_event.clone();
-		if let Some(state_key) = incoming_pdu.state_key() {
-			let shortstatekey = self
-				.services
-				.short
-				.get_or_create_shortstatekey(&incoming_pdu.kind().to_string().into(), state_key)
-				.await;
-
-			let event_id = incoming_pdu.event_id();
-			state_after.insert(shortstatekey, event_id.to_owned());
-		}
-
-		let new_room_state = self
-			.resolve_state(room_id, &room_version_id, state_after)
-			.await?;
-
-		// Set the new room state to the resolved state
-		debug!("Forcing new room state");
-		let HashSetCompressStateEvent { shortstatehash, added, removed } = self
-			.services
-			.state_compressor
-			.save_state(room_id, new_room_state)
-			.await?;
-
-		Box::pin(self.services.state.force_state(
-			room_id,
-			shortstatehash,
-			added,
-			removed,
-			&state_lock,
-		))
-		.await?;
-	}
-
+	// Finalize soft_fail before any state processing: check policy server
+	// and redaction status so we can skip expensive state resolution for
+	// events that will be rejected.
 	if !soft_fail {
-		// Don't call the below checks on events that have already soft-failed, there's
-		// no reason to re-calculate that.
 		// 14-pre. If the event is not a state event, ask the policy server about it
 		if incoming_pdu.state_key.is_none() {
 			debug!(event_id = %incoming_pdu.event_id, "Checking policy server for event");
@@ -356,6 +319,47 @@ where
 				soft_fail = true;
 			}
 		}
+	}
+
+	// Only derive new room state for state events that passed all auth checks.
+	// This avoids expensive state resolution, DB writes, and prevents corrupting
+	// room state with rejected events.
+	if !soft_fail && incoming_pdu.state_key().is_some() {
+		debug!("Event is a state-event that passed auth. Deriving new room state");
+
+		// We also add state after incoming event to the fork states
+		let mut state_after = state_at_incoming_event.clone();
+		if let Some(state_key) = incoming_pdu.state_key() {
+			let shortstatekey = self
+				.services
+				.short
+				.get_or_create_shortstatekey(&incoming_pdu.kind().to_string().into(), state_key)
+				.await;
+
+			let event_id = incoming_pdu.event_id();
+			state_after.insert(shortstatekey, event_id.to_owned());
+		}
+
+		let new_room_state = self
+			.resolve_state(room_id, &room_version_id, state_after)
+			.await?;
+
+		// Set the new room state to the resolved state
+		debug!("Forcing new room state");
+		let HashSetCompressStateEvent { shortstatehash, added, removed } = self
+			.services
+			.state_compressor
+			.save_state(room_id, new_room_state)
+			.await?;
+
+		Box::pin(self.services.state.force_state(
+			room_id,
+			shortstatehash,
+			added,
+			removed,
+			&state_lock,
+		))
+		.await?;
 	}
 
 	// 14. Check if the event passes auth based on the "current state" of the room,
