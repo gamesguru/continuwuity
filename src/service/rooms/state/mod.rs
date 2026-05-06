@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{RoomVersion, debug};
+use conduwuit::{RoomVersion, debug, info};
 use conduwuit_core::{
 	Event, PduEvent, Result, err,
 	result::FlatOk,
@@ -104,6 +104,19 @@ impl Service {
 		statediffremoved: Arc<CompressedState>,
 		state_lock: &RoomMutexGuard,
 	) -> Result {
+		info!(
+			target: "force_state",
+			"processing {} new, {} removed state events for {room_id}",
+			statediffnew.len(),
+			statediffremoved.len()
+		);
+
+		// Set the room state FIRST so sync can find the shortstatehash.
+		// Without this, update_membership below marks users as joined, sync
+		// sees them as joined, but the room has no shortstatehash yet,
+		// causing "Room has no state" errors on large rooms.
+		self.set_room_state(room_id, shortstatehash, state_lock);
+
 		let new_event_ids = statediffnew
 			.iter()
 			.stream()
@@ -126,15 +139,19 @@ impl Service {
 			})
 			.ignore_err();
 
+		let mut new_processed = 0_usize;
+		let mut new_members = 0_usize;
+		let mut new_skipped = 0_usize;
 		pin_mut!(new_event_ids);
 		while let Some(event_id) = new_event_ids.next().await {
+			new_processed = new_processed.saturating_add(1);
 			let Ok(pdu) = self
 				.services
 				.timeline
 				.get_pdu_in_room(Some(room_id), &event_id)
 				.await
 			else {
-				warn!("Failed to fetch PDU {event_id} for new state during force_state");
+				new_skipped = new_skipped.saturating_add(1);
 				continue;
 			};
 
@@ -149,6 +166,13 @@ impl Service {
 						.state_cache
 						.update_membership(room_id, user_id, &pdu, false)
 						.await?;
+					new_members = new_members.saturating_add(1);
+					if new_members.is_multiple_of(1000) {
+						info!(
+							target: "force_state",
+							"processed {new_members} members, {new_processed} total, {new_skipped} skipped"
+						);
+					}
 				},
 				| TimelineEventType::SpaceChild => {
 					self.services
@@ -161,6 +185,10 @@ impl Service {
 				| _ => continue,
 			}
 		}
+		info!(
+			target: "force_state",
+			"new events done: {new_processed} processed, {new_members} members, {new_skipped} skipped"
+		);
 
 		pin_mut!(removed_event_ids);
 		while let Some(event_id) = removed_event_ids.next().await {
@@ -226,10 +254,8 @@ impl Service {
 				| _ => continue,
 			}
 		}
-
+		info!(target: "force_state", "removed events done, updating joined count");
 		self.services.state_cache.update_joined_count(room_id).await;
-
-		self.set_room_state(room_id, shortstatehash, state_lock);
 
 		// Reset extremities to the events in the new state to break the anchor to the
 		// old fork
@@ -248,6 +274,7 @@ impl Service {
 		)
 		.await;
 
+		info!(target: "force_state", "complete for {room_id}");
 		Ok(())
 	}
 
