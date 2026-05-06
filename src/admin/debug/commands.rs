@@ -1463,7 +1463,7 @@ pub(super) async fn force_set_room_state_from_server(
 		}
 
 		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
-			info!(
+			trace!(
 				"PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier insert"
 			);
 		} else {

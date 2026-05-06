@@ -193,7 +193,9 @@ impl Service {
 				self.services
 					.outlier
 					.add_pdu_outlier(&event_id, pdu_json, Some(room_id));
-				self.services.timeline.remove_from_timeline(&event_id).await;
+				// NOTE: do NOT remove from timeline here. Removed state events
+				// should remain as historical timeline entries. Only the state
+				// pointer (shortstatehash) changes.
 			}
 
 			let Ok(pdu) = self
