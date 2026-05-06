@@ -1,4 +1,6 @@
-use conduwuit::{Error, Result, checked, debug::DebugInspect, err, utils::string};
+use conduwuit::{
+	Error, Result, arrayvec::ArrayVec, checked, debug::DebugInspect, err, utils::string,
+};
 use serde::{
 	Deserialize, de,
 	de::{DeserializeSeed, Visitor},
@@ -339,11 +341,14 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
 	fn deserialize_i64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
 		const BYTES: usize = size_of::<i64>();
-		let b = self.record_next();
-		if b.len() < BYTES {
-			return Err(Error::SerdeDe("i64 buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = b[..BYTES].try_into()?;
+
+		let end = self.pos.saturating_add(BYTES).min(self.buf.len());
+		let bytes: ArrayVec<u8, BYTES> = self.buf[self.pos..end].try_into()?;
+		let bytes = bytes
+			.into_inner()
+			.map_err(|_| Self::Error::SerdeDe("i64 buffer underflow".into()))?;
+
+		self.inc_pos(BYTES);
 		visitor.visit_i64(i64::from_be_bytes(bytes))
 	}
 
@@ -381,11 +386,14 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
 	fn deserialize_u64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
 		const BYTES: usize = size_of::<u64>();
-		let b = self.record_next();
-		if b.len() < BYTES {
-			return Err(Error::SerdeDe("u64 buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = b[..BYTES].try_into()?;
+
+		let end = self.pos.saturating_add(BYTES).min(self.buf.len());
+		let bytes: ArrayVec<u8, BYTES> = self.buf[self.pos..end].try_into()?;
+		let bytes = bytes
+			.into_inner()
+			.map_err(|_| Self::Error::SerdeDe("u64 buffer underflow".into()))?;
+
+		self.inc_pos(BYTES);
 		visitor.visit_u64(u64::from_be_bytes(bytes))
 	}
 
