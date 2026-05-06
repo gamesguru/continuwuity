@@ -9,7 +9,10 @@ use database::{Database, Deserialized, Json, KeyVal, Map};
 use futures::{
 	FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future::select_ok, pin_mut,
 };
-use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, UInt, api::Direction};
+use ruma::{
+	CanonicalJsonObject, EventId, MilliSecondsSinceUnixEpoch, OwnedUserId, RoomId, UInt,
+	api::Direction,
+};
 
 use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
@@ -226,7 +229,7 @@ impl Data {
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(pdu.event_id.as_bytes(), pdu_id);
 		self.eventid_outlierpdu.remove(pdu.event_id.as_bytes());
-		self.append_timestamp_index(pdu_id, pdu);
+		self.append_timestamp_index(pdu_id, MilliSecondsSinceUnixEpoch(pdu.origin_server_ts));
 	}
 
 	pub(super) fn prepend_backfill_pdu(
@@ -238,20 +241,16 @@ impl Data {
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(event_id, pdu_id);
 		self.eventid_outlierpdu.remove(event_id);
-		if let Ok(pdu) =
-			serde_json::from_value::<PduEvent>(serde_json::to_value(json).expect("valid json"))
-		{
-			self.append_timestamp_index(pdu_id, &pdu);
+		if let Some(ruma::CanonicalJsonValue::Integer(ts)) = json.get("origin_server_ts") {
+			if let Ok(ts) = UInt::try_from(i64::from(*ts)) {
+				self.append_timestamp_index(pdu_id, MilliSecondsSinceUnixEpoch(ts));
+			}
 		}
 	}
 
-	fn append_timestamp_index(&self, pdu_id: &RawPduId, pdu: &PduEvent) {
-		let key = database::keyval::serialize_key((
-			pdu_id.shortroomid(),
-			pdu.origin_server_ts,
-			pdu_id.pdu_count(),
-		))
-		.expect("valid key");
+	fn append_timestamp_index(&self, pdu_id: &RawPduId, ts: MilliSecondsSinceUnixEpoch) {
+		let key = database::keyval::serialize_key((pdu_id.shortroomid(), ts, pdu_id.pdu_count()))
+			.expect("valid key");
 		self.db["roomid_timestamp_pducount"].insert(&key, []);
 	}
 
@@ -400,7 +399,10 @@ impl Data {
 			};
 
 			let pdu_id = PduId { shortroomid, shorteventid: count };
-			self.append_timestamp_index(&pdu_id.into(), &pdu);
+			self.append_timestamp_index(
+				&pdu_id.into(),
+				MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
+			);
 
 			// Write to DB in batched queries of 1000; avoid nightmare 1 write per iteration
 			yield_count = yield_count.saturating_add(1);

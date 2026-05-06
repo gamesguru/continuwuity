@@ -227,7 +227,7 @@ pub enum DebugCommand {
 
 	/// Backfill the timestamp index for MSC3030
 	BackfillTimestampIndex {
-		/// Room ID to backfill (otherwise all rooms)
+		/// Room ID to backfill
 		room_id: OwnedRoomId,
 	},
 
