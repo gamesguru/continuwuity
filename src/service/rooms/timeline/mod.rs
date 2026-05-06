@@ -199,7 +199,9 @@ impl Service {
 			.await
 			.map_err(|_| err!(Database("Room does not exist")))?;
 
-		let _cork = self.db.db.cork();
+		// Note: intentionally NOT corking the entire operation. A cork here
+		// would buffer 164K+ writes (82K deletes + 82K inserts) and trigger a
+		// catastrophic RocksDB compaction on flush that locks the server.
 
 		// Collect all PDUs from the timeline
 		info!("reorder_timeline: reading all PDUs from timeline...");
@@ -283,12 +285,16 @@ impl Service {
 			.map_err(|e| err!(Database("Failed to sort timeline: {e:?}")))?;
 
 		info!("reorder_timeline: sorted {} events, removing old entries...", sorted.len());
-		// Remove old timeline entries
+		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
+		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
 			let (old_count, ..) = entries.get(event_id).expect("in sorted list");
 			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
 			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
 			if i.saturating_add(1).is_multiple_of(10000) {
+				// Drop and re-cork to flush this batch
+				drop(cork.take());
+				cork = Some(self.db.db.cork());
 				info!(
 					"reorder_timeline: removed {}/{} entries...",
 					i.saturating_add(1),
@@ -296,6 +302,7 @@ impl Service {
 				);
 			}
 		}
+		drop(cork.take());
 
 		// Re-insert in topological order with fresh PduCount values
 		let count = sorted.len();
@@ -308,6 +315,7 @@ impl Service {
 			 {batch_start}..{})...",
 			batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
 		);
+		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
 			let (_, pdu, json) = entries.get(event_id).expect("in sorted list");
 			let new_count = batch_start
@@ -318,9 +326,13 @@ impl Service {
 
 			self.db.append_pdu(&pdu_id, pdu, json, pdu_count).await;
 			if i.saturating_add(1).is_multiple_of(10000) {
+				// Drop and re-cork to flush this batch
+				drop(cork.take());
+				cork = Some(self.db.db.cork());
 				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
 			}
 		}
+		drop(cork.take());
 
 		Ok(count)
 	}
