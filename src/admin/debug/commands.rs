@@ -1295,6 +1295,7 @@ pub(super) async fn fetch_pdu(
 	room_id: OwnedRoomId,
 	event_id: OwnedEventId,
 	server: OwnedServerName,
+	skip_auth: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -1323,15 +1324,31 @@ pub(super) async fn fetch_pdu(
 		.validate_and_add_event_id(&response.pdu, &room_version)
 		.await?;
 
+	let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
+		.map_err(|e| err!(Database("Invalid PDU: {e:?}")))?;
+
+	if skip_auth {
+		// Direct insert into timeline, bypassing all auth checks.
+		let msg = match self
+			.services
+			.rooms
+			.timeline
+			.force_insert_pdu(&room_id, &event_id, &pdu, &value)
+			.await
+		{
+			| Ok(pdu_id) =>
+				format!("Force-inserted PDU {event_id} into timeline (skipped auth): {pdu_id:?}"),
+			| Err(e) => format!("PDU {event_id}: {e}"),
+		};
+		return self.write_str(&msg).await;
+	}
+
 	let create_event = self
 		.services
 		.rooms
 		.state_accessor
 		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
 		.await?;
-
-	let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
-		.map_err(|e| err!(Database("Invalid PDU: {e:?}")))?;
 
 	let result = Box::pin(
 		self.services

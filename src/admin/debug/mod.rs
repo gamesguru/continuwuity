@@ -339,6 +339,11 @@ pub enum DebugCommand {
 	///
 	/// This will fetch the PDU and all its missing ancestors from the
 	/// specified server, stitching the DAG back together.
+	///
+	/// With --skip-auth, bypasses all auth checks and inserts the event
+	/// directly into the timeline (like promote-outlier but for events
+	/// that don't exist locally). Useful for recovering events that were
+	/// rejected due to auth chain issues.
 	FetchPdu {
 		/// The room ID
 		room_id: OwnedRoomId,
@@ -346,6 +351,9 @@ pub enum DebugCommand {
 		event_id: OwnedEventId,
 		/// The server to fetch from
 		server: OwnedServerName,
+		/// Skip auth checks and insert directly into timeline
+		#[arg(long)]
+		skip_auth: bool,
 	},
 
 	/// Prints the very first PDU in the specified room (typically

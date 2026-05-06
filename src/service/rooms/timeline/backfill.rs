@@ -411,3 +411,41 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 
 	Ok(())
 }
+
+/// Force-insert a PDU directly into the timeline, bypassing all auth checks.
+/// The caller provides the already-parsed PDU and its canonical JSON.
+/// Returns the assigned PduId on success.
+#[implement(super::Service)]
+pub async fn force_insert_pdu(
+	&self,
+	room_id: &RoomId,
+	event_id: &EventId,
+	pdu: &PduEvent,
+	value: &CanonicalJsonObject,
+) -> Result<RawPduId> {
+	// Skip if already in timeline
+	if self.get_pdu_id(event_id).await.is_ok() {
+		return Err!(Database("PDU {event_id} already in timeline"));
+	}
+
+	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+
+	let insert_lock = self.mutex_insert.lock(room_id).await;
+
+	let count: u64 = self.services.globals.next_count()?;
+	let pdu_count = PduCount::Normal(count);
+	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+
+	self.db.append_pdu(&pdu_id, pdu, value, pdu_count).await;
+
+	drop(insert_lock);
+
+	if pdu.kind == TimelineEventType::RoomMessage {
+		let content: ExtractBody = pdu.get_content()?;
+		if let Some(body) = content.body {
+			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
+		}
+	}
+
+	Ok(pdu_id)
+}
