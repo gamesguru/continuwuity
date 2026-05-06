@@ -428,3 +428,32 @@ jobs:
                 body,
               });
             }
+
+      - name: Notify Matrix room
+        if: always()
+        env:
+          MATRIX_TOKEN: ${{ secrets.NUTRA_BOT_PAT }}
+          MATRIX_ROOM_ID: ${{ vars.C10Y_MATRIX_NOTIFY_ROOM_ID || '!m82A7i5caVq0WrL0mc:nutra.tk' }}
+          MATRIX_HOMESERVER: ${{ vars.C10Y_MATRIX_NOTIFY_HOMESERVER || 'https://matrix.nutra.tk' }}
+        run: |
+          PASS="${{ steps.results.outputs.pass || 0 }}"
+          FAIL="${{ steps.results.outputs.fail || 0 }}"
+          SKIP="${{ steps.results.outputs.skip || 0 }}"
+          TOTAL="${{ steps.results.outputs.total || 0 }}"
+          ARCH="${{ matrix.arch }}"
+          OS="${{ matrix.os }}"
+          REF="${{ github.head_ref || github.ref_name }}"
+          SHA="${{ github.sha }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MARK=$([[ "$FAIL" == "0" ]] && echo "✓" || echo "✗")
+
+          MSG="${MARK} Complement (${ARCH} ${OS}): ${PASS} pass, ${FAIL} fail, ${SKIP} skip / ${TOTAL} total -- ${REF} @ ${SHA:0:7} -- ${RUN_URL}"
+
+          if [ -n "${MATRIX_TOKEN}" ]; then
+            TXN_ID="ci-$(date +%s)-${RANDOM}"
+            curl -f -X PUT \
+              "${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${MATRIX_ROOM_ID}/send/m.room.message/${TXN_ID}" \
+              -H "Authorization: Bearer ${MATRIX_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"msgtype\":\"m.notice\",\"body\":\"${MSG}\"}"
+          fi
