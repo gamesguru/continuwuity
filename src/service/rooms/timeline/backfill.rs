@@ -363,7 +363,7 @@ pub async fn backfill_pdu(
 	Ok(())
 }
 
-/// Promote an outlier event directly into the timeline as a backfill PDU.
+/// Promote an outlier event into the visible timeline as a Normal PDU.
 /// This skips all auth checks — the caller is responsible for ensuring
 /// the event is valid (e.g. it came from a send_join response).
 #[implement(super::Service)]
@@ -384,15 +384,18 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
-	let count: i64 = self.services.globals.next_count()?.try_into()?;
+	// Use forward-facing (i.e., positive) PDU count
+	let count: u64 = self.services.globals.next_count()?;
 
 	let pdu_id: RawPduId = PduId {
 		shortroomid,
-		shorteventid: PduCount::Backfilled(validated!(0 - count)),
+		shorteventid: PduCount::Normal(count),
 	}
 	.into();
 
-	self.db.prepend_backfill_pdu(&pdu_id, event_id, &value);
+	self.db
+		.append_pdu(&pdu_id, &pdu, &value, PduCount::Normal(count))
+		.await;
 
 	drop(insert_lock);
 
