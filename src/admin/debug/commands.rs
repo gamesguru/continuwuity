@@ -1,5 +1,5 @@
 use std::{
-	collections::{HashMap, HashSet},
+	collections::{HashMap, HashSet, VecDeque},
 	fmt::Write,
 	iter::once,
 	time::{Instant, SystemTime},
@@ -2331,8 +2331,7 @@ pub(super) async fn heal_room(
 		.get_pdu(&latest_event_id)
 		.await?;
 
-	let mut queue: std::collections::VecDeque<OwnedEventId> =
-		latest.prev_events().map(ToOwned::to_owned).collect();
+	let mut queue: VecDeque<OwnedEventId> = latest.prev_events().map(ToOwned::to_owned).collect();
 	queue.extend(latest.auth_events().map(ToOwned::to_owned));
 	let mut seen = HashSet::<OwnedEventId>::new();
 	let mut fetched = 0_usize;
@@ -2578,4 +2577,331 @@ pub(super) async fn federation_request(
 			 /_matrix/federation/v1/state/!room:server?event_id=$event"
 		)
 	}
+}
+
+#[admin_command]
+pub(super) async fn dag_merge_base(
+	&self,
+	room_id: OwnedRoomId,
+	server: OwnedServerName,
+	event_a: Option<OwnedEventId>,
+	event_b: Option<OwnedEventId>,
+	max_depth: usize,
+) -> Result {
+	self.bail_restricted()?;
+
+	if !self.services.server.config.allow_federation {
+		return Err!("Federation is disabled on this homeserver.");
+	}
+
+	if server == self.services.globals.server_name() {
+		return Err!("Cannot compare against ourselves.");
+	}
+
+	/// Look up a PDU from timeline first, then outlier table.
+	macro_rules! get_pdu_any {
+		($event_id:expr) => {{
+			let eid: &EventId = $event_id;
+			if let Ok(pdu) = self.services.rooms.timeline.get_pdu(eid).await {
+				Some(pdu)
+			} else if let Ok(pdu) = self.services.rooms.outlier.get_pdu_outlier(eid).await {
+				Some(pdu)
+			} else {
+				None
+			}
+		}};
+	}
+
+	// Resolve local tip (event A)
+	let event_a = match event_a {
+		| Some(id) => id,
+		| None => {
+			let latest = self
+				.services
+				.rooms
+				.timeline
+				.latest_pdu_in_room(&room_id)
+				.await?;
+			self.write_str(&format!("Local tip: {}\n", latest.event_id()))
+				.await?;
+			latest.event_id().to_owned()
+		},
+	};
+
+	// Resolve remote tip (event B) via federation
+	let event_b = match event_b {
+		| Some(id) => id,
+		| None => {
+			self.write_str(&format!("Fetching remote tip from {server}...\n"))
+				.await?;
+			// Get state_ids at our local tip — the remote server's latest known
+			// event for this room will be in there
+			let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+			let request = get_room_state::v1::Request::new(event_a.clone(), room_id.clone());
+			let response = self
+				.services
+				.sending
+				.send_federation_request(&server, request)
+				.await
+				.map_err(|e| err!("Federation request to {server} failed: {e}"))?;
+			// Find the most recent PDU from the response (highest depth)
+			let mut best: Option<(OwnedEventId, PduEvent)> = None;
+			for raw_pdu in &response.pdus {
+				if let Ok((event_id, _value)) = self
+					.services
+					.server_keys
+					.validate_and_add_event_id(raw_pdu, &room_version)
+					.await
+				{
+					if let Ok(pdu) = serde_json::from_str::<PduEvent>(
+						&serde_json::to_string(raw_pdu).unwrap_or_default(),
+					) {
+						let dominated = best.as_ref().is_none_or(|(_, b)| pdu.depth > b.depth);
+						if dominated {
+							best = Some((event_id, pdu));
+						}
+					}
+				}
+			}
+			let (remote_tip_id, _) =
+				best.ok_or_else(|| err!("No valid PDUs found from {server}"))?;
+			self.write_str(&format!("Remote tip: {remote_tip_id}\n"))
+				.await?;
+			remote_tip_id
+		},
+	};
+
+	// Check both events exist locally
+	let pdu_a =
+		get_pdu_any!(&event_a).ok_or_else(|| err!("Event A not found locally: {event_a}"))?;
+	let pdu_b = get_pdu_any!(&event_b).ok_or_else(|| {
+		err!(
+			"Event B not found locally: {event_b}. You may need to fetch it first with `debug \
+			 fetch-pdu`."
+		)
+	})?;
+
+	self.write_str(&format!(
+		"Walking DAG backwards from:\n  A (local): {} (depth {}, type {})\n  B (remote): {} \
+		 (depth {}, type {})\n\nMax depth: {max_depth}\n",
+		event_a, pdu_a.depth, pdu_a.kind, event_b, pdu_b.depth, pdu_b.kind,
+	))
+	.await?;
+
+	// Bidirectional BFS via prev_events
+	// ancestors_a/b: event_id -> (depth_from_start, parent_event_id)
+	let mut ancestors_a: HashMap<OwnedEventId, (usize, Option<OwnedEventId>)> = HashMap::new();
+	let mut ancestors_b: HashMap<OwnedEventId, (usize, Option<OwnedEventId>)> = HashMap::new();
+	let mut queue_a: VecDeque<(OwnedEventId, usize)> = VecDeque::new();
+	let mut queue_b: VecDeque<(OwnedEventId, usize)> = VecDeque::new();
+
+	ancestors_a.insert(event_a.clone(), (0, None));
+	ancestors_b.insert(event_b.clone(), (0, None));
+	queue_a.push_back((event_a.clone(), 0));
+	queue_b.push_back((event_b.clone(), 0));
+
+	let mut merge_bases: Vec<OwnedEventId> = Vec::new();
+	let mut steps = 0_usize;
+	let mut missing_events = 0_usize;
+
+	while (!queue_a.is_empty() || !queue_b.is_empty()) && steps < max_depth {
+		// Expand one step from A
+		if let Some((current, depth)) = queue_a.pop_front() {
+			if ancestors_b.contains_key(&current) {
+				if !merge_bases.contains(&current) {
+					merge_bases.push(current.clone());
+				}
+				// Don't stop — find all merge bases at this depth
+			}
+
+			if let Some(pdu) = get_pdu_any!(&current) {
+				for prev in pdu.prev_events() {
+					let prev = prev.to_owned();
+					if !ancestors_a.contains_key(&prev) {
+						let next_depth = depth.saturating_add(1);
+						ancestors_a.insert(prev.clone(), (next_depth, Some(current.clone())));
+						if next_depth < max_depth {
+							queue_a.push_back((prev, next_depth));
+						}
+					}
+				}
+			} else {
+				missing_events = missing_events.saturating_add(1);
+			}
+		}
+
+		// Expand one step from B
+		if let Some((current, depth)) = queue_b.pop_front() {
+			if ancestors_a.contains_key(&current) {
+				if !merge_bases.contains(&current) {
+					merge_bases.push(current.clone());
+				}
+			}
+
+			if let Some(pdu) = get_pdu_any!(&current) {
+				for prev in pdu.prev_events() {
+					let prev = prev.to_owned();
+					if !ancestors_b.contains_key(&prev) {
+						let next_depth = depth.saturating_add(1);
+						ancestors_b.insert(prev.clone(), (next_depth, Some(current.clone())));
+						if next_depth < max_depth {
+							queue_b.push_back((prev, next_depth));
+						}
+					}
+				}
+			} else {
+				missing_events = missing_events.saturating_add(1);
+			}
+		}
+
+		steps = steps.saturating_add(1);
+
+		// If we found merge bases and both queues are past the merge base depth, stop
+		if !merge_bases.is_empty() && queue_a.is_empty() && queue_b.is_empty() {
+			break;
+		}
+		// Early stop if we found merge bases and current depth exceeds merge base depth
+		// by a margin
+		if let Some(first_mb) = merge_bases.first() {
+			let mb_depth_a = ancestors_a.get(first_mb).map_or(0, |(d, _)| *d);
+			let mb_depth_b = ancestors_b.get(first_mb).map_or(0, |(d, _)| *d);
+			let mb_max = mb_depth_a.max(mb_depth_b);
+			let current_min_a = queue_a.front().map_or(usize::MAX, |(_, d)| *d);
+			let current_min_b = queue_b.front().map_or(usize::MAX, |(_, d)| *d);
+			if current_min_a > mb_max && current_min_b > mb_max {
+				break;
+			}
+		}
+	}
+
+	self.write_str(&format!(
+		"Walked {} steps, visited {} (A) + {} (B) events, {} missing\n",
+		steps,
+		ancestors_a.len(),
+		ancestors_b.len(),
+		missing_events,
+	))
+	.await?;
+
+	if merge_bases.is_empty() {
+		return self
+			.write_str(&format!(
+				"**No common ancestor found** within {max_depth} steps.\n\nThe events may be on \
+				 completely disjoint DAG branches, or the common ancestor is deeper than the \
+				 limit."
+			))
+			.await;
+	}
+
+	// For each merge base, trace back the path from both events
+	for mb in &merge_bases {
+		let mb_pdu = get_pdu_any!(mb);
+		let mb_info = mb_pdu.as_ref().map_or_else(
+			|| "unknown".to_owned(),
+			|p| format!("depth {}, type {}", p.depth, p.kind),
+		);
+
+		self.write_str(&format!("\n### Merge base: `{mb}` ({mb_info})\n"))
+			.await?;
+
+		// Trace path A -> merge base
+		let path_a = trace_path(&ancestors_a, &event_a, mb);
+		let path_b = trace_path(&ancestors_b, &event_b, mb);
+
+		// Render ASCII DAG
+		let short = |id: &EventId| -> String {
+			let s = id.as_str();
+			let truncated: String = s.chars().take(12).collect();
+			if s.len() > 12 {
+				format!("{truncated}…")
+			} else {
+				s.to_owned()
+			}
+		};
+
+		let mut graph = String::new();
+
+		// Header
+		writeln!(graph, "```").ok();
+		writeln!(
+			graph,
+			"  A ({} steps)          B ({} steps)",
+			path_a.len().saturating_sub(1),
+			path_b.len().saturating_sub(1)
+		)
+		.ok();
+		writeln!(graph, "  │                     │").ok();
+
+		let max_len = path_a.len().max(path_b.len());
+		for i in 0..max_len {
+			let left = path_a.get(i).map(|id| short(id)).unwrap_or_default();
+			let right = path_b.get(i).map(|id| short(id)).unwrap_or_default();
+
+			// Check if this is the merge base
+			let is_mb_left = path_a.get(i).is_some_and(|id| id == mb);
+			let is_mb_right = path_b.get(i).is_some_and(|id| id == mb);
+
+			if is_mb_left || is_mb_right {
+				writeln!(graph, "  └──────────┬──────────┘").ok();
+				writeln!(graph, "             │").ok();
+				writeln!(graph, "      {left} ◄── MERGE BASE").ok();
+
+				// Get the merge base PDU info
+				if let Some(ref p) = mb_pdu {
+					writeln!(graph, "      depth={}, ts={}", p.depth, p.origin_server_ts).ok();
+				}
+				break;
+			}
+
+			if !left.is_empty() && !right.is_empty() {
+				writeln!(graph, "  {left:<20}  {right}").ok();
+				writeln!(graph, "  │                     │").ok();
+			} else if !left.is_empty() {
+				writeln!(graph, "  {left:<20}  ·").ok();
+				writeln!(graph, "  │                     ·").ok();
+			} else {
+				writeln!(graph, "  ·                     {right}").ok();
+				writeln!(graph, "  ·                     │").ok();
+			}
+		}
+
+		// If we never printed a merge base line (both paths end at merge base on
+		// different iterations)
+		if max_len == 0 {
+			writeln!(graph, "  (same event)").ok();
+		}
+
+		writeln!(graph, "```").ok();
+		self.write_str(&graph).await?;
+	}
+
+	Ok(())
+}
+
+/// Trace the path from a starting event back to the target event using the
+/// ancestor map.
+fn trace_path(
+	ancestors: &HashMap<OwnedEventId, (usize, Option<OwnedEventId>)>,
+	from: &EventId,
+	to: &EventId,
+) -> Vec<OwnedEventId> {
+	let mut path = Vec::new();
+	let mut current = from.to_owned();
+	let mut visited = HashSet::new();
+
+	loop {
+		if !visited.insert(current.clone()) {
+			break; // cycle guard
+		}
+		path.push(current.clone());
+		if current == to {
+			break;
+		}
+		match ancestors.get(&current) {
+			| Some((_, Some(parent))) => current = parent.clone(),
+			| _ => break,
+		}
+	}
+
+	path
 }

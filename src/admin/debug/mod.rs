@@ -482,6 +482,28 @@ pub enum DebugCommand {
 	/// Send a test email to the invoking admin's email address
 	SendTestEmail,
 
+	/// Find the merge-base (common ancestor) between two DAG tips and
+	/// render an ASCII graph of the divergence.
+	///
+	/// By default, compares the local latest PDU against the remote
+	/// server's latest PDU for the room. Use --event-a / --event-b to
+	/// override with specific event IDs.
+	DagMergeBase {
+		/// The room ID.
+		room_id: OwnedRoomId,
+		/// The remote server to compare against.
+		server: OwnedServerName,
+		/// Override the local tip event ID.
+		#[arg(long)]
+		event_a: Option<OwnedEventId>,
+		/// Override the remote tip event ID.
+		#[arg(long)]
+		event_b: Option<OwnedEventId>,
+		/// Maximum depth to walk before giving up (default: 500).
+		#[arg(long, default_value = "500")]
+		max_depth: usize,
+	},
+
 	/// Developer test stubs
 	#[command(subcommand)]
 	#[allow(non_snake_case)]
