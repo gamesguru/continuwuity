@@ -108,16 +108,16 @@ impl Data {
 		pin_mut!(pdus);
 
 		while let Some((_, pdu)) = pdus.try_next().await? {
+			// Use canonical key format: room_id || 0xFF || event_id
+			// (must match add_pdu_outlier / room_stream expectations)
 			let mut key = room_id.as_bytes().to_vec();
 			key.push(0xFF);
-			let ts: u64 = pdu.origin_server_ts.into();
-			key.extend_from_slice(&ts.to_be_bytes());
 			key.extend_from_slice(pdu.event_id.as_bytes());
 
 			if let Ok(json) = self.get_non_outlier_pdu_json(&pdu.event_id).await {
 				self.eventid_outlierpdu.raw_put(&pdu.event_id, Json(&json));
 				self.roomid_outliereventid
-					.raw_put::<&[u8], [u8; 0]>(&key, []);
+					.insert(&key, pdu.event_id.as_bytes());
 				count = count.saturating_add(1);
 			}
 		}
@@ -167,7 +167,7 @@ impl Data {
 					));
 				}
 			} else {
-				// Room version 3 and later: PDU JSON does not contain room_id.
+				// v12 hashed-room PDUs may not contain room_id in the JSON.
 				// Verify room association by comparing ShortRoomId from pdu_id.
 				let expected_shortroomid =
 					self.services.short.get_shortroomid(expected_room).await?;
@@ -218,7 +218,7 @@ impl Data {
 							)));
 						}
 					} else {
-						// Room version 3 and later: PDU JSON does not contain room_id.
+						// v12 hashed-room PDUs may not contain room_id in the JSON.
 						// Verify room association via roomid_outliereventid table.
 						let mut key = expected_room.as_bytes().to_vec();
 						key.push(0xFF);
@@ -274,7 +274,7 @@ impl Data {
 					));
 				}
 			} else {
-				// Room version 3 and later: PDU JSON does not contain room_id.
+				// v12 hashed-room PDUs may not contain room_id in the JSON.
 				// Verify room association by comparing ShortRoomId from pdu_id.
 				let expected_shortroomid =
 					self.services.short.get_shortroomid(expected_room).await?;
@@ -386,7 +386,7 @@ impl Data {
 					)));
 				}
 			} else {
-				// Room version 3 and later: PDU JSON does not contain room_id.
+				// v12 hashed-room PDUs may not contain room_id in the JSON.
 				// We do not have ShortRoomId here for the expected room, but
 				// we are called from an iterator that already filtered by it.
 			}

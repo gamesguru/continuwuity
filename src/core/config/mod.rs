@@ -545,7 +545,7 @@ pub struct Config {
 
 	/// Federation sender transaction retry backoff base (seconds). This is
 	/// the minimum delay before the first retry after a failed transaction.
-	/// Subsequent retries use quadratic backoff: base × tries².
+	/// Subsequent retries use exponential backoff: base × 2^(tries-1).
 	///
 	/// default: 5
 	#[serde(default = "default_sender_retry_backoff_base")]

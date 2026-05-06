@@ -159,15 +159,30 @@ pub fn add_pdu_outlier(
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn remove_outlier(&self, event_id: &EventId) {
-	if let Ok(pdu) = self
+	if let Ok(json) = self
 		.db
 		.eventid_outlierpdu
 		.get(event_id)
 		.await
-		.deserialized::<PduEvent>()
+		.deserialized::<CanonicalJsonObject>()
 	{
-		if let Some(room_id) = pdu.room_id.as_deref() {
-			let room_id: &RoomId = room_id;
+		// Derive room_id using the same fallback chain as add_pdu_outlier
+		// to ensure we always remove the roomid_outliereventid index entry
+		let room_id_from_pdu = json
+			.get("room_id")
+			.and_then(CanonicalJsonValue::as_str)
+			.and_then(|r| <&RoomId>::try_from(r).ok())
+			.map(ToOwned::to_owned)
+			.or_else(|| {
+				let is_create = json.get("type").and_then(CanonicalJsonValue::as_str)
+					== Some("m.room.create");
+				is_create
+					.then(|| event_id.as_str().replace('$', "!"))
+					.and_then(|r| OwnedRoomId::parse(r).ok())
+			});
+
+		if let Some(room_id) = room_id_from_pdu {
+			let room_id: &RoomId = &room_id;
 			let mut key = room_id.as_bytes().to_vec();
 			key.push(0xFF);
 			key.extend_from_slice(event_id.as_bytes());
