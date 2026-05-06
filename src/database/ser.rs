@@ -151,11 +151,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 		self,
 		_name: &'static str,
 		_idx: u32,
-		var: &'static str,
+		_var: &'static str,
 		_len: usize,
 	) -> Result<Self::SerializeTupleVariant> {
-		self.serialize_str(var)?;
-		Ok(self)
+		unhandled!("serialize Tuple Variant not implemented")
 	}
 
 	fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
@@ -176,11 +175,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 		self,
 		_name: &'static str,
 		_idx: u32,
-		var: &'static str,
+		_var: &'static str,
 		_len: usize,
 	) -> Result<Self::SerializeStructVariant> {
-		self.serialize_str(var)?;
-		Ok(self)
+		unhandled!("serialize Struct Variant not implemented")
 	}
 
 	#[allow(clippy::needless_borrows_for_generic_args)] // buggy
@@ -203,7 +201,7 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 					.serialize(&mut Serializer::new(&mut Writer::new(&mut self.out)))
 					.map_err(|e| Self::Error::SerdeSer(e.to_string().into()))
 			},
-			| _ => value.serialize(self),
+			| _ => unhandled!("Unrecognized serialization Newtype {name:?}"),
 		}
 	}
 
@@ -211,12 +209,10 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 		self,
 		_name: &'static str,
 		_idx: u32,
-		var: &'static str,
-		value: &T,
+		_var: &'static str,
+		_value: &T,
 	) -> Result<Self::Ok> {
-		self.serialize_str(var)?;
-		self.record_start()?;
-		value.serialize(self)
+		unhandled!("serialize Newtype Variant not implemented")
 	}
 
 	fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok> {
@@ -237,9 +233,9 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 		self,
 		_name: &'static str,
 		_idx: u32,
-		var: &'static str,
+		_var: &'static str,
 	) -> Result<Self::Ok> {
-		self.serialize_str(var)
+		unhandled!("serialize Unit Variant not implemented")
 	}
 
 	fn serialize_some<T: Serialize + ?Sized>(self, val: &T) -> Result<Self::Ok> {
@@ -283,21 +279,29 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 
 	fn serialize_i32(self, v: i32) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
 
-	fn serialize_i16(self, v: i16) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
+	fn serialize_i16(self, _v: i16) -> Result<Self::Ok> {
+		unhandled!("serialize i16 not implemented")
+	}
 
-	fn serialize_i8(self, v: i8) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
+	fn serialize_i8(self, _v: i8) -> Result<Self::Ok> {
+		unhandled!("serialize i8 not implemented")
+	}
 
 	fn serialize_u64(self, v: u64) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
 
 	fn serialize_u32(self, v: u32) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
 
-	fn serialize_u16(self, v: u16) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
+	fn serialize_u16(self, _v: u16) -> Result<Self::Ok> {
+		unhandled!("serialize u16 not implemented")
+	}
 
 	fn serialize_u8(self, v: u8) -> Result<Self::Ok> { self.write(&[v]) }
 
-	fn serialize_bool(self, v: bool) -> Result<Self::Ok> { self.serialize_u8(v.into()) }
+	fn serialize_bool(self, _v: bool) -> Result<Self::Ok> {
+		unhandled!("serialize bool not implemented")
+	}
 
-	fn serialize_unit(self) -> Result<Self::Ok> { Ok(()) }
+	fn serialize_unit(self) -> Result<Self::Ok> { unhandled!("serialize unit not implemented") }
 }
 
 impl<W: Write> ser::SerializeSeq for &mut Serializer<'_, W> {
@@ -384,11 +388,12 @@ impl<W: Write> ser::SerializeStructVariant for &mut Serializer<'_, W> {
 	fn serialize_field<T: Serialize + ?Sized>(
 		&mut self,
 		_key: &'static str,
-		val: &T,
+		_val: &T,
 	) -> Result<Self::Ok> {
-		self.record_start()?;
-		val.serialize(&mut **self)
+		unhandled!("serialize Struct Variant Field not implemented")
 	}
 
-	fn end(self) -> Result<Self::Ok> { self.tuple_end() }
+	fn end(self) -> Result<Self::Ok> {
+		unhandled!("serialize Struct Variant End not implemented")
+	}
 }

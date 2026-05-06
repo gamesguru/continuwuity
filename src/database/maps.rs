@@ -185,7 +185,7 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "roomid_timestamp_pducount",
-		key_size_hint: Some(24),
+		key_size_hint: Some(25),
 		..descriptor::SEQUENTIAL
 	},
 	Descriptor {

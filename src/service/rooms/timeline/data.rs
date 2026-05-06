@@ -249,8 +249,8 @@ impl Data {
 	}
 
 	fn append_timestamp_index(&self, pdu_id: &RawPduId, ts: MilliSecondsSinceUnixEpoch) {
-		let key = database::keyval::serialize_key((pdu_id.shortroomid(), ts, pdu_id.pdu_count()))
-			.expect("valid key");
+		let key = pack_timestamp_key(pdu_id.shortroomid(), u64::from(ts.0), pdu_id.pdu_count());
+
 		self.db["roomid_timestamp_pducount"].insert(&key, []);
 	}
 
@@ -340,9 +340,8 @@ impl Data {
 				| Direction::Backward => PduCount::max(),
 			};
 
-			// Define start key, and closure/exit type for the stream
-			let key = database::keyval::serialize_key((short, timestamp, count))?;
-			Ok::<_, conduwuit::Error>((short, key))
+			let key = pack_timestamp_key(short.to_be_bytes(), timestamp, count);
+			Ok::<_, conduwuit::Error>((short, key.to_vec()))
 		};
 
 		// Main stream
@@ -358,17 +357,22 @@ impl Data {
 				};
 
 				stream
-					// Stop searching when we hit an event/key belonging to another room
 					.ready_try_take_while(move |(k, _)| Ok(k.starts_with(&prefix)))
 					// Extract PDU count via key lookup (shortroomid, timestamp, count)
 					.ready_and_then(|(k, _)| {
-						let deserialized: (u64, UInt, PduCount) =
-							database::keyval::deserialize_key(k).map_err(|e| {
-								err!(Database("Failed to deserialize index key: {e:?}"))
-							})?;
+						if k.len() != 25 {
+							return Err(err!(Database("Invalid timestamp index key length")));
+						}
 
-						// We only need the count (3rd element) as a lookup key
-						let count = deserialized.2;
+						let is_normal = k[16] == 1;
+						let c_bytes: [u8; 8] = k[17..25].try_into().expect("valid slice");
+						let count = if is_normal {
+							PduCount::Normal(u64::from_be_bytes(c_bytes))
+						} else {
+							let sortable_c = u64::from_be_bytes(c_bytes);
+							PduCount::Backfilled((sortable_c ^ (1 << 63)).cast_signed())
+						};
+
 						Ok(count)
 					})
 					// Using PDU count, fetch full PDU event object
@@ -478,6 +482,32 @@ impl Data {
 
 		Ok(pdu_id.into())
 	}
+}
+
+/// Build a fixed-width 25-byte binary key for the `roomid_timestamp_pducount`
+/// index without going through conduwuit's serde serializer. The serde tuple
+/// format uses `0xFF` as a field delimiter, so raw big-endian integers that
+/// happen to contain a `0xFF` byte would inject false delimiters and corrupt
+/// the key. Manual packing avoids this entirely.
+///
+/// Layout: `[shortroomid:8][timestamp:8][variant:1][count:8]`
+fn pack_timestamp_key(shortroomid: [u8; 8], ts: u64, count: PduCount) -> [u8; 25] {
+	let mut key = [0_u8; 25];
+	key[0..8].copy_from_slice(&shortroomid);
+	key[8..16].copy_from_slice(&ts.to_be_bytes());
+	match count {
+		| PduCount::Backfilled(c) => {
+			key[16] = 0;
+			// Map negative i64 to correctly ordered u64 for RocksDB sorting
+			let sortable_c = c.cast_unsigned() ^ (1 << 63);
+			key[17..25].copy_from_slice(&sortable_c.to_be_bytes());
+		},
+		| PduCount::Normal(c) => {
+			key[16] = 1;
+			key[17..25].copy_from_slice(&c.to_be_bytes());
+		},
+	}
+	key
 }
 
 //TODO: this is an ABA

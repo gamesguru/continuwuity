@@ -7,11 +7,10 @@ use std::{
 };
 
 use ruma::api::Direction;
-use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result, err};
 
-#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Count {
 	Normal(u64),
 	Backfilled(i64),

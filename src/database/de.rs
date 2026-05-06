@@ -22,13 +22,7 @@ pub(crate) fn from_slice<'a, T>(buf: &'a [u8]) -> Result<T>
 where
 	T: Deserialize<'a>,
 {
-	let mut deserializer = Deserializer {
-		buf,
-		pos: 0,
-		rec: 0,
-		seq: 0,
-		ident_raw: false,
-	};
+	let mut deserializer = Deserializer { buf, pos: 0, rec: 0, seq: false };
 
 	T::deserialize(&mut deserializer).debug_inspect(|_| {
 		deserializer
@@ -42,8 +36,7 @@ pub(crate) struct Deserializer<'de> {
 	buf: &'de [u8],
 	pos: usize,
 	rec: usize,
-	seq: u32,
-	ident_raw: bool,
+	seq: bool,
 }
 
 /// Directive to ignore a record. This type can be used to skip deserialization
@@ -77,14 +70,17 @@ impl<'de> Deserializer<'de> {
 
 	/// Called at the start of arrays and tuples
 	#[inline]
-	fn sequence_start(&mut self) { self.seq = self.seq.saturating_add(1); }
+	fn sequence_start(&mut self) {
+		debug_assert!(!self.seq, "Nested sequences are not handled at this time");
+		self.seq = true;
+	}
 
 	/// Consume the current record to ignore it. Inside a sequence the next
 	/// record is skipped but at the top-level all records are skipped such that
 	/// deserialization completes with self.finished() == Ok.
 	#[inline]
 	fn record_ignore(&mut self) {
-		if self.seq > 0 {
+		if self.seq {
 			self.record_next();
 		} else {
 			self.record_ignore_all();
@@ -256,12 +252,7 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 		V: Visitor<'de>,
 	{
 		match name {
-			| "$serde_json::private::RawValue" => {
-				self.ident_raw = true;
-				let res = visitor.visit_map(&mut *self);
-				self.ident_raw = false;
-				res
-			},
+			| "$serde_json::private::RawValue" => visitor.visit_map(self),
 			| "Cbor" => visitor
 				.visit_newtype_struct(&mut minicbor_serde::Deserializer::new(self.record_trail()))
 				.map_err(|e| Self::Error::SerdeDe(e.to_string().into())),
@@ -270,17 +261,17 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 		}
 	}
 
-	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip(self, visitor)))]
+	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip(self, _visitor)))]
 	fn deserialize_enum<V>(
 		self,
 		_name: &'static str,
 		_variants: &'static [&'static str],
-		visitor: V,
+		_visitor: V,
 	) -> Result<V::Value>
 	where
 		V: Visitor<'de>,
 	{
-		visitor.visit_enum(self)
+		unhandled!("deserialize Enum not implemented")
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
@@ -297,45 +288,23 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		let b = self.record_next();
-		if b.is_empty() {
-			return Err(Error::SerdeDe("bool buffer underflow".into()));
-		}
-		visitor.visit_bool(b[0] != 0)
+	fn deserialize_bool<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!("deserialize bool not implemented")
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_i8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		const BYTES: usize = size_of::<i8>();
-		let b = self.record_next();
-		if b.len() < BYTES {
-			return Err(Error::SerdeDe("i8 buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = b[..BYTES].try_into()?;
-		visitor.visit_i8(i8::from_be_bytes(bytes))
+	fn deserialize_i8<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!("deserialize i8 not implemented")
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_i16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		const BYTES: usize = size_of::<i16>();
-		let b = self.record_next();
-		if b.len() < BYTES {
-			return Err(Error::SerdeDe("i16 buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = b[..BYTES].try_into()?;
-		visitor.visit_i16(i16::from_be_bytes(bytes))
+	fn deserialize_i16<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!("deserialize i16 not implemented")
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_i32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		const BYTES: usize = size_of::<i32>();
-		let b = self.record_next();
-		if b.len() < BYTES {
-			return Err(Error::SerdeDe("i32 buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = b[..BYTES].try_into()?;
-		visitor.visit_i32(i32::from_be_bytes(bytes))
+	fn deserialize_i32<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!("deserialize i32 not implemented")
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
@@ -353,34 +322,21 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_u8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		let b = self.record_next();
-		if b.is_empty() {
-			return Err(Error::SerdeDe("u8 buffer underflow".into()));
-		}
-		visitor.visit_u8(b[0])
+	fn deserialize_u8<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!(
+			"deserialize u8 not implemented; try dereferencing the Handle for [u8] access \
+			 instead"
+		)
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_u16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		const BYTES: usize = size_of::<u16>();
-		let b = self.record_next();
-		if b.len() < BYTES {
-			return Err(Error::SerdeDe("u16 buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = b[..BYTES].try_into()?;
-		visitor.visit_u16(u16::from_be_bytes(bytes))
+	fn deserialize_u16<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!("deserialize u16 not implemented")
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_u32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		const BYTES: usize = size_of::<u32>();
-		let b = self.record_next();
-		if b.len() < BYTES {
-			return Err(Error::SerdeDe("u32 buffer underflow".into()));
-		}
-		let bytes: [u8; BYTES] = b[..BYTES].try_into()?;
-		visitor.visit_u32(u32::from_be_bytes(bytes))
+	fn deserialize_u32<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!("deserialize u32 not implemented")
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
@@ -438,25 +394,20 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		visitor.visit_unit()
+	fn deserialize_unit<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!("deserialize Unit not implemented")
 	}
 
-	// this only used for $serde_json::private::RawValue and enums
+	// this only used for $serde_json::private::RawValue at this time; see MapAccess
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
 	fn deserialize_identifier<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		if self.ident_raw {
-			let input = "$serde_json::private::RawValue";
-			visitor.visit_borrowed_str(input)
-		} else {
-			self.deserialize_str(visitor)
-		}
+		let input = "$serde_json::private::RawValue";
+		visitor.visit_borrowed_str(input)
 	}
 
 	#[cfg_attr(unabridged, tracing::instrument(level = "trace", skip_all))]
-	fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-		self.record_ignore();
-		visitor.visit_unit()
+	fn deserialize_ignored_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value> {
+		unhandled!("deserialize Ignored Any not implemented")
 	}
 
 	#[cfg_attr(
@@ -472,47 +423,6 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 
 			| _ => self.deserialize_str(visitor),
 		}
-	}
-}
-
-impl<'de> de::EnumAccess<'de> for &mut Deserializer<'de> {
-	type Error = Error;
-	type Variant = Self;
-
-	fn variant_seed<V>(self, seed: V) -> Result<(V::Value, Self::Variant)>
-	where
-		V: DeserializeSeed<'de>,
-	{
-		let variant = seed.deserialize(&mut *self)?;
-		Ok((variant, self))
-	}
-}
-
-impl<'de> de::VariantAccess<'de> for &mut Deserializer<'de> {
-	type Error = Error;
-
-	fn unit_variant(self) -> Result<()> { Ok(()) }
-
-	fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value>
-	where
-		T: DeserializeSeed<'de>,
-	{
-		self.record_start();
-		seed.deserialize(self)
-	}
-
-	fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value>
-	where
-		V: Visitor<'de>,
-	{
-		de::Deserializer::deserialize_tuple(self, len, visitor)
-	}
-
-	fn struct_variant<V>(self, fields: &'static [&'static str], visitor: V) -> Result<V::Value>
-	where
-		V: Visitor<'de>,
-	{
-		de::Deserializer::deserialize_struct(self, "", fields, visitor)
 	}
 }
 
