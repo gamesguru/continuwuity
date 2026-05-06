@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use conduwuit::{
-	Err, PduCount, PduEvent, Result, at, err,
+	Err, Event, PduCount, PduEvent, Result, at, err,
 	result::NotFound,
 	utils::{self, stream::TryReadyExt},
 };
@@ -112,10 +112,23 @@ impl Data {
 	}
 
 	/// Returns the pdu directly from `eventid_pduid` only.
-	pub(super) async fn get_non_outlier_pdu(&self, event_id: &EventId) -> Result<PduEvent> {
+	/// If `room_id` is provided, validates the PDU belongs to that room.
+	pub(super) async fn get_non_outlier_pdu_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		event_id: &EventId,
+	) -> Result<PduEvent> {
 		let pduid = self.get_pdu_id(event_id).await?;
+		let pdu: PduEvent = self.pduid_pdu.get(&pduid).await.deserialized()?;
 
-		self.pduid_pdu.get(&pduid).await.deserialized()
+		// Enforce cross-room boundary: verify the PDU belongs to the expected room
+		if let Some(expected_room) = room_id {
+			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
+				return Err!(Database("PDU {event_id} does not belong to room {expected_room}"));
+			}
+		}
+
+		Ok(pdu)
 	}
 
 	/// Like get_non_outlier_pdu(), but without the expense of fetching and
@@ -129,12 +142,30 @@ impl Data {
 	/// Returns the pdu.
 	///
 	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.
-	pub(super) async fn get_pdu(&self, event_id: &EventId) -> Result<PduEvent> {
-		let accepted = self.get_non_outlier_pdu(event_id).boxed();
+	/// If `room_id` is provided, validates the PDU belongs to that room.
+	pub(super) async fn get_pdu_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		event_id: &EventId,
+	) -> Result<PduEvent> {
+		let accepted = self.get_non_outlier_pdu_in_room(room_id, event_id).boxed();
 		let outlier = self
 			.eventid_outlierpdu
 			.get(event_id)
-			.map(Deserialized::deserialized)
+			.map(move |handle| {
+				let pdu: PduEvent = handle.deserialized()?;
+
+				// Enforce cross-room boundary
+				if let Some(expected_room) = room_id {
+					if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
+						return Err(conduwuit::err!(Database(
+							"Outlier PDU {event_id} does not belong to room {expected_room}"
+						)));
+					}
+				}
+
+				Ok(pdu)
+			})
 			.boxed();
 
 		select_ok([accepted, outlier]).await.map(at!(0))
@@ -158,8 +189,21 @@ impl Data {
 	/// Returns the pdu.
 	///
 	/// This does __NOT__ check the outliers `Tree`.
-	pub(super) async fn get_pdu_from_id(&self, pdu_id: &RawPduId) -> Result<PduEvent> {
-		self.pduid_pdu.get(pdu_id).await.deserialized()
+	/// If `room_id` is provided, validates the PDU belongs to that room.
+	pub(super) async fn get_pdu_from_id_in_room(
+		&self,
+		room_id: Option<&RoomId>,
+		pdu_id: &RawPduId,
+	) -> Result<PduEvent> {
+		let pdu: PduEvent = self.pduid_pdu.get(pdu_id).await.deserialized()?;
+
+		if let Some(expected_room) = room_id {
+			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
+				return Err!(Database("PDU does not belong to room {expected_room}"));
+			}
+		}
+
+		Ok(pdu)
 	}
 
 	/// Returns the pdu as a `BTreeMap<String, CanonicalJsonValue>`.
@@ -240,7 +284,7 @@ impl Data {
 				self.pduid_pdu
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(Self::from_json_slice)
+					.ready_and_then(move |kv| Self::parse_json_slice(Some(room_id), kv))
 			})
 			.try_flatten_stream()
 	}
@@ -256,7 +300,7 @@ impl Data {
 				self.pduid_pdu
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(Self::from_json_slice)
+					.ready_and_then(move |kv| Self::parse_json_slice(Some(room_id), kv))
 			})
 			.try_flatten_stream()
 	}
@@ -331,7 +375,7 @@ impl Data {
 					// Using PDU count, fetch full PDU event object
 					.and_then(move |count| async move {
 						let pdu_id = PduId { shortroomid: short, shorteventid: count };
-						self.get_pdu_from_id(&pdu_id.into()).await
+						self.get_pdu_from_id_in_room(None, &pdu_id.into()).await
 					})
 			})
 			.try_flatten_stream()
@@ -370,10 +414,20 @@ impl Data {
 		Ok(())
 	}
 
-	fn from_json_slice((pdu_id, pdu): KeyVal<'_>) -> Result<PdusIterItem> {
+	fn parse_json_slice(
+		room_id: Option<&RoomId>,
+		(pdu_id, pdu): KeyVal<'_>,
+	) -> Result<PdusIterItem> {
 		let pdu_id: RawPduId = pdu_id.into();
-
 		let pdu = serde_json::from_slice::<PduEvent>(pdu)?;
+
+		if let Some(expected_room) = room_id {
+			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
+				return Err(conduwuit::err!(Database(
+					"PDU does not belong to expected room {expected_room}"
+				)));
+			}
+		}
 
 		Ok((pdu_id.pdu_count(), pdu))
 	}

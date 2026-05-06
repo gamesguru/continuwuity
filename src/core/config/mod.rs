@@ -2347,6 +2347,18 @@ pub struct LdapConfig {
 	#[serde(default)]
 	pub uri: Option<Url>,
 
+	/// StartTLS for LDAP connections.
+	///
+	/// default: false
+	#[serde(default)]
+	pub use_starttls: bool,
+
+	/// Skip TLS certificate verification, possibly dangerous.
+	///
+	/// default: false
+	#[serde(default)]
+	pub disable_tls_verification: bool,
+
 	/// Root of the searches.
 	///
 	/// example: "ou=users,dc=example,dc=org"
@@ -2555,6 +2567,9 @@ pub struct SmtpConfig {
 	/// Whether to require that users provide an email address when they
 	/// register.
 	///
+	/// If either this option or `require_email_for_token_registration` are set,
+	/// users will not be allowed to remove their email address.
+	///
 	/// default: false
 	#[serde(default)]
 	pub require_email_for_registration: bool,
@@ -2584,7 +2599,6 @@ const DEPRECATED_KEYS: &[&str] = &[
 	"well_known_support_role",
 	"well_known_support_email",
 	"well_known_support_mxid",
-	"registration_token_file",
 	"well_known.rtc_focus_server_urls",
 ];
 

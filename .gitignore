@@ -110,3 +110,5 @@ doc_build/
 ._*
 ~$*
 *.swp
+test_logs.jsonl
+test_results.jsonl
