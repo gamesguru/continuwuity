@@ -66,6 +66,18 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 	// Spawn deadlock detection thread
 	deadlock::spawn();
 
+	// Because we're not using rustls default-tls, we have to initialise a TLS
+	// provider
+	#[cfg(feature = "aws_lc_rs")]
+	rustls::crypto::aws_lc_rs::default_provider()
+		.install_default()
+		.expect("failed to initialise aws_lc_rs rustls crypto provider");
+
+	#[cfg(all(feature = "ring", not(feature = "aws_lc_rs")))]
+	rustls::crypto::ring::default_provider()
+		.install_default()
+		.expect("failed to initialise ring rustls crypto provider");
+
 	let config_paths = args.config.clone().unwrap_or_default();
 	let config = Config::load(&config_paths)
 		.and_then(|raw| update(raw, args))

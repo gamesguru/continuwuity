@@ -16,7 +16,7 @@ use conduwuit_core::error;
 use database::{Deserialized, Ignore, Interfix, Json, Map};
 use futures::{Stream, StreamExt, TryFutureExt};
 #[cfg(feature = "ldap")]
-use ldap3::{LdapConnAsync, Scope, SearchEntry};
+use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use ruma::{
 	DeviceId, KeyId, MilliSecondsSinceUnixEpoch, OneTimeKeyAlgorithm, OneTimeKeyId,
 	OneTimeKeyName, OwnedDeviceId, OwnedKeyId, OwnedMxcUri, OwnedUserId, RoomId, UInt, UserId,
@@ -1043,16 +1043,22 @@ impl Service {
 			.await
 			.map_err(|_| err!(Request(InvalidParam("Tried to sign nonexistent key"))))?
 			.deserialized()
-			.map_err(|e| err!(Database(debug_warn!("key in keyid_key is invalid: {e:?}"))))?;
+			.map_err(|e| err!(Database(info!("key in keyid_key is invalid: {e:?}"))))?;
 
 		let signatures = cross_signing_key
-			.get_mut("signatures")
-			.ok_or_else(|| {
-				err!(Database(debug_warn!("key in keyid_key has no signatures field")))
-			})?
+			.as_object_mut()
+			.ok_or_else(|| err!(Database(info!("key in keyid_key is not an object"))))?
+			.entry("signatures")
+			.or_insert_with(|| {
+				info!(
+					target: "cross_signing",
+					"Key {key_id} of {target_id} has no signatures field, initializing empty"
+				);
+				serde_json::json!({})
+			})
 			.as_object_mut()
 			.ok_or_else(|| {
-				err!(Database(debug_warn!("key in keyid_key has invalid signatures field.")))
+				err!(Database(info!("key in keyid_key has invalid signatures field.")))
 			})?
 			.entry(sender_id.to_string())
 			.or_insert_with(|| serde_json::Map::new().into());
@@ -1060,7 +1066,7 @@ impl Service {
 		signatures
 			.as_object_mut()
 			.ok_or_else(|| {
-				err!(Database(debug_warn!("signatures in keyid_key for a user is invalid.")))
+				err!(Database(info!("signatures in keyid_key for a user is invalid.")))
 			})?
 			.insert(signature.0, signature.1.into());
 
@@ -1517,6 +1523,24 @@ impl Service {
 		}
 	}
 
+	#[cfg(feature = "ldap")]
+	async fn create_ldap_connection(
+		config: &conduwuit_core::config::LdapConfig,
+		uri: &str,
+	) -> Result<(LdapConnAsync, ldap3::Ldap), ldap3::LdapError> {
+		let mut settings = LdapConnSettings::new();
+
+		if config.use_starttls {
+			settings = settings.set_starttls(true);
+		}
+
+		if config.disable_tls_verification {
+			settings = settings.set_no_tls_verify(true);
+		}
+
+		LdapConnAsync::with_settings(settings, uri).await
+	}
+
 	#[cfg(not(feature = "ldap"))]
 	pub async fn search_ldap(&self, _user_id: &UserId) -> Result<Vec<(String, Option<bool>)>> {
 		Err!(FeatureDisabled("ldap"))
@@ -1534,7 +1558,7 @@ impl Service {
 			.ok_or_else(|| err!(Ldap(error!("LDAP URI is not configured."))))?;
 
 		debug!(?uri, "LDAP creating connection...");
-		let (conn, mut ldap) = LdapConnAsync::new(uri.as_str())
+		let (conn, mut ldap) = Self::create_ldap_connection(config, uri.as_str())
 			.await
 			.map_err(|e| err!(Ldap(error!(%user_id, "LDAP connection setup error: {e}"))))?;
 
@@ -1643,9 +1667,9 @@ impl Service {
 			.ok_or_else(|| err!(Ldap(error!("LDAP URI is not configured."))))?;
 
 		debug!(?uri, "LDAP creating connection...");
-		let (conn, mut ldap) = LdapConnAsync::new(uri.as_str())
+		let (conn, mut ldap) = Self::create_ldap_connection(config, uri.as_str())
 			.await
-			.map_err(|e| err!(Ldap(error!(?user_dn, "LDAP connection setup error: {e}"))))?;
+			.map_err(|e| err!(Ldap(error!(%user_dn, "LDAP connection setup error: {e}"))))?;
 
 		let driver = self.services.server.runtime().spawn(async move {
 			match conn.drive().await {
