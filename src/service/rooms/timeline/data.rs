@@ -56,7 +56,7 @@ impl Data {
 			.await?
 			.map(at!(0))
 			.filter(|&count| matches!(count, PduCount::Normal(_)))
-			.unwrap_or_else(PduCount::min);
+			.unwrap_or_else(PduCount::max);
 
 		Ok(last_count)
 	}
