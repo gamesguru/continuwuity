@@ -287,7 +287,8 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 	) {
 		let _cork = self.db.db.cork();
-		let iv = if !matches!(msg.event, SendingEvent::Flush) {
+		let is_flush = matches!(msg.event, SendingEvent::Flush);
+		let iv = if !is_flush {
 			vec![(msg.queue_id, msg.event)]
 		} else {
 			self.db
@@ -297,19 +298,16 @@ impl Service {
 				.await
 		};
 
-		match self.select_events(&msg.dest, iv, statuses).await {
-			| Ok(Some(events)) if !events.is_empty() => {
+		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
+			if !events.is_empty() {
 				futures.push(self.send_events(msg.dest, events));
-			},
-			| Ok(Some(_)) => {
+			} else {
 				statuses.remove(&msg.dest);
-			},
-			| Ok(None) => {
-				// Flush was rejected (e.g., backoff still active). Re-schedule
-				// so the retry isn't permanently lost due to timer jitter.
-				self.reschedule_flush(msg.dest);
-			},
-			| Err(_) => {},
+			}
+		} else if is_flush {
+			// Flush was rejected (e.g., backoff still active due to timer
+			// jitter). Re-schedule so the retry isn't permanently lost.
+			self.reschedule_flush(msg.dest);
 		}
 	}
 
