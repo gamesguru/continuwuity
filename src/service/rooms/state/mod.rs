@@ -111,12 +111,6 @@ impl Service {
 			statediffremoved.len()
 		);
 
-		// Set the room state FIRST so sync can find the shortstatehash.
-		// Without this, update_membership below marks users as joined, sync
-		// sees them as joined, but the room has no shortstatehash yet,
-		// causing "Room has no state" errors on large rooms.
-		self.set_room_state(room_id, shortstatehash, state_lock);
-
 		let new_event_ids = statediffnew
 			.iter()
 			.stream()
@@ -256,6 +250,8 @@ impl Service {
 		}
 		info!(target: "force_state", "removed events done, updating joined count");
 		self.services.state_cache.update_joined_count(room_id).await;
+
+		self.set_room_state(room_id, shortstatehash, state_lock);
 
 		// Reset extremities to the events in the new state to break the anchor to the
 		// old fork
