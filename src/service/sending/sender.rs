@@ -199,6 +199,29 @@ impl Service {
 		});
 	}
 
+	/// Re-schedule a Flush for the given destination after a short delay.
+	/// Called when a Flush arrives but is rejected (e.g. backoff still active
+	/// due to timer jitter), so the retry isn't permanently lost.
+	fn reschedule_flush(&self, dest: Destination) {
+		let sender = self
+			.channels
+			.get(self.shard_id(&dest))
+			.expect("channel")
+			.0
+			.clone();
+
+		self.server.runtime().spawn(async move {
+			tokio::time::sleep(Duration::from_secs(1)).await;
+			sender
+				.send(Msg {
+					dest,
+					event: SendingEvent::Flush,
+					queue_id: Vec::new(),
+				})
+				.ok();
+		});
+	}
+
 	#[allow(clippy::needless_pass_by_ref_mut)]
 	async fn handle_response_ok<'a>(
 		&'a self,
@@ -274,12 +297,19 @@ impl Service {
 				.await
 		};
 
-		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
-			if !events.is_empty() {
+		match self.select_events(&msg.dest, iv, statuses).await {
+			| Ok(Some(events)) if !events.is_empty() => {
 				futures.push(self.send_events(msg.dest, events));
-			} else {
+			},
+			| Ok(Some(_)) => {
 				statuses.remove(&msg.dest);
-			}
+			},
+			| Ok(None) => {
+				// Flush was rejected (e.g., backoff still active). Re-schedule
+				// so the retry isn't permanently lost due to timer jitter.
+				self.reschedule_flush(msg.dest);
+			},
+			| Err(_) => {},
 		}
 	}
 
