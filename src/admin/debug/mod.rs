@@ -129,6 +129,19 @@ pub enum DebugCommand {
 		jsonl: String,
 	},
 
+	/// Force-import PDUs from a JSONL file on disk directly into the
+	/// timeline, bypassing auth checks. Useful for recovering events
+	/// that were rejected due to state forks.
+	///
+	/// Use `get-remote-dag` to create the JSONL file, then this command
+	/// to import it. Run `reorder-timeline` afterwards to fix ordering.
+	ImportPdus {
+		/// The room ID to import into.
+		room_id: OwnedRoomId,
+		/// Path to the JSONL file on disk.
+		path: String,
+	},
+
 	/// Compares local room state with a remote server.
 	CompareRoomState {
 		/// The room ID.

@@ -2519,6 +2519,78 @@ pub(super) async fn import_outliers(&self, jsonl: String) -> Result {
 }
 
 #[admin_command]
+pub(super) async fn import_pdus(&self, room_id: OwnedRoomId, path: String) -> Result {
+	self.bail_restricted()?;
+
+	let contents = tokio::fs::read_to_string(&path)
+		.await
+		.map_err(|e| err!("Failed to read file {path}: {e:?}"))?;
+
+	let mut inserted = 0_usize;
+	let mut skipped = 0_usize;
+	let mut failed = 0_usize;
+	let total = contents.lines().filter(|l| !l.trim().is_empty()).count();
+
+	self.write_str(&format!("Importing PDUs from {path} into {room_id} ({total} lines)..."))
+		.await?;
+
+	for line in contents.lines() {
+		if line.trim().is_empty() {
+			continue;
+		}
+
+		let value: CanonicalJsonObject = match serde_json::from_str(line) {
+			| Ok(v) => v,
+			| Err(e) => {
+				warn!("import_pdus: bad JSON line: {e:?}");
+				failed = failed.saturating_add(1);
+				continue;
+			},
+		};
+
+		let Some(event_id) = value
+			.get("event_id")
+			.and_then(ruma::CanonicalJsonValue::as_str)
+			.and_then(|id| OwnedEventId::parse(id).ok())
+		else {
+			failed = failed.saturating_add(1);
+			continue;
+		};
+
+		let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref())) {
+			| Ok(p) => p,
+			| Err(e) => {
+				warn!("import_pdus: bad PDU {event_id}: {e:?}");
+				failed = failed.saturating_add(1);
+				continue;
+			},
+		};
+
+		match self
+			.services
+			.rooms
+			.timeline
+			.force_insert_pdu(&room_id, &event_id, &pdu, &value)
+			.await
+		{
+			| Ok(_) => {
+				inserted = inserted.saturating_add(1);
+			},
+			| Err(_) => {
+				// Already in timeline
+				skipped = skipped.saturating_add(1);
+			},
+		}
+	}
+
+	self.write_str(&format!(
+		"Imported {inserted} PDUs, skipped {skipped}, failed {failed} out of {total} total for \
+		 {room_id}. Run `reorder-timeline` and `force-set-room-state` to finalize."
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn federation_request(
 	&self,
 	server_name: OwnedServerName,
