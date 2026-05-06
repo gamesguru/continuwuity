@@ -184,6 +184,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "roomid_timestamp_pducount",
+		key_size_hint: Some(24),
+		..descriptor::SEQUENTIAL
+	},
+	Descriptor {
 		name: "roomserverids",
 		..descriptor::RANDOM_SMALL
 	},
