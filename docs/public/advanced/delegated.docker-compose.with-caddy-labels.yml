@@ -16,6 +16,9 @@ services:
             - /var/run/docker.sock:/var/run/docker.sock
             - ./data:/data
         restart: unless-stopped
+        labels:
+            caddy: example.com
+            caddy.reverse_proxy: /.well-known/matrix/* homeserver:8008
 
     homeserver:
         image: "forgejo.ellis.link/continuwuation/continuwuity:latest"
@@ -26,7 +29,7 @@ services:
             - ./continuwuity-resolv.conf:/etc/resolv.conf # use custom resolvers rather than Docker's
             #- ./continuwuity.toml:/etc/continuwuity.toml
         environment:
-            CONTINUWUITY_SERVER_NAME: example.com
+            CONTINUWUITY_SERVER_NAME: example.com # EDIT THIS
             CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
             CONTINUWUITY_ADDRESS: 0.0.0.0
             CONTINUWUITY_PORT: 8008
@@ -35,14 +38,14 @@ services:
             # Serve .well-known files to tell others to reach Continuwuity on port :443
             CONTINUWUITY_WELL_KNOWN: |
                 {
-                client=https://example.com,
-                server=example.com:443
+                client=https://matrix.example.com,
+                server=matrix.example.com:443
                 }
 
         networks:
             - caddy
         labels:
-            caddy: example.com
+            caddy: matrix.example.com
             caddy.reverse_proxy: "{{upstreams 8008}}"
 volumes:
     db:

@@ -60,7 +60,9 @@ if new_passes_match:
     args_str = args_str.replace(new_passes_match.group(0), "")
 
 # Extract order (it takes whatever is left if it starts with order=)
-order_match = re.search(r"order=(.+?)(?:$| like=| limit=| new_passes=)", args_str + " ", re.IGNORECASE)
+order_match = re.search(
+    r"order=(.+?)(?:$| like=| limit=| new_passes=)", args_str + " ", re.IGNORECASE
+)
 if order_match:
     order = order_match.group(1).strip()
 
@@ -76,30 +78,33 @@ else:
     # Default to recent main/upstream
     baseline_run_filter = "(b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream') OR b.version_string LIKE '%main%')"
 
+if like_str == "all":
+    like_filter = ""
+else:
+    like_filter = f"AND version_string LIKE '%{like_str}%'"
+
 sql_file_path = os.path.join(os.path.dirname(__file__), "queries.sql")
 with open(sql_file_path, "r") as f:
     base_query_template = f.read()
 
-prefetch_limit = str(int(limit) * 4)
-
-if like_str == "all":
-    like_filter = ""
-else:
-    like_filter = f" AND r.version_string LIKE '%{like_str}%'"
-
-base_query = base_query_template.format(
+query = base_query_template.format(
     baseline_run_filter=baseline_run_filter,
     tz_sql=tz_sql,
     columns_tail=columns_tail,
-    prefetch_limit=prefetch_limit,
-    like_filter=like_filter
+    order=order,
+    limit=limit,
+    like_filter=like_filter,
 )
-
-query = f"{base_query}\nORDER BY\n    {order}\nLIMIT {limit}"
 
 print(f"\nExecuting Query:\n{query}\n")
 
-# Execute the db-shell script with the query
 env = os.environ.copy()
 env["PAGER"] = env.get("PAGER") or "less -X -F -S"
-subprocess.run(["./bin/db-shell", "-c", query], env=env)
+
+try:
+    subprocess.run(["./bin/db-shell", "-c", query], env=env)
+except KeyboardInterrupt:
+    raise SystemExit(130)
+finally:
+    if sys.stdin.isatty():
+        os.system("stty sane 2>/dev/null")
