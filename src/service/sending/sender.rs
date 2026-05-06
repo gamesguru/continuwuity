@@ -176,8 +176,11 @@ impl Service {
 		let base = self.server.config.sender_retry_backoff_base;
 		let max = self.server.config.sender_retry_backoff_limit;
 		let delay_secs = base
-			.saturating_mul(tries.into())
-			.saturating_mul(tries.into())
+			.saturating_mul(
+				1_u64
+					.checked_shl(tries.saturating_sub(1))
+					.unwrap_or(u64::MAX),
+			)
 			.min(max);
 
 		let sender = self
