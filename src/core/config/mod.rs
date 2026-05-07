@@ -2801,7 +2801,7 @@ fn default_sender_timeout() -> u64 { 180 }
 
 fn default_sender_idle_timeout() -> u64 { 180 }
 
-fn default_sender_retry_backoff_base() -> u64 { 5 }
+fn default_sender_retry_backoff_base() -> u64 { 2 }
 
 fn default_sender_retry_backoff_limit() -> u64 { 86400 }
 
