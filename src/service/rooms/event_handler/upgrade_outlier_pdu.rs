@@ -70,22 +70,16 @@ where
 	);
 	let mut state_at_incoming_event = if incoming_pdu.prev_events().count() == 1 {
 		self.state_at_incoming_degree_one(&incoming_pdu, room_id)
-			.await
-			.ok()
-			.flatten()
+			.await?
 	} else {
 		self.state_at_incoming_resolved(&incoming_pdu, room_id, &room_version_id)
-			.await
-			.ok()
-			.flatten()
+			.await?
 	};
 
 	if state_at_incoming_event.is_none() {
 		state_at_incoming_event = self
 			.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
-			.await
-			.ok()
-			.flatten();
+			.await?;
 	}
 
 	if state_at_incoming_event.is_none() {
@@ -209,7 +203,13 @@ where
 		false
 	} else {
 		match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
-			| (false, _) => true,
+			| (false, _) => {
+				info!(
+					event_id = %incoming_pdu.event_id,
+					"Soft-failing: auth check against current state failed"
+				);
+				true
+			},
 			| (true, None) => false,
 			| (true, Some(redact_id)) =>
 				!self
@@ -367,7 +367,10 @@ where
 	if soft_fail {
 		info!(
 			event_id = %incoming_pdu.event_id,
-			"Soft failing event"
+			event_type = %incoming_pdu.kind,
+			sender = %incoming_pdu.sender,
+			state_key = ?incoming_pdu.state_key,
+			"Soft-failing event"
 		);
 		// assert!(extremities.is_empty(), "soft_fail extremities empty");
 		let extremities = extremities.iter().map(Borrow::borrow);
