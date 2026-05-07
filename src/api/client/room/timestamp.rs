@@ -1,7 +1,10 @@
 use axum::extract::State;
-use conduwuit::{Err, Result};
+use conduwuit::{Err, Result, info};
 use futures::{StreamExt, pin_mut};
-use ruma::{MilliSecondsSinceUnixEpoch, api::client::room::get_event_by_timestamp};
+use ruma::{
+	MilliSecondsSinceUnixEpoch,
+	api::{Direction, client::room::get_event_by_timestamp},
+};
 
 use crate::Ruma;
 
@@ -49,7 +52,7 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 		.take(MAX_SCAN);
 	pin_mut!(stream);
 
-	// Look for first visible event
+	// Look for first visible event from the timestamp index
 	while let Some(res) = stream.next().await {
 		// If the event is not found, skip it (the question mark is meaningful here)
 		let pdu = res?;
@@ -69,5 +72,41 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 		}
 	}
 
-	Err!(Request(NotFound("Unable to navigate to the given timestamp")))
+	// Fallback: timestamp index had no entries (room not backfilled into ts index).
+	// Use the pduid_pdu timeline directly — this always works.
+	info!(
+		%room_id,
+		?ts,
+		?dir,
+		"Timestamp index miss, falling back to timeline scan"
+	);
+
+	let fallback = match dir {
+		| Direction::Forward => {
+			// "Go to beginning" — return the first event in the room
+			let stream = services.rooms.timeline.pdus(room_id, None);
+			pin_mut!(stream);
+			match stream.next().await {
+				| Some(Ok((_count, pdu))) => Some(pdu),
+				| _ => None,
+			}
+		},
+		| Direction::Backward => {
+			// "Go to end" — return the latest event in the room
+			let stream = services.rooms.timeline.pdus_rev(room_id, None);
+			pin_mut!(stream);
+			match stream.next().await {
+				| Some(Ok((_count, pdu))) => Some(pdu),
+				| _ => None,
+			}
+		},
+	};
+
+	match fallback {
+		| Some(pdu) => Ok(get_event_by_timestamp::v1::Response::new(
+			pdu.event_id.clone(),
+			MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
+		)),
+		| None => Err!(Request(NotFound("Unable to navigate to the given timestamp"))),
+	}
 }
