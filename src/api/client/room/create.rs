@@ -319,6 +319,8 @@ pub(crate) async fn create_room_route(
 						if let Ok(creator) = OwnedUserId::parse(creator) {
 							// Add them to the power levels and creators
 							creators.push(creator.clone());
+							// Also invite them, so they can join
+							invitees.insert(creator);
 						}
 					}
 				}
