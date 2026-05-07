@@ -1,4 +1,6 @@
-use conduwuit::{Err, Result, RoomVersion, implement, info, matrix::Event, pdu::PduBuilder};
+use conduwuit::{
+	Err, Result, RoomVersion, debug_info, implement, matrix::Event, pdu::PduBuilder,
+};
 use ruma::{
 	EventId, RoomId, UserId,
 	events::{
@@ -106,17 +108,32 @@ pub async fn user_can_see_event(
 ) -> bool {
 	if let Ok(pdu) = self.services.timeline.get_pdu(event_id).await {
 		if pdu.sender == user_id {
-			info!("visibility {event_id}: sender match -> true");
+			debug_info!("visibility {event_id}: sender match -> true");
 			return true;
 		}
 	} else {
-		info!("visibility {event_id}: get_pdu failed");
+		debug_info!("visibility {event_id}: get_pdu failed");
 	}
 
 	let Ok(shortstatehash) = self.pdu_shortstatehash(event_id).await else {
-		let joined = self.services.state_cache.is_joined(user_id, room_id).await;
-		info!("visibility {event_id}: no shortstatehash, is_joined={joined}");
-		return joined;
+		// No historical state snapshot for this event. Use the current room state's
+		// history_visibility as a best-effort fallback. For shared/world_readable
+		// policies, allow if currently a member. For joined/invited, deny since we
+		// cannot verify historical membership without the shortstatehash.
+		let currently_member = self.services.state_cache.is_joined(user_id, room_id).await;
+		debug_info!("visibility {event_id}: no shortstatehash, is_joined={currently_member}");
+		let history_visibility = self
+			.room_state_get_content(room_id, &StateEventType::RoomHistoryVisibility, "")
+			.await
+			.map_or(HistoryVisibility::Shared, |c: RoomHistoryVisibilityEventContent| {
+				c.history_visibility
+			});
+
+		return match history_visibility {
+			| HistoryVisibility::WorldReadable => true,
+			| HistoryVisibility::Shared => currently_member,
+			| _ => false,
+		};
 	};
 
 	let currently_member = self.services.state_cache.is_joined(user_id, room_id).await;
@@ -128,7 +145,11 @@ pub async fn user_can_see_event(
 			c.history_visibility
 		});
 
-	let result = match history_visibility {
+	debug_info!(
+		"visibility {event_id}: ssh={shortstatehash} hv={history_visibility:?} \
+		 member={currently_member}"
+	);
+	match history_visibility {
 		| HistoryVisibility::Invited => {
 			// Allow if any member on requesting server was AT LEAST invited, else deny
 			self.user_was_invited(shortstatehash, user_id).await
@@ -139,13 +160,7 @@ pub async fn user_can_see_event(
 		},
 		| HistoryVisibility::WorldReadable => true,
 		| HistoryVisibility::Shared | _ => currently_member,
-	};
-
-	info!(
-		"visibility {event_id}: ssh={shortstatehash} hv={history_visibility:?} \
-		 member={currently_member} -> {result}"
-	);
-	result
+	}
 }
 
 /// Whether a user is allowed to see an event, based on
