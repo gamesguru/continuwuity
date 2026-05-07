@@ -1,4 +1,4 @@
-use conduwuit::{Err, Result, RoomVersion, implement, matrix::Event, pdu::PduBuilder};
+use conduwuit::{Err, Result, RoomVersion, implement, info, matrix::Event, pdu::PduBuilder};
 use ruma::{
 	EventId, RoomId, UserId,
 	events::{
@@ -106,12 +106,17 @@ pub async fn user_can_see_event(
 ) -> bool {
 	if let Ok(pdu) = self.services.timeline.get_pdu(event_id).await {
 		if pdu.sender == user_id {
+			info!("visibility {event_id}: sender match -> true");
 			return true;
 		}
+	} else {
+		info!("visibility {event_id}: get_pdu failed");
 	}
 
 	let Ok(shortstatehash) = self.pdu_shortstatehash(event_id).await else {
-		return self.services.state_cache.is_joined(user_id, room_id).await;
+		let joined = self.services.state_cache.is_joined(user_id, room_id).await;
+		info!("visibility {event_id}: no shortstatehash, is_joined={joined}");
+		return joined;
 	};
 
 	let currently_member = self.services.state_cache.is_joined(user_id, room_id).await;
@@ -123,7 +128,7 @@ pub async fn user_can_see_event(
 			c.history_visibility
 		});
 
-	match history_visibility {
+	let result = match history_visibility {
 		| HistoryVisibility::Invited => {
 			// Allow if any member on requesting server was AT LEAST invited, else deny
 			self.user_was_invited(shortstatehash, user_id).await
@@ -134,7 +139,13 @@ pub async fn user_can_see_event(
 		},
 		| HistoryVisibility::WorldReadable => true,
 		| HistoryVisibility::Shared | _ => currently_member,
-	}
+	};
+
+	info!(
+		"visibility {event_id}: ssh={shortstatehash} hv={history_visibility:?} \
+		 member={currently_member} -> {result}"
+	);
+	result
 }
 
 /// Whether a user is allowed to see an event, based on
