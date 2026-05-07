@@ -1567,6 +1567,13 @@ pub(super) async fn force_set_room_state_from_server(
 		.force_state(room_id.clone().as_ref(), short_state_hash, added, removed, &state_lock)
 		.await?;
 
+	info!("Resetting forward extremities to new state snapshot");
+	self.services
+		.rooms
+		.state
+		.reset_extremities_to_state(room_id.clone().as_ref(), short_state_hash, &state_lock)
+		.await;
+
 	info!(
 		"Updating joined counts for room just in case (e.g. we may have found a difference in \
 		 the room's m.room.member state"

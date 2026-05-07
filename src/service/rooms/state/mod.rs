@@ -255,8 +255,23 @@ impl Service {
 
 		self.set_room_state(room_id, shortstatehash, state_lock);
 
-		// Reset extremities to the events in the new state to break the anchor to the
-		// old fork
+		info!(target: "force_state", "complete for {room_id}");
+		Ok(())
+	}
+
+	/// Reset forward extremities to all events in the given state snapshot.
+	///
+	/// This is an intentionally destructive operation for admin-level DAG
+	/// repair. It breaks the room's DAG continuity by replacing extremities
+	/// with the full state set, forcing the room to "restart" from the given
+	/// state. Only call this from admin commands, never from normal federation
+	/// intake.
+	pub async fn reset_extremities_to_state(
+		&self,
+		room_id: &RoomId,
+		shortstatehash: u64,
+		state_lock: &RoomMutexGuard,
+	) {
 		let new_extremities: Vec<OwnedEventId> = self
 			.services
 			.state_accessor
@@ -265,15 +280,18 @@ impl Service {
 			.collect()
 			.await;
 
+		info!(
+			target: "force_state",
+			"Admin: resetting {room_id} extremities to {} state events",
+			new_extremities.len()
+		);
+
 		self.set_forward_extremities(
 			room_id,
 			new_extremities.iter().map(AsRef::as_ref),
 			state_lock,
 		)
 		.await;
-
-		info!(target: "force_state", "complete for {room_id}");
-		Ok(())
 	}
 
 	/// Generates a new StateHash and associates it with the incoming event.

@@ -82,6 +82,7 @@ where
 			.await?;
 	}
 
+	let mut used_empty_state_fallback = false;
 	if state_at_incoming_event.is_none() {
 		if skip_soft_fail {
 			warn!(
@@ -89,6 +90,7 @@ where
 				"Could not find state at event, but skip_soft_fail is set — using empty state"
 			);
 			state_at_incoming_event = Some(HashMap::new());
+			used_empty_state_fallback = true;
 		} else {
 			return Err!(Request(Unknown("Could not find state at event")));
 		}
@@ -321,10 +323,10 @@ where
 		}
 	}
 
-	// Only derive new room state for state events that passed all auth checks.
-	// This avoids expensive state resolution, DB writes, and prevents corrupting
-	// room state with rejected events.
-	if !soft_fail && incoming_pdu.state_key().is_some() {
+	// Only derive new room state for state events that passed all auth checks
+	// and have real state (not the empty fallback). Using empty state here
+	// would resolve against current room state and wipe it.
+	if !soft_fail && incoming_pdu.state_key().is_some() && !used_empty_state_fallback {
 		debug!("Event is a state-event that passed auth. Deriving new room state");
 
 		// We also add state after incoming event to the fork states
