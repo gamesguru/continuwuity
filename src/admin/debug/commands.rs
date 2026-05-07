@@ -1504,6 +1504,8 @@ pub(super) async fn force_set_room_state_from_server(
 	}
 
 	info!("Going through auth_chain response");
+	let mut auth_existing = 0_usize;
+	let mut auth_added = 0_usize;
 	for result in remote_state_response.auth_chain.iter().map(|pdu| {
 		self.services
 			.server_keys
@@ -1513,19 +1515,24 @@ pub(super) async fn force_set_room_state_from_server(
 			continue;
 		};
 
-		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
-			info!(
-				"Auth PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier \
-				 insert"
-			);
+		if self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok()
+		{
+			auth_existing = auth_existing.saturating_add(1);
 		} else {
-			info!("Auth PDU {event_id} NOT in timeline, adding as outlier");
 			self.services
 				.rooms
 				.outlier
 				.add_pdu_outlier(&event_id, &value, Some(&room_id));
+			auth_added = auth_added.saturating_add(1);
 		}
 	}
+	info!("Auth chain: {auth_added} added as outliers, {auth_existing} already in timeline");
 
 	let new_room_state = if overwrite {
 		info!("Resolving new room state (ABSOLUTE OVERRIDE)");
