@@ -41,6 +41,10 @@ Complement tests have been added, as well functionality for these:
    - MSC4108 [QR Code login]
    - other complement failures relevant to continuwuity
 
+    ENDPOINTS:
+
+    - GET /_matrix/client/v3/notifications
+
 Chats to join (my fork)
 ~~~~~~~~~~~~~~~~~~~~~~~
 
