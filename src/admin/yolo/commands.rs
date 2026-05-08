@@ -1013,6 +1013,10 @@ pub(super) async fn get_room_dag(
 	let mut i = 0_u64;
 	let mut count = 0_u64;
 	let mut total_prev_events = 0_u64;
+	let mut state_events = 0_u64;
+	let mut missing_hash = 0_u64;
+	let mut unique_hashes = HashSet::<u64>::new();
+	let mut last_ssh: Option<u64> = None;
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
 	let path = format!("/tmp/dag-{safe_room_id}-{start}.jsonl");
 	let mut file = tokio::fs::File::create(&path)
@@ -1021,7 +1025,28 @@ pub(super) async fn get_room_dag(
 
 	while let Some((_, pdu)) = pdus.next().await {
 		if i >= start {
-			let json = serde_json::to_string(&pdu)?;
+			let mut obj: serde_json::Map<String, JsonValue> =
+				serde_json::from_value(serde_json::to_value(&pdu)?)?;
+
+			if let Ok(ssh) = self
+				.services
+				.rooms
+				.state_accessor
+				.pdu_shortstatehash(pdu.event_id())
+				.await
+			{
+				obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
+				unique_hashes.insert(ssh);
+				last_ssh = Some(ssh);
+			} else {
+				missing_hash = missing_hash.saturating_add(1);
+			}
+
+			if pdu.state_key.is_some() {
+				state_events = state_events.saturating_add(1);
+			}
+
+			let json = serde_json::to_string(&obj)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;
 			total_prev_events = total_prev_events
@@ -1046,10 +1071,40 @@ pub(super) async fn get_room_dag(
 		(0, 0)
 	};
 
-	self.write_str(&format!(
-		"Successfully wrote {count} PDUs to {path} (branching factor: {bf_whole}.{bf_frac:03})"
-	))
-	.await
+	let room_ssh = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(&room_id)
+		.await
+		.ok();
+
+	let tip_match = match (last_ssh, room_ssh) {
+		| (Some(tip), Some(room)) if tip == room => "✓ tip matches room state",
+		| (Some(tip), Some(room)) => {
+			let _ = (tip, room);
+			"✗ tip DIVERGES from room state"
+		},
+		| _ => "? unknown",
+	};
+
+	let mut out = format!("Wrote {count} PDUs to {path}\n");
+	writeln!(out, "```").expect("fmt");
+	writeln!(out, "PDUs:           {count}").expect("fmt");
+	writeln!(out, "State events:   {state_events}").expect("fmt");
+	writeln!(out, "Branching:      {bf_whole}.{bf_frac:03} avg prev_events/PDU").expect("fmt");
+	writeln!(out, "Unique states:  {}", unique_hashes.len()).expect("fmt");
+	writeln!(out, "Missing hash:   {missing_hash}").expect("fmt");
+	if let Some(tip) = last_ssh {
+		writeln!(out, "Tip SSH:        {tip}").expect("fmt");
+	}
+	if let Some(room) = room_ssh {
+		writeln!(out, "Room SSH:       {room}").expect("fmt");
+	}
+	writeln!(out, "Status:         {tip_match}").expect("fmt");
+	writeln!(out, "```").expect("fmt");
+
+	self.write_str(&out).await
 }
 
 #[admin_command]
