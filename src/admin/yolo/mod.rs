@@ -58,7 +58,11 @@ pub enum YoloCommand {
 	/// View the current forward extremities (timeline tips) of a room.
 	ViewExtremities {
 		/// The room ID or alias.
-		room: OwnedRoomOrAliasId,
+		room: Option<OwnedRoomOrAliasId>,
+
+		/// Show extremities for all rooms.
+		#[arg(long)]
+		all: bool,
 	},
 
 	/// Purge outlier PDUs that already exist in our timeline.

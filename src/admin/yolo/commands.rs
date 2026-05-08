@@ -520,7 +520,62 @@ pub(super) async fn list_outliers(
 }
 
 #[admin_command]
-pub(super) async fn view_extremities(&self, room: OwnedRoomOrAliasId) -> Result {
+pub(super) async fn view_extremities(
+	&self,
+	room: Option<OwnedRoomOrAliasId>,
+	all: bool,
+) -> Result {
+	if room.is_none() && !all {
+		return Err!("Specify a room or use --all.");
+	}
+
+	if all {
+		let mut fractured = Vec::new();
+		let rooms: Vec<_> = self
+			.services
+			.rooms
+			.metadata
+			.iter_ids()
+			.map(ToOwned::to_owned)
+			.collect()
+			.await;
+
+		for room_id in &rooms {
+			let count = self
+				.services
+				.rooms
+				.state
+				.get_forward_extremities(room_id)
+				.count()
+				.await;
+			if count > 1 {
+				fractured.push((room_id.clone(), count));
+			}
+		}
+
+		fractured.sort_by(|a, b| b.1.cmp(&a.1));
+
+		if fractured.is_empty() {
+			return self
+				.write_str(&format!("All {} rooms have exactly 1 extremity. ✓", rooms.len()))
+				.await;
+		}
+
+		let mut body = String::new();
+		for (room_id, count) in &fractured {
+			writeln!(body, "{room_id}\t{count} extremities")?;
+		}
+
+		return self
+			.write_str(&format!(
+				"{} of {} rooms have multiple extremities:\n```\n{body}\n```",
+				fractured.len(),
+				rooms.len()
+			))
+			.await;
+	}
+
+	let room = room.expect("room required when not --all");
 	let room_id = self.services.rooms.alias.resolve(&room).await?;
 	let extremities: Vec<OwnedEventId> = self
 		.services
