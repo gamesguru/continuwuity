@@ -9,30 +9,11 @@ use crate::admin_command_dispatch;
 #[admin_command_dispatch]
 #[derive(Debug, Subcommand)]
 pub enum YoloCommand {
-	/// Verify membership state consistency for a room.
-	///
-	/// Scans the timeline for the latest membership event per user and
-	/// compares it against the current room state snapshot. Reports any
-	/// users whose timeline membership disagrees with their state.
-	VerifyMembershipState {
-		/// The room ID to verify.
-		room_id: OwnedRoomId,
-	},
-
-	/// Compare membership state between local state_cache and the state
-	/// snapshot.
-	///
-	/// Checks if the derived membership cache (used for server_in_room,
-	/// user_is_joined, etc.) agrees with the authoritative state snapshot.
-	VerifyMembershipCache {
-		/// The room ID to verify.
-		room_id: OwnedRoomId,
-	},
-
 	/// Full membership audit: timeline vs state vs cache vs remote server.
 	///
-	/// Combines verify-membership-state and verify-membership-cache, and
-	/// optionally compares against a remote server's member list.
+	/// Compares timeline membership against state snapshot, checks the
+	/// membership cache for consistency, and optionally cross-references
+	/// with a remote server.
 	AuditMembership {
 		/// The room ID to audit.
 		room_id: OwnedRoomId,

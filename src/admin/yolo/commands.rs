@@ -23,10 +23,17 @@ use tokio::io::AsyncWriteExt;
 use crate::admin_command;
 
 #[admin_command]
-pub(super) async fn verify_membership_state(&self, room_id: OwnedRoomId) -> Result {
+pub(super) async fn audit_membership(
+	&self,
+	room_id: OwnedRoomId,
+	server: Option<OwnedServerName>,
+) -> Result {
 	self.bail_restricted()?;
 
-	// Phase 1: Collect latest membership event per user from the TIMELINE
+	// ── Phase 1: Timeline vs State Snapshot ──────────────────────────────
+	self.write_str("**Phase 1: Timeline vs State Snapshot**\n")
+		.await?;
+
 	let mut timeline_membership: HashMap<OwnedUserId, (String, String)> = HashMap::new();
 
 	let pdus = self
@@ -63,9 +70,6 @@ pub(super) async fn verify_membership_state(&self, room_id: OwnedRoomId) -> Resu
 		timeline_count = timeline_count.saturating_add(1);
 	}
 
-	// Phase 2: Collect membership from the STATE SNAPSHOT
-	let mut state_membership: HashMap<OwnedUserId, (String, String)> = HashMap::new();
-
 	let state_hash = self
 		.services
 		.rooms
@@ -76,6 +80,8 @@ pub(super) async fn verify_membership_state(&self, room_id: OwnedRoomId) -> Resu
 	let state = self.services.rooms.state_accessor.state_full(state_hash);
 
 	pin_mut!(state);
+	let mut state_membership: HashMap<OwnedUserId, (String, String)> = HashMap::new();
+
 	while let Some(((event_type, state_key), pdu)) = state.next().await {
 		if event_type.to_string() != "m.room.member" {
 			continue;
@@ -95,10 +101,8 @@ pub(super) async fn verify_membership_state(&self, room_id: OwnedRoomId) -> Resu
 		}
 	}
 
-	// Phase 3: Diff
 	let mut divergences = Vec::new();
 
-	// Check timeline members not matching state
 	for (user_id, (tl_membership, tl_event)) in &timeline_membership {
 		match state_membership.get(user_id) {
 			| Some((st_membership, st_event)) if st_membership != tl_membership => {
@@ -123,7 +127,6 @@ pub(super) async fn verify_membership_state(&self, room_id: OwnedRoomId) -> Resu
 		}
 	}
 
-	// Check state members with no timeline event (shouldn't happen but check)
 	for (user_id, (st_membership, st_event)) in &state_membership {
 		if !timeline_membership.contains_key(user_id) {
 			divergences.push(format!(
@@ -140,7 +143,7 @@ pub(super) async fn verify_membership_state(&self, room_id: OwnedRoomId) -> Resu
 			timeline_membership.len(),
 			state_membership.len()
 		))
-		.await
+		.await?;
 	} else {
 		let mut out = format!(
 			"Membership divergences found for {room_id}:\n- Timeline membership events: \
@@ -155,49 +158,46 @@ pub(super) async fn verify_membership_state(&self, room_id: OwnedRoomId) -> Resu
 			writeln!(out, "- {d}").expect("fmt");
 		}
 
-		self.write_str(&out).await
+		self.write_str(&out).await?;
 	}
-}
 
-#[admin_command]
-pub(super) async fn verify_membership_cache(&self, room_id: OwnedRoomId) -> Result {
-	self.bail_restricted()?;
-
-	// Get membership from state snapshot
-	let state_hash = self
-		.services
-		.rooms
-		.state
-		.get_room_shortstatehash(&room_id)
+	// ── Phase 2: State Snapshot vs Cache ─────────────────────────────────
+	self.write_str("\n**Phase 2: State Snapshot vs Cache**\n")
 		.await?;
 
-	let state = self.services.rooms.state_accessor.state_full(state_hash);
-
-	pin_mut!(state);
 	let mut state_joined: Vec<OwnedUserId> = Vec::new();
 	let mut state_invited: Vec<OwnedUserId> = Vec::new();
+	let mut state_left = 0_usize;
+	let mut state_banned = 0_usize;
+	let mut state_knocked = 0_usize;
 
-	while let Some(((event_type, state_key), pdu)) = state.next().await {
-		if event_type.to_string() != "m.room.member" {
-			continue;
-		}
-
-		let content: JsonValue = pdu.get_content_as_value();
-		let membership = content
-			.get("membership")
-			.and_then(|v| v.as_str())
-			.unwrap_or("unknown");
-
-		if let Ok(user_id) = OwnedUserId::try_from(state_key.as_str()) {
-			match membership {
-				| "join" => state_joined.push(user_id),
-				| "invite" => state_invited.push(user_id),
-				| _ => {},
-			}
+	for (user_id, (membership, _)) in &state_membership {
+		match membership.as_str() {
+			| "join" => state_joined.push(user_id.clone()),
+			| "invite" => state_invited.push(user_id.clone()),
+			| "leave" => state_left = state_left.saturating_add(1),
+			| "ban" => state_banned = state_banned.saturating_add(1),
+			| "knock" => state_knocked = state_knocked.saturating_add(1),
+			| _ => {},
 		}
 	}
 
-	// Check each state-joined user against the cache
+	let cached_joined = self
+		.services
+		.rooms
+		.state_cache
+		.room_joined_count(&room_id)
+		.await
+		.unwrap_or(0);
+
+	let cached_invited = self
+		.services
+		.rooms
+		.state_cache
+		.room_invited_count(&room_id)
+		.await
+		.unwrap_or(0);
+
 	let mut cache_mismatches = Vec::new();
 
 	for user_id in &state_joined {
@@ -228,20 +228,30 @@ pub(super) async fn verify_membership_cache(&self, room_id: OwnedRoomId) -> Resu
 		}
 	}
 
+	let total_members = state_joined
+		.len()
+		.saturating_add(state_invited.len())
+		.saturating_add(state_left)
+		.saturating_add(state_banned)
+		.saturating_add(state_knocked);
+
+	let counts_line = format!(
+		"- Total members in state: {total_members}\n- Joined: state={}, \
+		 cache={cached_joined}\n- Invited: state={}, cache={cached_invited}\n- Left: \
+		 state={state_left}\n- Banned: state={state_banned}\n- Knocked: state={state_knocked}",
+		state_joined.len(),
+		state_invited.len()
+	);
+
 	if cache_mismatches.is_empty() {
 		self.write_str(&format!(
-			"OK: Membership cache is consistent for {room_id}\n- Joined in state: {}\n- Invited \
-			 in state: {}",
-			state_joined.len(),
-			state_invited.len()
+			"OK: Membership cache is consistent for {room_id}\n{counts_line}"
 		))
-		.await
+		.await?;
 	} else {
 		let mut out = format!(
-			"Membership cache divergences for {room_id}:\n- Joined in state: {}\n- Invited in \
-			 state: {}\n\n**{} mismatch(es):**\n",
-			state_joined.len(),
-			state_invited.len(),
+			"Membership cache divergences for {room_id}:\n{counts_line}\n\n**{} \
+			 mismatch(es):**\n",
 			cache_mismatches.len()
 		);
 
@@ -249,28 +259,10 @@ pub(super) async fn verify_membership_cache(&self, room_id: OwnedRoomId) -> Resu
 			writeln!(out, "- {m}").expect("fmt");
 		}
 
-		self.write_str(&out).await
+		self.write_str(&out).await?;
 	}
-}
 
-#[admin_command]
-pub(super) async fn audit_membership(
-	&self,
-	room_id: OwnedRoomId,
-	server: Option<OwnedServerName>,
-) -> Result {
-	self.bail_restricted()?;
-
-	// Run both verify commands
-	self.write_str("**Phase 1: Timeline vs State Snapshot**\n")
-		.await?;
-	Box::pin(self.verify_membership_state(room_id.clone())).await?;
-
-	self.write_str("\n**Phase 2: State Snapshot vs Cache**\n")
-		.await?;
-	Box::pin(self.verify_membership_cache(room_id.clone())).await?;
-
-	// Phase 3: Remote comparison (optional)
+	// ── Phase 3: Remote comparison (optional) ────────────────────────────
 	if let Some(ref server) = server {
 		self.write_str(&format!("\n**Phase 3: Local vs Remote ({server})**\n"))
 			.await?;
@@ -329,32 +321,10 @@ pub(super) async fn audit_membership(
 					}
 				}
 
-				// Compare local state members vs remote
-				let state_hash = self
-					.services
-					.rooms
-					.state
-					.get_room_shortstatehash(&room_id)
-					.await?;
-
-				let state = self.services.rooms.state_accessor.state_full(state_hash);
-
-				pin_mut!(state);
 				let mut local_members: HashMap<String, String> = HashMap::new();
 
-				while let Some(((event_type, state_key), pdu)) = state.next().await {
-					if event_type.to_string() != "m.room.member" {
-						continue;
-					}
-
-					let content: JsonValue = pdu.get_content_as_value();
-					let membership = content
-						.get("membership")
-						.and_then(|v| v.as_str())
-						.unwrap_or("unknown")
-						.to_owned();
-
-					local_members.insert(state_key.to_string(), membership);
+				for (user_id, (membership, _)) in &state_membership {
+					local_members.insert(user_id.to_string(), membership.clone());
 				}
 
 				let mut remote_diffs = Vec::new();
@@ -1042,6 +1012,7 @@ pub(super) async fn get_room_dag(
 
 	let mut i = 0_u64;
 	let mut count = 0_u64;
+	let mut total_prev_events = 0_u64;
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
 	let path = format!("/tmp/dag-{safe_room_id}-{start}.jsonl");
 	let mut file = tokio::fs::File::create(&path)
@@ -1053,6 +1024,8 @@ pub(super) async fn get_room_dag(
 			let json = serde_json::to_string(&pdu)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;
+			total_prev_events = total_prev_events
+				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
 			count = count.saturating_add(1);
 		}
 		i = i.saturating_add(1);
@@ -1063,8 +1036,20 @@ pub(super) async fn get_room_dag(
 		}
 	}
 
-	self.write_str(&format!("Successfully wrote {count} PDUs to {path}"))
-		.await
+	let (bf_whole, bf_frac) = if count > 0 {
+		let scaled = total_prev_events
+			.saturating_mul(1000)
+			.checked_div(count)
+			.unwrap_or(0);
+		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
+	} else {
+		(0, 0)
+	};
+
+	self.write_str(&format!(
+		"Successfully wrote {count} PDUs to {path} (branching factor: {bf_whole}.{bf_frac:03})"
+	))
+	.await
 }
 
 #[admin_command]
@@ -1103,6 +1088,7 @@ pub(super) async fn get_remote_dag(
 	let mut seen = HashSet::<OwnedEventId>::new();
 	let mut queue = vec![latest.event_id().to_owned()];
 	let mut total = 0_usize;
+	let mut total_prev_events = 0_u64;
 	let batch_size = ruma::uint!(100);
 
 	self.write_str(&format!("Fetching DAG from {server} for {room_id} (limit: {limit})..."))
@@ -1158,6 +1144,8 @@ pub(super) async fn get_remote_dag(
 			let json = serde_json::to_string(&pdu)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;
+			total_prev_events = total_prev_events
+				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
 			total = total.saturating_add(1);
 
 			// Add prev_events to the queue for next iteration
@@ -1176,8 +1164,22 @@ pub(super) async fn get_remote_dag(
 		tokio::task::yield_now().await;
 	}
 
-	self.write_str(&format!("Successfully fetched {total} PDUs from {server} to {path}"))
-		.await
+	let (bf_whole, bf_frac) = if total > 0 {
+		let divisor = u64::try_from(total).unwrap_or(1);
+		let scaled = total_prev_events
+			.saturating_mul(1000)
+			.checked_div(divisor)
+			.unwrap_or(0);
+		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
+	} else {
+		(0, 0)
+	};
+
+	self.write_str(&format!(
+		"Successfully fetched {total} PDUs from {server} to {path} (branching factor: \
+		 {bf_whole}.{bf_frac:03})"
+	))
+	.await
 }
 
 #[admin_command]
