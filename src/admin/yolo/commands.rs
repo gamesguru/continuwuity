@@ -1604,10 +1604,18 @@ pub(super) async fn compare_room_state(
 	let local_state_hash = self
 		.services
 		.rooms
+		.state
+		.get_room_shortstatehash(&room_id)
+		.await?;
+
+	let tip_state_hash = self
+		.services
+		.rooms
 		.state_accessor
 		.pdu_shortstatehash(&at_event_id)
 		.await
-		.map_err(|_| err!(Database("No state snapshot for at_event {at_event_id}")))?;
+		.ok();
+
 	let local_state: HashMap<_, _> = self
 		.services
 		.rooms
@@ -1631,6 +1639,59 @@ pub(super) async fn compare_room_state(
 		}
 	}
 
+	// Count remote members by membership
+	let mut remote_joined = 0_usize;
+	let mut remote_invited = 0_usize;
+	for pdu_raw in &response.pdus {
+		if let Ok((eid, value)) = self
+			.services
+			.server_keys
+			.validate_and_add_event_id(pdu_raw, &room_version)
+			.await
+		{
+			if let Ok(pdu) = PduEvent::from_id_val(&eid, value, Some(room_id.as_ref())) {
+				if pdu.kind.to_string() == "m.room.member" {
+					let content: JsonValue = pdu.get_content_as_value();
+					match content.get("membership").and_then(|v| v.as_str()) {
+						| Some("join") => remote_joined = remote_joined.saturating_add(1),
+						| Some("invite") => {
+							remote_invited = remote_invited.saturating_add(1);
+						},
+						| _ => {},
+					}
+				}
+			}
+		}
+	}
+
+	// Local membership stats
+	let mut local_state_joined = 0_usize;
+	let mut local_state_invited = 0_usize;
+	let state_full = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full(local_state_hash);
+	pin_mut!(state_full);
+	while let Some(((event_type, _), pdu)) = state_full.next().await {
+		if event_type.to_string() == "m.room.member" {
+			let content: JsonValue = pdu.get_content_as_value();
+			match content.get("membership").and_then(|v| v.as_str()) {
+				| Some("join") => local_state_joined = local_state_joined.saturating_add(1),
+				| Some("invite") => local_state_invited = local_state_invited.saturating_add(1),
+				| _ => {},
+			}
+		}
+	}
+
+	let cached_joined = self
+		.services
+		.rooms
+		.state_cache
+		.room_joined_count(&room_id)
+		.await
+		.unwrap_or(0);
+
 	let latest_local = self
 		.services
 		.rooms
@@ -1639,16 +1700,35 @@ pub(super) async fn compare_room_state(
 		.await?;
 	let latest_local_id = latest_local.event_id().to_owned();
 
-	self.write_str(&format!(
+	let tip_status = match tip_state_hash {
+		| Some(tip) if tip == local_state_hash => "✓ tip matches room",
+		| Some(_) => "✗ tip DIVERGES from room",
+		| None => "? tip has no state hash",
+	};
+
+	let mut out = format!(
 		"Room State Comparison for {room_id} {server}\n- at_event (sent to remote): \
 		 {at_event_id}\n- local tip: {latest_local_id}\n- Missing locally: {}\n- Extra locally: \
-		 {}\n\nMissing IDs:\n```\n{:#?}\n```\n\nExtra IDs:\n```\n{:#?}\n```",
+		 {}\n",
 		missing_locally.len(),
-		extra_locally.len(),
-		missing_locally,
-		extra_locally
-	))
-	.await
+		extra_locally.len()
+	);
+	writeln!(out, "```").expect("fmt");
+	writeln!(out, "Room SSH:       {local_state_hash}").expect("fmt");
+	if let Some(tip) = tip_state_hash {
+		writeln!(out, "Tip SSH:        {tip}").expect("fmt");
+	}
+	writeln!(out, "SSH status:     {tip_status}").expect("fmt");
+	writeln!(out, "Local joined:   state={local_state_joined}, cache={cached_joined}")
+		.expect("fmt");
+	writeln!(out, "Local invited:  state={local_state_invited}").expect("fmt");
+	writeln!(out, "Remote joined:  {remote_joined}").expect("fmt");
+	writeln!(out, "Remote invited: {remote_invited}").expect("fmt");
+	writeln!(out, "```").expect("fmt");
+	writeln!(out, "\nMissing IDs:\n```\n{missing_locally:#?}\n```").expect("fmt");
+	writeln!(out, "\nExtra IDs:\n```\n{extra_locally:#?}\n```").expect("fmt");
+
+	self.write_str(&out).await
 }
 
 #[admin_command]
