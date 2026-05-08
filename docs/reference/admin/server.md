@@ -55,3 +55,7 @@ List features built into the server
 ## `!admin server build-info`
 
 Build information
+
+## `!admin server diagnostics`
+
+Print server diagnostics and metrics
