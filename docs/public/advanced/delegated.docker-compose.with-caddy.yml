@@ -6,7 +6,6 @@ services:
         ports:
             - 80:80
             - 443:443
-            - 8448:8448
         networks:
             - caddy
         volumes:
@@ -31,13 +30,12 @@ services:
             CONTINUWUITY_PORT: 8008
             #CONTINUWUITY_CONFIG: '/etc/continuwuity.toml' # Uncomment if you mapped config toml above
 
-            ## (Optional) Serve .well-known files to tell others to reach Continuwuity on port :443
-            ## If you do this, remove all routes to port :8448 from the compose and Caddyfile
-            # CONTINUWUITY_WELL_KNOWN: |
-            #     {
-            #     client=https://example.com,
-            #     server=example.com:443
-            #     }
+            ## Serve .well-known files to tell others to reach Continuwuity on port :443
+            CONTINUWUITY_WELL_KNOWN: |
+                {
+                client=https://matrix.example.com,
+                server=matrix.example.com:443
+                }
 
         networks:
             - caddy
@@ -51,6 +49,9 @@ volumes:
 configs:
     Caddyfile:
         content: |
-            https://example.com:443, https://example.com:8448 {
+            https://matrix.example.com:443 {
                 reverse_proxy http://homeserver:8008
+            }
+            https://example.com:443 {
+                reverse_proxy /.well-known/matrix* http://homeserver:8008
             }

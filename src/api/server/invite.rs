@@ -1,5 +1,5 @@
 use axum::extract::State;
-use axum_client_ip::InsecureClientIp;
+use axum_client_ip::ClientIp;
 use base64::{Engine as _, engine::general_purpose};
 use conduwuit::{
 	Err, PduEvent, Result, err, error,
@@ -13,14 +13,16 @@ use ruma::{
 	serde::JsonObject,
 };
 
+use crate::Ruma;
+
 /// # `POST /_matrix/federation/v2/invite/{roomId}/{eventId}`
 ///
 /// The recipient's server SHOULD return a 200 OK response to the sender's
 /// server, but MUST NOT notify the recipient of the invite.
 pub(crate) async fn create_invite_route(
 	State(services): State<crate::State>,
-	InsecureClientIp(_client_ip): InsecureClientIp,
-	body: crate::Ruma<create_invite::v2::Request>,
+	ClientIp(_client_ip): ClientIp,
+	body: Ruma<create_invite::v2::Request>,
 ) -> Result<create_invite::v2::Response> {
 	let mut signed_event: CanonicalJsonObject = serde_json::from_str(body.event.get())
 		.map_err(|e| err!(Request(BadJson("Invalid invite event PDU: {e}"))))?;
