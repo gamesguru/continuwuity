@@ -547,7 +547,7 @@ pub struct Config {
 	/// the minimum delay before the first retry after a failed transaction.
 	/// Subsequent retries use exponential backoff: base × 2^(tries-1).
 	///
-	/// default: 5
+	/// default: 2
 	#[serde(default = "default_sender_retry_backoff_base")]
 	pub sender_retry_backoff_base: u64,
 
