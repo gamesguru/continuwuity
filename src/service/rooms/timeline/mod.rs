@@ -426,10 +426,11 @@ impl Service {
 		// Rebuild membership cache from the authoritative state snapshot.
 		// This fixes stale/missing entries left by previous DAG fractures.
 
-		// Collect unique member user_ids from the timeline's m.room.member events
+		// Collect unique member user_ids from the timeline's m.room.member events.
+		// Uses the in-memory `entries` HashMap for O(1) lookups instead of N DB reads.
 		let mut member_users: HashSet<ruma::OwnedUserId> = HashSet::new();
 		for event_id in &sorted {
-			if let Ok(pdu) = self.get_pdu(event_id).await {
+			if let Some((_, pdu, _)) = entries.get(event_id) {
 				if pdu.kind.to_string() == "m.room.member" {
 					if let Some(sk) = pdu.state_key() {
 						if let Ok(uid) = ruma::OwnedUserId::try_from(sk) {
@@ -442,22 +443,25 @@ impl Service {
 
 		let mut members_synced = 0_usize;
 		for user_id in &member_users {
-			let Ok(pdu) = self
+			// Absent from state = left. Don't skip — clear stale cache entries.
+			let membership = match self
 				.services
 				.state_accessor
 				.room_state_get(room_id, &StateEventType::RoomMember, user_id.as_str())
 				.await
-			else {
-				continue;
+			{
+				| Ok(pdu) => {
+					let content: serde_json::Value = pdu.get_content_as_value();
+					content
+						.get("membership")
+						.and_then(|v| v.as_str())
+						.unwrap_or("leave")
+						.to_owned()
+				},
+				| Err(_) => "leave".to_owned(),
 			};
 
-			let content: serde_json::Value = pdu.get_content_as_value();
-			let membership = content
-				.get("membership")
-				.and_then(|v| v.as_str())
-				.unwrap_or("leave");
-
-			match membership {
+			match membership.as_str() {
 				| "join" => {
 					self.services
 						.state_cache
@@ -465,14 +469,18 @@ impl Service {
 						.await;
 					members_synced = members_synced.saturating_add(1);
 				},
-				| "leave" | "ban" => {
+				| "invite" => {
+					// mark_as_invited requires sender; skip cache update for
+					// invites here — update_joined_count will reconcile.
+					members_synced = members_synced.saturating_add(1);
+				},
+				| _ => {
 					self.services
 						.state_cache
 						.mark_as_left(user_id, room_id, None)
 						.await;
 					members_synced = members_synced.saturating_add(1);
 				},
-				| _ => {},
 			}
 		}
 		self.services.state_cache.update_joined_count(room_id).await;
