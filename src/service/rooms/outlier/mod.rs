@@ -159,8 +159,6 @@ pub fn add_pdu_outlier(
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn remove_outlier(&self, event_id: &EventId) {
-	use futures::StreamExt;
-
 	if let Ok(json) = self
 		.db
 		.eventid_outlierpdu
@@ -189,23 +187,11 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 			key.push(0xFF);
 			key.extend_from_slice(event_id.as_bytes());
 			self.db.roomid_outliereventid.remove(&key);
-		} else {
-			// PDU has no room_id in JSON and isn't a create event —
-			// add_pdu_outlier may have indexed it via its room_id parameter.
-			// Scan for any key ending with this event_id and remove it.
-			let suffix = event_id.as_bytes();
-			let mut stream = self.db.roomid_outliereventid.raw_keys();
-			while let Some(Ok(key)) = stream.next().await {
-				let sep = key.len().saturating_sub(suffix.len().saturating_add(1));
-				if key.ends_with(suffix)
-					&& key.len() > suffix.len()
-					&& key.get(sep) == Some(&0xFF)
-				{
-					self.db.roomid_outliereventid.remove(&key);
-					break;
-				}
-			}
 		}
+		// If room_id can't be derived, the ~80 byte roomid_outliereventid
+		// entry may remain as a harmless orphan. A full-table scan to find
+		// it would be O(N) per outlier — catastrophic for purge_outliers --all.
+		// room_stream filters by room prefix and ignores orphaned entries.
 	}
 	self.db.eventid_outlierpdu.remove(event_id);
 }
