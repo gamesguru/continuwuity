@@ -338,7 +338,37 @@ impl Service {
 		drop(cork.take());
 		let final_sync = self.db.db.cork_and_sync();
 		drop(final_sync);
-		info!("reorder_timeline: complete, {count} events reordered and synced to disk");
+		info!("reorder_timeline: re-insert complete, rebuilding shortstatehash chain...");
+
+		// Rebuild per-PDU shortstatehashes: walk the reordered events in sequence
+		// and call append_to_state for state events (which updates the room's
+		// shortstatehash and records the mapping from shorteventid →
+		// shortstatehash). Non-state events inherit the current room shortstatehash.
+		// This fixes sync serving stale state snapshots after reorder.
+		let state_lock = self.services.state.mutex.lock(room_id).await;
+		let mut state_rebuilt = 0_usize;
+		for event_id in &sorted {
+			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
+
+			let new_shortstatehash = self.services.state.append_to_state(pdu, room_id).await?;
+
+			self.services
+				.state
+				.set_room_state(room_id, new_shortstatehash, &state_lock);
+
+			state_rebuilt = state_rebuilt.saturating_add(1);
+			if state_rebuilt.is_multiple_of(10000) {
+				info!(
+					"reorder_timeline: rebuilt shortstatehash for {state_rebuilt}/{count} \
+					 events..."
+				);
+			}
+		}
+		drop(state_lock);
+		info!(
+			"reorder_timeline: complete, {count} events reordered, {state_rebuilt} state \
+			 snapshots rebuilt"
+		);
 
 		Ok(count)
 	}
