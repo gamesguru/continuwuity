@@ -262,17 +262,17 @@ pub(super) async fn audit_membership(
 	self.bail_restricted()?;
 
 	// Run both verify commands
-	self.write_str("**Phase 1: Timeline vs State Snapshot**")
+	self.write_str("**Phase 1: Timeline vs State Snapshot**\n")
 		.await?;
 	Box::pin(self.verify_membership_state(room_id.clone())).await?;
 
-	self.write_str("\n**Phase 2: State Snapshot vs Cache**")
+	self.write_str("\n**Phase 2: State Snapshot vs Cache**\n")
 		.await?;
 	Box::pin(self.verify_membership_cache(room_id.clone())).await?;
 
 	// Phase 3: Remote comparison (optional)
 	if let Some(ref server) = server {
-		self.write_str(&format!("\n**Phase 3: Local vs Remote ({server})**"))
+		self.write_str(&format!("\n**Phase 3: Local vs Remote ({server})**\n"))
 			.await?;
 
 		let latest_event_id = self
