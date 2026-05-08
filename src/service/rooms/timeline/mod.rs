@@ -397,6 +397,23 @@ impl Service {
 			info!("reorder_timeline: restored room shortstatehash to {ssh}");
 		}
 
+		// Collapse forward extremities to just the last event in the
+		// sorted timeline. This heals DAG fractures caused by
+		// force-set-room-state-from-server or other admin operations
+		// that scatter extremities across all state events.
+		if let Some(last_event_id) = sorted.last() {
+			self.services
+				.state
+				.set_forward_extremities(
+					room_id,
+					std::iter::once(last_event_id.as_ref()),
+					&state_lock,
+				)
+				.await;
+
+			info!("reorder_timeline: collapsed extremities to single tip: {last_event_id}");
+		}
+
 		drop(state_lock);
 		info!(
 			"reorder_timeline: complete, {count} events reordered, {state_rebuilt} state \
