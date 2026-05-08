@@ -1,5 +1,5 @@
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet},
 	fmt::Write,
 	iter::once,
 	time::{Instant, SystemTime},
@@ -22,7 +22,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use lettre::message::Mailbox;
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	RoomVersionId,
+	OwnedUserId, RoomVersionId,
 	api::federation::event::{get_event, get_room_state},
 	events::AnyStateEvent,
 	serde::Raw,
@@ -766,15 +766,98 @@ pub(crate) async fn force_set_room_state_from_server(
 		);
 	}
 
-	info!(
-		"Updating joined counts for room just in case (e.g. we may have found a difference in \
-		 the room's m.room.member state"
-	);
+	info!("Rebuilding membership cache from state snapshot for {room_id}");
+
+	// Rebuild per-user membership entries from the authoritative state
+	// snapshot. update_joined_count alone reads from the (stale) cache.
+	// This handles both directions: missing entries AND stale entries
+	// from users who left but were never removed from cache.
+	let mut state_joined: HashSet<OwnedUserId> = HashSet::new();
+	let mut members_updated = 0_usize;
+
+	{
+		let state_full = self
+			.services
+			.rooms
+			.state_accessor
+			.state_full(short_state_hash);
+
+		futures::pin_mut!(state_full);
+		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
+			if event_type.to_string() != "m.room.member" {
+				continue;
+			}
+			let Ok(user_id) = OwnedUserId::try_from(state_key.as_str()) else {
+				continue;
+			};
+
+			let membership = pdu
+				.get_content_as_value()
+				.get("membership")
+				.and_then(|v| v.as_str())
+				.unwrap_or("leave")
+				.to_owned();
+
+			match membership.as_str() {
+				| "join" => {
+					state_joined.insert(user_id.clone());
+					self.services
+						.rooms
+						.state_cache
+						.mark_as_joined(&user_id, &room_id)
+						.await;
+					members_updated = members_updated.saturating_add(1);
+				},
+				| "invite" => {
+					members_updated = members_updated.saturating_add(1);
+				},
+				| "leave" | "ban" => {
+					// TODO: distinguish left vs kicked vs banned for proper
+					// Cinny/Element display. Currently all three map to
+					// mark_as_left which loses the distinction.
+					self.services
+						.rooms
+						.state_cache
+						.mark_as_left(&user_id, &room_id, None)
+						.await;
+					members_updated = members_updated.saturating_add(1);
+				},
+				| unknown => {
+					warn!("Unknown membership state '{unknown}' for {user_id} in {room_id}");
+				},
+			}
+		}
+	}
+
+	// Remove stale cache entries: users the cache thinks are joined but
+	// who are NOT in the current state snapshot.
+	let cached_members: Vec<OwnedUserId> = self
+		.services
+		.rooms
+		.state_cache
+		.room_members(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let mut stale_removed = 0_usize;
+	for user_id in &cached_members {
+		if !state_joined.contains(user_id) {
+			self.services
+				.rooms
+				.state_cache
+				.mark_as_left(user_id, &room_id, None)
+				.await;
+			stale_removed = stale_removed.saturating_add(1);
+		}
+	}
+
 	self.services
 		.rooms
 		.state_cache
 		.update_joined_count(&room_id)
 		.await;
+	info!("Updated {members_updated} member entries, removed {stale_removed} stale caches");
 
 	self.write_str("Successfully forced the room state from the requested remote server.")
 		.await
