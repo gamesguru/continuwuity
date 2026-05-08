@@ -74,13 +74,13 @@ echo "→ Consolidating and ingesting test details..."
   done
   echo "\."
   echo "INSERT INTO run_details (run_id, test_name, status)
-        SELECT DISTINCT ON ((t.j->>'Test')) r.id, (t.j->>'Test'), (t.j->>'Action')
+        SELECT DISTINCT ON (r.id, (t.j->>'Test')) r.id, (t.j->>'Test'), (t.j->>'Action')
         FROM t
         JOIN runs r ON r.commit_hash = (t.j->>'commit')
                    AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'),''))
                    AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'),''))
                    AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'),''))
-        ORDER BY (t.j->>'Test'), (t.j->>'Time') DESC
+        ORDER BY r.id, (t.j->>'Test'), (t.j->>'Time') DESC
         ON CONFLICT (run_id, test_name) DO NOTHING;"
 ) | psql "$DB_TARGET"
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
