@@ -82,15 +82,42 @@ where
 			.await?;
 	}
 
-	let mut used_empty_state_fallback = false;
 	if state_at_incoming_event.is_none() {
 		if skip_soft_fail {
 			warn!(
 				event_id = %incoming_pdu.event_id,
-				"Could not find state at event, but skip_soft_fail is set — using empty state"
+				"Could not find state at event, but skip_soft_fail is set — using current room state as fallback"
 			);
-			state_at_incoming_event = Some(HashMap::new());
-			used_empty_state_fallback = true;
+			// Use the current room state as the base instead of empty state.
+			// This ensures state resolution has real data to work with and
+			// won't wipe the room's state.
+			let current_shortstatehash = self
+				.services
+				.state
+				.get_room_shortstatehash(room_id)
+				.await
+				.map_err(|_| err!(Database("Room has no state")))?;
+
+			let current_state: HashMap<_, _> = self
+				.services
+				.state_accessor
+				.state_full_shortids(current_shortstatehash)
+				.ready_filter_map(Result::ok)
+				.map(|(shortstatekey, shorteventid)| async move {
+					let event_id = self
+						.services
+						.short
+						.get_eventid_from_short::<Box<_>>(shorteventid)
+						.await
+						.ok()?;
+					Some((shortstatekey, (*event_id).to_owned()))
+				})
+				.buffer_unordered(64)
+				.filter_map(ready)
+				.collect()
+				.await;
+
+			state_at_incoming_event = Some(current_state);
 		} else {
 			return Err!(Request(Unknown("Could not find state at event")));
 		}
@@ -323,10 +350,10 @@ where
 		}
 	}
 
-	// Only derive new room state for state events that passed all auth checks
-	// and have real state (not the empty fallback). Using empty state here
-	// would resolve against current room state and wipe it.
-	if !soft_fail && incoming_pdu.state_key().is_some() && !used_empty_state_fallback {
+	// Only derive new room state for state events that passed all auth checks.
+	// When using the current-state fallback, we still resolve so that the
+	// rescued event properly updates room state.
+	if !soft_fail && incoming_pdu.state_key().is_some() {
 		debug!("Event is a state-event that passed auth. Deriving new room state");
 
 		// We also add state after incoming event to the fork states
