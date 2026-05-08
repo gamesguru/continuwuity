@@ -1,4 +1,4 @@
-use conduwuit_core::{Config, Result, error::Error};
+use conduwuit_core::{Config, Result, console_history::ConsoleHistory, error::Error};
 use rustyline_async::{Readline, ReadlineEvent};
 use tokio::{
 	io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -61,7 +61,7 @@ async fn async_run(config: &Config) -> Result<()> {
 
 	let mut stream_reader = BufReader::new(&mut stream);
 	let mut response_buf = Vec::new();
-	let mut history = std::collections::VecDeque::<String>::new();
+	let mut history = ConsoleHistory::new();
 
 	loop {
 		let (mut readline, writer) = Readline::new("uwu> ".to_owned()).map_err(|e| {
@@ -70,7 +70,7 @@ async fn async_run(config: &Config) -> Result<()> {
 		})?;
 
 		readline.set_tab_completer(conduwuit_admin::complete);
-		for line in &history {
+		for line in history.iter() {
 			_ = readline.add_history_entry(line.clone());
 		}
 
@@ -94,10 +94,7 @@ async fn async_run(config: &Config) -> Result<()> {
 					break;
 				}
 
-				if history.len() >= 50 {
-					history.pop_front();
-				}
-				history.push_back(line.clone());
+				history.add(line.clone());
 
 				// Send line to server
 				if let Err(_e) = stream_reader.get_mut().write_all(line.as_bytes()).await {
