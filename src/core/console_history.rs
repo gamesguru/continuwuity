@@ -2,10 +2,11 @@ use std::{
 	collections::VecDeque,
 	fs::{File, OpenOptions},
 	io::{BufRead, Write},
+	os::unix::fs::OpenOptionsExt,
 	path::PathBuf,
 };
 
-const HISTORY_LIMIT: usize = 1000;
+const HISTORY_LIMIT: usize = 10_000;
 const HISTORY_FILE: &str = ".c10y_history";
 
 /// Persistent command history backed by a file, shared between console and
@@ -18,6 +19,8 @@ pub struct ConsoleHistory {
 
 impl ConsoleHistory {
 	/// Load history from `~/.c10y_history`, creating the file if needed.
+	/// Lines starting with `#` are skipped as comments (timestamps) and
+	/// skipped
 	#[must_use]
 	pub fn new() -> Self {
 		let path = std::env::var("HOME")
@@ -27,7 +30,7 @@ impl ConsoleHistory {
 		let mut entries = VecDeque::with_capacity(HISTORY_LIMIT);
 		if let Ok(file) = File::open(&path) {
 			for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
-				if !line.is_empty() {
+				if !line.is_empty() && !line.starts_with('#') {
 					entries.push_back(line);
 				}
 			}
@@ -51,13 +54,49 @@ impl ConsoleHistory {
 		}
 		self.entries.push_back(line.to_owned());
 
-		// Append to persistent history file
-		if let Ok(mut file) = OpenOptions::new()
+		// Append to persistent history file with restrictive permissions.
+		// Periodically rewrite to cap disk growth at HISTORY_LIMIT entries.
+		if self.entries.len().is_multiple_of(HISTORY_LIMIT / 4) {
+			self.rewrite_file();
+		} else if let Ok(mut file) = OpenOptions::new()
 			.create(true)
 			.append(true)
+			.mode(0o600)
 			.open(&self.path)
 		{
 			_ = writeln!(file, "{line}");
+		}
+	}
+
+	/// Rewrite the history file with only the in-memory entries.
+	fn rewrite_file(&self) {
+		use std::io::BufWriter;
+
+		let Ok(file) = OpenOptions::new()
+			.create(true)
+			.write(true)
+			.truncate(true)
+			.mode(0o600)
+			.open(&self.path)
+		else {
+			return;
+		};
+		let mut w = BufWriter::new(file);
+
+		// Write a timestamp header for forensics
+		let ts = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map_or(0, |d| d.as_secs());
+
+		_ = writeln!(
+			w,
+			"# {ts} {} {}",
+			crate::info::version::name(),
+			crate::info::version::version(),
+		);
+
+		for entry in &self.entries {
+			_ = writeln!(w, "{entry}");
 		}
 	}
 
