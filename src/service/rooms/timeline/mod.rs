@@ -346,6 +346,12 @@ impl Service {
 		// shortstatehash). Non-state events inherit the current room shortstatehash.
 		// This fixes sync serving stale state snapshots after reorder.
 		let state_lock = self.services.state.mutex.lock(room_id).await;
+
+		// Save the room's current shortstatehash BEFORE the walk. The sequential
+		// rebuild uses naive "last event wins" which can disagree with state-res.
+		// We restore it after so force-set results are preserved.
+		let saved_shortstatehash = self.services.state.get_room_shortstatehash(room_id).await;
+
 		let mut state_rebuilt = 0_usize;
 		for event_id in &sorted {
 			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
@@ -365,12 +371,32 @@ impl Service {
 			}
 		}
 
-		// The sequential rebuild above gives each event a pdu_shortstatehash
-		// for visibility, but it uses naive "last event wins" which can disagree
-		// with state-res. Correct the room's final state by force-setting it
-		// from the state computed by append_to_state for the last event, which
-		// at minimum ensures the room shortstatehash is self-consistent.
-		// For authoritative correction, use force-set-room-state-from-server.
+		// Restore the room's shortstatehash to what it was before the walk.
+		// The sequential rebuild gives each event a pdu_shortstatehash for
+		// visibility, but the room's current state should reflect the
+		// authoritative state (e.g. from force-set-room-state-from-server),
+		// not the naive sequential result.
+		if let Ok(ssh) = saved_shortstatehash {
+			self.services
+				.state
+				.set_room_state(room_id, ssh, &state_lock);
+
+			// Also update the tip event's pdu_shortstatehash so /state/
+			// and compare-room-state see the correct state at the tip.
+			if let Some(last_event_id) = sorted.last() {
+				let shorteventid = self
+					.services
+					.short
+					.get_or_create_shorteventid(last_event_id)
+					.await;
+				self.services
+					.state
+					.set_pdu_shortstatehash(shorteventid, ssh);
+			}
+
+			info!("reorder_timeline: restored room shortstatehash to {ssh}");
+		}
+
 		drop(state_lock);
 		info!(
 			"reorder_timeline: complete, {count} events reordered, {state_rebuilt} state \
