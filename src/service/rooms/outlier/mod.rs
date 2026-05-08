@@ -155,21 +155,25 @@ pub fn add_pdu_outlier(
 	}
 }
 
-/// Remove the PDU from the outlier tree.
+/// Remove the PDU from the outlier tree. When the caller knows the
+/// room_id (hot path), pass it for O(1) index cleanup. Otherwise the
+/// room_id is derived from the stored PDU JSON.
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
-pub async fn remove_outlier(&self, event_id: &EventId) {
-	if let Ok(json) = self
+pub async fn remove_outlier(&self, event_id: &EventId, provided_room_id: Option<&RoomId>) {
+	// Fast path: caller provides room_id → O(1) index delete
+	let resolved_room_id: Option<OwnedRoomId> = if let Some(room_id) = provided_room_id {
+		Some(room_id.to_owned())
+	} else if let Ok(json) = self
 		.db
 		.eventid_outlierpdu
 		.get(event_id)
 		.await
 		.deserialized::<CanonicalJsonObject>()
 	{
-		// Derive room_id using the same fallback chain as add_pdu_outlier
-		// to ensure we always remove the roomid_outliereventid index entry.
-		let room_id_from_pdu = json
-			.get("room_id")
+		// Derive room_id from PDU JSON using the same fallback chain
+		// as add_pdu_outlier.
+		json.get("room_id")
 			.and_then(CanonicalJsonValue::as_str)
 			.and_then(|r| <&RoomId>::try_from(r).ok())
 			.map(ToOwned::to_owned)
@@ -179,20 +183,22 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 				is_create
 					.then(|| event_id.as_str().replace('$', "!"))
 					.and_then(|r| OwnedRoomId::parse(r).ok())
-			});
+			})
+	} else {
+		None
+	};
 
-		if let Some(room_id) = room_id_from_pdu {
-			let room_id: &RoomId = &room_id;
-			let mut key = room_id.as_bytes().to_vec();
-			key.push(0xFF);
-			key.extend_from_slice(event_id.as_bytes());
-			self.db.roomid_outliereventid.remove(&key);
-		}
-		// If room_id can't be derived, the ~80 byte roomid_outliereventid
-		// entry may remain as a harmless orphan. A full-table scan to find
-		// it would be O(N) per outlier — catastrophic for purge_outliers --all.
-		// room_stream filters by room prefix and ignores orphaned entries.
+	if let Some(room_id) = resolved_room_id {
+		let room_id: &RoomId = &room_id;
+		let mut key = room_id.as_bytes().to_vec();
+		key.push(0xFF);
+		key.extend_from_slice(event_id.as_bytes());
+		self.db.roomid_outliereventid.remove(&key);
 	}
+	// If room_id can't be resolved, the ~80 byte roomid_outliereventid
+	// entry may remain as a harmless orphan. room_stream filters by
+	// room prefix and ignores orphaned entries.
+
 	self.db.eventid_outlierpdu.remove(event_id);
 }
 

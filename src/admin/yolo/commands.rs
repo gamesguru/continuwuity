@@ -595,7 +595,11 @@ pub(super) async fn purge_outliers(
 	for event_id in &outliers {
 		if force {
 			// Force-remove: skip the timeline lookup entirely
-			self.services.rooms.outlier.remove_outlier(event_id).await;
+			self.services
+				.rooms
+				.outlier
+				.remove_outlier(event_id, None)
+				.await;
 			purged = purged.saturating_add(1);
 		} else if self
 			.services
@@ -606,7 +610,11 @@ pub(super) async fn purge_outliers(
 			.is_ok()
 		{
 			// Duplicate: exists in both outlier and timeline tables
-			self.services.rooms.outlier.remove_outlier(event_id).await;
+			self.services
+				.rooms
+				.outlier
+				.remove_outlier(event_id, None)
+				.await;
 			purged = purged.saturating_add(1);
 		} else {
 			skipped = skipped.saturating_add(1);
@@ -992,7 +1000,11 @@ pub(super) async fn promote_outliers(&self, room_id: OwnedRoomId) -> Result {
 pub(super) async fn purge_outlier(&self, event_id: OwnedEventId) -> Result {
 	self.bail_restricted()?;
 
-	self.services.rooms.outlier.remove_outlier(&event_id).await;
+	self.services
+		.rooms
+		.outlier
+		.remove_outlier(&event_id, None)
+		.await;
 
 	self.write_str(&format!("Purged outlier {event_id}")).await
 }

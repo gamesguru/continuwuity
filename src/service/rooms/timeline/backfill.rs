@@ -407,7 +407,10 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 	}
 
 	// Remove from outlier room index
-	self.services.outlier.remove_outlier(event_id).await;
+	self.services
+		.outlier
+		.remove_outlier(event_id, Some(room_id))
+		.await;
 
 	Ok(())
 }
