@@ -178,6 +178,7 @@ impl crate::Service for Service {
 
 				// Prevent flooding the sender worker channels by limiting the number of
 				// servers flushed per tick.
+				// TODO: no magic number (100)
 				servers.truncate(
 					self_flush
 						.services
@@ -185,7 +186,7 @@ impl crate::Service for Service {
 						.config
 						.sender_workers
 						.max(1)
-						.saturating_mul(20),
+						.saturating_mul(100),
 				);
 
 				if !servers.is_empty() {
