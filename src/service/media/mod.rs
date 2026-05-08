@@ -24,7 +24,10 @@ use tokio::{
 };
 
 use self::data::{Data, Metadata};
-pub use self::{preview::parse_preview_url, thumbnail::Dim};
+pub use self::{
+	preview::{UrlPreviewData, parse_preview_url},
+	thumbnail::Dim,
+};
 use crate::{Dep, client, globals, moderation, sending};
 
 #[derive(Debug)]

@@ -203,13 +203,15 @@ impl<'a, E: Event> From<Ref<'a, E>> for Raw<StateEvent<RoomMemberEventContent>> 
 			"content": event.content(),
 			"event_id": event.event_id(),
 			"origin_server_ts": event.origin_server_ts(),
-			"redacts": event.redacts(),
 			"room_id": event.room_id(),
 			"sender": event.sender(),
 			"state_key": event.state_key(),
 			"type": event.kind(),
 		});
 
+		if let Some(redacts) = event.redacts() {
+			json["redacts"] = json!(redacts);
+		}
 		if let Some(unsigned) = event.unsigned() {
 			json["unsigned"] = json!(unsigned);
 		}

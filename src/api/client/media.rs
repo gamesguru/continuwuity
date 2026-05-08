@@ -280,15 +280,13 @@ pub(crate) async fn get_media_preview_route(
 		)));
 	}
 
-	let preview = services
-		.media
-		.get_url_preview(&url)
-		.await
-		.map_err(|error| {
-			err!(Request(Unknown(
-				debug_error!(%sender_user, %url, "Failed to fetch URL preview: {error}")
-			)))
-		})?;
+	let preview = match services.media.get_url_preview(&url).await {
+		| Ok(preview) => preview,
+		| Err(error) => {
+			debug_warn!(%sender_user, %url, "Failed to fetch URL preview: {error}");
+			conduwuit_service::media::UrlPreviewData::default()
+		},
+	};
 
 	serde_json::value::to_raw_value(&preview)
 		.map(get_media_preview::v1::Response::from_raw_value)

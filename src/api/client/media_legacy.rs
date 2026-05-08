@@ -3,7 +3,7 @@
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Result, debug_info, err,
+	Err, Result, debug_info, debug_warn, err,
 	utils::{content_disposition::make_content_disposition, math::ruma_from_usize},
 };
 use conduwuit_service::media::{CACHE_CONTROL_IMMUTABLE, CORP_CROSS_ORIGIN, Dim, FileMeta};
@@ -69,11 +69,13 @@ pub(crate) async fn get_media_preview_legacy_route(
 		)));
 	}
 
-	let preview = services.media.get_url_preview(&url).await.map_err(|e| {
-		err!(Request(Unknown(
-			debug_error!(%sender_user, %url, "Failed to fetch a URL preview: {e}")
-		)))
-	})?;
+	let preview = match services.media.get_url_preview(&url).await {
+		| Ok(preview) => preview,
+		| Err(error) => {
+			debug_warn!(%sender_user, %url, "Failed to fetch URL preview: {error}");
+			conduwuit_service::media::UrlPreviewData::default()
+		},
+	};
 
 	serde_json::value::to_raw_value(&preview)
 		.map(get_media_preview::v3::Response::from_raw_value)
