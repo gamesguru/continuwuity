@@ -13,7 +13,7 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, future::ready, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	OwnedUserId, RoomId, RoomVersionId,
+	OwnedUserId, RoomId,
 	api::federation::event::{get_event, get_room_state},
 	events::{StateEventType, TimelineEventType},
 };
@@ -1598,11 +1598,19 @@ pub(super) async fn compare_room_state(
 pub(super) async fn compare_remote_state(
 	&self,
 	room_id: OwnedRoomId,
-	server1: OwnedServerName,
-	server2: OwnedServerName,
+	base_server: OwnedServerName,
+	servers: Vec<OwnedServerName>,
 	at_event: Option<OwnedEventId>,
 ) -> Result {
+	use std::fmt::Write;
+
 	self.bail_restricted()?;
+
+	if servers.is_empty() {
+		return Err!(Request(InvalidParam(
+			"Provide at least one server to compare against the base."
+		)));
+	}
 
 	// Try to resolve at_event: explicit > local timeline > error
 	let at_event_id = match at_event {
@@ -1627,127 +1635,136 @@ pub(super) async fn compare_remote_state(
 		},
 	};
 
-	// Fetch state from both servers at the same reference PDU
-	let (response1, response2) = futures::join!(
-		self.services
-			.sending
-			.send_federation_request(&server1, get_room_state::v1::Request {
-				room_id: room_id.clone(),
-				event_id: at_event_id.clone(),
-			}),
-		self.services
-			.sending
-			.send_federation_request(&server2, get_room_state::v1::Request {
-				room_id: room_id.clone(),
-				event_id: at_event_id,
-			}),
+	// Determine room version
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+
+	// Fetch base server state
+	let base_response = self
+		.services
+		.sending
+		.send_federation_request(&base_server, get_room_state::v1::Request {
+			room_id: room_id.clone(),
+			event_id: at_event_id.clone(),
+		})
+		.await?;
+
+	let mut base_state = HashMap::new();
+	let mut base_verify_errors = 0_usize;
+	for pdu in &base_response.pdus {
+		let Ok((event_id, value)) = self
+			.services
+			.server_keys
+			.validate_and_add_event_id(pdu, &room_version)
+			.await
+		else {
+			base_verify_errors = base_verify_errors.saturating_add(1);
+			continue;
+		};
+
+		let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
+			continue;
+		};
+		if let Some(state_key) = &pdu.state_key {
+			base_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+		}
+	}
+
+	let mut output = format!(
+		"Remote State Comparison for {room_id}:\n- Base: {base_server} ({} state events)\n- \
+		 at_event: {at_event_id}\n",
+		base_state.len()
 	);
 
-	let (response1, response2) = (response1?, response2?);
+	if base_verify_errors > 0 {
+		writeln!(output, "- Base verify errors: {base_verify_errors} (signature check failed)")?;
+	}
+	// Flush header immediately
+	self.write_str(&output).await?;
+	output.clear();
 
-	// Determine room version: try local first, fall back to remote create event
-	let room_version = match self.services.rooms.state.get_room_version(&room_id).await {
-		| Ok(v) => v,
-		| Err(_) => {
-			// Extract from m.room.create in server1's response
-			let mut found_version = None;
-			for pdu_raw in &response1.pdus {
-				let value: serde_json::Value = serde_json::from_str(pdu_raw.get())?;
-				if value.get("type").and_then(|t| t.as_str()) == Some("m.room.create") {
-					// Room version from content.room_version, default to "1"
-					let version_str = value
-						.get("content")
-						.and_then(|c| c.get("room_version"))
-						.and_then(|v| v.as_str())
-						.unwrap_or("1");
-					found_version =
-						Some(RoomVersionId::try_from(version_str).unwrap_or(RoomVersionId::V11));
-					break;
-				}
+	// Compare each server against the base
+	for server in &servers {
+		let response = match self
+			.services
+			.sending
+			.send_federation_request(server, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: at_event_id.clone(),
+			})
+			.await
+		{
+			| Ok(r) => r,
+			| Err(e) => {
+				writeln!(output, "\n--- vs {server}: ERROR: {e}")?;
+				continue;
+			},
+		};
+
+		let mut server_state = HashMap::new();
+		let mut verify_errors = 0_usize;
+		for pdu in &response.pdus {
+			let Ok((event_id, value)) = self
+				.services
+				.server_keys
+				.validate_and_add_event_id(pdu, &room_version)
+				.await
+			else {
+				verify_errors = verify_errors.saturating_add(1);
+				continue;
+			};
+			let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
+				continue;
+			};
+			if let Some(state_key) = &pdu.state_key {
+				server_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
 			}
-			found_version.ok_or_else(|| {
-				err!(
-					"Could not determine room version from remote state (no m.room.create found)"
-				)
-			})?
-		},
-	};
-
-	let mut state1 = HashMap::new();
-	let mut verify_errors1 = 0_usize;
-	for pdu in &response1.pdus {
-		let Ok((event_id, value)) = self
-			.services
-			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
-			.await
-		else {
-			verify_errors1 = verify_errors1.saturating_add(1);
-			continue;
-		};
-
-		let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
-			continue;
-		};
-		if let Some(state_key) = &pdu.state_key {
-			state1.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
 		}
+
+		let mut only_on_base = Vec::new();
+		for (key, event_id) in &base_state {
+			if server_state.get(key) != Some(event_id) {
+				only_on_base.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+			}
+		}
+
+		let mut only_on_server = Vec::new();
+		for (key, event_id) in &server_state {
+			if base_state.get(key) != Some(event_id) {
+				only_on_server.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+			}
+		}
+
+		writeln!(output, "\n--- vs {server}:")?;
+		writeln!(
+			output,
+			"  Only on {base_server}: {}  Only on {server}: {}",
+			only_on_base.len(),
+			only_on_server.len()
+		)?;
+
+		fmt_list(&mut output, &format!("  IDs only on {base_server}"), &only_on_base)?;
+		fmt_list(&mut output, &format!("  IDs only on {server}"), &only_on_server)?;
+
+		if verify_errors > 0 {
+			writeln!(output, "  Verify errors: {verify_errors}")?;
+		}
+
+		// Flush after each server so results appear incrementally
+		self.write_str(&output).await?;
+		output.clear();
 	}
 
-	let mut state2 = HashMap::new();
-	let mut verify_errors2 = 0_usize;
-	for pdu in &response2.pdus {
-		let Ok((event_id, value)) = self
-			.services
-			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
-			.await
-		else {
-			verify_errors2 = verify_errors2.saturating_add(1);
-			continue;
-		};
+	Ok(())
+}
 
-		let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
-			continue;
-		};
-		if let Some(state_key) = &pdu.state_key {
-			state2.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
-		}
+fn fmt_list(out: &mut String, label: &str, items: &[String]) -> std::fmt::Result {
+	use std::fmt::Write;
+
+	write!(out, "{label}: [")?;
+	for item in items {
+		write!(out, "\n    {item}")?;
 	}
-
-	let mut only_on_server1 = Vec::new();
-	for (key, event_id) in &state1 {
-		if state2.get(key) != Some(event_id) {
-			only_on_server1.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
-		}
-	}
-
-	let mut only_on_server2 = Vec::new();
-	for (key, event_id) in &state2 {
-		if state1.get(key) != Some(event_id) {
-			only_on_server2.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
-		}
-	}
-
-	let verify_note = if verify_errors1 > 0 || verify_errors2 > 0 {
-		format!(
-			"\n\nNote: {verify_errors1} events from {server1} and {verify_errors2} from \
-			 {server2} skipped (signature verification failed)"
-		)
-	} else {
-		String::new()
-	};
-
-	self.write_str(&format!(
-		"Remote State Comparison for {room_id}:\n- {server1} vs {server2}\n- Only on {server1}: \
-		 {}\n- Only on {server2}: {}\n\nIDs only on {server1}:\n```\n{:#?}\n```\n\nIDs only on \
-		 {server2}:\n```\n{:#?}\n```{verify_note}",
-		only_on_server1.len(),
-		only_on_server2.len(),
-		only_on_server1,
-		only_on_server2
-	))
-	.await
+	writeln!(out, "{}]", if items.is_empty() { "" } else { "\n" })
 }
 
 #[admin_command]

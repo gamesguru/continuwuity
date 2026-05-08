@@ -236,17 +236,19 @@ pub enum YoloCommand {
 		at_event: Option<OwnedEventId>,
 	},
 
-	/// Compares room state between two different remote servers.
+	/// Compares room state between remote servers. First server is the
+	/// base; each additional server is compared against it.
 	CompareRemoteState {
 		/// The room ID.
 		room_id: OwnedRoomId,
-		/// The first server to compare.
-		server1: OwnedServerName,
-		/// The second server to compare.
-		server2: OwnedServerName,
+		/// Base server to compare against.
+		base_server: OwnedServerName,
+		/// One or more servers to compare with the base.
+		servers: Vec<OwnedServerName>,
 		/// The event ID to use as a reference point. Will be found
 		/// automatically if not provided.
-		event_id: Option<OwnedEventId>,
+		#[arg(long)]
+		at_event: Option<OwnedEventId>,
 	},
 
 	/// Heals a room by rescuing local outliers, fetching genuinely missing
