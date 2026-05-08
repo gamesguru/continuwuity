@@ -82,6 +82,7 @@ echo "→ Consolidating and ingesting test details..."
                    AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'),''))
                    AND r.room_version IS NOT DISTINCT FROM COALESCE(NULLIF((t.j->>'room_version'), ''), '11')
         WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
+        ORDER BY r.id, (t.j->>'Test'), (t.j->>'Action') ASC
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
 ) | psql "$DB_TARGET"
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
