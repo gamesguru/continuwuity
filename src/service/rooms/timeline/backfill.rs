@@ -384,18 +384,17 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
-	// Use forward-facing (i.e., positive) PDU count
-	let count: u64 = self.services.globals.next_count()?;
+	// Use backfill (negative) PDU count — these are historical events
+	// that predate the join, not new forward events.
+	let count: i64 = self.services.globals.next_count()?.try_into()?;
 
 	let pdu_id: RawPduId = PduId {
 		shortroomid,
-		shorteventid: PduCount::Normal(count),
+		shorteventid: PduCount::Backfilled(validated!(0 - count)),
 	}
 	.into();
 
-	self.db
-		.append_pdu(&pdu_id, &pdu, &value, PduCount::Normal(count))
-		.await;
+	self.db.prepend_backfill_pdu(&pdu_id, event_id, &value);
 
 	drop(insert_lock);
 
