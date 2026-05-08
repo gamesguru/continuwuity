@@ -2122,26 +2122,31 @@ pub(super) async fn import_outliers(&self, jsonl: String) -> Result {
 
 #[admin_command]
 pub(super) async fn import_pdus(&self, room_id: OwnedRoomId, path: String) -> Result {
+	use tokio::io::{AsyncBufReadExt, BufReader};
+
 	self.bail_restricted()?;
 
-	let contents = tokio::fs::read_to_string(&path)
+	let file = tokio::fs::File::open(&path)
 		.await
-		.map_err(|e| err!("Failed to read file {path}: {e:?}"))?;
+		.map_err(|e| err!("Failed to open file {path}: {e:?}"))?;
+	let mut lines = BufReader::new(file).lines();
 
 	let mut inserted = 0_usize;
 	let mut skipped = 0_usize;
 	let mut failed = 0_usize;
-	let total = contents.lines().filter(|l| !l.trim().is_empty()).count();
+	let mut total = 0_usize;
 
-	self.write_str(&format!("Importing PDUs from {path} into {room_id} ({total} lines)..."))
+	self.write_str(&format!("Importing PDUs from {path} into {room_id} (streaming)..."))
 		.await?;
 
-	for line in contents.lines() {
+	while let Ok(Some(line)) = lines.next_line().await {
 		if line.trim().is_empty() {
 			continue;
 		}
 
-		let value: CanonicalJsonObject = match serde_json::from_str(line) {
+		total = total.saturating_add(1);
+
+		let value: CanonicalJsonObject = match serde_json::from_str(&line) {
 			| Ok(v) => v,
 			| Err(e) => {
 				warn!("import_pdus: bad JSON line: {e:?}");
@@ -2182,6 +2187,14 @@ pub(super) async fn import_pdus(&self, room_id: OwnedRoomId, path: String) -> Re
 				// Already in timeline
 				skipped = skipped.saturating_add(1);
 			},
+		}
+
+		let done = inserted.saturating_add(skipped).saturating_add(failed);
+		if done.is_multiple_of(1000) {
+			info!(
+				"import_pdus: progress {done} lines ({inserted} ok, {skipped} skip, {failed} \
+				 err)"
+			);
 		}
 	}
 

@@ -107,17 +107,24 @@ impl Data {
 		let pdus = self.pdus(room_id, PduCount::min());
 		pin_mut!(pdus);
 
+		// Pre-allocate key buffer outside the loop to avoid repeated heap allocations
+		let room_bytes = room_id.as_bytes();
+		let mut key = Vec::with_capacity(room_bytes.len().saturating_add(1).saturating_add(64));
+
 		while let Some((_, pdu)) = pdus.try_next().await? {
 			// Use canonical key format: room_id || 0xFF || event_id
 			// (must match add_pdu_outlier / room_stream expectations)
-			let mut key = room_id.as_bytes().to_vec();
+			key.clear();
+			key.extend_from_slice(room_bytes);
 			key.push(0xFF);
 			key.extend_from_slice(pdu.event_id.as_bytes());
 
 			if let Ok(json) = self.get_non_outlier_pdu_json(&pdu.event_id).await {
 				self.eventid_outlierpdu.raw_put(&pdu.event_id, Json(&json));
+				// Must use raw_put to bypass Bincode serializer — .insert()
+				// would prepend an 8-byte length prefix, corrupting lookups.
 				self.roomid_outliereventid
-					.insert(&key, pdu.event_id.as_bytes());
+					.raw_put::<&[u8], &[u8]>(&key, pdu.event_id.as_bytes());
 				count = count.saturating_add(1);
 			}
 		}

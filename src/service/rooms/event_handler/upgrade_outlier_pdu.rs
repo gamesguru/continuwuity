@@ -350,11 +350,13 @@ where
 		}
 	}
 
-	// Only derive new room state for state events that passed all auth checks.
-	// When using the current-state fallback, we still resolve so that the
-	// rescued event properly updates room state.
-	if !soft_fail && incoming_pdu.state_key().is_some() {
-		debug!("Event is a state-event that passed auth. Deriving new room state");
+	// Derive new room state for all incoming state events, including
+	// soft-failed ones. State resolution merges forks deterministically —
+	// a soft-failed event may carry state from a fork we haven't seen,
+	// and feeding it into resolve_state heals local drift. This is the
+	// continuous state reconciliation mechanism in Matrix federation.
+	if incoming_pdu.state_key().is_some() {
+		debug!("Event is a state-event. Deriving new room state");
 
 		// We also add state after incoming event to the fork states
 		let mut state_after = state_at_incoming_event.clone();
