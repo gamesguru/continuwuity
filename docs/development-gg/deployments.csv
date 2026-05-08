@@ -1,0 +1,4 @@
+env,server,branch,commit,commit_date,version_string,recorded_at,known_bugs,notes
+dev,nutra.tk,guru/dev-2026-03-27+b1-presence+b2-federation,0ab682905,2026-04-13,0.5.7-alpha.1+1058~0ab682905,2026-05-07T23:30-04:00,force_state race (fix: c3e35021c 2026-05-07); NXDOMAIN inflation (fix: 955a1f461 2026-05-07),pre-dates sender rework so no hot-loop
+nightly,mdev.nutra.tk,guru/nightly,6505d420f,2026-03-30,0.5.7-alpha.1+1054~6505d420f,2026-05-07T23:30-04:00,force_state race (fix: c3e35021c 2026-05-07),based on main; no custom sender/presence rework
+jon,wombatx.me,guru/dev-2026-03-27+b1-presence+b2-federation,07dc655e0,2026-05-07,0.5.8+1115~07dc655e0,2026-05-07T23:30-04:00,force_state race (fix: c3e35021c 2026-05-07); flush hot-loop (fix: e1dd142d8 2026-05-07); low presence drain (fix: b2a6ccdeb 2026-05-07); NXDOMAIN inflation (fix: 955a1f461 2026-05-07),133k outbound queue observed
