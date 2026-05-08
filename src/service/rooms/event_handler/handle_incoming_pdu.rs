@@ -231,19 +231,42 @@ pub async fn handle_incoming_pdu<'a>(
 		}
 
 		if meta_exists && is_room_member_event {
+			// During a federated join, the remote server starts pushing PDUs
+			// before our join flow finishes (force_state hasn't run yet, so
+			// server_in_room is still false). If we upgrade these to timeline
+			// events, upgrade_outlier_to_timeline_pdu will run state resolution
+			// against a stale pre-join snapshot and force_state will clobber the
+			// join flow's state — leaving the sync loop seeing the user as
+			// "invite" instead of "join" (the double-join bug).
+			//
+			// Save as outlier only. The outlier will be upgraded to a timeline
+			// event when the next federation transaction references it in
+			// prev_events, by which point server_in_room will be true and state
+			// resolution will use the correct post-join state.
 			info!(
 				%origin,
 				%room_id,
-				"Accepting inbound membership PDU for known room before participation cache catches up"
+				"Saving inbound membership PDU as outlier for known room while join is in progress"
 			);
-		} else {
-			info!(
-				%origin,
-				%room_id,
-				"Dropping inbound PDU for room we aren't participating in"
-			);
-			return Err!(Request(NotFound("This server is not participating in that room.")));
+
+			let create_event = &(self
+				.services
+				.state_accessor
+				.room_state_get(room_id, &StateEventType::RoomCreate, "")
+				.await?);
+
+			self.handle_outlier_pdu(origin, create_event, event_id, room_id, value, false)
+				.await?;
+
+			return Ok(None);
 		}
+
+		info!(
+			%origin,
+			%room_id,
+			"Dropping inbound PDU for room we aren't participating in"
+		);
+		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
 	if !meta_exists {
