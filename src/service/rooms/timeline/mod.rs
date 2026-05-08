@@ -356,11 +356,19 @@ impl Service {
 		for event_id in &sorted {
 			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
 
-			let new_shortstatehash = self.services.state.append_to_state(pdu, room_id).await?;
-
-			self.services
-				.state
-				.set_room_state(room_id, new_shortstatehash, &state_lock);
+			match self.services.state.append_to_state(pdu, room_id).await {
+				| Ok(new_shortstatehash) => {
+					self.services
+						.state
+						.set_room_state(room_id, new_shortstatehash, &state_lock);
+				},
+				| Err(e) => {
+					warn!(
+						"reorder_timeline: append_to_state failed for {event_id}: {e}; skipping \
+						 shortstatehash rebuild for this event"
+					);
+				},
+			}
 
 			state_rebuilt = state_rebuilt.saturating_add(1);
 			if state_rebuilt.is_multiple_of(10000) {
