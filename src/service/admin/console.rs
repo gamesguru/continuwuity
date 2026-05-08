@@ -308,7 +308,7 @@ impl Console {
 		});
 	}
 
-	fn add_history(&self, line: String) { self.history.lock().add(line); }
+	fn add_history(&self, line: String) { self.history.lock().add(&line); }
 
 	fn tab_complete(&self, line: &str) -> String {
 		self.admin

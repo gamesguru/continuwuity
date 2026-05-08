@@ -94,7 +94,7 @@ async fn async_run(config: &Config) -> Result<()> {
 					break;
 				}
 
-				history.add(line.clone());
+				history.add(&line);
 
 				// Send line to server
 				if let Err(_e) = stream_reader.get_mut().write_all(line.as_bytes()).await {

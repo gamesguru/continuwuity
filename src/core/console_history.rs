@@ -21,13 +21,12 @@ impl ConsoleHistory {
 	#[must_use]
 	pub fn new() -> Self {
 		let path = std::env::var("HOME")
-			.map(PathBuf::from)
-			.unwrap_or_else(|_| PathBuf::from("."))
+			.map_or_else(|_| PathBuf::from("."), PathBuf::from)
 			.join(HISTORY_FILE);
 
 		let mut entries = VecDeque::with_capacity(HISTORY_LIMIT);
 		if let Ok(file) = File::open(&path) {
-			for line in std::io::BufReader::new(file).lines().flatten() {
+			for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
 				if !line.is_empty() {
 					entries.push_back(line);
 				}
@@ -42,7 +41,7 @@ impl ConsoleHistory {
 	}
 
 	/// Add a line to the history and append it to the file.
-	pub fn add(&mut self, line: String) {
+	pub fn add(&mut self, line: &str) {
 		if line.trim().is_empty() {
 			return;
 		}
@@ -50,7 +49,7 @@ impl ConsoleHistory {
 		if self.entries.len() >= HISTORY_LIMIT {
 			self.entries.pop_front();
 		}
-		self.entries.push_back(line.clone());
+		self.entries.push_back(line.to_owned());
 
 		// Append to persistent history file
 		if let Ok(mut file) = OpenOptions::new()
