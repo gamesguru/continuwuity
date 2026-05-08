@@ -77,9 +77,18 @@ where
 	};
 
 	if state_at_incoming_event.is_none() {
-		state_at_incoming_event = self
+		// For normal events, propagate federation errors to trigger retry
+		// via backoff. For rescue-pdu (skip_soft_fail), swallow errors so
+		// the current-room-state fallback below can activate.
+		let fetched = self
 			.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
-			.await?;
+			.await;
+
+		state_at_incoming_event = if skip_soft_fail {
+			fetched.ok().flatten()
+		} else {
+			fetched?
+		};
 	}
 
 	if state_at_incoming_event.is_none() {
