@@ -525,10 +525,6 @@ pub(super) async fn view_extremities(
 	room: Option<OwnedRoomOrAliasId>,
 	all: bool,
 ) -> Result {
-	if room.is_none() && !all {
-		return Err!("Specify a room or use --all.");
-	}
-
 	if all {
 		let mut fractured = Vec::new();
 		let rooms: Vec<_> = self

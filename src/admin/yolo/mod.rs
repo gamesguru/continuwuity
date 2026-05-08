@@ -55,13 +55,15 @@ pub enum YoloCommand {
 		limit: Option<usize>,
 	},
 
-	/// View the current forward extremities (timeline tips) of a room.
+	/// View the current forward extremities (timeline tips) of a room,
+	/// or scan all rooms for DAG fractures with --all.
 	ViewExtremities {
 		/// The room ID or alias.
+		#[arg(required_unless_present = "all")]
 		room: Option<OwnedRoomOrAliasId>,
 
 		/// Show extremities for all rooms.
-		#[arg(long)]
+		#[arg(long, conflicts_with = "room")]
 		all: bool,
 	},
 

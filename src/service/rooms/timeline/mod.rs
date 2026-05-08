@@ -191,6 +191,7 @@ impl Service {
 
 		use conduwuit_core::matrix::state_res;
 		use futures::future::ready;
+		use ruma::events::StateEventType;
 
 		let shortroomid = self
 			.services
@@ -421,6 +422,61 @@ impl Service {
 
 			info!("reorder_timeline: collapsed extremities to single tip: {last_event_id}");
 		}
+
+		// Rebuild membership cache from the authoritative state snapshot.
+		// This fixes stale/missing entries left by previous DAG fractures.
+
+		// Collect unique member user_ids from the timeline's m.room.member events
+		let mut member_users: HashSet<ruma::OwnedUserId> = HashSet::new();
+		for event_id in &sorted {
+			if let Ok(pdu) = self.get_pdu(event_id).await {
+				if pdu.kind.to_string() == "m.room.member" {
+					if let Some(sk) = pdu.state_key() {
+						if let Ok(uid) = ruma::OwnedUserId::try_from(sk) {
+							member_users.insert(uid);
+						}
+					}
+				}
+			}
+		}
+
+		let mut members_synced = 0_usize;
+		for user_id in &member_users {
+			let Ok(pdu) = self
+				.services
+				.state_accessor
+				.room_state_get(room_id, &StateEventType::RoomMember, user_id.as_str())
+				.await
+			else {
+				continue;
+			};
+
+			let content: serde_json::Value = pdu.get_content_as_value();
+			let membership = content
+				.get("membership")
+				.and_then(|v| v.as_str())
+				.unwrap_or("leave");
+
+			match membership {
+				| "join" => {
+					self.services
+						.state_cache
+						.mark_as_joined(user_id, room_id)
+						.await;
+					members_synced = members_synced.saturating_add(1);
+				},
+				| "leave" | "ban" => {
+					self.services
+						.state_cache
+						.mark_as_left(user_id, room_id, None)
+						.await;
+					members_synced = members_synced.saturating_add(1);
+				},
+				| _ => {},
+			}
+		}
+		self.services.state_cache.update_joined_count(room_id).await;
+		info!("reorder_timeline: synced {members_synced} membership cache entries");
 
 		drop(state_lock);
 		info!(
