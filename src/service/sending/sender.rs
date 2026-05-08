@@ -202,10 +202,11 @@ impl Service {
 		});
 	}
 
-	/// Re-schedule a Flush for the given destination after a short delay.
+	/// Re-schedule a Flush for the given destination after a delay.
 	/// Called when a Flush arrives but is rejected (e.g. backoff still active
 	/// due to timer jitter), so the retry isn't permanently lost.
-	fn reschedule_flush(&self, dest: Destination) {
+	/// The delay should match the remaining backoff time to avoid hot-polling.
+	fn reschedule_flush(&self, dest: Destination, delay: Duration) {
 		let sender = self
 			.channels
 			.get(self.shard_id(&dest))
@@ -214,7 +215,7 @@ impl Service {
 			.clone();
 
 		self.server.runtime().spawn(async move {
-			tokio::time::sleep(Duration::from_secs(1)).await;
+			tokio::time::sleep(delay).await;
 			sender
 				.send(Msg {
 					dest,
@@ -308,9 +309,10 @@ impl Service {
 				statuses.remove(&msg.dest);
 			}
 		} else if is_flush {
-			// Flush was rejected (e.g., backoff still active due to timer
-			// jitter). Re-schedule so the retry isn't permanently lost.
-			self.reschedule_flush(msg.dest);
+			// Flush was rejected (e.g., backoff still active). Re-schedule
+			// at the remaining backoff time to avoid hot-polling the channel.
+			let delay = self.remaining_backoff(&msg.dest, statuses);
+			self.reschedule_flush(msg.dest, delay);
 		}
 	}
 
@@ -487,6 +489,38 @@ impl Service {
 			.or_insert(TransactionStatus::Running);
 
 		Ok((allow, retry))
+	}
+
+	/// Calculate the remaining backoff duration for a destination.
+	/// Used to schedule retries at the correct time instead of hot-polling.
+	fn remaining_backoff(&self, dest: &Destination, statuses: &CurTransactionStatus) -> Duration {
+		const FALLBACK: Duration = Duration::from_secs(5);
+
+		let Some(status) = statuses.get(dest) else {
+			return FALLBACK;
+		};
+
+		match status {
+			| TransactionStatus::Failed(tries, time) => {
+				let base = self.server.config.sender_retry_backoff_base;
+				let max = self.server.config.sender_retry_backoff_limit;
+				let backoff = base
+					.saturating_mul(
+						1_u64
+							.checked_shl(tries.saturating_sub(1))
+							.unwrap_or(u64::MAX),
+					)
+					.min(max);
+				let total = Duration::from_secs(backoff);
+				total
+					.saturating_sub(time.elapsed())
+					.max(Duration::from_secs(1))
+			},
+			| TransactionStatus::Cooldown(time) => Duration::from_millis(1500)
+				.saturating_sub(time.elapsed())
+				.max(Duration::from_millis(100)),
+			| _ => FALLBACK,
+		}
 	}
 
 	#[tracing::instrument(name = "edus", level = "debug", skip_all)]
