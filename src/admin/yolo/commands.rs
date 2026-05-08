@@ -1402,6 +1402,10 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 			.pdu_shortstatehash(event_id)
 			.await
 		else {
+			info!(
+				"repair_unsigned: skipped {event_id} ({} / {state_key}) — no state snapshot",
+				pdu.kind()
+			);
 			skipped = skipped.saturating_add(1);
 			continue;
 		};
@@ -1569,9 +1573,18 @@ pub(super) async fn compare_room_state(
 		}
 	}
 
+	let latest_local = self
+		.services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await?;
+	let latest_local_id = latest_local.event_id().to_owned();
+
 	self.write_str(&format!(
-		"Room State Comparison for {room_id} vs {server}:\n- Missing locally: {}\n- Extra \
-		 locally: {}\n\nMissing IDs:\n```\n{:#?}\n```\n\nExtra IDs:\n```\n{:#?}\n```",
+		"Room State Comparison for {room_id} {server}\n- at_event (sent to remote): \
+		 {at_event_id}\n- local tip: {latest_local_id}\n- Missing locally: {}\n- Extra locally: \
+		 {}\n\nMissing IDs:\n```\n{:#?}\n```\n\nExtra IDs:\n```\n{:#?}\n```",
 		missing_locally.len(),
 		extra_locally.len(),
 		missing_locally,
