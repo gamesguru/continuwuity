@@ -159,6 +159,8 @@ pub fn add_pdu_outlier(
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn remove_outlier(&self, event_id: &EventId) {
+	use futures::StreamExt;
+
 	if let Ok(json) = self
 		.db
 		.eventid_outlierpdu
@@ -167,7 +169,7 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 		.deserialized::<CanonicalJsonObject>()
 	{
 		// Derive room_id using the same fallback chain as add_pdu_outlier
-		// to ensure we always remove the roomid_outliereventid index entry
+		// to ensure we always remove the roomid_outliereventid index entry.
 		let room_id_from_pdu = json
 			.get("room_id")
 			.and_then(CanonicalJsonValue::as_str)
@@ -187,6 +189,22 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 			key.push(0xFF);
 			key.extend_from_slice(event_id.as_bytes());
 			self.db.roomid_outliereventid.remove(&key);
+		} else {
+			// PDU has no room_id in JSON and isn't a create event —
+			// add_pdu_outlier may have indexed it via its room_id parameter.
+			// Scan for any key ending with this event_id and remove it.
+			let suffix = event_id.as_bytes();
+			let mut stream = self.db.roomid_outliereventid.raw_keys();
+			while let Some(Ok(key)) = stream.next().await {
+				let sep = key.len().saturating_sub(suffix.len().saturating_add(1));
+				if key.ends_with(suffix)
+					&& key.len() > suffix.len()
+					&& key.get(sep) == Some(&0xFF)
+				{
+					self.db.roomid_outliereventid.remove(&key);
+					break;
+				}
+			}
 		}
 	}
 	self.db.eventid_outlierpdu.remove(event_id);
