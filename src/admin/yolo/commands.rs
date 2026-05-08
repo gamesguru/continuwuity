@@ -1754,16 +1754,17 @@ pub(super) async fn heal_room(
 	// Phase 1: Rescue existing local outliers first (no network)
 	// Only pass force=true when nuclear is set; otherwise respect auth checks
 	if !dry_run {
-		self.write_str(&format!("Phase 1: Rescuing local outliers in {room_id}..."))
+		self.write_str(&format!("Phase 1: Rescuing local outliers in {room_id}...\n"))
 			.await?;
 		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
 	} else {
-		self.write_str(&format!("Phase 1: [dry-run] Would rescue local outliers in {room_id}"))
+		self.write_str(&format!("Phase 1: [dry-run] Would rescue local outliers in {room_id}\n"))
 			.await?;
 	}
 
 	// Phase 2: Walk the DAG to find genuinely missing events
-	self.write_str("Phase 2: Scanning DAG for gaps...").await?;
+	self.write_str("Phase 2: Scanning DAG for gaps...\n")
+		.await?;
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let latest_event_id = self
 		.services
@@ -1857,7 +1858,7 @@ pub(super) async fn heal_room(
 	}
 
 	self.write_str(&format!(
-		"Phase 2: Scanned {seen} events ({local_found} local, {fetched} {action})",
+		"Phase 2: Scanned {seen} events ({local_found} local, {fetched} {action})\n",
 		seen = seen.len(),
 		action = if dry_run { "would fetch" } else { "fetched" },
 	))
