@@ -63,7 +63,6 @@ pub enum YoloCommand {
 	/// List all outlier PDUs in our database.
 	ListOutliers {
 		/// Filter outliers to a specific room
-		#[arg(short, long)]
 		room_id: Option<OwnedRoomOrAliasId>,
 
 		/// Filter outliers to a specific sender
