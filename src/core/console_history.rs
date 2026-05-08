@@ -10,7 +10,8 @@ const HISTORY_LIMIT: usize = 10_000;
 const HISTORY_FILE: &str = ".c10y_history";
 
 /// Persistent command history backed by a file, shared between console and
-/// attach modes.
+/// attach modes. Commands are appended to disk immediately so nothing is
+/// lost on crash or power loss.
 #[derive(Debug)]
 pub struct ConsoleHistory {
 	entries: VecDeque<String>,
@@ -33,7 +34,7 @@ impl ConsoleHistory {
 					entries.push_back(line);
 				}
 			}
-			// Keep only last N entries in memory
+			// Keep only last N entries in memory for readline
 			while entries.len() > HISTORY_LIMIT {
 				entries.pop_front();
 			}
@@ -42,7 +43,7 @@ impl ConsoleHistory {
 		Self { entries, path }
 	}
 
-	/// Add a line to the history and append it to the file.
+	/// Add a line to the history and immediately append it to the file.
 	pub fn add(&mut self, line: &str) {
 		if line.trim().is_empty() {
 			return;
@@ -53,49 +54,14 @@ impl ConsoleHistory {
 		}
 		self.entries.push_back(line.to_owned());
 
-		// Append to persistent history file with restrictive permissions.
-		// Periodically rewrite to cap disk growth at HISTORY_LIMIT entries.
-		if self.entries.len().is_multiple_of(HISTORY_LIMIT / 4) {
-			self.rewrite_file();
-		} else if let Ok(mut file) = OpenOptions::new()
+		// Append immediately — crash-safe, nothing buffered
+		if let Ok(mut file) = OpenOptions::new()
 			.create(true)
 			.append(true)
 			.mode(0o600)
 			.open(&self.path)
 		{
 			_ = writeln!(file, "{line}");
-		}
-	}
-
-	/// Rewrite the history file with only the in-memory entries.
-	fn rewrite_file(&self) {
-		use std::io::BufWriter;
-
-		let Ok(file) = OpenOptions::new()
-			.create(true)
-			.write(true)
-			.truncate(true)
-			.mode(0o600)
-			.open(&self.path)
-		else {
-			return;
-		};
-		let mut w = BufWriter::new(file);
-
-		// Write a timestamp header for forensics
-		let ts = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.map_or(0, |d| d.as_secs());
-
-		_ = writeln!(
-			w,
-			"# {ts} {} {}",
-			crate::info::version::name(),
-			crate::info::version::version(),
-		);
-
-		for entry in &self.entries {
-			_ = writeln!(w, "{entry}");
 		}
 	}
 
