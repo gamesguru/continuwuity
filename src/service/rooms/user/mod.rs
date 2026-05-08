@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use conduwuit::{Result, implement};
-use database::{Database, Deserialized, Map};
+use database::{Deserialized, Map};
 use ruma::{RoomId, UserId};
 
 use crate::{Dep, globals, rooms};
@@ -102,16 +102,14 @@ pub async fn count_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 	// short ID
 	let prefix = &[shortroomid];
 
-	// Collect all keys into a Vec and count them
-	let keys = self
+	let count = self
 		.db
 		.roomsynctoken_shortstatehash
 		.keys_prefix_raw(prefix)
-		.map_ok(|_| ()) // We only need to count, not store the keys
-		.try_collect::<Vec<_>>()
+		.try_fold(0_usize, |acc, _| async move { Ok(acc.saturating_add(1)) })
 		.await?;
 
-	Ok(keys.len())
+	Ok(count)
 }
 
 /// Delete all sync tokens associated with a room
@@ -141,7 +139,7 @@ pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 
 	// Delete each key individually
 	for key in &keys {
-		self.db.roomsynctoken_shortstatehash.del(key);
+		self.db.roomsynctoken_shortstatehash.remove(key);
 	}
 
 	let count = keys.len();

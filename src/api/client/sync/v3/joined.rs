@@ -371,7 +371,10 @@ async fn fetch_shortstatehashes(
 			services
 				.rooms
 				.timeline
-				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
+				.prev_shortstatehash(
+					room_id,
+					PduCount::Normal(last_sync_end_count).saturating_add(1),
+				)
 				.ok()
 		}))
 		.map(Option::flatten)

@@ -376,18 +376,11 @@ impl Service {
 	}
 
 	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
-		let event_id: OwnedEventId = self
-			.services
-			.short
-			.get_eventid_from_short(shorteventid)
-			.await?;
-		let room_id = self.services.timeline.get_pdu(&event_id).await?.room_id;
-		self.get_room_shortstatehash(
-			room_id
-				.as_deref()
-				.ok_or_else(|| err!(Database("PDU has no room_id")))?,
-		)
-		.await
+		self.db
+			.shorteventid_shortstatehash
+			.qry(&shorteventid)
+			.await
+			.deserialized()
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
