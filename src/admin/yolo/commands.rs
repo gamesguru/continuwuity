@@ -1209,7 +1209,7 @@ pub(super) async fn get_remote_dag(
 	let mut total_prev_events = 0_u64;
 	let batch_size = ruma::uint!(100);
 
-	self.write_str(&format!("Fetching DAG from {server} for {room_id} (limit: {limit})..."))
+	self.write_str(&format!("Fetching DAG from {server} for {room_id} (limit: {limit})...\n"))
 		.await?;
 
 	while !queue.is_empty() && total < limit {
@@ -1294,7 +1294,7 @@ pub(super) async fn get_remote_dag(
 	};
 
 	self.write_str(&format!(
-		"Successfully fetched {total} PDUs from {server} to {path} (branching factor: \
+		"\nSuccessfully fetched {total} PDUs from {server} to {path} (branching factor: \
 		 {bf_whole}.{bf_frac:03})"
 	))
 	.await
@@ -2199,7 +2199,7 @@ pub(super) async fn import_pdus(&self, room_id: OwnedRoomId, path: String) -> Re
 	let mut failed = 0_usize;
 	let mut total = 0_usize;
 
-	self.write_str(&format!("Importing PDUs from {path} into {room_id} (streaming)..."))
+	self.write_str(&format!("Importing PDUs from {path} into {room_id} (streaming)...\n"))
 		.await?;
 
 	while let Ok(Some(line)) = lines.next_line().await {
@@ -2262,8 +2262,8 @@ pub(super) async fn import_pdus(&self, room_id: OwnedRoomId, path: String) -> Re
 	}
 
 	self.write_str(&format!(
-		"Imported {inserted} PDUs, skipped {skipped}, failed {failed} out of {total} total for \
-		 {room_id}. Run `reorder-timeline` and `force-set-room-state` to finalize."
+		"\nImported {inserted} PDUs, skipped {skipped}, failed {failed} out of {total} total \
+		 for {room_id}. Run `reorder-timeline` and `force-set-room-state` to finalize."
 	))
 	.await
 }
