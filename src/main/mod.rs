@@ -75,9 +75,10 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 
 	let runtime = runtime::new(args)?;
 	let server = Server::new(args, Some(runtime.handle()))?;
+	let drop_sync_tokens = args.drop_sync_tokens;
 
 	runtime.spawn(signal::signal(server.clone()));
-	runtime.block_on(async_main(&server))?;
+	runtime.block_on(async_main(&server, drop_sync_tokens))?;
 	runtime::shutdown(&server, runtime);
 
 	#[cfg(unix)]
@@ -98,11 +99,18 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 	skip_all,
 	level = "info"
 )]
-async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
+async fn async_main(server: &Arc<Server>, drop_sync_tokens: bool) -> Result<(), Error> {
 	extern crate conduwuit_router as router;
 
 	match router::start(&server.server).await {
-		| Ok(services) => server.services.lock().await.insert(services),
+		| Ok(services) => {
+			if drop_sync_tokens {
+				conduwuit_core::info!("Dropping all sync tokens as requested by CLI flag...");
+				services.db["roomsynctoken_shortstatehash"].clear().await;
+				conduwuit_core::info!("Finished dropping all sync tokens.");
+			}
+			let _ = server.services.lock().await.insert(services);
+		},
 		| Err(error) => {
 			error!("Critical error starting server: {error}");
 			return Err(error);
@@ -145,13 +153,21 @@ async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
 /// and hot-reload portions of the server as-needed before returning for an
 /// actual shutdown. This is not available in release-mode or static builds.
 #[cfg(all(conduwuit_mods, feature = "conduwuit_mods"))]
-async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
+async fn async_main(server: &Arc<Server>, drop_sync_tokens: bool) -> Result<(), Error> {
 	let mut starts = true;
 	let mut reloads = true;
 	while reloads {
 		if let Err(error) = mods::open(server).await {
 			error!("Loading router: {error}");
 			return Err(error);
+		}
+
+		if starts && drop_sync_tokens {
+			conduwuit_core::info!("Dropping all sync tokens as requested by CLI flag...");
+			server.server.db["roomsynctoken_shortstatehash"]
+				.clear()
+				.await;
+			conduwuit_core::info!("Finished dropping all sync tokens.");
 		}
 
 		let result = mods::run(server, starts).await;
