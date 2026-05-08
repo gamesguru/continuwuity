@@ -1547,9 +1547,10 @@ pub(super) async fn compare_room_state(
 	let local_state_hash = self
 		.services
 		.rooms
-		.state
-		.get_room_shortstatehash(&room_id)
-		.await?;
+		.state_accessor
+		.pdu_shortstatehash(&at_event_id)
+		.await
+		.map_err(|_| err!(Database("No state snapshot for at_event {at_event_id}")))?;
 	let local_state: HashMap<_, _> = self
 		.services
 		.rooms
