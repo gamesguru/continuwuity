@@ -125,24 +125,17 @@ pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 	// short ID
 	let prefix = &[shortroomid];
 
-	// Collect all keys into a Vec first, then delete them
-	let keys = self
+	let _cork = self.db.roomsynctoken_shortstatehash.db().cork();
+
+	let count = self
 		.db
 		.roomsynctoken_shortstatehash
 		.keys_prefix_raw(prefix)
-		.map_ok(|key| {
-			// Clone the key since we can't store references in the Vec
-			Vec::from(key)
+		.try_fold(0_usize, |acc, key| async move {
+			self.db.roomsynctoken_shortstatehash.remove(key);
+			Ok(acc + 1)
 		})
-		.try_collect::<Vec<_>>()
 		.await?;
-
-	// Delete each key individually
-	for key in &keys {
-		self.db.roomsynctoken_shortstatehash.remove(key);
-	}
-
-	let count = keys.len();
 
 	Ok(count)
 }
