@@ -2159,7 +2159,10 @@ pub(super) async fn dag_merge_base(
 			// Get state_ids at our local tip — the remote server's latest known
 			// event for this room will be in there
 			let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
-			let request = get_room_state::v1::Request::new(event_a.clone(), room_id.clone());
+			let request = get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: event_a.clone(),
+			};
 			let response = self
 				.services
 				.sending
@@ -2169,15 +2172,15 @@ pub(super) async fn dag_merge_base(
 			// Find the most recent PDU from the response (highest depth)
 			let mut best: Option<(OwnedEventId, PduEvent)> = None;
 			for raw_pdu in &response.pdus {
-				if let Ok((event_id, _value)) = self
+				if let Ok((event_id, value)) = self
 					.services
 					.server_keys
 					.validate_and_add_event_id(raw_pdu, &room_version)
 					.await
 				{
-					if let Ok(pdu) = serde_json::from_str::<PduEvent>(
-						&serde_json::to_string(raw_pdu).unwrap_or_default(),
-					) {
+					if let Ok(pdu) =
+						PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))
+					{
 						let dominated = best.as_ref().is_none_or(|(_, b)| pdu.depth > b.depth);
 						if dominated {
 							best = Some((event_id, pdu));
