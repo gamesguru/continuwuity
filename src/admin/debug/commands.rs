@@ -731,15 +731,10 @@ pub(crate) async fn force_set_room_state_from_server(
 		.force_state(room_id.clone().as_ref(), short_state_hash, added, removed, &state_lock)
 		.await?;
 
-	info!("Resetting forward extremities to new state snapshot");
-	self.services
-		.rooms
-		.state
-		.reset_extremities_to_state(room_id.clone().as_ref(), short_state_hash, &state_lock)
-		.await;
-
-	// Overwrite the tip event's pdu_shortstatehash so the /state/ endpoint
-	// serves corrected state instead of the stale snapshot from original append.
+	// Set the tip event as the sole forward extremity. Previous behavior
+	// scattered extremities across all state events, fracturing the DAG.
+	// The state is already corrected by force_state above; extremities
+	// should just point at the timeline tip.
 	let tip_event_id = self
 		.services
 		.rooms
@@ -747,6 +742,14 @@ pub(crate) async fn force_set_room_state_from_server(
 		.latest_pdu_in_room(&room_id)
 		.await;
 	if let Ok(tip_pdu) = tip_event_id {
+		self.services
+			.rooms
+			.state
+			.set_forward_extremities(room_id.as_ref(), once(tip_pdu.event_id()), &state_lock)
+			.await;
+
+		// Also update the tip's pdu_shortstatehash so the /state/ endpoint
+		// serves corrected state instead of the stale snapshot from original append.
 		let shorteventid = self
 			.services
 			.rooms
@@ -758,7 +761,7 @@ pub(crate) async fn force_set_room_state_from_server(
 			.state
 			.set_pdu_shortstatehash(shorteventid, short_state_hash);
 		info!(
-			"Updated pdu_shortstatehash for tip event {} to {short_state_hash}",
+			"Set tip {} as sole extremity, updated pdu_shortstatehash to {short_state_hash}",
 			tip_pdu.event_id()
 		);
 	}
