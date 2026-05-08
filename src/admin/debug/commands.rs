@@ -738,6 +738,31 @@ pub(crate) async fn force_set_room_state_from_server(
 		.reset_extremities_to_state(room_id.clone().as_ref(), short_state_hash, &state_lock)
 		.await;
 
+	// Overwrite the tip event's pdu_shortstatehash so the /state/ endpoint
+	// serves corrected state instead of the stale snapshot from original append.
+	let tip_event_id = self
+		.services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await;
+	if let Ok(tip_pdu) = tip_event_id {
+		let shorteventid = self
+			.services
+			.rooms
+			.short
+			.get_or_create_shorteventid(tip_pdu.event_id())
+			.await;
+		self.services
+			.rooms
+			.state
+			.set_pdu_shortstatehash(shorteventid, short_state_hash);
+		info!(
+			"Updated pdu_shortstatehash for tip event {} to {short_state_hash}",
+			tip_pdu.event_id()
+		);
+	}
+
 	info!(
 		"Updating joined counts for room just in case (e.g. we may have found a difference in \
 		 the room's m.room.member state"

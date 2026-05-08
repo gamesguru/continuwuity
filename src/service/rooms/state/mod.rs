@@ -374,6 +374,17 @@ impl Service {
 		Ok(shortstatehash)
 	}
 
+	/// Overwrites the shortstatehash for a specific event. Used by admin
+	/// commands to fix stale pdu_shortstatehash entries after force-setting
+	/// room state.
+	pub fn set_pdu_shortstatehash(&self, shorteventid: u64, shortstatehash: u64) {
+		const BUFSIZE: usize = size_of::<u64>();
+
+		self.db
+			.shorteventid_shortstatehash
+			.aput::<BUFSIZE, BUFSIZE, _, _>(shorteventid, shortstatehash);
+	}
+
 	/// Generates a new StateHash and associates it with the incoming event.
 	///
 	/// This adds all current state events (not including the incoming event)
