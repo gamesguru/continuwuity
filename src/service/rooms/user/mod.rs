@@ -12,6 +12,7 @@ pub struct Service {
 }
 
 struct Data {
+	db: Arc<database::Database>,
 	userroomid_notificationcount: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	roomuserid_lastnotificationread: Arc<Map>,
@@ -27,6 +28,7 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			db: Data {
+				db: args.db.clone(),
 				userroomid_notificationcount: args.db["userroomid_notificationcount"].clone(),
 				userroomid_highlightcount: args.db["userroomid_highlightcount"].clone(),
 				roomuserid_lastnotificationread: args.db["userroomid_highlightcount"].clone(),
@@ -125,7 +127,7 @@ pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 	// short ID
 	let prefix = &[shortroomid];
 
-	let _cork = self.db.roomsynctoken_shortstatehash.db().cork();
+	let _cork = self.db.db.cork();
 
 	let count = self
 		.db
@@ -133,7 +135,7 @@ pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 		.keys_prefix_raw(prefix)
 		.try_fold(0_usize, |acc, key| async move {
 			self.db.roomsynctoken_shortstatehash.remove(key);
-			Ok(acc + 1)
+			Ok(acc.saturating_add(1))
 		})
 		.await?;
 
