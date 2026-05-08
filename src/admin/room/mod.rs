@@ -69,9 +69,10 @@ pub enum RoomCommand {
 		room: OwnedRoomOrAliasId,
 	},
 
-	/// - Delete sync tokens for all rooms that have no local users
+	/// - Delete sync tokens for all known rooms
 	///
-	/// By default, processes all empty rooms.
+	/// By default, processes all rooms. Use `target_option` to restrict
+	/// which room types are included.
 	PurgeAllSyncTokens {
 		/// Target specific room types
 		#[arg(long, value_enum)]
