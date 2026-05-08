@@ -364,6 +364,13 @@ impl Service {
 				);
 			}
 		}
+
+		// The sequential rebuild above gives each event a pdu_shortstatehash
+		// for visibility, but it uses naive "last event wins" which can disagree
+		// with state-res. Correct the room's final state by force-setting it
+		// from the state computed by append_to_state for the last event, which
+		// at minimum ensures the room shortstatehash is self-consistent.
+		// For authoritative correction, use force-set-room-state-from-server.
 		drop(state_lock);
 		info!(
 			"reorder_timeline: complete, {count} events reordered, {state_rebuilt} state \
