@@ -98,16 +98,20 @@ impl Resolver {
 			.dns_requests_time
 			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
 
-		if result.is_err() {
-			self.server
-				.metrics
-				.dns_requests_fail
-				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		} else {
-			self.server
-				.metrics
-				.dns_requests_success
-				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		match &result {
+			| Err(e) if !is_no_records_found(e) => {
+				self.server
+					.metrics
+					.dns_requests_fail
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			},
+			| Ok(_) => {
+				self.server
+					.metrics
+					.dns_requests_success
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			},
+			| _ => {},
 		}
 
 		result
@@ -126,16 +130,20 @@ impl Resolver {
 			.dns_requests_time
 			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
 
-		if result.is_err() {
-			self.server
-				.metrics
-				.dns_requests_fail
-				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		} else {
-			self.server
-				.metrics
-				.dns_requests_success
-				.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		match &result {
+			| Err(e) if !is_no_records_found(e) => {
+				self.server
+					.metrics
+					.dns_requests_fail
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			},
+			| Ok(_) => {
+				self.server
+					.metrics
+					.dns_requests_success
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			},
+			| _ => {},
 		}
 
 		result
@@ -233,13 +241,32 @@ async fn resolve_to_reqwest(
 			.metrics
 			.dns_requests_time
 			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
-		server
-			.metrics
-			.dns_requests_fail
-			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		// Don't count NoRecordsFound as a failure — it's a valid negative response
+		if let Err(ref boxed_err) = result {
+			if !boxed_err
+				.downcast_ref::<hickory_resolver::ResolveError>()
+				.is_some_and(is_no_records_found)
+			{
+				server
+					.metrics
+					.dns_requests_fail
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			}
+		}
 	}
 
 	result
+}
+
+/// Check if a DNS resolve error is a NoRecordsFound (NXDOMAIN) response.
+/// These are valid negative responses, not actual failures.
+fn is_no_records_found(e: &hickory_resolver::ResolveError) -> bool {
+	use hickory_resolver::{ResolveErrorKind::Proto, proto::ProtoErrorKind};
+
+	matches!(
+		e.kind(),
+		Proto(e) if matches!(e.kind(), ProtoErrorKind::NoRecordsFound { .. })
+	)
 }
 
 async fn cached_to_reqwest(cached: CachedOverride) -> ResolvingResult {
