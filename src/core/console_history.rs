@@ -19,8 +19,7 @@ pub struct ConsoleHistory {
 
 impl ConsoleHistory {
 	/// Load history from `~/.c10y_history`, creating the file if needed.
-	/// Lines starting with `#` are skipped as comments (timestamps) and
-	/// skipped
+	/// Lines starting with `#` are skipped as comments (timestamps).
 	#[must_use]
 	pub fn new() -> Self {
 		let path = std::env::var("HOME")
