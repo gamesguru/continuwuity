@@ -274,14 +274,24 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 				})
 			});
 		let pdu = match value {
-			| Ok(value) => {
-				self.services
-					.event_handler
-					.handle_incoming_pdu(backfill_server, room_id, event_id, value, false)
-					.boxed()
-					.await?;
-				debug!("Successfully backfilled {event_id} from {backfill_server}");
-				Some(self.get_pdu(event_id).await)
+			| Ok(value) => match self
+				.services
+				.event_handler
+				.handle_incoming_pdu(backfill_server, room_id, event_id, value, false)
+				.boxed()
+				.await
+			{
+				| Ok(_) => {
+					debug!("Successfully backfilled {event_id} from {backfill_server}");
+					Some(self.get_pdu(event_id).await)
+				},
+				| Err(e) => {
+					warn!(
+						"{backfill_server} provided an invalid PDU or failed state resolution \
+						 for {event_id}: {e}"
+					);
+					None
+				},
 			},
 			| Err(e) => {
 				warn!("{backfill_server} failed to provide backfill for room {room_id}: {e}");
