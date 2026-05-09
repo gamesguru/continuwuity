@@ -230,7 +230,8 @@ pub fn server_rooms<'a>(
 		.map(|(_, room_id): (Ignore, &RoomId)| room_id)
 }
 
-/// Returns true if server can see user by sharing at least one room.
+/// Returns true if a server can see a user by having any active membership
+/// (joined, invited, or knocked) in at least one shared room.
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn server_sees_user(&self, server: &ServerName, user_id: &UserId) -> bool {
