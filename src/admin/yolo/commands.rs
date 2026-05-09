@@ -1080,8 +1080,9 @@ pub(super) async fn get_room_dag(
 	let mut missing_hash = 0_u64;
 	let mut unique_hashes = HashSet::<u64>::new();
 	let mut last_ssh: Option<u64> = None;
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
-	let path = format!("/tmp/dag-{safe_room_id}-{start}.jsonl");
+	let path = format!("/tmp/dag-{safe_room_id}-v{room_version}-{start}.jsonl");
 	let mut file = tokio::fs::File::create(&path)
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
@@ -1198,7 +1199,7 @@ pub(super) async fn get_remote_dag(
 		.await?;
 
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
-	let path = format!("/tmp/remote-dag-{safe_room_id}-{server}.jsonl");
+	let path = format!("/tmp/remote-dag-{safe_room_id}-v{room_version}-{server}.jsonl");
 	let mut file = tokio::fs::File::create(&path)
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
