@@ -68,9 +68,9 @@ no partial state is ever visible to sync readers.
 
 ### 2. In-Flight Isolation via `current_count_in_flight()`
 
-`/sync` reads are bounded by a snapshot count taken *before* any
+`/sync` reads are bounded by a snapshot count taken _before_ any
 in-flight transaction. If a join is being written, sync won't read past
-the pre-join watermark. The join will appear in the *next* sync cycle
+the pre-join watermark. The join will appear in the _next_ sync cycle
 after the transaction commits.
 
 ### 3. Recently-Joined Cache

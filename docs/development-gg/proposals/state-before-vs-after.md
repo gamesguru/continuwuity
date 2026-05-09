@@ -35,6 +35,7 @@ room SSH = state AFTER tip event
 
 This divergence is correct behavior, not corruption. The two SSHs
 serve different purposes:
+
 - `pdu_shortstatehash`: "what state authorized this event?"
 - `roomid_shortstatehash`: "what is the room's current state?"
 
@@ -79,25 +80,51 @@ tip is a state event:
 ### Mitigation (implemented)
 
 The command emits a warning when `at_event` is a state event:
+
 ```
 ⚠ at_event is a state event — remote state excludes its own change
 ```
 
-### Future improvement
+### Future improvement (advisor-reviewed)
 
 The SSH comparison could check if the divergence is explained by a
 single state event (the tip itself). If applying the tip's state key
 change to the tip SSH produces the room SSH, report:
+
 ```
 SSH status: ✓ tip is consistent (state-event off-by-one)
 ```
+
+### `reorder-timeline` state walk fix (TODO)
+
+The root cause of the self-reference bug is that `reorder-timeline`
+starts its state walk from the room's current (full) SSH. This gives
+early backfilled events a state snapshot that includes future events.
+
+**⚠ DO NOT reset to empty.** In federated rooms, the timeline starts
+at the user's join — `m.room.create`, `m.room.power_levels`, etc. are
+outliers not in the timeline. Resetting to empty would produce state
+snapshots that lack the room's foundational state.
+
+**Correct approach:** Seed the walk from the `pdu_shortstatehash` of
+the oldest event in the sorted timeline:
+
+```rust
+let oldest_event_id = sorted.first().unwrap();
+let initial_ssh = self.services.rooms.state_accessor
+    .pdu_shortstatehash(oldest_event_id).await;
+// Reset room SSH to initial_ssh before starting the walk
+```
+
+This preserves outlier state while ensuring the walk starts from the
+correct historical point instead of the future tip.
 
 ## Why Not Store Post-Event State?
 
 Storing the post-event state as `pdu_shortstatehash` would:
 
 1. **Break federation `/state` semantics** — the spec says state is
-   returned *before* the event. If we store post-event state, we'd
+   returned _before_ the event. If we store post-event state, we'd
    serve wrong state to other servers.
 2. **Break auth chain reasoning** — state-res needs to know what state
    authorized an event, not what state resulted from it.
@@ -115,6 +142,7 @@ state **before** the event, this silently rolls back the tip's own
 state change.
 
 **Example:** If the tip is a `m.room.power_levels` update:
+
 - Remote returns the OLD power_levels (state before the tip)
 - `force-set --overwrite` adopts the old power_levels
 - The power level change is lost

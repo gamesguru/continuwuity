@@ -12,6 +12,7 @@ Sync tokens encode a PDU count. After reorder, all existing `since` tokens becom
 stale — they reference old PDU counts that now point to different events (or nothing).
 
 **Effect**: Clients that do an incremental sync will either:
+
 - Get duplicate events (token points to earlier than expected)
 - Miss events (token points to later than expected)
 - Trigger a full re-sync (token not found)
@@ -29,7 +30,7 @@ is now "first" in the window — its shortstatehash reflects a different state e
 in the sync state. This is the root cause of the "nex shows as invited" bug.
 
 **Root cause**: `pdu_shortstatehash` is stored per `event_id` (not per position), so it
-survives reorder correctly. But the *selection* of which event is "first" changes.
+survives reorder correctly. But the _selection_ of which event is "first" changes.
 
 **Mitigation**: After reorder, a full initial sync should use `current_shortstatehash`
 (line 522 fallback in `joined.rs`). But lazy loading and timeline limits mean the
@@ -75,7 +76,7 @@ Stored by `event_id`, not PDU count. Unaffected.
 ### 8. State Snapshots / shortstatehash (NONE)
 
 `pdu_shortstatehash` maps `event_id` → `shortstatehash`. Since event IDs don't change,
-these mappings survive. However, the *selection* of which event's shortstatehash is
+these mappings survive. However, the _selection_ of which event's shortstatehash is
 used (per issue #2) changes.
 
 ### 9. Outlier/PDU Store Consistency (LOW impact)

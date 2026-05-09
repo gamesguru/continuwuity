@@ -32,6 +32,7 @@ Use systemd socket activation to keep the TCP listener open during the binary sw
 ### Implementation
 
 #### systemd socket unit (`conduwuit.socket`)
+
 ```ini
 [Unit]
 Description=Conduwuit Matrix Server Socket
@@ -48,6 +49,7 @@ WantedBy=sockets.target
 ```
 
 #### systemd service unit changes (`conduwuit.service`)
+
 ```ini
 [Unit]
 Description=Conduwuit Matrix Server
@@ -90,6 +92,7 @@ fn get_listener() -> TcpListener {
 The `listenfd` or `sd-notify` crate handles this more robustly.
 
 #### Restart command
+
 ```bash
 # Instead of: systemctl restart conduwuit
 # Use:
