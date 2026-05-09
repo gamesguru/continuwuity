@@ -24,7 +24,7 @@ use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
 	OwnedUserId, RoomVersionId,
 	api::federation::event::{get_event, get_room_state},
-	events::AnyStateEvent,
+	events::{AnyStateEvent, StateEventType},
 	serde::Raw,
 };
 use service::rooms::{
@@ -817,43 +817,60 @@ pub(crate) async fn force_set_room_state_from_server(
 
 		futures::pin_mut!(state_full);
 		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
-			if event_type.to_string() != "m.room.member" {
+			if event_type != StateEventType::RoomMember {
 				continue;
 			}
 			let Ok(user_id) = OwnedUserId::try_from(state_key.as_str()) else {
 				continue;
 			};
 
-			let membership = pdu
-				.get_content_as_value()
+			let content = pdu.get_content_as_value();
+			let membership = content
 				.get("membership")
 				.and_then(|v| v.as_str())
-				.unwrap_or("leave")
-				.to_owned();
+				.unwrap_or("leave");
 
-			match membership.as_str() {
+			match membership {
 				| "join" => {
 					state_joined.insert(user_id.clone());
-					self.services
+					// Only write if cache disagrees — avoids redundant DB writes
+					if !self
+						.services
 						.rooms
 						.state_cache
-						.mark_as_joined(&user_id, &room_id)
-						.await;
-					members_updated = members_updated.saturating_add(1);
+						.is_joined(&user_id, &room_id)
+						.await
+					{
+						self.services
+							.rooms
+							.state_cache
+							.mark_as_joined(&user_id, &room_id)
+							.await;
+						members_updated = members_updated.saturating_add(1);
+					}
 				},
 				| "invite" => {
-					members_updated = members_updated.saturating_add(1);
+					// TODO: check-before-write for invites
 				},
 				| "leave" | "ban" => {
+					// Only write if cache still thinks user is joined.
 					// TODO: distinguish left vs kicked vs banned for proper
 					// Cinny/Element display. Currently all three map to
 					// mark_as_left which loses the distinction.
-					self.services
+					if self
+						.services
 						.rooms
 						.state_cache
-						.mark_as_left(&user_id, &room_id, None)
-						.await;
-					members_updated = members_updated.saturating_add(1);
+						.is_joined(&user_id, &room_id)
+						.await
+					{
+						self.services
+							.rooms
+							.state_cache
+							.mark_as_left(&user_id, &room_id, None)
+							.await;
+						members_updated = members_updated.saturating_add(1);
+					}
 				},
 				| unknown => {
 					warn!("Unknown membership state '{unknown}' for {user_id} in {room_id}");
