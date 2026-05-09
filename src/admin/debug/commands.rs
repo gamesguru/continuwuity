@@ -606,12 +606,12 @@ pub(crate) async fn force_set_room_state_from_server(
 	}
 
 	info!("Parsing {} incoming PDUs...", remote_state_response.pdus.len());
-	for pdu in remote_state_response.pdus.iter() {
+	for pdu in &remote_state_response.pdus {
 		match self
 			.services
 			.rooms
 			.event_handler
-			.parse_incoming_pdu(&pdu)
+			.parse_incoming_pdu(pdu)
 			.await
 		{
 			| Ok(t) => t,
