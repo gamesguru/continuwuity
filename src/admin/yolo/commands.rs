@@ -1593,12 +1593,7 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 			// No state snapshot, but we have replaces_state — use it directly
 			if let Ok(prev_eid) = <&EventId>::try_from(replaces_id.as_str()) {
 				if prev_eid != event_id {
-					self.services
-						.rooms
-						.timeline
-						.get_pdu(prev_eid)
-						.await
-						.ok()
+					self.services.rooms.timeline.get_pdu(prev_eid).await.ok()
 				} else {
 					None
 				}

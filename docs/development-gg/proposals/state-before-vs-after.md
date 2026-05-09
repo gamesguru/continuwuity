@@ -140,4 +140,3 @@ changes, server ACLs, encryption settings, etc.
 - `sync-join-race-condition.md`: related sync timing issue
 - `force-set-room-state-from-server`: updates both tip SSH and room
   SSH to the same value, eliminating the divergence
-

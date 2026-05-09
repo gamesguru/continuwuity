@@ -44,8 +44,10 @@ where
 		);
 		return Err!(Request(TooLarge("PDU is too large")));
 	}
-	// Remove unsigned field
-	value.remove("unsigned");
+	// Strip unsigned before signature verification (unsigned is not signed,
+	// so it must be excluded). Stash it so we can re-attach origin's
+	// prev_content after verification succeeds.
+	let stashed_unsigned = value.remove("unsigned");
 
 	// TODO: For RoomVersion6 we must check that Raw<..> is canonical do we anywhere?: https://matrix.org/docs/spec/rooms/v6#canonical-json
 
@@ -76,6 +78,13 @@ where
 	// convert to our PduEvent type
 	incoming_pdu
 		.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
+
+	// Re-attach the origin's unsigned field (prev_content, replaces_state, age).
+	// This data is untrusted but useful — append_pdu will overwrite prev_content
+	// with locally-verified data when a state snapshot is available.
+	if let Some(unsigned) = stashed_unsigned {
+		incoming_pdu.insert("unsigned".to_owned(), unsigned);
+	}
 
 	let pdu_event = serde_json::from_value::<PduEvent>(
 		serde_json::to_value(&incoming_pdu).expect("CanonicalJsonObj is a valid JsonValue"),
