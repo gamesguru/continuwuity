@@ -740,11 +740,14 @@ pub(crate) async fn force_set_room_state_from_server(
 	let state_lock = self.services.rooms.state.mutex.lock(&*room_id).await;
 
 	info!("Forcing new room state");
-	self.services
-		.rooms
-		.state
-		.force_state(room_id.clone().as_ref(), short_state_hash, added, removed, &state_lock)
-		.await?;
+	Box::pin(self.services.rooms.state.force_state(
+		room_id.clone().as_ref(),
+		short_state_hash,
+		added,
+		removed,
+		&state_lock,
+	))
+	.await?;
 
 	// Set the tip event as the sole forward extremity. Previous behavior
 	// scattered extremities across all state events, fracturing the DAG.
@@ -779,6 +782,10 @@ pub(crate) async fn force_set_room_state_from_server(
 			"Set tip {} as sole extremity, updated pdu_shortstatehash to {short_state_hash}",
 			tip_pdu.event_id()
 		);
+	} else {
+		// No timeline events — /sync won't deliver this room.
+		// Promote the most recent state event as a timeline anchor.
+		Box::pin(self.promote_sync_anchor(&room_id, short_state_hash, &state_lock)).await;
 	}
 
 	info!("Rebuilding membership cache from state snapshot for {room_id}");
@@ -876,6 +883,67 @@ pub(crate) async fn force_set_room_state_from_server(
 
 	self.write_str("Successfully forced the room state from the requested remote server.")
 		.await
+}
+
+/// Promote the most recent state event to the timeline as a Normal PDU,
+/// giving `/sync` a positional cursor to deliver the room to clients.
+#[admin_command]
+async fn promote_sync_anchor(
+	&self,
+	room_id: &ruma::RoomId,
+	short_state_hash: u64,
+	state_lock: &conduwuit_service::rooms::state::RoomMutexGuard,
+) {
+	use conduwuit::matrix::Event;
+	use futures::StreamExt;
+
+	info!("No timeline events found; promoting anchor event for /sync visibility");
+
+	let mut best: Option<(u64, OwnedEventId, PduEvent, CanonicalJsonObject)> = None;
+
+	let anchor_candidates = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full_pdus(short_state_hash);
+	futures::pin_mut!(anchor_candidates);
+
+	while let Some(pdu) = anchor_candidates.next().await {
+		let ts: u64 = pdu.origin_server_ts().0.into();
+		let eid = pdu.event_id().to_owned();
+		if best.as_ref().is_none_or(|(best_ts, ..)| ts > *best_ts) {
+			if let Ok(json) = self.services.rooms.timeline.get_pdu_json(&eid).await {
+				let pdu_owned: PduEvent =
+					serde_json::from_value(serde_json::to_value(&json).unwrap_or_default())
+						.unwrap_or_else(|_| panic!("Bad PDU JSON for {eid}"));
+				best = Some((ts, eid, pdu_owned, json));
+			}
+		}
+	}
+
+	if let Some((_ts, anchor_id, anchor_pdu, anchor_json)) = best {
+		match self
+			.services
+			.rooms
+			.timeline
+			.force_insert_pdu(room_id, &anchor_id, &anchor_pdu, &anchor_json)
+			.await
+		{
+			| Ok(_pdu_id) => {
+				self.services
+					.rooms
+					.state
+					.set_forward_extremities(room_id, once(anchor_id.as_ref()), state_lock)
+					.await;
+				info!("Promoted {anchor_id} as timeline anchor for /sync");
+			},
+			| Err(e) => {
+				warn!("Failed to promote anchor event {anchor_id}: {e}");
+			},
+		}
+	} else {
+		warn!("No state events found to promote as timeline anchor");
+	}
 }
 
 #[admin_command]
