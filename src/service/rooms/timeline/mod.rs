@@ -196,12 +196,7 @@ impl Service {
 		use futures::future::ready;
 		use ruma::events::StateEventType;
 
-		let shortroomid = self
-			.services
-			.short
-			.get_shortroomid(room_id)
-			.await
-			.map_err(|_| err!(Database("Room does not exist")))?;
+		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 
 		// Note: intentionally NOT corking the entire operation. A cork here
 		// would buffer 164K+ writes (82K deletes + 82K inserts) and trigger a
@@ -667,7 +662,8 @@ impl Service {
 
 		let mut stale_removed = 0_usize;
 		for user_id in &cached_members {
-			if !state_joined.contains(user_id) {
+			// Symmetric guard: only purge if they are neither joined NOR invited.
+			if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
 				self.services
 					.state_cache
 					.mark_as_left(user_id, room_id, None)

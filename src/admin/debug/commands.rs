@@ -916,7 +916,8 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 
 	let mut stale_removed = 0_usize;
 	for user_id in &cached_members {
-		if !state_joined.contains(user_id) {
+		// Symmetric guard: only purge if they are neither joined NOR invited.
+		if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
 			self.services
 				.rooms
 				.state_cache
@@ -992,8 +993,9 @@ async fn promote_sync_anchor(
 				| Err(_) => self.services.rooms.outlier.get_outlier_pdu_json(&eid).await,
 			};
 			if let Ok(json) = json_result {
-				let pdu_result: Result<PduEvent, _> =
-					serde_json::from_value(serde_json::to_value(&json).unwrap_or_default());
+				// Use from_id_val to inject the room_id into V3+ events
+				// which strip it from the raw JSON to save space.
+				let pdu_result = PduEvent::from_id_val(&eid, json.clone(), Some(room_id));
 				match pdu_result {
 					| Ok(pdu_owned) => {
 						best = Some((ts, eid, pdu_owned, json));

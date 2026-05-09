@@ -390,7 +390,7 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 	)
 	.map_err(|e| err!(Database("Bad outlier PDU: {e:?}")))?;
 
-	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+	let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
@@ -440,7 +440,7 @@ pub async fn force_insert_pdu(
 		return Err!(Database("PDU {event_id} already in timeline"));
 	}
 
-	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+	let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
