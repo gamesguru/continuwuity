@@ -166,8 +166,9 @@ pub async fn state_get_shortid(
 				.map(parse_compressed_state_event)
 				.map(at!(1))
 				.ok_or(err!(Request(NotFound(
-				"Not found in room state: type={event_type} key={state_key:?} ssh={shortstatehash}"
-			))))
+					"Not found in room state: type={event_type} key={state_key:?} \
+					 ssh={shortstatehash}"
+				))))
 		})
 		.await?
 }
