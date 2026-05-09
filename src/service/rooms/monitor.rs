@@ -266,18 +266,13 @@ impl Service {
 		}
 
 		if missing_latest.is_empty() {
-			debug!(
-				target: "forwardfill",
-				"Room {room_id} is not actually stale; we have all forward extremities from
-				 {target_server}."
-			);
+			debug!(target: "forwardfill", "Room {room_id} is not actually stale; we have all forward extremities from {target_server}.");
 			return Ok(());
 		}
 
 		info!(
 			target: "forwardfill",
-			"Room {room_id} is actually stale! Discovered {} missing forward extremities from
-			 {target_server}.",
+			"Room {room_id} is actually stale! Discovered {} missing forward extremities from {target_server}.",
 			missing_latest.len()
 		);
 

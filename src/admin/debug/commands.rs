@@ -606,7 +606,7 @@ pub(crate) async fn force_set_room_state_from_server(
 	}
 
 	info!("Parsing {} incoming PDUs...", remote_state_response.pdus.len());
-	for pdu in remote_state_response.pdus.clone() {
+	for pdu in remote_state_response.pdus.iter() {
 		match self
 			.services
 			.rooms
@@ -773,7 +773,7 @@ pub(crate) async fn force_set_room_state_from_server(
 			self.services
 				.rooms
 				.event_handler
-				.resolve_state(&room_id, &room_version, state.clone())
+				.resolve_state(&room_id, &room_version, state)
 				.await?
 		}
 	};
