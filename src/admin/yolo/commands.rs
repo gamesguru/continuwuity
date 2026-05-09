@@ -1752,25 +1752,25 @@ pub(super) async fn compare_room_state(
 		.await
 		.ok();
 
-	// When the tip is a state event, use its pdu_shortstatehash (state-before)
-	// for the local side so both sides compare the same state-before window.
-	// Otherwise use the room SSH (state-after) which equals state-before for
-	// non-state tip events.
-	let compare_hash = if tip_is_state_event {
-		if let Some(tsh) = tip_state_hash {
-			tsh
-		} else {
-			local_state_hash
+	// Federation /state returns state BEFORE the queried event. When the tip
+	// is a state event, inject it into the remote set so both sides reflect
+	// state-after (matching the local room SSH).
+	if tip_is_state_event {
+		if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
+			if let Some(state_key) = &tip_pdu.state_key {
+				remote_state.insert(
+					(tip_pdu.kind.to_string(), state_key.to_string()),
+					at_event_id.clone(),
+				);
+			}
 		}
-	} else {
-		local_state_hash
-	};
+	}
 
 	let local_state: HashMap<_, _> = self
 		.services
 		.rooms
 		.state_accessor
-		.state_full(compare_hash)
+		.state_full(local_state_hash)
 		.map(|((ty, sk), pdu)| ((ty.to_string(), sk.to_string()), pdu.event_id().to_owned()))
 		.collect()
 		.await;
@@ -1819,7 +1819,11 @@ pub(super) async fn compare_room_state(
 	// Local membership stats
 	let mut local_state_joined = 0_usize;
 	let mut local_state_invited = 0_usize;
-	let state_full = self.services.rooms.state_accessor.state_full(compare_hash);
+	let state_full = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full(local_state_hash);
 	pin_mut!(state_full);
 	while let Some(((event_type, _), pdu)) = state_full.next().await {
 		if event_type.to_string() == "m.room.member" {
@@ -1873,8 +1877,11 @@ pub(super) async fn compare_room_state(
 	writeln!(out, "Remote joined:  {remote_joined}").expect("fmt");
 	writeln!(out, "Remote invited: {remote_invited}").expect("fmt");
 	if tip_is_state_event {
-		writeln!(out, "⚠ tip is a state event — comparing state-before on both sides")
-			.expect("fmt");
+		writeln!(
+			out,
+			"NOTE: Tip is a state event — injected into remote state for state-after comparison"
+		)
+		.expect("fmt");
 	}
 	writeln!(out, "```").expect("fmt");
 	fmt_list(&mut out, "Missing IDs", &missing_locally).expect("fmt");
