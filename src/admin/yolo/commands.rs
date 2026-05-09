@@ -1569,6 +1569,10 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 		// Try to find the previous state event via two paths:
 		// 1. State snapshot (pdu_shortstatehash) — authoritative
 		// 2. Existing replaces_state in unsigned — fallback for outlier-sourced events
+		//
+		// Guard: if the lookup returns the event itself (can happen when
+		// reorder_timeline assigns a post-event SSH to backfilled events),
+		// treat it as no previous state.
 		let prev_state = if let Ok(shortstatehash) = self
 			.services
 			.rooms
@@ -1582,17 +1586,22 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 				.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
 				.await
 				.ok()
+				.filter(|prev| prev.event_id() != event_id)
 		} else if let Some(ruma::CanonicalJsonValue::String(replaces_id)) =
 			unsigned.get("replaces_state")
 		{
 			// No state snapshot, but we have replaces_state — use it directly
 			if let Ok(prev_eid) = <&EventId>::try_from(replaces_id.as_str()) {
-				self.services
-					.rooms
-					.timeline
-					.get_pdu(prev_eid)
-					.await
-					.ok()
+				if prev_eid != event_id {
+					self.services
+						.rooms
+						.timeline
+						.get_pdu(prev_eid)
+						.await
+						.ok()
+				} else {
+					None
+				}
 			} else {
 				None
 			}
