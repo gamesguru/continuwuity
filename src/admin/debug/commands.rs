@@ -572,6 +572,7 @@ pub(crate) async fn force_set_room_state_from_server(
 
 	let at_event_id_clone = at_event_id.clone();
 	let at_event_id_str = at_event_id.to_string();
+	info!("Fetching room state from {server_name} at event {at_event_id_str}...");
 	let remote_state_response = self
 		.services
 		.sending
@@ -580,6 +581,11 @@ pub(crate) async fn force_set_room_state_from_server(
 			event_id: at_event_id,
 		})
 		.await?;
+	info!(
+		"Received {} state PDUs and {} auth chain events from {server_name}",
+		remote_state_response.pdus.len(),
+		remote_state_response.auth_chain.len()
+	);
 
 	if let Some(ref path) = output {
 		info!("Dumping federation state response to {path}");
@@ -599,6 +605,7 @@ pub(crate) async fn force_set_room_state_from_server(
 		);
 	}
 
+	info!("Parsing {} incoming PDUs...", remote_state_response.pdus.len());
 	for pdu in remote_state_response.pdus.clone() {
 		match self
 			.services
