@@ -831,6 +831,7 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 	info!("Rebuilding membership cache from state snapshot for {room_id}");
 
 	let mut state_joined: HashSet<OwnedUserId> = HashSet::new();
+	let mut state_invited: HashSet<OwnedUserId> = HashSet::new();
 	let mut members_updated = 0_usize;
 
 	{
@@ -874,6 +875,7 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 					}
 				},
 				| "invite" => {
+					state_invited.insert(user_id.clone());
 					// TODO: check-before-write for invites
 				},
 				| "leave" | "ban" => {
@@ -935,7 +937,7 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 		.await;
 
 	for user_id in &cached_invited {
-		if !state_joined.contains(user_id) {
+		if !state_invited.contains(user_id) {
 			self.services
 				.rooms
 				.state_cache

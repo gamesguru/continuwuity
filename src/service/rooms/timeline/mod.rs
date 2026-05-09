@@ -597,6 +597,7 @@ impl Service {
 		// This fixes stale/missing entries left by previous DAG fractures.
 		let mut members_synced = 0_usize;
 		let mut state_joined: HashSet<ruma::OwnedUserId> = HashSet::new();
+		let mut state_invited: HashSet<ruma::OwnedUserId> = HashSet::new();
 
 		// Single pass over state snapshot — check-before-write avoids
 		// redundant DB writes for users whose cache is already correct.
@@ -634,6 +635,7 @@ impl Service {
 					}
 				},
 				| "invite" => {
+					state_invited.insert(uid.clone());
 					// mark_as_invited requires sender; skip cache update for
 					// invites here — update_joined_count will reconcile.
 				},
@@ -666,6 +668,25 @@ impl Service {
 		let mut stale_removed = 0_usize;
 		for user_id in &cached_members {
 			if !state_joined.contains(user_id) {
+				self.services
+					.state_cache
+					.mark_as_left(user_id, room_id, None)
+					.await;
+				stale_removed = stale_removed.saturating_add(1);
+			}
+		}
+
+		// Sweep stale invited cache entries
+		let cached_invited: Vec<ruma::OwnedUserId> = self
+			.services
+			.state_cache
+			.room_members_invited(room_id)
+			.map(ToOwned::to_owned)
+			.collect()
+			.await;
+
+		for user_id in &cached_invited {
+			if !state_invited.contains(user_id) {
 				self.services
 					.state_cache
 					.mark_as_left(user_id, room_id, None)
