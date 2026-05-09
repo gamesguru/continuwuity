@@ -317,12 +317,16 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	// note: we usually indicate a limited timeline if the syncing user just joined
-	// the room to trigger backfill (Synapse behavior). However, if the room
-	// actually has ZERO timeline events (e.g., a space), forcing `limited: true`
-	// causes clients to fail repeatedly to backfill.
+	// note: we always indicate a limited timeline if the syncing user just joined
+	// the room or this is an initial sync, to indicate to the client that it
+	// should request backfill (and to copy Synapse's behavior). for federated
+	// room joins, the `timeline` will usually only include the syncing user's
+	// join event. However, if the room actually has ZERO timeline events (e.g.,
+	// a space), forcing `limited: true` causes clients to fail repeatedly to
+	// backfill.
+	let is_initial_sync = sync_context.last_sync_end_count.is_none();
 	let limited = if timeline.pdus.is_empty() {
-		if joined_since_last_sync {
+		if joined_since_last_sync || is_initial_sync {
 			let is_space = services
 				.rooms
 				.state_accessor
@@ -335,7 +339,7 @@ async fn build_state_and_timeline(
 			timeline.limited
 		}
 	} else {
-		timeline.limited || joined_since_last_sync
+		timeline.limited || joined_since_last_sync || is_initial_sync
 	};
 
 	// the token which may be passed to the messages endpoint to backfill room

@@ -298,7 +298,7 @@ pub(crate) async fn build_sync_events(
 			 (room_id, joined_room, state_after, updates)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() || context.last_sync_end_count.is_none() {
+				if !joined_room.is_empty() {
 					joined_rooms.insert(room_id.clone(), joined_room);
 					if !state_after.is_empty() {
 						joined_state_after.insert(room_id, state_after);

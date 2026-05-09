@@ -332,12 +332,7 @@ pub async fn create_hash_and_sign_event(
 		match self
 			.services
 			.event_handler
-			.ask_policy_server(
-				&pdu,
-				&mut pdu_json,
-				&policy_room_id,
-				false,
-			)
+			.ask_policy_server(&pdu, &mut pdu_json, &policy_room_id, false)
 			.await
 		{
 			| Ok(true) => {},

@@ -306,24 +306,14 @@ impl Service {
 		let power_levels: RoomPowerLevelsEventContent = self
 			.services
 			.state_accessor
-			.room_state_get(
-				&room_id,
-				&StateEventType::RoomPowerLevels,
-				"",
-			)
+			.room_state_get(&room_id, &StateEventType::RoomPowerLevels, "")
 			.await
 			.and_then(|event| event.get_content())
 			.unwrap_or_default();
 
 		let serialized = event.to_format();
 		for action in self
-			.get_actions(
-				user,
-				&ruleset,
-				&power_levels,
-				&serialized,
-				&room_id,
-			)
+			.get_actions(user, &ruleset, &power_levels, &serialized, &room_id)
 			.await
 		{
 			let n = match action {

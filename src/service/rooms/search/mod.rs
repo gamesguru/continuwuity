@@ -128,11 +128,7 @@ pub async fn search_pdus<'a>(
 			let room_id = pdu.room_id_or_hash().expect("has room ID");
 			self.services
 				.state_accessor
-				.user_can_see_event(
-					query.user_id?,
-					&room_id,
-					pdu.event_id(),
-				)
+				.user_can_see_event(query.user_id?, &room_id, pdu.event_id())
 				.await
 				.then_some(pdu)
 		})
