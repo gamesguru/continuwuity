@@ -12,6 +12,7 @@ extend-ignore-re = [
     "([A-Za-z0-9+=]|\\\\\\s\\*){72,}",
     "[0-9+][A-Za-z0-9+]{30,}[a-z0-9+]",
     "\\$[A-Z0-9+][A-Za-z0-9+]{6,}[a-z0-9+]",
+    "![A-Za-z0-9_-]{10,}:[A-Za-z0-9._-]+", # Matrix room IDs
     "\\b[a-z0-9+/=][A-Za-z0-9+/=]{7,}[a-z0-9+/=][A-Z]\\b",
     # In the renovate config
     ".ontainer"
