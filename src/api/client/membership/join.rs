@@ -778,37 +778,7 @@ async fn join_room_by_id_helper_remote(
 		.state
 		.set_room_state(room_id, statehash_after_join, &state_lock);
 
-	// Promote all outlier events from the send_join response into the timeline
-	// as backfill PDUs. Without this, state/auth events remain stuck as orphaned
-	// outliers and cause cascading auth failures for future incoming events.
-	promote_join_outliers(services, room_id).await;
-
 	Ok(())
-}
-
-async fn promote_join_outliers(services: &Services, room_id: &RoomId) {
-	info!("Promoting send_join outliers to timeline");
-	let mut promoted = 0_usize;
-	let outlier_ids: Vec<_> = services
-		.rooms
-		.outlier
-		.room_stream(room_id)
-		.map(|(event_id, _pdu)| event_id)
-		.collect()
-		.await;
-	for event_id in &outlier_ids {
-		if let Err(e) = services
-			.rooms
-			.timeline
-			.promote_outlier(room_id, event_id)
-			.await
-		{
-			debug_warn!("Failed to promote outlier {event_id}: {e:?}");
-		} else {
-			promoted = promoted.saturating_add(1);
-		}
-	}
-	info!("Promoted {promoted} outliers to timeline for {room_id}");
 }
 
 #[tracing::instrument(skip_all, fields(%sender_user, %room_id), name = "join_local", level = "info")]
