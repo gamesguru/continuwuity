@@ -373,11 +373,6 @@ impl Service {
 		// This fixes sync serving stale state snapshots after reorder.
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
-		// Save the room's current shortstatehash BEFORE the walk. The sequential
-		// rebuild uses naive "last event wins" which can disagree with state-res.
-		// We restore it after so force-set results are preserved.
-		let saved_shortstatehash = self.services.state.get_room_shortstatehash(room_id).await;
-
 		// Compute the FOUNDATION state: the state BEFORE the oldest timeline
 		// event. This is the correct starting point for the state walk.
 		//
@@ -469,7 +464,7 @@ impl Service {
 			// rooms). Can drop keys that have outlier-only pre-timeline
 			// values — but this is still better than the tip state.
 			if !foundation_set {
-				if let Ok(ssh) = saved_shortstatehash {
+				if let Ok(ssh) = self.services.state.get_room_shortstatehash(room_id).await {
 					// Collect shorteventids for all state events in the timeline
 					let mut timeline_shorteventids: HashSet<u64> = HashSet::new();
 					for event_id in &sorted {
@@ -559,22 +554,14 @@ impl Service {
 			}
 		}
 
-		// Restore the room's shortstatehash to what it was before the walk.
-		// The sequential rebuild gives each event a pdu_shortstatehash for
-		// visibility, but the room's current state should reflect the
-		// authoritative state (e.g. from force-set-room-state-from-server),
-		// not the naive sequential result.
-		if let Ok(ssh) = saved_shortstatehash {
-			self.services
-				.state
-				.set_room_state(room_id, ssh, &state_lock);
-
-			// NOTE: Do NOT overwrite the tip event's pdu_shortstatehash here.
-			// pdu_shortstatehash stores the state BEFORE the event (per spec).
-			// The room's SSH is the state AFTER all events. These must diverge.
-
-			info!("reorder_timeline: restored room shortstatehash to {ssh}");
-		}
+		// NOTE: We no longer restore the pre-walk SSH here. The sequential
+		// walk through `append_to_state` correctly computes state-after for
+		// each event, and the final room SSH reflects the cumulative state
+		// including the tip event's own changes. Restoring the pre-walk SSH
+		// would undo state events at the tip (e.g. the user's own join).
+		//
+		// If force-set was run, its state is the walk's foundation; the walk
+		// replays all timeline events on top, producing the correct result.
 
 		// Collapse forward extremities to just the last event in the
 		// sorted timeline. This heals DAG fractures caused by
