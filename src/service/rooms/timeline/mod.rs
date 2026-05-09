@@ -595,82 +595,26 @@ impl Service {
 
 		// Rebuild membership cache from the authoritative state snapshot.
 		// This fixes stale/missing entries left by previous DAG fractures.
-
-		// Collect unique member user_ids from the timeline's m.room.member events.
-		// Uses the in-memory `entries` HashMap for O(1) lookups instead of N DB reads.
-		let mut member_users: HashSet<ruma::OwnedUserId> = HashSet::new();
-		for event_id in &sorted {
-			if let Some((_, pdu, _)) = entries.get(event_id) {
-				if pdu.kind == TimelineEventType::RoomMember {
-					if let Some(sk) = pdu.state_key() {
-						if let Ok(uid) = ruma::OwnedUserId::try_from(sk.to_owned()) {
-							member_users.insert(uid);
-						}
-					}
-				}
-			}
-		}
-
 		let mut members_synced = 0_usize;
-		for user_id in &member_users {
-			// Absent from state = left. Don't skip — clear stale cache entries.
-			let membership = match self
-				.services
-				.state_accessor
-				.room_state_get(room_id, &StateEventType::RoomMember, user_id.as_str())
-				.await
-			{
-				| Ok(pdu) => {
-					let content: serde_json::Value = pdu.get_content_as_value();
-					content
-						.get("membership")
-						.and_then(|v| v.as_str())
-						.unwrap_or("leave")
-						.to_owned()
-				},
-				| Err(_) => "leave".to_owned(),
-			};
+		let mut state_joined: HashSet<ruma::OwnedUserId> = HashSet::new();
 
-			match membership.as_str() {
-				| "join" => {
-					self.services
-						.state_cache
-						.mark_as_joined(user_id, room_id)
-						.await;
-					members_synced = members_synced.saturating_add(1);
-				},
-				| "invite" => {
-					// mark_as_invited requires sender; skip cache update for
-					// invites here — update_joined_count will reconcile.
-					members_synced = members_synced.saturating_add(1);
-				},
-				| _ => {
-					self.services
-						.state_cache
-						.mark_as_left(user_id, room_id, None)
-						.await;
-					members_synced = members_synced.saturating_add(1);
-				},
-			}
-		}
-		// Second pass: sync ghost members from state snapshot that have
-		// no timeline events. These come from force_state during federation
-		// joins and would otherwise leave stale cache entries.
-		let mut ghosts_synced = 0_usize;
-		let mut state_members =
-			std::pin::pin!(self.services.state_accessor.room_state_full(room_id));
-		while let Some(Ok((key, pdu))) = state_members.next().await {
-			if key.0 != StateEventType::RoomMember {
+		// Single pass over state snapshot — check-before-write avoids
+		// redundant DB writes for users whose cache is already correct.
+		let state_full = self.services.state_accessor.state_full(
+			self.services
+				.state
+				.get_room_shortstatehash(room_id)
+				.await
+				.unwrap_or_default(),
+		);
+		let mut state_full = std::pin::pin!(state_full);
+		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
+			if event_type != StateEventType::RoomMember {
 				continue;
 			}
-			let sk = key.1.as_str();
-			let Ok(uid) = ruma::OwnedUserId::try_from(sk) else {
+			let Ok(uid) = ruma::OwnedUserId::try_from(state_key.as_str()) else {
 				continue;
 			};
-			// Skip users already processed from the timeline
-			if member_users.contains(&uid) {
-				continue;
-			}
 
 			let content: serde_json::Value = pdu.get_content_as_value();
 			let membership = content
@@ -680,29 +624,60 @@ impl Service {
 
 			match membership {
 				| "join" => {
-					self.services
-						.state_cache
-						.mark_as_joined(&uid, room_id)
-						.await;
-					ghosts_synced = ghosts_synced.saturating_add(1);
+					state_joined.insert(uid.clone());
+					if !self.services.state_cache.is_joined(&uid, room_id).await {
+						self.services
+							.state_cache
+							.mark_as_joined(&uid, room_id)
+							.await;
+						members_synced = members_synced.saturating_add(1);
+					}
 				},
 				| "invite" => {
-					ghosts_synced = ghosts_synced.saturating_add(1);
+					// mark_as_invited requires sender; skip cache update for
+					// invites here — update_joined_count will reconcile.
 				},
 				| _ => {
-					self.services
+					if self
+						.services
 						.state_cache
-						.mark_as_left(&uid, room_id, None)
-						.await;
-					ghosts_synced = ghosts_synced.saturating_add(1);
+						.is_invited_or_joined(&uid, room_id)
+						.await
+					{
+						self.services
+							.state_cache
+							.mark_as_left(&uid, room_id, None)
+							.await;
+						members_synced = members_synced.saturating_add(1);
+					}
 				},
+			}
+		}
+
+		// Sweep stale joined cache entries
+		let cached_members: Vec<ruma::OwnedUserId> = self
+			.services
+			.state_cache
+			.room_members(room_id)
+			.map(ToOwned::to_owned)
+			.collect()
+			.await;
+
+		let mut stale_removed = 0_usize;
+		for user_id in &cached_members {
+			if !state_joined.contains(user_id) {
+				self.services
+					.state_cache
+					.mark_as_left(user_id, room_id, None)
+					.await;
+				stale_removed = stale_removed.saturating_add(1);
 			}
 		}
 
 		self.services.state_cache.update_joined_count(room_id).await;
 		info!(
-			"reorder_timeline: synced {members_synced} membership cache entries \
-			 ({ghosts_synced} from state snapshot)"
+			"reorder_timeline: synced {members_synced} membership cache entries, removed \
+			 {stale_removed} stale"
 		);
 
 		drop(state_lock);

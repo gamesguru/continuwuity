@@ -967,11 +967,7 @@ pub(super) async fn reorder_timeline(&self, room_id: OwnedRoomId, all: bool) -> 
 
 		let mut count = 0_usize;
 		for room_id in room_ids {
-			if self
-				.services
-				.rooms
-				.timeline
-				.reorder_timeline(&room_id)
+			if Box::pin(self.services.rooms.timeline.reorder_timeline(&room_id))
 				.await
 				.is_ok()
 			{
@@ -987,12 +983,7 @@ pub(super) async fn reorder_timeline(&self, room_id: OwnedRoomId, all: bool) -> 
 	self.write_str(&format!("Reordering timeline for {room_id} by origin_server_ts..."))
 		.await?;
 
-	let count = self
-		.services
-		.rooms
-		.timeline
-		.reorder_timeline(&room_id)
-		.await?;
+	let count = Box::pin(self.services.rooms.timeline.reorder_timeline(&room_id)).await?;
 
 	self.write_str(&format!(
 		"Reordered {count} PDUs in room {room_id}. Clients should re-sync this room."
@@ -1716,8 +1707,8 @@ pub(super) async fn compare_room_state(
 	// Single pass: build remote state map + count remote members
 	let mut remote_state = HashMap::new();
 	let mut skipped = 0_usize;
-	let mut remote_joined = 0_usize;
-	let mut remote_invited = 0_usize;
+	let mut remote_joined: HashSet<String> = HashSet::new();
+	let mut remote_invited: HashSet<String> = HashSet::new();
 	for pdu_raw in &response.pdus {
 		let (event_id, value) = match self
 			.services
@@ -1739,11 +1730,22 @@ pub(super) async fn compare_room_state(
 		}
 
 		if pdu.kind == TimelineEventType::RoomMember {
-			let content: JsonValue = pdu.get_content_as_value();
-			match content.get("membership").and_then(|v| v.as_str()) {
-				| Some("join") => remote_joined = remote_joined.saturating_add(1),
-				| Some("invite") => remote_invited = remote_invited.saturating_add(1),
-				| _ => {},
+			if let Some(state_key) = &pdu.state_key {
+				let content: JsonValue = pdu.get_content_as_value();
+				match content.get("membership").and_then(|v| v.as_str()) {
+					| Some("join") => {
+						remote_joined.insert(state_key.to_string());
+						remote_invited.remove(state_key.as_str());
+					},
+					| Some("invite") => {
+						remote_invited.insert(state_key.to_string());
+						remote_joined.remove(state_key.as_str());
+					},
+					| _ => {
+						remote_joined.remove(state_key.as_str());
+						remote_invited.remove(state_key.as_str());
+					},
+				}
 			}
 		}
 	}
@@ -1775,9 +1777,18 @@ pub(super) async fn compare_room_state(
 				if tip_pdu.kind == TimelineEventType::RoomMember {
 					let content: JsonValue = tip_pdu.get_content_as_value();
 					match content.get("membership").and_then(|v| v.as_str()) {
-						| Some("join") => remote_joined = remote_joined.saturating_add(1),
-						| Some("invite") => remote_invited = remote_invited.saturating_add(1),
-						| _ => {},
+						| Some("join") => {
+							remote_joined.insert(state_key.to_string());
+							remote_invited.remove(state_key.as_str());
+						},
+						| Some("invite") => {
+							remote_invited.insert(state_key.to_string());
+							remote_joined.remove(state_key.as_str());
+						},
+						| _ => {
+							remote_joined.remove(state_key.as_str());
+							remote_invited.remove(state_key.as_str());
+						},
 					}
 				}
 			}
@@ -1868,8 +1879,8 @@ pub(super) async fn compare_room_state(
 	writeln!(out, "Local joined:   state={local_state_joined}, cache={cached_joined}")
 		.expect("fmt");
 	writeln!(out, "Local invited:  state={local_state_invited}").expect("fmt");
-	writeln!(out, "Remote joined:  {remote_joined}").expect("fmt");
-	writeln!(out, "Remote invited: {remote_invited}").expect("fmt");
+	writeln!(out, "Remote joined:  {}", remote_joined.len()).expect("fmt");
+	writeln!(out, "Remote invited: {}", remote_invited.len()).expect("fmt");
 	if tip_is_state_event {
 		writeln!(
 			out,

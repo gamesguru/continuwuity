@@ -799,12 +799,20 @@ pub(crate) async fn force_set_room_state_from_server(
 		Box::pin(self.promote_sync_anchor(&room_id, short_state_hash, &state_lock)).await;
 	}
 
+	Box::pin(self.rebuild_membership_cache(room_id.clone(), short_state_hash)).await;
+
+	self.write_str("Successfully forced the room state from the requested remote server.")
+		.await
+}
+
+/// Rebuild membership cache from a state snapshot. Extracted to keep
+/// `force_set_room_state_from_server` below the stack-frame limit.
+#[admin_command]
+async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash: u64) {
+	use conduwuit::{info, warn};
+
 	info!("Rebuilding membership cache from state snapshot for {room_id}");
 
-	// Rebuild per-user membership entries from the authoritative state
-	// snapshot. update_joined_count alone reads from the (stale) cache.
-	// This handles both directions: missing entries AND stale entries
-	// from users who left but were never removed from cache.
 	let mut state_joined: HashSet<OwnedUserId> = HashSet::new();
 	let mut members_updated = 0_usize;
 
@@ -833,7 +841,6 @@ pub(crate) async fn force_set_room_state_from_server(
 			match membership {
 				| "join" => {
 					state_joined.insert(user_id.clone());
-					// Only write if cache disagrees — avoids redundant DB writes
 					if !self
 						.services
 						.rooms
@@ -853,7 +860,6 @@ pub(crate) async fn force_set_room_state_from_server(
 					// TODO: check-before-write for invites
 				},
 				| "leave" | "ban" => {
-					// Only write if cache still thinks user is joined.
 					// TODO: distinguish left vs kicked vs banned for proper
 					// Cinny/Element display. Currently all three map to
 					// mark_as_left which loses the distinction.
@@ -861,7 +867,7 @@ pub(crate) async fn force_set_room_state_from_server(
 						.services
 						.rooms
 						.state_cache
-						.is_joined(&user_id, &room_id)
+						.is_invited_or_joined(&user_id, &room_id)
 						.await
 					{
 						self.services
@@ -879,8 +885,7 @@ pub(crate) async fn force_set_room_state_from_server(
 		}
 	}
 
-	// Remove stale cache entries: users the cache thinks are joined but
-	// who are NOT in the current state snapshot.
+	// Sweep stale joined cache entries
 	let cached_members: Vec<OwnedUserId> = self
 		.services
 		.rooms
@@ -902,15 +907,33 @@ pub(crate) async fn force_set_room_state_from_server(
 		}
 	}
 
+	// Sweep stale invited cache entries
+	let cached_invited: Vec<OwnedUserId> = self
+		.services
+		.rooms
+		.state_cache
+		.room_members_invited(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	for user_id in &cached_invited {
+		if !state_joined.contains(user_id) {
+			self.services
+				.rooms
+				.state_cache
+				.mark_as_left(user_id, &room_id, None)
+				.await;
+			stale_removed = stale_removed.saturating_add(1);
+		}
+	}
+
 	self.services
 		.rooms
 		.state_cache
 		.update_joined_count(&room_id)
 		.await;
 	info!("Updated {members_updated} member entries, removed {stale_removed} stale caches");
-
-	self.write_str("Successfully forced the room state from the requested remote server.")
-		.await
 }
 
 /// Promote the most recent state event to the timeline as a Normal PDU,
