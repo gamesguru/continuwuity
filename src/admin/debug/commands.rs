@@ -741,11 +741,28 @@ pub(crate) async fn force_set_room_state_from_server(
 		std::sync::Arc::new(compressed)
 	} else {
 		info!("Resolving new room state (state-res)");
-		self.services
+		match self
+			.services
 			.rooms
 			.event_handler
-			.resolve_state(&room_id, &room_version, state)
-			.await?
+			.resolve_state(&room_id, &room_version, state.clone())
+			.await
+		{
+			| Ok(resolved) => resolved,
+			| Err(_) => {
+				info!("No prior state for room — using remote state directly (cold bootstrap)");
+				let compressed: conduwuit_service::rooms::state_compressor::CompressedState =
+					self.services
+						.rooms
+						.state_compressor
+						.compress_state_events(
+							state.iter().map(|(ssk, eid)| (ssk, (*eid).as_ref())),
+						)
+						.collect()
+						.await;
+				std::sync::Arc::new(compressed)
+			},
+		}
 	};
 
 	info!("Compressing new room state");
