@@ -21,7 +21,7 @@ use conduwuit_core::{
 use futures::{Future, Stream, TryStreamExt, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId,
-	events::room::encrypted::Relation,
+	events::{TimelineEventType, room::encrypted::Relation},
 };
 use serde::Deserialize;
 
@@ -289,8 +289,18 @@ impl Service {
 		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
-			let (old_count, ..) = entries.get(event_id).expect("in sorted list");
+			let (old_count, pdu, ..) = entries.get(event_id).expect("in sorted list");
 			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
+			// Deindex old pdu_id from search before removal
+			if pdu.kind == TimelineEventType::RoomMessage {
+				if let Ok(content) = pdu.get_content::<ExtractBody>() {
+					if let Some(body) = &content.body {
+						self.services
+							.search
+							.deindex_pdu(shortroomid, &old_pdu_id, body);
+					}
+				}
+			}
 			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
 			if i.saturating_add(1).is_multiple_of(10000) {
 				// Drop and re-cork to flush, then yield to let compaction breathe
@@ -327,6 +337,14 @@ impl Service {
 			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
 			self.db.append_pdu(&pdu_id, pdu, json, pdu_count).await;
+			// Re-index search with new pdu_id
+			if pdu.kind == TimelineEventType::RoomMessage {
+				if let Ok(content) = pdu.get_content::<ExtractBody>() {
+					if let Some(body) = &content.body {
+						self.services.search.index_pdu(shortroomid, &pdu_id, body);
+					}
+				}
+			}
 			if i.saturating_add(1).is_multiple_of(10000) {
 				// Drop and re-cork to flush, then yield to let compaction breathe
 				drop(cork.take());
