@@ -125,7 +125,7 @@ pub async fn search_pdus<'a>(
 		.ready_filter(|pdu| !pdu.is_redacted())
 		.ready_filter(move |pdu| filter.matches(pdu))
 		.wide_filter_map(move |pdu| async move {
-			let room_id = pdu.room_id_or_hash().expect("has room ID");
+			let room_id = pdu.room_id_or_hash()?;
 			self.services
 				.state_accessor
 				.user_can_see_event(query.user_id?, &room_id, pdu.event_id())
