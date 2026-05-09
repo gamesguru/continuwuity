@@ -545,8 +545,8 @@ pub(crate) async fn force_set_room_state_from_server(
 				.await
 			{
 				return Err!(Request(InvalidParam(
-					"We are not participating in the room; you must specify an event ID with \
-					 --at-event to bootstrap."
+					"We are not participating in the room; provide an event_id to bootstrap \
+					 (positional arg after server_name)."
 				)));
 			}
 			self.services
@@ -570,6 +570,7 @@ pub(crate) async fn force_set_room_state_from_server(
 
 	let mut state: HashMap<u64, OwnedEventId> = HashMap::new();
 
+	let at_event_id_clone = at_event_id.clone();
 	let at_event_id_str = at_event_id.to_string();
 	let remote_state_response = self
 		.services
@@ -666,6 +667,22 @@ pub(crate) async fn force_set_room_state_from_server(
 				.await;
 
 			state.insert(shortstatekey, pdu.event_id.clone());
+		}
+	}
+
+	// Federation /state returns state BEFORE the queried event. When the
+	// at_event is a state event, inject it into the state map so force-set
+	// includes its own state change (e.g. a join event for the local user).
+	if let Ok(at_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id_clone).await {
+		if let Some(state_key) = &at_pdu.state_key {
+			let shortstatekey = self
+				.services
+				.rooms
+				.short
+				.get_or_create_shortstatekey(&at_pdu.kind.to_string().into(), state_key)
+				.await;
+			info!("Injecting at_event {at_event_id_clone} into state (state-after)");
+			state.insert(shortstatekey, at_event_id_clone);
 		}
 	}
 

@@ -2028,6 +2028,8 @@ pub(super) async fn compare_remote_state(
 			| Ok(r) => r,
 			| Err(e) => {
 				writeln!(output, "\n--- vs {server}: ERROR: {e}")?;
+				self.write_str(&output).await?;
+				output.clear();
 				continue;
 			},
 		};
