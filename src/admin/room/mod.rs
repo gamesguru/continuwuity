@@ -5,7 +5,6 @@ mod info;
 mod moderation;
 
 use clap::Subcommand;
-use commands::RoomTargetOption;
 use conduwuit::Result;
 use ruma::{OwnedRoomId, OwnedRoomOrAliasId};
 
@@ -67,20 +66,5 @@ pub enum RoomCommand {
 		/// Room ID or alias to purge sync tokens for
 		#[arg(value_parser)]
 		room: OwnedRoomOrAliasId,
-	},
-
-	/// - Delete sync tokens for all known rooms
-	///
-	/// By default, processes all rooms. Use `target_option` to restrict
-	/// which room types are included.
-	PurgeAllSyncTokens {
-		/// Target specific room types
-		#[arg(long, value_enum)]
-		target_option: Option<RoomTargetOption>,
-
-		/// Execute token deletions. Otherwise,
-		/// Performs a dry run without actually deleting any tokens
-		#[arg(long)]
-		execute: bool,
 	},
 }
