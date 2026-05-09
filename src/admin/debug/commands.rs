@@ -673,7 +673,13 @@ pub(crate) async fn force_set_room_state_from_server(
 	// Federation /state returns state BEFORE the queried event. When the
 	// at_event is a state event, inject it into the state map so force-set
 	// includes its own state change (e.g. a join event for the local user).
-	if let Ok(at_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id_clone).await {
+	if let Ok(at_pdu) = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu(&at_event_id_clone)
+		.await
+	{
 		if let Some(state_key) = &at_pdu.state_key {
 			let shortstatekey = self
 				.services
