@@ -1556,23 +1556,6 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 			continue;
 		};
 
-		// Look up the state snapshot at this event (state before this event's
-		// changes), which is what set_event_state() stored.
-		let Ok(shortstatehash) = self
-			.services
-			.rooms
-			.state_accessor
-			.pdu_shortstatehash(event_id)
-			.await
-		else {
-			info!(
-				"repair_unsigned: skipped {event_id} ({} / {state_key}) — no state snapshot",
-				pdu.kind()
-			);
-			skipped = skipped.saturating_add(1);
-			continue;
-		};
-
 		// Get or create the unsigned object
 		let unsigned = pdu_json.entry("unsigned".to_owned()).or_insert_with(|| {
 			ruma::CanonicalJsonValue::Object(std::collections::BTreeMap::new())
@@ -1583,19 +1566,53 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 			continue;
 		};
 
+		// Try to find the previous state event via two paths:
+		// 1. State snapshot (pdu_shortstatehash) — authoritative
+		// 2. Existing replaces_state in unsigned — fallback for outlier-sourced events
+		let prev_state = if let Ok(shortstatehash) = self
+			.services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(event_id)
+			.await
+		{
+			self.services
+				.rooms
+				.state_accessor
+				.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
+				.await
+				.ok()
+		} else if let Some(ruma::CanonicalJsonValue::String(replaces_id)) =
+			unsigned.get("replaces_state")
+		{
+			// No state snapshot, but we have replaces_state — use it directly
+			if let Ok(prev_eid) = <&EventId>::try_from(replaces_id.as_str()) {
+				self.services
+					.rooms
+					.timeline
+					.get_pdu(prev_eid)
+					.await
+					.ok()
+			} else {
+				None
+			}
+		} else {
+			info!(
+				"repair_unsigned: skipped {event_id} ({} / {state_key}) — no state snapshot or \
+				 replaces_state",
+				pdu.kind()
+			);
+			skipped = skipped.saturating_add(1);
+			continue;
+		};
+
 		// Remove old (possibly wrong) prev_content fields
 		unsigned.remove("prev_content");
 		unsigned.remove("prev_sender");
 		unsigned.remove("replaces_state");
 
-		// Look up the correct previous state event
-		if let Ok(prev_state) = self
-			.services
-			.rooms
-			.state_accessor
-			.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
-			.await
-		{
+		// Populate from the previous state event
+		if let Some(prev_state) = prev_state {
 			if let Ok(content_obj) = utils::to_canonical_object(prev_state.get_content_as_value())
 			{
 				unsigned.insert(
