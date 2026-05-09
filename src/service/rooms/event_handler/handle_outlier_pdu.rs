@@ -82,15 +82,12 @@ where
 	// Re-attach the origin's unsigned field (age, etc.) after stripping
 	// untrusted state metadata. append_pdu will recompute prev_content
 	// from local state when a snapshot is available.
-	if let Some(unsigned) = stashed_unsigned {
-		if let CanonicalJsonValue::Object(mut unsigned_obj) = unsigned {
-			unsigned_obj.remove("prev_content");
-			unsigned_obj.remove("prev_sender");
-			unsigned_obj.remove("replaces_state");
-			if !unsigned_obj.is_empty() {
-				incoming_pdu
-					.insert("unsigned".to_owned(), CanonicalJsonValue::Object(unsigned_obj));
-			}
+	if let Some(CanonicalJsonValue::Object(mut unsigned_obj)) = stashed_unsigned {
+		unsigned_obj.remove("prev_content");
+		unsigned_obj.remove("prev_sender");
+		unsigned_obj.remove("replaces_state");
+		if !unsigned_obj.is_empty() {
+			incoming_pdu.insert("unsigned".to_owned(), CanonicalJsonValue::Object(unsigned_obj));
 		}
 	}
 
