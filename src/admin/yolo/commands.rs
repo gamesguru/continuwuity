@@ -44,7 +44,7 @@ pub(super) async fn audit_membership(
 	let mut timeline_count = 0_usize;
 
 	while let Some(Ok((_count, pdu))) = pdus.next().await {
-		if pdu.kind.to_string() != "m.room.member" {
+		if pdu.kind != TimelineEventType::RoomMember {
 			continue;
 		}
 
@@ -81,7 +81,7 @@ pub(super) async fn audit_membership(
 	let mut state_membership: HashMap<OwnedUserId, (String, String)> = HashMap::new();
 
 	while let Some(((event_type, state_key), pdu)) = state.next().await {
-		if event_type.to_string() != "m.room.member" {
+		if event_type != StateEventType::RoomMember {
 			continue;
 		}
 
@@ -303,7 +303,7 @@ pub(super) async fn audit_membership(
 						continue;
 					};
 
-					if pdu.kind.to_string() != "m.room.member" {
+					if pdu.kind != TimelineEventType::RoomMember {
 						continue;
 					}
 
@@ -1794,7 +1794,7 @@ pub(super) async fn compare_room_state(
 			.await
 		{
 			if let Ok(pdu) = PduEvent::from_id_val(&eid, value, Some(room_id.as_ref())) {
-				if pdu.kind.to_string() == "m.room.member" {
+				if pdu.kind == TimelineEventType::RoomMember {
 					let content: JsonValue = pdu.get_content_as_value();
 					match content.get("membership").and_then(|v| v.as_str()) {
 						| Some("join") => remote_joined = remote_joined.saturating_add(1),
@@ -1803,6 +1803,20 @@ pub(super) async fn compare_room_state(
 						},
 						| _ => {},
 					}
+				}
+			}
+		}
+	}
+
+	// Include the injected tip event in remote member counts
+	if tip_is_state_event {
+		if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
+			if tip_pdu.kind == TimelineEventType::RoomMember {
+				let content: JsonValue = tip_pdu.get_content_as_value();
+				match content.get("membership").and_then(|v| v.as_str()) {
+					| Some("join") => remote_joined = remote_joined.saturating_add(1),
+					| Some("invite") => remote_invited = remote_invited.saturating_add(1),
+					| _ => {},
 				}
 			}
 		}
@@ -1818,7 +1832,7 @@ pub(super) async fn compare_room_state(
 		.state_full(local_state_hash);
 	pin_mut!(state_full);
 	while let Some(((event_type, _), pdu)) = state_full.next().await {
-		if event_type.to_string() == "m.room.member" {
+		if event_type == StateEventType::RoomMember {
 			let content: JsonValue = pdu.get_content_as_value();
 			match content.get("membership").and_then(|v| v.as_str()) {
 				| Some("join") => local_state_joined = local_state_joined.saturating_add(1),
@@ -1989,25 +2003,25 @@ pub(super) async fn compare_remote_state(
 	// Federation /state returns state BEFORE the queried event. When the
 	// at_event is a state event, inject it into the base set so both sides
 	// reflect state-after (matching the room SSH).
-	let tip_is_state_event = if let Ok(tip_pdu) =
-		self.services.rooms.timeline.get_pdu(&at_event_id).await
-	{
-		if let Some(state_key) = &tip_pdu.state_key {
-			base_state
-				.insert((tip_pdu.kind.to_string(), state_key.to_string()), at_event_id.clone());
-			writeln!(
-				output,
-				"NOTE: at_event is a state event ({} {}) — injected into all sides for \
-				 state-after comparison.",
-				tip_pdu.kind, state_key
-			)?;
-			true
+	// Cache tip injection key so we don't re-fetch from DB per server
+	let tip_injection_key: Option<(String, String)> =
+		if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
+			if let Some(state_key) = &tip_pdu.state_key {
+				let key = (tip_pdu.kind.to_string(), state_key.to_string());
+				base_state.insert(key.clone(), at_event_id.clone());
+				writeln!(
+					output,
+					"NOTE: at_event is a state event ({} {}) — injected into all sides for \
+					 state-after comparison.",
+					tip_pdu.kind, state_key
+				)?;
+				Some(key)
+			} else {
+				None
+			}
 		} else {
-			false
-		}
-	} else {
-		false
-	};
+			None
+		};
 
 	// Flush header immediately
 	self.write_str(&output).await?;
@@ -2053,16 +2067,9 @@ pub(super) async fn compare_remote_state(
 			}
 		}
 
-		// Inject the at_event into comparison state too (same as base)
-		if tip_is_state_event {
-			if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
-				if let Some(state_key) = &tip_pdu.state_key {
-					server_state.insert(
-						(tip_pdu.kind.to_string(), state_key.to_string()),
-						at_event_id.clone(),
-					);
-				}
-			}
+		// Inject the at_event into comparison state too (cached key, no DB fetch)
+		if let Some(ref key) = tip_injection_key {
+			server_state.insert(key.clone(), at_event_id.clone());
 		}
 
 		let mut only_on_base = Vec::new();
