@@ -79,11 +79,19 @@ where
 	incoming_pdu
 		.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
 
-	// Re-attach the origin's unsigned field (prev_content, replaces_state, age).
-	// This data is untrusted but useful — append_pdu will overwrite prev_content
-	// with locally-verified data when a state snapshot is available.
+	// Re-attach the origin's unsigned field (age, etc.) after stripping
+	// untrusted state metadata. append_pdu will recompute prev_content
+	// from local state when a snapshot is available.
 	if let Some(unsigned) = stashed_unsigned {
-		incoming_pdu.insert("unsigned".to_owned(), unsigned);
+		if let CanonicalJsonValue::Object(mut unsigned_obj) = unsigned {
+			unsigned_obj.remove("prev_content");
+			unsigned_obj.remove("prev_sender");
+			unsigned_obj.remove("replaces_state");
+			if !unsigned_obj.is_empty() {
+				incoming_pdu
+					.insert("unsigned".to_owned(), CanonicalJsonValue::Object(unsigned_obj));
+			}
+		}
 	}
 
 	let pdu_event = serde_json::from_value::<PduEvent>(
