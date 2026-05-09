@@ -125,39 +125,43 @@ pub(super) async fn audit_membership(
 		}
 	}
 
-	for (user_id, (st_membership, st_event)) in &state_membership {
+	// Count ghosts (federation imports with no local timeline events) by
+	// membership — these are expected, not actionable anomalies.
+	let mut ghost_count = 0_usize;
+	let mut ghost_joined = 0_usize;
+	let mut ghost_left = 0_usize;
+	let mut ghost_banned = 0_usize;
+	for (user_id, (st_membership, _)) in &state_membership {
 		if !timeline_membership.contains_key(user_id) {
-			divergences.push(format!(
-				"GHOST {user_id}: in state as `{st_membership}` (via {st_event}) but has NO \
-				 membership events in timeline"
-			));
+			ghost_count = ghost_count.saturating_add(1);
+			match st_membership.as_str() {
+				| "join" => ghost_joined = ghost_joined.saturating_add(1),
+				| "leave" => ghost_left = ghost_left.saturating_add(1),
+				| "ban" => ghost_banned = ghost_banned.saturating_add(1),
+				| _ => {},
+			}
 		}
 	}
 
-	if divergences.is_empty() {
-		self.write_str(&format!(
-			"OK: Membership state is consistent for {room_id}\n- Timeline membership events: \
-			 {timeline_count}\n- Unique users in timeline: {}\n- Users in state snapshot: {}",
-			timeline_membership.len(),
-			state_membership.len()
-		))
-		.await?;
-	} else {
-		let mut out = format!(
-			"Membership divergences found for {room_id}:\n- Timeline membership events: \
-			 {timeline_count}\n- Unique users in timeline: {}\n- Users in state snapshot: \
-			 {}\n\n**{} divergence(s):**\n",
-			timeline_membership.len(),
-			state_membership.len(),
-			divergences.len()
-		);
+	let mut out = format!(
+		"Phase 1 for {room_id}:\n- Timeline membership events: {timeline_count}\n- Unique users \
+		 in timeline: {}\n- Users in state snapshot: {}\n- Ghosts (federation imports, no \
+		 timeline): {ghost_count} (joined={ghost_joined}, left={ghost_left}, \
+		 banned={ghost_banned})\n",
+		timeline_membership.len(),
+		state_membership.len(),
+	);
 
+	if divergences.is_empty() {
+		writeln!(out, "\nNo actionable divergences.").expect("fmt");
+	} else {
+		writeln!(out, "\n**{} actionable divergence(s):**", divergences.len()).expect("fmt");
 		for d in &divergences {
 			writeln!(out, "- {d}").expect("fmt");
 		}
-
-		self.write_str(&out).await?;
 	}
+
+	self.write_str(&out).await?;
 
 	// ── Phase 2: State Snapshot vs Cache ─────────────────────────────────
 	self.write_str("\n**Phase 2: State Snapshot vs Cache**\n")
