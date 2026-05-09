@@ -164,7 +164,7 @@ pub enum YoloCommand {
 		server: OwnedServerName,
 
 		/// Maximum number of events to fetch (-1 for unlimited, default: 100)
-		#[arg(long, default_value = "100")]
+		#[arg(long, default_value = "100", allow_hyphen_values = true)]
 		limit: i64,
 
 		/// Event ID to start backfill from (default: latest local event)

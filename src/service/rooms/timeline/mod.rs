@@ -378,68 +378,138 @@ impl Service {
 		// We restore it after so force-set results are preserved.
 		let saved_shortstatehash = self.services.state.get_room_shortstatehash(room_id).await;
 
-		// Compute the FOUNDATION state: the room's full state MINUS all state
-		// events that appear in the timeline. This gives us the outlier-derived
-		// state (m.room.create, power_levels, join_rules, etc.) without any
-		// timeline state events contaminating the walk. Without this, the walk
-		// starts from the room's tip state and every historical event inherits
-		// the full future state ("Time-Travel State Bug").
-		if let Ok(ssh) = saved_shortstatehash {
-			// Collect shorteventids for all state events in the timeline
-			let mut timeline_shorteventids: HashSet<u64> = HashSet::new();
-			for event_id in &sorted {
-				if let Some((_, pdu, _)) = entries.get(event_id) {
-					if pdu.state_key.is_some() {
-						let seid = self
+		// Compute the FOUNDATION state: the state BEFORE the oldest timeline
+		// event. This is the correct starting point for the state walk.
+		//
+		// Strategy (in priority order):
+		// 1. Use pdu_shortstatehash from the oldest event's prev_events. These are
+		//    outliers whose hashes were never modified by reorder-timeline, so they
+		//    give the correct pre-timeline state.
+		// 2. If prev_events don't have SSH (never-processed outliers), fall back to
+		//    subtracting timeline state events from the full state. This works when all
+		//    state changes for a key are within the timeline, but can drop keys that
+		//    have pre-timeline values.
+		// 3. If prev_events is empty (m.room.create), use empty state.
+		//
+		// Without this seeding, the walk starts from the room's tip state
+		// and every historical event inherits the full future state
+		// ("Time-Travel State Bug").
+		if let Some(oldest_event_id) = sorted.first() {
+			let mut foundation_set = false;
+
+			if let Some((_, oldest_pdu, _)) = entries.get(oldest_event_id) {
+				let prev_events: Vec<_> = oldest_pdu.prev_events().collect();
+
+				if prev_events.is_empty() {
+					// No prev_events → m.room.create → empty foundation.
+					// save_state with empty set creates a new SSH.
+					let empty = rooms::state_compressor::CompressedState::new();
+					if let Ok(result) = self
+						.services
+						.state_compressor
+						.save_state(room_id, Arc::new(empty))
+						.await
+					{
+						self.services.state.set_room_state(
+							room_id,
+							result.shortstatehash,
+							&state_lock,
+						);
+						info!(
+							"reorder_timeline: seeded walk from empty foundation \
+							 (m.room.create, no prev_events)"
+						);
+						foundation_set = true;
+					}
+				} else {
+					// Try each prev_event for an uncorrupted pdu_shortstatehash.
+					// These are outliers — reorder-timeline never touches their
+					// SSH, so they're guaranteed uncontaminated.
+					for prev_id in prev_events {
+						if let Ok(ssh) = self
 							.services
-							.short
-							.get_or_create_shorteventid(&pdu.event_id)
-							.await;
-						timeline_shorteventids.insert(seid);
+							.state_accessor
+							.pdu_shortstatehash(prev_id)
+							.await
+						{
+							self.services
+								.state
+								.set_room_state(room_id, ssh, &state_lock);
+							info!(
+								"reorder_timeline: seeded walk from prev_event {prev_id} SSH \
+								 {ssh}"
+							);
+							foundation_set = true;
+							break;
+						}
 					}
 				}
 			}
 
-			// Load the full state and filter out timeline state events
-			let state_info_result = self
-				.services
-				.state_compressor
-				.load_shortstatehash_info(ssh)
-				.await;
+			// Fallback: subtract timeline state events from full state.
+			// Works when all state changes for a key originate in the
+			// timeline (locally-created rooms, single-join federated
+			// rooms). Can drop keys that have outlier-only pre-timeline
+			// values — but this is still better than the tip state.
+			if !foundation_set {
+				if let Ok(ssh) = saved_shortstatehash {
+					// Collect shorteventids for all state events in the timeline
+					let mut timeline_shorteventids: HashSet<u64> = HashSet::new();
+					for event_id in &sorted {
+						if let Some((_, pdu, _)) = entries.get(event_id) {
+							if pdu.state_key.is_some() {
+								let seid = self
+									.services
+									.short
+									.get_or_create_shorteventid(&pdu.event_id)
+									.await;
+								timeline_shorteventids.insert(seid);
+							}
+						}
+					}
 
-			if let Ok(state_info) = state_info_result {
-				let full_state_opt = state_info.last().and_then(|info| info.full_state.clone());
-
-				if let Some(full_state) = full_state_opt {
-					use rooms::state_compressor::parse_compressed_state_event;
-
-					let foundation: rooms::state_compressor::CompressedState = full_state
-						.iter()
-						.filter(|entry| {
-							let (_ssk, seid) = parse_compressed_state_event(**entry);
-							!timeline_shorteventids.contains(&seid)
-						})
-						.copied()
-						.collect();
-
-					let foundation_result = self
+					// Load the full state and filter out timeline state events
+					let state_info_result = self
 						.services
 						.state_compressor
-						.save_state(room_id, Arc::new(foundation))
+						.load_shortstatehash_info(ssh)
 						.await;
 
-					if let Ok(foundation_state) = foundation_result {
-						self.services.state.set_room_state(
-							room_id,
-							foundation_state.shortstatehash,
-							&state_lock,
-						);
-						info!(
-							"reorder_timeline: seeded walk from foundation state {} ({} \
-							 timeline state events subtracted)",
-							foundation_state.shortstatehash,
-							timeline_shorteventids.len()
-						);
+					if let Ok(state_info) = state_info_result {
+						let full_state_opt =
+							state_info.last().and_then(|info| info.full_state.clone());
+
+						if let Some(full_state) = full_state_opt {
+							use rooms::state_compressor::parse_compressed_state_event;
+
+							let foundation: rooms::state_compressor::CompressedState = full_state
+								.iter()
+								.filter(|entry| {
+									let (_ssk, seid) = parse_compressed_state_event(**entry);
+									!timeline_shorteventids.contains(&seid)
+								})
+								.copied()
+								.collect();
+
+							if let Ok(result) = self
+								.services
+								.state_compressor
+								.save_state(room_id, Arc::new(foundation))
+								.await
+							{
+								self.services.state.set_room_state(
+									room_id,
+									result.shortstatehash,
+									&state_lock,
+								);
+								info!(
+									"reorder_timeline: seeded walk from subtracted foundation \
+									 state {} ({} timeline state events removed, fallback)",
+									result.shortstatehash,
+									timeline_shorteventids.len()
+								);
+							}
+						}
 					}
 				}
 			}
@@ -482,18 +552,9 @@ impl Service {
 				.state
 				.set_room_state(room_id, ssh, &state_lock);
 
-			// Also update the tip event's pdu_shortstatehash so /state/
-			// and compare-room-state see the correct state at the tip.
-			if let Some(last_event_id) = sorted.last() {
-				let shorteventid = self
-					.services
-					.short
-					.get_or_create_shorteventid(last_event_id)
-					.await;
-				self.services
-					.state
-					.set_pdu_shortstatehash(shorteventid, ssh);
-			}
+			// NOTE: Do NOT overwrite the tip event's pdu_shortstatehash here.
+			// pdu_shortstatehash stores the state BEFORE the event (per spec).
+			// The room's SSH is the state AFTER all events. These must diverge.
 
 			info!("reorder_timeline: restored room shortstatehash to {ssh}");
 		}
