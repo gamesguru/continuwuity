@@ -141,9 +141,9 @@ where
 {
 	let body = take_body(request, json_body);
 	let http_request = into_http_request(request, body);
-	let uri = request.parts.uri.clone();
+	let path = request.parts.uri.path();
 	T::try_from_http_request(http_request, &request.path).map_err(|e| {
-		err!(Request(BadJson(debug_warn!("Failed to deserialize request for {uri}: {e}"))))
+		err!(Request(BadJson(debug_warn!("Failed to deserialize request for {path}: {e}"))))
 	})
 }
 fn into_http_request(request: &Request, body: Bytes) -> hyper::Request<Bytes> {
