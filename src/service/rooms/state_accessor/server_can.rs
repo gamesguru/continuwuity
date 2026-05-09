@@ -41,13 +41,15 @@ pub async fn server_can_see_event(
 		return true;
 	}
 
-	let server_is_participant = self
+	let server_in_room = self
 		.services
 		.state_cache
-		.server_is_participant(&origin, &room_id)
+		.server_in_room(&origin, &room_id)
 		.await;
 
-	if server_is_participant {
+	// Fast path: if the server has joined users and visibility is Shared,
+	// all history is visible. Invited/knocked servers don't qualify.
+	if server_in_room {
 		if let Ok(shortstatehash) = self.services.state.get_room_shortstatehash(&room_id).await {
 			let history_visibility = self
 				.state_get_content(shortstatehash, &StateEventType::RoomHistoryVisibility, "")
@@ -62,9 +64,25 @@ pub async fn server_can_see_event(
 		}
 	}
 
-	// Fallback to strict historical check
+	// Fallback when pdu_shortstatehash is missing (outliers, force-set imports,
+	// DB corruption). Check current room visibility instead of blindly granting.
 	let Ok(shortstatehash) = self.pdu_shortstatehash(&event_id).await else {
-		return server_is_participant;
+		if let Ok(room_ssh) = self.services.state.get_room_shortstatehash(&room_id).await {
+			let hv = self
+				.state_get_content(room_ssh, &StateEventType::RoomHistoryVisibility, "")
+				.await
+				.map_or(HistoryVisibility::Shared, |c: RoomHistoryVisibilityEventContent| {
+					c.history_visibility
+				});
+
+			return match hv {
+				| HistoryVisibility::WorldReadable => true,
+				| HistoryVisibility::Shared => server_in_room,
+				| _ => false,
+			};
+		}
+
+		return false;
 	};
 
 	let history_visibility = self
@@ -77,8 +95,9 @@ pub async fn server_can_see_event(
 	match history_visibility {
 		| HistoryVisibility::WorldReadable => true,
 		| HistoryVisibility::Shared => {
-			// Spec: all servers whose users have joined the room can see all history
-			server_is_participant
+			// Spec: servers with joined users can see all history.
+			// Invited/knocked servers do NOT qualify for shared visibility.
+			server_in_room
 		},
 		| HistoryVisibility::Invited => {
 			// Allow if any member on requesting server was AT LEAST invited at that state
