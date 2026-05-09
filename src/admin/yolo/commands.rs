@@ -28,8 +28,6 @@ pub(super) async fn audit_membership(
 	room_id: OwnedRoomId,
 	server: Option<OwnedServerName>,
 ) -> Result {
-	self.bail_restricted()?;
-
 	// ── Phase 1: Timeline vs State Snapshot ──────────────────────────────
 	self.write_str("**Phase 1: Timeline vs State Snapshot**\n")
 		.await?;
@@ -1067,8 +1065,6 @@ pub(super) async fn get_room_dag(
 	start: u64,
 	end: i64,
 ) -> Result {
-	self.bail_restricted()?;
-
 	let room_id = self.services.rooms.alias.resolve(&room_id).await?;
 	let pdus = self.services.rooms.timeline.all_pdus(&room_id);
 	pin_mut!(pdus);
@@ -1208,8 +1204,6 @@ pub(super) async fn get_remote_dag(
 	limit: i64,
 	from: Option<OwnedEventId>,
 ) -> Result {
-	self.bail_restricted()?;
-
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
 	}
@@ -1669,8 +1663,6 @@ pub(super) async fn compare_room_state(
 	server: OwnedServerName,
 	at_event: Option<OwnedEventId>,
 ) -> Result {
-	self.bail_restricted()?;
-
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
@@ -1899,8 +1891,6 @@ pub(super) async fn compare_remote_state(
 	at_event: Option<OwnedEventId>,
 ) -> Result {
 	use std::fmt::Write;
-
-	self.bail_restricted()?;
 
 	if servers.is_empty() {
 		return Err!(Request(InvalidParam(
@@ -2434,8 +2424,6 @@ pub(super) async fn federation_request(
 ) -> Result {
 	use conduwuit::info;
 
-	self.bail_restricted()?;
-
 	// Parse the URL path to determine which federation endpoint to call
 	// Currently supports: /_matrix/federation/v1/state/{roomId}
 	if let Some(rest) = url_path.strip_prefix("/_matrix/federation/v1/state/") {
@@ -2512,8 +2500,6 @@ pub(super) async fn dag_merge_base(
 	event_b: Option<OwnedEventId>,
 	max_depth: usize,
 ) -> Result {
-	self.bail_restricted()?;
-
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
 	}
