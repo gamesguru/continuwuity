@@ -328,13 +328,14 @@ pub async fn create_hash_and_sign_event(
 			"Checking event in room {} with policy server",
 			pdu.room_id.as_ref().map_or("None", |id| id.as_str())
 		);
+		let policy_room_id = pdu.room_id_or_hash().expect("has room ID");
 		match self
 			.services
 			.event_handler
 			.ask_policy_server(
 				&pdu,
 				&mut pdu_json,
-				&pdu.room_id_or_hash().expect("has room ID"),
+				&policy_room_id,
 				false,
 			)
 			.await

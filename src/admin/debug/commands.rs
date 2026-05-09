@@ -989,10 +989,16 @@ async fn promote_sync_anchor(
 				| Err(_) => self.services.rooms.outlier.get_outlier_pdu_json(&eid).await,
 			};
 			if let Ok(json) = json_result {
-				let pdu_owned: PduEvent =
-					serde_json::from_value(serde_json::to_value(&json).unwrap_or_default())
-						.unwrap_or_else(|_| panic!("Bad PDU JSON for {eid}"));
-				best = Some((ts, eid, pdu_owned, json));
+				let pdu_result: Result<PduEvent, _> =
+					serde_json::from_value(serde_json::to_value(&json).unwrap_or_default());
+				match pdu_result {
+					| Ok(pdu_owned) => {
+						best = Some((ts, eid, pdu_owned, json));
+					},
+					| Err(e) => {
+						warn!("Skipping anchor candidate {eid}: bad PDU JSON: {e}");
+					},
+				}
 			}
 		}
 	}

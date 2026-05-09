@@ -298,16 +298,16 @@ impl Service {
 	{
 		let mut notify = None;
 		let mut tweaks = Vec::new();
-		if event.room_id().is_none() {
+		let Some(room_id) = event.room_id_or_hash() else {
 			// This only affects v12+ create events
 			return Ok(());
-		}
+		};
 
 		let power_levels: RoomPowerLevelsEventContent = self
 			.services
 			.state_accessor
 			.room_state_get(
-				&event.room_id_or_hash().expect("has room ID"),
+				&room_id,
 				&StateEventType::RoomPowerLevels,
 				"",
 			)
@@ -322,7 +322,7 @@ impl Service {
 				&ruleset,
 				&power_levels,
 				&serialized,
-				&event.room_id_or_hash().expect("has room ID"),
+				&room_id,
 			)
 			.await
 		{
@@ -486,17 +486,18 @@ impl Service {
 					notify.sender_display_name =
 						self.services.users.displayname(event.sender()).await.ok();
 
+					let notice_room_id = event.room_id_or_hash().expect("has room ID");
 					notify.room_name = self
 						.services
 						.state_accessor
-						.get_name(&event.room_id_or_hash().expect("has room ID"))
+						.get_name(&notice_room_id)
 						.await
 						.ok();
 
 					notify.room_alias = self
 						.services
 						.state_accessor
-						.get_canonical_alias(&event.room_id_or_hash().expect("has room ID"))
+						.get_canonical_alias(&notice_room_id)
 						.await
 						.ok();
 				}
