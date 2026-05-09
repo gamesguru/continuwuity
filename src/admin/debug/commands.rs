@@ -938,7 +938,8 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 
 	for user_id in &cached_invited {
 		// Only purge if they are neither invited NOR joined.
-		// If they transitioned to joined, mark_as_left would accidentally nuke their valid join.
+		// If they transitioned to joined, mark_as_left would accidentally nuke their
+		// valid join.
 		if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
 			self.services
 				.rooms
