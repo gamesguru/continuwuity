@@ -18,7 +18,7 @@ use conduwuit_core::{
 	utils::{MutexMap, MutexMapGuard, future::TryExtExt, stream::TryIgnore},
 	warn,
 };
-use futures::{Future, Stream, TryStreamExt, pin_mut};
+use futures::{Future, Stream, StreamExt, TryStreamExt, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId,
 	events::{TimelineEventType, room::encrypted::Relation},
@@ -302,16 +302,18 @@ impl Service {
 				}
 			}
 			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
-			if i.saturating_add(1).is_multiple_of(10000) {
-				// Drop and re-cork to flush, then yield to let compaction breathe
-				drop(cork.take());
-				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-				cork = Some(self.db.db.cork());
+			if i.saturating_add(1).is_multiple_of(100) {
 				info!(
 					"reorder_timeline: removed {}/{} entries...",
 					i.saturating_add(1),
 					sorted.len()
 				);
+			}
+			if i.saturating_add(1).is_multiple_of(10000) {
+				// Drop and re-cork to flush, then yield to let compaction breathe
+				drop(cork.take());
+				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+				cork = Some(self.db.db.cork());
 			}
 		}
 		drop(cork.take());
@@ -345,12 +347,14 @@ impl Service {
 					}
 				}
 			}
+			if i.saturating_add(1).is_multiple_of(100) {
+				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
+			}
 			if i.saturating_add(1).is_multiple_of(10000) {
 				// Drop and re-cork to flush, then yield to let compaction breathe
 				drop(cork.take());
 				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 				cork = Some(self.db.db.cork());
-				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
 			}
 		}
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
@@ -390,7 +394,7 @@ impl Service {
 			}
 
 			state_rebuilt = state_rebuilt.saturating_add(1);
-			if state_rebuilt.is_multiple_of(10000) {
+			if state_rebuilt.is_multiple_of(100) {
 				info!(
 					"reorder_timeline: rebuilt shortstatehash for {state_rebuilt}/{count} \
 					 events..."
@@ -501,8 +505,57 @@ impl Service {
 				},
 			}
 		}
+		// Second pass: sync ghost members from state snapshot that have
+		// no timeline events. These come from force_state during federation
+		// joins and would otherwise leave stale cache entries.
+		let mut ghosts_synced = 0_usize;
+		let mut state_members =
+			std::pin::pin!(self.services.state_accessor.room_state_full(room_id));
+		while let Some(Ok((key, pdu))) = state_members.next().await {
+			if key.0 != StateEventType::RoomMember {
+				continue;
+			}
+			let sk = key.1.as_str();
+			let Ok(uid) = ruma::OwnedUserId::try_from(sk) else {
+				continue;
+			};
+			// Skip users already processed from the timeline
+			if member_users.contains(&uid) {
+				continue;
+			}
+
+			let content: serde_json::Value = pdu.get_content_as_value();
+			let membership = content
+				.get("membership")
+				.and_then(|v| v.as_str())
+				.unwrap_or("leave");
+
+			match membership {
+				| "join" => {
+					self.services
+						.state_cache
+						.mark_as_joined(&uid, room_id)
+						.await;
+					ghosts_synced = ghosts_synced.saturating_add(1);
+				},
+				| "invite" => {
+					ghosts_synced = ghosts_synced.saturating_add(1);
+				},
+				| _ => {
+					self.services
+						.state_cache
+						.mark_as_left(&uid, room_id, None)
+						.await;
+					ghosts_synced = ghosts_synced.saturating_add(1);
+				},
+			}
+		}
+
 		self.services.state_cache.update_joined_count(room_id).await;
-		info!("reorder_timeline: synced {members_synced} membership cache entries");
+		info!(
+			"reorder_timeline: synced {members_synced} membership cache entries \
+			 ({ghosts_synced} from state snapshot)"
+		);
 
 		drop(state_lock);
 		info!(

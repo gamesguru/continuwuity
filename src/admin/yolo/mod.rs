@@ -321,4 +321,24 @@ pub enum YoloCommand {
 		#[arg(long, default_value = "500")]
 		max_depth: usize,
 	},
+
+	/// Forcefully replaces the room state of our local copy of the specified
+	///   room, with the copy the specified remote server says.
+	///
+	/// Delegates to the debug implementation. Useful for correcting state
+	/// divergence after DAG fractures.
+	ForceSetRoomStateFromServer {
+		/// The impacted room ID
+		room_id: OwnedRoomId,
+		/// The server we will use to query the room state for
+		server_name: OwnedServerName,
+		/// The event ID of the latest known PDU in the room. Will be found
+		/// automatically if not provided.
+		event_id: Option<OwnedEventId>,
+		#[arg(short, long)]
+		overwrite: bool,
+		/// Dump the raw federation state response to a JSON file
+		#[arg(long)]
+		output: Option<String>,
+	},
 }
