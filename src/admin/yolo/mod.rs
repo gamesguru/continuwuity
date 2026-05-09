@@ -344,5 +344,8 @@ pub enum YoloCommand {
 		/// Dump the raw federation state response to a JSON file
 		#[arg(long)]
 		output: Option<String>,
+		/// Load state from a previously dumped JSON file instead of federation
+		#[arg(long)]
+		input: Option<String>,
 	},
 }

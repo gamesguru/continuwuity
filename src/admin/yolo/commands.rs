@@ -2280,6 +2280,7 @@ pub(super) async fn heal_room(
 			None,
 			nuclear,
 			None,
+			None,
 		))
 		.await?;
 

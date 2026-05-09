@@ -531,6 +531,7 @@ pub(crate) async fn force_set_room_state_from_server(
 	at_event: Option<OwnedEventId>,
 	overwrite: bool,
 	output: Option<String>,
+	input: Option<String>,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -572,41 +573,74 @@ pub(crate) async fn force_set_room_state_from_server(
 
 	let at_event_id_clone = at_event_id.clone();
 	let at_event_id_str = at_event_id.to_string();
-	info!("Fetching room state from {server_name} at event {at_event_id_str}...");
-	let remote_state_response = self
-		.services
-		.sending
-		.send_federation_request(&server_name, get_room_state::v1::Request {
-			room_id: room_id.clone(),
-			event_id: at_event_id,
-		})
-		.await?;
-	info!(
-		"Received {} state PDUs and {} auth chain events from {server_name}",
-		remote_state_response.pdus.len(),
-		remote_state_response.auth_chain.len()
-	);
 
-	if let Some(ref path) = output {
-		info!("Dumping federation state response to {path}");
-		let dump = serde_json::json!({
-			"room_id": room_id,
-			"server_name": server_name,
-			"event_id": at_event_id_str,
-			"pdus": remote_state_response.pdus,
-			"auth_chain": remote_state_response.auth_chain,
-		});
-		std::fs::write(path, serde_json::to_string_pretty(&dump).unwrap_or_default())
-			.map_err(|e| err!(Database("Failed to write output file: {e:?}")))?;
+	// Load state from file or federation
+	let (pdus, auth_chain): (
+		Vec<Box<serde_json::value::RawValue>>,
+		Vec<Box<serde_json::value::RawValue>>,
+	) = if let Some(ref path) = input {
+		info!("Loading state from file: {path}");
+		let data = std::fs::read_to_string(path)
+			.map_err(|e| err!(Database("Failed to read input file: {e:?}")))?;
+		let parsed: serde_json::Value = serde_json::from_str(&data)
+			.map_err(|e| err!(Database("Failed to parse input file: {e:?}")))?;
+		let pdus_val = parsed
+			.get("pdus")
+			.ok_or(err!(Database("Missing 'pdus' key in input file")))?;
+		let auth_val = parsed
+			.get("auth_chain")
+			.ok_or(err!(Database("Missing 'auth_chain' key in input file")))?;
+		let pdus: Vec<Box<serde_json::value::RawValue>> =
+			serde_json::from_value(pdus_val.clone())
+				.map_err(|e| err!(Database("Failed to parse PDUs: {e:?}")))?;
+		let auth_chain: Vec<Box<serde_json::value::RawValue>> =
+			serde_json::from_value(auth_val.clone())
+				.map_err(|e| err!(Database("Failed to parse auth chain: {e:?}")))?;
 		info!(
-			"Dumped {} state PDUs and {} auth chain events",
-			remote_state_response.pdus.len(),
-			remote_state_response.auth_chain.len()
+			"Loaded {} state PDUs and {} auth chain events from file",
+			pdus.len(),
+			auth_chain.len()
 		);
-	}
+		(pdus, auth_chain)
+	} else {
+		info!("Fetching room state from {server_name} at event {at_event_id_str}...");
+		let resp = self
+			.services
+			.sending
+			.send_federation_request(&server_name, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: at_event_id,
+			})
+			.await?;
+		info!(
+			"Received {} state PDUs and {} auth chain events from {server_name}",
+			resp.pdus.len(),
+			resp.auth_chain.len()
+		);
 
-	info!("Parsing {} incoming PDUs...", remote_state_response.pdus.len());
-	for pdu in &remote_state_response.pdus {
+		if let Some(ref path) = output {
+			info!("Dumping federation state response to {path}");
+			let dump = serde_json::json!({
+				"room_id": room_id,
+				"server_name": server_name,
+				"event_id": at_event_id_str,
+				"pdus": resp.pdus,
+				"auth_chain": resp.auth_chain,
+			});
+			std::fs::write(path, serde_json::to_string_pretty(&dump).unwrap_or_default())
+				.map_err(|e| err!(Database("Failed to write output file: {e:?}")))?;
+			info!(
+				"Dumped {} state PDUs and {} auth chain events",
+				resp.pdus.len(),
+				resp.auth_chain.len()
+			);
+		}
+
+		(resp.pdus, resp.auth_chain)
+	};
+
+	info!("Parsing {} incoming PDUs...", pdus.len());
+	for pdu in &pdus {
 		match self
 			.services
 			.rooms
@@ -622,15 +656,32 @@ pub(crate) async fn force_set_room_state_from_server(
 		};
 	}
 
-	info!("Going through room_state response PDUs");
-	for result in remote_state_response.pdus.iter().map(|pdu| {
-		self.services
-			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
-	}) {
-		let Ok((event_id, value)) = result.await else {
+	info!("Going through room_state response PDUs (overwrite={overwrite})");
+	let mut validated = 0_usize;
+	let mut dropped = 0_usize;
+	for pdu in &pdus {
+		let result = if overwrite {
+			// Skip signature validation — admin is explicitly overriding
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
+				|(event_id, mut value)| {
+					value.insert(
+						"event_id".into(),
+						ruma::CanonicalJsonValue::String(event_id.as_str().into()),
+					);
+					(event_id, value)
+				},
+			)
+		} else {
+			self.services
+				.server_keys
+				.validate_and_add_event_id(pdu, &room_version)
+				.await
+		};
+		let Ok((event_id, value)) = result else {
+			dropped = dropped.saturating_add(1);
 			continue;
 		};
+		validated = validated.saturating_add(1);
 
 		let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
 			.map_err(|e| {
@@ -676,6 +727,13 @@ pub(crate) async fn force_set_room_state_from_server(
 			state.insert(shortstatekey, pdu.event_id.clone());
 		}
 	}
+	info!("State PDUs: {validated} validated, {dropped} dropped (failed signature check)");
+	if dropped > 0 {
+		warn!(
+			"{dropped} state PDUs were silently dropped due to signature validation failure. \
+			 Consider re-running with --overwrite to skip validation."
+		);
+	}
 
 	// Federation /state returns state BEFORE the queried event. When the
 	// at_event is a state event, inject it into the state map so force-set
@@ -702,7 +760,7 @@ pub(crate) async fn force_set_room_state_from_server(
 	info!("Going through auth_chain response");
 	let mut auth_existing = 0_usize;
 	let mut auth_added = 0_usize;
-	for result in remote_state_response.auth_chain.iter().map(|pdu| {
+	for result in auth_chain.iter().map(|pdu| {
 		self.services
 			.server_keys
 			.validate_and_add_event_id(pdu, &room_version)
