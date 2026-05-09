@@ -740,28 +740,34 @@ pub(crate) async fn force_set_room_state_from_server(
 			.await;
 		std::sync::Arc::new(compressed)
 	} else {
-		info!("Resolving new room state (state-res)");
-		match self
+		// Only attempt state resolution if the room has prior state.
+		// If there's no shortstatehash, this is a genuine cold bootstrap —
+		// use remote state directly. Real resolve_state errors (auth chain
+		// failures, resolution bugs) must NOT silently fall through here.
+		if self
 			.services
 			.rooms
-			.event_handler
-			.resolve_state(&room_id, &room_version, state.clone())
+			.state
+			.get_room_shortstatehash(&room_id)
 			.await
+			.is_err()
 		{
-			| Ok(resolved) => resolved,
-			| Err(_) => {
-				info!("No prior state for room — using remote state directly (cold bootstrap)");
-				let compressed: conduwuit_service::rooms::state_compressor::CompressedState =
-					self.services
-						.rooms
-						.state_compressor
-						.compress_state_events(
-							state.iter().map(|(ssk, eid)| (ssk, (*eid).as_ref())),
-						)
-						.collect()
-						.await;
-				std::sync::Arc::new(compressed)
-			},
+			info!("No prior state for room — using remote state directly (cold bootstrap)");
+			let compressed: conduwuit_service::rooms::state_compressor::CompressedState = self
+				.services
+				.rooms
+				.state_compressor
+				.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, (*eid).as_ref())))
+				.collect()
+				.await;
+			std::sync::Arc::new(compressed)
+		} else {
+			info!("Resolving new room state (state-res)");
+			self.services
+				.rooms
+				.event_handler
+				.resolve_state(&room_id, &room_version, state.clone())
+				.await?
 		}
 	};
 
