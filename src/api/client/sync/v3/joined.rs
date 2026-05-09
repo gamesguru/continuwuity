@@ -310,7 +310,10 @@ async fn build_state_and_timeline(
 	// the room, to indicate to the client that it should request backfill (and to
 	// copy Synapse's behavior). for federated room joins, the `timeline` will
 	// usually only include the syncing user's join event.
-	let limited = timeline.limited || joined_since_last_sync;
+	// we also indicate limited on initial syncs (no `since` token) because the
+	// client has no prior history — the timeline is inherently limited.
+	let is_initial_sync = sync_context.last_sync_end_count.is_none();
+	let limited = timeline.limited || joined_since_last_sync || is_initial_sync;
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
