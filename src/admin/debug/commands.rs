@@ -789,22 +789,10 @@ pub(crate) async fn force_set_room_state_from_server(
 			.set_forward_extremities(room_id.as_ref(), once(tip_pdu.event_id()), &state_lock)
 			.await;
 
-		// Also update the tip's pdu_shortstatehash so the /state/ endpoint
-		// serves corrected state instead of the stale snapshot from original append.
-		let shorteventid = self
-			.services
-			.rooms
-			.short
-			.get_or_create_shorteventid(tip_pdu.event_id())
-			.await;
-		self.services
-			.rooms
-			.state
-			.set_pdu_shortstatehash(shorteventid, short_state_hash);
-		info!(
-			"Set tip {} as sole extremity, updated pdu_shortstatehash to {short_state_hash}",
-			tip_pdu.event_id()
-		);
+		// NOTE: Do NOT update pdu_shortstatehash here. short_state_hash is
+		// state-after, but pdu_shortstatehash must be state-before per spec.
+		// The event's original pdu_shortstatehash from append is correct.
+		info!("Set tip {} as sole extremity (room SSH {short_state_hash})", tip_pdu.event_id());
 	} else {
 		// No timeline events — /sync won't deliver this room.
 		// Promote the most recent state event as a timeline anchor.
@@ -935,7 +923,13 @@ async fn promote_sync_anchor(
 		let ts: u64 = pdu.origin_server_ts().0.into();
 		let eid = pdu.event_id().to_owned();
 		if best.as_ref().is_none_or(|(best_ts, ..)| ts > *best_ts) {
-			if let Ok(json) = self.services.rooms.timeline.get_pdu_json(&eid).await {
+			// Check both timeline AND outlier tables — force-set imports
+			// state events into the outlier table, not timeline.
+			let json_result = match self.services.rooms.timeline.get_pdu_json(&eid).await {
+				| Ok(json) => Ok(json),
+				| Err(_) => self.services.rooms.outlier.get_outlier_pdu_json(&eid).await,
+			};
+			if let Ok(json) = json_result {
 				let pdu_owned: PduEvent =
 					serde_json::from_value(serde_json::to_value(&json).unwrap_or_default())
 						.unwrap_or_else(|_| panic!("Bad PDU JSON for {eid}"));
