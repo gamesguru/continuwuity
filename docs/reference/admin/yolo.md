@@ -4,23 +4,11 @@
 Advanced diagnostic and audit commands
 
 
-## `!admin yolo verify-membership-state`
-
-Verify membership state consistency for a room.
-
-Scans the timeline for the latest membership event per user and compares it against the current room state snapshot. Reports any users whose timeline membership disagrees with their state.
-
-## `!admin yolo verify-membership-cache`
-
-Compare membership state between local state_cache and the state snapshot.
-
-Checks if the derived membership cache (used for server_in_room, user_is_joined, etc.) agrees with the authoritative state snapshot.
-
 ## `!admin yolo audit-membership`
 
 Full membership audit: timeline vs state vs cache vs remote server.
 
-Combines verify-membership-state and verify-membership-cache, and optionally compares against a remote server's member list.
+Compares timeline membership against state snapshot, checks the membership cache for consistency, and optionally cross-references with a remote server.
 
 ## `!admin yolo rescue-pdu`
 
@@ -34,7 +22,7 @@ List all outlier PDUs in our database
 
 ## `!admin yolo view-extremities`
 
-View the current forward extremities (timeline tips) of a room
+View the current forward extremities (timeline tips) of a room, or scan all rooms for DAG fractures with --all
 
 ## `!admin yolo purge-outliers`
 
@@ -94,7 +82,7 @@ Compares local room state with a remote server
 
 ## `!admin yolo compare-remote-state`
 
-Compares room state between two different remote servers
+Compares room state between remote servers. First server is the base; each additional server is compared against it
 
 ## `!admin yolo heal-room`
 
@@ -123,3 +111,9 @@ Example: debug federation-request matrix.org /_matrix/federation/v1/state/!room:
 Find the merge-base (common ancestor) between two DAG tips and render an ASCII graph of the divergence.
 
 By default, compares the local latest PDU against the remote server's latest PDU for the room. Use --event-a / --event-b to override with specific event IDs.
+
+## `!admin yolo force-set-room-state-from-server`
+
+Forcefully replaces the room state of our local copy of the specified room, with the copy the specified remote server says.
+
+Delegates to the debug implementation. Useful for correcting state divergence after DAG fractures.

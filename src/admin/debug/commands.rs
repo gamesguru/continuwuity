@@ -640,6 +640,15 @@ pub(crate) async fn force_set_room_state_from_server(
 			trace!(
 				"PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier insert"
 			);
+		} else if self
+			.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(&event_id)
+			.await
+			.is_ok()
+		{
+			trace!("PDU {event_id} already an outlier, skipping");
 		} else {
 			info!("PDU {event_id} NOT in timeline, adding as outlier");
 			self.services
@@ -677,6 +686,12 @@ pub(crate) async fn force_set_room_state_from_server(
 			.rooms
 			.timeline
 			.get_pdu_id(&event_id)
+			.await
+			.is_ok() || self
+			.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(&event_id)
 			.await
 			.is_ok()
 		{

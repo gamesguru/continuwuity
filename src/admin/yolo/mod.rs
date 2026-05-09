@@ -163,9 +163,13 @@ pub enum YoloCommand {
 		/// Remote server to fetch from
 		server: OwnedServerName,
 
-		/// Maximum number of events to fetch (default: 100)
+		/// Maximum number of events to fetch (-1 for unlimited, default: 100)
 		#[arg(long, default_value = "100")]
-		limit: usize,
+		limit: i64,
+
+		/// Event ID to start backfill from (default: latest local event)
+		#[arg(long)]
+		from: Option<OwnedEventId>,
 	},
 
 	/// Fetches a PDU from a remote server and attempts to verify/persist it.

@@ -13,7 +13,7 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, future::ready, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	OwnedUserId, RoomId,
+	OwnedUserId, RoomId, RoomVersionId,
 	api::federation::event::{get_event, get_room_state},
 	events::{StateEventType, TimelineEventType},
 };
@@ -1080,12 +1080,16 @@ pub(super) async fn get_room_dag(
 	let mut missing_hash = 0_u64;
 	let mut unique_hashes = HashSet::<u64>::new();
 	let mut last_ssh: Option<u64> = None;
+	let mut max_depth = 0_u64;
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
 	let path = format!("/tmp/dag-{safe_room_id}-v{room_version}-{start}.jsonl");
 	let mut file = tokio::fs::File::create(&path)
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
+
+	let mut all_event_ids = HashSet::<OwnedEventId>::new();
+	let mut referenced_as_prev = HashSet::<OwnedEventId>::new();
 
 	while let Some((_, pdu)) = pdus.next().await {
 		if i >= start {
@@ -1110,6 +1114,13 @@ pub(super) async fn get_room_dag(
 				state_events = state_events.saturating_add(1);
 			}
 
+			let eid = pdu.event_id().to_owned();
+			all_event_ids.insert(eid);
+			for prev in pdu.prev_events() {
+				referenced_as_prev.insert(prev.to_owned());
+			}
+			max_depth = max_depth.max(pdu.depth.into());
+
 			let json = serde_json::to_string(&obj)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;
@@ -1124,6 +1135,9 @@ pub(super) async fn get_room_dag(
 			}
 		}
 	}
+
+	// Forward extremities: events not referenced as prev_events by any other event
+	let heads_count = all_event_ids.difference(&referenced_as_prev).count();
 
 	let (bf_whole, bf_frac) = if count > 0 {
 		let scaled = total_prev_events
@@ -1157,6 +1171,21 @@ pub(super) async fn get_room_dag(
 	writeln!(out, "PDUs:           {count}").expect("fmt");
 	writeln!(out, "State events:   {state_events}").expect("fmt");
 	writeln!(out, "Branching:      {bf_whole}.{bf_frac:03} avg prev_events/PDU").expect("fmt");
+	let (frag_whole, frag_frac) = if max_depth > 0 {
+		let scaled = count
+			.saturating_mul(1000)
+			.checked_div(max_depth)
+			.unwrap_or(0);
+		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
+	} else {
+		(0, 0)
+	};
+	writeln!(
+		out,
+		"Frag factor:    {frag_whole}.{frag_frac:03} ({count} events / {max_depth} depth, \
+		 {heads_count} heads)"
+	)
+	.expect("fmt");
 	writeln!(out, "Unique states:  {}", unique_hashes.len()).expect("fmt");
 	writeln!(out, "Missing hash:   {missing_hash}").expect("fmt");
 	if let Some(tip) = last_ssh {
@@ -1176,7 +1205,8 @@ pub(super) async fn get_remote_dag(
 	&self,
 	room_id: OwnedRoomId,
 	server: OwnedServerName,
-	limit: usize,
+	limit: i64,
+	from: Option<OwnedEventId>,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -1190,13 +1220,18 @@ pub(super) async fn get_remote_dag(
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
-	// Start from the latest local event in the room
-	let latest = self
-		.services
-		.rooms
-		.timeline
-		.latest_pdu_in_room(&room_id)
-		.await?;
+	// Start from explicit event ID or latest local event
+	let start_event_id = match from {
+		| Some(eid) => eid,
+		| None => self
+			.services
+			.rooms
+			.timeline
+			.latest_pdu_in_room(&room_id)
+			.await?
+			.event_id()
+			.to_owned(),
+	};
 
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
 	let path = format!("/tmp/remote-dag-{safe_room_id}-v{room_version}-{server}.jsonl");
@@ -1205,13 +1240,20 @@ pub(super) async fn get_remote_dag(
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
 
 	let mut seen = HashSet::<OwnedEventId>::new();
-	let mut queue = vec![latest.event_id().to_owned()];
+	let mut queue = vec![start_event_id];
 	let mut total = 0_usize;
 	let mut total_prev_events = 0_u64;
 	let batch_size = ruma::uint!(100);
 
 	self.write_str(&format!("Fetching DAG from {server} for {room_id} (limit: {limit})...\n"))
 		.await?;
+
+	let unlimited = limit < 0;
+	let limit = if unlimited {
+		usize::MAX
+	} else {
+		usize::try_from(limit).unwrap_or(usize::MAX)
+	};
 
 	while !queue.is_empty() && total < limit {
 		let request = ruma::api::federation::backfill::get_backfill::v1::Request {
@@ -1621,6 +1663,15 @@ pub(super) async fn compare_room_state(
 			.to_owned(),
 	};
 
+	// Warn if the at_event is a state event — federation /state returns state
+	// BEFORE the queried event, so the tip's own state change is invisible.
+	let tip_is_state_event =
+		if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
+			tip_pdu.state_key.is_some()
+		} else {
+			false
+		};
+
 	let response = match self
 		.services
 		.sending
@@ -1692,16 +1743,18 @@ pub(super) async fn compare_room_state(
 	let mut missing_locally = Vec::new();
 	for (key, event_id) in &remote_state {
 		if local_state.get(key) != Some(event_id) {
-			missing_locally.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+			missing_locally.push(format!("{event_id} ({} {})", key.0, key.1));
 		}
 	}
+	missing_locally.sort();
 
 	let mut extra_locally = Vec::new();
 	for (key, event_id) in &local_state {
 		if remote_state.get(key) != Some(event_id) {
-			extra_locally.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+			extra_locally.push(format!("{event_id} ({} {})", key.0, key.1));
 		}
 	}
+	extra_locally.sort();
 
 	// Count remote members by membership
 	let mut remote_joined = 0_usize;
@@ -1788,9 +1841,13 @@ pub(super) async fn compare_room_state(
 	writeln!(out, "Local invited:  state={local_state_invited}").expect("fmt");
 	writeln!(out, "Remote joined:  {remote_joined}").expect("fmt");
 	writeln!(out, "Remote invited: {remote_invited}").expect("fmt");
+	if tip_is_state_event {
+		writeln!(out, "⚠ at_event is a state event — remote state excludes its own change")
+			.expect("fmt");
+	}
 	writeln!(out, "```").expect("fmt");
-	writeln!(out, "\nMissing IDs:\n```\n{missing_locally:#?}\n```").expect("fmt");
-	writeln!(out, "\nExtra IDs:\n```\n{extra_locally:#?}\n```").expect("fmt");
+	fmt_list(&mut out, "Missing IDs", &missing_locally).expect("fmt");
+	fmt_list(&mut out, "Extra IDs", &extra_locally).expect("fmt");
 
 	self.write_str(&out).await
 }
@@ -1836,9 +1893,6 @@ pub(super) async fn compare_remote_state(
 		},
 	};
 
-	// Determine room version
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
-
 	// Fetch base server state
 	let base_response = self
 		.services
@@ -1848,6 +1902,30 @@ pub(super) async fn compare_remote_state(
 			event_id: at_event_id.clone(),
 		})
 		.await?;
+
+	// Determine room version: local DB > base response m.room.create > default
+	let room_version = match self.services.rooms.state.get_room_version(&room_id).await {
+		| Ok(v) => v,
+		| Err(_) => {
+			// Extract from base response's m.room.create event
+			let mut found_version = None;
+			for pdu_raw in &base_response.pdus {
+				if let Ok(obj) = serde_json::from_str::<serde_json::Map<String, JsonValue>>(
+					&serde_json::to_string(pdu_raw)?,
+				) {
+					if obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create") {
+						found_version = obj
+							.get("content")
+							.and_then(|c| c.get("room_version"))
+							.and_then(|v| v.as_str())
+							.and_then(|s| s.parse().ok());
+						break;
+					}
+				}
+			}
+			found_version.unwrap_or(RoomVersionId::V11)
+		},
+	};
 
 	let mut base_state = HashMap::new();
 	let mut base_verify_errors = 0_usize;
@@ -1879,6 +1957,21 @@ pub(super) async fn compare_remote_state(
 	if base_verify_errors > 0 {
 		writeln!(output, "- Base verify errors: {base_verify_errors} (signature check failed)")?;
 	}
+
+	// Warn if the at_event is a state event — federation /state returns state
+	// BEFORE the queried event, so the tip's own state change is invisible.
+	if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
+		if tip_pdu.state_key.is_some() {
+			writeln!(
+				output,
+				"⚠ WARNING: at_event is a state event ({} {}). Federation returns state BEFORE \
+				 this event, so its own state change is invisible to this comparison.",
+				tip_pdu.kind,
+				tip_pdu.state_key.as_deref().unwrap_or("")
+			)?;
+		}
+	}
+
 	// Flush header immediately
 	self.write_str(&output).await?;
 	output.clear();
@@ -1924,16 +2017,18 @@ pub(super) async fn compare_remote_state(
 		let mut only_on_base = Vec::new();
 		for (key, event_id) in &base_state {
 			if server_state.get(key) != Some(event_id) {
-				only_on_base.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+				only_on_base.push(format!("{event_id} ({} {})", key.0, key.1));
 			}
 		}
+		only_on_base.sort();
 
 		let mut only_on_server = Vec::new();
 		for (key, event_id) in &server_state {
 			if base_state.get(key) != Some(event_id) {
-				only_on_server.push(format!("{event_id} ({:?} \"{}\")", key.0, key.1));
+				only_on_server.push(format!("{event_id} ({} {})", key.0, key.1));
 			}
 		}
+		only_on_server.sort();
 
 		writeln!(output, "\n--- vs {server}:")?;
 		writeln!(
