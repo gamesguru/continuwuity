@@ -321,11 +321,36 @@ async fn build_state_and_timeline(
 	// the room or this is an initial sync, to indicate to the client that it
 	// should request backfill (and to copy Synapse's behavior). for federated
 	// room joins, the `timeline` will usually only include the syncing user's
-	// join event.
+	// join event. However, if the room actually has ZERO timeline events (e.g.,
+	// a space), forcing `limited: true` causes clients to fail repeatedly to
+	// backfill.
 	let is_initial_sync = sync_context.last_sync_end_count.is_none();
-	let limited = timeline.limited || joined_since_last_sync || is_initial_sync;
+	let limited = if timeline.pdus.is_empty() {
+		if joined_since_last_sync || is_initial_sync {
+			let is_space = services
+				.rooms
+				.state_accessor
+				.get_room_type(room_id)
+				.await
+				.is_ok_and(|room_type| room_type == ruma::room::RoomType::Space);
 
-	let prev_batch = timeline.pdus.front().map(at!(0));
+			timeline.limited || !is_space
+		} else {
+			timeline.limited
+		}
+	} else {
+		timeline.limited || joined_since_last_sync || is_initial_sync
+	};
+
+	// the token which may be passed to the messages endpoint to backfill room
+	// history. If the timeline is empty, fallback to the start of this sync window
+	// to ensure clients always have a valid topological pagination token.
+	let prev_batch = timeline.pdus.front().map(at!(0)).or_else(|| {
+		limited
+			.then_some(())
+			.and(sync_context.last_sync_end_count)
+			.map(PduCount::Normal)
+	});
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
