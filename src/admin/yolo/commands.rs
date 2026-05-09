@@ -1996,19 +1996,28 @@ pub(super) async fn compare_remote_state(
 		writeln!(output, "- Base verify errors: {base_verify_errors} (signature check failed)")?;
 	}
 
-	// Warn if the at_event is a state event — federation /state returns state
-	// BEFORE the queried event, so the tip's own state change is invisible.
-	if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
-		if tip_pdu.state_key.is_some() {
+	// Federation /state returns state BEFORE the queried event. When the
+	// at_event is a state event, inject it into the base set so both sides
+	// reflect state-after (matching the room SSH).
+	let tip_is_state_event = if let Ok(tip_pdu) =
+		self.services.rooms.timeline.get_pdu(&at_event_id).await
+	{
+		if let Some(state_key) = &tip_pdu.state_key {
+			base_state
+				.insert((tip_pdu.kind.to_string(), state_key.to_string()), at_event_id.clone());
 			writeln!(
 				output,
-				"⚠ WARNING: at_event is a state event ({} {}). Federation returns state BEFORE \
-				 this event, so its own state change is invisible to this comparison.",
-				tip_pdu.kind,
-				tip_pdu.state_key.as_deref().unwrap_or("")
+				"NOTE: at_event is a state event ({} {}) — injected into all sides for \
+				 state-after comparison.",
+				tip_pdu.kind, state_key
 			)?;
+			true
+		} else {
+			false
 		}
-	}
+	} else {
+		false
+	};
 
 	// Flush header immediately
 	self.write_str(&output).await?;
@@ -2051,6 +2060,18 @@ pub(super) async fn compare_remote_state(
 			};
 			if let Some(state_key) = &pdu.state_key {
 				server_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+			}
+		}
+
+		// Inject the at_event into comparison state too (same as base)
+		if tip_is_state_event {
+			if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
+				if let Some(state_key) = &tip_pdu.state_key {
+					server_state.insert(
+						(tip_pdu.kind.to_string(), state_key.to_string()),
+						at_event_id.clone(),
+					);
+				}
 			}
 		}
 
