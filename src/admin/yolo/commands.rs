@@ -1676,14 +1676,17 @@ pub(super) async fn compare_room_state(
 			.to_owned(),
 	};
 
-	// Warn if the at_event is a state event — federation /state returns state
-	// BEFORE the queried event, so the tip's own state change is invisible.
-	let tip_is_state_event =
-		if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
-			tip_pdu.state_key.is_some()
-		} else {
-			false
-		};
+	// Fetch tip once — used for state-event detection and injection
+	let tip_pdu_opt = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu(&at_event_id)
+		.await
+		.ok();
+	let tip_is_state_event = tip_pdu_opt
+		.as_ref()
+		.is_some_and(|pdu| pdu.state_key.is_some());
 
 	let response = match self
 		.services
@@ -1706,13 +1709,16 @@ pub(super) async fn compare_room_state(
 		},
 	};
 
+	// Single pass: build remote state map + count remote members
 	let mut remote_state = HashMap::new();
 	let mut skipped = 0_usize;
-	for pdu in &response.pdus {
+	let mut remote_joined = 0_usize;
+	let mut remote_invited = 0_usize;
+	for pdu_raw in &response.pdus {
 		let (event_id, value) = match self
 			.services
 			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
+			.validate_and_add_event_id(pdu_raw, &room_version)
 			.await
 		{
 			| Ok(r) => r,
@@ -1726,6 +1732,15 @@ pub(super) async fn compare_room_state(
 		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
 		if let Some(state_key) = &pdu.state_key {
 			remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+		}
+
+		if pdu.kind == TimelineEventType::RoomMember {
+			let content: JsonValue = pdu.get_content_as_value();
+			match content.get("membership").and_then(|v| v.as_str()) {
+				| Some("join") => remote_joined = remote_joined.saturating_add(1),
+				| Some("invite") => remote_invited = remote_invited.saturating_add(1),
+				| _ => {},
+			}
 		}
 	}
 
@@ -1744,28 +1759,56 @@ pub(super) async fn compare_room_state(
 		.await
 		.ok();
 
-	// Federation /state returns state BEFORE the queried event. When the tip
-	// is a state event, inject it into the remote set so both sides reflect
-	// state-after (matching the local room SSH).
+	// Inject tip event into remote state (uses cached tip_pdu_opt)
 	if tip_is_state_event {
-		if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
+		if let Some(ref tip_pdu) = tip_pdu_opt {
 			if let Some(state_key) = &tip_pdu.state_key {
 				remote_state.insert(
 					(tip_pdu.kind.to_string(), state_key.to_string()),
 					at_event_id.clone(),
 				);
+
+				if tip_pdu.kind == TimelineEventType::RoomMember {
+					let content: JsonValue = tip_pdu.get_content_as_value();
+					match content.get("membership").and_then(|v| v.as_str()) {
+						| Some("join") => remote_joined = remote_joined.saturating_add(1),
+						| Some("invite") => remote_invited = remote_invited.saturating_add(1),
+						| _ => {},
+					}
+				}
 			}
 		}
 	}
 
-	let local_state: HashMap<_, _> = self
-		.services
-		.rooms
-		.state_accessor
-		.state_full(local_state_hash)
-		.map(|((ty, sk), pdu)| ((ty.to_string(), sk.to_string()), pdu.event_id().to_owned()))
-		.collect()
-		.await;
+	// Single pass: build local state map + count local members
+	let mut local_state: HashMap<(String, String), OwnedEventId> = HashMap::new();
+	let mut local_state_joined = 0_usize;
+	let mut local_state_invited = 0_usize;
+	{
+		let state_full = self
+			.services
+			.rooms
+			.state_accessor
+			.state_full(local_state_hash);
+		pin_mut!(state_full);
+		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
+			local_state.insert(
+				(event_type.to_string(), state_key.to_string()),
+				pdu.event_id().to_owned(),
+			);
+
+			if event_type == StateEventType::RoomMember {
+				let content: JsonValue = pdu.get_content_as_value();
+				match content.get("membership").and_then(|v| v.as_str()) {
+					| Some("join") => local_state_joined = local_state_joined.saturating_add(1),
+					| Some("invite") => {
+						local_state_invited = local_state_invited.saturating_add(1);
+					},
+					| _ => {},
+				}
+			}
+		}
+	}
 
 	let mut missing_locally = Vec::new();
 	for (key, event_id) in &remote_state {
@@ -1782,65 +1825,6 @@ pub(super) async fn compare_room_state(
 		}
 	}
 	extra_locally.sort();
-
-	// Count remote members by membership
-	let mut remote_joined = 0_usize;
-	let mut remote_invited = 0_usize;
-	for pdu_raw in &response.pdus {
-		if let Ok((eid, value)) = self
-			.services
-			.server_keys
-			.validate_and_add_event_id(pdu_raw, &room_version)
-			.await
-		{
-			if let Ok(pdu) = PduEvent::from_id_val(&eid, value, Some(room_id.as_ref())) {
-				if pdu.kind == TimelineEventType::RoomMember {
-					let content: JsonValue = pdu.get_content_as_value();
-					match content.get("membership").and_then(|v| v.as_str()) {
-						| Some("join") => remote_joined = remote_joined.saturating_add(1),
-						| Some("invite") => {
-							remote_invited = remote_invited.saturating_add(1);
-						},
-						| _ => {},
-					}
-				}
-			}
-		}
-	}
-
-	// Include the injected tip event in remote member counts
-	if tip_is_state_event {
-		if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
-			if tip_pdu.kind == TimelineEventType::RoomMember {
-				let content: JsonValue = tip_pdu.get_content_as_value();
-				match content.get("membership").and_then(|v| v.as_str()) {
-					| Some("join") => remote_joined = remote_joined.saturating_add(1),
-					| Some("invite") => remote_invited = remote_invited.saturating_add(1),
-					| _ => {},
-				}
-			}
-		}
-	}
-
-	// Local membership stats
-	let mut local_state_joined = 0_usize;
-	let mut local_state_invited = 0_usize;
-	let state_full = self
-		.services
-		.rooms
-		.state_accessor
-		.state_full(local_state_hash);
-	pin_mut!(state_full);
-	while let Some(((event_type, _), pdu)) = state_full.next().await {
-		if event_type == StateEventType::RoomMember {
-			let content: JsonValue = pdu.get_content_as_value();
-			match content.get("membership").and_then(|v| v.as_str()) {
-				| Some("join") => local_state_joined = local_state_joined.saturating_add(1),
-				| Some("invite") => local_state_invited = local_state_invited.saturating_add(1),
-				| _ => {},
-			}
-		}
-	}
 
 	let cached_joined = self
 		.services
@@ -2430,6 +2414,10 @@ pub(super) async fn federation_request(
 	output: Option<String>,
 ) -> Result {
 	use conduwuit::info;
+
+	// This command can write arbitrary files via the `output` parameter,
+	// so it must remain restricted to the server console.
+	self.bail_restricted()?;
 
 	// Parse the URL path to determine which federation endpoint to call
 	// Currently supports: /_matrix/federation/v1/state/{roomId}
