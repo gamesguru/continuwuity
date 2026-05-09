@@ -686,7 +686,9 @@ impl Service {
 			.await;
 
 		for user_id in &cached_invited {
-			if !state_invited.contains(user_id) {
+			// Only purge if they are neither invited NOR joined.
+			// If they transitioned to joined, mark_as_left would accidentally nuke their valid join.
+			if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
 				self.services
 					.state_cache
 					.mark_as_left(user_id, room_id, None)
