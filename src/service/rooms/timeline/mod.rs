@@ -446,7 +446,24 @@ impl Service {
 				}
 			}
 
-			// Fallback: subtract timeline state events from full state.
+			// Safe fallback: try the oldest event's own pdu_shortstatehash.
+			// If the room was never previously reordered, this is pristine.
+			if !foundation_set {
+				if let Ok(ssh) = self
+					.services
+					.state_accessor
+					.pdu_shortstatehash(oldest_event_id)
+					.await
+				{
+					self.services
+						.state
+						.set_room_state(room_id, ssh, &state_lock);
+					info!("reorder_timeline: seeded walk from oldest event SSH {ssh} (fallback)");
+					foundation_set = true;
+				}
+			}
+
+			// Last-resort fallback: subtract timeline state events from full state.
 			// Works when all state changes for a key originate in the
 			// timeline (locally-created rooms, single-join federated
 			// rooms). Can drop keys that have outlier-only pre-timeline
@@ -584,9 +601,9 @@ impl Service {
 		let mut member_users: HashSet<ruma::OwnedUserId> = HashSet::new();
 		for event_id in &sorted {
 			if let Some((_, pdu, _)) = entries.get(event_id) {
-				if pdu.kind.to_string() == "m.room.member" {
+				if pdu.kind == TimelineEventType::RoomMember {
 					if let Some(sk) = pdu.state_key() {
-						if let Ok(uid) = ruma::OwnedUserId::try_from(sk) {
+						if let Ok(uid) = ruma::OwnedUserId::try_from(sk.to_owned()) {
 							member_users.insert(uid);
 						}
 					}

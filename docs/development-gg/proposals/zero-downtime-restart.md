@@ -81,11 +81,11 @@ fn get_listener() -> TcpListener {
     if let Ok(fds) = std::env::var("LISTEN_FDS") {
         if fds.parse::<i32>().unwrap_or(0) > 0 {
             // fd 3 is the first passed fd by convention
-            unsafe { TcpListener::from_raw_fd(3) }
+            return unsafe { TcpListener::from_raw_fd(3) };
         }
-    } else {
-        TcpListener::bind(&config.address).unwrap()
     }
+    // Fallback: bind normally when no socket activation
+    TcpListener::bind(&config.address).unwrap()
 }
 ```
 
