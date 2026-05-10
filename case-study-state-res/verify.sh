@@ -4,7 +4,7 @@
 #
 # Uses ruma-lean's independent state-res output (state-res.json) to determine
 # which server resolved state correctly for disputed membership events.
-#   cargo install ruma-lean
+#   cargo install ruma-lean --features cli
 
 set -euo pipefail
 cd "$(dirname "$0")"
