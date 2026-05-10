@@ -1004,9 +1004,22 @@ pub(super) async fn force_leave_remote_room(
 	for server in vias_raw {
 		vias.insert(server);
 	}
-	remote_leave_room(self.services, &user_id, &room_id, None, vias)
+	let leave_pdu = remote_leave_room(self.services, &user_id, &room_id, None, vias)
 		.boxed()
-		.await?;
+		.await
+		.ok();
+
+	self.services
+		.rooms
+		.state_cache
+		.mark_as_left(&user_id, &room_id, leave_pdu)
+		.await;
+
+	self.services
+		.rooms
+		.state_cache
+		.update_joined_count(&room_id)
+		.await;
 
 	self.write_str(&format!("{user_id} successfully left {room_id} via remote server."))
 		.await

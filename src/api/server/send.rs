@@ -421,7 +421,14 @@ async fn handle_room(
 			.map(|_| ());
 
 		if let Err(ref e) = result {
-			if e.status_code().is_server_error() && services.server.running() {
+			// Only abort the entire transaction for truly local failures
+			// (database errors, internal panics) — NOT for federation connection
+			// errors to third-party servers. Those are per-PDU failures that
+			// won't be fixed by the sender retrying the same transaction.
+			if e.status_code().is_server_error()
+				&& services.server.running()
+				&& !e.to_string().contains("Federation connection error")
+			{
 				return Err(TransactionError::Transient(e.to_string()));
 			}
 		}

@@ -143,13 +143,13 @@ pub async fn leave_room(
 
 		match user_member_event_content {
 			| Ok(content) => {
-				services
+				match services
 					.rooms
 					.timeline
 					.build_and_append_pdu(
 						PduBuilder::state(user_id.to_string(), &RoomMemberEventContent {
 							membership: MembershipState::Leave,
-							reason,
+							reason: reason.clone(),
 							join_authorized_via_users_server: None,
 							is_direct: None,
 							..content
@@ -158,10 +158,34 @@ pub async fn leave_room(
 						Some(room_id),
 						&state_lock,
 					)
-					.await?;
-
-				// `build_and_append_pdu` calls `mark_as_left` internally, so we return early.
-				return Ok(());
+					.await
+				{
+					| Ok(_) => {
+						// `build_and_append_pdu` calls `mark_as_left` internally, so we
+						// return early.
+						return Ok(());
+					},
+					| Err(e) => {
+						// Room state is corrupt (e.g. missing create event from an earlier
+						// deploy). Drop the state lock and fall through to remote leave.
+						warn!(
+							%user_id,
+							"Local leave failed for {room_id} (corrupt state?): {e}, \
+							 attempting remote leave"
+						);
+						drop(state_lock);
+						remote_leave_room(services, user_id, room_id, reason, HashSet::new())
+							.await
+							.inspect_err(|err| {
+								warn!(
+									%user_id,
+									"Remote leave also failed for {room_id}: {err}, \
+									 marking left locally"
+								);
+							})
+							.ok()
+					},
+				}
 			},
 			| Err(_) => {
 				// an exception to case 3 is if the user isn't even in the room they're trying
