@@ -1798,14 +1798,6 @@ pub(super) async fn compare_room_state(
 		.get_room_shortstatehash(&room_id)
 		.await?;
 
-	let tip_state_hash = self
-		.services
-		.rooms
-		.state_accessor
-		.pdu_shortstatehash(&at_event_id)
-		.await
-		.ok();
-
 	// Inject tip event into remote state (uses cached tip_pdu_opt)
 	if tip_is_state_event {
 		if let Some(ref tip_pdu) = tip_pdu_opt {
@@ -1907,10 +1899,18 @@ pub(super) async fn compare_room_state(
 		.await?;
 	let latest_local_id = latest_local.event_id().to_owned();
 
-	let tip_status = match tip_state_hash {
-		| Some(tip) if tip == local_state_hash => "✓ tip matches room",
-		| Some(_) => "✗ tip DIVERGES from room",
-		| None => "? tip has no state hash",
+	let extremity_count = self
+		.services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.count()
+		.await;
+
+	let cache_status = if u64::try_from(local_state_joined).unwrap_or(0) == cached_joined {
+		"✓"
+	} else {
+		"✗ MISMATCH"
 	};
 
 	let mut out = format!(
@@ -1921,16 +1921,16 @@ pub(super) async fn compare_room_state(
 		extra_locally.len()
 	);
 	writeln!(out, "```").expect("fmt");
-	writeln!(out, "Room SSH:       {local_state_hash}").expect("fmt");
-	if let Some(tip) = tip_state_hash {
-		writeln!(out, "Tip SSH:        {tip}").expect("fmt");
-	}
-	writeln!(out, "SSH status:     {tip_status}").expect("fmt");
-	writeln!(out, "Local joined:   state={local_state_joined}, cache={cached_joined}")
-		.expect("fmt");
-	writeln!(out, "Local invited:  state={local_state_invited}").expect("fmt");
-	writeln!(out, "Remote joined:  {}", remote_joined.len()).expect("fmt");
-	writeln!(out, "Remote invited: {}", remote_invited.len()).expect("fmt");
+	writeln!(out, "Room SSH:        {local_state_hash}").expect("fmt");
+	writeln!(out, "Extremities:     {extremity_count}").expect("fmt");
+	writeln!(
+		out,
+		"Local joined:    state={local_state_joined}, cache={cached_joined} {cache_status}"
+	)
+	.expect("fmt");
+	writeln!(out, "Local invited:   state={local_state_invited}").expect("fmt");
+	writeln!(out, "Remote joined:   {}", remote_joined.len()).expect("fmt");
+	writeln!(out, "Remote invited:  {}", remote_invited.len()).expect("fmt");
 	if tip_is_state_event {
 		writeln!(
 			out,
