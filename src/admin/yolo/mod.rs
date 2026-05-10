@@ -65,6 +65,10 @@ pub enum YoloCommand {
 		/// Show extremities for all rooms.
 		#[arg(long, conflicts_with = "room")]
 		all: bool,
+
+		/// Show full details (type, sender, timestamp) for each extremity.
+		#[arg(short, long)]
+		verbose: bool,
 	},
 
 	/// Purge outlier PDUs that already exist in our timeline.

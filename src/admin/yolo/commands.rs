@@ -526,6 +526,7 @@ pub(super) async fn view_extremities(
 	&self,
 	room: Option<OwnedRoomOrAliasId>,
 	all: bool,
+	verbose: bool,
 ) -> Result {
 	if all {
 		let mut fractured = Vec::new();
@@ -562,6 +563,29 @@ pub(super) async fn view_extremities(
 		let mut body = String::new();
 		for (room_id, count) in &fractured {
 			writeln!(body, "{room_id}\t{count} extremities")?;
+			if verbose {
+				let extremities: Vec<OwnedEventId> = self
+					.services
+					.rooms
+					.state
+					.get_forward_extremities(room_id)
+					.map(ToOwned::to_owned)
+					.collect()
+					.await;
+				for eid in &extremities {
+					let detail = match self.services.rooms.timeline.get_pdu(eid).await {
+						| Ok(pdu) => {
+							let ts = pdu.origin_server_ts;
+							let kind = pdu.kind.to_string();
+							let sender = pdu.sender();
+							format!("  {eid}  {kind}  {sender}  TS:{ts}")
+						},
+						| Err(_) => format!("  {eid}  (PDU not found in timeline)"),
+					};
+					writeln!(body, "{detail}")?;
+				}
+				writeln!(body)?;
+			}
 		}
 
 		return self
