@@ -1884,28 +1884,22 @@ pub(super) async fn compare_room_state(
 	let mut missing_locally = Vec::new();
 	for (key, event_id) in &remote_state {
 		if local_state.get(key) != Some(event_id) {
-			let ts = event_timestamps
-				.get(event_id)
-				.copied()
-				.map(format_ts)
-				.unwrap_or_default();
-			missing_locally.push(format!("{event_id} ({} {}) {ts}", key.0, key.1));
+			let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+			missing_locally
+				.push((ts, format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts))));
 		}
 	}
-	missing_locally.sort();
+	missing_locally.sort_by_key(|(ts, _)| *ts);
 
 	let mut extra_locally = Vec::new();
 	for (key, event_id) in &local_state {
 		if remote_state.get(key) != Some(event_id) {
-			let ts = event_timestamps
-				.get(event_id)
-				.copied()
-				.map(format_ts)
-				.unwrap_or_default();
-			extra_locally.push(format!("{event_id} ({} {}) {ts}", key.0, key.1));
+			let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+			extra_locally
+				.push((ts, format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts))));
 		}
 	}
-	extra_locally.sort();
+	extra_locally.sort_by_key(|(ts, _)| *ts);
 
 	let cached_joined = self
 		.services
@@ -2151,28 +2145,22 @@ pub(super) async fn compare_remote_state(
 		let mut only_on_base = Vec::new();
 		for (key, event_id) in &base_state {
 			if server_state.get(key) != Some(event_id) {
-				let ts = event_timestamps
-					.get(event_id)
-					.copied()
-					.map(format_ts)
-					.unwrap_or_default();
-				only_on_base.push(format!("{event_id} ({} {}) {ts}", key.0, key.1));
+				let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+				only_on_base
+					.push((ts, format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts))));
 			}
 		}
-		only_on_base.sort();
+		only_on_base.sort_by_key(|(ts, _)| *ts);
 
 		let mut only_on_server = Vec::new();
 		for (key, event_id) in &server_state {
 			if base_state.get(key) != Some(event_id) {
-				let ts = event_timestamps
-					.get(event_id)
-					.copied()
-					.map(format_ts)
-					.unwrap_or_default();
-				only_on_server.push(format!("{event_id} ({} {}) {ts}", key.0, key.1));
+				let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+				only_on_server
+					.push((ts, format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts))));
 			}
 		}
-		only_on_server.sort();
+		only_on_server.sort_by_key(|(ts, _)| *ts);
 
 		writeln!(output, "\n--- vs {server}:")?;
 		writeln!(
@@ -2197,11 +2185,11 @@ pub(super) async fn compare_remote_state(
 	Ok(())
 }
 
-fn fmt_list(out: &mut String, label: &str, items: &[String]) -> std::fmt::Result {
+fn fmt_list(out: &mut String, label: &str, items: &[(u64, String)]) -> std::fmt::Result {
 	use std::fmt::Write;
 
 	write!(out, "{label}: [")?;
-	for item in items {
+	for (_, item) in items {
 		write!(out, "\n    {item}")?;
 	}
 	writeln!(out, "{}]", if items.is_empty() { "" } else { "\n" })
