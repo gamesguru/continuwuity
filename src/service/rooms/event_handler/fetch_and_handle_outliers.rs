@@ -151,19 +151,19 @@ where
 							if let Ok(auth_event) =
 								serde_json::from_value::<OwnedEventId>(auth_event.clone().into())
 							{
+								if self
+									.services
+									.pdu_metadata
+									.is_event_soft_failed(&auth_event)
+									.await
+								{
+									info!(target: "auth_chain", "Skipping known soft-failed auth event: {auth_event}");
+									continue;
+								}
+
 								if !graph.contains_key(&auth_event)
 									&& !self.services.timeline.pdu_exists(&auth_event).await
 								{
-									if self
-										.services
-										.pdu_metadata
-										.is_event_soft_failed(&auth_event)
-										.await
-									{
-										info!(target: "auth_chain", "Skipping known soft-failed auth event: {auth_event}");
-										continue;
-									}
-
 									let ratelimited = if let Some((time, tries)) = self
 										.services
 										.globals
