@@ -9,6 +9,7 @@ use std::{
 use async_trait::async_trait;
 use conduwuit::{
 	Err, Result, Server, SyncRwLock, err, error::inspect_log, utils::string::SplitInfallible,
+	warn,
 };
 use database::Database;
 
@@ -127,12 +128,24 @@ impl<'a> Args<'a> {
 }
 
 /// Reference a Service by name. Panics if the Service does not exist or was
-/// incorrectly cast.
+/// incorrectly cast. During shutdown, services may be dropped before their
+/// dependents finish; this is logged as a warning rather than an error.
 #[inline]
 fn require<T: Service>(map: &Map, name: &str) -> Arc<T> {
-	try_get::<T>(map, name)
-		.inspect_err(inspect_log)
-		.expect("Failure to reference service required by another service.")
+	match try_get::<T>(map, name) {
+		| Ok(service) => service,
+		| Err(e) => {
+			// Check if the map still has the key — if so, the service was dropped
+			// (shutdown race) rather than never built.
+			let is_shutdown_race = map.read().contains_key(name);
+			if is_shutdown_race {
+				warn!("Service {name:?} dropped during shutdown, dependent still running");
+			} else {
+				inspect_log(&e);
+			}
+			panic!("Failure to reference service required by another service: {e}");
+		},
+	}
 }
 
 /// Reference a Service by name. Returns None if the Service does not exist, but

@@ -115,7 +115,7 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 	}
 
 	if let Err(e) = response.error_for_status_ref() {
-		return Err!(Request(Unknown(error!("HTTP {e} fetching URL preview probe"))));
+		return Err!(Request(Unknown(warn!("HTTP {e} fetching URL preview probe"))));
 	}
 
 	debug!(%url, "URL preview response headers: {:?}", response.headers());
