@@ -1706,6 +1706,7 @@ pub(super) async fn compare_room_state(
 
 	// Single pass: build remote state map + count remote members
 	let mut remote_state = HashMap::new();
+	let mut event_timestamps: HashMap<OwnedEventId, u64> = HashMap::new();
 	let mut skipped = 0_usize;
 	let mut remote_joined: HashSet<String> = HashSet::new();
 	let mut remote_invited: HashSet<String> = HashSet::new();
@@ -1725,6 +1726,7 @@ pub(super) async fn compare_room_state(
 		};
 
 		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
+		event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
 		if let Some(state_key) = &pdu.state_key {
 			remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
 		}
@@ -1807,10 +1809,9 @@ pub(super) async fn compare_room_state(
 			.state_full(local_state_hash);
 		pin_mut!(state_full);
 		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
-			local_state.insert(
-				(event_type.to_string(), state_key.to_string()),
-				pdu.event_id().to_owned(),
-			);
+			let eid = pdu.event_id().to_owned();
+			event_timestamps.insert(eid.clone(), pdu.origin_server_ts().0.into());
+			local_state.insert((event_type.to_string(), state_key.to_string()), eid);
 
 			if event_type == StateEventType::RoomMember {
 				let content: JsonValue = pdu.get_content_as_value();
@@ -1828,7 +1829,12 @@ pub(super) async fn compare_room_state(
 	let mut missing_locally = Vec::new();
 	for (key, event_id) in &remote_state {
 		if local_state.get(key) != Some(event_id) {
-			missing_locally.push(format!("{event_id} ({} {})", key.0, key.1));
+			let ts = event_timestamps
+				.get(event_id)
+				.copied()
+				.map(format_ts)
+				.unwrap_or_default();
+			missing_locally.push(format!("{event_id} ({} {}) {ts}", key.0, key.1));
 		}
 	}
 	missing_locally.sort();
@@ -1836,7 +1842,12 @@ pub(super) async fn compare_room_state(
 	let mut extra_locally = Vec::new();
 	for (key, event_id) in &local_state {
 		if remote_state.get(key) != Some(event_id) {
-			extra_locally.push(format!("{event_id} ({} {})", key.0, key.1));
+			let ts = event_timestamps
+				.get(event_id)
+				.copied()
+				.map(format_ts)
+				.unwrap_or_default();
+			extra_locally.push(format!("{event_id} ({} {}) {ts}", key.0, key.1));
 		}
 	}
 	extra_locally.sort();
@@ -1969,6 +1980,7 @@ pub(super) async fn compare_remote_state(
 	};
 
 	let mut base_state = HashMap::new();
+	let mut event_timestamps: HashMap<OwnedEventId, u64> = HashMap::new();
 	let mut base_verify_errors = 0_usize;
 	for pdu in &base_response.pdus {
 		let Ok((event_id, value)) = self
@@ -1984,6 +1996,7 @@ pub(super) async fn compare_remote_state(
 		let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
 			continue;
 		};
+		event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
 		if let Some(state_key) = &pdu.state_key {
 			base_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
 		}
@@ -2061,6 +2074,7 @@ pub(super) async fn compare_remote_state(
 			let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
 				continue;
 			};
+			event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
 			if let Some(state_key) = &pdu.state_key {
 				server_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
 			}
@@ -2074,7 +2088,12 @@ pub(super) async fn compare_remote_state(
 		let mut only_on_base = Vec::new();
 		for (key, event_id) in &base_state {
 			if server_state.get(key) != Some(event_id) {
-				only_on_base.push(format!("{event_id} ({} {})", key.0, key.1));
+				let ts = event_timestamps
+					.get(event_id)
+					.copied()
+					.map(format_ts)
+					.unwrap_or_default();
+				only_on_base.push(format!("{event_id} ({} {}) {ts}", key.0, key.1));
 			}
 		}
 		only_on_base.sort();
@@ -2082,7 +2101,12 @@ pub(super) async fn compare_remote_state(
 		let mut only_on_server = Vec::new();
 		for (key, event_id) in &server_state {
 			if base_state.get(key) != Some(event_id) {
-				only_on_server.push(format!("{event_id} ({} {})", key.0, key.1));
+				let ts = event_timestamps
+					.get(event_id)
+					.copied()
+					.map(format_ts)
+					.unwrap_or_default();
+				only_on_server.push(format!("{event_id} ({} {}) {ts}", key.0, key.1));
 			}
 		}
 		only_on_server.sort();
@@ -2828,4 +2852,53 @@ fn trace_path(
 	}
 
 	path
+}
+
+/// Format an origin_server_ts (millis since epoch) as a human-readable UTC
+/// string.
+fn format_ts(ts_millis: u64) -> String {
+	let ts_secs = ts_millis.checked_div(1000).unwrap_or(0);
+	let days = ts_secs.checked_div(86_400).unwrap_or(0);
+	let time_of_day = ts_secs.checked_rem(86_400).unwrap_or(0);
+	let hours = time_of_day.checked_div(3600).unwrap_or(0);
+	let minutes = time_of_day
+		.checked_rem(3600)
+		.unwrap_or(0)
+		.checked_div(60)
+		.unwrap_or(0);
+	let seconds = time_of_day.checked_rem(60).unwrap_or(0);
+	let (year, month, day) = civil_from_days(days.cast_signed());
+	format!("{year:04}-{month:02}-{day:02} {hours:02}:{minutes:02}:{seconds:02} UTC")
+}
+
+/// Convert days since 1970-01-01 to (year, month, day).
+/// Based on Howard Hinnant's civil_from_days algorithm.
+fn civil_from_days(days: i64) -> (i64, u64, u64) {
+	let z = days.saturating_add(719_468);
+	let era = if z >= 0 { z } else { z.saturating_sub(146_096) }.saturating_div(146_097);
+	let doe = z
+		.saturating_sub(era.saturating_mul(146_097))
+		.cast_unsigned();
+	let yoe = doe
+		.saturating_sub(doe.saturating_div(1460))
+		.saturating_add(doe.saturating_div(36_524))
+		.saturating_sub(doe.saturating_div(146_096))
+		.saturating_div(365);
+	let y = yoe.cast_signed().saturating_add(era.saturating_mul(400));
+	let doy = doe.saturating_sub(
+		yoe.saturating_mul(365)
+			.saturating_add(yoe.saturating_div(4))
+			.saturating_sub(yoe.saturating_div(100)),
+	);
+	let mp = doy.saturating_mul(5).saturating_add(2).saturating_div(153);
+	let d = doy
+		.saturating_sub(mp.saturating_mul(153).saturating_add(2).saturating_div(5))
+		.saturating_add(1);
+	let m = if mp < 10 {
+		mp.saturating_add(3)
+	} else {
+		mp.saturating_sub(9)
+	};
+	let y = if m <= 2 { y.saturating_add(1) } else { y };
+	(y, m, d)
 }
