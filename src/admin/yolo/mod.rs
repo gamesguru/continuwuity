@@ -142,6 +142,16 @@ pub enum YoloCommand {
 		event_id: OwnedEventId,
 	},
 
+	/// Purge a PDU from the timeline (removes from both timeline and outlier
+	/// tables).
+	///
+	/// Use this to remove rescued PDUs that are causing timeline issues.
+	/// After purging, you should force-set room state and reorder.
+	PurgeTimelinePdu {
+		/// The event ID to purge from the timeline.
+		event_id: OwnedEventId,
+	},
+
 	/// Get the room DAG as a list of PDUs in a range.
 	GetRoomDag {
 		/// Room ID

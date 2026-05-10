@@ -1054,6 +1054,45 @@ pub(super) async fn purge_outlier(&self, event_id: OwnedEventId) -> Result {
 }
 
 #[admin_command]
+pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result {
+	self.bail_restricted()?;
+
+	let in_timeline = self
+		.services
+		.rooms
+		.timeline
+		.non_outlier_pdu_exists(&event_id)
+		.await;
+
+	// Remove from timeline tables (pduid_pdu + eventid_pduid)
+	self.services
+		.rooms
+		.timeline
+		.remove_from_timeline(&event_id)
+		.await;
+
+	// Also remove from outlier tables
+	self.services
+		.rooms
+		.outlier
+		.remove_outlier(&event_id, None)
+		.await;
+
+	if in_timeline {
+		self.write_str(&format!(
+			"Purged {event_id} from timeline and outlier tables. Run force-set-room-state and \
+			 reorder-timeline to rebuild state."
+		))
+		.await
+	} else {
+		self.write_str(&format!(
+			"Event {event_id} was not in the timeline (purged outlier only)."
+		))
+		.await
+	}
+}
+
+#[admin_command]
 pub(super) async fn get_room_dag(
 	&self,
 	room_id: OwnedRoomOrAliasId,
