@@ -2459,6 +2459,7 @@ pub(super) async fn dag_merge_base(
 	event_a: Option<OwnedEventId>,
 	event_b: Option<OwnedEventId>,
 	max_depth: usize,
+	federate: bool,
 ) -> Result {
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
@@ -2467,6 +2468,8 @@ pub(super) async fn dag_merge_base(
 	if server == self.services.globals.server_name() {
 		return Err!("Cannot compare against ourselves.");
 	}
+
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
 	/// Look up a PDU from timeline first, then outlier table.
 	macro_rules! get_pdu_any {
@@ -2479,6 +2482,41 @@ pub(super) async fn dag_merge_base(
 			} else {
 				None
 			}
+		}};
+	}
+
+	// Fetch a PDU from the remote server and store as outlier.
+	macro_rules! fed_fetch {
+		($event_id:expr) => {{
+			let eid: OwnedEventId = $event_id;
+			let result: Option<PduEvent> = async {
+				let response = self
+					.services
+					.sending
+					.send_federation_request(
+						&server,
+						get_event::v1::Request::new(eid.clone(), None),
+					)
+					.await
+					.ok()?;
+				let (validated_id, value) = self
+					.services
+					.server_keys
+					.validate_and_add_event_id(&response.pdu, &room_version)
+					.await
+					.ok()?;
+				let pdu =
+					PduEvent::from_id_val(&validated_id, value.clone(), Some(room_id.as_ref()))
+						.ok()?;
+				self.services.rooms.outlier.add_pdu_outlier(
+					&validated_id,
+					&value,
+					Some(room_id.as_ref()),
+				);
+				Some(pdu)
+			}
+			.await;
+			result
 		}};
 	}
 
@@ -2576,6 +2614,7 @@ pub(super) async fn dag_merge_base(
 	let mut merge_bases: Vec<OwnedEventId> = Vec::new();
 	let mut steps = 0_usize;
 	let mut missing_events = 0_usize;
+	let mut fetched_events = 0_usize;
 
 	while (!queue_a.is_empty() || !queue_b.is_empty()) && steps < max_depth {
 		// Expand one step from A
@@ -2587,7 +2626,15 @@ pub(super) async fn dag_merge_base(
 				// Don't stop — find all merge bases at this depth
 			}
 
-			if let Some(pdu) = get_pdu_any!(&current) {
+			let pdu = match get_pdu_any!(&current) {
+				| Some(p) => Some(p),
+				| None if federate => {
+					fetched_events = fetched_events.saturating_add(1);
+					fed_fetch!(current.clone())
+				},
+				| None => None,
+			};
+			if let Some(pdu) = pdu {
 				for prev in pdu.prev_events() {
 					let prev = prev.to_owned();
 					if !ancestors_a.contains_key(&prev) {
@@ -2611,7 +2658,15 @@ pub(super) async fn dag_merge_base(
 				}
 			}
 
-			if let Some(pdu) = get_pdu_any!(&current) {
+			let pdu = match get_pdu_any!(&current) {
+				| Some(p) => Some(p),
+				| None if federate => {
+					fetched_events = fetched_events.saturating_add(1);
+					fed_fetch!(current.clone())
+				},
+				| None => None,
+			};
+			if let Some(pdu) = pdu {
 				for prev in pdu.prev_events() {
 					let prev = prev.to_owned();
 					if !ancestors_b.contains_key(&prev) {
@@ -2648,11 +2703,12 @@ pub(super) async fn dag_merge_base(
 	}
 
 	self.write_str(&format!(
-		"Walked {} steps, visited {} (A) + {} (B) events, {} missing\n",
+		"Walked {} steps, visited {} (A) + {} (B) events, {} missing, {} fetched\n",
 		steps,
 		ancestors_a.len(),
 		ancestors_b.len(),
 		missing_events,
+		fetched_events,
 	))
 	.await?;
 

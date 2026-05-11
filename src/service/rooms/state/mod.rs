@@ -555,6 +555,14 @@ impl Service {
 			.ignore_err()
 	}
 
+	/// Returns true if the given event_id is a current forward extremity
+	/// (DAG tip) for the room.
+	pub async fn is_forward_extremity(&self, room_id: &RoomId, event_id: &EventId) -> bool {
+		self.get_forward_extremities(room_id)
+			.any(|eid| futures::future::ready(eid == event_id))
+			.await
+	}
+
 	pub async fn set_forward_extremities<'a, I>(
 		&'a self,
 		room_id: &'a RoomId,
