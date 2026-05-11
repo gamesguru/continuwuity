@@ -1,10 +1,7 @@
 use axum::extract::State;
-use conduwuit::{Err, Result, info};
+use conduwuit::{Err, Result};
 use futures::{StreamExt, pin_mut};
-use ruma::{
-	MilliSecondsSinceUnixEpoch,
-	api::{Direction, client::room::get_event_by_timestamp},
-};
+use ruma::{MilliSecondsSinceUnixEpoch, api::client::room::get_event_by_timestamp};
 
 use crate::Ruma;
 
@@ -15,7 +12,8 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_event_by_timestamp::v1::Request>,
 ) -> Result<get_event_by_timestamp::v1::Response> {
-	// Maximum events to scan before giving up. TODO: May belong as a config option.
+	// Maximum events to scan in the timestamp index before giving up.
+	// Bounds worst-case work at O(MAX_SCAN) visibility checks.
 	const MAX_SCAN: usize = 256;
 
 	let room_id = &body.room_id;
@@ -33,29 +31,22 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 		)));
 	}
 
-	// Walk the from target toward destination, checking along way.
-	// First event we find, we take. This is relatively cheap.
+	// Walk the timestamp index starting from the target timestamp in the
+	// requested direction. The first visible event we encounter is the answer.
+	// This is O(1) in the common case (first event is visible) and bounded at
+	// O(MAX_SCAN) in the worst case.
 	let stream = services
 		.rooms
 		.timeline
-		.pdus_by_timestamp(room_id, ts.0.into(), dir)
-		.filter_map(|res| async {
-			match res {
-				| Ok(p) => Some(Ok(p)),
-				| Err(e) if e.is_not_found() => {
-					tracing::debug!("Skipping unresolvable event, ts-index: {e}");
-					None
-				},
-				| Err(e) => Some(Err(e)),
-			}
-		})
-		.take(MAX_SCAN);
+		.pdus_by_timestamp(room_id, ts.0.into(), dir);
 	pin_mut!(stream);
 
-	// Look for first visible event from the timestamp index
-	while let Some(res) = stream.next().await {
-		// If the event is not found, skip it (the question mark is meaningful here)
-		let pdu = res?;
+	let mut scanned = 0_usize;
+	while let Some(Ok(pdu)) = stream.next().await {
+		scanned = scanned.saturating_add(1);
+		if scanned > MAX_SCAN {
+			break;
+		}
 
 		if services
 			.rooms
@@ -63,8 +54,6 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 			.user_can_see_event(body.sender_user(), room_id, &pdu.event_id)
 			.await
 		{
-			// return the nearest event (or our best guess, at least)
-			// the algo is hopefully cheap and not requiring feature flag gating
 			return Ok(get_event_by_timestamp::v1::Response::new(
 				pdu.event_id.clone(),
 				MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
@@ -72,41 +61,5 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 		}
 	}
 
-	// Fallback: timestamp index had no entries (room not backfilled into ts index).
-	// Use the pduid_pdu timeline directly — this always works.
-	info!(
-		%room_id,
-		?ts,
-		?dir,
-		"Timestamp index miss, falling back to timeline scan"
-	);
-
-	let fallback = match dir {
-		| Direction::Forward => {
-			// "Go to beginning" — return the first event in the room
-			let stream = services.rooms.timeline.pdus(room_id, None);
-			pin_mut!(stream);
-			match stream.next().await {
-				| Some(Ok((_count, pdu))) => Some(pdu),
-				| _ => None,
-			}
-		},
-		| Direction::Backward => {
-			// "Go to end" — return the latest event in the room
-			let stream = services.rooms.timeline.pdus_rev(room_id, None);
-			pin_mut!(stream);
-			match stream.next().await {
-				| Some(Ok((_count, pdu))) => Some(pdu),
-				| _ => None,
-			}
-		},
-	};
-
-	match fallback {
-		| Some(pdu) => Ok(get_event_by_timestamp::v1::Response::new(
-			pdu.event_id.clone(),
-			MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
-		)),
-		| None => Err!(Request(NotFound("Unable to navigate to the given timestamp"))),
-	}
+	Err!(Request(NotFound("No visible event found near the given timestamp")))
 }

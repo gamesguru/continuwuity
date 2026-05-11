@@ -51,6 +51,11 @@ impl Data {
 		Ok((count, event))
 	}
 
+	pub(super) async fn clear(&self) {
+		futures::future::join(self.presenceid_presence.clear(), self.userid_presenceid.clear())
+			.await;
+	}
+
 	pub(super) async fn set_presence(
 		&self,
 		user_id: &UserId,
