@@ -532,6 +532,7 @@ pub(crate) async fn force_set_room_state_from_server(
 	overwrite: bool,
 	output: Option<String>,
 	input: Option<String>,
+	dry_run: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -791,6 +792,88 @@ pub(crate) async fn force_set_room_state_from_server(
 		}
 	}
 	info!("Auth chain: {auth_added} added, {auth_existing} existing, {auth_dropped} dropped");
+
+	if dry_run {
+		// Compare remote state against local state without modifying anything
+		let local_state: HashMap<u64, OwnedEventId> = if let Ok(ssh) = self
+			.services
+			.rooms
+			.state
+			.get_room_shortstatehash(&room_id)
+			.await
+		{
+			self.services
+				.rooms
+				.state_accessor
+				.state_full_ids(ssh)
+				.collect()
+				.await
+		} else {
+			HashMap::new()
+		};
+
+		let mut would_add = Vec::new();
+		let mut would_remove = Vec::new();
+		let mut would_replace = Vec::new();
+
+		// Events in remote state but not in local
+		for (ssk, remote_eid) in &state {
+			match local_state.get(ssk) {
+				| None => would_add.push(remote_eid.clone()),
+				| Some(local_eid) if local_eid != remote_eid => {
+					would_replace.push((local_eid.clone(), remote_eid.clone()));
+				},
+				| Some(_) => {}, // Same event, no change
+			}
+		}
+
+		// Events in local state but not in remote
+		for (ssk, local_eid) in &local_state {
+			if !state.contains_key(ssk) {
+				would_remove.push(local_eid.clone());
+			}
+		}
+
+		self.write_str(&format!(
+			"**Dry run** — no changes applied.\n\nRemote state events: {}\nLocal state events: \
+			 {}\nWould add: {}\nWould remove: {}\nWould replace: {}\nValidated: {validated}, \
+			 Dropped: {dropped}\nAuth chain: {auth_added} new, {auth_existing} existing, \
+			 {auth_dropped} dropped",
+			state.len(),
+			local_state.len(),
+			would_add.len(),
+			would_remove.len(),
+			would_replace.len(),
+		))
+		.await?;
+
+		if !would_replace.is_empty() {
+			use std::fmt::Write;
+			let mut details = String::from("\nReplacements:\n");
+			for (old, new) in &would_replace {
+				let _ = writeln!(details, "  {old} → {new}");
+			}
+			self.write_str(&details).await?;
+		}
+
+		if !would_add.is_empty() {
+			let mut details = String::from("\nAdditions:\n");
+			for eid in &would_add {
+				let _ = writeln!(details, "  + {eid}");
+			}
+			self.write_str(&details).await?;
+		}
+
+		if !would_remove.is_empty() {
+			let mut details = String::from("\nRemovals:\n");
+			for eid in &would_remove {
+				let _ = writeln!(details, "  - {eid}");
+			}
+			self.write_str(&details).await?;
+		}
+
+		return Ok(());
+	}
 
 	let new_room_state = if overwrite {
 		info!("Resolving new room state (ABSOLUTE OVERRIDE)");

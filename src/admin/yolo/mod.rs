@@ -355,5 +355,8 @@ pub enum YoloCommand {
 		/// Load state from a previously dumped JSON file instead of federation
 		#[arg(long)]
 		input: Option<String>,
+		/// Show what would change without modifying state
+		#[arg(long)]
+		dry_run: bool,
 	},
 }
