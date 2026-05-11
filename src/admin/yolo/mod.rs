@@ -248,6 +248,9 @@ pub enum YoloCommand {
 		/// for each server.
 		#[arg(long)]
 		conflict: Option<OwnedUserId>,
+		/// Only show counts and stats, omit the full event ID lists.
+		#[arg(long)]
+		summary: bool,
 	},
 
 	/// Heals a room by rescuing local outliers, fetching genuinely missing

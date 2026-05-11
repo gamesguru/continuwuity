@@ -1721,6 +1721,7 @@ pub(super) async fn compare_room_state(
 	servers: Vec<OwnedServerName>,
 	at_event: Option<OwnedEventId>,
 	conflict: Option<OwnedUserId>,
+	summary: bool,
 ) -> Result {
 	use std::fmt::Write;
 
@@ -2026,8 +2027,10 @@ pub(super) async fn compare_room_state(
 		)?;
 	}
 	writeln!(out, "```")?;
-	fmt_list(&mut out, "Missing IDs", &missing_locally)?;
-	fmt_list(&mut out, "Extra IDs", &extra_locally)?;
+	if !summary {
+		fmt_list(&mut out, "Missing IDs", &missing_locally)?;
+		fmt_list(&mut out, "Extra IDs", &extra_locally)?;
+	}
 	self.write_str(&out).await?;
 
 	// If additional servers provided, compare first server against each
@@ -2159,8 +2162,10 @@ pub(super) async fn compare_room_state(
 			if verify_errors > 0 {
 				writeln!(section, "  Skipped (bad sig): {verify_errors}")?;
 			}
-			fmt_list(&mut section, &format!("  IDs only on {server}"), &only_on_first)?;
-			fmt_list(&mut section, &format!("  IDs only on {cmp_server}"), &only_on_cmp)?;
+			if !summary {
+				fmt_list(&mut section, &format!("  IDs only on {server}"), &only_on_first)?;
+				fmt_list(&mut section, &format!("  IDs only on {cmp_server}"), &only_on_cmp)?;
+			}
 			self.write_str(&section).await?;
 		}
 	}
