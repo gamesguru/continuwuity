@@ -1,6 +1,7 @@
 use std::{
 	collections::{BTreeMap, HashMap, HashSet, VecDeque},
 	iter::once,
+	time::{Duration, Instant},
 };
 
 use conduwuit::{
@@ -53,7 +54,21 @@ where
 	}
 
 	let mut amount: u64 = 0;
+	let started = Instant::now();
+	let budget = Duration::from_secs(30);
 	loop {
+		if started.elapsed() > budget {
+			info!(
+				elapsed = ?started.elapsed(),
+				fetched = amount,
+				remaining = todo.len(),
+				"fetch_prev: wall-clock budget exhausted, proceeding with partial results"
+			);
+			for id in todo {
+				graph.insert(id, HashSet::new());
+			}
+			break;
+		}
 		// Fill active_fetches from todo up to concurrency limit and total budget
 		while active_fetches.len() < 16
 			&& !todo.is_empty()
