@@ -1,5 +1,5 @@
 use conduwuit::{
-	Err, Result, debug_warn, implement, matrix::event::gen_event_id_canonical_json, trace,
+	Err, Result, debug, debug_warn, implement, matrix::event::gen_event_id_canonical_json, trace,
 };
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, RoomVersionId, signatures::Verified,
@@ -63,7 +63,21 @@ pub async fn verify_event(
 ) -> Result<Verified> {
 	let room_version = room_version.unwrap_or(&RoomVersionId::V12);
 	let keys = self.get_event_keys(event, room_version).await?;
-	ruma::signatures::verify_event(&keys, event, room_version).map_err(Into::into)
+
+	match ruma::signatures::verify_event(&keys, event, room_version) {
+		| Ok(verified) => Ok(verified),
+		| Err(e) => {
+			// Try libsodium fallback for interop with Synapse/PyNaCl
+			trace!("dalek verification failed, trying libsodium fallback: {e}");
+			match super::verify_libsodium::verify_event_libsodium(event, &keys, room_version) {
+				| Ok(verified) => {
+					debug!("libsodium fallback succeeded where dalek failed");
+					Ok(verified)
+				},
+				| Err(_) => Err(e.into()),
+			}
+		},
+	}
 }
 
 #[implement(super::Service)]

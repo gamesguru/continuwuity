@@ -4,6 +4,7 @@ mod keypair;
 mod request;
 mod sign;
 mod verify;
+mod verify_libsodium;
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -52,6 +53,12 @@ impl crate::Service for Service {
 
 		let (keypair, verify_keys) = keypair::init(args.db)?;
 		debug_assert!(verify_keys.len() == 1, "only one active verify_key supported");
+
+		// Initialize libsodium for ed25519 fallback verification.
+		// SAFETY: sodium_init() is safe to call multiple times and from any
+		// thread. Returns 0 on success, 1 if already initialized, -1 on failure.
+		let sodium_ret = unsafe { libsodium_sys::sodium_init() };
+		debug_assert!(sodium_ret >= 0, "libsodium initialization failed");
 
 		Ok(Arc::new(Self {
 			keypair,
