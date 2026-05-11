@@ -172,6 +172,18 @@ impl Service {
 			}
 		});
 
+		// If max retries exceeded, drop all queued events for this destination
+		let max_attempts = self.server.config.sender_retry_max_attempts;
+		if max_attempts > 0 && tries >= max_attempts {
+			info!(
+				dest = ?dest,
+				tries = tries,
+				"Dropping queued events after {tries} failed attempts"
+			);
+			statuses.remove(&dest);
+			return;
+		}
+
 		// Schedule a delayed retry after the backoff period
 		let base = self.server.config.sender_retry_backoff_base;
 		let max = self.server.config.sender_retry_backoff_limit;

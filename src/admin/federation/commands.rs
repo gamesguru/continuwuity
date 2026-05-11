@@ -153,3 +153,61 @@ pub(super) async fn remote_user_in_rooms(&self, user_id: OwnedUserId) -> Result 
 	self.write_str(&format!("Rooms {user_id} shares with us ({num}):\n```\n{body}\n```",))
 		.await
 }
+
+#[admin_command]
+pub(super) async fn sending_queue(
+	&self,
+	server: Option<OwnedServerName>,
+	clear: bool,
+	all: bool,
+) -> Result {
+	self.bail_restricted()?;
+
+	if clear {
+		if let Some(ref server) = server {
+			self.services.sending.clear_destination_queue(server).await;
+			return self
+				.write_str(&format!("Cleared sending queue for {server}"))
+				.await;
+		}
+		if !all {
+			return Err!(Request(InvalidParam(
+				"Use --all to clear the entire sending queue, or specify a server."
+			)));
+		}
+		self.services.sending.clear_all_federation_queues().await;
+		return self
+			.write_str("Cleared sending queue for all destinations")
+			.await;
+	}
+
+	let destinations = self.services.sending.queued_destinations().await;
+
+	if destinations.is_empty() {
+		return self.write_str("Sending queue is empty.").await;
+	}
+
+	let mut out = String::from("Outbound Sending Queue:\n```\n");
+	let mut total_queued = 0_usize;
+	let mut total_active = 0_usize;
+
+	for (dest, queued, active) in &destinations {
+		if let Some(ref filter) = server {
+			if dest != filter.as_str() {
+				continue;
+			}
+		}
+		total_queued = total_queued.saturating_add(*queued);
+		total_active = total_active.saturating_add(*active);
+		writeln!(out, "{dest:50}  queued={queued:>6}  active={active:>4}")?;
+	}
+
+	writeln!(out, "```")?;
+	writeln!(
+		out,
+		"**Total:** {total_queued} queued, {total_active} active across {} destinations",
+		destinations.len()
+	)?;
+
+	self.write_str(&out).await
+}

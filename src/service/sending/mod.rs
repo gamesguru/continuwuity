@@ -426,6 +426,90 @@ impl Service {
 		let chans = self.channels.len().max(1);
 		hash.overflowing_rem(chans).0
 	}
+
+	/// Returns a list of (destination_display, queued_count, active_count) for
+	/// all destinations that have pending outbound events.
+	pub async fn queued_destinations(&self) -> Vec<(String, usize, usize)> {
+		use std::collections::BTreeMap;
+
+		let mut queued: BTreeMap<String, usize> = BTreeMap::new();
+		let mut active: BTreeMap<String, usize> = BTreeMap::new();
+
+		// Count queued (pending) items
+		let mut stream = self.db.servernameevent_data.raw_keys().boxed();
+		while let Some(Ok(key)) = stream.next().await {
+			let dest_name = key
+				.split(|&b| b == 0xFF)
+				.next()
+				.and_then(|b| std::str::from_utf8(b).ok())
+				.unwrap_or("<unknown>")
+				.to_owned();
+			let count = queued.entry(dest_name).or_default();
+			*count = count.saturating_add(1);
+		}
+
+		// Count active (in-flight) items
+		let mut stream = self.db.servercurrentevent_data.raw_keys().boxed();
+		while let Some(Ok(key)) = stream.next().await {
+			let dest_name = key
+				.split(|&b| b == 0xFF)
+				.next()
+				.and_then(|b| std::str::from_utf8(b).ok())
+				.unwrap_or("<unknown>")
+				.to_owned();
+			let count = active.entry(dest_name).or_default();
+			*count = count.saturating_add(1);
+		}
+
+		// Merge keys
+		let mut all_keys: std::collections::BTreeSet<String> = queued.keys().cloned().collect();
+		all_keys.extend(active.keys().cloned());
+
+		all_keys
+			.into_iter()
+			.map(|k| {
+				let q = queued.get(&k).copied().unwrap_or(0);
+				let a = active.get(&k).copied().unwrap_or(0);
+				(k, q, a)
+			})
+			.collect()
+	}
+
+	/// Clear all queued and active requests for a specific federation server.
+	pub async fn clear_destination_queue(&self, server: &ServerName) {
+		let dest = Destination::Federation(server.to_owned());
+		self.db.delete_all_requests_for(&dest).await;
+		self.db.delete_all_active_requests_for(&dest).await;
+	}
+
+	/// Clear all queued and active requests for ALL federation destinations.
+	pub async fn clear_all_federation_queues(&self) {
+		// Walk the queued table and delete everything
+		let keys: Vec<Vec<u8>> = self
+			.db
+			.servernameevent_data
+			.raw_keys()
+			.boxed()
+			.filter_map(|r| async { r.ok().map(<[u8]>::to_vec) })
+			.collect()
+			.await;
+		for key in &keys {
+			self.db.servernameevent_data.remove(key);
+		}
+
+		// Walk the active table and delete everything
+		let keys: Vec<Vec<u8>> = self
+			.db
+			.servercurrentevent_data
+			.raw_keys()
+			.boxed()
+			.filter_map(|r| async { r.ok().map(<[u8]>::to_vec) })
+			.collect()
+			.await;
+		for key in &keys {
+			self.db.servercurrentevent_data.remove(key);
+		}
+	}
 }
 
 fn num_senders(args: &crate::Args<'_>) -> usize {

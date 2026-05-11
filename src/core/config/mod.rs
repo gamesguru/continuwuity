@@ -557,6 +557,15 @@ pub struct Config {
 	#[serde(default = "default_sender_retry_backoff_limit")]
 	pub sender_retry_backoff_limit: u64,
 
+	/// Maximum number of retry attempts for a failed federation destination
+	/// before its queued events are dropped. This prevents infinite retry
+	/// loops for permanently unreachable or broken servers. Set to 0 to
+	/// disable the limit (retry forever).
+	///
+	/// default: 32
+	#[serde(default = "default_sender_retry_max_attempts")]
+	pub sender_retry_max_attempts: u32,
+
 	/// Appservice URL request connection timeout. Defaults to 35 seconds as
 	/// generally appservices are hosted within the same network.
 	///
@@ -2804,6 +2813,8 @@ fn default_sender_idle_timeout() -> u64 { 180 }
 fn default_sender_retry_backoff_base() -> u64 { 2 }
 
 fn default_sender_retry_backoff_limit() -> u64 { 86400 }
+
+fn default_sender_retry_max_attempts() -> u32 { 32 }
 
 fn default_appservice_timeout() -> u64 { 35 }
 
