@@ -274,11 +274,23 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	// the timeline should always include at least one PDU if the syncing user
-	// joined since the last sync, that being the syncing user's join event. if
-	// it's empty something is wrong.
+	// The timeline should always include at least one PDU if the syncing user
+	// joined since the last sync (their join event). If it's empty, the join
+	// event was likely appended after current_count was captured at sync start
+	// (a race between federation join and sync). Re-fetch without the upper
+	// bound to include it.
+	let mut timeline = timeline;
 	if joined_since_last_sync && timeline.pdus.is_empty() {
-		warn!(%room_id, "timeline for newly joined room is empty");
+		warn!(%room_id, "timeline for newly joined room is empty, retrying without upper bound");
+		timeline = load_timeline(
+			services,
+			sync_context.syncing_user,
+			room_id,
+			sync_context.last_sync_end_count.map(PduCount::Normal),
+			None,
+			DEFAULT_TIMELINE_LIMIT,
+		)
+		.await?;
 	}
 
 	let (summary, device_list_updates) = try_join(
@@ -304,7 +316,7 @@ async fn build_state_and_timeline(
 
 	// the token which may be passed to the messages endpoint to backfill room
 	// history
-	let prev_batch = timeline.pdus.front().map(at!(0));
+	let prev_batch = timeline.prev_batch;
 
 	// note: we always indicate a limited timeline if the syncing user just joined
 	// the room, to indicate to the client that it should request backfill (and to

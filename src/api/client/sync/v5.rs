@@ -417,7 +417,7 @@ where
 
 		let mut timestamp: Option<_> = None;
 		let mut invite_state = None;
-		let (timeline_pdus, limited);
+		let (timeline_pdus, limited, prev_batch);
 		let new_room_id: &RoomId = (*room_id).as_ref();
 		if all_invited_rooms.clone().any(is_equal_to!(new_room_id)) {
 			// TODO: figure out a timestamp we can use for remote invites
@@ -428,9 +428,9 @@ where
 				.await
 				.ok();
 
-			(timeline_pdus, limited) = (VecDeque::new(), true);
+			(timeline_pdus, limited, prev_batch) = (VecDeque::new(), true, None);
 		} else {
-			TimelinePdus { pdus: timeline_pdus, limited } = match load_timeline(
+			TimelinePdus { pdus: timeline_pdus, limited, prev_batch } = match load_timeline(
 				services,
 				sender_user,
 				room_id,
@@ -517,9 +517,8 @@ where
 			continue;
 		}
 
-		let prev_batch = timeline_pdus
-			.front()
-			.map_or(Ok::<_, Error>(None), |(pdu_count, _)| {
+		let prev_batch = prev_batch
+			.map_or(Ok::<_, Error>(None), |pdu_count| {
 				Ok(Some(match pdu_count {
 					| PduCount::Backfilled(_) => {
 						error!("timeline in backfill state?!");
