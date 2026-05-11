@@ -347,8 +347,16 @@ pub enum YoloCommand {
 		/// The event ID of the latest known PDU in the room. Will be found
 		/// automatically if not provided.
 		event_id: Option<OwnedEventId>,
+		/// Skip signature verification AND use absolute override (shorthand
+		/// for --skip-sig-verify --absolute)
 		#[arg(short, long)]
 		overwrite: bool,
+		/// Skip signature verification on incoming PDUs
+		#[arg(long)]
+		skip_sig_verify: bool,
+		/// Use remote state exclusively without merging with local state
+		#[arg(long)]
+		absolute: bool,
 		/// Dump the raw federation state response to a JSON file
 		#[arg(long)]
 		output: Option<String>,

@@ -524,17 +524,24 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 
 #[admin_command]
 #[tracing::instrument(skip(self), level = "info")]
+#[allow(clippy::fn_params_excessive_bools)]
 pub(crate) async fn force_set_room_state_from_server(
 	&self,
 	room_id: OwnedRoomId,
 	server_name: OwnedServerName,
 	at_event: Option<OwnedEventId>,
 	overwrite: bool,
+	skip_sig_verify: bool,
+	absolute: bool,
 	output: Option<String>,
 	input: Option<String>,
 	dry_run: bool,
 ) -> Result {
 	self.bail_restricted()?;
+
+	// --overwrite is shorthand for both flags
+	let skip_sig_verify = skip_sig_verify || overwrite;
+	let absolute = absolute || overwrite;
 
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
@@ -640,11 +647,11 @@ pub(crate) async fn force_set_room_state_from_server(
 		(resp.pdus, resp.auth_chain)
 	};
 
-	info!("Going through room_state response PDUs (overwrite={overwrite})");
+	info!("Going through room_state response PDUs (skip_sig_verify={skip_sig_verify})");
 	let mut validated = 0_usize;
 	let mut dropped = 0_usize;
 	for pdu in &pdus {
-		let result = if overwrite {
+		let result = if skip_sig_verify {
 			// Skip signature validation — admin is explicitly overriding
 			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
 				|(event_id, mut value)| {
@@ -715,7 +722,7 @@ pub(crate) async fn force_set_room_state_from_server(
 	if dropped > 0 {
 		warn!(
 			"{dropped} state PDUs were silently dropped due to signature validation failure. \
-			 Consider re-running with --overwrite to skip validation."
+			 Consider re-running with --skip-sig-verify to skip validation."
 		);
 	}
 
@@ -746,7 +753,7 @@ pub(crate) async fn force_set_room_state_from_server(
 	let mut auth_added = 0_usize;
 	let mut auth_dropped = 0_usize;
 	for pdu in &auth_chain {
-		let result = if overwrite {
+		let result = if skip_sig_verify {
 			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
 				|(event_id, mut value)| {
 					value.insert(
@@ -875,7 +882,7 @@ pub(crate) async fn force_set_room_state_from_server(
 		return Ok(());
 	}
 
-	let new_room_state = if overwrite {
+	let new_room_state = if absolute {
 		info!("Resolving new room state (ABSOLUTE OVERRIDE)");
 		let compressed: conduwuit_service::rooms::state_compressor::CompressedState = self
 			.services

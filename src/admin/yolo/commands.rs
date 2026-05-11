@@ -2228,6 +2228,8 @@ pub(super) async fn heal_room(
 			server,
 			None,
 			nuclear,
+			false,
+			false,
 			None,
 			None,
 			false,
