@@ -243,6 +243,11 @@ pub enum YoloCommand {
 		/// latest local event.
 		#[arg(long)]
 		at_event: Option<OwnedEventId>,
+		/// Drill into a specific user's membership across all servers.
+		/// Shows event ID, timestamp, membership, displayname and avatar
+		/// for each server.
+		#[arg(long)]
+		conflict: Option<OwnedUserId>,
 	},
 
 	/// Heals a room by rescuing local outliers, fetching genuinely missing

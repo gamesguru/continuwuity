@@ -1720,6 +1720,7 @@ pub(super) async fn compare_room_state(
 	room_id: OwnedRoomId,
 	servers: Vec<OwnedServerName>,
 	at_event: Option<OwnedEventId>,
+	conflict: Option<OwnedUserId>,
 ) -> Result {
 	use std::fmt::Write;
 
@@ -1779,6 +1780,14 @@ pub(super) async fn compare_room_state(
 	let mut skipped = 0_usize;
 	let mut remote_joined: HashSet<String> = HashSet::new();
 	let mut remote_invited: HashSet<String> = HashSet::new();
+
+	// Conflict tracking: (server_label, event_id, ts, membership, displayname,
+	// avatar_url)
+	let conflict_key = conflict
+		.as_ref()
+		.map(|u| ("m.room.member".to_owned(), u.to_string()));
+	let mut conflict_entries: Vec<(String, String, u64, String, String, String)> = Vec::new();
+
 	for pdu_raw in &response.pdus {
 		let (event_id, value) = match self
 			.services
@@ -1797,18 +1806,22 @@ pub(super) async fn compare_room_state(
 		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
 		event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
 		if let Some(state_key) = &pdu.state_key {
-			remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+			remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id.clone());
 		}
 
 		if pdu.kind == TimelineEventType::RoomMember {
 			if let Some(state_key) = &pdu.state_key {
 				let content: JsonValue = pdu.get_content_as_value();
-				match content.get("membership").and_then(|v| v.as_str()) {
-					| Some("join") => {
+				let membership = content
+					.get("membership")
+					.and_then(|v| v.as_str())
+					.unwrap_or("unknown");
+				match membership {
+					| "join" => {
 						remote_joined.insert(state_key.to_string());
 						remote_invited.remove(state_key.as_str());
 					},
-					| Some("invite") => {
+					| "invite" => {
 						remote_invited.insert(state_key.to_string());
 						remote_joined.remove(state_key.as_str());
 					},
@@ -1816,6 +1829,30 @@ pub(super) async fn compare_room_state(
 						remote_joined.remove(state_key.as_str());
 						remote_invited.remove(state_key.as_str());
 					},
+				}
+
+				if let Some(ref ck) = conflict_key {
+					if *state_key == ck.1 {
+						let displayname = content
+							.get("displayname")
+							.and_then(|v| v.as_str())
+							.unwrap_or("(none)")
+							.to_owned();
+						let avatar = content
+							.get("avatar_url")
+							.and_then(|v| v.as_str())
+							.unwrap_or("(none)")
+							.to_owned();
+						let ts = u64::from(pdu.origin_server_ts);
+						conflict_entries.push((
+							server.to_string(),
+							event_id.to_string(),
+							ts,
+							membership.to_owned(),
+							displayname,
+							avatar,
+						));
+					}
 				}
 			}
 		}
@@ -1872,16 +1909,44 @@ pub(super) async fn compare_room_state(
 		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
 			let eid = pdu.event_id().to_owned();
 			event_timestamps.insert(eid.clone(), pdu.origin_server_ts().0.into());
-			local_state.insert((event_type.to_string(), state_key.to_string()), eid);
+			local_state.insert((event_type.to_string(), state_key.to_string()), eid.clone());
 
 			if event_type == StateEventType::RoomMember {
 				let content: JsonValue = pdu.get_content_as_value();
-				match content.get("membership").and_then(|v| v.as_str()) {
-					| Some("join") => local_state_joined = local_state_joined.saturating_add(1),
-					| Some("invite") => {
+				let membership = content
+					.get("membership")
+					.and_then(|v| v.as_str())
+					.unwrap_or("unknown");
+				match membership {
+					| "join" => local_state_joined = local_state_joined.saturating_add(1),
+					| "invite" => {
 						local_state_invited = local_state_invited.saturating_add(1);
 					},
 					| _ => {},
+				}
+
+				if let Some(ref ck) = conflict_key {
+					if &*state_key == ck.1.as_str() {
+						let displayname = content
+							.get("displayname")
+							.and_then(|v| v.as_str())
+							.unwrap_or("(none)")
+							.to_owned();
+						let avatar = content
+							.get("avatar_url")
+							.and_then(|v| v.as_str())
+							.unwrap_or("(none)")
+							.to_owned();
+						let ts: u64 = pdu.origin_server_ts().0.into();
+						conflict_entries.push((
+							"local".to_owned(),
+							eid.to_string(),
+							ts,
+							membership.to_owned(),
+							displayname,
+							avatar,
+						));
+					}
 				}
 			}
 		}
@@ -1993,6 +2058,8 @@ pub(super) async fn compare_room_state(
 
 			let mut server_state = HashMap::new();
 			let mut verify_errors = 0_usize;
+			let mut cmp_joined = 0_usize;
+			let mut cmp_invited = 0_usize;
 			for pdu_raw in &response.pdus {
 				let Ok((event_id, value)) = self
 					.services
@@ -2009,7 +2076,49 @@ pub(super) async fn compare_room_state(
 				};
 				event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
 				if let Some(state_key) = &pdu.state_key {
-					server_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+					server_state
+						.insert((pdu.kind.to_string(), state_key.to_string()), event_id.clone());
+
+					if pdu.kind == TimelineEventType::RoomMember {
+						let content: JsonValue = pdu.get_content_as_value();
+						let membership = content
+							.get("membership")
+							.and_then(|v| v.as_str())
+							.unwrap_or("unknown");
+						match membership {
+							| "join" => {
+								cmp_joined = cmp_joined.saturating_add(1);
+							},
+							| "invite" => {
+								cmp_invited = cmp_invited.saturating_add(1);
+							},
+							| _ => {},
+						}
+
+						if let Some(ref ck) = conflict_key {
+							if *state_key == ck.1 {
+								let displayname = content
+									.get("displayname")
+									.and_then(|v| v.as_str())
+									.unwrap_or("(none)")
+									.to_owned();
+								let avatar = content
+									.get("avatar_url")
+									.and_then(|v| v.as_str())
+									.unwrap_or("(none)")
+									.to_owned();
+								let ts = u64::from(pdu.origin_server_ts);
+								conflict_entries.push((
+									cmp_server.to_string(),
+									event_id.to_string(),
+									ts,
+									membership.to_owned(),
+									displayname,
+									avatar,
+								));
+							}
+						}
+					}
 				}
 			}
 
@@ -2043,7 +2152,7 @@ pub(super) async fn compare_room_state(
 
 			let mut section = format!(
 				"\n--- {server} vs {cmp_server}:\n  Only on {server}: {}  Only on {cmp_server}: \
-				 {}\n",
+				 {}\n  {cmp_server} joined: {cmp_joined}, invited: {cmp_invited}\n",
 				only_on_first.len(),
 				only_on_cmp.len()
 			);
@@ -2053,6 +2162,27 @@ pub(super) async fn compare_room_state(
 			fmt_list(&mut section, &format!("  IDs only on {server}"), &only_on_first)?;
 			fmt_list(&mut section, &format!("  IDs only on {cmp_server}"), &only_on_cmp)?;
 			self.write_str(&section).await?;
+		}
+	}
+	// Output conflict summary if requested
+	if let Some(ref user) = conflict {
+		if !conflict_entries.is_empty() {
+			use std::fmt::Write;
+
+			let mut out = format!("\n--- Conflict detail for {user}:\n```\n");
+			for (srv, eid, ts, membership, displayname, avatar) in &conflict_entries {
+				writeln!(out, "{srv}:")?;
+				writeln!(out, "  event:       {eid}")?;
+				writeln!(out, "  timestamp:   {}", format_ts(*ts))?;
+				writeln!(out, "  membership:  {membership}")?;
+				writeln!(out, "  displayname: {displayname}")?;
+				writeln!(out, "  avatar_url:  {avatar}")?;
+			}
+			writeln!(out, "```")?;
+			self.write_str(&out).await?;
+		} else {
+			self.write_str(&format!("\n--- Conflict: {user} not found in any server state\n"))
+				.await?;
 		}
 	}
 
