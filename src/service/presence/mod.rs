@@ -233,9 +233,6 @@ impl Service {
 		self.db.remove_presence(user_id).await;
 	}
 
-	/// Clear all presence records from the database.
-	pub async fn clear_presence(&self) { self.db.clear().await; }
-
 	// Unset online/unavailable presence to offline on startup
 	pub async fn unset_all_presence(&self) {
 		use futures::{StreamExt, stream::FuturesUnordered};
