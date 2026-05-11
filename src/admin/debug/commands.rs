@@ -639,23 +639,6 @@ pub(crate) async fn force_set_room_state_from_server(
 		(resp.pdus, resp.auth_chain)
 	};
 
-	info!("Parsing {} incoming PDUs...", pdus.len());
-	for pdu in &pdus {
-		match self
-			.services
-			.rooms
-			.event_handler
-			.parse_incoming_pdu(pdu)
-			.await
-		{
-			| Ok(t) => t,
-			| Err(e) => {
-				warn!("Could not parse PDU, ignoring: {e}");
-				continue;
-			},
-		};
-	}
-
 	info!("Going through room_state response PDUs (overwrite={overwrite})");
 	let mut validated = 0_usize;
 	let mut dropped = 0_usize;
@@ -760,12 +743,27 @@ pub(crate) async fn force_set_room_state_from_server(
 	info!("Going through auth_chain response");
 	let mut auth_existing = 0_usize;
 	let mut auth_added = 0_usize;
-	for result in auth_chain.iter().map(|pdu| {
-		self.services
-			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
-	}) {
-		let Ok((event_id, value)) = result.await else {
+	let mut auth_dropped = 0_usize;
+	for pdu in &auth_chain {
+		let result = if overwrite {
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
+				|(event_id, mut value)| {
+					value.insert(
+						"event_id".into(),
+						ruma::CanonicalJsonValue::String(event_id.as_str().into()),
+					);
+					(event_id, value)
+				},
+			)
+		} else {
+			self.services
+				.server_keys
+				.validate_and_add_event_id(pdu, &room_version)
+				.await
+		};
+
+		let Ok((event_id, value)) = result else {
+			auth_dropped = auth_dropped.saturating_add(1);
 			continue;
 		};
 
@@ -792,7 +790,7 @@ pub(crate) async fn force_set_room_state_from_server(
 			auth_added = auth_added.saturating_add(1);
 		}
 	}
-	info!("Auth chain: {auth_added} added as outliers, {auth_existing} already in timeline");
+	info!("Auth chain: {auth_added} added, {auth_existing} existing, {auth_dropped} dropped");
 
 	let new_room_state = if overwrite {
 		info!("Resolving new room state (ABSOLUTE OVERRIDE)");
