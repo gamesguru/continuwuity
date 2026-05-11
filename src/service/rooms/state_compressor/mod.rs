@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use conduwuit::{
 	Result, SyncMutex,
 	arrayvec::ArrayVec,
-	at, checked, err, expected, implement, utils,
+	at, checked, err, implement, utils,
 	utils::{bytes, math::usize_from_f64, stream::IterStream},
 };
 use database::Map;
@@ -460,10 +460,10 @@ async fn get_statediff(&self, shortstatehash: ShortStateHash) -> Result<StateDif
 	let mut removed = CompressedState::new();
 
 	let mut i = STRIDE;
-	while let Some(v) = value.get(i..expected!(i + 2 * STRIDE)) {
+	while let Some(v) = value.get(i..i.saturating_add(STRIDE.saturating_mul(2))) {
 		if add_mode && v.starts_with(&0_u64.to_be_bytes()) {
 			add_mode = false;
-			i = expected!(i + STRIDE);
+			i = i.saturating_add(STRIDE);
 			continue;
 		}
 		if add_mode {
@@ -471,7 +471,7 @@ async fn get_statediff(&self, shortstatehash: ShortStateHash) -> Result<StateDif
 		} else {
 			removed.insert(v.try_into()?);
 		}
-		i = expected!(i + 2 * STRIDE);
+		i = i.saturating_add(STRIDE.saturating_mul(2));
 	}
 
 	Ok(StateDiff {

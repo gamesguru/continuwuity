@@ -24,7 +24,7 @@ use ruma::{
 	events::{
 		AnyToDeviceEvent, GlobalAccountDataEventType,
 		ignored_user_list::IgnoredUserListEvent,
-		invite_permission_config::{FilterLevel, InvitePermissionConfigEvent},
+		invite_permission_config::{FilterLevel, InvitePermissionConfigEventContent},
 	},
 	serde::Raw,
 	uint,
@@ -150,6 +150,27 @@ impl Service {
 			})
 	}
 
+	fn glob_match(glob: &str, target: &str) -> bool {
+		let mut regex_str = String::with_capacity(glob.len().saturating_mul(2).saturating_add(2));
+		regex_str.push('^');
+		for c in glob.chars() {
+			match c {
+				| '*' => regex_str.push_str(".*"),
+				| '?' => regex_str.push('.'),
+				| '.' | '+' | '(' | ')' | '|' | '^' | '$' | '[' | ']' | '{' | '}' | '\\' => {
+					regex_str.push('\\');
+					regex_str.push(c);
+				},
+				| _ => regex_str.push(c),
+			}
+		}
+		regex_str.push('$');
+
+		regex::Regex::new(&regex_str)
+			.map(|re| re.is_match(target))
+			.unwrap_or(false)
+	}
+
 	/// Returns the recipient's filter level for an invite from the sender.
 	pub async fn invite_filter_level(
 		&self,
@@ -159,14 +180,110 @@ impl Service {
 		let level = if self.user_is_ignored(sender_user, recipient_user).await {
 			FilterLevel::Ignore
 		} else {
-			self.services
-				.account_data
-				.get_global(recipient_user, GlobalAccountDataEventType::InvitePermissionConfig)
-				.await
-				.map(|config: InvitePermissionConfigEvent| {
-					config.content.user_filter_level(sender_user)
-				})
-				.unwrap_or(FilterLevel::Allow)
+			let mut config_content = None;
+			for kind in
+				["m.invite_permission_config", "org.matrix.msc4155.invite_permission_config"]
+			{
+				if let Ok(raw) = self
+					.services
+					.account_data
+					.get_raw(None, recipient_user, kind)
+					.await
+				{
+					if let Ok(mut json) = raw.deserialized::<serde_json::Value>() {
+						if let Some(content_val) = json.get_mut("content") {
+							// MSC4155: Will ignore null fields
+							if let Some(obj) = content_val.as_object_mut() {
+								obj.retain(|_, v| !v.is_null());
+							}
+
+							if let Ok(parsed) = serde_json::from_value::<
+								InvitePermissionConfigEventContent,
+							>(content_val.clone())
+							{
+								config_content = Some(parsed);
+								break;
+							}
+						}
+					}
+				}
+			}
+
+			if let Some(content) = config_content {
+				if content.enabled {
+					let sender_user_s = sender_user.as_str();
+					let sender_server_s = sender_user.server_name().as_str();
+
+					let allowed_user = content
+						.allowed_users
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user_s));
+					let ignored_user = content
+						.ignored_users
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user_s));
+					let blocked_user = content
+						.blocked_users
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user_s));
+
+					let allowed_server = content
+						.allowed_servers
+						.iter()
+						.any(|a| Self::glob_match(a, sender_server_s));
+					let ignored_server = content
+						.ignored_servers
+						.iter()
+						.any(|a| Self::glob_match(a, sender_server_s));
+					let blocked_server = content
+						.blocked_servers
+						.iter()
+						.any(|a| Self::glob_match(a, sender_server_s));
+
+					let allowlist_is_empty =
+						content.allowed_users.is_empty() && content.allowed_servers.is_empty();
+
+					// MSC4155 Evaluation Order:
+					// 1. allowed_users
+					if allowed_user {
+						return FilterLevel::Allow;
+					}
+					// 2. blocked_users
+					if blocked_user {
+						return FilterLevel::Block;
+					}
+					// 3. ignored_users
+					if ignored_user {
+						return FilterLevel::Ignore;
+					}
+					// 4. allowed_servers
+					if allowed_server {
+						return FilterLevel::Allow;
+					}
+					// 5. blocked_servers
+					if blocked_server {
+						return FilterLevel::Block;
+					}
+					// 6. ignored_servers
+					if ignored_server {
+						return FilterLevel::Ignore;
+					}
+
+					// 7. Strict allowlist fallback:
+					// If the allowlist is not empty and we didn't find a match, the user is
+					// blocked.
+					if !allowlist_is_empty {
+						return FilterLevel::Block;
+					}
+
+					// 8. Default behavior
+					content.user_filter_level(sender_user)
+				} else {
+					FilterLevel::Allow
+				}
+			} else {
+				FilterLevel::Allow
+			}
 		};
 
 		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");
@@ -766,6 +883,8 @@ impl Service {
 
 		if let Some(master_key) = master_key {
 			let (master_key_key, _) = parse_master_key(user_id, master_key)?;
+			let mut master_key_val: serde_json::Value =
+				serde_json::from_str(master_key.json().get()).unwrap();
 
 			info!(
 				target: "cross_signing",
@@ -773,9 +892,15 @@ impl Service {
 				user_id
 			);
 
+			if let Ok(old_key) = self.db.keyid_key.get(&master_key_key).await {
+				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
+					merge_signatures(&mut master_key_val, &old_key);
+				}
+			}
+
 			self.db
 				.keyid_key
-				.insert(&master_key_key, master_key.json().get().as_bytes());
+				.insert(&master_key_key, serde_json::to_vec(&master_key_val).unwrap());
 
 			self.db
 				.userid_masterkeyid
@@ -784,13 +909,15 @@ impl Service {
 
 		// Self-signing key
 		if let Some(self_signing_key) = self_signing_key {
-			let mut self_signing_key_ids = self_signing_key
-				.deserialize()
-				.map_err(|e| err!(Request(InvalidParam("Invalid self signing key: {e:?}"))))?
-				.keys
-				.into_values();
+			let mut self_signing_key_val: serde_json::Value =
+				serde_json::from_str(self_signing_key.json().get()).unwrap();
 
-			let self_signing_key_id = self_signing_key_ids.next().ok_or(Error::BadRequest(
+			let self_signing_key_obj = self_signing_key
+				.deserialize()
+				.map_err(|e| err!(Request(InvalidParam("Invalid self signing key: {e:?}"))))?;
+
+			let mut self_signing_key_ids = self_signing_key_obj.keys.values();
+			let self_signing_key_pub = self_signing_key_ids.next().ok_or(Error::BadRequest(
 				ErrorKind::InvalidParam,
 				"Self signing key contained no key.",
 			))?;
@@ -803,7 +930,7 @@ impl Service {
 			}
 
 			let mut self_signing_key_key = prefix.clone();
-			self_signing_key_key.extend_from_slice(self_signing_key_id.as_bytes());
+			self_signing_key_key.extend_from_slice(self_signing_key_pub.as_bytes());
 
 			info!(
 				target: "cross_signing",
@@ -811,9 +938,16 @@ impl Service {
 				user_id
 			);
 
-			self.db
-				.keyid_key
-				.insert(&self_signing_key_key, self_signing_key.json().get().as_bytes());
+			if let Ok(old_key) = self.db.keyid_key.get(&self_signing_key_key).await {
+				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
+					merge_signatures(&mut self_signing_key_val, &old_key);
+				}
+			}
+
+			self.db.keyid_key.insert(
+				&self_signing_key_key,
+				serde_json::to_vec(&self_signing_key_val).unwrap(),
+			);
 
 			self.db
 				.userid_selfsigningkeyid
@@ -821,8 +955,10 @@ impl Service {
 		}
 
 		if let Some(user_signing_key) = user_signing_key {
-			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
+			let mut user_signing_key_val: serde_json::Value =
+				serde_json::from_str(user_signing_key.json().get()).unwrap();
 
+			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 			let user_signing_key_key = (user_id, &user_signing_key_id);
 
 			info!(
@@ -831,9 +967,16 @@ impl Service {
 				user_id
 			);
 
-			self.db
-				.keyid_key
-				.put_raw(user_signing_key_key, user_signing_key.json().get().as_bytes());
+			if let Ok(old_key) = self.db.keyid_key.qry(&user_signing_key_key).await {
+				if let Ok(old_key) = serde_json::from_slice::<serde_json::Value>(&old_key) {
+					merge_signatures(&mut user_signing_key_val, &old_key);
+				}
+			}
+
+			self.db.keyid_key.put_raw(
+				user_signing_key_key,
+				serde_json::to_vec(&user_signing_key_val).unwrap(),
+			);
 
 			self.db
 				.userid_usersigningkeyid
@@ -889,6 +1032,12 @@ impl Service {
 				err!(Database(info!("signatures in keyid_key for a user is invalid.")))
 			})?
 			.insert(signature.0, signature.1.into());
+
+		info!(
+			target: "cross_signing",
+			"User {} signed key {} of user {}",
+			sender_id, key_id, target_id
+		);
 
 		let key = (target_id, key_id);
 		self.db.keyid_key.put(key, Json(cross_signing_key));
@@ -1549,6 +1698,34 @@ pub fn parse_user_signing_key(user_signing_key: &Raw<CrossSigningKey>) -> Result
 	}
 
 	Ok(user_signing_key_id)
+}
+
+fn merge_signatures(new: &mut serde_json::Value, old: &serde_json::Value) {
+	if let (Some(new_sigs), Some(old_sigs)) = (
+		new.get_mut("signatures").and_then(|v| v.as_object_mut()),
+		old.get("signatures").and_then(|v| v.as_object()),
+	) {
+		for (user, sigs) in old_sigs {
+			if let Some(sigs) = sigs.as_object() {
+				let new_user_sigs = new_sigs
+					.entry(user.clone())
+					.or_insert_with(|| json!({}))
+					.as_object_mut()
+					.expect("signatures for a user must be an object");
+
+				for (key, val) in sigs {
+					if !new_user_sigs.contains_key(key) {
+						info!(
+							target: "cross_signing",
+							"Merging existing signature for user {} key {}",
+							user, key
+						);
+						new_user_sigs.insert(key.clone(), val.clone());
+					}
+				}
+			}
+		}
+	}
 }
 
 /// Ensure that a user only sees signatures from themselves and the target user

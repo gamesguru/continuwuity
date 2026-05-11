@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use conduwuit::{Result, Server, arrayvec::ArrayString, utils::MutexMap};
+use tokio::sync::Semaphore;
 
 use self::{cache::Cache, dns::Resolver};
 use crate::{Dep, client};
@@ -18,6 +19,7 @@ pub struct Service {
 	pub cache: Arc<Cache>,
 	pub resolver: Arc<Resolver>,
 	resolving: Resolving,
+	pub semaphore: Semaphore,
 	services: Services,
 }
 
@@ -38,6 +40,7 @@ impl crate::Service for Service {
 			cache: cache.clone(),
 			resolver: Resolver::build(args.server, cache)?,
 			resolving: MutexMap::new(),
+			semaphore: Semaphore::new(30),
 			services: Services {
 				server: args.server.clone(),
 				client: args.depend::<client::Service>("client"),

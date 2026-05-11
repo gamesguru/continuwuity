@@ -4,10 +4,7 @@ use conduwuit::{
 	Err, Error, Result, debug_warn, err, implement,
 	utils::{content_disposition::make_content_disposition, response::LimitReadExt},
 };
-use http::{
-	StatusCode,
-	header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue},
-};
+use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue};
 use ruma::{
 	Mxc, ServerName, UserId,
 	api::{
@@ -38,7 +35,7 @@ pub async fn fetch_remote_thumbnail(
 		.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
 		.await;
 
-	if let Err(Error::Request(Unrecognized | NotFound, ..)) = &result {
+	if should_fallback_to_unauthenticated(&result, user.is_none()) {
 		return self
 			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
 			.await;
@@ -89,7 +86,7 @@ fn should_fallback_to_unauthenticated(
 			error.status_code().is_server_error()
 				|| matches!(
 					error.status_code(),
-					StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT
+					http::StatusCode::REQUEST_TIMEOUT | http::StatusCode::GATEWAY_TIMEOUT
 				) || matches!(
 				error,
 				Error::Reqwest(_)

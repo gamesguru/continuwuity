@@ -1,4 +1,7 @@
-use std::iter::once;
+use std::{
+	collections::{HashSet, hash_map},
+	time::Instant,
+};
 
 use conduwuit::{Err, PduEvent, RoomVersion};
 use conduwuit_core::{
@@ -7,7 +10,7 @@ use conduwuit_core::{
 		event::Event,
 		pdu::{PduCount, PduId, RawPduId},
 	},
-	utils::{IterStream, ReadyExt},
+	utils::{IterStream, continue_exponential_backoff_secs, stream::WidebandExt},
 	validated, warn,
 };
 use futures::{FutureExt, StreamExt};
@@ -106,31 +109,35 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 		}
 	});
 
-	let canonical_room_alias_server = once(
-		self.services
-			.state_accessor
-			.get_canonical_alias(room_id)
-			.await,
-	)
-	.filter_map(Result::ok)
-	.map(|alias| alias.server_name().to_owned())
-	.stream();
+	let mut seen = HashSet::new();
+	let mut servers = Vec::new();
+	let mut add_server = |server: &ServerName| {
+		if !self.services.globals.server_is_ours(server) && seen.insert(server.to_owned()) {
+			servers.push(server.to_owned());
+		}
+	};
 
-	let mut servers = room_mods
+	for server in room_mods {
+		add_server(server);
+	}
+
+	if let Ok(alias) = self
+		.services
+		.state_accessor
+		.get_canonical_alias(room_id)
+		.await
+	{
+		add_server(alias.server_name());
+	}
+
+	for server in &self.services.server.config.trusted_servers {
+		add_server(server);
+	}
+
+	let mut servers = servers
+		.into_iter()
 		.stream()
-		.map(ToOwned::to_owned)
-		.chain(canonical_room_alias_server)
-		.chain(
-			self.services
-				.server
-				.config
-				.trusted_servers
-				.iter()
-				.map(ToOwned::to_owned)
-				.stream(),
-		)
-		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
-		.filter_map(|server_name| async move {
+		.wide_filter_map(|server_name| async move {
 			self.services
 				.state_cache
 				.server_in_room(&server_name, room_id)
@@ -142,9 +149,24 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 	let mut federated_room = false;
 
 	while let Some(ref backfill_server) = servers.next().await {
+		if let Some((time, tries)) = self
+			.services
+			.globals
+			.bad_server_ratelimiter
+			.read()
+			.get(backfill_server)
+		{
+			// Exponential backoff
+			if continue_exponential_backoff_secs(60 * 2, 60 * 60, time.elapsed(), *tries) {
+				debug!("Backing off from {backfill_server}");
+				continue;
+			}
+		}
+
 		if !self.services.globals.server_is_ours(backfill_server) {
 			federated_room = true;
 		}
+
 		info!("Asking {backfill_server} for backfill in {room_id}");
 		let response = self
 			.services
@@ -158,6 +180,7 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				},
 			)
 			.await;
+
 		match response {
 			| Ok(response) => {
 				for pdu in response.pdus {
@@ -169,6 +192,20 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 			},
 			| Err(e) => {
 				warn!("{backfill_server} failed to provide backfill for room {room_id}: {e}");
+				match self
+					.services
+					.globals
+					.bad_server_ratelimiter
+					.write()
+					.entry(backfill_server.to_owned())
+				{
+					| hash_map::Entry::Vacant(e) => {
+						e.insert((Instant::now(), 1));
+					},
+					| hash_map::Entry::Occupied(mut e) => {
+						*e.get_mut() = (Instant::now(), e.get().1.saturating_add(1));
+					},
+				}
 			},
 		}
 	}
@@ -222,30 +259,35 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 		}
 	});
 
-	let canonical_room_alias_server = once(
-		self.services
-			.state_accessor
-			.get_canonical_alias(room_id)
-			.await,
-	)
-	.filter_map(Result::ok)
-	.map(|alias| alias.server_name().to_owned())
-	.stream();
-	let mut servers = room_mods
+	let mut seen = HashSet::new();
+	let mut servers = Vec::new();
+	let mut add_server = |server: &ServerName| {
+		if !self.services.globals.server_is_ours(server) && seen.insert(server.to_owned()) {
+			servers.push(server.to_owned());
+		}
+	};
+
+	for server in room_mods {
+		add_server(server);
+	}
+
+	if let Ok(alias) = self
+		.services
+		.state_accessor
+		.get_canonical_alias(room_id)
+		.await
+	{
+		add_server(alias.server_name());
+	}
+
+	for server in &self.services.server.config.trusted_servers {
+		add_server(server);
+	}
+
+	let mut servers = servers
+		.into_iter()
 		.stream()
-		.map(ToOwned::to_owned)
-		.chain(canonical_room_alias_server)
-		.chain(
-			self.services
-				.server
-				.config
-				.trusted_servers
-				.iter()
-				.map(ToOwned::to_owned)
-				.stream(),
-		)
-		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
-		.filter_map(|server_name| async move {
+		.wide_filter_map(|server_name| async move {
 			self.services
 				.state_cache
 				.server_in_room(&server_name, room_id)
@@ -255,6 +297,20 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 		.boxed();
 
 	while let Some(ref backfill_server) = servers.next().await {
+		if let Some((time, tries)) = self
+			.services
+			.globals
+			.bad_server_ratelimiter
+			.read()
+			.get(backfill_server)
+		{
+			// Exponential backoff
+			if continue_exponential_backoff_secs(60 * 2, 60 * 60, time.elapsed(), *tries) {
+				debug!("Backing off from {backfill_server}");
+				continue;
+			}
+		}
+
 		info!("Asking {backfill_server} for event {}", event_id);
 		let value = self
 			.services
@@ -283,6 +339,20 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 			},
 			| Err(e) => {
 				warn!("{backfill_server} failed to provide backfill for room {room_id}: {e}");
+				match self
+					.services
+					.globals
+					.bad_server_ratelimiter
+					.write()
+					.entry(backfill_server.to_owned())
+				{
+					| hash_map::Entry::Vacant(e) => {
+						e.insert((Instant::now(), 1));
+					},
+					| hash_map::Entry::Occupied(mut e) => {
+						*e.get_mut() = (Instant::now(), e.get().1.saturating_add(1));
+					},
+				}
 				None
 			},
 		};

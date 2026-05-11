@@ -18,11 +18,14 @@ use conduwuit::{
 	},
 	warn,
 };
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt, future::ready};
 use lettre::message::Mailbox;
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	RoomVersionId, api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
+	OwnedUserId, RoomId, RoomVersionId,
+	api::federation::event::get_room_state,
+	events::{AnyStateEvent, StateEventType, TimelineEventType},
+	serde::Raw,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -88,6 +91,249 @@ pub(super) async fn parse_pdu(&self) -> Result {
 		},
 	}
 	.await
+}
+
+#[admin_command]
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
+	let pdu_json = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu_json(&event_id)
+		.await
+		.map_err(|_| err!("PDU not found in database."))?;
+
+	let pdu: PduEvent = serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
+	let room_id = pdu
+		.room_id()
+		.ok_or_else(|| err!("PDU has no room_id."))?
+		.to_owned();
+
+	let create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.map_err(|_| err!("Failed to find create event for room."))?;
+
+	let origin = pdu
+		.origin
+		.clone()
+		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+	self.services
+		.rooms
+		.event_handler
+		.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id)
+		.await?;
+
+	self.write_str("Successfully rescued PDU.").await
+}
+
+#[admin_command]
+pub(super) async fn list_outliers(
+	&self,
+	room: Option<OwnedRoomOrAliasId>,
+	sender: Option<OwnedUserId>,
+	limit: Option<usize>,
+) -> Result {
+	let limit = limit.unwrap_or(100);
+
+	let room_id = if let Some(room) = room {
+		Some(self.services.rooms.alias.resolve(&room).await?)
+	} else {
+		None
+	};
+
+	let mut outliers: Vec<(OwnedEventId, PduEvent)> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| {
+			let room_match = room_id
+				.as_ref()
+				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
+			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+			ready(room_match && sender_match)
+		})
+		.collect()
+		.await;
+
+	// Sort by origin_server_ts
+	outliers.sort_by_key(|(_, pdu)| pdu.origin_server_ts);
+
+	let mut count = 0_usize;
+	let mut body = String::new();
+	for (event_id, pdu) in outliers {
+		if count >= limit {
+			writeln!(body, "--- Stopped after {limit} entries ---")?;
+			break;
+		}
+
+		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
+		let sender = pdu.sender();
+		let kind = pdu.kind.to_string();
+		let ts = pdu.origin_server_ts;
+		writeln!(
+			body,
+			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: {kind}"
+		)?;
+		count = count.saturating_add(1);
+	}
+
+	if body.is_empty() {
+		return Err!("No outliers found.");
+	}
+
+	self.write_str(&format!("Outliers:\n```\n{body}\n```"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn purge_outliers(
+	&self,
+	room: Option<OwnedRoomOrAliasId>,
+	sender: Option<OwnedUserId>,
+	all: bool,
+) -> Result {
+	if room.is_none() && sender.is_none() && !all {
+		return Err!("You must specify a room, a sender, or use --all to purge outliers.");
+	}
+
+	let room_id = if let Some(room) = room {
+		Some(self.services.rooms.alias.resolve(&room).await?)
+	} else {
+		None
+	};
+
+	let outliers: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| {
+			let room_match = room_id
+				.as_ref()
+				.is_none_or(|r| pdu.room_id().is_some_and(|room| room == r));
+			let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
+			ready(room_match && sender_match)
+		})
+		.map(|(event_id, _)| event_id)
+		.collect()
+		.await;
+
+	let count = outliers.len();
+	for event_id in outliers {
+		self.services.rooms.outlier.remove_outlier(&event_id);
+	}
+
+	self.write_str(&format!("Purged {count} outliers.")).await
+}
+
+#[admin_command]
+pub(super) async fn view_extremities(&self, room: OwnedRoomOrAliasId) -> Result {
+	let room_id = self.services.rooms.alias.resolve(&room).await?;
+	let extremities: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let num = extremities.len();
+	let mut body = String::new();
+	for event_id in extremities {
+		let pdu = self.services.rooms.timeline.get_pdu(&event_id).await;
+		match pdu {
+			| Ok(pdu) => {
+				let ts = pdu.origin_server_ts;
+				let sender = pdu.sender();
+				writeln!(body, "{event_id}\tTS: {ts}\tSender: {sender}")?;
+			},
+			| Err(_) => {
+				writeln!(body, "{event_id}\tERROR: PDU not found in timeline")?;
+			},
+		}
+	}
+
+	self.write_str(&format!("Room {room_id} has {num} extremities:\n```\n{body}\n```"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn rescue_room(&self, room_id: OwnedRoomId) -> Result {
+	let mut outliers: Vec<PduEvent> = self
+		.services
+		.rooms
+		.outlier
+		.stream()
+		.filter(|(_, pdu)| ready(pdu.room_id().is_some_and(|r| r == room_id)))
+		.map(|(_, pdu)| pdu)
+		.collect()
+		.await;
+
+	// Sort by origin_server_ts to handle them in order
+	outliers.sort_by_key(|pdu| pdu.origin_server_ts);
+
+	// Find the create event first to use as the foundation
+	let mut create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.ok();
+
+	// If it's still missing, see if it's in our outlier list
+	if create_event.is_none() {
+		create_event = outliers
+			.iter()
+			.find(|pdu| pdu.kind == TimelineEventType::RoomCreate)
+			.cloned();
+	}
+
+	let create_event =
+		create_event.ok_or_else(|| err!("Failed to find create event for room."))?;
+
+	let mut count = 0_usize;
+	for pdu in outliers {
+		let event_id = pdu.event_id().to_owned();
+		let pdu_json = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_json(&event_id)
+			.await
+			.map_err(|_| err!("PDU not found in database."))?;
+
+		let origin = pdu
+			.origin
+			.clone()
+			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+		if self
+			.services
+			.rooms
+			.event_handler
+			.upgrade_outlier_to_timeline_pdu(pdu, pdu_json, &create_event, &origin, &room_id)
+			.await
+			.is_ok()
+		{
+			count = count.saturating_add(1);
+		}
+
+		// Yield every 10 events to prevent blocking the executor too long
+		if count.is_multiple_of(10) {
+			tokio::task::yield_now().await;
+		}
+	}
+
+	self.write_str(&format!("Rescued {count} PDUs in room {room_id}."))
+		.await
 }
 
 #[admin_command]
@@ -661,6 +907,161 @@ pub(super) async fn force_set_room_state_from_server(
 
 	self.write_str("Successfully forced the room state from the requested remote server.")
 		.await
+}
+
+#[admin_command]
+pub(super) async fn compare_room_state(
+	&self,
+	room_id: OwnedRoomId,
+	server_name: OwnedServerName,
+) -> Result {
+	self.bail_restricted()?;
+
+	if !self
+		.services
+		.rooms
+		.state_cache
+		.server_in_room(&self.services.server.name, &room_id)
+		.await
+	{
+		return Err!("We are not participating in the room / we don't know about the room ID.");
+	}
+
+	let local_state: HashMap<_, _> = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_full_pdus(&room_id)
+		.map_ok(|event| {
+			(
+				(event.kind().to_string().into(), event.state_key().map(ToOwned::to_owned)),
+				event.event_id().to_owned(),
+			)
+		})
+		.try_collect()
+		.await?;
+
+	let remote_state_response = self
+		.services
+		.sending
+		.send_federation_request(&server_name, get_room_state::v1::Request {
+			room_id: room_id.clone(),
+			event_id: self
+				.services
+				.rooms
+				.timeline
+				.latest_pdu_in_room(&room_id)
+				.await
+				.map_err(|_| err!(Database("Failed to find the latest PDU in database")))?
+				.event_id()
+				.to_owned(),
+		})
+		.await?;
+
+	let mut remote_state = HashMap::new();
+	for pdu in remote_state_response.pdus {
+		if let Ok(event) = serde_json::from_str::<CanonicalJsonObject>(pdu.get()) {
+			if let (Some(kind), Some(state_key), Some(event_id)) = (
+				event.get("type").and_then(|v| v.as_str()),
+				event.get("state_key").and_then(|v| v.as_str()),
+				event.get("event_id").and_then(|v| v.as_str()),
+			) {
+				if let Ok(parsed_id) = OwnedEventId::parse(event_id) {
+					remote_state.insert(
+						(TimelineEventType::from(kind), Some(state_key.to_owned())),
+						parsed_id,
+					);
+				}
+			}
+		}
+	}
+
+	let mut differences = String::new();
+	for (key, local_event_id) in &local_state {
+		match remote_state.get(key) {
+			| Some(remote_event_id) =>
+				if local_event_id != remote_event_id {
+					writeln!(
+						&mut differences,
+						"Mismatch for {key:?}: local={local_event_id}, remote={remote_event_id}"
+					)?;
+				},
+			| None => {
+				writeln!(&mut differences, "Local only: {key:?} ({local_event_id})")?;
+			},
+		}
+	}
+
+	for (key, remote_event_id) in &remote_state {
+		if !local_state.contains_key(key) {
+			writeln!(&mut differences, "Remote only: {key:?} ({remote_event_id})")?;
+		}
+	}
+
+	if differences.is_empty() {
+		self.write_str("Room state matches the remote server perfectly.")
+			.await
+	} else {
+		self.write_str(&format!("Room state differences:\n```\n{differences}\n```"))
+			.await
+	}
+}
+
+#[admin_command]
+pub(super) async fn repair_dag(&self, room_id: OwnedRoomId) -> Result {
+	self.bail_restricted()?;
+
+	let mut extremities = std::collections::HashSet::new();
+
+	let mut it = Box::pin(self.services.rooms.timeline.pdus_rev(&room_id, None));
+	let mut all_events = Vec::new();
+	let mut count = 0_usize;
+	while let Some(Ok((_, pdu))) = it.next().await {
+		all_events.push(pdu.event_id().to_owned());
+		count = count.saturating_add(1);
+		if count >= 200 {
+			break;
+		}
+	}
+
+	let mut has_next = std::collections::HashSet::new();
+	let mut it2 = Box::pin(self.services.rooms.timeline.pdus_rev(&room_id, None));
+	let mut count2 = 0_usize;
+	while let Some(Ok((_, pdu))) = it2.next().await {
+		for prev in &pdu.prev_events {
+			has_next.insert(prev.to_owned());
+		}
+		count2 = count2.saturating_add(1);
+		if count2 >= 200 {
+			break;
+		}
+	}
+
+	for ev in &all_events {
+		if !has_next.contains(ev) {
+			extremities.insert(ev.clone());
+		}
+	}
+
+	if extremities.is_empty() {
+		if let Some(ev) = all_events.first() {
+			extremities.insert(ev.clone());
+		}
+	}
+
+	let state_lock = self.services.rooms.state.mutex.lock(&*room_id).await;
+
+	self.services
+		.rooms
+		.state
+		.set_forward_extremities(&room_id, extremities.iter().map(|id| &**id), &state_lock)
+		.await;
+
+	self.write_str(&format!(
+		"Successfully recalculated forward extremities. Found {} new extremities.",
+		extremities.len()
+	))
+	.await
 }
 
 #[admin_command]

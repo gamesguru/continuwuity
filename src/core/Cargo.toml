@@ -45,9 +45,9 @@ jemalloc_stats = [
 perf_measurements = []
 release_max_log_level = [
 	"tracing/max_level_trace",
-	"tracing/release_max_level_info",
+	"tracing/release_max_level_debug",
 	"log/max_level_trace",
-	"log/release_max_level_info",
+	"log/release_max_level_debug",
 ]
 sentry_telemetry = []
 tokio_metrics = ["dep:tokio-metrics"]
@@ -68,6 +68,7 @@ chrono.workspace = true
 clap.workspace = true
 conduwuit-macros.workspace = true
 conduwuit-build-metadata.workspace = true
+
 const-str.workspace = true
 core_affinity.workspace = true
 ctor.workspace = true

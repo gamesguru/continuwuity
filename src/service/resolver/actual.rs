@@ -42,10 +42,12 @@ impl super::Service {
 			return Ok((result, true));
 		}
 
-		let _dedup = self.resolving.lock(server_name.as_str());
+		let _dedup = self.resolving.lock(server_name.as_str()).await;
 		if let Ok(result) = self.cache.get_destination(server_name).await {
 			return Ok((result, true));
 		}
+
+		let _permit = self.semaphore.acquire().await;
 
 		self.resolve_actual_dest(server_name, true)
 			.inspect_ok(|result| self.cache.set_destination(server_name, result))

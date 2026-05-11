@@ -47,7 +47,8 @@ pub(crate) async fn set_read_marker_route(
 		services
 			.rooms
 			.user
-			.reset_notification_counts(sender_user, &body.room_id);
+			.reset_notification_counts(sender_user, &body.room_id)
+			.await;
 	}
 
 	// ping presence
@@ -135,7 +136,8 @@ pub(crate) async fn create_receipt_route(
 		services
 			.rooms
 			.user
-			.reset_notification_counts(sender_user, &body.room_id);
+			.reset_notification_counts(sender_user, &body.room_id)
+			.await;
 	}
 
 	// ping presence

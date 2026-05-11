@@ -5,30 +5,28 @@ use conduwuit::{
 	matrix::{event::gen_event_id_canonical_json, pdu::PduBuilder},
 	warn,
 };
+use conduwuit_service::Services;
 use futures::FutureExt;
 use ruma::{
-	RoomId, UserId,
 	api::{client::membership::invite_user, federation::membership::create_invite},
 	events::{
 		invite_permission_config::FilterLevel,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
 };
-use service::Services;
 
-use super::banned_room_check;
-use crate::Ruma;
+use crate::{Ruma, client::membership::banned_room_check};
 
-/// # `POST /_matrix/client/r0/rooms/{roomId}/invite`
+/// # `POST /_matrix/client/v3/rooms/{roomId}/invite`
 ///
-/// Tries to send an invite event into the room.
-#[tracing::instrument(skip_all, fields(%client), name = "invite", level = "info")]
+/// Invites a new user to this room.
 pub(crate) async fn invite_user_route(
 	State(services): State<crate::State>,
-	ClientIp(client): ClientIp,
+	ClientIp(client_ip): ClientIp,
 	body: Ruma<invite_user::v3::Request>,
 ) -> Result<invite_user::v3::Response> {
 	let sender_user = body.sender_user();
+
 	if services.users.is_suspended(sender_user).await? {
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
 	}
@@ -41,12 +39,18 @@ pub(crate) async fn invite_user_route(
 		return Err!(Request(Forbidden("Invites are not allowed on this server.")));
 	}
 
+	if let Some(appservice) = &body.appservice_info {
+		if !appservice.is_user_match(sender_user) {
+			return Err!(Request(Forbidden("User is not in your namespace.")));
+		}
+	}
+
 	banned_room_check(
 		&services,
 		sender_user,
 		Some(&body.room_id),
 		body.room_id.server_name(),
-		client,
+		client_ip,
 	)
 	.await?;
 
@@ -57,10 +61,14 @@ pub(crate) async fn invite_user_route(
 				.invite_filter_level(sender_user, recipient_user)
 				.await;
 
-			if matches!(recipient_filter_level, FilterLevel::Block) {
-				return Err!(Request(InviteBlocked(
-					"{recipient_user} has blocked invites from you."
-				)));
+			match recipient_filter_level {
+				| FilterLevel::Block => {
+					return Err!(Request(Forbidden(
+						"{recipient_user} has blocked invites from you."
+					)));
+				},
+				| FilterLevel::Ignore => return Ok(invite_user::v3::Response {}),
+				| FilterLevel::Allow => {},
 			}
 
 			if let Ok(target_user_membership) = services
@@ -87,26 +95,25 @@ pub(crate) async fn invite_user_route(
 
 			Ok(invite_user::v3::Response {})
 		},
-		| _ => {
-			Err!(Request(NotFound("User not found.")))
-		},
+		| _ => Err!(Request(NotFound("User not found."))),
 	}
 }
 
+#[tracing::instrument(skip_all, level = "debug")]
 pub(crate) async fn invite_helper(
 	services: &Services,
-	sender_user: &UserId,
-	recipient_user: &UserId,
-	room_id: &RoomId,
+	sender_user: &ruma::UserId,
+	recipient_user: &ruma::UserId,
+	room_id: &ruma::RoomId,
 	reason: Option<String>,
 	is_direct: bool,
-) -> Result {
-	if !services.users.is_admin(sender_user).await && services.config.block_non_admin_invites {
+) -> Result<()> {
+	if services.config.block_non_admin_invites && !services.users.is_admin(sender_user).await {
 		info!(
-			"User {sender_user} is not an admin and attempted to send an invite to room \
+			"User {sender_user} is not an admin and attempted to send an invite to room
 			 {room_id}"
 		);
-		return Err!(Request(Forbidden("Invites are not allowed on this server.")));
+		return Err!(Request(Forbidden("Invites are not allowed for non-admin users.")));
 	}
 
 	if let Err(e) = services
@@ -192,10 +199,11 @@ pub(crate) async fn invite_helper(
 			.event_handler
 			.handle_incoming_pdu(recipient_user.server_name(), room_id, &event_id, value, true)
 			.boxed()
-			.await?
-			.ok_or_else(|| {
-				err!(Request(InvalidParam("Could not accept incoming PDU as timeline event.")))
-			})?;
+			.await?;
+
+		let pdu_id = pdu_id.ok_or_else(|| {
+			err!(Request(InvalidParam("Could not accept incoming PDU as timeline event.")))
+		})?;
 
 		return services.sending.send_pdu_room(room_id, &pdu_id).await;
 	}

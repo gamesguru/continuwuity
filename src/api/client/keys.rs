@@ -173,7 +173,6 @@ pub(crate) async fn upload_signing_keys_route(
 	body: Ruma<upload_signing_keys::v3::Request>,
 ) -> Result<upload_signing_keys::v3::Response> {
 	let (sender_user, sender_device) = body.sender();
-
 	info!(
 		target: "cross_signing",
 		"Processing /keys/device_signing/upload request from {}/{}",

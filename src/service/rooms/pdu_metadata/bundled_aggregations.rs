@@ -129,7 +129,7 @@ impl super::Service {
 		original_event: &PduEvent,
 		replacement_events: &[&'a PdusIterItem],
 	) -> Result<Option<&'a PduEvent>> {
-		let room_id = original_event
+		let _room_id = original_event
 			.room_id_or_hash()
 			.ok_or_else(|| err!(Database("Event has no room_id")))?;
 		// Filter valid replacements and find the maximum in a single pass
@@ -156,13 +156,15 @@ impl super::Service {
 				},
 			};
 			if let Some(pdu) = next {
-				if self
-					.services
-					.state_accessor
-					.user_can_see_event(user_id, &room_id, pdu.event_id())
-					.await
-				{
-					result = Some(pdu);
+				if let Some(room_id) = pdu.room_id_or_hash() {
+					if self
+						.services
+						.state_accessor
+						.user_can_see_event(user_id, &room_id, pdu.event_id())
+						.await
+					{
+						result = Some(pdu);
+					}
 				}
 			}
 		}

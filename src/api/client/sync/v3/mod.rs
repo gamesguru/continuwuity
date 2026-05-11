@@ -47,7 +47,7 @@ use ruma::{
 };
 use service::rooms::lazy_loading::{self, MemberSet, Options as _};
 
-use super::{load_timeline, share_encrypted_room};
+use super::{load_timeline, shares_a_room};
 use crate::{
 	Ruma, RumaResponse,
 	client::{
@@ -320,7 +320,7 @@ pub(crate) async fn build_sync_events(
 				| Ok(Some((room, state_after))) => Some((room_id, room, state_after)),
 				| Ok(None) => None,
 				| Err(err) => {
-					warn!(?err, %room_id, "error loading joined room");
+					warn!(?err, %room_id, "error loading left room");
 					None
 				},
 			}

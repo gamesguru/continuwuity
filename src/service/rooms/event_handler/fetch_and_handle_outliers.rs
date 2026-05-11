@@ -4,8 +4,9 @@ use std::{
 };
 
 use conduwuit::{
-	Event, PduEvent, debug, debug_warn, implement, matrix::event::gen_event_id_canonical_json,
-	trace, utils::continue_exponential_backoff_secs, warn,
+	Event, PduEvent, debug, debug_warn, implement, info,
+	matrix::event::gen_event_id_canonical_json, trace, utils::continue_exponential_backoff_secs,
+	warn,
 };
 use ruma::{
 	CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
@@ -222,7 +223,7 @@ where
 						pdus.push((pdu, Some(json)));
 					},
 				| Err(e) => {
-					warn!("Authentication of event {next_id} failed: {e:?}");
+					info!("Authentication of event {next_id} failed: {e:?}");
 					back_off(next_id);
 				},
 			}

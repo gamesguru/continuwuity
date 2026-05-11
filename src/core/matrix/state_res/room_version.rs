@@ -121,6 +121,7 @@ impl RoomVersion {
 		..Self::V10
 	};
 	pub const V12: Self = Self {
+		state_res: StateResolutionVersion::V2_1,
 		explicitly_privilege_room_creators: true,
 		room_ids_as_hashes: true,
 		..Self::V11

@@ -26,6 +26,7 @@ use ruma::{
 	},
 	push::{Action, Ruleset, Tweak},
 };
+use serde_json::value::to_raw_value;
 
 use super::{ExtractBody, ExtractRelatesTo, ExtractRelatesToEventId, RoomMutexGuard};
 use crate::{appservice::NamespaceRegex, rooms::state_compressor::CompressedState};
@@ -145,23 +146,28 @@ where
 					.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
 					.await
 				{
+					let mut content_obj =
+						utils::to_canonical_object(prev_state.get_content_as_value())
+							.expect("Failed to convert prev_state to canonical JSON");
+
+					if let Some(is_direct) = prev_state.get_unsigned_as_value().get("is_direct") {
+						if let Ok(canon_val) =
+							serde_json::from_value::<CanonicalJsonValue>(is_direct.clone())
+						{
+							content_obj.insert("is_direct".to_owned(), canon_val);
+						}
+					}
+
 					unsigned.insert(
 						"prev_content".to_owned(),
-						CanonicalJsonValue::Object(
-							utils::to_canonical_object(prev_state.get_content_as_value())
-								.map_err(|e| {
-									err!(Database(error!(
-										"Failed to convert prev_state to canonical JSON: {e}",
-									)))
-								})?,
-						),
+						CanonicalJsonValue::Object(content_obj),
 					);
 					unsigned.insert(
-						String::from("prev_sender"),
+						"prev_sender".to_owned(),
 						CanonicalJsonValue::String(prev_state.sender().to_string()),
 					);
 					unsigned.insert(
-						String::from("replaces_state"),
+						"replaces_state".to_owned(),
 						CanonicalJsonValue::String(prev_state.event_id().to_string()),
 					);
 				}
@@ -194,13 +200,29 @@ where
 
 	self.services
 		.user
-		.reset_notification_counts(pdu.sender(), room_id);
+		.reset_notification_counts(pdu.sender(), room_id)
+		.await;
 
 	let count2 = PduCount::Normal(self.services.globals.next_count().unwrap());
 	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: count2 }.into();
 
 	// Insert pdu
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
+
+	// Update cached room state for this event type+key
+	if let Some(state_key) = pdu.state_key() {
+		let mut pdu = pdu.clone();
+		if let Some(unsigned) = pdu_json.get("unsigned") {
+			pdu.unsigned = Some(to_raw_value(unsigned)?);
+		}
+
+		self.services.state_accessor.update_room_state(
+			room_id,
+			&pdu.kind().to_string().into(),
+			state_key,
+			pdu,
+		);
+	}
 
 	drop(insert_lock);
 
@@ -279,6 +301,7 @@ where
 			highlights.push(user.clone());
 		}
 
+		// TODO: replace with future
 		self.services
 			.pusher
 			.get_pushkeys(user)
@@ -294,8 +317,10 @@ where
 			.await;
 	}
 
-	self.db
-		.increment_notification_counts(room_id, notifies, highlights);
+	self.services
+		.user
+		.increment_notification_counts(room_id, notifies, highlights)
+		.await;
 
 	match *pdu.kind() {
 		| TimelineEventType::RoomRedaction => {

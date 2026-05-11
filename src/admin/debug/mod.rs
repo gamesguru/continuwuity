@@ -3,7 +3,7 @@ pub(crate) mod tester;
 
 use clap::Subcommand;
 use conduwuit::Result;
-use ruma::{OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName};
+use ruma::{OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId};
 use service::rooms::short::{ShortEventId, ShortRoomId};
 
 use self::tester::TesterCommand;
@@ -36,6 +36,56 @@ pub enum DebugCommand {
 	GetPdu {
 		/// An event ID (a $ followed by the base64 reference hash)
 		event_id: OwnedEventId,
+	},
+
+	/// Attempts to "rescue" an outlier PDU by upgrading it to a timeline event.
+	///
+	/// This will perform all necessary auth checks and state resolution.
+	RescuePdu {
+		/// An event ID (a $ followed by the base64 reference hash)
+		event_id: OwnedEventId,
+	},
+
+	/// List all outlier PDUs in our database.
+	ListOutliers {
+		/// Filter outliers to a specific room
+		#[arg(short, long)]
+		room_id: Option<OwnedRoomOrAliasId>,
+
+		/// Filter outliers to a specific sender
+		#[arg(short, long)]
+		sender: Option<OwnedUserId>,
+
+		/// Limit the number of outliers listed.
+		#[arg(short, long)]
+		limit: Option<usize>,
+	},
+
+	/// Purge all outlier PDUs matching the filters.
+	PurgeOutliers {
+		/// Filter outliers to a specific room
+		#[arg(short, long)]
+		room_id: Option<OwnedRoomOrAliasId>,
+
+		/// Filter outliers to a specific sender
+		#[arg(short, long)]
+		sender: Option<OwnedUserId>,
+
+		/// Purge ALL outliers in the database.
+		#[arg(long)]
+		all: bool,
+	},
+
+	/// View the current forward extremities (timeline tips) of a room.
+	ViewExtremities {
+		/// The room ID or alias.
+		room: OwnedRoomOrAliasId,
+	},
+
+	/// Attempts to "rescue" all outlier PDUs in a room.
+	RescueRoom {
+		/// The room ID.
+		room_id: OwnedRoomId,
 	},
 
 	/// Retrieve and print a PDU by PduId from the Continuwuity database
@@ -174,6 +224,21 @@ pub enum DebugCommand {
 		/// The event ID of the latest known PDU in the room. Will be found
 		/// automatically if not provided.
 		event_id: Option<OwnedEventId>,
+	},
+
+	/// Compares the room state of our local copy of the specified
+	/// room, with the copy the specified remote server says.
+	CompareRoomState {
+		/// The impacted room ID
+		room_id: OwnedRoomId,
+		/// The server we will use to query the room state for
+		server_name: OwnedServerName,
+	},
+
+	/// Recalculates the forward extremities of a room.
+	RepairDag {
+		/// The impacted room ID
+		room_id: OwnedRoomId,
 	},
 
 	/// Runs a server name through Continuwuity's true destination resolution

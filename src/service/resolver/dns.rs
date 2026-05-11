@@ -51,6 +51,7 @@ impl Resolver {
 		}
 
 		opts.cache_size = config.dns_cache_entries as usize;
+
 		opts.preserve_intermediates = true;
 		opts.negative_min_ttl = Some(Duration::from_secs(config.dns_min_ttl_nxdomain));
 		opts.negative_max_ttl = Some(Duration::from_secs(60 * 60 * 24 * 30));
@@ -59,7 +60,7 @@ impl Resolver {
 		opts.timeout = Duration::from_secs(config.dns_timeout);
 		opts.attempts = config.dns_attempts as usize;
 		opts.try_tcp_on_error = config.dns_tcp_fallback;
-		opts.num_concurrent_reqs = 3;
+		opts.num_concurrent_reqs = 2;
 		opts.edns0 = true;
 		opts.case_randomization = true;
 		opts.ip_strategy = match config.ip_lookup_strategy {

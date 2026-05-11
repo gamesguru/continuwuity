@@ -3,9 +3,8 @@ mod tests;
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Result, err,
+	Err, Result, RoomVersion, err,
 	matrix::{Event, pdu::PduBuilder},
-	utils::BoolExt,
 };
 use conduwuit_service::Services;
 use futures::{FutureExt, TryStreamExt};
@@ -131,9 +130,7 @@ pub(crate) async fn get_state_events_for_key_route(
 		.user_can_see_state_events(sender_user, &body.room_id)
 		.await
 	{
-		return Err!(Request(NotFound(debug_warn!(
-			"You don't have permission to view the room state."
-		))));
+		return Err!(Request(Forbidden("You don't have permission to view the room state.")));
 	}
 
 	let event = services
@@ -149,16 +146,55 @@ pub(crate) async fn get_state_events_for_key_route(
 			))))
 		})?;
 
+	let mut event_content = event.get_content_as_value();
+
+	// Inject creators into power levels for RV11+
+	if body.event_type == StateEventType::RoomPowerLevels && body.state_key.is_empty() {
+		let room_version_id = services.rooms.state.get_room_version(&body.room_id).await?;
+		let room_version = RoomVersion::new(&room_version_id)?;
+
+		if room_version.explicitly_privilege_room_creators {
+			if let Ok(room_create) = services
+				.rooms
+				.state_accessor
+				.room_state_get(&body.room_id, &StateEventType::RoomCreate, "")
+				.await
+			{
+				let create_content: conduwuit::matrix::state_res::RoomCreateContentFields =
+					serde_json::from_str(room_create.content().get())?;
+
+				let mut creators = std::collections::BTreeSet::new();
+				creators.insert(room_create.sender().to_owned());
+				if let Some(additional_creators) = create_content.additional_creators {
+					for creator in additional_creators {
+						if let Ok(creator) = creator.deserialize_as::<ruma::OwnedUserId>() {
+							creators.insert(creator);
+						}
+					}
+				}
+
+				if let Some(users) = event_content
+					.get_mut("users")
+					.and_then(|u| u.as_object_mut())
+				{
+					for creator in creators {
+						users.insert(creator.to_string(), json!(ruma::Int::MAX));
+					}
+				}
+			}
+		}
+	}
+
 	let event_format = body
 		.format
 		.as_ref()
 		.is_some_and(|f| f.to_lowercase().eq("event"));
 
 	Ok(get_state_events_for_key::v3::Response {
-		content: event_format.or(|| event.get_content_as_value()),
+		content: (!event_format).then_some(event_content.clone()),
 		event: event_format.then(|| {
 			json!({
-				"content": event.content(),
+				"content": event_content,
 				"event_id": event.event_id(),
 				"origin_server_ts": event.origin_server_ts(),
 				"room_id": event.room_id_or_hash(),
@@ -170,12 +206,6 @@ pub(crate) async fn get_state_events_for_key_route(
 		}),
 	})
 }
-
-/// # `GET /_matrix/client/v3/rooms/{roomid}/state/{eventType}`
-///
-/// Get single state event of a room.
-/// The optional query parameter `?format=event|content` allows returning the
-/// full room state event or just the state event's content (default behaviour)
 ///
 /// - If not joined: Only works if current room history visibility is world
 ///   readable

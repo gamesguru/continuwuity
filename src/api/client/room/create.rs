@@ -147,9 +147,7 @@ pub(crate) async fn create_room_route(
 					.await,
 				FilterLevel::Block
 			) {
-			return Err!(Request(InviteBlocked(
-				"{recipient_user} has blocked invites from you."
-			)));
+			return Err!(Request(Forbidden("{recipient_user} has blocked invites from you.")));
 		}
 
 		invitees.insert(recipient_user.clone());
@@ -324,6 +322,10 @@ pub(crate) async fn create_room_route(
 				}
 			}
 		}
+		// For v12+ rooms, creators MUST NOT be in the power levels users map.
+		for creator in &creators {
+			power_levels_to_grant.remove(creator);
+		}
 	} else {
 		power_levels_to_grant.insert(sender_user.to_owned(), int!(100));
 		creators.clear(); // If this vec is not empty, default_power_levels_content will
@@ -331,10 +333,11 @@ pub(crate) async fn create_room_route(
 	}
 
 	let power_levels_content = default_power_levels_content(
+		&room_version,
 		body.power_level_content_override.as_ref(),
 		&body.visibility,
 		power_levels_to_grant,
-		creators,
+		&creators,
 	)?;
 
 	services
@@ -533,12 +536,12 @@ pub(crate) async fn create_room_route(
 	Ok(create_room::v3::Response::new(room_id))
 }
 
-/// creates the power_levels_content for the PDU builder
 fn default_power_levels_content(
+	room_version_id: &RoomVersionId,
 	power_level_content_override: Option<&Raw<RoomPowerLevelsEventContent>>,
 	visibility: &room::Visibility,
 	users: BTreeMap<OwnedUserId, Int>,
-	creators: Vec<OwnedUserId>,
+	creators: &[OwnedUserId],
 ) -> Result<serde_json::Value> {
 	let mut power_levels_content =
 		serde_json::to_value(RoomPowerLevelsEventContent { users, ..Default::default() })
@@ -561,10 +564,7 @@ fn default_power_levels_content(
 	// useful in read-only announcement rooms that post a public poll.
 	power_levels_content["events"]["org.matrix.msc3381.poll.response"] =
 		serde_json::to_value(0).expect("0 is valid Value");
-	power_levels_content["events"]["m.poll.response"] =
-		serde_json::to_value(0).expect("0 is valid Value");
 
-	// synapse does this too. clients do not expose these permissions. it prevents
 	// default users from calling public rooms, for obvious reasons.
 	if *visibility == room::Visibility::Public {
 		power_levels_content["events"]["m.call.invite"] =
@@ -582,6 +582,18 @@ fn default_power_levels_content(
 	if let Some(power_level_content_override) = power_level_content_override {
 		let json: JsonObject = serde_json::from_str(power_level_content_override.json().get())
 			.map_err(|e| err!(Request(BadJson("Invalid power_level_content_override: {e:?}"))))?;
+
+		if RoomVersion::new(room_version_id)?.explicitly_privilege_room_creators {
+			if let Some(users) = json.get("users").and_then(|u| u.as_object()) {
+				for creator in creators {
+					if users.contains_key(creator.as_str()) {
+						return Err!(Request(BadJson(
+							"creators cannot appear in the users list of m.room.power_levels"
+						)));
+					}
+				}
+			}
+		}
 
 		for (key, value) in json {
 			power_levels_content[key] = value;

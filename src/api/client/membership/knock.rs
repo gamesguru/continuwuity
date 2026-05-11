@@ -654,7 +654,7 @@ async fn knock_room_helper_remote(
 
 	debug!("Saving compressed state");
 	let HashSetCompressStateEvent {
-		shortstatehash: statehash_before_knock,
+		shortstatehash: _statehash_before_knock,
 		added,
 		removed,
 	} = services
@@ -663,17 +663,34 @@ async fn knock_room_helper_remote(
 		.save_state(room_id, Arc::new(compressed))
 		.await?;
 
-	debug!("Forcing state for new room");
-	services
-		.rooms
-		.state
-		.force_state(room_id, statehash_before_knock, added, removed, &state_lock)
-		.await?;
-
 	let statehash_after_knock = services
 		.rooms
 		.state
 		.append_to_state(&parsed_knock_pdu, room_id)
+		.await?;
+
+	let mut added = Arc::unwrap_or_clone(added);
+	if let Some(state_key) = &parsed_knock_pdu.state_key {
+		let shortstatekey = services
+			.rooms
+			.short
+			.get_or_create_shortstatekey(&parsed_knock_pdu.kind.to_string().into(), state_key)
+			.await;
+		added.insert(
+			services
+				.rooms
+				.state_compressor
+				.compress_state_event(shortstatekey, &parsed_knock_pdu.event_id)
+				.await,
+		);
+	}
+	let added = Arc::new(added);
+
+	debug!("Forcing state for new room");
+	services
+		.rooms
+		.state
+		.force_state(room_id, statehash_after_knock, added, removed, &state_lock)
 		.await?;
 
 	info!("Updating membership locally to knock state with provided stripped state events");
@@ -696,14 +713,6 @@ async fn knock_room_helper_remote(
 			room_id,
 		)
 		.await?;
-
-	info!("Setting final room state for new room");
-	// We set the room state after inserting the pdu, so that we never have a moment
-	// in time where events in the current room state do not exist
-	services
-		.rooms
-		.state
-		.set_room_state(room_id, statehash_after_knock, &state_lock);
 
 	Ok(())
 }

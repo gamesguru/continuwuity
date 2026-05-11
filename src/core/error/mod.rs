@@ -182,6 +182,7 @@ impl Error {
 			| Self::Federation(_, error) | Self::Ruma(error) =>
 				response::ruma_error_kind(error).clone(),
 			| Self::BadRequest(kind, ..) | Self::Request(kind, ..) => kind.clone(),
+			| Self::Json(_) | Self::SerdeDe(_) => ruma::api::client::error::ErrorKind::BadJson,
 			| Self::FeatureDisabled(..) => FeatureDisabled,
 			| _ => Unknown,
 		}
@@ -197,6 +198,14 @@ impl Error {
 			| Self::Request(kind, _, code) => response::status_code(kind, *code),
 			| Self::BadRequest(kind, ..) => response::bad_request_code(kind),
 			| Self::FeatureDisabled(..) => response::bad_request_code(&self.kind()),
+			| Self::Path(_)
+			| Self::TypedHeader(_)
+			| Self::Mxc(_)
+			| Self::Mxid(_)
+			| Self::JsParseInt(_)
+			| Self::JsTryFromInt(_)
+			| Self::Json(_)
+			| Self::SerdeDe(_) => StatusCode::BAD_REQUEST,
 			| Self::Reqwest(error) => error.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
 			| Self::Conflict(_) => StatusCode::CONFLICT,
 			| Self::Io(error) => response::io_error_code(error.kind()),
@@ -213,6 +222,31 @@ impl Error {
 	/// Result where Ok(None) is instead Err(e) if e.is_not_found().
 	#[inline]
 	pub fn is_not_found(&self) -> bool { self.status_code() == http::StatusCode::NOT_FOUND }
+
+	/// Returns true if the error is a "missing token" error.
+	#[inline]
+	pub fn is_missing_token(&self) -> bool {
+		matches!(self.kind(), ruma::api::client::error::ErrorKind::MissingToken)
+	}
+
+	/// Returns true if the error is a service-interrupted error (e.g.
+	/// shutdown).
+	#[inline]
+	pub fn is_interrupted(&self) -> bool {
+		match self {
+			| Self::Io(error) => error.kind() == std::io::ErrorKind::Interrupted,
+			| _ => false,
+		}
+	}
+
+	/// Returns true if the error is a DNS timeout error.
+	#[inline]
+	pub fn is_dns_timeout(&self) -> bool {
+		match self {
+			| Self::Err(error) => error.starts_with("DNS timeout:"),
+			| _ => false,
+		}
+	}
 }
 
 impl std::fmt::Debug for Error {

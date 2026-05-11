@@ -28,7 +28,7 @@ use ruma::{
 		},
 	},
 };
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 
 use crate::{Dep, account_data, globals, media::MXC_LENGTH, rooms, rooms::state::RoomMutexGuard};
 
@@ -147,7 +147,12 @@ impl crate::Service for Service {
 				},
 				sig = signals.recv() => match sig {
 					Ok(sig) => self.handle_signal(sig).await,
-					Err(_) => continue,
+					Err(broadcast::error::RecvError::Lagged(_)) => {
+						continue;
+					},
+					Err(broadcast::error::RecvError::Closed) => {
+						break;
+					},
 				},
 			}
 		}

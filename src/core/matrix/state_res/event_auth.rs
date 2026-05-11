@@ -45,12 +45,12 @@ struct RoomMemberContentFields {
 }
 
 #[derive(Deserialize)]
-struct RoomCreateContentFields {
-	room_version: Option<Raw<RoomVersionId>>,
-	creator: Option<Raw<IgnoredAny>>,
-	additional_creators: Option<Vec<Raw<OwnedUserId>>>,
+pub struct RoomCreateContentFields {
+	pub room_version: Option<Raw<RoomVersionId>>,
+	pub creator: Option<Raw<IgnoredAny>>,
+	pub additional_creators: Option<Vec<Raw<OwnedUserId>>>,
 	#[serde(rename = "m.federate", default = "ruma::serde::default_true")]
-	federate: bool,
+	pub federate: bool,
 }
 
 /// For the given event `kind` what are the relevant auth events that are needed
@@ -558,22 +558,15 @@ where
 				creators.insert(creator.deserialize()?);
 			}
 		}
-		match check_power_levels(
+		if !check_power_levels(
 			room_version,
 			incoming_event,
 			power_levels_event.as_ref(),
 			sender_power_level,
 			&creators,
-		) {
-			| Some(required_pwr_lvl) =>
-				if !required_pwr_lvl {
-					warn!("m.room.power_levels was not allowed");
-					return Ok(false);
-				},
-			| _ => {
-				warn!("m.room.power_levels was not allowed");
-				return Ok(false);
-			},
+		)? {
+			warn!("m.room.power_levels was not allowed");
+			return Ok(false);
 		}
 		debug!("m.room.power_levels event allowed");
 	}
@@ -1028,12 +1021,17 @@ where
 			} else {
 				true
 			};
+			let is_rescission = target_user_current_membership == MembershipState::Invite
+				&& target_user_membership_event
+					.as_ref()
+					.is_some_and(|ev| ev.sender() == sender);
+
 			let can_kick = if !matches!(
 				target_user_current_membership,
 				MembershipState::Ban | MembershipState::Leave
 			) {
-				if sender_creator {
-					// sender is a creator
+				if sender_creator || is_rescission {
+					// sender is a creator or the original inviter rescinding
 					true
 				} else if sender_power.filter(|&p| p >= &power_levels.kick).is_none() {
 					// sender lacks kick power level
@@ -1240,16 +1238,16 @@ fn check_power_levels(
 	previous_power_event: Option<&impl Event>,
 	user_level: Int,
 	creators: &BTreeSet<OwnedUserId>,
-) -> Option<bool> {
+) -> Result<bool, Error> {
 	match power_event.state_key() {
 		| Some("") => {},
 		| Some(key) => {
 			error!(state_key = key, "m.room.power_levels event has non-empty state key");
-			return None;
+			return Ok(false);
 		},
 		| None => {
 			error!("check_power_levels requires an m.room.power_levels *state* event argument");
-			return None;
+			return Ok(false);
 		},
 	}
 
@@ -1260,7 +1258,8 @@ fn check_power_levels(
 	// - If users key in content is not a dictionary with keys that are valid user
 	//   IDs with values that are integers, reject.
 	let user_content: RoomPowerLevelsEventContent =
-		deserialize_power_levels(power_event.content().get(), room_version)?;
+		deserialize_power_levels(power_event.content().get(), room_version)
+			.ok_or_else(|| Error::InvalidPdu("Failed to deserialize power levels".to_owned()))?;
 
 	// Validation of users is done in Ruma, synapse for loops validating user_ids
 	// and integers here
@@ -1270,11 +1269,13 @@ fn check_power_levels(
 	let current_state = match previous_power_event {
 		| Some(current_state) => current_state,
 		// If there is no previous m.room.power_levels event in the room, allow
-		| None => return Some(true),
+		| None => return Ok(true),
 	};
 
 	let current_content: RoomPowerLevelsEventContent =
-		deserialize_power_levels(current_state.content().get(), room_version)?;
+		deserialize_power_levels(current_state.content().get(), room_version).ok_or_else(
+			|| Error::InvalidPdu("Failed to deserialize current power levels".to_owned()),
+		)?;
 
 	let mut user_levels_to_check = BTreeSet::new();
 	let old_list = &current_content.users;
@@ -1311,11 +1312,16 @@ fn check_power_levels(
 					"creators cannot appear in the users list of m.room.power_levels with a \
 					 non-privileged power level"
 				);
-				return Some(false); // cannot alter creator power level
+				return Err(Error::InvalidPdu(
+					"creators cannot appear in the users list of m.room.power_levels with a \
+					 non-privileged power level"
+						.to_owned(),
+				));
 			}
 			trace!("ignoring creator in users list with privileged power level");
 			continue;
 		}
+
 		if old_level.is_some() && new_level.is_some() && old_level == new_level {
 			continue;
 		}
@@ -1330,7 +1336,7 @@ fn check_power_levels(
 				sender=%power_event.sender(),
 				"cannot alter the power level of a user with the same power level as sender's own"
 			);
-			return Some(false); // cannot remove ops level == to own
+			return Ok(false); // cannot remove ops level == to own
 		}
 
 		// If the current value is higher than the sender's current power level, reject
@@ -1346,7 +1352,7 @@ fn check_power_levels(
 				sender=%power_event.sender(),
 				"cannot alter the power level of a user with a higher power level than sender's own"
 			);
-			return Some(false); // cannot add ops greater than own
+			return Ok(false); // cannot add ops greater than own
 		}
 		if new_level_too_big {
 			warn!(
@@ -1357,7 +1363,7 @@ fn check_power_levels(
 				sender=%power_event.sender(),
 				"cannot set the power level of a user to a level higher than sender's own"
 			);
-			return Some(false); // cannot add ops greater than own
+			return Ok(false); // cannot add ops greater than own
 		}
 	}
 
@@ -1382,7 +1388,7 @@ fn check_power_levels(
 				sender=%power_event.sender(),
 				"cannot alter the power level of an event with a higher power level than sender's own"
 			);
-			return Some(false); // cannot add ops greater than own
+			return Ok(false); // cannot add ops greater than own
 		}
 		if new_level_too_big {
 			warn!(
@@ -1393,7 +1399,7 @@ fn check_power_levels(
 				sender=%power_event.sender(),
 				"cannot set the power level of an event to a level higher than sender's own"
 			);
-			return Some(false); // cannot add ops greater than own
+			return Ok(false); // cannot add ops greater than own
 		}
 	}
 
@@ -1414,7 +1420,7 @@ fn check_power_levels(
 					sender=%power_event.sender(),
 					"cannot alter the power level of notifications greater than sender's own"
 				);
-				return Some(false); // cannot add ops greater than own
+				return Ok(false); // cannot add ops greater than own
 			}
 		}
 	}
@@ -1445,12 +1451,12 @@ fn check_power_levels(
 					action=%lvl_name,
 					"cannot alter the power level of action greater than sender's own",
 				);
-				return Some(false);
+				return Ok(false);
 			}
 		}
 	}
 
-	Some(true)
+	Ok(true)
 }
 
 fn get_deserialize_levels(

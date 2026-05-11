@@ -3,7 +3,7 @@ use std::{borrow::Borrow, collections::HashMap, iter::once, sync::Arc};
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Result, debug, debug_info, debug_warn, err, error, info, is_true,
+	Err, Event, Result, debug, debug_info, debug_warn, err, error, info, is_true,
 	matrix::{
 		StateKey,
 		event::{gen_event_id, gen_event_id_canonical_json},
@@ -382,6 +382,7 @@ pub async fn join_room_by_id_helper(
 	Ok(join_room_by_id::v3::Response::new(room_id.to_owned()))
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(%sender_user, %room_id), name = "join_remote", level = "info")]
 async fn join_room_by_id_helper_remote(
 	services: &Services,
@@ -448,6 +449,13 @@ async fn join_room_by_id_helper_remote(
 		avatar_url: services.users.avatar_url(sender_user).await.ok(),
 		blurhash: services.users.blurhash(sender_user).await.ok(),
 		reason,
+		is_direct: services
+			.rooms
+			.state_accessor
+			.get_member(room_id, sender_user)
+			.await
+			.ok()
+			.and_then(|m| m.is_direct),
 		join_authorized_via_users_server: join_authorized_via_users_server.clone(),
 		..RoomMemberEventContent::new(MembershipState::Join)
 	})
@@ -576,7 +584,7 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	info!("Parsing join event");
-	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone(), Some(room_id))
+	let _parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone(), Some(room_id))
 		.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?;
 
 	info!("Acquiring server signing keys for response events");
@@ -656,6 +664,104 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	drop(cork);
+	drop(send_join_response);
+
+	let mut unsigned = join_event
+		.get("unsigned")
+		.and_then(|v| v.as_object())
+		.cloned()
+		.unwrap_or_default();
+
+	if let Ok(shortstatekey) = services
+		.rooms
+		.short
+		.get_shortstatekey(&StateEventType::RoomMember, sender_user.as_str())
+		.await
+	{
+		let prev_pdu = if let Some(prev_event_id) = state.get(&shortstatekey) {
+			services.rooms.timeline.get_pdu(prev_event_id).await.ok()
+		} else {
+			None
+		};
+
+		let (prev_pdu, mut prev_content, mut prev_sender, mut replaces_state) = match prev_pdu {
+			| Some(pdu) => (Some(pdu), None, None, None),
+			| None => {
+				// Fallback to local invite state if missing from send_join response state
+				let pending_invites = services
+					.rooms
+					.state_cache
+					.invite_state(sender_user, room_id)
+					.await
+					.unwrap_or_default();
+
+				let mut result = (None, None, None, None);
+				for raw in pending_invites {
+					if let Ok(Some(state_key)) = raw.get_field::<String>("state_key") {
+						if state_key == sender_user.as_str() {
+							let mut content = raw
+								.get_field::<CanonicalJsonObject>("content")
+								.ok()
+								.flatten();
+
+							// Preserve is_direct from invite unsigned
+							if let Some(ref mut content) = content {
+								if let Ok(Some(unsigned)) =
+									raw.get_field::<CanonicalJsonObject>("unsigned")
+								{
+									if let Some(is_direct) = unsigned.get("is_direct") {
+										content.insert("is_direct".to_owned(), is_direct.clone());
+									}
+								}
+							}
+
+							result.1 = content;
+							result.2 = raw.get_field::<String>("sender").ok().flatten();
+							result.3 = raw.get_field::<String>("event_id").ok().flatten();
+							break;
+						}
+					}
+				}
+				result
+			},
+		};
+
+		if let Some(prev_pdu) = prev_pdu {
+			if let Ok(mut content) = to_canonical_object(Event::get_content_as_value(&prev_pdu)) {
+				// MSC: Preserve is_direct flag in prev_content
+				if let Some(unsigned) = prev_pdu.unsigned() {
+					if let Ok(unsigned_obj) =
+						serde_json::from_str::<CanonicalJsonObject>(unsigned.get())
+					{
+						if let Some(is_direct) = unsigned_obj.get("is_direct") {
+							content.insert("is_direct".to_owned(), is_direct.clone());
+						}
+					}
+				}
+				prev_content = Some(content);
+			}
+			prev_sender = Some(prev_pdu.sender.to_string());
+			replaces_state = Some(prev_pdu.event_id.to_string());
+		}
+
+		if let Some(prev_content) = prev_content {
+			unsigned.insert("prev_content".to_owned(), CanonicalJsonValue::Object(prev_content));
+		}
+		if let Some(prev_sender) = prev_sender {
+			unsigned.insert("prev_sender".to_owned(), CanonicalJsonValue::String(prev_sender));
+		}
+		if let Some(replaces_state) = replaces_state {
+			unsigned
+				.insert("replaces_state".to_owned(), CanonicalJsonValue::String(replaces_state));
+		}
+	}
+	if !unsigned.is_empty() {
+		join_event.insert("unsigned".to_owned(), CanonicalJsonValue::Object(unsigned));
+	}
+
+	info!("Parsing join event");
+	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone(), Some(room_id))
+		.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?;
 
 	debug!("Running send_join auth check");
 	let fetch_state = &state;
@@ -685,7 +791,10 @@ async fn join_room_by_id_helper_remote(
 			.expect("create event is missing from send_join auth"),
 	)
 	.await
-	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
+	.map_err(|e| match e {
+		| state_res::Error::InvalidPdu(msg) => err!(Request(BadJson(warn!("{msg}")))),
+		| _ => err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))),
+	})?;
 
 	if !auth_check {
 		return Err!(Request(Forbidden("Auth check failed")));
@@ -704,47 +813,55 @@ async fn join_room_by_id_helper_remote(
 		shortstatehash: statehash_before_join,
 		added,
 		removed,
-	} = services
-		.rooms
-		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
-		.await?;
+	} = Box::pin(
+		services
+			.rooms
+			.state_compressor
+			.save_state(room_id, Arc::new(compressed)),
+	)
+	.await?;
+
+	// We append the PDU first. If this fails, we haven't mutated the room state
+	// yet.
+	info!("Appending new room join event");
+	let _pdu_id = Box::pin(services.rooms.timeline.append_pdu(
+		&parsed_join_pdu,
+		join_event,
+		once(parsed_join_pdu.event_id.borrow()),
+		&state_lock,
+		room_id,
+	))
+	.await?;
 
 	debug!("Forcing state for new room");
-	services
-		.rooms
-		.state
-		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
-		.await?;
+	Box::pin(services.rooms.state.force_state(
+		room_id,
+		statehash_before_join,
+		added,
+		removed,
+		&state_lock,
+	))
+	.await?;
 
-	debug!("Updating joined counts for new room");
-	services
-		.rooms
-		.state_cache
-		.update_joined_count(room_id)
-		.await;
+	// Nightly moved append_pdu before force_state, which causes force_state
+	// to overwrite the state_cache with the remote state's membership (e.g.
+	// invite). We MUST update our membership to join again so the user sees the
+	// room in /sync.
+	Box::pin(services.rooms.state_cache.update_membership(
+		room_id,
+		sender_user,
+		&parsed_join_pdu,
+		true,
+	))
+	.await?;
 
-	// We append to state before appending the pdu, so we don't have a moment in
-	// time with the pdu without it's state. This is okay because append_pdu can't
-	// fail.
-	let statehash_after_join = services
-		.rooms
-		.state
-		.append_to_state(&parsed_join_pdu, room_id)
-		.await?;
-
-	info!("Appending new room join event");
-	services
-		.rooms
-		.timeline
-		.append_pdu(
-			&parsed_join_pdu,
-			join_event,
-			once(parsed_join_pdu.event_id.borrow()),
-			&state_lock,
-			room_id,
-		)
-		.await?;
+	let statehash_after_join = Box::pin(
+		services
+			.rooms
+			.state
+			.append_to_state(&parsed_join_pdu, room_id),
+	)
+	.await?;
 
 	info!("Setting final room state for new room");
 	// We set the room state after inserting the pdu, so that we never have a moment
@@ -758,6 +875,7 @@ async fn join_room_by_id_helper_remote(
 }
 
 #[tracing::instrument(skip_all, fields(%sender_user, %room_id), name = "join_local", level = "info")]
+#[allow(clippy::too_many_arguments)]
 async fn join_room_by_id_helper_local(
 	services: &Services,
 	sender_user: &UserId,
@@ -802,6 +920,13 @@ async fn join_room_by_id_helper_local(
 		displayname: services.users.displayname(sender_user).await.ok(),
 		avatar_url: services.users.avatar_url(sender_user).await.ok(),
 		blurhash: services.users.blurhash(sender_user).await.ok(),
+		is_direct: services
+			.rooms
+			.state_accessor
+			.get_member(room_id, sender_user)
+			.await
+			.ok()
+			.and_then(|m| m.is_direct),
 		reason: reason.clone(),
 		join_authorized_via_users_server: auth_user,
 		..RoomMemberEventContent::new(MembershipState::Join)
@@ -855,7 +980,7 @@ async fn join_room_by_id_helper_local(
 		remote_servers = %servers.len(),
 		"Could not join room locally, attempting remote join",
 	);
-	join_room_by_id_helper_remote(
+	Box::pin(join_room_by_id_helper_remote(
 		services,
 		sender_user,
 		room_id,
@@ -863,7 +988,7 @@ async fn join_room_by_id_helper_local(
 		servers,
 		state_lock,
 		json_body,
-	)
+	))
 	.await
 }
 

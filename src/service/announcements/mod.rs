@@ -136,7 +136,20 @@ impl Service {
 			.default
 			.get(CHECK_FOR_ANNOUNCEMENTS_URL)
 			.send()
-			.await?
+			.await
+			.map_err(|e| {
+				// Log the full error source chain for diagnosis since the
+				// conduwuit Error wrapper loses it during conversion.
+				use std::fmt::Write;
+				let mut msg = format!("announcements request failed: {e}");
+				let mut source = std::error::Error::source(&e);
+				while let Some(cause) = source {
+					let _ = write!(msg, "\n  caused by: {cause}");
+					source = std::error::Error::source(cause);
+				}
+				error!("{msg}");
+				e
+			})?
 			.limit_read_text(1024 * 1024)
 			.await?;
 

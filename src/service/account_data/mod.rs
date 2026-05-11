@@ -81,30 +81,38 @@ pub async fn update(
 	Ok(())
 }
 
+/// Removes one event from the account data of the user.
 #[implement(Service)]
-pub async fn delete(
+pub async fn remove(
 	&self,
 	room_id: Option<&RoomId>,
 	user_id: &UserId,
-	event_type: &str,
+	event_type: RoomAccountDataEventType,
 ) -> Result<()> {
-	let key = (room_id, user_id, event_type);
-	if let Ok(prev) = self.db.roomusertype_roomuserdataid.qry(&key).await {
+	let key = (room_id, user_id, &event_type);
+	let prev = self.db.roomusertype_roomuserdataid.qry(&key).await;
+
+	// Remove old entry
+	if let Ok(prev) = prev {
 		self.db.roomuserdataid_accountdata.remove(&prev);
 	}
 
-	let data = serde_json::json!({
+	// We also remove the type index
+	self.db.roomusertype_roomuserdataid.del(key);
+
+	// To notify sync, we need to add a "deleted" entry in the timeline of changes
+	let count = self.services.globals.next_count().unwrap();
+	let roomuserdataid = (room_id, user_id, count, &event_type);
+
+	// Per MSC3391, we send an event with empty content to signify deletion
+	let tombstone = serde_json::json!({
 		"type": event_type,
 		"content": {},
 	});
 
-	let count = self.services.globals.next_count().unwrap();
-	let roomuserdataid = (room_id, user_id, count, event_type);
 	self.db
 		.roomuserdataid_accountdata
-		.put(roomuserdataid, Json(&data));
-
-	self.db.roomusertype_roomuserdataid.put(key, roomuserdataid);
+		.put(roomuserdataid, Json(tombstone));
 
 	Ok(())
 }
@@ -117,7 +125,7 @@ pub async fn delete_all(
 	event_types: &[&str],
 ) -> Result<()> {
 	for event_type in event_types {
-		self.delete(room_id, user_id, event_type).await?;
+		self.remove(room_id, user_id, (*event_type).into()).await?;
 	}
 
 	Ok(())

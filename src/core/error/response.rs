@@ -31,7 +31,7 @@ impl axum::response::IntoResponse for Error {
 				"Server error"
 			);
 		} else if status.is_client_error() {
-			crate::debug_error!(
+			crate::debug_warn!(
 				error = %self,
 				kind = ?self.kind(),
 				status = %status,

@@ -21,6 +21,7 @@ pub mod user;
 
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct Service {
 	pub alias: Arc<alias::Service>,
 	pub auth_chain: Arc<auth_chain::Service>,

@@ -131,11 +131,16 @@ async fn get_verify_key_from_origin(
 	origin: &ServerName,
 	key_id: &ServerSigningKeyId,
 ) -> Result<VerifyKey> {
-	if let Ok(server_key) = self.server_request(origin).await {
-		self.add_signing_keys(server_key.clone()).await;
-		if let Some(result) = extract_key(server_key, key_id) {
-			return Ok(result);
-		}
+	match self.server_request(origin).await {
+		| Ok(server_key) => {
+			self.add_signing_keys(server_key.clone()).await;
+			if let Some(result) = extract_key(server_key, key_id) {
+				return Ok(result);
+			}
+		},
+		| Err(e) => {
+			conduwuit::warn!(%origin, %key_id, "Failed to fetch signing key from origin: {}", e);
+		},
 	}
 
 	Err!(Request(NotFound("Failed to fetch signing-key from origin")))

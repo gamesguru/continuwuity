@@ -24,6 +24,28 @@ This command needs a JSON blob provided in a Markdown code block below the comma
 
 Retrieve and print a PDU by EventID from the Continuwuity database
 
+## `!admin debug rescue-pdu`
+
+Attempts to "rescue" an outlier PDU by upgrading it to a timeline event.
+
+This will perform all necessary auth checks and state resolution.
+
+## `!admin debug list-outliers`
+
+List all outlier PDUs in our database
+
+## `!admin debug purge-outliers`
+
+Purge all outlier PDUs matching the filters
+
+## `!admin debug view-extremities`
+
+View the current forward extremities (timeline tips) of a room
+
+## `!admin debug rescue-room`
+
+Attempts to "rescue" all outlier PDUs in a room
+
 ## `!admin debug get-short-pdu`
 
 Retrieve and print a PDU by PduId from the Continuwuity database

@@ -14,8 +14,8 @@ where
 	Key: Clone + Eq + Hash + Send,
 	Val: Default + Send,
 {
-	key: Key,
 	map: Map<Key, Val>,
+	key: Key,
 	val: Omg<Val>,
 }
 
@@ -119,7 +119,13 @@ where
 	#[tracing::instrument(name = "unlock", level = "trace", skip_all)]
 	fn drop(&mut self) {
 		if Arc::strong_count(Omg::mutex(&self.val)) <= 2 {
-			self.map.lock().remove(&self.key);
+			let mut map = self.map.lock();
+			if let std::collections::hash_map::Entry::Occupied(e) = map.entry(self.key.clone()) {
+				if Arc::ptr_eq(e.get(), Omg::mutex(&self.val)) && Arc::strong_count(e.get()) <= 2
+				{
+					e.remove();
+				}
+			}
 		}
 	}
 }

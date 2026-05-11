@@ -35,9 +35,9 @@ jemalloc_stats = [
 release_max_log_level = [
 	"conduwuit-core/release_max_log_level",
 	"log/max_level_trace",
-	"log/release_max_level_info",
+	"log/release_max_level_debug",
 	"tracing/max_level_trace",
-	"tracing/release_max_level_info",
+	"tracing/release_max_level_debug",
 ]
 zstd_compression = [
 	"conduwuit-core/zstd_compression",

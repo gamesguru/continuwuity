@@ -1,0 +1,6 @@
+{"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators_AdditionalValidation"}
+{"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators_AdditionalValidation/additional_creators_are_valid"}
+{"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators_AdditionalValidation/additional_creators_elements_aren't_strings"}
+{"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators_AdditionalValidation/additional_creators_elements_aren't_user_ID_strings"}
+{"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators_AdditionalValidation/additional_creators_elements_aren't_valid_user_ID_strings_(domain)"}
+{"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators_AdditionalValidation/additional_creators_isn't_an_array"}

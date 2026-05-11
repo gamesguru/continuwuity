@@ -4,8 +4,8 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer, err,
-	implement, info, trace, utils::stream::IterStream, warn,
+	Err, Event, PduEvent, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer,
+	err, implement, info, trace, utils::stream::IterStream, warn,
 };
 use futures::{
 	FutureExt, TryFutureExt, TryStreamExt,
@@ -18,8 +18,8 @@ use ruma::{
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
 };
-use tracing::debug;
 
+// use tracing::debug; (Removed)
 use crate::rooms::timeline::{RawPduId, pdu_fits};
 
 async fn should_rescind_invite(
@@ -27,7 +27,7 @@ async fn should_rescind_invite(
 	content: &mut BTreeMap<String, CanonicalJsonValue>,
 	sender: &UserId,
 	room_id: &RoomId,
-) -> Result<Option<PduEvent>> {
+) -> Result<Option<(PduEvent, OwnedUserId)>> {
 	// We insert a bogus event ID since we can't actually calculate the right one
 	content.insert("event_id".to_owned(), CanonicalJsonValue::String("$rescind".to_owned()));
 	let pdu_event = serde_json::from_value::<PduEvent>(
@@ -36,14 +36,15 @@ async fn should_rescind_invite(
 	.map_err(|e| err!("invalid PDU: {e}"))?;
 
 	if pdu_event.room_id().is_none_or(|r| r != room_id)
-		&& pdu_event.sender() != sender
-		&& pdu_event.event_type() != &TimelineEventType::RoomMember
-		&& pdu_event.state_key().is_none_or(|v| v == sender.as_str())
+		|| pdu_event.sender() != sender
+		|| pdu_event.event_type() != &TimelineEventType::RoomMember
+		|| pdu_event.state_key().is_none_or(|v| v == sender.as_str())
 	{
 		return Ok(None);
 	}
 
-	let target_user_id = UserId::parse(pdu_event.state_key().unwrap())?;
+	let target_user_id = OwnedUserId::try_from(pdu_event.state_key().unwrap().to_owned())
+		.map_err(|e| err!("invalid target_user_id: {e}"))?;
 	if pdu_event
 		.get_content::<RoomMemberEventContent>()?
 		.membership
@@ -55,7 +56,7 @@ async fn should_rescind_invite(
 	// Does the target user have a pending invite?
 	let Ok(pending_invite_state) = services
 		.state_cache
-		.invite_state(target_user_id, room_id)
+		.invite_state(&target_user_id, room_id)
 		.await
 	else {
 		return Ok(None); // No pending invite, so nothing to rescind
@@ -64,17 +65,27 @@ async fn should_rescind_invite(
 		if event
 			.get_field::<String>("type")?
 			.is_some_and(|t| t == "m.room.member")
-			|| event
+			&& event
 				.get_field::<OwnedUserId>("state_key")?
-				.is_some_and(|s| s == *target_user_id)
-			|| event
-				.get_field::<OwnedUserId>("sender")?
-				.is_some_and(|s| s == *sender)
-			|| event
+				.is_some_and(|s| s == target_user_id)
+			&& event
 				.get_field::<RoomMemberEventContent>("content")?
 				.is_some_and(|c| c.membership == MembershipState::Invite)
 		{
-			return Ok(Some(pdu_event));
+			// The sender of the leave event must be either the target user (rejecting the
+			// invite) or the original inviter (rescinding the invite)
+			let inviter = event
+				.get_field::<OwnedUserId>("sender")?
+				.unwrap_or_else(|| target_user_id.clone());
+			if sender == target_user_id || sender == inviter {
+				return Ok(Some((pdu_event, target_user_id)));
+			}
+
+			warn!(
+				"Sender {sender} attempted to rescind invite to {target_user_id} but is neither \
+				 the target nor the inviter ({inviter})"
+			);
+			return Err!(Request(Forbidden("You are not allowed to rescind this invitation.")));
 		}
 	}
 
@@ -182,35 +193,80 @@ pub async fn handle_incoming_pdu<'a>(
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
 		if is_room_member_event {
-			if let Some(pdu) =
+			if let Some((pdu, target_user_id)) =
 				should_rescind_invite(&self.services, &mut value.clone(), sender, room_id).await?
 			{
 				debug_info!(
-					"Invite to {room_id} appears to have been rescinded by {sender}, marking as \
-					 left"
+					"Invite to {room_id} for {target_user_id} appears to have been rescinded or \
+					 rejected by {sender}, marking as left"
 				);
 				self.services
 					.state_cache
-					.mark_as_left(sender, room_id, Some(pdu))
+					.mark_as_left(&target_user_id, room_id, Some(pdu))
 					.await;
 				return Ok(None);
+			}
+
+			let state_key = value.get("state_key").and_then(|k| k.as_str());
+			let content_val = value.get("content").and_then(|v| v.as_object());
+			let membership = content_val
+				.and_then(|c| c.get("membership"))
+				.and_then(|m| m.as_str());
+			if membership == Some("leave") {
+				if let Some(target_user) = state_key.and_then(|k| UserId::parse(k).ok()) {
+					if let Ok(pending_invite_state) = self
+						.services
+						.state_cache
+						.invite_state(target_user, room_id)
+						.await
+					{
+						if !pending_invite_state.is_empty() {
+							return Err!(Request(Forbidden(
+								"Dropping invalid federated invite rescission from {sender}"
+							)));
+						}
+					}
+				}
 			}
 		}
 
 		if meta_exists && is_room_member_event {
+			// During a federated join, the remote server starts pushing PDUs
+			// before our join flow finishes (force_state hasn't run yet, so
+			// server_in_room is still false). If we upgrade these to timeline
+			// events, upgrade_outlier_to_timeline_pdu will run state resolution
+			// against a stale pre-join snapshot and force_state will clobber the
+			// join flow's state — leaving the sync loop seeing the user as
+			// "invite" instead of "join" (the double-join bug).
+			//
+			// Save as outlier only. The outlier will be upgraded to a timeline
+			// event when the next federation transaction references it in
+			// prev_events, by which point server_in_room will be true and state
+			// resolution will use the correct post-join state.
 			info!(
 				%origin,
 				%room_id,
-				"Accepting inbound membership PDU for known room before participation cache catches up"
+				"Saving inbound membership PDU as outlier for known room while join is in progress"
 			);
-		} else {
-			info!(
-				%origin,
-				%room_id,
-				"Dropping inbound PDU for room we aren't participating in"
-			);
-			return Err!(Request(NotFound("This server is not participating in that room.")));
+
+			let create_event = &(self
+				.services
+				.state_accessor
+				.room_state_get(room_id, &StateEventType::RoomCreate, "")
+				.await?);
+
+			self.handle_outlier_pdu(origin, create_event, event_id, room_id, value, false)
+				.await?;
+
+			return Ok(None);
 		}
+
+		info!(
+			%origin,
+			%room_id,
+			"Dropping inbound PDU for room we aren't participating in"
+		);
+		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
 	if !meta_exists {

@@ -175,7 +175,15 @@ pub async fn create_event(
 				.room_state_get(room_id, &event_type.clone().to_string().into(), state_key)
 				.await
 			{
-				unsigned.insert("prev_content".to_owned(), prev_pdu.get_content_as_value());
+				if !unsigned.contains_key("prev_content") {
+					let mut content = prev_pdu.get_content_as_value();
+					if let Some(is_direct) = prev_pdu.get_unsigned_as_value().get("is_direct") {
+						if let Some(map) = content.as_object_mut() {
+							map.insert("is_direct".to_owned(), is_direct.clone());
+						}
+					}
+					unsigned.insert("prev_content".to_owned(), content);
+				}
 				unsigned
 					.insert("prev_sender".to_owned(), serde_json::to_value(prev_pdu.sender())?);
 				unsigned.insert(
@@ -254,10 +262,16 @@ pub async fn create_event(
 		create_event,
 	)
 	.await
-	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
+	.map_err(|e| match e {
+		| state_res::Error::InvalidPdu(msg) => err!(Request(BadJson(warn!("{msg}")))),
+		| _ => err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))),
+	})?;
 
 	if !auth_check {
-		return Err!(Request(Forbidden("Event is not authorized.")));
+		return Err!(Request(Forbidden(warn!(
+			"Event is not authorized. kind: {}, state_key: {:?}, sender: {}",
+			pdu.kind, pdu.state_key, pdu.sender
+		))));
 	}
 	trace!(
 		"Event {} in room {} is authorized",

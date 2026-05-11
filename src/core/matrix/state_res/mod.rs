@@ -1,6 +1,6 @@
 #![cfg_attr(test, allow(warnings))]
 
-pub(crate) mod error;
+pub mod error;
 pub mod event_auth;
 mod power_levels;
 mod room_version;
@@ -29,19 +29,18 @@ use ruma::{
 };
 use serde_json::from_str as from_json_str;
 
-pub(crate) use self::error::Error;
 use self::power_levels::PowerLevelsContentFields;
 pub use self::{
-	event_auth::{auth_check, auth_types_for_event},
+	error::Error,
+	event_auth::{RoomCreateContentFields, auth_check, auth_types_for_event},
 	room_version::RoomVersion,
 };
 use crate::{
-	debug, debug_error, err,
+	debug, debug_error, err, info,
 	matrix::{Event, StateKey},
 	state_res::room_version::StateResolutionVersion,
 	trace,
 	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, WidebandExt},
-	warn,
 };
 
 /// A mapping of event type and state_key to some value `T`, usually an
@@ -96,6 +95,7 @@ where
 {
 	use RoomVersionId::*;
 	let stateres_version = match room_version {
+		| V1 => StateResolutionVersion::V1,
 		| V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 | V11 => StateResolutionVersion::V2,
 		| _ => StateResolutionVersion::V2_1,
 	};
@@ -696,7 +696,7 @@ where
 					ev.clone(),
 				);
 			} else {
-				warn!(event_id = aid.as_str(), "missing auth event");
+				info!(event_id = aid.as_str(), "missing auth event");
 			}
 		}
 
@@ -760,7 +760,7 @@ where
 			},
 			| Ok(false) => {
 				// synapse passes here on AuthError. We do not add this event to resolved_state.
-				warn!("event {} failed the authentication check", event.event_id());
+				info!("event {} failed the authentication check", event.event_id());
 			},
 			| Err(e) => {
 				debug_error!("event {} failed the authentication check: {e}", event.event_id());
@@ -943,7 +943,7 @@ fn is_power_event(event: &impl Event) -> bool {
 		| TimelineEventType::RoomCreate => event.state_key() == Some(""),
 		| TimelineEventType::RoomMember => {
 			if let Ok(content) = from_json_str::<RoomMemberEventContent>(event.content().get()) {
-				if [MembershipState::Leave, MembershipState::Ban].contains(&content.membership) {
+				if matches!(content.membership, MembershipState::Leave | MembershipState::Ban) {
 					return Some(event.sender().as_str()) != event.state_key();
 				}
 			}
