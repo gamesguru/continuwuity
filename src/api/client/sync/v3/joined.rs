@@ -260,17 +260,31 @@ async fn build_state_and_timeline(
 	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<StateAndTimeline> {
-	let (shortstatehashes, timeline) = try_join(
+	let (mut shortstatehashes, timeline) = try_join(
 		fetch_shortstatehashes(services, sync_context, room_id),
 		build_timeline(services, sync_context, room_id),
 	)
 	.await?;
 
+	// Fallback: if this is an incremental sync and we lost the previous state
+	// hash, but the timeline is completely empty and un-limited, the state
+	// could not have possibly changed. Fall back to the current state to
+	// prevent a false `joined_since_last_sync` which would trigger expensive
+	// full-state payloads via `build_state_initial`.
+	if sync_context.last_sync_end_count.is_some()
+		&& shortstatehashes.last_sync_end_shortstatehash.is_none()
+		&& timeline.pdus.is_empty()
+		&& !timeline.limited
+	{
+		shortstatehashes.last_sync_end_shortstatehash =
+			Some(shortstatehashes.current_shortstatehash);
+	}
+
 	let (state_events, state_after, notification_counts, joined_since_last_sync) = try_join4(
 		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_state_after(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
+		check_joined_since_last_sync(services, shortstatehashes, sync_context, &timeline),
 	)
 	.await?;
 
@@ -621,6 +635,7 @@ async fn check_joined_since_last_sync(
 		current_shortstatehash,
 	}: ShortStateHashes,
 	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
+	timeline: &TimelinePdus,
 ) -> Result<bool> {
 	// TODO: If the requesting user got state-reset out of the room, this
 	// will be `true` when it shouldn't be. this function should never be called
@@ -641,6 +656,10 @@ async fn check_joined_since_last_sync(
 				)
 				.await
 				.ok(),
+			// When the shortstatehash is missing (e.g. token mapping expired
+			// or no events in this room near the sync token), we can't
+			// determine previous membership from state alone. Fall through
+			// to corroborate with the timeline below.
 			| None => None,
 		};
 
@@ -660,6 +679,33 @@ async fn check_joined_since_last_sync(
 		) && membership_during_current_sync.as_ref().is_some_and(
 			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
 		);
+
+		// When the previous shortstatehash is missing and state-based
+		// membership is inconclusive, corroborate by checking whether
+		// the user's join event actually appears in the timeline. If it
+		// doesn't, this is a false positive caused by a missing token
+		// mapping, not a real join.
+		let joined_since_last_sync =
+			if joined_since_last_sync && last_sync_end_shortstatehash.is_none() {
+				let timeline_has_join = timeline.pdus.iter().any(|(_, pdu)| {
+					pdu.kind == RoomMember
+						&& pdu.state_key.as_deref() == Some(syncing_user.as_str())
+						&& pdu
+							.get_content::<RoomMemberEventContent>()
+							.is_ok_and(|c| c.membership == MembershipState::Join)
+				});
+
+				if !timeline_has_join {
+					trace!(
+						"previous shortstatehash missing but no join event in timeline; \
+						 suppressing false joined_since_last_sync"
+					);
+				}
+
+				timeline_has_join
+			} else {
+				joined_since_last_sync
+			};
 
 		if joined_since_last_sync && membership_during_previous_sync.is_some() {
 			debug_warn!(
