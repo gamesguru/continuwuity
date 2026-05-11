@@ -229,29 +229,18 @@ pub enum YoloCommand {
 		room_id: OwnedRoomId,
 	},
 
-	/// Compares local room state with a remote server.
+	/// Compares room state. With one server, compares local state against
+	/// it. With multiple servers, also compares the first server against
+	/// each additional server.
 	CompareRoomState {
 		/// The room ID.
 		room_id: OwnedRoomId,
-		/// The server to compare with.
-		server: OwnedServerName,
-		/// The event ID to query state at. If not provided, uses the latest
-		/// local event.
-		#[arg(long)]
-		at_event: Option<OwnedEventId>,
-	},
-
-	/// Compares room state between remote servers. First server is the
-	/// base; each additional server is compared against it.
-	CompareRemoteState {
-		/// The room ID.
-		room_id: OwnedRoomId,
-		/// Base server to compare against.
-		base_server: OwnedServerName,
-		/// One or more servers to compare with the base.
+		/// One or more servers to compare against. First server is
+		/// compared against local state; additional servers are compared
+		/// against the first.
 		servers: Vec<OwnedServerName>,
-		/// The event ID to use as a reference point. Will be found
-		/// automatically if not provided.
+		/// The event ID to query state at. If not provided, uses the
+		/// latest local event.
 		#[arg(long)]
 		at_event: Option<OwnedEventId>,
 	},

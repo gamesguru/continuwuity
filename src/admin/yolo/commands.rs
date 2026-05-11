@@ -13,7 +13,7 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, future::ready, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	OwnedUserId, RoomId, RoomVersionId,
+	OwnedUserId, RoomId,
 	api::federation::event::{get_event, get_room_state},
 	events::{StateEventType, TimelineEventType},
 };
@@ -1718,9 +1718,15 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 pub(super) async fn compare_room_state(
 	&self,
 	room_id: OwnedRoomId,
-	server: OwnedServerName,
+	servers: Vec<OwnedServerName>,
 	at_event: Option<OwnedEventId>,
 ) -> Result {
+	use std::fmt::Write;
+
+	if servers.is_empty() {
+		return Err!(Request(InvalidParam("Provide at least one server to compare against.")));
+	}
+	let server = &servers[0];
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
@@ -1749,7 +1755,7 @@ pub(super) async fn compare_room_state(
 	let response = match self
 		.services
 		.sending
-		.send_federation_request(&server, get_room_state::v1::Request {
+		.send_federation_request(server, get_room_state::v1::Request {
 			room_id: room_id.clone(),
 			event_id: at_event_id.clone(),
 		})
@@ -1932,254 +1938,122 @@ pub(super) async fn compare_room_state(
 	};
 
 	let mut out = format!(
-		"Room State Comparison for {room_id} {server}\n- at_event (sent to remote): \
+		"Room State Comparison for {room_id} vs {server}\n- at_event (sent to remote): \
 		 {at_event_id}\n- local tip: {latest_local_id}\n- Missing locally: {}\n- Extra locally: \
-		 {}\n",
+		 {}\n- Skipped (bad sig): {skipped}\n",
 		missing_locally.len(),
 		extra_locally.len()
 	);
-	writeln!(out, "```").expect("fmt");
-	writeln!(out, "Room SSH:        {local_state_hash}").expect("fmt");
-	writeln!(out, "Extremities:     {extremity_count}").expect("fmt");
+	writeln!(out, "```")?;
+	writeln!(out, "Room SSH:        {local_state_hash}")?;
+	writeln!(out, "Extremities:     {extremity_count}")?;
 	writeln!(
 		out,
 		"Local joined:    state={local_state_joined}, cache={cached_joined} {cache_status}"
-	)
-	.expect("fmt");
-	writeln!(out, "Local invited:   state={local_state_invited}").expect("fmt");
-	writeln!(out, "Remote joined:   {}", remote_joined.len()).expect("fmt");
-	writeln!(out, "Remote invited:  {}", remote_invited.len()).expect("fmt");
+	)?;
+	writeln!(out, "Local invited:   state={local_state_invited}")?;
+	writeln!(out, "Remote joined:   {}", remote_joined.len())?;
+	writeln!(out, "Remote invited:  {}", remote_invited.len())?;
 	if tip_is_state_event {
 		writeln!(
 			out,
 			"NOTE: Tip is a state event — injected into remote state for state-after comparison"
-		)
-		.expect("fmt");
+		)?;
 	}
-	writeln!(out, "```").expect("fmt");
-	fmt_list(&mut out, "Missing IDs", &missing_locally).expect("fmt");
-	fmt_list(&mut out, "Extra IDs", &extra_locally).expect("fmt");
+	writeln!(out, "```")?;
+	fmt_list(&mut out, "Missing IDs", &missing_locally)?;
+	fmt_list(&mut out, "Extra IDs", &extra_locally)?;
+	self.write_str(&out).await?;
 
-	self.write_str(&out).await
-}
+	// If additional servers provided, compare first server against each
+	if servers.len() > 1 {
+		let tip_key: Option<(String, String)> = tip_pdu_opt.as_ref().and_then(|pdu| {
+			pdu.state_key
+				.as_ref()
+				.map(|sk| (pdu.kind.to_string(), sk.to_string()))
+		});
 
-#[admin_command]
-pub(super) async fn compare_remote_state(
-	&self,
-	room_id: OwnedRoomId,
-	base_server: OwnedServerName,
-	servers: Vec<OwnedServerName>,
-	at_event: Option<OwnedEventId>,
-) -> Result {
-	use std::fmt::Write;
-
-	if servers.is_empty() {
-		return Err!(Request(InvalidParam(
-			"Provide at least one server to compare against the base."
-		)));
-	}
-
-	// Try to resolve at_event: explicit > local timeline > error
-	let at_event_id = match at_event {
-		| Some(event_id) => event_id,
-		| None => {
-			// Fall back to local timeline if we know the room
-			match self
+		for cmp_server in &servers[1..] {
+			let response = match self
 				.services
-				.rooms
-				.timeline
-				.latest_pdu_in_room(&room_id)
+				.sending
+				.send_federation_request(cmp_server, get_room_state::v1::Request {
+					room_id: room_id.clone(),
+					event_id: at_event_id.clone(),
+				})
 				.await
 			{
-				| Ok(pdu) => pdu.event_id().to_owned(),
-				| Err(_) => {
-					return Err!(Request(NotFound(
-						"Room not known locally. Provide an --at-event ID to compare remote \
-						 state for rooms this server hasn't joined."
-					)));
+				| Ok(r) => r,
+				| Err(e) => {
+					self.write_str(&format!("\n--- vs {cmp_server}: ERROR: {e}\n"))
+						.await?;
+					continue;
 				},
-			}
-		},
-	};
+			};
 
-	// Fetch base server state
-	let base_response = self
-		.services
-		.sending
-		.send_federation_request(&base_server, get_room_state::v1::Request {
-			room_id: room_id.clone(),
-			event_id: at_event_id.clone(),
-		})
-		.await?;
-
-	// Determine room version: local DB > base response m.room.create > default
-	let room_version = match self.services.rooms.state.get_room_version(&room_id).await {
-		| Ok(v) => v,
-		| Err(_) => {
-			// Extract from base response's m.room.create event
-			let mut found_version = None;
-			for pdu_raw in &base_response.pdus {
-				if let Ok(obj) = serde_json::from_str::<serde_json::Map<String, JsonValue>>(
-					&serde_json::to_string(pdu_raw)?,
-				) {
-					if obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create") {
-						found_version = obj
-							.get("content")
-							.and_then(|c| c.get("room_version"))
-							.and_then(|v| v.as_str())
-							.and_then(|s| s.parse().ok());
-						break;
-					}
+			let mut server_state = HashMap::new();
+			let mut verify_errors = 0_usize;
+			for pdu_raw in &response.pdus {
+				let Ok((event_id, value)) = self
+					.services
+					.server_keys
+					.validate_and_add_event_id(pdu_raw, &room_version)
+					.await
+				else {
+					verify_errors = verify_errors.saturating_add(1);
+					continue;
+				};
+				let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))
+				else {
+					continue;
+				};
+				event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
+				if let Some(state_key) = &pdu.state_key {
+					server_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
 				}
 			}
-			found_version.unwrap_or(RoomVersionId::V11)
-		},
-	};
 
-	let mut base_state = HashMap::new();
-	let mut event_timestamps: HashMap<OwnedEventId, u64> = HashMap::new();
-	let mut base_verify_errors = 0_usize;
-	for pdu in &base_response.pdus {
-		let Ok((event_id, value)) = self
-			.services
-			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
-			.await
-		else {
-			base_verify_errors = base_verify_errors.saturating_add(1);
-			continue;
-		};
-
-		let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
-			continue;
-		};
-		event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
-		if let Some(state_key) = &pdu.state_key {
-			base_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
-		}
-	}
-
-	let mut output = format!(
-		"Remote State Comparison for {room_id}:\n- Base: {base_server} ({} state events)\n- \
-		 at_event: {at_event_id}\n",
-		base_state.len()
-	);
-
-	if base_verify_errors > 0 {
-		writeln!(output, "- Base verify errors: {base_verify_errors} (signature check failed)")?;
-	}
-
-	// Federation /state returns state BEFORE the queried event. When the
-	// at_event is a state event, inject it into the base set so both sides
-	// reflect state-after (matching the room SSH).
-	// Cache tip injection key so we don't re-fetch from DB per server
-	let tip_injection_key: Option<(String, String)> =
-		if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&at_event_id).await {
-			if let Some(state_key) = &tip_pdu.state_key {
-				let key = (tip_pdu.kind.to_string(), state_key.to_string());
-				base_state.insert(key.clone(), at_event_id.clone());
-				writeln!(
-					output,
-					"NOTE: at_event is a state event ({} {}) — injected into all sides for \
-					 state-after comparison.",
-					tip_pdu.kind, state_key
-				)?;
-				Some(key)
-			} else {
-				None
+			if let Some(ref key) = tip_key {
+				server_state.insert(key.clone(), at_event_id.clone());
 			}
-		} else {
-			None
-		};
 
-	// Flush header immediately
-	self.write_str(&output).await?;
-	output.clear();
-
-	// Compare each server against the base
-	for server in &servers {
-		let response = match self
-			.services
-			.sending
-			.send_federation_request(server, get_room_state::v1::Request {
-				room_id: room_id.clone(),
-				event_id: at_event_id.clone(),
-			})
-			.await
-		{
-			| Ok(r) => r,
-			| Err(e) => {
-				writeln!(output, "\n--- vs {server}: ERROR: {e}")?;
-				self.write_str(&output).await?;
-				output.clear();
-				continue;
-			},
-		};
-
-		let mut server_state = HashMap::new();
-		let mut verify_errors = 0_usize;
-		for pdu in &response.pdus {
-			let Ok((event_id, value)) = self
-				.services
-				.server_keys
-				.validate_and_add_event_id(pdu, &room_version)
-				.await
-			else {
-				verify_errors = verify_errors.saturating_add(1);
-				continue;
-			};
-			let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) else {
-				continue;
-			};
-			event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
-			if let Some(state_key) = &pdu.state_key {
-				server_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+			let mut only_on_first = Vec::new();
+			for (key, event_id) in &remote_state {
+				if server_state.get(key) != Some(event_id) {
+					let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+					only_on_first.push((
+						ts,
+						format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts)),
+					));
+				}
 			}
-		}
+			only_on_first.sort_by_key(|(ts, _)| *ts);
 
-		// Inject the at_event into comparison state too (cached key, no DB fetch)
-		if let Some(ref key) = tip_injection_key {
-			server_state.insert(key.clone(), at_event_id.clone());
-		}
-
-		let mut only_on_base = Vec::new();
-		for (key, event_id) in &base_state {
-			if server_state.get(key) != Some(event_id) {
-				let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
-				only_on_base
-					.push((ts, format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts))));
+			let mut only_on_cmp = Vec::new();
+			for (key, event_id) in &server_state {
+				if remote_state.get(key) != Some(event_id) {
+					let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+					only_on_cmp.push((
+						ts,
+						format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts)),
+					));
+				}
 			}
-		}
-		only_on_base.sort_by_key(|(ts, _)| *ts);
+			only_on_cmp.sort_by_key(|(ts, _)| *ts);
 
-		let mut only_on_server = Vec::new();
-		for (key, event_id) in &server_state {
-			if base_state.get(key) != Some(event_id) {
-				let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
-				only_on_server
-					.push((ts, format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts))));
+			let mut section = format!(
+				"\n--- {server} vs {cmp_server}:\n  Only on {server}: {}  Only on {cmp_server}: \
+				 {}\n",
+				only_on_first.len(),
+				only_on_cmp.len()
+			);
+			if verify_errors > 0 {
+				writeln!(section, "  Skipped (bad sig): {verify_errors}")?;
 			}
+			fmt_list(&mut section, &format!("  IDs only on {server}"), &only_on_first)?;
+			fmt_list(&mut section, &format!("  IDs only on {cmp_server}"), &only_on_cmp)?;
+			self.write_str(&section).await?;
 		}
-		only_on_server.sort_by_key(|(ts, _)| *ts);
-
-		writeln!(output, "\n--- vs {server}:")?;
-		writeln!(
-			output,
-			"  Only on {base_server}: {}  Only on {server}: {}",
-			only_on_base.len(),
-			only_on_server.len()
-		)?;
-
-		fmt_list(&mut output, &format!("  IDs only on {base_server}"), &only_on_base)?;
-		fmt_list(&mut output, &format!("  IDs only on {server}"), &only_on_server)?;
-
-		if verify_errors > 0 {
-			writeln!(output, "  Verify errors: {verify_errors}")?;
-		}
-
-		// Flush after each server so results appear incrementally
-		self.write_str(&output).await?;
-		output.clear();
 	}
 
 	Ok(())
