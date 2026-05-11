@@ -186,6 +186,34 @@ async fn process_inbound_transaction(
 	}
 
 	let elapsed = txn_start_time.elapsed();
+
+	// Record transaction timing metrics
+	let elapsed_us = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+	services
+		.server
+		.metrics
+		.transactions_time
+		.fetch_add(elapsed_us, std::sync::atomic::Ordering::Relaxed);
+	services
+		.server
+		.metrics
+		.transactions_max_time_1m
+		.fetch_max(elapsed_us, std::sync::atomic::Ordering::Relaxed);
+	if elapsed > Duration::from_secs(1) {
+		services
+			.server
+			.metrics
+			.transactions_slow_1s
+			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	}
+	if elapsed > Duration::from_secs(10) {
+		services
+			.server
+			.metrics
+			.transactions_slow_10s
+			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	}
+
 	if elapsed < Duration::from_millis(50) {
 		debug!(
 			target: "federation-nominal",

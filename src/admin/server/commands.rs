@@ -334,6 +334,26 @@ pub(super) async fn diagnostics(&self) -> Result {
 			.transactions_rate_1m
 			.load(std::sync::atomic::Ordering::Relaxed)
 	)?;
+	let total_time_us = metrics
+		.transactions_time
+		.load(std::sync::atomic::Ordering::Relaxed);
+	let total_time_s = total_time_us / 1_000_000;
+	let total_time_frac = (total_time_us % 1_000_000) / 100_000;
+	writeln!(info, "**Total Processing Time:** {total_time_s}.{total_time_frac}s")?;
+	writeln!(
+		info,
+		"**Slow Txns (>1s):** {}",
+		metrics
+			.transactions_slow_1s
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Slow Txns (>10s):** {}",
+		metrics
+			.transactions_slow_10s
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
 
 	writeln!(info, "\n## Aggregated DNS Metrics")?;
 	writeln!(
