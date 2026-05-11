@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 #[cfg(feature = "ldap")]
 use conduwuit::result::LogErr;
 use conduwuit::{
-	Err, Error, Result, Server, debug, debug_warn, err, info, is_equal_to, trace,
+	Err, Error, Result, Server, debug_warn, err, info, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
 	warn,
 };
@@ -876,22 +876,16 @@ impl Service {
 			}) {
 				info!(
 					target: "cross_signing",
-					"Adding master cross-signing key for user {}",
+					"Storing new master cross-signing key for user {}",
 					user_id
 				);
-			} else {
-				debug!(
-					target: "cross_signing",
-					"Master cross-signing key for user {} already exists",
-					user_id
-				);
+
+				self.db.keyid_key.insert(&master_key_key, new_key_vec);
+
+				self.db
+					.userid_masterkeyid
+					.insert(user_id.as_bytes(), &master_key_key);
 			}
-
-			self.db.keyid_key.insert(&master_key_key, new_key_vec);
-
-			self.db
-				.userid_masterkeyid
-				.insert(user_id.as_bytes(), &master_key_key);
 		}
 
 		// Self-signing key
@@ -948,22 +942,16 @@ impl Service {
 			}) {
 				info!(
 					target: "cross_signing",
-					"Adding self-signing key for user {}",
+					"Storing new self-signing key for user {}",
 					user_id
 				);
-			} else {
-				debug!(
-					target: "cross_signing",
-					"Self-signing key for user {} already exists",
-					user_id
-				);
+
+				self.db.keyid_key.insert(&self_signing_key_key, new_key_vec);
+
+				self.db
+					.userid_selfsigningkeyid
+					.insert(user_id.as_bytes(), &self_signing_key_key);
 			}
-
-			self.db.keyid_key.insert(&self_signing_key_key, new_key_vec);
-
-			self.db
-				.userid_selfsigningkeyid
-				.insert(user_id.as_bytes(), &self_signing_key_key);
 		}
 
 		if let Some(user_signing_key) = user_signing_key {
@@ -1002,22 +990,16 @@ impl Service {
 			}) {
 				info!(
 					target: "cross_signing",
-					"Adding user-signing key for user {}",
+					"Storing new user-signing key for user {}",
 					user_id
 				);
-			} else {
-				debug!(
-					target: "cross_signing",
-					"User-signing key for user {} already exists",
-					user_id
-				);
+
+				self.db.keyid_key.put_raw(user_signing_key_key, new_key_vec);
+
+				self.db
+					.userid_usersigningkeyid
+					.raw_put(user_id, user_signing_key_key);
 			}
-
-			self.db.keyid_key.put_raw(user_signing_key_key, new_key_vec);
-
-			self.db
-				.userid_usersigningkeyid
-				.raw_put(user_id, user_signing_key_key);
 		}
 
 		if notify {
