@@ -102,6 +102,21 @@ pub enum DebugCommand {
 		server_name: Option<OwnedServerName>,
 	},
 
+	/// Import a server signing key into the local cache.
+	///
+	/// Useful when a server rotated keys without publishing old ones,
+	/// and you have the old key material from another source.
+	ImportSigningKey {
+		/// The server name (e.g., canceled.cc)
+		server_name: OwnedServerName,
+
+		/// The key ID (e.g., ed25519:1)
+		key_id: String,
+
+		/// The base64-encoded public key
+		public_key: String,
+	},
+
 	/// Sends a federation request to the remote server's
 	///   `/_matrix/federation/v1/version` endpoint and measures the latency it
 	///   took for the server to respond
