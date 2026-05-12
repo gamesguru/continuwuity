@@ -2460,7 +2460,13 @@ pub(super) async fn import_outliers(&self, jsonl: String) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn import_pdus(&self, room_id: OwnedRoomId, path: String) -> Result {
+pub(super) async fn import_pdus(
+	&self,
+	room_id: OwnedRoomId,
+	path: String,
+	skip_auth: bool,
+	skip_sig_verify: bool,
+) -> Result {
 	use tokio::io::{AsyncBufReadExt, BufReader};
 
 	self.bail_restricted()?;
@@ -2469,77 +2475,103 @@ pub(super) async fn import_pdus(&self, room_id: OwnedRoomId, path: String) -> Re
 		.await
 		.map_err(|e| err!("Failed to open file {path}: {e:?}"))?;
 	let mut lines = BufReader::new(file).lines();
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let origin = room_id
+		.server_name()
+		.filter(|s| !self.services.globals.server_is_ours(s))
+		.unwrap_or_else(|| self.services.globals.server_name());
 
 	let mut inserted = 0_usize;
-	let mut skipped = 0_usize;
 	let mut failed = 0_usize;
 	let mut total = 0_usize;
 
-	self.write_str(&format!("Importing PDUs from {path} into {room_id} (streaming)...\n"))
-		.await?;
+	let mode = match (skip_auth, skip_sig_verify) {
+		| (true, _) => "force-insert (skip-auth)",
+		| (_, true) => "auth-checked (skip-sig-verify)",
+		| _ => "full pipeline",
+	};
+
+	self.write_str(&format!(
+		"Importing PDUs from {path} into {room_id} [{mode}] (streaming)...\n"
+	))
+	.await?;
+
+	// Helper: extract event_id from raw JSON value
+	let extract_event_id = |value: &CanonicalJsonObject| -> Option<OwnedEventId> {
+		value
+			.get("event_id")
+			.and_then(ruma::CanonicalJsonValue::as_str)
+			.and_then(|id| OwnedEventId::parse(id).ok())
+	};
+
+	// Helper: serialize a CanonicalJsonObject to RawValue
+	let to_raw = |value: &CanonicalJsonObject| -> Box<serde_json::value::RawValue> {
+		serde_json::value::RawValue::from_string(
+			serde_json::to_string(value).expect("valid json"),
+		)
+		.expect("valid raw")
+	};
 
 	while let Ok(Some(line)) = lines.next_line().await {
 		if line.trim().is_empty() {
 			continue;
 		}
-
 		total = total.saturating_add(1);
 
-		let value: CanonicalJsonObject = match serde_json::from_str(&line) {
-			| Ok(v) => v,
+		let result: Result = async {
+			let value: CanonicalJsonObject = serde_json::from_str(&line)?;
+
+			if skip_auth {
+				let eid = extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?;
+				let pdu = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))?;
+				self.services
+					.rooms
+					.timeline
+					.force_insert_pdu(&room_id, &eid, &pdu, &value)
+					.await
+					.map(|_| ())
+			} else {
+				let (eid, val) = if skip_sig_verify {
+					(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
+				} else {
+					self.services
+						.server_keys
+						.validate_and_add_event_id(&to_raw(&value), &room_version)
+						.await?
+				};
+				let (_, _, canonical) = self
+					.services
+					.rooms
+					.event_handler
+					.parse_incoming_pdu(&to_raw(&val))
+					.await?;
+				self.services
+					.rooms
+					.event_handler
+					.handle_incoming_pdu(origin, &room_id, &eid, canonical, true)
+					.await?;
+				Ok(())
+			}
+		}
+		.await;
+
+		match result {
+			| Ok(()) => inserted = inserted.saturating_add(1),
 			| Err(e) => {
-				warn!("import_pdus: bad JSON line: {e:?}");
+				warn!("import_pdus: {e}");
 				failed = failed.saturating_add(1);
-				continue;
-			},
-		};
-
-		let Some(event_id) = value
-			.get("event_id")
-			.and_then(ruma::CanonicalJsonValue::as_str)
-			.and_then(|id| OwnedEventId::parse(id).ok())
-		else {
-			failed = failed.saturating_add(1);
-			continue;
-		};
-
-		let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref())) {
-			| Ok(p) => p,
-			| Err(e) => {
-				warn!("import_pdus: bad PDU {event_id}: {e:?}");
-				failed = failed.saturating_add(1);
-				continue;
-			},
-		};
-
-		match self
-			.services
-			.rooms
-			.timeline
-			.force_insert_pdu(&room_id, &event_id, &pdu, &value)
-			.await
-		{
-			| Ok(_) => {
-				inserted = inserted.saturating_add(1);
-			},
-			| Err(_) => {
-				// Already in timeline
-				skipped = skipped.saturating_add(1);
 			},
 		}
 
-		let done = inserted.saturating_add(skipped).saturating_add(failed);
+		let done = inserted.saturating_add(failed);
 		if done.is_multiple_of(1000) {
-			info!(
-				"import_pdus: progress {done} lines ({inserted} ok, {skipped} skip, {failed} \
-				 err)"
-			);
+			info!("import_pdus: {done}/{total} ({inserted} ok, {failed} err)");
 		}
 	}
 
 	self.write_str(&format!(
-		"\nImported {inserted} PDUs, skipped {skipped}, failed {failed} out of {total} total \
-		 for {room_id}. Run `reorder-timeline` and `force-set-room-state` to finalize."
+		"\nImported {inserted} PDUs, failed {failed} out of {total} total for {room_id}. Run \
+		 `reorder-timeline` and `force-set-room-state` to finalize."
 	))
 	.await
 }
@@ -2632,7 +2664,7 @@ pub(super) async fn dag_merge_base(
 	event_a: Option<OwnedEventId>,
 	event_b: Option<OwnedEventId>,
 	max_depth: usize,
-	no_federate: bool,
+	federate: bool,
 ) -> Result {
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
@@ -2747,9 +2779,8 @@ pub(super) async fn dag_merge_base(
 
 			let event_stub_raw = response.event;
 
-			let event_stub: CanonicalJsonObject =
-				serde_json::from_str(event_stub_raw.get())
-					.map_err(|e| err!("Invalid make_join template from {server}: {e}"))?;
+			let event_stub: CanonicalJsonObject = serde_json::from_str(event_stub_raw.get())
+				.map_err(|e| err!("Invalid make_join template from {server}: {e}"))?;
 
 			let remote_tips: Vec<OwnedEventId> = event_stub
 				.get("prev_events")
@@ -2757,9 +2788,8 @@ pub(super) async fn dag_merge_base(
 				.map(|arr| {
 					arr.iter()
 						.filter_map(|v| {
-							v.as_str().and_then(|s| {
-								<&EventId>::try_from(s).ok().map(ToOwned::to_owned)
-							})
+							v.as_str()
+								.and_then(|s| <&EventId>::try_from(s).ok().map(ToOwned::to_owned))
 						})
 						.collect()
 				})
@@ -2774,10 +2804,8 @@ pub(super) async fn dag_merge_base(
 			// Pick the first tip. If there are multiple extremities, just
 			// use the first — the BFS will find the merge base regardless.
 			let remote_tip_id = remote_tips.into_iter().next().expect("checked non-empty");
-			self.write_str(&format!(
-				"Remote tip (via make_join): {remote_tip_id}\n"
-			))
-			.await?;
+			self.write_str(&format!("Remote tip (via make_join): {remote_tip_id}\n"))
+				.await?;
 			remote_tip_id
 		},
 	};
@@ -2832,9 +2860,12 @@ pub(super) async fn dag_merge_base(
 
 			let pdu = match get_pdu_any!(&current) {
 				| Some(p) => Some(p),
-				| None if !no_federate => {
+				| None if federate => {
 					fetched_events = fetched_events.saturating_add(1);
-					info!("dag-merge-base: fetching {current} from {server} (A-side, #{fetched_events})");
+					info!(
+						"dag-merge-base: fetching {current} from {server} (A-side, \
+						 #{fetched_events})"
+					);
 					fed_fetch!(current.clone())
 				},
 				| None => None,
@@ -2865,9 +2896,12 @@ pub(super) async fn dag_merge_base(
 
 			let pdu = match get_pdu_any!(&current) {
 				| Some(p) => Some(p),
-				| None if !no_federate => {
+				| None if federate => {
 					fetched_events = fetched_events.saturating_add(1);
-					info!("dag-merge-base: fetching {current} from {server} (B-side, #{fetched_events})");
+					info!(
+						"dag-merge-base: fetching {current} from {server} (B-side, \
+						 #{fetched_events})"
+					);
 					fed_fetch!(current.clone())
 				},
 				| None => None,

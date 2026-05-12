@@ -293,9 +293,10 @@ pub enum YoloCommand {
 		jsonl: String,
 	},
 
-	/// Force-import PDUs from a JSONL file on disk directly into the
-	/// timeline, bypassing auth checks. Useful for recovering events
-	/// that were rejected due to state forks.
+	/// Import PDUs from a JSONL file on disk into the timeline.
+	///
+	/// By default, each PDU goes through the full federation pipeline:
+	/// signature verification, auth checks, and state resolution.
 	///
 	/// Use `get-remote-dag` to create the JSONL file, then this command
 	/// to import it. Run `reorder-timeline` afterwards to fix ordering.
@@ -304,6 +305,13 @@ pub enum YoloCommand {
 		room_id: OwnedRoomId,
 		/// Path to the JSONL file on disk.
 		path: String,
+		/// Skip auth checks and state resolution (force-insert directly
+		/// into the timeline, bypassing handle_incoming_pdu).
+		#[arg(long)]
+		skip_auth: bool,
+		/// Skip signature verification on incoming PDUs.
+		#[arg(long)]
+		skip_sig_verify: bool,
 	},
 
 	/// Make a raw federation API request to a remote server and print/save
@@ -343,11 +351,11 @@ pub enum YoloCommand {
 		/// Maximum depth to walk before giving up (default: 500).
 		#[arg(long, default_value = "500")]
 		max_depth: usize,
-		/// Disable fetching missing events from the remote server during
-		/// the walk. By default, missing prev_events are fetched via
-		/// federation to avoid dead-ending the BFS.
+		/// Fetch missing events from the remote server during the walk.
+		/// Without this, the walk dead-ends when prev_events are missing
+		/// locally. Logs each federation fetch at INFO level.
 		#[arg(long)]
-		no_federate: bool,
+		federate: bool,
 	},
 
 	/// Forcefully replaces the room state of our local copy of the specified
