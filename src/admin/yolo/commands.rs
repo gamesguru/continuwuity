@@ -2724,15 +2724,16 @@ pub(super) async fn dag_merge_base(
 		},
 	};
 
-	// Check both events exist locally
-	let pdu_a =
-		get_pdu_any!(&event_a).ok_or_else(|| err!("Event A not found locally: {event_a}"))?;
-	let pdu_b = get_pdu_any!(&event_b).ok_or_else(|| {
-		err!(
-			"Event B not found locally: {event_b}. You may need to fetch it first with `debug \
-			 fetch-pdu`."
-		)
-	})?;
+	let pdu_a = match get_pdu_any!(&event_a) {
+		| Some(pdu) => pdu,
+		| None => fed_fetch!(event_a.clone())
+			.ok_or_else(|| err!("Event A not found locally or via federation: {event_a}"))?,
+	};
+	let pdu_b = match get_pdu_any!(&event_b) {
+		| Some(pdu) => pdu,
+		| None => fed_fetch!(event_b.clone())
+			.ok_or_else(|| err!("Event B not found locally or via federation: {event_b}"))?,
+	};
 
 	self.write_str(&format!(
 		"Walking DAG backwards from:\n  A (local): {} (depth {}, type {})\n  B (remote): {} \
