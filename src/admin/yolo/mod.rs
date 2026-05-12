@@ -21,6 +21,11 @@ pub enum YoloCommand {
 		/// Optional remote server to cross-reference.
 		#[arg(long)]
 		server: Option<OwnedServerName>,
+
+		/// Event ID to query remote state at. Defaults to latest PDU
+		/// in the target room (not the admin room).
+		#[arg(long)]
+		at_event: Option<OwnedEventId>,
 	},
 
 	/// Attempts to "rescue" an outlier PDU by upgrading it to a timeline event.

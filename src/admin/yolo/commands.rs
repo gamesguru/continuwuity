@@ -27,6 +27,7 @@ pub(super) async fn audit_membership(
 	&self,
 	room_id: OwnedRoomId,
 	server: Option<OwnedServerName>,
+	at_event: Option<OwnedEventId>,
 ) -> Result {
 	// ── Phase 1: Timeline vs State Snapshot ──────────────────────────────
 	self.write_str("**Phase 1: Timeline vs State Snapshot**\n")
@@ -269,14 +270,17 @@ pub(super) async fn audit_membership(
 		self.write_str(&format!("\n**Phase 3: Local vs Remote ({server})**\n"))
 			.await?;
 
-		let latest_event_id = self
-			.services
-			.rooms
-			.timeline
-			.latest_pdu_in_room(&room_id)
-			.await?
-			.event_id()
-			.to_owned();
+		let latest_event_id = match at_event {
+			| Some(ref eid) => eid.clone(),
+			| None => self
+				.services
+				.rooms
+				.timeline
+				.latest_pdu_in_room(&room_id)
+				.await?
+				.event_id()
+				.to_owned(),
+		};
 
 		match self
 			.services
