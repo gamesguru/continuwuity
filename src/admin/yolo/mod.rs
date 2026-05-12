@@ -358,16 +358,17 @@ pub enum YoloCommand {
 		federate: bool,
 	},
 
-	/// Forcefully replaces the room state of our local copy of the specified
-	///   room, with the copy the specified remote server says.
+	/// Forcefully re-resolve and set room state.
 	///
-	/// Delegates to the debug implementation. Useful for correcting state
-	/// divergence after DAG fractures.
-	ForceSetRoomStateFromServer {
+	/// When called without a server, rebuilds from the local DAG.
+	/// Delegates to the debug implementation.
+	#[clap(alias = "force-set-room-state-from-server")]
+	ForceSetState {
 		/// The impacted room ID
 		room_id: OwnedRoomId,
-		/// The server we will use to query the room state for
-		server_name: OwnedServerName,
+		/// The server to query room state from. If omitted, rebuilds from
+		/// the local DAG without federation.
+		server_name: Option<OwnedServerName>,
 		/// The event ID of the latest known PDU in the room. Will be found
 		/// automatically if not provided.
 		event_id: Option<OwnedEventId>,

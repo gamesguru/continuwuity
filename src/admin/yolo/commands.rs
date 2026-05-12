@@ -2393,9 +2393,9 @@ pub(super) async fn heal_room(
 	if resync_state {
 		self.write_str("Phase 5: Resyncing room state from server...")
 			.await?;
-		Box::pin(self.force_set_room_state_from_server(
+		Box::pin(self.force_set_state(
 			room_id.clone(),
-			server,
+			Some(server),
 			None,
 			nuclear,
 			false,

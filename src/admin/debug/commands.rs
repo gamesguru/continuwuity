@@ -525,10 +525,10 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 #[admin_command]
 #[tracing::instrument(skip(self), level = "info")]
 #[allow(clippy::fn_params_excessive_bools)]
-pub(crate) async fn force_set_room_state_from_server(
+pub(crate) async fn force_set_state(
 	&self,
 	room_id: OwnedRoomId,
-	server_name: OwnedServerName,
+	server_name: Option<OwnedServerName>,
 	at_event: Option<OwnedEventId>,
 	overwrite: bool,
 	skip_sig_verify: bool,
@@ -582,7 +582,7 @@ pub(crate) async fn force_set_room_state_from_server(
 	let at_event_id_clone = at_event_id.clone();
 	let at_event_id_str = at_event_id.to_string();
 
-	// Load state from file or federation
+	// Load state from file, federation, or local database
 	let (pdus, auth_chain): (
 		Vec<Box<serde_json::value::RawValue>>,
 		Vec<Box<serde_json::value::RawValue>>,
@@ -610,12 +610,12 @@ pub(crate) async fn force_set_room_state_from_server(
 			auth_chain.len()
 		);
 		(pdus, auth_chain)
-	} else {
+	} else if let Some(ref server_name) = server_name {
 		info!("Fetching room state from {server_name} at event {at_event_id_str}...");
 		let resp = self
 			.services
 			.sending
-			.send_federation_request(&server_name, get_room_state::v1::Request {
+			.send_federation_request(server_name, get_room_state::v1::Request {
 				room_id: room_id.clone(),
 				event_id: at_event_id,
 			})
@@ -645,6 +645,31 @@ pub(crate) async fn force_set_room_state_from_server(
 		}
 
 		(resp.pdus, resp.auth_chain)
+	} else {
+		// Local-only: rebuild state from existing database without federation
+		info!("Rebuilding room state from local DAG (no federation)...");
+		let ssh = self
+			.services
+			.rooms
+			.state
+			.get_room_shortstatehash(&room_id)
+			.await
+			.map_err(|_| {
+				err!("No existing state for room — provide a server to bootstrap from")
+			})?;
+
+		let local_state: HashMap<u64, OwnedEventId> = self
+			.services
+			.rooms
+			.state_accessor
+			.state_full_ids(ssh)
+			.collect()
+			.await;
+
+		info!("Local state has {} entries, re-resolving...", local_state.len());
+		state = local_state;
+		// No PDUs or auth_chain to process — state is already populated
+		(Vec::new(), Vec::new())
 	};
 
 	info!("Going through room_state response PDUs (skip_sig_verify={skip_sig_verify})");
