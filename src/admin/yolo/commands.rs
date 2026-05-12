@@ -2003,14 +2003,16 @@ pub(super) async fn compare_room_state(
 		"✗ MISMATCH"
 	};
 
-	let mut out = format!(
-		"Room State Comparison for {room_id} vs {server}\n- at_event (sent to remote): \
-		 {at_event_id}\n- local tip: {latest_local_id}\n- Missing locally: {}\n- Extra locally: \
-		 {}\n- Skipped (bad sig): {skipped}\n",
+	let mut out = String::from("```\n");
+	writeln!(
+		out,
+		"Room State Comparison for {room_id} vs {server}\nat_event (sent to remote): \
+		 {at_event_id}\nlocal tip: {latest_local_id}\nMissing locally: {}\nExtra locally: \
+		 {}\nSkipped (bad sig): {skipped}",
 		missing_locally.len(),
 		extra_locally.len()
-	);
-	writeln!(out, "```")?;
+	)?;
+	writeln!(out)?;
 	writeln!(out, "Room SSH:        {local_state_hash}")?;
 	writeln!(out, "Extremities:     {extremity_count}")?;
 	writeln!(
@@ -2026,11 +2028,12 @@ pub(super) async fn compare_room_state(
 			"NOTE: Tip is a state event — injected into remote state for state-after comparison"
 		)?;
 	}
-	writeln!(out, "```")?;
 	if !summary {
+		writeln!(out)?;
 		fmt_list(&mut out, "Missing IDs", &missing_locally)?;
 		fmt_list(&mut out, "Extra IDs", &extra_locally)?;
 	}
+	writeln!(out, "```")?;
 	self.write_str(&out).await?;
 
 	// If additional servers provided, compare first server against each
@@ -2154,18 +2157,19 @@ pub(super) async fn compare_room_state(
 			only_on_cmp.sort_by_key(|(ts, _)| *ts);
 
 			let mut section = format!(
-				"\n--- {server} vs {cmp_server}:\n  Only on {server}: {}  Only on {cmp_server}: \
-				 {}\n  {cmp_server} joined: {cmp_joined}, invited: {cmp_invited}\n",
+				"```\n--- {server} vs {cmp_server}:\nOnly on {server}: {}  Only on \
+				 {cmp_server}: {}\n{cmp_server} joined: {cmp_joined}, invited: {cmp_invited}\n",
 				only_on_first.len(),
 				only_on_cmp.len()
 			);
 			if verify_errors > 0 {
-				writeln!(section, "  Skipped (bad sig): {verify_errors}")?;
+				writeln!(section, "Skipped (bad sig): {verify_errors}")?;
 			}
 			if !summary {
-				fmt_list(&mut section, &format!("  IDs only on {server}"), &only_on_first)?;
-				fmt_list(&mut section, &format!("  IDs only on {cmp_server}"), &only_on_cmp)?;
+				fmt_list(&mut section, &format!("IDs only on {server}"), &only_on_first)?;
+				fmt_list(&mut section, &format!("IDs only on {cmp_server}"), &only_on_cmp)?;
 			}
+			writeln!(section, "```")?;
 			self.write_str(&section).await?;
 		}
 	}
@@ -2199,7 +2203,7 @@ fn fmt_list(out: &mut String, label: &str, items: &[(u64, String)]) -> std::fmt:
 
 	write!(out, "{label}: [")?;
 	for (_, item) in items {
-		write!(out, "\n    {item}")?;
+		write!(out, "\n  {item}")?;
 	}
 	writeln!(out, "{}]", if items.is_empty() { "" } else { "\n" })
 }
