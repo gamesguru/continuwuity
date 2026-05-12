@@ -2395,7 +2395,7 @@ pub(super) async fn heal_room(
 			.await?;
 		Box::pin(self.force_set_state(
 			room_id.clone(),
-			Some(server),
+			vec![server],
 			None,
 			nuclear,
 			false,

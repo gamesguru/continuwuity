@@ -528,7 +528,7 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 pub(crate) async fn force_set_state(
 	&self,
 	room_id: OwnedRoomId,
-	server_name: Option<OwnedServerName>,
+	server_names: Vec<OwnedServerName>,
 	at_event: Option<OwnedEventId>,
 	overwrite: bool,
 	skip_sig_verify: bool,
@@ -610,41 +610,74 @@ pub(crate) async fn force_set_state(
 			auth_chain.len()
 		);
 		(pdus, auth_chain)
-	} else if let Some(ref server_name) = server_name {
-		info!("Fetching room state from {server_name} at event {at_event_id_str}...");
-		let resp = self
-			.services
-			.sending
-			.send_federation_request(server_name, get_room_state::v1::Request {
-				room_id: room_id.clone(),
-				event_id: at_event_id,
-			})
-			.await?;
-		info!(
-			"Received {} state PDUs and {} auth chain events from {server_name}",
-			resp.pdus.len(),
-			resp.auth_chain.len()
-		);
+	} else if !server_names.is_empty() {
+		let mut all_pdus: Vec<Box<serde_json::value::RawValue>> = Vec::new();
+		let mut all_auth: Vec<Box<serde_json::value::RawValue>> = Vec::new();
 
-		if let Some(ref path) = output {
-			info!("Dumping federation state response to {path}");
-			let dump = serde_json::json!({
-				"room_id": room_id,
-				"server_name": server_name,
-				"event_id": at_event_id_str,
-				"pdus": resp.pdus,
-				"auth_chain": resp.auth_chain,
-			});
-			std::fs::write(path, serde_json::to_string_pretty(&dump).unwrap_or_default())
-				.map_err(|e| err!(Database("Failed to write output file: {e:?}")))?;
-			info!(
-				"Dumped {} state PDUs and {} auth chain events",
-				resp.pdus.len(),
-				resp.auth_chain.len()
-			);
+		for server_name in &server_names {
+			info!("Fetching room state from {server_name} at event {at_event_id_str}...");
+			match self
+				.services
+				.sending
+				.send_federation_request(server_name, get_room_state::v1::Request {
+					room_id: room_id.clone(),
+					event_id: at_event_id.clone(),
+				})
+				.await
+			{
+				| Ok(resp) => {
+					info!(
+						"Received {} state PDUs and {} auth chain events from {server_name}",
+						resp.pdus.len(),
+						resp.auth_chain.len()
+					);
+
+					if let Some(ref path) = output {
+						let suffix = if server_names.len() > 1 {
+							format!("-{server_name}")
+						} else {
+							String::new()
+						};
+						let dump_path = format!("{path}{suffix}");
+						info!("Dumping federation state response to {dump_path}");
+						let dump = serde_json::json!({
+							"room_id": room_id,
+							"server_name": server_name,
+							"event_id": at_event_id_str,
+							"pdus": resp.pdus,
+							"auth_chain": resp.auth_chain,
+						});
+						if let Err(e) = std::fs::write(
+							&dump_path,
+							serde_json::to_string_pretty(&dump).unwrap_or_default(),
+						) {
+							warn!("Failed to write output file {dump_path}: {e}");
+						}
+					}
+
+					all_pdus.extend(resp.pdus);
+					all_auth.extend(resp.auth_chain);
+				},
+				| Err(e) => {
+					warn!("Failed to fetch state from {server_name}: {e}");
+					self.write_str(&format!("⚠ Failed to fetch state from {server_name}: {e}\n"))
+						.await?;
+					continue;
+				},
+			}
 		}
 
-		(resp.pdus, resp.auth_chain)
+		if all_pdus.is_empty() {
+			return Err!(Request(Unknown("All servers failed to respond")));
+		}
+
+		info!(
+			"Merged state from {} server(s): {} PDUs, {} auth chain events",
+			server_names.len(),
+			all_pdus.len(),
+			all_auth.len()
+		);
+		(all_pdus, all_auth)
 	} else {
 		// Local-only: rebuild state from existing database without federation
 		info!("Rebuilding room state from local DAG (no federation)...");

@@ -154,17 +154,18 @@ pub enum DebugCommand {
 
 	/// Forcefully re-resolve and set room state.
 	///
-	/// When called without a server, rebuilds state from the local DAG
-	/// and reconciles the membership cache. When a server is provided,
-	/// fetches state via `/_matrix/federation/v1/state/{roomId}` and
-	/// merges it with local state (or replaces it with --absolute).
+	/// When called without servers, rebuilds state from the local DAG
+	/// and reconciles the membership cache. When one or more servers are
+	/// provided, fetches state from each via federation and merges all
+	/// PDUs before running state resolution.
 	#[clap(alias = "force-set-room-state-from-server")]
 	ForceSetState {
 		/// The impacted room ID
 		room_id: OwnedRoomId,
-		/// The server to query room state from. If omitted, rebuilds from
-		/// the local DAG without federation.
-		server_name: Option<OwnedServerName>,
+		/// Servers to query room state from. If omitted, rebuilds from
+		/// the local DAG without federation. Multiple servers will be
+		/// merged before resolution.
+		server_names: Vec<OwnedServerName>,
 		/// The event ID of the latest known PDU in the room. Will be found
 		/// automatically if not provided.
 		event_id: Option<OwnedEventId>,

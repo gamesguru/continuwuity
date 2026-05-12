@@ -360,15 +360,16 @@ pub enum YoloCommand {
 
 	/// Forcefully re-resolve and set room state.
 	///
-	/// When called without a server, rebuilds from the local DAG.
+	/// When called without servers, rebuilds from the local DAG.
+	/// Multiple servers are merged before resolution.
 	/// Delegates to the debug implementation.
 	#[clap(alias = "force-set-room-state-from-server")]
 	ForceSetState {
 		/// The impacted room ID
 		room_id: OwnedRoomId,
-		/// The server to query room state from. If omitted, rebuilds from
+		/// Servers to query room state from. If omitted, rebuilds from
 		/// the local DAG without federation.
-		server_name: Option<OwnedServerName>,
+		server_names: Vec<OwnedServerName>,
 		/// The event ID of the latest known PDU in the room. Will be found
 		/// automatically if not provided.
 		event_id: Option<OwnedEventId>,
