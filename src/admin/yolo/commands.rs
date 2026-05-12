@@ -1122,6 +1122,7 @@ pub(super) async fn get_room_dag(
 	room_id: OwnedRoomOrAliasId,
 	start: u64,
 	end: i64,
+	print: bool,
 ) -> Result {
 	let room_id = self.services.rooms.alias.resolve(&room_id).await?;
 	let pdus = self.services.rooms.timeline.all_pdus(&room_id);
@@ -1178,6 +1179,9 @@ pub(super) async fn get_room_dag(
 			let json = serde_json::to_string(&obj)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;
+			if print {
+				self.write_str(&format!("{json}\n")).await?;
+			}
 			total_prev_events = total_prev_events
 				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
 			count = count.saturating_add(1);
@@ -1261,6 +1265,7 @@ pub(super) async fn get_remote_dag(
 	server: OwnedServerName,
 	limit: i64,
 	from: Option<OwnedEventId>,
+	print: bool,
 ) -> Result {
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
@@ -1295,8 +1300,11 @@ pub(super) async fn get_remote_dag(
 	let mut queue = vec![start_event_id];
 	let mut total = 0_usize;
 	let mut total_prev_events = 0_u64;
+	let mut batches = 0_usize;
 	let batch_size = ruma::uint!(100);
+	let start_time = tokio::time::Instant::now();
 
+	info!("get-remote-dag: starting crawl from {server} for {room_id} (limit: {limit})");
 	self.write_str(&format!("Fetching DAG from {server} for {room_id} (limit: {limit})...\n"))
 		.await?;
 
@@ -1314,6 +1322,7 @@ pub(super) async fn get_remote_dag(
 			limit: batch_size,
 		};
 
+		batches = batches.saturating_add(1);
 		let response = match self
 			.services
 			.sending
@@ -1322,6 +1331,10 @@ pub(super) async fn get_remote_dag(
 		{
 			| Ok(r) => r,
 			| Err(e) => {
+				info!(
+					"get-remote-dag: federation request failed after {total} PDUs in {batches} \
+					 batches: {e}"
+				);
 				self.write_str(&format!("Federation request failed: {e}"))
 					.await?;
 				break;
@@ -1329,6 +1342,7 @@ pub(super) async fn get_remote_dag(
 		};
 
 		if response.pdus.is_empty() {
+			info!("get-remote-dag: server returned empty response after {total} PDUs");
 			break;
 		}
 
@@ -1357,9 +1371,21 @@ pub(super) async fn get_remote_dag(
 			let json = serde_json::to_string(&pdu)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;
+			if print {
+				self.write_str(&format!("{json}\n")).await?;
+			}
 			total_prev_events = total_prev_events
 				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
 			total = total.saturating_add(1);
+
+			if total.is_multiple_of(1000) {
+				let elapsed = start_time.elapsed();
+				info!(
+					"get-remote-dag: {total} PDUs fetched from {server} in {elapsed:?} \
+					 ({batches} batches, queue={})",
+					queue.len()
+				);
+			}
 
 			// Add prev_events to the queue for next iteration
 			for prev in pdu.prev_events() {
@@ -1377,6 +1403,7 @@ pub(super) async fn get_remote_dag(
 		tokio::task::yield_now().await;
 	}
 
+	let elapsed = start_time.elapsed();
 	let (bf_whole, bf_frac) = if total > 0 {
 		let divisor = u64::try_from(total).unwrap_or(1);
 		let scaled = total_prev_events
@@ -1388,6 +1415,10 @@ pub(super) async fn get_remote_dag(
 		(0, 0)
 	};
 
+	info!(
+		"get-remote-dag: complete — {total} PDUs from {server} in {elapsed:?} ({batches} \
+		 batches, bf={bf_whole}.{bf_frac:03})"
+	);
 	self.write_str(&format!(
 		"\nSuccessfully fetched {total} PDUs from {server} to {path} (branching factor: \
 		 {bf_whole}.{bf_frac:03})"

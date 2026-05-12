@@ -166,6 +166,10 @@ pub enum YoloCommand {
 
 		/// End index (0-based, inclusive, or -1 for all)
 		end: i64,
+
+		/// Print PDUs to the admin room (in addition to writing to file)
+		#[arg(long)]
+		print: bool,
 	},
 
 	/// Fetch a room's DAG from a remote server via federation backfill API
@@ -184,6 +188,10 @@ pub enum YoloCommand {
 		/// Event ID to start backfill from (default: latest local event)
 		#[arg(long)]
 		from: Option<OwnedEventId>,
+
+		/// Print PDUs to the admin room (in addition to writing to file)
+		#[arg(long)]
+		print: bool,
 	},
 
 	/// Fetches a PDU from a remote server and attempts to verify/persist it.
