@@ -436,6 +436,13 @@
 #
 #sender_retry_backoff_limit = 86400
 
+# Maximum number of retry attempts for a failed federation destination
+# before its queued events are dropped. This prevents infinite retry
+# loops for permanently unreachable or broken servers. Set to 0 to
+# disable the limit (retry forever).
+#
+#sender_retry_max_attempts = 32
+
 # Appservice URL request connection timeout. Defaults to 35 seconds as
 # generally appservices are hosted within the same network.
 #

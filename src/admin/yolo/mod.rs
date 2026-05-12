@@ -343,11 +343,11 @@ pub enum YoloCommand {
 		/// Maximum depth to walk before giving up (default: 500).
 		#[arg(long, default_value = "500")]
 		max_depth: usize,
-		/// Fetch missing events from the remote server during the walk.
-		/// Without this, the walk dead-ends when prev_events are missing
-		/// locally.
+		/// Disable fetching missing events from the remote server during
+		/// the walk. By default, missing prev_events are fetched via
+		/// federation to avoid dead-ending the BFS.
 		#[arg(long)]
-		federate: bool,
+		no_federate: bool,
 	},
 
 	/// Forcefully replaces the room state of our local copy of the specified

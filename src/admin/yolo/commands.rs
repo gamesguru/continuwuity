@@ -2632,7 +2632,7 @@ pub(super) async fn dag_merge_base(
 	event_a: Option<OwnedEventId>,
 	event_b: Option<OwnedEventId>,
 	max_depth: usize,
-	federate: bool,
+	no_federate: bool,
 ) -> Result {
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
@@ -2713,44 +2713,71 @@ pub(super) async fn dag_merge_base(
 	let event_b = match event_b {
 		| Some(id) => id,
 		| None => {
-			self.write_str(&format!("Fetching remote tip from {server}...\n"))
+			self.write_str(&format!("Probing {server} for remote tip via make_join...\n"))
 				.await?;
-			// Get state_ids at our local tip — the remote server's latest known
-			// event for this room will be in there
-			let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
-			let request = get_room_state::v1::Request {
-				room_id: room_id.clone(),
-				event_id: event_a.clone(),
-			};
+
+			// Use make_join to discover the remote's forward extremities.
+			// This is much cheaper than get_room_state (which fetches ALL
+			// state PDUs). The make_join template's prev_events ARE the
+			// remote's current DAG tips.
+			let user_id = self
+				.services
+				.rooms
+				.state_cache
+				.active_local_users_in_room(&room_id)
+				.boxed()
+				.next()
+				.await
+				.ok_or_else(|| err!("No active local users in room {room_id}"))?
+				.to_owned();
+
+			let make_join_request =
+				ruma::api::federation::membership::prepare_join_event::v1::Request {
+					room_id: room_id.clone(),
+					user_id,
+					ver: self.services.server.supported_room_versions().collect(),
+				};
+
 			let response = self
 				.services
 				.sending
-				.send_federation_request(&server, request)
+				.send_federation_request(&server, make_join_request)
 				.await
-				.map_err(|e| err!("Federation request to {server} failed: {e}"))?;
-			// Find the most recent PDU from the response (highest depth)
-			let mut best: Option<(OwnedEventId, PduEvent)> = None;
-			for raw_pdu in &response.pdus {
-				if let Ok((event_id, value)) = self
-					.services
-					.server_keys
-					.validate_and_add_event_id(raw_pdu, &room_version)
-					.await
-				{
-					if let Ok(pdu) =
-						PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))
-					{
-						let dominated = best.as_ref().is_none_or(|(_, b)| pdu.depth > b.depth);
-						if dominated {
-							best = Some((event_id, pdu));
-						}
-					}
-				}
+				.map_err(|e| err!("make_join to {server} failed: {e}"))?;
+
+			let event_stub_raw = response.event;
+
+			let event_stub: CanonicalJsonObject =
+				serde_json::from_str(event_stub_raw.get())
+					.map_err(|e| err!("Invalid make_join template from {server}: {e}"))?;
+
+			let remote_tips: Vec<OwnedEventId> = event_stub
+				.get("prev_events")
+				.and_then(|v| v.as_array())
+				.map(|arr| {
+					arr.iter()
+						.filter_map(|v| {
+							v.as_str().and_then(|s| {
+								<&EventId>::try_from(s).ok().map(ToOwned::to_owned)
+							})
+						})
+						.collect()
+				})
+				.unwrap_or_default();
+
+			if remote_tips.is_empty() {
+				return Err!(
+					"make_join from {server} returned no prev_events (forward extremities)"
+				);
 			}
-			let (remote_tip_id, _) =
-				best.ok_or_else(|| err!("No valid PDUs found from {server}"))?;
-			self.write_str(&format!("Remote tip: {remote_tip_id}\n"))
-				.await?;
+
+			// Pick the first tip. If there are multiple extremities, just
+			// use the first — the BFS will find the merge base regardless.
+			let remote_tip_id = remote_tips.into_iter().next().expect("checked non-empty");
+			self.write_str(&format!(
+				"Remote tip (via make_join): {remote_tip_id}\n"
+			))
+			.await?;
 			remote_tip_id
 		},
 	};
@@ -2767,9 +2794,12 @@ pub(super) async fn dag_merge_base(
 	};
 
 	self.write_str(&format!(
-		"Walking DAG backwards from:\n  A (local): {} (depth {}, type {})\n  B (remote): {} \
-		 (depth {}, type {})\n\nMax depth: {max_depth}\n",
-		event_a, pdu_a.depth, pdu_a.kind, event_b, pdu_b.depth, pdu_b.kind,
+		"Walking DAG backwards from:\n  A (local):  {event_a} (depth {da}, type {ta})\n  B \
+		 (remote): {event_b} (depth {db}, type {tb})\n\nMax depth: {max_depth}\n",
+		da = pdu_a.depth,
+		ta = pdu_a.kind,
+		db = pdu_b.depth,
+		tb = pdu_b.kind,
 	))
 	.await?;
 
@@ -2802,8 +2832,9 @@ pub(super) async fn dag_merge_base(
 
 			let pdu = match get_pdu_any!(&current) {
 				| Some(p) => Some(p),
-				| None if federate => {
+				| None if !no_federate => {
 					fetched_events = fetched_events.saturating_add(1);
+					info!("dag-merge-base: fetching {current} from {server} (A-side, #{fetched_events})");
 					fed_fetch!(current.clone())
 				},
 				| None => None,
@@ -2834,8 +2865,9 @@ pub(super) async fn dag_merge_base(
 
 			let pdu = match get_pdu_any!(&current) {
 				| Some(p) => Some(p),
-				| None if federate => {
+				| None if !no_federate => {
 					fetched_events = fetched_events.saturating_add(1);
+					info!("dag-merge-base: fetching {current} from {server} (B-side, #{fetched_events})");
 					fed_fetch!(current.clone())
 				},
 				| None => None,
