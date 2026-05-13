@@ -1922,6 +1922,8 @@ pub(super) async fn compare_room_state(
 	// Single pass: build remote state map + count remote members
 	let mut remote_state = HashMap::new();
 	let mut event_timestamps: HashMap<OwnedEventId, u64> = HashMap::new();
+	// (membership_or_empty, sender)
+	let mut event_meta: HashMap<OwnedEventId, (String, String)> = HashMap::new();
 	let mut skipped = 0_usize;
 	let mut remote_joined: HashSet<String> = HashSet::new();
 	let mut remote_invited: HashSet<String> = HashSet::new();
@@ -1952,6 +1954,16 @@ pub(super) async fn compare_room_state(
 		event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
 		if let Some(state_key) = &pdu.state_key {
 			remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id.clone());
+		}
+		// Store metadata for richer diff output
+		{
+			let content: JsonValue = pdu.get_content_as_value();
+			let membership = content
+				.get("membership")
+				.and_then(|v| v.as_str())
+				.unwrap_or("")
+				.to_owned();
+			event_meta.insert(event_id.clone(), (membership, pdu.sender().to_string()));
 		}
 
 		if pdu.kind == TimelineEventType::RoomMember {
@@ -2055,6 +2067,16 @@ pub(super) async fn compare_room_state(
 			let eid = pdu.event_id().to_owned();
 			event_timestamps.insert(eid.clone(), pdu.origin_server_ts().0.into());
 			local_state.insert((event_type.to_string(), state_key.to_string()), eid.clone());
+			// Store metadata for richer diff output
+			{
+				let content: JsonValue = pdu.get_content_as_value();
+				let membership = content
+					.get("membership")
+					.and_then(|v| v.as_str())
+					.unwrap_or("")
+					.to_owned();
+				event_meta.insert(eid.clone(), (membership, pdu.sender().to_string()));
+			}
 
 			if event_type == StateEventType::RoomMember {
 				let content: JsonValue = pdu.get_content_as_value();
@@ -2101,8 +2123,9 @@ pub(super) async fn compare_room_state(
 	for (key, event_id) in &remote_state {
 		if local_state.get(key) != Some(event_id) {
 			let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+			let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 			missing_locally
-				.push((ts, format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts))));
+				.push((ts, format!("{event_id} ({} {}) {}{extra}", key.0, key.1, format_ts(ts))));
 		}
 	}
 	missing_locally.sort_by_key(|(ts, _)| *ts);
@@ -2111,8 +2134,9 @@ pub(super) async fn compare_room_state(
 	for (key, event_id) in &local_state {
 		if remote_state.get(key) != Some(event_id) {
 			let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+			let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 			extra_locally
-				.push((ts, format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts))));
+				.push((ts, format!("{event_id} ({} {}) {}{extra}", key.0, key.1, format_ts(ts))));
 		}
 	}
 	extra_locally.sort_by_key(|(ts, _)| *ts);
@@ -2280,9 +2304,10 @@ pub(super) async fn compare_room_state(
 			for (key, event_id) in &remote_state {
 				if server_state.get(key) != Some(event_id) {
 					let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+					let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 					only_on_first.push((
 						ts,
-						format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts)),
+						format!("{event_id} ({} {}) {}{extra}", key.0, key.1, format_ts(ts)),
 					));
 				}
 			}
@@ -2292,9 +2317,10 @@ pub(super) async fn compare_room_state(
 			for (key, event_id) in &server_state {
 				if remote_state.get(key) != Some(event_id) {
 					let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+					let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 					only_on_cmp.push((
 						ts,
-						format!("{event_id} ({} {}) {}", key.0, key.1, format_ts(ts)),
+						format!("{event_id} ({} {}) {}{extra}", key.0, key.1, format_ts(ts)),
 					));
 				}
 			}
@@ -2350,6 +2376,22 @@ fn fmt_list(out: &mut String, label: &str, items: &[(u64, String)]) -> std::fmt:
 		write!(out, "\n  {item}")?;
 	}
 	writeln!(out, "{}]", if items.is_empty() { "" } else { "\n" })
+}
+
+/// Returns a suffix like " [join]" or " [by @admin:hs]" for richer diff output.
+fn fmt_event_meta(
+	event_type: &str,
+	event_id: &OwnedEventId,
+	meta: &HashMap<OwnedEventId, (String, String)>,
+) -> String {
+	let Some((membership, sender)) = meta.get(event_id) else {
+		return String::new();
+	};
+	match event_type {
+		| "m.room.member" if !membership.is_empty() => format!(" [{membership}]"),
+		| "m.room.power_levels" => format!(" [by {sender}]"),
+		| _ => String::new(),
+	}
 }
 
 #[admin_command]

@@ -140,6 +140,54 @@ pub async fn get_summary_and_children_local(
 		},
 	}
 
+	// For rooms without local members, skip DB synthesis—our local
+	// room_joined_count can drift from the authoritative value. Fall
+	// through to federation which will populate the cache for next time.
+	let has_local_members = self
+		.services
+		.state_cache
+		.active_local_users_in_room(current_room)
+		.boxed()
+		.next()
+		.await
+		.is_some();
+
+	if !has_local_members {
+		return Ok(None);
+	}
+
+	let children_pdus: Vec<_> = self
+		.get_space_child_events(current_room)
+		.map(Event::into_format)
+		.collect()
+		.await;
+
+	let Ok(summary) = self
+		.get_room_summary(current_room, children_pdus, identifier)
+		.boxed()
+		.await
+	else {
+		return Ok(None);
+	};
+
+	self.roomid_spacehierarchy_cache.lock().await.insert(
+		current_room.to_owned(),
+		Some(CachedSpaceHierarchySummary { summary: summary.clone() }),
+	);
+
+	Ok(Some(SummaryAccessibility::Accessible(summary)))
+}
+
+/// Last-resort fallback: always synthesizes from local DB even if member
+/// counts may be stale.  Used when both the primary local path (which skips
+/// stale rooms) and federation have failed, so the room still appears in the
+/// space hierarchy rather than vanishing.
+#[implement(Service)]
+async fn get_summary_and_children_local_fallback(
+	&self,
+	current_room: &RoomId,
+	identifier: &Identifier<'_>,
+) -> Result<Option<SummaryAccessibility>> {
 	let children_pdus: Vec<_> = self
 		.get_space_child_events(current_room)
 		.map(Event::into_format)
@@ -293,28 +341,25 @@ pub async fn get_summary_and_children_client(
 ) -> Result<Option<SummaryAccessibility>> {
 	let identifier = Identifier::UserId(user_id);
 
-	// Only use local state for rooms where we have local members.
-	// Without local members our room_joined_count can drift from the
-	// authoritative value (different state-res outcomes), so prefer
-	// the federation response for rooms we merely observe.
-	let has_local_members = self
-		.services
-		.state_cache
-		.local_users_in_room(current_room)
-		.next()
+	// 1. Try local (serves from cache; skips DB synthesis if no active local members)
+	if let Ok(Some(response)) = self
+		.get_summary_and_children_local(current_room, &identifier)
 		.await
-		.is_some();
-
-	if has_local_members {
-		if let Ok(Some(response)) = self
-			.get_summary_and_children_local(current_room, &identifier)
-			.await
-		{
-			return Ok(Some(response));
-		}
+	{
+		return Ok(Some(response));
 	}
 
-	self.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
+	// 2. Try federation (authoritative for rooms we merely observe)
+	if let Ok(Some(response)) = self
+		.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
+		.await
+	{
+		return Ok(Some(response));
+	}
+
+	// 3. Fallback: synthesize from local DB even with stale counts, so rooms
+	//    don't vanish from the hierarchy when federation is unreachable.
+	self.get_summary_and_children_local_fallback(current_room, &identifier)
 		.await
 }
 

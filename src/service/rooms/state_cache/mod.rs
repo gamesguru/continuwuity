@@ -234,7 +234,7 @@ pub fn server_rooms<'a>(
 				s.starts_with('!') && s.len() <= 255 && s.bytes().all(|b| b.is_ascii_graphic());
 
 			if !valid {
-				tracing::warn!("server_rooms: skipping corrupt room ID ({} bytes)", s.len());
+				tracing::info!("server_rooms: skipping corrupt room ID ({} bytes)", s.len());
 			}
 
 			std::future::ready(valid)
