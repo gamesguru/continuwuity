@@ -230,8 +230,10 @@ pub fn server_rooms<'a>(
 		.map(|(_, room_id): (Ignore, &RoomId)| room_id)
 		.filter(|room_id| {
 			let s = room_id.as_str();
-			let valid =
-				s.starts_with('!') && s.len() <= 255 && s.bytes().all(|b| b.is_ascii_graphic());
+			let valid = s.starts_with('!')
+				&& s.contains(':')
+				&& s.len() <= 255
+				&& s.bytes().all(|b| b.is_ascii_graphic());
 
 			if !valid {
 				tracing::info!("server_rooms: skipping corrupt room ID ({} bytes)", s.len());

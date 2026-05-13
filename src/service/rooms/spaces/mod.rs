@@ -341,7 +341,8 @@ pub async fn get_summary_and_children_client(
 ) -> Result<Option<SummaryAccessibility>> {
 	let identifier = Identifier::UserId(user_id);
 
-	// 1. Try local (serves from cache; skips DB synthesis if no active local members)
+	// 1. Try local (serves from cache; skips DB synthesis if no active local
+	//    members)
 	if let Ok(Some(response)) = self
 		.get_summary_and_children_local(current_room, &identifier)
 		.await
@@ -357,8 +358,8 @@ pub async fn get_summary_and_children_client(
 		return Ok(Some(response));
 	}
 
-	// 3. Fallback: synthesize from local DB even with stale counts, so rooms
-	//    don't vanish from the hierarchy when federation is unreachable.
+	// 3. Fallback: synthesize from local DB even with stale counts, so rooms don't
+	//    vanish from the hierarchy when federation is unreachable.
 	self.get_summary_and_children_local_fallback(current_room, &identifier)
 		.await
 }

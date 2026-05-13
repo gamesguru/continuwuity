@@ -6,7 +6,6 @@ use std::{
 
 use conduwuit::{
 	Error, Result, err, implement,
-	matrix::Event,
 	state_res::{self, StateMap},
 	trace,
 	utils::stream::{IterStream, ReadyExt, TryWidebandExt, WidebandExt},
@@ -80,7 +79,7 @@ pub async fn resolve_state(
 		.await?;
 
 	trace!("State resolution done.");
-	let mut state_events: Vec<_> = state
+	let state_events: Vec<_> = state
 		.iter()
 		.stream()
 		.wide_then(|((event_type, state_key), event_id)| {
@@ -91,7 +90,6 @@ pub async fn resolve_state(
 		})
 		.collect()
 		.await;
-
 
 	trace!("Compressing state...");
 	let new_room_state: CompressedState = self
