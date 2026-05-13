@@ -705,7 +705,10 @@ pub(crate) async fn force_set_state(
 		(Vec::new(), Vec::new())
 	};
 
-	info!("Going through room_state response PDUs (skip_sig_verify={skip_sig_verify})");
+	info!(
+		"Validating signatures for {} room_state PDUs (skip_sig_verify={skip_sig_verify})",
+		pdus.len()
+	);
 	let mut validated = 0_usize;
 	let mut dropped = 0_usize;
 	for pdu in &pdus {
@@ -731,6 +734,14 @@ pub(crate) async fn force_set_state(
 			continue;
 		};
 		validated = validated.saturating_add(1);
+
+		let total = validated.saturating_add(dropped);
+		if total.is_multiple_of(100) {
+			info!(
+				"Sig verify progress: {validated} ok, {dropped} dropped of {} total",
+				pdus.len()
+			);
+		}
 
 		let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
 			.map_err(|e| {

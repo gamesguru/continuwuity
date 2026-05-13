@@ -85,16 +85,16 @@ impl Service {
 	/// idle longer than `stale_threshold_ms`.
 	async fn scan_all_rooms(&self, stale_threshold_ms: u64) {
 		let ours = self.services.globals.server_name();
-		let rooms = self.services.state_cache.server_rooms(ours);
-		let mut room_stream = rooms.boxed();
 
-		while let Some(room_id) = room_stream.next().await {
-			if let Err(e) = self.check_room(room_id, stale_threshold_ms).boxed().await {
-				debug!(target: "forwardfill", "Error checking room {room_id}: {e}");
-			}
-			// yield so we don't starve other tasks
-			tokio::task::yield_now().await;
-		}
+		self.services
+			.state_cache
+			.server_rooms(ours)
+			.for_each_concurrent(10, |room_id| async move {
+				if let Err(e) = self.check_room(room_id, stale_threshold_ms).boxed().await {
+					debug!(target: "forwardfill", "Error checking room {room_id}: {e}");
+				}
+			})
+			.await;
 	}
 
 	#[tracing::instrument(skip(self), level = "debug")]
