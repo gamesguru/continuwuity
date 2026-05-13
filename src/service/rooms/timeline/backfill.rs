@@ -1,6 +1,6 @@
 use std::iter::once;
 
-use conduwuit::{Err, PduEvent, RoomVersion};
+use conduwuit::{Err, Error, PduEvent, RoomVersion};
 use conduwuit_core::{
 	Result, debug, debug_warn, err, implement, info,
 	matrix::{
@@ -129,7 +129,15 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				.map(ToOwned::to_owned)
 				.stream(),
 		)
-		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
+		.ready_filter(|server_name| {
+			!self.services.globals.server_is_ours(server_name)
+				&& !self
+					.services
+					.server
+					.config
+					.forbidden_remote_server_names
+					.is_match(server_name.host())
+		})
 		.wide_filter_map(|server_name| async move {
 			self.services
 				.state_cache
@@ -169,7 +177,12 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				}
 				return Ok(());
 			},
-			| Err(e) => {
+			| Err(ref e) => {
+				// If the server explicitly forbids us, drop it from candidates
+				if matches!(e, Error::Federation(_, _)) && e.to_string().contains("not allowed") {
+					info!("{backfill_server} forbade backfill for {room_id}, skipping");
+					continue;
+				}
 				warn!("{backfill_server} failed to provide backfill for room {room_id}: {e}");
 			},
 		}
@@ -246,7 +259,15 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 				.map(ToOwned::to_owned)
 				.stream(),
 		)
-		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
+		.ready_filter(|server_name| {
+			!self.services.globals.server_is_ours(server_name)
+				&& !self
+					.services
+					.server
+					.config
+					.forbidden_remote_server_names
+					.is_match(server_name.host())
+		})
 		.wide_filter_map(|server_name| async move {
 			self.services
 				.state_cache
