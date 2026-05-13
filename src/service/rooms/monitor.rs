@@ -104,9 +104,19 @@ impl Service {
 
 		stale_threshold_ms: u64,
 	) -> Result<()> {
-		// Guard against corrupt room IDs in the database
+		// Guard against corrupt room IDs in the database.
+		// Some entries contain raw JSON fragments or garbled bytes that
+		// happen to pass simple prefix checks but cause SEGV on downstream
+		// parsing (e.g. server_name()). Reject anything with non-printable
+		// ASCII or JSON-special characters.
 		let room_str = room_id.as_str();
-		if !room_str.starts_with('!') || !room_str.contains(':') || room_str.len() > 255 {
+		if !room_str.starts_with('!')
+			|| !room_str.contains(':')
+			|| room_str.len() > 255
+			|| room_str
+				.bytes()
+				.any(|b| b < 0x20 || b == b'"' || b == b'\\')
+		{
 			warn!(
 				target: "forwardfill",
 				"Skipping room with invalid ID ({} bytes, starts_with_bang={}, has_colon={})",
@@ -116,6 +126,7 @@ impl Service {
 			);
 			return Ok(());
 		}
+
 		// Ensure we are actually participating in the room before we start
 		// probes that could lead to unauthorized make_join requests.
 		let ours = self.services.globals.server_name();

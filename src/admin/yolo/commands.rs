@@ -2773,18 +2773,28 @@ pub(super) async fn federation_request(
 pub(super) async fn dag_merge_base(
 	&self,
 	room_id: OwnedRoomId,
-	server: OwnedServerName,
+	server: Option<OwnedServerName>,
 	event_a: Option<OwnedEventId>,
 	event_b: Option<OwnedEventId>,
 	max_depth: usize,
 	federate: bool,
 ) -> Result {
-	if !self.services.server.config.allow_federation {
-		return Err!("Federation is disabled on this homeserver.");
+	// Server is required when event_b is not provided (need to probe remote tip)
+	if event_b.is_none() && server.is_none() {
+		return Err!("--server is required unless both --event-a and --event-b are provided");
 	}
 
-	if server == self.services.globals.server_name() {
-		return Err!("Cannot compare against ourselves.");
+	if let Some(ref server) = server {
+		if !self.services.server.config.allow_federation {
+			return Err!("Federation is disabled on this homeserver.");
+		}
+		if *server == self.services.globals.server_name()
+			&& !self.services.server.config.federation_loopback
+		{
+			return Err!(
+				"Cannot compare against ourselves (enable federation_loopback to allow)."
+			);
+		}
 	}
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
@@ -2808,11 +2818,12 @@ pub(super) async fn dag_merge_base(
 		($event_id:expr) => {{
 			let eid: OwnedEventId = $event_id;
 			let result: Option<PduEvent> = async {
+				let server = server.as_ref()?;
 				let response = self
 					.services
 					.sending
 					.send_federation_request(
-						&server,
+						server,
 						get_event::v1::Request::new(eid.clone(), None),
 					)
 					.await
@@ -2854,17 +2865,15 @@ pub(super) async fn dag_merge_base(
 		},
 	};
 
-	// Resolve remote tip (event B) via federation
+	// Resolve remote tip (event B) — only needed when --event-b is not provided.
+	// The early guard ensures server.is_some() in this path.
 	let event_b = match event_b {
 		| Some(id) => id,
 		| None => {
+			let server = server.as_ref().expect("guarded above");
 			self.write_str(&format!("Probing {server} for remote tip via make_join...\n"))
 				.await?;
 
-			// Use make_join to discover the remote's forward extremities.
-			// This is much cheaper than get_room_state (which fetches ALL
-			// state PDUs). The make_join template's prev_events ARE the
-			// remote's current DAG tips.
 			let user_id = self
 				.services
 				.rooms
@@ -2886,7 +2895,7 @@ pub(super) async fn dag_merge_base(
 			let response = self
 				.services
 				.sending
-				.send_federation_request(&server, make_join_request)
+				.send_federation_request(server, make_join_request)
 				.await
 				.map_err(|e| err!("make_join to {server} failed: {e}"))?;
 
@@ -2914,8 +2923,6 @@ pub(super) async fn dag_merge_base(
 				);
 			}
 
-			// Pick the first tip. If there are multiple extremities, just
-			// use the first — the BFS will find the merge base regardless.
 			let remote_tip_id = remote_tips.into_iter().next().expect("checked non-empty");
 			self.write_str(&format!("Remote tip (via make_join): {remote_tip_id}\n"))
 				.await?;
@@ -2975,8 +2982,9 @@ pub(super) async fn dag_merge_base(
 				| Some(p) => Some(p),
 				| None if federate => {
 					fetched_events = fetched_events.saturating_add(1);
+					let srv = server.as_deref().map_or("local", |s| s.as_str());
 					info!(
-						"dag-merge-base: fetching {current} from {server} (A-side, \
+						"dag-merge-base: fetching {current} from {srv} (A-side, \
 						 #{fetched_events})"
 					);
 					fed_fetch!(current.clone())
@@ -3011,8 +3019,9 @@ pub(super) async fn dag_merge_base(
 				| Some(p) => Some(p),
 				| None if federate => {
 					fetched_events = fetched_events.saturating_add(1);
+					let srv = server.as_deref().map_or("local", |s| s.as_str());
 					info!(
-						"dag-merge-base: fetching {current} from {server} (B-side, \
+						"dag-merge-base: fetching {current} from {srv} (B-side, \
 						 #{fetched_events})"
 					);
 					fed_fetch!(current.clone())

@@ -345,12 +345,14 @@ pub enum YoloCommand {
 	DagMergeBase {
 		/// The room ID.
 		room_id: OwnedRoomId,
-		/// The remote server to compare against.
-		server: OwnedServerName,
+		/// Remote server to compare against. Required unless both --event-a
+		/// and --event-b are provided (local-only comparison).
+		#[arg(long)]
+		server: Option<OwnedServerName>,
 		/// Override the local tip event ID.
 		#[arg(long)]
 		event_a: Option<OwnedEventId>,
-		/// Override the remote tip event ID.
+		/// Override the remote tip event ID (or second local tip).
 		#[arg(long)]
 		event_b: Option<OwnedEventId>,
 		/// Maximum depth to walk before giving up (default: 500).
