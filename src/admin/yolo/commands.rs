@@ -354,11 +354,7 @@ pub(super) async fn audit_membership(
 					.services
 					.rooms
 					.state_accessor
-					.state_get(
-						state_hash,
-						&ruma::events::StateEventType::RoomMember,
-						user_id.as_str(),
-					)
+					.state_get(state_hash, &StateEventType::RoomMember, user_id.as_str())
 					.await
 				{
 					let _ = self
