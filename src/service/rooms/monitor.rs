@@ -104,23 +104,12 @@ impl Service {
 
 		stale_threshold_ms: u64,
 	) -> Result<()> {
-		// Guard against corrupt room IDs in the database.
-		// Some entries contain raw JSON fragments or garbled bytes that
-		// happen to pass simple prefix checks but cause SEGV on downstream
-		// parsing (e.g. server_name()). Reject anything with non-printable
-		// ASCII or JSON-special characters.
 		let room_str = room_id.as_str();
-		if !room_str.starts_with('!')
-			|| !room_str.contains(':')
-			|| room_str.len() > 255
-			|| room_str.bytes().any(|b| !b.is_ascii_graphic())
-		{
+		if <&ruma::RoomId>::try_from(room_str).is_err() {
 			warn!(
 				target: "forwardfill",
-				"Skipping room with invalid ID ({} bytes, starts_with_bang={}, has_colon={})",
-				room_str.len(),
-				room_str.starts_with('!'),
-				room_str.contains(':')
+				"Skipping room with strictly invalid ID ({} bytes)",
+				room_str.len()
 			);
 			return Ok(());
 		}

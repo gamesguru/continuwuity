@@ -230,13 +230,11 @@ pub fn server_rooms<'a>(
 		.map(|(_, room_id): (Ignore, &RoomId)| room_id)
 		.filter(|room_id| {
 			let s = room_id.as_str();
-			let valid = s.starts_with('!')
-				&& s.contains(':')
-				&& s.len() <= 255
-				&& s.bytes().all(|b| b.is_ascii_graphic());
+			// Delegate entirely to Ruma's strict parser to catch ANY trailing garbage
+			let valid = <&RoomId>::try_from(s).is_ok();
 
 			if !valid {
-				tracing::info!("server_rooms: skipping corrupt room ID ({} bytes)", s.len());
+				tracing::debug!("server_rooms: skipping corrupt room ID ({} bytes)", s.len());
 			}
 
 			std::future::ready(valid)

@@ -264,6 +264,9 @@ pub enum YoloCommand {
 		/// Only show counts and stats, omit the full event ID lists.
 		#[arg(long)]
 		summary: bool,
+		/// Skip signature verification (prevents DB write contention)
+		#[arg(long)]
+		skip_sig_verify: bool,
 	},
 
 	/// Heals a room by rescuing local outliers, fetching genuinely missing

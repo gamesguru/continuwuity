@@ -1462,7 +1462,13 @@ pub(super) async fn get_remote_dag(
 				continue;
 			};
 
-			let json = serde_json::to_string(&pdu)?;
+			// Write the original un-canonicalized raw JSON from the remote server
+			// so signatures and unsigned data are perfectly preserved for imports.
+			let mut export_val: serde_json::Map<String, serde_json::Value> =
+				serde_json::from_str(raw_pdu.get())?;
+			export_val
+				.insert("event_id".to_owned(), serde_json::Value::String(event_id.to_string()));
+			let json = serde_json::to_string(&export_val)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;
 			if print {
@@ -1866,6 +1872,7 @@ pub(super) async fn compare_room_state(
 	at_event: Option<OwnedEventId>,
 	conflict: Option<OwnedUserId>,
 	summary: bool,
+	skip_sig_verify: bool,
 ) -> Result {
 	use std::fmt::Write;
 
@@ -1936,18 +1943,29 @@ pub(super) async fn compare_room_state(
 	let mut conflict_entries: Vec<(String, String, u64, String, String, String)> = Vec::new();
 
 	for pdu_raw in &response.pdus {
-		let (event_id, value) = match self
-			.services
-			.server_keys
-			.validate_and_add_event_id(pdu_raw, &room_version)
-			.await
-		{
-			| Ok(r) => r,
-			| Err(e) => {
-				warn!("Skipping PDU with bad signature: {e}");
-				skipped = skipped.saturating_add(1);
-				continue;
-			},
+		let (event_id, value) = if skip_sig_verify {
+			match conduwuit::matrix::event::gen_event_id_canonical_json(pdu_raw, &room_version) {
+				| Ok((eid, val)) => (eid, val),
+				| Err(e) => {
+					warn!("Skipping PDU, canonicalization failed: {e}");
+					skipped = skipped.saturating_add(1);
+					continue;
+				},
+			}
+		} else {
+			match self
+				.services
+				.server_keys
+				.validate_and_add_event_id(pdu_raw, &room_version)
+				.await
+			{
+				| Ok(r) => r,
+				| Err(e) => {
+					warn!("Skipping PDU with bad signature: {e}");
+					skipped = skipped.saturating_add(1);
+					continue;
+				},
+			}
 		};
 
 		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
@@ -1963,8 +1981,8 @@ pub(super) async fn compare_room_state(
 				.and_then(|v| v.as_str())
 				.unwrap_or("")
 				.to_owned();
-			event_meta.insert(event_id.clone(), (membership, pdu.sender().to_string()));
-		}
+			event_meta.insert(event_id.clone(), (membership, pdu.sender().to_string()))
+		};
 
 		if pdu.kind == TimelineEventType::RoomMember {
 			if let Some(state_key) = &pdu.state_key {
@@ -2075,8 +2093,8 @@ pub(super) async fn compare_room_state(
 					.and_then(|v| v.as_str())
 					.unwrap_or("")
 					.to_owned();
-				event_meta.insert(eid.clone(), (membership, pdu.sender().to_string()));
-			}
+				event_meta.insert(eid.clone(), (membership, pdu.sender().to_string()))
+			};
 
 			if event_type == StateEventType::RoomMember {
 				let content: JsonValue = pdu.get_content_as_value();
@@ -2235,12 +2253,14 @@ pub(super) async fn compare_room_state(
 			let mut cmp_joined = 0_usize;
 			let mut cmp_invited = 0_usize;
 			for pdu_raw in &response.pdus {
-				let Ok((event_id, value)) = self
-					.services
-					.server_keys
-					.validate_and_add_event_id(pdu_raw, &room_version)
-					.await
-				else {
+				let Ok((event_id, value)) = (if skip_sig_verify {
+					conduwuit::matrix::event::gen_event_id_canonical_json(pdu_raw, &room_version)
+				} else {
+					self.services
+						.server_keys
+						.validate_and_add_event_id(pdu_raw, &room_version)
+						.await
+				}) else {
 					verify_errors = verify_errors.saturating_add(1);
 					continue;
 				};
