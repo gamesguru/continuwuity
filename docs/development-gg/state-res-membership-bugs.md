@@ -1,0 +1,341 @@
+# State Resolution Membership Bugs
+
+Three interconnected bugs caused federated room membership state to silently
+inflate, adding "ghost" joined users to the state snapshot while the
+membership cache remained correct.
+
+Discovered May 2026 via `yolo audit-membership` diagnostics.
+
+## Command Quick Reference
+
+There are many admin commands across `yolo` and `debug`. Here's what each
+does, grouped by workflow.
+
+### Diagnostics (read-only, safe to run anytime)
+
+| Command                                       | What it does                                         |
+| --------------------------------------------- | ---------------------------------------------------- |
+| `yolo audit-membership !room_id --server srv` | Full audit: timeline vs state vs cache vs remote     |
+| `yolo compare-room-state !room_id srv1 srv2`  | Compare member counts/extremities across servers     |
+| `yolo view-extremities !room_id`              | Show forward extremities (DAG tips)                  |
+| `yolo list-outliers !room_id`                 | List all outlier PDUs in a room                      |
+| `yolo get-room-dag !room_id`                  | Export local DAG as PDU list                         |
+| `yolo get-remote-dag !room_id --server srv`   | Fetch remote DAG via federation backfill             |
+| `yolo dag-merge-base !room_id`                | Find merge base between local DAG branches           |
+| `debug get-pdu $event_id`                     | Inspect single event (shows timeline/outlier status) |
+| `debug get-room-state !room_id`               | Dump full room state snapshot                        |
+| `debug first-pdu-in-room !room_id`            | Show earliest timeline event                         |
+| `debug latest-pdu-in-room !room_id`           | Show latest timeline event                           |
+
+### Healing (writes data — use carefully)
+
+| Command                                   | What it does                                           | When to use                             |
+| ----------------------------------------- | ------------------------------------------------------ | --------------------------------------- |
+| `yolo force-set-state !room_id srv1 srv2` | Fetch state from remotes, **overwrite** local snapshot | State snapshot is wrong (ghost members) |
+| `yolo heal-room !room_id`                 | Combined: force-set + rescue + reorder                 | Full room repair (does everything)      |
+
+### Outlier Management (writes data)
+
+| Command                             | What it does                                    | When to use                     |
+| ----------------------------------- | ----------------------------------------------- | ------------------------------- |
+| `yolo rescue-pdu $event_id`         | Upgrade one outlier to timeline (with auth)     | Single stuck outlier            |
+| `yolo rescue-room !room_id`         | Rescue all outliers in a room (with auth)       | Many outliers need promoting    |
+| `yolo promote-outliers !room_id`    | Force-insert outliers to timeline (**no auth**) | Bootstrapping from send_join    |
+| `yolo purge-outlier $event_id`      | Delete one outlier                              | Remove bad outlier              |
+| `yolo purge-outliers !room_id`      | Delete outliers that already exist in timeline  | Clean up historical STUCK state |
+| `yolo purge-timeline-pdu $event_id` | Delete from timeline AND outlier tables         | Remove bad event entirely       |
+
+### Timeline Repair (writes data)
+
+| Command                          | What it does                        | When to use                       |
+| -------------------------------- | ----------------------------------- | --------------------------------- |
+| `yolo reorder-timeline !room_id` | Re-sort by `origin_server_ts`       | Events out of chronological order |
+| `yolo repair-unsigned !room_id`  | Rebuild `unsigned` fields           | Corrupted unsigned metadata       |
+| `yolo resend-receipts !room_id`  | Re-send read receipts to federation | Missing receipts on remote        |
+
+### Federation (network requests)
+
+| Command                                      | What it does                             |
+| -------------------------------------------- | ---------------------------------------- |
+| `yolo fetch-pdu $event_id !room_id`          | Fetch specific PDU from remote + persist |
+| `yolo import-outliers !room_id --input file` | Import PDUs from JSONL as outliers       |
+| `yolo import-pdus !room_id --input file`     | Import PDUs from JSONL to timeline       |
+| `yolo federation-request srv /_matrix/...`   | Raw federation API call                  |
+
+### Typical Workflows
+
+**"My room has ghost members" (state inflation)**:
+
+```
+1. yolo audit-membership !room_id --server trusted.org    # diagnose
+2. yolo force-set-state !room_id trusted1.org trusted2.org # heal
+3. yolo audit-membership !room_id --server trusted.org    # verify
+```
+
+**"Events are out of order"**:
+
+```
+1. yolo reorder-timeline !room_id
+```
+
+**"Room is totally broken" (full repair)**:
+
+```
+1. yolo heal-room !room_id
+```
+
+**"Historical outliers stuck in both tables"**:
+
+```
+1. yolo purge-outliers !room_id    # safe — only removes duplicates
+```
+
+## Summary
+
+| Bug                                        | File                 | Severity | Status |
+| ------------------------------------------ | -------------------- | -------- | ------ |
+| Hotel California state-res regression      | `resolve_state.rs`   | HIGH     | Fixed  |
+| Outlier table leak on federation promotion | `timeline/append.rs` | MEDIUM   | Fixed  |
+| force_state silent PDU lookup failure      | `state/mod.rs`       | LOW      | Fixed  |
+
+## Bug 1: Hotel California State-Res Regression
+
+### What happens
+
+When state-res merges a fork branch against the current room state and both
+branches contain a membership event for the same user (e.g., `join` on the
+fork branch, `leave` on the current branch), state-res v2 can incorrectly
+pick the older `join` event over the newer `leave`.
+
+### Why it happens (Matrix state-res v2 algorithm)
+
+1. State-res builds a "base state" from the **intersection** of the two
+   forking state sets.
+2. If the fork diverged **before** the user originally joined the room, the
+   base state does NOT contain the user's join event.
+3. State-res then auth-checks each conflicting event against this base state.
+4. The `leave` event **fails auth** because the user isn't joined in the
+   base state (you can't leave a room you're not in).
+5. The `leave` event is dropped from the conflict set.
+6. The stale `join` event wins by default — the user is "resurrected" as
+   joined.
+
+This is sometimes called the "Hotel California" bug: you can check out any
+time you like, but state-res may never let you leave.
+
+### Observable symptoms
+
+- State snapshot membership count slowly increases over time
+- `yolo audit-membership` shows "ghosts" — users in state but not timeline
+- `--conflict <user_id>` shows no remote server has the user as joined
+- The state-winning event is often an outlier-only PDU (e.g., a profile
+  update at a high depth that was never part of the local timeline)
+
+### The fix (post-filter)
+
+After state-res produces its result, we post-filter `m.room.member` state
+keys. For each membership event where state-res picked a different event
+than our current state, we compare `origin_server_ts`. If state-res picked
+an **older** event, we override it to keep our current (newer) event.
+
+This is restricted to `m.room.member` only — other state types (power levels,
+room names) may legitimately have older events win due to power-level
+tie-breaking rules in the spec.
+
+```
+File: src/service/rooms/event_handler/resolve_state.rs
+```
+
+### Why not skip resolve_state entirely for old events?
+
+An older incoming state event might carry `state_at_incoming_event` containing
+other perfectly valid, newer state events (power levels, room names) from its
+fork branch. Skipping `resolve_state` entirely would drop those valid updates.
+The post-filter approach allows the full merge to happen while enforcing a
+strict invariant: state-res cannot regress a member's state to an older event.
+
+## Bug 2: Outlier Table Leak on Federation Promotion
+
+### What happens
+
+When an outlier PDU is upgraded to a timeline event via the federation path
+(`upgrade_outlier_to_timeline_pdu` → `append_incoming_pdu` → `append_pdu`),
+the event is inserted into the timeline table but **never removed** from the
+outlier table. The event exists in both tables indefinitely.
+
+### Why it matters
+
+- Events stuck in both tables are discoverable by both `get_pdu` (timeline)
+  and `get_pdu_outlier` (outlier). State-res can find these "phantom" outliers
+  and treat them as valid fork-branch candidates, amplifying Bug 1.
+- Silent database bloat — every federated event that was first seen as an
+  outlier (most of them) leaks ~500 bytes of duplicate storage.
+- DAG diagnostic tools may report confusing results when the same event
+  appears in multiple tables.
+
+### The fix
+
+Call `remove_outlier(event_id, Some(room_id))` after `append_pdu` succeeds
+in `append_incoming_pdu`. Placement is after the timeline insert but before
+admin command processing.
+
+Soft-failed events correctly remain as outliers because they return early
+(line ~59) before reaching `append_pdu`, so this cleanup only fires for
+fully authenticated, timeline-promoted events.
+
+```
+File: src/service/rooms/timeline/append.rs
+```
+
+### Note: promote_outlier was already correct
+
+The backfill path (`promote_outlier` in `backfill.rs`) already called
+`remove_outlier`. Only the federation forward-fill path was missing it.
+
+## Bug 3: force_state Silent PDU Lookup Failure
+
+### What happens
+
+`force_state` iterates state diff events and updates the membership cache
+for `m.room.member` events. It uses `get_pdu_in_room(Some(room_id))` to
+fetch each PDU. When this lookup fails (e.g., for outlier events with room_id
+indexing edge cases), it silently skips the membership cache update.
+
+### The fix
+
+Fall back to `get_pdu_in_room(None)` (unfiltered lookup) before skipping.
+Log a warning when the fallback is used.
+
+```
+File: src/service/rooms/state/mod.rs
+```
+
+---
+
+## Cross-Ecosystem Comparison
+
+### tuwunel (conduwuit sibling)
+
+**Status: VULNERABLE to all three bugs.**
+
+tuwunel's `resolve_state` in
+`src/service/rooms/event_handler/resolve_state.rs` is structurally identical
+to our pre-fix code. No post-filter, no `current_state_ids` clone, blind
+`compress_state_events` pipeline. Their `hydra_backports` flag changes some
+resolution rules but does not address the base-state auth check failure.
+
+Their `append_incoming_pdu` also lacks the `remove_outlier` cleanup.
+
+Any tuwunel instance in large federated rooms with fork branches will
+accumulate the same ghost membership inflation over time.
+
+### Synapse (reference implementation)
+
+**Status: Architecturally protected, but uses the same vulnerable algorithm.**
+
+Synapse runs state-res v2 through `resolve_events_with_store` — the same
+algorithm with the same base-state auth check failure mode. However, two
+structural differences prevent the damage:
+
+1. **State computation model**: Synapse's `compute_event_context` resolves
+   state across the `prev_events` state groups (the state _before_ the new
+   event), not by directly merging incoming state against the room's current
+   state. The result becomes state context, not a direct overwrite.
+
+2. **Persistence layer firewall**: Synapse's `update_current_state` in
+   `persist_events.py` recalculates current state dynamically from forward
+   extremities. Even if state-res produces bad results, the persistence layer
+   reconciles them against existing extremities rather than blindly committing.
+
+In conduwuit, `resolve_state` directly merges `[current_state_ids,
+incoming_state]` and the result is immediately compressed and committed as
+the new room state. Our post-filter provides the equivalent safety net
+without requiring an architectural rewrite.
+
+---
+
+## Self-Audit Procedure
+
+Use these steps to verify membership state consistency after deploying fixes
+or if drift is suspected.
+
+### Step 1: Audit local state vs cache
+
+```
+yolo audit-membership !room_id --server trusted_server.org
+```
+
+Check for:
+
+- **State vs cache count mismatch**: State snapshot count should equal cache
+  count. If state > cache, Hotel California may be active.
+- **DIFF entries**: Same membership but different event IDs between timeline
+  and state. Indicates state-res picked a fork-branch event over the
+  timeline event.
+- **WARN entries**: Different membership between timeline and state.
+  Strongest signal of Hotel California — e.g., timeline says `leave` but
+  state says `join`.
+- **Ghost count**: Users in state but with no timeline event. High ghost
+  count (relative to room activity) suggests federation state import
+  without corresponding timeline events.
+
+### Step 2: Cross-check with remote servers
+
+```
+yolo compare-room-state !room_id server1.org server2.org server3.org
+```
+
+If local joined count exceeds all remote servers, the local state is
+inflated. The remote consensus is the ground truth.
+
+### Step 3: Inspect specific conflicts
+
+```
+yolo audit-membership !room_id --server trusted.org
+```
+
+For each WARN/DIFF entry:
+
+```
+debug get-pdu $state_event_id
+```
+
+Check:
+
+- Is the state-winning event an **outlier**? (Status: "Outlier PDU")
+- Is its `origin_server_ts` **older** than the timeline event?
+- Does any remote server have this user as joined?
+
+If all three: classic Hotel California.
+
+### Step 4: Heal (if needed)
+
+```
+yolo force-set-state !room_id server1.org server2.org
+```
+
+This fetches authoritative state from remote servers and overwrites the
+local state snapshot. The multi-server variant merges state from multiple
+sources for better coverage.
+
+After healing, re-run Step 1 to verify counts match.
+
+### Step 5: Monitor
+
+After deploying the Hotel California post-filter fix, watch logs for:
+
+```
+State-res sought to resurrect older membership event
+```
+
+These `info!` messages indicate the post-filter is actively intercepting
+resurrection attempts. Frequency should decrease over time as fork branches
+are resolved.
+
+### Expected healthy state
+
+- `audit-membership` shows 0 actionable divergences
+- State snapshot count = cache count = remote server consensus
+- No WARN entries (timeline/state membership disagreements)
+- DIFF entries may still exist for profile updates (same membership,
+  different event ID) — these are cosmetic, not harmful
