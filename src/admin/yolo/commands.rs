@@ -3007,11 +3007,11 @@ pub(super) async fn dag_merge_base(
 	};
 
 	self.write_str(&format!(
-		"Walking DAG backwards from:\n  A (local):  {event_a} (depth {da}, type {ta})\n  B \
-		 (remote): {event_b} (depth {db}, type {tb})\n\nMax depth: {max_depth}\n",
-		da = pdu_a.depth,
+		"Walking DAG backwards from:\n  A (local):  {event_a} (ts {ta_ts}, type {ta})\n  B \
+		 (remote): {event_b} (ts {tb_ts}, type {tb})\n\nMax depth: {max_depth}\n",
+		ta_ts = pdu_a.origin_server_ts,
 		ta = pdu_a.kind,
-		db = pdu_b.depth,
+		tb_ts = pdu_b.origin_server_ts,
 		tb = pdu_b.kind,
 	))
 	.await?;
@@ -3154,11 +3154,22 @@ pub(super) async fn dag_merge_base(
 		let mb_pdu = get_pdu_any!(mb);
 		let mb_info = mb_pdu.as_ref().map_or_else(
 			|| "unknown".to_owned(),
-			|p| format!("depth {}, type {}", p.depth, p.kind),
+			|p| format!("ts {}, type {}", p.origin_server_ts, p.kind),
 		);
 
-		self.write_str(&format!("\n### Merge base: `{mb}` ({mb_info})\n"))
-			.await?;
+		// BFS distances from each starting event
+		let dist_a = ancestors_a
+			.get(mb)
+			.map_or_else(|| "?".to_owned(), |(d, _)| d.to_string());
+		let dist_b = ancestors_b
+			.get(mb)
+			.map_or_else(|| "?".to_owned(), |(d, _)| d.to_string());
+
+		self.write_str(&format!(
+			"\n### Merge base: `{mb}` ({mb_info})\nA is {dist_a} step(s) away, B is {dist_b} \
+			 step(s) away\n"
+		))
+		.await?;
 
 		// Trace path A -> merge base
 		let path_a = trace_path(&ancestors_a, &event_a, mb);
@@ -3204,7 +3215,7 @@ pub(super) async fn dag_merge_base(
 
 				// Get the merge base PDU info
 				if let Some(ref p) = mb_pdu {
-					writeln!(graph, "      depth={}, ts={}", p.depth, p.origin_server_ts).ok();
+					writeln!(graph, "      ts={}", p.origin_server_ts).ok();
 				}
 				break;
 			}
