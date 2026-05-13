@@ -122,16 +122,10 @@ impl Service {
 			})
 			.ignore_err();
 
-		let removed_event_ids = statediffremoved
+		let removed_events = statediffremoved
 			.iter()
 			.stream()
-			.map(|&old| parse_compressed_state_event(old).1)
-			.then(|shorteventid| {
-				self.services
-					.short
-					.get_eventid_from_short::<Box<_>>(shorteventid)
-			})
-			.ignore_err();
+			.map(|&old| parse_compressed_state_event(old));
 
 		let mut new_processed = 0_usize;
 		let mut new_members = 0_usize;
@@ -201,70 +195,65 @@ impl Service {
 			"new events done: {new_processed} processed, {new_members} members, {new_skipped} skipped"
 		);
 
-		pin_mut!(removed_event_ids);
-		while let Some(event_id) = removed_event_ids.next().await {
-			// When state is removed, we demote it to an outlier instead of deleting it.
-			// This keeps the PDU locally but removes it from the official room state.
-			let pdu_json = self.services.timeline.get_pdu_json(&event_id).await;
-			if let Ok(pdu_json) = &pdu_json {
-				self.services
-					.outlier
-					.add_pdu_outlier(&event_id, pdu_json, Some(room_id));
-				// NOTE: do NOT remove from timeline here. Removed state events
-				// should remain as historical timeline entries. Only the state
-				// pointer (shortstatehash) changes.
-			}
-
-			let Ok(pdu) = self
-				.services
-				.timeline
-				.get_pdu_in_room(Some(room_id), &event_id)
-				.await
-				.or_else(|_| {
-					pdu_json.and_then(|j| {
-						PduEvent::from_id_val(&event_id, j, Some(room_id))
-							.map_err(|e| err!(Database("Invalid PDU: {e:?}")))
-					})
-				})
-			else {
-				continue;
-			};
-
-			match pdu.kind {
-				| TimelineEventType::RoomMember => {
-					let Some(user_id) = pdu.state_key.as_ref().map(UserId::parse).flat_ok()
-					else {
-						continue;
-					};
-
-					// Re-sync membership from the NEW state to update the cache correctly.
-					if let Ok(new_pdu) = self
-						.services
-						.state_accessor
-						.room_state_get(room_id, &StateEventType::RoomMember, user_id.as_str())
-						.await
-					{
-						self.services
-							.state_cache
-							.update_membership(room_id, user_id, &new_pdu, false)
-							.await?;
-					} else {
-						// User is no longer in the room at all in the new state
-						self.services
-							.state_cache
-							.mark_as_left(user_id, room_id, None)
-							.await;
+		pin_mut!(removed_events);
+		while let Some((shortstatekey, shorteventid)) = removed_events.next().await {
+			// Process cache updates using shortstatekey (PDU-free!)
+			// This guarantees we update the cache even if the historical PDU
+			// JSON has been pruned from the database.
+			if let Ok((event_type, state_key)) =
+				self.services.short.get_statekey_from_short(shortstatekey).await
+			{
+				if event_type == StateEventType::RoomMember {
+					if let Ok(user_id) = UserId::parse(&*state_key) {
+						// Re-sync membership from the NEW state to update cache correctly.
+						if let Ok(new_pdu) = self
+							.services
+							.state_accessor
+							.room_state_get(
+								room_id,
+								&StateEventType::RoomMember,
+								user_id.as_str(),
+							)
+							.await
+						{
+							let _ = self
+								.services
+								.state_cache
+								.update_membership(room_id, &user_id, &new_pdu, false)
+								.await;
+						} else {
+							// User is no longer in the room at all in the new state
+							self.services
+								.state_cache
+								.mark_as_left(&user_id, room_id, None)
+								.await;
+						}
 					}
-				},
-				| TimelineEventType::SpaceChild => {
+				} else if event_type == StateEventType::SpaceChild {
 					self.services
 						.spaces
 						.roomid_spacehierarchy_cache
 						.lock()
 						.await
 						.remove(room_id);
-				},
-				| _ => continue,
+				}
+			}
+
+			// Demote to outlier if possible (best-effort, not required for cache)
+			let Ok(event_id) = self
+				.services
+				.short
+				.get_eventid_from_short::<Box<_>>(shorteventid)
+				.await
+			else {
+				continue;
+			};
+
+			let pdu_json = self.services.timeline.get_pdu_json(&event_id).await;
+			if let Ok(pdu_json) = &pdu_json {
+				self.services
+					.outlier
+					.add_pdu_outlier(&event_id, pdu_json, Some(room_id));
 			}
 		}
 		info!(target: "force_state", "removed events done, updating joined count");
