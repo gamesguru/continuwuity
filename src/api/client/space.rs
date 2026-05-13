@@ -4,7 +4,7 @@ use std::{
 };
 
 use axum::extract::State as AxumState;
-use conduwuit::{Err, Result, utils::stream::IterStream};
+use conduwuit::{Err, Result, info, utils::stream::IterStream};
 use conduwuit_service::rooms::spaces::{
 	PaginationToken, SummaryAccessibility, get_parent_children_via, summary_to_chunk,
 };
@@ -117,7 +117,18 @@ where
 
 		match (summary, current_room == *room_id) {
 			| (None | Some(SummaryAccessibility::Inaccessible), false) => {
-				// Just ignore other unavailable rooms
+				let name: Option<String> = services
+					.rooms
+					.state_accessor
+					.get_name(&current_room)
+					.await
+					.ok();
+
+				info!(
+					room_id = %current_room,
+					name = name.as_deref().unwrap_or("<unknown>"),
+					"Space hierarchy: child room unavailable/inaccessible, skipping"
+				);
 			},
 			| (None, true) => {
 				return Err!(Request(Forbidden("The requested room was not found")));

@@ -179,6 +179,7 @@ async fn get_summary_and_children_federation(
 
 	let mut requests: FuturesUnordered<_> = via
 		.iter()
+		.take(3)
 		.map(|server| {
 			self.services
 				.sending
@@ -186,7 +187,16 @@ async fn get_summary_and_children_federation(
 		})
 		.collect();
 
-	let Some(Ok(response)) = requests.next().await else {
+	// Fan out to all via servers; take the first successful response
+	let mut response = None;
+	while let Some(result) = requests.next().await {
+		if let Ok(resp) = result {
+			response = Some(resp);
+			break;
+		}
+	}
+
+	let Some(response) = response else {
 		self.roomid_spacehierarchy_cache
 			.lock()
 			.await
