@@ -6,7 +6,7 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Result, debug_error, err, info,
+	Err, Result, err, info,
 	matrix::{
 		Event,
 		pdu::{PduEvent, PduId, RawPduId},
@@ -743,13 +743,14 @@ pub(crate) async fn force_set_state(
 			);
 		}
 
-		let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
-			.map_err(|e| {
-				debug_error!(
-					"Invalid PDU in fetching remote room state PDUs response: {value:#?}"
-				);
-				err!(BadServerResponse(debug_error!("Invalid PDU in send_join response: {e:?}")))
-			})?;
+		let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref())) {
+			| Ok(pdu) => pdu,
+			| Err(e) => {
+				warn!("Skipping invalid PDU {event_id} in remote state: {e:?}");
+				dropped = dropped.saturating_add(1);
+				continue;
+			},
+		};
 
 		if pdu.room_id_or_hash().as_deref() != Some(room_id.as_ref()) {
 			return Err!(BadServerResponse("Remote room_state PDU belongs to a different room"));
