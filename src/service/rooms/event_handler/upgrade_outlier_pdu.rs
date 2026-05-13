@@ -6,10 +6,10 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Result, debug, debug_info, err, implement, info, is_equal_to,
+	Err, Result, debug, debug_info, debug_warn, err, implement, info, is_equal_to,
 	matrix::{Event, EventTypeExt, PduEvent, StateKey, state_res},
 	trace,
-	utils::stream::{BroadbandExt, ReadyExt},
+	utils::stream::{BroadbandExt, IterStream, ReadyExt},
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
@@ -284,37 +284,6 @@ where
 		}
 	};
 
-	// Now we calculate the set of extremities this room has after the incoming
-	// event has been applied. We start with the previous extremities (aka leaves)
-	trace!("Calculating extremities");
-	let mut extremities: Vec<_> = self
-		.services
-		.state
-		.get_forward_extremities(room_id)
-		.map(ToOwned::to_owned)
-		.ready_filter(|event_id| {
-			// Remove any that are referenced by this incoming event's prev_events
-			!incoming_pdu.prev_events().any(is_equal_to!(event_id))
-		})
-		.broad_filter_map(|event_id| async move {
-			// Only keep those extremities were not referenced yet
-			self.services
-				.pdu_metadata
-				.is_event_referenced(room_id, &event_id)
-				.await
-				.eq(&false)
-				.then_some(event_id)
-		})
-		.collect()
-		.await;
-	extremities.push(incoming_pdu.event_id().to_owned());
-
-	debug!(
-		"Retained {} extremities checked against {} prev_events",
-		extremities.len(),
-		incoming_pdu.prev_events().count()
-	);
-
 	let state_ids_compressed: Arc<CompressedState> = self
 		.services
 		.state_compressor
@@ -428,51 +397,46 @@ where
 		.await?;
 	}
 
-	// 14. Check if the event passes auth based on the "current state" of the room,
-	//     if not soft fail it
-	if soft_fail {
-		info!(
-			event_id = %incoming_pdu.event_id,
-			event_type = %incoming_pdu.kind,
-			sender = %incoming_pdu.sender,
-			state_key = ?incoming_pdu.state_key,
-			"Soft-failing event"
-		);
-		// assert!(extremities.is_empty(), "soft_fail extremities empty");
-		let extremities = extremities.iter().map(Borrow::borrow);
-		debug_assert!(extremities.clone().count() > 0, "extremities not empty");
-
-		self.services
-			.timeline
-			.append_incoming_pdu(
-				&incoming_pdu,
-				val,
-				extremities,
-				state_ids_compressed,
-				soft_fail,
-				&state_lock,
-				room_id,
-			)
-			.await?;
-
-		// Soft fail, we keep the event as an outlier but don't add it to the timeline
-		self.services
-			.pdu_metadata
-			.mark_event_soft_failed(incoming_pdu.event_id());
-
-		warn!(
-			event_id = %incoming_pdu.event_id,
-			"Event was soft failed"
-		);
-		return Err!(Request(InvalidParam("Event has been soft failed")));
-	}
-
-	// Now that the event has passed all auth it is added into the timeline.
-	// We use the `state_at_event` instead of `state_after` so we accurately
-	// represent the state for this event.
+	// Calculate forward extremities AFTER the soft-fail evaluation.
+	// Per spec, soft-failed events are NOT added as forward extremities.
 	trace!("Appending pdu to timeline");
-	let extremities = extremities.iter().map(Borrow::borrow);
-	debug_assert!(extremities.clone().count() > 0, "extremities not empty");
+	let mut extremities: Vec<_> = self
+		.services
+		.state
+		.get_forward_extremities(room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	if !soft_fail {
+		// Only non-soft-failed events modify the extremity set
+		extremities = extremities
+			.into_iter()
+			.stream()
+			.ready_filter(|event_id| {
+				// Remove any that are referenced by this incoming event's prev_events
+				!incoming_pdu.prev_events().any(is_equal_to!(event_id))
+			})
+			.broad_filter_map(|event_id| async move {
+				// Only keep those extremities were not referenced yet
+				self.services
+					.pdu_metadata
+					.is_event_referenced(room_id, &event_id)
+					.await
+					.eq(&false)
+					.then_some(event_id)
+			})
+			.collect::<Vec<_>>()
+			.await;
+
+		extremities.push(incoming_pdu.event_id().to_owned());
+		debug!(
+			"Retained {} extremities checked against {} prev_events",
+			extremities.len(),
+			incoming_pdu.prev_events().count()
+		);
+		assert!(!extremities.is_empty(), "extremities must not be empty");
+	}
 
 	let pdu_id = self
 		.services
@@ -480,7 +444,7 @@ where
 		.append_incoming_pdu(
 			&incoming_pdu,
 			val,
-			extremities,
+			extremities.iter().map(Borrow::borrow),
 			state_ids_compressed,
 			soft_fail,
 			&state_lock,
@@ -488,12 +452,24 @@ where
 		)
 		.await?;
 
+	if soft_fail {
+		self.services
+			.pdu_metadata
+			.mark_event_soft_failed(incoming_pdu.event_id());
+
+		debug_warn!(
+			elapsed = ?timer.elapsed(),
+			"Event has been soft-failed",
+		);
+	} else {
+		debug_info!(
+			elapsed = ?timer.elapsed(),
+			"Accepted",
+		);
+	}
+
 	// Event has passed all auth/stateres checks
 	drop(state_lock);
-	debug_info!(
-		elapsed = ?timer.elapsed(),
-		"Accepted",
-	);
 
 	Ok(pdu_id)
 }
