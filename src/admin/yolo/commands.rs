@@ -1419,6 +1419,7 @@ pub(super) async fn get_remote_dag(
 	let mut batches = 0_usize;
 	let mut min_depth = u64::MAX;
 	let mut max_depth = 0_u64;
+	let mut consecutive_errors = 0_usize;
 	let batch_size = ruma::uint!(100);
 	let start_time = tokio::time::Instant::now();
 
@@ -1447,24 +1448,38 @@ pub(super) async fn get_remote_dag(
 			.send_federation_request(&server, request)
 			.await
 		{
-			| Ok(r) => r,
+			| Ok(r) => {
+				consecutive_errors = 0;
+				r
+			},
 			| Err(e) => {
+				consecutive_errors = consecutive_errors.saturating_add(1);
 				info!(
 					"get-remote-dag: federation request failed after {total} PDUs in {batches} \
-					 batches: {e}"
+					 batches (attempt {consecutive_errors}/3): {e}"
 				);
 				if verbose {
 					self.write_str(&format!(
-						"Federation request failed (batch {batches}, \
-						 queue={}):\n```\n{e:?}\n```\n",
+						"Federation request failed (batch {batches}, queue={}, attempt \
+						 {consecutive_errors}/3):\n```\n{e:?}\n```\n",
 						queue.len()
 					))
 					.await?;
 				} else {
-					self.write_str(&format!("Federation request failed: {e}"))
-						.await?;
+					self.write_str(&format!(
+						"Federation request failed (attempt {consecutive_errors}/3): {e}"
+					))
+					.await?;
 				}
-				break;
+				if consecutive_errors >= 3 {
+					self.write_str("Giving up after 3 consecutive failures.\n")
+						.await?;
+					break;
+				}
+				// Trim the queue and retry — drop the first half to try different events
+				let drain = queue.len() / 2;
+				queue.drain(..drain.max(1));
+				continue;
 			},
 		};
 
@@ -1509,7 +1524,7 @@ pub(super) async fn get_remote_dag(
 			}
 			total_prev_events = total_prev_events
 				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
-			let depth = pdu.depth.try_into().unwrap_or(0_u64);
+			let depth: u64 = pdu.depth.into();
 			min_depth = min_depth.min(depth);
 			max_depth = max_depth.max(depth);
 			total = total.saturating_add(1);
