@@ -5,7 +5,7 @@ use std::{
 };
 
 use conduwuit::{
-	Error, Result, err, implement, info,
+	Error, Result, err, implement,
 	matrix::Event,
 	state_res::{self, StateMap},
 	trace,
@@ -92,73 +92,6 @@ pub async fn resolve_state(
 		.collect()
 		.await;
 
-	// FIX: Prevent the "Hotel California" state-res bug where state-res
-	// incorrectly resurrects older membership events from stale fork branches.
-	//
-	// In Matrix state-res v2, when two forks conflict on a membership state key,
-	// state-res builds a "base state" from their intersection. If the forks
-	// diverged before the user joined, the base state won't contain their join
-	// event. When state-res auth-checks the newer leave event against this base,
-	// the auth check fails (can't leave a room you're not in), and the leave is
-	// dropped — allowing the stale join to win by default.
-	//
-	// We fix this by post-filtering: if state-res picked a membership event that
-	// is older (by origin_server_ts) than the one already in our current state,
-	// we override it to keep our current (newer) event.
-	let mut membership_overrides = 0_usize;
-	for (shortstatekey, event_id) in &mut state_events {
-		let Some(current_event_id) = current_state_ids_ref.get(shortstatekey) else {
-			continue;
-		};
-
-		if current_event_id == event_id {
-			continue;
-		}
-
-		// Only check membership events — other state types (power levels, etc.) may
-		// legitimately have an older event win due to higher power level.
-		let Ok((event_type, _)) = self
-			.services
-			.short
-			.get_statekey_from_short(*shortstatekey)
-			.await
-		else {
-			continue;
-		};
-
-		if event_type.to_string() != "m.room.member" {
-			continue;
-		}
-
-		// Compare timestamps: if state-res picked an older event, keep the current one.
-		let (Ok(resolved_pdu), Ok(current_pdu)) = (
-			self.services.timeline.get_pdu(event_id).await,
-			self.services.timeline.get_pdu(current_event_id).await,
-		) else {
-			continue;
-		};
-
-		if resolved_pdu.origin_server_ts() < current_pdu.origin_server_ts() {
-			info!(
-				"State-res sought to resurrect older membership event {} (ts={}) over {} \
-				 (ts={}) in {room_id}, keeping current event to prevent Hotel California \
-				 regression",
-				event_id,
-				resolved_pdu.origin_server_ts().get(),
-				current_event_id,
-				current_pdu.origin_server_ts().get(),
-			);
-			*event_id = current_event_id.clone();
-			membership_overrides = membership_overrides.saturating_add(1);
-		}
-	}
-
-	if membership_overrides > 0 {
-		info!(
-			"Overrode {membership_overrides} stale membership event(s) from state-res in \
-			 {room_id}"
-		);
-	}
 
 	trace!("Compressing state...");
 	let new_room_state: CompressedState = self
