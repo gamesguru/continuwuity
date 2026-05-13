@@ -117,9 +117,12 @@ where
 	let event_fetch = |event_id| self.event_fetch(Some(room_id), event_id);
 	let event_exists = |event_id| self.event_exists(event_id);
 	let event_rejected = |event_id: OwnedEventId| async move {
-		self.services
+		// The comprehensive firewall: returns true if the event is
+		// EITHER soft-failed OR explicitly hard-rejected.
+		!self
+			.services
 			.pdu_metadata
-			.is_event_soft_failed(&event_id)
+			.is_event_accepted(&event_id)
 			.await
 	};
 

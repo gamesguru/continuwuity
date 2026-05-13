@@ -514,12 +514,12 @@ pub(super) async fn rescue_pdu(
 		.clone()
 		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
-	// Only un-soft-fail when --force is passed
+	// Clear all soft-fail and rejection markers when rescuing
 	if force || skip_soft_fail {
 		self.services
 			.rooms
 			.pdu_metadata
-			.unmark_event_soft_failed(&event_id);
+			.clear_pdu_markers(&event_id);
 	}
 
 	Box::pin(
@@ -1019,13 +1019,14 @@ pub(super) async fn rescue_room(
 			.clone()
 			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
-		// Only un-soft-fail when --force is passed; otherwise previously
-		// rejected events stay rejected to prevent infinite rescue loops.
+		// Clear all soft-fail and rejection markers when force-rescuing;
+		// otherwise previously rejected events stay rejected to prevent
+		// infinite rescue loops.
 		if force {
 			self.services
 				.rooms
 				.pdu_metadata
-				.unmark_event_soft_failed(&event_id);
+				.clear_pdu_markers(&event_id);
 		}
 
 		if Box::pin(
@@ -2525,6 +2526,8 @@ pub(super) async fn heal_room(
 			.rooms
 			.outlier
 			.add_pdu_outlier(&eid, &value, Some(&room_id));
+		// Clear rejection/soft-fail markers for forcefully imported state
+		self.services.rooms.pdu_metadata.clear_pdu_markers(&eid);
 		queue.extend(pdu.prev_events().map(ToOwned::to_owned));
 		queue.extend(pdu.auth_events().map(ToOwned::to_owned));
 		fetched = fetched.saturating_add(1);

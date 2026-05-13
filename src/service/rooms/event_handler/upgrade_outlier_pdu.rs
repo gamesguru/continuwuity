@@ -44,13 +44,34 @@ where
 		return Ok(Some(pduid));
 	}
 
-	if self
-		.services
-		.pdu_metadata
-		.is_event_soft_failed(incoming_pdu.event_id())
-		.await
-	{
-		return Err!(Request(InvalidParam("Event has been soft failed")));
+	let (rejected, soft_failed_early) = tokio::join!(
+		self.services
+			.pdu_metadata
+			.is_event_rejected(incoming_pdu.event_id()),
+		self.services
+			.pdu_metadata
+			.is_event_soft_failed(incoming_pdu.event_id())
+	);
+	if rejected {
+		return Err!(Request(InvalidParam("Event has been rejected")));
+	} else if soft_failed_early {
+		return Err!(Request(InvalidParam("Event has been soft-failed")));
+	}
+
+	// If any of the auth events are rejected, this event is also rejected.
+	if !skip_soft_fail {
+		for aid in incoming_pdu.auth_events() {
+			if self.services.pdu_metadata.is_event_rejected(aid).await {
+				warn!(
+					"Rejecting incoming event {} which depends on rejected auth event {aid}",
+					incoming_pdu.event_id()
+				);
+				self.services
+					.pdu_metadata
+					.mark_event_rejected(incoming_pdu.event_id());
+				return Err!(Request(InvalidParam("Event has rejected auth event: {aid}")));
+			}
+		}
 	}
 
 	debug!(
@@ -170,12 +191,13 @@ where
 				"Event failed auth check against state-at-event, but skip_soft_fail is set — continuing"
 			);
 		} else {
+			// SYNAPSE PARITY: Mark as REJECTED, not soft-failed!
 			self.services
 				.pdu_metadata
-				.mark_event_soft_failed(incoming_pdu.event_id());
+				.mark_event_rejected(incoming_pdu.event_id());
 
 			return Err!(Request(Forbidden(
-				"Event has failed auth check with state at the event."
+				"Event authorisation fails based on the state before the event"
 			)));
 		}
 	}

@@ -159,6 +159,12 @@ where
 				v.insert(auth_event);
 			},
 			| hash_map::Entry::Occupied(_) => {
+				self.services.pdu_metadata.mark_event_rejected(event_id);
+				self.services.outlier.add_pdu_outlier(
+					pdu_event.event_id(),
+					&incoming_pdu,
+					pdu_event.room_id.as_deref(),
+				);
 				return Err!(Request(InvalidParam(
 					"Auth event's type and state_key combination exists multiple times: {}, {}",
 					auth_event.kind,
@@ -175,6 +181,12 @@ where
 		&& !to_room_version(&room_version_id).room_ids_as_hashes
 		&& !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into()))
 	{
+		self.services.pdu_metadata.mark_event_rejected(event_id);
+		self.services.outlier.add_pdu_outlier(
+			pdu_event.event_id(),
+			&incoming_pdu,
+			pdu_event.room_id.as_deref(),
+		);
 		return Err!(Request(InvalidParam(
 			"Incoming event missing m.room.create in auth events"
 		)));
@@ -196,7 +208,15 @@ where
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
 	if !auth_check {
-		return Err!(Request(Forbidden("Auth check failed")));
+		self.services.pdu_metadata.mark_event_rejected(event_id);
+		self.services.outlier.add_pdu_outlier(
+			pdu_event.event_id(),
+			&incoming_pdu,
+			pdu_event.room_id.as_deref(),
+		);
+		return Err!(Request(Forbidden(
+			"Event authorisation fails based on event's claimed auth events"
+		)));
 	}
 
 	trace!("Validation successful.");
