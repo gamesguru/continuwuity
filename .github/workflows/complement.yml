@@ -157,12 +157,13 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}
+          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}-v${{ matrix.room_version }}
           path: |
             target/latest/conduwuit
             target/latest/conduwuit.asc
             target/latest/lib/
           retention-days: 60
+          overwrite: true
 
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
