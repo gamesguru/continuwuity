@@ -265,6 +265,34 @@ pub(super) async fn audit_membership(
 		self.write_str(&out).await?;
 	}
 
+	// ── Phase 2.5: Aggregate count cross-check ───────────────────────────
+	let state_joined_count: u64 = state_joined
+		.len()
+		.try_into()
+		.expect("joined count overflow");
+	let cached_joined_u64 = self
+		.services
+		.rooms
+		.state_cache
+		.room_joined_count(&room_id)
+		.await
+		.unwrap_or(0);
+
+	if cached_joined_u64 != state_joined_count {
+		self.write_str(&format!(
+			"\n✗ AGGREGATE MISMATCH: state has {state_joined_count} joined, but \
+			 roomid_joinedcount reports {cached_joined_u64}. Recalculating..."
+		))
+		.await?;
+		self.services
+			.rooms
+			.state_cache
+			.update_joined_count(&room_id)
+			.await;
+		self.write_str("\n✓ Aggregate joined count repaired.")
+			.await?;
+	}
+
 	// ── Phase 3: Remote comparison (optional) ────────────────────────────
 	if let Some(ref server) = server {
 		self.write_str(&format!("\n**Phase 3: Local vs Remote ({server})**\n"))
