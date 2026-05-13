@@ -2,7 +2,7 @@ mod pagination_token;
 #[cfg(test)]
 mod tests;
 
-use std::{fmt::Write, sync::Arc, time::Instant};
+use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
 use conduwuit_core::{
@@ -40,7 +40,6 @@ use crate::{Dep, rooms, sending};
 pub struct Service {
 	services: Services,
 	pub roomid_spacehierarchy_cache: Mutex<Cache>,
-	negative_cache_ts: Mutex<LruCache<OwnedRoomId, Instant>>,
 }
 
 struct Services {
@@ -71,10 +70,6 @@ pub enum Identifier<'a> {
 
 type Cache = LruCache<OwnedRoomId, Option<CachedSpaceHierarchySummary>>;
 
-/// How long a negative (failed) hierarchy lookup stays cached before
-/// we retry federation for that room.
-const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(120);
-
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
@@ -93,7 +88,6 @@ impl crate::Service for Service {
 				sending: args.depend::<sending::Service>("sending"),
 			},
 			roomid_spacehierarchy_cache: Mutex::new(LruCache::new(usize_from_f64(cache_size)?)),
-			negative_cache_ts: Mutex::new(LruCache::new(usize_from_f64(cache_size)?)),
 		}))
 	}
 
@@ -105,10 +99,7 @@ impl crate::Service for Service {
 		Ok(())
 	}
 
-	async fn clear_cache(&self) {
-		self.roomid_spacehierarchy_cache.lock().await.clear();
-		self.negative_cache_ts.lock().await.clear();
-	}
+	async fn clear_cache(&self) { self.roomid_spacehierarchy_cache.lock().await.clear(); }
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
@@ -206,16 +197,6 @@ async fn get_summary_and_children_federation(
 	}
 
 	let Some(response) = response else {
-		self.roomid_spacehierarchy_cache
-			.lock()
-			.await
-			.insert(current_room.to_owned(), None);
-
-		self.negative_cache_ts
-			.lock()
-			.await
-			.insert(current_room.to_owned(), Instant::now());
-
 		return Ok(None);
 	};
 
@@ -317,18 +298,6 @@ pub async fn get_summary_and_children_client(
 		.await
 	{
 		return Ok(Some(response));
-	}
-
-	// If we recently failed federation for this room, don't retry until
-	// the TTL expires (1 hour).
-	if self
-		.negative_cache_ts
-		.lock()
-		.await
-		.get_mut(current_room)
-		.is_some_and(|ts: &mut Instant| ts.elapsed() < NEGATIVE_CACHE_TTL)
-	{
-		return Ok(None);
 	}
 
 	self.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
