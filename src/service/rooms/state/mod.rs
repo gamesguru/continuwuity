@@ -139,14 +139,31 @@ impl Service {
 		pin_mut!(new_event_ids);
 		while let Some(event_id) = new_event_ids.next().await {
 			new_processed = new_processed.saturating_add(1);
-			let Ok(pdu) = self
+			let pdu = match self
 				.services
 				.timeline
 				.get_pdu_in_room(Some(room_id), &event_id)
 				.await
-			else {
-				new_skipped = new_skipped.saturating_add(1);
-				continue;
+			{
+				| Ok(pdu) => pdu,
+				| Err(_) => match self
+					.services
+					.timeline
+					.get_pdu_in_room(None, &event_id)
+					.await
+				{
+					| Ok(pdu) => {
+						warn!(
+							target: "force_state",
+							"PDU {event_id} not found with room_id filter, recovered without"
+						);
+						pdu
+					},
+					| Err(_) => {
+						new_skipped = new_skipped.saturating_add(1);
+						continue;
+					},
+				},
 			};
 
 			match pdu.kind {
