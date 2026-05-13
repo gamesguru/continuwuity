@@ -92,11 +92,14 @@ does, grouped by workflow.
 
 ## Summary
 
-| Bug                                        | File                 | Severity | Status |
-| ------------------------------------------ | -------------------- | -------- | ------ |
-| Hotel California state-res regression      | `resolve_state.rs`   | HIGH     | Fixed  |
-| Outlier table leak on federation promotion | `timeline/append.rs` | MEDIUM   | Fixed  |
-| force_state silent PDU lookup failure      | `state/mod.rs`       | LOW      | Fixed  |
+| Bug                                        | File                 | Severity | Status    |
+| ------------------------------------------ | -------------------- | -------- | --------- |
+| Hotel California state-res regression      | `resolve_state.rs`   | HIGH     | Fixed     |
+| Outlier table leak on federation promotion | `timeline/append.rs` | MEDIUM   | Fixed     |
+| force_state silent PDU lookup failure      | `state/mod.rs`       | LOW      | Fixed     |
+| Membership cache count drift               | `state_cache/update` | MEDIUM   | Diagnosed |
+| audit-membership false "OK"                | `yolo/commands.rs`   | LOW      | TODO      |
+| Rejected events in state-res (root cause)  | `state_res/mod.rs`   | HIGH     | Planned   |
 
 ## Bug 1: Hotel California State-Res Regression
 
@@ -339,3 +342,159 @@ are resolved.
 - No WARN entries (timeline/state membership disagreements)
 - DIFF entries may still exist for profile updates (same membership,
   different event ID) — these are cosmetic, not harmful
+
+## Bug 4: Membership Cache Count Drift After Leave Events
+
+### What happens
+
+A user leaves a room (visible in the timeline). The state snapshot correctly
+reflects the leave (`state=615`), but the **aggregate count cache** is stale
+(`cache=616`). The `audit-membership` tool incorrectly reports "OK:
+Membership cache is consistent" despite the count mismatch.
+
+### Example
+
+```
+Phase 2: State Snapshot vs Cache
+OK: Membership cache is consistent for !c10y-...
+- Joined: state=615, cache=616    ← MISMATCH IGNORED
+```
+
+### Why it happens
+
+The leave event arrives through the normal timeline path:
+
+1. `handle_incoming_pdu` → `append_pdu` (timeline/append.rs:363)
+2. `update_membership(room_id, user_id, pdu, true)` — calls `mark_as_left`
+   AND `update_joined_count`
+3. Cache correctly shows 615
+
+But then a subsequent **state-res** triggers (e.g., a competing fork branch
+merges). The state-res flow:
+
+4. `resolve_state` runs, Hotel California post-filter fires (35 overrides)
+5. `force_state` processes the delta: `1 new, 1 removed`
+6. During "new" processing, a stale `join` event for a different user may
+   call `update_membership(room_id, user_id, &pdu, false)` — note `false`
+   for `update_joined_count`
+7. At the end of `force_state`, `update_joined_count` recalculates from
+   `room_members()` — but `room_members()` reads from the individual
+   user cache entries (`userroomid_joined`), which may not yet reflect
+   all the changes
+
+The root cause is a **TOCTOU race**: `mark_as_left` removes the user from
+`userroomid_joined`, but a concurrent or subsequent `force_state` can
+re-insert them via `mark_as_joined` if state-res produces a stale join.
+The Hotel California post-filter catches MOST of these, but cannot catch
+events where `origin_server_ts` is equal or very close.
+
+### Additional factor: rejected events in state-res
+
+The deeper root cause is that **soft-failed events participate in state
+resolution**. Line 710-711 of `src/core/matrix/state_res/mod.rs`:
+
+```rust
+//TODO: synapse checks "rejected_reason" which is most likely related to soft-failing
+```
+
+Synapse skips rejected events at three points during `iterative_auth_check`:
+
+1. Skip the event itself if previously rejected
+2. Skip any auth event that was previously rejected
+3. Don't include rejected events in the final resolved state
+
+Without this filter, soft-failed events can win state-res battles and
+produce stale membership state that the Hotel California post-filter must
+then clean up. This is the source of the 35 overrides per transaction.
+
+### The fix (multi-part)
+
+| Component                  | Fix                                                                    | Status  |
+| -------------------------- | ---------------------------------------------------------------------- | ------- |
+| `audit-membership` Phase 2 | Compare `state_joined.len()` vs `cached_joined` for aggregate mismatch | TODO    |
+| `audit-membership` Phase 2 | Call `update_joined_count` when mismatch detected                      | TODO    |
+| `state_res::resolve`       | Add `event_rejected` closure parameter                                 | PLANNED |
+| `iterative_auth_check`     | Skip rejected events and their auth events                             | PLANNED |
+| `resolve_state.rs`         | Wire `is_event_soft_failed` as the reject closure                      | PLANNED |
+
+### Workaround
+
+Until the `event_rejected` firewall is implemented:
+
+```
+yolo audit-membership !room_id --server trusted.org   # see the drift
+debug force-joined-count !room_id                     # (does not exist yet)
+```
+
+Current workaround is to use `force-set-state` to re-sync from trusted
+remote servers, which recalculates the count as a side effect.
+
+---
+
+## Bug 5: `audit-membership` Phase 2 False "OK"
+
+### What happens
+
+The audit tool checks per-user `is_joined`/`is_invited` cache entries against
+the state snapshot. If all individual entries match, it reports "OK". However,
+it does NOT compare the **aggregate count** (`room_joined_count`) against the
+state-derived count.
+
+This means `state=615, cache=616` is reported as "OK" because every user
+that is in the state snapshot IS correctly marked in the cache — but there's
+one extra user in the cache who is NOT in the state snapshot.
+
+### The fix
+
+Add an aggregate count comparison to Phase 2:
+
+```rust
+if state_joined.len() as u64 != cached_joined || state_invited.len() as u64 != cached_invited {
+    // Report MISMATCH and call update_joined_count to fix
+}
+```
+
+```
+File: src/admin/yolo/commands.rs (audit_membership, Phase 2)
+```
+
+---
+
+## Planned: Event Rejected Firewall (`state_res::resolve`)
+
+### Overview
+
+Add an `event_rejected` closure to `state_res::resolve()` to skip
+soft-failed events during state resolution, achieving Synapse parity.
+
+### API change
+
+```rust
+pub async fn resolve<..., Reject, RejectFut>(
+    ...,
+    event_rejected: &Reject,
+) -> Result<StateMap<OwnedEventId>>
+where
+    Reject: Fn(OwnedEventId) -> RejectFut + Sync,
+    RejectFut: Future<Output = bool> + Send,
+```
+
+### Filtering points in `iterative_auth_check`
+
+1. **Main event loop** (line 675): `if event_rejected(event.event_id()).await { continue; }`
+2. **Auth events** (line 708): skip auth event if rejected
+3. **Resolved state** (post-loop): optionally filter rejected events from output
+
+### Service wiring
+
+```rust
+// resolve_state.rs
+let event_rejected = |event_id| self.services.pdu_metadata.is_event_soft_failed(&event_id);
+state_res::resolve(..., &event_rejected)
+```
+
+### Impact
+
+- Eliminates the source of the 35+ Hotel California overrides per transaction
+- Reduces state-res divergence in high-activity rooms
+- Makes the post-filter a safety net rather than the primary defense
