@@ -163,7 +163,7 @@ where
 				self.services.outlier.add_pdu_outlier(
 					pdu_event.event_id(),
 					&incoming_pdu,
-					pdu_event.room_id.as_deref(),
+					Some(room_id),
 				);
 				return Err!(Request(InvalidParam(
 					"Auth event's type and state_key combination exists multiple times: {}, {}",
@@ -185,7 +185,7 @@ where
 		self.services.outlier.add_pdu_outlier(
 			pdu_event.event_id(),
 			&incoming_pdu,
-			pdu_event.room_id.as_deref(),
+			Some(room_id),
 		);
 		return Err!(Request(InvalidParam(
 			"Incoming event missing m.room.create in auth events"
@@ -212,7 +212,7 @@ where
 		self.services.outlier.add_pdu_outlier(
 			pdu_event.event_id(),
 			&incoming_pdu,
-			pdu_event.room_id.as_deref(),
+			Some(room_id),
 		);
 		return Err!(Request(Forbidden(
 			"Event authorisation fails based on event's claimed auth events"
@@ -225,7 +225,7 @@ where
 	self.services.outlier.add_pdu_outlier(
 		pdu_event.event_id(),
 		&incoming_pdu,
-		pdu_event.room_id.as_deref(),
+		Some(room_id),
 	);
 
 	trace!("Added pdu as outlier.");
