@@ -1381,6 +1381,7 @@ pub(super) async fn get_remote_dag(
 	limit: i64,
 	from: Option<OwnedEventId>,
 	print: bool,
+	verbose: bool,
 ) -> Result {
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
@@ -1416,6 +1417,8 @@ pub(super) async fn get_remote_dag(
 	let mut total = 0_usize;
 	let mut total_prev_events = 0_u64;
 	let mut batches = 0_usize;
+	let mut min_depth = u64::MAX;
+	let mut max_depth = 0_u64;
 	let batch_size = ruma::uint!(100);
 	let start_time = tokio::time::Instant::now();
 
@@ -1450,8 +1453,17 @@ pub(super) async fn get_remote_dag(
 					"get-remote-dag: federation request failed after {total} PDUs in {batches} \
 					 batches: {e}"
 				);
-				self.write_str(&format!("Federation request failed: {e}"))
+				if verbose {
+					self.write_str(&format!(
+						"Federation request failed (batch {batches}, \
+						 queue={}):\n```\n{e:?}\n```\n",
+						queue.len()
+					))
 					.await?;
+				} else {
+					self.write_str(&format!("Federation request failed: {e}"))
+						.await?;
+				}
 				break;
 			},
 		};
@@ -1497,6 +1509,9 @@ pub(super) async fn get_remote_dag(
 			}
 			total_prev_events = total_prev_events
 				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
+			let depth = pdu.depth.try_into().unwrap_or(0_u64);
+			min_depth = min_depth.min(depth);
+			max_depth = max_depth.max(depth);
 			total = total.saturating_add(1);
 
 			if total.is_multiple_of(1000) {
@@ -1538,11 +1553,25 @@ pub(super) async fn get_remote_dag(
 
 	info!(
 		"get-remote-dag: complete — {total} PDUs from {server} in {elapsed:?} ({batches} \
-		 batches, bf={bf_whole}.{bf_frac:03})"
+		 batches, bf={bf_whole}.{bf_frac:03}, depth={min_depth}..{max_depth})"
 	);
+
+	// Rename to include depth range so successive runs don't overwrite
+	let final_path = format!(
+		"/tmp/remote-dag-{safe_room_id}-v{room_version}-{server}-d{min_depth}-{max_depth}.jsonl"
+	);
+	if let Err(e) = tokio::fs::rename(&path, &final_path).await {
+		warn!("Failed to rename {path} -> {final_path}: {e}");
+	}
+	let display_path = if tokio::fs::metadata(&final_path).await.is_ok() {
+		&final_path
+	} else {
+		&path
+	};
+
 	self.write_str(&format!(
-		"\nSuccessfully fetched {total} PDUs from {server} to {path} (branching factor: \
-		 {bf_whole}.{bf_frac:03})"
+		"\nSuccessfully fetched {total} PDUs from {server} to {display_path} (depth: \
+		 {min_depth}..{max_depth}, branching factor: {bf_whole}.{bf_frac:03})"
 	))
 	.await
 }

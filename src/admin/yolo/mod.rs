@@ -197,6 +197,10 @@ pub enum YoloCommand {
 		/// Print PDUs to the admin room (in addition to writing to file)
 		#[arg(long)]
 		print: bool,
+
+		/// Show verbose output including federation request/response details
+		#[arg(long)]
+		verbose: bool,
 	},
 
 	/// Fetches a PDU from a remote server and attempts to verify/persist it.
