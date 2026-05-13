@@ -170,6 +170,10 @@ where
 				"Event failed auth check against state-at-event, but skip_soft_fail is set — continuing"
 			);
 		} else {
+			self.services
+				.pdu_metadata
+				.mark_event_soft_failed(incoming_pdu.event_id());
+
 			return Err!(Request(Forbidden(
 				"Event has failed auth check with state at the event."
 			)));

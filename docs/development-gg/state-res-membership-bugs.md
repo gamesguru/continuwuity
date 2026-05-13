@@ -99,7 +99,11 @@ does, grouped by workflow.
 | force_state silent PDU lookup failure      | `state/mod.rs`       | LOW      | Fixed     |
 | Membership cache count drift               | `state_cache/update` | MEDIUM   | Diagnosed |
 | audit-membership false "OK"                | `yolo/commands.rs`   | LOW      | TODO      |
-| Rejected events in state-res (root cause)  | `state_res/mod.rs`   | HIGH     | Planned   |
+| Rejected events in state-res (root cause)  | `state_res/mod.rs`   | HIGH     | Fixed     |
+| MSC4297 version gate (smoking gun)         | `state_res/mod.rs`   | CRITICAL | Fixed     |
+| repair_unsigned OOM risk                   | `yolo/commands.rs`   | MEDIUM   | TODO      |
+| N+1 DB queries in event_rejected           | `state_res/mod.rs`   | LOW      | TODO      |
+| force_state PDU-free cache update          | `state/mod.rs`       | MEDIUM   | TODO      |
 
 ## Bug 1: Hotel California State-Res Regression
 
@@ -498,3 +502,194 @@ state_res::resolve(..., &event_rejected)
 - Eliminates the source of the 35+ Hotel California overrides per transaction
 - Reduces state-res divergence in high-activity rooms
 - Makes the post-filter a safety net rather than the primary defense
+
+---
+
+## Bug 6: MSC4297 Version Gate (SMOKING GUN)
+
+### What happens
+
+`iterative_auth_check` in `state_res/mod.rs` had an unconditional block
+that injected `resolved_state` events into `auth_state` for ALL room
+versions. The comment said "MSC4297: for V2.1" but there was **no version
+gate**.
+
+### Why it causes divergence
+
+In standard State-Res V2 (rooms V1-V11, including Matrix HQ), an event
+is evaluated **strictly** against its own `auth_events`. By injecting
+`resolved_state` into `auth_state`, Conduwuit overwrites the event's
+auth chain with previously-resolved events from the same iterative loop.
+
+Example scenario:
+
+1. Two conflicting power level events: PL_old (March 19) and PL_new (March 23)
+2. PL_old is processed first and enters `resolved_state`
+3. When PL_new is processed, Conduwuit injects PL_old from `resolved_state`
+   into PL_new's `auth_state`
+4. PL_new's auth check sees conflicting permissions from PL_old
+5. PL_new **fails auth** and is dropped
+6. Synapse evaluates PL_new cleanly (no injection), PL_new passes auth and wins
+
+This single bug causes persistent divergence from Synapse on any V2 room
+with conflicting power level events.
+
+### The fix
+
+Gate the block to only run for V2.1 rooms:
+
+```rust
+if room_version.state_res == StateResolutionVersion::V2_1 {
+    for key in &auth_types {
+        // ... only inject resolved_state for V2.1 rooms
+    }
+}
+```
+
+```
+File: src/core/matrix/state_res/mod.rs (iterative_auth_check)
+```
+
+---
+
+## TODO: OOM Risk in `repair_unsigned`
+
+### What happens
+
+`repair_unsigned` in `yolo/commands.rs` uses `.collect().await` to load
+every state event in the room's history into RAM simultaneously. For
+large rooms (Matrix HQ has 88K+ state PDUs), this will OOM-kill the
+process.
+
+### Why it's dangerous
+
+The command loads ALL state events into a `Vec<_>` before processing them
+in chunks. The chunking happens on the already-collected vector, so the
+entire dataset is resident in memory.
+
+### The fix
+
+Chunk the *stream* instead of the collected vector:
+
+```rust
+let mut pdus_stream = self
+    .services
+    .rooms
+    .timeline
+    .pdus(&room_id, Some(PduCount::min()))
+    .filter_map(|r| ready(r.ok()))
+    .filter(|(_, pdu)| ready(pdu.state_key().is_some()))
+    .chunks(100); // StreamExt::chunks
+
+while let Some(chunk) = pdus_stream.next().await {
+    // process chunk with FuturesUnordered
+}
+```
+
+This trades the total-count progress log for bounded memory usage.
+
+```
+File: src/admin/yolo/commands.rs (repair_unsigned)
+```
+
+---
+
+## TODO: N+1 Database Queries in `event_rejected`
+
+### What happens
+
+The `event_rejected` closure calls `is_event_soft_failed(&event_id).await`
+inside the inner loops of `iterative_auth_check`. For each event being
+checked, it queries RocksDB for the event itself, then again for each of
+its auth events, producing O(N × M) sequential database lookups.
+
+### Impact
+
+For 50 conflicting control events with 10 auth events each: 500+
+sequential RocksDB point lookups per state resolution.
+
+### The fix (pre-filtering)
+
+Filter rejected events from the `auth_events` HashMap during the initial
+concurrent fetch, before the sequential auth check loop:
+
+```rust
+let auth_events: HashMap<OwnedEventId, E> = auth_event_ids
+    .into_iter()
+    .stream()
+    .broad_filter_map(fetch_event)
+    .broad_filter_map(|auth_event| async move {
+        if event_rejected(auth_event.event_id().to_owned()).await {
+            None
+        } else {
+            Some((auth_event.event_id().to_owned(), auth_event))
+        }
+    })
+    .collect()
+    .boxed()
+    .await;
+```
+
+This converts O(N × M) sequential lookups into O(N + M) concurrent
+lookups.
+
+```
+File: src/core/matrix/state_res/mod.rs (iterative_auth_check)
+```
+
+---
+
+## TODO: `force_state` PDU-Free Cache Update
+
+### What happens (Bug 4 root cause refinement)
+
+The cache count drift documented in Bug 4 is not a TOCTOU race — the
+room `state_lock` prevents concurrent access. The real cause is the
+silent `continue` when PDU lookup fails in `force_state`:
+
+```rust
+while let Some(event_id) = removed_event_ids.next().await {
+    let Ok(pdu) = self.services.timeline
+        .get_pdu_in_room(Some(room_id), &event_id).await
+        .or_else(|_| { ... })
+    else {
+        continue; // ← silently skips mark_as_left!
+    };
+```
+
+When a user is removed from the state snapshot by state-res but the
+historical PDU is missing/pruned/unfetchable, `force_state` silently
+skips `mark_as_left`, leaving the user permanently stuck in the cache.
+
+### The fix (PDU-free approach)
+
+The `statediffremoved` compressed state entries contain `shortstatekey`
+which maps to `(StateEventType, state_key)` via the `short` service.
+We don't need the PDU at all:
+
+```rust
+let removed_events = statediffremoved
+    .iter()
+    .stream()
+    .map(|&old| parse_compressed_state_event(old));
+
+while let Some((shortstatekey, _shorteventid)) = removed_events.next().await {
+    let Ok((event_type, state_key)) = self.services.short
+        .get_statekey_from_short(shortstatekey).await
+    else { continue; };
+
+    if event_type == StateEventType::RoomMember {
+        if let Ok(user_id) = ruma::UserId::parse(&state_key) {
+            self.services.state_cache
+                .mark_as_left(&user_id, room_id, None).await;
+        }
+    }
+}
+```
+
+This eliminates the PDU lookup entirely and guarantees `mark_as_left`
+fires for every removed membership event.
+
+```
+File: src/service/rooms/state/mod.rs (force_state)
+```

@@ -71,7 +71,6 @@ pub enum Identifier<'a> {
 
 type Cache = LruCache<OwnedRoomId, Option<CachedSpaceHierarchySummary>>;
 
-
 /// How long a negative (failed) hierarchy lookup stays cached before
 /// we retry federation for that room.
 const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);

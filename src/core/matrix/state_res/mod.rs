@@ -764,7 +764,7 @@ where
 		}
 
 		// MSC4297: auth_state must include events from resolved_state for V2.1
-		// This MUST NOT run for V2 rooms (V1-V11) — injecting resolved_state
+		// This MUST NOT run for V1 or V2 (V1-V11 rooms). Injecting resolved_state
 		// into auth_state corrupts power-level auth checks in older room versions.
 		if room_version.state_res == StateResolutionVersion::V2_1 {
 			for key in &auth_types {
