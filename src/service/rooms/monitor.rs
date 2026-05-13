@@ -113,9 +113,7 @@ impl Service {
 		if !room_str.starts_with('!')
 			|| !room_str.contains(':')
 			|| room_str.len() > 255
-			|| room_str
-				.bytes()
-				.any(|b| b < 0x20 || b == b'"' || b == b'\\')
+			|| room_str.bytes().any(|b| !b.is_ascii_graphic())
 		{
 			warn!(
 				target: "forwardfill",
