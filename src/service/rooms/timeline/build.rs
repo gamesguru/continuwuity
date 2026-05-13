@@ -1,6 +1,6 @@
 use std::{collections::HashSet, iter::once};
 
-use conduwuit::trace;
+use conduwuit::{info, trace};
 use conduwuit_core::{
 	Err, Result, err, implement,
 	matrix::{event::Event, pdu::PduBuilder},
@@ -181,10 +181,15 @@ pub async fn build_and_append_pdu(
 	servers.remove(self.services.globals.server_name());
 
 	trace!("Sending PDU {} to {} servers", pdu.event_id(), servers.len());
-	self.services
+	let num_sent = self
+		.services
 		.sending
 		.send_pdu_servers(servers.iter().map(AsRef::as_ref).stream(), &pdu_id)
 		.await?;
+
+	if num_sent > 0 {
+		info!("Broadcasting {} in {room_id} to {num_sent} servers", pdu.event_id());
+	}
 
 	trace!("Event {} in room {:?} has been appended", pdu.event_id(), room_id);
 	Ok(pdu.event_id().to_owned())

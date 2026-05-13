@@ -15,7 +15,7 @@ use std::{
 
 use async_trait::async_trait;
 use conduwuit::{
-	Result, Server, debug, debug_warn, err, error,
+	Result, Server, debug, debug_warn, err, error, info,
 	smallvec::SmallVec,
 	utils::{ReadyExt, TryReadyExt, available_parallelism, math::usize_from_u64_truncated},
 	warn,
@@ -207,11 +207,17 @@ impl Service {
 			.room_servers(room_id)
 			.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name));
 
-		self.send_pdu_servers(servers, pdu_id).await
+		let num_servers = self.send_pdu_servers(servers, pdu_id).await?;
+
+		if num_servers > 0 {
+			info!("Broadcasting PDU in {room_id} to {num_servers} servers");
+		}
+
+		Ok(())
 	}
 
 	#[tracing::instrument(skip(self, servers, pdu_id), level = "debug")]
-	pub async fn send_pdu_servers<'a, S>(&self, servers: S, pdu_id: &RawPduId) -> Result
+	pub async fn send_pdu_servers<'a, S>(&self, servers: S, pdu_id: &RawPduId) -> Result<usize>
 	where
 		S: Stream<Item = &'a ServerName> + Send + 'a,
 	{
@@ -222,6 +228,7 @@ impl Service {
 			.collect::<Vec<_>>()
 			.await;
 
+		let num_servers = requests.len();
 		let _cork = self.db.db.cork();
 		let keys = self.db.queue_requests(requests.iter().map(|(o, e)| (e, o)));
 
@@ -229,7 +236,7 @@ impl Service {
 			self.dispatch(Msg { dest, event, queue_id })?;
 		}
 
-		Ok(())
+		Ok(num_servers)
 	}
 
 	#[tracing::instrument(skip(self, server, serialized), level = "debug")]

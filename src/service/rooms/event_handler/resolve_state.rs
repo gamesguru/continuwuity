@@ -141,7 +141,8 @@ pub async fn resolve_state(
 		if resolved_pdu.origin_server_ts() < current_pdu.origin_server_ts() {
 			info!(
 				"State-res sought to resurrect older membership event {} (ts={}) over {} \
-				 (ts={}), keeping current event to prevent Hotel California regression",
+				 (ts={}) in {room_id}, keeping current event to prevent Hotel California \
+				 regression",
 				event_id,
 				resolved_pdu.origin_server_ts().get(),
 				current_event_id,
@@ -153,7 +154,10 @@ pub async fn resolve_state(
 	}
 
 	if membership_overrides > 0 {
-		info!("Overrode {membership_overrides} stale membership event(s) from state-res");
+		info!(
+			"Overrode {membership_overrides} stale membership event(s) from state-res in \
+			 {room_id}"
+		);
 	}
 
 	trace!("Compressing state...");
