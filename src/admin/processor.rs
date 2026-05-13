@@ -70,6 +70,13 @@ async fn process_command(services: Arc<Services>, input: &CommandInput) -> Proce
 	let output =
 		String::from_utf8(take(output.get_mut())).expect("invalid utf8 in command output stream");
 
+	// Wrap command output in code blocks if it's not already markdown
+	let output = if !output.is_empty() && !looks_like_markdown(&output) {
+		format!("```\n{output}\n```")
+	} else {
+		output
+	};
+
 	match result {
 		| Ok(()) if logs.is_empty() =>
 			Ok(Some(reply(RoomMessageEventContent::notice_markdown(output), context.reply_id))),
@@ -306,4 +313,17 @@ fn reply(
 	});
 
 	content
+}
+
+/// Heuristic: output that already contains markdown formatting should not be
+/// wrapped in code blocks.
+fn looks_like_markdown(s: &str) -> bool {
+	let trimmed = s.trim_start();
+	trimmed.starts_with('#')
+		|| trimmed.starts_with('>')
+		|| trimmed.starts_with("```")
+		|| trimmed.starts_with("- ")
+		|| trimmed.starts_with("* ")
+		|| trimmed.contains("**")
+		|| trimmed.contains("](")
 }
