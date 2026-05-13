@@ -1615,30 +1615,30 @@ pub(super) async fn resend_receipts(
 #[admin_command]
 pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 	use conduwuit::PduCount;
-	use futures::stream::FuturesUnordered;
+	use futures::{StreamExt, stream::FuturesUnordered};
 
 	self.bail_restricted()?;
 
-	let pdus: Vec<_> = self
+	let pdus_stream = self
 		.services
 		.rooms
 		.timeline
 		.pdus(&room_id, Some(PduCount::min()))
 		.filter_map(|r| ready(r.ok()))
 		.filter(|(_count, pdu)| ready(pdu.state_key().is_some()))
-		.collect()
-		.await;
+		.ready_chunks(100);
 
-	let total = pdus.len();
-	info!("repair_unsigned: {total} state events to process in {room_id}");
+	pin_mut!(pdus_stream);
+
+	info!("repair_unsigned: starting streaming state event repair in {room_id}");
 
 	let mut repaired = 0_usize;
 	let mut skipped = 0_usize;
 	let mut errors = 0_usize;
 
-	for chunk in pdus.chunks(100) {
+	while let Some(chunk) = pdus_stream.next().await {
 		let mut futs: FuturesUnordered<_> = chunk
-			.iter()
+			.into_iter()
 			.map(|(_count, pdu)| {
 				let event_id = pdu.event_id().to_owned();
 				let kind = pdu.kind().to_string();
@@ -1756,8 +1756,7 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 		let processed = repaired.saturating_add(skipped).saturating_add(errors);
 		if processed.is_multiple_of(1000) {
 			info!(
-				"repair_unsigned: {processed}/{total} processed ({repaired} repaired, {skipped} \
-				 skipped)"
+				"repair_unsigned: {processed} processed ({repaired} repaired, {skipped} skipped)"
 			);
 		}
 	}

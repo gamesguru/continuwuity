@@ -200,8 +200,11 @@ impl Service {
 			// Process cache updates using shortstatekey (PDU-free!)
 			// This guarantees we update the cache even if the historical PDU
 			// JSON has been pruned from the database.
-			if let Ok((event_type, state_key)) =
-				self.services.short.get_statekey_from_short(shortstatekey).await
+			if let Ok((event_type, state_key)) = self
+				.services
+				.short
+				.get_statekey_from_short(shortstatekey)
+				.await
 			{
 				if event_type == StateEventType::RoomMember {
 					if let Ok(user_id) = UserId::parse(&*state_key) {
@@ -219,13 +222,13 @@ impl Service {
 							let _ = self
 								.services
 								.state_cache
-								.update_membership(room_id, &user_id, &new_pdu, false)
+								.update_membership(room_id, user_id, &new_pdu, false)
 								.await;
 						} else {
 							// User is no longer in the room at all in the new state
 							self.services
 								.state_cache
-								.mark_as_left(&user_id, room_id, None)
+								.mark_as_left(user_id, room_id, None)
 								.await;
 						}
 					}
