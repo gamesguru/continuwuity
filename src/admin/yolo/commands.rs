@@ -168,16 +168,20 @@ pub(super) async fn audit_membership(
 	self.write_str("\n**Phase 2: State Snapshot vs Cache**\n")
 		.await?;
 
-	let mut state_joined: Vec<OwnedUserId> = Vec::new();
-	let mut state_invited: Vec<OwnedUserId> = Vec::new();
+	let mut state_joined: HashSet<OwnedUserId> = HashSet::new();
+	let mut state_invited: HashSet<OwnedUserId> = HashSet::new();
 	let mut state_left = 0_usize;
 	let mut state_banned = 0_usize;
 	let mut state_knocked = 0_usize;
 
 	for (user_id, (membership, _)) in &state_membership {
 		match membership.as_str() {
-			| "join" => state_joined.push(user_id.clone()),
-			| "invite" => state_invited.push(user_id.clone()),
+			| "join" => {
+				state_joined.insert(user_id.clone());
+			},
+			| "invite" => {
+				state_invited.insert(user_id.clone());
+			},
 			| "leave" => state_left = state_left.saturating_add(1),
 			| "ban" => state_banned = state_banned.saturating_add(1),
 			| "knock" => state_knocked = state_knocked.saturating_add(1),
@@ -201,33 +205,55 @@ pub(super) async fn audit_membership(
 		.await
 		.unwrap_or(0);
 
+	// Collect actual cache members for bidirectional comparison
+	let cached_joined_members: HashSet<OwnedUserId> = self
+		.services
+		.rooms
+		.state_cache
+		.room_members(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let cached_invited_members: HashSet<OwnedUserId> = self
+		.services
+		.rooms
+		.state_cache
+		.room_members_invited(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
 	let mut cache_mismatches = Vec::new();
 
+	// Check state → cache (MISSING: in state but not cache)
 	for user_id in &state_joined {
-		let cached = self
-			.services
-			.rooms
-			.state_cache
-			.is_joined(user_id, &room_id)
-			.await;
-
-		if !cached {
+		if !cached_joined_members.contains(user_id) {
 			cache_mismatches
 				.push(format!("MISSING {user_id}: state says JOINED but cache says NOT joined"));
 		}
 	}
 
 	for user_id in &state_invited {
-		let cached = self
-			.services
-			.rooms
-			.state_cache
-			.is_invited(user_id, &room_id)
-			.await;
+		if !cached_invited_members.contains(user_id) {
+			cache_mismatches.push(format!(
+				"MISSING {user_id}: state says INVITED but cache says NOT invited"
+			));
+		}
+	}
 
-		if !cached {
+	// Check cache → state (EXTRA: in cache but not state)
+	for user_id in &cached_joined_members {
+		if !state_joined.contains(user_id) {
 			cache_mismatches
-				.push(format!("WARN {user_id}: state says INVITED but cache says NOT invited"));
+				.push(format!("EXTRA {user_id}: cache says JOINED but state says NOT joined"));
+		}
+	}
+
+	for user_id in &cached_invited_members {
+		if !state_invited.contains(user_id) {
+			cache_mismatches
+				.push(format!("EXTRA {user_id}: cache says INVITED but state says NOT invited"));
 		}
 	}
 
@@ -258,14 +284,18 @@ pub(super) async fn audit_membership(
 			cache_mismatches.len()
 		);
 
-		for m in &cache_mismatches {
+		for m in cache_mismatches.iter().take(100) {
 			writeln!(out, "- {m}").expect("fmt");
+		}
+		if cache_mismatches.len() > 100 {
+			writeln!(out, "- ... and {} more", cache_mismatches.len().saturating_sub(100))
+				.expect("fmt");
 		}
 
 		self.write_str(&out).await?;
 	}
 
-	// ── Phase 2.5: Aggregate count cross-check ───────────────────────────
+	// ── Phase 2.5: Aggregate count cross-check + active healing ──────────
 	let state_joined_count: u64 = state_joined
 		.len()
 		.try_into()
@@ -278,19 +308,51 @@ pub(super) async fn audit_membership(
 		.await
 		.unwrap_or(0);
 
-	if cached_joined_u64 != state_joined_count {
+	if cached_joined_u64 != state_joined_count || !cache_mismatches.is_empty() {
 		self.write_str(&format!(
-			"\n✗ AGGREGATE MISMATCH: state has {state_joined_count} joined, but \
-			 roomid_joinedcount reports {cached_joined_u64}. Recalculating..."
+			"\n✗ CACHE INCONSISTENCY (state: {state_joined_count}, cache: {cached_joined_u64}, \
+			 mismatches: {}). Healing…",
+			cache_mismatches.len()
 		))
 		.await?;
+
+		// Heal EXTRA users (in cache but not state)
+		for user_id in &cached_joined_members {
+			if !state_joined.contains(user_id) {
+				self.services
+					.rooms
+					.state_cache
+					.mark_as_left(user_id, &room_id, None)
+					.await;
+			}
+		}
+		for user_id in &cached_invited_members {
+			if !state_invited.contains(user_id) {
+				self.services
+					.rooms
+					.state_cache
+					.mark_as_left(user_id, &room_id, None)
+					.await;
+			}
+		}
+
+		// Heal MISSING users (in state but not cache)
+		for user_id in &state_joined {
+			if !cached_joined_members.contains(user_id) {
+				self.services
+					.rooms
+					.state_cache
+					.mark_as_joined(user_id, &room_id)
+					.await;
+			}
+		}
+
 		self.services
 			.rooms
 			.state_cache
 			.update_joined_count(&room_id)
 			.await;
-		self.write_str("\n✓ Aggregate joined count repaired.")
-			.await?;
+		self.write_str("\n✓ Cache repaired.\n").await?;
 	}
 
 	// ── Phase 3: Remote comparison (optional) ────────────────────────────

@@ -209,11 +209,13 @@ impl Service {
 				if event_type == StateEventType::RoomMember {
 					if let Ok(user_id) = UserId::parse(&*state_key) {
 						// Re-sync membership from the NEW state to update cache correctly.
+						// NB: Must use state_get(shortstatehash) NOT room_state_get —
+						// the new state has not been committed yet via set_room_state.
 						if let Ok(new_pdu) = self
 							.services
 							.state_accessor
-							.room_state_get(
-								room_id,
+							.state_get(
+								shortstatehash,
 								&StateEventType::RoomMember,
 								user_id.as_str(),
 							)
