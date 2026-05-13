@@ -498,18 +498,31 @@ where
 pub fn get_parent_children_via(
 	parent: &SpaceHierarchyParentSummary,
 	suggested_only: bool,
-) -> impl DoubleEndedIterator<Item = (OwnedRoomId, impl Iterator<Item = OwnedServerName> + use<>)>
-+ Send
-+ '_ {
-	parent
+) -> Vec<(OwnedRoomId, Vec<OwnedServerName>)> {
+	let mut children: Vec<_> = parent
 		.children_state
 		.iter()
 		.map(Raw::deserialize)
 		.filter_map(Result::ok)
-		.filter_map(move |ce| {
-			(!suggested_only || ce.content.suggested)
-				.then_some((ce.state_key, ce.content.via.into_iter()))
-		})
+		.filter(|ce| !suggested_only || ce.content.suggested)
+		.map(|ce| (ce.state_key, ce.content.order, ce.content.via))
+		.collect();
+
+	// Spec: sort by `order` field (lexicographic), rooms without `order` come
+	// last, tiebreak by room_id for determinism across homeservers.
+	children.sort_by(|(room_a, order_a, _), (room_b, order_b, _)| {
+		match (order_a.as_deref(), order_b.as_deref()) {
+			| (Some(a), Some(b)) => a.cmp(b).then_with(|| room_a.cmp(room_b)),
+			| (Some(_), None) => std::cmp::Ordering::Less,
+			| (None, Some(_)) => std::cmp::Ordering::Greater,
+			| (None, None) => room_a.cmp(room_b),
+		}
+	});
+
+	children
+		.into_iter()
+		.map(|(room_id, _order, via)| (room_id, via))
+		.collect()
 }
 
 #[implement(Service)]

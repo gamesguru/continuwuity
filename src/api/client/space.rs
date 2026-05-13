@@ -137,8 +137,9 @@ where
 				let populate = !on_token_path || path.len() > short_room_ids.clone().count();
 
 				let mut children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
+					.into_iter()
 					.rev()
-					.map(|(key, val)| (key, val.collect(), depth.saturating_add(1), false))
+					.map(|(key, val)| (key, val, depth.saturating_add(1), false))
 					.collect();
 
 				if populate {
