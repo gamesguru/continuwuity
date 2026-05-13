@@ -1615,130 +1615,150 @@ pub(super) async fn resend_receipts(
 #[admin_command]
 pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 	use conduwuit::PduCount;
+	use futures::stream::FuturesUnordered;
 
 	self.bail_restricted()?;
 
-	let pdus = self
+	let pdus: Vec<_> = self
 		.services
 		.rooms
 		.timeline
-		.pdus(&room_id, Some(PduCount::min()));
+		.pdus(&room_id, Some(PduCount::min()))
+		.filter_map(|r| ready(r.ok()))
+		.filter(|(_count, pdu)| ready(pdu.state_key().is_some()))
+		.collect()
+		.await;
 
-	pin_mut!(pdus);
+	let total = pdus.len();
+	info!("repair_unsigned: {total} state events to process in {room_id}");
+
 	let mut repaired = 0_usize;
 	let mut skipped = 0_usize;
 	let mut errors = 0_usize;
 
-	while let Some(Ok((_count, pdu))) = pdus.next().await {
-		// Only state events have prev_content
-		let Some(state_key) = pdu.state_key() else {
-			continue;
-		};
+	for chunk in pdus.chunks(100) {
+		let mut futs: FuturesUnordered<_> = chunk
+			.iter()
+			.map(|(_count, pdu)| {
+				let event_id = pdu.event_id().to_owned();
+				let kind = pdu.kind().to_string();
+				let state_key = pdu.state_key().unwrap_or_default().to_owned();
+				async move {
+					// Get the stored JSON
+					let pdu_json = self.services.rooms.timeline.get_pdu_json(&event_id).await;
 
-		let event_id = pdu.event_id();
+					// Try state snapshot lookup
+					let prev_state = if let Ok(ssh) = self
+						.services
+						.rooms
+						.state_accessor
+						.pdu_shortstatehash(&event_id)
+						.await
+					{
+						self.services
+							.rooms
+							.state_accessor
+							.state_get(ssh, &kind.clone().into(), &state_key)
+							.await
+							.ok()
+							.filter(|prev| prev.event_id() != event_id)
+					} else {
+						None
+					};
 
-		// Get the stored JSON
-		let Ok(mut pdu_json) = self.services.rooms.timeline.get_pdu_json(event_id).await else {
-			errors = errors.saturating_add(1);
-			continue;
-		};
-
-		// Get or create the unsigned object
-		let unsigned = pdu_json.entry("unsigned".to_owned()).or_insert_with(|| {
-			ruma::CanonicalJsonValue::Object(std::collections::BTreeMap::new())
-		});
-
-		let ruma::CanonicalJsonValue::Object(unsigned) = unsigned else {
-			errors = errors.saturating_add(1);
-			continue;
-		};
-
-		// Try to find the previous state event via two paths:
-		// 1. State snapshot (pdu_shortstatehash) — authoritative
-		// 2. Existing replaces_state in unsigned — fallback for outlier-sourced events
-		//
-		// Guard: if the lookup returns the event itself (can happen when
-		// reorder_timeline assigns a post-event SSH to backfilled events),
-		// treat it as no previous state.
-		let prev_state = if let Ok(shortstatehash) = self
-			.services
-			.rooms
-			.state_accessor
-			.pdu_shortstatehash(event_id)
-			.await
-		{
-			self.services
-				.rooms
-				.state_accessor
-				.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
-				.await
-				.ok()
-				.filter(|prev| prev.event_id() != event_id)
-		} else if let Some(ruma::CanonicalJsonValue::String(replaces_id)) =
-			unsigned.get("replaces_state")
-		{
-			// No state snapshot, but we have replaces_state — use it directly
-			if let Ok(prev_eid) = <&EventId>::try_from(replaces_id.as_str()) {
-				if prev_eid != event_id {
-					self.services.rooms.timeline.get_pdu(prev_eid).await.ok()
-				} else {
-					None
+					(event_id, kind, state_key, pdu_json, prev_state)
 				}
-			} else {
-				None
+			})
+			.collect();
+
+		while let Some((event_id, _kind, _state_key, pdu_json, prev_state)) = futs.next().await {
+			let Ok(mut pdu_json) = pdu_json else {
+				errors = errors.saturating_add(1);
+				continue;
+			};
+
+			let unsigned = pdu_json.entry("unsigned".to_owned()).or_insert_with(|| {
+				ruma::CanonicalJsonValue::Object(std::collections::BTreeMap::new())
+			});
+
+			let ruma::CanonicalJsonValue::Object(unsigned) = unsigned else {
+				errors = errors.saturating_add(1);
+				continue;
+			};
+
+			// If no state snapshot, try replaces_state fallback
+			let prev_state = match prev_state {
+				| Some(_) => prev_state,
+				| None => {
+					let replaces = unsigned
+						.get("replaces_state")
+						.and_then(|v| v.as_str())
+						.and_then(|s| <&EventId>::try_from(s).ok())
+						.filter(|eid| *eid != event_id);
+
+					match replaces {
+						| Some(prev_eid) =>
+							self.services.rooms.timeline.get_pdu(prev_eid).await.ok(),
+						| None => {
+							skipped = skipped.saturating_add(1);
+							continue;
+						},
+					}
+				},
+			};
+
+			// Remove old (possibly wrong) prev_content fields
+			unsigned.remove("prev_content");
+			unsigned.remove("prev_sender");
+			unsigned.remove("replaces_state");
+
+			// Populate from the previous state event
+			if let Some(prev_state) = prev_state {
+				if let Ok(content_obj) =
+					utils::to_canonical_object(prev_state.get_content_as_value())
+				{
+					unsigned.insert(
+						"prev_content".to_owned(),
+						ruma::CanonicalJsonValue::Object(content_obj),
+					);
+					unsigned.insert(
+						"prev_sender".to_owned(),
+						ruma::CanonicalJsonValue::String(prev_state.sender().to_string()),
+					);
+					unsigned.insert(
+						"replaces_state".to_owned(),
+						ruma::CanonicalJsonValue::String(prev_state.event_id().to_string()),
+					);
+				}
 			}
-		} else {
-			info!(
-				"repair_unsigned: skipped {event_id} ({} / {state_key}) — no state snapshot or \
-				 replaces_state",
-				pdu.kind()
-			);
-			skipped = skipped.saturating_add(1);
-			continue;
-		};
 
-		// Remove old (possibly wrong) prev_content fields
-		unsigned.remove("prev_content");
-		unsigned.remove("prev_sender");
-		unsigned.remove("replaces_state");
+			// Write back
+			let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await else {
+				errors = errors.saturating_add(1);
+				continue;
+			};
 
-		// Populate from the previous state event
-		if let Some(prev_state) = prev_state {
-			if let Ok(content_obj) = utils::to_canonical_object(prev_state.get_content_as_value())
+			if let Err(e) = self
+				.services
+				.rooms
+				.timeline
+				.replace_pdu(&pdu_id, &pdu_json)
+				.await
 			{
-				unsigned.insert(
-					"prev_content".to_owned(),
-					ruma::CanonicalJsonValue::Object(content_obj),
-				);
-				unsigned.insert(
-					"prev_sender".to_owned(),
-					ruma::CanonicalJsonValue::String(prev_state.sender().to_string()),
-				);
-				unsigned.insert(
-					"replaces_state".to_owned(),
-					ruma::CanonicalJsonValue::String(prev_state.event_id().to_string()),
-				);
+				warn!("Failed to replace PDU {event_id}: {e}");
+				errors = errors.saturating_add(1);
+				continue;
 			}
+
+			repaired = repaired.saturating_add(1);
 		}
 
-		// Write back
-		let pdu_id = self.services.rooms.timeline.get_pdu_id(event_id).await?;
-		if let Err(e) = self
-			.services
-			.rooms
-			.timeline
-			.replace_pdu(&pdu_id, &pdu_json)
-			.await
-		{
-			warn!("Failed to replace PDU {event_id}: {e}");
-			errors = errors.saturating_add(1);
-			continue;
-		}
-
-		repaired = repaired.saturating_add(1);
-
-		if repaired.is_multiple_of(1000) {
-			info!("Repair progress: {repaired} state events repaired so far");
+		let processed = repaired.saturating_add(skipped).saturating_add(errors);
+		if processed.is_multiple_of(1000) {
+			info!(
+				"repair_unsigned: {processed}/{total} processed ({repaired} repaired, {skipped} \
+				 skipped)"
+			);
 		}
 	}
 
