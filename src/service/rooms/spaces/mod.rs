@@ -293,11 +293,25 @@ pub async fn get_summary_and_children_client(
 ) -> Result<Option<SummaryAccessibility>> {
 	let identifier = Identifier::UserId(user_id);
 
-	if let Ok(Some(response)) = self
-		.get_summary_and_children_local(current_room, &identifier)
+	// Only use local state for rooms where we have local members.
+	// Without local members our room_joined_count can drift from the
+	// authoritative value (different state-res outcomes), so prefer
+	// the federation response for rooms we merely observe.
+	let has_local_members = self
+		.services
+		.state_cache
+		.local_users_in_room(current_room)
+		.next()
 		.await
-	{
-		return Ok(Some(response));
+		.is_some();
+
+	if has_local_members {
+		if let Ok(Some(response)) = self
+			.get_summary_and_children_local(current_room, &identifier)
+			.await
+		{
+			return Ok(Some(response));
+		}
 	}
 
 	self.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
