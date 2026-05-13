@@ -659,6 +659,21 @@ where
 				.await
 				.ok_or_else(|| Error::NotFound(format!("Failed to find {event_id}")))
 		})
+		// SYNAPSE CHECK 1: Pre-filter rejected events concurrently during fetch
+		.broad_filter_map(|res| async {
+			match res {
+				| Ok(event) if event_rejected(event.event_id().to_owned()).await => {
+					info!(
+						target: "state_res",
+						event_id = event.event_id().as_str(),
+						"skipping previously rejected event"
+					);
+					None
+				},
+				| Ok(event) => Some(Ok(event)),
+				| Err(e) => Some(Err(e)),
+			}
+		})
 		.try_collect()
 		.boxed()
 		.await?;
@@ -679,7 +694,19 @@ where
 		.into_iter()
 		.stream()
 		.broad_filter_map(fetch_event)
-		.map(|auth_event| (auth_event.event_id().to_owned(), auth_event))
+		// SYNAPSE CHECK 2: Pre-filter rejected auth events concurrently
+		.broad_filter_map(|auth_event| async {
+			if event_rejected(auth_event.event_id().to_owned()).await {
+				trace!(
+					target: "state_res",
+					event_id = auth_event.event_id().as_str(),
+					"skipping rejected auth event"
+				);
+				None
+			} else {
+				Some((auth_event.event_id().to_owned(), auth_event))
+			}
+		})
 		.collect()
 		.boxed()
 		.await;
@@ -693,16 +720,6 @@ where
 	// going missing from the resolved state as they'd be discarded here.
 	let mut resolved_state = unconflicted_state;
 	for event in events_to_check {
-		// SYNAPSE CHECK 1: Skip previously rejected events entirely
-		if event_rejected(event.event_id().to_owned()).await {
-			info!(
-				target: "state_res",
-				event_id = event.event_id().as_str(),
-				"skipping previously rejected event"
-			);
-			continue;
-		}
-
 		trace!(event_id = event.event_id().as_str(), "checking event");
 		let state_key = event
 			.state_key()
@@ -737,16 +754,6 @@ where
 		}
 		for aid in event.auth_events() {
 			if let Some(ev) = auth_events.get(aid) {
-				// SYNAPSE CHECK 2: Exclude rejected auth events
-				if event_rejected(aid.to_owned()).await {
-					trace!(
-						target: "state_res",
-						event_id = aid.as_str(),
-						"skipping rejected auth event"
-					);
-					continue;
-				}
-
 				trace!(event_id = aid.as_str(), "found auth event");
 				auth_state.insert(
 					ev.event_type()
