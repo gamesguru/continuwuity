@@ -128,58 +128,70 @@ impl Service {
 			return Ok(());
 		}
 
-		// Determine the best server to query: prefer the room's homeserver
-		// (authoritative), then fall back to any known remote participant.
-		let target_server: OwnedServerName = if let Some(hs) = room_id
+		// Build candidate server list: prefer room homeserver, then any remote
+		// participants. We try multiple servers instead of giving up on one.
+		let mut candidate_servers: Vec<OwnedServerName> = Vec::new();
+
+		// Prefer the room's homeserver if it's remote and in the room
+		if let Some(hs) = room_id
 			.server_name()
 			.filter(|s| !self.services.globals.server_is_ours(s))
 		{
 			if self.services.state_cache.server_in_room(hs, room_id).await {
-				hs.to_owned()
-			} else {
-				self.services
-					.state_cache
-					.room_servers(room_id)
-					.ready_filter(|&s| !self.services.globals.server_is_ours(s))
-					.next()
-					.await
-					.map(ToOwned::to_owned)
-					.ok_or_else(|| conduwuit::err!("No remote servers in room {room_id}"))?
+				candidate_servers.push(hs.to_owned());
 			}
-		} else {
-			let Some(server) = self
-				.services
-				.state_cache
-				.room_servers(room_id)
-				.ready_filter(|&s| !self.services.globals.server_is_ours(s))
-				.next()
-				.await
-			else {
-				return Ok(()); // Local-only room, nothing to forward-fill
-			};
-			server.to_owned()
-		};
+		}
 
-		// 1. Grab an active local user to use for the probe. We MUST use an active
-		// joined user, or Synapse will return 403.
-		let mut users = self
+		// Add other remote servers (up to 5 candidates total)
+		let other_servers: Vec<OwnedServerName> = self
 			.services
 			.state_cache
-			.active_local_users_in_room(room_id)
-			.boxed();
+			.room_servers(room_id)
+			.ready_filter(|&s| !self.services.globals.server_is_ours(s))
+			.map(ToOwned::to_owned)
+			.collect()
+			.await;
 
-		let mut remote_latest_events: Vec<ruma::OwnedEventId> = Vec::new();
-		while let Some(user_id) = users.next().await {
-			let user_id = user_id.to_owned();
+		for server in other_servers {
+			if candidate_servers.len() >= 5 {
+				break;
+			}
+			if !candidate_servers.contains(&server) {
+				candidate_servers.push(server);
+			}
+		}
 
+		if candidate_servers.is_empty() {
+			return Ok(()); // Local-only room, nothing to forward-fill
+		}
+
+		// Grab an active local user to use for the probe.
+		let user_id = {
+			let mut users = self
+				.services
+				.state_cache
+				.active_local_users_in_room(room_id)
+				.boxed();
+			match users.next().await {
+				| Some(u) => u.to_owned(),
+				| None => {
+					info!(
+						target: "forwardfill",
+						"Skipping stagnant room {room_id} due to no joined local users."
+					);
+					return Ok(());
+				},
+			}
+		};
+
+		// Try each candidate server for the probe + fetch
+		for target_server in &candidate_servers {
 			info!(
 				target: "forwardfill",
 				"Room {room_id} is stagnant (latest PDU was {}ms ago). Probing {target_server} for extremities via {user_id}...",
 				now.saturating_sub(latest_pdu.origin_server_ts().get().into())
 			);
 
-			// 2. Probe the remote server for its forward extremities via a make_join
-			// template. This is the most reliable way to get the remote DAG tip.
 			let make_join_request =
 				ruma::api::federation::membership::prepare_join_event::v1::Request {
 					room_id: room_id.to_owned(),
@@ -190,36 +202,32 @@ impl Service {
 			let probe_response = match self
 				.services
 				.sending
-				.send_federation_request(&target_server, make_join_request)
+				.send_federation_request(target_server, make_join_request)
 				.await
 			{
-				| Ok(r) => Some(r.event),
+				| Ok(r) => r.event,
 				| Err(e) => {
 					warn!(
 						target: "forwardfill",
 						"Probe failed for {room_id} via {target_server} (user {user_id}): {e}"
 					);
-					continue;
+					continue; // Try next server
 				},
 			};
 
-			let Some(event_stub_raw) = probe_response else {
-				continue;
-			};
-
 			let event_stub =
-				match serde_json::from_str::<ruma::CanonicalJsonObject>(event_stub_raw.get()) {
+				match serde_json::from_str::<ruma::CanonicalJsonObject>(probe_response.get()) {
 					| Ok(s) => s,
 					| Err(e) => {
 						warn!(
 							target: "forwardfill",
 							"Invalid probe template from {target_server}: {e}"
 						);
-						continue;
+						continue; // Try next server
 					},
 				};
 
-			remote_latest_events = event_stub
+			let remote_latest_events: Vec<ruma::OwnedEventId> = event_stub
 				.get("prev_events")
 				.and_then(|v| v.as_array())
 				.map(|arr| {
@@ -233,103 +241,85 @@ impl Service {
 				})
 				.unwrap_or_default();
 
-			if !remote_latest_events.is_empty() {
-				break;
+			if remote_latest_events.is_empty() {
+				continue; // Try next server
 			}
-		}
 
-		if remote_latest_events.is_empty() {
-			if self
-				.services
-				.state_cache
-				.active_local_users_in_room(room_id)
-				.boxed()
-				.next()
-				.await
-				.is_none()
-			{
-				info!(
-					target: "forwardfill",
-					"Skipping stagnant room {room_id} due to no joined local users."
-				);
+			// Filter to only events we don't have
+			let mut missing_latest = Vec::new();
+			for event_id in remote_latest_events {
+				if !self.services.timeline.pdu_exists(&event_id).await {
+					missing_latest.push(event_id);
+				}
 			}
-			return Ok(());
-		}
 
-		// 3. Filter remote_latest_events to only those we DON'T know.
-		// If we know all of them, the room isn't actually stale.
-		let mut missing_latest = Vec::new();
-		for event_id in remote_latest_events {
-			if !self.services.timeline.pdu_exists(&event_id).await {
-				missing_latest.push(event_id);
+			if missing_latest.is_empty() {
+				debug!(target: "forwardfill", "Room {room_id} is not actually stale; we have all forward extremities from {target_server}.");
+				return Ok(());
 			}
-		}
 
-		if missing_latest.is_empty() {
-			debug!(target: "forwardfill", "Room {room_id} is not actually stale; we have all forward extremities from {target_server}.");
-			return Ok(());
-		}
+			info!(
+				target: "forwardfill",
+				"Room {room_id} is actually stale! Discovered {} missing forward extremities from {target_server}.",
+				missing_latest.len()
+			);
 
-		info!(
-			target: "forwardfill",
-			"Room {room_id} is actually stale! Discovered {} missing forward extremities from {target_server}.",
-			missing_latest.len()
-		);
+			// Fetch the missing extremities
+			let mut handled = 0_usize;
+			for event_id in missing_latest {
+				let request = ruma::api::federation::event::get_event::v1::Request {
+					event_id: event_id.clone(),
+					include_unredacted_content: None,
+				};
 
-		// 4. Fetch the missing extremities and feed them to handle_incoming_pdu.
-		// Passing `true` for fetch_prev tells Conduwuit to automatically use its own
-		// robust native fetch_prev engine to stitch the DAG backwards!
-		let mut handled = 0_usize;
-		for event_id in missing_latest {
-			let request = ruma::api::federation::event::get_event::v1::Request {
-				event_id: event_id.clone(),
-				include_unredacted_content: None,
-			};
+				let response = match self
+					.services
+					.sending
+					.send_federation_request(target_server, request)
+					.await
+				{
+					| Ok(r) => r,
+					| Err(e) => {
+						warn!(target: "forwardfill", "Failed to fetch missing extremity {event_id}: {e}");
+						continue;
+					},
+				};
 
-			let response = match self
-				.services
-				.sending
-				.send_federation_request(&target_server, request)
-				.await
-			{
-				| Ok(r) => r,
-				| Err(e) => {
-					warn!(target: "forwardfill", "Failed to fetch missing extremity {event_id}: {e}");
+				let (parsed_room_id, parsed_event_id, value) = match self
+					.services
+					.event_handler
+					.parse_incoming_pdu(&response.pdu)
+					.await
+				{
+					| Ok(v) => v,
+					| Err(e) => {
+						warn!(target: "forwardfill", "Failed to parse extremity {event_id}: {e}");
+						continue;
+					},
+				};
+
+				if parsed_room_id != *room_id {
 					continue;
-				},
-			};
+				}
 
-			let (parsed_room_id, parsed_event_id, value) = match self
-				.services
-				.event_handler
-				.parse_incoming_pdu(&response.pdu)
-				.await
-			{
-				| Ok(v) => v,
-				| Err(e) => {
-					warn!(target: "forwardfill", "Failed to parse extremity {event_id}: {e}");
-					continue;
-				},
-			};
-
-			if parsed_room_id != *room_id {
-				continue;
+				if let Err(e) = self
+					.services
+					.event_handler
+					.handle_incoming_pdu(target_server, room_id, &parsed_event_id, value, true)
+					.await
+				{
+					warn!(target: "forwardfill", "Failed to handle extremity {event_id}: {e}");
+				} else {
+					handled = handled.saturating_add(1);
+				}
 			}
 
-			if let Err(e) = self
-				.services
-				.event_handler
-				.handle_incoming_pdu(&target_server, room_id, &parsed_event_id, value, true)
-				.await
-			{
-				warn!(target: "forwardfill", "Failed to handle extremity {event_id}: {e}");
-			} else {
-				handled = handled.saturating_add(1);
+			if handled > 0 {
+				info!(target: "forwardfill", "Successfully forward-filled {room_id} via {handled} extremities from {target_server}");
 			}
-		}
 
-		if handled > 0 {
-			info!(target: "forwardfill", "Successfully forward-filled {room_id} via {handled} extremities");
+			// We got a valid probe from this server, done with this room
+			return Ok(());
 		}
 
 		Ok(())
