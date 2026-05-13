@@ -337,17 +337,17 @@ where
 		if let Some(redact_id) = incoming_pdu.redacts_id(&room_version_id) {
 			debug!(
 				redact_id = %redact_id,
-				"Checking if redaction is for a soft-failed event"
+				"Checking if redaction is for a soft-failed or rejected event"
 			);
-			if self
+			if !self
 				.services
 				.pdu_metadata
-				.is_event_soft_failed(&redact_id)
+				.is_event_accepted(&redact_id)
 				.await
 			{
 				warn!(
 					redact_id = %redact_id,
-					"Redaction is for a soft-failed event, soft failing the redaction"
+					"Redaction targets a non-accepted event, soft failing"
 				);
 				soft_fail = true;
 			}

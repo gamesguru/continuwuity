@@ -117,12 +117,13 @@ where
 	let event_fetch = |event_id| self.event_fetch(Some(room_id), event_id);
 	let event_exists = |event_id| self.event_exists(event_id);
 	let event_rejected = |event_id: OwnedEventId| async move {
-		// The comprehensive firewall: returns true if the event is
-		// EITHER soft-failed OR explicitly hard-rejected.
-		!self
-			.services
+		// Synapse parity: only hard-rejected events are excluded from state
+		// resolution. Soft-failed events must still participate to heal state
+		// forks correctly (they are valid per the DAG auth chain, just
+		// out-of-order relative to current state).
+		self.services
 			.pdu_metadata
-			.is_event_accepted(&event_id)
+			.is_event_rejected(&event_id)
 			.await
 	};
 
