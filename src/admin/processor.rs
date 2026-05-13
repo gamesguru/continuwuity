@@ -120,7 +120,8 @@ async fn process(
 	// Prepend the logs only if any were captured
 	let logs = logs.lock();
 	if logs.lines().count() > 2 {
-		writeln!(&mut output, "{logs}").expect("failed to format logs to command output");
+		writeln!(&mut output, "```\n{logs}\n```")
+			.expect("failed to format logs to command output");
 	}
 	drop(logs);
 
