@@ -266,8 +266,8 @@ impl Service {
 			}
 
 			if missing_latest.is_empty() {
-				debug!(target: "forwardfill", "Room {room_id} is not actually stale; we have all forward extremities from {target_server}.");
-				return Ok(());
+				debug!(target: "forwardfill", "Server {target_server} has no new extremities for {room_id}. Trying next candidate.");
+				continue;
 			}
 
 			info!(
