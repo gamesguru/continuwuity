@@ -40,7 +40,7 @@ use crate::{Dep, rooms, sending};
 pub struct Service {
 	services: Services,
 	pub roomid_spacehierarchy_cache: Mutex<Cache>,
-	negative_cache_ts: Mutex<HashMap<OwnedRoomId, Instant>>,
+	negative_cache_ts: Mutex<LruCache<OwnedRoomId, Instant>>,
 }
 
 struct Services {
@@ -71,7 +71,6 @@ pub enum Identifier<'a> {
 
 type Cache = LruCache<OwnedRoomId, Option<CachedSpaceHierarchySummary>>;
 
-use std::collections::HashMap;
 
 /// How long a negative (failed) hierarchy lookup stays cached before
 /// we retry federation for that room.
@@ -95,7 +94,7 @@ impl crate::Service for Service {
 				sending: args.depend::<sending::Service>("sending"),
 			},
 			roomid_spacehierarchy_cache: Mutex::new(LruCache::new(usize_from_f64(cache_size)?)),
-			negative_cache_ts: Mutex::new(HashMap::new()),
+			negative_cache_ts: Mutex::new(LruCache::new(usize_from_f64(cache_size)?)),
 		}))
 	}
 
@@ -327,8 +326,8 @@ pub async fn get_summary_and_children_client(
 		.negative_cache_ts
 		.lock()
 		.await
-		.get(current_room)
-		.is_some_and(|ts| ts.elapsed() < NEGATIVE_CACHE_TTL)
+		.get_mut(current_room)
+		.is_some_and(|ts: &mut Instant| ts.elapsed() < NEGATIVE_CACHE_TTL)
 	{
 		return Ok(None);
 	}

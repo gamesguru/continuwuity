@@ -764,22 +764,26 @@ where
 		}
 
 		// MSC4297: auth_state must include events from resolved_state for V2.1
-		for key in &auth_types {
-			if let Some(ev_id) = resolved_state.get(key) {
-				// SYNAPSE CHECK 3: Exclude rejected events from resolved_state
-				if event_rejected(ev_id.clone()).await {
-					trace!(
-						target: "state_res",
-						event_id = ev_id.as_str(),
-						"skipping rejected event from resolved_state"
-					);
-					continue;
-				}
+		// This MUST NOT run for V2 rooms (V1-V11) — injecting resolved_state
+		// into auth_state corrupts power-level auth checks in older room versions.
+		if room_version.state_res == StateResolutionVersion::V2_1 {
+			for key in &auth_types {
+				if let Some(ev_id) = resolved_state.get(key) {
+					// SYNAPSE CHECK 3: Exclude rejected events from resolved_state
+					if event_rejected(ev_id.clone()).await {
+						trace!(
+							target: "state_res",
+							event_id = ev_id.as_str(),
+							"skipping rejected event from resolved_state"
+						);
+						continue;
+					}
 
-				if let Some(event) = auth_events.get(ev_id) {
-					auth_state.insert(key.to_owned(), event.clone());
-				} else if let Some(event) = fetch_event(ev_id.clone()).await {
-					auth_state.insert(key.to_owned(), event);
+					if let Some(event) = auth_events.get(ev_id) {
+						auth_state.insert(key.to_owned(), event.clone());
+					} else if let Some(event) = fetch_event(ev_id.clone()).await {
+						auth_state.insert(key.to_owned(), event);
+					}
 				}
 			}
 		}
