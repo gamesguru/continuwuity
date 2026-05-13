@@ -321,9 +321,9 @@ fn looks_like_markdown(s: &str) -> bool {
 	let trimmed = s.trim_start();
 	trimmed.starts_with('#')
 		|| trimmed.starts_with('>')
-		|| trimmed.starts_with("```")
 		|| trimmed.starts_with("- ")
 		|| trimmed.starts_with("* ")
-		|| trimmed.contains("**")
-		|| trimmed.contains("](")
+		|| s.contains("```")
+		|| s.contains("**")
+		|| s.contains("](")
 }
