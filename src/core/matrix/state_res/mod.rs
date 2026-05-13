@@ -75,18 +75,33 @@ type Result<T, E = Error> = crate::Result<T, E>;
 //#[tracing::instrument(level = "debug", skip(state_sets, auth_chain_sets,
 //#[tracing::instrument(level event_fetch))]
 #[allow(clippy::cognitive_complexity)]
-pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, Exists, ExistsFut>(
+pub async fn resolve<
+	'a,
+	Pdu,
+	Sets,
+	SetIter,
+	Hasher,
+	Fetch,
+	FetchFut,
+	Exists,
+	ExistsFut,
+	Reject,
+	RejectFut,
+>(
 	room_version: &RoomVersionId,
 	state_sets: Sets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId, Hasher>],
 	event_fetch: &Fetch,
 	event_exists: &Exists,
+	event_rejected: &Reject,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	Fetch: Fn(OwnedEventId) -> FetchFut + Sync,
 	FetchFut: Future<Output = Option<Pdu>> + Send,
 	Exists: Fn(OwnedEventId) -> ExistsFut + Sync,
 	ExistsFut: Future<Output = bool> + Send,
+	Reject: Fn(OwnedEventId) -> RejectFut + Sync,
+	RejectFut: Future<Output = bool> + Send,
 	Sets: IntoIterator<IntoIter = SetIter> + Send,
 	SetIter: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 	Hasher: BuildHasher + Send + Sync,
@@ -195,6 +210,7 @@ where
 		sorted_control_levels.iter().stream().map(AsRef::as_ref),
 		initial_state,
 		&event_fetch,
+		event_rejected,
 	)
 	.await?;
 
@@ -235,6 +251,7 @@ where
 		sorted_left_events.iter().stream().map(AsRef::as_ref),
 		resolved_control, // The control events are added to the final resolved state
 		&event_fetch,
+		event_rejected,
 	)
 	.await?;
 
@@ -617,11 +634,12 @@ where
 /// the the `fetch_event` closure and verify each event using the
 /// `event_auth::auth_check` function.
 #[tracing::instrument(level = "trace", skip_all)]
-async fn iterative_auth_check<'a, E, F, Fut, S>(
+async fn iterative_auth_check<'a, E, F, Fut, S, R, RFut>(
 	room_version: &RoomVersion,
 	events_to_check: S,
 	unconflicted_state: StateMap<OwnedEventId>,
 	fetch_event: &F,
+	event_rejected: &R,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
@@ -629,6 +647,8 @@ where
 	S: Stream<Item = &'a EventId> + Send + 'a,
 	E: Event + Clone + Send + Sync,
 	for<'b> &'b E: Event + Send,
+	R: Fn(OwnedEventId) -> RFut + Sync,
+	RFut: Future<Output = bool> + Send,
 {
 	debug!("starting iterative auth check");
 
@@ -673,6 +693,16 @@ where
 	// going missing from the resolved state as they'd be discarded here.
 	let mut resolved_state = unconflicted_state;
 	for event in events_to_check {
+		// SYNAPSE CHECK 1: Skip previously rejected events entirely
+		if event_rejected(event.event_id().to_owned()).await {
+			info!(
+				target: "state_res",
+				event_id = event.event_id().as_str(),
+				"skipping previously rejected event"
+			);
+			continue;
+		}
+
 		trace!(event_id = event.event_id().as_str(), "checking event");
 		let state_key = event
 			.state_key()
@@ -707,8 +737,16 @@ where
 		}
 		for aid in event.auth_events() {
 			if let Some(ev) = auth_events.get(aid) {
-				//TODO: synapse checks "rejected_reason" which is most likely related to
-				// soft-failing
+				// SYNAPSE CHECK 2: Exclude rejected auth events
+				if event_rejected(aid.to_owned()).await {
+					trace!(
+						target: "state_res",
+						event_id = aid.as_str(),
+						"skipping rejected auth event"
+					);
+					continue;
+				}
+
 				trace!(event_id = aid.as_str(), "found auth event");
 				auth_state.insert(
 					ev.event_type()
@@ -728,6 +766,16 @@ where
 		// MSC4297: auth_state must include events from resolved_state for V2.1
 		for key in &auth_types {
 			if let Some(ev_id) = resolved_state.get(key) {
+				// SYNAPSE CHECK 3: Exclude rejected events from resolved_state
+				if event_rejected(ev_id.clone()).await {
+					trace!(
+						target: "state_res",
+						event_id = ev_id.as_str(),
+						"skipping rejected event from resolved_state"
+					);
+					continue;
+				}
+
 				if let Some(event) = auth_events.get(ev_id) {
 					auth_state.insert(key.to_owned(), event.clone());
 				} else if let Some(event) = fetch_event(ev_id.clone()).await {
