@@ -182,11 +182,9 @@ where
 		&& !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into()))
 	{
 		self.services.pdu_metadata.mark_event_rejected(event_id);
-		self.services.outlier.add_pdu_outlier(
-			pdu_event.event_id(),
-			&incoming_pdu,
-			Some(room_id),
-		);
+		self.services
+			.outlier
+			.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu, Some(room_id));
 		return Err!(Request(InvalidParam(
 			"Incoming event missing m.room.create in auth events"
 		)));
@@ -209,11 +207,9 @@ where
 
 	if !auth_check {
 		self.services.pdu_metadata.mark_event_rejected(event_id);
-		self.services.outlier.add_pdu_outlier(
-			pdu_event.event_id(),
-			&incoming_pdu,
-			Some(room_id),
-		);
+		self.services
+			.outlier
+			.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu, Some(room_id));
 		return Err!(Request(Forbidden(
 			"Event authorisation fails based on event's claimed auth events"
 		)));
@@ -222,11 +218,9 @@ where
 	trace!("Validation successful.");
 
 	// 7. Persist the event as an outlier.
-	self.services.outlier.add_pdu_outlier(
-		pdu_event.event_id(),
-		&incoming_pdu,
-		Some(room_id),
-	);
+	self.services
+		.outlier
+		.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu, Some(room_id));
 
 	trace!("Added pdu as outlier.");
 
