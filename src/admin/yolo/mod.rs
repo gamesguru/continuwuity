@@ -377,6 +377,7 @@ pub enum YoloCommand {
 		server_names: Vec<OwnedServerName>,
 		/// The event ID of the latest known PDU in the room. Will be found
 		/// automatically if not provided.
+		#[arg(long = "at-event")]
 		event_id: Option<OwnedEventId>,
 		/// Skip signature verification AND use absolute override (shorthand
 		/// for --skip-sig-verify --absolute)
