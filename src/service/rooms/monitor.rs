@@ -104,6 +104,18 @@ impl Service {
 
 		stale_threshold_ms: u64,
 	) -> Result<()> {
+		// Guard against corrupt room IDs in the database
+		let room_str = room_id.as_str();
+		if !room_str.starts_with('!') || !room_str.contains(':') || room_str.len() > 255 {
+			warn!(
+				target: "forwardfill",
+				"Skipping room with invalid ID ({} bytes, starts_with_bang={}, has_colon={})",
+				room_str.len(),
+				room_str.starts_with('!'),
+				room_str.contains(':')
+			);
+			return Ok(());
+		}
 		// Ensure we are actually participating in the room before we start
 		// probes that could lead to unauthorized make_join requests.
 		let ours = self.services.globals.server_name();
