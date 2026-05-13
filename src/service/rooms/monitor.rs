@@ -105,10 +105,13 @@ impl Service {
 		stale_threshold_ms: u64,
 	) -> Result<()> {
 		let room_str = room_id.as_str();
-		if <&ruma::RoomId>::try_from(room_str).is_err() {
+		if <&ruma::RoomId>::try_from(room_str).is_err()
+			|| !room_str.is_ascii()
+			|| room_id.server_name().is_none()
+		{
 			warn!(
 				target: "forwardfill",
-				"Skipping room with strictly invalid ID ({} bytes)",
+				"Skipping room with invalid/corrupt ID ({} bytes)",
 				room_str.len()
 			);
 			return Ok(());
@@ -157,7 +160,15 @@ impl Service {
 			.services
 			.state_cache
 			.room_servers(room_id)
-			.ready_filter(|&s| !self.services.globals.server_is_ours(s))
+			.ready_filter(|&s| {
+				!self.services.globals.server_is_ours(s)
+					&& !self
+						.services
+						.server
+						.config
+						.forbidden_remote_server_names
+						.is_match(s.host())
+			})
 			.map(ToOwned::to_owned)
 			.collect()
 			.await;
