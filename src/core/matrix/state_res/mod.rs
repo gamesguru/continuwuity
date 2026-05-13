@@ -1128,11 +1128,13 @@ mod tests {
 				.await
 				.unwrap();
 
+		let no_rejected = |_: OwnedEventId| ready(false);
 		let resolved_power = super::iterative_auth_check(
 			&RoomVersion::V6,
 			sorted_power_events.iter().map(AsRef::as_ref).stream(),
 			HashMap::new(), // unconflicted events
 			&fetcher,
+			&no_rejected,
 		)
 		.await
 		.expect("iterative auth check failed on resolved events");
@@ -1529,13 +1531,20 @@ mod tests {
 			})
 			.collect();
 
-		let resolved =
-			match super::resolve(&RoomVersionId::V2, &state_sets, &auth_chain, &fetcher, &exists)
-				.await
-			{
-				| Ok(state) => state,
-				| Err(e) => panic!("{e}"),
-			};
+		let no_rejected = |_: OwnedEventId| ready(false);
+		let resolved = match super::resolve(
+			&RoomVersionId::V2,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&no_rejected,
+		)
+		.await
+		{
+			| Ok(state) => state,
+			| Err(e) => panic!("{e}"),
+		};
 
 		assert_eq!(expected, resolved);
 	}
@@ -1642,13 +1651,20 @@ mod tests {
 
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let resolved =
-			match super::resolve(&RoomVersionId::V6, &state_sets, &auth_chain, &fetcher, &exists)
-				.await
-			{
-				| Ok(state) => state,
-				| Err(e) => panic!("{e}"),
-			};
+		let no_rejected = |_: OwnedEventId| ready(false);
+		let resolved = match super::resolve(
+			&RoomVersionId::V6,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&no_rejected,
+		)
+		.await
+		{
+			| Ok(state) => state,
+			| Err(e) => panic!("{e}"),
+		};
 
 		debug!(
 			resolved = ?resolved
