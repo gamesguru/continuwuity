@@ -118,10 +118,11 @@ impl Service {
 		if !room_str.bytes().all(|b| b.is_ascii_graphic())
 			|| <&ruma::RoomId>::try_from(room_str).is_err()
 		{
-			warn!(
+			info!(
 				target: "forwardfill",
-				"Skipping room with invalid/corrupt ID ({} bytes)",
-				room_str.len()
+				"Skipping room with invalid/corrupt ID ({} bytes): {:?}",
+				room_str.len(),
+				room_str,
 			);
 			return Ok(());
 		}
