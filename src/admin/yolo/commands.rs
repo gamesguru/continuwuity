@@ -3796,7 +3796,7 @@ pub(super) async fn heal_all_rooms(
 			None,  // output
 			None,  // input
 			false, // dry_run
-			true,  // skip_membership_rebuild (fast path)
+			false, // skip_membership_rebuild (safe-ish: rebuild & silent calls)
 		))
 		.await
 		{

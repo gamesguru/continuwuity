@@ -956,6 +956,15 @@ pub(crate) async fn force_set_state(
 	// Collect remote event IDs before state is consumed by compress/resolve
 	let remote_eids: HashSet<OwnedEventId> = state.values().cloned().collect();
 
+	// Un-reject/un-soft-fail the authoritative remote events so they
+	//    can participate in state resolution
+	for eid in &remote_eids {
+		self.services.rooms.pdu_metadata.clear_pdu_markers(eid);
+	}
+
+	// Neutralize DAG poison BEFORE state resolution evaluates them
+	Box::pin(self.reject_conflicting_state(&room_id, &remote_eids)).await;
+
 	let new_room_state = if absolute {
 		info!("Resolving new room state (ABSOLUTE OVERRIDE)");
 		let compressed: conduwuit_service::rooms::state_compressor::CompressedState = self
@@ -997,8 +1006,6 @@ pub(crate) async fn force_set_state(
 				.await?
 		}
 	};
-
-	Box::pin(self.reject_conflicting_state(&room_id, &remote_eids)).await;
 
 	info!("Compressing new room state");
 	let HashSetCompressStateEvent {
@@ -1172,7 +1179,7 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 						self.services
 							.rooms
 							.state_cache
-							.mark_as_joined(&user_id, &room_id)
+							.mark_as_joined_silent(&user_id, &room_id)
 							.await;
 						members_updated = members_updated.saturating_add(1);
 					}
@@ -1195,7 +1202,7 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 						self.services
 							.rooms
 							.state_cache
-							.mark_as_left(&user_id, &room_id, None)
+							.mark_as_left_silent(&user_id, &room_id)
 							.await;
 						members_updated = members_updated.saturating_add(1);
 					}
@@ -1224,7 +1231,7 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 			self.services
 				.rooms
 				.state_cache
-				.mark_as_left(user_id, &room_id, None)
+				.mark_as_left_silent(user_id, &room_id)
 				.await;
 			stale_removed = stale_removed.saturating_add(1);
 		}
@@ -1248,7 +1255,7 @@ async fn rebuild_membership_cache(&self, room_id: OwnedRoomId, short_state_hash:
 			self.services
 				.rooms
 				.state_cache
-				.mark_as_left(user_id, &room_id, None)
+				.mark_as_left_silent(user_id, &room_id)
 				.await;
 			stale_removed = stale_removed.saturating_add(1);
 		}
