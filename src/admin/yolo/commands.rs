@@ -2740,6 +2740,7 @@ pub(super) async fn import_pdus(
 		.unwrap_or_else(|| self.services.globals.server_name());
 
 	let mut inserted = 0_usize;
+	let mut rejected = 0_usize;
 	let mut failed = 0_usize;
 	let mut total = 0_usize;
 
@@ -2792,10 +2793,50 @@ pub(super) async fn import_pdus(
 				let (eid, val) = if skip_sig_verify {
 					(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
 				} else {
-					self.services
+					// Use the raw line JSON directly, stripping event_id for v3+
+					// rooms where it's not part of the signed content. Avoids
+					// CanonicalJsonObject round-trip which can mangle the JSON.
+					let mut raw_val: serde_json::Map<String, serde_json::Value> =
+						serde_json::from_str(&line)?;
+					raw_val.remove("event_id");
+					let raw = serde_json::value::RawValue::from_string(
+						serde_json::to_string(&raw_val)?,
+					)
+					.map_err(|e| err!("raw value: {e}"))?;
+
+					match self
+						.services
 						.server_keys
-						.validate_and_add_event_id(&to_raw(&value), &room_version)
-						.await?
+						.validate_and_add_event_id(&raw, &room_version)
+						.await
+					{
+						| Ok(result) => result,
+						| Err(e) => {
+							// Sig verification failed — persist as rejected outlier so the
+							// event is available for auth chain lookups and state context
+							let eid = extract_event_id(&value)
+								.ok_or_else(|| err!("missing event_id"))?;
+
+							warn!(
+								"import_pdus: Event {eid} failed verification: {e}"
+							);
+
+							// Store as outlier
+							self.services
+								.rooms
+								.outlier
+								.add_pdu_outlier(&eid, &value, Some(&room_id));
+
+							// Mark as rejected/soft-failed
+							self.services
+								.rooms
+								.pdu_metadata
+								.mark_event_soft_failed(&eid);
+
+							rejected = rejected.saturating_add(1);
+							return Ok(());
+						},
+					}
 				};
 				let (_, _, canonical) = self
 					.services
@@ -2821,15 +2862,18 @@ pub(super) async fn import_pdus(
 			},
 		}
 
-		let done = inserted.saturating_add(failed);
+		let done = inserted.saturating_add(failed).saturating_add(rejected);
 		if done.is_multiple_of(1000) {
-			info!("import_pdus: {done}/{total} ({inserted} ok, {failed} err)");
+			info!(
+				"import_pdus: {done}/{total} ({inserted} ok, {rejected} rejected, {failed} err)"
+			);
 		}
 	}
 
 	self.write_str(&format!(
-		"\nImported {inserted} PDUs, failed {failed} out of {total} total for {room_id}. Run \
-		 `reorder-timeline` and `force-set-room-state` to finalize."
+		"\nImported {inserted} PDUs, {rejected} stored as rejected outliers, {failed} errors \
+		 out of {total} total for {room_id}. Run `reorder-timeline` and \
+		 `force-set-room-state` to finalize."
 	))
 	.await
 }

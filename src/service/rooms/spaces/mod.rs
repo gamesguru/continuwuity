@@ -140,6 +140,54 @@ pub async fn get_summary_and_children_local(
 		},
 	}
 
+	// For rooms without local members, skip DB synthesis—our local
+	// room_joined_count can drift from the authoritative value. Fall
+	// through to federation which will populate the cache for next time.
+	let has_local_members = self
+		.services
+		.state_cache
+		.active_local_users_in_room(current_room)
+		.boxed()
+		.next()
+		.await
+		.is_some();
+
+	if !has_local_members {
+		return Ok(None);
+	}
+
+	let children_pdus: Vec<_> = self
+		.get_space_child_events(current_room)
+		.map(Event::into_format)
+		.collect()
+		.await;
+
+	let Ok(summary) = self
+		.get_room_summary(current_room, children_pdus, identifier)
+		.boxed()
+		.await
+	else {
+		return Ok(None);
+	};
+
+	self.roomid_spacehierarchy_cache.lock().await.insert(
+		current_room.to_owned(),
+		Some(CachedSpaceHierarchySummary { summary: summary.clone() }),
+	);
+
+	Ok(Some(SummaryAccessibility::Accessible(summary)))
+}
+
+/// Last-resort fallback: always synthesizes from local DB even if member
+/// counts may be stale.  Used when both the primary local path (which skips
+/// stale rooms) and federation have failed, so the room still appears in the
+/// space hierarchy rather than vanishing.
+#[implement(Service)]
+async fn get_summary_and_children_local_fallback(
+	&self,
+	current_room: &RoomId,
+	identifier: &Identifier<'_>,
+) -> Result<Option<SummaryAccessibility>> {
 	let children_pdus: Vec<_> = self
 		.get_space_child_events(current_room)
 		.map(Event::into_format)
@@ -179,6 +227,7 @@ async fn get_summary_and_children_federation(
 
 	let mut requests: FuturesUnordered<_> = via
 		.iter()
+		.take(3)
 		.map(|server| {
 			self.services
 				.sending
@@ -186,12 +235,16 @@ async fn get_summary_and_children_federation(
 		})
 		.collect();
 
-	let Some(Ok(response)) = requests.next().await else {
-		self.roomid_spacehierarchy_cache
-			.lock()
-			.await
-			.insert(current_room.to_owned(), None);
+	// Fan out to all via servers; take the first successful response
+	let mut response = None;
+	while let Some(result) = requests.next().await {
+		if let Ok(resp) = result {
+			response = Some(resp);
+			break;
+		}
+	}
 
+	let Some(response) = response else {
 		return Ok(None);
 	};
 
@@ -288,6 +341,7 @@ pub async fn get_summary_and_children_client(
 ) -> Result<Option<SummaryAccessibility>> {
 	let identifier = Identifier::UserId(user_id);
 
+	// Try local (from cache; skip DB synthesis if no active local members)
 	if let Ok(Some(response)) = self
 		.get_summary_and_children_local(current_room, &identifier)
 		.await
@@ -295,7 +349,17 @@ pub async fn get_summary_and_children_client(
 		return Ok(Some(response));
 	}
 
-	self.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
+	// Try federation (authoritative for rooms we merely observe)
+	if let Ok(Some(response)) = self
+		.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
+		.await
+	{
+		return Ok(Some(response));
+	}
+
+	// Fallback: synthesize from local DB even with stale counts, so rooms don't
+	// vanish from the hierarchy when federation is unreachable.
+	self.get_summary_and_children_local_fallback(current_room, &identifier)
 		.await
 }
 
@@ -458,22 +522,38 @@ where
 }
 
 /// Returns the children of a SpaceHierarchyParentSummary, making use of the
-/// children_state field
+/// children_state field.
+///
+/// Sorted by the spec-mandated `order` field (lexicographic), rooms without
+/// `order` come last, tiebreak by room_id for determinism across homeservers.
 pub fn get_parent_children_via(
 	parent: &SpaceHierarchyParentSummary,
 	suggested_only: bool,
-) -> impl DoubleEndedIterator<Item = (OwnedRoomId, impl Iterator<Item = OwnedServerName> + use<>)>
-+ Send
-+ '_ {
-	parent
+) -> Vec<(OwnedRoomId, Vec<OwnedServerName>)> {
+	let mut children: Vec<_> = parent
 		.children_state
 		.iter()
 		.map(Raw::deserialize)
 		.filter_map(Result::ok)
-		.filter_map(move |ce| {
-			(!suggested_only || ce.content.suggested)
-				.then_some((ce.state_key, ce.content.via.into_iter()))
-		})
+		.filter(|ce| !suggested_only || ce.content.suggested)
+		.map(|ce| (ce.state_key, ce.content.order, ce.content.via))
+		.collect();
+
+	// Spec: sort by `order` field (lexicographic), rooms without `order` come
+	// last, tiebreak by room_id for determinism across homeservers.
+	children.sort_by(|(room_a, order_a, _), (room_b, order_b, _)| {
+		match (order_a.as_deref(), order_b.as_deref()) {
+			| (Some(a), Some(b)) => a.cmp(b).then_with(|| room_a.cmp(room_b)),
+			| (Some(_), None) => std::cmp::Ordering::Less,
+			| (None, Some(_)) => std::cmp::Ordering::Greater,
+			| (None, None) => room_a.cmp(room_b),
+		}
+	});
+
+	children
+		.into_iter()
+		.map(|(room_id, _order, via)| (room_id, via))
+		.collect()
 }
 
 #[implement(Service)]

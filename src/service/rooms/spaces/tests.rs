@@ -67,24 +67,86 @@ fn get_summary_children() {
 	}
 	.into();
 
-	let all: Vec<_> = get_parent_children_via(&summary, false)
-		.map(|(id, via)| (id, via.collect::<Vec<_>>()))
-		.collect();
+	let all = get_parent_children_via(&summary, false);
 	assert_eq!(all, vec![
-		(owned_room_id!("!foo:example.org"), vec![owned_server_name!("example.org")]),
 		(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")]),
-		(owned_room_id!("!baz:example.org"), vec![owned_server_name!("example.org")])
+		(owned_room_id!("!baz:example.org"), vec![owned_server_name!("example.org")]),
+		(owned_room_id!("!foo:example.org"), vec![owned_server_name!("example.org")])
 	]);
-	let suggested: Vec<_> = get_parent_children_via(&summary, true)
-		.map(|(id, via)| (id, via.collect::<Vec<_>>()))
-		.collect();
+	let suggested = get_parent_children_via(&summary, true);
 	assert_eq!(suggested, vec![(owned_room_id!("!bar:example.org"), vec![owned_server_name!(
 		"example.org"
 	)])]);
 }
 
-// NOTE: get_summary_children_sorted_by_order test removed — the canonical
-// order sorting was reverted along with the spaces hierarchy rework.
+#[test]
+fn get_summary_children_sorted_by_order() {
+	let summary: SpaceHierarchyParentSummary = SpaceHierarchyParentSummaryInit {
+		num_joined_members: UInt::from(1_u32),
+		room_id: owned_room_id!("!root:example.org"),
+		world_readable: true,
+		guest_can_join: true,
+		join_rule: SpaceRoomJoinRule::Public,
+		children_state: vec![
+			// No order field — should sort last, tiebreak by room_id
+			serde_json::from_str(
+				r#"{
+                      "content": { "via": ["example.org"], "suggested": false },
+                      "origin_server_ts": 1,
+                      "sender": "@alice:example.org",
+                      "state_key": "!zoo:example.org",
+                      "type": "m.space.child"
+                    }"#,
+			)
+			.unwrap(),
+			// order = "b"
+			serde_json::from_str(
+				r#"{
+                      "content": { "via": ["example.org"], "order": "b", "suggested": false },
+                      "origin_server_ts": 2,
+                      "sender": "@alice:example.org",
+                      "state_key": "!beta:example.org",
+                      "type": "m.space.child"
+                    }"#,
+			)
+			.unwrap(),
+			// order = "a"
+			serde_json::from_str(
+				r#"{
+                      "content": { "via": ["example.org"], "order": "a", "suggested": false },
+                      "origin_server_ts": 3,
+                      "sender": "@alice:example.org",
+                      "state_key": "!alpha:example.org",
+                      "type": "m.space.child"
+                    }"#,
+			)
+			.unwrap(),
+			// No order field — should sort last, tiebreak by room_id (before !zoo)
+			serde_json::from_str(
+				r#"{
+                      "content": { "via": ["example.org"], "suggested": false },
+                      "origin_server_ts": 4,
+                      "sender": "@alice:example.org",
+                      "state_key": "!aaa:example.org",
+                      "type": "m.space.child"
+                    }"#,
+			)
+			.unwrap(),
+		],
+		allowed_room_ids: vec![],
+	}
+	.into();
+
+	let result = get_parent_children_via(&summary, false);
+	let room_ids: Vec<_> = result.iter().map(|(id, _)| id.as_str()).collect();
+	// order="a" first, then order="b", then no-order sorted by room_id
+	assert_eq!(room_ids, vec![
+		"!alpha:example.org",
+		"!beta:example.org",
+		"!aaa:example.org",
+		"!zoo:example.org",
+	]);
+}
 
 #[test]
 fn invalid_pagination_tokens() {
