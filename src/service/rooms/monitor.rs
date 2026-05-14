@@ -99,8 +99,9 @@ impl Service {
 		self.services
 			.state_cache
 			.server_rooms(ours)
+			.map(ToOwned::to_owned) // Copy RoomId before concurrent loop (UAF )
 			.for_each_concurrent(concurrency, |room_id| async move {
-				if let Err(e) = self.check_room(room_id, stale_threshold_ms).boxed().await {
+				if let Err(e) = self.check_room(&room_id, stale_threshold_ms).boxed().await {
 					debug!(target: "forwardfill", "Error checking room {room_id}: {e}");
 				}
 			})
@@ -114,7 +115,9 @@ impl Service {
 		stale_threshold_ms: u64,
 	) -> Result<()> {
 		let room_str = room_id.as_str();
-		if !room_str.is_ascii() || <&ruma::RoomId>::try_from(room_str).is_err() {
+		if !room_str.bytes().all(|b| b.is_ascii_graphic())
+			|| <&ruma::RoomId>::try_from(room_str).is_err()
+		{
 			warn!(
 				target: "forwardfill",
 				"Skipping room with invalid/corrupt ID ({} bytes)",
