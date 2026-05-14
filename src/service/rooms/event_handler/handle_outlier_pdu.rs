@@ -195,6 +195,20 @@ where
 		ready(auth_events_by_key.get(&key).map(ToOwned::to_owned))
 	};
 
+	// If any of the auth events are rejected, this event is also rejected.
+	// This ensures that rejections cascade through the entire outlier graph.
+	for aid in pdu_event.auth_events() {
+		if self.services.pdu_metadata.is_event_rejected(aid).await {
+			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services.outlier.add_pdu_outlier(
+				pdu_event.event_id(),
+				&incoming_pdu,
+				Some(room_id),
+			);
+			return Err!(Request(Forbidden("Event depends on rejected auth event {aid}")));
+		}
+	}
+
 	let auth_check = state_res::event_auth::auth_check(
 		&to_room_version(&room_version_id),
 		&pdu_event,

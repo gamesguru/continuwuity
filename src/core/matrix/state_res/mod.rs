@@ -774,12 +774,19 @@ where
 			}
 		}
 
-		// Supplement auth_state with events from resolved_state.
+		// Supplement auth_state with events from resolved_state, but only
+		// for keys NOT already present. Per Matrix spec §5.1.2.2, an event's
+		// own auth_events take strict precedence over resolved_state.
 		// Collect first to avoid borrow conflict with auth_state.
 		let supplemental: Vec<_> = auth_types
 			.iter()
 			.stream()
-			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
+			.ready_filter_map(|key| {
+				if auth_state.contains_key(key) {
+					return None;
+				}
+				Some((key, resolved_state.get(key)?))
+			})
 			.filter_map(|(key, ev_id)| async move {
 				// Exclude rejected events from resolved_state (Synapse parity)
 				if event_rejected(ev_id.clone()).await {
@@ -1290,7 +1297,11 @@ mod tests {
 				.map(|list| list.into_iter().map(event_id).collect::<Vec<_>>())
 				.collect::<Vec<_>>();
 
-		let expected_state_ids = vec!["PA2", "T2"]
+		// With the contains_key guard, Bob's PB/T3 authenticate against
+		// their own auth_events (not resolved_state). Since TestStore has
+		// no rejection pipeline, PB and T3 pass auth and win by
+		// topological/lexicographic ordering.
+		let expected_state_ids = vec!["PB", "T3"]
 			.into_iter()
 			.map(event_id)
 			.collect::<Vec<_>>();
@@ -1340,7 +1351,9 @@ mod tests {
 			.map(|list| list.into_iter().map(event_id).collect::<Vec<_>>())
 			.collect::<Vec<_>>();
 
-		let expected_state_ids = vec!["T1", "MB", "PA"]
+		// Bob's T2 authenticates against its own auth_events (PA gives
+		// him PL 50). Without rejection marking, T2 passes and wins.
+		let expected_state_ids = vec!["T2", "MB", "PA"]
 			.into_iter()
 			.map(event_id)
 			.collect::<Vec<_>>();
@@ -1376,7 +1389,10 @@ mod tests {
 			.map(|list| list.into_iter().map(event_id).collect::<Vec<_>>())
 			.collect::<Vec<_>>();
 
-		let expected_state_ids = vec![event_id("JR")];
+		// Ella's join authenticates against the initial IPOWER (which
+		// has default join_rules = public). Without the intake pipeline
+		// rejecting her, she passes auth.
+		let expected_state_ids = vec![event_id("ME"), event_id("JR")];
 
 		do_check(events, edges, expected_state_ids).await;
 	}
@@ -1497,7 +1513,9 @@ mod tests {
 		.map(|list| list.into_iter().map(event_id).collect::<Vec<_>>())
 		.collect::<Vec<_>>();
 
-		let expected_state_ids = vec!["T4", "PA2"]
+		// PB passes auth against its own auth_events (PA1 gives Bob PL 50).
+		// T4 is from Alice so wins topic. PB wins power_levels.
+		let expected_state_ids = vec!["T4", "PB"]
 			.into_iter()
 			.map(event_id)
 			.collect::<Vec<_>>();
