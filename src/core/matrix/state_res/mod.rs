@@ -2033,4 +2033,64 @@ mod tests {
 			StateEventType::RoomMember => "@c:hs1" => vec![2],
 		],);
 	}
+
+	/// Validates that the `is_ascii_graphic` check correctly filters room IDs.
+	/// This is a regression test for the zero-copy stream UAF that produced
+	/// corrupted room IDs like `!D0yPVK3zb8Y4svzltl:nutra.tked\nGg▒[\x7f]`.
+	mod room_id_validation {
+		/// Simulates the validation logic from `monitor.rs::check_room`
+		fn is_valid_room_id(s: &str) -> bool {
+			s.bytes().all(|b| b.is_ascii_graphic())
+				&& <&ruma::RoomId>::try_from(s).is_ok()
+		}
+
+		#[test]
+		fn valid_standard_room_id() {
+			assert!(is_valid_room_id("!abc123:matrix.org"));
+		}
+
+		#[test]
+		fn valid_v4_opaque_room_id() {
+			// v4+ room IDs have no server_name, just an opaque hash
+			assert!(is_valid_room_id(
+				"!c10y-fNiMx5ijtgGFibzPUfNs9hpQvnJYPTV-fD2KPk"
+			));
+		}
+
+		#[test]
+		fn reject_newline_injection() {
+			// The nutra.tked UAF scenario: buffer overlap produces \n in the ID
+			assert!(!is_valid_room_id("!abc123:nutra.tked\nGg"));
+		}
+
+		#[test]
+		fn reject_del_byte() {
+			assert!(!is_valid_room_id("!abc123:server\x7f.org"));
+		}
+
+		#[test]
+		fn reject_escape_sequence() {
+			assert!(!is_valid_room_id("!abc123:server\x1b[0m.org"));
+		}
+
+		#[test]
+		fn reject_null_byte() {
+			assert!(!is_valid_room_id("!abc123:server\0.org"));
+		}
+
+		#[test]
+		fn reject_space() {
+			assert!(!is_valid_room_id("!abc123:server .org"));
+		}
+
+		#[test]
+		fn reject_tab() {
+			assert!(!is_valid_room_id("!abc123:server\t.org"));
+		}
+
+		#[test]
+		fn reject_empty() {
+			assert!(!is_valid_room_id(""));
+		}
+	}
 }
