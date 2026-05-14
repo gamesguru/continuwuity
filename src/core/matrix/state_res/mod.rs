@@ -40,7 +40,8 @@ use crate::{
 	matrix::{Event, StateKey},
 	state_res::room_version::StateResolutionVersion,
 	trace,
-	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryWidebandExt, WidebandExt},
+	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, WidebandExt},
+	warn,
 };
 
 /// A mapping of event type and state_key to some value `T`, usually an
@@ -187,7 +188,7 @@ where
 	let control_events: Vec<_> = all_conflicted
 		.iter()
 		.stream()
-		.wide_filter_map(|id| async move {
+		.wide_filter_map(async |id| {
 			is_power_event_id(id, &event_fetch)
 				.await
 				.then_some(id.clone())
@@ -652,9 +653,9 @@ where
 {
 	debug!("starting iterative auth check");
 
-	let events_to_check: Vec<_> = events_to_check
+	let mut events_to_check: Vec<_> = events_to_check
 		.map(Result::Ok)
-		.wide_and_then(async |event_id: &EventId| {
+		.broad_and_then(async |event_id| {
 			fetch_event(event_id.to_owned())
 				.await
 				.ok_or_else(|| Error::NotFound(format!("Failed to find {event_id}")))
@@ -677,6 +678,16 @@ where
 		.try_collect()
 		.boxed()
 		.await?;
+
+	// Filter out previously rejected events (Synapse parity)
+	let mut i = 0;
+	while i < events_to_check.len() {
+		if event_rejected(events_to_check[i].event_id().to_owned()).await {
+			events_to_check.swap_remove(i);
+		} else {
+			i = i.saturating_add(1);
+		}
+	}
 	trace!(list = ?events_to_check, "events to check");
 	if events_to_check.is_empty() {
 		debug!("no events to check, returning unconflicted state");
@@ -694,7 +705,7 @@ where
 		.into_iter()
 		.stream()
 		.broad_filter_map(fetch_event)
-		// SYNAPSE CHECK 2: Pre-filter rejected auth events concurrently
+		// SYNAPSE CHECK 2: filter rejected auth events
 		.broad_filter_map(|auth_event| async {
 			if event_rejected(auth_event.event_id().to_owned()).await {
 				trace!(
@@ -754,6 +765,8 @@ where
 		}
 		for aid in event.auth_events() {
 			if let Some(ev) = auth_events.get(aid) {
+				//TODO: synapse checks "rejected_reason" which is most likely related to
+				// soft-failing
 				trace!(event_id = aid.as_str(), "found auth event");
 				auth_state.insert(
 					ev.event_type()
@@ -763,37 +776,26 @@ where
 					ev.clone(),
 				);
 			} else {
-				info!(
-					target: "state_res",
-					event_id = aid.as_str(), "missing auth event"
-				);
+				warn!(event_id = aid.as_str(), "missing auth event");
 			}
 		}
 
-		// MSC4297: auth_state must include events from resolved_state for V2.1
-		// This MUST NOT run for V1 or V2 (V1-V11 rooms). Injecting resolved_state
-		// into auth_state corrupts power-level auth checks in older room versions.
-		if room_version.state_res == StateResolutionVersion::V2_1 {
-			for key in &auth_types {
-				if let Some(ev_id) = resolved_state.get(key) {
-					// SYNAPSE CHECK 3: Exclude rejected events from resolved_state
-					if event_rejected(ev_id.clone()).await {
-						trace!(
-							target: "state_res",
-							event_id = ev_id.as_str(),
-							"skipping rejected event from resolved_state"
-						);
-						continue;
-					}
-
-					if let Some(event) = auth_events.get(ev_id) {
-						auth_state.insert(key.to_owned(), event.clone());
-					} else if let Some(event) = fetch_event(ev_id.clone()).await {
-						auth_state.insert(key.to_owned(), event);
-					}
+		auth_types
+			.iter()
+			.stream()
+			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
+			.filter_map(|(key, ev_id)| async move {
+				if let Some(event) = auth_events.get(ev_id) {
+					Some((key, event.clone()))
+				} else {
+					Some((key, fetch_event(ev_id.clone()).await?))
 				}
-			}
-		}
+			})
+			.ready_for_each(|(key, event)| {
+				//TODO: synapse checks "rejected_reason" is None here
+				auth_state.insert(key.to_owned(), event);
+			})
+			.await;
 		trace!(map = ?auth_state.keys().collect::<Vec<_>>(), event_id = event.event_id().as_str(), "auth state for event");
 
 		debug!(event_id = event.event_id().as_str(), "Running auth checks");
@@ -812,24 +814,16 @@ where
 			)
 		};
 
-		let create_event = if *event.event_type() == TimelineEventType::RoomCreate {
-			event.clone()
-		} else {
-			match fetch_state(&StateEventType::RoomCreate, "").await {
-				| Some(ce) => ce,
-				| None => {
-					info!(
-						target: "auth_chain",
-						"event {} failed the authentication check (missing create event)", event.event_id()
-					);
-					continue;
-				},
-			}
-		};
-
-		let auth_result =
-			auth_check(room_version, &event, current_third_party, fetch_state, &create_event)
-				.await;
+		let auth_result = auth_check(
+			room_version,
+			&event,
+			current_third_party,
+			fetch_state,
+			&fetch_state(&StateEventType::RoomCreate, "")
+				.await
+				.expect("create event must exist"),
+		)
+		.await;
 
 		match auth_result {
 			| Ok(true) => {
@@ -846,10 +840,7 @@ where
 			},
 			| Ok(false) => {
 				// synapse passes here on AuthError. We do not add this event to resolved_state.
-				info!(
-					target: "auth_chain",
-					"event {} failed the authentication check", event.event_id()
-				);
+				warn!("event {} failed the authentication check", event.event_id());
 			},
 			| Err(e) => {
 				debug_error!("event {} failed the authentication check: {e}", event.event_id());
@@ -1128,13 +1119,13 @@ mod tests {
 				.await
 				.unwrap();
 
-		let no_rejected = |_: OwnedEventId| ready(false);
+		let rejected = |_: OwnedEventId| ready(false);
 		let resolved_power = super::iterative_auth_check(
 			&RoomVersion::V6,
 			sorted_power_events.iter().map(AsRef::as_ref).stream(),
 			HashMap::new(), // unconflicted events
 			&fetcher,
-			&no_rejected,
+			&rejected,
 		)
 		.await
 		.expect("iterative auth check failed on resolved events");
@@ -1531,14 +1522,14 @@ mod tests {
 			})
 			.collect();
 
-		let no_rejected = |_: OwnedEventId| ready(false);
+		let rejected = |_: OwnedEventId| ready(false);
 		let resolved = match super::resolve(
 			&RoomVersionId::V2,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
 			&exists,
-			&no_rejected,
+			&rejected,
 		)
 		.await
 		{
@@ -1651,14 +1642,14 @@ mod tests {
 
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let no_rejected = |_: OwnedEventId| ready(false);
+		let rejected = |_: OwnedEventId| ready(false);
 		let resolved = match super::resolve(
 			&RoomVersionId::V6,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
 			&exists,
-			&no_rejected,
+			&rejected,
 		)
 		.await
 		{
@@ -1689,6 +1680,173 @@ mod tests {
 			assert!(resolved.values().any(|eid| eid == &id) || init.contains_key(&id), "{id}");
 		}
 		assert_eq!(expected.len(), resolved.len());
+	}
+
+	/// Verify that rejected events are excluded from state resolution.
+	/// Marks Ella's join ($IME) as rejected; she should not appear in resolved state
+	/// since her join was the only membership event and it's rejected.
+	#[tokio::test]
+	async fn rejected_event_excluded_from_resolution() {
+		use futures::future::ready;
+
+		let _ = tracing::subscriber::set_default(
+			tracing_subscriber::fmt().with_test_writer().finish(),
+		);
+		let init = INITIAL_EVENTS();
+		let ban = BAN_STATE_SET();
+
+		let mut inner = init.clone();
+		inner.extend(ban);
+		let store = TestStore(inner.clone());
+
+		// State set A: has MB (ban of ella) and PA
+		let state_set_a = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("MB")).unwrap(),
+			inner.get(&event_id("PA")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		// State set B: has IME (ella's join) and PA
+		let state_set_b = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("IME")).unwrap(),
+			inner.get(&event_id("PA")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		let ev_map = &store.0;
+		let state_sets = [state_set_a, state_set_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		// Mark IME (Ella's join) as rejected
+		let rejected_id = event_id("IME");
+		let rejected = move |id: OwnedEventId| ready(id == rejected_id);
+		let resolved = match super::resolve(
+			&RoomVersionId::V6,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		{
+			| Ok(state) => state,
+			| Err(e) => panic!("{e}"),
+		};
+
+		// IME was rejected, so it should NOT appear in resolved state.
+		// MB (the ban) should win for ella's membership slot.
+		let ella_key = (StateEventType::RoomMember, ella().to_string().into());
+		let ella_event = resolved.get(&ella_key);
+		assert!(
+			ella_event.is_none() || ella_event.unwrap() == &event_id("MB"),
+			"Ella's rejected join should not appear; got {:?}",
+			ella_event
+		);
+	}
+
+	/// Verify that rejecting a power-level event changes the resolution outcome.
+	/// Without rejection, PA wins. With PB rejected, PA should definitely win.
+	#[tokio::test]
+	async fn rejected_event_changes_resolution_outcome() {
+		use futures::future::ready;
+
+		let _ = tracing::subscriber::set_default(
+			tracing_subscriber::fmt().with_test_writer().finish(),
+		);
+		let init = INITIAL_EVENTS();
+		let ban = BAN_STATE_SET();
+
+		let mut inner = init.clone();
+		inner.extend(ban);
+		let store = TestStore(inner.clone());
+
+		let state_set_a = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("MB")).unwrap(),
+			inner.get(&event_id("PA")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		let state_set_b = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("IME")).unwrap(),
+			inner.get(&event_id("PB")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		let ev_map = &store.0;
+		let state_sets = [state_set_a, state_set_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		// Mark PB as rejected — PA should be the sole power level winner
+		let rejected_id = event_id("PB");
+		let rejected = move |id: OwnedEventId| ready(id == rejected_id);
+		let resolved = match super::resolve(
+			&RoomVersionId::V6,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		{
+			| Ok(state) => state,
+			| Err(e) => panic!("{e}"),
+		};
+
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		let pl_event = resolved.get(&pl_key).expect("power levels must be in resolved state");
+		assert_eq!(
+			pl_event,
+			&event_id("PA"),
+			"With PB rejected, PA must win the power levels slot"
+		);
 	}
 
 	#[tokio::test]

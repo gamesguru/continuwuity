@@ -72,7 +72,7 @@ fn resolution_shallow_auth_chain(c: &mut test::Bencher) {
 			})
 			.collect();
 
-		let rejected = |_| ready(false);
+		let rejected = |_: OwnedEventId| ready(false);
 		let _ = match state_res::resolve(
 			&RoomVersionId::V6,
 			state_sets.into_iter(),
@@ -147,7 +147,7 @@ fn resolve_deeper_event_set(c: &mut test::Bencher) {
 
 		let fetch = |id: OwnedEventId| ready(inner.get(&id).map(ToOwned::to_owned));
 		let exists = |id: OwnedEventId| ready(inner.get(&id).is_some());
-		let rejected = |_| ready(false);
+		let rejected = |_: OwnedEventId| ready(false);
 		let _ = match state_res::resolve(
 			&RoomVersionId::V6,
 			state_sets.into_iter(),

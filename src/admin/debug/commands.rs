@@ -536,8 +536,7 @@ pub(crate) async fn force_set_state(
 	output: Option<String>,
 	input: Option<String>,
 	dry_run: bool,
-	#[allow(unused_variables)]
-	skip_membership_rebuild: bool,
+	#[allow(unused_variables)] skip_membership_rebuild: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -1053,8 +1052,13 @@ pub(crate) async fn force_set_state(
 			.set_forward_extremities(room_id.as_ref(), once(tip_pdu.event_id()), &state_lock)
 			.await;
 
+		// NOTE: Do NOT update pdu_shortstatehash here. short_state_hash is
+		// state-after, but pdu_shortstatehash must be state-before per spec.
+		// The event's original pdu_shortstatehash from append is correct.
 		info!("Set tip {} as sole extremity (room SSH {short_state_hash})", tip_pdu.event_id());
 	} else {
+		// No timeline events — /sync won't deliver this room.
+		// Promote the most recent state event as a timeline anchor.
 		Box::pin(self.promote_sync_anchor(&room_id, short_state_hash, &state_lock)).await;
 	}
 

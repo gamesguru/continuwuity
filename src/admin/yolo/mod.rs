@@ -407,7 +407,8 @@ pub enum YoloCommand {
 		/// Show what would change without modifying state
 		#[arg(long)]
 		dry_run: bool,
-		/// Skip per-member membership cache rebuild (fast path for bulk healing)
+		/// Skip per-member membership cache rebuild (fast path for bulk
+		/// healing)
 		#[arg(long, hide = true, default_value_t = false)]
 		skip_membership_rebuild: bool,
 	},
