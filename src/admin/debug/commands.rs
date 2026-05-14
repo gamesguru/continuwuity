@@ -998,47 +998,7 @@ pub(crate) async fn force_set_state(
 		}
 	};
 
-	// Mark conflicting local state events as rejected. Without this, stale
-	// unrejected "join" events will win over authoritative "ban" events during
-	// future state resolution, causing the state to reset in a loop.
-	if let Ok(local_ssh) = self
-		.services
-		.rooms
-		.state
-		.get_room_shortstatehash(&room_id)
-		.await
-	{
-		let mut local_eids: HashSet<OwnedEventId> = HashSet::new();
-
-		let local_full = self.services.rooms.state_accessor.state_full(local_ssh);
-		futures::pin_mut!(local_full);
-
-		while let Some(((..), pdu)) = local_full.next().await {
-			local_eids.insert(pdu.event_id().to_owned());
-		}
-
-		let extra: Vec<OwnedEventId> = local_eids.difference(&remote_eids).cloned().collect();
-		if !extra.is_empty() {
-			let mut rejected = 0_usize;
-			for eid in &extra {
-				if !self
-					.services
-					.rooms
-					.pdu_metadata
-					.is_event_rejected(eid)
-					.await
-				{
-					self.services.rooms.pdu_metadata.mark_event_rejected(eid);
-					rejected = rejected.saturating_add(1);
-				}
-			}
-			info!(
-				"Marked {rejected}/{} conflicting local events as rejected (DAG poison \
-				 neutralized)",
-				extra.len()
-			);
-		}
-	}
+	Box::pin(self.reject_conflicting_state(&room_id, &remote_eids)).await;
 
 	info!("Compressing new room state");
 	let HashSetCompressStateEvent {
@@ -1113,6 +1073,56 @@ pub(crate) async fn force_set_state(
 
 	self.write_str("Successfully forced the room state from the requested remote server.")
 		.await
+}
+
+/// Mark conflicting local state events as rejected. Without this, stale
+/// unrejected "join" events win over authoritative "ban" events during
+/// future state resolution, causing the state to reset in a loop.
+#[admin_command]
+async fn reject_conflicting_state(
+	&self,
+	room_id: &ruma::RoomId,
+	remote_eids: &HashSet<OwnedEventId>,
+) {
+	let Ok(local_ssh) = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(room_id)
+		.await
+	else {
+		return;
+	};
+
+	let mut local_eids: HashSet<OwnedEventId> = HashSet::new();
+
+	let local_full = self.services.rooms.state_accessor.state_full(local_ssh);
+	futures::pin_mut!(local_full);
+
+	while let Some(((..), pdu)) = local_full.next().await {
+		local_eids.insert(pdu.event_id().to_owned());
+	}
+
+	let extra: Vec<OwnedEventId> = local_eids.difference(remote_eids).cloned().collect();
+	if !extra.is_empty() {
+		let mut rejected = 0_usize;
+		for eid in &extra {
+			if !self
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_rejected(eid)
+				.await
+			{
+				self.services.rooms.pdu_metadata.mark_event_rejected(eid);
+				rejected = rejected.saturating_add(1);
+			}
+		}
+		info!(
+			"Marked {rejected}/{} conflicting local events as rejected (DAG poison neutralized)",
+			extra.len()
+		);
+	}
 }
 
 /// Rebuild membership cache from a state snapshot. Extracted to keep
