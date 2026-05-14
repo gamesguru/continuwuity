@@ -50,6 +50,12 @@ This skips auth checks and directly inserts outliers into the timeline. Useful f
 
 Purge a specific outlier event by event ID
 
+## `!admin yolo purge-timeline-pdu`
+
+Purge a PDU from the timeline (removes from both timeline and outlier tables).
+
+Use this to remove rescued PDUs that are causing timeline issues. After purging, you should force-set room state and reorder.
+
 ## `!admin yolo get-room-dag`
 
 Get the room DAG as a list of PDUs in a range
@@ -78,11 +84,7 @@ This fixes persistent corruption where prev_content contained the event's own co
 
 ## `!admin yolo compare-room-state`
 
-Compares local room state with a remote server
-
-## `!admin yolo compare-remote-state`
-
-Compares room state between remote servers. First server is the base; each additional server is compared against it
+Compares room state. With one server, compares local state against it. With multiple servers, also compares the first server against each additional server
 
 ## `!admin yolo heal-room`
 
@@ -96,7 +98,9 @@ Emergency command to re-import outliers from a JSONL file
 
 ## `!admin yolo import-pdus`
 
-Force-import PDUs from a JSONL file on disk directly into the timeline, bypassing auth checks. Useful for recovering events that were rejected due to state forks.
+Import PDUs from a JSONL file on disk into the timeline.
+
+By default, each PDU goes through the full federation pipeline: signature verification, auth checks, and state resolution.
 
 Use `get-remote-dag` to create the JSONL file, then this command to import it. Run `reorder-timeline` afterwards to fix ordering.
 
@@ -112,8 +116,38 @@ Find the merge-base (common ancestor) between two DAG tips and render an ASCII g
 
 By default, compares the local latest PDU against the remote server's latest PDU for the room. Use --event-a / --event-b to override with specific event IDs.
 
-## `!admin yolo force-set-room-state-from-server`
+## `!admin yolo force-set-state`
 
-Forcefully replaces the room state of our local copy of the specified room, with the copy the specified remote server says.
+Forcefully re-resolve and set room state.
 
-Delegates to the debug implementation. Useful for correcting state divergence after DAG fractures.
+When called without servers, rebuilds from the local DAG. Multiple servers are merged before resolution. Delegates to the `debug` implementation.
+
+## `!admin yolo check-rooms`
+
+Fast local-only health check across all rooms.
+
+Scans every room in the database and reports: - Corrupt room IDs (non-ASCII, parse failures) - Soft-failed or missing create events - Orphaned rooms (no local users) - Extremity anomalies (0 or >10 forward extremities) - Membership cache drift (state vs cache mismatch)
+
+## `!admin yolo mark-rejected`
+
+Mark event IDs as rejected in the database.
+
+Rejected events are permanently excluded from state resolution. Use `compare-room-state` to identify divergent event IDs first.
+
+## `!admin yolo unmark-rejected`
+
+Remove the rejected marker from event IDs.
+
+Reverses `mark-rejected`. Events will participate in state resolution again.
+
+## `!admin yolo heal-all-rooms`
+
+Batch-heal all rooms by comparing state against a backbone server.
+
+For each room: compares local state with the remote server, marks any extra local events as rejected, then force-sets state from the remote server. Reports a summary when done.
+
+## `!admin yolo clean-corrupt-rooms`
+
+Scan the database for corrupt/invalid room IDs and purge them.
+
+This removes entries from serverroomids that contain non-ASCII bytes, missing colons, or other malformed data that causes SEGV on downstream parsing. Run once to clean up, then the scattered validation guards in monitor/state_cache become unnecessary.
