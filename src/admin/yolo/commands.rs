@@ -2799,9 +2799,9 @@ pub(super) async fn import_pdus(
 					let mut raw_val: serde_json::Map<String, serde_json::Value> =
 						serde_json::from_str(&line)?;
 					raw_val.remove("event_id");
-					let raw = serde_json::value::RawValue::from_string(
-						serde_json::to_string(&raw_val)?,
-					)
+					let raw = serde_json::value::RawValue::from_string(serde_json::to_string(
+						&raw_val,
+					)?)
 					.map_err(|e| err!("raw value: {e}"))?;
 
 					match self
@@ -2817,15 +2817,14 @@ pub(super) async fn import_pdus(
 							let eid = extract_event_id(&value)
 								.ok_or_else(|| err!("missing event_id"))?;
 
-							warn!(
-								"import_pdus: Event {eid} failed verification: {e}"
-							);
+							warn!("import_pdus: Event {eid} failed verification: {e}");
 
 							// Store as outlier
-							self.services
-								.rooms
-								.outlier
-								.add_pdu_outlier(&eid, &value, Some(&room_id));
+							self.services.rooms.outlier.add_pdu_outlier(
+								&eid,
+								&value,
+								Some(&room_id),
+							);
 
 							// Mark as rejected/soft-failed
 							self.services
@@ -2872,8 +2871,8 @@ pub(super) async fn import_pdus(
 
 	self.write_str(&format!(
 		"\nImported {inserted} PDUs, {rejected} stored as rejected outliers, {failed} errors \
-		 out of {total} total for {room_id}. Run `reorder-timeline` and \
-		 `force-set-room-state` to finalize."
+		 out of {total} total for {room_id}. Run `reorder-timeline` and `force-set-room-state` \
+		 to finalize."
 	))
 	.await
 }

@@ -6,7 +6,7 @@ use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
 use conduwuit_core::{
-	Err, Error, Event, PduEvent, Result, implement,
+	Err, Error, Event, PduEvent, Result, debug, implement,
 	utils::{
 		IterStream,
 		future::{BoolExt, TryExtExt},
@@ -153,6 +153,7 @@ pub async fn get_summary_and_children_local(
 		.is_some();
 
 	if !has_local_members {
+		debug!(room_id = %current_room, "spaces: skipping local summary (no active local members, deferring to federation)");
 		return Ok(None);
 	}
 
@@ -167,6 +168,7 @@ pub async fn get_summary_and_children_local(
 		.boxed()
 		.await
 	else {
+		debug!(room_id = %current_room, "spaces: local summary synthesis failed");
 		return Ok(None);
 	};
 
@@ -199,6 +201,7 @@ async fn get_summary_and_children_local_fallback(
 		.boxed()
 		.await
 	else {
+		debug!(room_id = %current_room, "spaces: local fallback summary synthesis failed");
 		return Ok(None);
 	};
 
@@ -350,15 +353,22 @@ pub async fn get_summary_and_children_client(
 	}
 
 	// Try federation (authoritative for rooms we merely observe)
-	if let Ok(Some(response)) = self
+	match self
 		.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
 		.await
 	{
-		return Ok(Some(response));
+		| Ok(Some(response)) => return Ok(Some(response)),
+		| Ok(None) => {
+			debug!(room_id = %current_room, "spaces: federation returned no summary");
+		},
+		| Err(e) => {
+			debug!(room_id = %current_room, error = %e, "spaces: federation hierarchy request failed");
+		},
 	}
 
 	// Fallback: synthesize from local DB even with stale counts, so rooms don't
 	// vanish from the hierarchy when federation is unreachable.
+	debug!(room_id = %current_room, "spaces: using local fallback (may have stale counts)");
 	self.get_summary_and_children_local_fallback(current_room, &identifier)
 		.await
 }
