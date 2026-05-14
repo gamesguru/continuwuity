@@ -114,7 +114,10 @@ impl Service {
 		stale_threshold_ms: u64,
 	) -> Result<()> {
 		let room_str = room_id.as_str();
-		if !room_str.is_ascii() || <&ruma::RoomId>::try_from(room_str).is_err() {
+		if !room_str.is_ascii()
+			|| <&ruma::RoomId>::try_from(room_str).is_err()
+			|| room_id.server_name().is_none()
+		{
 			warn!(
 				target: "forwardfill",
 				"Skipping room with invalid/corrupt ID ({} bytes)",

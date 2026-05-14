@@ -228,19 +228,6 @@ pub fn server_rooms<'a>(
 		.keys_prefix(&prefix)
 		.ignore_err()
 		.map(|(_, room_id): (Ignore, &RoomId)| room_id)
-		.filter(|room_id| {
-			let s = room_id.as_str();
-			let valid = s.starts_with('!')
-				&& s.contains(':')
-				&& s.len() <= 255
-				&& s.bytes().all(|b| b.is_ascii_graphic());
-
-			if !valid {
-				tracing::debug!("server_rooms: skipping corrupt room ID ({} bytes)", s.len());
-			}
-
-			std::future::ready(valid)
-		})
 }
 
 /// Returns true if a server can see a user by having any active membership

@@ -4,7 +4,7 @@ use std::{
 };
 
 use axum::extract::State as AxumState;
-use conduwuit::{Err, Result, debug, info, utils::stream::IterStream};
+use conduwuit::{Err, Result, utils::stream::IterStream};
 use conduwuit_service::rooms::spaces::{
 	PaginationToken, SummaryAccessibility, get_parent_children_via, summary_to_chunk,
 };
@@ -93,7 +93,6 @@ where
 
 	let mut path = Vec::new();
 	let mut visited = BTreeSet::new();
-	let mut skipped_rooms = 0_usize;
 
 	while let Some((current_room, via, depth, on_token_path)) = queue.pop_back() {
 		if !visited.insert(current_room.clone()) {
@@ -118,11 +117,7 @@ where
 
 		match (summary, current_room == *room_id) {
 			| (None | Some(SummaryAccessibility::Inaccessible), false) => {
-				debug!(
-					room_id = %current_room,
-					"Space hierarchy: child room unavailable/inaccessible, skipping"
-				);
-				skipped_rooms = skipped_rooms.saturating_add(1);
+				// Just ignore other unavailable rooms
 			},
 			| (None, true) => {
 				return Err!(Request(Forbidden("The requested room was not found")));
@@ -137,9 +132,8 @@ where
 				let populate = !on_token_path || path.len() > short_room_ids.clone().count();
 
 				let mut children: Vec<Entry> = get_parent_children_via(&summary, suggested_only)
-					.into_iter()
 					.rev()
-					.map(|(key, val)| (key, val, depth.saturating_add(1), false))
+					.map(|(key, val)| (key, val.collect(), depth.saturating_add(1), false))
 					.collect();
 
 				if populate {
@@ -185,13 +179,6 @@ where
 				queue.extend(children);
 			},
 		}
-	}
-
-	if skipped_rooms > 0 {
-		info!(
-			"Space hierarchy for {room_id}: {skipped_rooms} child room(s) \
-			 unavailable/inaccessible"
-		);
 	}
 
 	let next_batch: OptionFuture<_> = queue
