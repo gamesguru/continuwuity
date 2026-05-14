@@ -3650,31 +3650,21 @@ pub(super) async fn heal_all_rooms(
 	let mut total_rejected = 0_usize;
 
 	for (i, room_id) in rooms.iter().take(total).enumerate() {
-		let room_version = match self.services.rooms.state.get_room_version(room_id).await {
-			| Ok(v) => v,
-			| Err(_) => {
-				skipped = skipped.saturating_add(1);
-				continue;
-			},
+		let Ok(room_version) = self.services.rooms.state.get_room_version(room_id).await else {
+			skipped = skipped.saturating_add(1);
+			continue;
 		};
 
 		// Get our latest event
-		let at_event_id = match self
-			.services
-			.rooms
-			.timeline
-			.latest_pdu_in_room(room_id)
-			.await
-		{
-			| Ok(pdu) => pdu.event_id().to_owned(),
-			| Err(_) => {
-				skipped = skipped.saturating_add(1);
-				continue;
-			},
+		let Ok(latest_pdu) = self.services.rooms.timeline.latest_pdu_in_room(room_id).await
+		else {
+			skipped = skipped.saturating_add(1);
+			continue;
 		};
+		let at_event_id = latest_pdu.event_id().to_owned();
 
 		// Fetch remote state
-		let response = match self
+		let Ok(response) = self
 			.services
 			.sending
 			.send_federation_request(&server, get_room_state::v1::Request {
@@ -3682,12 +3672,9 @@ pub(super) async fn heal_all_rooms(
 				event_id: at_event_id.clone(),
 			})
 			.await
-		{
-			| Ok(r) => r,
-			| Err(_) => {
-				skipped = skipped.saturating_add(1);
-				continue;
-			},
+		else {
+			skipped = skipped.saturating_add(1);
+			continue;
 		};
 
 		// Build remote state map
@@ -3714,18 +3701,15 @@ pub(super) async fn heal_all_rooms(
 		}
 
 		// Build local state map
-		let local_state_hash = match self
+		let Ok(local_state_hash) = self
 			.services
 			.rooms
 			.state
 			.get_room_shortstatehash(room_id)
 			.await
-		{
-			| Ok(h) => h,
-			| Err(_) => {
-				skipped = skipped.saturating_add(1);
-				continue;
-			},
+		else {
+			skipped = skipped.saturating_add(1);
+			continue;
 		};
 
 		let mut local_state: HashMap<(String, String), OwnedEventId> = HashMap::new();
@@ -3755,7 +3739,7 @@ pub(super) async fn heal_all_rooms(
 		}
 
 		let n_extra = extra.len();
-		self.write_str(&format!("[{}/{}] {} — {n_extra} extra events", i + 1, total, room_id,))
+		self.write_str(&format!("[{}/{}] {} — {n_extra} extra events", i.saturating_add(1), total, room_id,))
 			.await?;
 
 		if dry_run {
