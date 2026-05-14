@@ -1435,9 +1435,11 @@ pub(super) async fn get_remote_dag(
 	};
 
 	while !queue.is_empty() && total < limit {
+		// Cap request queue to avoid 414 URI Too Long from reverse proxies
+		let request_v: Vec<_> = queue.iter().take(50).cloned().collect();
 		let request = ruma::api::federation::backfill::get_backfill::v1::Request {
 			room_id: room_id.clone(),
-			v: queue.clone(),
+			v: request_v,
 			limit: batch_size,
 		};
 
@@ -1453,6 +1455,15 @@ pub(super) async fn get_remote_dag(
 				r
 			},
 			| Err(e) => {
+				let err_str = e.to_string();
+
+				// 414 URI Too Long -- drop 1/4 of the queue silently, don't log error
+				if err_str.contains("414") {
+					let drain = queue.len() / 4;
+					queue.drain(..drain.max(1));
+					continue;
+				}
+
 				consecutive_errors = consecutive_errors.saturating_add(1);
 				info!(
 					"get-remote-dag: federation request failed after {total} PDUs in {batches} \
