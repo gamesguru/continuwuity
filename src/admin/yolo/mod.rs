@@ -462,4 +462,16 @@ pub enum YoloCommand {
 		#[arg(long, default_value = "0")]
 		limit: usize,
 	},
+
+	/// Scan the database for corrupt/invalid room IDs and purge them.
+	///
+	/// This removes entries from serverroomids that contain non-ASCII bytes,
+	/// missing colons, or other malformed data that causes SEGV on downstream
+	/// parsing. Run once to clean up, then the scattered validation guards
+	/// in monitor/state_cache become unnecessary.
+	CleanCorruptRooms {
+		/// Actually delete corrupt entries. Without this, only reports them.
+		#[arg(long)]
+		execute: bool,
+	},
 }

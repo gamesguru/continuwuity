@@ -3817,3 +3817,56 @@ pub(super) async fn heal_all_rooms(
 	))
 	.await
 }
+
+#[admin_command]
+pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
+	use futures::StreamExt;
+	use ruma::RoomId;
+
+	let ours = self.services.globals.server_name();
+	let mut corrupt = Vec::new();
+	let mut total = 0_usize;
+
+	let mut rooms = self.services.rooms.state_cache.server_rooms(ours);
+
+	while let Some(room_id) = rooms.next().await {
+		total = total.saturating_add(1);
+		let s = room_id.as_str();
+
+		let valid = s.starts_with('!')
+			&& s.contains(':')
+			&& s.len() <= 255
+			&& s.bytes().all(|b| b.is_ascii_graphic())
+			&& <&RoomId>::try_from(s).is_ok();
+
+		if !valid {
+			corrupt.push(room_id.to_owned());
+		}
+	}
+
+	drop(rooms);
+
+	self.write_str(&format!(
+		"Scanned {total} rooms, found {} corrupt entries\n",
+		corrupt.len()
+	))
+	.await?;
+
+	for room_id in &corrupt {
+		self.write_str(&format!("  corrupt: {} ({} bytes)\n", room_id, room_id.as_bytes().len()))
+			.await?;
+	}
+
+	if !execute {
+		self.write_str(
+			"\nDry run — corrupt entries are filtered by server_rooms() automatically. \
+			 Use purge-room to remove individual entries.\n",
+		)
+		.await
+	} else {
+		self.write_str(
+			"\nNote: use purge-room on individual corrupt room IDs to remove them from the DB.\n",
+		)
+		.await
+	}
+}

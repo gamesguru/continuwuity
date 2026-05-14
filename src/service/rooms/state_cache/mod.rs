@@ -228,6 +228,7 @@ pub fn server_rooms<'a>(
 		.keys_prefix(&prefix)
 		.ignore_err()
 		.map(|(_, room_id): (Ignore, &RoomId)| room_id)
+		.ready_filter(|room_id| <&RoomId>::try_from(room_id.as_str()).is_ok())
 }
 
 /// Returns true if a server can see a user by having any active membership
