@@ -1828,7 +1828,7 @@ pub struct Config {
 
 	/// User agent that is used specifically when fetching url previews.
 	///
-	/// default: "Rustnapse Project S-51 CLASSIFIED/<version>"
+	/// default: "Rustnapse Project S-51 C10Y CLASSIFIED/<version>"
 	pub url_preview_user_agent: Option<String>,
 
 	/// Determines whether audio and video files will be downloaded for URL
