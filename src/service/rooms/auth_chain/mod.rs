@@ -188,12 +188,6 @@ async fn get_auth_chain_inner(
 	let mut found = HashSet::new();
 
 	while let Some(event_id) = todo.pop_front() {
-		// Safety cap: prevent OOM on rooms with enormous auth chains
-		if found.len() > 10_000 {
-			warn!(%event_id, found = found.len(), "Auth chain exceeds 10k events, truncating to prevent OOM");
-			break;
-		}
-
 		trace!(%event_id, "processing auth event");
 
 		match self
