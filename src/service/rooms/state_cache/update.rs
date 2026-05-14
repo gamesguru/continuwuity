@@ -262,6 +262,75 @@ pub async fn mark_as_joined(&self, user_id: &UserId, room_id: &RoomId) {
 	self.invalidate_server_visibility(user_id, room_id).await;
 }
 
+/// Silent variant of `mark_as_joined` for admin healing operations.
+/// Performs the exact same DB writes but does NOT trigger
+/// `update_membership`, presence updates, or device list notifications.
+/// The caller MUST call `update_joined_count` after the batch completes.
+#[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn mark_as_joined_silent(&self, user_id: &UserId, room_id: &RoomId) {
+	let userroom_id = (user_id, room_id);
+	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
+
+	let roomuser_id = (room_id, user_id);
+	let roomuser_id = serialize_key(roomuser_id).expect("failed to serialize roomuser_id");
+
+	self.db.userroomid_joined.insert(&userroom_id, []);
+	self.db.roomuserid_joined.insert(&roomuser_id, []);
+
+	self.db.userroomid_invitestate.remove(&userroom_id);
+	self.db.roomuserid_invitecount.remove(&roomuser_id);
+	self.db.userroomid_invitesender.remove(&userroom_id);
+
+	self.db.userroomid_leftstate.remove(&userroom_id);
+	self.db.roomuserid_leftcount.remove(&roomuser_id);
+
+	self.db.userroomid_knockedstate.remove(&userroom_id);
+	self.db.roomuserid_knockedcount.remove(&roomuser_id);
+
+	self.db.roomid_inviteviaservers.remove(room_id);
+
+	self.invalidate_user_visibility(user_id, room_id).await;
+	self.invalidate_server_visibility(user_id, room_id).await;
+}
+
+/// Silent variant of `mark_as_left` for admin healing operations.
+/// Performs the exact same DB writes but does NOT trigger
+/// `update_membership`, presence updates, or device list notifications.
+/// The caller MUST call `update_joined_count` after the batch completes.
+#[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn mark_as_left_silent(&self, user_id: &UserId, room_id: &RoomId) {
+	let userroom_id = (user_id, room_id);
+	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
+
+	let roomuser_id = (room_id, user_id);
+	let roomuser_id = serialize_key(roomuser_id).expect("failed to serialize roomuser_id");
+
+	// Write left state with no PDU (admin operation, no actual leave event)
+	self.db
+		.userroomid_leftstate
+		.raw_put(&userroom_id, Json(Option::<Pdu>::None));
+	self.db
+		.roomuserid_leftcount
+		.raw_aput::<8, _, _>(&roomuser_id, self.services.globals.next_count().unwrap());
+
+	self.db.userroomid_joined.remove(&userroom_id);
+	self.db.roomuserid_joined.remove(&roomuser_id);
+
+	self.db.userroomid_invitestate.remove(&userroom_id);
+	self.db.roomuserid_invitecount.remove(&roomuser_id);
+	self.db.userroomid_invitesender.remove(&userroom_id);
+
+	self.db.userroomid_knockedstate.remove(&userroom_id);
+	self.db.roomuserid_knockedcount.remove(&roomuser_id);
+
+	self.db.roomid_inviteviaservers.remove(room_id);
+
+	self.invalidate_user_visibility(user_id, room_id).await;
+	self.invalidate_server_visibility(user_id, room_id).await;
+}
+
 /// Mark a user as having left a room.
 ///
 /// `leave_pdu` represents the m.room.member event which the user sent to leave

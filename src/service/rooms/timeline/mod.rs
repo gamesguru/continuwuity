@@ -624,7 +624,7 @@ impl Service {
 					if !self.services.state_cache.is_joined(&uid, room_id).await {
 						self.services
 							.state_cache
-							.mark_as_joined(&uid, room_id)
+							.mark_as_joined_silent(&uid, room_id)
 							.await;
 						members_synced = members_synced.saturating_add(1);
 					}
@@ -643,7 +643,7 @@ impl Service {
 					{
 						self.services
 							.state_cache
-							.mark_as_left(&uid, room_id, None)
+							.mark_as_left_silent(&uid, room_id)
 							.await;
 						members_synced = members_synced.saturating_add(1);
 					}
@@ -666,7 +666,7 @@ impl Service {
 			if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
 				self.services
 					.state_cache
-					.mark_as_left(user_id, room_id, None)
+					.mark_as_left_silent(user_id, room_id)
 					.await;
 				stale_removed = stale_removed.saturating_add(1);
 			}
@@ -688,7 +688,7 @@ impl Service {
 			if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
 				self.services
 					.state_cache
-					.mark_as_left(user_id, room_id, None)
+					.mark_as_left_silent(user_id, room_id)
 					.await;
 				stale_removed = stale_removed.saturating_add(1);
 			}

@@ -322,7 +322,7 @@ pub(super) async fn audit_membership(
 				self.services
 					.rooms
 					.state_cache
-					.mark_as_left(user_id, &room_id, None)
+					.mark_as_left_silent(user_id, &room_id)
 					.await;
 			}
 		}
@@ -331,7 +331,7 @@ pub(super) async fn audit_membership(
 				self.services
 					.rooms
 					.state_cache
-					.mark_as_left(user_id, &room_id, None)
+					.mark_as_left_silent(user_id, &room_id)
 					.await;
 			}
 		}
@@ -342,7 +342,7 @@ pub(super) async fn audit_membership(
 				self.services
 					.rooms
 					.state_cache
-					.mark_as_joined(user_id, &room_id)
+					.mark_as_joined_silent(user_id, &room_id)
 					.await;
 			}
 		}
