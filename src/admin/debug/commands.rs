@@ -847,7 +847,10 @@ pub(crate) async fn force_set_state(
 		};
 
 		// Clear markers for incoming auth events from the backbone
-		self.services.rooms.pdu_metadata.clear_pdu_markers(&event_id);
+		self.services
+			.rooms
+			.pdu_metadata
+			.clear_pdu_markers(&event_id);
 
 		if self
 			.services
@@ -873,6 +876,10 @@ pub(crate) async fn force_set_state(
 		}
 	}
 	info!("Auth chain: {auth_added} added, {auth_existing} existing, {auth_dropped} dropped");
+	let auth_total = auth_added.saturating_add(auth_existing);
+	if auth_total > 10_000 {
+		warn!("Auth chain exceeds 10k events ({auth_total}) — possible DAG bloat");
+	}
 
 	if dry_run {
 		// Compare remote state against local state without modifying anything

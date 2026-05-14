@@ -180,6 +180,21 @@ where
 	debug!(count = all_conflicted.len(), "full conflicted set");
 	trace!(set = ?all_conflicted, "full conflicted set");
 
+	let total_auth_chain: usize = auth_chain_sets.iter().map(HashSet::len).sum();
+	if total_auth_chain > 10_000 {
+		warn!(
+			total_auth_chain,
+			num_sets = auth_chain_sets.len(),
+			"Auth chain exceeds 10k events — possible DAG bloat or amplification attack"
+		);
+	}
+	if all_conflicted.len() > 5_000 {
+		warn!(
+			count = all_conflicted.len(),
+			"Conflicted set exceeds 5k events — state resolution may be slow"
+		);
+	}
+
 	// We used to check that all events are events from the correct room
 	// this is now a check the caller of `resolve` must make.
 
@@ -583,10 +598,7 @@ where
 /// Do NOT use this any where but topological sort, we find the power level for
 /// the eventId at the eventId's generation (we walk backwards to `EventId`s
 /// most recent previous power level event).
-async fn get_power_level_for_sender<E, F, Fut>(
-	event_id: &EventId,
-	fetch_event: &F,
-) -> Int
+async fn get_power_level_for_sender<E, F, Fut>(event_id: &EventId, fetch_event: &F) -> Int
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
 	Fut: Future<Output = Option<E>> + Send,
@@ -684,6 +696,12 @@ where
 		.await?;
 
 	trace!(list = ?events_to_check, "events to check");
+	if events_to_check.len() > 5_000 {
+		warn!(
+			count = events_to_check.len(),
+			"iterative_auth_check processing >5k events — possible fork storm"
+		);
+	}
 	if events_to_check.is_empty() {
 		debug!("no events to check, returning unconflicted state");
 		return Ok(unconflicted_state);
