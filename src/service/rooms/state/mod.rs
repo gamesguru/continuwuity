@@ -104,12 +104,63 @@ impl Service {
 		statediffremoved: Arc<CompressedState>,
 		state_lock: &RoomMutexGuard,
 	) -> Result {
+		self.force_state_inner(
+			room_id,
+			shortstatehash,
+			statediffnew,
+			statediffremoved,
+			state_lock,
+			true,
+		)
+		.await
+	}
+
+	/// Admin-only: set room state without triggering per-member cache updates
+	/// or outbound federation notifications (presence, device lists, etc).
+	/// The caller must rebuild the membership cache afterwards.
+	pub async fn force_state_quiet(
+		&self,
+		room_id: &RoomId,
+		shortstatehash: u64,
+		statediffnew: Arc<CompressedState>,
+		statediffremoved: Arc<CompressedState>,
+		state_lock: &RoomMutexGuard,
+	) -> Result {
+		self.force_state_inner(
+			room_id,
+			shortstatehash,
+			statediffnew,
+			statediffremoved,
+			state_lock,
+			false,
+		)
+		.await
+	}
+
+	async fn force_state_inner(
+		&self,
+		room_id: &RoomId,
+		shortstatehash: u64,
+		statediffnew: Arc<CompressedState>,
+		statediffremoved: Arc<CompressedState>,
+		state_lock: &RoomMutexGuard,
+		update_cache: bool,
+	) -> Result {
 		info!(
 			target: "force_state",
-			"processing {} new, {} removed state events for {room_id}",
+			"processing {} new, {} removed state events for {room_id} (cache_update={update_cache})",
 			statediffnew.len(),
 			statediffremoved.len()
 		);
+
+		if !update_cache {
+			// Admin bypass: Skip membership churn and outbound federation notifications.
+			// The admin command will manually rebuild the cache via silent_bulk_sync.
+			self.set_room_state(room_id, shortstatehash, state_lock);
+			self.services.state_cache.update_joined_count(room_id).await;
+			info!(target: "force_state", "quiet mode: state pointer set for {room_id}");
+			return Ok(());
+		}
 
 		let new_event_ids = statediffnew
 			.iter()

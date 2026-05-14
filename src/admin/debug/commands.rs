@@ -1024,8 +1024,8 @@ pub(crate) async fn force_set_state(
 			.update_joined_count(room_id.as_ref())
 			.await;
 	} else {
-		info!("Forcing new room state");
-		Box::pin(self.services.rooms.state.force_state(
+		info!("Forcing new room state (quiet mode)");
+		Box::pin(self.services.rooms.state.force_state_quiet(
 			room_id.clone().as_ref(),
 			short_state_hash,
 			added,

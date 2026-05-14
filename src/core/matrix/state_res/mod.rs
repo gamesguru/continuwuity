@@ -1683,8 +1683,8 @@ mod tests {
 	}
 
 	/// Verify that rejected events are excluded from state resolution.
-	/// Marks Ella's join ($IME) as rejected; she should not appear in resolved state
-	/// since her join was the only membership event and it's rejected.
+	/// Marks Ella's join ($IME) as rejected; she should not appear in resolved
+	/// state since her join was the only membership event and it's rejected.
 	#[tokio::test]
 	async fn rejected_event_excluded_from_resolution() {
 		use futures::future::ready;
@@ -1768,8 +1768,9 @@ mod tests {
 		);
 	}
 
-	/// Verify that rejecting a power-level event changes the resolution outcome.
-	/// Without rejection, PA wins. With PB rejected, PA should definitely win.
+	/// Verify that rejecting a power-level event changes the resolution
+	/// outcome. Without rejection, PA wins. With PB rejected, PA should
+	/// definitely win.
 	#[tokio::test]
 	async fn rejected_event_changes_resolution_outcome() {
 		use futures::future::ready;
@@ -1841,7 +1842,9 @@ mod tests {
 		};
 
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
-		let pl_event = resolved.get(&pl_key).expect("power levels must be in resolved state");
+		let pl_event = resolved
+			.get(&pl_key)
+			.expect("power levels must be in resolved state");
 		assert_eq!(
 			pl_event,
 			&event_id("PA"),

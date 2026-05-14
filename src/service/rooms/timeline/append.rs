@@ -238,66 +238,75 @@ where
 		}
 	}
 
-	let serialized = pdu.to_format();
-	for user in &push_target {
-		let rules_for_user = self
-			.services
-			.account_data
-			.get_global(user, GlobalAccountDataEventType::PushRules)
-			.await
-			.map_or_else(
-				|_| Ruleset::server_default(user),
-				|ev: PushRulesEvent| ev.content.global,
-			);
+	// Skip push notifications for historical events (backfilled, rescued,
+	// or heavily delayed federation events) to avoid notification storms.
+	let now = utils::millis_since_unix_epoch();
+	let is_historical = now.saturating_sub(pdu.origin_server_ts().0.into()) > 10 * 60 * 1000;
 
-		let mut highlight = false;
-		let mut notify = false;
+	if is_historical {
+		trace!("Event {} is historical, skipping push notifications", pdu.event_id());
+	} else {
+		let serialized = pdu.to_format();
+		for user in &push_target {
+			let rules_for_user = self
+				.services
+				.account_data
+				.get_global(user, GlobalAccountDataEventType::PushRules)
+				.await
+				.map_or_else(
+					|_| Ruleset::server_default(user),
+					|ev: PushRulesEvent| ev.content.global,
+				);
 
-		for action in self
-			.services
-			.pusher
-			.get_actions(user, &rules_for_user, &power_levels, &serialized, room_id)
-			.await
-		{
-			match action {
-				| Action::Notify => notify = true,
-				| Action::SetTweak(Tweak::Highlight(true)) => {
-					highlight = true;
-				},
-				| _ => {},
-			}
+			let mut highlight = false;
+			let mut notify = false;
 
-			// Break early if both conditions are true
-			if notify && highlight {
-				break;
-			}
-		}
-
-		if notify {
-			notifies.push(user.clone());
-		}
-
-		if highlight {
-			highlights.push(user.clone());
-		}
-
-		self.services
-			.pusher
-			.get_pushkeys(user)
-			.ready_for_each(|push_key| {
-				if let Err(e) =
-					self.services
-						.sending
-						.send_pdu_push(&pdu_id, user, push_key.to_owned())
-				{
-					warn!("Failed to queue push notification: {e}");
+			for action in self
+				.services
+				.pusher
+				.get_actions(user, &rules_for_user, &power_levels, &serialized, room_id)
+				.await
+			{
+				match action {
+					| Action::Notify => notify = true,
+					| Action::SetTweak(Tweak::Highlight(true)) => {
+						highlight = true;
+					},
+					| _ => {},
 				}
-			})
-			.await;
-	}
 
-	self.db
-		.increment_notification_counts(room_id, notifies, highlights);
+				// Break early if both conditions are true
+				if notify && highlight {
+					break;
+				}
+			}
+
+			if notify {
+				notifies.push(user.clone());
+			}
+
+			if highlight {
+				highlights.push(user.clone());
+			}
+
+			self.services
+				.pusher
+				.get_pushkeys(user)
+				.ready_for_each(|push_key| {
+					if let Err(e) =
+						self.services
+							.sending
+							.send_pdu_push(&pdu_id, user, push_key.to_owned())
+					{
+						warn!("Failed to queue push notification: {e}");
+					}
+				})
+				.await;
+		}
+
+		self.db
+			.increment_notification_counts(room_id, notifies, highlights);
+	}
 
 	match *pdu.kind() {
 		| TimelineEventType::RoomRedaction => {
