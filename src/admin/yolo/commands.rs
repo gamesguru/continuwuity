@@ -3656,7 +3656,12 @@ pub(super) async fn heal_all_rooms(
 		};
 
 		// Get our latest event
-		let Ok(latest_pdu) = self.services.rooms.timeline.latest_pdu_in_room(room_id).await
+		let Ok(latest_pdu) = self
+			.services
+			.rooms
+			.timeline
+			.latest_pdu_in_room(room_id)
+			.await
 		else {
 			skipped = skipped.saturating_add(1);
 			continue;
@@ -3739,8 +3744,13 @@ pub(super) async fn heal_all_rooms(
 		}
 
 		let n_extra = extra.len();
-		self.write_str(&format!("[{}/{}] {} — {n_extra} extra events", i.saturating_add(1), total, room_id,))
-			.await?;
+		self.write_str(&format!(
+			"[{}/{}] {} — {n_extra} extra events",
+			i.saturating_add(1),
+			total,
+			room_id,
+		))
+		.await?;
 
 		if dry_run {
 			self.write_str(" (would reject + force-set)\n").await?;
