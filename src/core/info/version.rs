@@ -7,7 +7,7 @@
 
 use std::sync::OnceLock;
 
-static BRANDING: &str = "Rustnapse Project S-51 C10Y CLASSIFIED";
+static BRANDING: &str = "Rustnapse Project S-51 CLASSIFIED c10y";
 static WEBSITE: &str = "https://nutra.tk";
 static SEMANTIC: &str = env!("CARGO_PKG_VERSION");
 
