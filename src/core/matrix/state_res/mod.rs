@@ -653,7 +653,7 @@ where
 {
 	debug!("starting iterative auth check");
 
-	let mut events_to_check: Vec<_> = events_to_check
+	let events_to_check: Vec<_> = events_to_check
 		.map(Result::Ok)
 		.broad_and_then(async |event_id| {
 			fetch_event(event_id.to_owned())
@@ -679,15 +679,6 @@ where
 		.boxed()
 		.await?;
 
-	// Filter out previously rejected events (Synapse parity)
-	let mut i = 0;
-	while i < events_to_check.len() {
-		if event_rejected(events_to_check[i].event_id().to_owned()).await {
-			events_to_check.swap_remove(i);
-		} else {
-			i = i.saturating_add(1);
-		}
-	}
 	trace!(list = ?events_to_check, "events to check");
 	if events_to_check.is_empty() {
 		debug!("no events to check, returning unconflicted state");
@@ -765,8 +756,11 @@ where
 		}
 		for aid in event.auth_events() {
 			if let Some(ev) = auth_events.get(aid) {
-				//TODO: synapse checks "rejected_reason" which is most likely related to
-				// soft-failing
+				// Skip rejected events (Synapse parity: checks rejected_reason)
+				if event_rejected(aid.to_owned()).await {
+					trace!(event_id = aid.as_str(), "skipping rejected auth event");
+					continue;
+				}
 				trace!(event_id = aid.as_str(), "found auth event");
 				auth_state.insert(
 					ev.event_type()
@@ -780,22 +774,30 @@ where
 			}
 		}
 
-		auth_types
+		// Supplement auth_state with events from resolved_state.
+		// Collect first to avoid borrow conflict with auth_state.
+		let supplemental: Vec<_> = auth_types
 			.iter()
 			.stream()
 			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
 			.filter_map(|(key, ev_id)| async move {
+				// Exclude rejected events from resolved_state (Synapse parity)
+				if event_rejected(ev_id.clone()).await {
+					return None;
+				}
+
 				if let Some(event) = auth_events.get(ev_id) {
-					Some((key, event.clone()))
+					Some((key.to_owned(), event.clone()))
 				} else {
-					Some((key, fetch_event(ev_id.clone()).await?))
+					Some((key.to_owned(), fetch_event(ev_id.clone()).await?))
 				}
 			})
-			.ready_for_each(|(key, event)| {
-				//TODO: synapse checks "rejected_reason" is None here
-				auth_state.insert(key.to_owned(), event);
-			})
+			.collect()
 			.await;
+
+		for (key, event) in supplemental {
+			auth_state.insert(key, event);
+		}
 		trace!(map = ?auth_state.keys().collect::<Vec<_>>(), event_id = event.event_id().as_str(), "auth state for event");
 
 		debug!(event_id = event.event_id().as_str(), "Running auth checks");
@@ -814,16 +816,27 @@ where
 			)
 		};
 
-		let auth_result = auth_check(
-			room_version,
-			&event,
-			current_third_party,
-			fetch_state,
-			&fetch_state(&StateEventType::RoomCreate, "")
-				.await
-				.expect("create event must exist"),
-		)
-		.await;
+		// If the event IS the create event, use it directly; otherwise fetch
+		// from auth_state. Without this fallback, authenticating the genesis
+		// event itself panics because its auth_events list is empty.
+		let create_event = if *event.event_type() == TimelineEventType::RoomCreate {
+			event.clone()
+		} else {
+			match fetch_state(&StateEventType::RoomCreate, "").await {
+				| Some(ce) => ce,
+				| None => {
+					warn!(
+						"event {} failed the authentication check (missing create event)",
+						event.event_id()
+					);
+					continue;
+				},
+			}
+		};
+
+		let auth_result =
+			auth_check(room_version, &event, current_third_party, fetch_state, &create_event)
+				.await;
 
 		match auth_result {
 			| Ok(true) => {
@@ -1161,8 +1174,7 @@ mod tests {
 		);
 	}
 
-	// NOTE(2025-09-17): Disabled due to unknown "create event must exist" bug
-	// #[tokio::test]
+	#[tokio::test]
 	async fn test_sort() {
 		for _ in 0..20 {
 			// since we shuffle the eventIds before we sort them introducing randomness
@@ -1171,8 +1183,7 @@ mod tests {
 		}
 	}
 
-	// NOTE(2025-09-17): Disabled due to unknown "create event must exist" bug
-	//#[tokio::test]
+	#[tokio::test]
 	async fn ban_vs_power_level() {
 		let _ = tracing::subscriber::set_default(
 			tracing_subscriber::fmt().with_test_writer().finish(),
@@ -2204,11 +2215,91 @@ mod tests {
 	/// Validates that the `is_ascii_graphic` check correctly filters room IDs.
 	/// This is a regression test for the zero-copy stream UAF that produced
 	/// corrupted room IDs like `!D0yPVK3zb8Y4svzltl:nutra.tked\nGg▒[\x7f]`.
+	/// Verify that if a power level event is rejected, it is excluded from
+	/// the resolved state even when both forks contain it.
+	#[tokio::test]
+	async fn rejected_power_level_excluded_from_state() {
+		use futures::future::ready;
+
+		let _ = tracing::subscriber::set_default(
+			tracing_subscriber::fmt().with_test_writer().finish(),
+		);
+
+		let init = INITIAL_EVENTS();
+		let ban = BAN_STATE_SET();
+		let mut inner = init.clone();
+		inner.extend(ban);
+		let store = TestStore(inner.clone());
+
+		// State set A: has IPOWER + PA
+		let state_set_a = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("PA")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		// State set B: has PB (conflicts on power_levels with PA)
+		let state_set_b = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("IME")).unwrap(),
+			inner.get(&event_id("PB")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		let ev_map = &store.0;
+		let state_sets = [state_set_a, state_set_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+
+		// Mark PA as rejected — only the unconflicted IPOWER should remain
+		let rejected_id = event_id("PA");
+		let rejected = move |id: OwnedEventId| ready(id == rejected_id);
+
+		let resolved = super::resolve(
+			&RoomVersionId::V6,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		.unwrap();
+
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		// PA was rejected, so it must not appear in resolved state
+		assert!(
+			resolved.get(&pl_key) != Some(&event_id("PA")),
+			"PA was rejected and must not appear in resolved state; got {:?}",
+			resolved.get(&pl_key)
+		);
+	}
+
 	mod room_id_validation {
 		/// Simulates the validation logic from `monitor.rs::check_room`
 		fn is_valid_room_id(s: &str) -> bool {
-			s.bytes().all(|b| b.is_ascii_graphic())
-				&& <&ruma::RoomId>::try_from(s).is_ok()
+			s.bytes().all(|b| b.is_ascii_graphic()) && <&ruma::RoomId>::try_from(s).is_ok()
 		}
 
 		#[test]
@@ -2219,9 +2310,7 @@ mod tests {
 		#[test]
 		fn valid_v4_opaque_room_id() {
 			// v4+ room IDs have no server_name, just an opaque hash
-			assert!(is_valid_room_id(
-				"!c10y-fNiMx5ijtgGFibzPUfNs9hpQvnJYPTV-fD2KPk"
-			));
+			assert!(is_valid_room_id("!c10y-fNiMx5ijtgGFibzPUfNs9hpQvnJYPTV-fD2KPk"));
 		}
 
 		#[test]
