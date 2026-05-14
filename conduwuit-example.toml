@@ -1581,7 +1581,7 @@
 
 # User agent that is used specifically when fetching url previews.
 #
-#url_preview_user_agent = "guwitty/<version>"
+#url_preview_user_agent = "Rustnapse Project S-51 CLASSIFIED/<version>"
 
 # Determines whether audio and video files will be downloaded for URL
 # previews.
