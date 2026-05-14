@@ -3614,3 +3614,201 @@ pub(super) async fn unmark_rejected(&self, event_ids: Vec<OwnedEventId>) -> Resu
 	))
 	.await
 }
+
+#[admin_command]
+pub(super) async fn heal_all_rooms(
+	&self,
+	server: OwnedServerName,
+	dry_run: bool,
+	limit: usize,
+) -> Result {
+	use conduwuit::matrix::event::gen_event_id_canonical_json;
+
+	let ours = self.services.globals.server_name();
+
+	// Collect all rooms we participate in
+	let rooms: Vec<OwnedRoomId> = self
+		.services
+		.rooms
+		.state_cache
+		.server_rooms(ours)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let total = if limit > 0 { limit.min(rooms.len()) } else { rooms.len() };
+	self.write_str(&format!(
+		"Healing {total}/{} rooms against {server} {}...\n\n",
+		rooms.len(),
+		if dry_run { "(DRY RUN)" } else { "" }
+	))
+	.await?;
+
+	let mut healed = 0_usize;
+	let mut skipped = 0_usize;
+	let mut errors = 0_usize;
+	let mut total_rejected = 0_usize;
+
+	for (i, room_id) in rooms.iter().take(total).enumerate() {
+		let room_version = match self.services.rooms.state.get_room_version(room_id).await {
+			| Ok(v) => v,
+			| Err(_) => {
+				skipped = skipped.saturating_add(1);
+				continue;
+			},
+		};
+
+		// Get our latest event
+		let at_event_id = match self
+			.services
+			.rooms
+			.timeline
+			.latest_pdu_in_room(room_id)
+			.await
+		{
+			| Ok(pdu) => pdu.event_id().to_owned(),
+			| Err(_) => {
+				skipped = skipped.saturating_add(1);
+				continue;
+			},
+		};
+
+		// Fetch remote state
+		let response = match self
+			.services
+			.sending
+			.send_federation_request(&server, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: at_event_id.clone(),
+			})
+			.await
+		{
+			| Ok(r) => r,
+			| Err(_) => {
+				skipped = skipped.saturating_add(1);
+				continue;
+			},
+		};
+
+		// Build remote state map
+		let mut remote_state: HashMap<(String, String), OwnedEventId> = HashMap::new();
+		for pdu_raw in &response.pdus {
+			let Ok((event_id, _value)) = gen_event_id_canonical_json(pdu_raw, &room_version)
+			else {
+				continue;
+			};
+
+			let pdu: PduEvent = match serde_json::from_str(pdu_raw.get()) {
+				| Ok(p) => p,
+				| Err(_) => continue,
+			};
+
+			if let Some(state_key) = &pdu.state_key {
+				remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
+			}
+		}
+
+		if remote_state.is_empty() {
+			skipped = skipped.saturating_add(1);
+			continue;
+		}
+
+		// Build local state map
+		let local_state_hash = match self
+			.services
+			.rooms
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+		{
+			| Ok(h) => h,
+			| Err(_) => {
+				skipped = skipped.saturating_add(1);
+				continue;
+			},
+		};
+
+		let mut local_state: HashMap<(String, String), OwnedEventId> = HashMap::new();
+		{
+			let state_full = self
+				.services
+				.rooms
+				.state_accessor
+				.state_full(local_state_hash);
+			pin_mut!(state_full);
+			while let Some(((event_type, state_key), pdu)) = state_full.next().await {
+				local_state.insert(
+					(event_type.to_string(), state_key.to_string()),
+					pdu.event_id().to_owned(),
+				);
+			}
+		}
+
+		// Find extra local events (in local but not remote, or different event ID)
+		let remote_eids: HashSet<OwnedEventId> = remote_state.values().cloned().collect();
+		let local_eids: HashSet<OwnedEventId> = local_state.values().cloned().collect();
+		let extra: Vec<OwnedEventId> = local_eids.difference(&remote_eids).cloned().collect();
+
+		if extra.is_empty() {
+			// Room is healthy
+			continue;
+		}
+
+		let n_extra = extra.len();
+		self.write_str(&format!("[{}/{}] {} — {n_extra} extra events", i + 1, total, room_id,))
+			.await?;
+
+		if dry_run {
+			self.write_str(" (would reject + force-set)\n").await?;
+			healed = healed.saturating_add(1);
+			total_rejected = total_rejected.saturating_add(n_extra);
+			continue;
+		}
+
+		// Mark extra events as rejected
+		for eid in &extra {
+			if !self
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_rejected(eid)
+				.await
+			{
+				self.services.rooms.pdu_metadata.mark_event_rejected(eid);
+			}
+		}
+		total_rejected = total_rejected.saturating_add(n_extra);
+
+		// Force-set state from backbone
+		match Box::pin(self.force_set_state(
+			room_id.clone(),
+			vec![server.clone()],
+			None,
+			true,  // overwrite
+			false, // skip_sig_verify
+			false, // absolute
+			None,  // output
+			None,  // input
+			false, // dry_run
+		))
+		.await
+		{
+			| Ok(()) => {
+				self.write_str(&format!(" ✓ rejected {n_extra}, state reset\n"))
+					.await?;
+				healed = healed.saturating_add(1);
+			},
+			| Err(e) => {
+				self.write_str(&format!(" ✗ force-set failed: {e}\n"))
+					.await?;
+				errors = errors.saturating_add(1);
+			},
+		}
+	}
+
+	self.write_str(&format!(
+		"\n**Summary**: {healed} healed, {skipped} skipped, {errors} errors, {total_rejected} \
+		 events rejected\n"
+	))
+	.await
+}

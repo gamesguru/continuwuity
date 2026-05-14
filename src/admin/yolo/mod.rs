@@ -444,4 +444,22 @@ pub enum YoloCommand {
 		/// One or more event IDs to unmark.
 		event_ids: Vec<OwnedEventId>,
 	},
+
+	/// Batch-heal all rooms by comparing state against a backbone server.
+	///
+	/// For each room: compares local state with the remote server,
+	/// marks any extra local events as rejected, then force-sets state
+	/// from the remote server. Reports a summary when done.
+	HealAllRooms {
+		/// Backbone server to compare against (e.g. matrix.org)
+		server: OwnedServerName,
+
+		/// Only report divergence without making changes
+		#[arg(long)]
+		dry_run: bool,
+
+		/// Maximum number of rooms to heal (0 = unlimited)
+		#[arg(long, default_value = "0")]
+		limit: usize,
+	},
 }
