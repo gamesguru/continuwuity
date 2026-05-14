@@ -700,21 +700,28 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	debug!("Saving compressed state");
-	let HashSetCompressStateEvent {
-		shortstatehash: statehash_before_join,
-		added,
-		removed,
-	} = services
-		.rooms
-		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
-		.await?;
+	let _statehash_before_join = services
+		.db
+		.transaction(|| async {
+			let HashSetCompressStateEvent {
+				shortstatehash: statehash_before_join,
+				added,
+				removed,
+			} = services
+				.rooms
+				.state_compressor
+				.save_state(room_id, Arc::new(compressed))
+				.await?;
 
-	debug!("Forcing state for new room");
-	services
-		.rooms
-		.state
-		.force_state(room_id, statehash_before_join, added, removed, &state_lock)
+			debug!("Forcing state for new room");
+			services
+				.rooms
+				.state
+				.force_state(room_id, statehash_before_join, added, removed, &state_lock)
+				.await?;
+
+			Ok(statehash_before_join)
+		})
 		.await?;
 
 	debug!("Updating joined counts for new room");
@@ -855,7 +862,7 @@ async fn join_room_by_id_helper_local(
 		remote_servers = %servers.len(),
 		"Could not join room locally, attempting remote join",
 	);
-	join_room_by_id_helper_remote(
+	Box::pin(join_room_by_id_helper_remote(
 		services,
 		sender_user,
 		room_id,
@@ -863,7 +870,7 @@ async fn join_room_by_id_helper_local(
 		servers,
 		state_lock,
 		json_body,
-	)
+	))
 	.await
 }
 
