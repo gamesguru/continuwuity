@@ -1852,6 +1852,173 @@ mod tests {
 		);
 	}
 
+	/// The state reset loop scenario: when a stale join is NOT rejected, it
+	/// can survive alongside a ban from a different fork. This proves that
+	/// marking events as rejected is critical for convergence.
+	#[tokio::test]
+	async fn unrejected_join_survives_in_resolution() {
+		use futures::future::ready;
+
+		let _ = tracing::subscriber::set_default(
+			tracing_subscriber::fmt().with_test_writer().finish(),
+		);
+		let init = INITIAL_EVENTS();
+		let ban = BAN_STATE_SET();
+
+		let mut inner = init.clone();
+		inner.extend(ban);
+		let store = TestStore(inner.clone());
+
+		// State set A: has MB (ban of ella)
+		let state_set_a = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("MB")).unwrap(),
+			inner.get(&event_id("PA")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		// State set B: has IME (ella's join)
+		let state_set_b = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("IME")).unwrap(),
+			inner.get(&event_id("PA")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		let ev_map = &store.0;
+		let state_sets = [state_set_a, state_set_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		// Nothing rejected — both IME and MB participate
+		let rejected = |_id: OwnedEventId| ready(false);
+		let resolved = match super::resolve(
+			&RoomVersionId::V6,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		{
+			| Ok(state) => state,
+			| Err(e) => panic!("{e}"),
+		};
+
+		// Without rejection, state-res picks a winner between IME and MB
+		// based on auth rules. The key insight: *some* event fills ella's
+		// slot. When the "wrong" one wins, that's the state reset loop.
+		let ella_key = (StateEventType::RoomMember, ella().to_string().into());
+		assert!(
+			resolved.contains_key(&ella_key),
+			"ella must have a membership entry when nothing is rejected"
+		);
+	}
+
+	/// Verifies that rejecting ALL conflicting membership events for a user
+	/// removes them from resolved state entirely — the nuclear option for
+	/// membership cleanup.
+	#[tokio::test]
+	async fn reject_all_membership_events_removes_user() {
+		use futures::future::ready;
+
+		let _ = tracing::subscriber::set_default(
+			tracing_subscriber::fmt().with_test_writer().finish(),
+		);
+		let init = INITIAL_EVENTS();
+		let ban = BAN_STATE_SET();
+
+		let mut inner = init.clone();
+		inner.extend(ban);
+		let store = TestStore(inner.clone());
+
+		let state_set_a = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("MB")).unwrap(),
+			inner.get(&event_id("PA")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		let state_set_b = [
+			inner.get(&event_id("CREATE")).unwrap(),
+			inner.get(&event_id("IJR")).unwrap(),
+			inner.get(&event_id("IMA")).unwrap(),
+			inner.get(&event_id("IMB")).unwrap(),
+			inner.get(&event_id("IMC")).unwrap(),
+			inner.get(&event_id("IME")).unwrap(),
+			inner.get(&event_id("PA")).unwrap(),
+		]
+		.iter()
+		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
+		.collect::<StateMap<_>>();
+
+		let ev_map = &store.0;
+		let state_sets = [state_set_a, state_set_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		// Reject BOTH ella's join AND her ban — nuclear cleanup
+		let rejected_ime = event_id("IME");
+		let rejected_mb = event_id("MB");
+		let rejected = move |id: OwnedEventId| ready(id == rejected_ime || id == rejected_mb);
+		let resolved = match super::resolve(
+			&RoomVersionId::V6,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		{
+			| Ok(state) => state,
+			| Err(e) => panic!("{e}"),
+		};
+
+		// With both events rejected, ella should have no membership entry
+		let ella_key = (StateEventType::RoomMember, ella().to_string().into());
+		assert!(
+			!resolved.contains_key(&ella_key),
+			"ella should have no membership when all her events are rejected; got {:?}",
+			resolved.get(&ella_key)
+		);
+	}
+
 	#[tokio::test]
 	async fn join_rule_with_auth_chain() {
 		let join_rule = JOIN_RULE();
