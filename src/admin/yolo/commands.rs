@@ -2330,6 +2330,18 @@ pub(super) async fn compare_room_state(
 					server_state
 						.insert((pdu.kind.to_string(), state_key.to_string()), event_id.clone());
 
+					// Store metadata for richer diff output
+					if !event_meta.contains_key(&event_id) {
+						let content: JsonValue = pdu.get_content_as_value();
+						let membership = content
+							.get("membership")
+							.and_then(|v| v.as_str())
+							.unwrap_or("")
+							.to_owned();
+						event_meta
+							.insert(event_id.clone(), (membership, pdu.sender().to_string()));
+					}
+
 					if pdu.kind == TimelineEventType::RoomMember {
 						let content: JsonValue = pdu.get_content_as_value();
 						let membership = content
@@ -3376,4 +3388,229 @@ fn civil_from_days(days: i64) -> (i64, u64, u64) {
 	};
 	let y = if m <= 2 { y.saturating_add(1) } else { y };
 	(y, m, d)
+}
+
+#[admin_command]
+pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result {
+	let ours = self.services.globals.server_name();
+
+	self.write_str("Scanning all rooms...\n").await?;
+
+	let mut total_rooms = 0_usize;
+	let mut problem_rooms = 0_usize;
+	let mut fixed_rooms = 0_usize;
+	let mut output = String::new();
+
+	let room_ids: Vec<_> = self
+		.services
+		.rooms
+		.metadata
+		.iter_ids()
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	for room_id in &room_ids {
+		total_rooms = total_rooms.saturating_add(1);
+		let mut issues: Vec<String> = Vec::new();
+		let room_str = room_id.as_str();
+
+		// Corrupt room ID check
+		if <&RoomId>::try_from(room_str).is_err() || !room_str.is_ascii() {
+			issues.push(format!("CORRUPT_ID ({} bytes, non-parseable)", room_str.len()));
+			// Can't do further checks on a corrupt ID
+			problem_rooms = problem_rooms.saturating_add(1);
+			writeln!(output, "FAIL {} -- {}", room_str, issues.join(", ")).ok();
+			continue;
+		}
+
+		// Create event check
+		let create_state = self
+			.services
+			.rooms
+			.state_accessor
+			.room_state_get(room_id, &StateEventType::RoomCreate, "")
+			.await;
+
+		match &create_state {
+			| Ok(create_pdu) => {
+				let create_id = create_pdu.event_id();
+				let soft_failed = self
+					.services
+					.rooms
+					.pdu_metadata
+					.is_event_soft_failed(create_id)
+					.await;
+				if soft_failed {
+					issues.push("SOFT_FAILED_CREATE".to_owned());
+				}
+			},
+			| Err(_) => {
+				issues.push("MISSING_CREATE".to_owned());
+			},
+		}
+
+		// Local user check
+		let has_local = self
+			.services
+			.rooms
+			.state_cache
+			.active_local_users_in_room(room_id)
+			.boxed()
+			.next()
+			.await
+			.is_some();
+
+		if !has_local {
+			let we_participate = self
+				.services
+				.rooms
+				.state_cache
+				.server_in_room(ours, room_id)
+				.await;
+
+			if we_participate {
+				issues.push("ORPHANED (server listed, 0 local users)".to_owned());
+			}
+		}
+
+		// Forward extremities check
+		let extremities: Vec<_> = self
+			.services
+			.rooms
+			.state
+			.get_forward_extremities(room_id)
+			.map(ToOwned::to_owned)
+			.collect()
+			.await;
+
+		let ext_count = extremities.len();
+		if ext_count == 0 {
+			issues.push("ZERO_EXTREMITIES (stuck DAG)".to_owned());
+		} else if ext_count > 10 {
+			issues.push(format!("EXCESSIVE_EXTREMITIES ({ext_count} tips)"));
+		}
+
+		// Membership cache drift check
+		let cache_joined = self
+			.services
+			.rooms
+			.state_cache
+			.room_joined_count(room_id)
+			.await
+			.unwrap_or(0);
+
+		// Get actual state member count (joined)
+		let state_joined: u64 = self
+			.services
+			.rooms
+			.state_cache
+			.room_members(room_id)
+			.count()
+			.await
+			.try_into()
+			.unwrap_or(0);
+
+		if cache_joined != state_joined {
+			issues.push(format!("MEMBERSHIP_DRIFT (cache={cache_joined}, state={state_joined})"));
+
+			if fix {
+				self.services
+					.rooms
+					.state_cache
+					.update_joined_count(room_id)
+					.await;
+				issues.push("FIXED".to_owned());
+				fixed_rooms = fixed_rooms.saturating_add(1);
+			}
+		}
+
+		if issues.is_empty() {
+			if !problems_only {
+				writeln!(output, "OK   {room_id} (ext={ext_count}, joined={cache_joined})").ok();
+			}
+		} else {
+			problem_rooms = problem_rooms.saturating_add(1);
+			writeln!(output, "FAIL {room_id} -- {}", issues.join(", ")).ok();
+		}
+
+		// Flush every 50 rooms to avoid building huge strings
+		if total_rooms.is_multiple_of(50) {
+			self.write_str(&output).await?;
+			output.clear();
+		}
+	}
+
+	if !output.is_empty() {
+		self.write_str(&output).await?;
+	}
+
+	let mut summary =
+		format!("\n**Scan complete:** {total_rooms} rooms checked, {problem_rooms} with issues.");
+	if fix && fixed_rooms > 0 {
+		write!(summary, " {fixed_rooms} membership caches repaired.").ok();
+	}
+	summary.push('\n');
+
+	self.write_str(&summary).await
+}
+
+#[admin_command]
+pub(super) async fn mark_rejected(&self, event_ids: Vec<OwnedEventId>) -> Result {
+	let mut marked = 0_usize;
+	let mut already = 0_usize;
+
+	for event_id in &event_ids {
+		if self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_rejected(event_id)
+			.await
+		{
+			already = already.saturating_add(1);
+		} else {
+			self.services
+				.rooms
+				.pdu_metadata
+				.mark_event_rejected(event_id);
+			marked = marked.saturating_add(1);
+		}
+	}
+
+	self.write_str(&format!(
+		"Marked {marked} event(s) as rejected ({already} already rejected, {} total)\n",
+		event_ids.len()
+	))
+	.await
+}
+
+#[admin_command]
+pub(super) async fn unmark_rejected(&self, event_ids: Vec<OwnedEventId>) -> Result {
+	let mut unmarked = 0_usize;
+	let mut not_found = 0_usize;
+
+	for event_id in &event_ids {
+		if self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_rejected(event_id)
+			.await
+		{
+			self.services
+				.rooms
+				.pdu_metadata
+				.unmark_event_rejected(event_id);
+			unmarked = unmarked.saturating_add(1);
+		} else {
+			not_found = not_found.saturating_add(1);
+		}
+	}
+
+	self.write_str(&format!(
+		"Unmarked {unmarked} event(s) ({not_found} were not rejected, {} total)\n",
+		event_ids.len()
+	))
+	.await
 }

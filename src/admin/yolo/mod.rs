@@ -376,7 +376,7 @@ pub enum YoloCommand {
 	///
 	/// When called without servers, rebuilds from the local DAG.
 	/// Multiple servers are merged before resolution.
-	/// Delegates to the debug implementation.
+	/// Delegates to the `debug` implementation.
 	#[clap(alias = "force-set-room-state-from-server")]
 	ForceSetState {
 		/// The impacted room ID
@@ -389,7 +389,7 @@ pub enum YoloCommand {
 		#[arg(long = "at-event")]
 		event_id: Option<OwnedEventId>,
 		/// Skip signature verification AND use absolute override (shorthand
-		/// for --skip-sig-verify --absolute)
+		/// for `--skip-sig-verify --absolute`)
 		#[arg(short, long)]
 		overwrite: bool,
 		/// Skip signature verification on incoming PDUs
@@ -407,5 +407,41 @@ pub enum YoloCommand {
 		/// Show what would change without modifying state
 		#[arg(long)]
 		dry_run: bool,
+	},
+
+	/// Fast local-only health check across all rooms.
+	///
+	/// Scans every room in the database and reports:
+	/// - Corrupt room IDs (non-ASCII, parse failures)
+	/// - Soft-failed or missing create events
+	/// - Orphaned rooms (no local users)
+	/// - Extremity anomalies (0 or >10 forward extremities)
+	/// - Membership cache drift (state vs cache mismatch)
+	CheckRooms {
+		/// Only show rooms with problems (hide healthy rooms)
+		#[arg(long, short)]
+		problems_only: bool,
+
+		/// Auto-repair membership cache drift when detected
+		#[arg(long)]
+		fix: bool,
+	},
+
+	/// Mark event IDs as rejected in the database.
+	///
+	/// Rejected events are permanently excluded from state resolution.
+	/// Use `compare-room-state` to identify divergent event IDs first.
+	MarkRejected {
+		/// One or more event IDs to mark as rejected.
+		event_ids: Vec<OwnedEventId>,
+	},
+
+	/// Remove the rejected marker from event IDs.
+	///
+	/// Reverses `mark-rejected`. Events will participate in state
+	/// resolution again.
+	UnmarkRejected {
+		/// One or more event IDs to unmark.
+		event_ids: Vec<OwnedEventId>,
 	},
 }

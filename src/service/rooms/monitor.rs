@@ -60,7 +60,7 @@ impl Service {
 		// last 5 minutes. This covers missed events from downtime while avoiding
 		// immediate probes for rooms that were just active.
 		info!(target: "forwardfill", "Running startup forward-fill scan (all federated rooms)...");
-		self.scan_all_rooms(5 * 60 * 1000).await;
+		self.scan_all_rooms_startup(5 * 60 * 1000).await;
 		info!(target: "forwardfill", "Startup forward-fill scan complete.");
 
 		// --- Periodic sweep ---
@@ -84,12 +84,22 @@ impl Service {
 	/// Scans all known rooms and fetches missing events for any that have been
 	/// idle longer than `stale_threshold_ms`.
 	async fn scan_all_rooms(&self, stale_threshold_ms: u64) {
+		self.scan_all_rooms_inner(stale_threshold_ms, 10).await;
+	}
+
+	/// Startup variant with reduced concurrency to avoid stack overflow
+	/// on cold boot (deep event_handler call chains with empty caches).
+	async fn scan_all_rooms_startup(&self, stale_threshold_ms: u64) {
+		self.scan_all_rooms_inner(stale_threshold_ms, 1).await;
+	}
+
+	async fn scan_all_rooms_inner(&self, stale_threshold_ms: u64, concurrency: usize) {
 		let ours = self.services.globals.server_name();
 
 		self.services
 			.state_cache
 			.server_rooms(ours)
-			.for_each_concurrent(10, |room_id| async move {
+			.for_each_concurrent(concurrency, |room_id| async move {
 				if let Err(e) = self.check_room(room_id, stale_threshold_ms).boxed().await {
 					debug!(target: "forwardfill", "Error checking room {room_id}: {e}");
 				}
@@ -97,7 +107,6 @@ impl Service {
 			.await;
 	}
 
-	#[tracing::instrument(skip(self), level = "debug")]
 	pub async fn check_room(
 		&self,
 		room_id: &ruma::RoomId,
@@ -105,10 +114,7 @@ impl Service {
 		stale_threshold_ms: u64,
 	) -> Result<()> {
 		let room_str = room_id.as_str();
-		if <&ruma::RoomId>::try_from(room_str).is_err()
-			|| !room_str.is_ascii()
-			|| room_id.server_name().is_none()
-		{
+		if !room_str.is_ascii() || <&ruma::RoomId>::try_from(room_str).is_err() {
 			warn!(
 				target: "forwardfill",
 				"Skipping room with invalid/corrupt ID ({} bytes)",
