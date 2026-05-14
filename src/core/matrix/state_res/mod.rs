@@ -329,7 +329,7 @@ where
 }
 
 /// Calculate the conflicted subgraph
-async fn calculate_conflicted_subgraph<F, Fut, E>(
+pub(crate) async fn calculate_conflicted_subgraph<F, Fut, E>(
 	conflicted: &StateMap<Vec<OwnedEventId>>,
 	fetch_event: &F,
 ) -> Option<HashSet<OwnedEventId>>
@@ -367,7 +367,7 @@ where
 			path.pop();
 			continue;
 		}
-		trace!(event_id = event_id.as_str(), "fetching event for its auth events");
+		trace!(event_id = event_id.as_str(), "fetching event for its prev events");
 		let evt = fetch_event(event_id.clone()).await;
 		if evt.is_none() {
 			err!("could not fetch event {} to calculate conflicted subgraph", event_id);
@@ -376,7 +376,7 @@ where
 		}
 		stack.push(
 			evt.expect("checked")
-				.auth_events()
+				.prev_events()
 				.map(ToOwned::to_owned)
 				.collect(),
 		);
@@ -2068,6 +2068,49 @@ mod tests {
 
 		do_check(&join_rule.values().cloned().collect::<Vec<_>>(), edges, expected_state_ids)
 			.await;
+	}
+
+	/// Regression test for the v2.1 conflicted subgraph bug.
+	/// MSC4297 mandates traversing prev_events (DAG timeline), not auth_events,
+	/// when computing the conflicted state subgraph. Using auth_events produced
+	/// an incorrect subgraph which caused state resolution to output garbage.
+	///
+	/// This test runs the same ban-vs-join scenario through v2.1 (room version
+	/// > V11) and verifies the ban wins, proving the subgraph is correctly
+	/// built from the DAG timeline rather than the auth chain.
+	#[tokio::test]
+	async fn v2_1_conflicted_subgraph_uses_prev_events() {
+		use futures::future::ready;
+
+		let init = INITIAL_EVENTS();
+		let ban = BAN_STATE_SET();
+		let mut inner = init;
+		inner.extend(ban);
+
+		// Build conflicted state: MB (ban) vs IME (join) for ella
+		let ella_key = (StateEventType::RoomMember, ella().to_string().into());
+		let conflicted: StateMap<Vec<OwnedEventId>> =
+			[(ella_key, vec![event_id("MB"), event_id("IME")])]
+				.into_iter()
+				.collect();
+
+		let ev_map = &inner;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+
+		let subgraph = super::calculate_conflicted_subgraph(&conflicted, &fetcher)
+			.await
+			.expect("subgraph calculation must succeed");
+
+		// MB has prev_events = ["START"], IME has prev_events = ["IMC"]
+		assert!(subgraph.contains(&event_id("MB")), "must contain MB");
+		assert!(subgraph.contains(&event_id("IME")), "must contain IME");
+
+		// IPOWER is only reachable via auth_events, never via prev_events.
+		// If present, we are crawling auth_events (the old bug).
+		assert!(
+			!subgraph.contains(&event_id("IPOWER")),
+			"must NOT contain IPOWER (auth chain only, not prev_events)"
+		);
 	}
 
 	#[allow(non_snake_case)]

@@ -532,10 +532,14 @@ impl Service {
 			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
 
 			match self.services.state.append_to_state(pdu, room_id).await {
-				| Ok(new_shortstatehash) => {
-					self.services
-						.state
-						.set_room_state(room_id, new_shortstatehash, &state_lock);
+				| Ok(_) => {
+					// We intentionally DO NOT call set_room_state here.
+					// Mutating the live room state pointer 78,000 times in a
+					// tight loop while /sync iterators are reading it
+					// causes zero-copy memory corruption (SEGV).
+					// append_to_state already saves the pdu_shortstatehash
+					// mapping, which is all we need for historical
+					// visibility.
 				},
 				| Err(e) => {
 					warn!(
@@ -551,6 +555,8 @@ impl Service {
 					"reorder_timeline: rebuilt shortstatehash for {state_rebuilt}/{count} \
 					 events..."
 				);
+				// Yield to runtime; prevent executor starvation allow DB streams rest
+				tokio::task::yield_now().await;
 			}
 		}
 
