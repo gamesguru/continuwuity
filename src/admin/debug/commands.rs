@@ -846,6 +846,9 @@ pub(crate) async fn force_set_state(
 			continue;
 		};
 
+		// Clear markers for incoming auth events from the backbone
+		self.services.rooms.pdu_metadata.clear_pdu_markers(&event_id);
+
 		if self
 			.services
 			.rooms

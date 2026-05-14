@@ -423,9 +423,7 @@ where
 		.cloned()
 		.stream()
 		.broad_filter_map(async |event_id| {
-			let pl = get_power_level_for_sender(&event_id, fetch_event)
-				.await
-				.ok()?;
+			let pl = get_power_level_for_sender(&event_id, fetch_event).await;
 
 			Some((event_id, pl))
 		})
@@ -588,7 +586,7 @@ where
 async fn get_power_level_for_sender<E, F, Fut>(
 	event_id: &EventId,
 	fetch_event: &F,
-) -> serde_json::Result<Int>
+) -> Int
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
 	Fut: Future<Output = Option<E>> + Send,
@@ -609,18 +607,24 @@ where
 		.await;
 
 	let content: PowerLevelsContentFields = match pl {
-		| None => return Ok(int!(0)),
-		| Some(ev) => from_json_str(ev.content().get())?,
+		| None => return int!(0),
+		| Some(ev) => match from_json_str(ev.content().get()) {
+			| Ok(c) => c,
+			| Err(e) => {
+				warn!("Failed to parse power levels event {}: {e}", ev.event_id());
+				return int!(0);
+			},
+		},
 	};
 
 	if let Some(ev) = event {
 		if let Some(&user_level) = content.get_user_power(ev.sender()) {
 			debug!("found {} at power_level {user_level}", ev.sender());
-			return Ok(user_level);
+			return user_level;
 		}
 	}
 
-	Ok(content.users_default)
+	content.users_default
 }
 
 /// Check the that each event is authenticated based on the events before it.
@@ -774,19 +778,15 @@ where
 			}
 		}
 
-		// Supplement auth_state with events from resolved_state, but only
-		// for keys NOT already present. Per Matrix spec §5.1.2.2, an event's
-		// own auth_events take strict precedence over resolved_state.
+		// Supplement auth_state with events from resolved_state.
+		// Per Synapse parity, resolved_state OVERWRITES auth_events — this
+		// forces events to authenticate against authoritative state, preventing
+		// auth-bypass attacks where a malicious event claims old power levels.
 		// Collect first to avoid borrow conflict with auth_state.
 		let supplemental: Vec<_> = auth_types
 			.iter()
 			.stream()
-			.ready_filter_map(|key| {
-				if auth_state.contains_key(key) {
-					return None;
-				}
-				Some((key, resolved_state.get(key)?))
-			})
+			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
 			.filter_map(|(key, ev_id)| async move {
 				// Exclude rejected events from resolved_state (Synapse parity)
 				if event_rejected(ev_id.clone()).await {
@@ -1297,11 +1297,7 @@ mod tests {
 				.map(|list| list.into_iter().map(event_id).collect::<Vec<_>>())
 				.collect::<Vec<_>>();
 
-		// With the contains_key guard, Bob's PB/T3 authenticate against
-		// their own auth_events (not resolved_state). Since TestStore has
-		// no rejection pipeline, PB and T3 pass auth and win by
-		// topological/lexicographic ordering.
-		let expected_state_ids = vec!["PB", "T3"]
+		let expected_state_ids = vec!["PA2", "T2"]
 			.into_iter()
 			.map(event_id)
 			.collect::<Vec<_>>();
@@ -1351,9 +1347,7 @@ mod tests {
 			.map(|list| list.into_iter().map(event_id).collect::<Vec<_>>())
 			.collect::<Vec<_>>();
 
-		// Bob's T2 authenticates against its own auth_events (PA gives
-		// him PL 50). Without rejection marking, T2 passes and wins.
-		let expected_state_ids = vec!["T2", "MB", "PA"]
+		let expected_state_ids = vec!["T1", "MB", "PA"]
 			.into_iter()
 			.map(event_id)
 			.collect::<Vec<_>>();
@@ -1389,10 +1383,7 @@ mod tests {
 			.map(|list| list.into_iter().map(event_id).collect::<Vec<_>>())
 			.collect::<Vec<_>>();
 
-		// Ella's join authenticates against the initial IPOWER (which
-		// has default join_rules = public). Without the intake pipeline
-		// rejecting her, she passes auth.
-		let expected_state_ids = vec![event_id("ME"), event_id("JR")];
+		let expected_state_ids = vec![event_id("JR")];
 
 		do_check(events, edges, expected_state_ids).await;
 	}
@@ -1513,9 +1504,7 @@ mod tests {
 		.map(|list| list.into_iter().map(event_id).collect::<Vec<_>>())
 		.collect::<Vec<_>>();
 
-		// PB passes auth against its own auth_events (PA1 gives Bob PL 50).
-		// T4 is from Alice so wins topic. PB wins power_levels.
-		let expected_state_ids = vec!["T4", "PB"]
+		let expected_state_ids = vec!["T4", "PA2"]
 			.into_iter()
 			.map(event_id)
 			.collect::<Vec<_>>();

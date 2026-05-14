@@ -53,23 +53,25 @@ where
 			.is_event_soft_failed(incoming_pdu.event_id())
 	);
 	if rejected {
-		return Err!(Request(InvalidParam("Event has been rejected")));
+		return Err!(Request(Forbidden("Event has been rejected")));
 	} else if soft_failed_early {
-		return Err!(Request(InvalidParam("Event has been soft-failed")));
+		// Return Ok(None) so the remote server stops endlessly retrying
+		info!("Event was previously soft-failed; acknowledging receipt");
+		return Ok(None);
 	}
 
 	// If any of the auth events are rejected, this event is also rejected.
 	if !skip_soft_fail {
 		for aid in incoming_pdu.auth_events() {
 			if self.services.pdu_metadata.is_event_rejected(aid).await {
-				warn!(
+				info!(
 					"Rejecting incoming event {} which depends on rejected auth event {aid}",
 					incoming_pdu.event_id()
 				);
 				self.services
 					.pdu_metadata
 					.mark_event_rejected(incoming_pdu.event_id());
-				return Err!(Request(InvalidParam("Event has rejected auth event: {aid}")));
+				return Err!(Request(Forbidden("Event has rejected auth event")));
 			}
 		}
 	}
