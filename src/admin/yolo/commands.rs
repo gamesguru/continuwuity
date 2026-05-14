@@ -3789,11 +3789,11 @@ pub(super) async fn heal_all_rooms(
 			room_id.clone(),
 			vec![server.clone()],
 			None,
-			true,  // overwrite
-			false, // skip_sig_verify
-			false, // absolute
-			None,  // output
-			None,  // input
+			true, // overwrite
+			true, // skip_sig_verify
+			true, // absolute (direct override, no state-res merge)
+			None, // output
+			None, // input
 			false, // dry_run
 		))
 		.await
@@ -3846,11 +3846,8 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 
 	drop(rooms);
 
-	self.write_str(&format!(
-		"Scanned {total} rooms, found {} corrupt entries\n",
-		corrupt.len()
-	))
-	.await?;
+	self.write_str(&format!("Scanned {total} rooms, found {} corrupt entries\n", corrupt.len()))
+		.await?;
 
 	for room_id in &corrupt {
 		self.write_str(&format!("  corrupt: {} ({} bytes)\n", room_id, room_id.as_bytes().len()))
@@ -3859,8 +3856,8 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 
 	if !execute {
 		self.write_str(
-			"\nDry run — corrupt entries are filtered by server_rooms() automatically. \
-			 Use purge-room to remove individual entries.\n",
+			"\nDry run — corrupt entries are filtered by server_rooms() automatically. Use \
+			 purge-room to remove individual entries.\n",
 		)
 		.await
 	} else {
