@@ -174,6 +174,14 @@ where
 		.chain(conflicting.into_values().flatten().stream())
 		.broad_filter_map(async |id| event_exists(id.clone()).await.then_some(id))
 		.chain(conflicted_state_subgraph.into_iter().stream())
+		// Filter to state events only: auth chains and prev_events subgraph
+		// traversals can pull in non-state events (e.g. m.room.message) which
+		// lack a state_key. These must be excluded from state resolution since
+		// iterative_auth_check requires all events to have a state_key.
+		.broad_filter_map(async |id| {
+			let ev = event_fetch(id.clone()).await?;
+			ev.state_key().is_some().then_some(id)
+		})
 		.collect()
 		.await;
 
@@ -2111,6 +2119,107 @@ mod tests {
 			!subgraph.contains(&event_id("IPOWER")),
 			"must NOT contain IPOWER (auth chain only, not prev_events)"
 		);
+	}
+
+	/// Regression test: non-state events (e.g. m.room.message) that appear in
+	/// auth chains or subgraph traversals must be filtered out of the
+	/// conflicted set before iterative_auth_check, which requires all events
+	/// to have a state_key.
+	///
+	/// Without the filter, this crashes with:
+	///   InvalidPdu("State event had no state key")
+	#[tokio::test]
+	async fn non_state_events_in_auth_chain_dont_crash_resolution() {
+		use std::collections::HashSet;
+
+		use futures::future::ready;
+
+		let init = INITIAL_EVENTS();
+		let mut ev_map: HashMap<OwnedEventId, PduEvent> = init.clone();
+
+		// Insert a non-state event (m.room.message, no state_key) that will
+		// appear in the auth chain. In real federation, auth chains can
+		// contain non-state events due to DAG traversal.
+		let msg = to_pdu_event(
+			"MSG1",
+			alice(),
+			TimelineEventType::RoomMessage,
+			None, // <-- no state_key, this is NOT a state event
+			to_raw_json_value(&json!({ "body": "hello", "msgtype": "m.text" })).unwrap(),
+			&["CREATE", "IMA", "IPOWER"],
+			&["START"],
+		);
+		ev_map.insert(msg.event_id.clone(), msg);
+
+		// Create two conflicting topic events
+		let t1 = to_pdu_event(
+			"T1",
+			alice(),
+			TimelineEventType::RoomTopic,
+			Some(""),
+			to_raw_json_value(&json!({ "topic": "topic A" })).unwrap(),
+			&["CREATE", "IMA", "IPOWER"],
+			&["START"],
+		);
+		let t2 = to_pdu_event(
+			"T2",
+			alice(),
+			TimelineEventType::RoomTopic,
+			Some(""),
+			to_raw_json_value(&json!({ "topic": "topic B" })).unwrap(),
+			&["CREATE", "IMA", "IPOWER"],
+			&["START"],
+		);
+		ev_map.insert(t1.event_id.clone(), t1);
+		ev_map.insert(t2.event_id.clone(), t2);
+
+		let topic_key = StateEventType::RoomTopic.with_state_key("");
+
+		// State set 1: topic = T1
+		let mut state1: StateMap<OwnedEventId> = HashMap::new();
+		for ev in init.values().filter(|e| e.state_key().is_some()) {
+			state1.insert(
+				ev.event_type().with_state_key(ev.state_key().unwrap()),
+				ev.event_id().to_owned(),
+			);
+		}
+		state1.insert(topic_key.clone(), event_id("T1"));
+
+		// State set 2: topic = T2
+		let mut state2 = state1.clone();
+		state2.insert(topic_key.clone(), event_id("T2"));
+
+		let state_sets = vec![state1, state2];
+
+		// Auth chain includes the non-state event MSG1 — this is the
+		// scenario that triggered the crash.
+		let auth_chain: HashSet<OwnedEventId> = ev_map.keys().cloned().collect();
+		let auth_chain_sets = vec![auth_chain.clone(), auth_chain];
+
+		let fetch = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.contains_key(&id));
+		let rejected = |_: OwnedEventId| ready(false);
+
+		// This must not panic with "State event had no state key"
+		let result = super::resolve(
+			&RoomVersionId::V6,
+			state_sets.iter(),
+			&auth_chain_sets,
+			&fetch,
+			&exists,
+			&rejected,
+		)
+		.await;
+
+		assert!(
+			result.is_ok(),
+			"resolve() must not crash when non-state events are in the auth chain: {:?}",
+			result.err()
+		);
+
+		// The resolved state must contain a topic event (T1 or T2)
+		let resolved = result.unwrap();
+		assert!(resolved.contains_key(&topic_key), "resolved state must contain the topic key");
 	}
 
 	#[allow(non_snake_case)]
