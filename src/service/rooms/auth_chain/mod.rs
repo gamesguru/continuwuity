@@ -8,7 +8,7 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Result, at, debug, debug_error, implement, trace,
+	Err, Result, at, debug, debug_error, implement, info, trace,
 	utils::{
 		IterStream,
 		stream::{ReadyExt, TryBroadbandExt},
@@ -114,7 +114,7 @@ where
 		.boxed()
 		.await?;
 
-	debug!(
+	info!(
 		chain_length = ?full_auth_chain.len(),
 		elapsed = ?started.elapsed(),
 		"done",
@@ -187,7 +187,13 @@ async fn get_auth_chain_inner(
 	let mut todo: VecDeque<_> = [event_id.to_owned()].into();
 	let mut found = HashSet::new();
 
+	let started = Instant::now();
+
 	while let Some(event_id) = todo.pop_front() {
+		if found.len() % 5000 == 0 && !found.is_empty() {
+			info!(%event_id, found = found.len(), queue = todo.len(), elapsed = ?started.elapsed(), "auth chain progress");
+		}
+
 		trace!(%event_id, "processing auth event");
 
 		match self
