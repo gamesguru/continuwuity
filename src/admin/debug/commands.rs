@@ -536,6 +536,8 @@ pub(crate) async fn force_set_state(
 	output: Option<String>,
 	input: Option<String>,
 	dry_run: bool,
+	#[allow(unused_variables)]
+	skip_membership_rebuild: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -1008,15 +1010,31 @@ pub(crate) async fn force_set_state(
 
 	let state_lock = self.services.rooms.state.mutex.lock(&*room_id).await;
 
-	info!("Forcing new room state");
-	Box::pin(self.services.rooms.state.force_state(
-		room_id.clone().as_ref(),
-		short_state_hash,
-		added,
-		removed,
-		&state_lock,
-	))
-	.await?;
+	if skip_membership_rebuild {
+		// Fast path: just set the state hash directly, skip per-member iteration
+		info!("Fast-setting room state (skipping membership rebuild)");
+		self.services
+			.rooms
+			.state
+			.set_room_state(room_id.as_ref(), short_state_hash, &state_lock);
+
+		// Update joined count from state snapshot
+		self.services
+			.rooms
+			.state_cache
+			.update_joined_count(room_id.as_ref())
+			.await;
+	} else {
+		info!("Forcing new room state");
+		Box::pin(self.services.rooms.state.force_state(
+			room_id.clone().as_ref(),
+			short_state_hash,
+			added,
+			removed,
+			&state_lock,
+		))
+		.await?;
+	}
 
 	// Set the tip event as the sole forward extremity. Previous behavior
 	// scattered extremities across all state events, fracturing the DAG.
@@ -1035,17 +1053,14 @@ pub(crate) async fn force_set_state(
 			.set_forward_extremities(room_id.as_ref(), once(tip_pdu.event_id()), &state_lock)
 			.await;
 
-		// NOTE: Do NOT update pdu_shortstatehash here. short_state_hash is
-		// state-after, but pdu_shortstatehash must be state-before per spec.
-		// The event's original pdu_shortstatehash from append is correct.
 		info!("Set tip {} as sole extremity (room SSH {short_state_hash})", tip_pdu.event_id());
 	} else {
-		// No timeline events — /sync won't deliver this room.
-		// Promote the most recent state event as a timeline anchor.
 		Box::pin(self.promote_sync_anchor(&room_id, short_state_hash, &state_lock)).await;
 	}
 
-	Box::pin(self.rebuild_membership_cache(room_id.clone(), short_state_hash)).await;
+	if !skip_membership_rebuild {
+		Box::pin(self.rebuild_membership_cache(room_id.clone(), short_state_hash)).await;
+	}
 
 	self.write_str("Successfully forced the room state from the requested remote server.")
 		.await

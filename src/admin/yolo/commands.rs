@@ -2660,6 +2660,7 @@ pub(super) async fn heal_room(
 			None,
 			None,
 			false,
+			false, // skip_membership_rebuild
 		))
 		.await?;
 
@@ -3789,12 +3790,13 @@ pub(super) async fn heal_all_rooms(
 			room_id.clone(),
 			vec![server.clone()],
 			None,
-			true, // overwrite
-			true, // skip_sig_verify
-			true, // absolute (direct override, no state-res merge)
-			None, // output
-			None, // input
+			true,  // overwrite
+			true,  // skip_sig_verify
+			true,  // absolute (direct override, no state-res merge)
+			None,  // output
+			None,  // input
 			false, // dry_run
+			true,  // skip_membership_rebuild (fast path)
 		))
 		.await
 		{

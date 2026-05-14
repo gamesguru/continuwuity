@@ -188,6 +188,9 @@ pub enum DebugCommand {
 		/// Show what would change without modifying state
 		#[arg(long)]
 		dry_run: bool,
+		/// Skip per-member membership cache rebuild (fast path for bulk healing)
+		#[arg(long, hide = true, default_value_t = false)]
+		skip_membership_rebuild: bool,
 	},
 
 	/// Runs a server name through Continuwuity's true destination resolution
