@@ -1127,8 +1127,8 @@ mod tests {
 		room_version::RoomVersion,
 		test_utils::{
 			INITIAL_EVENTS, TestStore, alice, bob, charlie, do_check, ella, event_id,
-			member_content_ban, member_content_join, room_id, to_init_pdu_event, to_pdu_event,
-			zara,
+			member_content_ban, member_content_join, member_content_leave, room_id,
+			to_init_pdu_event, to_pdu_event, zara,
 		},
 	};
 	use crate::{
@@ -2543,6 +2543,9 @@ mod tests {
 	///   power3 -> zara_join
 	#[tokio::test]
 	async fn synapse_v21_state_reset_replay_conflicted_subgraph() {
+		use futures::future::ready;
+		use ruma::EventId;
+
 		use super::test_utils::*;
 
 		let e1_create = to_pdu_event::<&EventId>(
@@ -2705,9 +2708,9 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_| ready(false);
 
-		// Use v2.1 (room version > 11)
+		// Use v2.1 (room version >= 12, dispatched via wildcard _ match)
 		let resolved = super::resolve(
-			&RoomVersionId::V11,
+			&RoomVersionId::V12,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
@@ -2747,6 +2750,9 @@ mod tests {
 	///   join_rules_invite -> alice_leave
 	#[tokio::test]
 	async fn synapse_v21_state_reset_start_empty_set() {
+		use futures::future::ready;
+		use ruma::EventId;
+
 		use super::test_utils::*;
 
 		let e1_create = to_pdu_event::<&EventId>(
@@ -2865,9 +2871,9 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_| ready(false);
 
-		// Use v2.1 (room version > 11)
+		// Use v2.1 (room version >= 12, dispatched via wildcard _ match)
 		let resolved = super::resolve(
-			&RoomVersionId::V11,
+			&RoomVersionId::V12,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
