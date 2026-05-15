@@ -219,10 +219,9 @@ where
 			return Ok(false);
 		}
 
-		if room_version.room_ids_as_hashes && incoming_event.room_id().is_some() {
-			warn!("room create event incorrectly claims to have a room ID when it should not");
-			return Ok(false);
-		}
+		// Note: We cannot check `incoming_event.room_id().is_some()` to enforce
+		// wire-format compliance here. Conduit internally populates `room_id`
+		// via `from_id_val` for database routing, so it will always be Some.
 
 		if !room_version.use_room_create_sender
 			&& !room_version.explicitly_privilege_room_creators
@@ -1305,6 +1304,14 @@ fn check_power_levels(
 	for user in user_levels_to_check {
 		let old_level = old_state.users.get(user);
 		let new_level = new_state.users.get(user);
+
+		// Matrix auth checks only validate deltas. If the level didn't change,
+		// skip it — this must come before the creator check to avoid rejecting
+		// PL updates that don't touch the creator's entry.
+		if old_level.is_some() && new_level.is_some() && old_level == new_level {
+			continue;
+		}
+
 		if new_level.is_some() && creators.contains(user) {
 			if new_level != Some(&Int::MAX) {
 				warn!(
@@ -1314,9 +1321,6 @@ fn check_power_levels(
 				return Some(false); // cannot alter creator power level
 			}
 			trace!("ignoring creator in users list with privileged power level");
-			continue;
-		}
-		if old_level.is_some() && new_level.is_some() && old_level == new_level {
 			continue;
 		}
 
