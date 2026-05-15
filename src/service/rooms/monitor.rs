@@ -151,22 +151,14 @@ impl Service {
 			return Ok(());
 		}
 
-		// Build candidate server list: prefer room homeserver, then any remote
-		// participants. We try multiple servers instead of giving up on one.
+		// Build candidate server list: prefer trusted servers that are in the
+		// room, then the room homeserver, then a random sample from remaining
+		// participants. This avoids wasting probes on dead alphabetically-first
+		// servers like 11037.xyz.
 		let mut candidate_servers: Vec<OwnedServerName> = Vec::new();
 
-		// Prefer the room's homeserver if it's remote and in the room
-		if let Some(hs) = room_id
-			.server_name()
-			.filter(|s| !self.services.globals.server_is_ours(s))
-		{
-			if self.services.state_cache.server_in_room(hs, room_id).await {
-				candidate_servers.push(hs.to_owned());
-			}
-		}
-
-		// Add other remote servers (up to 5 candidates total)
-		let other_servers: Vec<OwnedServerName> = self
+		// Collect all remote servers in the room (filtered)
+		let all_remote: Vec<OwnedServerName> = self
 			.services
 			.state_cache
 			.room_servers(room_id)
@@ -183,11 +175,42 @@ impl Service {
 			.collect()
 			.await;
 
-		for server in other_servers {
+		// Trusted servers that are in the room (most likely responsive)
+		for trusted in &self.services.server.config.trusted_servers {
 			if candidate_servers.len() >= 5 {
 				break;
 			}
-			if !candidate_servers.contains(&server) {
+			if all_remote.contains(trusted) && !candidate_servers.contains(trusted) {
+				candidate_servers.push(trusted.clone());
+			}
+		}
+
+		// Room homeserver (if remote and in the room)
+		if candidate_servers.len() < 5 {
+			if let Some(hs) = room_id
+				.server_name()
+				.filter(|s| !self.services.globals.server_is_ours(s))
+			{
+				let hs_owned = hs.to_owned();
+				if all_remote.contains(&hs_owned) && !candidate_servers.contains(&hs_owned) {
+					candidate_servers.push(hs_owned);
+				}
+			}
+		}
+
+		// Random sample from remaining servers (avoid alphabetical bias)
+		if candidate_servers.len() < 5 && !all_remote.is_empty() {
+			use rand::seq::SliceRandom;
+			let mut remaining: Vec<_> = all_remote
+				.iter()
+				.filter(|s| !candidate_servers.contains(s))
+				.cloned()
+				.collect();
+			remaining.shuffle(&mut rand::rng());
+			for server in remaining {
+				if candidate_servers.len() >= 5 {
+					break;
+				}
 				candidate_servers.push(server);
 			}
 		}

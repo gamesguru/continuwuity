@@ -170,6 +170,7 @@ pub enum YoloCommand {
 		start: u64,
 
 		/// End index (0-based, inclusive, or -1 for all)
+		#[arg(allow_hyphen_values = true)]
 		end: i64,
 
 		/// Print PDUs to the admin room (in addition to writing to file)
@@ -477,5 +478,12 @@ pub enum YoloCommand {
 		/// Actually delete corrupt entries. Without this, only reports them.
 		#[arg(long)]
 		execute: bool,
+	},
+	/// Rebuild the membership cache from the current state snapshot.
+	///
+	/// Useful after force-set-state or when /sync is missing rooms.
+	RebuildMembershipCache {
+		/// The room ID to rebuild.
+		room_id: OwnedRoomId,
 	},
 }

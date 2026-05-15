@@ -216,14 +216,23 @@ async fn process_inbound_transaction(
 
 	if elapsed < Duration::from_millis(50) {
 		debug!(
-			target: "federation-nominal",
+			target: "federation",
 			pdus = body.pdus.len(),
 			edus = body.edus.len(),
 			?elapsed,
 			"Finished processing transaction"
 		);
+	} else if elapsed > Duration::from_secs(10) {
+		warn!(
+			target: "federation",
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Slow transaction"
+		);
 	} else {
 		info!(
+			target: "federation",
 			pdus = body.pdus.len(),
 			edus = body.edus.len(),
 			?elapsed,
