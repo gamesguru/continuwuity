@@ -3937,7 +3937,6 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 		let s = room_id.as_str();
 
 		let valid = s.starts_with('!')
-			&& s.contains(':')
 			&& s.len() <= 255
 			&& s.bytes().all(|b| b.is_ascii_graphic())
 			&& <&RoomId>::try_from(s).is_ok();
