@@ -1244,7 +1244,7 @@ async fn reject_conflicting_state(
 		.rooms
 		.state_accessor
 		.state_full(local_ssh)
-		.map(|((..), pdu)| pdu.event_id().to_owned())
+		.map(|(_, pdu)| pdu.event_id().to_owned())
 		.collect()
 		.await;
 
