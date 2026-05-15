@@ -390,6 +390,14 @@ pub(crate) fn member_content_join() -> Box<RawJsonValue> {
 	to_raw_json_value(&RoomMemberEventContent::new(MembershipState::Join)).unwrap()
 }
 
+pub(crate) fn member_content_leave() -> Box<RawJsonValue> {
+	to_raw_json_value(&RoomMemberEventContent::new(MembershipState::Leave)).unwrap()
+}
+
+pub(crate) fn member_content_invite() -> Box<RawJsonValue> {
+	to_raw_json_value(&RoomMemberEventContent::new(MembershipState::Invite)).unwrap()
+}
+
 pub(crate) fn to_init_pdu_event(
 	id: &str,
 	sender: &UserId,

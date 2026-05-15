@@ -1236,14 +1236,17 @@ async fn reject_conflicting_state(
 		return;
 	};
 
-	let mut local_eids: HashSet<OwnedEventId> = HashSet::new();
-
-	let local_full = self.services.rooms.state_accessor.state_full(local_ssh);
-	futures::pin_mut!(local_full);
-
-	while let Some(((..), pdu)) = local_full.next().await {
-		local_eids.insert(pdu.event_id().to_owned());
-	}
+	// Collect into Vec FIRST to drop the zero-copy RocksDB iterator
+	// before the write phase. Holding an iterator across .await points
+	// risks SEGV if compaction invalidates the underlying memory.
+	let local_eids: HashSet<OwnedEventId> = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full(local_ssh)
+		.map(|((..), pdu)| pdu.event_id().to_owned())
+		.collect()
+		.await;
 
 	let extra: Vec<OwnedEventId> = local_eids.difference(remote_eids).cloned().collect();
 	if !extra.is_empty() {
@@ -1279,73 +1282,77 @@ async fn rebuild_membership_cache_inner(&self, room_id: OwnedRoomId, short_state
 	let mut state_invited: HashSet<OwnedUserId> = HashSet::new();
 	let mut members_updated = 0_usize;
 
-	{
-		let state_full = self
-			.services
-			.rooms
-			.state_accessor
-			.state_full(short_state_hash);
-
-		futures::pin_mut!(state_full);
-		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
+	// Collect membership data into a Vec FIRST to drop the zero-copy
+	// RocksDB iterator before the write phase. Holding an iterator
+	// across .await points risks SEGV if compaction invalidates the
+	// underlying memory.
+	let members: Vec<(OwnedUserId, String)> = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full(short_state_hash)
+		.filter_map(|((event_type, state_key), pdu)| async move {
 			if event_type != StateEventType::RoomMember {
-				continue;
+				return None;
 			}
-			let Ok(user_id) = OwnedUserId::try_from(state_key.as_str()) else {
-				continue;
-			};
-
+			let user_id = OwnedUserId::try_from(state_key.as_str()).ok()?;
 			let content = pdu.get_content_as_value();
 			let membership = content
 				.get("membership")
 				.and_then(|v| v.as_str())
-				.unwrap_or("leave");
+				.unwrap_or("leave")
+				.to_owned();
+			Some((user_id, membership))
+		})
+		.collect()
+		.await;
 
-			match membership {
-				| "join" => {
-					state_joined.insert(user_id.clone());
-					if !self
-						.services
+	// Now process with the iterator dropped — safe to write.
+	for (user_id, membership) in &members {
+		match membership.as_str() {
+			| "join" => {
+				state_joined.insert(user_id.clone());
+				if !self
+					.services
+					.rooms
+					.state_cache
+					.is_joined(user_id, &room_id)
+					.await
+				{
+					self.services
 						.rooms
 						.state_cache
-						.is_joined(&user_id, &room_id)
-						.await
-					{
-						self.services
-							.rooms
-							.state_cache
-							.mark_as_joined_silent(&user_id, &room_id)
-							.await;
-						members_updated = members_updated.saturating_add(1);
-					}
-				},
-				| "invite" => {
-					state_invited.insert(user_id.clone());
-					// TODO: check-before-write for invites
-				},
-				| "leave" | "ban" => {
-					// TODO: distinguish left vs kicked vs banned for proper
-					// Cinny/Element display. Currently all three map to
-					// mark_as_left which loses the distinction.
-					if self
-						.services
+						.mark_as_joined_silent(user_id, &room_id)
+						.await;
+					members_updated = members_updated.saturating_add(1);
+				}
+			},
+			| "invite" => {
+				state_invited.insert(user_id.clone());
+				// TODO: check-before-write for invites
+			},
+			| "leave" | "ban" => {
+				// TODO: distinguish left vs kicked vs banned for proper
+				// Cinny/Element display. Currently all three map to
+				// mark_as_left which loses the distinction.
+				if self
+					.services
+					.rooms
+					.state_cache
+					.is_invited_or_joined(user_id, &room_id)
+					.await
+				{
+					self.services
 						.rooms
 						.state_cache
-						.is_invited_or_joined(&user_id, &room_id)
-						.await
-					{
-						self.services
-							.rooms
-							.state_cache
-							.mark_as_left_silent(&user_id, &room_id)
-							.await;
-						members_updated = members_updated.saturating_add(1);
-					}
-				},
-				| unknown => {
-					warn!("Unknown membership state '{unknown}' for {user_id} in {room_id}");
-				},
-			}
+						.mark_as_left_silent(user_id, &room_id)
+						.await;
+					members_updated = members_updated.saturating_add(1);
+				}
+			},
+			| unknown => {
+				warn!("Unknown membership state '{unknown}' for {user_id} in {room_id}");
+			},
 		}
 	}
 

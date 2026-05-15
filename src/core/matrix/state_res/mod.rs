@@ -2526,4 +2526,365 @@ mod tests {
 			assert!(!is_valid_room_id(""));
 		}
 	}
+
+	/// Ported from Synapse
+	/// tests/state/test_v21.py::test_state_reset_replay_conflicted_subgraph
+	///
+	/// Tests that when an event cites OLD auth events but indirectly references
+	/// NEW ones, the v2.1 subgraph traversal correctly replays events in the
+	/// right power-level epoch, preventing state resets.
+	///
+	/// DAG:
+	///   create -> alice_join -> power1 -> join_rules -> bob_join, charlie_join
+	///   power1 -> power2 (Alice promotes Bob)
+	///   power2 -> power3 (Bob promotes Charlie)
+	///   power3 -> eve_join1
+	///   eve_join1 -> eve_join2 (cites OLD power1 — DODGY)
+	///   power3 -> zara_join
+	#[tokio::test]
+	async fn synapse_v21_state_reset_replay_conflicted_subgraph() {
+		use super::test_utils::*;
+
+		let e1_create = to_pdu_event::<&EventId>(
+			"S21_CREATE",
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice() })).unwrap(),
+			&[],
+			&[],
+		);
+
+		let e2_ma = to_pdu_event(
+			"S21_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&["S21_CREATE"],
+			&["S21_CREATE"],
+		);
+
+		let e3_power1 = to_pdu_event(
+			"S21_PL1",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": {} })).unwrap(),
+			&["S21_CREATE", "S21_MA"],
+			&["S21_MA"],
+		);
+
+		let e4_jr = to_pdu_event(
+			"S21_JR",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["S21_CREATE", "S21_MA", "S21_PL1"],
+			&["S21_PL1"],
+		);
+
+		let e5_mb = to_pdu_event(
+			"S21_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["S21_CREATE", "S21_PL1", "S21_JR"],
+			&["S21_JR"],
+		);
+
+		let e6_mc = to_pdu_event(
+			"S21_MC",
+			charlie(),
+			TimelineEventType::RoomMember,
+			Some(charlie().as_str()),
+			member_content_join(),
+			&["S21_CREATE", "S21_PL1", "S21_JR"],
+			&["S21_JR"],
+		);
+
+		// Alice promotes Bob
+		let e7_power2 = to_pdu_event(
+			"S21_PL2",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { bob(): 50 } })).unwrap(),
+			&["S21_CREATE", "S21_MA", "S21_PL1"],
+			&["S21_PL1"],
+		);
+
+		// Bob promotes Charlie
+		let e8_power3 = to_pdu_event(
+			"S21_PL3",
+			bob(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { bob(): 50, charlie(): 50 } })).unwrap(),
+			&["S21_CREATE", "S21_MB", "S21_PL2"],
+			&["S21_PL2"],
+		);
+
+		// Eve joins citing current power levels
+		let e9_me1 = to_pdu_event(
+			"S21_ME1",
+			ella(),
+			TimelineEventType::RoomMember,
+			Some(ella().as_str()),
+			member_content_join(),
+			&["S21_CREATE", "S21_PL3", "S21_JR"],
+			&["S21_PL3"],
+		);
+
+		// Eve changes her name, but DODGY: cites OLD power levels (PL1)
+		let e10_me2 = to_pdu_event(
+			"S21_ME2",
+			ella(),
+			TimelineEventType::RoomMember,
+			Some(ella().as_str()),
+			member_content_join(),
+			&["S21_CREATE", "S21_PL1", "S21_JR", "S21_ME1"],
+			&["S21_ME1"],
+		);
+
+		// Zara joins citing the most recent power levels
+		let e11_mz = to_pdu_event(
+			"S21_MZ",
+			zara(),
+			TimelineEventType::RoomMember,
+			Some(zara().as_str()),
+			member_content_join(),
+			&["S21_CREATE", "S21_PL3", "S21_JR"],
+			&["S21_PL3"],
+		);
+
+		// Build the event store
+		let all_events = vec![
+			&e1_create, &e2_ma, &e3_power1, &e4_jr, &e5_mb, &e6_mc, &e7_power2, &e8_power3,
+			&e9_me1, &e10_me2, &e11_mz,
+		];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| (ev.event_id.clone(), (*ev).clone()))
+				.collect(),
+		);
+
+		// State set A: dodgy state after Eve's rename (old power levels)
+		let dodgy_state: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e5_mb, &e6_mc, &e10_me2, &e3_power1, &e4_jr]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		// State set B: sensible state after Zara joins (current power levels)
+		let sensible_state: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e5_mb, &e6_mc, &e11_mz, &e8_power3, &e4_jr]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		let state_sets = [dodgy_state, sensible_state];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		let rejected = |_| ready(false);
+
+		// Use v2.1 (room version > 11)
+		let resolved = super::resolve(
+			&RoomVersionId::V11,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		.expect("v2.1 resolution should succeed");
+
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		// The newer power levels (PL3) MUST win — old PL1 from dodgy state
+		// must not cause a state reset
+		assert_eq!(
+			resolved.get(&pl_key),
+			Some(&event_id("S21_PL3")),
+			"v2.1 must pick newer power levels PL3, not dodgy PL1; got {:?}",
+			resolved.get(&pl_key)
+		);
+
+		// Eve's ME1 (joined under PL3 epoch) should win over ME2 (dodgy, cites PL1)
+		let ella_key = (StateEventType::RoomMember, ella().as_str().into());
+		assert!(
+			resolved.contains_key(&ella_key),
+			"Ella/Eve membership must be present in resolved state"
+		);
+	}
+
+	/// Ported from Synapse
+	/// tests/state/test_v21.py::test_state_reset_start_empty_set
+	///
+	/// Tests that when another server gives us incorrect state on a fork
+	/// (citing old join rules), state resolution picks the newer join rules.
+	///
+	/// DAG:
+	///   create -> alice_join -> power -> join_rules_public -> bob_join
+	///   power -> join_rules_invite
+	///   join_rules_invite -> alice_leave
+	#[tokio::test]
+	async fn synapse_v21_state_reset_start_empty_set() {
+		use super::test_utils::*;
+
+		let e1_create = to_pdu_event::<&EventId>(
+			"S21B_CREATE",
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice() })).unwrap(),
+			&[],
+			&[],
+		);
+
+		let e2_ma1 = to_pdu_event(
+			"S21B_MA1",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&["S21B_CREATE"],
+			&["S21B_CREATE"],
+		);
+
+		// Alice makes Bob an admin
+		let e3_power = to_pdu_event(
+			"S21B_PL",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { bob(): 100 } })).unwrap(),
+			&["S21B_CREATE", "S21B_MA1"],
+			&["S21B_MA1"],
+		);
+
+		// Public join rules
+		let e4_jr1 = to_pdu_event(
+			"S21B_JR1",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["S21B_CREATE", "S21B_MA1", "S21B_PL"],
+			&["S21B_PL"],
+		);
+
+		// Bob joins
+		let e5_mb = to_pdu_event(
+			"S21B_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["S21B_CREATE", "S21B_PL", "S21B_JR1"],
+			&["S21B_JR1"],
+		);
+
+		// Alice sets join rules to invite
+		let e6_jr2 = to_pdu_event(
+			"S21B_JR2",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Invite)).unwrap(),
+			&["S21B_CREATE", "S21B_MA1", "S21B_PL"],
+			&["S21B_PL"],
+		);
+
+		// Alice leaves
+		let e7_ma2 = to_pdu_event(
+			"S21B_MA2",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_leave(),
+			&["S21B_CREATE", "S21B_PL", "S21B_MA1"],
+			&["S21B_MA1"],
+		);
+
+		let all_events = vec![&e1_create, &e2_ma1, &e3_power, &e4_jr1, &e5_mb, &e6_jr2, &e7_ma2];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| (ev.event_id.clone(), (*ev).clone()))
+				.collect(),
+		);
+
+		// Correct state: has the newer invite-only join rules
+		let correct_state: StateMap<OwnedEventId> =
+			[&e1_create, &e7_ma2, &e5_mb, &e3_power, &e6_jr2]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		// Incorrect state from another server: cites old public join rules
+		let incorrect_state: StateMap<OwnedEventId> =
+			[&e1_create, &e7_ma2, &e5_mb, &e3_power, &e4_jr1]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		let state_sets = [correct_state, incorrect_state];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		let rejected = |_| ready(false);
+
+		// Use v2.1 (room version > 11)
+		let resolved = super::resolve(
+			&RoomVersionId::V11,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		.expect("v2.1 resolution should succeed");
+
+		let jr_key = (StateEventType::RoomJoinRules, "".into());
+		// The NEWER join rules (invite-only, JR2) MUST win over the old
+		// public join rules (JR1) from the incorrect fork
+		assert_eq!(
+			resolved.get(&jr_key),
+			Some(&event_id("S21B_JR2")),
+			"v2.1 must pick newer invite-only join rules JR2; got {:?}",
+			resolved.get(&jr_key)
+		);
+	}
 }
