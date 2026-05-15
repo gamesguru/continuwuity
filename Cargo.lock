@@ -1235,6 +1235,7 @@ dependencies = [
  "sha2 0.11.0",
  "termimad",
  "tokio",
+ "tokio-util",
  "tracing",
  "url",
  "webpage",
