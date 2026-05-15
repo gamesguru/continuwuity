@@ -628,35 +628,27 @@ pub(super) async fn list_outliers(
 			.is_event_soft_failed(&event_id)
 			.await;
 
-		// If --rejected filter is active, skip non-rejected events
-		if rejected && !is_rejected && !is_soft_failed {
-			continue;
-		}
+		let status =
+			super::outlier_utils::OutlierStatus { is_stuck, is_rejected, is_soft_failed };
 
-		// Clear markers if --clear is active
-		if clear && (is_rejected || is_soft_failed) {
-			self.services
-				.rooms
-				.pdu_metadata
-				.clear_pdu_markers(&event_id);
-			cleared = cleared.saturating_add(1);
+		let action = super::outlier_utils::classify_outlier(&status, rejected, clear);
+		match action {
+			| super::outlier_utils::OutlierAction::Skip => continue,
+			| super::outlier_utils::OutlierAction::Show { should_clear } =>
+				if should_clear {
+					self.services
+						.rooms
+						.pdu_metadata
+						.clear_pdu_markers(&event_id);
+					cleared = cleared.saturating_add(1);
+				},
 		}
 
 		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
 		let sender = pdu.sender();
 		let kind = pdu.kind.to_string();
 		let ts = pdu.origin_server_ts;
-
-		let mut flags = String::new();
-		if is_stuck {
-			flags.push_str(" [STUCK]");
-		}
-		if is_rejected {
-			flags.push_str(" [REJECTED]");
-		}
-		if is_soft_failed {
-			flags.push_str(" [SOFT-FAIL]");
-		}
+		let flags = super::outlier_utils::render_flags(&status);
 
 		writeln!(
 			body,
@@ -672,7 +664,7 @@ pub(super) async fn list_outliers(
 		return Err!("No outliers found.");
 	}
 
-	let header = if rejected { "Rejected outliers" } else { "Outliers" };
+	let header = super::outlier_utils::summary_header(rejected);
 	self.write_str(&format!("{header} ({count} shown, {cleared} cleared):\n```\n{body}\n```"))
 		.await
 }

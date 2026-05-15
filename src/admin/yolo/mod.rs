@@ -1,4 +1,5 @@
 mod commands;
+pub(crate) mod outlier_utils;
 
 use clap::Subcommand;
 use conduwuit::Result;
