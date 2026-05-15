@@ -294,6 +294,15 @@ async fn handle(
 	pdus: impl Stream<Item = Pdu> + Send,
 	edus: impl Stream<Item = Edu> + Send,
 ) -> std::result::Result<ResolvedMap, TransactionError> {
+	// Process EDUs first — they are lightweight DB writes (to-device messages,
+	// receipts, typing, etc.) that must be persisted even if the server is
+	// shutting down during the heavier PDU processing phase. If we processed
+	// PDUs first, a ShuttingDown error would cause the ? to skip EDU processing
+	// entirely, silently dropping to-device messages.
+	edus.for_each_concurrent(automatic_width(), |edu| handle_edu(services, client, origin, edu))
+		.boxed()
+		.await;
+
 	// group pdus by room
 	let pdus = pdus
 		.collect()
@@ -318,11 +327,6 @@ async fn handle(
 		.try_collect()
 		.boxed()
 		.await?;
-
-	// evaluate edus after pdus, at least for now.
-	edus.for_each_concurrent(automatic_width(), |edu| handle_edu(services, client, origin, edu))
-		.boxed()
-		.await;
 
 	Ok(results)
 }
