@@ -36,7 +36,7 @@ pub use self::{
 	room_version::RoomVersion,
 };
 use crate::{
-	debug, debug_error, err, info,
+	debug, debug_error, info,
 	matrix::{Event, StateKey},
 	state_res::room_version::StateResolutionVersion,
 	trace,
@@ -179,6 +179,8 @@ where
 	let all_conflicted: HashSet<_> = all_conflicted_ids
 		.into_iter()
 		.stream()
+		// Filter out events that no longer exist in the database
+		.broad_filter_map(async |id| event_exists(id.clone()).await.then_some(id))
 		// Filter to state events only: auth chains and prev_events subgraph
 		// traversals can pull in non-state events (e.g. m.room.message) which
 		// lack a state_key. These must be excluded from state resolution since
@@ -759,15 +761,9 @@ where
 	let mut cached_create_event: Option<E> = None;
 	for event in events_to_check {
 		trace!(event_id = event.event_id().as_str(), "checking event");
-		let state_key = match event.state_key() {
-			| Some(k) => k,
-			| None => {
-				warn!(
-					"event {} failed the authentication check (no state key)",
-					event.event_id()
-				);
-				continue;
-			},
+		let Some(state_key) = event.state_key() else {
+			warn!("event {} failed the authentication check (no state key)", event.event_id());
+			continue;
 		};
 
 		let auth_types = match auth_types_for_event(
@@ -2578,23 +2574,28 @@ mod tests {
 	#[tokio::test]
 	async fn synapse_v21_state_reset_replay_conflicted_subgraph() {
 		use futures::future::ready;
-		use ruma::{EventId, OwnedRoomId};
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
 
 		use super::test_utils::*;
 
-		// V12 derives create event ID from room ID: !X:foo -> $X:foo
-		// So room_id must match the create event's name
-		let v12_room_id: OwnedRoomId = "!S21_CREATE:foo".try_into().unwrap();
+		// V12 derives create event ID from room ID: !X -> $X
+		// Must be 43 url-safe base64 chars for Ruma to parse as V4+ Room ID
+		let v12_room_id: OwnedRoomId = "!S21Create123456789012345678901234567890123"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$S21Create123456789012345678901234567890123";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
 
-		let e1_create = to_pdu_event::<&EventId>(
-			"S21_CREATE",
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
 			alice(),
 			TimelineEventType::RoomCreate,
 			Some(""),
-			to_raw_json_value(&json!({ "creator": alice() })).unwrap(),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
 			&[],
 			&[],
 		);
+		e1_create.room_id = None; // V12: create event has no room_id
 
 		let e2_ma = to_pdu_event(
 			"S21_MA",
@@ -2602,8 +2603,8 @@ mod tests {
 			TimelineEventType::RoomMember,
 			Some(alice().as_str()),
 			member_content_join(),
-			&["S21_CREATE"],
-			&["S21_CREATE"],
+			&[], // V12: no create event in auth_events
+			&[create_id_str],
 		);
 
 		let e3_power1 = to_pdu_event(
@@ -2612,7 +2613,7 @@ mod tests {
 			TimelineEventType::RoomPowerLevels,
 			Some(""),
 			to_raw_json_value(&json!({ "users": {} })).unwrap(),
-			&["S21_CREATE", "S21_MA"],
+			&["S21_MA"],
 			&["S21_MA"],
 		);
 
@@ -2622,7 +2623,7 @@ mod tests {
 			TimelineEventType::RoomJoinRules,
 			Some(""),
 			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
-			&["S21_CREATE", "S21_MA", "S21_PL1"],
+			&["S21_MA", "S21_PL1"],
 			&["S21_PL1"],
 		);
 
@@ -2632,7 +2633,7 @@ mod tests {
 			TimelineEventType::RoomMember,
 			Some(bob().as_str()),
 			member_content_join(),
-			&["S21_CREATE", "S21_PL1", "S21_JR"],
+			&["S21_PL1", "S21_JR"],
 			&["S21_JR"],
 		);
 
@@ -2642,82 +2643,78 @@ mod tests {
 			TimelineEventType::RoomMember,
 			Some(charlie().as_str()),
 			member_content_join(),
-			&["S21_CREATE", "S21_PL1", "S21_JR"],
+			&["S21_PL1", "S21_JR"],
 			&["S21_JR"],
 		);
 
-		// Alice promotes Bob
 		let e7_power2 = to_pdu_event(
 			"S21_PL2",
 			alice(),
 			TimelineEventType::RoomPowerLevels,
 			Some(""),
 			to_raw_json_value(&json!({ "users": { bob(): 50 } })).unwrap(),
-			&["S21_CREATE", "S21_MA", "S21_PL1"],
+			&["S21_MA", "S21_PL1"],
 			&["S21_PL1"],
 		);
 
-		// Bob promotes Charlie
 		let e8_power3 = to_pdu_event(
 			"S21_PL3",
 			bob(),
 			TimelineEventType::RoomPowerLevels,
 			Some(""),
 			to_raw_json_value(&json!({ "users": { bob(): 50, charlie(): 50 } })).unwrap(),
-			&["S21_CREATE", "S21_MB", "S21_PL2"],
+			&["S21_MB", "S21_PL2"],
 			&["S21_PL2"],
 		);
 
-		// Eve joins citing current power levels
 		let e9_me1 = to_pdu_event(
 			"S21_ME1",
 			ella(),
 			TimelineEventType::RoomMember,
 			Some(ella().as_str()),
 			member_content_join(),
-			&["S21_CREATE", "S21_PL3", "S21_JR"],
+			&["S21_PL3", "S21_JR"],
 			&["S21_PL3"],
 		);
 
-		// Eve changes her name, but DODGY: cites OLD power levels (PL1)
 		let e10_me2 = to_pdu_event(
 			"S21_ME2",
 			ella(),
 			TimelineEventType::RoomMember,
 			Some(ella().as_str()),
 			member_content_join(),
-			&["S21_CREATE", "S21_PL1", "S21_JR", "S21_ME1"],
+			&["S21_PL1", "S21_JR", "S21_ME1"],
 			&["S21_ME1"],
 		);
 
-		// Zara joins citing the most recent power levels
 		let e11_mz = to_pdu_event(
 			"S21_MZ",
 			zara(),
 			TimelineEventType::RoomMember,
 			Some(zara().as_str()),
 			member_content_join(),
-			&["S21_CREATE", "S21_PL3", "S21_JR"],
+			&["S21_PL3", "S21_JR"],
 			&["S21_PL3"],
 		);
 
-		// Build the event store with V12-compatible room_id
 		let all_events = vec![
 			&e1_create, &e2_ma, &e3_power1, &e4_jr, &e5_mb, &e6_mc, &e7_power2, &e8_power3,
 			&e9_me1, &e10_me2, &e11_mz,
 		];
+
 		let store = TestStore(
 			all_events
 				.iter()
 				.map(|ev| {
 					let mut ev = (*ev).clone();
-					ev.room_id = Some(v12_room_id.clone());
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
 					(ev.event_id.clone(), ev)
 				})
 				.collect(),
 		);
 
-		// State set A: dodgy state after Eve's rename (old power levels)
 		let dodgy_state: StateMap<OwnedEventId> =
 			[&e1_create, &e2_ma, &e5_mb, &e6_mc, &e10_me2, &e3_power1, &e4_jr]
 				.iter()
@@ -2726,7 +2723,6 @@ mod tests {
 				})
 				.collect();
 
-		// State set B: sensible state after Zara joins (current power levels)
 		let sensible_state: StateMap<OwnedEventId> =
 			[&e1_create, &e2_ma, &e5_mb, &e6_mc, &e11_mz, &e8_power3, &e4_jr]
 				.iter()
@@ -2748,9 +2744,9 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_| ready(false);
+		let rejected = |_: OwnedEventId| ready(false);
 
-		// Use V12 which dispatches to v2.1 state resolution
+		// Dispatch normally through V12 (no test-hack needed)
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
@@ -2762,11 +2758,7 @@ mod tests {
 		.await
 		.expect("v2.1 resolution should succeed");
 
-		eprintln!("RESOLVED STATE: {resolved:#?}");
-
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
-		// The newer power levels (PL3) MUST win — old PL1 from dodgy state
-		// must not cause a state reset
 		assert_eq!(
 			resolved.get(&pl_key),
 			Some(&event_id("S21_PL3")),
@@ -2774,7 +2766,6 @@ mod tests {
 			resolved.get(&pl_key)
 		);
 
-		// Eve's ME1 (joined under PL3 epoch) should win over ME2 (dodgy, cites PL1)
 		let ella_key = (StateEventType::RoomMember, ella().as_str().into());
 		assert!(
 			resolved.contains_key(&ella_key),
@@ -2785,9 +2776,6 @@ mod tests {
 	/// Ported from Synapse
 	/// tests/state/test_v21.py::test_state_reset_start_empty_set
 	///
-	/// Tests that when another server gives us incorrect state on a fork
-	/// (citing old join rules), state resolution picks the newer join rules.
-	///
 	/// DAG:
 	///   create -> alice_join -> power -> join_rules_public -> bob_join
 	///   power -> join_rules_invite
@@ -2795,22 +2783,26 @@ mod tests {
 	#[tokio::test]
 	async fn synapse_v21_state_reset_start_empty_set() {
 		use futures::future::ready;
-		use ruma::{EventId, OwnedRoomId};
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
 
 		use super::test_utils::*;
 
-		// V12 derives create event ID from room ID: !X:foo -> $X:foo
-		let v12_room_id: OwnedRoomId = "!S21B_CREATE:foo".try_into().unwrap();
+		let v12_room_id: OwnedRoomId = "!S21bCreate12345678901234567890123456789012"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$S21bCreate12345678901234567890123456789012";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
 
-		let e1_create = to_pdu_event::<&EventId>(
-			"S21B_CREATE",
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
 			alice(),
 			TimelineEventType::RoomCreate,
 			Some(""),
-			to_raw_json_value(&json!({ "creator": alice() })).unwrap(),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
 			&[],
 			&[],
 		);
+		e1_create.room_id = None;
 
 		let e2_ma1 = to_pdu_event(
 			"S21B_MA1",
@@ -2818,8 +2810,8 @@ mod tests {
 			TimelineEventType::RoomMember,
 			Some(alice().as_str()),
 			member_content_join(),
-			&["S21B_CREATE"],
-			&["S21B_CREATE"],
+			&[],
+			&[create_id_str],
 		);
 
 		// Alice makes Bob an admin
@@ -2829,7 +2821,7 @@ mod tests {
 			TimelineEventType::RoomPowerLevels,
 			Some(""),
 			to_raw_json_value(&json!({ "users": { bob(): 100 } })).unwrap(),
-			&["S21B_CREATE", "S21B_MA1"],
+			&["S21B_MA1"],
 			&["S21B_MA1"],
 		);
 
@@ -2840,7 +2832,7 @@ mod tests {
 			TimelineEventType::RoomJoinRules,
 			Some(""),
 			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
-			&["S21B_CREATE", "S21B_MA1", "S21B_PL"],
+			&["S21B_MA1", "S21B_PL"],
 			&["S21B_PL"],
 		);
 
@@ -2851,7 +2843,7 @@ mod tests {
 			TimelineEventType::RoomMember,
 			Some(bob().as_str()),
 			member_content_join(),
-			&["S21B_CREATE", "S21B_PL", "S21B_JR1"],
+			&["S21B_PL", "S21B_JR1"],
 			&["S21B_JR1"],
 		);
 
@@ -2862,7 +2854,7 @@ mod tests {
 			TimelineEventType::RoomJoinRules,
 			Some(""),
 			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Invite)).unwrap(),
-			&["S21B_CREATE", "S21B_MA1", "S21B_PL"],
+			&["S21B_MA1", "S21B_PL"],
 			&["S21B_PL"],
 		);
 
@@ -2873,7 +2865,7 @@ mod tests {
 			TimelineEventType::RoomMember,
 			Some(alice().as_str()),
 			member_content_leave(),
-			&["S21B_CREATE", "S21B_PL", "S21B_MA1"],
+			&["S21B_PL", "S21B_MA1"],
 			&["S21B_MA1"],
 		);
 
@@ -2883,13 +2875,14 @@ mod tests {
 				.iter()
 				.map(|ev| {
 					let mut ev = (*ev).clone();
-					ev.room_id = Some(v12_room_id.clone());
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
 					(ev.event_id.clone(), ev)
 				})
 				.collect(),
 		);
 
-		// Correct state: has the newer invite-only join rules
 		let correct_state: StateMap<OwnedEventId> =
 			[&e1_create, &e7_ma2, &e5_mb, &e3_power, &e6_jr2]
 				.iter()
@@ -2898,7 +2891,6 @@ mod tests {
 				})
 				.collect();
 
-		// Incorrect state from another server: cites old public join rules
 		let incorrect_state: StateMap<OwnedEventId> =
 			[&e1_create, &e7_ma2, &e5_mb, &e3_power, &e4_jr1]
 				.iter()
@@ -2920,9 +2912,8 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_| ready(false);
+		let rejected = |_: OwnedEventId| ready(false);
 
-		// Use V12 which dispatches to v2.1 state resolution
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
@@ -2935,8 +2926,6 @@ mod tests {
 		.expect("v2.1 resolution should succeed");
 
 		let jr_key = (StateEventType::RoomJoinRules, "".into());
-		// The NEWER join rules (invite-only, JR2) MUST win over the old
-		// public join rules (JR1) from the incorrect fork
 		assert_eq!(
 			resolved.get(&jr_key),
 			Some(&event_id("S21B_JR2")),
@@ -2948,37 +2937,33 @@ mod tests {
 	#[tokio::test]
 	async fn v12_missing_create_event_does_not_panic() {
 		use futures::future::ready;
-		use ruma::{EventId, OwnedRoomId};
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
 
 		use super::test_utils::*;
 
-		// Use a room ID that derives to a create event ID that we DO NOT put in the
-		// store.
-		let v12_room_id: OwnedRoomId = "!MISSING_CREATE:foo".try_into().unwrap();
+		let v12_room_id: OwnedRoomId = "!MissingCreate12345678901234567890123456789"
+			.try_into()
+			.unwrap();
 
-		let e1_ma = to_pdu_event::<&str>(
+		let mut e1_ma = to_pdu_event::<&str>(
 			"S21_MA",
 			alice(),
 			TimelineEventType::RoomMember,
 			Some(alice().as_str()),
 			member_content_join(),
-			&[], // Empty auth events because we don't have the create event
+			&[],
 			&[],
 		);
+		e1_ma.room_id = Some(v12_room_id.clone());
 
 		let all_events = vec![&e1_ma];
 		let store = TestStore(
 			all_events
 				.iter()
-				.map(|ev| {
-					let mut ev = (*ev).clone();
-					ev.room_id = Some(v12_room_id.clone());
-					(ev.event_id.clone(), ev)
-				})
+				.map(|ev| (ev.event_id.clone(), (*ev).clone()))
 				.collect(),
 		);
 
-		// State sets that conflict so state resolution is triggered.
 		let state_set_a: StateMap<OwnedEventId> = [(&e1_ma)]
 			.iter()
 			.map(|ev| {
@@ -2986,7 +2971,7 @@ mod tests {
 			})
 			.collect();
 
-		let state_set_b: StateMap<OwnedEventId> = HashMap::new(); // empty
+		let state_set_b: StateMap<OwnedEventId> = HashMap::new();
 
 		let state_sets = [state_set_a, state_set_b];
 		let auth_chain: Vec<_> = state_sets
@@ -3001,10 +2986,8 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_| ready(false);
+		let rejected = |_: OwnedEventId| ready(false);
 
-		// Use V12 which dispatches to v2.1 state resolution and tries to find
-		// $MISSING_CREATE:foo
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
@@ -3015,7 +2998,6 @@ mod tests {
 		)
 		.await;
 
-		// Should not panic or return Err(NotFound), should return Ok
 		assert!(resolved.is_ok());
 	}
 }
