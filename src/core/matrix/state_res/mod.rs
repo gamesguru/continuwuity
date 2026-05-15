@@ -3000,4 +3000,290 @@ mod tests {
 
 		assert!(resolved.is_ok());
 	}
+
+	/// Mirrors complement
+	/// TestMSC4297StateResolutionV2_1_includes_conflicted_subgraph
+	///
+	/// Tests that a V12 room creator can update power levels AFTER other users
+	/// have joined. The complement test creates a V12 room, sets power levels,
+	/// joins bob+charlie, then sets power levels again. The second PL update
+	/// was returning 403 because iterative_auth_check couldn't verify the
+	/// creator's authority.
+	///
+	/// This test exercises the auth chain through iterative_auth_check directly
+	/// to ensure the create event is found via the room_id→event_id derivation
+	/// and the creator retains power level authority.
+	#[tokio::test]
+	async fn v12_power_levels_update_after_joins() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		let v12_room_id: OwnedRoomId = "!V12PLAfterJoin234567890123456789012345678901"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$V12PLAfterJoin234567890123456789012345678901";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
+
+		// 1. Create event
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
+			&[],
+			&[],
+		);
+		e1_create.room_id = None; // V12: no room_id on create
+
+		// 2. Creator joins
+		let e2_ma = to_pdu_event(
+			"PLAJ_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[], // V12: no create in auth_events
+			&[create_id_str],
+		);
+
+		// 3. First power levels (creator sets PL)
+		let e3_pl1 = to_pdu_event(
+			"PLAJ_PL1",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({
+				"users": { alice().as_str(): 100 },
+				"users_default": 0
+			}))
+			.unwrap(),
+			&["PLAJ_MA"],
+			&["PLAJ_MA"],
+		);
+
+		// 4. Join rules (public)
+		let e4_jr = to_pdu_event(
+			"PLAJ_JR",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["PLAJ_MA", "PLAJ_PL1"],
+			&["PLAJ_PL1"],
+		);
+
+		// 5. Bob joins
+		let e5_mb = to_pdu_event(
+			"PLAJ_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["PLAJ_PL1", "PLAJ_JR"],
+			&["PLAJ_JR"],
+		);
+
+		// 6. Charlie joins
+		let e6_mc = to_pdu_event(
+			"PLAJ_MC",
+			charlie(),
+			TimelineEventType::RoomMember,
+			Some(charlie().as_str()),
+			member_content_join(),
+			&["PLAJ_PL1", "PLAJ_JR"],
+			&["PLAJ_JR"],
+		);
+
+		// 7. Creator updates power levels AFTER joins (this is the one that was 403ing)
+		let e7_pl2 = to_pdu_event(
+			"PLAJ_PL2",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({
+				"users": { alice().as_str(): 100, bob().as_str(): 50 },
+				"users_default": 0
+			}))
+			.unwrap(),
+			&["PLAJ_MA", "PLAJ_PL1"],
+			&["PLAJ_MC"],
+		);
+
+		let all_events = vec![&e1_create, &e2_ma, &e3_pl1, &e4_jr, &e5_mb, &e6_mc, &e7_pl2];
+
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		// State before the PL2 event: create, alice join, PL1, JR, bob, charlie
+		let state_a: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e3_pl1, &e4_jr, &e5_mb, &e6_mc]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		// State including the PL2 update
+		let state_b: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e7_pl2, &e4_jr, &e5_mb, &e6_mc]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		let state_sets = [state_a, state_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		let rejected = |_: OwnedEventId| ready(false);
+
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		.expect("V12 power levels update after joins must succeed");
+
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		assert_eq!(
+			resolved.get(&pl_key),
+			Some(&event_id("PLAJ_PL2")),
+			"V12 must accept the creator's PL update after joins; got {:?}",
+			resolved.get(&pl_key)
+		);
+	}
+
+	/// Tests that V12 iterative_auth_check correctly derives the create event
+	/// from the room ID when processing power events. This catches the
+	/// regression where the create event cache fails to find the create event
+	/// because room_id_or_hash() returns None.
+	#[tokio::test]
+	async fn v12_iterative_auth_check_finds_create_event() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		let v12_room_id: OwnedRoomId = "!V12AuthCreate2345678901234567890123456789012"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$V12AuthCreate2345678901234567890123456789012";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
+
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
+			&[],
+			&[],
+		);
+		e1_create.room_id = None;
+
+		let e2_ma = to_pdu_event(
+			"IAC_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[],
+			&[create_id_str],
+		);
+
+		// Power levels event — this is the one that needs create event lookup
+		let e3_pl = to_pdu_event(
+			"IAC_PL",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { alice().as_str(): 100 } })).unwrap(),
+			&["IAC_MA"],
+			&["IAC_MA"],
+		);
+
+		let all_events = vec![&e1_create, &e2_ma, &e3_pl];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		let state_a: StateMap<OwnedEventId> = [&e1_create, &e2_ma]
+			.iter()
+			.map(|ev| {
+				(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+			})
+			.collect();
+
+		let state_b: StateMap<OwnedEventId> = [&e1_create, &e2_ma, &e3_pl]
+			.iter()
+			.map(|ev| {
+				(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+			})
+			.collect();
+
+		let state_sets = [state_a, state_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		let rejected = |_: OwnedEventId| ready(false);
+
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		.expect("V12 iterative_auth_check must find create event via room ID derivation");
+
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		assert!(resolved.contains_key(&pl_key), "Power levels must be in resolved state");
+	}
 }
