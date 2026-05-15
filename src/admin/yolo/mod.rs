@@ -58,6 +58,15 @@ pub enum YoloCommand {
 		/// Limit the number of outliers listed.
 		#[arg(short, long)]
 		limit: Option<usize>,
+
+		/// Only show rejected outliers (identifies cascade-rejected events).
+		#[arg(short, long)]
+		rejected: bool,
+
+		/// Clear rejected/soft-fail markers for matched outliers (use with
+		/// --rejected).
+		#[arg(short, long, requires = "rejected")]
+		clear: bool,
 	},
 
 	/// View the current forward extremities (timeline tips) of a room,

@@ -564,6 +564,8 @@ pub(super) async fn list_outliers(
 	room_id: Option<OwnedRoomOrAliasId>,
 	sender: Option<OwnedUserId>,
 	limit: Option<usize>,
+	rejected: bool,
+	clear: bool,
 ) -> Result {
 	let limit = limit.unwrap_or(100);
 
@@ -577,7 +579,7 @@ pub(super) async fn list_outliers(
 				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
 				ready(sender_match)
 			})
-			.take(limit.saturating_add(1))
+			.take(limit.saturating_mul(10)) // take extra before filtering
 			.collect()
 			.await
 	} else {
@@ -589,7 +591,7 @@ pub(super) async fn list_outliers(
 				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
 				ready(sender_match)
 			})
-			.take(limit.saturating_add(1))
+			.take(limit.saturating_mul(10))
 			.collect()
 			.await
 	};
@@ -598,6 +600,7 @@ pub(super) async fn list_outliers(
 	outliers.sort_by_key(|(_, pdu)| pdu.origin_server_ts);
 
 	let mut count = 0_usize;
+	let mut cleared = 0_usize;
 	let mut body = String::new();
 	for (event_id, pdu) in outliers {
 		if count >= limit {
@@ -612,24 +615,65 @@ pub(super) async fn list_outliers(
 			.get_pdu_id(&event_id)
 			.await
 			.is_ok();
+		let is_rejected = self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_rejected(&event_id)
+			.await;
+		let is_soft_failed = self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_soft_failed(&event_id)
+			.await;
+
+		// If --rejected filter is active, skip non-rejected events
+		if rejected && !is_rejected && !is_soft_failed {
+			continue;
+		}
+
+		// Clear markers if --clear is active
+		if clear && (is_rejected || is_soft_failed) {
+			self.services
+				.rooms
+				.pdu_metadata
+				.clear_pdu_markers(&event_id);
+			cleared = cleared.saturating_add(1);
+		}
+
 		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
 		let sender = pdu.sender();
 		let kind = pdu.kind.to_string();
 		let ts = pdu.origin_server_ts;
-		let stuck_flag = if is_stuck { " [STUCK]" } else { "" };
+
+		let mut flags = String::new();
+		if is_stuck {
+			flags.push_str(" [STUCK]");
+		}
+		if is_rejected {
+			flags.push_str(" [REJECTED]");
+		}
+		if is_soft_failed {
+			flags.push_str(" [SOFT-FAIL]");
+		}
+
 		writeln!(
 			body,
-			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: \
-			 {kind}{stuck_flag}"
+			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: {kind}{flags}"
 		)?;
 		count = count.saturating_add(1);
 	}
 
 	if body.is_empty() {
+		if rejected {
+			return Err!("No rejected outliers found.");
+		}
 		return Err!("No outliers found.");
 	}
 
-	self.write_str(&format!("Outliers:\n```\n{body}\n```"))
+	let header = if rejected { "Rejected outliers" } else { "Outliers" };
+	self.write_str(&format!("{header} ({count} shown, {cleared} cleared):\n```\n{body}\n```"))
 		.await
 }
 
