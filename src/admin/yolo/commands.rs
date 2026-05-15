@@ -1302,6 +1302,8 @@ pub(super) async fn get_room_dag(
 	let mut unique_hashes = HashSet::<u64>::new();
 	let mut last_ssh: Option<u64> = None;
 	let mut max_depth = 0_u64;
+	let mut min_depth = u64::MAX;
+	let server = self.services.globals.server_name();
 	let room_version_str = self
 		.services
 		.rooms
@@ -1310,7 +1312,7 @@ pub(super) async fn get_room_dag(
 		.await
 		.map_or_else(|_| "unknown".to_owned(), |v| v.to_string());
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
-	let path = format!("/tmp/dag-{safe_room_id}-v{room_version_str}-{start}.jsonl");
+	let path = format!("/tmp/local-dag-{safe_room_id}-v{room_version_str}-{server}.jsonl");
 	let mut file = tokio::fs::File::create(&path)
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
@@ -1352,7 +1354,9 @@ pub(super) async fn get_room_dag(
 				for prev in pdu.prev_events() {
 					referenced_as_prev.insert(prev.to_owned());
 				}
-				max_depth = max_depth.max(pdu.depth.into());
+				let d: u64 = pdu.depth.into();
+				max_depth = max_depth.max(d);
+				min_depth = min_depth.min(d);
 
 				let json = serde_json::to_string(&obj)?;
 				file.write_all(json.as_bytes()).await?;
@@ -1398,7 +1402,21 @@ pub(super) async fn get_room_dag(
 		| _ => "? unknown",
 	};
 
-	let mut out = format!("Wrote {count} PDUs to {path}\n");
+	// Rename to include depth range so successive runs don't overwrite
+	let min_d = if min_depth == u64::MAX { 0 } else { min_depth };
+	let final_path = format!(
+		"/tmp/local-dag-{safe_room_id}-v{room_version_str}-{server}-d{min_d}-{max_depth}.jsonl"
+	);
+	if let Err(e) = tokio::fs::rename(&path, &final_path).await {
+		warn!("Failed to rename {path} -> {final_path}: {e}");
+	}
+	let display_path = if tokio::fs::metadata(&final_path).await.is_ok() {
+		&final_path
+	} else {
+		&path
+	};
+
+	let mut out = format!("Wrote {count} PDUs to {display_path}\n");
 	writeln!(out, "```").expect("fmt");
 	writeln!(out, "PDUs:           {count}").expect("fmt");
 	writeln!(out, "State events:   {state_events}").expect("fmt");
