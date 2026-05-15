@@ -1030,14 +1030,25 @@ pub(super) async fn rescue_room(
 		.get_room_shortstatehash(&room_id)
 		.await
 	{
-		let state_pdus = self.services.rooms.state_accessor.state_full(state_hash);
-		pin_mut!(state_pdus);
-		while let Some(((event_type, state_key), event)) = state_pdus.next().await {
-			let eid = event.event_id().to_owned();
+		// Collect into Vec FIRST to drop the zero-copy RocksDB iterator
+		// before the write/fetch phase. Holding an iterator across .await points
+		// risks SEGV if compaction invalidates the underlying memory.
+		let state_eids: Vec<_> = self
+			.services
+			.rooms
+			.state_accessor
+			.state_full(state_hash)
+			.map(|((event_type, state_key), event)| {
+				(event_type.to_string(), state_key.to_string(), event.event_id().to_owned())
+			})
+			.collect()
+			.await;
+
+		for (event_type, state_key, eid) in state_eids {
 			// Fetch the full PduEvent for depth access
 			if let Ok(full_pdu) = self.services.rooms.timeline.get_pdu(&eid).await {
 				current_state.insert(
-					(event_type.to_string(), state_key.to_string()),
+					(event_type, state_key),
 					(full_pdu.origin_server_ts, full_pdu.depth, eid),
 				);
 			}
@@ -1274,8 +1285,14 @@ pub(super) async fn get_room_dag(
 	print: bool,
 ) -> Result {
 	let room_id = self.services.rooms.alias.resolve(&room_id).await?;
-	let pdus = self.services.rooms.timeline.all_pdus(&room_id);
-	pin_mut!(pdus);
+	let pdu_ids: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.timeline
+		.all_pdus(&room_id)
+		.map(|(_, pdu)| pdu.event_id().to_owned())
+		.collect()
+		.await;
 
 	let mut i = 0_u64;
 	let mut count = 0_u64;
@@ -1301,52 +1318,54 @@ pub(super) async fn get_room_dag(
 	let mut all_event_ids = HashSet::<OwnedEventId>::new();
 	let mut referenced_as_prev = HashSet::<OwnedEventId>::new();
 
-	while let Some((_, pdu)) = pdus.next().await {
-		if i >= start {
-			let mut obj: serde_json::Map<String, JsonValue> =
-				serde_json::from_value(serde_json::to_value(&pdu)?)?;
-
-			if let Ok(ssh) = self
-				.services
-				.rooms
-				.state_accessor
-				.pdu_shortstatehash(pdu.event_id())
-				.await
-			{
-				obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
-				unique_hashes.insert(ssh);
-				last_ssh = Some(ssh);
-			} else {
-				missing_hash = missing_hash.saturating_add(1);
-			}
-
-			if pdu.state_key.is_some() {
-				state_events = state_events.saturating_add(1);
-			}
-
-			let eid = pdu.event_id().to_owned();
-			all_event_ids.insert(eid);
-			for prev in pdu.prev_events() {
-				referenced_as_prev.insert(prev.to_owned());
-			}
-			max_depth = max_depth.max(pdu.depth.into());
-
-			let json = serde_json::to_string(&obj)?;
-			file.write_all(json.as_bytes()).await?;
-			file.write_all(b"\n").await?;
-			if print {
-				self.write_str(&format!("{json}\n")).await?;
-			}
-			total_prev_events = total_prev_events
-				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
-			count = count.saturating_add(1);
-		}
-		i = i.saturating_add(1);
+	for event_id in pdu_ids {
 		if let Ok(end) = u64::try_from(end) {
 			if i > end {
 				break;
 			}
 		}
+		if i >= start {
+			if let Ok(pdu) = self.services.rooms.timeline.get_pdu(&event_id).await {
+				let mut obj: serde_json::Map<String, JsonValue> =
+					serde_json::from_value(serde_json::to_value(&pdu)?)?;
+
+				if let Ok(ssh) = self
+					.services
+					.rooms
+					.state_accessor
+					.pdu_shortstatehash(pdu.event_id())
+					.await
+				{
+					obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
+					unique_hashes.insert(ssh);
+					last_ssh = Some(ssh);
+				} else {
+					missing_hash = missing_hash.saturating_add(1);
+				}
+
+				if pdu.state_key.is_some() {
+					state_events = state_events.saturating_add(1);
+				}
+
+				let eid = pdu.event_id().to_owned();
+				all_event_ids.insert(eid);
+				for prev in pdu.prev_events() {
+					referenced_as_prev.insert(prev.to_owned());
+				}
+				max_depth = max_depth.max(pdu.depth.into());
+
+				let json = serde_json::to_string(&obj)?;
+				file.write_all(json.as_bytes()).await?;
+				file.write_all(b"\n").await?;
+				if print {
+					self.write_str(&format!("{json}\n")).await?;
+				}
+				total_prev_events = total_prev_events
+					.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
+				count = count.saturating_add(1);
+			}
+		}
+		i = i.saturating_add(1);
 	}
 
 	// Forward extremities: events not referenced as prev_events by any other event
@@ -2833,11 +2852,10 @@ pub(super) async fn import_pdus(
 				let (eid, val) = if skip_sig_verify {
 					(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
 				} else {
-					// Use the raw line JSON directly, stripping event_id for v3+
-					// rooms where it's not part of the signed content. Avoids
-					// CanonicalJsonObject round-trip which can mangle the JSON.
-					let mut raw_val: serde_json::Map<String, serde_json::Value> =
-						serde_json::from_str(&line)?;
+					// Strip event_id for v3+ rooms where it's not part of the signed content.
+					// Use CanonicalJsonObject to preserve large integers (serde_json::Value uses
+					// f64).
+					let mut raw_val = value.clone();
 					raw_val.remove("event_id");
 					let raw = serde_json::value::RawValue::from_string(serde_json::to_string(
 						&raw_val,
@@ -3971,41 +3989,46 @@ pub(super) async fn rebuild_membership_cache(&self, room_id: OwnedRoomId) -> Res
 	let mut state_invited: HashSet<OwnedUserId> = HashSet::new();
 	let mut members_updated = 0_usize;
 
-	let state_full = self
+	// Collect membership data into a Vec FIRST to drop the zero-copy
+	// RocksDB iterator before the write phase. Holding an iterator
+	// across .await points risks SEGV if compaction invalidates the
+	// underlying memory.
+	let members: Vec<(OwnedUserId, String)> = self
 		.services
 		.rooms
 		.state_accessor
-		.state_full(short_state_hash);
+		.state_full(short_state_hash)
+		.filter_map(|((event_type, state_key), pdu)| async move {
+			if event_type != StateEventType::RoomMember {
+				return None;
+			}
+			let user_id = OwnedUserId::try_from(state_key.as_str()).ok()?;
+			let content = pdu.get_content_as_value();
+			let membership = content
+				.get("membership")
+				.and_then(|v| v.as_str())
+				.unwrap_or("leave")
+				.to_owned();
+			Some((user_id, membership))
+		})
+		.collect()
+		.await;
 
-	pin_mut!(state_full);
-	while let Some(((event_type, state_key), pdu)) = state_full.next().await {
-		if event_type != StateEventType::RoomMember {
-			continue;
-		}
-		let Ok(user_id) = OwnedUserId::try_from(state_key.as_str()) else {
-			continue;
-		};
-
-		let content = pdu.get_content_as_value();
-		let membership = content
-			.get("membership")
-			.and_then(|v| v.as_str())
-			.unwrap_or("leave");
-
-		match membership {
+	for (user_id, membership) in &members {
+		match membership.as_str() {
 			| "join" => {
 				state_joined.insert(user_id.clone());
 				if !self
 					.services
 					.rooms
 					.state_cache
-					.is_joined(&user_id, &room_id)
+					.is_joined(user_id, &room_id)
 					.await
 				{
 					self.services
 						.rooms
 						.state_cache
-						.mark_as_joined_silent(&user_id, &room_id)
+						.mark_as_joined_silent(user_id, &room_id)
 						.await;
 					members_updated = members_updated.saturating_add(1);
 				}
@@ -4018,13 +4041,13 @@ pub(super) async fn rebuild_membership_cache(&self, room_id: OwnedRoomId) -> Res
 					.services
 					.rooms
 					.state_cache
-					.is_invited_or_joined(&user_id, &room_id)
+					.is_invited_or_joined(user_id, &room_id)
 					.await
 				{
 					self.services
 						.rooms
 						.state_cache
-						.mark_as_left_silent(&user_id, &room_id)
+						.mark_as_left_silent(user_id, &room_id)
 						.await;
 					members_updated = members_updated.saturating_add(1);
 				}

@@ -170,10 +170,15 @@ where
 		get_auth_chain_diff(auth_chain_sets).boxed()
 	};
 
-	let all_conflicted: HashSet<_> = auth_diff_stream
+	let all_conflicted_ids: HashSet<_> = auth_diff_stream
 		.chain(conflicting.into_values().flatten().stream())
-		.broad_filter_map(async |id| event_exists(id.clone()).await.then_some(id))
 		.chain(conflicted_state_subgraph.into_iter().stream())
+		.collect()
+		.await;
+
+	let all_conflicted: HashSet<_> = all_conflicted_ids
+		.into_iter()
+		.stream()
 		// Filter to state events only: auth chains and prev_events subgraph
 		// traversals can pull in non-state events (e.g. m.room.message) which
 		// lack a state_key. These must be excluded from state resolution since
@@ -378,7 +383,7 @@ where
 		trace!(event_id = event_id.as_str(), "fetching event for its prev events");
 		let evt = fetch_event(event_id.clone()).await;
 		if evt.is_none() {
-			err!("could not fetch event {} to calculate conflicted subgraph", event_id);
+			warn!("could not fetch event {} to calculate conflicted subgraph", event_id);
 			path.pop();
 			continue;
 		}
@@ -751,38 +756,67 @@ where
 	// force an empty state map in this case, and this resulted in power events
 	// going missing from the resolved state as they'd be discarded here.
 	let mut resolved_state = unconflicted_state;
+	let mut cached_create_event: Option<E> = None;
 	for event in events_to_check {
 		trace!(event_id = event.event_id().as_str(), "checking event");
-		let state_key = event
-			.state_key()
-			.ok_or_else(|| Error::InvalidPdu("State event had no state key".to_owned()))?;
+		let state_key = match event.state_key() {
+			| Some(k) => k,
+			| None => {
+				warn!(
+					"event {} failed the authentication check (no state key)",
+					event.event_id()
+				);
+				continue;
+			},
+		};
 
-		let auth_types = auth_types_for_event(
+		let auth_types = match auth_types_for_event(
 			event.event_type(),
 			event.sender(),
 			Some(state_key),
 			event.content(),
 			room_version,
-		)?;
+		) {
+			| Ok(types) => types,
+			| Err(e) => {
+				warn!(
+					"event {} failed the authentication check (invalid auth_types: {e})",
+					event.event_id()
+				);
+				continue;
+			},
+		};
+
 		trace!(list = ?auth_types, event_id = event.event_id().as_str(), "auth types for event");
 
 		let mut auth_state = StateMap::new();
 		if room_version.room_ids_as_hashes {
-			trace!("room version uses hashed IDs, manually fetching create event");
-			let room_id = event
-				.room_id_or_hash()
-				.ok_or_else(|| Error::InvalidPdu("Event has no room_id".into()))?;
-
-			let create_event_id_raw = room_id.as_str().replace('!', "$");
-			let create_event_id = EventId::parse(&create_event_id_raw).map_err(|e| {
-				Error::InvalidPdu(format!(
-					"Failed to parse create event ID from room ID/hash: {e}"
-				))
-			})?;
-			let create_event = fetch_event(create_event_id.into())
-				.await
-				.ok_or_else(|| Error::NotFound("Failed to find create event".into()))?;
-			auth_state.insert(create_event.event_type().with_state_key(""), create_event);
+			if *event.event_type() == TimelineEventType::RoomCreate {
+				auth_state.insert(event.event_type().with_state_key(""), event.clone());
+			} else {
+				if cached_create_event.is_none() {
+					trace!("room version uses hashed IDs, manually fetching create event");
+					let room_id_res = event.room_id_or_hash();
+					if let Some(room_id) = room_id_res {
+						let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
+						if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
+							cached_create_event = fetch_event(create_event_id.into()).await;
+						}
+					}
+				}
+				if let Some(create_event) = &cached_create_event {
+					auth_state.insert(
+						create_event.event_type().with_state_key(""),
+						create_event.clone(),
+					);
+				} else {
+					warn!(
+						"event {} failed the authentication check (missing create event)",
+						event.event_id()
+					);
+					continue;
+				}
+			}
 		}
 		for aid in event.auth_events() {
 			if let Some(ev) = auth_events.get(aid) {
@@ -2728,6 +2762,8 @@ mod tests {
 		.await
 		.expect("v2.1 resolution should succeed");
 
+		eprintln!("RESOLVED STATE: {resolved:#?}");
+
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
 		// The newer power levels (PL3) MUST win — old PL1 from dodgy state
 		// must not cause a state reset
@@ -2907,5 +2943,79 @@ mod tests {
 			"v2.1 must pick newer invite-only join rules JR2; got {:?}",
 			resolved.get(&jr_key)
 		);
+	}
+
+	#[tokio::test]
+	async fn v12_missing_create_event_does_not_panic() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		// Use a room ID that derives to a create event ID that we DO NOT put in the
+		// store.
+		let v12_room_id: OwnedRoomId = "!MISSING_CREATE:foo".try_into().unwrap();
+
+		let e1_ma = to_pdu_event::<&str>(
+			"S21_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[], // Empty auth events because we don't have the create event
+			&[],
+		);
+
+		let all_events = vec![&e1_ma];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					ev.room_id = Some(v12_room_id.clone());
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		// State sets that conflict so state resolution is triggered.
+		let state_set_a: StateMap<OwnedEventId> = [(&e1_ma)]
+			.iter()
+			.map(|ev| {
+				(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+			})
+			.collect();
+
+		let state_set_b: StateMap<OwnedEventId> = HashMap::new(); // empty
+
+		let state_sets = [state_set_a, state_set_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		let rejected = |_| ready(false);
+
+		// Use V12 which dispatches to v2.1 state resolution and tries to find
+		// $MISSING_CREATE:foo
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await;
+
+		// Should not panic or return Err(NotFound), should return Ok
+		assert!(resolved.is_ok());
 	}
 }

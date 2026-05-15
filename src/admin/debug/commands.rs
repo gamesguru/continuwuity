@@ -1427,16 +1427,22 @@ async fn promote_sync_anchor(
 
 	let mut best: Option<(u64, OwnedEventId, PduEvent, CanonicalJsonObject)> = None;
 
-	let anchor_candidates = self
+	// Collect candidate IDs first to avoid holding zero-copy RocksDB
+	// iterator across .await points (SEGV prevention)
+	let anchor_candidates: Vec<_> = self
 		.services
 		.rooms
 		.state_accessor
-		.state_full_pdus(short_state_hash);
-	futures::pin_mut!(anchor_candidates);
+		.state_full_pdus(short_state_hash)
+		.map(|pdu| {
+			let ts: u64 = pdu.origin_server_ts().0.into();
+			let eid = pdu.event_id().to_owned();
+			(ts, eid)
+		})
+		.collect()
+		.await;
 
-	while let Some(pdu) = anchor_candidates.next().await {
-		let ts: u64 = pdu.origin_server_ts().0.into();
-		let eid = pdu.event_id().to_owned();
+	for (ts, eid) in anchor_candidates {
 		if best.as_ref().is_none_or(|(best_ts, ..)| ts > *best_ts) {
 			// Check both timeline AND outlier tables — force-set imports
 			// state events into the outlier table, not timeline.
