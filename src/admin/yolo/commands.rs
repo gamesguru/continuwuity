@@ -111,10 +111,8 @@ pub(super) async fn audit_membership(
 				));
 			},
 			| Some((_, st_event)) if st_event != tl_event => {
-				divergences.push(format!(
-					"DIFF {user_id}: same membership but different event IDs — timeline: \
-					 {tl_event}, state: {st_event}"
-				));
+				divergences
+					.push(format!("DIFF {user_id}: `{tl_membership}` {tl_event} {st_event}"));
 			},
 			| None if tl_membership == "join" || tl_membership == "invite" => {
 				divergences.push(format!(
@@ -1251,9 +1249,15 @@ pub(super) async fn get_room_dag(
 	let mut unique_hashes = HashSet::<u64>::new();
 	let mut last_ssh: Option<u64> = None;
 	let mut max_depth = 0_u64;
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version_str = self
+		.services
+		.rooms
+		.state
+		.get_room_version(&room_id)
+		.await
+		.map_or_else(|_| "unknown".to_owned(), |v| v.to_string());
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
-	let path = format!("/tmp/dag-{safe_room_id}-v{room_version}-{start}.jsonl");
+	let path = format!("/tmp/dag-{safe_room_id}-v{room_version_str}-{start}.jsonl");
 	let mut file = tokio::fs::File::create(&path)
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
@@ -3911,4 +3915,141 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 		)
 		.await
 	}
+}
+
+#[admin_command]
+pub(super) async fn rebuild_membership_cache(&self, room_id: OwnedRoomId) -> Result {
+	use conduwuit::info;
+	use ruma::events::StateEventType;
+
+	let short_state_hash = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(&room_id)
+		.await?;
+
+	info!("Rebuilding membership cache from state snapshot {short_state_hash} for {room_id}");
+
+	let mut state_joined: HashSet<OwnedUserId> = HashSet::new();
+	let mut state_invited: HashSet<OwnedUserId> = HashSet::new();
+	let mut members_updated = 0_usize;
+
+	let state_full = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full(short_state_hash);
+
+	pin_mut!(state_full);
+	while let Some(((event_type, state_key), pdu)) = state_full.next().await {
+		if event_type != StateEventType::RoomMember {
+			continue;
+		}
+		let Ok(user_id) = OwnedUserId::try_from(state_key.as_str()) else {
+			continue;
+		};
+
+		let content = pdu.get_content_as_value();
+		let membership = content
+			.get("membership")
+			.and_then(|v| v.as_str())
+			.unwrap_or("leave");
+
+		match membership {
+			| "join" => {
+				state_joined.insert(user_id.clone());
+				if !self
+					.services
+					.rooms
+					.state_cache
+					.is_joined(&user_id, &room_id)
+					.await
+				{
+					self.services
+						.rooms
+						.state_cache
+						.mark_as_joined_silent(&user_id, &room_id)
+						.await;
+					members_updated = members_updated.saturating_add(1);
+				}
+			},
+			| "invite" => {
+				state_invited.insert(user_id.clone());
+			},
+			| "leave" | "ban" => {
+				if self
+					.services
+					.rooms
+					.state_cache
+					.is_invited_or_joined(&user_id, &room_id)
+					.await
+				{
+					self.services
+						.rooms
+						.state_cache
+						.mark_as_left_silent(&user_id, &room_id)
+						.await;
+					members_updated = members_updated.saturating_add(1);
+				}
+			},
+			| _ => {},
+		}
+	}
+
+	// Sweep stale joined cache entries
+	let cached_members: Vec<OwnedUserId> = self
+		.services
+		.rooms
+		.state_cache
+		.room_members(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let mut stale_removed = 0_usize;
+	for user_id in &cached_members {
+		if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
+			self.services
+				.rooms
+				.state_cache
+				.mark_as_left_silent(user_id, &room_id)
+				.await;
+			stale_removed = stale_removed.saturating_add(1);
+		}
+	}
+
+	// Sweep stale invited cache entries
+	let cached_invited: Vec<OwnedUserId> = self
+		.services
+		.rooms
+		.state_cache
+		.room_members_invited(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	for user_id in &cached_invited {
+		if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
+			self.services
+				.rooms
+				.state_cache
+				.mark_as_left_silent(user_id, &room_id)
+				.await;
+			stale_removed = stale_removed.saturating_add(1);
+		}
+	}
+
+	self.services
+		.rooms
+		.state_cache
+		.update_joined_count(&room_id)
+		.await;
+
+	let out = format!(
+		"Rebuilt membership cache for {room_id}: updated {members_updated}, removed \
+		 {stale_removed} stale entries"
+	);
+	info!("{out}");
+	self.write_str(&out).await
 }
