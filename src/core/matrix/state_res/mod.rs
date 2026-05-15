@@ -2544,9 +2544,13 @@ mod tests {
 	#[tokio::test]
 	async fn synapse_v21_state_reset_replay_conflicted_subgraph() {
 		use futures::future::ready;
-		use ruma::EventId;
+		use ruma::{EventId, OwnedRoomId};
 
 		use super::test_utils::*;
+
+		// V12 derives create event ID from room ID: !X:foo -> $X:foo
+		// So room_id must match the create event's name
+		let v12_room_id: OwnedRoomId = "!S21_CREATE:foo".try_into().unwrap();
 
 		let e1_create = to_pdu_event::<&EventId>(
 			"S21_CREATE",
@@ -2663,7 +2667,7 @@ mod tests {
 			&["S21_PL3"],
 		);
 
-		// Build the event store
+		// Build the event store with V12-compatible room_id
 		let all_events = vec![
 			&e1_create, &e2_ma, &e3_power1, &e4_jr, &e5_mb, &e6_mc, &e7_power2, &e8_power3,
 			&e9_me1, &e10_me2, &e11_mz,
@@ -2671,7 +2675,11 @@ mod tests {
 		let store = TestStore(
 			all_events
 				.iter()
-				.map(|ev| (ev.event_id.clone(), (*ev).clone()))
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					ev.room_id = Some(v12_room_id.clone());
+					(ev.event_id.clone(), ev)
+				})
 				.collect(),
 		);
 
@@ -2698,7 +2706,7 @@ mod tests {
 			.iter()
 			.map(|map| {
 				store
-					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
 					.unwrap()
 			})
 			.collect();
@@ -2708,7 +2716,7 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_| ready(false);
 
-		// Use v2.1 (room version >= 12, dispatched via wildcard _ match)
+		// Use V12 which dispatches to v2.1 state resolution
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
@@ -2751,9 +2759,12 @@ mod tests {
 	#[tokio::test]
 	async fn synapse_v21_state_reset_start_empty_set() {
 		use futures::future::ready;
-		use ruma::EventId;
+		use ruma::{EventId, OwnedRoomId};
 
 		use super::test_utils::*;
+
+		// V12 derives create event ID from room ID: !X:foo -> $X:foo
+		let v12_room_id: OwnedRoomId = "!S21B_CREATE:foo".try_into().unwrap();
 
 		let e1_create = to_pdu_event::<&EventId>(
 			"S21B_CREATE",
@@ -2834,7 +2845,11 @@ mod tests {
 		let store = TestStore(
 			all_events
 				.iter()
-				.map(|ev| (ev.event_id.clone(), (*ev).clone()))
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					ev.room_id = Some(v12_room_id.clone());
+					(ev.event_id.clone(), ev)
+				})
 				.collect(),
 		);
 
@@ -2861,7 +2876,7 @@ mod tests {
 			.iter()
 			.map(|map| {
 				store
-					.auth_event_ids(room_id(), map.values().cloned().collect())
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
 					.unwrap()
 			})
 			.collect();
@@ -2871,7 +2886,7 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_| ready(false);
 
-		// Use v2.1 (room version >= 12, dispatched via wildcard _ match)
+		// Use V12 which dispatches to v2.1 state resolution
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
