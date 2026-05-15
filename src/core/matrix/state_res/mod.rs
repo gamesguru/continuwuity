@@ -3056,7 +3056,7 @@ mod tests {
 			TimelineEventType::RoomPowerLevels,
 			Some(""),
 			to_raw_json_value(&json!({
-				"users": { alice().as_str(): 100 },
+				"users": {},
 				"users_default": 0
 			}))
 			.unwrap(),
@@ -3104,7 +3104,7 @@ mod tests {
 			TimelineEventType::RoomPowerLevels,
 			Some(""),
 			to_raw_json_value(&json!({
-				"users": { alice().as_str(): 100, bob().as_str(): 50 },
+				"users": { bob().as_str(): 50 },
 				"users_default": 0
 			}))
 			.unwrap(),
