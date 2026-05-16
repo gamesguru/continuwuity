@@ -91,8 +91,13 @@ impl Data {
 			.ignore_err()
 			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
 				| Ok((dest, event)) => Some((key.to_vec(), event, dest)),
-				| Err(e) => {
-					conduwuit::warn!("Invalid servercurrentevent in db, ignoring: {e}");
+				| Err(_e) => {
+					// Delete the corrupted key so it doesn't spam on every scan
+					self.servercurrentevent_data.remove(key);
+					conduwuit::info!(
+						"Removed corrupted/stale servercurrentevent key ({} bytes)",
+						key.len()
+					);
 					None
 				},
 			})
