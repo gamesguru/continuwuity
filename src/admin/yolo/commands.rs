@@ -1331,6 +1331,12 @@ pub(super) async fn get_room_dag(
 				let mut obj: serde_json::Map<String, JsonValue> =
 					serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
 
+				// Inject event_id into the raw JSON (required for v3+ rooms where it's missing)
+				obj.insert(
+					"event_id".to_owned(),
+					JsonValue::String(event_id.as_str().to_owned()),
+				);
+
 				let pdu_result = self.services.rooms.timeline.get_pdu(&event_id).await;
 				if let Ok(pdu) = &pdu_result {
 					if let Ok(ssh) = self
