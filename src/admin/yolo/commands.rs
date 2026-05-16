@@ -405,13 +405,25 @@ pub(super) async fn audit_membership(
 				let mut remote_members: HashMap<String, String> = HashMap::new();
 
 				for pdu_raw in &response.pdus {
-					let Ok((event_id, value)) = self
+					let (event_id, value) = match self
 						.services
 						.server_keys
 						.validate_and_add_event_id(pdu_raw, &room_version)
 						.await
-					else {
-						continue;
+					{
+						| Ok(r) => r,
+						| Err(e) => {
+							if let Ok((eid, val)) =
+								conduwuit::matrix::event::gen_event_id_canonical_json(
+									pdu_raw,
+									&room_version,
+								) {
+								warn!("audit_membership: PDU {eid} failed sig verify, storing as rejected outlier: {e}");
+								self.services.rooms.outlier.add_pdu_outlier(&eid, &val, Some(&room_id));
+								self.services.rooms.pdu_metadata.mark_event_soft_failed(&eid);
+							}
+							continue;
+						},
 					};
 
 					let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))
@@ -1590,13 +1602,25 @@ pub(super) async fn get_remote_dag(
 		queue.clear();
 
 		for raw_pdu in &response.pdus {
-			let Ok((event_id, value)) = self
+			let (event_id, value) = match self
 				.services
 				.server_keys
 				.validate_and_add_event_id(raw_pdu, &room_version)
 				.await
-			else {
-				continue;
+			{
+				| Ok(r) => r,
+				| Err(e) => {
+					if let Ok((eid, val)) =
+						conduwuit::matrix::event::gen_event_id_canonical_json(
+							raw_pdu,
+							&room_version,
+						) {
+						warn!("get_remote_dag: PDU {eid} failed sig verify, storing as rejected outlier: {e}");
+						self.services.rooms.outlier.add_pdu_outlier(&eid, &val, Some(&room_id));
+						self.services.rooms.pdu_metadata.mark_event_soft_failed(&eid);
+					}
+					continue;
+				},
 			};
 
 			if seen.contains(&event_id) {
@@ -2117,9 +2141,34 @@ pub(super) async fn compare_room_state(
 			{
 				| Ok(r) => r,
 				| Err(e) => {
-					warn!("Skipping PDU with bad signature: {e}");
-					skipped = skipped.saturating_add(1);
-					continue;
+					// Persist as rejected outlier so the event is available for
+					// auth chain lookups and state resolution context
+					match conduwuit::matrix::event::gen_event_id_canonical_json(
+						pdu_raw,
+						&room_version,
+					) {
+						| Ok((eid, val)) => {
+							warn!(
+								"PDU {eid} failed signature verification, storing as \
+								 rejected outlier: {e}"
+							);
+							self.services
+								.rooms
+								.outlier
+								.add_pdu_outlier(&eid, &val, Some(&room_id));
+							self.services
+								.rooms
+								.pdu_metadata
+								.mark_event_soft_failed(&eid);
+							skipped = skipped.saturating_add(1);
+							continue;
+						},
+						| Err(e2) => {
+							warn!("Skipping PDU, canonicalization failed: {e2}");
+							skipped = skipped.saturating_add(1);
+							continue;
+						},
+					}
 				},
 			}
 		};
@@ -2409,16 +2458,28 @@ pub(super) async fn compare_room_state(
 			let mut cmp_joined = 0_usize;
 			let mut cmp_invited = 0_usize;
 			for pdu_raw in &response.pdus {
-				let Ok((event_id, value)) = (if skip_sig_verify {
+				let (event_id, value) = match (if skip_sig_verify {
 					conduwuit::matrix::event::gen_event_id_canonical_json(pdu_raw, &room_version)
 				} else {
 					self.services
 						.server_keys
 						.validate_and_add_event_id(pdu_raw, &room_version)
 						.await
-				}) else {
-					verify_errors = verify_errors.saturating_add(1);
-					continue;
+				}) {
+					| Ok(r) => r,
+					| Err(e) => {
+						if let Ok((eid, val)) =
+							conduwuit::matrix::event::gen_event_id_canonical_json(
+								pdu_raw,
+								&room_version,
+							) {
+							warn!("compare_room_state: PDU {eid} failed verification, storing as rejected outlier: {e}");
+							self.services.rooms.outlier.add_pdu_outlier(&eid, &val, Some(&room_id));
+							self.services.rooms.pdu_metadata.mark_event_soft_failed(&eid);
+						}
+						verify_errors = verify_errors.saturating_add(1);
+						continue;
+					},
 				};
 				let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))
 				else {
