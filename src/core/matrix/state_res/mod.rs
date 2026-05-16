@@ -2957,6 +2957,229 @@ mod tests {
 		);
 	}
 
+	/// Ported from Complement
+	/// TestMSC4297StateResolutionV2_1_includes_conflicted_subgraph
+	///
+	/// DAG:
+	///   create -> alice_join -> power1 -> join_rules -> bob_join
+	///                                                -> charlie_join
+	///                                 -> power2(bob:50)
+	///                                 -> power3(bob:50,charlie:50) ->
+	/// zara_join   power1 -> ella_join  (dodgy: cites old PL in auth)
+	///
+	/// Two state forks: dodgy (with ella, PL1) vs correct (with zara, PL3).
+	/// Resolution must pick PL3 (bob:50, charlie:50), not regress to PL1.
+	#[tokio::test]
+	async fn synapse_v21_conflicted_subgraph_preserves_power_levels() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		let v12_room_id: OwnedRoomId = "!S21cCreate12345678901234567890123456789012"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$S21cCreate12345678901234567890123456789012";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
+
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
+			&[],
+			&[],
+		);
+		e1_create.room_id = None;
+
+		// Alice joins
+		let e2_ma = to_pdu_event(
+			"S21C_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[],
+			&[create_id_str],
+		);
+
+		// Initial power levels (alice is creator, implicit PL 100 in V12)
+		let e3_power1 = to_pdu_event(
+			"S21C_PL1",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": {} })).unwrap(),
+			&["S21C_MA"],
+			&["S21C_MA"],
+		);
+
+		// Join rules = public
+		let e4_jr = to_pdu_event(
+			"S21C_JR",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["S21C_MA", "S21C_PL1"],
+			&["S21C_PL1"],
+		);
+
+		// Bob joins
+		let e5_mb = to_pdu_event(
+			"S21C_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["S21C_PL1", "S21C_JR"],
+			&["S21C_JR"],
+		);
+
+		// Charlie joins
+		let e6_mc = to_pdu_event(
+			"S21C_MC",
+			charlie(),
+			TimelineEventType::RoomMember,
+			Some(charlie().as_str()),
+			member_content_join(),
+			&["S21C_PL1", "S21C_JR"],
+			&["S21C_MB"],
+		);
+
+		// Alice promotes Bob to PL 50
+		let e7_power2 = to_pdu_event(
+			"S21C_PL2",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { bob(): 50 } })).unwrap(),
+			&["S21C_MA", "S21C_PL1"],
+			&["S21C_MC"],
+		);
+
+		// Bob promotes Charlie to PL 50
+		let e8_power3 = to_pdu_event(
+			"S21C_PL3",
+			bob(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { bob(): 50, charlie(): 50 } })).unwrap(),
+			&["S21C_MB", "S21C_PL2"],
+			&["S21C_PL2"],
+		);
+
+		// Zara joins citing PL3 (correct)
+		let e9_mz = to_pdu_event(
+			"S21C_MZ",
+			zara(),
+			TimelineEventType::RoomMember,
+			Some(zara().as_str()),
+			member_content_join(),
+			&["S21C_PL3", "S21C_JR"],
+			&["S21C_PL3"],
+		);
+
+		// Ella joins citing PL1 (DODGY — old power levels)
+		let e10_me = to_pdu_event(
+			"S21C_ME",
+			ella(),
+			TimelineEventType::RoomMember,
+			Some(ella().as_str()),
+			member_content_join(),
+			&["S21C_PL1", "S21C_JR"],
+			&["S21C_MZ"],
+		);
+
+		let all_events = vec![
+			&e1_create, &e2_ma, &e3_power1, &e4_jr, &e5_mb, &e6_mc, &e7_power2, &e8_power3,
+			&e9_mz, &e10_me,
+		];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		// Dodgy state fork: has ella with old PL1
+		let dodgy_state: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e5_mb, &e6_mc, &e10_me, &e3_power1, &e4_jr]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		// Correct state fork: has zara with PL3
+		let correct_state: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e5_mb, &e6_mc, &e9_mz, &e8_power3, &e4_jr]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		let state_sets = [dodgy_state, correct_state];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		let rejected = |_: OwnedEventId| ready(false);
+
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		.expect("v2.1 resolution should succeed");
+
+		// PL3 must win over PL1 — resolution must pick the latest power levels
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		assert_eq!(
+			resolved.get(&pl_key),
+			Some(&event_id("S21C_PL3")),
+			"v2.1 must pick PL3 (bob:50, charlie:50) over PL1 (empty users); got {:?}",
+			resolved.get(&pl_key)
+		);
+
+		// Both zara and ella must be present in resolved state
+		let zara_key = (StateEventType::RoomMember, zara().to_string().into());
+		assert_eq!(
+			resolved.get(&zara_key),
+			Some(&event_id("S21C_MZ")),
+			"zara must be in resolved state; got {:?}",
+			resolved.get(&zara_key)
+		);
+
+		let ella_key = (StateEventType::RoomMember, ella().to_string().into());
+		assert_eq!(
+			resolved.get(&ella_key),
+			Some(&event_id("S21C_ME")),
+			"ella must be in resolved state; got {:?}",
+			resolved.get(&ella_key)
+		);
+	}
+
 	#[tokio::test]
 	async fn v12_missing_create_event_does_not_panic() {
 		use futures::future::ready;
