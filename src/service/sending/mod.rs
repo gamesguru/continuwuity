@@ -209,7 +209,9 @@ impl Service {
 
 		let num_servers = self.send_pdu_servers(servers, pdu_id).await?;
 
-		if num_servers > 0 {
+		if num_servers > 100 {
+			warn!("Broadcasting PDU in {room_id} to {num_servers} servers");
+		} else if num_servers > 0 {
 			info!("Broadcasting PDU in {room_id} to {num_servers} servers");
 		}
 
@@ -277,6 +279,11 @@ impl Service {
 			})
 			.collect::<Vec<_>>()
 			.await;
+
+		let num_servers = requests.len();
+		if num_servers > 100 {
+			warn!("Fanning out EDU to {num_servers} servers (edu_size={})", serialized.len());
+		}
 
 		let _cork = self.db.db.cork();
 		let keys = self.db.queue_requests(requests.iter().map(|(o, e)| (e, o)));
