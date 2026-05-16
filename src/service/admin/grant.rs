@@ -1,3 +1,4 @@
+#![allow(clippy::large_futures)]
 use std::collections::BTreeMap;
 
 use conduwuit::{

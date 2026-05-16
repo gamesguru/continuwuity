@@ -1,3 +1,5 @@
+#![allow(clippy::large_futures)]
+
 pub mod console;
 mod create;
 mod execute;

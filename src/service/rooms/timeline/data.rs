@@ -18,6 +18,7 @@ pub(super) struct Data {
 	pduid_pdu: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
+	#[allow(dead_code)]
 	eventid_prevstateevents: Arc<Map>,
 	pub(super) eventid_statejumppointers: Arc<Map>,
 	pub(super) db: Arc<Database>,
@@ -240,7 +241,7 @@ impl Data {
 		}
 	}
 
-	pub async fn calculate_and_persist_jump_pointers(&self, pdu: &PduEvent) -> Result<()> {
+	pub(super) async fn calculate_and_persist_jump_pointers(&self, pdu: &PduEvent) -> Result<()> {
 		// Grab the first prev_state_event as our tree parent.
 		// If there are multiple, picking one still enables a sublinear walk towards the
 		// root.
@@ -248,7 +249,7 @@ impl Data {
 			return Ok(());
 		};
 
-		let mut jump_pointers: Vec<ruma::OwnedEventId> = vec![parent.clone().into()];
+		let mut jump_pointers: Vec<ruma::OwnedEventId> = vec![parent.into()];
 		let mut k = 0;
 
 		while let Some(ancestor) = jump_pointers.get(k) {
@@ -261,7 +262,7 @@ impl Data {
 			} else {
 				break;
 			}
-			k += 1;
+			k = k.saturating_add(1);
 		}
 
 		self.eventid_statejumppointers.insert(
@@ -271,7 +272,10 @@ impl Data {
 		Ok(())
 	}
 
-	pub async fn get_jump_pointers(&self, event_id: &EventId) -> Result<Vec<ruma::OwnedEventId>> {
+	pub(super) async fn get_jump_pointers(
+		&self,
+		event_id: &EventId,
+	) -> Result<Vec<ruma::OwnedEventId>> {
 		self.eventid_statejumppointers
 			.get(event_id.as_bytes())
 			.await
@@ -280,7 +284,8 @@ impl Data {
 
 	/// Finds the Lowest Common Ancestor (LCA) of two state events in O(log N)
 	/// time using pre-calculated binary-lifted jump pointers.
-	pub async fn find_lca(
+	#[allow(dead_code)]
+	pub(super) async fn find_lca(
 		&self,
 		mut a: ruma::OwnedEventId,
 		mut b: ruma::OwnedEventId,

@@ -378,6 +378,7 @@ fn create_dummy_leave_event(
 		// The following keys are dropped on conversion
 		room_id: Some(room_id.to_owned()),
 		prev_events: vec![],
+		prev_state_events: None,
 		depth: uint!(1),
 		auth_events: vec![],
 		redacts: None,
