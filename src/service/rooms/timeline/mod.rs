@@ -528,18 +528,21 @@ impl Service {
 		}
 
 		let mut state_rebuilt = 0_usize;
+		let mut walk_ssh: Option<u64> = None;
 		for event_id in &sorted {
 			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
 
 			match self.services.state.append_to_state(pdu, room_id).await {
-				| Ok(_) => {
-					// We intentionally DO NOT call set_room_state here.
-					// Mutating the live room state pointer 78,000 times in a
-					// tight loop while /sync iterators are reading it
-					// causes zero-copy memory corruption (SEGV).
-					// append_to_state already saves the pdu_shortstatehash
-					// mapping, which is all we need for historical
-					// visibility.
+				| Ok(new_ssh) => {
+					// Only write the room state pointer when the SSH actually
+					// changes (i.e. this was a state event). Non-state events
+					// return the same SSH they read, so writing is redundant.
+					if walk_ssh != Some(new_ssh) {
+						self.services
+							.state
+							.set_room_state(room_id, new_ssh, &state_lock);
+						walk_ssh = Some(new_ssh);
+					}
 				},
 				| Err(e) => {
 					warn!(
@@ -560,6 +563,40 @@ impl Service {
 			}
 		}
 
+		// Post-walk invariant check: verify SSH diversity.
+		// If there were state events but the SSH never changed, the walk
+		// failed to advance state properly (regression guard).
+		let state_event_count = sorted
+			.iter()
+			.filter(|eid| {
+				entries
+					.get(*eid)
+					.is_some_and(|(_, pdu, _)| pdu.state_key.is_some())
+			})
+			.count();
+
+		if state_event_count > 1
+			&& walk_ssh
+				== self
+					.services
+					.state
+					.get_room_shortstatehash(room_id)
+					.await
+					.ok()
+		{
+			// walk_ssh never diverged from the foundation — every state
+			// event produced the same SSH it started with. This should be
+			// impossible unless append_to_state is broken.
+			warn!(
+				"reorder_timeline: INVARIANT VIOLATION — {state_event_count} state events but \
+				 SSH never advanced from foundation. Per-event state snapshots may be incorrect."
+			);
+		} else {
+			info!(
+				"reorder_timeline: walk complete — {state_rebuilt} events, {state_event_count} \
+				 state events processed"
+			);
+		}
 		// Restore the room's shortstatehash to what it was before the walk.
 		// The sequential rebuild gives each event a pdu_shortstatehash for
 		// visibility, but the room's current state should reflect the

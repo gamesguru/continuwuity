@@ -60,8 +60,9 @@ pub enum YoloCommand {
 		#[arg(short, long)]
 		limit: Option<usize>,
 
-		/// Only show rejected outliers (identifies cascade-rejected events).
-		#[arg(short, long)]
+		/// Only show rejected/soft-failed outliers (identifies
+		/// cascade-poisoned events).
+		#[arg(short, long, alias = "softfailed")]
 		rejected: bool,
 
 		/// Clear rejected/soft-fail markers for matched outliers (use with
