@@ -418,9 +418,19 @@ pub(super) async fn audit_membership(
 									pdu_raw,
 									&room_version,
 								) {
-								warn!("audit_membership: PDU {eid} failed sig verify, storing as rejected outlier: {e}");
-								self.services.rooms.outlier.add_pdu_outlier(&eid, &val, Some(&room_id));
-								self.services.rooms.pdu_metadata.mark_event_soft_failed(&eid);
+								warn!(
+									"audit_membership: PDU {eid} failed sig verify, storing as \
+									 rejected outlier: {e}"
+								);
+								self.services.rooms.outlier.add_pdu_outlier(
+									&eid,
+									&val,
+									Some(&room_id),
+								);
+								self.services
+									.rooms
+									.pdu_metadata
+									.mark_event_soft_failed(&eid);
 							}
 							continue;
 						},
@@ -1610,14 +1620,22 @@ pub(super) async fn get_remote_dag(
 			{
 				| Ok(r) => r,
 				| Err(e) => {
-					if let Ok((eid, val)) =
-						conduwuit::matrix::event::gen_event_id_canonical_json(
-							raw_pdu,
-							&room_version,
-						) {
-						warn!("get_remote_dag: PDU {eid} failed sig verify, storing as rejected outlier: {e}");
-						self.services.rooms.outlier.add_pdu_outlier(&eid, &val, Some(&room_id));
-						self.services.rooms.pdu_metadata.mark_event_soft_failed(&eid);
+					if let Ok((eid, val)) = conduwuit::matrix::event::gen_event_id_canonical_json(
+						raw_pdu,
+						&room_version,
+					) {
+						warn!(
+							"get_remote_dag: PDU {eid} failed sig verify, storing as rejected \
+							 outlier: {e}"
+						);
+						self.services
+							.rooms
+							.outlier
+							.add_pdu_outlier(&eid, &val, Some(&room_id));
+						self.services
+							.rooms
+							.pdu_metadata
+							.mark_event_soft_failed(&eid);
 					}
 					continue;
 				},
@@ -2149,13 +2167,14 @@ pub(super) async fn compare_room_state(
 					) {
 						| Ok((eid, val)) => {
 							warn!(
-								"PDU {eid} failed signature verification, storing as \
-								 rejected outlier: {e}"
+								"PDU {eid} failed signature verification, storing as rejected \
+								 outlier: {e}"
 							);
-							self.services
-								.rooms
-								.outlier
-								.add_pdu_outlier(&eid, &val, Some(&room_id));
+							self.services.rooms.outlier.add_pdu_outlier(
+								&eid,
+								&val,
+								Some(&room_id),
+							);
 							self.services
 								.rooms
 								.pdu_metadata
@@ -2473,9 +2492,19 @@ pub(super) async fn compare_room_state(
 								pdu_raw,
 								&room_version,
 							) {
-							warn!("compare_room_state: PDU {eid} failed verification, storing as rejected outlier: {e}");
-							self.services.rooms.outlier.add_pdu_outlier(&eid, &val, Some(&room_id));
-							self.services.rooms.pdu_metadata.mark_event_soft_failed(&eid);
+							warn!(
+								"compare_room_state: PDU {eid} failed verification, storing as \
+								 rejected outlier: {e}"
+							);
+							self.services.rooms.outlier.add_pdu_outlier(
+								&eid,
+								&val,
+								Some(&room_id),
+							);
+							self.services
+								.rooms
+								.pdu_metadata
+								.mark_event_soft_failed(&eid);
 						}
 						verify_errors = verify_errors.saturating_add(1);
 						continue;
