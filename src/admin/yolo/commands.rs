@@ -2866,14 +2866,18 @@ pub(super) async fn import_pdus(
 		total = total.saturating_add(1);
 
 		let result: Result = async {
-			let mut value: CanonicalJsonObject = serde_json::from_str(&line)?;
+			let mut raw_map: serde_json::Map<String, serde_json::Value> =
+				serde_json::from_str(&line)?;
 
 			// Strip diagnostic/internal fields that were injected during export.
-			// If these remain, they will corrupt the canonical JSON hash and fail
-			// signature verification, and we don't want to store them back into the DB.
-			value.remove("__shortstatehash");
-			value.remove("prev_state_events");
-			value.remove("state_jump_pointers");
+			raw_map.remove("__shortstatehash");
+			raw_map.remove("prev_state_events");
+			raw_map.remove("state_jump_pointers");
+
+			// Create the CanonicalJsonObject needed for the rest of the pipeline
+			let value: CanonicalJsonObject =
+				serde_json::from_value(serde_json::Value::Object(raw_map.clone()))
+					.map_err(|e| err!("Failed to convert to CanonicalJsonObject: {e}"))?;
 
 			if skip_auth {
 				let eid = extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?;
@@ -2888,13 +2892,12 @@ pub(super) async fn import_pdus(
 				let (eid, val) = if skip_sig_verify {
 					(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
 				} else {
-					// Strip event_id for v3+ rooms where it's not part of the signed content.
-					// Use CanonicalJsonObject to preserve large integers (serde_json::Value uses
-					// f64).
-					let mut raw_val = value.clone();
-					raw_val.remove("event_id");
+					// Use the raw line JSON directly (after stripping diagnostics),
+					// stripping event_id for v3+ rooms where it's not part of the signed content.
+					// Avoids CanonicalJsonObject round-trip which can mangle the JSON.
+					raw_map.remove("event_id");
 					let raw = serde_json::value::RawValue::from_string(serde_json::to_string(
-						&raw_val,
+						&raw_map,
 					)?)
 					.map_err(|e| err!("raw value: {e}"))?;
 
