@@ -2855,7 +2855,14 @@ pub(super) async fn import_pdus(
 		total = total.saturating_add(1);
 
 		let result: Result = async {
-			let value: CanonicalJsonObject = serde_json::from_str(&line)?;
+			let mut value: CanonicalJsonObject = serde_json::from_str(&line)?;
+
+			// Strip diagnostic/internal fields that were injected during export.
+			// If these remain, they will corrupt the canonical JSON hash and fail
+			// signature verification, and we don't want to store them back into the DB.
+			value.remove("__shortstatehash");
+			value.remove("prev_state_events");
+			value.remove("state_jump_pointers");
 
 			if skip_auth {
 				let eid = extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?;
