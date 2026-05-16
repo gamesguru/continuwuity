@@ -130,13 +130,6 @@ impl RoomVersion {
 		state_res: StateResolutionVersion::V2,
 		..Self::V1
 	};
-	/// V2.1 state resolution (MSC4297) without room_ids_as_hashes.
-	/// Used in tests where fixtures use traditional room IDs.
-	#[cfg(test)]
-	pub const V2_1_TEST: Self = Self {
-		state_res: StateResolutionVersion::V2_1,
-		..Self::V11
-	};
 	pub const V3: Self = Self {
 		event_format: EventFormatVersion::V2,
 		extra_redaction_checks: false,
