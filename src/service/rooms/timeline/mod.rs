@@ -559,7 +559,7 @@ impl Service {
 			}
 
 			state_rebuilt = state_rebuilt.saturating_add(1);
-			if state_rebuilt.is_multiple_of(100) {
+			if state_rebuilt.is_multiple_of(1000) {
 				info!(
 					"reorder_timeline: rebuilt shortstatehash for {state_rebuilt}/{count} \
 					 events..."
