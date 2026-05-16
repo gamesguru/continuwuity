@@ -1327,36 +1327,39 @@ pub(super) async fn get_room_dag(
 			}
 		}
 		if i >= start {
-			if let Ok(pdu) = self.services.rooms.timeline.get_pdu(&event_id).await {
+			if let Ok(pdu_json) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
 				let mut obj: serde_json::Map<String, JsonValue> =
-					serde_json::from_value(serde_json::to_value(&pdu)?)?;
+					serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
 
-				if let Ok(ssh) = self
-					.services
-					.rooms
-					.state_accessor
-					.pdu_shortstatehash(pdu.event_id())
-					.await
-				{
-					obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
-					unique_hashes.insert(ssh);
-					last_ssh = Some(ssh);
-				} else {
-					missing_hash = missing_hash.saturating_add(1);
-				}
+				let pdu_result = self.services.rooms.timeline.get_pdu(&event_id).await;
+				if let Ok(pdu) = &pdu_result {
+					if let Ok(ssh) = self
+						.services
+						.rooms
+						.state_accessor
+						.pdu_shortstatehash(pdu.event_id())
+						.await
+					{
+						obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
+						unique_hashes.insert(ssh);
+						last_ssh = Some(ssh);
+					} else {
+						missing_hash = missing_hash.saturating_add(1);
+					}
 
-				if pdu.state_key.is_some() {
-					state_events = state_events.saturating_add(1);
-				}
+					if pdu.state_key.is_some() {
+						state_events = state_events.saturating_add(1);
+					}
 
-				let eid = pdu.event_id().to_owned();
-				all_event_ids.insert(eid);
-				for prev in pdu.prev_events() {
-					referenced_as_prev.insert(prev.to_owned());
+					let eid = pdu.event_id().to_owned();
+					all_event_ids.insert(eid);
+					for prev in pdu.prev_events() {
+						referenced_as_prev.insert(prev.to_owned());
+					}
+					let d: u64 = pdu.depth.into();
+					max_depth = max_depth.max(d);
+					min_depth = min_depth.min(d);
 				}
-				let d: u64 = pdu.depth.into();
-				max_depth = max_depth.max(d);
-				min_depth = min_depth.min(d);
 
 				let json = serde_json::to_string(&obj)?;
 				file.write_all(json.as_bytes()).await?;
@@ -1364,8 +1367,10 @@ pub(super) async fn get_room_dag(
 				if print {
 					self.write_str(&format!("{json}\n")).await?;
 				}
-				total_prev_events = total_prev_events
-					.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
+				if let Ok(pdu) = &pdu_result {
+					total_prev_events = total_prev_events
+						.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
+				}
 				count = count.saturating_add(1);
 			}
 		}
