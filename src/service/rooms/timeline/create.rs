@@ -201,6 +201,16 @@ pub async fn create_event(
 		),
 		kind: event_type,
 		content,
+		prev_state_events: if state_key.is_some() {
+			Some(
+				auth_events
+					.values()
+					.map(|pdu| pdu.event_id.clone())
+					.collect(),
+			)
+		} else {
+			None
+		},
 		state_key,
 		prev_events,
 		depth,
