@@ -41,6 +41,12 @@ pub enum RawCommand {
 		key: String,
 	},
 
+	/// Clear all entries from a database map
+	RawClear {
+		/// Map name
+		map: String,
+	},
+
 	/// Raw database keys iteration
 	RawKeys {
 		/// Map name
@@ -416,6 +422,24 @@ pub(super) async fn raw_del(&self, map: String, key: String) -> Result {
 
 	let query_time = timer.elapsed();
 	self.write_str(&format!("Operation completed in {query_time:?}"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn raw_clear(&self, map: String) -> Result {
+	let map = self.services.db.get(&map)?;
+	let timer = Instant::now();
+	let count = map
+		.raw_keys()
+		.ignore_err()
+		.ready_fold(0_usize, |count, key| {
+			map.remove(key);
+			count.saturating_add(1)
+		})
+		.await;
+
+	let query_time = timer.elapsed();
+	self.write_str(&format!("Cleared {count} entries in {query_time:?}"))
 		.await
 }
 
