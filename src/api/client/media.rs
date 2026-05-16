@@ -123,7 +123,7 @@ pub(crate) async fn get_content_thumbnail_route(
 			| _ => return Err!(Request(Unknown("Unknown error when fetching file."))),
 		},
 		| Err(e) => {
-			debug_warn!(%mxc, "Fetching thumbnail failed: {e:?}");
+			conduwuit::info!(%mxc, "Fetching thumbnail failed: {e:?}");
 			return Err!(Request(NotFound("Media not found.")));
 		},
 	};

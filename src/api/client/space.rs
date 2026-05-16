@@ -117,12 +117,17 @@ where
 
 		match (summary, current_room == *room_id) {
 			| (None | Some(SummaryAccessibility::Inaccessible), false) => {
-				// Just ignore other unavailable rooms
+				conduwuit::info!(
+					room_id = %current_room,
+					"spaces: ignoring unavailable room in hierarchy (inaccessible or missing summary)"
+				);
 			},
 			| (None, true) => {
+				conduwuit::info!(room_id = %current_room, "spaces: requested root room was not found");
 				return Err!(Request(Forbidden("The requested room was not found")));
 			},
 			| (Some(SummaryAccessibility::Inaccessible), true) => {
+				conduwuit::info!(room_id = %current_room, "spaces: requested root room is inaccessible");
 				return Err!(Request(Forbidden("The requested room is inaccessible")));
 			},
 			| (Some(SummaryAccessibility::Accessible(summary)), _) => {
