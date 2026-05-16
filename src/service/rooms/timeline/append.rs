@@ -56,13 +56,8 @@ where
 		.set_event_state(&pdu.event_id, room_id, state_ids_compressed)
 		.await?;
 
-	if soft_fail {
-		// Nothing else to do with a soft-failed event.
-		return Ok(None);
-	}
-
 	let pdu_id = self
-		.append_pdu(pdu, pdu_json, new_room_leaves, state_lock, room_id)
+		.append_pdu(pdu, pdu_json, new_room_leaves, state_lock, room_id, soft_fail)
 		.await?;
 
 	// Clean up the outlier table entry now that this event is in the timeline.
@@ -111,6 +106,7 @@ pub async fn append_pdu<'a, Leaves>(
 	leaves: Leaves,
 	state_lock: &'a RoomMutexGuard,
 	room_id: &'a ruma::RoomId,
+	soft_fail: bool,
 ) -> Result<RawPduId>
 where
 	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
@@ -243,7 +239,9 @@ where
 	let now = utils::millis_since_unix_epoch();
 	let is_historical = now.saturating_sub(pdu.origin_server_ts().0.into()) > 10 * 60 * 1000;
 
-	if is_historical {
+	if soft_fail {
+		trace!("Event {} is soft-failed, skipping push notifications", pdu.event_id());
+	} else if is_historical {
 		trace!("Event {} is historical, skipping push notifications", pdu.event_id());
 	} else {
 		let serialized = pdu.to_format();

@@ -34,7 +34,7 @@ where
 
 	for event_id in current_extremities {
 		// Remove extremities that are referenced by the incoming event's prev_events
-		if prev_events.iter().any(|pe| *pe == event_id.as_str()) {
+		if prev_events.iter().any(|&pe| pe == event_id) {
 			continue;
 		}
 

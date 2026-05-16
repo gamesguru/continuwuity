@@ -125,6 +125,7 @@ pub async fn build_and_append_pdu(
 			once(pdu.event_id()),
 			state_lock,
 			&room_id,
+			false,
 		)
 		.boxed()
 		.await?;

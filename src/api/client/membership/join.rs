@@ -769,6 +769,7 @@ async fn join_room_by_id_helper_remote(
 			once(parsed_join_pdu.event_id.borrow()),
 			&state_lock,
 			room_id,
+			false,
 		)
 		.await?;
 
