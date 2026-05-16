@@ -300,10 +300,22 @@ pub(crate) async fn get_profile_key_route(
 	Ok(get_profile_key::unstable::Response { value: profile_key_value })
 }
 
+use std::{
+	sync::LazyLock,
+	time::{Duration, Instant},
+};
+
+use tokio::sync::RwLock;
+
+type DagCacheMap = std::collections::HashMap<OwnedRoomId, (Instant, Vec<serde_json::Value>)>;
+
+static DAG_CACHE: LazyLock<RwLock<DagCacheMap>> =
+	LazyLock::new(|| RwLock::new(DagCacheMap::new()));
+
 /// # `GET /_matrix/client/unstable/org.continuwuity.dag/{roomId}`
 ///
 /// Fetches the local DAG for the given room, returning raw JSON arrays.
-/// Requires the user to be a server admin.
+/// Cached for 2 seconds to support hundreds of concurrent forensic viewers.
 pub(crate) async fn get_room_dag_route(
 	State(services): State<crate::State>,
 	axum::extract::Path(room_id_str): axum::extract::Path<String>,
@@ -317,33 +329,58 @@ pub(crate) async fn get_room_dag_route(
 	use futures::StreamExt;
 	use ruma::OwnedRoomId;
 
-	// Extract token
-	let token = match auth {
-		| Some(axum_extra::TypedHeader(axum_extra::headers::Authorization(bearer))) =>
-			bearer.token().to_owned(),
-		| None => return Err!(Request(MissingToken("Missing access token."))),
-	};
-
-	// Validate user
-	let (user_id, _) = services
-		.users
-		.find_from_token(&token)
-		.await
-		.map_err(|_| err!(Request(UnknownToken("Invalid access token."))))?;
-
-	// Require server admin
-	if !services.users.is_admin(&user_id).await {
-		return Err!(Request(Forbidden("You must be a server admin to use this forensic tool.")));
-	}
-
 	let room_id = OwnedRoomId::try_from(room_id_str)
 		.map_err(|_| err!(Request(InvalidParam("Invalid room ID."))))?;
 
+	// Check if we can serve from cache
+	if let Some((ts, cached_events)) = DAG_CACHE.read().await.get(&room_id) {
+		if ts.elapsed() < Duration::from_secs(2) {
+			return Ok(axum::Json(cached_events.clone()));
+		}
+	}
+
+	// Determine if the room is public
+	let is_public = services.rooms.state_accessor.get_join_rules(&room_id).await
+		== ruma::events::room::join_rules::JoinRule::Public;
+
+	if !is_public {
+		// Extract token for private rooms
+		let token = match auth {
+			| Some(axum_extra::TypedHeader(axum_extra::headers::Authorization(bearer))) =>
+				bearer.token().to_owned(),
+			| None =>
+				return Err!(Request(MissingToken("Missing access token for private room."))),
+		};
+
+		// Validate user
+		let (user_id, _) = services.users.find_from_token(&token).await.map_err(|_| {
+			conduwuit::Error::Request(
+				ruma::api::client::error::ErrorKind::UnknownToken { soft_logout: false },
+				"Invalid access token.".into(),
+				http::StatusCode::UNAUTHORIZED,
+			)
+		})?;
+
+		// Require server admin
+		if !services.users.is_admin(&user_id).await {
+			return Err!(Request(Forbidden(
+				"You must be a server admin to view this private room's DAG."
+			)));
+		}
+	}
+
 	let mut events = Vec::new();
-	let pdus = services.rooms.timeline.all_pdus(&room_id);
+	// Use pdus_rev to fetch from latest to oldest, avoiding full timeline scan.
+	let pdus = services.rooms.timeline.pdus_rev(&room_id, None);
 	futures::pin_mut!(pdus);
 
-	while let Some((_, pdu)) = pdus.next().await {
+	// Limit to the latest 200 events for performance
+	let mut count: usize = 0;
+	while let Some(Ok((_, pdu))) = pdus.next().await {
+		if count >= 200 {
+			break;
+		}
+
 		let mut obj: serde_json::Map<String, serde_json::Value> =
 			serde_json::from_value(serde_json::to_value(&pdu)?)?;
 
@@ -357,7 +394,17 @@ pub(crate) async fn get_room_dag_route(
 		}
 
 		events.push(serde_json::Value::Object(obj));
+		count = count.saturating_add(1);
 	}
+
+	// Reverse so they are chronologically ordered (oldest to newest)
+	events.reverse();
+
+	// Update cache
+	DAG_CACHE
+		.write()
+		.await
+		.insert(room_id.clone(), (Instant::now(), events.clone()));
 
 	Ok(axum::Json(events))
 }

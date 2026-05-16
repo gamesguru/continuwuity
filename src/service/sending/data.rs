@@ -175,7 +175,7 @@ impl Data {
 			.raw_keys()
 			.ignore_err()
 			.filter_map(|key| async move {
-				parse_servercurrentevent(&key, &[])
+				parse_servercurrentevent(key, &[])
 					.ok()
 					.map(|(dest, _)| dest)
 			})
