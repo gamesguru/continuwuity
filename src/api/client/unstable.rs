@@ -299,3 +299,65 @@ pub(crate) async fn get_profile_key_route(
 
 	Ok(get_profile_key::unstable::Response { value: profile_key_value })
 }
+
+/// # `GET /_matrix/client/unstable/org.continuwuity.dag/{roomId}`
+///
+/// Fetches the local DAG for the given room, returning raw JSON arrays.
+/// Requires the user to be a server admin.
+pub(crate) async fn get_room_dag_route(
+	State(services): State<crate::State>,
+	axum::extract::Path(room_id_str): axum::extract::Path<String>,
+	auth: Option<
+		axum_extra::TypedHeader<
+			axum_extra::headers::Authorization<axum_extra::headers::authorization::Bearer>,
+		>,
+	>,
+) -> Result<impl axum::response::IntoResponse> {
+	use conduwuit::{Err, err};
+	use futures::StreamExt;
+	use ruma::OwnedRoomId;
+
+	// Extract token
+	let token = match auth {
+		| Some(axum_extra::TypedHeader(axum_extra::headers::Authorization(bearer))) =>
+			bearer.token().to_owned(),
+		| None => return Err!(Request(MissingToken("Missing access token."))),
+	};
+
+	// Validate user
+	let (user_id, _) = services
+		.users
+		.find_from_token(&token)
+		.await
+		.map_err(|_| err!(Request(UnknownToken("Invalid access token."))))?;
+
+	// Require server admin
+	if !services.users.is_admin(&user_id).await {
+		return Err!(Request(Forbidden("You must be a server admin to use this forensic tool.")));
+	}
+
+	let room_id = OwnedRoomId::try_from(room_id_str)
+		.map_err(|_| err!(Request(InvalidParam("Invalid room ID."))))?;
+
+	let mut events = Vec::new();
+	let pdus = services.rooms.timeline.all_pdus(&room_id);
+	futures::pin_mut!(pdus);
+
+	while let Some((_, pdu)) = pdus.next().await {
+		let mut obj: serde_json::Map<String, serde_json::Value> =
+			serde_json::from_value(serde_json::to_value(&pdu)?)?;
+
+		if let Ok(ssh) = services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(&pdu.event_id)
+			.await
+		{
+			obj.insert("__shortstatehash".to_owned(), serde_json::Value::from(ssh));
+		}
+
+		events.push(serde_json::Value::Object(obj));
+	}
+
+	Ok(axum::Json(events))
+}

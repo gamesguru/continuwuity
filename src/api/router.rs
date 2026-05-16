@@ -215,6 +215,7 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.route("/_continuwuity/server_version", get(client::conduwuit_server_version))
 		.ruma_route(&client::room_initial_sync_route)
 		.route("/client/server.json", get(client::syncv3_client_server_json))
+		.route("/_matrix/client/unstable/org.continuwuity.dag/{room_id}", get(client::get_room_dag_route))
 		.ruma_route(&admin::rooms::ban::ban_room)
 		.ruma_route(&admin::rooms::list::list_rooms);
 
