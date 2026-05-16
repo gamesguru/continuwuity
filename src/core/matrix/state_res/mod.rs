@@ -834,32 +834,39 @@ where
 			}
 		}
 
-		// Supplement auth_state with events from resolved_state.
-		// Per Synapse parity, resolved_state OVERWRITES auth_events — this
-		// forces events to authenticate against authoritative state, preventing
-		// auth-bypass attacks where a malicious event claims old power levels.
-		// Collect first to avoid borrow conflict with auth_state.
-		let supplemental: Vec<_> = auth_types
-			.iter()
-			.stream()
-			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
-			.filter_map(|(key, ev_id)| async move {
-				// Exclude rejected events from resolved_state (Synapse parity)
-				if event_rejected(ev_id.clone()).await {
-					return None;
-				}
+		// In V2.1 (MSC4297), each event authenticates purely against its own
+		// auth_events chain. The supplemental merge from resolved_state is
+		// skipped because V2.1 starts from the empty set precisely so that
+		// events are evaluated against their own auth chain, preventing
+		// cascading auth failures when conflicting state (e.g. join_rules)
+		// contaminates the accumulated resolved_state.
+		//
+		// For V2, resolved_state OVERWRITES auth_events — this forces events
+		// to authenticate against authoritative state, preventing auth-bypass
+		// attacks where a malicious event claims old power levels.
+		if room_version.state_res != StateResolutionVersion::V2_1 {
+			let supplemental: Vec<_> = auth_types
+				.iter()
+				.stream()
+				.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
+				.filter_map(|(key, ev_id)| async move {
+					// Exclude rejected events from resolved_state (Synapse parity)
+					if event_rejected(ev_id.clone()).await {
+						return None;
+					}
 
-				if let Some(event) = auth_events.get(ev_id) {
-					Some((key.to_owned(), event.clone()))
-				} else {
-					Some((key.to_owned(), fetch_event(ev_id.clone()).await?))
-				}
-			})
-			.collect()
-			.await;
+					if let Some(event) = auth_events.get(ev_id) {
+						Some((key.to_owned(), event.clone()))
+					} else {
+						Some((key.to_owned(), fetch_event(ev_id.clone()).await?))
+					}
+				})
+				.collect()
+				.await;
 
-		for (key, event) in supplemental {
-			auth_state.insert(key, event);
+			for (key, event) in supplemental {
+				auth_state.insert(key, event);
+			}
 		}
 		trace!(map = ?auth_state.keys().collect::<Vec<_>>(), event_id = event.event_id().as_str(), "auth state for event");
 
@@ -2931,6 +2938,22 @@ mod tests {
 			Some(&event_id("S21B_JR2")),
 			"v2.1 must pick newer invite-only join rules JR2; got {:?}",
 			resolved.get(&jr_key)
+		);
+
+		// Bob must survive in the resolved state. Without the V2.1
+		// supplemental merge fix, resolved_state accumulates join_rules=invite
+		// from the control pass and overwrites bob's own auth chain (which had
+		// join_rules=public when he joined). This causes bob_join to fail auth
+		// with "not invited to invite-only room", dropping him from state.
+		let bob_key = (StateEventType::RoomMember, bob().to_string().into());
+		assert_eq!(
+			resolved.get(&bob_key),
+			Some(&event_id("S21B_MB")),
+			"v2.1 supplemental merge must not clobber bob's auth chain; bob_join should \
+			 survive. If this fails, iterative_auth_check is overriding event auth_events with \
+			 resolved_state (the V2 behavior) instead of using the event's own auth chain (V2.1 \
+			 behavior). Got {:?}",
+			resolved.get(&bob_key)
 		);
 	}
 
