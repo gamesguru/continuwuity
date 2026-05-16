@@ -527,6 +527,12 @@ impl Service {
 			}
 		}
 
+		let foundation_ssh = self
+			.services
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.ok();
 		let mut state_rebuilt = 0_usize;
 		let mut walk_ssh: Option<u64> = None;
 		for event_id in &sorted {
@@ -575,15 +581,7 @@ impl Service {
 			})
 			.count();
 
-		if state_event_count > 1
-			&& walk_ssh
-				== self
-					.services
-					.state
-					.get_room_shortstatehash(room_id)
-					.await
-					.ok()
-		{
+		if state_event_count > 1 && walk_ssh == foundation_ssh {
 			// walk_ssh never diverged from the foundation — every state
 			// event produced the same SSH it started with. This should be
 			// impossible unless append_to_state is broken.
