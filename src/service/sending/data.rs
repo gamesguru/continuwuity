@@ -169,6 +169,18 @@ impl Data {
 			})
 	}
 
+	#[inline]
+	pub fn queued_request_destinations(&self) -> impl Stream<Item = Destination> + Send + '_ {
+		self.servernameevent_data
+			.raw_keys()
+			.ignore_err()
+			.filter_map(|key| async move {
+				parse_servercurrentevent(&key, &[])
+					.ok()
+					.map(|(dest, _)| dest)
+			})
+	}
+
 	pub(super) fn set_latest_educount(&self, server_name: &ServerName, last_count: u64) {
 		self.servername_educount.raw_put(server_name, last_count);
 	}

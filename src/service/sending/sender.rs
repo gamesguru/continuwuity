@@ -395,6 +395,30 @@ impl Service {
 				futures.push(self.send_events(dest.clone(), events));
 			}
 		}
+
+		// Process orphaned queued requests
+		if self.server.config.startup_netburst {
+			let mut queued_dests = HashSet::new();
+			let mut queued = self.db.queued_request_destinations().boxed();
+			while let Some(dest) = queued.next().await {
+				if self.shard_id(&dest) == id {
+					queued_dests.insert(dest);
+				}
+			}
+
+			if !queued_dests.is_empty() {
+				let sender = self.channels.get(id).expect("channel").0.clone();
+				for dest in queued_dests {
+					sender
+						.send(Msg {
+							dest,
+							event: SendingEvent::Flush,
+							queue_id: Vec::new(),
+						})
+						.ok();
+				}
+			}
+		}
 	}
 
 	#[tracing::instrument(
@@ -878,11 +902,13 @@ impl Service {
 	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>) -> SendingFuture<'_> {
 		debug_assert!(!events.is_empty(), "sending empty transaction");
 		match dest {
-			| Destination::Federation(server) =>
-				self.send_events_dest_federation(server, events).boxed(),
+			| Destination::Federation(server) => {
+				self.send_events_dest_federation(server, events).boxed()
+			},
 			| Destination::Appservice(id) => self.send_events_dest_appservice(id, events).boxed(),
-			| Destination::Push(user_id, pushkey) =>
-				self.send_events_dest_push(user_id, pushkey, events).boxed(),
+			| Destination::Push(user_id, pushkey) => {
+				self.send_events_dest_push(user_id, pushkey, events).boxed()
+			},
 		}
 	}
 
@@ -925,12 +951,13 @@ impl Service {
 						pdu_jsons.push(pdu.to_format());
 					}
 				},
-				| SendingEvent::Edu(edu) =>
+				| SendingEvent::Edu(edu) => {
 					if appservice.receive_ephemeral {
 						if let Ok(edu) = serde_json::from_slice(edu) {
 							edu_jsons.push(edu);
 						}
-					},
+					}
+				},
 				| SendingEvent::Flush => {}, // flush only; no new content
 			}
 		}
