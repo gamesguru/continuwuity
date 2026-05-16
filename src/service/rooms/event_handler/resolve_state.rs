@@ -5,7 +5,7 @@ use std::{
 };
 
 use conduwuit::{
-	Error, Result, err, implement,
+	Error, Result, err, implement, info,
 	state_res::{self, StateMap},
 	trace,
 	utils::stream::{IterStream, ReadyExt, TryWidebandExt, WidebandExt},
@@ -72,12 +72,27 @@ pub async fn resolve_state(
 
 	let (fork_states, auth_chain_sets) = try_join(fork_states, auth_chain_sets).await?;
 
+	// Diagnostic: log PL events in each fork state
+	for (i, fork) in fork_states.iter().enumerate() {
+		for ((ty, sk), eid) in fork {
+			if ty.to_string() == "m.room.power_levels" {
+				info!("resolve_state fork[{i}] PL ({ty},{sk}) => {eid}");
+			}
+		}
+	}
+
 	trace!("Resolving state");
 	let state = self
 		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
 		.boxed()
 		.await?;
 
+	// Diagnostic: log resolved PL
+	for ((ty, sk), eid) in &state {
+		if ty.to_string() == "m.room.power_levels" {
+			info!("resolve_state RESULT PL ({ty},{sk}) => {eid}");
+		}
+	}
 	trace!("State resolution done.");
 	let state_events: Vec<_> = state
 		.iter()

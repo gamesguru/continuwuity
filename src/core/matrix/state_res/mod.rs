@@ -40,7 +40,7 @@ use crate::{
 	matrix::{Event, StateKey},
 	state_res::room_version::StateResolutionVersion,
 	trace,
-	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, WidebandExt},
+	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryWidebandExt, WidebandExt},
 	warn,
 };
 
@@ -232,6 +232,7 @@ where
 		reverse_topological_power_sort(control_events, &all_conflicted, &event_fetch).await?;
 
 	debug!(count = sorted_control_levels.len(), "power events");
+	info!(list = ?sorted_control_levels, "sorted power events (order of auth check)");
 	trace!(list = ?sorted_control_levels, "sorted power events");
 
 	let room_version = RoomVersion::new(room_version)?;
@@ -686,13 +687,17 @@ where
 
 	let events_to_check: Vec<_> = events_to_check
 		.map(Result::Ok)
-		.broad_and_then(async |event_id| {
+		// NOTE: wide_and_then (ordered) is required here, NOT broad_and_then.
+		// The input stream is topologically sorted; broad_and_then uses
+		// buffer_unordered which destroys that ordering, causing the wrong
+		// power-level event to win during state resolution.
+		.wide_and_then(async |event_id| {
 			fetch_event(event_id.to_owned())
 				.await
 				.ok_or_else(|| Error::NotFound(format!("Failed to find {event_id}")))
 		})
 		// SYNAPSE CHECK 1: Pre-filter rejected events concurrently during fetch
-		.broad_filter_map(|res| async {
+		.wide_filter_map(|res| async {
 			match res {
 				| Ok(event) if event_rejected(event.event_id().to_owned()).await => {
 					info!(
@@ -870,6 +875,13 @@ where
 		}
 		trace!(map = ?auth_state.keys().collect::<Vec<_>>(), event_id = event.event_id().as_str(), "auth state for event");
 
+		if *event.event_type() == TimelineEventType::RoomPowerLevels {
+			info!(
+				event_id = event.event_id().as_str(),
+				sender = %event.sender(),
+				"iterative_auth_check: about to auth PL event"
+			);
+		}
 		debug!(event_id = event.event_id().as_str(), "Running auth checks");
 
 		// The key for this is (eventType + a state_key of the signed token not sender)
@@ -911,6 +923,12 @@ where
 		match auth_result {
 			| Ok(true) => {
 				// add event to resolved state map
+				if *event.event_type() == TimelineEventType::RoomPowerLevels {
+					info!(
+						event_id = event.event_id().as_str(),
+						"iterative_auth_check: PL event PASSED auth, adding to resolved state"
+					);
+				}
 				trace!(
 					event_id = event.event_id().as_str(),
 					"event passed the authentication check, adding to resolved state"
@@ -923,6 +941,12 @@ where
 			},
 			| Ok(false) => {
 				// synapse passes here on AuthError. We do not add this event to resolved_state.
+				if *event.event_type() == TimelineEventType::RoomPowerLevels {
+					warn!(
+						event_id = event.event_id().as_str(),
+						"iterative_auth_check: PL event FAILED auth check!"
+					);
+				}
 				warn!("event {} failed the authentication check", event.event_id());
 			},
 			| Err(e) => {
