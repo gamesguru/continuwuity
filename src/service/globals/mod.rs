@@ -264,6 +264,24 @@ impl crate::Service for Service {
 				sending
 			);
 
+			// Evict stale bad_event_ratelimiter entries to prevent unbounded memory growth.
+			// Entries older than MAX_EVICT_AGE will never trigger backoff again, so they
+			// are safe to remove.
+			{
+				const MAX_EVICT_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60 * 8);
+				let before = self.bad_event_ratelimiter.read().len();
+				self.bad_event_ratelimiter
+					.write()
+					.retain(|_, (instant, _)| instant.elapsed() < MAX_EVICT_AGE);
+				let after = self.bad_event_ratelimiter.read().len();
+				let evicted = before.saturating_sub(after);
+				if evicted > 0 {
+					conduwuit::debug!(
+						"bad_event_ratelimiter: evicted {evicted} stale entries ({before} → {after})"
+					);
+				}
+			}
+
 			last_http_success = http_success;
 			last_http_fail = http_fail;
 			last_http_time = http_time;
