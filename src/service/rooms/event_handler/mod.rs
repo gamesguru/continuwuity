@@ -1,4 +1,5 @@
 mod acl_check;
+pub(crate) mod extremities;
 mod fetch_and_handle_outliers;
 mod fetch_prev;
 mod fetch_state;

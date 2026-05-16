@@ -6,10 +6,10 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Result, debug, debug_info, debug_warn, err, implement, info, is_equal_to,
+	Err, Result, debug, debug_info, debug_warn, err, implement, info,
 	matrix::{Event, EventTypeExt, PduEvent, StateKey, state_res},
 	trace,
-	utils::stream::{BroadbandExt, IterStream, ReadyExt},
+	utils::stream::ReadyExt,
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
@@ -402,7 +402,7 @@ where
 	// Calculate forward extremities AFTER the soft-fail evaluation.
 	// Per spec, soft-failed events are NOT added as forward extremities.
 	trace!("Appending pdu to timeline");
-	let mut extremities: Vec<_> = self
+	let current_extremities: Vec<_> = self
 		.services
 		.state
 		.get_forward_extremities(room_id)
@@ -410,35 +410,27 @@ where
 		.collect()
 		.await;
 
-	if !soft_fail {
-		// Only non-soft-failed events modify the extremity set
-		extremities = extremities
-			.into_iter()
-			.stream()
-			.ready_filter(|event_id| {
-				// Remove any that are referenced by this incoming event's prev_events
-				!incoming_pdu.prev_events().any(is_equal_to!(event_id))
-			})
-			.broad_filter_map(|event_id| async move {
-				// Only keep those extremities were not referenced yet
-				self.services
-					.pdu_metadata
-					.is_event_referenced(room_id, &event_id)
-					.await
-					.eq(&false)
-					.then_some(event_id)
-			})
-			.collect::<Vec<_>>()
-			.await;
+	let prev_events: Vec<&ruma::EventId> = incoming_pdu.prev_events().collect();
+	let room_id_owned = room_id.to_owned();
+	let is_referenced = |event_id: &ruma::EventId| {
+		let eid = event_id.to_owned();
+		let rid = room_id_owned.clone();
+		async move {
+			self.services
+				.pdu_metadata
+				.is_event_referenced(&rid, &eid)
+				.await
+		}
+	};
 
-		extremities.push(incoming_pdu.event_id().to_owned());
-		debug!(
-			"Retained {} extremities checked against {} prev_events",
-			extremities.len(),
-			incoming_pdu.prev_events().count()
-		);
-		assert!(!extremities.is_empty(), "extremities must not be empty");
-	}
+	let extremities = super::extremities::calculate_forward_extremities(
+		current_extremities,
+		incoming_pdu.event_id(),
+		&prev_events,
+		soft_fail,
+		is_referenced,
+	)
+	.await;
 
 	let pdu_id = self
 		.services
