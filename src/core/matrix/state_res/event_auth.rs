@@ -1312,15 +1312,15 @@ fn check_power_levels(
 			continue;
 		}
 
-		if new_level.is_some() && creators.contains(user) {
-			if new_level != Some(&Int::MAX) {
-				warn!(
-					"creators cannot appear in the users list of m.room.power_levels with a \
-					 non-privileged power level"
-				);
-				return Some(false); // cannot alter creator power level
-			}
-			trace!("ignoring creator in users list with privileged power level");
+		if creators.contains(user) {
+			// In V12+ rooms, creators always have implicit Int::MAX power
+			// regardless of what content.users says. Any entry for a creator
+			// in content.users is effectively a no-op — skip it rather than
+			// rejecting the entire PL event. This prevents V2.1 state
+			// resolution from dropping valid PL events that happen to
+			// include the creator in their users dict (e.g. from federation
+			// partners or older room versions).
+			trace!("skipping creator {user} in users list — implicit Int::MAX power");
 			continue;
 		}
 

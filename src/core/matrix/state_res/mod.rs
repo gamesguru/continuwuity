@@ -3180,6 +3180,186 @@ mod tests {
 		);
 	}
 
+	/// Regression test for the Complement
+	/// TestMSC4297StateResolutionV2_1_includes_conflicted_subgraph failure.
+	///
+	/// Root cause: In V12 rooms, check_power_levels rejected PL events that
+	/// included the room creator in content.users with a non-Int::MAX value
+	/// (e.g. {alice: 100}). During V2.1 state resolution, ALL events go
+	/// through iterative_auth_check, and the creator's PL entry caused the
+	/// entire PL event to be rejected — dropping Alice's power level and
+	/// making subsequent events (like promoting Bob) return 403 Forbidden.
+	///
+	/// This test verifies that a PL event with the creator in content.users
+	/// survives V2.1 state resolution.
+	///
+	/// DAG:
+	///   create -> alice_join -> PL1(users:{}) -> PL2(users:{alice:100})
+	///   PL2 must survive resolution, not be rejected.
+	#[tokio::test]
+	async fn v12_pl_with_creator_in_users_survives_resolution() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		let v12_room_id: OwnedRoomId = "!S21dCreate12345678901234567890123456789012"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$S21dCreate12345678901234567890123456789012";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
+
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
+			&[],
+			&[],
+		);
+		e1_create.room_id = None;
+
+		// Alice joins
+		let e2_ma = to_pdu_event(
+			"S21D_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[],
+			&[create_id_str],
+		);
+
+		// PL1: default power levels (creator omitted from users, as V12 requires)
+		let e3_pl1 = to_pdu_event(
+			"S21D_PL1",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": {} })).unwrap(),
+			&["S21D_MA"],
+			&["S21D_MA"],
+		);
+
+		// PL2: creator sends PL with herself in content.users at 100.
+		// This is what the Complement test does and what federation
+		// partners may send. Must NOT be rejected by check_power_levels.
+		let e4_pl2 = to_pdu_event(
+			"S21D_PL2",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { alice(): 100 } })).unwrap(),
+			&["S21D_MA", "S21D_PL1"],
+			&["S21D_PL1"],
+		);
+
+		// Join rules = public
+		let e5_jr = to_pdu_event(
+			"S21D_JR",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["S21D_MA", "S21D_PL2"],
+			&["S21D_PL2"],
+		);
+
+		// Bob joins
+		let e6_mb = to_pdu_event(
+			"S21D_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["S21D_PL2", "S21D_JR"],
+			&["S21D_JR"],
+		);
+
+		let all_events = vec![&e1_create, &e2_ma, &e3_pl1, &e4_pl2, &e5_jr, &e6_mb];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		// Two identical state forks (simulating federation join where both
+		// sides agree on state — the resolution should be a no-op)
+		let state_set_a: StateMap<OwnedEventId> = [&e1_create, &e2_ma, &e4_pl2, &e5_jr, &e6_mb]
+			.iter()
+			.map(|ev| {
+				(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+			})
+			.collect();
+
+		// Second fork: same state but without bob (as if remote server
+		// hasn't seen bob yet). This forces PL2 through iterative_auth_check.
+		let state_set_b: StateMap<OwnedEventId> = [&e1_create, &e2_ma, &e4_pl2, &e5_jr]
+			.iter()
+			.map(|ev| {
+				(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+			})
+			.collect();
+
+		let state_sets = [state_set_a, state_set_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
+		let rejected = |_: OwnedEventId| ready(false);
+
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			&exists,
+			&rejected,
+		)
+		.await
+		.expect("v2.1 resolution should succeed");
+
+		// PL2 (with alice:100 in content.users) must survive resolution.
+		// Before the fix, check_power_levels rejected PL2 because the
+		// creator appeared in content.users with a non-Int::MAX value,
+		// causing it to be dropped from resolved state.
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		assert_eq!(
+			resolved.get(&pl_key),
+			Some(&event_id("S21D_PL2")),
+			"PL2 (with creator in content.users) must survive V2.1 resolution; got {:?}. If \
+			 this fails, check_power_levels is rejecting PL events that include the room \
+			 creator in content.users — V12 creators have implicit Int::MAX power, so their \
+			 presence in content.users should be a no-op, not a rejection.",
+			resolved.get(&pl_key)
+		);
+
+		// Bob must also survive
+		let bob_key = (StateEventType::RoomMember, bob().to_string().into());
+		assert_eq!(
+			resolved.get(&bob_key),
+			Some(&event_id("S21D_MB")),
+			"bob must be in resolved state; got {:?}",
+			resolved.get(&bob_key)
+		);
+	}
+
 	#[tokio::test]
 	async fn v12_missing_create_event_does_not_panic() {
 		use futures::future::ready;
