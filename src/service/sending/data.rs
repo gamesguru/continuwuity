@@ -91,12 +91,16 @@ impl Data {
 			.ignore_err()
 			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
 				| Ok((dest, event)) => Some((key.to_vec(), event, dest)),
-				| Err(_e) => {
+				| Err(e) => {
 					// Delete the corrupted key so it doesn't spam on every scan
 					self.servercurrentevent_data.remove(key);
-					conduwuit::info!(
-						"Removed corrupted/stale servercurrentevent key ({} bytes)",
-						key.len()
+					conduwuit::warn!(
+						"Removed corrupted servercurrentevent key ({} bytes): key_hex={:02x?} \
+						 key_lossy={:?} val_len={} err={e}",
+						key.len(),
+						key,
+						String::from_utf8_lossy(key),
+						val.len(),
 					);
 					None
 				},

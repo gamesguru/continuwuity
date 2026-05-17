@@ -13,7 +13,7 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, future::ready, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	OwnedUserId, RoomId,
+	OwnedUserId, RoomId, RoomVersionId,
 	api::federation::event::{get_event, get_room_state},
 	events::{StateEventType, TimelineEventType},
 };
@@ -1359,6 +1359,13 @@ pub(super) async fn get_room_dag(
 					JsonValue::String(event_id.as_str().to_owned()),
 				);
 
+				// V12: strip room_id from m.room.create content (not part of signed event)
+				if room_version_str == "12" {
+					if obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create") {
+						obj.remove("room_id");
+					}
+				}
+
 				let pdu_result = self.services.rooms.timeline.get_pdu(&event_id).await;
 				if let Ok(pdu) = &pdu_result {
 					if let Ok(ssh) = self
@@ -1657,6 +1664,13 @@ pub(super) async fn get_remote_dag(
 				serde_json::from_str(raw_pdu.get())?;
 			export_val
 				.insert("event_id".to_owned(), serde_json::Value::String(event_id.to_string()));
+
+			// V12: strip room_id from m.room.create content (not part of signed event)
+			if room_version == RoomVersionId::V12
+				&& export_val.get("type").and_then(|v| v.as_str()) == Some("m.room.create")
+			{
+				export_val.remove("room_id");
+			}
 			let json = serde_json::to_string(&export_val)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;
@@ -2963,6 +2977,13 @@ pub(super) async fn import_pdus(
 			raw_map.remove("__shortstatehash");
 			raw_map.remove("prev_state_events");
 			raw_map.remove("state_jump_pointers");
+
+			// V12: strip room_id from m.room.create events (not part of signed content)
+			if room_version == RoomVersionId::V12
+				&& raw_map.get("type").and_then(|v| v.as_str()) == Some("m.room.create")
+			{
+				raw_map.remove("room_id");
+			}
 
 			// Create the CanonicalJsonObject needed for the rest of the pipeline
 			let value: CanonicalJsonObject =
