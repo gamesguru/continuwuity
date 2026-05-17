@@ -28,6 +28,7 @@ pub(super) async fn audit_membership(
 	room_id: OwnedRoomId,
 	server: Option<OwnedServerName>,
 	at_event: Option<OwnedEventId>,
+	clean: bool,
 ) -> Result {
 	// ── Phase 1: Timeline vs State Snapshot ──────────────────────────────
 	self.write_str("**Phase 1: Timeline vs State Snapshot**\n")
@@ -103,24 +104,62 @@ pub(super) async fn audit_membership(
 	let mut divergences = Vec::new();
 
 	for (user_id, (tl_membership, tl_event)) in &timeline_membership {
-		match state_membership.get(user_id) {
-			| Some((st_membership, st_event)) if st_membership != tl_membership => {
-				divergences.push(format!(
-					"WARN {user_id}: timeline says `{tl_membership}` (via {tl_event}) but state \
-					 says `{st_membership}` (via {st_event})"
-				));
-			},
-			| Some((_, st_event)) if st_event != tl_event => {
-				divergences
-					.push(format!("DIFF {user_id}: `{tl_membership}` {tl_event} {st_event}"));
-			},
-			| None if tl_membership == "join" || tl_membership == "invite" => {
-				divergences.push(format!(
-					"MISSING {user_id}: timeline says `{tl_membership}` (via {tl_event}) but \
-					 user is ABSENT from state snapshot"
-				));
-			},
-			| _ => {},
+		let is_divergent = match state_membership.get(user_id) {
+			| Some((st_membership, _)) if st_membership != tl_membership => true,
+			| Some((_, st_event)) if st_event != tl_event => true,
+			| None if tl_membership == "join" || tl_membership == "invite" => true,
+			| _ => false,
+		};
+
+		if is_divergent {
+			if clean {
+				if let Ok(event_id) = OwnedEventId::try_from(tl_event.as_str()) {
+					if let Ok(pdu_json) =
+						self.services.rooms.timeline.get_pdu_json(&event_id).await
+					{
+						self.services.rooms.outlier.add_pdu_outlier(
+							&event_id,
+							&pdu_json,
+							Some(&room_id),
+						);
+					}
+					self.services
+						.rooms
+						.timeline
+						.remove_from_timeline(&event_id)
+						.await;
+					self.services
+						.rooms
+						.pdu_metadata
+						.mark_event_soft_failed(&event_id);
+
+					divergences.push(format!(
+						"PURGED {user_id}: demoted `{tl_membership}` (via {tl_event}) to outlier",
+					));
+					continue;
+				}
+			}
+
+			// Original diagnostic output
+			match state_membership.get(user_id) {
+				| Some((st_membership, st_event)) if st_membership != tl_membership => {
+					divergences.push(format!(
+						"WARN {user_id}: timeline says `{tl_membership}` (via {tl_event}) but \
+						 state says `{st_membership}` (via {st_event})"
+					));
+				},
+				| Some((_, st_event)) if st_event != tl_event => {
+					divergences
+						.push(format!("DIFF {user_id}: `{tl_membership}` {tl_event} {st_event}"));
+				},
+				| None if tl_membership == "join" || tl_membership == "invite" => {
+					divergences.push(format!(
+						"MISSING {user_id}: timeline says `{tl_membership}` (via {tl_event}) \
+						 but user is ABSENT from state snapshot"
+					));
+				},
+				| _ => {},
+			}
 		}
 	}
 

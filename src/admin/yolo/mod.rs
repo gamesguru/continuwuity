@@ -27,6 +27,10 @@ pub enum YoloCommand {
 		/// in the target room (not the admin room).
 		#[arg(long)]
 		at_event: Option<OwnedEventId>,
+
+		/// If set, automatically demotes divergent timeline events to outliers
+		#[arg(long)]
+		clean: bool,
 	},
 
 	/// Attempts to "rescue" an outlier PDU by upgrading it to a timeline event.
