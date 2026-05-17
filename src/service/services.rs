@@ -93,6 +93,7 @@ impl Services {
 			rooms: rooms::Service {
 				alias: build!(rooms::alias::Service),
 				auth_chain: build!(rooms::auth_chain::Service),
+				delayed_events: build!(rooms::delayed_events::Service),
 				directory: build!(rooms::directory::Service),
 				event_handler: build!(rooms::event_handler::Service),
 				lazy_loading: build!(rooms::lazy_loading::Service),
