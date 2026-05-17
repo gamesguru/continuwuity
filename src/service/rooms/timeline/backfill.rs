@@ -197,6 +197,8 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 #[implement(super::Service)]
 #[tracing::instrument(name = "get_remote_pdu", level = "debug", skip(self))]
 pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Result<PduEvent> {
+	let _mutex = self.mutex_fetch.lock(event_id).await;
+
 	let local = self.get_pdu(event_id).await;
 	if local.is_ok() {
 		// We already have this PDU, no need to backfill

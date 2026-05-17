@@ -57,6 +57,7 @@ pub struct Service {
 	services: Services,
 	db: Data,
 	pub mutex_insert: RoomMutexMap,
+	pub mutex_fetch: MutexMap<OwnedEventId, ()>,
 }
 
 struct Services {
@@ -122,12 +123,15 @@ impl crate::Service for Service {
 			},
 			db: Data::new(&args),
 			mutex_insert: RoomMutexMap::new(),
+			mutex_fetch: MutexMap::new(),
 		}))
 	}
 
 	async fn memory_usage(&self, out: &mut (dyn Write + Send)) -> Result {
 		let mutex_insert = self.mutex_insert.len();
 		writeln!(out, "insert_mutex: {mutex_insert}")?;
+		let mutex_fetch = self.mutex_fetch.len();
+		writeln!(out, "fetch_mutex: {mutex_fetch}")?;
 
 		Ok(())
 	}
