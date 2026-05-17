@@ -107,7 +107,7 @@ pub async fn resolve_state(
 				match self
 					.services
 					.sending
-					.send_federation_request(*server, get_event::v1::Request {
+					.send_federation_request(server, get_event::v1::Request {
 						event_id: event_id.clone(),
 						include_unredacted_content: None,
 					})
