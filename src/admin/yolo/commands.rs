@@ -102,17 +102,58 @@ pub(super) async fn audit_membership(
 	}
 
 	let mut divergences = Vec::new();
+	let mut total_purged = 0_usize;
+	let max_clean_passes = 50_usize;
+	let mut pass_num = 0_usize;
 
-	for (user_id, (tl_membership, tl_event)) in &timeline_membership {
-		let is_divergent = match state_membership.get(user_id) {
-			| Some((st_membership, _)) if st_membership != tl_membership => true,
-			| Some((_, st_event)) if st_event != tl_event => true,
-			| None if tl_membership == "join" || tl_membership == "invite" => true,
-			| _ => false,
-		};
+	loop {
+		pass_num = pass_num.saturating_add(1);
+		let mut pass_purged = 0_usize;
 
-		if is_divergent {
-			if clean {
+		// Rebuild timeline membership for this pass
+		let mut tl_membership_pass: HashMap<OwnedUserId, (String, String)> = HashMap::new();
+		let pdus_pass = self
+			.services
+			.rooms
+			.timeline
+			.pdus(&room_id, Some(PduCount::min()));
+
+		pin_mut!(pdus_pass);
+		while let Some(Ok((_count, pdu))) = pdus_pass.next().await {
+			if pdu.kind != TimelineEventType::RoomMember {
+				continue;
+			}
+			let Some(state_key) = pdu.state_key() else {
+				continue;
+			};
+			let membership = pdu
+				.get_content_as_value()
+				.get("membership")
+				.and_then(|v| v.as_str())
+				.unwrap_or("leave")
+				.to_owned();
+			let event_id = pdu.event_id().to_string();
+			if let Ok(user_id) = OwnedUserId::try_from(state_key) {
+				tl_membership_pass.insert(user_id, (membership, event_id));
+			}
+		}
+
+		for (user_id, (tl_membership, tl_event)) in &tl_membership_pass {
+			let is_divergent = match state_membership.get(user_id) {
+				// Membership type differs (join vs leave, etc) — always divergent
+				| Some((st_membership, _)) if st_membership != tl_membership => true,
+				// Same membership but different event ID — only divergent for leave/ban
+				// (multiple join events with different IDs are just renames)
+				| Some((st_membership, st_event))
+					if st_event != tl_event
+						&& (st_membership == "leave" || st_membership == "ban") =>
+					true,
+				// User in timeline but absent from state
+				| None if tl_membership == "join" || tl_membership == "invite" => true,
+				| _ => false,
+			};
+
+			if is_divergent && clean {
 				if let Ok(event_id) = OwnedEventId::try_from(tl_event.as_str()) {
 					if let Ok(pdu_json) =
 						self.services.rooms.timeline.get_pdu_json(&event_id).await
@@ -133,34 +174,59 @@ pub(super) async fn audit_membership(
 						.pdu_metadata
 						.mark_event_soft_failed(&event_id);
 
-					divergences.push(format!(
-						"PURGED {user_id}: demoted `{tl_membership}` (via {tl_event}) to outlier",
-					));
+					pass_purged = pass_purged.saturating_add(1);
+					total_purged = total_purged.saturating_add(1);
+
+					if total_purged <= 100 {
+						divergences.push(format!(
+							"PURGED {user_id}: demoted `{tl_membership}` (via {tl_event}) to \
+							 outlier",
+						));
+					}
 					continue;
 				}
 			}
 
-			// Original diagnostic output
-			match state_membership.get(user_id) {
-				| Some((st_membership, st_event)) if st_membership != tl_membership => {
-					divergences.push(format!(
-						"WARN {user_id}: timeline says `{tl_membership}` (via {tl_event}) but \
-						 state says `{st_membership}` (via {st_event})"
-					));
-				},
-				| Some((_, st_event)) if st_event != tl_event => {
-					divergences
-						.push(format!("DIFF {user_id}: `{tl_membership}` {tl_event} {st_event}"));
-				},
-				| None if tl_membership == "join" || tl_membership == "invite" => {
-					divergences.push(format!(
-						"MISSING {user_id}: timeline says `{tl_membership}` (via {tl_event}) \
-						 but user is ABSENT from state snapshot"
-					));
-				},
-				| _ => {},
+			if !clean {
+				// Original diagnostic output (only on non-clean runs)
+				match state_membership.get(user_id) {
+					| Some((st_membership, st_event)) if st_membership != tl_membership => {
+						divergences.push(format!(
+							"WARN {user_id}: timeline says `{tl_membership}` (via {tl_event}) \
+							 but state says `{st_membership}` (via {st_event})"
+						));
+					},
+					| Some((_, st_event)) if st_event != tl_event => {
+						divergences.push(format!(
+							"DIFF {user_id}: `{tl_membership}` {tl_event} {st_event}"
+						));
+					},
+					| None if tl_membership == "join" || tl_membership == "invite" => {
+						divergences.push(format!(
+							"MISSING {user_id}: timeline says `{tl_membership}` (via \
+							 {tl_event}) but user is ABSENT from state snapshot"
+						));
+					},
+					| _ => {},
+				}
 			}
 		}
+
+		if !clean || pass_purged == 0 || pass_num >= max_clean_passes {
+			// Update timeline_membership from the final pass for ghost counting
+			timeline_membership = tl_membership_pass;
+			if clean && pass_num >= max_clean_passes && pass_purged > 0 {
+				divergences.push(format!(
+					"WARN: hit max {max_clean_passes} clean passes, {total_purged} total purged \
+					 — remaining divergences may need manual inspection"
+				));
+			}
+			break;
+		}
+	}
+
+	if clean && total_purged > 100 {
+		divergences.push(format!("... and {} more purged (truncated)", total_purged - 100));
 	}
 
 	// Count ghosts (federation imports with no local timeline events) by
