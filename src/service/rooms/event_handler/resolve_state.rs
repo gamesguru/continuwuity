@@ -198,7 +198,7 @@ pub async fn resolve_state(
 }
 
 #[implement(super::Service)]
-#[tracing::instrument(name = "ruma", level = "debug", skip_all)]
+#[tracing::instrument(name = "ruma", level = "debug", skip_all, fields(%room_id))]
 pub async fn state_resolution<'a, StateSets>(
 	&'a self,
 	room_id: &RoomId,
