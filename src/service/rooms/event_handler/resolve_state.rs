@@ -43,9 +43,6 @@ pub async fn resolve_state(
 		.collect()
 		.await;
 
-	// Keep a copy for the post-filter membership regression check
-	let _current_state_ids_ref = current_state_ids.clone();
-
 	trace!("Loading fork states");
 	let fork_states = [current_state_ids, incoming_state];
 	let auth_chain_sets = fork_states
