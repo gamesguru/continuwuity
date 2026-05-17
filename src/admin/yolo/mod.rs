@@ -465,6 +465,20 @@ pub enum YoloCommand {
 		event_ids: Vec<OwnedEventId>,
 	},
 
+	/// Bulk-unreject all rejected events in a room.
+	///
+	/// Scans the timeline and outlier tree, unmarks any events flagged
+	/// as rejected so they participate in state resolution again.
+	#[command(name = "unreject-room")]
+	UnrejectRoom {
+		/// The room to scan
+		room_id: OwnedRoomId,
+
+		/// Only report the count without unrejecting
+		#[arg(long)]
+		dry_run: bool,
+	},
+
 	/// Batch-heal all rooms by comparing state against a backbone server.
 	///
 	/// For each room: compares local state with the remote server,

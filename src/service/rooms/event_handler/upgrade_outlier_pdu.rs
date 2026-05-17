@@ -378,7 +378,7 @@ where
 		}
 
 		let new_room_state = self
-			.resolve_state(room_id, &room_version_id, state_after, origin)
+			.resolve_state(room_id, &room_version_id, state_after, Some(&[origin.to_owned()]))
 			.await?;
 
 		// Set the new room state to the resolved state

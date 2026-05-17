@@ -4208,6 +4208,74 @@ pub(super) async fn unmark_rejected(&self, event_ids: Vec<OwnedEventId>) -> Resu
 }
 
 #[admin_command]
+pub(super) async fn unreject_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Result {
+	self.bail_restricted()?;
+
+	let mut unmarked = 0_usize;
+	let mut total = 0_usize;
+
+	// Collect all event IDs from timeline + outlier tree
+	let mut pdu_ids: HashSet<OwnedEventId> = self
+		.services
+		.rooms
+		.timeline
+		.all_pdus(&room_id)
+		.map(|(_, pdu)| pdu.event_id().to_owned())
+		.collect()
+		.await;
+
+	let outlier_count_before = pdu_ids.len();
+
+	let outliers: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.outlier
+		.room_stream(&room_id)
+		.map(|(event_id, _)| event_id)
+		.collect()
+		.await;
+
+	pdu_ids.extend(outliers);
+
+	self.write_str(&format!(
+		"Scanning {} events ({} timeline, {} outliers)...\n",
+		pdu_ids.len(),
+		outlier_count_before,
+		pdu_ids.len().saturating_sub(outlier_count_before),
+	))
+	.await?;
+
+	for event_id in &pdu_ids {
+		if self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_rejected(event_id)
+			.await
+		{
+			total = total.saturating_add(1);
+			if !dry_run {
+				self.services
+					.rooms
+					.pdu_metadata
+					.unmark_event_rejected(event_id);
+				unmarked = unmarked.saturating_add(1);
+			}
+		}
+	}
+
+	if dry_run {
+		self.write_str(&format!(
+			"Dry run: Found {total} rejected events in {room_id} to unmark.\n"
+		))
+		.await
+	} else {
+		self.write_str(&format!("Unmarked {unmarked} rejected events in {room_id}.\n"))
+			.await
+	}
+}
+
+#[admin_command]
 pub(super) async fn heal_all_rooms(
 	&self,
 	server: OwnedServerName,

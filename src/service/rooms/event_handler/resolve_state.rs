@@ -13,7 +13,9 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
-use ruma::{OwnedEventId, RoomId, RoomVersionId, ServerName, api::federation::event::get_event};
+use ruma::{
+	OwnedEventId, OwnedServerName, RoomId, RoomVersionId, api::federation::event::get_event,
+};
 
 use crate::rooms::state_compressor::CompressedState;
 
@@ -24,7 +26,7 @@ pub async fn resolve_state(
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 	incoming_state: HashMap<u64, OwnedEventId>,
-	origin: &ServerName,
+	fetch_servers: Option<&[OwnedServerName]>,
 ) -> Result<Arc<CompressedState>> {
 	trace!("Loading current room state ids");
 	let current_sstatehash = self
@@ -86,24 +88,28 @@ pub async fn resolve_state(
 		}
 	}
 
+	// Build server list: fetch_servers first, then trusted notaries
+	let mut servers_to_try: Vec<OwnedServerName> = Vec::new();
+	if let Some(servers) = fetch_servers {
+		servers_to_try.extend_from_slice(servers);
+	}
+	for s in &self.services.server.config.trusted_servers {
+		if !self.services.globals.server_is_ours(s) && !servers_to_try.contains(s) {
+			servers_to_try.push(s.clone());
+		}
+	}
+
 	if !missing.is_empty() {
 		info!(
 			count = missing.len(),
-			%origin,
 			"Pre-fetching missing auth chain events before state resolution"
 		);
 
 		let mut fetched = 0_usize;
-		// Build server list: origin first, then trusted notaries
-		let mut servers_to_try: Vec<&ServerName> = vec![origin];
-		for s in &self.services.server.config.trusted_servers {
-			if !self.services.globals.server_is_ours(s) && s != origin {
-				servers_to_try.push(s);
-			}
-		}
 
 		'next_event: for event_id in &missing {
 			for server in &servers_to_try {
+				let server: &ruma::ServerName = server;
 				match self
 					.services
 					.sending
@@ -154,7 +160,13 @@ pub async fn resolve_state(
 
 	trace!("Resolving state");
 	let state = self
-		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(
+			room_id,
+			room_version_id,
+			fork_states.iter(),
+			&auth_chain_sets,
+			&servers_to_try,
+		)
 		.boxed()
 		.await?;
 
@@ -196,12 +208,41 @@ pub async fn state_resolution<'a, StateSets>(
 	room_version: &'a RoomVersionId,
 	state_sets: StateSets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId>],
+	fetch_servers: &'a [OwnedServerName],
 ) -> Result<StateMap<OwnedEventId>>
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	let event_fetch = |event_id| self.event_fetch(Some(room_id), event_id);
-	let event_exists = |event_id| self.event_exists(event_id);
+	let event_fetch = |event_id: OwnedEventId| async move {
+		// Try local first
+		if let Some(pdu) = self.event_fetch(Some(room_id), event_id.clone()).await {
+			return Some(pdu);
+		}
+		// Try federation fallback
+		for server in fetch_servers {
+			let server: &ruma::ServerName = server;
+			if let Ok(res) = self
+				.services
+				.sending
+				.send_federation_request(server, get_event::v1::Request {
+					event_id: event_id.clone(),
+					include_unredacted_content: None,
+				})
+				.await
+			{
+				if let Ok((_, value)) = gen_event_id_canonical_json(&res.pdu, room_version) {
+					self.services
+						.outlier
+						.add_pdu_outlier(&event_id, &value, Some(room_id));
+					if let Some(pdu) = self.event_fetch(Some(room_id), event_id.clone()).await {
+						return Some(pdu);
+					}
+				}
+			}
+		}
+		None
+	};
+	let event_exists = |event_id: OwnedEventId| async move { self.event_exists(event_id).await };
 	let event_rejected = |event_id: OwnedEventId| async move {
 		// Synapse parity: only hard-rejected events are excluded from state
 		// resolution. Soft-failed events must still participate to heal state

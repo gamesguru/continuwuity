@@ -131,7 +131,7 @@ where
 			.await?;
 
 	let Ok(new_state) = self
-		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets, &[])
 		.boxed()
 		.await
 	else {
