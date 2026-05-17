@@ -2491,14 +2491,14 @@ pub(super) async fn compare_room_state(
 			let mut cmp_joined = 0_usize;
 			let mut cmp_invited = 0_usize;
 			for pdu_raw in &response.pdus {
-				let (event_id, value) = match (if skip_sig_verify {
+				let (event_id, value) = match if skip_sig_verify {
 					conduwuit::matrix::event::gen_event_id_canonical_json(pdu_raw, &room_version)
 				} else {
 					self.services
 						.server_keys
 						.validate_and_add_event_id(pdu_raw, &room_version)
 						.await
-				}) {
+				} {
 					| Ok(r) => r,
 					| Err(e) => {
 						if let Ok((eid, val)) =
