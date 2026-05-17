@@ -1,6 +1,6 @@
 use axum::extract::State;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use conduwuit::{Err, Result, err, info};
+use conduwuit::{Err, Result, err, info, utils::math::usize_from_f64};
 use futures::StreamExt;
 use ruma::OwnedEventId;
 use serde::Serialize;
@@ -41,10 +41,12 @@ pub(crate) struct RoomDigestResponse {
 ///   position_i = (h1 + i * h2) mod m, for i in {0, 1, 2, 3}
 ///
 /// Returns (base64url-encoded filter, bit count m).
-fn build_xxh3_bloom(event_ids: &[OwnedEventId]) -> (String, u32) {
+fn build_xxh3_bloom(event_ids: &[OwnedEventId]) -> Result<(String, u32)> {
 	let w = event_ids.len();
-	#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss, clippy::as_conversions)]
-	let m_bits = ((w as f64) * BITS_PER_ELEMENT).ceil().max(64.0) as usize;
+	let m_bits_f = (f64::from(u32::try_from(w).unwrap_or(u32::MAX)) * BITS_PER_ELEMENT)
+		.ceil()
+		.max(64.0);
+	let m_bits = usize_from_f64(m_bits_f)?;
 	let m_bytes = m_bits.div_ceil(8);
 	let mut filter = vec![0_u8; m_bytes];
 
@@ -55,14 +57,16 @@ fn build_xxh3_bloom(event_ids: &[OwnedEventId]) -> (String, u32) {
 		let h2 = xxh3::xxh3_128_with_seed(bytes, 0x01);
 
 		for i in 0..BLOOM_K {
-			#[allow(clippy::arithmetic_side_effects)]
-			let pos = h1.wrapping_add(i.wrapping_mul(h2)) % m;
-			let pos = usize::try_from(pos).unwrap_or(0);
+			let pos = h1
+				.wrapping_add(i.wrapping_mul(h2))
+				.checked_rem(m)
+				.and_then(|p| usize::try_from(p).ok())
+				.unwrap_or(0);
 			filter[pos / 8] |= 1 << (pos % 8);
 		}
 	}
 
-	(URL_SAFE_NO_PAD.encode(&filter), u32::try_from(m_bits).unwrap_or(u32::MAX))
+	Ok((URL_SAFE_NO_PAD.encode(&filter), u32::try_from(m_bits).unwrap_or(u32::MAX)))
 }
 
 /// Compute the ETag for a room digest.
@@ -168,7 +172,7 @@ pub(crate) async fn get_room_digest_route(
 	);
 
 	// 3. Build the Bloom filter
-	let (digest, digest_bits) = build_xxh3_bloom(&window_event_ids);
+	let (digest, digest_bits) = build_xxh3_bloom(&window_event_ids)?;
 
 	// 4. Compute ETag for conditional request support
 	let etag = compute_etag(&mut extremity_event_ids, event_count);
@@ -200,8 +204,8 @@ mod tests {
 			"$def456:example.com".try_into().unwrap(),
 			"$ghi789:example.com".try_into().unwrap(),
 		];
-		let (digest1, bits1) = build_xxh3_bloom(&ids);
-		let (digest2, bits2) = build_xxh3_bloom(&ids);
+		let (digest1, bits1) = build_xxh3_bloom(&ids).unwrap();
+		let (digest2, bits2) = build_xxh3_bloom(&ids).unwrap();
 		assert_eq!(digest1, digest2, "Bloom filter must be deterministic");
 		assert_eq!(bits1, bits2);
 	}
@@ -211,7 +215,7 @@ mod tests {
 		let ids: Vec<OwnedEventId> = (0..5000)
 			.map(|i| format!("$event{i}:example.com").try_into().unwrap())
 			.collect();
-		let (_, bits) = build_xxh3_bloom(&ids);
+		let (_, bits) = build_xxh3_bloom(&ids).unwrap();
 		// m = ceil(5000 * 6.235) = 31175
 		assert_eq!(bits, 31175, "Filter size must match MSC0F01 spec");
 	}

@@ -111,9 +111,10 @@ impl Service {
 }
 
 fn check_room_id<Pdu: Event>(room_id: &RoomId, pdu: &Pdu) -> Result {
-	// room_id_or_hash() returns None for non-create events in room versions ≥4
-	// where room_id is not included in the wire format. We can only verify if
-	// the PDU actually contains a room_id.
+	// room_id_or_hash() returns None only for v12 create events where room_id
+	// is derived from the event_id. All other events must have room_id.
+	// If room_id is missing on a non-create event, the stored JSON is corrupt
+	// but we still proceed rather than blocking the entire auth chain.
 	if let Some(pdu_room_id) = pdu.room_id_or_hash() {
 		if *pdu_room_id != *room_id {
 			return Err!(Request(InvalidParam(error!(
