@@ -463,6 +463,17 @@ pub(super) async fn audit_membership(
 					local_members.insert(user_id.to_string(), (membership.clone(), eid.clone()));
 				}
 
+				let remote_joined = remote_members.values().filter(|m| *m == "join").count();
+				let remote_invited = remote_members.values().filter(|m| *m == "invite").count();
+				let remote_left = remote_members.values().filter(|m| *m == "leave").count();
+				let remote_banned = remote_members.values().filter(|m| *m == "ban").count();
+				self.write_str(&format!(
+					"Remote {server}: {} total member events, joined={remote_joined}, \
+					 invited={remote_invited}, left={remote_left}, banned={remote_banned}\n",
+					remote_members.len()
+				))
+				.await?;
+
 				let mut remote_diffs = Vec::new();
 
 				for (user, remote_ms) in &remote_members {
@@ -553,7 +564,9 @@ pub(super) async fn audit_membership(
 
 				if remote_diffs.is_empty() {
 					self.write_str(&format!(
-						"OK: Local and {server} agree on membership ({} members)",
+						"OK: Local and {server} agree on membership \
+						 ({} members, joined={remote_joined}, invited={remote_invited}, \
+						 left={remote_left}, banned={remote_banned})",
 						remote_members.len()
 					))
 					.await?;
