@@ -615,7 +615,7 @@ async fn join_room_by_id_helper_remote(
 				.server_keys
 				.validate_and_add_event_id(pdu, &room_version_id)
 				.inspect_err(|e| {
-					debug_warn!("Could not validate send_join response room_state event: {e:?}");
+					info!("Could not validate send_join response room_state event: {e:?}");
 				})
 				.inspect(|_| debug!("Completed validating send_join response room_state event"))
 		})
@@ -624,7 +624,7 @@ async fn join_room_by_id_helper_remote(
 			let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id)) {
 				| Ok(pdu) => pdu,
 				| Err(e) => {
-					debug_warn!("Invalid PDU in send_join response: {e:?}: {value:#?}");
+					info!("Invalid PDU in send_join response: {e:?}: {value:#?}");
 					return state;
 				},
 			};
