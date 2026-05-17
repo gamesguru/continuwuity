@@ -193,7 +193,12 @@ where
 	let mut auth_events: HashMap<OwnedEventId, PduEvent> = HashMap::new();
 
 	for aid in pdu_event.auth_events() {
-		if let Ok(auth_event) = self.services.timeline.get_pdu(aid).await {
+		if let Ok(auth_event) = self
+			.services
+			.timeline
+			.get_pdu_in_room(Some(room_id), aid)
+			.await
+		{
 			check_room_id(room_id, &auth_event)?;
 			trace!("Found auth event {aid} for outlier event {event_id} locally");
 			auth_events.insert(aid.to_owned(), auth_event);
