@@ -43,23 +43,26 @@ pub(crate) struct RoomDigestResponse {
 /// Returns (base64url-encoded filter, bit count m).
 fn build_xxh3_bloom(event_ids: &[OwnedEventId]) -> (String, u32) {
 	let w = event_ids.len();
+	#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss, clippy::as_conversions)]
 	let m_bits = ((w as f64) * BITS_PER_ELEMENT).ceil().max(64.0) as usize;
 	let m_bytes = m_bits.div_ceil(8);
 	let mut filter = vec![0_u8; m_bytes];
 
-	let m = m_bits as u128;
+	let m = u128::try_from(m_bits).unwrap_or(u128::MAX);
 	for event_id in event_ids {
 		let bytes = event_id.as_bytes();
 		let h1 = xxh3::xxh3_128_with_seed(bytes, 0x00);
 		let h2 = xxh3::xxh3_128_with_seed(bytes, 0x01);
 
 		for i in 0..BLOOM_K {
-			let pos = (h1.wrapping_add(i.wrapping_mul(h2)) % m) as usize;
+			#[allow(clippy::arithmetic_side_effects)]
+			let pos = h1.wrapping_add(i.wrapping_mul(h2)) % m;
+			let pos = usize::try_from(pos).unwrap_or(0);
 			filter[pos / 8] |= 1 << (pos % 8);
 		}
 	}
 
-	(URL_SAFE_NO_PAD.encode(&filter), m_bits as u32)
+	(URL_SAFE_NO_PAD.encode(&filter), u32::try_from(m_bits).unwrap_or(u32::MAX))
 }
 
 /// Compute the ETag for a room digest.
@@ -174,7 +177,7 @@ pub(crate) async fn get_room_digest_route(
 		digest,
 		digest_type: "xxh3_bloom".to_owned(),
 		digest_bits,
-		digest_window: window_event_ids.len() as u32,
+		digest_window: u32::try_from(window_event_ids.len()).unwrap_or(u32::MAX),
 		event_count,
 		extremity_event_ids,
 		depth_range: (min_depth, max_depth),
