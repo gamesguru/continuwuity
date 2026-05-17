@@ -1122,7 +1122,7 @@ where
 				);
 				false
 			} else {
-				let allow = sender_creator
+				let allow = (sender_creator && !target_creator)
 					|| (sender_power.filter(|&p| p >= &power_levels.ban).is_some()
 						&& target_power < sender_power);
 				if !allow {

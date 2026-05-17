@@ -1530,7 +1530,7 @@ pub(super) async fn get_remote_dag(
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
 
 	let mut seen = HashSet::<OwnedEventId>::new();
-	let mut queue = vec![start_event_id];
+	let mut queue = VecDeque::from(vec![start_event_id]);
 	let mut total = 0_usize;
 	let mut total_prev_events = 0_u64;
 	let mut batches = 0_usize;
@@ -1552,11 +1552,13 @@ pub(super) async fn get_remote_dag(
 	};
 
 	while !queue.is_empty() && total < limit {
-		// Cap request queue to avoid 414 URI Too Long from reverse proxies
-		let request_v: Vec<_> = queue.iter().take(50).cloned().collect();
+		// Cap request queue to avoid 414 URI Too Long from reverse proxies.
+		// Drain items from front so we don't lose unsent frontier items.
+		let current_batch_size = 50.min(queue.len());
+		let request_v: Vec<_> = queue.drain(..current_batch_size).collect();
 		let request = ruma::api::federation::backfill::get_backfill::v1::Request {
 			room_id: room_id.clone(),
-			v: request_v,
+			v: request_v.clone(),
 			limit: batch_size,
 		};
 
@@ -1574,11 +1576,18 @@ pub(super) async fn get_remote_dag(
 			| Err(e) => {
 				let err_str = e.to_string();
 
-				// 414 URI Too Long -- drop 1/4 of the queue silently, don't log error
+				// 414 URI Too Long -- re-add only half the items to shrink next request
 				if err_str.contains("414") {
-					let drain = queue.len() / 4;
-					queue.drain(..drain.max(1));
+					let keep = request_v.len() / 2;
+					for id in request_v.into_iter().take(keep) {
+						queue.push_front(id);
+					}
 					continue;
+				}
+
+				// Other errors: re-add all items to retry
+				for id in request_v.into_iter().rev() {
+					queue.push_front(id);
 				}
 
 				consecutive_errors = consecutive_errors.saturating_add(1);
@@ -1604,9 +1613,6 @@ pub(super) async fn get_remote_dag(
 						.await?;
 					break;
 				}
-				// Trim the queue and retry — drop the first half to try different events
-				let drain = queue.len() / 2;
-				queue.drain(..drain.max(1));
 				continue;
 			},
 		};
@@ -1616,8 +1622,7 @@ pub(super) async fn get_remote_dag(
 			break;
 		}
 
-		queue.clear();
-
+		// Response PDUs will add their prev_events to the queue below
 		for raw_pdu in &response.pdus {
 			let (event_id, value) = match self
 				.services
@@ -1704,7 +1709,7 @@ pub(super) async fn get_remote_dag(
 			// Add prev_events to the queue for next iteration
 			for prev in pdu.prev_events() {
 				if !seen.contains(prev) {
-					queue.push(prev.to_owned());
+					queue.push_back(prev.to_owned());
 				}
 			}
 
@@ -2963,116 +2968,113 @@ pub(super) async fn import_pdus(
 			.and_then(|id| OwnedEventId::parse(id).ok())
 	};
 
-	// Helper: serialize a CanonicalJsonObject to RawValue
-	let to_raw = |value: &CanonicalJsonObject| -> Box<serde_json::value::RawValue> {
-		serde_json::value::RawValue::from_string(
-			serde_json::to_string(value).expect("valid json"),
-		)
-		.expect("valid raw")
-	};
-
 	while let Ok(Some(line)) = lines.next_line().await {
 		if line.trim().is_empty() {
 			continue;
 		}
 		total = total.saturating_add(1);
 
-		let result: Result<bool> = async {
-			let mut raw_map: serde_json::Map<String, serde_json::Value> =
-				serde_json::from_str(&line)?;
+		let result: Result<bool> =
+			async {
+				let mut value: CanonicalJsonObject = serde_json::from_str(&line)
+					.map_err(|e| err!("Failed to parse JSON line: {e}"))?;
 
-			// Strip diagnostic/internal fields that were injected during export.
-			raw_map.remove("__shortstatehash");
-			raw_map.remove("prev_state_events");
-			raw_map.remove("state_jump_pointers");
+				// Strip diagnostic/internal fields that were injected during export.
+				value.remove("__shortstatehash");
+				value.remove("prev_state_events");
+				value.remove("state_jump_pointers");
 
-			// V12: strip room_id from m.room.create events (not part of signed content)
-			if room_version == RoomVersionId::V12
-				&& raw_map.get("type").and_then(|v| v.as_str()) == Some("m.room.create")
-			{
-				raw_map.remove("room_id");
-			}
+				// V12+: strip room_id from m.room.create events (not part of signed content)
+				let is_v12_or_later =
+					!matches!(
+						room_version,
+						RoomVersionId::V1
+							| RoomVersionId::V2 | RoomVersionId::V3
+							| RoomVersionId::V4 | RoomVersionId::V5
+							| RoomVersionId::V6 | RoomVersionId::V7
+							| RoomVersionId::V8 | RoomVersionId::V9
+							| RoomVersionId::V10 | RoomVersionId::V11
+					);
+				if is_v12_or_later
+					&& value.get("type").and_then(ruma::CanonicalJsonValue::as_str)
+						== Some("m.room.create")
+				{
+					value.remove("room_id");
+				}
 
-			// Create the CanonicalJsonObject needed for the rest of the pipeline
-			let value: CanonicalJsonObject =
-				serde_json::from_value(serde_json::Value::Object(raw_map.clone()))
-					.map_err(|e| err!("Failed to convert to CanonicalJsonObject: {e}"))?;
-
-			if skip_auth {
-				let eid = extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?;
-				let pdu = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))?;
-				self.services
-					.rooms
-					.timeline
-					.force_insert_pdu(&room_id, &eid, &pdu, &value)
-					.await
-					.map(|_| true)
-			} else {
-				let (eid, val) = if skip_sig_verify {
-					(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
-				} else {
-					// Use the raw line JSON directly (after stripping diagnostics),
-					// stripping event_id for v3+ rooms where it's not part of the signed content.
-					// V1/V2 rooms require event_id in the JSON for signature verification.
-					if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
-						raw_map.remove("event_id");
-					}
-					let raw = serde_json::value::RawValue::from_string(serde_json::to_string(
-						&raw_map,
-					)?)
-					.map_err(|e| err!("raw value: {e}"))?;
-
-					match self
-						.services
-						.server_keys
-						.validate_and_add_event_id(&raw, &room_version)
+				if skip_auth {
+					let eid = extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?;
+					let pdu = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))?;
+					self.services
+						.rooms
+						.timeline
+						.force_insert_pdu(&room_id, &eid, &pdu, &value)
 						.await
-					{
-						| Ok(result) => result,
-						| Err(e) => {
-							// Sig verification failed — persist as rejected outlier so the
-							// event is available for auth chain lookups and state context
-							let eid = extract_event_id(&value)
-								.ok_or_else(|| err!("missing event_id"))?;
+						.map(|_| true)
+				} else {
+					let (eid, val) = if skip_sig_verify {
+						(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
+					} else {
+						// Build RawValue for sig verification from the canonical object.
+						// Strip event_id for v3+ rooms (not part of signed content).
+						// V1/V2 rooms require event_id for sig verification.
+						let mut raw_val = value.clone();
+						if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2
+						{
+							raw_val.remove("event_id");
+						}
+						let raw = serde_json::value::RawValue::from_string(
+							serde_json::to_string(&raw_val)?,
+						)
+						.map_err(|e| err!("raw value: {e}"))?;
 
-							warn!(
-								"import_pdus: Event {eid} failed verification: {e}\n  PDU: {}",
-								serde_json::to_string_pretty(&value).unwrap_or_default(),
-							);
+						match self
+							.services
+							.server_keys
+							.validate_and_add_event_id(&raw, &room_version)
+							.await
+						{
+							| Ok(result) => result,
+							| Err(e) => {
+								// Sig verification failed — persist as soft-failed outlier so the
+								// event is available for auth chain lookups and state context
+								let eid = extract_event_id(&value)
+									.ok_or_else(|| err!("missing event_id"))?;
 
-							// Store as outlier
-							self.services.rooms.outlier.add_pdu_outlier(
-								&eid,
-								&value,
-								Some(&room_id),
-							);
+								warn!(
+									"import_pdus: Event {eid} failed verification: {e}\n  PDU: \
+									 {}",
+									serde_json::to_string_pretty(&value).unwrap_or_default(),
+								);
 
-							// Mark as rejected (NOT soft-failed: sig failures are rejections,
-							// not soft-fails which are for valid-sig events failing state auth)
-							self.services
-								.rooms
-								.pdu_metadata
-								.mark_event_soft_failed(&eid);
+								// Store as outlier
+								self.services.rooms.outlier.add_pdu_outlier(
+									&eid,
+									&value,
+									Some(&room_id),
+								);
 
-							return Ok(false);
-						},
-					}
-				};
-				let (_, _, canonical) = self
-					.services
-					.rooms
-					.event_handler
-					.parse_incoming_pdu(&to_raw(&val))
-					.await?;
-				self.services
-					.rooms
-					.event_handler
-					.handle_incoming_pdu(origin, &room_id, &eid, canonical, true)
-					.await?;
-				Ok(true)
+								// Mark as soft-failed (unverifiable, not proven fraudulent)
+								self.services
+									.rooms
+									.pdu_metadata
+									.mark_event_soft_failed(&eid);
+
+								return Ok(false);
+							},
+						}
+					};
+					// Pass directly to handle_incoming_pdu, bypassing parse_incoming_pdu
+					// which would redundantly re-hash and re-extract event_id/room_id.
+					self.services
+						.rooms
+						.event_handler
+						.handle_incoming_pdu(origin, &room_id, &eid, val, true)
+						.await?;
+					Ok(true)
+				}
 			}
-		}
-		.await;
+			.await;
 
 		match result {
 			| Ok(true) => inserted = inserted.saturating_add(1),
