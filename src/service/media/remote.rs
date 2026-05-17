@@ -13,7 +13,7 @@ use ruma::{
 	api::{
 		OutgoingRequest,
 		client::{
-			error::ErrorKind::{NotFound, Unrecognized},
+			error::ErrorKind::{Forbidden, NotFound, Unrecognized},
 			media,
 		},
 		federation,
@@ -38,7 +38,7 @@ pub async fn fetch_remote_thumbnail(
 		.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
 		.await;
 
-	if let Err(Error::Request(Unrecognized | NotFound, ..)) = &result {
+	if let Err(Error::Request(Unrecognized | NotFound | Forbidden { .. }, ..)) = &result {
 		return self
 			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
 			.await;
@@ -84,7 +84,7 @@ fn should_fallback_to_unauthenticated(
 	allow_broad_fallback: bool,
 ) -> bool {
 	match result {
-		| Err(Error::Request(Unrecognized | NotFound, ..)) => true,
+		| Err(Error::Request(Unrecognized | NotFound | Forbidden { .. }, ..)) => true,
 		| Err(error) if allow_broad_fallback =>
 			error.status_code().is_server_error()
 				|| matches!(

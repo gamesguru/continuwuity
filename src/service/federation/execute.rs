@@ -180,12 +180,20 @@ async fn into_http_response(
 		.status(status)
 		.version(response.version());
 
-	mem::swap(
-		response.headers_mut(),
-		http_response_builder
-			.headers_mut()
-			.expect("http::response::Builder is usable"),
-	);
+	let headers = http_response_builder
+		.headers_mut()
+		.expect("http::response::Builder is usable");
+
+	mem::swap(response.headers_mut(), headers);
+
+	// Some servers omit Content-Type (e.g. broken media endpoints). Default to
+	// application/octet-stream so ruma's response deserialization doesn't fail.
+	if !headers.contains_key(http::header::CONTENT_TYPE) {
+		headers.insert(
+			http::header::CONTENT_TYPE,
+			HeaderValue::from_static("application/octet-stream"),
+		);
+	}
 
 	trace!("Waiting for response body...");
 	let body_bytes = response.limit_read(max_size).await?;
