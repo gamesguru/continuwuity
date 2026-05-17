@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug, debug_info, debug_warn, err, implement, state_res,
+	Err, Event, PduEvent, Result, debug, debug_info, debug_warn, err, implement, info, state_res,
 	trace, warn,
 };
 use futures::future::ready;
@@ -62,8 +62,31 @@ where
 	{
 		| Ok(ruma::signatures::Verified::All) => value,
 		| Ok(ruma::signatures::Verified::Signatures) => {
-			// Redact
-			debug_info!("Calculated hash does not match (redaction): {event_id}");
+			// Content hash does not match — spec says to redact. Log
+			// details to diagnose whether this is a genuine mismatch or
+			// a canonicalization false positive.
+			let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+			let sender = value.get("sender").and_then(|v| v.as_str()).unwrap_or("?");
+			let content_keys: Vec<&str> = value
+				.get("content")
+				.and_then(|v| v.as_object())
+				.map(|o| o.keys().map(String::as_str).collect())
+				.unwrap_or_default();
+			let stored_hash = value
+				.get("hashes")
+				.and_then(|v| v.as_object())
+				.and_then(|h| h.get("sha256"))
+				.and_then(|v| v.as_str())
+				.unwrap_or("?");
+			info!(
+				%event_id,
+				event_type,
+				sender,
+				stored_hash,
+				?content_keys,
+				"Content hash mismatch — redacting event (fidelity loss). \
+				 Content keys being stripped by redaction."
+			);
 			ruma::canonical_json::redact(value, &room_version_id, None)
 				.map_err(|_| err!(Request(InvalidParam("Redaction failed"))))?
 		},
