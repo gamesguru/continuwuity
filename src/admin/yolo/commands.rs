@@ -4228,10 +4228,16 @@ pub(super) async fn unmark_rejected(&self, event_ids: Vec<OwnedEventId>) -> Resu
 }
 
 #[admin_command]
-pub(super) async fn unreject_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Result {
+pub(super) async fn unreject_room(
+	&self,
+	room_id: OwnedRoomId,
+	dry_run: bool,
+	soft_fail: bool,
+) -> Result {
 	self.bail_restricted()?;
 
 	let mut unmarked = 0_usize;
+	let mut soft_unmarked = 0_usize;
 	let mut total = 0_usize;
 
 	// Collect all event IDs from timeline + outlier tree
@@ -4282,6 +4288,22 @@ pub(super) async fn unreject_room(&self, room_id: OwnedRoomId, dry_run: bool) ->
 				unmarked = unmarked.saturating_add(1);
 			}
 		}
+		if soft_fail
+			&& self
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_soft_failed(event_id)
+				.await
+		{
+			if !dry_run {
+				self.services
+					.rooms
+					.pdu_metadata
+					.unmark_event_soft_failed(event_id);
+				soft_unmarked = soft_unmarked.saturating_add(1);
+			}
+		}
 	}
 
 	if dry_run {
@@ -4290,7 +4312,12 @@ pub(super) async fn unreject_room(&self, room_id: OwnedRoomId, dry_run: bool) ->
 		))
 		.await
 	} else {
-		self.write_str(&format!("Unmarked {unmarked} rejected events in {room_id}.\n"))
+		let soft_msg = if soft_fail {
+			format!(", {soft_unmarked} soft-fail markers cleared")
+		} else {
+			String::new()
+		};
+		self.write_str(&format!("Unmarked {unmarked} rejected events{soft_msg} in {room_id}.\n"))
 			.await
 	}
 }

@@ -469,6 +469,7 @@ pub enum YoloCommand {
 	///
 	/// Scans the timeline and outlier tree, unmarks any events flagged
 	/// as rejected so they participate in state resolution again.
+	/// Use --soft-fail to also clear soft-fail markers.
 	#[command(name = "unreject-room")]
 	UnrejectRoom {
 		/// The room to scan
@@ -477,6 +478,10 @@ pub enum YoloCommand {
 		/// Only report the count without unrejecting
 		#[arg(long)]
 		dry_run: bool,
+
+		/// Also clear soft-fail markers
+		#[arg(long)]
+		soft_fail: bool,
 	},
 
 	/// Batch-heal all rooms by comparing state against a backbone server.
