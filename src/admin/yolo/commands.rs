@@ -4678,3 +4678,168 @@ pub(super) async fn rebuild_membership_cache(&self, room_id: OwnedRoomId) -> Res
 	info!("{out}");
 	self.write_str(&out).await
 }
+
+#[admin_command]
+pub(super) async fn set_state_event(
+	&self,
+	room_id: OwnedRoomId,
+	event_type: String,
+	state_key: String,
+	event_id: OwnedEventId,
+) -> Result {
+	use conduwuit_service::rooms::state_compressor::CompressedState;
+
+	self.bail_restricted()?;
+
+	let event_type: StateEventType = event_type.into();
+
+	// Verify the event exists locally (timeline or outlier)
+	let pdu = match self.services.rooms.timeline.get_pdu(&event_id).await {
+		| Ok(pdu) => pdu,
+		| Err(_) => {
+			// Try outlier: get the JSON and parse it
+			let json = self
+				.services
+				.rooms
+				.outlier
+				.get_outlier_pdu_json(&event_id)
+				.await
+				.map_err(|_| err!(Request(NotFound("Event {event_id} not found locally"))))?;
+			serde_json::from_value::<PduEvent>(
+				serde_json::to_value(&json).map_err(|e| err!(Request(InvalidParam("{e}"))))?,
+			)
+			.map_err(|e| err!(Request(InvalidParam("Failed to parse outlier: {e}"))))?
+		},
+	};
+
+	// Verify it matches the claimed type/state_key
+	if pdu.kind.to_string() != event_type.to_string() {
+		return Err!(Request(InvalidParam(
+			"Event type mismatch: expected {event_type}, got {}",
+			pdu.kind
+		)));
+	}
+	if pdu.state_key.as_deref() != Some(&*state_key) {
+		return Err!(Request(InvalidParam(
+			"State key mismatch: expected {state_key:?}, got {:?}",
+			pdu.state_key
+		)));
+	}
+
+	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
+
+	// Get current state
+	let current_shortstatehash = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(&room_id)
+		.await
+		.map_err(|_| err!(Request(NotFound("Room has no state"))))?;
+
+	// Get the full state as (shortstatekey, event_id) pairs
+	let current_state: HashMap<u64, OwnedEventId> = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full_ids(current_shortstatehash)
+		.collect()
+		.await;
+
+	// Build new compressed state
+	let target_shortstatekey = self
+		.services
+		.rooms
+		.short
+		.get_or_create_shortstatekey(&event_type, &state_key)
+		.await;
+
+	let mut new_state = CompressedState::new();
+
+	for (shortstatekey, eid) in &current_state {
+		if *shortstatekey == target_shortstatekey {
+			// Replace with our target event
+			let compressed = self
+				.services
+				.rooms
+				.state_compressor
+				.compress_state_event(*shortstatekey, &event_id)
+				.await;
+			new_state.insert(compressed);
+		} else {
+			let compressed = self
+				.services
+				.rooms
+				.state_compressor
+				.compress_state_event(*shortstatekey, eid)
+				.await;
+			new_state.insert(compressed);
+		}
+	}
+
+	// If the (type, state_key) wasn't in the current state, add it
+	if !current_state.contains_key(&target_shortstatekey) {
+		let compressed = self
+			.services
+			.rooms
+			.state_compressor
+			.compress_state_event(target_shortstatekey, &event_id)
+			.await;
+		new_state.insert(compressed);
+	}
+
+	// Save the new state
+	let new_state = std::sync::Arc::new(new_state);
+	let new_shortstatehash = self
+		.services
+		.rooms
+		.state
+		.set_event_state(&event_id, &room_id, new_state)
+		.await?;
+
+	self.services
+		.rooms
+		.state
+		.set_room_state(&room_id, new_shortstatehash, &state_lock);
+
+	// Rebuild membership cache if this is a member event
+	if event_type == StateEventType::RoomMember {
+		if let Ok(user_id) = ruma::UserId::parse(&state_key) {
+			self.services
+				.rooms
+				.state_cache
+				.update_membership(&room_id, user_id, &pdu, false)
+				.await?;
+		}
+		self.services
+			.rooms
+			.state_cache
+			.update_joined_count(&room_id)
+			.await;
+	}
+
+	let membership = if event_type == StateEventType::RoomMember {
+		pdu.content
+			.get()
+			.parse::<serde_json::Value>()
+			.ok()
+			.and_then(|c: serde_json::Value| {
+				c.get("membership")
+					.and_then(|m| m.as_str().map(String::from))
+			})
+			.unwrap_or_default()
+	} else {
+		String::new()
+	};
+
+	let out = format!(
+		"Set ({event_type}, {state_key:?}) => {event_id}{}\n",
+		if membership.is_empty() {
+			String::new()
+		} else {
+			format!(" (membership: {membership})")
+		}
+	);
+	info!("{out}");
+	self.write_str(&out).await
+}

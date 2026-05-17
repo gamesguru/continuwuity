@@ -515,4 +515,24 @@ pub enum YoloCommand {
 		/// The room ID to rebuild.
 		room_id: OwnedRoomId,
 	},
+
+	/// Surgically override a single state event in a room's state snapshot.
+	///
+	/// Sets the state for a specific (type, state_key) tuple to the given
+	/// event_id. The event must exist locally (timeline or outlier).
+	/// Rebuilds membership cache if the event is m.room.member.
+	///
+	/// Example: yolo set-state-event !room:server m.room.member @user:server
+	/// $eventid
+	#[command(name = "set-state-event")]
+	SetStateEvent {
+		/// The room ID.
+		room_id: OwnedRoomId,
+		/// The state event type (e.g. m.room.member, m.room.power_levels).
+		event_type: String,
+		/// The state key (e.g. @user:server for members, empty for PLs).
+		state_key: String,
+		/// The event ID to set as the current state for this (type, key).
+		event_id: OwnedEventId,
+	},
 }
