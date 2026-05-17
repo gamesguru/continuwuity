@@ -55,6 +55,7 @@ where
 			routing_servers.push(s.clone());
 		}
 	}
+	let n_trusted = routing_servers.len(); // origin + trusted servers
 	let room_servers: Vec<OwnedServerName> = self
 		.services
 		.state_cache
@@ -63,10 +64,17 @@ where
 			!self.services.globals.server_is_ours(s) && !routing_servers.iter().any(|x| x == s)
 		})
 		.map(ToOwned::to_owned)
-		.take(15)
+		.take(self.services.server.config.federation_fallback_room_servers)
 		.collect()
 		.await;
 	routing_servers.extend(room_servers);
+	info!(
+		origin = %origin,
+		n_trusted,
+		n_room = routing_servers.len().saturating_sub(n_trusted),
+		n_total = routing_servers.len(),
+		"Built federation fallback server list for outlier fetching"
+	);
 
 	let mut events_with_auth_events = Vec::with_capacity(events.clone().count());
 	trace!("Fetching {} outlier pdus", events.clone().count());
@@ -107,11 +115,72 @@ where
 			} else {
 				let id_clone = id.to_owned();
 				let servers = routing_servers.clone();
+				let n_t = n_trusted;
 				active_fetches.push(
 					async move {
-						let mut last_err =
+						for attempt in 0..2_u8 {
+							if attempt > 0 {
+								tokio::time::sleep(std::time::Duration::from_secs(
+									2_u64.pow(attempt.into()),
+								))
+								.await;
+								debug!(%id_clone, attempt, "Retrying federation fetch");
+							}
+							let _last_err = conduwuit::err!(Request(NotFound(
+								"event not found on any server"
+							)));
+							for (i, server) in servers.iter().enumerate() {
+								match self
+									.services
+									.sending
+									.send_federation_request(server, get_event::v1::Request {
+										event_id: id_clone.clone(),
+										include_unredacted_content: None,
+									})
+									.await
+								{
+									| Ok(res) => return (id_clone, Ok(res)),
+									| Err(e) => {
+										if i == 0 {
+											debug!(%id_clone, %server, "Origin server failed: {e}");
+										}
+										if i.saturating_add(1) == n_t {
+											info!(%id_clone, "All origin+trusted servers failed ({n_t} tried)");
+										}
+										let _ = e;
+									},
+								}
+							}
+							warn!(%id_clone, n_servers = servers.len(), attempt, "All fallback servers exhausted");
+						}
+						(
+							id_clone,
+							Err(conduwuit::err!(Request(NotFound(
+								"event not found after retries"
+							)))),
+						)
+					}
+					.boxed(),
+				);
+				graph.insert(id.to_owned(), HashSet::new());
+			}
+		} else {
+			let id_clone = id.to_owned();
+			let servers = routing_servers.clone();
+			let n_t = n_trusted;
+			active_fetches.push(
+				async move {
+					for attempt in 0..2_u8 {
+						if attempt > 0 {
+							tokio::time::sleep(std::time::Duration::from_secs(
+								2_u64.pow(attempt.into()),
+							))
+							.await;
+							debug!(%id_clone, attempt, "Retrying federation fetch");
+						}
+						let _last_err =
 							conduwuit::err!(Request(NotFound("event not found on any server")));
-						for server in &servers {
+						for (i, server) in servers.iter().enumerate() {
 							match self
 								.services
 								.sending
@@ -122,37 +191,23 @@ where
 								.await
 							{
 								| Ok(res) => return (id_clone, Ok(res)),
-								| Err(e) => last_err = e,
+								| Err(e) => {
+									if i == 0 {
+										debug!(%id_clone, %server, "Origin server failed: {e}");
+									}
+									if i.saturating_add(1) == n_t {
+										warn!(%id_clone, "All origin+trusted servers failed ({n_t} tried)");
+									}
+									let _ = e;
+								},
 							}
 						}
-						(id_clone, Err(last_err))
+						warn!(%id_clone, n_servers = servers.len(), attempt, "All fallback servers exhausted");
 					}
-					.boxed(),
-				);
-				graph.insert(id.to_owned(), HashSet::new());
-			}
-		} else {
-			let id_clone = id.to_owned();
-			let servers = routing_servers.clone();
-			active_fetches.push(
-				async move {
-					let mut last_err =
-						conduwuit::err!(Request(NotFound("event not found on any server")));
-					for server in &servers {
-						match self
-							.services
-							.sending
-							.send_federation_request(server, get_event::v1::Request {
-								event_id: id_clone.clone(),
-								include_unredacted_content: None,
-							})
-							.await
-						{
-							| Ok(res) => return (id_clone, Ok(res)),
-							| Err(e) => last_err = e,
-						}
-					}
-					(id_clone, Err(last_err))
+					(
+						id_clone,
+						Err(conduwuit::err!(Request(NotFound("event not found after retries")))),
+					)
 				}
 				.boxed(),
 			);
@@ -239,30 +294,46 @@ where
 									);
 									let auth_event_clone = auth_event.clone();
 									let servers = routing_servers.clone();
+									let n_t = n_trusted;
 									active_fetches.push(
 										async move {
-											let mut last_err = conduwuit::err!(Request(
-												NotFound("event not found on any server")
-											));
-											for server in &servers {
-												match self
-													.services
-													.sending
-													.send_federation_request(
-														server,
-														get_event::v1::Request {
-															event_id: auth_event_clone.clone(),
-															include_unredacted_content: None,
-														},
-													)
-													.await
-												{
-													| Ok(res) =>
-														return (auth_event_clone, Ok(res)),
-													| Err(e) => last_err = e,
+											for attempt in 0..2_u8 {
+												if attempt > 0 {
+													tokio::time::sleep(std::time::Duration::from_secs(2_u64.pow(attempt.into()))).await;
+													debug!(%auth_event_clone, attempt, "Retrying auth event fetch");
 												}
+												let _last_err = conduwuit::err!(Request(
+													NotFound("auth event not found on any server")
+												));
+												for (i, server) in servers.iter().enumerate() {
+													match self
+														.services
+														.sending
+														.send_federation_request(
+															server,
+															get_event::v1::Request {
+																event_id: auth_event_clone.clone(),
+																include_unredacted_content: None,
+															},
+														)
+														.await
+													{
+														| Ok(res) =>
+															return (auth_event_clone, Ok(res)),
+														| Err(e) => {
+															if i == 0 {
+																debug!(%auth_event_clone, %server, "Origin failed for auth event: {e}");
+															}
+															if i.saturating_add(1) == n_t {
+																warn!(%auth_event_clone, "All origin+trusted failed for auth event ({n_t} tried)");
+															}
+															let _ = e;
+														},
+													}
+												}
+												warn!(%auth_event_clone, n_servers = servers.len(), attempt, "All servers exhausted for auth event");
 											}
-											(auth_event_clone, Err(last_err))
+											(auth_event_clone, Err(conduwuit::err!(Request(NotFound("auth event not found after retries")))))
 										}
 										.boxed(),
 									);

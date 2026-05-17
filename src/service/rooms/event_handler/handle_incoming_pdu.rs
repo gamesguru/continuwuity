@@ -154,7 +154,8 @@ pub async fn handle_incoming_pdu<'a>(
 
 	let fut = self.handle_incoming_pdu_inner(origin, room_id, event_id, value, is_timeline_event);
 
-	match tokio::time::timeout(std::time::Duration::from_secs(60), fut).await {
+	let pdu_timeout = self.services.server.config.pdu_receive_timeout;
+	match tokio::time::timeout(std::time::Duration::from_secs(pdu_timeout), fut).await {
 		| Ok(res) => {
 			if res.is_ok() {
 				// Clear the circuit breaker on success
@@ -167,7 +168,8 @@ pub async fn handle_incoming_pdu<'a>(
 				%event_id,
 				%room_id,
 				%origin,
-				"PDU processing timed out after 60s, soft-failing and tripping circuit breaker"
+				pdu_timeout,
+				"PDU processing timed out, soft-failing and tripping circuit breaker"
 			);
 
 			let mut lock = self.bad_room_ratelimiter.write();

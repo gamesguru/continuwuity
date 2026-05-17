@@ -492,6 +492,23 @@ pub struct Config {
 	#[serde(default = "default_federation_timeout")]
 	pub federation_timeout: u64,
 
+	/// Maximum time (seconds) to process a single incoming federation PDU.
+	/// This includes auth chain pre-fetching, outlier resolution, and state
+	/// resolution. If exceeded, the PDU is soft-failed and a per-room circuit
+	/// breaker is tripped.
+	///
+	/// default: 600
+	#[serde(default = "default_pdu_receive_timeout")]
+	pub pdu_receive_timeout: u64,
+
+	/// Maximum number of room member servers to try when fetching missing
+	/// federation events (auth chains, outliers). These are tried after the
+	/// origin server and trusted_servers.
+	///
+	/// default: 25
+	#[serde(default = "default_federation_fallback_room_servers")]
+	pub federation_fallback_room_servers: usize,
+
 	/// Federation presence interval (seconds).
 	/// This is used to aggressively load-shed large incoming loops of presence
 	/// updates and batch outgoing presence changes.
@@ -2797,6 +2814,10 @@ fn default_well_known_timeout() -> u64 { 10 }
 fn default_federation_conn_timeout() -> u64 { 10 }
 
 fn default_federation_timeout() -> u64 { 60 }
+
+fn default_pdu_receive_timeout() -> u64 { 600 }
+
+fn default_federation_fallback_room_servers() -> usize { 25 }
 
 fn default_federation_presence_interval_s() -> u64 { 5 }
 

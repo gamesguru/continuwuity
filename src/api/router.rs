@@ -256,6 +256,11 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			.ruma_route(&server::get_content_route)
 			.ruma_route(&server::get_content_thumbnail_route)
 			.ruma_route(&server::get_edutypes_route)
+			// MSC0F01: Gossip-Based Federation Room Reconciliation
+			.route(
+				"/_matrix/federation/unstable/org.matrix.msc0f01/room_digest/{room_id}",
+				get(server::room_digest::get_room_digest_route),
+			)
 			.route("/_conduwuit/local_user_count", get(client::conduwuit_local_user_count))
 			.route("/_continuwuity/local_user_count", get(client::conduwuit_local_user_count));
 	} else {

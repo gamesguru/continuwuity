@@ -111,13 +111,20 @@ impl Service {
 }
 
 fn check_room_id<Pdu: Event>(room_id: &RoomId, pdu: &Pdu) -> Result {
-	if pdu.room_id_or_hash().as_deref() != Some(room_id) {
-		return Err!(Request(InvalidParam(error!(
-			pdu_event_id = %pdu.event_id(),
-			pdu_room_id = pdu.room_id().map(tracing::field::display),
-			%room_id,
-			"Found event from room in room",
-		))));
+	// room_id_or_hash() returns None for non-create events in room versions ≥4
+	// where room_id is not included in the wire format. We can only verify if
+	// the PDU actually contains a room_id.
+	if let Some(pdu_room_id) = pdu.room_id_or_hash() {
+		if *pdu_room_id != *room_id {
+			return Err!(Request(InvalidParam(error!(
+				pdu_event_id = %pdu.event_id(),
+				pdu_room_id = %pdu_room_id,
+				pdu_sender = %pdu.sender(),
+				pdu_event_type = %pdu.event_type(),
+				expected_room_id = %room_id,
+				"PDU room_id mismatch: event belongs to a different room than expected",
+			))));
+		}
 	}
 
 	Ok(())

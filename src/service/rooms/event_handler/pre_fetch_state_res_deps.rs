@@ -92,7 +92,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 			!self.services.globals.server_is_ours(s) && !servers.iter().any(|x| x == s)
 		})
 		.map(ToOwned::to_owned)
-		.take(20)
+		.take(self.services.server.config.federation_fallback_room_servers)
 		.collect()
 		.await;
 	servers.extend(room_servers);

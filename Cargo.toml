@@ -58,6 +58,11 @@ version = "0.6.0"
 version = "0.22.1"
 default-features = false
 
+# Used for MSC0F01 gossip reconciliation Bloom filter (XXH3 double-hashing)
+[workspace.dependencies.xxhash-rust]
+version = "0.8"
+features = ["xxh3"]
+
 # used for TURN server authentication
 [workspace.dependencies.hmac]
 version = "0.13.0"
