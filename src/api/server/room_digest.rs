@@ -117,10 +117,10 @@ pub(crate) async fn get_room_digest_route(
 
 	let mut window_event_ids: Vec<OwnedEventId> = Vec::with_capacity(DEFAULT_WINDOW);
 	let mut event_count: u64 = 0;
-	let mut min_depth: u64 = u64::MAX;
-	let mut max_depth: u64 = 0;
-	let mut min_ts: u64 = u64::MAX;
-	let mut max_ts: u64 = 0;
+	let mut min_depth = u64::MAX;
+	let mut max_depth = 0_u64;
+	let mut min_ts = u64::MAX;
+	let mut max_ts = 0_u64;
 
 	while let Some(Ok((_, pdu))) = pdus.next().await {
 		event_count = event_count.saturating_add(1);
