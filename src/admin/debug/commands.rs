@@ -1201,9 +1201,20 @@ pub(crate) async fn force_set_state(
 			.set_forward_extremities(room_id.as_ref(), once(tip_pdu.event_id()), &state_lock)
 			.await;
 
-		// NOTE: Do NOT update pdu_shortstatehash here. short_state_hash is
-		// state-after, but pdu_shortstatehash must be state-before per spec.
-		// The event's original pdu_shortstatehash from append is correct.
+		// Update the tip event's shortstatehash so that state_at_incoming
+		// inherits the forced state when the next event arrives. Without this,
+		// the forced state is ephemeral — the first incoming event re-resolves
+		// from the tip's old shortstatehash and undoes the force.
+		let tip_shorteventid = self
+			.services
+			.rooms
+			.short
+			.get_or_create_shorteventid(tip_pdu.event_id())
+			.await;
+		self.services
+			.rooms
+			.state
+			.set_pdu_shortstatehash(tip_shorteventid, short_state_hash);
 		info!("Set tip {} as sole extremity (room SSH {short_state_hash})", tip_pdu.event_id());
 	} else {
 		// No timeline events — /sync won't deliver this room.
