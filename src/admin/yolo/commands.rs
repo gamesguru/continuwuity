@@ -564,9 +564,9 @@ pub(super) async fn audit_membership(
 
 				if remote_diffs.is_empty() {
 					self.write_str(&format!(
-						"OK: Local and {server} agree on membership \
-						 ({} members, joined={remote_joined}, invited={remote_invited}, \
-						 left={remote_left}, banned={remote_banned})",
+						"OK: Local and {server} agree on membership ({} members, \
+						 joined={remote_joined}, invited={remote_invited}, left={remote_left}, \
+						 banned={remote_banned})",
 						remote_members.len()
 					))
 					.await?;
@@ -2298,6 +2298,51 @@ pub(super) async fn compare_room_state(
 								.rooms
 								.pdu_metadata
 								.mark_event_soft_failed(&eid);
+							// Still count membership for the remote's totals —
+							// the remote sent this as part of their state.
+							if let Ok(pdu) =
+								PduEvent::from_id_val(&eid, val, Some(room_id.as_ref()))
+							{
+								if pdu.kind == TimelineEventType::RoomMember {
+									if let Some(state_key) = &pdu.state_key {
+										let content: JsonValue = pdu.get_content_as_value();
+										let membership = content
+											.get("membership")
+											.and_then(|v| v.as_str())
+											.unwrap_or("unknown");
+										match membership {
+											| "join" => {
+												remote_joined.insert(state_key.to_string());
+												remote_invited.remove(state_key.as_str());
+											},
+											| "invite" => {
+												remote_invited.insert(state_key.to_string());
+												remote_joined.remove(state_key.as_str());
+											},
+											| _ => {
+												remote_joined.remove(state_key.as_str());
+												remote_invited.remove(state_key.as_str());
+											},
+										}
+									}
+								}
+								if let Some(state_key) = &pdu.state_key {
+									remote_state.insert(
+										(pdu.kind.to_string(), state_key.to_string()),
+										eid.clone(),
+									);
+								}
+								event_timestamps
+									.insert(eid.clone(), u64::from(pdu.origin_server_ts));
+								let content: JsonValue = pdu.get_content_as_value();
+								let membership = content
+									.get("membership")
+									.and_then(|v| v.as_str())
+									.unwrap_or("")
+									.to_owned();
+								event_meta
+									.insert(eid.clone(), (membership, pdu.sender().to_string()));
+							}
 							skipped = skipped.saturating_add(1);
 							continue;
 						},
@@ -2624,6 +2669,50 @@ pub(super) async fn compare_room_state(
 								.rooms
 								.pdu_metadata
 								.mark_event_soft_failed(&eid);
+							// Still count membership — remote sent this as
+							// part of their state.
+							if let Ok(pdu) =
+								PduEvent::from_id_val(&eid, val, Some(room_id.as_ref()))
+							{
+								event_timestamps
+									.insert(eid.clone(), u64::from(pdu.origin_server_ts));
+								if let Some(state_key) = &pdu.state_key {
+									server_state.insert(
+										(pdu.kind.to_string(), state_key.to_string()),
+										eid.clone(),
+									);
+									if !event_meta.contains_key(&eid) {
+										let content: JsonValue = pdu.get_content_as_value();
+										let membership = content
+											.get("membership")
+											.and_then(|v| v.as_str())
+											.unwrap_or("")
+											.to_owned();
+										event_meta.insert(
+											eid.clone(),
+											(membership, pdu.sender().to_string()),
+										);
+									}
+								}
+								if pdu.kind == TimelineEventType::RoomMember {
+									if pdu.state_key.is_some() {
+										let content: JsonValue = pdu.get_content_as_value();
+										let membership = content
+											.get("membership")
+											.and_then(|v| v.as_str())
+											.unwrap_or("unknown");
+										match membership {
+											| "join" => {
+												cmp_joined = cmp_joined.saturating_add(1);
+											},
+											| "invite" => {
+												cmp_invited = cmp_invited.saturating_add(1);
+											},
+											| _ => {},
+										}
+									}
+								}
+							}
 						}
 						verify_errors = verify_errors.saturating_add(1);
 						continue;
