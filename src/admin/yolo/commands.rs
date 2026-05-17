@@ -3025,7 +3025,10 @@ pub(super) async fn import_pdus(
 							let eid = extract_event_id(&value)
 								.ok_or_else(|| err!("missing event_id"))?;
 
-							warn!("import_pdus: Event {eid} failed verification: {e}");
+							warn!(
+								"import_pdus: Event {eid} failed verification: {e}\n  PDU: {}",
+								serde_json::to_string_pretty(&value).unwrap_or_default(),
+							);
 
 							// Store as outlier
 							self.services.rooms.outlier.add_pdu_outlier(

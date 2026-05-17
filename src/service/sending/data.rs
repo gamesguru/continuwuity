@@ -5,7 +5,7 @@ use conduwuit::{
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Database, Deserialized, Map};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use ruma::{OwnedServerName, ServerName, UserId};
 
 use super::{Destination, SendingEvent};
@@ -120,7 +120,14 @@ impl Data {
 			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
 				| Ok((_, event)) => Some((key.to_vec(), event)),
 				| Err(e) => {
-					conduwuit::warn!("Invalid servercurrentevent in db, ignoring: {e}");
+					self.servercurrentevent_data.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted servercurrentevent key ({} bytes): key_hex={:02x?} \
+						 val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
 					None
 				},
 			})
@@ -175,7 +182,14 @@ impl Data {
 			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
 				| Ok((_, event)) => Some((key.to_vec(), event)),
 				| Err(e) => {
-					conduwuit::warn!("Invalid servernameevent in db, ignoring: {e}");
+					self.servernameevent_data.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted servernameevent key ({} bytes): key_hex={:02x?} \
+						 val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
 					None
 				},
 			})
@@ -184,12 +198,21 @@ impl Data {
 	#[inline]
 	pub fn queued_request_destinations(&self) -> impl Stream<Item = Destination> + Send + '_ {
 		self.servernameevent_data
-			.raw_keys()
+			.raw_stream()
 			.ignore_err()
-			.filter_map(|key| async move {
-				parse_servercurrentevent(key, &[])
-					.ok()
-					.map(|(dest, _)| dest)
+			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+				| Ok((dest, _)) => Some(dest),
+				| Err(e) => {
+					self.servernameevent_data.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted servernameevent key ({} bytes): key_hex={:02x?} \
+						 val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
+					None
+				},
 			})
 	}
 
