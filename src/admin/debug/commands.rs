@@ -1135,17 +1135,14 @@ pub(crate) async fn force_set_state(
 		} else {
 			info!("Resolving new room state (state-res)");
 			Box::pin(
-				self.services
-					.rooms
-					.event_handler
-					.resolve_state(
-						&room_id,
-						&room_version,
-						state,
-						server_names
-							.first()
-							.map_or(&*self.services.server.name, |s| s.as_ref()),
-					),
+				self.services.rooms.event_handler.resolve_state(
+					&room_id,
+					&room_version,
+					state,
+					server_names
+						.first()
+						.map_or(&*self.services.server.name, |s| s.as_ref()),
+				),
 			)
 			.await?
 		}
