@@ -232,7 +232,20 @@ where
 		reverse_topological_power_sort(control_events, &all_conflicted, &event_fetch).await?;
 
 	debug!(count = sorted_control_levels.len(), "power events");
-	info!(list = ?sorted_control_levels, "sorted power events (order of auth check)");
+	if sorted_control_levels.len() <= 10 {
+		info!(
+			"using {} sorted power events: {:?}",
+			sorted_control_levels.len(),
+			sorted_control_levels
+		);
+	} else {
+		info!(
+			"using {} sorted power events: {:?} ... {:?}",
+			sorted_control_levels.len(),
+			&sorted_control_levels[..5],
+			&sorted_control_levels[sorted_control_levels.len().saturating_sub(5)..],
+		);
+	}
 	trace!(list = ?sorted_control_levels, "sorted power events");
 
 	let room_version = RoomVersion::new(room_version)?;
