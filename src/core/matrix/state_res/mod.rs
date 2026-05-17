@@ -373,6 +373,7 @@ where
 		vec![conflicted_events.iter().cloned().collect::<Vec<_>>()];
 	let mut path: Vec<OwnedEventId> = Vec::new();
 	let mut seen: HashSet<OwnedEventId> = HashSet::new();
+	let mut missing: Vec<OwnedEventId> = Vec::new();
 	let next_event = |stack: &mut Vec<Vec<_>>, path: &mut Vec<_>| {
 		while stack.last().is_some_and(Vec::is_empty) {
 			stack.pop();
@@ -399,7 +400,7 @@ where
 		trace!(event_id = event_id.as_str(), "fetching event for its prev events");
 		let evt = fetch_event(event_id.clone()).await;
 		if evt.is_none() {
-			info!("could not fetch event {} to calculate conflicted subgraph", event_id);
+			missing.push(event_id.clone());
 			seen.insert(event_id);
 			path.pop();
 			continue;
@@ -411,6 +412,22 @@ where
 				.collect(),
 		);
 		seen.insert(event_id);
+	}
+	if !missing.is_empty() {
+		info!(
+			n_missing = missing.len(),
+			n_seen = seen.len(),
+			n_subgraph = subgraph.len(),
+			"conflicted subgraph has missing prev_events (DAG holes)"
+		);
+		for (i, eid) in missing.iter().enumerate() {
+			if i < 25 {
+				info!(event_id = %eid, "missing prev_event dependency");
+			}
+		}
+		if missing.len() > 25 {
+			info!("... and {} more missing prev_events", missing.len().saturating_sub(25));
+		}
 	}
 	Some(subgraph)
 }
