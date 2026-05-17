@@ -94,35 +94,44 @@ pub async fn resolve_state(
 		);
 
 		let mut fetched = 0_usize;
-		for event_id in &missing {
-			match self
-				.services
-				.sending
-				.send_federation_request(origin, get_event::v1::Request {
-					event_id: event_id.clone(),
-					include_unredacted_content: None,
-				})
-				.await
-			{
-				| Ok(res) => {
-					if let Ok((_, value)) = gen_event_id_canonical_json(&res.pdu, room_version_id)
-					{
-						// Persist as outlier so event_fetch finds it during
-						// state resolution
-						self.services
-							.outlier
-							.add_pdu_outlier(event_id, &value, Some(room_id));
-						fetched = fetched.saturating_add(1);
-					}
-				},
-				| Err(e) => {
-					warn!(
-						%event_id,
-						%origin,
-						"Failed to pre-fetch auth chain event: {e}"
-					);
-				},
+		// Build server list: origin first, then trusted notaries
+		let mut servers_to_try: Vec<&ServerName> = vec![origin];
+		for s in &self.services.server.config.trusted_servers {
+			if !self.services.globals.server_is_ours(s) && s != origin {
+				servers_to_try.push(s);
 			}
+		}
+
+		'next_event: for event_id in &missing {
+			for server in &servers_to_try {
+				match self
+					.services
+					.sending
+					.send_federation_request(*server, get_event::v1::Request {
+						event_id: event_id.clone(),
+						include_unredacted_content: None,
+					})
+					.await
+				{
+					| Ok(res) => {
+						if let Ok((_, value)) =
+							gen_event_id_canonical_json(&res.pdu, room_version_id)
+						{
+							// Persist as outlier so event_fetch finds it during
+							// state resolution
+							self.services.outlier.add_pdu_outlier(
+								event_id,
+								&value,
+								Some(room_id),
+							);
+							fetched = fetched.saturating_add(1);
+							continue 'next_event;
+						}
+					},
+					| Err(_) => continue,
+				}
+			}
+			warn!(%event_id, "Failed to pre-fetch auth chain event from any server");
 		}
 
 		if fetched > 0 {

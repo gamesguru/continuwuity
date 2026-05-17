@@ -226,7 +226,10 @@ pub(super) async fn audit_membership(
 	}
 
 	if clean && total_purged > 100 {
-		divergences.push(format!("... and {} more purged (truncated)", total_purged - 100));
+		divergences.push(format!(
+			"... and {} more purged (truncated)",
+			total_purged.saturating_sub(100)
+		));
 	}
 
 	// Count ghosts (federation imports with no local timeline events) by

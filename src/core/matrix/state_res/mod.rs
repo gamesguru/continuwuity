@@ -387,6 +387,7 @@ where
 		let evt = fetch_event(event_id.clone()).await;
 		if evt.is_none() {
 			info!("could not fetch event {} to calculate conflicted subgraph", event_id);
+			seen.insert(event_id);
 			path.pop();
 			continue;
 		}
