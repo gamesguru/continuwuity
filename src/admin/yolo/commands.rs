@@ -511,6 +511,8 @@ pub(super) async fn audit_membership(
 				let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
 				let mut remote_members: HashMap<String, String> = HashMap::new();
+				let mut sig_failed: usize = 0;
+				let mut parse_failed: usize = 0;
 
 				for pdu_raw in &response.pdus {
 					let (event_id, value) = match self
@@ -521,6 +523,7 @@ pub(super) async fn audit_membership(
 					{
 						| Ok(r) => r,
 						| Err(e) => {
+							sig_failed = sig_failed.saturating_add(1);
 							if let Ok((eid, val)) =
 								conduwuit::matrix::event::gen_event_id_canonical_json(
 									pdu_raw,
@@ -546,6 +549,7 @@ pub(super) async fn audit_membership(
 
 					let Ok(pdu) = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))
 					else {
+						parse_failed = parse_failed.saturating_add(1);
 						continue;
 					};
 
@@ -582,48 +586,62 @@ pub(super) async fn audit_membership(
 				))
 				.await?;
 
-				let mut remote_diffs = Vec::new();
+				let mut remote_diffs: Vec<(u64, String)> = Vec::new();
+
+				let now_secs = std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap_or_default()
+					.as_secs();
+
+				let format_age = |age_secs: u64| -> String {
+					let days = age_secs / 86400;
+					let hours = age_secs / 3600;
+					if age_secs > 86400 {
+						format!("{days}d ago")
+					} else if age_secs > 3600 {
+						format!("{hours}h ago")
+					} else {
+						format!("{age_secs}s ago")
+					}
+				};
 
 				for (user, remote_ms) in &remote_members {
 					match local_members.get(user) {
 						| Some((local_ms, eid)) if local_ms != remote_ms => {
-							let age = if let Ok(eid) = OwnedEventId::parse(eid) {
+							let age_secs = if let Ok(eid) = OwnedEventId::parse(eid) {
 								self.services
 									.rooms
 									.timeline
 									.get_pdu(&eid)
 									.await
 									.ok()
-									.map(|p| {
+									.map_or(u64::MAX, |p| {
 										let ms = u64::from(p.origin_server_ts);
-										let secs = ms / 1000;
-										let now = std::time::SystemTime::now()
-											.duration_since(std::time::UNIX_EPOCH)
-											.unwrap_or_default()
-											.as_secs();
-										let a = now.saturating_sub(secs);
-										let days = a / 86400;
-										let hours = a / 3600;
-										if a > 86400 {
-											format!("{days}d ago")
-										} else if a > 3600 {
-											format!("{hours}h ago")
-										} else {
-											format!("{a}s ago")
-										}
+										now_secs.saturating_sub(ms / 1000)
 									})
-									.unwrap_or_default()
 							} else {
-								String::new()
+								u64::MAX
 							};
-							remote_diffs.push(format!(
-								"WARN {user}: local=`{local_ms}`, {server}=`{remote_ms}` \
-								 (event: {eid}, {age})"
+							let age = if age_secs < u64::MAX {
+								format_age(age_secs)
+							} else {
+								String::from("unknown")
+							};
+							remote_diffs.push((
+								age_secs,
+								format!(
+									"WARN {user}: local=`{local_ms}`, {server}=`{remote_ms}` \
+									 (event: {eid}, {age})"
+								),
 							));
 						},
 						| None if remote_ms == "join" || remote_ms == "invite" => {
-							remote_diffs.push(format!(
-								"MISSING {user}: ABSENT locally but {server} says `{remote_ms}`"
+							remote_diffs.push((
+								u64::MAX,
+								format!(
+									"MISSING {user}: ABSENT locally but {server} says \
+									 `{remote_ms}`"
+								),
 							));
 						},
 						| _ => {},
@@ -634,56 +652,58 @@ pub(super) async fn audit_membership(
 					if !remote_members.contains_key(user)
 						&& (local_ms == "join" || local_ms == "invite")
 					{
-						let age = if let Ok(eid) = OwnedEventId::parse(eid) {
+						let age_secs = if let Ok(eid) = OwnedEventId::parse(eid) {
 							self.services
 								.rooms
 								.timeline
 								.get_pdu(&eid)
 								.await
 								.ok()
-								.map(|p| {
+								.map_or(u64::MAX, |p| {
 									let ms = u64::from(p.origin_server_ts);
-									let secs = ms / 1000;
-									let now = std::time::SystemTime::now()
-										.duration_since(std::time::UNIX_EPOCH)
-										.unwrap_or_default()
-										.as_secs();
-									let a = now.saturating_sub(secs);
-									let d = a / 86400;
-									let h = a / 3600;
-									if a > 86400 {
-										format!("{d}d ago")
-									} else if a > 3600 {
-										format!("{h}h ago")
-									} else {
-										format!("{a}s ago")
-									}
+									now_secs.saturating_sub(ms / 1000)
 								})
-								.unwrap_or_default()
 						} else {
-							String::new()
+							u64::MAX
 						};
-						remote_diffs.push(format!(
-							"GHOST {user}: local says `{local_ms}` but ABSENT on {server} \
-							 (event: {eid}, {age})"
+						let age = if age_secs < u64::MAX {
+							format_age(age_secs)
+						} else {
+							String::from("unknown")
+						};
+						remote_diffs.push((
+							age_secs,
+							format!(
+								"GHOST {user}: local says `{local_ms}` but ABSENT on {server} \
+								 (event: {eid}, {age})"
+							),
 						));
 					}
 				}
+
+				// Sort newest first (smallest age_secs first)
+				remote_diffs.sort_by_key(|(age, _)| *age);
+
+				let failure_summary = if sig_failed > 0 || parse_failed > 0 {
+					format!(" (sig_failed={sig_failed}, parse_failed={parse_failed})")
+				} else {
+					String::new()
+				};
 
 				if remote_diffs.is_empty() {
 					self.write_str(&format!(
 						"OK: Local and {server} agree on membership ({} members, \
 						 joined={remote_joined}, invited={remote_invited}, left={remote_left}, \
-						 banned={remote_banned})",
+						 banned={remote_banned}){failure_summary}",
 						remote_members.len()
 					))
 					.await?;
 				} else {
 					let mut out = format!(
-						"Remote membership diffs vs {server} ({} diff(s)):\n",
+						"Remote membership diffs vs {server} ({} diff(s)){failure_summary}:\n",
 						remote_diffs.len()
 					);
-					for d in &remote_diffs {
+					for (_, d) in &remote_diffs {
 						writeln!(out, "- {d}").expect("fmt");
 					}
 					self.write_str(&out).await?;
