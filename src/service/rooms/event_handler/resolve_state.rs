@@ -157,13 +157,7 @@ pub async fn resolve_state(
 
 	trace!("Resolving state");
 	let state = self
-		.state_resolution(
-			room_id,
-			room_version_id,
-			fork_states.iter(),
-			&auth_chain_sets,
-			&servers_to_try,
-		)
+		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
 		.boxed()
 		.await?;
 
@@ -205,39 +199,16 @@ pub async fn state_resolution<'a, StateSets>(
 	room_version: &'a RoomVersionId,
 	state_sets: StateSets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId>],
-	fetch_servers: &'a [OwnedServerName],
 ) -> Result<StateMap<OwnedEventId>>
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
 	let event_fetch = |event_id: OwnedEventId| async move {
-		// Try local first
-		if let Some(pdu) = self.event_fetch(Some(room_id), event_id.clone()).await {
-			return Some(pdu);
-		}
-		// Try federation fallback
-		for server in fetch_servers {
-			let server: &ruma::ServerName = server;
-			if let Ok(res) = self
-				.services
-				.sending
-				.send_federation_request(server, get_event::v1::Request {
-					event_id: event_id.clone(),
-					include_unredacted_content: None,
-				})
-				.await
-			{
-				if let Ok((_, value)) = gen_event_id_canonical_json(&res.pdu, room_version) {
-					self.services
-						.outlier
-						.add_pdu_outlier(&event_id, &value, Some(room_id));
-					if let Some(pdu) = self.event_fetch(Some(room_id), event_id.clone()).await {
-						return Some(pdu);
-					}
-				}
-			}
-		}
-		None
+		// Local-only: never fetch from federation during state resolution.
+		// Federation I/O can block for minutes/hours and stall the entire
+		// inbound transaction pipeline. If the event isn't local, state_res
+		// handles None gracefully (skips the subgraph branch).
+		self.event_fetch(Some(room_id), event_id).await
 	};
 	let event_exists = |event_id: OwnedEventId| async move { self.event_exists(event_id).await };
 	let event_rejected = |event_id: OwnedEventId| async move {
