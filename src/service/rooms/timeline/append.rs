@@ -5,7 +5,7 @@ use std::{
 
 use conduwuit::trace;
 use conduwuit_core::{
-	Result, err, error, implement,
+	Result, err, error, implement, info,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduEvent, PduId, RawPduId},
@@ -141,10 +141,28 @@ where
 					.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
 					.await
 				{
+					let prev_content_value = prev_state.get_content_as_value();
+					let curr_content_value = pdu.get_content_as_value();
+
+					// Log no-op membership transitions (identical content)
+					if pdu.kind() == &TimelineEventType::RoomMember
+						&& prev_content_value == curr_content_value
+					{
+						info!(
+							event_id = %pdu.event_id(),
+							sender = %pdu.sender(),
+							state_key = %state_key,
+							prev_event_id = %prev_state.event_id(),
+							room_id = %room_id,
+							"no-op membership event: content identical to prev_content \
+							 (possible stale state lookup during DAG fork)",
+						);
+					}
+
 					unsigned.insert(
 						"prev_content".to_owned(),
 						CanonicalJsonValue::Object(
-							utils::to_canonical_object(prev_state.get_content_as_value())
+							utils::to_canonical_object(prev_content_value)
 								.map_err(|e| {
 									err!(Database(error!(
 										"Failed to convert prev_state to canonical JSON: {e}",
