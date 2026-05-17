@@ -2968,121 +2968,134 @@ pub(super) async fn import_pdus(
 			.and_then(|id| OwnedEventId::parse(id).ok())
 	};
 
+	// Fetch the room's create event for auth checking (needed by
+	// handle_outlier_pdu)
+	let create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.map_err(|_| err!("Could not find create event for room {room_id}"))?;
+
 	while let Ok(Some(line)) = lines.next_line().await {
 		if line.trim().is_empty() {
 			continue;
 		}
 		total = total.saturating_add(1);
 
-		let result: Result<bool> = async {
-			let mut value: CanonicalJsonObject = serde_json::from_str(&line)
-				.map_err(|e| err!("Failed to parse JSON line: {e}"))?;
+		let result: Result<bool> =
+			async {
+				let mut value: CanonicalJsonObject = serde_json::from_str(&line)
+					.map_err(|e| err!("Failed to parse JSON line: {e}"))?;
 
-			// Strip diagnostic/internal fields that were injected during export.
-			value.remove("__shortstatehash");
-			value.remove("prev_state_events");
-			value.remove("state_jump_pointers");
+				// Strip diagnostic/internal fields that were injected during export.
+				value.remove("__shortstatehash");
+				value.remove("prev_state_events");
+				value.remove("state_jump_pointers");
 
-			// V12+: strip room_id from m.room.create events (not part of signed content)
-			let is_v12_or_later = !matches!(
-				room_version,
-				RoomVersionId::V1
-					| RoomVersionId::V2
-					| RoomVersionId::V3
-					| RoomVersionId::V4
-					| RoomVersionId::V5
-					| RoomVersionId::V6
-					| RoomVersionId::V7
-					| RoomVersionId::V8
-					| RoomVersionId::V9
-					| RoomVersionId::V10
-					| RoomVersionId::V11
-			);
-			if is_v12_or_later
-				&& value.get("type").and_then(ruma::CanonicalJsonValue::as_str)
-					== Some("m.room.create")
-			{
-				value.remove("room_id");
-			}
+				// V12+: strip room_id from m.room.create events (not part of signed content)
+				let is_v12_or_later =
+					!matches!(
+						room_version,
+						RoomVersionId::V1
+							| RoomVersionId::V2 | RoomVersionId::V3
+							| RoomVersionId::V4 | RoomVersionId::V5
+							| RoomVersionId::V6 | RoomVersionId::V7
+							| RoomVersionId::V8 | RoomVersionId::V9
+							| RoomVersionId::V10 | RoomVersionId::V11
+					);
+				if is_v12_or_later
+					&& value.get("type").and_then(ruma::CanonicalJsonValue::as_str)
+						== Some("m.room.create")
+				{
+					value.remove("room_id");
+				}
 
-			if skip_auth {
-				let eid = extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?;
-				let pdu = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))?;
-				self.services
-					.rooms
-					.timeline
-					.force_insert_pdu(&room_id, &eid, &pdu, &value)
-					.await
-					.map(|_| true)
-			} else {
-				let (eid, val) = if skip_sig_verify {
-					(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
-				} else {
-					// Build RawValue for sig verification from the canonical object.
-					// Strip event_id for v3+ rooms (not part of signed content).
-					// V1/V2 rooms require event_id for sig verification.
-					let mut raw_val = value.clone();
-					if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
-						raw_val.remove("event_id");
-					}
-					let raw = serde_json::value::RawValue::from_string(serde_json::to_string(
-						&raw_val,
-					)?)
-					.map_err(|e| err!("raw value: {e}"))?;
-
-					match self
-						.services
-						.server_keys
-						.validate_and_add_event_id(&raw, &room_version)
+				if skip_auth {
+					let eid = extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?;
+					let pdu = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref()))?;
+					self.services
+						.rooms
+						.timeline
+						.force_insert_pdu(&room_id, &eid, &pdu, &value)
 						.await
-					{
-						| Ok(result) => result,
-						| Err(e) => {
-							// Sig verification failed — persist as soft-failed outlier so the
-							// event is available for auth chain lookups and state context
-							let eid = extract_event_id(&value)
-								.ok_or_else(|| err!("missing event_id"))?;
+						.map(|_| true)
+				} else {
+					let (eid, val) = if skip_sig_verify {
+						(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
+					} else {
+						// Build RawValue for sig verification from the canonical object.
+						// Strip event_id for v3+ rooms (not part of signed content).
+						// V1/V2 rooms require event_id for sig verification.
+						let mut raw_val = value.clone();
+						if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2
+						{
+							raw_val.remove("event_id");
+						}
+						let raw = serde_json::value::RawValue::from_string(
+							serde_json::to_string(&raw_val)?,
+						)
+						.map_err(|e| err!("raw value: {e}"))?;
 
-							warn!(
-								"import_pdus: Event {eid} failed verification: {e}\n  PDU: {}",
-								serde_json::to_string_pretty(&value).unwrap_or_default(),
-							);
+						match self
+							.services
+							.server_keys
+							.validate_and_add_event_id(&raw, &room_version)
+							.await
+						{
+							| Ok(result) => result,
+							| Err(e) => {
+								// Sig verification failed — persist as soft-failed outlier so the
+								// event is available for auth chain lookups and state context
+								let eid = extract_event_id(&value)
+									.ok_or_else(|| err!("missing event_id"))?;
 
-							// Store as outlier
-							self.services.rooms.outlier.add_pdu_outlier(
-								&eid,
-								&value,
-								Some(&room_id),
-							);
+								warn!(
+									"import_pdus: Event {eid} failed verification: {e}\n  PDU: \
+									 {}",
+									serde_json::to_string_pretty(&value).unwrap_or_default(),
+								);
 
-							// Mark as soft-failed (unverifiable, not proven fraudulent)
-							self.services
-								.rooms
-								.pdu_metadata
-								.mark_event_soft_failed(&eid);
+								// Store as outlier
+								self.services.rooms.outlier.add_pdu_outlier(
+									&eid,
+									&value,
+									Some(&room_id),
+								);
 
-							return Ok(false);
-						},
-					}
-				};
-				// Re-serialize to RawValue for parse_incoming_pdu
-				let raw = serde_json::value::RawValue::from_string(serde_json::to_string(&val)?)
-					.map_err(|e| err!("raw value: {e}"))?;
-				let (_, _, canonical) = self
-					.services
-					.rooms
-					.event_handler
-					.parse_incoming_pdu(&raw)
-					.await?;
-				self.services
-					.rooms
-					.event_handler
-					.handle_incoming_pdu(origin, &room_id, &eid, canonical, true)
-					.await?;
-				Ok(true)
+								// Mark as soft-failed (unverifiable, not proven fraudulent)
+								self.services
+									.rooms
+									.pdu_metadata
+									.mark_event_soft_failed(&eid);
+
+								return Ok(false);
+							},
+						}
+					};
+
+					// Local-only auth: handle_outlier_pdu checks auth_events from local DB,
+					// runs auth_check, and persists as outlier. auth_events_known=true skips
+					// federation fetches for missing auth events.
+					let (pdu, _json) = self
+						.services
+						.rooms
+						.event_handler
+						.handle_outlier_pdu(origin, &create_event, &eid, &room_id, val, true)
+						.await?;
+
+					// Promote from outlier to timeline
+					self.services
+						.rooms
+						.timeline
+						.promote_outlier(&room_id, &eid)
+						.await?;
+					let _ = pdu; // used by handle_outlier_pdu internally
+					Ok(true)
+				}
 			}
-		}
-		.await;
+			.await;
 
 		match result {
 			| Ok(true) => inserted = inserted.saturating_add(1),
