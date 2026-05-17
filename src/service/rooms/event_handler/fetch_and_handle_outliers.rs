@@ -4,16 +4,19 @@ use std::{
 };
 
 use conduwuit::{
-	Event, PduEvent, debug, implement, info, matrix::event::gen_event_id_canonical_json,
-	state_res, trace, utils::continue_exponential_backoff_secs, warn,
+	Event, PduEvent, debug, implement, info,
+	matrix::event::gen_event_id_canonical_json,
+	state_res, trace,
+	utils::{continue_exponential_backoff_secs, stream::ReadyExt},
+	warn,
 };
 use futures::{
 	FutureExt, future,
 	stream::{FuturesUnordered, StreamExt},
 };
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
-	api::federation::event::get_event,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedServerName, RoomId,
+	ServerName, api::federation::event::get_event,
 };
 
 use super::get_room_version_id;
@@ -44,6 +47,26 @@ where
 			*e.get_mut() = (Instant::now(), e.get().1.saturating_add(1));
 		},
 	};
+
+	// Build routing servers: origin → trusted → room member servers
+	let mut routing_servers: Vec<OwnedServerName> = vec![origin.to_owned()];
+	for s in &self.services.server.config.trusted_servers {
+		if !self.services.globals.server_is_ours(s) && !routing_servers.contains(s) {
+			routing_servers.push(s.clone());
+		}
+	}
+	let room_servers: Vec<OwnedServerName> = self
+		.services
+		.state_cache
+		.room_servers(room_id)
+		.ready_filter(|s| {
+			!self.services.globals.server_is_ours(s) && !routing_servers.iter().any(|x| x == s)
+		})
+		.map(ToOwned::to_owned)
+		.take(15)
+		.collect()
+		.await;
+	routing_servers.extend(room_servers);
 
 	let mut events_with_auth_events = Vec::with_capacity(events.clone().count());
 	trace!("Fetching {} outlier pdus", events.clone().count());
@@ -82,36 +105,54 @@ where
 					"Backing off from {id} (ratelimited)"
 				);
 			} else {
+				let id_clone = id.to_owned();
+				let servers = routing_servers.clone();
 				active_fetches.push(
 					async move {
-						let id = id.to_owned();
-						let res = self
-							.services
-							.sending
-							.send_federation_request(origin, get_event::v1::Request {
-								event_id: id.clone(),
-								include_unredacted_content: None,
-							})
-							.await;
-						(id, res)
+						let mut last_err =
+							conduwuit::err!(Request(NotFound("event not found on any server")));
+						for server in &servers {
+							match self
+								.services
+								.sending
+								.send_federation_request(server, get_event::v1::Request {
+									event_id: id_clone.clone(),
+									include_unredacted_content: None,
+								})
+								.await
+							{
+								| Ok(res) => return (id_clone, Ok(res)),
+								| Err(e) => last_err = e,
+							}
+						}
+						(id_clone, Err(last_err))
 					}
 					.boxed(),
 				);
 				graph.insert(id.to_owned(), HashSet::new());
 			}
 		} else {
+			let id_clone = id.to_owned();
+			let servers = routing_servers.clone();
 			active_fetches.push(
 				async move {
-					let id = id.to_owned();
-					let res = self
-						.services
-						.sending
-						.send_federation_request(origin, get_event::v1::Request {
-							event_id: id.clone(),
-							include_unredacted_content: None,
-						})
-						.await;
-					(id, res)
+					let mut last_err =
+						conduwuit::err!(Request(NotFound("event not found on any server")));
+					for server in &servers {
+						match self
+							.services
+							.sending
+							.send_federation_request(server, get_event::v1::Request {
+								event_id: id_clone.clone(),
+								include_unredacted_content: None,
+							})
+							.await
+						{
+							| Ok(res) => return (id_clone, Ok(res)),
+							| Err(e) => last_err = e,
+						}
+					}
+					(id_clone, Err(last_err))
 				}
 				.boxed(),
 			);
@@ -121,7 +162,7 @@ where
 		while let Some((next_id, fetch_res)) = active_fetches.next().await {
 			match fetch_res {
 				| Ok(res) => {
-					debug!("Got {next_id} over federation from {origin}");
+					debug!("Got {next_id} over federation from multiple candidate servers");
 					let Ok(room_version_id) = get_room_version_id(create_event) else {
 						back_off(next_id);
 						continue;
@@ -197,20 +238,31 @@ where
 										"Found auth event id {auth_event} for event {next_id}"
 									);
 									let auth_event_clone = auth_event.clone();
+									let servers = routing_servers.clone();
 									active_fetches.push(
 										async move {
-											let res = self
-												.services
-												.sending
-												.send_federation_request(
-													origin,
-													get_event::v1::Request {
-														event_id: auth_event_clone.clone(),
-														include_unredacted_content: None,
-													},
-												)
-												.await;
-											(auth_event_clone, res)
+											let mut last_err = conduwuit::err!(Request(
+												NotFound("event not found on any server")
+											));
+											for server in &servers {
+												match self
+													.services
+													.sending
+													.send_federation_request(
+														server,
+														get_event::v1::Request {
+															event_id: auth_event_clone.clone(),
+															include_unredacted_content: None,
+														},
+													)
+													.await
+												{
+													| Ok(res) =>
+														return (auth_event_clone, Ok(res)),
+													| Err(e) => last_err = e,
+												}
+											}
+											(auth_event_clone, Err(last_err))
 										}
 										.boxed(),
 									);
@@ -232,7 +284,7 @@ where
 				| Err(e) => {
 					info!(
 						target: "auth_chain",
-						"Failed to fetch auth event {next_id} from {origin}: {e}"
+						"Failed to fetch event {next_id} from all fallback servers: {e}"
 					);
 					back_off(next_id);
 				},

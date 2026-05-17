@@ -6,8 +6,8 @@ use std::{
 
 use conduwuit::{
 	implement, info,
-	matrix::event::gen_event_id_canonical_json,
 	utils::stream::{IterStream, ReadyExt, TryWidebandExt},
+	warn,
 };
 use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
 use ruma::{
@@ -154,11 +154,26 @@ pub(super) async fn pre_fetch_state_res_deps(
 		};
 
 		if let Some(pdu_raw) = maybe_pdu {
-			if let Ok((_, value)) = gen_event_id_canonical_json(&pdu_raw, room_version_id) {
-				self.services
-					.outlier
-					.add_pdu_outlier(&event_id, &value, Some(room_id));
-				fetched = fetched.saturating_add(1);
+			// Validate signatures before trusting pre-fetched events.
+			// Blindly inserting unverified events allows malicious servers to
+			// forge power levels and hijack state res.
+			if let Ok((eid, value)) = self
+				.services
+				.server_keys
+				.validate_and_add_event_id(&pdu_raw, room_version_id)
+				.await
+			{
+				if eid == event_id {
+					self.services
+						.outlier
+						.add_pdu_outlier(&event_id, &value, Some(room_id));
+					fetched = fetched.saturating_add(1);
+				}
+			} else {
+				warn!(
+					%event_id,
+					"Pre-fetched auth event failed signature verification, dropping"
+				);
 			}
 		}
 	}
