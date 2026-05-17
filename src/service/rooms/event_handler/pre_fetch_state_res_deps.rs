@@ -11,7 +11,8 @@ use conduwuit::{
 };
 use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
 use ruma::{
-	OwnedEventId, OwnedServerName, RoomId, RoomVersionId, api::federation::event::get_event,
+	OwnedEventId, OwnedServerName, RoomId, RoomVersionId,
+	api::federation::{self, event::get_event},
 };
 
 /// Pre-fetch missing auth chain events from federation BEFORE acquiring
@@ -62,12 +63,13 @@ pub(super) async fn pre_fetch_state_res_deps(
 	// Find events in the auth chain that we don't have locally
 	let all_auth_ids: HashSet<&OwnedEventId> = auth_chain_sets.iter().flatten().collect();
 	let mut missing: Vec<OwnedEventId> = Vec::new();
+	let mut seen: HashSet<OwnedEventId> = HashSet::new();
 	for event_id in &all_auth_ids {
 		if !self.services.timeline.pdu_exists(event_id).await {
 			missing.push((*event_id).clone());
+			seen.insert((*event_id).clone());
 		}
 	}
-
 	if missing.is_empty() {
 		return;
 	}
@@ -100,7 +102,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 	info!(
 		count = missing.len(),
 		servers = servers.len(),
-		"Pre-fetching missing auth chain events"
+		"Pre-fetching missing auth chain + prev_events"
 	);
 
 	// Parallel fetch with 50s budget, 32 concurrency
@@ -184,5 +186,48 @@ pub(super) async fn pre_fetch_state_res_deps(
 			elapsed = ?started.elapsed(),
 			"Pre-fetched auth chain events for state resolution"
 		);
+	}
+
+	// Phase 2: Backfill ~100 recent PDUs from the origin server to fill
+	// prev_events gaps that state_res needs for conflicted subgraph walks.
+	// This is much cheaper than chasing individual missing events.
+	let latest_ids: Vec<OwnedEventId> = incoming_state.values().cloned().collect();
+	if latest_ids.is_empty() {
+		return;
+	}
+
+	if let Ok(response) = self
+		.services
+		.sending
+		.send_federation_request(origin, federation::backfill::get_backfill::v1::Request {
+			room_id: room_id.to_owned(),
+			v: latest_ids,
+			limit: 100_u32.into(),
+		})
+		.await
+	{
+		let mut backfilled = 0_usize;
+		for pdu_raw in &response.pdus {
+			if let Ok((eid, value)) = self
+				.services
+				.server_keys
+				.validate_and_add_event_id(pdu_raw, room_version_id)
+				.await
+			{
+				if !self.services.timeline.pdu_exists(&eid).await {
+					self.services
+						.outlier
+						.add_pdu_outlier(&eid, &value, Some(room_id));
+					backfilled = backfilled.saturating_add(1);
+				}
+			}
+		}
+		if backfilled > 0 {
+			info!(
+				backfilled,
+				total_received = response.pdus.len(),
+				"Pre-fetched DAG history via backfill for state resolution"
+			);
+		}
 	}
 }
