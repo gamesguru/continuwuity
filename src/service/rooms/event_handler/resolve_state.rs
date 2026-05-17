@@ -6,12 +6,14 @@ use std::{
 
 use conduwuit::{
 	Error, Result, err, implement, info,
+	matrix::event::gen_event_id_canonical_json,
 	state_res::{self, StateMap},
 	trace,
 	utils::stream::{IterStream, ReadyExt, TryWidebandExt, WidebandExt},
+	warn,
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
-use ruma::{OwnedEventId, RoomId, RoomVersionId};
+use ruma::{OwnedEventId, RoomId, RoomVersionId, ServerName, api::federation::event::get_event};
 
 use crate::rooms::state_compressor::CompressedState;
 
@@ -22,6 +24,7 @@ pub async fn resolve_state(
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 	incoming_state: HashMap<u64, OwnedEventId>,
+	origin: &ServerName,
 ) -> Result<Arc<CompressedState>> {
 	trace!("Loading current room state ids");
 	let current_sstatehash = self
@@ -71,6 +74,65 @@ pub async fn resolve_state(
 		.try_collect::<Vec<StateMap<OwnedEventId>>>();
 
 	let (fork_states, auth_chain_sets) = try_join(fork_states, auth_chain_sets).await?;
+
+	// Pre-fetch missing auth chain events from federation before state
+	// resolution. calculate_conflicted_subgraph silently drops entire DAG
+	// branches when events are missing locally, producing wrong results.
+	let all_auth_ids: HashSet<&OwnedEventId> = auth_chain_sets.iter().flatten().collect();
+	let mut missing: Vec<OwnedEventId> = Vec::new();
+	for event_id in &all_auth_ids {
+		if !self.event_exists((*event_id).clone()).await {
+			missing.push((*event_id).clone());
+		}
+	}
+
+	if !missing.is_empty() {
+		info!(
+			count = missing.len(),
+			%origin,
+			"Pre-fetching missing auth chain events before state resolution"
+		);
+
+		let mut fetched = 0_usize;
+		for event_id in &missing {
+			match self
+				.services
+				.sending
+				.send_federation_request(origin, get_event::v1::Request {
+					event_id: event_id.clone(),
+					include_unredacted_content: None,
+				})
+				.await
+			{
+				| Ok(res) => {
+					if let Ok((_, value)) = gen_event_id_canonical_json(&res.pdu, room_version_id)
+					{
+						// Persist as outlier so event_fetch finds it during
+						// state resolution
+						self.services
+							.outlier
+							.add_pdu_outlier(event_id, &value, Some(room_id));
+						fetched = fetched.saturating_add(1);
+					}
+				},
+				| Err(e) => {
+					warn!(
+						%event_id,
+						%origin,
+						"Failed to pre-fetch auth chain event: {e}"
+					);
+				},
+			}
+		}
+
+		if fetched > 0 {
+			info!(
+				fetched,
+				total_missing = missing.len(),
+				"Pre-fetched auth chain events for state resolution"
+			);
+		}
+	}
 
 	// Diagnostic: log PL events in each fork state
 	for (i, fork) in fork_states.iter().enumerate() {
