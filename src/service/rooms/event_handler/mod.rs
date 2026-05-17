@@ -8,6 +8,7 @@ mod handle_outlier_pdu;
 mod handle_prev_pdu;
 mod parse_incoming_pdu;
 mod policy_server;
+mod pre_fetch_state_res_deps;
 mod resolve_state;
 mod state_at_incoming;
 pub mod upgrade_outlier_pdu;

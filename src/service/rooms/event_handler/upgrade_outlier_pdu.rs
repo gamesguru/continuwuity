@@ -206,6 +206,19 @@ where
 
 	// 13. Use state resolution to find new room state
 
+	// Pre-fetch missing auth chain events from federation BEFORE
+	// acquiring the room lock. This is parallel (32 concurrent) and
+	// multi-server (origin + trusted + room members) with a 50s budget.
+	if incoming_pdu.state_key().is_some() {
+		self.pre_fetch_state_res_deps(
+			room_id,
+			&room_version_id,
+			&state_at_incoming_event,
+			origin,
+		)
+		.await;
+	}
+
 	// We start looking at current room state now, so lets lock the room
 	trace!(
 		room_id = %room_id,
