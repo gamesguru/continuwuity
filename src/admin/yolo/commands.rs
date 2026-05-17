@@ -1359,11 +1359,15 @@ pub(super) async fn get_room_dag(
 					JsonValue::String(event_id.as_str().to_owned()),
 				);
 
-				// V12: strip room_id from m.room.create content (not part of signed event)
-				if room_version_str == "12" {
-					if obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create") {
-						obj.remove("room_id");
-					}
+				// V11+: strip room_id per MSC3820/MSC4291
+				let is_v11 = room_version_str == "11";
+				let is_v12_or_later = !matches!(
+					room_version_str.as_str(),
+					"1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11"
+				);
+				let is_create = obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create");
+				if is_v12_or_later || (is_v11 && !is_create) {
+					obj.remove("room_id");
 				}
 
 				let pdu_result = self.services.rooms.timeline.get_pdu(&event_id).await;
@@ -1678,10 +1682,25 @@ pub(super) async fn get_remote_dag(
 			export_val
 				.insert("event_id".to_owned(), serde_json::Value::String(event_id.to_string()));
 
-			// V12: strip room_id from m.room.create content (not part of signed event)
-			if room_version == RoomVersionId::V12
-				&& export_val.get("type").and_then(|v| v.as_str()) == Some("m.room.create")
-			{
+			// V11+: strip room_id per MSC3820/MSC4291
+			let is_v11 = room_version == RoomVersionId::V11;
+			let is_v12_or_later = !matches!(
+				room_version,
+				RoomVersionId::V1
+					| RoomVersionId::V2
+					| RoomVersionId::V3
+					| RoomVersionId::V4
+					| RoomVersionId::V5
+					| RoomVersionId::V6
+					| RoomVersionId::V7
+					| RoomVersionId::V8
+					| RoomVersionId::V9
+					| RoomVersionId::V10
+					| RoomVersionId::V11
+			);
+			let is_create =
+				export_val.get("type").and_then(|v| v.as_str()) == Some("m.room.create");
+			if is_v12_or_later || (is_v11 && !is_create) {
 				export_val.remove("room_id");
 			}
 			let json = serde_json::to_string(&export_val)?;
@@ -2994,7 +3013,10 @@ pub(super) async fn import_pdus(
 				value.remove("prev_state_events");
 				value.remove("state_jump_pointers");
 
-				// V12+: strip room_id from m.room.create events (not part of signed content)
+				// V11+: strip room_id per MSC3820/MSC4291
+				// V11: strips room_id from all non-create events
+				// V12+: strips room_id from ALL events (including create)
+				let is_v11 = room_version == RoomVersionId::V11;
 				let is_v12_or_later =
 					!matches!(
 						room_version,
@@ -3005,10 +3027,10 @@ pub(super) async fn import_pdus(
 							| RoomVersionId::V8 | RoomVersionId::V9
 							| RoomVersionId::V10 | RoomVersionId::V11
 					);
-				if is_v12_or_later
-					&& value.get("type").and_then(ruma::CanonicalJsonValue::as_str)
-						== Some("m.room.create")
-				{
+				let is_create = value.get("type").and_then(ruma::CanonicalJsonValue::as_str)
+					== Some("m.room.create");
+
+				if is_v12_or_later || (is_v11 && !is_create) {
 					value.remove("room_id");
 				}
 
