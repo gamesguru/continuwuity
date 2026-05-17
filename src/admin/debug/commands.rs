@@ -1138,7 +1138,6 @@ pub(crate) async fn force_set_state(
 				&room_id,
 				&room_version,
 				state,
-				Some(&server_names),
 			))
 			.await?
 		}

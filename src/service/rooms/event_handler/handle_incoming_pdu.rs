@@ -123,6 +123,75 @@ pub async fn handle_incoming_pdu<'a>(
 	value: BTreeMap<String, CanonicalJsonValue>,
 	is_timeline_event: bool,
 ) -> Result<Option<RawPduId>> {
+	// Prepare outlier value in case we need to soft-fail on timeout
+	let mut outlier_value = value.clone();
+	outlier_value
+		.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
+
+	// Circuit Breaker: fast-fail if this room is in backoff
+	if let Some(&(strikes, ref time)) = self.bad_room_ratelimiter.read().get(room_id) {
+		const BACKOFF_MIN: u64 = 60 * 5;
+		const BACKOFF_MAX: u64 = 60 * 60 * 24;
+		if conduwuit::utils::continue_exponential_backoff_secs(
+			BACKOFF_MIN,
+			BACKOFF_MAX,
+			time.elapsed(),
+			strikes,
+		) {
+			info!(
+				%room_id,
+				%event_id,
+				strikes,
+				"Circuit breaker active, soft-failing PDU"
+			);
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &outlier_value, Some(room_id));
+			self.services.pdu_metadata.mark_event_soft_failed(event_id);
+			return Ok(None);
+		}
+	}
+
+	let fut = self.handle_incoming_pdu_inner(origin, room_id, event_id, value, is_timeline_event);
+
+	match tokio::time::timeout(std::time::Duration::from_secs(60), fut).await {
+		| Ok(res) => {
+			if res.is_ok() {
+				// Clear the circuit breaker on success
+				self.bad_room_ratelimiter.write().remove(room_id);
+			}
+			res
+		},
+		| Err(_) => {
+			warn!(
+				%event_id,
+				%room_id,
+				%origin,
+				"PDU processing timed out after 60s, soft-failing and tripping circuit breaker"
+			);
+
+			let mut lock = self.bad_room_ratelimiter.write();
+			let strikes = lock.get(room_id).map_or(1, |&(s, _)| s.saturating_add(1));
+			lock.insert(room_id.to_owned(), (strikes, Instant::now()));
+
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &outlier_value, Some(room_id));
+			self.services.pdu_metadata.mark_event_soft_failed(event_id);
+			Ok(None)
+		},
+	}
+}
+
+#[implement(super::Service)]
+pub(super) async fn handle_incoming_pdu_inner<'a>(
+	&self,
+	origin: &'a ServerName,
+	room_id: &'a RoomId,
+	event_id: &'a EventId,
+	value: BTreeMap<String, CanonicalJsonValue>,
+	is_timeline_event: bool,
+) -> Result<Option<RawPduId>> {
 	// 1. Skip the PDU if we already have it as a timeline event
 	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
 		return Ok(Some(pdu_id));
