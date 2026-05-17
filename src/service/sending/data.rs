@@ -246,9 +246,6 @@ fn parse_servercurrentevent(key: &[u8], value: &[u8]) -> Result<(Destination, Se
 		(
 			Destination::Appservice(server),
 			if value.is_empty() {
-				if event.len() != 16 && event.len() != 24 {
-					return Err(Error::bad_database("Invalid RawId length in servercurrentpdus"));
-				}
 				SendingEvent::Pdu(event.into())
 			} else {
 				SendingEvent::Edu(value.into())
@@ -276,9 +273,6 @@ fn parse_servercurrentevent(key: &[u8], value: &[u8]) -> Result<(Destination, Se
 		(
 			Destination::Push(user_id.to_owned(), pushkey_string),
 			if value.is_empty() {
-				if event.len() != 16 && event.len() != 24 {
-					return Err(Error::bad_database("Invalid RawId length in servercurrentpdus"));
-				}
 				SendingEvent::Pdu(event.into())
 			} else {
 				// I'm pretty sure this should never be called
@@ -302,9 +296,6 @@ fn parse_servercurrentevent(key: &[u8], value: &[u8]) -> Result<(Destination, Se
 				Error::bad_database("Invalid server string in server_currenttransaction")
 			})?),
 			if value.is_empty() {
-				if event.len() != 16 && event.len() != 24 {
-					return Err(Error::bad_database("Invalid RawId length in servercurrentpdus"));
-				}
 				SendingEvent::Pdu(event.into())
 			} else {
 				SendingEvent::Edu(value.into())
