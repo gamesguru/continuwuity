@@ -1153,10 +1153,19 @@ impl Service {
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {
 			if let Err(e) = result {
+				let room_id = self
+					.services
+					.timeline
+					.get_pdu(event_id)
+					.await
+					.ok()
+					.and_then(|pdu| pdu.room_id_or_hash().map(|r| r.to_string()))
+					.unwrap_or_default();
 				info!(
 					%txn_id,
 					%server,
 					%event_id,
+					%room_id,
 					remote_error=?e,
 					"remote server encountered an error while processing an event"
 				);
