@@ -858,6 +858,9 @@ where
 					"sender cannot join as they are banned from the room"
 				);
 				false
+			} else if target_user_current_membership == MembershipState::Join {
+				trace!("sender is already joined to the room, allowing profile update");
+				true
 			} else {
 				match join_rules {
 					| JoinRule::Invite =>
