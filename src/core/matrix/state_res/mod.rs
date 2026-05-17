@@ -386,7 +386,7 @@ where
 		trace!(event_id = event_id.as_str(), "fetching event for its prev events");
 		let evt = fetch_event(event_id.clone()).await;
 		if evt.is_none() {
-			debug!("could not fetch event {} to calculate conflicted subgraph", event_id);
+			warn!("could not fetch event {} to calculate conflicted subgraph", event_id);
 			path.pop();
 			continue;
 		}
