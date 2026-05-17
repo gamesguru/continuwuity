@@ -457,19 +457,49 @@ pub(super) async fn audit_membership(
 					}
 				}
 
-				let mut local_members: HashMap<String, String> = HashMap::new();
+				let mut local_members: HashMap<String, (String, String)> = HashMap::new();
 
-				for (user_id, (membership, _)) in &state_membership {
-					local_members.insert(user_id.to_string(), membership.clone());
+				for (user_id, (membership, eid)) in &state_membership {
+					local_members.insert(user_id.to_string(), (membership.clone(), eid.clone()));
 				}
 
 				let mut remote_diffs = Vec::new();
 
 				for (user, remote_ms) in &remote_members {
 					match local_members.get(user) {
-						| Some(local_ms) if local_ms != remote_ms => {
+						| Some((local_ms, eid)) if local_ms != remote_ms => {
+							let age = if let Ok(eid) = OwnedEventId::parse(eid) {
+								self.services
+									.rooms
+									.timeline
+									.get_pdu(&eid)
+									.await
+									.ok()
+									.map(|p| {
+										let ms = u64::from(p.origin_server_ts);
+										let secs = ms / 1000;
+										let now = std::time::SystemTime::now()
+											.duration_since(std::time::UNIX_EPOCH)
+											.unwrap_or_default()
+											.as_secs();
+										let a = now.saturating_sub(secs);
+										let days = a / 86400;
+										let hours = a / 3600;
+										if a > 86400 {
+											format!("{days}d ago")
+										} else if a > 3600 {
+											format!("{hours}h ago")
+										} else {
+											format!("{a}s ago")
+										}
+									})
+									.unwrap_or_default()
+							} else {
+								String::new()
+							};
 							remote_diffs.push(format!(
-								"WARN {user}: local=`{local_ms}`, {server}=`{remote_ms}`"
+								"WARN {user}: local=`{local_ms}`, {server}=`{remote_ms}` \
+								 (event: {eid}, {age})"
 							));
 						},
 						| None if remote_ms == "join" || remote_ms == "invite" => {
@@ -481,12 +511,42 @@ pub(super) async fn audit_membership(
 					}
 				}
 
-				for (user, local_ms) in &local_members {
+				for (user, (local_ms, eid)) in &local_members {
 					if !remote_members.contains_key(user)
 						&& (local_ms == "join" || local_ms == "invite")
 					{
+						let age = if let Ok(eid) = OwnedEventId::parse(eid) {
+							self.services
+								.rooms
+								.timeline
+								.get_pdu(&eid)
+								.await
+								.ok()
+								.map(|p| {
+									let ms = u64::from(p.origin_server_ts);
+									let secs = ms / 1000;
+									let now = std::time::SystemTime::now()
+										.duration_since(std::time::UNIX_EPOCH)
+										.unwrap_or_default()
+										.as_secs();
+									let a = now.saturating_sub(secs);
+									let d = a / 86400;
+									let h = a / 3600;
+									if a > 86400 {
+										format!("{d}d ago")
+									} else if a > 3600 {
+										format!("{h}h ago")
+									} else {
+										format!("{a}s ago")
+									}
+								})
+								.unwrap_or_default()
+						} else {
+							String::new()
+						};
 						remote_diffs.push(format!(
-							"GHOST {user}: local says `{local_ms}` but ABSENT on {server}"
+							"GHOST {user}: local says `{local_ms}` but ABSENT on {server} \
+							 (event: {eid}, {age})"
 						));
 					}
 				}
