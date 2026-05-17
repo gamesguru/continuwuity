@@ -51,11 +51,51 @@ fn isolate_origin_signatures(
 		return event.clone();
 	};
 
+	// The `origin` field identifies the server that created/signed the event.
+	// For restricted joins, this differs from the sender (the resident server
+	// signs the join event on behalf of the joining user).
+	let origin_field_server: Option<OwnedServerName> = event
+		.get("origin")
+		.and_then(|v| match v {
+			| CanonicalJsonValue::String(s) => ServerName::parse(s.as_str()).ok(),
+			| _ => None,
+		})
+		.map(ToOwned::to_owned);
+
 	// Build the set of origin servers to retain
 	let mut origin_servers: Vec<&ServerName> = vec![sender.as_ref()];
 	if let Some(ref eid_server) = event_id_server {
 		if eid_server != sender {
 			origin_servers.push(eid_server.as_ref());
+		}
+	}
+	if let Some(ref origin_server) = origin_field_server {
+		if !origin_servers.iter().any(|s| *s == origin_server.as_str()) {
+			origin_servers.push(origin_server.as_ref());
+		}
+	}
+
+	// For V8+ restricted joins, ruma requires a signature from the server of
+	// the user in `join_authorised_via_users_server`. We must retain it.
+	let authorized_server: Option<OwnedServerName> = match room_version {
+		| RoomVersionId::V1
+		| RoomVersionId::V2
+		| RoomVersionId::V3
+		| RoomVersionId::V4
+		| RoomVersionId::V5
+		| RoomVersionId::V6
+		| RoomVersionId::V7 => None,
+		| _ => event
+			.get("content")
+			.and_then(|c| c.as_object())
+			.and_then(|c| c.get("join_authorised_via_users_server"))
+			.and_then(|v| v.as_str())
+			.and_then(|s| UserId::parse(s).ok())
+			.map(|u| u.server_name().to_owned()),
+	};
+	if let Some(ref auth_server) = authorized_server {
+		if !origin_servers.iter().any(|s| *s == auth_server.as_str()) {
+			origin_servers.push(auth_server.as_ref());
 		}
 	}
 
