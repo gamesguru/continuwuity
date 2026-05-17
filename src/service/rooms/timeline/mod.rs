@@ -300,7 +300,7 @@ impl Service {
 				}
 			}
 			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
-			if i.saturating_add(1).is_multiple_of(100) {
+			if i.saturating_add(1).is_multiple_of(2000) {
 				info!(
 					"reorder_timeline: removed {}/{} entries...",
 					i.saturating_add(1),
@@ -345,7 +345,7 @@ impl Service {
 					}
 				}
 			}
-			if i.saturating_add(1).is_multiple_of(100) {
+			if i.saturating_add(1).is_multiple_of(2000) {
 				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
 			}
 			if i.saturating_add(1).is_multiple_of(10000) {
