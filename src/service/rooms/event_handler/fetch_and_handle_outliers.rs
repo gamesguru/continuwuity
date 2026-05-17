@@ -312,6 +312,7 @@ where
 				room_id,
 				value.clone(),
 				true,
+				false, // skip_sig_verify
 			))
 			.await
 			{

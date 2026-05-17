@@ -23,6 +23,7 @@ pub async fn handle_outlier_pdu<'a, Pdu>(
 	room_id: &'a RoomId,
 	mut value: CanonicalJsonObject,
 	auth_events_known: bool,
+	skip_sig_verify: bool,
 ) -> Result<(PduEvent, BTreeMap<String, CanonicalJsonValue>)>
 where
 	Pdu: Event + Send + Sync,
@@ -51,27 +52,117 @@ where
 
 	// TODO: For RoomVersion6 we must check that Raw<..> is canonical do we anywhere?: https://matrix.org/docs/spec/rooms/v6#canonical-json
 
-	// Check signatures, otherwise drop
-	// check content hash, redact if doesn't match
 	let room_version_id = get_room_version_id(create_event)?;
-	let mut incoming_pdu = match self
-		.services
-		.server_keys
-		.verify_event(&value, Some(&room_version_id))
-		.await
-	{
-		| Ok(ruma::signatures::Verified::All) => value,
-		| Ok(ruma::signatures::Verified::Signatures) => {
-			// Redact
-			debug_info!("Calculated hash does not match (redaction): {event_id}");
-			ruma::canonical_json::redact(value, &room_version_id, None)
-				.map_err(|_| err!(Request(InvalidParam("Redaction failed"))))?
-		},
-		| Err(e) => {
-			return Err!(Request(InvalidParam(debug_error!(
-				"Signature verification failed for {event_id}: {e}"
-			))));
-		},
+
+	let mut incoming_pdu = if skip_sig_verify {
+		// Caller already verified signatures (e.g. import_pdus via
+		// validate_and_add_event_id). Skip redundant verification.
+		value
+	} else {
+		// Check signatures, otherwise drop
+		// check content hash, redact if doesn't match
+		match self
+			.services
+			.server_keys
+			.verify_event(&value, Some(&room_version_id))
+			.await
+		{
+			| Ok(ruma::signatures::Verified::All) => value,
+			| Ok(ruma::signatures::Verified::Signatures) => {
+				// Content hash mismatch — content may have been tampered by a relay.
+				// Attempt to fetch a pristine copy from the sender's server.
+				let sender_server = value
+					.get("sender")
+					.and_then(|v| v.as_str())
+					.and_then(|s| ruma::UserId::parse(s).ok())
+					.map(|u| u.server_name().to_owned());
+
+				let mut recovered = false;
+				if let Some(ref server) = sender_server {
+					if server.as_str() != origin.as_str() {
+						debug_info!(
+							%event_id,
+							"Hash mismatch, fetching pristine copy from {server}"
+						);
+						if let Ok(res) = self
+							.services
+							.sending
+							.send_federation_request(
+								server,
+								ruma::api::federation::event::get_event::v1::Request {
+									event_id: event_id.to_owned(),
+									include_unredacted_content: None,
+								},
+							)
+							.await
+						{
+							if let Ok((eid, clean_val)) =
+								conduwuit::matrix::event::gen_event_id_canonical_json(
+									&res.pdu,
+									&room_version_id,
+								) {
+								if eid == *event_id {
+									if matches!(
+										self.services
+											.server_keys
+											.verify_event(&clean_val, Some(&room_version_id))
+											.await,
+										Ok(ruma::signatures::Verified::All)
+									) {
+										debug_info!(
+											%event_id,
+											"Recovered pristine copy from {server}"
+										);
+										recovered = true;
+									}
+								}
+							}
+						}
+					}
+				}
+
+				if recovered {
+					// Re-fetch since we can't move clean_val out of the nested scope
+					if let Ok(res) = self
+						.services
+						.sending
+						.send_federation_request(
+							sender_server.as_ref().unwrap(),
+							ruma::api::federation::event::get_event::v1::Request {
+								event_id: event_id.to_owned(),
+								include_unredacted_content: None,
+							},
+						)
+						.await
+					{
+						if let Ok((_, clean_val)) =
+							conduwuit::matrix::event::gen_event_id_canonical_json(
+								&res.pdu,
+								&room_version_id,
+							) {
+							clean_val
+						} else {
+							debug_info!("Calculated hash does not match (redaction): {event_id}");
+							ruma::canonical_json::redact(value, &room_version_id, None)
+								.map_err(|_| err!(Request(InvalidParam("Redaction failed"))))?
+						}
+					} else {
+						debug_info!("Calculated hash does not match (redaction): {event_id}");
+						ruma::canonical_json::redact(value, &room_version_id, None)
+							.map_err(|_| err!(Request(InvalidParam("Redaction failed"))))?
+					}
+				} else {
+					debug_info!("Calculated hash does not match (redaction): {event_id}");
+					ruma::canonical_json::redact(value, &room_version_id, None)
+						.map_err(|_| err!(Request(InvalidParam("Redaction failed"))))?
+				}
+			},
+			| Err(e) => {
+				return Err!(Request(InvalidParam(debug_error!(
+					"Signature verification failed for {event_id}: {e}"
+				))));
+			},
+		}
 	};
 
 	// Now that we have checked the signature and hashes we can add the eventID and
