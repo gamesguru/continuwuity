@@ -7,7 +7,8 @@ use conduwuit::{
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
 use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
-use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, api::Direction};
+use ruma::{CanonicalJsonObject, EventId, OwnedEventId, OwnedUserId, RoomId, api::Direction};
+use serde::{Deserialize, Serialize};
 
 use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
@@ -18,8 +19,6 @@ pub(super) struct Data {
 	pduid_pdu: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
-	#[allow(dead_code)]
-	eventid_prevstateevents: Arc<Map>,
 	pub(super) eventid_statejumppointers: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
@@ -31,6 +30,17 @@ struct Services {
 
 pub type PdusIterItem = (PduCount, PduEvent);
 
+/// State DAG jump pointer data stored per state event (MSC4242).
+///
+/// Each state event stores its absolute depth in the State DAG
+/// (distinct from the Event DAG depth) along with binary-lifted
+/// jump pointers: `jumps[k]` points to the 2^k-th ancestor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct StateJumpData {
+	pub depth: u64,
+	pub jumps: Vec<OwnedEventId>,
+}
+
 impl Data {
 	pub(super) fn new(args: &crate::Args<'_>) -> Self {
 		let db = &args.db;
@@ -40,7 +50,6 @@ impl Data {
 			pduid_pdu: db["pduid_pdu"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
-			eventid_prevstateevents: db["eventid_prevstateevents"].clone(),
 			eventid_statejumppointers: db["eventid_statejumppointers"].clone(),
 			db: args.db.clone(),
 			services: Services {
@@ -230,7 +239,7 @@ impl Data {
 		self.eventid_pduid.insert(pdu.event_id.as_bytes(), pdu_id);
 		self.eventid_outlierpdu.remove(pdu.event_id.as_bytes());
 
-		if pdu.state_key().is_some() {
+		if pdu.state_key().is_some() && pdu.prev_state_events().is_some() {
 			if let Err(e) = self.calculate_and_persist_jump_pointers(pdu).await {
 				conduwuit::warn!(
 					"Failed to calculate jump pointers for state event {}: {}",
@@ -241,21 +250,39 @@ impl Data {
 		}
 	}
 
+	/// Calculate and persist binary-lifted jump pointers with depth tracking
+	/// for a state event in the State DAG (MSC4242).
+	///
+	/// Jump pointers enable O(log N) LCA queries. Each entry `jumps[k]`
+	/// points to the 2^k-th ancestor in the State DAG.
 	pub(super) async fn calculate_and_persist_jump_pointers(&self, pdu: &PduEvent) -> Result<()> {
 		// Grab the first prev_state_event as our tree parent.
-		// If there are multiple, picking one still enables a sublinear walk towards the
-		// root.
-		let Some(parent) = pdu.prev_state_events().and_then(|mut iter| iter.next()) else {
+		// If there are multiple (merge), picking one still enables a sublinear walk.
+		let Some(parent_id) = pdu.prev_state_events().and_then(|mut iter| iter.next()) else {
+			// Root event (create) — depth 0, no jumps
+			let data = StateJumpData { depth: 0, jumps: vec![] };
+			self.eventid_statejumppointers.insert(
+				pdu.event_id.as_bytes(),
+				serde_json::to_vec(&data).expect("StateJumpData serializes"),
+			);
 			return Ok(());
 		};
 
-		let mut jump_pointers: Vec<ruma::OwnedEventId> = vec![parent.into()];
+		// Parent's depth + 1
+		let parent_data = self
+			.get_jump_data(parent_id)
+			.await
+			.unwrap_or(StateJumpData { depth: 0, jumps: vec![] });
+		let my_depth = parent_data.depth.saturating_add(1);
+
+		// Build jump table: jumps[k] = 2^k-th ancestor
+		let mut jumps: Vec<OwnedEventId> = vec![parent_id.into()];
 		let mut k = 0;
 
-		while let Some(ancestor) = jump_pointers.get(k) {
-			if let Ok(ancestor_jumps) = self.get_jump_pointers(ancestor).await {
-				if let Some(next_jump) = ancestor_jumps.get(k) {
-					jump_pointers.push(next_jump.clone());
+		while let Some(ancestor_id) = jumps.get(k).cloned() {
+			if let Ok(ancestor_data) = self.get_jump_data(&ancestor_id).await {
+				if let Some(next) = ancestor_data.jumps.get(k) {
+					jumps.push(next.clone());
 				} else {
 					break;
 				}
@@ -265,17 +292,16 @@ impl Data {
 			k = k.saturating_add(1);
 		}
 
+		let data = StateJumpData { depth: my_depth, jumps };
 		self.eventid_statejumppointers.insert(
 			pdu.event_id.as_bytes(),
-			serde_json::to_vec(&jump_pointers).expect("jump pointers serialize"),
+			serde_json::to_vec(&data).expect("StateJumpData serializes"),
 		);
 		Ok(())
 	}
 
-	pub(super) async fn get_jump_pointers(
-		&self,
-		event_id: &EventId,
-	) -> Result<Vec<ruma::OwnedEventId>> {
+	/// Retrieve the State DAG jump data for an event.
+	pub(super) async fn get_jump_data(&self, event_id: &EventId) -> Result<StateJumpData> {
 		self.eventid_statejumppointers
 			.get(event_id.as_bytes())
 			.await
@@ -284,36 +310,82 @@ impl Data {
 
 	/// Finds the Lowest Common Ancestor (LCA) of two state events in O(log N)
 	/// time using pre-calculated binary-lifted jump pointers.
+	///
+	/// Requires that both events have persisted `StateJumpData` with correct
+	/// depth values. The algorithm:
+	/// 1. Align both nodes to the same depth by lifting the deeper one.
+	/// 2. If they're the same node, return it.
+	/// 3. Binary lift both in parallel to find the last point of divergence.
+	/// 4. Return their common parent.
 	#[allow(dead_code)]
 	pub(super) async fn find_lca(
 		&self,
-		mut a: ruma::OwnedEventId,
-		mut b: ruma::OwnedEventId,
-	) -> Result<Option<ruma::OwnedEventId>> {
-		// In a full implementation, we would align `a` and `b` to the same State DAG
-		// depth. For simplicity, we just do a staggered jump to find the
-		// intersection.
-		for k in (0..32).rev() {
-			if let Ok(jumps_a) = self.get_jump_pointers(&a).await {
-				if let Ok(jumps_b) = self.get_jump_pointers(&b).await {
-					if let (Some(jump_a), Some(jump_b)) = (jumps_a.get(k), jumps_b.get(k)) {
-						if jump_a != jump_b {
-							a = jump_a.clone();
-							b = jump_b.clone();
-						}
-					}
+		mut a: OwnedEventId,
+		mut b: OwnedEventId,
+	) -> Result<Option<OwnedEventId>> {
+		let mut data_a = self.get_jump_data(&a).await?;
+		let mut data_b = self.get_jump_data(&b).await?;
+
+		// Step 1: Align depths — lift the deeper node
+		if data_a.depth > data_b.depth {
+			let result = self.lift_to_depth(a, data_a, data_b.depth).await?;
+			a = result.0;
+			data_a = result.1;
+		} else if data_b.depth > data_a.depth {
+			let result = self.lift_to_depth(b, data_b, data_a.depth).await?;
+			b = result.0;
+			data_b = result.1;
+		}
+
+		// Step 2: If already the same event, return it
+		if a == b {
+			return Ok(Some(a));
+		}
+
+		// Step 3: Binary lift in parallel — find the last point where they differ
+		let max_k = data_a.jumps.len().max(data_b.jumps.len());
+		for k in (0..max_k).rev() {
+			let jump_a = data_a.jumps.get(k);
+			let jump_b = data_b.jumps.get(k);
+			if let (Some(ja), Some(jb)) = (jump_a, jump_b) {
+				if ja != jb {
+					a = ja.clone();
+					b = jb.clone();
+					data_a = self.get_jump_data(&a).await?;
+					data_b = self.get_jump_data(&b).await?;
 				}
 			}
 		}
 
-		// After jumping, the parent of A (or B) should be the LCA.
-		if let Ok(jumps_a) = self.get_jump_pointers(&a).await {
-			if let Some(parent) = jumps_a.first() {
-				return Ok(Some(parent.clone()));
-			}
-		}
+		// Step 4: a and b are now children of the LCA — return their parent
+		Ok(data_a.jumps.first().cloned())
+	}
 
-		Ok(None)
+	/// Lift an event to a target depth using binary decomposition of the
+	/// depth difference. E.g., if diff=5 (binary 101), jump 2^0 then 2^2.
+	#[allow(dead_code)]
+	async fn lift_to_depth(
+		&self,
+		mut id: OwnedEventId,
+		mut data: StateJumpData,
+		target_depth: u64,
+	) -> Result<(OwnedEventId, StateJumpData)> {
+		let mut diff = data.depth.saturating_sub(target_depth);
+		let mut k = 0;
+		while diff > 0 {
+			if diff & 1 == 1 {
+				if let Some(jump) = data.jumps.get(k) {
+					id = jump.clone();
+					data = self.get_jump_data(&id).await?;
+				} else {
+					// Jump table incomplete — cannot lift further
+					break;
+				}
+			}
+			diff >>= 1;
+			k = k.saturating_add(1);
+		}
+		Ok((id, data))
 	}
 
 	pub(super) fn prepend_backfill_pdu(

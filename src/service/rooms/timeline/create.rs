@@ -201,13 +201,19 @@ pub async fn create_event(
 		),
 		kind: event_type,
 		content,
-		prev_state_events: if state_key.is_some() {
-			Some(
-				auth_events
-					.values()
-					.map(|pdu| pdu.event_id.clone())
-					.collect(),
-			)
+		prev_state_events: if room_version.state_dags && state_key.is_some() {
+			// MSC4242: populate with state DAG forward extremities
+			let extremities: Vec<OwnedEventId> = match room_id {
+				| Some(room_id) =>
+					self.services
+						.state
+						.get_state_forward_extremities(room_id)
+						.map(Into::into)
+						.collect()
+						.await,
+				| None => Vec::new(), // create event has no prev_state_events
+			};
+			Some(extremities)
 		} else {
 			None
 		},

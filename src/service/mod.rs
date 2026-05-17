@@ -1,6 +1,5 @@
 #![type_length_limit = "8192"]
 #![allow(refining_impl_trait)]
-#![allow(clippy::large_futures)]
 
 extern crate conduwuit_core as conduwuit;
 extern crate conduwuit_database as database;

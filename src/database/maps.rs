@@ -467,15 +467,13 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "eventid_prevstateevents",
+		name: "eventid_statejumppointers",
 		cache_disp: CacheDisp::Unique,
 		key_size_hint: Some(48),
 		..descriptor::RANDOM
 	},
 	Descriptor {
-		name: "eventid_statejumppointers",
-		cache_disp: CacheDisp::Unique,
-		key_size_hint: Some(48),
-		..descriptor::RANDOM
+		name: "roomid_stateleaves",
+		..descriptor::RANDOM_SMALL
 	},
 ];

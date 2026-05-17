@@ -129,6 +129,14 @@ pub async fn build_and_append_pdu(
 		.boxed()
 		.await?;
 
+	// MSC4242: Update State DAG extremities for state events
+	if pdu.state_key().is_some() && pdu.prev_state_events().is_some() {
+		self.services
+			.state
+			.update_state_extremities_for_event(&room_id, &pdu, state_lock)
+			.await;
+	}
+
 	// Process admin commands for locally sent events
 	if *pdu.kind() == TimelineEventType::RoomMessage {
 		let content: ExtractBody = pdu.get_content()?;

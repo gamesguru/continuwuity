@@ -1,5 +1,3 @@
-#![allow(clippy::large_futures)]
-
 pub mod console;
 mod create;
 mod execute;
@@ -491,16 +489,13 @@ impl Service {
 		assert!(self.user_is_admin(user_id).await, "sender is not admin");
 
 		let state_lock = self.services.state.mutex.lock(room_id).await;
-		if let Err(e) = self
-			.services
-			.timeline
-			.build_and_append_pdu(
-				PduBuilder::timeline(&self.text_or_file(content).await),
-				user_id,
-				Some(room_id),
-				&state_lock,
-			)
-			.await
+		if let Err(e) = Box::pin(self.services.timeline.build_and_append_pdu(
+			PduBuilder::timeline(&self.text_or_file(content).await),
+			user_id,
+			Some(room_id),
+			&state_lock,
+		))
+		.await
 		{
 			self.handle_response_error(e, room_id, user_id, &state_lock)
 				.boxed()
@@ -524,15 +519,13 @@ impl Service {
 			 may have finished successfully, but we could not return the output."
 		));
 
-		self.services
-			.timeline
-			.build_and_append_pdu(
-				PduBuilder::timeline(&content),
-				user_id,
-				Some(room_id),
-				state_lock,
-			)
-			.await?;
+		Box::pin(self.services.timeline.build_and_append_pdu(
+			PduBuilder::timeline(&content),
+			user_id,
+			Some(room_id),
+			state_lock,
+		))
+		.await?;
 
 		Ok(())
 	}

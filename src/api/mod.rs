@@ -1,6 +1,5 @@
 #![type_length_limit = "16384"] //TODO: reduce me
 #![allow(clippy::toplevel_ref_arg)]
-#![allow(clippy::large_futures)]
 
 extern crate conduwuit_core as conduwuit;
 extern crate conduwuit_service as service;

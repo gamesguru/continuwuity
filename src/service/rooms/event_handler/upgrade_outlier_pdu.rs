@@ -209,6 +209,14 @@ where
 		.await;
 	extremities.push(incoming_pdu.event_id().to_owned());
 
+	// MSC4242: Update State DAG extremities for incoming state events
+	if incoming_pdu.state_key().is_some() && incoming_pdu.prev_state_events().is_some() {
+		self.services
+			.state
+			.update_state_extremities_for_event(room_id, &incoming_pdu, &state_lock)
+			.await;
+	}
+
 	debug!(
 		"Retained {} extremities checked against {} prev_events",
 		extremities.len(),
