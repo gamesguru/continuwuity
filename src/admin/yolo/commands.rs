@@ -1627,24 +1627,32 @@ pub(super) async fn get_remote_dag(
 			{
 				| Ok(r) => r,
 				| Err(e) => {
-					if let Ok((eid, val)) = conduwuit::matrix::event::gen_event_id_canonical_json(
+					match conduwuit::matrix::event::gen_event_id_canonical_json(
 						raw_pdu,
 						&room_version,
 					) {
-						warn!(
-							"get_remote_dag: PDU {eid} failed sig verify, storing as rejected \
-							 outlier: {e}"
-						);
-						self.services
-							.rooms
-							.outlier
-							.add_pdu_outlier(&eid, &val, Some(&room_id));
-						self.services
-							.rooms
-							.pdu_metadata
-							.mark_event_soft_failed(&eid);
+						| Ok((eid, val)) => {
+							warn!(
+								"get_remote_dag: PDU {eid} failed sig verify, storing as \
+								 rejected outlier: {e}"
+							);
+							self.services.rooms.outlier.add_pdu_outlier(
+								&eid,
+								&val,
+								Some(&room_id),
+							);
+							self.services
+								.rooms
+								.pdu_metadata
+								.mark_event_soft_failed(&eid);
+							// Fall through so prev_events are still queued
+							(eid, val)
+						},
+						| Err(err) => {
+							warn!("get_remote_dag: Failed to canonicalize PDU: {err}");
+							continue;
+						},
 					}
-					continue;
 				},
 			};
 
@@ -2969,7 +2977,7 @@ pub(super) async fn import_pdus(
 		}
 		total = total.saturating_add(1);
 
-		let result: Result = async {
+		let result: Result<bool> = async {
 			let mut raw_map: serde_json::Map<String, serde_json::Value> =
 				serde_json::from_str(&line)?;
 
@@ -2998,15 +3006,17 @@ pub(super) async fn import_pdus(
 					.timeline
 					.force_insert_pdu(&room_id, &eid, &pdu, &value)
 					.await
-					.map(|_| ())
+					.map(|_| true)
 			} else {
 				let (eid, val) = if skip_sig_verify {
 					(extract_event_id(&value).ok_or_else(|| err!("missing event_id"))?, value)
 				} else {
 					// Use the raw line JSON directly (after stripping diagnostics),
 					// stripping event_id for v3+ rooms where it's not part of the signed content.
-					// Avoids CanonicalJsonObject round-trip which can mangle the JSON.
-					raw_map.remove("event_id");
+					// V1/V2 rooms require event_id in the JSON for signature verification.
+					if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
+						raw_map.remove("event_id");
+					}
 					let raw = serde_json::value::RawValue::from_string(serde_json::to_string(
 						&raw_map,
 					)?)
@@ -3037,14 +3047,14 @@ pub(super) async fn import_pdus(
 								Some(&room_id),
 							);
 
-							// Mark as rejected/soft-failed
+							// Mark as rejected (NOT soft-failed: sig failures are rejections,
+							// not soft-fails which are for valid-sig events failing state auth)
 							self.services
 								.rooms
 								.pdu_metadata
 								.mark_event_soft_failed(&eid);
 
-							rejected = rejected.saturating_add(1);
-							return Ok(());
+							return Ok(false);
 						},
 					}
 				};
@@ -3059,13 +3069,14 @@ pub(super) async fn import_pdus(
 					.event_handler
 					.handle_incoming_pdu(origin, &room_id, &eid, canonical, true)
 					.await?;
-				Ok(())
+				Ok(true)
 			}
 		}
 		.await;
 
 		match result {
-			| Ok(()) => inserted = inserted.saturating_add(1),
+			| Ok(true) => inserted = inserted.saturating_add(1),
+			| Ok(false) => rejected = rejected.saturating_add(1),
 			| Err(e) => {
 				warn!("import_pdus: {e}");
 				failed = failed.saturating_add(1);

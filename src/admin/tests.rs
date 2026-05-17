@@ -96,15 +96,19 @@ fn yolo_view_extremities_with_room() {
 	assert!(parse_yolo(&["yolo", "view-extremities", "!foo:example.org"]).is_ok());
 }
 
-// -- V12 room_id stripping tests --
+// -- V12+ room_id stripping tests --
 
-/// Helper: simulates the V12 room_id stripping logic used in import/export.
+/// Helper: simulates the V12+ room_id stripping logic used in import/export.
 /// Returns whether room_id was removed.
 fn strip_v12_room_id(
 	obj: &mut serde_json::Map<String, serde_json::Value>,
 	room_version: &str,
 ) -> bool {
-	if room_version == "12" && obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create") {
+	let is_v12_or_later = !matches!(
+		room_version,
+		"1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11"
+	);
+	if is_v12_or_later && obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create") {
 		obj.remove("room_id").is_some()
 	} else {
 		false

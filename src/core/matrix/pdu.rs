@@ -89,9 +89,20 @@ impl Pdu {
 		pdu.event_id = event_id.to_owned();
 
 		if pdu.room_id.is_none() {
-			if let Some(room_id) = room_id {
+			if pdu.kind == TimelineEventType::RoomCreate {
+				// V12+: room_id is omitted from the signed content. Derive it
+				// deterministically from the event_id hash ($ -> !) to prevent
+				// a malicious server from spoofing creator privileges.
+				let constructed_hash = event_id.as_str().replacen('$', "!", 1);
+				let constructed_room_id = RoomId::parse(&constructed_hash).map_err(|_| {
+					crate::err!(Request(InvalidParam(
+						"Invalid event_id for room hash derivation"
+					)))
+				})?;
+				pdu.room_id = Some(constructed_room_id.into());
+			} else if let Some(room_id) = room_id {
 				pdu.room_id = Some(room_id.to_owned());
-			} else if pdu.kind != TimelineEventType::RoomCreate {
+			} else {
 				return Err(crate::err!(Request(InvalidParam("Event is missing room_id"))));
 			}
 		}

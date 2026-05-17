@@ -1023,7 +1023,8 @@ where
 		},
 		| MembershipState::Leave => {
 			let can_unban = if target_user_current_membership == MembershipState::Ban {
-				sender_creator || sender_power.filter(|&p| p >= &power_levels.ban).is_some()
+				(sender_creator && !target_creator)
+					|| sender_power.filter(|&p| p >= &power_levels.ban).is_some()
 			} else {
 				true
 			};
@@ -1031,8 +1032,8 @@ where
 				target_user_current_membership,
 				MembershipState::Ban | MembershipState::Leave
 			) {
-				if sender_creator {
-					// sender is a creator
+				if sender_creator && !target_creator {
+					// sender is a creator, target is not
 					true
 				} else if sender_power.filter(|&p| p >= &power_levels.kick).is_none() {
 					// sender lacks kick power level
