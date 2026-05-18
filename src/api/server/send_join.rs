@@ -107,7 +107,7 @@ async fn create_join_event(
 	.map_err(|e| err!(Request(BadJson(warn!("Event has invalid state event type: {e}")))))?;
 
 	if event_type != StateEventType::RoomMember {
-		return Err!(Request(BadJson(
+		return Err!(Request(Forbidden(
 			"Not allowed to send non-membership state event to join endpoint."
 		)));
 	}
@@ -122,7 +122,7 @@ async fn create_join_event(
 	.map_err(|e| err!(Request(BadJson(warn!("Event content is empty or invalid: {e}")))))?;
 
 	if content.membership != MembershipState::Join {
-		return Err!(Request(BadJson(
+		return Err!(Request(Forbidden(
 			"Not allowed to send a non-join membership event to join endpoint."
 		)));
 	}
@@ -151,7 +151,7 @@ async fn create_join_event(
 	.map_err(|e| err!(Request(BadJson(warn!("State key is not a valid user ID: {e}")))))?;
 
 	if state_key != sender {
-		return Err!(Request(BadJson("State key does not match sender user.")));
+		return Err!(Request(Forbidden("State key does not match sender user.")));
 	}
 
 	if let Some(authorising_user) = content.join_authorized_via_users_server {

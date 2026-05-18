@@ -430,6 +430,10 @@ async fn join_room_by_id_helper_remote(
 			)))
 		})?;
 
+	if join_event_stub.get("type").and_then(|v| v.as_str()) != Some("m.room.member") {
+		return Err!(BadServerResponse("make_join response event type is not m.room.member"));
+	}
+
 	let join_authorized_via_users_server = if !matches!(
 		room_version_id,
 		RoomVersionId::V1
