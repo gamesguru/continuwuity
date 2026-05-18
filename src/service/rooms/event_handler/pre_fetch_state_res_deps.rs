@@ -184,14 +184,18 @@ pub(super) async fn pre_fetch_state_res_deps(
 	}
 
 	// Phase 2: Backfill ~100 recent PDUs to fill prev_events gaps that
-	// state_res needs for conflicted subgraph walks. Always runs regardless
-	// of auth chain completeness. Tries multiple servers until one succeeds.
-	if started.elapsed() < budget {
-		// Use the room's current forward extremities as the backfill starting
-		// point — exactly what Synapse does. Extremities are the unresolved
-		// DAG tips (typically 1-5 events), which naturally bounds URI length.
-		// incoming_state contains state events (memberships, PLs), not DAG tips,
-		// so using it here was semantically wrong and could generate 414 errors.
+	// state_res needs for conflicted subgraph walks. Only runs for rooms
+	// with an established timeline — skips brand-new rooms (send_join on a
+	// fresh Complement test room) where the origin has no /backfill handler.
+	let has_timeline = self
+		.services
+		.state
+		.get_room_shortstatehash(room_id)
+		.await
+		.is_ok();
+	if has_timeline && started.elapsed() < budget {
+		// Use the room's current forward extremities (DAG tips) as the v= parameter,
+		// exactly as Synapse does. Naturally bounded (typically 1-5 events).
 		let latest_ids: Vec<OwnedEventId> = self
 			.services
 			.state
