@@ -13,7 +13,15 @@ mod resolve_state;
 mod state_at_incoming;
 pub mod upgrade_outlier_pdu;
 
-use std::{collections::HashMap, fmt::Write, sync::Arc, time::Instant};
+use std::{
+	collections::HashMap,
+	fmt::Write,
+	sync::{
+		Arc,
+		atomic::{AtomicU32, Ordering},
+	},
+	time::Instant,
+};
 
 use async_trait::async_trait;
 use conduwuit::{
@@ -32,7 +40,15 @@ pub struct Service {
 	pub mutex_federation: RoomMutexMap,
 	pub federation_handletime: SyncRwLock<HandleTimeMap>,
 	pub bad_room_ratelimiter: SyncRwLock<HashMap<OwnedRoomId, (u32, Instant)>>,
+	pub peer_scorer: dashmap::DashMap<ruma::OwnedServerName, PeerStats>,
 	services: Services,
+}
+
+#[derive(Default, Debug)]
+pub struct PeerStats {
+	pub successes: AtomicU32,
+	pub errors: AtomicU32,
+	pub latency_ms: AtomicU32,
 }
 
 struct Services {
@@ -62,6 +78,7 @@ impl crate::Service for Service {
 			mutex_federation: RoomMutexMap::new(),
 			federation_handletime: HandleTimeMap::new().into(),
 			bad_room_ratelimiter: HashMap::new().into(),
+			peer_scorer: dashmap::DashMap::new(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				sending: args.depend::<sending::Service>("sending"),
@@ -129,7 +146,7 @@ impl Service {
 				servers.push(s.clone());
 			}
 		}
-		let room_servers: Vec<ruma::OwnedServerName> = self
+		let mut room_servers: Vec<ruma::OwnedServerName> = self
 			.services
 			.state_cache
 			.room_servers(room_id)
@@ -137,11 +154,51 @@ impl Service {
 				!self.services.globals.server_is_ours(s) && !servers.iter().any(|x| x == s)
 			})
 			.map(ToOwned::to_owned)
-			.take(room_server_cap)
 			.collect()
 			.await;
+
+		// Sort by peer score (latency + (errors * 1000) - (successes * 100))
+		room_servers.sort_by_cached_key(|s| {
+			if let Some(stats) = self.peer_scorer.get(s) {
+				let success = stats.successes.load(Ordering::Relaxed) as u64;
+				let error = stats.errors.load(Ordering::Relaxed) as u64;
+				let latency = stats.latency_ms.load(Ordering::Relaxed) as u64;
+				(latency + (error * 1000)).saturating_sub(success * 100)
+			} else {
+				// Default penalization for unknown servers (assume 5s latency)
+				5000
+			}
+		});
+
+		room_servers.truncate(room_server_cap);
 		servers.extend(room_servers);
 		servers
+	}
+
+	pub(super) fn update_peer_stats(
+		&self,
+		server: &ruma::ServerName,
+		success: bool,
+		latency_ms: u32,
+	) {
+		if let Some(stats) = self.peer_scorer.get(server) {
+			if success {
+				stats.successes.fetch_add(1, Ordering::Relaxed);
+				let old = stats.latency_ms.load(Ordering::Relaxed);
+				stats
+					.latency_ms
+					.store((old * 7 + latency_ms * 3) / 10, Ordering::Relaxed);
+			} else {
+				stats.errors.fetch_add(1, Ordering::Relaxed);
+			}
+		} else {
+			let stats = PeerStats {
+				successes: AtomicU32::new(if success { 1 } else { 0 }),
+				errors: AtomicU32::new(if success { 0 } else { 1 }),
+				latency_ms: AtomicU32::new(if success { latency_ms } else { 5000 }),
+			};
+			self.peer_scorer.insert(server.to_owned(), stats);
+		}
 	}
 }
 

@@ -5,7 +5,7 @@ use std::{
 };
 
 use conduwuit::{
-	implement, info,
+	Event, implement, info,
 	utils::stream::{IterStream, TryWidebandExt},
 	warn,
 };
@@ -25,6 +25,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 	incoming_state: &HashMap<u64, OwnedEventId>,
+	prev_events: &[OwnedEventId],
 	origin: &ruma::ServerName,
 ) {
 	// Load current room state
@@ -99,7 +100,8 @@ pub(super) async fn pre_fetch_state_res_deps(
 				active.push(async move {
 					for server in &servers {
 						let server: &ruma::ServerName = server;
-						if let Ok(res) = self
+						let start = Instant::now();
+						match self
 							.services
 							.sending
 							.send_federation_request(server, get_event::v1::Request {
@@ -108,7 +110,21 @@ pub(super) async fn pre_fetch_state_res_deps(
 							})
 							.await
 						{
-							return (event_id, Some(res.pdu));
+							| Ok(res) => {
+								self.update_peer_stats(
+									server,
+									true,
+									start.elapsed().as_millis() as u32,
+								);
+								return (event_id, Some(res.pdu));
+							},
+							| Err(_) => {
+								self.update_peer_stats(
+									server,
+									false,
+									start.elapsed().as_millis() as u32,
+								);
+							},
 						}
 					}
 					(event_id, None)
@@ -130,7 +146,15 @@ pub(super) async fn pre_fetch_state_res_deps(
 				break;
 			}
 
-			let Some((event_id, maybe_pdu)) = active.next().await else {
+			let time_left = budget.saturating_sub(started.elapsed());
+			if time_left.is_zero() {
+				break;
+			}
+
+			let Ok(Some((event_id, maybe_pdu))) =
+				tokio::time::timeout(time_left, active.next()).await
+			else {
+				info!("Pre-fetch budget exhausted (timeout during active wait)");
 				break;
 			};
 
@@ -172,10 +196,11 @@ pub(super) async fn pre_fetch_state_res_deps(
 	// state_res needs for conflicted subgraph walks. Always runs regardless
 	// of auth chain completeness. Tries multiple servers until one succeeds.
 	if started.elapsed() < budget {
-		let latest_ids: Vec<OwnedEventId> = incoming_state.values().cloned().collect();
+		let latest_ids: Vec<OwnedEventId> = prev_events.to_vec();
 		if !latest_ids.is_empty() {
 			for server in &servers {
-				if let Ok(response) = self
+				let start = Instant::now();
+				match self
 					.services
 					.sending
 					.send_federation_request(
@@ -188,34 +213,52 @@ pub(super) async fn pre_fetch_state_res_deps(
 					)
 					.await
 				{
-					let mut backfilled = 0_usize;
-					for pdu_raw in &response.pdus {
-						if let Ok((eid, value)) = self
-							.services
-							.server_keys
-							.validate_and_add_event_id(pdu_raw, room_version_id)
-							.await
-						{
-							if !self.services.timeline.pdu_exists(&eid).await {
-								self.services.outlier.add_pdu_outlier(
+					| Ok(response) => {
+						self.update_peer_stats(server, true, start.elapsed().as_millis() as u32);
+						let mut backfilled = 0_usize;
+						for pdu_raw in &response.pdus {
+							if let Ok((eid, value)) = self
+								.services
+								.server_keys
+								.validate_and_add_event_id(pdu_raw, room_version_id)
+								.await
+							{
+								if let Ok(pdu) = conduwuit::PduEvent::from_id_val(
 									&eid,
-									&value,
+									value.clone(),
 									Some(room_id),
-								);
-								backfilled = backfilled.saturating_add(1);
+								) {
+									if pdu.room_id_or_hash().as_deref() == Some(room_id) {
+										if !self.services.timeline.pdu_exists(&eid).await {
+											self.services.outlier.add_pdu_outlier(
+												&eid,
+												&value,
+												Some(room_id),
+											);
+											backfilled = backfilled.saturating_add(1);
+										}
+									} else {
+										warn!(%eid, "Server returned backfill event for a different room!");
+									}
+								}
 							}
 						}
-					}
-					if backfilled > 0 {
-						info!(
-							backfilled,
-							total_received = response.pdus.len(),
-							%server,
-							"Pre-fetched DAG history via backfill for state resolution"
-						);
-					}
-					// Got data from at least one server, done
-					break;
+						if backfilled > 0 {
+							info!(
+								backfilled,
+								total_received = response.pdus.len(),
+								%server,
+								"Pre-fetched DAG history via backfill for state resolution"
+							);
+						}
+						// Got data from at least one server, done
+						if !response.pdus.is_empty() {
+							break;
+						}
+					},
+					| Err(_) => {
+						self.update_peer_stats(server, false, start.elapsed().as_millis() as u32);
+					},
 				}
 			}
 		}

@@ -46,7 +46,13 @@ where
 	};
 
 	// Build routing servers via shared helper: origin → trusted → room members
-	let routing_servers = self.build_federation_server_list(room_id, origin, 5).await;
+	let routing_servers = self
+		.build_federation_server_list(
+			room_id,
+			origin,
+			self.services.server.config.federation_fallback_room_servers,
+		)
+		.await;
 	info!(
 		origin = %origin,
 		n_total = routing_servers.len(),
@@ -106,6 +112,7 @@ where
 								"event not found on any server"
 							)));
 							for (i, server) in servers.iter().enumerate() {
+								let start = std::time::Instant::now();
 								match self
 									.services
 									.sending
@@ -115,8 +122,20 @@ where
 									})
 									.await
 								{
-									| Ok(res) => return (id_clone, Ok((res, server.clone()))),
+									| Ok(res) => {
+										self.update_peer_stats(
+											server,
+											true,
+											start.elapsed().as_millis() as u32,
+										);
+										return (id_clone, Ok((res, server.clone())));
+									},
 									| Err(e) => {
+										self.update_peer_stats(
+											server,
+											false,
+											start.elapsed().as_millis() as u32,
+										);
 										if i == 0 {
 											debug!(%id_clone, %server, "Origin server failed: {e}");
 										}
@@ -153,6 +172,7 @@ where
 						let _last_err =
 							conduwuit::err!(Request(NotFound("event not found on any server")));
 						for (i, server) in servers.iter().enumerate() {
+							let start = std::time::Instant::now();
 							match self
 								.services
 								.sending
@@ -162,8 +182,20 @@ where
 								})
 								.await
 							{
-								| Ok(res) => return (id_clone, Ok((res, server.clone()))),
+								| Ok(res) => {
+									self.update_peer_stats(
+										server,
+										true,
+										start.elapsed().as_millis() as u32,
+									);
+									return (id_clone, Ok((res, server.clone())));
+								},
 								| Err(e) => {
+									self.update_peer_stats(
+										server,
+										false,
+										start.elapsed().as_millis() as u32,
+									);
 									if i == 0 {
 										debug!(%id_clone, %server, "Origin server failed: {e}");
 									}

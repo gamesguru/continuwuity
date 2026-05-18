@@ -13,7 +13,9 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
-use ruma::{CanonicalJsonValue, RoomId, ServerName, events::StateEventType};
+use ruma::{
+	CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName, events::StateEventType,
+};
 
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
@@ -210,10 +212,13 @@ where
 	// acquiring the room lock. This is parallel (32 concurrent) and
 	// multi-server (origin + trusted + room members) with a 300s budget.
 	if incoming_pdu.state_key().is_some() {
+		let prev_events: Vec<OwnedEventId> =
+			incoming_pdu.prev_events().map(ToOwned::to_owned).collect();
 		self.pre_fetch_state_res_deps(
 			room_id,
 			&room_version_id,
 			&state_at_incoming_event,
+			&prev_events,
 			origin,
 		)
 		.await;
