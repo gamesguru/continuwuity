@@ -25,7 +25,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 	incoming_state: &HashMap<u64, OwnedEventId>,
-	prev_events: &[OwnedEventId],
+	backfill_targets: &[OwnedEventId],
 	origin: &ruma::ServerName,
 ) {
 	// Load current room state
@@ -196,7 +196,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 	// state_res needs for conflicted subgraph walks. Always runs regardless
 	// of auth chain completeness. Tries multiple servers until one succeeds.
 	if started.elapsed() < budget {
-		let latest_ids: Vec<OwnedEventId> = prev_events.to_vec();
+		let latest_ids: Vec<OwnedEventId> = backfill_targets.to_vec();
 		if !latest_ids.is_empty() {
 			for server in &servers {
 				let start = Instant::now();
