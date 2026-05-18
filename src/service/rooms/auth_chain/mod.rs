@@ -8,7 +8,7 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Result, at, debug, debug_error, implement, info, trace,
+	Err, Result, at, debug, implement, info, trace,
 	utils::{
 		IterStream,
 		stream::{ReadyExt, TryBroadbandExt},
@@ -196,22 +196,14 @@ async fn get_auth_chain_inner(
 
 		trace!(%event_id, "processing auth event");
 
-		// Try timeline first, then fall back to the outlier store.
-		// Backfilled auth events (create, power_levels, etc.) often land in the
-		// outlier store before being promoted to the timeline, so auth chain walks
-		// must check both to avoid false "missing" gaps.
-		let pdu_result = match self
+		match self
 			.services
 			.timeline
 			.get_pdu_in_room(Some(room_id), &event_id)
 			.await
 		{
-			| Ok(pdu) => Ok(pdu),
-			| Err(_) => self.services.outlier.get_pdu_outlier(&event_id).await,
-		};
-		match pdu_result {
 			| Err(e) => {
-				debug_error!(%event_id, ?e, "Could not find pdu mentioned in auth events");
+				info!(%event_id, ?e, "Could not find pdu mentioned in auth events");
 			},
 			| Ok(pdu) => {
 				if let Some(claimed_room_id) = pdu.room_id.clone() {

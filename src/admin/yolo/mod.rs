@@ -10,6 +10,27 @@ use crate::admin_command_dispatch;
 #[admin_command_dispatch]
 #[derive(Debug, Subcommand)]
 pub enum YoloCommand {
+	/// Audit the auth chain for a room, reporting events that are missing
+	/// from both the timeline and outlier store (true DAG gaps).
+	///
+	/// Scans the auth chains of all current state events and buckets each
+	/// referenced event as: timeline, outlier-only, or missing. With
+	/// --fetch, fans out GET /event to all known room servers for each gap
+	/// and stores successes as outliers.
+	AuditAuthChain {
+		/// The room ID to audit.
+		room_id: OwnedRoomId,
+
+		/// Fan out GET /event to all known room servers for missing events
+		/// and store successful responses as outliers.
+		#[arg(long)]
+		fetch: bool,
+
+		/// Show each missing/outlier event ID (default: summary only).
+		#[arg(short, long)]
+		verbose: bool,
+	},
+
 	/// Full membership audit: timeline vs state vs cache vs remote server.
 	///
 	/// Compares timeline membership against state snapshot, checks the
@@ -92,8 +113,14 @@ pub enum YoloCommand {
 	/// This is a safe cleanup command that resolves "stuck" state where an
 	/// event exists in both the timeline and outlier tables. It will NOT
 	/// delete outliers that haven't been rescued yet.
-	#[command(alias("purge-stuck"))]
+	///
+	/// To purge a single event by ID, use `--event-id $id`.
+	#[command(alias("purge-stuck"), alias("purge-outlier"))]
 	PurgeOutliers {
+		/// Purge a specific outlier event by event ID.
+		#[arg(long)]
+		event_id: Option<OwnedEventId>,
+
 		/// Filter outliers to a specific room
 		#[arg(short, long)]
 		room_id: Option<OwnedRoomOrAliasId>,
@@ -154,12 +181,6 @@ pub enum YoloCommand {
 	PromoteOutliers {
 		/// The room ID.
 		room_id: OwnedRoomId,
-	},
-
-	/// Purge a specific outlier event by event ID.
-	PurgeOutlier {
-		/// The event ID to purge.
-		event_id: OwnedEventId,
 	},
 
 	/// Purge a PDU from the timeline (removes from both timeline and outlier
@@ -443,22 +464,25 @@ pub enum YoloCommand {
 		fix: bool,
 	},
 
-	/// Mark event IDs as rejected in the database.
+	/// Mark or unmark event IDs as rejected in the database.
 	///
 	/// Rejected events are permanently excluded from state resolution.
 	/// Use `compare-room-state` to identify divergent event IDs first.
-	MarkRejected {
-		/// One or more event IDs to mark as rejected.
+	/// By default, marks events as rejected. Use --unreject to reverse.
+	/// Add --soft-fail to also handle the soft-failed marker.
+	#[command(alias("mark-rejected"), alias("unmark-rejected"))]
+	ManageRejected {
+		/// One or more event IDs to mark or unmark.
 		event_ids: Vec<OwnedEventId>,
-	},
 
-	/// Remove the rejected marker from event IDs.
-	///
-	/// Reverses `mark-rejected`. Events will participate in state
-	/// resolution again.
-	UnmarkRejected {
-		/// One or more event IDs to unmark.
-		event_ids: Vec<OwnedEventId>,
+		/// Remove the rejected marker instead of adding it.
+		/// Events will participate in state resolution again.
+		#[arg(long)]
+		unreject: bool,
+
+		/// Also handle the soft-failed marker (in addition to rejected).
+		#[arg(long)]
+		soft_fail: bool,
 	},
 
 	/// Bulk-unreject all rejected events in a room.

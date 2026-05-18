@@ -23,6 +23,199 @@ use tokio::io::AsyncWriteExt;
 use crate::admin_command;
 
 #[admin_command]
+pub(super) async fn audit_auth_chain(
+	&self,
+	room_id: OwnedRoomId,
+	fetch: bool,
+	verbose: bool,
+) -> Result {
+	use std::{borrow::Borrow, time::Instant};
+
+	use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
+
+	// Resolve room and get current state hash
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let sstatehash = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(&room_id)
+		.await
+		.map_err(|_| err!("Room {room_id} has no state — not joined?"))?;
+
+	let state_ids: HashMap<_, OwnedEventId> = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full_ids(sstatehash)
+		.collect()
+		.await;
+
+	self.write_str(&format!(
+		"Auditing auth chain for {room_id} ({} current state events)...\n",
+		state_ids.len()
+	))
+	.await?;
+
+	// Walk the full auth chain for all current state
+	let started = Instant::now();
+	let auth_chain: HashSet<OwnedEventId> = self
+		.services
+		.rooms
+		.auth_chain
+		.event_ids_iter(&room_id, state_ids.values().map(Borrow::borrow))
+		.try_collect()
+		.await
+		.unwrap_or_default();
+
+	self.write_str(&format!(
+		"Auth chain: {} events (walked in {:.1?})\n",
+		auth_chain.len(),
+		started.elapsed()
+	))
+	.await?;
+
+	// Bucket: timeline / outlier-only / missing
+	let mut in_timeline: usize = 0;
+	let mut in_outlier: usize = 0;
+	let mut missing: Vec<OwnedEventId> = Vec::new();
+
+	for event_id in &auth_chain {
+		if self.services.rooms.timeline.pdu_exists(event_id).await {
+			in_timeline = in_timeline.saturating_add(1);
+		} else if self
+			.services
+			.rooms
+			.outlier
+			.get_pdu_outlier(event_id)
+			.await
+			.is_ok()
+		{
+			in_outlier = in_outlier.saturating_add(1);
+			if verbose {
+				self.write_str(&format!("  OUTLIER: {event_id}\n")).await?;
+			}
+		} else {
+			if verbose {
+				self.write_str(&format!("  MISSING: {event_id}\n")).await?;
+			}
+			missing.push(event_id.clone());
+		}
+	}
+
+	self.write_str(&format!(
+		"Results: {in_timeline} timeline, {in_outlier} outlier-only, {} missing\n",
+		missing.len()
+	))
+	.await?;
+
+	if missing.is_empty() || !fetch {
+		if !missing.is_empty() {
+			self.write_str("Hint: rerun with --fetch to attempt recovery from room servers.\n")
+				.await?;
+		}
+		return Ok(());
+	}
+
+	// --fetch: EMA-sorted server list (trusted servers first, then room members
+	// ranked by latency/success score so the most reliable servers are tried first)
+	let servers = self
+		.services
+		.rooms
+		.event_handler
+		.build_federation_server_list(
+			&room_id,
+			self.services.globals.server_name(),
+			self.services.server.config.federation_fallback_room_servers,
+		)
+		.await;
+
+	self.write_str(&format!(
+		"Fetching {} missing events from {} servers (EMA-sorted)...\n",
+		missing.len(),
+		servers.len()
+	))
+	.await?;
+
+	// Fan out in parallel: up to 32 concurrent per-event fetches.
+	// Each future tries servers serially (best-first) until one returns a valid
+	// event.
+	let mut active: FuturesUnordered<_> = FuturesUnordered::new();
+	let mut queue = missing.iter().peekable();
+	let mut fetched = 0_usize;
+
+	loop {
+		while active.len() < 32 && queue.peek().is_some() {
+			let event_id = queue.next().expect("peeked").clone();
+			let servers = servers.clone();
+			let room_id = room_id.clone();
+			let room_version = room_version.clone();
+			active.push(async move {
+				for server in &servers {
+					let t = Instant::now();
+					match self
+						.services
+						.sending
+						.send_federation_request(server, get_event::v1::Request {
+							event_id: event_id.clone(),
+							include_unredacted_content: None,
+						})
+						.await
+					{
+						| Ok(res) => {
+							self.services.rooms.event_handler.update_peer_stats(
+								server,
+								true,
+								t.elapsed(),
+							);
+							if let Ok((eid, value)) = self
+								.services
+								.server_keys
+								.validate_and_add_event_id(&res.pdu, &room_version)
+								.await
+							{
+								if eid == event_id {
+									self.services.rooms.outlier.add_pdu_outlier(
+										&event_id,
+										&value,
+										Some(&room_id),
+									);
+									return true;
+								}
+							}
+						},
+						| Err(_) => {
+							self.services.rooms.event_handler.update_peer_stats(
+								server,
+								false,
+								t.elapsed(),
+							);
+						},
+					}
+				}
+				false
+			});
+		}
+
+		if active.is_empty() {
+			break;
+		}
+
+		if let Some(found) = active.next().await {
+			if found {
+				fetched = fetched.saturating_add(1);
+			}
+		}
+	}
+
+	self.write_str(&format!(
+		"Fetched {fetched}/{} missing auth events (now in outlier store).\n",
+		missing.len()
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn audit_membership(
 	&self,
 	room_id: OwnedRoomId,
@@ -996,13 +1189,22 @@ pub(super) async fn view_extremities(
 #[admin_command]
 pub(super) async fn purge_outliers(
 	&self,
+	event_id: Option<OwnedEventId>,
 	room_id: Option<OwnedRoomOrAliasId>,
 	sender: Option<OwnedUserId>,
 	all: bool,
 	force: bool,
 ) -> Result {
+	// Fast path: single event by ID
+	if let Some(ref eid) = event_id {
+		self.services.rooms.outlier.remove_outlier(eid, None).await;
+		return self.write_str(&format!("Purged outlier {eid}")).await;
+	}
+
 	if room_id.is_none() && sender.is_none() && !all {
-		return Err!("You must specify a room, a sender, or use --all to purge outliers.");
+		return Err!(
+			"You must specify --event-id, a room, a sender, or use --all to purge outliers."
+		);
 	}
 
 	let outliers: Vec<OwnedEventId> = if let Some(room) = room_id {
@@ -1439,19 +1641,6 @@ pub(super) async fn promote_outliers(&self, room_id: OwnedRoomId) -> Result {
 		 Clients should re-sync."
 	))
 	.await
-}
-
-#[admin_command]
-pub(super) async fn purge_outlier(&self, event_id: OwnedEventId) -> Result {
-	self.bail_restricted()?;
-
-	self.services
-		.rooms
-		.outlier
-		.remove_outlier(&event_id, None)
-		.await;
-
-	self.write_str(&format!("Purged outlier {event_id}")).await
 }
 
 #[admin_command]
@@ -3185,7 +3374,7 @@ pub(super) async fn heal_room(
 	if purge_after {
 		self.write_str("Phase 6: Purging stuck outliers...").await?;
 		let room_alias = OwnedRoomOrAliasId::from(room_id);
-		Box::pin(self.purge_outliers(Some(room_alias), None, false, false)).await?;
+		Box::pin(self.purge_outliers(None, Some(room_alias), None, false, false)).await?;
 	}
 
 	Ok(())
@@ -4163,60 +4352,73 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 }
 
 #[admin_command]
-pub(super) async fn mark_rejected(&self, event_ids: Vec<OwnedEventId>) -> Result {
-	let mut marked = 0_usize;
+pub(super) async fn manage_rejected(
+	&self,
+	event_ids: Vec<OwnedEventId>,
+	unreject: bool,
+	soft_fail: bool,
+) -> Result {
+	let mut changed = 0_usize;
 	let mut already = 0_usize;
 
 	for event_id in &event_ids {
-		if self
+		let is_rejected = self
 			.services
 			.rooms
 			.pdu_metadata
 			.is_event_rejected(event_id)
-			.await
-		{
-			already = already.saturating_add(1);
-		} else {
-			self.services
-				.rooms
-				.pdu_metadata
-				.mark_event_rejected(event_id);
-			marked = marked.saturating_add(1);
-		}
-	}
-
-	self.write_str(&format!(
-		"Marked {marked} event(s) as rejected ({already} already rejected, {} total)\n",
-		event_ids.len()
-	))
-	.await
-}
-
-#[admin_command]
-pub(super) async fn unmark_rejected(&self, event_ids: Vec<OwnedEventId>) -> Result {
-	let mut unmarked = 0_usize;
-	let mut not_found = 0_usize;
-
-	for event_id in &event_ids {
-		if self
+			.await;
+		let is_soft_failed = self
 			.services
 			.rooms
 			.pdu_metadata
-			.is_event_rejected(event_id)
-			.await
-		{
-			self.services
-				.rooms
-				.pdu_metadata
-				.unmark_event_rejected(event_id);
-			unmarked = unmarked.saturating_add(1);
+			.is_event_soft_failed(event_id)
+			.await;
+
+		if unreject {
+			if is_rejected {
+				self.services
+					.rooms
+					.pdu_metadata
+					.unmark_event_rejected(event_id);
+				changed = changed.saturating_add(1);
+			} else {
+				already = already.saturating_add(1);
+			}
+			if soft_fail && is_soft_failed {
+				self.services
+					.rooms
+					.pdu_metadata
+					.unmark_event_soft_failed(event_id);
+			}
 		} else {
-			not_found = not_found.saturating_add(1);
+			if !is_rejected {
+				self.services
+					.rooms
+					.pdu_metadata
+					.mark_event_rejected(event_id);
+				changed = changed.saturating_add(1);
+			} else {
+				already = already.saturating_add(1);
+			}
+			if soft_fail && !is_soft_failed {
+				self.services
+					.rooms
+					.pdu_metadata
+					.mark_event_soft_failed(event_id);
+			}
 		}
 	}
 
+	let action = if unreject { "unrejected" } else { "marked rejected" };
+	let already_desc = if unreject {
+		"already not rejected"
+	} else {
+		"already rejected"
+	};
+	let sf_note = if soft_fail { " (+ soft-fail marker)" } else { "" };
 	self.write_str(&format!(
-		"Unmarked {unmarked} event(s) ({not_found} were not rejected, {} total)\n",
+		"{changed} event(s) {action}{sf_note} ({already} {already_desc}, {} total)\n",
 		event_ids.len()
 	))
 	.await

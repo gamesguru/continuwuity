@@ -137,7 +137,7 @@ impl Service {
 	///  1. origin (the server that sent the transaction)
 	///  2. trusted/notary servers (from config)
 	///  3. room member servers (capped by room_server_cap)
-	pub(super) async fn build_federation_server_list(
+	pub async fn build_federation_server_list(
 		&self,
 		room_id: &RoomId,
 		origin: &ruma::ServerName,
@@ -181,12 +181,7 @@ impl Service {
 		servers
 	}
 
-	pub(super) fn update_peer_stats(
-		&self,
-		server: &ruma::ServerName,
-		success: bool,
-		latency: Duration,
-	) {
+	pub fn update_peer_stats(&self, server: &ruma::ServerName, success: bool, latency: Duration) {
 		let latency_ms = u32::try_from(latency.as_millis()).unwrap_or(u32::MAX);
 		let stats = self.peer_scorer.entry(server.to_owned()).or_default();
 		if success {
