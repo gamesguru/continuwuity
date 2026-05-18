@@ -282,7 +282,7 @@ impl Service {
 
 		let num_servers = requests.len();
 		if num_servers > 100 {
-			warn!("Fanning out EDU to {num_servers} servers (edu_size={})", serialized.len());
+			info!("Fanning out EDU to {num_servers} servers (edu_size={})", serialized.len());
 		}
 
 		let _cork = self.db.db.cork();
