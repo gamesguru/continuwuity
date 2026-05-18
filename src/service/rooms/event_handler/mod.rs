@@ -16,7 +16,11 @@ pub mod upgrade_outlier_pdu;
 use std::{collections::HashMap, fmt::Write, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
-use conduwuit::{Err, Event, PduEvent, Result, RoomVersion, Server, SyncRwLock, utils::MutexMap};
+use conduwuit::{
+	Err, Event, PduEvent, Result, RoomVersion, Server, SyncRwLock,
+	utils::{MutexMap, stream::ReadyExt},
+};
+use futures::StreamExt;
 use ruma::{
 	OwnedEventId, OwnedRoomId, RoomId, RoomVersionId,
 	events::room::create::RoomCreateEventContent,
@@ -107,6 +111,36 @@ impl Service {
 			.get_pdu_in_room(room_id, &event_id)
 			.await
 			.ok()
+	}
+
+	/// Build a prioritized list of federation servers for fetching events:
+	///  1. origin (the server that sent the transaction)
+	///  2. trusted/notary servers (from config)
+	///  3. room member servers (capped by federation_fallback_room_servers)
+	pub(super) async fn build_federation_server_list(
+		&self,
+		room_id: &RoomId,
+		origin: &ruma::ServerName,
+	) -> Vec<ruma::OwnedServerName> {
+		let mut servers: Vec<ruma::OwnedServerName> = vec![origin.to_owned()];
+		for s in &self.services.server.config.trusted_servers {
+			if !self.services.globals.server_is_ours(s) && !servers.contains(s) {
+				servers.push(s.clone());
+			}
+		}
+		let room_servers: Vec<ruma::OwnedServerName> = self
+			.services
+			.state_cache
+			.room_servers(room_id)
+			.ready_filter(|s| {
+				!self.services.globals.server_is_ours(s) && !servers.iter().any(|x| x == s)
+			})
+			.map(ToOwned::to_owned)
+			.take(self.services.server.config.federation_fallback_room_servers)
+			.collect()
+			.await;
+		servers.extend(room_servers);
+		servers
 	}
 }
 

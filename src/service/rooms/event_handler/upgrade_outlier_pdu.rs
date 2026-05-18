@@ -208,7 +208,7 @@ where
 
 	// Pre-fetch missing auth chain events from federation BEFORE
 	// acquiring the room lock. This is parallel (32 concurrent) and
-	// multi-server (origin + trusted + room members) with a 50s budget.
+	// multi-server (origin + trusted + room members) with a 300s budget.
 	if incoming_pdu.state_key().is_some() {
 		self.pre_fetch_state_res_deps(
 			room_id,

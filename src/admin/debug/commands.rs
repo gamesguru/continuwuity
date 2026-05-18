@@ -571,6 +571,13 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 		writeln!(out, "Room: {room_id}")?;
 	}
 	writeln!(out, "Type: {}", pdu.kind())?;
+	if pdu.kind() == &ruma::events::TimelineEventType::RoomMember {
+		if let Ok(content) = serde_json::from_str::<serde_json::Value>(pdu.content().get()) {
+			if let Some(membership) = content.get("membership").and_then(|m| m.as_str()) {
+				writeln!(out, "Membership: {membership}")?;
+			}
+		}
+	}
 	writeln!(out, "State key: {}", pdu.state_key().unwrap_or("<none (not a state event)>"))?;
 	writeln!(out, "Sender: {}", pdu.sender())?;
 	writeln!(out, "Verify: {sig_msg}")?;

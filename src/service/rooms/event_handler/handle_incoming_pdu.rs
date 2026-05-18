@@ -142,6 +142,7 @@ pub async fn handle_incoming_pdu<'a>(
 				%room_id,
 				%event_id,
 				strikes,
+				reason = "PDU processing timed out during previous request",
 				"Circuit breaker active, soft-failing PDU"
 			);
 			self.services

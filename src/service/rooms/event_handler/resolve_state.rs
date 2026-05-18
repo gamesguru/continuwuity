@@ -132,13 +132,8 @@ pub async fn state_resolution<'a, StateSets>(
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	let event_fetch = |event_id: OwnedEventId| async move {
-		// Local-only: never fetch from federation during state resolution.
-		// Federation I/O can block for minutes/hours and stall the entire
-		// inbound transaction pipeline. If the event isn't local, state_res
-		// handles None gracefully (skips the subgraph branch).
-		self.event_fetch(Some(room_id), event_id).await
-	};
+	let event_fetch =
+		|event_id: OwnedEventId| async move { self.event_fetch(Some(room_id), event_id).await };
 	let event_exists = |event_id: OwnedEventId| async move { self.event_exists(event_id).await };
 	let event_rejected = |event_id: OwnedEventId| async move {
 		// Synapse parity: only hard-rejected events are excluded from state

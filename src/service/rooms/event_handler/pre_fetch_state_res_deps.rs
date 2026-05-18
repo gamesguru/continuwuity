@@ -6,18 +6,18 @@ use std::{
 
 use conduwuit::{
 	implement, info,
-	utils::stream::{IterStream, ReadyExt, TryWidebandExt},
+	utils::stream::{IterStream, TryWidebandExt},
 	warn,
 };
 use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
 use ruma::{
-	OwnedEventId, OwnedServerName, RoomId, RoomVersionId,
+	OwnedEventId, RoomId, RoomVersionId,
 	api::federation::{self, event::get_event},
 };
 
-/// Pre-fetch missing auth chain events from federation BEFORE acquiring
-/// the room mutex lock. This runs in parallel across multiple servers
-/// with a time budget to avoid blocking the pipeline.
+/// Pre-fetch missing auth chain events and recent DAG history from federation
+/// BEFORE acquiring the room mutex lock. This runs in parallel across multiple
+/// servers with a time budget to avoid blocking the pipeline.
 #[implement(super::Service)]
 #[tracing::instrument(name = "prefetch", level = "debug", skip_all)]
 pub(super) async fn pre_fetch_state_res_deps(
@@ -60,7 +60,13 @@ pub(super) async fn pre_fetch_state_res_deps(
 		},
 	};
 
-	// Find events in the auth chain that we don't have locally
+	// Build server list once via shared helper
+	let servers = self.build_federation_server_list(room_id, origin).await;
+
+	let started = Instant::now();
+	let budget = Duration::from_secs(50);
+
+	// Phase 1: Fetch individually missing auth chain events
 	let all_auth_ids: HashSet<&OwnedEventId> = auth_chain_sets.iter().flatten().collect();
 	let mut missing: Vec<OwnedEventId> = Vec::new();
 	for event_id in &all_auth_ids {
@@ -68,164 +74,141 @@ pub(super) async fn pre_fetch_state_res_deps(
 			missing.push((*event_id).clone());
 		}
 	}
-	if missing.is_empty() {
-		return;
-	}
 
-	// Build server list in priority order:
-	//  1. origin (the server that sent the transaction)
-	//  2. trusted/notary servers (from config)
-	//  3. room member servers (fan out to peers in the room)
-	let mut servers: Vec<OwnedServerName> = Vec::new();
-	servers.push(origin.to_owned());
-	for s in &self.services.server.config.trusted_servers {
-		if !self.services.globals.server_is_ours(s) && !servers.contains(s) {
-			servers.push(s.clone());
-		}
-	}
-	// Fan out to room member servers
-	let room_servers: Vec<OwnedServerName> = self
-		.services
-		.state_cache
-		.room_servers(room_id)
-		.ready_filter(|s| {
-			!self.services.globals.server_is_ours(s) && !servers.iter().any(|x| x == s)
-		})
-		.map(ToOwned::to_owned)
-		.take(self.services.server.config.federation_fallback_room_servers)
-		.collect()
-		.await;
-	servers.extend(room_servers);
-
-	info!(
-		count = missing.len(),
-		servers = servers.len(),
-		"Pre-fetching missing auth chain + prev_events"
-	);
-
-	// Parallel fetch with 50s budget, 32 concurrency
-	let started = Instant::now();
-	let budget = Duration::from_secs(50);
-	let mut fetched = 0_usize;
-	let mut active = FuturesUnordered::new();
-	let mut queue = missing.into_iter().peekable();
-
-	loop {
-		// Fill up to 32 concurrent fetches
-		while active.len() < 32 && queue.peek().is_some() {
-			let event_id = queue.next().expect("peeked");
-			let servers = servers.clone();
-			active.push(async move {
-				for server in &servers {
-					let server: &ruma::ServerName = server;
-					if let Ok(res) = self
-						.services
-						.sending
-						.send_federation_request(server, get_event::v1::Request {
-							event_id: event_id.clone(),
-							include_unredacted_content: None,
-						})
-						.await
-					{
-						return (event_id, Some(res.pdu));
-					}
-				}
-				(event_id, None)
-			});
-		}
-
-		if active.is_empty() {
-			break;
-		}
-
-		// Check budget
-		if started.elapsed() > budget {
-			info!(
-				elapsed = ?started.elapsed(),
-				fetched,
-				remaining = active.len().saturating_add(queue.count()),
-				"Pre-fetch budget exhausted, proceeding with partial auth chain"
-			);
-			break;
-		}
-
-		let Some((event_id, maybe_pdu)) = active.next().await else {
-			break;
-		};
-
-		if let Some(pdu_raw) = maybe_pdu {
-			// Validate signatures before trusting pre-fetched events.
-			// Blindly inserting unverified events allows malicious servers to
-			// forge power levels and hijack state res.
-			if let Ok((eid, value)) = self
-				.services
-				.server_keys
-				.validate_and_add_event_id(&pdu_raw, room_version_id)
-				.await
-			{
-				if eid == event_id {
-					self.services
-						.outlier
-						.add_pdu_outlier(&event_id, &value, Some(room_id));
-					fetched = fetched.saturating_add(1);
-				}
-			} else {
-				warn!(
-					%event_id,
-					"Pre-fetched auth event failed signature verification, dropping"
-				);
-			}
-		}
-	}
-
-	if fetched > 0 {
+	if !missing.is_empty() {
 		info!(
-			fetched,
-			elapsed = ?started.elapsed(),
-			"Pre-fetched auth chain events for state resolution"
+			count = missing.len(),
+			servers = servers.len(),
+			"Pre-fetching missing auth chain events"
 		);
-	}
 
-	// Phase 2: Backfill ~100 recent PDUs from the origin server to fill
-	// prev_events gaps that state_res needs for conflicted subgraph walks.
-	// This is much cheaper than chasing individual missing events.
-	let latest_ids: Vec<OwnedEventId> = incoming_state.values().cloned().collect();
-	if latest_ids.is_empty() {
-		return;
-	}
+		let mut fetched = 0_usize;
+		let mut active = FuturesUnordered::new();
+		let mut queue = missing.into_iter().peekable();
 
-	if let Ok(response) = self
-		.services
-		.sending
-		.send_federation_request(origin, federation::backfill::get_backfill::v1::Request {
-			room_id: room_id.to_owned(),
-			v: latest_ids,
-			limit: 100_u32.into(),
-		})
-		.await
-	{
-		let mut backfilled = 0_usize;
-		for pdu_raw in &response.pdus {
-			if let Ok((eid, value)) = self
-				.services
-				.server_keys
-				.validate_and_add_event_id(pdu_raw, room_version_id)
-				.await
-			{
-				if !self.services.timeline.pdu_exists(&eid).await {
-					self.services
-						.outlier
-						.add_pdu_outlier(&eid, &value, Some(room_id));
-					backfilled = backfilled.saturating_add(1);
+		loop {
+			while active.len() < 32 && queue.peek().is_some() {
+				let event_id = queue.next().expect("peeked");
+				let servers = servers.clone();
+				active.push(async move {
+					for server in &servers {
+						let server: &ruma::ServerName = server;
+						if let Ok(res) = self
+							.services
+							.sending
+							.send_federation_request(server, get_event::v1::Request {
+								event_id: event_id.clone(),
+								include_unredacted_content: None,
+							})
+							.await
+						{
+							return (event_id, Some(res.pdu));
+						}
+					}
+					(event_id, None)
+				});
+			}
+
+			if active.is_empty() {
+				break;
+			}
+
+			// Check budget
+			if started.elapsed() > budget {
+				info!(
+					elapsed = ?started.elapsed(),
+					fetched,
+					remaining = active.len().saturating_add(queue.count()),
+					"Pre-fetch budget exhausted, proceeding with partial auth chain"
+				);
+				break;
+			}
+
+			let Some((event_id, maybe_pdu)) = active.next().await else {
+				break;
+			};
+
+			if let Some(pdu_raw) = maybe_pdu {
+				if let Ok((eid, value)) = self
+					.services
+					.server_keys
+					.validate_and_add_event_id(&pdu_raw, room_version_id)
+					.await
+				{
+					if eid == event_id {
+						self.services
+							.outlier
+							.add_pdu_outlier(&event_id, &value, Some(room_id));
+						fetched = fetched.saturating_add(1);
+					}
+				} else {
+					warn!(
+						%event_id,
+						"Pre-fetched auth event failed signature verification, dropping"
+					);
 				}
 			}
 		}
-		if backfilled > 0 {
+
+		if fetched > 0 {
 			info!(
-				backfilled,
-				total_received = response.pdus.len(),
-				"Pre-fetched DAG history via backfill for state resolution"
+				fetched,
+				elapsed = ?started.elapsed(),
+				"Pre-fetched auth chain events for state resolution"
 			);
+		}
+	}
+
+	// Phase 2: Backfill ~100 recent PDUs to fill prev_events gaps that
+	// state_res needs for conflicted subgraph walks. Always runs regardless
+	// of auth chain completeness. Tries multiple servers until one succeeds.
+	if started.elapsed() < budget {
+		let latest_ids: Vec<OwnedEventId> = incoming_state.values().cloned().collect();
+		if !latest_ids.is_empty() {
+			for server in &servers {
+				if let Ok(response) = self
+					.services
+					.sending
+					.send_federation_request(
+						server,
+						federation::backfill::get_backfill::v1::Request {
+							room_id: room_id.to_owned(),
+							v: latest_ids.clone(),
+							limit: 100_u32.into(),
+						},
+					)
+					.await
+				{
+					let mut backfilled = 0_usize;
+					for pdu_raw in &response.pdus {
+						if let Ok((eid, value)) = self
+							.services
+							.server_keys
+							.validate_and_add_event_id(pdu_raw, room_version_id)
+							.await
+						{
+							if !self.services.timeline.pdu_exists(&eid).await {
+								self.services.outlier.add_pdu_outlier(
+									&eid,
+									&value,
+									Some(room_id),
+								);
+								backfilled = backfilled.saturating_add(1);
+							}
+						}
+					}
+					if backfilled > 0 {
+						info!(
+							backfilled,
+							total_received = response.pdus.len(),
+							%server,
+							"Pre-fetched DAG history via backfill for state resolution"
+						);
+					}
+					// Got data from at least one server, done
+					break;
+				}
+			}
 		}
 	}
 }

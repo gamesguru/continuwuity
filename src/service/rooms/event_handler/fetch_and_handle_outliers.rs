@@ -4,19 +4,16 @@ use std::{
 };
 
 use conduwuit::{
-	Event, PduEvent, debug, implement, info,
-	matrix::event::gen_event_id_canonical_json,
-	state_res, trace,
-	utils::{continue_exponential_backoff_secs, stream::ReadyExt},
-	warn,
+	Event, PduEvent, debug, implement, info, matrix::event::gen_event_id_canonical_json,
+	state_res, trace, utils::continue_exponential_backoff_secs, warn,
 };
 use futures::{
 	FutureExt, future,
 	stream::{FuturesUnordered, StreamExt},
 };
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedServerName, RoomId,
-	ServerName, api::federation::event::get_event,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
+	api::federation::event::get_event,
 };
 
 use super::get_room_version_id;
@@ -48,30 +45,10 @@ where
 		},
 	};
 
-	// Build routing servers: origin → trusted → room member servers
-	let mut routing_servers: Vec<OwnedServerName> = vec![origin.to_owned()];
-	for s in &self.services.server.config.trusted_servers {
-		if !self.services.globals.server_is_ours(s) && !routing_servers.contains(s) {
-			routing_servers.push(s.clone());
-		}
-	}
-	let n_trusted = routing_servers.len(); // origin + trusted servers
-	let room_servers: Vec<OwnedServerName> = self
-		.services
-		.state_cache
-		.room_servers(room_id)
-		.ready_filter(|s| {
-			!self.services.globals.server_is_ours(s) && !routing_servers.iter().any(|x| x == s)
-		})
-		.map(ToOwned::to_owned)
-		.take(self.services.server.config.federation_fallback_room_servers)
-		.collect()
-		.await;
-	routing_servers.extend(room_servers);
+	// Build routing servers via shared helper: origin → trusted → room members
+	let routing_servers = self.build_federation_server_list(room_id, origin).await;
 	info!(
 		origin = %origin,
-		n_trusted,
-		n_room = routing_servers.len().saturating_sub(n_trusted),
 		n_total = routing_servers.len(),
 		"Built federation fallback server list for outlier fetching"
 	);
@@ -115,7 +92,6 @@ where
 			} else {
 				let id_clone = id.to_owned();
 				let servers = routing_servers.clone();
-				let n_t = n_trusted;
 				active_fetches.push(
 					async move {
 						for attempt in 0..2_u8 {
@@ -144,9 +120,6 @@ where
 										if i == 0 {
 											debug!(%id_clone, %server, "Origin server failed: {e}");
 										}
-										if i.saturating_add(1) == n_t {
-											info!(%id_clone, "All origin+trusted servers failed ({n_t} tried)");
-										}
 										let _ = e;
 									},
 								}
@@ -167,7 +140,6 @@ where
 		} else {
 			let id_clone = id.to_owned();
 			let servers = routing_servers.clone();
-			let n_t = n_trusted;
 			active_fetches.push(
 				async move {
 					for attempt in 0..2_u8 {
@@ -194,9 +166,6 @@ where
 								| Err(e) => {
 									if i == 0 {
 										debug!(%id_clone, %server, "Origin server failed: {e}");
-									}
-									if i.saturating_add(1) == n_t {
-										warn!(%id_clone, "All origin+trusted servers failed ({n_t} tried)");
 									}
 									let _ = e;
 								},
@@ -294,7 +263,6 @@ where
 									);
 									let auth_event_clone = auth_event.clone();
 									let servers = routing_servers.clone();
-									let n_t = n_trusted;
 									active_fetches.push(
 										async move {
 											for attempt in 0..2_u8 {
@@ -302,9 +270,6 @@ where
 													tokio::time::sleep(std::time::Duration::from_secs(2_u64.pow(attempt.into()))).await;
 													debug!(%auth_event_clone, attempt, "Retrying auth event fetch");
 												}
-												let _last_err = conduwuit::err!(Request(
-													NotFound("auth event not found on any server")
-												));
 												for (i, server) in servers.iter().enumerate() {
 													match self
 														.services
@@ -322,10 +287,7 @@ where
 															return (auth_event_clone, Ok(res)),
 														| Err(e) => {
 															if i == 0 {
-																debug!(%auth_event_clone, %server, "Origin failed for auth event: {e}");
-															}
-															if i.saturating_add(1) == n_t {
-																warn!(%auth_event_clone, "All origin+trusted failed for auth event ({n_t} tried)");
+																debug!(%auth_event_clone, %server, "Origin server failed: {e}");
 															}
 															let _ = e;
 														},
