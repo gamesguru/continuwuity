@@ -497,6 +497,7 @@ where
 			.is_err()
 		{
 			conduwuit_core::info!(
+				target: "spaces_debug_filter",
 				room_id = %current_room,
 				server = %server_name,
 				"spaces: room inaccessible: server failed ACL check"
@@ -533,6 +534,7 @@ where
 
 			if !is_allowed {
 				conduwuit_core::info!(
+					target: "spaces_debug_filter",
 					room_id = %current_room,
 					?join_rule,
 					"spaces: room inaccessible: restricted join rule but user not in allowed rooms"
@@ -545,6 +547,7 @@ where
 		// Invite only, Private, or Custom join rule
 		| _ => {
 			conduwuit_core::info!(
+				target: "spaces_debug_filter",
 				room_id = %current_room,
 				?join_rule,
 				"spaces: room inaccessible: closed join rule and user not joined/invited"
