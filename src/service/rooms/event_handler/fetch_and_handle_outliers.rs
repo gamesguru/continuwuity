@@ -123,21 +123,11 @@ where
 									.await
 								{
 									| Ok(res) => {
-										self.update_peer_stats(
-											server,
-											true,
-											u32::try_from(start.elapsed().as_millis())
-												.unwrap_or(u32::MAX),
-										);
+										self.update_peer_stats(server, true, start.elapsed());
 										return (id_clone, Ok((res, server.clone())));
 									},
 									| Err(e) => {
-										self.update_peer_stats(
-											server,
-											false,
-											u32::try_from(start.elapsed().as_millis())
-												.unwrap_or(u32::MAX),
-										);
+										self.update_peer_stats(server, false, start.elapsed());
 										if i == 0 {
 											debug!(%id_clone, %server, "Origin server failed: {e}");
 										}
@@ -185,21 +175,11 @@ where
 								.await
 							{
 								| Ok(res) => {
-									self.update_peer_stats(
-										server,
-										true,
-										u32::try_from(start.elapsed().as_millis())
-											.unwrap_or(u32::MAX),
-									);
+									self.update_peer_stats(server, true, start.elapsed());
 									return (id_clone, Ok((res, server.clone())));
 								},
 								| Err(e) => {
-									self.update_peer_stats(
-										server,
-										false,
-										u32::try_from(start.elapsed().as_millis())
-											.unwrap_or(u32::MAX),
-									);
+									self.update_peer_stats(server, false, start.elapsed());
 									if i == 0 {
 										debug!(%id_clone, %server, "Origin server failed: {e}");
 									}

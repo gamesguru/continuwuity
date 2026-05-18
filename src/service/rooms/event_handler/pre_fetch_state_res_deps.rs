@@ -25,7 +25,6 @@ pub(super) async fn pre_fetch_state_res_deps(
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 	incoming_state: &HashMap<u64, OwnedEventId>,
-	backfill_targets: &[OwnedEventId],
 	origin: &ruma::ServerName,
 ) {
 	// Load current room state
@@ -111,21 +110,11 @@ pub(super) async fn pre_fetch_state_res_deps(
 							.await
 						{
 							| Ok(res) => {
-								self.update_peer_stats(
-									server,
-									true,
-									u32::try_from(start.elapsed().as_millis())
-										.unwrap_or(u32::MAX),
-								);
+								self.update_peer_stats(server, true, start.elapsed());
 								return (event_id, Some(res.pdu));
 							},
 							| Err(_) => {
-								self.update_peer_stats(
-									server,
-									false,
-									u32::try_from(start.elapsed().as_millis())
-										.unwrap_or(u32::MAX),
-								);
+								self.update_peer_stats(server, false, start.elapsed());
 							},
 						}
 					}
@@ -198,7 +187,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 	// state_res needs for conflicted subgraph walks. Always runs regardless
 	// of auth chain completeness. Tries multiple servers until one succeeds.
 	if started.elapsed() < budget {
-		let latest_ids: Vec<OwnedEventId> = backfill_targets.to_vec();
+		let latest_ids: Vec<OwnedEventId> = incoming_state.values().cloned().take(50).collect();
 		if !latest_ids.is_empty() {
 			for server in &servers {
 				let start = Instant::now();
@@ -216,11 +205,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 					.await
 				{
 					| Ok(response) => {
-						self.update_peer_stats(
-							server,
-							true,
-							u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX),
-						);
+						self.update_peer_stats(server, true, start.elapsed());
 						let mut backfilled = 0_usize;
 						for pdu_raw in &response.pdus {
 							if let Ok((eid, value)) = self
@@ -263,11 +248,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 						}
 					},
 					| Err(_) => {
-						self.update_peer_stats(
-							server,
-							false,
-							u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX),
-						);
+						self.update_peer_stats(server, false, start.elapsed());
 					},
 				}
 			}

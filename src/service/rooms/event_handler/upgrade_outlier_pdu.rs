@@ -210,15 +210,10 @@ where
 	// acquiring the room lock. This is parallel (32 concurrent) and
 	// multi-server (origin + trusted + room members) with a 300s budget.
 	if incoming_pdu.state_key().is_some() {
-		let mut backfill_targets: Vec<OwnedEventId> =
-			incoming_pdu.prev_events().map(ToOwned::to_owned).collect();
-		backfill_targets.extend(incoming_pdu.auth_events().map(ToOwned::to_owned));
-
 		self.pre_fetch_state_res_deps(
 			room_id,
 			&room_version_id,
 			&state_at_incoming_event,
-			&backfill_targets,
 			origin,
 		)
 		.await;

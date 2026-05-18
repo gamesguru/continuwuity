@@ -20,7 +20,7 @@ use std::{
 		Arc,
 		atomic::{AtomicU32, Ordering},
 	},
-	time::Instant,
+	time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -107,6 +107,9 @@ impl crate::Service for Service {
 		let federation_handletime = self.federation_handletime.read().len();
 		writeln!(out, "federation_handletime: {federation_handletime}")?;
 
+		let peer_scorer = self.peer_scorer.len();
+		writeln!(out, "peer_scorer: {peer_scorer}")?;
+
 		Ok(())
 	}
 
@@ -157,18 +160,19 @@ impl Service {
 			.collect()
 			.await;
 
-		// Sort by peer score (latency + (errors * 1000) - (successes * 100))
-		room_servers.sort_by_cached_key(|s| {
+		// Sort by peer score: lower is better (latency + errors*1000 - successes*100)
+		// i64 allows healthy servers to score negative, ranking above unseen peers
+		room_servers.sort_unstable_by_key(|s| {
 			if let Some(stats) = self.peer_scorer.get(s) {
-				let success = u64::from(stats.successes.load(Ordering::Relaxed));
-				let error = u64::from(stats.errors.load(Ordering::Relaxed));
-				let latency = u64::from(stats.latency_ms.load(Ordering::Relaxed));
+				let success = i64::from(stats.successes.load(Ordering::Relaxed));
+				let error = i64::from(stats.errors.load(Ordering::Relaxed));
+				let latency = i64::from(stats.latency_ms.load(Ordering::Relaxed));
 				latency
 					.saturating_add(error.saturating_mul(1000))
 					.saturating_sub(success.saturating_mul(100))
 			} else {
 				// Default penalization for unknown servers (assume 5s latency)
-				5000
+				5000_i64
 			}
 		});
 
@@ -181,28 +185,24 @@ impl Service {
 		&self,
 		server: &ruma::ServerName,
 		success: bool,
-		latency_ms: u32,
+		latency: Duration,
 	) {
-		if let Some(stats) = self.peer_scorer.get(server) {
-			if success {
-				stats.successes.fetch_add(1, Ordering::Relaxed);
-				let old = stats.latency_ms.load(Ordering::Relaxed);
-				stats.latency_ms.store(
-					old.saturating_mul(7)
-						.saturating_add(latency_ms.saturating_mul(3))
-						/ 10,
-					Ordering::Relaxed,
-				);
+		let latency_ms = u32::try_from(latency.as_millis()).unwrap_or(u32::MAX);
+		let stats = self.peer_scorer.entry(server.to_owned()).or_default();
+		if success {
+			stats.successes.fetch_add(1, Ordering::Relaxed);
+			let old = stats.latency_ms.load(Ordering::Relaxed);
+			let new_latency = if old == 0 {
+				// First measurement — seed directly rather than blending with zero
+				latency_ms
 			} else {
-				stats.errors.fetch_add(1, Ordering::Relaxed);
-			}
-		} else {
-			let stats = PeerStats {
-				successes: AtomicU32::new(u32::from(success)),
-				errors: AtomicU32::new(u32::from(!success)),
-				latency_ms: AtomicU32::new(if success { latency_ms } else { 5000 }),
+				old.saturating_mul(7)
+					.saturating_add(latency_ms.saturating_mul(3))
+					/ 10
 			};
-			self.peer_scorer.insert(server.to_owned(), stats);
+			stats.latency_ms.store(new_latency, Ordering::Relaxed);
+		} else {
+			stats.errors.fetch_add(1, Ordering::Relaxed);
 		}
 	}
 }
