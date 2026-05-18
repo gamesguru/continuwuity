@@ -61,7 +61,13 @@ pub(super) async fn pre_fetch_state_res_deps(
 	};
 
 	// Build server list once via shared helper
-	let servers = self.build_federation_server_list(room_id, origin).await;
+	let servers = self
+		.build_federation_server_list(
+			room_id,
+			origin,
+			self.services.server.config.federation_fallback_room_servers,
+		)
+		.await;
 
 	let started = Instant::now();
 	let budget = Duration::from_secs(50);
@@ -129,6 +135,9 @@ pub(super) async fn pre_fetch_state_res_deps(
 			};
 
 			if let Some(pdu_raw) = maybe_pdu {
+				// We must validate signatures before trusting pre-fetched events.
+				// Blindly inserting unverified events allows malicious servers to forge
+				// power levels and hijack state resolution.
 				if let Ok((eid, value)) = self
 					.services
 					.server_keys

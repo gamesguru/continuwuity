@@ -116,11 +116,12 @@ impl Service {
 	/// Build a prioritized list of federation servers for fetching events:
 	///  1. origin (the server that sent the transaction)
 	///  2. trusted/notary servers (from config)
-	///  3. room member servers (capped by federation_fallback_room_servers)
+	///  3. room member servers (capped by room_server_cap)
 	pub(super) async fn build_federation_server_list(
 		&self,
 		room_id: &RoomId,
 		origin: &ruma::ServerName,
+		room_server_cap: usize,
 	) -> Vec<ruma::OwnedServerName> {
 		let mut servers: Vec<ruma::OwnedServerName> = vec![origin.to_owned()];
 		for s in &self.services.server.config.trusted_servers {
@@ -136,7 +137,7 @@ impl Service {
 				!self.services.globals.server_is_ours(s) && !servers.iter().any(|x| x == s)
 			})
 			.map(ToOwned::to_owned)
-			.take(self.services.server.config.federation_fallback_room_servers)
+			.take(room_server_cap)
 			.collect()
 			.await;
 		servers.extend(room_servers);

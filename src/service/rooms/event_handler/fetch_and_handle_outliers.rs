@@ -46,7 +46,7 @@ where
 	};
 
 	// Build routing servers via shared helper: origin → trusted → room members
-	let routing_servers = self.build_federation_server_list(room_id, origin).await;
+	let routing_servers = self.build_federation_server_list(room_id, origin, 5).await;
 	info!(
 		origin = %origin,
 		n_total = routing_servers.len(),
@@ -115,7 +115,7 @@ where
 									})
 									.await
 								{
-									| Ok(res) => return (id_clone, Ok(res)),
+									| Ok(res) => return (id_clone, Ok((res, server.clone()))),
 									| Err(e) => {
 										if i == 0 {
 											debug!(%id_clone, %server, "Origin server failed: {e}");
@@ -162,7 +162,7 @@ where
 								})
 								.await
 							{
-								| Ok(res) => return (id_clone, Ok(res)),
+								| Ok(res) => return (id_clone, Ok((res, server.clone()))),
 								| Err(e) => {
 									if i == 0 {
 										debug!(%id_clone, %server, "Origin server failed: {e}");
@@ -185,8 +185,8 @@ where
 
 		while let Some((next_id, fetch_res)) = active_fetches.next().await {
 			match fetch_res {
-				| Ok(res) => {
-					debug!("Got {next_id} over federation from multiple candidate servers");
+				| Ok((res, successful_server)) => {
+					debug!("Got {next_id} over federation from {successful_server}");
 					let Ok(room_version_id) = get_room_version_id(create_event) else {
 						back_off(next_id);
 						continue;
@@ -284,7 +284,7 @@ where
 														.await
 													{
 														| Ok(res) =>
-															return (auth_event_clone, Ok(res)),
+															return (auth_event_clone, Ok((res, server.clone()))),
 														| Err(e) => {
 															if i == 0 {
 																debug!(%auth_event_clone, %server, "Origin server failed: {e}");
