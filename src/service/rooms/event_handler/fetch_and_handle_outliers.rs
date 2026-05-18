@@ -19,7 +19,7 @@ use ruma::{
 use super::get_room_version_id;
 
 #[implement(super::Service)]
-pub(super) async fn fetch_and_handle_outliers<'a, Pdu, Events>(
+pub async fn fetch_and_handle_outliers<'a, Pdu, Events>(
 	&self,
 	origin: &'a ServerName,
 	events: Events,

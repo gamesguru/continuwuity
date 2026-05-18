@@ -560,4 +560,30 @@ pub enum YoloCommand {
 		/// The event ID to set as the current state for this (type, key).
 		event_id: OwnedEventId,
 	},
+
+	/// Fan out POST /get_missing_events to all room servers to recover DAG
+	/// holes.
+	///
+	/// Uses the room's current forward extremities as the earliest boundary
+	/// and fans out to all EMA-ranked room servers in parallel. Each server
+	/// returns events it knows about in the gap; received events are stored
+	/// as outliers and processed into the timeline. Optionally accepts a
+	/// list of specific event IDs to target; otherwise targets all current
+	/// room extremities.
+	///
+	/// Example: yolo fetch-missing-events !room:server
+	#[command(name = "fetch-missing-events")]
+	FetchMissingEvents {
+		/// The room ID to fill gaps for.
+		room_id: OwnedRoomId,
+
+		/// Specific event IDs to request as gap targets (latest_events).
+		/// Defaults to the room's current forward extremities.
+		#[arg(long = "event-id")]
+		event_ids: Vec<OwnedEventId>,
+
+		/// Number of iterative rounds to run (default: 3).
+		#[arg(long, default_value = "3")]
+		rounds: usize,
+	},
 }

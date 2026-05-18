@@ -14,7 +14,7 @@ use futures::{FutureExt, StreamExt, future::ready, pin_mut};
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
 	OwnedUserId, RoomId, RoomVersionId,
-	api::federation::event::{get_event, get_room_state},
+	api::federation::event::{get_event, get_missing_events, get_room_state},
 	events::{StateEventType, TimelineEventType},
 };
 use serde_json::Value as JsonValue;
@@ -31,10 +31,10 @@ pub(super) async fn audit_auth_chain(
 ) -> Result {
 	use std::{borrow::Borrow, time::Instant};
 
-	use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
+	use futures::TryStreamExt;
+	use ruma::events::StateEventType;
 
 	// Resolve room and get current state hash
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let sstatehash = self
 		.services
 		.rooms
@@ -117,99 +117,37 @@ pub(super) async fn audit_auth_chain(
 		return Ok(());
 	}
 
-	// --fetch: EMA-sorted server list (trusted servers first, then room members
-	// ranked by latency/success score so the most reliable servers are tried first)
-	let servers = self
+	// --fetch: reuse the battle-tested outlier fetch pipeline (32-server EMA
+	// fallback, backoff, full signature validation, rate-limit tracking)
+	let create_event = self
+		.services
+		.rooms
+		.state_accessor
+		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+		.await
+		.map_err(|_| err!("Room {room_id} has no m.room.create event — cannot fetch"))?;
+
+	self.write_str(&format!(
+		"Fetching {} missing events via fetch_and_handle_outliers pipeline...\n",
+		missing.len(),
+	))
+	.await?;
+
+	let fetched = self
 		.services
 		.rooms
 		.event_handler
-		.build_federation_server_list(
-			&room_id,
+		.fetch_and_handle_outliers(
 			self.services.globals.server_name(),
-			self.services.server.config.federation_fallback_room_servers,
+			missing.iter().map(AsRef::as_ref),
+			&create_event,
+			&room_id,
 		)
 		.await;
 
 	self.write_str(&format!(
-		"Fetching {} missing events from {} servers (EMA-sorted)...\n",
-		missing.len(),
-		servers.len()
-	))
-	.await?;
-
-	// Fan out in parallel: up to 32 concurrent per-event fetches.
-	// Each future tries servers serially (best-first) until one returns a valid
-	// event.
-	let mut active: FuturesUnordered<_> = FuturesUnordered::new();
-	let mut queue = missing.iter().peekable();
-	let mut fetched = 0_usize;
-
-	loop {
-		while active.len() < 32 && queue.peek().is_some() {
-			let event_id = queue.next().expect("peeked").clone();
-			let servers = servers.clone();
-			let room_id = room_id.clone();
-			let room_version = room_version.clone();
-			active.push(async move {
-				for server in &servers {
-					let t = Instant::now();
-					match self
-						.services
-						.sending
-						.send_federation_request(server, get_event::v1::Request {
-							event_id: event_id.clone(),
-							include_unredacted_content: None,
-						})
-						.await
-					{
-						| Ok(res) => {
-							self.services.rooms.event_handler.update_peer_stats(
-								server,
-								true,
-								t.elapsed(),
-							);
-							if let Ok((eid, value)) = self
-								.services
-								.server_keys
-								.validate_and_add_event_id(&res.pdu, &room_version)
-								.await
-							{
-								if eid == event_id {
-									self.services.rooms.outlier.add_pdu_outlier(
-										&event_id,
-										&value,
-										Some(&room_id),
-									);
-									return true;
-								}
-							}
-						},
-						| Err(_) => {
-							self.services.rooms.event_handler.update_peer_stats(
-								server,
-								false,
-								t.elapsed(),
-							);
-						},
-					}
-				}
-				false
-			});
-		}
-
-		if active.is_empty() {
-			break;
-		}
-
-		if let Some(found) = active.next().await {
-			if found {
-				fetched = fetched.saturating_add(1);
-			}
-		}
-	}
-
-	self.write_str(&format!(
-		"Fetched {fetched}/{} missing auth events (now in outlier store).\n",
+		"Fetched {}/{} missing auth events (now in outlier store).\n",
+		fetched.len(),
 		missing.len()
 	))
 	.await
@@ -5066,4 +5004,154 @@ pub(super) async fn set_state_event(
 	);
 	info!("{out}");
 	self.write_str(&out).await
+}
+
+#[admin_command]
+pub(super) async fn fetch_missing_events(
+	&self,
+	room_id: OwnedRoomId,
+	event_ids: Vec<OwnedEventId>,
+	rounds: usize,
+) -> Result {
+	use std::time::Instant;
+
+	use futures::{StreamExt, stream::FuturesUnordered};
+
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+
+	// Build EMA-sorted server list
+	let servers = self
+		.services
+		.rooms
+		.event_handler
+		.build_federation_server_list(
+			&room_id,
+			self.services.globals.server_name(),
+			self.services.server.config.federation_fallback_room_servers,
+		)
+		.await;
+
+	// Use current forward extremities as the "earliest" boundary
+	let extremities: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	// If no explicit event IDs given, use extremities as the gap target too
+	let targets: Vec<OwnedEventId> = if event_ids.is_empty() {
+		extremities.clone()
+	} else {
+		event_ids
+	};
+
+	self.write_str(&format!(
+		"fetch-missing-events: room={room_id} servers={} extremities={} targets={} rounds={}\n",
+		servers.len(),
+		extremities.len(),
+		targets.len(),
+		rounds,
+	))
+	.await?;
+
+	let mut total_filled: usize = 0;
+
+	for round in 1..=rounds {
+		// Filter to IDs still missing locally
+		let remaining: Vec<OwnedEventId> = {
+			let mut r = Vec::new();
+			for id in &targets {
+				if !self.services.rooms.timeline.pdu_exists(id).await
+					&& self
+						.services
+						.rooms
+						.outlier
+						.get_pdu_outlier(id)
+						.await
+						.is_err()
+				{
+					r.push(id.clone());
+				}
+			}
+			r
+		};
+
+		if remaining.is_empty() {
+			self.write_str(&format!("Round {round}: all targets present locally, done.\n"))
+				.await?;
+			break;
+		}
+
+		self.write_str(&format!(
+			"Round {round}/{rounds}: {} targets still missing, fanning out to {} servers...\n",
+			remaining.len(),
+			servers.len(),
+		))
+		.await?;
+
+		// Fan out POST /get_missing_events to all servers in parallel
+		let mut active: FuturesUnordered<_> = FuturesUnordered::new();
+		for server in &servers {
+			let room_id_c = room_id.clone();
+			let earliest = extremities.clone();
+			let latest = remaining.clone();
+			active.push(async move {
+				let t = Instant::now();
+				let res = self
+					.services
+					.sending
+					.send_federation_request(server, get_missing_events::v1::Request {
+						room_id: room_id_c,
+						earliest_events: earliest,
+						latest_events: latest,
+						limit: 100_u32.into(),
+						min_depth: 0_u32.into(),
+					})
+					.await;
+				self.services.rooms.event_handler.update_peer_stats(
+					server,
+					res.is_ok(),
+					t.elapsed(),
+				);
+				res.map(|r| r.events)
+			});
+		}
+
+		let mut round_filled: usize = 0;
+		while let Some(result) = active.next().await {
+			if let Ok(events) = result {
+				for raw in events {
+					if let Ok((event_id, value)) = self
+						.services
+						.server_keys
+						.validate_and_add_event_id(raw.as_ref(), &room_version)
+						.await
+					{
+						self.services.rooms.outlier.add_pdu_outlier(
+							&event_id,
+							&value,
+							Some(&room_id),
+						);
+						round_filled = round_filled.saturating_add(1);
+					}
+				}
+			}
+		}
+
+		total_filled = total_filled.saturating_add(round_filled);
+		self.write_str(&format!("Round {round}: filled {round_filled} events.\n"))
+			.await?;
+
+		if round_filled == 0 {
+			self.write_str("No new events found this round, stopping early.\n")
+				.await?;
+			break;
+		}
+	}
+
+	self.write_str(&format!("Done. Total events stored as outliers: {total_filled}\n"))
+		.await
 }
