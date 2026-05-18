@@ -196,12 +196,20 @@ async fn get_auth_chain_inner(
 
 		trace!(%event_id, "processing auth event");
 
-		match self
+		// Try timeline first, then fall back to the outlier store.
+		// Backfilled auth events (create, power_levels, etc.) often land in the
+		// outlier store before being promoted to the timeline, so auth chain walks
+		// must check both to avoid false "missing" gaps.
+		let pdu_result = match self
 			.services
 			.timeline
 			.get_pdu_in_room(Some(room_id), &event_id)
 			.await
 		{
+			| Ok(pdu) => Ok(pdu),
+			| Err(_) => self.services.outlier.get_pdu_outlier(&event_id).await,
+		};
+		match pdu_result {
 			| Err(e) => {
 				debug_error!(%event_id, ?e, "Could not find pdu mentioned in auth events");
 			},
