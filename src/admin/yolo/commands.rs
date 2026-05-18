@@ -755,13 +755,14 @@ pub(super) async fn rescue_pdu(
 		.clone()
 		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
-	// Clear all soft-fail and rejection markers when rescuing
-	if force || skip_soft_fail {
-		self.services
-			.rooms
-			.pdu_metadata
-			.clear_pdu_markers(&event_id);
-	}
+	let _ = force;
+
+	// Clear all soft-fail and rejection markers when rescuing unconditionally
+	// (if an admin is rescuing a PDU, they definitely want it un-rejected)
+	self.services
+		.rooms
+		.pdu_metadata
+		.clear_pdu_markers(&event_id);
 
 	Box::pin(
 		self.services
