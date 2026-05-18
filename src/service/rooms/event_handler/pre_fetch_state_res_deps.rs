@@ -63,11 +63,9 @@ pub(super) async fn pre_fetch_state_res_deps(
 	// Find events in the auth chain that we don't have locally
 	let all_auth_ids: HashSet<&OwnedEventId> = auth_chain_sets.iter().flatten().collect();
 	let mut missing: Vec<OwnedEventId> = Vec::new();
-	let mut seen: HashSet<OwnedEventId> = HashSet::new();
 	for event_id in &all_auth_ids {
 		if !self.services.timeline.pdu_exists(event_id).await {
 			missing.push((*event_id).clone());
-			seen.insert((*event_id).clone());
 		}
 	}
 	if missing.is_empty() {
