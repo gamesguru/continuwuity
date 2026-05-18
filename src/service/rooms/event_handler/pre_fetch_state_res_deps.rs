@@ -187,7 +187,18 @@ pub(super) async fn pre_fetch_state_res_deps(
 	// state_res needs for conflicted subgraph walks. Always runs regardless
 	// of auth chain completeness. Tries multiple servers until one succeeds.
 	if started.elapsed() < budget {
-		let latest_ids: Vec<OwnedEventId> = incoming_state.values().cloned().take(50).collect();
+		// Use the room's current forward extremities as the backfill starting
+		// point — exactly what Synapse does. Extremities are the unresolved
+		// DAG tips (typically 1-5 events), which naturally bounds URI length.
+		// incoming_state contains state events (memberships, PLs), not DAG tips,
+		// so using it here was semantically wrong and could generate 414 errors.
+		let latest_ids: Vec<OwnedEventId> = self
+			.services
+			.state
+			.get_forward_extremities(room_id)
+			.map(ToOwned::to_owned)
+			.collect()
+			.await;
 		if !latest_ids.is_empty() {
 			for server in &servers {
 				let start = Instant::now();
