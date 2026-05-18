@@ -1,7 +1,7 @@
 use std::{
 	borrow::Borrow,
 	collections::{HashMap, HashSet},
-	time::Instant,
+	time::{Duration, Instant},
 };
 
 use conduwuit::{
@@ -214,7 +214,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 		let mut remaining = Vec::with_capacity(still_needed.len());
 		for id in &still_needed {
 			if !self.services.timeline.pdu_exists(id).await
-				&& !self.services.outlier.get_pdu_outlier(id).await.is_ok()
+				&& self.services.outlier.get_pdu_outlier(id).await.is_err()
 			{
 				remaining.push(id.clone());
 			}
