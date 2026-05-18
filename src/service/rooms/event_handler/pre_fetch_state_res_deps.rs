@@ -1,7 +1,7 @@
 use std::{
 	borrow::Borrow,
 	collections::{HashMap, HashSet},
-	time::Instant,
+	time::{Duration, Instant},
 };
 
 use conduwuit::{
@@ -59,19 +59,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 		},
 	};
 
-	// Build server list once via shared helper
-	let servers = self
-		.build_federation_server_list(
-			room_id,
-			origin,
-			self.services.server.config.federation_fallback_room_servers,
-		)
-		.await;
-
-	let started = Instant::now();
-	let budget = Duration::from_secs(120);
-
-	// Phase 1: Fetch individually missing auth chain events
+	// Phase 1: collect auth chain events we don't have locally.
 	let all_auth_ids: HashSet<&OwnedEventId> = auth_chain_sets.iter().flatten().collect();
 	let mut missing: Vec<OwnedEventId> = Vec::new();
 	for event_id in &all_auth_ids {
@@ -81,6 +69,18 @@ pub(super) async fn pre_fetch_state_res_deps(
 	}
 
 	if !missing.is_empty() {
+		// Build server list only when we actually have events to fetch.
+		let servers = self
+			.build_federation_server_list(
+				room_id,
+				origin,
+				self.services.server.config.federation_fallback_room_servers,
+			)
+			.await;
+
+		let started = Instant::now();
+		let budget = Duration::from_secs(120);
+
 		info!(
 			count = missing.len(),
 			servers = servers.len(),
