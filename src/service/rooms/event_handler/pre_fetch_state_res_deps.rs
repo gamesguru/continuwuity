@@ -114,7 +114,8 @@ pub(super) async fn pre_fetch_state_res_deps(
 								self.update_peer_stats(
 									server,
 									true,
-									start.elapsed().as_millis() as u32,
+									u32::try_from(start.elapsed().as_millis())
+										.unwrap_or(u32::MAX),
 								);
 								return (event_id, Some(res.pdu));
 							},
@@ -122,7 +123,8 @@ pub(super) async fn pre_fetch_state_res_deps(
 								self.update_peer_stats(
 									server,
 									false,
-									start.elapsed().as_millis() as u32,
+									u32::try_from(start.elapsed().as_millis())
+										.unwrap_or(u32::MAX),
 								);
 							},
 						}
@@ -214,7 +216,11 @@ pub(super) async fn pre_fetch_state_res_deps(
 					.await
 				{
 					| Ok(response) => {
-						self.update_peer_stats(server, true, start.elapsed().as_millis() as u32);
+						self.update_peer_stats(
+							server,
+							true,
+							u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX),
+						);
 						let mut backfilled = 0_usize;
 						for pdu_raw in &response.pdus {
 							if let Ok((eid, value)) = self
@@ -257,7 +263,11 @@ pub(super) async fn pre_fetch_state_res_deps(
 						}
 					},
 					| Err(_) => {
-						self.update_peer_stats(server, false, start.elapsed().as_millis() as u32);
+						self.update_peer_stats(
+							server,
+							false,
+							u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX),
+						);
 					},
 				}
 			}

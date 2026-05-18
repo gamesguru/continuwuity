@@ -112,7 +112,7 @@ where
 								"event not found on any server"
 							)));
 							for (i, server) in servers.iter().enumerate() {
-								let start = std::time::Instant::now();
+								let start = Instant::now();
 								match self
 									.services
 									.sending
@@ -126,7 +126,8 @@ where
 										self.update_peer_stats(
 											server,
 											true,
-											start.elapsed().as_millis() as u32,
+											u32::try_from(start.elapsed().as_millis())
+												.unwrap_or(u32::MAX),
 										);
 										return (id_clone, Ok((res, server.clone())));
 									},
@@ -134,7 +135,8 @@ where
 										self.update_peer_stats(
 											server,
 											false,
-											start.elapsed().as_millis() as u32,
+											u32::try_from(start.elapsed().as_millis())
+												.unwrap_or(u32::MAX),
 										);
 										if i == 0 {
 											debug!(%id_clone, %server, "Origin server failed: {e}");
@@ -172,7 +174,7 @@ where
 						let _last_err =
 							conduwuit::err!(Request(NotFound("event not found on any server")));
 						for (i, server) in servers.iter().enumerate() {
-							let start = std::time::Instant::now();
+							let start = Instant::now();
 							match self
 								.services
 								.sending
@@ -186,7 +188,8 @@ where
 									self.update_peer_stats(
 										server,
 										true,
-										start.elapsed().as_millis() as u32,
+										u32::try_from(start.elapsed().as_millis())
+											.unwrap_or(u32::MAX),
 									);
 									return (id_clone, Ok((res, server.clone())));
 								},
@@ -194,7 +197,8 @@ where
 									self.update_peer_stats(
 										server,
 										false,
-										start.elapsed().as_millis() as u32,
+										u32::try_from(start.elapsed().as_millis())
+											.unwrap_or(u32::MAX),
 									);
 									if i == 0 {
 										debug!(%id_clone, %server, "Origin server failed: {e}");

@@ -160,10 +160,12 @@ impl Service {
 		// Sort by peer score (latency + (errors * 1000) - (successes * 100))
 		room_servers.sort_by_cached_key(|s| {
 			if let Some(stats) = self.peer_scorer.get(s) {
-				let success = stats.successes.load(Ordering::Relaxed) as u64;
-				let error = stats.errors.load(Ordering::Relaxed) as u64;
-				let latency = stats.latency_ms.load(Ordering::Relaxed) as u64;
-				(latency + (error * 1000)).saturating_sub(success * 100)
+				let success = u64::from(stats.successes.load(Ordering::Relaxed));
+				let error = u64::from(stats.errors.load(Ordering::Relaxed));
+				let latency = u64::from(stats.latency_ms.load(Ordering::Relaxed));
+				latency
+					.saturating_add(error.saturating_mul(1000))
+					.saturating_sub(success.saturating_mul(100))
 			} else {
 				// Default penalization for unknown servers (assume 5s latency)
 				5000
@@ -185,16 +187,19 @@ impl Service {
 			if success {
 				stats.successes.fetch_add(1, Ordering::Relaxed);
 				let old = stats.latency_ms.load(Ordering::Relaxed);
-				stats
-					.latency_ms
-					.store((old * 7 + latency_ms * 3) / 10, Ordering::Relaxed);
+				stats.latency_ms.store(
+					old.saturating_mul(7)
+						.saturating_add(latency_ms.saturating_mul(3))
+						/ 10,
+					Ordering::Relaxed,
+				);
 			} else {
 				stats.errors.fetch_add(1, Ordering::Relaxed);
 			}
 		} else {
 			let stats = PeerStats {
-				successes: AtomicU32::new(if success { 1 } else { 0 }),
-				errors: AtomicU32::new(if success { 0 } else { 1 }),
+				successes: AtomicU32::new(u32::from(success)),
+				errors: AtomicU32::new(u32::from(!success)),
 				latency_ms: AtomicU32::new(if success { latency_ms } else { 5000 }),
 			};
 			self.peer_scorer.insert(server.to_owned(), stats);

@@ -13,9 +13,7 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
-use ruma::{
-	CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName, events::StateEventType,
-};
+use ruma::{CanonicalJsonValue, OwnedEventId, RoomId, ServerName, events::StateEventType};
 
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
