@@ -914,6 +914,7 @@ pub(super) async fn list_outliers(
 	limit: Option<usize>,
 	rejected: bool,
 	clear: bool,
+	reverse: bool,
 ) -> Result {
 	let limit = limit.unwrap_or(100);
 
@@ -944,8 +945,14 @@ pub(super) async fn list_outliers(
 			.await
 	};
 
-	// Sort by origin_server_ts
-	outliers.sort_by_key(|(_, pdu)| pdu.origin_server_ts);
+	// Sort by origin_server_ts (or in reverse, if requested)
+	outliers.sort_by(|(_, a), (_, b)| {
+		if reverse {
+			b.origin_server_ts.cmp(&a.origin_server_ts)
+		} else {
+			a.origin_server_ts.cmp(&b.origin_server_ts)
+		}
+	});
 
 	let mut count = 0_usize;
 	let mut cleared = 0_usize;

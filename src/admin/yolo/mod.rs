@@ -90,6 +90,10 @@ pub enum YoloCommand {
 		/// --rejected).
 		#[arg(short, long, requires = "rejected")]
 		clear: bool,
+
+		/// Show newest events first (default: oldest first).
+		#[arg(short = 'R', long)]
+		reverse: bool,
 	},
 
 	/// View the current forward extremities (timeline tips) of a room,
