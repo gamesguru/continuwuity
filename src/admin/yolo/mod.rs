@@ -40,10 +40,6 @@ pub enum YoloCommand {
 		/// An event ID (a $ followed by the base64 reference hash)
 		event_id: OwnedEventId,
 
-		/// If set, bypasses strict auth checks.
-		#[arg(short, long)]
-		force: bool,
-
 		/// If set, skips the soft-fail check against current room state.
 		/// Use for late-arriving events that are valid at their DAG position
 		/// but conflict with current state.

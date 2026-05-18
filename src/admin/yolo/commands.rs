@@ -720,12 +720,7 @@ pub(super) async fn audit_membership(
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(
-	&self,
-	event_id: OwnedEventId,
-	force: bool,
-	skip_soft_fail: bool,
-) -> Result {
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, skip_soft_fail: bool) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -754,8 +749,6 @@ pub(super) async fn rescue_pdu(
 		.origin
 		.clone()
 		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
-
-	let _ = force;
 
 	// Clear all soft-fail and rejection markers when rescuing unconditionally
 	// (if an admin is rescuing a PDU, they definitely want it un-rejected)

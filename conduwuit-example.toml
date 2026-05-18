@@ -386,6 +386,19 @@
 #
 #federation_timeout = 60
 
+# Maximum time (seconds) to process a single incoming federation PDU.
+# This includes auth chain pre-fetching, outlier resolution, and state
+# resolution. If exceeded, the PDU is soft-failed and a per-room circuit
+# breaker is tripped.
+#
+#pdu_receive_timeout = 600
+
+# Maximum number of room member servers to try when fetching missing
+# federation events (auth chains, outliers). These are tried after the
+# origin server and trusted_servers.
+#
+#federation_fallback_room_servers = 25
+
 # Federation presence interval (seconds).
 # This is used to aggressively load-shed large incoming loops of presence
 # updates and batch outgoing presence changes.
