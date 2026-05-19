@@ -404,7 +404,7 @@ pub async fn save_state(
 		});
 	}
 
-	let states_parents = if let Some(p) = previous_shortstatehash {
+	let states_parents = if let Some(p) = previous_shortstatehash.filter(|&p| p != 0) {
 		self.load_shortstatehash_info(p).await.unwrap_or_default()
 	} else {
 		ShortStateInfoVec::new()

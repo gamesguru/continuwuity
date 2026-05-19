@@ -4850,15 +4850,15 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 		// The RoomId is the remainder of the bytes after the server name + 0xFF byte
 		let split_idx = key_bytes.iter().position(|&b| b == 0xFF).unwrap_or(0);
 		let room_id_bytes = if split_idx < key_bytes.len() {
-			&key_bytes[split_idx + 1..]
+			&key_bytes[split_idx.saturating_add(1)..]
 		} else {
-			&key_bytes
+			key_bytes
 		};
 		let s = std::str::from_utf8(room_id_bytes).unwrap_or("");
 
 		let valid = s.starts_with('!') && s.len() <= 255 && <&RoomId>::try_from(s).is_ok();
 		if !valid && s.starts_with('!') {
-			corrupt.push((key_bytes.to_vec(), s.to_string()));
+			corrupt.push((key_bytes.to_vec(), s.to_owned()));
 		}
 	}
 

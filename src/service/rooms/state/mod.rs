@@ -388,7 +388,7 @@ impl Service {
 
 		if !already_existed {
 			let states_parents = match previous_shortstatehash {
-				| Ok(p) =>
+				| Ok(p) if p != 0 =>
 					self.services
 						.state_compressor
 						.load_shortstatehash_info(p)
@@ -472,7 +472,7 @@ impl Service {
 		match &new_pdu.state_key {
 			| Some(state_key) => {
 				let states_parents = match previous_shortstatehash {
-					| Ok(p) =>
+					| Ok(p) if p != 0 =>
 						self.services
 							.state_compressor
 							.load_shortstatehash_info(p)
