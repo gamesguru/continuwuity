@@ -851,7 +851,7 @@ pub(super) async fn audit_membership(
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, skip_soft_fail: bool) -> Result {
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -888,6 +888,9 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, skip_soft_fail: bo
 		.pdu_metadata
 		.clear_pdu_markers(&event_id);
 
+	// Always use the lenient (nuclear) path for admin rescue: if no server can
+	// provide /state_ids for this historical event, fall back to current room
+	// state rather than hard-failing. Admins know what they're asking for.
 	Box::pin(
 		self.services
 			.rooms
@@ -898,7 +901,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, skip_soft_fail: bo
 				&create_event,
 				&origin,
 				&room_id,
-				skip_soft_fail,
+				true, // skip_soft_fail: always lenient for admin rescue
 			),
 	)
 	.await?;

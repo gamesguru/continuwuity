@@ -57,15 +57,11 @@ pub enum YoloCommand {
 	/// Attempts to "rescue" an outlier PDU by upgrading it to a timeline event.
 	///
 	/// This will perform all necessary auth checks and state resolution.
+	/// Falls back to current room state when no server can provide historical
+	/// /state_ids for the event.
 	RescuePdu {
 		/// An event ID (a $ followed by the base64 reference hash)
 		event_id: OwnedEventId,
-
-		/// If set, skips the soft-fail check against current room state.
-		/// Use for late-arriving events that are valid at their DAG position
-		/// but conflict with current state.
-		#[arg(long)]
-		skip_soft_fail: bool,
 	},
 
 	/// List all outlier PDUs in our database.
