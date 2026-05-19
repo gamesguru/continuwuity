@@ -84,10 +84,6 @@ pub enum DebugCommand {
 	GetRoomState {
 		/// Room ID
 		room_id: OwnedRoomOrAliasId,
-
-		/// Return a JSON array of the fully resolved state events
-		#[arg(short, long)]
-		json: bool,
 	},
 
 	/// Get and display signing keys from local cache or remote server.

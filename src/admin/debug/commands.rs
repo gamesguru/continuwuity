@@ -320,13 +320,13 @@ pub(super) async fn get_remote_pdu(
 }
 
 #[admin_command]
-pub(super) async fn get_room_state(&self, room: OwnedRoomOrAliasId, json: bool) -> Result {
+pub(super) async fn get_room_state(&self, room: OwnedRoomOrAliasId) -> Result {
 	use std::fmt::Write;
 
 	self.bail_restricted()?;
 
 	let room_id = self.services.rooms.alias.resolve(&room).await?;
-	let mut room_state: Vec<_> = self
+	let room_state: Vec<_> = self
 		.services
 		.rooms
 		.state_accessor
@@ -336,20 +336,6 @@ pub(super) async fn get_room_state(&self, room: OwnedRoomOrAliasId, json: bool) 
 
 	if room_state.is_empty() {
 		return Err!("Unable to find room state in our database (vector is empty)",);
-	}
-
-	room_state.sort_by_key(|pdu| pdu.origin_server_ts());
-
-	if json {
-		let mut events_json = Vec::with_capacity(room_state.len());
-		for pdu in &room_state {
-			if let Ok(pdu_json) = self.services.rooms.timeline.get_pdu_json(pdu.event_id()).await {
-				events_json.push(pdu_json);
-			}
-		}
-		let out = serde_json::to_string_pretty(&events_json)?;
-		let text = format!("```json\n{out}\n```");
-		return self.write_str(&text).await;
 	}
 
 	let mut out = format!("{} state events in {}:\n", room_state.len(), room_id);
