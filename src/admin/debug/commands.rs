@@ -130,17 +130,27 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 	} else if in_timeline {
 		status.push_str("Timeline PDU");
 	} else {
-		let soft_failed = self
-			.services
-			.rooms
-			.pdu_metadata
-			.is_event_soft_failed(&event_id)
-			.await;
-		if soft_failed {
-			status.push_str("Outlier (Soft Failed / Rejected) PDU");
-		} else {
-			status.push_str("Outlier PDU");
-		}
+		status.push_str("Outlier PDU");
+	}
+	
+	let soft_failed = self
+		.services
+		.rooms
+		.pdu_metadata
+		.is_event_soft_failed(&event_id)
+		.await;
+	if soft_failed {
+		status.push_str(" [SOFT-FAIL]");
+	}
+
+	let rejected = self
+		.services
+		.rooms
+		.pdu_metadata
+		.is_event_rejected(&event_id)
+		.await;
+	if rejected {
+		status.push_str(" [REJECTED]");
 	}
 
 	let out = format!("Status: {status}\n\n```json\n{text}\n```");

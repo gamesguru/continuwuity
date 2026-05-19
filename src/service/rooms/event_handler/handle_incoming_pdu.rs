@@ -153,6 +153,19 @@ pub async fn handle_incoming_pdu<'a>(
 		}
 	}
 
+	// Cork check: If the room is currently undergoing heavy administrative maintenance
+	// (like reorder-timeline), we immediately reject incoming PDUs with an error so that
+	// the remote server will queue and retry them later, preventing them from waiting
+	// and timing out (which triggers the circuit breaker and soft-fails them).
+	if self.services.globals.suppress_healer.contains(room_id) {
+		warn!(
+			%room_id,
+			%event_id,
+			"Room is corked for maintenance, rejecting incoming PDU for later retry"
+		);
+		return Err!(Request(Unknown("Room is undergoing administrative maintenance, please retry later.")));
+	}
+
 	let fut = self.handle_incoming_pdu_inner(origin, room_id, event_id, value, is_timeline_event);
 
 	let pdu_timeout = self.services.server.config.pdu_receive_timeout;
@@ -165,6 +178,16 @@ pub async fn handle_incoming_pdu<'a>(
 			res
 		},
 		| Err(_) => {
+			if self.services.globals.suppress_healer.contains(room_id) {
+				warn!(
+					%event_id,
+					%room_id,
+					%origin,
+					"PDU processing timed out while room was corked for maintenance. Bypassing circuit breaker so remote retries."
+				);
+				return Err!(Request(Unknown("Room is locked for maintenance, try again later.")));
+			}
+
 			warn!(
 				%event_id,
 				%room_id,
