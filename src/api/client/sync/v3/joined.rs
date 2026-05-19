@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Result, at, debug_warn, err, extract_variant,
+	Result, at, debug_warn, err, extract_variant, info,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
@@ -293,7 +293,7 @@ async fn build_state_and_timeline(
 	// joined since the last sync, that being the syncing user's join event. if
 	// it's empty something is wrong.
 	if joined_since_last_sync && timeline.pdus.is_empty() {
-		warn!(%room_id, "timeline for newly joined room is empty");
+		info!(%room_id, "timeline for newly joined room is empty");
 	}
 
 	let (summary, device_list_updates) = try_join(
