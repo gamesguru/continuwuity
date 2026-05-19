@@ -26,7 +26,7 @@ use ruma::{
 		v3::{Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline},
 	},
 	events::{
-		AnyRawAccountDataEvent, AnySyncStateEvent, StateEventType,
+		AnyRawAccountDataEvent, AnySyncStateEvent, StateEventType, TimelineEventType,
 		TimelineEventType::*,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
@@ -312,6 +312,29 @@ async fn build_state_and_timeline(
 	// usually only include the syncing user's join event.
 	let limited = timeline.limited || joined_since_last_sync;
 
+	let timeline_types: HashSet<TimelineEventType> = sync_context
+		.filter
+		.room
+		.timeline
+		.types
+		.as_ref()
+		.map(|types| {
+			types
+				.iter()
+				.map(|s| TimelineEventType::from(s.as_str()))
+				.collect()
+		})
+		.unwrap_or_default();
+
+	let timeline_not_types: HashSet<TimelineEventType> = sync_context
+		.filter
+		.room
+		.timeline
+		.not_types
+		.iter()
+		.map(|s| TimelineEventType::from(s.as_str()))
+		.collect();
+
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
 	let filtered_timeline_pdus: Vec<PduEvent> = timeline
@@ -320,15 +343,12 @@ async fn build_state_and_timeline(
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item.clone(), sync_context.syncing_user))
 		.ready_filter(|(_, pdu)| {
-			let event_type = pdu.event_type().to_string();
 			let timeline_filter = &sync_context.filter.room.timeline;
 
-			let types_ok = match &timeline_filter.types {
-				| Some(types) => types.contains(&event_type),
-				| None => true,
-			};
+			let types_ok =
+				timeline_filter.types.is_none() || timeline_types.contains(pdu.event_type());
 
-			let not_types_ok = !timeline_filter.not_types.contains(&event_type);
+			let not_types_ok = !timeline_not_types.contains(pdu.event_type());
 
 			let senders_ok = match &timeline_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),

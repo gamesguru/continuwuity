@@ -234,6 +234,48 @@ pub(super) async fn load_left_room(
 		Vec::new()
 	};
 
+	let timeline_types: std::collections::HashSet<TimelineEventType> = filter
+		.room
+		.timeline
+		.types
+		.as_ref()
+		.map(|types| {
+			types
+				.iter()
+				.map(|s| TimelineEventType::from(s.as_str()))
+				.collect()
+		})
+		.unwrap_or_default();
+
+	let timeline_not_types: std::collections::HashSet<TimelineEventType> = filter
+		.room
+		.timeline
+		.not_types
+		.iter()
+		.map(|s| TimelineEventType::from(s.as_str()))
+		.collect();
+
+	let state_types: std::collections::HashSet<TimelineEventType> = filter
+		.room
+		.state
+		.types
+		.as_ref()
+		.map(|types| {
+			types
+				.iter()
+				.map(|s| TimelineEventType::from(s.as_str()))
+				.collect()
+		})
+		.unwrap_or_default();
+
+	let state_not_types: std::collections::HashSet<TimelineEventType> = filter
+		.room
+		.state
+		.not_types
+		.iter()
+		.map(|s| TimelineEventType::from(s.as_str()))
+		.collect();
+
 	let TimelinePdus { pdus, limited } = timeline;
 
 	// filter out ignored events from the timeline
@@ -244,14 +286,9 @@ pub(super) async fn load_left_room(
 		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
 			let timeline_filter = &filter.room.timeline;
 
-			let types_ok = match &timeline_filter.types {
-				| Some(types) => types.iter().any(|t| *pdu.event_type() == t.as_str()),
-				| None => true,
-			};
-			let not_types_ok = !timeline_filter
-				.not_types
-				.iter()
-				.any(|t| *pdu.event_type() == t.as_str());
+			let types_ok =
+				timeline_filter.types.is_none() || timeline_types.contains(pdu.event_type());
+			let not_types_ok = !timeline_not_types.contains(pdu.event_type());
 
 			let senders_ok = match &timeline_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),
@@ -310,14 +347,8 @@ pub(super) async fn load_left_room(
 		.filter(|pdu: &PduEvent| {
 			let state_filter = &filter.room.state;
 
-			let types_ok = match &state_filter.types {
-				| Some(types) => types.iter().any(|t| *pdu.event_type() == t.as_str()),
-				| None => true,
-			};
-			let not_types_ok = !state_filter
-				.not_types
-				.iter()
-				.any(|t| *pdu.event_type() == t.as_str());
+			let types_ok = state_filter.types.is_none() || state_types.contains(pdu.event_type());
+			let not_types_ok = !state_not_types.contains(pdu.event_type());
 
 			let senders_ok = match &state_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),
@@ -471,7 +502,7 @@ async fn build_left_state_and_timeline(
 		%timeline_end_count,
 		"syncing {} timeline events (limited = {}) and {} state events",
 		timeline.pdus.len(),
-		limited,
+		timeline.limited,
 		state.len()
 	);
 
