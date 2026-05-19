@@ -44,13 +44,17 @@ where
 	};
 
 	// Build routing servers via shared helper: origin → trusted → room members
-	let routing_servers = self
+	let mut routing_servers = self
 		.build_federation_server_list(
 			room_id,
 			origin,
 			self.services.server.config.federation_fallback_room_servers,
 		)
 		.await;
+
+	// Cap fallback servers to prevent thread exhaustion during bulk 404s
+	routing_servers.truncate(4);
+
 	debug!(
 		origin = %origin,
 		n_total = routing_servers.len(),
@@ -68,6 +72,13 @@ where
 				trace!("Found {id} in main timeline or outlier tree");
 			}
 			events_with_auth_events.push((id.to_owned(), Some(local_pdu), vec![]));
+			continue;
+		}
+
+		// If the event is soft-failed but we couldn't parse it into a local_pdu (e.g. invalid JSON),
+		// we MUST skip it so we don't spam the network trying to fetch it again.
+		if self.services.pdu_metadata.is_event_soft_failed(id).await {
+			warn!(target: "auth_chain", "Skipping unparseable soft-failed outlier: {id}");
 			continue;
 		}
 
