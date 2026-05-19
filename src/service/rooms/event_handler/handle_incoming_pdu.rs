@@ -297,7 +297,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		.await?);
 
 	let (incoming_pdu, val) = self
-		.handle_outlier_pdu(origin, create_event, event_id, room_id, value, false, false)
+		.handle_outlier_pdu(origin, Some(create_event), event_id, room_id, value, false, false)
 		.await?;
 
 	// 8. if not timeline event: stop

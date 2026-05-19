@@ -18,7 +18,7 @@ use crate::rooms::timeline::pdu_fits;
 pub async fn handle_outlier_pdu<'a, Pdu>(
 	&self,
 	origin: &'a ServerName,
-	create_event: &'a Pdu,
+	create_event: Option<&'a Pdu>,
 	event_id: &'a EventId,
 	room_id: &'a RoomId,
 	mut value: CanonicalJsonObject,
@@ -52,7 +52,15 @@ where
 
 	// TODO: For RoomVersion6 we must check that Raw<..> is canonical do we anywhere?: https://matrix.org/docs/spec/rooms/v6#canonical-json
 
-	let room_version_id = get_room_version_id(create_event)?;
+	let room_version_id = match create_event {
+		| Some(ce) => get_room_version_id(ce)?,
+		| None => self
+			.services
+			.state
+			.get_room_version_or_fallback(room_id)
+			.await
+			.unwrap_or(ruma::RoomVersionId::V11),
+	};
 
 	let mut incoming_pdu = if skip_sig_verify {
 		// Caller already verified signatures (e.g. import_pdus via
@@ -310,7 +318,7 @@ where
 		&pdu_event,
 		None, // TODO: third party invite
 		state_fetch,
-		create_event.as_pdu(),
+		create_event.map_or(&pdu_event, Event::as_pdu),
 	)
 	.await
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;

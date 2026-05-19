@@ -90,7 +90,7 @@ pub(crate) async fn healer_worker(
 					.fetch_and_handle_outliers(
 						server,
 						std::iter::once(&**event_id),
-						&create_event,
+						Some(&create_event),
 						&room_id,
 					)
 					.await

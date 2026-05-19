@@ -458,50 +458,52 @@ impl Service {
 				}
 			}
 
-			if let Some((_, oldest_pdu, _)) = entries.get(oldest_event_id) {
-				let prev_events: Vec<_> = oldest_pdu.prev_events().collect();
+			if !foundation_set {
+				if let Some((_, oldest_pdu, _)) = entries.get(oldest_event_id) {
+					let prev_events: Vec<_> = oldest_pdu.prev_events().collect();
 
-				if prev_events.is_empty() {
-					// No prev_events → m.room.create → empty foundation.
-					// save_state with empty set creates a new SSH.
-					let empty = rooms::state_compressor::CompressedState::new();
-					if let Ok(result) = self
-						.services
-						.state_compressor
-						.save_state(room_id, Arc::new(empty))
-						.await
-					{
-						self.services.state.set_room_state(
-							room_id,
-							result.shortstatehash,
-							&state_lock,
-						);
-						info!(
-							"reorder_timeline: seeded walk from empty foundation \
-							 (m.room.create, no prev_events)"
-						);
-						foundation_set = true;
-					}
-				} else {
-					// Try each prev_event for an uncorrupted pdu_shortstatehash.
-					// These are outliers — reorder-timeline never touches their
-					// SSH, so they're guaranteed uncontaminated.
-					for prev_id in prev_events {
-						if let Ok(ssh) = self
+					if prev_events.is_empty() {
+						// No prev_events → m.room.create → empty foundation.
+						// save_state with empty set creates a new SSH.
+						let empty = rooms::state_compressor::CompressedState::new();
+						if let Ok(result) = self
 							.services
-							.state_accessor
-							.pdu_shortstatehash(prev_id)
+							.state_compressor
+							.save_state(room_id, Arc::new(empty))
 							.await
 						{
-							self.services
-								.state
-								.set_room_state(room_id, ssh, &state_lock);
+							self.services.state.set_room_state(
+								room_id,
+								result.shortstatehash,
+								&state_lock,
+							);
 							info!(
-								"reorder_timeline: seeded walk from prev_event {prev_id} SSH \
-								 {ssh}"
+								"reorder_timeline: seeded walk from empty foundation \
+								 (m.room.create, no prev_events)"
 							);
 							foundation_set = true;
-							break;
+						}
+					} else {
+						// Try each prev_event for an uncorrupted pdu_shortstatehash.
+						// These are outliers — reorder-timeline never touches their
+						// SSH, so they're guaranteed uncontaminated.
+						for prev_id in prev_events {
+							if let Ok(ssh) = self
+								.services
+								.state_accessor
+								.pdu_shortstatehash(prev_id)
+								.await
+							{
+								self.services
+									.state
+									.set_room_state(room_id, ssh, &state_lock);
+								info!(
+									"reorder_timeline: seeded walk from prev_event {prev_id} \
+									 SSH {ssh}"
+								);
+								foundation_set = true;
+								break;
+							}
 						}
 					}
 				}

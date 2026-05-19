@@ -140,6 +140,7 @@ pub(crate) async fn do_check(
 				&auth_chain_sets,
 				&fetch,
 				&rejected,
+				None::<&fn(Vec<OwnedEventId>)>,
 			)
 			.await;
 

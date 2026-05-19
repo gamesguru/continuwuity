@@ -74,7 +74,7 @@ where
 	debug!("Fetching state events");
 	let state_ids = res.pdu_ids.iter().map(AsRef::as_ref);
 	let state_vec = self
-		.fetch_and_handle_outliers(origin, state_ids, create_event, room_id)
+		.fetch_and_handle_outliers(origin, state_ids, Some(create_event), room_id)
 		.boxed()
 		.await;
 

@@ -457,6 +457,7 @@ pub async fn force_insert_pdu(
 	event_id: &EventId,
 	pdu: &PduEvent,
 	value: &CanonicalJsonObject,
+	backfill: bool,
 ) -> Result<RawPduId> {
 	// Skip if already in timeline
 	if self.get_pdu_id(event_id).await.is_ok() {
@@ -468,10 +469,21 @@ pub async fn force_insert_pdu(
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
 	let count: u64 = self.services.globals.next_count()?;
-	let pdu_count = PduCount::Normal(count);
-	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
-	self.db.append_pdu(&pdu_id, pdu, value, pdu_count).await;
+	let (pdu_count, pdu_id) = if backfill {
+		let count_i64: i64 = count.try_into()?;
+		let pcount = PduCount::Backfilled(conduwuit_core::validated!(0 - count_i64));
+		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
+	} else {
+		let pcount = PduCount::Normal(count);
+		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
+	};
+
+	if backfill {
+		self.db.prepend_backfill_pdu(&pdu_id, event_id, value);
+	} else {
+		self.db.append_pdu(&pdu_id, pdu, value, pdu_count).await;
+	}
 
 	drop(insert_lock);
 

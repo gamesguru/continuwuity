@@ -132,17 +132,29 @@ pub async fn state_resolution<'a, StateSets>(
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	let event_fetch =
-		|event_id: OwnedEventId| async move { self.event_fetch(Some(room_id), event_id).await };
-	let event_rejected = |event_id: OwnedEventId| async move {
-		// Synapse parity: only hard-rejected events are excluded from state
-		// resolution. Soft-failed events must still participate to heal state
-		// forks correctly (they are valid per the DAG auth chain, just
-		// out-of-order relative to current state).
-		self.services
+	let fetch_cache: dashmap::DashMap<OwnedEventId, Option<conduwuit_core::PduEvent>> =
+		dashmap::DashMap::new();
+	let event_fetch = |event_id: OwnedEventId| async {
+		if let Some(pdu) = fetch_cache.get(&event_id).map(|e| e.value().clone()) {
+			return pdu;
+		}
+		let pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
+		fetch_cache.insert(event_id, pdu.clone());
+		pdu
+	};
+
+	let rejected_cache: dashmap::DashMap<OwnedEventId, bool> = dashmap::DashMap::new();
+	let event_rejected = |event_id: OwnedEventId| async {
+		if let Some(rej) = rejected_cache.get(&event_id).map(|e| *e.value()) {
+			return rej;
+		}
+		let rej = self
+			.services
 			.pdu_metadata
 			.is_event_rejected(&event_id)
-			.await
+			.await;
+		rejected_cache.insert(event_id, rej);
+		rej
 	};
 
 	let room_id_clone = room_id.to_owned();

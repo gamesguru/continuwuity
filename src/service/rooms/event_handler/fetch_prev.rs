@@ -93,7 +93,7 @@ where
 						.fetch_and_handle_outliers(
 							origin,
 							once(id.as_ref()),
-							create_event,
+							Some(create_event),
 							room_id,
 						)
 						.await;

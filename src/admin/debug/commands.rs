@@ -113,7 +113,15 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 		return Err!("PDU not found locally.");
 	}
 
-	let pdu_json = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
+	let pdu_json = if in_timeline {
+		self.services.rooms.timeline.get_pdu_json(&event_id).await?
+	} else {
+		self.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(&event_id)
+			.await?
+	};
 	let text = serde_json::to_string_pretty(&pdu_json)?;
 
 	let mut status = String::new();
@@ -685,7 +693,7 @@ pub(crate) async fn force_set_state(
 			{
 				return Err!(Request(InvalidParam(
 					"We are not participating in the room; provide an event_id to bootstrap \
-					 (positional arg after server_name)."
+					 using the --at-event flag."
 				)));
 			}
 			self.services
@@ -1501,7 +1509,7 @@ async fn promote_sync_anchor(
 			.services
 			.rooms
 			.timeline
-			.force_insert_pdu(room_id, &anchor_id, &anchor_pdu, &anchor_json)
+			.force_insert_pdu(room_id, &anchor_id, &anchor_pdu, &anchor_json, true)
 			.await
 		{
 			| Ok(_pdu_id) => {

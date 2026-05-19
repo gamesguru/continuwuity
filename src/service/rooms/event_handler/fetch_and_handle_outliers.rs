@@ -16,14 +16,12 @@ use ruma::{
 	api::federation::event::get_event,
 };
 
-use super::get_room_version_id;
-
 #[implement(super::Service)]
 pub async fn fetch_and_handle_outliers<'a, Pdu, Events>(
 	&self,
 	origin: &'a ServerName,
 	events: Events,
-	create_event: &'a Pdu,
+	create_event: Option<&'a Pdu>,
 	room_id: &'a RoomId,
 ) -> Vec<(PduEvent, Option<BTreeMap<String, CanonicalJsonValue>>)>
 where
@@ -180,11 +178,17 @@ where
 			match fetch_res {
 				| Ok((res, successful_server)) => {
 					debug!("Got {next_id} over federation from {successful_server}");
-					let Ok(room_version_id) = get_room_version_id(create_event) else {
-						back_off(next_id);
-						continue;
-					};
 
+					let room_version_id = match create_event {
+						| Some(ce) => crate::rooms::event_handler::get_room_version_id(ce)
+							.unwrap_or(ruma::RoomVersionId::V11),
+						| None => self
+							.services
+							.state
+							.get_room_version_or_fallback(room_id)
+							.await
+							.unwrap_or(ruma::RoomVersionId::V11),
+					};
 					let Ok((calculated_event_id, value)) =
 						gen_event_id_canonical_json(&res.pdu, &room_version_id)
 					else {
