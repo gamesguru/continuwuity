@@ -171,7 +171,8 @@ pub fn add_pdu_outlier(
 		self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
 	}
 
-	// Populate the room-scoped index (metadata only, does not affect stored payload).
+	// Populate the room-scoped index (metadata only, does not affect stored
+	// payload).
 	if let Some(room_id) = room_id_from_pdu {
 		let room_id: &RoomId = &room_id;
 		let mut key = room_id.as_bytes().to_vec();

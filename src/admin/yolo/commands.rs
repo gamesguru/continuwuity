@@ -851,7 +851,7 @@ pub(super) async fn audit_membership(
 }
 
 #[admin_command]
-pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
+pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Result {
 	self.bail_restricted()?;
 
 	let pdu_json = self
@@ -868,6 +868,29 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
 		.ok_or_else(|| err!("PDU has no room_id."))?
 		.to_owned();
 
+	// Clear all soft-fail and rejection markers when rescuing unconditionally
+	// (if an admin is rescuing a PDU, they definitely want it un-rejected)
+	self.services
+		.rooms
+		.pdu_metadata
+		.clear_pdu_markers(&event_id);
+
+	// --force fast path: bypass state resolution and auth entirely.
+	// Required for ancient events where remote servers have pruned historical
+	// state (404 Pdu state not found) or the origin is gone.
+	if force {
+		self.services
+			.rooms
+			.timeline
+			.promote_outlier(&room_id, &event_id)
+			.await?;
+		return self
+			.write_str(&format!(
+				"Force-promoted {event_id} into the timeline (bypassed state resolution)."
+			))
+			.await;
+	}
+
 	let create_event = self
 		.services
 		.rooms
@@ -881,16 +904,8 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId) -> Result {
 		.clone()
 		.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
-	// Clear all soft-fail and rejection markers when rescuing unconditionally
-	// (if an admin is rescuing a PDU, they definitely want it un-rejected)
-	self.services
-		.rooms
-		.pdu_metadata
-		.clear_pdu_markers(&event_id);
-
-	// Always use the lenient (nuclear) path for admin rescue: if no server can
-	// provide /state_ids for this historical event, fall back to current room
-	// state rather than hard-failing. Admins know what they're asking for.
+	// Lenient path: falls back to current room state when no server can
+	// provide /state_ids for this historical event.
 	Box::pin(
 		self.services
 			.rooms
@@ -1444,12 +1459,30 @@ pub(super) async fn rescue_room(
 			}
 		}
 
-		// --force implies nuclear to skip auth checks via the production pipeline.
+		// --force fast path: bypass the network and auth checks entirely and
+		// directly promote the outlier to the timeline. Required for dead events
+		// where the network returns 404 for /state_ids (pruned remote databases)
+		// or the origin server is gone entirely.
 		if force {
 			self.services
 				.rooms
 				.pdu_metadata
 				.clear_pdu_markers(&event_id);
+			if self
+				.services
+				.rooms
+				.timeline
+				.promote_outlier(&room_id, &event_id)
+				.await
+				.is_ok()
+			{
+				count = count.saturating_add(1);
+			}
+			if count.is_multiple_of(500) && count > 0 {
+				info!("rescue_room (force): promoted {count} events...");
+				tokio::task::yield_now().await;
+			}
+			continue;
 		}
 
 		let origin = pdu
@@ -1467,8 +1500,8 @@ pub(super) async fn rescue_room(
 					&create_event,
 					&origin,
 					&room_id,
-					// force implies nuclear: bypass auth checks via the production path
-					nuclear || force,
+					// nuclear: bypass auth checks via the production path
+					nuclear,
 				),
 		)
 		.await

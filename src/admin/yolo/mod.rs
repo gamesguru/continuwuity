@@ -62,6 +62,13 @@ pub enum YoloCommand {
 	RescuePdu {
 		/// An event ID (a $ followed by the base64 reference hash)
 		event_id: OwnedEventId,
+
+		/// Bypass all state resolution and auth checks entirely. Use when the
+		/// network returns 404 for /state_ids (servers have pruned historical
+		/// state) or the origin server no longer exists. After force-rescuing
+		/// several events, run reorder-timeline --tail N to fix ordering.
+		#[arg(long)]
+		force: bool,
 	},
 
 	/// List all outlier PDUs in our database.

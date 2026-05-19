@@ -198,53 +198,53 @@ async fn get_auth_chain_inner(
 
 		trace!(%event_id, "processing auth event");
 
-			// Try timeline first, then fall back to the outlier store.
-			// get_pdu_in_room(Some(room_id)) rejects v11/v12 events whose
-			// room_id() returns None — those events are valid but lack the
-			// room_id field in their canonical JSON. The outlier fallback
-			// sees them regardless of room_id field presence.
-			let pdu_result = match self
-				.services
-				.timeline
-				.get_pdu_in_room(Some(room_id), &event_id)
-				.await
-			{
-				| Ok(pdu) => Ok(pdu),
-				| Err(_) => self.services.outlier.get_pdu_outlier(&event_id).await,
-			};
+		// Try timeline first, then fall back to the outlier store.
+		// get_pdu_in_room(Some(room_id)) rejects v11/v12 events whose
+		// room_id() returns None — those events are valid but lack the
+		// room_id field in their canonical JSON. The outlier fallback
+		// sees them regardless of room_id field presence.
+		let pdu_result = match self
+			.services
+			.timeline
+			.get_pdu_in_room(Some(room_id), &event_id)
+			.await
+		{
+			| Ok(pdu) => Ok(pdu),
+			| Err(_) => self.services.outlier.get_pdu_outlier(&event_id).await,
+		};
 
-			match pdu_result {
-				| Err(e) => {
-					info!(%event_id, ?e, "Could not find pdu mentioned in auth events");
-				},
-				| Ok(pdu) => {
-					if let Some(claimed_room_id) = pdu.room_id.clone() {
-						if claimed_room_id != *room_id {
-							return Err!(Request(Forbidden(error!(
-								%event_id,
-								%room_id,
-								wrong_room_id = ?pdu.room_id.unwrap(),
-								"auth event for incorrect room"
-							))));
-						}
+		match pdu_result {
+			| Err(e) => {
+				info!(%event_id, ?e, "Could not find pdu mentioned in auth events");
+			},
+			| Ok(pdu) => {
+				if let Some(claimed_room_id) = pdu.room_id.clone() {
+					if claimed_room_id != *room_id {
+						return Err!(Request(Forbidden(error!(
+							%event_id,
+							%room_id,
+							wrong_room_id = ?pdu.room_id.unwrap(),
+							"auth event for incorrect room"
+						))));
 					}
+				}
 
-					for auth_event in &pdu.auth_events {
-						let sauthevent = self
-							.services
-							.short
-							.get_or_create_shorteventid(auth_event)
-							.await;
+				for auth_event in &pdu.auth_events {
+					let sauthevent = self
+						.services
+						.short
+						.get_or_create_shorteventid(auth_event)
+						.await;
 
-						if found.insert(sauthevent) {
-							trace!(%event_id, ?auth_event, "adding auth event to processing queue");
+					if found.insert(sauthevent) {
+						trace!(%event_id, ?auth_event, "adding auth event to processing queue");
 
-							todo.push_back(auth_event.clone());
-						}
+						todo.push_back(auth_event.clone());
 					}
-				},
-			}
+				}
+			},
 		}
+	}
 
 	Ok(found.into_iter().collect())
 }
