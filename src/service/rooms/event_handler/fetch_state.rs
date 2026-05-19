@@ -1,6 +1,6 @@
 use std::collections::{HashMap, hash_map};
 
-use conduwuit::{Err, Event, Result, debug, debug_warn, err, implement};
+use conduwuit::{Err, Event, Result, debug, debug_warn, err, implement, warn};
 use futures::FutureExt;
 use ruma::{
 	EventId, OwnedEventId, RoomId, ServerName, api::federation::event::get_room_state_ids,
@@ -28,15 +28,49 @@ pub(super) async fn fetch_state<Pdu>(
 where
 	Pdu: Event + Send + Sync,
 {
-	let res = self
-		.services
-		.sending
-		.send_federation_request(origin, get_room_state_ids::v1::Request {
-			room_id: room_id.to_owned(),
-			event_id: event_id.to_owned(),
-		})
-		.await
-		.inspect_err(|e| debug_warn!("Fetching state for event failed: {e}"))?;
+	// Build the full fallback server list: origin → trusted → room members.
+	// This mirrors fetch_and_handle_outliers so that when the origin is
+	// unreachable (connection error, timeout, 404), we still get state from
+	// another server that has the room.
+	let servers = self
+		.build_federation_server_list(
+			room_id,
+			origin,
+			self.services.server.config.federation_fallback_room_servers,
+		)
+		.await;
+
+	let mut last_err: conduwuit::Error =
+		conduwuit::err!(Request(NotFound("No server could provide /state_ids")));
+	let res = 'found: {
+		for server in &servers {
+			match self
+				.services
+				.sending
+				.send_federation_request(server, get_room_state_ids::v1::Request {
+					room_id: room_id.to_owned(),
+					event_id: event_id.to_owned(),
+				})
+				.await
+			{
+				| Ok(res) => {
+					if server != origin {
+						debug!(%server, "fetch_state: used fallback server for /state_ids");
+					}
+					break 'found res;
+				},
+				| Err(e) => {
+					debug_warn!(%server, "fetch_state /state_ids failed: {e}");
+					last_err = e;
+				},
+			}
+		}
+		warn!(
+			n_servers = servers.len(),
+			"fetch_state: all servers failed /state_ids for {event_id}"
+		);
+		return Err(last_err);
+	};
 
 	debug!("Fetching state events");
 	let state_ids = res.pdu_ids.iter().map(AsRef::as_ref);
