@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 use async_trait::async_trait;
 use conduwuit::{RoomVersion, debug, info};
 use conduwuit_core::{
-	Event, PduEvent, Result, err,
+	Event, PduEvent, Result,
 	result::FlatOk,
 	state_res::{self, StateMap},
 	utils::{
@@ -593,7 +593,16 @@ impl Service {
 			.room_state_get_content(room_id, &StateEventType::RoomCreate, "")
 			.await
 			.map(|content: RoomCreateEventContent| content.room_version)
-			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
+			.or_else(|e| {
+				// Fallback to V11 if the create event is missing from the database or state map
+				// This allows admin commands to fetch the missing create event to repair the
+				// room.
+				conduwuit::warn!(
+					"Room {room_id} is missing its create event! Falling back to room version \
+					 11 to prevent lockout. Original error: {e:?}"
+				);
+				Ok(RoomVersionId::V11)
+			})
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
