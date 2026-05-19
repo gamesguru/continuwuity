@@ -130,6 +130,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			is_referenced,
+			true,
 		)
 		.await;
 
@@ -174,6 +175,7 @@ mod tests {
 			&[a.as_ref()],
 			true, // soft_fail!
 			never_referenced,
+			true,
 		)
 		.await;
 
@@ -212,6 +214,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			a_is_referenced,
+			true,
 		)
 		.await;
 		assert_eq!(after_j2, vec![j1_id.to_owned(), j2_id.to_owned()]);
