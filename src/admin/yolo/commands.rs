@@ -2220,11 +2220,19 @@ pub(super) async fn fetch_pdu(
 		.send_federation_request(&server, get_event::v1::Request::new(event_id, None))
 		.await?;
 
-	let (event_id, value) = self
-		.services
-		.server_keys
-		.validate_and_add_event_id(&response.pdu, &room_version)
-		.await?;
+	let (event_id, value) = if skip_auth {
+		let (eid, mut val) = conduwuit_core::matrix::event::gen_event_id_canonical_json(
+			&response.pdu,
+			&room_version,
+		)?;
+		val.insert("event_id".into(), ruma::CanonicalJsonValue::String(eid.as_str().into()));
+		(eid, val)
+	} else {
+		self.services
+			.server_keys
+			.validate_and_add_event_id(&response.pdu, &room_version)
+			.await?
+	};
 
 	let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
 		.map_err(|e| err!(Database("Invalid PDU: {e:?}")))?;

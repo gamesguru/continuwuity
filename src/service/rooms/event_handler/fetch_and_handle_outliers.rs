@@ -100,69 +100,6 @@ where
 				let servers = routing_servers.clone();
 				active_fetches.push(
 					async move {
-						for attempt in 0..2_u8 {
-							if attempt > 0 {
-								tokio::time::sleep(std::time::Duration::from_secs(
-									2_u64.pow(attempt.into()),
-								))
-								.await;
-								debug!(%id_clone, attempt, "Retrying federation fetch");
-							}
-							let _last_err = conduwuit::err!(Request(NotFound(
-								"event not found on any server"
-							)));
-							for (i, server) in servers.iter().enumerate() {
-								let start = Instant::now();
-								match self
-									.services
-									.sending
-									.send_federation_request(server, get_event::v1::Request {
-										event_id: id_clone.clone(),
-										include_unredacted_content: None,
-									})
-									.await
-								{
-									| Ok(res) => {
-										self.update_peer_stats(server, true, start.elapsed());
-										return (id_clone, Ok((res, server.clone())));
-									},
-									| Err(e) => {
-										self.update_peer_stats(server, false, start.elapsed());
-										if i == 0 {
-											debug!(%id_clone, %server, "Origin server failed: {e}");
-										}
-										let _ = e;
-									},
-								}
-							}
-							warn!(%id_clone, n_servers = servers.len(), attempt, "All fallback servers exhausted");
-						}
-						(
-							id_clone,
-							Err(conduwuit::err!(Request(NotFound(
-								"event not found after retries"
-							)))),
-						)
-					}
-					.boxed(),
-				);
-				graph.insert(id.to_owned(), HashSet::new());
-			}
-		} else {
-			let id_clone = id.to_owned();
-			let servers = routing_servers.clone();
-			active_fetches.push(
-				async move {
-					for attempt in 0..2_u8 {
-						if attempt > 0 {
-							tokio::time::sleep(std::time::Duration::from_secs(
-								2_u64.pow(attempt.into()),
-							))
-							.await;
-							debug!(%id_clone, attempt, "Retrying federation fetch");
-						}
-						let _last_err =
-							conduwuit::err!(Request(NotFound("event not found on any server")));
 						for (i, server) in servers.iter().enumerate() {
 							let start = Instant::now();
 							match self
@@ -183,15 +120,55 @@ where
 									if i == 0 {
 										debug!(%id_clone, %server, "Origin server failed: {e}");
 									}
-									let _ = e;
 								},
 							}
 						}
-						warn!(%id_clone, n_servers = servers.len(), attempt, "All fallback servers exhausted");
+						warn!(%id_clone, n_servers = servers.len(), "All fallback servers exhausted");
+						(
+							id_clone,
+							Err(conduwuit::err!(Request(NotFound(
+								"event not found after trying all servers"
+							)))),
+						)
 					}
+					.boxed(),
+				);
+				graph.insert(id.to_owned(), HashSet::new());
+			}
+		} else {
+			let id_clone = id.to_owned();
+			let servers = routing_servers.clone();
+			active_fetches.push(
+				async move {
+					for (i, server) in servers.iter().enumerate() {
+						let start = Instant::now();
+						match self
+							.services
+							.sending
+							.send_federation_request(server, get_event::v1::Request {
+								event_id: id_clone.clone(),
+								include_unredacted_content: None,
+							})
+							.await
+						{
+							| Ok(res) => {
+								self.update_peer_stats(server, true, start.elapsed());
+								return (id_clone, Ok((res, server.clone())));
+							},
+							| Err(e) => {
+								self.update_peer_stats(server, false, start.elapsed());
+								if i == 0 {
+									debug!(%id_clone, %server, "Origin server failed: {e}");
+								}
+							},
+						}
+					}
+					warn!(%id_clone, n_servers = servers.len(), "All fallback servers exhausted");
 					(
 						id_clone,
-						Err(conduwuit::err!(Request(NotFound("event not found after retries")))),
+						Err(conduwuit::err!(Request(NotFound(
+							"event not found after trying all servers"
+						)))),
 					)
 				}
 				.boxed(),

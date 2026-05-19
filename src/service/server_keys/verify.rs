@@ -126,7 +126,18 @@ pub async fn validate_and_add_event_id(
 	room_version: &RoomVersionId,
 ) -> Result<(OwnedEventId, CanonicalJsonObject)> {
 	let (event_id, mut value) = gen_event_id_canonical_json(pdu, room_version)?;
-	if let Err(e) = self.verify_event(&value, Some(room_version)).await {
+
+	if self
+		.services
+		.server
+		.config
+		.bypassed_signature_events
+		.contains(&event_id)
+	{
+		conduwuit::warn!(
+			"Bypassing signature verification for configured exception event: {event_id}"
+		);
+	} else if let Err(e) = self.verify_event(&value, Some(room_version)).await {
 		return Err!(BadServerResponse(debug_error!(
 			"Event {event_id} failed verification: {e:?}"
 		)));
@@ -155,7 +166,17 @@ pub async fn validate_and_add_event_id_no_fetch(
 		)));
 	}
 	trace!("All required keys exist, verifying event");
-	if let Err(e) = self.verify_event(&value, Some(room_version)).await {
+	if self
+		.services
+		.server
+		.config
+		.bypassed_signature_events
+		.contains(&event_id)
+	{
+		conduwuit::warn!(
+			"Bypassing signature verification for configured exception event: {event_id}"
+		);
+	} else if let Err(e) = self.verify_event(&value, Some(room_version)).await {
 		debug_warn!("Event verification failed");
 		return Err!(BadServerResponse(debug_error!(
 			"Event {event_id} failed verification: {e:?}"

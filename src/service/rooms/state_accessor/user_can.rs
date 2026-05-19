@@ -115,12 +115,23 @@ pub async fn user_can_see_event(
 		debug_info!("visibility {event_id}: get_pdu failed");
 	}
 
+	let currently_member = self.services.state_cache.is_joined(user_id, room_id).await;
+
+	if currently_member
+		&& self
+			.services
+			.globals
+			.allow_local_users_to_bypass_history_visibility()
+		&& self.services.globals.server_name() == user_id.server_name()
+	{
+		return true;
+	}
+
 	let Ok(shortstatehash) = self.pdu_shortstatehash(event_id).await else {
 		// No historical state snapshot for this event. Use the current room state's
 		// history_visibility as a best-effort fallback. For shared/world_readable
 		// policies, allow if currently a member. For joined/invited, deny since we
 		// cannot verify historical membership without the shortstatehash.
-		let currently_member = self.services.state_cache.is_joined(user_id, room_id).await;
 		debug_info!("visibility {event_id}: no shortstatehash, is_joined={currently_member}");
 		let history_visibility = self
 			.room_state_get_content(room_id, &StateEventType::RoomHistoryVisibility, "")
@@ -135,8 +146,6 @@ pub async fn user_can_see_event(
 			| _ => false,
 		};
 	};
-
-	let currently_member = self.services.state_cache.is_joined(user_id, room_id).await;
 
 	let history_visibility = self
 		.state_get_content(shortstatehash, &StateEventType::RoomHistoryVisibility, "")
@@ -169,6 +178,15 @@ pub async fn user_can_see_event(
 #[tracing::instrument(skip_all, level = "trace")]
 pub async fn user_can_see_state_events(&self, user_id: &UserId, room_id: &RoomId) -> bool {
 	if self.services.state_cache.is_joined(user_id, room_id).await {
+		return true;
+	}
+
+	if self
+		.services
+		.globals
+		.allow_local_users_to_bypass_history_visibility()
+		&& self.services.globals.server_name() == user_id.server_name()
+	{
 		return true;
 	}
 

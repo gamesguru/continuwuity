@@ -19,7 +19,7 @@ pub use figment::{Figment, value::Value as FigmentValue};
 use lettre::message::Mailbox;
 use regex::RegexSet;
 use ruma::{
-	OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomVersionId,
+	OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomVersionId,
 	api::client::discovery::{discover_homeserver::RtcFocusInfo, discover_support::ContactRole},
 };
 use serde::{Deserialize, Serialize, de::IgnoredAny};
@@ -738,6 +738,12 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_federation: bool,
 
+	/// Enable or disable the startup forward-fill sweep that queries remote
+	/// servers to fetch missed events during server downtime. Disabling this
+	/// speeds up startup but relies entirely on periodic sweeps or DAG healing.
+	#[serde(default = "true_fn")]
+	pub allow_startup_forwardfill: bool,
+
 	/// Allows federation requests to be made to itself
 	///
 	/// This isn't intended and is very likely a bug if federation requests are
@@ -804,6 +810,16 @@ pub struct Config {
 	/// This is inherently false if `allow_federation` is disabled
 	#[serde(default = "true_fn", alias = "allow_profile_lookup_federation_requests")]
 	pub allow_inbound_profile_lookup_federation_requests: bool,
+
+	/// Bypasses the room's history visibility rules for local users on your
+	/// server. If true, any local user joined to a room will be able to search
+	/// and view the full history of the room (assuming the server has the
+	/// PDUs), regardless of the room's m.room.history_visibility setting.
+	///
+	/// This is technically a Matrix spec violation, but provided as an admin
+	/// override.
+	#[serde(default)]
+	pub allow_local_users_to_bypass_history_visibility: bool,
 
 	/// Allow standard users to create rooms. Appservices and admins are always
 	/// allowed to create rooms
@@ -1801,6 +1817,14 @@ pub struct Config {
 	/// default: []
 	#[serde(default)]
 	pub url_preview_domain_explicit_denylist: Vec<String>,
+
+	/// A list of specific Event IDs (e.g. `$bad_event_id`) that are known to
+	/// have corrupted signatures or missing server keys, but should be globally
+	/// accepted by the server without signature verification. Useful for
+	/// bypassing unresolvable DAG holes without manually running `yolo
+	/// fetch-pdu --skip-auth`.
+	#[serde(default)]
+	pub bypassed_signature_events: Vec<OwnedEventId>,
 
 	/// Vector list of URLs allowed to send requests to for URL previews.
 	///

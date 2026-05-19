@@ -380,6 +380,12 @@ impl Service {
 
 	pub fn forbidden_usernames(&self) -> &RegexSet { &self.server.config.forbidden_usernames }
 
+	pub fn allow_local_users_to_bypass_history_visibility(&self) -> bool {
+		self.server
+			.config
+			.allow_local_users_to_bypass_history_visibility
+	}
+
 	/// checks if `user_id` is local to us via server_name comparison
 	#[inline]
 	pub fn user_is_local(&self, user_id: &UserId) -> bool {

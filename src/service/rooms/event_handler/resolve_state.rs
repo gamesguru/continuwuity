@@ -145,7 +145,23 @@ where
 			.await
 	};
 
-	state_res::resolve(room_version, state_sets, auth_chain_sets, &event_fetch, &event_rejected)
-		.map_err(|e| err!(error!("State resolution failed: {e:?}")))
-		.await
+	let room_id_clone = room_id.to_owned();
+	let dag_healer = self.dag_healer.clone();
+	let event_missing_cb = move |missing_events| {
+		let _ = dag_healer.send(crate::rooms::event_handler::HealRequest {
+			room_id: room_id_clone.clone(),
+			missing_events,
+		});
+	};
+
+	state_res::resolve(
+		room_version,
+		state_sets,
+		auth_chain_sets,
+		&event_fetch,
+		&event_rejected,
+		Some(&event_missing_cb),
+	)
+	.map_err(|e| err!(error!("State resolution failed: {e:?}")))
+	.await
 }

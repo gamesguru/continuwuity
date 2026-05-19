@@ -59,9 +59,13 @@ impl Service {
 		// On boot, check every federated room that hasn't had an event in the
 		// last 5 minutes. This covers missed events from downtime while avoiding
 		// immediate probes for rooms that were just active.
-		info!(target: "forwardfill", "Running startup forward-fill scan (all federated rooms)...");
-		self.scan_all_rooms_startup(5 * 60 * 1000).await;
-		info!(target: "forwardfill", "Startup forward-fill scan complete.");
+		if self.services.server.config.allow_startup_forwardfill {
+			info!(target: "forwardfill", "Running startup forward-fill scan (all federated rooms)...");
+			self.scan_all_rooms_startup(5 * 60 * 1000).await;
+			info!(target: "forwardfill", "Startup forward-fill scan complete.");
+		} else {
+			info!(target: "forwardfill", "Skipping startup forward-fill scan per configuration.");
+		}
 
 		// --- Periodic sweep ---
 		let mut interval = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));

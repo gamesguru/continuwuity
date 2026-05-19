@@ -76,18 +76,20 @@ type Result<T, E = Error> = crate::Result<T, E>;
 //#[tracing::instrument(level = "debug", skip(state_sets, auth_chain_sets,
 //#[tracing::instrument(level event_fetch))]
 #[allow(clippy::cognitive_complexity)]
-pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, Reject, RejectFut>(
+pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, Reject, RejectFut, Cb>(
 	room_version: &RoomVersionId,
 	state_sets: Sets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId, Hasher>],
 	event_fetch: &Fetch,
 	event_rejected: &Reject,
+	event_missing_cb: Option<&Cb>,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	Fetch: Fn(OwnedEventId) -> FetchFut + Sync,
 	FetchFut: Future<Output = Option<Pdu>> + Send,
 	Reject: Fn(OwnedEventId) -> RejectFut + Sync,
 	RejectFut: Future<Output = bool> + Send,
+	Cb: Fn(Vec<OwnedEventId>) + Sync,
 	Sets: IntoIterator<IntoIter = SetIter> + Send,
 	SetIter: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 	Hasher: BuildHasher + Send + Sync,
@@ -126,13 +128,18 @@ where
 	trace!(map = ?conflicting, "conflicting events");
 	let (conflicted_state_subgraph, initial_state) =
 		if stateres_version == StateResolutionVersion::V2_1 {
-			let csg = calculate_conflicted_subgraph(&conflicting, event_fetch)
+			let (csg, missing) = calculate_conflicted_subgraph(&conflicting, event_fetch)
 				.await
 				.ok_or_else(|| {
 					Error::InvalidPdu("Failed to calculate conflicted subgraph".to_owned())
 				})?;
 			debug!(count = csg.len(), "conflicted subgraph");
 			trace!(set = ?csg, "conflicted subgraph");
+			if !missing.is_empty() {
+				if let Some(cb) = event_missing_cb {
+					cb(missing);
+				}
+			}
 			(csg, HashMap::new())
 		} else {
 			(HashSet::new(), unconflicted.clone())
@@ -347,7 +354,7 @@ where
 pub(crate) async fn calculate_conflicted_subgraph<F, Fut, E>(
 	conflicted: &StateMap<Vec<OwnedEventId>>,
 	fetch_event: &F,
-) -> Option<HashSet<OwnedEventId>>
+) -> Option<(HashSet<OwnedEventId>, Vec<OwnedEventId>)>
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
 	Fut: Future<Output = Option<E>> + Send,
@@ -415,7 +422,7 @@ where
 			info!("... and {} more missing prev_events", missing.len().saturating_sub(25));
 		}
 	}
-	Some(subgraph)
+	Some((subgraph, missing))
 }
 
 /// Returns a Vec of deduped EventIds that appear in some chains but not others.

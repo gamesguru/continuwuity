@@ -42,6 +42,7 @@ struct Services {
 	state_compressor: Dep<rooms::state_compressor::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
 	timeline: Dep<rooms::timeline::Service>,
+	globals: Dep<crate::globals::Service>,
 }
 
 struct Data {
@@ -59,6 +60,7 @@ impl crate::Service for Service {
 				state: args.depend::<rooms::state::Service>("rooms::state"),
 				state_compressor: args
 					.depend::<rooms::state_compressor::Service>("rooms::state_compressor"),
+				globals: args.depend::<crate::globals::Service>("globals"),
 			},
 			db: Data {
 				shorteventid_shortstatehash: args.db["shorteventid_shortstatehash"].clone(),
