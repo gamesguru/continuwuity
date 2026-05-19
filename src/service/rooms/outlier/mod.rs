@@ -147,29 +147,13 @@ pub fn add_pdu_outlier(
 				.and_then(|r| OwnedRoomId::parse(r).ok())
 		});
 
-	// If room_id is resolved but absent from the JSON, inject it before storing.
-	// Only v12 create events legitimately lack room_id in their canonical JSON —
-	// in room version 12 the room_id is derived from the create event's ID hash
-	// and is therefore not included in the content. The injection does not affect
-	// signatures or hashes (those are computed at ingestion and already embedded).
-	// It ensures pdu.room_id() returns a value when the event is read back from
-	// the outlier store, which is required by several internal code paths.
-	if let Some(ref rid) = room_id_from_pdu {
-		if !pdu.contains_key("room_id") {
-			let mut pdu_with_room = pdu.clone();
-			pdu_with_room.insert(
-				"room_id".to_owned(),
-				CanonicalJsonValue::String(rid.as_str().to_owned()),
-			);
-			self.db
-				.eventid_outlierpdu
-				.raw_put(event_id, Json(&pdu_with_room));
-		} else {
-			self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
-		}
-	} else {
-		self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
-	}
+	// Store the outlier PDU as-is, without injecting room_id into the JSON.
+	// v12 create events legitimately lack room_id in their canonical JSON
+	// (because room_id = hash of create event). Injecting it would corrupt
+	// the content hash and break signature verification when the event is
+	// later served over federation (e.g. in send_join responses).
+	// Room association is tracked externally via the roomid_outliereventid index.
+	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
 
 	// Populate the room-scoped index (metadata only, does not affect stored
 	// payload).
