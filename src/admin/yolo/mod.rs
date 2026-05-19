@@ -115,6 +115,17 @@ pub enum YoloCommand {
 		verbose: bool,
 	},
 
+	/// Recalculate and fix forward extremities using true topological DAG
+	/// resolution.
+	RecalculateExtremities {
+		/// The room ID or alias.
+		room: OwnedRoomOrAliasId,
+
+		/// The number of recent events to analyze (default: 500)
+		#[arg(long, default_value_t = 500)]
+		tail: usize,
+	},
+
 	/// Purge outlier PDUs that already exist in our timeline.
 	///
 	/// This is a safe cleanup command that resolves "stuck" state where an

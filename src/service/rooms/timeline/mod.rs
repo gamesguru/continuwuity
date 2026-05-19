@@ -837,6 +837,60 @@ impl Service {
 		Ok(count)
 	}
 
+	/// Automatically recalculates the true topological DAG forward extremities
+	/// by querying the last `tail` events from the room's timeline and
+	/// analyzing their `prev_events` graph to find all nodes with out-degree
+	/// 0. Overwrites the stored forward extremities.
+	/// Returns true if the extremities were changed.
+	#[tracing::instrument(skip(self), level = "info")]
+	pub async fn recalculate_extremities(&self, room_id: &RoomId, tail: usize) -> Result<bool> {
+		use std::collections::{HashMap, HashSet};
+
+		use futures_util::StreamExt;
+		use ruma::OwnedEventId;
+
+		let state_lock = self.services.state.mutex.lock(room_id.to_owned()).await;
+
+		let mut pdus = Vec::with_capacity(tail);
+		let mut graph = HashMap::with_capacity(tail);
+		let mut sorted = Vec::with_capacity(tail);
+
+		let mut stream = std::pin::pin!(self.pdus_rev(room_id, None));
+		while let Some(Ok((_count, pdu))) = stream.next().await {
+			pdus.push(pdu);
+			if pdus.len() >= tail {
+				break;
+			}
+		}
+
+		// pdus_rev returns newest first. We need oldest for true_extremities
+		pdus.reverse();
+
+		for pdu in pdus {
+			let event_id = pdu.event_id.clone();
+			let prev_events: HashSet<OwnedEventId> = pdu.prev_events.iter().cloned().collect();
+			graph.insert(event_id.clone(), prev_events);
+			sorted.push(event_id);
+		}
+
+		let true_extremities = calculate_true_extremities(&graph, &sorted);
+
+		let current_extremities = self.services.state.get_forward_extremities(room_id);
+		let current_set: HashSet<_> = current_extremities.iter().cloned().collect();
+		let new_set: HashSet<_> = true_extremities.iter().map(|e| (*e).to_owned()).collect();
+
+		if current_set == new_set {
+			return Ok(false);
+		}
+
+		self.services
+			.state
+			.set_forward_extremities(room_id, true_extremities.iter().copied(), &state_lock)
+			.await;
+
+		Ok(true)
+	}
+
 	#[inline]
 	pub async fn get_non_outlier_pdu_json(
 		&self,
@@ -982,7 +1036,7 @@ impl Service {
 	}
 }
 
-pub(crate) fn calculate_true_extremities<'a>(
+pub fn calculate_true_extremities<'a>(
 	graph: &std::collections::HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>>,
 	sorted: &'a [OwnedEventId],
 ) -> Vec<&'a EventId> {

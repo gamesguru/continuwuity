@@ -82,7 +82,7 @@ pub(crate) async fn healer_worker(
 			// (or our own) as the seed origin.
 			let seed_server = fallback_servers
 				.first()
-				.unwrap_or(&service.services.globals.server_name().to_owned())
+				.unwrap_or_else(|| &service.services.globals.server_name().to_owned())
 				.clone();
 
 			trace!(
