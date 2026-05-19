@@ -27,7 +27,7 @@ use ruma::{
 		v3::{Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline},
 	},
 	events::{
-		AnyRawAccountDataEvent, AnySyncStateEvent, StateEventType, TimelineEventType,
+		AnyRawAccountDataEvent, AnySyncStateEvent, StateEventType,
 		TimelineEventType::*,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
@@ -305,7 +305,7 @@ async fn build_state_and_timeline(
 
 	// the token which may be passed to the messages endpoint to backfill room
 	// history
-	let prev_batch = timeline.pdus.front().map(at!(0)).map(ToString::to_string);
+	let prev_batch = timeline.pdus.front().map(at!(0)).map(|c| c.to_string());
 
 	let TimelinePdus { pdus, limited: timeline_limited } = timeline;
 
@@ -321,7 +321,10 @@ async fn build_state_and_timeline(
 		.into_iter()
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item, sync_context.syncing_user))
-		.ready_filter(|(_, pdu)| sync_context.filter.room.timeline.matches(pdu))
+		.ready_filter(|(_, pdu)| {
+			let filter = &sync_context.filter.room.timeline;
+			filter.matches(pdu)
+		})
 		.map(at!(1))
 		.collect::<Vec<_>>()
 		.await;

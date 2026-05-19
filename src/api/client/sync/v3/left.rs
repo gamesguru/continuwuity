@@ -1,7 +1,6 @@
 use conduwuit::{
-	Event, PduCount, PduEvent, Result, at, debug_warn,
-	event::Matches,
-	info,
+	Event, PduCount, PduEvent, Result, at, debug_warn, info,
+	matrix::event::Matches,
 	pdu::EventHash,
 	trace,
 	utils::{
@@ -243,7 +242,10 @@ pub(super) async fn load_left_room(
 		.into_iter()
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
-		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| filter.room.timeline.matches(pdu))
+		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
+			let filter = &filter.room.timeline;
+			filter.matches(pdu)
+		})
 		.map(at!(1))
 		.collect::<Vec<_>>()
 		.await;
@@ -289,7 +291,10 @@ pub(super) async fn load_left_room(
 	let raw_state_events: Vec<Raw<AnySyncStateEvent>> = state_events
 		.into_iter()
 		.filter(|pdu: &PduEvent| !timeline_ids.contains(&pdu.event_id))
-		.filter(|pdu: &PduEvent| filter.room.state.matches(pdu))
+		.filter(|pdu: &PduEvent| {
+			let filter = &filter.room.state;
+			filter.matches(pdu)
+		})
 		.map(Event::into_format)
 		.collect();
 
