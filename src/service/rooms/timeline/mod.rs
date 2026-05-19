@@ -1093,7 +1093,7 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn test_calculate_true_extremities_single_tip() {
+	fn test_calculate_true_extremities_00_single_tip() {
 		let a = event_id!("$a").to_owned();
 		let b = event_id!("$b").to_owned();
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
@@ -1107,7 +1107,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_calculate_true_extremities_fork() {
+	fn test_calculate_true_extremities_01_fork() {
 		let a = event_id!("$a").to_owned();
 		let b = event_id!("$b").to_owned();
 		let c = event_id!("$c").to_owned();
@@ -1124,7 +1124,104 @@ mod tests {
 	}
 
 	#[test]
-	fn test_calculate_true_extremities_cap() {
+	fn test_calculate_true_extremities_02_diamond() {
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let c = event_id!("$c").to_owned();
+		let d = event_id!("$d").to_owned();
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(d.clone(), vec![b.clone(), c.clone()].into_iter().collect());
+
+		let sorted = vec![a, b, c, d.clone()];
+		let tips = calculate_true_extremities(&graph, &sorted);
+		let expected: Vec<&EventId> = vec![&*d];
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_03_islands() {
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let x = event_id!("$x").to_owned();
+		let y = event_id!("$y").to_owned();
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(y.clone(), vec![x.clone()].into_iter().collect());
+
+		let sorted = vec![a.clone(), b.clone(), x.clone(), y.clone()];
+		let mut tips = calculate_true_extremities(&graph, &sorted);
+		tips.sort();
+
+		let mut expected: Vec<&EventId> = vec![&*b, &*y];
+		expected.sort();
+
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_04_missing_parents() {
+		let a = event_id!("$a").to_owned();
+		let z = event_id!("$z").to_owned(); // not in sorted, but referenced
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+
+		graph.insert(a.clone(), vec![z.clone()].into_iter().collect());
+
+		let sorted = vec![a.clone()];
+		let tips = calculate_true_extremities(&graph, &sorted);
+		let expected: Vec<&EventId> = vec![&*a];
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_05_missing_from_graph() {
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+		// Graph only knows about A's parents (none). B is omitted from the map
+		// entirely.
+		graph.insert(a.clone(), std::collections::HashSet::new());
+
+		let sorted = vec![a.clone(), b.clone()];
+		let mut tips = calculate_true_extremities(&graph, &sorted);
+
+		// Because B is in `sorted` and nothing in `graph` lists B as a parent, B must
+		// be a tip. A is also a tip because nothing lists it as a parent.
+		tips.sort();
+		let mut expected: Vec<&EventId> = vec![&*a, &*b];
+		expected.sort();
+
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_06_cycle_fallback() {
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(a.clone(), vec![b.clone()].into_iter().collect());
+
+		let sorted = vec![a.clone(), b.clone()];
+		let tips = calculate_true_extremities(&graph, &sorted);
+
+		// Fallback returns the last element in `sorted`
+		let expected: Vec<&EventId> = vec![&*b];
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_07_cap() {
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
 			HashMap::new();
 		let mut sorted = Vec::new();
