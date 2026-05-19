@@ -234,60 +234,24 @@ pub(super) async fn load_left_room(
 		Vec::new()
 	};
 
-	let timeline_types: std::collections::HashSet<TimelineEventType> = filter
-		.room
-		.timeline
-		.types
-		.as_ref()
-		.map(|types| {
-			types
-				.iter()
-				.map(|s| TimelineEventType::from(s.as_str()))
-				.collect()
-		})
-		.unwrap_or_default();
-
-	let timeline_not_types: std::collections::HashSet<TimelineEventType> = filter
-		.room
-		.timeline
-		.not_types
-		.iter()
-		.map(|s| TimelineEventType::from(s.as_str()))
-		.collect();
-
-	let state_types: std::collections::HashSet<TimelineEventType> = filter
-		.room
-		.state
-		.types
-		.as_ref()
-		.map(|types| {
-			types
-				.iter()
-				.map(|s| TimelineEventType::from(s.as_str()))
-				.collect()
-		})
-		.unwrap_or_default();
-
-	let state_not_types: std::collections::HashSet<TimelineEventType> = filter
-		.room
-		.state
-		.not_types
-		.iter()
-		.map(|s| TimelineEventType::from(s.as_str()))
-		.collect();
+	let TimelinePdus { pdus, limited } = timeline;
 
 	// filter out ignored events from the timeline
-	let raw_timeline_pdus: Vec<PduEvent> = timeline
-		.pdus
+	let raw_timeline_pdus: Vec<PduEvent> = pdus
 		.into_iter()
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
 		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
 			let timeline_filter = &filter.room.timeline;
 
-			let types_ok =
-				timeline_filter.types.is_none() || timeline_types.contains(pdu.event_type());
-			let not_types_ok = !timeline_not_types.contains(pdu.event_type());
+			let types_ok = match &timeline_filter.types {
+				| Some(types) => types.iter().any(|t| t == pdu.event_type().as_str()),
+				| None => true,
+			};
+			let not_types_ok = !timeline_filter
+				.not_types
+				.iter()
+				.any(|t| t == pdu.event_type().as_str());
 
 			let senders_ok = match &timeline_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),
@@ -346,8 +310,14 @@ pub(super) async fn load_left_room(
 		.filter(|pdu: &PduEvent| {
 			let state_filter = &filter.room.state;
 
-			let types_ok = state_filter.types.is_none() || state_types.contains(pdu.event_type());
-			let not_types_ok = !state_not_types.contains(pdu.event_type());
+			let types_ok = match &state_filter.types {
+				| Some(types) => types.iter().any(|t| t == pdu.event_type().as_str()),
+				| None => true,
+			};
+			let not_types_ok = !state_filter
+				.not_types
+				.iter()
+				.any(|t| t == pdu.event_type().as_str());
 
 			let senders_ok = match &state_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),
@@ -372,7 +342,7 @@ pub(super) async fn load_left_room(
 		LeftRoom {
 			account_data: RoomAccountData { events: Vec::new() },
 			timeline: Timeline {
-				limited: timeline.limited,
+				limited,
 				prev_batch: Some(current_count.to_string()),
 				events: raw_timeline_pdus
 					.into_iter()
