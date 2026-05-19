@@ -249,7 +249,9 @@ impl Service {
 			}
 		} else {
 			info!("reorder_timeline: reading all PDUs from timeline...");
-			let pdus = self.pdus(room_id, None);
+			let pdus_backfill = self.pdus(room_id, Some(PduCount::min()));
+			let pdus_normal = self.pdus(room_id, Some(PduCount::Normal(0)));
+			let pdus = pdus_backfill.chain(pdus_normal);
 			pin_mut!(pdus);
 			while let Some((count, pdu)) = pdus.try_next().await? {
 				// Try non-outlier JSON first, fall back to any JSON (including outlier)
