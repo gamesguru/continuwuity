@@ -760,7 +760,7 @@ pub struct Config {
 	/// Set to false to disable users from joining or creating room versions
 	/// that aren't officially supported by continuwuity.
 	///
-	/// continuwuity officially supports room versions 6 - 11.
+	/// continuwuity officially supports room versions 6 - 12.
 	///
 	/// continuwuity has slightly experimental (though works fine in practice)
 	/// support for versions 3 - 5.
@@ -772,9 +772,9 @@ pub struct Config {
 	/// rather than an integer. Forgetting the quotes will make the server fail
 	/// to start!
 	///
-	/// Per spec, room version "11" is the default.
+	/// Per spec, room version "12" is the default.
 	///
-	/// default: "11"
+	/// default: "12"
 	#[serde(default = "default_default_room_version")]
 	pub default_room_version: RoomVersionId,
 
@@ -2347,6 +2347,18 @@ pub struct LdapConfig {
 	#[serde(default)]
 	pub uri: Option<Url>,
 
+	/// StartTLS for LDAP connections.
+	///
+	/// default: false
+	#[serde(default)]
+	pub use_starttls: bool,
+
+	/// Skip TLS certificate verification, possibly dangerous.
+	///
+	/// default: false
+	#[serde(default)]
+	pub disable_tls_verification: bool,
+
 	/// Root of the searches.
 	///
 	/// example: "ou=users,dc=example,dc=org"
@@ -2555,6 +2567,9 @@ pub struct SmtpConfig {
 	/// Whether to require that users provide an email address when they
 	/// register.
 	///
+	/// If either this option or `require_email_for_token_registration` are set,
+	/// users will not be allowed to remove their email address.
+	///
 	/// default: false
 	#[serde(default)]
 	pub require_email_for_registration: bool,
@@ -2584,7 +2599,6 @@ const DEPRECATED_KEYS: &[&str] = &[
 	"well_known_support_role",
 	"well_known_support_email",
 	"well_known_support_mxid",
-	"registration_token_file",
 	"well_known.rtc_focus_server_urls",
 ];
 
@@ -2867,7 +2881,7 @@ fn default_rocksdb_stats_level() -> u8 { 1 }
 // I know, it's a great name
 #[must_use]
 #[inline]
-pub fn default_default_room_version() -> RoomVersionId { RoomVersionId::V11 }
+pub fn default_default_room_version() -> RoomVersionId { RoomVersionId::V12 }
 
 fn default_ip_range_denylist() -> Vec<String> {
 	vec![

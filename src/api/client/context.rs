@@ -72,7 +72,7 @@ pub(crate) async fn get_context_route(
 
 	let (base_id, base_pdu, visible) = try_join3(base_id, base_pdu, visible).await?;
 
-	if base_pdu.room_id_or_hash() != *room_id || base_pdu.event_id != *event_id {
+	if base_pdu.room_id_or_hash().as_ref() != Some(room_id) || base_pdu.event_id != *event_id {
 		return Err!(Request(NotFound("Event not found.")));
 	}
 

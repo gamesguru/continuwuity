@@ -1,7 +1,7 @@
 use std::{borrow::Borrow, collections::HashMap, iter::once, sync::Arc};
 
 use axum::extract::State;
-use axum_client_ip::InsecureClientIp;
+use axum_client_ip::ClientIp;
 use conduwuit::{
 	Err, Result, debug, debug_info, debug_warn, err, info,
 	matrix::{
@@ -47,7 +47,7 @@ use crate::Ruma;
 #[tracing::instrument(skip_all, fields(%client), name = "knock", level = "info")]
 pub(crate) async fn knock_room_route(
 	State(services): State<crate::State>,
-	InsecureClientIp(client): InsecureClientIp,
+	ClientIp(client): ClientIp,
 	body: Ruma<knock_room::v3::Request>,
 ) -> Result<knock_room::v3::Response> {
 	let sender_user = body.sender_user();
@@ -250,6 +250,7 @@ async fn knock_room_by_id_helper(
 				reason.clone(),
 				servers,
 				&None,
+				None,
 			)
 			.await
 			{
@@ -407,6 +408,7 @@ async fn knock_room_helper_local(
 		&MembershipState::Knock,
 		sender_user,
 		room_id,
+		&room_version_id,
 		&knock_event_stub,
 	)?;
 
@@ -475,8 +477,9 @@ async fn knock_room_helper_local(
 
 	info!("Parsing knock event");
 
-	let parsed_knock_pdu = PduEvent::from_id_val(&event_id, knock_event.clone())
-		.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
+	let parsed_knock_pdu =
+		PduEvent::from_id_val(&event_id, knock_event.clone(), Some(room_id))
+			.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
 
 	info!("Updating membership locally to knock state with provided stripped state events");
 	// TODO: this call does not appear to do anything because `update_membership`
@@ -597,8 +600,9 @@ async fn knock_room_helper_remote(
 		.await;
 
 	info!("Parsing knock event");
-	let parsed_knock_pdu = PduEvent::from_id_val(&event_id, knock_event.clone())
-		.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
+	let parsed_knock_pdu =
+		PduEvent::from_id_val(&event_id, knock_event.clone(), Some(room_id))
+			.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
 
 	info!("Going through send_knock response knock state events");
 	let state = send_knock_response
@@ -737,10 +741,12 @@ async fn make_knock_request(
 		trace!("make_knock response: {make_knock_response:?}");
 		make_knock_counter = make_knock_counter.saturating_add(1);
 		if let Ok(r) = &make_knock_response {
+			let room_version_id = &r.room_version;
 			if let Err(e) = validate_remote_member_event_stub(
 				&MembershipState::Knock,
 				sender_user,
 				room_id,
+				room_version_id,
 				&to_canonical_object(&r.event)?,
 			) {
 				warn!("make_knock response from {remote_server} failed validation: {e}");

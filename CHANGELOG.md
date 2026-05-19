@@ -1,3 +1,73 @@
+# Continuwuity 0.5.9 (2026-05-07)
+
+## Security
+
+- Fixed a bug that caused the server to drop events during processing if several events for the same room were sent in a
+  singular transaction. Contributed by @nex. (#1711)
+- Fixed a bug that caused the server to panic while handling transactions with malformed events, resulting in a
+  deadlock that prevented the remote server from federating with us until the server was restarted. Contributed by @nex.
+- Fixed a bug that resulted in the `m.federate` field of `m.room.create` being ignored in v12 rooms, allowing remote
+  servers to participate in local-only rooms. Contributed by @nex, reported by [@mat:emzee.ee](matrix:u/mat:emzee.ee?action=chat).
+
+# Continuwuity 0.5.8 (2026-04-24)
+
+## Features
+
+- LDAP can now optionally be connected to using StartTLS, and you may unsafely skip verification. Contributed by @getz (#1389)
+- Users will now be prevented from removing their email if the server is configured to require an email when registering an account.
+
+## Bugfixes
+
+- Fixed a situation where multiple email addresses could be associated with one user when that user changes their email address.
+
+## Improved Documentation
+
+- Updated config docs to state we support room version 12, and set it as default. Contributed by @ezera. (#1622)
+- Improve instructions for generic deployments, removing unnecessary parts and documenting the new initial registration token flow. Contributed by @stratself (#1677)
+
+
+# Continuwuity v0.5.7 (2026-04-17)
+
+## Features
+
+- Re-added support for reading registration tokens from a file. Contributed by @ginger and @benbot. (#1371)
+- Add new config option to allow or disallow search engine indexing through a `<meta ../>` tag. Defaults to blocking indexing (`content="noindex"`). Contributed by @s1lv3r and @ginger. (#1527)
+- Add new config option for [MSC4439](https://github.com/matrix-org/matrix-spec-proposals/pull/4439)
+  PGP key URIs. Contributed by LogN. (#1609)
+- Added `!admin users reset-push-rules` command to reset the notification settings of users. Contributed by @nex. (#1613)
+- Notification pushers are now automatically removed when their associated device is. Admin commands now exist for manual cleanup too. Contributed by @nex. (#1614)
+- Implemented option to deprioritize servers for room join requests. Contributed by @ezera. (#1624)
+- Added admin commands to get build information and features. Contributed by @Jade (#1629)
+- Added support for associating email addresses with accounts, requiring email addresses for registration, and resetting passwords via email. Contributed by @ginger
+- Added support for requiring users to accept terms and conditions when registering.
+- Added support for using an admin command to issue self-service password reset links.
+
+## Bugfixes
+
+- Fixed corrupted appservice registrations causing the server to enter a crash loop. Contributed by @nex. (#1265)
+- Prevent removing the admin room alias (`#admins`) to avoid accidentally breaking admin room functionality. Contributed by @0xnim (#1448)
+- Stripped `join_authorised_via_users_server` from json if user is already in room (@partha:cxy.run) (#1542)
+- Fixed internal server errors for fetching thumbnails. Contributed by @PerformativeJade (#1572)
+- Fixed error 500 when joining non-existent rooms. Contributed by @ezera. (#1579)
+- Refactored nix package. Breaking, since `all-features` package no longer exists. Continuwuity is now built with jemalloc and liburing by default. Contributed by @Henry-Hiles (QuadRadical). (#1596)
+- Fixed resolving IP of servers that only use SRV delegation. Contributed by @tulir. (#1615)
+- Fixed "Sender must be a local user" error for make_join, make_knock, and make_leave federation routes. Contributed by @nex. (#1623)
+- Fixed restricted joins not being signed when we are being used as an authorising server. Contributed by @nex, reported by [vel](matrix:u/vel:nhjkl.com?action=chat). (#1630)
+- Fixed room alias deletion so removing one local alias no longer removes other aliases from room alias listings.
+- Stopped left rooms from being unconditionally sent on initial sync, hopefully fixing spurious appearances of left rooms in some clients (and making sync faster as a bonus). Contributed by @ginger
+- Correct the response field name for MatrixRTC transports. Contributed by @spaetz
+
+## Improved Documentation
+
+- Added Testing and Troubleshooting instructions for Livekit documentation. Contributed by @stratself. (#1429)
+- Refactored docker docs to include new initial token workflow, and add Caddyfile example. Contributed by @stratself. (#1594)
+- Add DNS tuning guide for Continuwuity. Users are recommended to set up a local caching resolver following the guide's advice. Contributed by @stratself (#1601)
+
+## Misc
+
+- Fixed compiler warning in cf_opts.rs when building in release. Contributed by @ezera. (#1620)
+
+
 # Continuwuity 0.5.6 (2026-03-03)
 
 ## Security
