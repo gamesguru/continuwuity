@@ -1230,6 +1230,7 @@ pub(super) async fn rescue_room(
 	nuclear: bool,
 	all: bool,
 	timeline_limit: Option<usize>,
+	reorder: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -1265,7 +1266,7 @@ pub(super) async fn rescue_room(
 
 		let mut total_rescued = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(self.rescue_room(room_id, force, nuclear, false, None))
+			if Box::pin(self.rescue_room(room_id, force, nuclear, false, None, false))
 				.await
 				.is_ok()
 			{
@@ -1495,11 +1496,25 @@ pub(super) async fn rescue_room(
 	} else {
 		format!("Rescued {count} PDUs in room {room_id}.")
 	};
-	self.write_str(&msg).await
+	self.write_str(&msg).await?;
+
+	if reorder {
+		self.write_str(&format!("\nRunning reorder-timeline for {room_id}..."))
+			.await?;
+		let n = Box::pin(self.services.rooms.timeline.reorder_timeline(&room_id)).await?;
+		self.write_str(&format!("Reordered {n} events. Clients should re-sync.")).await?;
+	}
+
+	Ok(())
 }
 
 #[admin_command]
-pub(super) async fn reorder_timeline(&self, room_id: OwnedRoomId, all: bool) -> Result {
+pub(super) async fn reorder_timeline(
+	&self,
+	room_id: OwnedRoomId,
+	all: bool,
+	tail: Option<usize>,
+) -> Result {
 	self.bail_restricted()?;
 
 	if all {
@@ -1525,6 +1540,25 @@ pub(super) async fn reorder_timeline(&self, room_id: OwnedRoomId, all: bool) -> 
 
 		return self
 			.write_str(&format!("Reordered timeline for {count} rooms. Clients should re-sync."))
+			.await;
+	}
+
+	if let Some(n) = tail {
+		self.write_str(&format!(
+			"Reordering last {n} events in {room_id} by origin_server_ts (tail fast-path)..."
+		))
+		.await?;
+		let count = Box::pin(
+			self.services
+				.rooms
+				.timeline
+				.reorder_timeline_tail(&room_id, n),
+		)
+		.await?;
+		return self
+			.write_str(&format!(
+				"Reordered {count} events in room {room_id}. Clients should re-sync this room."
+			))
 			.await;
 	}
 
@@ -3156,7 +3190,7 @@ pub(super) async fn heal_room(
 	if !dry_run {
 		self.write_str(&format!("Phase 1: Rescuing local outliers in {room_id}...\n"))
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false)).await?;
 	} else {
 		self.write_str(&format!("Phase 1: [dry-run] Would rescue local outliers in {room_id}\n"))
 			.await?;
@@ -3276,7 +3310,7 @@ pub(super) async fn heal_room(
 	if fetched > 0 {
 		self.write_str(&format!("Phase 3: Fetched {fetched} missing events, rescuing..."))
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false)).await?;
 	} else {
 		self.write_str("Phase 3: No missing events found (DAG is complete locally).")
 			.await?;
@@ -3285,7 +3319,7 @@ pub(super) async fn heal_room(
 	// Phase 4: Reorder timeline by origin_server_ts so auth checks work correctly
 	self.write_str("Phase 4: Reordering timeline by timestamp...")
 		.await?;
-	Box::pin(self.reorder_timeline(room_id.clone(), false)).await?;
+	Box::pin(self.reorder_timeline(room_id.clone(), false, None)).await?;
 	self.write_str("Phase 4: Reordered timeline.").await?;
 
 	// Phase 5: Resync state from the remote server (opt-in)
@@ -3309,7 +3343,7 @@ pub(super) async fn heal_room(
 		// Phase 5b: Rescue any outliers created by Phase 5's state resync
 		self.write_str("Phase 5b: Rescuing state outliers from resync...")
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false)).await?;
 	} else {
 		self.write_str("Phase 5: Skipped state resync (pass --resync-state to enable).")
 			.await?;

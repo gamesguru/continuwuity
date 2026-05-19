@@ -162,6 +162,11 @@ pub enum YoloCommand {
 		/// If set, includes the last N timeline PDUs for re-processing.
 		#[arg(long)]
 		timeline_limit: Option<usize>,
+
+		/// If set, automatically runs reorder-timeline after rescue.
+		/// Fixes anachronisms from rescued outliers being appended at the end.
+		#[arg(long)]
+		reorder: bool,
 	},
 
 	/// Reorder the timeline for a room by origin_server_ts.
@@ -175,6 +180,12 @@ pub enum YoloCommand {
 		/// If set, reorders timeline in ALL rooms.
 		#[arg(long)]
 		all: bool,
+
+		/// Only reorder the last N events (fast path). Useful when only recent
+		/// events are out of order (e.g. after force-set-state ingestion).
+		/// When omitted, the full timeline is reordered.
+		#[arg(long)]
+		tail: Option<usize>,
 	},
 
 	/// Promote all outlier events in a room to backfill timeline PDUs.
