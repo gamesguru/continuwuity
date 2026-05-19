@@ -51,7 +51,7 @@ where
 			self.services.server.config.federation_fallback_room_servers,
 		)
 		.await;
-	debug!(
+	info!(
 		origin = %origin,
 		n_total = routing_servers.len(),
 		"Built federation fallback server list for outlier fetching"
@@ -61,13 +61,12 @@ where
 	trace!("Fetching {} outlier pdus", events.clone().count());
 
 	for id in events {
-		if self.services.pdu_metadata.is_event_soft_failed(id).await {
-			info!(target: "auth_chain", "Skipping known soft-failed outlier: {id}");
-			continue;
-		}
-
 		if let Ok(local_pdu) = self.services.timeline.get_pdu(id).await {
-			trace!("Found {id} in main timeline or outlier tree");
+			if self.services.pdu_metadata.is_event_soft_failed(id).await {
+				info!(target: "auth_chain", "Found known soft-failed outlier locally: {id}");
+			} else {
+				trace!("Found {id} in main timeline or outlier tree");
+			}
 			events_with_auth_events.push((id.to_owned(), Some(local_pdu), vec![]));
 			continue;
 		}
@@ -219,8 +218,7 @@ where
 									.is_event_soft_failed(&auth_event)
 									.await
 								{
-									info!(target: "auth_chain", "Skipping known soft-failed auth event: {auth_event}");
-									continue;
+									info!(target: "auth_chain", "Found known soft-failed auth event locally: {auth_event}");
 								}
 
 								if !graph.contains_key(&auth_event)
