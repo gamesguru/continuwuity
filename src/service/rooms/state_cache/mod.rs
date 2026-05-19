@@ -231,6 +231,22 @@ pub fn server_rooms<'a>(
 		.ready_filter(|room_id| <&RoomId>::try_from(room_id.as_str()).is_ok())
 }
 
+/// Expose raw keys for the clean_corrupt_rooms command
+#[implement(Service)]
+pub fn server_rooms_raw_keys_prefix<'a>(
+	&'a self,
+	prefix: &'a (&'a ServerName, conduwuit_database::Interfix),
+) -> impl Stream<Item = Result<database::keyval::Key<'a>>> + Send + 'a {
+	self.db.serverroomids.keys_prefix_raw(prefix)
+}
+
+/// Remove a malformed room from the server_rooms index using raw bytes.
+#[implement(Service)]
+pub fn server_rooms_remove_raw(&self, key: &[u8]) -> Result<()> {
+	self.db.serverroomids.remove_raw(key);
+	Ok(())
+}
+
 /// Returns true if a server can see a user by having any active membership
 /// (joined, invited, or knocked) in at least one shared room.
 #[implement(Service)]

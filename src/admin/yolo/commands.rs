@@ -4837,41 +4837,43 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 	let mut corrupt = Vec::new();
 	let mut total = 0_usize;
 
-	let mut rooms = self.services.rooms.state_cache.server_rooms(ours);
+	let prefix = (ours, conduwuit_database::Interfix);
+	let mut raw_stream = self.services.rooms.state_cache.server_rooms_raw_keys_prefix(&prefix);
 
-	while let Some(room_id) = rooms.next().await {
+	while let Some(Ok(key_bytes)) = raw_stream.next().await {
 		total = total.saturating_add(1);
-		let s = room_id.as_str();
+		// Decode the key: (ServerName, Interfix, RoomId)
+		// The RoomId is the remainder of the bytes after the server name + 0xFF byte
+		let split_idx = key_bytes.iter().position(|&b| b == 0xFF).unwrap_or(0);
+		let room_id_bytes = if split_idx < key_bytes.len() { &key_bytes[split_idx + 1..] } else { &key_bytes };
+		let s = std::str::from_utf8(room_id_bytes).unwrap_or("");
 
-		let valid = s.starts_with('!')
-			&& s.len() <= 255
-			&& s.bytes().all(|b| b.is_ascii_graphic())
-			&& <&RoomId>::try_from(s).is_ok();
-
-		if !valid {
-			corrupt.push(room_id.to_owned());
+		let valid = s.starts_with('!') && s.len() <= 255 && <&RoomId>::try_from(s).is_ok();
+		if !valid && s.starts_with('!') {
+			corrupt.push((key_bytes.to_vec(), s.to_string()));
 		}
 	}
-
-	drop(rooms);
 
 	self.write_str(&format!("Scanned {total} rooms, found {} corrupt entries\n", corrupt.len()))
 		.await?;
 
-	for room_id in &corrupt {
-		self.write_str(&format!("  corrupt: {} ({} bytes)\n", room_id, room_id.as_bytes().len()))
+	for (key, room_id) in &corrupt {
+		self.write_str(&format!("  corrupt: {} ({} bytes)\n", room_id, room_id.len()))
 			.await?;
+		if execute {
+			let _ = self.services.rooms.state_cache.server_rooms_remove_raw(key);
+		}
 	}
 
 	if !execute {
 		self.write_str(
-			"\nDry run — corrupt entries are filtered by server_rooms() automatically. Use \
-			 purge-room to remove individual entries.\n",
+			"\nDry run — corrupt entries are found using raw bytes. Use \
+			 --execute to remove individual entries.\n",
 		)
 		.await
 	} else {
 		self.write_str(
-			"\nNote: use purge-room on individual corrupt room IDs to remove them from the DB.\n",
+			"\nNote: Removed malformed room IDs from the serverroomids tree.\n",
 		)
 		.await
 	}
