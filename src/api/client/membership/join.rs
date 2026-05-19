@@ -700,7 +700,11 @@ async fn join_room_by_id_helper_remote(
 
 	let create_event = state_fetch(StateEventType::RoomCreate, "".into())
 		.await
-		.ok_or_else(|| err!(BadServerResponse(warn!("create event is missing from send_join auth_chain or state"))))?;
+		.ok_or_else(|| {
+			err!(BadServerResponse(warn!(
+				"create event is missing from send_join auth_chain or state"
+			)))
+		})?;
 
 	let auth_check = state_res::event_auth::auth_check(
 		&state_res::RoomVersion::new(&room_version_id)?,

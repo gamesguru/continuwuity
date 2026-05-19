@@ -2524,15 +2524,10 @@ mod tests {
 		let rejected_id = event_id("PA");
 		let rejected = move |id: OwnedEventId| ready(id == rejected_id);
 
-		let resolved = super::resolve(
-			&RoomVersionId::V6,
-			&state_sets,
-			&auth_chain,
-			&fetcher,
-			&rejected,
-		)
-		.await
-		.unwrap();
+		let resolved =
+			super::resolve(&RoomVersionId::V6, &state_sets, &auth_chain, &fetcher, &rejected)
+				.await
+				.unwrap();
 
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
 		// PA was rejected, so it must not appear in resolved state
@@ -2787,15 +2782,10 @@ mod tests {
 		let rejected = |_: OwnedEventId| ready(false);
 
 		// Dispatch normally through V12 (no test-hack needed)
-		let resolved = super::resolve(
-			&RoomVersionId::V12,
-			&state_sets,
-			&auth_chain,
-			&fetcher,
-			&rejected,
-		)
-		.await
-		.expect("v2.1 resolution should succeed");
+		let resolved =
+			super::resolve(&RoomVersionId::V12, &state_sets, &auth_chain, &fetcher, &rejected)
+				.await
+				.expect("v2.1 resolution should succeed");
 
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
 		assert_eq!(
@@ -2953,15 +2943,10 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_: OwnedEventId| ready(false);
 
-		let resolved = super::resolve(
-			&RoomVersionId::V12,
-			&state_sets,
-			&auth_chain,
-			&fetcher,
-			&rejected,
-		)
-		.await
-		.expect("v2.1 resolution should succeed");
+		let resolved =
+			super::resolve(&RoomVersionId::V12, &state_sets, &auth_chain, &fetcher, &rejected)
+				.await
+				.expect("v2.1 resolution should succeed");
 
 		let jr_key = (StateEventType::RoomJoinRules, "".into());
 		assert_eq!(
@@ -3173,15 +3158,10 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_: OwnedEventId| ready(false);
 
-		let resolved = super::resolve(
-			&RoomVersionId::V12,
-			&state_sets,
-			&auth_chain,
-			&fetcher,
-			&rejected,
-		)
-		.await
-		.expect("v2.1 resolution should succeed");
+		let resolved =
+			super::resolve(&RoomVersionId::V12, &state_sets, &auth_chain, &fetcher, &rejected)
+				.await
+				.expect("v2.1 resolution should succeed");
 
 		// PL3 must win over PL1 — resolution must pick the latest power levels
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
@@ -3354,15 +3334,10 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_: OwnedEventId| ready(false);
 
-		let resolved = super::resolve(
-			&RoomVersionId::V12,
-			&state_sets,
-			&auth_chain,
-			&fetcher,
-			&rejected,
-		)
-		.await
-		.expect("v2.1 resolution should succeed");
+		let resolved =
+			super::resolve(&RoomVersionId::V12, &state_sets, &auth_chain, &fetcher, &rejected)
+				.await
+				.expect("v2.1 resolution should succeed");
 
 		// PL2 (with alice:100 in content.users) must survive resolution.
 		// Before the fix, check_power_levels rejected PL2 because the
@@ -3443,14 +3418,9 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_: OwnedEventId| ready(false);
 
-		let resolved = super::resolve(
-			&RoomVersionId::V12,
-			&state_sets,
-			&auth_chain,
-			&fetcher,
-			&rejected,
-		)
-		.await;
+		let resolved =
+			super::resolve(&RoomVersionId::V12, &state_sets, &auth_chain, &fetcher, &rejected)
+				.await;
 
 		assert!(resolved.is_ok());
 	}
@@ -3614,15 +3584,10 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_: OwnedEventId| ready(false);
 
-		let resolved = super::resolve(
-			&RoomVersionId::V12,
-			&state_sets,
-			&auth_chain,
-			&fetcher,
-			&rejected,
-		)
-		.await
-		.expect("V12 power levels update after joins must succeed");
+		let resolved =
+			super::resolve(&RoomVersionId::V12, &state_sets, &auth_chain, &fetcher, &rejected)
+				.await
+				.expect("V12 power levels update after joins must succeed");
 
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
 		assert_eq!(
@@ -3725,15 +3690,10 @@ mod tests {
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let rejected = |_: OwnedEventId| ready(false);
 
-		let resolved = super::resolve(
-			&RoomVersionId::V12,
-			&state_sets,
-			&auth_chain,
-			&fetcher,
-			&rejected,
-		)
-		.await
-		.expect("V12 iterative_auth_check must find create event via room ID derivation");
+		let resolved =
+			super::resolve(&RoomVersionId::V12, &state_sets, &auth_chain, &fetcher, &rejected)
+				.await
+				.expect("V12 iterative_auth_check must find create event via room ID derivation");
 
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
 		assert!(resolved.contains_key(&pl_key), "Power levels must be in resolved state");
