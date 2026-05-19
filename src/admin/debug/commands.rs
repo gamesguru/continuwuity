@@ -503,7 +503,13 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 
 	// Auth check against current room state
 	let auth_msg = if let Some(room_id) = pdu.room_id_or_hash() {
-		if let Ok(room_version_id) = self.services.rooms.state.get_room_version(&room_id).await {
+		if let Ok(room_version_id) = self
+			.services
+			.rooms
+			.state
+			.get_room_version_or_fallback(&room_id)
+			.await
+		{
 			let room_version =
 				RoomVersion::new(&room_version_id).expect("room version is supported");
 
@@ -697,7 +703,7 @@ pub(crate) async fn force_set_state(
 		.services
 		.rooms
 		.state
-		.get_room_version(&room_id)
+		.get_room_version_or_fallback(&room_id)
 		.await
 		.unwrap_or(RoomVersionId::V11);
 

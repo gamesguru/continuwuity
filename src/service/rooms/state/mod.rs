@@ -593,16 +593,16 @@ impl Service {
 			.room_state_get_content(room_id, &StateEventType::RoomCreate, "")
 			.await
 			.map(|content: RoomCreateEventContent| content.room_version)
-			.or_else(|e| {
-				// Fallback to V11 if the create event is missing from the database or state map
-				// This allows admin commands to fetch the missing create event to repair the
-				// room.
-				conduwuit::warn!(
-					"Room {room_id} is missing its create event! Falling back to room version \
-					 11 to prevent lockout. Original error: {e:?}"
-				);
-				Ok(RoomVersionId::V11)
-			})
+	}
+
+	pub async fn get_room_version_or_fallback(&self, room_id: &RoomId) -> Result<RoomVersionId> {
+		self.get_room_version(room_id).await.or_else(|e| {
+			conduwuit::warn!(
+				"Room {room_id} is missing its create event! Falling back to room version 11 to \
+				 prevent lockout. Original error: {e:?}"
+			);
+			Ok(RoomVersionId::V11)
+		})
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {

@@ -639,7 +639,12 @@ pub(super) async fn audit_membership(
 			.await
 		{
 			| Ok(response) => {
-				let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+				let room_version = self
+					.services
+					.rooms
+					.state
+					.get_room_version_or_fallback(&room_id)
+					.await?;
 
 				let mut remote_members: HashMap<String, String> = HashMap::new();
 				let mut sig_failed: usize = 0;
@@ -1743,7 +1748,7 @@ pub(super) async fn get_room_dag(
 		.services
 		.rooms
 		.state
-		.get_room_version(&room_id)
+		.get_room_version_or_fallback(&room_id)
 		.await
 		.map_or_else(|_| "unknown".to_owned(), |v| v.to_string());
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
@@ -1925,7 +1930,12 @@ pub(super) async fn get_remote_dag(
 		return Err!("Cannot fetch from ourselves. Use get-room-dag instead.");
 	}
 
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version_or_fallback(&room_id)
+		.await?;
 
 	// Start from explicit event ID or latest local event
 	let start_event_id = match from {
@@ -2212,7 +2222,12 @@ pub(super) async fn fetch_pdu(
 		);
 	}
 
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version_or_fallback(&room_id)
+		.await?;
 
 	let response = self
 		.services
@@ -2545,7 +2560,12 @@ pub(super) async fn compare_room_state(
 		return Err!(Request(InvalidParam("Provide at least one server to compare against.")));
 	}
 	let server = &servers[0];
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version_or_fallback(&room_id)
+		.await?;
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
 		| None => self
@@ -3257,7 +3277,12 @@ pub(super) async fn heal_room(
 	// Phase 2: Walk the DAG to find genuinely missing events
 	self.write_str("Phase 2: Scanning DAG for gaps...\n")
 		.await?;
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version_or_fallback(&room_id)
+		.await?;
 	let latest_event_id = self
 		.services
 		.rooms
@@ -3467,7 +3492,12 @@ pub(super) async fn import_pdus(
 		.await
 		.map_err(|e| err!("Failed to open file {path}: {e:?}"))?;
 	let mut lines = BufReader::new(file).lines();
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version_or_fallback(&room_id)
+		.await?;
 	let origin = room_id
 		.server_name()
 		.filter(|s| !self.services.globals.server_is_ours(s))
@@ -3763,7 +3793,12 @@ pub(super) async fn dag_merge_base(
 		}
 	}
 
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version_or_fallback(&room_id)
+		.await?;
 
 	/// Look up a PDU from timeline first, then outlier table.
 	macro_rules! get_pdu_any {
@@ -4591,7 +4626,13 @@ pub(super) async fn heal_all_rooms(
 	let mut total_rejected = 0_usize;
 
 	for (i, room_id) in rooms.iter().take(total).enumerate() {
-		let Ok(room_version) = self.services.rooms.state.get_room_version(room_id).await else {
+		let Ok(room_version) = self
+			.services
+			.rooms
+			.state
+			.get_room_version_or_fallback(room_id)
+			.await
+		else {
 			skipped = skipped.saturating_add(1);
 			continue;
 		};
@@ -5116,7 +5157,12 @@ pub(super) async fn fetch_missing_events(
 
 	use futures::{StreamExt, stream::FuturesUnordered};
 
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version_or_fallback(&room_id)
+		.await?;
 
 	// Build EMA-sorted server list
 	let servers = self
