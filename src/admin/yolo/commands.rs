@@ -1081,7 +1081,7 @@ pub(super) async fn view_extremities(
 	all: bool,
 	verbose: bool,
 ) -> Result {
-	if all {
+	if all || room.is_none() {
 		let mut fractured = Vec::new();
 		let rooms: Vec<_> = self
 			.services

@@ -103,7 +103,6 @@ pub enum YoloCommand {
 	/// or scan all rooms for DAG fractures with --all.
 	ViewExtremities {
 		/// The room ID or alias.
-		#[arg(required_unless_present = "all")]
 		room: Option<OwnedRoomOrAliasId>,
 
 		/// Show extremities for all rooms.
