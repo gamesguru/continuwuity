@@ -22,6 +22,7 @@ use crate::rooms::{
 };
 
 #[implement(super::Service)]
+#[allow(clippy::too_many_arguments)]
 pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	&self,
 	incoming_pdu: PduEvent,
@@ -30,6 +31,7 @@ pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	origin: &ServerName,
 	room_id: &RoomId,
 	skip_soft_fail: bool,
+	is_forward_extremity: bool,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -442,6 +444,7 @@ where
 		&prev_events,
 		soft_fail,
 		is_referenced,
+		is_forward_extremity,
 	)
 	.await;
 

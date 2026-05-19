@@ -19,6 +19,7 @@ pub(crate) async fn calculate_forward_extremities<F, Fut>(
 	prev_events: &[&EventId],
 	soft_fail: bool,
 	is_referenced: F,
+	is_forward_extremity: bool,
 ) -> Vec<OwnedEventId>
 where
 	F: Fn(&EventId) -> Fut,
@@ -46,8 +47,13 @@ where
 		new_extremities.push(event_id);
 	}
 
-	// Add the incoming event as a new forward extremity
-	new_extremities.push(incoming_event_id.to_owned());
+	// Add the incoming event as a new forward extremity if it's a DAG tip.
+	// If it's an ancestor being upgraded, it should not become a tip, unless
+	// all previous tips were collapsed and we have no other choice to prevent
+	// an empty extremity list.
+	if is_forward_extremity || new_extremities.is_empty() {
+		new_extremities.push(incoming_event_id.to_owned());
+	}
 
 	debug!(
 		"Retained {} extremities checked against {} prev_events",
@@ -85,6 +91,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 
@@ -106,6 +113,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 
@@ -145,6 +153,7 @@ mod tests {
 			&[b.as_ref(), c.as_ref()],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 
@@ -190,6 +199,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 		assert_eq!(after_j1, vec![j1_id.to_owned()]);
@@ -213,6 +223,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			a_is_referenced,
+			true,
 		)
 		.await;
 		assert_eq!(after_j3, vec![j1_id.to_owned(), j2_id.to_owned(), j3_id.to_owned()]);
@@ -225,6 +236,7 @@ mod tests {
 			&[j1_id, j2_id, j3_id],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 		assert_eq!(result, vec![m_id.to_owned()]);
@@ -247,6 +259,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 		assert_eq!(after_rename, vec![rename_id.to_owned()]);
@@ -259,6 +272,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			a_referenced,
+			true,
 		)
 		.await;
 		assert_eq!(after_avatar, vec![rename_id.to_owned(), avatar_id.to_owned()]);
@@ -270,6 +284,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			a_referenced,
+			true,
 		)
 		.await;
 		assert_eq!(after_msg, vec![
@@ -286,6 +301,7 @@ mod tests {
 			&[rename_id, avatar_id, msg_id],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 		assert_eq!(result, vec![merge_id.to_owned()]);
@@ -308,6 +324,7 @@ mod tests {
 			&[b.as_ref(), c.as_ref()],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 
@@ -333,6 +350,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			b_is_referenced,
+			true,
 		)
 		.await;
 
@@ -354,6 +372,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 
@@ -364,6 +383,7 @@ mod tests {
 			&[a.as_ref()],
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 
@@ -404,6 +424,7 @@ mod tests {
 			&prev_events,
 			false,
 			never_referenced,
+			true,
 		)
 		.await;
 

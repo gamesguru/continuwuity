@@ -408,6 +408,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		origin,
 		room_id,
 		false,
+		true,
 	))
 	.await
 }

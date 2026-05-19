@@ -948,6 +948,7 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Re
 				&origin,
 				&room_id,
 				true, // skip_soft_fail: always lenient for admin rescue
+				true, // is_forward_extremity
 			),
 	)
 	.await?;
@@ -1533,6 +1534,7 @@ pub(super) async fn rescue_room(
 					&room_id,
 					// nuclear: bypass auth checks via the production path
 					nuclear,
+					true,
 				),
 		)
 		.await
@@ -2327,7 +2329,15 @@ pub(super) async fn fetch_pdu(
 		self.services
 			.rooms
 			.event_handler
-			.upgrade_outlier_to_timeline_pdu(pdu, value, &create_event, &server, &room_id, false),
+			.upgrade_outlier_to_timeline_pdu(
+				pdu,
+				value,
+				&create_event,
+				&server,
+				&room_id,
+				false,
+				true,
+			),
 	)
 	.await?;
 
