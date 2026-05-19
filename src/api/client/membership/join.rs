@@ -698,14 +698,16 @@ async fn join_room_by_id_helper_remote(
 		}
 	};
 
+	let create_event = state_fetch(StateEventType::RoomCreate, "".into())
+		.await
+		.ok_or_else(|| err!(BadServerResponse(warn!("create event is missing from send_join auth_chain or state"))))?;
+
 	let auth_check = state_res::event_auth::auth_check(
 		&state_res::RoomVersion::new(&room_version_id)?,
 		&parsed_join_pdu,
 		None, // TODO: third party invite
 		|k, s| state_fetch(k.clone(), s.into()),
-		&state_fetch(StateEventType::RoomCreate, "".into())
-			.await
-			.expect("create event is missing from send_join auth"),
+		&create_event,
 	)
 	.await
 	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;

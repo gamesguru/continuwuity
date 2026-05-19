@@ -1650,7 +1650,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -1770,7 +1769,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -1870,7 +1868,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -1954,7 +1951,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -2039,7 +2035,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -2123,7 +2118,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -2284,7 +2278,6 @@ mod tests {
 			state_sets.iter(),
 			&auth_chain_sets,
 			&fetch,
-			&exists,
 			&rejected,
 		)
 		.await;
@@ -2536,7 +2529,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -2800,7 +2792,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -2967,7 +2958,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -3188,7 +3178,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -3370,7 +3359,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -3460,7 +3448,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await;
@@ -3632,7 +3619,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -3744,7 +3730,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&exists,
 			&rejected,
 		)
 		.await
