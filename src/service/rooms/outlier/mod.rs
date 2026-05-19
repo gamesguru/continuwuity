@@ -130,8 +130,9 @@ pub fn add_pdu_outlier(
 	// Stamp receive order (write-once, never mutated by rescue/reorder)
 	self.stamp_receive_count(event_id);
 
-	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
-
+	// Resolve room_id from the JSON, the hint, or create-event heuristic.
+	// Do this BEFORE storing so we can inject it into the JSON if absent —
+	// this ensures PduEvent.room_id() is always populated when read back.
 	let room_id_from_pdu = pdu
 		.get("room_id")
 		.and_then(CanonicalJsonValue::as_str)
@@ -145,6 +146,26 @@ pub fn add_pdu_outlier(
 				.then(|| event_id.as_str().replace('$', "!"))
 				.and_then(|r| OwnedRoomId::parse(r).ok())
 		});
+
+	// If room_id is resolved but not in the JSON, inject it before storing.
+	// gen_event_id_canonical_json may strip room_id from the content hash,
+	// leaving the stored object without it and causing room_id() → None.
+	if let Some(ref rid) = room_id_from_pdu {
+		if !pdu.contains_key("room_id") {
+			let mut pdu_with_room = pdu.clone();
+			pdu_with_room.insert(
+				"room_id".to_owned(),
+				CanonicalJsonValue::String(rid.as_str().to_owned()),
+			);
+			self.db
+				.eventid_outlierpdu
+				.raw_put(event_id, Json(&pdu_with_room));
+		} else {
+			self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
+		}
+	} else {
+		self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
+	}
 
 	if let Some(room_id) = room_id_from_pdu {
 		let room_id: &RoomId = &room_id;
