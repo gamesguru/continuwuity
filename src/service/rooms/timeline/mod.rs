@@ -882,7 +882,7 @@ impl Service {
 		let true_extremities = calculate_true_extremities(&graph, &sorted);
 
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
-		let current_set: HashSet<_> = current_extremities.map(|e| e.to_owned()).collect().await;
+		let current_set: HashSet<_> = current_extremities.map(ToOwned::to_owned).collect().await;
 		let new_set: HashSet<_> = true_extremities.iter().map(|e| (*e).to_owned()).collect();
 
 		if current_set == new_set {
@@ -1044,10 +1044,18 @@ impl Service {
 	}
 }
 
-pub fn calculate_true_extremities<'a>(
-	graph: &std::collections::HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>>,
+pub fn calculate_true_extremities<'a, S1, S2>(
+	graph: &std::collections::HashMap<
+		OwnedEventId,
+		std::collections::HashSet<OwnedEventId, S2>,
+		S1,
+	>,
 	sorted: &'a [OwnedEventId],
-) -> Vec<&'a EventId> {
+) -> Vec<&'a EventId>
+where
+	S1: std::hash::BuildHasher,
+	S2: std::hash::BuildHasher,
+{
 	let mut has_children: std::collections::HashSet<OwnedEventId> =
 		std::collections::HashSet::new();
 	for parents in graph.values() {
@@ -1088,7 +1096,8 @@ mod tests {
 	fn test_calculate_true_extremities_single_tip() {
 		let a = event_id!("$a").to_owned();
 		let b = event_id!("$b").to_owned();
-		let mut graph = HashMap::new();
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 
 		let sorted = vec![a.clone(), b.clone()];
@@ -1103,7 +1112,8 @@ mod tests {
 		let b = event_id!("$b").to_owned();
 		let c = event_id!("$c").to_owned();
 
-		let mut graph = HashMap::new();
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
 
@@ -1115,7 +1125,8 @@ mod tests {
 
 	#[test]
 	fn test_calculate_true_extremities_cap() {
-		let mut graph = HashMap::new();
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
 		let mut sorted = Vec::new();
 		let root = event_id!("$root").to_owned();
 		sorted.push(root.clone());

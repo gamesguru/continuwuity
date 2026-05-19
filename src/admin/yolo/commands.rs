@@ -601,7 +601,8 @@ pub(super) async fn audit_membership(
 					.state_get(state_hash, &StateEventType::RoomMember, user_id.as_str())
 					.await
 				{
-					self.services
+					let _ = self
+						.services
 						.rooms
 						.state_cache
 						.update_membership(&room_id, user_id, &pdu, false)
@@ -1719,7 +1720,7 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 	if in_timeline {
 		if let Ok(pdu) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
 			if let Some(room_id) = pdu.get("room_id").and_then(|v| v.as_str()) {
-				if let Ok(rid) = <&ruma::RoomId>::try_from(room_id) {
+				if let Ok(rid) = <&RoomId>::try_from(room_id) {
 					room_id_opt = Some(rid.to_owned());
 				}
 			}
@@ -4371,7 +4372,7 @@ pub(super) async fn recalculate_extremities(
 	room: OwnedRoomOrAliasId,
 	tail: usize,
 ) -> Result {
-	let room_id = self.services.rooms.alias.resolve_local_alias(&room).await?;
+	let room_id = self.services.rooms.alias.resolve(&room).await?;
 
 	self.write_str(&format!(
 		"Recalculating forward extremities for room {room_id} using tail {tail}...\n"
@@ -4505,7 +4506,8 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			.rooms
 			.state
 			.get_forward_extremities(room_id)
-			.count();
+			.count()
+			.await;
 
 		if ext_count == 0 {
 			issues.push("ZERO_EXTREMITIES (stuck DAG)".to_owned());
@@ -4985,7 +4987,7 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 		self.write_str(&format!("  corrupt: {} ({} bytes)\n", room_id, room_id.len()))
 			.await?;
 		if execute {
-			self.services.rooms.state_cache.server_rooms_remove_raw(key);
+			let _ = self.services.rooms.state_cache.server_rooms_remove_raw(key);
 		}
 	}
 
