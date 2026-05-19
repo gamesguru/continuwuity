@@ -193,7 +193,7 @@ impl Service {
 	/// sequential `PduCount::Normal` values. This fixes anachronisms
 	/// caused by rescued outliers being appended at the end of the
 	/// timeline.
-	pub async fn reorder_timeline(&self, room_id: &RoomId) -> Result<usize> {
+	pub async fn reorder_timeline(&self, room_id: &RoomId, tail: Option<usize>) -> Result<usize> {
 		use std::collections::{HashMap, HashSet};
 
 		use conduwuit_core::matrix::state_res;
@@ -206,12 +206,48 @@ impl Service {
 		// would buffer 164K+ writes (82K deletes + 82K inserts) and trigger a
 		// catastrophic RocksDB compaction on flush that locks the server.
 
-		// Collect all PDUs from the timeline
+		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)
 		info!("reorder_timeline: reading all PDUs from timeline...");
 		let mut entries: HashMap<OwnedEventId, (PduCount, PduEvent, CanonicalJsonObject)> =
 			HashMap::new();
 		let mut dropped = 0_usize;
-		{
+		let mut tail_min_count: Option<PduCount> = None;
+
+		if let Some(limit) = tail {
+			info!("reorder_timeline: reading last {limit} PDUs from timeline (tail mode)...");
+			// Collect in reverse and record the minimum count seen (oldest in window)
+			let mut min_count = PduCount::max();
+			let mut rev = Box::pin(self.pdus_rev(room_id, None));
+			let mut collected = 0_usize;
+			while let Some((count, pdu)) = rev.try_next().await? {
+				if collected >= limit {
+					break;
+				}
+				let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
+					| Ok(j) => j,
+					| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
+						| Ok(j) => j,
+						| Err(_) => {
+							warn!(
+								event_id = %pdu.event_id,
+								"PDU in timeline has no JSON anywhere — cannot reorder, skipping"
+							);
+							dropped = dropped.saturating_add(1);
+							continue;
+						},
+					},
+				};
+				if count < min_count {
+					min_count = count;
+				}
+				entries.insert(pdu.event_id.clone(), (count, pdu, json));
+				collected = collected.saturating_add(1);
+			}
+			if min_count != PduCount::max() {
+				tail_min_count = Some(min_count);
+			}
+		} else {
+			info!("reorder_timeline: reading all PDUs from timeline...");
 			let pdus = self.pdus(room_id, None);
 			pin_mut!(pdus);
 			while let Some((count, pdu)) = pdus.try_next().await? {
@@ -353,9 +389,9 @@ impl Service {
 				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
 			}
 			if i.saturating_add(1).is_multiple_of(10000) {
-				// Drop and re-cork to flush, then yield to let compaction breathe
+				// Flush batch and yield so the executor can handle other work.
 				drop(cork.take());
-				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+				tokio::task::yield_now().await;
 				cork = Some(self.db.db.cork());
 			}
 		}
@@ -395,6 +431,32 @@ impl Service {
 		// ("Time-Travel State Bug").
 		if let Some(oldest_event_id) = sorted.first() {
 			let mut foundation_set = false;
+
+			// Tail mode: the foundation is simply the event immediately before the
+			// window boundary — look it up via pdus_rev starting just below min_count.
+			if let Some(min_count) = tail_min_count {
+				if let Some((_, pre_pdu)) = Box::pin(self.pdus_rev(room_id, Some(min_count)))
+					.try_next()
+					.await?
+				{
+					if let Ok(ssh) = self
+						.services
+						.state_accessor
+						.pdu_shortstatehash(&pre_pdu.event_id)
+						.await
+					{
+						self.services
+							.state
+							.set_room_state(room_id, ssh, &state_lock);
+						info!(
+							"reorder_timeline: tail: seeded walk from pre-window event {} (SSH \
+							 {ssh})",
+							pre_pdu.event_id
+						);
+						foundation_set = true;
+					}
+				}
+			}
 
 			if let Some((_, oldest_pdu, _)) = entries.get(oldest_event_id) {
 				let prev_events: Vec<_> = oldest_pdu.prev_events().collect();
@@ -538,22 +600,18 @@ impl Service {
 			.await
 			.ok();
 		let mut state_rebuilt = 0_usize;
-		let mut walk_ssh: Option<u64> = None;
+		let mut walk_ssh: Option<u64> = foundation_ssh;
 		for event_id in &sorted {
 			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
 
 			match self.services.state.append_to_state(pdu, room_id).await {
-				| Ok(new_ssh) => {
-					// Only write the room state pointer when the SSH actually
-					// changes (i.e. this was a state event). Non-state events
-					// return the same SSH they read, so writing is redundant.
+				| Ok(new_ssh) =>
 					if walk_ssh != Some(new_ssh) {
 						self.services
 							.state
 							.set_room_state(room_id, new_ssh, &state_lock);
 						walk_ssh = Some(new_ssh);
-					}
-				},
+					},
 				| Err(e) => {
 					warn!(
 						"reorder_timeline: append_to_state failed for {event_id}: {e}; skipping \
@@ -563,12 +621,11 @@ impl Service {
 			}
 
 			state_rebuilt = state_rebuilt.saturating_add(1);
-			if state_rebuilt.is_multiple_of(1000) {
+			if state_rebuilt.is_multiple_of(5000) {
 				info!(
 					"reorder_timeline: rebuilt shortstatehash for {state_rebuilt}/{count} \
 					 events..."
 				);
-				// Yield to runtime; prevent executor starvation allow DB streams rest
 				tokio::task::yield_now().await;
 			}
 		}
@@ -751,197 +808,6 @@ impl Service {
 			 snapshots rebuilt"
 		);
 
-		Ok(count)
-	}
-
-	/// Tail-only reorder: re-sort only the last `limit` events in the timeline.
-	///
-	/// Reads the last `limit` PDUs via `pdus_rev`, seeds the shortstatehash
-	/// foundation from the single event immediately before the window (no
-	/// complex origin-seeding needed), then runs the same topological
-	/// sort / delete / re-insert / SSH-walk as `reorder_timeline` but limited
-	/// to that slice.  O(limit) instead of O(total_timeline).
-	pub async fn reorder_timeline_tail(&self, room_id: &RoomId, limit: usize) -> Result<usize> {
-		use std::collections::{HashMap, HashSet};
-
-		use conduwuit_core::matrix::state_res;
-		use futures::future::ready;
-
-		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
-
-		if limit == 0 {
-			return Ok(0);
-		}
-
-		// ── 1. Collect the last `limit` PDUs (reverse order from tip) ────────────
-		info!("reorder_timeline_tail: reading last {limit} PDUs from timeline...");
-		let mut entries: HashMap<OwnedEventId, (PduCount, PduEvent, CanonicalJsonObject)> =
-			HashMap::new();
-		let mut min_count = PduCount::max();
-		{
-			let mut rev = Box::pin(self.pdus_rev(room_id, None));
-			let mut collected = 0_usize;
-			while let Some((count, pdu)) = rev.try_next().await? {
-				if collected >= limit {
-					break;
-				}
-				let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
-					| Ok(j) => j,
-					| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
-						| Ok(j) => j,
-						| Err(_) => {
-							warn!(
-								event_id = %pdu.event_id,
-								"reorder_timeline_tail: PDU has no JSON, skipping"
-							);
-							continue;
-						},
-					},
-				};
-				if count < min_count {
-					min_count = count;
-				}
-				entries.insert(pdu.event_id.clone(), (count, pdu, json));
-				collected = collected.saturating_add(1);
-			}
-		}
-
-		if entries.is_empty() {
-			return Ok(0);
-		}
-		info!("reorder_timeline_tail: collected {} events", entries.len());
-
-		// ── 2. Topological sort on just the window ───────────────────────────────
-		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
-			HashMap::with_capacity(entries.len());
-		for (event_id, (_, pdu, _)) in &entries {
-			let parents: HashSet<_> = pdu
-				.prev_events()
-				.filter(|p| entries.contains_key(*p))
-				.map(ToOwned::to_owned)
-				.collect();
-			graph.insert(event_id.clone(), parents);
-		}
-
-		let event_fetch = |event_id: OwnedEventId| {
-			let ts = entries
-				.get(&event_id)
-				.map_or_else(|| ruma::uint!(0), |(_, p, _)| p.origin_server_ts);
-			ready(Ok::<_, state_res::Error>((
-				ruma::int!(0),
-				ruma::MilliSecondsSinceUnixEpoch(ts),
-			)))
-		};
-
-		let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
-			.await
-			.map_err(|e| err!(Database("Failed to sort tail: {e:?}")))?;
-
-		// ── 3. Delete old timeline entries for these events ───────────────────────
-		info!("reorder_timeline_tail: removing {} old entries...", sorted.len());
-		let cork = self.db.db.cork();
-		for event_id in &sorted {
-			let (old_count, pdu, ..) = entries.get(event_id).expect("in sorted list");
-			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
-			if pdu.kind == TimelineEventType::RoomMessage {
-				if let Ok(content) = pdu.get_content::<ExtractBody>() {
-					if let Some(body) = &content.body {
-						self.services
-							.search
-							.deindex_pdu(shortroomid, &old_pdu_id, body);
-					}
-				}
-			}
-			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
-		}
-		drop(cork);
-
-		// ── 4. Re-insert in topological order with fresh PduCount values ─────────
-		let count = sorted.len();
-		let batch_start = self
-			.services
-			.globals
-			.next_count_batch(u64::try_from(count).unwrap_or(u64::MAX))?;
-		info!(
-			"reorder_timeline_tail: re-inserting {count} events (counter range \
-			 {batch_start}..{})...",
-			batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
-		);
-		let cork = self.db.db.cork_and_sync();
-		for (i, event_id) in sorted.iter().enumerate() {
-			let (_, pdu, json) = entries.get(event_id).expect("in sorted list");
-			let new_count = batch_start
-				.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
-				.saturating_add(1);
-			let pdu_count = PduCount::Normal(new_count);
-			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
-			self.db.append_pdu(&pdu_id, pdu, json, pdu_count).await;
-			if pdu.kind == TimelineEventType::RoomMessage {
-				if let Ok(content) = pdu.get_content::<ExtractBody>() {
-					if let Some(body) = &content.body {
-						self.services.search.index_pdu(shortroomid, &pdu_id, body);
-					}
-				}
-			}
-		}
-		drop(cork);
-
-		// ── 5. Rebuild shortstatehash chain for the window ────────────────────────
-		let state_lock = self.services.state.mutex.lock(room_id).await;
-		let saved_ssh = self.services.state.get_room_shortstatehash(room_id).await;
-
-		// Seed from the event just before the window (pdus_rev with until=min_count
-		// gives events strictly before min_count, so .next() = event immediately
-		// before our window).
-		if let Some((_, prev_pdu)) = Box::pin(self.pdus_rev(room_id, Some(min_count)))
-			.try_next()
-			.await?
-		{
-			if let Ok(ssh) = self
-				.services
-				.state_accessor
-				.pdu_shortstatehash(&prev_pdu.event_id)
-				.await
-			{
-				self.services
-					.state
-					.set_room_state(room_id, ssh, &state_lock);
-				info!("reorder_timeline_tail: seeded walk from pre-window event {ssh}");
-			}
-		}
-
-		let mut walk_ssh: Option<u64> = None;
-		for event_id in &sorted {
-			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
-			if let Ok(new_ssh) = self.services.state.append_to_state(pdu, room_id).await {
-				if walk_ssh != Some(new_ssh) {
-					self.services
-						.state
-						.set_room_state(room_id, new_ssh, &state_lock);
-					walk_ssh = Some(new_ssh);
-				}
-			}
-		}
-
-		// Restore the authoritative SSH (force-set-state result, etc.)
-		if let Ok(ssh) = saved_ssh {
-			self.services
-				.state
-				.set_room_state(room_id, ssh, &state_lock);
-			info!("reorder_timeline_tail: restored room SSH to {ssh}");
-		}
-
-		// Collapse extremities to the new tip
-		if let Some(last_id) = sorted.last() {
-			self.services
-				.state
-				.set_forward_extremities(room_id, std::iter::once(last_id.as_ref()), &state_lock)
-				.await;
-			info!("reorder_timeline_tail: tip → {last_id}");
-		}
-
-		drop(state_lock);
-		info!("reorder_timeline_tail: done, {count} events reordered");
 		Ok(count)
 	}
 

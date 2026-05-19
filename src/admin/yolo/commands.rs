@@ -1441,38 +1441,14 @@ pub(super) async fn rescue_room(
 			}
 		}
 
-		// --force fast path: skip the full auth-chain/state-resolution pipeline and
-		// directly promote the outlier to the timeline. This is O(1) per event
-		// instead of O(state_resolution_cost). reorder-timeline (triggered by
-		// --reorder) will fix the ordering and rebuild shortstatehashes afterward.
+		// --force implies nuclear to skip auth checks via the production pipeline.
 		if force {
 			self.services
 				.rooms
 				.pdu_metadata
 				.clear_pdu_markers(&event_id);
-			if self
-				.services
-				.rooms
-				.timeline
-				.promote_outlier(&room_id, &event_id)
-				.await
-				.is_ok()
-			{
-				count = count.saturating_add(1);
-				if let Some(state_key) = &pdu.state_key {
-					let key = (pdu.kind.to_string(), state_key.to_string());
-					current_state
-						.insert(key, (pdu.origin_server_ts, pdu.depth, pdu.event_id.clone()));
-				}
-			}
-			if count.is_multiple_of(500) && count > 0 {
-				info!("rescue_room (force): promoted {count} events...");
-				tokio::task::yield_now().await;
-			}
-			continue;
 		}
 
-		// Normal path: full auth-validated upgrade pipeline.
 		let origin = pdu
 			.origin
 			.clone()
@@ -1488,7 +1464,8 @@ pub(super) async fn rescue_room(
 					&create_event,
 					&origin,
 					&room_id,
-					nuclear,
+					// force implies nuclear: bypass auth checks via the production path
+					nuclear || force,
 				),
 		)
 		.await
@@ -1520,7 +1497,13 @@ pub(super) async fn rescue_room(
 	if reorder {
 		self.write_str(&format!("\nRunning reorder-timeline for {room_id}..."))
 			.await?;
-		let n = Box::pin(self.services.rooms.timeline.reorder_timeline(&room_id)).await?;
+		let n = Box::pin(
+			self.services
+				.rooms
+				.timeline
+				.reorder_timeline(&room_id, None),
+		)
+		.await?;
 		self.write_str(&format!("Reordered {n} events. Clients should re-sync."))
 			.await?;
 	}
@@ -1550,9 +1533,14 @@ pub(super) async fn reorder_timeline(
 
 		let mut count = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(self.services.rooms.timeline.reorder_timeline(&room_id))
-				.await
-				.is_ok()
+			if Box::pin(
+				self.services
+					.rooms
+					.timeline
+					.reorder_timeline(&room_id, None),
+			)
+			.await
+			.is_ok()
 			{
 				count = count.saturating_add(1);
 			}
@@ -1572,7 +1560,7 @@ pub(super) async fn reorder_timeline(
 			self.services
 				.rooms
 				.timeline
-				.reorder_timeline_tail(&room_id, n),
+				.reorder_timeline(&room_id, Some(n)),
 		)
 		.await?;
 		return self
@@ -1585,7 +1573,13 @@ pub(super) async fn reorder_timeline(
 	self.write_str(&format!("Reordering timeline for {room_id} by origin_server_ts..."))
 		.await?;
 
-	let count = Box::pin(self.services.rooms.timeline.reorder_timeline(&room_id)).await?;
+	let count = Box::pin(
+		self.services
+			.rooms
+			.timeline
+			.reorder_timeline(&room_id, None),
+	)
+	.await?;
 
 	self.write_str(&format!(
 		"Reordered {count} PDUs in room {room_id}. Clients should re-sync this room."
