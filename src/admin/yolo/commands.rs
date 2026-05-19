@@ -1502,7 +1502,8 @@ pub(super) async fn rescue_room(
 		self.write_str(&format!("\nRunning reorder-timeline for {room_id}..."))
 			.await?;
 		let n = Box::pin(self.services.rooms.timeline.reorder_timeline(&room_id)).await?;
-		self.write_str(&format!("Reordered {n} events. Clients should re-sync.")).await?;
+		self.write_str(&format!("Reordered {n} events. Clients should re-sync."))
+			.await?;
 	}
 
 	Ok(())

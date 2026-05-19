@@ -838,10 +838,7 @@ impl Service {
 			.map_err(|e| err!(Database("Failed to sort tail: {e:?}")))?;
 
 		// ── 3. Delete old timeline entries for these events ───────────────────────
-		info!(
-			"reorder_timeline_tail: removing {} old entries...",
-			sorted.len()
-		);
+		info!("reorder_timeline_tail: removing {} old entries...", sorted.len());
 		let cork = self.db.db.cork();
 		for event_id in &sorted {
 			let (old_count, pdu, ..) = entries.get(event_id).expect("in sorted list");
@@ -849,7 +846,9 @@ impl Service {
 			if pdu.kind == TimelineEventType::RoomMessage {
 				if let Ok(content) = pdu.get_content::<ExtractBody>() {
 					if let Some(body) = &content.body {
-						self.services.search.deindex_pdu(shortroomid, &old_pdu_id, body);
+						self.services
+							.search
+							.deindex_pdu(shortroomid, &old_pdu_id, body);
 					}
 				}
 			}
@@ -859,8 +858,10 @@ impl Service {
 
 		// ── 4. Re-insert in topological order with fresh PduCount values ─────────
 		let count = sorted.len();
-		let batch_start =
-			self.services.globals.next_count_batch(u64::try_from(count).unwrap_or(u64::MAX))?;
+		let batch_start = self
+			.services
+			.globals
+			.next_count_batch(u64::try_from(count).unwrap_or(u64::MAX))?;
 		info!(
 			"reorder_timeline_tail: re-inserting {count} events (counter range \
 			 {batch_start}..{})...",
@@ -892,8 +893,9 @@ impl Service {
 		// Seed from the event just before the window (pdus_rev with until=min_count
 		// gives events strictly before min_count, so .next() = event immediately
 		// before our window).
-		if let Some((_, prev_pdu)) =
-			Box::pin(self.pdus_rev(room_id, Some(min_count))).try_next().await?
+		if let Some((_, prev_pdu)) = Box::pin(self.pdus_rev(room_id, Some(min_count)))
+			.try_next()
+			.await?
 		{
 			if let Ok(ssh) = self
 				.services
@@ -901,7 +903,9 @@ impl Service {
 				.pdu_shortstatehash(&prev_pdu.event_id)
 				.await
 			{
-				self.services.state.set_room_state(room_id, ssh, &state_lock);
+				self.services
+					.state
+					.set_room_state(room_id, ssh, &state_lock);
 				info!("reorder_timeline_tail: seeded walk from pre-window event {ssh}");
 			}
 		}
@@ -911,7 +915,9 @@ impl Service {
 			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
 			if let Ok(new_ssh) = self.services.state.append_to_state(pdu, room_id).await {
 				if walk_ssh != Some(new_ssh) {
-					self.services.state.set_room_state(room_id, new_ssh, &state_lock);
+					self.services
+						.state
+						.set_room_state(room_id, new_ssh, &state_lock);
 					walk_ssh = Some(new_ssh);
 				}
 			}
@@ -919,7 +925,9 @@ impl Service {
 
 		// Restore the authoritative SSH (force-set-state result, etc.)
 		if let Ok(ssh) = saved_ssh {
-			self.services.state.set_room_state(room_id, ssh, &state_lock);
+			self.services
+				.state
+				.set_room_state(room_id, ssh, &state_lock);
 			info!("reorder_timeline_tail: restored room SSH to {ssh}");
 		}
 

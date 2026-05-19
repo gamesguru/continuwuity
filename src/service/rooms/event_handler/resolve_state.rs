@@ -145,13 +145,7 @@ where
 			.await
 	};
 
-	state_res::resolve(
-		room_version,
-		state_sets,
-		auth_chain_sets,
-		&event_fetch,
-		&event_rejected,
-	)
-	.map_err(|e| err!(error!("State resolution failed: {e:?}")))
-	.await
+	state_res::resolve(room_version, state_sets, auth_chain_sets, &event_fetch, &event_rejected)
+		.map_err(|e| err!(error!("State resolution failed: {e:?}")))
+		.await
 }

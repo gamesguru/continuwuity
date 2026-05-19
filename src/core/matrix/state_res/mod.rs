@@ -76,17 +76,7 @@ type Result<T, E = Error> = crate::Result<T, E>;
 //#[tracing::instrument(level = "debug", skip(state_sets, auth_chain_sets,
 //#[tracing::instrument(level event_fetch))]
 #[allow(clippy::cognitive_complexity)]
-pub async fn resolve<
-	'a,
-	Pdu,
-	Sets,
-	SetIter,
-	Hasher,
-	Fetch,
-	FetchFut,
-	Reject,
-	RejectFut,
->(
+pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, Reject, RejectFut>(
 	room_version: &RoomVersionId,
 	state_sets: Sets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId, Hasher>],
