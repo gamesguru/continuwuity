@@ -626,7 +626,7 @@ pub(super) async fn audit_membership(
 			.sending
 			.send_federation_request(server, get_room_state::v1::Request {
 				room_id: room_id.clone(),
-				event_id: latest_event_id,
+				event_id: latest_event_id.clone(),
 			})
 			.await
 		{
@@ -694,6 +694,25 @@ pub(super) async fn audit_membership(
 							.to_owned();
 
 						remote_members.insert(state_key.to_owned(), membership);
+					}
+				}
+
+				// Inject the tip event into remote_members, if it is a member event!
+
+				if let Ok(tip_pdu) = self.services.rooms.timeline.get_pdu(&latest_event_id).await
+				{
+					if tip_pdu.kind == TimelineEventType::RoomMember {
+						if let Some(state_key) = tip_pdu.state_key() {
+							let content: JsonValue = tip_pdu.get_content_as_value();
+
+							let membership = content
+								.get("membership")
+								.and_then(|v| v.as_str())
+								.unwrap_or("unknown")
+								.to_owned();
+
+							remote_members.insert(state_key.to_owned(), membership);
+						}
 					}
 				}
 
@@ -2888,7 +2907,13 @@ pub(super) async fn compare_room_state(
 	let mut missing_locally = Vec::new();
 	for (key, event_id) in &remote_state {
 		if local_state.get(key) != Some(event_id) {
-			let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+			let ts = event_timestamps.get(event_id).copied().unwrap_or_else(|| {
+				tip_pdu_opt
+					.as_ref()
+					.filter(|tip| tip.event_id() == event_id)
+					.map(|tip| u64::from(tip.origin_server_ts))
+					.unwrap_or(0)
+			});
 			let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 			missing_locally
 				.push((ts, format!("{event_id} ({} {}) {}{extra}", key.0, key.1, format_ts(ts))));
@@ -2899,7 +2924,13 @@ pub(super) async fn compare_room_state(
 	let mut extra_locally = Vec::new();
 	for (key, event_id) in &local_state {
 		if remote_state.get(key) != Some(event_id) {
-			let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+			let ts = event_timestamps.get(event_id).copied().unwrap_or_else(|| {
+				tip_pdu_opt
+					.as_ref()
+					.filter(|tip| tip.event_id() == event_id)
+					.map(|tip| u64::from(tip.origin_server_ts))
+					.unwrap_or(0)
+			});
 			let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 			extra_locally
 				.push((ts, format!("{event_id} ({} {}) {}{extra}", key.0, key.1, format_ts(ts))));
@@ -3149,7 +3180,13 @@ pub(super) async fn compare_room_state(
 			let mut only_on_first = Vec::new();
 			for (key, event_id) in &remote_state {
 				if server_state.get(key) != Some(event_id) {
-					let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+					let ts = event_timestamps.get(event_id).copied().unwrap_or_else(|| {
+						tip_pdu_opt
+							.as_ref()
+							.filter(|tip| tip.event_id() == event_id)
+							.map(|tip| u64::from(tip.origin_server_ts))
+							.unwrap_or(0)
+					});
 					let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 					only_on_first.push((
 						ts,
@@ -3162,7 +3199,13 @@ pub(super) async fn compare_room_state(
 			let mut only_on_cmp = Vec::new();
 			for (key, event_id) in &server_state {
 				if remote_state.get(key) != Some(event_id) {
-					let ts = event_timestamps.get(event_id).copied().unwrap_or(0);
+					let ts = event_timestamps.get(event_id).copied().unwrap_or_else(|| {
+						tip_pdu_opt
+							.as_ref()
+							.filter(|tip| tip.event_id() == event_id)
+							.map(|tip| u64::from(tip.origin_server_ts))
+							.unwrap_or(0)
+					});
 					let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 					only_on_cmp.push((
 						ts,
@@ -3527,7 +3570,7 @@ pub(super) async fn import_pdus(
 		.state_accessor
 		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
 		.await
-		.map_err(|_| err!("Could not find create event for room {room_id}"))?;
+		.ok();
 
 	while let Ok(Some(line)) = lines.next_line().await {
 		if line.trim().is_empty() {
@@ -3638,7 +3681,7 @@ pub(super) async fn import_pdus(
 						.event_handler
 						.handle_outlier_pdu(
 							origin,
-							Some(&create_event),
+							create_event.as_ref(),
 							&eid,
 							&room_id,
 							val,
