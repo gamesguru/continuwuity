@@ -184,7 +184,18 @@ impl Service {
 	pub async fn reindex_timeline(&self, room_id: &RoomId) -> Result<usize> {
 		self.db.reindex_timeline(room_id).await
 	}
+}
 
+struct HealerSuppressGuard<'a> {
+	globals: &'a globals::Service,
+	room_id: OwnedRoomId,
+}
+
+impl Drop for HealerSuppressGuard<'_> {
+	fn drop(&mut self) { self.globals.suppress_healer.remove(&self.room_id); }
+}
+
+impl Service {
 	/// Reorder the timeline for a room using topological sort.
 	///
 	/// Reads all PDUs, builds the DAG from `prev_events`, performs
@@ -202,6 +213,15 @@ impl Service {
 
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let state_lock = self.services.state.mutex.lock(room_id).await;
+
+		self.services
+			.globals
+			.suppress_healer
+			.insert(room_id.to_owned());
+		let _suppress_guard = HealerSuppressGuard {
+			globals: &self.services.globals,
+			room_id: room_id.to_owned(),
+		};
 
 		// Note: intentionally NOT corking the entire operation. A cork here
 		// would buffer 164K+ writes (82K deletes + 82K inserts) and trigger a

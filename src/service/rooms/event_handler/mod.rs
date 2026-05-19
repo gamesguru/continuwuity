@@ -145,11 +145,16 @@ impl Service {
 		room_id: Option<&RoomId>,
 		event_id: OwnedEventId,
 	) -> Option<PduEvent> {
-		self.services
+		if let Ok(pdu) = self
+			.services
 			.timeline
 			.get_pdu_in_room(room_id, &event_id)
 			.await
-			.ok()
+		{
+			Some(pdu)
+		} else {
+			self.services.outlier.get_pdu_outlier(&event_id).await.ok()
+		}
 	}
 
 	/// Build a prioritized list of federation servers for fetching events:

@@ -165,11 +165,14 @@ where
 
 	let room_id_clone = room_id.to_owned();
 	let dag_healer = self.dag_healer.clone();
+	let is_suppressed = self.services.globals.suppress_healer.contains(room_id);
 	let event_missing_cb = move |missing_events| {
-		let _ = dag_healer.send(crate::rooms::event_handler::HealRequest {
-			room_id: room_id_clone.clone(),
-			missing_events,
-		});
+		if !is_suppressed {
+			let _ = dag_healer.send(crate::rooms::event_handler::HealRequest {
+				room_id: room_id_clone.clone(),
+				missing_events,
+			});
+		}
 	};
 
 	state_res::resolve(

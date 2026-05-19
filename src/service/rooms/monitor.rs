@@ -360,11 +360,14 @@ impl Service {
 					continue;
 				}
 
-				if let Err(e) = self
-					.services
-					.event_handler
-					.handle_incoming_pdu(target_server, room_id, &parsed_event_id, value, true)
-					.await
+				if let Err(e) = Box::pin(self.services.event_handler.handle_incoming_pdu(
+					target_server,
+					room_id,
+					&parsed_event_id,
+					value,
+					true,
+				))
+				.await
 				{
 					warn!(target: "forwardfill", "Failed to handle extremity {event_id}: {e}");
 				} else {

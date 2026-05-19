@@ -454,12 +454,14 @@ async fn handle_room(
 			.server
 			.check_running()
 			.map_err(|_| TransactionError::ShuttingDown)?;
-		let result = services
-			.rooms
-			.event_handler
-			.handle_incoming_pdu(origin, room_id, &event_id, value, true)
-			.await
-			.map(|_| ());
+		let result = Box::pin(
+			services
+				.rooms
+				.event_handler
+				.handle_incoming_pdu(origin, room_id, &event_id, value, true),
+		)
+		.await
+		.map(|_| ());
 
 		if let Err(ref e) = result {
 			// Only abort the entire transaction for truly local failures
