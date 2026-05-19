@@ -344,21 +344,7 @@ pub(super) async fn load_left_room(
 	let raw_state_events: Vec<Raw<AnySyncStateEvent>> = state_events
 		.into_iter()
 		.filter(|pdu: &PduEvent| !timeline_ids.contains(&pdu.event_id))
-		.filter(|pdu: &PduEvent| {
-			let state_filter = &filter.room.state;
-
-			let types_ok = state_filter.types.is_none() || state_types.contains(pdu.event_type());
-			let not_types_ok = !state_not_types.contains(pdu.event_type());
-
-			let senders_ok = match &state_filter.senders {
-				| Some(senders) => senders.contains(&pdu.sender),
-				| None => true,
-			};
-
-			let not_senders_ok = !state_filter.not_senders.contains(&pdu.sender);
-
-			types_ok && not_types_ok && senders_ok && not_senders_ok
-		})
+		.filter(|pdu: &PduEvent| filter.room.state.matches(pdu))
 		.map(Event::into_format)
 		.collect();
 
