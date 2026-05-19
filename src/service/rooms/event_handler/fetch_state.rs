@@ -40,8 +40,7 @@ where
 		)
 		.await;
 
-	let mut last_err: conduwuit::Error =
-		conduwuit::err!(Request(NotFound("No server could provide /state_ids")));
+	let mut last_err = err!(Request(NotFound("No server could provide /state_ids")));
 	let res = 'found: {
 		for server in &servers {
 			match self
