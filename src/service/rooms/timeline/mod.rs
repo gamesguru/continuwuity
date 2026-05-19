@@ -201,6 +201,7 @@ impl Service {
 		use ruma::events::StateEventType;
 
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
+		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		// Note: intentionally NOT corking the entire operation. A cork here
 		// would buffer 164K+ writes (82K deletes + 82K inserts) and trigger a
@@ -406,7 +407,6 @@ impl Service {
 		// shortstatehash and records the mapping from shorteventid →
 		// shortstatehash). Non-state events inherit the current room shortstatehash.
 		// This fixes sync serving stale state snapshots after reorder.
-		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		// Save the room's current shortstatehash BEFORE the walk. The sequential
 		// rebuild uses naive "last event wins" which can disagree with state-res.
