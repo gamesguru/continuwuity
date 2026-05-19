@@ -33,25 +33,38 @@ pub(super) async fn audit_auth_chain(
 
 	use futures::TryStreamExt;
 
-	// Resolve room and get current state hash
-	let sstatehash = self
+	// Resolve room and get current state hash, fallback to extremities if no state
+	let state_ids: Vec<OwnedEventId> = match self
 		.services
 		.rooms
 		.state
 		.get_room_shortstatehash(&room_id)
 		.await
-		.map_err(|_| err!("Room {room_id} has no state — not joined?"))?;
+	{
+		| Ok(sstatehash) => self
+			.services
+			.rooms
+			.state_accessor
+			.state_full_ids(sstatehash)
+			.map(|(_, id)| id)
+			.collect()
+			.await,
+		| Err(_) => self
+			.services
+			.rooms
+			.state
+			.get_forward_extremities(&room_id)
+			.map(ToOwned::to_owned)
+			.collect()
+			.await,
+	};
 
-	let state_ids: HashMap<_, OwnedEventId> = self
-		.services
-		.rooms
-		.state_accessor
-		.state_full_ids(sstatehash)
-		.collect()
-		.await;
+	if state_ids.is_empty() {
+		return Err!("Room {room_id} has no state and no forward extremities — completely empty?");
+	}
 
 	self.write_str(&format!(
-		"Auditing auth chain for {room_id} ({} current state events)...\n",
+		"Auditing auth chain for {room_id} ({} seed events)...\n",
 		state_ids.len()
 	))
 	.await?;
@@ -62,7 +75,7 @@ pub(super) async fn audit_auth_chain(
 		.services
 		.rooms
 		.auth_chain
-		.event_ids_iter(&room_id, state_ids.values().map(Borrow::borrow))
+		.event_ids_iter(&room_id, state_ids.iter().map(Borrow::borrow))
 		.try_collect()
 		.await
 		.unwrap_or_default();
