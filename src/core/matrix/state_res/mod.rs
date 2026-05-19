@@ -1085,13 +1085,11 @@ where
 
 		event = None;
 		for aid in sort_ev.auth_events() {
-			let aev = fetch_event(aid.to_owned())
-				.await
-				.ok_or_else(|| Error::NotFound(format!("Failed to find {aid}")))?;
-
-			if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-				event = Some(aev);
-				break;
+			if let Some(aev) = fetch_event(aid.to_owned()).await {
+				if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+					event = Some(aev);
+					break;
+				}
 			}
 		}
 	}
