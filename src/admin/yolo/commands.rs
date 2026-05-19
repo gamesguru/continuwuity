@@ -2233,7 +2233,7 @@ pub(super) async fn fetch_pdu(
 		);
 	}
 
-	let room_version = self
+	let mut room_version = self
 		.services
 		.rooms
 		.state
@@ -2245,6 +2245,26 @@ pub(super) async fn fetch_pdu(
 		.sending
 		.send_federation_request(&server, get_event::v1::Request::new(event_id, None))
 		.await?;
+
+	// If the room's state is completely missing (falling back to V11) and we happen to be fetching
+	// the `m.room.create` event to rescue it, we MUST extract the real version from the PDU itself.
+	// Otherwise, canonicalization uses the fallback rules, resulting in an entirely incorrect event ID.
+	if let Ok(val) = serde_json::from_str::<serde_json::Value>(response.pdu.get()) {
+		if val.get("type").and_then(|t| t.as_str()) == Some("m.room.create") {
+			if let Some(v_str) = val
+				.get("content")
+				.and_then(|c| c.get("room_version"))
+				.and_then(|v| v.as_str())
+			{
+				if let Ok(v) = ruma::RoomVersionId::try_from(v_str) {
+					room_version = v;
+				}
+			} else {
+				// Matrix spec: If room_version is omitted in m.room.create, it defaults to V1.
+				room_version = ruma::RoomVersionId::V1;
+			}
+		}
+	}
 
 	let (event_id, value) = if skip_auth {
 		let (eid, mut val) = conduwuit_core::matrix::event::gen_event_id_canonical_json(

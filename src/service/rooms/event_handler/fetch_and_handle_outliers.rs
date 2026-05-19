@@ -52,7 +52,13 @@ where
 		)
 		.await;
 
-	// Cap fallback servers to prevent thread exhaustion during bulk 404s
+	// Cap fallback servers to prevent thread exhaustion during bulk 404s,
+	// but shuffle the fallback candidates so we don't always sample the
+	// exact same 3 high-EMA servers if they genuinely don't have the event.
+	if routing_servers.len() > 2 {
+		// Keep origin at index 0, shuffle the rest
+		conduwuit::utils::shuffle(&mut routing_servers[1..]);
+	}
 	routing_servers.truncate(4);
 
 	debug!(
@@ -75,10 +81,11 @@ where
 			continue;
 		}
 
-		// If the event is soft-failed but we couldn't parse it into a local_pdu (e.g. invalid JSON),
-		// we MUST skip it so we don't spam the network trying to fetch it again.
+		// If the event is soft-failed but we couldn't parse it into a local_pdu (e.g.
+		// invalid JSON), we MUST skip it so we don't spam the network trying to fetch
+		// it again.
 		if self.services.pdu_metadata.is_event_soft_failed(id).await {
-			warn!(target: "auth_chain", "Skipping unparseable soft-failed outlier: {id}");
+			warn!(target: "auth_chain", "Skipping unparsable soft-failed outlier: {id}");
 			continue;
 		}
 
