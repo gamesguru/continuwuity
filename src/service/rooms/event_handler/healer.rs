@@ -77,47 +77,38 @@ pub(crate) async fn healer_worker(
 		let mut fetched_count = 0_usize;
 
 		for event_id in &to_fetch {
-			let mut success = false;
-			for server in &fallback_servers {
-				trace!(
-					event_id = ?event_id,
-					server = ?server,
-					"DAG Healer fetching event from fallback server"
-				);
+			// fetch_and_handle_outliers automatically queries all fallback servers,
+			// so we only need to invoke it once, using the first available server
+			// (or our own) as the seed origin.
+			let seed_server = fallback_servers
+				.first()
+				.unwrap_or(&service.services.globals.server_name().to_owned())
+				.clone();
 
-				// Re-use the existing outlier fetching machinery
-				match service
-					.fetch_and_handle_outliers(
-						server,
-						std::iter::once(&**event_id),
-						Some(&create_event),
-						&room_id,
-					)
-					.await
-					.is_empty()
-				{
-					| false => {
-						debug!(event_id = ?event_id, "DAG Healer successfully fetched missing event");
-						success = true;
-						fetched_count = fetched_count.saturating_add(1);
-						break;
-					},
-					| true => {
-						trace!(
-							event_id = ?event_id,
-							server = ?server,
-							"DAG Healer failed to fetch event from fallback server (returned empty)"
-						);
-					},
-				}
-			}
+			trace!(
+				event_id = ?event_id,
+				server = ?seed_server,
+				"DAG Healer fetching event via fallback routing"
+			);
 
-			if !success {
-				warn!(
-					event_id = ?event_id,
-					"DAG Healer failed to fetch event from all fallback servers, marking as 404"
-				);
-				failed_heals.insert(event_id.clone(), std::time::Instant::now());
+			match service
+				.fetch_and_handle_outliers(
+					&seed_server,
+					std::iter::once(&**event_id),
+					Some(&create_event),
+					&room_id,
+				)
+				.await
+				.is_empty()
+			{
+				| false => {
+					debug!(event_id = ?event_id, "DAG Healer successfully fetched missing event");
+					fetched_count = fetched_count.saturating_add(1);
+				},
+				| true => {
+					warn!(event_id = ?event_id, "DAG Healer failed to fetch event from all fallback servers, marking as 404");
+					failed_heals.insert(event_id.clone(), std::time::Instant::now());
+				},
 			}
 		}
 
