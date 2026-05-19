@@ -4,6 +4,7 @@ use conduwuit::{
 	Result, at, debug_warn, err, extract_variant,
 	matrix::{
 		Event,
+		event::Matches,
 		pdu::{PduCount, PduEvent},
 	},
 	trace,
@@ -304,61 +305,23 @@ async fn build_state_and_timeline(
 
 	// the token which may be passed to the messages endpoint to backfill room
 	// history
-	let prev_batch = timeline.pdus.front().map(at!(0));
+	let prev_batch = timeline.pdus.front().map(at!(0)).map(ToString::to_string);
+
+	let TimelinePdus { pdus, limited: timeline_limited } = timeline;
 
 	// note: we always indicate a limited timeline if the syncing user just joined
 	// the room, to indicate to the client that it should request backfill (and to
 	// copy Synapse's behavior). for federated room joins, the `timeline` will
 	// usually only include the syncing user's join event.
-	let limited = timeline.limited || joined_since_last_sync;
-
-	let timeline_types: HashSet<TimelineEventType> = sync_context
-		.filter
-		.room
-		.timeline
-		.types
-		.as_ref()
-		.map(|types| {
-			types
-				.iter()
-				.map(|s| TimelineEventType::from(s.as_str()))
-				.collect()
-		})
-		.unwrap_or_default();
-
-	let timeline_not_types: HashSet<TimelineEventType> = sync_context
-		.filter
-		.room
-		.timeline
-		.not_types
-		.iter()
-		.map(|s| TimelineEventType::from(s.as_str()))
-		.collect();
+	let limited = timeline_limited || joined_since_last_sync;
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
-	let filtered_timeline_pdus: Vec<PduEvent> = timeline
-		.pdus
-		.iter()
+	let filtered_timeline_pdus: Vec<PduEvent> = pdus
+		.into_iter()
 		.stream()
-		.wide_filter_map(|item| ignored_filter(services, item.clone(), sync_context.syncing_user))
-		.ready_filter(|(_, pdu)| {
-			let timeline_filter = &sync_context.filter.room.timeline;
-
-			let types_ok =
-				timeline_filter.types.is_none() || timeline_types.contains(pdu.event_type());
-
-			let not_types_ok = !timeline_not_types.contains(pdu.event_type());
-
-			let senders_ok = match &timeline_filter.senders {
-				| Some(senders) => senders.contains(&pdu.sender),
-				| None => true,
-			};
-
-			let not_senders_ok = !timeline_filter.not_senders.contains(&pdu.sender);
-
-			types_ok && not_types_ok && senders_ok && not_senders_ok
-		})
+		.wide_filter_map(|item| ignored_filter(services, item, sync_context.syncing_user))
+		.ready_filter(|(_, pdu)| sync_context.filter.room.timeline.matches(pdu))
 		.map(at!(1))
 		.collect::<Vec<_>>()
 		.await;
@@ -378,7 +341,7 @@ async fn build_state_and_timeline(
 		state_after,
 		timeline: Timeline {
 			limited,
-			prev_batch: prev_batch.as_ref().map(ToString::to_string),
+			prev_batch,
 			events: filtered_timeline_pdus
 				.into_iter()
 				.map(Event::into_format)

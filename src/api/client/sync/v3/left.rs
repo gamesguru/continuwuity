@@ -1,5 +1,7 @@
 use conduwuit::{
-	Event, PduCount, PduEvent, Result, at, debug_warn, info,
+	Event, PduCount, PduEvent, Result, at, debug_warn,
+	event::Matches,
+	info,
 	pdu::EventHash,
 	trace,
 	utils::{
@@ -234,48 +236,6 @@ pub(super) async fn load_left_room(
 		Vec::new()
 	};
 
-	let timeline_types: std::collections::HashSet<TimelineEventType> = filter
-		.room
-		.timeline
-		.types
-		.as_ref()
-		.map(|types| {
-			types
-				.iter()
-				.map(|s| TimelineEventType::from(s.as_str()))
-				.collect()
-		})
-		.unwrap_or_default();
-
-	let timeline_not_types: std::collections::HashSet<TimelineEventType> = filter
-		.room
-		.timeline
-		.not_types
-		.iter()
-		.map(|s| TimelineEventType::from(s.as_str()))
-		.collect();
-
-	let state_types: std::collections::HashSet<TimelineEventType> = filter
-		.room
-		.state
-		.types
-		.as_ref()
-		.map(|types| {
-			types
-				.iter()
-				.map(|s| TimelineEventType::from(s.as_str()))
-				.collect()
-		})
-		.unwrap_or_default();
-
-	let state_not_types: std::collections::HashSet<TimelineEventType> = filter
-		.room
-		.state
-		.not_types
-		.iter()
-		.map(|s| TimelineEventType::from(s.as_str()))
-		.collect();
-
 	let TimelinePdus { pdus, limited } = timeline;
 
 	// filter out ignored events from the timeline
@@ -283,22 +243,7 @@ pub(super) async fn load_left_room(
 		.into_iter()
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
-		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
-			let timeline_filter = &filter.room.timeline;
-
-			let types_ok =
-				timeline_filter.types.is_none() || timeline_types.contains(pdu.event_type());
-			let not_types_ok = !timeline_not_types.contains(pdu.event_type());
-
-			let senders_ok = match &timeline_filter.senders {
-				| Some(senders) => senders.contains(&pdu.sender),
-				| None => true,
-			};
-
-			let not_senders_ok = !timeline_filter.not_senders.contains(&pdu.sender);
-
-			types_ok && not_types_ok && senders_ok && not_senders_ok
-		})
+		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| filter.room.timeline.matches(pdu))
 		.map(at!(1))
 		.collect::<Vec<_>>()
 		.await;
