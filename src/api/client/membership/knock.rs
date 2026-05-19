@@ -664,7 +664,7 @@ async fn knock_room_helper_remote(
 	} = services
 		.rooms
 		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
+		.save_state_as_root(room_id, Arc::new(compressed))
 		.await?;
 
 	debug!("Forcing state for new room");

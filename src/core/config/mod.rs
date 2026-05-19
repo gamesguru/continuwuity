@@ -2721,6 +2721,16 @@ impl Config {
 	}
 
 	pub fn check(&self) -> Result<(), Error> { check(self) }
+
+	/// Returns an iterator over config keys that appeared in the user's
+	/// config file but are not known to this version of continuwuity.
+	/// These are either deprecated, misspelled, or from a newer version.
+	pub fn unknown_config_keys(&self) -> impl Iterator<Item = &str> {
+		self.catchall
+			.keys()
+			.filter(|key| key.as_str() != "config")
+			.map(String::as_str)
+	}
 }
 
 fn true_fn() -> bool { true }

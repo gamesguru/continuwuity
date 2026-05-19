@@ -1159,7 +1159,12 @@ pub(crate) async fn force_set_state(
 		.services
 		.rooms
 		.state_compressor
-		.save_state(room_id.clone().as_ref(), new_room_state)
+		// Use save_state_as_root instead of save_state: the normal save_state
+		// must traverse the entire O(depth) ancestor diff chain via
+		// load_shortstatehash_info, which hangs on rooms with deep history.
+		// save_state_as_root checks the stateinfo_cache (O(1)) and falls back to
+		// writing the full state as a fresh root, completing in O(state_size).
+		.save_state_as_root(room_id.clone().as_ref(), new_room_state)
 		.await?;
 
 	let state_lock = self.services.rooms.state.mutex.lock(&*room_id).await;

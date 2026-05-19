@@ -16,6 +16,10 @@ pub enum ServerCommand {
 	/// Show configuration values
 	ShowConfig,
 
+	/// Show non-default config values and keys missing from your config
+	/// file (useful for detecting drift after upgrades)
+	ConfigDiff,
+
 	/// Reload configuration values
 	ReloadConfig {
 		path: Option<PathBuf>,

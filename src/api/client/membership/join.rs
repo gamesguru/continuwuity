@@ -730,7 +730,7 @@ async fn join_room_by_id_helper_remote(
 	} = services
 		.rooms
 		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
+		.save_state_as_root(room_id, Arc::new(compressed))
 		.await?;
 
 	info!("Forcing state for new room (shortstatehash={statehash_before_join})");
