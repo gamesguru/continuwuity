@@ -1223,6 +1223,7 @@ pub(super) async fn purge_outliers(
 }
 
 #[admin_command]
+#[allow(clippy::fn_params_excessive_bools)]
 pub(super) async fn rescue_room(
 	&self,
 	room_id: OwnedRoomId,
@@ -1425,11 +1426,7 @@ pub(super) async fn rescue_room(
 	for event_id in sorted {
 		let (pdu, pdu_json) = outliers.get(&event_id).expect("in sorted list");
 
-		// Skip state events that are superseded by a newer event already in the
-		// timeline for the same (event_type, state_key). Uses 3 tiebreakers:
-		// origin_server_ts, depth, event_id (matching state-res ordering).
-		// When --force is set, skip this check to allow historical state events
-		// to be inserted for complete timeline history.
+		// Skip superseded state events (only when not force-rescuing).
 		if !force {
 			if let Some(state_key) = &pdu.state_key {
 				let key = (pdu.kind.to_string(), state_key.to_string());
@@ -1444,20 +1441,42 @@ pub(super) async fn rescue_room(
 			}
 		}
 
-		let origin = pdu
-			.origin
-			.clone()
-			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
-
-		// Clear all soft-fail and rejection markers when force-rescuing;
-		// otherwise previously rejected events stay rejected to prevent
-		// infinite rescue loops.
+		// --force fast path: skip the full auth-chain/state-resolution pipeline and
+		// directly promote the outlier to the timeline. This is O(1) per event
+		// instead of O(state_resolution_cost). reorder-timeline (triggered by
+		// --reorder) will fix the ordering and rebuild shortstatehashes afterward.
 		if force {
 			self.services
 				.rooms
 				.pdu_metadata
 				.clear_pdu_markers(&event_id);
+			if self
+				.services
+				.rooms
+				.timeline
+				.promote_outlier(&room_id, &event_id)
+				.await
+				.is_ok()
+			{
+				count = count.saturating_add(1);
+				if let Some(state_key) = &pdu.state_key {
+					let key = (pdu.kind.to_string(), state_key.to_string());
+					current_state
+						.insert(key, (pdu.origin_server_ts, pdu.depth, pdu.event_id.clone()));
+				}
+			}
+			if count.is_multiple_of(500) && count > 0 {
+				info!("rescue_room (force): promoted {count} events...");
+				tokio::task::yield_now().await;
+			}
+			continue;
 		}
+
+		// Normal path: full auth-validated upgrade pipeline.
+		let origin = pdu
+			.origin
+			.clone()
+			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
 		if Box::pin(
 			self.services
