@@ -467,15 +467,17 @@ impl Service {
 						.pdu_shortstatehash(&pre_pdu.event_id)
 						.await
 					{
-						self.services
-							.state
-							.set_room_state(room_id, ssh, &state_lock);
-						info!(
-							"reorder_timeline: tail: seeded walk from pre-window event {} (SSH \
-							 {ssh})",
-							pre_pdu.event_id
-						);
-						foundation_set = true;
+						if ssh != 0 {
+							self.services
+								.state
+								.set_room_state(room_id, ssh, &state_lock);
+							info!(
+								"reorder_timeline: tail: seeded walk from pre-window event {} \
+								 (SSH {ssh})",
+								pre_pdu.event_id
+							);
+							foundation_set = true;
+						}
 					}
 				}
 			}

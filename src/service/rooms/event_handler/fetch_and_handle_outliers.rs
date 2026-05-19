@@ -199,12 +199,32 @@ where
 					let room_version_id = match create_event {
 						| Some(ce) => crate::rooms::event_handler::get_room_version_id(ce)
 							.unwrap_or(ruma::RoomVersionId::V11),
-						| None => self
-							.services
-							.state
-							.get_room_version_or_fallback(room_id)
-							.await
-							.unwrap_or(ruma::RoomVersionId::V11),
+						| None => {
+							let mut version = None;
+							if let Ok(json) =
+								serde_json::from_str::<serde_json::Value>(res.pdu.get())
+							{
+								if json.get("type").and_then(|t| t.as_str())
+									== Some("m.room.create")
+								{
+									let v = json
+										.get("content")
+										.and_then(|c| c.get("room_version"))
+										.and_then(|v| v.as_str())
+										.unwrap_or("1");
+									version = ruma::RoomVersionId::try_from(v).ok();
+								}
+							}
+							match version {
+								| Some(v) => v,
+								| None => self
+									.services
+									.state
+									.get_room_version_or_fallback(room_id)
+									.await
+									.unwrap_or(ruma::RoomVersionId::V11),
+							}
+						},
 					};
 					let Ok((calculated_event_id, value)) =
 						gen_event_id_canonical_json(&res.pdu, &room_version_id)
