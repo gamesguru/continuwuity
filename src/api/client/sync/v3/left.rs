@@ -245,13 +245,13 @@ pub(super) async fn load_left_room(
 			let timeline_filter = &filter.room.timeline;
 
 			let types_ok = match &timeline_filter.types {
-				| Some(types) => types.iter().any(|t| t == pdu.event_type().as_str()),
+				| Some(types) => types.iter().any(|t| *pdu.event_type() == t.as_str()),
 				| None => true,
 			};
 			let not_types_ok = !timeline_filter
 				.not_types
 				.iter()
-				.any(|t| t == pdu.event_type().as_str());
+				.any(|t| *pdu.event_type() == t.as_str());
 
 			let senders_ok = match &timeline_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),
@@ -311,13 +311,13 @@ pub(super) async fn load_left_room(
 			let state_filter = &filter.room.state;
 
 			let types_ok = match &state_filter.types {
-				| Some(types) => types.iter().any(|t| t == pdu.event_type().as_str()),
+				| Some(types) => types.iter().any(|t| *pdu.event_type() == t.as_str()),
 				| None => true,
 			};
 			let not_types_ok = !state_filter
 				.not_types
 				.iter()
-				.any(|t| t == pdu.event_type().as_str());
+				.any(|t| *pdu.event_type() == t.as_str());
 
 			let senders_ok = match &state_filter.senders {
 				| Some(senders) => senders.contains(&pdu.sender),
@@ -471,7 +471,7 @@ async fn build_left_state_and_timeline(
 		%timeline_end_count,
 		"syncing {} timeline events (limited = {}) and {} state events",
 		timeline.pdus.len(),
-		timeline.limited,
+		limited,
 		state.len()
 	);
 
