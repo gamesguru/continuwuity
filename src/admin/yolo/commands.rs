@@ -4838,14 +4838,22 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 	let mut total = 0_usize;
 
 	let prefix = (ours, conduwuit_database::Interfix);
-	let mut raw_stream = self.services.rooms.state_cache.server_rooms_raw_keys_prefix(&prefix);
+	let mut raw_stream = self
+		.services
+		.rooms
+		.state_cache
+		.server_rooms_raw_keys_prefix(&prefix);
 
 	while let Some(Ok(key_bytes)) = raw_stream.next().await {
 		total = total.saturating_add(1);
 		// Decode the key: (ServerName, Interfix, RoomId)
 		// The RoomId is the remainder of the bytes after the server name + 0xFF byte
 		let split_idx = key_bytes.iter().position(|&b| b == 0xFF).unwrap_or(0);
-		let room_id_bytes = if split_idx < key_bytes.len() { &key_bytes[split_idx + 1..] } else { &key_bytes };
+		let room_id_bytes = if split_idx < key_bytes.len() {
+			&key_bytes[split_idx + 1..]
+		} else {
+			&key_bytes
+		};
 		let s = std::str::from_utf8(room_id_bytes).unwrap_or("");
 
 		let valid = s.starts_with('!') && s.len() <= 255 && <&RoomId>::try_from(s).is_ok();
@@ -4867,15 +4875,13 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 
 	if !execute {
 		self.write_str(
-			"\nDry run — corrupt entries are found using raw bytes. Use \
-			 --execute to remove individual entries.\n",
+			"\nDry run — corrupt entries are found using raw bytes. Use --execute to remove \
+			 individual entries.\n",
 		)
 		.await
 	} else {
-		self.write_str(
-			"\nNote: Removed malformed room IDs from the serverroomids tree.\n",
-		)
-		.await
+		self.write_str("\nNote: Removed malformed room IDs from the serverroomids tree.\n")
+			.await
 	}
 }
 

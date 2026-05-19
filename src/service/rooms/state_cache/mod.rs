@@ -235,7 +235,7 @@ pub fn server_rooms<'a>(
 #[implement(Service)]
 pub fn server_rooms_raw_keys_prefix<'a>(
 	&'a self,
-	prefix: &'a (&'a ServerName, conduwuit_database::Interfix),
+	prefix: &'a (&'a ServerName, Interfix),
 ) -> impl Stream<Item = Result<database::keyval::Key<'a>>> + Send + 'a {
 	self.db.serverroomids.keys_prefix_raw(prefix)
 }

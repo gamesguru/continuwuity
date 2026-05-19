@@ -132,20 +132,26 @@ pub async fn state_resolution<'a, StateSets>(
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	let fetch_cache: dashmap::DashMap<OwnedEventId, Option<conduwuit_core::PduEvent>> =
-		dashmap::DashMap::new();
-	let event_fetch = |event_id: OwnedEventId| async {
-		if let Some(pdu) = fetch_cache.get(&event_id).map(|e| e.value().clone()) {
+	let fetch_cache = scc::HashMap::new();
+	let fetch_cache_ref = &fetch_cache;
+
+	let event_fetch = |event_id: OwnedEventId| async move {
+		if let Some(pdu) = fetch_cache_ref
+			.read_async(&event_id, |_, v: &Option<conduwuit_core::PduEvent>| v.clone())
+			.await
+		{
 			return pdu;
 		}
 		let pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
-		fetch_cache.insert(event_id, pdu.clone());
+		let _ = fetch_cache_ref.insert_async(event_id, pdu.clone()).await;
 		pdu
 	};
 
-	let rejected_cache: dashmap::DashMap<OwnedEventId, bool> = dashmap::DashMap::new();
-	let event_rejected = |event_id: OwnedEventId| async {
-		if let Some(rej) = rejected_cache.get(&event_id).map(|e| *e.value()) {
+	let rejected_cache = scc::HashMap::new();
+	let rejected_cache_ref = &rejected_cache;
+
+	let event_rejected = |event_id: OwnedEventId| async move {
+		if let Some(rej) = rejected_cache_ref.read_async(&event_id, |_, v| *v).await {
 			return rej;
 		}
 		let rej = self
@@ -153,7 +159,7 @@ where
 			.pdu_metadata
 			.is_event_rejected(&event_id)
 			.await;
-		rejected_cache.insert(event_id, rej);
+		let _ = rejected_cache_ref.insert_async(event_id, rej).await;
 		rej
 	};
 
