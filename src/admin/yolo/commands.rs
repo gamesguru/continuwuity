@@ -601,8 +601,7 @@ pub(super) async fn audit_membership(
 					.state_get(state_hash, &StateEventType::RoomMember, user_id.as_str())
 					.await
 				{
-					let _ = self
-						.services
+					self.services
 						.rooms
 						.state_cache
 						.update_membership(&room_id, user_id, &pdu, false)
@@ -1716,6 +1715,17 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 		.non_outlier_pdu_exists(&event_id)
 		.await;
 
+	let mut room_id_opt = None;
+	if in_timeline {
+		if let Ok(pdu) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
+			if let Some(room_id) = pdu.get("room_id").and_then(|v| v.as_str()) {
+				if let Ok(rid) = <&ruma::RoomId>::try_from(room_id) {
+					room_id_opt = Some(rid.to_owned());
+				}
+			}
+		}
+	}
+
 	// Remove from timeline tables (pduid_pdu + eventid_pduid)
 	self.services
 		.rooms
@@ -1731,9 +1741,16 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 		.await;
 
 	if in_timeline {
+		if let Some(room_id) = room_id_opt {
+			self.services
+				.rooms
+				.timeline
+				.recalculate_extremities(&room_id, 50, true)
+				.await?;
+		}
 		self.write_str(&format!(
-			"Purged {event_id} from timeline and outlier tables. Run force-set-room-state and \
-			 reorder-timeline to rebuild state."
+			"Purged {event_id} from timeline and outlier tables. DAG Extremities automatically \
+			 recalculated."
 		))
 		.await
 	} else {
@@ -3761,10 +3778,16 @@ pub(super) async fn import_pdus(
 		}
 	}
 
+	self.services
+		.rooms
+		.timeline
+		.recalculate_extremities(&room_id, 500, true)
+		.await?;
+
 	self.write_str(&format!(
 		"\nImported {inserted} PDUs, {rejected} stored as rejected outliers, {failed} errors \
-		 out of {total} total for {room_id}. Run `reorder-timeline` and `force-set-room-state` \
-		 to finalize."
+		 out of {total} total for {room_id}. DAG Extremities recalculated. Run \
+		 `force-set-room-state` to finalize."
 	))
 	.await
 }
@@ -4343,6 +4366,40 @@ fn civil_from_days(days: i64) -> (i64, u64, u64) {
 }
 
 #[admin_command]
+pub(super) async fn recalculate_extremities(
+	&self,
+	room: OwnedRoomOrAliasId,
+	tail: usize,
+) -> Result {
+	let room_id = self.services.rooms.alias.resolve_local_alias(&room).await?;
+
+	self.write_str(&format!(
+		"Recalculating forward extremities for room {room_id} using tail {tail}...\n"
+	))
+	.await?;
+
+	let changed = self
+		.services
+		.rooms
+		.timeline
+		.recalculate_extremities(&room_id, tail, true)
+		.await?;
+
+	if changed {
+		self.write_str(
+			"SUCCESS: DAG Extremities were silently broken and have now been recalculated and \
+			 permanently healed!\n",
+		)
+		.await?;
+	} else {
+		self.write_str("DAG Extremities are already mathematically perfect. No changes made.\n")
+			.await?;
+	}
+
+	Ok(())
+}
+
+#[admin_command]
 pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result {
 	let ours = self.services.globals.server_name();
 
@@ -4427,16 +4484,29 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 		}
 
 		// Forward extremities check
-		let extremities: Vec<_> = self
+		let would_change = self
+			.services
+			.rooms
+			.timeline
+			.recalculate_extremities(room_id, 50, fix)
+			.await
+			.unwrap_or(false);
+
+		if would_change {
+			if fix {
+				issues.push("EXTREMITIES_DRIFT (Fixed)".to_owned());
+			} else {
+				issues.push("EXTREMITIES_DRIFT (DAG tips silently broken)".to_owned());
+			}
+		}
+
+		let ext_count = self
 			.services
 			.rooms
 			.state
 			.get_forward_extremities(room_id)
-			.map(ToOwned::to_owned)
-			.collect()
-			.await;
+			.count();
 
-		let ext_count = extremities.len();
 		if ext_count == 0 {
 			issues.push("ZERO_EXTREMITIES (stuck DAG)".to_owned());
 		} else if ext_count > 10 {
@@ -4915,7 +4985,7 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 		self.write_str(&format!("  corrupt: {} ({} bytes)\n", room_id, room_id.len()))
 			.await?;
 		if execute {
-			let _ = self.services.rooms.state_cache.server_rooms_remove_raw(key);
+			self.services.rooms.state_cache.server_rooms_remove_raw(key);
 		}
 	}
 

@@ -840,16 +840,22 @@ impl Service {
 	/// Automatically recalculates the true topological DAG forward extremities
 	/// by querying the last `tail` events from the room's timeline and
 	/// analyzing their `prev_events` graph to find all nodes with out-degree
-	/// 0. Overwrites the stored forward extremities.
-	/// Returns true if the extremities were changed.
+	/// 0. Optionally overwrites the stored forward extremities if `update_db`
+	///    is true.
+	/// Returns true if the extremities were changed (or would be changed).
 	#[tracing::instrument(skip(self), level = "info")]
-	pub async fn recalculate_extremities(&self, room_id: &RoomId, tail: usize) -> Result<bool> {
+	pub async fn recalculate_extremities(
+		&self,
+		room_id: &RoomId,
+		tail: usize,
+		update_db: bool,
+	) -> Result<bool> {
 		use std::collections::{HashMap, HashSet};
 
-		use futures_util::StreamExt;
+		use futures::StreamExt;
 		use ruma::OwnedEventId;
 
-		let state_lock = self.services.state.mutex.lock(room_id.to_owned()).await;
+		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		let mut pdus = Vec::with_capacity(tail);
 		let mut graph = HashMap::with_capacity(tail);
@@ -876,17 +882,19 @@ impl Service {
 		let true_extremities = calculate_true_extremities(&graph, &sorted);
 
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
-		let current_set: HashSet<_> = current_extremities.iter().cloned().collect();
+		let current_set: HashSet<_> = current_extremities.map(|e| e.to_owned()).collect().await;
 		let new_set: HashSet<_> = true_extremities.iter().map(|e| (*e).to_owned()).collect();
 
 		if current_set == new_set {
 			return Ok(false);
 		}
 
-		self.services
-			.state
-			.set_forward_extremities(room_id, true_extremities.iter().copied(), &state_lock)
-			.await;
+		if update_db {
+			self.services
+				.state
+				.set_forward_extremities(room_id, true_extremities.iter().copied(), &state_lock)
+				.await;
+		}
 
 		Ok(true)
 	}

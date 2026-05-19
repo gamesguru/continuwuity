@@ -80,10 +80,8 @@ pub(crate) async fn healer_worker(
 			// fetch_and_handle_outliers automatically queries all fallback servers,
 			// so we only need to invoke it once, using the first available server
 			// (or our own) as the seed origin.
-			let seed_server = fallback_servers
-				.first()
-				.unwrap_or_else(|| &service.services.globals.server_name().to_owned())
-				.clone();
+			let our_server = service.services.globals.server_name().to_owned();
+			let seed_server = fallback_servers.first().unwrap_or(&our_server).clone();
 
 			trace!(
 				event_id = ?event_id,
