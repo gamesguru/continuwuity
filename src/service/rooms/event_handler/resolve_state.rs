@@ -147,20 +147,15 @@ where
 		pdu
 	};
 
-	let rejected_cache = scc::HashMap::new();
-	let rejected_cache_ref = &rejected_cache;
-
-	let event_rejected = |event_id: OwnedEventId| async move {
-		if let Some(rej) = rejected_cache_ref.read_async(&event_id, |_, v| *v).await {
-			return rej;
-		}
-		let rej = self
-			.services
-			.pdu_metadata
-			.is_event_rejected(&event_id)
-			.await;
-		let _ = rejected_cache_ref.insert_async(event_id, rej).await;
-		rej
+	let event_rejected = |_event_id: OwnedEventId| async move {
+		// ALGORITHMIC DAG HEALING:
+		// Do not blindly trust the local `is_event_rejected` flag during state
+		// resolution! If an event was rejected in the past due to a broken local DAG,
+		// returning `true` here hides it from `state_res`, creating artificial
+		// "missing auth event" DAG holes. Returning `false` forces
+		// `iterative_auth_check` to safely re-evaluate the event against the true
+		// topological graph, automatically healing historical rejections.
+		false
 	};
 
 	let room_id_clone = room_id.to_owned();

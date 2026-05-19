@@ -699,21 +699,21 @@ impl Service {
 			info!("reorder_timeline: restored room shortstatehash to {ssh}");
 		}
 
-		// Collapse forward extremities to just the last event in the
-		// sorted timeline. This heals DAG fractures caused by
-		// force-set-room-state-from-server or other admin operations
-		// that scatter extremities across all state events.
-		if let Some(last_event_id) = sorted.last() {
+		// Calculate the true DAG forward extremities using the extracted pure function.
+		// This preserves rescued state events (which have no children locally) as
+		// extremities so they can naturally merge into the DAG via state resolution.
+		let true_extremities = calculate_true_extremities(&graph, &sorted);
+
+		if !true_extremities.is_empty() {
 			self.services
 				.state
-				.set_forward_extremities(
-					room_id,
-					std::iter::once(last_event_id.as_ref()),
-					&state_lock,
-				)
+				.set_forward_extremities(room_id, true_extremities.iter().copied(), &state_lock)
 				.await;
 
-			info!("reorder_timeline: collapsed extremities to single tip: {last_event_id}");
+			info!(
+				"reorder_timeline: set forward extremities to {} true DAG tips",
+				true_extremities.len()
+			);
 		}
 
 		// Rebuild membership cache from the authoritative state snapshot.
@@ -979,5 +979,94 @@ impl Service {
 		from: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.db.pdus(room_id, from.unwrap_or_else(PduCount::min))
+	}
+}
+
+pub(crate) fn calculate_true_extremities<'a>(
+	graph: &std::collections::HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>>,
+	sorted: &'a [OwnedEventId],
+) -> Vec<&'a EventId> {
+	let mut has_children: std::collections::HashSet<OwnedEventId> =
+		std::collections::HashSet::new();
+	for parents in graph.values() {
+		for parent in parents {
+			has_children.insert(parent.clone());
+		}
+	}
+
+	let mut true_extremities: Vec<&EventId> = sorted
+		.iter()
+		.filter(|eid| !has_children.contains(*eid))
+		.map(AsRef::as_ref)
+		.collect();
+
+	if true_extremities.is_empty() {
+		if let Some(last_event_id) = sorted.last() {
+			true_extremities.push(last_event_id.as_ref());
+		}
+	}
+
+	if true_extremities.len() > 20 {
+		true_extremities.reverse();
+		true_extremities.truncate(20);
+	}
+
+	true_extremities
+}
+
+#[cfg(test)]
+mod tests {
+	use std::collections::HashMap;
+
+	use ruma::event_id;
+
+	use super::*;
+
+	#[test]
+	fn test_calculate_true_extremities_single_tip() {
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let mut graph = HashMap::new();
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+
+		let sorted = vec![a.clone(), b.clone()];
+		let tips = calculate_true_extremities(&graph, &sorted);
+		let expected: Vec<&EventId> = vec![b.as_ref()];
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_fork() {
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let c = event_id!("$c").to_owned();
+
+		let mut graph = HashMap::new();
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
+
+		let sorted = vec![a.clone(), b.clone(), c.clone()];
+		let tips = calculate_true_extremities(&graph, &sorted);
+		let expected: Vec<&EventId> = vec![b.as_ref(), c.as_ref()];
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_cap() {
+		let mut graph = HashMap::new();
+		let mut sorted = Vec::new();
+		let root = event_id!("$root").to_owned();
+		sorted.push(root.clone());
+
+		for i in 0..25 {
+			let id: OwnedEventId = format!("$tip{i}").try_into().unwrap();
+			graph.insert(id.clone(), vec![root.clone()].into_iter().collect());
+			sorted.push(id);
+		}
+
+		let tips = calculate_true_extremities(&graph, &sorted);
+		assert_eq!(tips.len(), 20);
+		assert_eq!(tips[0].as_str(), "$tip24");
+		assert_eq!(tips[19].as_str(), "$tip5");
 	}
 }
