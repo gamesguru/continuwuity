@@ -51,7 +51,7 @@ where
 			self.services.server.config.federation_fallback_room_servers,
 		)
 		.await;
-	info!(
+	debug!(
 		origin = %origin,
 		n_total = routing_servers.len(),
 		"Built federation fallback server list for outlier fetching"

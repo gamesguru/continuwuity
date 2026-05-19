@@ -2911,8 +2911,7 @@ pub(super) async fn compare_room_state(
 				tip_pdu_opt
 					.as_ref()
 					.filter(|tip| tip.event_id() == event_id)
-					.map(|tip| u64::from(tip.origin_server_ts))
-					.unwrap_or(0)
+					.map_or(0, |tip| u64::from(tip.origin_server_ts))
 			});
 			let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 			missing_locally
@@ -2928,8 +2927,7 @@ pub(super) async fn compare_room_state(
 				tip_pdu_opt
 					.as_ref()
 					.filter(|tip| tip.event_id() == event_id)
-					.map(|tip| u64::from(tip.origin_server_ts))
-					.unwrap_or(0)
+					.map_or(0, |tip| u64::from(tip.origin_server_ts))
 			});
 			let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 			extra_locally
@@ -3184,8 +3182,7 @@ pub(super) async fn compare_room_state(
 						tip_pdu_opt
 							.as_ref()
 							.filter(|tip| tip.event_id() == event_id)
-							.map(|tip| u64::from(tip.origin_server_ts))
-							.unwrap_or(0)
+							.map_or(0, |tip| u64::from(tip.origin_server_ts))
 					});
 					let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 					only_on_first.push((
@@ -3203,8 +3200,7 @@ pub(super) async fn compare_room_state(
 						tip_pdu_opt
 							.as_ref()
 							.filter(|tip| tip.event_id() == event_id)
-							.map(|tip| u64::from(tip.origin_server_ts))
-							.unwrap_or(0)
+							.map_or(0, |tip| u64::from(tip.origin_server_ts))
 					});
 					let extra = fmt_event_meta(&key.0, event_id, &event_meta);
 					only_on_cmp.push((

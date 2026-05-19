@@ -126,19 +126,8 @@ pub(crate) async fn healer_worker(
 				room_id = ?room_id,
 				fetched = fetched_count,
 				total = to_fetch.len(),
-				"DAG Healer successfully fetched missing events, triggering timeline reorder"
+				"DAG Healer successfully fetched missing events"
 			);
-
-			// Trigger a background task to reorder timeline and force state resolution
-			let s = service.clone();
-			let r_id = room_id.clone();
-			let runtime = service.services.server.runtime();
-			runtime.spawn(async move {
-				if let Err(e) = Box::pin(s.services.timeline.reorder_timeline(&r_id, None)).await
-				{
-					warn!(room_id = ?r_id, error = ?e, "DAG Healer failed to reorder timeline");
-				}
-			});
 		}
 	}
 }
