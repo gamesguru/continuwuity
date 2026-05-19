@@ -41,26 +41,28 @@ pub(super) async fn audit_auth_chain(
 		.get_room_shortstatehash(&room_id)
 		.await
 	{
-		| Ok(sstatehash) => self
-			.services
-			.rooms
-			.state_accessor
-			.state_full_ids(sstatehash)
-			.map(|(_, id)| id)
-			.collect()
-			.await,
-		| Err(_) => self
-			.services
-			.rooms
-			.state
-			.get_forward_extremities(&room_id)
-			.map(ToOwned::to_owned)
-			.collect()
-			.await,
+		| Ok(sstatehash) =>
+			self.services
+				.rooms
+				.state_accessor
+				.state_full_ids(sstatehash)
+				.map(|(_, id)| id)
+				.collect()
+				.await,
+		| Err(_) =>
+			self.services
+				.rooms
+				.state
+				.get_forward_extremities(&room_id)
+				.map(ToOwned::to_owned)
+				.collect()
+				.await,
 	};
 
 	if state_ids.is_empty() {
-		return Err!("Room {room_id} has no state and no forward extremities — completely empty?");
+		return Err!(
+			"Room {room_id} has no state and no forward extremities — completely empty?"
+		);
 	}
 
 	self.write_str(&format!(
@@ -2259,9 +2261,10 @@ pub(super) async fn fetch_pdu(
 		.send_federation_request(&server, get_event::v1::Request::new(event_id, None))
 		.await?;
 
-	// If the room's state is completely missing (falling back to V11) and we happen to be fetching
-	// the `m.room.create` event to rescue it, we MUST extract the real version from the PDU itself.
-	// Otherwise, canonicalization uses the fallback rules, resulting in an entirely incorrect event ID.
+	// If the room's state is completely missing (falling back to V11) and we happen
+	// to be fetching the `m.room.create` event to rescue it, we MUST extract the
+	// real version from the PDU itself. Otherwise, canonicalization uses the
+	// fallback rules, resulting in an entirely incorrect event ID.
 	if let Ok(val) = serde_json::from_str::<serde_json::Value>(response.pdu.get()) {
 		if val.get("type").and_then(|t| t.as_str()) == Some("m.room.create") {
 			if let Some(v_str) = val
@@ -2269,12 +2272,12 @@ pub(super) async fn fetch_pdu(
 				.and_then(|c| c.get("room_version"))
 				.and_then(|v| v.as_str())
 			{
-				if let Ok(v) = ruma::RoomVersionId::try_from(v_str) {
+				if let Ok(v) = RoomVersionId::try_from(v_str) {
 					room_version = v;
 				}
 			} else {
 				// Matrix spec: If room_version is omitted in m.room.create, it defaults to V1.
-				room_version = ruma::RoomVersionId::V1;
+				room_version = RoomVersionId::V1;
 			}
 		}
 	}

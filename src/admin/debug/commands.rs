@@ -132,7 +132,7 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 	} else {
 		status.push_str("Outlier PDU");
 	}
-	
+
 	let soft_failed = self
 		.services
 		.rooms
