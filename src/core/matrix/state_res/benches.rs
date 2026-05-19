@@ -62,7 +62,6 @@ fn resolution_shallow_auth_chain(c: &mut test::Bencher) {
 		let ev_map = store.0.clone();
 		let state_sets = [&state_at_bob, &state_at_charlie];
 		let fetch = |id: OwnedEventId| ready(ev_map.get(&id).map(ToOwned::to_owned));
-		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		let auth_chain_sets: Vec<HashSet<_>> = state_sets
 			.iter()
 			.map(|map| {
@@ -78,7 +77,6 @@ fn resolution_shallow_auth_chain(c: &mut test::Bencher) {
 			state_sets.into_iter(),
 			&auth_chain_sets,
 			&fetch,
-			&exists,
 			&rejected,
 		)
 		.await
@@ -146,14 +144,12 @@ fn resolve_deeper_event_set(c: &mut test::Bencher) {
 			.collect();
 
 		let fetch = |id: OwnedEventId| ready(inner.get(&id).map(ToOwned::to_owned));
-		let exists = |id: OwnedEventId| ready(inner.get(&id).is_some());
 		let rejected = |_: OwnedEventId| ready(false);
 		let _ = match state_res::resolve(
 			&RoomVersionId::V6,
 			state_sets.into_iter(),
 			&auth_chain_sets,
 			&fetch,
-			&exists,
 			&rejected,
 		)
 		.await

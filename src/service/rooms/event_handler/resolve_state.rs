@@ -134,7 +134,6 @@ where
 {
 	let event_fetch =
 		|event_id: OwnedEventId| async move { self.event_fetch(Some(room_id), event_id).await };
-	let event_exists = |event_id: OwnedEventId| async move { self.event_exists(event_id).await };
 	let event_rejected = |event_id: OwnedEventId| async move {
 		// Synapse parity: only hard-rejected events are excluded from state
 		// resolution. Soft-failed events must still participate to heal state
@@ -151,7 +150,6 @@ where
 		state_sets,
 		auth_chain_sets,
 		&event_fetch,
-		&event_exists,
 		&event_rejected,
 	)
 	.map_err(|e| err!(error!("State resolution failed: {e:?}")))

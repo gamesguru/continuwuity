@@ -84,8 +84,6 @@ pub async fn resolve<
 	Hasher,
 	Fetch,
 	FetchFut,
-	Exists,
-	ExistsFut,
 	Reject,
 	RejectFut,
 >(
@@ -93,14 +91,11 @@ pub async fn resolve<
 	state_sets: Sets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId, Hasher>],
 	event_fetch: &Fetch,
-	event_exists: &Exists,
 	event_rejected: &Reject,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	Fetch: Fn(OwnedEventId) -> FetchFut + Sync,
 	FetchFut: Future<Output = Option<Pdu>> + Send,
-	Exists: Fn(OwnedEventId) -> ExistsFut + Sync,
-	ExistsFut: Future<Output = bool> + Send,
 	Reject: Fn(OwnedEventId) -> RejectFut + Sync,
 	RejectFut: Future<Output = bool> + Send,
 	Sets: IntoIterator<IntoIter = SetIter> + Send,
@@ -179,12 +174,13 @@ where
 	let all_conflicted: HashSet<_> = all_conflicted_ids
 		.into_iter()
 		.stream()
-		// Filter out events that no longer exist in the database
-		.broad_filter_map(async |id| event_exists(id.clone()).await.then_some(id))
-		// Filter to state events only: auth chains and prev_events subgraph
-		// traversals can pull in non-state events (e.g. m.room.message) which
-		// lack a state_key. These must be excluded from state resolution since
-		// iterative_auth_check requires all events to have a state_key.
+		// Filter out non-existent events and non-state events in a single fetch.
+		// event_fetch returns None for missing events (same as event_exists would),
+		// and we need the event body anyway to check state_key — doing two separate
+		// broad passes would double the DB round-trips (up to 2× |all_conflicted|
+		// lookups). Auth chains and prev_events subgraph traversals can pull in
+		// non-state events (e.g. m.room.message) which lack a state_key; these must
+		// be excluded since iterative_auth_check requires all events to have one.
 		.broad_filter_map(async |id| {
 			let ev = event_fetch(id.clone()).await?;
 			ev.state_key().is_some().then_some(id)
