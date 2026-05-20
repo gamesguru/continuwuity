@@ -4951,17 +4951,16 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 	let mut corrupt = Vec::new();
 	let mut total = 0_usize;
 
-	let mut raw_stream = self
-		.services
-		.rooms
-		.metadata
-		.iter_ids();
+	let mut raw_stream = self.services.rooms.metadata.iter_ids();
 
 	while let Some(room_id) = raw_stream.next().await {
 		total = total.saturating_add(1);
 		let s = room_id.as_str();
 
-		let valid = s.starts_with('!') && s.len() <= 255 && <&RoomId>::try_from(s).is_ok() && s.contains(':');
+		let valid = s.starts_with('!')
+			&& s.len() <= 255
+			&& <&RoomId>::try_from(s).is_ok()
+			&& s.contains(':');
 		if !valid && s.starts_with('!') {
 			corrupt.push(room_id.to_owned());
 		}
@@ -4975,7 +4974,11 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 			.await?;
 		if execute {
 			let prefix = (ours, conduwuit_database::Interfix, room_id.as_ref());
-			let _ = self.services.rooms.state_cache.server_rooms_remove_raw(&conduwuit_database::key_bytes(prefix));
+			let _ = self
+				.services
+				.rooms
+				.state_cache
+				.server_rooms_remove_raw(&conduwuit_database::key_bytes(prefix));
 			self.services.rooms.metadata.remove_room_raw(room_id);
 		}
 	}
