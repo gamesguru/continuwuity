@@ -197,19 +197,40 @@ where
 
 	let room_version = RoomVersion::new(room_version)?;
 
-	// 1. Isolate the power level events
+	// -- Isolate ALL power/foundation events for sub-resolution. --
+	//    V2.1 starts from empty state, so the PL auth check requires:
+	//    1. m.room.create - to establish the room
+	//    2. m.room.join_rules - needed for join auth checks
+	//    3. m.room.member - sender's join must be in state for PL auth
+	//    4. m.room.power_levels - the actual PL events
+	//    This matches Synapse/ruma-lean behavior where ALL member events
+	//    go through the Kahn-sorted power event path.
 	let conflicted_pl_events: Vec<_> = all_conflicted
 		.iter()
 		.stream()
 		.wide_filter_map(async |id| {
 			let ev = event_fetch(id.clone()).await?;
-			is_type_and_key(&ev, &TimelineEventType::RoomPowerLevels, "").then_some(id.clone())
+			let dominated = matches!(
+				ev.event_type(),
+				TimelineEventType::RoomPowerLevels
+					| TimelineEventType::RoomCreate
+					| TimelineEventType::RoomJoinRules
+					| TimelineEventType::RoomMember
+			);
+			dominated.then_some(id.clone())
 		})
 		.collect()
 		.await;
 
-	// 2. Sub-resolve the PL events using the 100/0 bootstrap (global_pl_context =
-	//    None)
+	debug!(
+		"PL sub-resolution: found {} power/foundation events in conflicted set \
+		 (all_conflicted={})",
+		conflicted_pl_events.len(),
+		all_conflicted.len()
+	);
+
+	// -- Sub-resolve the PL+create events using the 100/0 bootstrap --
+	//    (global_pl_context = None)
 	let sorted_pl_events = reverse_topological_power_sort(
 		conflicted_pl_events,
 		&all_conflicted,
@@ -227,22 +248,24 @@ where
 	)
 	.await?;
 
-	// 3. Extract the authoritative global power level context
+	debug!(entries = partially_resolved_pl_state.len(), "partially resolved PL state");
+
+	// -- Extract the authoritative global power level context --
 	let mut global_pl_context = None;
 	let power_levels_ty_sk = (StateEventType::RoomPowerLevels, StateKey::new());
 	if let Some(pl_event_id) = partially_resolved_pl_state.get(&power_levels_ty_sk) {
-		println!("Selected global PL event: {pl_event_id}");
+		debug!(%pl_event_id, "selected global PL event");
 		if let Some(pl_event) = event_fetch(pl_event_id.clone()).await {
 			if let Ok(c) = from_json_str::<PowerLevelsContentFields>(pl_event.content().get()) {
 				global_pl_context = Some(c);
 			} else {
-				println!("Failed to parse global PL event content!");
+				warn!(%pl_event_id, "failed to parse global PL event content");
 			}
 		} else {
-			println!("Failed to fetch global PL event!");
+			warn!(%pl_event_id, "failed to fetch global PL event");
 		}
 	} else {
-		println!("No global PL event found in partially_resolved_pl_state!");
+		warn!("no global PL event found in partially resolved PL state");
 	}
 
 	// Get only the control events with a state_key: "" or ban/kick event (sender !=
@@ -258,7 +281,7 @@ where
 		.collect()
 		.await;
 
-	// 4. Sort the control events based on power_level/clock/event_id and
+	// -- Sort the control events based on power_level/clock/event_id and --
 	// outgoing/incoming edges, using the global context
 	let sorted_control_levels = reverse_topological_power_sort(
 		control_events,
@@ -882,12 +905,25 @@ where
 				auth_state.insert(event.event_type().with_state_key(""), event.clone());
 			} else {
 				if cached_create_event.is_none() {
-					trace!("room version uses hashed IDs, manually fetching create event");
-					let room_id_res = event.room_id_or_hash();
-					if let Some(room_id) = room_id_res {
-						let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
-						if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
-							cached_create_event = fetch_event(create_event_id.into()).await;
+					trace!("room version uses hashed IDs, searching auth chain for create event");
+					// V12 PDUs may not include room_id in federation dumps.
+					// Find the create event from this event's auth_events.
+					for aid in event.auth_events() {
+						// Check pre-fetched auth events first
+						if let Some(aev) = auth_events.get(aid) {
+							if *aev.event_type() == TimelineEventType::RoomCreate
+								&& aev.state_key() == Some("")
+							{
+								cached_create_event = Some(aev.clone());
+								break;
+							}
+						} else if let Some(aev) = fetch_event(aid.to_owned()).await {
+							if *aev.event_type() == TimelineEventType::RoomCreate
+								&& aev.state_key() == Some("")
+							{
+								cached_create_event = Some(aev);
+								break;
+							}
 						}
 					}
 				}

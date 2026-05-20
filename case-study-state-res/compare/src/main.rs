@@ -17,8 +17,9 @@ async fn main() -> anyhow::Result<()> {
 
 	let mut events_map: HashMap<OwnedEventId, Arc<Pdu>> = HashMap::new();
 
-	let dags_dir = "/run/media/shane/shane4tb-ent/repos/dag-toolkit/\
-	                merged-c10y-t1HZB9jgYr9mmaKtMDsS19HXbWRFc6d0bWGVYU-v12.jsonl";
+	let dags_dir =
+		"/run/media/shane/shane4tb-ent/dags/\
+		 merged-sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE-unredacted-lounge-v12-d1-84135.jsonl";
 	println!("Loading merged.jsonl...");
 	let file = File::open(dags_dir)?;
 	let reader = BufReader::new(file);
@@ -72,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
 		println!("State set for head {} has {} events.", head_id, state_map.len());
 		state_sets.push(state_map);
 	}
+	println!("Using all {} heads", heads.len());
 
 	let mut auth_chain_sets = Vec::new();
 	for map in &state_sets {
@@ -97,6 +99,35 @@ async fn main() -> anyhow::Result<()> {
 		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
 	};
 	let event_rejected = |_: OwnedEventId| std::future::ready(false);
+
+	println!("State sets: {}", state_sets.len());
+	for (i, s) in state_sets.iter().enumerate() {
+		println!("  state_set[{}]: {} entries", i, s.len());
+	}
+	println!("Auth chain sets: {}", auth_chain_sets.len());
+	for (i, a) in auth_chain_sets.iter().enumerate() {
+		println!("  auth_chain[{}]: {} entries", i, a.len());
+	}
+
+	// Check how many state keys are conflicted (appear in >1 set with different
+	// values)
+	let mut all_keys: HashMap<
+		(ruma::events::StateEventType, conduwuit_core::matrix::StateKey),
+		Vec<OwnedEventId>,
+	> = HashMap::new();
+	for s in &state_sets {
+		for (k, v) in s {
+			all_keys.entry(k.clone()).or_default().push(v.clone());
+		}
+	}
+	let conflicted_keys: Vec<_> = all_keys
+		.iter()
+		.filter(|(_, vs)| {
+			let first = &vs[0];
+			vs.iter().any(|v| v != first)
+		})
+		.collect();
+	println!("Conflicted state keys: {} / {} total", conflicted_keys.len(), all_keys.len());
 
 	println!("Resolving state using conduwuit_state_res...");
 	let conduwuit_resolved = state_res::resolve(
