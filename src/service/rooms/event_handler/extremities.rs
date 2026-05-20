@@ -61,7 +61,7 @@ where
 	// to 20, keeping more than that guarantees the server can never merge them all,
 	// leading to permanent fork storms and degraded state resolution.
 	if new_extremities.len() > 10 {
-		let truncate_count = new_extremities.len() - 10;
+		let truncate_count = new_extremities.len().saturating_sub(10);
 		new_extremities.drain(0..truncate_count);
 	}
 

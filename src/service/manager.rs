@@ -99,8 +99,14 @@ impl Manager {
 	}
 
 	async fn handle_abort(&self, _workers: &mut WorkersLocked<'_>, error: Error) -> Result<()> {
+		if !self.server.running() {
+			info!("Worker task aborted during shutdown: {error:?}");
+			return Ok(());
+		}
+
 		// not supported until service can be associated with abort
-		unimplemented!("unexpected worker task abort {error:?}");
+		error!("Unexpected worker task abort: {error:?}");
+		Ok(())
 	}
 
 	async fn handle_result(

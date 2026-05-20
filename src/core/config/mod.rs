@@ -741,7 +741,7 @@ pub struct Config {
 	/// Enable or disable the startup forward-fill sweep that queries remote
 	/// servers to fetch missed events during server downtime. Disabling this
 	/// speeds up startup but relies entirely on periodic sweeps or DAG healing.
-	#[serde(default = "true_fn")]
+	#[serde(default)]
 	pub allow_startup_forwardfill: bool,
 
 	/// Allows federation requests to be made to itself
@@ -818,7 +818,7 @@ pub struct Config {
 	///
 	/// This is technically a Matrix spec violation, but provided as an admin
 	/// override.
-	#[serde(default)]
+	#[serde(default = "true_fn")]
 	pub allow_local_users_to_bypass_history_visibility: bool,
 
 	/// Allow standard users to create rooms. Appservices and admins are always
@@ -1823,7 +1823,9 @@ pub struct Config {
 	/// accepted by the server without signature verification. Useful for
 	/// bypassing unresolvable DAG holes without manually running `yolo
 	/// fetch-pdu --skip-auth`.
-	#[serde(default)]
+	///
+	/// default: []
+	#[serde(default = "Vec::new")]
 	pub bypassed_signature_events: Vec<OwnedEventId>,
 
 	/// Vector list of URLs allowed to send requests to for URL previews.

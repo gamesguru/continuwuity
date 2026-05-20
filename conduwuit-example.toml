@@ -595,7 +595,7 @@
 # servers to fetch missed events during server downtime. Disabling this
 # speeds up startup but relies entirely on periodic sweeps or DAG healing.
 #
-#allow_startup_forwardfill = true
+#allow_startup_forwardfill = false
 
 # Allows federation requests to be made to itself
 #
@@ -672,7 +672,7 @@
 # This is technically a Matrix spec violation, but provided as an admin
 # override.
 #
-#allow_local_users_to_bypass_history_visibility = false
+#allow_local_users_to_bypass_history_visibility = true
 
 # Allow standard users to create rooms. Appservices and admins are always
 # allowed to create rooms
@@ -1579,7 +1579,7 @@
 # bypassing unresolvable DAG holes without manually running `yolo
 # fetch-pdu --skip-auth`.
 #
-#bypassed_signature_events = false
+#bypassed_signature_events = []
 
 # Vector list of URLs allowed to send requests to for URL previews.
 #

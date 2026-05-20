@@ -4,6 +4,12 @@
 Advanced diagnostic and audit commands
 
 
+## `!admin yolo audit-auth-chain`
+
+Audit the auth chain for a room, reporting events that are missing from both the timeline and outlier store (true DAG gaps).
+
+Scans the auth chains of all current state events and buckets each referenced event as: timeline, outlier-only, or missing. With --fetch, fans out GET /event to all known room servers for each gap and stores successes as outliers.
+
 ## `!admin yolo audit-membership`
 
 Full membership audit: timeline vs state vs cache vs remote server.
@@ -14,7 +20,7 @@ Compares timeline membership against state snapshot, checks the membership cache
 
 Attempts to "rescue" an outlier PDU by upgrading it to a timeline event.
 
-This will perform all necessary auth checks and state resolution.
+This will perform all necessary auth checks and state resolution. Falls back to current room state when no server can provide historical /state_ids for the event.
 
 ## `!admin yolo list-outliers`
 
@@ -24,11 +30,17 @@ List all outlier PDUs in our database
 
 View the current forward extremities (timeline tips) of a room, or scan all rooms for DAG fractures with --all
 
+## `!admin yolo recalculate-extremities`
+
+Recalculate and fix forward extremities using true topological DAG resolution
+
 ## `!admin yolo purge-outliers`
 
 Purge outlier PDUs that already exist in our timeline.
 
 This is a safe cleanup command that resolves "stuck" state where an event exists in both the timeline and outlier tables. It will NOT delete outliers that haven't been rescued yet.
+
+To purge a single event by ID, use `--event-id $id`.
 
 ## `!admin yolo rescue-room`
 
@@ -45,10 +57,6 @@ Fixes anachronisms caused by rescued outliers being appended at the end of the t
 Promote all outlier events in a room to backfill timeline PDUs.
 
 This skips auth checks and directly inserts outliers into the timeline. Useful for rooms where the join flow stored events as outliers instead of timeline PDUs.
-
-## `!admin yolo purge-outlier`
-
-Purge a specific outlier event by event ID
 
 ## `!admin yolo purge-timeline-pdu`
 
@@ -128,17 +136,17 @@ Fast local-only health check across all rooms.
 
 Scans every room in the database and reports: - Corrupt room IDs (non-ASCII, parse failures) - Soft-failed or missing create events - Orphaned rooms (no local users) - Extremity anomalies (0 or >10 forward extremities) - Membership cache drift (state vs cache mismatch)
 
-## `!admin yolo mark-rejected`
+## `!admin yolo manage-rejected`
 
-Mark event IDs as rejected in the database.
+Mark or unmark event IDs as rejected in the database.
 
-Rejected events are permanently excluded from state resolution. Use `compare-room-state` to identify divergent event IDs first.
+Rejected events are permanently excluded from state resolution. Use `compare-room-state` to identify divergent event IDs first. By default, marks events as rejected. Use --unreject to reverse. Add --soft-fail to also handle the soft-failed marker.
 
-## `!admin yolo unmark-rejected`
+## `!admin yolo unreject-room`
 
-Remove the rejected marker from event IDs.
+Bulk-unreject all rejected events in a room.
 
-Reverses `mark-rejected`. Events will participate in state resolution again.
+Scans the timeline and outlier tree, unmarks any events flagged as rejected so they participate in state resolution again. Use --soft-fail to also clear soft-fail markers.
 
 ## `!admin yolo heal-all-rooms`
 
@@ -151,3 +159,31 @@ For each room: compares local state with the remote server, marks any extra loca
 Scan the database for corrupt/invalid room IDs and purge them.
 
 This removes entries from serverroomids that contain non-ASCII bytes, missing colons, or other malformed data that causes SEGV on downstream parsing. Run once to clean up, then the scattered validation guards in monitor/state_cache become unnecessary.
+
+## `!admin yolo rebuild-membership-cache`
+
+Rebuild the membership cache from the current state snapshot.
+
+Useful after force-set-state or when /sync is missing rooms.
+
+## `!admin yolo set-state-event`
+
+Surgically override a single state event in a room's state snapshot.
+
+Sets the state for a specific (type, state_key) tuple to the given event_id. The event must exist locally (timeline or outlier). Rebuilds membership cache if the event is m.room.member.
+
+Example: yolo set-state-event !room:server m.room.member @user:server $eventid
+
+## `!admin yolo fetch-missing-events`
+
+Fan out POST /get_missing_events to all room servers to recover DAG holes.
+
+Uses the room's current forward extremities as the earliest boundary and fans out to all EMA-ranked room servers in parallel. Each server returns events it knows about in the gap; received events are stored as outliers and processed into the timeline. Optionally accepts a list of specific event IDs to target; otherwise targets all current room extremities.
+
+Example: yolo fetch-missing-events !room:server
+
+## `!admin yolo clear-ratelimiter`
+
+Clears the global bad_event ratelimiter cache.
+
+Useful after massive DAG healing operations where 404s have bloated the heap.
