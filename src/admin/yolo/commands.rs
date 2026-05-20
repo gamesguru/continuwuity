@@ -4951,39 +4951,32 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 	let mut corrupt = Vec::new();
 	let mut total = 0_usize;
 
-	let prefix = (ours, conduwuit_database::Interfix);
 	let mut raw_stream = self
 		.services
 		.rooms
-		.state_cache
-		.server_rooms_raw_keys_prefix(&prefix);
+		.metadata
+		.iter_ids();
 
-	while let Some(Ok(key_bytes)) = raw_stream.next().await {
+	while let Some(room_id) = raw_stream.next().await {
 		total = total.saturating_add(1);
-		// Decode the key: (ServerName, Interfix, RoomId)
-		// The RoomId is the remainder of the bytes after the server name + 0xFF byte
-		let split_idx = key_bytes.iter().position(|&b| b == 0xFF).unwrap_or(0);
-		let room_id_bytes = if split_idx < key_bytes.len() {
-			&key_bytes[split_idx.saturating_add(1)..]
-		} else {
-			key_bytes
-		};
-		let s = std::str::from_utf8(room_id_bytes).unwrap_or("");
+		let s = room_id.as_str();
 
-		let valid = s.starts_with('!') && s.len() <= 255 && <&RoomId>::try_from(s).is_ok();
+		let valid = s.starts_with('!') && s.len() <= 255 && <&RoomId>::try_from(s).is_ok() && s.contains(':');
 		if !valid && s.starts_with('!') {
-			corrupt.push((key_bytes.to_vec(), s.to_owned()));
+			corrupt.push(room_id.to_owned());
 		}
 	}
 
 	self.write_str(&format!("Scanned {total} rooms, found {} corrupt entries\n", corrupt.len()))
 		.await?;
 
-	for (key, room_id) in &corrupt {
-		self.write_str(&format!("  corrupt: {} ({} bytes)\n", room_id, room_id.len()))
+	for room_id in &corrupt {
+		self.write_str(&format!("  corrupt: {} ({} bytes)\n", room_id, room_id.as_str().len()))
 			.await?;
 		if execute {
-			let _ = self.services.rooms.state_cache.server_rooms_remove_raw(key);
+			let prefix = (ours, conduwuit_database::Interfix, room_id.as_ref());
+			let _ = self.services.rooms.state_cache.server_rooms_remove_raw(&conduwuit_database::key_bytes(prefix));
+			self.services.rooms.metadata.remove_room_raw(room_id);
 		}
 	}
 

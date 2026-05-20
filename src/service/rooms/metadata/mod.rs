@@ -98,3 +98,10 @@ pub async fn is_disabled(&self, room_id: &RoomId) -> bool {
 pub async fn is_banned(&self, room_id: &RoomId) -> bool {
 	self.db.bannedroomids.get(room_id).await.is_ok()
 }
+
+#[implement(Service)]
+pub fn remove_room_raw(&self, room_id: &RoomId) {
+	self.db.roomid_shortroomid.remove(room_id);
+	self.db.disabledroomids.remove(room_id);
+	self.db.bannedroomids.remove(room_id);
+}
