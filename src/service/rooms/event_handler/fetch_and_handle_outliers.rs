@@ -155,36 +155,47 @@ where
 			let servers = routing_servers.clone();
 			active_fetches.push(
 				async move {
-					for (i, server) in servers.iter().enumerate() {
-						let start = Instant::now();
-						match self
-							.services
-							.sending
-							.send_federation_request(server, get_event::v1::Request {
-								event_id: id_clone.clone(),
-								include_unredacted_content: None,
-							})
-							.await
-						{
-							| Ok(res) => {
-								self.update_peer_stats(server, true, start.elapsed());
-								return (id_clone, Ok((res, server.clone())));
-							},
-							| Err(e) => {
-								self.update_peer_stats(server, false, start.elapsed());
-								if i == 0 {
-									debug!(%id_clone, %server, "Origin server failed: {e}");
-								}
-							},
+					let reqs = servers.iter().enumerate().map(|(i, server)| {
+						let id_clone = id_clone.clone();
+						async move {
+							let start = Instant::now();
+							match self
+								.services
+								.sending
+								.send_federation_request(server, get_event::v1::Request {
+									event_id: id_clone.clone(),
+									include_unredacted_content: None,
+								})
+								.await
+							{
+								| Ok(res) => {
+									self.update_peer_stats(server, true, start.elapsed());
+									Ok((res, server.clone()))
+								},
+								| Err(e) => {
+									self.update_peer_stats(server, false, start.elapsed());
+									if i == 0 {
+										debug!(%id_clone, %server, "Origin server failed: {e}");
+									}
+									Err(e)
+								},
+							}
 						}
+						.boxed()
+					});
+
+					match future::select_ok(reqs).await {
+						| Ok((res, _rem)) => (id_clone, Ok(res)),
+						| Err(_all_errors) => {
+							warn!(%id_clone, n_servers = servers.len(), "All fallback servers exhausted");
+							(
+								id_clone,
+								Err(conduwuit::err!(Request(NotFound(
+									"event not found after trying all servers"
+								)))),
+							)
+						},
 					}
-					warn!(%id_clone, n_servers = servers.len(), "All fallback servers exhausted");
-					(
-						id_clone,
-						Err(conduwuit::err!(Request(NotFound(
-							"event not found after trying all servers"
-						)))),
-					)
 				}
 				.boxed(),
 			);
