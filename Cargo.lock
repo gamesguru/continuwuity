@@ -941,6 +941,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "compare"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "conduwuit_core",
+ "ruma",
+ "ruma-lean",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4875,6 +4888,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruma-lean"
+version = "0.1.3"
+dependencies = [
+ "hashbrown 0.15.5",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ruma-macros"
 version = "0.13.0"
 source = "git+https://forgejo.ellis.link/continuwuation/ruwuma?rev=d00b51a8669b21689c4eb47fb81f3a8b27c3e371#d00b51a8669b21689c4eb47fb81f3a8b27c3e371"
@@ -5353,7 +5375,7 @@ checksum = "f83ad47c2f14654528a89495f8d0dbc64173176f8512c7c72386cbe81009f661"
 dependencies = [
  "ahash",
  "annotate-snippets",
- "base64 0.22.1",
+ "base64 0.21.7",
  "encoding_rs_io",
  "getrandom 0.3.4",
  "nohash-hasher",
@@ -5949,6 +5971,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
