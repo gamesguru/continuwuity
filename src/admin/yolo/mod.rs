@@ -615,4 +615,9 @@ pub enum YoloCommand {
 		#[arg(long, default_value = "3")]
 		rounds: usize,
 	},
+
+	/// Clears the global bad_event ratelimiter cache.
+	///
+	/// Useful after massive DAG healing operations where 404s have bloated the heap.
+	ClearRatelimiter,
 }
