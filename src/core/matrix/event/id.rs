@@ -41,9 +41,9 @@ pub fn gen_event_id_canonical_json(
 		value.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create");
 
 	// V11+: strip room_id per MSC3820/MSC4291
-	// V11: strips room_id from all non-create events
+	// V11: strips room_id ONLY from create events
 	// V12+: strips room_id from ALL events (including create)
-	if is_v12_or_later || (is_v11 && !is_create) {
+	if is_v12_or_later || (is_v11 && is_create) {
 		value.remove("room_id");
 	}
 
