@@ -121,9 +121,10 @@ pub enum YoloCommand {
 		/// The room ID or alias.
 		room: OwnedRoomOrAliasId,
 
-		/// The number of recent events to analyze (default: 500)
-		#[arg(long, default_value_t = 500)]
-		tail: usize,
+		/// The number of recent events to analyze (default: 500, or -1 for all
+		/// events)
+		#[arg(allow_hyphen_values = true, long, default_value_t = 500)]
+		tail: i64,
 	},
 
 	/// Purge outlier PDUs that already exist in our timeline.
@@ -227,8 +228,9 @@ pub enum YoloCommand {
 		/// Room ID
 		room_id: OwnedRoomOrAliasId,
 
-		/// Start index (0-based)
-		start: u64,
+		/// Start index (0-based, or negative for offset from the end)
+		#[arg(allow_hyphen_values = true)]
+		start: i64,
 
 		/// End index (0-based, inclusive, or -1 for all)
 		#[arg(allow_hyphen_values = true)]

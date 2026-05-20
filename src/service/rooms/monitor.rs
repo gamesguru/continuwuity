@@ -24,6 +24,7 @@ impl crate::Service for Service {
 				event_handler: args
 					.depend::<crate::rooms::event_handler::Service>("rooms::event_handler"),
 				sending: args.depend::<crate::sending::Service>("sending"),
+				state: args.depend::<crate::rooms::state::Service>("rooms::state"),
 			},
 		}))
 	}
@@ -40,6 +41,7 @@ pub(crate) struct InnerServices {
 	pub(crate) state_cache: Dep<crate::rooms::state_cache::Service>,
 	pub(crate) event_handler: Dep<crate::rooms::event_handler::Service>,
 	pub(crate) sending: Dep<crate::sending::Service>,
+	pub(crate) state: Dep<crate::rooms::state::Service>,
 }
 
 /// How long a room must be idle before being considered stale during the
@@ -105,8 +107,17 @@ impl Service {
 			.server_rooms(ours)
 			.map(ToOwned::to_owned) // Copy RoomId before concurrent loop (UAF )
 			.for_each_concurrent(concurrency, |room_id| async move {
+				// Step 1: Forward-fill missing events
 				if let Err(e) = self.check_room(&room_id, stale_threshold_ms).boxed().await {
 					debug!(target: "forwardfill", "Error checking room {room_id}: {e}");
+				}
+
+				// Step 2: Auto-heal DAG extremities (prune dead forks)
+				// We check the last 50 events to find true topological tips
+				match self.services.timeline.recalculate_extremities(&room_id, 50, true).await {
+					Ok(true) => info!(target: "forwardfill", "Auto-healed DAG extremities for room {room_id}"),
+					Ok(false) => {},
+					Err(e) => warn!(target: "forwardfill", "Error recalculating extremities for {room_id}: {e}"),
 				}
 			})
 			.await;
@@ -322,36 +333,48 @@ impl Service {
 				missing_latest.len()
 			);
 
-			// Fetch the missing extremities
+			// Fetch the missing extremities via /get_missing_events
+			let earliest_events: Vec<ruma::OwnedEventId> = self
+				.services
+				.state
+				.get_forward_extremities(room_id)
+				.take(20)
+				.map(ToOwned::to_owned)
+				.collect()
+				.await;
+
+			let request = ruma::api::federation::event::get_missing_events::v1::Request {
+				room_id: room_id.to_owned(),
+				earliest_events,
+				latest_events: missing_latest,
+				limit: 50_u32.into(),
+				min_depth: 0_u32.into(),
+			};
+
+			let response = match self
+				.services
+				.sending
+				.send_federation_request(target_server, request)
+				.await
+			{
+				| Ok(r) => r,
+				| Err(e) => {
+					warn!(target: "forwardfill", "Failed to fetch missing events for {room_id}: {e}");
+					continue;
+				},
+			};
+
 			let mut handled = 0_usize;
-			for event_id in missing_latest {
-				let request = ruma::api::federation::event::get_event::v1::Request {
-					event_id: event_id.clone(),
-					include_unredacted_content: None,
-				};
-
-				let response = match self
-					.services
-					.sending
-					.send_federation_request(target_server, request)
-					.await
-				{
-					| Ok(r) => r,
-					| Err(e) => {
-						warn!(target: "forwardfill", "Failed to fetch missing extremity {event_id}: {e}");
-						continue;
-					},
-				};
-
+			for pdu_raw in response.events {
 				let (parsed_room_id, parsed_event_id, value) = match self
 					.services
 					.event_handler
-					.parse_incoming_pdu(&response.pdu)
+					.parse_incoming_pdu(&pdu_raw)
 					.await
 				{
 					| Ok(v) => v,
 					| Err(e) => {
-						warn!(target: "forwardfill", "Failed to parse extremity {event_id}: {e}");
+						warn!(target: "forwardfill", "Failed to parse missing event: {e}");
 						continue;
 					},
 				};
@@ -369,7 +392,7 @@ impl Service {
 				))
 				.await
 				{
-					warn!(target: "forwardfill", "Failed to handle extremity {event_id}: {e}");
+					warn!(target: "forwardfill", "Failed to handle missing event {parsed_event_id}: {e}");
 				} else {
 					handled = handled.saturating_add(1);
 				}

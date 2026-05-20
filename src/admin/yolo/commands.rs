@@ -1762,7 +1762,7 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 pub(super) async fn get_room_dag(
 	&self,
 	room_id: OwnedRoomOrAliasId,
-	start: u64,
+	start: i64,
 	end: i64,
 	print: bool,
 ) -> Result {
@@ -1775,6 +1775,13 @@ pub(super) async fn get_room_dag(
 		.map(|(_, pdu)| pdu.event_id().to_owned())
 		.collect()
 		.await;
+
+	let actual_start = if start < 0 {
+		let offset = usize::try_from(start.unsigned_abs()).unwrap_or(usize::MAX);
+		u64::try_from(pdu_ids.len().saturating_sub(offset)).unwrap_or(u64::MAX)
+	} else {
+		start.unsigned_abs()
+	};
 
 	let mut i = 0_u64;
 	let mut count = 0_u64;
@@ -1808,7 +1815,7 @@ pub(super) async fn get_room_dag(
 				break;
 			}
 		}
-		if i >= start {
+		if i >= actual_start {
 			if let Ok(pdu_json) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
 				let mut obj: serde_json::Map<String, JsonValue> =
 					serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
@@ -4338,12 +4345,24 @@ fn civil_from_days(days: i64) -> (i64, u64, u64) {
 pub(super) async fn recalculate_extremities(
 	&self,
 	room: OwnedRoomOrAliasId,
-	tail: usize,
+	tail: i64,
 ) -> Result {
 	let room_id = self.services.rooms.alias.resolve(&room).await?;
 
+	let actual_tail = if tail < 0 {
+		usize::MAX
+	} else {
+		usize::try_from(tail).unwrap_or(usize::MAX)
+	};
+
+	let tail_str = if tail < 0 {
+		"all".to_owned()
+	} else {
+		actual_tail.to_string()
+	};
+
 	self.write_str(&format!(
-		"Recalculating forward extremities for room {room_id} using tail {tail}...\n"
+		"Recalculating forward extremities for room {room_id} using tail {tail_str}...\n"
 	))
 	.await?;
 
@@ -4351,7 +4370,7 @@ pub(super) async fn recalculate_extremities(
 		.services
 		.rooms
 		.timeline
-		.recalculate_extremities(&room_id, tail, true)
+		.recalculate_extremities(&room_id, actual_tail, true)
 		.await?;
 
 	if changed {

@@ -55,6 +55,16 @@ where
 		new_extremities.push(incoming_event_id.to_owned());
 	}
 
+	// SYNAPSE PARITY / DAG HEALING:
+	// Prevent mathematically unmergeable DAG bloat. If there are more than 10
+	// forward extremities, drop the oldest ones. Since Matrix restricts prev_events
+	// to 20, keeping more than that guarantees the server can never merge them all,
+	// leading to permanent fork storms and degraded state resolution.
+	if new_extremities.len() > 10 {
+		let truncate_count = new_extremities.len() - 10;
+		new_extremities.drain(0..truncate_count);
+	}
+
 	debug!(
 		"Retained {} extremities checked against {} prev_events",
 		new_extremities.len(),
