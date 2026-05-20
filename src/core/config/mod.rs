@@ -501,8 +501,7 @@ pub struct Config {
 	#[serde(default = "default_pdu_receive_timeout")]
 	pub pdu_receive_timeout: u64,
 
-	/// Timeout in seconds to wait for missing prev_events to be fetched over
-	/// federation.
+	/// Timeout in seconds to try fetching missing prev_events over federation.
 	///
 	/// default: 30
 	#[serde(default = "default_fetch_prev_timeout")]

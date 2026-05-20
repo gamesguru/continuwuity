@@ -483,7 +483,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	use ruma::{events::StateEventType, signatures::Verified};
 
 	let pdu = self.services.rooms.timeline.get_pdu(&event_id).await?;
-	let mut event = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
+	let event = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
 
 	// Status flags
 	let (is_rejected, is_soft_failed) = tokio::join!(
@@ -511,9 +511,25 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 		.await
 		.is_ok();
 
+	let room_version_id = if let Some(room_id) = pdu.room_id_or_hash() {
+		self.services
+			.rooms
+			.state
+			.get_room_version_or_fallback(&room_id)
+			.await
+			.unwrap_or_else(|_| ruma::RoomVersionId::V12)
+	} else {
+		ruma::RoomVersionId::V12
+	};
+	let room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
+
 	// Signature verification
-	event.remove("event_id");
-	let sig_msg = match self.services.server_keys.verify_event(&event, None).await {
+	let sig_msg = match self
+		.services
+		.server_keys
+		.verify_event(&event, Some(&room_version_id))
+		.await
+	{
 		| Err(e) => format!("SIGNATURE FAILED: {e}"),
 		| Ok(Verified::Signatures) => "signatures OK, content hash FAILED (redaction)".to_owned(),
 		| Ok(Verified::All) => "signatures and hashes OK".to_owned(),
@@ -521,16 +537,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 
 	// Auth check against current room state
 	let auth_msg = if let Some(room_id) = pdu.room_id_or_hash() {
-		if let Ok(room_version_id) = self
-			.services
-			.rooms
-			.state
-			.get_room_version_or_fallback(&room_id)
-			.await
 		{
-			let room_version =
-				RoomVersion::new(&room_version_id).expect("room version is supported");
-
 			// Gather auth events from current state
 			let auth_events = self
 				.services
@@ -582,8 +589,6 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 				},
 				| Err(e) => format!("SKIP (auth events: {e})"),
 			}
-		} else {
-			"SKIP (unknown room version)".to_owned()
 		}
 	} else {
 		"SKIP (no room_id)".to_owned()

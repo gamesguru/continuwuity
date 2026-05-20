@@ -121,9 +121,9 @@ pub enum YoloCommand {
 		/// The room ID or alias.
 		room: OwnedRoomOrAliasId,
 
-		/// The number of recent events to analyze (default: 500, or -1 for all
+		/// The number of recent events to analyze (default: 50, or -1 for all
 		/// events)
-		#[arg(allow_hyphen_values = true, long, default_value_t = 500)]
+		#[arg(allow_hyphen_values = true, long, default_value_t = 50)]
 		tail: i64,
 	},
 

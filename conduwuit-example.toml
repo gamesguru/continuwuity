@@ -393,7 +393,7 @@
 #
 #pdu_receive_timeout = 600
 
-# Timeout in seconds to wait for missing prev_events to be fetched over federation.
+# Timeout in seconds to try fetching missing prev_events over federation.
 #
 #fetch_prev_timeout = 30
 

@@ -4936,10 +4936,7 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 		total = total.saturating_add(1);
 		let s = room_id.as_str();
 
-		let valid = s.starts_with('!')
-			&& s.len() <= 255
-			&& <&RoomId>::try_from(s).is_ok()
-			&& s.contains(':');
+		let valid = s.starts_with('!') && s.len() <= 255 && <&RoomId>::try_from(s).is_ok();
 		if !valid && s.starts_with('!') {
 			corrupt.push(room_id.to_owned());
 		}
