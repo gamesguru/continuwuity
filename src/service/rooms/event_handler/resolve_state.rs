@@ -147,7 +147,17 @@ where
 		pdu
 	};
 
-	let event_rejected = |_event_id: OwnedEventId| async move {
+	let event_rejected = |event_id: OwnedEventId| async move {
+		// Admin rejections are ABSOLUTE.
+		if self
+			.services
+			.pdu_metadata
+			.is_event_admin_rejected(&event_id)
+			.await
+		{
+			return true;
+		}
+
 		// ALGORITHMIC DAG HEALING:
 		// Do not blindly trust the local `is_event_rejected` flag during state
 		// resolution! If an event was rejected in the past due to a broken local DAG,

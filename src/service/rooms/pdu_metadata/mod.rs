@@ -149,6 +149,18 @@ impl Service {
 		self.db.mark_event_rejected(event_id);
 	}
 
+	pub fn mark_event_admin_rejected(&self, event_id: &EventId) {
+		self.db.mark_event_admin_rejected(event_id);
+	}
+
+	pub async fn is_event_admin_rejected(&self, event_id: &EventId) -> bool {
+		self.db.is_event_admin_rejected(event_id).await
+	}
+
+	pub fn unmark_event_admin_rejected(&self, event_id: &EventId) {
+		self.db.unmark_event_admin_rejected(event_id);
+	}
+
 	pub fn unmark_event_soft_failed(&self, event_id: &EventId) {
 		self.db.unmark_event_soft_failed(event_id);
 	}

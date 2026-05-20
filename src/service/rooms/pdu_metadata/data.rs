@@ -26,6 +26,7 @@ pub(super) struct Data {
 	tofrom_relation: Arc<Map>,
 	referencedevents: Arc<Map>,
 	softfailedeventids: Arc<Map>,
+	adminrejectedeventids: Arc<Map>,
 	rejectedeventids: Arc<Map>,
 	services: Services,
 }
@@ -41,6 +42,7 @@ impl Data {
 			tofrom_relation: db["tofrom_relation"].clone(),
 			referencedevents: db["referencedevents"].clone(),
 			softfailedeventids: db["softfailedeventids"].clone(),
+			adminrejectedeventids: db["adminrejectedeventids"].clone(),
 			rejectedeventids: db["rejectedeventids"].clone(),
 			services: Services {
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
@@ -140,9 +142,23 @@ impl Data {
 		self.rejectedeventids.remove(event_id);
 	}
 
+	pub(super) fn mark_event_admin_rejected(&self, event_id: &EventId) {
+		self.adminrejectedeventids.insert(event_id, []);
+		self.rejectedeventids.insert(event_id, []); // Admin rejected is always rejected
+	}
+
+	pub(super) async fn is_event_admin_rejected(&self, event_id: &EventId) -> bool {
+		self.adminrejectedeventids.get(event_id).await.is_ok()
+	}
+
+	pub(super) fn unmark_event_admin_rejected(&self, event_id: &EventId) {
+		self.adminrejectedeventids.remove(event_id);
+	}
+
 	/// Removes any soft-fail or rejection markers applied to the target PDU
 	pub(super) fn clear_pdu_markers(&self, event_id: &EventId) {
 		self.unmark_event_rejected(event_id);
 		self.unmark_event_soft_failed(event_id);
+		self.unmark_event_admin_rejected(event_id);
 	}
 }
