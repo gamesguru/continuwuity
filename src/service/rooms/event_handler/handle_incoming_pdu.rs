@@ -243,9 +243,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	let is_disabled = self.services.metadata.is_disabled(room_id).map(Ok);
 
 	// 1.3.1 Check room ACL on origin field/server
-	let origin_acl_check: OptionFuture<_> = is_timeline_event
-		.then(|| self.acl_check(origin, room_id))
-		.into();
+	let origin_acl_check = self.acl_check(origin, room_id);
 
 	// 1.3.2 Check room ACL on sender's server name
 	let sender: &UserId = value
@@ -253,15 +251,16 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		.try_into()
 		.map_err(|e| err!(Request(InvalidParam("PDU does not have a valid sender key: {e}"))))?;
 
-	let sender_acl_check: OptionFuture<_> = (is_timeline_event
-		&& sender.server_name().ne(origin))
-	.then(|| self.acl_check(sender.server_name(), room_id))
-	.into();
+	let sender_acl_check: OptionFuture<_> = sender
+		.server_name()
+		.ne(origin)
+		.then(|| self.acl_check(sender.server_name(), room_id))
+		.into();
 
-	let (meta_exists, is_disabled, _origin_acl_res, _sender_acl_res) = try_join4(
+	let (meta_exists, is_disabled, (), ()) = try_join4(
 		meta_exists,
 		is_disabled,
-		origin_acl_check.map(|o| o.unwrap_or(Ok(()))),
+		origin_acl_check,
 		sender_acl_check.map(|o| o.unwrap_or(Ok(()))),
 	)
 	.await
