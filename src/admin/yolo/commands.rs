@@ -1718,12 +1718,8 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 
 	let mut room_id_opt = None;
 	if in_timeline {
-		if let Ok(pdu) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
-			if let Some(room_id) = pdu.get("room_id").and_then(|v| v.as_str()) {
-				if let Ok(rid) = <&RoomId>::try_from(room_id) {
-					room_id_opt = Some(rid.to_owned());
-				}
-			}
+		if let Ok(pdu) = self.services.rooms.timeline.get_pdu(&event_id).await {
+			room_id_opt = pdu.room_id().map(ToOwned::to_owned);
 		}
 	}
 
@@ -1746,7 +1742,7 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 			self.services
 				.rooms
 				.timeline
-				.recalculate_extremities(&room_id, 50, true)
+				.recalculate_extremities(&room_id, 100, true)
 				.await?;
 		}
 		self.write_str(&format!(
@@ -4489,7 +4485,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			.services
 			.rooms
 			.timeline
-			.recalculate_extremities(room_id, 500, fix)
+			.recalculate_extremities(room_id, 100, fix)
 			.await
 			.unwrap_or(false);
 

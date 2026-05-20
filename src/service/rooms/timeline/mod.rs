@@ -863,6 +863,14 @@ impl Service {
 
 		let mut stream = std::pin::pin!(self.pdus_rev(room_id, None));
 		while let Some(Ok((_count, pdu))) = stream.next().await {
+			// ALGORITHMIC DAG HEALING:
+			// Do NOT include soft-failed events in the topological graph.
+			// By ignoring them, their parents will naturally have out-degree 0
+			// and become the true DAG tips, burying the soft-failed event.
+			if self.services.pdu_metadata.is_event_soft_failed(&pdu.event_id).await {
+				continue;
+			}
+			
 			pdus.push(pdu);
 			if pdus.len() >= tail {
 				break;
@@ -1260,5 +1268,57 @@ mod tests {
 		assert_eq!(tips.len(), 20);
 		assert_eq!(tips[0].as_str(), "$tip24");
 		assert_eq!(tips[19].as_str(), "$tip5");
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_08_empty_input() {
+		let graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> = HashMap::new();
+		let sorted = vec![];
+		let tips = calculate_true_extremities(&graph, &sorted);
+		assert!(tips.is_empty(), "Empty graph should return empty extremities");
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_09_extraneous_graph_data() {
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let old = event_id!("$old").to_owned();
+		let older = event_id!("$older").to_owned();
+
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		// Extraneous data outside the 'sorted' window
+		graph.insert(old.clone(), vec![older.clone()].into_iter().collect());
+
+		let sorted = vec![a.clone(), b.clone()];
+		let tips = calculate_true_extremities(&graph, &sorted);
+
+		let expected: Vec<&EventId> = vec![&*b];
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_calculate_true_extremities_10_out_of_order() {
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let c = event_id!("$c").to_owned();
+
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+			
+		// Linear chain: A -> B -> C
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+
+		// Array is passed in completely scrambled chronological order
+		let sorted = vec![c.clone(), a.clone(), b.clone()];
+		let tips = calculate_true_extremities(&graph, &sorted);
+
+		// Even though C was first in the array, A and B are in has_children.
+		// The algorithm correctly identifies C as the sole extremity.
+		let expected: Vec<&EventId> = vec![&*c];
+		assert_eq!(tips, expected);
 	}
 }
