@@ -66,6 +66,7 @@ where
 	let mut fetched_info: HashMap<OwnedEventId, CanonicalJsonObject> = HashMap::new();
 	let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::with_capacity(128);
 	let mut active_fetches = FuturesUnordered::new();
+	let fetch_concurrency = std::sync::Arc::new(tokio::sync::Semaphore::new(20));
 	let limit = self.services.server.config.max_fetch_prev_events;
 
 	// Track which events were the original seed requests
@@ -111,8 +112,10 @@ where
 
 		let id_clone = id.to_owned();
 		let servers = routing_servers.clone();
+		let sem = fetch_concurrency.clone();
 		active_fetches.push(
 			async move {
+				let _permit = sem.acquire().await;
 				let reqs = servers.iter().enumerate().map(|(i, server)| {
 					let id_clone = id_clone.clone();
 					async move {
@@ -261,8 +264,10 @@ where
 								trace!("Found auth event id {auth_event} for event {next_id}");
 								let auth_event_clone = auth_event.clone();
 								let servers = routing_servers.clone();
+								let sem = fetch_concurrency.clone();
 								active_fetches.push(
 									async move {
+										let _permit = sem.acquire().await;
 										for attempt in 0..2_u8 {
 											if attempt > 0 {
 												tokio::time::sleep(std::time::Duration::from_secs(

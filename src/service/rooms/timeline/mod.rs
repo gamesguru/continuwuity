@@ -887,42 +887,22 @@ impl Service {
 			sorted.push(event_id);
 		}
 
-		let window_extremities = calculate_true_extremities(&graph, &sorted);
+		let true_extremities = calculate_true_extremities(&graph, &sorted);
 
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
-		let mut current_set: HashSet<_> =
-			current_extremities.map(ToOwned::to_owned).collect().await;
+		let current_set: HashSet<_> = current_extremities.map(ToOwned::to_owned).collect().await;
+		let new_set: HashSet<_> = true_extremities.iter().map(|e| (*e).to_owned()).collect();
 
-		let original_set = current_set.clone();
-
-		// Find all prev_events referenced by any event in our scanned window
-		let mut has_children = HashSet::new();
-		for parents in graph.values() {
-			for parent in parents {
-				has_children.insert(parent.clone());
-			}
-		}
-
-		// Remove any existing extremity that now has a child in our scanned window
-		current_set.retain(|ext| !has_children.contains(ext));
-
-		// Add any new true extremities found within the scanned window
-		for ext in window_extremities {
-			current_set.insert(ext.to_owned());
-		}
-
-		if original_set == current_set {
+		if current_set == new_set {
 			return Ok(false);
 		}
 
 		if update_db {
-			let mut final_ext: Vec<_> = current_set.into_iter().collect();
-			if final_ext.len() > 20 {
-				final_ext.truncate(20);
-			}
+			// STRICT OVERWRITE: Erases phantom tips that fell out of the window.
+			// calculate_true_extremities already caps to 20 safely.
 			self.services
 				.state
-				.set_forward_extremities(room_id, final_ext.iter().map(|e| &**e), &state_lock)
+				.set_forward_extremities(room_id, true_extremities.into_iter(), &state_lock)
 				.await;
 		}
 
