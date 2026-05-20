@@ -195,6 +195,56 @@ where
 	// We used to check that all events are events from the correct room
 	// this is now a check the caller of `resolve` must make.
 
+	let room_version = RoomVersion::new(room_version)?;
+
+	// 1. Isolate the power level events
+	let conflicted_pl_events: Vec<_> = all_conflicted
+		.iter()
+		.stream()
+		.wide_filter_map(async |id| {
+			let ev = event_fetch(id.clone()).await?;
+			is_type_and_key(&ev, &TimelineEventType::RoomPowerLevels, "").then_some(id.clone())
+		})
+		.collect()
+		.await;
+
+	// 2. Sub-resolve the PL events using the 100/0 bootstrap (global_pl_context =
+	//    None)
+	let sorted_pl_events = reverse_topological_power_sort(
+		conflicted_pl_events,
+		&all_conflicted,
+		&event_fetch,
+		None, // Bootstrap mode
+	)
+	.await?;
+
+	let partially_resolved_pl_state = iterative_auth_check(
+		&room_version,
+		sorted_pl_events.iter().stream().map(AsRef::as_ref),
+		initial_state.clone(),
+		&event_fetch,
+		&event_rejected,
+	)
+	.await?;
+
+	// 3. Extract the authoritative global power level context
+	let mut global_pl_context = None;
+	let power_levels_ty_sk = (StateEventType::RoomPowerLevels, StateKey::new());
+	if let Some(pl_event_id) = partially_resolved_pl_state.get(&power_levels_ty_sk) {
+		println!("Selected global PL event: {pl_event_id}");
+		if let Some(pl_event) = event_fetch(pl_event_id.clone()).await {
+			if let Ok(c) = from_json_str::<PowerLevelsContentFields>(pl_event.content().get()) {
+				global_pl_context = Some(c);
+			} else {
+				println!("Failed to parse global PL event content!");
+			}
+		} else {
+			println!("Failed to fetch global PL event!");
+		}
+	} else {
+		println!("No global PL event found in partially_resolved_pl_state!");
+	}
+
 	// Get only the control events with a state_key: "" or ban/kick event (sender !=
 	// state_key)
 	let control_events: Vec<_> = all_conflicted
@@ -208,10 +258,15 @@ where
 		.collect()
 		.await;
 
-	// Sort the control events based on power_level/clock/event_id and
-	// outgoing/incoming edges
-	let sorted_control_levels =
-		reverse_topological_power_sort(control_events, &all_conflicted, &event_fetch).await?;
+	// 4. Sort the control events based on power_level/clock/event_id and
+	// outgoing/incoming edges, using the global context
+	let sorted_control_levels = reverse_topological_power_sort(
+		control_events,
+		&all_conflicted,
+		&event_fetch,
+		global_pl_context.as_ref(),
+	)
+	.await?;
 
 	debug!(count = sorted_control_levels.len(), "power events");
 	if sorted_control_levels.len() <= 10 {
@@ -230,14 +285,13 @@ where
 	}
 	trace!(list = ?sorted_control_levels, "sorted power events");
 
-	let room_version = RoomVersion::new(room_version)?;
 	// Sequentially auth check each control event.
 	let resolved_control = iterative_auth_check(
 		&room_version,
 		sorted_control_levels.iter().stream().map(AsRef::as_ref),
 		initial_state,
 		&event_fetch,
-		event_rejected,
+		&event_rejected,
 	)
 	.await?;
 
@@ -448,6 +502,7 @@ async fn reverse_topological_power_sort<E, F, Fut>(
 	events_to_sort: Vec<OwnedEventId>,
 	auth_diff: &HashSet<OwnedEventId>,
 	fetch_event: &F,
+	global_pl_context: Option<&PowerLevelsContentFields>,
 ) -> Result<Vec<OwnedEventId>>
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
@@ -467,7 +522,7 @@ where
 		.cloned()
 		.stream()
 		.broad_filter_map(async |event_id| {
-			let pl = get_power_level_for_sender(&event_id, fetch_event).await;
+			let pl = get_power_level_for_sender(&event_id, fetch_event, global_pl_context).await;
 
 			Some((event_id, pl))
 		})
@@ -627,7 +682,11 @@ where
 /// Do NOT use this any where but topological sort, we find the power level for
 /// the eventId at the eventId's generation (we walk backwards to `EventId`s
 /// most recent previous power level event).
-async fn get_power_level_for_sender<E, F, Fut>(event_id: &EventId, fetch_event: &F) -> Int
+async fn get_power_level_for_sender<E, F, Fut>(
+	event_id: &EventId,
+	fetch_event: &F,
+	global_pl_context: Option<&PowerLevelsContentFields>,
+) -> Int
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
 	Fut: Future<Output = Option<E>> + Send,
@@ -636,36 +695,50 @@ where
 	debug!("fetch event ({event_id}) senders power level");
 
 	let event = fetch_event(event_id.to_owned()).await;
+	let sender = event.as_ref().map(Event::sender);
 
-	let auth_events = event.as_ref().map(Event::auth_events);
-
-	let pl = auth_events
-		.into_iter()
-		.flatten()
-		.stream()
-		.broadn_filter_map(5, |aid| fetch_event(aid.to_owned()))
-		.ready_find(|aev| is_type_and_key(aev, &TimelineEventType::RoomPowerLevels, ""))
-		.await;
-
-	let content: PowerLevelsContentFields = match pl {
-		| None => return int!(0),
-		| Some(ev) => match from_json_str(ev.content().get()) {
-			| Ok(c) => c,
-			| Err(e) => {
-				warn!("Failed to parse power levels event {}: {e}", ev.event_id());
-				return int!(0);
-			},
-		},
-	};
+	if let Some(global_context) = global_pl_context {
+		if let Some(s) = &sender {
+			if let Some(&user_level) = global_context.get_user_power(s) {
+				debug!("found {} at power_level {user_level} via global context", s);
+				return user_level;
+			}
+			return global_context.users_default;
+		}
+		return int!(0);
+	}
 
 	if let Some(ev) = event {
-		if let Some(&user_level) = content.get_user_power(ev.sender()) {
-			debug!("found {} at power_level {user_level}", ev.sender());
-			return user_level;
+		if is_type_and_key(&ev, &TimelineEventType::RoomCreate, "") {
+			return int!(100);
+		}
+
+		let auth_events = ev.auth_events();
+		let creator_event: Option<E> = auth_events
+			.into_iter()
+			.stream()
+			.broadn_filter_map(5, |aid| fetch_event(aid.to_owned()))
+			.ready_find(|aev: &E| is_type_and_key(aev, &TimelineEventType::RoomCreate, ""))
+			.await;
+
+		if let Some(creator_ev) = creator_event {
+			let mut is_creator = creator_ev.sender() == ev.sender();
+			if let Ok(create_content) = from_json_str::<
+				ruma::events::room::create::RoomCreateEventContent,
+			>(creator_ev.content().get())
+			{
+				#[allow(deprecated)]
+				if let Some(creator_user) = create_content.creator {
+					is_creator = creator_user == ev.sender();
+				}
+			}
+			if is_creator {
+				return int!(100);
+			}
 		}
 	}
 
-	content.users_default
+	int!(0)
 }
 
 /// Check the that each event is authenticated based on the events before it.
@@ -1025,7 +1098,7 @@ where
 		.iter()
 		.rev()
 		.enumerate()
-		.map(|(idx, eid)| ((*eid).clone(), idx))
+		.map(|(idx, eid)| ((*eid).clone(), idx.saturating_add(1)))
 		.collect();
 
 	let order_map: HashMap<_, _> = to_sort

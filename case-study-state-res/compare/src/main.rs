@@ -13,29 +13,22 @@ async fn main() -> anyhow::Result<()> {
 	tracing_subscriber::fmt::init();
 	println!("Loading events...");
 
+	let start_time = std::time::Instant::now();
+
 	let mut events_map: HashMap<OwnedEventId, Arc<Pdu>> = HashMap::new();
 
-	let dags_dir = "/run/media/shane/shane4tb-ent/dags";
-	for entry in std::fs::read_dir(dags_dir)? {
-		let entry = entry?;
-		let path = entry.path();
-		if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-			if name.starts_with("remote-dag-l2xV0sd51lraysuRcsWVECge4NULaH3g-ou95vgDgiM-v12")
-				&& name.ends_with(".jsonl")
-			{
-				println!("Loading {}...", name);
-				let file = File::open(&path)?;
-				let reader = BufReader::new(file);
-				use std::io::BufRead;
-				for line in reader.lines().flatten() {
-					if line.trim().is_empty() {
-						continue;
-					}
-					if let Ok(pdu) = serde_json::from_str::<Pdu>(&line) {
-						events_map.insert(pdu.event_id.clone(), Arc::new(pdu));
-					}
-				}
-			}
+	let dags_dir = "/run/media/shane/shane4tb-ent/repos/dag-toolkit/\
+	                merged-c10y-t1HZB9jgYr9mmaKtMDsS19HXbWRFc6d0bWGVYU-v12.jsonl";
+	println!("Loading merged.jsonl...");
+	let file = File::open(dags_dir)?;
+	let reader = BufReader::new(file);
+	use std::io::BufRead;
+	for line in reader.lines().map_while(Result::ok) {
+		if line.trim().is_empty() {
+			continue;
+		}
+		if let Ok(pdu) = serde_json::from_str::<Pdu>(&line) {
+			events_map.insert(pdu.event_id.clone(), Arc::new(pdu));
 		}
 	}
 
@@ -70,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
 		}
 
 		reachable.sort_by(|a, b| a.depth.cmp(&b.depth).then(a.event_id.cmp(&b.event_id)));
+
 		let mut state_map = HashMap::new();
 		for ev in reachable {
 			let key = (ev.kind.clone().into(), ev.state_key.as_deref().unwrap_or("").into());
@@ -118,17 +112,114 @@ async fn main() -> anyhow::Result<()> {
 
 	println!("Conduwuit resolved {} events", conduwuit_resolved.len());
 
+	let mut joined = 0;
+	let mut left = 0;
+	let mut banned = 0;
+	let mut invite = 0;
+	let mut knock = 0;
+
+	for id in conduwuit_resolved.values() {
+		if let Some(ev) = events_map.get(id)
+			&& ev.kind == ruma::events::TimelineEventType::RoomMember
+			&& let Ok(member) = serde_json::from_str::<
+				ruma::events::room::member::RoomMemberEventContent,
+			>(ev.content.get())
+		{
+			match member.membership {
+				| ruma::events::room::member::MembershipState::Join => joined += 1,
+				| ruma::events::room::member::MembershipState::Leave => left += 1,
+				| ruma::events::room::member::MembershipState::Ban => banned += 1,
+				| ruma::events::room::member::MembershipState::Invite => invite += 1,
+				| ruma::events::room::member::MembershipState::Knock => knock += 1,
+				| _ => {},
+			}
+		}
+	}
+	println!(
+		"CONDUWUIT COUNTS: {} joined, {} left, {} banned (invite: {}, knock: {})",
+		joined, left, banned, invite, knock
+	);
+
 	// Load baseline output
 	let output_file = File::open("/tmp/state-res-output.json")?;
 	let output_reader = BufReader::new(output_file);
-	let baseline_pdus: Vec<Pdu> = serde_json::from_reader(output_reader)?;
-	let baseline_ids: Vec<OwnedEventId> = baseline_pdus.into_iter().map(|p| p.event_id).collect();
+	let baseline_ids: Vec<OwnedEventId> = serde_json::from_reader(output_reader)?;
+
+	let mut b_joined = 0;
+	let mut b_left = 0;
+	let mut b_banned = 0;
+
+	for ev_id in &baseline_ids {
+		if let Some(ev) = events_map.get(ev_id)
+			&& ev.kind == ruma::events::TimelineEventType::RoomMember
+			&& let Ok(member) = serde_json::from_str::<
+				ruma::events::room::member::RoomMemberEventContent,
+			>(ev.content.get())
+		{
+			match member.membership {
+				| ruma::events::room::member::MembershipState::Join => b_joined += 1,
+				| ruma::events::room::member::MembershipState::Leave => b_left += 1,
+				| ruma::events::room::member::MembershipState::Ban => b_banned += 1,
+				| _ => {},
+			}
+		}
+	}
+	println!("BASELINE COUNTS: {} joined, {} left, {} banned", b_joined, b_left, b_banned);
+
 	let baseline_set: HashSet<OwnedEventId> = baseline_ids.into_iter().collect();
 
 	let conduwuit_set: HashSet<OwnedEventId> = conduwuit_resolved.values().cloned().collect();
 
 	let missing_in_conduwuit: Vec<_> = baseline_set.difference(&conduwuit_set).collect();
 	let extra_in_conduwuit: Vec<_> = conduwuit_set.difference(&baseline_set).collect();
+
+	let mut conduwuit_pdus: Vec<Arc<Pdu>> = conduwuit_set
+		.iter()
+		.filter_map(|id| events_map.get(id).cloned())
+		.collect();
+
+	// Sort by (TimelineEventType String, StateKey String) to match ruma-lean's
+	// BTreeMap StateMap sorting
+	conduwuit_pdus.sort_by(|a, b| {
+		let a_key = (a.kind.to_string(), a.state_key.as_deref().unwrap_or(""));
+		let b_key = (b.kind.to_string(), b.state_key.as_deref().unwrap_or(""));
+		a_key.cmp(&b_key)
+	});
+
+	let sorted_ids: Vec<String> = conduwuit_pdus
+		.into_iter()
+		.map(|p| p.event_id.to_string())
+		.collect();
+
+	let mut final_auth_chain = HashSet::new();
+	let mut stack: Vec<OwnedEventId> = conduwuit_set.iter().cloned().collect();
+	let mut visited = HashSet::new();
+	while let Some(ev_id) = stack.pop() {
+		if visited.insert(ev_id.clone())
+			&& let Some(ev) = events_map.get(&ev_id)
+		{
+			for auth_id in &ev.auth_events {
+				if final_auth_chain.insert(auth_id.clone()) {
+					stack.push(auth_id.clone());
+				}
+			}
+		}
+	}
+
+	let duration = start_time.elapsed();
+
+	let output_json = serde_json::json!({
+		"auth_chain_size": final_auth_chain.len(),
+		"duration_ms": duration.as_millis(),
+		"resolved_state_size": sorted_ids.len(),
+		"state_event_ids": sorted_ids,
+		"status": "success",
+		"version": "V2_1"
+	});
+
+	let mut out_file = File::create("/tmp/conduwuit-output.json")?;
+	serde_json::to_writer_pretty(&mut out_file, &output_json)?;
+	println!("Exported Conduwuit's sorted state event IDs to /tmp/conduwuit-output.json");
 
 	if missing_in_conduwuit.is_empty() && extra_in_conduwuit.is_empty() {
 		println!("SUCCESS: Conduwuit state resolution perfectly matches baseline!");

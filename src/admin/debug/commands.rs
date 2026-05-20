@@ -517,7 +517,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 			.state
 			.get_room_version_or_fallback(&room_id)
 			.await
-			.unwrap_or_else(|_| RoomVersionId::V12)
+			.unwrap_or(RoomVersionId::V12)
 	} else {
 		RoomVersionId::V12
 	};

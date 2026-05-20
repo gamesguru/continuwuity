@@ -1118,24 +1118,30 @@ where
 				true
 			}
 		},
-		| MembershipState::Ban => {
-			let allow = (sender_creator && !target_creator)
-				|| (sender_power.filter(|&p| p >= &power_levels.ban).is_some()
-					&& target_power < sender_power);
-			if !allow {
+		| MembershipState::Ban =>
+			if !sender_is_joined {
 				warn!(
 					%sender,
-					%target_user,
-					?sender_power,
-					?target_power,
-					ban_level = %power_levels.ban,
-					"sender cannot ban target"
+					?sender_membership_event_id,
+					"sender cannot ban another user as they are not joined to the room",
 				);
 				false
 			} else {
-				true
-			}
-		},
+				let allow = (sender_creator && !target_creator)
+					|| (sender_power.filter(|&p| p >= &power_levels.ban).is_some()
+						&& target_power < sender_power);
+				if !allow {
+					warn!(
+						%sender,
+						%target_user,
+						?sender_power,
+						?target_power,
+						ban_level = %power_levels.ban,
+						"sender cannot ban target"
+					);
+				}
+				allow
+			},
 		| MembershipState::Knock if room_version.allow_knocking => {
 			// 1. If the `join_rule` is anything other than `knock` or `knock_restricted`,
 			//    reject.
