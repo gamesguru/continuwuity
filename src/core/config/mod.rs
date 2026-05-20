@@ -824,7 +824,7 @@ pub struct Config {
 	///
 	/// This is technically a Matrix spec violation, but provided as an admin
 	/// override.
-	#[serde(default = "true_fn")]
+	#[serde(default)]
 	pub allow_local_users_to_bypass_history_visibility: bool,
 
 	/// Allow standard users to create rooms. Appservices and admins are always

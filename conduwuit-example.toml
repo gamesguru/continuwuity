@@ -676,7 +676,7 @@
 # This is technically a Matrix spec violation, but provided as an admin
 # override.
 #
-#allow_local_users_to_bypass_history_visibility = true
+#allow_local_users_to_bypass_history_visibility = false
 
 # Allow standard users to create rooms. Appservices and admins are always
 # allowed to create rooms
