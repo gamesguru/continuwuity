@@ -1,10 +1,12 @@
 //! Helpers for submitting events with the right checks performed
 
+use std::collections::BTreeMap;
+
 use conduwuit::{Err, Result, err, implement, matrix::pdu::PartialPdu};
 use ruma::{
-	MilliSecondsSinceUnixEpoch, OwnedEventId, RoomId, UserId,
+	MilliSecondsSinceUnixEpoch, OwnedEventId, RoomId, TransactionId, UserId,
 	events::{
-		AnyStateEventContent, StateEventType,
+		AnyMessageLikeEventContent, AnyStateEventContent, MessageLikeEventType, StateEventType,
 		room::{
 			canonical_alias::RoomCanonicalAliasEventContent,
 			history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent},
@@ -17,6 +19,71 @@ use ruma::{
 };
 
 use crate::rooms::state::RoomMutexGuard;
+
+#[implement(super::Service)]
+#[allow(clippy::too_many_arguments)]
+pub async fn send_message_event_helper(
+	&self,
+	sender: &UserId,
+	room_id: &RoomId,
+	state_lock: &RoomMutexGuard,
+	event_type: &MessageLikeEventType,
+	content: &Raw<AnyMessageLikeEventContent>,
+	txn_id: Option<&TransactionId>,
+	timestamp: Option<MilliSecondsSinceUnixEpoch>,
+) -> Result<OwnedEventId> {
+	// let json: &mut Raw<AnyMessageLikeEventContent> = &mut json.clone();
+	self.allowed_to_send_message_event(room_id, event_type)
+		.await?;
+
+	let content = serde_json::from_str(content.json().get())
+		.map_err(|e| err!(Request(BadJson("Invalid JSON body: {e}"))))?;
+
+	let unsigned = txn_id.map(|txn_id| {
+		let mut unsigned = BTreeMap::new();
+		unsigned.insert("transaction_id".to_owned(), txn_id.to_string().into());
+		unsigned
+	});
+
+	let event_id = self
+		.build_and_append_pdu(
+			PartialPdu {
+				event_type: event_type.to_string().into(),
+				content,
+				timestamp,
+				unsigned,
+				..Default::default()
+			},
+			sender,
+			Some(room_id),
+			state_lock,
+		)
+		.await?;
+
+	Ok(event_id)
+}
+
+#[implement(super::Service)]
+async fn allowed_to_send_message_event(
+	&self,
+	room_id: &RoomId,
+	event_type: &MessageLikeEventType,
+) -> Result {
+	if *event_type == MessageLikeEventType::CallInvite
+		&& self.services.directory.is_public_room(room_id).await
+	{
+		return Err!(Request(Forbidden("Room call invites are not allowed in public rooms")));
+	}
+
+	// Forbid m.room.encrypted if encryption is disabled
+	if MessageLikeEventType::RoomEncrypted == *event_type
+		&& !self.services.config.allow_encryption
+	{
+		return Err!(Request(Forbidden("Encryption has been disabled")));
+	}
+
+	Ok(())
+}
 
 #[implement(super::Service)]
 #[allow(clippy::too_many_arguments)]

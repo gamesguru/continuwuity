@@ -1,10 +1,7 @@
-use std::collections::BTreeMap;
-
 use axum::extract::State;
 use axum_client_ip::ClientIp;
-use conduwuit::{Err, Result, err, matrix::pdu::PduBuilder, utils};
-use ruma::{api::client::message::send_message_event, events::MessageLikeEventType};
-use serde_json::from_str;
+use conduwuit::{Err, Result, err, utils};
+use ruma::api::client::message::send_message_event;
 
 use crate::Ruma;
 
@@ -34,19 +31,7 @@ pub(crate) async fn send_message_event_route(
 		.update_device_last_seen(sender_user, body.sender_device.as_deref(), client_ip)
 		.await;
 
-	// Forbid m.room.encrypted if encryption is disabled
-	if MessageLikeEventType::RoomEncrypted == body.event_type && !services.config.allow_encryption
-	{
-		return Err!(Request(Forbidden("Encryption has been disabled")));
-	}
-
 	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
-
-	if body.event_type == MessageLikeEventType::CallInvite
-		&& services.rooms.directory.is_public_room(&body.room_id).await
-	{
-		return Err!(Request(Forbidden("Room call invites are not allowed in public rooms")));
-	}
 
 	// Check if this is a new transaction id
 	if let Ok(response) = services
@@ -69,26 +54,21 @@ pub(crate) async fn send_message_event_route(
 		});
 	}
 
-	let mut unsigned = BTreeMap::new();
-	unsigned.insert("transaction_id".to_owned(), body.txn_id.to_string().into());
-
-	let content = from_str(body.body.body.json().get())
-		.map_err(|e| err!(Request(BadJson("Invalid JSON body: {e}"))))?;
-
 	let event_id = services
 		.rooms
 		.timeline
-		.build_and_append_pdu(
-			PduBuilder {
-				event_type: body.event_type.clone().into(),
-				content,
-				unsigned: Some(unsigned),
-				timestamp: appservice_info.and(body.timestamp),
-				..Default::default()
-			},
+		.send_message_event_helper(
 			sender_user,
-			Some(&body.room_id),
+			&body.room_id,
 			&state_lock,
+			&body.event_type,
+			&body.body.body,
+			Some(&body.txn_id),
+			if appservice_info.is_some() {
+				body.timestamp
+			} else {
+				None
+			},
 		)
 		.await?;
 
