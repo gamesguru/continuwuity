@@ -105,14 +105,14 @@ fn strip_room_id_if_needed(
 	obj: &mut serde_json::Map<String, serde_json::Value>,
 	room_version: &str,
 ) -> bool {
-	let is_v11 = room_version == "11";
-	let is_v12_or_later = !matches!(
-		room_version,
-		"1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11"
-	);
 	let is_create = obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create");
 
-	if is_v12_or_later || (is_v11 && !is_create) {
+	let room_version_id =
+		ruma::RoomVersionId::try_from(room_version).unwrap_or(ruma::RoomVersionId::V1);
+	let room_features = conduwuit_core::RoomVersion::new(&room_version_id)
+		.unwrap_or(conduwuit_core::RoomVersion::V1);
+
+	if room_features.strips_room_id(is_create) {
 		obj.remove("room_id").is_some()
 	} else {
 		false
@@ -130,23 +130,23 @@ fn v12_create_event_strips_room_id() {
 }
 
 #[test]
-fn v12_non_create_event_strips_room_id() {
+fn v12_non_create_event_keeps_room_id() {
 	let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
 		r#"{"type":"m.room.member","room_id":"!abc:example.org","content":{}}"#,
 	)
 	.unwrap();
-	assert!(strip_room_id_if_needed(&mut obj, "12"));
-	assert!(!obj.contains_key("room_id"));
+	assert!(!strip_room_id_if_needed(&mut obj, "12"));
+	assert!(obj.contains_key("room_id"));
 }
 
 #[test]
-fn v11_non_create_event_strips_room_id() {
+fn v11_non_create_event_keeps_room_id() {
 	let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
 		r#"{"type":"m.room.member","room_id":"!abc:example.org","content":{}}"#,
 	)
 	.unwrap();
-	assert!(strip_room_id_if_needed(&mut obj, "11"));
-	assert!(!obj.contains_key("room_id"));
+	assert!(!strip_room_id_if_needed(&mut obj, "11"));
+	assert!(obj.contains_key("room_id"));
 }
 
 #[test]
@@ -219,15 +219,14 @@ fn import_strips_diagnostic_fields() {
 }
 
 #[test]
-fn v11_event_has_no_room_id_in_wire_format() {
-	// In v11, room_id is not part of the wire format for non-create events
-	// (MSC3820).
+fn v11_event_keeps_room_id_in_wire_format() {
+	// In v11, room_id IS part of the wire format.
 	let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
 		r#"{"type":"m.room.member","room_id":"!abc:example.org","content":{}}"#,
 	)
 	.unwrap();
 	strip_import_fields(&mut obj, "11");
-	assert!(!obj.contains_key("room_id"));
+	assert!(obj.contains_key("room_id"));
 }
 
 #[test]
@@ -244,13 +243,13 @@ fn v12_create_event_full_import_pipeline() {
 }
 
 #[test]
-fn v12_non_create_event_strips_room_id_after_import() {
+fn v12_non_create_event_keeps_room_id_after_import() {
 	let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
 		r#"{"type":"m.room.member","room_id":"!abc:example.org","content":{}}"#,
 	)
 	.unwrap();
 	strip_import_fields(&mut obj, "12");
-	assert!(!obj.contains_key("room_id"));
+	assert!(obj.contains_key("room_id"));
 }
 
 #[test]
@@ -306,16 +305,11 @@ fn strip_preserves_older_versions() {
 }
 
 #[test]
-fn strip_v11_v12_removes() {
-	for version in &["11", "12"] {
-		let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
-			r#"{"type":"m.room.member","room_id":"!abc:example.org","content":{}}"#,
-		)
-		.unwrap();
-		strip_room_id_if_needed(&mut obj, version);
-		assert!(
-			!obj.contains_key("room_id"),
-			"room_id must be removed for V{version} non-create events"
-		);
-	}
+fn strip_v12_create_removes() {
+	let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+		r#"{"type":"m.room.create","room_id":"!abc:example.org","content":{}}"#,
+	)
+	.unwrap();
+	strip_room_id_if_needed(&mut obj, "12");
+	assert!(!obj.contains_key("room_id"), "room_id must be removed for V12 create events");
 }

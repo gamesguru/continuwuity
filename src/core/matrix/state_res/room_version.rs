@@ -150,6 +150,8 @@ impl RoomVersion {
 	pub const V8: Self = Self { restricted_join_rules: true, ..Self::V7 };
 	pub const V9: Self = Self::V8;
 
+	pub fn strips_room_id(&self, is_create: bool) -> bool { self.room_ids_as_hashes && is_create }
+
 	pub fn new(version: &RoomVersionId) -> Result<Self> {
 		Ok(match version {
 			| RoomVersionId::V1 => Self::V1,

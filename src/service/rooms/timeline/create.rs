@@ -23,29 +23,32 @@ use serde_json::value::{RawValue, to_raw_value};
 use super::RoomMutexGuard;
 
 pub fn pdu_fits(owned_obj: &mut CanonicalJsonObject) -> bool {
-	// room IDs, event IDs, senders, types, and state keys must all be <= 255 bytes
+	// room IDs, event IDs, senders, types, and state keys should ideally be <= 255
+	// bytes but legacy DAGs (e.g. matrix.org) contain events with much larger
+	// fields (e.g. 320+ bytes). We relax these to 1024 to prevent DAG splits,
+	// relying on the overall 64KiB limit.
 	if let Some(CanonicalJsonValue::String(room_id)) = owned_obj.get("room_id") {
-		if room_id.len() > 255 {
+		if room_id.len() > 1024 {
 			return false;
 		}
 	}
 	if let Some(CanonicalJsonValue::String(event_id)) = owned_obj.get("event_id") {
-		if event_id.len() > 255 {
+		if event_id.len() > 1024 {
 			return false;
 		}
 	}
 	if let Some(CanonicalJsonValue::String(sender)) = owned_obj.get("sender") {
-		if sender.len() > 255 {
+		if sender.len() > 1024 {
 			return false;
 		}
 	}
 	if let Some(CanonicalJsonValue::String(kind)) = owned_obj.get("type") {
-		if kind.len() > 255 {
+		if kind.len() > 1024 {
 			return false;
 		}
 	}
 	if let Some(CanonicalJsonValue::String(state_key)) = owned_obj.get("state_key") {
-		if state_key.len() > 255 {
+		if state_key.len() > 1024 {
 			return false;
 		}
 	}
