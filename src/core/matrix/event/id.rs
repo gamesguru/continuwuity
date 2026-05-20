@@ -21,9 +21,7 @@ pub fn gen_event_id_canonical_json(
 		value.remove("origin");
 	}
 
-	// For V12+, the `room_id` is derived from the `m.room.create` event's hash.
-	// Therefore, the signed event content cannot contain `room_id`. If remote
-	// servers erroneously inject it, we must strip it before hashing.
+	let is_v11 = room_version_id == &RoomVersionId::V11;
 	let is_v12_or_later = !matches!(
 		room_version_id,
 		RoomVersionId::V1
@@ -39,9 +37,12 @@ pub fn gen_event_id_canonical_json(
 			| RoomVersionId::V11
 	);
 
-	if is_v12_or_later
-		&& value.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create")
-	{
+	let is_create = value.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create");
+
+	// V11+: strip room_id per MSC3820/MSC4291
+	// V11: strips room_id from all non-create events
+	// V12+: strips room_id from ALL events (including create)
+	if is_v12_or_later || (is_v11 && !is_create) {
 		value.remove("room_id");
 	}
 
