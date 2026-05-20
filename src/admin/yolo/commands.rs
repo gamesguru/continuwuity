@@ -4489,7 +4489,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			.services
 			.rooms
 			.timeline
-			.recalculate_extremities(room_id, 50, fix)
+			.recalculate_extremities(room_id, 500, fix)
 			.await
 			.unwrap_or(false);
 
