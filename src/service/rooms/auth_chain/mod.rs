@@ -194,7 +194,7 @@ async fn get_auth_chain_inner(
 	let mut iterations: usize = 0;
 	while let Some(event_id) = todo.pop_front() {
 		iterations = iterations.saturating_add(1);
-		if iterations % 100 == 0 {
+		if iterations.is_multiple_of(100) {
 			tokio::task::yield_now().await;
 		}
 

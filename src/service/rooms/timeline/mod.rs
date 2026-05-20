@@ -4,6 +4,7 @@ mod build;
 mod create;
 mod data;
 mod redact;
+mod repair_unsigned;
 
 use std::{fmt::Write, sync::Arc};
 
@@ -716,6 +717,12 @@ impl Service {
 			);
 		}
 
+		// Repair unsigned.prev_content JSON values which may have been missed during
+		// DAG holes
+		if let Err(e) = self.repair_room_unsigned(room_id).await {
+			warn!("reorder_timeline: failed to repair unsigned payload values: {e}");
+		}
+
 		// Rebuild membership cache from the authoritative state snapshot.
 		// This fixes stale/missing entries left by previous DAG fractures.
 		let mut members_synced = 0_usize;
@@ -1097,6 +1104,44 @@ where
 	}
 
 	true_extremities
+}
+
+pub fn update_unsigned_prev_content(
+	pdu_json: &mut CanonicalJsonObject,
+	prev_state: &PduEvent,
+) -> Result<()> {
+	let unsigned = pdu_json.entry("unsigned".to_owned()).or_insert_with(|| {
+		ruma::CanonicalJsonValue::Object(std::collections::BTreeMap::default())
+	});
+
+	if let ruma::CanonicalJsonValue::Object(unsigned) = unsigned {
+		// Idempotently remove old (possibly wrong/missing) fields
+		unsigned.remove("prev_content");
+		unsigned.remove("prev_sender");
+		unsigned.remove("replaces_state");
+
+		let prev_content_value = prev_state.get_content_as_value();
+		unsigned.insert(
+			"prev_content".to_owned(),
+			ruma::CanonicalJsonValue::Object(
+				conduwuit_core::utils::to_canonical_object(prev_content_value).map_err(|e| {
+					conduwuit::err!(Database(error!(
+						"Failed to convert prev_state to canonical JSON: {e}"
+					)))
+				})?,
+			),
+		);
+		unsigned.insert(
+			"prev_sender".to_owned(),
+			ruma::CanonicalJsonValue::String(prev_state.sender().to_string()),
+		);
+		unsigned.insert(
+			"replaces_state".to_owned(),
+			ruma::CanonicalJsonValue::String(prev_state.event_id().to_string()),
+		);
+	}
+
+	Ok(())
 }
 
 #[cfg(test)]

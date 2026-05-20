@@ -55,7 +55,7 @@ where
 
 	let mut amount: u64 = 0;
 	let started = Instant::now();
-	let budget = Duration::from_secs(30);
+	let budget = Duration::from_secs(self.services.server.config.fetch_prev_timeout);
 	loop {
 		if started.elapsed() > budget {
 			info!(

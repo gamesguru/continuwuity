@@ -1,7 +1,4 @@
-use std::{
-	collections::{BTreeMap, HashSet},
-	sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use conduwuit::trace;
 use conduwuit_core::{
@@ -15,7 +12,7 @@ use conduwuit_core::{
 };
 use futures::StreamExt;
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, RoomVersionId, UserId,
+	CanonicalJsonObject, EventId, RoomVersionId, UserId,
 	events::{
 		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 		push_rules::PushRulesEvent,
@@ -125,62 +122,43 @@ where
 	// but state events need to have previous content in the unsigned field, so
 	// clients can easily interpret things like membership changes
 	if let Some(state_key) = pdu.state_key() {
-		if let CanonicalJsonValue::Object(unsigned) = pdu_json
-			.entry("unsigned".to_owned())
-			.or_insert_with(|| CanonicalJsonValue::Object(BTreeMap::default()))
+		if let Ok(shortstatehash) = self
+			.services
+			.state_accessor
+			.pdu_shortstatehash(pdu.event_id())
+			.await
 		{
-			if let Ok(shortstatehash) = self
+			if let Ok(prev_state) = self
 				.services
 				.state_accessor
-				.pdu_shortstatehash(pdu.event_id())
+				.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
 				.await
 			{
-				if let Ok(prev_state) = self
-					.services
-					.state_accessor
-					.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
-					.await
+				let prev_content_value = prev_state.get_content_as_value();
+				let curr_content_value = pdu.get_content_as_value();
+
+				// Log no-op membership transitions (identical content)
+				if pdu.kind() == &TimelineEventType::RoomMember
+					&& prev_content_value == curr_content_value
 				{
-					let prev_content_value = prev_state.get_content_as_value();
-					let curr_content_value = pdu.get_content_as_value();
-
-					// Log no-op membership transitions (identical content)
-					if pdu.kind() == &TimelineEventType::RoomMember
-						&& prev_content_value == curr_content_value
-					{
-						info!(
-							event_id = %pdu.event_id(),
-							sender = %pdu.sender(),
-							state_key = %state_key,
-							prev_event_id = %prev_state.event_id(),
-							room_id = %room_id,
-							"no-op membership event: content identical to prev_content \
-							 (possible stale state lookup during DAG fork)",
-						);
-					}
-
-					unsigned.insert(
-						"prev_content".to_owned(),
-						CanonicalJsonValue::Object(
-							utils::to_canonical_object(prev_content_value).map_err(|e| {
-								err!(Database(error!(
-									"Failed to convert prev_state to canonical JSON: {e}",
-								)))
-							})?,
-						),
-					);
-					unsigned.insert(
-						String::from("prev_sender"),
-						CanonicalJsonValue::String(prev_state.sender().to_string()),
-					);
-					unsigned.insert(
-						String::from("replaces_state"),
-						CanonicalJsonValue::String(prev_state.event_id().to_string()),
+					info!(
+						event_id = %pdu.event_id(),
+						sender = %pdu.sender(),
+						state_key = %state_key,
+						prev_event_id = %prev_state.event_id(),
+						room_id = %room_id,
+						"no-op membership event: content identical to prev_content \
+						 (possible stale state lookup during DAG fork)",
 					);
 				}
+
+				if let Err(e) = crate::rooms::timeline::update_unsigned_prev_content(
+					&mut pdu_json,
+					&prev_state,
+				) {
+					error!(%room_id, event_id = %pdu.event_id(), "Failed to update unsigned.prev_content: {e}");
+				}
 			}
-		} else {
-			error!("Invalid unsigned type in pdu.");
 		}
 	}
 

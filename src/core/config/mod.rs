@@ -501,6 +501,13 @@ pub struct Config {
 	#[serde(default = "default_pdu_receive_timeout")]
 	pub pdu_receive_timeout: u64,
 
+	/// Timeout in seconds to wait for missing prev_events to be fetched over
+	/// federation.
+	///
+	/// default: 30
+	#[serde(default = "default_fetch_prev_timeout")]
+	pub fetch_prev_timeout: u64,
+
 	/// Maximum number of room member servers to try when fetching missing
 	/// federation events (auth chains, outliers). These are tried after the
 	/// origin server and trusted_servers.
@@ -2852,6 +2859,8 @@ fn default_federation_conn_timeout() -> u64 { 10 }
 fn default_federation_timeout() -> u64 { 60 }
 
 fn default_pdu_receive_timeout() -> u64 { 600 }
+
+fn default_fetch_prev_timeout() -> u64 { 30 }
 
 fn default_federation_fallback_room_servers() -> usize { 25 }
 

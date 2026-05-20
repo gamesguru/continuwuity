@@ -393,6 +393,10 @@
 #
 #pdu_receive_timeout = 600
 
+# Timeout in seconds to wait for missing prev_events to be fetched over federation.
+#
+#fetch_prev_timeout = 30
+
 # Maximum number of room member servers to try when fetching missing
 # federation events (auth chains, outliers). These are tried after the
 # origin server and trusted_servers.

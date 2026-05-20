@@ -6,7 +6,7 @@ use std::{
 use conduwuit::{
 	Err, PduCount, Result, err, info,
 	matrix::{Event, pdu::PduEvent},
-	state_res, utils,
+	state_res,
 	utils::stream::BroadbandExt,
 	warn,
 };
@@ -2550,27 +2550,15 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 			},
 		};
 
-		// Remove old (possibly wrong) prev_content fields
-		unsigned.remove("prev_content");
-		unsigned.remove("prev_sender");
-		unsigned.remove("replaces_state");
-
 		// Populate from the previous state event
 		if let Some(prev_state) = prev_state {
-			if let Ok(content_obj) = utils::to_canonical_object(prev_state.get_content_as_value())
-			{
-				unsigned.insert(
-					"prev_content".to_owned(),
-					ruma::CanonicalJsonValue::Object(content_obj),
-				);
-				unsigned.insert(
-					"prev_sender".to_owned(),
-					ruma::CanonicalJsonValue::String(prev_state.sender().to_string()),
-				);
-				unsigned.insert(
-					"replaces_state".to_owned(),
-					ruma::CanonicalJsonValue::String(prev_state.event_id().to_string()),
-				);
+			if let Err(e) = conduwuit_service::rooms::timeline::update_unsigned_prev_content(
+				&mut pdu_json,
+				&prev_state,
+			) {
+				warn!("repair_unsigned: failed to update unsigned for {event_id}: {e}");
+				errors = errors.saturating_add(1);
+				continue;
 			}
 		}
 

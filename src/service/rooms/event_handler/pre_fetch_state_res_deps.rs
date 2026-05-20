@@ -70,7 +70,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 		.await;
 
 	let started = Instant::now();
-	let budget = Duration::from_secs(120);
+	let budget = Duration::from_secs(self.services.server.config.pdu_receive_timeout);
 
 	// Phase 1: Fetch individually missing auth chain events
 	let all_auth_ids: HashSet<&OwnedEventId> = auth_chain_sets.iter().flatten().collect();
