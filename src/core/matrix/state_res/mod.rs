@@ -905,25 +905,11 @@ where
 				auth_state.insert(event.event_type().with_state_key(""), event.clone());
 			} else {
 				if cached_create_event.is_none() {
-					trace!("room version uses hashed IDs, searching auth chain for create event");
-					// V12 PDUs may not include room_id in federation dumps.
-					// Find the create event from this event's auth_events.
-					for aid in event.auth_events() {
-						// Check pre-fetched auth events first
-						if let Some(aev) = auth_events.get(aid) {
-							if *aev.event_type() == TimelineEventType::RoomCreate
-								&& aev.state_key() == Some("")
-							{
-								cached_create_event = Some(aev.clone());
-								break;
-							}
-						} else if let Some(aev) = fetch_event(aid.to_owned()).await {
-							if *aev.event_type() == TimelineEventType::RoomCreate
-								&& aev.state_key() == Some("")
-							{
-								cached_create_event = Some(aev);
-								break;
-							}
+					trace!("room version uses hashed IDs, deriving create event from room_id");
+					if let Some(room_id) = event.room_id_or_hash() {
+						let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
+						if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
+							cached_create_event = fetch_event(create_event_id.into()).await;
 						}
 					}
 				}
@@ -1342,7 +1328,7 @@ mod tests {
 
 		let fetcher = |id| ready(events.get(&id).cloned());
 		let sorted_power_events =
-			super::reverse_topological_power_sort(power_events, &auth_chain, &fetcher)
+			super::reverse_topological_power_sort(power_events, &auth_chain, &fetcher, None)
 				.await
 				.unwrap();
 
