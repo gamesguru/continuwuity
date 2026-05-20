@@ -517,9 +517,9 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 			.state
 			.get_room_version_or_fallback(&room_id)
 			.await
-			.unwrap_or_else(|_| ruma::RoomVersionId::V12)
+			.unwrap_or_else(|_| RoomVersionId::V12)
 	} else {
-		ruma::RoomVersionId::V12
+		RoomVersionId::V12
 	};
 	let room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
 
