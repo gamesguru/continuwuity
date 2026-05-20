@@ -867,10 +867,15 @@ impl Service {
 			// Do NOT include soft-failed events in the topological graph.
 			// By ignoring them, their parents will naturally have out-degree 0
 			// and become the true DAG tips, burying the soft-failed event.
-			if self.services.pdu_metadata.is_event_soft_failed(&pdu.event_id).await {
+			if self
+				.services
+				.pdu_metadata
+				.is_event_soft_failed(&pdu.event_id)
+				.await
+			{
 				continue;
 			}
-			
+
 			pdus.push(pdu);
 			if pdus.len() >= tail {
 				break;
@@ -1252,7 +1257,8 @@ mod tests {
 
 	#[test]
 	fn test_calculate_true_extremities_08_empty_input() {
-		let graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> = HashMap::new();
+		let graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
 		let sorted = vec![];
 		let tips = calculate_true_extremities(&graph, &sorted);
 		assert!(tips.is_empty(), "Empty graph should return empty extremities");
@@ -1287,7 +1293,7 @@ mod tests {
 
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
 			HashMap::new();
-			
+
 		// Linear chain: A -> B -> C
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());

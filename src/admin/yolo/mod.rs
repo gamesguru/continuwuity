@@ -618,6 +618,7 @@ pub enum YoloCommand {
 
 	/// Clears the global bad_event ratelimiter cache.
 	///
-	/// Useful after massive DAG healing operations where 404s have bloated the heap.
+	/// Useful after massive DAG healing operations where 404s have bloated the
+	/// heap.
 	ClearRatelimiter,
 }
