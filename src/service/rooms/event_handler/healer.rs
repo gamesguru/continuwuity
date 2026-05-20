@@ -104,7 +104,7 @@ pub(crate) async fn healer_worker(
 					fetched_count = fetched_count.saturating_add(1);
 				},
 				| true => {
-					warn!(event_id = ?event_id, "DAG Healer failed to fetch event from all fallback servers, marking as 404");
+					info!(event_id = ?event_id, "DAG Healer failed to fetch event from all fallback servers, marking as 404");
 					failed_heals.insert(event_id.clone(), std::time::Instant::now());
 				},
 			}

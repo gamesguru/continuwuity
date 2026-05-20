@@ -306,7 +306,7 @@ where
 											match future::select_ok(reqs).await {
 												| Ok((res, _rem)) => return (auth_event_clone, Ok(res)),
 												| Err(_all_errors) => {
-													warn!(%auth_event_clone, n_servers = servers.len(), attempt, "All servers exhausted for auth event");
+													info!(%auth_event_clone, n_servers = servers.len(), attempt, "All servers exhausted for auth event");
 												},
 											}
 										}
