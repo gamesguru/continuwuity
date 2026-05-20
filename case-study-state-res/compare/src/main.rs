@@ -8,22 +8,44 @@ use std::{
 use conduwuit_core::matrix::{Pdu, state_res};
 use ruma::{OwnedEventId, RoomVersionId};
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-	tracing_subscriber::fmt::init();
-	println!("Loading events...");
+struct DagConfig {
+	path: String,
+	room_version: RoomVersionId,
+	baseline_path: Option<String>,
+}
 
-	let start_time = std::time::Instant::now();
-
-	let mut events_map: HashMap<OwnedEventId, Arc<Pdu>> = HashMap::new();
-
-	let dags_dir =
+fn parse_args() -> DagConfig {
+	let args: Vec<String> = std::env::args().collect();
+	let path = args.get(1).cloned().unwrap_or_else(|| {
 		"/run/media/shane/shane4tb-ent/dags/\
-		 merged-sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE-unredacted-lounge-v12-d1-84135.jsonl";
-	println!("Loading merged.jsonl...");
-	let file = File::open(dags_dir)?;
-	let reader = BufReader::new(file);
+		 merged-sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE-unredacted-lounge-v12-d1-84135.jsonl"
+			.to_string()
+	});
+	let version_str = args.get(2).map(|s| s.as_str()).unwrap_or("12");
+	let room_version = match version_str {
+		| "1" => RoomVersionId::V1,
+		| "2" => RoomVersionId::V2,
+		| "3" => RoomVersionId::V3,
+		| "4" => RoomVersionId::V4,
+		| "5" => RoomVersionId::V5,
+		| "6" => RoomVersionId::V6,
+		| "7" => RoomVersionId::V7,
+		| "8" => RoomVersionId::V8,
+		| "9" => RoomVersionId::V9,
+		| "10" => RoomVersionId::V10,
+		| "11" => RoomVersionId::V11,
+		| "12" => RoomVersionId::V12,
+		| v => panic!("Unknown room version: {v}"),
+	};
+	let baseline_path = args.get(3).cloned();
+	DagConfig { path, room_version, baseline_path }
+}
+
+fn load_events(path: &str) -> HashMap<OwnedEventId, Arc<Pdu>> {
 	use std::io::BufRead;
+	let mut events_map = HashMap::new();
+	let file = File::open(path).unwrap_or_else(|e| panic!("Failed to open {path}: {e}"));
+	let reader = BufReader::new(file);
 	for line in reader.lines().map_while(Result::ok) {
 		if line.trim().is_empty() {
 			continue;
@@ -32,9 +54,21 @@ async fn main() -> anyhow::Result<()> {
 			events_map.insert(pdu.event_id.clone(), Arc::new(pdu));
 		}
 	}
+	events_map
+}
 
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+	tracing_subscriber::fmt::init();
+
+	let config = parse_args();
+	let start_time = std::time::Instant::now();
+
+	println!("Loading {}...", config.path);
+	let events_map = load_events(&config.path);
 	println!("Loaded {} total events.", events_map.len());
 
+	// Compute heads (forward extremities)
 	let mut referenced = HashSet::new();
 	for pdu in events_map.values() {
 		for pe in &pdu.prev_events {
@@ -45,8 +79,9 @@ async fn main() -> anyhow::Result<()> {
 	let mut heads: Vec<OwnedEventId> = all_ids.difference(&referenced).cloned().collect();
 	heads.sort();
 
-	println!("Found {} heads: {:?}", heads.len(), heads);
+	println!("Found {} heads", heads.len());
 
+	// Build state sets per head via backward walk
 	let mut state_sets = Vec::new();
 	for head_id in &heads {
 		let mut reachable = Vec::new();
@@ -70,11 +105,10 @@ async fn main() -> anyhow::Result<()> {
 			let key = (ev.kind.clone().into(), ev.state_key.as_deref().unwrap_or("").into());
 			state_map.insert(key, ev.event_id.clone());
 		}
-		println!("State set for head {} has {} events.", head_id, state_map.len());
 		state_sets.push(state_map);
 	}
-	println!("Using all {} heads", heads.len());
 
+	// Build auth chain sets
 	let mut auth_chain_sets = Vec::new();
 	for map in &state_sets {
 		let mut auth_chain = HashSet::new();
@@ -93,45 +127,23 @@ async fn main() -> anyhow::Result<()> {
 		auth_chain_sets.push(auth_chain);
 	}
 
-	let room_version = RoomVersionId::V12;
+	println!("State sets: {} heads", state_sets.len());
+	for (i, s) in state_sets.iter().enumerate() {
+		if state_sets.len() <= 10 || i < 3 || i >= state_sets.len() - 2 {
+			println!("  state_set[{}]: {} entries", i, s.len());
+		} else if i == 3 {
+			println!("  ...");
+		}
+	}
 
 	let fetch_event = |event_id: OwnedEventId| {
 		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
 	};
 	let event_rejected = |_: OwnedEventId| std::future::ready(false);
 
-	println!("State sets: {}", state_sets.len());
-	for (i, s) in state_sets.iter().enumerate() {
-		println!("  state_set[{}]: {} entries", i, s.len());
-	}
-	println!("Auth chain sets: {}", auth_chain_sets.len());
-	for (i, a) in auth_chain_sets.iter().enumerate() {
-		println!("  auth_chain[{}]: {} entries", i, a.len());
-	}
-
-	// Check how many state keys are conflicted (appear in >1 set with different
-	// values)
-	let mut all_keys: HashMap<
-		(ruma::events::StateEventType, conduwuit_core::matrix::StateKey),
-		Vec<OwnedEventId>,
-	> = HashMap::new();
-	for s in &state_sets {
-		for (k, v) in s {
-			all_keys.entry(k.clone()).or_default().push(v.clone());
-		}
-	}
-	let conflicted_keys: Vec<_> = all_keys
-		.iter()
-		.filter(|(_, vs)| {
-			let first = &vs[0];
-			vs.iter().any(|v| v != first)
-		})
-		.collect();
-	println!("Conflicted state keys: {} / {} total", conflicted_keys.len(), all_keys.len());
-
-	println!("Resolving state using conduwuit_state_res...");
+	println!("Resolving state with room version {:?}...", config.room_version);
 	let conduwuit_resolved = state_res::resolve(
-		&room_version,
+		&config.room_version,
 		&state_sets,
 		&auth_chain_sets,
 		&fetch_event,
@@ -141,14 +153,15 @@ async fn main() -> anyhow::Result<()> {
 	.await
 	.expect("Conduwuit failed to resolve");
 
-	println!("Conduwuit resolved {} events", conduwuit_resolved.len());
+	let duration = start_time.elapsed();
+	println!(
+		"Conduwuit resolved {} events in {:.2}s",
+		conduwuit_resolved.len(),
+		duration.as_secs_f64()
+	);
 
-	let mut joined = 0;
-	let mut left = 0;
-	let mut banned = 0;
-	let mut invite = 0;
-	let mut knock = 0;
-
+	// Membership counts
+	let (mut joined, mut left, mut banned, mut invite, mut knock) = (0, 0, 0, 0, 0);
 	for id in conduwuit_resolved.values() {
 		if let Some(ev) = events_map.get(id)
 			&& ev.kind == ruma::events::TimelineEventType::RoomMember
@@ -167,111 +180,85 @@ async fn main() -> anyhow::Result<()> {
 		}
 	}
 	println!(
-		"CONDUWUIT COUNTS: {} joined, {} left, {} banned (invite: {}, knock: {})",
+		"CONDUWUIT COUNTS: {} joined, {} left, {} banned, {} invite, {} knock",
 		joined, left, banned, invite, knock
 	);
 
-	// Load baseline output
-	let output_file = File::open("/tmp/state-res-output.json")?;
-	let output_reader = BufReader::new(output_file);
-	let baseline_ids: Vec<OwnedEventId> = serde_json::from_reader(output_reader)?;
+	// Compare against baseline if provided
+	if let Some(baseline_path) = &config.baseline_path {
+		let output_file = File::open(baseline_path)?;
+		let output_reader = BufReader::new(output_file);
+		let baseline_ids: Vec<OwnedEventId> = serde_json::from_reader(output_reader)?;
 
-	let mut b_joined = 0;
-	let mut b_left = 0;
-	let mut b_banned = 0;
+		let baseline_set: HashSet<OwnedEventId> = baseline_ids.into_iter().collect();
+		let conduwuit_set: HashSet<OwnedEventId> = conduwuit_resolved.values().cloned().collect();
 
-	for ev_id in &baseline_ids {
-		if let Some(ev) = events_map.get(ev_id)
-			&& ev.kind == ruma::events::TimelineEventType::RoomMember
-			&& let Ok(member) = serde_json::from_str::<
-				ruma::events::room::member::RoomMemberEventContent,
-			>(ev.content.get())
-		{
-			match member.membership {
-				| ruma::events::room::member::MembershipState::Join => b_joined += 1,
-				| ruma::events::room::member::MembershipState::Leave => b_left += 1,
-				| ruma::events::room::member::MembershipState::Ban => b_banned += 1,
-				| _ => {},
+		let missing: Vec<_> = baseline_set.difference(&conduwuit_set).collect();
+		let extra: Vec<_> = conduwuit_set.difference(&baseline_set).collect();
+
+		if missing.is_empty() && extra.is_empty() {
+			println!("SUCCESS: Conduwuit perfectly matches baseline!");
+		} else {
+			println!(
+				"DIVERGENCE: {} missing, {} extra (baseline={}, conduwuit={})",
+				missing.len(),
+				extra.len(),
+				baseline_set.len(),
+				conduwuit_set.len()
+			);
+			for id in missing.iter().take(10) {
+				if let Some(ev) = events_map.get(*id) {
+					println!(
+						"  MISSING: {} type={}, state_key={}, sender={}",
+						id,
+						ev.kind,
+						ev.state_key.as_deref().unwrap_or(""),
+						ev.sender
+					);
+				}
+			}
+			for id in extra.iter().take(10) {
+				if let Some(ev) = events_map.get(*id) {
+					println!(
+						"  EXTRA:   {} type={}, state_key={}, sender={}",
+						id,
+						ev.kind,
+						ev.state_key.as_deref().unwrap_or(""),
+						ev.sender
+					);
+				}
 			}
 		}
+	} else {
+		println!("No baseline provided — skipping comparison.");
 	}
-	println!("BASELINE COUNTS: {} joined, {} left, {} banned", b_joined, b_left, b_banned);
 
-	let baseline_set: HashSet<OwnedEventId> = baseline_ids.into_iter().collect();
-
+	// Export results
 	let conduwuit_set: HashSet<OwnedEventId> = conduwuit_resolved.values().cloned().collect();
-
-	let missing_in_conduwuit: Vec<_> = baseline_set.difference(&conduwuit_set).collect();
-	let extra_in_conduwuit: Vec<_> = conduwuit_set.difference(&baseline_set).collect();
-
 	let mut conduwuit_pdus: Vec<Arc<Pdu>> = conduwuit_set
 		.iter()
 		.filter_map(|id| events_map.get(id).cloned())
 		.collect();
-
-	// Sort by (TimelineEventType String, StateKey String) to match ruma-lean's
-	// BTreeMap StateMap sorting
 	conduwuit_pdus.sort_by(|a, b| {
 		let a_key = (a.kind.to_string(), a.state_key.as_deref().unwrap_or(""));
 		let b_key = (b.kind.to_string(), b.state_key.as_deref().unwrap_or(""));
 		a_key.cmp(&b_key)
 	});
-
 	let sorted_ids: Vec<String> = conduwuit_pdus
 		.into_iter()
 		.map(|p| p.event_id.to_string())
 		.collect();
 
-	let mut final_auth_chain = HashSet::new();
-	let mut stack: Vec<OwnedEventId> = conduwuit_set.iter().cloned().collect();
-	let mut visited = HashSet::new();
-	while let Some(ev_id) = stack.pop() {
-		if visited.insert(ev_id.clone())
-			&& let Some(ev) = events_map.get(&ev_id)
-		{
-			for auth_id in &ev.auth_events {
-				if final_auth_chain.insert(auth_id.clone()) {
-					stack.push(auth_id.clone());
-				}
-			}
-		}
-	}
-
-	let duration = start_time.elapsed();
-
 	let output_json = serde_json::json!({
-		"auth_chain_size": final_auth_chain.len(),
-		"duration_ms": duration.as_millis(),
 		"resolved_state_size": sorted_ids.len(),
 		"state_event_ids": sorted_ids,
-		"status": "success",
-		"version": "V2_1"
+		"duration_ms": duration.as_millis(),
+		"room_version": format!("{:?}", config.room_version),
 	});
 
 	let mut out_file = File::create("/tmp/conduwuit-output.json")?;
 	serde_json::to_writer_pretty(&mut out_file, &output_json)?;
-	println!("Exported Conduwuit's sorted state event IDs to /tmp/conduwuit-output.json");
-
-	if missing_in_conduwuit.is_empty() && extra_in_conduwuit.is_empty() {
-		println!("SUCCESS: Conduwuit state resolution perfectly matches baseline!");
-	} else {
-		println!("DIVERGENCE FOUND!");
-		println!("Missing in Conduwuit (Baseline has these):");
-		for id in &missing_in_conduwuit {
-			if let Some(ev) = events_map.get(*id) {
-				println!(
-					"  - {}: type={}, state_key={}, sender={}",
-					id,
-					ev.kind,
-					ev.state_key.as_deref().unwrap_or(""),
-					ev.sender
-				);
-			} else {
-				println!("  - {}: (NOT IN EVENTS MAP!)", id);
-			}
-		}
-		println!("Extra in Conduwuit (Baseline DOES NOT have these): {:#?}", extra_in_conduwuit);
-	}
+	println!("Exported to /tmp/conduwuit-output.json");
 
 	Ok(())
 }

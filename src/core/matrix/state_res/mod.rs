@@ -1360,12 +1360,12 @@ mod tests {
 			vec![
 				"$CREATE:foo",
 				"$IMA:foo",
+				"$START:foo",
+				"$END:foo",
 				"$IPOWER:foo",
 				"$IJR:foo",
 				"$IMB:foo",
 				"$IMC:foo",
-				"$START:foo",
-				"$END:foo"
 			],
 			sorted_event_ids
 				.iter()
