@@ -1283,8 +1283,13 @@ pub(super) async fn rescue_room(
 	all: bool,
 	timeline_limit: Option<usize>,
 	reorder: bool,
+	heal_from: Vec<OwnedServerName>,
 ) -> Result {
 	self.bail_restricted()?;
+
+	// --heal-from implies --force (no point doing full state_res per
+	// outlier when we're about to overwrite state from the backbone)
+	let force = force || !heal_from.is_empty();
 
 	if all {
 		let mut room_ids: HashSet<OwnedRoomId> = HashSet::new();
@@ -1318,7 +1323,7 @@ pub(super) async fn rescue_room(
 
 		let mut total_rescued = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(self.rescue_room(room_id, force, nuclear, false, None, false))
+			if Box::pin(self.rescue_room(room_id, force, nuclear, false, None, false, vec![]))
 				.await
 				.is_ok()
 			{
@@ -1609,6 +1614,41 @@ pub(super) async fn rescue_room(
 		)
 		.await?;
 		self.write_str(&format!("Reordered {n} events. Clients should re-sync."))
+			.await?;
+	}
+
+	if !heal_from.is_empty() {
+		// Find the latest local event to use as at_event for bootstrapping
+		let at_event = self
+			.services
+			.rooms
+			.timeline
+			.latest_pdu_in_room(&room_id)
+			.await
+			.ok()
+			.map(|pdu| pdu.event_id().to_owned());
+
+		self.write_str(&format!(
+			"\nHealing state from {:?} (force-set-state --overwrite)...",
+			heal_from.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+		))
+		.await?;
+
+		Box::pin(self.force_set_state(
+			room_id.clone(),
+			heal_from,
+			at_event,
+			true,  // overwrite
+			true,  // skip_sig_verify
+			true,  // absolute
+			None,  // output
+			None,  // input
+			false, // dry_run
+			false, // skip_membership_rebuild
+		))
+		.await?;
+
+		self.write_str("Heal complete. Room state synchronized with backbone.")
 			.await?;
 	}
 
@@ -3389,7 +3429,8 @@ pub(super) async fn heal_room(
 	if !dry_run {
 		self.write_str(&format!("Phase 1: Rescuing local outliers in {room_id}...\n"))
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false, vec![]))
+			.await?;
 	} else {
 		self.write_str(&format!("Phase 1: [dry-run] Would rescue local outliers in {room_id}\n"))
 			.await?;
@@ -3514,7 +3555,8 @@ pub(super) async fn heal_room(
 	if fetched > 0 {
 		self.write_str(&format!("Phase 3: Fetched {fetched} missing events, rescuing..."))
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false, vec![]))
+			.await?;
 	} else {
 		self.write_str("Phase 3: No missing events found (DAG is complete locally).")
 			.await?;
@@ -3547,7 +3589,8 @@ pub(super) async fn heal_room(
 		// Phase 5b: Rescue any outliers created by Phase 5's state resync
 		self.write_str("Phase 5b: Rescuing state outliers from resync...")
 			.await?;
-		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false)).await?;
+		Box::pin(self.rescue_room(room_id.clone(), nuclear, nuclear, false, None, false, vec![]))
+			.await?;
 	} else {
 		self.write_str("Phase 5: Skipped state resync (pass --resync-state to enable).")
 			.await?;

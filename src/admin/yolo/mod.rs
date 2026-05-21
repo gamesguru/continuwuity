@@ -182,6 +182,12 @@ pub enum YoloCommand {
 		/// Fixes anachronisms from rescued outliers being appended at the end.
 		#[arg(long)]
 		reorder: bool,
+
+		/// After rescue, force-set room state from these server(s) using
+		/// absolute override (--overwrite). Chains rescue-room →
+		/// force-set-state into a single command. Implies --force.
+		#[arg(long = "heal-from")]
+		heal_from: Vec<OwnedServerName>,
 	},
 
 	/// Reorder the timeline for a room by origin_server_ts.
