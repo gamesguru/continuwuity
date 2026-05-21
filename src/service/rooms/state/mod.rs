@@ -59,6 +59,12 @@ struct Data {
 type RoomMutexMap = MutexMap<OwnedRoomId, ()>;
 pub type RoomMutexGuard = MutexMapGuard<OwnedRoomId, ()>;
 
+/// Hard cap on the number of forward extremities (DAG tips) stored per room.
+/// Enforced at the DB writer level to prevent unbounded fork accumulation.
+/// Matrix spec limits prev_events to 20, so keeping >10 tips is wasteful —
+/// servers can only reference a subset in any single event anyway.
+pub const MAX_FORWARD_EXTREMITIES: usize = 10;
+
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
@@ -650,9 +656,16 @@ impl Service {
 			.ready_for_each(|key| self.db.roomid_pduleaves.remove(key))
 			.await;
 
-		for event_id in event_ids {
-			let key = (room_id, event_id);
-			self.db.roomid_pduleaves.put_raw(key, event_id);
+		// Enforce a hard cap at the DB writer level. Callers may pass more
+		// tips than this (e.g. from recalculate_extremities or
+		// reset_extremities_to_state), but we only persist the last N.
+		// Keeping the newest tips is preferred since they are most likely to
+		// be merged by future events.
+		let collected: Vec<&EventId> = event_ids.collect();
+		let start = collected.len().saturating_sub(MAX_FORWARD_EXTREMITIES);
+		for event_id in &collected[start..] {
+			let key = (room_id, *event_id);
+			self.db.roomid_pduleaves.put_raw(key, *event_id);
 		}
 	}
 

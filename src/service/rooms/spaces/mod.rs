@@ -496,7 +496,7 @@ where
 			.await
 			.is_err()
 		{
-			conduwuit_core::info!(
+			conduwuit_core::debug!(
 				target: "spaces_debug_filter",
 				room_id = %current_room,
 				server = %server_name,
@@ -533,7 +533,7 @@ where
 				.await;
 
 			if !is_allowed {
-				conduwuit_core::info!(
+				conduwuit_core::debug!(
 					target: "spaces_debug_filter",
 					room_id = %current_room,
 					?join_rule,
@@ -546,7 +546,7 @@ where
 
 		// Invite only, Private, or Custom join rule
 		| _ => {
-			conduwuit_core::info!(
+			conduwuit_core::debug!(
 				target: "spaces_debug_filter",
 				room_id = %current_room,
 				?join_rule,

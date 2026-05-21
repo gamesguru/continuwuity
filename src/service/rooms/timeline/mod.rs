@@ -911,7 +911,7 @@ impl Service {
 
 		if update_db {
 			// STRICT OVERWRITE: Erases phantom tips that fell out of the window.
-			// calculate_true_extremities already caps to 20 safely.
+			// set_forward_extremities enforces MAX_FORWARD_EXTREMITIES cap.
 			self.services
 				.state
 				.set_forward_extremities(room_id, true_extremities.into_iter(), &state_lock)
@@ -1096,11 +1096,6 @@ where
 		if let Some(last_event_id) = sorted.last() {
 			true_extremities.push(last_event_id.as_ref());
 		}
-	}
-
-	if true_extremities.len() > 20 {
-		true_extremities.reverse();
-		true_extremities.truncate(20);
 	}
 
 	true_extremities
