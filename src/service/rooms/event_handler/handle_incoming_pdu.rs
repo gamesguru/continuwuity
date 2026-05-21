@@ -196,18 +196,22 @@ pub async fn handle_incoming_pdu<'a>(
 				%room_id,
 				%origin,
 				pdu_timeout,
-				"PDU processing timed out, soft-failing and tripping circuit breaker"
+				"PDU processing timed out, storing as outlier and tripping circuit breaker"
 			);
 
 			let mut lock = self.bad_room_ratelimiter.write();
 			let strikes = lock.get(room_id).map_or(1, |&(s, _)| s.saturating_add(1));
 			lock.insert(room_id.to_owned(), (strikes, Instant::now()));
 
+			// Store the event data as an outlier so subsequent events
+			// referencing it as a prev_event have something to build on.
+			// Do NOT mark it soft-failed — it didn't fail auth, it just
+			// ran out of time. It can be retried or upgraded later.
 			self.services
 				.outlier
 				.add_pdu_outlier(event_id, &outlier_value, Some(room_id));
-			self.services.pdu_metadata.mark_event_soft_failed(event_id);
-			Ok(None)
+
+			Err!(Request(Unknown("PDU processing timed out, please retry later.")))
 		},
 	}
 }
