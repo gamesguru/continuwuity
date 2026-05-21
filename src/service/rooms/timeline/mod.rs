@@ -1151,9 +1151,10 @@ impl Service {
 
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
 		let current_set: HashSet<_> = current_extremities.map(ToOwned::to_owned).collect().await;
-		let new_set: HashSet<_> = true_extremities.iter().map(|e| (*e).to_owned()).collect();
 
-		if current_set == new_set {
+		let phantom_tips = detect_phantom_extremities(&graph, &current_set);
+
+		if phantom_tips.is_empty() {
 			return Ok(false);
 		}
 
@@ -1312,6 +1313,39 @@ impl Service {
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.db.pdus(room_id, from.unwrap_or_else(PduCount::min))
 	}
+}
+
+/// Detect stored extremities that are provably broken: they appear in the
+/// window graph AND have children there (meaning they shouldn't be tips).
+///
+/// Returns the set of phantom tip event IDs. An empty return means the stored
+/// extremities are consistent with the local DAG window.
+///
+/// This avoids false positives from:
+/// - Stored extremities outside the tail window (unverifiable)
+/// - MAX_FORWARD_EXTREMITIES capping (stored set is a subset of true tips)
+pub fn detect_phantom_extremities<S1, S2>(
+	graph: &std::collections::HashMap<
+		OwnedEventId,
+		std::collections::HashSet<OwnedEventId, S2>,
+		S1,
+	>,
+	stored_extremities: &std::collections::HashSet<OwnedEventId>,
+) -> Vec<OwnedEventId>
+where
+	S1: std::hash::BuildHasher,
+	S2: std::hash::BuildHasher,
+{
+	let has_children: std::collections::HashSet<&OwnedEventId> = graph
+		.values()
+		.flat_map(|parents| parents.iter())
+		.collect();
+
+	stored_extremities
+		.iter()
+		.filter(|eid| has_children.contains(eid))
+		.cloned()
+		.collect()
 }
 
 pub fn calculate_true_extremities<'a, S1, S2>(
@@ -1596,5 +1630,98 @@ mod tests {
 		// The algorithm correctly identifies C as the sole extremity.
 		let expected: Vec<&EventId> = vec![&*c];
 		assert_eq!(tips, expected);
+	}
+
+	// --- detect_phantom_extremities tests ---
+
+	#[test]
+	fn test_phantom_11_no_drift_linear() {
+		// Linear chain A -> B -> C, stored extremity is C (correct)
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let c = event_id!("$c").to_owned();
+
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+
+		let stored: std::collections::HashSet<OwnedEventId> = vec![c].into_iter().collect();
+		let phantoms = detect_phantom_extremities(&graph, &stored);
+		assert!(phantoms.is_empty(), "correct tip should not be phantom");
+	}
+
+	#[test]
+	fn test_phantom_12_real_drift() {
+		// Linear chain A -> B -> C, but stored extremity is A (has children)
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let c = event_id!("$c").to_owned();
+
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+
+		let stored: std::collections::HashSet<OwnedEventId> = vec![a.clone()].into_iter().collect();
+		let phantoms = detect_phantom_extremities(&graph, &stored);
+		assert_eq!(phantoms, vec![a], "A has children and is phantom");
+	}
+
+	#[test]
+	fn test_phantom_13_out_of_window_tolerated() {
+		// Window only has B -> C, but stored extremity includes $old (outside window)
+		let b = event_id!("$b").to_owned();
+		let c = event_id!("$c").to_owned();
+		let old = event_id!("$old").to_owned();
+
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+
+		// $old is stored but not in the window graph at all
+		let stored: std::collections::HashSet<OwnedEventId> =
+			vec![c, old].into_iter().collect();
+		let phantoms = detect_phantom_extremities(&graph, &stored);
+		assert!(phantoms.is_empty(), "out-of-window extremity should not be flagged");
+	}
+
+	#[test]
+	fn test_phantom_14_capped_subset_ok() {
+		// 25 fork tips from a root, but stored set is capped to 10
+		let root = event_id!("$root").to_owned();
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+
+		let mut all_tips = Vec::new();
+		for i in 0..25 {
+			let id: OwnedEventId = format!("$tip{i}").try_into().unwrap();
+			graph.insert(id.clone(), vec![root.clone()].into_iter().collect());
+			all_tips.push(id);
+		}
+
+		// Stored set is a capped subset (first 10 tips)
+		let stored: std::collections::HashSet<OwnedEventId> =
+			all_tips[..10].iter().cloned().collect();
+		let phantoms = detect_phantom_extremities(&graph, &stored);
+		assert!(phantoms.is_empty(), "capped tips are still valid tips");
+	}
+
+	#[test]
+	fn test_phantom_15_mixed_valid_and_phantom() {
+		// A -> B -> C, stored = {A, C}. A is phantom (has child B), C is valid.
+		let a = event_id!("$a").to_owned();
+		let b = event_id!("$b").to_owned();
+		let c = event_id!("$c").to_owned();
+
+		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
+			HashMap::new();
+		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
+		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+
+		let stored: std::collections::HashSet<OwnedEventId> =
+			vec![a.clone(), c].into_iter().collect();
+		let phantoms = detect_phantom_extremities(&graph, &stored);
+		assert_eq!(phantoms, vec![a], "only A is phantom, C is valid");
 	}
 }
