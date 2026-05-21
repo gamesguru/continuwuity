@@ -219,6 +219,7 @@ pub async fn create_event(
 		},
 		hashes: EventHash { sha256: String::new() },
 		signatures: None,
+		rejected: false,
 	};
 
 	let auth_fetch = |k: &StateEventType, s: &str| {

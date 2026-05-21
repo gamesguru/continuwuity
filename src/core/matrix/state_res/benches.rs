@@ -420,6 +420,7 @@ where
 		depth: uint!(0),
 		hashes: EventHash { sha256: String::new() },
 		signatures: None,
+		rejected: false,
 	}
 }
 

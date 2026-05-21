@@ -361,7 +361,6 @@ async fn run_state_sets_mode(
 	let fetch_event = |event_id: OwnedEventId| {
 		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
 	};
-	let event_rejected = |_: OwnedEventId| std::future::ready(false);
 
 	println!("Resolving state with room version {:?}...", room_version);
 	let conduwuit_resolved = state_res::resolve(
@@ -369,7 +368,6 @@ async fn run_state_sets_mode(
 		&state_sets,
 		&auth_chain_sets,
 		&fetch_event,
-		&event_rejected,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await
@@ -479,7 +477,6 @@ async fn run_dag_mode(
 	let fetch_event = |event_id: OwnedEventId| {
 		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
 	};
-	let event_rejected = |_: OwnedEventId| std::future::ready(false);
 
 	println!("Resolving state with room version {:?}...", room_version);
 	let conduwuit_resolved = state_res::resolve(
@@ -487,7 +484,6 @@ async fn run_dag_mode(
 		&state_sets,
 		&auth_chain_sets,
 		&fetch_event,
-		&event_rejected,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await

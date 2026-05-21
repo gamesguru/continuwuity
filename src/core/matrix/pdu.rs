@@ -66,6 +66,12 @@ pub struct Pdu {
 	// BTreeMap<Box<ServerName>, BTreeMap<ServerSigningKeyId, String>>
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub signatures: Option<Box<RawJsonValue>>,
+
+	/// Whether this event has been rejected (by auth check, soft-fail, or
+	/// admin action). Populated at fetch time from pdu_metadata DB;
+	/// not persisted in the event JSON itself.
+	#[serde(skip)]
+	pub rejected: bool,
 }
 
 /// Content hashes of a PDU.
@@ -173,6 +179,9 @@ impl Event for Pdu {
 	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
 
 	#[inline]
+	fn rejected(&self) -> bool { self.rejected }
+
+	#[inline]
 	fn as_mut_pdu(&mut self) -> &mut Pdu { self }
 
 	#[inline]
@@ -236,6 +245,9 @@ impl Event for &Pdu {
 
 	#[inline]
 	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
+
+	#[inline]
+	fn rejected(&self) -> bool { self.rejected }
 
 	#[inline]
 	fn as_pdu(&self) -> &Pdu { self }

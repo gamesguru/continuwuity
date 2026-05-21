@@ -135,6 +135,8 @@ where
 	let fetch_cache = scc::HashMap::new();
 	let fetch_cache_ref = &fetch_cache;
 
+	// Populate pdu.rejected at fetch time so iterative_auth_check can use
+	// the synchronous event.rejected() method instead of async DB lookups.
 	let event_fetch = |event_id: OwnedEventId| async move {
 		if let Some(pdu) = fetch_cache_ref
 			.read_async(&event_id, |_, v: &Option<conduwuit_core::PduEvent>| v.clone())
@@ -142,18 +144,25 @@ where
 		{
 			return pdu;
 		}
-		let pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
+		let mut pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
+
+		// Populate rejection flag from pdu_metadata DB, gated by config.
+		// This replaces the old event_rejected callback with a single
+		// check at fetch time — O(1) field access during state-res instead
+		// of O(N×M) async DB lookups.
+		if let Some(ref mut p) = pdu {
+			let config = &self.services.server.config;
+			let meta = &self.services.pdu_metadata;
+			p.rejected = (config.state_res_ignore_admin_rejected
+				&& meta.is_event_admin_rejected(&event_id).await)
+				|| (config.state_res_ignore_rejected
+					&& meta.is_event_rejected(&event_id).await)
+				|| (config.state_res_ignore_soft_failed
+					&& meta.is_event_soft_failed(&event_id).await);
+		}
+
 		let _ = fetch_cache_ref.insert_async(event_id, pdu.clone()).await;
 		pdu
-	};
-
-	let event_rejected = |event_id: OwnedEventId| async move {
-		let config = &self.services.server.config;
-		let meta = &self.services.pdu_metadata;
-
-		(config.state_res_ignore_admin_rejected && meta.is_event_admin_rejected(&event_id).await)
-			|| (config.state_res_ignore_rejected && meta.is_event_rejected(&event_id).await)
-			|| (config.state_res_ignore_soft_failed && meta.is_event_soft_failed(&event_id).await)
 	};
 
 	let room_id_clone = room_id.to_owned();
@@ -174,7 +183,6 @@ where
 		state_sets,
 		auth_chain_sets,
 		&event_fetch,
-		&event_rejected,
 		Some(&event_missing_cb),
 	)
 	.map_err(|e| err!(error!("State resolution failed: {e:?}")))

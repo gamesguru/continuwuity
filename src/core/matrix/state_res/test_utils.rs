@@ -133,13 +133,11 @@ pub(crate) async fn do_check(
 			let event_map = &event_map;
 			let fetch = |id: OwnedEventId| ready(event_map.get(&id).cloned());
 			let exists = |id: OwnedEventId| ready(event_map.get(&id).is_some());
-			let rejected = |_| ready(false);
 			let resolved = super::resolve(
 				&RoomVersionId::V6,
 				state_sets,
 				&auth_chain_sets,
 				&fetch,
-				&rejected,
 				None::<&fn(Vec<OwnedEventId>)>,
 			)
 			.await;
@@ -428,6 +426,7 @@ pub(crate) fn to_init_pdu_event(
 		depth: uint!(0),
 		hashes: EventHash { sha256: "".to_owned() },
 		signatures: None,
+		rejected: false,
 	}
 }
 
@@ -476,6 +475,7 @@ where
 		depth: uint!(0),
 		hashes: EventHash { sha256: "".to_owned() },
 		signatures: None,
+		rejected: false,
 	}
 }
 

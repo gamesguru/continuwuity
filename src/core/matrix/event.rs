@@ -187,6 +187,13 @@ pub trait Event: Clone + Debug {
 	/// Metadata container; peer-trusted only.
 	fn unsigned(&self) -> Option<&RawJsonValue>;
 
+	/// Whether this event has been rejected (auth failure, soft-fail, or
+	/// admin rejection). Default is `false` (not rejected).
+	/// Populated at fetch time to avoid async DB lookups during state
+	/// resolution.
+	#[inline]
+	fn rejected(&self) -> bool { false }
+
 	//#[deprecated]
 	#[inline]
 	fn event_type(&self) -> &TimelineEventType { self.kind() }

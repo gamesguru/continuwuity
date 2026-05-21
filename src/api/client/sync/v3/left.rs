@@ -410,5 +410,6 @@ fn create_dummy_leave_event(
 		redacts: None,
 		hashes: EventHash { sha256: String::new() },
 		signatures: None,
+		rejected: false,
 	}
 }

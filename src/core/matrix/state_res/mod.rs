@@ -77,19 +77,16 @@ type Result<T, E = Error> = crate::Result<T, E>;
 //#[tracing::instrument(level = "debug", skip(state_sets, auth_chain_sets,
 //#[tracing::instrument(level event_fetch))]
 #[allow(clippy::cognitive_complexity)]
-pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, Reject, RejectFut, Cb>(
+pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, Cb>(
 	room_version: &RoomVersionId,
 	state_sets: Sets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId, Hasher>],
 	event_fetch: &Fetch,
-	event_rejected: &Reject,
 	event_missing_cb: Option<&Cb>,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	Fetch: Fn(OwnedEventId) -> FetchFut + Sync,
 	FetchFut: Future<Output = Option<Pdu>> + Send,
-	Reject: Fn(OwnedEventId) -> RejectFut + Sync,
-	RejectFut: Future<Output = bool> + Send,
 	Cb: Fn(Vec<OwnedEventId>) + Sync,
 	Sets: IntoIterator<IntoIter = SetIter> + Send,
 	SetIter: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
@@ -245,7 +242,6 @@ where
 		sorted_pl_events.iter().stream().map(AsRef::as_ref),
 		initial_state.clone(),
 		&event_fetch,
-		&event_rejected,
 	)
 	.await?;
 
@@ -315,7 +311,6 @@ where
 		sorted_control_levels.iter().stream().map(AsRef::as_ref),
 		initial_state,
 		&event_fetch,
-		&event_rejected,
 	)
 	.await?;
 
@@ -356,7 +351,6 @@ where
 		sorted_left_events.iter().stream().map(AsRef::as_ref),
 		resolved_control, // The control events are added to the final resolved state
 		&event_fetch,
-		event_rejected,
 	)
 	.await?;
 
@@ -801,12 +795,11 @@ where
 /// the the `fetch_event` closure and verify each event using the
 /// `event_auth::auth_check` function.
 #[tracing::instrument(level = "trace", skip_all)]
-async fn iterative_auth_check<'a, E, F, Fut, S, R, RFut>(
+async fn iterative_auth_check<'a, E, F, Fut, S>(
 	room_version: &RoomVersion,
 	events_to_check: S,
 	unconflicted_state: StateMap<OwnedEventId>,
 	fetch_event: &F,
-	event_rejected: &R,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
@@ -814,8 +807,6 @@ where
 	S: Stream<Item = &'a EventId> + Send + 'a,
 	E: Event + Clone + Send + Sync,
 	for<'b> &'b E: Event + Send,
-	R: Fn(OwnedEventId) -> RFut + Sync,
-	RFut: Future<Output = bool> + Send,
 {
 	debug!("starting iterative auth check");
 
@@ -830,10 +821,10 @@ where
 				.await
 				.ok_or_else(|| Error::NotFound(format!("Failed to find {event_id}")))
 		})
-		// SYNAPSE CHECK 1: Pre-filter rejected events concurrently during fetch
+		// SYNAPSE CHECK 1: Pre-filter rejected events synchronously via trait
 		.wide_filter_map(|res| async {
 			match res {
-				| Ok(event) if event_rejected(event.event_id().to_owned()).await => {
+				| Ok(event) if event.rejected() => {
 					info!(
 						target: "state_res",
 						event_id = event.event_id().as_str(),
@@ -874,7 +865,7 @@ where
 		.broad_filter_map(fetch_event)
 		// SYNAPSE CHECK 2: filter rejected auth events
 		.broad_filter_map(|auth_event| async {
-			if event_rejected(auth_event.event_id().to_owned()).await {
+			if auth_event.rejected() {
 				trace!(
 					target: "state_res",
 					event_id = auth_event.event_id().as_str(),
@@ -957,8 +948,8 @@ where
 		}
 		for aid in event.auth_events() {
 			if let Some(ev) = auth_events.get(aid) {
-				// Skip rejected events (Synapse parity: checks rejected_reason)
-				if event_rejected(aid.to_owned()).await {
+				// Skip rejected events (Synapse parity: checks rejected flag)
+				if ev.rejected() {
 					trace!(event_id = aid.as_str(), "skipping rejected auth event");
 					continue;
 				}
@@ -991,14 +982,18 @@ where
 				.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
 				.filter_map(|(key, ev_id)| async move {
 					// Exclude rejected events from resolved_state (Synapse parity)
-					if event_rejected(ev_id.clone()).await {
-						return None;
-					}
-
+					// Fetch the event to check its rejected flag
 					if let Some(event) = auth_events.get(ev_id) {
+						if event.rejected() {
+							return None;
+						}
 						Some((key.to_owned(), event.clone()))
 					} else {
-						Some((key.to_owned(), fetch_event(ev_id.clone()).await?))
+						let fetched = fetch_event(ev_id.clone()).await?;
+						if fetched.rejected() {
+							return None;
+						}
+						Some((key.to_owned(), fetched))
 					}
 				})
 				.collect()
@@ -1383,13 +1378,11 @@ mod tests {
 				.await
 				.unwrap();
 
-		let rejected = |_: OwnedEventId| ready(false);
 		let resolved_power = super::iterative_auth_check(
 			&RoomVersion::V6,
 			sorted_power_events.iter().map(AsRef::as_ref).stream(),
 			HashMap::new(), // unconflicted events
 			&fetcher,
-			&rejected,
 		)
 		.await
 		.expect("iterative auth check failed on resolved events");
@@ -1784,13 +1777,11 @@ mod tests {
 			})
 			.collect();
 
-		let rejected = |_: OwnedEventId| ready(false);
 		let resolved = match super::resolve(
 			&RoomVersionId::V2,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -1904,13 +1895,11 @@ mod tests {
 
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_: OwnedEventId| ready(false);
 		let resolved = match super::resolve(
 			&RoomVersionId::V6,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -1959,7 +1948,7 @@ mod tests {
 
 		let mut inner = init.clone();
 		inner.extend(ban);
-		let store = TestStore(inner.clone());
+		let mut store = TestStore(inner.clone());
 
 		// State set A: has MB (ban of ella) and PA
 		let state_set_a = [
@@ -1989,6 +1978,8 @@ mod tests {
 		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
 		.collect::<StateMap<_>>();
 
+		// Mark IME (Ella's join) as rejected via the Pdu field
+		store.0.get_mut(&event_id("IME")).unwrap().rejected = true;
 		let ev_map = &store.0;
 		let state_sets = [state_set_a, state_set_b];
 		let auth_chain: Vec<_> = state_sets
@@ -2002,15 +1993,11 @@ mod tests {
 
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		// Mark IME (Ella's join) as rejected
-		let rejected_id = event_id("IME");
-		let rejected = move |id: OwnedEventId| ready(id == rejected_id);
 		let resolved = match super::resolve(
 			&RoomVersionId::V6,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2045,7 +2032,7 @@ mod tests {
 
 		let mut inner = init.clone();
 		inner.extend(ban);
-		let store = TestStore(inner.clone());
+		let mut store = TestStore(inner.clone());
 
 		let state_set_a = [
 			inner.get(&event_id("CREATE")).unwrap(),
@@ -2073,6 +2060,8 @@ mod tests {
 		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
 		.collect::<StateMap<_>>();
 
+		// Mark PB as rejected via the Pdu field — PA should be the sole power level winner
+		store.0.get_mut(&event_id("PB")).unwrap().rejected = true;
 		let ev_map = &store.0;
 		let state_sets = [state_set_a, state_set_b];
 		let auth_chain: Vec<_> = state_sets
@@ -2086,15 +2075,11 @@ mod tests {
 
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		// Mark PB as rejected — PA should be the sole power level winner
-		let rejected_id = event_id("PB");
-		let rejected = move |id: OwnedEventId| ready(id == rejected_id);
 		let resolved = match super::resolve(
 			&RoomVersionId::V6,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2173,13 +2158,11 @@ mod tests {
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 		// Nothing rejected — both IME and MB participate
-		let rejected = |_id: OwnedEventId| ready(false);
 		let resolved = match super::resolve(
 			&RoomVersionId::V6,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2213,7 +2196,7 @@ mod tests {
 
 		let mut inner = init.clone();
 		inner.extend(ban);
-		let store = TestStore(inner.clone());
+		let mut store = TestStore(inner.clone());
 
 		let state_set_a = [
 			inner.get(&event_id("CREATE")).unwrap(),
@@ -2241,6 +2224,9 @@ mod tests {
 		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
 		.collect::<StateMap<_>>();
 
+		// Reject BOTH ella's join AND her ban — nuclear cleanup
+		store.0.get_mut(&event_id("IME")).unwrap().rejected = true;
+		store.0.get_mut(&event_id("MB")).unwrap().rejected = true;
 		let ev_map = &store.0;
 		let state_sets = [state_set_a, state_set_b];
 		let auth_chain: Vec<_> = state_sets
@@ -2254,16 +2240,11 @@ mod tests {
 
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		// Reject BOTH ella's join AND her ban — nuclear cleanup
-		let rejected_ime = event_id("IME");
-		let rejected_mb = event_id("MB");
-		let rejected = move |id: OwnedEventId| ready(id == rejected_ime || id == rejected_mb);
 		let resolved = match super::resolve(
 			&RoomVersionId::V6,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2416,7 +2397,6 @@ mod tests {
 
 		let fetch = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.contains_key(&id));
-		let rejected = |_: OwnedEventId| ready(false);
 
 		// This must not panic with "State event had no state key"
 		let result = super::resolve(
@@ -2424,7 +2404,6 @@ mod tests {
 			state_sets.iter(),
 			&auth_chain_sets,
 			&fetch,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await;
@@ -2624,7 +2603,7 @@ mod tests {
 		let ban = BAN_STATE_SET();
 		let mut inner = init.clone();
 		inner.extend(ban);
-		let store = TestStore(inner.clone());
+		let mut store = TestStore(inner.clone());
 
 		// State set A: has IPOWER + PA
 		let state_set_a = [
@@ -2653,6 +2632,8 @@ mod tests {
 		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
 		.collect::<StateMap<_>>();
 
+		// Mark PA as rejected via the Pdu field — only the unconflicted IPOWER should remain
+		store.0.get_mut(&event_id("PA")).unwrap().rejected = true;
 		let ev_map = &store.0;
 		let state_sets = [state_set_a, state_set_b];
 		let auth_chain: Vec<_> = state_sets
@@ -2667,16 +2648,11 @@ mod tests {
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
 
-		// Mark PA as rejected — only the unconflicted IPOWER should remain
-		let rejected_id = event_id("PA");
-		let rejected = move |id: OwnedEventId| ready(id == rejected_id);
-
 		let resolved = super::resolve(
 			&RoomVersionId::V6,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2932,7 +2908,6 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_: OwnedEventId| ready(false);
 
 		// Dispatch normally through V12 (no test-hack needed)
 		let resolved = super::resolve(
@@ -2940,7 +2915,6 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3100,14 +3074,12 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_: OwnedEventId| ready(false);
 
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3321,14 +3293,12 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_: OwnedEventId| ready(false);
 
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3503,14 +3473,12 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_: OwnedEventId| ready(false);
 
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3593,14 +3561,12 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_: OwnedEventId| ready(false);
 
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await;
@@ -3765,14 +3731,12 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_: OwnedEventId| ready(false);
 
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3877,14 +3841,12 @@ mod tests {
 		let ev_map = &store.0;
 		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
 		let exists = |id: OwnedEventId| ready(ev_map.get(&id).is_some());
-		let rejected = |_: OwnedEventId| ready(false);
 
 		let resolved = super::resolve(
 			&RoomVersionId::V12,
 			&state_sets,
 			&auth_chain,
 			&fetcher,
-			&rejected,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
