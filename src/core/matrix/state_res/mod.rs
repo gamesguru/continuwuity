@@ -718,7 +718,7 @@ where
 	debug!("fetch event ({event_id}) senders power level");
 
 	let event = fetch_event(event_id.to_owned()).await;
-	let sender = event.as_ref().map(Event::sender);
+	let sender = event.as_ref().map(|e| Event::sender(e).to_owned());
 
 	if let Some(global_context) = global_pl_context {
 		if let Some(s) = &sender {
@@ -737,13 +737,37 @@ where
 		}
 
 		let auth_events = ev.auth_events();
-		let creator_event: Option<E> = auth_events
-			.into_iter()
-			.stream()
-			.broadn_filter_map(5, |aid| fetch_event(aid.to_owned()))
-			.ready_find(|aev: &E| is_type_and_key(aev, &TimelineEventType::RoomCreate, ""))
-			.await;
 
+		// Look for both the create event and a power_levels event in the auth chain
+		let mut creator_event: Option<E> = None;
+		let mut pl_event: Option<E> = None;
+
+		for aid in auth_events {
+			if let Some(aev) = fetch_event(aid.to_owned()).await {
+				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "") {
+					creator_event = Some(aev);
+				} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+					pl_event = Some(aev);
+				}
+			}
+		}
+
+		// If we found a PL event in the auth chain, use the sender's actual PL
+		if let Some(pl_ev) = pl_event {
+			if let Ok(pl_content) =
+				from_json_str::<PowerLevelsContentFields>(pl_ev.content().get())
+			{
+				if let Some(s) = &sender {
+					if let Some(&user_level) = pl_content.get_user_power(s) {
+						debug!("found {s} at power_level {user_level} via auth chain PL event");
+						return user_level;
+					}
+					return pl_content.users_default;
+				}
+			}
+		}
+
+		// Fallback: check if sender is the room creator
 		if let Some(creator_ev) = creator_event {
 			let mut is_creator = creator_ev.sender() == ev.sender();
 			if let Ok(create_content) = from_json_str::<
