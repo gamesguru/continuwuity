@@ -917,13 +917,38 @@ impl Service {
 			 {stale_removed} stale"
 		);
 
+		let n_extremities = true_extremities.len();
 		drop(state_lock);
+
+		// Prune fork storms down to operationally relevant tips.
+		// Must happen after dropping state_lock since recalculate acquires its own.
+		if n_extremities > 5 {
+			self.prune_extremities(room_id, 50).await;
+		}
+
 		info!(
 			"reorder_timeline: complete, {count} events reordered, {state_rebuilt} state \
 			 snapshots rebuilt"
 		);
 
 		Ok(count)
+	}
+
+	/// Prune fork storms down to operationally relevant tips using tail-based
+	/// recalculation. This is a convenience wrapper around
+	/// `recalculate_extremities` with standardized logging.
+	pub async fn prune_extremities(&self, room_id: &RoomId, tail: usize) {
+		match self.recalculate_extremities(room_id, tail, true).await {
+			| Ok(true) => info!(
+				%room_id, tail,
+				"pruned extremities via tail-based recalculation"
+			),
+			| Ok(false) => info!(
+				%room_id, tail,
+				"extremities already consistent after recalculation"
+			),
+			| Err(e) => warn!(%room_id, tail, "failed to prune extremities: {e}"),
+		}
 	}
 
 	/// Automatically recalculates the true topological DAG forward extremities
