@@ -190,16 +190,16 @@ async fn get_auth_chain_inner(
 	let mut found = HashSet::new();
 
 	let started = Instant::now();
+	let mut last_progress = Instant::now();
 
-	let mut iterations: usize = 0;
 	while let Some(event_id) = todo.pop_front() {
-		iterations = iterations.saturating_add(1);
-		if iterations.is_multiple_of(100) {
+		if found.len().is_multiple_of(100) && !found.is_empty() {
 			tokio::task::yield_now().await;
 		}
 
-		if found.len() % 5000 == 0 && !found.is_empty() {
-			info!(%event_id, found = found.len(), queue = todo.len(), elapsed = ?started.elapsed(), "auth chain progress");
+		if last_progress.elapsed().as_secs() >= 30 {
+			info!(%room_id, found = found.len(), queue = todo.len(), elapsed = ?started.elapsed(), "auth_chain walk in progress");
+			last_progress = Instant::now();
 		}
 
 		trace!(%event_id, "processing auth event");

@@ -85,6 +85,9 @@ pub async fn resolve_state(
 	}
 
 	trace!("Resolving state");
+	let n_fork_states: usize = fork_states.iter().map(HashMap::len).sum();
+	let n_auth_chain: usize = auth_chain_sets.iter().map(HashSet::len).sum();
+	info!(%room_id, n_fork_states, n_auth_chain, "resolve_state: auth chains loaded, starting state resolution");
 	let state = self
 		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
 		.boxed()
