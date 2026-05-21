@@ -2060,7 +2060,8 @@ mod tests {
 		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
 		.collect::<StateMap<_>>();
 
-		// Mark PB as rejected via the Pdu field — PA should be the sole power level winner
+		// Mark PB as rejected via the Pdu field — PA should be the sole power level
+		// winner
 		store.0.get_mut(&event_id("PB")).unwrap().rejected = true;
 		let ev_map = &store.0;
 		let state_sets = [state_set_a, state_set_b];
@@ -2632,7 +2633,8 @@ mod tests {
 		.map(|ev| (ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone()))
 		.collect::<StateMap<_>>();
 
-		// Mark PA as rejected via the Pdu field — only the unconflicted IPOWER should remain
+		// Mark PA as rejected via the Pdu field — only the unconflicted IPOWER should
+		// remain
 		store.0.get_mut(&event_id("PA")).unwrap().rejected = true;
 		let ev_map = &store.0;
 		let state_sets = [state_set_a, state_set_b];

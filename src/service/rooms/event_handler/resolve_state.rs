@@ -155,8 +155,7 @@ where
 			let meta = &self.services.pdu_metadata;
 			p.rejected = (config.state_res_ignore_admin_rejected
 				&& meta.is_event_admin_rejected(&event_id).await)
-				|| (config.state_res_ignore_rejected
-					&& meta.is_event_rejected(&event_id).await)
+				|| (config.state_res_ignore_rejected && meta.is_event_rejected(&event_id).await)
 				|| (config.state_res_ignore_soft_failed
 					&& meta.is_event_soft_failed(&event_id).await);
 		}

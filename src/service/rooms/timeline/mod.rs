@@ -680,10 +680,7 @@ impl Service {
 				let shortstatekey = self
 					.services
 					.short
-					.get_or_create_shortstatekey(
-						&pdu.kind.to_string().into(),
-						state_key,
-					)
+					.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
 					.await;
 
 				let new_entry =

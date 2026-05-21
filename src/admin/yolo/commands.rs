@@ -2819,7 +2819,9 @@ pub(super) async fn compare_room_state(
 		let pdu = match PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) {
 			| Ok(pdu) => pdu,
 			| Err(e) => {
-				warn!("Skipping PDU {event_id}, deserialization failed (likely oversized ID): {e}");
+				warn!(
+					"Skipping PDU {event_id}, deserialization failed (likely oversized ID): {e}"
+				);
 				skipped = skipped.saturating_add(1);
 				continue;
 			},
