@@ -168,9 +168,23 @@ pub(super) async fn pre_fetch_state_res_deps(
 						fetched = fetched.saturating_add(1);
 					}
 				} else {
+					// Persist as rejected outlier so we don't re-fetch from
+					// federation on every auth chain walk
+					if let Ok((eid, value)) =
+						conduwuit::matrix::event::gen_event_id_canonical_json(
+							&pdu_raw,
+							room_version_id,
+						) {
+						if eid == event_id {
+							self.services.pdu_metadata.mark_event_rejected(&event_id);
+							self.services
+								.outlier
+								.add_pdu_outlier(&event_id, &value, Some(room_id));
+						}
+					}
 					warn!(
 						%event_id,
-						"Pre-fetched auth event failed signature verification, dropping"
+						"Pre-fetched auth event failed signature verification, storing as rejected outlier"
 					);
 				}
 			}

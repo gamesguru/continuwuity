@@ -4480,7 +4480,8 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 		.await;
 
 	let n_rooms = room_ids.len();
-	self.write_str(&format!("Scanning {n_rooms} rooms...\n")).await?;
+	self.write_str(&format!("Scanning {n_rooms} rooms...\n"))
+		.await?;
 
 	let mut total_rooms = 0_usize;
 	let mut problem_rooms = 0_usize;

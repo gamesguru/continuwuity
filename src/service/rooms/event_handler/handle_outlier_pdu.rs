@@ -63,6 +63,18 @@ where
 		// Caller already verified signatures (e.g. import_pdus via
 		// validate_and_add_event_id). Skip redundant verification.
 		value
+	} else if self
+		.services
+		.server
+		.config
+		.bypassed_signature_events
+		.contains(&event_id.to_owned())
+	{
+		// Configured exception — skip signature verification for known-bad events
+		conduwuit::warn!(
+			"Bypassing signature verification for configured exception event: {event_id}"
+		);
+		value
 	} else {
 		// Check signatures, otherwise drop
 		// check content hash, redact if doesn't match
@@ -163,6 +175,16 @@ where
 				}
 			},
 			| Err(e) => {
+				// Persist as rejected outlier so we don't re-fetch from
+				// federation on every auth chain walk
+				value.insert(
+					"event_id".to_owned(),
+					CanonicalJsonValue::String(event_id.as_str().to_owned()),
+				);
+				self.services.pdu_metadata.mark_event_rejected(event_id);
+				self.services
+					.outlier
+					.add_pdu_outlier(event_id, &value, Some(room_id));
 				return Err!(Request(InvalidParam(debug_error!(
 					"Signature verification failed for {event_id}: {e}"
 				))));
