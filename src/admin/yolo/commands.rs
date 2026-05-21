@@ -1473,6 +1473,7 @@ pub(super) async fn rescue_room(
 
 	let mut count = 0_usize;
 	let mut skipped = 0_usize;
+	let mut failed = 0_usize;
 	for event_id in sorted {
 		let (pdu, pdu_json) = outliers.get(&event_id).expect("in sorted list");
 
@@ -1522,7 +1523,16 @@ pub(super) async fn rescue_room(
 			.clone()
 			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
 
-		if Box::pin(
+		// Always clear rejection/soft-fail markers before rescue attempt.
+		// An admin explicitly rescuing events wants them in the timeline.
+		// Without this, previously soft-failed events bounce off the early
+		// check in upgrade_outlier_to_timeline_pdu and nothing happens.
+		self.services
+			.rooms
+			.pdu_metadata
+			.clear_pdu_markers(&event_id);
+
+		match Box::pin(
 			self.services
 				.rooms
 				.event_handler
@@ -1532,22 +1542,38 @@ pub(super) async fn rescue_room(
 					&create_event,
 					&origin,
 					&room_id,
-					// nuclear: bypass auth checks via the production path
-					nuclear,
+					// Always skip soft-fail for admin rescue (matches rescue-pdu)
+					true,
+					// is_forward_extremity
 					true,
 				),
 		)
 		.await
-		.is_ok()
 		{
-			count = count.saturating_add(1);
-			// Update current_state so subsequent events can compare against
-			// the just-rescued event
-			if let Some(state_key) = &pdu.state_key {
-				let key = (pdu.kind.to_string(), state_key.to_string());
-				current_state
-					.insert(key, (pdu.origin_server_ts, pdu.depth, pdu.event_id.clone()));
-			}
+			| Ok(Some(_)) => {
+				count = count.saturating_add(1);
+				// Update current_state so subsequent events can compare against
+				// the just-rescued event
+				if let Some(state_key) = &pdu.state_key {
+					let key = (pdu.kind.to_string(), state_key.to_string());
+					current_state
+						.insert(key, (pdu.origin_server_ts, pdu.depth, pdu.event_id.clone()));
+				}
+			},
+			| Ok(None) => {
+				// Event was acknowledged but NOT added to the timeline
+				// (e.g., soft-failed acknowledgment). Don't count as rescued.
+				skipped = skipped.saturating_add(1);
+			},
+			| Err(e) => {
+				failed = failed.saturating_add(1);
+				warn!(
+					event_id = %event_id,
+					sender = %pdu.sender(),
+					kind = %pdu.kind,
+					"rescue-room: failed to upgrade outlier: {e}"
+				);
+			},
 		}
 
 		// Yield every 10 events to prevent blocking the executor too long
@@ -1556,10 +1582,18 @@ pub(super) async fn rescue_room(
 		}
 	}
 
-	let msg = if skipped > 0 {
-		format!("Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded).")
-	} else {
-		format!("Rescued {count} PDUs in room {room_id}.")
+	let msg = match (skipped > 0, failed > 0) {
+		| (true, true) => format!(
+			"Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded, {failed} \
+			 failed)."
+		),
+		| (true, false) =>
+			format!("Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded)."),
+		| (false, true) => format!(
+			"Rescued {count} PDUs in room {room_id} ({failed} failed — check server logs for \
+			 details)."
+		),
+		| (false, false) => format!("Rescued {count} PDUs in room {room_id}."),
 	};
 	self.write_str(&msg).await?;
 
@@ -1676,6 +1710,10 @@ pub(super) async fn promote_outliers(&self, room_id: OwnedRoomId) -> Result {
 	let mut promoted = 0_usize;
 	let mut failed = 0_usize;
 	for event_id in &outlier_ids {
+		// Clear soft-fail/rejected markers so promoted events are visible
+		// to clients via sync. Without this, events are ghost timeline entries.
+		self.services.rooms.pdu_metadata.clear_pdu_markers(event_id);
+
 		match self
 			.services
 			.rooms

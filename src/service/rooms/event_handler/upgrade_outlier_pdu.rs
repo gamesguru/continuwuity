@@ -54,9 +54,9 @@ where
 			.pdu_metadata
 			.is_event_soft_failed(incoming_pdu.event_id())
 	);
-	if rejected {
+	if rejected && !skip_soft_fail {
 		return Err!(Request(Forbidden("Event has been rejected")));
-	} else if soft_failed_early {
+	} else if soft_failed_early && !skip_soft_fail {
 		// Return Ok(None) so the remote server stops endlessly retrying
 		info!("Event was previously soft-failed; acknowledging receipt");
 		return Ok(None);

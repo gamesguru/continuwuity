@@ -117,7 +117,7 @@ where
 
 		match (summary, current_room == *room_id) {
 			| (None | Some(SummaryAccessibility::Inaccessible), false) => {
-				conduwuit::debug!(
+				conduwuit::info!(
 					room_id = %current_room,
 					"spaces: ignoring unavailable room in hierarchy (inaccessible or missing summary)"
 				);
