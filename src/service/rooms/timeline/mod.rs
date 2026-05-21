@@ -229,7 +229,6 @@ impl Service {
 		// catastrophic RocksDB compaction on flush that locks the server.
 
 		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)
-		info!("reorder_timeline: reading all PDUs from timeline...");
 		let mut entries: HashMap<OwnedEventId, (PduCount, PduEvent, CanonicalJsonObject)> =
 			HashMap::new();
 		let mut dropped = 0_usize;
