@@ -321,10 +321,10 @@ async fn run_state_sets_mode(
 	// Count conflicts
 	let mut conflicts = 0;
 	for key in state_map_a.keys() {
-		if let Some(id_b) = state_map_b.get(key) {
-			if state_map_a[key] != *id_b {
-				conflicts += 1;
-			}
+		if let Some(id_b) = state_map_b.get(key)
+			&& state_map_a[key] != *id_b
+		{
+			conflicts += 1;
 		}
 	}
 	let only_a = state_map_a

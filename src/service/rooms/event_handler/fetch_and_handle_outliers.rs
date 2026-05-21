@@ -66,7 +66,9 @@ where
 	let mut fetched_info: HashMap<OwnedEventId, CanonicalJsonObject> = HashMap::new();
 	let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::with_capacity(128);
 	let mut active_fetches = FuturesUnordered::new();
-	let fetch_concurrency = std::sync::Arc::new(tokio::sync::Semaphore::new(20));
+	let fetch_concurrency = std::sync::Arc::new(tokio::sync::Semaphore::new(
+		self.services.server.concurrency_scaled(2),
+	));
 	let limit = self.services.server.config.max_fetch_prev_events;
 
 	// Track which events were the original seed requests

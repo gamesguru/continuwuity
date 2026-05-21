@@ -46,10 +46,10 @@ pub(crate) struct InnerServices {
 
 /// How long a room must be idle before being considered stale during the
 /// periodic background sweep.
-const PERIODIC_STALE_THRESHOLD_MS: u64 = 4 * 3600 * 1000; // 4 hours
+const PERIODIC_STALE_THRESHOLD_MS: u64 = 12 * 3600 * 1000; // 12 hours
 
 /// How often the periodic sweep runs.
-const SWEEP_INTERVAL_SECS: u64 = 3600; // every hour
+const SWEEP_INTERVAL_SECS: u64 = 4 * 3600; // every 4 hours
 
 impl Service {
 	pub async fn worker(self: Arc<Self>) -> Result<()> {
@@ -119,6 +119,11 @@ impl Service {
 					Ok(false) => {},
 					Err(e) => warn!(target: "forwardfill", "Error recalculating extremities for {room_id}: {e}"),
 				}
+
+				// Yield to the executor between rooms to prevent starving
+				// client requests on low-memory boxes.
+				tokio::task::yield_now().await;
+				tokio::time::sleep(Duration::from_millis(50)).await;
 			})
 			.await;
 	}

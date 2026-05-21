@@ -70,7 +70,8 @@ where
 			break;
 		}
 		// Fill active_fetches from todo up to concurrency limit and total budget
-		while active_fetches.len() < 16
+		let fetch_width = self.services.server.concurrency_scaled(2);
+		while active_fetches.len() < fetch_width
 			&& !todo.is_empty()
 			&& amount.saturating_add(u64::try_from(active_fetches.len()).unwrap_or(u64::MAX))
 				< limit.into()

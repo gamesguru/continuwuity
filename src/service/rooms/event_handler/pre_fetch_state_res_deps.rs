@@ -92,8 +92,10 @@ pub(super) async fn pre_fetch_state_res_deps(
 		let mut active = FuturesUnordered::new();
 		let mut queue = missing.into_iter().peekable();
 
+		let concurrency = self.services.server.concurrency_scaled(2);
+
 		loop {
-			while active.len() < 32 && queue.peek().is_some() {
+			while active.len() < concurrency && queue.peek().is_some() {
 				let event_id = queue.next().expect("peeked");
 				let servers = servers.clone();
 				active.push(async move {
@@ -204,9 +206,10 @@ pub(super) async fn pre_fetch_state_res_deps(
 	let mut still_needed: Vec<OwnedEventId> = incoming_state.values().cloned().collect();
 	let mut total_filled: usize = 0;
 	let mut round: usize = 0;
+	const MAX_ROUNDS: usize = 3;
 
 	loop {
-		if started.elapsed() >= budget {
+		if started.elapsed() >= budget || round >= MAX_ROUNDS {
 			break;
 		}
 
@@ -234,9 +237,11 @@ pub(super) async fn pre_fetch_state_res_deps(
 
 		round = round.saturating_add(1);
 
-		// Fan out to all servers in parallel.
+		// Fan out to a capped subset of servers to avoid overwhelming
+		// the executor and disk I/O on resource-constrained boxes.
+		let server_fanout = self.services.server.concurrency_scaled(1);
 		let mut active = FuturesUnordered::new();
-		for server in &servers {
+		for server in servers.iter().take(server_fanout) {
 			let room_id_owned = room_id.to_owned();
 			let earliest = earliest.clone();
 			let remaining = remaining.clone();
@@ -311,6 +316,9 @@ pub(super) async fn pre_fetch_state_res_deps(
 			// No server returned anything useful — gap won't close further.
 			break;
 		}
+
+		// Yield between rounds to keep the executor responsive.
+		tokio::task::yield_now().await;
 	}
 
 	if total_filled > 0 {

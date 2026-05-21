@@ -58,7 +58,7 @@ pub(crate) async fn healer_worker(
 		);
 
 		let fallback_servers = service
-			.build_federation_server_list(&room_id, service.services.globals.server_name(), 32)
+			.build_federation_server_list(&room_id, service.services.globals.server_name(), 8)
 			.await;
 
 		let create_event = match service
@@ -108,6 +108,10 @@ pub(crate) async fn healer_worker(
 					failed_heals.insert(event_id.clone(), std::time::Instant::now());
 				},
 			}
+
+			// Yield to the executor between events to prevent starving
+			// client request handling on resource-constrained boxes.
+			tokio::task::yield_now().await;
 		}
 
 		if fetched_count > 0 {
@@ -118,5 +122,9 @@ pub(crate) async fn healer_worker(
 				"DAG Healer successfully fetched missing events"
 			);
 		}
+
+		// Small delay between heal requests to avoid monopolizing the
+		// executor when the channel has a large backlog.
+		tokio::time::sleep(Duration::from_millis(100)).await;
 	}
 }
