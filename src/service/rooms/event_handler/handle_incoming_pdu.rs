@@ -143,13 +143,11 @@ pub async fn handle_incoming_pdu<'a>(
 				%event_id,
 				strikes,
 				reason = "PDU processing timed out during previous request",
-				"Circuit breaker active, soft-failing PDU"
+				"Circuit breaker active, rejecting PDU for remote retry"
 			);
-			self.services
-				.outlier
-				.add_pdu_outlier(event_id, &outlier_value, Some(room_id));
-			self.services.pdu_metadata.mark_event_soft_failed(event_id);
-			return Ok(None);
+			return Err!(Request(Unknown(
+				"Room is in circuit-breaker backoff due to previous timeout, please retry later."
+			)));
 		}
 	}
 
