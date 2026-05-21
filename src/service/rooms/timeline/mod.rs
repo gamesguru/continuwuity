@@ -626,32 +626,118 @@ impl Service {
 			.get_room_shortstatehash(room_id)
 			.await
 			.ok();
+
+		// Load the foundation full state ONCE into memory. Every subsequent
+		// state event will be applied as an incremental diff against this
+		// cached set, avoiding the O(N × depth) DB reads that
+		// append_to_state would perform by re-loading the entire state
+		// chain for every single event.
+		let mut cached_full_state = if let Some(ssh) = foundation_ssh {
+			match self
+				.services
+				.state_compressor
+				.load_shortstatehash_info(ssh)
+				.await
+			{
+				| Ok(info) => info
+					.last()
+					.and_then(|i| i.full_state.clone())
+					.map(|arc| (*arc).clone())
+					.unwrap_or_default(),
+				| _ => {
+					use rooms::state_compressor::CompressedState;
+					CompressedState::new()
+				},
+			}
+		} else {
+			use rooms::state_compressor::CompressedState;
+			CompressedState::new()
+		};
+
 		let mut state_rebuilt = 0_usize;
 		let mut walk_ssh: Option<u64> = foundation_ssh;
+		let mut state_event_count = 0_usize;
+
 		for event_id in &sorted {
 			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
 
-			match self.services.state.append_to_state(pdu, room_id).await {
-				| Ok(new_ssh) =>
+			// Get short IDs for this event
+			let shorteventid = self
+				.services
+				.short
+				.get_or_create_shorteventid(&pdu.event_id)
+				.await;
+
+			// Associate this event with the CURRENT room SSH
+			if let Some(ssh) = walk_ssh {
+				self.services
+					.state
+					.set_pdu_shortstatehash(shorteventid, ssh);
+			}
+
+			// If this is a state event, apply the diff to cached_full_state
+			if let Some(state_key) = &pdu.state_key {
+				let shortstatekey = self
+					.services
+					.short
+					.get_or_create_shortstatekey(
+						&pdu.kind.to_string().into(),
+						state_key,
+					)
+					.await;
+
+				let new_entry =
+					rooms::state_compressor::compress_state_event(shortstatekey, shorteventid);
+
+				// Find and remove the old entry with the same shortstatekey
+				let old_entry = cached_full_state
+					.iter()
+					.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
+					.copied();
+
+				if old_entry == Some(new_entry) {
+					// No change — SSH stays the same
+				} else {
+					// Apply the diff in memory
+					if let Some(old) = old_entry {
+						cached_full_state.remove(&old);
+					}
+					cached_full_state.insert(new_entry);
+
+					// Save as a new root to avoid expensive chain traversal
+					let new_ssh = match self
+						.services
+						.state_compressor
+						.save_state(room_id, Arc::new(cached_full_state.clone()))
+						.await
+					{
+						| Ok(result) => result.shortstatehash,
+						| Err(e) => {
+							warn!(
+								"reorder_timeline: save_state failed for {event_id}: {e}; \
+								 skipping shortstatehash rebuild for this event"
+							);
+							state_rebuilt = state_rebuilt.saturating_add(1);
+							continue;
+						},
+					};
+
 					if walk_ssh != Some(new_ssh) {
 						self.services
 							.state
 							.set_room_state(room_id, new_ssh, &state_lock);
 						walk_ssh = Some(new_ssh);
-					},
-				| Err(e) => {
-					warn!(
-						"reorder_timeline: append_to_state failed for {event_id}: {e}; skipping \
-						 shortstatehash rebuild for this event"
-					);
-				},
+					}
+
+					state_event_count = state_event_count.saturating_add(1);
+				}
 			}
 
 			state_rebuilt = state_rebuilt.saturating_add(1);
 			if state_rebuilt.is_multiple_of(5000) {
 				info!(
 					"reorder_timeline: rebuilt shortstatehash for {state_rebuilt}/{count} \
-					 events..."
+					 events ({state_event_count} state changes)..."
 				);
 				tokio::task::yield_now().await;
 			}

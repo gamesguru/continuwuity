@@ -2816,7 +2816,14 @@ pub(super) async fn compare_room_state(
 			}
 		};
 
-		let pdu = PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref()))?;
+		let pdu = match PduEvent::from_id_val(&event_id, value, Some(room_id.as_ref())) {
+			| Ok(pdu) => pdu,
+			| Err(e) => {
+				warn!("Skipping PDU {event_id}, deserialization failed (likely oversized ID): {e}");
+				skipped = skipped.saturating_add(1);
+				continue;
+			},
+		};
 		event_timestamps.insert(event_id.clone(), u64::from(pdu.origin_server_ts));
 		if let Some(state_key) = &pdu.state_key {
 			remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id.clone());
