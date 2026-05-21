@@ -100,7 +100,7 @@ pub(crate) async fn healer_worker(
 				.is_empty()
 			{
 				| false => {
-					debug!(event_id = ?event_id, "DAG Healer successfully fetched missing event");
+					info!(event_id = ?event_id, "DAG Healer successfully fetched missing event");
 					fetched_count = fetched_count.saturating_add(1);
 				},
 				| true => {
@@ -114,12 +114,14 @@ pub(crate) async fn healer_worker(
 			tokio::task::yield_now().await;
 		}
 
-		if fetched_count > 0 {
+		let failed_count = to_fetch.len().saturating_sub(fetched_count);
+		if fetched_count > 0 || failed_count > 0 {
 			info!(
 				room_id = ?room_id,
 				fetched = fetched_count,
+				failed = failed_count,
 				total = to_fetch.len(),
-				"DAG Healer successfully fetched missing events"
+				"DAG Healer batch complete"
 			);
 		}
 

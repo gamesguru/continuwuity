@@ -1030,14 +1030,20 @@ where
 			)
 		};
 
-		// If the event IS the create event, use it directly; otherwise fetch
-		// from auth_state. Without this fallback, authenticating the genesis
-		// event itself panics because its auth_events list is empty.
+		// If the event IS the create event, use it directly; otherwise use
+		// the memoized create event (or discover it once from auth_state).
+		// This avoids redundant auth_state lookups on every iteration.
 		let create_event = if *event.event_type() == TimelineEventType::RoomCreate {
+			cached_create_event = Some(event.clone());
 			event.clone()
+		} else if let Some(ref ce) = cached_create_event {
+			ce.clone()
 		} else {
 			match fetch_state(&StateEventType::RoomCreate, "").await {
-				| Some(ce) => ce,
+				| Some(ce) => {
+					cached_create_event = Some(ce.clone());
+					ce
+				},
 				| None => {
 					warn!(
 						"event {} failed the authentication check (missing create event)",

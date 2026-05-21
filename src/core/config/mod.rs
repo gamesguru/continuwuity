@@ -764,8 +764,8 @@ pub struct Config {
 	/// events, at the cost of not automatically re-evaluating previously
 	/// rejected events during state resolution.
 	///
-	/// default: true
-	#[serde(default = "true_fn")]
+	/// default: false
+	#[serde(default)]
 	pub state_res_ignore_rejected: bool,
 
 	/// When true, state resolution will skip events that have been
@@ -773,8 +773,8 @@ pub struct Config {
 	/// during auth chain walks, which can cause 600s+ blocking on rooms
 	/// with thousands of soft-failed auth events.
 	///
-	/// default: true
-	#[serde(default = "true_fn")]
+	/// default: false
+	#[serde(default)]
 	pub state_res_ignore_soft_failed: bool,
 
 	/// When true, state resolution will skip events that have been
@@ -783,9 +783,19 @@ pub struct Config {
 	/// events to be reconsidered during state resolution, set this to
 	/// false and clear the admin rejection list instead.
 	///
-	/// default: true
-	#[serde(default = "true_fn")]
+	/// default: false
+	#[serde(default)]
 	pub state_res_ignore_admin_rejected: bool,
+
+	/// Enable the background DAG healer that automatically fetches missing
+	/// events discovered during state resolution. When disabled, missing
+	/// events in auth chains are silently skipped (best-effort resolution).
+	/// Disable this on resource-constrained boxes where the healer's
+	/// federation requests cause excessive CPU and I/O load.
+	///
+	/// default: false
+	#[serde(default)]
+	pub allow_dag_healer: bool,
 
 	/// Always calls /forget on behalf of the user if leaving a room. This is a
 	/// part of MSC4267 "Automatically forgetting rooms on leave"

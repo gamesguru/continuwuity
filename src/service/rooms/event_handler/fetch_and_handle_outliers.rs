@@ -150,7 +150,7 @@ where
 				match future::select_ok(reqs).await {
 					| Ok((res, _rem)) => (id_clone, Ok(res)),
 					| Err(_all_errors) => {
-						warn!(%id_clone, n_servers = servers.len(), "All fallback servers exhausted");
+						debug!(%id_clone, n_servers = servers.len(), "All fallback servers exhausted");
 						(
 							id_clone,
 							Err(conduwuit::err!(Request(NotFound(
@@ -337,7 +337,7 @@ where
 				fetched_info.insert(next_id, value);
 			},
 			| Err(e) => {
-				info!(
+				debug!(
 					target: "auth_chain",
 					"Failed to fetch event {next_id} from all fallback servers: {e}"
 				);
