@@ -1276,7 +1276,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_calculate_true_extremities_07_cap() {
+	fn test_calculate_true_extremities_07_no_cap() {
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
 			HashMap::new();
 		let mut sorted = Vec::new();
@@ -1290,9 +1290,11 @@ mod tests {
 		}
 
 		let tips = calculate_true_extremities(&graph, &sorted);
-		assert_eq!(tips.len(), 20);
-		assert_eq!(tips[0].as_str(), "$tip24");
-		assert_eq!(tips[19].as_str(), "$tip5");
+		// No cap here — capping is done at the DB writer level
+		// (set_forward_extremities) with MAX_FORWARD_EXTREMITIES = 10.
+		assert_eq!(tips.len(), 25);
+		assert_eq!(tips[0].as_str(), "$tip0");
+		assert_eq!(tips[24].as_str(), "$tip24");
 	}
 
 	#[test]

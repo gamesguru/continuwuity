@@ -28,6 +28,7 @@ use ruma::{
 	int,
 };
 use serde_json::from_str as from_json_str;
+use smallvec::SmallVec;
 
 use self::power_levels::PowerLevelsContentFields;
 pub use self::{
@@ -923,10 +924,13 @@ where
 
 		trace!(list = ?auth_types, event_id = event.event_id().as_str(), "auth types for event");
 
-		let mut auth_state = StateMap::new();
+		// SmallVec<[_; 4]> — stack-allocated for the common case (≤4 auth
+		// events: create, join_rules, power_levels, sender_membership).
+		// Eliminates per-iteration HashMap allocation.
+		let mut auth_state: SmallVec<[(TypeStateKey, E); 4]> = SmallVec::new();
 		if room_version.room_ids_as_hashes {
 			if *event.event_type() == TimelineEventType::RoomCreate {
-				auth_state.insert(event.event_type().with_state_key(""), event.clone());
+				auth_state.push((event.event_type().with_state_key(""), event.clone()));
 			} else {
 				if cached_create_event.is_none() {
 					trace!("room version uses hashed IDs, deriving create event from room_id");
@@ -938,10 +942,10 @@ where
 					}
 				}
 				if let Some(create_event) = &cached_create_event {
-					auth_state.insert(
+					auth_state.push((
 						create_event.event_type().with_state_key(""),
 						create_event.clone(),
-					);
+					));
 				} else {
 					warn!(
 						"event {} failed the authentication check (missing create event)",
@@ -959,13 +963,12 @@ where
 					continue;
 				}
 				trace!(event_id = aid.as_str(), "found auth event");
-				auth_state.insert(
-					ev.event_type()
-						.with_state_key(ev.state_key().ok_or_else(|| {
-							Error::InvalidPdu("State event had no state key".to_owned())
-						})?),
-					ev.clone(),
-				);
+				let key = ev
+					.event_type()
+					.with_state_key(ev.state_key().ok_or_else(|| {
+						Error::InvalidPdu("State event had no state key".to_owned())
+					})?);
+				auth_state.push((key, ev.clone()));
 			} else {
 				warn!(event_id = aid.as_str(), "missing auth event");
 			}
@@ -1002,10 +1005,25 @@ where
 				.await;
 
 			for (key, event) in supplemental {
-				auth_state.insert(key, event);
+				auth_state.push((key, event));
 			}
 		}
-		trace!(map = ?auth_state.keys().collect::<Vec<_>>(), event_id = event.event_id().as_str(), "auth state for event");
+
+		// Sort + dedup: binary search requires ascending order, and duplicates
+		// from overlapping auth_events/resolved_state must be collapsed.
+		// Supplemental entries are pushed AFTER auth_events, so reverse+dedup
+		// keeps supplemental (matching old HashMap overwrite semantics), then
+		// re-sort ascending for binary_search.
+		auth_state.sort_by(|a, b| a.0.cmp(&b.0));
+		auth_state.reverse();
+		auth_state.dedup_by(|a, b| a.0.eq(&b.0));
+		auth_state.sort_by(|a, b| a.0.cmp(&b.0));
+
+		trace!(
+			keys = ?auth_state.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+			event_id = event.event_id().as_str(),
+			"auth state for event"
+		);
 
 		if *event.event_type() == TimelineEventType::RoomPowerLevels {
 			info!(
@@ -1016,17 +1034,20 @@ where
 		}
 		debug!(event_id = event.event_id().as_str(), "Running auth checks");
 
-		// The key for this is (eventType + a state_key of the signed token not sender)
-		// so search for it
+		// Binary search for third party invite in the sorted auth_state
 		let current_third_party = auth_state.iter().find_map(|(_, pdu)| {
 			(*pdu.event_type() == TimelineEventType::RoomThirdPartyInvite).then_some(pdu)
 		});
 
+		// Binary search closure: O(log n) lookup instead of HashMap hashing.
+		// For ≤4 elements this is 1-2 comparisons.
 		let fetch_state = |ty: &StateEventType, key: &str| {
+			let needle = ty.with_state_key(key);
 			future::ready(
 				auth_state
-					.get(&ty.with_state_key(key))
-					.map(ToOwned::to_owned),
+					.binary_search_by(|(k, _)| k.cmp(&needle))
+					.ok()
+					.map(|i| auth_state[i].1.clone()),
 			)
 		};
 
