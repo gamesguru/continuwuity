@@ -978,10 +978,11 @@ pub(super) async fn list_outliers(
 				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
 				ready(sender_match)
 			})
-			.take(limit.saturating_mul(10)) // take extra before filtering
 			.collect()
 			.await
 	} else {
+		// Global stream: cap at 10k to avoid OOM on large outlier sets (300k+).
+		// Room-specific queries above are uncapped for correct TS sorting.
 		self.services
 			.rooms
 			.outlier
@@ -990,7 +991,7 @@ pub(super) async fn list_outliers(
 				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
 				ready(sender_match)
 			})
-			.take(limit.saturating_mul(10))
+			.take(10_000)
 			.collect()
 			.await
 	};
