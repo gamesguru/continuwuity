@@ -21,7 +21,7 @@ use conduwuit_core::{
 };
 use futures::{Future, Stream, StreamExt, TryStreamExt, pin_mut};
 use ruma::{
-	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId,
+	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId,
 	events::{TimelineEventType, room::encrypted::Relation},
 };
 use serde::Deserialize;
@@ -85,6 +85,7 @@ struct Services {
 	event_handler: Dep<rooms::event_handler::Service>,
 	outlier: Dep<rooms::outlier::Service>,
 	state_compressor: Dep<rooms::state_compressor::Service>,
+	auth_chain: Dep<rooms::auth_chain::Service>,
 }
 
 type RoomMutexMap = MutexMap<OwnedRoomId, ()>;
@@ -121,6 +122,8 @@ impl crate::Service for Service {
 					.depend::<rooms::state_compressor::Service>("rooms::state_compressor"),
 				event_handler: args
 					.depend::<rooms::event_handler::Service>("rooms::event_handler"),
+				auth_chain: args
+					.depend::<rooms::auth_chain::Service>("rooms::auth_chain"),
 			},
 			db: Data::new(&args),
 			mutex_insert: RoomMutexMap::new(),
@@ -209,6 +212,7 @@ impl Service {
 		use std::collections::{HashMap, HashSet};
 
 		use conduwuit_core::matrix::state_res;
+
 		use futures::future::ready;
 		use ruma::events::StateEventType;
 
@@ -765,27 +769,164 @@ impl Service {
 				 state events processed"
 			);
 		}
-		// Restore the room's shortstatehash to what it was before the walk.
-		// The sequential rebuild gives each event a pdu_shortstatehash for
-		// visibility, but the room's current state should reflect the
-		// authoritative state (e.g. from force-set-room-state-from-server),
-		// not the naive sequential result.
-		if let Ok(ssh) = saved_shortstatehash {
-			self.services
-				.state
-				.set_room_state(room_id, ssh, &state_lock);
+		// Compute the correct final room state. The sequential walk gives
+		// each event a pdu_shortstatehash for visibility, but at merge
+		// points (events with >1 prev_event) the "last writer wins"
+		// heuristic can disagree with proper state resolution.
+		//
+		// Strategy:
+		// - Single extremity: the walk result (walk_ssh) is correct since there are no
+		//   unresolved forks.
+		// - Multiple extremities: run state_res across all fork states to get the
+		//   authoritative resolved state.
+		// - Fallback: if state_res fails, keep the walk result rather than restoring a
+		//   potentially stale pre-walk snapshot.
 
-			// NOTE: Do NOT overwrite the tip event's pdu_shortstatehash here.
-			// pdu_shortstatehash stores the state BEFORE the event (per spec).
-			// The room's SSH is the state AFTER all events. These must diverge.
-
-			info!("reorder_timeline: restored room shortstatehash to {ssh}");
-		}
-
-		// Calculate the true DAG forward extremities using the extracted pure function.
-		// This preserves rescued state events (which have no children locally) as
-		// extremities so they can naturally merge into the DAG via state resolution.
+		// Calculate the true DAG forward extremities first (needed for both
+		// state resolution and the extremity store update below).
 		let true_extremities = calculate_true_extremities(&graph, &sorted);
+
+		if true_extremities.len() > 1 {
+			// Multiple forks — run state_res to reconcile
+			info!(
+				"reorder_timeline: {} forward extremities — running state resolution to \
+				 reconcile fork states...",
+				true_extremities.len()
+			);
+
+			// Collect the state at each extremity by looking up their
+			// pdu_shortstatehash (which the walk just set), then converting
+			// short keys to full (StateEventType, String) tuples for state_res.
+			let mut fork_states: Vec<state_res::StateMap<OwnedEventId>> = Vec::new();
+
+			for ext_eid in &true_extremities {
+				if let Ok(ext_ssh) = self
+					.services
+					.state_accessor
+					.pdu_shortstatehash(ext_eid)
+					.await
+				{
+					// Build typed StateMap directly from state_full
+					let typed_state: state_res::StateMap<OwnedEventId> = self
+						.services
+						.state_accessor
+						.state_full(ext_ssh)
+						.map(|((ty, sk), pdu)| ((ty, sk), pdu.event_id().to_owned()))
+						.collect()
+						.await;
+
+					fork_states.push(typed_state);
+				}
+			}
+
+			if fork_states.len() > 1 {
+				let room_version = self
+					.services
+					.state
+					.get_room_version(room_id)
+					.await
+					.unwrap_or(RoomVersionId::V6);
+
+				// Build auth chain sets for each fork state
+				let mut auth_chain_sets: Vec<HashSet<OwnedEventId>> = Vec::new();
+				for state in &fork_states {
+					let event_ids: Vec<&EventId> =
+						state.values().map(AsRef::as_ref).collect();
+					let chain: HashSet<OwnedEventId> = self
+						.services
+						.auth_chain
+						.event_ids_iter(room_id, event_ids.into_iter())
+						.try_collect()
+						.await
+						.unwrap_or_default();
+					auth_chain_sets.push(chain);
+				}
+
+				match self
+					.services
+					.event_handler
+					.state_resolution(
+						room_id,
+						&room_version,
+						fork_states.iter(),
+						&auth_chain_sets,
+					)
+					.await
+				{
+					| Ok(resolved) => {
+						// Convert resolved StateMap<OwnedEventId> to compressed state
+						let mut new_state =
+							rooms::state_compressor::CompressedState::new();
+
+						for ((event_type, state_key), event_id) in &resolved {
+							let shortstatekey = self
+								.services
+								.short
+								.get_or_create_shortstatekey(event_type, state_key)
+								.await;
+							let shorteventid = self
+								.services
+								.short
+								.get_or_create_shorteventid(event_id)
+								.await;
+							new_state.insert(
+								rooms::state_compressor::compress_state_event(
+									shortstatekey,
+									shorteventid,
+								),
+							);
+						}
+
+						match self
+							.services
+							.state_compressor
+							.save_state(room_id, Arc::new(new_state))
+							.await
+						{
+							| Ok(result) => {
+								self.services.state.set_room_state(
+									room_id,
+									result.shortstatehash,
+									&state_lock,
+								);
+								info!(
+									"reorder_timeline: state resolution complete — \
+									 new SSH {} ({} resolved state entries)",
+									result.shortstatehash,
+									resolved.len()
+								);
+							},
+							| Err(e) => {
+								warn!(
+									"reorder_timeline: save_state after resolution \
+									 failed: {e}; keeping walk result"
+								);
+							},
+						}
+					},
+					| Err(e) => {
+						warn!(
+							"reorder_timeline: state resolution failed: {e}; keeping \
+							 walk result"
+						);
+					},
+				}
+			} else {
+				info!(
+					"reorder_timeline: only {} fork states available, keeping walk \
+					 result",
+					fork_states.len()
+				);
+			}
+		} else {
+			// Single extremity or no extremities — walk result is correct.
+			// No need to restore a stale pre-walk snapshot.
+			info!(
+				"reorder_timeline: single extremity — walk state is authoritative \
+				 (SSH {:?})",
+				walk_ssh
+			);
+		}
 
 		if !true_extremities.is_empty() {
 			self.services
