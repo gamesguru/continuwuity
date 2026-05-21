@@ -4470,13 +4470,6 @@ pub(super) async fn recalculate_extremities(
 pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result {
 	let ours = self.services.globals.server_name();
 
-	self.write_str("Scanning all rooms...\n").await?;
-
-	let mut total_rooms = 0_usize;
-	let mut problem_rooms = 0_usize;
-	let mut fixed_rooms = 0_usize;
-	let mut output = String::new();
-
 	let room_ids: Vec<_> = self
 		.services
 		.rooms
@@ -4485,6 +4478,14 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 		.map(ToOwned::to_owned)
 		.collect()
 		.await;
+
+	let n_rooms = room_ids.len();
+	self.write_str(&format!("Scanning {n_rooms} rooms...\n")).await?;
+
+	let mut total_rooms = 0_usize;
+	let mut problem_rooms = 0_usize;
+	let mut fixed_rooms = 0_usize;
+	let mut output = String::new();
 
 	for room_id in &room_ids {
 		total_rooms = total_rooms.saturating_add(1);
@@ -4624,8 +4625,8 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			writeln!(output, "FAIL {room_id} -- {}", issues.join(", ")).ok();
 		}
 
-		// Flush every 50 rooms to avoid building huge strings
-		if total_rooms.is_multiple_of(50) {
+		// Flush every 25 rooms to show live progress
+		if total_rooms.is_multiple_of(25) {
 			self.write_str(&output).await?;
 			output.clear();
 		}
