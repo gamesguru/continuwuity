@@ -122,8 +122,7 @@ impl crate::Service for Service {
 					.depend::<rooms::state_compressor::Service>("rooms::state_compressor"),
 				event_handler: args
 					.depend::<rooms::event_handler::Service>("rooms::event_handler"),
-				auth_chain: args
-					.depend::<rooms::auth_chain::Service>("rooms::auth_chain"),
+				auth_chain: args.depend::<rooms::auth_chain::Service>("rooms::auth_chain"),
 			},
 			db: Data::new(&args),
 			mutex_insert: RoomMutexMap::new(),
@@ -212,7 +211,6 @@ impl Service {
 		use std::collections::{HashMap, HashSet};
 
 		use conduwuit_core::matrix::state_res;
-
 		use futures::future::ready;
 		use ruma::events::StateEventType;
 
@@ -830,8 +828,7 @@ impl Service {
 				// Build auth chain sets for each fork state
 				let mut auth_chain_sets: Vec<HashSet<OwnedEventId>> = Vec::new();
 				for state in &fork_states {
-					let event_ids: Vec<&EventId> =
-						state.values().map(AsRef::as_ref).collect();
+					let event_ids: Vec<&EventId> = state.values().map(AsRef::as_ref).collect();
 					let chain: HashSet<OwnedEventId> = self
 						.services
 						.auth_chain
@@ -855,8 +852,7 @@ impl Service {
 				{
 					| Ok(resolved) => {
 						// Convert resolved StateMap<OwnedEventId> to compressed state
-						let mut new_state =
-							rooms::state_compressor::CompressedState::new();
+						let mut new_state = rooms::state_compressor::CompressedState::new();
 
 						for ((event_type, state_key), event_id) in &resolved {
 							let shortstatekey = self
@@ -869,12 +865,10 @@ impl Service {
 								.short
 								.get_or_create_shorteventid(event_id)
 								.await;
-							new_state.insert(
-								rooms::state_compressor::compress_state_event(
-									shortstatekey,
-									shorteventid,
-								),
-							);
+							new_state.insert(rooms::state_compressor::compress_state_event(
+								shortstatekey,
+								shorteventid,
+							));
 						}
 
 						match self
@@ -890,31 +884,29 @@ impl Service {
 									&state_lock,
 								);
 								info!(
-									"reorder_timeline: state resolution complete — \
-									 new SSH {} ({} resolved state entries)",
+									"reorder_timeline: state resolution complete — new SSH {} \
+									 ({} resolved state entries)",
 									result.shortstatehash,
 									resolved.len()
 								);
 							},
 							| Err(e) => {
 								warn!(
-									"reorder_timeline: save_state after resolution \
-									 failed: {e}; keeping walk result"
+									"reorder_timeline: save_state after resolution failed: {e}; \
+									 keeping walk result"
 								);
 							},
 						}
 					},
 					| Err(e) => {
 						warn!(
-							"reorder_timeline: state resolution failed: {e}; keeping \
-							 walk result"
+							"reorder_timeline: state resolution failed: {e}; keeping walk result"
 						);
 					},
 				}
 			} else {
 				info!(
-					"reorder_timeline: only {} fork states available, keeping walk \
-					 result",
+					"reorder_timeline: only {} fork states available, keeping walk result",
 					fork_states.len()
 				);
 			}
@@ -922,8 +914,7 @@ impl Service {
 			// Single extremity or no extremities — walk result is correct.
 			// No need to restore a stale pre-walk snapshot.
 			info!(
-				"reorder_timeline: single extremity — walk state is authoritative \
-				 (SSH {:?})",
+				"reorder_timeline: single extremity — walk state is authoritative (SSH {:?})",
 				walk_ssh
 			);
 		}
@@ -1336,10 +1327,8 @@ where
 	S1: std::hash::BuildHasher,
 	S2: std::hash::BuildHasher,
 {
-	let has_children: std::collections::HashSet<&OwnedEventId> = graph
-		.values()
-		.flat_map(|parents| parents.iter())
-		.collect();
+	let has_children: std::collections::HashSet<&OwnedEventId> =
+		graph.values().flat_map(|parents| parents.iter()).collect();
 
 	stored_extremities
 		.iter()
@@ -1663,7 +1652,8 @@ mod tests {
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
 
-		let stored: std::collections::HashSet<OwnedEventId> = vec![a.clone()].into_iter().collect();
+		let stored: std::collections::HashSet<OwnedEventId> =
+			vec![a.clone()].into_iter().collect();
 		let phantoms = detect_phantom_extremities(&graph, &stored);
 		assert_eq!(phantoms, vec![a], "A has children and is phantom");
 	}
@@ -1680,8 +1670,7 @@ mod tests {
 		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
 
 		// $old is stored but not in the window graph at all
-		let stored: std::collections::HashSet<OwnedEventId> =
-			vec![c, old].into_iter().collect();
+		let stored: std::collections::HashSet<OwnedEventId> = vec![c, old].into_iter().collect();
 		let phantoms = detect_phantom_extremities(&graph, &stored);
 		assert!(phantoms.is_empty(), "out-of-window extremity should not be flagged");
 	}
