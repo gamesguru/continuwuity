@@ -758,6 +758,35 @@ pub struct Config {
 	#[serde(default)]
 	pub federation_loopback: bool,
 
+	/// When true, state resolution will skip events that have been marked as
+	/// rejected (e.g. due to auth failures). This dramatically improves
+	/// performance on rooms with large auth chains containing many rejected
+	/// events, at the cost of not automatically re-evaluating previously
+	/// rejected events during state resolution.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub state_res_ignore_rejected: bool,
+
+	/// When true, state resolution will skip events that have been
+	/// soft-failed. This prevents known-bad events from being re-evaluated
+	/// during auth chain walks, which can cause 600s+ blocking on rooms
+	/// with thousands of soft-failed auth events.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub state_res_ignore_soft_failed: bool,
+
+	/// When true, state resolution will skip events that have been
+	/// admin-rejected (manually rejected via admin commands). This is
+	/// the most authoritative rejection flag. If you want admin-rejected
+	/// events to be reconsidered during state resolution, set this to
+	/// false and clear the admin rejection list instead.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub state_res_ignore_admin_rejected: bool,
+
 	/// Always calls /forget on behalf of the user if leaving a room. This is a
 	/// part of MSC4267 "Automatically forgetting rooms on leave"
 	#[serde(default)]

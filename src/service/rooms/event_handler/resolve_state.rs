@@ -148,25 +148,12 @@ where
 	};
 
 	let event_rejected = |event_id: OwnedEventId| async move {
-		// Admin rejections are ABSOLUTE.
-		if self
-			.services
-			.pdu_metadata
-			.is_event_admin_rejected(&event_id)
-			.await
-		{
-			return true;
-		}
+		let config = &self.services.server.config;
+		let meta = &self.services.pdu_metadata;
 
-		// Trust the local rejection/soft-fail flags. Re-evaluating every
-		// rejected event in auth chains of 8000+ events causes catastrophic
-		// performance regression (600s+ state resolution blocking a worker
-		// thread). The DAG healer handles genuinely missing events via the
-		// event_missing_cb callback instead.
-		self.services
-			.pdu_metadata
-			.is_event_soft_failed(&event_id)
-			.await
+		(config.state_res_ignore_admin_rejected && meta.is_event_admin_rejected(&event_id).await)
+			|| (config.state_res_ignore_rejected && meta.is_event_rejected(&event_id).await)
+			|| (config.state_res_ignore_soft_failed && meta.is_event_soft_failed(&event_id).await)
 	};
 
 	let room_id_clone = room_id.to_owned();
