@@ -158,14 +158,15 @@ where
 			return true;
 		}
 
-		// ALGORITHMIC DAG HEALING:
-		// Do not blindly trust the local `is_event_rejected` flag during state
-		// resolution! If an event was rejected in the past due to a broken local DAG,
-		// returning `true` here hides it from `state_res`, creating artificial
-		// "missing auth event" DAG holes. Returning `false` forces
-		// `iterative_auth_check` to safely re-evaluate the event against the true
-		// topological graph, automatically healing historical rejections.
-		false
+		// Trust the local rejection/soft-fail flags. Re-evaluating every
+		// rejected event in auth chains of 8000+ events causes catastrophic
+		// performance regression (600s+ state resolution blocking a worker
+		// thread). The DAG healer handles genuinely missing events via the
+		// event_missing_cb callback instead.
+		self.services
+			.pdu_metadata
+			.is_event_soft_failed(&event_id)
+			.await
 	};
 
 	let room_id_clone = room_id.to_owned();
