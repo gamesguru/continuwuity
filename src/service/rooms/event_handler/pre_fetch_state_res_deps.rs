@@ -177,9 +177,11 @@ pub(super) async fn pre_fetch_state_res_deps(
 						) {
 						if eid == event_id {
 							self.services.pdu_metadata.mark_event_rejected(&event_id);
-							self.services
-								.outlier
-								.add_pdu_outlier(&event_id, &value, Some(room_id));
+							self.services.outlier.add_pdu_outlier(
+								&event_id,
+								&value,
+								Some(room_id),
+							);
 						}
 					}
 					warn!(

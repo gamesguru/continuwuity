@@ -866,7 +866,7 @@ pub(crate) async fn force_set_state(
 	let mut dropped = 0_usize;
 	for pdu in &pdus {
 		let result = if skip_sig_verify {
-			// Skip signature validation — admin is explicitly overriding
+			// Skip signature validation — just derive event_id from content hash
 			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
 				|(event_id, mut value)| {
 					value.insert(
@@ -905,17 +905,34 @@ pub(crate) async fn force_set_state(
 			);
 		}
 
-		let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref())) {
-			| Ok(pdu) => pdu,
-			| Err(e) => {
-				warn!("Skipping invalid PDU {event_id} in remote state: {e:?}");
-				dropped = dropped.saturating_add(1);
-				continue;
-			},
+		// Extract fields directly from canonical JSON — avoids PduEvent
+		// deserialization failures for events with oversized IDs (>255 bytes).
+		let event_type_str = value.get("type").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+		let state_key_opt = value.get("state_key").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+		let pdu_room_id = value.get("room_id").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+
+		let Some(ref event_type) = event_type_str else {
+			warn!("Skipping PDU {event_id} with no type field");
+			dropped = dropped.saturating_add(1);
+			continue;
 		};
 
-		if pdu.room_id_or_hash().as_deref() != Some(room_id.as_ref()) {
-			return Err!(BadServerResponse("Remote room_state PDU belongs to a different room"));
+		// Validate room_id matches (v11+ events may omit room_id)
+		if let Some(ref rid) = pdu_room_id {
+			if rid != room_id.as_str() {
+				return Err!(BadServerResponse(
+					"Remote room_state PDU belongs to a different room"
+				));
+			}
 		}
 
 		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
@@ -939,15 +956,15 @@ pub(crate) async fn force_set_state(
 				.add_pdu_outlier(&event_id, &value, Some(&room_id));
 		}
 
-		if let Some(state_key) = &pdu.state_key {
+		if let Some(state_key) = &state_key_opt {
 			let shortstatekey = self
 				.services
 				.rooms
 				.short
-				.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
+				.get_or_create_shortstatekey(&event_type.clone().into(), state_key)
 				.await;
 
-			state.insert(shortstatekey, pdu.event_id.clone());
+			state.insert(shortstatekey, event_id.clone());
 		}
 	}
 	info!("State PDUs: {validated} validated, {dropped} dropped (failed signature check)");
