@@ -22,7 +22,7 @@ pub async fn handle_outlier_pdu<'a, Pdu>(
 	event_id: &'a EventId,
 	room_id: &'a RoomId,
 	mut value: CanonicalJsonObject,
-	auth_events_known: bool,
+	_auth_events_known: bool,
 	skip_sig_verify: bool,
 ) -> Result<(PduEvent, BTreeMap<String, CanonicalJsonValue>)>
 where
@@ -239,25 +239,17 @@ where
 		.auth_events()
 		.filter(|id| !auth_events.contains_key(*id))
 		.collect::<Vec<_>>();
-	if !missing_auth_events.is_empty() || !auth_events_known {
+	if !missing_auth_events.is_empty() {
 		debug_info!(
-			"Fetching {} missing auth events for outlier event {event_id}",
+			"Missing {} auth events for outlier event {event_id}, suspending to fetch queue",
 			missing_auth_events.len()
 		);
-		for (pdu, _) in self
-			.fetch_and_handle_outliers(
-				origin,
-				missing_auth_events.iter().copied(),
-				create_event,
-				room_id,
-			)
-			.await
-		{
-			auth_events.insert(pdu.event_id().to_owned(), pdu);
-		}
-	} else {
-		debug!("No missing auth events for outlier event {event_id}");
-	}
+		let missing = missing_auth_events
+			.into_iter()
+			.map(|id| id.to_owned())
+			.collect::<Vec<_>>();
+		return Err!(MissingAuthEvents(missing));
+	debug!("No missing auth events for outlier event {event_id}");
 
 	// Build map of auth events and reject if we are still missing some
 	let mut auth_events_by_key: HashMap<_, _> = HashMap::with_capacity(auth_events.len());
