@@ -353,15 +353,11 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			self.services
 				.outlier
 				.add_pdu_outlier(event_id, &value, Some(room_id));
-			// Kick off a background fetch without awaiting -- don't block the response
-			let _ = self
-				.services
-				.event_handler
-				.heal_room_tx
-				.send(super::HealRequest {
-					room_id: room_id.to_owned(),
-					missing_events: missing,
-				});
+			// Kick off a background fetch without awaiting — don't block the response
+			let _ = self.dag_healer.send(super::HealRequest {
+				room_id: room_id.to_owned(),
+				missing_events: missing,
+			});
 			// This PDU cannot be a timeline event yet — treat as non-timeline
 			return Ok(None);
 		},

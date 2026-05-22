@@ -1203,10 +1203,18 @@ where
 	}
 
 	// Step 2: For each event to sort, find its associated power level event,
-	// then look up its mainline position in O(1). Events whose PL is not on the
-	// mainline (or have no associated PL) get position usize::MAX (lowest
-	// priority).
-	let mut event_to_mainline: HashMap<&OwnedEventId, usize> = HashMap::new();
+	// then look up its mainline position in O(1).
+	//
+	// Depth semantics (matching the original ruma state-res algorithm):
+	//   - None  → event has no PL in its auth chain; lowest priority, applied
+	//     first, loses
+	//   - Some(0) → event's PL IS the resolved PL; highest priority, applied last,
+	//     wins
+	//   - Some(N) → event's PL is N hops from the resolved PL; intermediate
+	//     priority
+	//
+	// We use Option<usize> so that None < Some(0) in Rust's natural Ord ordering.
+	let mut event_to_mainline: HashMap<&OwnedEventId, Option<usize>> = HashMap::new();
 	let mut event_ts: HashMap<&OwnedEventId, MilliSecondsSinceUnixEpoch> = HashMap::new();
 
 	for ev_id in to_sort {
@@ -1215,37 +1223,38 @@ where
 		};
 		event_ts.insert(ev_id, event.origin_server_ts());
 
-		let depth = if is_type_and_key(&event, &TimelineEventType::RoomPowerLevels, "") {
-			// The event IS a power level event — look itself up directly
-			mainline_depth.get(ev_id).copied().unwrap_or(usize::MAX)
-		} else {
-			// Find the power level event in this event's auth_events
-			let mut found_depth = usize::MAX;
-			for aid in event.auth_events() {
-				let Some(aev) = cached_fetch(aid.to_owned()).await else {
-					continue;
-				};
-				if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-					found_depth = mainline_depth.get(aid).copied().unwrap_or(usize::MAX);
-					break;
+		let depth: Option<usize> =
+			if is_type_and_key(&event, &TimelineEventType::RoomPowerLevels, "") {
+				// The event IS a power level event — look itself up directly
+				mainline_depth.get(ev_id).copied()
+			} else {
+				// Find the power level event in this event's auth_events
+				let mut found = None;
+				for aid in event.auth_events() {
+					let Some(aev) = cached_fetch(aid.to_owned()).await else {
+						continue;
+					};
+					if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+						found = mainline_depth.get(aid).copied();
+						break;
+					}
 				}
-			}
-			found_depth
-		};
+				found
+			};
 
 		event_to_mainline.insert(ev_id, depth);
 	}
 
 	// Step 3: Sort ascending by (mainline_position, origin_server_ts, event_id).
-	// Lower mainline_position = closer to the resolved PL = higher priority.
-	// In ascending sort the LAST element wins (state map is overwritten on each
-	// step). usize::MAX for events with no mainline connection = lowest priority =
-	// first.
+	//
+	// None events (no mainline connection) sort FIRST -> applied first -> lose.
+	// Some(0) events (PL = resolved PL) sort LAST -> applied last -> win.
+	// The state map is overwritten on each application, so the last event wins.
 	let mut sort_event_ids: Vec<_> = event_to_mainline.keys().map(|&k| k.clone()).collect();
 
 	sort_event_ids.sort_by(|a, b| {
-		let da = event_to_mainline.get(a).copied().unwrap_or(usize::MAX);
-		let db = event_to_mainline.get(b).copied().unwrap_or(usize::MAX);
+		let da = event_to_mainline.get(a).copied().flatten();
+		let db = event_to_mainline.get(b).copied().flatten();
 		let ta = event_ts
 			.get(a)
 			.copied()
@@ -1437,14 +1446,16 @@ mod tests {
 
 		assert_eq!(
 			vec![
+				// No PL in auth chain -> None depth -> sort first (lowest priority, lose)
 				"$CREATE:foo",
 				"$IMA:foo",
+				"$START:foo",
+				"$END:foo",
+				// PL in auth chain -> Some(0) -> sort last (highest priority, win)
 				"$IPOWER:foo",
 				"$IJR:foo",
 				"$IMB:foo",
 				"$IMC:foo",
-				"$START:foo",
-				"$END:foo",
 			],
 			sorted_event_ids
 				.iter()
