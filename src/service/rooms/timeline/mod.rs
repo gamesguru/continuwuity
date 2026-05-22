@@ -828,27 +828,23 @@ impl Service {
 				// Build auth chain sets for each fork state
 				let mut auth_chain_sets: Vec<HashSet<OwnedEventId>> = Vec::new();
 				for state in &fork_states {
-					let event_ids: Vec<&EventId> = state.values().map(AsRef::as_ref).collect();
 					let chain: HashSet<OwnedEventId> = self
 						.services
 						.auth_chain
-						.event_ids_iter(room_id, event_ids.into_iter())
+						.event_ids_iter(room_id, state.values().map(AsRef::as_ref))
 						.try_collect()
 						.await
 						.unwrap_or_default();
 					auth_chain_sets.push(chain);
 				}
 
-				match self
-					.services
-					.event_handler
-					.state_resolution(
-						room_id,
-						&room_version,
-						fork_states.iter(),
-						&auth_chain_sets,
-					)
-					.await
+				match Box::pin(self.services.event_handler.state_resolution(
+					room_id,
+					&room_version,
+					fork_states.iter(),
+					&auth_chain_sets,
+				))
+				.await
 				{
 					| Ok(resolved) => {
 						// Convert resolved StateMap<OwnedEventId> to compressed state
@@ -1315,17 +1311,18 @@ impl Service {
 /// This avoids false positives from:
 /// - Stored extremities outside the tail window (unverifiable)
 /// - MAX_FORWARD_EXTREMITIES capping (stored set is a subset of true tips)
-pub fn detect_phantom_extremities<S1, S2>(
+pub fn detect_phantom_extremities<S1, S2, S3>(
 	graph: &std::collections::HashMap<
 		OwnedEventId,
 		std::collections::HashSet<OwnedEventId, S2>,
 		S1,
 	>,
-	stored_extremities: &std::collections::HashSet<OwnedEventId>,
+	stored_extremities: &std::collections::HashSet<OwnedEventId, S3>,
 ) -> Vec<OwnedEventId>
 where
 	S1: std::hash::BuildHasher,
 	S2: std::hash::BuildHasher,
+	S3: std::hash::BuildHasher,
 {
 	let has_children: std::collections::HashSet<&OwnedEventId> =
 		graph.values().flat_map(|parents| parents.iter()).collect();
