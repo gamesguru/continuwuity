@@ -1206,11 +1206,11 @@ where
 	// then look up its mainline position in O(1).
 	//
 	// Depth semantics (matching the original ruma state-res algorithm):
-	//   - None  → event has no PL in its auth chain; lowest priority, applied
+	//   - None  -> event has no PL in its auth chain; lowest priority, applied
 	//     first, loses
-	//   - Some(0) → event's PL IS the resolved PL; highest priority, applied last,
+	//   - Some(0) -> event's PL IS the resolved PL; highest priority, applied last,
 	//     wins
-	//   - Some(N) → event's PL is N hops from the resolved PL; intermediate
+	//   - Some(N) -> event's PL is N hops from the resolved PL; intermediate
 	//     priority
 	//
 	// We use Option<usize> so that None < Some(0) in Rust's natural Ord ordering.
@@ -1245,11 +1245,14 @@ where
 		event_to_mainline.insert(ev_id, depth);
 	}
 
-	// Step 3: Sort ascending by (mainline_position, origin_server_ts, event_id).
+	// Step 3: Sort by mainline position then ts/id. Applied left->right, last wins.
 	//
-	// None events (no mainline connection) sort FIRST -> applied first -> lose.
-	// Some(0) events (PL = resolved PL) sort LAST -> applied last -> win.
-	// The state map is overwritten on each application, so the last event wins.
+	// None (no mainline connection) -> worst -> FIRST -> loses.
+	// For events with a connection: LARGER position = FARTHER from resolved PL =
+	// worse = comes FIRST.  Position 0 (closest to current PL) is LAST -> wins.
+	//
+	// This mirrors spec §6.6.3.3: "x < y if x.position > y.position" where ∞
+	// beats all finite positions (None events have position ∞).
 	let mut sort_event_ids: Vec<_> = event_to_mainline.keys().map(|&k| k.clone()).collect();
 
 	sort_event_ids.sort_by(|a, b| {
@@ -1263,9 +1266,19 @@ where
 			.get(b)
 			.copied()
 			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
-		da.cmp(&db)
-			.then(ta.cmp(&tb))
-			.then(a.as_str().cmp(b.as_str()))
+		match (da, db) {
+			// Both have no PL ancestor -> tiebreak by ts ascending then id ascending.
+			| (None, None) => ta.cmp(&tb).then(a.as_str().cmp(b.as_str())),
+			// No-PL events are worst (first).
+			| (None, Some(_)) => Ordering::Less,
+			| (Some(_), None) => Ordering::Greater,
+			// Both have a PL ancestor: DESCENDING position (farther from PL first).
+			// Then ascending ts (earlier ts -> loses; later ts -> wins).
+			| (Some(pa), Some(pb)) => pb
+				.cmp(&pa)
+				.then(ta.cmp(&tb))
+				.then(a.as_str().cmp(b.as_str())),
+		}
 	});
 
 	Ok(sort_event_ids)
@@ -1866,6 +1879,131 @@ mod tests {
 				.map(|s| s.replace('$', "").replace(":foo", ""))
 				.collect::<Vec<_>>()
 		);
+	}
+
+	/// Ported from ruma-state-res `state_res::tests::test_mainline_sort`.
+	/// Events connected to the mainline PL sort AFTER events with no PL
+	/// ancestor.
+	#[tokio::test]
+	async fn ruma_test_mainline_sort() {
+		use futures::future::ready;
+
+		let events = INITIAL_EVENTS();
+		let fetcher = |id| ready(events.get(&id).cloned());
+
+		// Only the room-setup events (no disconnected START/END message events)
+		let mut to_sort: Vec<OwnedEventId> = events
+			.keys()
+			.filter(|id| {
+				let s = id.to_string();
+				!s.contains("START") && !s.contains("END")
+			})
+			.cloned()
+			.collect();
+
+		for _ in 0..20 {
+			to_sort.shuffle(&mut rand::rng());
+			let power_level = events
+				.iter()
+				.find(|(_, ev)| {
+					ev.event_type() == &ruma::events::TimelineEventType::RoomPowerLevels
+				})
+				.map(|(id, _)| id.clone());
+
+			let sorted = super::mainline_sort(&to_sort, power_level, &fetcher)
+				.await
+				.unwrap();
+			let names: Vec<String> = sorted
+				.iter()
+				.map(|id| id.to_string().replace("$", "").replace(":foo", ""))
+				.collect();
+
+			// No-PL-ancestor events (CREATE, IMA) come FIRST (lowest priority, lose).
+			// PL-connected events (IPOWER, IJR, IMB, IMC) come LAST (win).
+			assert_eq!(
+				names,
+				["CREATE", "IMA", "IPOWER", "IJR", "IMB", "IMC"],
+				"ruma_test_mainline_sort: wrong order on iteration"
+			);
+		}
+	}
+
+	/// Ported from ruma-state-res
+	/// `state_res::tests::test_mainline_sort_no_pl_ancestor_sorts_first`.
+	/// Per spec §6.6.3.3: an event with i=∞ (no mainline ancestor) sorts BEFORE
+	/// all chain-rooted events.  Directly validates our `Option<usize>`
+	/// sentinel.
+	#[tokio::test]
+	async fn ruma_test_mainline_sort_no_pl_ancestor_sorts_first() {
+		use futures::future::ready;
+
+		let events = INITIAL_EVENTS();
+		let fetcher = |id| ready(events.get(&id).cloned());
+
+		// IMA  -> auth=[$CREATE]          -> no PL -> no mainline anchor (sorts first)
+		// IJR  -> auth=[$CREATE,$IMA,$IPOWER] -> PL=$IPOWER -> mainline depth 0
+		// IPOWER -> IS the PL               -> mainline depth 0 (closest, wins)
+		let to_sort: Vec<OwnedEventId> = ["IMA", "IJR", "IPOWER"]
+			.iter()
+			.map(|s| {
+				<&ruma::EventId>::try_from(format!("${s}:foo").as_str())
+					.unwrap()
+					.to_owned()
+			})
+			.collect();
+
+		let power_level = events
+			.iter()
+			.find(|(_, ev)| ev.event_type() == &ruma::events::TimelineEventType::RoomPowerLevels)
+			.map(|(id, _)| id.clone());
+
+		let sorted = super::mainline_sort(&to_sort, power_level, &fetcher)
+			.await
+			.unwrap();
+		let names: Vec<String> = sorted
+			.iter()
+			.map(|id| id.to_string().replace("$", "").replace(":foo", ""))
+			.collect();
+
+		// IMA (None) first. IPOWER (ts=2) and IJR (ts=3) both at depth=Some(0);
+		// ascending ts within equal depth -> IPOWER before IJR -> IJR last -> IJR wins.
+		assert_eq!(
+			names,
+			["IMA", "IPOWER", "IJR"],
+			"no-PL-ancestor event must sort before mainline-connected events"
+		);
+	}
+
+	/// Ported from ruma-state-res
+	/// `state_res::tests::test_reverse_topological_power_sort`.
+	#[tokio::test]
+	async fn ruma_test_reverse_topological_power_sort() {
+		let eid = |s: &str| -> OwnedEventId {
+			<&ruma::EventId>::try_from(format!("${s}:foo").as_str())
+				.unwrap()
+				.to_owned()
+		};
+		let graph = [
+			(eid("l"), [eid("o")].into()),
+			(eid("m"), [eid("n"), eid("o")].into()),
+			(eid("n"), [eid("o")].into()),
+			(eid("o"), std::collections::HashSet::new()),
+			(eid("p"), [eid("o")].into()),
+		]
+		.into();
+
+		let sorted = super::lexicographical_topological_sort(&graph, &|_id| async {
+			Ok((int!(0), MilliSecondsSinceUnixEpoch(uint!(0))))
+		})
+		.await
+		.unwrap();
+
+		let names: Vec<String> = sorted
+			.iter()
+			.map(|id| id.to_string().replace("$", "").replace(":foo", ""))
+			.collect();
+
+		assert_eq!(names, ["o", "l", "n", "m", "p"]);
 	}
 
 	#[tokio::test]
@@ -3632,7 +3770,7 @@ mod tests {
 	/// creator's authority.
 	///
 	/// This test exercises the auth chain through iterative_auth_check directly
-	/// to ensure the create event is found via the room_id→event_id derivation
+	/// to ensure the create event is found via the room_id->event_id derivation
 	/// and the creator retains power level authority.
 	#[tokio::test]
 	async fn v12_power_levels_update_after_joins() {
