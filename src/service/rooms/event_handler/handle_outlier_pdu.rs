@@ -249,6 +249,7 @@ where
 			.map(|id| id.to_owned())
 			.collect::<Vec<_>>();
 		return Err!(MissingAuthEvents(missing));
+	}
 	debug!("No missing auth events for outlier event {event_id}");
 
 	// Build map of auth events and reject if we are still missing some

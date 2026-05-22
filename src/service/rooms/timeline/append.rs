@@ -163,9 +163,12 @@ where
 	}
 
 	// We must keep track of all events that have been referenced.
-	self.services
-		.pdu_metadata
-		.mark_as_referenced(room_id, pdu.prev_events().map(AsRef::as_ref));
+	// EXCEPT for soft-failed events, which are invisible to DAG tips.
+	if !soft_fail {
+		self.services
+			.pdu_metadata
+			.mark_as_referenced(room_id, pdu.prev_events().map(AsRef::as_ref));
+	}
 
 	trace!("setting forward extremities");
 	self.services
