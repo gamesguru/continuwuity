@@ -170,7 +170,7 @@ pub async fn handle_incoming_pdu<'a>(
 	let fut = self.handle_incoming_pdu_inner(origin, room_id, event_id, value, is_timeline_event);
 
 	let pdu_timeout = self.services.server.config.pdu_receive_timeout;
-	match tokio::time::timeout(std::time::Duration::from_secs(pdu_timeout), fut).await {
+	match Box::pin(tokio::time::timeout(std::time::Duration::from_secs(pdu_timeout), fut)).await {
 		| Ok(res) => {
 			if res.is_ok() {
 				// Clear the circuit breaker on success
@@ -326,9 +326,49 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		.room_state_get(room_id, &StateEventType::RoomCreate, "")
 		.await?);
 
-	let (incoming_pdu, val) = self
-		.handle_outlier_pdu(origin, Some(create_event), event_id, room_id, value, false, false)
-		.await?;
+	let (incoming_pdu, val) = match self
+		.handle_outlier_pdu(
+			origin,
+			Some(create_event),
+			event_id,
+			room_id,
+			value.clone(),
+			false,
+			false,
+		)
+		.await
+	{
+		| Ok(res) => res,
+		| Err(e) => {
+			if let conduwuit::Error::MissingAuthEvents(missing) = &e {
+				info!(
+					target: "state_res_debug",
+					"Fetching {} missing auth events for incoming PDU {event_id}",
+					missing.len()
+				);
+				self.fetch_and_handle_outliers(
+					origin,
+					missing.iter().map(AsRef::as_ref),
+					Some(create_event),
+					room_id,
+				)
+				.await;
+				// retry once
+				self.handle_outlier_pdu(
+					origin,
+					Some(create_event),
+					event_id,
+					room_id,
+					value,
+					false,
+					false,
+				)
+				.await?
+			} else {
+				return Err(e);
+			}
+		},
+	};
 
 	// 8. if not timeline event: stop
 	if !is_timeline_event {
