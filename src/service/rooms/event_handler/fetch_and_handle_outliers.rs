@@ -76,7 +76,6 @@ where
 
 	let push_fetch =
 		|event_id: OwnedEventId, is_retry: bool, fetches: &mut FuturesUnordered<_>| {
-			let id_clone = event_id.clone();
 			let servers = routing_servers.clone();
 			let sem = fetch_concurrency.clone();
 			fetches.push(
@@ -88,17 +87,17 @@ where
 								2_u64.pow(attempt.into()),
 							))
 							.await;
-							debug!(%id_clone, attempt, "Retrying fetch");
+							debug!(%event_id, attempt, "Retrying fetch");
 						}
 						let reqs = servers.iter().enumerate().map(|(i, server)| {
-							let id_clone = id_clone.clone();
+							let event_id = event_id.clone();
 							async move {
 								let start = Instant::now();
 								match self
 									.services
 									.sending
 									.send_federation_request(server, get_event::v1::Request {
-										event_id: id_clone.clone(),
+										event_id: event_id.clone(),
 										include_unredacted_content: None,
 									})
 									.await
@@ -110,7 +109,7 @@ where
 									| Err(e) => {
 										self.update_peer_stats(server, false, start.elapsed());
 										if i == 0 {
-											debug!(%id_clone, %server, "Origin server failed: {e}");
+											debug!(%event_id, %server, "Origin server failed: {e}");
 										}
 										Err(e)
 									},
@@ -120,18 +119,18 @@ where
 						});
 
 						match future::select_ok(reqs).await {
-							| Ok((res, _rem)) => return (id_clone, Ok(res)),
+							| Ok((res, _rem)) => return (event_id, Ok(res)),
 							| Err(_all_errors) =>
 								if is_retry {
-									info!(%id_clone, n_servers = servers.len(), attempt, "All servers exhausted");
+									info!(%event_id, n_servers = servers.len(), attempt, "All servers exhausted");
 								} else {
-									debug!(%id_clone, n_servers = servers.len(), "All servers exhausted");
+									debug!(%event_id, n_servers = servers.len(), "All servers exhausted");
 									break;
 								},
 						}
 					}
 					(
-						id_clone,
+						event_id,
 						Err(conduwuit::err!(Request(NotFound(
 							"event not found after trying all servers"
 						)))),

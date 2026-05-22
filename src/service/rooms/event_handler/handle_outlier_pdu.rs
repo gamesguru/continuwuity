@@ -246,7 +246,7 @@ where
 		);
 		let missing = missing_auth_events
 			.into_iter()
-			.map(|id| id.to_owned())
+			.map(ToOwned::to_owned)
 			.collect::<Vec<_>>();
 		return Err!(MissingAuthEvents(missing));
 	}

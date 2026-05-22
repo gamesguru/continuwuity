@@ -1340,7 +1340,7 @@ where
 		if let (Some(&i), Some(&j), Some(ce), Some(cm)) = (first_e, first_m, comp_e, comp_m) {
 			if ce == cm {
 				let min_idx = sparse_table.query(i, j);
-				return sparse_table.depths[min_idx].saturating_add(1);
+				return sparse_table.depths[min_idx];
 			}
 		}
 		0
@@ -1368,6 +1368,10 @@ where
 
 	// Sort the event_ids by their depth, timestamp and EventId
 	let mut sort_event_ids: Vec<_> = order_map.keys().map(|&k| k.clone()).collect();
+
+	for (id, val) in &order_map {
+		println!("SORT_VAL: {id} -> {val:?}");
+	}
 
 	sort_event_ids.sort_by_key(|sort_id| &order_map[sort_id]);
 
@@ -1551,12 +1555,12 @@ mod tests {
 			vec![
 				"$CREATE:foo",
 				"$IMA:foo",
-				"$START:foo",
-				"$END:foo",
 				"$IPOWER:foo",
 				"$IJR:foo",
 				"$IMB:foo",
 				"$IMC:foo",
+				"$START:foo",
+				"$END:foo",
 			],
 			sorted_event_ids
 				.iter()
