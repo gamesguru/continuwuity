@@ -818,88 +818,8 @@ impl Service {
 			}
 
 			if fork_states.len() > 1 {
-				let room_version = self
-					.services
-					.state
-					.get_room_version(room_id)
-					.await
-					.unwrap_or(RoomVersionId::V6);
-
-				// Build auth chain sets for each fork state
-				let mut auth_chain_sets: Vec<HashSet<OwnedEventId>> = Vec::new();
-				for state in &fork_states {
-					let chain: HashSet<OwnedEventId> = self
-						.services
-						.auth_chain
-						.event_ids_iter(room_id, state.values().map(AsRef::as_ref))
-						.try_collect()
-						.await
-						.unwrap_or_default();
-					auth_chain_sets.push(chain);
-				}
-
-				match Box::pin(self.services.event_handler.state_resolution(
-					room_id,
-					&room_version,
-					fork_states.iter(),
-					&auth_chain_sets,
-				))
-				.await
-				{
-					| Ok(resolved) => {
-						// Convert resolved StateMap<OwnedEventId> to compressed state
-						let mut new_state = rooms::state_compressor::CompressedState::new();
-
-						for ((event_type, state_key), event_id) in &resolved {
-							let shortstatekey = self
-								.services
-								.short
-								.get_or_create_shortstatekey(event_type, state_key)
-								.await;
-							let shorteventid = self
-								.services
-								.short
-								.get_or_create_shorteventid(event_id)
-								.await;
-							new_state.insert(rooms::state_compressor::compress_state_event(
-								shortstatekey,
-								shorteventid,
-							));
-						}
-
-						match self
-							.services
-							.state_compressor
-							.save_state(room_id, Arc::new(new_state))
-							.await
-						{
-							| Ok(result) => {
-								self.services.state.set_room_state(
-									room_id,
-									result.shortstatehash,
-									&state_lock,
-								);
-								info!(
-									"reorder_timeline: state resolution complete — new SSH {} \
-									 ({} resolved state entries)",
-									result.shortstatehash,
-									resolved.len()
-								);
-							},
-							| Err(e) => {
-								warn!(
-									"reorder_timeline: save_state after resolution failed: {e}; \
-									 keeping walk result"
-								);
-							},
-						}
-					},
-					| Err(e) => {
-						warn!(
-							"reorder_timeline: state resolution failed: {e}; keeping walk result"
-						);
-					},
-				}
+				self.reconcile_fork_states(room_id, fork_states, &state_lock)
+					.await;
 			} else {
 				info!(
 					"reorder_timeline: only {} fork states available, keeping walk result",
@@ -1075,8 +995,103 @@ impl Service {
 				%room_id, tail,
 				"extremities already consistent after recalculation"
 			),
-			| Err(e) => warn!(%room_id, tail, "failed to prune extremities: {e}"),
+			| Err(e) => warn!(
+				%room_id, tail,
+				"failed to prune extremities: {e}"
+			),
 		}
+	}
+
+	fn reconcile_fork_states<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+		fork_states: Vec<conduwuit_core::matrix::state_res::StateMap<OwnedEventId>>,
+		state_lock: &'a RoomMutexGuard,
+	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+		Box::pin(async move {
+			use std::collections::HashSet;
+
+			let room_version = self
+				.services
+				.state
+				.get_room_version(room_id)
+				.await
+				.unwrap_or(RoomVersionId::V6);
+
+			// Build auth chain sets for each fork state
+			let mut auth_chain_sets: Vec<HashSet<OwnedEventId>> = Vec::new();
+			for state in &fork_states {
+				let chain: HashSet<OwnedEventId> = self
+					.services
+					.auth_chain
+					.event_ids_iter(room_id, state.values().map(AsRef::as_ref))
+					.try_collect()
+					.await
+					.unwrap_or_default();
+				auth_chain_sets.push(chain);
+			}
+
+			match Box::pin(self.services.event_handler.state_resolution(
+				room_id,
+				&room_version,
+				fork_states.iter(),
+				&auth_chain_sets,
+			))
+			.await
+			{
+				| Ok(resolved) => {
+					// Convert resolved StateMap<OwnedEventId> to compressed state
+					let mut new_state = rooms::state_compressor::CompressedState::new();
+
+					for ((event_type, state_key), event_id) in &resolved {
+						let shortstatekey = self
+							.services
+							.short
+							.get_or_create_shortstatekey(event_type, state_key)
+							.await;
+						let shorteventid = self
+							.services
+							.short
+							.get_or_create_shorteventid(event_id)
+							.await;
+						new_state.insert(rooms::state_compressor::compress_state_event(
+							shortstatekey,
+							shorteventid,
+						));
+					}
+
+					match self
+						.services
+						.state_compressor
+						.save_state(room_id, Arc::new(new_state))
+						.await
+					{
+						| Ok(result) => {
+							self.services.state.set_room_state(
+								room_id,
+								result.shortstatehash,
+								state_lock,
+							);
+							info!(
+								"reorder_timeline: state resolution complete — new SSH {} ({} \
+								 resolved state entries)",
+								result.shortstatehash,
+								resolved.len()
+							);
+						},
+						| Err(e) => {
+							warn!(
+								"reorder_timeline: save_state after resolution failed: {e}; \
+								 keeping walk result"
+							);
+						},
+					}
+				},
+				| Err(e) => {
+					warn!("reorder_timeline: state resolution failed: {e}; keeping walk result");
+				},
+			}
+		})
 	}
 
 	/// Automatically recalculates the true topological DAG forward extremities
