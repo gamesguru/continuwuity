@@ -25,7 +25,7 @@ use ruma::{
 		StateEventType, TimelineEventType,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
-	int,
+	int, uint,
 };
 use serde_json::from_str as from_json_str;
 use smallvec::SmallVec;
@@ -1134,66 +1134,6 @@ where
 /// Returns the sorted `to_sort` list of `EventId`s based on a mainline sort
 /// using the depth of `resolved_power_level`, the server timestamp, and the
 /// eventId.
-///
-/// The depth of the given event is calculated based on the depth of it's
-/// closest "parent" power_level event. If there have been two power events the
-/// after the most recent are depth 0, the events before (with the first power
-/// level as a parent) will be marked as depth 1. depth 1 is "older" than depth
-/// 0.
-struct SparseTable {
-	st: Vec<Vec<usize>>,
-	depths: Vec<usize>,
-}
-
-impl SparseTable {
-	fn new(depths: Vec<usize>) -> Self {
-		let n = depths.len();
-		if n == 0 {
-			return Self { st: vec![], depths };
-		}
-		let max_log = usize::try_from(n.ilog2()).unwrap_or(0).saturating_add(1);
-		let mut st = vec![vec![0; max_log]; n];
-
-		for (i, item) in st.iter_mut().enumerate().take(n) {
-			item[0] = i;
-		}
-
-		for j in 1..max_log {
-			let mut i = 0_usize;
-			let j_u32 = u32::try_from(j).unwrap_or(0);
-			let j_prev = j.saturating_sub(1);
-			let j_prev_u32 = u32::try_from(j_prev).unwrap_or(0);
-			let shift = 1_usize.checked_shl(j_u32).unwrap_or(0);
-			let shift_prev = 1_usize.checked_shl(j_prev_u32).unwrap_or(0);
-
-			while i.saturating_add(shift) <= n {
-				let left = st[i][j_prev];
-				let right = st[i.saturating_add(shift_prev)][j_prev];
-				st[i][j] = if depths[left] < depths[right] { left } else { right };
-				i = i.saturating_add(1);
-			}
-		}
-
-		Self { st, depths }
-	}
-
-	fn query(&self, mut l: usize, mut r: usize) -> usize {
-		if l > r {
-			std::mem::swap(&mut l, &mut r);
-		}
-		let j = usize::try_from(r.saturating_sub(l).saturating_add(1).ilog2()).unwrap_or(0);
-		let j_u32 = u32::try_from(j).unwrap_or(0);
-		let shift = 1_usize.checked_shl(j_u32).unwrap_or(0);
-		let left = self.st[l][j];
-		let right = self.st[r.saturating_add(1).saturating_sub(shift)][j];
-		if self.depths[left] < self.depths[right] {
-			left
-		} else {
-			right
-		}
-	}
-}
-
 async fn mainline_sort<E, F, Fut>(
 	to_sort: &[OwnedEventId],
 	resolved_power_level: Option<OwnedEventId>,
@@ -1204,7 +1144,7 @@ where
 	Fut: Future<Output = Option<E>> + Send,
 	E: Event + Clone + Send + Sync,
 {
-	debug!("mainline sort of events via LCA-to-RMQ");
+	debug!("mainline sort of events");
 
 	// There are no EventId's to sort, bail.
 	if to_sort.is_empty() {
@@ -1231,149 +1171,93 @@ where
 		}
 	};
 
-	let mut pl_events = HashSet::new();
-	if let Some(ref p) = resolved_power_level {
-		pl_events.insert(p.clone());
+	// Step 1: Walk the mainline (the chain of power level events starting from the
+	// resolved power level) and assign each a position. Position 0 = most recent
+	// (highest priority). This is O(M) where M is the length of the mainline.
+	//
+	// NOTE: The mainline is a LINEAR CHAIN (each PL event references at most one
+	// predecessor PL event in its auth_events). We do NOT use LCA-to-RMQ here
+	// because Matrix auth chains are DAGs, not trees — the Euler tour required
+	// for RMQ is only valid on trees. We use a simple HashMap for O(1) lookups.
+	let mut mainline_depth: HashMap<OwnedEventId, usize> = HashMap::new();
+	let mut pl = resolved_power_level;
+	let mut position: usize = 0;
+	while let Some(p) = pl {
+		mainline_depth.insert(p.clone(), position);
+		position = position.saturating_add(1);
+
+		let Some(event) = cached_fetch(p).await else {
+			break;
+		};
+
+		pl = None;
+		for aid in event.auth_events() {
+			let Some(aev) = cached_fetch(aid.to_owned()).await else {
+				continue;
+			};
+			if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+				pl = Some(aid.to_owned());
+				break;
+			}
+		}
 	}
 
-	let mut event_to_pl = HashMap::new();
+	// Step 2: For each event to sort, find its associated power level event,
+	// then look up its mainline position in O(1). Events whose PL is not on the
+	// mainline (or have no associated PL) get position usize::MAX (lowest
+	// priority).
+	let mut event_to_mainline: HashMap<&OwnedEventId, usize> = HashMap::new();
+	let mut event_ts: HashMap<&OwnedEventId, MilliSecondsSinceUnixEpoch> = HashMap::new();
 
 	for ev_id in to_sort {
-		let event = cached_fetch(ev_id.clone()).await;
-		if let Some(ev) = event {
-			if is_type_and_key(&ev, &TimelineEventType::RoomPowerLevels, "") {
-				pl_events.insert(ev_id.clone());
-				event_to_pl.insert(ev_id.clone(), ev_id.clone());
-			} else {
-				let mut pl = None;
-				for aid in ev.auth_events() {
-					if let Some(aev) = cached_fetch(aid.to_owned()).await {
-						if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-							pl = Some(aid.to_owned());
-							break;
-						}
-					}
-				}
-				if let Some(p) = pl {
-					pl_events.insert(p.clone());
-					event_to_pl.insert(ev_id.clone(), p);
-				}
-			}
-		}
-	}
-
-	let mut parent_map = HashMap::new();
-	let mut children_map: HashMap<OwnedEventId, Vec<OwnedEventId>> = HashMap::new();
-	let mut queue: Vec<_> = pl_events.into_iter().collect();
-
-	while let Some(node) = queue.pop() {
-		if parent_map.contains_key(&node) {
+		let Some(event) = cached_fetch(ev_id.clone()).await else {
 			continue;
-		}
-
-		if let Some(ev) = cached_fetch(node.clone()).await {
-			let mut parent = None;
-			for aid in ev.auth_events() {
-				if let Some(aev) = cached_fetch(aid.to_owned()).await {
-					if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-						parent = Some(aid.to_owned());
-						break;
-					}
-				}
-			}
-
-			if let Some(p) = parent {
-				parent_map.insert(node.clone(), Some(p.clone()));
-				children_map
-					.entry(p.clone())
-					.or_default()
-					.push(node.clone());
-				queue.push(p);
-			} else {
-				parent_map.insert(node.clone(), None);
-			}
-		}
-	}
-
-	let roots: Vec<_> = parent_map
-		.iter()
-		.filter_map(|(k, v)| if v.is_none() { Some(k.clone()) } else { None })
-		.collect();
-
-	let mut euler_tour = Vec::new();
-	let mut depths = Vec::new();
-	let mut first_occurrence = HashMap::new();
-	let mut component_root = HashMap::new();
-
-	for root in roots {
-		let mut dfs_stack = vec![(root.clone(), 0_usize, 0_usize)];
-		while let Some((node, depth, child_idx)) = dfs_stack.pop() {
-			if child_idx == 0 {
-				first_occurrence
-					.entry(node.clone())
-					.or_insert(euler_tour.len());
-				component_root.insert(node.clone(), root.clone());
-			}
-			euler_tour.push(node.clone());
-			depths.push(depth);
-
-			if let Some(children) = children_map.get(&node) {
-				if child_idx < children.len() {
-					dfs_stack.push((node.clone(), depth, child_idx.saturating_add(1)));
-					dfs_stack.push((children[child_idx].clone(), depth.saturating_add(1), 0));
-				}
-			}
-		}
-	}
-
-	let sparse_table = SparseTable::new(depths);
-
-	let get_mainline_depth_lca = |p_e: &OwnedEventId| -> usize {
-		let Some(ref m) = resolved_power_level else {
-			return 0;
 		};
-		let first_e = first_occurrence.get(p_e);
-		let first_m = first_occurrence.get(m);
-		let comp_e = component_root.get(p_e);
-		let comp_m = component_root.get(m);
+		event_ts.insert(ev_id, event.origin_server_ts());
 
-		if let (Some(&i), Some(&j), Some(ce), Some(cm)) = (first_e, first_m, comp_e, comp_m) {
-			if ce == cm {
-				let min_idx = sparse_table.query(i, j);
-				return sparse_table.depths[min_idx];
+		let depth = if is_type_and_key(&event, &TimelineEventType::RoomPowerLevels, "") {
+			// The event IS a power level event — look itself up directly
+			mainline_depth.get(ev_id).copied().unwrap_or(usize::MAX)
+		} else {
+			// Find the power level event in this event's auth_events
+			let mut found_depth = usize::MAX;
+			for aid in event.auth_events() {
+				let Some(aev) = cached_fetch(aid.to_owned()).await else {
+					continue;
+				};
+				if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+					found_depth = mainline_depth.get(aid).copied().unwrap_or(usize::MAX);
+					break;
+				}
 			}
-		}
-		0
-	};
+			found_depth
+		};
 
-	let order_map: HashMap<_, _> = to_sort
-		.iter()
-		.stream()
-		.broad_filter_map(async |ev_id| {
-			cached_fetch(ev_id.clone())
-				.await
-				.map(|event| (event, ev_id))
-		})
-		.broad_filter_map(|(event, ev_id)| {
-			let depth = if let Some(p_e) = event_to_pl.get(ev_id) {
-				get_mainline_depth_lca(p_e)
-			} else {
-				0
-			};
-			future::ready(Some((ev_id, (depth, event.origin_server_ts(), ev_id))))
-		})
-		.collect()
-		.boxed()
-		.await;
-
-	// Sort the event_ids by their depth, timestamp and EventId
-	let mut sort_event_ids: Vec<_> = order_map.keys().map(|&k| k.clone()).collect();
-
-	for (id, val) in &order_map {
-		println!("SORT_VAL: {id} -> {val:?}");
+		event_to_mainline.insert(ev_id, depth);
 	}
 
-	sort_event_ids.sort_by_key(|sort_id| &order_map[sort_id]);
+	// Step 3: Sort ascending by (mainline_position, origin_server_ts, event_id).
+	// Lower mainline_position = closer to the resolved PL = higher priority.
+	// In ascending sort the LAST element wins (state map is overwritten on each
+	// step). usize::MAX for events with no mainline connection = lowest priority =
+	// first.
+	let mut sort_event_ids: Vec<_> = event_to_mainline.keys().map(|&k| k.clone()).collect();
+
+	sort_event_ids.sort_by(|a, b| {
+		let da = event_to_mainline.get(a).copied().unwrap_or(usize::MAX);
+		let db = event_to_mainline.get(b).copied().unwrap_or(usize::MAX);
+		let ta = event_ts
+			.get(a)
+			.copied()
+			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
+		let tb = event_ts
+			.get(b)
+			.copied()
+			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
+		da.cmp(&db)
+			.then(ta.cmp(&tb))
+			.then(a.as_str().cmp(b.as_str()))
+	});
 
 	Ok(sort_event_ids)
 }
