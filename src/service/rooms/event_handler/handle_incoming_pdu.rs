@@ -339,35 +339,33 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		.await
 	{
 		| Ok(res) => res,
-		| Err(e) => {
-			if let conduwuit::Error::MissingAuthEvents(missing) = &e {
-				info!(
-					target: "state_res_debug",
-					"Fetching {} missing auth events for incoming PDU {event_id}",
-					missing.len()
-				);
-				self.fetch_and_handle_outliers(
-					origin,
-					missing.iter().map(AsRef::as_ref),
-					Some(create_event),
-					room_id,
-				)
-				.await;
-				// retry once
-				self.handle_outlier_pdu(
-					origin,
-					Some(create_event),
-					event_id,
-					room_id,
-					value,
-					false,
-					false,
-				)
-				.await?
-			} else {
-				return Err(e);
-			}
+		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
+			// Auth events for this PDU are not yet in our database. Store the
+			// raw PDU as an outlier so it is available once auth events arrive,
+			// then queue a background fetch of the missing events. The /send/
+			// endpoint will return 200 so the remote doesn't retry endlessly.
+			info!(
+				target: "state_res_debug",
+				event_id = %event_id,
+				count = missing.len(),
+				"Storing incoming PDU as outlier; missing auth events will be fetched in background"
+			);
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &value, Some(room_id));
+			// Kick off a background fetch without awaiting -- don't block the response
+			let _ = self
+				.services
+				.event_handler
+				.heal_room_tx
+				.send(super::HealRequest {
+					room_id: room_id.to_owned(),
+					missing_events: missing,
+				});
+			// This PDU cannot be a timeline event yet — treat as non-timeline
+			return Ok(None);
 		},
+		| Err(e) => return Err(e),
 	};
 
 	// 8. if not timeline event: stop
