@@ -1151,20 +1151,26 @@ impl SparseTable {
 		if n == 0 {
 			return Self { st: vec![], depths };
 		}
-		let max_log = n.ilog2() as usize + 1;
+		let max_log = usize::try_from(n.ilog2()).unwrap_or(0).saturating_add(1);
 		let mut st = vec![vec![0; max_log]; n];
 
-		for i in 0..n {
-			st[i][0] = i;
+		for (i, item) in st.iter_mut().enumerate().take(n) {
+			item[0] = i;
 		}
 
 		for j in 1..max_log {
-			let mut i = 0;
-			while i + (1 << j) <= n {
-				let left = st[i][j - 1];
-				let right = st[i + (1 << (j - 1))][j - 1];
+			let mut i = 0_usize;
+			let j_u32 = u32::try_from(j).unwrap_or(0);
+			let j_prev = j.saturating_sub(1);
+			let j_prev_u32 = u32::try_from(j_prev).unwrap_or(0);
+			let shift = 1_usize.checked_shl(j_u32).unwrap_or(0);
+			let shift_prev = 1_usize.checked_shl(j_prev_u32).unwrap_or(0);
+
+			while i.saturating_add(shift) <= n {
+				let left = st[i][j_prev];
+				let right = st[i.saturating_add(shift_prev)][j_prev];
 				st[i][j] = if depths[left] < depths[right] { left } else { right };
-				i += 1;
+				i = i.saturating_add(1);
 			}
 		}
 
@@ -1175,9 +1181,11 @@ impl SparseTable {
 		if l > r {
 			std::mem::swap(&mut l, &mut r);
 		}
-		let j = r.saturating_sub(l).saturating_add(1).ilog2() as usize;
+		let j = usize::try_from(r.saturating_sub(l).saturating_add(1).ilog2()).unwrap_or(0);
+		let j_u32 = u32::try_from(j).unwrap_or(0);
+		let shift = 1_usize.checked_shl(j_u32).unwrap_or(0);
 		let left = self.st[l][j];
-		let right = self.st[r.saturating_add(1).saturating_sub(1 << j)][j];
+		let right = self.st[r.saturating_add(1).saturating_sub(shift)][j];
 		if self.depths[left] < self.depths[right] {
 			left
 		} else {
@@ -1298,24 +1306,22 @@ where
 	let mut component_root = HashMap::new();
 
 	for root in roots {
-		let mut dfs_stack = vec![(root.clone(), 0_usize, false)];
-		while let Some((node, depth, visited)) = dfs_stack.pop() {
-			if !visited {
+		let mut dfs_stack = vec![(root.clone(), 0_usize, 0_usize)];
+		while let Some((node, depth, child_idx)) = dfs_stack.pop() {
+			if child_idx == 0 {
 				first_occurrence
 					.entry(node.clone())
 					.or_insert(euler_tour.len());
 				component_root.insert(node.clone(), root.clone());
-				euler_tour.push(node.clone());
-				depths.push(depth);
-				dfs_stack.push((node.clone(), depth, true));
-				if let Some(children) = children_map.get(&node) {
-					for child in children {
-						dfs_stack.push((child.clone(), depth.saturating_add(1), false));
-					}
+			}
+			euler_tour.push(node.clone());
+			depths.push(depth);
+
+			if let Some(children) = children_map.get(&node) {
+				if child_idx < children.len() {
+					dfs_stack.push((node.clone(), depth, child_idx.saturating_add(1)));
+					dfs_stack.push((children[child_idx].clone(), depth.saturating_add(1), 0));
 				}
-			} else {
-				euler_tour.push(node.clone());
-				depths.push(depth);
 			}
 		}
 	}
