@@ -18,7 +18,7 @@ use std::{
 	hash::{BuildHasher, Hash},
 };
 
-use futures::{Future, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt, future};
+use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt, future};
 use ruma::{
 	EventId, Int, MilliSecondsSinceUnixEpoch, OwnedEventId, RoomVersionId,
 	events::{
@@ -1140,6 +1140,52 @@ where
 /// after the most recent are depth 0, the events before (with the first power
 /// level as a parent) will be marked as depth 1. depth 1 is "older" than depth
 /// 0.
+struct SparseTable {
+	st: Vec<Vec<usize>>,
+	depths: Vec<usize>,
+}
+
+impl SparseTable {
+	fn new(depths: Vec<usize>) -> Self {
+		let n = depths.len();
+		if n == 0 {
+			return Self { st: vec![], depths };
+		}
+		let max_log = n.ilog2() as usize + 1;
+		let mut st = vec![vec![0; max_log]; n];
+
+		for i in 0..n {
+			st[i][0] = i;
+		}
+
+		for j in 1..max_log {
+			let mut i = 0;
+			while i + (1 << j) <= n {
+				let left = st[i][j - 1];
+				let right = st[i + (1 << (j - 1))][j - 1];
+				st[i][j] = if depths[left] < depths[right] { left } else { right };
+				i += 1;
+			}
+		}
+
+		Self { st, depths }
+	}
+
+	fn query(&self, mut l: usize, mut r: usize) -> usize {
+		if l > r {
+			std::mem::swap(&mut l, &mut r);
+		}
+		let j = r.saturating_sub(l).saturating_add(1).ilog2() as usize;
+		let left = self.st[l][j];
+		let right = self.st[r.saturating_add(1).saturating_sub(1 << j)][j];
+		if self.depths[left] < self.depths[right] {
+			left
+		} else {
+			right
+		}
+	}
+}
+
 async fn mainline_sort<E, F, Fut>(
 	to_sort: &[OwnedEventId],
 	resolved_power_level: Option<OwnedEventId>,
@@ -1150,98 +1196,176 @@ where
 	Fut: Future<Output = Option<E>> + Send,
 	E: Event + Clone + Send + Sync,
 {
-	debug!("mainline sort of events");
+	debug!("mainline sort of events via LCA-to-RMQ");
 
 	// There are no EventId's to sort, bail.
 	if to_sort.is_empty() {
 		return Ok(vec![]);
 	}
 
-	let mut mainline = vec![];
-	let mut pl = resolved_power_level;
-	while let Some(p) = pl {
-		mainline.push(p.clone());
+	let fetch_cache =
+		std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::<OwnedEventId, E>::new()));
+	let cached_fetch = |id: OwnedEventId| {
+		let cache = std::sync::Arc::clone(&fetch_cache);
+		async move {
+			{
+				let read_guard = cache.read().await;
+				if let Some(ev) = read_guard.get(&id) {
+					return Some(ev.clone());
+				}
+			}
+			let ev = fetch_event(id.clone()).await;
+			if let Some(ref e) = ev {
+				let mut write_guard = cache.write().await;
+				write_guard.insert(id, e.clone());
+			}
+			ev
+		}
+	};
 
-		let event = fetch_event(p.clone())
-			.await
-			.ok_or_else(|| Error::NotFound(format!("Failed to find {p}")))?;
+	let mut pl_events = HashSet::new();
+	if let Some(ref p) = resolved_power_level {
+		pl_events.insert(p.clone());
+	}
 
-		pl = None;
-		for aid in event.auth_events() {
-			let ev = fetch_event(aid.to_owned())
-				.await
-				.ok_or_else(|| Error::NotFound(format!("Failed to find {aid}")))?;
+	let mut event_to_pl = HashMap::new();
 
+	for ev_id in to_sort {
+		let event = cached_fetch(ev_id.clone()).await;
+		if let Some(ev) = event {
 			if is_type_and_key(&ev, &TimelineEventType::RoomPowerLevels, "") {
-				pl = Some(aid.to_owned());
-				break;
+				pl_events.insert(ev_id.clone());
+				event_to_pl.insert(ev_id.clone(), ev_id.clone());
+			} else {
+				let mut pl = None;
+				for aid in ev.auth_events() {
+					if let Some(aev) = cached_fetch(aid.to_owned()).await {
+						if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+							pl = Some(aid.to_owned());
+							break;
+						}
+					}
+				}
+				if let Some(p) = pl {
+					pl_events.insert(p.clone());
+					event_to_pl.insert(ev_id.clone(), p);
+				}
 			}
 		}
 	}
 
-	let mainline_map: HashMap<_, _> = mainline
+	let mut parent_map = HashMap::new();
+	let mut children_map: HashMap<OwnedEventId, Vec<OwnedEventId>> = HashMap::new();
+	let mut queue: Vec<_> = pl_events.into_iter().collect();
+
+	while let Some(node) = queue.pop() {
+		if parent_map.contains_key(&node) {
+			continue;
+		}
+
+		if let Some(ev) = cached_fetch(node.clone()).await {
+			let mut parent = None;
+			for aid in ev.auth_events() {
+				if let Some(aev) = cached_fetch(aid.to_owned()).await {
+					if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+						parent = Some(aid.to_owned());
+						break;
+					}
+				}
+			}
+
+			if let Some(p) = parent {
+				parent_map.insert(node.clone(), Some(p.clone()));
+				children_map
+					.entry(p.clone())
+					.or_default()
+					.push(node.clone());
+				queue.push(p);
+			} else {
+				parent_map.insert(node.clone(), None);
+			}
+		}
+	}
+
+	let roots: Vec<_> = parent_map
 		.iter()
-		.rev()
-		.enumerate()
-		.map(|(idx, eid)| ((*eid).clone(), idx.saturating_add(1)))
+		.filter_map(|(k, v)| if v.is_none() { Some(k.clone()) } else { None })
 		.collect();
+
+	let mut euler_tour = Vec::new();
+	let mut depths = Vec::new();
+	let mut first_occurrence = HashMap::new();
+	let mut component_root = HashMap::new();
+
+	for root in roots {
+		let mut dfs_stack = vec![(root.clone(), 0_usize, false)];
+		while let Some((node, depth, visited)) = dfs_stack.pop() {
+			if !visited {
+				first_occurrence
+					.entry(node.clone())
+					.or_insert(euler_tour.len());
+				component_root.insert(node.clone(), root.clone());
+				euler_tour.push(node.clone());
+				depths.push(depth);
+				dfs_stack.push((node.clone(), depth, true));
+				if let Some(children) = children_map.get(&node) {
+					for child in children {
+						dfs_stack.push((child.clone(), depth.saturating_add(1), false));
+					}
+				}
+			} else {
+				euler_tour.push(node.clone());
+				depths.push(depth);
+			}
+		}
+	}
+
+	let sparse_table = SparseTable::new(depths);
+
+	let get_mainline_depth_lca = |p_e: &OwnedEventId| -> usize {
+		let Some(ref m) = resolved_power_level else {
+			return 0;
+		};
+		let first_e = first_occurrence.get(p_e);
+		let first_m = first_occurrence.get(m);
+		let comp_e = component_root.get(p_e);
+		let comp_m = component_root.get(m);
+
+		if let (Some(&i), Some(&j), Some(ce), Some(cm)) = (first_e, first_m, comp_e, comp_m) {
+			if ce == cm {
+				let min_idx = sparse_table.query(i, j);
+				return sparse_table.depths[min_idx].saturating_add(1);
+			}
+		}
+		0
+	};
 
 	let order_map: HashMap<_, _> = to_sort
 		.iter()
 		.stream()
 		.broad_filter_map(async |ev_id| {
-			fetch_event(ev_id.clone()).await.map(|event| (event, ev_id))
+			cached_fetch(ev_id.clone())
+				.await
+				.map(|event| (event, ev_id))
 		})
 		.broad_filter_map(|(event, ev_id)| {
-			get_mainline_depth(Some(event.clone()), &mainline_map, fetch_event)
-				.map_ok(move |depth| (ev_id, (depth, event.origin_server_ts(), ev_id)))
-				.map(Result::ok)
+			let depth = if let Some(p_e) = event_to_pl.get(ev_id) {
+				get_mainline_depth_lca(p_e)
+			} else {
+				0
+			};
+			future::ready(Some((ev_id, (depth, event.origin_server_ts(), ev_id))))
 		})
 		.collect()
 		.boxed()
 		.await;
 
 	// Sort the event_ids by their depth, timestamp and EventId
-	// unwrap is OK order map and sort_event_ids are from to_sort (the same Vec)
 	let mut sort_event_ids: Vec<_> = order_map.keys().map(|&k| k.clone()).collect();
 
 	sort_event_ids.sort_by_key(|sort_id| &order_map[sort_id]);
 
 	Ok(sort_event_ids)
-}
-
-/// Get the mainline depth from the `mainline_map` or finds a power_level event
-/// that has an associated mainline depth.
-async fn get_mainline_depth<E, F, Fut>(
-	mut event: Option<E>,
-	mainline_map: &HashMap<OwnedEventId, usize>,
-	fetch_event: &F,
-) -> Result<usize>
-where
-	F: Fn(OwnedEventId) -> Fut + Sync,
-	Fut: Future<Output = Option<E>> + Send,
-	E: Event + Send + Sync,
-{
-	while let Some(sort_ev) = event {
-		debug!(event_id = sort_ev.event_id().as_str(), "mainline");
-
-		let id = sort_ev.event_id();
-		if let Some(depth) = mainline_map.get(id) {
-			return Ok(*depth);
-		}
-
-		event = None;
-		for aid in sort_ev.auth_events() {
-			if let Some(aev) = fetch_event(aid.to_owned()).await {
-				if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-					event = Some(aev);
-					break;
-				}
-			}
-		}
-	}
-	// Did not find a power level event so we default to zero
-	Ok(0)
 }
 
 async fn add_event_and_auth_chain_to_graph<E, F, Fut>(
