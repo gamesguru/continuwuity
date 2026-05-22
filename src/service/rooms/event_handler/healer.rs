@@ -76,7 +76,7 @@ pub(crate) async fn healer_worker(
 
 		let mut fetched_count = 0_usize;
 
-		for event_id in &to_fetch {
+		for chunk in to_fetch.chunks(20) {
 			// fetch_and_handle_outliers automatically queries all fallback servers,
 			// so we only need to invoke it once, using the first available server
 			// (or our own) as the seed origin.
@@ -84,32 +84,34 @@ pub(crate) async fn healer_worker(
 			let seed_server = fallback_servers.first().unwrap_or(&our_server).clone();
 
 			trace!(
-				event_id = ?event_id,
+				chunk_size = chunk.len(),
 				server = ?seed_server,
-				"DAG Healer fetching event via fallback routing"
+				"DAG Healer fetching event chunk via fallback routing"
 			);
 
-			match service
+			let fetched = service
 				.fetch_and_handle_outliers(
 					&seed_server,
-					std::iter::once(&**event_id),
+					chunk.iter().map(AsRef::as_ref),
 					Some(&create_event),
 					&room_id,
 				)
-				.await
-				.is_empty()
-			{
-				| false => {
+				.await;
+
+			let fetched_set: HashSet<OwnedEventId> =
+				fetched.into_iter().map(|(pdu, _)| pdu.event_id).collect();
+
+			for event_id in chunk {
+				if fetched_set.contains(event_id) {
 					info!(event_id = ?event_id, "DAG Healer successfully fetched missing event");
 					fetched_count = fetched_count.saturating_add(1);
-				},
-				| true => {
+				} else {
 					info!(event_id = ?event_id, "DAG Healer failed to fetch event from all fallback servers, marking as 404");
 					failed_heals.insert(event_id.clone(), std::time::Instant::now());
-				},
+				}
 			}
 
-			// Yield to the executor between events to prevent starving
+			// Yield to the executor between chunks to prevent starving
 			// client request handling on resource-constrained boxes.
 			tokio::task::yield_now().await;
 		}

@@ -529,9 +529,29 @@ where
 {
 	debug!("reverse topological sort of power events");
 
+	let fetch_cache =
+		std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::<OwnedEventId, E>::new()));
+	let cached_fetch = |id: OwnedEventId| {
+		let cache = std::sync::Arc::clone(&fetch_cache);
+		async move {
+			{
+				let read_guard = cache.read().await;
+				if let Some(ev) = read_guard.get(&id) {
+					return Some(ev.clone());
+				}
+			}
+			let ev = fetch_event(id.clone()).await;
+			if let Some(ref e) = ev {
+				let mut write_guard = cache.write().await;
+				write_guard.insert(id, e.clone());
+			}
+			ev
+		}
+	};
+
 	let mut graph = HashMap::new();
 	for event_id in events_to_sort {
-		add_event_and_auth_chain_to_graph(&mut graph, event_id, auth_diff, fetch_event).await;
+		add_event_and_auth_chain_to_graph(&mut graph, event_id, auth_diff, &cached_fetch).await;
 	}
 
 	// This is used in the `key_fn` passed to the lexico_topo_sort fn
@@ -540,7 +560,8 @@ where
 		.cloned()
 		.stream()
 		.broad_filter_map(async |event_id| {
-			let pl = get_power_level_for_sender(&event_id, fetch_event, global_pl_context).await;
+			let pl =
+				get_power_level_for_sender(&event_id, &cached_fetch, global_pl_context).await;
 
 			Some((event_id, pl))
 		})
@@ -560,7 +581,7 @@ where
 			.get(&event_id)
 			.ok_or_else(|| Error::NotFound(String::new()))?;
 
-		let ev = fetch_event(event_id)
+		let ev = cached_fetch(event_id)
 			.await
 			.ok_or_else(|| Error::NotFound(String::new()))?;
 
@@ -888,8 +909,8 @@ where
 	// force an empty state map in this case, and this resulted in power events
 	// going missing from the resolved state as they'd be discarded here.
 	let mut resolved_state = unconflicted_state;
-	let mut cached_create_event: Option<E> = None;
 	for event in events_to_check {
+		let mut local_create_event: Option<E> = None;
 		trace!(event_id = event.event_id().as_str(), "checking event");
 		let Some(state_key) = event.state_key() else {
 			warn!("event {} failed the authentication check (no state key)", event.event_id());
@@ -923,16 +944,16 @@ where
 			if *event.event_type() == TimelineEventType::RoomCreate {
 				auth_state.push((event.event_type().with_state_key(""), event.clone()));
 			} else {
-				if cached_create_event.is_none() {
+				if local_create_event.is_none() {
 					trace!("room version uses hashed IDs, deriving create event from room_id");
 					if let Some(room_id) = event.room_id_or_hash() {
 						let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
 						if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
-							cached_create_event = fetch_event(create_event_id.into()).await;
+							local_create_event = fetch_event(create_event_id.into()).await;
 						}
 					}
 				}
-				if let Some(create_event) = &cached_create_event {
+				if let Some(create_event) = &local_create_event {
 					auth_state.push((
 						create_event.event_type().with_state_key(""),
 						create_event.clone(),
@@ -1050,16 +1071,12 @@ where
 		// the memoized create event (or discover it once from auth_state).
 		// This avoids redundant auth_state lookups on every iteration.
 		let create_event = if *event.event_type() == TimelineEventType::RoomCreate {
-			cached_create_event = Some(event.clone());
 			event.clone()
-		} else if let Some(ref ce) = cached_create_event {
+		} else if let Some(ref ce) = local_create_event {
 			ce.clone()
 		} else {
 			match fetch_state(&StateEventType::RoomCreate, "").await {
-				| Some(ce) => {
-					cached_create_event = Some(ce.clone());
-					ce
-				},
+				| Some(ce) => ce,
 				| None => {
 					warn!(
 						"event {} failed the authentication check (missing create event)",

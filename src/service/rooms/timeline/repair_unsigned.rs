@@ -19,6 +19,20 @@ pub async fn repair_room_unsigned(&self, room_id: &RoomId) -> Result<usize> {
 				// Get the stored JSON
 				let pdu_json = self.get_pdu_json(&event_id).await;
 
+				let mut already_has_prev_content = false;
+				if let Ok(ref json) = pdu_json {
+					if let Some(ruma::CanonicalJsonValue::Object(unsigned)) = json.get("unsigned")
+					{
+						if unsigned.contains_key("prev_content") {
+							already_has_prev_content = true;
+						}
+					}
+				}
+
+				if already_has_prev_content {
+					return (event_id, kind, state_key, pdu_json, None, true);
+				}
+
 				// Try state snapshot lookup
 				let prev_state = if let Ok(ssh) = self
 					.services
@@ -36,7 +50,7 @@ pub async fn repair_room_unsigned(&self, room_id: &RoomId) -> Result<usize> {
 					None
 				};
 
-				(event_id, kind, state_key, pdu_json, prev_state)
+				(event_id, kind, state_key, pdu_json, prev_state, false)
 			}
 		})
 		.buffer_unordered(100);
@@ -49,8 +63,27 @@ pub async fn repair_room_unsigned(&self, room_id: &RoomId) -> Result<usize> {
 	let mut skipped = 0_usize;
 	let mut errors = 0_usize;
 
-	while let Some((event_id, _kind, _state_key, pdu_json, prev_state)) = pdus_stream.next().await
+	while let Some((
+		event_id,
+		_kind,
+		_state_key,
+		pdu_json,
+		prev_state,
+		already_has_prev_content,
+	)) = pdus_stream.next().await
 	{
+		if already_has_prev_content {
+			skipped = skipped.saturating_add(1);
+			let processed = repaired.saturating_add(skipped).saturating_add(errors);
+			if processed.is_multiple_of(1000) {
+				tracing::info!(
+					"repair_unsigned: {processed} processed ({repaired} repaired, {skipped} \
+					 skipped)"
+				);
+			}
+			continue;
+		}
+
 		let Ok(mut pdu_json): std::result::Result<ruma::CanonicalJsonObject, _> = pdu_json else {
 			errors = errors.saturating_add(1);
 			continue;
