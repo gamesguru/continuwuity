@@ -81,7 +81,7 @@ where
 				self.services
 					.pdu_metadata
 					.mark_event_rejected(incoming_pdu.event_id());
-				return Err!(Request(Forbidden("Event has rejected auth event")));
+				return Err!(Request(Forbidden("Event depends on rejected auth event {aid}")));
 			}
 		}
 	}
