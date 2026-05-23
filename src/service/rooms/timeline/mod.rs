@@ -231,8 +231,10 @@ impl Service {
 		// catastrophic RocksDB compaction on flush that locks the server.
 
 		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)
-		let mut entries: HashMap<OwnedEventId, (PduCount, PduEvent, CanonicalJsonObject)> =
-			HashMap::new();
+		// Only keep (PduCount, PduEvent) per event — CanonicalJsonObject is re-fetched
+		// on-demand during re-insertion to avoid holding the full JSON for every event
+		// in memory simultaneously (causes OOM on large rooms).
+		let mut entries: HashMap<OwnedEventId, (PduCount, PduEvent)> = HashMap::new();
 		let mut dropped = 0_usize;
 		let mut tail_min_count: Option<PduCount> = None;
 
@@ -246,24 +248,25 @@ impl Service {
 				if collected >= limit {
 					break;
 				}
-				let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
-					| Ok(j) => j,
-					| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
-						| Ok(j) => j,
-						| Err(_) => {
-							warn!(
-								event_id = %pdu.event_id,
-								"PDU in timeline has no JSON anywhere — cannot reorder, skipping"
-							);
-							dropped = dropped.saturating_add(1);
-							continue;
-						},
-					},
-				};
+				// Verify JSON exists now; we'll re-fetch it during insertion to avoid
+				// holding all JSON in memory simultaneously.
+				let json_exists = self
+					.db
+					.get_non_outlier_pdu_json(&pdu.event_id)
+					.await
+					.is_ok() || self.db.get_pdu_json(&pdu.event_id).await.is_ok();
+				if !json_exists {
+					warn!(
+						event_id = %pdu.event_id,
+						"PDU in timeline has no JSON anywhere — cannot reorder, skipping"
+					);
+					dropped = dropped.saturating_add(1);
+					continue;
+				}
 				if count < min_count {
 					min_count = count;
 				}
-				entries.insert(pdu.event_id.clone(), (count, pdu, json));
+				entries.insert(pdu.event_id.clone(), (count, pdu));
 				collected = collected.saturating_add(1);
 			}
 			if min_count != PduCount::max() {
@@ -276,16 +279,20 @@ impl Service {
 			let pdus = pdus_backfill.chain(pdus_normal);
 			pin_mut!(pdus);
 			while let Some((count, pdu)) = pdus.try_next().await? {
-				// Try non-outlier JSON first, fall back to any JSON (including outlier)
-				let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
-					| Ok(json) => json,
-					| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
-						| Ok(json) => {
+				// Verify JSON exists; we re-fetch it during insertion to avoid holding
+				// the full JSON for all events in memory simultaneously.
+				let json_ok = self
+					.db
+					.get_non_outlier_pdu_json(&pdu.event_id)
+					.await
+					.is_ok();
+				if !json_ok {
+					match self.db.get_pdu_json(&pdu.event_id).await {
+						| Ok(_) => {
 							warn!(
 								event_id = %pdu.event_id,
 								"PDU in timeline had no non-outlier JSON, recovered from outlier table"
 							);
-							json
 						},
 						| Err(_) => {
 							warn!(
@@ -295,10 +302,10 @@ impl Service {
 							dropped = dropped.saturating_add(1);
 							continue;
 						},
-					},
-				};
+					}
+				}
 				let eid = pdu.event_id.clone();
-				entries.insert(eid, (count, pdu, json));
+				entries.insert(eid, (count, pdu));
 				if entries.len().is_multiple_of(10000) {
 					info!("reorder_timeline: read {} PDUs so far...", entries.len());
 				}
@@ -322,7 +329,7 @@ impl Service {
 		// the sort output — then permanently deleted from the timeline.
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
 			HashMap::with_capacity(entries.len());
-		for (event_id, (_, pdu, _)) in &entries {
+		for (event_id, (_, pdu)) in &entries {
 			let mut parents = HashSet::new();
 			for prev_id in pdu.prev_events() {
 				if entries.contains_key(prev_id) {
@@ -337,7 +344,7 @@ impl Service {
 		let event_fetch = |event_id: OwnedEventId| {
 			let ts = entries
 				.get(&event_id)
-				.map_or_else(|| ruma::uint!(0), |(_, p, _)| p.origin_server_ts);
+				.map_or_else(|| ruma::uint!(0), |(_, p)| p.origin_server_ts);
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
 				ruma::MilliSecondsSinceUnixEpoch(ts),
@@ -352,7 +359,7 @@ impl Service {
 		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
-			let (old_count, pdu, ..) = entries.get(event_id).expect("in sorted list");
+			let (old_count, pdu) = entries.get(event_id).expect("in sorted list");
 			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
 			// Deindex old pdu_id from search before removal
 			if pdu.kind == TimelineEventType::RoomMessage {
@@ -394,14 +401,31 @@ impl Service {
 		);
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
-			let (_, pdu, json) = entries.get(event_id).expect("in sorted list");
+			let (_, pdu) = entries.get(event_id).expect("in sorted list");
 			let new_count = batch_start
 				.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
 				.saturating_add(1);
 			let pdu_count = PduCount::Normal(new_count);
 			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
-			self.db.append_pdu(&pdu_id, pdu, json, pdu_count).await;
+			// Re-fetch JSON on-demand — avoids holding all event JSON in memory
+			// simultaneously. The event store is keyed by event_id independently of
+			// the timeline ordering, so this survives remove_from_timeline_by_id.
+			let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
+				| Ok(j) => j,
+				| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
+					| Ok(j) => j,
+					| Err(e) => {
+						warn!(
+							event_id = %pdu.event_id,
+							"PDU JSON missing during re-insertion (skipping): {e}"
+						);
+						continue;
+					},
+				},
+			};
+
+			self.db.append_pdu(&pdu_id, pdu, &json, pdu_count).await;
 			// Re-index search with new pdu_id
 			if pdu.kind == TimelineEventType::RoomMessage {
 				if let Ok(content) = pdu.get_content::<ExtractBody>() {
@@ -660,7 +684,7 @@ impl Service {
 		let mut state_event_count = 0_usize;
 
 		for event_id in &sorted {
-			let (_, pdu, _) = entries.get(event_id).expect("in sorted list");
+			let (_, pdu) = entries.get(event_id).expect("in sorted list");
 
 			// Get short IDs for this event
 			let shorteventid = self
@@ -749,7 +773,7 @@ impl Service {
 			.filter(|eid| {
 				entries
 					.get(*eid)
-					.is_some_and(|(_, pdu, _)| pdu.state_key.is_some())
+					.is_some_and(|(_, pdu)| pdu.state_key.is_some())
 			})
 			.count();
 
