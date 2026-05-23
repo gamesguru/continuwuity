@@ -138,6 +138,7 @@ pub(crate) async fn do_check(
 				state_sets,
 				&auth_chain_sets,
 				&fetch,
+				None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 				None::<&fn(Vec<OwnedEventId>)>,
 			)
 			.await;

@@ -144,7 +144,7 @@ impl Event for Pdu {
 	}
 
 	#[inline]
-	fn depth(&self) -> ruma::UInt { self.depth }
+	fn depth(&self) -> UInt { self.depth }
 
 	#[inline]
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
@@ -215,7 +215,7 @@ impl Event for &Pdu {
 	}
 
 	#[inline]
-	fn depth(&self) -> ruma::UInt { self.depth }
+	fn depth(&self) -> UInt { self.depth }
 
 	#[inline]
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {

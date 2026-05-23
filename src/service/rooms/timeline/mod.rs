@@ -1208,6 +1208,18 @@ impl Service {
 		self.db.non_outlier_pdu_exists(event_id).await.is_ok()
 	}
 
+	/// Fetch multiple PDUs in parallel from the database.
+	pub fn multi_get_pdus<'a, S>(
+		&'a self,
+		room_id: Option<&'a RoomId>,
+		event_ids: S,
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a
+	where
+		S: Stream<Item = OwnedEventId> + Send + 'a,
+	{
+		self.db.multi_get_pdus(room_id, event_ids)
+	}
+
 	/// Checks if all PDUs exist directly in the timeline (non-outlier).
 	#[inline]
 	pub async fn non_outlier_pdus_exist<'a, I>(&self, event_ids: I) -> bool

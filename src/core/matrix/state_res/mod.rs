@@ -80,16 +80,19 @@ type Result<T, E = Error> = crate::Result<T, E>;
 //#[tracing::instrument(level = "debug", skip(state_sets, auth_chain_sets,
 //#[tracing::instrument(level event_fetch))]
 #[allow(clippy::cognitive_complexity)]
-pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, Cb>(
+pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, BatchFetch, BatchFut, Cb>(
 	room_version: &RoomVersionId,
 	state_sets: Sets,
 	auth_chain_sets: &'a [HashSet<OwnedEventId, Hasher>],
 	event_fetch: &Fetch,
+	event_batch_fetch: Option<&BatchFetch>,
 	event_missing_cb: Option<&Cb>,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	Fetch: Fn(OwnedEventId) -> FetchFut + Sync,
 	FetchFut: Future<Output = Option<Pdu>> + Send,
+	BatchFetch: Fn(Vec<OwnedEventId>) -> BatchFut + Sync,
+	BatchFut: Future<Output = Vec<Pdu>> + Send,
 	Cb: Fn(Vec<OwnedEventId>) + Sync,
 	Sets: IntoIterator<IntoIter = SetIter> + Send,
 	SetIter: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
@@ -185,6 +188,11 @@ where
 		.collect()
 		.await;
 
+	if let Some(batch_fetch) = event_batch_fetch {
+		let ids: Vec<_> = all_conflicted_ids.iter().cloned().collect();
+		let _ = batch_fetch(ids).await;
+	}
+
 	let all_conflicted: HashSet<_> = all_conflicted_ids
 		.into_iter()
 		.stream()
@@ -274,6 +282,7 @@ where
 		sorted_pl_events.iter().stream().map(AsRef::as_ref),
 		initial_state.clone(),
 		&cached_fetch,
+		event_batch_fetch,
 	)
 	.await?;
 
@@ -345,6 +354,7 @@ where
 		sorted_control_levels.iter().stream().map(AsRef::as_ref),
 		initial_state,
 		&cached_fetch,
+		event_batch_fetch,
 	)
 	.await?;
 
@@ -385,6 +395,7 @@ where
 		sorted_left_events.iter().stream().map(AsRef::as_ref),
 		resolved_control, // The control events are added to the final resolved state
 		&cached_fetch,
+		event_batch_fetch,
 	)
 	.await?;
 
@@ -605,8 +616,8 @@ where
 				&event_id,
 				fetch_event,
 				global_pl_context,
-				&parsed_pl_cache,
-				&sender_pl_cache,
+				parsed_pl_cache,
+				sender_pl_cache,
 			)
 			.await;
 
@@ -881,17 +892,20 @@ where
 /// the the `fetch_event` closure and verify each event using the
 /// `event_auth::auth_check` function.
 #[tracing::instrument(level = "trace", skip_all)]
-async fn iterative_auth_check<'a, E, F, Fut, S>(
+async fn iterative_auth_check<'a, E, F, Fut, S, BatchFetch, BatchFut>(
 	room_version: &RoomVersion,
 	events_to_check: S,
 	unconflicted_state: StateMap<OwnedEventId>,
 	fetch_event: &F,
+	event_batch_fetch: Option<&BatchFetch>,
 ) -> Result<StateMap<OwnedEventId>>
 where
+	E: Event + Clone + Send + Sync,
 	F: Fn(OwnedEventId) -> Fut + Sync,
 	Fut: Future<Output = Option<E>> + Send,
 	S: Stream<Item = &'a EventId> + Send + 'a,
-	E: Event + Clone + Send + Sync,
+	BatchFetch: Fn(Vec<OwnedEventId>) -> BatchFut + Sync,
+	BatchFut: Future<Output = Vec<E>> + Send,
 	for<'b> &'b E: Event + Send,
 {
 	debug!("starting iterative auth check");
@@ -944,6 +958,11 @@ where
 		.collect();
 
 	trace!(set = ?auth_event_ids, "auth event IDs to fetch");
+
+	if let Some(batch_fetch) = event_batch_fetch {
+		let ids: Vec<_> = auth_event_ids.iter().cloned().collect();
+		let _ = batch_fetch(ids).await;
+	}
 
 	let auth_events: HashMap<OwnedEventId, E> = auth_event_ids
 		.into_iter()
@@ -1289,44 +1308,42 @@ where
 				// The event IS a power level event — look itself up directly
 				mainline_depth.get(ev_id).copied()
 			} else {
-				// 1. Find the 1-hop PL event
+				// Find the 1-hop PL event
 				let mut current_pl = None;
 				for aid in event.auth_events() {
 					let Some(aev) = cached_fetch(aid.to_owned()).await else {
 						continue;
 					};
 					if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-						current_pl = Some(aid.to_owned());
+						current_pl = Some(aev);
 						break;
 					}
 				}
 
-				// 2. Recursively walk the chain of PL events with Path Memoization
+				// Recursively walk chain of PL events w/ path memoization
 				let mut path = Vec::new();
 				let mut found_depth = None;
 				while let Some(c_pl) = current_pl {
-					if let Some(&d) = mainline_depth.get(&c_pl) {
-						found_depth = Some(d);
+					path.push(c_pl.event_id().to_owned());
+					if let Some(&depth) = mainline_depth.get(c_pl.event_id()) {
+						found_depth = Some(depth);
 						break;
 					}
-					path.push(c_pl.clone());
-					let Some(c_pl_ev) = cached_fetch(c_pl).await else {
-						break;
-					};
 					current_pl = None;
-					for aid in c_pl_ev.auth_events() {
+					for aid in c_pl.auth_events() {
 						let Some(aev) = cached_fetch(aid.to_owned()).await else {
 							continue;
 						};
 						if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-							current_pl = Some(aid.to_owned());
+							current_pl = Some(aev);
 							break;
 						}
 					}
 				}
-				if let Some(d) = found_depth {
-					for p in path {
-						mainline_depth.insert(p, d);
+
+				if let Some(depth) = found_depth {
+					for id in path {
+						mainline_depth.insert(id, depth);
 					}
 				}
 				found_depth
@@ -1530,6 +1547,7 @@ mod tests {
 			sorted_power_events.iter().map(AsRef::as_ref).stream(),
 			HashMap::new(), // unconflicted events
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 		)
 		.await
 		.expect("iterative auth check failed on resolved events");
@@ -1931,6 +1949,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2174,6 +2193,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2272,6 +2292,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2355,6 +2376,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2438,6 +2460,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2520,6 +2543,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -2679,6 +2703,7 @@ mod tests {
 			state_sets.iter(),
 			&auth_chain_sets,
 			&fetch,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await;
@@ -2929,6 +2954,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3191,6 +3217,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3356,6 +3383,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3575,6 +3603,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3755,6 +3784,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -3843,6 +3873,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await;
@@ -4013,6 +4044,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
@@ -4123,6 +4155,7 @@ mod tests {
 			&state_sets,
 			&auth_chain,
 			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await

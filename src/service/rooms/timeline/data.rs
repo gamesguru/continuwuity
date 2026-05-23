@@ -3,11 +3,14 @@ use std::sync::Arc;
 use conduwuit::{
 	Err, Event, PduCount, PduEvent, Result, at, err,
 	result::NotFound,
-	utils::{self, stream::TryReadyExt},
+	utils::{
+		self,
+		stream::{TryReadyExt, WidebandExt},
+	},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
 use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
-use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, api::Direction};
+use ruma::{CanonicalJsonObject, EventId, OwnedEventId, OwnedUserId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
@@ -244,6 +247,19 @@ impl Data {
 			.boxed();
 
 		select_ok([accepted, outlier]).await.map(at!(0))
+	}
+
+	pub(super) fn multi_get_pdus<'a, S>(
+		&'a self,
+		room_id: Option<&'a RoomId>,
+		event_ids: S,
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a
+	where
+		S: Stream<Item = OwnedEventId> + Send + 'a,
+	{
+		event_ids.wide_then(move |event_id| async move {
+			self.get_pdu_in_room(room_id, &event_id).await
+		})
 	}
 
 	/// Like get_non_outlier_pdu(), but without the expense of fetching and

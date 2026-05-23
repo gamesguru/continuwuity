@@ -169,6 +169,24 @@ where
 		pdu
 	};
 
+	let event_batch_fetch = |event_ids: Vec<OwnedEventId>| async move {
+		let pdus: Vec<conduwuit_core::PduEvent> = self
+			.services
+			.timeline
+			.multi_get_pdus(Some(room_id), event_ids.into_iter().stream())
+			.filter_map(|r| async move { r.ok() })
+			.collect()
+			.await;
+
+		for pdu in &pdus {
+			let _ = fetch_cache_ref
+				.insert_async(pdu.event_id.clone(), Some(pdu.clone()))
+				.await;
+		}
+
+		pdus
+	};
+
 	let room_id_clone = room_id.to_owned();
 	let dag_healer = self.dag_healer.clone();
 	let healer_enabled = self.services.server.config.allow_dag_healer;
@@ -187,6 +205,7 @@ where
 		state_sets,
 		auth_chain_sets,
 		&event_fetch,
+		Some(&event_batch_fetch),
 		Some(&event_missing_cb),
 	)
 	.map_err(|e| err!(error!("State resolution failed: {e:?}")))
