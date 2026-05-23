@@ -504,10 +504,11 @@ where
 
 	let mut backwards_reachable = HashSet::new();
 	let mut missing = Vec::new();
-	let mut queue: std::collections::VecDeque<OwnedEventId> = conflicted_events.iter().cloned().collect();
+	let mut queue: std::collections::VecDeque<OwnedEventId> =
+		conflicted_events.iter().cloned().collect();
 	let mut children_map: HashMap<OwnedEventId, Vec<OwnedEventId>> = HashMap::new();
 
-	// 1. Backwards BFS (finds all ancestors down to min_depth)
+	// Backwards BFS (finds all ancestors down to min_depth)
 	while let Some(event_id) = queue.pop_front() {
 		if !backwards_reachable.insert(event_id.clone()) {
 			continue;
@@ -527,14 +528,18 @@ where
 		for prev in evt.prev_events() {
 			let prev_owned = prev.to_owned();
 			// Store reverse edges for the forwards BFS
-			children_map.entry(prev_owned.clone()).or_default().push(event_id.clone());
+			children_map
+				.entry(prev_owned.clone())
+				.or_default()
+				.push(event_id.clone());
 			queue.push_back(prev_owned);
 		}
 	}
 
-	// 2. Forwards BFS (finds descendants from the seeds)
+	// Forwards BFS (finds descendants from the seeds)
 	let mut forwards_reachable = HashSet::new();
-	let mut f_queue: std::collections::VecDeque<OwnedEventId> = conflicted_events.iter().cloned().collect();
+	let mut f_queue: std::collections::VecDeque<OwnedEventId> =
+		conflicted_events.iter().cloned().collect();
 
 	while let Some(event_id) = f_queue.pop_front() {
 		if !forwards_reachable.insert(event_id.clone()) {
@@ -545,7 +550,7 @@ where
 		}
 	}
 
-	// 3. Subgraph is the linear intersection of paths
+	// Subgraph is the linear intersection of paths
 	let subgraph: HashSet<OwnedEventId> = backwards_reachable
 		.into_iter()
 		.filter(|id| forwards_reachable.contains(id))
@@ -978,7 +983,12 @@ where
 		// Only batch fetch events that are NOT already in our DashMap cache!
 		let ids: Vec<_> = auth_event_ids
 			.iter()
-			.filter(|id| fetch_event((*id).clone()).now_or_never().flatten().is_none())
+			.filter(|id| {
+				fetch_event((*id).clone())
+					.now_or_never()
+					.flatten()
+					.is_none()
+			})
 			.cloned()
 			.collect();
 
