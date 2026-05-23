@@ -1235,8 +1235,6 @@ where
 		return Ok(vec![]);
 	}
 
-
-
 	// Step 1: Walk the mainline (the chain of power level events starting from the
 	// resolved power level) and assign each a position. Position 0 = most recent
 	// (highest priority). This is O(M) where M is the length of the mainline.
