@@ -13,14 +13,20 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
-use ruma::{CanonicalJsonValue, RoomId, ServerName, events::StateEventType};
+use ruma::{CanonicalJsonValue, OwnedEventId, RoomId, RoomVersionId, ServerName, events::StateEventType};
 
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
 	state_compressor::{CompressedState, HashSetCompressStateEvent},
-	timeline::RawPduId,
+	timeline::{RawPduId, RoomMutexGuard},
 };
 
+/// Upgrade an outlier PDU to a full timeline event.
+///
+/// Performs auth checks, state resolution, soft-fail evaluation, and finally
+/// appends the PDU to the room timeline.  The function is deliberately kept
+/// thin; the heavy lifting is delegated to the helpers below so that each
+/// async state-machine stays within the stack-frame budget.
 #[implement(super::Service)]
 #[allow(clippy::too_many_arguments)]
 pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
@@ -85,128 +91,29 @@ where
 	let timer = Instant::now();
 	let room_version_id = get_room_version_id(create_event)?;
 
-	// 10. Fetch missing state and auth chain events by calling /state_ids at
-	//     backwards extremities doing all the checks in this list starting at 1.
-	//     These are not timeline events.
-
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Resolving state at event"
-	);
-	let mut state_at_incoming_event = if incoming_pdu.prev_events().count() == 1 {
-		self.state_at_incoming_degree_one(&incoming_pdu, room_id)
-			.await?
-	} else {
-		self.state_at_incoming_resolved(&incoming_pdu, room_id, &room_version_id)
-			.await?
-	};
-
-	if state_at_incoming_event.is_none() {
-		if !skip_soft_fail {
-			// Local state is unavailable — prev_events are not yet in DB or their
-			// state hashes have not been computed. Attempt a synchronous /state_ids
-			// fetch from the sending server BEFORE queuing the async DAG healer.
-			//
-			// The healer fires asynchronously (after a delay), which races with the
-			// sending server's lifetime: in Complement tests the fake federation
-			// server shuts down when the test times out, so the healer's /state_ids
-			// calls always arrive too late and "all servers failed". Fetching inline
-			// here gives us a shot while the sender is still alive.
-			debug!(
-				event_id = %incoming_pdu.event_id,
-				%origin,
-				"local state unavailable; attempting synchronous /state_ids fetch"
-			);
-			match self
-				.fetch_state(origin, create_event, room_id, incoming_pdu.event_id(), false)
-				.await
-			{
-				| Ok(Some(fetched_state)) => {
-					info!(
-						target: "state_res_debug",
-						event_id = %incoming_pdu.event_id,
-						n_state = fetched_state.len(),
-						"fetched state via /state_ids; proceeding with auth check"
-					);
-					state_at_incoming_event = Some(fetched_state);
-				},
-				| Ok(None) | Err(_) => {
-					// /state_ids also failed — hand off to the healer for a later retry.
-					let _ = self.dag_healer.send(super::HealRequest::MissingState {
-						room_id: room_id.to_owned(),
-						event_id: incoming_pdu.event_id().to_owned(),
-						origin: origin.to_owned(),
-						waiting_pdu: None,
-					});
-
-					return Err(conduwuit::Error::MissingAuthEvents(vec![]));
-				},
-			}
-		}
-	}
-
-	if state_at_incoming_event.is_none() {
-		if skip_soft_fail {
-			warn!(
-				event_id = %incoming_pdu.event_id,
-				"Could not find state at event, but skip_soft_fail is set — using current room state as fallback"
-			);
-			// Use the current room state as the base instead of empty state.
-			// This ensures state resolution has real data to work with and
-			// won't wipe the room's state.
-			let current_shortstatehash = self
-				.services
-				.state
-				.get_room_shortstatehash(room_id)
-				.await
-				.map_err(|_| err!(Database("Room has no state")))?;
-
-			let current_state: HashMap<_, _> = self
-				.services
-				.state_accessor
-				.state_full_shortids(current_shortstatehash)
-				.ready_filter_map(Result::ok)
-				.map(|(shortstatekey, shorteventid)| async move {
-					let event_id = self
-						.services
-						.short
-						.get_eventid_from_short::<Box<_>>(shorteventid)
-						.await
-						.ok()?;
-					Some((shortstatekey, (*event_id).to_owned()))
-				})
-				.buffer_unordered(64)
-				.filter_map(ready)
-				.collect()
-				.await;
-
-			state_at_incoming_event = Some(current_state);
-		} else {
-			return Err!(Request(Unknown("Could not find state at event")));
-		}
-	}
-
-	let state_at_incoming_event = state_at_incoming_event.unwrap_or_default();
+	// --- Phase 1: resolve state at the incoming event (extracted to reduce frame) ---
+	let state_at_incoming_event = self
+		.resolve_state_at_incoming_event(
+			&incoming_pdu,
+			create_event,
+			origin,
+			room_id,
+			&room_version_id,
+			skip_soft_fail,
+		)
+		.await?;
 
 	let room_version = to_room_version(&room_version_id);
 
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Performing auth check to upgrade"
-	);
 	// 11. Check the auth of the event passes based on the state of the event
+	debug!(event_id = %incoming_pdu.event_id, "Running initial auth check");
 	let state_fetch_state = &state_at_incoming_event;
 	let state_fetch = |k: StateEventType, s: StateKey| async move {
 		let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
-
 		let event_id = state_fetch_state.get(&shortstatekey)?;
 		self.services.timeline.get_pdu(event_id).await.ok()
 	};
 
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Running initial auth check"
-	);
 	let auth_check = state_res::event_auth::auth_check(
 		&room_version,
 		&incoming_pdu,
@@ -251,14 +158,11 @@ where
 	}
 
 	// We start looking at current room state now, so lets lock the room
-	trace!(
-		room_id = %room_id,
-		"Locking the room"
-	);
+	trace!(room_id = %room_id, "Locking the room");
 	let state_lock = self.services.state.mutex.lock(room_id).await;
 
-	// Re-check if the PDU was added to the timeline while we were waiting for the
-	// lock
+	// Re-check if the PDU was added to the timeline while we were waiting for
+	// the lock
 	if let Ok(pduid) = self
 		.services
 		.timeline
@@ -268,10 +172,7 @@ where
 		return Ok(Some(pduid));
 	}
 
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Gathering auth events"
-	);
+	debug!(event_id = %incoming_pdu.event_id, "Gathering auth events");
 	let auth_events = self
 		.services
 		.state
@@ -290,10 +191,7 @@ where
 		ready(auth_events.get(&key).map(ToOwned::to_owned))
 	};
 
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Running auth check with claimed state auth"
-	);
+	debug!(event_id = %incoming_pdu.event_id, "Running auth check with claimed state auth");
 	let auth_check = state_res::event_auth::auth_check(
 		&room_version,
 		&incoming_pdu,
@@ -305,10 +203,7 @@ where
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
 	// Soft fail check before doing state res
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Performing soft-fail check"
-	);
+	debug!(event_id = %incoming_pdu.event_id, "Performing soft-fail check");
 	let mut soft_fail = if skip_soft_fail {
 		false
 	} else {
@@ -374,12 +269,8 @@ where
 			}
 		}
 
-		// Additionally, if this is a redaction for a soft-failed event, we soft-fail it
-		// also.
-
-		// TODO: this is supposed to hide redactions from policy servers, however, for
-		// full efficacy it also needs to hide redactions for unknown events. This
-		// needs to be investigated at a later time.
+		// Additionally, if this is a redaction for a soft-failed event, we
+		// soft-fail it also.
 		if let Some(redact_id) = incoming_pdu.redacts_id(&room_version_id) {
 			debug!(
 				redact_id = %redact_id,
@@ -400,61 +291,20 @@ where
 		}
 	}
 
+	// --- Phase 2: state event handling (extracted to reduce frame) ---
+	//
 	// Derive new room state for all incoming state events, including
 	// soft-failed ones. State resolution merges forks deterministically —
 	// a soft-failed event may carry state from a fork we haven't seen,
-	// and feeding it into resolve_state heals local drift. This is the
-	// continuous state reconciliation mechanism in Matrix federation.
+	// and feeding it into resolve_state heals local drift.
 	if incoming_pdu.state_key().is_some() {
-		debug!("Event is a state-event. Deriving new room state");
-
-		// We also add state after incoming event to the fork states
-		let mut state_after = state_at_incoming_event.clone();
-		if let Some(state_key) = incoming_pdu.state_key() {
-			let shortstatekey = self
-				.services
-				.short
-				.get_or_create_shortstatekey(&incoming_pdu.kind().to_string().into(), state_key)
-				.await;
-
-			let event_id = incoming_pdu.event_id();
-			state_after.insert(shortstatekey, event_id.to_owned());
-		}
-
-		let new_room_state = {
-			let t = Instant::now();
-			info!(
-				event_id = %incoming_pdu.event_id(),
-				%room_id,
-				"state_res: starting resolve_state for incoming state event"
-			);
-			let result = self
-				.resolve_state(room_id, &room_version_id, state_after)
-				.await?;
-			info!(
-				event_id = %incoming_pdu.event_id(),
-				%room_id,
-				elapsed = ?t.elapsed(),
-				"state_res: resolve_state complete"
-			);
-			result
-		};
-
-		// Set the new room state to the resolved state
-		debug!("Forcing new room state");
-		let HashSetCompressStateEvent { shortstatehash, added, removed } = self
-			.services
-			.state_compressor
-			.save_state(room_id, new_room_state)
-			.await?;
-
-		Box::pin(self.services.state.force_state(
+		self.apply_incoming_state_update(
+			&incoming_pdu,
+			state_at_incoming_event,
 			room_id,
-			shortstatehash,
-			added,
-			removed,
+			&room_version_id,
 			&state_lock,
-		))
+		)
 		.await?;
 	}
 
@@ -526,4 +376,193 @@ where
 	drop(state_lock);
 
 	Ok(pdu_id)
+}
+
+/// Determine the room state that was in effect just before the incoming PDU
+/// was sent.  Tries local DB first; if unavailable, falls back to a
+/// synchronous `/state_ids` fetch from the sending server; if that also fails,
+/// enqueues a DAG-healer request and returns `MissingAuthEvents`.
+///
+/// When `skip_soft_fail` is set and state cannot be found at all, the current
+/// room state is used as a best-effort fallback to avoid wiping state.
+#[implement(super::Service)]
+#[tracing::instrument(level = "debug", skip_all)]
+async fn resolve_state_at_incoming_event<Pdu>(
+	&self,
+	incoming_pdu: &PduEvent,
+	create_event: &Pdu,
+	origin: &ServerName,
+	room_id: &RoomId,
+	room_version_id: &RoomVersionId,
+	skip_soft_fail: bool,
+) -> Result<HashMap<u64, OwnedEventId>>
+where
+	Pdu: Event + Send + Sync,
+{
+	// 10. Fetch missing state and auth chain events by calling /state_ids at
+	//     backwards extremities doing all the checks in this list starting at 1.
+	//     These are not timeline events.
+	debug!(event_id = %incoming_pdu.event_id, "Resolving state at event");
+	let mut state = if incoming_pdu.prev_events().count() == 1 {
+		self.state_at_incoming_degree_one(incoming_pdu, room_id)
+			.await?
+	} else {
+		self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id)
+			.await?
+	};
+
+	if state.is_none() && !skip_soft_fail {
+		// Local state is unavailable — prev_events are not yet in DB or their
+		// state hashes have not been computed. Attempt a synchronous /state_ids
+		// fetch from the sending server BEFORE queuing the async DAG healer.
+		//
+		// The healer fires asynchronously (after a delay), which races with the
+		// sending server's lifetime: in Complement tests the fake federation
+		// server shuts down when the test times out, so the healer's /state_ids
+		// calls always arrive too late and "all servers failed". Fetching inline
+		// here gives us a shot while the sender is still alive.
+		debug!(
+			event_id = %incoming_pdu.event_id,
+			%origin,
+			"local state unavailable; attempting synchronous /state_ids fetch"
+		);
+		match self
+			.fetch_state(origin, create_event, room_id, incoming_pdu.event_id(), false)
+			.await
+		{
+			| Ok(Some(fetched_state)) => {
+				info!(
+					target: "state_res_debug",
+					event_id = %incoming_pdu.event_id,
+					n_state = fetched_state.len(),
+					"fetched state via /state_ids; proceeding with auth check"
+				);
+				state = Some(fetched_state);
+			},
+			| Ok(None) | Err(_) => {
+				// /state_ids also failed — hand off to the healer for a later retry.
+				let _ = self.dag_healer.send(super::HealRequest::MissingState {
+					room_id: room_id.to_owned(),
+					event_id: incoming_pdu.event_id().to_owned(),
+					origin: origin.to_owned(),
+					waiting_pdu: None,
+				});
+
+				return Err(conduwuit::Error::MissingAuthEvents(vec![]));
+			},
+		}
+	}
+
+	if state.is_none() {
+		if skip_soft_fail {
+			warn!(
+				event_id = %incoming_pdu.event_id,
+				"Could not find state at event, but skip_soft_fail is set — using current room state as fallback"
+			);
+			// Use the current room state as the base instead of empty state.
+			// This ensures state resolution has real data to work with and
+			// won't wipe the room's state.
+			let current_shortstatehash = self
+				.services
+				.state
+				.get_room_shortstatehash(room_id)
+				.await
+				.map_err(|_| err!(Database("Room has no state")))?;
+
+			let current_state: HashMap<_, _> = self
+				.services
+				.state_accessor
+				.state_full_shortids(current_shortstatehash)
+				.ready_filter_map(Result::ok)
+				.map(|(shortstatekey, shorteventid)| async move {
+					let event_id = self
+						.services
+						.short
+						.get_eventid_from_short::<Box<_>>(shorteventid)
+						.await
+						.ok()?;
+					Some((shortstatekey, (*event_id).to_owned()))
+				})
+				.buffer_unordered(64)
+				.filter_map(ready)
+				.collect()
+				.await;
+
+			state = Some(current_state);
+		} else {
+			return Err!(Request(Unknown("Could not find state at event")));
+		}
+	}
+
+	Ok(state.unwrap_or_default())
+}
+
+/// For state events: build the new post-event state, run state resolution
+/// against the current room state, and apply the result via `force_state`.
+///
+/// Extracted from `upgrade_outlier_to_timeline_pdu` to give `force_state`
+/// its own async state-machine frame and keep the caller below the
+/// `large_stack_frames` threshold.
+#[implement(super::Service)]
+#[tracing::instrument(level = "debug", skip_all)]
+async fn apply_incoming_state_update(
+	&self,
+	incoming_pdu: &PduEvent,
+	state_at_incoming_event: HashMap<u64, OwnedEventId>,
+	room_id: &RoomId,
+	room_version_id: &RoomVersionId,
+	state_lock: &RoomMutexGuard,
+) -> Result<()> {
+	debug!("Event is a state-event. Deriving new room state");
+
+	// We also add state after incoming event to the fork states
+	let mut state_after = state_at_incoming_event;
+	if let Some(state_key) = incoming_pdu.state_key() {
+		let shortstatekey = self
+			.services
+			.short
+			.get_or_create_shortstatekey(&incoming_pdu.kind().to_string().into(), state_key)
+			.await;
+
+		let event_id = incoming_pdu.event_id();
+		state_after.insert(shortstatekey, event_id.to_owned());
+	}
+
+	let new_room_state = {
+		let t = Instant::now();
+		info!(
+			event_id = %incoming_pdu.event_id(),
+			%room_id,
+			"state_res: starting resolve_state for incoming state event"
+		);
+		let result = self
+			.resolve_state(room_id, room_version_id, state_after)
+			.await?;
+		info!(
+			event_id = %incoming_pdu.event_id(),
+			%room_id,
+			elapsed = ?t.elapsed(),
+			"state_res: resolve_state complete"
+		);
+		result
+	};
+
+	// Set the new room state to the resolved state
+	debug!("Forcing new room state");
+	let HashSetCompressStateEvent { shortstatehash, added, removed } = self
+		.services
+		.state_compressor
+		.save_state(room_id, new_room_state)
+		.await?;
+
+	Box::pin(self.services.state.force_state(
+		room_id,
+		shortstatehash,
+		added,
+		removed,
+		state_lock,
+	))
+	.await?;
+
+	Ok(())
 }
