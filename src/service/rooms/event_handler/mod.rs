@@ -48,9 +48,16 @@ pub struct Service {
 }
 
 #[derive(Debug)]
-pub struct HealRequest {
-	pub room_id: OwnedRoomId,
-	pub missing_events: Vec<OwnedEventId>,
+pub enum HealRequest {
+	MissingEvents {
+		room_id: OwnedRoomId,
+		missing_events: Vec<OwnedEventId>,
+	},
+	MissingState {
+		room_id: OwnedRoomId,
+		event_id: OwnedEventId,
+		origin: ruma::OwnedServerName,
+	},
 }
 
 #[derive(Default, Debug)]

@@ -127,6 +127,13 @@ pub enum YoloCommand {
 		tail: i64,
 	},
 
+	/// Prune dangling forward extremities and reset them to the current room
+	/// state.
+	CleanExtremities {
+		/// The room ID.
+		room_id: OwnedRoomId,
+	},
+
 	/// Purge outlier PDUs that already exist in our timeline.
 	///
 	/// This is a safe cleanup command that resolves "stuck" state where an

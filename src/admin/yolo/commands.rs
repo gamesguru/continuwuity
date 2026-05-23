@@ -161,6 +161,29 @@ pub(super) async fn audit_auth_chain(
 }
 
 #[admin_command]
+pub(super) async fn clean_extremities(&self, room_id: OwnedRoomId) -> Result {
+	let mutex = self.services.rooms.state.mutex.lock(&room_id).await;
+
+	let state_hash = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(&room_id)
+		.await?;
+
+	self.services
+		.rooms
+		.state
+		.reset_extremities_to_state(&room_id, state_hash, &mutex)
+		.await;
+
+	self.write_str(&format!(
+		"Pruned unused forward extremities and reset them to the current state for {room_id}.\n"
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn audit_membership(
 	&self,
 	room_id: OwnedRoomId,

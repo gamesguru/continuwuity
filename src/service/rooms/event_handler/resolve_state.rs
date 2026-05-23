@@ -175,7 +175,7 @@ where
 	let is_suppressed = self.services.globals.suppress_healer.contains(room_id);
 	let event_missing_cb = move |missing_events| {
 		if healer_enabled && !is_suppressed {
-			let _ = dag_healer.send(crate::rooms::event_handler::HealRequest {
+			let _ = dag_healer.send(crate::rooms::event_handler::HealRequest::MissingEvents {
 				room_id: room_id_clone.clone(),
 				missing_events,
 			});

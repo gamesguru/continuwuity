@@ -102,18 +102,15 @@ where
 	};
 
 	if state_at_incoming_event.is_none() {
-		// For normal events, propagate federation errors to trigger retry
-		// via backoff. For rescue-pdu (skip_soft_fail), swallow errors so
-		// the current-room-state fallback below can activate.
-		let fetched = self
-			.fetch_state(origin, create_event, room_id, incoming_pdu.event_id())
-			.await;
+		if !skip_soft_fail {
+			let _ = self.dag_healer.send(super::HealRequest::MissingState {
+				room_id: room_id.to_owned(),
+				event_id: incoming_pdu.event_id().to_owned(),
+				origin: origin.to_owned(),
+			});
 
-		state_at_incoming_event = if skip_soft_fail {
-			fetched.ok().flatten()
-		} else {
-			fetched?
-		};
+			return Err(conduwuit::Error::MissingAuthEvents(vec![]));
+		}
 	}
 
 	if state_at_incoming_event.is_none() {

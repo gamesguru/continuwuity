@@ -104,6 +104,30 @@ where
 		| _ => StateResolutionVersion::V2_1,
 	};
 	debug!(version = ?stateres_version, "State resolution starting");
+	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<Pdu>>>>> =
+		Arc::new(DashMap::new());
+	let _parsed_pl_cache: Arc<DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>> =
+		Arc::new(DashMap::new());
+
+	let cached_fetch = |id: OwnedEventId| {
+		let cache = Arc::clone(&fetch_cache);
+		async move {
+			if let Some(cell) = cache.get(&id) {
+				return cell
+					.get_or_init(|| async { event_fetch(id.clone()).await })
+					.await
+					.clone();
+			}
+			let cell = cache
+				.entry(id.clone())
+				.or_insert_with(|| Arc::new(OnceCell::new()))
+				.value()
+				.clone();
+			cell.get_or_init(|| async { event_fetch(id).await })
+				.await
+				.clone()
+		}
+	};
 
 	// Split non-conflicting and conflicting state
 	let (mut unconflicted, mut conflicting) = separate(state_sets.into_iter());
@@ -129,7 +153,7 @@ where
 	trace!(map = ?conflicting, "conflicting events");
 	let (conflicted_state_subgraph, initial_state) =
 		if stateres_version == StateResolutionVersion::V2_1 {
-			let (csg, missing) = calculate_conflicted_subgraph(&conflicting, event_fetch)
+			let (csg, missing) = calculate_conflicted_subgraph(&conflicting, &cached_fetch)
 				.await
 				.ok_or_else(|| {
 					Error::InvalidPdu("Failed to calculate conflicted subgraph".to_owned())
@@ -491,22 +515,24 @@ where
 
 /// Returns a Vec of deduped EventIds that appear in some chains but not others.
 #[allow(clippy::arithmetic_side_effects)]
-fn get_auth_chain_diff<'a, Id: 'a, Hasher>(
+fn get_auth_chain_diff<'a, Id, Hasher>(
 	auth_chain_sets: &'a [HashSet<Id, Hasher>],
 ) -> impl Stream<Item = Id> + Send + use<'a, Id, Hasher>
 where
-	Id: Clone + Eq + Hash + Send + Sync,
+	Id: Clone + Eq + Hash + Send + Sync + 'a,
 	Hasher: BuildHasher + Send + Sync,
 {
 	let num_sets = auth_chain_sets.len();
 	let mut id_counts: HashMap<&'a Id, usize> = HashMap::new(); // Borrowed!
 	for id in auth_chain_sets.iter().flatten() {
-		*id_counts.entry(id).or_default() += 1;
+		let count = id_counts.entry(id).or_default();
+		*count = count.saturating_add(1);
 	}
 
 	id_counts
 		.into_iter()
-		.filter_map(move |(id, count)| (count < num_sets).then(|| id.clone()))
+		.filter(move |&(_id, count)| count < num_sets)
+		.map(|(id, _count)| id.clone())
 		.stream()
 }
 
@@ -528,30 +554,17 @@ async fn reverse_topological_power_sort<E, F, Fut>(
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
 	Fut: Future<Output = Option<E>> + Send,
-	E: Event + Send + Sync,
+	E: Event + Send + Sync + Clone,
 {
 	debug!("reverse topological sort of power events");
 
-	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
-		Arc::new(DashMap::new());
-	let cached_fetch = |id: OwnedEventId| {
-		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
-			Arc::clone(&fetch_cache);
-		let cell: Arc<OnceCell<Option<E>>> = cache
-			.entry(id.clone())
-			.or_insert_with(|| Arc::new(OnceCell::new()))
-			.value()
-			.clone();
-		async move {
-			let res: &Option<E> = cell.get_or_init(|| async { fetch_event(id).await }).await;
-			res.clone()
-		}
-	};
-
 	let mut graph = HashMap::new();
 	for event_id in events_to_sort {
-		add_event_and_auth_chain_to_graph(&mut graph, event_id, auth_diff, &cached_fetch).await;
+		add_event_and_auth_chain_to_graph(&mut graph, event_id, auth_diff, fetch_event).await;
 	}
+
+	let parsed_pl_cache: Arc<DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>> =
+		Arc::new(DashMap::new());
 
 	// This is used in the `key_fn` passed to the lexico_topo_sort fn
 	let sender_pl_cache: Arc<DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>> =
@@ -563,8 +576,9 @@ where
 		.broad_filter_map(async |event_id| {
 			let pl = get_power_level_for_sender(
 				&event_id,
-				&cached_fetch,
+				fetch_event,
 				global_pl_context,
+				&parsed_pl_cache,
 				&sender_pl_cache,
 			)
 			.await;
@@ -587,7 +601,7 @@ where
 			.get(&event_id)
 			.ok_or_else(|| Error::NotFound(String::new()))?;
 
-		let ev = cached_fetch(event_id)
+		let ev = fetch_event(event_id)
 			.await
 			.ok_or_else(|| Error::NotFound(String::new()))?;
 
@@ -731,6 +745,7 @@ async fn get_power_level_for_sender<E, F, Fut>(
 	event_id: &EventId,
 	fetch_event: &F,
 	global_pl_context: Option<&PowerLevelsContentFields>,
+	parsed_pl_cache: &DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>,
 	sender_pl_cache: &DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>,
 ) -> Int
 where
@@ -741,12 +756,11 @@ where
 	debug!("fetch event ({event_id}) senders power level");
 
 	let event = fetch_event(event_id.to_owned()).await;
-	let sender = event.as_ref().map(|e| Event::sender(e).to_owned());
+	let sender_str = event.as_ref().map(|e| Event::sender(e).to_owned());
 
 	if let Some(global_context) = global_pl_context {
-		if let Some(s) = &sender {
+		if let Some(s) = &sender_str {
 			if let Some(&user_level) = global_context.get_user_power(s) {
-				debug!("found {} at power_level {user_level} via global context", s);
 				return user_level;
 			}
 			return global_context.users_default;
@@ -756,63 +770,51 @@ where
 
 	if let Some(ev) = event {
 		if is_type_and_key(&ev, &TimelineEventType::RoomCreate, "") {
-			return int!(100);
+			return Int::MAX;
 		}
 
 		let mut creator_event: Option<E> = None;
 		let mut pl_event: Option<E> = None;
 
-		let mut queue = std::collections::VecDeque::new();
-		queue.extend(ev.auth_events().map(ToOwned::to_owned));
-		let mut visited = HashSet::new();
-
-		while let Some(aid) = queue.pop_front() {
-			if !visited.insert(aid.clone()) {
-				continue;
-			}
-			if let Some(aev) = fetch_event(aid.clone()).await {
-				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "")
-					&& creator_event.is_none()
-				{
-					creator_event = Some(aev.clone());
-				} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "")
-					&& pl_event.is_none()
-				{
-					pl_event = Some(aev.clone());
+		// 1-HOP STRICT SCAN (Removes the polynomial BFS trap)
+		for aid in ev.auth_events() {
+			if let Some(aev) = fetch_event(aid.to_owned()).await {
+				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "") {
+					creator_event = Some(aev);
+				} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+					pl_event = Some(aev);
 				}
-				if creator_event.is_some() && pl_event.is_some() {
-					break;
-				}
-				queue.extend(aev.auth_events().map(ToOwned::to_owned));
 			}
 		}
-
-		let pl_event_id = pl_event.as_ref().map(|e| e.event_id().to_owned());
-		let cache_key = (
-			sender
-				.clone()
-				.unwrap_or_else(|| ruma::user_id!("@unknown:unknown").to_owned()),
-			pl_event_id,
-		);
-
-		if let Some(cached_pl) = sender_pl_cache.get(&cache_key) {
-			return *cached_pl;
-		}
-
-		let mut calculated_pl = int!(0);
 
 		if let Some(pl_ev) = pl_event {
-			if let Ok(pl_content) =
-				from_json_str::<PowerLevelsContentFields>(pl_ev.content().get())
-			{
-				if let Some(s) = &sender {
-					if let Some(&user_level) = pl_content.get_user_power(s) {
-						debug!("found {s} at power_level {user_level} via auth chain PL event");
-						calculated_pl = user_level;
-					} else {
-						calculated_pl = pl_content.users_default;
-					}
+			let pl_id = pl_ev.event_id().to_owned();
+			let parsed_pl = parsed_pl_cache
+				.entry(pl_id.clone())
+				.or_insert_with(|| {
+					Arc::new(
+						from_json_str::<PowerLevelsContentFields>(pl_ev.content().get())
+							.unwrap_or_else(|_| PowerLevelsContentFields {
+								users_default: int!(0),
+								users: Vec::new(),
+							}),
+					)
+				})
+				.value()
+				.clone();
+
+			if let Some(s) = &sender_str {
+				let cache_key = (s.clone(), Some(pl_id));
+				if let Some(cached_pl) = sender_pl_cache.get(&cache_key) {
+					return *cached_pl;
 				}
+
+				if let Some(&user_level) = parsed_pl.get_user_power(s) {
+					sender_pl_cache.insert(cache_key, user_level);
+					return user_level;
+				}
+				sender_pl_cache.insert(cache_key, parsed_pl.users_default);
+				return parsed_pl.users_default;
 			}
 		} else if let Some(creator_ev) = creator_event {
 			let mut is_creator = creator_ev.sender() == ev.sender();
@@ -826,14 +828,10 @@ where
 				}
 			}
 			if is_creator {
-				calculated_pl = int!(100);
+				return Int::MAX;
 			}
 		}
-
-		sender_pl_cache.insert(cache_key, calculated_pl);
-		return calculated_pl;
 	}
-
 	int!(0)
 }
 
@@ -1220,25 +1218,13 @@ where
 		};
 
 		pl = None;
-		let mut queue = std::collections::VecDeque::new();
 		for aid in event.auth_events() {
-			queue.push_back(aid.to_owned());
-		}
-		let mut visited = HashSet::new();
-
-		while let Some(aid) = queue.pop_front() {
-			if !visited.insert(aid.clone()) {
-				continue;
-			}
-			let Some(aev) = cached_fetch(aid.clone()).await else {
+			let Some(aev) = cached_fetch(aid.to_owned()).await else {
 				continue;
 			};
 			if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-				pl = Some(aid);
+				pl = Some(aid.to_owned());
 				break;
-			}
-			for next_aid in aev.auth_events() {
-				queue.push_back(next_aid.to_owned());
 			}
 		}
 	}
@@ -1269,30 +1255,40 @@ where
 				// The event IS a power level event — look itself up directly
 				mainline_depth.get(ev_id).copied()
 			} else {
-				// Find the power level event in this event's auth_events
-				let mut found = None;
-				let mut queue = std::collections::VecDeque::new();
+				// 1. Find the 1-hop PL event
+				let mut current_pl = None;
 				for aid in event.auth_events() {
-					queue.push_back(aid.to_owned());
-				}
-				let mut visited = HashSet::new();
-
-				while let Some(aid) = queue.pop_front() {
-					if !visited.insert(aid.clone()) {
-						continue;
-					}
-					let Some(aev) = cached_fetch(aid.clone()).await else {
+					let Some(aev) = cached_fetch(aid.to_owned()).await else {
 						continue;
 					};
 					if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-						found = mainline_depth.get(&aid).copied();
+						current_pl = Some(aid.to_owned());
 						break;
 					}
-					for next_aid in aev.auth_events() {
-						queue.push_back(next_aid.to_owned());
+				}
+
+				// 2. Recursively walk the chain of PL events
+				let mut found_depth = None;
+				while let Some(c_pl) = current_pl {
+					if let Some(&d) = mainline_depth.get(&c_pl) {
+						found_depth = Some(d);
+						break;
+					}
+					let Some(c_pl_ev) = cached_fetch(c_pl).await else {
+						break;
+					};
+					current_pl = None;
+					for aid in c_pl_ev.auth_events() {
+						let Some(aev) = cached_fetch(aid.to_owned()).await else {
+							continue;
+						};
+						if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+							current_pl = Some(aid.to_owned());
+							break;
+						}
 					}
 				}
-				found
+				found_depth
 			};
 
 		event_to_mainline.insert(ev_id, depth);

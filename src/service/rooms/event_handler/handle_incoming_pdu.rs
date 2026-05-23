@@ -356,7 +356,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			self.services
 				.outlier
 				.add_pdu_outlier(event_id, &value, Some(room_id));
-			let _ = self.dag_healer.send(super::HealRequest {
+			let _ = self.dag_healer.send(super::HealRequest::MissingEvents {
 				room_id: room_id.to_owned(),
 				missing_events: missing,
 			});
