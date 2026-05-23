@@ -392,9 +392,24 @@ where
 			state_after.insert(shortstatekey, event_id.to_owned());
 		}
 
-		let new_room_state = self
-			.resolve_state(room_id, &room_version_id, state_after)
-			.await?;
+		let new_room_state = {
+			let t = std::time::Instant::now();
+			info!(
+				event_id = %incoming_pdu.event_id(),
+				%room_id,
+				"state_res: starting resolve_state for incoming state event"
+			);
+			let result = self
+				.resolve_state(room_id, &room_version_id, state_after)
+				.await?;
+			info!(
+				event_id = %incoming_pdu.event_id(),
+				%room_id,
+				elapsed = ?t.elapsed(),
+				"state_res: resolve_state complete"
+			);
+			result
+		};
 
 		// Set the new room state to the resolved state
 		debug!("Forcing new room state");

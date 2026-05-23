@@ -4490,6 +4490,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 
 	for room_id in &room_ids {
 		total_rooms = total_rooms.saturating_add(1);
+		info!(room_id = %room_id, scanned = total_rooms, total = n_rooms, "check-rooms scanning room");
 		let mut issues: Vec<String> = Vec::new();
 		let room_str = room_id.as_str();
 
@@ -4628,8 +4629,19 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 
 		// Flush every 25 rooms to show live progress
 		if total_rooms.is_multiple_of(25) {
-			self.write_str(&output).await?;
-			output.clear();
+			let progress =
+				format!("[{total_rooms}/{n_rooms}] {problem_rooms} problems found so far...\n");
+			self.write_str(&progress).await?;
+			if !output.is_empty() {
+				self.write_str(&output).await?;
+				output.clear();
+			}
+			info!(
+				scanned = total_rooms,
+				total = n_rooms,
+				problems = problem_rooms,
+				"check-rooms progress"
+			);
 		}
 	}
 

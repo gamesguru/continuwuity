@@ -87,11 +87,13 @@ pub async fn resolve_state(
 	trace!("Resolving state");
 	let n_fork_states: usize = fork_states.iter().map(HashMap::len).sum();
 	let n_auth_chain: usize = auth_chain_sets.iter().map(HashSet::len).sum();
-	info!(%room_id, n_fork_states, n_auth_chain, "resolve_state: auth chains loaded, starting state resolution");
+	info!(%room_id, n_fork_states, n_auth_chain, "state_res: auth chains loaded, starting resolution");
+	let t = std::time::Instant::now();
 	let state = self
 		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
 		.boxed()
 		.await?;
+	info!(%room_id, n_resolved = state.len(), elapsed = ?t.elapsed(), "state_res: resolution complete");
 
 	// Diagnostic: log resolved PL
 	for ((ty, sk), eid) in &state {
