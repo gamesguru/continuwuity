@@ -41,7 +41,7 @@ pub struct Service {
 	pub mutex_federation: RoomMutexMap,
 	pub federation_handletime: SyncRwLock<HandleTimeMap>,
 	pub bad_room_ratelimiter: SyncRwLock<HashMap<OwnedRoomId, (u32, Instant)>>,
-	pub peer_scorer: dashmap::DashMap<ruma::OwnedServerName, PeerStats>,
+	pub peer_scorer: dashmap::DashMap<OwnedServerName, PeerStats>,
 	pub dag_healer: tokio::sync::mpsc::UnboundedSender<HealRequest>,
 	dag_healer_rx: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<HealRequest>>>,
 	services: Services,
@@ -188,14 +188,14 @@ impl Service {
 		room_id: &RoomId,
 		origin: &ruma::ServerName,
 		room_server_cap: usize,
-	) -> Vec<ruma::OwnedServerName> {
-		let mut servers: Vec<ruma::OwnedServerName> = vec![origin.to_owned()];
+	) -> Vec<OwnedServerName> {
+		let mut servers: Vec<OwnedServerName> = vec![origin.to_owned()];
 		for s in &self.services.server.config.trusted_servers {
 			if !self.services.globals.server_is_ours(s) && !servers.contains(s) {
 				servers.push(s.clone());
 			}
 		}
-		let mut room_servers: Vec<ruma::OwnedServerName> = self
+		let mut room_servers: Vec<OwnedServerName> = self
 			.services
 			.state_cache
 			.room_servers(room_id)

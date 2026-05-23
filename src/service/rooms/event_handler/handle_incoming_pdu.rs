@@ -361,7 +361,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			// then retry handle_incoming_pdu so the pipeline can complete.
 			let prev_event_id: Option<ruma::OwnedEventId> = value
 				.get("prev_events")
-				.and_then(ruma::CanonicalJsonValue::as_array)
+				.and_then(CanonicalJsonValue::as_array)
 				.and_then(|arr| arr.first())
 				.and_then(|v| serde_json::from_value(v.clone().into()).ok());
 

@@ -509,7 +509,7 @@ impl Service {
 			}
 
 			if !foundation_set {
-				if let Some((_, oldest_pdu, _)) = entries.get(oldest_event_id) {
+				if let Some((_, oldest_pdu)) = entries.get(oldest_event_id) {
 					let prev_events: Vec<_> = oldest_pdu.prev_events().collect();
 
 					if prev_events.is_empty() {
@@ -586,7 +586,7 @@ impl Service {
 					// Collect shorteventids for all state events in the timeline
 					let mut timeline_shorteventids: HashSet<u64> = HashSet::new();
 					for event_id in &sorted {
-						if let Some((_, pdu, _)) = entries.get(event_id) {
+						if let Some((_, pdu)) = entries.get(event_id) {
 							if pdu.state_key.is_some() {
 								let seid = self
 									.services
