@@ -489,65 +489,74 @@ where
 {
 	let conflicted_events: HashSet<_> = conflicted.values().flatten().cloned().collect();
 
-	let mut subgraph: HashSet<OwnedEventId> = HashSet::new();
-	let mut stack: Vec<Vec<OwnedEventId>> =
-		vec![conflicted_events.iter().cloned().collect::<Vec<_>>()];
-	let mut path: Vec<OwnedEventId> = Vec::new();
-	let mut seen: HashSet<OwnedEventId> = HashSet::new();
-	let mut missing: Vec<OwnedEventId> = Vec::new();
-	let next_event = |stack: &mut Vec<Vec<_>>, path: &mut Vec<_>| {
-		while stack.last().is_some_and(Vec::is_empty) {
-			stack.pop();
-			path.pop();
-		}
-		stack.last_mut().and_then(Vec::pop)
-	};
-	while let Some(event_id) = next_event(&mut stack, &mut path) {
-		path.push(event_id.clone());
-		if subgraph.contains(&event_id) {
-			if path.len() > 1 {
-				subgraph.extend(path.iter().cloned());
-			}
-			path.pop();
+	// FAST CONCURRENT DEPTH DISCOVERY
+	let depths: Vec<_> = conflicted_events
+		.iter()
+		.stream()
+		.broad_filter_map(async |id| {
+			let evt = fetch_event(id.clone()).await?;
+			Some(evt.depth())
+		})
+		.collect()
+		.await;
+
+	let min_depth = depths.into_iter().min().unwrap_or(ruma::UInt::MAX);
+
+	let mut backwards_reachable = HashSet::new();
+	let mut missing = Vec::new();
+	let mut queue: std::collections::VecDeque<OwnedEventId> = conflicted_events.iter().cloned().collect();
+	let mut children_map: HashMap<OwnedEventId, Vec<OwnedEventId>> = HashMap::new();
+
+	// 1. Backwards BFS (finds all ancestors down to min_depth)
+	while let Some(event_id) = queue.pop_front() {
+		if !backwards_reachable.insert(event_id.clone()) {
 			continue;
 		}
-		if conflicted_events.contains(&event_id) && path.len() > 1 {
-			subgraph.extend(path.iter().cloned());
-			path.pop();
-			continue;
-		}
-		if seen.contains(&event_id) {
-			path.pop();
-			continue;
-		}
-		trace!(event_id = event_id.as_str(), "fetching event for its prev events");
+
 		let evt = fetch_event(event_id.clone()).await;
 		if evt.is_none() {
-			missing.push(event_id.clone());
-			seen.insert(event_id);
-			path.pop();
+			missing.push(event_id);
 			continue;
 		}
 
 		let evt = evt.expect("checked");
-		stack.push(evt.prev_events().map(ToOwned::to_owned).collect());
-		seen.insert(event_id);
+		if evt.depth() < min_depth {
+			continue; // Cut off traversal if we go deeper than the conflicted set
+		}
+
+		for prev in evt.prev_events() {
+			let prev_owned = prev.to_owned();
+			// Store reverse edges for the forwards BFS
+			children_map.entry(prev_owned.clone()).or_default().push(event_id.clone());
+			queue.push_back(prev_owned);
+		}
 	}
+
+	// 2. Forwards BFS (finds descendants from the seeds)
+	let mut forwards_reachable = HashSet::new();
+	let mut f_queue: std::collections::VecDeque<OwnedEventId> = conflicted_events.iter().cloned().collect();
+
+	while let Some(event_id) = f_queue.pop_front() {
+		if !forwards_reachable.insert(event_id.clone()) {
+			continue;
+		}
+		if let Some(children) = children_map.get(&event_id) {
+			f_queue.extend(children.iter().cloned());
+		}
+	}
+
+	// 3. Subgraph is the linear intersection of paths
+	let subgraph: HashSet<OwnedEventId> = backwards_reachable
+		.into_iter()
+		.filter(|id| forwards_reachable.contains(id))
+		.collect();
+
 	if !missing.is_empty() {
 		info!(
 			n_missing = missing.len(),
-			n_seen = seen.len(),
 			n_subgraph = subgraph.len(),
 			"conflicted subgraph has missing prev_events (DAG holes)"
 		);
-		for (i, eid) in missing.iter().enumerate() {
-			if i < 25 {
-				info!(event_id = %eid, "missing prev_event dependency");
-			}
-		}
-		if missing.len() > 25 {
-			info!("... and {} more missing prev_events", missing.len().saturating_sub(25));
-		}
 	}
 	Some((subgraph, missing))
 }
@@ -966,10 +975,13 @@ where
 	trace!(set = ?auth_event_ids, "auth event IDs to fetch");
 
 	if let Some(batch_fetch) = event_batch_fetch {
-		// Filter out IDs we've already loaded into auth_events to avoid redundant
-		// RocksDB multi_get calls for create/PL events that appear in all three
-		// iterative_auth_check phases.
-		let ids: Vec<_> = auth_event_ids.iter().cloned().collect();
+		// Only batch fetch events that are NOT already in our DashMap cache!
+		let ids: Vec<_> = auth_event_ids
+			.iter()
+			.filter(|id| fetch_event((*id).clone()).now_or_never().flatten().is_none())
+			.cloned()
+			.collect();
+
 		if !ids.is_empty() {
 			let _ = batch_fetch(ids).await;
 		}
@@ -999,22 +1011,18 @@ where
 	trace!(map = ?auth_events.keys().collect::<Vec<_>>(), "fetched auth events");
 
 	let auth_events = &auth_events;
-	// NOTE: in state resolution v2.1, auth checks should start with an empty state
-	// map. It is the caller's job to do this. Previously, this function would
-	// force an empty state map in this case, and this resulted in power events
-	// going missing from the resolved state as they'd be discarded here.
 	let mut resolved_state = unconflicted_state;
+	let mut local_create_event: Option<E> = None;
 
 	// For room versions that use hashed room IDs (v12+), the create event is
 	// derived from the room_id on every event. Hoist this fetch out of the loop
 	// so we only do it once for the entire batch instead of once per event.
-	let mut cached_create_event: Option<E> = None;
 	if room_version.room_ids_as_hashes {
 		if let Some(first) = events_to_check.first() {
 			if let Some(room_id) = first.room_id_or_hash() {
 				let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
 				if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
-					cached_create_event = fetch_event(create_event_id.into()).await;
+					local_create_event = fetch_event(create_event_id.into()).await;
 				}
 			}
 		}
@@ -1055,7 +1063,7 @@ where
 				auth_state.push((event.event_type().with_state_key(""), event.clone()));
 			} else {
 				// Use the hoisted cached_create_event (fetched once before the loop).
-				if let Some(create_event) = &cached_create_event {
+				if let Some(create_event) = &local_create_event {
 					auth_state.push((
 						create_event.event_type().with_state_key(""),
 						create_event.clone(),
@@ -1173,12 +1181,16 @@ where
 		// the memoized create event (or discover it once from auth_state).
 		// This avoids redundant auth_state lookups on every iteration.
 		let create_event = if *event.event_type() == TimelineEventType::RoomCreate {
+			local_create_event = Some(event.clone()); // <-- Keep hoisted cache warm
 			event.clone()
-		} else if let Some(ref ce) = cached_create_event {
+		} else if let Some(ref ce) = local_create_event {
 			ce.clone()
 		} else {
 			match fetch_state(&StateEventType::RoomCreate, "").await {
-				| Some(ce) => ce,
+				| Some(ce) => {
+					local_create_event = Some(ce.clone());
+					ce
+				},
 				| None => {
 					warn!(
 						"event {} failed the authentication check (missing create event)",
