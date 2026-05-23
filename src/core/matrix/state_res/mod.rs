@@ -108,11 +108,11 @@ where
 	};
 	debug!(version = ?stateres_version, "State resolution starting");
 	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<Pdu>>>>> =
-		Arc::new(DashMap::new());
+		Arc::new(dashmap::DashMap::new());
 	let parsed_pl_cache: Arc<DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>> =
-		Arc::new(DashMap::new());
+		Arc::new(dashmap::DashMap::new());
 	let sender_pl_cache: Arc<DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>> =
-		Arc::new(DashMap::new());
+		Arc::new(dashmap::DashMap::new());
 
 	let cached_fetch = |id: OwnedEventId| {
 		let cache = Arc::clone(&fetch_cache);
@@ -1236,7 +1236,7 @@ where
 	}
 
 	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
-		Arc::new(DashMap::new());
+		Arc::new(dashmap::DashMap::new());
 	let cached_fetch = |id: OwnedEventId| {
 		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
 			Arc::clone(&fetch_cache);
@@ -1537,10 +1537,18 @@ mod tests {
 			.collect::<Vec<_>>();
 
 		let fetcher = |id| ready(events.get(&id).cloned());
-		let sorted_power_events =
-			super::reverse_topological_power_sort(power_events, &auth_chain, &fetcher, None)
-				.await
-				.unwrap();
+		let parsed_pl_cache = dashmap::DashMap::new();
+		let sender_pl_cache = dashmap::DashMap::new();
+		let sorted_power_events = super::reverse_topological_power_sort(
+			power_events,
+			&auth_chain,
+			&fetcher,
+			None,
+			&parsed_pl_cache,
+			&sender_pl_cache,
+		)
+		.await
+		.unwrap();
 
 		let resolved_power = super::iterative_auth_check(
 			&RoomVersion::V6,

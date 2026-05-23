@@ -368,6 +368,7 @@ async fn run_state_sets_mode(
 		&state_sets,
 		&auth_chain_sets,
 		&fetch_event,
+		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<Pdu>>>,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await
@@ -484,6 +485,7 @@ async fn run_dag_mode(
 		&state_sets,
 		&auth_chain_sets,
 		&fetch_event,
+		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<Pdu>>>,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await

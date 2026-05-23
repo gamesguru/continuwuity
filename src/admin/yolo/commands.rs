@@ -1253,46 +1253,54 @@ pub(super) async fn purge_outliers(
 			.await
 	};
 
-	let mut purged = 0_usize;
-	let mut skipped = 0_usize;
-	for event_id in &outliers {
-		if force {
-			// Force-remove: skip the timeline lookup entirely
-			self.services
-				.rooms
-				.outlier
-				.remove_outlier(event_id, None)
-				.await;
-			purged = purged.saturating_add(1);
-		} else if self
-			.services
-			.rooms
-			.timeline
-			.get_pdu_id(event_id)
-			.await
-			.is_ok()
-		{
-			// Duplicate: exists in both outlier and timeline tables
-			self.services
-				.rooms
-				.outlier
-				.remove_outlier(event_id, None)
-				.await;
-			purged = purged.saturating_add(1);
-		} else {
-			skipped = skipped.saturating_add(1);
-		}
+	let purged = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+	let skipped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+	let total_len = outliers.len();
 
-		let total = purged.saturating_add(skipped);
-		if total.is_multiple_of(10_000) && total > 0 {
-			info!(
-				"Purge progress: {purged} purged, {skipped} skipped of {} total",
-				outliers.len()
-			);
-		}
-	}
+	futures::stream::iter(outliers)
+		.for_each_concurrent(100, |event_id| {
+			let purged = std::sync::Arc::clone(&purged);
+			let skipped = std::sync::Arc::clone(&skipped);
+			async move {
+				if force {
+					self.services
+						.rooms
+						.outlier
+						.remove_outlier(&event_id, None)
+						.await;
+					purged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+				} else if self
+					.services
+					.rooms
+					.timeline
+					.get_pdu_id(&event_id)
+					.await
+					.is_ok()
+				{
+					// Duplicate: exists in both outlier and timeline tables
+					self.services
+						.rooms
+						.outlier
+						.remove_outlier(&event_id, None)
+						.await;
+					purged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+				} else {
+					skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+				}
 
-	self.write_str(&format!("Purged {purged} outliers, skipped {skipped} un-rescued outliers."))
+				let p = purged.load(std::sync::atomic::Ordering::Relaxed);
+				let s = skipped.load(std::sync::atomic::Ordering::Relaxed);
+				let total = p.saturating_add(s);
+				if total.is_multiple_of(10_000) && total > 0 {
+					info!("Purge progress: {p} purged, {s} skipped of {total_len} total");
+				}
+			}
+		})
+		.await;
+
+	let p = purged.load(std::sync::atomic::Ordering::Relaxed);
+	let s = skipped.load(std::sync::atomic::Ordering::Relaxed);
+	self.write_str(&format!("Purged {p} outliers, skipped {s} un-rescued outliers."))
 		.await
 }
 
