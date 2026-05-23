@@ -992,33 +992,30 @@ pub(super) async fn list_outliers(
 ) -> Result {
 	let limit = limit.unwrap_or(100);
 
-	let mut outliers: Vec<(OwnedEventId, PduEvent)> = if let Some(room) = room_id {
-		let room_id = self.services.rooms.alias.resolve(&room).await?;
-		self.services
-			.rooms
-			.outlier
-			.room_stream(&room_id)
-			.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
-				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
-				ready(sender_match)
-			})
-			.collect()
-			.await
-	} else {
-		// Global stream: cap at 10k to avoid OOM on large outlier sets (300k+).
-		// Room-specific queries above are uncapped for correct TS sorting.
-		self.services
-			.rooms
-			.outlier
-			.stream()
-			.filter(|(_event_id, pdu): &(OwnedEventId, PduEvent)| {
-				let sender_match = sender.as_ref().is_none_or(|s| pdu.sender() == s);
-				ready(sender_match)
-			})
-			.take(10_000)
-			.collect()
-			.await
-	};
+	let mut outliers: Vec<(OwnedEventId, PduEvent)> = Vec::new();
+	{
+		let resolved_room_id = match room_id {
+			| Some(room) => Some(self.services.rooms.alias.resolve(&room).await?),
+			| None => None,
+		};
+
+		let mut stream = if let Some(room) = &resolved_room_id {
+			self.services.rooms.outlier.room_stream(room).boxed()
+		} else {
+			self.services.rooms.outlier.stream().take(10_000).boxed()
+		};
+
+		let mut i = 0_usize;
+		while let Some((event_id, pdu)) = stream.next().await {
+			if sender.as_ref().is_none_or(|s| pdu.sender() == s) {
+				outliers.push((event_id, pdu));
+			}
+			i = i.saturating_add(1);
+			if i.is_multiple_of(10_000) {
+				tokio::task::yield_now().await;
+			}
+		}
+	}
 
 	// Sort by origin_server_ts (or in reverse, if requested)
 	outliers.sort_by(|(_, a), (_, b)| {
@@ -4661,9 +4658,6 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 
 		// Flush every 25 rooms to show live progress
 		if total_rooms.is_multiple_of(25) {
-			let progress =
-				format!("[{total_rooms}/{n_rooms}] {problem_rooms} problems found so far...\n");
-			self.write_str(&progress).await?;
 			if !output.is_empty() {
 				self.write_str(&output).await?;
 				output.clear();

@@ -249,6 +249,23 @@ impl Data {
 		select_ok([accepted, outlier]).await.map(at!(0))
 	}
 
+	pub(super) fn backup_pdu_to_outlier(&self, event_id: &EventId, json: &CanonicalJsonObject) {
+		self.eventid_outlierpdu
+			.raw_put(event_id.as_bytes(), Json(json));
+		// Use expected raw key format: room_id || 0xFF || event_id
+		let room_id = json
+			.get("room_id")
+			.and_then(|v| v.as_str())
+			.and_then(|s| RoomId::parse(s).ok());
+		if let Some(room_id) = room_id {
+			let mut key = room_id.as_bytes().to_vec();
+			key.push(0xFF);
+			key.extend_from_slice(event_id.as_bytes());
+			self.roomid_outliereventid
+				.raw_put::<&[u8], &[u8]>(&key, event_id.as_bytes());
+		}
+	}
+
 	pub(super) fn multi_get_pdus<'a, S>(
 		&'a self,
 		room_id: Option<&'a RoomId>,

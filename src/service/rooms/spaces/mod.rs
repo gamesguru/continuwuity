@@ -40,6 +40,7 @@ use crate::{Dep, rooms, sending};
 pub struct Service {
 	services: Services,
 	pub roomid_spacehierarchy_cache: Mutex<Cache>,
+	pub negative_cache_ts: Mutex<LruCache<OwnedRoomId, std::time::Instant>>,
 }
 
 struct Services {
@@ -70,6 +71,8 @@ pub enum Identifier<'a> {
 
 type Cache = LruCache<OwnedRoomId, Option<CachedSpaceHierarchySummary>>;
 
+const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
@@ -88,6 +91,7 @@ impl crate::Service for Service {
 				sending: args.depend::<sending::Service>("sending"),
 			},
 			roomid_spacehierarchy_cache: Mutex::new(LruCache::new(usize_from_f64(cache_size)?)),
+			negative_cache_ts: Mutex::new(LruCache::new(usize_from_f64(cache_size)?)),
 		}))
 	}
 
@@ -99,7 +103,10 @@ impl crate::Service for Service {
 		Ok(())
 	}
 
-	async fn clear_cache(&self) { self.roomid_spacehierarchy_cache.lock().await.clear(); }
+	async fn clear_cache(&self) {
+		self.roomid_spacehierarchy_cache.lock().await.clear();
+		self.negative_cache_ts.lock().await.clear();
+	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
@@ -138,23 +145,6 @@ pub async fn get_summary_and_children_local(
 
 			return Ok(Some(accessibility));
 		},
-	}
-
-	// For rooms without local members, skip DB synthesis—our local
-	// room_joined_count can drift from the authoritative value. Fall
-	// through to federation which will populate the cache for next time.
-	let has_local_members = self
-		.services
-		.state_cache
-		.active_local_users_in_room(current_room)
-		.boxed()
-		.next()
-		.await
-		.is_some();
-
-	if !has_local_members {
-		debug!(room_id = %current_room, "spaces: skipping local summary (no active local members, deferring to federation)");
-		return Ok(None);
 	}
 
 	let children_pdus: Vec<_> = self
@@ -248,6 +238,10 @@ async fn get_summary_and_children_federation(
 	}
 
 	let Some(response) = response else {
+		self.negative_cache_ts
+			.lock()
+			.await
+			.insert(current_room.to_owned(), std::time::Instant::now());
 		return Ok(None);
 	};
 
@@ -344,12 +338,22 @@ pub async fn get_summary_and_children_client(
 ) -> Result<Option<SummaryAccessibility>> {
 	let identifier = Identifier::UserId(user_id);
 
-	// Try local (from cache; skip DB synthesis if no active local members)
+	// Try local (from cache or DB)
 	if let Ok(Some(response)) = self
 		.get_summary_and_children_local(current_room, &identifier)
 		.await
 	{
 		return Ok(Some(response));
+	}
+
+	if self
+		.negative_cache_ts
+		.lock()
+		.await
+		.get_mut(current_room)
+		.is_some_and(|ts| ts.elapsed() < NEGATIVE_CACHE_TTL)
+	{
+		return Ok(None);
 	}
 
 	// Try federation (authoritative for rooms we merely observe)

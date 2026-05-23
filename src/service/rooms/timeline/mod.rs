@@ -235,39 +235,24 @@ impl Service {
 		// on-demand during re-insertion to avoid holding the full JSON for every event
 		// in memory simultaneously (causes OOM on large rooms).
 		let mut entries: HashMap<OwnedEventId, (PduCount, PduEvent)> = HashMap::new();
-		let mut dropped = 0_usize;
+		let dropped = 0_usize;
 		let mut tail_min_count: Option<PduCount> = None;
 
 		if let Some(limit) = tail {
 			info!("reorder_timeline: reading last {limit} PDUs from timeline (tail mode)...");
 			// Collect in reverse and record the minimum count seen (oldest in window)
-			let mut min_count = PduCount::max();
+			let min_count = PduCount::max();
 			let mut rev = Box::pin(self.pdus_rev(room_id, None));
 			let mut collected = 0_usize;
 			while let Some((count, pdu)) = rev.try_next().await? {
 				if collected >= limit {
 					break;
 				}
-				// Verify JSON exists now; we'll re-fetch it during insertion to avoid
-				// holding all JSON in memory simultaneously.
-				let json_exists = self
-					.db
-					.get_non_outlier_pdu_json(&pdu.event_id)
-					.await
-					.is_ok() || self.db.get_pdu_json(&pdu.event_id).await.is_ok();
-				if !json_exists {
-					warn!(
-						event_id = %pdu.event_id,
-						"PDU in timeline has no JSON anywhere — cannot reorder, skipping"
-					);
-					dropped = dropped.saturating_add(1);
-					continue;
-				}
-				if count < min_count {
-					min_count = count;
-				}
 				entries.insert(pdu.event_id.clone(), (count, pdu));
 				collected = collected.saturating_add(1);
+				if collected.is_multiple_of(10000) {
+					tokio::task::yield_now().await;
+				}
 			}
 			if min_count != PduCount::max() {
 				tail_min_count = Some(min_count);
@@ -279,35 +264,11 @@ impl Service {
 			let pdus = pdus_backfill.chain(pdus_normal);
 			pin_mut!(pdus);
 			while let Some((count, pdu)) = pdus.try_next().await? {
-				// Verify JSON exists; we re-fetch it during insertion to avoid holding
-				// the full JSON for all events in memory simultaneously.
-				let json_ok = self
-					.db
-					.get_non_outlier_pdu_json(&pdu.event_id)
-					.await
-					.is_ok();
-				if !json_ok {
-					match self.db.get_pdu_json(&pdu.event_id).await {
-						| Ok(_) => {
-							warn!(
-								event_id = %pdu.event_id,
-								"PDU in timeline had no non-outlier JSON, recovered from outlier table"
-							);
-						},
-						| Err(_) => {
-							warn!(
-								event_id = %pdu.event_id,
-								"PDU in timeline has no JSON anywhere — cannot reorder, skipping"
-							);
-							dropped = dropped.saturating_add(1);
-							continue;
-						},
-					}
-				}
 				let eid = pdu.event_id.clone();
 				entries.insert(eid, (count, pdu));
 				if entries.len().is_multiple_of(10000) {
 					info!("reorder_timeline: read {} PDUs so far...", entries.len());
+					tokio::task::yield_now().await;
 				}
 			}
 		}
@@ -354,6 +315,23 @@ impl Service {
 		let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
 			.await
 			.map_err(|e| err!(Database("Failed to sort timeline: {e:?}")))?;
+
+		// BACKUP PHASE: Safely backup all JSON to the outlier tables BEFORE deleting
+		// them from the timeline. This prevents data loss since
+		// remove_from_timeline_by_id deletes the pduid_pdu entries that exclusively
+		// hold normal event JSON.
+		info!(
+			"reorder_timeline: safely backing up {} events to outlier tables before deletion...",
+			entries.len()
+		);
+		for (event_id, (old_count, _)) in &entries {
+			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
+			if let Ok(json) = self.db.get_pdu_json_from_id(&old_pdu_id).await {
+				self.db.backup_pdu_to_outlier(event_id, &json);
+			} else {
+				warn!("reorder_timeline: could not find JSON for {event_id} in pduid_pdu!");
+			}
+		}
 
 		info!("reorder_timeline: sorted {} events, removing old entries...", sorted.len());
 		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
