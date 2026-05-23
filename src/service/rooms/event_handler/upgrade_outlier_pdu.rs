@@ -103,14 +103,45 @@ where
 
 	if state_at_incoming_event.is_none() {
 		if !skip_soft_fail {
-			let _ = self.dag_healer.send(super::HealRequest::MissingState {
-				room_id: room_id.to_owned(),
-				event_id: incoming_pdu.event_id().to_owned(),
-				origin: origin.to_owned(),
-				waiting_pdu: None,
-			});
+			// Local state is unavailable — prev_events are not yet in DB or their
+			// state hashes have not been computed. Attempt a synchronous /state_ids
+			// fetch from the sending server BEFORE queuing the async DAG healer.
+			//
+			// The healer fires asynchronously (after a delay), which races with the
+			// sending server's lifetime: in Complement tests the fake federation
+			// server shuts down when the test times out, so the healer's /state_ids
+			// calls always arrive too late and "all servers failed". Fetching inline
+			// here gives us a shot while the sender is still alive.
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				%origin,
+				"local state unavailable; attempting synchronous /state_ids fetch"
+			);
+			match self
+				.fetch_state(origin, create_event, room_id, incoming_pdu.event_id(), false)
+				.await
+			{
+				| Ok(Some(fetched_state)) => {
+					info!(
+						target: "state_res_debug",
+						event_id = %incoming_pdu.event_id,
+						n_state = fetched_state.len(),
+						"fetched state via /state_ids; proceeding with auth check"
+					);
+					state_at_incoming_event = Some(fetched_state);
+				},
+				| Ok(None) | Err(_) => {
+					// /state_ids also failed — hand off to the healer for a later retry.
+					let _ = self.dag_healer.send(super::HealRequest::MissingState {
+						room_id: room_id.to_owned(),
+						event_id: incoming_pdu.event_id().to_owned(),
+						origin: origin.to_owned(),
+						waiting_pdu: None,
+					});
 
-			return Err(conduwuit::Error::MissingAuthEvents(vec![]));
+					return Err(conduwuit::Error::MissingAuthEvents(vec![]));
+				},
+			}
 		}
 	}
 

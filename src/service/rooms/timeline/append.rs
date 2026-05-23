@@ -394,10 +394,22 @@ where
 				}
 			},
 			| Relation::Thread(thread) => {
-				self.services
+				if let Err(e) = self
+					.services
 					.threads
 					.add_to_thread(&thread.event_id, pdu)
-					.await?;
+					.await
+				{
+					// Thread root may not be in the timeline yet (e.g. during
+					// rescue-room reorder or when the root is itself an outlier).
+					// Store the PDU anyway; thread metadata will be missing until
+					// the root is also promoted to the timeline.
+					info!(
+						?e,
+						event_id = %pdu.event_id,
+						"failed to add event to thread (root not yet in timeline)"
+					);
+				}
 			},
 			| _ => {}, // TODO: Aggregate other types
 		}
