@@ -393,7 +393,7 @@ where
 		}
 
 		let new_room_state = {
-			let t = std::time::Instant::now();
+			let t = Instant::now();
 			info!(
 				event_id = %incoming_pdu.event_id(),
 				%room_id,

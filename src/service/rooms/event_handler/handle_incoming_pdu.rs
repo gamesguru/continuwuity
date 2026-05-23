@@ -4,8 +4,8 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer, err,
-	implement, info, trace, utils::stream::IterStream, warn,
+	Err, Event, Result, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer, err, implement,
+	info, trace, utils::stream::IterStream, warn,
 };
 use futures::{
 	FutureExt, TryFutureExt, TryStreamExt,
@@ -14,7 +14,7 @@ use futures::{
 use ruma::{
 	CanonicalJsonValue, EventId, OwnedUserId, RoomId, ServerName, UserId,
 	events::{
-		StateEventType, TimelineEventType,
+		StateEventType,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
 };
