@@ -96,6 +96,7 @@ where
 							once(id.as_ref()),
 							Some(create_event),
 							room_id,
+							false,
 						)
 						.await;
 					(id, res)

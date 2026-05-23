@@ -56,6 +56,10 @@ pub type TypeStateKey = (StateEventType, StateKey);
 
 type Result<T, E = Error> = crate::Result<T, E>;
 
+/// Hard cap on the conflicted set size during state resolution.
+/// If the conflicted set exceeds this, we bail out immediately.
+const STATE_RES_MAX_CONFLICTED: usize = 200_000;
+
 /// Resolve sets of state events as they come in.
 ///
 /// Internally `StateResolution` builds a graph and an auth chain to allow for
@@ -226,6 +230,23 @@ where
 			count = all_conflicted.len(),
 			"Conflicted set exceeds 5k events — state resolution may be slow"
 		);
+	}
+
+	// Hard cap: if the conflicted set is truly enormous, full iterative auth check
+	// will take minutes (226s observed in production for 16k events). Rather than
+	// blocking the federation executor, bail out early and return just the
+	// unconflicted state. The incoming PDU will be soft-failed and can be retried
+	// once the room DAG is healed (e.g. via `yolo rescue-room`).
+	if all_conflicted.len() > STATE_RES_MAX_CONFLICTED {
+		warn!(
+			count = all_conflicted.len(),
+			limit = STATE_RES_MAX_CONFLICTED,
+			"Conflicted set exceeds hard cap -- skipping full state resolution to prevent \
+			 federation stall. Returning unconflicted state only. Run `yolo rescue-room` to \
+			 repair this room's DAG."
+		);
+		// TODO: revert this for something better
+		return Ok(unconflicted);
 	}
 
 	// We used to check that all events are events from the correct room
@@ -468,15 +489,6 @@ where
 {
 	let conflicted_events: HashSet<_> = conflicted.values().flatten().cloned().collect();
 
-	let mut min_depth = ruma::UInt::MAX;
-	for event_id in &conflicted_events {
-		if let Some(evt) = fetch_event(event_id.clone()).await {
-			if evt.depth() < min_depth {
-				min_depth = evt.depth();
-			}
-		}
-	}
-
 	let mut subgraph: HashSet<OwnedEventId> = HashSet::new();
 	let mut stack: Vec<Vec<OwnedEventId>> =
 		vec![conflicted_events.iter().cloned().collect::<Vec<_>>()];
@@ -518,12 +530,6 @@ where
 		}
 
 		let evt = evt.expect("checked");
-		if evt.depth() < min_depth {
-			seen.insert(event_id.clone());
-			path.pop();
-			continue;
-		}
-
 		stack.push(evt.prev_events().map(ToOwned::to_owned).collect());
 		seen.insert(event_id);
 	}

@@ -149,6 +149,7 @@ pub(super) async fn audit_auth_chain(
 			missing.iter().map(AsRef::as_ref),
 			None::<&PduEvent>,
 			&room_id,
+			false, // TODO: fetch doesn't skip signature verification currently
 		)
 		.await;
 

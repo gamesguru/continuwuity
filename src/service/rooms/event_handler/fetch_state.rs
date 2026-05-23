@@ -24,6 +24,7 @@ pub(super) async fn fetch_state<Pdu>(
 	create_event: &Pdu,
 	room_id: &RoomId,
 	event_id: &EventId,
+	skip_sig_verify: bool,
 ) -> Result<Option<HashMap<u64, OwnedEventId>>>
 where
 	Pdu: Event + Send + Sync,
@@ -78,14 +79,26 @@ where
 	debug!("Fetching auth chain events to validate state events");
 	let auth_chain_ids = res.auth_chain_ids.iter().map(AsRef::as_ref);
 	let _auth_chain = self
-		.fetch_and_handle_outliers(origin, auth_chain_ids, Some(create_event), room_id)
+		.fetch_and_handle_outliers(
+			origin,
+			auth_chain_ids,
+			Some(create_event),
+			room_id,
+			skip_sig_verify,
+		)
 		.boxed()
 		.await;
 
 	debug!("Fetching state events");
 	let state_ids = res.pdu_ids.iter().map(AsRef::as_ref);
 	let state_vec = self
-		.fetch_and_handle_outliers(origin, state_ids, Some(create_event), room_id)
+		.fetch_and_handle_outliers(
+			origin,
+			state_ids,
+			Some(create_event),
+			room_id,
+			skip_sig_verify,
+		)
 		.boxed()
 		.await;
 

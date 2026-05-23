@@ -24,6 +24,7 @@ pub async fn fetch_and_handle_outliers<'a, Pdu, Events>(
 	events: Events,
 	create_event: Option<&'a Pdu>,
 	room_id: &'a RoomId,
+	skip_sig_verify: bool,
 ) -> Vec<(PduEvent, Option<BTreeMap<String, CanonicalJsonValue>>)>
 where
 	Pdu: Event + Send + Sync,
@@ -386,7 +387,7 @@ where
 				room_id,
 				value.clone(),
 				true,
-				false, // skip_sig_verify
+				skip_sig_verify,
 			))
 			.await
 			{

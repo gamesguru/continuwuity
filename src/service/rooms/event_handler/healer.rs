@@ -99,6 +99,7 @@ pub(crate) async fn healer_worker(
 							chunk.iter().map(AsRef::as_ref),
 							Some(&create_event),
 							&room_id,
+							false, // TODO: flag for skip_sig_verify
 						)
 						.await;
 
@@ -149,7 +150,7 @@ pub(crate) async fn healer_worker(
 					},
 				};
 				let _ = service
-					.fetch_state(&origin, &create_event, &room_id, &event_id)
+					.fetch_state(&origin, &create_event, &room_id, &event_id, false)
 					.await;
 			},
 		}
