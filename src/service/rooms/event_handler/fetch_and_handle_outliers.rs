@@ -411,7 +411,7 @@ where
 						suspended = true;
 						unprocessed.push((next_id, value));
 					} else {
-						info!(target: "auth_chain", "Authentication of event {next_id} failed: {e:?}");
+						warn!(target: "auth_chain", "Permanently backing off event {next_id} after auth failure: {e:?}");
 						back_off(next_id);
 					},
 			}

@@ -71,7 +71,7 @@ where
 		.contains(&event_id.to_owned())
 	{
 		// Configured exception — skip signature verification for known-bad events
-		conduwuit::warn!(
+		conduwuit::info!(
 			"Bypassing signature verification for configured exception event: {event_id}"
 		);
 		value

@@ -134,7 +134,7 @@ pub async fn validate_and_add_event_id(
 		.bypassed_signature_events
 		.contains(&event_id)
 	{
-		conduwuit::warn!(
+		conduwuit::info!(
 			"Bypassing signature verification for configured exception event: {event_id}"
 		);
 	} else if let Err(e) = self.verify_event(&value, Some(room_version)).await {
@@ -173,7 +173,7 @@ pub async fn validate_and_add_event_id_no_fetch(
 		.bypassed_signature_events
 		.contains(&event_id)
 	{
-		conduwuit::warn!(
+		conduwuit::info!(
 			"Bypassing signature verification for configured exception event: {event_id}"
 		);
 	} else if let Err(e) = self.verify_event(&value, Some(room_version)).await {
