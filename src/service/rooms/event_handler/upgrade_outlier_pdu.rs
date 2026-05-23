@@ -295,27 +295,58 @@ where
 	// soft-failed ones. State resolution merges forks deterministically —
 	// a soft-failed event may carry state from a fork we haven't seen,
 	// and feeding it into resolve_state heals local drift.
-	let state_delta_opt = self
-		.calculate_state_delta(&incoming_pdu, state_at_incoming_event, room_id, &room_version_id)
-		.await?;
+	let mut state_delta_opt;
+	let state_lock;
+	loop {
+		let current_sstatehash = self
+			.services
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.unwrap_or(0);
 
-	// Calculate forward extremities AFTER the soft-fail evaluation.
-	// Per spec, soft-failed events are NOT added as forward extremities.
-	trace!("Appending pdu to timeline");
+		state_delta_opt = self
+			.calculate_state_delta(
+				&incoming_pdu,
+				state_at_incoming_event.clone(),
+				room_id,
+				&room_version_id,
+			)
+			.await?;
 
-	// NOW lock the room!
-	trace!(room_id = %room_id, "Locking the room");
-	let state_lock = self.services.state.mutex.lock(room_id).await;
+		// Calculate forward extremities AFTER the soft-fail evaluation.
+		// Per spec, soft-failed events are NOT added as forward extremities.
+		trace!("Appending pdu to timeline");
 
-	// Re-check if the PDU was added to the timeline while we were doing CPU-bound
-	// state res
-	if let Ok(pduid) = self
-		.services
-		.timeline
-		.get_pdu_id(incoming_pdu.event_id())
-		.await
-	{
-		return Ok(Some(pduid));
+		// NOW lock the room!
+		trace!(room_id = %room_id, "Locking the room");
+		let lock = self.services.state.mutex.lock(room_id).await;
+
+		// Re-check if the PDU was added to the timeline while we were doing CPU-bound
+		// state res
+		if let Ok(pduid) = self
+			.services
+			.timeline
+			.get_pdu_id(incoming_pdu.event_id())
+			.await
+		{
+			return Ok(Some(pduid));
+		}
+
+		let new_sstatehash = self
+			.services
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.unwrap_or(0);
+		if current_sstatehash != new_sstatehash {
+			debug_warn!(event_id = %incoming_pdu.event_id(), %room_id, "Room state changed during resolution, retrying OCC");
+			drop(lock);
+			continue;
+		}
+
+		state_lock = lock;
+		break;
 	}
 
 	if let Some(HashSetCompressStateEvent { shortstatehash, added, removed }) = state_delta_opt {

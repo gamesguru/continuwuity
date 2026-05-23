@@ -510,6 +510,12 @@ where
 	// Backwards BFS (ancestors down to min_depth w/ concurrent layer-by-layer
 	// fetch)
 	while !current_layer.is_empty() {
+		// Filter out nodes we've already visited to prevent redundant fetches/edges
+		current_layer.retain(|id| !backwards_reachable.contains(id));
+		if current_layer.is_empty() {
+			break;
+		}
+
 		let mut next_layer = HashSet::new();
 
 		// Fetch all events in the current layer concurrently
