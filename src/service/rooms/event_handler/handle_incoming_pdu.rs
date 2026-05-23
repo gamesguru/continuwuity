@@ -341,9 +341,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		| Ok(res) => res,
 		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
 			// Auth events for this PDU are not yet in our database. Store the
-			// raw PDU as an outlier so it is available once auth events arrive,
-			// then queue a background fetch of the missing events. The /send/
-			// endpoint will return 200 so the remote doesn't retry endlessly.
+			// raw PDU as an outlier so it is available once auth events arrive.
 			// NOTE: fetch_state (/state_ids) must NOT be called synchronously
 			// here — it blocks the federation transaction handler for the full
 			// round-trip duration, starving the async runtime.
@@ -356,10 +354,35 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			self.services
 				.outlier
 				.add_pdu_outlier(event_id, &value, Some(room_id));
-			let _ = self.dag_healer.send(super::HealRequest::MissingEvents {
-				room_id: room_id.to_owned(),
-				missing_events: missing,
-			});
+
+			// Try to use a prev_event as the /state_ids target. The state at
+			// a prev_event includes the auth events we need for this PDU. The
+			// healer will fetch /state_ids, then fetch the prev_event itself,
+			// then retry handle_incoming_pdu so the pipeline can complete.
+			let prev_event_id: Option<ruma::OwnedEventId> = value
+				.get("prev_events")
+				.and_then(ruma::CanonicalJsonValue::as_array)
+				.and_then(|arr| arr.first())
+				.and_then(|v| serde_json::from_value(v.clone().into()).ok());
+
+			if let Some(prev_id) = prev_event_id {
+				let _ = self.dag_healer.send(super::HealRequest::MissingState {
+					room_id: room_id.to_owned(),
+					event_id: prev_id,
+					origin: origin.to_owned(),
+					waiting_pdu: Some(Box::new(super::WaitingPdu {
+						event_id: event_id.to_owned(),
+						value,
+						origin: origin.to_owned(),
+					})),
+				});
+			} else {
+				// No prev_events (unusual) — fall back to fetching missing auth events.
+				let _ = self.dag_healer.send(super::HealRequest::MissingEvents {
+					room_id: room_id.to_owned(),
+					missing_events: missing,
+				});
+			}
 			return Ok(None);
 		},
 		| Err(e) => return Err(e),

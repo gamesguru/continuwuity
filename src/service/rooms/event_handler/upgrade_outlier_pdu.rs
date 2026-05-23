@@ -107,6 +107,7 @@ where
 				room_id: room_id.to_owned(),
 				event_id: incoming_pdu.event_id().to_owned(),
 				origin: origin.to_owned(),
+				waiting_pdu: None,
 			});
 
 			return Err(conduwuit::Error::MissingAuthEvents(vec![]));

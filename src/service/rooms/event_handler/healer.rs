@@ -132,7 +132,7 @@ pub(crate) async fn healer_worker(
 					);
 				}
 			},
-			| HealRequest::MissingState { room_id, event_id, origin } => {
+			| HealRequest::MissingState { room_id, event_id, origin, waiting_pdu } => {
 				debug!(room_id = ?room_id, event_id = ?event_id, "DAG Healer fetching missing state for event");
 				let create_event = match service
 					.services
@@ -152,6 +152,40 @@ pub(crate) async fn healer_worker(
 				let _ = service
 					.fetch_state(&origin, &create_event, &room_id, &event_id, false)
 					.await;
+
+				// If a PDU was suspended waiting for this state, fetch the state-target
+				// event itself (its auth events are now available from /state_ids),
+				// then retry the waiting PDU through the full incoming pipeline.
+				if let Some(waiting) = waiting_pdu {
+					// Fetch event_id (e.g. Eve 249) — its auth events are now in the DB
+					// from the /state_ids response above.
+					service
+						.fetch_and_handle_outliers(
+							&origin,
+							std::iter::once(event_id.as_ref()),
+							Some(&create_event),
+							&room_id,
+							false,
+						)
+						.await;
+
+					// Retry the original PDU. Now that event_id (its auth event / prev_event)
+					// is stored, handle_incoming_pdu should be able to proceed past
+					// handle_outlier_pdu and reach upgrade_outlier_to_timeline_pdu.
+					info!(
+						event_id = %waiting.event_id,
+						"DAG Healer retrying PDU after state+auth fetch"
+					);
+					let _ = service
+						.handle_incoming_pdu(
+							&waiting.origin,
+							&room_id,
+							&waiting.event_id,
+							waiting.value,
+							true,
+						)
+						.await;
+				}
 			},
 		}
 

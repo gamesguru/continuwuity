@@ -15,7 +15,7 @@ mod state_at_incoming;
 pub mod upgrade_outlier_pdu;
 
 use std::{
-	collections::HashMap,
+	collections::{BTreeMap, HashMap},
 	fmt::Write,
 	sync::{
 		Arc,
@@ -31,7 +31,7 @@ use conduwuit::{
 };
 use futures::StreamExt;
 use ruma::{
-	OwnedEventId, OwnedRoomId, RoomId, RoomVersionId,
+	CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedServerName, RoomId, RoomVersionId,
 	events::room::create::RoomCreateEventContent,
 };
 
@@ -47,6 +47,16 @@ pub struct Service {
 	services: Services,
 }
 
+/// A PDU that was stored as an outlier because its auth events were missing.
+/// Carried by `HealRequest::MissingState` so the healer can retry it after
+/// fetching the remote state via /state_ids.
+#[derive(Debug)]
+pub struct WaitingPdu {
+	pub event_id: OwnedEventId,
+	pub value: BTreeMap<String, CanonicalJsonValue>,
+	pub origin: OwnedServerName,
+}
+
 #[derive(Debug)]
 pub enum HealRequest {
 	MissingEvents {
@@ -55,8 +65,13 @@ pub enum HealRequest {
 	},
 	MissingState {
 		room_id: OwnedRoomId,
+		/// The event to call /state_ids at (usually the prev_event of
+		/// waiting_pdu).
 		event_id: OwnedEventId,
-		origin: ruma::OwnedServerName,
+		origin: OwnedServerName,
+		/// If set, after fetching state the healer will also fetch `event_id`
+		/// directly and then retry handle_incoming_pdu for this PDU.
+		waiting_pdu: Option<Box<WaitingPdu>>,
 	},
 }
 
