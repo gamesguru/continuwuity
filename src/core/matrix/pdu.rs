@@ -144,6 +144,9 @@ impl Event for Pdu {
 	}
 
 	#[inline]
+	fn depth(&self) -> ruma::UInt { self.depth }
+
+	#[inline]
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
 		self.prev_events.iter().map(AsRef::as_ref)
 	}
@@ -210,6 +213,9 @@ impl Event for &Pdu {
 	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch {
 		MilliSecondsSinceUnixEpoch(self.origin_server_ts)
 	}
+
+	#[inline]
+	fn depth(&self) -> ruma::UInt { self.depth }
 
 	#[inline]
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {

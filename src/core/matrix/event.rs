@@ -161,6 +161,9 @@ pub trait Event: Clone + Debug {
 	/// The time of creation on the originating server.
 	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch;
 
+	/// The depth of this event.
+	fn depth(&self) -> ruma::UInt;
+
 	/// The events before this event.
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_;
 

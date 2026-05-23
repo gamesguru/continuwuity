@@ -449,6 +449,16 @@ where
 	E: Event + Send + Sync,
 {
 	let conflicted_events: HashSet<_> = conflicted.values().flatten().cloned().collect();
+
+	let mut min_depth = ruma::UInt::MAX;
+	for event_id in &conflicted_events {
+		if let Some(evt) = fetch_event(event_id.clone()).await {
+			if evt.depth() < min_depth {
+				min_depth = evt.depth();
+			}
+		}
+	}
+
 	let mut subgraph: HashSet<OwnedEventId> = HashSet::new();
 	let mut stack: Vec<Vec<OwnedEventId>> =
 		vec![conflicted_events.iter().cloned().collect::<Vec<_>>()];
@@ -473,6 +483,8 @@ where
 		}
 		if conflicted_events.contains(&event_id) && path.len() > 1 {
 			subgraph.extend(path.iter().cloned());
+			path.pop();
+			continue;
 		}
 		if seen.contains(&event_id) {
 			path.pop();
@@ -486,12 +498,15 @@ where
 			path.pop();
 			continue;
 		}
-		stack.push(
-			evt.expect("checked")
-				.prev_events()
-				.map(ToOwned::to_owned)
-				.collect(),
-		);
+
+		let evt = evt.expect("checked");
+		if evt.depth() < min_depth {
+			seen.insert(event_id.clone());
+			path.pop();
+			continue;
+		}
+
+		stack.push(evt.prev_events().map(ToOwned::to_owned).collect());
 		seen.insert(event_id);
 	}
 	if !missing.is_empty() {
