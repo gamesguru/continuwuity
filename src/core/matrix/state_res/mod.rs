@@ -106,23 +106,26 @@ where
 	debug!(version = ?stateres_version, "State resolution starting");
 	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<Pdu>>>>> =
 		Arc::new(DashMap::new());
-	let _parsed_pl_cache: Arc<DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>> =
+	let parsed_pl_cache: Arc<DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>> =
+		Arc::new(DashMap::new());
+	let sender_pl_cache: Arc<DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>> =
 		Arc::new(DashMap::new());
 
 	let cached_fetch = |id: OwnedEventId| {
 		let cache = Arc::clone(&fetch_cache);
 		async move {
-			if let Some(cell) = cache.get(&id) {
-				return cell
-					.get_or_init(|| async { event_fetch(id.clone()).await })
-					.await
-					.clone();
-			}
-			let cell = cache
-				.entry(id.clone())
-				.or_insert_with(|| Arc::new(OnceCell::new()))
-				.value()
-				.clone();
+			let cell = {
+				if let Some(cell_ref) = cache.get(&id) {
+					Arc::clone(cell_ref.value())
+				} else {
+					Arc::clone(
+						cache
+							.entry(id.clone())
+							.or_insert_with(|| Arc::new(OnceCell::new()))
+							.value(),
+					)
+				}
+			};
 			cell.get_or_init(|| async { event_fetch(id).await })
 				.await
 				.clone()
@@ -193,7 +196,7 @@ where
 		// non-state events (e.g. m.room.message) which lack a state_key; these must
 		// be excluded since iterative_auth_check requires all events to have one.
 		.broad_filter_map(async |id| {
-			let ev = event_fetch(id.clone()).await?;
+			let ev = cached_fetch(id.clone()).await?;
 			ev.state_key().is_some().then_some(id)
 		})
 		.collect()
@@ -234,7 +237,7 @@ where
 		.iter()
 		.stream()
 		.wide_filter_map(async |id| {
-			let ev = event_fetch(id.clone()).await?;
+			let ev = cached_fetch(id.clone()).await?;
 			let dominated = matches!(
 				ev.event_type(),
 				TimelineEventType::RoomPowerLevels
@@ -259,8 +262,10 @@ where
 	let sorted_pl_events = reverse_topological_power_sort(
 		conflicted_pl_events,
 		&all_conflicted,
-		&event_fetch,
+		&cached_fetch,
 		None, // Bootstrap mode
+		&parsed_pl_cache,
+		&sender_pl_cache,
 	)
 	.await?;
 
@@ -268,7 +273,7 @@ where
 		&room_version,
 		sorted_pl_events.iter().stream().map(AsRef::as_ref),
 		initial_state.clone(),
-		&event_fetch,
+		&cached_fetch,
 	)
 	.await?;
 
@@ -279,7 +284,7 @@ where
 	let power_levels_ty_sk = (StateEventType::RoomPowerLevels, StateKey::new());
 	if let Some(pl_event_id) = partially_resolved_pl_state.get(&power_levels_ty_sk) {
 		debug!(%pl_event_id, "selected global PL event");
-		if let Some(pl_event) = event_fetch(pl_event_id.clone()).await {
+		if let Some(pl_event) = cached_fetch(pl_event_id.clone()).await {
 			if let Ok(c) = from_json_str::<PowerLevelsContentFields>(pl_event.content().get()) {
 				global_pl_context = Some(c);
 			} else {
@@ -298,7 +303,7 @@ where
 		.iter()
 		.stream()
 		.wide_filter_map(async |id| {
-			is_power_event_id(id, &event_fetch)
+			is_power_event_id(id, &cached_fetch)
 				.await
 				.then_some(id.clone())
 		})
@@ -310,8 +315,10 @@ where
 	let sorted_control_levels = reverse_topological_power_sort(
 		control_events,
 		&all_conflicted,
-		&event_fetch,
+		&cached_fetch,
 		global_pl_context.as_ref(),
+		&parsed_pl_cache,
+		&sender_pl_cache,
 	)
 	.await?;
 
@@ -337,7 +344,7 @@ where
 		&room_version,
 		sorted_control_levels.iter().stream().map(AsRef::as_ref),
 		initial_state,
-		&event_fetch,
+		&cached_fetch,
 	)
 	.await?;
 
@@ -369,7 +376,7 @@ where
 	trace!(event_id = ?power_event, "power event");
 
 	let sorted_left_events =
-		mainline_sort(&events_to_resolve, power_event.cloned(), &event_fetch).await?;
+		mainline_sort(&events_to_resolve, power_event.cloned(), &cached_fetch).await?;
 
 	trace!(list = ?sorted_left_events, "events left, sorted, running iterative auth check");
 
@@ -377,7 +384,7 @@ where
 		&room_version,
 		sorted_left_events.iter().stream().map(AsRef::as_ref),
 		resolved_control, // The control events are added to the final resolved state
-		&event_fetch,
+		&cached_fetch,
 	)
 	.await?;
 
@@ -537,6 +544,14 @@ where
 	Id: Clone + Eq + Hash + Send + Sync + 'a,
 	Hasher: BuildHasher + Send + Sync,
 {
+	if auth_chain_sets.len() == 2 {
+		let diff: Vec<Id> = auth_chain_sets[0]
+			.symmetric_difference(&auth_chain_sets[1])
+			.cloned()
+			.collect();
+		return futures::stream::iter(diff).boxed();
+	}
+
 	let num_sets = auth_chain_sets.len();
 	let mut id_counts: HashMap<&'a Id, usize> = HashMap::new(); // Borrowed!
 	for id in auth_chain_sets.iter().flatten() {
@@ -549,6 +564,7 @@ where
 		.filter(move |&(_id, count)| count < num_sets)
 		.map(|(id, _count)| id.clone())
 		.stream()
+		.boxed()
 }
 
 /// Events are sorted from "earliest" to "latest".
@@ -565,6 +581,8 @@ async fn reverse_topological_power_sort<E, F, Fut>(
 	auth_diff: &HashSet<OwnedEventId>,
 	fetch_event: &F,
 	global_pl_context: Option<&PowerLevelsContentFields>,
+	parsed_pl_cache: &DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>,
+	sender_pl_cache: &DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>,
 ) -> Result<Vec<OwnedEventId>>
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
@@ -578,12 +596,6 @@ where
 		add_event_and_auth_chain_to_graph(&mut graph, event_id, auth_diff, fetch_event).await;
 	}
 
-	let parsed_pl_cache: Arc<DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>> =
-		Arc::new(DashMap::new());
-
-	// This is used in the `key_fn` passed to the lexico_topo_sort fn
-	let sender_pl_cache: Arc<DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>> =
-		Arc::new(DashMap::new());
 	let event_to_pl: HashMap<_, _> = graph
 		.keys()
 		.cloned()
@@ -791,14 +803,21 @@ where
 		let mut creator_event: Option<E> = None;
 		let mut pl_event: Option<E> = None;
 
-		// 1-HOP STRICT SCAN (Removes the polynomial BFS trap)
+		// 1-HOP STRICT SCAN: avoids O(N * E) exponential BFS tarpit
 		for aid in ev.auth_events() {
 			if let Some(aev) = fetch_event(aid.to_owned()).await {
-				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "") {
+				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "")
+					&& creator_event.is_none()
+				{
 					creator_event = Some(aev);
-				} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
+				} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "")
+					&& pl_event.is_none()
+				{
 					pl_event = Some(aev);
 				}
+			}
+			if creator_event.is_some() && pl_event.is_some() {
+				break;
 			}
 		}
 
@@ -1282,13 +1301,15 @@ where
 					}
 				}
 
-				// 2. Recursively walk the chain of PL events
+				// 2. Recursively walk the chain of PL events with Path Memoization
+				let mut path = Vec::new();
 				let mut found_depth = None;
 				while let Some(c_pl) = current_pl {
 					if let Some(&d) = mainline_depth.get(&c_pl) {
 						found_depth = Some(d);
 						break;
 					}
+					path.push(c_pl.clone());
 					let Some(c_pl_ev) = cached_fetch(c_pl).await else {
 						break;
 					};
@@ -1301,6 +1322,11 @@ where
 							current_pl = Some(aid.to_owned());
 							break;
 						}
+					}
+				}
+				if let Some(d) = found_depth {
+					for p in path {
+						mainline_depth.insert(p, d);
 					}
 				}
 				found_depth
