@@ -108,11 +108,11 @@ where
 	};
 	debug!(version = ?stateres_version, "State resolution starting");
 	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<Pdu>>>>> =
-		Arc::new(dashmap::DashMap::new());
+		Arc::new(DashMap::new());
 	let parsed_pl_cache: Arc<DashMap<OwnedEventId, Arc<PowerLevelsContentFields>>> =
-		Arc::new(dashmap::DashMap::new());
+		Arc::new(DashMap::new());
 	let sender_pl_cache: Arc<DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>> =
-		Arc::new(dashmap::DashMap::new());
+		Arc::new(DashMap::new());
 
 	let cached_fetch = |id: OwnedEventId| {
 		let cache = Arc::clone(&fetch_cache);
@@ -1236,7 +1236,7 @@ where
 	}
 
 	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
-		Arc::new(dashmap::DashMap::new());
+		Arc::new(DashMap::new());
 	let cached_fetch = |id: OwnedEventId| {
 		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
 			Arc::clone(&fetch_cache);
