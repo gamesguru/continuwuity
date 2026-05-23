@@ -1174,7 +1174,7 @@ where
 		// This avoids redundant auth_state lookups on every iteration.
 		let create_event = if *event.event_type() == TimelineEventType::RoomCreate {
 			event.clone()
-		} else if let Some(ref ce) = local_create_event {
+		} else if let Some(ref ce) = cached_create_event {
 			ce.clone()
 		} else {
 			match fetch_state(&StateEventType::RoomCreate, "").await {
