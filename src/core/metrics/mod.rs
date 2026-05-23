@@ -51,6 +51,9 @@ pub struct Metrics {
 	pub presence_pending_updates: AtomicU64,
 	pub federation_active_rooms: AtomicU32,
 	pub sending_queue_total: AtomicU64,
+	pub state_res_active: AtomicU32,
+	pub auth_chain_fetches_active: AtomicU32,
+	pub space_hierarchy_workers_active: AtomicU32,
 }
 
 impl Metrics {
@@ -99,6 +102,9 @@ impl Metrics {
 			presence_pending_updates: AtomicU64::new(0),
 			federation_active_rooms: AtomicU32::new(0),
 			sending_queue_total: AtomicU64::new(0),
+			state_res_active: AtomicU32::new(0),
+			auth_chain_fetches_active: AtomicU32::new(0),
+			space_hierarchy_workers_active: AtomicU32::new(0),
 		}
 	}
 

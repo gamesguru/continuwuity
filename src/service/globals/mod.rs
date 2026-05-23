@@ -238,13 +238,28 @@ impl crate::Service for Service {
 				.metrics
 				.sending_queue_total
 				.load(std::sync::atomic::Ordering::Relaxed);
+			let state_res = self
+				.server
+				.metrics
+				.state_res_active
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let auth_chain_fetches = self
+				.server
+				.metrics
+				.auth_chain_fetches_active
+				.load(std::sync::atomic::Ordering::Relaxed);
+			let space_hierarchy_workers = self
+				.server
+				.metrics
+				.space_hierarchy_workers_active
+				.load(std::sync::atomic::Ordering::Relaxed);
 
 			conduwuit::info!(
 				target: "stats",
 				"Network stats (Last 1m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
 				 latency) | DNS Resolver: {} reqs ({:.2}% fail, {:.2}ms avg latency) | Fed \
 				 Txns: {} (total: {}, {}.{}ms avg, {}.{}ms max, {}.{}s wall, {} >1s, {} \
-				 >10s) | Background: {} pres, {} bfill, {} send",
+				 >10s) | Background: {} pres, {} bfill, {} send, {} state_res, {} auth_fetch, {} spaces",
 				d_http_total,
 				http_fail_rate,
 				http_avg_latency_ms,
@@ -263,7 +278,10 @@ impl crate::Service for Service {
 				d_slow_10s,
 				presence,
 				backfill,
-				sending
+				sending,
+				state_res,
+				auth_chain_fetches,
+				space_hierarchy_workers
 			);
 
 			// Evict stale bad_event_ratelimiter entries to prevent unbounded memory growth.
