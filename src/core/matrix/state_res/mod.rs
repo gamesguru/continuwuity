@@ -16,12 +16,11 @@ use std::{
 	cmp::{Ordering, Reverse},
 	collections::{BinaryHeap, HashMap, HashSet},
 	hash::{BuildHasher, Hash},
+	sync::Arc,
 };
 
-use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt, future};
 use dashmap::DashMap;
-use tokio::sync::OnceCell;
-use std::sync::Arc;
+use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt, future};
 use ruma::{
 	EventId, Int, MilliSecondsSinceUnixEpoch, OwnedEventId, RoomVersionId,
 	events::{
@@ -32,6 +31,7 @@ use ruma::{
 };
 use serde_json::from_str as from_json_str;
 use smallvec::SmallVec;
+use tokio::sync::OnceCell;
 
 use self::power_levels::PowerLevelsContentFields;
 pub use self::{
@@ -491,22 +491,22 @@ where
 
 /// Returns a Vec of deduped EventIds that appear in some chains but not others.
 #[allow(clippy::arithmetic_side_effects)]
-fn get_auth_chain_diff<Id, Hasher>(
-	auth_chain_sets: &[HashSet<Id, Hasher>],
-) -> impl Stream<Item = Id> + Send + use<Id, Hasher>
+fn get_auth_chain_diff<'a, Id: 'a, Hasher>(
+	auth_chain_sets: &'a [HashSet<Id, Hasher>],
+) -> impl Stream<Item = Id> + Send + use<'a, Id, Hasher>
 where
-	Id: Clone + Eq + Hash + Send,
+	Id: Clone + Eq + Hash + Send + Sync,
 	Hasher: BuildHasher + Send + Sync,
 {
 	let num_sets = auth_chain_sets.len();
-	let mut id_counts: HashMap<Id, usize> = HashMap::new();
+	let mut id_counts: HashMap<&'a Id, usize> = HashMap::new(); // Borrowed!
 	for id in auth_chain_sets.iter().flatten() {
-		*id_counts.entry(id.clone()).or_default() += 1;
+		*id_counts.entry(id).or_default() += 1;
 	}
 
 	id_counts
 		.into_iter()
-		.filter_map(move |(id, count)| (count < num_sets).then_some(id))
+		.filter_map(move |(id, count)| (count < num_sets).then(|| id.clone()))
 		.stream()
 }
 
@@ -532,9 +532,11 @@ where
 {
 	debug!("reverse topological sort of power events");
 
-	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> = Arc::new(DashMap::new());
+	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
+		Arc::new(DashMap::new());
 	let cached_fetch = |id: OwnedEventId| {
-		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> = Arc::clone(&fetch_cache);
+		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
+			Arc::clone(&fetch_cache);
 		let cell: Arc<OnceCell<Option<E>>> = cache
 			.entry(id.clone())
 			.or_insert_with(|| Arc::new(OnceCell::new()))
@@ -552,14 +554,20 @@ where
 	}
 
 	// This is used in the `key_fn` passed to the lexico_topo_sort fn
-	let sender_pl_cache: Arc<DashMap<ruma::OwnedUserId, Int>> = Arc::new(DashMap::new());
+	let sender_pl_cache: Arc<DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>> =
+		Arc::new(DashMap::new());
 	let event_to_pl: HashMap<_, _> = graph
 		.keys()
 		.cloned()
 		.stream()
 		.broad_filter_map(async |event_id| {
-			let pl =
-				get_power_level_for_sender(&event_id, &cached_fetch, global_pl_context, &sender_pl_cache).await;
+			let pl = get_power_level_for_sender(
+				&event_id,
+				&cached_fetch,
+				global_pl_context,
+				&sender_pl_cache,
+			)
+			.await;
 
 			Some((event_id, pl))
 		})
@@ -723,23 +731,17 @@ async fn get_power_level_for_sender<E, F, Fut>(
 	event_id: &EventId,
 	fetch_event: &F,
 	global_pl_context: Option<&PowerLevelsContentFields>,
-	sender_pl_cache: &DashMap<ruma::OwnedUserId, Int>,
+	sender_pl_cache: &DashMap<(ruma::OwnedUserId, Option<OwnedEventId>), Int>,
 ) -> Int
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
 	Fut: Future<Output = Option<E>> + Send,
-	E: Event + Send,
+	E: Event + Send + Clone,
 {
 	debug!("fetch event ({event_id}) senders power level");
 
 	let event = fetch_event(event_id.to_owned()).await;
 	let sender = event.as_ref().map(|e| Event::sender(e).to_owned());
-
-	if let Some(s) = &sender {
-		if let Some(pl) = sender_pl_cache.get(s) {
-			return *pl;
-		}
-	}
 
 	if let Some(global_context) = global_pl_context {
 		if let Some(s) = &sender {
@@ -754,42 +756,65 @@ where
 
 	if let Some(ev) = event {
 		if is_type_and_key(&ev, &TimelineEventType::RoomCreate, "") {
-			if let Some(s) = &sender { sender_pl_cache.insert(s.clone(), int!(100)); }
 			return int!(100);
 		}
 
-		let auth_events = ev.auth_events();
-
-		// Look for both the create event and a power_levels event in the auth chain
 		let mut creator_event: Option<E> = None;
 		let mut pl_event: Option<E> = None;
 
-		for aid in auth_events {
-			if let Some(aev) = fetch_event(aid.to_owned()).await {
-				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "") {
-					creator_event = Some(aev);
-				} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-					pl_event = Some(aev);
+		let mut queue = std::collections::VecDeque::new();
+		queue.extend(ev.auth_events().map(ToOwned::to_owned));
+		let mut visited = HashSet::new();
+
+		while let Some(aid) = queue.pop_front() {
+			if !visited.insert(aid.clone()) {
+				continue;
+			}
+			if let Some(aev) = fetch_event(aid.clone()).await {
+				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "")
+					&& creator_event.is_none()
+				{
+					creator_event = Some(aev.clone());
+				} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "")
+					&& pl_event.is_none()
+				{
+					pl_event = Some(aev.clone());
 				}
+				if creator_event.is_some() && pl_event.is_some() {
+					break;
+				}
+				queue.extend(aev.auth_events().map(ToOwned::to_owned));
 			}
 		}
 
-		// If we found a PL event in the auth chain, use the sender's actual PL
+		let pl_event_id = pl_event.as_ref().map(|e| e.event_id().to_owned());
+		let cache_key = (
+			sender
+				.clone()
+				.unwrap_or_else(|| ruma::user_id!("@unknown:unknown").to_owned()),
+			pl_event_id,
+		);
+
+		if let Some(cached_pl) = sender_pl_cache.get(&cache_key) {
+			return *cached_pl;
+		}
+
+		let mut calculated_pl = int!(0);
+
 		if let Some(pl_ev) = pl_event {
 			if let Ok(pl_content) =
 				from_json_str::<PowerLevelsContentFields>(pl_ev.content().get())
 			{
 				if let Some(s) = &sender {
-					let level = pl_content.get_user_power(s).copied().unwrap_or(pl_content.users_default);
-					sender_pl_cache.insert(s.clone(), level);
-					debug!("found {s} at power_level {level} via auth chain PL event");
-					return level;
+					if let Some(&user_level) = pl_content.get_user_power(s) {
+						debug!("found {s} at power_level {user_level} via auth chain PL event");
+						calculated_pl = user_level;
+					} else {
+						calculated_pl = pl_content.users_default;
+					}
 				}
 			}
-		}
-
-		// Fallback: check if sender is the room creator
-		if let Some(creator_ev) = creator_event {
+		} else if let Some(creator_ev) = creator_event {
 			let mut is_creator = creator_ev.sender() == ev.sender();
 			if let Ok(create_content) = from_json_str::<
 				ruma::events::room::create::RoomCreateEventContent,
@@ -801,9 +826,12 @@ where
 				}
 			}
 			if is_creator {
-				return int!(100);
+				calculated_pl = int!(100);
 			}
 		}
+
+		sender_pl_cache.insert(cache_key, calculated_pl);
+		return calculated_pl;
 	}
 
 	int!(0)
@@ -1156,9 +1184,11 @@ where
 		return Ok(vec![]);
 	}
 
-	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> = Arc::new(DashMap::new());
+	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
+		Arc::new(DashMap::new());
 	let cached_fetch = |id: OwnedEventId| {
-		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> = Arc::clone(&fetch_cache);
+		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
+			Arc::clone(&fetch_cache);
 		let cell: Arc<OnceCell<Option<E>>> = cache
 			.entry(id.clone())
 			.or_insert_with(|| Arc::new(OnceCell::new()))
@@ -1194,7 +1224,7 @@ where
 		for aid in event.auth_events() {
 			queue.push_back(aid.to_owned());
 		}
-		let mut visited = std::collections::HashSet::new();
+		let mut visited = HashSet::new();
 
 		while let Some(aid) = queue.pop_front() {
 			if !visited.insert(aid.clone()) {
@@ -1245,7 +1275,7 @@ where
 				for aid in event.auth_events() {
 					queue.push_back(aid.to_owned());
 				}
-				let mut visited = std::collections::HashSet::new();
+				let mut visited = HashSet::new();
 
 				while let Some(aid) = queue.pop_front() {
 					if !visited.insert(aid.clone()) {
