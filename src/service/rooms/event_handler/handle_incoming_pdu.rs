@@ -340,26 +340,49 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	{
 		| Ok(res) => res,
 		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
-			// Auth events for this PDU are not yet in our database. Store the
-			// raw PDU as an outlier so it is available once auth events arrive,
-			// then queue a background fetch of the missing events. The /send/
-			// endpoint will return 200 so the remote doesn't retry endlessly.
-			info!(
-				target: "state_res_debug",
-				event_id = %event_id,
-				count = missing.len(),
-				"Storing incoming PDU as outlier; missing auth events will be fetched in background"
-			);
-			self.services
-				.outlier
-				.add_pdu_outlier(event_id, &value, Some(room_id));
-			// Kick off a background fetch without awaiting — don't block the response
-			let _ = self.dag_healer.send(super::HealRequest {
-				room_id: room_id.to_owned(),
-				missing_events: missing,
-			});
-			// This PDU cannot be a timeline event yet — treat as non-timeline
-			return Ok(None);
+			// The auth event chain for this PDU may be deeper than the
+			// iterative fetcher's per-call limit. Try calling /state_ids on
+			// the origin to retrieve and store the complete auth chain in one
+			// shot (fetch_state now processes auth_chain_ids too), then retry
+			// handle_outlier_pdu. This also satisfies the Matrix spec
+			// requirement that servers call /state_ids when auth events are
+			// unresolvable via the normal backfill path.
+			let retry_result = async {
+				self.fetch_state(origin, create_event, room_id, event_id)
+					.await?;
+				Box::pin(self.handle_outlier_pdu(
+					origin,
+					Some(create_event),
+					event_id,
+					room_id,
+					value.clone(),
+					false,
+					false,
+				))
+				.await
+			}
+			.await;
+
+			match retry_result {
+				| Ok(res) => res,
+				| Err(_) => {
+					// /state_ids didn't help — fall back to background healer.
+					info!(
+						target: "state_res_debug",
+						event_id = %event_id,
+						count = missing.len(),
+						"Storing incoming PDU as outlier; missing auth events will be fetched in background"
+					);
+					self.services
+						.outlier
+						.add_pdu_outlier(event_id, &value, Some(room_id));
+					let _ = self.dag_healer.send(super::HealRequest {
+						room_id: room_id.to_owned(),
+						missing_events: missing,
+					});
+					return Ok(None);
+				},
+			}
 		},
 		| Err(e) => return Err(e),
 	};

@@ -71,6 +71,17 @@ where
 		return Err(last_err);
 	};
 
+	// Fetch auth chain events first so that state events can be validated
+	// locally. Without this, state events whose auth predecessors form a
+	// long chain (e.g. 250 display-name changes) would always fail
+	// handle_outlier_pdu with MissingAuthEvents.
+	debug!("Fetching auth chain events to validate state events");
+	let auth_chain_ids = res.auth_chain_ids.iter().map(AsRef::as_ref);
+	let _auth_chain = self
+		.fetch_and_handle_outliers(origin, auth_chain_ids, Some(create_event), room_id)
+		.boxed()
+		.await;
+
 	debug!("Fetching state events");
 	let state_ids = res.pdu_ids.iter().map(AsRef::as_ref);
 	let state_vec = self
