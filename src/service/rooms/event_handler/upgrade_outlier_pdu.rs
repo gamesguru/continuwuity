@@ -13,7 +13,9 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
-use ruma::{CanonicalJsonValue, OwnedEventId, RoomId, RoomVersionId, ServerName, events::StateEventType};
+use ruma::{
+	CanonicalJsonValue, OwnedEventId, RoomId, RoomVersionId, ServerName, events::StateEventType,
+};
 
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
@@ -91,7 +93,8 @@ where
 	let timer = Instant::now();
 	let room_version_id = get_room_version_id(create_event)?;
 
-	// --- Phase 1: resolve state at the incoming event (extracted to reduce frame) ---
+	// --- Phase 1: resolve state at the incoming event (extracted to reduce frame)
+	// ---
 	let state_at_incoming_event = self
 		.resolve_state_at_incoming_event(
 			&incoming_pdu,
