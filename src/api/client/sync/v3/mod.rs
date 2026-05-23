@@ -11,11 +11,12 @@ use std::{
 use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Result, at, error, extract_variant,
+	Result, at, extract_variant,
 	utils::{
 		ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, Tools, WidebandExt},
 	},
+	warn,
 };
 use conduwuit_service::Services;
 use futures::{
@@ -115,9 +116,6 @@ struct SyncContext<'a> {
 	/// The sync filter, which the client uses to specify what data should be
 	/// included in the sync response.
 	filter: &'a FilterDefinition,
-	/// Whether the state at the end of the timeline should be used when
-	/// calculating state diffs for sync.
-	use_state_after: bool,
 }
 
 impl<'a> SyncContext<'a> {
@@ -268,6 +266,7 @@ pub(crate) async fn build_sync_events(
 			.await
 			.unwrap_or_default(),
 	});
+
 	let context = SyncContext {
 		syncing_user,
 		syncing_device,
@@ -275,7 +274,6 @@ pub(crate) async fn build_sync_events(
 		current_count,
 		full_state,
 		filter: &filter,
-		use_state_after: false, // TODO: Ruma doesn't support this yet
 	};
 
 	let joined_rooms = services
@@ -289,7 +287,7 @@ pub(crate) async fn build_sync_events(
 			match joined_room {
 				| Ok((room, state_after, updates)) => Some((room_id, room, state_after, updates)),
 				| Err(err) => {
-					error!(?err, %room_id, "error loading joined room");
+					warn!(?err, %room_id, "error loading joined room");
 					None
 				},
 			}
@@ -322,7 +320,7 @@ pub(crate) async fn build_sync_events(
 				| Ok(Some((room, state_after))) => Some((room_id, room, state_after)),
 				| Ok(None) => None,
 				| Err(err) => {
-					error!(?err, %room_id, "error loading joined room");
+					warn!(?err, %room_id, "error loading joined room");
 					None
 				},
 			}
