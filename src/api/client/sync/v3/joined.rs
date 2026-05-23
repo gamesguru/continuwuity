@@ -457,6 +457,7 @@ async fn build_state_events(
 		syncing_user,
 		last_sync_end_count,
 		full_state,
+		use_state_after,
 		..
 	} = sync_context;
 
@@ -469,60 +470,54 @@ async fn build_state_events(
 	// the beginning of the timeline, so we determine the state of the syncing room
 	// as of the first timeline event. NOTE: this explanation is not entirely
 	// accurate; see the implementation of `build_state_incremental`.
-	let timeline_start_shortstatehash = async {
-		if let Some((_, pdu)) = timeline.pdus.front() {
-			if let Ok(shortstatehash) = services
-				.rooms
-				.state_accessor
-				.pdu_shortstatehash(&pdu.event_id)
-				.await
-			{
-				return shortstatehash;
-			}
-		}
-
-		current_shortstatehash
+	let timeline_start_shortstatehash = if let Some((_, pdu)) = timeline.pdus.front() {
+		services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(&pdu.event_id)
+			.await
+			.map_err(|err| err!("Timeline start has no shortstatehash: {err}"))?
+	} else {
+		// if the timeline is empty there can't possibly be any changes to the state
+		return Ok(vec![]);
 	};
 
 	// the user IDs of members whose membership needs to be sent to the client, if
 	// lazy-loading is enabled.
 	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders());
-
-	let (timeline_start_shortstatehash, lazily_loaded_members) =
-		join(timeline_start_shortstatehash, lazily_loaded_members).await;
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders()).await;
 
 	// compute the state delta between the previous sync and this sync.
 	match (last_sync_end_count, last_sync_end_shortstatehash) {
 		/*
-		if `last_sync_end_count` is Some (meaning this is an incremental sync), and `last_sync_end_shortstatehash`
+		if the last sync token is Some (meaning we aren't doing an initial sync), and the last sync state hash
 		is Some (meaning the syncing user didn't just join this room for the first time ever), and `full_state` is false,
 		then use `build_state_incremental`.
 		*/
-		| (Some(last_sync_end_count), Some(last_sync_end_shortstatehash)) if !full_state =>
+		| (Some(_), Some(last_sync_end_shortstatehash)) if !full_state =>
 			build_state_incremental(
 				services,
 				syncing_user,
-				room_id,
-				PduCount::Normal(last_sync_end_count),
 				last_sync_end_shortstatehash,
 				timeline_start_shortstatehash,
 				current_shortstatehash,
 				timeline,
+				use_state_after,
 				lazily_loaded_members.as_ref(),
 			)
 			.boxed()
 			.await,
+
 		/*
-		otherwise use `build_state_initial`. note that this branch will be taken if the user joined this room since the last sync
-		for the first time ever, because in that case we have no `last_sync_end_shortstatehash` and can't correctly calculate
-		the state using the incremental sync algorithm.
+		otherwise, use `build_state_initial`.
 		*/
 		| _ =>
 			build_state_initial(
 				services,
 				syncing_user,
 				timeline_start_shortstatehash,
+				current_shortstatehash,
+				use_state_after,
 				lazily_loaded_members.as_ref(),
 			)
 			.boxed()
@@ -538,7 +533,7 @@ async fn build_state_after(
 	shortstatehashes: ShortStateHashes,
 	timeline: &TimelinePdus,
 ) -> Result<Vec<PduEvent>> {
-	if !services.config.experimental_features.msc4222_enabled {
+	if !sync_context.use_state_after {
 		return Ok(Vec::new());
 	}
 
@@ -554,6 +549,8 @@ async fn build_state_after(
 		services,
 		syncing_user,
 		current_shortstatehash,
+		current_shortstatehash,
+		true, // use_state_after is implied here for MSC4222 compatibility
 		lazily_loaded_members.as_ref(),
 	)
 	.boxed()
