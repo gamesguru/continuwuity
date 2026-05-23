@@ -21,6 +21,10 @@ inputs:
     description: "Allow unrelated histories during merge"
     default: "false"
 
+  sync_tags:
+    description: "Whether to sync tags as well"
+    default: "false"
+
 runs:
   using: "composite"
   steps:
@@ -71,6 +75,13 @@ runs:
 
           echo "Pushing to $DST..."
           git push "$DST" "$DST_BRANCH" $PUSH_FLAGS --no-verify
+
+          if [[ "${{ inputs.sync_tags }}" == "true" ]]; then
+            echo "Syncing tags from $SRC to $DST..."
+            git fetch "$SRC" --tags --force
+            git push "$DST" --tags --force --no-verify
+          fi
+
           echo "Done."
         else
           echo "Failed to fetch $BRANCH from $SRC."

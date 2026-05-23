@@ -13,44 +13,49 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          token: ${{ github.token }}
+          token: ${{ secrets.NUTRA_BOT_PAT }}
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6
+        with:
+          gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
 
       - name: Configure Git
         env:
-          TOKEN: ${{ github.token }}
-          GPG_PASSPHRASE: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
+          TOKEN: ${{ secrets.NUTRA_BOT_PAT }}
         run: |
-          git config user.name "continuwuity CI"
-          git config user.email "noreply@continuwuity.org"
-          git config commit.gpgsign true
-          if [ -n "$GPG_PASSPHRASE" ]; then
-            git config gpg.program "gpg --batch --pinentry-mode loopback --passphrase $GPG_PASSPHRASE"
-          fi
+          git config user.name "nutra-bot"
+          git config user.email "services@nutra.tk"
 
-          # Re-configure origin with token for authenticated push
+          # Rename origin (GitHub) to github and re-configure with token for authenticated push
           SERVER_URL="${{ github.server_url }}"
           HOST="${SERVER_URL#https://}"
-          git remote set-url origin https://x-access-token:$TOKEN@$HOST/${{ github.repository }}.git
+          git remote set-url origin "https://x-access-token:$TOKEN@$HOST/${{ github.repository }}.git"
 
-          git remote add upstream https://forgejo.ellis.link/continuwuation/continuwuity.git
+          # origin is now Forgejo
+          git remote add forge https://forgejo.ellis.link/continuwuation/continuwuity.git
 
       - name: "Sync main [from forge: continuwuation/continuwuity]"
         uses: ./.github/actions/git-sync
         with:
           source_branch: main
-          source_remote: upstream
+          source_remote: forge
           dest_remote: origin
           mode: merge
+          sync_tags: "true"
 
       - name: "Sync main-upstream [from forge: continuwuation/continuwuity]"
         uses: ./.github/actions/git-sync
         with:
           source_branch: main
           dest_branch: main-upstream
-          source_remote: upstream
+          source_remote: forge
           dest_remote: origin
           mode: rebase
 
@@ -74,6 +79,6 @@ jobs:
         with:
           source_branch: main
           dest_branch: _metadata/refs/remotes/upstream/main
-          source_remote: upstream
+          source_remote: forge
           dest_remote: origin
           mode: force

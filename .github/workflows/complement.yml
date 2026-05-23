@@ -3,7 +3,7 @@ name: Complement Tests
 
 on:
   push:
-    branches: [main, main-upstream, dev]
+    branches: [main, main-upstream]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -75,9 +75,6 @@ jobs:
             mold \
             postgresql-client
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Detect best CPU target
         id: cpu
         if: matrix.arch == 'amd64'
@@ -87,18 +84,39 @@ jobs:
         uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ${{ matrix.os }}
-          arch: ${{ matrix.prebuilt_arch || steps.cpu.outputs.target }}
+          arch: ${{ matrix.prebuilt_arch != '' && matrix.prebuilt_arch || steps.cpu.outputs.target }}
+
+      - name: Export CPU target env vars
+        if: matrix.arch == 'amd64'
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ steps.cpu.outputs.target }}" | tee -a $GITHUB_ENV
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
-        with:
-          toolchain: "1.90.0"
+        run: rustup show
 
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
         with:
-          shared-key: ${{ matrix.os }}-${{ matrix.arch }}
+          shared-key: ${{ matrix.os }}-${{ matrix.arch }}-${{ steps.cpu.outputs.target || 'generic' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
+
+      - name: Debug Environment & Prebuilts
+        run: |
+          echo "--- Downloaded Prebuilts Info ---"
+          for lib in librocksdb libjemalloc liblz4 libzstd; do
+            echo ">> $lib"
+            file /usr/local/lib/$lib.so* || true
+            nm -D /usr/local/lib/$lib.so* | grep " T " | head -n 5 || true
+          done
+          echo "--- Runner CPU Info ---"
+          grep "model name" /proc/cpuinfo | head -n 1 || true
+          grep "flags" /proc/cpuinfo | head -n 1 || true
+          grep "Features" /proc/cpuinfo | head -n 1 || true
+          echo "--- Build Environment ---"
+          echo "OS: ${{ matrix.os }}"
+          echo "Arch: ${{ matrix.arch }}"
+          echo "Prebuilt Arch: ${{ matrix.prebuilt_arch }}"
+          echo "Detected CPU Target: ${{ steps.cpu.outputs.target }}"
 
       - name: Build conduwuit for Complement
         env:
@@ -109,11 +127,11 @@ jobs:
         run: SKIP_CONFIRM=1 make build PROFILE=${{ matrix.profile }} CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features direct_tls"
 
       - name: Sanity check binary
-        run: ./target/latest/conduwuit --version
+        run: ./tests/sanity_check.sh ./target/latest/conduwuit
 
       - name: Import GPG key
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6
         with:
           gpg_private_key: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.C10Y_BINARY_RELEASE_GPG_PRIVATE_KEY_PASSWORD }}
@@ -126,7 +144,7 @@ jobs:
         run: make complement/docker PROFILE=${{ matrix.profile }}
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}
           path: |
@@ -145,7 +163,7 @@ jobs:
           path: complement-src
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.22"
           cache-dependency-path: complement-src/go.sum
@@ -197,13 +215,21 @@ jobs:
           FAILED_TESTS=$(jq -r 'select(.Action == "fail") | .Test' "$RESULTS" \
             | sort -u)
 
-          echo "pass=$PASS" >> "$GITHUB_OUTPUT"
-          echo "fail=$FAIL" >> "$GITHUB_OUTPUT"
-          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-          echo "total=$total" >> "$GITHUB_OUTPUT"
-          echo "failed_tests<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$FAILED_TESTS" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "pass=$PASS" | tee -a "$GITHUB_OUTPUT"
+          echo "fail=$FAIL" | tee -a "$GITHUB_OUTPUT"
+          echo "skip=$SKIP" | tee -a "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" | tee -a "$GITHUB_OUTPUT"
+          echo "failed_tests<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$FAILED_TESTS" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+
+          echo "### Complement Test Results (${{ matrix.arch }} ${{ matrix.os }})" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| Status | Count |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ✓ Pass | $PASS |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ✗ Fail | $FAIL |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| ⌒ Skip | $SKIP |" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "| **Total** | **$TOTAL** |" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Get conduwuit version
         id: version
@@ -211,7 +237,7 @@ jobs:
         run: |
           VERSION=$(./target/latest/conduwuit --version 2>/dev/null \
             || echo "unknown")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
       - name: Update Results Ledger
         if: always()
         uses: ./.github/actions/update-results-ledger
@@ -256,8 +282,8 @@ jobs:
           # Actually, since the composite action runs its own bash shells, aliases won't pass down.
           # The cleanest way is to use ssh-agent and export it to GITHUB_ENV for future steps.
           eval $(ssh-agent -s)
-          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
-          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> $GITHUB_ENV
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" | tee -a $GITHUB_ENV
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" | tee -a $GITHUB_ENV
 
           if [ -n "$SSH_PASSPHRASE" ]; then
              echo "echo \$SSH_PASSPHRASE" > /tmp/askpass.sh
@@ -268,18 +294,56 @@ jobs:
           fi
 
           # Add the server key to known_hosts to prevent interactive prompts
-          ssh-keyscan -p 22 nutra.tk >> ~/.ssh/known_hosts
+          ssh-keyscan -p 22 nutra.tk | tee -a ~/.ssh/known_hosts
       - name: Run Postgres Ingestion
         if: always()
         uses: ./.github/actions/postgres
         with:
           ssh_target: "git@nutra.tk"
+          database_url: ${{ secrets.C10Y_POSTGRES_URL }}
+          setup_tables: ${{ github.ref == 'refs/heads/main' }}
+          rebuild_db: false
+
+      - name: Query updated Postgres stats
+        env:
+          PAGER: cat
+          DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
+        run: python3 .github/actions/postgres/ci-query-failures.py
+
+      - name: Get newly failing tests
+        id: new_failures
+        env:
+          DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          ARCH="${{ matrix.arch }}"
+          OS="${{ matrix.os }}"
+          PROFILE="${{ matrix.profile }}"
+
+          # Fetch the newly failing tests for this specific run
+          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' LIMIT 1;" | sed 's/\\n/\n/g')
+
+          echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+
+          # Count non-empty lines of new failures
+          NEW_FAILURES_COUNT=$(echo "$NEW_FAILURES" | grep -c '[^[:space:]]' || true)
+          if [ "$NEW_FAILURES_COUNT" -gt 0 ]; then
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>Newly Failed Tests ($NEW_FAILURES_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$NEW_FAILURES" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Post Complement results to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
-          FAILED_TESTS: ${{ steps.results.outputs.failed_tests }}
+          FAILED_TESTS: ${{ steps.new_failures.outputs.new_failures }}
         with:
           script: |
             const pass = ${{ steps.results.outputs.pass || 0 }};
@@ -291,7 +355,7 @@ jobs:
             const failedTestsRaw = process.env.FAILED_TESTS || '';
 
             const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
-            let failedContent = 'No failing tests recorded.';
+            let failedContent = 'No newly failing tests recorded.';
             if (lines.length > 0) {
               const list = lines.join('\n');
               failedContent = '```\n' + list + '\n```';
@@ -308,7 +372,7 @@ jobs:
               `| ⌒ Skip | ${skip} |`,
               `| **Total** | **${total}** |`,
               '',
-              `<details><summary>Failed Tests (${fail})</summary>`,
+              `<details><summary>Newly Failed Tests (${lines.length})</summary>`,
               '',
               failedContent,
               '',

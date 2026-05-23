@@ -3,7 +3,7 @@ name: PR Checks
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
       PROFILE: dev-quick
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
@@ -45,12 +45,13 @@ jobs:
             llvm-dev \
             mold
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       - name: Detect best CPU target
         id: cpu
         uses: ./.github/actions/get-cpu-target
+
+      - name: Export CPU target env vars
+        run: |
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ steps.cpu.outputs.target }}" | tee -a $GITHUB_ENV
 
       - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-prebuilts
@@ -59,10 +60,7 @@ jobs:
           arch: ${{ steps.cpu.outputs.target }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
-        with:
-          toolchain: "1.90.0"
-          components: clippy, rustfmt
+        run: rustup show && rustup component add clippy rustfmt
 
       - name: Install nightly rustfmt
         run: rustup toolchain install nightly --component rustfmt --component clippy

@@ -3,10 +3,113 @@ name: Build
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
-    branches: [main, dev]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      profile:
+        description: "Cargo profile to build"
+        type: choice
+        options:
+          - bench
+          - dev
+          - dev-quick
+          - release
+          - release-debuginfo
+          - release-high-perf
+          - release-max-perf
+          - release-quick
+          - test
+        default: "release-max-perf"
+      feat_bindgen_runtime:
+        description: "Feature: bindgen-runtime"
+        type: boolean
+        default: false
+      feat_bindgen_static:
+        description: "Feature: bindgen-static"
+        type: boolean
+        default: false
+      feat_conduwuit_mods:
+        description: "Feature: conduwuit_mods"
+        type: boolean
+        default: false
+      feat_console:
+        description: "Feature: console"
+        type: boolean
+        default: true
+      feat_default:
+        description: "Feature: default"
+        type: boolean
+        default: true
+      feat_direct_tls:
+        description: "Feature: direct_tls"
+        type: boolean
+        default: false
+      feat_element_hacks:
+        description: "Feature: element_hacks"
+        type: boolean
+        default: false
+      feat_full:
+        description: "Feature: full"
+        type: boolean
+        default: false
+      feat_hardened_malloc:
+        description: "Feature: hardened_malloc"
+        type: boolean
+        default: false
+      feat_http3:
+        description: "Feature: http3"
+        type: boolean
+        default: false
+      feat_io_uring:
+        description: "Feature: io_uring"
+        type: boolean
+        default: false
+      feat_jemalloc:
+        description: "Feature: jemalloc"
+        type: boolean
+        default: false
+      feat_journald:
+        description: "Feature: journald"
+        type: boolean
+        default: false
+      feat_ldap:
+        description: "Feature: ldap"
+        type: boolean
+        default: false
+      feat_otlp_telemetry:
+        description: "Feature: otlp_telemetry"
+        type: boolean
+        default: false
+      feat_release_max_log_level:
+        description: "Feature: release_max_log_level"
+        type: boolean
+        default: false
+      feat_sentry_telemetry:
+        description: "Feature: sentry_telemetry"
+        type: boolean
+        default: false
+      feat_standard:
+        description: "Feature: standard"
+        type: boolean
+        default: false
+      feat_systemd:
+        description: "Feature: systemd"
+        type: boolean
+        default: false
+      feat_tokio_console:
+        description: "Feature: tokio_console"
+        type: boolean
+        default: false
+      feat_tokio_metrics:
+        description: "Feature: tokio_metrics"
+        type: boolean
+        default: false
+      feat_url_preview:
+        description: "Feature: url_preview"
+        type: boolean
+        default: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,23 +117,51 @@ env:
   SKIP_CONFIRM: 1
 
 jobs:
-  cpu-x86-64-v3:
-    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_HASWELL != ''
-    runs-on: ${{ matrix.os }}
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      run_any: ${{ steps.set-matrix.outputs.run_any }}
+    steps:
+      - id: set-matrix
+        shell: bash
+        run: |
+          JSON='{"include":[]}'
+          RUN_ANY=false
+
+          add_target() {
+            local arch="$1" toggle="$2" cpu="$3" lg_page="$4"
+            if [[ -n "$toggle" ]] || [[ -n "${{ vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_ALL_CPU_TARGETS }}" ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+              for os in ubuntu-22.04 ubuntu-24.04; do
+                JSON=$(echo "$JSON" | jq -c ".include += [{\"arch\":\"$arch\", \"os\":\"$os\", \"cpu\":\"$cpu\", \"lg_page\":\"$lg_page\"}]")
+              done
+              RUN_ANY=true
+            fi
+          }
+
+          add_target "x86-64-v2" "${{ vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_X86_64_V2 }}" "x86-64-v2" ""
+          add_target "x86-64-v3" "${{ vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_HASWELL }}" "x86-64-v3" ""
+          add_target "x86-64-v4" "${{ vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_SKYLAKE }}" "x86-64-v4" ""
+          add_target "arm64-generic" "${{ vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_GENERIC }}" "generic" "16"
+          add_target "arm64-cortex-a76" "${{ vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 }}" "cortex-a76" "16"
+
+          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+          echo "run_any=$RUN_ANY" >> $GITHUB_OUTPUT
+
+  build:
+    needs: [setup]
+    if: needs.setup.outputs.run_any == 'true'
+    runs-on: ${{ matrix.os }}${{ contains(matrix.arch, 'arm64') && '-arm' || '' }}
     env:
       ROCKSDB_LIB_DIR: /usr/local/lib
+      JEMALLOC_SYS_WITH_LG_PAGE: ${{ matrix.lg_page }}
 
     strategy:
       fail-fast: false
-      matrix:
-        os:
-          - ubuntu-22.04
-          - ubuntu-24.04
-        profile:
-          - release-max-perf
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-tags: true
@@ -40,65 +171,119 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            liburing-dev \
-            libbz2-dev \
-            clang \
-            libclang-dev \
-            llvm-dev \
-            mold
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+            build-essential pkg-config liburing-dev \
+            libbz2-dev clang libclang-dev llvm-dev mold
 
       - name: Setup RocksDB and Jemalloc
         uses: ./.github/actions/setup-prebuilts
         with:
           cache-key: ${{ matrix.os }}
-          arch: x86-64-v3
+          arch: ${{ matrix.arch }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
-        with:
-          toolchain: "1.90.0"
+        run: rustup show
 
       - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
         with:
-          shared-key: ${{ matrix.os }}-${{ github.job }}
+          shared-key: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.profile || 'release-max-perf' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
+
+      - name: Resolve Configuration
+        id: config
+        run: |
+          PROFILE="${{ inputs.profile || 'release-max-perf' }}"
+          FEATURES="bindgen-static,standard"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            F=()
+            [ "${{ inputs.feat_bindgen_runtime }}" == "true" ] && F+=("bindgen-runtime")
+            [ "${{ inputs.feat_bindgen_static }}" == "true" ] && F+=("bindgen-static")
+            [ "${{ inputs.feat_conduwuit_mods }}" == "true" ] && F+=("conduwuit_mods")
+            [ "${{ inputs.feat_console }}" == "true" ] && F+=("console")
+            [ "${{ inputs.feat_default }}" == "true" ] && F+=("default")
+            [ "${{ inputs.feat_direct_tls }}" == "true" ] && F+=("direct_tls")
+            [ "${{ inputs.feat_element_hacks }}" == "true" ] && F+=("element_hacks")
+            [ "${{ inputs.feat_full }}" == "true" ] && F+=("full")
+            [ "${{ inputs.feat_hardened_malloc }}" == "true" ] && F+=("hardened_malloc")
+            [ "${{ inputs.feat_http3 }}" == "true" ] && F+=("http3")
+            [ "${{ inputs.feat_io_uring }}" == "true" ] && F+=("io_uring")
+            [ "${{ inputs.feat_jemalloc }}" == "true" ] && F+=("jemalloc")
+            [ "${{ inputs.feat_journald }}" == "true" ] && F+=("journald")
+            [ "${{ inputs.feat_ldap }}" == "true" ] && F+=("ldap")
+            [ "${{ inputs.feat_otlp_telemetry }}" == "true" ] && F+=("otlp_telemetry")
+            [ "${{ inputs.feat_release_max_log_level }}" == "true" ] && F+=("release_max_log_level")
+            [ "${{ inputs.feat_sentry_telemetry }}" == "true" ] && F+=("sentry_telemetry")
+            [ "${{ inputs.feat_standard }}" == "true" ] && F+=("standard")
+            [ "${{ inputs.feat_systemd }}" == "true" ] && F+=("systemd")
+            [ "${{ inputs.feat_tokio_console }}" == "true" ] && F+=("tokio_console")
+            [ "${{ inputs.feat_tokio_metrics }}" == "true" ] && F+=("tokio_metrics")
+            [ "${{ inputs.feat_url_preview }}" == "true" ] && F+=("url_preview")
+            FEATURES=$(IFS=,; echo "${F[*]}")
+          fi
+          echo "profile=$PROFILE" >> $GITHUB_OUTPUT
+          echo "features=$FEATURES" >> $GITHUB_OUTPUT
 
       - name: Debug checks
         run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
         env:
-          PROFILE: ${{ matrix.profile }}
+          PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
+
+      - name: Debug Environment & Prebuilts
+        run: |
+          echo "--- Downloaded Prebuilts Info ---"
+          for lib in librocksdb libjemalloc liblz4 libzstd; do
+            echo ">> $lib"
+            file /usr/local/lib/$lib.so* || true
+            nm -D /usr/local/lib/$lib.so* | grep " T " | head -n 5 || true
+          done
+          echo "--- Runner CPU Info ---"
+          grep "model name" /proc/cpuinfo | head -n 1 || true
+          grep "flags" /proc/cpuinfo | head -n 1 || true
+          grep "Features" /proc/cpuinfo | head -n 1 || true
+          echo "--- Build Environment ---"
+          echo "OS: ${{ matrix.os }}"
+          echo "Arch: ${{ matrix.arch }}"
+          echo "Detected CPU Target: ${{ steps.cpu.outputs.target }}"
 
       - name: Build
         env:
-          PROFILE: ${{ matrix.profile }}
+          PROFILE: ${{ steps.config.outputs.profile }}
           CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v3
-        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features bindgen-static,standard"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ matrix.cpu }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=${{ matrix.cpu }}
+        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ steps.config.outputs.profile }} --features ${{ steps.config.outputs.features }}"
 
       - name: Sanity check binary
-        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
+        env:
+          LD_LIBRARY_PATH: /usr/local/lib
+        run: |
+          if [[ "${{ matrix.arch }}" == "x86-64-v4" ]]; then
+            if grep -q "avx512f" /proc/cpuinfo && \
+               grep -q "avx512dq" /proc/cpuinfo && \
+               grep -q "avx512bw" /proc/cpuinfo && \
+               grep -q "avx512vl" /proc/cpuinfo; then
+              ./tests/sanity_check.sh ./target/latest/conduwuit
+            else
+              echo "Skipping binary sanity check: CPU does not support all required AVX-512 flags (F, DQ, BW, VL)."
+            fi
+          else
+            ./tests/sanity_check.sh ./target/latest/conduwuit
+          fi
 
       - name: Package Assets
         run: |
           mkdir -p release-assets/bin release-assets/lib release-assets/include
           cp target/latest/conduwuit release-assets/bin/
-          # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
-          tar -czvf conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz -C release-assets .
+          cp target/${{ steps.config.outputs.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
+          tar -czvf conduwuit-${{ matrix.arch }}-${{ matrix.os }}.tar.gz -C release-assets .
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: conduwuit-x86-64-v3-${{ matrix.os }}
-          path: conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz
+          name: conduwuit-${{ matrix.arch }}-${{ matrix.os }}
+          path: conduwuit-${{ matrix.arch }}-${{ matrix.os }}.tar.gz
           retention-days: 90
 
       - name: Publish Release
@@ -107,240 +292,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Use the branch name or tag for the release name
           TAG_NAME="${{ github.ref_name }}"
           [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
-          gh release create "$TAG_NAME" \
-            --title "Build: ${TAG_NAME}" \
-            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
-            --prerelease || true
-          gh release upload "$TAG_NAME" conduwuit-x86-64-v3-${{ matrix.os }}.tar.gz --clobber
-
-  # NOTE: Currently just for Ubuntu 22/24 microarchitecture optimized builds (avx512 or avx2)
-  cpu-x86-64-v4:
-    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_SKYLAKE != ''
-    runs-on: ${{ matrix.os }}
-    env:
-      ROCKSDB_LIB_DIR: /usr/local/lib
-
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-22.04
-          - ubuntu-24.04
-        profile:
-          - release-max-perf
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-tags: true
-          fetch-depth: 0
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            liburing-dev \
-            libbz2-dev \
-            clang \
-            libclang-dev \
-            llvm-dev \
-            mold
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Detect best CPU target
-        id: cpu
-        uses: ./.github/actions/get-cpu-target
-
-      - name: Setup RocksDB and Jemalloc
-        uses: ./.github/actions/setup-prebuilts
-        with:
-          cache-key: ${{ matrix.os }}
-          arch: x86-64-v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
-        with:
-          toolchain: "1.90.0"
-
-      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
-        with:
-          shared-key: ${{ matrix.os }}-${{ github.job }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
-
-      - name: Debug checks
-        run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
-        env:
-          PROFILE: ${{ matrix.profile }}
-          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-
-      - name: Build (${{ steps.cpu.outputs.target }})
-        env:
-          PROFILE: ${{ matrix.profile }}
-          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          RUSTFLAGS: -C link-arg=-fuse-ld=mold
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=x86-64-v4
-        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features bindgen-static,standard"
-
-      - name: Sanity check binary
-        continue-on-error: true
-        shell: bash
-        run: |
-          if grep -q "avx512f" /proc/cpuinfo && \
-             grep -q "avx512dq" /proc/cpuinfo && \
-             grep -q "avx512bw" /proc/cpuinfo && \
-             grep -q "avx512vl" /proc/cpuinfo; then
-            ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
-          else
-            echo "Skipping binary sanity check: CPU does not support all required AVX-512 flags (F, DQ, BW, VL)."
-            echo "This is expected on most GitHub Actions runners for x86-64-v4 builds."
-          fi
-
-      - name: Package Assets
-        run: |
-          mkdir -p release-assets/bin release-assets/lib release-assets/include
-          cp target/latest/conduwuit release-assets/bin/
-          # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
-          tar -czvf conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz -C release-assets .
-
-      - name: Upload binary (${{ steps.cpu.outputs.target }})
-        uses: actions/upload-artifact@v4
-        with:
-          name: conduwuit-x86-64-v4-${{ matrix.os }}
-          path: conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz
-          retention-days: 60
-
-      - name: Publish Release
-        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/'))
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Use the branch name or tag for the release name
-          TAG_NAME="${{ github.ref_name }}"
-          [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
-          gh release create "$TAG_NAME" \
-            --title "Build: ${TAG_NAME}" \
-            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
-            --prerelease || true
-          gh release upload "$TAG_NAME" conduwuit-x86-64-v4-${{ matrix.os }}.tar.gz --clobber
-
-  # NOTE: Max performance build targeting ARM64 (specifically Raspberry Pi 5 / Cortex-A76)
-  # configured for 16K page sizes via a 64K jemalloc override.
-  cpu-arm64-cortex-a76:
-    if: github.ref == 'refs/heads/main' && vars.C10Y_ENABLE_GITHUB_WORKFLOW_BUILD_CPU_ARM64_PI5 != ''
-    runs-on: ${{ matrix.os }}-arm
-    env:
-      # 16 = 64K page size. Safely covers Pi 5's 16K pages while remaining compatible.
-      JEMALLOC_SYS_WITH_LG_PAGE: 16
-      ROCKSDB_LIB_DIR: /usr/local/lib
-
-    # Ubuntu 22.04 uses glibc 2.35 (compatible)
-    # Raspberry Pi uses glibc 2.36
-    # Ubuntu 24.04 uses glibc 2.39 (compatible only with glibc upgrade on Pi 5)
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-22.04
-          - ubuntu-24.04
-        profile:
-          - release-max-perf
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-tags: true
-          fetch-depth: 0
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            liburing-dev \
-            libbz2-dev \
-            clang \
-            libclang-dev \
-            llvm-dev \
-            mold
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Setup RocksDB and Jemalloc
-        uses: ./.github/actions/setup-prebuilts
-        with:
-          cache-key: ${{ matrix.os }}
-          arch: arm64-cortex-a76
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
-        with:
-          toolchain: "1.90.0"
-
-      - uses: Swatinem/rust-cache@ad397744b0d591a723ab90405b7247fac0e6b8db # v2
-        with:
-          shared-key: ${{ matrix.os }}-${{ github.job }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          env-vars: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS PROFILE JEMALLOC_SYS_WITH_LG_PAGE
-
-      - name: Debug checks
-        run: echo "RUSTFLAGS=$RUSTFLAGS" && echo "JEMALLOC_OVERRIDE=$JEMALLOC_OVERRIDE" && make vars cpu-info
-        env:
-          PROFILE: ${{ matrix.profile }}
-
-      - name: Build (cortex-a76)
-        env:
-          PROFILE: ${{ matrix.profile }}
-          CONTINUWUITY_BRANCH: ${{ github.head_ref || github.ref_name }}
-          RUSTFLAGS: -C link-arg=-fuse-ld=mold
-          # The Raspberry Pi 5 uses a Cortex-A76 CPU. Setting this maximizes performance.
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=cortex-a76
-        run: make build CARGO_FLAGS="--config Cargo.custom.toml --profile ${{ matrix.profile }} --features bindgen-static,standard"
-
-      - name: Sanity check binary
-        env:
-          LD_LIBRARY_PATH: /usr/local/lib
-        run: ./target/latest/conduwuit --version && ./target/latest/conduwuit --version-verbose
-
-      - name: Package Assets
-        run: |
-          mkdir -p release-assets/bin release-assets/lib release-assets/include
-          cp target/latest/conduwuit release-assets/bin/
-          # Include the static .a library
-          cp target/${{ matrix.profile }}/libconduwuit.a release-assets/lib/ || cp target/release/libconduwuit.a release-assets/lib/ || true
-          tar -czvf conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz -C release-assets .
-
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: conduwuit-arm64-cortex-a76-${{ matrix.os }}
-          path: conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz
-          retention-days: 60
-
-      - name: Publish Release
-        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/'))
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Use the branch name or tag for the release name
-          TAG_NAME="${{ github.ref_name }}"
-          [ "${{ github.ref_type }}" != "tag" ] && TAG_NAME="latest-${TAG_NAME}"
-          gh release create "$TAG_NAME" \
-            --title "Build: ${TAG_NAME}" \
-            --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" \
-            --prerelease || true
-          gh release upload "$TAG_NAME" conduwuit-arm64-cortex-a76-${{ matrix.os }}.tar.gz --clobber
+          gh release create "$TAG_NAME" --title "Build: ${TAG_NAME}" --notes "Automated build for ${TAG_NAME} (${{ github.sha }})" --prerelease || true
+          gh release upload "$TAG_NAME" conduwuit-${{ matrix.arch }}-${{ matrix.os }}.tar.gz --clobber

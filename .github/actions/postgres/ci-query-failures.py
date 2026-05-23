@@ -25,15 +25,15 @@ else:
     tz_sql = "+00:00"
 
 # Defaults
-sha = "all"
+like_str = "all"
 limit = "15"
 order = "run_date DESC, n_pass DESC"
 
-# Extract sha
-sha_match = re.search(r"sha=([^\s]+)", args_str)
-if sha_match:
-    sha = sha_match.group(1)
-    args_str = args_str.replace(sha_match.group(0), "")
+# Extract like
+like_match = re.search(r"like=([^\s]+)", args_str)
+if like_match:
+    like_str = like_match.group(1)
+    args_str = args_str.replace(like_match.group(0), "")
 
 # Extract limit
 limit_match = re.search(r"limit=([0-9]+)", args_str)
@@ -41,37 +41,59 @@ if limit_match:
     limit = limit_match.group(1)
     args_str = args_str.replace(limit_match.group(0), "")
 
+# Extract baseline (can be a branch, commit hash, or run ID)
+baseline = None
+baseline_match = re.search(r"baseline=([a-zA-Z0-9_\-\.]+)", args_str)
+if baseline_match:
+    baseline = baseline_match.group(1)
+    args_str = args_str.replace(baseline_match.group(0), "")
+
+# Extract new_passes (Must be done before order parsing to avoid greedy capture)
+new_passes = False
+new_passes_match = re.search(r"new_passes=([^\s]*)", args_str, re.IGNORECASE)
+if new_passes_match:
+    val = new_passes_match.group(1).strip().lower()
+    if val in ("1", "true", "yes"):
+        new_passes = True
+    elif val in ("0", "false", "no", ""):
+        new_passes = False
+    args_str = args_str.replace(new_passes_match.group(0), "")
+
 # Extract order (it takes whatever is left if it starts with order=)
-order_match = re.search(r"order=(.+?)(?:$| sha=| limit=)", args_str + " ")
+order_match = re.search(r"order=(.+?)(?:$| like=| limit=| new_passes=)", args_str + " ", re.IGNORECASE)
 if order_match:
     order = order_match.group(1).strip()
 
-base_query = f"""
-SELECT
-    version_string,
-    to_char(run_date AT TIME ZONE '{tz_sql}', 'YYYY-MM-DD HH24:MI:SS') AS run_date,
-    (n_pass + n_skip + n_fail) AS n_total,
-    n_pass,
-    n_skip,
-    n_fail,
-    new_pass,
-    new_fail,
-    profile,
-    regexp_replace(features, '[, ]+', E'\n', 'g') AS features,
-    os,
-    arch,
-    new_failures_list
-FROM
-    v_run_regressions"""
+if new_passes:
+    columns_tail = "new_failures_list,\n    new_passes_list"
+else:
+    columns_tail = "new_failures_list"
 
-if sha == "all":
+if baseline:
+    # A specific commit/branch was requested as the baseline
+    baseline_run_filter = f"(b.commit_hash LIKE '{baseline}%' OR b.version_string LIKE '%{baseline}%' OR b.branch LIKE '%{baseline}%' OR b.id::text = '{baseline}')"
+else:
+    # Default to recent main/upstream
+    baseline_run_filter = "(b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream') OR b.version_string LIKE '%main%')"
+
+sql_file_path = os.path.join(os.path.dirname(__file__), "queries.sql")
+with open(sql_file_path, "r") as f:
+    base_query_template = f.read()
+
+base_query = base_query_template.format(
+    baseline_run_filter=baseline_run_filter,
+    tz_sql=tz_sql,
+    columns_tail=columns_tail
+)
+
+if like_str == "all":
     query = f"{base_query}\nORDER BY\n    {order}\nLIMIT {limit}"
 else:
-    query = f"{base_query}\nWHERE\n    commit_hash LIKE '{sha}%'\n    OR upstream_sha LIKE '{sha}%'\nORDER BY\n    {order}\nLIMIT {limit}"
+    query = f"{base_query}\nWHERE\n    version_string LIKE '%{like_str}%'\nORDER BY\n    {order}\nLIMIT {limit}"
 
 print(f"\nExecuting Query:\n{query}\n")
 
 # Execute the db-shell script with the query
 env = os.environ.copy()
-env["PAGER"] = "less -X -F -S"
+env["PAGER"] = env.get("PAGER") or "less -X -F -S"
 subprocess.run(["./bin/db-shell", "-c", query], env=env)

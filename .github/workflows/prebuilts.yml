@@ -25,14 +25,14 @@ on:
       release_tag:
         description: "Target GitHub Release Tag"
         required: true
-        default: "prebuilts-v0.5"
+        default: "prebuilts-v0.5.7"
 
 env:
   ROCKSDB_DEFAULT_VERSION: "10.5.1"
   JEMALLOC_DEFAULT_VERSION: "5.3.0"
   LZ4_DEFAULT_VERSION: "1.9.4"
   ZSTD_DEFAULT_VERSION: "1.5.6"
-  DEFAULT_RELEASE_TAG: "prebuilts-v0.5"
+  DEFAULT_RELEASE_TAG: "prebuilts-v0.5.7"
 
 jobs:
   check-existing:
@@ -44,6 +44,9 @@ jobs:
       lz4: ${{ steps.check.outputs.lz4 }}
       zstd: ${{ steps.check.outputs.zstd }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Determine builds needed
         id: check
         env:
@@ -56,7 +59,7 @@ jobs:
 
           check_dep() {
             local dep="$1" version="$2" matrix="[]"
-            for arch in x86-64-v2 x86-64-v3 x86-64-v4 arm64-cortex-a76; do
+            for arch in x86-64-v2 x86-64-v3 x86-64-v4 arm64-generic arm64-cortex-a76; do
               for os in ubuntu-22.04 ubuntu-24.04; do
                 local filename="${dep}-${version}-${arch}-${os}.tar.gz"
                 if ! echo "$EXISTING" | grep -qF "$filename"; then
@@ -70,15 +73,26 @@ jobs:
             echo "$matrix"
           }
 
-          ROCKSDB_V="${{ github.event.inputs.rocksdb_version }}"
-          JEMALLOC_V="${{ github.event.inputs.jemalloc_version }}"
-          LZ4_V="${{ github.event.inputs.lz4_version }}"
-          ZSTD_V="${{ github.event.inputs.zstd_version }}"
+          # Extract versions from CSV
+          CSV=".github/ellis_link_deps.csv"
+          get_ver() { grep "^$1," "$CSV" | cut -d',' -f2; }
 
-          echo "rocksdb=$(check_dep rocksdb "${ROCKSDB_V:-$ROCKSDB_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
-          echo "jemalloc=$(check_dep jemalloc "${JEMALLOC_V:-$JEMALLOC_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
-          echo "lz4=$(check_dep lz4 "${LZ4_V:-$LZ4_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
-          echo "zstd=$(check_dep zstd "${ZSTD_V:-$ZSTD_DEFAULT_VERSION}")" >> "$GITHUB_OUTPUT"
+          ROCKSDB_V="${{ github.event.inputs.rocksdb_version }}"
+          ROCKSDB_V="${ROCKSDB_V:-$(get_ver rocksdb)}"
+
+          JEMALLOC_V="${{ github.event.inputs.jemalloc_version }}"
+          JEMALLOC_V="${JEMALLOC_V:-$(get_ver jemalloc)}"
+
+          LZ4_V="${{ github.event.inputs.lz4_version }}"
+          LZ4_V="${LZ4_V:-$(get_ver lz4)}"
+
+          ZSTD_V="${{ github.event.inputs.zstd_version }}"
+          ZSTD_V="${ZSTD_V:-$(get_ver zstd)}"
+
+          echo "rocksdb=$(check_dep rocksdb "$ROCKSDB_V")" >> "$GITHUB_OUTPUT"
+          echo "jemalloc=$(check_dep jemalloc "$JEMALLOC_V")" >> "$GITHUB_OUTPUT"
+          echo "lz4=$(check_dep lz4 "$LZ4_V")" >> "$GITHUB_OUTPUT"
+          echo "zstd=$(check_dep zstd "$ZSTD_V")" >> "$GITHUB_OUTPUT"
 
   build-rocksdb:
     name: Build RocksDB (${{ matrix.arch }}, ${{ matrix.os }})
@@ -92,7 +106,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
@@ -107,6 +121,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -123,14 +139,15 @@ jobs:
           just prebuild-rocksdb
           just install-rocksdb
 
-          cd /usr/local
+          cd /usr/local/uwu
+          CSV="$GITHUB_WORKSPACE/.github/ellis_link_deps.csv"
           VERSION="${{ github.event.inputs.rocksdb_version }}"
-          VERSION="${VERSION:-$ROCKSDB_DEFAULT_VERSION}"
+          VERSION="${VERSION:-$(grep "^rocksdb," "$CSV" | cut -d',' -f2)}"
           TAR_FILENAME="rocksdb-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/rocksdb lib/librocksdb*
 
       - name: Upload Artifact Storage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rocksdb_${{ matrix.arch }}_${{ matrix.os }}
           path: "*.tar.gz"
@@ -148,7 +165,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
@@ -165,6 +182,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -181,14 +200,15 @@ jobs:
           just prebuild-jemalloc
           just install-jemalloc
 
-          cd /usr/local
+          cd /usr/local/uwu
+          CSV="$GITHUB_WORKSPACE/.github/ellis_link_deps.csv"
           VERSION="${{ github.event.inputs.jemalloc_version }}"
-          VERSION="${VERSION:-$JEMALLOC_DEFAULT_VERSION}"
+          VERSION="${VERSION:-$(grep "^jemalloc," "$CSV" | cut -d',' -f2)}"
           TAR_FILENAME="jemalloc-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/jemalloc lib/libjemalloc*
 
       - name: Upload Artifact Storage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jemalloc_${{ matrix.arch }}_${{ matrix.os }}
           path: "*.tar.gz"
@@ -206,7 +226,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
@@ -223,6 +243,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -239,14 +261,15 @@ jobs:
           just prebuild-lz4
           just install-lz4
 
-          cd /usr/local
+          cd /usr/local/uwu
+          CSV="$GITHUB_WORKSPACE/.github/ellis_link_deps.csv"
           VERSION="${{ github.event.inputs.lz4_version }}"
-          VERSION="${VERSION:-$LZ4_DEFAULT_VERSION}"
+          VERSION="${VERSION:-$(grep "^lz4," "$CSV" | cut -d',' -f2)}"
           TAR_FILENAME="lz4-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/lz4* lib/liblz4*
 
       - name: Upload Artifact Storage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: lz4_${{ matrix.arch }}_${{ matrix.os }}
           path: "*.tar.gz"
@@ -264,7 +287,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install system dependencies
         run: |
@@ -279,6 +302,8 @@ jobs:
           ARCH="${{ matrix.arch }}"
           if [[ "$ARCH" == "arm64-cortex-a76" ]]; then
             EXTRA_FLAGS="-march=armv8.2-a+crc"
+          elif [[ "$ARCH" == "arm64-generic" ]]; then
+            EXTRA_FLAGS="-march=armv8-a"
           elif [[ "$ARCH" == "x86-64-v4" ]]; then
             EXTRA_FLAGS="-march=$ARCH -mpclmul -mavx512f -mavx512bw -mavx512cd -mavx512dq -mavx512vl"
           elif [[ "$ARCH" == x86-64-v* ]]; then
@@ -295,14 +320,15 @@ jobs:
           just prebuild-zstd
           just install-zstd
 
-          cd /usr/local
+          cd /usr/local/uwu
+          CSV="$GITHUB_WORKSPACE/.github/ellis_link_deps.csv"
           VERSION="${{ github.event.inputs.zstd_version }}"
-          VERSION="${VERSION:-$ZSTD_DEFAULT_VERSION}"
+          VERSION="${VERSION:-$(grep "^zstd," "$CSV" | cut -d',' -f2)}"
           TAR_FILENAME="zstd-${VERSION}-${{ matrix.arch }}-${{ matrix.os }}.tar.gz"
           sudo tar -czvf "$GITHUB_WORKSPACE/$TAR_FILENAME" include/zstd* lib/libzstd*
 
       - name: Upload Artifact Storage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: zstd_${{ matrix.arch }}_${{ matrix.os }}
           path: "*.tar.gz"
@@ -315,7 +341,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: prebuilts_download
           merge-multiple: true
