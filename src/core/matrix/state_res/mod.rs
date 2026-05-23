@@ -1235,21 +1235,7 @@ where
 		return Ok(vec![]);
 	}
 
-	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
-		Arc::new(DashMap::new());
-	let cached_fetch = |id: OwnedEventId| {
-		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> =
-			Arc::clone(&fetch_cache);
-		let cell: Arc<OnceCell<Option<E>>> = cache
-			.entry(id.clone())
-			.or_insert_with(|| Arc::new(OnceCell::new()))
-			.value()
-			.clone();
-		async move {
-			let res: &Option<E> = cell.get_or_init(|| async { fetch_event(id).await }).await;
-			res.clone()
-		}
-	};
+
 
 	// Step 1: Walk the mainline (the chain of power level events starting from the
 	// resolved power level) and assign each a position. Position 0 = most recent
@@ -1266,13 +1252,13 @@ where
 		mainline_depth.insert(p.clone(), position);
 		position = position.saturating_add(1);
 
-		let Some(event) = cached_fetch(p).await else {
+		let Some(event) = fetch_event(p).await else {
 			break;
 		};
 
 		pl = None;
 		for aid in event.auth_events() {
-			let Some(aev) = cached_fetch(aid.to_owned()).await else {
+			let Some(aev) = fetch_event(aid.to_owned()).await else {
 				continue;
 			};
 			if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
@@ -1298,7 +1284,7 @@ where
 	let mut event_ts: HashMap<&OwnedEventId, MilliSecondsSinceUnixEpoch> = HashMap::new();
 
 	for ev_id in to_sort {
-		let Some(event) = cached_fetch(ev_id.clone()).await else {
+		let Some(event) = fetch_event(ev_id.clone()).await else {
 			continue;
 		};
 		event_ts.insert(ev_id, event.origin_server_ts());
@@ -1311,7 +1297,7 @@ where
 				// Find the 1-hop PL event
 				let mut current_pl = None;
 				for aid in event.auth_events() {
-					let Some(aev) = cached_fetch(aid.to_owned()).await else {
+					let Some(aev) = fetch_event(aid.to_owned()).await else {
 						continue;
 					};
 					if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
@@ -1331,7 +1317,7 @@ where
 					}
 					current_pl = None;
 					for aid in c_pl.auth_events() {
-						let Some(aev) = cached_fetch(aid.to_owned()).await else {
+						let Some(aev) = fetch_event(aid.to_owned()).await else {
 							continue;
 						};
 						if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
