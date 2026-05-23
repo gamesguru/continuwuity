@@ -18,7 +18,7 @@ use std::{
 	hash::{BuildHasher, Hash},
 };
 
-use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt, future};
+use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt, future, stream};
 use ruma::{
 	EventId, Int, MilliSecondsSinceUnixEpoch, OwnedEventId, RoomVersionId,
 	events::{
@@ -529,25 +529,20 @@ where
 {
 	debug!("reverse topological sort of power events");
 
-	let fetch_cache =
-		std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::<OwnedEventId, E>::new()));
-	let cached_fetch = |id: OwnedEventId| {
-		let cache = std::sync::Arc::clone(&fetch_cache);
-		async move {
-			{
-				let read_guard = cache.read().await;
-				if let Some(ev) = read_guard.get(&id) {
-					return Some(ev.clone());
-				}
-			}
-			let ev = fetch_event(id.clone()).await;
-			if let Some(ref e) = ev {
-				let mut write_guard = cache.write().await;
-				write_guard.insert(id, e.clone());
-			}
-			ev
-		}
-	};
+	let all_ids_to_fetch: HashSet<_> = events_to_sort
+		.iter()
+		.chain(auth_diff.iter())
+		.cloned()
+		.collect();
+
+	let pre_fetched: HashMap<OwnedEventId, E> = all_ids_to_fetch
+		.into_iter()
+		.stream()
+		.broad_filter_map(async |id| fetch_event(id.clone()).await.map(|ev| (id, ev)))
+		.collect()
+		.await;
+
+	let cached_fetch = |id: OwnedEventId| future::ready(pre_fetched.get(&id).cloned());
 
 	let mut graph = HashMap::new();
 	for event_id in events_to_sort {
@@ -1151,25 +1146,56 @@ where
 		return Ok(vec![]);
 	}
 
-	let fetch_cache =
-		std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::<OwnedEventId, E>::new()));
-	let cached_fetch = |id: OwnedEventId| {
-		let cache = std::sync::Arc::clone(&fetch_cache);
-		async move {
-			{
-				let read_guard = cache.read().await;
-				if let Some(ev) = read_guard.get(&id) {
-					return Some(ev.clone());
+	let mut pre_fetched: HashMap<OwnedEventId, E> = to_sort
+		.iter()
+		.cloned()
+		.stream()
+		.broad_filter_map(async |id| {
+			if let Some(ev) = fetch_event(id.clone()).await {
+				let mut deps = vec![(id, ev.clone())];
+				for aid in ev.auth_events() {
+					if let Some(aev) = fetch_event(aid.to_owned()).await {
+						deps.push((aid.to_owned(), aev));
+					}
+				}
+				Some(stream::iter(deps))
+			} else {
+				None
+			}
+		})
+		.flatten()
+		.collect()
+		.await;
+
+	// Pre-fetch the linear mainline chain serially
+	let mut pl_iter = resolved_power_level.clone();
+	while let Some(p) = pl_iter {
+		if !pre_fetched.contains_key(&p) {
+			if let Some(ev) = fetch_event(p.clone()).await {
+				pre_fetched.insert(p.clone(), ev);
+			} else {
+				break;
+			}
+		}
+
+		let ev = pre_fetched.get(&p).unwrap().clone();
+		pl_iter = None;
+		for aid in ev.auth_events() {
+			if !pre_fetched.contains_key(aid) {
+				if let Some(aev) = fetch_event(aid.to_owned()).await {
+					pre_fetched.insert(aid.to_owned(), aev.clone());
 				}
 			}
-			let ev = fetch_event(id.clone()).await;
-			if let Some(ref e) = ev {
-				let mut write_guard = cache.write().await;
-				write_guard.insert(id, e.clone());
+			if let Some(aev) = pre_fetched.get(aid) {
+				if is_type_and_key(aev, &TimelineEventType::RoomPowerLevels, "") {
+					pl_iter = Some(aid.to_owned());
+					break;
+				}
 			}
-			ev
 		}
-	};
+	}
+
+	let cached_fetch = |id: OwnedEventId| future::ready(pre_fetched.get(&id).cloned());
 
 	// Step 1: Walk the mainline (the chain of power level events starting from the
 	// resolved power level) and assign each a position. Position 0 = most recent
