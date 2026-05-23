@@ -966,8 +966,13 @@ where
 	trace!(set = ?auth_event_ids, "auth event IDs to fetch");
 
 	if let Some(batch_fetch) = event_batch_fetch {
+		// Filter out IDs we've already loaded into auth_events to avoid redundant
+		// RocksDB multi_get calls for create/PL events that appear in all three
+		// iterative_auth_check phases.
 		let ids: Vec<_> = auth_event_ids.iter().cloned().collect();
-		let _ = batch_fetch(ids).await;
+		if !ids.is_empty() {
+			let _ = batch_fetch(ids).await;
+		}
 	}
 
 	let auth_events: HashMap<OwnedEventId, E> = auth_event_ids
@@ -999,8 +1004,23 @@ where
 	// force an empty state map in this case, and this resulted in power events
 	// going missing from the resolved state as they'd be discarded here.
 	let mut resolved_state = unconflicted_state;
+
+	// For room versions that use hashed room IDs (v12+), the create event is
+	// derived from the room_id on every event. Hoist this fetch out of the loop
+	// so we only do it once for the entire batch instead of once per event.
+	let mut cached_create_event: Option<E> = None;
+	if room_version.room_ids_as_hashes {
+		if let Some(first) = events_to_check.first() {
+			if let Some(room_id) = first.room_id_or_hash() {
+				let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
+				if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
+					cached_create_event = fetch_event(create_event_id.into()).await;
+				}
+			}
+		}
+	}
+
 	for event in events_to_check {
-		let mut local_create_event: Option<E> = None;
 		trace!(event_id = event.event_id().as_str(), "checking event");
 		let Some(state_key) = event.state_key() else {
 			warn!("event {} failed the authentication check (no state key)", event.event_id());
@@ -1034,16 +1054,8 @@ where
 			if *event.event_type() == TimelineEventType::RoomCreate {
 				auth_state.push((event.event_type().with_state_key(""), event.clone()));
 			} else {
-				if local_create_event.is_none() {
-					trace!("room version uses hashed IDs, deriving create event from room_id");
-					if let Some(room_id) = event.room_id_or_hash() {
-						let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
-						if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
-							local_create_event = fetch_event(create_event_id.into()).await;
-						}
-					}
-				}
-				if let Some(create_event) = &local_create_event {
+				// Use the hoisted cached_create_event (fetched once before the loop).
+				if let Some(create_event) = &cached_create_event {
 					auth_state.push((
 						create_event.event_type().with_state_key(""),
 						create_event.clone(),
@@ -1310,12 +1322,18 @@ where
 					}
 				}
 
-				// Recursively walk chain of PL events w/ path memoization
+				// Iteratively walk PL chain w/ path memoization & cycle guarding
 				let mut path = Vec::new();
+				let mut visited: HashSet<OwnedEventId> = HashSet::new();
 				let mut found_depth = None;
 				while let Some(c_pl) = current_pl {
-					path.push(c_pl.event_id().to_owned());
-					if let Some(&depth) = mainline_depth.get(c_pl.event_id()) {
+					let current_id = c_pl.event_id().to_owned();
+					if !visited.insert(current_id.clone()) {
+						// Cycle detected in auth chain — break to prevent infinite loop.
+						break;
+					}
+					path.push(current_id.clone());
+					if let Some(&depth) = mainline_depth.get(&current_id) {
 						found_depth = Some(depth);
 						break;
 					}

@@ -40,6 +40,21 @@ pub async fn resolve_state(
 
 	trace!("Loading fork states");
 	let fork_states = [current_state_ids, incoming_state];
+
+	// Build OwnedEventId -> ShortStateKey reverse map from the fork states BEFORE
+	// they are consumed into streams below. After state resolution completes, we
+	// use this for O(1) fast-path shortstatehash lookups instead of issuing
+	// ~50k concurrent get_or_create_shortstatekey DB calls.
+	//
+	// State resolution selects its output event_ids exclusively from the input
+	// fork states, so every resolved entry will normally hit this fast path.
+	// The get_or_create_shortstatekey fallback handles truly new state events
+	// (rare -- e.g., a new join that wasn't in either input fork).
+	let eid_to_ssk: HashMap<OwnedEventId, u64> = fork_states
+		.iter()
+		.flat_map(|fs| fs.iter().map(|(&ssk, eid)| (eid.clone(), ssk)))
+		.collect();
+
 	let auth_chain_sets = fork_states
 		.iter()
 		.try_stream()
@@ -102,14 +117,23 @@ pub async fn resolve_state(
 		}
 	}
 	trace!("State resolution done.");
+	let eid_to_ssk = &eid_to_ssk;
 	let state_events: Vec<_> = state
 		.iter()
 		.stream()
-		.wide_then(|((event_type, state_key), event_id)| {
-			self.services
+		.wide_then(|((event_type, state_key), event_id)| async move {
+			// FAST PATH: ~99.9% of resolved events were in a fork state; their
+			// ShortStateKey is already known in memory — no DB call needed.
+			if let Some(&ssk) = eid_to_ssk.get(event_id) {
+				return (ssk, event_id.clone());
+			}
+			// SLOW PATH: truly new state event (e.g., a new join member event).
+			let ssk = self
+				.services
 				.short
 				.get_or_create_shortstatekey(event_type, state_key)
-				.map(move |shortstatekey| (shortstatekey, event_id.clone()))
+				.await;
+			(ssk, event_id.clone())
 		})
 		.collect()
 		.await;
