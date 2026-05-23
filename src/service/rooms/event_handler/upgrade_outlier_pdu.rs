@@ -20,7 +20,7 @@ use ruma::{
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
 	state_compressor::{CompressedState, HashSetCompressStateEvent},
-	timeline::{RawPduId, RoomMutexGuard},
+	timeline::RawPduId,
 };
 
 /// Upgrade an outlier PDU to a full timeline event.
@@ -160,12 +160,7 @@ where
 		.await;
 	}
 
-	// We start looking at current room state now, so lets lock the room
-	trace!(room_id = %room_id, "Locking the room");
-	let state_lock = self.services.state.mutex.lock(room_id).await;
-
-	// Re-check if the PDU was added to the timeline while we were waiting for
-	// the lock
+	// Re-check if the PDU was added to the timeline while we were waiting
 	if let Ok(pduid) = self
 		.services
 		.timeline
@@ -300,20 +295,40 @@ where
 	// soft-failed ones. State resolution merges forks deterministically —
 	// a soft-failed event may carry state from a fork we haven't seen,
 	// and feeding it into resolve_state heals local drift.
-	if incoming_pdu.state_key().is_some() {
-		self.apply_incoming_state_update(
-			&incoming_pdu,
-			state_at_incoming_event,
-			room_id,
-			&room_version_id,
-			&state_lock,
-		)
+	let state_delta_opt = self
+		.calculate_state_delta(&incoming_pdu, state_at_incoming_event, room_id, &room_version_id)
 		.await?;
-	}
 
 	// Calculate forward extremities AFTER the soft-fail evaluation.
 	// Per spec, soft-failed events are NOT added as forward extremities.
 	trace!("Appending pdu to timeline");
+
+	// NOW lock the room!
+	trace!(room_id = %room_id, "Locking the room");
+	let state_lock = self.services.state.mutex.lock(room_id).await;
+
+	// Re-check if the PDU was added to the timeline while we were doing CPU-bound
+	// state res
+	if let Ok(pduid) = self
+		.services
+		.timeline
+		.get_pdu_id(incoming_pdu.event_id())
+		.await
+	{
+		return Ok(Some(pduid));
+	}
+
+	if let Some(HashSetCompressStateEvent { shortstatehash, added, removed }) = state_delta_opt {
+		Box::pin(self.services.state.force_state(
+			room_id,
+			shortstatehash,
+			added,
+			removed,
+			&state_lock,
+		))
+		.await?;
+	}
+
 	let current_extremities: Vec<_> = self
 		.services
 		.state
@@ -501,21 +516,24 @@ where
 }
 
 /// For state events: build the new post-event state, run state resolution
-/// against the current room state, and apply the result via `force_state`.
+/// against the current room state, and return the state delta for application.
 ///
-/// Extracted from `upgrade_outlier_to_timeline_pdu` to give `force_state`
-/// its own async state-machine frame and keep the caller below the
-/// `large_stack_frames` threshold.
+/// Extracted from `upgrade_outlier_to_timeline_pdu` to give `save_state`
+/// its own async state-machine frame and allow Optimistic Concurrency Control
+/// (running without a lock).
 #[implement(super::Service)]
 #[tracing::instrument(level = "debug", skip_all)]
-async fn apply_incoming_state_update(
+async fn calculate_state_delta(
 	&self,
 	incoming_pdu: &PduEvent,
 	state_at_incoming_event: HashMap<u64, OwnedEventId>,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
-	state_lock: &RoomMutexGuard,
-) -> Result<()> {
+) -> Result<Option<HashSetCompressStateEvent>> {
+	if incoming_pdu.state_key().is_none() {
+		return Ok(None);
+	}
+
 	debug!("Event is a state-event. Deriving new room state");
 
 	// We also add state after incoming event to the fork states
@@ -550,22 +568,13 @@ async fn apply_incoming_state_update(
 		result
 	};
 
-	// Set the new room state to the resolved state
-	debug!("Forcing new room state");
-	let HashSetCompressStateEvent { shortstatehash, added, removed } = self
+	// Save the resolved state delta into the database (safe to do concurrently)
+	debug!("Compressing new room state");
+	let state_delta = self
 		.services
 		.state_compressor
 		.save_state(room_id, new_room_state)
 		.await?;
 
-	Box::pin(self.services.state.force_state(
-		room_id,
-		shortstatehash,
-		added,
-		removed,
-		state_lock,
-	))
-	.await?;
-
-	Ok(())
+	Ok(Some(state_delta))
 }
