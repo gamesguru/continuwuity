@@ -19,6 +19,9 @@ use std::{
 };
 
 use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt, future};
+use dashmap::DashMap;
+use tokio::sync::OnceCell;
+use std::sync::Arc;
 use ruma::{
 	EventId, Int, MilliSecondsSinceUnixEpoch, OwnedEventId, RoomVersionId,
 	events::{
@@ -529,23 +532,17 @@ where
 {
 	debug!("reverse topological sort of power events");
 
-	let fetch_cache =
-		std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::<OwnedEventId, E>::new()));
+	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> = Arc::new(DashMap::new());
 	let cached_fetch = |id: OwnedEventId| {
-		let cache = std::sync::Arc::clone(&fetch_cache);
+		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> = Arc::clone(&fetch_cache);
+		let cell: Arc<OnceCell<Option<E>>> = cache
+			.entry(id.clone())
+			.or_insert_with(|| Arc::new(OnceCell::new()))
+			.value()
+			.clone();
 		async move {
-			{
-				let read_guard = cache.read().await;
-				if let Some(ev) = read_guard.get(&id) {
-					return Some(ev.clone());
-				}
-			}
-			let ev = fetch_event(id.clone()).await;
-			if let Some(ref e) = ev {
-				let mut write_guard = cache.write().await;
-				write_guard.insert(id, e.clone());
-			}
-			ev
+			let res: &Option<E> = cell.get_or_init(|| async { fetch_event(id).await }).await;
+			res.clone()
 		}
 	};
 
@@ -555,13 +552,14 @@ where
 	}
 
 	// This is used in the `key_fn` passed to the lexico_topo_sort fn
+	let sender_pl_cache: Arc<DashMap<ruma::OwnedUserId, Int>> = Arc::new(DashMap::new());
 	let event_to_pl: HashMap<_, _> = graph
 		.keys()
 		.cloned()
 		.stream()
 		.broad_filter_map(async |event_id| {
 			let pl =
-				get_power_level_for_sender(&event_id, &cached_fetch, global_pl_context).await;
+				get_power_level_for_sender(&event_id, &cached_fetch, global_pl_context, &sender_pl_cache).await;
 
 			Some((event_id, pl))
 		})
@@ -725,6 +723,7 @@ async fn get_power_level_for_sender<E, F, Fut>(
 	event_id: &EventId,
 	fetch_event: &F,
 	global_pl_context: Option<&PowerLevelsContentFields>,
+	sender_pl_cache: &DashMap<ruma::OwnedUserId, Int>,
 ) -> Int
 where
 	F: Fn(OwnedEventId) -> Fut + Sync,
@@ -735,6 +734,12 @@ where
 
 	let event = fetch_event(event_id.to_owned()).await;
 	let sender = event.as_ref().map(|e| Event::sender(e).to_owned());
+
+	if let Some(s) = &sender {
+		if let Some(pl) = sender_pl_cache.get(s) {
+			return *pl;
+		}
+	}
 
 	if let Some(global_context) = global_pl_context {
 		if let Some(s) = &sender {
@@ -749,6 +754,7 @@ where
 
 	if let Some(ev) = event {
 		if is_type_and_key(&ev, &TimelineEventType::RoomCreate, "") {
+			if let Some(s) = &sender { sender_pl_cache.insert(s.clone(), int!(100)); }
 			return int!(100);
 		}
 
@@ -774,11 +780,10 @@ where
 				from_json_str::<PowerLevelsContentFields>(pl_ev.content().get())
 			{
 				if let Some(s) = &sender {
-					if let Some(&user_level) = pl_content.get_user_power(s) {
-						debug!("found {s} at power_level {user_level} via auth chain PL event");
-						return user_level;
-					}
-					return pl_content.users_default;
+					let level = pl_content.get_user_power(s).copied().unwrap_or(pl_content.users_default);
+					sender_pl_cache.insert(s.clone(), level);
+					debug!("found {s} at power_level {level} via auth chain PL event");
+					return level;
 				}
 			}
 		}
@@ -1151,23 +1156,17 @@ where
 		return Ok(vec![]);
 	}
 
-	let fetch_cache =
-		std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::<OwnedEventId, E>::new()));
+	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> = Arc::new(DashMap::new());
 	let cached_fetch = |id: OwnedEventId| {
-		let cache = std::sync::Arc::clone(&fetch_cache);
+		let cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<E>>>>> = Arc::clone(&fetch_cache);
+		let cell: Arc<OnceCell<Option<E>>> = cache
+			.entry(id.clone())
+			.or_insert_with(|| Arc::new(OnceCell::new()))
+			.value()
+			.clone();
 		async move {
-			{
-				let read_guard = cache.read().await;
-				if let Some(ev) = read_guard.get(&id) {
-					return Some(ev.clone());
-				}
-			}
-			let ev = fetch_event(id.clone()).await;
-			if let Some(ref e) = ev {
-				let mut write_guard = cache.write().await;
-				write_guard.insert(id, e.clone());
-			}
-			ev
+			let res: &Option<E> = cell.get_or_init(|| async { fetch_event(id).await }).await;
+			res.clone()
 		}
 	};
 
@@ -1191,13 +1190,25 @@ where
 		};
 
 		pl = None;
+		let mut queue = std::collections::VecDeque::new();
 		for aid in event.auth_events() {
-			let Some(aev) = cached_fetch(aid.to_owned()).await else {
+			queue.push_back(aid.to_owned());
+		}
+		let mut visited = std::collections::HashSet::new();
+
+		while let Some(aid) = queue.pop_front() {
+			if !visited.insert(aid.clone()) {
+				continue;
+			}
+			let Some(aev) = cached_fetch(aid.clone()).await else {
 				continue;
 			};
 			if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-				pl = Some(aid.to_owned());
+				pl = Some(aid);
 				break;
+			}
+			for next_aid in aev.auth_events() {
+				queue.push_back(next_aid.to_owned());
 			}
 		}
 	}
@@ -1230,13 +1241,25 @@ where
 			} else {
 				// Find the power level event in this event's auth_events
 				let mut found = None;
+				let mut queue = std::collections::VecDeque::new();
 				for aid in event.auth_events() {
-					let Some(aev) = cached_fetch(aid.to_owned()).await else {
+					queue.push_back(aid.to_owned());
+				}
+				let mut visited = std::collections::HashSet::new();
+
+				while let Some(aid) = queue.pop_front() {
+					if !visited.insert(aid.clone()) {
+						continue;
+					}
+					let Some(aev) = cached_fetch(aid.clone()).await else {
 						continue;
 					};
 					if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-						found = mainline_depth.get(aid).copied();
+						found = mainline_depth.get(&aid).copied();
 						break;
+					}
+					for next_aid in aev.auth_events() {
+						queue.push_back(next_aid.to_owned());
 					}
 				}
 				found
