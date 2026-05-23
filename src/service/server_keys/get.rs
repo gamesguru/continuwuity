@@ -19,8 +19,14 @@ pub async fn get_event_keys(
 	let required = match required_keys(object, version) {
 		| Ok(required) => required,
 		| Err(e) => {
-			debug_error!("Failed to determine keys required to verify: {e}");
-			return Err!(BadServerResponse("Failed to determine keys required to verify: {e}"));
+			// The event is malformed (e.g. sender User ID exceeds 255 bytes from a
+			// spambot). Return an empty key map so signature verification fails
+			// gracefully for this event rather than propagating a hard error that
+			// poisons the auth chain of all events referencing it.
+			info!(
+				"Failed to determine keys required to verify, treating as unverifiable: {e}"
+			);
+			return Ok(PubKeyMap::new());
 		},
 	};
 	trace!(?required, "Keys required to verify event");
