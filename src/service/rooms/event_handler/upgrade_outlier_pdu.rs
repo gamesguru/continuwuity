@@ -86,7 +86,7 @@ where
 		}
 	}
 
-	debug!(
+	info!(
 		event_id = %incoming_pdu.event_id,
 		"Upgrading PDU from outlier to timeline"
 	);
@@ -466,14 +466,68 @@ where
 	// 10. Fetch missing state and auth chain events by calling /state_ids at
 	//     backwards extremities doing all the checks in this list starting at 1.
 	//     These are not timeline events.
-	debug!(event_id = %incoming_pdu.event_id, "Resolving state at event");
-	let mut state = if incoming_pdu.prev_events().count() == 1 {
-		self.state_at_incoming_degree_one(incoming_pdu, room_id)
-			.await?
-	} else {
-		self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id)
-			.await?
-	};
+	let current_extremities: Vec<_> = self
+		.services
+		.state
+		.get_forward_extremities(room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let prev_events: Vec<_> = incoming_pdu.prev_events().map(ToOwned::to_owned).collect();
+	let exact_match = !current_extremities.is_empty()
+		&& prev_events.len() == current_extremities.len()
+		&& current_extremities.iter().all(|e| prev_events.contains(e));
+
+	let mut state = None;
+
+	if exact_match {
+		info!(
+			"Incoming PDU matches current extremities exactly (fast-forward candidate). \
+			 Fetching current state..."
+		);
+		if let Ok(current_shortstatehash) =
+			self.services.state.get_room_shortstatehash(room_id).await
+		{
+			if current_shortstatehash != 0 {
+				let current_state: HashMap<_, _> = self
+					.services
+					.state_accessor
+					.state_full_shortids(current_shortstatehash)
+					.ready_filter_map(Result::ok)
+					.map(|(shortstatekey, shorteventid)| async move {
+						let event_id = self
+							.services
+							.short
+							.get_eventid_from_short::<Box<_>>(shorteventid)
+							.await
+							.ok()?;
+						Some((shortstatekey, (*event_id).to_owned()))
+					})
+					.buffer_unordered(100)
+					.filter_map(futures::future::ready)
+					.collect()
+					.await;
+
+				state = Some(current_state);
+			}
+		}
+	}
+
+	if state.is_none() {
+		info!(
+			"State is none. Resolving state for incoming PDU (prev_events count: {})",
+			incoming_pdu.prev_events().count()
+		);
+		state = if incoming_pdu.prev_events().count() == 1 {
+			self.state_at_incoming_degree_one(incoming_pdu, room_id)
+				.await?
+		} else {
+			self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id)
+				.await?
+		};
+		info!("State resolution completed for incoming PDU");
+	}
 
 	if state.is_none() && !skip_soft_fail {
 		// Local state is unavailable — prev_events are not yet in DB or their
@@ -587,7 +641,33 @@ async fn calculate_state_delta(
 		state_after.insert(shortstatekey, event_id.to_owned());
 	}
 
-	let new_room_state = {
+	// FAST PATH 2: Bypass V2.1 Auth Check explosion for non-forking events
+	let current_extremities: Vec<_> = self
+		.services
+		.state
+		.get_forward_extremities(room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let prev_events: Vec<_> = incoming_pdu.prev_events().map(ToOwned::to_owned).collect();
+	let is_fast_forward = !current_extremities.is_empty()
+		&& current_extremities.len() == prev_events.len()
+		&& current_extremities.iter().all(|e| prev_events.contains(e));
+
+	let new_room_state = if is_fast_forward {
+		info!("Fast-forward state update, skipping state resolution");
+		self.services
+			.state_compressor
+			.compress_state_events(
+				state_after
+					.iter()
+					.map(|(ssk, eid)| (ssk, std::borrow::Borrow::borrow(eid))),
+			)
+			.collect()
+			.map(Arc::new)
+			.await
+	} else {
 		let t = Instant::now();
 		info!(
 			event_id = %incoming_pdu.event_id(),
