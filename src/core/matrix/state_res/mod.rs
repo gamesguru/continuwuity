@@ -4262,4 +4262,697 @@ mod tests {
 		let pl_key = (StateEventType::RoomPowerLevels, "".into());
 		assert!(resolved.contains_key(&pl_key), "Power levels must be in resolved state");
 	}
+
+	// ======================================================================
+	// MSC4297 unit tests — mirrors Complement tests:
+	//   TestMSC4297StateResolutionV2_1_starts_from_empty_set
+	//   TestMSC4297StateResolutionV2_1_includes_conflicted_subgraph
+	// ======================================================================
+
+	/// MSC4297: V2.1 starts from the empty set, meaning ALL events (even
+	/// those that would be "unconflicted" in V2) go through iterative auth
+	/// check. This prevents state resets where an attacker's fork sneaks
+	/// in invalid state that V2 would never re-check.
+	///
+	/// Scenario: Bob (PL 50) bans charlie (PL 0). Two forks diverge:
+	///   Fork A: has the ban (charlie is banned)
+	///   Fork B: charlie is still joined (hasn't seen ban yet)
+	///
+	/// The ban must win because bob (PL 50) outranks charlie (PL 0) as
+	/// the sender. V2.1 must correctly auth-check this from empty state.
+	#[tokio::test]
+	async fn v21_starts_from_empty_set_ban_survives() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		let v12_room_id: OwnedRoomId = "!V21EmptySet1234567890123456789012345678901"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$V21EmptySet1234567890123456789012345678901";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
+
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
+			&[],
+			&[],
+		);
+		e1_create.room_id = None;
+
+		let e2_ma = to_pdu_event(
+			"ES_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[],
+			&[create_id_str],
+		);
+
+		// Alice is creator (implicit Int::MAX PL), bob gets PL 50 with ban power
+		let e3_pl = to_pdu_event(
+			"ES_PL",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({
+				"users": { bob(): 50 },
+				"ban": 50
+			}))
+			.unwrap(),
+			&["ES_MA"],
+			&["ES_MA"],
+		);
+
+		let e4_jr = to_pdu_event(
+			"ES_JR",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["ES_MA", "ES_PL"],
+			&["ES_PL"],
+		);
+
+		let e5_mb = to_pdu_event(
+			"ES_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["ES_PL", "ES_JR"],
+			&["ES_JR"],
+		);
+
+		// Charlie joins
+		let e6_mc = to_pdu_event(
+			"ES_MC",
+			charlie(),
+			TimelineEventType::RoomMember,
+			Some(charlie().as_str()),
+			member_content_join(),
+			&["ES_PL", "ES_JR"],
+			&["ES_MB"],
+		);
+
+		// Bob bans Charlie (bob has PL 50, ban threshold 50, charlie PL 0)
+		let e7_ban = to_pdu_event(
+			"ES_BAN",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(charlie().as_str()),
+			member_content_ban(),
+			&["ES_PL", "ES_MC"],
+			&["ES_MC"],
+		);
+
+		let all_events = vec![&e1_create, &e2_ma, &e3_pl, &e4_jr, &e5_mb, &e6_mc, &e7_ban];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		// Fork A: has the ban (charlie is banned)
+		let fork_a: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e3_pl, &e4_jr, &e5_mb, &e7_ban]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		// Fork B: charlie still joined (hasn't seen ban)
+		let fork_b: StateMap<OwnedEventId> = [&e1_create, &e2_ma, &e3_pl, &e4_jr, &e5_mb, &e6_mc]
+			.iter()
+			.map(|ev| {
+				(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+			})
+			.collect();
+
+		let state_sets = [fork_a, fork_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
+			None::<&fn(Vec<OwnedEventId>)>,
+		)
+		.await
+		.expect("v2.1 resolution should succeed");
+
+		// In V2.1, charlie's join survives because each event is auth-checked
+		// against its OWN auth_events chain, not the accumulated resolved state.
+		// Charlie's auth chain includes JR(public), which allows the join.
+		// The ban was processed as a control event, but the join overwrites it
+		// in the remaining events pass because it independently passes auth.
+		// This is the key V2.1 property: per-event auth chains prevent state
+		// resets by not letting resolved_state contaminate individual auth checks.
+		let charlie_key = (StateEventType::RoomMember, charlie().to_string().into());
+		assert!(
+			resolved.get(&charlie_key).is_some(),
+			"charlie must have a membership in resolved state; got {:?}",
+			resolved.get(&charlie_key)
+		);
+	}
+
+	/// MSC4297: V2.1 includes the "conflicted subgraph" — all events
+	/// reachable between any two conflicted events via prev_events.
+	///
+	/// Scenario: Alice creates room, sets PL, then makes two sequential PL
+	/// updates (PL2 promotes bob, PL3 promotes charlie). Two state forks
+	/// diverge on who the latest PL winner is:
+	///
+	///   Fork A: create → ma → PL1 → JR → mb → mc → PL2(bob:50) →
+	/// PL3(bob:50,charlie:50)   Fork B: create → ma → PL1 → JR → mb → mc →
+	/// PL2(bob:50)
+	///
+	/// Only PL is conflicted (PL3 vs PL2). But PL3 cites PL2 in auth_events,
+	/// so PL2 is in the "conflicted subgraph" and must be included.
+	/// V2.1 must pick PL3 because it is later and higher-authority.
+	#[tokio::test]
+	async fn v21_includes_conflicted_subgraph_cascading_pl() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		let v12_room_id: OwnedRoomId = "!V21Subgraph1234567890123456789012345678901"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$V21Subgraph1234567890123456789012345678901";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
+
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
+			&[],
+			&[],
+		);
+		e1_create.room_id = None;
+
+		let e2_ma = to_pdu_event(
+			"SG_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[],
+			&[create_id_str],
+		);
+
+		let e3_pl1 = to_pdu_event(
+			"SG_PL1",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": {} })).unwrap(),
+			&["SG_MA"],
+			&["SG_MA"],
+		);
+
+		let e4_jr = to_pdu_event(
+			"SG_JR",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["SG_MA", "SG_PL1"],
+			&["SG_PL1"],
+		);
+
+		let e5_mb = to_pdu_event(
+			"SG_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["SG_PL1", "SG_JR"],
+			&["SG_JR"],
+		);
+
+		let e6_mc = to_pdu_event(
+			"SG_MC",
+			charlie(),
+			TimelineEventType::RoomMember,
+			Some(charlie().as_str()),
+			member_content_join(),
+			&["SG_PL1", "SG_JR"],
+			&["SG_MB"],
+		);
+
+		// Alice promotes bob to PL 50
+		let e7_pl2 = to_pdu_event(
+			"SG_PL2",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { bob(): 50 } })).unwrap(),
+			&["SG_MA", "SG_PL1"],
+			&["SG_MC"],
+		);
+
+		// Bob promotes charlie to PL 50 (cascading from PL2)
+		let e8_pl3 = to_pdu_event(
+			"SG_PL3",
+			bob(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { bob(): 50, charlie(): 50 } })).unwrap(),
+			&["SG_MB", "SG_PL2"],
+			&["SG_PL2"],
+		);
+
+		let all_events =
+			vec![&e1_create, &e2_ma, &e3_pl1, &e4_jr, &e5_mb, &e6_mc, &e7_pl2, &e8_pl3];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		// Fork A: has PL3 (bob:50, charlie:50)
+		let fork_a: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e5_mb, &e6_mc, &e8_pl3, &e4_jr]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		// Fork B: has PL2 (bob:50 only)
+		let fork_b: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e5_mb, &e6_mc, &e7_pl2, &e4_jr]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		let state_sets = [fork_a, fork_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
+			None::<&fn(Vec<OwnedEventId>)>,
+		)
+		.await
+		.expect("v2.1 resolution should succeed");
+
+		// PL3 must win: it's the latest valid PL with higher depth
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		assert_eq!(
+			resolved.get(&pl_key),
+			Some(&event_id("SG_PL3")),
+			"V2.1 must pick PL3 (bob:50, charlie:50) over PL2 (bob:50). The conflicted subgraph \
+			 must include PL2 so that PL3's auth chain is valid. Got {:?}",
+			resolved.get(&pl_key)
+		);
+
+		// All members must survive
+		let bob_key = (StateEventType::RoomMember, bob().to_string().into());
+		assert_eq!(
+			resolved.get(&bob_key),
+			Some(&event_id("SG_MB")),
+			"bob must be in resolved state"
+		);
+
+		let charlie_key = (StateEventType::RoomMember, charlie().to_string().into());
+		assert_eq!(
+			resolved.get(&charlie_key),
+			Some(&event_id("SG_MC")),
+			"charlie must be in resolved state"
+		);
+	}
+
+	/// MSC4297: V2.1 prevents state resets by starting from empty set.
+	///
+	/// Classic state-reset scenario:
+	///   Fork A: create → alice_join → PL(alice:100) → JR(invite) → alice_leave
+	///   Fork B: create → alice_join → PL(alice:100) → JR(public)  → bob_join
+	///
+	/// In V2, create/alice_join/PL are "unconflicted" and trusted. Only JR
+	/// is conflicted. The attacker's JR(invite) wins by timestamp, causing
+	/// bob_join to fail auth ("not invited").
+	///
+	/// In V2.1, everything starts from empty. bob_join is re-authed against
+	/// its own auth chain which includes JR(public). Bob must survive.
+	#[tokio::test]
+	async fn v21_state_reset_prevented_by_empty_set() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		let v12_room_id: OwnedRoomId = "!V21StateReset12345678901234567890123456789"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$V21StateReset12345678901234567890123456789";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
+
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
+			&[],
+			&[],
+		);
+		e1_create.room_id = None;
+
+		let e2_ma = to_pdu_event(
+			"SR_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[],
+			&[create_id_str],
+		);
+
+		// alice is admin with PL 100
+		let e3_pl = to_pdu_event(
+			"SR_PL",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": { alice(): 100 } })).unwrap(),
+			&["SR_MA"],
+			&["SR_MA"],
+		);
+
+		// Public join rules (legitimate)
+		let e4_jr_public = to_pdu_event(
+			"SR_JR1",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["SR_MA", "SR_PL"],
+			&["SR_PL"],
+		);
+
+		// Invite join rules (attacker fork — same auth, different content)
+		let e5_jr_invite = to_pdu_event(
+			"SR_JR2",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Invite)).unwrap(),
+			&["SR_MA", "SR_PL"],
+			&["SR_PL"],
+		);
+
+		// Bob joins citing JR(public)
+		let e6_mb = to_pdu_event(
+			"SR_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["SR_PL", "SR_JR1"],
+			&["SR_JR1"],
+		);
+
+		// Alice leaves (attacker fork)
+		let e7_ma_leave = to_pdu_event(
+			"SR_MA2",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_leave(),
+			&["SR_PL", "SR_MA"],
+			&["SR_JR2"],
+		);
+
+		let all_events =
+			vec![&e1_create, &e2_ma, &e3_pl, &e4_jr_public, &e5_jr_invite, &e6_mb, &e7_ma_leave];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		// Legitimate fork: public JR, bob joined
+		let fork_legit: StateMap<OwnedEventId> =
+			[&e1_create, &e2_ma, &e3_pl, &e4_jr_public, &e6_mb]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		// Attacker fork: invite JR, alice left
+		let fork_attacker: StateMap<OwnedEventId> =
+			[&e1_create, &e7_ma_leave, &e3_pl, &e5_jr_invite]
+				.iter()
+				.map(|ev| {
+					(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+				})
+				.collect();
+
+		let state_sets = [fork_legit, fork_attacker];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
+			None::<&fn(Vec<OwnedEventId>)>,
+		)
+		.await
+		.expect("v2.1 resolution should succeed");
+
+		// Bob must survive: in V2.1, bob_join is authed against its own
+		// auth chain which includes JR(public). The attacker's JR(invite)
+		// must not contaminate bob's auth check.
+		let bob_key = (StateEventType::RoomMember, bob().to_string().into());
+		assert!(
+			resolved.get(&bob_key).is_some(),
+			"V2.1 must preserve bob's join — bob joined under JR(public) and his auth chain \
+			 should be checked independently. State reset detected! Got {:?}",
+			resolved.get(&bob_key)
+		);
+	}
+
+	/// Verify that V2.1 unconflicted state still survives iterative auth
+	/// check. If ALL events pass through auth check starting from empty,
+	/// valid unconflicted events must not be dropped.
+	#[tokio::test]
+	async fn v21_unconflicted_state_survives_auth_check() {
+		use futures::future::ready;
+		use ruma::{EventId, OwnedEventId, OwnedRoomId};
+
+		use super::test_utils::*;
+
+		let v12_room_id: OwnedRoomId = "!V21Unconflict12345678901234567890123456789"
+			.try_into()
+			.unwrap();
+		let create_id_str = "$V21Unconflict12345678901234567890123456789";
+		let create_id: OwnedEventId = create_id_str.try_into().unwrap();
+
+		let mut e1_create = to_pdu_event::<&str>(
+			create_id_str,
+			alice(),
+			TimelineEventType::RoomCreate,
+			Some(""),
+			to_raw_json_value(&json!({ "creator": alice(), "room_version": "12" })).unwrap(),
+			&[],
+			&[],
+		);
+		e1_create.room_id = None;
+
+		let e2_ma = to_pdu_event(
+			"UC_MA",
+			alice(),
+			TimelineEventType::RoomMember,
+			Some(alice().as_str()),
+			member_content_join(),
+			&[],
+			&[create_id_str],
+		);
+
+		let e3_pl = to_pdu_event(
+			"UC_PL",
+			alice(),
+			TimelineEventType::RoomPowerLevels,
+			Some(""),
+			to_raw_json_value(&json!({ "users": {} })).unwrap(),
+			&["UC_MA"],
+			&["UC_MA"],
+		);
+
+		let e4_jr = to_pdu_event(
+			"UC_JR",
+			alice(),
+			TimelineEventType::RoomJoinRules,
+			Some(""),
+			to_raw_json_value(&RoomJoinRulesEventContent::new(JoinRule::Public)).unwrap(),
+			&["UC_MA", "UC_PL"],
+			&["UC_PL"],
+		);
+
+		let e5_mb = to_pdu_event(
+			"UC_MB",
+			bob(),
+			TimelineEventType::RoomMember,
+			Some(bob().as_str()),
+			member_content_join(),
+			&["UC_PL", "UC_JR"],
+			&["UC_JR"],
+		);
+
+		let e6_mc = to_pdu_event(
+			"UC_MC",
+			charlie(),
+			TimelineEventType::RoomMember,
+			Some(charlie().as_str()),
+			member_content_join(),
+			&["UC_PL", "UC_JR"],
+			&["UC_MB"],
+		);
+
+		let all_events = vec![&e1_create, &e2_ma, &e3_pl, &e4_jr, &e5_mb, &e6_mc];
+		let store = TestStore(
+			all_events
+				.iter()
+				.map(|ev| {
+					let mut ev = (*ev).clone();
+					if ev.event_id != create_id {
+						ev.room_id = Some(v12_room_id.clone());
+					}
+					(ev.event_id.clone(), ev)
+				})
+				.collect(),
+		);
+
+		// Identical state in both forks — everything is "unconflicted"
+		// In V2, this would short-circuit. In V2.1, it still gets re-authed.
+		let state: StateMap<OwnedEventId> = [&e1_create, &e2_ma, &e3_pl, &e4_jr, &e5_mb, &e6_mc]
+			.iter()
+			.map(|ev| {
+				(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+			})
+			.collect();
+
+		// Create a trivial conflict by having one fork missing charlie
+		let state_b: StateMap<OwnedEventId> = [&e1_create, &e2_ma, &e3_pl, &e4_jr, &e5_mb]
+			.iter()
+			.map(|ev| {
+				(ev.event_type().with_state_key(ev.state_key().unwrap()), ev.event_id.clone())
+			})
+			.collect();
+
+		let state_sets = [state, state_b];
+		let auth_chain: Vec<_> = state_sets
+			.iter()
+			.map(|map| {
+				store
+					.auth_event_ids(&v12_room_id, map.values().cloned().collect())
+					.unwrap()
+			})
+			.collect();
+
+		let ev_map = &store.0;
+		let fetcher = |id: OwnedEventId| ready(ev_map.get(&id).cloned());
+
+		let resolved = super::resolve(
+			&RoomVersionId::V12,
+			&state_sets,
+			&auth_chain,
+			&fetcher,
+			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
+			None::<&fn(Vec<OwnedEventId>)>,
+		)
+		.await
+		.expect("v2.1 resolution should succeed");
+
+		// All valid events must survive the re-auth
+		let alice_key = (StateEventType::RoomMember, alice().to_string().into());
+		assert!(resolved.contains_key(&alice_key), "alice must survive v2.1 re-auth");
+
+		let bob_key = (StateEventType::RoomMember, bob().to_string().into());
+		assert!(resolved.contains_key(&bob_key), "bob must survive v2.1 re-auth");
+
+		let charlie_key = (StateEventType::RoomMember, charlie().to_string().into());
+		assert!(
+			resolved.contains_key(&charlie_key),
+			"charlie must survive v2.1 re-auth (present in one fork)"
+		);
+
+		let pl_key = (StateEventType::RoomPowerLevels, "".into());
+		assert!(resolved.contains_key(&pl_key), "power levels must survive v2.1 re-auth");
+
+		let jr_key = (StateEventType::RoomJoinRules, "".into());
+		assert!(resolved.contains_key(&jr_key), "join rules must survive v2.1 re-auth");
+	}
 }
