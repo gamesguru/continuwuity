@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use conduwuit::warn;
+use conduwuit;
 
 /// Lightweight atomic counters for federation activity.
 /// Logged periodically and reset after each report.
@@ -35,7 +35,7 @@ impl FederationStats {
 			return false;
 		}
 
-		warn!(
+		conduwuit::info!(
 			target: "stats",
 			"Federation stats: {txns} txns ({pdus} PDUs, {edus} general EDUs, {presence} \
 			 presence, {receipts} receipts, {device_lists} device lists, {to_device} to-device, \
