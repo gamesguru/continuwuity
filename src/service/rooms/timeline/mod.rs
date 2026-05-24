@@ -762,7 +762,24 @@ impl Service {
 
 		// Calculate the true DAG forward extremities first (needed for both
 		// state resolution and the extremity store update below).
-		let true_extremities = calculate_true_extremities(&graph, &sorted);
+		let mut true_extremities: Vec<OwnedEventId> = calculate_true_extremities(&graph, &sorted)
+			.into_iter()
+			.map(ToOwned::to_owned)
+			.collect();
+
+		// Preserve outlier extremities (e.g. from force-set-state) that are not in the
+		// timeline.
+		let current_exts: Vec<_> = self
+			.services
+			.state
+			.get_forward_extremities(room_id)
+			.collect()
+			.await;
+		for ext in current_exts {
+			if !entries.contains_key(ext) {
+				true_extremities.push(ext.to_owned());
+			}
+		}
 
 		if true_extremities.len() > 1 {
 			// Multiple forks — run state_res to reconcile
@@ -818,7 +835,11 @@ impl Service {
 		if !true_extremities.is_empty() {
 			self.services
 				.state
-				.set_forward_extremities(room_id, true_extremities.iter().copied(), &state_lock)
+				.set_forward_extremities(
+					room_id,
+					true_extremities.iter().map(AsRef::as_ref),
+					&state_lock,
+				)
 				.await;
 
 			info!(

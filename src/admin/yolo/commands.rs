@@ -2375,11 +2375,14 @@ pub(super) async fn fetch_pdu(
 		.await
 		.ok();
 
+	info!("fetch_pdu: sending federation request to {server} for event...");
 	let response = self
 		.services
 		.sending
 		.send_federation_request(&server, get_event::v1::Request::new(event_id, None))
 		.await?;
+
+	info!("fetch_pdu: received response from {server}, parsing PDU...");
 
 	// If the room's state is completely missing and we happen
 	// to be fetching the `m.room.create` event to rescue it, we MUST extract the
@@ -2408,25 +2411,37 @@ pub(super) async fn fetch_pdu(
 		)
 	})?;
 
+	info!("fetch_pdu: room version is {room_version}, validating signatures...");
+
 	let (event_id, value) = if skip_auth {
 		let (eid, mut val) = conduwuit_core::matrix::event::gen_event_id_canonical_json(
 			&response.pdu,
 			&room_version,
 		)?;
 		val.insert("event_id".into(), ruma::CanonicalJsonValue::String(eid.as_str().into()));
+		info!("fetch_pdu: skip_auth mode, generated event_id={eid}");
 		(eid, val)
 	} else {
-		self.services
+		let result = self
+			.services
 			.server_keys
 			.validate_and_add_event_id(&response.pdu, &room_version)
-			.await?
+			.await?;
+		info!("fetch_pdu: validated event_id={}", result.0);
+		result
 	};
 
 	let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
 		.map_err(|e| err!(Database("Invalid PDU: {e:?}")))?;
 
+	info!(
+		"fetch_pdu: parsed PDU type={} state_key={:?} sender={} depth={}",
+		pdu.kind, pdu.state_key, pdu.sender, pdu.depth
+	);
+
 	if skip_auth {
 		// Direct insert into timeline, bypassing all auth checks.
+		info!("fetch_pdu: force-inserting PDU (skip_auth) into timeline...");
 		let msg = match self
 			.services
 			.rooms
@@ -2449,6 +2464,7 @@ pub(super) async fn fetch_pdu(
 		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
 		.await?;
 
+	info!("fetch_pdu: upgrading outlier to timeline PDU (full auth check)...");
 	let result = Box::pin(
 		self.services
 			.rooms
@@ -2464,6 +2480,11 @@ pub(super) async fn fetch_pdu(
 			),
 	)
 	.await?;
+
+	match result {
+		| Some(ref id) => info!("fetch_pdu: success — promoted to timeline: {id:?}"),
+		| None => info!("fetch_pdu: PDU was already present or promoted (no-op)"),
+	}
 
 	match result {
 		| Some(id) => write!(self, "Successfully fetched and rescued PDU: {id:?}"),
