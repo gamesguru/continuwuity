@@ -59,11 +59,15 @@ where
 			if let Some(override_v) = room_version_override {
 				override_v.clone()
 			} else {
-				self.services.state.get_room_version(room_id).await.map_err(|e| {
-					err!(Request(InvalidParam(
-						"Room version is unknown locally and no override was provided: {e}"
-					)))
-				})?
+				self.services
+					.state
+					.get_room_version(room_id)
+					.await
+					.map_err(|e| {
+						err!(Request(InvalidParam(
+							"Room version is unknown locally and no override was provided: {e}"
+						)))
+					})?
 			},
 	};
 
@@ -301,10 +305,7 @@ where
 	// The original create event must be in the auth events for v11 and below.
 	// The create event itself has an empty auth_events array (it's the DAG root).
 	// For v12+, create is not required in auth_events.
-	// We skip this check if we fell back to V11 because we don't know the room
-	// version yet (e.g. fetching V12 outlier without m.room.create locally).
-	if !is_fallback_version
-		&& pdu_event.kind != TimelineEventType::RoomCreate
+	if pdu_event.kind != TimelineEventType::RoomCreate
 		&& !to_room_version(&room_version_id).room_ids_as_hashes
 		&& !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into()))
 	{

@@ -2098,15 +2098,14 @@ pub(super) async fn get_remote_dag(
 
 	let room_version = match self.services.rooms.state.get_room_version(&room_id).await {
 		| Ok(v) => v,
-		| Err(e) => {
+		| Err(e) =>
 			if let Some(v) = room_version {
 				v
 			} else {
 				return Err!(Request(InvalidParam(
 					"Local room version missing. You must specify --room-version explicitly."
 				)));
-			}
-		},
+			},
 	};
 
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
@@ -3687,9 +3686,11 @@ pub(super) async fn import_pdus(
 		| Some(v) => v,
 		| None => match self.services.rooms.state.get_room_version(&room_id).await {
 			| Ok(v) => v,
-			| Err(_) => return Err!(Request(InvalidParam(
-				"Local room version unknown. You must specify --room-version explicitly when importing to an empty room."
-			))),
+			| Err(_) =>
+				return Err!(Request(InvalidParam(
+					"Local room version unknown. You must specify --room-version explicitly \
+					 when importing to an empty room."
+				))),
 		},
 	};
 
