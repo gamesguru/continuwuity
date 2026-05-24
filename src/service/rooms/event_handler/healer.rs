@@ -200,15 +200,19 @@ pub(crate) async fn healer_worker(
 								.write()
 								.insert(room_id.clone().into(), (r.incoming_pdu.event_id.clone(), start_time));
 
-							if let Err(e) = svc.process_timeline_upgrade(
+							let res = svc.process_timeline_upgrade(
 								r.incoming_pdu.clone(),
 								r.val,
 								&r.create_event,
 								&r.origin,
 								&r.room_id,
-							).await {
+							).await;
+
+							if let Err(ref e) = res {
 								warn!(room_id = ?r.room_id, event_id = ?r.incoming_pdu.event_id, error = ?e, "DAG Healer failed to process timeline upgrade for PDU");
 							}
+
+							let _ = r.response_tx.send(res);
 
 							svc.federation_handletime
 								.write()

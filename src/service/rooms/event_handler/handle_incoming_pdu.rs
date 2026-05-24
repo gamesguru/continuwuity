@@ -393,6 +393,8 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		return Ok(None);
 	}
 
+	let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
 	// Dispatch upgrade to background channel
 	let _ = self
 		.dag_healer
@@ -402,9 +404,16 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			create_event: create_event.clone(),
 			origin: origin.to_owned(),
 			room_id: room_id.to_owned(),
+			response_tx,
 		})));
 
-	// Immediately return to unblock the transaction handler for EDUs
+	// Await the processing result to ensure durability before acknowledging the
+	// transaction Since state resolution lockups are fixed, this will return in
+	// milliseconds!
+	if let Ok(res) = response_rx.await {
+		res?;
+	}
+
 	Ok(None)
 }
 

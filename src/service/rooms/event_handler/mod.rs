@@ -66,6 +66,7 @@ pub struct PduUpgradeRequest {
 	pub create_event: PduEvent,
 	pub origin: OwnedServerName,
 	pub room_id: OwnedRoomId,
+	pub response_tx: tokio::sync::oneshot::Sender<conduwuit::Result<()>>,
 }
 
 #[derive(Debug)]
