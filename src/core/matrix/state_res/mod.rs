@@ -146,7 +146,7 @@ where
 	};
 
 	// Split non-conflicting and conflicting state
-	let (unconflicted, conflicting) = separate(state_sets.into_iter());
+	let (mut unconflicted, mut conflicting) = separate(state_sets.into_iter());
 
 	debug!(count = unconflicted.len(), "non-conflicting events");
 	trace!(map = ?unconflicted, "non-conflicting events");
@@ -160,6 +160,12 @@ where
 	trace!(map = ?conflicting, "conflicting events");
 	let (conflicted_state_subgraph, initial_state) =
 		if stateres_version == StateResolutionVersion::V2_1 {
+			// MSC4297: For room versions > 11, the "clean" state is the empty set,
+			// and the "conflicting" state is the set of all state events in the set of
+			// states to resolve.
+			for (k, v) in unconflicted.drain() {
+				conflicting.insert(k, vec![v]);
+			}
 			let (csg, missing) = calculate_conflicted_subgraph(&conflicting, &cached_fetch)
 				.await
 				.ok_or_else(|| {
@@ -298,7 +304,7 @@ where
 	let partially_resolved_pl_state = iterative_auth_check(
 		&room_version,
 		sorted_pl_events.iter().stream().map(AsRef::as_ref),
-		initial_state.clone(),
+		vec![initial_state.clone()],
 		&cached_fetch,
 		event_batch_fetch,
 		Some(&is_cached),
@@ -371,7 +377,7 @@ where
 	let resolved_control = iterative_auth_check(
 		&room_version,
 		sorted_control_levels.iter().stream().map(AsRef::as_ref),
-		initial_state,
+		vec![initial_state],
 		&cached_fetch,
 		event_batch_fetch,
 		Some(&is_cached),
@@ -413,7 +419,7 @@ where
 	let mut resolved_state = iterative_auth_check(
 		&room_version,
 		sorted_left_events.iter().stream().map(AsRef::as_ref),
-		resolved_control, // The control events are added to the final resolved state
+		vec![resolved_control], // The control events are added to the final resolved state
 		&cached_fetch,
 		event_batch_fetch,
 		Some(&is_cached),
@@ -938,7 +944,7 @@ where
 async fn iterative_auth_check<'a, E, F, Fut, S, BatchFetch, BatchFut, IsCached>(
 	room_version: &RoomVersion,
 	events_to_check: S,
-	unconflicted_state: StateMap<OwnedEventId>,
+	mut unconflicted_state_sets: Vec<StateMap<OwnedEventId>>,
 	fetch_event: &F,
 	event_batch_fetch: Option<&BatchFetch>,
 	is_cached: Option<&IsCached>,
@@ -994,7 +1000,15 @@ where
 	}
 	if events_to_check.is_empty() {
 		debug!("no events to check, returning unconflicted state");
-		return Ok(unconflicted_state);
+		let mut resolved_state = if let Some(first_state) = unconflicted_state_sets.pop() {
+			first_state
+		} else {
+			StateMap::new()
+		};
+		for state in unconflicted_state_sets {
+			resolved_state.extend(state);
+		}
+		return Ok(resolved_state);
 	}
 
 	let auth_event_ids: HashSet<OwnedEventId> = events_to_check
@@ -1047,7 +1061,15 @@ where
 	trace!(map = ?auth_events.keys().collect::<Vec<_>>(), "fetched auth events");
 
 	let auth_events = &auth_events;
-	let mut resolved_state = unconflicted_state;
+	let mut resolved_state = if let Some(first_state) = unconflicted_state_sets.pop() {
+		first_state
+	} else {
+		StateMap::new()
+	};
+
+	for state in unconflicted_state_sets {
+		resolved_state.extend(state);
+	}
 	let mut local_create_event: Option<E> = None;
 
 	// For room versions that use hashed room IDs (v12+), the create event is
@@ -1132,31 +1154,33 @@ where
 			}
 		}
 
-		let supplemental: Vec<_> = auth_types
-			.iter()
-			.stream()
-			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
-			.filter_map(|(key, ev_id)| async move {
-				// Exclude rejected events from resolved_state (Synapse parity)
-				// Fetch the event to check its rejected flag
-				if let Some(event) = auth_events.get(ev_id) {
-					if event.rejected() {
-						return None;
+		if room_version.state_res != StateResolutionVersion::V2_1 {
+			let supplemental: Vec<_> = auth_types
+				.iter()
+				.stream()
+				.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
+				.filter_map(|(key, ev_id)| async move {
+					// Exclude rejected events from resolved_state (Synapse parity)
+					// Fetch the event to check its rejected flag
+					if let Some(event) = auth_events.get(ev_id) {
+						if event.rejected() {
+							return None;
+						}
+						Some((key.to_owned(), event.clone()))
+					} else {
+						let fetched = fetch_event(ev_id.clone()).await?;
+						if fetched.rejected() {
+							return None;
+						}
+						Some((key.to_owned(), fetched))
 					}
-					Some((key.to_owned(), event.clone()))
-				} else {
-					let fetched = fetch_event(ev_id.clone()).await?;
-					if fetched.rejected() {
-						return None;
-					}
-					Some((key.to_owned(), fetched))
-				}
-			})
-			.collect()
-			.await;
+				})
+				.collect()
+				.await;
 
-		for (key, event) in supplemental {
-			auth_state.push((key, event));
+			for (key, event) in supplemental {
+				auth_state.push((key, event));
+			}
 		}
 
 		// Sort + dedup: binary search requires ascending order, and duplicates
@@ -1597,7 +1621,7 @@ mod tests {
 		let resolved_power = super::iterative_auth_check(
 			&RoomVersion::V6,
 			sorted_power_events.iter().map(AsRef::as_ref).stream(),
-			HashMap::new(), // unconflicted events
+			vec![HashMap::new()], // unconflicted events
 			&fetcher,
 			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 			None::<&fn(&ruma::EventId) -> bool>,
