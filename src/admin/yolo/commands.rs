@@ -2074,7 +2074,7 @@ pub(super) async fn get_remote_dag(
 	from: Option<OwnedEventId>,
 	print: bool,
 	verbose: bool,
-	room_version: Option<ruma::RoomVersionId>,
+	room_version: Option<RoomVersionId>,
 ) -> Result {
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
@@ -2098,7 +2098,7 @@ pub(super) async fn get_remote_dag(
 
 	let room_version = match self.services.rooms.state.get_room_version(&room_id).await {
 		| Ok(v) => v,
-		| Err(e) =>
+		| Err(_e) =>
 			if let Some(v) = room_version {
 				v
 			} else {
@@ -3676,7 +3676,7 @@ pub(super) async fn import_pdus(
 	path: String,
 	skip_auth: bool,
 	skip_sig_verify: bool,
-	room_version: Option<ruma::RoomVersionId>,
+	room_version: Option<RoomVersionId>,
 ) -> Result {
 	use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -3825,7 +3825,7 @@ pub(super) async fn import_pdus(
 				// Local-only auth: handle_outlier_pdu checks auth_events from local DB,
 				// runs auth_check, and persists as outlier. auth_events_known=true skips
 				// federation fetches for missing auth events.
-				let (pdu, parsed) = self
+				let (pdu, _parsed) = self
 					.services
 					.rooms
 					.event_handler
