@@ -217,10 +217,21 @@ where
 		// The ingestion pipeline (handle_outlier_pdu, fetch_prev, fetch_state) is
 		// responsible for pre-fetching auth events before we reach this point.
 		if !missing_events.is_empty() {
+			let formatted_events = if missing_events.len() > 10 {
+				format!(
+					"{:?}, ... {} more ..., {:?}",
+					&missing_events[..5],
+					missing_events.len() - 10,
+					&missing_events[missing_events.len() - 5..]
+				)
+			} else {
+				format!("{:?}", missing_events)
+			};
+
 			warn!(
 				target: "state_res_debug",
 				count = missing_events.len(),
-				events = ?missing_events,
+				events = %formatted_events,
 				"state_res: skipping missing auth chain events (best-effort)"
 			);
 		}
