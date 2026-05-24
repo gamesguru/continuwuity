@@ -505,7 +505,7 @@ where
 						Some((shortstatekey, (*event_id).to_owned()))
 					})
 					.buffer_unordered(100)
-					.filter_map(futures::future::ready)
+					.filter_map(ready)
 					.collect()
 					.await;
 
@@ -662,7 +662,7 @@ async fn calculate_state_delta(
 			.compress_state_events(
 				state_after
 					.iter()
-					.map(|(ssk, eid)| (ssk, std::borrow::Borrow::borrow(eid))),
+					.map(|(ssk, eid)| (ssk, Borrow::borrow(eid))),
 			)
 			.collect()
 			.map(Arc::new)

@@ -142,9 +142,9 @@ impl Data {
 		pin_mut!(iter);
 
 		while let Some((event_id_bytes, pdu_id_bytes)) = iter.try_next().await? {
-			if let Ok(event_id_str) = std::str::from_utf8(&event_id_bytes) {
+			if let Ok(event_id_str) = std::str::from_utf8(event_id_bytes) {
 				if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
-					let pdu_id: RawPduId = (&*pdu_id_bytes).into();
+					let pdu_id: RawPduId = pdu_id_bytes.into();
 					if let Ok(mut json) = self
 						.pduid_pdu
 						.get(&pdu_id)
@@ -156,7 +156,7 @@ impl Data {
 								"event_id".into(),
 								ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
 							);
-							self.pduid_pdu.raw_put(&pdu_id, Json(&json));
+							self.pduid_pdu.raw_put(pdu_id, Json(&json));
 							fixed += 1;
 						}
 					}

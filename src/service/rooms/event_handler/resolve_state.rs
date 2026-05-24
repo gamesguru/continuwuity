@@ -225,7 +225,7 @@ where
 					&missing_events[missing_events.len() - 5..]
 				)
 			} else {
-				format!("{:?}", missing_events)
+				format!("{missing_events:?}")
 			};
 
 			warn!(

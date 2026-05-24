@@ -226,7 +226,7 @@ pub async fn fix_pdu_event_ids(&self) -> Result<usize> {
 
 	use futures::TryStreamExt;
 	while let Some((event_id_bytes, _)) = iter.try_next().await? {
-		if let Ok(event_id_str) = std::str::from_utf8(&event_id_bytes) {
+		if let Ok(event_id_str) = std::str::from_utf8(event_id_bytes) {
 			if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
 				if let Ok(mut json) = self
 					.db
@@ -242,7 +242,7 @@ pub async fn fix_pdu_event_ids(&self) -> Result<usize> {
 						);
 						self.db
 							.eventid_outlierpdu
-							.raw_put(&event_id_bytes, Json(&json));
+							.raw_put(event_id_bytes, Json(&json));
 						fixed += 1;
 					}
 				}
