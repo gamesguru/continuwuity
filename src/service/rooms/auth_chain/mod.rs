@@ -243,9 +243,13 @@ async fn get_auth_chain_inner(
 						.await;
 
 					if found.insert(sauthevent) {
-						trace!(%event_id, ?auth_event, "adding auth event to processing queue");
-
-						todo.push_back(auth_event.clone());
+						if let Ok(cached) = self.get_cached_eventid_authchain(&[sauthevent]).await
+						{
+							found.extend(cached.iter().copied());
+						} else {
+							trace!(%event_id, ?auth_event, "adding auth event to processing queue");
+							todo.push_back(auth_event.clone());
+						}
 					}
 				}
 			},
