@@ -205,12 +205,27 @@ where
 		.short
 		.get_or_create_shorteventid(pdu.event_id())
 		.await;
-	if let Ok(full_auth_chain) = self
+	if let Ok(mut full_auth_chain) = self
 		.services
 		.auth_chain
 		.get_auth_chain(room_id, pdu.auth_events().map(AsRef::as_ref))
 		.await
 	{
+		// The auth chain closure for this PDU must include both the
+		// transitive ancestors returned by get_auth_chain AND the PDU's
+		// own direct auth_events (which get_auth_chain uses as *starting*
+		// points but does not include in its output).
+		for auth_event_id in pdu.auth_events() {
+			let short = self
+				.services
+				.short
+				.get_or_create_shorteventid(auth_event_id)
+				.await;
+			full_auth_chain.push(short);
+		}
+		full_auth_chain.sort_unstable();
+		full_auth_chain.dedup();
+
 		self.services
 			.auth_chain
 			.cache_auth_chain_vec(vec![short_event_id], &full_auth_chain);
