@@ -681,7 +681,7 @@
 {"Action":"pass","Test":"TestSyncTimelineGap/full","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","room_version":"11","commit":"4539a9df77e461c90cc00bd9be8bf8309d7dc98d"}
 {"Action":"pass","Test":"TestSyncTimelineGap/incremental","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","room_version":"11","commit":"4539a9df77e461c90cc00bd9be8bf8309d7dc98d"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","room_version":"11","commit":"4539a9df77e461c90cc00bd9be8bf8309d7dc98d"}
-{"Action":"pass","Test":"TestThreadReceiptsInSyncMSC4102","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","room_version":"11","commit":"4539a9df77e461c90cc00bd9be8bf8309d7dc98d"}
+{"Action":"fail","Test":"TestThreadReceiptsInSyncMSC4102","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","room_version":"11","commit":"4539a9df77e461c90cc00bd9be8bf8309d7dc98d"}
 {"Action":"fail","Test":"TestThreadSubscriptions","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","room_version":"11","commit":"4539a9df77e461c90cc00bd9be8bf8309d7dc98d"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_create_automatic_subscription_to_a_thread","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","room_version":"11","commit":"4539a9df77e461c90cc00bd9be8bf8309d7dc98d"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_subscribe_to_and_unsubscribe_from_a_thread","arch":"arm64","os":"ubuntu-24.04","profile":"release-quick","room_version":"11","commit":"4539a9df77e461c90cc00bd9be8bf8309d7dc98d"}
