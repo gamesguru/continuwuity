@@ -139,6 +139,12 @@ where
 		}
 	};
 
+	let is_cached = |id: &EventId| {
+		fetch_cache
+			.get(id)
+			.map_or(false, |cell| cell.value().get().is_some())
+	};
+
 	// Split non-conflicting and conflicting state
 	let (mut unconflicted, mut conflicting) = separate(state_sets.into_iter());
 
@@ -148,15 +154,6 @@ where
 	if conflicting.is_empty() {
 		debug!("no conflicting state found");
 		return Ok(unconflicted);
-	}
-
-	if stateres_version == StateResolutionVersion::V2_1 {
-		// MSC4297: For room versions > 11, the "clean" state is the empty set,
-		// and the "conflicting" state is the set of all state events in the set of
-		// states to resolve.
-		for (k, v) in unconflicted.drain() {
-			conflicting.insert(k, vec![v]);
-		}
 	}
 
 	debug!(count = conflicting.len(), "conflicting events");
@@ -304,6 +301,7 @@ where
 		initial_state.clone(),
 		&cached_fetch,
 		event_batch_fetch,
+		Some(&is_cached),
 	)
 	.await?;
 
@@ -376,6 +374,7 @@ where
 		initial_state,
 		&cached_fetch,
 		event_batch_fetch,
+		Some(&is_cached),
 	)
 	.await?;
 
@@ -417,6 +416,7 @@ where
 		resolved_control, // The control events are added to the final resolved state
 		&cached_fetch,
 		event_batch_fetch,
+		Some(&is_cached),
 	)
 	.await?;
 
@@ -935,12 +935,13 @@ where
 /// the the `fetch_event` closure and verify each event using the
 /// `event_auth::auth_check` function.
 #[tracing::instrument(level = "trace", skip_all)]
-async fn iterative_auth_check<'a, E, F, Fut, S, BatchFetch, BatchFut>(
+async fn iterative_auth_check<'a, E, F, Fut, S, BatchFetch, BatchFut, IsCached>(
 	room_version: &RoomVersion,
 	events_to_check: S,
 	unconflicted_state: StateMap<OwnedEventId>,
 	fetch_event: &F,
 	event_batch_fetch: Option<&BatchFetch>,
+	is_cached: Option<&IsCached>,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	E: Event + Clone + Send + Sync,
@@ -949,6 +950,7 @@ where
 	S: Stream<Item = &'a EventId> + Send + 'a,
 	BatchFetch: Fn(Vec<OwnedEventId>) -> BatchFut + Sync,
 	BatchFut: Future<Output = Vec<E>> + Send,
+	IsCached: Fn(&EventId) -> bool + Sync,
 	for<'b> &'b E: Event + Send,
 {
 	debug!("starting iterative auth check");
@@ -1007,10 +1009,11 @@ where
 		let ids: Vec<_> = auth_event_ids
 			.iter()
 			.filter(|id| {
-				fetch_event((*id).clone())
-					.now_or_never()
-					.flatten()
-					.is_none()
+				if let Some(is_cached) = is_cached {
+					!is_cached(id)
+				} else {
+					true
+				}
 			})
 			.cloned()
 			.collect();
@@ -1609,6 +1612,7 @@ mod tests {
 			HashMap::new(), // unconflicted events
 			&fetcher,
 			None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
+			None::<&fn(&ruma::EventId) -> bool>,
 		)
 		.await
 		.expect("iterative auth check failed on resolved events");
