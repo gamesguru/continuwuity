@@ -106,7 +106,7 @@ node_modules/
 doc_build/
 .rspress/
 
-# custom files 
+# custom files
 /.tmp/
 .complement-logs
 .~*
