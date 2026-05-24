@@ -793,6 +793,7 @@ impl Service {
 			// pdu_shortstatehash (which the walk just set), then converting
 			// short keys to full (StateEventType, String) tuples for state_res.
 			let mut fork_states: Vec<state_res::StateMap<OwnedEventId>> = Vec::new();
+			let mut fork_sshs: HashSet<u64> = HashSet::new();
 
 			for ext_eid in &true_extremities {
 				if let Ok(ext_ssh) = self
@@ -801,6 +802,12 @@ impl Service {
 					.pdu_shortstatehash(ext_eid)
 					.await
 				{
+					// Deduplicate: skip if we already have a fork with this exact state
+					if fork_sshs.contains(&ext_ssh) {
+						continue;
+					}
+					fork_sshs.insert(ext_ssh);
+
 					// Build typed StateMap directly from state_full
 					let typed_state: state_res::StateMap<OwnedEventId> = self
 						.services
@@ -812,6 +819,14 @@ impl Service {
 
 					fork_states.push(typed_state);
 				}
+			}
+
+			if fork_states.len() != true_extremities.len() {
+				info!(
+					"reorder_timeline: deduplicated {} extremities down to {} unique fork states",
+					true_extremities.len(),
+					fork_states.len()
+				);
 			}
 
 			if fork_states.len() > 1 {
@@ -1019,77 +1034,110 @@ impl Service {
 				.await
 				.unwrap_or(RoomVersionId::V6);
 
-			// Build auth chain sets for each fork state
-			let mut auth_chain_sets: Vec<HashSet<OwnedEventId>> = Vec::new();
-			for state in &fork_states {
-				let chain: HashSet<OwnedEventId> = self
-					.services
-					.auth_chain
-					.event_ids_iter(room_id, state.values().map(AsRef::as_ref))
-					.try_collect()
-					.await
-					.unwrap_or_default();
-				auth_chain_sets.push(chain);
+			// Iterative pairwise state resolution: resolve 2 forks at a time
+			// to keep memory bounded at O(2 × auth_chain_size) regardless of
+			// the total number of forks. Loading all N auth chains at once
+			// (N × ~40k events) causes OOM on fractured DAGs.
+			let mut fork_iter = fork_states.into_iter();
+			let mut accumulated = fork_iter.next().expect("fork_states is non-empty");
+			let total_forks = fork_iter.len().saturating_add(1); // +1 for the one we already took
+			let mut resolved_count = 1_usize;
+
+			for next_fork in fork_iter {
+				resolved_count = resolved_count.saturating_add(1);
+				if resolved_count.is_multiple_of(10) || resolved_count == total_forks {
+					info!(
+						"reorder_timeline: pairwise state resolution \
+						 {resolved_count}/{total_forks}..."
+					);
+				}
+
+				let pair = [accumulated.clone(), next_fork];
+				let auth_chain_sets: Vec<HashSet<OwnedEventId>> = {
+					let mut sets = Vec::with_capacity(2);
+					for state in &pair {
+						let chain: HashSet<OwnedEventId> = self
+							.services
+							.auth_chain
+							.event_ids_iter(room_id, state.values().map(AsRef::as_ref))
+							.try_collect()
+							.await
+							.unwrap_or_default();
+						sets.push(chain);
+					}
+					sets
+				};
+
+				match Box::pin(self.services.event_handler.state_resolution(
+					room_id,
+					&room_version,
+					pair.iter(),
+					&auth_chain_sets,
+				))
+				.await
+				{
+					| Ok(resolved) => {
+						accumulated = resolved;
+					},
+					| Err(e) => {
+						warn!(
+							"reorder_timeline: pairwise state resolution failed at step \
+							 {resolved_count}/{total_forks}: {e}; using partial result"
+						);
+						break;
+					},
+				}
+
+				// Yield to avoid starving other tasks during long resolution runs
+				tokio::task::yield_now().await;
 			}
 
-			match Box::pin(self.services.event_handler.state_resolution(
-				room_id,
-				&room_version,
-				fork_states.iter(),
-				&auth_chain_sets,
-			))
-			.await
+			let resolved = accumulated;
+
+			// Convert pairwise-resolved StateMap<OwnedEventId> to compressed state
+			let mut new_state = rooms::state_compressor::CompressedState::new();
+
+			for ((event_type, state_key), event_id) in &resolved {
+				let shortstatekey = self
+					.services
+					.short
+					.get_or_create_shortstatekey(event_type, state_key)
+					.await;
+				let shorteventid = self
+					.services
+					.short
+					.get_or_create_shorteventid(event_id)
+					.await;
+				new_state.insert(rooms::state_compressor::compress_state_event(
+					shortstatekey,
+					shorteventid,
+				));
+			}
+
+			match self
+				.services
+				.state_compressor
+				.save_state(room_id, Arc::new(new_state))
+				.await
 			{
-				| Ok(resolved) => {
-					// Convert resolved StateMap<OwnedEventId> to compressed state
-					let mut new_state = rooms::state_compressor::CompressedState::new();
-
-					for ((event_type, state_key), event_id) in &resolved {
-						let shortstatekey = self
-							.services
-							.short
-							.get_or_create_shortstatekey(event_type, state_key)
-							.await;
-						let shorteventid = self
-							.services
-							.short
-							.get_or_create_shorteventid(event_id)
-							.await;
-						new_state.insert(rooms::state_compressor::compress_state_event(
-							shortstatekey,
-							shorteventid,
-						));
-					}
-
-					match self
-						.services
-						.state_compressor
-						.save_state(room_id, Arc::new(new_state))
-						.await
-					{
-						| Ok(result) => {
-							self.services.state.set_room_state(
-								room_id,
-								result.shortstatehash,
-								state_lock,
-							);
-							info!(
-								"reorder_timeline: state resolution complete — new SSH {} ({} \
-								 resolved state entries)",
-								result.shortstatehash,
-								resolved.len()
-							);
-						},
-						| Err(e) => {
-							warn!(
-								"reorder_timeline: save_state after resolution failed: {e}; \
-								 keeping walk result"
-							);
-						},
-					}
+				| Ok(result) => {
+					self.services.state.set_room_state(
+						room_id,
+						result.shortstatehash,
+						state_lock,
+					);
+					info!(
+						"reorder_timeline: pairwise state resolution complete — new SSH {} ({} \
+						 resolved state entries, {total_forks} forks)",
+						result.shortstatehash,
+						resolved.len()
+					);
 				},
 				| Err(e) => {
-					warn!("reorder_timeline: state resolution failed: {e}; keeping walk result");
+					warn!(
+						"reorder_timeline: save_state after resolution failed: {e}; keeping \
+						 walk result"
+					);
 				},
 			}
 		})

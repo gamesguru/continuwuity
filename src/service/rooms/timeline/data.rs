@@ -333,8 +333,7 @@ impl Data {
 
 		// 3. Batch fetch timeline PDUs
 		let pdu_events = if !valid_pdu_ids.is_empty() {
-			self
-				.pduid_pdu
+			self.pduid_pdu
 				.get_batch(futures::stream::iter(valid_pdu_ids.iter().map(AsRef::as_ref)))
 				.map(|res: Result<database::Handle<'_>>| {
 					res.and_then(|handle| handle.deserialized::<PduEvent>())
@@ -347,8 +346,7 @@ impl Data {
 
 		// 4. Batch fetch outliers
 		let outlier_events = if !missing_event_ids.is_empty() {
-			self
-				.eventid_outlierpdu
+			self.eventid_outlierpdu
 				.get_batch(futures::stream::iter(missing_event_ids))
 				.map(|res: Result<database::Handle<'_>>| {
 					res.and_then(|handle| handle.deserialized::<PduEvent>())
