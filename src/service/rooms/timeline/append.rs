@@ -195,6 +195,28 @@ where
 	// unexpectedly wake the sync watcher.
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
 
+	// Flattened Auth Chain Cache:
+	// Pre-calculate the auth chain closure for this PDU by doing a single
+	// get_auth_chain lookup on its auth_events. Because the auth events
+	// were already appended, their closures are cached, making this an
+	// O(1) DB hit per auth event rather than a 30-second DAG crawl later.
+	let short_event_id = self
+		.services
+		.short
+		.get_or_create_shorteventid(pdu.event_id())
+		.await;
+	let auth_events: Vec<&EventId> = pdu.auth_events().map(AsRef::as_ref).collect();
+	if let Ok(full_auth_chain) = self
+		.services
+		.auth_chain
+		.get_auth_chain(room_id, auth_events.into_iter())
+		.await
+	{
+		self.services
+			.auth_chain
+			.cache_auth_chain_vec(vec![short_event_id.into()], &full_auth_chain);
+	}
+
 	// Stamp receive order (write-once — outlier-first events already have this)
 	self.services.outlier.stamp_receive_count(pdu.event_id());
 

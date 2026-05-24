@@ -187,6 +187,30 @@ pub(crate) async fn healer_worker(
 						.await;
 				}
 			},
+			| HealRequest::UpdateTimeline(req) => {
+				let tx = service.timeline_worker_tx.entry(req.room_id.clone()).or_insert_with(|| {
+					let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::PduUpgradeRequest>();
+					let svc = service.clone();
+					let room_id = req.room_id.clone();
+					tokio::spawn(async move {
+						debug!(room_id = ?room_id, "Started per-room timeline worker");
+						while let Some(r) = rx.recv().await {
+							if let Err(e) = svc.process_timeline_upgrade(
+								r.incoming_pdu.clone(),
+								r.val,
+								&r.create_event,
+								&r.origin,
+								&r.room_id,
+							).await {
+								warn!(room_id = ?r.room_id, event_id = ?r.incoming_pdu.event_id, error = ?e, "DAG Healer failed to process timeline upgrade for PDU");
+							}
+						}
+					});
+					tx
+				});
+
+				let _ = tx.value().send(*req);
+			},
 		}
 
 		// Small delay between heal requests to avoid monopolizing the

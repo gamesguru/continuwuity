@@ -393,6 +393,38 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		return Ok(None);
 	}
 
+	// Dispatch upgrade to background channel
+	let _ = self
+		.dag_healer
+		.send(super::HealRequest::UpdateTimeline(Box::new(super::PduUpgradeRequest {
+			incoming_pdu,
+			val: val.clone(),
+			create_event: create_event.clone(),
+			origin: origin.to_owned(),
+			room_id: room_id.to_owned(),
+		})));
+
+	// Immediately return to unblock the transaction handler for EDUs
+	Ok(None)
+}
+
+#[implement(super::Service)]
+#[tracing::instrument(
+	name = "pdu_upgrade",
+	level = INFO_SPAN_LEVEL,
+	skip_all,
+	fields(%room_id, %event_id = %incoming_pdu.event_id()),
+)]
+pub async fn process_timeline_upgrade(
+	&self,
+	incoming_pdu: conduwuit::PduEvent,
+	val: BTreeMap<String, CanonicalJsonValue>,
+	create_event: &conduwuit::PduEvent,
+	origin: &ServerName,
+	room_id: &RoomId,
+) -> Result<()> {
+	let event_id = incoming_pdu.event_id();
+
 	// Skip old events
 	let first_ts_in_room = self
 		.services
@@ -471,4 +503,5 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		true,
 	))
 	.await
+	.map(|_| ())
 }
