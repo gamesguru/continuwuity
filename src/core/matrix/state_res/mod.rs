@@ -1157,33 +1157,31 @@ where
 			}
 		}
 
-		if room_version.state_res != StateResolutionVersion::V2_1 {
-			let supplemental: Vec<_> = auth_types
-				.iter()
-				.stream()
-				.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
-				.filter_map(|(key, ev_id)| async move {
-					// Exclude rejected events from resolved_state (Synapse parity)
-					// Fetch the event to check its rejected flag
-					if let Some(event) = auth_events.get(ev_id) {
-						if event.rejected() {
-							return None;
-						}
-						Some((key.to_owned(), event.clone()))
-					} else {
-						let fetched = fetch_event(ev_id.clone()).await?;
-						if fetched.rejected() {
-							return None;
-						}
-						Some((key.to_owned(), fetched))
+		let supplemental: Vec<_> = auth_types
+			.iter()
+			.stream()
+			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
+			.filter_map(|(key, ev_id)| async move {
+				// Exclude rejected events from resolved_state (Synapse parity)
+				// Fetch the event to check its rejected flag
+				if let Some(event) = auth_events.get(ev_id) {
+					if event.rejected() {
+						return None;
 					}
-				})
-				.collect()
-				.await;
+					Some((key.to_owned(), event.clone()))
+				} else {
+					let fetched = fetch_event(ev_id.clone()).await?;
+					if fetched.rejected() {
+						return None;
+					}
+					Some((key.to_owned(), fetched))
+				}
+			})
+			.collect()
+			.await;
 
-			for (key, event) in supplemental {
-				auth_state.push((key, event));
-			}
+		for (key, event) in supplemental {
+			auth_state.push((key, event));
 		}
 
 		// Sort + dedup: binary search requires ascending order, and duplicates
