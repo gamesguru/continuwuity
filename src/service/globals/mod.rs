@@ -254,7 +254,7 @@ impl crate::Service for Service {
 
 			conduwuit::info!(
 				target: "stats",
-				"Network stats (Last 1m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
+				"Network stats: (Last 1m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
 				 latency) | DNS Resolver: {} reqs ({:.2}% fail, {:.2}ms avg latency) | Fed \
 				 Txns: {} (total: {}, {}.{}ms avg, {}.{}ms max, {}.{}s wall, {} >1s, {} \
 				 >10s) | Background: {} pres, {} bfill, {} send, {} state_res, {} auth_fetch, {} spaces",
