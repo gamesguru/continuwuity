@@ -8,10 +8,10 @@ use std::{
 };
 
 use conduwuit_core::{
-	Result,
-	matrix::{Event, event::PduEvent, state_res, state_res::StateMap},
+	PduEvent,
+	matrix::{Event, state_res, state_res::StateMap},
 };
-use ruma::{CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomVersionId};
+use ruma::{CanonicalJsonValue, EventId, OwnedEventId, RoomVersionId};
 
 // ==========================================
 // JSON Pre-processor & Snapshot Parser
@@ -45,10 +45,10 @@ fn parse_upstream_fixture(fixture_name: &str) -> Vec<PduEvent> {
 				);
 			}
 
-			let event_id_str = obj.get("event_id").unwrap().as_str().unwrap();
-			let event_id = <&EventId>::try_from(event_id_str).unwrap();
+			let event_id_str = obj.get("event_id").unwrap().as_str().unwrap().to_owned();
+			let event_id = EventId::parse(&event_id_str).unwrap();
 
-			PduEvent::from_id_val(event_id, obj, None).expect("Failed to parse PduEvent")
+			PduEvent::from_id_val(&event_id, obj, None).expect("Failed to parse PduEvent")
 		})
 		.collect()
 }
@@ -113,7 +113,7 @@ impl MockStore {
 				continue;
 			}
 			if let Some(ev) = self.fetch_event(id).await {
-				queue.extend(ev.auth_events().map(|e| e.to_owned()));
+				queue.extend(ev.auth_events().map(ToOwned::to_owned));
 			}
 		}
 		chain
@@ -132,12 +132,12 @@ async fn resolve_atomic(
 	// Find the leaves (extremities) of the provided DAG fixture
 	let mut has_children = HashSet::new();
 	for ev in events {
-		has_children.extend(ev.prev_events().map(|id| id.to_owned()));
+		has_children.extend(ev.prev_events().map(ToOwned::to_owned));
 	}
 
 	let extremities: Vec<&PduEvent> = events
 		.iter()
-		.filter(|ev| !has_children.contains(ev.event_id()))
+		.filter(|ev: &&PduEvent| !has_children.contains(ev.event_id()))
 		.collect();
 
 	// In a real environment, you'd calculate the state AT these extremities.
@@ -146,7 +146,7 @@ async fn resolve_atomic(
 	for ev in events {
 		if let Some(sk) = ev.state_key() {
 			full_state
-				.insert((ev.event_type().clone(), sk.to_string()), ev.event_id().to_owned());
+				.insert((ev.kind().to_string().into(), sk.into()), ev.event_id().to_owned());
 		}
 	}
 
@@ -158,6 +158,7 @@ async fn resolve_atomic(
 		vec![full_state].iter(),
 		&auth_chains,
 		&|id| store.fetch_event(id),
+		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await

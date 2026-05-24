@@ -189,7 +189,7 @@ pub(crate) async fn healer_worker(
 			},
 			| HealRequest::UpdateTimeline(req) => {
 				let tx = service.timeline_worker_tx.entry(req.room_id.clone()).or_insert_with(|| {
-					let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::PduUpgradeRequest>();
+					let (tx, mut rx) = mpsc::unbounded_channel::<super::PduUpgradeRequest>();
 					let svc = service.clone();
 					let room_id = req.room_id.clone();
 					tokio::spawn(async move {

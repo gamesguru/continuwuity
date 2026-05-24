@@ -398,7 +398,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		.dag_healer
 		.send(super::HealRequest::UpdateTimeline(Box::new(super::PduUpgradeRequest {
 			incoming_pdu,
-			val: val.clone(),
+			val,
 			create_event: create_event.clone(),
 			origin: origin.to_owned(),
 			room_id: room_id.to_owned(),

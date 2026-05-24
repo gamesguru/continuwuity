@@ -214,7 +214,7 @@ where
 	{
 		self.services
 			.auth_chain
-			.cache_auth_chain_vec(vec![short_event_id.into()], &full_auth_chain);
+			.cache_auth_chain_vec(vec![short_event_id], &full_auth_chain);
 	}
 
 	// Stamp receive order (write-once — outlier-first events already have this)
