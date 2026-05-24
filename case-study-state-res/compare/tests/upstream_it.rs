@@ -1,9 +1,9 @@
 //! Integration tests running upstream `ruma-state-res` fixtures against
 //! Conduwuit's engine.
 //!
-//! Each test loads the same fixture files used by upstream ruma-state-res tests.
-//! "Batched" tests load multiple PDU files, each representing one side of a DAG
-//! fork (plus a common bootstrap). State is built per-fork and fed to
+//! Each test loads the same fixture files used by upstream ruma-state-res
+//! tests. "Batched" tests load multiple PDU files, each representing one side
+//! of a DAG fork (plus a common bootstrap). State is built per-fork and fed to
 //! `state_res::resolve` as separate state sets.
 //!
 //! "State map" tests (MSC4297) load explicit state maps + PDU definitions.
@@ -21,7 +21,8 @@ use conduwuit_core::{
 use ruma::{CanonicalJsonValue, EventId, OwnedEventId, RoomVersionId};
 
 const FIXTURES_DIR: &str = "../../ruma-upstream/crates/ruma-state-res/tests/it/resolve/fixtures";
-const SNAPSHOTS_DIR: &str = "../../ruma-upstream/crates/ruma-state-res/tests/it/resolve/snapshots";
+const SNAPSHOTS_DIR: &str =
+	"../../ruma-upstream/crates/ruma-state-res/tests/it/resolve/snapshots";
 
 // ==========================================
 // Fixture Loading
@@ -31,8 +32,8 @@ fn fixtures_path() -> &'static Path {
 	let p = Path::new(FIXTURES_DIR);
 	assert!(
 		p.exists(),
-		"Fixtures directory not found at {FIXTURES_DIR}. \
-		 Ensure the ruma-upstream submodule is checked out."
+		"Fixtures directory not found at {FIXTURES_DIR}. Ensure the ruma-upstream submodule is \
+		 checked out."
 	);
 	p
 }
@@ -61,26 +62,17 @@ fn load_pdus_from_file(filename: &str) -> Vec<PduEvent> {
 				);
 			}
 			if !obj.contains_key("depth") {
-				obj.insert(
-					"depth".to_string(),
-					CanonicalJsonValue::Integer(ruma::Int::from(0)),
-				);
+				obj.insert("depth".to_string(), CanonicalJsonValue::Integer(ruma::Int::from(0)));
 			}
 			if !obj.contains_key("hashes") {
 				use std::collections::BTreeMap;
 				let mut hashes = BTreeMap::new();
-				hashes.insert(
-					"sha256".to_string(),
-					CanonicalJsonValue::String(String::new()),
-				);
+				hashes.insert("sha256".to_string(), CanonicalJsonValue::String(String::new()));
 				obj.insert("hashes".to_string(), CanonicalJsonValue::Object(hashes));
 			}
 			if !obj.contains_key("signatures") {
 				use std::collections::BTreeMap;
-				obj.insert(
-					"signatures".to_string(),
-					CanonicalJsonValue::Object(BTreeMap::new()),
-				);
+				obj.insert("signatures".to_string(), CanonicalJsonValue::Object(BTreeMap::new()));
 			}
 
 			let event_id_str = obj.get("event_id").unwrap().as_str().unwrap().to_owned();
@@ -189,10 +181,8 @@ impl EventStore {
 
 			// Apply this event's state
 			if let Some(sk) = ev.state_key() {
-				merged_state.insert(
-					(ev.kind().to_string().into(), sk.into()),
-					ev.event_id().to_owned(),
-				);
+				merged_state
+					.insert((ev.kind().to_string().into(), sk.into()), ev.event_id().to_owned());
 			}
 
 			state_at.insert(eid.clone(), merged_state);
@@ -236,10 +226,7 @@ fn extract_snapshot(snapshot_name: &str) -> String {
 
 /// Format resolved state as a sorted JSON array matching upstream snapshot
 /// format: each entry has event_type, state_key, event_id, and content.
-fn format_state_for_snapshot(
-	state: &StateMap<OwnedEventId>,
-	store: &EventStore,
-) -> String {
+fn format_state_for_snapshot(state: &StateMap<OwnedEventId>, store: &EventStore) -> String {
 	#[derive(serde::Serialize)]
 	struct Entry<'a> {
 		#[serde(rename = "type")]
@@ -266,7 +253,9 @@ fn format_state_for_snapshot(
 	}
 
 	impl PartialOrd for Entry<'_> {
-		fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+		fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+			Some(self.cmp(other))
+		}
 	}
 
 	let entries: BTreeSet<Entry<'_>> = state
