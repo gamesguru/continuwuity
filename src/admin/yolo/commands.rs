@@ -1894,6 +1894,10 @@ pub(super) async fn get_room_dag(
 	let mut missing_hash = 0_u64;
 	let mut unique_hashes = HashSet::<u64>::new();
 	let mut last_ssh: Option<u64> = None;
+	let mut last_is_state_event = false;
+	let mut last_event_id: Option<Box<ruma::EventId>> = None;
+	let mut last_event_type: Option<ruma::events::TimelineEventType> = None;
+	let mut last_state_key: Option<String> = None;
 	let mut max_depth = 0_u64;
 	let mut min_depth = u64::MAX;
 	let server = self.services.globals.server_name();
@@ -1959,8 +1963,14 @@ pub(super) async fn get_room_dag(
 
 					if pdu.state_key.is_some() {
 						state_events = state_events.saturating_add(1);
+						last_is_state_event = true;
+						last_event_type = Some(pdu.kind().clone());
+						last_state_key = pdu.state_key.as_ref().map(|sk| sk.to_string());
+					} else {
+						last_is_state_event = false;
 					}
 
+					last_event_id = Some(pdu.event_id().into());
 					let eid = pdu.event_id().to_owned();
 					all_event_ids.insert(eid);
 					for prev in pdu.prev_events() {
@@ -2009,12 +2019,42 @@ pub(super) async fn get_room_dag(
 		.ok();
 
 	let tip_match = match (last_ssh, room_ssh) {
-		| (Some(tip), Some(room)) if tip == room => "✓ tip matches room state",
-		| (Some(tip), Some(room)) => {
-			let _ = (tip, room);
-			"✗ tip DIVERGES from room state"
+		| (Some(tip), Some(room)) if tip == room => "✓ tip matches room state".to_owned(),
+		| (Some(_tip), Some(room)) if last_is_state_event => {
+			// pdu_shortstatehash is the state BEFORE the tip event; room SSH is
+			// the state AFTER. Verify the room state actually contains the tip
+			// event's state change — look up (type, state_key) in room state.
+			if let (Some(last_eid), Some(last_type), Some(last_sk)) =
+				(&last_event_id, &last_event_type, &last_state_key)
+			{
+				let room_has_tip = self
+					.services
+					.rooms
+					.state_accessor
+					.state_get_id::<Box<ruma::EventId>>(
+						room,
+						&ruma::events::StateEventType::from(last_type.to_string()),
+						last_sk,
+					)
+					.await
+					.is_ok_and(|eid| *eid == **last_eid);
+
+				if room_has_tip {
+					format!(
+						"✓ tip is state event — room state includes tip (pre={_tip} post={room})"
+					)
+				} else {
+					format!(
+						"✗ tip DIVERGES — room state at ({last_type}, {last_sk}) \
+						 does not point to tip event {last_eid}"
+					)
+				}
+			} else {
+				"✗ tip DIVERGES from room state (state event but missing metadata)".to_owned()
+			}
 		},
-		| _ => "? unknown",
+		| (Some(_tip), Some(_room)) => "✗ tip DIVERGES from room state".to_owned(),
+		| _ => "? unknown".to_owned(),
 	};
 
 	// Rename to include depth range so successive runs don't overwrite
