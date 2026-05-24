@@ -332,30 +332,32 @@ impl Data {
 		}
 
 		// 3. Batch fetch timeline PDUs
-		let mut pdu_events = Vec::new();
-		if !valid_pdu_ids.is_empty() {
-			pdu_events = self
+		let pdu_events = if !valid_pdu_ids.is_empty() {
+			self
 				.pduid_pdu
 				.get_batch(futures::stream::iter(valid_pdu_ids.iter().map(AsRef::as_ref)))
 				.map(|res: Result<database::Handle<'_>>| {
 					res.and_then(|handle| handle.deserialized::<PduEvent>())
 				})
 				.collect()
-				.await;
-		}
+				.await
+		} else {
+			Vec::new()
+		};
 
 		// 4. Batch fetch outliers
-		let mut outlier_events = Vec::new();
-		if !missing_event_ids.is_empty() {
-			outlier_events = self
+		let outlier_events = if !missing_event_ids.is_empty() {
+			self
 				.eventid_outlierpdu
 				.get_batch(futures::stream::iter(missing_event_ids))
 				.map(|res: Result<database::Handle<'_>>| {
 					res.and_then(|handle| handle.deserialized::<PduEvent>())
 				})
 				.collect()
-				.await;
-		}
+				.await
+		} else {
+			Vec::new()
+		};
 
 		// 5. Re-assemble results in original order
 		let mut pdu_iter = pdu_events.into_iter();
@@ -454,7 +456,7 @@ impl Data {
 			.widen_then(automatic_width(), move |chunk| async move {
 				self.get_pdus_in_room_batch(room_id, &chunk).await
 			})
-			.map(|results| futures::stream::iter(results))
+			.map(futures::stream::iter)
 			.flatten()
 	}
 

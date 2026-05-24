@@ -466,11 +466,13 @@ async fn handle_room(
 		if let Err(ref e) = result {
 			// Only abort the entire transaction for truly local failures
 			// (database errors, internal panics) — NOT for federation connection
-			// errors to third-party servers. Those are per-PDU failures that
-			// won't be fixed by the sender retrying the same transaction.
+			// errors to third-party servers or per-PDU auth rejections. Those are
+			// per-PDU failures that won't be fixed by the sender retrying the
+			// same transaction.
 			if e.status_code().is_server_error()
 				&& services.server.running()
 				&& !e.to_string().contains("Federation connection error")
+				&& !matches!(e, Error::MissingAuthEvents(_))
 			{
 				return Err(TransactionError::Transient(e.to_string()));
 			}
