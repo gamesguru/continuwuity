@@ -33,13 +33,18 @@ where
 	// This mirrors fetch_and_handle_outliers so that when the origin is
 	// unreachable (connection error, timeout, 404), we still get state from
 	// another server that has the room.
-	let servers = self
+	let mut servers = self
 		.build_federation_server_list(
 			room_id,
 			origin,
 			self.services.server.config.federation_fallback_room_servers,
 		)
 		.await;
+
+	// In inline synchronous fetches, we cap the number of fallback servers to 2
+	// to prevent blocking the incoming federation queue for minutes when dealing
+	// with a dead origin or missing state backlog.
+	servers.truncate(2);
 
 	let mut last_err = err!(Request(NotFound("No server could provide /state_ids")));
 	let res = 'found: {
