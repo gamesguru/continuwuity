@@ -344,7 +344,7 @@ where
 		.ok();
 
 	if base_shortstatehash != current_shortstatehash {
-		debug_warn!(
+		info!(
 			%room_id,
 			?base_shortstatehash,
 			?current_shortstatehash,

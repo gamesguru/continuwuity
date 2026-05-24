@@ -263,7 +263,7 @@ async fn get_summary_and_children_federation(
 		.ready_filter_map(|(child, mut cache)| {
 			(!cache.contains_key(&child.room_id)).then_some((child, cache))
 		})
-		.for_each(|(child, cache)| self.cache_insert(cache, current_room, child))
+		.for_each(|(child, cache)| self.cache_insert(cache, child))
 		.await;
 
 	let identifier = Identifier::UserId(user_id);
@@ -601,7 +601,6 @@ pub fn get_parent_children_via(
 async fn cache_insert(
 	&self,
 	mut cache: MutexGuard<'_, Cache>,
-	current_room: &RoomId,
 	child: SpaceHierarchyChildSummary,
 ) {
 	let SpaceHierarchyChildSummary {
