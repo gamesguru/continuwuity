@@ -97,6 +97,7 @@ where
 							Some(create_event),
 							room_id,
 							false,
+							None,
 						)
 						.await;
 					(id, res)

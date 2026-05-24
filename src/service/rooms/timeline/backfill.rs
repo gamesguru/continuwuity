@@ -300,7 +300,7 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 			| Ok(value) => match self
 				.services
 				.event_handler
-				.handle_incoming_pdu(backfill_server, room_id, event_id, value, false)
+				.handle_incoming_pdu(backfill_server, room_id, event_id, value, false, None)
 				.boxed()
 				.await
 			{
@@ -356,7 +356,7 @@ pub async fn backfill_pdu(
 
 	self.services
 		.event_handler
-		.handle_incoming_pdu(origin, &room_id, &event_id, value, false)
+		.handle_incoming_pdu(origin, &room_id, &event_id, value, false, None)
 		.boxed()
 		.await?;
 

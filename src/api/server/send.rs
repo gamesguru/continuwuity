@@ -458,7 +458,7 @@ async fn handle_room(
 			services
 				.rooms
 				.event_handler
-				.handle_incoming_pdu(origin, room_id, &event_id, value, true),
+				.handle_incoming_pdu(origin, room_id, &event_id, value, true, None),
 		)
 		.await
 		.map(|_| ());

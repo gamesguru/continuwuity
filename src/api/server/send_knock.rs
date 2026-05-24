@@ -167,7 +167,14 @@ pub(crate) async fn create_knock_event_v1_route(
 	let pdu_id = services
 		.rooms
 		.event_handler
-		.handle_incoming_pdu(sender.server_name(), &body.room_id, &event_id, value.clone(), true)
+		.handle_incoming_pdu(
+			sender.server_name(),
+			&body.room_id,
+			&event_id,
+			value.clone(),
+			true,
+			None,
+		)
 		.boxed()
 		.await?
 		.ok_or_else(|| err!(Request(InvalidParam("Could not accept as timeline event."))))?;

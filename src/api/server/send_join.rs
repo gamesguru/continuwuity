@@ -215,7 +215,7 @@ async fn create_join_event(
 	let pdu_id = services
 		.rooms
 		.event_handler
-		.handle_incoming_pdu(sender.server_name(), room_id, &event_id, value.clone(), true)
+		.handle_incoming_pdu(sender.server_name(), room_id, &event_id, value.clone(), true, None)
 		.boxed()
 		.await?
 		.ok_or_else(|| err!(Request(InvalidParam("Could not accept as timeline event."))))?;

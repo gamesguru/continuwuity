@@ -150,6 +150,7 @@ pub(super) async fn audit_auth_chain(
 			None::<&PduEvent>,
 			&room_id,
 			false, // TODO: fetch doesn't skip signature verification currently
+			None,
 		)
 		.await;
 
@@ -670,12 +671,7 @@ pub(super) async fn audit_membership(
 			.await
 		{
 			| Ok(response) => {
-				let room_version = self
-					.services
-					.rooms
-					.state
-					.get_room_version_or_fallback(&room_id)
-					.await?;
+				let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
 				let mut remote_members: HashMap<String, String> = HashMap::new();
 				let mut sig_failed: usize = 0;
@@ -1905,7 +1901,7 @@ pub(super) async fn get_room_dag(
 		.services
 		.rooms
 		.state
-		.get_room_version_or_fallback(&room_id)
+		.get_room_version(&room_id)
 		.await
 		.map_or_else(|_| "unknown".to_owned(), |v| v.to_string());
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
@@ -1934,14 +1930,14 @@ pub(super) async fn get_room_dag(
 					JsonValue::String(event_id.as_str().to_owned()),
 				);
 
-				// V11+: strip room_id per MSC3820/MSC4291
-				let is_v11 = room_version_str == "11";
+				// V12+: ONLY the m.room.create event lacks the room_id field.
+				// All subsequent events in V12 still require it.
 				let is_v12_or_later = !matches!(
 					room_version_str.as_str(),
 					"1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11"
 				);
 				let is_create = obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create");
-				if is_v12_or_later || (is_v11 && !is_create) {
+				if is_v12_or_later && is_create {
 					obj.remove("room_id");
 				}
 
@@ -2078,6 +2074,7 @@ pub(super) async fn get_remote_dag(
 	from: Option<OwnedEventId>,
 	print: bool,
 	verbose: bool,
+	room_version: Option<ruma::RoomVersionId>,
 ) -> Result {
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
@@ -2087,15 +2084,7 @@ pub(super) async fn get_remote_dag(
 		return Err!("Cannot fetch from ourselves. Use get-room-dag instead.");
 	}
 
-	let room_version = self
-		.services
-		.rooms
-		.state
-		.get_room_version_or_fallback(&room_id)
-		.await?;
-
-	// Start from explicit event ID or latest local event
-	let start_event_id = match from {
+	let start_event_id: OwnedEventId = match from {
 		| Some(eid) => eid,
 		| None => self
 			.services
@@ -2105,6 +2094,19 @@ pub(super) async fn get_remote_dag(
 			.await?
 			.event_id()
 			.to_owned(),
+	};
+
+	let room_version = match self.services.rooms.state.get_room_version(&room_id).await {
+		| Ok(v) => v,
+		| Err(e) => {
+			if let Some(v) = room_version {
+				v
+			} else {
+				return Err!(Request(InvalidParam(
+					"Local room version missing. You must specify --room-version explicitly."
+				)));
+			}
+		},
 	};
 
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
@@ -2370,8 +2372,9 @@ pub(super) async fn fetch_pdu(
 		.services
 		.rooms
 		.state
-		.get_room_version_or_fallback(&room_id)
-		.await?;
+		.get_room_version(&room_id)
+		.await
+		.ok();
 
 	let response = self
 		.services
@@ -2379,10 +2382,9 @@ pub(super) async fn fetch_pdu(
 		.send_federation_request(&server, get_event::v1::Request::new(event_id, None))
 		.await?;
 
-	// If the room's state is completely missing (falling back to V11) and we happen
+	// If the room's state is completely missing and we happen
 	// to be fetching the `m.room.create` event to rescue it, we MUST extract the
-	// real version from the PDU itself. Otherwise, canonicalization uses the
-	// fallback rules, resulting in an entirely incorrect event ID.
+	// real version from the PDU itself. Otherwise, canonicalization fails.
 	if let Ok(val) = serde_json::from_str::<serde_json::Value>(response.pdu.get()) {
 		if val.get("type").and_then(|t| t.as_str()) == Some("m.room.create") {
 			if let Some(v_str) = val
@@ -2391,14 +2393,21 @@ pub(super) async fn fetch_pdu(
 				.and_then(|v| v.as_str())
 			{
 				if let Ok(v) = RoomVersionId::try_from(v_str) {
-					room_version = v;
+					room_version = Some(v);
 				}
 			} else {
 				// Matrix spec: If room_version is omitted in m.room.create, it defaults to V1.
-				room_version = RoomVersionId::V1;
+				room_version = Some(RoomVersionId::V1);
 			}
 		}
 	}
+
+	let room_version = room_version.ok_or_else(|| {
+		err!(
+			"Local room version is unknown and the fetched PDU is not an m.room.create event. \
+			 You must rescue the m.room.create event first."
+		)
+	})?;
 
 	let (event_id, value) = if skip_auth {
 		let (eid, mut val) = conduwuit_core::matrix::event::gen_event_id_canonical_json(
@@ -2717,16 +2726,13 @@ pub(super) async fn compare_room_state(
 ) -> Result {
 	use std::fmt::Write;
 
+	use ruma::api::federation::event::get_room_state;
+
 	if servers.is_empty() {
 		return Err!(Request(InvalidParam("Provide at least one server to compare against.")));
 	}
 	let server = &servers[0];
-	let room_version = self
-		.services
-		.rooms
-		.state
-		.get_room_version_or_fallback(&room_id)
-		.await?;
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
 		| None => self
@@ -3468,12 +3474,7 @@ pub(super) async fn heal_room(
 	// Phase 2: Walk the DAG to find genuinely missing events
 	self.write_str("Phase 2: Scanning DAG for gaps...\n")
 		.await?;
-	let room_version = self
-		.services
-		.rooms
-		.state
-		.get_room_version_or_fallback(&room_id)
-		.await?;
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let latest_event_id = self
 		.services
 		.rooms
@@ -3676,21 +3677,26 @@ pub(super) async fn import_pdus(
 	path: String,
 	skip_auth: bool,
 	skip_sig_verify: bool,
+	room_version: Option<ruma::RoomVersionId>,
 ) -> Result {
 	use tokio::io::{AsyncBufReadExt, BufReader};
 
 	self.bail_restricted()?;
 
+	let room_version = match room_version {
+		| Some(v) => v,
+		| None => match self.services.rooms.state.get_room_version(&room_id).await {
+			| Ok(v) => v,
+			| Err(_) => return Err!(Request(InvalidParam(
+				"Local room version unknown. You must specify --room-version explicitly when importing to an empty room."
+			))),
+		},
+	};
+
 	let file = tokio::fs::File::open(&path)
 		.await
 		.map_err(|e| err!("Failed to open file {path}: {e:?}"))?;
 	let mut lines = BufReader::new(file).lines();
-	let room_version = self
-		.services
-		.rooms
-		.state
-		.get_room_version_or_fallback(&room_id)
-		.await?;
 	let origin = room_id
 		.server_name()
 		.filter(|s| !self.services.globals.server_is_ours(s))
@@ -3818,7 +3824,7 @@ pub(super) async fn import_pdus(
 				// Local-only auth: handle_outlier_pdu checks auth_events from local DB,
 				// runs auth_check, and persists as outlier. auth_events_known=true skips
 				// federation fetches for missing auth events.
-				let (pdu, _json) = self
+				let (pdu, parsed) = self
 					.services
 					.rooms
 					.event_handler
@@ -3829,7 +3835,8 @@ pub(super) async fn import_pdus(
 						&room_id,
 						val,
 						true,
-						true,
+						skip_sig_verify,
+						Some(&room_version),
 					)
 					.await?;
 
@@ -3984,12 +3991,7 @@ pub(super) async fn dag_merge_base(
 		}
 	}
 
-	let room_version = self
-		.services
-		.rooms
-		.state
-		.get_room_version_or_fallback(&room_id)
-		.await?;
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
 	/// Look up a PDU from timeline first, then outlier table.
 	macro_rules! get_pdu_any {
@@ -4896,13 +4898,7 @@ pub(super) async fn heal_all_rooms(
 	let mut total_rejected = 0_usize;
 
 	for (i, room_id) in rooms.iter().take(total).enumerate() {
-		let Ok(room_version) = self
-			.services
-			.rooms
-			.state
-			.get_room_version_or_fallback(room_id)
-			.await
-		else {
+		let Ok(room_version) = self.services.rooms.state.get_room_version(room_id).await else {
 			skipped = skipped.saturating_add(1);
 			continue;
 		};
@@ -5427,12 +5423,7 @@ pub(super) async fn fetch_missing_events(
 
 	use futures::{StreamExt, stream::FuturesUnordered};
 
-	let room_version = self
-		.services
-		.rooms
-		.state
-		.get_room_version_or_fallback(&room_id)
-		.await?;
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
 	// Build EMA-sorted server list
 	let servers = self

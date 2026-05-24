@@ -278,6 +278,10 @@ pub enum YoloCommand {
 		/// Show verbose output including federation request/response details
 		#[arg(long)]
 		verbose: bool,
+
+		/// Override the room version instead of guessing it if missing.
+		#[arg(long)]
+		room_version: Option<ruma::RoomVersionId>,
 	},
 
 	/// Fetches a PDU from a remote server and attempts to verify/persist it.
@@ -401,6 +405,10 @@ pub enum YoloCommand {
 		/// Skip signature verification on incoming PDUs.
 		#[arg(long)]
 		skip_sig_verify: bool,
+
+		/// Override the room version instead of guessing it if missing.
+		#[arg(long)]
+		room_version: Option<ruma::RoomVersionId>,
 	},
 
 	/// Make a raw federation API request to a remote server and print/save

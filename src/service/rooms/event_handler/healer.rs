@@ -100,6 +100,7 @@ pub(crate) async fn healer_worker(
 							Some(&create_event),
 							&room_id,
 							false, // TODO: flag for skip_sig_verify
+							None,
 						)
 						.await;
 
@@ -166,6 +167,7 @@ pub(crate) async fn healer_worker(
 							Some(&create_event),
 							&room_id,
 							false,
+							None,
 						)
 						.await;
 
@@ -183,6 +185,7 @@ pub(crate) async fn healer_worker(
 							&waiting.event_id,
 							waiting.value,
 							true,
+							None,
 						)
 						.await;
 				}

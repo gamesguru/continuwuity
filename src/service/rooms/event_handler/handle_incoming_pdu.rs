@@ -124,6 +124,7 @@ pub async fn handle_incoming_pdu<'a>(
 	event_id: &'a EventId,
 	value: BTreeMap<String, CanonicalJsonValue>,
 	is_timeline_event: bool,
+	room_version_override: Option<&'a ruma::RoomVersionId>,
 ) -> Result<Option<RawPduId>> {
 	// Prepare outlier value in case we need to soft-fail on timeout
 	let mut outlier_value = value.clone();
@@ -169,7 +170,14 @@ pub async fn handle_incoming_pdu<'a>(
 		)));
 	}
 
-	let fut = self.handle_incoming_pdu_inner(origin, room_id, event_id, value, is_timeline_event);
+	let fut = self.handle_incoming_pdu_inner(
+		origin,
+		room_id,
+		event_id,
+		value,
+		is_timeline_event,
+		room_version_override,
+	);
 
 	let pdu_timeout = self.services.server.config.pdu_receive_timeout;
 	match Box::pin(tokio::time::timeout(std::time::Duration::from_secs(pdu_timeout), fut)).await {
@@ -226,6 +234,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	event_id: &'a EventId,
 	value: BTreeMap<String, CanonicalJsonValue>,
 	is_timeline_event: bool,
+	room_version_override: Option<&'a ruma::RoomVersionId>,
 ) -> Result<Option<RawPduId>> {
 	// 1. Skip the PDU if we already have it as a timeline event
 	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
@@ -335,6 +344,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			value.clone(),
 			false,
 			false,
+			room_version_override,
 		)
 		.await
 	{

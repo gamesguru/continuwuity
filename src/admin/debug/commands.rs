@@ -515,7 +515,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 		self.services
 			.rooms
 			.state
-			.get_room_version_or_fallback(&room_id)
+			.get_room_version(&room_id)
 			.await
 			.unwrap_or(RoomVersionId::V12)
 	} else {
@@ -726,7 +726,7 @@ pub(crate) async fn force_set_state(
 		.services
 		.rooms
 		.state
-		.get_room_version_or_fallback(&room_id)
+		.get_room_version(&room_id)
 		.await
 		.unwrap_or(RoomVersionId::V11);
 

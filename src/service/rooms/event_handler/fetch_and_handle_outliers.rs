@@ -25,6 +25,7 @@ pub async fn fetch_and_handle_outliers<'a, Pdu, Events>(
 	create_event: Option<&'a Pdu>,
 	room_id: &'a RoomId,
 	skip_sig_verify: bool,
+	room_version_override: Option<&'a ruma::RoomVersionId>,
 ) -> Vec<(PduEvent, Option<BTreeMap<String, CanonicalJsonValue>>)>
 where
 	Pdu: Event + Send + Sync,
@@ -194,8 +195,18 @@ where
 					debug!("Got {next_id} over federation from {successful_server}");
 
 					let room_version_id = match create_event {
-						| Some(ce) => crate::rooms::event_handler::get_room_version_id(ce)
-							.unwrap_or(ruma::RoomVersionId::V11),
+						| Some(ce) =>
+							match crate::rooms::event_handler::get_room_version_id(ce) {
+								| Ok(v) => v,
+								| Err(_) => {
+									warn!(
+										"Provided create_event for {room_id} has no room \
+										 version! Skipping outlier {next_id}"
+									);
+									back_off(next_id.clone());
+									continue;
+								},
+							},
 						| None => {
 							let mut version = None;
 							if let Ok(json) =
@@ -214,12 +225,23 @@ where
 							}
 							match version {
 								| Some(v) => v,
-								| None => self
-									.services
-									.state
-									.get_room_version_or_fallback(room_id)
-									.await
-									.unwrap_or(ruma::RoomVersionId::V11),
+								| None =>
+									if let Some(override_v) = room_version_override {
+										override_v.clone()
+									} else {
+										match self.services.state.get_room_version(room_id).await
+										{
+											| Ok(v) => v,
+											| Err(e) => {
+												warn!(
+													"Unknown room version for {room_id}, \
+													 skipping outlier {next_id}: {e}"
+												);
+												back_off(next_id.clone());
+												continue;
+											},
+										}
+									},
 							}
 						},
 					};
@@ -388,6 +410,7 @@ where
 				value.clone(),
 				true,
 				skip_sig_verify,
+				room_version_override,
 			))
 			.await
 			{

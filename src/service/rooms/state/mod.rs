@@ -601,16 +601,6 @@ impl Service {
 			.map(|content: RoomCreateEventContent| content.room_version)
 	}
 
-	pub async fn get_room_version_or_fallback(&self, room_id: &RoomId) -> Result<RoomVersionId> {
-		self.get_room_version(room_id).await.or_else(|e| {
-			conduwuit::warn!(
-				"Room {room_id} is missing its create event! Falling back to room version 11 to \
-				 prevent lockout. Original error: {e:?}"
-			);
-			Ok(RoomVersionId::V11)
-		})
-	}
-
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
 		self.db
 			.roomid_shortstatehash

@@ -24,6 +24,7 @@ pub async fn handle_outlier_pdu<'a, Pdu>(
 	mut value: CanonicalJsonObject,
 	_auth_events_known: bool,
 	skip_sig_verify: bool,
+	room_version_override: Option<&'a ruma::RoomVersionId>,
 ) -> Result<(PduEvent, BTreeMap<String, CanonicalJsonValue>)>
 where
 	Pdu: Event + Send + Sync,
@@ -52,11 +53,18 @@ where
 
 	// TODO: For RoomVersion6 we must check that Raw<..> is canonical do we anywhere?: https://matrix.org/docs/spec/rooms/v6#canonical-json
 
-	let actual_room_version = self.services.state.get_room_version(room_id).await;
-	let is_fallback_version = create_event.is_none() && actual_room_version.is_err();
 	let room_version_id = match create_event {
 		| Some(ce) => get_room_version_id(ce)?,
-		| None => actual_room_version.unwrap_or(ruma::RoomVersionId::V11),
+		| None =>
+			if let Some(override_v) = room_version_override {
+				override_v.clone()
+			} else {
+				self.services.state.get_room_version(room_id).await.map_err(|e| {
+					err!(Request(InvalidParam(
+						"Room version is unknown locally and no override was provided: {e}"
+					)))
+				})?
+			},
 	};
 
 	let mut incoming_pdu = if skip_sig_verify {
