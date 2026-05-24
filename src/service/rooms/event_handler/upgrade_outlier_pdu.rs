@@ -295,62 +295,26 @@ where
 	// soft-failed ones. State resolution merges forks deterministically —
 	// a soft-failed event may carry state from a fork we haven't seen,
 	// and feeding it into resolve_state heals local drift.
+	//
+	// OCC (Optimistic Concurrency Control): We compute the state delta
+	// WITHOUT holding the room lock, then acquire the lock and verify the
+	// base state hash hasn't changed. If it has, we DROP the lock and
+	// retry. This avoids holding the exclusive mutex during CPU-bound
+	// state resolution.
+	let state_delta_opt;
+	let state_lock;
 
-	// OCC: Capture the base state hash BEFORE the unlocked computation.
-	// We'll verify it hasn't shifted after acquiring the lock.
-	let base_shortstatehash = self
-		.services
-		.state
-		.get_room_shortstatehash(room_id)
-		.await
-		.ok();
+	loop {
+		// 1. Capture base state hash BEFORE the unlocked computation
+		let base_shortstatehash = self
+			.services
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.ok();
 
-	let mut state_delta_opt = self
-		.calculate_state_delta(
-			&incoming_pdu,
-			state_at_incoming_event.clone(),
-			room_id,
-			&room_version_id,
-		)
-		.await?;
-
-	// Calculate forward extremities AFTER the soft-fail evaluation.
-	// Per spec, soft-failed events are NOT added as forward extremities.
-	trace!("Appending pdu to timeline");
-
-	// NOW lock the room!
-	trace!(room_id = %room_id, "Locking the room");
-	let state_lock = self.services.state.mutex.lock(room_id).await;
-
-	// Re-check if the PDU was added to the timeline while we were doing CPU-bound
-	// state res
-	if let Ok(pduid) = self
-		.services
-		.timeline
-		.get_pdu_id(incoming_pdu.event_id())
-		.await
-	{
-		return Ok(Some(pduid));
-	}
-
-	// OCC check: verify the room state hasn't shifted while we were unlocked.
-	// If another PDU was processed concurrently and changed the state, our
-	// state_delta was computed against a stale base and must be recalculated.
-	let current_shortstatehash = self
-		.services
-		.state
-		.get_room_shortstatehash(room_id)
-		.await
-		.ok();
-
-	if base_shortstatehash != current_shortstatehash {
-		info!(
-			%room_id,
-			?base_shortstatehash,
-			?current_shortstatehash,
-			"Room state changed during unlocked state-res, recalculating state delta"
-		);
-		state_delta_opt = self
+		// 2. Heavy computation WITHOUT the lock
+		let delta = self
 			.calculate_state_delta(
 				&incoming_pdu,
 				state_at_incoming_event.clone(),
@@ -358,8 +322,48 @@ where
 				&room_version_id,
 			)
 			.await?;
+
+		// 3. Acquire lock for the commit phase
+		trace!(room_id = %room_id, "Locking the room");
+		let lock = self.services.state.mutex.lock(room_id).await;
+
+		// 4. Re-check if the PDU was already added while we were unlocked
+		if let Ok(pduid) = self
+			.services
+			.timeline
+			.get_pdu_id(incoming_pdu.event_id())
+			.await
+		{
+			return Ok(Some(pduid));
+		}
+
+		// 5. OCC verification: has the base state shifted?
+		let current_shortstatehash = self
+			.services
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.ok();
+
+		if base_shortstatehash == current_shortstatehash {
+			// State is consistent — break while HOLDING the lock
+			state_delta_opt = delta;
+			state_lock = lock;
+			break;
+		}
+
+		// State changed — drop the lock and retry so we don't block the room
+		info!(
+			%room_id,
+			?base_shortstatehash,
+			?current_shortstatehash,
+			"Room state changed during unlocked state-res, dropping lock and retrying"
+		);
+		drop(lock);
 	}
 
+	// 6. Apply the state delta (still holding state_lock from the successful break)
+	trace!("Appending pdu to timeline");
 	if let Some(HashSetCompressStateEvent { shortstatehash, added, removed }) = state_delta_opt {
 		Box::pin(self.services.state.force_state(
 			room_id,

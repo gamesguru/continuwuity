@@ -1,10 +1,17 @@
 //! Integration tests running upstream `ruma-state-res` fixtures against
 //! Conduwuit's engine.
+//!
+//! Each test loads the same fixture files used by upstream ruma-state-res tests.
+//! "Batched" tests load multiple PDU files, each representing one side of a DAG
+//! fork (plus a common bootstrap). State is built per-fork and fed to
+//! `state_res::resolve` as separate state sets.
+//!
+//! "State map" tests (MSC4297) load explicit state maps + PDU definitions.
 
 use std::{
-	collections::{BTreeMap, HashMap, HashSet, VecDeque},
+	collections::{BTreeSet, HashMap, HashSet, VecDeque},
 	fs,
-	path::PathBuf,
+	path::Path,
 };
 
 use conduwuit_core::{
@@ -13,16 +20,25 @@ use conduwuit_core::{
 };
 use ruma::{CanonicalJsonValue, EventId, OwnedEventId, RoomVersionId};
 
+const FIXTURES_DIR: &str = "../../ruma-upstream/crates/ruma-state-res/tests/it/resolve/fixtures";
+const SNAPSHOTS_DIR: &str = "../../ruma-upstream/crates/ruma-state-res/tests/it/resolve/snapshots";
+
 // ==========================================
-// JSON Pre-processor & Snapshot Parser
+// Fixture Loading
 // ==========================================
 
-fn parse_upstream_fixture(fixture_name: &str) -> Vec<PduEvent> {
-	let path = PathBuf::from(format!(
-		"../../ruma-upstream/crates/ruma-state-res/tests/it/resolve/fixtures/{}.json",
-		fixture_name
-	));
+fn fixtures_path() -> &'static Path {
+	let p = Path::new(FIXTURES_DIR);
+	assert!(
+		p.exists(),
+		"Fixtures directory not found at {FIXTURES_DIR}. \
+		 Ensure the ruma-upstream submodule is checked out."
+	);
+	p
+}
 
+fn load_pdus_from_file(filename: &str) -> Vec<PduEvent> {
+	let path = fixtures_path().join(filename);
 	let content = fs::read_to_string(&path)
 		.unwrap_or_else(|_| panic!("Failed to read fixture: {:?}", path));
 
@@ -37,11 +53,33 @@ fn parse_upstream_fixture(fixture_name: &str) -> Vec<PduEvent> {
 				| _ => panic!("Event is not a JSON object"),
 			};
 
-			// Inject a dummy room_id if missing (upstream tests often omit it)
+			// Inject required fields missing from upstream fixtures
 			if !obj.contains_key("room_id") {
 				obj.insert(
 					"room_id".to_string(),
 					CanonicalJsonValue::String("!test_room:conduwuit.local".to_string()),
+				);
+			}
+			if !obj.contains_key("depth") {
+				obj.insert(
+					"depth".to_string(),
+					CanonicalJsonValue::Integer(ruma::Int::from(0)),
+				);
+			}
+			if !obj.contains_key("hashes") {
+				use std::collections::BTreeMap;
+				let mut hashes = BTreeMap::new();
+				hashes.insert(
+					"sha256".to_string(),
+					CanonicalJsonValue::String(String::new()),
+				);
+				obj.insert("hashes".to_string(), CanonicalJsonValue::Object(hashes));
+			}
+			if !obj.contains_key("signatures") {
+				use std::collections::BTreeMap;
+				obj.insert(
+					"signatures".to_string(),
+					CanonicalJsonValue::Object(BTreeMap::new()),
 				);
 			}
 
@@ -53,159 +91,487 @@ fn parse_upstream_fixture(fixture_name: &str) -> Vec<PduEvent> {
 		.collect()
 }
 
-fn extract_upstream_snapshot(fixture_name: &str) -> String {
-	let path = PathBuf::from(format!(
-		"../../ruma-upstream/crates/ruma-state-res/tests/it/resolve/snapshots/it__resolve__{}.\
-		 snap",
-		fixture_name
-	));
-
+fn load_event_id_list(filename: &str) -> Vec<OwnedEventId> {
+	let path = fixtures_path().join(filename);
 	let content = fs::read_to_string(&path)
-		.unwrap_or_else(|_| panic!("Failed to read snapshot: {:?}", path));
+		.unwrap_or_else(|_| panic!("Failed to read state map: {:?}", path));
 
-	// Insta snapshots contain YAML headers separated by "---\n". We just want the
-	// JSON.
-	let parts: Vec<&str> = content.split("---\n").collect();
-	parts.last().unwrap().trim().to_string()
-}
-
-fn format_state_map(state: &StateMap<OwnedEventId>) -> String {
-	// Upstream snaps group by event_type, then state_key
-	let mut map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-
-	for ((ev_type, state_key), ev_id) in state {
-		map.entry(ev_type.to_string())
-			.or_default()
-			.insert(state_key.to_string(), ev_id.to_string());
-	}
-
-	serde_json::to_string_pretty(&map).unwrap()
+	serde_json::from_str(&content).expect("State map file is not valid JSON")
 }
 
 // ==========================================
-// Mock Store for State Resolution
+// Auth Chain / State Building
 // ==========================================
 
-struct MockStore {
+struct EventStore {
 	events: HashMap<OwnedEventId, PduEvent>,
 }
 
-impl MockStore {
-	fn new(events: &[PduEvent]) -> Self {
+impl EventStore {
+	fn new(all_events: &[PduEvent]) -> Self {
 		let mut map = HashMap::new();
-		for ev in events {
+		for ev in all_events {
 			map.insert(ev.event_id().to_owned(), ev.clone());
 		}
 		Self { events: map }
 	}
 
-	async fn fetch_event(&self, id: OwnedEventId) -> Option<PduEvent> {
-		self.events.get(&id).cloned()
-	}
+	fn fetch(&self, id: OwnedEventId) -> Option<PduEvent> { self.events.get(&id).cloned() }
 
-	// Helper to generate the auth_chain set for a given list of state events
-	async fn get_auth_chain(&self, state: &StateMap<OwnedEventId>) -> HashSet<OwnedEventId> {
+	fn auth_chain(&self, event_ids: impl Iterator<Item = OwnedEventId>) -> HashSet<OwnedEventId> {
 		let mut chain = HashSet::new();
-		let mut queue: VecDeque<OwnedEventId> = state.values().cloned().collect();
+		let mut queue: VecDeque<OwnedEventId> = event_ids.collect();
 
 		while let Some(id) = queue.pop_front() {
 			if !chain.insert(id.clone()) {
 				continue;
 			}
-			if let Some(ev) = self.fetch_event(id).await {
+			if let Some(ev) = self.events.get(&id) {
 				queue.extend(ev.auth_events().map(ToOwned::to_owned));
 			}
 		}
 		chain
 	}
+
+	/// Build the accumulated state at each event by walking the DAG forward
+	/// from roots. Returns state maps at each DAG leaf (forward extremity).
+	fn build_state_at_leaves(&self, events: &[PduEvent]) -> Vec<StateMap<OwnedEventId>> {
+		// Build forward graph: for each event, which events have it as prev_event?
+		let mut forward_graph: HashMap<OwnedEventId, Vec<OwnedEventId>> = HashMap::new();
+		let mut has_children: HashSet<OwnedEventId> = HashSet::new();
+		let mut roots = Vec::new();
+
+		for ev in events {
+			if ev.prev_events().next().is_none() {
+				roots.push(ev.event_id().to_owned());
+			}
+			for prev in ev.prev_events() {
+				has_children.insert(prev.to_owned());
+				forward_graph
+					.entry(prev.to_owned())
+					.or_default()
+					.push(ev.event_id().to_owned());
+			}
+		}
+
+		// Walk the DAG forward, accumulating state at each event
+		let mut state_at: HashMap<OwnedEventId, StateMap<OwnedEventId>> = HashMap::new();
+		let mut queue: VecDeque<OwnedEventId> = roots.into_iter().collect();
+		let mut processed = HashSet::new();
+
+		while let Some(eid) = queue.pop_front() {
+			if processed.contains(&eid) {
+				continue;
+			}
+
+			let ev = match self.events.get(&eid) {
+				| Some(e) => e,
+				| None => continue,
+			};
+
+			// Check all prev_events have been processed
+			let all_prevs_ready = ev.prev_events().all(|p| state_at.contains_key(p));
+			if !all_prevs_ready {
+				// Re-queue for later
+				queue.push_back(eid);
+				continue;
+			}
+
+			// Merge state from all prev_events
+			let mut merged_state: StateMap<OwnedEventId> = StateMap::new();
+			for prev in ev.prev_events() {
+				if let Some(prev_state) = state_at.get(prev) {
+					for (k, v) in prev_state {
+						merged_state.insert(k.clone(), v.clone());
+					}
+				}
+			}
+
+			// Apply this event's state
+			if let Some(sk) = ev.state_key() {
+				merged_state.insert(
+					(ev.kind().to_string().into(), sk.into()),
+					ev.event_id().to_owned(),
+				);
+			}
+
+			state_at.insert(eid.clone(), merged_state);
+			processed.insert(eid.clone());
+
+			// Queue children
+			if let Some(children) = forward_graph.get(&eid) {
+				for child in children {
+					queue.push_back(child.clone());
+				}
+			}
+		}
+
+		// Find leaves (events not referenced as prev_events by any other event)
+		let leaves: Vec<_> = events
+			.iter()
+			.filter(|ev| !has_children.contains(ev.event_id()))
+			.collect();
+
+		leaves
+			.into_iter()
+			.filter_map(|ev| state_at.remove(ev.event_id()))
+			.collect()
+	}
 }
 
 // ==========================================
-// Test Modes (Iterative & Atomic)
+// Snapshot Comparison
 // ==========================================
 
-async fn resolve_atomic(
-	events: &[PduEvent],
-	store: &MockStore,
-	room_version: &RoomVersionId,
-) -> StateMap<OwnedEventId> {
-	// Find the leaves (extremities) of the provided DAG fixture
-	let mut has_children = HashSet::new();
-	for ev in events {
-		has_children.extend(ev.prev_events().map(ToOwned::to_owned));
+fn extract_snapshot(snapshot_name: &str) -> String {
+	let path = Path::new(SNAPSHOTS_DIR).join(format!("{snapshot_name}@resolved_state.snap"));
+
+	let content = fs::read_to_string(&path)
+		.unwrap_or_else(|_| panic!("Failed to read snapshot: {:?}", path));
+
+	// Insta snapshots have a YAML header separated by "---\n". We want the JSON.
+	let parts: Vec<&str> = content.split("---\n").collect();
+	parts.last().unwrap().trim().to_string()
+}
+
+/// Format resolved state as a sorted JSON array matching upstream snapshot
+/// format: each entry has event_type, state_key, event_id, and content.
+fn format_state_for_snapshot(
+	state: &StateMap<OwnedEventId>,
+	store: &EventStore,
+) -> String {
+	#[derive(serde::Serialize)]
+	struct Entry<'a> {
+		#[serde(rename = "type")]
+		event_type: &'a str,
+		state_key: &'a str,
+		event_id: &'a str,
+		content: serde_json::Value,
 	}
 
-	let extremities: Vec<&PduEvent> = events
-		.iter()
-		.filter(|ev: &&PduEvent| !has_children.contains(ev.event_id()))
-		.collect();
-
-	// In a real environment, you'd calculate the state AT these extremities.
-	// For atomic test bounds, we treat the entire fixture as the conflicted set.
-	let mut full_state = HashMap::new();
-	for ev in events {
-		if let Some(sk) = ev.state_key() {
-			full_state
-				.insert((ev.kind().to_string().into(), sk.into()), ev.event_id().to_owned());
+	impl PartialEq for Entry<'_> {
+		fn eq(&self, other: &Self) -> bool {
+			self.event_type == other.event_type && self.state_key == other.state_key
 		}
 	}
 
-	// For MSC4297 tests, atomic resolution just dumps the states into the engine
-	let auth_chains = vec![store.get_auth_chain(&full_state).await];
+	impl Eq for Entry<'_> {}
+
+	impl Ord for Entry<'_> {
+		fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+			self.event_type
+				.cmp(other.event_type)
+				.then_with(|| self.state_key.cmp(other.state_key))
+		}
+	}
+
+	impl PartialOrd for Entry<'_> {
+		fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+	}
+
+	let entries: BTreeSet<Entry<'_>> = state
+		.iter()
+		.filter_map(|((ev_type, sk), eid)| {
+			let ev = store.events.get(eid)?;
+			let ev_type_str = ev_type.to_string();
+			let ev_type_ref: &str = Box::leak(ev_type_str.into_boxed_str());
+			let content: serde_json::Value =
+				serde_json::from_str(ev.content().get()).unwrap_or_default();
+			Some(Entry {
+				event_type: ev_type_ref,
+				state_key: sk.as_str(),
+				event_id: eid.as_str(),
+				content,
+			})
+		})
+		.collect();
+
+	serde_json::to_string_pretty(&entries).unwrap()
+}
+
+// ==========================================
+// Resolution Modes
+// ==========================================
+
+/// Resolve by building per-leaf state maps from the DAG structure.
+/// This is the correct approach: each leaf represents a fork tip.
+async fn resolve_batched(
+	fixture_files: &[&str],
+	room_version: &RoomVersionId,
+) -> StateMap<OwnedEventId> {
+	// Load all PDUs from all fixture files
+	let mut all_events: Vec<PduEvent> = Vec::new();
+	for file in fixture_files {
+		all_events.extend(load_pdus_from_file(file));
+	}
+
+	let store = EventStore::new(&all_events);
+	let state_sets = store.build_state_at_leaves(&all_events);
+
+	if state_sets.is_empty() {
+		panic!("No DAG leaves found — fixture DAG has no extremities");
+	}
+
+	// If there's only one leaf, no conflict to resolve — just return it
+	if state_sets.len() == 1 {
+		return state_sets.into_iter().next().unwrap();
+	}
+
+	// Build auth chain sets per state set
+	let auth_chain_sets: Vec<HashSet<OwnedEventId>> = state_sets
+		.iter()
+		.map(|ss| store.auth_chain(ss.values().cloned()))
+		.collect();
+
+	let fetch = |id: OwnedEventId| std::future::ready(store.fetch(id));
 
 	state_res::resolve(
 		room_version,
-		vec![full_state].iter(),
-		&auth_chains,
-		&|id| store.fetch_event(id),
+		state_sets.iter(),
+		&auth_chain_sets,
+		&fetch,
 		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await
-	.unwrap()
+	.expect("State resolution failed")
 }
 
-async fn run_upstream_test(fixture_name: &str, room_version: RoomVersionId) {
-	let events = parse_upstream_fixture(fixture_name);
-	let store = MockStore::new(&events);
+/// Resolve MSC4297 state map tests: explicit state maps + PDU definitions.
+async fn resolve_state_maps(
+	state_map_files: &[&str],
+	pdu_files: &[&str],
+	room_version: &RoomVersionId,
+) -> StateMap<OwnedEventId> {
+	// Load all PDUs
+	let mut all_events: Vec<PduEvent> = Vec::new();
+	for file in pdu_files {
+		all_events.extend(load_pdus_from_file(file));
+	}
 
-	// Run atomic resolution (mimics standard test harness mapping)
-	let resolved_state = resolve_atomic(&events, &store, &room_version).await;
+	let store = EventStore::new(&all_events);
 
-	let result_json = format_state_map(&resolved_state);
-	let expected_snap = extract_upstream_snapshot(fixture_name);
+	// Load explicit state maps: each file is a list of event_ids
+	let state_sets: Vec<StateMap<OwnedEventId>> = state_map_files
+		.iter()
+		.map(|file| {
+			let event_ids = load_event_id_list(file);
+			event_ids
+				.into_iter()
+				.map(|eid| {
+					let ev = store
+						.events
+						.get(&eid)
+						.unwrap_or_else(|| panic!("State map references unknown event: {eid}"));
+					let sk = ev.state_key().expect("State events must have state_key");
+					((ev.kind().to_string().into(), sk.into()), eid)
+				})
+				.collect()
+		})
+		.collect();
 
-	assert_eq!(
-		result_json, expected_snap,
-		"State Resolution mismatch for fixture: {}",
-		fixture_name
-	);
+	let auth_chain_sets: Vec<HashSet<OwnedEventId>> = state_sets
+		.iter()
+		.map(|ss| store.auth_chain(ss.values().cloned()))
+		.collect();
+
+	let fetch = |id: OwnedEventId| std::future::ready(store.fetch(id));
+
+	state_res::resolve(
+		room_version,
+		state_sets.iter(),
+		&auth_chain_sets,
+		&fetch,
+		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
+		None::<&fn(Vec<OwnedEventId>)>,
+	)
+	.await
+	.expect("State resolution failed")
 }
 
 // ==========================================
-// Test Registration (All 13 Upstream Tests)
+// Test Registration
 // ==========================================
 
-macro_rules! upstream_test {
-	($name:ident, $fixture:expr, $version:expr) => {
+macro_rules! batched_test {
+	($name:ident, [$($file:expr),+ $(,)?], $version:expr, $snapshot:expr) => {
 		#[tokio::test]
-		async fn $name() { run_upstream_test($fixture, $version).await; }
+		async fn $name() {
+			let state = resolve_batched(&[$($file),+], &$version).await;
+			let store = {
+				let mut all = Vec::new();
+				$(all.extend(load_pdus_from_file($file));)+
+				EventStore::new(&all)
+			};
+
+			let result = format_state_for_snapshot(&state, &store);
+			let expected = extract_snapshot($snapshot);
+
+			assert_eq!(
+				result, expected,
+				"State resolution mismatch for {}",
+				$snapshot
+			);
+		}
 	};
 }
 
-upstream_test!(minimal_private_chat, "minimal_private_chat", RoomVersionId::V11);
-upstream_test!(minimal_public_chat, "minimal_public_chat", RoomVersionId::V11);
-upstream_test!(origin_server_ts_tiebreak, "origin_server_ts_tiebreak", RoomVersionId::V11);
+macro_rules! state_map_test {
+	($name:ident, states: [$($sfile:expr),+], pdus: [$($pfile:expr),+], $version:expr, $snapshot:expr) => {
+		#[tokio::test]
+		async fn $name() {
+			let state = resolve_state_maps(&[$($sfile),+], &[$($pfile),+], &$version).await;
+			let store = {
+				let mut all = Vec::new();
+				$(all.extend(load_pdus_from_file($pfile));)+
+				EventStore::new(&all)
+			};
 
-// MSC4297 Specific Tests (V2.0 vs V2.1)
-upstream_test!(msc4297_problem_a_state_res_v2_0, "msc4297_problem_a", RoomVersionId::V11);
-upstream_test!(msc4297_problem_a_state_res_v2_1, "msc4297_problem_a", RoomVersionId::V12); // V2.1 rules
-upstream_test!(msc4297_problem_b_state_res_v2_0, "msc4297_problem_b", RoomVersionId::V11);
-upstream_test!(msc4297_problem_b_state_res_v2_1, "msc4297_problem_b", RoomVersionId::V12); // V2.1 rules
+			let result = format_state_for_snapshot(&state, &store);
+			let expected = extract_snapshot($snapshot);
 
-upstream_test!(ban_vs_power_levels, "ban_vs_power_levels", RoomVersionId::V11);
-upstream_test!(topic_vs_power_levels, "topic_vs_power_levels", RoomVersionId::V11);
-upstream_test!(power_levels_admin_vs_mod, "power_levels_admin_vs_mod", RoomVersionId::V11);
-upstream_test!(topic_vs_ban, "topic_vs_ban", RoomVersionId::V11);
-upstream_test!(join_rules_vs_join, "join_rules_vs_join", RoomVersionId::V11);
-upstream_test!(concurrent_joins, "concurrent_joins", RoomVersionId::V11);
+			assert_eq!(
+				result, expected,
+				"State resolution mismatch for {}",
+				$snapshot
+			);
+		}
+	};
+}
+
+// --- Batch tests (bootstrap + fork files) ---
+
+batched_test!(
+	minimal_private_chat,
+	["bootstrap-private-chat.json"],
+	RoomVersionId::V11,
+	"minimal_private_chat"
+);
+
+batched_test!(
+	minimal_public_chat,
+	["bootstrap-public-chat.json"],
+	RoomVersionId::V11,
+	"minimal_public_chat"
+);
+
+batched_test!(
+	origin_server_ts_tiebreak,
+	["bootstrap-private-chat.json", "origin-server-ts-tiebreak.json"],
+	RoomVersionId::V11,
+	"origin_server_ts_tiebreak"
+);
+
+batched_test!(
+	ban_vs_power_levels,
+	[
+		"bootstrap-public-chat.json",
+		"ban-vs-power-levels-alice.json",
+		"ban-vs-power-levels-bob.json",
+	],
+	RoomVersionId::V11,
+	"ban_vs_power_levels"
+);
+
+batched_test!(
+	topic_vs_power_levels,
+	[
+		"bootstrap-public-chat.json",
+		"topic-vs-power-levels-alice.json",
+		"topic-vs-power-levels-bob.json",
+	],
+	RoomVersionId::V11,
+	"topic_vs_power_levels"
+);
+
+batched_test!(
+	power_levels_admin_vs_mod,
+	[
+		"bootstrap-public-chat.json",
+		"power-levels-admin-vs-mod-alice.json",
+		"power-levels-admin-vs-mod-bob.json",
+	],
+	RoomVersionId::V11,
+	"power_levels_admin_vs_mod"
+);
+
+batched_test!(
+	topic_vs_ban,
+	[
+		"bootstrap-public-chat.json",
+		"topic-vs-ban-common.json",
+		"topic-vs-ban-alice.json",
+		"topic-vs-ban-bob.json",
+	],
+	RoomVersionId::V11,
+	"topic_vs_ban"
+);
+
+batched_test!(
+	join_rules_vs_join,
+	[
+		"bootstrap-public-chat.json",
+		"join-rules-vs-join-common.json",
+		"join-rules-vs-join-alice.json",
+		"join-rules-vs-join-ella.json",
+	],
+	RoomVersionId::V11,
+	"join_rules_vs_join"
+);
+
+batched_test!(
+	concurrent_joins,
+	[
+		"bootstrap-public-chat.json",
+		"concurrent-joins-charlie.json",
+		"concurrent-joins-ella.json",
+	],
+	RoomVersionId::V11,
+	"concurrent_joins"
+);
+
+// --- MSC4297 state map tests ---
+
+state_map_test!(
+	msc4297_problem_a_state_res_v2_0,
+	states: [
+		"MSC4297-problem-A/state-bob.json",
+		"MSC4297-problem-A/state-charlie.json"
+	],
+	pdus: ["MSC4297-problem-A/pdus-v11.json"],
+	RoomVersionId::V11,
+	"msc4297_problem_a_state_res_v2_0"
+);
+
+state_map_test!(
+	msc4297_problem_a_state_res_v2_1,
+	states: [
+		"MSC4297-problem-A/state-bob.json",
+		"MSC4297-problem-A/state-charlie.json"
+	],
+	pdus: ["MSC4297-problem-A/pdus-v12.json"],
+	RoomVersionId::V12,
+	"msc4297_problem_a_state_res_v2_1"
+);
+
+state_map_test!(
+	msc4297_problem_b_state_res_v2_0,
+	states: [
+		"MSC4297-problem-B/state-eve.json",
+		"MSC4297-problem-B/state-zara.json"
+	],
+	pdus: ["MSC4297-problem-B/pdus-v11.json"],
+	RoomVersionId::V11,
+	"msc4297_problem_b_state_res_v2_0"
+);
+
+state_map_test!(
+	msc4297_problem_b_state_res_v2_1,
+	states: [
+		"MSC4297-problem-B/state-eve.json",
+		"MSC4297-problem-B/state-zara.json"
+	],
+	pdus: ["MSC4297-problem-B/pdus-v12.json"],
+	RoomVersionId::V12,
+	"msc4297_problem_b_state_res_v2_1"
+);
