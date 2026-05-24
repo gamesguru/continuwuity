@@ -189,15 +189,6 @@ impl Service {
 	}
 }
 
-struct HealerSuppressGuard<'a> {
-	globals: &'a globals::Service,
-	room_id: OwnedRoomId,
-}
-
-impl Drop for HealerSuppressGuard<'_> {
-	fn drop(&mut self) { self.globals.suppress_healer.remove(&self.room_id); }
-}
-
 impl Service {
 	/// Reorder the timeline for a room using topological sort.
 	///
@@ -216,19 +207,6 @@ impl Service {
 
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let state_lock = self.services.state.mutex.lock(room_id).await;
-
-		self.services
-			.globals
-			.suppress_healer
-			.insert(room_id.to_owned());
-		let _suppress_guard = HealerSuppressGuard {
-			globals: &self.services.globals,
-			room_id: room_id.to_owned(),
-		};
-
-		// Note: intentionally NOT corking the entire operation. A cork here
-		// would buffer 164K+ writes (82K deletes + 82K inserts) and trigger a
-		// catastrophic RocksDB compaction on flush that locks the server.
 
 		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)
 		// Only keep (PduCount, PduEvent) per event — CanonicalJsonObject is re-fetched

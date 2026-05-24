@@ -787,16 +787,6 @@ pub struct Config {
 	#[serde(default)]
 	pub state_res_ignore_admin_rejected: bool,
 
-	/// Enable the background DAG healer that automatically fetches missing
-	/// events discovered during state resolution. When disabled, missing
-	/// events in auth chains are silently skipped (best-effort resolution).
-	/// Disable this on resource-constrained boxes where the healer's
-	/// federation requests cause excessive CPU and I/O load.
-	///
-	/// default: false
-	#[serde(default)]
-	pub allow_dag_healer: bool,
-
 	/// Always calls /forget on behalf of the user if leaving a room. This is a
 	/// part of MSC4267 "Automatically forgetting rooms on leave"
 	#[serde(default)]

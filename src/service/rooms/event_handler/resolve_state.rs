@@ -9,6 +9,7 @@ use conduwuit::{
 	state_res::{self, StateMap},
 	trace,
 	utils::stream::{IterStream, ReadyExt, TryWidebandExt, WidebandExt},
+	warn,
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
 use ruma::{OwnedEventId, RoomId, RoomVersionId};
@@ -211,16 +212,17 @@ where
 		pdus
 	};
 
-	let room_id_clone = room_id.to_owned();
-	let dag_healer = self.dag_healer.clone();
-	let healer_enabled = self.services.server.config.allow_dag_healer;
-	let is_suppressed = self.services.globals.suppress_healer.contains(room_id);
-	let event_missing_cb = move |missing_events| {
-		if healer_enabled && !is_suppressed {
-			let _ = dag_healer.send(crate::rooms::event_handler::HealRequest::MissingEvents {
-				room_id: room_id_clone.clone(),
-				missing_events,
-			});
+	let event_missing_cb = move |missing_events: Vec<OwnedEventId>| {
+		// Can't do async federation fetches here (sync callback inside state_res).
+		// The ingestion pipeline (handle_outlier_pdu, fetch_prev, fetch_state) is
+		// responsible for pre-fetching auth events before we reach this point.
+		if !missing_events.is_empty() {
+			warn!(
+				target: "state_res_debug",
+				count = missing_events.len(),
+				events = ?missing_events,
+				"state_res: skipping missing auth chain events (best-effort)"
+			);
 		}
 	};
 

@@ -463,14 +463,6 @@ where
 				state = Some(fetched_state);
 			},
 			| Ok(None) | Err(_) => {
-				// /state_ids also failed — hand off to the healer for a later retry.
-				let _ = self.dag_healer.send(super::HealRequest::MissingState {
-					room_id: room_id.to_owned(),
-					event_id: incoming_pdu.event_id().to_owned(),
-					origin: origin.to_owned(),
-					waiting_pdu: None,
-				});
-
 				return Err(conduwuit::Error::MissingAuthEvents(vec![]));
 			},
 		}

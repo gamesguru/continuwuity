@@ -154,22 +154,6 @@ pub async fn handle_incoming_pdu<'a>(
 		}
 	}
 
-	// Cork check: If the room is currently undergoing heavy administrative
-	// maintenance (like reorder-timeline), we immediately reject incoming PDUs
-	// with an error so that the remote server will queue and retry them later,
-	// preventing them from waiting and timing out (which triggers the circuit
-	// breaker and soft-fails them).
-	if self.services.globals.suppress_healer.contains(room_id) {
-		warn!(
-			%room_id,
-			%event_id,
-			"Room is corked for maintenance, rejecting incoming PDU for later retry"
-		);
-		return Err!(Request(Unknown(
-			"Room is undergoing administrative maintenance, please retry later."
-		)));
-	}
-
 	let fut = self.handle_incoming_pdu_inner(
 		origin,
 		room_id,
@@ -189,18 +173,6 @@ pub async fn handle_incoming_pdu<'a>(
 			res
 		},
 		| Err(_) => {
-			if self.services.globals.suppress_healer.contains(room_id) {
-				warn!(
-					%event_id,
-					%room_id,
-					%origin,
-					"PDU processing timed out while room was corked for maintenance. Bypassing circuit breaker so remote retries."
-				);
-				return Err!(Request(Unknown(
-					"Room is locked for maintenance, try again later."
-				)));
-			}
-
 			warn!(
 				%event_id,
 				%room_id,
@@ -387,34 +359,6 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 						.outlier
 						.add_pdu_outlier(event_id, &value, Some(room_id));
 
-					// Try to use a prev_event as the /state_ids target. The state at
-					// a prev_event includes the auth events we need for this PDU. The
-					// healer will fetch /state_ids, then fetch the prev_event itself,
-					// then retry handle_incoming_pdu so the pipeline can complete.
-					let prev_event_id: Option<ruma::OwnedEventId> = value
-						.get("prev_events")
-						.and_then(CanonicalJsonValue::as_array)
-						.and_then(|arr| arr.first())
-						.and_then(|v| serde_json::from_value(v.clone().into()).ok());
-
-					if let Some(prev_id) = prev_event_id {
-						let _ = self.dag_healer.send(super::HealRequest::MissingState {
-							room_id: room_id.to_owned(),
-							event_id: prev_id,
-							origin: origin.to_owned(),
-							waiting_pdu: Some(Box::new(super::WaitingPdu {
-								event_id: event_id.to_owned(),
-								value,
-								origin: origin.to_owned(),
-							})),
-						});
-					} else {
-						// No prev_events (unusual) — fall back to fetching missing auth events.
-						let _ = self.dag_healer.send(super::HealRequest::MissingEvents {
-							room_id: room_id.to_owned(),
-							missing_events: missing,
-						});
-					}
 					return Ok(None);
 				},
 			}

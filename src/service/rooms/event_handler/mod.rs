@@ -6,7 +6,6 @@ mod fetch_state;
 mod handle_incoming_pdu;
 mod handle_outlier_pdu;
 mod handle_prev_pdu;
-pub(crate) mod healer;
 mod parse_incoming_pdu;
 mod policy_server;
 mod pre_fetch_state_res_deps;
@@ -15,7 +14,7 @@ mod state_at_incoming;
 pub mod upgrade_outlier_pdu;
 
 use std::{
-	collections::{BTreeMap, HashMap},
+	collections::HashMap,
 	fmt::Write,
 	sync::{
 		Arc,
@@ -31,7 +30,7 @@ use conduwuit::{
 };
 use futures::StreamExt;
 use ruma::{
-	CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedServerName, RoomId, RoomVersionId,
+	OwnedEventId, OwnedRoomId, OwnedServerName, RoomId, RoomVersionId,
 	events::room::create::RoomCreateEventContent,
 };
 
@@ -42,37 +41,7 @@ pub struct Service {
 	pub federation_handletime: SyncRwLock<HandleTimeMap>,
 	pub bad_room_ratelimiter: SyncRwLock<HashMap<OwnedRoomId, (u32, Instant)>>,
 	pub peer_scorer: dashmap::DashMap<OwnedServerName, PeerStats>,
-	pub dag_healer: tokio::sync::mpsc::UnboundedSender<HealRequest>,
-	dag_healer_rx: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<HealRequest>>>,
 	services: Services,
-}
-
-/// A PDU that was stored as an outlier because its auth events were missing.
-/// Carried by `HealRequest::MissingState` so the healer can retry it after
-/// fetching the remote state via /state_ids.
-#[derive(Debug)]
-pub struct WaitingPdu {
-	pub event_id: OwnedEventId,
-	pub value: BTreeMap<String, CanonicalJsonValue>,
-	pub origin: OwnedServerName,
-}
-
-#[derive(Debug)]
-pub enum HealRequest {
-	MissingEvents {
-		room_id: OwnedRoomId,
-		missing_events: Vec<OwnedEventId>,
-	},
-	MissingState {
-		room_id: OwnedRoomId,
-		/// The event to call /state_ids at (usually the prev_event of
-		/// waiting_pdu).
-		event_id: OwnedEventId,
-		origin: OwnedServerName,
-		/// If set, after fetching state the healer will also fetch `event_id`
-		/// directly and then retry handle_incoming_pdu for this PDU.
-		waiting_pdu: Option<Box<WaitingPdu>>,
-	},
 }
 
 #[derive(Default, Debug)]
@@ -105,15 +74,11 @@ type HandleTimeMap = HashMap<OwnedRoomId, (OwnedEventId, Instant)>;
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
-		let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-
-		let service = Arc::new(Self {
+		Ok(Arc::new(Self {
 			mutex_federation: RoomMutexMap::new(),
 			federation_handletime: HandleTimeMap::new().into(),
 			bad_room_ratelimiter: HashMap::new().into(),
 			peer_scorer: dashmap::DashMap::new(),
-			dag_healer: sender,
-			dag_healer_rx: std::sync::Mutex::new(Some(receiver)),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				sending: args.depend::<sending::Service>("sending"),
@@ -132,17 +97,7 @@ impl crate::Service for Service {
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 				server: args.server.clone(),
 			},
-		});
-
-		Ok(service)
-	}
-
-	async fn worker(self: Arc<Self>) -> Result<()> {
-		let receiver = self.dag_healer_rx.lock().unwrap().take();
-		if let Some(receiver) = receiver {
-			healer::healer_worker(receiver, self.clone()).await;
-		}
-		Ok(())
+		}))
 	}
 
 	async fn memory_usage(&self, out: &mut (dyn Write + Send)) -> Result {

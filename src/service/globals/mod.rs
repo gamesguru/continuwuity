@@ -18,7 +18,6 @@ pub struct Service {
 	pub server_user: OwnedUserId,
 	pub admin_alias: OwnedRoomAliasId,
 	pub turn_secret: String,
-	pub suppress_healer: dashmap::DashSet<ruma::OwnedRoomId>,
 }
 
 type RateLimitState = (Instant, u32); // Time if last failed try, number of failed tries
@@ -45,7 +44,6 @@ impl crate::Service for Service {
 			db,
 			server: args.server.clone(),
 			bad_event_ratelimiter: Arc::new(SyncRwLock::new(HashMap::new())),
-			suppress_healer: dashmap::DashSet::new(),
 			admin_alias: OwnedRoomAliasId::try_from(format!("#admins:{}", &args.server.name))
 				.expect("#admins:server_name is valid alias name"),
 			server_user: UserId::parse_with_server_name(
