@@ -1000,11 +1000,7 @@ where
 	}
 	if events_to_check.is_empty() {
 		debug!("no events to check, returning unconflicted state");
-		let mut resolved_state = if let Some(first_state) = unconflicted_state_sets.pop() {
-			first_state
-		} else {
-			StateMap::new()
-		};
+		let mut resolved_state = unconflicted_state_sets.pop().unwrap_or_default();
 		for state in unconflicted_state_sets {
 			resolved_state.extend(state);
 		}
@@ -1061,11 +1057,7 @@ where
 	trace!(map = ?auth_events.keys().collect::<Vec<_>>(), "fetched auth events");
 
 	let auth_events = &auth_events;
-	let mut resolved_state = if let Some(first_state) = unconflicted_state_sets.pop() {
-		first_state
-	} else {
-		StateMap::new()
-	};
+	let mut resolved_state = unconflicted_state_sets.pop().unwrap_or_default();
 
 	for state in unconflicted_state_sets {
 		resolved_state.extend(state);
