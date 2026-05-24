@@ -73,7 +73,7 @@ impl Data {
 			.try_next()
 			.await?
 			.map(at!(1))
-			.ok_or_else(|| err!(Request(NotFound("no PDU's found in room"))))
+			.ok_or_else(|| err!(Request(NotFound("no PDUs found in room"))))
 	}
 
 	/// Returns the `count` of this pdu's id.

@@ -3822,6 +3822,11 @@ pub(super) async fn import_pdus(
 					}
 				};
 
+				let mut pdu_val = val;
+				if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
+					pdu_val.remove("event_id");
+				}
+
 				// Local-only auth: handle_outlier_pdu checks auth_events from local DB,
 				// runs auth_check, and persists as outlier. auth_events_known=true skips
 				// federation fetches for missing auth events.
@@ -3834,7 +3839,7 @@ pub(super) async fn import_pdus(
 						create_event.as_ref(),
 						&eid,
 						&room_id,
-						val,
+						pdu_val,
 						true,
 						skip_sig_verify,
 						Some(&room_version),
