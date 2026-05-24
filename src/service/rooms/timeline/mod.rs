@@ -1298,6 +1298,9 @@ impl Service {
 			.pdus_rev(room_id, until.unwrap_or_else(PduCount::max))
 	}
 
+	#[tracing::instrument(skip(self), level = "info")]
+	pub async fn fix_pdu_event_ids(&self) -> Result<usize> { self.db.fix_pdu_event_ids().await }
+
 	/// Forward iteration starting after `from`.
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub fn pdus<'a>(

@@ -134,6 +134,38 @@ impl Data {
 		Ok(count)
 	}
 
+	pub(super) async fn fix_pdu_event_ids(&self) -> Result<usize> {
+		let mut fixed = 0;
+		use futures::TryStreamExt;
+		// Use raw_stream to iterate eventid_pduid mapping
+		let iter = self.eventid_pduid.raw_stream();
+		pin_mut!(iter);
+
+		while let Some((event_id_bytes, pdu_id_bytes)) = iter.try_next().await? {
+			if let Ok(event_id_str) = std::str::from_utf8(&event_id_bytes) {
+				if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
+					let pdu_id: RawPduId = (&*pdu_id_bytes).into();
+					if let Ok(mut json) = self
+						.pduid_pdu
+						.get(&pdu_id)
+						.await
+						.deserialized::<CanonicalJsonObject>()
+					{
+						if !json.contains_key("event_id") {
+							json.insert(
+								"event_id".into(),
+								ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
+							);
+							self.pduid_pdu.raw_put(&pdu_id, Json(&json));
+							fixed += 1;
+						}
+					}
+				}
+			}
+		}
+		Ok(fixed)
+	}
+
 	pub(super) async fn remove_from_timeline(&self, event_id: &EventId) {
 		if let Ok(pduid) = self.get_pdu_id(event_id).await {
 			self.pduid_pdu.remove(&pduid);

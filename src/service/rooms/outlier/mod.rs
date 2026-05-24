@@ -130,6 +130,9 @@ pub fn add_pdu_outlier(
 	// Stamp receive order (write-once, never mutated by rescue/reorder)
 	self.stamp_receive_count(event_id);
 
+	let mut pdu = pdu.clone();
+	pdu.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
+
 	// Resolve room_id from the JSON, the hint, or create-event heuristic.
 	// Do this BEFORE storing so we can inject it into the JSON if absent —
 	// this ensures PduEvent.room_id() is always populated when read back.
@@ -211,6 +214,42 @@ pub async fn remove_outlier(&self, event_id: &EventId, provided_room_id: Option<
 	// room prefix and ignores orphaned entries.
 
 	self.db.eventid_outlierpdu.remove(event_id);
+}
+
+#[implement(Service)]
+pub async fn fix_pdu_event_ids(&self) -> Result<usize> {
+	let mut fixed = 0;
+	use futures::pin_mut;
+	// Use raw_stream to iterate eventid_outlierpdu mapping
+	let iter = self.db.eventid_outlierpdu.raw_stream();
+	pin_mut!(iter);
+
+	use futures::TryStreamExt;
+	while let Some((event_id_bytes, _)) = iter.try_next().await? {
+		if let Ok(event_id_str) = std::str::from_utf8(&event_id_bytes) {
+			if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
+				if let Ok(mut json) = self
+					.db
+					.eventid_outlierpdu
+					.get(&event_id_bytes)
+					.await
+					.deserialized::<CanonicalJsonObject>()
+				{
+					if !json.contains_key("event_id") {
+						json.insert(
+							"event_id".into(),
+							CanonicalJsonValue::String(event_id.as_str().to_owned()),
+						);
+						self.db
+							.eventid_outlierpdu
+							.raw_put(&event_id_bytes, Json(&json));
+						fixed += 1;
+					}
+				}
+			}
+		}
+	}
+	Ok(fixed)
 }
 
 #[implement(Service)]

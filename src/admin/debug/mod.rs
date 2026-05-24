@@ -246,6 +246,10 @@ pub enum DebugCommand {
 	/// Send a test email to the invoking admin's email address
 	SendTestEmail,
 
+	/// Scans timeline and outlier PDUs in the database and injects missing
+	/// event_id fields.
+	FixPduEventIds,
+
 	/// Developer test stubs
 	#[command(subcommand)]
 	#[allow(non_snake_case)]
