@@ -6,7 +6,7 @@ use std::{
 
 use conduwuit::{
 	Event, implement, info,
-	utils::stream::{IterStream, TryWidebandExt},
+	utils::stream::{BroadbandExt, IterStream, TryWidebandExt},
 	warn,
 };
 use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
@@ -74,12 +74,18 @@ pub(super) async fn pre_fetch_state_res_deps(
 
 	// Phase 1: Fetch individually missing auth chain events
 	let all_auth_ids: HashSet<&OwnedEventId> = auth_chain_sets.iter().flatten().collect();
-	let mut missing: Vec<OwnedEventId> = Vec::new();
-	for event_id in &all_auth_ids {
-		if !self.services.timeline.pdu_exists(event_id).await {
-			missing.push((*event_id).clone());
-		}
-	}
+	let missing: Vec<OwnedEventId> = all_auth_ids
+		.into_iter()
+		.stream()
+		.broad_filter_map(|event_id| async move {
+			if !self.services.timeline.pdu_exists(event_id).await {
+				Some(event_id.clone())
+			} else {
+				None
+			}
+		})
+		.collect()
+		.await;
 
 	if !missing.is_empty() {
 		info!(
