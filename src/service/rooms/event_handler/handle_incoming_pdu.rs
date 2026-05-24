@@ -409,7 +409,6 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	// OCC storms!
 	Box::pin(self.process_timeline_upgrade(incoming_pdu, val, create_event, origin, room_id))
 		.await
-		.map(|()| None)
 }
 
 #[implement(super::Service)]
@@ -426,7 +425,7 @@ pub async fn process_timeline_upgrade(
 	create_event: &conduwuit::PduEvent,
 	origin: &ServerName,
 	room_id: &RoomId,
-) -> Result<()> {
+) -> Result<Option<RawPduId>> {
 	let event_id = incoming_pdu.event_id();
 
 	// Skip old events
@@ -507,5 +506,4 @@ pub async fn process_timeline_upgrade(
 		true,
 	))
 	.await
-	.map(|_| ())
 }

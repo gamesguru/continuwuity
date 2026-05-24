@@ -1165,31 +1165,43 @@ where
 			}
 		}
 
-		let supplemental: Vec<_> = auth_types
-			.iter()
-			.stream()
-			.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
-			.filter_map(|(key, ev_id)| async move {
-				// Exclude rejected events from resolved_state (Synapse parity)
-				// Fetch the event to check its rejected flag
-				if let Some(event) = auth_events.get(ev_id) {
-					if event.rejected() {
-						return None;
+		// In V2.1 (MSC4297), each event authenticates purely against its own
+		// auth_events chain. The supplemental merge from resolved_state is
+		// skipped because V2.1 starts from the empty set precisely so that
+		// events are evaluated against their own auth chain, preventing
+		// cascading auth failures when conflicting state (e.g. join_rules)
+		// contaminates the accumulated resolved_state.
+		//
+		// For V2, resolved_state OVERWRITES auth_events — this forces events
+		// to authenticate against authoritative state, preventing auth-bypass
+		// attacks where a malicious event claims old power levels.
+		if room_version.state_res != StateResolutionVersion::V2_1 {
+			let supplemental: Vec<_> = auth_types
+				.iter()
+				.stream()
+				.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
+				.filter_map(|(key, ev_id)| async move {
+					// Exclude rejected events from resolved_state (Synapse parity)
+					// Fetch the event to check its rejected flag
+					if let Some(event) = auth_events.get(ev_id) {
+						if event.rejected() {
+							return None;
+						}
+						Some((key.to_owned(), event.clone()))
+					} else {
+						let fetched = fetch_event(ev_id.clone()).await?;
+						if fetched.rejected() {
+							return None;
+						}
+						Some((key.to_owned(), fetched))
 					}
-					Some((key.to_owned(), event.clone()))
-				} else {
-					let fetched = fetch_event(ev_id.clone()).await?;
-					if fetched.rejected() {
-						return None;
-					}
-					Some((key.to_owned(), fetched))
-				}
-			})
-			.collect()
-			.await;
+				})
+				.collect()
+				.await;
 
-		for (key, event) in supplemental {
-			auth_state.push((key, event));
+			for (key, event) in supplemental {
+				auth_state.push((key, event));
+			}
 		}
 
 		// Sort + dedup: binary search requires ascending order, and duplicates
