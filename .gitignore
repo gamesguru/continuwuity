@@ -106,8 +106,9 @@ node_modules/
 doc_build/
 .rspress/
 
-# professor
+# custom files 
 /.tmp/
+.complement-logs
 .~*
 ._*
 ~$*

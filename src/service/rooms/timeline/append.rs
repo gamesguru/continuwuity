@@ -395,6 +395,16 @@ where
 					.state_cache
 					.update_membership(room_id, target_user_id, pdu, true)
 					.await?;
+
+				// Invalidate hierarchy cache: membership changes can affect
+				// restricted room accessibility (the `allow` list checks
+				// whether the requesting user/server is joined to this room).
+				self.services
+					.spaces
+					.roomid_spacehierarchy_cache
+					.lock()
+					.await
+					.remove(room_id);
 			}
 		},
 		| TimelineEventType::RoomMessage => {
