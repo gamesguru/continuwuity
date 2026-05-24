@@ -200,7 +200,7 @@ pub(super) async fn load_left_room(
 	let mut raw_timeline_pdus = Vec::with_capacity(timeline.pdus.len());
 	let mut in_timeline = false;
 
-	let TimelinePdus { pdus, limited } = timeline;
+	let TimelinePdus { pdus, limited, .. } = timeline;
 
 	let mut stream = pdus
 		.into_iter()
