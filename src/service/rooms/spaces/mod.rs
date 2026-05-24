@@ -71,7 +71,7 @@ pub enum Identifier<'a> {
 
 type Cache = LruCache<OwnedRoomId, Option<CachedSpaceHierarchySummary>>;
 
-const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(0);
 
 #[async_trait]
 impl crate::Service for Service {
@@ -261,7 +261,7 @@ async fn get_summary_and_children_federation(
 				.map(|lock| (child, lock))
 		})
 		.ready_filter_map(|(child, mut cache)| {
-			(!cache.contains_key(current_room)).then_some((child, cache))
+			(!cache.contains_key(&child.room_id)).then_some((child, cache))
 		})
 		.for_each(|(child, cache)| self.cache_insert(cache, current_room, child))
 		.await;
@@ -532,7 +532,8 @@ where
 					| Identifier::UserId(user) =>
 						self.services.state_cache.is_joined(user, room).await,
 					| Identifier::ServerName(server) =>
-						self.services.state_cache.server_in_room(server, room).await,
+						self.services.state_cache.server_in_room(server, room).await
+							|| room.server_name() == Some(*server),
 				})
 				.await;
 
@@ -640,7 +641,7 @@ async fn cache_insert(
 		room_version,
 	};
 
-	cache.insert(current_room.to_owned(), Some(CachedSpaceHierarchySummary { summary }));
+	cache.insert(room_id.clone(), Some(CachedSpaceHierarchySummary { summary }));
 }
 
 // Here because cannot implement `From` across ruma-federation-api and
