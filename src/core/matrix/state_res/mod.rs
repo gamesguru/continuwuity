@@ -276,70 +276,78 @@ where
 	//    4. m.room.power_levels - the actual PL events
 	//    This matches Synapse/ruma-lean behavior where ALL member events
 	//    go through the Kahn-sorted power event path.
-	let conflicted_pl_events: Vec<_> = all_conflicted
-		.iter()
-		.stream()
-		.wide_filter_map(async |id| {
-			let ev = cached_fetch(id.clone()).await?;
-			let dominated = matches!(
-				ev.event_type(),
-				TimelineEventType::RoomPowerLevels
-					| TimelineEventType::RoomCreate
-					| TimelineEventType::RoomJoinRules
-					| TimelineEventType::RoomMember
-			);
-			dominated.then_some(id.clone())
-		})
-		.collect()
-		.await;
-
-	debug!(
-		"PL sub-resolution: found {} power/foundation events in conflicted set \
-		 (all_conflicted={})",
-		conflicted_pl_events.len(),
-		all_conflicted.len()
-	);
-
-	// -- Sub-resolve the PL+create events using the 100/0 bootstrap --
-	//    (global_pl_context = None)
-	let sorted_pl_events = reverse_topological_power_sort(
-		conflicted_pl_events,
-		&all_conflicted,
-		&cached_fetch,
-		None, // Bootstrap mode
-		&parsed_pl_cache,
-		&sender_pl_cache,
-	)
-	.await?;
-
-	let partially_resolved_pl_state = iterative_auth_check(
-		&room_version,
-		sorted_pl_events.iter().stream().map(AsRef::as_ref),
-		vec![initial_state.clone()],
-		&cached_fetch,
-		event_batch_fetch,
-		Some(&is_cached),
-	)
-	.await?;
-
-	debug!(entries = partially_resolved_pl_state.len(), "partially resolved PL state");
-
-	// -- Extract the authoritative global power level context --
+	//
+	//    NOTE: This is ONLY needed for V2.1 which starts from empty state.
+	//    V2 rooms already have unconflicted state as initial_state, so the
+	//    normal 2-phase resolution (control events + remaining) suffices.
+	//    Running this for V2 was a regression that tripled auth-check work.
 	let mut global_pl_context = None;
-	let power_levels_ty_sk = (StateEventType::RoomPowerLevels, StateKey::new());
-	if let Some(pl_event_id) = partially_resolved_pl_state.get(&power_levels_ty_sk) {
-		debug!(%pl_event_id, "selected global PL event");
-		if let Some(pl_event) = cached_fetch(pl_event_id.clone()).await {
-			if let Ok(c) = from_json_str::<PowerLevelsContentFields>(pl_event.content().get()) {
-				global_pl_context = Some(c);
+	if stateres_version == StateResolutionVersion::V2_1 {
+		let conflicted_pl_events: Vec<_> = all_conflicted
+			.iter()
+			.stream()
+			.wide_filter_map(async |id| {
+				let ev = cached_fetch(id.clone()).await?;
+				let dominated = matches!(
+					ev.event_type(),
+					TimelineEventType::RoomPowerLevels
+						| TimelineEventType::RoomCreate
+						| TimelineEventType::RoomJoinRules
+						| TimelineEventType::RoomMember
+				);
+				dominated.then_some(id.clone())
+			})
+			.collect()
+			.await;
+
+		debug!(
+			"PL sub-resolution: found {} power/foundation events in conflicted set \
+			 (all_conflicted={})",
+			conflicted_pl_events.len(),
+			all_conflicted.len()
+		);
+
+		// -- Sub-resolve the PL+create events using the 100/0 bootstrap --
+		//    (global_pl_context = None)
+		let sorted_pl_events = reverse_topological_power_sort(
+			conflicted_pl_events,
+			&all_conflicted,
+			&cached_fetch,
+			None, // Bootstrap mode
+			&parsed_pl_cache,
+			&sender_pl_cache,
+		)
+		.await?;
+
+		let partially_resolved_pl_state = iterative_auth_check(
+			&room_version,
+			sorted_pl_events.iter().stream().map(AsRef::as_ref),
+			vec![initial_state.clone()],
+			&cached_fetch,
+			event_batch_fetch,
+			Some(&is_cached),
+		)
+		.await?;
+
+		debug!(entries = partially_resolved_pl_state.len(), "partially resolved PL state");
+
+		// -- Extract the authoritative global power level context --
+		let power_levels_ty_sk = (StateEventType::RoomPowerLevels, StateKey::new());
+		if let Some(pl_event_id) = partially_resolved_pl_state.get(&power_levels_ty_sk) {
+			debug!(%pl_event_id, "selected global PL event");
+			if let Some(pl_event) = cached_fetch(pl_event_id.clone()).await {
+				if let Ok(c) = from_json_str::<PowerLevelsContentFields>(pl_event.content().get())
+				{
+					global_pl_context = Some(c);
+				} else {
+					warn!(%pl_event_id, "failed to parse global PL event content");
+				}
 			} else {
-				warn!(%pl_event_id, "failed to parse global PL event content");
+				warn!(%pl_event_id, "failed to fetch global PL event");
 			}
 		} else {
-			warn!(%pl_event_id, "failed to fetch global PL event");
+			warn!("no global PL event found in partially resolved PL state");
 		}
-	} else {
-		warn!("no global PL event found in partially resolved PL state");
 	}
 
 	// Get only the control events with a state_key: "" or ban/kick event (sender !=
