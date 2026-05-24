@@ -135,8 +135,8 @@ impl Data {
 	}
 
 	pub(super) async fn fix_pdu_event_ids(&self) -> Result<usize> {
-		let mut fixed = 0;
 		use futures::TryStreamExt;
+		let mut fixed: usize = 0;
 		// Use raw_stream to iterate eventid_pduid mapping
 		let iter = self.eventid_pduid.raw_stream();
 		pin_mut!(iter);
@@ -157,7 +157,7 @@ impl Data {
 								ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
 							);
 							self.pduid_pdu.raw_put(pdu_id, Json(&json));
-							fixed += 1;
+							fixed = fixed.saturating_add(1);
 						}
 					}
 				}

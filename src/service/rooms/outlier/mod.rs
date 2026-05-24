@@ -218,13 +218,12 @@ pub async fn remove_outlier(&self, event_id: &EventId, provided_room_id: Option<
 
 #[implement(Service)]
 pub async fn fix_pdu_event_ids(&self) -> Result<usize> {
-	let mut fixed = 0;
-	use futures::pin_mut;
+	use futures::{TryStreamExt, pin_mut};
+	let mut fixed: usize = 0;
 	// Use raw_stream to iterate eventid_outlierpdu mapping
 	let iter = self.db.eventid_outlierpdu.raw_stream();
 	pin_mut!(iter);
 
-	use futures::TryStreamExt;
 	while let Some((event_id_bytes, _)) = iter.try_next().await? {
 		if let Ok(event_id_str) = std::str::from_utf8(event_id_bytes) {
 			if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
@@ -243,7 +242,7 @@ pub async fn fix_pdu_event_ids(&self) -> Result<usize> {
 						self.db
 							.eventid_outlierpdu
 							.raw_put(event_id_bytes, Json(&json));
-						fixed += 1;
+						fixed = fixed.saturating_add(1);
 					}
 				}
 			}

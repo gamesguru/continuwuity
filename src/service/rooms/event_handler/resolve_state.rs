@@ -221,8 +221,8 @@ where
 				format!(
 					"{:?}, ... {} more ..., {:?}",
 					&missing_events[..5],
-					missing_events.len() - 10,
-					&missing_events[missing_events.len() - 5..]
+					missing_events.len().saturating_sub(10),
+					&missing_events[missing_events.len().saturating_sub(5)..]
 				)
 			} else {
 				format!("{missing_events:?}")
