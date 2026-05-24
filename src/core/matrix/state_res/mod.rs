@@ -146,7 +146,7 @@ where
 	};
 
 	// Split non-conflicting and conflicting state
-	let (mut unconflicted, mut conflicting) = separate(state_sets.into_iter());
+	let (unconflicted, conflicting) = separate(state_sets.into_iter());
 
 	debug!(count = unconflicted.len(), "non-conflicting events");
 	trace!(map = ?unconflicted, "non-conflicting events");
@@ -160,12 +160,11 @@ where
 	trace!(map = ?conflicting, "conflicting events");
 	let (conflicted_state_subgraph, initial_state) =
 		if stateres_version == StateResolutionVersion::V2_1 {
-			// MSC4297: For room versions > 11, the "clean" state is the empty set,
-			// and the "conflicting" state is the set of all state events in the set of
-			// states to resolve.
-			for (k, v) in unconflicted.drain() {
-				conflicting.insert(k, vec![v]);
-			}
+			// MSC4297: V2.1 starts from the empty set as initial state.
+			// The conflicting set remains as-is — only actually conflicting
+			// events need subgraph traversal. Do NOT drain unconflicted into
+			// conflicting; that causes the entire room history to be crawled
+			// (the "drain trap" — 90+ second stalls on large rooms).
 			let (csg, missing) = calculate_conflicted_subgraph(&conflicting, &cached_fetch)
 				.await
 				.ok_or_else(|| {
@@ -1165,17 +1164,14 @@ where
 			}
 		}
 
-		// In V2.1 (MSC4297), each event authenticates purely against its own
-		// auth_events chain. The supplemental merge from resolved_state is
-		// skipped because V2.1 starts from the empty set precisely so that
-		// events are evaluated against their own auth chain, preventing
-		// cascading auth failures when conflicting state (e.g. join_rules)
-		// contaminates the accumulated resolved_state.
-		//
-		// For V2, resolved_state OVERWRITES auth_events — this forces events
-		// to authenticate against authoritative state, preventing auth-bypass
-		// attacks where a malicious event claims old power levels.
-		if room_version.state_res != StateResolutionVersion::V2_1 {
+		// Merge resolved_state into auth context for ALL room versions.
+		// Without this, auth_check evaluates events in a vacuum and rejects
+		// valid membership transitions (e.g. "Sender cannot leave").
+		// V2: resolved_state provides authoritative state context.
+		// V2.1: resolved_state provides membership context from the
+		// partially-resolved PL state, which is needed to find the
+		// sender's join event during leave/kick auth checks.
+		{
 			let supplemental: Vec<_> = auth_types
 				.iter()
 				.stream()
