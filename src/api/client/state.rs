@@ -368,8 +368,38 @@ async fn allowed_to_send_state_event(
 				},
 			}
 		},
-		| StateEventType::RoomMember => match json.deserialize_as::<RoomMemberEventContent>() {
-			| Ok(mut membership_content) => {
+		| StateEventType::RoomMember => {
+			// Try strict deserialization first; if it fails due to an invalid
+			// join_authorised_via_users_server value (e.g. "unused"), strip
+			// the field and retry — the spec says servers should ignore this
+			// field on join->join transitions.
+			let membership_result = json.deserialize_as::<RoomMemberEventContent>();
+			let mut membership_content = match membership_result {
+				| Ok(content) => content,
+				| Err(e) => {
+					// Attempt lenient parse: strip the offending field and retry
+					let mut raw_value: serde_json::Value =
+						serde_json::from_str(json.json().get()).map_err(|e| {
+							err!(Request(BadJson(
+								"Membership content must have a valid JSON body with at least a \
+								 valid membership state: {e}"
+							)))
+						})?;
+
+					if let Some(obj) = raw_value.as_object_mut() {
+						obj.remove("join_authorised_via_users_server");
+					}
+
+					serde_json::from_value::<RoomMemberEventContent>(raw_value).map_err(|_| {
+						err!(Request(BadJson(
+							"Membership content must have a valid JSON body with at least a \
+							 valid membership state: {e}"
+						)))
+					})?
+				},
+			};
+
+			{
 				let Ok(state_key) = UserId::parse(state_key) else {
 					return Err!(Request(BadJson(
 						"Membership event has invalid or non-existent state key"
@@ -419,13 +449,7 @@ async fn allowed_to_send_state_event(
 						)));
 					}
 				}
-			},
-			| Err(e) => {
-				return Err!(Request(BadJson(
-					"Membership content must have a valid JSON body with at least a valid \
-					 membership state: {e}"
-				)));
-			},
+			}
 		},
 		| _ => (),
 	}
