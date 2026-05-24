@@ -205,11 +205,10 @@ where
 		.short
 		.get_or_create_shorteventid(pdu.event_id())
 		.await;
-	let auth_events: Vec<&EventId> = pdu.auth_events().map(AsRef::as_ref).collect();
 	if let Ok(full_auth_chain) = self
 		.services
 		.auth_chain
-		.get_auth_chain(room_id, auth_events.into_iter())
+		.get_auth_chain(room_id, pdu.auth_events().map(AsRef::as_ref))
 		.await
 	{
 		self.services

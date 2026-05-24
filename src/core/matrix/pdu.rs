@@ -128,7 +128,14 @@ impl Pdu {
 
 impl Event for Pdu {
 	#[inline]
-	fn auth_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
+	fn auth_events(
+		&self,
+	) -> impl DoubleEndedIterator<Item = &EventId>
+	+ ExactSizeIterator
+	+ Clone
+	+ Send
+	+ std::fmt::Debug
+	+ '_ {
 		self.auth_events.iter().map(AsRef::as_ref)
 	}
 
@@ -199,7 +206,14 @@ impl Event for Pdu {
 
 impl Event for &Pdu {
 	#[inline]
-	fn auth_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
+	fn auth_events(
+		&self,
+	) -> impl DoubleEndedIterator<Item = &EventId>
+	+ ExactSizeIterator
+	+ Clone
+	+ Send
+	+ std::fmt::Debug
+	+ '_ {
 		self.auth_events.iter().map(AsRef::as_ref)
 	}
 

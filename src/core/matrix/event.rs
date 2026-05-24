@@ -150,7 +150,14 @@ pub trait Event: Clone + Debug {
 	//
 
 	/// All the authenticating events for this event.
-	fn auth_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_;
+	fn auth_events(
+		&self,
+	) -> impl DoubleEndedIterator<Item = &EventId>
+	+ ExactSizeIterator
+	+ Clone
+	+ Send
+	+ std::fmt::Debug
+	+ '_;
 
 	/// The event's content.
 	fn content(&self) -> &RawJsonValue;

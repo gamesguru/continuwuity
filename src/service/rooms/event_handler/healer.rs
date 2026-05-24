@@ -195,6 +195,11 @@ pub(crate) async fn healer_worker(
 					service.services.server.runtime().spawn(async move {
 						debug!(room_id = ?room_id, "Started per-room timeline worker");
 						while let Some(r) = rx.recv().await {
+							let start_time = std::time::Instant::now();
+							svc.federation_handletime
+								.write()
+								.insert(room_id.clone().into(), (r.incoming_pdu.event_id.clone(), start_time));
+
 							if let Err(e) = svc.process_timeline_upgrade(
 								r.incoming_pdu.clone(),
 								r.val,
@@ -204,6 +209,10 @@ pub(crate) async fn healer_worker(
 							).await {
 								warn!(room_id = ?r.room_id, event_id = ?r.incoming_pdu.event_id, error = ?e, "DAG Healer failed to process timeline upgrade for PDU");
 							}
+
+							svc.federation_handletime
+								.write()
+								.remove(&room_id);
 						}
 					});
 					tx
