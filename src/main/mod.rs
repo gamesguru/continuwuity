@@ -75,9 +75,10 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 
 	let runtime = runtime::new(args)?;
 	let server = Server::new(args, Some(runtime.handle()))?;
+	let drop_sync_tokens = args.drop_sync_tokens;
 
 	runtime.spawn(signal::signal(server.clone()));
-	runtime.block_on(async_main(&server))?;
+	runtime.block_on(async_main(&server, drop_sync_tokens))?;
 	runtime::shutdown(&server, runtime);
 
 	#[cfg(unix)]
@@ -89,6 +90,12 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 	Ok(())
 }
 
+async fn drop_sync_tokens(db: &conduwuit_database::Database) {
+	conduwuit_core::info!("Dropping all sync tokens as requested by CLI flag...");
+	db["roomsynctoken_shortstatehash"].clear().await;
+	conduwuit_core::info!("Finished dropping all sync tokens.");
+}
+
 /// Operate the server normally in release-mode static builds. This will start,
 /// run and stop the server within the asynchronous runtime.
 #[cfg(any(not(conduwuit_mods), not(feature = "conduwuit_mods")))]
@@ -98,16 +105,21 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 	skip_all,
 	level = "info"
 )]
-async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
+async fn async_main(server: &Arc<Server>, drop_sync_tokens_flag: bool) -> Result<(), Error> {
 	extern crate conduwuit_router as router;
 
 	match router::start(&server.server).await {
-		| Ok(services) => server.services.lock().await.insert(services),
+		| Ok(services) => {
+			if drop_sync_tokens_flag {
+				drop_sync_tokens(&services.db).await;
+			}
+			let _ = server.services.lock().await.insert(services);
+		},
 		| Err(error) => {
 			error!("Critical error starting server: {error}");
 			return Err(error);
 		},
-	};
+	}
 
 	if let Err(error) = router::run(
 		server
@@ -145,13 +157,17 @@ async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
 /// and hot-reload portions of the server as-needed before returning for an
 /// actual shutdown. This is not available in release-mode or static builds.
 #[cfg(all(conduwuit_mods, feature = "conduwuit_mods"))]
-async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
+async fn async_main(server: &Arc<Server>, drop_sync_tokens_flag: bool) -> Result<(), Error> {
 	let mut starts = true;
 	let mut reloads = true;
 	while reloads {
 		if let Err(error) = mods::open(server).await {
 			error!("Loading router: {error}");
 			return Err(error);
+		}
+
+		if starts && drop_sync_tokens_flag {
+			drop_sync_tokens(&server.server.db).await;
 		}
 
 		let result = mods::run(server, starts).await;

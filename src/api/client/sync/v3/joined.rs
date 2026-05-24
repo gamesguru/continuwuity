@@ -260,17 +260,31 @@ async fn build_state_and_timeline(
 	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<StateAndTimeline> {
-	let (shortstatehashes, timeline) = try_join(
+	let (mut shortstatehashes, timeline) = try_join(
 		fetch_shortstatehashes(services, sync_context, room_id),
 		build_timeline(services, sync_context, room_id),
 	)
 	.await?;
 
+	// Fallback: if this is an incremental sync and we lost the previous state
+	// hash, but the timeline is completely empty and un-limited, the state
+	// could not have possibly changed. Fall back to the current state to
+	// prevent a false `joined_since_last_sync` which would trigger expensive
+	// full-state payloads via `build_state_initial`.
+	if sync_context.last_sync_end_count.is_some()
+		&& shortstatehashes.last_sync_end_shortstatehash.is_none()
+		&& timeline.pdus.is_empty()
+		&& !timeline.limited
+	{
+		shortstatehashes.last_sync_end_shortstatehash =
+			Some(shortstatehashes.current_shortstatehash);
+	}
+
 	let (state_events, state_after, notification_counts, joined_since_last_sync) = try_join4(
 		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_state_after(services, sync_context, room_id, shortstatehashes, &timeline),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
+		check_joined_since_last_sync(services, shortstatehashes, sync_context, &timeline),
 	)
 	.await?;
 
@@ -310,7 +324,10 @@ async fn build_state_and_timeline(
 	// the room, to indicate to the client that it should request backfill (and to
 	// copy Synapse's behavior). for federated room joins, the `timeline` will
 	// usually only include the syncing user's join event.
-	let limited = timeline.limited || joined_since_last_sync;
+	// we also indicate limited on initial syncs (no `since` token) because the
+	// client has no prior history — the timeline is inherently limited.
+	let is_initial_sync = sync_context.last_sync_end_count.is_none();
+	let limited = timeline.limited || joined_since_last_sync || is_initial_sync;
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
@@ -351,7 +368,7 @@ struct ShortStateHashes {
 #[tracing::instrument(level = "debug", skip_all)]
 async fn fetch_shortstatehashes(
 	services: &Services,
-	SyncContext { last_sync_end_count, current_count, .. }: SyncContext<'_>,
+	SyncContext { last_sync_end_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<ShortStateHashes> {
 	// the room state currently.
@@ -363,23 +380,18 @@ async fn fetch_shortstatehashes(
 		.get_room_shortstatehash(room_id)
 		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
 
-	// the room state as of the end of the last sync.
-	// this will be None if we are doing an initial sync or if we just joined this
-	// room.
+	// the room state as of the end of the last sync, computed statelessly from
+	// the timeline. this will be None if we are doing an initial sync or if
+	// we just joined this room.
 	let last_sync_end_shortstatehash =
 		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
-			// look up the shortstatehash saved by the last sync's call to
-			// `associate_token_shortstatehash`
 			services
 				.rooms
-				.user
-				.get_token_shortstatehash(room_id, last_sync_end_count)
-				.inspect_err(move |_| {
-					debug_warn!(
-						token = last_sync_end_count,
-						"Room has no shortstatehash for this token"
-					);
-				})
+				.timeline
+				.prev_shortstatehash(
+					room_id,
+					PduCount::Normal(last_sync_end_count).saturating_add(1),
+				)
 				.ok()
 		}))
 		.map(Option::flatten)
@@ -387,20 +399,6 @@ async fn fetch_shortstatehashes(
 
 	let (current_shortstatehash, last_sync_end_shortstatehash) =
 		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
-
-	/*
-	associate the `current_count` with the `current_shortstatehash`, so we can
-	use it on the next sync as the `last_sync_end_shortstatehash`.
-
-	TODO: the table written to by this call grows extremely fast, gaining one new entry for each
-	joined room on _every single sync request_. we need to find a better way to remember the shortstatehash
-	between syncs.
-	*/
-	services
-		.rooms
-		.user
-		.associate_token_shortstatehash(room_id, current_count, current_shortstatehash)
-		.await;
 
 	Ok(ShortStateHashes {
 		current_shortstatehash,
@@ -632,34 +630,96 @@ async fn build_notification_counts(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn check_joined_since_last_sync(
 	services: &Services,
-	ShortStateHashes { last_sync_end_shortstatehash, .. }: ShortStateHashes,
-	SyncContext { syncing_user, .. }: SyncContext<'_>,
+	ShortStateHashes {
+		last_sync_end_shortstatehash,
+		current_shortstatehash,
+	}: ShortStateHashes,
+	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
+	timeline: &TimelinePdus,
 ) -> Result<bool> {
-	// fetch the syncing user's membership event during the last sync.
-	// this will be None if `previous_sync_end_shortstatehash` is None.
-	let membership_during_previous_sync = match last_sync_end_shortstatehash {
-		| Some(last_sync_end_shortstatehash) => services
-			.rooms
-			.state_accessor
-			.state_get_content(
-				last_sync_end_shortstatehash,
-				&StateEventType::RoomMember,
-				syncing_user.as_str(),
-			)
-			.await
-			.inspect_err(|_| debug_warn!("User has no previous membership"))
-			.ok(),
-		| None => None,
-	};
-
 	// TODO: If the requesting user got state-reset out of the room, this
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
 	// the root cause of this needs to be addressed
-	let joined_since_last_sync =
-		membership_during_previous_sync.is_none_or(|content: RoomMemberEventContent| {
-			content.membership != MembershipState::Join
-		});
+	let joined_since_last_sync = if let Some(_last_sync_end_count) = last_sync_end_count {
+		// Incremental sync
+		// fetch the syncing user's membership event during the last sync.
+		// this will be None if `previous_sync_end_shortstatehash` is None.
+		let membership_during_previous_sync = match last_sync_end_shortstatehash {
+			| Some(last_sync_end_shortstatehash) => services
+				.rooms
+				.state_accessor
+				.state_get_content(
+					last_sync_end_shortstatehash,
+					&StateEventType::RoomMember,
+					syncing_user.as_str(),
+				)
+				.await
+				.ok(),
+			// When the shortstatehash is missing (e.g. token mapping expired
+			// or no events in this room near the sync token), we can't
+			// determine previous membership from state alone. Fall through
+			// to corroborate with the timeline below.
+			| None => None,
+		};
+
+		let membership_during_current_sync: Option<RoomMemberEventContent> = services
+			.rooms
+			.state_accessor
+			.state_get_content(
+				current_shortstatehash,
+				&StateEventType::RoomMember,
+				syncing_user.as_str(),
+			)
+			.await
+			.ok();
+
+		let joined_since_last_sync = membership_during_previous_sync.as_ref().is_none_or(
+			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
+		) && membership_during_current_sync.as_ref().is_some_and(
+			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
+		);
+
+		// When the previous shortstatehash is missing and state-based
+		// membership is inconclusive, corroborate by checking whether
+		// the user's join event actually appears in the timeline. If it
+		// doesn't, this is a false positive caused by a missing token
+		// mapping, not a real join.
+		let joined_since_last_sync =
+			if joined_since_last_sync && last_sync_end_shortstatehash.is_none() {
+				let timeline_has_join = timeline.pdus.iter().any(|(_, pdu)| {
+					pdu.kind == RoomMember
+						&& pdu.state_key.as_deref() == Some(syncing_user.as_str())
+						&& pdu
+							.get_content::<RoomMemberEventContent>()
+							.is_ok_and(|c| c.membership == MembershipState::Join)
+				});
+
+				if !timeline_has_join {
+					trace!(
+						"previous shortstatehash missing but no join event in timeline; \
+						 suppressing false joined_since_last_sync"
+					);
+				}
+
+				timeline_has_join
+			} else {
+				joined_since_last_sync
+			};
+
+		if joined_since_last_sync && membership_during_previous_sync.is_some() {
+			debug_warn!(
+				user_joined_since_last_sync = syncing_user.as_str(),
+				?last_sync_end_shortstatehash,
+				membership = ?membership_during_previous_sync,
+			);
+		}
+
+		joined_since_last_sync
+	} else {
+		// Initial sync
+		false
+	};
 
 	if joined_since_last_sync {
 		trace!("user joined since last sync");

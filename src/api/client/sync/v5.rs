@@ -856,8 +856,8 @@ where
 
 		let since_shortstatehash = services
 			.rooms
-			.user
-			.get_token_shortstatehash(room_id, globalsince)
+			.timeline
+			.prev_shortstatehash(room_id, PduCount::Normal(globalsince).saturating_add(1))
 			.await
 			.ok();
 
