@@ -142,11 +142,11 @@ where
 	let is_cached = |id: &EventId| {
 		fetch_cache
 			.get(id)
-			.map_or(false, |cell| cell.value().get().is_some())
+			.is_some_and(|cell| cell.value().get().is_some())
 	};
 
 	// Split non-conflicting and conflicting state
-	let (mut unconflicted, mut conflicting) = separate(state_sets.into_iter());
+	let (unconflicted, conflicting) = separate(state_sets.into_iter());
 
 	debug!(count = unconflicted.len(), "non-conflicting events");
 	trace!(map = ?unconflicted, "non-conflicting events");
