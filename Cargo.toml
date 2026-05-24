@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src/*", "xtask/"]
-exclude = ["case-study-state-res/compare"]
+members = ["case-study-state-res/compare", "src/*", "xtask/"]
 default-members = ["src/*"]
 
 [workspace.package]
