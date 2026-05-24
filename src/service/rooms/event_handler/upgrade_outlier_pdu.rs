@@ -295,7 +295,17 @@ where
 	// soft-failed ones. State resolution merges forks deterministically —
 	// a soft-failed event may carry state from a fork we haven't seen,
 	// and feeding it into resolve_state heals local drift.
-	let state_delta_opt = self
+
+	// OCC: Capture the base state hash BEFORE the unlocked computation.
+	// We'll verify it hasn't shifted after acquiring the lock.
+	let base_shortstatehash = self
+		.services
+		.state
+		.get_room_shortstatehash(room_id)
+		.await
+		.ok();
+
+	let mut state_delta_opt = self
 		.calculate_state_delta(
 			&incoming_pdu,
 			state_at_incoming_event.clone(),
@@ -321,6 +331,33 @@ where
 		.await
 	{
 		return Ok(Some(pduid));
+	}
+
+	// OCC check: verify the room state hasn't shifted while we were unlocked.
+	// If another PDU was processed concurrently and changed the state, our
+	// state_delta was computed against a stale base and must be recalculated.
+	let current_shortstatehash = self
+		.services
+		.state
+		.get_room_shortstatehash(room_id)
+		.await
+		.ok();
+
+	if base_shortstatehash != current_shortstatehash {
+		debug_warn!(
+			%room_id,
+			?base_shortstatehash,
+			?current_shortstatehash,
+			"Room state changed during unlocked state-res, recalculating state delta"
+		);
+		state_delta_opt = self
+			.calculate_state_delta(
+				&incoming_pdu,
+				state_at_incoming_event.clone(),
+				room_id,
+				&room_version_id,
+			)
+			.await?;
 	}
 
 	if let Some(HashSetCompressStateEvent { shortstatehash, added, removed }) = state_delta_opt {
