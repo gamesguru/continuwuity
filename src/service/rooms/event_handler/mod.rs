@@ -44,8 +44,6 @@ pub struct Service {
 	pub peer_scorer: dashmap::DashMap<OwnedServerName, PeerStats>,
 	pub dag_healer: tokio::sync::mpsc::UnboundedSender<HealRequest>,
 	dag_healer_rx: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<HealRequest>>>,
-	pub timeline_worker_tx:
-		dashmap::DashMap<OwnedRoomId, tokio::sync::mpsc::UnboundedSender<PduUpgradeRequest>>,
 	services: Services,
 }
 
@@ -57,16 +55,6 @@ pub struct WaitingPdu {
 	pub event_id: OwnedEventId,
 	pub value: BTreeMap<String, CanonicalJsonValue>,
 	pub origin: OwnedServerName,
-}
-
-#[derive(Debug)]
-pub struct PduUpgradeRequest {
-	pub incoming_pdu: PduEvent,
-	pub val: BTreeMap<String, CanonicalJsonValue>,
-	pub create_event: PduEvent,
-	pub origin: OwnedServerName,
-	pub room_id: OwnedRoomId,
-	pub response_tx: tokio::sync::oneshot::Sender<conduwuit::Result<()>>,
 }
 
 #[derive(Debug)]
@@ -85,7 +73,6 @@ pub enum HealRequest {
 		/// directly and then retry handle_incoming_pdu for this PDU.
 		waiting_pdu: Option<Box<WaitingPdu>>,
 	},
-	UpdateTimeline(Box<PduUpgradeRequest>),
 }
 
 #[derive(Default, Debug)]
@@ -127,7 +114,6 @@ impl crate::Service for Service {
 			peer_scorer: dashmap::DashMap::new(),
 			dag_healer: sender,
 			dag_healer_rx: std::sync::Mutex::new(Some(receiver)),
-			timeline_worker_tx: dashmap::DashMap::new(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				sending: args.depend::<sending::Service>("sending"),
