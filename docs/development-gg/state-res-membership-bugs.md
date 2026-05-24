@@ -569,7 +569,7 @@ entire dataset is resident in memory.
 
 ### The fix
 
-Chunk the *stream* instead of the collected vector:
+Chunk the _stream_ instead of the collected vector:
 
 ```rust
 let mut pdus_stream = self

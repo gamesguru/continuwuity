@@ -34,6 +34,7 @@ No batch endpoint used.
 **Used by:** Background periodic sweep (every 4 hours) and startup scan.
 
 **Method:** Two-phase:
+
 1. `PUT /_matrix/federation/v1/make_join` — probe for remote extremities via
    `prev_events` in the join template
 2. `POST /_matrix/federation/v1/get_missing_events` — fetch gap between local
@@ -85,6 +86,7 @@ creates a DAG hole. No fallback to other servers.
 acquiring the room lock).
 
 **Method:** Two-phase:
+
 1. `GET /_matrix/federation/v1/state_ids/{roomId}` — get full state ID set
 2. `GET /_matrix/federation/v1/event/{eventId}` — batch fetch missing events
 
@@ -117,6 +119,7 @@ async fn fetch_events_from_federation(
 ```
 
 This would unify:
+
 - Server selection and prioritization
 - Concurrency control
 - Error handling and logging
@@ -127,6 +130,7 @@ This would unify:
 
 Without consolidation, each path makes independent decisions about which
 servers to contact, leading to:
+
 - **DAG holes** when `fetch_prev` only tries the origin server
 - **Wasted bandwidth** when multiple paths fetch the same event concurrently
 - **Inconsistent resilience** — some paths retry across servers, others don't
