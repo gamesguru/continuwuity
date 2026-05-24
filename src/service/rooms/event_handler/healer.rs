@@ -192,7 +192,7 @@ pub(crate) async fn healer_worker(
 					let (tx, mut rx) = mpsc::unbounded_channel::<super::PduUpgradeRequest>();
 					let svc = service.clone();
 					let room_id = req.room_id.clone();
-					tokio::spawn(async move {
+					service.services.server.runtime().spawn(async move {
 						debug!(room_id = ?room_id, "Started per-room timeline worker");
 						while let Some(r) = rx.recv().await {
 							if let Err(e) = svc.process_timeline_upgrade(
