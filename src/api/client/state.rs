@@ -390,12 +390,20 @@ async fn allowed_to_send_state_event(
 						obj.remove("join_authorised_via_users_server");
 					}
 
-					serde_json::from_value::<RoomMemberEventContent>(raw_value).map_err(|_| {
-						err!(Request(BadJson(
-							"Membership content must have a valid JSON body with at least a \
-							 valid membership state: {e}"
-						)))
-					})?
+					let content =
+						serde_json::from_value::<RoomMemberEventContent>(raw_value.clone())
+							.map_err(|_| {
+								err!(Request(BadJson(
+									"Membership content must have a valid JSON body with at \
+									 least a valid membership state: {e}"
+								)))
+							})?;
+
+					*json = Raw::<AnyStateEventContent>::from_json_string(serde_json::to_string(
+						&raw_value,
+					)?)
+					.unwrap();
+					content
 				},
 			};
 
