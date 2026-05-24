@@ -105,7 +105,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 				let event_id = queue.next().expect("peeked");
 				let servers = servers.clone();
 				active.push(async move {
-					for server in &servers {
+					for server in servers.iter().take(2) {
 						let server: &ruma::ServerName = server;
 						let start = Instant::now();
 						match self
