@@ -34,6 +34,10 @@ View the current forward extremities (timeline tips) of a room, or scan all room
 
 Recalculate and fix forward extremities using true topological DAG resolution
 
+## `!admin yolo clean-extremities`
+
+Prune dangling forward extremities and reset them to the current room state
+
 ## `!admin yolo purge-outliers`
 
 Purge outlier PDUs that already exist in our timeline.
