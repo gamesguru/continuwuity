@@ -303,10 +303,9 @@ impl Data {
 		room_id: Option<&RoomId>,
 		event_ids: &[OwnedEventId],
 	) -> Vec<Result<PduEvent>> {
-		use futures::StreamExt;
 		let mut results = Vec::with_capacity(event_ids.len());
 
-		let mut expected_shortroomid: Option<ShortRoomId> = None;
+		let mut expected_shortroomid = None;
 		if let Some(expected_room) = room_id {
 			if let Ok(id) = self.services.short.get_shortroomid(expected_room).await {
 				expected_shortroomid = Some(id);
@@ -337,9 +336,7 @@ impl Data {
 			pdu_events = self
 				.pduid_pdu
 				.get_batch(futures::stream::iter(valid_pdu_ids.iter().map(AsRef::as_ref)))
-				.map(|res: Result<database::Handle<'_>>| {
-					res.and_then(|handle| handle.deserialized::<PduEvent>())
-				})
+				.map(|res| res.and_then(|handle| handle.deserialized::<PduEvent>()))
 				.collect()
 				.await;
 		}
@@ -350,9 +347,7 @@ impl Data {
 			outlier_events = self
 				.eventid_outlierpdu
 				.get_batch(futures::stream::iter(missing_event_ids))
-				.map(|res: Result<database::Handle<'_>>| {
-					res.and_then(|handle| handle.deserialized::<PduEvent>())
-				})
+				.map(|res| res.and_then(|handle| handle.deserialized::<PduEvent>()))
 				.collect()
 				.await;
 		}
@@ -364,9 +359,7 @@ impl Data {
 		for (i, pdu_id_res) in pdu_ids.iter().enumerate() {
 			if let Ok(pdu_id_handle) = pdu_id_res {
 				// Result comes from timeline
-				let pdu_res: Result<PduEvent> = pdu_iter
-					.next()
-					.expect("length matches timeline fetch count");
+				let pdu_res = pdu_iter.next().expect("length matches timeline fetch count");
 				match pdu_res {
 					| Ok(pdu) => {
 						// Verify room boundary
@@ -405,9 +398,7 @@ impl Data {
 				}
 			} else {
 				// Result comes from outlier
-				let outlier_res: Result<PduEvent> = outlier_iter
-					.next()
-					.expect("length matches outlier fetch count");
+				let outlier_res = outlier_iter.next().expect("length matches outlier fetch count");
 				match outlier_res {
 					| Ok(pdu) => {
 						if let Some(expected_room) = room_id {
@@ -446,10 +437,8 @@ impl Data {
 		S: Stream<Item = OwnedEventId> + Send + 'a,
 	{
 		use conduwuit::utils::stream::{automatic_amplification, automatic_width};
-		use futures::StreamExt;
 
 		event_ids
-			.boxed()
 			.ready_chunks(automatic_amplification())
 			.widen_then(automatic_width(), move |chunk| async move {
 				self.get_pdus_in_room_batch(room_id, &chunk).await
