@@ -85,6 +85,7 @@ where
 		room_id,
 		false,
 		false,
+		false, // force_local
 	))
 	.await?;
 

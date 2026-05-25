@@ -322,28 +322,64 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	{
 		| Ok(res) => res,
 		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
-			// The auth event chain for this PDU may be deeper than the
-			// iterative fetcher's per-call limit. Try calling /state_ids on
-			// the origin to retrieve and store the complete auth chain in one
-			// shot, then retry handle_outlier_pdu. This also satisfies the
-			// Matrix spec requirement that servers call /state_ids when auth
-			// events are unresolvable via the normal backfill path.
-			let retry_result = async {
-				self.fetch_state(origin, create_event, room_id, event_id, false)
-					.await?;
-				Box::pin(self.handle_outlier_pdu(
-					origin,
-					Some(create_event),
-					event_id,
-					room_id,
-					value.clone(),
-					false,
-					false,
-					room_version_override,
-				))
-				.await
-			}
+			// Try direct fetch first
+			info!(
+				target: "state_res_debug",
+				"Fetching {} missing auth events for incoming PDU {event_id} via fetch_and_handle_outliers",
+				missing.len()
+			);
+			self.fetch_and_handle_outliers(
+				origin,
+				missing.iter().map(AsRef::as_ref),
+				Some(create_event),
+				room_id,
+				false, // skip_sig_verify
+				room_version_override,
+			)
 			.await;
+
+			// Retry handle_outlier_pdu once after direct fetch
+			let retry_result = Box::pin(self.handle_outlier_pdu(
+				origin,
+				Some(create_event),
+				event_id,
+				room_id,
+				value.clone(),
+				false,
+				false,
+				room_version_override,
+			))
+			.await;
+
+			// If it STILL fails with MissingAuthEvents, then fall back to calling
+			// /state_ids
+			let retry_result = match retry_result {
+				| Ok(res) => Ok(res),
+				| Err(conduwuit::Error::MissingAuthEvents(_)) => {
+					info!(
+						target: "state_res_debug",
+						event_id = %event_id,
+						"Auth chain is still missing after direct fetch, falling back to /state_ids"
+					);
+					async {
+						self.fetch_state(origin, create_event, room_id, event_id, false)
+							.await?;
+						Box::pin(self.handle_outlier_pdu(
+							origin,
+							Some(create_event),
+							event_id,
+							room_id,
+							value.clone(),
+							false,
+							false,
+							room_version_override,
+						))
+						.await
+					}
+					.await
+				},
+				| Err(e) => Err(e),
+			};
 
 			match retry_result {
 				| Ok(res) => res,
@@ -472,6 +508,7 @@ pub async fn process_timeline_upgrade(
 		room_id,
 		false,
 		true,
+		false, // force_local
 	))
 	.await
 }

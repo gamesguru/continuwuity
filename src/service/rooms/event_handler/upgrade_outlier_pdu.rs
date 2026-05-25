@@ -40,6 +40,7 @@ pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	room_id: &RoomId,
 	skip_soft_fail: bool,
 	is_forward_extremity: bool,
+	force_local: bool,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -104,6 +105,7 @@ where
 			room_id,
 			&room_version_id,
 			skip_soft_fail,
+			force_local,
 		)
 		.await?;
 
@@ -465,6 +467,7 @@ async fn resolve_state_at_incoming_event<Pdu>(
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 	skip_soft_fail: bool,
+	force_local: bool,
 ) -> Result<HashMap<u64, OwnedEventId>>
 where
 	Pdu: Event + Send + Sync,
@@ -535,7 +538,7 @@ where
 		info!("State resolution completed for incoming PDU");
 	}
 
-	if state.is_none() && !skip_soft_fail {
+	if state.is_none() && !skip_soft_fail && !force_local {
 		// Local state is unavailable — prev_events are not yet in DB or their
 		// state hashes have not been computed. Attempt a synchronous /state_ids
 		// fetch from the sending server BEFORE queuing the async DAG healer.
@@ -800,6 +803,7 @@ async fn trigger_unreject_cascade_inner(
 					room_id,
 					false, // skip_soft_fail
 					true,  // is_forward_extremity
+					true,  // force_local
 				))
 				.await
 				{
