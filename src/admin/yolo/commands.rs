@@ -1895,8 +1895,8 @@ pub(super) async fn get_room_dag(
 	let mut unique_hashes = HashSet::<u64>::new();
 	let mut last_ssh: Option<u64> = None;
 	let mut last_is_state_event = false;
-	let mut last_event_id: Option<Box<ruma::EventId>> = None;
-	let mut last_event_type: Option<ruma::events::TimelineEventType> = None;
+	let mut last_event_id: Option<Box<EventId>> = None;
+	let mut last_event_type: Option<TimelineEventType> = None;
 	let mut last_state_key: Option<String> = None;
 	let mut max_depth = 0_u64;
 	let mut min_depth = u64::MAX;
@@ -1965,7 +1965,7 @@ pub(super) async fn get_room_dag(
 						state_events = state_events.saturating_add(1);
 						last_is_state_event = true;
 						last_event_type = Some(pdu.kind().clone());
-						last_state_key = pdu.state_key.as_ref().map(|sk| sk.to_string());
+						last_state_key = pdu.state_key.as_ref().map(ToString::to_string);
 					} else {
 						last_is_state_event = false;
 					}
@@ -2020,7 +2020,7 @@ pub(super) async fn get_room_dag(
 
 	let tip_match = match (last_ssh, room_ssh) {
 		| (Some(tip), Some(room)) if tip == room => "✓ tip matches room state".to_owned(),
-		| (Some(_tip), Some(room)) if last_is_state_event => {
+		| (Some(tip), Some(room)) if last_is_state_event => {
 			// pdu_shortstatehash is the state BEFORE the tip event; room SSH is
 			// the state AFTER. Verify the room state actually contains the tip
 			// event's state change — look up (type, state_key) in room state.
@@ -2031,9 +2031,9 @@ pub(super) async fn get_room_dag(
 					.services
 					.rooms
 					.state_accessor
-					.state_get_id::<Box<ruma::EventId>>(
+					.state_get_id::<Box<EventId>>(
 						room,
-						&ruma::events::StateEventType::from(last_type.to_string()),
+						&StateEventType::from(last_type.to_string()),
 						last_sk,
 					)
 					.await
@@ -2041,7 +2041,7 @@ pub(super) async fn get_room_dag(
 
 				if room_has_tip {
 					format!(
-						"✓ tip is state event — room state includes tip (pre={_tip} post={room})"
+						"✓ tip is state event — room state includes tip (pre={tip} post={room})"
 					)
 				} else {
 					format!(
