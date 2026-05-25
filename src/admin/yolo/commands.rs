@@ -2045,8 +2045,8 @@ pub(super) async fn get_room_dag(
 					)
 				} else {
 					format!(
-						"✗ tip DIVERGES — room state at ({last_type}, {last_sk}) \
-						 does not point to tip event {last_eid}"
+						"✗ tip DIVERGES — room state at ({last_type}, {last_sk}) does not point \
+						 to tip event {last_eid}"
 					)
 				}
 			} else {
