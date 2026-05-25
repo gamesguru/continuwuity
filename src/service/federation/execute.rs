@@ -12,7 +12,7 @@ use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, ServerName, ServerSigningKeyId,
 	api::{
 		EndpointError, IncomingResponse, MatrixVersion, OutgoingRequest, SendAccessToken,
-		client::error::Error as RumaError, federation::authentication::XMatrix,
+		client::error::Error as RumaError,
 	},
 	serde::Base64,
 };
