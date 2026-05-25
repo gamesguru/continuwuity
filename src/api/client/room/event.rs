@@ -29,7 +29,14 @@ pub(crate) async fn get_room_event_route(
 
 	let (mut event, visible) = try_join(event, visible).await?;
 
-	if !visible || is_ignored_pdu(services, &event, body.sender_user()).await? {
+	if !visible
+		|| is_ignored_pdu(services, &event, body.sender_user()).await?
+		|| !services
+			.rooms
+			.pdu_metadata
+			.is_event_accepted(event_id)
+			.await
+	{
 		return Err!(Request(NotFound("Event not found.")));
 	}
 

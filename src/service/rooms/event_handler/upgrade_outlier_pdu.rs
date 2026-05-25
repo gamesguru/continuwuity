@@ -70,12 +70,13 @@ where
 		return Ok(None);
 	}
 
-	// If any of the auth events are rejected, this event is also rejected.
+	// If any auth events are rejected/soft-failed, the event is also rejected.
 	if !skip_soft_fail {
 		for aid in incoming_pdu.auth_events() {
-			if self.services.pdu_metadata.is_event_rejected(aid).await {
+			if !self.services.pdu_metadata.is_event_accepted(aid).await {
 				info!(
-					"Rejecting incoming event {} which depends on rejected auth event {aid}",
+					"Rejecting incoming event {} which depends on rejected/soft-failed auth \
+					 event {aid}",
 					incoming_pdu.event_id()
 				);
 				self.services
