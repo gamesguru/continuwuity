@@ -84,6 +84,12 @@ where
 				self.services
 					.pdu_metadata
 					.mark_event_rejected(incoming_pdu.event_id());
+				warn!(
+					"Event failed auth_check! Event ID: {}, Sender: {}, Type: {}",
+					incoming_pdu.event_id(),
+					incoming_pdu.sender(),
+					incoming_pdu.kind()
+				);
 				return Err!(Request(Forbidden("Event depends on rejected auth event {aid}")));
 			}
 		}
@@ -143,6 +149,12 @@ where
 				.pdu_metadata
 				.mark_event_rejected(incoming_pdu.event_id());
 
+			warn!(
+				"Event failed auth_check! Event ID: {}, Sender: {}, Type: {}",
+				incoming_pdu.event_id(),
+				incoming_pdu.sender(),
+				incoming_pdu.kind()
+			);
 			return Err!(Request(Forbidden(
 				"Event authorisation fails based on the state before the event"
 			)));
