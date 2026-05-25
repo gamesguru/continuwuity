@@ -310,8 +310,14 @@ fn sign_request(&self, http_request: &mut http::Request<Vec<u8>>, dest: &ServerN
 		.expect("signature is json string")
 		.expect("signature is valid base64");
 
-	let x_matrix = XMatrix::new(origin.into(), dest.into(), key.into(), sig);
-	let authorization = HeaderValue::from(&x_matrix);
+	let sig_encoded = sig.encode();
+	let auth_str = format!(
+		"X-Matrix origin=\"{origin}\", key=\"{key}\", sig=\"{sig_encoded}\", \
+		 destination=\"{dest}\""
+	);
+	let authorization = HeaderValue::from_str(&auth_str).expect("valid header value");
+
+	debug!(?authorization, "Sending X-Matrix auth");
 	let authorization = http_request
 		.headers_mut()
 		.insert(AUTHORIZATION, authorization);
