@@ -558,50 +558,54 @@ where
 				state = Some(fetched_state);
 			},
 			| Ok(None) | Err(_) => {
-				return Err(conduwuit::Error::MissingAuthEvents(vec![]));
+				// Federation fetch failed — fall back to current room state.
+				// The auth check at step 11 will still reject invalid events;
+				// we just need a base state to check against rather than giving
+				// up entirely (which would reject valid events like sentinels
+				// that follow rejected events in the same transaction).
+				debug!(
+					event_id = %incoming_pdu.event_id,
+					"fetch_state failed; falling back to current room state"
+				);
 			},
 		}
 	}
 
 	if state.is_none() {
-		if skip_soft_fail {
-			warn!(
-				event_id = %incoming_pdu.event_id,
-				"Could not find state at event, but skip_soft_fail is set — using current room state as fallback"
-			);
-			// Use the current room state as the base instead of empty state.
-			// This ensures state resolution has real data to work with and
-			// won't wipe the room's state.
-			let current_shortstatehash = self
-				.services
-				.state
-				.get_room_shortstatehash(room_id)
-				.await
-				.map_err(|_| err!(Database("Room has no state")))?;
+		// State could not be determined from prev_events or federation.
+		// Fall back to current room state — the auth check at step 11 will
+		// still reject invalid events.
+		debug!(
+			event_id = %incoming_pdu.event_id,
+			"Could not find state at event — using current room state as fallback"
+		);
+		let current_shortstatehash = self
+			.services
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.map_err(|_| err!(Database("Room has no state")))?;
 
-			let current_state: HashMap<_, _> = self
-				.services
-				.state_accessor
-				.state_full_shortids(current_shortstatehash)
-				.ready_filter_map(Result::ok)
-				.map(|(shortstatekey, shorteventid)| async move {
-					let event_id = self
-						.services
-						.short
-						.get_eventid_from_short::<Box<_>>(shorteventid)
-						.await
-						.ok()?;
-					Some((shortstatekey, (*event_id).to_owned()))
-				})
-				.buffer_unordered(64)
-				.filter_map(ready)
-				.collect()
-				.await;
+		let current_state: HashMap<_, _> = self
+			.services
+			.state_accessor
+			.state_full_shortids(current_shortstatehash)
+			.ready_filter_map(Result::ok)
+			.map(|(shortstatekey, shorteventid)| async move {
+				let event_id = self
+					.services
+					.short
+					.get_eventid_from_short::<Box<_>>(shorteventid)
+					.await
+					.ok()?;
+				Some((shortstatekey, (*event_id).to_owned()))
+			})
+			.buffer_unordered(64)
+			.filter_map(ready)
+			.collect()
+			.await;
 
-			state = Some(current_state);
-		} else {
-			return Err!(Request(Unknown("Could not find state at event")));
-		}
+		state = Some(current_state);
 	}
 
 	Ok(state.unwrap_or_default())
