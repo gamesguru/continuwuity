@@ -55,17 +55,13 @@ where
 		return Ok(Some(pduid));
 	}
 
-	let (rejected, soft_failed_early) = tokio::join!(
-		self.services
-			.pdu_metadata
-			.is_event_rejected(incoming_pdu.event_id()),
-		self.services
-			.pdu_metadata
-			.is_event_soft_failed(incoming_pdu.event_id())
-	);
-	if rejected && !skip_soft_fail {
-		return Err!(Request(Forbidden("Event has been rejected")));
-	} else if soft_failed_early && !skip_soft_fail {
+	let soft_failed_early = self
+		.services
+		.pdu_metadata
+		.is_event_soft_failed(incoming_pdu.event_id())
+		.await;
+
+	if soft_failed_early && !skip_soft_fail {
 		// Return Ok(None) so the remote server stops endlessly retrying
 		info!("Event was previously soft-failed; acknowledging receipt");
 		return Ok(None);
@@ -433,6 +429,10 @@ where
 			"Event has been soft-failed",
 		);
 	} else {
+		// Clear any previous rejected markers now that it passed auth organically
+		self.services
+			.pdu_metadata
+			.clear_pdu_markers(incoming_pdu.event_id());
 		debug_info!(
 			elapsed = ?timer.elapsed(),
 			"Accepted",
@@ -442,12 +442,7 @@ where
 	// Event has passed all auth/stateres checks
 	drop(state_lock);
 
-	// Trigger the un-reject cascade to process any dependent rejected events
-	if let Err(e) = self.trigger_unreject_cascade(room_id).await {
-		warn!(%room_id, "Failed to run un-reject cascade: {e}");
-	}
-
-	Ok(pdu_id)
+	Ok(Some(pdu_id))
 }
 
 /// Determine the room state that was in effect just before the incoming PDU
@@ -684,127 +679,4 @@ async fn calculate_state_delta(
 		.await?;
 
 	Ok(Some(state_delta))
-}
-
-#[implement(super::Service)]
-#[tracing::instrument(skip_all, level = "info")]
-pub async fn trigger_unreject_cascade(&self, room_id: &RoomId) -> Result<()> {
-	let mut visited = std::collections::HashSet::new();
-	self.trigger_unreject_cascade_inner(room_id, &mut visited, 0)
-		.await
-}
-
-#[implement(super::Service)]
-async fn trigger_unreject_cascade_inner(
-	&self,
-	room_id: &RoomId,
-	visited: &mut std::collections::HashSet<OwnedEventId>,
-	depth: usize,
-) -> Result<()> {
-	use futures::StreamExt;
-
-	if depth > 10 {
-		warn!(%room_id, "Unreject cascade reached maximum depth limit");
-		return Ok(());
-	}
-
-	// Fetch the room's create event
-	let create_event = self
-		.services
-		.state_accessor
-		.room_state_get(room_id, &StateEventType::RoomCreate, "")
-		.await?;
-
-	// Stream all outlier PDUs in the room
-	let mut room_outliers = Box::pin(self.services.outlier.room_stream(room_id));
-	let mut candidates = Vec::new();
-
-	while let Some((event_id, pdu)) = room_outliers.next().await {
-		if visited.contains(&event_id) {
-			continue;
-		}
-
-		// Filter to rejected outliers
-		if self
-			.services
-			.pdu_metadata
-			.is_event_rejected(&event_id)
-			.await
-		{
-			candidates.push((event_id, pdu));
-		}
-	}
-
-	let mut upgraded_any = false;
-	for (event_id, pdu) in candidates {
-		// Check if all auth events are now satisfied
-		let mut satisfied = true;
-		for aid in pdu.auth_events() {
-			let exists = self.services.timeline.pdu_exists(aid).await
-				|| self.services.outlier.get_pdu_outlier(aid).await.is_ok();
-			if !exists {
-				satisfied = false;
-				break;
-			}
-			if !self.services.pdu_metadata.is_event_accepted(aid).await {
-				satisfied = false;
-				break;
-			}
-		}
-
-		if satisfied {
-			info!(
-				%event_id,
-				%room_id,
-				"Unrejecting event whose auth chain is now complete"
-			);
-			visited.insert(event_id.clone());
-
-			// Clear the rejected/soft-fail markers so the database allows upgrading it
-			self.services.pdu_metadata.clear_pdu_markers(&event_id);
-
-			// Fetch the raw outlier JSON
-			if let Ok(val) = self.services.outlier.get_outlier_pdu_json(&event_id).await {
-				let origin = pdu
-					.origin
-					.clone()
-					.unwrap_or_else(|| pdu.sender.server_name().to_owned());
-
-				// Try upgrading the outlier to timeline PDU
-				match Box::pin(self.upgrade_outlier_to_timeline_pdu(
-					pdu,
-					val,
-					&create_event,
-					&origin,
-					room_id,
-					false, // skip_soft_fail
-					true,  // is_forward_extremity
-					true,  // force_local
-				))
-				.await
-				{
-					| Ok(Some(_)) => {
-						info!(%event_id, %room_id, "Successfully unrejected and upgraded event to timeline");
-						upgraded_any = true;
-					},
-					| Ok(None) => {
-						warn!(%event_id, %room_id, "Unrejected event acknowledged but not added to timeline");
-					},
-					| Err(e) => {
-						warn!(%event_id, %room_id, "Failed to upgrade unrejected outlier: {e}");
-						// Restore rejected marker if it failed to validate
-						self.services.pdu_metadata.mark_event_rejected(&event_id);
-					},
-				}
-			}
-		}
-	}
-
-	// If any event was successfully upgraded, recursively run the cascade
-	if upgraded_any {
-		Box::pin(self.trigger_unreject_cascade_inner(room_id, visited, depth.saturating_add(1)))
-			.await?;
-	}
-
-	Ok(())
 }
