@@ -251,8 +251,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 	} else if skipped > 0 {
 		info!(
 			total = all_auth_count,
-			skipped,
-			"All auth chain events already known locally, skipping pre-fetch"
+			skipped, "All auth chain events already known locally, skipping pre-fetch"
 		);
 	}
 

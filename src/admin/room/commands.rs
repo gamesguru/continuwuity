@@ -85,16 +85,29 @@ pub(super) async fn exists(&self, room_id: OwnedRoomId) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn bump(&self, room_id: Option<OwnedRoomId>, all: bool) -> Result {
+pub(super) async fn bump(
+	&self,
+	room_id: Option<OwnedRoomId>,
+	all: bool,
+	skip: Vec<OwnedRoomId>,
+) -> Result {
 	self.bail_restricted()?;
 
 	if all {
+		let skip_set: std::collections::HashSet<&ruma::RoomId> =
+			skip.iter().map(AsRef::as_ref).collect();
 		let ours = self.services.globals.server_name();
 		let rooms = self.services.rooms.state_cache.server_rooms(ours);
 		let mut room_stream = rooms.boxed();
 		let mut thumper = 0_usize;
+		let mut skipped = 0_usize;
 
 		while let Some(room_id) = room_stream.next().await {
+			if skip_set.contains(room_id) {
+				skipped = skipped.saturating_add(1);
+				continue;
+			}
+
 			if self
 				.services
 				.rooms
@@ -116,7 +129,9 @@ pub(super) async fn bump(&self, room_id: Option<OwnedRoomId>, all: bool) -> Resu
 		}
 
 		return self
-			.write_str(&format!("Successfully triggered sync for {thumper} rooms."))
+			.write_str(&format!(
+				"Successfully triggered sync for {thumper} rooms (skipped {skipped})."
+			))
 			.await;
 	}
 

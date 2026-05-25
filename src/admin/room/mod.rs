@@ -69,5 +69,9 @@ pub enum RoomCommand {
 		/// Thump all stagnant federated rooms.
 		#[arg(long)]
 		all: bool,
+
+		/// Skip specific rooms (for excluding problematic rooms).
+		#[arg(long)]
+		skip: Vec<OwnedRoomId>,
 	},
 }
