@@ -78,11 +78,29 @@ pub(super) async fn pre_fetch_state_res_deps(
 		.into_iter()
 		.stream()
 		.broad_filter_map(|event_id| async move {
-			if !self.services.timeline.pdu_exists(event_id).await {
-				Some(event_id.clone())
-			} else {
-				None
+			// Skip events already in the timeline
+			if self.services.timeline.pdu_exists(event_id).await {
+				return None;
 			}
+
+			// Skip events already stored as outliers (including rejected ones)
+			if self
+				.services
+				.outlier
+				.get_pdu_outlier(event_id)
+				.await
+				.is_ok()
+			{
+				return None;
+			}
+
+			// Skip events marked as rejected or soft-failed (e.g.
+			// permanently backed off, unfetchable, or failed sig verify)
+			if !self.services.pdu_metadata.is_event_accepted(event_id).await {
+				return None;
+			}
+
+			Some(event_id.clone())
 		})
 		.collect()
 		.await;
@@ -188,13 +206,34 @@ pub(super) async fn pre_fetch_state_res_deps(
 								&value,
 								Some(room_id),
 							);
+							warn!(
+								%event_id,
+								"Pre-fetched auth event failed signature verification, storing as rejected outlier"
+							);
+						} else {
+							warn!(
+								%event_id,
+								%eid,
+								"Pre-fetched auth event ID mismatch, soft-failing"
+							);
+							self.services.pdu_metadata.mark_event_soft_failed(&event_id);
 						}
+					} else {
+						warn!(
+							%event_id,
+							"Pre-fetched auth event failed signature verification; could not parse, soft-failing"
+						);
+						self.services.pdu_metadata.mark_event_soft_failed(&event_id);
 					}
-					warn!(
-						%event_id,
-						"Pre-fetched auth event failed signature verification, storing as rejected outlier"
-					);
 				}
+			} else {
+				// No server returned this event - mark as soft-failed so we
+				// don't waste time re-fetching on every subsequent state_res
+				warn!(
+					%event_id,
+					"Auth chain event unfetchable from all servers, soft-failing"
+				);
+				self.services.pdu_metadata.mark_event_soft_failed(&event_id);
 			}
 		}
 
