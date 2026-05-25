@@ -278,42 +278,43 @@ where
 									info!(target: "auth_chain", "Found known soft-failed auth event locally: {auth_event}");
 								}
 
-								if !graph.contains_key(&auth_event)
-									&& !self.services.timeline.pdu_exists(&auth_event).await
-								{
-									let ratelimited = if let Some((time, tries)) = self
-										.services
-										.globals
-										.bad_event_ratelimiter
-										.read()
-										.get(&*auth_event)
-									{
-										const MIN_DURATION: u64 = 60 * 2;
-										const MAX_DURATION: u64 = 60 * 60 * 8;
-										continue_exponential_backoff_secs(
-											MIN_DURATION,
-											MAX_DURATION,
-											time.elapsed(),
-											*tries,
-										)
-									} else {
-										false
-									};
+								if !graph.contains_key(&auth_event) {
+									if !self.services.timeline.pdu_exists(&auth_event).await {
+										let ratelimited = if let Some((time, tries)) = self
+											.services
+											.globals
+											.bad_event_ratelimiter
+											.read()
+											.get(&*auth_event)
+										{
+											const MIN_DURATION: u64 = 60 * 2;
+											const MAX_DURATION: u64 = 60 * 60 * 8;
+											continue_exponential_backoff_secs(
+												MIN_DURATION,
+												MAX_DURATION,
+												time.elapsed(),
+												*tries,
+											)
+										} else {
+											false
+										};
 
-									if ratelimited {
-										info!(target: "auth_chain", "Backing off from {auth_event} (auth event ratelimited)");
-										continue;
+										if ratelimited {
+											info!(target: "auth_chain", "Backing off from {auth_event} (auth event ratelimited)");
+											continue;
+										}
+
+										if graph.len() >= limit.into() {
+											info!(target: "auth_chain", "Max auth event limit reached! Limit: {limit}");
+											continue;
+										}
+
+										trace!(
+											"Found auth event id {auth_event} for event \
+											 {next_id}"
+										);
+										push_fetch(auth_event.clone(), true, &mut active_fetches);
 									}
-
-									if graph.len() >= limit.into() {
-										info!(target: "auth_chain", "Max auth event limit reached! Limit: {limit}");
-										continue;
-									}
-
-									trace!(
-										"Found auth event id {auth_event} for event {next_id}"
-									);
-									push_fetch(auth_event.clone(), true, &mut active_fetches);
 									graph.insert(auth_event.clone(), HashSet::new());
 								}
 
