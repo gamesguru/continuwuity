@@ -11,7 +11,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit::info;
 use conduwuit_core::{
-	Error, Event, Result, debug, err, error,
+	Error, Event, Result, err, error,
 	result::LogErr,
 	trace,
 	utils::{
@@ -154,7 +154,7 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 		e: &Error,
 	) {
-		debug!(dest = ?dest, "{e:?}");
+		info!(dest = ?dest, "{e:?}");
 		let mut tries = 1_u32;
 		statuses.entry(dest.clone()).and_modify(|e| {
 			*e = match e {
@@ -389,8 +389,13 @@ impl Service {
 			}
 		}
 
+		if txns.is_empty() {
+			info!("startup_netburst[{id}]: no active requests to resume");
+		}
+
 		for (dest, events) in txns {
 			if self.server.config.startup_netburst && !events.is_empty() {
+				info!("startup_netburst[{id}]: resuming {} events for {dest:?}", events.len());
 				statuses.insert(dest.clone(), TransactionStatus::Running);
 				futures.push(self.send_events(dest.clone(), events));
 			}
@@ -407,6 +412,10 @@ impl Service {
 			}
 
 			if !queued_dests.is_empty() {
+				info!(
+					"startup_netburst[{id}]: flushing {} orphaned queued destinations",
+					queued_dests.len()
+				);
 				let sender = self.channels.get(id).expect("channel").0.clone();
 				for dest in queued_dests {
 					sender
@@ -417,6 +426,8 @@ impl Service {
 						})
 						.ok();
 				}
+			} else {
+				info!("startup_netburst[{id}]: no orphaned queued destinations");
 			}
 		}
 	}
