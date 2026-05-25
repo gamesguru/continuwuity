@@ -74,6 +74,7 @@ pub(super) async fn pre_fetch_state_res_deps(
 
 	// Phase 1: Fetch individually missing auth chain events
 	let all_auth_ids: HashSet<&OwnedEventId> = auth_chain_sets.iter().flatten().collect();
+	let all_auth_count = all_auth_ids.len();
 	let missing: Vec<OwnedEventId> = all_auth_ids
 		.into_iter()
 		.stream()
@@ -105,9 +106,12 @@ pub(super) async fn pre_fetch_state_res_deps(
 		.collect()
 		.await;
 
+	let skipped = all_auth_count.saturating_sub(missing.len());
 	if !missing.is_empty() {
 		info!(
-			count = missing.len(),
+			total = all_auth_count,
+			skipped,
+			missing = missing.len(),
 			servers = servers.len(),
 			"Pre-fetching missing auth chain events"
 		);
@@ -244,6 +248,12 @@ pub(super) async fn pre_fetch_state_res_deps(
 				"Pre-fetched auth chain events for state resolution"
 			);
 		}
+	} else if skipped > 0 {
+		info!(
+			total = all_auth_count,
+			skipped,
+			"All auth chain events already known locally, skipping pre-fetch"
+		);
 	}
 
 	// Phase 2: Iterative DAG gap filling via POST /get_missing_events.
