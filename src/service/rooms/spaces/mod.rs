@@ -147,20 +147,6 @@ pub async fn get_summary_and_children_local(
 		},
 	}
 
-	// If we don't have this room at all, return None so the caller can
-	// try federation. Without this check, get_room_summary would build a
-	// fake summary with default join_rule=invite, causing restricted rooms
-	// to appear inaccessible.
-	if self
-		.services
-		.state
-		.get_room_shortstatehash(current_room)
-		.await
-		.is_err()
-	{
-		return Ok(None);
-	}
-
 	let children_pdus: Vec<_> = self
 		.get_space_child_events(current_room)
 		.map(Event::into_format)

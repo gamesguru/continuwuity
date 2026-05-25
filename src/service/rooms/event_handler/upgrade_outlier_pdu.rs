@@ -442,7 +442,7 @@ where
 	// Event has passed all auth/stateres checks
 	drop(state_lock);
 
-	Ok(Some(pdu_id))
+	Ok(pdu_id)
 }
 
 /// Determine the room state that was in effect just before the incoming PDU
@@ -625,33 +625,7 @@ async fn calculate_state_delta(
 		state_after.insert(shortstatekey, event_id.to_owned());
 	}
 
-	// FAST PATH 2: Bypass V2.1 Auth Check explosion for non-forking events
-	let current_extremities: Vec<_> = self
-		.services
-		.state
-		.get_forward_extremities(room_id)
-		.map(ToOwned::to_owned)
-		.collect()
-		.await;
-
-	let prev_events: Vec<_> = incoming_pdu.prev_events().map(ToOwned::to_owned).collect();
-	let is_fast_forward = !current_extremities.is_empty()
-		&& current_extremities.len() == prev_events.len()
-		&& current_extremities.iter().all(|e| prev_events.contains(e));
-
-	let new_room_state = if is_fast_forward {
-		info!("Fast-forward state update, skipping state resolution");
-		self.services
-			.state_compressor
-			.compress_state_events(
-				state_after
-					.iter()
-					.map(|(ssk, eid)| (ssk, Borrow::borrow(eid))),
-			)
-			.collect()
-			.map(Arc::new)
-			.await
-	} else {
+	let new_room_state = {
 		let t = Instant::now();
 		info!(
 			event_id = %incoming_pdu.event_id(),
