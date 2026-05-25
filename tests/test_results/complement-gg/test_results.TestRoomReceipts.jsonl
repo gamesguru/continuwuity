@@ -1,0 +1,2 @@
+{"Action":"pass","Test":"TestRoomReceipts"}
+{"Action":"pass","Test":"TestRoomReceipts/Receipts_DO_NOT_include_a_`room_id`_field"}
