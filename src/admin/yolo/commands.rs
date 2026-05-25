@@ -1930,23 +1930,6 @@ pub(super) async fn get_room_dag(
 				let mut obj: serde_json::Map<String, JsonValue> =
 					serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
 
-				// Inject event_id into the raw JSON (required for v3+ rooms where it's missing)
-				obj.insert(
-					"event_id".to_owned(),
-					JsonValue::String(event_id.as_str().to_owned()),
-				);
-
-				// V12+: ONLY the m.room.create event lacks the room_id field.
-				// All subsequent events in V12 still require it.
-				let is_v12_or_later = !matches!(
-					room_version_str.as_str(),
-					"1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11"
-				);
-				let is_create = obj.get("type").and_then(|v| v.as_str()) == Some("m.room.create");
-				if is_v12_or_later && is_create {
-					obj.remove("room_id");
-				}
-
 				let pdu_result = self.services.rooms.timeline.get_pdu(&event_id).await;
 				if let Ok(pdu) = &pdu_result {
 					if let Ok(ssh) = self
@@ -2298,21 +2281,8 @@ pub(super) async fn get_remote_dag(
 				continue;
 			};
 
-			// Write the original un-canonicalized raw JSON from the remote server
-			// so signatures and unsigned data are perfectly preserved for imports.
-			let mut export_val: serde_json::Map<String, serde_json::Value> =
+			let export_val: serde_json::Map<String, serde_json::Value> =
 				serde_json::from_str(raw_pdu.get())?;
-			export_val
-				.insert("event_id".to_owned(), serde_json::Value::String(event_id.to_string()));
-
-			let room_features = conduwuit_core::RoomVersion::new(&room_version)
-				.unwrap_or(conduwuit_core::RoomVersion::V1);
-			let is_create =
-				export_val.get("type").and_then(|v| v.as_str()) == Some("m.room.create");
-
-			if room_features.strips_room_id(is_create) {
-				export_val.remove("room_id");
-			}
 			let json = serde_json::to_string(&export_val)?;
 			file.write_all(json.as_bytes()).await?;
 			file.write_all(b"\n").await?;

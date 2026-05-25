@@ -8,9 +8,7 @@ use std::{
 use conduwuit::{
 	Err, Result, debug, debug_info, debug_warn, err, implement, info,
 	matrix::{Event, EventTypeExt, PduEvent, StateKey, state_res},
-	trace,
-	utils::stream::ReadyExt,
-	warn,
+	trace, warn,
 };
 use futures::{FutureExt, StreamExt, future::ready};
 use ruma::{
@@ -52,7 +50,14 @@ where
 		.get_pdu_id(incoming_pdu.event_id())
 		.await
 	{
-		return Ok(Some(pduid));
+		if self
+			.services
+			.pdu_metadata
+			.is_event_accepted(incoming_pdu.event_id())
+			.await
+		{
+			return Ok(Some(pduid));
+		}
 	}
 
 	let soft_failed_early = self
@@ -107,7 +112,7 @@ where
 
 	let room_version = to_room_version(&room_version_id);
 
-	// 11. Check the auth of the event passes based on the state of the event
+	// Check the auth of the event passes based on the state of the event
 	debug!(event_id = %incoming_pdu.event_id, "Running initial auth check");
 	let state_fetch_state = &state_at_incoming_event;
 	let state_fetch = |k: StateEventType, s: StateKey| async move {
@@ -144,8 +149,8 @@ where
 		}
 	}
 
-	// 13. Use state resolution to find new room state
-
+	// --- Use state resolution to find new room state ---
+	//
 	// Pre-fetch missing auth chain events from federation BEFORE
 	// acquiring the room lock. This is parallel (32 concurrent) and
 	// multi-server (origin + trusted + room members) with a 300s budget.
@@ -166,7 +171,14 @@ where
 		.get_pdu_id(incoming_pdu.event_id())
 		.await
 	{
-		return Ok(Some(pduid));
+		if self
+			.services
+			.pdu_metadata
+			.is_event_accepted(incoming_pdu.event_id())
+			.await
+		{
+			return Ok(Some(pduid));
+		}
 	}
 
 	debug!(event_id = %incoming_pdu.event_id, "Gathering auth events");
@@ -304,7 +316,7 @@ where
 	let state_lock;
 
 	loop {
-		// 1. Capture base state hash BEFORE the unlocked computation
+		// Capture base state hash BEFORE the unlocked computation
 		let base_shortstatehash = self
 			.services
 			.state
@@ -312,7 +324,7 @@ where
 			.await
 			.ok();
 
-		// 2. Heavy computation WITHOUT the lock
+		// Heavy computation WITHOUT lock
 		let delta = self
 			.calculate_state_delta(
 				&incoming_pdu,
@@ -322,21 +334,28 @@ where
 			)
 			.await?;
 
-		// 3. Acquire lock for the commit phase
+		// Acquire lock for the commit phase
 		trace!(room_id = %room_id, "Locking the room");
 		let lock = self.services.state.mutex.lock(room_id).await;
 
-		// 4. Re-check if the PDU was already added while we were unlocked
+		// Re-check if the PDU was already added while we were unlocked
 		if let Ok(pduid) = self
 			.services
 			.timeline
 			.get_pdu_id(incoming_pdu.event_id())
 			.await
 		{
-			return Ok(Some(pduid));
+			if self
+				.services
+				.pdu_metadata
+				.is_event_accepted(incoming_pdu.event_id())
+				.await
+			{
+				return Ok(Some(pduid));
+			}
 		}
 
-		// 5. OCC verification: has the base state shifted?
+		// OCC verification: has the base state shifted?
 		let current_shortstatehash = self
 			.services
 			.state
@@ -454,6 +473,7 @@ where
 /// room state is used as a best-effort fallback to avoid wiping state.
 #[implement(super::Service)]
 #[tracing::instrument(level = "debug", skip_all)]
+#[allow(clippy::too_many_arguments)]
 async fn resolve_state_at_incoming_event<Pdu>(
 	&self,
 	incoming_pdu: &PduEvent,

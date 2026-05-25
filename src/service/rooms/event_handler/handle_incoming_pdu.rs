@@ -1,5 +1,6 @@
 use std::{
 	collections::{BTreeMap, hash_map},
+	sync::Arc,
 	time::Instant,
 };
 
@@ -208,9 +209,13 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	is_timeline_event: bool,
 	room_version_override: Option<&'a ruma::RoomVersionId>,
 ) -> Result<Option<RawPduId>> {
-	// 1. Skip the PDU if we already have it as a timeline event
+	// Skip the PDU if we already have it as a timeline event, AND it is accepted.
+	// If it was previously soft-failed or rejected, we want to re-evaluate it
+	// now that it's being re-sent over federation (it might pass auth this time).
 	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
-		return Ok(Some(pdu_id));
+		if self.services.pdu_metadata.is_event_accepted(event_id).await {
+			return Ok(Some(pdu_id));
+		}
 	}
 	if !pdu_fits(&mut value.clone()) {
 		warn!(
@@ -221,16 +226,16 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	}
 	trace!("processing incoming PDU from {origin} for room {room_id} with event id {event_id}");
 
-	// 1.1 Check we even know about the room
+	// Check we even know about the room
 	let meta_exists = self.services.metadata.exists(room_id).map(Ok);
 
-	// 1.2 Check if the room is disabled
+	// Check if the room is disabled
 	let is_disabled = self.services.metadata.is_disabled(room_id).map(Ok);
 
-	// 1.3.1 Check room ACL on origin field/server
+	// Check room ACL on origin field/server
 	let origin_acl_check = self.acl_check(origin, room_id);
 
-	// 1.3.2 Check room ACL on sender's server name
+	// Check room ACL on sender's server name
 	let sender: &UserId = value
 		.get("sender")
 		.try_into()
@@ -322,87 +327,39 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	{
 		| Ok(res) => res,
 		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
-			// Try direct fetch first
+			// Enqueue the background DAG healer and return MissingAuthEvents
+			// immediately to unblock the network transaction. The sending server
+			// may not retry, but the healer will fetch the auth chain asynchronously
+			// and heal the graph.
 			info!(
 				target: "state_res_debug",
-				"Fetching {} missing auth events for incoming PDU {event_id} via fetch_and_handle_outliers",
-				missing.len()
+				event_id = %event_id,
+				count = missing.len(),
+				"Missing auth events; queuing background DAG healer fetch"
 			);
-			self.fetch_and_handle_outliers(
-				origin,
-				missing.iter().map(AsRef::as_ref),
-				Some(create_event),
-				room_id,
-				false, // skip_sig_verify
-				room_version_override,
-			)
-			.await;
 
-			// Retry handle_outlier_pdu once after direct fetch
-			let retry_result = Box::pin(self.handle_outlier_pdu(
-				origin,
-				Some(create_event),
-				event_id,
-				room_id,
-				value.clone(),
-				false,
-				false,
-				room_version_override,
-			))
-			.await;
-
-			// If it STILL fails with MissingAuthEvents, then fall back to calling
-			// /state_ids
-			let retry_result = match retry_result {
-				| Ok(res) => Ok(res),
-				| Err(conduwuit::Error::MissingAuthEvents(_)) => {
-					info!(
-						target: "state_res_debug",
-						event_id = %event_id,
-						"Auth chain is still missing after direct fetch, falling back to /state_ids"
-					);
-					async {
-						self.fetch_state(origin, create_event, room_id, event_id, false)
-							.await?;
-						Box::pin(self.handle_outlier_pdu(
-							origin,
-							Some(create_event),
-							event_id,
-							room_id,
-							value.clone(),
-							false,
-							false,
-							room_version_override,
-						))
-						.await
-					}
-					.await
-				},
-				| Err(e) => Err(e),
+			let req = crate::rooms::event_handler::FetchStateRequest {
+				origin: origin.to_owned(),
+				room_id: room_id.to_owned(),
+				event_id: event_id.to_owned(),
+				create_event: Arc::new(create_event.clone()), // assuming PduEvent is Clone
 			};
 
-			match retry_result {
-				| Ok(res) => res,
-				| Err(_) => {
-					// /state_ids didn't help — fall back to background healer.
-					info!(
-						target: "state_res_debug",
-						event_id = %event_id,
-						count = missing.len(),
-						"Storing incoming PDU as outlier; missing auth events will be fetched in background"
-					);
-					self.services
-						.outlier
-						.add_pdu_outlier(event_id, &value, Some(room_id));
-
-					return Ok(None);
-				},
+			if let Err(e) = self.fetch_state_channel.0.send(req) {
+				warn!("Failed to queue DAG healer fetch: {e}");
 			}
+
+			// Save the PDU as an outlier so it can be picked up later if needed
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &value, Some(room_id));
+
+			return Err(conduwuit::Error::MissingAuthEvents(missing));
 		},
 		| Err(e) => return Err(e),
 	};
 
-	// 8. if not timeline event: stop
+	// if not timeline event: stop
 	if !is_timeline_event {
 		return Ok(None);
 	}

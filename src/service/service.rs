@@ -88,7 +88,22 @@ impl<T: Service + Send + Sync> Deref for Dep<T> {
 
 	/// Dereference a dependency. The dependency must be ready or panics.
 	#[inline]
-	fn deref(&self) -> &Self::Target {
+	fn deref(&self) -> &Self::Target { self.get() }
+}
+
+impl<T: Service + Send + Sync> Clone for Dep<T> {
+	fn clone(&self) -> Self {
+		Self {
+			dep: self.dep.clone(),
+			service: self.service.clone(),
+			name: self.name,
+		}
+	}
+}
+
+impl<T: Service + Send + Sync> Dep<T> {
+	#[inline]
+	fn get(&self) -> &Arc<T> {
 		self.dep.get_or_init(
 			#[inline(never)]
 			|| self.init(),
