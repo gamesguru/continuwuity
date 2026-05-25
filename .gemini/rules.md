@@ -109,6 +109,9 @@ jq -r 'select(.Test == "<TestName>" and .Action == "output") | .Output' \
     ```bash
     make format lint
     ```
+- **NEVER run plain `cargo fmt`.** It uses stable rustfmt which mass-reformats 196+ files and breaks the build. Use ONLY:
+    - `make format` (preferred)
+    - `cargo +nightly fmt` (manual equivalent)
 - The project uses `pre-commit` hooks.
 - Custom macros like `err!()` do NOT support tracing-style `%field` syntax — use `warn!()` or `tracing::warn!()` for structured logging.
 
