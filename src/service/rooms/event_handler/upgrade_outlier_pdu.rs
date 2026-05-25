@@ -488,8 +488,8 @@ where
 		&& prev_events.len() == current_extremities.len()
 		&& current_extremities.iter().all(|e| prev_events.contains(e));
 
-	let mut state = None;
-
+	// Fast-forward path: If the incoming PDU matches current extremities exactly,
+	// we can bypass state resolution entirely and just use the current room state.
 	if exact_match {
 		info!(
 			"Incoming PDU matches current extremities exactly (fast-forward candidate). \
@@ -499,65 +499,60 @@ where
 			self.services.state.get_room_shortstatehash(room_id).await
 		{
 			if current_shortstatehash != 0 {
-				let current_state: HashMap<_, _> = self
+				return Ok(self
 					.services
 					.state_accessor
-					.state_full_shortids(current_shortstatehash)
-					.ready_filter_map(Result::ok)
-					.map(|(shortstatekey, shorteventid)| async move {
-						let event_id = self
-							.services
-							.short
-							.get_eventid_from_short::<Box<_>>(shorteventid)
-							.await
-							.ok()?;
-						Some((shortstatekey, (*event_id).to_owned()))
-					})
-					.buffer_unordered(100)
-					.filter_map(ready)
+					.state_full_ids(current_shortstatehash)
 					.collect()
-					.await;
-
-				state = Some(current_state);
+					.await);
 			}
 		}
 	}
 
-	if state.is_none() {
-		info!(
-			"State is none. Resolving state for incoming PDU (prev_events count: {})",
-			incoming_pdu.prev_events().count()
-		);
-		state = if incoming_pdu.prev_events().count() == 1 {
-			self.state_at_incoming_degree_one(incoming_pdu, room_id)
-				.await?
-		} else {
-			self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id)
-				.await?
-		};
-		info!("State resolution completed for incoming PDU");
-	}
+	// Local State Resolution: Try to resolve state locally using prev_events
+	info!(
+		"Resolving state locally for incoming PDU (prev_events count: {})",
+		incoming_pdu.prev_events().count()
+	);
 
+	let mut state = if incoming_pdu.prev_events().count() == 1 {
+		self.state_at_incoming_degree_one(incoming_pdu, room_id)
+			.await?
+	} else {
+		self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id)
+			.await?
+	};
+
+	// Federation Fetch: If local resolution failed, try fetching state from the
+	// sender
 	if state.is_none() && !skip_soft_fail && !force_local {
-		// Local state is unavailable — prev_events are not yet in DB or their
-		// state hashes have not been computed. Attempt a synchronous /state_ids
-		// fetch from the sending server BEFORE queuing the async DAG healer.
-		//
-		// The healer fires asynchronously (after a delay), which races with the
-		// sending server's lifetime: in Complement tests the fake federation
-		// server shuts down when the test times out, so the healer's /state_ids
-		// calls always arrive too late and "all servers failed". Fetching inline
-		// here gives us a shot while the sender is still alive.
-		debug!(
-			event_id = %incoming_pdu.event_id,
-			%origin,
-			"local state unavailable; attempting synchronous /state_ids fetch"
-		);
-		match self
-			.fetch_state(origin, create_event, room_id, incoming_pdu.event_id(), false)
-			.await
-		{
-			| Ok(Some(fetched_state)) => {
+		let mut prev_event_rejected = false;
+		for prev_id in &prev_events {
+			if self.services.pdu_metadata.is_event_rejected(prev_id).await {
+				prev_event_rejected = true;
+				info!(
+					event_id = %incoming_pdu.event_id,
+					rejected_prev_event = %prev_id,
+					"prev_event is rejected; bypassing federation /state_ids fetch"
+				);
+				break;
+			}
+		}
+
+		if !prev_event_rejected {
+			// Local state is unavailable — prev_events are not yet in DB or their
+			// state hashes have not been computed. Attempt a synchronous /state_ids
+			// fetch from the sending server BEFORE queuing the async DAG healer.
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				%origin,
+				"local state unavailable; attempting synchronous /state_ids fetch"
+			);
+
+			if let Ok(Some(fetched_state)) = self
+				.fetch_state(origin, create_event, room_id, incoming_pdu.event_id(), false)
+				.await
+			{
 				info!(
 					target: "state_res_debug",
 					event_id = %incoming_pdu.event_id,
@@ -565,22 +560,19 @@ where
 					"fetched state via /state_ids; proceeding with auth check"
 				);
 				state = Some(fetched_state);
-			},
-			| Ok(None) | Err(_) => {
-				// Federation fetch failed — fall back to current room state.
-				// The auth check at step 11 will still reject invalid events;
-				// we just need a base state to check against rather than giving
-				// up entirely (which would reject valid events like sentinels
-				// that follow rejected events in the same transaction).
+			} else {
 				debug!(
 					event_id = %incoming_pdu.event_id,
 					"fetch_state failed; falling back to current room state"
 				);
-			},
+			}
 		}
 	}
 
-	if state.is_none() {
+	// Fallback: If all else fails, use the current room state
+	if let Some(resolved_state) = state {
+		Ok(resolved_state)
+	} else {
 		// State could not be determined from prev_events or federation.
 		// Fall back to current room state — the auth check at step 11 will
 		// still reject invalid events.
@@ -595,29 +587,13 @@ where
 			.await
 			.map_err(|_| err!(Database("Room has no state")))?;
 
-		let current_state: HashMap<_, _> = self
+		Ok(self
 			.services
 			.state_accessor
-			.state_full_shortids(current_shortstatehash)
-			.ready_filter_map(Result::ok)
-			.map(|(shortstatekey, shorteventid)| async move {
-				let event_id = self
-					.services
-					.short
-					.get_eventid_from_short::<Box<_>>(shorteventid)
-					.await
-					.ok()?;
-				Some((shortstatekey, (*event_id).to_owned()))
-			})
-			.buffer_unordered(64)
-			.filter_map(ready)
+			.state_full_ids(current_shortstatehash)
 			.collect()
-			.await;
-
-		state = Some(current_state);
+			.await)
 	}
-
-	Ok(state.unwrap_or_default())
 }
 
 /// For state events: build the new post-event state, run state resolution
