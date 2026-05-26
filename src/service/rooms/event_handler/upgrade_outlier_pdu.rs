@@ -245,13 +245,12 @@ where
 				true
 			},
 			| (true, None) => false,
-			| (true, Some(redact_id)) => {
+			| (true, Some(redact_id)) =>
 				!self
 					.services
 					.state_accessor
 					.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
-					.await?
-			},
+					.await?,
 		}
 	};
 

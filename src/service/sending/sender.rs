@@ -930,13 +930,11 @@ impl Service {
 	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>) -> SendingFuture<'_> {
 		debug_assert!(!events.is_empty(), "sending empty transaction");
 		match dest {
-			| Destination::Federation(server) => {
-				self.send_events_dest_federation(server, events).boxed()
-			},
+			| Destination::Federation(server) =>
+				self.send_events_dest_federation(server, events).boxed(),
 			| Destination::Appservice(id) => self.send_events_dest_appservice(id, events).boxed(),
-			| Destination::Push(user_id, pushkey) => {
-				self.send_events_dest_push(user_id, pushkey, events).boxed()
-			},
+			| Destination::Push(user_id, pushkey) =>
+				self.send_events_dest_push(user_id, pushkey, events).boxed(),
 		}
 	}
 
@@ -979,13 +977,12 @@ impl Service {
 						pdu_jsons.push(pdu.to_format());
 					}
 				},
-				| SendingEvent::Edu(edu) => {
+				| SendingEvent::Edu(edu) =>
 					if appservice.receive_ephemeral {
 						if let Ok(edu) = serde_json::from_slice(edu) {
 							edu_jsons.push(edu);
 						}
-					}
-				},
+					},
 				| SendingEvent::Flush => {}, // flush only; no new content
 			}
 		}
