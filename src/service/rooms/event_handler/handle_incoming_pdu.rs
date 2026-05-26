@@ -360,24 +360,47 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	{
 		| Ok(res) => res,
 		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
-			// Auth events couldn't be fetched inline (handle_outlier_pdu already
-			// tried /event_auth). Save as outlier so it can be picked up later.
-			info!(
-				target: "state_res_debug",
-				event_id = %event_id,
-				count = missing.len(),
-				"Missing auth events after inline fetch; saving as outlier"
-			);
+			// The auth event chain for this PDU may be deeper than the
+			// iterative fetcher's per-call limit. Try calling /state_ids on
+			// the origin to retrieve and store the complete auth chain in one
+			// shot, then retry handle_outlier_pdu. This also satisfies the
+			// Matrix spec requirement that servers call /state_ids when auth
+			// events are unresolvable via the normal backfill path.
+			let retry_result = async {
+				self.fetch_state(origin, create_event, room_id, event_id, false)
+					.await?;
+				Box::pin(self.handle_outlier_pdu(
+					origin,
+					Some(create_event),
+					event_id,
+					room_id,
+					value.clone(),
+					false,
+					false,
+					room_version_override,
+				))
+				.await
+			}
+			.await;
 
-			self.services
-				.outlier
-				.add_pdu_outlier(event_id, &value, Some(room_id));
+			match retry_result {
+				| Ok(res) => res,
+				| Err(_) => {
+					// /state_ids didn't help — fall back to background healer.
+					info!(
+						target: "state_res_debug",
+						event_id = %event_id,
+						count = missing.len(),
+						"Storing incoming PDU as outlier; missing auth events will be \
+						 fetched in background"
+					);
+					self.services
+						.outlier
+						.add_pdu_outlier(event_id, &value, Some(room_id));
 
-			// Mark as rejected so the client API returns 404 for this event.
-			// The unreject path will clear this flag when all auth deps arrive.
-			self.services.pdu_metadata.mark_event_rejected(event_id);
-
-			return Err(conduwuit::Error::MissingAuthEvents(missing));
+					return Ok(None);
+				},
+			}
 		},
 		| Err(e) => return Err(e),
 	};
