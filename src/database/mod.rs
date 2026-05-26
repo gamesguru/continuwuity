@@ -1,7 +1,7 @@
 #![type_length_limit = "3072"]
 
 extern crate conduwuit_core as conduwuit;
-extern crate rust_rocksdb as rocksdb;
+pub extern crate rust_rocksdb as rocksdb;
 
 conduwuit_macros::introspect_crate! {}
 

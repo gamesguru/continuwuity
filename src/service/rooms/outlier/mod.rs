@@ -169,6 +169,56 @@ pub fn add_pdu_outlier(
 	}
 }
 
+/// Append the PDU as an outlier using a WriteBatch.
+#[implement(Service)]
+#[tracing::instrument(skip(self, batch, pdu), level = "debug")]
+pub fn add_pdu_outlier_batch(
+	&self,
+	batch: &mut database::rocksdb::WriteBatch,
+	event_id: &EventId,
+	pdu: &CanonicalJsonObject,
+	room_id: Option<&RoomId>,
+) {
+	self.stamp_receive_count(event_id);
+
+	let mut pdu = pdu.clone();
+	pdu.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
+
+	let room_id_from_pdu = pdu
+		.get("room_id")
+		.and_then(CanonicalJsonValue::as_str)
+		.and_then(|r| <&RoomId>::try_from(r).ok())
+		.map(ToOwned::to_owned)
+		.or_else(|| room_id.map(ToOwned::to_owned))
+		.or_else(|| {
+			let is_create =
+				pdu.get("type").and_then(CanonicalJsonValue::as_str) == Some("m.room.create");
+			is_create
+				.then(|| event_id.as_str().replace('$', "!"))
+				.and_then(|r| OwnedRoomId::parse(r).ok())
+		});
+
+	self.db
+		.eventid_outlierpdu
+		.raw_put_into_batch(batch, event_id, Json(pdu));
+
+	if let Some(room_id) = room_id_from_pdu {
+		let room_id: &RoomId = &room_id;
+		let mut key = room_id.as_bytes().to_vec();
+		key.push(0xFF);
+		key.extend_from_slice(event_id.as_bytes());
+		self.db
+			.roomid_outliereventid
+			.insert_into_batch(batch, &key, event_id);
+	}
+}
+
+/// Apply a batch of outlier insertions
+#[implement(Service)]
+pub fn apply_outlier_batch(&self, batch: &database::rocksdb::WriteBatch) {
+	self.db.eventid_outlierpdu.apply_batch(batch);
+}
+
 /// Remove the PDU from the outlier tree. When the caller knows the
 /// room_id (hot path), pass it for O(1) index cleanup. Otherwise the
 /// room_id is derived from the stored PDU JSON.

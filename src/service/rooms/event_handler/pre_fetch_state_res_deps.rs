@@ -255,14 +255,11 @@ pub(super) async fn pre_fetch_state_res_deps(
 		);
 	}
 
-	// Phase 2: Iterative DAG gap filling via POST /get_missing_events.
+	// Phase 2: Single-round DAG gap filling via POST /get_missing_events.
 	//
-	// Each round fans out to ALL servers in parallel (FuturesUnordered). As
-	// responses arrive, events are inserted as outliers and the gap shrinks.
-	// We then recompute both boundaries and run another round until the gap
-	// is closed or the budget is exhausted. POST body is immune to URI length
-	// limits (unlike GET /backfill). Skips brand-new rooms (no shortstatehash)
-	// to avoid hitting Complement mock servers with UnexpectedRequestsAreErrors.
+	// We perform a single, strictly timeboxed round of get_missing_events to
+	// satisfy federation requirements (which mandate attempting to fill gaps
+	// inline). If it fails or times out, we defer to the background DAG healer.
 	let has_timeline = self
 		.services
 		.state
@@ -273,125 +270,106 @@ pub(super) async fn pre_fetch_state_res_deps(
 		return;
 	}
 
-	let mut still_needed: Vec<OwnedEventId> = incoming_state.values().cloned().collect();
-	let mut total_filled: usize = 0;
-	let mut round: usize = 0;
-	const MAX_ROUNDS: usize = 3;
+	let still_needed: Vec<OwnedEventId> = incoming_state.values().cloned().collect();
 
-	loop {
-		if started.elapsed() >= budget || round >= MAX_ROUNDS {
-			break;
+	// Filter to IDs still not present locally.
+	let mut remaining = Vec::with_capacity(still_needed.len());
+	for id in &still_needed {
+		if !self.services.timeline.pdu_exists(id).await
+			&& self.services.outlier.get_pdu_outlier(id).await.is_err()
+		{
+			remaining.push(id.clone());
 		}
+	}
+	if remaining.is_empty() {
+		return;
+	}
 
-		// Filter to IDs still not present locally.
-		let mut remaining = Vec::with_capacity(still_needed.len());
-		for id in &still_needed {
-			if !self.services.timeline.pdu_exists(id).await
-				&& self.services.outlier.get_pdu_outlier(id).await.is_err()
-			{
-				remaining.push(id.clone());
-			}
-		}
-		if remaining.is_empty() {
-			break;
-		}
+	// Recompute local DAG boundary
+	let earliest: Vec<OwnedEventId> = self
+		.services
+		.state
+		.get_forward_extremities(room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
 
-		// Recompute local DAG boundary — grows with each filled round.
-		let earliest: Vec<OwnedEventId> = self
-			.services
-			.state
-			.get_forward_extremities(room_id)
-			.map(ToOwned::to_owned)
-			.collect()
-			.await;
-
-		round = round.saturating_add(1);
-
-		// Fan out to a capped subset of servers to avoid overwhelming
-		// the executor and disk I/O on resource-constrained boxes.
-		let server_fanout = self.services.server.concurrency_scaled(1);
-		let mut active = FuturesUnordered::new();
-		for server in servers.iter().take(server_fanout) {
-			let room_id_owned = room_id.to_owned();
-			let earliest = earliest.clone();
-			let remaining = remaining.clone();
-			active.push(async move {
-				let t = Instant::now();
-				let res = self
-					.services
-					.sending
-					.send_federation_request(server, get_missing_events::v1::Request {
+	// Fan out to a capped subset of servers to avoid overwhelming
+	let server_fanout = self.services.server.concurrency_scaled(1);
+	let mut active = FuturesUnordered::new();
+	for server in servers.iter().take(server_fanout) {
+		let room_id_owned = room_id.to_owned();
+		let earliest = earliest.clone();
+		let remaining = remaining.clone();
+		active.push(async move {
+			let t = Instant::now();
+			let res = tokio::time::timeout(
+				Duration::from_secs(5),
+				self.services.sending.send_federation_request(
+					server,
+					get_missing_events::v1::Request {
 						room_id: room_id_owned,
 						earliest_events: earliest,
 						latest_events: remaining,
 						limit: 50_u32.into(),
 						min_depth: 0_u32.into(),
-					})
-					.await;
-				(server, res, t.elapsed())
-			});
-		}
+					},
+				),
+			)
+			.await;
 
-		let mut round_filled: usize = 0;
-		while let Some((server, res, latency)) = active.next().await {
-			match res {
-				| Ok(response) => {
-					self.update_peer_stats(server, true, latency);
-					for pdu_raw in &response.events {
-						if let Ok((eid, value)) = self
-							.services
-							.server_keys
-							.validate_and_add_event_id(pdu_raw, room_version_id)
-							.await
-						{
-							if let Ok(pdu) = conduwuit::PduEvent::from_id_val(
-								&eid,
-								value.clone(),
-								Some(room_id),
-							) {
-								if pdu.room_id_or_hash().as_deref() == Some(room_id) {
-									if !self.services.timeline.pdu_exists(&eid).await {
-										self.services.outlier.add_pdu_outlier(
-											&eid,
-											&value,
-											Some(room_id),
-										);
-										round_filled = round_filled.saturating_add(1);
-									}
-								} else {
-									warn!(%eid, %server, "get_missing_events returned event for wrong room");
-								}
-							}
-						}
+			(server, res, t.elapsed())
+		});
+	}
+
+	let mut batch = database::rocksdb::WriteBatchWithTransaction::<false>::default();
+	let mut total_filled: usize = 0;
+	while let Some((server, res, latency)) = active.next().await {
+		match res {
+			| Ok(Ok(response)) => {
+				self.update_peer_stats(server, true, latency);
+				for pdu_raw in &response.events {
+					let Ok((eid, value)) = self
+						.services
+						.server_keys
+						.validate_and_add_event_id(pdu_raw, room_version_id)
+						.await
+					else {
+						continue;
+					};
+
+					let Ok(pdu) =
+						conduwuit::PduEvent::from_id_val(&eid, value.clone(), Some(room_id))
+					else {
+						continue;
+					};
+
+					if pdu.room_id_or_hash().as_deref() != Some(room_id) {
+						warn!(%eid, %server, "get_missing_events returned event for wrong room");
+						continue;
 					}
-				},
-				| Err(_) => {
-					self.update_peer_stats(server, false, latency);
-				},
-			}
-		}
 
-		total_filled = total_filled.saturating_add(round_filled);
-		if round_filled > 0 {
-			info!(
-				round,
-				round_filled,
-				total_filled,
-				still_open = remaining.len().saturating_sub(round_filled),
-				"Phase 2: get_missing_events round complete"
-			);
-			// next round will re-filter still_needed
-			still_needed = remaining;
-		} else {
-			// No server returned anything useful — gap won't close further.
-			break;
-		}
+					if self.services.timeline.pdu_exists(&eid).await {
+						continue;
+					}
 
-		// Yield between rounds to keep the executor responsive.
-		tokio::task::yield_now().await;
+					self.services.outlier.add_pdu_outlier_batch(
+						&mut batch,
+						&eid,
+						&value,
+						Some(room_id),
+					);
+					total_filled = total_filled.saturating_add(1);
+				}
+			},
+			| _ => {
+				self.update_peer_stats(server, false, latency);
+			},
+		}
 	}
 
 	if total_filled > 0 {
-		info!(total_filled, rounds = round, "Phase 2: DAG gap filling complete");
+		self.services.outlier.apply_outlier_batch(&batch);
+		info!(total_filled, "Phase 2: Single-round DAG gap filling complete");
 	}
 }
