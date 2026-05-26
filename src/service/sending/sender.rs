@@ -259,6 +259,15 @@ impl Service {
 			new_events.push((k, e));
 		}
 
+		let remaining_limit = DEQUEUE_LIMIT.saturating_sub(new_events.len());
+		if remaining_limit > 0 {
+			let mut reliable_stream =
+				self.db.queued_reliable_requests(dest).take(remaining_limit);
+			while let Some((k, e)) = reliable_stream.next().await {
+				new_events.push((k, e));
+			}
+		}
+
 		if !new_events.is_empty() && has_pdu {
 			// Immediately send the critical PDUs without trailing cooldown!
 			self.db.mark_as_active(new_events.iter());

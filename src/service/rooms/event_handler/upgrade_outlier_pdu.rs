@@ -566,10 +566,10 @@ where
 	// Federation Fetch: If local resolution failed, try fetching state from the
 	// sender
 	if state.is_none() && !skip_soft_fail && !force_local {
-		let mut any_event_rejected = false;
+		let mut prev_event_rejected = false;
 		for prev_id in &prev_events {
 			if self.services.pdu_metadata.is_event_rejected(prev_id).await {
-				any_event_rejected = true;
+				prev_event_rejected = true;
 				info!(
 					event_id = %incoming_pdu.event_id,
 					rejected_prev_event = %prev_id,
@@ -579,21 +579,7 @@ where
 			}
 		}
 
-		if !any_event_rejected {
-			for auth_id in incoming_pdu.auth_events() {
-				if self.services.pdu_metadata.is_event_rejected(auth_id).await {
-					any_event_rejected = true;
-					info!(
-						event_id = %incoming_pdu.event_id,
-						rejected_auth_event = %auth_id,
-						"auth_event is rejected; bypassing federation /state_ids fetch"
-					);
-					break;
-				}
-			}
-		}
-
-		if !any_event_rejected {
+		if !prev_event_rejected {
 			// Local state is unavailable — prev_events are not yet in DB or their
 			// state hashes have not been computed. Attempt a synchronous /state_ids
 			// fetch from the sending server BEFORE queuing the async DAG healer.

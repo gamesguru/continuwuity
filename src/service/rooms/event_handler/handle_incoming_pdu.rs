@@ -373,7 +373,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 				.outlier
 				.add_pdu_outlier(event_id, &value, Some(room_id));
 
-			return Ok(None);
+			return Err(conduwuit::Error::MissingAuthEvents(missing));
 		},
 		| Err(e) => return Err(e),
 	};

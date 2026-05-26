@@ -62,32 +62,59 @@ pub(crate) async fn set_read_marker_route(
 		if services.config.allow_local_read_receipts
 			&& !services.users.is_suspended(sender_user).await?
 		{
-			let receipt_content = BTreeMap::from_iter([(
-				event.to_owned(),
-				BTreeMap::from_iter([(
-					ReceiptType::Read,
-					BTreeMap::from_iter([(
-						sender_user.to_owned(),
-						ruma::events::receipt::Receipt {
-							ts: Some(MilliSecondsSinceUnixEpoch::now()),
-							thread: ReceiptThread::Unthreaded,
-						},
-					)]),
-				)]),
-			)]);
+			let count = services
+				.rooms
+				.timeline
+				.get_pdu_count(event)
+				.await
+				.map_err(|_| err!(Request(NotFound("Event not found."))))?;
 
-			services
+			let PduCount::Normal(count) = count else {
+				return Err!(Request(InvalidParam(
+					"Event is a backfilled PDU and cannot be marked as read."
+				)));
+			};
+
+			let current_count = services
 				.rooms
 				.read_receipt
-				.readreceipt_update(
-					sender_user,
-					&body.room_id,
-					&ruma::events::receipt::ReceiptEvent {
-						content: ruma::events::receipt::ReceiptEventContent(receipt_content),
-						room_id: body.room_id.clone(),
-					},
-				)
-				.await;
+				.private_read_get_count(&body.room_id, sender_user)
+				.await
+				.unwrap_or(0);
+
+			if count > current_count {
+				services
+					.rooms
+					.read_receipt
+					.private_read_set(&body.room_id, sender_user, count);
+
+				let receipt_content = BTreeMap::from_iter([(
+					event.to_owned(),
+					BTreeMap::from_iter([(
+						ReceiptType::Read,
+						BTreeMap::from_iter([(
+							sender_user.to_owned(),
+							ruma::events::receipt::Receipt {
+								ts: Some(MilliSecondsSinceUnixEpoch::now()),
+								thread: ReceiptThread::Unthreaded,
+							},
+						)]),
+					)]),
+				)]);
+
+				services
+					.rooms
+					.read_receipt
+					.readreceipt_update(
+						sender_user,
+						&body.room_id,
+						&ruma::events::receipt::ReceiptEvent {
+							content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+							room_id: body.room_id.clone(),
+						},
+					)
+					.await;
+			}
 		}
 	}
 
@@ -105,10 +132,19 @@ pub(crate) async fn set_read_marker_route(
 			)));
 		};
 
-		services
+		let current_count = services
 			.rooms
 			.read_receipt
-			.private_read_set(&body.room_id, sender_user, count);
+			.private_read_get_count(&body.room_id, sender_user)
+			.await
+			.unwrap_or(0);
+
+		if count > current_count {
+			services
+				.rooms
+				.read_receipt
+				.private_read_set(&body.room_id, sender_user, count);
+		}
 	}
 
 	Ok(set_read_marker::v3::Response {})
@@ -164,32 +200,59 @@ pub(crate) async fn create_receipt_route(
 				.await?;
 		},
 		| create_receipt::v3::ReceiptType::Read => {
-			let receipt_content = BTreeMap::from_iter([(
-				body.event_id.clone(),
-				BTreeMap::from_iter([(
-					ReceiptType::Read,
-					BTreeMap::from_iter([(
-						sender_user.to_owned(),
-						ruma::events::receipt::Receipt {
-							ts: Some(MilliSecondsSinceUnixEpoch::now()),
-							thread: ReceiptThread::Unthreaded,
-						},
-					)]),
-				)]),
-			)]);
+			let count = services
+				.rooms
+				.timeline
+				.get_pdu_count(&body.event_id)
+				.await
+				.map_err(|_| err!(Request(NotFound("Event not found."))))?;
 
-			services
+			let PduCount::Normal(count) = count else {
+				return Err!(Request(InvalidParam(
+					"Event is a backfilled PDU and cannot be marked as read."
+				)));
+			};
+
+			let current_count = services
 				.rooms
 				.read_receipt
-				.readreceipt_update(
-					sender_user,
-					&body.room_id,
-					&ruma::events::receipt::ReceiptEvent {
-						content: ruma::events::receipt::ReceiptEventContent(receipt_content),
-						room_id: body.room_id.clone(),
-					},
-				)
-				.await;
+				.private_read_get_count(&body.room_id, sender_user)
+				.await
+				.unwrap_or(0);
+
+			if count > current_count {
+				services
+					.rooms
+					.read_receipt
+					.private_read_set(&body.room_id, sender_user, count);
+
+				let receipt_content = BTreeMap::from_iter([(
+					body.event_id.clone(),
+					BTreeMap::from_iter([(
+						ReceiptType::Read,
+						BTreeMap::from_iter([(
+							sender_user.to_owned(),
+							ruma::events::receipt::Receipt {
+								ts: Some(MilliSecondsSinceUnixEpoch::now()),
+								thread: ReceiptThread::Unthreaded,
+							},
+						)]),
+					)]),
+				)]);
+
+				services
+					.rooms
+					.read_receipt
+					.readreceipt_update(
+						sender_user,
+						&body.room_id,
+						&ruma::events::receipt::ReceiptEvent {
+							content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+							room_id: body.room_id.clone(),
+						},
+					)
+					.await;
+			}
 		},
 		| create_receipt::v3::ReceiptType::ReadPrivate => {
 			let count = services
@@ -205,10 +268,19 @@ pub(crate) async fn create_receipt_route(
 				)));
 			};
 
-			services
+			let current_count = services
 				.rooms
 				.read_receipt
-				.private_read_set(&body.room_id, sender_user, count);
+				.private_read_get_count(&body.room_id, sender_user)
+				.await
+				.unwrap_or(0);
+
+			if count > current_count {
+				services
+					.rooms
+					.read_receipt
+					.private_read_set(&body.room_id, sender_user, count);
+			}
 		},
 		| _ => {
 			return Err!(Request(InvalidParam(warn!(
