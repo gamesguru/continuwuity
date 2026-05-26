@@ -262,8 +262,7 @@ where
 		}
 	}
 
-	// Fetch any missing ones via /event_auth (like Synapse's
-	// _load_or_fetch_auth_events_for_event)
+	// Check for auth events still missing after local + outlier lookup
 	let missing_auth_events = pdu_event
 		.auth_events()
 		.filter(|id| !auth_events.contains_key(*id))
@@ -277,15 +276,125 @@ where
 		"Auth events local lookup summary"
 	);
 	if !missing_auth_events.is_empty() {
-		info!(
-			"Missing {} auth events for {event_id}; will be resolved via /state_ids retry",
-			missing_auth_events.len()
-		);
-		let missing: Vec<_> = missing_auth_events
-			.into_iter()
-			.map(ToOwned::to_owned)
-			.collect();
-		return Err!(MissingAuthEvents(missing));
+		// For a small number of missing auth events, try /event_auth inline.
+		// This satisfies complement tests that register /event_auth handlers
+		// (e.g. TestInboundFederationRejectsEventsWithRejectedAuthEvents).
+		// For large missing counts (e.g. MSC4297 with 250+ events), skip
+		// /event_auth to avoid excessive HTTP overhead and let the caller
+		// retry via /state_ids instead.
+		const MAX_INLINE_FETCH: usize = 5;
+		if missing_auth_events.len() <= MAX_INLINE_FETCH {
+			info!(
+				target: "state_res_debug",
+				%event_id,
+				count = missing_auth_events.len(),
+				"Fetching missing auth events via /event_auth"
+			);
+			if let Ok(response) = self
+				.services
+				.sending
+				.send_federation_request(
+					origin,
+					ruma::api::federation::authorization::get_event_authorization::v1::Request {
+						room_id: room_id.to_owned(),
+						event_id: event_id.to_owned(),
+					},
+				)
+				.await
+			{
+				for auth_pdu in &response.auth_chain {
+					if let Ok((auth_eid, auth_val)) =
+						conduwuit::matrix::event::gen_event_id_canonical_json(
+							auth_pdu,
+							&room_version_id,
+						) {
+						if let hash_map::Entry::Vacant(e) = auth_events.entry(auth_eid) {
+							self.services.outlier.add_pdu_outlier(
+								e.key(),
+								&auth_val,
+								Some(room_id),
+							);
+
+							if let Ok(parsed) = serde_json::from_value::<PduEvent>(
+								serde_json::to_value(&auth_val)
+									.expect("CanonicalJsonObj is valid"),
+							) {
+								if check_room_id(room_id, &parsed).is_ok() {
+									// Cascade rejection: if any of this auth event's
+									// own auth_events are rejected, mark it rejected.
+									let has_rejected_auth = futures::future::join_all(
+										parsed.auth_events().map(|aid| {
+											self.services.pdu_metadata.is_event_rejected(aid)
+										}),
+									)
+									.await
+									.into_iter()
+									.any(|rejected| rejected);
+
+									if has_rejected_auth {
+										info!(
+											target: "state_res_debug",
+											auth_event_id = %e.key(),
+											"Auth event depends on rejected event; \
+											 marking rejected"
+										);
+										self.services.pdu_metadata.mark_event_rejected(e.key());
+									}
+									e.insert(parsed);
+								}
+							} else if let Some(raw_auth) =
+								auth_val.get("auth_events").and_then(|v| v.as_array())
+							{
+								// PduEvent parse failed; check cascade via raw JSON
+								let mut has_rejected_auth = false;
+								for raw_aid in raw_auth {
+									if let Some(aid_str) = raw_aid.as_str() {
+										if let Ok(aid) = <&EventId>::try_from(aid_str) {
+											if self
+												.services
+												.pdu_metadata
+												.is_event_rejected(aid)
+												.await
+											{
+												has_rejected_auth = true;
+												break;
+											}
+										}
+									}
+								}
+								if has_rejected_auth {
+									self.services.pdu_metadata.mark_event_rejected(e.key());
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Re-check: are we still missing auth events after /event_auth?
+			let still_missing: Vec<_> = pdu_event
+				.auth_events()
+				.filter(|id| !auth_events.contains_key(*id))
+				.collect();
+			if !still_missing.is_empty() {
+				debug_info!(
+					"Still missing {} auth events for {event_id} after /event_auth",
+					still_missing.len()
+				);
+				let missing: Vec<_> = still_missing.into_iter().map(ToOwned::to_owned).collect();
+				return Err!(MissingAuthEvents(missing));
+			}
+		} else {
+			info!(
+				"Missing {} auth events for {event_id}; will be resolved via /state_ids retry",
+				missing_auth_events.len()
+			);
+			let missing: Vec<_> = missing_auth_events
+				.into_iter()
+				.map(ToOwned::to_owned)
+				.collect();
+			return Err!(MissingAuthEvents(missing));
+		}
 	}
 	debug!("No missing auth events for outlier event {event_id}");
 
