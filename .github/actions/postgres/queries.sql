@@ -19,6 +19,7 @@ recent_runs AS (
     SELECT r.*
     FROM runs r
     WHERE r.n_pass > 0
+      AND EXISTS (SELECT 1 FROM run_details rd WHERE rd.run_id = r.id)
     {like_filter}
     ORDER BY {order}
     LIMIT {limit}
