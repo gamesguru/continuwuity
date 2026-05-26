@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug, debug_info, debug_warn, err, implement, info, state_res,
+	Err, Event, PduEvent, Result, debug, debug_info, err, implement, info, state_res,
 	trace, warn,
 };
-use futures::{StreamExt, future::ready};
+use futures::future::ready;
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
 	events::{StateEventType, TimelineEventType},
@@ -239,10 +239,21 @@ where
 			.await
 		{
 			check_room_id(room_id, &auth_event)?;
-			trace!("Found auth event {aid} for outlier event {event_id} locally");
+			info!(
+				target: "state_res_debug",
+				%event_id,
+				auth_event_id = %aid,
+				event_type = ?auth_event.kind,
+				"Found auth event locally for outlier"
+			);
 			auth_events.insert(aid.to_owned(), auth_event);
 		} else {
-			debug_warn!("Could not find auth event {aid} for outlier event {event_id} locally");
+			info!(
+				target: "state_res_debug",
+				%event_id,
+				auth_event_id = %aid,
+				"Auth event NOT found locally for outlier"
+			);
 		}
 	}
 
@@ -252,10 +263,20 @@ where
 		.auth_events()
 		.filter(|id| !auth_events.contains_key(*id))
 		.collect::<Vec<_>>();
+	info!(
+		target: "state_res_debug",
+		%event_id,
+		found = auth_events.len(),
+		missing = missing_auth_events.len(),
+		total_auth = pdu_event.auth_events().count(),
+		"Auth events local lookup summary"
+	);
 	if !missing_auth_events.is_empty() {
-		debug_info!(
-			"Missing {} auth events for outlier event {event_id}, fetching via /event_auth",
-			missing_auth_events.len()
+		info!(
+			target: "state_res_debug",
+			event_id = %event_id,
+			count = missing_auth_events.len(),
+			"Missing auth events for outlier event, fetching via /event_auth"
 		);
 
 		// Try to fetch the auth chain from the origin server inline
@@ -271,9 +292,11 @@ where
 			)
 			.await
 		{
-			debug_info!(
-				"Got {} auth chain events from /event_auth for {event_id}",
-				response.auth_chain.len()
+			info!(
+				target: "state_res_debug",
+				event_id = %event_id,
+				count = response.auth_chain.len(),
+				"Got auth chain events from /event_auth"
 			);
 
 			// Persist them as outliers (like Synapse's _auth_and_persist_outliers)
@@ -283,7 +306,13 @@ where
 						auth_pdu,
 						&room_version_id,
 					) {
+					let auth_eid_str = auth_eid.to_string();
 					if let hash_map::Entry::Vacant(e) = auth_events.entry(auth_eid) {
+						info!(
+							target: "state_res_debug",
+							auth_event_id = %e.key(),
+							"Processing auth chain event from /event_auth"
+						);
 						self.services
 							.outlier
 							.add_pdu_outlier(e.key(), &auth_val, Some(room_id));
@@ -295,12 +324,36 @@ where
 							if check_room_id(room_id, &parsed).is_ok() {
 								// Cascade rejection: if any of this auth event's own
 								// auth_events are rejected, mark it rejected too.
-								let has_rejected_auth =
-									futures::stream::iter(parsed.auth_events())
-										.any(|aid| {
-											self.services.pdu_metadata.is_event_rejected(aid)
-										})
-										.await;
+								let auth_event_ids: Vec<String> =
+									parsed.auth_events().map(ToString::to_string).collect();
+								info!(
+									target: "state_res_debug",
+									auth_event_id = %e.key(),
+									auth_deps = ?auth_event_ids,
+									"Checking cascade rejection for auth chain event"
+								);
+								let mut has_rejected_auth = false;
+								for aid_str in &auth_event_ids {
+									if let Ok(aid) = <&EventId>::try_from(aid_str.as_str()) {
+										if self.services.pdu_metadata.is_event_rejected(aid).await
+										{
+											info!(
+												target: "state_res_debug",
+												auth_event_id = %e.key(),
+												rejected_dep = %aid,
+												"Found rejected auth dependency"
+											);
+											has_rejected_auth = true;
+											break;
+										}
+									}
+								}
+								info!(
+									target: "state_res_debug",
+									auth_event_id = %e.key(),
+									%has_rejected_auth,
+									"Cascade rejection check result"
+								);
 								if has_rejected_auth {
 									info!(
 										target: "state_res_debug",
@@ -312,11 +365,22 @@ where
 								e.insert(parsed);
 							}
 						}
+					} else {
+						info!(
+							target: "state_res_debug",
+							auth_event_id = %auth_eid_str,
+							"Auth chain event already known locally, skipping"
+						);
 					}
 				}
 			}
 		} else {
-			debug_warn!("Failed to fetch /event_auth for {event_id} from {origin}");
+			info!(
+				target: "state_res_debug",
+				event_id = %event_id,
+				%origin,
+				"Failed to fetch /event_auth"
+			);
 		}
 
 		// Re-check: are we still missing auth events after the fetch?
