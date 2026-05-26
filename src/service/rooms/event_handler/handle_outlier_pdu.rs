@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug, debug_info, err, implement, info, state_res,
-	trace, warn,
+	Err, Event, PduEvent, Result, debug, debug_info, err, implement, info, state_res, trace, warn,
 };
 use futures::future::ready;
 use ruma::{
@@ -35,6 +34,12 @@ where
 		self.services.timeline.get_pdu_json(event_id).await,
 	) {
 		if pdu.room_id_or_hash().as_deref() == Some(room_id) {
+			info!(
+				target: "state_res_debug",
+				%event_id,
+				event_type = ?pdu.kind,
+				"handle_outlier_pdu: early return, event already known"
+			);
 			return Ok((pdu, json));
 		}
 	}
