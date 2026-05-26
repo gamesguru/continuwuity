@@ -207,6 +207,11 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			}
 
 			if all_auth_accepted {
+				// All auth deps are satisfied: clear the rejection flag so
+				// upgrade_outlier_pdu won't bail early with "Event has been rejected".
+				info!("Un-rejecting event {event_id}: all auth events now accepted");
+				self.services.pdu_metadata.unmark_event_rejected(event_id);
+
 				// The auth chain is finally valid! Bypass handle_outlier_pdu (we already
 				// verified sigs/hashes when we first saved it) and push to timeline
 				// upgrade.
