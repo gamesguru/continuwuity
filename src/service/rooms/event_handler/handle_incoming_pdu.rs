@@ -182,21 +182,9 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			return Ok(Some(pdu_id));
 		}
 	}
-	// 2. NATIVE RETRY INTERCEPTION: If it's a known outlier that was rejected, check local auth.
-	else if is_timeline_event
-		&& self
-			.services
-			.outlier
-			.get_pdu_outlier(event_id)
-			.await
-			.is_ok()
-	{
-		let pdu = self
-			.services
-			.outlier
-			.get_pdu_outlier(event_id)
-			.await
-			.unwrap();
+	// NATIVE RETRY INTERCEPTION: If it's a known outlier that was rejected, check local auth.
+	else if is_timeline_event && self.services.outlier.get_pdu_outlier(event_id).await.is_ok() {
+		let pdu = self.services.outlier.get_pdu_outlier(event_id).await.unwrap();
 		if !self.services.pdu_metadata.is_event_accepted(event_id).await {
 			// Fast local auth check: are all its dependencies NOW locally accepted?
 			let mut all_auth_accepted = true;
@@ -222,14 +210,8 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 					.get_outlier_pdu_json(event_id)
 					.await
 					.unwrap_or(value.clone());
-				return Box::pin(self.process_timeline_upgrade(
-					pdu,
-					val,
-					&create_event,
-					origin,
-					room_id,
-				))
-				.await;
+				return Box::pin(self.process_timeline_upgrade(pdu, val, &create_event, origin, room_id))
+					.await;
 			} else {
 				// Still missing/rejected dependencies. Return Ok(None) to ACK the transaction
 				// instantly WITHOUT triggering network fetches or state resolution lockups.
