@@ -252,6 +252,16 @@ where
 				"Found auth event locally for outlier"
 			);
 			auth_events.insert(aid.to_owned(), auth_event);
+		} else if let Ok(auth_event) = self.services.outlier.get_pdu_outlier(aid).await {
+			check_room_id(room_id, &auth_event)?;
+			info!(
+				target: "state_res_debug",
+				%event_id,
+				auth_event_id = %aid,
+				event_type = ?auth_event.kind,
+				"Found auth event in outlier store"
+			);
+			auth_events.insert(aid.to_owned(), auth_event);
 		} else {
 			info!(
 				target: "state_res_debug",
