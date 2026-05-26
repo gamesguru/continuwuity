@@ -307,11 +307,22 @@ impl Service {
 		let iv = if !is_flush {
 			vec![(msg.queue_id, msg.event)]
 		} else {
-			self.db
+			let mut reqs = self
+				.db
 				.queued_requests(&msg.dest)
 				.take(DEQUEUE_LIMIT)
 				.collect::<Vec<_>>()
-				.await
+				.await;
+
+			let reliable_reqs = self
+				.db
+				.queued_reliable_requests(&msg.dest)
+				.take(DEQUEUE_LIMIT.saturating_sub(reqs.len()))
+				.collect::<Vec<_>>()
+				.await;
+
+			reqs.extend(reliable_reqs);
+			reqs
 		};
 
 		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {

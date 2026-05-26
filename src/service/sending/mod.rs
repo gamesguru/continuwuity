@@ -256,6 +256,19 @@ impl Service {
 		})
 	}
 
+	#[tracing::instrument(skip(self, server, serialized), level = "debug")]
+	pub fn send_reliable_edu_server(&self, server: &ServerName, serialized: EduBuf) -> Result {
+		let dest = Destination::Federation(server.to_owned());
+		let event = SendingEvent::Edu(serialized);
+		let _cork = self.db.db.cork();
+		let keys = self.db.queue_reliable_requests(once((&event, &dest)));
+		self.dispatch(Msg {
+			dest,
+			event,
+			queue_id: keys.into_iter().next().expect("request queue key"),
+		})
+	}
+
 	#[tracing::instrument(skip(self, room_id, serialized), level = "debug")]
 	pub async fn send_edu_room(&self, room_id: &RoomId, serialized: EduBuf) -> Result {
 		let servers = self

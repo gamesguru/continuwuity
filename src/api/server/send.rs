@@ -187,6 +187,8 @@ async fn process_inbound_transaction(
 		.map(|edu| edu.json().get())
 		.map(serde_json::from_str)
 		.filter_map(Result::ok)
+		.collect::<Vec<_>>()
+		.into_iter()
 		.stream();
 
 	let pdu_ids: Vec<_> = body
@@ -211,7 +213,20 @@ async fn process_inbound_transaction(
 		.metrics
 		.transactions_processed
 		.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let results = match handle(&services, &client, body.origin(), pdus, edus).await {
+
+	let edu_origin = body.origin().to_owned();
+	let edu_client = client;
+	services.server.runtime().spawn(async move {
+		edus.for_each_concurrent(automatic_width(), |edu| {
+			let services = &services;
+			let client = &edu_client;
+			let origin = &edu_origin;
+			async move { handle_edu(services, client, origin, edu).await }
+		})
+		.await;
+	});
+
+	let results = match handle(&services, &client, body.origin(), pdus).await {
 		| Ok(results) => results,
 		| Err(err) => {
 			fail_federation_txn(services, &txn_key, &sender, err);
@@ -334,17 +349,7 @@ async fn handle(
 	client: &IpAddr,
 	origin: &ServerName,
 	pdus: impl Stream<Item = Pdu> + Send,
-	edus: impl Stream<Item = Edu> + Send,
 ) -> std::result::Result<ResolvedMap, TransactionError> {
-	// Process EDUs first — they are lightweight DB writes (to-device messages,
-	// receipts, typing, etc.) that must be persisted even if the server is
-	// shutting down during the heavier PDU processing phase. If we processed
-	// PDUs first, a ShuttingDown error would cause the ? to skip EDU processing
-	// entirely, silently dropping to-device messages.
-	edus.for_each_concurrent(automatic_width(), |edu| handle_edu(services, client, origin, edu))
-		.boxed()
-		.await;
-
 	// group pdus by room
 	let pdus = pdus
 		.collect()

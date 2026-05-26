@@ -276,6 +276,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
+		name: "federation_outbound_to_device",
+		val_size_hint: Some(128),
+		..descriptor::RANDOM
+	},
+	Descriptor {
 		name: "serverroomids",
 		..descriptor::RANDOM_SMALL
 	},
