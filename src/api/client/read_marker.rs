@@ -69,8 +69,8 @@ pub(crate) async fn set_read_marker_route(
 					BTreeMap::from_iter([(
 						sender_user.to_owned(),
 						ruma::events::receipt::Receipt {
-								ts: Some(MilliSecondsSinceUnixEpoch::now()),
-								thread: ReceiptThread::Unthreaded,
+							ts: Some(MilliSecondsSinceUnixEpoch::now()),
+							thread: ReceiptThread::Unthreaded,
 						},
 					)]),
 				)]),

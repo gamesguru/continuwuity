@@ -107,6 +107,15 @@ pub(super) async fn pre_fetch_state_res_deps(
 		.await;
 
 	let skipped = all_auth_count.saturating_sub(missing.len());
+	if missing.len() > 50 {
+		warn!(
+			total = all_auth_count,
+			missing = missing.len(),
+			"DAG hole too large. Bailing to background healer."
+		);
+		return;
+	}
+
 	if !missing.is_empty() {
 		info!(
 			total = all_auth_count,

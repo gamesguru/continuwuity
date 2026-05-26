@@ -214,15 +214,18 @@ async fn process_inbound_transaction(
 		.transactions_processed
 		.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-	// Process EDUs first — they are lightweight DB writes (to-device messages,
-	// receipts, typing, etc.) that must be persisted even if the server is
-	// shutting down during the heavier PDU processing phase. If we processed
-	// PDUs first, a ShuttingDown error would cause the ? to skip EDU processing
-	// entirely, silently dropping to-device messages.
-	edus.for_each_concurrent(automatic_width(), |edu| {
-		handle_edu(&services, &client, body.origin(), edu)
-	})
-	.await;
+	// Spawn EDU processing into background so PDU pipeline starts immediately.
+	// EDUs are lightweight DB writes (to-device, receipts, typing) that don't
+	// need to block the transaction response.
+	let edu_services = services.clone();
+	let edu_client = client.clone();
+	let edu_origin = body.origin().to_owned();
+	services.server.runtime().spawn(async move {
+		edus.for_each_concurrent(automatic_width(), |edu| {
+			handle_edu(&edu_services, &edu_client, &edu_origin, edu)
+		})
+		.await;
+	});
 
 	let results = match handle(&services, &client, body.origin(), pdus).await {
 		| Ok(results) => results,
