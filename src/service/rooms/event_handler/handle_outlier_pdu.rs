@@ -368,6 +368,51 @@ where
 									self.services.pdu_metadata.mark_event_rejected(e.key());
 								}
 								e.insert(parsed);
+							} else {
+								info!(
+									target: "state_res_debug",
+									auth_event_id = %e.key(),
+									"Auth chain event failed check_room_id"
+								);
+							}
+						} else {
+							// PduEvent deserialization failed, but we can still
+							// extract auth_events from the raw canonical JSON
+							// to perform cascade rejection.
+							info!(
+								target: "state_res_debug",
+								auth_event_id = %e.key(),
+								"Auth chain event failed to parse as PduEvent; checking cascade via raw JSON"
+							);
+							if let Some(raw_auth) = auth_val
+								.get("auth_events")
+								.and_then(|v| v.as_array())
+							{
+								let mut has_rejected_auth = false;
+								for raw_aid in raw_auth {
+									if let Some(aid_str) = raw_aid.as_str() {
+										if let Ok(aid) = <&EventId>::try_from(aid_str) {
+											if self.services.pdu_metadata.is_event_rejected(aid).await {
+												info!(
+													target: "state_res_debug",
+													auth_event_id = %e.key(),
+													rejected_dep = %aid,
+													"Found rejected auth dependency (raw JSON path)"
+												);
+												has_rejected_auth = true;
+												break;
+											}
+										}
+									}
+								}
+								if has_rejected_auth {
+									info!(
+										target: "state_res_debug",
+										auth_event_id = %e.key(),
+										"Auth event from /event_auth depends on rejected event; marking rejected (raw JSON path)"
+									);
+									self.services.pdu_metadata.mark_event_rejected(e.key());
+								}
 							}
 						}
 					} else {
