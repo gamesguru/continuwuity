@@ -316,6 +316,19 @@ jobs:
           database_url: ${{ secrets.C10Y_POSTGRES_URL }}
           setup_tables: false
           rebuild_db: false
+          # Direct-ingest inputs (used as fallback when git sync fails)
+          results_file: tests/test_results/complement/test_results.jsonl
+          commit_hash: ${{ github.event.pull_request.head.sha || github.sha }}
+          branch: ${{ github.head_ref || github.ref_name }}
+          arch: ${{ matrix.arch }}
+          os: ${{ matrix.os }}
+          profile: ${{ matrix.profile }}
+          room_version: ${{ matrix.room_version }}
+          version_string: ${{ steps.version.outputs.version }}
+          features: ${{ env.FEATURES }}
+          pass_count: ${{ steps.results.outputs.pass || 0 }}
+          fail_count: ${{ steps.results.outputs.fail || 0 }}
+          skip_count: ${{ steps.results.outputs.skip || 0 }}
 
       - name: Query updated Postgres stats
         env:
