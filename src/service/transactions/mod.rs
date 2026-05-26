@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use conduwuit::{Error, Result, SyncRwLock, debug_warn, warn};
+use conduwuit::{Error, Result, SyncRwLock, debug_warn, info, warn};
 use database::{Handle, Map};
 use ruma::{
 	DeviceId, OwnedServerName, OwnedTransactionId, TransactionId, UserId,
@@ -202,6 +202,7 @@ impl Service {
 				.max_concurrent_inbound_transactions_per_origin
 		{
 			info!(
+				target: "txns_debug",
 				origin = ?key.0,
 				active = active_from_origin,
 				max = self.services.config.max_concurrent_inbound_transactions_per_origin,
