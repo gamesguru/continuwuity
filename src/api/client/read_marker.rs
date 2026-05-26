@@ -211,11 +211,7 @@ pub(crate) async fn create_receipt_route(
 				if let Some(old_event_id) = services
 					.rooms
 					.read_receipt
-					.readreceipt_get(
-						&body.room_id,
-						sender_user,
-						Some(&ReceiptThread::Unthreaded),
-					)
+					.readreceipt_get(&body.room_id, sender_user, Some(&ReceiptThread::Unthreaded))
 					.await
 				{
 					if let Ok(PduCount::Normal(old_count)) =
@@ -278,10 +274,11 @@ pub(crate) async fn create_receipt_route(
 				.unwrap_or(0);
 
 			if new_count > old_count {
-				services
-					.rooms
-					.read_receipt
-					.private_read_set(&body.room_id, sender_user, new_count);
+				services.rooms.read_receipt.private_read_set(
+					&body.room_id,
+					sender_user,
+					new_count,
+				);
 			}
 		},
 		| _ => {

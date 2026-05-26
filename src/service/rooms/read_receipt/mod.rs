@@ -58,7 +58,9 @@ impl Service {
 		user_id: &UserId,
 		target_thread: Option<&ruma::events::receipt::ReceiptThread>,
 	) -> Option<OwnedEventId> {
-		self.db.readreceipt_get(room_id, user_id, target_thread).await
+		self.db
+			.readreceipt_get(room_id, user_id, target_thread)
+			.await
 	}
 
 	/// Replaces the previous read receipt.
