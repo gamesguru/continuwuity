@@ -406,6 +406,13 @@ pub struct Config {
 	#[serde(default = "default_max_concurrent_inbound_transactions")]
 	pub max_concurrent_inbound_transactions: usize,
 
+	/// Max concurrent global outbound requests. Defaults to 2048 to prevent
+	/// offline or slow federated servers from tying up all outbound permits.
+	///
+	/// default: 2048
+	#[serde(default = "default_max_concurrent_outbound_requests")]
+	pub max_concurrent_outbound_requests: usize,
+
 	/// How many concurrent incoming federation transactions the server is
 	/// willing to accept from a single domain.
 	///
@@ -2930,6 +2937,8 @@ fn default_pusher_idle_timeout() -> u64 { 15 }
 fn default_max_fetch_prev_events() -> u16 { 192_u16 }
 
 fn default_max_concurrent_inbound_transactions() -> usize { 150 }
+
+fn default_max_concurrent_outbound_requests() -> usize { 2048 }
 
 fn default_max_concurrent_inbound_transactions_per_origin() -> usize { 10 }
 

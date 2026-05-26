@@ -105,13 +105,12 @@ pub(crate) async fn send_transaction_message_route(
 			wait_for_result(receiver).await
 		},
 		| Err(e) => {
-			if matches!(e, Error::BadRequest(ErrorKind::LimitExceeded { .. }, _)) {
+			if matches!(e, Error::BadRequest(LimitExceeded { .. }, _)) {
 				// We're rejecting the transaction due to load.
 				// Process the EDUs anyway so we don't miss ephemeral keys that might otherwise
 				// be dropped by the sender if they eventually give up retrying!
 				let edus: Vec<_> = body.body.edus.clone();
 				let origin = body.origin().to_owned();
-				let services_clone = services.clone();
 
 				services.server.runtime().spawn(async move {
 					let edus_stream = edus
@@ -123,7 +122,7 @@ pub(crate) async fn send_transaction_message_route(
 
 					edus_stream
 						.for_each_concurrent(automatic_width(), |edu| {
-							handle_edu(&services_clone, &client, &origin, edu)
+							handle_edu(&services, &client, &origin, edu)
 						})
 						.await;
 				});

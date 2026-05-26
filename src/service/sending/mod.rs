@@ -104,7 +104,9 @@ impl crate::Service for Service {
 				federation: args.depend::<federation::Service>("federation"),
 			},
 			channels: (0..num_senders).map(|_| loole::unbounded()).collect(),
-			semaphore: Arc::new(tokio::sync::Semaphore::new(128)),
+			semaphore: Arc::new(tokio::sync::Semaphore::new(
+				args.server.config.max_concurrent_outbound_requests,
+			)),
 		}))
 	}
 
