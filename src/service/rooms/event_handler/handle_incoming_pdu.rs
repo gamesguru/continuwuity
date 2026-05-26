@@ -197,16 +197,24 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			.await
 			.unwrap();
 		if !self.services.pdu_metadata.is_event_accepted(event_id).await {
-			// Fast local auth check: are all its dependencies NOW locally accepted?
-			let mut all_auth_accepted = true;
+			// Fast local check: are all auth events AND prev_events NOW in the timeline?
+			let mut all_deps_satisfied = true;
 			for aid in pdu.auth_events() {
 				if !self.services.pdu_metadata.is_event_accepted(aid).await {
-					all_auth_accepted = false;
+					all_deps_satisfied = false;
 					break;
 				}
 			}
+			if all_deps_satisfied {
+				for prev_id in pdu.prev_events() {
+					if self.services.timeline.get_pdu_id(prev_id).await.is_err() {
+						all_deps_satisfied = false;
+						break;
+					}
+				}
+			}
 
-			if all_auth_accepted {
+			if all_deps_satisfied {
 				// All auth deps are satisfied: clear the rejection flag so
 				// upgrade_outlier_pdu won't bail early with "Event has been rejected".
 				info!("Un-rejecting event {event_id}: all auth events now accepted");

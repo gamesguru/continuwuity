@@ -559,14 +559,33 @@ where
 				state = Some(fetched_state);
 			},
 			| Ok(None) | Err(_) => {
-				// Federation fetch failed — fall back to current room state.
-				// The auth check at step 11 will still reject invalid events;
-				// we just need a base state to check against rather than giving
-				// up entirely (which would reject valid events like sentinels
-				// that follow rejected events in the same transaction).
+				// Check if prev_events are actually missing from the timeline.
+				// If they are, we cannot determine the correct state-at-event.
+				// Rather than using fallback state (which would accept the event
+				// prematurely), mark it as rejected so the unreject path can
+				// re-evaluate it when the missing prev_events arrive.
+				let any_prev_missing = futures::stream::iter(incoming_pdu.prev_events())
+					.any(|prev_id| async move {
+						self.services.timeline.get_pdu_id(prev_id).await.is_err()
+					})
+					.await;
+
+				if any_prev_missing {
+					info!(
+						event_id = %incoming_pdu.event_id,
+						"Rejecting event: prev_events missing from timeline and /state_ids fetch failed"
+					);
+					self.services
+						.pdu_metadata
+						.mark_event_rejected(incoming_pdu.event_id());
+					return Ok(HashMap::new());
+				}
+
+				// All prev_events exist but state hashes not computed — safe to
+				// fall back to current room state for the auth check.
 				debug!(
 					event_id = %incoming_pdu.event_id,
-					"fetch_state failed; falling back to current room state"
+					"fetch_state failed but prev_events present; falling back to current room state"
 				);
 			},
 		}
