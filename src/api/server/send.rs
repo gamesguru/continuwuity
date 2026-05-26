@@ -85,17 +85,17 @@ pub(crate) async fn send_transaction_message_route(
 	// Atomically check cache, join active, or start new transaction
 	match services
 		.transactions
-		.get_or_start_federation_txn(txn_key.clone())?
+		.get_or_start_federation_txn(txn_key.clone())
 	{
-		| FederationTxnState::Cached(response) => {
+		| Ok(FederationTxnState::Cached(response)) => {
 			// Already responded
 			Ok(response)
 		},
-		| FederationTxnState::Active(receiver) => {
+		| Ok(FederationTxnState::Active(receiver)) => {
 			// Another thread is processing
 			wait_for_result(receiver).await
 		},
-		| FederationTxnState::Started { receiver, sender } => {
+		| Ok(FederationTxnState::Started { receiver, sender }) => {
 			// We're the first, spawn the processing task
 			services
 				.server
@@ -103,6 +103,33 @@ pub(crate) async fn send_transaction_message_route(
 				.spawn(process_inbound_transaction(services, body, client, txn_key, sender));
 			// and wait for it
 			wait_for_result(receiver).await
+		},
+		| Err(e) => {
+			if matches!(e, Error::BadRequest(ErrorKind::LimitExceeded { .. }, _)) {
+				// We're rejecting the transaction due to load.
+				// Process the EDUs anyway so we don't miss ephemeral keys that might otherwise
+				// be dropped by the sender if they eventually give up retrying!
+				let edus: Vec<_> = body.body.edus.clone();
+				let origin = body.origin().to_owned();
+				let services_clone = services.clone();
+
+				services.server.runtime().spawn(async move {
+					let edus_stream = edus
+						.into_iter()
+						.map(|edu| edu.into_json().get().to_owned())
+						.map(|json_str| serde_json::from_str(&json_str))
+						.filter_map(Result::ok)
+						.stream();
+
+					edus_stream
+						.for_each_concurrent(automatic_width(), |edu| {
+							handle_edu(&services_clone, &client, &origin, edu)
+						})
+						.await;
+				});
+			}
+
+			Err(e)
 		},
 	}
 }
