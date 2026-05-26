@@ -536,17 +536,22 @@ where
 		}
 	}
 
+	let unrolled_prev_events = self
+		.unroll_rejected_prev_events(incoming_pdu.prev_events())
+		.await;
+
 	// Local State Resolution: Try to resolve state locally using prev_events
 	info!(
-		"Resolving state locally for incoming PDU (prev_events count: {})",
-		incoming_pdu.prev_events().count()
+		"Resolving state locally for incoming PDU (prev_events count: {}, unrolled count: {})",
+		incoming_pdu.prev_events().count(),
+		unrolled_prev_events.len(),
 	);
 
-	let mut state = if incoming_pdu.prev_events().count() == 1 {
-		self.state_at_incoming_degree_one(incoming_pdu, room_id)
+	let mut state = if unrolled_prev_events.len() == 1 {
+		self.state_at_incoming_degree_one(&unrolled_prev_events[0], room_id)
 			.await?
 	} else {
-		self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id)
+		self.state_at_incoming_resolved(unrolled_prev_events.iter(), room_id, room_version_id)
 			.await?
 	};
 

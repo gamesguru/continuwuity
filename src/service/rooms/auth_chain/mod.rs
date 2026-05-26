@@ -69,7 +69,7 @@ where
 }
 
 #[implement(Service)]
-#[tracing::instrument(name = "auth_chain", level = "debug", skip_all)]
+#[tracing::instrument(name = "auth_chain", level = "debug", skip_all, fields(room_id = %room_id))]
 pub async fn get_auth_chain<'a, I>(
 	&'a self,
 	room_id: &RoomId,

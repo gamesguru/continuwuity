@@ -19,19 +19,11 @@ use crate::rooms::short::ShortStateHash;
 #[implement(super::Service)]
 // request and build the state from a known point and resolve if > 1 prev_event
 #[tracing::instrument(name = "state", level = "debug", skip_all)]
-pub(super) async fn state_at_incoming_degree_one<Pdu>(
+pub(super) async fn state_at_incoming_degree_one(
 	&self,
-	incoming_pdu: &Pdu,
+	prev_event: &OwnedEventId,
 	room_id: &RoomId,
-) -> Result<Option<HashMap<u64, OwnedEventId>>>
-where
-	Pdu: Event + Send + Sync,
-{
-	let prev_event = incoming_pdu
-		.prev_events()
-		.next()
-		.expect("at least one prev_event");
-
+) -> Result<Option<HashMap<u64, OwnedEventId>>> {
 	let Ok(prev_pdu) = self
 		.services
 		.timeline
@@ -81,18 +73,15 @@ where
 
 #[implement(super::Service)]
 #[tracing::instrument(name = "state", level = "debug", skip_all)]
-pub(super) async fn state_at_incoming_resolved<Pdu>(
+pub(super) async fn state_at_incoming_resolved(
 	&self,
-	incoming_pdu: &Pdu,
+	unrolled_prev_events: impl Iterator<Item = &OwnedEventId> + Send,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
-) -> Result<Option<HashMap<u64, OwnedEventId>>>
-where
-	Pdu: Event + Send + Sync,
-{
+) -> Result<Option<HashMap<u64, OwnedEventId>>> {
 	trace!("Calculating extremity statehashes...");
-	let Ok(extremity_sstatehashes) = incoming_pdu
-		.prev_events()
+	let Ok(extremity_sstatehashes) = unrolled_prev_events
+		.into_iter()
 		.try_stream()
 		.broad_and_then(|prev_eventid| {
 			self.services

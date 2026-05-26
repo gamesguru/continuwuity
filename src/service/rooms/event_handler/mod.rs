@@ -1,3 +1,5 @@
+pub mod unroll_rejected_prev_events;
+
 mod acl_check;
 pub(crate) mod extremities;
 mod fetch_and_handle_outliers;

@@ -221,7 +221,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 					.outlier
 					.get_outlier_pdu_json(event_id)
 					.await
-					.unwrap_or(value.clone());
+					.unwrap_or_else(|_| value.clone());
 				return Box::pin(self.process_timeline_upgrade(
 					pdu,
 					val,
