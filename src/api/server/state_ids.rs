@@ -38,6 +38,13 @@ pub(crate) async fn get_room_state_ids_route(
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		event_id = %body.event_id,
+		"Serving state_ids request"
+	);
+
 	let is_extremity = services
 		.rooms
 		.state

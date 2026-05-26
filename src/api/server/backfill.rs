@@ -53,6 +53,14 @@ pub(crate) async fn get_backfill_route(
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
 
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		limit,
+		from = ?body.v,
+		"Serving backfill request"
+	);
+
 	let from = body
 		.v
 		.iter()

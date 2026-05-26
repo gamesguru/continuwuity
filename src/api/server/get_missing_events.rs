@@ -48,6 +48,15 @@ pub(crate) async fn get_missing_events_route(
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
 
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		limit,
+		latest = body.latest_events.len(),
+		earliest = body.earliest_events.len(),
+		"Serving get_missing_events request"
+	);
+
 	let room_version = services.rooms.state.get_room_version(&body.room_id).await?;
 
 	let mut queue: VecDeque<OwnedEventId> = VecDeque::from(body.latest_events.clone());

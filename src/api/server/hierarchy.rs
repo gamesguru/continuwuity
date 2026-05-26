@@ -36,6 +36,13 @@ pub(crate) async fn get_hierarchy_route(
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		suggested_only = body.suggested_only,
+		"Serving hierarchy request"
+	);
+
 	let room_id = &body.room_id;
 	let suggested_only = body.suggested_only;
 	let ref identifier = Identifier::ServerName(body.origin());

@@ -37,6 +37,13 @@ pub(crate) async fn get_room_state_route(
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		event_id = %body.event_id,
+		"Serving full room state request"
+	);
+
 	// For current extremities (DAG tips), prefer the room's current
 	// shortstatehash over the per-event pdu_shortstatehash, which may be
 	// stale after force-set or state updates.

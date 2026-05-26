@@ -48,6 +48,13 @@ pub(crate) async fn get_event_route(
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
+	info!(
+		origin = body.origin().as_str(),
+		event_id = %body.event_id,
+		room_id = %room_id,
+		"Serving single event request"
+	);
+
 	let event_json = services
 		.rooms
 		.timeline
