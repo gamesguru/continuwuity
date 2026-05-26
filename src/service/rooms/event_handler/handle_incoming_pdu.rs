@@ -207,6 +207,8 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			}
 			if all_deps_satisfied {
 				for prev_id in pdu.prev_events() {
+					// Prev must exist in the timeline (not just as outlier)
+					// for the unreject upgrade to have the state it needs.
 					if self.services.timeline.get_pdu_id(prev_id).await.is_err() {
 						all_deps_satisfied = false;
 						break;

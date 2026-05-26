@@ -559,21 +559,31 @@ where
 				state = Some(fetched_state);
 			},
 			| Ok(None) | Err(_) => {
-				// Check if prev_events are actually missing from the timeline.
-				// If they are, we cannot determine the correct state-at-event.
-				// Rather than using fallback state (which would accept the event
-				// prematurely), mark it as rejected so the unreject path can
-				// re-evaluate it when the missing prev_events arrive.
-				let any_prev_missing = futures::stream::iter(incoming_pdu.prev_events())
+				// Check if prev_events are completely unknown — not in the
+				// timeline AND not even stored as outliers. If they are, we
+				// cannot determine the correct state-at-event. Mark as
+				// rejected so the unreject path can re-evaluate later.
+				//
+				// Events whose prev_events reference KNOWN events (even
+				// rejected outliers) can safely fall through to the current
+				// room state fallback — the auth check will still reject
+				// invalid events.
+				let any_prev_unknown = futures::stream::iter(incoming_pdu.prev_events())
 					.any(|prev_id| async move {
 						self.services.timeline.get_pdu_id(prev_id).await.is_err()
+							&& self
+								.services
+								.outlier
+								.get_pdu_outlier(prev_id)
+								.await
+								.is_err()
 					})
 					.await;
 
-				if any_prev_missing {
+				if any_prev_unknown {
 					info!(
 						event_id = %incoming_pdu.event_id,
-						"Rejecting event: prev_events missing from timeline and /state_ids fetch failed"
+						"Rejecting event: prev_events completely unknown and /state_ids fetch failed"
 					);
 					self.services
 						.pdu_metadata
