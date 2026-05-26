@@ -64,12 +64,13 @@ pub(super) async fn load_left_room(
 	};
 
 	// return early if:
-	// - this is an initial sync and the room filter doesn't include leaves, or
-	// - this is an incremental sync, and we've already synced the leave, and the
-	//   room filter doesn't include leaves
-	if last_sync_end_count.is_none_or(|last_sync_end_count| last_sync_end_count >= left_count)
-		&& !filter.room.include_leave
-	{
+	// - this is an incremental sync and we've already synced the leave, or
+	// - this is an initial sync and the room filter doesn't include leaves
+	if let Some(last_sync_end_count) = last_sync_end_count {
+		if last_sync_end_count >= left_count {
+			return Ok(None);
+		}
+	} else if !filter.room.include_leave {
 		return Ok(None);
 	}
 

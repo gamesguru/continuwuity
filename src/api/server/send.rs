@@ -396,15 +396,26 @@ async fn build_local_dag(
 		// sort below. If there are multiple events with omitted prevs, they will be
 		// ordered by timestamp, then event ID. At that point though, it's unlikely to
 		// matter.
-		let prev_events = value
+		let mut prev_events: HashSet<OwnedEventId> = value
 			.get("prev_events")
 			.unwrap()
 			.as_array()
 			.unwrap()
 			.iter()
-			.map(|v| OwnedEventId::parse(v.as_str().unwrap()).unwrap())
+			.filter_map(|v| v.as_str())
+			.filter_map(|s| OwnedEventId::parse(s).ok())
 			.filter(|id| pdu_map.contains_key(id))
 			.collect();
+
+		if let Some(auth_events) = value.get("auth_events").and_then(|v| v.as_array()) {
+			prev_events.extend(
+				auth_events
+					.iter()
+					.filter_map(|v| v.as_str())
+					.filter_map(|s| OwnedEventId::parse(s).ok())
+					.filter(|id| pdu_map.contains_key(id)),
+			);
+		}
 
 		dag.insert(event_id.clone(), prev_events);
 		let origin_server_ts = value

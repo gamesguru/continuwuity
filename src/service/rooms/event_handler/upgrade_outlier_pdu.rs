@@ -84,6 +84,11 @@ where
 				self.services
 					.pdu_metadata
 					.mark_event_rejected(incoming_pdu.event_id());
+				self.services.outlier.add_pdu_outlier(
+					incoming_pdu.event_id(),
+					&val,
+					Some(room_id),
+				);
 				warn!(
 					"Event failed auth_check! Event ID: {}, Sender: {}, Type: {}",
 					incoming_pdu.event_id(),
@@ -148,6 +153,9 @@ where
 			self.services
 				.pdu_metadata
 				.mark_event_rejected(incoming_pdu.event_id());
+			self.services
+				.outlier
+				.add_pdu_outlier(incoming_pdu.event_id(), &val, Some(room_id));
 
 			warn!(
 				"Event failed auth_check! Event ID: {}, Sender: {}, Type: {}",
