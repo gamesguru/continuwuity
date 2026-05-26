@@ -2245,10 +2245,14 @@ pub(super) async fn get_remote_dag(
 						raw_pdu,
 						&room_version,
 					) {
-						| Ok((eid, val)) => {
+						| Ok((eid, mut val)) => {
 							warn!(
 								"get_remote_dag: PDU {eid} failed sig verify, storing as \
 								 rejected outlier: {e}"
+							);
+							val.insert(
+								"event_id".to_owned(),
+								ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),
 							);
 							self.services.rooms.outlier.add_pdu_outlier(
 								&eid,
