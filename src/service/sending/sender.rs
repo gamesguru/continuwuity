@@ -421,6 +421,12 @@ impl Service {
 					queued_dests.insert(dest);
 				}
 			}
+			let mut reliable_queued = self.db.queued_reliable_request_destinations().boxed();
+			while let Some(dest) = reliable_queued.next().await {
+				if self.shard_id(&dest) == id {
+					queued_dests.insert(dest);
+				}
+			}
 
 			if !queued_dests.is_empty() {
 				info!(

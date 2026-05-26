@@ -281,6 +281,29 @@ impl Data {
 			})
 	}
 
+	#[inline]
+	pub fn queued_reliable_request_destinations(
+		&self,
+	) -> impl Stream<Item = Destination> + Send + '_ {
+		self.federation_outbound_to_device
+			.raw_stream()
+			.ignore_err()
+			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+				| Ok((dest, _)) => Some(dest),
+				| Err(e) => {
+					self.federation_outbound_to_device.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted federation_outbound_to_device key ({} bytes): \
+						 key_hex={:02x?} val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
+					None
+				},
+			})
+	}
+
 	pub(super) fn set_latest_educount(&self, server_name: &ServerName, last_count: u64) {
 		self.servername_educount.raw_put(server_name, last_count);
 	}
