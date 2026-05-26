@@ -484,7 +484,6 @@ pub async fn process_timeline_upgrade(
 		room_id,
 		false,
 		true,
-		false, // force_local
 	))
 	.await
 }

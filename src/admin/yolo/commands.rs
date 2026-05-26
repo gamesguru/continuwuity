@@ -969,7 +969,6 @@ pub(super) async fn rescue_pdu(&self, event_id: OwnedEventId, force: bool) -> Re
 				&room_id,
 				true,  // skip_soft_fail: always lenient for admin rescue
 				true,  // is_forward_extremity
-				false, // force_local
 			),
 	)
 	.await?;
@@ -1578,7 +1577,6 @@ pub(super) async fn rescue_room(
 					true,
 					// is_forward_extremity
 					true,
-					false, // force_local
 				),
 		)
 		.await
@@ -2495,7 +2493,6 @@ pub(super) async fn fetch_pdu(
 				&room_id,
 				false,
 				true,
-				false, // force_local
 			),
 	)
 	.await?;
