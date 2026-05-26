@@ -284,11 +284,9 @@ where
 						&room_version_id,
 					) {
 					if let hash_map::Entry::Vacant(e) = auth_events.entry(auth_eid) {
-						self.services.outlier.add_pdu_outlier(
-							e.key(),
-							&auth_val,
-							Some(room_id),
-						);
+						self.services
+							.outlier
+							.add_pdu_outlier(e.key(), &auth_val, Some(room_id));
 
 						// Try to parse it and add to our auth_events map
 						if let Ok(parsed) = serde_json::from_value::<PduEvent>(
