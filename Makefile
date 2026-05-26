@@ -317,6 +317,13 @@ complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR
 	COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" COMPLEMENT_HOST_MOUNTS="$(PREFIX)/lib:$(PREFIX)/lib:ro$(if $(HOST_LIBS_MOUNTS),;$(HOST_LIBS_MOUNTS))" ./bin/complement $(COMPLEMENT_DIR)
 
 
+.PHONY: complement/clean
+complement/clean: ##H Force-remove all Complement Docker containers and networks
+	@echo "Cleaning up Complement docker resources..."
+	@docker ps -aq --filter "name=complement_" | xargs -r docker rm -f
+	@docker network ls -q --filter "name=complement_" | xargs -r docker network rm
+	@echo "Done."
+
 .PHONY: complement/stats
 complement/stats: ##H Check local test stats
 	@test -f "tests/test_results/complement/test_results.jsonl" || (echo "ERROR: tests/test_results/complement/test_results.jsonl does not exist" && exit 1)
