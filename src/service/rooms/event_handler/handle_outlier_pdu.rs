@@ -246,21 +246,78 @@ where
 		}
 	}
 
-	// Fetch any missing ones & reject invalid ones
+	// Fetch any missing ones via /event_auth (like Synapse's
+	// _load_or_fetch_auth_events_for_event)
 	let missing_auth_events = pdu_event
 		.auth_events()
 		.filter(|id| !auth_events.contains_key(*id))
 		.collect::<Vec<_>>();
 	if !missing_auth_events.is_empty() {
 		debug_info!(
-			"Missing {} auth events for outlier event {event_id}, suspending to fetch queue",
+			"Missing {} auth events for outlier event {event_id}, fetching via /event_auth",
 			missing_auth_events.len()
 		);
-		let missing = missing_auth_events
-			.into_iter()
+
+		// Try to fetch the auth chain from the origin server inline
+		if let Ok(response) = self
+			.services
+			.sending
+			.send_federation_request(
+				origin,
+				ruma::api::federation::authorization::get_event_authorization::v1::Request {
+					room_id: room_id.to_owned(),
+					event_id: event_id.to_owned(),
+				},
+			)
+			.await
+		{
+			debug_info!(
+				"Got {} auth chain events from /event_auth for {event_id}",
+				response.auth_chain.len()
+			);
+
+			// Persist them as outliers (like Synapse's _auth_and_persist_outliers)
+			for auth_pdu in &response.auth_chain {
+				if let Ok((auth_eid, auth_val)) =
+					conduwuit::matrix::event::gen_event_id_canonical_json(
+						auth_pdu,
+						&room_version_id,
+					) {
+					if let hash_map::Entry::Vacant(e) = auth_events.entry(auth_eid) {
+						self.services.outlier.add_pdu_outlier(
+							e.key(),
+							&auth_val,
+							Some(room_id),
+						);
+
+						// Try to parse it and add to our auth_events map
+						if let Ok(parsed) = serde_json::from_value::<PduEvent>(
+							serde_json::to_value(&auth_val).expect("CanonicalJsonObj is valid"),
+						) {
+							if check_room_id(room_id, &parsed).is_ok() {
+								e.insert(parsed);
+							}
+						}
+					}
+				}
+			}
+		} else {
+			debug_warn!("Failed to fetch /event_auth for {event_id} from {origin}");
+		}
+
+		// Re-check: are we still missing auth events after the fetch?
+		let still_missing: Vec<_> = pdu_event
+			.auth_events()
+			.filter(|id| !auth_events.contains_key(*id))
 			.map(ToOwned::to_owned)
-			.collect::<Vec<_>>();
-		return Err!(MissingAuthEvents(missing));
+			.collect();
+		if !still_missing.is_empty() {
+			debug_info!(
+				"Still missing {} auth events for {event_id} after /event_auth fetch",
+				still_missing.len()
+			);
+			return Err!(MissingAuthEvents(still_missing));
+		}
 	}
 	debug!("No missing auth events for outlier event {event_id}");
 

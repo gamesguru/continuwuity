@@ -36,20 +36,11 @@ use ruma::{
 
 use crate::{Dep, globals, rooms, sending, server_keys};
 
-pub struct FetchStateRequest {
-	pub origin: OwnedServerName,
-	pub room_id: OwnedRoomId,
-	pub event_id: OwnedEventId,
-	pub create_event: Arc<PduEvent>,
-}
-
 pub struct Service {
 	pub mutex_federation: RoomMutexMap,
 	pub federation_handletime: SyncRwLock<HandleTimeMap>,
 	pub bad_room_ratelimiter: SyncRwLock<HashMap<OwnedRoomId, (u32, Instant)>>,
 	pub peer_scorer: dashmap::DashMap<OwnedServerName, PeerStats>,
-	pub fetch_state_channel:
-		(loole::Sender<FetchStateRequest>, loole::Receiver<FetchStateRequest>),
 	services: Services,
 }
 
@@ -109,7 +100,6 @@ impl crate::Service for Service {
 			federation_handletime: HandleTimeMap::new().into(),
 			bad_room_ratelimiter: HashMap::new().into(),
 			peer_scorer: dashmap::DashMap::new(),
-			fetch_state_channel: loole::unbounded(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				sending: args.depend::<sending::Service>("sending"),
@@ -129,25 +119,6 @@ impl crate::Service for Service {
 				server: args.server.clone(),
 			},
 		}))
-	}
-
-	async fn worker(self: Arc<Self>) -> Result<()> {
-		let receiver = self.fetch_state_channel.1.clone();
-		while let Ok(req) = receiver.recv_async().await {
-			let self_ = Arc::clone(&self);
-			self.services.server.runtime().spawn(async move {
-				let _ = self_
-					.fetch_state(
-						&req.origin,
-						&*req.create_event,
-						&req.room_id,
-						&req.event_id,
-						false,
-					)
-					.await;
-			});
-		}
-		Ok(())
 	}
 
 	async fn memory_usage(&self, out: &mut (dyn Write + Send)) -> Result {

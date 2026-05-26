@@ -1,6 +1,5 @@
 use std::{
 	collections::{BTreeMap, hash_map},
-	sync::Arc,
 	time::Instant,
 };
 
@@ -346,29 +345,15 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	{
 		| Ok(res) => res,
 		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
-			// Enqueue the background DAG healer and return MissingAuthEvents
-			// immediately to unblock the network transaction. The sending server
-			// may not retry, but the healer will fetch the auth chain asynchronously
-			// and heal the graph.
+			// Auth events couldn't be fetched inline (handle_outlier_pdu already
+			// tried /event_auth). Save as outlier so it can be picked up later.
 			info!(
 				target: "state_res_debug",
 				event_id = %event_id,
 				count = missing.len(),
-				"Missing auth events; queuing background DAG healer fetch"
+				"Missing auth events after inline fetch; saving as outlier"
 			);
 
-			let req = crate::rooms::event_handler::FetchStateRequest {
-				origin: origin.to_owned(),
-				room_id: room_id.to_owned(),
-				event_id: event_id.to_owned(),
-				create_event: Arc::new(create_event.clone()), // assuming PduEvent is Clone
-			};
-
-			if let Err(e) = self.fetch_state_channel.0.send(req) {
-				warn!("Failed to queue DAG healer fetch: {e}");
-			}
-
-			// Save the PDU as an outlier so it can be picked up later if needed
 			self.services
 				.outlier
 				.add_pdu_outlier(event_id, &value, Some(room_id));
