@@ -132,29 +132,6 @@ pub async fn handle_incoming_pdu<'a>(
 	outlier_value
 		.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
 
-	// Circuit Breaker: fast-fail if this room is in backoff
-	if let Some(&(strikes, ref time)) = self.bad_room_ratelimiter.read().get(room_id) {
-		const BACKOFF_MIN: u64 = 60 * 5;
-		const BACKOFF_MAX: u64 = 60 * 60 * 24;
-		if conduwuit::utils::continue_exponential_backoff_secs(
-			BACKOFF_MIN,
-			BACKOFF_MAX,
-			time.elapsed(),
-			strikes,
-		) {
-			info!(
-				%room_id,
-				%event_id,
-				strikes,
-				reason = "PDU processing timed out during previous request",
-				"Circuit breaker active, rejecting PDU for remote retry"
-			);
-			return Err!(Request(Unknown(
-				"Room is in circuit-breaker backoff due to previous timeout, please retry later."
-			)));
-		}
-	}
-
 	let fut = self.handle_incoming_pdu_inner(
 		origin,
 		room_id,
@@ -166,25 +143,15 @@ pub async fn handle_incoming_pdu<'a>(
 
 	let pdu_timeout = self.services.server.config.pdu_receive_timeout;
 	match Box::pin(tokio::time::timeout(std::time::Duration::from_secs(pdu_timeout), fut)).await {
-		| Ok(res) => {
-			if res.is_ok() {
-				// Clear the circuit breaker on success
-				self.bad_room_ratelimiter.write().remove(room_id);
-			}
-			res
-		},
+		| Ok(res) => res,
 		| Err(_) => {
 			warn!(
 				%event_id,
 				%room_id,
 				%origin,
 				pdu_timeout,
-				"PDU processing timed out, storing as outlier and tripping circuit breaker"
+				"PDU processing timed out, storing as outlier"
 			);
-
-			let mut lock = self.bad_room_ratelimiter.write();
-			let strikes = lock.get(room_id).map_or(1, |&(s, _)| s.saturating_add(1));
-			lock.insert(room_id.to_owned(), (strikes, Instant::now()));
 
 			// Store the event data as an outlier so subsequent events
 			// referencing it as a prev_event have something to build on.
@@ -209,12 +176,65 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	is_timeline_event: bool,
 	room_version_override: Option<&'a ruma::RoomVersionId>,
 ) -> Result<Option<RawPduId>> {
-	// Skip the PDU if we already have it as a timeline event, AND it is accepted.
-	// If it was previously soft-failed or rejected, we want to re-evaluate it
-	// now that it's being re-sent over federation (it might pass auth this time).
+	// Skip if it's already an accepted timeline event.
 	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
 		if self.services.pdu_metadata.is_event_accepted(event_id).await {
 			return Ok(Some(pdu_id));
+		}
+	}
+	// 2. NATIVE RETRY INTERCEPTION: If it's a known outlier that was rejected, check local auth.
+	else if is_timeline_event
+		&& self
+			.services
+			.outlier
+			.get_pdu_outlier(event_id)
+			.await
+			.is_ok()
+	{
+		let pdu = self
+			.services
+			.outlier
+			.get_pdu_outlier(event_id)
+			.await
+			.unwrap();
+		if !self.services.pdu_metadata.is_event_accepted(event_id).await {
+			// Fast local auth check: are all its dependencies NOW locally accepted?
+			let mut all_auth_accepted = true;
+			for aid in pdu.auth_events() {
+				if !self.services.pdu_metadata.is_event_accepted(aid).await {
+					all_auth_accepted = false;
+					break;
+				}
+			}
+
+			if all_auth_accepted {
+				// The auth chain is finally valid! Bypass handle_outlier_pdu (we already
+				// verified sigs/hashes when we first saved it) and push to timeline
+				// upgrade.
+				let create_event = self
+					.services
+					.state_accessor
+					.room_state_get(room_id, &ruma::events::StateEventType::RoomCreate, "")
+					.await?;
+				let val = self
+					.services
+					.outlier
+					.get_outlier_pdu_json(event_id)
+					.await
+					.unwrap_or(value.clone());
+				return Box::pin(self.process_timeline_upgrade(
+					pdu,
+					val,
+					&create_event,
+					origin,
+					room_id,
+				))
+				.await;
+			} else {
+				// Still missing/rejected dependencies. Return Ok(None) to ACK the transaction
+				// instantly WITHOUT triggering network fetches or state resolution lockups.
+				return Ok(None);
+			}
 		}
 	}
 	if !pdu_fits(&mut value.clone()) {

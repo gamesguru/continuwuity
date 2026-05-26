@@ -69,13 +69,11 @@ pub(super) async fn load_left_room(
 		return Ok(None);
 	}
 
-	// return early if:
-	// - this is an initial sync and the room filter doesn't include leaves, or
-	// - this is an incremental sync, and we've already synced the leave, and the
-	//   room filter doesn't include leaves
-	if last_sync_end_count.is_none_or(|last_sync_end_count| last_sync_end_count >= left_count)
-		&& !filter.room.include_leave
-	{
+	if let Some(last_sync) = last_sync_end_count {
+		if last_sync >= left_count {
+			return Ok(None);
+		}
+	} else if !filter.room.include_leave {
 		return Ok(None);
 	}
 
@@ -333,14 +331,18 @@ async fn build_left_state_and_timeline(
 	// TODO: calculate incremental state for incremental syncs.
 	// always calculating initial state _works_ but returns more data and does
 	// more processing than strictly necessary.
-	let mut state = build_state_initial(
-		services,
-		syncing_user,
-		room_id,
-		timeline_start_shortstatehash,
-		lazily_loaded_members.as_ref(),
-	)
-	.await?;
+	let mut state = if timeline.limited || timeline.pdus.is_empty() {
+		build_state_initial(
+			services,
+			syncing_user,
+			room_id,
+			timeline_start_shortstatehash,
+			lazily_loaded_members.as_ref(),
+		)
+		.await?
+	} else {
+		Vec::new()
+	};
 
 	/*
 	remove membership events for the syncing user from state.

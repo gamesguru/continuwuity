@@ -2135,9 +2135,10 @@ pub(super) async fn get_remote_dag(
 
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
 	let path = format!("/tmp/remote-dag-{safe_room_id}-v{room_version}-{server}.jsonl");
-	let mut file = tokio::fs::File::create(&path)
+	let file = tokio::fs::File::create(&path)
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
+	let mut writer = tokio::io::BufWriter::new(file);
 
 	let mut seen = HashSet::<OwnedEventId>::new();
 	let mut queue = VecDeque::from(vec![start_event_id]);
@@ -2284,8 +2285,8 @@ pub(super) async fn get_remote_dag(
 			let export_val: serde_json::Map<String, serde_json::Value> =
 				serde_json::from_str(raw_pdu.get())?;
 			let json = serde_json::to_string(&export_val)?;
-			file.write_all(json.as_bytes()).await?;
-			file.write_all(b"\n").await?;
+			writer.write_all(json.as_bytes()).await?;
+			writer.write_all(b"\n").await?;
 			if print {
 				self.write_str(&format!("{json}\n")).await?;
 			}
@@ -2320,6 +2321,11 @@ pub(super) async fn get_remote_dag(
 		// Yield to avoid blocking
 		tokio::task::yield_now().await;
 	}
+
+	writer
+		.flush()
+		.await
+		.map_err(|e| err!(Database("Failed to flush writer: {e:?}")))?;
 
 	let elapsed = start_time.elapsed();
 	let (bf_whole, bf_frac) = if total > 0 {

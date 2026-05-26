@@ -163,7 +163,23 @@ async fn process_inbound_transaction(
 		.filter_map(Result::ok)
 		.stream();
 
-	debug!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction");
+	let pdu_ids: Vec<_> = body
+		.pdus
+		.iter()
+		.filter_map(|pdu| serde_json::from_str::<serde_json::Value>(pdu.get()).ok())
+		.filter_map(|pdu| {
+			pdu.get("event_id")
+				.and_then(|e| e.as_str())
+				.map(ToOwned::to_owned)
+		})
+		.collect();
+
+	info!(
+		pdus = body.pdus.len(),
+		edus = body.edus.len(),
+		pdu_ids = ?pdu_ids,
+		"Processing transaction"
+	);
 	services
 		.server
 		.metrics
@@ -740,6 +756,8 @@ async fn handle_edu_device_list_update(
 		return;
 	}
 
+	info!(%user_id, %origin, "Received DeviceListUpdate event");
+
 	services.users.mark_device_key_update(&user_id).await;
 }
 
@@ -802,8 +820,17 @@ async fn handle_edu_direct_to_device_user<Event: Send + Sync>(
 			.deserialize_as()
 			.map_err(|e| err!(Request(InvalidParam(error!("To-Device event is invalid: {e}")))))
 		else {
+			info!(
+				%sender, %target_user_id, ?target_device_id_maybe, ev_type,
+				"Failed to deserialize To-Device event, dropping"
+			);
 			continue;
 		};
+
+		info!(
+			%sender, %target_user_id, ?target_device_id_maybe, ev_type,
+			"Received To-Device event"
+		);
 
 		handle_edu_direct_to_device_event(
 			services,

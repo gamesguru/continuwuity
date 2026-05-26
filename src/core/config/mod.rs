@@ -406,6 +406,13 @@ pub struct Config {
 	#[serde(default = "default_max_concurrent_inbound_transactions")]
 	pub max_concurrent_inbound_transactions: usize,
 
+	/// How many concurrent incoming federation transactions the server is
+	/// willing to accept from a single domain.
+	///
+	/// default: 10
+	#[serde(default = "default_max_concurrent_inbound_transactions_per_origin")]
+	pub max_concurrent_inbound_transactions_per_origin: usize,
+
 	/// Maximum age (in seconds) for cached federation transaction responses.
 	/// Entries older than this will be removed during cleanup.
 	///
@@ -2923,6 +2930,8 @@ fn default_pusher_idle_timeout() -> u64 { 15 }
 fn default_max_fetch_prev_events() -> u16 { 192_u16 }
 
 fn default_max_concurrent_inbound_transactions() -> usize { 150 }
+
+fn default_max_concurrent_inbound_transactions_per_origin() -> usize { 10 }
 
 fn default_transaction_id_cache_max_age_secs() -> u64 { 60 * 60 * 2 }
 
