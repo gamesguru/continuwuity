@@ -9,16 +9,12 @@ pub struct State {
 }
 
 impl Default for State {
-	fn default() -> Self {
-		Self::new()
-	}
+	fn default() -> Self { Self::new() }
 }
 
 impl State {
 	#[must_use]
-	pub fn new() -> Self {
-		Self { active: SyncRwLock::new(Vec::new()) }
-	}
+	pub fn new() -> Self { Self { active: SyncRwLock::new(Vec::new()) } }
 
 	pub(super) fn add(&self, capture: &Arc<Capture>) {
 		self.active.write().push(capture.clone());

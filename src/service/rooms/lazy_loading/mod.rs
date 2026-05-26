@@ -52,9 +52,7 @@ impl crate::Service for Service {
 		}))
 	}
 
-	fn name(&self) -> &str {
-		crate::service::make_name(std::module_path!())
-	}
+	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
 
 #[implement(Service)]
@@ -156,7 +154,5 @@ impl Options for LazyLoadOptions {
 		}
 	}
 
-	fn is_enabled(&self) -> bool {
-		!self.is_disabled()
-	}
+	fn is_enabled(&self) -> bool { !self.is_disabled() }
 }

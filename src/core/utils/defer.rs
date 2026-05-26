@@ -6,9 +6,7 @@ macro_rules! defer {
 		}
 
 		impl<F: FnMut()> Drop for _Defer_<F> {
-			fn drop(&mut self) {
-				(self.closure)();
-			}
+			fn drop(&mut self) { (self.closure)(); }
 		}
 
 		let _defer_ = _Defer_ { closure: || $body };

@@ -65,9 +65,7 @@ where
 }
 
 #[inline]
-pub fn inspect_log<E: fmt::Display>(error: &E) {
-	inspect_log_level(error, Level::ERROR);
-}
+pub fn inspect_log<E: fmt::Display>(error: &E) { inspect_log_level(error, Level::ERROR); }
 
 #[inline]
 pub fn inspect_debug_log<E: fmt::Debug>(error: &E) {

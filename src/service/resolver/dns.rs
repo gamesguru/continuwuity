@@ -84,9 +84,7 @@ impl Resolver {
 	}
 
 	#[inline]
-	pub fn clear_cache(&self) {
-		self.resolver.clear_cache();
-	}
+	pub fn clear_cache(&self) { self.resolver.clear_cache(); }
 
 	pub async fn lookup_ip<N: hickory_resolver::IntoName>(
 		&self,
@@ -178,7 +176,7 @@ async fn hooked_resolve(
 ) -> Result<Addrs, Box<dyn std::error::Error + Send + Sync>> {
 	match cache.get_override(name.as_str()).await {
 		| Ok(cached) if cached.valid() => cached_to_reqwest(cached).await,
-		| Ok(CachedOverride { overriding, .. }) if overriding.is_some() => {
+		| Ok(CachedOverride { overriding, .. }) if overriding.is_some() =>
 			resolve_to_reqwest(
 				server,
 				resolver,
@@ -189,8 +187,7 @@ async fn hooked_resolve(
 					.expect("overriding is a valid internet name"),
 			)
 			.boxed()
-			.await
-		},
+			.await,
 
 		| _ => resolve_to_reqwest(server, resolver, name).boxed().await,
 	}

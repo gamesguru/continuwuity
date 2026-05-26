@@ -64,9 +64,7 @@ impl crate::Service for Service {
 		}))
 	}
 
-	fn name(&self) -> &str {
-		crate::service::make_name(std::module_path!())
-	}
+	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 
 	async fn worker(self: Arc<Self>) -> Result {
 		// first run mode will be enabled if there are no local users, provided it's not

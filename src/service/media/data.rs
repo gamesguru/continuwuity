@@ -170,9 +170,7 @@ impl Data {
 		Ok(())
 	}
 
-	pub(super) async fn clear_url_previews(&self) {
-		self.url_previews.clear().await;
-	}
+	pub(super) async fn clear_url_previews(&self) { self.url_previews.clear().await; }
 
 	pub(super) fn set_url_preview(
 		&self,

@@ -108,9 +108,7 @@ impl EventStore {
 		Self { events: map }
 	}
 
-	fn fetch(&self, id: OwnedEventId) -> Option<PduEvent> {
-		self.events.get(&id).cloned()
-	}
+	fn fetch(&self, id: OwnedEventId) -> Option<PduEvent> { self.events.get(&id).cloned() }
 
 	fn auth_chain(&self, event_ids: impl Iterator<Item = OwnedEventId>) -> HashSet<OwnedEventId> {
 		let mut chain = HashSet::new();

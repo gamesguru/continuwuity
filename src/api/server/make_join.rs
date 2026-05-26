@@ -140,13 +140,10 @@ pub(crate) async fn create_join_event_template_route(
 		.rooms
 		.timeline
 		.create_event(
-			PduBuilder::state(
-				body.user_id.to_string(),
-				&RoomMemberEventContent {
-					join_authorized_via_users_server,
-					..RoomMemberEventContent::new(MembershipState::Join)
-				},
-			),
+			PduBuilder::state(body.user_id.to_string(), &RoomMemberEventContent {
+				join_authorized_via_users_server,
+				..RoomMemberEventContent::new(MembershipState::Join)
+			}),
 			&body.user_id,
 			Some(&body.room_id),
 			&state_lock,

@@ -45,17 +45,14 @@ pub(crate) async fn kick_user_route(
 		.rooms
 		.timeline
 		.build_and_append_pdu(
-			PduBuilder::state(
-				body.user_id.to_string(),
-				&RoomMemberEventContent {
-					membership: MembershipState::Leave,
-					reason: body.reason.clone(),
-					is_direct: None,
-					join_authorized_via_users_server: None,
-					third_party_invite: None,
-					..event
-				},
-			),
+			PduBuilder::state(body.user_id.to_string(), &RoomMemberEventContent {
+				membership: MembershipState::Leave,
+				reason: body.reason.clone(),
+				is_direct: None,
+				join_authorized_via_users_server: None,
+				third_party_invite: None,
+				..event
+			}),
 			sender_user,
 			Some(&body.room_id),
 			&state_lock,

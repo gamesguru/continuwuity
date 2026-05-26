@@ -40,6 +40,4 @@ pub(crate) fn read_options_default(db: &Arc<Engine>) -> ReadOptions {
 }
 
 #[inline]
-pub(crate) fn write_options_default(_db: &Arc<Engine>) -> WriteOptions {
-	WriteOptions::default()
-}
+pub(crate) fn write_options_default(_db: &Arc<Engine>) -> WriteOptions { WriteOptions::default() }

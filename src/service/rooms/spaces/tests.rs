@@ -68,19 +68,15 @@ fn get_summary_children() {
 	.into();
 
 	let all = get_parent_children_via(&summary, false);
-	assert_eq!(
-		all,
-		vec![
-			(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")]),
-			(owned_room_id!("!baz:example.org"), vec![owned_server_name!("example.org")]),
-			(owned_room_id!("!foo:example.org"), vec![owned_server_name!("example.org")])
-		]
-	);
+	assert_eq!(all, vec![
+		(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")]),
+		(owned_room_id!("!baz:example.org"), vec![owned_server_name!("example.org")]),
+		(owned_room_id!("!foo:example.org"), vec![owned_server_name!("example.org")])
+	]);
 	let suggested = get_parent_children_via(&summary, true);
-	assert_eq!(
-		suggested,
-		vec![(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")])]
-	);
+	assert_eq!(suggested, vec![(owned_room_id!("!bar:example.org"), vec![owned_server_name!(
+		"example.org"
+	)])]);
 }
 
 #[test]
@@ -144,22 +140,17 @@ fn get_summary_children_sorted_by_order() {
 	let result = get_parent_children_via(&summary, false);
 	let room_ids: Vec<_> = result.iter().map(|(id, _)| id.as_str()).collect();
 	// order="a" first, then order="b", then no-order sorted by room_id
-	assert_eq!(
-		room_ids,
-		vec![
-			"!alpha:example.org",
-			"!beta:example.org",
-			"!aaa:example.org",
-			"!zoo:example.org",
-		]
-	);
+	assert_eq!(room_ids, vec![
+		"!alpha:example.org",
+		"!beta:example.org",
+		"!aaa:example.org",
+		"!zoo:example.org",
+	]);
 }
 
 #[test]
 fn invalid_pagination_tokens() {
-	fn token_is_err(token: &str) {
-		PaginationToken::from_str(token).unwrap_err();
-	}
+	fn token_is_err(token: &str) { PaginationToken::from_str(token).unwrap_err(); }
 
 	token_is_err("231_2_noabool");
 	token_is_err("");

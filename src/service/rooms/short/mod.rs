@@ -54,9 +54,7 @@ impl crate::Service for Service {
 		}))
 	}
 
-	fn name(&self) -> &str {
-		crate::service::make_name(std::module_path!())
-	}
+	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
 
 #[implement(Service)]
@@ -100,7 +98,7 @@ where
 			for (result, event_id) in chunk {
 				match result {
 					| Ok(ref short) => results.push(utils::u64_from_u8(short)),
-					| Err(_) => {
+					| Err(_) =>
 						if let Some(&short) = new_allocations.get(event_id) {
 							results.push(short);
 						} else {
@@ -116,8 +114,7 @@ where
 
 							new_allocations.insert(event_id, short);
 							results.push(short);
-						}
-					},
+						},
 				}
 			}
 			IterStream::stream(results.into_iter())

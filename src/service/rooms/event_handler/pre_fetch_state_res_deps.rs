@@ -133,13 +133,10 @@ pub(super) async fn pre_fetch_state_res_deps(
 						match self
 							.services
 							.sending
-							.send_federation_request(
-								server,
-								get_event::v1::Request {
-									event_id: event_id.clone(),
-									include_unredacted_content: None,
-								},
-							)
+							.send_federation_request(server, get_event::v1::Request {
+								event_id: event_id.clone(),
+								include_unredacted_content: None,
+							})
 							.await
 						{
 							| Ok(res) => {

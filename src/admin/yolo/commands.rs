@@ -41,24 +41,22 @@ pub(super) async fn audit_auth_chain(
 		.get_room_shortstatehash(&room_id)
 		.await
 	{
-		| Ok(sstatehash) => {
+		| Ok(sstatehash) =>
 			self.services
 				.rooms
 				.state_accessor
 				.state_full_ids(sstatehash)
 				.map(|(_, id)| id)
 				.collect()
-				.await
-		},
-		| Err(_) => {
+				.await,
+		| Err(_) =>
 			self.services
 				.rooms
 				.state
 				.get_forward_extremities(&room_id)
 				.map(ToOwned::to_owned)
 				.collect()
-				.await
-		},
+				.await,
 	};
 
 	if state_ids.is_empty() {
@@ -312,9 +310,7 @@ pub(super) async fn audit_membership(
 				| Some((st_membership, st_event))
 					if st_event != tl_event
 						&& (st_membership == "leave" || st_membership == "ban") =>
-				{
-					true
-				},
+					true,
 				// User in timeline but absent from state
 				| None if tl_membership == "join" || tl_membership == "invite" => true,
 				| _ => false,
@@ -668,13 +664,10 @@ pub(super) async fn audit_membership(
 		match self
 			.services
 			.sending
-			.send_federation_request(
-				server,
-				get_room_state::v1::Request {
-					room_id: room_id.clone(),
-					event_id: latest_event_id.clone(),
-				},
-			)
+			.send_federation_request(server, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: latest_event_id.clone(),
+			})
 			.await
 		{
 			| Ok(response) => {
@@ -1065,15 +1058,14 @@ pub(super) async fn list_outliers(
 		let action = super::outlier_utils::classify_outlier(&status, rejected, clear);
 		match action {
 			| super::outlier_utils::OutlierAction::Skip => continue,
-			| super::outlier_utils::OutlierAction::Show { should_clear } => {
+			| super::outlier_utils::OutlierAction::Show { should_clear } =>
 				if should_clear {
 					self.services
 						.rooms
 						.pdu_metadata
 						.clear_pdu_markers(&event_id);
 					cleared = cleared.saturating_add(1);
-				}
-			},
+				},
 		}
 
 		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
@@ -1628,9 +1620,8 @@ pub(super) async fn rescue_room(
 			"Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded, {failed} \
 			 failed)."
 		),
-		| (true, false) => {
-			format!("Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded).")
-		},
+		| (true, false) =>
+			format!("Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded)."),
 		| (false, true) => format!(
 			"Rescued {count} PDUs in room {room_id} ({failed} failed — check server logs for \
 			 details)."
@@ -2132,15 +2123,14 @@ pub(super) async fn get_remote_dag(
 
 	let room_version = match self.services.rooms.state.get_room_version(&room_id).await {
 		| Ok(v) => v,
-		| Err(_e) => {
+		| Err(_e) =>
 			if let Some(v) = room_version {
 				v
 			} else {
 				return Err!(Request(InvalidParam(
 					"Local room version missing. You must specify --room-version explicitly."
 				)));
-			}
-		},
+			},
 	};
 
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
@@ -2590,13 +2580,10 @@ pub(super) async fn resend_receipts(
 	// Build the receipt EDU
 	let mut read = BTreeMap::new();
 	for (user_id, (event_id, receipt)) in &latest_receipts {
-		read.insert(
-			user_id.clone(),
-			ReceiptData {
-				data: receipt.clone(),
-				event_ids: vec![event_id.clone()],
-			},
-		);
+		read.insert(user_id.clone(), ReceiptData {
+			data: receipt.clone(),
+			event_ids: vec![event_id.clone()],
+		});
 	}
 
 	let receipt_map = ReceiptMap { read };
@@ -2812,13 +2799,10 @@ pub(super) async fn compare_room_state(
 	let response = match self
 		.services
 		.sending
-		.send_federation_request(
-			server,
-			get_room_state::v1::Request {
-				room_id: room_id.clone(),
-				event_id: at_event_id.clone(),
-			},
-		)
+		.send_federation_request(server, get_room_state::v1::Request {
+			room_id: room_id.clone(),
+			event_id: at_event_id.clone(),
+		})
 		.await
 	{
 		| Ok(r) => r,
@@ -3231,13 +3215,10 @@ pub(super) async fn compare_room_state(
 			let response = match self
 				.services
 				.sending
-				.send_federation_request(
-					cmp_server,
-					get_room_state::v1::Request {
-						room_id: room_id.clone(),
-						event_id: at_event_id.clone(),
-					},
-				)
+				.send_federation_request(cmp_server, get_room_state::v1::Request {
+					room_id: room_id.clone(),
+					event_id: at_event_id.clone(),
+				})
 				.await
 			{
 				| Ok(r) => r,
@@ -3745,12 +3726,11 @@ pub(super) async fn import_pdus(
 		| Some(v) => v,
 		| None => match self.services.rooms.state.get_room_version(&room_id).await {
 			| Ok(v) => v,
-			| Err(_) => {
+			| Err(_) =>
 				return Err!(Request(InvalidParam(
 					"Local room version unknown. You must specify --room-version explicitly \
 					 when importing to an empty room."
-				)));
-			},
+				))),
 		},
 	};
 
@@ -3986,13 +3966,10 @@ pub(super) async fn federation_request(
 		let response = self
 			.services
 			.sending
-			.send_federation_request(
-				&server_name,
-				get_room_state::v1::Request {
-					room_id: room_id.clone(),
-					event_id: event_id.clone(),
-				},
-			)
+			.send_federation_request(&server_name, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: event_id.clone(),
+			})
 			.await?;
 
 		let dump = serde_json::json!({
@@ -4989,13 +4966,10 @@ pub(super) async fn heal_all_rooms(
 		let Ok(response) = self
 			.services
 			.sending
-			.send_federation_request(
-				&server,
-				get_room_state::v1::Request {
-					room_id: room_id.clone(),
-					event_id: at_event_id.clone(),
-				},
-			)
+			.send_federation_request(&server, get_room_state::v1::Request {
+				room_id: room_id.clone(),
+				event_id: at_event_id.clone(),
+			})
 			.await
 		else {
 			skipped = skipped.saturating_add(1);
@@ -5581,16 +5555,13 @@ pub(super) async fn fetch_missing_events(
 				let res = self
 					.services
 					.sending
-					.send_federation_request(
-						server,
-						get_missing_events::v1::Request {
-							room_id: room_id_c,
-							earliest_events: earliest,
-							latest_events: latest,
-							limit: 100_u32.into(),
-							min_depth: 0_u32.into(),
-						},
-					)
+					.send_federation_request(server, get_missing_events::v1::Request {
+						room_id: room_id_c,
+						earliest_events: earliest,
+						latest_events: latest,
+						limit: 100_u32.into(),
+						min_depth: 0_u32.into(),
+					})
 					.await;
 				self.services.rooms.event_handler.update_peer_stats(
 					server,

@@ -11,21 +11,15 @@ pub struct Cork {
 impl Database {
 	#[inline]
 	#[must_use]
-	pub fn cork(&self) -> Cork {
-		Cork::new(&self.db, false, false)
-	}
+	pub fn cork(&self) -> Cork { Cork::new(&self.db, false, false) }
 
 	#[inline]
 	#[must_use]
-	pub fn cork_and_flush(&self) -> Cork {
-		Cork::new(&self.db, true, false)
-	}
+	pub fn cork_and_flush(&self) -> Cork { Cork::new(&self.db, true, false) }
 
 	#[inline]
 	#[must_use]
-	pub fn cork_and_sync(&self) -> Cork {
-		Cork::new(&self.db, true, true)
-	}
+	pub fn cork_and_sync(&self) -> Cork { Cork::new(&self.db, true, true) }
 }
 
 impl Cork {

@@ -66,30 +66,20 @@ impl ConsoleHistory {
 	}
 
 	/// Iterate over history entries (oldest first).
-	pub fn iter(&self) -> impl Iterator<Item = &String> {
-		self.entries.iter()
-	}
+	pub fn iter(&self) -> impl Iterator<Item = &String> { self.entries.iter() }
 
 	/// Iterate over history entries (newest first).
-	pub fn iter_rev(&self) -> impl Iterator<Item = &String> {
-		self.entries.iter().rev()
-	}
+	pub fn iter_rev(&self) -> impl Iterator<Item = &String> { self.entries.iter().rev() }
 
 	/// Number of entries in history.
 	#[must_use]
-	pub fn len(&self) -> usize {
-		self.entries.len()
-	}
+	pub fn len(&self) -> usize { self.entries.len() }
 
 	/// Whether the history is empty.
 	#[must_use]
-	pub fn is_empty(&self) -> bool {
-		self.entries.is_empty()
-	}
+	pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 }
 
 impl Default for ConsoleHistory {
-	fn default() -> Self {
-		Self::new()
-	}
+	fn default() -> Self { Self::new() }
 }

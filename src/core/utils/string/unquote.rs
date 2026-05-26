@@ -31,7 +31,5 @@ impl<'a> Unquote<'a> for &'a str {
 	}
 
 	#[inline]
-	fn is_quoted(&self) -> bool {
-		self.starts_with(QUOTE) && self.ends_with(QUOTE)
-	}
+	fn is_quoted(&self) -> bool { self.starts_with(QUOTE) && self.ends_with(QUOTE) }
 }

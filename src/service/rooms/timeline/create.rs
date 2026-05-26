@@ -127,20 +127,19 @@ pub async fn create_event(
 	let room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
 
 	let prev_events: Vec<OwnedEventId> = match room_id {
-		| Some(room_id) => {
+		| Some(room_id) =>
 			self.services
 				.state
 				.get_forward_extremities(room_id)
 				.take(20)
 				.map(Into::into)
 				.collect()
-				.await
-		},
+				.await,
 		| None => Vec::new(),
 	};
 
 	let auth_events: HashMap<(StateEventType, SmallString<[u8; 48]>), PduEvent> = match room_id {
-		| Some(room_id) => {
+		| Some(room_id) =>
 			self.services
 				.state
 				.get_auth_events(
@@ -151,8 +150,7 @@ pub async fn create_event(
 					&content,
 					&room_version,
 				)
-				.await?
-		},
+				.await?,
 		| None => HashMap::new(),
 	};
 	// Our depth is the maximum depth of prev_events + 1

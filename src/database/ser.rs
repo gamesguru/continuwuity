@@ -107,18 +107,14 @@ impl<W: Write> Serializer<'_, W> {
 		self.out.write_all(Self::SEP).map_err(Into::into)
 	}
 
-	fn write(&mut self, buf: &[u8]) -> Result {
-		self.out.write_all(buf).map_err(Into::into)
-	}
+	fn write(&mut self, buf: &[u8]) -> Result { self.out.write_all(buf).map_err(Into::into) }
 
 	fn set_finalized(&mut self) {
 		debug_assert!(!self.is_finalized(), "Finalization already set");
 		cfg!(debug_assertions).then(|| self.fin = true);
 	}
 
-	fn is_finalized(&self) -> bool {
-		self.fin
-	}
+	fn is_finalized(&self) -> bool { self.fin }
 }
 
 impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
@@ -246,9 +242,7 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 		val.serialize(self)
 	}
 
-	fn serialize_none(self) -> Result<Self::Ok> {
-		Ok(())
-	}
+	fn serialize_none(self) -> Result<Self::Ok> { Ok(()) }
 
 	fn serialize_char(self, v: char) -> Result<Self::Ok> {
 		let mut buf: [u8; 4] = [0; 4];
@@ -281,13 +275,9 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 		unhandled!("serialize f32 not implemented")
 	}
 
-	fn serialize_i64(self, v: i64) -> Result<Self::Ok> {
-		self.write(&v.to_be_bytes())
-	}
+	fn serialize_i64(self, v: i64) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
 
-	fn serialize_i32(self, v: i32) -> Result<Self::Ok> {
-		self.write(&v.to_be_bytes())
-	}
+	fn serialize_i32(self, v: i32) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
 
 	fn serialize_i16(self, _v: i16) -> Result<Self::Ok> {
 		unhandled!("serialize i16 not implemented")
@@ -297,29 +287,21 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 		unhandled!("serialize i8 not implemented")
 	}
 
-	fn serialize_u64(self, v: u64) -> Result<Self::Ok> {
-		self.write(&v.to_be_bytes())
-	}
+	fn serialize_u64(self, v: u64) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
 
-	fn serialize_u32(self, v: u32) -> Result<Self::Ok> {
-		self.write(&v.to_be_bytes())
-	}
+	fn serialize_u32(self, v: u32) -> Result<Self::Ok> { self.write(&v.to_be_bytes()) }
 
 	fn serialize_u16(self, _v: u16) -> Result<Self::Ok> {
 		unhandled!("serialize u16 not implemented")
 	}
 
-	fn serialize_u8(self, v: u8) -> Result<Self::Ok> {
-		self.write(&[v])
-	}
+	fn serialize_u8(self, v: u8) -> Result<Self::Ok> { self.write(&[v]) }
 
 	fn serialize_bool(self, _v: bool) -> Result<Self::Ok> {
 		unhandled!("serialize bool not implemented")
 	}
 
-	fn serialize_unit(self) -> Result<Self::Ok> {
-		unhandled!("serialize unit not implemented")
-	}
+	fn serialize_unit(self) -> Result<Self::Ok> { unhandled!("serialize unit not implemented") }
 }
 
 impl<W: Write> ser::SerializeSeq for &mut Serializer<'_, W> {
@@ -330,9 +312,7 @@ impl<W: Write> ser::SerializeSeq for &mut Serializer<'_, W> {
 		val.serialize(&mut **self)
 	}
 
-	fn end(self) -> Result<Self::Ok> {
-		self.sequence_end()
-	}
+	fn end(self) -> Result<Self::Ok> { self.sequence_end() }
 }
 
 impl<W: Write> ser::SerializeTuple for &mut Serializer<'_, W> {
@@ -344,9 +324,7 @@ impl<W: Write> ser::SerializeTuple for &mut Serializer<'_, W> {
 		val.serialize(&mut **self)
 	}
 
-	fn end(self) -> Result<Self::Ok> {
-		self.tuple_end()
-	}
+	fn end(self) -> Result<Self::Ok> { self.tuple_end() }
 }
 
 impl<W: Write> ser::SerializeTupleStruct for &mut Serializer<'_, W> {
@@ -358,9 +336,7 @@ impl<W: Write> ser::SerializeTupleStruct for &mut Serializer<'_, W> {
 		val.serialize(&mut **self)
 	}
 
-	fn end(self) -> Result<Self::Ok> {
-		self.tuple_end()
-	}
+	fn end(self) -> Result<Self::Ok> { self.tuple_end() }
 }
 
 impl<W: Write> ser::SerializeTupleVariant for &mut Serializer<'_, W> {
@@ -372,9 +348,7 @@ impl<W: Write> ser::SerializeTupleVariant for &mut Serializer<'_, W> {
 		val.serialize(&mut **self)
 	}
 
-	fn end(self) -> Result<Self::Ok> {
-		self.tuple_end()
-	}
+	fn end(self) -> Result<Self::Ok> { self.tuple_end() }
 }
 
 impl<W: Write> ser::SerializeMap for &mut Serializer<'_, W> {
@@ -389,9 +363,7 @@ impl<W: Write> ser::SerializeMap for &mut Serializer<'_, W> {
 		unhandled!("serialize Map Val not implemented")
 	}
 
-	fn end(self) -> Result<Self::Ok> {
-		unhandled!("serialize Map End not implemented")
-	}
+	fn end(self) -> Result<Self::Ok> { unhandled!("serialize Map End not implemented") }
 }
 
 impl<W: Write> ser::SerializeStruct for &mut Serializer<'_, W> {
@@ -406,9 +378,7 @@ impl<W: Write> ser::SerializeStruct for &mut Serializer<'_, W> {
 		unhandled!("serialize Struct Field not implemented")
 	}
 
-	fn end(self) -> Result<Self::Ok> {
-		unhandled!("serialize Struct End not implemented")
-	}
+	fn end(self) -> Result<Self::Ok> { unhandled!("serialize Struct End not implemented") }
 }
 
 impl<W: Write> ser::SerializeStructVariant for &mut Serializer<'_, W> {

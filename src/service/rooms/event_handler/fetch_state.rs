@@ -52,13 +52,10 @@ where
 			match self
 				.services
 				.sending
-				.send_federation_request(
-					server,
-					get_room_state_ids::v1::Request {
-						room_id: room_id.to_owned(),
-						event_id: event_id.to_owned(),
-					},
-				)
+				.send_federation_request(server, get_room_state_ids::v1::Request {
+					room_id: room_id.to_owned(),
+					event_id: event_id.to_owned(),
+				})
 				.await
 			{
 				| Ok(res) => {

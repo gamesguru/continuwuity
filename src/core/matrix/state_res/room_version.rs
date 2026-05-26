@@ -151,9 +151,7 @@ impl RoomVersion {
 	pub const V9: Self = Self::V8;
 
 	#[must_use]
-	pub fn strips_room_id(&self, is_create: bool) -> bool {
-		self.room_ids_as_hashes && is_create
-	}
+	pub fn strips_room_id(&self, is_create: bool) -> bool { self.room_ids_as_hashes && is_create }
 
 	pub fn new(version: &RoomVersionId) -> Result<Self> {
 		Ok(match version {

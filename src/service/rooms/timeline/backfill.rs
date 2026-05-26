@@ -284,13 +284,10 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 		let value = self
 			.services
 			.sending
-			.send_federation_request(
-				backfill_server,
-				federation::event::get_event::v1::Request {
-					event_id: event_id.to_owned(),
-					include_unredacted_content: Some(false),
-				},
-			)
+			.send_federation_request(backfill_server, federation::event::get_event::v1::Request {
+				event_id: event_id.to_owned(),
+				include_unredacted_content: Some(false),
+			})
 			.await
 			.and_then(|response| {
 				serde_json::from_str::<CanonicalJsonObject>(response.pdu.get()).map_err(|e| {

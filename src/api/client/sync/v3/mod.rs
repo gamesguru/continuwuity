@@ -80,9 +80,7 @@ impl DeviceListUpdates {
 		self.left.extend(other.left);
 	}
 
-	fn is_empty(&self) -> bool {
-		self.changed.is_empty() && self.left.is_empty()
-	}
+	fn is_empty(&self) -> bool { self.changed.is_empty() && self.left.is_empty() }
 }
 
 impl From<DeviceListUpdates> for DeviceLists {

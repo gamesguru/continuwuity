@@ -14,9 +14,7 @@ pub struct ChangeEmail<'a> {
 }
 
 impl MessageTemplate for ChangeEmail<'_> {
-	fn subject(&self) -> String {
-		"Verify your email address".to_owned()
-	}
+	fn subject(&self) -> String { "Verify your email address".to_owned() }
 }
 
 #[derive(Template)]
@@ -27,9 +25,7 @@ pub struct NewAccount<'a> {
 }
 
 impl MessageTemplate for NewAccount<'_> {
-	fn subject(&self) -> String {
-		"Create your new Matrix account".to_owned()
-	}
+	fn subject(&self) -> String { "Create your new Matrix account".to_owned() }
 }
 
 #[derive(Template)]
@@ -41,9 +37,7 @@ pub struct PasswordReset<'a> {
 }
 
 impl MessageTemplate for PasswordReset<'_> {
-	fn subject(&self) -> String {
-		format!("Password reset request for {}", &self.user_id)
-	}
+	fn subject(&self) -> String { format!("Password reset request for {}", &self.user_id) }
 }
 
 #[derive(Template)]
@@ -51,7 +45,5 @@ impl MessageTemplate for PasswordReset<'_> {
 pub struct Test;
 
 impl MessageTemplate for Test {
-	fn subject(&self) -> String {
-		"Test message".to_owned()
-	}
+	fn subject(&self) -> String { "Test message".to_owned() }
 }

@@ -97,11 +97,7 @@ where
 }
 
 #[inline]
-pub fn key<K, V>(kv: KeyVal<'_, K, V>) -> Key<'_, K> {
-	kv.0
-}
+pub fn key<K, V>(kv: KeyVal<'_, K, V>) -> Key<'_, K> { kv.0 }
 
 #[inline]
-pub fn val<K, V>(kv: KeyVal<'_, K, V>) -> Val<'_, V> {
-	kv.1
-}
+pub fn val<K, V>(kv: KeyVal<'_, K, V>) -> Val<'_, V> { kv.1 }

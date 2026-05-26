@@ -136,29 +136,19 @@ impl Server {
 	}
 
 	#[inline]
-	pub fn running(&self) -> bool {
-		!self.is_stopping()
-	}
+	pub fn running(&self) -> bool { !self.is_stopping() }
 
 	#[inline]
-	pub fn is_stopping(&self) -> bool {
-		self.stopping.load(Ordering::Relaxed)
-	}
+	pub fn is_stopping(&self) -> bool { self.stopping.load(Ordering::Relaxed) }
 
 	#[inline]
-	pub fn is_reloading(&self) -> bool {
-		self.reloading.load(Ordering::Relaxed)
-	}
+	pub fn is_reloading(&self) -> bool { self.reloading.load(Ordering::Relaxed) }
 
 	#[inline]
-	pub fn is_restarting(&self) -> bool {
-		self.restarting.load(Ordering::Relaxed)
-	}
+	pub fn is_restarting(&self) -> bool { self.restarting.load(Ordering::Relaxed) }
 
 	#[inline]
-	pub fn is_ours(&self, name: &str) -> bool {
-		name == self.config.server_name
-	}
+	pub fn is_ours(&self, name: &str) -> bool { name == self.config.server_name }
 
 	/// Returns a concurrency limit scaled to the number of Tokio worker
 	/// threads. Use this instead of hardcoded constants for federation

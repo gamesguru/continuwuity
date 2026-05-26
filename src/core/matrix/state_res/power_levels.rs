@@ -86,9 +86,7 @@ struct IntNotificationPowerLevels {
 }
 
 impl Default for IntNotificationPowerLevels {
-	fn default() -> Self {
-		Self { room: default_power_level() }
-	}
+	fn default() -> Self { Self { room: default_power_level() } }
 }
 
 impl From<IntNotificationPowerLevels> for NotificationPowerLevels {

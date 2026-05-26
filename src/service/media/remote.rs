@@ -84,10 +84,9 @@ fn should_fallback_to_unauthenticated(
 	allow_broad_fallback: bool,
 ) -> bool {
 	match result {
-		| Err(Error::Request(Unrecognized | NotFound | Forbidden { .. } | Unauthorized, ..)) => {
-			true
-		},
-		| Err(error) if allow_broad_fallback => {
+		| Err(Error::Request(Unrecognized | NotFound | Forbidden { .. } | Unauthorized, ..)) =>
+			true,
+		| Err(error) if allow_broad_fallback =>
 			error.status_code().is_server_error()
 				|| matches!(
 					error.status_code(),
@@ -98,8 +97,7 @@ fn should_fallback_to_unauthenticated(
 					| Error::Federation(_, _)
 					| Error::FederationTimeout(_)
 					| Error::FederationConnection(_)
-			)
-		},
+			),
 		| _ => false,
 	}
 }
@@ -127,9 +125,8 @@ async fn fetch_thumbnail_authenticated(
 	let Response { content, .. } = self.federation_request(mxc, server, request).await?;
 
 	match content {
-		| FileOrLocation::File(content) => {
-			self.handle_thumbnail_file(mxc, user, dim, content).await
-		},
+		| FileOrLocation::File(content) =>
+			self.handle_thumbnail_file(mxc, user, dim, content).await,
 		| FileOrLocation::Location(location) => self.handle_location(mxc, user, &location).await,
 	}
 }
