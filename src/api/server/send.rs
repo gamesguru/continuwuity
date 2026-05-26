@@ -217,12 +217,10 @@ async fn process_inbound_transaction(
 	// Spawn EDU processing into background so PDU pipeline starts immediately.
 	// EDUs are lightweight DB writes (to-device, receipts, typing) that don't
 	// need to block the transaction response.
-	let edu_services = services.clone();
-	let edu_client = client.clone();
 	let edu_origin = body.origin().to_owned();
 	services.server.runtime().spawn(async move {
 		edus.for_each_concurrent(automatic_width(), |edu| {
-			handle_edu(&edu_services, &edu_client, &edu_origin, edu)
+			handle_edu(&services, &client, &edu_origin, edu)
 		})
 		.await;
 	});
