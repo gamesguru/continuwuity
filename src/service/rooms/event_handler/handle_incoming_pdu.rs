@@ -375,9 +375,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 
 			// Mark as rejected so the client API returns 404 for this event.
 			// The unreject path will clear this flag when all auth deps arrive.
-			self.services
-				.pdu_metadata
-				.mark_event_rejected(event_id);
+			self.services.pdu_metadata.mark_event_rejected(event_id);
 
 			return Err(conduwuit::Error::MissingAuthEvents(missing));
 		},

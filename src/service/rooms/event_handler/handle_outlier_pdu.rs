@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug, debug_info, debug_warn, err, implement, state_res,
+	Err, Event, PduEvent, Result, debug, debug_info, debug_warn, err, implement, info, state_res,
 	trace, warn,
 };
-use futures::future::ready;
+use futures::{StreamExt, future::ready};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
 	events::{StateEventType, TimelineEventType},
@@ -293,6 +293,22 @@ where
 							serde_json::to_value(&auth_val).expect("CanonicalJsonObj is valid"),
 						) {
 							if check_room_id(room_id, &parsed).is_ok() {
+								// Cascade rejection: if any of this auth event's own
+								// auth_events are rejected, mark it rejected too.
+								let has_rejected_auth =
+									futures::stream::iter(parsed.auth_events())
+										.any(|aid| {
+											self.services.pdu_metadata.is_event_rejected(aid)
+										})
+										.await;
+								if has_rejected_auth {
+									info!(
+										target: "state_res_debug",
+										auth_event_id = %e.key(),
+										"Auth event from /event_auth depends on a rejected event; marking rejected"
+									);
+									self.services.pdu_metadata.mark_event_rejected(e.key());
+								}
 								e.insert(parsed);
 							}
 						}
