@@ -62,6 +62,31 @@ pub(crate) async fn set_read_marker_route(
 		if services.config.allow_local_read_receipts
 			&& !services.users.is_suspended(sender_user).await?
 		{
+			// Spec: server SHOULD NOT allow read receipts to move backwards
+			let new_count = services
+				.rooms
+				.timeline
+				.get_pdu_count(event)
+				.await
+				.map_err(|_| err!(Request(NotFound("Event not found."))))?;
+
+			if let PduCount::Normal(new_count) = new_count {
+				if let Some(old_event_id) = services
+					.rooms
+					.read_receipt
+					.readreceipt_get(&body.room_id, sender_user, Some(&ReceiptThread::Unthreaded))
+					.await
+				{
+					if let Ok(PduCount::Normal(old_count)) =
+						services.rooms.timeline.get_pdu_count(&old_event_id).await
+					{
+						if new_count <= old_count {
+							return Ok(set_read_marker::v3::Response {});
+						}
+					}
+				}
+			}
+
 			let receipt_content = BTreeMap::from_iter([(
 				event.to_owned(),
 				BTreeMap::from_iter([(
@@ -99,16 +124,26 @@ pub(crate) async fn set_read_marker_route(
 			.await
 			.map_err(|_| err!(Request(NotFound("Event not found."))))?;
 
-		let PduCount::Normal(count) = count else {
+		let PduCount::Normal(new_count) = count else {
 			return Err!(Request(InvalidParam(
 				"Event is a backfilled PDU and cannot be marked as read."
 			)));
 		};
 
-		services
+		// Don't allow private receipt to move backwards
+		let old_count = services
 			.rooms
 			.read_receipt
-			.private_read_set(&body.room_id, sender_user, count);
+			.private_read_get_count(&body.room_id, sender_user)
+			.await
+			.unwrap_or(0);
+
+		if new_count > old_count {
+			services
+				.rooms
+				.read_receipt
+				.private_read_set(&body.room_id, sender_user, new_count);
+		}
 	}
 
 	Ok(set_read_marker::v3::Response {})
@@ -164,6 +199,35 @@ pub(crate) async fn create_receipt_route(
 				.await?;
 		},
 		| create_receipt::v3::ReceiptType::Read => {
+			// Spec: server SHOULD NOT allow read receipts to move backwards
+			let new_count = services
+				.rooms
+				.timeline
+				.get_pdu_count(&body.event_id)
+				.await
+				.map_err(|_| err!(Request(NotFound("Event not found."))))?;
+
+			if let PduCount::Normal(new_count) = new_count {
+				if let Some(old_event_id) = services
+					.rooms
+					.read_receipt
+					.readreceipt_get(
+						&body.room_id,
+						sender_user,
+						Some(&ReceiptThread::Unthreaded),
+					)
+					.await
+				{
+					if let Ok(PduCount::Normal(old_count)) =
+						services.rooms.timeline.get_pdu_count(&old_event_id).await
+					{
+						if new_count <= old_count {
+							return Ok(create_receipt::v3::Response {});
+						}
+					}
+				}
+			}
+
 			let receipt_content = BTreeMap::from_iter([(
 				body.event_id.clone(),
 				BTreeMap::from_iter([(
@@ -199,16 +263,26 @@ pub(crate) async fn create_receipt_route(
 				.await
 				.map_err(|_| err!(Request(NotFound("Event not found."))))?;
 
-			let PduCount::Normal(count) = count else {
+			let PduCount::Normal(new_count) = count else {
 				return Err!(Request(InvalidParam(
 					"Event is a backfilled PDU and cannot be marked as read."
 				)));
 			};
 
-			services
+			// Don't allow private receipt to move backwards
+			let old_count = services
 				.rooms
 				.read_receipt
-				.private_read_set(&body.room_id, sender_user, count);
+				.private_read_get_count(&body.room_id, sender_user)
+				.await
+				.unwrap_or(0);
+
+			if new_count > old_count {
+				services
+					.rooms
+					.read_receipt
+					.private_read_set(&body.room_id, sender_user, new_count);
+			}
 		},
 		| _ => {
 			return Err!(Request(InvalidParam(warn!(

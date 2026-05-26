@@ -50,6 +50,17 @@ impl crate::Service for Service {
 }
 
 impl Service {
+	/// Gets the user's current public read receipt event ID for the given
+	/// thread.
+	pub async fn readreceipt_get(
+		&self,
+		room_id: &RoomId,
+		user_id: &UserId,
+		target_thread: Option<&ruma::events::receipt::ReceiptThread>,
+	) -> Option<OwnedEventId> {
+		self.db.readreceipt_get(room_id, user_id, target_thread).await
+	}
+
 	/// Replaces the previous read receipt.
 	pub async fn readreceipt_update(
 		&self,

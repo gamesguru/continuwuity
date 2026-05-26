@@ -47,6 +47,47 @@ impl Data {
 		}
 	}
 
+	/// Returns the user's current public read receipt event ID for the given
+	/// thread.
+	pub(super) async fn readreceipt_get(
+		&self,
+		room_id: &RoomId,
+		user_id: &UserId,
+		target_thread: Option<&ruma::events::receipt::ReceiptThread>,
+	) -> Option<ruma::OwnedEventId> {
+		let last_possible_key = (room_id, u64::MAX);
+		self.readreceiptid_readreceipt
+			.rev_stream_from_raw(&last_possible_key)
+			.ignore_err()
+			.ready_take_while(|(key, _)| {
+				key.starts_with(room_id.as_bytes())
+					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
+			})
+			.ready_filter_map(|(key, value)| {
+				let user_id_bytes = user_id.as_bytes();
+				if key.ends_with(user_id_bytes)
+					&& key
+						.len()
+						.checked_sub(user_id_bytes.len())
+						.and_then(|len| len.checked_sub(1))
+						.and_then(|idx| key.get(idx))
+						== Some(&database::SEP)
+				{
+					let receipt = serde_json::from_slice::<ReceiptEvent>(value).ok()?;
+					let (event_id, types) = receipt.content.0.into_iter().next()?;
+					let users = types.get(&ReceiptType::Read)?;
+					let receipt_data = users.get(user_id)?;
+
+					if Some(&receipt_data.thread) == target_thread {
+						return Some(event_id);
+					}
+				}
+				None
+			})
+			.next()
+			.await
+	}
+
 	pub(super) async fn readreceipt_update(
 		&self,
 		user_id: &UserId,
