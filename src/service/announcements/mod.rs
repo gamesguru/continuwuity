@@ -120,9 +120,13 @@ impl crate::Service for Service {
 		Ok(())
 	}
 
-	fn interrupt(&self) { self.interrupt.notify_waiters(); }
+	fn interrupt(&self) {
+		self.interrupt.notify_waiters();
+	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 }
 
 impl Service {

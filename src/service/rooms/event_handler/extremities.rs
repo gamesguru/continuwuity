@@ -75,7 +75,9 @@ mod tests {
 	use super::*;
 
 	/// Nothing is referenced in the DB by default in tests.
-	fn never_referenced(_event_id: &EventId) -> std::future::Ready<bool> { ready(false) }
+	fn never_referenced(_event_id: &EventId) -> std::future::Ready<bool> {
+		ready(false)
+	}
 
 	// ---------------------------------------------------------------
 	// Test 1: Single linear chain — extremity collapses to 1
@@ -290,11 +292,10 @@ mod tests {
 			true,
 		)
 		.await;
-		assert_eq!(after_msg, vec![
-			rename_id.to_owned(),
-			avatar_id.to_owned(),
-			msg_id.to_owned()
-		]);
+		assert_eq!(
+			after_msg,
+			vec![rename_id.to_owned(), avatar_id.to_owned(), msg_id.to_owned()]
+		);
 
 		// Merge collapses all three
 		let merge_id = event_id!("$merge:example.org");

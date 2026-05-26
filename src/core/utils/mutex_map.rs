@@ -94,13 +94,19 @@ where
 	}
 
 	#[must_use]
-	pub fn contains(&self, k: &Key) -> bool { self.map.lock().contains_key(k) }
+	pub fn contains(&self, k: &Key) -> bool {
+		self.map.lock().contains_key(k)
+	}
 
 	#[must_use]
-	pub fn is_empty(&self) -> bool { self.map.lock().is_empty() }
+	pub fn is_empty(&self) -> bool {
+		self.map.lock().is_empty()
+	}
 
 	#[must_use]
-	pub fn len(&self) -> usize { self.map.lock().len() }
+	pub fn len(&self) -> usize {
+		self.map.lock().len()
+	}
 }
 
 impl<Key, Val> Default for MutexMap<Key, Val>
@@ -108,7 +114,9 @@ where
 	Key: Clone + Eq + Hash + Send,
 	Val: Default + Send,
 {
-	fn default() -> Self { Self::new() }
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 impl<Key, Val> Drop for Guard<Key, Val>

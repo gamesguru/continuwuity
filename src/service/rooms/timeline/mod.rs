@@ -139,7 +139,9 @@ impl crate::Service for Service {
 		Ok(())
 	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 }
 
 impl Service {
@@ -1368,7 +1370,9 @@ impl Service {
 	}
 
 	#[tracing::instrument(skip(self), level = "info")]
-	pub async fn fix_pdu_event_ids(&self) -> Result<usize> { self.db.fix_pdu_event_ids().await }
+	pub async fn fix_pdu_event_ids(&self) -> Result<usize> {
+		self.db.fix_pdu_event_ids().await
+	}
 
 	/// Forward iteration starting after `from`.
 	#[tracing::instrument(skip(self), level = "debug")]

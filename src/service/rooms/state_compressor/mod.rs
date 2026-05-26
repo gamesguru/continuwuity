@@ -112,9 +112,13 @@ impl crate::Service for Service {
 		Ok(())
 	}
 
-	async fn clear_cache(&self) { self.stateinfo_cache.lock().clear(); }
+	async fn clear_cache(&self) {
+		self.stateinfo_cache.lock().clear();
+	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 }
 
 /// Returns a stack with info on shortstatehash, full state, added diff and
@@ -312,11 +316,14 @@ pub fn save_state_from_diff(
 
 	if parent_states.is_empty() {
 		// There is no parent layer, create a new state
-		self.save_statediff(shortstatehash, &StateDiff {
-			parent: None,
-			added: statediffnew,
-			removed: statediffremoved,
-		});
+		self.save_statediff(
+			shortstatehash,
+			&StateDiff {
+				parent: None,
+				added: statediffnew,
+				removed: statediffremoved,
+			},
+		);
 
 		return Ok(());
 	}
@@ -362,11 +369,14 @@ pub fn save_state_from_diff(
 		)?;
 	} else {
 		// Diff small enough, we add diff as layer on top of parent
-		self.save_statediff(shortstatehash, &StateDiff {
-			parent: Some(parent.shortstatehash),
-			added: statediffnew,
-			removed: statediffremoved,
-		});
+		self.save_statediff(
+			shortstatehash,
+			&StateDiff {
+				parent: Some(parent.shortstatehash),
+				added: statediffnew,
+				removed: statediffremoved,
+			},
+		);
 	}
 
 	Ok(())

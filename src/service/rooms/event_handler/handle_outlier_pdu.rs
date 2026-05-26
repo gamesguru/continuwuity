@@ -55,7 +55,7 @@ where
 
 	let room_version_id = match create_event {
 		| Some(ce) => get_room_version_id(ce)?,
-		| None =>
+		| None => {
 			if let Some(override_v) = room_version_override {
 				override_v.clone()
 			} else {
@@ -68,7 +68,8 @@ where
 							"Room version is unknown locally and no override was provided: {e}"
 						)))
 					})?
-			},
+			}
+		},
 	};
 
 	let mut incoming_pdu = if skip_sig_verify {

@@ -256,21 +256,23 @@ async fn main() -> anyhow::Result<()> {
 	let mode = parse_args();
 
 	match mode {
-		| Mode::Dag { path, room_version, baseline_path } =>
-			run_dag_mode(&path, &room_version, baseline_path.as_deref()).await,
+		| Mode::Dag { path, room_version, baseline_path } => {
+			run_dag_mode(&path, &room_version, baseline_path.as_deref()).await
+		},
 		| Mode::StateSets {
 			state_set_a,
 			state_set_b,
 			room_version,
 			baseline_path,
-		} =>
+		} => {
 			run_state_sets_mode(
 				&state_set_a,
 				&state_set_b,
 				&room_version,
 				baseline_path.as_deref(),
 			)
-			.await,
+			.await
+		},
 	}
 }
 

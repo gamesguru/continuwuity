@@ -40,4 +40,6 @@ pub fn time_from_now_secs(range: Range<u64>) -> SystemTime {
 }
 
 #[must_use]
-pub fn secs(range: Range<u64>) -> Duration { Duration::from_secs(rand::random_range(range)) }
+pub fn secs(range: Range<u64>) -> Duration {
+	Duration::from_secs(rand::random_range(range))
+}

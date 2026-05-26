@@ -346,10 +346,12 @@ pub(crate) async fn get_room_dag_route(
 	if !is_public {
 		// Extract token for private rooms
 		let token = match auth {
-			| Some(axum_extra::TypedHeader(axum_extra::headers::Authorization(bearer))) =>
-				bearer.token().to_owned(),
-			| None =>
-				return Err!(Request(MissingToken("Missing access token for private room."))),
+			| Some(axum_extra::TypedHeader(axum_extra::headers::Authorization(bearer))) => {
+				bearer.token().to_owned()
+			},
+			| None => {
+				return Err!(Request(MissingToken("Missing access token for private room.")));
+			},
 		};
 
 		// Validate user

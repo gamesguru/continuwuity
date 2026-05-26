@@ -166,12 +166,13 @@ pub(crate) async fn register_route(
 		// namespace
 
 		match body.appservice_info {
-			| Some(ref info) =>
+			| Some(ref info) => {
 				if !info.is_user_match(&user_id) && !emergency_mode_enabled {
 					return Err!(Request(Exclusive(
 						"Username is not in an appservice namespace."
 					)));
-				},
+				}
+			},
 			| _ => {
 				return Err!(Request(MissingToken("Missing appservice token.")));
 			},

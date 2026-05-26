@@ -128,8 +128,9 @@ impl Console {
 					| ReadlineEvent::Line(string) => self.clone().handle(string).await,
 					| ReadlineEvent::Interrupted => continue,
 					| ReadlineEvent::Eof => break,
-					| ReadlineEvent::Quit =>
-						self.server.shutdown().unwrap_or_else(error::default_log),
+					| ReadlineEvent::Quit => {
+						self.server.shutdown().unwrap_or_else(error::default_log)
+					},
 				},
 				| Err(error) => match error {
 					| ReadlineError::Closed => break,
@@ -308,7 +309,9 @@ impl Console {
 		});
 	}
 
-	fn add_history(&self, line: String) { self.history.lock().add(&line); }
+	fn add_history(&self, line: String) {
+		self.history.lock().add(&line);
+	}
 
 	fn tab_complete(&self, line: &str) -> String {
 		self.admin

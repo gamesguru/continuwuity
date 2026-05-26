@@ -30,7 +30,9 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use crate::{admin, admin::AdminCommand, context::Context};
 
 #[must_use]
-pub fn complete(line: &str) -> String { complete_command(AdminCommand::command(), line) }
+pub fn complete(line: &str) -> String {
+	complete_command(AdminCommand::command(), line)
+}
 
 #[must_use]
 pub(super) fn dispatch(services: Arc<Services>, command: CommandInput) -> ProcessorFuture {
@@ -78,8 +80,9 @@ async fn process_command(services: Arc<Services>, input: &CommandInput) -> Proce
 	};
 
 	match result {
-		| Ok(()) if logs.is_empty() =>
-			Ok(Some(reply(RoomMessageEventContent::notice_markdown(output), context.reply_id))),
+		| Ok(()) if logs.is_empty() => {
+			Ok(Some(reply(RoomMessageEventContent::notice_markdown(output), context.reply_id)))
+		},
 
 		| Ok(()) => {
 			logs.write_str(output.as_str()).expect("output buffer");

@@ -84,7 +84,9 @@ pub fn memory_usage() -> Option<String> {
 
 #[must_use]
 #[cfg(not(feature = "jemalloc_stats"))]
-pub fn memory_usage() -> Option<String> { None }
+pub fn memory_usage() -> Option<String> {
+	None
+}
 
 pub fn memory_stats(opts: &str) -> Option<String> {
 	const MAX_LENGTH: usize = 1_048_576;
@@ -145,27 +147,41 @@ pub mod this_thread {
 		static DEALLOCATED_BYTES: OnceCell<&'static u64> = const { OnceCell::new() };
 	}
 
-	pub fn trim() -> Result { decay().and_then(|()| purge()) }
+	pub fn trim() -> Result {
+		decay().and_then(|()| purge())
+	}
 
-	pub fn purge() -> Result { notify(mallctl!("arena.0.purge")) }
+	pub fn purge() -> Result {
+		notify(mallctl!("arena.0.purge"))
+	}
 
-	pub fn decay() -> Result { notify(mallctl!("arena.0.decay")) }
+	pub fn decay() -> Result {
+		notify(mallctl!("arena.0.decay"))
+	}
 
-	pub fn idle() -> Result { super::notify(&mallctl!("thread.idle")) }
+	pub fn idle() -> Result {
+		super::notify(&mallctl!("thread.idle"))
+	}
 
-	pub fn flush() -> Result { super::notify(&mallctl!("thread.tcache.flush")) }
+	pub fn flush() -> Result {
+		super::notify(&mallctl!("thread.tcache.flush"))
+	}
 
 	pub fn set_muzzy_decay(decay_ms: isize) -> Result<isize> {
 		set(mallctl!("arena.0.muzzy_decay_ms"), decay_ms)
 	}
 
-	pub fn get_muzzy_decay() -> Result<isize> { get(mallctl!("arena.0.muzzy_decay_ms")) }
+	pub fn get_muzzy_decay() -> Result<isize> {
+		get(mallctl!("arena.0.muzzy_decay_ms"))
+	}
 
 	pub fn set_dirty_decay(decay_ms: isize) -> Result<isize> {
 		set(mallctl!("arena.0.dirty_decay_ms"), decay_ms)
 	}
 
-	pub fn get_dirty_decay() -> Result<isize> { get(mallctl!("arena.0.dirty_decay_ms")) }
+	pub fn get_dirty_decay() -> Result<isize> {
+		get(mallctl!("arena.0.dirty_decay_ms"))
+	}
 
 	pub fn cache_enable(enable: bool) -> Result<bool> {
 		super::set::<u8>(&mallctl!("thread.tcache.enabled"), enable.into()).map(is_nonzero!())
@@ -191,9 +207,13 @@ pub mod this_thread {
 		super::get::<u8>(&mallctl!("thread.prof.active")).map(is_nonzero!())
 	}
 
-	pub fn reset_peak() -> Result { super::notify(&mallctl!("thread.peak.reset")) }
+	pub fn reset_peak() -> Result {
+		super::notify(&mallctl!("thread.peak.reset"))
+	}
 
-	pub fn peak() -> Result<u64> { super::get(&mallctl!("thread.peak.read")) }
+	pub fn peak() -> Result<u64> {
+		super::get(&mallctl!("thread.peak.read"))
+	}
 
 	#[inline]
 	#[must_use]
@@ -207,7 +227,9 @@ pub mod this_thread {
 		*DEALLOCATED_BYTES.with(|once| init_tls_cell(once, "thread.deallocatedp"))
 	}
 
-	fn notify(key: Key) -> Result { super::notify_by_arena(Some(arena_id()?), key) }
+	fn notify(key: Key) -> Result {
+		super::notify_by_arena(Some(arena_id()?), key)
+	}
 
 	fn set<T>(key: Key, val: T) -> Result<T>
 	where
@@ -233,9 +255,13 @@ pub mod this_thread {
 	}
 }
 
-pub fn stats_reset() -> Result { notify(&mallctl!("stats.mutexes.reset")) }
+pub fn stats_reset() -> Result {
+	notify(&mallctl!("stats.mutexes.reset"))
+}
 
-pub fn prof_reset() -> Result { notify(&mallctl!("prof.reset")) }
+pub fn prof_reset() -> Result {
+	notify(&mallctl!("prof.reset"))
+}
 
 pub fn prof_enable(enable: bool) -> Result<bool> {
 	set::<u8>(&mallctl!("prof.active"), enable.into()).map(is_nonzero!())
@@ -259,16 +285,18 @@ pub fn decay<I: Into<Option<usize>>>(arena: I) -> Result {
 
 pub fn set_muzzy_decay<I: Into<Option<usize>>>(arena: I, decay_ms: isize) -> Result<isize> {
 	match arena.into() {
-		| Some(arena) =>
-			set_by_arena(Some(arena), mallctl!("arena.4096.muzzy_decay_ms"), decay_ms),
+		| Some(arena) => {
+			set_by_arena(Some(arena), mallctl!("arena.4096.muzzy_decay_ms"), decay_ms)
+		},
 		| _ => set(&mallctl!("arenas.muzzy_decay_ms"), decay_ms),
 	}
 }
 
 pub fn set_dirty_decay<I: Into<Option<usize>>>(arena: I, decay_ms: isize) -> Result<isize> {
 	match arena.into() {
-		| Some(arena) =>
-			set_by_arena(Some(arena), mallctl!("arena.4096.dirty_decay_ms"), decay_ms),
+		| Some(arena) => {
+			set_by_arena(Some(arena), mallctl!("arena.4096.dirty_decay_ms"), decay_ms)
+		},
 		| _ => set(&mallctl!("arenas.dirty_decay_ms"), decay_ms),
 	}
 }
@@ -279,15 +307,21 @@ pub fn background_thread_enable(enable: bool) -> Result<bool> {
 
 #[inline]
 #[must_use]
-pub fn is_affine_arena() -> bool { is_percpu_arena() || is_phycpu_arena() }
+pub fn is_affine_arena() -> bool {
+	is_percpu_arena() || is_phycpu_arena()
+}
 
 #[inline]
 #[must_use]
-pub fn is_percpu_arena() -> bool { percpu_arenas().is_ok_and(is_equal_to!("percpu")) }
+pub fn is_percpu_arena() -> bool {
+	percpu_arenas().is_ok_and(is_equal_to!("percpu"))
+}
 
 #[inline]
 #[must_use]
-pub fn is_phycpu_arena() -> bool { percpu_arenas().is_ok_and(is_equal_to!("phycpu")) }
+pub fn is_phycpu_arena() -> bool {
+	percpu_arenas().is_ok_and(is_equal_to!("phycpu"))
+}
 
 pub fn percpu_arenas() -> Result<&'static str> {
 	let ptr = get::<*const c_char>(&mallctl!("opt.percpu_arena"))?;
@@ -300,9 +334,13 @@ pub fn arenas() -> Result<usize> {
 	get::<u32>(&mallctl!("arenas.narenas")).and_then(math::try_into)
 }
 
-pub fn inc_epoch() -> Result<u64> { xchg(&mallctl!("epoch"), 1_u64) }
+pub fn inc_epoch() -> Result<u64> {
+	xchg(&mallctl!("epoch"), 1_u64)
+}
 
-pub fn acq_epoch() -> Result<u64> { xchg(&mallctl!("epoch"), 0_u64) }
+pub fn acq_epoch() -> Result<u64> {
+	xchg(&mallctl!("epoch"), 0_u64)
+}
 
 fn notify_by_arena(id: Option<usize>, mut key: Key) -> Result {
 	key[1] = id.unwrap_or(4096);
@@ -325,7 +363,9 @@ where
 	get(&key)
 }
 
-fn notify(key: &Key) -> Result { xchg(key, ()) }
+fn notify(key: &Key) -> Result {
+	xchg(key, ())
+}
 
 fn set<T>(key: &Key, val: T) -> Result<T>
 where

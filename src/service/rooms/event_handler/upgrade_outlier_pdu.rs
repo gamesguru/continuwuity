@@ -245,12 +245,13 @@ where
 				true
 			},
 			| (true, None) => false,
-			| (true, Some(redact_id)) =>
+			| (true, Some(redact_id)) => {
 				!self
 					.services
 					.state_accessor
 					.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
-					.await?,
+					.await?
+			},
 		}
 	};
 
@@ -566,10 +567,10 @@ where
 	// Federation Fetch: If local resolution failed, try fetching state from the
 	// sender
 	if state.is_none() && !skip_soft_fail && !force_local {
-		let mut prev_event_rejected = false;
+		let mut any_event_rejected = false;
 		for prev_id in &prev_events {
 			if self.services.pdu_metadata.is_event_rejected(prev_id).await {
-				prev_event_rejected = true;
+				any_event_rejected = true;
 				info!(
 					event_id = %incoming_pdu.event_id,
 					rejected_prev_event = %prev_id,
@@ -579,7 +580,21 @@ where
 			}
 		}
 
-		if !prev_event_rejected {
+		if !any_event_rejected {
+			for auth_id in incoming_pdu.auth_events() {
+				if self.services.pdu_metadata.is_event_rejected(auth_id).await {
+					any_event_rejected = true;
+					info!(
+						event_id = %incoming_pdu.event_id,
+						rejected_auth_event = %auth_id,
+						"auth_event is rejected; bypassing federation /state_ids fetch"
+					);
+					break;
+				}
+			}
+		}
+
+		if !any_event_rejected {
 			// Local state is unavailable — prev_events are not yet in DB or their
 			// state hashes have not been computed. Attempt a synchronous /state_ids
 			// fetch from the sending server BEFORE queuing the async DAG healer.

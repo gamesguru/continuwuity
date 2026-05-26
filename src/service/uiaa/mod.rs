@@ -49,7 +49,9 @@ impl crate::Service for Service {
 		}))
 	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 }
 
 struct UiaaSession {
@@ -193,10 +195,13 @@ impl Service {
 		let mut info = UiaaInfo::new(flows, params);
 		info.session = Some(session_id.clone());
 
-		uiaa_sessions.insert(session_id, UiaaSession {
-			info: info.clone(),
-			identity: identity.unwrap_or_default(),
-		});
+		uiaa_sessions.insert(
+			session_id,
+			UiaaSession {
+				info: info.clone(),
+				identity: identity.unwrap_or_default(),
+			},
+		);
 
 		info
 	}

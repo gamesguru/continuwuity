@@ -34,7 +34,9 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self { transport }))
 	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 
 	async fn worker(self: Arc<Self>) -> Result<()> {
 		if let Some((_, ref transport)) = self.transport {

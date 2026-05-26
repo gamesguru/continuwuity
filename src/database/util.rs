@@ -37,12 +37,18 @@ pub(crate) fn result<T>(
 }
 
 #[inline(always)]
-pub(crate) fn and_then<T>(t: T) -> Result<T, conduwuit::Error> { Ok(t) }
+pub(crate) fn and_then<T>(t: T) -> Result<T, conduwuit::Error> {
+	Ok(t)
+}
 
-pub(crate) fn or_else<T>(e: rocksdb::Error) -> Result<T, conduwuit::Error> { Err(map_err(e)) }
+pub(crate) fn or_else<T>(e: rocksdb::Error) -> Result<T, conduwuit::Error> {
+	Err(map_err(e))
+}
 
 #[inline]
-pub(crate) fn is_incomplete(e: &rocksdb::Error) -> bool { e.kind() == ErrorKind::Incomplete }
+pub(crate) fn is_incomplete(e: &rocksdb::Error) -> bool {
+	e.kind() == ErrorKind::Incomplete
+}
 
 pub(crate) fn map_err(e: rocksdb::Error) -> conduwuit::Error {
 	let kind = io_error_kind(&e.kind());

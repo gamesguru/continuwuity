@@ -148,7 +148,9 @@ pub struct Args {
 
 /// Parse commandline arguments into structured data
 #[must_use]
-pub(crate) fn parse() -> Args { Args::parse() }
+pub(crate) fn parse() -> Args {
+	Args::parse()
+}
 
 /// Synthesize any command line options with configuration file options.
 pub(crate) fn update(mut config: Figment, args: &Args) -> Result<Figment> {

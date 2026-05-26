@@ -108,7 +108,9 @@ impl crate::Service for Service {
 		self.negative_cache_ts.lock().await.clear();
 	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 }
 
 /// Gets the summary of a space using solely local information
@@ -529,11 +531,13 @@ where
 			let is_allowed = allowed_rooms
 				.stream()
 				.any(async |room| match identifier {
-					| Identifier::UserId(user) =>
-						self.services.state_cache.is_joined(user, room).await,
-					| Identifier::ServerName(server) =>
+					| Identifier::UserId(user) => {
+						self.services.state_cache.is_joined(user, room).await
+					},
+					| Identifier::ServerName(server) => {
 						self.services.state_cache.server_in_room(server, room).await
-							|| room.server_name() == Some(*server),
+							|| room.server_name() == Some(*server)
+					},
 				})
 				.await;
 

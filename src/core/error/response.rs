@@ -91,8 +91,9 @@ pub(super) fn bad_request_code(kind: &ErrorKind) -> StatusCode {
 		| Unrecognized => StatusCode::METHOD_NOT_ALLOWED,
 
 		// 404
-		| NotFound | NotImplemented | FeatureDisabled | SenderIgnored { .. } =>
-			StatusCode::NOT_FOUND,
+		| NotFound | NotImplemented | FeatureDisabled | SenderIgnored { .. } => {
+			StatusCode::NOT_FOUND
+		},
 
 		// 403
 		| GuestAccessForbidden
@@ -105,8 +106,9 @@ pub(super) fn bad_request_code(kind: &ErrorKind) -> StatusCode {
 		| Forbidden { .. } => StatusCode::FORBIDDEN,
 
 		// 401
-		| UnknownToken { .. } | MissingToken | Unauthorized | UserLocked =>
-			StatusCode::UNAUTHORIZED,
+		| UnknownToken { .. } | MissingToken | Unauthorized | UserLocked => {
+			StatusCode::UNAUTHORIZED
+		},
 
 		// 400
 		| _ => StatusCode::BAD_REQUEST,

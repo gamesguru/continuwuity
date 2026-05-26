@@ -250,7 +250,9 @@ impl Dim {
 	/// Returns true if the method is Crop.
 	#[inline]
 	#[must_use]
-	pub fn crop(&self) -> bool { self.method == Method::Crop }
+	pub fn crop(&self) -> bool {
+		self.method == Method::Crop
+	}
 }
 
 impl Default for Dim {

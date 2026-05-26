@@ -98,10 +98,13 @@ where
 								match self
 									.services
 									.sending
-									.send_federation_request(server, get_event::v1::Request {
-										event_id: event_id.clone(),
-										include_unredacted_content: None,
-									})
+									.send_federation_request(
+										server,
+										get_event::v1::Request {
+											event_id: event_id.clone(),
+											include_unredacted_content: None,
+										},
+									)
 									.await
 								{
 									| Ok(res) => {
@@ -122,13 +125,14 @@ where
 
 						match future::select_ok(reqs).await {
 							| Ok((res, _rem)) => return (event_id, Ok(res)),
-							| Err(_all_errors) =>
+							| Err(_all_errors) => {
 								if is_retry {
 									info!(%event_id, n_servers = servers.len(), attempt, "All servers exhausted");
 								} else {
 									debug!(%event_id, n_servers = servers.len(), "All servers exhausted");
 									break;
-								},
+								}
+							},
 						}
 					}
 					(
@@ -195,7 +199,7 @@ where
 					debug!("Got {next_id} over federation from {successful_server}");
 
 					let room_version_id = match create_event {
-						| Some(ce) =>
+						| Some(ce) => {
 							match crate::rooms::event_handler::get_room_version_id(ce) {
 								| Ok(v) => v,
 								| Err(_) => {
@@ -206,7 +210,8 @@ where
 									back_off(next_id.clone());
 									continue;
 								},
-							},
+							}
+						},
 						| None => {
 							let mut version = None;
 							if let Ok(json) =
@@ -225,7 +230,7 @@ where
 							}
 							match version {
 								| Some(v) => v,
-								| None =>
+								| None => {
 									if let Some(override_v) = room_version_override {
 										override_v.clone()
 									} else {
@@ -241,7 +246,8 @@ where
 												continue;
 											},
 										}
-									},
+									}
+								},
 							}
 						},
 					};
@@ -418,7 +424,7 @@ where
 				| Ok((pdu, json)) => {
 					processed_pdus.insert(next_id.clone(), (pdu, Some(json)));
 				},
-				| Err(e) =>
+				| Err(e) => {
 					if let conduwuit::Error::MissingAuthEvents(missing) = &e {
 						debug_info!(
 							"Suspending outlier {next_id} to fetch {} missing auth events",
@@ -437,7 +443,8 @@ where
 					} else {
 						warn!(target: "auth_chain", "Permanently backing off event {next_id} after auth failure: {e:?}");
 						back_off(next_id);
-					},
+					}
+				},
 			}
 		}
 

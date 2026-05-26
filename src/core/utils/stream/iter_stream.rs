@@ -23,7 +23,9 @@ where
 	<I as IntoIterator>::IntoIter: Send,
 {
 	#[inline]
-	fn stream(self) -> impl Stream<Item = <I as IntoIterator>::Item> + Send { stream::iter(self) }
+	fn stream(self) -> impl Stream<Item = <I as IntoIterator>::Item> + Send {
+		stream::iter(self)
+	}
 
 	#[inline]
 	fn try_stream<E>(

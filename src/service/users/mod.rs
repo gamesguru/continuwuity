@@ -131,7 +131,9 @@ impl crate::Service for Service {
 		}))
 	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 }
 
 impl Service {
@@ -336,7 +338,9 @@ impl Service {
 		self.db.userid_lock.raw_put(user_id, Json(suspension));
 	}
 
-	pub async fn unlock_account(&self, user_id: &UserId) { self.db.userid_lock.remove(user_id); }
+	pub async fn unlock_account(&self, user_id: &UserId) {
+		self.db.userid_lock.remove(user_id);
+	}
 
 	/// Check if a user has an account on this homeserver.
 	#[inline]
@@ -364,12 +368,13 @@ impl Service {
 			.deserialized::<UserSuspension>()
 		{
 			| Ok(s) => Ok(s.suspended),
-			| Err(e) =>
+			| Err(e) => {
 				if e.is_not_found() {
 					Ok(false)
 				} else {
 					Err(e)
-				},
+				}
+			},
 		}
 	}
 
@@ -382,12 +387,13 @@ impl Service {
 			.deserialized::<UserSuspension>()
 		{
 			| Ok(s) => Ok(s.suspended),
-			| Err(e) =>
+			| Err(e) => {
 				if e.is_not_found() {
 					Ok(false)
 				} else {
 					Err(e)
-				},
+				}
+			},
 		}
 	}
 
@@ -395,7 +401,9 @@ impl Service {
 		self.db.userid_logindisabled.insert(user_id, "");
 	}
 
-	pub fn enable_login(&self, user_id: &UserId) { self.db.userid_logindisabled.remove(user_id); }
+	pub fn enable_login(&self, user_id: &UserId) {
+		self.db.userid_logindisabled.remove(user_id);
+	}
 
 	pub async fn is_login_disabled(&self, user_id: &UserId) -> bool {
 		self.db
@@ -417,7 +425,9 @@ impl Service {
 
 	/// Returns the number of users registered on this server.
 	#[inline]
-	pub async fn count(&self) -> usize { self.db.userid_password.count().await }
+	pub async fn count(&self) -> usize {
+		self.db.userid_password.count().await
+	}
 
 	/// Find out which user an access token belongs to.
 	pub async fn find_from_token(&self, token: &str) -> Result<(OwnedUserId, OwnedDeviceId)> {
@@ -596,10 +606,14 @@ impl Service {
 		// Remove MSC3890 local notification settings for this device
 		self.services
 			.account_data
-			.delete_all(None, user_id, &[
-				&format!("org.matrix.msc3890.local_notification_settings.{device_id}"),
-				&format!("m.local_notification_settings.{device_id}"),
-			])
+			.delete_all(
+				None,
+				user_id,
+				&[
+					&format!("org.matrix.msc3890.local_notification_settings.{device_id}"),
+					&format!("m.local_notification_settings.{device_id}"),
+				],
+			)
 			.await
 			.ok();
 

@@ -122,7 +122,9 @@ impl crate::Service for Service {
 		}))
 	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 }
 
 #[implement(Service)]
@@ -171,7 +173,9 @@ pub fn get_appservice_in_room_cache_usage(&self) -> (usize, usize) {
 
 #[implement(Service)]
 #[tracing::instrument(level = "debug", skip_all)]
-pub fn clear_appservice_in_room_cache(&self) { self.appservice_in_room_cache.write().clear(); }
+pub fn clear_appservice_in_room_cache(&self) {
+	self.appservice_in_room_cache.write().clear();
+}
 
 /// Returns an iterator of all servers participating in this room.
 #[implement(Service)]

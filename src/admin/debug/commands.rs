@@ -772,10 +772,13 @@ pub(crate) async fn force_set_state(
 			match self
 				.services
 				.sending
-				.send_federation_request(server_name, get_room_state::v1::Request {
-					room_id: room_id.clone(),
-					event_id: at_event_id.clone(),
-				})
+				.send_federation_request(
+					server_name,
+					get_room_state::v1::Request {
+						room_id: room_id.clone(),
+						event_id: at_event_id.clone(),
+					},
+				)
 				.await
 			{
 				| Ok(resp) => {

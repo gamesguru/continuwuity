@@ -36,7 +36,9 @@ impl crate::Service for Service {
 		}))
 	}
 
-	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+	fn name(&self) -> &str {
+		crate::service::make_name(std::module_path!())
+	}
 }
 
 impl Service {
@@ -175,5 +177,7 @@ impl Service {
 			&& !self.db.is_event_soft_failed(event_id).await
 	}
 
-	pub fn clear_pdu_markers(&self, event_id: &EventId) { self.db.clear_pdu_markers(event_id); }
+	pub fn clear_pdu_markers(&self, event_id: &EventId) {
+		self.db.clear_pdu_markers(event_id);
+	}
 }

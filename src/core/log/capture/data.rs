@@ -14,16 +14,24 @@ pub struct Data<'a> {
 
 impl Data<'_> {
 	#[must_use]
-	pub fn our_modules(&self) -> bool { self.mod_name().starts_with(info::CRATE_PREFIX) }
+	pub fn our_modules(&self) -> bool {
+		self.mod_name().starts_with(info::CRATE_PREFIX)
+	}
 
 	#[must_use]
-	pub fn level(&self) -> Level { *self.event.metadata().level() }
+	pub fn level(&self) -> Level {
+		*self.event.metadata().level()
+	}
 
 	#[must_use]
-	pub fn mod_name(&self) -> &str { self.event.metadata().module_path().unwrap_or_default() }
+	pub fn mod_name(&self) -> &str {
+		self.event.metadata().module_path().unwrap_or_default()
+	}
 
 	#[must_use]
-	pub fn span_name(&self) -> &str { self.current.metadata().map_or(EMPTY, |s| s.name()) }
+	pub fn span_name(&self) -> &str {
+		self.current.metadata().map_or(EMPTY, |s| s.name())
+	}
 
 	#[must_use]
 	pub fn message(&self) -> &str {

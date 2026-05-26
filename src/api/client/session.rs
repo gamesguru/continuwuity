@@ -108,8 +108,9 @@ pub(super) async fn ldap_login(
 	password: &str,
 ) -> Result<OwnedUserId> {
 	let (user_dn, is_ldap_admin) = match services.config.ldap.bind_dn.as_ref() {
-		| Some(bind_dn) if bind_dn.contains("{username}") =>
-			(bind_dn.replace("{username}", lowercased_user_id.localpart()), None),
+		| Some(bind_dn) if bind_dn.contains("{username}") => {
+			(bind_dn.replace("{username}", lowercased_user_id.localpart()), None)
+		},
 		| _ => {
 			debug!("Searching user in LDAP");
 
