@@ -865,7 +865,30 @@ pub(crate) async fn force_set_state(
 	let mut validated = 0_usize;
 	let mut dropped = 0_usize;
 	for pdu in &pdus {
-		let result = if skip_sig_verify {
+		// Always compute event_id cheaply first (hash, no crypto)
+		let Ok((event_id, _)) =
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version)
+		else {
+			dropped = dropped.saturating_add(1);
+			continue;
+		};
+
+		// Skip expensive Ed25519 sig verification for events already stored locally
+		let already_exists = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok() || self
+			.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(&event_id)
+			.await
+			.is_ok();
+
+		let result = if skip_sig_verify || already_exists {
 			// Skip signature validation — just derive event_id from content hash
 			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
 				|(event_id, mut value)| {
@@ -935,20 +958,7 @@ pub(crate) async fn force_set_state(
 			}
 		}
 
-		if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&event_id).await {
-			trace!(
-				"PDU {event_id} already in timeline (pdu_id={pdu_id:?}), skipping outlier insert"
-			);
-		} else if self
-			.services
-			.rooms
-			.outlier
-			.get_outlier_pdu_json(&event_id)
-			.await
-			.is_ok()
-		{
-			trace!("PDU {event_id} already an outlier, skipping");
-		} else {
+		if !already_exists {
 			info!("PDU {event_id} NOT in timeline, adding as outlier");
 			self.services
 				.rooms
