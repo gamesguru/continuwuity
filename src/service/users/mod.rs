@@ -1721,6 +1721,22 @@ pub fn parse_user_signing_key(user_signing_key: &Raw<CrossSigningKey>) -> Result
 }
 
 fn merge_signatures(new: &mut serde_json::Value, old: &serde_json::Value) {
+	// Normalize null/missing signatures in the new key to an empty object
+	// so old signatures can be merged in. Some servers (e.g. matrix.org)
+	// send signatures: `null` rather than `{}` which would cause
+	// as_object_mut() to return None, skipping/clobbering the merge.
+	if let Some(obj) = new.as_object_mut() {
+		match obj.get("signatures") {
+			| Some(v) if !v.is_object() => {
+				obj.insert("signatures".to_owned(), json!({}));
+			},
+			| None => {
+				obj.insert("signatures".to_owned(), json!({}));
+			},
+			| _ => {},
+		}
+	}
+
 	if let (Some(new_sigs), Some(old_sigs)) = (
 		new.get_mut("signatures").and_then(|v| v.as_object_mut()),
 		old.get("signatures").and_then(|v| v.as_object()),
