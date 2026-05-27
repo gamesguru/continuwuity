@@ -47,8 +47,15 @@ where
 	if !pdu_fits(&mut value.clone()) {
 		warn!(
 			"dropping incoming PDU {event_id} in room {room_id} from {origin} because it \
-			 exceeds 65535 bytes or is otherwise too large."
+			 exceeds 65535 bytes or is otherwise too large. Persisting as rejected outlier."
 		);
+		// Persist as a rejected outlier to preserve the DAG chain.
+		// This prevents future valid events that reference this event from
+		// failing with MissingAuthEvents.
+		self.services.pdu_metadata.mark_event_rejected(event_id);
+		self.services
+			.outlier
+			.add_pdu_outlier(event_id, &value, Some(room_id));
 		return Err!(Request(TooLarge("PDU is too large")));
 	}
 	// Strip unsigned before signature verification (unsigned is not signed,
@@ -238,10 +245,21 @@ where
 		}
 	}
 
-	let pdu_event = serde_json::from_value::<PduEvent>(
+	let pdu_event = match serde_json::from_value::<PduEvent>(
 		serde_json::to_value(&incoming_pdu).expect("CanonicalJsonObj is a valid JsonValue"),
-	)
-	.map_err(|e| err!(Request(BadJson(debug_warn!("Event is not a valid PDU: {e}")))))?;
+	) {
+		| Ok(pdu) => pdu,
+		| Err(e) => {
+			// Persist as a rejected outlier to preserve the DAG chain.
+			// This prevents future valid events that reference this event from
+			// failing with MissingAuthEvents.
+			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &incoming_pdu, Some(room_id));
+			return Err!(Request(BadJson(debug_warn!("Event is not a valid PDU: {e}"))));
+		},
+	};
 
 	check_room_id(room_id, &pdu_event)?;
 
@@ -249,6 +267,20 @@ where
 	let mut auth_events: HashMap<OwnedEventId, PduEvent> = HashMap::new();
 
 	for aid in pdu_event.auth_events() {
+		// If any of the auth events are already marked as rejected, this event is
+		// automatically rejected. We must check this BEFORE attempting to fetch the
+		// auth event to avoid deadlocks (e.g. MissingAuthEvents) when an auth event
+		// is unparsable but correctly marked as rejected in our database.
+		if self.services.pdu_metadata.is_event_rejected(aid).await {
+			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services.outlier.add_pdu_outlier(
+				pdu_event.event_id(),
+				&incoming_pdu,
+				Some(room_id),
+			);
+			return Err!(Request(Forbidden("Event depends on rejected auth event {aid}")));
+		}
+
 		if let Ok(auth_event) = self
 			.services
 			.timeline
@@ -479,19 +511,7 @@ where
 		ready(auth_events_by_key.get(&key).map(ToOwned::to_owned))
 	};
 
-	// If any of the auth events are rejected, this event is also rejected.
-	// This ensures that rejections cascade through the entire outlier graph.
-	for aid in pdu_event.auth_events() {
-		if self.services.pdu_metadata.is_event_rejected(aid).await {
-			self.services.pdu_metadata.mark_event_rejected(event_id);
-			self.services.outlier.add_pdu_outlier(
-				pdu_event.event_id(),
-				&incoming_pdu,
-				Some(room_id),
-			);
-			return Err!(Request(Forbidden("Event depends on rejected auth event {aid}")));
-		}
-	}
+	// [NOTE: Rejection cascade now above auth events loop to avoid DAG holes]
 
 	let auth_check = state_res::event_auth::auth_check(
 		&to_room_version(&room_version_id),

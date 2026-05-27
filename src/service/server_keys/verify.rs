@@ -204,7 +204,25 @@ pub async fn verify_event(
 	let event = isolate_origin_signatures(event, room_version);
 
 	let keys = self.get_event_keys(&event, room_version).await?;
-	ruma::signatures::verify_event(&keys, &event, room_version).map_err(Into::into)
+
+	let result = ruma::signatures::verify_event(&keys, &event, room_version);
+	if let Err(ref e) = result {
+		let event_id = event
+			.get("event_id")
+			.and_then(|v| v.as_str())
+			.unwrap_or("unknown");
+		let signatures = event
+			.get("signatures")
+			.and_then(|v| v.as_object())
+			.map(|v| serde_json::to_string(v).unwrap_or_default())
+			.unwrap_or_default();
+		conduwuit::warn!(
+			"Signature verification failed for event {event_id}. Error: {e:?}. Available keys: \
+			 {keys:?}. Event signatures: {signatures}"
+		);
+	}
+
+	result.map_err(Into::into)
 }
 
 #[implement(super::Service)]
