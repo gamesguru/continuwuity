@@ -312,8 +312,7 @@ fn sign_request(&self, http_request: &mut http::Request<Vec<u8>>, dest: &ServerN
 
 	let sig_encoded = sig.encode();
 	let auth_str = format!(
-		"X-Matrix origin=\"{origin}\", key=\"{key}\", sig=\"{sig_encoded}\", \
-		 destination=\"{dest}\""
+		"X-Matrix origin=\"{origin}\",key=\"{key}\",sig=\"{sig_encoded}\",destination=\"{dest}\""
 	);
 	let authorization = HeaderValue::from_str(&auth_str).expect("valid header value");
 
