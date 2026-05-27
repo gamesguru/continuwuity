@@ -1,4 +1,4 @@
-use std::{net::IpAddr, sync::Arc, time::SystemTime};
+use std::{mem::size_of_val, net::IpAddr, sync::Arc, time::SystemTime};
 
 use conduwuit::{
 	Result,

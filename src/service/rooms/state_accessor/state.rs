@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, ops::Deref, sync::Arc};
+use std::{borrow::Borrow, mem::size_of, ops::Deref, sync::Arc};
 
 use conduwuit::{
 	Result, at, err, implement,

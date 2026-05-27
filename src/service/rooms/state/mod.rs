@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
+use std::{collections::HashMap, fmt::Write, iter::once, mem::size_of, sync::Arc};
 
 use async_trait::async_trait;
 use conduwuit::{RoomVersion, debug};

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use conduwuit::{Result, implement};
+use conduwuit::{Result, implement, utils::stream::TryReadyExt};
 use database::{Deserialized, Map};
 use ruma::{RoomId, UserId};
 
@@ -96,8 +96,6 @@ pub async fn last_notification_read(&self, user_id: &UserId, room_id: &RoomId) -
 /// This is useful for dry runs to see how many tokens would be deleted
 #[implement(Service)]
 pub async fn count_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
-	use futures::TryStreamExt;
-
 	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
 
 	// Create a prefix to search by - all entries for this room will start with its
@@ -108,7 +106,7 @@ pub async fn count_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 		.db
 		.roomsynctoken_shortstatehash
 		.keys_prefix_raw(prefix)
-		.try_fold(0_usize, |acc, _| async move { Ok(acc.saturating_add(1)) })
+		.ready_try_fold(0_usize, |acc, _| Ok(acc.saturating_add(1)))
 		.await?;
 
 	Ok(count)
@@ -119,8 +117,6 @@ pub async fn count_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 /// This helps clean up the database as these tokens are never otherwise removed
 #[implement(Service)]
 pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
-	use futures::TryStreamExt;
-
 	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
 
 	// Create a prefix to search by - all entries for this room will start with its
@@ -133,7 +129,7 @@ pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 		.db
 		.roomsynctoken_shortstatehash
 		.keys_prefix_raw(prefix)
-		.try_fold(0_usize, |acc, key| async move {
+		.ready_try_fold(0_usize, |acc, key| {
 			self.db.roomsynctoken_shortstatehash.remove(key);
 			Ok(acc.saturating_add(1))
 		})

@@ -5,7 +5,7 @@ mod create;
 mod data;
 mod redact;
 
-use std::{fmt::Write, sync::Arc};
+use std::{fmt::Write, mem::size_of, sync::Arc};
 
 use async_trait::async_trait;
 pub use conduwuit_core::matrix::pdu::{PduId, RawPduId};

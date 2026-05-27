@@ -1,4 +1,9 @@
-use std::{borrow::Borrow, fmt::Debug, mem::size_of_val, sync::Arc};
+use std::{
+	borrow::Borrow,
+	fmt::Debug,
+	mem::{size_of, size_of_val},
+	sync::Arc,
+};
 
 pub use conduwuit::matrix::pdu::{ShortEventId, ShortId, ShortRoomId, ShortStateKey};
 use conduwuit::{

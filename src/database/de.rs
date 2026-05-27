@@ -1,3 +1,5 @@
+use std::mem::size_of;
+
 use conduwuit::{
 	Error, Result, arrayvec::ArrayVec, checked, debug::DebugInspect, err, utils::string,
 };
