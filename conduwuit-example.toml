@@ -322,8 +322,9 @@
 #
 #max_concurrent_inbound_transactions = 150
 
-# Max concurrent global outbound requests. Defaults to 2048 to prevent
-# offline or slow federated servers from tying up all outbound permits.
+# Max concurrent global outbound requests. Limits how many outbound
+# federation HTTP connections can be in-flight simultaneously. Too high
+# and dead/slow servers consume all permits, starving live connections.
 #
 #max_concurrent_outbound_requests = 128
 

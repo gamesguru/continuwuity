@@ -396,14 +396,15 @@ where
 					.update_membership(room_id, target_user_id, pdu, true)
 					.await?;
 
-				// NOTE: we intentionally do NOT invalidate the spaces hierarchy
-				// cache here. The cache stores room summaries (name, topic,
-				// counts, join_rule), and the is_accessible_child() check is
-				// re-evaluated on every cache HIT. Membership changes are thus
-				// reflected without eviction. Invalidating on every member
-				// event caused constant cache thrashing and full hierarchy
-				// recomputation (including federation requests) on each
-				// /hierarchy call.
+				// Invalidate hierarchy cache: membership changes can affect
+				// restricted room accessibility (the `allow` list checks
+				// whether the requesting user/server is joined to this room).
+				self.services
+					.spaces
+					.roomid_spacehierarchy_cache
+					.lock()
+					.await
+					.remove(room_id);
 			}
 		},
 		| TimelineEventType::RoomMessage => {

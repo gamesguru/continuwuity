@@ -189,7 +189,14 @@ pub async fn build_and_append_pdu(
 		.await?;
 
 	if num_sent > 0 {
-		info!("Broadcasting {} in {room_id} to {num_sent} servers", pdu.event_id());
+		let _span = tracing::info_span!(
+			"broadcast",
+			event_id = %pdu.event_id(),
+			%room_id,
+			servers = num_sent,
+		)
+		.entered();
+		info!("Sending to federation");
 	}
 
 	trace!("Event {} in room {:?} has been appended", pdu.event_id(), room_id);

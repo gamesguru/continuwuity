@@ -229,6 +229,14 @@ impl Service {
 						.update_membership(room_id, user_id, &pdu, false)
 						.await?;
 
+					// Membership changes can affect restricted room accessibility
+					self.services
+						.spaces
+						.roomid_spacehierarchy_cache
+						.lock()
+						.await
+						.remove(room_id);
+
 					new_members = new_members.saturating_add(1);
 					if new_members.is_multiple_of(1000) {
 						info!(

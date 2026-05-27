@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Result, at, debug_warn, err, extract_variant, info,
+	Result, at, debug_warn, err, extract_variant,
 	matrix::{
 		Event,
 		pdu::{PduCount, PduEvent},
@@ -291,10 +291,9 @@ async fn build_state_and_timeline(
 
 	// the timeline should always include at least one PDU if the syncing user
 	// joined since the last sync, that being the syncing user's join event. if
-	// it's empty something is wrong. on initial sync this fires for every room
-	// so use debug! to avoid noise.
+	// it's empty something is wrong.
 	if joined_since_last_sync && timeline.pdus.is_empty() {
-		info!(%room_id, "timeline for newly joined room is empty");
+		warn!(%room_id, "timeline for newly joined room is empty");
 	}
 
 	let (summary, device_list_updates) = try_join(
@@ -716,23 +715,13 @@ async fn check_joined_since_last_sync(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn build_room_summary(
 	services: &Services,
-	sync_context: SyncContext<'_>,
+	SyncContext { syncing_user, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
 	joined_since_last_sync: bool,
 ) -> Result<Option<RoomSummary>> {
-	let SyncContext { syncing_user, last_sync_end_count, .. } = sync_context;
-
-	// On initial sync, skip room summary entirely. The client will compute
-	// counts from the full state we already send. This avoids
-	// joined_count + invited_count + has_name + has_canonical_alias + heroes
-	// queries for every room (~150 rooms × 5 DB reads = 750 avoided).
-	if last_sync_end_count.is_none() {
-		return Ok(None);
-	}
-
 	// determine whether any events in the state or timeline are membership events.
 	let are_syncing_membership_events = timeline
 		.pdus

@@ -157,6 +157,7 @@ impl Service {
 		match e {
 			| Error::FederationTimeout(..) | Error::FederationConnection(..) =>
 				debug!(dest = ?dest, "{e:?}"),
+			| _ if e.status_code().is_server_error() => debug!(dest = ?dest, "{e:?}"),
 			| _ => info!(dest = ?dest, "{e:?}"),
 		}
 		let mut tries = 1_u32;
