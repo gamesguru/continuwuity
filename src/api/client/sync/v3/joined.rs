@@ -17,7 +17,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join, join4, try_join, try_join3, try_join4},
+	future::{OptionFuture, join, join3, join4, try_join, try_join3, try_join4},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -162,31 +162,22 @@ async fn build_ephemeral(
 	// of `load_joined_room`. I don't know why boxing them fixes this -- it seems
 	// to be related to the async closures and borrowing from the sync context.
 
-	// collect updates to read receipts.
-	// On initial sync (since=None), skip receipts entirely. readreceipts_since
-	// with since=0 would scan ALL historical receipts for the room — a massive
-	// DB read for 150 rooms. Clients handle missing initial receipts gracefully
-	// and will receive them on the next incremental sync.
-	let receipt_events = if last_sync_end_count.is_some() {
-		services
-			.rooms
-			.read_receipt
-			.readreceipts_since(room_id, last_sync_end_count)
-			.filter_map(async |(read_user, _, edu)| {
-				let is_ignored = services
-					.users
-					.user_is_ignored(&read_user, syncing_user)
-					.await;
+	// collect updates to read receipts
+	let receipt_events = services
+		.rooms
+		.read_receipt
+		.readreceipts_since(room_id, last_sync_end_count)
+		.filter_map(async |(read_user, _, edu)| {
+			let is_ignored = services
+				.users
+				.user_is_ignored(&read_user, syncing_user)
+				.await;
 
-				// filter out read receipts for ignored users
-				is_ignored.or_some(edu)
-			})
-			.collect::<Vec<_>>()
-			.boxed()
-			.await
-	} else {
-		Vec::new()
-	};
+			// filter out read receipts for ignored users
+			is_ignored.or_some(edu)
+		})
+		.collect::<Vec<_>>()
+		.boxed();
 
 	// collect the updated list of typing users, if it's changed
 	let typing_event = async {
@@ -256,7 +247,8 @@ async fn build_ephemeral(
 		}
 	};
 
-	let (typing_event, private_read_event) = join(typing_event, private_read_event).await;
+	let (receipt_events, typing_event, private_read_event) =
+		join3(receipt_events, typing_event, private_read_event).await;
 
 	let mut edus = receipt_events;
 	edus.extend(typing_event);
