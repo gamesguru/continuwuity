@@ -966,7 +966,6 @@ where
 							(!shares_a_room(services, sender_user, user_id, Some(room_id)).await)
 								.then(|| user_id.to_owned())
 						})
-
 						.collect::<Vec<_>>()
 						.await,
 					);

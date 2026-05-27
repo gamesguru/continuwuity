@@ -90,9 +90,7 @@ pub(super) async fn purge_sync_tokens(&self, room: OwnedRoomOrAliasId) -> Result
 	let room_id = self.services.rooms.alias.resolve(&room).await?;
 
 	// Delete all tokens for this room using the service method
-	let Ok(deleted_count) = self.services.rooms.user.delete_room_tokens(&room_id).await else {
-		return Err!("Failed to delete sync tokens for room {}", room_id.as_str());
-	};
+	let deleted_count = self.services.rooms.user.delete_room_tokens(&room_id).await?;
 
 	self.write_str(&format!(
 		"Successfully deleted {deleted_count} sync tokens for room {}",

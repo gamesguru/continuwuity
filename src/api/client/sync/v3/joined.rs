@@ -725,7 +725,7 @@ async fn check_joined_since_last_sync(
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
 	// the root cause of this needs to be addressed
-	let joined_since_last_sync = if let Some(_last_sync_end_count) = last_sync_end_count {
+	let joined_since_last_sync = if last_sync_end_count.is_some() {
 		// Incremental sync
 		// fetch the syncing user's membership event during the last sync.
 		// this will be None if `previous_sync_end_shortstatehash` is None.
@@ -936,6 +936,11 @@ async fn build_device_list_updates(
 		return Ok(DeviceListUpdates::new());
 	}
 
+	// device list updates are only relevant for encrypted rooms
+	if !services.rooms.state_accessor.is_encrypted_room(room_id).await? {
+		return Ok(DeviceListUpdates::new());
+	}
+
 	let mut device_list_updates = DeviceListUpdates::new();
 
 	// add users with changed keys to the `changed` list
@@ -975,14 +980,14 @@ async fn build_device_list_updates(
 			use MembershipState::*;
 
 			if matches!(content.membership, Leave | Join) {
-				let shares_a_room =
+				let shares_room =
 					shares_a_room(services, syncing_user, &user_id, Some(room_id)).await;
 				match content.membership {
-					| Leave if !shares_a_room => {
+					| Leave if !shares_room => {
 						device_list_updates.left.insert(user_id);
 					},
 					| Join if joined_since_last_sync
-						|| shares_a_room || syncing_user == user_id =>
+						|| shares_room || syncing_user == user_id =>
 					{
 						device_list_updates.changed.insert(user_id);
 					},
