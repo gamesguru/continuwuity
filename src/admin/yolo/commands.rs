@@ -5610,6 +5610,85 @@ pub(super) async fn fetch_missing_events(
 }
 
 #[admin_command]
+pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Result {
+	self.bail_restricted()?;
+
+	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+
+	let pdus: Vec<(PduCount, PduEvent)> = self
+		.services
+		.rooms
+		.timeline
+		.all_pdus(&room_id)
+		.collect()
+		.await;
+
+	let total = pdus.len();
+	info!("Scanning {total} timeline PDUs in {room_id} for wrong-hash duplicates");
+
+	let mut removed = 0_usize;
+	let mut kept = 0_usize;
+	for (_, pdu) in &pdus {
+		let stored_event_id = pdu.event_id();
+
+		// Load the raw JSON to recompute the correct content-hash event_id
+		let Ok(json) = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_json(stored_event_id)
+			.await
+		else {
+			continue;
+		};
+
+		// Strip fields that shouldn't be in the content hash
+		let mut hashable = json.clone();
+		hashable.remove("event_id");
+		hashable.remove("signatures");
+		hashable.remove("unsigned");
+		hashable.remove("age_ts");
+
+		let Ok(correct_event_id) =
+			conduwuit::matrix::event::gen_event_id(&hashable, &room_version)
+		else {
+			continue;
+		};
+
+		if *stored_event_id != *correct_event_id {
+			if dry_run {
+				info!("Would remove: {stored_event_id} (correct: {correct_event_id})");
+			} else {
+				self.services
+					.rooms
+					.timeline
+					.remove_from_timeline(stored_event_id)
+					.await;
+				self.services
+					.rooms
+					.outlier
+					.remove_outlier(stored_event_id, None)
+					.await;
+			}
+			removed = removed.saturating_add(1);
+		} else {
+			kept = kept.saturating_add(1);
+		}
+
+		let processed = kept.saturating_add(removed);
+		if processed.is_multiple_of(1000) && processed > 0 {
+			info!("Dedup progress: {kept} kept, {removed} wrong-hash of {total} total");
+		}
+	}
+
+	let action = if dry_run { "Would remove" } else { "Removed" };
+	self.write_str(&format!(
+		"{action} {removed} wrong-hash duplicates out of {total} timeline PDUs. {kept} kept."
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn clear_ratelimiter(&self) -> Result {
 	self.bail_restricted()?;
 	self.services.globals.bad_event_ratelimiter.write().clear();

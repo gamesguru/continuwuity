@@ -639,6 +639,22 @@ pub enum YoloCommand {
 		rounds: usize,
 	},
 
+	/// Remove duplicate timeline events stored under wrong content-hash
+	/// event IDs.
+	///
+	/// Iterates all timeline PDUs in a room, recomputes the correct event_id
+	/// from the canonical JSON hash, and removes entries where the stored
+	/// event_id doesn't match. Use --dry-run to preview without deleting.
+	#[command(name = "dedup-room")]
+	DedupRoom {
+		/// The room ID to deduplicate.
+		room_id: OwnedRoomId,
+
+		/// Only report duplicates without removing them.
+		#[arg(long)]
+		dry_run: bool,
+	},
+
 	/// Clears the global bad_event ratelimiter cache.
 	///
 	/// Useful after massive DAG healing operations where 404s have bloated the
