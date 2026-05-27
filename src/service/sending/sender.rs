@@ -609,31 +609,32 @@ impl Service {
 		let batch = (since, since_upper);
 		debug_assert!(batch.0 <= batch.1, "since range must not be negative");
 
-		let events_len = AtomicUsize::default();
-		let max_edu_count = AtomicU64::new(since);
-
-		let device_changes =
-			self.select_edus_device_changes(server_name, batch, &max_edu_count, &events_len);
+		let device_changes = self.select_edus_device_changes(server_name, batch);
 
 		let receipts: OptionFuture<_> = self
 			.server
 			.config
 			.allow_outgoing_read_receipts
-			.then(|| self.select_edus_receipts(server_name, batch, &max_edu_count))
+			.then(|| self.select_edus_receipts(server_name, batch))
 			.into();
 
 		let presence: OptionFuture<_> = self
 			.server
 			.config
 			.allow_outgoing_presence
-			.then(|| self.select_edus_presence(server_name, batch, &max_edu_count))
+			.then(|| self.select_edus_presence(server_name, batch))
 			.into();
 
-		let (device_changes, receipts, presence) = join!(device_changes, receipts, presence);
+		let (device_res, receipts_res, presence_res) = join!(device_changes, receipts, presence);
+
+		let (device_changes, device_max) = device_res;
+		let (receipts, receipt_max) = receipts_res.unwrap_or((None, since_upper));
+		let (presence, presence_max) = presence_res.unwrap_or((None, since_upper));
+
+		// The safe global cursor is the minimum of all processed bounds
+		let last_count = device_max.min(receipt_max).min(presence_max);
 
 		// Collect them all
-		let receipts = receipts.flatten();
-		let presence = presence.flatten();
 
 		if !device_changes.is_empty() {
 			self.stats.outgoing_device_lists.fetch_add(
@@ -650,27 +651,21 @@ impl Service {
 		events.extend(presence);
 		events.extend(receipts);
 
-		Ok((events, max_edu_count.load(Ordering::Acquire)))
+		Ok((events, last_count))
 	}
 
 	/// Look for device changes
-	#[tracing::instrument(
-		name = "device_changes",
-		level = "trace",
-		skip(self, server_name, max_edu_count)
-	)]
+	#[tracing::instrument(name = "device_changes", level = "trace", skip(self, server_name))]
 	async fn select_edus_device_changes(
 		&self,
 		server_name: &ServerName,
 		since: (u64, u64),
-		max_edu_count: &AtomicU64,
-		events_len: &AtomicUsize,
-	) -> EduVec {
+	) -> (EduVec, u64) {
 		let mut events = EduVec::new();
 		let server_rooms = self.services.state_cache.server_rooms(server_name);
 
 		pin_mut!(server_rooms);
-		let mut device_list_changes = HashSet::<OwnedUserId>::new();
+		let mut all_changes = BTreeMap::<u64, HashSet<OwnedUserId>>::new();
 		while let Some(room_id) = server_rooms.next().await {
 			let keys_changed = self
 				.services
@@ -683,9 +678,17 @@ impl Service {
 				if count > since.1 {
 					break;
 				}
+				all_changes.entry(count).or_default().insert(user_id.into());
+			}
+		}
 
-				max_edu_count.fetch_max(count, Ordering::Relaxed);
-				if !device_list_changes.insert(user_id.into()) {
+		let mut device_list_changes = HashSet::<OwnedUserId>::new();
+		let mut max_processed_count = since.0;
+		let mut limited = false;
+
+		for (count, users) in all_changes {
+			for user_id in users {
+				if !device_list_changes.insert(user_id.clone()) {
 					continue;
 				}
 
@@ -706,27 +709,32 @@ impl Service {
 					.expect("failed to serialize device list update to JSON");
 
 				events.push(buf);
-				if events_len.fetch_add(1, Ordering::Relaxed) >= SELECT_EDU_LIMIT - 1 {
-					return events;
+				if events.len() >= SELECT_EDU_LIMIT {
+					limited = true;
+					break;
 				}
 			}
+
+			if limited {
+				break;
+			}
+			max_processed_count = count;
 		}
 
-		events
+		if !limited {
+			max_processed_count = since.1;
+		}
+
+		(events, max_processed_count)
 	}
 
 	/// Look for read receipts in this room
-	#[tracing::instrument(
-		name = "receipts",
-		level = "trace",
-		skip(self, server_name, max_edu_count)
-	)]
+	#[tracing::instrument(name = "receipts", level = "trace", skip(self, server_name))]
 	async fn select_edus_receipts(
 		&self,
 		server_name: &ServerName,
 		since: (u64, u64),
-		max_edu_count: &AtomicU64,
-	) -> Option<EduBuf> {
+	) -> (Option<EduBuf>, u64) {
 		let mut num = 0;
 		let receipts: BTreeMap<OwnedRoomId, ReceiptMap> = self
 			.services
@@ -735,7 +743,7 @@ impl Service {
 			.map(ToOwned::to_owned)
 			.broad_filter_map(|room_id| async move {
 				let receipt_map = self
-					.select_edus_receipts_room(&room_id, since, max_edu_count, &mut num)
+					.select_edus_receipts_room(&room_id, since, &mut num)
 					.await;
 
 				receipt_map
@@ -748,7 +756,7 @@ impl Service {
 			.await;
 
 		if receipts.is_empty() {
-			return None;
+			return (None, since.1);
 		}
 
 		let receipt_content = Edu::Receipt(ReceiptContent { receipts });
@@ -757,16 +765,15 @@ impl Service {
 		serde_json::to_writer(&mut buf, &receipt_content)
 			.expect("Failed to serialize Receipt EDU to JSON vec");
 
-		Some(buf)
+		(Some(buf), since.1)
 	}
 
 	/// Look for read receipts in this room
-	#[tracing::instrument(name = "receipts", level = "trace", skip(self, since, max_edu_count))]
+	#[tracing::instrument(name = "receipts", level = "trace", skip(self, since))]
 	async fn select_edus_receipts_room(
 		&self,
 		room_id: &RoomId,
 		since: (u64, u64),
-		max_edu_count: &AtomicU64,
 		num: &mut usize,
 	) -> ReceiptMap {
 		let receipts = self
@@ -781,7 +788,6 @@ impl Service {
 				break;
 			}
 
-			max_edu_count.fetch_max(count, Ordering::Relaxed);
 			if !self.services.globals.user_is_local(&user_id) {
 				continue;
 			}
@@ -829,26 +835,22 @@ impl Service {
 	// TODO: presence updates are batched per server via `pending_updates`,
 	// but server_sees_user still hits the DB per user to check shared rooms.
 	// Consider caching which servers each user is visible to, to avoid these DB calls.
-	#[tracing::instrument(
-		name = "presence",
-		level = "trace",
-		skip(self, server_name, since, max_edu_count)
-	)]
+	#[tracing::instrument(name = "presence", level = "trace", skip(self, server_name, since))]
 	async fn select_edus_presence(
 		&self,
 		server_name: &ServerName,
 		since: (u64, u64),
-		max_edu_count: &AtomicU64,
-	) -> Option<EduBuf> {
-		let (_, mut users) = self.services.presence.pending_updates.remove(server_name)?;
+	) -> (Option<EduBuf>, u64) {
+		let Some((_, mut users)) = self.services.presence.pending_updates.remove(server_name) else {
+			return (None, since.1);
+		};
 
 		if users.is_empty() {
-			return None;
+			return (None, since.1);
 		}
 
 		let mut presence_updates = Vec::with_capacity(users.len().min(SELECT_PRESENCE_LIMIT));
 		let mut attempted_users = Vec::with_capacity(SELECT_PRESENCE_LIMIT);
-		let mut max_presence_count = 0;
 		let mut loop_count = 0_usize;
 		for user_id in users.iter().cloned() {
 			loop_count = loop_count.saturating_add(1);
@@ -856,7 +858,7 @@ impl Service {
 				break;
 			}
 
-			let Ok((presence_count, presence_event)) = self
+			let Ok((_, presence_event)) = self
 				.services
 				.presence
 				.get_presence_with_count(&user_id)
@@ -879,11 +881,6 @@ impl Service {
 				continue;
 			}
 
-			// We don't want to advance the global EDU cursor past the snapshot upper bound
-			// because that could skip other EDU types. But we can still send the latest
-			// presence for this user right now.
-			max_presence_count = max_presence_count.max(presence_count.min(since.1));
-
 			let update = PresenceUpdate {
 				user_id,
 				presence: presence_event.content.presence,
@@ -899,13 +896,6 @@ impl Service {
 			if presence_updates.len() >= SELECT_PRESENCE_LIMIT {
 				break;
 			}
-		}
-
-		// Update the global EDU cursor so that if we only send presence updates,
-		// the cursor still moves forward. This prevents the server from repeatedly
-		// scanning historical events for other EDU types (like typing or receipts).
-		if max_presence_count > 0 {
-			max_edu_count.fetch_max(max_presence_count, Ordering::Relaxed);
 		}
 
 		// remove only the users we attempted to process from this batch
@@ -925,7 +915,7 @@ impl Service {
 		}
 
 		if presence_updates.is_empty() {
-			return None;
+			return (None, since.1);
 		}
 
 		self.stats
@@ -938,7 +928,7 @@ impl Service {
 		serde_json::to_writer(&mut buf, &presence_content)
 			.expect("failed to serialize Presence EDU to JSON");
 
-		Some(buf)
+		(Some(buf), since.1)
 	}
 
 	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>) -> SendingFuture<'_> {
