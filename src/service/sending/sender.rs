@@ -11,7 +11,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit::info;
 use conduwuit_core::{
-	Error, Event, Result, err, error,
+	Error, Event, Result, debug, err, error,
 	result::LogErr,
 	trace,
 	utils::{
@@ -154,7 +154,11 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 		e: &Error,
 	) {
-		info!(dest = ?dest, "{e:?}");
+		match e {
+			| Error::FederationTimeout(..) | Error::FederationConnection(..) =>
+				debug!(dest = ?dest, "{e:?}"),
+			| _ => info!(dest = ?dest, "{e:?}"),
+		}
 		let mut tries = 1_u32;
 		statuses.entry(dest.clone()).and_modify(|e| {
 			*e = match e {
