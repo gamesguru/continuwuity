@@ -1001,6 +1001,7 @@ pub(crate) async fn force_set_state(
 	let mut auth_existing = 0_usize;
 	let mut auth_added = 0_usize;
 	let mut auth_dropped = 0_usize;
+	let auth_chain_total = auth_chain.len();
 	for pdu in &auth_chain {
 		let result = if skip_sig_verify {
 			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
@@ -1051,6 +1052,16 @@ pub(crate) async fn force_set_state(
 				.outlier
 				.add_pdu_outlier(&event_id, &value, Some(&room_id));
 			auth_added = auth_added.saturating_add(1);
+		}
+
+		let processed = auth_existing
+			.saturating_add(auth_added)
+			.saturating_add(auth_dropped);
+		if processed.is_multiple_of(1000) {
+			info!(
+				"Auth chain progress: {auth_added} added, {auth_existing} existing, \
+				 {auth_dropped} dropped of {auth_chain_total} total"
+			);
 		}
 	}
 	info!("Auth chain: {auth_added} added, {auth_existing} existing, {auth_dropped} dropped");
