@@ -40,6 +40,29 @@ pub(super) async fn pre_fetch_state_res_deps(
 		.collect()
 		.await;
 
+	// Fast path: if all incoming state event IDs are already known locally
+	// (timeline or outlier), the auth chain is almost certainly complete too.
+	// Skip the expensive full auth chain computation (~11K events in large rooms).
+	let all_incoming_local = incoming_state
+		.values()
+		.stream()
+		.broad_all(|event_id| async move {
+			self.services.timeline.pdu_exists(event_id).await
+				|| self
+					.services
+					.outlier
+					.get_pdu_outlier(event_id)
+					.await
+					.is_ok()
+		})
+		.await;
+
+	if all_incoming_local {
+		// Phase 2 (DAG gap fill) is still relevant, but Phase 1 (auth chain
+		// pre-fetch) can be skipped entirely for well-established rooms.
+		return;
+	}
+
 	// Compute auth chain sets for both fork states
 	let auth_chain_sets: Vec<HashSet<OwnedEventId>> = match [&current_state_ids, incoming_state]
 		.iter()
