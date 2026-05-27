@@ -368,7 +368,7 @@ struct ShortStateHashes {
 #[tracing::instrument(level = "debug", skip_all)]
 async fn fetch_shortstatehashes(
 	services: &Services,
-	SyncContext { last_sync_end_count, .. }: SyncContext<'_>,
+	SyncContext { last_sync_end_count, current_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<ShortStateHashes> {
 	// the room state currently.
@@ -379,27 +379,45 @@ async fn fetch_shortstatehashes(
 		.timeline
 		.next_shortstatehash(room_id, PduCount::Normal(current_count))
 		.or_else(|_| services.rooms.state.get_room_shortstatehash(room_id))
-		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
+		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))
+		.await?;
 
-	// the room state as of the end of the last sync, computed statelessly from
-	// the timeline. this will be None if we are doing an initial sync or if
-	// we just joined this room.
+	// The room state as of the end of the last sync.
+	// This will be None if we are doing an initial sync or if we just joined this
+	// room.
 	let last_sync_end_shortstatehash =
-		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
-			services
+		OptionFuture::from(last_sync_end_count.map(async |last_sync_end_count| {
+			use futures::pin_mut;
+			let pdus = services
 				.rooms
 				.timeline
-				.prev_shortstatehash(
-					room_id,
-					PduCount::Normal(last_sync_end_count).saturating_add(1),
-				)
-				.ok()
-		}))
-		.map(Option::flatten)
-		.map(Ok);
+				.pdus(room_id, Some(PduCount::Normal(last_sync_end_count)))
+				.ignore_err();
 
-	let (current_shortstatehash, last_sync_end_shortstatehash) =
-		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
+			pin_mut!(pdus);
+
+			match pdus.next().await {
+				| Some((_, pdu_after_last_sync_end)) => {
+					trace!(?pdu_after_last_sync_end.event_id, "pdu at last sync end");
+
+					services
+						.rooms
+						.state_accessor
+						.pdu_shortstatehash(&pdu_after_last_sync_end.event_id)
+						.await
+						.map_err(|err| {
+							err!(Database("Last sync end PDU has no shortstatehash: {err}"))
+						})
+				},
+				| None => {
+					// No events have been sent since the last sync,
+					// so the state then is the same as the state now
+					Ok(current_shortstatehash)
+				},
+			}
+		}))
+		.await
+		.transpose()?;
 
 	Ok(ShortStateHashes {
 		current_shortstatehash,
