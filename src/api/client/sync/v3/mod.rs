@@ -8,10 +8,10 @@ use std::{
 	time::Duration,
 };
 
-use axum::{extract::State, response::IntoResponse};
+use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Result, at, extract_variant,
+	Err, Result, at, extract_variant,
 	utils::{
 		ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, Tools, WidebandExt},
@@ -19,37 +19,31 @@ use conduwuit::{
 	warn,
 };
 use conduwuit_service::Services;
-use futures::{
-	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join3, join4},
-};
+use futures::{FutureExt, StreamExt, TryFutureExt, future::OptionFuture};
 use ruma::{
 	DeviceId, OwnedUserId, RoomId, UserId,
-	api::{
-		OutgoingResponse,
-		client::{
-			filter::FilterDefinition,
-			sync::sync_events::{
-				self, DeviceLists,
-				v3::{
-					Filter, GlobalAccountData, InviteState, InvitedRoom, KnockState, KnockedRoom,
-					Presence, Rooms, ToDevice,
-				},
+	api::client::{
+		filter::FilterDefinition,
+		sync::sync_events::{
+			self, DeviceLists,
+			v3::{
+				Filter, GlobalAccountData, InviteState, InvitedRoom, KnockState, KnockedRoom,
+				Presence, Rooms, ToDevice,
 			},
-			uiaa::UiaaResponse,
 		},
 	},
-	events::{
-		AnyGlobalAccountDataEvent, AnyRawAccountDataEvent,
-		presence::{PresenceEvent, PresenceEventContent},
-	},
+	assign,
+	events::presence::{PresenceEvent, PresenceEventContent},
 	serde::Raw,
 };
-use service::rooms::lazy_loading::{self, MemberSet, Options as _};
+use service::{
+	account_data::AnyRawAccountDataEvent,
+	rooms::lazy_loading::{self, MemberSet, Options as _},
+};
 
 use super::{load_timeline, share_encrypted_room};
 use crate::{
-	Ruma, RumaResponse,
+	Ruma,
 	client::{
 		is_ignored_invite,
 		sync::v3::{joined::load_joined_room, left::load_left_room},
@@ -85,10 +79,10 @@ impl DeviceListUpdates {
 
 impl From<DeviceListUpdates> for DeviceLists {
 	fn from(val: DeviceListUpdates) -> Self {
-		Self {
+		assign!(Self::new(), {
 			changed: val.changed.into_iter().collect(),
 			left: val.left.into_iter().collect(),
-		}
+		})
 	}
 }
 
@@ -186,8 +180,9 @@ pub(crate) async fn sync_events_route(
 	State(services): State<crate::State>,
 	ClientIp(client_ip): ClientIp,
 	body: Ruma<sync_events::v3::Request>,
-) -> Result<axum::response::Response, RumaResponse<UiaaResponse>> {
-	let (sender_user, sender_device) = body.sender();
+) -> Result<sync_events::v3::Response> {
+	let sender_user = body.identity.sender_user();
+	let sender_device = body.identity.expect_sender_device()?;
 
 	// Presence update
 	if services.config.allow_local_presence {
@@ -207,8 +202,14 @@ pub(crate) async fn sync_events_route(
 	let watcher = services.sync.watch(sender_user, sender_device);
 
 	let response = build_sync_events(&services, &body).await?;
-	if body.body.since.is_none() || body.body.full_state || !is_sync_response_empty(&response) {
-		return Ok(axum::Json(response).into_response());
+	if body.body.full_state
+		|| !(response.rooms.is_empty()
+			&& response.presence.is_empty()
+			&& response.account_data.is_empty()
+			&& response.device_lists.is_empty()
+			&& response.to_device.is_empty())
+	{
+		return Ok(response);
 	}
 
 	// Hang a few seconds so requests are not spammed
@@ -218,29 +219,15 @@ pub(crate) async fn sync_events_route(
 	_ = tokio::time::timeout(duration, watcher).await;
 
 	// Retry returning data
-	let response = build_sync_events(&services, &body).await?;
-	Ok(axum::Json(response).into_response())
-}
-
-fn is_sync_response_empty(val: &serde_json::Value) -> bool {
-	let Some(obj) = val.as_object() else {
-		return true;
-	};
-
-	let rooms_empty = obj.get("rooms").is_none();
-	let presence_empty = obj.get("presence").is_none();
-	let account_data_empty = obj.get("account_data").is_none();
-	let to_device_empty = obj.get("to_device").is_none();
-	let device_lists_empty = obj.get("device_lists").is_none();
-
-	rooms_empty && presence_empty && account_data_empty && to_device_empty && device_lists_empty
+	build_sync_events(&services, &body).await
 }
 
 pub(crate) async fn build_sync_events(
 	services: &Services,
 	body: &Ruma<sync_events::v3::Request>,
-) -> Result<serde_json::Value, RumaResponse<UiaaResponse>> {
-	let (syncing_user, syncing_device) = body.sender();
+) -> Result<sync_events::v3::Response> {
+	let syncing_user = body.identity.sender_user();
+	let syncing_device = body.identity.sender_device().expect("should have a device");
 
 	let current_count = services.globals.current_count()?;
 
@@ -265,6 +252,8 @@ pub(crate) async fn build_sync_events(
 			.get_filter(syncing_user, filter_id)
 			.await
 			.unwrap_or_default(),
+		// error out for unknown filter types
+		| _ => return Err!(Request(InvalidParam("Unknown filter type"))),
 	});
 
 	let context = SyncContext {
@@ -280,12 +269,11 @@ pub(crate) async fn build_sync_events(
 		.rooms
 		.state_cache
 		.rooms_joined(syncing_user)
-		.map(ToOwned::to_owned)
 		.broad_filter_map(|room_id| async {
 			let joined_room = load_joined_room(services, context, room_id.clone()).await;
 
 			match joined_room {
-				| Ok((room, state_after, updates)) => Some((room_id, room, state_after, updates)),
+				| Ok((room, updates)) => Some((room_id, room, updates)),
 				| Err(err) => {
 					warn!(?err, %room_id, "error loading joined room");
 					None
@@ -293,19 +281,15 @@ pub(crate) async fn build_sync_events(
 			}
 		})
 		.ready_fold(
-			(BTreeMap::new(), BTreeMap::new(), DeviceListUpdates::new()),
-			|(mut joined_rooms, mut joined_state_after, mut all_updates),
-			 (room_id, joined_room, state_after, updates)| {
+			(BTreeMap::new(), DeviceListUpdates::new()),
+			|(mut joined_rooms, mut all_updates), (room_id, joined_room, updates)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() || context.last_sync_end_count.is_none() {
-					joined_rooms.insert(room_id.clone(), joined_room);
-					if !state_after.is_empty() {
-						joined_state_after.insert(room_id, state_after);
-					}
+				if !joined_room.is_empty() {
+					joined_rooms.insert(room_id, joined_room);
 				}
 
-				(joined_rooms, joined_state_after, all_updates)
+				(joined_rooms, all_updates)
 			},
 		);
 
@@ -317,7 +301,7 @@ pub(crate) async fn build_sync_events(
 			let left_room = load_left_room(services, context, room_id.clone(), leave_pdu).await;
 
 			match left_room {
-				| Ok(Some((room, state_after))) => Some((room_id, room, state_after)),
+				| Ok(Some(left_room)) => Some((room_id, left_room)),
 				| Ok(None) => None,
 				| Err(err) => {
 					warn!(?err, %room_id, "error loading joined room");
@@ -325,16 +309,7 @@ pub(crate) async fn build_sync_events(
 				},
 			}
 		})
-		.fold(
-			(BTreeMap::new(), BTreeMap::new()),
-			|(mut left_rooms, mut left_state_after), (room_id, left_room, state_after)| async move {
-				left_rooms.insert(room_id.clone(), left_room);
-				if !state_after.is_empty() {
-					left_state_after.insert(room_id, state_after);
-				}
-				(left_rooms, left_state_after)
-			},
-		);
+		.collect();
 
 	let invited_rooms = services
 		.rooms
@@ -357,9 +332,9 @@ pub(crate) async fn build_sync_events(
 
 			// only sync this invite if it was sent after the last /sync call
 			if last_sync_end_count < invite_count {
-				let invited_room = InvitedRoom {
-					invite_state: InviteState { events: invite_state },
-				};
+				let invited_room = assign!(InvitedRoom::new(), {
+					invite_state: InviteState::from(invite_state),
+				});
 
 				invited_rooms.insert(room_id, invited_room);
 			}
@@ -380,20 +355,14 @@ pub(crate) async fn build_sync_events(
 
 			// only sync this knock if it was sent after the last /sync call
 			if last_sync_end_count < knock_count {
-				let knocked_room = KnockedRoom {
-					knock_state: KnockState { events: knock_state },
-				};
+				let knocked_room = assign!(KnockedRoom::new(), {
+					knock_state: assign!(KnockState::new(), { events: knock_state }),
+				});
 
 				knocked_rooms.insert(room_id, knocked_room);
 			}
 			knocked_rooms
 		});
-
-	let (joined_rooms, left_rooms, invited_rooms, knocked_rooms) =
-		join4(joined_rooms, left_rooms, invited_rooms, knocked_rooms).await;
-
-	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
-	let (left_rooms, left_state_after) = left_rooms;
 
 	let presence_updates: OptionFuture<_> = services
 		.config
@@ -401,19 +370,11 @@ pub(crate) async fn build_sync_events(
 		.then(|| process_presence_updates(services, last_sync_end_count, syncing_user))
 		.into();
 
-	let account_data: Vec<Raw<AnyGlobalAccountDataEvent>> = services
+	let account_data = services
 		.account_data
 		.changes_since(None, syncing_user, last_sync_end_count, Some(current_count))
 		.ready_filter_map(|e| extract_variant!(e, AnyRawAccountDataEvent::Global))
-		.collect()
-		.await;
-
-	// Look for device list updates of this account
-	let keys_changed = services
-		.users
-		.keys_changed(syncing_user, last_sync_end_count, Some(current_count))
-		.map(ToOwned::to_owned)
-		.collect::<HashSet<_>>();
+		.collect();
 
 	let to_device_events = services
 		.users
@@ -426,35 +387,62 @@ pub(crate) async fn build_sync_events(
 		.map(at!(1))
 		.collect::<Vec<_>>();
 
+	// Look for device list updates of this account
+	let keys_changed = services
+		.users
+		.keys_changed(syncing_user, last_sync_end_count, Some(current_count))
+		.collect::<HashSet<_>>();
+
 	let device_one_time_keys_count = services
 		.users
 		.count_one_time_keys(syncing_user, syncing_device);
 
-	// Remove all to-device events the device received *last time*
-	let remove_to_device_events =
-		services
-			.users
-			.remove_to_device_events(syncing_user, syncing_device, last_sync_end_count);
+	let unused_fallback_key_types = services
+		.users
+		.list_unused_fallback_key_types(syncing_user, syncing_device);
 
-	let ephemeral = join3(remove_to_device_events, to_device_events, presence_updates);
-	let top = join3(ephemeral, device_one_time_keys_count, keys_changed)
-		.boxed()
+	let (
+		(joined_rooms, mut device_list_updates),
+		left_rooms,
+		invited_rooms,
+		knocked_rooms,
+		presence_updates,
+		account_data,
+		to_device_events,
+		keys_changed,
+		device_one_time_keys_count,
+		unused_fallback_key_types,
+	) = async {
+		futures::join!(
+			joined_rooms,
+			left_rooms,
+			invited_rooms,
+			knocked_rooms,
+			presence_updates,
+			account_data,
+			to_device_events,
+			keys_changed,
+			device_one_time_keys_count,
+			unused_fallback_key_types,
+		)
+	}
+	.boxed()
+	.await;
+
+	// Remove all to-device events the device received *last time*
+	services
+		.users
+		.remove_to_device_events(syncing_user, syncing_device, last_sync_end_count)
 		.await;
 
-	let (ephemeral, device_one_time_keys_count, keys_changed) = top;
-	let ((), to_device_events, presence_updates) = ephemeral;
-	let mut device_list_updates: DeviceLists = device_list_updates.into();
 	device_list_updates.changed.extend(keys_changed);
 
-	let ruma_response = sync_events::v3::Response {
-		next_batch: current_count.to_string(),
-		rooms: Rooms {
-			leave: left_rooms,
-			join: joined_rooms,
-			invite: invited_rooms,
-			knock: knocked_rooms,
-		},
-		presence: Presence {
+	let response = assign!(sync_events::v3::Response::new(current_count.to_string()), {
+		account_data: assign!(GlobalAccountData::new(), { events: account_data }),
+		device_lists: device_list_updates.into(),
+		device_one_time_keys_count,
+		device_unused_fallback_key_types: Some(unused_fallback_key_types),
+		presence: assign!(Presence::new(), {
 			events: presence_updates
 				.into_iter()
 				.flat_map(IntoIterator::into_iter)
@@ -462,52 +450,17 @@ pub(crate) async fn build_sync_events(
 				.map(|ref event| Raw::new(event))
 				.filter_map(Result::ok)
 				.collect(),
-		},
-		account_data: GlobalAccountData { events: account_data },
-		to_device: ToDevice { events: to_device_events },
-		device_lists: device_list_updates,
-		device_one_time_keys_count,
-		device_unused_fallback_key_types: None,
-	};
+		}),
+		rooms: assign!(Rooms::new(), {
+			leave: left_rooms,
+			join: joined_rooms,
+			invite: invited_rooms,
+			knock: knocked_rooms,
+		}),
+		to_device: assign!(ToDevice::new(), { events: to_device_events }),
+	});
 
-	let mut val: serde_json::Value = serde_json::from_slice(
-		ruma_response
-			.try_into_http_response::<bytes::BytesMut>()
-			.expect("ruma response is valid")
-			.body(),
-	)
-	.expect("ruma response is valid JSON");
-
-	// Manually insert state_after data for MSC4222
-	if let Some(join) = val.get_mut("rooms").and_then(|r| r.get_mut("join")) {
-		for (room_id, state_after) in joined_state_after {
-			if let Some(room) = join.get_mut(room_id.as_str()) {
-				let state_after_obj = serde_json::json!({ "events": state_after });
-				room.as_object_mut()
-					.unwrap()
-					.insert("state_after".to_owned(), state_after_obj.clone());
-				room.as_object_mut()
-					.unwrap()
-					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
-			}
-		}
-	}
-
-	if let Some(leave) = val.get_mut("rooms").and_then(|r| r.get_mut("leave")) {
-		for (room_id, state_after) in left_state_after {
-			if let Some(room) = leave.get_mut(room_id.as_str()) {
-				let state_after_obj = serde_json::json!({ "events": state_after });
-				room.as_object_mut()
-					.unwrap()
-					.insert("state_after".to_owned(), state_after_obj.clone());
-				room.as_object_mut()
-					.unwrap()
-					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
-			}
-		}
-	}
-
-	Ok(val)
+	Ok(response)
 }
 
 #[tracing::instrument(name = "presence", level = "debug", skip_all)]

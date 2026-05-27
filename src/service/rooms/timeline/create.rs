@@ -5,17 +5,17 @@ use conduwuit_core::{
 	Err, Error, Result, err, implement,
 	matrix::{
 		event::{Event, gen_event_id},
-		pdu::{EventHash, PduBuilder, PduEvent},
-		state_res::{self, RoomVersion},
+		pdu::{EventHash, PartialPdu, PduEvent},
+		state_res,
 	},
 	utils::{self, IterStream, ReadyExt, stream::TryIgnore},
-	warn,
 };
 use futures::{StreamExt, TryStreamExt, future, future::ready};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId,
 	UserId,
 	events::{StateEventType, TimelineEventType, room::create::RoomCreateEventContent},
+	room_version_rules::RoomVersionRules,
 	uint,
 };
 use serde_json::value::{RawValue, to_raw_value};
@@ -77,26 +77,26 @@ fn room_version_from_event(
 #[implement(super::Service)]
 pub async fn create_event(
 	&self,
-	pdu_builder: PduBuilder,
+	partial_pdu: PartialPdu,
 	sender: &UserId,
 	room_id: Option<&RoomId>,
 	_mutex_lock: &RoomMutexGuard,
-) -> Result<(PduEvent, RoomVersionId)> {
-	let PduBuilder {
+) -> Result<(PduEvent, RoomVersionRules)> {
+	let PartialPdu {
 		event_type,
 		content,
 		unsigned,
 		state_key,
 		redacts,
 		timestamp,
-	} = pdu_builder;
-	// If there was no create event yet, assume we are creating a room
+	} = partial_pdu;
+
 	trace!(
 		"Creating event of type {} in room {}",
 		event_type,
 		room_id.as_ref().map_or("None", |id| id.as_str())
 	);
-	let room_version_id = match room_id {
+	let room_version = match room_id {
 		| Some(room_id) => {
 			trace!(%room_id, "Looking up existing room ID");
 			self.services
@@ -114,14 +114,16 @@ pub async fn create_event(
 		| None => {
 			trace!("No room ID, assuming room creation");
 			room_version_from_event(
-				RoomId::new(self.services.globals.server_name()),
+				RoomId::new_v1(self.services.globals.server_name()),
 				&event_type.clone(),
 				&content.clone(),
 			)?
 		},
 	};
 
-	let room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
+	let Some(room_version_rules) = room_version.rules() else {
+		return Err!(Request(UnsupportedRoomVersion("Unsupported room version")));
+	};
 
 	let prev_events: Vec<OwnedEventId> = match room_id {
 		| Some(room_id) =>
@@ -145,7 +147,7 @@ pub async fn create_event(
 					sender,
 					state_key.as_deref(),
 					&content,
-					&room_version,
+					&room_version_rules,
 				)
 				.await?,
 		| None => HashMap::new(),
@@ -247,7 +249,7 @@ pub async fn create_event(
 	};
 
 	let auth_check = state_res::auth_check(
-		&room_version,
+		&room_version_rules,
 		&pdu,
 		None, // TODO: third_party_invite
 		auth_fetch,
@@ -264,13 +266,13 @@ pub async fn create_event(
 		pdu.event_id,
 		pdu.room_id.as_ref().map_or("None", |id| id.as_str())
 	);
-	Ok((pdu, room_version_id))
+	Ok((pdu, room_version_rules))
 }
 
 #[implement(super::Service)]
 pub async fn create_hash_and_sign_event(
 	&self,
-	pdu_builder: PduBuilder,
+	partial_pdu: PartialPdu,
 	sender: &UserId,
 	room_id: Option<&RoomId>,
 	mutex_lock: &RoomMutexGuard, /* Take mutex guard to make sure users get the room
@@ -279,8 +281,8 @@ pub async fn create_hash_and_sign_event(
 	if !self.services.globals.user_is_local(sender) {
 		return Err!(Request(Forbidden("Sender must be a local user")));
 	}
-	let (mut pdu, room_version_id) = self
-		.create_event(pdu_builder, sender, room_id, mutex_lock)
+	let (mut pdu, room_version_rules) = self
+		.create_event(partial_pdu, sender, room_id, mutex_lock)
 		.await?;
 	// Hash and sign
 	let mut pdu_json = utils::to_canonical_object(&pdu).map_err(|e| {
@@ -292,17 +294,17 @@ pub async fn create_hash_and_sign_event(
 	if let Err(e) = self
 		.services
 		.server_keys
-		.hash_and_sign_event(&mut pdu_json, &room_version_id)
+		.hash_and_sign_event(&mut pdu_json, &room_version_rules)
 	{
 		return match e {
-			| Error::Signatures(ruma::signatures::Error::PduSize) => {
+			| Error::SignatureJson(ruma::signatures::JsonError::PduTooLarge) => {
 				Err!(Request(TooLarge("Message/PDU is too long (exceeds 65535 bytes)")))
 			},
 			| _ => Err!(Request(Unknown(warn!("Signing event failed: {e}")))),
 		};
 	}
 	// Generate event id
-	pdu.event_id = gen_event_id(&pdu_json, &room_version_id)?;
+	pdu.event_id = gen_event_id(&pdu_json, &room_version_rules)?;
 	pdu_json.insert("event_id".into(), CanonicalJsonValue::String(pdu.event_id.clone().into()));
 
 	// MSC4291: ensure room_id is in our internal representation even if it's
@@ -315,8 +317,6 @@ pub async fn create_hash_and_sign_event(
 	}
 
 	// Verify that the *full* PDU isn't over 64KiB.
-	// Ruma only validates that it's under 64KiB before signing and hashing.
-	// Has to be cloned to prevent mutating pdu_json itself :(
 	if !pdu_fits(&mut pdu_json.clone()) {
 		// feckin huge PDU mate
 		return Err!(Request(TooLarge("Message/PDU is too long (exceeds 65535 bytes)")));
@@ -328,23 +328,23 @@ pub async fn create_hash_and_sign_event(
 			"Checking event in room {} with policy server",
 			pdu.room_id.as_ref().map_or("None", |id| id.as_str())
 		);
-		match self
-			.services
+		// We need to remove the event ID before getting a PS signature on the event.
+		// Note that we seemingly pointlessly add it above just to remove it here, but
+		// it's important to make sure the event ID isn't the field that makes the
+		// difference between an illegally-large event and one that is okay.
+		pdu_json.remove("event_id");
+		self.services
 			.event_handler
-			.ask_policy_server(&pdu, &mut pdu_json, pdu.room_id().expect("has room ID"), false)
-			.await
-		{
-			| Ok(true) => {},
-			| Ok(false) => {
-				return Err!(Request(Forbidden(debug_warn!(
-					"Policy server marked this event as spam"
-				))));
-			},
-			| Err(e) => {
-				// fail open
-				warn!("Failed to check event with policy server: {e}");
-			},
-		}
+			.policy_server_allows_event(
+				&pdu,
+				&mut pdu_json,
+				pdu.room_id().expect("has room ID"),
+				&room_version_rules,
+				false,
+			)
+			.await?;
+		pdu_json
+			.insert("event_id".into(), CanonicalJsonValue::String(pdu.event_id.clone().into()));
 	}
 
 	// Generate short event id

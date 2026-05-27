@@ -1,5 +1,5 @@
 use conduwuit::{
-	Event, PduEvent, Result, debug_warn,
+	Event, PduEvent, Result, at, debug_warn,
 	pdu::EventHash,
 	trace,
 	utils::{self, IterStream, future::ReadyEqExt, stream::WidebandExt as _},
@@ -7,9 +7,11 @@ use conduwuit::{
 use futures::{StreamExt, future::join};
 use ruma::{
 	EventId, OwnedRoomId, RoomId,
-	api::client::sync::sync_events::v3::{LeftRoom, RoomAccountData, State, Timeline},
-	events::{AnySyncStateEvent, StateEventType, TimelineEventType},
-	serde::Raw,
+	api::client::sync::sync_events::v3::{
+		LeftRoom, RoomAccountData, State, StateEvents, Timeline,
+	},
+	assign,
+	events::{StateEventType, TimelineEventType},
 	uint,
 };
 use serde_json::value::RawValue;
@@ -40,7 +42,7 @@ pub(super) async fn load_left_room(
 	sync_context: SyncContext<'_>,
 	ref room_id: OwnedRoomId,
 	leave_membership_event: Option<PduEvent>,
-) -> Result<Option<(LeftRoom, Vec<Raw<AnySyncStateEvent>>)>> {
+) -> Result<Option<LeftRoom>> {
 	let SyncContext {
 		syncing_user,
 		last_sync_end_count,
@@ -89,7 +91,7 @@ pub(super) async fn load_left_room(
 
 	let does_not_exist = services.rooms.metadata.exists(room_id).eq(&false).await;
 
-	let (timeline, state_events, leave_shortstatehash) = match leave_membership_event.clone() {
+	let (timeline, state_events) = match leave_membership_event {
 		| Some(leave_membership_event) if does_not_exist => {
 			/*
 			we have none PDUs with left beef for this room, likely because it was a rejected invite to a room
@@ -105,7 +107,7 @@ pub(super) async fn load_left_room(
 			}
 
 			trace!("syncing remote-assisted leave PDU");
-			(TimelinePdus::default(), vec![leave_membership_event], None)
+			(TimelinePdus::default(), vec![leave_membership_event])
 		},
 		| Some(leave_membership_event) => {
 			// we have this room in our DB, and can fetch the state and timeline from when
@@ -137,7 +139,7 @@ pub(super) async fn load_left_room(
 				)
 				.await?;
 
-			let (timeline, state_events) = build_left_state_and_timeline(
+			build_left_state_and_timeline(
 				services,
 				sync_context,
 				room_id,
@@ -145,9 +147,7 @@ pub(super) async fn load_left_room(
 				leave_shortstatehash,
 				prev_membership_event,
 			)
-			.await?;
-
-			(timeline, state_events, Some(leave_shortstatehash))
+			.await?
 		},
 		| None => {
 			/*
@@ -162,81 +162,34 @@ pub(super) async fn load_left_room(
 			}
 
 			trace!("syncing dummy leave event");
-			(
-				TimelinePdus::default(),
-				vec![create_dummy_leave_event(services, sync_context, room_id)],
-				None,
-			)
-		},
-	};
-
-	let state_after = if services.config.experimental_features.msc4222_enabled {
-		if let Some(shortstatehash) = leave_shortstatehash {
-			let lazily_loaded_members = prepare_lazily_loaded_members(
+			(TimelinePdus::default(), vec![create_dummy_leave_event(
 				services,
 				sync_context,
 				room_id,
-				timeline.senders(),
-			)
-			.await;
-
-			build_state_initial(
-				services,
-				syncing_user,
-				shortstatehash,
-				lazily_loaded_members.as_ref(),
-			)
-			.await?
-			.into_iter()
-			.map(Event::into_format)
-			.collect()
-		} else {
-			Vec::new()
-		}
-	} else {
-		Vec::new()
+			)])
+		},
 	};
 
-	let mut raw_timeline_pdus = Vec::with_capacity(timeline.pdus.len());
-	let mut in_timeline = false;
-
-	let TimelinePdus { pdus, limited } = timeline;
-
-	let mut stream = pdus
+	let raw_timeline_pdus = timeline
+		.pdus
 		.into_iter()
 		.stream()
 		// filter out ignored events from the timeline
-		.wide_filter_map(|item| ignored_filter(services, item, syncing_user));
+		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
+		.map(at!(1))
+		.map(Event::into_format)
+		.collect::<Vec<_>>()
+		.await;
 
-	while let Some((_, pdu)) = stream.next().await {
-		if pdu.event_type() == &TimelineEventType::RoomMember
-			&& pdu.state_key() == Some(syncing_user.as_str())
-		{
-			in_timeline = true;
-		}
-		raw_timeline_pdus.push(pdu.into_format());
-	}
-
-	let mut state_events_raw: Vec<_> = state_events.into_iter().map(Event::into_format).collect();
-
-	if !in_timeline && last_sync_end_count.is_none_or(|c| c < left_count) {
-		if let Some(leave_pdu) = leave_membership_event {
-			state_events_raw.push(leave_pdu.into_format());
-		}
-	}
-
-	Ok(Some((
-		LeftRoom {
-			account_data: RoomAccountData { events: Vec::new() },
-			timeline: Timeline {
-				limited,
-				prev_batch: Some(current_count.to_string()),
-				events: raw_timeline_pdus,
-			},
-			state: State { events: state_events_raw },
-		},
-		state_after,
-	)))
+	Ok(Some(assign!(LeftRoom::new(), {
+		account_data: RoomAccountData::new(),
+		timeline: assign!(Timeline::new(), {
+			limited: timeline.limited,
+			prev_batch: Some(current_count.to_string()),
+			events: raw_timeline_pdus,
+		}),
+		state: State::Before(StateEvents::with_events(state_events.into_iter().map(Event::into_format).collect())),
+	})))
 }
 
 async fn build_left_state_and_timeline(
@@ -365,7 +318,7 @@ fn create_dummy_leave_event(
 	// clients. perhaps a database table could be created to hold these dummy
 	// events, or they could be stored as outliers?
 	PduEvent {
-		event_id: EventId::new(services.globals.server_name()),
+		event_id: EventId::new_v1(services.globals.server_name()),
 		sender: syncing_user.to_owned(),
 		origin: None,
 		origin_server_ts: utils::millis_since_unix_epoch()

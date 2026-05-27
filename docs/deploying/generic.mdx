@@ -260,7 +260,7 @@ Pick your own username and password!
 ```
 
 You can then open [a Matrix client][matrix-clients],
-enter your homeserver address, and try to register with the provided token.
+enter your homeserver address, and register with the provided token.
 By default, the first user is the instance's first admin. They will be added
 to the `#admin:example.com` room and be able to [issue admin commands](../reference/admin/index.md).
 
@@ -268,9 +268,13 @@ to the `#admin:example.com` room and be able to [issue admin commands](../refere
 
 ## How do I know it works?
 
-To check if your server can communicate with other homeservers, use the
-[Matrix Federation Tester](https://federationtester.mtrnord.blog/). If you can
-register your account but cannot join federated rooms, check your configuration
+To check if your server can communicate with other homeservers,
+use an external testing tool:
+
+- [Matrix Connectivity Tester](https://federationtester.mtrnord.blog/)
+- [Matrix Federation Tester](https://federationtester.matrix.org/)
+
+If you can register your account but cannot join federated rooms, check your configuration
 and verify that your federation endpoints are opened and forwarded correctly.
 
 As a quick health check, you can also use these cURL commands:
@@ -292,4 +296,5 @@ curl https://example.com/_matrix/client/versions
 
 - For smooth federation, set up a caching resolver according to the [**DNS tuning guide**](../advanced/dns.mdx) (recommended)
 - For Audio/Video call functionality see the [**Calls**](../calls.md) page.
+- Consult the [Maintenance](../maintenance.mdx) page for guidance on maintaining your homeserver.
 - If you want to set up an appservice, take a look at the [**Appservice Guide**](../appservices.md).

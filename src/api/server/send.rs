@@ -25,10 +25,10 @@ use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use http::StatusCode;
 use itertools::Itertools;
 use ruma::{
-	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedUserId,
-	RoomId, ServerName, UInt, UserId,
+	CanonicalJsonObject, EventId, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId,
+	OwnedUserId, RoomId, ServerName, UInt, UserId,
 	api::{
-		client::error::{ErrorKind, ErrorKind::LimitExceeded},
+		error::{ErrorKind, LimitExceededErrorData},
 		federation::transactions::{
 			edu::{
 				DeviceListUpdateContent, DirectDeviceContent, Edu, PresenceContent,
@@ -62,7 +62,7 @@ pub(crate) async fn send_transaction_message_route(
 	ClientIp(client): ClientIp,
 	body: Ruma<send_transaction_message::v1::Request>,
 ) -> Result<send_transaction_message::v1::Response> {
-	if body.origin() != body.body.origin {
+	if body.identity != body.body.origin {
 		return Err!(Request(Forbidden(
 			"Not allowed to send transactions on behalf of other servers"
 		)));
@@ -80,7 +80,7 @@ pub(crate) async fn send_transaction_message_route(
 		)));
 	}
 
-	let txn_key = (body.origin().to_owned(), body.transaction_id.clone());
+	let txn_key = (body.identity.clone(), body.transaction_id.clone());
 
 	// Atomically check cache, join active, or start new transaction
 	match services
@@ -116,7 +116,7 @@ async fn wait_for_result(
 	{
 		// Took too long, return 429 to encourage the sender to try again
 		return Err(Error::BadRequest(
-			LimitExceeded { retry_after: None },
+			ErrorKind::LimitExceeded(LimitExceededErrorData::new()),
 			"Transaction is being still being processed. Please try again later.",
 		));
 	}
@@ -136,7 +136,7 @@ async fn wait_for_result(
 	skip_all,
 	fields(
 		id = ?body.transaction_id.as_str(),
-		origin = ?body.origin()
+		origin = ?body.identity
 	)
 )]
 async fn process_inbound_transaction(
@@ -164,7 +164,7 @@ async fn process_inbound_transaction(
 		.stream();
 
 	debug!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction",);
-	let results = match handle(&services, &client, body.origin(), pdus, edus).await {
+	let results = match handle(&services, &client, &body.identity, pdus, edus).await {
 		| Ok(results) => results,
 		| Err(err) => {
 			fail_federation_txn(services, &txn_key, &sender, err);
@@ -187,12 +187,12 @@ async fn process_inbound_transaction(
 		"Finished processing transaction"
 	);
 
-	let response = send_transaction_message::v1::Response {
-		pdus: results
+	let response = send_transaction_message::v1::Response::new(
+		results
 			.into_iter()
 			.map(|(e, r)| (e, r.map_err(error::sanitized_message)))
 			.collect(),
-	};
+	);
 
 	services
 		.transactions
@@ -298,7 +298,7 @@ async fn build_local_dag(
 			.as_array()
 			.unwrap()
 			.iter()
-			.map(|v| OwnedEventId::parse(v.as_str().unwrap()).unwrap())
+			.map(|v| EventId::parse(v.as_str().unwrap()).unwrap())
 			.filter(|id| pdu_map.contains_key(id))
 			.collect();
 
@@ -348,7 +348,7 @@ async fn handle_room(
 		.rooms
 		.event_handler
 		.mutex_federation
-		.lock(&room_id)
+		.lock(room_id.as_str())
 		.await;
 
 	let room_id = &room_id;
@@ -544,10 +544,14 @@ async fn handle_edu_receipt_room_user(
 			services
 				.rooms
 				.read_receipt
-				.readreceipt_update(user_id, room_id, &ReceiptEvent {
-					content: ReceiptEventContent(content.into()),
-					room_id: room_id.to_owned(),
-				})
+				.readreceipt_update(
+					user_id,
+					room_id,
+					&ReceiptEvent::new(
+						room_id.to_owned(),
+						ReceiptEventContent::from_iter(content),
+					),
+				)
 				.await;
 		})
 		.await;
@@ -646,6 +650,7 @@ async fn handle_edu_direct_to_device(
 		ref ev_type,
 		ref message_id,
 		messages,
+		..
 	} = content;
 
 	if sender.server_name() != origin {
@@ -729,14 +734,17 @@ async fn handle_edu_direct_to_device_event(
 			services
 				.users
 				.all_device_ids(target_user_id)
-				.for_each(|target_device_id| {
-					services.users.add_to_device_event(
-						sender,
-						target_user_id,
-						target_device_id,
-						ev_type,
-						event.clone(),
-					)
+				.for_each(async |target_device_id| {
+					services
+						.users
+						.add_to_device_event(
+							sender,
+							target_user_id,
+							&target_device_id,
+							ev_type,
+							event.clone(),
+						)
+						.await;
 				})
 				.await;
 		},
@@ -749,7 +757,9 @@ async fn handle_edu_signing_key_update(
 	origin: &ServerName,
 	content: SigningKeyUpdateContent,
 ) {
-	let SigningKeyUpdateContent { user_id, master_key, self_signing_key } = content;
+	let SigningKeyUpdateContent {
+		user_id, master_key, self_signing_key, ..
+	} = content;
 
 	if user_id.server_name() != origin {
 		debug_warn!(

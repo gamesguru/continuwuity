@@ -7,8 +7,7 @@ use conduwuit::{
 use futures::FutureExt;
 use ruma::{
 	OwnedUserId,
-	RoomVersionId::*,
-	api::federation::knock::send_knock,
+	api::federation::membership::create_knock_event,
 	events::{
 		StateEventType,
 		room::member::{MembershipState, RoomMemberEventContent},
@@ -23,17 +22,16 @@ use crate::Ruma;
 /// Submits a signed knock event.
 pub(crate) async fn create_knock_event_v1_route(
 	State(services): State<crate::State>,
-	body: Ruma<send_knock::v1::Request>,
-) -> Result<send_knock::v1::Response> {
+	body: Ruma<create_knock_event::v1::Request>,
+) -> Result<create_knock_event::v1::Response> {
 	if services
 		.moderation
-		.is_remote_server_forbidden(body.origin())
+		.is_remote_server_forbidden(&body.identity)
 	{
 		warn!(
 			"Server {} tried knocking room ID {} who has a server name that is globally \
 			 forbidden. Rejecting.",
-			body.origin(),
-			&body.room_id,
+			body.identity, &body.room_id,
 		);
 		return Err!(Request(Forbidden("Server is banned on this homeserver.")));
 	}
@@ -43,8 +41,7 @@ pub(crate) async fn create_knock_event_v1_route(
 			warn!(
 				"Server {} tried knocking room ID {} which has a server name that is globally \
 				 forbidden. Rejecting.",
-				body.origin(),
-				&body.room_id,
+				body.identity, &body.room_id,
 			);
 			return Err!(Request(Forbidden("Server is banned on this homeserver.")));
 		}
@@ -61,7 +58,7 @@ pub(crate) async fn create_knock_event_v1_route(
 		.await
 	{
 		info!(
-			origin = body.origin().as_str(),
+			origin = body.identity.as_str(),
 			"Refusing to serve send_knock for room we aren't participating in"
 		);
 		return Err!(Request(NotFound("This server is not participating in that room.")));
@@ -71,16 +68,18 @@ pub(crate) async fn create_knock_event_v1_route(
 	services
 		.rooms
 		.event_handler
-		.acl_check(body.origin(), &body.room_id)
+		.acl_check(&body.identity, &body.room_id)
 		.await?;
 
-	let room_version_id = services.rooms.state.get_room_version(&body.room_id).await?;
+	let room_version = services.rooms.state.get_room_version(&body.room_id).await?;
+	let room_version_rules = room_version.rules().unwrap();
 
-	if matches!(room_version_id, V1 | V2 | V3 | V4 | V5 | V6) {
+	if !room_version_rules.authorization.knocking {
 		return Err!(Request(Forbidden("Room version does not support knocking.")));
 	}
 
-	let Ok((event_id, value)) = gen_event_id_canonical_json(&body.pdu, &room_version_id) else {
+	let Ok((event_id, value)) = gen_event_id_canonical_json(&body.pdu, &room_version_rules)
+	else {
 		// Event could not be converted to canonical json
 		return Err!(Request(InvalidParam("Could not convert event to canonical json.")));
 	};
@@ -132,7 +131,7 @@ pub(crate) async fn create_knock_event_v1_route(
 		.await?;
 
 	// check if origin server is trying to send for another server
-	if sender.server_name() != body.origin() {
+	if sender.server_name() != body.identity {
 		return Err!(Request(BadJson("Not allowed to knock on behalf of another server/user.")));
 	}
 
@@ -161,7 +160,7 @@ pub(crate) async fn create_knock_event_v1_route(
 		.rooms
 		.event_handler
 		.mutex_federation
-		.lock(&body.room_id)
+		.lock(body.room_id.as_str())
 		.await;
 
 	let pdu_id = services
@@ -182,8 +181,8 @@ pub(crate) async fn create_knock_event_v1_route(
 	let knock_room_state = services
 		.rooms
 		.state
-		.summary_stripped(&pdu, &body.room_id)
+		.summary_stripped(&pdu, &body.room_id, &sender)
 		.await;
 
-	Ok(send_knock::v1::Response { knock_room_state })
+	Ok(create_knock_event::v1::Response::new(knock_room_state))
 }
