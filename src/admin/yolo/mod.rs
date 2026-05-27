@@ -599,18 +599,22 @@ pub enum YoloCommand {
 	/// event_id. The event must exist locally (timeline or outlier).
 	/// Rebuilds membership cache if the event is m.room.member.
 	///
-	/// Example: yolo set-state-event !room:server m.room.member @user:server
-	/// $eventid
+	/// Examples:
+	///   yolo set-state-event !room:server m.room.create $eventid
+	///   yolo set-state-event !room:server m.room.member $eventid --state-key
+	/// @user:server
 	#[command(name = "set-state-event")]
 	SetStateEvent {
 		/// The room ID.
 		room_id: OwnedRoomId,
 		/// The state event type (e.g. m.room.member, m.room.power_levels).
 		event_type: String,
-		/// The state key (e.g. @user:server for members, empty for PLs).
-		state_key: String,
 		/// The event ID to set as the current state for this (type, key).
 		event_id: OwnedEventId,
+		/// The state key (e.g. @user:server for members). Defaults to
+		/// empty string for events like m.room.create.
+		#[arg(short = 'k', long, default_value = "")]
+		state_key: String,
 	},
 
 	/// Fan out POST /get_missing_events to all room servers to recover DAG

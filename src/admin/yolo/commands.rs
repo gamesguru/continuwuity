@@ -5299,8 +5299,8 @@ pub(super) async fn set_state_event(
 	&self,
 	room_id: OwnedRoomId,
 	event_type: String,
-	state_key: String,
 	event_id: OwnedEventId,
+	state_key: String,
 ) -> Result {
 	use conduwuit_service::rooms::state_compressor::CompressedState;
 
