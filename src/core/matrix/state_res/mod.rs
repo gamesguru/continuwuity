@@ -97,7 +97,8 @@ where
 	use RoomVersionId::*;
 	let stateres_version = match room_version {
 		| V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 | V11 => StateResolutionVersion::V2,
-		| _ => StateResolutionVersion::V2_1,
+		| V12 => StateResolutionVersion::V2_1,
+		| _ => StateResolutionVersion::V2_2,
 	};
 	debug!(version = ?stateres_version, "State resolution starting");
 
@@ -115,7 +116,7 @@ where
 	debug!(count = conflicting.len(), "conflicting events");
 	trace!(map = ?conflicting, "conflicting events");
 	let (conflicted_state_subgraph, initial_state) =
-		if stateres_version == StateResolutionVersion::V2_1 {
+		if stateres_version >= StateResolutionVersion::V2_1 {
 			let csg = calculate_conflicted_subgraph(&conflicting, event_fetch)
 				.await
 				.ok_or_else(|| {

@@ -22,7 +22,7 @@ pub enum EventFormatVersion {
 	V3,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(not(feature = "unstable-exhaustive-types"), non_exhaustive)]
 pub enum StateResolutionVersion {
 	/// State resolution for rooms at version 1.
@@ -31,6 +31,8 @@ pub enum StateResolutionVersion {
 	V2,
 	/// State resolution for room at version 12 or later.
 	V2_1,
+	/// State resolution for MSC4242 (State DAGs).
+	V2_2,
 }
 
 #[cfg_attr(not(feature = "unstable-exhaustive-types"), non_exhaustive)]
@@ -129,6 +131,7 @@ impl RoomVersion {
 		..Self::V10
 	};
 	pub const V12: Self = Self {
+		state_res: StateResolutionVersion::V2_1,
 		explicitly_privilege_room_creators: true,
 		room_ids_as_hashes: true,
 		..Self::V11
@@ -159,6 +162,7 @@ impl RoomVersion {
 	/// MSC4242: State DAGs room version (unstable, based on V12).
 	pub const V_MSC4242: Self = Self {
 		disposition: RoomDisposition::Unstable,
+		state_res: StateResolutionVersion::V2_2,
 		state_dags: true,
 		..Self::V12
 	};
@@ -180,5 +184,20 @@ impl RoomVersion {
 			| ver if ver.as_str() == "org.matrix.msc4242.12" => Self::V_MSC4242,
 			| ver => return Err(Error::Unsupported(format!("found version `{ver}`"))),
 		})
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::str::FromStr;
+
+	use super::*;
+
+	#[test]
+	fn new_msc4242() {
+		let id = RoomVersionId::from_str("org.matrix.msc4242.12").expect("valid version");
+		let v = RoomVersion::new(&id).expect("valid version");
+		assert!(v.state_dags);
+		assert_eq!(v.state_res, StateResolutionVersion::V2_2);
 	}
 }
