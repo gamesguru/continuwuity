@@ -530,7 +530,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 		.verify_event(&event, Some(&room_version_id))
 		.await
 	{
-		| Err(e) => format!("SIGNATURE FAILED: {e}"),
+		| Err(e) => format!("SIGNATURE FAILED: {e:?}"),
 		| Ok(Verified::Signatures) => "signatures OK, content hash FAILED (redaction)".to_owned(),
 		| Ok(Verified::All) => "signatures and hashes OK".to_owned(),
 	};
@@ -609,6 +609,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	}
 	writeln!(out, "State key: {}", pdu.state_key().unwrap_or("<none (not a state event)>"))?;
 	writeln!(out, "Sender: {}", pdu.sender())?;
+	writeln!(out, "Room Version: {room_version_id}")?;
 	writeln!(out, "Verify: {sig_msg}")?;
 	writeln!(out, "Auth check: {auth_msg}")?;
 	writeln!(
