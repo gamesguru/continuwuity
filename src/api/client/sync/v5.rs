@@ -536,8 +536,14 @@ where
 				}
 			});
 
-		let required_state =
-			collect_required_state(services, sender_user, room_id, required_state_request, &timeline_pdus).await;
+		let required_state = collect_required_state(
+			services,
+			sender_user,
+			room_id,
+			required_state_request,
+			&timeline_pdus,
+		)
+		.await;
 
 		let room_events: Vec<_> = timeline_pdus
 			.iter()
@@ -695,7 +701,7 @@ async fn collect_required_state(
 	sender_user: &UserId,
 	room_id: &RoomId,
 	required_state_request: &BTreeSet<TypeStateKey>,
-	timeline_pdus: &VecDeque<(PduCount, impl Event)>,
+	timeline_pdus: &VecDeque<(PduCount, impl Event + Sync)>,
 ) -> Vec<Raw<AnySyncStateEvent>> {
 	let mut required_state = Vec::new();
 	let mut wildcard_types: HashSet<&StateEventType> = HashSet::new();
@@ -720,7 +726,7 @@ async fn collect_required_state(
 					.await
 				{
 					for key in keys {
-						if !fetched.insert((event_type.clone(), key.to_string())) {
+						if !fetched.insert((event_type.clone(), key.clone())) {
 							continue;
 						}
 						if let Ok(event) = services
@@ -735,7 +741,7 @@ async fn collect_required_state(
 				}
 			},
 			// Handled below via `lazy`; skip the literal "$LAZY" lookup only for member state.
-			| "$LAZY" if event_type.as_str() == "m.room.member" => {},
+			| "$LAZY" if *event_type == StateEventType::RoomMember => {},
 			| "$ME" => {
 				let resolved_key = sender_user.as_str();
 				if !fetched.insert((event_type.clone(), resolved_key.to_owned())) {
