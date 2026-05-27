@@ -1,5 +1,5 @@
 use conduwuit::{
-	Event, PduCount, PduEvent, Result, debug_warn,
+	Event, PduEvent, Result, debug_warn,
 	pdu::EventHash,
 	trace,
 	utils::{self, IterStream, future::ReadyEqExt, stream::WidebandExt as _},
