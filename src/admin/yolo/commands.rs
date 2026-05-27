@@ -5642,12 +5642,11 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 			continue;
 		};
 
-		// Strip fields that shouldn't be in the content hash
+		// Only strip event_id (DB events include it, federation events don't).
+		// ruma's reference_hash handles redaction + stripping signatures/unsigned
+		// per the room version spec.
 		let mut hashable = json.clone();
 		hashable.remove("event_id");
-		hashable.remove("signatures");
-		hashable.remove("unsigned");
-		hashable.remove("age_ts");
 
 		let Ok(correct_event_id) =
 			conduwuit::matrix::event::gen_event_id(&hashable, &room_version)

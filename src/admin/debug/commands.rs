@@ -722,13 +722,13 @@ pub(crate) async fn force_set_state(
 		},
 	};
 
-	let room_version = self
+	let db_room_version = self
 		.services
 		.rooms
 		.state
 		.get_room_version(&room_id)
 		.await
-		.unwrap_or(RoomVersionId::V11);
+		.ok();
 
 	let mut state: HashMap<u64, OwnedEventId> = HashMap::new();
 
@@ -856,6 +856,37 @@ pub(crate) async fn force_set_state(
 		state = local_state;
 		// No PDUs or auth_chain to process — state is already populated
 		(Vec::new(), Vec::new())
+	};
+
+	// Resolve room version: prefer DB, fall back to create event in
+	// federation response. Error out if neither works — using the wrong
+	// version produces wrong reference hashes (e.g. V11 rules on a V6 room).
+	let room_version = if let Some(v) = db_room_version {
+		v
+	} else {
+		let mut found = None;
+		for pdu in &pdus {
+			if let Ok(val) = serde_json::from_str::<serde_json::Value>(pdu.get()) {
+				if val.get("type").and_then(|v| v.as_str()) == Some("m.room.create") {
+					if let Some(ver) = val
+						.get("content")
+						.and_then(|c| c.get("room_version"))
+						.and_then(|v| v.as_str())
+					{
+						found = ver.parse::<RoomVersionId>().ok();
+					}
+					break;
+				}
+			}
+		}
+		let v = found.ok_or_else(|| {
+			err!(Request(Unknown(
+				"Cannot determine room version from DB or federation response. \
+				 Refusing to proceed — wrong version produces wrong event hashes."
+			)))
+		})?;
+		info!("Extracted room version {v} from create event (DB had no state)");
+		v
 	};
 
 	info!(
