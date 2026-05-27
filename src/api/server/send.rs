@@ -159,6 +159,7 @@ async fn wait_for_result(
 }
 
 #[instrument(
+	name = "federation",
 	skip_all,
 	fields(
 		id = ?body.transaction_id.as_str(),

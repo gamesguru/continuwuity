@@ -881,8 +881,8 @@ pub(crate) async fn force_set_state(
 		}
 		let v = found.ok_or_else(|| {
 			err!(Request(Unknown(
-				"Cannot determine room version from DB or federation response. \
-				 Refusing to proceed — wrong version produces wrong event hashes."
+				"Cannot determine room version from DB or federation response. Refusing to \
+				 proceed — wrong version produces wrong event hashes."
 			)))
 		})?;
 		info!("Extracted room version {v} from create event (DB had no state)");
