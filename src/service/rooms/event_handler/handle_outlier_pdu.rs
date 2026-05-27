@@ -103,7 +103,19 @@ where
 		{
 			| Ok(ruma::signatures::Verified::All) => value,
 			| Ok(ruma::signatures::Verified::Signatures) => {
-				// Content hash mismatch — content may have been tampered by a relay.
+				// Content hash mismatch: content may have been tampered by a relay.
+				// If we already have this event locally, re-use our known-good content
+				// instead of redacting or re-fetching from the origin.
+				if let Ok(known_pdu) = self.services.timeline.get_pdu(event_id).await {
+					info!(
+						%event_id,
+						"Received redacted copy, but we already have known-good content. Re-using."
+					);
+					check_room_id(room_id, &known_pdu)?;
+					let obj = known_pdu.to_canonical_object();
+					return Ok((known_pdu, obj));
+				}
+
 				// Attempt to fetch a pristine copy from the sender's server.
 				let sender_server = value
 					.get("sender")
