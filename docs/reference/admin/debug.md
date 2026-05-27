@@ -132,6 +132,10 @@ List database files
 
 Send a test email to the invoking admin's email address
 
+## `!admin debug fix-pdu-event-ids`
+
+Scans timeline and outlier PDUs in the database and injects missing event_id fields
+
 ## `!admin debug tester`
 
 Developer test stubs
