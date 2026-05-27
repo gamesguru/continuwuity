@@ -681,50 +681,7 @@ impl Service {
 			}
 		}
 
-		let mut device_list_changes = HashSet::<OwnedUserId>::new();
-		let mut max_processed_count = since.0;
-		let mut limited = false;
-
-		for (count, users) in all_changes {
-			for user_id in users {
-				if !device_list_changes.insert(user_id.clone()) {
-					continue;
-				}
-
-				// Empty prev id forces synapse to resync; because synapse resyncs,
-				// we can just insert placeholder data
-				let edu = Edu::DeviceListUpdate(DeviceListUpdateContent {
-					user_id: user_id.into(),
-					device_id: device_id!("placeholder").to_owned(),
-					device_display_name: Some("Placeholder".to_owned()),
-					stream_id: uint!(1),
-					prev_id: Vec::new(),
-					deleted: None,
-					keys: None,
-				});
-
-				let mut buf = EduBuf::new();
-				serde_json::to_writer(&mut buf, &edu)
-					.expect("failed to serialize device list update to JSON");
-
-				events.push(buf);
-				if events.len() >= SELECT_EDU_LIMIT {
-					limited = true;
-					break;
-				}
-			}
-
-			if limited {
-				break;
-			}
-			max_processed_count = count;
-		}
-
-		if !limited {
-			max_processed_count = since.1;
-		}
-
-		(events, max_processed_count)
+		build_device_list_edus(all_changes, since, SELECT_EDU_LIMIT)
 	}
 
 	/// Look for read receipts in this room
@@ -734,22 +691,23 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (Option<EduBuf>, u64) {
-		let mut num = 0;
+		let num = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 		let receipts: BTreeMap<OwnedRoomId, ReceiptMap> = self
 			.services
 			.state_cache
 			.server_rooms(server_name)
 			.map(ToOwned::to_owned)
-			.broad_filter_map(|room_id| async move {
-				let receipt_map = self
-					.select_edus_receipts_room(&room_id, since, &mut num)
-					.await;
+			.broad_filter_map(|room_id| {
+				let num = std::sync::Arc::clone(&num);
+				async move {
+					let receipt_map = self.select_edus_receipts_room(&room_id, since, &num).await;
 
-				receipt_map
-					.read
-					.is_empty()
-					.eq(&false)
-					.then_some((room_id, receipt_map))
+					receipt_map
+						.read
+						.is_empty()
+						.eq(&false)
+						.then_some((room_id, receipt_map))
+				}
 			})
 			.collect()
 			.await;
@@ -768,66 +726,30 @@ impl Service {
 	}
 
 	/// Look for read receipts in this room
-	#[tracing::instrument(name = "receipts", level = "trace", skip(self, since))]
+	#[tracing::instrument(name = "receipts", level = "trace", skip(self, since, num))]
 	async fn select_edus_receipts_room(
 		&self,
 		room_id: &RoomId,
 		since: (u64, u64),
-		num: &mut usize,
+		num: &std::sync::atomic::AtomicUsize,
 	) -> ReceiptMap {
-		let receipts = self
+		let receipts_stream = self
 			.services
 			.read_receipt
 			.readreceipts_since(room_id, Some(since.0));
 
-		pin_mut!(receipts);
-		let mut read = BTreeMap::<OwnedUserId, ReceiptData>::new();
-		while let Some((user_id, count, read_receipt)) = receipts.next().await {
+		pin_mut!(receipts_stream);
+		let mut collected = Vec::new();
+		while let Some((user_id, count, read_receipt)) = receipts_stream.next().await {
 			if count > since.1 {
 				break;
 			}
-
-			if !self.services.globals.user_is_local(&user_id) {
-				continue;
-			}
-
-			let Ok(event) = serde_json::from_str(read_receipt.json().get()) else {
-				error!(%user_id, %count, ?read_receipt, "Invalid edu event in read_receipts.");
-				continue;
-			};
-
-			let AnySyncEphemeralRoomEvent::Receipt(r) = event else {
-				error!(%user_id, %count, ?event, "Invalid event type in read_receipts");
-				continue;
-			};
-
-			let (event_id, mut receipt) = r
-				.content
-				.0
-				.into_iter()
-				.next()
-				.expect("we only use one event per read receipt");
-
-			let receipt = receipt
-				.remove(&ReceiptType::Read)
-				.expect("our read receipts always set this")
-				.remove(&user_id)
-				.expect("our read receipts always have the user here");
-
-			let receipt_data = ReceiptData {
-				data: receipt,
-				event_ids: vec![event_id.clone()],
-			};
-
-			if read.insert(user_id, receipt_data).is_none() {
-				*num = num.saturating_add(1);
-				if *num >= SELECT_RECEIPT_LIMIT {
-					break;
-				}
+			if self.services.globals.user_is_local(&user_id) {
+				collected.push((user_id, count, read_receipt.json().get().to_owned()));
 			}
 		}
 
-		ReceiptMap { read }
+		build_receipt_map(collected, since, SELECT_RECEIPT_LIMIT, num)
 	}
 
 	/// Look for presence
@@ -1249,5 +1171,264 @@ impl Service {
 		// .expect("Raw::from_value always works")
 
 		to_raw_value(&pdu_json).expect("CanonicalJson is valid serde_json::Value")
+	}
+}
+
+pub(crate) fn build_device_list_edus(
+	all_changes: std::collections::BTreeMap<u64, std::collections::HashSet<ruma::OwnedUserId>>,
+	since: (u64, u64),
+	limit: usize,
+) -> (EduVec, u64) {
+	let mut events = EduVec::new();
+	let mut device_list_changes = std::collections::HashSet::<ruma::OwnedUserId>::new();
+	let mut max_processed_count = since.0;
+	let mut limited = false;
+
+	for (count, users) in all_changes {
+		let mut consumed_all = true;
+		for user_id in users {
+			if events.len() >= limit {
+				limited = true;
+				consumed_all = false;
+				break;
+			}
+
+			if !device_list_changes.insert(user_id.clone()) {
+				continue;
+			}
+
+			// Empty prev id forces synapse to resync; because synapse resyncs,
+			// we can just insert placeholder data
+			let edu = Edu::DeviceListUpdate(DeviceListUpdateContent {
+				user_id: user_id.into(),
+				device_id: device_id!("placeholder").to_owned(),
+				device_display_name: Some("Placeholder".to_owned()),
+				stream_id: uint!(1),
+				prev_id: Vec::new(),
+				deleted: None,
+				keys: None,
+			});
+
+			let mut buf = EduBuf::new();
+			serde_json::to_writer(&mut buf, &edu)
+				.expect("failed to serialize device list update to JSON");
+
+			events.push(buf);
+		}
+
+		if consumed_all {
+			max_processed_count = count;
+		}
+
+		if limited {
+			break;
+		}
+	}
+
+	if !limited {
+		max_processed_count = since.1;
+	}
+
+	(events, max_processed_count)
+}
+
+pub(crate) fn build_receipt_map(
+	receipts: Vec<(ruma::OwnedUserId, u64, String)>,
+	since: (u64, u64),
+	limit: usize,
+	num: &std::sync::atomic::AtomicUsize,
+) -> ReceiptMap {
+	use std::sync::atomic::Ordering;
+	let mut read = std::collections::BTreeMap::<ruma::OwnedUserId, ReceiptData>::new();
+
+	for (user_id, count, read_receipt_json) in receipts {
+		if count > since.1 {
+			break;
+		}
+
+		let Ok(event) = serde_json::from_str::<AnySyncEphemeralRoomEvent>(&read_receipt_json)
+		else {
+			continue;
+		};
+
+		let AnySyncEphemeralRoomEvent::Receipt(r) = event else {
+			continue;
+		};
+
+		let (event_id, mut receipt) = r
+			.content
+			.0
+			.into_iter()
+			.next()
+			.expect("we only use one event per read receipt");
+
+		let receipt = receipt
+			.remove(&ReceiptType::Read)
+			.expect("our read receipts always set this")
+			.remove(&user_id)
+			.expect("our read receipts always have the user here");
+
+		let receipt_data = ReceiptData {
+			data: receipt,
+			event_ids: vec![event_id.clone()],
+		};
+
+		if read.insert(user_id, receipt_data).is_none() {
+			if num.fetch_add(1, Ordering::Relaxed) >= limit - 1 {
+				break;
+			}
+		}
+	}
+
+	ReceiptMap { read }
+}
+
+#[cfg(test)]
+mod tests {
+	use std::collections::{BTreeMap, HashSet};
+
+	use ruma::user_id;
+
+	use super::*;
+
+	#[test]
+	fn test_build_device_list_edus_empty() {
+		let all_changes = BTreeMap::new();
+		let since = (10, 20);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 100);
+		assert!(events.is_empty());
+		assert_eq!(max_processed_count, 20);
+	}
+
+	#[test]
+	fn test_build_device_list_edus_under_limit() {
+		let mut all_changes = BTreeMap::new();
+		let mut users_15 = HashSet::new();
+		users_15.insert(user_id!("@alice:example.com").to_owned());
+		all_changes.insert(15, users_15);
+
+		let mut users_18 = HashSet::new();
+		users_18.insert(user_id!("@bob:example.com").to_owned());
+		all_changes.insert(18, users_18);
+
+		let since = (10, 20);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 100);
+		assert_eq!(events.len(), 2);
+		assert_eq!(max_processed_count, 20);
+	}
+
+	#[test]
+	fn test_build_device_list_edus_over_limit_exact_count_boundary() {
+		let mut all_changes = BTreeMap::new();
+
+		let mut users_15 = HashSet::new();
+		users_15.insert(user_id!("@alice:example.com").to_owned());
+		users_15.insert(user_id!("@bob:example.com").to_owned());
+		all_changes.insert(15, users_15);
+
+		let mut users_18 = HashSet::new();
+		users_18.insert(user_id!("@charlie:example.com").to_owned());
+		all_changes.insert(18, users_18);
+
+		let since = (10, 20);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 2);
+		assert_eq!(events.len(), 2);
+		assert_eq!(max_processed_count, 15);
+	}
+
+	#[test]
+	fn test_build_device_list_edus_over_limit_mid_count_boundary() {
+		let mut all_changes = BTreeMap::new();
+
+		let mut users_15 = HashSet::new();
+		users_15.insert(user_id!("@alice:example.com").to_owned());
+		users_15.insert(user_id!("@bob:example.com").to_owned());
+		users_15.insert(user_id!("@charlie:example.com").to_owned());
+		all_changes.insert(15, users_15);
+
+		let since = (10, 20);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 2);
+		assert_eq!(events.len(), 2);
+		assert_eq!(max_processed_count, 10);
+	}
+
+	#[test]
+	fn test_build_device_list_edus_deduplication() {
+		let mut all_changes = BTreeMap::new();
+
+		let mut users_15 = HashSet::new();
+		users_15.insert(user_id!("@alice:example.com").to_owned());
+		all_changes.insert(15, users_15);
+
+		let mut users_18 = HashSet::new();
+		// Same user!
+		users_18.insert(user_id!("@alice:example.com").to_owned());
+		users_18.insert(user_id!("@bob:example.com").to_owned());
+		all_changes.insert(18, users_18);
+
+		let since = (10, 20);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 100);
+		// Alice should only produce 1 event, plus bob = 2 events total
+		assert_eq!(events.len(), 2);
+		assert_eq!(max_processed_count, 20);
+	}
+
+	#[test]
+	fn test_build_receipt_map_under_limit() {
+		let mut receipts = Vec::new();
+		let user_id = user_id!("@alice:example.com").to_owned();
+		let json = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"ts": 12345
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id, 15, json.to_string()));
+
+		let since = (10, 20);
+		let num = std::sync::atomic::AtomicUsize::new(0);
+		let map = build_receipt_map(receipts, since, 100, &num);
+
+		assert_eq!(map.read.len(), 1);
+		assert_eq!(num.load(std::sync::atomic::Ordering::Relaxed), 1);
+	}
+
+	#[test]
+	fn test_build_receipt_map_over_limit() {
+		let mut receipts = Vec::new();
+		for i in 1..=5 {
+			let user_id_str = format!("@user{}:example.com", i);
+			let user_id = <ruma::OwnedUserId as std::convert::TryFrom<&str>>::try_from(
+				user_id_str.as_str(),
+			)
+			.unwrap();
+			let json = serde_json::json!({
+				"type": "m.receipt",
+				"content": {
+					"$event1": {
+						"m.read": {
+							&user_id_str: {
+								"ts": 12345
+							}
+						}
+					}
+				}
+			});
+			receipts.push((user_id, 10 + i as u64, json.to_string()));
+		}
+
+		let since = (10, 20);
+		let num = std::sync::atomic::AtomicUsize::new(0);
+		// Limit to 3!
+		let map = build_receipt_map(receipts, since, 3, &num);
+
+		assert_eq!(map.read.len(), 3);
+		assert_eq!(num.load(std::sync::atomic::Ordering::Relaxed), 3);
 	}
 }
