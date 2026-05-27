@@ -635,7 +635,6 @@ impl Service {
 		let last_count = device_max.min(receipt_max).min(presence_max);
 
 		// Collect them all
-
 		if !device_changes.is_empty() {
 			self.stats.outgoing_device_lists.fetch_add(
 				device_changes.len().try_into().unwrap_or(u64::MAX),
@@ -841,7 +840,8 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (Option<EduBuf>, u64) {
-		let Some((_, mut users)) = self.services.presence.pending_updates.remove(server_name) else {
+		let Some((_, mut users)) = self.services.presence.pending_updates.remove(server_name)
+		else {
 			return (None, since.1);
 		};
 
