@@ -1265,7 +1265,10 @@ pub(super) async fn bump_device_lists(&self, user_id: String) -> Result {
 			return Err!("User is not active.");
 		}
 		self.services.users.mark_device_key_update(&user_id).await;
-		self.write_str("Bumped device list updates for user, they will be rebroadcasted over federation shortly.")
-			.await
+		self.write_str(
+			"Bumped device list updates for user, they will be rebroadcasted over federation \
+			 shortly.",
+		)
+		.await
 	}
 }
