@@ -15,7 +15,7 @@ use conduwuit::{
 		BoolExt, FutureBoolExt, IterStream, ReadyExt, TryFutureExtExt,
 		future::ReadyEqExt,
 		math::{ruma_from_usize, usize_from_ruma},
-		stream::{TryIgnore, WidebandExt},
+		stream::WidebandExt,
 	},
 	warn,
 };
@@ -39,7 +39,7 @@ use ruma::{
 	uint,
 };
 
-use super::share_encrypted_room;
+use super::shares_a_room;
 use crate::{
 	Ruma,
 	client::{
@@ -854,33 +854,12 @@ where
 			continue;
 		};
 
-		let since_shortstatehash = async {
-			use futures::pin_mut;
-			let pdus = services
-				.rooms
-				.timeline
-				.pdus(room_id, Some(PduCount::Normal(globalsince)))
-				.ignore_err();
-
-			pin_mut!(pdus);
-
-			match pdus.next().await {
-				| Some((count, pdu_after_globalsince)) => {
-					if matches!(count, PduCount::Backfilled(_)) {
-						return None;
-					}
-
-					services
-						.rooms
-						.state_accessor
-						.pdu_shortstatehash(&pdu_after_globalsince.event_id)
-						.await
-						.ok()
-				},
-				| None => Some(current_shortstatehash),
-			}
-		}
-		.await;
+		let since_shortstatehash = services
+			.rooms
+			.timeline
+			.next_shortstatehash(room_id, PduCount::Normal(globalsince))
+			.await
+			.ok();
 
 		let encrypted_room = services
 			.rooms
@@ -950,7 +929,7 @@ where
 								match content.membership {
 									| MembershipState::Join => {
 										// A new user joined an encrypted room
-										if !share_encrypted_room(
+										if !shares_a_room(
 											services,
 											sender_user,
 											user_id,
@@ -981,12 +960,13 @@ where
 						.room_members(room_id)
 						// Don't send key updates from the sender to the sender
 						.ready_filter(|user_id| sender_user != *user_id)
-						// Only send keys if the sender doesn't share an encrypted room with the target
+						// only send keys if the sender doesn't share a room with the target
 						// already
-						.filter_map(|user_id| {
-							share_encrypted_room(services, sender_user, user_id, Some(room_id))
-								.map(|res| res.or_some(user_id.to_owned()))
+						.filter_map(|user_id| async move {
+							(!shares_a_room(services, sender_user, user_id, Some(room_id)).await)
+								.then(|| user_id.to_owned())
 						})
+
 						.collect::<Vec<_>>()
 						.await,
 					);
@@ -1006,12 +986,11 @@ where
 	}
 
 	for user_id in left_encrypted_users {
-		let dont_share_encrypted_room =
-			!share_encrypted_room(services, sender_user, &user_id, None).await;
+		let dont_shares_a_room = !shares_a_room(services, sender_user, &user_id, None).await;
 
-		// If the user doesn't share an encrypted room with the target anymore, we need
+		// If the user doesn't share a room with the target anymore, we need
 		// to tell them
-		if dont_share_encrypted_room {
+		if dont_shares_a_room {
 			device_list_left.insert(user_id);
 		}
 	}
