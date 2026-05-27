@@ -376,8 +376,9 @@ async fn fetch_shortstatehashes(
 	// to get that right now.
 	let current_shortstatehash = services
 		.rooms
-		.state
-		.get_room_shortstatehash(room_id)
+		.timeline
+		.next_shortstatehash(room_id, PduCount::Normal(current_count))
+		.or_else(|_| services.rooms.state.get_room_shortstatehash(room_id))
 		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
 
 	// the room state as of the end of the last sync, computed statelessly from

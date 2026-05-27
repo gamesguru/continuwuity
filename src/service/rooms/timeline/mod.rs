@@ -64,6 +64,7 @@ pub struct Service {
 	db: Data,
 	pub mutex_insert: RoomMutexMap,
 	pub next_shortstatehash_cache: SyncMutex<LruCache<(ShortRoomId, PduCount), ShortStateHash>>,
+	pub prev_shortstatehash_cache: SyncMutex<LruCache<(ShortRoomId, PduCount), ShortStateHash>>,
 }
 
 struct Services {
@@ -99,11 +100,11 @@ impl crate::Service for Service {
 		let config = &args.server.config;
 		let cache_capacity =
 			f64::from(config.shortstatehash_cache_capacity) * config.cache_capacity_modifier;
+		let cache_capacity = usize_from_f64(cache_capacity)?;
 
 		Ok(Arc::new(Self {
-			next_shortstatehash_cache: SyncMutex::new(LruCache::new(usize_from_f64(
-				cache_capacity,
-			)?)),
+			next_shortstatehash_cache: SyncMutex::new(LruCache::new(cache_capacity / 2)),
+			prev_shortstatehash_cache: SyncMutex::new(LruCache::new(cache_capacity / 2)),
 			services: Services {
 				server: args.server.clone(),
 				account_data: args.depend::<account_data::Service>("account_data"),
@@ -135,12 +136,19 @@ impl crate::Service for Service {
 	}
 
 	async fn memory_usage(&self, out: &mut (dyn Write + Send)) -> Result {
-		let cache_len = self.next_shortstatehash_cache.lock().len();
-		let cache_bytes = cache_len.saturating_mul(
+		let next_cache_len = self.next_shortstatehash_cache.lock().len();
+		let next_cache_bytes = next_cache_len.saturating_mul(
 			size_of::<(ShortRoomId, PduCount)>().saturating_add(size_of::<ShortStateHash>()),
 		);
-		let bytes = bytes::pretty(cache_bytes);
-		writeln!(out, "next_shortstatehash_cache: {cache_len} ({bytes})")?;
+		let next_bytes = bytes::pretty(next_cache_bytes);
+		writeln!(out, "next_shortstatehash_cache: {next_cache_len} ({next_bytes})")?;
+
+		let prev_cache_len = self.prev_shortstatehash_cache.lock().len();
+		let prev_cache_bytes = prev_cache_len.saturating_mul(
+			size_of::<(ShortRoomId, PduCount)>().saturating_add(size_of::<ShortStateHash>()),
+		);
+		let prev_bytes = bytes::pretty(prev_cache_bytes);
+		writeln!(out, "prev_shortstatehash_cache: {prev_cache_len} ({prev_bytes})")?;
 
 		let mutex_insert = self.mutex_insert.len();
 		writeln!(out, "insert_mutex: {mutex_insert}")?;
@@ -148,7 +156,10 @@ impl crate::Service for Service {
 		Ok(())
 	}
 
-	async fn clear_cache(&self) { self.next_shortstatehash_cache.lock().clear(); }
+	async fn clear_cache(&self) {
+		self.next_shortstatehash_cache.lock().clear();
+		self.prev_shortstatehash_cache.lock().clear();
+	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
@@ -282,6 +293,14 @@ impl Service {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
+		if let Some(hash) = self
+			.prev_shortstatehash_cache
+			.lock()
+			.get_mut(&(shortroomid, before))
+		{
+			return Ok(*hash);
+		}
+
 		let before_pdu = PduId { shortroomid, shorteventid: before };
 
 		let prev_count = self.db.prev_timeline_count(&before_pdu).await?;
@@ -289,7 +308,15 @@ impl Service {
 
 		let shorteventid = self.get_shorteventid_from_pdu_id(&prev_pdu).await?;
 
-		self.services.state.get_shortstatehash(shorteventid).await
+		let result = self.services.state.get_shortstatehash(shorteventid).await;
+
+		if let Ok(hash) = result {
+			self.prev_shortstatehash_cache
+				.lock()
+				.insert((shortroomid, before), hash);
+		}
+
+		result
 	}
 
 	/// Returns the shortstatehash of the room at the event directly following

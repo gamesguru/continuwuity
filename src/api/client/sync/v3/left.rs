@@ -171,7 +171,15 @@ pub(super) async fn load_left_room(
 	};
 
 	let state_after = if services.config.experimental_features.msc4222_enabled {
-		if let Some(shortstatehash) = leave_shortstatehash {
+		let state_after_shortstatehash = services
+			.rooms
+			.timeline
+			.next_shortstatehash(room_id, PduCount::Normal(left_count))
+			.await
+			.ok()
+			.or(leave_shortstatehash);
+
+		if let Some(shortstatehash) = state_after_shortstatehash {
 			let lazily_loaded_members = prepare_lazily_loaded_members(
 				services,
 				sync_context,
