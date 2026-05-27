@@ -15,7 +15,7 @@ use conduwuit::{
 		BoolExt, FutureBoolExt, IterStream, ReadyExt, TryFutureExtExt,
 		future::ReadyEqExt,
 		math::{ruma_from_usize, usize_from_ruma},
-		stream::WidebandExt,
+		stream::{TryIgnore, WidebandExt},
 	},
 	warn,
 };
@@ -854,12 +854,33 @@ where
 			continue;
 		};
 
-		let since_shortstatehash = services
-			.rooms
-			.timeline
-			.prev_shortstatehash(room_id, PduCount::Normal(globalsince).saturating_add(1))
-			.await
-			.ok();
+		let since_shortstatehash = async {
+			use futures::pin_mut;
+			let pdus = services
+				.rooms
+				.timeline
+				.pdus(room_id, Some(PduCount::Normal(globalsince)))
+				.ignore_err();
+
+			pin_mut!(pdus);
+
+			match pdus.next().await {
+				| Some((count, pdu_after_globalsince)) => {
+					if matches!(count, PduCount::Backfilled(_)) {
+						return None;
+					}
+
+					services
+						.rooms
+						.state_accessor
+						.pdu_shortstatehash(&pdu_after_globalsince.event_id)
+						.await
+						.ok()
+				},
+				| None => Some(current_shortstatehash),
+			}
+		}
+		.await;
 
 		let encrypted_room = services
 			.rooms
