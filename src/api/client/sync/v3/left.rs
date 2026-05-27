@@ -285,12 +285,12 @@ pub(super) async fn load_left_room(
 		}
 	}
 
-	let timeline_ids: std::collections::HashSet<_> =
-		raw_timeline_pdus.iter().map(|pdu| &pdu.event_id).collect();
+	let timeline_ids: std::collections::HashSet<&ruma::EventId> =
+		raw_timeline_pdus.iter().map(|pdu| &*pdu.event_id).collect();
 
 	let raw_state_events: Vec<Raw<AnySyncStateEvent>> = state_events
 		.into_iter()
-		.filter(|pdu: &PduEvent| !timeline_ids.contains(&pdu.event_id))
+		.filter(|pdu: &PduEvent| !timeline_ids.contains(&*pdu.event_id))
 		.filter(|pdu: &PduEvent| {
 			let filter = &filter.room.state;
 			filter.matches(pdu)

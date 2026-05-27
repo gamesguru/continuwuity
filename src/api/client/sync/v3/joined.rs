@@ -329,14 +329,14 @@ async fn build_state_and_timeline(
 		.collect::<Vec<_>>()
 		.await;
 
-	let timeline_ids: HashSet<_> = filtered_timeline_pdus
+	let timeline_ids: HashSet<&ruma::EventId> = filtered_timeline_pdus
 		.iter()
-		.map(|pdu| &pdu.event_id)
+		.map(|pdu| &*pdu.event_id)
 		.collect();
 
 	let state_events: Vec<_> = state_events
 		.into_iter()
-		.filter(|pdu| !timeline_ids.contains(&pdu.event_id))
+		.filter(|pdu| !timeline_ids.contains(&*pdu.event_id))
 		.collect();
 
 	Ok(StateAndTimeline {
