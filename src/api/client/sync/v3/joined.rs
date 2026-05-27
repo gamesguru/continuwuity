@@ -641,7 +641,7 @@ async fn check_joined_since_last_sync(
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
 	// the root cause of this needs to be addressed
-	let joined_since_last_sync = if let Some(_last_sync_end_count) = last_sync_end_count {
+	let joined_since_last_sync = if last_sync_end_count.is_some() {
 		// Incremental sync
 		// fetch the syncing user's membership event during the last sync.
 		// this will be None if `previous_sync_end_shortstatehash` is None.
