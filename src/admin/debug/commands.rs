@@ -1003,34 +1003,16 @@ pub(crate) async fn force_set_state(
 	let mut auth_dropped = 0_usize;
 	let auth_chain_total = auth_chain.len();
 	for pdu in &auth_chain {
-		let result = if skip_sig_verify {
-			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
-				|(event_id, mut value)| {
-					value.insert(
-						"event_id".into(),
-						ruma::CanonicalJsonValue::String(event_id.as_str().into()),
-					);
-					(event_id, value)
-				},
-			)
-		} else {
-			self.services
-				.server_keys
-				.validate_and_add_event_id(pdu, &room_version)
-				.await
-		};
-
-		let Ok((event_id, value)) = result else {
+		// Compute event_id first (cheap hash, no crypto) to check existence
+		// before doing expensive sig verification.
+		let Ok((event_id, _)) =
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version)
+		else {
 			auth_dropped = auth_dropped.saturating_add(1);
 			continue;
 		};
 
-		// Clear markers for incoming auth events from the backbone
-		self.services
-			.rooms
-			.pdu_metadata
-			.clear_pdu_markers(&event_id);
-
+		// Skip events we already have (timeline or outlier store)
 		if self
 			.services
 			.rooms
@@ -1047,6 +1029,35 @@ pub(crate) async fn force_set_state(
 		{
 			auth_existing = auth_existing.saturating_add(1);
 		} else {
+			// Only sig-verify events we actually need to store
+			let result = if skip_sig_verify {
+				conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
+					|(event_id, mut value)| {
+						value.insert(
+							"event_id".into(),
+							ruma::CanonicalJsonValue::String(event_id.as_str().into()),
+						);
+						(event_id, value)
+					},
+				)
+			} else {
+				self.services
+					.server_keys
+					.validate_and_add_event_id(pdu, &room_version)
+					.await
+			};
+
+			let Ok((event_id, value)) = result else {
+				auth_dropped = auth_dropped.saturating_add(1);
+				continue;
+			};
+
+			// Clear markers for incoming auth events from the backbone
+			self.services
+				.rooms
+				.pdu_metadata
+				.clear_pdu_markers(&event_id);
+
 			self.services
 				.rooms
 				.outlier
@@ -1154,6 +1165,7 @@ pub(crate) async fn force_set_state(
 
 	// Collect remote event IDs before state is consumed by compress/resolve
 	let remote_eids: HashSet<OwnedEventId> = state.values().cloned().collect();
+	info!("Clearing PDU markers for {} remote events", remote_eids.len());
 
 	// Un-reject/un-soft-fail the authoritative remote events so they
 	//    can participate in state resolution
@@ -1162,6 +1174,7 @@ pub(crate) async fn force_set_state(
 	}
 
 	// Neutralize DAG poison BEFORE state resolution evaluates them
+	info!("Rejecting conflicting local state");
 	Box::pin(self.reject_conflicting_state(&room_id, &remote_eids)).await;
 
 	let new_room_state = if absolute {
@@ -1241,7 +1254,11 @@ pub(crate) async fn force_set_state(
 			.update_joined_count(room_id.as_ref())
 			.await;
 	} else {
-		info!("Forcing new room state (quiet mode)");
+		info!(
+			"Forcing new room state (quiet mode): {} added, {} removed",
+			added.len(),
+			removed.len()
+		);
 		Box::pin(self.services.rooms.state.force_state_quiet(
 			room_id.clone().as_ref(),
 			short_state_hash,
@@ -1291,6 +1308,7 @@ pub(crate) async fn force_set_state(
 	}
 
 	if !skip_membership_rebuild {
+		info!("Rebuilding membership cache");
 		Box::pin(self.rebuild_membership_cache_inner(room_id.clone(), short_state_hash)).await;
 	}
 
