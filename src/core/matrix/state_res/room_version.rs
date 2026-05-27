@@ -22,7 +22,7 @@ pub enum EventFormatVersion {
 	V3,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(not(feature = "unstable-exhaustive-types"), non_exhaustive)]
 pub enum StateResolutionVersion {
 	/// State resolution for rooms at version 1.
@@ -31,6 +31,8 @@ pub enum StateResolutionVersion {
 	V2,
 	/// State resolution for room at version 12 or later.
 	V2_1,
+	/// State resolution for MSC4242 (State DAGs).
+	V2_2,
 }
 
 #[cfg_attr(not(feature = "unstable-exhaustive-types"), non_exhaustive)]
@@ -91,6 +93,13 @@ pub struct RoomVersion {
 	///
 	/// See: [MSC4291](https://github.com/matrix-org/matrix-spec-proposals/pull/4291)
 	pub room_ids_as_hashes: bool,
+	/// Whether this room version uses State DAGs (MSC4242).
+	///
+	/// State events form their own DAG via `prev_state_events`, enabling
+	/// faster state convergence and calculated `auth_events`.
+	///
+	/// See: [MSC4242](https://github.com/matrix-org/matrix-spec-proposals/pull/4242)
+	pub state_dags: bool,
 }
 
 impl RoomVersion {
@@ -110,6 +119,7 @@ impl RoomVersion {
 		use_room_create_sender: false,
 		explicitly_privilege_room_creators: false,
 		room_ids_as_hashes: false,
+		state_dags: false,
 	};
 	pub const V10: Self = Self {
 		knock_restricted_join_rule: true,
@@ -121,6 +131,7 @@ impl RoomVersion {
 		..Self::V10
 	};
 	pub const V12: Self = Self {
+		state_res: StateResolutionVersion::V2_1,
 		explicitly_privilege_room_creators: true,
 		room_ids_as_hashes: true,
 		..Self::V11
@@ -148,6 +159,13 @@ impl RoomVersion {
 	pub const V7: Self = Self { allow_knocking: true, ..Self::V6 };
 	pub const V8: Self = Self { restricted_join_rules: true, ..Self::V7 };
 	pub const V9: Self = Self::V8;
+	/// MSC4242: State DAGs room version (unstable, based on V12).
+	pub const V_MSC4242: Self = Self {
+		disposition: RoomDisposition::Unstable,
+		state_res: StateResolutionVersion::V2_2,
+		state_dags: true,
+		..Self::V12
+	};
 
 	pub fn new(version: &RoomVersionId) -> Result<Self> {
 		Ok(match version {
@@ -163,7 +181,23 @@ impl RoomVersion {
 			| RoomVersionId::V10 => Self::V10,
 			| RoomVersionId::V11 => Self::V11,
 			| RoomVersionId::V12 => Self::V12,
+			| ver if ver.as_str() == "org.matrix.msc4242.12" => Self::V_MSC4242,
 			| ver => return Err(Error::Unsupported(format!("found version `{ver}`"))),
 		})
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::str::FromStr;
+
+	use super::*;
+
+	#[test]
+	fn new_msc4242() {
+		let id = RoomVersionId::from_str("org.matrix.msc4242.12").expect("valid version");
+		let v = RoomVersion::new(&id).expect("valid version");
+		assert!(v.state_dags);
+		assert_eq!(v.state_res, StateResolutionVersion::V2_2);
 	}
 }

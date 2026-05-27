@@ -51,6 +51,9 @@ pub struct Pdu {
 
 	pub prev_events: Vec<OwnedEventId>,
 
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub prev_state_events: Option<Vec<OwnedEventId>>,
+
 	pub depth: UInt,
 
 	pub auth_events: Vec<OwnedEventId>,
@@ -123,6 +126,15 @@ impl Event for Pdu {
 	}
 
 	#[inline]
+	fn prev_state_events(
+		&self,
+	) -> Option<impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_> {
+		self.prev_state_events
+			.as_ref()
+			.map(|v| v.iter().map(AsRef::as_ref))
+	}
+
+	#[inline]
 	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
 
 	#[inline]
@@ -185,6 +197,15 @@ impl Event for &Pdu {
 	#[inline]
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
 		self.prev_events.iter().map(AsRef::as_ref)
+	}
+
+	#[inline]
+	fn prev_state_events(
+		&self,
+	) -> Option<impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_> {
+		self.prev_state_events
+			.as_ref()
+			.map(|v| v.iter().map(AsRef::as_ref))
 	}
 
 	#[inline]

@@ -53,6 +53,7 @@ struct Data {
 	shorteventid_shortstatehash: Arc<Map>,
 	roomid_shortstatehash: Arc<Map>,
 	roomid_pduleaves: Arc<Map>,
+	roomid_stateleaves: Arc<Map>,
 }
 
 type RoomMutexMap = MutexMap<OwnedRoomId, ()>;
@@ -78,6 +79,7 @@ impl crate::Service for Service {
 				shorteventid_shortstatehash: args.db["shorteventid_shortstatehash"].clone(),
 				roomid_shortstatehash: args.db["roomid_shortstatehash"].clone(),
 				roomid_pduleaves: args.db["roomid_pduleaves"].clone(),
+				roomid_stateleaves: args.db["roomid_stateleaves"].clone(),
 			},
 		}))
 	}
@@ -416,6 +418,85 @@ impl Service {
 			let key = (room_id, event_id);
 			self.db.roomid_pduleaves.put_raw(key, event_id);
 		}
+	}
+
+	/// Returns the forward extremities of the State DAG for a room (MSC4242).
+	pub fn get_state_forward_extremities<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+	) -> impl Stream<Item = &'a EventId> + Send + 'a {
+		let prefix = (room_id, Interfix);
+
+		self.db
+			.roomid_stateleaves
+			.keys_prefix(&prefix)
+			.map_ok(|(_, event_id): (Ignore, &EventId)| event_id)
+			.ignore_err()
+	}
+
+	/// Replaces all State DAG forward extremities for a room (MSC4242).
+	pub async fn set_state_forward_extremities<'a, I>(
+		&'a self,
+		room_id: &'a RoomId,
+		event_ids: I,
+		_state_lock: &'a RoomMutexGuard,
+	) where
+		I: Iterator<Item = &'a EventId> + Send + 'a,
+	{
+		let prefix = (room_id, Interfix);
+		self.db
+			.roomid_stateleaves
+			.keys_prefix_raw(&prefix)
+			.ignore_err()
+			.ready_for_each(|key| self.db.roomid_stateleaves.remove(key))
+			.await;
+
+		for event_id in event_ids {
+			let key = (room_id, event_id);
+			self.db.roomid_stateleaves.put_raw(key, event_id);
+		}
+	}
+
+	/// Update State DAG extremities after appending a state event (MSC4242).
+	///
+	/// Removes any extremities referenced by this event's `prev_state_events`,
+	/// then inserts this event as a new extremity.
+	pub async fn update_state_extremities_for_event(
+		&self,
+		room_id: &RoomId,
+		pdu: &PduEvent,
+		state_lock: &RoomMutexGuard,
+	) {
+		// Only applies to state events with prev_state_events
+		if pdu.state_key().is_none() {
+			return;
+		}
+
+		let Some(prev_state) = pdu.prev_state_events() else {
+			return;
+		};
+
+		// Collect current extremities, removing those referenced by
+		// prev_state_events
+		let referenced: std::collections::HashSet<OwnedEventId> =
+			prev_state.map(ToOwned::to_owned).collect();
+
+		let mut new_extremities: Vec<OwnedEventId> = self
+			.get_state_forward_extremities(room_id)
+			.map(ToOwned::to_owned)
+			.ready_filter(|id: &OwnedEventId| !referenced.contains(id))
+			.collect()
+			.await;
+
+		// Add this event as a new extremity
+		new_extremities.push(pdu.event_id.clone());
+
+		self.set_state_forward_extremities(
+			room_id,
+			new_extremities.iter().map(AsRef::as_ref),
+			state_lock,
+		)
+		.await;
 	}
 
 	/// This fetches auth events from the current state.

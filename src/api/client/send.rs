@@ -75,22 +75,19 @@ pub(crate) async fn send_message_event_route(
 	let content = from_str(body.body.body.json().get())
 		.map_err(|e| err!(Request(BadJson("Invalid JSON body: {e}"))))?;
 
-	let event_id = services
-		.rooms
-		.timeline
-		.build_and_append_pdu(
-			PduBuilder {
-				event_type: body.event_type.clone().into(),
-				content,
-				unsigned: Some(unsigned),
-				timestamp: appservice_info.and(body.timestamp),
-				..Default::default()
-			},
-			sender_user,
-			Some(&body.room_id),
-			&state_lock,
-		)
-		.await?;
+	let event_id = Box::pin(services.rooms.timeline.build_and_append_pdu(
+		PduBuilder {
+			event_type: body.event_type.clone().into(),
+			content,
+			unsigned: Some(unsigned),
+			timestamp: appservice_info.and(body.timestamp),
+			..Default::default()
+		},
+		sender_user,
+		Some(&body.room_id),
+		&state_lock,
+	))
+	.await?;
 
 	services.transactions.add_client_txnid(
 		sender_user,
