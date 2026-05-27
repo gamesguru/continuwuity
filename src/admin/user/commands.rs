@@ -1248,3 +1248,24 @@ pub(super) async fn reset_push_rules(&self, user_id: String) -> Result {
 	self.write_str("Reset user's push rules to the server default.")
 		.await
 }
+
+#[admin_command]
+pub(super) async fn bump_device_lists(&self, user_id: String) -> Result {
+	if user_id.eq_ignore_ascii_case("all") {
+		let users: Vec<_> = self.services.users.list_local_users().collect().await;
+		let count = users.len();
+		for user in users {
+			self.services.users.mark_device_key_update(&user).await;
+		}
+		self.write_str(&format!("Bumped device list updates for all {count} local users."))
+			.await
+	} else {
+		let user_id = parse_local_user_id(self.services, &user_id)?;
+		if !self.services.users.is_active(&user_id).await {
+			return Err!("User is not active.");
+		}
+		self.services.users.mark_device_key_update(&user_id).await;
+		self.write_str("Bumped device list updates for user, they will be rebroadcasted over federation shortly.")
+			.await
+	}
+}

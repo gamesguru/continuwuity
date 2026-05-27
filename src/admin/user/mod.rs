@@ -263,4 +263,12 @@ pub enum UserCommand {
 	ResetPushRules {
 		user_id: String,
 	},
+
+	/// Forcefully rebroadcasts device list updates for a user to all federated servers.
+	///
+	/// This is useful if a device list update was missed by other servers.
+	/// Can accept `all` to rebroadcast for all local users.
+	BumpDeviceLists {
+		user_id: String,
+	},
 }
