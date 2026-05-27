@@ -20,7 +20,9 @@ use std::{
 };
 
 use dashmap::DashMap;
-use futures::{Future, FutureExt, Stream, StreamExt, TryStreamExt, future};
+use futures::{
+	Future, FutureExt, Stream, StreamExt, TryStreamExt, future, stream::FuturesUnordered,
+};
 use ruma::{
 	EventId, Int, MilliSecondsSinceUnixEpoch, OwnedEventId, RoomVersionId,
 	events::{
@@ -526,61 +528,49 @@ where
 
 	let min_depth = depths.into_iter().min().unwrap_or(ruma::UInt::MAX);
 
-	let mut backwards_reachable = HashSet::new();
+	let mut backwards_reachable: HashSet<OwnedEventId> = HashSet::new();
 	let mut missing = Vec::new();
-	let mut current_layer: HashSet<OwnedEventId> = conflicted_events.clone();
 	let mut children_map: HashMap<OwnedEventId, Vec<OwnedEventId>> = HashMap::new();
 
-	// Backwards BFS (ancestors down to min_depth w/ concurrent layer-by-layer
-	// fetch)
-	while !current_layer.is_empty() {
-		// Filter out nodes we've already visited to prevent redundant fetches/edges
-		current_layer.retain(|id| !backwards_reachable.contains(id));
-		if current_layer.is_empty() {
-			break;
-		}
+	// Concurrent work-stealing BFS: instead of waiting for each layer to
+	// complete before starting the next (which serializes on layer boundaries
+	// and caused 3+ minute stalls on 47k-event rooms), we use
+	// FuturesUnordered as a work queue. Each completed fetch immediately
+	// enqueues its prev_events for fetching, maximizing DB I/O concurrency
+	// across the full DAG traversal.
+	let make_fetch = |id: OwnedEventId| {
+		let fut = fetch_event(id.clone());
+		async move { (id, fut.await) }
+	};
 
-		let mut next_layer = HashSet::new();
+	let mut work: FuturesUnordered<_> = conflicted_events
+		.iter()
+		.filter(|id| backwards_reachable.insert((*id).clone()))
+		.map(|id| make_fetch(id.clone()))
+		.collect();
 
-		// Fetch all events in the current layer concurrently
-		let fetched_events: Vec<_> = current_layer
-			.into_iter()
-			.stream()
-			.broad_filter_map(|event_id| async move {
-				let evt_opt = fetch_event(event_id.clone()).await;
-				Some((event_id, evt_opt))
-			})
-			.collect()
-			.await;
-
-		for (event_id, evt_opt) in fetched_events {
-			// Track that we have visited this node
-			backwards_reachable.insert(event_id.clone());
-
-			if let Some(evt) = evt_opt {
-				if evt.depth() < min_depth {
-					continue; // Cut off traversal if we go deeper than the conflicted set
-				}
-
-				for prev in evt.prev_events() {
-					let prev_owned = prev.to_owned();
-					// Store reverse edges for the forwards BFS
-					children_map
-						.entry(prev_owned.clone())
-						.or_default()
-						.push(event_id.clone());
-
-					// Only queue the parent if we haven't already processed it
-					if !backwards_reachable.contains(&prev_owned) {
-						next_layer.insert(prev_owned);
-					}
-				}
-			} else {
-				missing.push(event_id);
+	while let Some((event_id, evt_opt)) = work.next().await {
+		if let Some(evt) = evt_opt {
+			if evt.depth() < min_depth {
+				continue; // Cut off traversal if we go deeper than the conflicted set
 			}
-		}
 
-		current_layer = next_layer;
+			for prev in evt.prev_events() {
+				let prev_owned = prev.to_owned();
+				// Store reverse edges for the forwards BFS
+				children_map
+					.entry(prev_owned.clone())
+					.or_default()
+					.push(event_id.clone());
+
+				// Immediately enqueue unseen prev_events for fetching
+				if backwards_reachable.insert(prev_owned.clone()) {
+					work.push(make_fetch(prev_owned));
+				}
+			}
+		} else {
+			missing.push(event_id);
+		}
 	}
 
 	// Forwards BFS (finds descendants from the seeds)
