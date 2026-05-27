@@ -734,8 +734,8 @@ async fn collect_required_state(
 					}
 				}
 			},
-			// Handled below via `lazy`; skip the literal "$LAZY" lookup.
-			| "$LAZY" => {},
+			// Handled below via `lazy`; skip the literal "$LAZY" lookup only for member state.
+			| "$LAZY" if event_type.as_str() == "m.room.member" => {},
 			| "$ME" => {
 				let resolved_key = sender_user.as_str();
 				if !fetched.insert((event_type.clone(), resolved_key.to_owned())) {
