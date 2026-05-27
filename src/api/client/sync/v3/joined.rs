@@ -17,7 +17,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join, join3, join4, try_join, try_join3, try_join4},
+	future::{OptionFuture, join, join4, try_join, try_join3, try_join4},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -162,22 +162,31 @@ async fn build_ephemeral(
 	// of `load_joined_room`. I don't know why boxing them fixes this -- it seems
 	// to be related to the async closures and borrowing from the sync context.
 
-	// collect updates to read receipts
-	let receipt_events = services
-		.rooms
-		.read_receipt
-		.readreceipts_since(room_id, last_sync_end_count)
-		.filter_map(async |(read_user, _, edu)| {
-			let is_ignored = services
-				.users
-				.user_is_ignored(&read_user, syncing_user)
-				.await;
+	// collect updates to read receipts.
+	// On initial sync (since=None), skip receipts entirely. readreceipts_since
+	// with since=0 would scan ALL historical receipts for the room — a massive
+	// DB read for 150 rooms. Clients handle missing initial receipts gracefully
+	// and will receive them on the next incremental sync.
+	let receipt_events = if last_sync_end_count.is_some() {
+		services
+			.rooms
+			.read_receipt
+			.readreceipts_since(room_id, last_sync_end_count)
+			.filter_map(async |(read_user, _, edu)| {
+				let is_ignored = services
+					.users
+					.user_is_ignored(&read_user, syncing_user)
+					.await;
 
-			// filter out read receipts for ignored users
-			is_ignored.or_some(edu)
-		})
-		.collect::<Vec<_>>()
-		.boxed();
+				// filter out read receipts for ignored users
+				is_ignored.or_some(edu)
+			})
+			.collect::<Vec<_>>()
+			.boxed()
+			.await
+	} else {
+		Vec::new()
+	};
 
 	// collect the updated list of typing users, if it's changed
 	let typing_event = async {
@@ -247,8 +256,7 @@ async fn build_ephemeral(
 		}
 	};
 
-	let (receipt_events, typing_event, private_read_event) =
-		join3(receipt_events, typing_event, private_read_event).await;
+	let (typing_event, private_read_event) = join(typing_event, private_read_event).await;
 
 	let mut edus = receipt_events;
 	edus.extend(typing_event);
@@ -291,7 +299,8 @@ async fn build_state_and_timeline(
 
 	// the timeline should always include at least one PDU if the syncing user
 	// joined since the last sync, that being the syncing user's join event. if
-	// it's empty something is wrong.
+	// it's empty something is wrong. on initial sync this fires for every room
+	// so use debug! to avoid noise.
 	if joined_since_last_sync && timeline.pdus.is_empty() {
 		info!(%room_id, "timeline for newly joined room is empty");
 	}
@@ -715,13 +724,23 @@ async fn check_joined_since_last_sync(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn build_room_summary(
 	services: &Services,
-	SyncContext { syncing_user, .. }: SyncContext<'_>,
+	sync_context: SyncContext<'_>,
 	room_id: &RoomId,
 	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
 	joined_since_last_sync: bool,
 ) -> Result<Option<RoomSummary>> {
+	let SyncContext { syncing_user, last_sync_end_count, .. } = sync_context;
+
+	// On initial sync, skip room summary entirely. The client will compute
+	// counts from the full state we already send. This avoids
+	// joined_count + invited_count + has_name + has_canonical_alias + heroes
+	// queries for every room (~150 rooms × 5 DB reads = 750 avoided).
+	if last_sync_end_count.is_none() {
+		return Ok(None);
+	}
+
 	// determine whether any events in the state or timeline are membership events.
 	let are_syncing_membership_events = timeline
 		.pdus

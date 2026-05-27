@@ -325,7 +325,7 @@
 # Max concurrent global outbound requests. Defaults to 2048 to prevent
 # offline or slow federated servers from tying up all outbound permits.
 #
-#max_concurrent_outbound_requests = 2048
+#max_concurrent_outbound_requests = 128
 
 # How many concurrent incoming federation transactions the server is
 # willing to accept from a single domain.

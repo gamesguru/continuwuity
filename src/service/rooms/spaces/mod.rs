@@ -71,8 +71,6 @@ pub enum Identifier<'a> {
 
 type Cache = LruCache<OwnedRoomId, Option<CachedSpaceHierarchySummary>>;
 
-const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(0);
-
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
@@ -159,39 +157,6 @@ pub async fn get_summary_and_children_local(
 		.await
 	else {
 		debug!(room_id = %current_room, "spaces: local summary synthesis failed");
-		return Ok(None);
-	};
-
-	self.roomid_spacehierarchy_cache.lock().await.insert(
-		current_room.to_owned(),
-		Some(CachedSpaceHierarchySummary { summary: summary.clone() }),
-	);
-
-	Ok(Some(SummaryAccessibility::Accessible(summary)))
-}
-
-/// Last-resort fallback: always synthesizes from local DB even if member
-/// counts may be stale.  Used when both the primary local path (which skips
-/// stale rooms) and federation have failed, so the room still appears in the
-/// space hierarchy rather than vanishing.
-#[implement(Service)]
-async fn get_summary_and_children_local_fallback(
-	&self,
-	current_room: &RoomId,
-	identifier: &Identifier<'_>,
-) -> Result<Option<SummaryAccessibility>> {
-	let children_pdus: Vec<_> = self
-		.get_space_child_events(current_room)
-		.map(Event::into_format)
-		.collect()
-		.await;
-
-	let Ok(summary) = self
-		.get_room_summary(current_room, children_pdus, identifier)
-		.boxed()
-		.await
-	else {
-		debug!(room_id = %current_room, "spaces: local fallback summary synthesis failed");
 		return Ok(None);
 	};
 
@@ -346,16 +311,6 @@ pub async fn get_summary_and_children_client(
 		return Ok(Some(response));
 	}
 
-	if self
-		.negative_cache_ts
-		.lock()
-		.await
-		.get_mut(current_room)
-		.is_some_and(|ts| ts.elapsed() < NEGATIVE_CACHE_TTL)
-	{
-		return Ok(None);
-	}
-
 	// Try federation (authoritative for rooms we merely observe)
 	match self
 		.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
@@ -370,11 +325,11 @@ pub async fn get_summary_and_children_client(
 		},
 	}
 
-	// Fallback: synthesize from local DB even with stale counts, so rooms don't
-	// vanish from the hierarchy when federation is unreachable.
-	debug!(room_id = %current_room, "spaces: using local fallback (may have stale counts)");
-	self.get_summary_and_children_local_fallback(current_room, &identifier)
-		.await
+	// Both local and federation failed — room is genuinely unavailable.
+	// Don't fallback to local DB synthesis (which re-does the same work
+	// that already failed above) to avoid redundant DB reads and keeping
+	// the hierarchy walker responsive.
+	Ok(None)
 }
 
 #[implement(Service)]

@@ -193,10 +193,6 @@ async fn get_auth_chain_inner(
 	let mut last_progress = Instant::now();
 
 	while let Some(event_id) = todo.pop_front() {
-		if found.len().is_multiple_of(100) && !found.is_empty() {
-			tokio::task::yield_now().await;
-		}
-
 		if last_progress.elapsed().as_secs() >= 30 {
 			info!(%room_id, found = found.len(), queue = todo.len(), elapsed = ?started.elapsed(), "auth_chain walk in progress");
 			last_progress = Instant::now();
