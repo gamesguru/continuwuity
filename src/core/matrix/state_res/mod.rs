@@ -1217,7 +1217,7 @@ where
 		);
 
 		if *event.event_type() == TimelineEventType::RoomPowerLevels {
-			info!(
+			debug!(
 				event_id = event.event_id().as_str(),
 				sender = %event.sender(),
 				"iterative_auth_check: about to auth PL event"
@@ -1274,7 +1274,7 @@ where
 			| Ok(true) => {
 				// add event to resolved state map
 				if *event.event_type() == TimelineEventType::RoomPowerLevels {
-					info!(
+					debug!(
 						event_id = event.event_id().as_str(),
 						"iterative_auth_check: PL event PASSED auth, adding to resolved state"
 					);
