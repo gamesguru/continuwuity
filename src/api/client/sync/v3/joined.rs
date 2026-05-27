@@ -4,6 +4,7 @@ use conduwuit::{
 	Result, at, debug_warn, err, extract_variant,
 	matrix::{
 		Event,
+		event::Matches,
 		pdu::{PduCount, PduEvent},
 	},
 	trace,
@@ -304,33 +305,50 @@ async fn build_state_and_timeline(
 
 	// the token which may be passed to the messages endpoint to backfill room
 	// history
-	let prev_batch = timeline.pdus.front().map(at!(0));
+	let prev_batch = timeline.pdus.front().map(at!(0)).map(|c| c.to_string());
+
+	let TimelinePdus { pdus, limited: timeline_limited } = timeline;
 
 	// note: we always indicate a limited timeline if the syncing user just joined
 	// the room, to indicate to the client that it should request backfill (and to
 	// copy Synapse's behavior). for federated room joins, the `timeline` will
 	// usually only include the syncing user's join event.
-	let limited = timeline.limited || joined_since_last_sync;
+	let limited = timeline_limited || joined_since_last_sync;
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
-	let filtered_timeline = timeline
-		.pdus
+	let filtered_timeline_pdus: Vec<PduEvent> = pdus
 		.into_iter()
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item, sync_context.syncing_user))
+		.ready_filter(|(_, pdu)| {
+			let filter = &sync_context.filter.room.timeline;
+			filter.matches(pdu)
+		})
 		.map(at!(1))
-		.map(Event::into_format)
 		.collect::<Vec<_>>()
 		.await;
+
+	let timeline_ids: HashSet<&ruma::EventId> = filtered_timeline_pdus
+		.iter()
+		.map(|pdu| &*pdu.event_id)
+		.collect();
+
+	let state_events: Vec<_> = state_events
+		.into_iter()
+		.filter(|pdu| !timeline_ids.contains(&*pdu.event_id))
+		.collect();
 
 	Ok(StateAndTimeline {
 		state_events,
 		state_after,
 		timeline: Timeline {
 			limited,
-			prev_batch: prev_batch.as_ref().map(ToString::to_string),
-			events: filtered_timeline,
+			prev_batch,
+			events: filtered_timeline_pdus
+				.into_iter()
+				.map(Event::into_format)
+				.collect(),
 		},
 		summary,
 		notification_counts,
