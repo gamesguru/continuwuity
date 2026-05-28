@@ -26,7 +26,12 @@ use super::ExtractBody;
 
 #[implement(super::Service)]
 #[tracing::instrument(name = "backfill", level = "trace", skip(self))]
-pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Result<()> {
+pub async fn backfill_if_required(
+	&self,
+	room_id: &RoomId,
+	from: PduCount,
+	limit: usize,
+) -> Result<()> {
 	if self
 		.services
 		.state_cache
@@ -44,14 +49,19 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 		return Ok(());
 	}
 
-	let first_pdu = self
-		.first_item_in_room(room_id)
-		.await
-		.expect("Room is not empty");
+	let mut backwards_extremities = Vec::new();
+	let mut pdus = self.pdus_rev(room_id, Some(from)).take(limit).boxed();
+	while let Some(Ok((_, pdu))) = pdus.next().await {
+		for prev_event_id in &pdu.prev_events {
+			if self.get_pdu_id(prev_event_id).await.is_err() {
+				backwards_extremities.push(pdu.event_id.clone());
+				break;
+			}
+		}
+	}
 
-	if first_pdu.0 < from {
-		// No backfill required, there are still events between them
-		debug!("No backfill required in room {room_id}, {:?} < {from}", first_pdu.0);
+	if backwards_extremities.is_empty() {
+		// No gaps found in this chunk, no backfill required
 		return Ok(());
 	}
 
@@ -167,7 +177,7 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				backfill_server,
 				federation::backfill::get_backfill::v1::Request {
 					room_id: room_id.to_owned(),
-					v: vec![first_pdu.1.event_id().to_owned()],
+					v: backwards_extremities.clone(),
 					limit: uint!(100),
 				},
 			)
