@@ -1035,7 +1035,7 @@ pub(super) async fn list_outliers(
 			.timeline
 			.get_pdu_id(&event_id)
 			.await
-			.is_ok();
+			.is_err();
 		let is_rejected = self
 			.services
 			.rooms
