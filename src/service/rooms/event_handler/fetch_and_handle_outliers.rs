@@ -85,11 +85,14 @@ where
 	));
 	let limit = self.services.server.config.max_fetch_prev_events;
 
-	let push_fetch =
-		|event_id: OwnedEventId, is_retry: bool, fetches: &mut FuturesUnordered<_>| {
+	macro_rules! push_generic_fetch {
+		($fetches:expr, $event_id:expr, $is_retry:expr, $retry_msg:literal, $fail_msg:literal, $exhaust_msg:literal, $not_found_msg:literal, $req_closure:expr, $result_variant:path $(, $extra_capture:ident)*) => {
 			let servers = routing_servers.clone();
 			let sem = fetch_concurrency.clone();
-			fetches.push(
+			let event_id = $event_id;
+			let is_retry = $is_retry;
+			$( let $extra_capture = $extra_capture.clone(); )*
+			$fetches.push(
 				async move {
 					let _permit = sem.acquire().await;
 					for attempt in 0..2_u8 {
@@ -98,19 +101,18 @@ where
 								2_u64.pow(attempt.into()),
 							))
 							.await;
-							debug!(%event_id, attempt, "Retrying fetch");
+							debug!(%event_id, attempt, $retry_msg);
 						}
 						let reqs = servers.iter().enumerate().map(|(i, server)| {
 							let event_id = event_id.clone();
+							$( let $extra_capture = $extra_capture.clone(); )*
+							let req = $req_closure(event_id.clone() $(, $extra_capture.clone() )*);
 							async move {
 								let start = Instant::now();
 								match self
 									.services
 									.sending
-									.send_federation_request(server, get_event::v1::Request {
-										event_id: event_id.clone(),
-										include_unredacted_content: None,
-									})
+									.send_federation_request(server, req)
 									.await
 								{
 									| Ok(res) => {
@@ -120,7 +122,7 @@ where
 									| Err(e) => {
 										self.update_peer_stats(server, false, start.elapsed());
 										if i == 0 {
-											debug!(%event_id, %server, "Origin server failed: {e}");
+											debug!(%event_id, %server, $fail_msg, e);
 										}
 										Err(e)
 									},
@@ -130,24 +132,41 @@ where
 						});
 
 						match future::select_ok(reqs).await {
-							| Ok((res, _rem)) => return FetchResult::Event(event_id, Ok(res)),
+							| Ok((res, _rem)) => return $result_variant(event_id, Ok(res)),
 							| Err(_all_errors) =>
 								if is_retry {
-									info!(%event_id, n_servers = servers.len(), attempt, "All servers exhausted");
+									info!(%event_id, n_servers = servers.len(), attempt, $exhaust_msg);
 								} else {
-									debug!(%event_id, n_servers = servers.len(), "All servers exhausted");
+									debug!(%event_id, n_servers = servers.len(), $exhaust_msg);
 									break;
 								},
 						}
 					}
-					FetchResult::Event(
+					$result_variant(
 						event_id,
-						Err(conduwuit::err!(Request(NotFound(
-							"event not found after trying all servers"
-						)))),
+						Err(conduwuit::err!(Request(NotFound($not_found_msg)))),
 					)
 				}
 				.boxed(),
+			);
+		};
+	}
+
+	let push_fetch =
+		|event_id: OwnedEventId, is_retry: bool, fetches: &mut FuturesUnordered<_>| {
+			push_generic_fetch!(
+				fetches,
+				event_id,
+				is_retry,
+				"Retrying fetch",
+				"Origin server failed fetch: {}",
+				"All servers exhausted for fetch",
+				"event not found after trying all servers",
+				|event_id| get_event::v1::Request {
+					event_id,
+					include_unredacted_content: None,
+				},
+				FetchResult::Event
 			);
 		};
 
@@ -155,72 +174,18 @@ where
 	                       event_id: OwnedEventId,
 	                       is_retry: bool,
 	                       fetches: &mut FuturesUnordered<_>| {
-		let servers = routing_servers.clone();
-		let sem = fetch_concurrency.clone();
-		fetches.push(
-				async move {
-					let _permit = sem.acquire().await;
-					for attempt in 0..2_u8 {
-						if is_retry && attempt > 0 {
-							tokio::time::sleep(std::time::Duration::from_secs(
-								2_u64.pow(attempt.into()),
-							))
-							.await;
-							debug!(%event_id, attempt, "Retrying auth chain fetch");
-						}
-						let reqs = servers.iter().enumerate().map(|(i, server)| {
-							let event_id = event_id.clone();
-							let room_id = room_id.clone();
-							async move {
-								let start = Instant::now();
-								match self
-									.services
-									.sending
-									.send_federation_request(
-										server,
-										get_event_authorization::v1::Request {
-											room_id,
-											event_id: event_id.clone(),
-										},
-									)
-									.await
-								{
-									| Ok(res) => {
-										self.update_peer_stats(server, true, start.elapsed());
-										Ok((res, server.clone()))
-									},
-									| Err(e) => {
-										self.update_peer_stats(server, false, start.elapsed());
-										if i == 0 {
-											debug!(%event_id, %server, "Origin server failed auth fetch: {e}");
-										}
-										Err(e)
-									},
-								}
-							}
-							.boxed()
-						});
-
-						match future::select_ok(reqs).await {
-							| Ok((res, _rem)) => return FetchResult::AuthChain(event_id, Ok(res)),
-							| Err(_all_errors) =>
-								if is_retry {
-									info!(%event_id, n_servers = servers.len(), attempt, "All servers exhausted for auth fetch");
-								} else {
-									debug!(%event_id, n_servers = servers.len(), "All servers exhausted for auth fetch");
-									break;
-								},
-						}
-					}
-					FetchResult::AuthChain(
-						event_id,
-						Err(conduwuit::err!(Request(NotFound(
-							"auth chain not found after trying all servers"
-						)))),
-					)
-				}
-				.boxed(),
-			);
+		push_generic_fetch!(
+			fetches,
+			event_id,
+			is_retry,
+			"Retrying auth chain fetch",
+			"Origin server failed auth fetch: {}",
+			"All servers exhausted for auth fetch",
+			"auth chain not found after trying all servers",
+			|event_id, room_id| get_event_authorization::v1::Request { room_id, event_id },
+			FetchResult::AuthChain,
+			room_id
+		);
 	};
 
 	let mut requested_seeds = Vec::new();
