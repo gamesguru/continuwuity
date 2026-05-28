@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use conduwuit::{Result, implement};
-use database::{Database, Deserialized, Map};
+use database::{Deserialized, Map};
 use ruma::{RoomId, UserId};
 
-use crate::{Dep, globals, rooms, rooms::short::ShortStateHash};
+use crate::{Dep, globals, rooms};
 
 pub struct Service {
 	db: Data,
@@ -12,7 +12,7 @@ pub struct Service {
 }
 
 struct Data {
-	db: Arc<Database>,
+	db: Arc<database::Database>,
 	userroomid_notificationcount: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	roomuserid_lastnotificationread: Arc<Map>,
@@ -91,39 +91,53 @@ pub async fn last_notification_read(&self, user_id: &UserId, room_id: &RoomId) -
 		.unwrap_or(0)
 }
 
+/// Count how many sync tokens exist for a room without deleting them
+///
+/// This is useful for dry runs to see how many tokens would be deleted
 #[implement(Service)]
-pub async fn associate_token_shortstatehash(
-	&self,
-	room_id: &RoomId,
-	token: u64,
-	shortstatehash: ShortStateHash,
-) {
-	let shortroomid = self
-		.services
-		.short
-		.get_shortroomid(room_id)
-		.await
-		.expect("room exists");
+pub async fn count_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
+	use futures::TryStreamExt;
 
-	let _cork = self.db.db.cork();
-	let key: &[u64] = &[shortroomid, token];
-	self.db
-		.roomsynctoken_shortstatehash
-		.put(key, shortstatehash);
-}
-
-#[implement(Service)]
-pub async fn get_token_shortstatehash(
-	&self,
-	room_id: &RoomId,
-	token: u64,
-) -> Result<ShortStateHash> {
 	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
 
-	let key: &[u64] = &[shortroomid, token];
-	self.db
+	// Create a prefix to search by - all entries for this room will start with its
+	// short ID
+	let prefix = &[shortroomid];
+
+	let count = self
+		.db
 		.roomsynctoken_shortstatehash
-		.qry(key)
-		.await
-		.deserialized()
+		.keys_prefix_raw(prefix)
+		.try_fold(0_usize, |acc, _| async move { Ok(acc.saturating_add(1)) })
+		.await?;
+
+	Ok(count)
+}
+
+/// Delete all sync tokens associated with a room
+///
+/// This helps clean up the database as these tokens are never otherwise removed
+#[implement(Service)]
+pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
+	use futures::TryStreamExt;
+
+	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+
+	// Create a prefix to search by - all entries for this room will start with its
+	// short ID
+	let prefix = &[shortroomid];
+
+	let _cork = self.db.db.cork();
+
+	let count = self
+		.db
+		.roomsynctoken_shortstatehash
+		.keys_prefix_raw(prefix)
+		.try_fold(0_usize, |acc, key| async move {
+			self.db.roomsynctoken_shortstatehash.remove(key);
+			Ok(acc.saturating_add(1))
+		})
+		.await?;
+
+	Ok(count)
 }

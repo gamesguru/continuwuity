@@ -146,15 +146,28 @@ pub fn pack_receipts<I>(receipts: I) -> Raw<SyncEphemeralRoomEvent<ReceiptEventC
 where
 	I: Iterator<Item = Raw<AnySyncEphemeralRoomEvent>>,
 {
-	let mut json = BTreeMap::new();
+	let mut json: BTreeMap<OwnedEventId, Receipts> = BTreeMap::new();
 	for value in receipts {
 		let receipt = serde_json::from_str::<SyncEphemeralRoomEvent<ReceiptEventContent>>(
 			value.json().get(),
 		);
 		match receipt {
 			| Ok(value) =>
-				for (event, receipt) in value.content {
-					json.insert(event, receipt);
+				for (event_id, new_receipts) in value.content {
+					let existing_receipts = json.entry(event_id).or_default();
+					for (receipt_type, new_users) in new_receipts {
+						let existing_users = existing_receipts.entry(receipt_type).or_default();
+						for (user_id, new_receipt) in new_users {
+							// Prefer unthreaded receipts if there's a clash
+							let is_unthreaded = matches!(
+								new_receipt.thread,
+								ruma::events::receipt::ReceiptThread::Unthreaded
+							);
+							if is_unthreaded || !existing_users.contains_key(&user_id) {
+								existing_users.insert(user_id, new_receipt);
+							}
+						}
+					}
 				},
 			| _ => {
 				debug!("failed to parse receipt: {:?}", receipt);

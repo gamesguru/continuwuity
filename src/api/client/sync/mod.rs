@@ -26,6 +26,7 @@ pub(crate) const DEFAULT_BUMP_TYPES: &[TimelineEventType; 6] =
 #[derive(Default)]
 pub(crate) struct TimelinePdus {
 	pub pdus: VecDeque<(PduCount, PduEvent)>,
+	pub prev_batch: Option<PduCount>,
 	pub limited: bool,
 }
 
@@ -119,7 +120,7 @@ async fn load_timeline(
 	};
 
 	// Return at most `limit` PDUs from the stream
-	let pdus = pdu_stream
+	let mut pdus = pdu_stream
 		.by_ref()
 		.take(limit)
 		.ready_fold(VecDeque::with_capacity(limit), |mut pdus, item| {
@@ -127,6 +128,34 @@ async fn load_timeline(
 			pdus
 		})
 		.await;
+
+	// capture the count of the absolute earliest PDU in the stream as the
+	// prev_batch token. This must be determined before topological sort changes
+	// the order of the PDUs.
+	let prev_batch = pdus.front().map(|(count, _)| *count);
+
+	if !pdus.is_empty() {
+		let mut event_to_count = std::collections::HashMap::new();
+		let events: Vec<_> = pdus
+			.into_iter()
+			.map(|(count, pdu)| {
+				event_to_count.insert(pdu.event_id.clone(), count);
+				pdu
+			})
+			.collect();
+
+		let sorted_events = conduwuit::matrix::dag::sort_topologically(events);
+
+		pdus = sorted_events
+			.into_iter()
+			.map(|pdu| {
+				let count = event_to_count
+					.remove(&pdu.event_id)
+					.expect("event count exists");
+				(count, pdu)
+			})
+			.collect();
+	}
 
 	// The timeline is limited if there are still more PDUs in the stream
 	let limited = pdu_stream.next().await.is_some();
@@ -139,7 +168,7 @@ async fn load_timeline(
 		limited,
 	);
 
-	Ok(TimelinePdus { pdus, limited })
+	Ok(TimelinePdus { pdus, prev_batch, limited })
 }
 
 async fn share_encrypted_room(
