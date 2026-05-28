@@ -313,6 +313,8 @@ impl Service {
 			| Ok((_, ref presence)) => now.saturating_sub(presence.last_active_ts),
 		};
 
+		let refresh_timeout = self.services.server.config.presence_idle_debounce_ms;
+
 		// Synapse-style debounce: If an idle background client says "offline" when
 		// we were explicitly "online" *within the last REFRESH_TIMEOUT (60s)*, ignore
 		// the idle client's claim.
@@ -320,7 +322,7 @@ impl Service {
 			if let Ok((_, ref presence)) = last_presence {
 				if *new_state == PresenceState::Unavailable && presence.state == PresenceState::Online
 				{
-					if last_last_active_ago < REFRESH_TIMEOUT {
+					if last_last_active_ago < refresh_timeout {
 						return Ok(());
 					}
 				}

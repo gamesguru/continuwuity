@@ -1501,6 +1501,14 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub presence_idle_debounce: bool,
 
+	/// The duration in milliseconds for the Synapse-style presence debounce.
+	/// If `presence_idle_debounce` is enabled, any idle client claims of Offline
+	/// will be ignored if the user was Online within this time window.
+	///
+	/// default: 60000 (60 seconds)
+	#[serde(default = "default_presence_idle_debounce_ms")]
+	pub presence_idle_debounce_ms: u64,
+
 	/// Allow incoming federated presence updates.
 	///
 	/// This option enables processing inbound presence updates from other
@@ -3183,3 +3191,5 @@ fn default_ldap_search_filter() -> String { "(objectClass=*)".to_owned() }
 fn default_ldap_uid_attribute() -> String { String::from("uid") }
 
 fn default_ldap_name_attribute() -> String { String::from("givenName") }
+
+fn default_presence_idle_debounce_ms() -> u64 { 60000 }
