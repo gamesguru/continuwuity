@@ -1494,6 +1494,13 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_local_presence: bool,
 
+	/// Enable Synapse-style debounce logic to prevent background clients from
+	/// instantly overriding active Online presence with Unavailable.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub presence_idle_debounce: bool,
+
 	/// Allow incoming federated presence updates.
 	///
 	/// This option enables processing inbound presence updates from other

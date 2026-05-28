@@ -134,11 +134,36 @@ where
 
 	debug!(event_id = %incoming_pdu.event_id, "Gathering explicitly claimed auth events");
 	let mut auth_events = HashMap::new();
+	let mut missing_auth_events = false;
+
 	for event_id in incoming_pdu.auth_events() {
 		if let Ok(pdu) = self.services.timeline.get_pdu(event_id).await {
 			if let Some(state_key) = &pdu.state_key {
 				let key = StateEventType::from(pdu.kind().clone());
 				auth_events.insert((key, state_key.clone()), pdu);
+			}
+		} else {
+			missing_auth_events = true;
+		}
+	}
+
+	if missing_auth_events {
+		debug!(event_id = %incoming_pdu.event_id, "Missing claimed auth events locally. Falling back to state-based auth events");
+		if let Ok(state_auth_events) = self
+			.services
+			.state
+			.get_auth_events(
+				room_id,
+				incoming_pdu.kind(),
+				incoming_pdu.sender(),
+				incoming_pdu.state_key(),
+				incoming_pdu.content(),
+				&room_version,
+			)
+			.await
+		{
+			for ((k, s), pdu) in state_auth_events {
+				auth_events.entry((k, s.to_string())).or_insert(pdu);
 			}
 		}
 	}
