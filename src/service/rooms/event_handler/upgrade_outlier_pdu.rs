@@ -163,7 +163,7 @@ where
 			.await
 		{
 			for ((k, s), pdu) in state_auth_events {
-				auth_events.entry((k, s.to_string())).or_insert(pdu);
+				auth_events.entry((k, s)).or_insert(pdu);
 			}
 		}
 	}

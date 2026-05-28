@@ -318,9 +318,10 @@ impl Service {
 		// Synapse-style debounce: If an idle background client says "offline" when
 		// we were explicitly "online" *within the last REFRESH_TIMEOUT (60s)*, ignore
 		// the idle client's claim.
-		if self.services.server.config.presence_idle_debounce {
+		if refresh_timeout > 0 {
 			if let Ok((_, ref presence)) = last_presence {
-				if *new_state == PresenceState::Unavailable && presence.state == PresenceState::Online
+				if *new_state == PresenceState::Unavailable
+					&& presence.state == PresenceState::Online
 				{
 					if last_last_active_ago < refresh_timeout {
 						return Ok(());

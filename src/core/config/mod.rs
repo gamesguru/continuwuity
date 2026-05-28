@@ -1494,16 +1494,9 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_local_presence: bool,
 
-	/// Enable Synapse-style debounce logic to prevent background clients from
-	/// instantly overriding active Online presence with Unavailable.
-	///
-	/// default: true
-	#[serde(default = "true_fn")]
-	pub presence_idle_debounce: bool,
-
 	/// The duration in milliseconds for the Synapse-style presence debounce.
-	/// If `presence_idle_debounce` is enabled, any idle client claims of Offline
-	/// will be ignored if the user was Online within this time window.
+	/// If greater than 0, any idle client claims of Offline will be ignored
+	/// if the user was Online within this time window.
 	///
 	/// default: 60000 (60 seconds)
 	#[serde(default = "default_presence_idle_debounce_ms")]
