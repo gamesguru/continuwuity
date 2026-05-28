@@ -649,10 +649,7 @@ impl Service {
 		let mut state_event_count = 0_usize;
 
 		for event_id in &sorted {
-			let pdu = match self.db.get_pdu_in_room(Some(room_id), event_id).await {
-				| Ok(p) => p,
-				| Err(_) => continue,
-			};
+			let Ok(pdu) = self.db.get_pdu_in_room(Some(room_id), event_id).await else { continue };
 
 			// Get short IDs for this event
 			let shorteventid = self
