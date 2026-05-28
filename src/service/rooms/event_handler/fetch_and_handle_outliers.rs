@@ -18,6 +18,17 @@ use ruma::{
 	api::federation::{authorization::get_event_authorization, event::get_event},
 };
 
+enum FetchResult {
+	Event(
+		OwnedEventId,
+		conduwuit::Result<(get_event::v1::Response, ruma::OwnedServerName)>,
+	),
+	AuthChain(
+		OwnedEventId,
+		conduwuit::Result<(get_event_authorization::v1::Response, ruma::OwnedServerName)>,
+	),
+}
+
 #[implement(super::Service)]
 pub async fn fetch_and_handle_outliers<'a, Pdu, Events>(
 	&self,
@@ -73,17 +84,6 @@ where
 		self.services.server.concurrency_scaled(2),
 	));
 	let limit = self.services.server.config.max_fetch_prev_events;
-
-	enum FetchResult {
-		Event(
-			OwnedEventId,
-			conduwuit::Result<(get_event::v1::Response, ruma::OwnedServerName)>,
-		),
-		AuthChain(
-			OwnedEventId,
-			conduwuit::Result<(get_event_authorization::v1::Response, ruma::OwnedServerName)>,
-		),
-	}
 
 	let push_fetch =
 		|event_id: OwnedEventId, is_retry: bool, fetches: &mut FuturesUnordered<_>| {
