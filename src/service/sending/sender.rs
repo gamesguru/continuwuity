@@ -153,8 +153,8 @@ impl Service {
 	) {
 		match e {
 			| Error::FederationTimeout(..) | Error::FederationConnection(..) =>
-				debug!(dest = ?dest, "{e:?}"),
-			| _ if e.status_code().is_server_error() => debug!(dest = ?dest, "{e:?}"),
+				tracing::warn!(dest = ?dest, "{e:?}"),
+			| _ if e.status_code().is_server_error() => tracing::warn!(dest = ?dest, "{e:?}"),
 			| _ => info!(dest = ?dest, "{e:?}"),
 		}
 		let mut tries = 1_u32;
@@ -275,7 +275,7 @@ impl Service {
 			self.db.mark_as_active(new_events.iter());
 			let new_events_vec = new_events.into_iter().map(|(_, e)| e).collect();
 			statuses.insert(dest.clone(), TransactionStatus::Running);
-			futures.push(self.send_events(dest.clone(), new_events_vec));
+			futures.push(self.send_events(dest.clone(), new_events_vec, None));
 			return;
 		}
 
@@ -336,9 +336,9 @@ impl Service {
 			reqs
 		};
 
-		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
+		if let Ok(Some((events, edu_count))) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
-				futures.push(self.send_events(msg.dest, events));
+				futures.push(self.send_events(msg.dest, events, edu_count));
 			} else {
 				statuses.remove(&msg.dest);
 			}
@@ -394,32 +394,41 @@ impl Service {
 	) {
 		let keep =
 			usize::try_from(self.server.config.startup_netburst_keep).unwrap_or(usize::MAX);
-		let mut txns = HashMap::<Destination, Vec<SendingEvent>>::new();
 		let mut active = self.db.active_requests().boxed();
+
+		let mut current_dest: Option<Destination> = None;
+		let mut current_events = Vec::new();
 
 		while let Some((key, event, dest)) = active.next().await {
 			if self.shard_id(&dest) != id {
 				continue;
 			}
 
-			let entry = txns.entry(dest.clone()).or_default();
-			if self.server.config.startup_netburst_keep >= 0 && entry.len() >= keep {
+			if current_dest.as_ref() != Some(&dest) {
+				if let Some(old_dest) = current_dest.take() {
+					if self.server.config.startup_netburst && !current_events.is_empty() {
+						info!("startup_netburst[{id}]: resuming {} events for {:?}", current_events.len(), old_dest);
+						statuses.insert(old_dest.clone(), TransactionStatus::Running);
+						futures.push(self.send_events(old_dest, std::mem::take(&mut current_events), None));
+					}
+				}
+				current_dest = Some(dest.clone());
+				current_events.clear();
+			}
+
+			if keep == usize::MAX || current_events.len() < keep {
+				current_events.push(event);
+			} else {
 				warn!("Dropping unsent event {dest:?} {:?}", String::from_utf8_lossy(&key));
 				self.db.delete_active_request(&key);
-			} else {
-				entry.push(event);
 			}
 		}
 
-		if txns.is_empty() {
-			info!("startup_netburst[{id}]: no active requests to resume");
-		}
-
-		for (dest, events) in txns {
-			if self.server.config.startup_netburst && !events.is_empty() {
-				info!("startup_netburst[{id}]: resuming {} events for {dest:?}", events.len());
-				statuses.insert(dest.clone(), TransactionStatus::Running);
-				futures.push(self.send_events(dest.clone(), events));
+		if let Some(old_dest) = current_dest.take() {
+			if self.server.config.startup_netburst && !current_events.is_empty() {
+				info!("startup_netburst[{id}]: resuming {} events for {:?}", current_events.len(), old_dest);
+				statuses.insert(old_dest.clone(), TransactionStatus::Running);
+				futures.push(self.send_events(old_dest, std::mem::take(&mut current_events), None));
 			}
 		}
 
@@ -474,7 +483,7 @@ impl Service {
 		dest: &Destination,
 		new_events: Vec<QueueItem>, // Events we want to send: event and full key
 		statuses: &mut CurTransactionStatus,
-	) -> Result<Option<Vec<SendingEvent>>> {
+	) -> Result<Option<(Vec<SendingEvent>, Option<u64>)>> {
 		let has_pdu = new_events
 			.iter()
 			.any(|(_, e)| matches!(e, SendingEvent::Pdu(_)));
@@ -501,7 +510,7 @@ impl Service {
 				.ready_for_each(|(_, e)| events.push(e))
 				.await;
 
-			return Ok(Some(events));
+			return Ok(Some((events, None)));
 		}
 
 		// Compose the next transaction
@@ -513,6 +522,7 @@ impl Service {
 			}
 		}
 
+		let mut edu_count = None;
 		// Add EDU's into the transaction
 		if let Destination::Federation(server_name) = dest {
 			if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
@@ -520,11 +530,11 @@ impl Service {
 				let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
 
 				events.extend(select_edus);
-				self.db.set_latest_educount(server_name, last_count);
+				edu_count = Some(last_count);
 			}
 		}
 
-		Ok(Some(events))
+		Ok(Some((events, edu_count)))
 	}
 
 	fn select_events_current(
@@ -849,11 +859,11 @@ impl Service {
 		(Some(buf), since.1)
 	}
 
-	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>) -> SendingFuture<'_> {
+	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>, edu_count: Option<u64>) -> SendingFuture<'_> {
 		debug_assert!(!events.is_empty(), "sending empty transaction");
 		match dest {
 			| Destination::Federation(server) =>
-				self.send_events_dest_federation(server, events).boxed(),
+				self.send_events_dest_federation(server, events, edu_count).boxed(),
 			| Destination::Appservice(id) => self.send_events_dest_appservice(id, events).boxed(),
 			| Destination::Push(user_id, pushkey) =>
 				self.send_events_dest_push(user_id, pushkey, events).boxed(),
@@ -1020,6 +1030,7 @@ impl Service {
 		&self,
 		server: OwnedServerName,
 		events: Vec<SendingEvent>,
+		edu_count: Option<u64>,
 	) -> SendingResult {
 		let pdus: Vec<_> = events
 			.iter()
@@ -1039,7 +1050,13 @@ impl Service {
 				| SendingEvent::Edu(edu) => Some(edu.as_ref()),
 				| _ => None,
 			})
-			.map(serde_json::from_slice)
+			.map(|edu_buf| {
+				let res = serde_json::from_slice(edu_buf);
+				if let Err(ref e) = res {
+					tracing::error!("Failed to deserialize EDU: {} - JSON: {}", e, String::from_utf8_lossy(edu_buf));
+				}
+				res
+			})
 			.filter_map(Result::ok)
 			.collect();
 
@@ -1097,9 +1114,11 @@ impl Service {
 			edus,
 		};
 
+		tracing::warn!(dest = ?server, "Sending federation request to server!");
 		let result = self
 			.send_federation_request_on(&self.services.client.sender, &server, request)
 			.await;
+		tracing::warn!(dest = ?server, "Finished sending federation request! Result: {:?}", result.is_ok());
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {
 			if let Err(e) = result {
@@ -1127,7 +1146,12 @@ impl Service {
 				self.stats.outgoing_errors.fetch_add(1, Ordering::Relaxed);
 				Err((Destination::Federation(server), error))
 			},
-			| Ok(_) => Ok(Destination::Federation(server)),
+			| Ok(_) => {
+				if let Some(count) = edu_count {
+					self.db.set_latest_educount(&server, count);
+				}
+				Ok(Destination::Federation(server))
+			},
 		}
 	}
 

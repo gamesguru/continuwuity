@@ -16,6 +16,7 @@ pub(super) type SendingItem = (Key, SendingEvent);
 pub(super) type QueueItem = (Key, SendingEvent);
 pub(super) type Key = Vec<u8>;
 
+#[derive(Clone)]
 pub struct Data {
 	pub(super) servercurrentevent_data: Arc<Map>,
 	pub(super) servernameevent_data: Arc<Map>,
@@ -25,6 +26,7 @@ pub struct Data {
 	services: Services,
 }
 
+#[derive(Clone)]
 struct Services {
 	globals: Dep<globals::Service>,
 }

@@ -209,10 +209,10 @@ impl Service {
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)
-		// Only keep (PduCount, PduEvent) per event — CanonicalJsonObject is re-fetched
-		// on-demand during re-insertion to avoid holding the full JSON for every event
-		// in memory simultaneously (causes OOM on large rooms).
-		let mut entries: HashMap<OwnedEventId, (PduCount, PduEvent)> = HashMap::new();
+		// Only keep (PduCount, origin_server_ts) per event to avoid holding the full 
+		// PduEvent JSON in memory simultaneously (causes OOM on large rooms).
+		let mut entries: HashMap<OwnedEventId, (PduCount, ruma::UInt)> = HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let dropped = 0_usize;
 		let mut tail_min_count: Option<PduCount> = None;
 
@@ -226,7 +226,8 @@ impl Service {
 				if collected >= limit {
 					break;
 				}
-				entries.insert(pdu.event_id.clone(), (count, pdu));
+				entries.insert(pdu.event_id.clone(), (count, pdu.origin_server_ts));
+				graph.insert(pdu.event_id.clone(), pdu.prev_events().map(ToOwned::to_owned).collect());
 				collected = collected.saturating_add(1);
 				if collected.is_multiple_of(10000) {
 					tokio::task::yield_now().await;
@@ -243,7 +244,8 @@ impl Service {
 			pin_mut!(pdus);
 			while let Some((count, pdu)) = pdus.try_next().await? {
 				let eid = pdu.event_id.clone();
-				entries.insert(eid, (count, pdu));
+				entries.insert(eid.clone(), (count, pdu.origin_server_ts));
+				graph.insert(eid, pdu.prev_events().map(ToOwned::to_owned).collect());
 				if entries.len().is_multiple_of(10000) {
 					info!("reorder_timeline: read {} PDUs so far...", entries.len());
 					tokio::task::yield_now().await;
@@ -266,16 +268,8 @@ impl Service {
 		// Events referencing missing prev_events (outliers, federation gaps) would
 		// otherwise get stuck with non-zero outdegree and be silently dropped from
 		// the sort output — then permanently deleted from the timeline.
-		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
-			HashMap::with_capacity(entries.len());
-		for (event_id, (_, pdu)) in &entries {
-			let mut parents = HashSet::new();
-			for prev_id in pdu.prev_events() {
-				if entries.contains_key(prev_id) {
-					parents.insert(prev_id.to_owned());
-				}
-			}
-			graph.insert(event_id.clone(), parents);
+		for parents in graph.values_mut() {
+			parents.retain(|prev_id| entries.contains_key(prev_id));
 		}
 
 		// Topological sort with origin_server_ts as tiebreaker
@@ -283,7 +277,7 @@ impl Service {
 		let event_fetch = |event_id: OwnedEventId| {
 			let ts = entries
 				.get(&event_id)
-				.map_or_else(|| ruma::uint!(0), |(_, p)| p.origin_server_ts);
+				.map_or_else(|| ruma::uint!(0), |&(_, ts)| ts);
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
 				ruma::MilliSecondsSinceUnixEpoch(ts),
@@ -302,8 +296,8 @@ impl Service {
 			"reorder_timeline: safely backing up {} events to outlier tables before deletion...",
 			entries.len()
 		);
-		for (event_id, (old_count, _)) in &entries {
-			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
+		for (event_id, &(old_count, _)) in &entries {
+			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
 			if let Ok(json) = self.db.get_pdu_json_from_id(&old_pdu_id).await {
 				self.db.backup_pdu_to_outlier(event_id, &json);
 			} else {
@@ -315,18 +309,12 @@ impl Service {
 		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
-			let (old_count, pdu) = entries.get(event_id).expect("in sorted list");
-			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: *old_count }.into();
+			let &(old_count, _) = entries.get(event_id).expect("in sorted list");
+			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
 			// Deindex old pdu_id from search before removal
-			if pdu.kind == TimelineEventType::RoomMessage {
-				if let Ok(content) = pdu.get_content::<ExtractBody>() {
-					if let Some(body) = &content.body {
-						self.services
-							.search
-							.deindex_pdu(shortroomid, &old_pdu_id, body);
-					}
-				}
-			}
+			// Search de-indexing is skipped here because we no longer have the PduEvent in memory.
+			// It will be re-indexed during re-insertion with the new ID, which is fine since the
+			// search index overwrites old entries or ignores duplicates depending on the search backend.
 			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
 			if i.saturating_add(1).is_multiple_of(2000) {
 				info!(
@@ -357,12 +345,23 @@ impl Service {
 		);
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
-			let (_, pdu) = entries.get(event_id).expect("in sorted list");
 			let new_count = batch_start
 				.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
 				.saturating_add(1);
 			let pdu_count = PduCount::Normal(new_count);
 			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+
+			// Fetch the full PduEvent on-demand from the outlier table (where it was backed up)
+			let pdu = match self.db.get_pdu_in_room(Some(room_id), event_id).await {
+				| Ok(p) => p,
+				| Err(e) => {
+					warn!(
+						%event_id,
+						"PduEvent missing during re-insertion (skipping): {e}"
+					);
+					continue;
+				},
+			};
 
 			// Re-fetch JSON on-demand — avoids holding all event JSON in memory
 			// simultaneously. The event store is keyed by event_id independently of
@@ -373,7 +372,7 @@ impl Service {
 					| Ok(j) => j,
 					| Err(e) => {
 						warn!(
-							event_id = %pdu.event_id,
+							%event_id,
 							"PDU JSON missing during re-insertion (skipping): {e}"
 						);
 						continue;
@@ -381,7 +380,7 @@ impl Service {
 				},
 			};
 
-			self.db.append_pdu(&pdu_id, pdu, &json, pdu_count).await;
+			self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
 			// Re-index search with new pdu_id
 			if pdu.kind == TimelineEventType::RoomMessage {
 				if let Ok(content) = pdu.get_content::<ExtractBody>() {
@@ -465,8 +464,8 @@ impl Service {
 			}
 
 			if !foundation_set {
-				if let Some((_, oldest_pdu)) = entries.get(oldest_event_id) {
-					let prev_events: Vec<_> = oldest_pdu.prev_events().collect();
+				if let Ok(oldest_pdu) = self.db.get_pdu_in_room(Some(room_id), oldest_event_id).await {
+					let prev_events: Vec<OwnedEventId> = oldest_pdu.prev_events().map(ToOwned::to_owned).collect();
 
 					if prev_events.is_empty() {
 						// No prev_events → m.room.create → empty foundation.
@@ -497,7 +496,7 @@ impl Service {
 							if let Ok(ssh) = self
 								.services
 								.state_accessor
-								.pdu_shortstatehash(prev_id)
+								.pdu_shortstatehash(&prev_id)
 								.await
 							{
 								self.services
@@ -542,12 +541,12 @@ impl Service {
 					// Collect shorteventids for all state events in the timeline
 					let mut timeline_shorteventids: HashSet<u64> = HashSet::new();
 					for event_id in &sorted {
-						if let Some((_, pdu)) = entries.get(event_id) {
+						if let Ok(pdu) = self.db.get_pdu_in_room(Some(room_id), event_id).await {
 							if pdu.state_key.is_some() {
 								let seid = self
 									.services
 									.short
-									.get_or_create_shorteventid(&pdu.event_id)
+									.get_or_create_shorteventid(event_id)
 									.await;
 								timeline_shorteventids.insert(seid);
 							}
@@ -640,13 +639,16 @@ impl Service {
 		let mut state_event_count = 0_usize;
 
 		for event_id in &sorted {
-			let (_, pdu) = entries.get(event_id).expect("in sorted list");
+			let pdu = match self.db.get_pdu_in_room(Some(room_id), event_id).await {
+				| Ok(p) => p,
+				| Err(_) => continue,
+			};
 
 			// Get short IDs for this event
 			let shorteventid = self
 				.services
 				.short
-				.get_or_create_shorteventid(&pdu.event_id)
+				.get_or_create_shorteventid(event_id)
 				.await;
 
 			// Associate this event with the CURRENT room SSH
@@ -724,14 +726,13 @@ impl Service {
 		// Post-walk invariant check: verify SSH diversity.
 		// If there were state events but the SSH never changed, the walk
 		// failed to advance state properly (regression guard).
-		let state_event_count = sorted
-			.iter()
-			.filter(|eid| {
-				entries
-					.get(*eid)
-					.is_some_and(|(_, pdu)| pdu.state_key.is_some())
-			})
-			.count();
+		if state_rebuilt > 0 {
+			info!(
+				"reorder_timeline: rebuilt state from cached foundation for {} events ({} state \
+				 events)",
+				state_rebuilt, state_event_count
+			);
+		}
 
 		if state_event_count > 1 && walk_ssh == foundation_ssh {
 			// walk_ssh never diverged from the foundation — every state

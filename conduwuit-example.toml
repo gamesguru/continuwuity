@@ -1267,6 +1267,12 @@
 #
 #allow_local_presence = true
 
+# The duration in milliseconds for the Synapse-style presence debounce.
+# If greater than 0, any idle client claims of Offline will be ignored
+# if the user was Online within this time window.
+#
+#presence_idle_debounce_ms = 60000 (60 seconds)
+
 # Allow incoming federated presence updates.
 #
 # This option enables processing inbound presence updates from other
@@ -1654,9 +1660,17 @@
 #
 #url_preview_check_root_domain = false
 
-# User agent that is used specifically when fetching url previews.
+# User agent that the server uses for federation and client requests.
+# You can use templates like $PROJECT_NAME, $PROJECT_VERSION,
+# $PROJECT_VERSION_FULL.
 #
-#url_preview_user_agent = "Rustnapse/<version>"
+#user_agent = "$PROJECT_NAME/$PROJECT_VERSION_FULL"
+
+# User agent that is used specifically when fetching url previews.
+# You can use templates like $PROJECT_NAME, $PROJECT_VERSION,
+# $PROJECT_VERSION_FULL.
+#
+#url_preview_user_agent = "$PROJECT_NAME/$PROJECT_VERSION_FULL (embedbot; facebookexternalhit/1.1; +https://github.com)"
 
 # Determines whether audio and video files will be downloaded for URL
 # previews.
