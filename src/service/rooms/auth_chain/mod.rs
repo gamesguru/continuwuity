@@ -1,7 +1,7 @@
 mod data;
 
 use std::{
-	collections::{BTreeSet, HashSet, VecDeque},
+	collections::{BTreeSet, HashSet},
 	fmt::Debug,
 	sync::Arc,
 	time::Instant,
@@ -186,69 +186,88 @@ async fn get_auth_chain_inner(
 	room_id: &RoomId,
 	event_id: &EventId,
 ) -> Result<Vec<ShortEventId>> {
-	let mut todo: VecDeque<_> = [event_id.to_owned()].into();
+	let mut todo = vec![event_id.to_owned()];
 	let mut found = HashSet::new();
 
 	let started = Instant::now();
 	let mut last_progress = Instant::now();
 
-	while let Some(event_id) = todo.pop_front() {
+	while !todo.is_empty() {
 		if last_progress.elapsed().as_secs() >= 30 {
 			info!(%room_id, found = found.len(), queue = todo.len(), elapsed = ?started.elapsed(), "auth_chain walk in progress");
 			last_progress = Instant::now();
 		}
 
-		trace!(%event_id, "processing auth event");
+		let current_batch = std::mem::take(&mut todo);
 
-		// Try timeline first, then fall back to the outlier store.
-		// get_pdu_in_room(Some(room_id)) rejects v11/v12 events whose
-		// room_id() returns None — those events are valid but lack the
-		// room_id field in their canonical JSON. The outlier fallback
-		// sees them regardless of room_id field presence.
-		let pdu_result = match self
-			.services
-			.timeline
-			.get_pdu_in_room(Some(room_id), &event_id)
-			.await
-		{
-			| Ok(pdu) => Ok(pdu),
-			| Err(_) => self.services.outlier.get_pdu_outlier(&event_id).await,
-		};
+		let results: Vec<_> = current_batch
+			.into_iter()
+			.try_stream::<conduwuit::Error>()
+			.broad_and_then(|event_id| async move {
+				trace!(%event_id, "processing auth event");
 
-		match pdu_result {
-			| Err(e) => {
-				info!(%event_id, ?e, "Could not find pdu mentioned in auth events");
-			},
-			| Ok(pdu) => {
-				if let Some(claimed_room_id) = pdu.room_id.clone() {
-					if claimed_room_id != *room_id {
-						return Err!(Request(Forbidden(error!(
-							%event_id,
-							%room_id,
-							wrong_room_id = ?pdu.room_id.unwrap(),
-							"auth event for incorrect room"
-						))));
-					}
-				}
+				// Try timeline first, then fall back to the outlier store.
+				let pdu_result = match self
+					.services
+					.timeline
+					.get_pdu_in_room(Some(room_id), &event_id)
+					.await
+				{
+					| Ok(pdu) => Ok(pdu),
+					| Err(_) => self.services.outlier.get_pdu_outlier(&event_id).await,
+				};
 
-				for auth_event in &pdu.auth_events {
-					let sauthevent = self
-						.services
-						.short
-						.get_or_create_shorteventid(auth_event)
-						.await;
+				Ok((event_id, pdu_result))
+			})
+			.try_collect()
+			.await?;
 
-					if found.insert(sauthevent) {
-						if let Ok(cached) = self.get_cached_eventid_authchain(&[sauthevent]).await
-						{
-							found.extend(cached.iter().copied());
-						} else {
-							trace!(%event_id, ?auth_event, "adding auth event to processing queue");
-							todo.push_back(auth_event.clone());
+		let mut new_auth_events = HashSet::new();
+		for (event_id, pdu_result) in results {
+			match pdu_result {
+				| Err(e) => {
+					info!(%event_id, ?e, "Could not find pdu mentioned in auth events");
+				},
+				| Ok(pdu) => {
+					if let Some(claimed_room_id) = pdu.room_id.clone() {
+						if claimed_room_id != *room_id {
+							return Err!(Request(Forbidden(error!(
+								%event_id,
+								%room_id,
+								wrong_room_id = ?pdu.room_id.unwrap(),
+								"auth event for incorrect room"
+							))));
 						}
 					}
+
+					for auth_event in &pdu.auth_events {
+						new_auth_events.insert(auth_event.clone());
+					}
+				},
+			}
+		}
+
+		let new_auth_events: Vec<_> = new_auth_events.into_iter().collect();
+		if new_auth_events.is_empty() {
+			continue;
+		}
+
+		let mut short_ids = self
+			.services
+			.short
+			.multi_get_or_create_shorteventid(new_auth_events.iter().map(|id| &**id))
+			.zip(futures::stream::iter(new_auth_events.clone()))
+			.boxed();
+
+		while let Some((sauthevent, auth_event)) = short_ids.next().await {
+			if found.insert(sauthevent) {
+				if let Ok(cached) = self.get_cached_eventid_authchain(&[sauthevent]).await {
+					found.extend(cached.iter().copied());
+				} else {
+					trace!(?auth_event, "adding auth event to processing queue");
+					todo.push(auth_event);
 				}
-			},
+			}
 		}
 	}
 

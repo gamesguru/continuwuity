@@ -7,7 +7,7 @@ use std::{
 
 use conduwuit::{
 	Err, Result, debug, debug_info, debug_warn, err, implement, info,
-	matrix::{Event, EventTypeExt, PduEvent, StateKey, state_res},
+	matrix::{Event, PduEvent, StateKey, state_res},
 	trace,
 	utils::stream::ReadyExt,
 	warn,
@@ -109,45 +109,6 @@ where
 
 	let room_version = to_room_version(&room_version_id);
 
-	// 11. Check the auth of the event passes based on the state of the event
-	debug!(event_id = %incoming_pdu.event_id, "Running initial auth check");
-	let state_fetch_state = &state_at_incoming_event;
-	let state_fetch = |k: StateEventType, s: StateKey| async move {
-		let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
-		let event_id = state_fetch_state.get(&shortstatekey)?;
-		self.services.timeline.get_pdu(event_id).await.ok()
-	};
-
-	let auth_check = state_res::event_auth::auth_check(
-		&room_version,
-		&incoming_pdu,
-		None, // TODO: third party invite
-		|ty, sk| state_fetch(ty.clone(), sk.into()),
-		create_event.as_pdu(),
-	)
-	.await
-	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
-
-	if !auth_check {
-		if skip_soft_fail {
-			warn!(
-				event_id = %incoming_pdu.event_id,
-				"Event failed auth check against state-at-event, but skip_soft_fail is set — continuing"
-			);
-		} else {
-			// SYNAPSE PARITY: Mark as REJECTED, not soft-failed!
-			self.services
-				.pdu_metadata
-				.mark_event_rejected(incoming_pdu.event_id());
-
-			return Err!(Request(Forbidden(
-				"Event authorisation fails based on the state before the event"
-			)));
-		}
-	}
-
-	// 13. Use state resolution to find new room state
-
 	// Pre-fetch missing auth chain events from federation BEFORE
 	// acquiring the room lock. This is parallel (32 concurrent) and
 	// multi-server (origin + trusted + room members) with a 300s budget.
@@ -171,42 +132,74 @@ where
 		return Ok(Some(pduid));
 	}
 
-	debug!(event_id = %incoming_pdu.event_id, "Gathering auth events");
-	let auth_events = self
-		.services
-		.state
-		.get_auth_events(
-			room_id,
-			incoming_pdu.kind(),
-			incoming_pdu.sender(),
-			incoming_pdu.state_key(),
-			incoming_pdu.content(),
-			&room_version,
-		)
-		.await?;
+	debug!(event_id = %incoming_pdu.event_id, "Gathering explicitly claimed auth events");
+	let mut auth_events = HashMap::new();
+	for event_id in incoming_pdu.auth_events() {
+		if let Ok(pdu) = self.services.timeline.get_pdu(event_id).await {
+			if let Some(state_key) = &pdu.state_key {
+				let key = StateEventType::from(pdu.kind().clone());
+				auth_events.insert((key, state_key.clone()), pdu);
+			}
+		}
+	}
 
-	let state_fetch = |k: &StateEventType, s: &str| {
-		let key = k.with_state_key(s);
-		ready(auth_events.get(&key).map(ToOwned::to_owned))
+	let state_fetch_auth = |k: &StateEventType, s: &str| {
+		let key = (k.to_owned(), s.into());
+		ready(auth_events.get(&key).cloned())
 	};
 
+	// Check the auth of the event passes based on the claimed auth_events
 	debug!(event_id = %incoming_pdu.event_id, "Running auth check with claimed state auth");
-	let auth_check = state_res::event_auth::auth_check(
+	let auth_check_claimed = state_res::event_auth::auth_check(
 		&room_version,
 		&incoming_pdu,
 		None, // third-party invite
-		state_fetch,
+		state_fetch_auth,
 		create_event.as_pdu(),
 	)
 	.await
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
-	// Soft fail check before doing state res
-	debug!(event_id = %incoming_pdu.event_id, "Performing soft-fail check");
+	if !auth_check_claimed {
+		if skip_soft_fail {
+			warn!(
+				event_id = %incoming_pdu.event_id,
+				"Event failed auth check against claimed auth_events, but skip_soft_fail is set — continuing"
+			);
+		} else {
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(incoming_pdu.event_id());
+
+			return Err!(Request(Forbidden(
+				"Event authorisation fails based on its auth_events"
+			)));
+		}
+	}
+
+	// Check auth of event passes based on its state (soft-fail check)
+	debug!(event_id = %incoming_pdu.event_id, "Running initial auth check against state-at-event");
+	let state_fetch_state = &state_at_incoming_event;
+	let state_fetch = |k: StateEventType, s: StateKey| async move {
+		let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
+		let event_id = state_fetch_state.get(&shortstatekey)?;
+		self.services.timeline.get_pdu(event_id).await.ok()
+	};
+
+	let auth_check_state = state_res::event_auth::auth_check(
+		&room_version,
+		&incoming_pdu,
+		None, // TODO: third party invite
+		|ty, sk| state_fetch(ty.clone(), sk.into()),
+		create_event.as_pdu(),
+	)
+	.await
+	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+
 	let mut soft_fail = if skip_soft_fail {
 		false
 	} else {
-		match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
+		match (auth_check_state, incoming_pdu.redacts_id(&room_version_id)) {
 			| (false, _) => {
 				info!(
 					event_id = %incoming_pdu.event_id,
@@ -240,7 +233,7 @@ where
 	// and redaction status so we can skip expensive state resolution for
 	// events that will be rejected.
 	if !soft_fail {
-		// 14-pre. If the event is not a state event, ask the policy server about it
+		// If the event is not a state event, ask the policy server about it
 		if incoming_pdu.state_key.is_none() {
 			debug!(event_id = %incoming_pdu.event_id, "Checking policy server for event");
 			match self
@@ -306,7 +299,7 @@ where
 	let state_lock;
 
 	loop {
-		// 1. Capture base state hash BEFORE the unlocked computation
+		// Capture base state hash BEFORE the unlocked computation
 		let base_shortstatehash = self
 			.services
 			.state
@@ -314,7 +307,7 @@ where
 			.await
 			.ok();
 
-		// 2. Heavy computation WITHOUT the lock
+		// Heavy computation WITHOUT the lock
 		let delta = self
 			.calculate_state_delta(
 				&incoming_pdu,
@@ -324,11 +317,11 @@ where
 			)
 			.await?;
 
-		// 3. Acquire lock for the commit phase
+		// Acquire lock for the commit phase
 		trace!(room_id = %room_id, "Locking the room");
 		let lock = self.services.state.mutex.lock(room_id).await;
 
-		// 4. Re-check if the PDU was already added while we were unlocked
+		// Re-check if the PDU was already added while we were unlocked
 		if let Ok(pduid) = self
 			.services
 			.timeline
@@ -338,7 +331,7 @@ where
 			return Ok(Some(pduid));
 		}
 
-		// 5. OCC verification: has the base state shifted?
+		// OCC verification: has the base state shifted?
 		let current_shortstatehash = self
 			.services
 			.state
@@ -363,7 +356,7 @@ where
 		drop(lock);
 	}
 
-	// 6. Apply the state delta (still holding state_lock from the successful break)
+	// Apply the state delta (still holding state_lock from the successful break)
 	trace!("Appending pdu to timeline");
 	if let Some(HashSetCompressStateEvent { shortstatehash, added, removed }) = state_delta_opt {
 		Box::pin(self.services.state.force_state(
@@ -464,9 +457,9 @@ async fn resolve_state_at_incoming_event<Pdu>(
 where
 	Pdu: Event + Send + Sync,
 {
-	// 10. Fetch missing state and auth chain events by calling /state_ids at
-	//     backwards extremities doing all the checks in this list starting at 1.
-	//     These are not timeline events.
+	// Fetch missing state and auth chain events by calling /state_ids at
+	// backwards extremities doing all the checks in this list starting at 1.
+	// These are not timeline events.
 	let current_extremities: Vec<_> = self
 		.services
 		.state
