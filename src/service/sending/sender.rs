@@ -255,7 +255,7 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
-		if let Destination::Federation(ref server) = dest {
+		if let Destination::Federation(server) = dest {
 			self.dead_servers.write().unwrap().remove(server);
 		}
 		let _cork = self.db.db.cork();
