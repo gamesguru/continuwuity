@@ -6,9 +6,7 @@ use std::{
 use conduwuit::{
 	Err, PduCount, Result, err, info,
 	matrix::{Event, pdu::PduEvent},
-	state_res,
-	utils::stream::BroadbandExt,
-	warn,
+	state_res, warn,
 };
 use futures::{FutureExt, StreamExt, future::ready, pin_mut};
 use ruma::{
@@ -1361,21 +1359,12 @@ pub(super) async fn rescue_room(
 			.await;
 	}
 
-	let mut outliers: HashMap<OwnedEventId, (PduEvent, CanonicalJsonObject)> = self
+	let mut outliers: HashMap<OwnedEventId, PduEvent> = self
 		.services
 		.rooms
 		.outlier
 		.room_stream(&room_id)
-		.broad_filter_map(|(event_id, pdu): (OwnedEventId, PduEvent)| async move {
-			let json = self
-				.services
-				.rooms
-				.timeline
-				.get_pdu_json(&event_id)
-				.await
-				.ok()?;
-			Some((event_id, (pdu, json)))
-		})
+		.map(|(event_id, pdu)| (event_id, pdu))
 		.collect()
 		.await;
 
@@ -1386,22 +1375,18 @@ pub(super) async fn rescue_room(
 			.services
 			.rooms
 			.timeline
-			.all_pdus(&room_id)
-			.collect::<Vec<_>>()
-			.await
-			.into_iter()
-			.rev()
+			.pdus_rev(&room_id, None)
+			.filter_map(|item| ready(item.ok()))
 			.take(limit)
 			.map(|(_, pdu)| (pdu.event_id().to_owned(), pdu))
-			.collect();
+			.collect()
+			.await;
 
 		for (event_id, pdu) in timeline_pdus {
 			if outliers.contains_key(&event_id) {
 				continue;
 			}
-			if let Ok(json) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
-				outliers.insert(event_id, (pdu, json));
-			}
+			outliers.insert(event_id, pdu);
 		}
 	}
 
@@ -1414,7 +1399,7 @@ pub(super) async fn rescue_room(
 	// being dropped from the sort output due to unresolvable parents.
 	let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
 		HashMap::with_capacity(outliers.len());
-	for (event_id, (pdu, _)) in &outliers {
+	for (event_id, pdu) in &outliers {
 		let mut parents = HashSet::new();
 		for prev_id in pdu.prev_events() {
 			if outliers.contains_key(prev_id) {
@@ -1425,7 +1410,7 @@ pub(super) async fn rescue_room(
 	}
 
 	let event_fetch = |event_id: OwnedEventId| {
-		let pdu = if let Some((p, _)) = outliers.get(&event_id) {
+		let pdu = if let Some(p) = outliers.get(&event_id) {
 			Some(p.clone())
 		} else {
 			self.services
@@ -1457,8 +1442,8 @@ pub(super) async fn rescue_room(
 	if create_event.is_none() {
 		create_event = outliers
 			.values()
-			.find(|(pdu, _)| pdu.kind == TimelineEventType::RoomCreate)
-			.map(|(pdu, _)| pdu.clone());
+			.find(|pdu| pdu.kind == TimelineEventType::RoomCreate)
+			.cloned();
 	}
 
 	let create_event =
@@ -1506,7 +1491,7 @@ pub(super) async fn rescue_room(
 	let mut skipped = 0_usize;
 	let mut failed = 0_usize;
 	for event_id in sorted {
-		let (pdu, pdu_json) = outliers.get(&event_id).expect("in sorted list");
+		let pdu = outliers.get(&event_id).expect("in sorted list");
 
 		// Skip superseded state events (only when not force-rescuing).
 		if !force {
@@ -1553,6 +1538,15 @@ pub(super) async fn rescue_room(
 			.origin
 			.clone()
 			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+		let pdu_json = match self.services.rooms.timeline.get_pdu_json(&event_id).await {
+			| Ok(json) => json,
+			| Err(e) => {
+				warn!("rescue_room: could not find JSON for {event_id}: {e}");
+				failed = failed.saturating_add(1);
+				continue;
+			},
+		};
 
 		// Always clear rejection/soft-fail markers before rescue attempt.
 		// An admin explicitly rescuing events wants them in the timeline.

@@ -209,7 +209,7 @@ impl Service {
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)
-		// Only keep (PduCount, origin_server_ts) per event to avoid holding the full 
+		// Only keep (PduCount, origin_server_ts) per event to avoid holding the full
 		// PduEvent JSON in memory simultaneously (causes OOM on large rooms).
 		let mut entries: HashMap<OwnedEventId, (PduCount, ruma::UInt)> = HashMap::new();
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
@@ -227,7 +227,10 @@ impl Service {
 					break;
 				}
 				entries.insert(pdu.event_id.clone(), (count, pdu.origin_server_ts));
-				graph.insert(pdu.event_id.clone(), pdu.prev_events().map(ToOwned::to_owned).collect());
+				graph.insert(
+					pdu.event_id.clone(),
+					pdu.prev_events().map(ToOwned::to_owned).collect(),
+				);
 				collected = collected.saturating_add(1);
 				if collected.is_multiple_of(10000) {
 					tokio::task::yield_now().await;
@@ -312,9 +315,10 @@ impl Service {
 			let &(old_count, _) = entries.get(event_id).expect("in sorted list");
 			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
 			// Deindex old pdu_id from search before removal
-			// Search de-indexing is skipped here because we no longer have the PduEvent in memory.
-			// It will be re-indexed during re-insertion with the new ID, which is fine since the
-			// search index overwrites old entries or ignores duplicates depending on the search backend.
+			// Search de-indexing is skipped here because we no longer have the PduEvent in
+			// memory. It will be re-indexed during re-insertion with the new ID, which
+			// is fine since the search index overwrites old entries or ignores
+			// duplicates depending on the search backend.
 			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
 			if i.saturating_add(1).is_multiple_of(2000) {
 				info!(
@@ -351,7 +355,8 @@ impl Service {
 			let pdu_count = PduCount::Normal(new_count);
 			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
-			// Fetch the full PduEvent on-demand from the outlier table (where it was backed up)
+			// Fetch the full PduEvent on-demand from the outlier table (where it was backed
+			// up)
 			let pdu = match self.db.get_pdu_in_room(Some(room_id), event_id).await {
 				| Ok(p) => p,
 				| Err(e) => {
@@ -464,8 +469,13 @@ impl Service {
 			}
 
 			if !foundation_set {
-				if let Ok(oldest_pdu) = self.db.get_pdu_in_room(Some(room_id), oldest_event_id).await {
-					let prev_events: Vec<OwnedEventId> = oldest_pdu.prev_events().map(ToOwned::to_owned).collect();
+				if let Ok(oldest_pdu) = self
+					.db
+					.get_pdu_in_room(Some(room_id), oldest_event_id)
+					.await
+				{
+					let prev_events: Vec<OwnedEventId> =
+						oldest_pdu.prev_events().map(ToOwned::to_owned).collect();
 
 					if prev_events.is_empty() {
 						// No prev_events → m.room.create → empty foundation.
