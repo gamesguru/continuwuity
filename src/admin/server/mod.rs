@@ -25,6 +25,17 @@ pub enum ServerCommand {
 		path: Option<PathBuf>,
 	},
 
+	/// Set a configuration key dynamically
+	SetConfig {
+		key: String,
+		value: String,
+	},
+
+	/// Unset a dynamically configured key
+	UnsetConfig {
+		key: String,
+	},
+
 	/// Print database memory usage statistics
 	MemoryUsage,
 

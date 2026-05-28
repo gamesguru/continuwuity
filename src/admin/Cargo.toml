@@ -76,6 +76,7 @@ zstd_compression = [
 ]
 
 [dependencies]
+toml = { workspace = true, features = ["display"] }
 clap.workspace = true
 conduwuit-api.workspace = true
 conduwuit-core.workspace = true

@@ -2759,11 +2759,22 @@ impl Config {
 			Env::var("CONDUWUIT_CONFIG"),
 			Env::var("CONTINUWUITY_CONFIG"),
 		];
+		let mut runtime_paths = Vec::new();
+		for path in paths {
+			let mut p = path.clone();
+			p.set_file_name("conduwuit-runtime.toml");
+			runtime_paths.push(p);
+		}
+		if runtime_paths.is_empty() {
+			runtime_paths.push(PathBuf::from("conduwuit-runtime.toml"));
+		}
+
 		let mut config = envs
 			.into_iter()
 			.flatten()
 			.map(Toml::file)
 			.chain(paths.iter().cloned().map(Toml::file))
+			.chain(runtime_paths.iter().cloned().map(Toml::file))
 			.fold(Figment::new(), |config, file| config.merge(file.nested()))
 			.merge(Env::prefixed("CONDUIT_").global().split("__"))
 			.merge(Env::prefixed("CONDUWUIT_").global().split("__"))

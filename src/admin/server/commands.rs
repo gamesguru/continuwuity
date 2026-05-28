@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, fmt::Write, path::PathBuf, sync::Arc};
 use conduwuit::{
 	Err, Result,
 	config::Config,
+	err,
 	utils::{stream::IterStream, time},
 	warn,
 };
@@ -188,6 +189,106 @@ pub(super) async fn reload_config(&self, path: Option<PathBuf>) -> Result {
 
 	self.write_str(&format!("Successfully reconfigured from paths: {paths:?}"))
 		.await
+}
+
+#[admin_command]
+pub(super) async fn set_config(&self, key: String, value: String) -> Result {
+	use std::{fs, path::Path};
+
+	use toml::Table;
+
+	let runtime_path = self
+		.services
+		.config
+		.config_paths
+		.clone()
+		.unwrap_or_default()
+		.first()
+		.map(|p| p.with_file_name("conduwuit-runtime.toml"))
+		.unwrap_or_else(|| Path::new("conduwuit-runtime.toml").to_path_buf());
+
+	let mut table = if runtime_path.exists() {
+		let content = fs::read_to_string(&runtime_path)
+			.map_err(|e| err!("Failed to read runtime config: {e}"))?;
+		content
+			.parse::<Table>()
+			.map_err(|e| err!("Failed to parse runtime config: {e}"))?
+	} else {
+		Table::new()
+	};
+
+	// Very basic parsing for value. If it's a number, boolean, etc.
+	let parsed_val = if let Ok(v) = value.parse::<i64>() {
+		toml::Value::Integer(v)
+	} else if let Ok(v) = value.parse::<bool>() {
+		toml::Value::Boolean(v)
+	} else {
+		toml::Value::String(value.clone())
+	};
+
+	table.insert(key.clone(), parsed_val);
+
+	let new_content =
+		toml::to_string_pretty(&table).map_err(|e| err!("Failed to serialize config: {e}"))?;
+	fs::write(&runtime_path, new_content)
+		.map_err(|e| err!("Failed to write runtime config: {e}"))?;
+
+	// Now reload config
+	let mut paths = self
+		.services
+		.config
+		.config_paths
+		.clone()
+		.unwrap_or_default();
+	self.services.config.reload(&paths)?;
+
+	self.write_str(&format!("Successfully updated config key '{key}' to '{value}' and reloaded."))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn unset_config(&self, key: String) -> Result {
+	use std::{fs, path::Path};
+
+	use toml::Table;
+
+	let runtime_path = self
+		.services
+		.config
+		.config_paths
+		.clone()
+		.unwrap_or_default()
+		.first()
+		.map(|p| p.with_file_name("conduwuit-runtime.toml"))
+		.unwrap_or_else(|| Path::new("conduwuit-runtime.toml").to_path_buf());
+
+	if !runtime_path.exists() {
+		return self.write_str("No runtime config exists to unset.").await;
+	}
+
+	let mut table = fs::read_to_string(&runtime_path)
+		.map_err(|e| err!("Failed to read runtime config: {e}"))?
+		.parse::<Table>()
+		.map_err(|e| err!("Failed to parse runtime config: {e}"))?;
+
+	if table.remove(&key).is_some() {
+		let new_content = toml::to_string_pretty(&table)
+			.map_err(|e| err!("Failed to serialize config: {e}"))?;
+		fs::write(&runtime_path, new_content)
+			.map_err(|e| err!("Failed to write runtime config: {e}"))?;
+		let mut paths = self
+			.services
+			.config
+			.config_paths
+			.clone()
+			.unwrap_or_default();
+		self.services.config.reload(&paths)?;
+		self.write_str(&format!("Successfully unset config key '{key}' and reloaded."))
+			.await
+	} else {
+		self.write_str(&format!("Key '{key}' not found in runtime config."))
+			.await
+	}
 }
 
 #[admin_command]
