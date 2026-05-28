@@ -228,7 +228,7 @@ fn handle_error(
 
 	if e.is_connect() {
 		e = e.without_url();
-		debug!(target: "federation", %dest, %method, %url, "Federation connection failed: {e:?}");
+		tracing::warn!(%dest, %method, %url, "Federation connection failed: {e:?}");
 		return Err(Error::FederationConnection(dest.to_owned()));
 	}
 

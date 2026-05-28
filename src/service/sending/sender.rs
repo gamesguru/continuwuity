@@ -8,7 +8,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit::info;
 use conduwuit_core::{
-	Error, Event, Result, debug, err,
+	Error, Event, Result, err,
 	result::LogErr,
 	trace,
 	utils::{
@@ -182,6 +182,14 @@ impl Service {
 				tries = tries,
 				"Dropping queued events after {tries} failed attempts"
 			);
+			if let Destination::Federation(ref server) = dest {
+				self.dead_servers.write().unwrap().insert(server.clone());
+			}
+			let dest_clone = dest.clone();
+			let db = self.db.clone();
+			self.server.runtime().spawn(async move {
+				db.delete_all_requests_for(&dest_clone).await;
+			});
 			statuses.remove(&dest);
 			return;
 		}
@@ -247,6 +255,9 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
+		if let Destination::Federation(ref server) = dest {
+			self.dead_servers.write().unwrap().remove(server);
+		}
 		let _cork = self.db.db.cork();
 		self.db.delete_all_active_requests_for(dest).await;
 
@@ -407,9 +418,17 @@ impl Service {
 			if current_dest.as_ref() != Some(&dest) {
 				if let Some(old_dest) = current_dest.take() {
 					if self.server.config.startup_netburst && !current_events.is_empty() {
-						info!("startup_netburst[{id}]: resuming {} events for {:?}", current_events.len(), old_dest);
+						info!(
+							"startup_netburst[{id}]: resuming {} events for {:?}",
+							current_events.len(),
+							old_dest
+						);
 						statuses.insert(old_dest.clone(), TransactionStatus::Running);
-						futures.push(self.send_events(old_dest, std::mem::take(&mut current_events), None));
+						futures.push(self.send_events(
+							old_dest,
+							std::mem::take(&mut current_events),
+							None,
+						));
 					}
 				}
 				current_dest = Some(dest.clone());
@@ -426,9 +445,17 @@ impl Service {
 
 		if let Some(old_dest) = current_dest.take() {
 			if self.server.config.startup_netburst && !current_events.is_empty() {
-				info!("startup_netburst[{id}]: resuming {} events for {:?}", current_events.len(), old_dest);
+				info!(
+					"startup_netburst[{id}]: resuming {} events for {:?}",
+					current_events.len(),
+					old_dest
+				);
 				statuses.insert(old_dest.clone(), TransactionStatus::Running);
-				futures.push(self.send_events(old_dest, std::mem::take(&mut current_events), None));
+				futures.push(self.send_events(
+					old_dest,
+					std::mem::take(&mut current_events),
+					None,
+				));
 			}
 		}
 
@@ -859,11 +886,17 @@ impl Service {
 		(Some(buf), since.1)
 	}
 
-	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>, edu_count: Option<u64>) -> SendingFuture<'_> {
+	fn send_events(
+		&self,
+		dest: Destination,
+		events: Vec<SendingEvent>,
+		edu_count: Option<u64>,
+	) -> SendingFuture<'_> {
 		debug_assert!(!events.is_empty(), "sending empty transaction");
 		match dest {
-			| Destination::Federation(server) =>
-				self.send_events_dest_federation(server, events, edu_count).boxed(),
+			| Destination::Federation(server) => self
+				.send_events_dest_federation(server, events, edu_count)
+				.boxed(),
 			| Destination::Appservice(id) => self.send_events_dest_appservice(id, events).boxed(),
 			| Destination::Push(user_id, pushkey) =>
 				self.send_events_dest_push(user_id, pushkey, events).boxed(),
@@ -1053,7 +1086,11 @@ impl Service {
 			.map(|edu_buf| {
 				let res = serde_json::from_slice(edu_buf);
 				if let Err(ref e) = res {
-					tracing::error!("Failed to deserialize EDU: {} - JSON: {}", e, String::from_utf8_lossy(edu_buf));
+					tracing::error!(
+						"Failed to deserialize EDU: {} - JSON: {}",
+						e,
+						String::from_utf8_lossy(edu_buf)
+					);
 				}
 				res
 			})

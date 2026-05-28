@@ -41,6 +41,7 @@ pub struct Service {
 	services: Services,
 	channels: Vec<(loole::Sender<Msg>, loole::Receiver<Msg>)>,
 	pub(super) semaphore: Arc<tokio::sync::Semaphore>,
+	pub(super) dead_servers: std::sync::RwLock<std::collections::HashSet<ruma::OwnedServerName>>,
 }
 
 struct Services {
@@ -87,6 +88,7 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			db: Data::new(&args),
 			stats: stats::FederationStats::default(),
+			dead_servers: std::sync::RwLock::new(std::collections::HashSet::new()),
 			server: args.server.clone(),
 			services: Services {
 				client: args.depend::<client::Service>("client"),
@@ -245,6 +247,10 @@ impl Service {
 
 	#[tracing::instrument(skip(self, server, serialized), level = "debug")]
 	pub fn send_edu_server(&self, server: &ServerName, serialized: EduBuf) -> Result {
+		if self.dead_servers.read().unwrap().contains(server) {
+			return Ok(());
+		}
+
 		let dest = Destination::Federation(server.to_owned());
 		let event = SendingEvent::Edu(serialized);
 		let _cork = self.db.db.cork();

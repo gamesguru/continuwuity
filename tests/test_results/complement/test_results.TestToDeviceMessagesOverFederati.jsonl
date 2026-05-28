@@ -1,2 +1,2 @@
-{"Action":"fail","Test":"TestToDeviceMessagesOverFederation"}
-{"Action":"fail","Test":"TestToDeviceMessagesOverFederation/stopped_server"}
+{"Action":"pass","Test":"TestToDeviceMessagesOverFederation"}
+{"Action":"pass","Test":"TestToDeviceMessagesOverFederation/stopped_server"}
