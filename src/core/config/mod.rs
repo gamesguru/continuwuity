@@ -338,6 +338,8 @@ pub struct Config {
 	/// default: 10
 	#[serde(default = "default_dns_timeout")]
 	pub dns_timeout: u64,
+	#[serde(default = "default_dns_cache_override_expire")]
+	pub dns_cache_override_expire: u64,
 
 	/// Fallback to TCP on DNS errors. Set this to false if unsupported by
 	/// nameserver.
@@ -3186,3 +3188,4 @@ fn default_ldap_uid_attribute() -> String { String::from("uid") }
 fn default_ldap_name_attribute() -> String { String::from("givenName") }
 
 fn default_presence_idle_debounce_ms() -> u64 { 60000 }
+fn default_dns_cache_override_expire() -> u64 { 60 * 60 * 6 }

@@ -56,7 +56,9 @@ federation_idle_timeout = 300
 sender_timeout = 300
 sender_retry_backoff_base = 1
 sender_idle_timeout = 300
-sender_retry_backoff_limit = 300
+sender_retry_backoff_limit = 5
+dns_cache_entries = 0
+ip_lookup_strategy = 1
 force_disable_first_run_mode = true
 
 [global.tls]
@@ -66,3 +68,7 @@ dual_protocol = true
 msc3266_enabled = true
 msc4222_enabled = true
 presence_idle_debounce_ms = 0
+
+dns_min_ttl_nxdomain = 0
+dns_cache_override_expire = 1
+dns_min_ttl = 0
