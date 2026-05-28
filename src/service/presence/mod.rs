@@ -313,6 +313,16 @@ impl Service {
 			| Ok((_, ref presence)) => now.saturating_sub(presence.last_active_ts),
 		};
 
+		// Synapse-style debounce: If an idle background client tries to set us to Unavailable,
+		// but we were explicitly marked Online within the last REFRESH_TIMEOUT (60s), ignore the idle client.
+		if let Ok((_, ref presence)) = last_presence {
+			if *new_state == PresenceState::Unavailable && presence.state == PresenceState::Online {
+				if last_last_active_ago < REFRESH_TIMEOUT {
+					return Ok(());
+				}
+			}
+		}
+
 		if !state_changed && last_last_active_ago < REFRESH_TIMEOUT {
 			return Ok(());
 		}
