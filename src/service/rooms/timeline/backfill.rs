@@ -129,6 +129,12 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				.map(ToOwned::to_owned)
 				.stream(),
 		)
+		.chain(
+			self.services
+				.state_cache
+				.room_servers(room_id)
+				.map(ToOwned::to_owned),
+		)
 		.ready_filter(|server_name| {
 			!self.services.globals.server_is_ours(server_name)
 				&& !self
@@ -260,6 +266,12 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 				.iter()
 				.map(ToOwned::to_owned)
 				.stream(),
+		)
+		.chain(
+			self.services
+				.state_cache
+				.room_servers(room_id)
+				.map(ToOwned::to_owned),
 		)
 		.ready_filter(|server_name| {
 			!self.services.globals.server_is_ours(server_name)
