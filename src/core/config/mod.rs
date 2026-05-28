@@ -1919,9 +1919,19 @@ pub struct Config {
 	#[serde(default)]
 	pub url_preview_check_root_domain: bool,
 
-	/// User agent that is used specifically when fetching url previews.
+	/// User agent that the server uses for federation and client requests.
+	/// You can use templates like $PROJECT_NAME, $PROJECT_VERSION,
+	/// $PROJECT_VERSION_FULL.
 	///
-	/// default: "Rustnapse/<version>"
+	/// default: "$PROJECT_NAME/$PROJECT_VERSION_FULL"
+	#[serde(default = "default_user_agent")]
+	pub user_agent: String,
+
+	/// User agent that is used specifically when fetching url previews.
+	/// You can use templates like $PROJECT_NAME, $PROJECT_VERSION,
+	/// $PROJECT_VERSION_FULL.
+	///
+	/// default: "$PROJECT_NAME/$PROJECT_VERSION_FULL (embedbot; facebookexternalhit/1.1; +https://github.com)"
 	pub url_preview_user_agent: Option<String>,
 
 	/// Determines whether audio and video files will be downloaded for URL
@@ -2756,9 +2766,29 @@ impl Config {
 
 	/// Finalize config
 	pub fn new(raw_config: &Figment) -> Result<Self> {
-		let config = raw_config
+		let mut config = raw_config
 			.extract::<Self>()
 			.map_err(|e| err!("There was a problem with your configuration file: {e}"))?;
+
+		// Evaluate user-agent templates
+		let replace_template = |s: &str| {
+			s.replace("$PROJECT_NAME", crate::info::version::name())
+				.replace("$PROJECT_VERSION_FULL", crate::info::version::version_ua())
+				.replace("$PROJECT_VERSION", env!("CARGO_PKG_VERSION"))
+		};
+
+		config.user_agent = replace_template(&config.user_agent);
+
+		if let Some(ua) = config.url_preview_user_agent.as_mut() {
+			*ua = replace_template(ua);
+		} else {
+			// If not specified, default to media-specific user agent suffix for URL
+			// previews
+			config.url_preview_user_agent = Some(format!(
+				"{} (embedbot; facebookexternalhit/1.1; +https://github.com)",
+				config.user_agent
+			));
+		}
 
 		// don't start if we're listening on both UNIX sockets and TCP at same time
 		check::is_dual_listening(raw_config)?;
@@ -3075,6 +3105,8 @@ fn default_url_preview_timeout() -> u64 { 120 }
 fn default_new_user_displayname_suffix() -> String { "🏳️‍⚧️".to_owned() }
 
 fn default_sentry_endpoint() -> Option<Url> { None }
+
+fn default_user_agent() -> String { "$PROJECT_NAME/$PROJECT_VERSION_FULL".to_owned() }
 
 fn default_sentry_traces_sample_rate() -> f32 { 0.15 }
 

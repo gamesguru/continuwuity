@@ -106,8 +106,15 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 				debug!(%url, "URL preview HEAD probe returned {status}, falling back to GET");
 				let mut req = client.get(url.as_str());
 				if status == reqwest::StatusCode::FORBIDDEN {
-					req =
-						req.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent());
+					req = req.header(
+						reqwest::header::USER_AGENT,
+						self.services
+							.server
+							.config
+							.url_preview_user_agent
+							.as_deref()
+							.unwrap_or(&self.services.server.config.user_agent),
+					);
 				}
 				response = req.send().await?;
 			}
@@ -176,7 +183,15 @@ pub async fn download_image(
 			.client
 			.url_preview
 			.get(url)
-			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.header(
+				reqwest::header::USER_AGENT,
+				self.services
+					.server
+					.config
+					.url_preview_user_agent
+					.as_deref()
+					.unwrap_or(&self.services.server.config.user_agent),
+			)
 			.send()
 			.await?;
 	}
@@ -294,7 +309,15 @@ pub async fn download_media(&self, url: &str) -> Result<(OwnedMxcUri, usize)> {
 			.client
 			.url_preview
 			.get(url)
-			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.header(
+				reqwest::header::USER_AGENT,
+				self.services
+					.server
+					.config
+					.url_preview_user_agent
+					.as_deref()
+					.unwrap_or(&self.services.server.config.user_agent),
+			)
 			.send()
 			.await?;
 	}
@@ -373,7 +396,15 @@ async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
 	if response.status() == reqwest::StatusCode::FORBIDDEN {
 		response = client
 			.get(url)
-			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.header(
+				reqwest::header::USER_AGENT,
+				self.services
+					.server
+					.config
+					.url_preview_user_agent
+					.as_deref()
+					.unwrap_or(&self.services.server.config.user_agent),
+			)
 			.send()
 			.await?;
 	}
