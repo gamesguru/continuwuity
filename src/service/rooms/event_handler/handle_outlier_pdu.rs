@@ -47,15 +47,8 @@ where
 	if !pdu_fits(&mut value.clone()) {
 		warn!(
 			"dropping incoming PDU {event_id} in room {room_id} from {origin} because it \
-			 exceeds 65535 bytes or is otherwise too large. Persisting as rejected outlier."
+			 exceeds 65535 bytes or is otherwise too large."
 		);
-		// Persist as a rejected outlier to preserve the DAG chain.
-		// This prevents future valid events that reference this event from
-		// failing with MissingAuthEvents.
-		self.services.pdu_metadata.mark_event_rejected(event_id);
-		self.services
-			.outlier
-			.add_pdu_outlier(event_id, &value, Some(room_id));
 		return Err!(Request(TooLarge("PDU is too large")));
 	}
 	// Strip unsigned before signature verification (unsigned is not signed,

@@ -1,17 +1,14 @@
 use std::{
 	collections::{BTreeMap, HashMap, HashSet},
 	fmt::Debug,
-	sync::{
-		Arc,
-		atomic::{AtomicU64, AtomicUsize, Ordering},
-	},
+	sync::{Arc, atomic::Ordering},
 	time::{Duration, Instant},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit::info;
 use conduwuit_core::{
-	Error, Event, Result, debug, err, error,
+	Error, Event, Result, debug, err,
 	result::LogErr,
 	trace,
 	utils::{
@@ -660,7 +657,6 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (EduVec, u64) {
-		let mut events = EduVec::new();
 		let server_rooms = self.services.state_cache.server_rooms(server_name);
 
 		pin_mut!(server_rooms);
@@ -691,14 +687,14 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (Option<EduBuf>, u64) {
-		let num = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+		let num = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 		let receipts: BTreeMap<OwnedRoomId, ReceiptMap> = self
 			.services
 			.state_cache
 			.server_rooms(server_name)
 			.map(ToOwned::to_owned)
 			.broad_filter_map(|room_id| {
-				let num = std::sync::Arc::clone(&num);
+				let num = Arc::clone(&num);
 				async move {
 					let receipt_map = self.select_edus_receipts_room(&room_id, since, &num).await;
 
@@ -1175,12 +1171,12 @@ impl Service {
 }
 
 pub(crate) fn build_device_list_edus(
-	all_changes: std::collections::BTreeMap<u64, std::collections::HashSet<ruma::OwnedUserId>>,
+	all_changes: BTreeMap<u64, HashSet<OwnedUserId>>,
 	since: (u64, u64),
 	limit: usize,
 ) -> (EduVec, u64) {
 	let mut events = EduVec::new();
-	let mut device_list_changes = std::collections::HashSet::<ruma::OwnedUserId>::new();
+	let mut device_list_changes = HashSet::<OwnedUserId>::new();
 	let mut max_processed_count = since.0;
 	let mut limited = false;
 
@@ -1200,7 +1196,7 @@ pub(crate) fn build_device_list_edus(
 			// Empty prev id forces synapse to resync; because synapse resyncs,
 			// we can just insert placeholder data
 			let edu = Edu::DeviceListUpdate(DeviceListUpdateContent {
-				user_id: user_id.into(),
+				user_id,
 				device_id: device_id!("placeholder").to_owned(),
 				device_display_name: Some("Placeholder".to_owned()),
 				stream_id: uint!(1),
@@ -1233,13 +1229,13 @@ pub(crate) fn build_device_list_edus(
 }
 
 pub(crate) fn build_receipt_map(
-	receipts: Vec<(ruma::OwnedUserId, u64, String)>,
+	receipts: Vec<(OwnedUserId, u64, String)>,
 	since: (u64, u64),
 	limit: usize,
 	num: &std::sync::atomic::AtomicUsize,
 ) -> ReceiptMap {
 	use std::sync::atomic::Ordering;
-	let mut read = std::collections::BTreeMap::<ruma::OwnedUserId, ReceiptData>::new();
+	let mut read = BTreeMap::<OwnedUserId, ReceiptData>::new();
 
 	for (user_id, count, read_receipt_json) in receipts {
 		if count > since.1 {
@@ -1274,7 +1270,7 @@ pub(crate) fn build_receipt_map(
 		};
 
 		if read.insert(user_id, receipt_data).is_none() {
-			if num.fetch_add(1, Ordering::Relaxed) >= limit - 1 {
+			if num.fetch_add(1, Ordering::Relaxed) >= limit.saturating_sub(1) {
 				break;
 			}
 		}

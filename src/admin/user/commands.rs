@@ -1255,7 +1255,7 @@ pub(super) async fn bump_device_lists(&self, user_id: String) -> Result {
 		let users: Vec<_> = self.services.users.list_local_users().collect().await;
 		let count = users.len();
 		for user in users {
-			self.services.users.mark_device_key_update(&user).await;
+			self.services.users.mark_device_key_update(user).await;
 		}
 		self.write_str(&format!("Bumped device list updates for all {count} local users."))
 			.await

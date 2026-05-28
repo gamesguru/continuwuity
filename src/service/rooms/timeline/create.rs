@@ -367,3 +367,32 @@ pub async fn create_hash_and_sign_event(
 	trace!("New PDU created: {pdu:?}");
 	Ok((pdu, pdu_json))
 }
+
+#[cfg(test)]
+mod tests {
+	use ruma::{CanonicalJsonObject, CanonicalJsonValue};
+
+	use super::*;
+
+	#[test]
+	fn test_pdu_fits() {
+		let mut obj = CanonicalJsonObject::new();
+		obj.insert("type".into(), CanonicalJsonValue::String("m.room.message".into()));
+		assert!(pdu_fits(&mut obj));
+
+		// Test exact size limit boundary (65535 bytes)
+		let large_string = "a".repeat(65400);
+		obj.insert("content".into(), CanonicalJsonValue::String(large_string));
+		assert!(pdu_fits(&mut obj));
+
+		// Test oversized PDU (>65535 bytes)
+		let huge_string = "a".repeat(66000);
+		obj.insert("content".into(), CanonicalJsonValue::String(huge_string));
+		assert!(!pdu_fits(&mut obj));
+
+		// Test oversized individual field (>1024 chars for room_id)
+		let mut obj2 = CanonicalJsonObject::new();
+		obj2.insert("room_id".into(), CanonicalJsonValue::String("a".repeat(1025)));
+		assert!(!pdu_fits(&mut obj2));
+	}
+}
