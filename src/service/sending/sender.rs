@@ -1281,7 +1281,10 @@ pub(crate) fn build_receipt_map(
 
 #[cfg(test)]
 mod tests {
-	use std::collections::{BTreeMap, HashSet};
+	use std::{
+		collections::{BTreeMap, HashSet},
+		sync::atomic::AtomicUsize,
+	};
 
 	use ruma::user_id;
 
@@ -1388,11 +1391,11 @@ mod tests {
 		receipts.push((user_id, 15, json.to_string()));
 
 		let since = (10, 20);
-		let num = std::sync::atomic::AtomicUsize::new(0);
+		let num = AtomicUsize::new(0);
 		let map = build_receipt_map(receipts, since, 100, &num);
 
 		assert_eq!(map.read.len(), 1);
-		assert_eq!(num.load(std::sync::atomic::Ordering::Relaxed), 1);
+		assert_eq!(num.load(Ordering::Relaxed), 1);
 	}
 
 	#[test]
@@ -1400,10 +1403,7 @@ mod tests {
 		let mut receipts = Vec::new();
 		for i in 1..=5 {
 			let user_id_str = format!("@user{}:example.com", i);
-			let user_id = <ruma::OwnedUserId as std::convert::TryFrom<&str>>::try_from(
-				user_id_str.as_str(),
-			)
-			.unwrap();
+			let user_id = <OwnedUserId as TryFrom<&str>>::try_from(user_id_str.as_str()).unwrap();
 			let json = serde_json::json!({
 				"type": "m.receipt",
 				"content": {
@@ -1420,11 +1420,11 @@ mod tests {
 		}
 
 		let since = (10, 20);
-		let num = std::sync::atomic::AtomicUsize::new(0);
+		let num = AtomicUsize::new(0);
 		// Limit to 3!
 		let map = build_receipt_map(receipts, since, 3, &num);
 
 		assert_eq!(map.read.len(), 3);
-		assert_eq!(num.load(std::sync::atomic::Ordering::Relaxed), 3);
+		assert_eq!(num.load(Ordering::Relaxed), 3);
 	}
 }
