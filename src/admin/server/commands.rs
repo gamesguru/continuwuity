@@ -204,8 +204,10 @@ pub(super) async fn set_config(&self, key: String, value: String) -> Result {
 		.clone()
 		.unwrap_or_default()
 		.first()
-		.map(|p| p.with_file_name("conduwuit-runtime.toml"))
-		.unwrap_or_else(|| Path::new("conduwuit-runtime.toml").to_path_buf());
+		.map_or_else(
+			|| Path::new("conduwuit-runtime.toml").to_path_buf(),
+			|p| p.with_file_name("conduwuit-runtime.toml"),
+		);
 
 	let mut table = if runtime_path.exists() {
 		let content = fs::read_to_string(&runtime_path)
@@ -234,7 +236,7 @@ pub(super) async fn set_config(&self, key: String, value: String) -> Result {
 		.map_err(|e| err!("Failed to write runtime config: {e}"))?;
 
 	// Now reload config
-	let mut paths = self
+	let paths = self
 		.services
 		.config
 		.config_paths
@@ -259,8 +261,10 @@ pub(super) async fn unset_config(&self, key: String) -> Result {
 		.clone()
 		.unwrap_or_default()
 		.first()
-		.map(|p| p.with_file_name("conduwuit-runtime.toml"))
-		.unwrap_or_else(|| Path::new("conduwuit-runtime.toml").to_path_buf());
+		.map_or_else(
+			|| Path::new("conduwuit-runtime.toml").to_path_buf(),
+			|p| p.with_file_name("conduwuit-runtime.toml"),
+		);
 
 	if !runtime_path.exists() {
 		return self.write_str("No runtime config exists to unset.").await;
@@ -276,7 +280,7 @@ pub(super) async fn unset_config(&self, key: String) -> Result {
 			.map_err(|e| err!("Failed to serialize config: {e}"))?;
 		fs::write(&runtime_path, new_content)
 			.map_err(|e| err!("Failed to write runtime config: {e}"))?;
-		let mut paths = self
+		let paths = self
 			.services
 			.config
 			.config_paths
