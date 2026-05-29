@@ -34,40 +34,33 @@ pub(crate) async fn send_event_to_device_route(
 		return Ok(send_event_to_device::v3::Response {});
 	}
 
+	let mut remote_servers: BTreeMap<
+		ruma::OwnedServerName,
+		BTreeMap<ruma::OwnedUserId, BTreeMap<DeviceIdOrAllDevices, _>>,
+	> = BTreeMap::new();
+
 	for (target_user_id, map) in &body.messages {
 		let ev_type = body.event_type.to_string();
 		if (ev_type == "m.room.encrypted"
 			|| ev_type == "m.room_key"
 			|| ev_type == "m.forwarded_room_key")
-			&& services.config.prevent_e2ee_to_users.is_match(target_user_id.as_str())
+			&& services
+				.config
+				.prevent_e2ee_to_users
+				.is_match(target_user_id.as_str())
 		{
-			info!(%target_user_id, "Silently dropping E2EE keys for this user");
+			tracing::info!(%target_user_id, "Silently dropping E2EE keys for this user");
 			continue;
 		}
 
 		for (target_device_id_maybe, event) in map {
 			if !services.globals.user_is_local(target_user_id) {
-				let mut map = BTreeMap::new();
-				map.insert(target_device_id_maybe.clone(), event.clone());
-				let mut messages = BTreeMap::new();
-				messages.insert(target_user_id.clone(), map);
-				let count = services.globals.next_count()?;
-
-				let mut buf = EduBuf::new();
-				serde_json::to_writer(
-					&mut buf,
-					&federation::transactions::edu::Edu::DirectToDevice(DirectDeviceContent {
-						sender: sender_user.to_owned(),
-						ev_type: body.event_type.clone(),
-						message_id: count.to_string().into(),
-						messages,
-					}),
-				)
-				.expect("DirectToDevice EDU can be serialized");
-
-				services
-					.sending
-					.send_edu_server(target_user_id.server_name(), buf)?;
+				remote_servers
+					.entry(target_user_id.server_name().to_owned())
+					.or_default()
+					.entry(target_user_id.clone())
+					.or_default()
+					.insert(target_device_id_maybe.clone(), event.clone().into());
 
 				continue;
 			}
@@ -110,6 +103,24 @@ pub(crate) async fn send_event_to_device_route(
 				},
 			}
 		}
+	}
+
+	// Send the aggregated EDUs to remote servers
+	for (server_name, messages) in remote_servers {
+		let count = services.globals.next_count()?;
+		let mut buf = EduBuf::new();
+		serde_json::to_writer(
+			&mut buf,
+			&federation::transactions::edu::Edu::DirectToDevice(DirectDeviceContent {
+				sender: sender_user.to_owned(),
+				ev_type: body.event_type.clone(),
+				message_id: count.to_string().into(),
+				messages,
+			}),
+		)
+		.expect("DirectToDevice EDU can be serialized");
+
+		services.sending.send_edu_server(&server_name, buf)?;
 	}
 
 	// Save transaction id with empty data
