@@ -56,6 +56,7 @@ pub struct Pdu {
 
 	pub depth: UInt,
 
+	#[serde(default)]
 	pub auth_events: Vec<OwnedEventId>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]

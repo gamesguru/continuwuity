@@ -15,8 +15,8 @@ pub async fn get_event_keys(
 	version: &RoomVersionId,
 ) -> Result<PubKeyMap> {
 	use ruma::signatures::required_keys;
-
-	let required = match required_keys(object, version) {
+	let version = super::ruma_signatures_version(version);
+	let required = match required_keys(object, &version) {
 		| Ok(required) => required,
 		| Err(e) => {
 			debug_error!("Failed to determine keys required to verify: {e}");

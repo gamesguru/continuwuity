@@ -111,6 +111,14 @@ async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
 	self.db.server_signingkeys.raw_put(origin, Json(&keys));
 }
 
+pub(super) fn ruma_signatures_version(version: &RoomVersionId) -> RoomVersionId {
+	if version.as_str() == "org.matrix.msc4242.12" {
+		RoomVersionId::V12
+	} else {
+		version.clone()
+	}
+}
+
 #[implement(Service)]
 #[tracing::instrument(skip(self, object), level = "debug")]
 pub async fn required_keys_exist(
@@ -121,7 +129,8 @@ pub async fn required_keys_exist(
 	use ruma::signatures::required_keys;
 
 	trace!(?object, "Checking required keys exist");
-	let Ok(required_keys) = required_keys(object, version) else {
+	let version = ruma_signatures_version(version);
+	let Ok(required_keys) = required_keys(object, &version) else {
 		debug_error!("Failed to determine required keys");
 		return false;
 	};

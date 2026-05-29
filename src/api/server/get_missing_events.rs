@@ -89,12 +89,21 @@ pub(crate) async fn get_missing_events_route(
 			pdu.redact(&room_version, json!({}))?;
 		}
 
+		let mut prev_events: Vec<OwnedEventId> = if room_version.state_dags && pdu.state_key().is_some() {
+			pdu.prev_state_events().map_or(Vec::new(), |i| i.collect())
+		} else {
+			pdu.prev_events().collect()
+		};
+		// MSC4242: make /get_missing_events deterministic
+		prev_events.sort();
+
 		trace!(
 			%next_event_id,
-			prev_events = ?pdu.prev_events().collect::<Vec<_>>(),
+			?prev_events,
 			"adding event to results and queueing prev events"
 		);
-		queue.extend(pdu.prev_events.clone());
+
+		queue.extend(prev_events);
 		seen.insert(next_event_id.clone());
 		if body.latest_events.contains(&next_event_id) {
 			continue; // Don't include latest_events in results,
