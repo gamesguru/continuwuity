@@ -1,5 +1,14 @@
-mod commands;
+mod dag;
+mod extremities;
+mod federation;
+mod heal;
+mod imports;
+mod misc;
 pub(crate) mod outlier_utils;
+mod outliers;
+mod rejected;
+mod state;
+mod timeline;
 
 use clap::Subcommand;
 use conduwuit::Result;
