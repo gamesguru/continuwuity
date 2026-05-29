@@ -35,6 +35,16 @@ pub(crate) async fn send_event_to_device_route(
 	}
 
 	for (target_user_id, map) in &body.messages {
+		let ev_type = body.event_type.to_string();
+		if (ev_type == "m.room.encrypted"
+			|| ev_type == "m.room_key"
+			|| ev_type == "m.forwarded_room_key")
+			&& services.config.prevent_e2ee_to_users.is_match(target_user_id.as_str())
+		{
+			info!(%target_user_id, "Silently dropping E2EE keys for this user");
+			continue;
+		}
+
 		for (target_device_id_maybe, event) in map {
 			if !services.globals.user_is_local(target_user_id) {
 				let mut map = BTreeMap::new();
