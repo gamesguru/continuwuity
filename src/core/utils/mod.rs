@@ -2,6 +2,7 @@ pub mod arrayvec;
 pub mod bool;
 pub mod bytes;
 pub mod content_disposition;
+pub mod dag_walker;
 pub mod debug;
 pub mod defer;
 pub mod future;

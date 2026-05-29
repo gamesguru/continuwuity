@@ -27,7 +27,6 @@ pub(super) async fn audit_auth_chain(
 	fetch: bool,
 	verbose: bool,
 ) -> Result {
-	use std::time::Instant;
 
 	// Resolve room and get current state hash, fallback to extremities if no state
 	let state_ids: Vec<OwnedEventId> = match self
@@ -70,49 +69,35 @@ pub(super) async fn audit_auth_chain(
 	// Deep walk the auth chain by parsing the actual PDUs
 	// This finds true DAG holes that the DB index might miss if the events were
 	// forcefully injected
-	let _started = Instant::now();
-	let mut in_timeline: usize = 0;
-	let mut in_outlier: usize = 0;
-	let mut missing: Vec<OwnedEventId> = Vec::new();
-	let mut queue: Vec<OwnedEventId> = state_ids.clone();
-	let mut seen: HashSet<OwnedEventId> = state_ids.into_iter().collect();
-
-	while let Some(event_id) = queue.pop() {
-		let pdu_opt = self.services.rooms.timeline.get_pdu(&event_id).await.ok();
-
-		if let Some(pdu) = pdu_opt {
-			in_timeline = in_timeline.saturating_add(1);
-			for auth_id in &pdu.auth_events {
-				if seen.insert(auth_id.clone()) {
-					queue.push(auth_id.clone());
-				}
-			}
-		} else {
-			let outlier_opt = self
+	let fetcher = |event_id: OwnedEventId| {
+		Box::pin(async move {
+			if let Ok(pdu) = self.services.rooms.timeline.get_pdu(&event_id).await {
+				conduwuit_core::utils::dag_walker::FetchResult::Timeline(pdu)
+			} else if let Ok(pdu) = self
 				.services
 				.rooms
 				.outlier
 				.get_pdu_outlier(&event_id)
 				.await
-				.ok();
-			if let Some(pdu) = outlier_opt {
-				in_outlier = in_outlier.saturating_add(1);
+			{
 				if verbose {
-					self.write_str(&format!("  OUTLIER: {event_id}\n")).await?;
+					let _ = self.write_str(&format!("  OUTLIER: {event_id}\n")).await;
 				}
-				for auth_id in &pdu.auth_events {
-					if seen.insert(auth_id.clone()) {
-						queue.push(auth_id.clone());
-					}
-				}
+				conduwuit_core::utils::dag_walker::FetchResult::Outlier(pdu)
 			} else {
 				if verbose {
-					self.write_str(&format!("  MISSING: {event_id}\n")).await?;
+					let _ = self.write_str(&format!("  MISSING: {event_id}\n")).await;
 				}
-				missing.push(event_id.clone());
+				conduwuit_core::utils::dag_walker::FetchResult::Missing
 			}
-		}
-	}
+		})
+	};
+
+	let result = conduwuit_core::utils::dag_walker::walk_dag(state_ids.clone(), fetcher).await;
+
+	let in_timeline = result.in_timeline;
+	let in_outlier = result.in_outlier;
+	let missing = result.missing;
 
 	self.write_str(&format!(
 		"Results: {in_timeline} timeline, {in_outlier} outlier-only, {} missing\n",
@@ -5459,7 +5444,6 @@ pub(super) async fn fetch_missing_events(
 	event_ids: Vec<OwnedEventId>,
 	rounds: usize,
 ) -> Result {
-	use std::time::Instant;
 
 	use futures::{StreamExt, stream::FuturesUnordered};
 
