@@ -27,9 +27,7 @@ pub(super) async fn audit_auth_chain(
 	fetch: bool,
 	verbose: bool,
 ) -> Result {
-	use std::{borrow::Borrow, time::Instant};
-
-	use futures::TryStreamExt;
+	use std::time::Instant;
 
 	// Resolve room and get current state hash, fallback to extremities if no state
 	let state_ids: Vec<OwnedEventId> = match self
@@ -69,49 +67,50 @@ pub(super) async fn audit_auth_chain(
 	))
 	.await?;
 
-	// Walk the full auth chain for all current state
-	let started = Instant::now();
-	let auth_chain: HashSet<OwnedEventId> = self
-		.services
-		.rooms
-		.auth_chain
-		.event_ids_iter(&room_id, state_ids.iter().map(Borrow::borrow))
-		.try_collect()
-		.await
-		.unwrap_or_default();
-
-	self.write_str(&format!(
-		"Auth chain: {} events (walked in {:.1?})\n",
-		auth_chain.len(),
-		started.elapsed()
-	))
-	.await?;
-
-	// Bucket: timeline / outlier-only / missing
+	// Deep walk the auth chain by parsing the actual PDUs
+	// This finds true DAG holes that the DB index might miss if the events were
+	// forcefully injected
+	let _started = Instant::now();
 	let mut in_timeline: usize = 0;
 	let mut in_outlier: usize = 0;
 	let mut missing: Vec<OwnedEventId> = Vec::new();
+	let mut queue: Vec<OwnedEventId> = state_ids.clone();
+	let mut seen: HashSet<OwnedEventId> = state_ids.into_iter().collect();
 
-	for event_id in &auth_chain {
-		if self.services.rooms.timeline.pdu_exists(event_id).await {
+	while let Some(event_id) = queue.pop() {
+		let pdu_opt = self.services.rooms.timeline.get_pdu(&event_id).await.ok();
+
+		if let Some(pdu) = pdu_opt {
 			in_timeline = in_timeline.saturating_add(1);
-		} else if self
-			.services
-			.rooms
-			.outlier
-			.get_pdu_outlier(event_id)
-			.await
-			.is_ok()
-		{
-			in_outlier = in_outlier.saturating_add(1);
-			if verbose {
-				self.write_str(&format!("  OUTLIER: {event_id}\n")).await?;
+			for auth_id in &pdu.auth_events {
+				if seen.insert(auth_id.clone()) {
+					queue.push(auth_id.clone());
+				}
 			}
 		} else {
-			if verbose {
-				self.write_str(&format!("  MISSING: {event_id}\n")).await?;
+			let outlier_opt = self
+				.services
+				.rooms
+				.outlier
+				.get_pdu_outlier(&event_id)
+				.await
+				.ok();
+			if let Some(pdu) = outlier_opt {
+				in_outlier = in_outlier.saturating_add(1);
+				if verbose {
+					self.write_str(&format!("  OUTLIER: {event_id}\n")).await?;
+				}
+				for auth_id in &pdu.auth_events {
+					if seen.insert(auth_id.clone()) {
+						queue.push(auth_id.clone());
+					}
+				}
+			} else {
+				if verbose {
+					self.write_str(&format!("  MISSING: {event_id}\n")).await?;
+				}
+				missing.push(event_id.clone());
 			}
-			missing.push(event_id.clone());
 		}
 	}
 

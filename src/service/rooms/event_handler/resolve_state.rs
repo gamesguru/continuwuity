@@ -181,13 +181,9 @@ where
 		// check at fetch time — O(1) field access during state-res instead
 		// of O(N×M) async DB lookups.
 		if let Some(ref mut p) = pdu {
-			let config = &self.services.server.config;
 			let meta = &self.services.pdu_metadata;
-			p.rejected = (config.state_res_ignore_admin_rejected
-				&& meta.is_event_admin_rejected(&event_id).await)
-				|| (config.state_res_ignore_rejected && meta.is_event_rejected(&event_id).await)
-				|| (config.state_res_ignore_soft_failed
-					&& meta.is_event_soft_failed(&event_id).await);
+			p.rejected = meta.is_event_admin_rejected(&event_id).await
+				|| meta.is_event_rejected(&event_id).await;
 		}
 
 		let _ = fetch_cache_ref.insert_async(event_id, pdu.clone()).await;
