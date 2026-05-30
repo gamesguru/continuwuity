@@ -71,7 +71,7 @@ mod tests {
 		sync::{Arc, Mutex},
 	};
 
-	use ruma::{EventId, event_id, server_name};
+	use ruma::{EventId, event_id};
 
 	use super::*;
 
