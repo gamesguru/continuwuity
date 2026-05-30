@@ -96,31 +96,22 @@ where
 
 	// --- Phase 1: resolve state at the incoming event (extracted to reduce frame)
 	// ---
-	let state_at_incoming_event = self
-		.resolve_state_at_incoming_event(
-			&incoming_pdu,
-			create_event,
-			origin,
-			room_id,
-			&room_version_id,
-			skip_soft_fail,
-		)
-		.await?;
+	let state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
+		&incoming_pdu,
+		create_event,
+		origin,
+		room_id,
+		&room_version_id,
+		skip_soft_fail,
+	))
+	.await?;
 
 	let room_version = to_room_version(&room_version_id);
 
 	// Pre-fetch missing auth chain events from federation BEFORE
 	// acquiring the room lock. This is parallel (32 concurrent) and
 	// multi-server (origin + trusted + room members) with a 300s budget.
-	if incoming_pdu.state_key().is_some() {
-		self.pre_fetch_state_res_deps(
-			room_id,
-			&room_version_id,
-			&state_at_incoming_event,
-			origin,
-		)
-		.await;
-	}
+	// (DELETED as fetch_state now gets auth_chain completely)
 
 	// Re-check if the PDU was added to the timeline while we were waiting
 	if let Ok(pduid) = self
@@ -571,9 +562,14 @@ where
 			%origin,
 			"local state unavailable; attempting synchronous /state_ids fetch"
 		);
-		match self
-			.fetch_state(origin, create_event, room_id, incoming_pdu.event_id(), false)
-			.await
+		match Box::pin(self.fetch_state(
+			origin,
+			create_event,
+			room_id,
+			incoming_pdu.event_id(),
+			false,
+		))
+		.await
 		{
 			| Ok(Some(fetched_state)) => {
 				info!(

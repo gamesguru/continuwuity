@@ -366,8 +366,8 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			// shot, then retry handle_outlier_pdu. This also satisfies the
 			// Matrix spec requirement that servers call /state_ids when auth
 			// events are unresolvable via the normal backfill path.
-			let retry_result = async {
-				self.fetch_state(origin, create_event, room_id, event_id, false)
+			let retry_result = Box::pin(async {
+				Box::pin(self.fetch_state(origin, create_event, room_id, event_id, false))
 					.await?;
 				Box::pin(self.handle_outlier_pdu(
 					origin,
@@ -380,7 +380,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 					room_version_override,
 				))
 				.await
-			}
+			})
 			.await;
 
 			match retry_result {
@@ -445,9 +445,14 @@ pub async fn process_timeline_upgrade(
 
 	// 9. Fetch any missing prev events doing all checks listed here starting at 1.
 	//    These are timeline events
-	let (sorted_prev_events, mut eventid_info) = self
-		.fetch_prev(origin, create_event, room_id, first_ts_in_room, incoming_pdu.prev_events())
-		.await?;
+	let (sorted_prev_events, mut eventid_info) = Box::pin(self.fetch_prev(
+		origin,
+		create_event,
+		room_id,
+		first_ts_in_room,
+		incoming_pdu.prev_events(),
+	))
+	.await?;
 
 	debug!(
 		events = ?sorted_prev_events,
