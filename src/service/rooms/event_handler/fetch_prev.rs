@@ -217,7 +217,7 @@ where
 	// events. The events are timeline gaps, their auth events are likely known.
 	// We just iterate in any order. The topological sorting here is for the
 	// timeline!
-	for eid in sorted_eids.iter() {
+	for eid in &sorted_eids {
 		if let Some((_, val)) = verified_events.remove(eid) {
 			if let Ok((pdu, val)) = self
 				.handle_outlier_pdu(

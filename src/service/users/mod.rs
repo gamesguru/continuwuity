@@ -56,7 +56,6 @@ struct Services {
 	admin: Dep<admin::Service>,
 	appservice: Dep<appservice::Service>,
 	globals: Dep<globals::Service>,
-	state_accessor: Dep<rooms::state_accessor::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
 }
 
@@ -97,8 +96,6 @@ impl crate::Service for Service {
 				admin: args.depend::<admin::Service>("admin"),
 				appservice: args.depend::<appservice::Service>("appservice"),
 				globals: args.depend::<globals::Service>("globals"),
-				state_accessor: args
-					.depend::<rooms::state_accessor::Service>("rooms::state_accessor"),
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
 			},
 			db: Data {

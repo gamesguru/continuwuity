@@ -129,25 +129,19 @@ where
 					async move {
 						let stashed_unsigned = val.remove("unsigned");
 
-						let passes_sig = if skip_sig_verify {
-							true
-						} else if self
-							.services
-							.server
-							.config
-							.bypassed_signature_events
-							.contains(&eid)
-						{
-							true
-						} else {
-							matches!(
-								self.services
-									.server_keys
-									.verify_event(&val, Some(&room_version_id))
-									.await,
-								Ok(ruma::signatures::Verified::All)
-							)
-						};
+						let passes_sig = skip_sig_verify
+							|| self
+								.services
+								.server
+								.config
+								.bypassed_signature_events
+								.contains(&eid) || matches!(
+							self.services
+								.server_keys
+								.verify_event(&val, Some(&room_version_id))
+								.await,
+							Ok(ruma::signatures::Verified::All)
+						);
 
 						if passes_sig {
 							// Re-attach unsigned for completeness

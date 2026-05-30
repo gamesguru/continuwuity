@@ -76,8 +76,6 @@ pub(crate) async fn get_backfill_route(
 		.await;
 
 	let origin = body.origin().to_owned();
-	let services_clone = services.clone();
-
 	Ok(get_backfill::v1::Response {
 		origin_server_ts: MilliSecondsSinceUnixEpoch::now(),
 
@@ -89,7 +87,6 @@ pub(crate) async fn get_backfill_route(
 			.pdus_rev(&body.room_id, Some(from.saturating_add(1)))
 			.try_filter_map(move |(_, pdu)| {
 				let origin = origin.clone();
-				let services = services_clone.clone();
 				async move {
 					let room_id = pdu
 						.room_id_or_hash()
