@@ -198,7 +198,12 @@ async fn resolve_to_reqwest(
 	resolver: Arc<TokioResolver>,
 	name: Name,
 ) -> ResolvingResult {
-	use std::{io, io::ErrorKind::Interrupted};
+	use std::{io, io::ErrorKind::Interrupted, net::IpAddr};
+
+	if let Ok(ip_addr) = name.as_str().parse::<IpAddr>() {
+		let addrs: Addrs = Box::new(std::iter::once(SocketAddr::new(ip_addr, 0)));
+		return Ok(addrs);
+	}
 
 	let handle_shutdown = || Box::new(io::Error::new(Interrupted, "Server shutting down"));
 	let handle_results = |results: LookupIp| {
