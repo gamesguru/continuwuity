@@ -21,6 +21,114 @@ use tokio::io::AsyncWriteExt;
 
 use crate::admin_command;
 
+struct DagExportStats {
+	pub count: u64,
+	pub total_prev_events: u64,
+	pub state_events: u64,
+	pub missing_hash: u64,
+	pub unique_hashes: HashSet<u64>,
+	pub last_ssh: Option<u64>,
+	pub last_is_state_event: bool,
+	pub last_event_id: Option<Box<EventId>>,
+	pub last_event_type: Option<TimelineEventType>,
+	pub last_state_key: Option<String>,
+	pub max_depth: u64,
+	pub min_depth: u64,
+	pub all_event_ids: HashSet<OwnedEventId>,
+	pub referenced_as_prev: HashSet<OwnedEventId>,
+}
+
+impl Default for DagExportStats {
+	fn default() -> Self {
+		Self {
+			count: 0,
+			total_prev_events: 0,
+			state_events: 0,
+			missing_hash: 0,
+			unique_hashes: HashSet::new(),
+			last_ssh: None,
+			last_is_state_event: false,
+			last_event_id: None,
+			last_event_type: None,
+			last_state_key: None,
+			max_depth: 0,
+			min_depth: u64::MAX,
+			all_event_ids: HashSet::new(),
+			referenced_as_prev: HashSet::new(),
+		}
+	}
+}
+
+impl DagExportStats {
+	#[allow(clippy::too_many_arguments)]
+	async fn process_and_write_pdu(
+		&mut self,
+		ctx: &crate::context::Context<'_>,
+		file: &mut tokio::fs::File,
+		pdu_json: CanonicalJsonObject,
+		pdu_result: Result<PduEvent>,
+		is_outlier: bool,
+		print: bool,
+	) -> Result<()> {
+		let mut obj: serde_json::Map<String, JsonValue> =
+			serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
+
+		if is_outlier {
+			obj.insert("__outlier".to_owned(), JsonValue::Bool(true));
+		}
+
+		if let Ok(pdu) = &pdu_result {
+			if let Ok(ssh) = ctx
+				.services
+				.rooms
+				.state_accessor
+				.pdu_shortstatehash(pdu.event_id())
+				.await
+			{
+				obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
+				self.unique_hashes.insert(ssh);
+				self.last_ssh = Some(ssh);
+			} else {
+				self.missing_hash = self.missing_hash.saturating_add(1);
+			}
+
+			if pdu.state_key.is_some() {
+				self.state_events = self.state_events.saturating_add(1);
+				self.last_is_state_event = true;
+				self.last_event_type = Some(pdu.kind().clone());
+				self.last_state_key = pdu.state_key.as_ref().map(ToString::to_string);
+			} else {
+				self.last_is_state_event = false;
+			}
+
+			self.last_event_id = Some(pdu.event_id().into());
+			let eid = pdu.event_id().to_owned();
+			self.all_event_ids.insert(eid);
+			for prev in pdu.prev_events() {
+				self.referenced_as_prev.insert(prev.to_owned());
+			}
+			let d: u64 = pdu.depth.into();
+			self.max_depth = self.max_depth.max(d);
+			self.min_depth = self.min_depth.min(d);
+		}
+
+		let json = serde_json::to_string(&obj)?;
+		file.write_all(json.as_bytes()).await?;
+		file.write_all(b"\n").await?;
+		if print {
+			ctx.write_str(&format!("{json}\n")).await?;
+		}
+		if let Ok(pdu) = &pdu_result {
+			self.total_prev_events = self
+				.total_prev_events
+				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
+		}
+		self.count = self.count.saturating_add(1);
+
+		Ok(())
+	}
+}
+
 #[admin_command]
 pub(super) async fn get_room_dag(
 	&self,
@@ -47,18 +155,7 @@ pub(super) async fn get_room_dag(
 	};
 
 	let mut i = 0_u64;
-	let mut count = 0_u64;
-	let mut total_prev_events = 0_u64;
-	let mut state_events = 0_u64;
-	let mut missing_hash = 0_u64;
-	let mut unique_hashes = HashSet::<u64>::new();
-	let mut last_ssh: Option<u64> = None;
-	let mut last_is_state_event = false;
-	let mut last_event_id: Option<Box<EventId>> = None;
-	let mut last_event_type: Option<TimelineEventType> = None;
-	let mut last_state_key: Option<String> = None;
-	let mut max_depth = 0_u64;
-	let mut min_depth = u64::MAX;
+	let mut stats = DagExportStats::default();
 	let server = self.services.globals.server_name();
 	let room_version_str = self
 		.services
@@ -73,9 +170,6 @@ pub(super) async fn get_room_dag(
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
 
-	let mut all_event_ids = HashSet::<OwnedEventId>::new();
-	let mut referenced_as_prev = HashSet::<OwnedEventId>::new();
-
 	for event_id in pdu_ids {
 		if let Ok(end) = u64::try_from(end) {
 			if i > end {
@@ -84,68 +178,56 @@ pub(super) async fn get_room_dag(
 		}
 		if i >= actual_start {
 			if let Ok(pdu_json) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
-				let mut obj: serde_json::Map<String, JsonValue> =
-					serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
-
 				let pdu_result = self.services.rooms.timeline.get_pdu(&event_id).await;
-				if let Ok(pdu) = &pdu_result {
-					if let Ok(ssh) = self
-						.services
-						.rooms
-						.state_accessor
-						.pdu_shortstatehash(pdu.event_id())
-						.await
-					{
-						obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
-						unique_hashes.insert(ssh);
-						last_ssh = Some(ssh);
-					} else {
-						missing_hash = missing_hash.saturating_add(1);
-					}
-
-					if pdu.state_key.is_some() {
-						state_events = state_events.saturating_add(1);
-						last_is_state_event = true;
-						last_event_type = Some(pdu.kind().clone());
-						last_state_key = pdu.state_key.as_ref().map(ToString::to_string);
-					} else {
-						last_is_state_event = false;
-					}
-
-					last_event_id = Some(pdu.event_id().into());
-					let eid = pdu.event_id().to_owned();
-					all_event_ids.insert(eid);
-					for prev in pdu.prev_events() {
-						referenced_as_prev.insert(prev.to_owned());
-					}
-					let d: u64 = pdu.depth.into();
-					max_depth = max_depth.max(d);
-					min_depth = min_depth.min(d);
+				if let Err(e) = stats
+					.process_and_write_pdu(self, &mut file, pdu_json, pdu_result, false, print)
+					.await
+				{
+					warn!("Failed to process PDU {event_id}: {e}");
 				}
-
-				let json = serde_json::to_string(&obj)?;
-				file.write_all(json.as_bytes()).await?;
-				file.write_all(b"\n").await?;
-				if print {
-					self.write_str(&format!("{json}\n")).await?;
-				}
-				if let Ok(pdu) = &pdu_result {
-					total_prev_events = total_prev_events
-						.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
-				}
-				count = count.saturating_add(1);
 			}
 		}
 		i = i.saturating_add(1);
 	}
 
-	// Forward extremities: events not referenced as prev_events by any other event
-	let heads_count = all_event_ids.difference(&referenced_as_prev).count();
+	let outlier_ids: Vec<OwnedEventId> = self
+		.services
+		.rooms
+		.outlier
+		.room_stream(&room_id)
+		.map(|(id, _)| id)
+		.collect()
+		.await;
 
-	let (bf_whole, bf_frac) = if count > 0 {
-		let scaled = total_prev_events
+	for event_id in outlier_ids {
+		if let Ok(pdu_json) = self
+			.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(&event_id)
+			.await
+		{
+			let pdu_result = self.services.rooms.outlier.get_pdu_outlier(&event_id).await;
+			if let Err(e) = stats
+				.process_and_write_pdu(self, &mut file, pdu_json, pdu_result, true, print)
+				.await
+			{
+				warn!("Failed to process outlier PDU {event_id}: {e}");
+			}
+		}
+	}
+
+	// Forward extremities: events not referenced as prev_events by any other event
+	let heads_count = stats
+		.all_event_ids
+		.difference(&stats.referenced_as_prev)
+		.count();
+
+	let (bf_whole, bf_frac) = if stats.count > 0 {
+		let scaled = stats
+			.total_prev_events
 			.saturating_mul(1000)
-			.checked_div(count)
+			.checked_div(stats.count)
 			.unwrap_or(0);
 		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
 	} else {
@@ -160,14 +242,14 @@ pub(super) async fn get_room_dag(
 		.await
 		.ok();
 
-	let tip_match = match (last_ssh, room_ssh) {
+	let tip_match = match (stats.last_ssh, room_ssh) {
 		| (Some(tip), Some(room)) if tip == room => "✓ tip matches room state".to_owned(),
-		| (Some(tip), Some(room)) if last_is_state_event => {
+		| (Some(tip), Some(room)) if stats.last_is_state_event => {
 			// pdu_shortstatehash is the state BEFORE the tip event; room SSH is
 			// the state AFTER. Verify the room state actually contains the tip
 			// event's state change — look up (type, state_key) in room state.
 			if let (Some(last_eid), Some(last_type), Some(last_sk)) =
-				(&last_event_id, &last_event_type, &last_state_key)
+				(&stats.last_event_id, &stats.last_event_type, &stats.last_state_key)
 			{
 				let room_has_tip = self
 					.services
@@ -200,9 +282,14 @@ pub(super) async fn get_room_dag(
 	};
 
 	// Rename to include depth range so successive runs don't overwrite
-	let min_d = if min_depth == u64::MAX { 0 } else { min_depth };
+	let min_d = if stats.min_depth == u64::MAX {
+		0
+	} else {
+		stats.min_depth
+	};
 	let final_path = format!(
-		"/tmp/local-dag-{safe_room_id}-v{room_version_str}-{server}-d{min_d}-{max_depth}.jsonl"
+		"/tmp/local-dag-{safe_room_id}-v{room_version_str}-{server}-d{min_d}-{max_depth}.jsonl",
+		max_depth = stats.max_depth
 	);
 	if let Err(e) = tokio::fs::rename(&path, &final_path).await {
 		warn!("Failed to rename {path} -> {final_path}: {e}");
@@ -213,15 +300,17 @@ pub(super) async fn get_room_dag(
 		&path
 	};
 
-	let mut out = format!("Wrote {count} PDUs to {display_path}\n");
+	let mut out = format!("Wrote {count} PDUs to {display_path}\n", count = stats.count);
 	writeln!(out, "```").expect("fmt");
-	writeln!(out, "PDUs:           {count}").expect("fmt");
-	writeln!(out, "State events:   {state_events}").expect("fmt");
+	writeln!(out, "PDUs:           {count}", count = stats.count).expect("fmt");
+	writeln!(out, "State events:   {state_events}", state_events = stats.state_events)
+		.expect("fmt");
 	writeln!(out, "Branching:      {bf_whole}.{bf_frac:03} avg prev_events/PDU").expect("fmt");
-	let (frag_whole, frag_frac) = if max_depth > 0 {
-		let scaled = count
+	let (frag_whole, frag_frac) = if stats.max_depth > 0 {
+		let scaled = stats
+			.count
 			.saturating_mul(1000)
-			.checked_div(max_depth)
+			.checked_div(stats.max_depth)
 			.unwrap_or(0);
 		(scaled.checked_div(1000).unwrap_or(0), scaled % 1000)
 	} else {
@@ -230,12 +319,15 @@ pub(super) async fn get_room_dag(
 	writeln!(
 		out,
 		"Frag factor:    {frag_whole}.{frag_frac:03} ({count} events / {max_depth} depth, \
-		 {heads_count} heads)"
+		 {heads_count} heads)",
+		count = stats.count,
+		max_depth = stats.max_depth
 	)
 	.expect("fmt");
-	writeln!(out, "Unique states:  {}", unique_hashes.len()).expect("fmt");
-	writeln!(out, "Missing hash:   {missing_hash}").expect("fmt");
-	if let Some(tip) = last_ssh {
+	writeln!(out, "Unique states:  {}", stats.unique_hashes.len()).expect("fmt");
+	writeln!(out, "Missing hash:   {missing_hash}", missing_hash = stats.missing_hash)
+		.expect("fmt");
+	if let Some(tip) = stats.last_ssh {
 		writeln!(out, "Tip SSH:        {tip}").expect("fmt");
 	}
 	if let Some(room) = room_ssh {

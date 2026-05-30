@@ -157,6 +157,16 @@ impl Service {
 			| _ if e.status_code().is_server_error() => tracing::warn!(dest = ?dest, "{e:?}"),
 			| _ => info!(dest = ?dest, "{e:?}"),
 		}
+
+		// If a transaction fails with a 4xx client error (except 429 Too Many
+		// Requests), we drop the transaction but do NOT penalize the entire
+		// destination with exponential backoff, which would block unrelated follow-up
+		// requests.
+		if e.status_code().is_client_error() && e.status_code().as_u16() != 429 {
+			statuses.remove(&dest);
+			return;
+		}
+
 		let mut tries = 1_u32;
 		statuses.entry(dest.clone()).and_modify(|e| {
 			*e = match e {

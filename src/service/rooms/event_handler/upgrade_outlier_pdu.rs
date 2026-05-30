@@ -221,19 +221,27 @@ where
 	.await
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
+	if !auth_check_state {
+		if skip_soft_fail {
+			warn!(
+				event_id = %incoming_pdu.event_id,
+				"Event failed auth check against state at event, but skip_soft_fail is set — continuing"
+			);
+		} else {
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(incoming_pdu.event_id());
+
+			return Err!(Request(Forbidden("Event authorisation fails based on state at event")));
+		}
+	}
+
 	let mut soft_fail = if skip_soft_fail {
 		false
 	} else {
-		match (auth_check_state, incoming_pdu.redacts_id(&room_version_id)) {
-			| (false, _) => {
-				info!(
-					event_id = %incoming_pdu.event_id,
-					"Soft-failing: auth check against current state failed"
-				);
-				true
-			},
-			| (true, None) => false,
-			| (true, Some(redact_id)) =>
+		match incoming_pdu.redacts_id(&room_version_id) {
+			| None => false,
+			| Some(redact_id) =>
 				!self
 					.services
 					.state_accessor
