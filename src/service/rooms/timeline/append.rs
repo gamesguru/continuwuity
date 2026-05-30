@@ -17,7 +17,9 @@ use ruma::{
 		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 		push_rules::PushRulesEvent,
 		room::{
-			encrypted::Relation, power_levels::RoomPowerLevelsEventContent,
+			encrypted::Relation,
+			member::{MembershipState, RoomMemberEventContent},
+			power_levels::RoomPowerLevelsEventContent,
 			redaction::RoomRedactionEventContent,
 		},
 	},
@@ -182,6 +184,10 @@ where
 	let pdu_count = PduCount::Normal(count);
 	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
+	// Insert pdu FIRST to ensure it's in the DB before any secondary writes
+	// unexpectedly wake the sync watcher.
+	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
+
 	// Mark as read first so the sync watcher uses the correct receipt
 	self.services
 		.read_receipt
@@ -190,10 +196,6 @@ where
 	self.services
 		.user
 		.reset_notification_counts(pdu.sender(), room_id);
-
-	// Insert pdu FIRST to ensure it's in the DB before any secondary writes
-	// unexpectedly wake the sync watcher.
-	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
 
 	// Flattened Auth Chain Cache:
 	// Pre-calculate the auth chain closure for this PDU by doing a single
@@ -395,6 +397,14 @@ where
 					.state_cache
 					.update_membership(room_id, target_user_id, pdu, true)
 					.await?;
+
+				if let Ok(content) = pdu.get_content::<RoomMemberEventContent>() {
+					if content.membership == MembershipState::Join {
+						if self.services.globals.user_is_local(target_user_id) {
+							self.services.users.mark_device_key_update(target_user_id).await;
+						}
+					}
+				}
 
 				// Invalidate hierarchy cache: membership changes can affect
 				// restricted room accessibility (the `allow` list checks
