@@ -312,6 +312,7 @@ async fn build_state_and_timeline(
 			room_id,
 			shortstatehashes,
 			&state_events,
+			&timeline,
 			joined_since_last_sync,
 		),
 	)
@@ -855,7 +856,8 @@ async fn build_device_list_updates(
 	}: SyncContext<'_>,
 	room_id: &RoomId,
 	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
-	state_events: &Vec<PduEvent>,
+	state_events: &[PduEvent],
+	timeline: &TimelinePdus,
 	joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
 	let is_encrypted_room = services
@@ -883,9 +885,23 @@ async fn build_device_list_updates(
 		})
 		.await;
 
+	if joined_since_last_sync {
+		services
+			.rooms
+			.state_cache
+			.room_members(room_id)
+			.ready_for_each(|user_id| {
+				if user_id != syncing_user {
+					device_list_updates.changed.insert(user_id.to_owned());
+				}
+			})
+			.await;
+	}
+
 	// add users who now share encrypted rooms to `changed` and
 	// users who no longer share encrypted rooms to `left`
-	for state_event in state_events {
+	let events = state_events.iter().chain(timeline.pdus.iter().map(|(_, pdu)| pdu));
+	for state_event in events {
 		if state_event.kind == RoomMember {
 			let Some(content): Option<RoomMemberEventContent> = state_event.get_content().ok()
 			else {
@@ -895,7 +911,7 @@ async fn build_device_list_updates(
 			let Some(user_id): Option<OwnedUserId> = state_event
 				.state_key
 				.as_ref()
-				.and_then(|key| key.parse().ok())
+				.and_then(|key| key.as_str().try_into().ok())
 			else {
 				continue;
 			};
@@ -911,7 +927,7 @@ async fn build_device_list_updates(
 						| Leave if !shares_encrypted_room => {
 							device_list_updates.left.insert(user_id);
 						},
-						| Join if joined_since_last_sync || shares_encrypted_room => {
+						| Join if shares_encrypted_room => {
 							device_list_updates.changed.insert(user_id);
 						},
 						| _ => (),

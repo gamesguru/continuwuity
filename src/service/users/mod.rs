@@ -1114,8 +1114,6 @@ impl Service {
 		self.services
 			.state_cache
 			.rooms_joined(user_id)
-			// Don't send key updates to unencrypted rooms
-			.filter(|room_id| self.services.state_accessor.is_encrypted_room(room_id))
 			.ready_for_each(|room_id| {
 				let key = (room_id, count);
 				self.db.keychangeid_userid.put_raw(key, user_id);
