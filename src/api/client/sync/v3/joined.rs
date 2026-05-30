@@ -900,7 +900,9 @@ async fn build_device_list_updates(
 
 	// add users who now share encrypted rooms to `changed` and
 	// users who no longer share encrypted rooms to `left`
-	let events = state_events.iter().chain(timeline.pdus.iter().map(|(_, pdu)| pdu));
+	let events = state_events
+		.iter()
+		.chain(timeline.pdus.iter().map(|(_, pdu)| pdu));
 	for state_event in events {
 		if state_event.kind == RoomMember {
 			let Some(content): Option<RoomMemberEventContent> = state_event.get_content().ok()
