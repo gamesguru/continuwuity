@@ -70,19 +70,23 @@ where
 		return Ok(None);
 	}
 
-	// If any auth events are rejected/soft-failed, the event is also rejected.
+	// If we reject/soft-fail/are missing auth events, the event is also rejected.
 	if !skip_soft_fail {
 		for aid in incoming_pdu.auth_events() {
-			if !self.services.pdu_metadata.is_event_accepted(aid).await {
+			let exists = self.services.timeline.pdu_exists(aid).await;
+			let accepted = self.services.pdu_metadata.is_event_accepted(aid).await;
+			if !exists || !accepted {
 				info!(
-					"Rejecting incoming event {} which depends on rejected/soft-failed auth \
-					 event {aid}",
+					"Rejecting incoming event {} which depends on missing/rejected/soft-failed \
+					 auth event {aid}",
 					incoming_pdu.event_id()
 				);
 				self.services
 					.pdu_metadata
 					.mark_event_rejected(incoming_pdu.event_id());
-				return Err!(Request(Forbidden("Event depends on rejected auth event {aid}")));
+				return Err!(Request(Forbidden(
+					"Event depends on missing or rejected auth event {aid}"
+				)));
 			}
 		}
 	}
