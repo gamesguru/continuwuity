@@ -937,7 +937,12 @@ async fn build_device_list_updates(
 	}
 
 	// device list updates are only relevant for encrypted rooms
-	if !services.rooms.state_accessor.is_encrypted_room(room_id).await? {
+	if !services
+		.rooms
+		.state_accessor
+		.is_encrypted_room(room_id)
+		.await?
+	{
 		return Ok(DeviceListUpdates::new());
 	}
 
@@ -986,8 +991,7 @@ async fn build_device_list_updates(
 					| Leave if !shares_room => {
 						device_list_updates.left.insert(user_id);
 					},
-					| Join if joined_since_last_sync
-						|| shares_room || syncing_user == user_id =>
+					| Join if joined_since_last_sync || shares_room || syncing_user == user_id =>
 					{
 						device_list_updates.changed.insert(user_id);
 					},
