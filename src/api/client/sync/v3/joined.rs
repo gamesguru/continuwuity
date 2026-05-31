@@ -941,7 +941,7 @@ async fn build_device_list_updates(
 		.rooms
 		.state_accessor
 		.is_encrypted_room(room_id)
-		.await?
+		.await
 	{
 		return Ok(DeviceListUpdates::new());
 	}
