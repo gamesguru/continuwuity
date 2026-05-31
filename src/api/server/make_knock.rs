@@ -1,9 +1,10 @@
-use RoomVersionId::*;
 use axum::extract::State;
-use conduwuit::{Err, Error, Result, debug_warn, info, matrix::pdu::PduBuilder, utils, warn};
+use conduwuit::{Err, Error, Result, debug_warn, info, matrix::pdu::PartialPdu, utils, warn};
 use ruma::{
-	RoomVersionId,
-	api::{client::error::ErrorKind, federation::knock::create_knock_event_template},
+	api::{
+		error::{ErrorKind, IncompatibleRoomVersionErrorData},
+		federation::membership::prepare_knock_event,
+	},
 	events::room::member::{MembershipState, RoomMemberEventContent},
 };
 use serde_json::value::to_raw_value;
@@ -15,8 +16,8 @@ use crate::Ruma;
 /// Creates a knock template.
 pub(crate) async fn create_knock_event_template_route(
 	State(services): State<crate::State>,
-	body: Ruma<create_knock_event_template::v1::Request>,
-) -> Result<create_knock_event_template::v1::Response> {
+	body: Ruma<prepare_knock_event::v1::Request>,
+) -> Result<prepare_knock_event::v1::Response> {
 	if !services.rooms.metadata.exists(&body.room_id).await {
 		return Err!(Request(NotFound("Room is unknown to this server.")));
 	}
@@ -27,14 +28,14 @@ pub(crate) async fn create_knock_event_template_route(
 		.await
 	{
 		info!(
-			origin = body.origin().as_str(),
+			origin = body.identity.as_str(),
 			room_id = %body.room_id,
 			"Refusing to serve make_knock for room we aren't participating in"
 		);
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
-	if body.user_id.server_name() != body.origin() {
+	if body.user_id.server_name() != body.identity {
 		return Err!(Request(BadJson("Not allowed to knock on behalf of another server/user.")));
 	}
 
@@ -42,19 +43,17 @@ pub(crate) async fn create_knock_event_template_route(
 	services
 		.rooms
 		.event_handler
-		.acl_check(body.origin(), &body.room_id)
+		.acl_check(&body.identity, &body.room_id)
 		.await?;
 
 	if services
 		.moderation
-		.is_remote_server_forbidden(body.origin())
+		.is_remote_server_forbidden(&body.identity)
 	{
 		warn!(
 			"Server {} for remote user {} tried knocking room ID {} which has a server name \
 			 that is globally forbidden. Rejecting.",
-			body.origin(),
-			&body.user_id,
-			&body.room_id,
+			body.identity, &body.user_id, &body.room_id,
 		);
 		return Err!(Request(Forbidden("Server is banned on this homeserver.")));
 	}
@@ -65,23 +64,28 @@ pub(crate) async fn create_knock_event_template_route(
 		}
 	}
 
-	let room_version_id = services.rooms.state.get_room_version(&body.room_id).await?;
+	let room_version = services.rooms.state.get_room_version(&body.room_id).await?;
+	let room_version_rules = room_version.rules().unwrap();
 
-	if matches!(room_version_id, V1 | V2 | V3 | V4 | V5 | V6) {
+	if !room_version_rules.authorization.knocking {
 		return Err(Error::BadRequest(
-			ErrorKind::IncompatibleRoomVersion { room_version: room_version_id },
+			ErrorKind::IncompatibleRoomVersion(IncompatibleRoomVersionErrorData::new(
+				room_version,
+			)),
 			"Room version does not support knocking.",
 		));
 	}
 
-	if !body.ver.contains(&room_version_id) {
+	if !body.ver.contains(&room_version) {
 		return Err(Error::BadRequest(
-			ErrorKind::IncompatibleRoomVersion { room_version: room_version_id },
+			ErrorKind::IncompatibleRoomVersion(IncompatibleRoomVersionErrorData::new(
+				room_version,
+			)),
 			"Your homeserver does not support the features required to knock on this room.",
 		));
 	}
 
-	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
+	let state_lock = services.rooms.state.mutex.lock(body.room_id.as_str()).await;
 
 	if let Ok(membership) = services
 		.rooms
@@ -103,7 +107,7 @@ pub(crate) async fn create_knock_event_template_route(
 		.rooms
 		.timeline
 		.create_event(
-			PduBuilder::state(
+			PartialPdu::state(
 				body.user_id.to_string(),
 				&RoomMemberEventContent::new(MembershipState::Knock),
 			),
@@ -118,8 +122,8 @@ pub(crate) async fn create_knock_event_template_route(
 		.expect("Barebones PDU should be convertible to canonical JSON");
 	pdu_json.remove("event_id");
 
-	Ok(create_knock_event_template::v1::Response {
-		room_version: room_version_id,
-		event: to_raw_value(&pdu_json).expect("CanonicalJson can be serialized to JSON"),
-	})
+	Ok(prepare_knock_event::v1::Response::new(
+		room_version,
+		to_raw_value(&pdu_json).expect("CanonicalJson can be serialized to JSON"),
+	))
 }

@@ -6,7 +6,10 @@ mod serde;
 
 use std::{any::Any, borrow::Cow, convert::Infallible, error::Error as _, sync::PoisonError};
 
+use ruma::api::error::{ErrorKind, RetryAfter::Delay};
+
 pub use self::{err::visit, log::*};
+use crate::Error::BadRequest;
 
 #[derive(thiserror::Error)]
 pub enum Error {
@@ -57,13 +60,11 @@ pub enum Error {
 	#[error(transparent)]
 	Json(#[from] serde_json::Error),
 	#[error(transparent)]
-	JsParseInt(#[from] ruma::JsParseIntError), // js_int re-export
-	#[error(transparent)]
-	JsTryFromInt(#[from] ruma::JsTryFromIntError), // js_int re-export
-	#[error(transparent)]
 	Path(#[from] axum::extract::rejection::PathRejection),
 	#[error("Mutex poisoned: {0}")]
 	Poison(Cow<'static, str>),
+	#[error(transparent)]
+	Query(#[from] axum::extract::rejection::QueryRejection),
 	#[error("Regex error: {0}")]
 	Regex(#[from] regex::Error),
 	#[error("{0}")]
@@ -90,8 +91,8 @@ pub enum Error {
 	// ruma/conduwuit
 	#[error("Arithmetic operation failed: {0}")]
 	Arithmetic(Cow<'static, str>),
-	#[error("{0}: {1}")]
-	BadRequest(ruma::api::client::error::ErrorKind, &'static str), //TODO: remove
+	#[error("{0:?}: {1}")]
+	BadRequest(ErrorKind, &'static str), //TODO: remove
 	#[error("{0}")]
 	BadServerResponse(Cow<'static, str>),
 	#[error(transparent)]
@@ -107,25 +108,25 @@ pub enum Error {
 	#[error("Feature '{0}' is not available on this server.")]
 	FeatureDisabled(Cow<'static, str>),
 	#[error("Remote server {0} responded with: {1}")]
-	Federation(ruma::OwnedServerName, ruma::api::client::error::Error),
+	Federation(ruma::OwnedServerName, ruma::api::error::Error),
 	#[error("{0} in {1}")]
 	InconsistentRoomState(&'static str, ruma::OwnedRoomId),
 	#[error(transparent)]
 	IntoHttp(#[from] ruma::api::error::IntoHttpError),
-	#[error("{0}")]
-	Ldap(Cow<'static, str>),
 	#[error(transparent)]
 	Mxc(#[from] ruma::MxcUriError),
 	#[error(transparent)]
 	Mxid(#[from] ruma::IdParseError),
 	#[error("from {0}: {1}")]
 	Redaction(ruma::OwnedServerName, ruma::canonical_json::RedactionError),
-	#[error("{0}: {1}")]
-	Request(ruma::api::client::error::ErrorKind, Cow<'static, str>, http::StatusCode),
+	#[error("{0:?}: {1}")]
+	Request(ErrorKind, Cow<'static, str>, http::StatusCode),
 	#[error(transparent)]
-	Ruma(#[from] ruma::api::client::error::Error),
+	Ruma(#[from] ruma::api::error::Error),
 	#[error(transparent)]
-	Signatures(#[from] ruma::signatures::Error),
+	SignatureJson(#[from] ruma::signatures::JsonError),
+	#[error(transparent)]
+	SignatureVerification(#[from] ruma::signatures::VerificationError),
 	#[error(transparent)]
 	StateRes(#[from] crate::state_res::Error),
 	#[error("uiaa")]
@@ -175,14 +176,14 @@ impl Error {
 
 	/// Returns the Matrix error code / error kind
 	#[inline]
-	pub fn kind(&self) -> ruma::api::client::error::ErrorKind {
-		use ruma::api::client::error::ErrorKind::{FeatureDisabled, Unknown};
+	pub fn kind(&self) -> ErrorKind {
+		use ruma::api::error::ErrorKind::{Unknown, Unrecognized};
 
 		match self {
 			| Self::Federation(_, error) | Self::Ruma(error) =>
 				response::ruma_error_kind(error).clone(),
-			| Self::BadRequest(kind, ..) | Self::Request(kind, ..) => kind.clone(),
-			| Self::FeatureDisabled(..) => FeatureDisabled,
+			| BadRequest(kind, ..) | Self::Request(kind, ..) => kind.clone(),
+			| Self::FeatureDisabled(..) => Unrecognized,
 			| _ => Unknown,
 		}
 	}
@@ -213,6 +214,15 @@ impl Error {
 	/// Result where Ok(None) is instead Err(e) if e.is_not_found().
 	#[inline]
 	pub fn is_not_found(&self) -> bool { self.status_code() == http::StatusCode::NOT_FOUND }
+
+	pub fn retry_after(&self) -> Option<std::time::Duration> {
+		if let BadRequest(ErrorKind::LimitExceeded(limit_data), ..) = self {
+			if let Some(Delay(after)) = limit_data.retry_after {
+				return Some(after);
+			}
+		}
+		None
+	}
 }
 
 impl std::fmt::Debug for Error {
@@ -273,7 +283,7 @@ impl std::fmt::Display for FormattedReqwestError {
 				write!(f, "{real_error}")
 			}
 		} else {
-			write!(f, "Request error: {}", &self.0)
+			write!(f, "Request error: {}", self.0)
 		}
 	}
 }

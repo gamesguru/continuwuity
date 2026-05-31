@@ -1,34 +1,28 @@
 pub(super) mod dehydrated_device;
 
-#[cfg(feature = "ldap")]
-use std::collections::HashMap;
 use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 
-#[cfg(feature = "ldap")]
-use conduwuit::result::LogErr;
 use conduwuit::{
-	Err, Error, Result, Server, debug_warn, err, info, is_equal_to, trace,
+	Err, Error, Result, Server, debug_error, debug_warn, err, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
 };
-#[cfg(feature = "ldap")]
-use conduwuit_core::{debug, error};
 use database::{Deserialized, Ignore, Interfix, Json, Map};
 use futures::{Stream, StreamExt, TryFutureExt};
-#[cfg(feature = "ldap")]
-use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use ruma::{
-	DeviceId, KeyId, MilliSecondsSinceUnixEpoch, OneTimeKeyAlgorithm, OneTimeKeyId,
-	OneTimeKeyName, OwnedDeviceId, OwnedKeyId, OwnedMxcUri, OwnedUserId, RoomId, UInt, UserId,
-	api::client::{device::Device, error::ErrorKind, filter::FilterDefinition},
+	DeviceId, MilliSecondsSinceUnixEpoch, OneTimeKeyAlgorithm, OneTimeKeyId, OneTimeKeyName,
+	OwnedDeviceId, OwnedKeyId, OwnedMxcUri, OwnedOneTimeKeyId, OwnedUserId, RoomId, UInt, UserId,
+	api::{
+		client::{device::Device, filter::FilterDefinition},
+		error::ErrorKind,
+	},
 	encryption::{CrossSigningKey, DeviceKeys, OneTimeKey},
 	events::{
-		AnyToDeviceEvent, GlobalAccountDataEventType,
-		ignored_user_list::IgnoredUserListEvent,
-		invite_permission_config::{FilterLevel, InvitePermissionConfigEvent},
+		AnyToDeviceEvent, GlobalAccountDataEventType, ignored_user_list::IgnoredUserListEvent,
 	},
 	serde::Raw,
 	uint,
 };
+use ruminuwuity::invite_permission_config::{FilterLevel, InvitePermissionConfigEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -42,6 +36,19 @@ pub struct UserSuspension {
 	pub suspended_at: u64,
 	/// User ID of who suspended this user
 	pub suspended_by: String,
+}
+
+/// A password hash. This is only for use when setting a user's password,
+/// if the hash needs to be kept around for a while without keeping the password
+/// in memory.
+pub struct HashedPassword(String);
+
+impl HashedPassword {
+	pub fn new(password: &str) -> Result<Self> {
+		Ok(Self(utils::hash::password(password).map_err(|e| {
+			err!(Request(InvalidParam("Password does not meet the requirements: {e}")))
+		})?))
+	}
 }
 
 pub struct Service {
@@ -63,6 +70,7 @@ struct Data {
 	keychangeid_userid: Arc<Map>,
 	keyid_key: Arc<Map>,
 	onetimekeyid_onetimekeys: Arc<Map>,
+	fallbackkeyid_fallbackkey: Arc<Map>,
 	openidtoken_expiresatuserid: Arc<Map>,
 	logintoken_expiresatuserid: Arc<Map>,
 	todeviceid_events: Arc<Map>,
@@ -71,13 +79,11 @@ struct Data {
 	userdeviceid_token: Arc<Map>,
 	userfilterid_filter: Arc<Map>,
 	userid_avatarurl: Arc<Map>,
-	userid_blurhash: Arc<Map>,
 	userid_dehydrateddevice: Arc<Map>,
 	userid_devicelistversion: Arc<Map>,
 	userid_displayname: Arc<Map>,
 	userid_lastonetimekeyupdate: Arc<Map>,
 	userid_masterkeyid: Arc<Map>,
-	userid_origin: Arc<Map>,
 	userid_password: Arc<Map>,
 	userid_suspension: Arc<Map>,
 	userid_lock: Arc<Map>,
@@ -104,6 +110,7 @@ impl crate::Service for Service {
 				keychangeid_userid: args.db["keychangeid_userid"].clone(),
 				keyid_key: args.db["keyid_key"].clone(),
 				onetimekeyid_onetimekeys: args.db["onetimekeyid_onetimekeys"].clone(),
+				fallbackkeyid_fallbackkey: args.db["fallbackkeyid_fallbackkey"].clone(),
 				openidtoken_expiresatuserid: args.db["openidtoken_expiresatuserid"].clone(),
 				logintoken_expiresatuserid: args.db["logintoken_expiresatuserid"].clone(),
 				todeviceid_events: args.db["todeviceid_events"].clone(),
@@ -112,13 +119,11 @@ impl crate::Service for Service {
 				userdeviceid_token: args.db["userdeviceid_token"].clone(),
 				userfilterid_filter: args.db["userfilterid_filter"].clone(),
 				userid_avatarurl: args.db["userid_avatarurl"].clone(),
-				userid_blurhash: args.db["userid_blurhash"].clone(),
 				userid_dehydrateddevice: args.db["userid_dehydrateddevice"].clone(),
 				userid_devicelistversion: args.db["userid_devicelistversion"].clone(),
 				userid_displayname: args.db["userid_displayname"].clone(),
 				userid_lastonetimekeyupdate: args.db["userid_lastonetimekeyupdate"].clone(),
 				userid_masterkeyid: args.db["userid_masterkeyid"].clone(),
-				userid_origin: args.db["userid_origin"].clone(),
 				userid_password: args.db["userid_password"].clone(),
 				userid_suspension: args.db["userid_suspension"].clone(),
 				userid_lock: args.db["userid_lock"].clone(),
@@ -156,21 +161,17 @@ impl Service {
 		sender_user: &UserId,
 		recipient_user: &UserId,
 	) -> FilterLevel {
-		let level = if self.user_is_ignored(sender_user, recipient_user).await {
+		if self.user_is_ignored(sender_user, recipient_user).await {
 			FilterLevel::Ignore
 		} else {
 			self.services
 				.account_data
 				.get_global(recipient_user, GlobalAccountDataEventType::InvitePermissionConfig)
 				.await
-				.map(|config: InvitePermissionConfigEvent| {
+				.map_or(FilterLevel::Allow, |config: InvitePermissionConfigEvent| {
 					config.content.user_filter_level(sender_user)
 				})
-				.unwrap_or(FilterLevel::Allow)
-		};
-
-		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");
-		level
+		}
 	}
 
 	/// Check if a user is an admin
@@ -180,43 +181,36 @@ impl Service {
 	}
 
 	/// Create a new user account on this homeserver.
-	///
-	/// User origin is by default "password" (meaning that it will login using
-	/// its user_id/password). Users with other origins (currently only "ldap"
-	/// is available) have special login processes.
 	#[inline]
-	pub async fn create(
-		&self,
-		user_id: &UserId,
-		password: Option<&str>,
-		origin: Option<&str>,
-	) -> Result<()> {
-		if !self.services.globals.user_is_local(user_id)
-			&& (password.is_some() || origin.is_some())
-		{
-			return Err!("Cannot create a nonlocal user with a set password or origin");
+	pub async fn create(&self, user_id: &UserId, password: Option<HashedPassword>) -> Result<()> {
+		if !self.services.globals.user_is_local(user_id) && password.is_some() {
+			return Err!("Cannot create a nonlocal user with a set password");
 		}
 
-		self.db
-			.userid_origin
-			.insert(user_id, origin.unwrap_or("password"));
-		self.set_password(user_id, password).await?;
+		self.set_password(user_id, password);
 
 		Ok(())
 	}
+
+	// /// Create a new account for a local human or bot user.
+	// pub async fn create_local_account(
+	// 	&self,
+	// 	username: String,
+	// 	password:
+	// )
 
 	/// Deactivate account
 	pub async fn deactivate_account(&self, user_id: &UserId) -> Result<()> {
 		// Remove all associated devices
 		self.all_device_ids(user_id)
-			.for_each(|device_id| self.remove_device(user_id, device_id))
+			.for_each(async |device_id| self.remove_device(user_id, &device_id).await)
 			.await;
 
 		// Set the password to "" to indicate a deactivated account. Hashes will never
 		// result in an empty string, so the user will not be able to log in again.
 		// Systems like changing the password without logging in should check if the
 		// account is deactivated.
-		self.set_password(user_id, None).await?;
+		self.set_password(user_id, None);
 
 		// TODO: Unhook 3PID
 		Ok(())
@@ -259,10 +253,12 @@ impl Service {
 
 	pub async fn unlock_account(&self, user_id: &UserId) { self.db.userid_lock.remove(user_id); }
 
-	/// Check if a user has an account on this homeserver.
+	/// Check if the provided user ID belongs to an existing (possibly
+	/// deactivated) account on this homeserver.
 	#[inline]
 	pub async fn exists(&self, user_id: &UserId) -> bool {
-		self.db.userid_password.get(user_id).await.is_ok()
+		self.services.globals.user_is_local(user_id)
+			&& self.db.userid_password.get(user_id).await.is_ok()
 	}
 
 	/// Check if account is deactivated
@@ -345,15 +341,8 @@ impl Service {
 		self.db.token_userdeviceid.get(token).await.deserialized()
 	}
 
-	/// Returns an iterator over all users on this homeserver (offered for
-	/// compatibility)
-	#[allow(clippy::iter_without_into_iter, clippy::iter_not_returning_iterator)]
-	pub fn iter(&self) -> impl Stream<Item = OwnedUserId> + Send + '_ {
-		self.stream().map(ToOwned::to_owned)
-	}
-
 	/// Returns an iterator over all users on this homeserver.
-	pub fn stream(&self) -> impl Stream<Item = &UserId> + Send {
+	pub fn stream(&self) -> impl Stream<Item = OwnedUserId> + Send {
 		self.db.userid_password.keys().ignore_err()
 	}
 
@@ -361,54 +350,50 @@ impl Service {
 	///
 	/// A user account is considered `local` if the length of it's password is
 	/// greater then zero.
-	pub fn list_local_users(&self) -> impl Stream<Item = &UserId> + Send + '_ {
+	pub fn list_local_users(&self) -> impl Stream<Item = OwnedUserId> + Send + '_ {
 		self.db
 			.userid_password
 			.stream()
 			.ignore_err()
-			.ready_filter_map(|(u, p): (&UserId, &[u8])| (!p.is_empty()).then_some(u))
+			.ready_filter_map(|(u, p): (OwnedUserId, &[u8])| (!p.is_empty()).then_some(u))
 	}
 
-	/// Returns the origin of the user (password/LDAP/...).
-	pub async fn origin(&self, user_id: &UserId) -> Result<String> {
-		self.db.userid_origin.get(user_id).await.deserialized()
+	/// Set a user's password.
+	pub fn set_password(&self, user_id: &UserId, password: Option<HashedPassword>) {
+		if let Some(hash) = password {
+			self.db.userid_password.insert(user_id, hash.0);
+		} else {
+			self.db.userid_password.insert(user_id, b"");
+		}
 	}
 
-	/// Returns the password hash for the given user.
-	pub async fn password_hash(&self, user_id: &UserId) -> Result<String> {
-		self.db.userid_password.get(user_id).await.deserialized()
-	}
-
-	/// Hash and set the user's password to the Argon2 hash
-	pub async fn set_password(&self, user_id: &UserId, password: Option<&str>) -> Result<()> {
-		// Cannot change the password of a LDAP user. There are two special cases :
-		// - a `None` password can be used to deactivate a LDAP user
-		// - a "*" password is used as the default password of an active LDAP user
-		if cfg!(feature = "ldap")
-			&& password.is_some_and(|pwd| pwd != "*")
-			&& self
-				.db
-				.userid_origin
-				.get(user_id)
-				.await
-				.deserialized::<String>()
-				.is_ok_and(is_equal_to!("ldap"))
+	/// Check a user's password.
+	pub async fn check_password(&self, user_id: &UserId, password: &str) -> Result<OwnedUserId> {
+		let (hash, user_id): (String, OwnedUserId) = if let Ok(hash) =
+			self.db.userid_password.get(user_id).await.deserialized()
 		{
-			return Err!(Request(InvalidParam("Cannot change password of a LDAP user")));
+			(hash, user_id.to_owned())
+		} else {
+			// We also check the lowercased version of the user ID to handle legacy user IDs
+			// better
+			let lowercase_user_id = UserId::parse(user_id.as_str().to_lowercase()).unwrap();
+
+			if let Ok(hash) = self.db.userid_password.get(user_id).await.deserialized() {
+				(hash, lowercase_user_id)
+			} else {
+				return Err!(Request(InvalidParam("This user cannot log in with a password.")));
+			}
+		};
+
+		if hash.is_empty() {
+			return Err!(Request(UserDeactivated("This user is deactivated")));
 		}
 
-		password
-			.map(utils::hash::password)
-			.transpose()
-			.map_err(|e| {
-				err!(Request(InvalidParam("Password does not meet the requirements: {e}")))
-			})?
-			.map_or_else(
-				|| self.db.userid_password.insert(user_id, b""),
-				|hash| self.db.userid_password.insert(user_id, hash),
-			);
+		utils::hash::verify_password(password, &hash)
+			.inspect_err(|e| debug_error!("{e}"))
+			.map_err(|_| err!(Request(Forbidden("Invalid identifier or password."))))?;
 
-		Ok(())
+		Ok(user_id)
 	}
 
 	/// Returns the displayname of a user on this homeserver.
@@ -443,20 +428,6 @@ impl Service {
 		}
 	}
 
-	/// Get the blurhash of a user.
-	pub async fn blurhash(&self, user_id: &UserId) -> Result<String> {
-		self.db.userid_blurhash.get(user_id).await.deserialized()
-	}
-
-	/// Sets a new avatar_url or removes it if avatar_url is None.
-	pub fn set_blurhash(&self, user_id: &UserId, blurhash: Option<String>) {
-		if let Some(blurhash) = blurhash {
-			self.db.userid_blurhash.insert(user_id, blurhash);
-		} else {
-			self.db.userid_blurhash.remove(user_id);
-		}
-	}
-
 	/// Adds a new device to a user.
 	pub async fn create_device(
 		&self,
@@ -473,21 +444,18 @@ impl Service {
 		}
 
 		let key = (user_id, device_id);
-		let val = Device {
-			device_id: device_id.into(),
-			display_name: initial_device_display_name,
-			last_seen_ip: client_ip,
-			last_seen_ts: Some(MilliSecondsSinceUnixEpoch::now()),
-		};
+		let mut device = Device::new(device_id.into());
+		device.display_name = initial_device_display_name;
+		device.last_seen_ip = client_ip;
+		device.last_seen_ts = Some(MilliSecondsSinceUnixEpoch::now());
 
 		increment(&self.db.userid_devicelistversion, user_id.as_bytes());
-		self.db.userdeviceid_metadata.put(key, Json(val));
+		self.db.userdeviceid_metadata.put(key, Json(device));
 		self.set_token(user_id, device_id, token).await
 	}
 
 	/// Removes a device from a user.
 	pub async fn remove_device(&self, user_id: &UserId, device_id: &DeviceId) {
-		info!("Removing device {device_id} for user {user_id}");
 		// Remove dehydrated device if this is the dehydrated device
 		let _: Result<_> = self
 			.remove_dehydrated_device(user_id, Some(device_id))
@@ -514,16 +482,6 @@ impl Service {
 
 		increment(&self.db.userid_devicelistversion, user_id.as_bytes());
 
-		// Remove MSC3890 local notification settings for this device
-		self.services
-			.account_data
-			.delete_all(None, user_id, &[
-				&format!("org.matrix.msc3890.local_notification_settings.{device_id}"),
-				&format!("m.local_notification_settings.{device_id}"),
-			])
-			.await
-			.ok();
-
 		self.db.userdeviceid_metadata.del(userdeviceid);
 		self.mark_device_key_update(user_id).await;
 	}
@@ -532,13 +490,13 @@ impl Service {
 	pub fn all_device_ids<'a>(
 		&'a self,
 		user_id: &'a UserId,
-	) -> impl Stream<Item = &'a DeviceId> + Send + 'a {
+	) -> impl Stream<Item = OwnedDeviceId> + Send + 'a {
 		let prefix = (user_id, Interfix);
 		self.db
 			.userdeviceid_metadata
 			.keys_prefix(&prefix)
 			.ignore_err()
-			.map(|(_, device_id): (Ignore, &DeviceId)| device_id)
+			.map(|(_, device_id): (Ignore, OwnedDeviceId)| device_id)
 	}
 
 	pub async fn get_token(&self, user_id: &UserId, device_id: &DeviceId) -> Result<String> {
@@ -617,7 +575,7 @@ impl Service {
 		&self,
 		user_id: &UserId,
 		device_id: &DeviceId,
-		one_time_key_key: &KeyId<OneTimeKeyAlgorithm, OneTimeKeyName>,
+		one_time_key_key: &OneTimeKeyId,
 		one_time_key_value: &Raw<OneTimeKey>,
 	) -> Result {
 		// All devices have metadata
@@ -654,6 +612,39 @@ impl Service {
 		Ok(())
 	}
 
+	/// Save a fallback key for the given user, device, and algorithm
+	/// This key will replace an existing fallback key
+	pub async fn add_fallback_key(
+		&self,
+		user_id: &UserId,
+		device_id: &DeviceId,
+		fallback_key_id: &OneTimeKeyId,
+		fallback_key: &Raw<OneTimeKey>,
+		used: bool,
+	) -> Result {
+		// All devices have metadata
+		// Only existing devices should be able to call this, but we shouldn't assert
+		// either...
+		let key = (user_id, device_id);
+		if self.db.userdeviceid_metadata.qry(&key).await.is_err() {
+			return Err!(Database(error!(
+				%user_id,
+				%device_id,
+				"User does not exist or device has no metadata."
+			)));
+		}
+
+		// There is one fallback key slot per user, per device, per algorithm
+		// Therefore we use this as the DB key for this column
+		let db_key = (user_id, device_id, fallback_key_id.algorithm());
+
+		self.db
+			.fallbackkeyid_fallbackkey
+			.put(db_key, (used, fallback_key_id.as_str(), Json(fallback_key)));
+
+		Ok(())
+	}
+
 	pub async fn last_one_time_keys_update(&self, user_id: &UserId) -> u64 {
 		self.db
 			.userid_lastonetimekeyupdate
@@ -685,6 +676,8 @@ impl Service {
 			.onetimekeyid_onetimekeys
 			.raw_stream_prefix(&prefix)
 			.ignore_err()
+			.next()
+			.await
 			.map(|(key, val)| {
 				self.db.onetimekeyid_onetimekeys.remove(key);
 
@@ -703,11 +696,44 @@ impl Service {
 					.unwrap();
 
 				(key, val)
-			})
-			.next()
-			.await;
+			});
 
-		one_time_key.ok_or_else(|| err!(Request(NotFound("No one-time-key found"))))
+		if let Some(result) = one_time_key {
+			return Ok(result);
+		}
+
+		// No one-time key has been found. Look for a fallback key.
+
+		let db_key = (user_id, device_id, key_algorithm);
+
+		let fallback_key = self
+			.db
+			.fallbackkeyid_fallbackkey
+			.qry(&db_key)
+			.await
+			.ok()
+			.and_then(|handle| {
+				handle
+					.deserialized::<(bool, OwnedOneTimeKeyId, Raw<OneTimeKey>)>()
+					.ok()
+			});
+
+		if let Some((used, fallback_key_id, fallback_key_value)) = fallback_key {
+			if !used {
+				// write the key to the database again to mark it as used
+				self.add_fallback_key(
+					user_id,
+					device_id,
+					&fallback_key_id,
+					&fallback_key_value,
+					true,
+				)
+				.await?;
+			}
+			return Ok((fallback_key_id, fallback_key_value));
+		}
+
+		Err(err!(Request(NotFound("No one-time key or fallback key found"))))
 	}
 
 	pub async fn count_one_time_keys(
@@ -740,6 +766,34 @@ impl Service {
 		algorithm_counts
 	}
 
+	pub async fn list_unused_fallback_key_types(
+		&self,
+		user_id: &UserId,
+		device_id: &DeviceId,
+	) -> Vec<OneTimeKeyAlgorithm> {
+		type KeyVal = ((String, String, OneTimeKeyAlgorithm), (bool, String, Ignore));
+
+		let mut query = user_id.as_bytes().to_vec();
+		query.push(0xFF);
+		query.extend_from_slice(device_id.as_bytes());
+		query.push(0xFF);
+
+		let mut unused_algorithms = Vec::new();
+
+		self.db
+			.fallbackkeyid_fallbackkey
+			.stream_prefix(&query)
+			.ignore_err()
+			.ready_for_each(|((_, _, fallback_key_algorithm), (used, ..)): KeyVal| {
+				if !used {
+					unused_algorithms.push(fallback_key_algorithm);
+				}
+			})
+			.await;
+
+		unused_algorithms
+	}
+
 	pub async fn add_device_keys(
 		&self,
 		user_id: &UserId,
@@ -766,12 +820,6 @@ impl Service {
 
 		if let Some(master_key) = master_key {
 			let (master_key_key, _) = parse_master_key(user_id, master_key)?;
-
-			info!(
-				target: "cross_signing",
-				"Adding master cross-signing key for user {}",
-				user_id
-			);
 
 			self.db
 				.keyid_key
@@ -805,12 +853,6 @@ impl Service {
 			let mut self_signing_key_key = prefix.clone();
 			self_signing_key_key.extend_from_slice(self_signing_key_id.as_bytes());
 
-			info!(
-				target: "cross_signing",
-				"Adding self-signing key for user {}",
-				user_id
-			);
-
 			self.db
 				.keyid_key
 				.insert(&self_signing_key_key, self_signing_key.json().get().as_bytes());
@@ -820,17 +862,11 @@ impl Service {
 				.insert(user_id.as_bytes(), &self_signing_key_key);
 		}
 
+		// User-signing key
 		if let Some(user_signing_key) = user_signing_key {
 			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 
 			let user_signing_key_key = (user_id, &user_signing_key_id);
-
-			info!(
-				target: "cross_signing",
-				"Adding user-signing key for user {}",
-				user_id
-			);
-
 			self.db
 				.keyid_key
 				.put_raw(user_signing_key_key, user_signing_key.json().get().as_bytes());
@@ -863,22 +899,16 @@ impl Service {
 			.await
 			.map_err(|_| err!(Request(InvalidParam("Tried to sign nonexistent key"))))?
 			.deserialized()
-			.map_err(|e| err!(Database(info!("key in keyid_key is invalid: {e:?}"))))?;
+			.map_err(|e| err!(Database(debug_warn!("key in keyid_key is invalid: {e:?}"))))?;
 
 		let signatures = cross_signing_key
-			.as_object_mut()
-			.ok_or_else(|| err!(Database(info!("key in keyid_key is not an object"))))?
-			.entry("signatures")
-			.or_insert_with(|| {
-				info!(
-					target: "cross_signing",
-					"Key {key_id} of {target_id} has no signatures field, initializing empty"
-				);
-				serde_json::json!({})
-			})
+			.get_mut("signatures")
+			.ok_or_else(|| {
+				err!(Database(debug_warn!("key in keyid_key has no signatures field")))
+			})?
 			.as_object_mut()
 			.ok_or_else(|| {
-				err!(Database(info!("key in keyid_key has invalid signatures field.")))
+				err!(Database(debug_warn!("key in keyid_key has invalid signatures field.")))
 			})?
 			.entry(sender_id.to_string())
 			.or_insert_with(|| serde_json::Map::new().into());
@@ -886,7 +916,7 @@ impl Service {
 		signatures
 			.as_object_mut()
 			.ok_or_else(|| {
-				err!(Database(info!("signatures in keyid_key for a user is invalid.")))
+				err!(Database(debug_warn!("signatures in keyid_key for a user is invalid.")))
 			})?
 			.insert(signature.0, signature.1.into());
 
@@ -904,7 +934,7 @@ impl Service {
 		user_id: &'a UserId,
 		from: Option<u64>,
 		to: Option<u64>,
-	) -> impl Stream<Item = &'a UserId> + Send + 'a {
+	) -> impl Stream<Item = OwnedUserId> + Send + 'a {
 		self.keys_changed_user_or_room(user_id.as_str(), from, to)
 			.map(|(user_id, ..)| user_id)
 	}
@@ -915,7 +945,7 @@ impl Service {
 		room_id: &'a RoomId,
 		from: Option<u64>,
 		to: Option<u64>,
-	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
+	) -> impl Stream<Item = (OwnedUserId, u64)> + Send + 'a {
 		self.keys_changed_user_or_room(room_id.as_str(), from, to)
 	}
 
@@ -924,8 +954,8 @@ impl Service {
 		user_or_room_id: &'a str,
 		from: Option<u64>,
 		to: Option<u64>,
-	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
-		type KeyVal<'a> = ((&'a str, u64), &'a UserId);
+	) -> impl Stream<Item = (OwnedUserId, u64)> + Send + 'a {
+		type KeyVal<'a> = ((&'a str, u64), OwnedUserId);
 
 		let from = from.unwrap_or(0);
 		let to = to.unwrap_or(u64::MAX);
@@ -947,7 +977,13 @@ impl Service {
 			.state_cache
 			.rooms_joined(user_id)
 			// Don't send key updates to unencrypted rooms
-			.filter(|room_id| self.services.state_accessor.is_encrypted_room(room_id))
+			.filter_map(async |room_id| {
+				if self.services.state_accessor.is_encrypted_room(&room_id).await {
+					Some(room_id)
+				} else {
+					None
+				}
+			})
 			.ready_for_each(|room_id| {
 				let key = (room_id, count);
 				self.db.keychangeid_userid.put_raw(key, user_id);
@@ -1031,19 +1067,6 @@ impl Service {
 		event_type: &str,
 		content: serde_json::Value,
 	) {
-		if event_type.starts_with("m.key.verification.") {
-			let tx_id = content
-				.get("transaction_id")
-				.and_then(|v| v.as_str())
-				.unwrap_or("unknown");
-
-			info!(
-				target: "cross_signing",
-				"Verification event ({}) from {} to {}/{} (tx_id: {})",
-				event_type, sender, target_user_id, target_device_id, tx_id
-			);
-		}
-
 		let count = self.services.globals.next_count().unwrap();
 
 		let key = (target_user_id, target_device_id, count);
@@ -1064,7 +1087,7 @@ impl Service {
 		since: Option<u64>,
 		to: Option<u64>,
 	) -> impl Stream<Item = (u64, Raw<AnyToDeviceEvent>)> + Send + 'a {
-		type Key<'a> = (&'a UserId, &'a DeviceId, u64);
+		type Key = (OwnedUserId, OwnedDeviceId, u64);
 
 		let from = (user_id, device_id, since.map_or(0, |since| since.saturating_add(1)));
 
@@ -1072,7 +1095,7 @@ impl Service {
 			.todeviceid_events
 			.stream_from(&from)
 			.ignore_err()
-			.ready_take_while(move |((user_id_, device_id_, count), _): &(Key<'_>, _)| {
+			.ready_take_while(move |((user_id_, device_id_, count), _): &(Key, _)| {
 				user_id == *user_id_
 					&& device_id == *device_id_
 					&& to.is_none_or(|to| *count <= to)
@@ -1088,7 +1111,7 @@ impl Service {
 	) where
 		Until: Into<Option<u64>> + Send,
 	{
-		type Key<'a> = (&'a UserId, &'a DeviceId, u64);
+		type Key = (OwnedUserId, OwnedDeviceId, u64);
 
 		let until = until.into().unwrap_or(u64::MAX);
 		let from = (user_id, device_id, until);
@@ -1096,10 +1119,10 @@ impl Service {
 			.todeviceid_events
 			.rev_keys_from(&from)
 			.ignore_err()
-			.ready_take_while(move |(user_id_, device_id_, _): &Key<'_>| {
+			.ready_take_while(move |(user_id_, device_id_, _): &Key| {
 				user_id == *user_id_ && device_id == *device_id_
 			})
-			.ready_for_each(|key: Key<'_>| {
+			.ready_for_each(|key: Key| {
 				self.db.todeviceid_events.del(key);
 			})
 			.await;
@@ -1326,7 +1349,6 @@ impl Service {
 		profile_key: &str,
 		profile_key_value: Option<serde_json::Value>,
 	) {
-		// TODO: insert to the stable MSC4175 key when it's stable
 		let key = (user_id, profile_key);
 
 		if let Some(value) = profile_key_value {
@@ -1336,175 +1358,14 @@ impl Service {
 		}
 	}
 
-	#[cfg(feature = "ldap")]
-	async fn create_ldap_connection(
-		config: &conduwuit_core::config::LdapConfig,
-		uri: &str,
-	) -> Result<(LdapConnAsync, ldap3::Ldap), ldap3::LdapError> {
-		let mut settings = LdapConnSettings::new();
-
-		if config.use_starttls {
-			settings = settings.set_starttls(true);
-		}
-
-		if config.disable_tls_verification {
-			settings = settings.set_no_tls_verify(true);
-		}
-
-		LdapConnAsync::with_settings(settings, uri).await
-	}
-
-	#[cfg(not(feature = "ldap"))]
-	pub async fn search_ldap(&self, _user_id: &UserId) -> Result<Vec<(String, Option<bool>)>> {
-		Err!(FeatureDisabled("ldap"))
-	}
-
-	#[cfg(feature = "ldap")]
-	pub async fn search_ldap(&self, user_id: &UserId) -> Result<Vec<(String, Option<bool>)>> {
-		let localpart = user_id.localpart().to_owned();
-		let lowercased_localpart = localpart.to_lowercase();
-
-		let config = &self.services.server.config.ldap;
-		let uri = config
-			.uri
-			.as_ref()
-			.ok_or_else(|| err!(Ldap(error!("LDAP URI is not configured."))))?;
-
-		debug!(?uri, "LDAP creating connection...");
-		let (conn, mut ldap) = Self::create_ldap_connection(config, uri.as_str())
-			.await
-			.map_err(|e| err!(Ldap(error!(%user_id, "LDAP connection setup error: {e}"))))?;
-
-		let driver = self.services.server.runtime().spawn(async move {
-			match conn.drive().await {
-				| Err(e) => error!("LDAP connection error: {e}"),
-				| Ok(()) => debug!("LDAP connection completed."),
-			}
-		});
-
-		match (&config.bind_dn, &config.bind_password_file) {
-			| (Some(bind_dn), Some(bind_password_file)) => {
-				let bind_pw = String::from_utf8(std::fs::read(bind_password_file)?)?;
-				ldap.simple_bind(bind_dn, bind_pw.trim())
-					.await
-					.and_then(ldap3::LdapResult::success)
-					.map_err(|e| err!(Ldap(error!("LDAP bind error: {e}"))))?;
-			},
-			| (..) => {},
-		}
-
-		let attr = [&config.uid_attribute, &config.name_attribute];
-
-		let user_filter = &config.filter.replace("{username}", &lowercased_localpart);
-
-		let (entries, _result) = ldap
-			.search(&config.base_dn, Scope::Subtree, user_filter, &attr)
-			.await
-			.and_then(ldap3::SearchResult::success)
-			.inspect(|(entries, result)| trace!(?entries, ?result, "LDAP Search"))
-			.map_err(|e| err!(Ldap(error!(?attr, ?user_filter, "LDAP search error: {e}"))))?;
-
-		let mut dns: HashMap<String, Option<bool>> = entries
-			.into_iter()
-			.filter_map(|entry| {
-				let search_entry = SearchEntry::construct(entry);
-				debug!(?search_entry, "LDAP search entry");
-				search_entry
-					.attrs
-					.get(&config.uid_attribute)
-					.into_iter()
-					.chain(search_entry.attrs.get(&config.name_attribute))
-					.any(|ids| ids.contains(&localpart) || ids.contains(&lowercased_localpart))
-					.then_some((search_entry.dn, None))
-			})
-			.collect();
-
-		if !config.admin_filter.is_empty() {
-			// Update all existing entries to Some(false) since we can now determine admin
-			// status
-			for admin_status in dns.values_mut() {
-				*admin_status = Some(false);
-			}
-			let admin_base_dn = if config.admin_base_dn.is_empty() {
-				&config.base_dn
-			} else {
-				&config.admin_base_dn
-			};
-
-			let admin_filter = &config
-				.admin_filter
-				.replace("{username}", &lowercased_localpart);
-
-			let (admin_entries, _result) = ldap
-				.search(admin_base_dn, Scope::Subtree, admin_filter, &attr)
-				.await
-				.and_then(ldap3::SearchResult::success)
-				.inspect(|(entries, result)| trace!(?entries, ?result, "LDAP Admin Search"))
-				.map_err(|e| {
-					err!(Ldap(error!(?attr, ?admin_filter, "Ldap admin search error: {e}")))
-				})?;
-
-			dns.extend(admin_entries.into_iter().filter_map(|entry| {
-				let search_entry = SearchEntry::construct(entry);
-				debug!(?search_entry, "LDAP search entry");
-				search_entry
-					.attrs
-					.get(&config.uid_attribute)
-					.into_iter()
-					.chain(search_entry.attrs.get(&config.name_attribute))
-					.any(|ids| ids.contains(&localpart) || ids.contains(&lowercased_localpart))
-					.then_some((search_entry.dn, Some(true)))
-			}));
-		}
-
-		ldap.unbind()
-			.await
-			.map_err(|e| err!(Ldap(error!("LDAP unbind error: {e}"))))?;
-
-		driver.await.log_err().ok();
-
-		Ok(dns.drain().collect())
-	}
-
-	#[cfg(not(feature = "ldap"))]
-	pub async fn auth_ldap(&self, _user_dn: &str, _password: &str) -> Result {
-		Err!(FeatureDisabled("ldap"))
-	}
-
-	#[cfg(feature = "ldap")]
-	pub async fn auth_ldap(&self, user_dn: &str, password: &str) -> Result {
-		let config = &self.services.server.config.ldap;
-		let uri = config
-			.uri
-			.as_ref()
-			.ok_or_else(|| err!(Ldap(error!("LDAP URI is not configured."))))?;
-
-		debug!(?uri, "LDAP creating connection...");
-		let (conn, mut ldap) = Self::create_ldap_connection(config, uri.as_str())
-			.await
-			.map_err(|e| err!(Ldap(error!(%user_dn, "LDAP connection setup error: {e}"))))?;
-
-		let driver = self.services.server.runtime().spawn(async move {
-			match conn.drive().await {
-				| Err(e) => error!("LDAP connection error: {e}"),
-				| Ok(()) => debug!("LDAP connection completed."),
-			}
-		});
-
-		ldap.simple_bind(user_dn, password)
-			.await
-			.and_then(ldap3::LdapResult::success)
-			.map_err(|e| {
-				err!(Request(Forbidden(debug_error!("LDAP authentication error: {e}"))))
-			})?;
-
-		ldap.unbind()
-			.await
-			.map_err(|e| err!(Ldap(error!("LDAP unbind error: {e}"))))?;
-
-		driver.await.log_err().ok();
-
-		Ok(())
+	/// Clears all profile data for a user, including display name and avatar
+	/// url.
+	pub async fn clear_profile(&self, user_id: &UserId) {
+		self.set_displayname(user_id, None);
+		self.set_avatar_url(user_id, None);
+		self.all_profile_keys(user_id)
+			.ready_for_each(|(key, _)| self.set_profile_key(user_id, &key, None))
+			.await;
 	}
 }
 
@@ -1575,12 +1436,6 @@ where
 				.map_err(|_| Error::bad_database("Invalid user ID in database."))?;
 			if sender_user == Some(user_id) || sid == user_id || allowed_signatures(sid) {
 				signatures.insert(user, signature);
-			} else {
-				info!(
-					target: "cross_signing",
-					"Dropped cross-signing signature for user {} (sender: {:?}, target: {})",
-					sid, sender_user, user_id
-				);
 			}
 		}
 	}

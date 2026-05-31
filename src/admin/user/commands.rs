@@ -4,28 +4,26 @@ use std::{
 };
 
 use api::client::{
-	full_user_deactivate, join_room_by_id_helper, leave_room, recreate_push_rules_and_return,
-	remote_leave_room,
+	full_user_deactivate, leave_room, recreate_push_rules_and_return, remote_leave_room,
 };
 use conduwuit::{
-	Err, Result, debug_warn, err, error, info,
-	matrix::{Event, pdu::PduBuilder},
+	Err, Result, debug_warn, error, info,
+	matrix::{Event, pdu::PartialPdu},
 	utils::{self, ReadyExt},
 	warn,
 };
 use futures::{FutureExt, StreamExt};
 use lettre::Address;
 use ruma::{
-	OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, UserId,
+	OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, ServerName,
+	UserId, assign,
 	events::{
-		RoomAccountDataEventType, StateEventType,
-		room::{
-			power_levels::{RoomPowerLevels, RoomPowerLevelsEventContent},
-			redaction::RoomRedactionEventContent,
-		},
+		RoomAccountDataEventType,
+		room::{power_levels::RoomPowerLevelsEventContent, redaction::RoomRedactionEventContent},
 		tag::{TagEvent, TagEventContent, TagInfo},
 	},
 };
+use service::users::HashedPassword;
 
 use crate::{
 	admin_command, get_room_info,
@@ -41,7 +39,7 @@ pub(super) async fn list_users(&self) -> Result {
 		.services
 		.users
 		.list_local_users()
-		.map(ToString::to_string)
+		.map(|id| id.as_str().to_owned())
 		.collect()
 		.await;
 
@@ -72,7 +70,7 @@ pub(super) async fn create_user(&self, username: String, password: Option<String
 	// Create user
 	self.services
 		.users
-		.create(&user_id, Some(password.as_str()), None)
+		.create(&user_id, Some(HashedPassword::new(&password)?))
 		.await?;
 
 	// Default to pretty displayname
@@ -103,11 +101,12 @@ pub(super) async fn create_user(&self, username: String, password: Option<String
 			ruma::events::GlobalAccountDataEventType::PushRules
 				.to_string()
 				.into(),
-			&serde_json::to_value(ruma::events::push_rules::PushRulesEvent {
-				content: ruma::events::push_rules::PushRulesEventContent {
-					global: ruma::push::Ruleset::server_default(&user_id),
-				},
-			})?,
+			&serde_json::to_value(ruma::events::push_rules::PushRulesEvent::new(
+				ruma::events::push_rules::PushRulesEventContent::new(
+					ruma::push::Ruleset::server_default(&user_id),
+				),
+			))
+			.unwrap(),
 		)
 		.await?;
 
@@ -135,19 +134,20 @@ pub(super) async fn create_user(&self, username: String, password: Option<String
 			}
 
 			if let Some(room_server_name) = room.server_name() {
-				match join_room_by_id_helper(
-					self.services,
-					&user_id,
-					&room_id,
-					Some("Automatically joining this room upon registration".to_owned()),
-					&[
-						self.services.globals.server_name().to_owned(),
-						room_server_name.to_owned(),
-					],
-					&None,
-					None,
-				)
-				.await
+				match self
+					.services
+					.rooms
+					.membership
+					.join_room(
+						&user_id,
+						&room_id,
+						Some("Automatically joining this room upon registration".to_owned()),
+						&[
+							self.services.globals.server_name().to_owned(),
+							room_server_name.to_owned(),
+						],
+					)
+					.await
 				{
 					| Ok(_response) => {
 						info!("Automatically joined room {room} for user {user_id}");
@@ -276,24 +276,25 @@ pub(super) async fn reset_password(
 
 	let new_password = password.unwrap_or_else(|| utils::random_string(AUTO_GEN_PASSWORD_LENGTH));
 
-	match self
-		.services
+	self.services
 		.users
-		.set_password(&user_id, Some(new_password.as_str()))
-		.await
-	{
-		| Err(e) => return Err!("Couldn't reset the password for user {user_id}: {e}"),
-		| Ok(()) => {
-			write!(self, "Successfully reset the password for user {user_id}: `{new_password}`")
-		},
-	}
+		.set_password(&user_id, Some(HashedPassword::new(&new_password)?));
+
+	self.write_str(&format!(
+		"Successfully reset the password for user {user_id}: `{new_password}`"
+	))
 	.await?;
 
 	if logout {
 		self.services
 			.users
 			.all_device_ids(&user_id)
-			.for_each(|device_id| self.services.users.remove_device(&user_id, device_id))
+			.for_each(async |device_id| {
+				self.services
+					.users
+					.remove_device(&user_id, &device_id)
+					.await;
+			})
 			.await;
 		write!(self, "\nAll existing sessions have been logged out.").await?;
 	}
@@ -429,6 +430,82 @@ pub(super) async fn deactivate_all(&self, no_leave_rooms: bool, force: bool) -> 
 }
 
 #[admin_command]
+pub(super) async fn list_invited_rooms(&self, user_id: String) -> Result {
+	// Validate user id
+	let user_id = parse_local_user_id(self.services, &user_id)?;
+
+	let mut rooms: Vec<((OwnedRoomId, u64, String), Result<OwnedUserId>)> = self
+		.services
+		.rooms
+		.state_cache
+		.rooms_invited(&user_id)
+		.then(async |(room_id, _)| {
+			let sender = self
+				.services
+				.rooms
+				.state_cache
+				.invite_sender(&user_id, &room_id)
+				.await;
+			(get_room_info(self.services, &room_id).await, sender)
+		})
+		.collect()
+		.await;
+
+	if rooms.is_empty() {
+		return Err!("User is not invited to any rooms.");
+	}
+
+	rooms.sort_by_key(|r| r.0.1);
+	rooms.reverse();
+
+	let body = rooms
+		.iter()
+		.map(|((id, members, name), sender)| match sender {
+			| Ok(user_id) =>
+				format!("{id}\tInviter: {user_id}\tMembers: {members}\tName: {name}"),
+			| Err(_) => format!("{id}\tMembers: {members}\tName: {name}"),
+		})
+		.collect::<Vec<_>>()
+		.join("\n");
+
+	self.write_str(&format!("Rooms {user_id} is Invited to ({}):\n```\n{body}\n```", rooms.len()))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn reject_all_invites(&self, user_id: String) -> Result {
+	let user_id = parse_local_user_id(self.services, &user_id)?;
+
+	assert!(
+		self.services.globals.user_is_local(&user_id),
+		"Parsed user_id must be a local user"
+	);
+
+	let fails = self
+		.services
+		.rooms
+		.state_cache
+		.rooms_invited(&user_id)
+		.filter_map(async |(room_id, _)| {
+			match leave_room(self.services, &user_id, &room_id, None).await {
+				| Err(ref e) => {
+					warn!(%user_id, "Failed to leave {room_id}: {e}");
+					Some(())
+				},
+				| Ok(()) => None,
+			}
+		})
+		.count()
+		.await;
+
+	if fails > 0 {
+		return Err!("{fails} invites could not be rejected");
+	}
+
+	self.write_str("Successfully rejected all invites.").await
+}
+
+#[admin_command]
 pub(super) async fn list_joined_rooms(&self, user_id: String) -> Result {
 	// Validate user id
 	let user_id = parse_local_user_id(self.services, &user_id)?;
@@ -438,7 +515,7 @@ pub(super) async fn list_joined_rooms(&self, user_id: String) -> Result {
 		.rooms
 		.state_cache
 		.rooms_joined(&user_id)
-		.then(|room_id| get_room_info(self.services, room_id))
+		.then(async |room_id| get_room_info(self.services, &room_id).await)
 		.collect()
 		.await;
 
@@ -455,7 +532,7 @@ pub(super) async fn list_joined_rooms(&self, user_id: String) -> Result {
 		.collect::<Vec<_>>()
 		.join("\n");
 
-	self.write_str(&format!("Rooms {user_id} Joined ({}):\n```\n{body}\n```", rooms.len(),))
+	self.write_str(&format!("Rooms {user_id} Joined ({}):\n```\n{body}\n```", rooms.len()))
 		.await
 }
 
@@ -507,7 +584,7 @@ pub(super) async fn force_join_list_of_local_users(
 		.rooms
 		.state_cache
 		.room_members(&room_id)
-		.ready_any(|user_id| server_admins.contains(&user_id.to_owned()))
+		.ready_any(|user_id| server_admins.contains(&user_id))
 		.await
 	{
 		return Err!("There is not a single server admin in the room.",);
@@ -553,16 +630,12 @@ pub(super) async fn force_join_list_of_local_users(
 	let mut successful_joins: usize = 0;
 
 	for user_id in user_ids {
-		match join_room_by_id_helper(
-			self.services,
-			&user_id,
-			&room_id,
-			Some(String::from(BULK_JOIN_REASON)),
-			&servers,
-			&None,
-			None,
-		)
-		.await
+		match self
+			.services
+			.rooms
+			.membership
+			.join_room(&user_id, &room_id, Some(String::from(BULK_JOIN_REASON)), &servers)
+			.await
 		{
 			| Ok(_res) => {
 				successful_joins = successful_joins.saturating_add(1);
@@ -622,7 +695,7 @@ pub(super) async fn force_join_all_local_users(
 		.rooms
 		.state_cache
 		.room_members(&room_id)
-		.ready_any(|user_id| server_admins.contains(&user_id.to_owned()))
+		.ready_any(|user_id| server_admins.contains(&user_id))
 		.await
 	{
 		return Err!("There is not a single server admin in the room.",);
@@ -635,20 +708,15 @@ pub(super) async fn force_join_all_local_users(
 		.services
 		.users
 		.list_local_users()
-		.map(UserId::to_owned)
 		.collect::<Vec<_>>()
 		.await
 	{
-		match join_room_by_id_helper(
-			self.services,
-			user_id,
-			&room_id,
-			Some(String::from(BULK_JOIN_REASON)),
-			&servers,
-			&None,
-			None,
-		)
-		.await
+		match self
+			.services
+			.rooms
+			.membership
+			.join_room(user_id, &room_id, Some(String::from(BULK_JOIN_REASON)), &servers)
+			.await
 		{
 			| Ok(_res) => {
 				successful_joins = successful_joins.saturating_add(1);
@@ -672,23 +740,31 @@ pub(super) async fn force_join_room(
 	&self,
 	user_id: String,
 	room_id: OwnedRoomOrAliasId,
+	via: Option<String>,
 ) -> Result {
 	let user_id = parse_local_user_id(self.services, &user_id)?;
-	let (room_id, servers) = self
+	let (room_id, mut servers) = self
 		.services
 		.rooms
 		.alias
 		.resolve_with_servers(&room_id, None)
 		.await?;
+	if let Some(via) = via.map(ServerName::parse).transpose()? {
+		servers.retain(|n| *n != via);
+		servers.insert(0, via);
+	}
 
 	assert!(
 		self.services.globals.user_is_local(&user_id),
 		"Parsed user_id must be a local user"
 	);
-	join_room_by_id_helper(self.services, &user_id, &room_id, None, &servers, &None, None)
+	self.services
+		.rooms
+		.membership
+		.join_room(&user_id, &room_id, None, &servers)
 		.await?;
 
-	self.write_str(&format!("{user_id} has been joined to {room_id}.",))
+	self.write_str(&format!("{user_id} has been joined to {room_id}."))
 		.await
 }
 
@@ -720,7 +796,7 @@ pub(super) async fn force_leave_room(
 		.boxed()
 		.await?;
 
-	self.write_str(&format!("{user_id} has left {room_id}.",))
+	self.write_str(&format!("{user_id} has left {room_id}."))
 		.await
 }
 
@@ -734,42 +810,34 @@ pub(super) async fn force_demote(&self, user_id: String, room_id: OwnedRoomOrAli
 		"Parsed user_id must be a local user"
 	);
 
-	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
+	let state_lock = self.services.rooms.state.mutex.lock(room_id.as_str()).await;
 
-	let room_power_levels: Option<RoomPowerLevelsEventContent> = self
+	let mut room_power_levels = self
 		.services
 		.rooms
 		.state_accessor
-		.room_state_get_content(&room_id, &StateEventType::RoomPowerLevels, "")
-		.await
-		.ok();
+		.get_room_power_levels(&room_id)
+		.await;
 
-	let user_can_demote_self = room_power_levels
-		.as_ref()
-		.is_some_and(|power_levels_content| {
-			RoomPowerLevels::from(power_levels_content.clone())
-				.user_can_change_user_power_level(&user_id, &user_id)
-		}) || self
-		.services
-		.rooms
-		.state_accessor
-		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-		.await
-		.is_ok_and(|event| event.sender() == user_id);
+	let user_can_demote_self =
+		room_power_levels.user_can_change_user_power_level(&user_id, &user_id);
 
 	if !user_can_demote_self {
 		return Err!("User is not allowed to modify their own power levels in the room.",);
 	}
 
-	let mut power_levels_content = room_power_levels.unwrap_or_default();
-	power_levels_content.users.remove(&user_id);
+	room_power_levels.users.remove(&user_id);
 
 	let event_id = self
 		.services
 		.rooms
 		.timeline
 		.build_and_append_pdu(
-			PduBuilder::state(String::new(), &power_levels_content),
+			PartialPdu::state(
+				String::new(),
+				&RoomPowerLevelsEventContent::try_from(room_power_levels)
+					.expect("PLs should be valid for room version"),
+			),
 			&user_id,
 			Some(&room_id),
 			&state_lock,
@@ -797,7 +865,7 @@ pub(super) async fn make_user_admin(&self, user_id: String) -> Result {
 		.boxed()
 		.await?;
 
-	self.write_str(&format!("{user_id} has been granted admin privileges.",))
+	self.write_str(&format!("{user_id} has been granted admin privileges."))
 		.await
 }
 
@@ -815,9 +883,7 @@ pub(super) async fn put_room_tag(
 		.account_data
 		.get_room(&room_id, &user_id, RoomAccountDataEventType::Tag)
 		.await
-		.unwrap_or(TagEvent {
-			content: TagEventContent { tags: BTreeMap::new() },
-		});
+		.unwrap_or_else(|_| TagEvent::new(TagEventContent::new(BTreeMap::new())));
 
 	tags_event
 		.content
@@ -854,9 +920,7 @@ pub(super) async fn delete_room_tag(
 		.account_data
 		.get_room(&room_id, &user_id, RoomAccountDataEventType::Tag)
 		.await
-		.unwrap_or(TagEvent {
-			content: TagEventContent { tags: BTreeMap::new() },
-		});
+		.unwrap_or_else(|_| TagEvent::new(TagEventContent::new(BTreeMap::new())));
 
 	tags_event.content.tags.remove(&tag.clone().into());
 
@@ -886,9 +950,7 @@ pub(super) async fn get_room_tags(&self, user_id: String, room_id: OwnedRoomId) 
 		.account_data
 		.get_room(&room_id, &user_id, RoomAccountDataEventType::Tag)
 		.await
-		.unwrap_or(TagEvent {
-			content: TagEventContent { tags: BTreeMap::new() },
-		});
+		.unwrap_or_else(|_| TagEvent::new(TagEventContent::new(BTreeMap::new())));
 
 	self.write_str(&format!("```\n{:#?}\n```", tags_event.content.tags))
 		.await
@@ -919,26 +981,33 @@ pub(super) async fn redact_event(&self, event_id: OwnedEventId) -> Result {
 		self.services.globals.server_name()
 	);
 
-	let room_id = event
-		.room_id_or_hash()
-		.ok_or_else(|| err!(Database("Event has no room_id")))?;
-
 	let redaction_event_id = {
-		let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
+		let state_lock = self
+			.services
+			.rooms
+			.state
+			.mutex
+			.lock(
+				event
+					.room_id_or_hash()
+					.expect("event must have room_id")
+					.as_str(),
+			)
+			.await;
 
 		self.services
 			.rooms
 			.timeline
 			.build_and_append_pdu(
-				PduBuilder {
+				PartialPdu {
 					redacts: Some(event.event_id().to_owned()),
-					..PduBuilder::timeline(&RoomRedactionEventContent {
+					..PartialPdu::timeline(&assign!(RoomRedactionEventContent::new_v1(), {
 						redacts: Some(event.event_id().to_owned()),
 						reason: Some(reason),
-					})
+					}))
 				},
 				event.sender(),
-				Some(&room_id),
+				event.room_id_or_hash().as_deref(),
 				&state_lock,
 			)
 			.await?
@@ -965,7 +1034,7 @@ pub(super) async fn force_leave_remote_room(
 		.resolve_with_servers(
 			&room_id,
 			if let Some(v) = via.clone() {
-				Some(vec![OwnedServerName::parse(v)?])
+				Some(vec![ServerName::parse(v)?])
 			} else {
 				None
 			},
@@ -978,7 +1047,7 @@ pub(super) async fn force_leave_remote_room(
 	);
 	let mut vias: HashSet<OwnedServerName> = HashSet::new();
 	if let Some(via) = via {
-		vias.insert(OwnedServerName::parse(via)?);
+		vias.insert(ServerName::parse(via)?);
 	}
 	for server in vias_raw {
 		vias.insert(server);
@@ -1053,7 +1122,12 @@ pub(super) async fn logout(&self, user_id: String) -> Result {
 	self.services
 		.users
 		.all_device_ids(&user_id)
-		.for_each(|device_id| self.services.users.remove_device(&user_id, device_id))
+		.for_each(async |device_id| {
+			self.services
+				.users
+				.remove_device(&user_id, &device_id)
+				.await;
+		})
 		.await;
 	self.write_str(&format!("User {user_id} has been logged out from all devices."))
 		.await
@@ -1131,11 +1205,9 @@ pub(super) async fn get_user_by_email(&self, email: String) -> Result {
 
 	match self.services.threepid.get_localpart_for_email(&email).await {
 		| Some(localpart) => {
-			let user_id = OwnedUserId::parse(format!(
-				"@{localpart}:{}",
-				self.services.globals.server_name()
-			))
-			.unwrap();
+			let user_id =
+				UserId::parse(format!("@{localpart}:{}", self.services.globals.server_name()))
+					.unwrap();
 
 			self.write_str(&format!("{email} belongs to {user_id}."))
 				.await

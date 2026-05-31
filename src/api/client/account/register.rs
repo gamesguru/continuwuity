@@ -10,23 +10,26 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{FutureExt, StreamExt};
 use lettre::{Address, message::Mailbox};
-use register::RegistrationKind;
 use ruma::{
 	OwnedUserId, UserId,
 	api::client::{
 		account::{
-			register::{self, LoginType},
+			register::{self, LoginType, RegistrationKind},
 			request_registration_token_via_email,
 		},
 		uiaa::{AuthFlow, AuthType},
 	},
-	events::{GlobalAccountDataEventType, room::message::RoomMessageEventContent},
+	assign,
+	events::{
+		GlobalAccountDataEventType, push_rules::PushRulesEvent,
+		room::message::RoomMessageEventContent,
+	},
 	push,
 };
 use serde_json::value::RawValue;
-use service::mailer::messages;
+use service::{mailer::messages, users::HashedPassword};
 
-use super::{DEVICE_ID_LENGTH, TOKEN_LENGTH, join_room_by_id_helper};
+use super::{DEVICE_ID_LENGTH, TOKEN_LENGTH};
 use crate::Ruma;
 
 const RANDOM_USER_ID_LENGTH: usize = 10;
@@ -38,16 +41,6 @@ const RANDOM_USER_ID_LENGTH: usize = 10;
 /// You can use [`GET
 /// /_matrix/client/v3/register/available`](fn.get_register_available_route.
 /// html) to check if the user id is valid and available.
-///
-/// - Only works if registration is enabled
-/// - If type is guest: ignores all parameters except
-///   initial_device_display_name
-/// - If sender is not appservice: Requires UIAA (but we only use a dummy stage)
-/// - If type is not guest and no username is given: Always fails after UIAA
-///   check
-/// - Creates a new account and populates it with default account data
-/// - If `inhibit_login` is false: Creates a device and returns device id and
-///   access_token
 #[allow(clippy::doc_markdown)]
 #[tracing::instrument(skip_all, fields(%client), name = "register", level = "info")]
 pub(crate) async fn register_route(
@@ -55,7 +48,10 @@ pub(crate) async fn register_route(
 	ClientIp(client): ClientIp,
 	body: Ruma<register::v3::Request>,
 ) -> Result<register::v3::Response> {
-	let is_guest = body.kind == RegistrationKind::Guest;
+	if body.kind != RegistrationKind::User {
+		return Err!(Request(GuestAccessForbidden("Guests may not register on this server.")));
+	}
+
 	let emergency_mode_enabled = services.config.emergency_password.is_some();
 
 	// Allow registration if it's enabled in the config file or if this is the first
@@ -63,70 +59,20 @@ pub(crate) async fn register_route(
 	let allow_registration =
 		services.config.allow_registration || services.firstrun.is_first_run();
 
-	if !allow_registration && body.appservice_info.is_none() {
-		match (body.username.as_ref(), body.initial_device_display_name.as_ref()) {
-			| (Some(username), Some(device_display_name)) => {
-				info!(
-					%is_guest,
-					user = %username,
-					device_name = %device_display_name,
-					"Rejecting registration attempt as registration is disabled"
-				);
-			},
-			| (Some(username), _) => {
-				info!(
-					%is_guest,
-					user = %username,
-					"Rejecting registration attempt as registration is disabled"
-				);
-			},
-			| (_, Some(device_display_name)) => {
-				info!(
-					%is_guest,
-					device_name = %device_display_name,
-					"Rejecting registration attempt as registration is disabled"
-				);
-			},
-			| (None, _) => {
-				info!(
-					%is_guest,
-					"Rejecting registration attempt as registration is disabled"
-				);
-			},
-		}
-
-		return Err!(Request(Forbidden(
-			"This server is not accepting registrations at this time."
-		)));
-	}
-
-	if is_guest && !services.config.allow_guest_registration {
+	if !allow_registration && body.identity.is_none() {
 		info!(
-			"Guest registration disabled, rejecting guest registration attempt, initial device \
-			 name: \"{}\"",
-			body.initial_device_display_name.as_deref().unwrap_or("")
+			?body.username,
+			?body.initial_device_display_name,
+			"Rejecting registration attempt as registration is disabled"
 		);
-		return Err!(Request(GuestAccessForbidden("Guest registration is disabled.")));
-	}
 
-	// forbid guests from registering if there is not a real admin user yet. give
-	// generic user error.
-	if is_guest && services.firstrun.is_first_run() {
-		warn!(
-			"Guest account attempted to register before a real admin user has been registered, \
-			 rejecting registration. Guest's initial device name: \"{}\"",
-			body.initial_device_display_name.as_deref().unwrap_or("")
-		);
 		return Err!(Request(Forbidden(
 			"This server is not accepting registrations at this time."
 		)));
 	}
 
-	// Appeservices and guests get to skip auth
-	let skip_auth = body.appservice_info.is_some() || is_guest;
-
-	let identity = if skip_auth {
-		// Appservices and guests have no identity
+	let identity = if body.identity.is_some() {
+		// Appservices can skip auth
 		None
 	} else {
 		// Perform UIAA to determine the user's identity
@@ -153,19 +99,15 @@ pub(crate) async fn register_route(
 		}
 	});
 
-	let user_id = determine_registration_user_id(
-		&services,
-		supplied_username,
-		is_guest,
-		emergency_mode_enabled,
-	)
-	.await?;
+	let user_id =
+		determine_registration_user_id(&services, supplied_username, emergency_mode_enabled)
+			.await?;
 
 	if body.body.login_type == Some(LoginType::ApplicationService) {
 		// For appservice logins, make sure that the user ID is in the appservice's
 		// namespace
 
-		match body.appservice_info {
+		match body.identity {
 			| Some(ref info) =>
 				if !info.is_user_match(&user_id) && !emergency_mode_enabled {
 					return Err!(Request(Exclusive(
@@ -183,18 +125,22 @@ pub(crate) async fn register_route(
 		return Err!(Request(Exclusive("Username is reserved by an appservice.")));
 	}
 
-	let password = if is_guest { None } else { body.password.as_deref() };
+	let password = if body.identity.is_some() {
+		None
+	} else if let Some(password) = body.password.as_deref() {
+		Some(HashedPassword::new(password)?)
+	} else {
+		return Err!(Request(InvalidParam("A password must be provided")));
+	};
 
 	// Create user
-	services.users.create(&user_id, password, None).await?;
+	services.users.create(&user_id, password).await?;
 
 	// Set an initial display name
 	let mut displayname = user_id.localpart().to_owned();
 
 	// Apply the new user displayname suffix, if it's set
-	if !services.globals.new_user_displayname_suffix().is_empty()
-		&& body.appservice_info.is_none()
-	{
+	if !services.globals.new_user_displayname_suffix().is_empty() && body.identity.is_none() {
 		write!(displayname, " {}", services.server.config.new_user_displayname_suffix)?;
 	}
 
@@ -209,24 +155,18 @@ pub(crate) async fn register_route(
 			None,
 			&user_id,
 			GlobalAccountDataEventType::PushRules.to_string().into(),
-			&serde_json::to_value(ruma::events::push_rules::PushRulesEvent {
-				content: ruma::events::push_rules::PushRulesEventContent {
-					global: push::Ruleset::server_default(&user_id),
-				},
-			})?,
+			&serde_json::to_value(PushRulesEvent::new(
+				push::Ruleset::server_default(&user_id).into(),
+			))
+			.expect("should be able to serialize push rules"),
 		)
 		.await?;
 
 	// Generate new device id if the user didn't specify one
-	let no_device = body.inhibit_login
-		|| body
-			.appservice_info
-			.as_ref()
-			.is_some_and(|aps| aps.registration.device_management);
-
-	let (token, device) = if !no_device {
-		// Don't create a device for inhibited logins
-		let device_id = if is_guest { None } else { body.device_id.clone() }
+	let (token, device) = if !body.inhibit_login {
+		let device_id = body
+			.device_id
+			.clone()
 			.unwrap_or_else(|| utils::random_string(DEVICE_ID_LENGTH).into());
 
 		// Generate new token for the device
@@ -243,11 +183,13 @@ pub(crate) async fn register_route(
 				Some(client.to_string()),
 			)
 			.await?;
-		debug_info!(%user_id, %device_id, "User account was created");
 		(Some(new_token), Some(device_id))
 	} else {
+		// Don't create a device for inhibited logins
 		(None, None)
 	};
+
+	debug_info!(%user_id, ?device, "User account was created");
 
 	// If the user registered with an email, associate it with their account.
 	if let Some(identity) = identity
@@ -265,8 +207,7 @@ pub(crate) async fn register_route(
 
 	let device_display_name = body.initial_device_display_name.as_deref().unwrap_or("");
 
-	// log in conduit admin channel if a non-guest user registered
-	if body.appservice_info.is_none() && !is_guest {
+	if body.identity.is_none() {
 		if !device_display_name.is_empty() {
 			let notice = format!(
 				"New user \"{user_id}\" registered on this server from IP {client} and device \
@@ -287,65 +228,32 @@ pub(crate) async fn register_route(
 		}
 	}
 
-	// log in conduit admin channel if a guest registered
-	if body.appservice_info.is_none() && is_guest && services.config.log_guest_registrations {
-		debug_info!("New guest user \"{user_id}\" registered on this server.");
+	// Make the first user to register an administrator and disable first-run mode.
+	let was_first_user = services.firstrun.empower_first_user(&user_id).await?;
 
-		if !device_display_name.is_empty() {
-			if services.server.config.admin_room_notices {
-				services
-					.admin
-					.notice(&format!(
-						"Guest user \"{user_id}\" with device display name \
-						 \"{device_display_name}\" registered on this server from IP {client}"
-					))
-					.await;
-			}
-		} else {
-			#[allow(clippy::collapsible_else_if)]
-			if services.server.config.admin_room_notices {
-				services
-					.admin
-					.notice(&format!(
-						"Guest user \"{user_id}\" with no device display name registered on \
-						 this server from IP {client}",
-					))
-					.await;
-			}
-		}
-	}
-
-	if !is_guest {
-		// Make the first user to register an administrator and disable first-run mode.
-		let was_first_user = services.firstrun.empower_first_user(&user_id).await?;
-
-		// If the registering user was not the first and we're suspending users on
-		// register, suspend them.
-		if !was_first_user && services.config.suspend_on_register {
-			// Note that we can still do auto joins for suspended users
+	// If the registering user was not the first and we're suspending users on
+	// register, suspend them.
+	if !was_first_user && services.config.suspend_on_register {
+		// Note that we can still do auto joins for suspended users
+		services
+			.users
+			.suspend_account(&user_id, &services.globals.server_user)
+			.await;
+		// And send an @room notice to the admin room, to prompt admins to review the
+		// new user and ideally unsuspend them if deemed appropriate.
+		if services.server.config.admin_room_notices {
 			services
-				.users
-				.suspend_account(&user_id, &services.globals.server_user)
-				.await;
-			// And send an @room notice to the admin room, to prompt admins to review the
-			// new user and ideally unsuspend them if deemed appropriate.
-			if services.server.config.admin_room_notices {
-				services
-					.admin
-					.send_loud_message(RoomMessageEventContent::text_plain(format!(
-						"User {user_id} has been suspended as they are not the first user on \
-						 this server. Please review and unsuspend them if appropriate."
-					)))
-					.await
-					.ok();
-			}
+				.admin
+				.send_loud_message(RoomMessageEventContent::text_plain(format!(
+					"User {user_id} has been suspended as they are not the first user on this \
+					 server. Please review and unsuspend them if appropriate."
+				)))
+				.await
+				.ok();
 		}
 	}
 
-	if body.appservice_info.is_none()
-		&& !services.server.config.auto_join_rooms.is_empty()
-		&& (services.config.allow_guests_auto_join_rooms || !is_guest)
-	{
+	if body.identity.is_none() && !services.server.config.auto_join_rooms.is_empty() {
 		for room in &services.server.config.auto_join_rooms {
 			let Ok(room_id) = services.rooms.alias.resolve(room).await else {
 				error!(
@@ -368,17 +276,17 @@ pub(crate) async fn register_route(
 			}
 
 			if let Some(room_server_name) = room.server_name() {
-				match join_room_by_id_helper(
-					&services,
-					&user_id,
-					&room_id,
-					Some("Automatically joining this room upon registration".to_owned()),
-					&[services.globals.server_name().to_owned(), room_server_name.to_owned()],
-					&body.appservice_info,
-					None,
-				)
-				.boxed()
-				.await
+				match services
+					.rooms
+					.membership
+					.join_room(
+						&user_id,
+						&room_id,
+						Some("Automatically joining this room upon registration".to_owned()),
+						&[services.globals.server_name().to_owned(), room_server_name.to_owned()],
+					)
+					.boxed()
+					.await
 				{
 					| Err(e) => {
 						// don't return this error so we don't fail registrations
@@ -394,13 +302,12 @@ pub(crate) async fn register_route(
 		}
 	}
 
-	Ok(register::v3::Response {
+	Ok(assign!(register::v3::Response::new(user_id), {
 		access_token: token,
-		user_id,
 		device_id: device,
 		refresh_token: None,
 		expires_in: None,
-	})
+	}))
 }
 
 /// Determine which flows and parameters should be presented when
@@ -410,25 +317,18 @@ async fn create_registration_uiaa_session(
 ) -> Result<(Vec<AuthFlow>, Box<RawValue>)> {
 	let mut params = HashMap::<String, serde_json::Value>::new();
 
-	let open_registration = services
-		.config
-		.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse;
-
-	let flows = if services.firstrun.is_first_run() && !open_registration {
-		// Registration token forced while in first-run mode, unless the admin
-		// has explicitly opted into open registration, in which case we fall
-		// through to the dummy-auth path below.
+	let flows = if services.firstrun.is_first_run() {
+		// Registration token forced while in first-run mode
 		vec![AuthFlow::new(vec![AuthType::RegistrationToken])]
 	} else {
 		let mut flows = vec![];
 
-		if !open_registration
-			&& services
-				.registration_tokens
-				.iterate_tokens()
-				.next()
-				.await
-				.is_some()
+		if services
+			.registration_tokens
+			.iterate_tokens()
+			.next()
+			.await
+			.is_some()
 		{
 			// Trusted registration flow with a token is available
 			let mut token_flow = AuthFlow::new(vec![AuthType::RegistrationToken]);
@@ -498,7 +398,10 @@ async fn create_registration_uiaa_session(
 		if flows.is_empty() {
 			// No flows are configured. Bail out by default
 			// unless open registration was explicitly enabled.
-			if !open_registration {
+			if !services
+				.config
+				.yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse
+			{
 				return Err!(Request(Forbidden(
 					"This server is not accepting registrations at this time."
 				)));
@@ -519,12 +422,9 @@ async fn create_registration_uiaa_session(
 async fn determine_registration_user_id(
 	services: &Services,
 	supplied_username: Option<String>,
-	is_guest: bool,
 	emergency_mode_enabled: bool,
 ) -> Result<OwnedUserId> {
-	if let Some(mut supplied_username) = supplied_username
-		&& !is_guest
-	{
+	if let Some(supplied_username) = supplied_username {
 		// The user gets to pick their username. Do some validation to make sure it's
 		// acceptable.
 
@@ -537,8 +437,6 @@ async fn determine_registration_user_id(
 		{
 			return Err!(Request(Forbidden("Username is forbidden")));
 		}
-
-		supplied_username = supplied_username.to_lowercase();
 
 		// Create and validate the user ID
 		let user_id = match UserId::parse_with_server_name(
@@ -579,7 +477,7 @@ async fn determine_registration_user_id(
 
 		Ok(user_id)
 	} else {
-		// The user is a guest or didn't specify a username. Generate a username for
+		// The user didn't specify a username. Generate a username for
 		// them.
 
 		loop {

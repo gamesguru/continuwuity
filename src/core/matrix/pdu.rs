@@ -1,6 +1,6 @@
-mod builder;
 mod count;
 mod id;
+mod partial;
 mod raw_id;
 mod redact;
 #[cfg(test)]
@@ -10,17 +10,17 @@ mod unsigned;
 use std::cmp::Ordering;
 
 use ruma::{
-	CanonicalJsonObject, EventId, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId,
-	OwnedServerName, OwnedUserId, RoomId, UInt, UserId, events::TimelineEventType,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, MilliSecondsSinceUnixEpoch, OwnedEventId,
+	OwnedRoomId, OwnedServerName, OwnedUserId, RoomId, UInt, UserId, events::TimelineEventType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue as RawJsonValue;
 
 pub use self::{
 	Count as PduCount, Id as PduId, Pdu as PduEvent, RawId as RawPduId,
-	builder::{Builder, Builder as PduBuilder},
 	count::Count,
 	id::{ShortId, *},
+	partial::PartialPdu,
 	raw_id::*,
 };
 use super::{Event, StateKey};
@@ -76,27 +76,12 @@ pub struct EventHash {
 }
 
 impl Pdu {
-	pub fn from_id_val(
-		event_id: &EventId,
-		mut json: CanonicalJsonObject,
-		room_id: Option<&RoomId>,
-	) -> Result<Self> {
-		json.insert(
-			"event_id".into(),
-			ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
-		);
-		let pdu: Self = serde_json::from_value(serde_json::to_value(json)?)?;
-
-		// Validate the PDU belongs to the expected room if one is specified
-		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-				return Err(crate::err!(Request(InvalidParam(
-					"PDU {event_id} does not belong to room {expected_room}"
-				))));
-			}
-		}
-
-		Ok(pdu)
+	pub fn from_id_val(event_id: &EventId, mut json: CanonicalJsonObject) -> Result<Self> {
+		let event_id = CanonicalJsonValue::String(event_id.into());
+		json.insert("event_id".into(), event_id);
+		serde_json::to_value(json)
+			.and_then(serde_json::from_value)
+			.map_err(Into::into)
 	}
 }
 
@@ -135,7 +120,7 @@ impl Event for Pdu {
 		}
 		if *self.event_type() == TimelineEventType::RoomCreate {
 			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
+			return RoomId::parse(&constructed_hash).ok();
 		}
 		None
 	}
@@ -200,7 +185,7 @@ impl Event for &Pdu {
 		}
 		if *self.event_type() == TimelineEventType::RoomCreate {
 			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
+			return RoomId::parse(&constructed_hash).ok();
 		}
 		None
 	}

@@ -6,187 +6,345 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug, debug_error, debug_info, debug_warn, implement, trace,
-	warn,
+	Err, Error, Event, PduEvent, Result, debug, debug_error, debug_info, debug_warn, error,
+	implement, info, state_res::EventTypeExt, trace, utils::to_canonical_object, warn,
 };
+use http::StatusCode;
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, KeyId, RoomId, ServerName, SigningKeyId,
-	api::federation::room::{
-		policy_check::unstable::Request as PolicyCheckRequest,
-		policy_sign::unstable::Request as PolicySignRequest,
-	},
+	CanonicalJsonObject, CanonicalJsonValue, KeyId, RoomId, ServerName, SigningKeyAlgorithm,
+	api::{error::ErrorKind, federation::policy::sign_event},
+	canonical_json::redact,
 	events::{StateEventType, room::policy::RoomPolicyEventContent},
+	room_version_rules::{RedactionRules, RoomVersionRules},
+	serde::{Base64, base64::Standard},
+	signatures::{to_canonical_json_string_for_signing, verify_canonical_json_bytes},
 };
 use serde_json::value::RawValue;
+use tokio::time::sleep;
 
-/// Asks a remote policy server if the event is allowed.
+const POLICY_SERVER_KEY_ID_ED25519: &str = "ed25519:policy_server";
+
+/// Checks that the given policy server signed the event with the given public
+/// key.
 ///
-/// If the event is the `org.matrix.msc4284.policy` configuration state event,
+/// Note: The caller MUST ensure event_id (and any other keys) are stripped
+/// BEFORE passing to this function - no mutation is performed beyond redacting.
+///
+/// Parameters:
+///
+/// - via: The policy server that should've signed the event.
+/// - ps_key: The public key part of the policy server's signing key.
+/// - pdu_json: The raw PDU JSON object (will be cloned).
+/// - redaction_rules: The redaction rules of the room version
+///
+/// Returns: `true` if the signature is present, `false` if it is not (including
+/// if the signatures object is malformed).
+pub(super) fn verify_policy_signature(
+	via: &ServerName,
+	ps_key: &Base64<Standard, Vec<u8>>,
+	pdu_json: &CanonicalJsonObject,
+	redaction_rules: &RedactionRules,
+) -> bool {
+	#[cfg(debug_assertions)]
+	{
+		let pretty = serde_json::to_string(pdu_json).unwrap();
+		trace!(data=%pretty, "Preparing to check policy server signature");
+	};
+	let Some(canonical_json) = redact(pdu_json.clone(), redaction_rules, None)
+		.ok()
+		.and_then(|r| to_canonical_object(r).ok())
+	else {
+		debug_warn!("Failed to redact event");
+		return false;
+	};
+	let Some(signature) = extract_signature(pdu_json, via, POLICY_SERVER_KEY_ID_ED25519) else {
+		debug!("No (valid) policy server signature present on event");
+		return false;
+	};
+
+	trace!(%signature, "Verifying policy server signature");
+	let Ok(canonical_str) = to_canonical_json_string_for_signing(&canonical_json) else {
+		debug_warn!("Could not convert canonical json object into string");
+		return false;
+	};
+
+	verify_canonical_json_bytes(
+		&SigningKeyAlgorithm::Ed25519,
+		ps_key.as_bytes(),
+		signature.as_bytes(),
+		canonical_str.as_bytes(),
+	)
+	.inspect_err(|e| debug_error!("Policy server verification failed: {e}"))
+	.is_ok()
+}
+
+pub(super) fn extract_signature(
+	pdu_json: &CanonicalJsonObject,
+	server_name: &ServerName,
+	key_id: &str,
+) -> Option<Base64<Standard, Vec<u8>>> {
+	pdu_json
+		.get("signatures")?
+		.as_object()?
+		.get(server_name.as_str())?
+		.as_object()?
+		.get(key_id)?
+		.as_str()
+		.and_then(|signature| Base64::<Standard>::parse(signature).ok())
+}
+
+/// Verifies the existing policy server signature, and/or fetches a new one
+/// immediately.
+///
+/// If `incoming` is `true`, the event is checked for an existing signature. If
+/// it has a valid one, `Ok` is returned. If it does not have a valid signature,
+/// the function falls through to fetching a new one (which may be a soft-fail
+/// in a future version).
+///
+/// If the event is the `m.room.policy` configuration state event,
 /// this check is skipped. Similarly, if there is no policy server configured in
-/// the PDU's room, or the configured server is not present in the room, the
-/// check is also skipped.
+/// the PDU's room, the configuration event is malformed, or the configured
+/// server is not present in the room, the check is also skipped.
 ///
-/// If the policy server marks the event as spam, Ok(false) is returned,
-/// otherwise Ok(true) allows the event. If the policy server cannot be
-/// contacted for whatever reason, Err(e) is returned, which generally is a
-/// fail-open operation.
+/// If the policy server marks the event as spam, the relevant error is
+/// returned. Otherwise, the incoming PDU JSON is mutated to include the new
+/// policy server signature. Transient errors such as rate-limits are handled,
+/// so any error returned by this function should be treated as final.
 #[implement(super::Service)]
-#[tracing::instrument(skip(self, pdu, pdu_json, room_id), level = "info")]
-pub async fn ask_policy_server(
+#[tracing::instrument(skip(self, pdu, pdu_json, room_version_rules), level = "info")]
+pub async fn policy_server_allows_event(
 	&self,
 	pdu: &PduEvent,
 	pdu_json: &mut CanonicalJsonObject,
 	room_id: &RoomId,
+	room_version_rules: &RoomVersionRules,
 	incoming: bool,
-) -> Result<bool> {
-	if !self.services.server.config.enable_msc4284_policy_servers {
-		trace!("policy server checking is disabled");
-		return Ok(true); // don't ever contact policy servers
+) -> Result<()> {
+	assert!(
+		!pdu_json.contains_key("event_id"),
+		"event_id should be removed from the JSON before calling policy_server_allows_event"
+	);
+	if pdu.event_type().with_state_key("") == (StateEventType::RoomPolicy, "".into()) {
+		return Ok(());
 	}
-
-	if *pdu.event_type() == StateEventType::RoomPolicy.into() {
-		debug!(
-			room_id = %room_id,
-			event_type = ?pdu.event_type(),
-			"Skipping spam check for policy server meta-event"
-		);
-		return Ok(true);
-	}
-
-	let Ok(policyserver) = self
+	let ps = match self
 		.services
 		.state_accessor
-		.room_state_get_content(room_id, &StateEventType::RoomPolicy, "")
+		.room_state_get_content::<RoomPolicyEventContent>(
+			room_id,
+			&StateEventType::RoomPolicy,
+			"",
+		)
 		.await
-		.inspect_err(|e| {
-			if !e.is_not_found() {
-				debug_error!("failed to load room policy server state event: {e}");
-			}
-		})
-		.map(|c: RoomPolicyEventContent| c)
-	else {
-		debug!("room has no policy server configured");
-		return Ok(true);
-	};
-
-	if self.services.server.config.policy_server_check_own_events
-		&& !incoming
-		&& policyserver.public_key.is_none()
 	{
-		// don't contact policy servers for locally generated events, but only when the
-		// policy server does not require signatures
-		trace!("won't contact policy server for locally generated event");
-		return Ok(true);
-	}
-
-	let via = match policyserver.via {
-		| Some(ref via) => ServerName::parse(via)?,
-		| None => {
-			trace!("No policy server configured for room {room_id}");
-			return Ok(true);
-		},
+		| Ok(s) => s,
+		| Err(e) =>
+			return if e.is_not_found() || e.kind() == ErrorKind::BadJson {
+				debug!(%e, "no policy server configured");
+				Ok(())
+			} else {
+				Err!("failed to load m.room.policy state event: {e}")
+			},
 	};
-	if via.is_empty() {
-		trace!("Policy server is empty for room {room_id}, skipping spam check");
-		return Ok(true);
-	}
-	if !self.services.state_cache.server_in_room(via, room_id).await {
+
+	let Some(ps_key) = ps.public_keys.get(&SigningKeyAlgorithm::Ed25519) else {
 		debug!(
-			via = %via,
+			"room has a policy server configured, but no valid public keys; skipping spam check"
+		);
+		return Ok(());
+	};
+
+	if !self
+		.services
+		.state_cache
+		.server_in_room(&ps.via, room_id)
+		.await
+	{
+		debug!(
+			via = %ps.via,
 			"Policy server is not in the room, skipping spam check"
 		);
-		return Ok(true);
+		return Ok(());
 	}
+
+	if incoming {
+		if verify_policy_signature(&ps.via, ps_key, pdu_json, &room_version_rules.redaction) {
+			debug!(
+				via = %ps.via,
+				"Event is incoming and has a valid policy server signature"
+			);
+			return Ok(());
+		}
+		// N.B. In a future room version, this will be a soft failure specifically.
+		debug_info!(
+			via = %ps.via,
+			"Event is incoming but does not have a valid policy server signature; asking policy \
+			server to sign it now"
+		);
+	}
+
+	if ps.via == self.services.globals.server_name()
+		&& !self.services.server.config.federation_loopback
+	{
+		error!(
+			%ps.via,
+			%room_id,
+			"Cannot ask ourselves for a policy signature if `federation_loopback=false`",
+		);
+		return Ok(());
+	}
+
 	let outgoing = self
 		.services
 		.sending
 		.convert_to_outgoing_federation_event(pdu_json.clone())
 		.await;
-	if policyserver.public_key.is_some() {
-		if !incoming {
+
+	debug_info!(
+		%ps.via,
+		"Asking policy server to sign event"
+	);
+	if let Err(e) = self
+		.fetch_policy_server_signature(pdu, pdu_json, &ps.via, outgoing, room_id, ps_key, 0)
+		.await
+	{
+		if e.is_not_found() {
+			return Ok(());
+		}
+		return Err(e);
+	}
+	trace!(
+		"Got successful response for fetching PS signature, ensuring it is signed with the \
+		 expected key."
+	);
+	if verify_policy_signature(&ps.via, ps_key, pdu_json, &room_version_rules.redaction) {
+		Ok(())
+	} else if incoming {
+		Err!(Request(Forbidden("Policy server signature is invalid")))
+	} else {
+		Err(Error::Request(
+			ErrorKind::Unknown,
+			"Policy server signature is invalid".into(),
+			StatusCode::BAD_GATEWAY,
+		))
+	}
+}
+
+/// Handles an error returned by the policy server. If the error is one that
+/// should be returned to the user, it is propagated, otherwise the request may
+/// be retried (for example, when rate-limited).
+#[allow(clippy::too_many_arguments)]
+#[implement(super::Service)]
+async fn handle_policy_server_error(
+	&self,
+	error: Error,
+	pdu: &PduEvent,
+	pdu_json: &mut CanonicalJsonObject,
+	via: &ServerName,
+	outgoing: Box<RawValue>,
+	room_id: &RoomId,
+	policy_server_key: &Base64<Standard, Vec<u8>>,
+	retries: u8,
+	timeout: Duration,
+) -> Result<()> {
+	match error.status_code() {
+		| StatusCode::OK => unreachable!("ok response passed to handle_policy_server_error"),
+		| StatusCode::BAD_REQUEST => {
+			if matches!(error.kind(), ErrorKind::Forbidden) {
+				warn!(
+					via = %via,
+					event_id = %pdu.event_id(),
+					%room_id,
+					error = ?error,
+					"Policy server marked the event as spam"
+				);
+				return Err(error);
+			}
+			error!(
+				via = %via,
+				event_id = %pdu.event_id(),
+				%room_id,
+				error = ?error.to_string(),
+				"Policy server could not understand our request",
+			);
+			Err!(BadServerResponse("Error communicating with policy server"))
+		},
+		| StatusCode::FORBIDDEN => {
+			Err!(Request(Forbidden(
+				"Policy server refused to sign the event due to the room ACL"
+			)))
+		},
+		| StatusCode::NOT_FOUND => {
 			debug_info!(
 				via = %via,
-				outgoing = ?pdu_json,
-				"Getting policy server signature on event"
+				event_id = %pdu.event_id(),
+				%room_id,
+				"Policy server is not actually a policy server or is not protecting this room: {}",
+				error.message()
 			);
-			return self
-				.fetch_policy_server_signature(pdu, pdu_json, via, outgoing, room_id)
-				.await;
-		}
-		// for incoming events, is it signed by <via> with the key
-		// "ed25519:policy_server"?
-		if let Some(CanonicalJsonValue::Object(sigs)) = pdu_json.get("signatures") {
-			if let Some(CanonicalJsonValue::Object(server_sigs)) = sigs.get(via.as_str()) {
-				let wanted_key_id: &KeyId<ruma::SigningKeyAlgorithm, ruma::Base64PublicKey> =
-					SigningKeyId::parse("ed25519:policy_server")?;
-				if let Some(CanonicalJsonValue::String(_sig_value)) =
-					server_sigs.get(wanted_key_id.as_str())
-				{
-					// TODO: verify signature
-				}
-			}
-		}
-		debug!(
-			"Event is not local and has no policy server signature, performing legacy spam check"
-		);
-	}
-	debug_info!(
-		via = %via,
-		"Checking event for spam with policy server via legacy check"
-	);
-	let response = tokio::time::timeout(
-		Duration::from_secs(self.services.server.config.policy_server_request_timeout),
-		self.services
-			.sending
-			.send_federation_request(via, PolicyCheckRequest {
-				event_id: pdu.event_id().to_owned(),
-				pdu: Some(outgoing),
-			}),
-	)
-	.await;
-	let response = match response {
-		| Ok(Ok(response)) => {
-			debug!("Response from policy server: {:?}", response);
-			response
+			Err(error)
 		},
-		| Ok(Err(e)) => {
+		| StatusCode::TOO_MANY_REQUESTS => {
+			if let Some(retry_after) = error.retry_after() {
+				if retries >= 5 {
+					warn!(
+						via = %via,
+						event_id = %pdu.event_id(),
+						room_id = %room_id,
+						retries,
+						"Policy server rate-limited us too many times; giving up"
+					);
+					return Err(error); // Error should be passed to c2s
+				}
+				let saturated = retry_after.min(timeout);
+				// ^ don't wait more than 60 seconds
+				info!(
+					via = %via,
+					event_id = %pdu.event_id(),
+					room_id = %room_id,
+					retry_after = %saturated.as_secs(),
+					retries,
+					"Policy server rate-limited us; retrying after {retry_after:?}"
+				);
+				tokio::select! {
+					() = self.server_shutdown.notified() => (),
+					() = sleep(saturated) => (),
+				}
+				if !self.services.server.running() {
+					return Err(error);
+				}
+				return Box::pin(self.fetch_policy_server_signature(
+					pdu,
+					pdu_json,
+					via,
+					outgoing,
+					room_id,
+					policy_server_key,
+					retries.saturating_add(1),
+				))
+				.await;
+			}
 			warn!(
 				via = %via,
 				event_id = %pdu.event_id(),
 				room_id = %room_id,
-				"Failed to contact policy server: {e}"
+				retries,
+				"Policy server rate-limited us without giving a retry window; giving up"
 			);
-			// Network or policy server errors are treated as non-fatal: event is allowed by
-			// default.
-			return Err(e);
+			Err(error)
 		},
-		| Err(elapsed) => {
-			warn!(
-				%via,
-				event_id = %pdu.event_id(),
-				%room_id,
-				%elapsed,
-				"Policy server request timed out after 10 seconds"
-			);
-			return Err!("Request to policy server timed out");
-		},
-	};
-	trace!("Recommendation from policy server was {}", response.recommendation);
-	if response.recommendation == "spam" {
-		warn!(
-			via = %via,
-			event_id = %pdu.event_id(),
-			room_id = %room_id,
-			"Event was marked as spam by policy server",
-		);
-		return Ok(false);
+		| _ => Err!(BadServerResponse(
+			"Unexpected response from policy server: {}/{:?}",
+			error.status_code(),
+			error.kind()
+		)),
 	}
-
-	Ok(true)
 }
 
 /// Asks a remote policy server for a signature on this event.
 /// If the policy server signs this event, the original data is mutated.
+/// Otherwise, the error is handled and potentially returned.
+#[allow(clippy::too_many_arguments)]
 #[implement(super::Service)]
 #[tracing::instrument(skip_all, fields(event_id=%pdu.event_id(), via=%via), level = "info")]
 pub async fn fetch_policy_server_signature(
@@ -196,31 +354,36 @@ pub async fn fetch_policy_server_signature(
 	via: &ServerName,
 	outgoing: Box<RawValue>,
 	room_id: &RoomId,
-) -> Result<bool> {
+	policy_server_key: &Base64<Standard, Vec<u8>>,
+	retries: u8,
+) -> Result<()> {
+	let timeout = Duration::from_secs(self.services.server.config.policy_server_request_timeout);
 	debug!("Requesting policy server signature");
 	let response = tokio::time::timeout(
-		Duration::from_secs(self.services.server.config.policy_server_request_timeout),
+		timeout,
 		self.services
 			.sending
-			.send_federation_request(via, PolicySignRequest { pdu: outgoing }),
+			.send_federation_request(via, sign_event::v1::Request::new(outgoing.clone())),
 	)
 	.await;
 
 	let response = match response {
-		| Ok(Ok(response)) => {
-			debug!("Response from policy server: {:?}", response);
-			response
-		},
+		| Ok(Ok(response)) => response,
 		| Ok(Err(e)) => {
-			warn!(
-				via = %via,
-				event_id = %pdu.event_id(),
-				room_id = %room_id,
-				"Failed to contact policy server: {e}"
-			);
-			// Network or policy server errors are treated as non-fatal: event is allowed by
-			// default.
-			return Err(e);
+			debug_error!("Error from policy server: {:?}", e);
+			return self
+				.handle_policy_server_error(
+					e,
+					pdu,
+					pdu_json,
+					via,
+					outgoing,
+					room_id,
+					policy_server_key,
+					retries,
+					timeout,
+				)
+				.await;
 		},
 		| Err(elapsed) => {
 			warn!(
@@ -228,76 +391,50 @@ pub async fn fetch_policy_server_signature(
 				event_id = %pdu.event_id(),
 				%room_id,
 				%elapsed,
-				"Policy server request timed out after 10 seconds"
+				"Policy server signature request timed out"
 			);
-			return Err!("Request to policy server timed out");
+			return Err!(Request(Forbidden("Policy server did not respond in time")));
 		},
 	};
-	if response.signatures.is_none() {
-		debug!("Policy server refused to sign event");
-		return Ok(false);
+
+	let Some(signatures) = response.signatures.get(via) else {
+		// NOTE: Legacy policy servers return a `200 {}` to indicate that the event was
+		// flagged as spam. We'll make a distinction in the error message in case
+		// it's unexpected.
+		return Err!(Request(Forbidden("Policy server did not sign the event")));
+	};
+	if response.signatures.len() > 1 {
+		warn!(?response.signatures, "Misbehaving policy server: returned signatures for extraneous servers");
+		// TODO: This should return an error but doesn't because some servers do
+		// this. It's safe for us to not explode for now because we only care
+		// about the signature for `via`, but ideally we'd want to enforce
+		// this more strictly in the future.
 	}
-	let sigs: ruma::Signatures<ruma::OwnedServerName, ruma::ServerSigningKeyVersion> =
-		response.signatures.unwrap();
-	if !sigs.contains_key(via) {
-		debug_warn!(
-			"Policy server returned signatures, but did not include the expected server name \
-			 '{}': {:?}",
-			via,
-			sigs
-		);
-		return Ok(false);
+
+	let Some(signature) = signatures
+		.get(&KeyId::parse(POLICY_SERVER_KEY_ID_ED25519).expect("policy server key ID is valid"))
+	else {
+		return Err!(BadServerResponse(
+			"Policy server did not return a signature with the expected key ID",
+		));
+	};
+	if signatures.len() > 1 {
+		info!(?signatures, "Misbehaving policy server: returned extraneous signatures");
 	}
-	let keypairs = sigs.get(via).unwrap();
-	let wanted_key_id = KeyId::parse("ed25519:policy_server")?;
-	if !keypairs.contains_key(wanted_key_id) {
-		debug_warn!(
-			"Policy server returned signature, but did not use the key ID \
-			 'ed25519:policy_server'."
-		);
-		return Ok(false);
-	}
-	let signatures_entry = pdu_json
+
+	pdu_json
 		.entry("signatures".to_owned())
-		.or_insert_with(|| CanonicalJsonValue::Object(BTreeMap::default()));
-
-	if let CanonicalJsonValue::Object(signatures_map) = signatures_entry {
-		let sig_value = keypairs.get(wanted_key_id).unwrap().to_owned();
-
-		match signatures_map.get_mut(via.as_str()) {
-			| Some(CanonicalJsonValue::Object(inner_map)) => {
-				trace!("inserting PS signature: {}", sig_value);
-				inner_map.insert(
-					"ed25519:policy_server".to_owned(),
-					CanonicalJsonValue::String(sig_value),
-				);
-			},
-			| Some(_) => {
-				debug_warn!(
-					"Existing `signatures[{}]` field is not an object; cannot insert policy \
-					 signature",
-					via
-				);
-				return Ok(false);
-			},
-			| None => {
-				let mut inner = BTreeMap::new();
-				inner.insert(
-					"ed25519:policy_server".to_owned(),
-					CanonicalJsonValue::String(sig_value.clone()),
-				);
-				trace!(
-					"created new signatures object for {via} with the signature {}",
-					sig_value
-				);
-				signatures_map.insert(via.as_str().to_owned(), CanonicalJsonValue::Object(inner));
-			},
-		}
-	} else {
-		debug_warn!(
-			"Existing `signatures` field is not an object; cannot insert policy signature"
+		.or_insert_with(|| CanonicalJsonValue::Object(BTreeMap::default()))
+		.as_object_mut()
+		.expect("`signatures` field must be an object")
+		.entry(via.to_string())
+		.or_insert_with(|| CanonicalJsonValue::Object(BTreeMap::default()))
+		.as_object_mut()
+		.expect("`signatures[via]` field must be an object")
+		.insert(
+			POLICY_SERVER_KEY_ID_ED25519.to_owned(),
+			CanonicalJsonValue::String(signature.clone()),
 		);
-		return Ok(false);
-	}
-	Ok(true)
+	debug_info!("Policy server allowed event");
+	Ok(())
 }

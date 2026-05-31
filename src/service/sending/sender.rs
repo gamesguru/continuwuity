@@ -393,24 +393,9 @@ impl Service {
 
 		let (device_changes, receipts, presence) = join!(device_changes, receipts, presence);
 
-		// Collect them all
-		let receipts = receipts.flatten();
-		let presence = presence.flatten();
-
-		if !device_changes.is_empty() {
-			self.stats.outgoing_device_lists.fetch_add(
-				device_changes.len().try_into().unwrap_or(u64::MAX),
-				Ordering::Relaxed,
-			);
-		}
-
-		if receipts.is_some() {
-			self.stats.outgoing_receipts.fetch_add(1, Ordering::Relaxed);
-		}
-
 		let mut events = device_changes;
-		events.extend(presence);
-		events.extend(receipts);
+		events.extend(presence.into_iter().flatten());
+		events.extend(receipts.into_iter().flatten());
 
 		Ok((events, max_edu_count.load(Ordering::Acquire)))
 	}
@@ -437,7 +422,7 @@ impl Service {
 			let keys_changed = self
 				.services
 				.users
-				.room_keys_changed(room_id, Some(since.0), None)
+				.room_keys_changed(&room_id, Some(since.0), None)
 				.ready_filter(|(user_id, _)| self.services.globals.user_is_local(user_id));
 
 			pin_mut!(keys_changed);
@@ -447,21 +432,17 @@ impl Service {
 				}
 
 				max_edu_count.fetch_max(count, Ordering::Relaxed);
-				if !device_list_changes.insert(user_id.into()) {
+				if !device_list_changes.insert(user_id.clone()) {
 					continue;
 				}
 
 				// Empty prev id forces synapse to resync; because synapse resyncs,
 				// we can just insert placeholder data
-				let edu = Edu::DeviceListUpdate(DeviceListUpdateContent {
-					user_id: user_id.into(),
-					device_id: device_id!("placeholder").to_owned(),
-					device_display_name: Some("Placeholder".to_owned()),
-					stream_id: uint!(1),
-					prev_id: Vec::new(),
-					deleted: None,
-					keys: None,
-				});
+				let edu = Edu::DeviceListUpdate(DeviceListUpdateContent::new(
+					user_id,
+					device_id!("placeholder").to_owned(),
+					uint!(1),
+				));
 
 				let mut buf = EduBuf::new();
 				serde_json::to_writer(&mut buf, &edu)
@@ -494,7 +475,6 @@ impl Service {
 			.services
 			.state_cache
 			.server_rooms(server_name)
-			.map(ToOwned::to_owned)
 			.broad_filter_map(|room_id| async move {
 				let receipt_map = self
 					.select_edus_receipts_room(&room_id, since, max_edu_count, &mut num)
@@ -513,7 +493,7 @@ impl Service {
 			return None;
 		}
 
-		let receipt_content = Edu::Receipt(ReceiptContent { receipts });
+		let receipt_content = Edu::Receipt(ReceiptContent::new(receipts));
 
 		let mut buf = EduBuf::new();
 		serde_json::to_writer(&mut buf, &receipt_content)
@@ -571,10 +551,7 @@ impl Service {
 				.remove(&user_id)
 				.expect("our read receipts always have the user here");
 
-			let receipt_data = ReceiptData {
-				data: receipt,
-				event_ids: vec![event_id.clone()],
-			};
+			let receipt_data = ReceiptData::new(receipt, vec![event_id.clone()]);
 
 			if read.insert(user_id, receipt_data).is_none() {
 				*num = num.saturating_add(1);
@@ -584,7 +561,7 @@ impl Service {
 			}
 		}
 
-		ReceiptMap { read }
+		ReceiptMap::new(read)
 	}
 
 	/// Look for presence
@@ -602,8 +579,7 @@ impl Service {
 		let presence_since = self.services.presence.presence_since(since.0);
 
 		pin_mut!(presence_since);
-		let mut presence_updates =
-			HashMap::<OwnedUserId, PresenceUpdate>::with_capacity(SELECT_PRESENCE_LIMIT);
+		let mut presence_updates = HashMap::<OwnedUserId, PresenceUpdate>::new();
 		while let Some((user_id, count, presence_bytes)) = presence_since.next().await {
 			if count > since.1 {
 				break;
@@ -633,16 +609,16 @@ impl Service {
 				continue;
 			};
 
-			let update = PresenceUpdate {
-				user_id: user_id.into(),
-				presence: presence_event.content.presence,
-				currently_active: presence_event.content.currently_active.unwrap_or(false),
-				status_msg: presence_event.content.status_msg,
-				last_active_ago: presence_event
+			let mut update = PresenceUpdate::new(
+				user_id.to_owned(),
+				presence_event.content.presence,
+				presence_event
 					.content
 					.last_active_ago
 					.unwrap_or_else(|| uint!(0)),
-			};
+			);
+			update.currently_active = presence_event.content.currently_active.unwrap_or_default();
+			update.status_msg = presence_event.content.status_msg;
 
 			presence_updates.insert(user_id.into(), update);
 			if presence_updates.len() >= SELECT_PRESENCE_LIMIT {
@@ -654,13 +630,8 @@ impl Service {
 			return None;
 		}
 
-		self.stats
-			.outgoing_presence
-			.fetch_add(presence_updates.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
-
-		let presence_content = Edu::Presence(PresenceContent {
-			push: presence_updates.into_values().collect(),
-		});
+		let presence_content =
+			Edu::Presence(PresenceContent::new(presence_updates.into_values().collect()));
 
 		let mut buf = EduBuf::new();
 		serde_json::to_writer(&mut buf, &presence_content)
@@ -706,7 +677,7 @@ impl Service {
 				.filter(|event| matches!(event, SendingEvent::Pdu(_)))
 				.count(),
 		);
-		let mut edu_jsons: Vec<EphemeralData> = Vec::with_capacity(
+		let mut edu_jsons: Vec<Raw<EphemeralData>> = Vec::with_capacity(
 			events
 				.iter()
 				.filter(|event| matches!(event, SendingEvent::Edu(_)))
@@ -722,7 +693,7 @@ impl Service {
 				| SendingEvent::Edu(edu) =>
 					if appservice.receive_ephemeral {
 						if let Ok(edu) = serde_json::from_slice(edu) {
-							edu_jsons.push(edu);
+							edu_jsons.push(Raw::from_json(edu));
 						}
 					},
 				| SendingEvent::Flush => {}, // flush only; no new content
@@ -740,18 +711,12 @@ impl Service {
 		//debug_assert!(pdu_jsons.len() + edu_jsons.len() > 0, "sending empty
 		// transaction");
 
-		match self
-			.send_appservice_request(
-				appservice,
-				ruma::api::appservice::event::push_events::v1::Request {
-					events: pdu_jsons,
-					txn_id: txn_id.into(),
-					ephemeral: edu_jsons,
-					to_device: Vec::new(), // TODO
-				},
-			)
-			.await
-		{
+		let mut request =
+			ruma::api::appservice::event::push_events::v1::Request::new(txn_id.into(), pdu_jsons);
+		request.ephemeral = edu_jsons;
+		request.to_device = Vec::new(); // TODO
+
+		match self.send_appservice_request(appservice, request).await {
 			| Ok(_) => Ok(Destination::Appservice(id)),
 			| Err(e) => Err((Destination::Appservice(id), e)),
 		}
@@ -814,16 +779,17 @@ impl Service {
 					|ev: PushRulesEvent| ev.content.global,
 				);
 
-			let unread: UInt = if let Some(room_id) = pdu.room_id_or_hash() {
-				self.services
-					.user
-					.notification_count(&user_id, &room_id)
-					.await
-					.try_into()
-					.expect("notification count can't go that high")
-			} else {
-				uint!(0)
+			let Some(pdu_room_id) = pdu.room_id_or_hash() else {
+				continue;
 			};
+
+			let unread: UInt = self
+				.services
+				.user
+				.notification_count(&user_id, &pdu_room_id)
+				.await
+				.try_into()
+				.expect("notification count can't go that high");
 
 			let _response = self
 				.services
@@ -867,41 +833,6 @@ impl Service {
 			return Ok(Destination::Federation(server));
 		}
 
-		let mut typing = 0_u64;
-		let mut to_device = 0_u64;
-		let mut unknown = 0_u64;
-
-		for edu in &edus {
-			match edu.deserialize() {
-				| Ok(Edu::Typing(_)) => typing = typing.saturating_add(1),
-				| Ok(Edu::DirectToDevice(_)) => to_device = to_device.saturating_add(1),
-				| Ok(Edu::Presence(_) | Edu::Receipt(_) | Edu::DeviceListUpdate(_)) => {},
-				| _ => unknown = unknown.saturating_add(1),
-			}
-		}
-
-		if typing > 0 {
-			self.stats
-				.outgoing_typing
-				.fetch_add(typing, Ordering::Relaxed);
-		}
-		if to_device > 0 {
-			self.stats
-				.outgoing_to_device
-				.fetch_add(to_device, Ordering::Relaxed);
-		}
-		if unknown > 0 {
-			self.stats
-				.outgoing_edus
-				.fetch_add(unknown, Ordering::Relaxed);
-		}
-
-		// Track federation stats
-		self.stats
-			.outgoing_pdus
-			.fetch_add(pdus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
-		self.stats.outgoing_txns.fetch_add(1, Ordering::Relaxed);
-
 		let preimage = pdus
 			.iter()
 			.map(|raw| raw.get().as_bytes())
@@ -909,18 +840,18 @@ impl Service {
 
 		let txn_hash = calculate_hash(preimage);
 		let txn_id = &*URL_SAFE_NO_PAD.encode(txn_hash);
-		let request = send_transaction_message::v1::Request {
-			transaction_id: txn_id.into(),
-			origin: self.server.name.clone(),
-			origin_server_ts: MilliSecondsSinceUnixEpoch::now(),
-			pdus,
-			edus,
-		};
+		let mut request = send_transaction_message::v1::Request::new(
+			txn_id.into(),
+			self.server.name.clone(),
+			MilliSecondsSinceUnixEpoch::now(),
+		);
+		request.pdus = pdus;
+		request.edus = edus;
 
 		let result = self
 			.services
 			.federation
-			.execute_on(&self.services.client.sender, &server, request)
+			.execute_signed(&self.services.client.sender, &server, request)
 			.await;
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {
@@ -936,10 +867,7 @@ impl Service {
 		}
 
 		match result {
-			| Err(error) => {
-				self.stats.outgoing_errors.fetch_add(1, Ordering::Relaxed);
-				Err((Destination::Federation(server), error))
-			},
+			| Err(error) => Err((Destination::Federation(server), error)),
 			| Ok(_) => Ok(Destination::Federation(server)),
 		}
 	}
@@ -961,7 +889,7 @@ impl Service {
 			.get("room_id")
 			.and_then(|val| RoomId::parse(val.as_str()?).ok())
 		{
-			match self.services.state.get_room_version(room_id).await {
+			match self.services.state.get_room_version(&room_id).await {
 				| Ok(room_version_id) => match room_version_id {
 					| RoomVersionId::V1 | RoomVersionId::V2 => {},
 					| _ => _ = pdu_json.remove("event_id"),

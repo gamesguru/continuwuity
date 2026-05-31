@@ -20,7 +20,8 @@ use lettre::message::Mailbox;
 use regex::RegexSet;
 use ruma::{
 	OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomVersionId,
-	api::client::discovery::{discover_homeserver::RtcFocusInfo, discover_support::ContactRole},
+	api::client::{discovery::discover_support::ContactRole, rtc::RtcTransport},
+	serde::Base64,
 };
 use serde::{Deserialize, Serialize, de::IgnoredAny};
 use url::Url;
@@ -375,6 +376,7 @@ pub struct Config {
 	pub ip_lookup_strategy: u8,
 
 	/// Max request size for file uploads in bytes. Defaults to 20MB.
+	/// Also limits incoming federated media.
 	///
 	/// default: 20971520
 	#[serde(default = "default_max_request_size")]
@@ -481,20 +483,18 @@ pub struct Config {
 	#[serde(default = "default_federation_timeout")]
 	pub federation_timeout: u64,
 
-	/// MSC4284 Policy server request timeout (seconds). Generally policy
+	/// Policy server request timeout (seconds). Generally policy
 	/// servers should respond near instantly, however may slow down under
 	/// load. If a policy server doesn't respond in a short amount of time, the
 	/// room it is configured in may become unusable if this limit is set too
-	/// high. 10 seconds is a good default, however dropping this to 3-5 seconds
-	/// can be acceptable.
+	/// high. 30 seconds is a good default, however lower values may be
+	/// acceptable if temporary send failures are an okay trade-off.
 	///
-	/// Please be aware that policy requests are *NOT* currently re-tried, so if
-	/// a spam check request fails, the event will be assumed to be not spam,
-	/// which in some cases may result in spam being sent to or received from
-	/// the room that would typically be prevented.
 	///
 	/// About policy servers: https://matrix.org/blog/2025/04/introducing-policy-servers/
-	/// default: 10
+	/// (Stabilized in Matrix v1.18)
+	///
+	/// default: 30
 	#[serde(default = "default_policy_server_request_timeout")]
 	pub policy_server_request_timeout: u64,
 
@@ -714,18 +714,6 @@ pub struct Config {
 	#[serde(default)]
 	pub allow_public_room_directory_over_federation: bool,
 
-	/// Allow guests/unauthenticated users to access TURN credentials.
-	///
-	/// This is the equivalent of Synapse's `turn_allow_guests` config option.
-	/// This allows any unauthenticated user to call the endpoint
-	/// `/_matrix/client/v3/voip/turnServer`.
-	///
-	/// It is unlikely you need to enable this as all major clients support
-	/// authentication for this endpoint and prevents misuse of your TURN server
-	/// from potential bots.
-	#[serde(default)]
-	pub turn_allow_guests: bool,
-
 	/// Set this to true to lock down your server's public room directory and
 	/// only allow admins to publish rooms to the room directory. Unpublishing
 	/// is still allowed by all users with this enabled.
@@ -777,6 +765,28 @@ pub struct Config {
 	/// default: "12"
 	#[serde(default = "default_default_room_version")]
 	pub default_room_version: RoomVersionId,
+
+	/// A default allow value for the Access Control List when creating a room.
+	///
+	/// If a list is provided, new rooms will be created with
+	/// a m.room.server_acl event. Only servers which match one of the patterns
+	/// in the list will be permitted to participate in the room.
+	///
+	/// ACLs in existing rooms will not be updated automatically. This is not
+	/// a substitute for moderation bots.
+	pub default_room_acl_allow: Option<Vec<String>>,
+
+	/// A default deny value for the Access Control List when creating a room.
+	///
+	/// If a list is provided, new rooms will be created with
+	/// a m.room.server_acl event. Servers which match one of the patterns
+	/// in the list will be NOT permitted to participate in the room.
+	///
+	/// This config cannot be used if the default_room_acl_allow config is used.
+	///
+	/// ACLs in existing rooms will not be updated automatically. This is not
+	/// a substitute for moderation bots.
+	pub default_room_acl_deny: Option<Vec<String>>,
 
 	/// display: nested
 	#[serde(default)]
@@ -1507,21 +1517,6 @@ pub struct Config {
 	#[serde(default)]
 	pub brotli_compression: bool,
 
-	/// Set to true to allow user type "guest" registrations. Some clients like
-	/// Element attempt to register guest users automatically.
-	#[serde(default)]
-	pub allow_guest_registration: bool,
-
-	/// Set to true to log guest registrations in the admin room. Note that
-	/// these may be noisy or unnecessary if you're a public homeserver.
-	#[serde(default)]
-	pub log_guest_registrations: bool,
-
-	/// Set to true to allow guest registrations/users to auto join any rooms
-	/// specified in `auto_join_rooms`.
-	#[serde(default)]
-	pub allow_guests_auto_join_rooms: bool,
-
 	/// Enable the legacy unauthenticated Matrix media repository endpoints.
 	/// These endpoints consist of:
 	/// - /_matrix/media/*/config
@@ -1858,19 +1853,6 @@ pub struct Config {
 	#[serde(default)]
 	pub block_non_admin_invites: bool,
 
-	/// Enable or disable making requests to MSC4284 Policy Servers.
-	/// It is recommended you keep this enabled unless you experience frequent
-	/// connectivity issues, such as in a restricted networking environment.
-	#[serde(default = "true_fn")]
-	pub enable_msc4284_policy_servers: bool,
-
-	/// Enable running locally generated events through configured MSC4284
-	/// policy servers. You may wish to disable this if your server is
-	/// single-user for a slight speed benefit in some rooms, but otherwise
-	/// should leave it enabled.
-	#[serde(default = "true_fn")]
-	pub policy_server_check_own_events: bool,
-
 	/// Allow admins to enter commands in rooms other than "#admins" (admin
 	/// room) by prefixing your message with "\!admin" or "\\!admin" followed up
 	/// a normal continuwuity admin command. The reply will be publicly visible
@@ -2156,18 +2138,10 @@ pub struct Config {
 	#[serde(default)]
 	pub allow_web_indexing: bool,
 
-	/// display: nested
-	#[serde(default)]
-	pub ldap: LdapConfig,
-
 	/// Configuration for antispam support
 	/// display: nested
 	#[serde(default)]
 	pub antispam: Option<Antispam>,
-
-	/// display: nested
-	#[serde(default)]
-	pub blurhashing: BlurhashConfig,
 
 	/// Configuration for MatrixRTC (MSC4143) transport discovery.
 	/// display: nested
@@ -2225,6 +2199,10 @@ pub struct WellKnownConfig {
 	/// Will be included alongside any contact information
 	pub support_page: Option<Url>,
 
+	/// The ed25519 public key for the policy server available at this server's
+	/// name. Must be unpadded base64.
+	pub policy_server_public_key: Option<Base64<ruma::serde::base64::Standard>>,
+
 	/// Role string for server support contacts, to be served as part of the
 	/// MSC1929 server support endpoint at /.well-known/matrix/support.
 	///
@@ -2247,43 +2225,6 @@ pub struct WellKnownConfig {
 	/// PGP key URI for server support contacts, to be served as part of the
 	/// MSC1929 server support endpoint.
 	pub support_pgp_key: Option<String>,
-
-	/// **DEPRECATED**: Use `[global.matrix_rtc].foci` instead.
-	///
-	/// A list of MatrixRTC foci URLs which will be served as part of the
-	/// MSC4143 client endpoint at /.well-known/matrix/client.
-	///
-	/// This option is deprecated and will be removed in a future release.
-	/// Please migrate to the new `[global.matrix_rtc]` config section.
-	///
-	/// default: []
-	#[serde(default)]
-	pub rtc_focus_server_urls: Vec<RtcFocusInfo>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Default)]
-#[allow(rustdoc::broken_intra_doc_links, rustdoc::bare_urls)]
-#[config_example_generator(filename = "conduwuit-example.toml", section = "global.blurhashing")]
-pub struct BlurhashConfig {
-	/// blurhashing x component, 4 is recommended by https://blurha.sh/
-	///
-	/// default: 4
-	#[serde(default = "default_blurhash_x_component")]
-	pub components_x: u32,
-	/// blurhashing y component, 3 is recommended by https://blurha.sh/
-	///
-	/// default: 3
-	#[serde(default = "default_blurhash_y_component")]
-	pub components_y: u32,
-	/// Max raw size that the server will blurhash, this is the size of the
-	/// image after converting it to raw data, it should be higher than the
-	/// upload limit but not too high. The higher it is the higher the
-	/// potential load will be for clients requesting blurhashes. The default
-	/// is 33.55MB. Setting it to 0 disables blurhashing.
-	///
-	/// default: 33554432
-	#[serde(default = "default_blurhash_max_raw_size")]
-	pub blurhash_max_raw_size: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -2304,143 +2245,7 @@ pub struct MatrixRtcConfig {
 	///
 	/// default: []
 	#[serde(default)]
-	pub foci: Vec<RtcFocusInfo>,
-}
-
-impl MatrixRtcConfig {
-	/// Returns the effective foci, falling back to the deprecated
-	/// `rtc_focus_server_urls` if the new config is empty.
-	#[must_use]
-	pub fn effective_foci<'a>(
-		&'a self,
-		deprecated_foci: &'a [RtcFocusInfo],
-	) -> &'a [RtcFocusInfo] {
-		if !self.foci.is_empty() {
-			&self.foci
-		} else {
-			deprecated_foci
-		}
-	}
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[config_example_generator(filename = "conduwuit-example.toml", section = "global.ldap")]
-pub struct LdapConfig {
-	/// Whether to enable LDAP login.
-	///
-	/// example: "true"
-	#[serde(default)]
-	pub enable: bool,
-
-	/// Whether to force LDAP authentication or authorize classical password
-	/// login.
-	///
-	/// example: "true"
-	#[serde(default)]
-	pub ldap_only: bool,
-
-	/// URI of the LDAP server.
-	///
-	/// example: "ldap://ldap.example.com:389"
-	///
-	/// default: ""
-	#[serde(default)]
-	pub uri: Option<Url>,
-
-	/// StartTLS for LDAP connections.
-	///
-	/// default: false
-	#[serde(default)]
-	pub use_starttls: bool,
-
-	/// Skip TLS certificate verification, possibly dangerous.
-	///
-	/// default: false
-	#[serde(default)]
-	pub disable_tls_verification: bool,
-
-	/// Root of the searches.
-	///
-	/// example: "ou=users,dc=example,dc=org"
-	///
-	/// default: ""
-	#[serde(default)]
-	pub base_dn: String,
-
-	/// Bind DN if anonymous search is not enabled.
-	///
-	/// You can use the variable `{username}` that will be replaced by the
-	/// entered username. In such case, the password used to bind will be the
-	/// one provided for the login and not the one given by
-	/// `bind_password_file`. Beware: automatically granting admin rights will
-	/// not work if you use this direct bind instead of a LDAP search.
-	///
-	/// example: "cn=ldap-reader,dc=example,dc=org" or
-	/// "cn={username},ou=users,dc=example,dc=org"
-	///
-	/// default: ""
-	#[serde(default)]
-	pub bind_dn: Option<String>,
-
-	/// Path to a file on the system that contains the password for the
-	/// `bind_dn`.
-	///
-	/// The server must be able to access the file, and it must not be empty.
-	///
-	/// default: ""
-	#[serde(default)]
-	pub bind_password_file: Option<PathBuf>,
-
-	/// Search filter to limit user searches.
-	///
-	/// You can use the variable `{username}` that will be replaced by the
-	/// entered username for more complex filters.
-	///
-	/// example: "(&(objectClass=person)(memberOf=matrix))"
-	///
-	/// default: "(objectClass=*)"
-	#[serde(default = "default_ldap_search_filter")]
-	pub filter: String,
-
-	/// Attribute to use to uniquely identify the user.
-	///
-	/// example: "uid" or "cn"
-	///
-	/// default: "uid"
-	#[serde(default = "default_ldap_uid_attribute")]
-	pub uid_attribute: String,
-
-	/// Attribute containing the display name of the user.
-	///
-	/// example: "givenName" or "sn"
-	///
-	/// default: "givenName"
-	#[serde(default = "default_ldap_name_attribute")]
-	pub name_attribute: String,
-
-	/// Root of the searches for admin users.
-	///
-	/// Defaults to `base_dn` if empty.
-	///
-	/// example: "ou=admins,dc=example,dc=org"
-	///
-	/// default: ""
-	#[serde(default)]
-	pub admin_base_dn: String,
-
-	/// The LDAP search filter to find administrative users for continuwuity.
-	///
-	/// If left blank, administrative state must be configured manually for each
-	/// user.
-	///
-	/// You can use the variable `{username}` that will be replaced by the
-	/// entered username for more complex filters.
-	///
-	/// example: "(objectClass=conduwuitAdmin)" or "(uid={username})"
-	///
-	/// default: ""
-	#[serde(default)]
-	pub admin_filter: String,
+	pub foci: Vec<RtcTransport>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -2564,8 +2369,10 @@ pub struct SmtpConfig {
 	/// - `address@domain.org` to not use a name
 	pub sender: Mailbox,
 
-	/// Whether to require that users provide an email address when they
-	/// register.
+	/// Whether to allow public registration with an email address.
+	///
+	/// Note that, if this option is enabled, anyone will be able to register an
+	/// account with just an email address.
 	///
 	/// If either this option or `require_email_for_token_registration` are set,
 	/// users will not be allowed to remove their email address.
@@ -2575,7 +2382,8 @@ pub struct SmtpConfig {
 	pub require_email_for_registration: bool,
 
 	/// Whether to require that users who register with a registration token
-	/// provide an email address.
+	/// provide an email address. This option is independent of
+	/// `require_email_for_registration`.
 	///
 	/// default: false
 	#[serde(default)]
@@ -2758,7 +2566,7 @@ fn default_federation_conn_timeout() -> u64 { 10 }
 
 fn default_federation_timeout() -> u64 { 60 }
 
-fn default_policy_server_request_timeout() -> u64 { 10 }
+fn default_policy_server_request_timeout() -> u64 { 30 }
 
 fn default_federation_idle_timeout() -> u64 { 25 }
 
@@ -2968,20 +2776,4 @@ fn default_client_response_timeout() -> u64 { 120 }
 
 fn default_client_shutdown_timeout() -> u64 { 10 }
 
-fn default_sender_shutdown_timeout() -> u64 { 3 }
-
-// blurhashing defaults recommended by https://blurha.sh/
-// 2^25
-pub(super) fn default_blurhash_max_raw_size() -> u64 { 33_554_432 }
-
-pub(super) fn default_blurhash_x_component() -> u32 { 4 }
-
-pub(super) fn default_blurhash_y_component() -> u32 { 3 }
-
-// end recommended & blurhashing defaults
-
-fn default_ldap_search_filter() -> String { "(objectClass=*)".to_owned() }
-
-fn default_ldap_uid_attribute() -> String { String::from("uid") }
-
-fn default_ldap_name_attribute() -> String { String::from("givenName") }
+fn default_sender_shutdown_timeout() -> u64 { 5 }
