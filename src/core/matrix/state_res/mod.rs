@@ -212,7 +212,8 @@ where
 		let _ = batch_fetch(ids).await;
 
 		// FAST PATH: Pre-fetch 1-hop auth events to prevent massive cache stampedes
-		// during concurrent power-level lookups later in reverse_topological_power_sort.
+		// during concurrent power-level lookups later in
+		// reverse_topological_power_sort.
 		let mut extra_auth_ids = HashSet::new();
 		for id in &all_conflicted_ids {
 			if let Some(ev) = cached_fetch(id.clone()).await {

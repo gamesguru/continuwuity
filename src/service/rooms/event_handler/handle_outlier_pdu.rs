@@ -448,6 +448,18 @@ where
 	// Build map of auth events and reject if we are still missing some
 	let mut auth_events_by_key: HashMap<_, _> = HashMap::with_capacity(auth_events.len());
 	for id in pdu_event.auth_events() {
+		// Re-check for rejected auth events. We might have fetched them via /event_auth
+		// and discovered they were rejected. If they are, this event must be rejected.
+		if self.services.pdu_metadata.is_event_rejected(id).await {
+			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services.outlier.add_pdu_outlier(
+				pdu_event.event_id(),
+				&incoming_pdu,
+				Some(room_id),
+			);
+			return Err!(Request(Forbidden("Event depends on rejected auth event {id}")));
+		}
+
 		let Some(auth_event) = auth_events.get(id).map(ToOwned::to_owned) else {
 			return Err!(Request(InvalidParam(debug_error!(
 				"Could not fetch all auth events for outlier event {event_id}, still missing: \
