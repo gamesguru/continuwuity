@@ -483,7 +483,8 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	use ruma::{events::StateEventType, signatures::Verified};
 
 	let pdu = self.services.rooms.timeline.get_pdu(&event_id).await?;
-	let event = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
+	let mut event = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
+	utils::pdu_json_canonical_strip(&mut event);
 
 	// Status flags
 	let (is_rejected, is_soft_failed) = tokio::join!(
@@ -538,56 +539,47 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	// Auth check against current room state
 	let auth_msg = if let Some(room_id) = pdu.room_id_or_hash() {
 		{
-			// Gather auth events from current state
-			let auth_events = self
+			// Gather auth events from the PDU's own declared auth_events
+			let mut auth_events = HashMap::new();
+			for auth_event_id in pdu.auth_events() {
+				if let Ok(auth_pdu) = self.services.rooms.timeline.get_pdu(auth_event_id).await {
+					let key = auth_pdu
+						.kind()
+						.with_state_key(auth_pdu.state_key().unwrap_or(""));
+					auth_events.insert(key, auth_pdu);
+				}
+			}
+
+			let state_fetch = |k: &StateEventType, s: &str| {
+				let key = k.with_state_key(s);
+				ready(auth_events.get(&key).map(ToOwned::to_owned))
+			};
+
+			// Get create event for this room
+			let create = self
 				.services
 				.rooms
-				.state
-				.get_auth_events(
-					&room_id,
-					pdu.kind(),
-					pdu.sender(),
-					pdu.state_key(),
-					pdu.content(),
-					&room_version,
-				)
+				.state_accessor
+				.room_state_get(&room_id, &StateEventType::RoomCreate, "")
 				.await;
 
-			match auth_events {
-				| Ok(auth_events) => {
-					let state_fetch = |k: &StateEventType, s: &str| {
-						let key = k.with_state_key(s);
-						ready(auth_events.get(&key).map(ToOwned::to_owned))
-					};
-
-					// Get create event for this room
-					let create = self
-						.services
-						.rooms
-						.state_accessor
-						.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-						.await;
-
-					match create {
-						| Ok(create_event) => {
-							match state_res::event_auth::auth_check(
-								&room_version,
-								&pdu,
-								None,
-								state_fetch,
-								create_event.as_pdu(),
-							)
-							.await
-							{
-								| Ok(true) => "PASS".to_owned(),
-								| Ok(false) => "FAIL (not authorized)".to_owned(),
-								| Err(e) => format!("ERROR: {e}"),
-							}
-						},
-						| Err(_) => "SKIP (no create event)".to_owned(),
+			match create {
+				| Ok(create_event) => {
+					match state_res::event_auth::auth_check(
+						&room_version,
+						&pdu,
+						None,
+						state_fetch,
+						create_event.as_pdu(),
+					)
+					.await
+					{
+						| Ok(true) => "PASS".to_owned(),
+						| Ok(false) => "FAIL (not authorized)".to_owned(),
+						| Err(e) => format!("ERROR: {e}"),
 					}
 				},
-				| Err(e) => format!("SKIP (auth events: {e})"),
+				| Err(_) => "SKIP (no create event)".to_owned(),
 			}
 		}
 	} else {

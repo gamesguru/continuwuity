@@ -11,6 +11,7 @@ pub mod html;
 pub mod json;
 pub mod math;
 pub mod mutex_map;
+pub mod pdu;
 pub mod pdu_parser;
 pub mod rand;
 pub mod response;
@@ -38,6 +39,7 @@ pub use self::{
 	json::{deserialize_from_str, to_canonical_object},
 	math::clamp,
 	mutex_map::{Guard as MutexMapGuard, MutexMap},
+	pdu::pdu_json_canonical_strip,
 	rand::{shuffle, string as random_string},
 	stream::{IterStream, ReadyExt, Tools as StreamTools, TryReadyExt},
 	string::{str_from_bytes, string_from_bytes},

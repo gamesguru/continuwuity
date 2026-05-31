@@ -16,9 +16,7 @@ pub fn parse_and_clean_pdu(
 
 	// Strip diagnostic/internal fields that were injected during export or
 	// debugging
-	value.remove("__shortstatehash");
-	value.remove("prev_state_events");
-	value.remove("state_jump_pointers");
+	crate::utils::pdu_json_canonical_strip(&mut value);
 
 	let room_features = crate::RoomVersion::new(room_version).unwrap_or(crate::RoomVersion::V1);
 

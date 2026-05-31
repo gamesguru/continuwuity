@@ -393,6 +393,9 @@ pub(crate) async fn get_room_dag_route(
 			obj.insert("__shortstatehash".to_owned(), serde_json::Value::from(ssh));
 		}
 
+		// Add event_id in case PduEvent serialization omits it (V3+ rooms)
+		obj.insert("event_id".to_owned(), serde_json::Value::String(pdu.event_id.to_string()));
+
 		events.push(serde_json::Value::Object(obj));
 		count = count.saturating_add(1);
 	}
