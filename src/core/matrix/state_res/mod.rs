@@ -210,6 +210,23 @@ where
 	if let Some(batch_fetch) = event_batch_fetch {
 		let ids: Vec<_> = all_conflicted_ids.iter().cloned().collect();
 		let _ = batch_fetch(ids).await;
+
+		// FAST PATH: Pre-fetch 1-hop auth events to prevent massive cache stampedes
+		// during concurrent power-level lookups later in reverse_topological_power_sort.
+		let mut extra_auth_ids = HashSet::new();
+		for id in &all_conflicted_ids {
+			if let Some(ev) = cached_fetch(id.clone()).await {
+				for aid in ev.auth_events() {
+					if !is_cached(aid) {
+						extra_auth_ids.insert(aid.to_owned());
+					}
+				}
+			}
+		}
+		if !extra_auth_ids.is_empty() {
+			let ids: Vec<_> = extra_auth_ids.into_iter().collect();
+			let _ = batch_fetch(ids).await;
+		}
 	}
 
 	let all_conflicted: HashSet<_> = all_conflicted_ids
