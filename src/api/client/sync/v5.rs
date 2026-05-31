@@ -78,9 +78,8 @@ pub(crate) async fn sync_events_v5_route(
 	let mut body = body.body;
 
 	// Setup watchers, so if there's no response, we can wait for them
+	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.watch(sender_user, sender_device);
-
-	let next_batch = services.globals.next_count()?;
 
 	let conn_id = body.conn_id.clone();
 
@@ -107,6 +106,65 @@ pub(crate) async fn sync_events_v5_route(
 	let known_rooms = services
 		.sync
 		.update_snake_sync_request_with_cache(&snake_key, &mut body);
+
+	let default = Duration::from_secs(30);
+	let duration = cmp::min(body.timeout.unwrap_or(default), default);
+
+	let mut response = build_sync_events_v5(
+		services,
+		sender_user,
+		sender_device,
+		globalsince,
+		&body,
+		&known_rooms,
+	)
+	.await?;
+
+	if response.rooms.iter().all(|(id, r)| {
+		r.timeline.is_empty()
+			&& r.required_state.is_empty()
+			&& !response.extensions.receipts.rooms.contains_key(id)
+	}) && response
+		.extensions
+		.to_device
+		.clone()
+		.is_none_or(|to| to.events.is_empty())
+	{
+		// Hang a few seconds so requests are not spammed
+		// Stop hanging if new info arrives
+		_ = tokio::time::timeout(duration, watcher).await;
+
+		// Rebuild the response after waking up to avoid returning advanced tokens
+		// without their associated events.
+		response = build_sync_events_v5(
+			services,
+			sender_user,
+			sender_device,
+			globalsince,
+			&body,
+			&known_rooms,
+		)
+		.await?;
+	}
+
+	trace!(
+		rooms = ?response.rooms.len(),
+		account_data = ?response.extensions.account_data.rooms.len(),
+		receipts = ?response.extensions.receipts.rooms.len(),
+		"responding to request with"
+	);
+	Ok(response)
+}
+
+async fn build_sync_events_v5(
+	services: &Services,
+	sender_user: &UserId,
+	sender_device: &DeviceId,
+	globalsince: u64,
+	body: &sync_events::v5::Request,
+	known_rooms: &KnownRooms,
+) -> Result<sync_events::v5::Response> {
+	let next_batch = services.globals.current_count()?;
 
 	let all_joined_rooms = services
 		.rooms
@@ -151,7 +209,7 @@ pub(crate) async fn sync_events_v5_route(
 
 	let mut todo_rooms: TodoRooms = BTreeMap::new();
 
-	let sync_info: SyncInfo<'_> = (sender_user, sender_device, globalsince, &body);
+	let sync_info: SyncInfo<'_> = (sender_user, sender_device, globalsince, body);
 
 	let account_data = collect_account_data(services, sync_info).map(Ok);
 
@@ -187,12 +245,12 @@ pub(crate) async fn sync_events_v5_route(
 		all_joined_rooms.clone(),
 		all_rooms,
 		&mut todo_rooms,
-		&known_rooms,
+		known_rooms,
 		&mut response,
 	)
 	.await;
 
-	fetch_subscriptions(services, sync_info, &known_rooms, &mut todo_rooms).await;
+	fetch_subscriptions(services, sync_info, known_rooms, &mut todo_rooms).await;
 
 	response.rooms = process_rooms(
 		services,
@@ -201,36 +259,13 @@ pub(crate) async fn sync_events_v5_route(
 		all_invited_rooms.clone(),
 		&todo_rooms,
 		&mut response,
-		&body,
+		body,
 	)
 	.await?;
 
-	if response.rooms.iter().all(|(id, r)| {
-		r.timeline.is_empty()
-			&& r.required_state.is_empty()
-			&& !response.extensions.receipts.rooms.contains_key(id)
-	}) && response
-		.extensions
-		.to_device
-		.clone()
-		.is_none_or(|to| to.events.is_empty())
-	{
-		// Hang a few seconds so requests are not spammed
-		// Stop hanging if new info arrives
-		let default = Duration::from_secs(30);
-		let duration = cmp::min(body.timeout.unwrap_or(default), default);
-		_ = tokio::time::timeout(duration, watcher).await;
-	}
-
-	let typing = collect_typing_events(services, sender_user, &body, &todo_rooms).await?;
+	let typing = collect_typing_events(services, sender_user, body, &todo_rooms).await?;
 	response.extensions.typing = typing;
 
-	trace!(
-		rooms = ?response.rooms.len(),
-		account_data = ?response.extensions.account_data.rooms.len(),
-		receipts = ?response.extensions.receipts.rooms.len(),
-		"responding to request with"
-	);
 	Ok(response)
 }
 
