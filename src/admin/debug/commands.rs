@@ -105,7 +105,7 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 		.services
 		.rooms
 		.outlier
-		.get_pdu_outlier(&event_id)
+		.get_outlier_pdu_json(&event_id)
 		.await
 		.is_ok();
 
@@ -500,7 +500,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 		.services
 		.rooms
 		.outlier
-		.get_pdu_outlier(&event_id)
+		.get_outlier_pdu_json(&event_id)
 		.await
 		.is_ok();
 	let is_timeline = self

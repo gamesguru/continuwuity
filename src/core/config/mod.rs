@@ -2961,9 +2961,9 @@ fn default_max_fetch_prev_events() -> u16 { 192_u16 }
 
 fn default_max_concurrent_inbound_transactions() -> usize { 150 }
 
-fn default_max_concurrent_outbound_requests() -> usize { 128 }
-
 fn default_max_concurrent_inbound_transactions_per_origin() -> usize { 10 }
+
+fn default_max_concurrent_outbound_requests() -> usize { 128 }
 
 fn default_transaction_id_cache_max_age_secs() -> u64 { 60 * 60 * 2 }
 
