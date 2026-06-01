@@ -50,7 +50,10 @@ pub async fn backfill_if_required(
 	}
 
 	let mut backwards_extremities = Vec::new();
-	let mut pdus = self.pdus_rev(room_id, Some(from)).take(limit).boxed();
+	let mut pdus = self
+		.pdus_rev(room_id, Some(from.saturating_inc(ruma::api::Direction::Forward)))
+		.take(limit)
+		.boxed();
 	while let Some(Ok((_, pdu))) = pdus.next().await {
 		for prev_event_id in &pdu.prev_events {
 			if self.get_pdu_id(prev_event_id).await.is_err() {
