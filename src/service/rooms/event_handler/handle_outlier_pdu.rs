@@ -349,69 +349,61 @@ where
 				)
 				.await
 			{
+				let mut auth_chain_map = HashMap::new();
 				for auth_pdu in &response.auth_chain {
-					if let Ok((auth_eid, auth_val)) =
-						conduwuit::matrix::event::gen_event_id_canonical_json(
-							auth_pdu,
-							&room_version_id,
-						) {
-						if let hash_map::Entry::Vacant(e) = auth_events.entry(auth_eid) {
-							self.services.outlier.add_pdu_outlier(
-								e.key(),
-								&auth_val,
-								Some(room_id),
-							);
+					if let Ok((auth_eid, auth_val)) = conduwuit::matrix::event::gen_event_id_canonical_json(auth_pdu, &room_version_id) {
+						if let Ok(parsed) = serde_json::from_value::<PduEvent>(serde_json::to_value(&auth_val).unwrap_or_default()) {
+							if check_room_id(room_id, &parsed).is_ok() {
+								auth_chain_map.insert(auth_eid, (auth_val, parsed));
+							}
+						}
+					}
+				}
 
-							if let Ok(parsed) = serde_json::from_value::<PduEvent>(
-								serde_json::to_value(&auth_val)
-									.expect("CanonicalJsonObj is valid"),
-							) {
-								if check_room_id(room_id, &parsed).is_ok() {
-									// Cascade rejection: if any of this auth event's
-									// own auth_events are rejected, mark it rejected.
-									let has_rejected_auth = futures::future::join_all(
-										parsed.auth_events().map(|aid| {
-											self.services.pdu_metadata.is_event_rejected(aid)
-										}),
-									)
-									.await
-									.into_iter()
-									.any(|rejected| rejected);
+				let mut in_degree = HashMap::new();
+				for (eid, (_, pdu)) in &auth_chain_map {
+					let mut count = 0;
+					for auth_id in pdu.auth_events() {
+						if auth_chain_map.contains_key(auth_id) {
+							count += 1;
+						}
+					}
+					in_degree.insert(eid.clone(), count);
+				}
 
-									if has_rejected_auth {
-										info!(
-											target: "state_res_debug",
-											auth_event_id = %e.key(),
-											"Auth event depends on rejected event; \
-											 marking rejected"
-										);
-										self.services.pdu_metadata.mark_event_rejected(e.key());
-									}
-									e.insert(parsed);
+				let mut sorted_auth_chain = Vec::new();
+				let mut queue: Vec<_> = in_degree.iter().filter_map(|(k, &v)| if v == 0 { Some(k.clone()) } else { None }).collect();
+
+				while let Some(eid) = queue.pop() {
+					sorted_auth_chain.push(eid.clone());
+					for (other_eid, (_, other_pdu)) in &auth_chain_map {
+						if other_pdu.auth_events().any(|aid| aid == eid) {
+							if let Some(deg) = in_degree.get_mut(other_eid) {
+								*deg -= 1;
+								if *deg == 0 {
+									queue.push(other_eid.clone());
 								}
-							} else if let Some(raw_auth) =
-								auth_val.get("auth_events").and_then(|v| v.as_array())
+							}
+						}
+					}
+				}
+
+				for auth_eid in sorted_auth_chain {
+					if let Some((auth_val, _)) = auth_chain_map.remove(&auth_eid) {
+						if !auth_events.contains_key(&auth_eid) {
+							if let Ok((pdu, _)) = Box::pin(self.handle_outlier_pdu(
+								origin,
+								create_event,
+								&auth_eid,
+								room_id,
+								auth_val,
+								true,
+								false,
+								room_version_override,
+							))
+							.await
 							{
-								// PduEvent parse failed; check cascade via raw JSON
-								let mut has_rejected_auth = false;
-								for raw_aid in raw_auth {
-									if let Some(aid_str) = raw_aid.as_str() {
-										if let Ok(aid) = <&EventId>::try_from(aid_str) {
-											if self
-												.services
-												.pdu_metadata
-												.is_event_rejected(aid)
-												.await
-											{
-												has_rejected_auth = true;
-												break;
-											}
-										}
-									}
-								}
-								if has_rejected_auth {
-									self.services.pdu_metadata.mark_event_rejected(e.key());
-								}
+								auth_events.insert(pdu.event_id().to_owned(), pdu);
 							}
 						}
 					}
