@@ -351,8 +351,14 @@ where
 			{
 				let mut auth_chain_map = HashMap::new();
 				for auth_pdu in &response.auth_chain {
-					if let Ok((auth_eid, auth_val)) = conduwuit::matrix::event::gen_event_id_canonical_json(auth_pdu, &room_version_id) {
-						if let Ok(parsed) = serde_json::from_value::<PduEvent>(serde_json::to_value(&auth_val).unwrap_or_default()) {
+					if let Ok((auth_eid, auth_val)) =
+						conduwuit::matrix::event::gen_event_id_canonical_json(
+							auth_pdu,
+							&room_version_id,
+						) {
+						if let Ok(parsed) = serde_json::from_value::<PduEvent>(
+							serde_json::to_value(&auth_val).unwrap_or_default(),
+						) {
 							if check_room_id(room_id, &parsed).is_ok() {
 								auth_chain_map.insert(auth_eid, (auth_val, parsed));
 							}
@@ -372,7 +378,10 @@ where
 				}
 
 				let mut sorted_auth_chain = Vec::new();
-				let mut queue: Vec<_> = in_degree.iter().filter_map(|(k, &v)| if v == 0 { Some(k.clone()) } else { None }).collect();
+				let mut queue: Vec<_> = in_degree
+					.iter()
+					.filter_map(|(k, &v)| if v == 0 { Some(k.clone()) } else { None })
+					.collect();
 
 				while let Some(eid) = queue.pop() {
 					sorted_auth_chain.push(eid.clone());

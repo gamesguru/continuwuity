@@ -355,7 +355,11 @@ features = ["future"]
 [workspace.dependencies.dashmap]
 version = "6.1.0"
 
-# Used for matrix spec type definitions and helpers
+# Used for matrix spec type definitions and helpers (legacy=libsodium compat)
+[workspace.dependencies.ed25519-dalek]
+version = "2.2.0"
+features = ["legacy_compatibility"]
+
 [workspace.dependencies.ruma]
 git = "https://forgejo.ellis.link/continuwuation/ruwuma"
 #branch = "conduwuit-changes"
