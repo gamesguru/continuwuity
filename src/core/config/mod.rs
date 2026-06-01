@@ -1831,6 +1831,11 @@ pub struct Config {
 	#[serde(default, with = "serde_regex")]
 	pub forbidden_usernames: RegexSet,
 
+	/// List of regex patterns for users that we will silently drop E2EE to-device messages to.
+	/// This prevents sending `m.room.encrypted` (room keys) to these users.
+	#[serde(default, with = "serde_regex")]
+	pub prevent_e2ee_to_users: RegexSet,
+
 	/// Retry failed and incomplete messages to remote servers immediately upon
 	/// startup. This is called bursting. If this is disabled, said messages may
 	/// not be delivered until more messages are queued for that server. Do not
