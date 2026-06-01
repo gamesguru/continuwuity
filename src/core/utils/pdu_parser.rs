@@ -14,6 +14,15 @@ pub fn parse_and_clean_pdu(
 	let mut value: CanonicalJsonObject =
 		serde_json::from_str(json_str).map_err(|e| err!("Failed to parse JSON: {e}"))?;
 
+	let event_id = match value
+		.get("event_id")
+		.and_then(CanonicalJsonValue::as_str)
+		.and_then(|id| OwnedEventId::parse(id).ok())
+	{
+		| Some(id) => id,
+		| None => crate::matrix::event::gen_event_id(&value, room_version)?,
+	};
+
 	// Strip diagnostic/internal fields that were injected during export or
 	// debugging
 	crate::utils::pdu_json_canonical_strip(&mut value);
@@ -26,12 +35,6 @@ pub fn parse_and_clean_pdu(
 	if room_features.strips_room_id(is_create) {
 		value.remove("room_id");
 	}
-
-	let event_id = value
-		.get("event_id")
-		.and_then(CanonicalJsonValue::as_str)
-		.and_then(|id| OwnedEventId::parse(id).ok())
-		.ok_or_else(|| err!(Request(InvalidParam("Missing or invalid event_id in PDU"))))?;
 
 	let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id))?;
 
