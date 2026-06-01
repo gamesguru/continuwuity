@@ -66,6 +66,12 @@ pub struct Pdu {
 	// BTreeMap<Box<ServerName>, BTreeMap<ServerSigningKeyId, String>>
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub signatures: Option<Box<RawJsonValue>>,
+
+	/// Whether this event has been rejected (by auth check, soft-fail, or
+	/// admin action). Populated at fetch time from pdu_metadata DB;
+	/// not persisted in the event JSON itself.
+	#[serde(skip)]
+	pub rejected: bool,
 }
 
 /// Content hashes of a PDU.
@@ -85,7 +91,27 @@ impl Pdu {
 			"event_id".into(),
 			ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
 		);
-		let pdu: Self = serde_json::from_value(serde_json::to_value(json)?)?;
+		let mut pdu: Self = serde_json::from_value(serde_json::to_value(json)?)?;
+		pdu.event_id = event_id.to_owned();
+
+		if pdu.room_id.is_none() {
+			if pdu.kind == TimelineEventType::RoomCreate {
+				// V12+: room_id is omitted from the signed content. Derive it
+				// deterministically from the event_id hash ($ -> !) to prevent
+				// a malicious server from spoofing creator privileges.
+				let constructed_hash = event_id.as_str().replacen('$', "!", 1);
+				let constructed_room_id = RoomId::parse(&constructed_hash).map_err(|_| {
+					crate::err!(Request(InvalidParam(
+						"Invalid event_id for room hash derivation"
+					)))
+				})?;
+				pdu.room_id = Some(constructed_room_id.into());
+			} else if let Some(room_id) = room_id {
+				pdu.room_id = Some(room_id.to_owned());
+			} else {
+				return Err(crate::err!(Request(InvalidParam("Event is missing room_id"))));
+			}
+		}
 
 		// Validate the PDU belongs to the expected room if one is specified
 		if let Some(expected_room) = room_id {
@@ -102,7 +128,14 @@ impl Pdu {
 
 impl Event for Pdu {
 	#[inline]
-	fn auth_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
+	fn auth_events(
+		&self,
+	) -> impl DoubleEndedIterator<Item = &EventId>
+	+ ExactSizeIterator
+	+ Clone
+	+ Send
+	+ std::fmt::Debug
+	+ '_ {
 		self.auth_events.iter().map(AsRef::as_ref)
 	}
 
@@ -116,6 +149,9 @@ impl Event for Pdu {
 	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch {
 		MilliSecondsSinceUnixEpoch(self.origin_server_ts)
 	}
+
+	#[inline]
+	fn depth(&self) -> UInt { self.depth }
 
 	#[inline]
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
@@ -153,6 +189,9 @@ impl Event for Pdu {
 	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
 
 	#[inline]
+	fn rejected(&self) -> bool { self.rejected }
+
+	#[inline]
 	fn as_mut_pdu(&mut self) -> &mut Pdu { self }
 
 	#[inline]
@@ -167,7 +206,14 @@ impl Event for Pdu {
 
 impl Event for &Pdu {
 	#[inline]
-	fn auth_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
+	fn auth_events(
+		&self,
+	) -> impl DoubleEndedIterator<Item = &EventId>
+	+ ExactSizeIterator
+	+ Clone
+	+ Send
+	+ std::fmt::Debug
+	+ '_ {
 		self.auth_events.iter().map(AsRef::as_ref)
 	}
 
@@ -181,6 +227,9 @@ impl Event for &Pdu {
 	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch {
 		MilliSecondsSinceUnixEpoch(self.origin_server_ts)
 	}
+
+	#[inline]
+	fn depth(&self) -> UInt { self.depth }
 
 	#[inline]
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
@@ -216,6 +265,9 @@ impl Event for &Pdu {
 
 	#[inline]
 	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
+
+	#[inline]
+	fn rejected(&self) -> bool { self.rejected }
 
 	#[inline]
 	fn as_pdu(&self) -> &Pdu { self }

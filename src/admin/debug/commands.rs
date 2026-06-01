@@ -1,12 +1,12 @@
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet},
 	fmt::Write,
 	iter::once,
 	time::{Instant, SystemTime},
 };
 
 use conduwuit::{
-	Err, Result, debug_error, err, info,
+	Err, Result, err, info,
 	matrix::{
 		Event,
 		pdu::{PduEvent, PduId, RawPduId},
@@ -22,7 +22,9 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use lettre::message::Mailbox;
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	RoomVersionId, api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
+	OwnedUserId, RoomVersionId,
+	api::federation::event::{get_event, get_room_state},
+	events::StateEventType,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -92,32 +94,67 @@ pub(super) async fn parse_pdu(&self) -> Result {
 
 #[admin_command]
 pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
-	let mut outlier = false;
-	let mut pdu_json = self
+	let in_timeline = self
 		.services
 		.rooms
 		.timeline
-		.get_non_outlier_pdu_json(&event_id)
+		.get_pdu_id(&event_id)
+		.await
+		.is_ok();
+	let in_outlier = self
+		.services
+		.rooms
+		.outlier
+		.get_outlier_pdu_json(&event_id)
+		.await
+		.is_ok();
+
+	if !in_timeline && !in_outlier {
+		return Err!("PDU not found locally.");
+	}
+
+	let pdu_json = if in_timeline {
+		self.services.rooms.timeline.get_pdu_json(&event_id).await?
+	} else {
+		self.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(&event_id)
+			.await?
+	};
+	let text = serde_json::to_string_pretty(&pdu_json)?;
+
+	let mut status = String::new();
+	if in_timeline && in_outlier {
+		status.push_str("STUCK STATE (Both Timeline and Outlier tables)");
+	} else if in_timeline {
+		status.push_str("Timeline PDU");
+	} else {
+		status.push_str("Outlier PDU");
+	}
+
+	let soft_failed = self
+		.services
+		.rooms
+		.pdu_metadata
+		.is_event_soft_failed(&event_id)
 		.await;
-
-	if pdu_json.is_err() {
-		outlier = true;
-		pdu_json = self.services.rooms.timeline.get_pdu_json(&event_id).await;
+	if soft_failed {
+		status.push_str(" [SOFT-FAIL]");
 	}
 
-	match pdu_json {
-		| Err(_) => return Err!("PDU not found locally."),
-		| Ok(json) => {
-			let text = serde_json::to_string_pretty(&json)?;
-			let msg = if outlier {
-				"Outlier (Rejected / Soft Failed) PDU found in our database"
-			} else {
-				"PDU found in our database"
-			};
-			write!(self, "{msg}\n```json\n{text}\n```",)
-		},
+	let rejected = self
+		.services
+		.rooms
+		.pdu_metadata
+		.is_event_rejected(&event_id)
+		.await;
+	if rejected {
+		status.push_str(" [REJECTED]");
 	}
-	.await
+
+	let out = format!("Status: {status}\n\n```json\n{text}\n```");
+	self.write_str(&out).await
 }
 
 #[admin_command]
@@ -232,10 +269,7 @@ pub(super) async fn get_remote_pdu(
 	match self
 		.services
 		.sending
-		.send_federation_request(&server, ruma::api::federation::event::get_event::v1::Request {
-			event_id: event_id.clone(),
-			include_unredacted_content: None,
-		})
+		.send_federation_request(&server, get_event::v1::Request::new(event_id.clone(), None))
 		.await
 	{
 		| Err(e) => {
@@ -287,15 +321,16 @@ pub(super) async fn get_remote_pdu(
 
 #[admin_command]
 pub(super) async fn get_room_state(&self, room: OwnedRoomOrAliasId) -> Result {
+	use std::fmt::Write;
+
 	self.bail_restricted()?;
 
 	let room_id = self.services.rooms.alias.resolve(&room).await?;
-	let room_state: Vec<Raw<AnyStateEvent>> = self
+	let room_state: Vec<_> = self
 		.services
 		.rooms
 		.state_accessor
 		.room_state_full_pdus(&room_id)
-		.map_ok(Event::into_format)
 		.try_collect()
 		.await?;
 
@@ -303,14 +338,18 @@ pub(super) async fn get_room_state(&self, room: OwnedRoomOrAliasId) -> Result {
 		return Err!("Unable to find room state in our database (vector is empty)",);
 	}
 
-	let json = serde_json::to_string_pretty(&room_state).map_err(|e| {
-		err!(Database(
-			"Failed to convert room state events to pretty JSON, possible invalid room state \
-			 events in our database {e}",
-		))
-	})?;
+	let mut out = format!("{} state events in {}:\n", room_state.len(), room_id);
+	for pdu in &room_state {
+		writeln!(
+			out,
+			"  {} {} {} {}",
+			pdu.kind(),
+			pdu.state_key().unwrap_or(""),
+			pdu.sender(),
+			pdu.event_id(),
+		)?;
+	}
 
-	let out = format!("```json\n{json}\n```");
 	self.write_str(&out).await
 }
 
@@ -419,7 +458,7 @@ pub(super) async fn change_log_level(&self, filter: Option<String>, reset: bool)
 pub(super) async fn verify_json(&self) -> Result {
 	if self.body.len() < 2
 		|| !self.body[0].trim().starts_with("```")
-		|| self.body.last().unwrap_or(&"").trim() != "```"
+		|| self.body.last().unwrap_or(&EMPTY).trim() != "```"
 	{
 		return Err!("Expected code block in command body. Add --help for details.");
 	}
@@ -437,18 +476,141 @@ pub(super) async fn verify_json(&self) -> Result {
 
 #[admin_command]
 pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
-	use ruma::signatures::Verified;
+	use std::fmt::Write;
 
+	use conduwuit::matrix::{Event, EventTypeExt, RoomVersion, state_res};
+	use futures::future::ready;
+	use ruma::{events::StateEventType, signatures::Verified};
+
+	let pdu = self.services.rooms.timeline.get_pdu(&event_id).await?;
 	let mut event = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
+	utils::pdu_json_canonical_strip(&mut event);
 
-	event.remove("event_id");
-	let msg = match self.services.server_keys.verify_event(&event, None).await {
-		| Err(e) => return Err(e),
-		| Ok(Verified::Signatures) => "signatures OK, but content hash failed (redaction).",
-		| Ok(Verified::All) => "signatures and hashes OK.",
+	// Status flags
+	let (is_rejected, is_soft_failed) = tokio::join!(
+		self.services
+			.rooms
+			.pdu_metadata
+			.is_event_rejected(&event_id),
+		self.services
+			.rooms
+			.pdu_metadata
+			.is_event_soft_failed(&event_id),
+	);
+	let is_outlier = self
+		.services
+		.rooms
+		.outlier
+		.get_outlier_pdu_json(&event_id)
+		.await
+		.is_ok();
+	let is_timeline = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu_id(&event_id)
+		.await
+		.is_ok();
+
+	let room_version_id = if let Some(room_id) = pdu.room_id_or_hash() {
+		self.services
+			.rooms
+			.state
+			.get_room_version(&room_id)
+			.await
+			.unwrap_or(RoomVersionId::V12)
+	} else {
+		RoomVersionId::V12
+	};
+	let room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
+
+	// Signature verification
+	let sig_msg = match self
+		.services
+		.server_keys
+		.verify_event(&event, Some(&room_version_id))
+		.await
+	{
+		| Err(e) => format!("SIGNATURE FAILED: {e:?}"),
+		| Ok(Verified::Signatures) => "signatures OK, content hash FAILED (redaction)".to_owned(),
+		| Ok(Verified::All) => "signatures and hashes OK".to_owned(),
 	};
 
-	self.write_str(msg).await
+	// Auth check against current room state
+	let auth_msg = if let Some(room_id) = pdu.room_id_or_hash() {
+		{
+			// Gather auth events from the PDU's own declared auth_events
+			let mut auth_events = HashMap::new();
+			for auth_event_id in pdu.auth_events() {
+				if let Ok(auth_pdu) = self.services.rooms.timeline.get_pdu(auth_event_id).await {
+					let key = auth_pdu
+						.kind()
+						.with_state_key(auth_pdu.state_key().unwrap_or(""));
+					auth_events.insert(key, auth_pdu);
+				}
+			}
+
+			let state_fetch = |k: &StateEventType, s: &str| {
+				let key = k.with_state_key(s);
+				ready(auth_events.get(&key).map(ToOwned::to_owned))
+			};
+
+			// Get create event for this room
+			let create = self
+				.services
+				.rooms
+				.state_accessor
+				.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+				.await;
+
+			match create {
+				| Ok(create_event) => {
+					match state_res::event_auth::auth_check(
+						&room_version,
+						&pdu,
+						None,
+						state_fetch,
+						create_event.as_pdu(),
+					)
+					.await
+					{
+						| Ok(true) => "PASS".to_owned(),
+						| Ok(false) => "FAIL (not authorized)".to_owned(),
+						| Err(e) => format!("ERROR: {e}"),
+					}
+				},
+				| Err(_) => "SKIP (no create event)".to_owned(),
+			}
+		}
+	} else {
+		"SKIP (no room_id)".to_owned()
+	};
+
+	let mut out = String::new();
+	writeln!(out, "Event: {event_id}")?;
+	if let Some(room_id) = pdu.room_id_or_hash() {
+		writeln!(out, "Room: {room_id}")?;
+	}
+	writeln!(out, "Type: {}", pdu.kind())?;
+	if pdu.kind() == &ruma::events::TimelineEventType::RoomMember {
+		if let Ok(content) = serde_json::from_str::<serde_json::Value>(pdu.content().get()) {
+			if let Some(membership) = content.get("membership").and_then(|m| m.as_str()) {
+				writeln!(out, "Membership: {membership}")?;
+			}
+		}
+	}
+	writeln!(out, "State key: {}", pdu.state_key().unwrap_or("<none (not a state event)>"))?;
+	writeln!(out, "Sender: {}", pdu.sender())?;
+	writeln!(out, "Room Version: {room_version_id}")?;
+	writeln!(out, "Verify: {sig_msg}")?;
+	writeln!(out, "Auth check: {auth_msg}")?;
+	writeln!(
+		out,
+		"Status: timeline={is_timeline} outlier={is_outlier} rejected={is_rejected} \
+		 soft_failed={is_soft_failed}"
+	)?;
+
+	self.write_str(&out).await
 }
 
 #[admin_command]
@@ -460,7 +622,7 @@ pub(super) async fn first_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 		.services
 		.rooms
 		.state_cache
-		.server_in_room(&self.services.server.name, &room_id)
+		.server_is_participant(&self.services.server.name, &room_id)
 		.await
 	{
 		return Err!("We are not participating in the room / we don't know about the room ID.",);
@@ -487,7 +649,7 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 		.services
 		.rooms
 		.state_cache
-		.server_in_room(&self.services.server.name, &room_id)
+		.server_is_participant(&self.services.server.name, &room_id)
 		.await
 	{
 		return Err!("We are not participating in the room / we don't know about the room ID.");
@@ -507,126 +669,590 @@ pub(super) async fn latest_pdu_in_room(&self, room_id: OwnedRoomId) -> Result {
 
 #[admin_command]
 #[tracing::instrument(skip(self), level = "info")]
-pub(super) async fn force_set_room_state_from_server(
+#[allow(clippy::fn_params_excessive_bools)]
+pub(crate) async fn force_set_state(
 	&self,
 	room_id: OwnedRoomId,
-	server_name: OwnedServerName,
+	server_names: Vec<OwnedServerName>,
 	at_event: Option<OwnedEventId>,
+	overwrite: bool,
+	skip_sig_verify: bool,
+	absolute: bool,
+	output: Option<String>,
+	input: Option<String>,
+	dry_run: bool,
+	#[allow(unused_variables)] skip_membership_rebuild: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
-	if !self
-		.services
-		.rooms
-		.state_cache
-		.server_in_room(&self.services.server.name, &room_id)
-		.await
-	{
-		return Err!("We are not participating in the room / we don't know about the room ID.");
-	}
+	// --overwrite is shorthand for both flags
+	let skip_sig_verify = skip_sig_verify || overwrite;
+	let absolute = absolute || overwrite;
 
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
-		| None => self
-			.services
-			.rooms
-			.timeline
-			.latest_pdu_in_room(&room_id)
-			.await
-			.map_err(|_| err!(Database("Failed to find the latest PDU in database")))?
-			.event_id()
-			.to_owned(),
+		| None => {
+			if !self
+				.services
+				.rooms
+				.state_cache
+				.server_is_participant(&self.services.server.name, &room_id)
+				.await
+			{
+				return Err!(Request(InvalidParam(
+					"We are not participating in the room; provide an event_id to bootstrap \
+					 using the --at-event flag."
+				)));
+			}
+			self.services
+				.rooms
+				.timeline
+				.latest_pdu_in_room(&room_id)
+				.await
+				.map_err(|_| err!(Database("Failed to find the latest PDU in database")))?
+				.event_id()
+				.to_owned()
+		},
 	};
 
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let db_room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version(&room_id)
+		.await
+		.ok();
 
 	let mut state: HashMap<u64, OwnedEventId> = HashMap::new();
 
-	let remote_state_response = self
-		.services
-		.sending
-		.send_federation_request(&server_name, get_room_state::v1::Request {
-			room_id: room_id.clone(),
-			event_id: at_event_id,
-		})
-		.await?;
+	let at_event_id_clone = at_event_id.clone();
+	let at_event_id_str = at_event_id.to_string();
 
-	for pdu in remote_state_response.pdus.clone() {
-		match self
+	// Load state from file, federation, or local database
+	let (pdus, auth_chain): (
+		Vec<Box<serde_json::value::RawValue>>,
+		Vec<Box<serde_json::value::RawValue>>,
+	) = if let Some(ref path) = input {
+		info!("Loading state from file: {path}");
+		let data = std::fs::read_to_string(path)
+			.map_err(|e| err!(Database("Failed to read input file: {e:?}")))?;
+		let parsed: serde_json::Value = serde_json::from_str(&data)
+			.map_err(|e| err!(Database("Failed to parse input file: {e:?}")))?;
+		let pdus_val = parsed
+			.get("pdus")
+			.ok_or(err!(Database("Missing 'pdus' key in input file")))?;
+		let auth_val = parsed
+			.get("auth_chain")
+			.ok_or(err!(Database("Missing 'auth_chain' key in input file")))?;
+		let pdus: Vec<Box<serde_json::value::RawValue>> =
+			serde_json::from_value(pdus_val.clone())
+				.map_err(|e| err!(Database("Failed to parse PDUs: {e:?}")))?;
+		let auth_chain: Vec<Box<serde_json::value::RawValue>> =
+			serde_json::from_value(auth_val.clone())
+				.map_err(|e| err!(Database("Failed to parse auth chain: {e:?}")))?;
+		info!(
+			"Loaded {} state PDUs and {} auth chain events from file",
+			pdus.len(),
+			auth_chain.len()
+		);
+		(pdus, auth_chain)
+	} else if !server_names.is_empty() {
+		let mut all_pdus: Vec<Box<serde_json::value::RawValue>> = Vec::new();
+		let mut all_auth: Vec<Box<serde_json::value::RawValue>> = Vec::new();
+
+		for server_name in &server_names {
+			info!("Fetching room state from {server_name} at event {at_event_id_str}...");
+			match self
+				.services
+				.sending
+				.send_federation_request(server_name, get_room_state::v1::Request {
+					room_id: room_id.clone(),
+					event_id: at_event_id.clone(),
+				})
+				.await
+			{
+				| Ok(resp) => {
+					info!(
+						"Received {} state PDUs and {} auth chain events from {server_name}",
+						resp.pdus.len(),
+						resp.auth_chain.len()
+					);
+
+					if let Some(ref path) = output {
+						let suffix = if server_names.len() > 1 {
+							format!("-{server_name}")
+						} else {
+							String::new()
+						};
+						let dump_path = format!("{path}{suffix}");
+						info!("Dumping federation state response to {dump_path}");
+						let dump = serde_json::json!({
+							"room_id": room_id,
+							"server_name": server_name,
+							"event_id": at_event_id_str,
+							"pdus": resp.pdus,
+							"auth_chain": resp.auth_chain,
+						});
+						if let Err(e) = std::fs::write(
+							&dump_path,
+							serde_json::to_string_pretty(&dump).unwrap_or_default(),
+						) {
+							warn!("Failed to write output file {dump_path}: {e}");
+						}
+					}
+
+					all_pdus.extend(resp.pdus);
+					all_auth.extend(resp.auth_chain);
+				},
+				| Err(e) => {
+					warn!("Failed to fetch state from {server_name}: {e}");
+					self.write_str(&format!("⚠ Failed to fetch state from {server_name}: {e}\n"))
+						.await?;
+					continue;
+				},
+			}
+		}
+
+		if all_pdus.is_empty() {
+			return Err!(Request(Unknown("All servers failed to respond")));
+		}
+
+		info!(
+			"Merged state from {} server(s): {} PDUs, {} auth chain events",
+			server_names.len(),
+			all_pdus.len(),
+			all_auth.len()
+		);
+		(all_pdus, all_auth)
+	} else {
+		// Local-only: rebuild state from existing database without federation
+		info!("Rebuilding room state from local DAG (no federation)...");
+		let ssh = self
 			.services
 			.rooms
-			.event_handler
-			.parse_incoming_pdu(&pdu)
+			.state
+			.get_room_shortstatehash(&room_id)
 			.await
-		{
-			| Ok(t) => t,
-			| Err(e) => {
-				warn!("Could not parse PDU, ignoring: {e}");
-				continue;
-			},
-		};
-	}
+			.map_err(|_| {
+				err!("No existing state for room — provide a server to bootstrap from")
+			})?;
 
-	info!("Going through room_state response PDUs");
-	for result in remote_state_response.pdus.iter().map(|pdu| {
-		self.services
-			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
-	}) {
-		let Ok((event_id, value)) = result.await else {
+		let local_state: HashMap<u64, OwnedEventId> = self
+			.services
+			.rooms
+			.state_accessor
+			.state_full_ids(ssh)
+			.collect()
+			.await;
+
+		info!("Local state has {} entries, re-resolving...", local_state.len());
+		state = local_state;
+		// No PDUs or auth_chain to process — state is already populated
+		(Vec::new(), Vec::new())
+	};
+
+	// Resolve room version: prefer DB, fall back to create event in
+	// federation response. Error out if neither works — using the wrong
+	// version produces wrong reference hashes (e.g. V11 rules on a V6 room).
+	let room_version = if let Some(v) = db_room_version {
+		v
+	} else {
+		let mut found = None;
+		for pdu in &pdus {
+			if let Ok(val) = serde_json::from_str::<serde_json::Value>(pdu.get()) {
+				if val.get("type").and_then(|v| v.as_str()) == Some("m.room.create") {
+					if let Some(ver) = val
+						.get("content")
+						.and_then(|c| c.get("room_version"))
+						.and_then(|v| v.as_str())
+					{
+						found = ver.parse::<RoomVersionId>().ok();
+					}
+					break;
+				}
+			}
+		}
+		let v = found.ok_or_else(|| {
+			err!(Request(Unknown(
+				"Cannot determine room version from DB or federation response. Refusing to \
+				 proceed — wrong version produces wrong event hashes."
+			)))
+		})?;
+		info!("Extracted room version {v} from create event (DB had no state)");
+		v
+	};
+
+	info!(
+		"Validating signatures for {} room_state PDUs (skip_sig_verify={skip_sig_verify})",
+		pdus.len()
+	);
+	let mut validated = 0_usize;
+	let mut dropped = 0_usize;
+	for pdu in &pdus {
+		// Always compute event_id cheaply first (hash, no crypto)
+		let Ok((event_id, _)) =
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version)
+		else {
+			dropped = dropped.saturating_add(1);
 			continue;
 		};
 
-		let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
-			.map_err(|e| {
-				debug_error!(
-					"Invalid PDU in fetching remote room state PDUs response: {value:#?}"
-				);
-				err!(BadServerResponse(debug_error!("Invalid PDU in send_join response: {e:?}")))
-			})?;
-		if pdu.room_id_or_hash().as_deref() != Some(room_id.as_ref()) {
-			return Err!(BadServerResponse("Remote room_state PDU belongs to a different room"));
-		}
-		self.services
+		// Skip expensive Ed25519 sig verification for events already stored locally
+		let already_exists = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok() || self
+			.services
 			.rooms
 			.outlier
-			.add_pdu_outlier(&event_id, &value);
+			.get_outlier_pdu_json(&event_id)
+			.await
+			.is_ok();
 
-		if let Some(state_key) = &pdu.state_key {
+		let result = if skip_sig_verify || already_exists {
+			// Skip signature validation — just derive event_id from content hash
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
+				|(event_id, mut value)| {
+					value.insert(
+						"event_id".into(),
+						ruma::CanonicalJsonValue::String(event_id.as_str().into()),
+					);
+					(event_id, value)
+				},
+			)
+		} else {
+			self.services
+				.server_keys
+				.validate_and_add_event_id(pdu, &room_version)
+				.await
+		};
+		let Ok((event_id, value)) = result else {
+			dropped = dropped.saturating_add(1);
+			continue;
+		};
+		validated = validated.saturating_add(1);
+
+		// Clear any rejection/soft-fail markers for state PDUs we accept from
+		// federation. Without this, previously rejected events stay in the
+		// rejectedeventids table and poison all subsequent state_res operations.
+		// (Auth chain events already get this treatment at line ~967 below.)
+		self.services
+			.rooms
+			.pdu_metadata
+			.clear_pdu_markers(&event_id);
+
+		let total = validated.saturating_add(dropped);
+		if total.is_multiple_of(100) {
+			info!(
+				"Sig verify progress: {validated} ok, {dropped} dropped of {} total",
+				pdus.len()
+			);
+		}
+
+		// Extract fields directly from canonical JSON — avoids PduEvent
+		// deserialization failures for events with oversized IDs (>255 bytes).
+		let event_type_str = value.get("type").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+		let state_key_opt = value.get("state_key").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+		let pdu_room_id = value.get("room_id").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+
+		let Some(ref event_type) = event_type_str else {
+			warn!("Skipping PDU {event_id} with no type field");
+			dropped = dropped.saturating_add(1);
+			continue;
+		};
+
+		// Validate room_id matches (v11+ events may omit room_id)
+		if let Some(ref rid) = pdu_room_id {
+			if rid != room_id.as_str() {
+				return Err!(BadServerResponse(
+					"Remote room_state PDU belongs to a different room"
+				));
+			}
+		}
+
+		if !already_exists {
+			info!("PDU {event_id} NOT in timeline, adding as outlier");
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value, Some(&room_id));
+		}
+
+		if let Some(state_key) = &state_key_opt {
 			let shortstatekey = self
 				.services
 				.rooms
 				.short
-				.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
+				.get_or_create_shortstatekey(&event_type.clone().into(), state_key)
 				.await;
 
-			state.insert(shortstatekey, pdu.event_id.clone());
+			state.insert(shortstatekey, event_id.clone());
+		}
+	}
+	info!("State PDUs: {validated} validated, {dropped} dropped (failed signature check)");
+	if dropped > 0 {
+		warn!(
+			"{dropped} state PDUs were silently dropped due to signature validation failure. \
+			 Consider re-running with --skip-sig-verify to skip validation."
+		);
+	}
+
+	// Federation /state returns state BEFORE the queried event. When the
+	// at_event is a state event, inject it into the state map so force-set
+	// includes its own state change (e.g. a join event for the local user).
+	if let Ok(at_pdu) = self
+		.services
+		.rooms
+		.timeline
+		.get_pdu(&at_event_id_clone)
+		.await
+	{
+		if let Some(state_key) = &at_pdu.state_key {
+			let shortstatekey = self
+				.services
+				.rooms
+				.short
+				.get_or_create_shortstatekey(&at_pdu.kind.to_string().into(), state_key)
+				.await;
+			info!("Injecting at_event {at_event_id_clone} into state (state-after)");
+			state.insert(shortstatekey, at_event_id_clone);
 		}
 	}
 
 	info!("Going through auth_chain response");
-	for result in remote_state_response.auth_chain.iter().map(|pdu| {
-		self.services
-			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
-	}) {
-		let Ok((event_id, value)) = result.await else {
+	let mut auth_existing = 0_usize;
+	let mut auth_added = 0_usize;
+	let mut auth_dropped = 0_usize;
+	let auth_chain_total = auth_chain.len();
+	for pdu in &auth_chain {
+		// Compute event_id first (cheap hash, no crypto) to check existence
+		// before doing expensive sig verification.
+		let Ok((event_id, _)) =
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version)
+		else {
+			auth_dropped = auth_dropped.saturating_add(1);
 			continue;
 		};
 
-		self.services
+		// Skip events we already have (timeline or outlier store)
+		if self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok() || self
+			.services
 			.rooms
 			.outlier
-			.add_pdu_outlier(&event_id, &value);
+			.get_outlier_pdu_json(&event_id)
+			.await
+			.is_ok()
+		{
+			auth_existing = auth_existing.saturating_add(1);
+		} else {
+			// Only sig-verify events we actually need to store
+			let result = if skip_sig_verify {
+				conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
+					|(event_id, mut value)| {
+						value.insert(
+							"event_id".into(),
+							ruma::CanonicalJsonValue::String(event_id.as_str().into()),
+						);
+						(event_id, value)
+					},
+				)
+			} else {
+				self.services
+					.server_keys
+					.validate_and_add_event_id(pdu, &room_version)
+					.await
+			};
+
+			let Ok((event_id, value)) = result else {
+				auth_dropped = auth_dropped.saturating_add(1);
+				continue;
+			};
+
+			// Clear markers for incoming auth events from the backbone
+			self.services
+				.rooms
+				.pdu_metadata
+				.clear_pdu_markers(&event_id);
+
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value, Some(&room_id));
+			auth_added = auth_added.saturating_add(1);
+		}
+
+		let processed = auth_existing
+			.saturating_add(auth_added)
+			.saturating_add(auth_dropped);
+		if processed.is_multiple_of(1000) {
+			info!(
+				"Auth chain progress: {auth_added} added, {auth_existing} existing, \
+				 {auth_dropped} dropped of {auth_chain_total} total"
+			);
+		}
+	}
+	info!("Auth chain: {auth_added} added, {auth_existing} existing, {auth_dropped} dropped");
+	let auth_total = auth_added.saturating_add(auth_existing);
+	if auth_total > 10_000 {
+		warn!("Auth chain exceeds 10k events ({auth_total}) — possible DAG bloat");
 	}
 
-	info!("Resolving new room state");
-	let new_room_state = self
-		.services
-		.rooms
-		.event_handler
-		.resolve_state(&room_id, &room_version, state)
+	if dry_run {
+		// Compare remote state against local state without modifying anything
+		let local_state: HashMap<u64, OwnedEventId> = if let Ok(ssh) = self
+			.services
+			.rooms
+			.state
+			.get_room_shortstatehash(&room_id)
+			.await
+		{
+			self.services
+				.rooms
+				.state_accessor
+				.state_full_ids(ssh)
+				.collect()
+				.await
+		} else {
+			HashMap::new()
+		};
+
+		let mut would_add = Vec::new();
+		let mut would_remove = Vec::new();
+		let mut would_replace = Vec::new();
+
+		// Events in remote state but not in local
+		for (ssk, remote_eid) in &state {
+			match local_state.get(ssk) {
+				| None => would_add.push(remote_eid.clone()),
+				| Some(local_eid) if local_eid != remote_eid => {
+					would_replace.push((local_eid.clone(), remote_eid.clone()));
+				},
+				| Some(_) => {}, // Same event, no change
+			}
+		}
+
+		// Events in local state but not in remote
+		for (ssk, local_eid) in &local_state {
+			if !state.contains_key(ssk) {
+				would_remove.push(local_eid.clone());
+			}
+		}
+
+		self.write_str(&format!(
+			"**Dry run** — no changes applied.\n\nRemote state events: {}\nLocal state events: \
+			 {}\nWould add: {}\nWould remove: {}\nWould replace: {}\nValidated: {validated}, \
+			 Dropped: {dropped}\nAuth chain: {auth_added} new, {auth_existing} existing, \
+			 {auth_dropped} dropped",
+			state.len(),
+			local_state.len(),
+			would_add.len(),
+			would_remove.len(),
+			would_replace.len(),
+		))
 		.await?;
+
+		if !would_replace.is_empty() {
+			use std::fmt::Write;
+			let mut details = String::from("\nReplacements:\n");
+			for (old, new) in &would_replace {
+				let _ = writeln!(details, "  {old} → {new}");
+			}
+			self.write_str(&details).await?;
+		}
+
+		if !would_add.is_empty() {
+			let mut details = String::from("\nAdditions:\n");
+			for eid in &would_add {
+				let _ = writeln!(details, "  + {eid}");
+			}
+			self.write_str(&details).await?;
+		}
+
+		if !would_remove.is_empty() {
+			let mut details = String::from("\nRemovals:\n");
+			for eid in &would_remove {
+				let _ = writeln!(details, "  - {eid}");
+			}
+			self.write_str(&details).await?;
+		}
+
+		return Ok(());
+	}
+
+	// Collect remote event IDs before state is consumed by compress/resolve
+	let remote_eids: HashSet<OwnedEventId> = state.values().cloned().collect();
+	info!("Clearing PDU markers for {} remote events", remote_eids.len());
+
+	// Un-reject/un-soft-fail the authoritative remote events so they
+	//    can participate in state resolution
+	for eid in &remote_eids {
+		self.services.rooms.pdu_metadata.clear_pdu_markers(eid);
+	}
+
+	// Neutralize DAG poison BEFORE state resolution evaluates them
+	info!("Rejecting conflicting local state");
+	Box::pin(self.reject_conflicting_state(&room_id, &remote_eids)).await;
+
+	let new_room_state = if absolute {
+		info!("Resolving new room state (ABSOLUTE OVERRIDE)");
+		let compressed: conduwuit_service::rooms::state_compressor::CompressedState = self
+			.services
+			.rooms
+			.state_compressor
+			.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, (*eid).as_ref())))
+			.collect()
+			.await;
+		std::sync::Arc::new(compressed)
+	} else {
+		// Only attempt state resolution if the room has prior state.
+		// If there's no shortstatehash, this is a genuine cold bootstrap —
+		// use remote state directly. Real resolve_state errors (auth chain
+		// failures, resolution bugs) must NOT silently fall through here.
+		if self
+			.services
+			.rooms
+			.state
+			.get_room_shortstatehash(&room_id)
+			.await
+			.is_err()
+		{
+			info!("No prior state for room — using remote state directly (cold bootstrap)");
+			let compressed: conduwuit_service::rooms::state_compressor::CompressedState = self
+				.services
+				.rooms
+				.state_compressor
+				.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, (*eid).as_ref())))
+				.collect()
+				.await;
+			std::sync::Arc::new(compressed)
+		} else {
+			info!("Resolving new room state (state-res)");
+			Box::pin(self.services.rooms.event_handler.resolve_state(
+				&room_id,
+				&room_version,
+				state,
+			))
+			.await?
+		}
+	};
 
 	info!("Compressing new room state");
 	let HashSetCompressStateEvent {
@@ -637,30 +1263,368 @@ pub(super) async fn force_set_room_state_from_server(
 		.services
 		.rooms
 		.state_compressor
-		.save_state(room_id.clone().as_ref(), new_room_state)
+		// Use save_state_as_root instead of save_state: the normal save_state
+		// must traverse the entire O(depth) ancestor diff chain via
+		// load_shortstatehash_info, which hangs on rooms with deep history.
+		// save_state_as_root checks the stateinfo_cache (O(1)) and falls back to
+		// writing the full state as a fresh root, completing in O(state_size).
+		.save_state_as_root(room_id.clone().as_ref(), new_room_state)
 		.await?;
 
 	let state_lock = self.services.rooms.state.mutex.lock(&*room_id).await;
 
-	info!("Forcing new room state");
-	self.services
+	if skip_membership_rebuild {
+		// Fast path: just set the state hash directly, skip per-member iteration
+		info!("Fast-setting room state (skipping membership rebuild)");
+		self.services
+			.rooms
+			.state
+			.set_room_state(room_id.as_ref(), short_state_hash, &state_lock);
+
+		// Update joined count from state snapshot
+		self.services
+			.rooms
+			.state_cache
+			.update_joined_count(room_id.as_ref())
+			.await;
+	} else {
+		info!(
+			"Forcing new room state (quiet mode): {} added, {} removed",
+			added.len(),
+			removed.len()
+		);
+		Box::pin(self.services.rooms.state.force_state_quiet(
+			room_id.clone().as_ref(),
+			short_state_hash,
+			added,
+			removed,
+			&state_lock,
+		))
+		.await?;
+	}
+
+	// Set the tip event as the sole forward extremity. Previous behavior
+	// scattered extremities across all state events, fracturing the DAG.
+	// The state is already corrected by force_state above; extremities
+	// should just point at the timeline tip.
+	let tip_event_id = self
+		.services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await;
+	if let Ok(tip_pdu) = tip_event_id {
+		self.services
+			.rooms
+			.state
+			.set_forward_extremities(room_id.as_ref(), once(tip_pdu.event_id()), &state_lock)
+			.await;
+
+		// Update the tip event's shortstatehash so that state_at_incoming
+		// inherits the forced state when the next event arrives. Without this,
+		// the forced state is ephemeral — the first incoming event re-resolves
+		// from the tip's old shortstatehash and undoes the force.
+		let tip_shorteventid = self
+			.services
+			.rooms
+			.short
+			.get_or_create_shorteventid(tip_pdu.event_id())
+			.await;
+		self.services
+			.rooms
+			.state
+			.set_pdu_shortstatehash(tip_shorteventid, short_state_hash);
+		info!("Set tip {} as sole extremity (room SSH {short_state_hash})", tip_pdu.event_id());
+	} else {
+		// No timeline events — /sync won't deliver this room.
+		// Promote the most recent state event as a timeline anchor.
+		Box::pin(self.promote_sync_anchor(&room_id, short_state_hash, &state_lock)).await;
+	}
+
+	if !skip_membership_rebuild {
+		info!("Rebuilding membership cache");
+		Box::pin(self.rebuild_membership_cache_inner(room_id.clone(), short_state_hash)).await;
+	}
+
+	self.write_str("Successfully forced the room state from the requested remote server.")
+		.await
+}
+
+/// Mark conflicting local state events as rejected. Without this, stale
+/// unrejected "join" events win over authoritative "ban" events during
+/// future state resolution, causing the state to reset in a loop.
+#[admin_command]
+async fn reject_conflicting_state(
+	&self,
+	room_id: &ruma::RoomId,
+	remote_eids: &HashSet<OwnedEventId>,
+) {
+	let Ok(local_ssh) = self
+		.services
 		.rooms
 		.state
-		.force_state(room_id.clone().as_ref(), short_state_hash, added, removed, &state_lock)
-		.await?;
+		.get_room_shortstatehash(room_id)
+		.await
+	else {
+		return;
+	};
 
-	info!(
-		"Updating joined counts for room just in case (e.g. we may have found a difference in \
-		 the room's m.room.member state"
-	);
+	// Collect into Vec FIRST to drop the zero-copy RocksDB iterator
+	// before the write phase. Holding an iterator across .await points
+	// risks SEGV if compaction invalidates the underlying memory.
+	let local_eids: HashSet<OwnedEventId> = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full(local_ssh)
+		.map(|(_, pdu)| pdu.event_id().to_owned())
+		.collect()
+		.await;
+
+	let extra: Vec<OwnedEventId> = local_eids.difference(remote_eids).cloned().collect();
+	if !extra.is_empty() {
+		let mut rejected = 0_usize;
+		for eid in &extra {
+			if !self
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_admin_rejected(eid)
+				.await
+			{
+				self.services
+					.rooms
+					.pdu_metadata
+					.mark_event_admin_rejected(eid);
+				rejected = rejected.saturating_add(1);
+			}
+		}
+		info!(
+			"Marked {rejected}/{} conflicting events as rejected (we will not revisit them 🪦)",
+			extra.len()
+		);
+	}
+}
+
+/// Rebuild membership cache from a state snapshot. Extracted to keep
+/// `force_set_room_state_from_server` below the stack-frame limit.
+#[admin_command]
+async fn rebuild_membership_cache_inner(&self, room_id: OwnedRoomId, short_state_hash: u64) {
+	use conduwuit::{info, warn};
+
+	info!("Rebuilding membership cache from state snapshot for {room_id}");
+
+	let mut state_joined: HashSet<OwnedUserId> = HashSet::new();
+	let mut state_invited: HashSet<OwnedUserId> = HashSet::new();
+	let mut members_updated = 0_usize;
+
+	// Collect membership data into a Vec FIRST to drop the zero-copy
+	// RocksDB iterator before the write phase. Holding an iterator
+	// across .await points risks SEGV if compaction invalidates the
+	// underlying memory.
+	let members: Vec<(OwnedUserId, String)> = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full(short_state_hash)
+		.filter_map(|((event_type, state_key), pdu)| async move {
+			if event_type != StateEventType::RoomMember {
+				return None;
+			}
+			let user_id = OwnedUserId::try_from(state_key.as_str()).ok()?;
+			let content = pdu.get_content_as_value();
+			let membership = content
+				.get("membership")
+				.and_then(|v| v.as_str())
+				.unwrap_or("leave")
+				.to_owned();
+			Some((user_id, membership))
+		})
+		.collect()
+		.await;
+
+	// Now process with the iterator dropped — safe to write.
+	for (user_id, membership) in &members {
+		match membership.as_str() {
+			| "join" => {
+				state_joined.insert(user_id.clone());
+				if !self
+					.services
+					.rooms
+					.state_cache
+					.is_joined(user_id, &room_id)
+					.await
+				{
+					self.services
+						.rooms
+						.state_cache
+						.mark_as_joined_silent(user_id, &room_id)
+						.await;
+					members_updated = members_updated.saturating_add(1);
+				}
+			},
+			| "invite" => {
+				state_invited.insert(user_id.clone());
+				// TODO: check-before-write for invites
+			},
+			| "leave" | "ban" => {
+				// TODO: distinguish left vs kicked vs banned for proper
+				// Cinny/Element display. Currently all three map to
+				// mark_as_left which loses the distinction.
+				if self
+					.services
+					.rooms
+					.state_cache
+					.is_invited_or_joined(user_id, &room_id)
+					.await
+				{
+					self.services
+						.rooms
+						.state_cache
+						.mark_as_left_silent(user_id, &room_id)
+						.await;
+					members_updated = members_updated.saturating_add(1);
+				}
+			},
+			| unknown => {
+				warn!("Unknown membership state '{unknown}' for {user_id} in {room_id}");
+			},
+		}
+	}
+
+	// Sweep stale joined cache entries
+	let cached_members: Vec<OwnedUserId> = self
+		.services
+		.rooms
+		.state_cache
+		.room_members(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let mut stale_removed = 0_usize;
+	for user_id in &cached_members {
+		// Symmetric guard: only purge if they are neither joined NOR invited.
+		if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
+			self.services
+				.rooms
+				.state_cache
+				.mark_as_left_silent(user_id, &room_id)
+				.await;
+			stale_removed = stale_removed.saturating_add(1);
+		}
+	}
+
+	// Sweep stale invited cache entries
+	let cached_invited: Vec<OwnedUserId> = self
+		.services
+		.rooms
+		.state_cache
+		.room_members_invited(&room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	for user_id in &cached_invited {
+		// Only purge if they are neither invited NOR joined.
+		// If they transitioned to joined, mark_as_left would accidentally nuke their
+		// valid join.
+		if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
+			self.services
+				.rooms
+				.state_cache
+				.mark_as_left_silent(user_id, &room_id)
+				.await;
+			stale_removed = stale_removed.saturating_add(1);
+		}
+	}
+
 	self.services
 		.rooms
 		.state_cache
 		.update_joined_count(&room_id)
 		.await;
+	info!("Updated {members_updated} member entries, removed {stale_removed} stale caches");
+}
 
-	self.write_str("Successfully forced the room state from the requested remote server.")
-		.await
+/// Promote the most recent state event to the timeline as a Normal PDU,
+/// giving `/sync` a positional cursor to deliver the room to clients.
+#[admin_command]
+async fn promote_sync_anchor(
+	&self,
+	room_id: &ruma::RoomId,
+	short_state_hash: u64,
+	state_lock: &conduwuit_service::rooms::state::RoomMutexGuard,
+) {
+	use conduwuit::matrix::Event;
+	use futures::StreamExt;
+
+	info!("No timeline events found; promoting anchor event for /sync visibility");
+
+	let mut best: Option<(u64, OwnedEventId, PduEvent, CanonicalJsonObject)> = None;
+
+	// Collect candidate IDs first to avoid holding zero-copy RocksDB
+	// iterator across .await points (SEGV prevention)
+	let anchor_candidates: Vec<_> = self
+		.services
+		.rooms
+		.state_accessor
+		.state_full_pdus(short_state_hash)
+		.map(|pdu| {
+			let ts: u64 = pdu.origin_server_ts().0.into();
+			let eid = pdu.event_id().to_owned();
+			(ts, eid)
+		})
+		.collect()
+		.await;
+
+	for (ts, eid) in anchor_candidates {
+		if best.as_ref().is_none_or(|(best_ts, ..)| ts > *best_ts) {
+			// Check both timeline AND outlier tables — force-set imports
+			// state events into the outlier table, not timeline.
+			let json_result = match self.services.rooms.timeline.get_pdu_json(&eid).await {
+				| Ok(json) => Ok(json),
+				| Err(_) => self.services.rooms.outlier.get_outlier_pdu_json(&eid).await,
+			};
+			if let Ok(json) = json_result {
+				// Use from_id_val to inject the room_id into V3+ events
+				// which strip it from the raw JSON to save space.
+				let pdu_result = PduEvent::from_id_val(&eid, json.clone(), Some(room_id));
+				match pdu_result {
+					| Ok(pdu_owned) => {
+						best = Some((ts, eid, pdu_owned, json));
+					},
+					| Err(e) => {
+						warn!("Skipping anchor candidate {eid}: bad PDU JSON: {e}");
+					},
+				}
+			}
+		}
+	}
+
+	if let Some((_ts, anchor_id, anchor_pdu, anchor_json)) = best {
+		match self
+			.services
+			.rooms
+			.timeline
+			.force_insert_pdu(room_id, &anchor_id, &anchor_pdu, &anchor_json, true)
+			.await
+		{
+			| Ok(_pdu_id) => {
+				self.services
+					.rooms
+					.state
+					.set_forward_extremities(room_id, once(anchor_id.as_ref()), state_lock)
+					.await;
+				info!("Promoted {anchor_id} as timeline anchor for /sync");
+			},
+			| Err(e) => {
+				warn!("Failed to promote anchor event {anchor_id}: {e}");
+			},
+		}
+	} else {
+		warn!("No state events found to promote as timeline anchor");
+	}
 }
 
 #[admin_command]
@@ -902,6 +1866,20 @@ pub(super) async fn send_test_email(&self) -> Result {
 
 	self.write_str(&format!("Test email successfully sent to {email}"))
 		.await?;
+
+	Ok(())
+}
+
+#[admin_command]
+pub(super) async fn fix_pdu_event_ids(&self) -> Result {
+	let timeline_fixed = self.services.rooms.timeline.fix_pdu_event_ids().await?;
+	let outlier_fixed = self.services.rooms.outlier.fix_pdu_event_ids().await?;
+
+	let out = format!(
+		"Fixed {timeline_fixed} missing event_ids in timeline PDUs.\nFixed {outlier_fixed} \
+		 missing event_ids in outlier PDUs.\n"
+	);
+	self.write_str(&out).await?;
 
 	Ok(())
 }

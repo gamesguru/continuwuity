@@ -47,7 +47,7 @@ struct StateDiff {
 #[derive(Clone, Default)]
 pub struct ShortStateInfo {
 	pub shortstatehash: ShortStateHash,
-	pub full_state: Arc<CompressedState>,
+	pub full_state: Option<Arc<CompressedState>>,
 	pub added: Arc<CompressedState>,
 	pub removed: Arc<CompressedState>,
 }
@@ -90,8 +90,10 @@ impl crate::Service for Service {
 			let ents = cache.iter().map(at!(1)).flat_map(|vec| vec.iter()).fold(
 				HashMap::new(),
 				|mut ents, ssi| {
-					for cs in &[&ssi.added, &ssi.removed, &ssi.full_state] {
-						ents.insert(Arc::as_ptr(cs), compressed_state_size(cs));
+					ents.insert(Arc::as_ptr(&ssi.added), compressed_state_size(&ssi.added));
+					ents.insert(Arc::as_ptr(&ssi.removed), compressed_state_size(&ssi.removed));
+					if let Some(ref fs) = ssi.full_state {
+						ents.insert(Arc::as_ptr(fs), compressed_state_size(fs));
 					}
 
 					ents
@@ -167,16 +169,25 @@ async fn new_shortstatehash_info(
 	let Some(parent) = parent else {
 		return Ok(vec![ShortStateInfo {
 			shortstatehash,
-			full_state: added.clone(),
+			full_state: Some(added.clone()),
 			added,
 			removed,
 		}]);
 	};
 
 	let mut stack = Box::pin(self.load_shortstatehash_info(parent)).await?;
-	let top = stack.last().expect("at least one frame");
+	let top = stack.last_mut().expect("at least one frame");
 
-	let mut full_state = (*top.full_state).clone();
+	let mut full_state = (**top
+		.full_state
+		.as_ref()
+		.expect("top frame must have full_state"))
+	.clone();
+
+	// Drop the full_state from the parent layer to save gigabytes of RAM
+	// on deeply nested room states.
+	top.full_state = None;
+
 	full_state.extend(added.iter().copied());
 
 	let removed = (*removed).clone();
@@ -188,7 +199,7 @@ async fn new_shortstatehash_info(
 		shortstatehash,
 		added,
 		removed: Arc::new(removed),
-		full_state: Arc::new(full_state),
+		full_state: Some(Arc::new(full_state)),
 	});
 
 	Ok(stack)
@@ -393,7 +404,7 @@ pub async fn save_state(
 		});
 	}
 
-	let states_parents = if let Some(p) = previous_shortstatehash {
+	let states_parents = if let Some(p) = previous_shortstatehash.filter(|&p| p != 0) {
 		self.load_shortstatehash_info(p).await.unwrap_or_default()
 	} else {
 		ShortStateInfoVec::new()
@@ -401,12 +412,19 @@ pub async fn save_state(
 
 	let (statediffnew, statediffremoved) = if let Some(parent_stateinfo) = states_parents.last() {
 		let statediffnew: CompressedState = new_state_ids_compressed
-			.difference(&parent_stateinfo.full_state)
+			.difference(
+				parent_stateinfo
+					.full_state
+					.as_ref()
+					.expect("top frame must have full_state"),
+			)
 			.copied()
 			.collect();
 
 		let statediffremoved: CompressedState = parent_stateinfo
 			.full_state
+			.as_ref()
+			.expect("top frame must have full_state")
 			.difference(&new_state_ids_compressed)
 			.copied()
 			.collect();
@@ -422,6 +440,108 @@ pub async fn save_state(
 			statediffnew.clone(),
 			statediffremoved.clone(),
 			2, // every state change is 2 event changes on average
+			states_parents,
+		)?;
+	}
+
+	Ok(HashSetCompressStateEvent {
+		shortstatehash: new_shortstatehash,
+		added: statediffnew,
+		removed: statediffremoved,
+	})
+}
+
+/// Like `save_state`, but writes the new state as a fresh root node in the
+/// diff chain rather than computing a diff against the room's full history.
+///
+/// `save_state` must load the entire ancestor chain via
+/// `load_shortstatehash_info` to compute an incremental diff — for rooms with
+/// thousands of historical state changes this is an O(depth × state_size)
+/// traversal that can take minutes or hang the task entirely.
+///
+/// This variant skips that traversal and stores the full state unconditionally
+/// as a new root (parent = None). The diff tree becomes slightly larger on
+/// disk (future saves will still diff against this root), but the operation
+/// completes in O(state_size) time regardless of history depth.
+///
+/// Use this for administrative force operations where correctness takes
+/// precedence over diff-chain efficiency.
+#[implement(Service)]
+#[tracing::instrument(skip(self, new_state_ids_compressed), level = "debug")]
+pub async fn save_state_as_root(
+	&self,
+	room_id: &RoomId,
+	new_state_ids_compressed: Arc<CompressedState>,
+) -> Result<HashSetCompressStateEvent> {
+	let previous_shortstatehash = self
+		.services
+		.state
+		.get_room_shortstatehash(room_id)
+		.await
+		.ok();
+
+	let state_hash =
+		utils::calculate_hash(new_state_ids_compressed.iter().map(|bytes| &bytes[..]));
+
+	let (new_shortstatehash, already_existed) = self
+		.services
+		.short
+		.get_or_create_shortstatehash(&state_hash)
+		.await;
+
+	// Fast-path: same state hash → nothing to do.
+	if Some(new_shortstatehash) == previous_shortstatehash {
+		return Ok(HashSetCompressStateEvent {
+			shortstatehash: new_shortstatehash,
+			..Default::default()
+		});
+	}
+
+	// Compute the diff against the previous shortstatehash if we can load it
+	// cheaply from the cache. Otherwise write the full state as a new root —
+	// this avoids the O(depth) chain traversal that causes hangs on large rooms.
+	let (statediffnew, statediffremoved, states_parents) =
+		if let Some(prev) = previous_shortstatehash {
+			if let Some(cached) = self.stateinfo_cache.lock().get_mut(&prev).cloned() {
+				// Parent state was already in cache — diff is cheap.
+				let parent = cached.last().expect("at least one frame");
+				let full = parent
+					.full_state
+					.as_ref()
+					.expect("top frame must have full_state");
+
+				let added: CompressedState =
+					new_state_ids_compressed.difference(full).copied().collect();
+				let removed: CompressedState = full
+					.difference(&new_state_ids_compressed)
+					.copied()
+					.collect();
+
+				(Arc::new(added), Arc::new(removed), cached)
+			} else {
+				// Parent not cached — write the full state as a fresh root to
+				// avoid the expensive recursive chain walk.
+				(
+					new_state_ids_compressed.clone(),
+					Arc::new(CompressedState::new()),
+					ShortStateInfoVec::new(),
+				)
+			}
+		} else {
+			// No previous state at all — this is a cold bootstrap.
+			(
+				new_state_ids_compressed,
+				Arc::new(CompressedState::new()),
+				ShortStateInfoVec::new(),
+			)
+		};
+
+	if !already_existed {
+		self.save_state_from_diff(
+			new_shortstatehash,
+			statediffnew.clone(),
+			statediffremoved.clone(),
+			2,
 			states_parents,
 		)?;
 	}

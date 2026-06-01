@@ -5,7 +5,7 @@ use conduwuit::{
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Database, Deserialized, Map};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use ruma::{OwnedServerName, ServerName, UserId};
 
 use super::{Destination, SendingEvent};
@@ -16,14 +16,17 @@ pub(super) type SendingItem = (Key, SendingEvent);
 pub(super) type QueueItem = (Key, SendingEvent);
 pub(super) type Key = Vec<u8>;
 
+#[derive(Clone)]
 pub struct Data {
-	servercurrentevent_data: Arc<Map>,
-	servernameevent_data: Arc<Map>,
+	pub(super) servercurrentevent_data: Arc<Map>,
+	pub(super) servernameevent_data: Arc<Map>,
+	pub(super) federation_outbound_to_device: Arc<Map>,
 	servername_educount: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
 }
 
+#[derive(Clone)]
 struct Services {
 	globals: Dep<globals::Service>,
 }
@@ -34,6 +37,7 @@ impl Data {
 		Self {
 			servercurrentevent_data: db["servercurrentevent_data"].clone(),
 			servernameevent_data: db["servernameevent_data"].clone(),
+			federation_outbound_to_device: db["federation_outbound_to_device"].clone(),
 			servername_educount: db["servername_educount"].clone(),
 			db: args.db.clone(),
 			services: Services {
@@ -81,6 +85,7 @@ impl Data {
 
 				self.servercurrentevent_data.insert(key, val);
 				self.servernameevent_data.remove(key);
+				self.federation_outbound_to_device.remove(key);
 			});
 	}
 
@@ -89,11 +94,21 @@ impl Data {
 		self.servercurrentevent_data
 			.raw_stream()
 			.ignore_err()
-			.map(|(key, val)| {
-				let (dest, event) =
-					parse_servercurrentevent(key, val).expect("invalid servercurrentevent");
-
-				(key.to_vec(), event, dest)
+			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+				| Ok((dest, event)) => Some((key.to_vec(), event, dest)),
+				| Err(e) => {
+					// Delete the corrupted key so it doesn't spam on every scan
+					self.servercurrentevent_data.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted servercurrentevent key ({} bytes): key_hex={:02x?} \
+						 key_lossy={:?} val_len={} err={e}",
+						key.len(),
+						key,
+						String::from_utf8_lossy(key),
+						val.len(),
+					);
+					None
+				},
 			})
 	}
 
@@ -107,11 +122,19 @@ impl Data {
 			.raw_stream_from(&prefix)
 			.ignore_err()
 			.ready_take_while(move |(key, _)| key.starts_with(&prefix))
-			.map(|(key, val)| {
-				let (_, event) =
-					parse_servercurrentevent(key, val).expect("invalid servercurrentevent");
-
-				(key.to_vec(), event)
+			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+				| Ok((_, event)) => Some((key.to_vec(), event)),
+				| Err(e) => {
+					self.servercurrentevent_data.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted servercurrentevent key ({} bytes): key_hex={:02x?} \
+						 val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
+					None
+				},
 			})
 	}
 
@@ -152,6 +175,43 @@ impl Data {
 		keys
 	}
 
+	pub(super) fn queue_reliable_requests<'a, I>(&self, requests: I) -> Vec<Vec<u8>>
+	where
+		I: Iterator<Item = (&'a SendingEvent, &'a Destination)> + Clone + Debug + Send,
+	{
+		let keys: Vec<_> = requests
+			.clone()
+			.map(|(event, dest)| {
+				let mut key = dest.get_prefix();
+				if let SendingEvent::Pdu(value) = event {
+					key.extend(value.as_ref());
+				} else {
+					let count = self.services.globals.next_count().unwrap();
+					key.extend(&count.to_be_bytes());
+				}
+
+				key
+			})
+			.collect();
+
+		self.federation_outbound_to_device.insert_batch(
+			keys.iter()
+				.map(Vec::as_slice)
+				.zip(requests.map(at!(0)))
+				.map(|(key, event)| {
+					let value = if let SendingEvent::Edu(value) = &event {
+						&**value
+					} else {
+						&[]
+					};
+
+					(key, value)
+				}),
+		);
+
+		keys
+	}
+
 	pub fn queued_requests(
 		&self,
 		destination: &Destination,
@@ -161,11 +221,88 @@ impl Data {
 			.raw_stream_from(&prefix)
 			.ignore_err()
 			.ready_take_while(move |(key, _)| key.starts_with(&prefix))
-			.map(|(key, val)| {
-				let (_, event) =
-					parse_servercurrentevent(key, val).expect("invalid servercurrentevent");
+			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+				| Ok((_, event)) => Some((key.to_vec(), event)),
+				| Err(e) => {
+					self.servernameevent_data.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted servernameevent key ({} bytes): key_hex={:02x?} \
+						 val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
+					None
+				},
+			})
+	}
 
-				(key.to_vec(), event)
+	#[inline]
+	pub fn queued_request_destinations(&self) -> impl Stream<Item = Destination> + Send + '_ {
+		self.servernameevent_data
+			.raw_stream()
+			.ignore_err()
+			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+				| Ok((dest, _)) => Some(dest),
+				| Err(e) => {
+					self.servernameevent_data.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted servernameevent key ({} bytes): key_hex={:02x?} \
+						 val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
+					None
+				},
+			})
+	}
+
+	pub fn queued_reliable_requests(
+		&self,
+		destination: &Destination,
+	) -> impl Stream<Item = QueueItem> + Send + '_ + use<'_> {
+		let prefix = destination.get_prefix();
+		self.federation_outbound_to_device
+			.raw_stream_from(&prefix)
+			.ignore_err()
+			.ready_take_while(move |(key, _)| key.starts_with(&prefix))
+			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+				| Ok((_, event)) => Some((key.to_vec(), event)),
+				| Err(e) => {
+					self.federation_outbound_to_device.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted federation_outbound_to_device key ({} bytes): \
+						 key_hex={:02x?} val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
+					None
+				},
+			})
+	}
+
+	#[inline]
+	pub fn queued_reliable_request_destinations(
+		&self,
+	) -> impl Stream<Item = Destination> + Send + '_ {
+		self.federation_outbound_to_device
+			.raw_stream()
+			.ignore_err()
+			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+				| Ok((dest, _)) => Some(dest),
+				| Err(e) => {
+					self.federation_outbound_to_device.remove(key);
+					conduwuit::warn!(
+						"Removed corrupted federation_outbound_to_device key ({} bytes): \
+						 key_hex={:02x?} val_len={} err={e}",
+						key.len(),
+						key,
+						val.len(),
+					);
+					None
+				},
 			})
 	}
 

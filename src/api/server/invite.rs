@@ -188,7 +188,7 @@ pub(crate) async fn create_invite_route(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), &body.room_id)
+		.server_is_participant(services.globals.server_name(), &body.room_id)
 		.await
 	{
 		services

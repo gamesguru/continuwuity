@@ -28,7 +28,7 @@ pub(crate) async fn get_room_state_ids_route(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), &body.room_id)
+		.server_is_participant(services.globals.server_name(), &body.room_id)
 		.await
 	{
 		info!(
@@ -38,12 +38,34 @@ pub(crate) async fn get_room_state_ids_route(
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
 
-	let shortstatehash = services
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		event_id = %body.event_id,
+		"Serving state_ids request"
+	);
+
+	let is_extremity = services
 		.rooms
-		.state_accessor
-		.pdu_shortstatehash(&body.event_id)
-		.await
-		.map_err(|_| err!(Request(NotFound("Pdu state not found."))))?;
+		.state
+		.is_forward_extremity(&body.room_id, &body.event_id)
+		.await;
+
+	let shortstatehash = if is_extremity {
+		services
+			.rooms
+			.state
+			.get_room_shortstatehash(&body.room_id)
+			.await
+			.map_err(|_| err!(Request(NotFound("Room state not found."))))?
+	} else {
+		services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(&body.event_id)
+			.await
+			.map_err(|_| err!(Request(NotFound("Pdu state not found."))))?
+	};
 
 	let pdu_ids: Vec<OwnedEventId> = services
 		.rooms

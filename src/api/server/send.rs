@@ -7,7 +7,7 @@ use std::{
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Error, Result, debug, debug_warn, err, error,
+	Err, Error, Result, debug, debug_warn, defer, err, error, info,
 	result::LogErr,
 	state_res::lexicographical_topological_sort,
 	trace,
@@ -85,17 +85,17 @@ pub(crate) async fn send_transaction_message_route(
 	// Atomically check cache, join active, or start new transaction
 	match services
 		.transactions
-		.get_or_start_federation_txn(txn_key.clone())?
+		.get_or_start_federation_txn(txn_key.clone())
 	{
-		| FederationTxnState::Cached(response) => {
+		| Ok(FederationTxnState::Cached(response)) => {
 			// Already responded
 			Ok(response)
 		},
-		| FederationTxnState::Active(receiver) => {
+		| Ok(FederationTxnState::Active(receiver)) => {
 			// Another thread is processing
 			wait_for_result(receiver).await
 		},
-		| FederationTxnState::Started { receiver, sender } => {
+		| Ok(FederationTxnState::Started { receiver, sender }) => {
 			// We're the first, spawn the processing task
 			services
 				.server
@@ -103,6 +103,32 @@ pub(crate) async fn send_transaction_message_route(
 				.spawn(process_inbound_transaction(services, body, client, txn_key, sender));
 			// and wait for it
 			wait_for_result(receiver).await
+		},
+		| Err(e) => {
+			if matches!(e, Error::BadRequest(LimitExceeded { .. }, _)) {
+				// We're rejecting the transaction due to load.
+				// Process the EDUs anyway so we don't miss ephemeral keys that might otherwise
+				// be dropped by the sender if they eventually give up retrying!
+				let edus: Vec<_> = body.body.edus.clone();
+				let origin = body.origin().to_owned();
+
+				services.server.runtime().spawn(async move {
+					let edus_stream = edus
+						.into_iter()
+						.map(|edu| edu.into_json().get().to_owned())
+						.map(|json_str| serde_json::from_str(&json_str))
+						.filter_map(Result::ok)
+						.stream();
+
+					edus_stream
+						.for_each_concurrent(automatic_width(), |edu| {
+							handle_edu(&services, &client, &origin, edu)
+						})
+						.await;
+				});
+			}
+
+			Err(e)
 		},
 	}
 }
@@ -133,6 +159,7 @@ async fn wait_for_result(
 }
 
 #[instrument(
+	name = "federation",
 	skip_all,
 	fields(
 		id = ?body.transaction_id.as_str(),
@@ -161,10 +188,45 @@ async fn process_inbound_transaction(
 		.map(|edu| edu.json().get())
 		.map(serde_json::from_str)
 		.filter_map(Result::ok)
+		.collect::<Vec<_>>()
+		.into_iter()
 		.stream();
 
-	debug!(pdus = body.pdus.len(), edus = body.edus.len(), "Processing transaction",);
-	let results = match handle(&services, &client, body.origin(), pdus, edus).await {
+	let pdu_ids: Vec<_> = body
+		.pdus
+		.iter()
+		.filter_map(|pdu| serde_json::from_str::<serde_json::Value>(pdu.get()).ok())
+		.filter_map(|pdu| {
+			pdu.get("event_id")
+				.and_then(|e| e.as_str())
+				.map(ToOwned::to_owned)
+		})
+		.collect();
+
+	info!(
+		pdus = body.pdus.len(),
+		edus = body.edus.len(),
+		pdu_ids = ?pdu_ids,
+		"Processing transaction"
+	);
+	services
+		.server
+		.metrics
+		.transactions_processed
+		.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+	// Spawn EDU processing into background so PDU pipeline starts immediately.
+	// EDUs are lightweight DB writes (to-device, receipts, typing) that don't
+	// need to block the transaction response.
+	let edu_origin = body.origin().to_owned();
+	services.server.runtime().spawn(async move {
+		edus.for_each_concurrent(automatic_width(), |edu| {
+			handle_edu(&services, &client, &edu_origin, edu)
+		})
+		.await;
+	});
+
+	let results = match handle(&services, &client, body.origin(), pdus).await {
 		| Ok(results) => results,
 		| Err(err) => {
 			fail_federation_txn(services, &txn_key, &sender, err);
@@ -180,12 +242,60 @@ async fn process_inbound_transaction(
 		}
 	}
 
-	debug!(
-		pdus = body.pdus.len(),
-		edus = body.edus.len(),
-		elapsed = ?txn_start_time.elapsed(),
-		"Finished processing transaction"
-	);
+	let elapsed = txn_start_time.elapsed();
+
+	// Record transaction timing metrics
+	let elapsed_us = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+	services
+		.server
+		.metrics
+		.transactions_time
+		.fetch_add(elapsed_us, std::sync::atomic::Ordering::Relaxed);
+	services
+		.server
+		.metrics
+		.transactions_max_time_1m
+		.fetch_max(elapsed_us, std::sync::atomic::Ordering::Relaxed);
+	if elapsed > Duration::from_secs(1) {
+		services
+			.server
+			.metrics
+			.transactions_slow_1s
+			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	}
+	if elapsed > Duration::from_secs(10) {
+		services
+			.server
+			.metrics
+			.transactions_slow_10s
+			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	}
+
+	if elapsed < Duration::from_millis(50) {
+		debug!(
+			target: "federation",
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Finished processing transaction"
+		);
+	} else if elapsed > Duration::from_secs(10) {
+		warn!(
+			target: "federation",
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Slow transaction"
+		);
+	} else {
+		info!(
+			target: "federation",
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Finished processing transaction"
+		);
+	}
 
 	let response = send_transaction_message::v1::Response {
 		pdus: results
@@ -227,6 +337,11 @@ fn transaction_error_to_response(err: &TransactionError) -> Error {
 			"Server is shutting down, please retry later".into(),
 			StatusCode::SERVICE_UNAVAILABLE,
 		),
+		| TransactionError::Transient(e) => Error::Request(
+			ErrorKind::Unknown,
+			format!("Transient error, please retry: {e}").into(),
+			StatusCode::INTERNAL_SERVER_ERROR,
+		),
 	}
 }
 async fn handle(
@@ -234,7 +349,6 @@ async fn handle(
 	client: &IpAddr,
 	origin: &ServerName,
 	pdus: impl Stream<Item = Pdu> + Send,
-	edus: impl Stream<Item = Edu> + Send,
 ) -> std::result::Result<ResolvedMap, TransactionError> {
 	// group pdus by room
 	let pdus = pdus
@@ -260,11 +374,6 @@ async fn handle(
 		.try_collect()
 		.boxed()
 		.await?;
-
-	// evaluate edus after pdus, at least for now.
-	edus.for_each_concurrent(automatic_width(), |edu| handle_edu(services, client, origin, edu))
-		.boxed()
-		.await;
 
 	Ok(results)
 }
@@ -292,15 +401,26 @@ async fn build_local_dag(
 		// sort below. If there are multiple events with omitted prevs, they will be
 		// ordered by timestamp, then event ID. At that point though, it's unlikely to
 		// matter.
-		let prev_events = value
+		let mut prev_events: HashSet<OwnedEventId> = value
 			.get("prev_events")
 			.unwrap()
 			.as_array()
 			.unwrap()
 			.iter()
-			.map(|v| OwnedEventId::parse(v.as_str().unwrap()).unwrap())
+			.filter_map(|v| v.as_str())
+			.filter_map(|s| OwnedEventId::parse(s).ok())
 			.filter(|id| pdu_map.contains_key(id))
 			.collect();
+
+		if let Some(auth_events) = value.get("auth_events").and_then(|v| v.as_array()) {
+			prev_events.extend(
+				auth_events
+					.iter()
+					.filter_map(|v| v.as_str())
+					.filter_map(|s| OwnedEventId::parse(s).ok())
+					.filter(|id| pdu_map.contains_key(id)),
+			);
+		}
 
 		dag.insert(event_id.clone(), prev_events);
 		let origin_server_ts = value
@@ -344,6 +464,20 @@ async fn handle_room(
 	room_id: OwnedRoomId,
 	pdus: impl Iterator<Item = Pdu> + Send,
 ) -> std::result::Result<Vec<(OwnedEventId, Result)>, TransactionError> {
+	services
+		.server
+		.metrics
+		.federation_active_rooms
+		.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+	defer! {{
+		services
+			.server
+			.metrics
+			.federation_active_rooms
+			.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+	}}
+
 	let _room_lock = services
 		.rooms
 		.event_handler
@@ -369,6 +503,7 @@ async fn handle_room(
 	};
 	let mut results = Vec::with_capacity(sorted_event_ids.len());
 	for event_id in sorted_event_ids {
+		tokio::task::yield_now().await;
 		let value = pdu_map
 			.get(&event_id)
 			.expect("sorted event IDs must be from the original map")
@@ -377,12 +512,30 @@ async fn handle_room(
 			.server
 			.check_running()
 			.map_err(|_| TransactionError::ShuttingDown)?;
-		let result = services
-			.rooms
-			.event_handler
-			.handle_incoming_pdu(origin, room_id, &event_id, value, true)
-			.await
-			.map(|_| ());
+		let result = Box::pin(
+			services
+				.rooms
+				.event_handler
+				.handle_incoming_pdu(origin, room_id, &event_id, value, true, None),
+		)
+		.await
+		.map(|_| ());
+
+		if let Err(ref e) = result {
+			// Only abort the entire transaction for truly local failures
+			// (database errors, internal panics) — NOT for federation connection
+			// errors to third-party servers or per-PDU auth rejections. Those are
+			// per-PDU failures that won't be fixed by the sender retrying the
+			// same transaction.
+			if e.status_code().is_server_error()
+				&& services.server.running()
+				&& !e.to_string().contains("Federation connection error")
+				&& !matches!(e, Error::MissingAuthEvents(_))
+			{
+				return Err(TransactionError::Transient(e.to_string()));
+			}
+		}
+
 		results.push((event_id, result));
 	}
 	Ok(results)
@@ -420,14 +573,25 @@ async fn handle_edu_presence(
 	origin: &ServerName,
 	presence: PresenceContent,
 ) {
-	presence
+	let fut = presence
 		.push
 		.into_iter()
 		.stream()
 		.for_each_concurrent(automatic_width(), |update| {
 			handle_edu_presence_update(services, origin, update)
-		})
-		.await;
+		});
+
+	let timeout = services.server.config.federation_presence_interval_s;
+	if tokio::time::timeout(Duration::from_secs(timeout), fut)
+		.await
+		.is_err()
+	{
+		info!(
+			%origin,
+			timeout,
+			"Congestion: presence updates took too long, dropping remaining"
+		);
+	}
 }
 
 async fn handle_edu_presence_update(
@@ -435,6 +599,8 @@ async fn handle_edu_presence_update(
 	origin: &ServerName,
 	update: PresenceUpdate,
 ) {
+	tokio::task::yield_now().await;
+
 	if update.user_id.server_name() != origin {
 		debug_warn!(
 			%update.user_id, %origin,
@@ -632,6 +798,8 @@ async fn handle_edu_device_list_update(
 		return;
 	}
 
+	info!(%user_id, %origin, "Received DeviceListUpdate event");
+
 	services.users.mark_device_key_update(&user_id).await;
 }
 
@@ -694,8 +862,17 @@ async fn handle_edu_direct_to_device_user<Event: Send + Sync>(
 			.deserialize_as()
 			.map_err(|e| err!(Request(InvalidParam(error!("To-Device event is invalid: {e}")))))
 		else {
+			info!(
+				%sender, %target_user_id, ?target_device_id_maybe, ev_type,
+				"Failed to deserialize To-Device event, dropping"
+			);
 			continue;
 		};
+
+		info!(
+			%sender, %target_user_id, ?target_device_id_maybe, ev_type,
+			"Received To-Device event"
+		);
 
 		handle_edu_direct_to_device_event(
 			services,

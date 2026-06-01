@@ -53,9 +53,9 @@ impl Resolver {
 		opts.cache_size = config.dns_cache_entries as usize;
 		opts.preserve_intermediates = true;
 		opts.negative_min_ttl = Some(Duration::from_secs(config.dns_min_ttl_nxdomain));
-		opts.negative_max_ttl = Some(Duration::from_secs(60 * 60 * 24 * 30));
+		opts.negative_max_ttl = opts.negative_min_ttl;
 		opts.positive_min_ttl = Some(Duration::from_secs(config.dns_min_ttl));
-		opts.positive_max_ttl = Some(Duration::from_secs(60 * 60 * 24 * 7));
+		opts.positive_max_ttl = opts.positive_min_ttl;
 		opts.timeout = Duration::from_secs(config.dns_timeout);
 		opts.attempts = config.dns_attempts as usize;
 		opts.try_tcp_on_error = config.dns_tcp_fallback;
@@ -83,9 +83,71 @@ impl Resolver {
 		}))
 	}
 
-	/// Clear the in-memory hickory-dns caches
 	#[inline]
 	pub fn clear_cache(&self) { self.resolver.clear_cache(); }
+
+	pub async fn lookup_ip<N: hickory_resolver::IntoName>(
+		&self,
+		name: N,
+	) -> core::result::Result<LookupIp, hickory_resolver::ResolveError> {
+		let start = tokio::time::Instant::now();
+		let result = self.resolver.lookup_ip(name).await;
+		let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+		self.server
+			.metrics
+			.dns_requests_time
+			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+
+		match &result {
+			| Err(e) if !is_no_records_found(e) => {
+				self.server
+					.metrics
+					.dns_requests_fail
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			},
+			| Ok(_) => {
+				self.server
+					.metrics
+					.dns_requests_success
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			},
+			| _ => {},
+		}
+
+		result
+	}
+
+	pub async fn srv_lookup<N: hickory_resolver::IntoName>(
+		&self,
+		name: N,
+	) -> core::result::Result<hickory_resolver::lookup::SrvLookup, hickory_resolver::ResolveError>
+	{
+		let start = tokio::time::Instant::now();
+		let result = self.resolver.srv_lookup(name).await;
+		let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+		self.server
+			.metrics
+			.dns_requests_time
+			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+
+		match &result {
+			| Err(e) if !is_no_records_found(e) => {
+				self.server
+					.metrics
+					.dns_requests_fail
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			},
+			| Ok(_) => {
+				self.server
+					.metrics
+					.dns_requests_success
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			},
+			| _ => {},
+		}
+
+		result
+	}
 }
 
 impl Resolve for Resolver {
@@ -136,16 +198,80 @@ async fn resolve_to_reqwest(
 	resolver: Arc<TokioResolver>,
 	name: Name,
 ) -> ResolvingResult {
-	use std::{io, io::ErrorKind::Interrupted};
+	use std::{io, io::ErrorKind::Interrupted, net::IpAddr};
+
+	if let Ok(ip_addr) = name.as_str().parse::<IpAddr>() {
+		let addrs: Addrs = Box::new(std::iter::once(SocketAddr::new(ip_addr, 0)));
+		return Ok(addrs);
+	}
 
 	let handle_shutdown = || Box::new(io::Error::new(Interrupted, "Server shutting down"));
-	let handle_results =
-		|results: LookupIp| Box::new(results.into_iter().map(|ip| SocketAddr::new(ip, 0)));
+	let handle_results = |results: LookupIp| {
+		let addrs: Addrs = Box::new(results.into_iter().map(|ip| SocketAddr::new(ip, 0)));
+		addrs
+	};
 
-	tokio::select! {
-		results = resolver.lookup_ip(name.as_str()) => Ok(handle_results(results?)),
-		() = server.until_shutdown() => Err(handle_shutdown()),
+	let start = tokio::time::Instant::now();
+	let result = tokio::select! {
+		results = resolver.lookup_ip(name.as_str()) => {
+			match results {
+				Ok(results) => {
+					let res: ResolvingResult = Ok(handle_results(results));
+					let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+					server
+						.metrics
+						.dns_requests_time
+						.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+					server
+						.metrics
+						.dns_requests_success
+						.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+					res
+				},
+				Err(e) => {
+					let res: ResolvingResult = Err(Box::new(e));
+					res
+				}
+			}
+		},
+		() = server.until_shutdown() => {
+			let res: ResolvingResult = Err(handle_shutdown());
+			res
+		},
+	};
+
+	if result.is_err() {
+		let elapsed = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+		server
+			.metrics
+			.dns_requests_time
+			.fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+		// Don't count NoRecordsFound as a failure — it's a valid negative response
+		if let Err(ref boxed_err) = result {
+			if !boxed_err
+				.downcast_ref::<hickory_resolver::ResolveError>()
+				.is_some_and(is_no_records_found)
+			{
+				server
+					.metrics
+					.dns_requests_fail
+					.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+			}
+		}
 	}
+
+	result
+}
+
+/// Check if a DNS resolve error is a NoRecordsFound (NXDOMAIN) response.
+/// These are valid negative responses, not actual failures.
+fn is_no_records_found(e: &hickory_resolver::ResolveError) -> bool {
+	use hickory_resolver::{ResolveErrorKind::Proto, proto::ProtoErrorKind};
+
+	matches!(
+		e.kind(),
+		Proto(e) if matches!(e.kind(), ProtoErrorKind::NoRecordsFound { .. })
+	)
 }
 
 async fn cached_to_reqwest(cached: CachedOverride) -> ResolvingResult {

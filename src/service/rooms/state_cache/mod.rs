@@ -11,8 +11,9 @@ use conduwuit::{
 };
 use database::{Deserialized, Ignore, Interfix, Map};
 use futures::{Stream, StreamExt, future::join5, pin_mut};
+use moka::sync::Cache;
 use ruma::{
-	OwnedRoomId, OwnedUserId, RoomId, ServerName, UserId,
+	OwnedRoomId, OwnedServerName, OwnedUserId, RoomId, ServerName, UserId,
 	events::{AnyStrippedStateEvent, room::member::MembershipState},
 	serde::Raw,
 };
@@ -21,6 +22,8 @@ use crate::{Dep, account_data, appservice::RegistrationInfo, config, globals, ro
 
 pub struct Service {
 	appservice_in_room_cache: AppServiceInRoomCache,
+	server_visibility_cache: Cache<(OwnedServerName, OwnedUserId), bool>,
+	user_visibility_cache: Cache<(OwnedUserId, OwnedUserId), bool>,
 	services: Services,
 	db: Data,
 }
@@ -60,6 +63,35 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			appservice_in_room_cache: SyncRwLock::new(HashMap::new()),
+			// Ugly way to build the cache with a dynamic capacity
+			server_visibility_cache: Cache::builder()
+				.max_capacity(
+					conduwuit::utils::math::usize_from_f64(
+						25_000.0
+							* args
+								.depend::<config::Service>("config")
+								.cache_capacity_modifier,
+					)
+					.unwrap_or(25_000)
+					.try_into()
+					.unwrap_or(25_000),
+				)
+				.time_to_live(std::time::Duration::from_secs(5 * 60))
+				.build(),
+			user_visibility_cache: Cache::builder()
+				.max_capacity(
+					conduwuit::utils::math::usize_from_f64(
+						25_000.0
+							* args
+								.depend::<config::Service>("config")
+								.cache_capacity_modifier,
+					)
+					.unwrap_or(25_000)
+					.try_into()
+					.unwrap_or(25_000),
+				)
+				.time_to_live(std::time::Duration::from_secs(5 * 60))
+				.build(),
 			services: Services {
 				account_data: args.depend::<account_data::Service>("account_data"),
 				config: args.depend::<config::Service>("config"),
@@ -163,6 +195,25 @@ pub async fn server_in_room<'a>(&'a self, server: &'a ServerName, room_id: &'a R
 	self.db.serverroomids.qry(&key).await.is_ok()
 }
 
+/// Returns true if the server is participating in the room (joined, invited, or
+/// knocked).
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "trace")]
+pub async fn server_is_participant<'a>(
+	&'a self,
+	server: &'a ServerName,
+	room_id: &'a RoomId,
+) -> bool {
+	if self.server_in_room(server, room_id).await {
+		return true;
+	}
+
+	self.room_members_invited(room_id)
+		.chain(self.room_members_knocked(room_id))
+		.ready_any(|user| user.server_name() == server)
+		.await
+}
+
 /// Returns an iterator of all rooms a server participates in (as far as we
 /// know).
 #[implement(Service)]
@@ -177,25 +228,72 @@ pub fn server_rooms<'a>(
 		.keys_prefix(&prefix)
 		.ignore_err()
 		.map(|(_, room_id): (Ignore, &RoomId)| room_id)
+		.ready_filter(|room_id| <&RoomId>::try_from(room_id.as_str()).is_ok())
 }
 
-/// Returns true if server can see user by sharing at least one room.
+/// Expose raw keys for the clean_corrupt_rooms command
 #[implement(Service)]
-#[tracing::instrument(skip(self), level = "trace")]
+pub fn server_rooms_raw_keys_prefix<'a>(
+	&'a self,
+	prefix: &'a (&'a ServerName, Interfix),
+) -> impl Stream<Item = Result<database::keyval::Key<'a>>> + Send + 'a {
+	self.db.serverroomids.keys_prefix_raw(prefix)
+}
+
+/// Remove a malformed room from the server_rooms index using raw bytes.
+#[implement(Service)]
+pub fn server_rooms_remove_raw(&self, key: &[u8]) -> Result<()> {
+	self.db.serverroomids.remove_raw(key);
+	Ok(())
+}
+
+/// Returns true if a server can see a user by having any active membership
+/// (joined, invited, or knocked) in at least one shared room.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug")]
 pub async fn server_sees_user(&self, server: &ServerName, user_id: &UserId) -> bool {
-	self.server_rooms(server)
-		.any(|room_id| self.is_joined(user_id, room_id))
-		.await
+	let key = (server.to_owned(), user_id.to_owned());
+	if let Some(sees) = self.server_visibility_cache.get(&key) {
+		return sees;
+	}
+
+	let sees = self
+		.server_rooms(server)
+		.any(|room_id| async move {
+			self.is_invited_or_joined(user_id, room_id).await
+				|| self.is_knocked(user_id, room_id).await
+		})
+		.await;
+
+	self.server_visibility_cache.insert(key, sees);
+	sees
 }
 
 /// Returns true if user_a and user_b share at least one room.
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn user_sees_user(&self, user_a: &UserId, user_b: &UserId) -> bool {
+	if user_a == user_b {
+		return true;
+	}
+
+	let key = if user_a < user_b {
+		(user_a.to_owned(), user_b.to_owned())
+	} else {
+		(user_b.to_owned(), user_a.to_owned())
+	};
+
+	if let Some(sees) = self.user_visibility_cache.get(&key) {
+		return sees;
+	}
+
 	let get_shared_rooms = self.get_shared_rooms(user_a, user_b);
 
 	pin_mut!(get_shared_rooms);
-	get_shared_rooms.next().await.is_some()
+	let sees = get_shared_rooms.next().await.is_some();
+
+	self.user_visibility_cache.insert(key, sees);
+	sees
 }
 
 /// List the rooms common between two users
@@ -226,6 +324,34 @@ pub fn room_members<'a>(
 		.keys_prefix(&prefix)
 		.ignore_err()
 		.map(|(_, user_id): (Ignore, &UserId)| user_id)
+}
+
+/// Invalidate user visibility cache for all users in the room.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn invalidate_user_visibility(&self, user_id: &UserId, room_id: &RoomId) {
+	self.room_members(room_id)
+		.ready_for_each(|other_user| {
+			let key = if user_id < other_user {
+				(user_id.to_owned(), other_user.to_owned())
+			} else {
+				(other_user.to_owned(), user_id.to_owned())
+			};
+			self.user_visibility_cache.invalidate(&key);
+		})
+		.await;
+}
+
+/// Invalidate server visibility cache for the user and all servers in the room.
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn invalidate_server_visibility(&self, user_id: &UserId, room_id: &RoomId) {
+	self.room_servers(room_id)
+		.ready_for_each(|server| {
+			self.server_visibility_cache
+				.invalidate(&(server.to_owned(), user_id.to_owned()));
+		})
+		.await;
 }
 
 /// Returns the number of users which are currently in a room
@@ -511,6 +637,17 @@ pub async fn is_invited(&self, user_id: &UserId, room_id: &RoomId) -> bool {
 	self.db.userroomid_invitestate.qry(&key).await.is_ok()
 }
 
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "trace")]
+pub async fn is_invited_or_joined(&self, user_id: &UserId, room_id: &RoomId) -> bool {
+	self.is_joined(user_id, room_id).await || self.is_invited(user_id, room_id).await
+}
+
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "trace")]
+pub async fn is_knocked_or_joined(&self, user_id: &UserId, room_id: &RoomId) -> bool {
+	self.is_joined(user_id, room_id).await || self.is_knocked(user_id, room_id).await
+}
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn is_left(&self, user_id: &UserId, room_id: &RoomId) -> bool {

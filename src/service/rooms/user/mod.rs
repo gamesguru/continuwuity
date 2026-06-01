@@ -98,12 +98,9 @@ pub async fn associate_token_shortstatehash(
 	token: u64,
 	shortstatehash: ShortStateHash,
 ) {
-	let shortroomid = self
-		.services
-		.short
-		.get_shortroomid(room_id)
-		.await
-		.expect("room exists");
+	let Ok(shortroomid) = self.services.short.get_shortroomid(room_id).await else {
+		return;
+	};
 
 	let _cork = self.db.db.cork();
 	let key: &[u64] = &[shortroomid, token];

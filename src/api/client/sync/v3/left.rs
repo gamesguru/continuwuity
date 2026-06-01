@@ -1,8 +1,8 @@
 use conduwuit::{
-	Event, PduEvent, Result, debug_warn,
-	pdu::EventHash,
+	Event, PduCount, PduEvent, Result, debug_warn,
+	matrix::{event::Matches, pdu::EventHash},
 	trace,
-	utils::{self, IterStream, future::ReadyEqExt, stream::WidebandExt as _},
+	utils::{self, IterStream, ReadyExt as _, future::ReadyEqExt, stream::WidebandExt as _},
 };
 use futures::{StreamExt, future::join};
 use ruma::{
@@ -63,19 +63,14 @@ pub(super) async fn load_left_room(
 		return Ok(None);
 	};
 
-	// return early if we haven't gotten to this leave yet.
-	// this can happen if the user leaves while a sync response is being generated
-	if current_count < left_count {
-		return Ok(None);
-	}
-
 	// return early if:
-	// - this is an initial sync and the room filter doesn't include leaves, or
-	// - this is an incremental sync, and we've already synced the leave, and the
-	//   room filter doesn't include leaves
-	if last_sync_end_count.is_none_or(|last_sync_end_count| last_sync_end_count >= left_count)
-		&& !filter.room.include_leave
-	{
+	// - this is an incremental sync and we've already synced the leave, or
+	// - this is an initial sync and the room filter doesn't include leaves
+	if let Some(last_sync_end_count) = last_sync_end_count {
+		if last_sync_end_count >= left_count {
+			return Ok(None);
+		}
+	} else if !filter.room.include_leave {
 		return Ok(None);
 	}
 
@@ -104,8 +99,33 @@ pub(super) async fn load_left_room(
 				return Ok(None);
 			}
 
+			// the global count as of the moment the user left the room
+			let Some(left_count) = services
+				.rooms
+				.state_cache
+				.get_left_count(room_id, syncing_user)
+				.await
+				.ok()
+			else {
+				return Ok(None);
+			};
+
+			// return early if we've already synced the leave
+			if last_sync_end_count
+				.is_some_and(|last_sync_end_count| last_sync_end_count >= left_count)
+			{
+				return Ok(None);
+			}
+
 			trace!("syncing remote-assisted leave PDU");
-			(TimelinePdus::default(), vec![leave_membership_event], None)
+			(
+				TimelinePdus {
+					pdus: vec![(PduCount::max(), leave_membership_event)].into(),
+					limited: false,
+				},
+				Vec::new(),
+				None,
+			)
 		},
 		| Some(leave_membership_event) => {
 			// we have this room in our DB, and can fetch the state and timeline from when
@@ -183,6 +203,7 @@ pub(super) async fn load_left_room(
 			build_state_initial(
 				services,
 				syncing_user,
+				room_id,
 				shortstatehash,
 				lazily_loaded_members.as_ref(),
 			)
@@ -206,7 +227,18 @@ pub(super) async fn load_left_room(
 		.into_iter()
 		.stream()
 		// filter out ignored events from the timeline
-		.wide_filter_map(|item| ignored_filter(services, item, syncing_user));
+		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
+		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
+			let matches = (&filter.room.timeline).matches(pdu);
+			tracing::info!(
+				"Checking timeline event {} of type {}: filter.types = {:?}, matches = {}",
+				pdu.event_id,
+				pdu.event_type(),
+				filter.room.timeline.types,
+				matches
+			);
+			matches
+		});
 
 	while let Some((_, pdu)) = stream.next().await {
 		if pdu.event_type() == &TimelineEventType::RoomMember
@@ -217,11 +249,17 @@ pub(super) async fn load_left_room(
 		raw_timeline_pdus.push(pdu.into_format());
 	}
 
-	let mut state_events_raw: Vec<_> = state_events.into_iter().map(Event::into_format).collect();
+	let mut state_events_raw: Vec<_> = state_events
+		.into_iter()
+		.filter(|pdu: &PduEvent| (&filter.room.state).matches(pdu))
+		.map(Event::into_format)
+		.collect();
 
 	if !in_timeline && last_sync_end_count.is_none_or(|c| c < left_count) {
 		if let Some(leave_pdu) = leave_membership_event {
-			state_events_raw.push(leave_pdu.into_format());
+			if (&filter.room.state).matches(&leave_pdu) {
+				state_events_raw.push(leave_pdu.into_format());
+			}
 		}
 	}
 
@@ -310,6 +348,7 @@ async fn build_left_state_and_timeline(
 	let mut state = build_state_initial(
 		services,
 		syncing_user,
+		room_id,
 		timeline_start_shortstatehash,
 		lazily_loaded_members.as_ref(),
 	)
@@ -383,5 +422,6 @@ fn create_dummy_leave_event(
 		redacts: None,
 		hashes: EventHash { sha256: String::new() },
 		signatures: None,
+		rejected: false,
 	}
 }

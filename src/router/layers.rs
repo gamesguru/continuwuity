@@ -55,7 +55,7 @@ pub(crate) fn build(services: &Arc<Services>) -> Result<(Router, Guard)> {
 			TraceLayer::new_for_http()
 				.make_span_with(tracing_span::<_>)
 				.on_failure(DefaultOnFailure::new().level(Level::ERROR))
-				.on_request(DefaultOnRequest::new().level(Level::TRACE))
+				.on_request(DefaultOnRequest::new().level(Level::DEBUG))
 				.on_response(DefaultOnResponse::new().level(Level::DEBUG)),
 		)
 		.layer(axum::middleware::from_fn_with_state(Arc::clone(services), request::handle))

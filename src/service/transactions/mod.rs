@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use conduwuit::{Error, Result, SyncRwLock, debug_warn, warn};
+use conduwuit::{Error, Result, SyncRwLock, debug_warn, info, warn};
 use database::{Handle, Map};
 use ruma::{
 	DeviceId, OwnedServerName, OwnedTransactionId, TransactionId, UserId,
@@ -32,12 +32,17 @@ pub enum TransactionError {
 	/// Server is shutting down - the sender should retry the entire
 	/// transaction.
 	ShuttingDown,
+
+	/// A transient error occurred during transaction processing.
+	/// The entire transaction should be retried.
+	Transient(String),
 }
 
 impl fmt::Display for TransactionError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
 			| Self::ShuttingDown => write!(f, "Server is shutting down"),
+			| Self::Transient(s) => write!(f, "Transient error: {s}"),
 		}
 	}
 }
@@ -132,6 +137,17 @@ impl Service {
 			.count()
 	}
 
+	/// Returns keys of currently active (in-progress) transactions.
+	#[must_use]
+	pub fn txn_active_keys(&self) -> Vec<TxnKey> {
+		let state = self.federation_txn_state.read();
+		state
+			.iter()
+			.filter(|(_, v)| matches!(v, TxnState::Active(_)))
+			.map(|(k, _)| k.clone())
+			.collect()
+	}
+
 	pub fn add_client_txnid(
 		&self,
 		user_id: &UserId,
@@ -174,14 +190,23 @@ impl Service {
 		}
 
 		// Check if another transaction from this origin is already running
-		let has_active_from_origin = state
+		let active_from_origin = state
 			.iter()
-			.any(|(k, v)| k.0 == key.0 && matches!(v, TxnState::Active(_)));
+			.filter(|(k, v)| k.0 == key.0 && matches!(v, TxnState::Active(_)))
+			.count();
 
-		if has_active_from_origin {
-			debug_warn!(
+		if active_from_origin
+			>= self
+				.services
+				.config
+				.max_concurrent_inbound_transactions_per_origin
+		{
+			info!(
+				target: "txns_debug",
 				origin = ?key.0,
-				"Got concurrent transaction request from an origin with an active transaction"
+				active = active_from_origin,
+				max = self.services.config.max_concurrent_inbound_transactions_per_origin,
+				"Got concurrent transaction request from an origin exceeding its limit"
 			);
 			return Err(Error::BadRequest(
 				LimitExceeded { retry_after: None },

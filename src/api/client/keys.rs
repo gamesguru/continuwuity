@@ -563,7 +563,11 @@ where
 
 					if let Ok(our_master_key) = services
 						.users
-						.get_key(&master_key_id, sender_user, &user, &allowed_signatures)
+						// Use |_| true here: we need ALL stored signatures (including
+						// from other local users) so they survive the merge back into
+						// the DB. The requesting user's visibility filter is applied
+						// separately to the response.
+						.get_key(&master_key_id, sender_user, &user, &|_: &UserId| true)
 						.await
 					{
 						if let Ok((_, mut our_master_key)) =

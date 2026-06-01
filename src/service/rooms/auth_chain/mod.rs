@@ -1,14 +1,14 @@
 mod data;
 
 use std::{
-	collections::{BTreeSet, HashSet, VecDeque},
+	collections::{BTreeSet, HashSet},
 	fmt::Debug,
 	sync::Arc,
 	time::Instant,
 };
 
 use conduwuit::{
-	Err, Result, at, debug, debug_error, implement, trace,
+	Err, Result, at, debug, implement, info, trace,
 	utils::{
 		IterStream,
 		stream::{ReadyExt, TryBroadbandExt},
@@ -29,6 +29,7 @@ pub struct Service {
 struct Services {
 	short: Dep<rooms::short::Service>,
 	timeline: Dep<rooms::timeline::Service>,
+	outlier: Dep<rooms::outlier::Service>,
 }
 
 type Bucket<'a> = BTreeSet<(u64, &'a EventId)>;
@@ -39,6 +40,7 @@ impl crate::Service for Service {
 			services: Services {
 				short: args.depend::<rooms::short::Service>("rooms::short"),
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
+				outlier: args.depend::<rooms::outlier::Service>("rooms::outlier"),
 			},
 			db: Data::new(&args),
 		}))
@@ -67,7 +69,7 @@ where
 }
 
 #[implement(Service)]
-#[tracing::instrument(name = "auth_chain", level = "debug", skip_all)]
+#[tracing::instrument(name = "auth_chain", level = "debug", skip_all, fields(room_id = %room_id))]
 pub async fn get_auth_chain<'a, I>(
 	&'a self,
 	room_id: &RoomId,
@@ -114,7 +116,7 @@ where
 		.boxed()
 		.await?;
 
-	debug!(
+	info!(
 		chain_length = ?full_auth_chain.len(),
 		elapsed = ?started.elapsed(),
 		"done",
@@ -184,47 +186,88 @@ async fn get_auth_chain_inner(
 	room_id: &RoomId,
 	event_id: &EventId,
 ) -> Result<Vec<ShortEventId>> {
-	let mut todo: VecDeque<_> = [event_id.to_owned()].into();
+	let mut todo = vec![event_id.to_owned()];
 	let mut found = HashSet::new();
 
-	while let Some(event_id) = todo.pop_front() {
-		trace!(%event_id, "processing auth event");
+	let started = Instant::now();
+	let mut last_progress = Instant::now();
 
-		match self
+	while !todo.is_empty() {
+		if last_progress.elapsed().as_secs() >= 30 {
+			info!(%room_id, found = found.len(), queue = todo.len(), elapsed = ?started.elapsed(), "auth_chain walk in progress");
+			last_progress = Instant::now();
+		}
+
+		let current_batch = std::mem::take(&mut todo);
+
+		let results: Vec<_> = current_batch
+			.into_iter()
+			.try_stream::<conduwuit::Error>()
+			.broad_and_then(|event_id| async move {
+				trace!(%event_id, "processing auth event");
+
+				// Try timeline first, then fall back to the outlier store.
+				let pdu_result = match self
+					.services
+					.timeline
+					.get_pdu_in_room(Some(room_id), &event_id)
+					.await
+				{
+					| Ok(pdu) => Ok(pdu),
+					| Err(_) => self.services.outlier.get_pdu_outlier(&event_id).await,
+				};
+
+				Ok((event_id, pdu_result))
+			})
+			.try_collect()
+			.await?;
+
+		let mut new_auth_events = HashSet::new();
+		for (event_id, pdu_result) in results {
+			match pdu_result {
+				| Err(e) => {
+					info!(%event_id, ?e, "Could not find pdu mentioned in auth events");
+				},
+				| Ok(pdu) => {
+					if let Some(claimed_room_id) = pdu.room_id.clone() {
+						if claimed_room_id != *room_id {
+							return Err!(Request(Forbidden(error!(
+								%event_id,
+								%room_id,
+								wrong_room_id = ?pdu.room_id.unwrap(),
+								"auth event for incorrect room"
+							))));
+						}
+					}
+
+					for auth_event in &pdu.auth_events {
+						new_auth_events.insert(auth_event.clone());
+					}
+				},
+			}
+		}
+
+		let new_auth_events: Vec<_> = new_auth_events.into_iter().collect();
+		if new_auth_events.is_empty() {
+			continue;
+		}
+
+		let mut short_ids = self
 			.services
-			.timeline
-			.get_pdu_in_room(Some(room_id), &event_id)
-			.await
-		{
-			| Err(e) => {
-				debug_error!(%event_id, ?e, "Could not find pdu mentioned in auth events");
-			},
-			| Ok(pdu) => {
-				if let Some(claimed_room_id) = pdu.room_id.clone() {
-					if claimed_room_id != *room_id {
-						return Err!(Request(Forbidden(error!(
-							%event_id,
-							%room_id,
-							wrong_room_id = ?pdu.room_id.unwrap(),
-							"auth event for incorrect room"
-						))));
-					}
+			.short
+			.multi_get_or_create_shorteventid(new_auth_events.iter().map(|id| &**id))
+			.zip(futures::stream::iter(new_auth_events.clone()))
+			.boxed();
+
+		while let Some((sauthevent, auth_event)) = short_ids.next().await {
+			if found.insert(sauthevent) {
+				if let Ok(cached) = self.get_cached_eventid_authchain(&[sauthevent]).await {
+					found.extend(cached.iter().copied());
+				} else {
+					trace!(?auth_event, "adding auth event to processing queue");
+					todo.push(auth_event);
 				}
-
-				for auth_event in &pdu.auth_events {
-					let sauthevent = self
-						.services
-						.short
-						.get_or_create_shorteventid(auth_event)
-						.await;
-
-					if found.insert(sauthevent) {
-						trace!(%event_id, ?auth_event, "adding auth event to processing queue");
-
-						todo.push_back(auth_event.clone());
-					}
-				}
-			},
+			}
 		}
 	}
 

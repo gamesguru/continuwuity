@@ -105,6 +105,21 @@ pub(super) async fn load_joined_room(
 		unread_thread_notifications: BTreeMap::new(),
 	};
 
+	if !joined_room.is_empty() {
+		conduwuit::debug!(
+			"room {} is not empty. timeline: {} (limited: {}), state: {}, acc: {}, eph: {}, \
+			 notif: {:?}, summary: {:?}",
+			room_id,
+			joined_room.timeline.events.len(),
+			joined_room.timeline.limited,
+			joined_room.state.events.len(),
+			joined_room.account_data.events.len(),
+			joined_room.ephemeral.events.len(),
+			joined_room.unread_notifications,
+			joined_room.summary.joined_member_count
+		);
+	}
+
 	let state_after = state_after
 		.into_iter()
 		.map(Event::into_format)
@@ -297,20 +312,46 @@ async fn build_state_and_timeline(
 			room_id,
 			shortstatehashes,
 			&state_events,
+			&timeline,
 			joined_since_last_sync,
 		),
 	)
 	.await?;
 
-	// the token which may be passed to the messages endpoint to backfill room
-	// history
-	let prev_batch = timeline.pdus.front().map(at!(0));
-
 	// note: we always indicate a limited timeline if the syncing user just joined
-	// the room, to indicate to the client that it should request backfill (and to
-	// copy Synapse's behavior). for federated room joins, the `timeline` will
-	// usually only include the syncing user's join event.
-	let limited = timeline.limited || joined_since_last_sync;
+	// the room or this is an initial sync, to indicate to the client that it
+	// should request backfill (and to copy Synapse's behavior). for federated
+	// room joins, the `timeline` will usually only include the syncing user's
+	// join event. However, if the room actually has ZERO timeline events (e.g.,
+	// a space), forcing `limited: true` causes clients to fail repeatedly to
+	// backfill.
+	let is_initial_sync = sync_context.last_sync_end_count.is_none();
+	let limited = if timeline.pdus.is_empty() {
+		if joined_since_last_sync || is_initial_sync {
+			let is_space = services
+				.rooms
+				.state_accessor
+				.get_room_type(room_id)
+				.await
+				.is_ok_and(|room_type| room_type == ruma::room::RoomType::Space);
+
+			timeline.limited || !is_space
+		} else {
+			timeline.limited
+		}
+	} else {
+		timeline.limited || joined_since_last_sync || is_initial_sync
+	};
+
+	// the token which may be passed to the messages endpoint to backfill room
+	// history. If the timeline is empty, fallback to the start of this sync window
+	// to ensure clients always have a valid topological pagination token.
+	let prev_batch = timeline.pdus.front().map(at!(0)).or_else(|| {
+		limited
+			.then_some(())
+			.and(sync_context.last_sync_end_count)
+			.map(PduCount::Normal)
+	});
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
@@ -524,6 +565,7 @@ async fn build_state_events(
 			build_state_initial(
 				services,
 				syncing_user,
+				room_id,
 				timeline_start_shortstatehash,
 				lazily_loaded_members.as_ref(),
 			)
@@ -555,6 +597,7 @@ async fn build_state_after(
 	build_state_initial(
 		services,
 		syncing_user,
+		room_id,
 		current_shortstatehash,
 		lazily_loaded_members.as_ref(),
 	)
@@ -813,7 +856,8 @@ async fn build_device_list_updates(
 	}: SyncContext<'_>,
 	room_id: &RoomId,
 	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
-	state_events: &Vec<PduEvent>,
+	state_events: &[PduEvent],
+	timeline: &TimelinePdus,
 	joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
 	let is_encrypted_room = services
@@ -841,9 +885,25 @@ async fn build_device_list_updates(
 		})
 		.await;
 
+	if joined_since_last_sync {
+		services
+			.rooms
+			.state_cache
+			.room_members(room_id)
+			.ready_for_each(|user_id| {
+				if user_id != syncing_user {
+					device_list_updates.changed.insert(user_id.to_owned());
+				}
+			})
+			.await;
+	}
+
 	// add users who now share encrypted rooms to `changed` and
 	// users who no longer share encrypted rooms to `left`
-	for state_event in state_events {
+	let events = state_events
+		.iter()
+		.chain(timeline.pdus.iter().map(|(_, pdu)| pdu));
+	for state_event in events {
 		if state_event.kind == RoomMember {
 			let Some(content): Option<RoomMemberEventContent> = state_event.get_content().ok()
 			else {
@@ -853,7 +913,7 @@ async fn build_device_list_updates(
 			let Some(user_id): Option<OwnedUserId> = state_event
 				.state_key
 				.as_ref()
-				.and_then(|key| key.parse().ok())
+				.and_then(|key| key.as_str().try_into().ok())
 			else {
 				continue;
 			};
@@ -869,7 +929,7 @@ async fn build_device_list_updates(
 						| Leave if !shares_encrypted_room => {
 							device_list_updates.left.insert(user_id);
 						},
-						| Join if joined_since_last_sync || shares_encrypted_room => {
+						| Join if shares_encrypted_room => {
 							device_list_updates.changed.insert(user_id);
 						},
 						| _ => (),

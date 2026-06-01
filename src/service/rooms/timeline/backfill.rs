@@ -1,13 +1,13 @@
 use std::iter::once;
 
-use conduwuit::{Err, PduEvent, RoomVersion};
+use conduwuit::{Err, Error, PduEvent, RoomVersion};
 use conduwuit_core::{
 	Result, debug, debug_warn, err, implement, info,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduId, RawPduId},
 	},
-	utils::{IterStream, ReadyExt},
+	utils::{IterStream, ReadyExt, stream::WidebandExt},
 	validated, warn,
 };
 use futures::{FutureExt, StreamExt};
@@ -26,7 +26,12 @@ use super::ExtractBody;
 
 #[implement(super::Service)]
 #[tracing::instrument(name = "backfill", level = "trace", skip(self))]
-pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Result<()> {
+pub async fn backfill_if_required(
+	&self,
+	room_id: &RoomId,
+	from: PduCount,
+	limit: usize,
+) -> Result<()> {
 	if self
 		.services
 		.state_cache
@@ -44,14 +49,22 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 		return Ok(());
 	}
 
-	let first_pdu = self
-		.first_item_in_room(room_id)
-		.await
-		.expect("Room is not empty");
+	let mut backwards_extremities = Vec::new();
+	let mut pdus = self
+		.pdus_rev(room_id, Some(from.saturating_inc(ruma::api::Direction::Forward)))
+		.take(limit)
+		.boxed();
+	while let Some(Ok((_, pdu))) = pdus.next().await {
+		for prev_event_id in &pdu.prev_events {
+			if self.get_pdu_id(prev_event_id).await.is_err() {
+				backwards_extremities.push(pdu.event_id.clone());
+				break;
+			}
+		}
+	}
 
-	if first_pdu.0 < from {
-		// No backfill required, there are still events between them
-		debug!("No backfill required in room {room_id}, {:?} < {from}", first_pdu.0);
+	if backwards_extremities.is_empty() {
+		// No gaps found in this chunk, no backfill required
 		return Ok(());
 	}
 
@@ -129,8 +142,22 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				.map(ToOwned::to_owned)
 				.stream(),
 		)
-		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
-		.filter_map(|server_name| async move {
+		.chain(
+			self.services
+				.state_cache
+				.room_servers(room_id)
+				.map(ToOwned::to_owned),
+		)
+		.ready_filter(|server_name| {
+			!self.services.globals.server_is_ours(server_name)
+				&& !self
+					.services
+					.server
+					.config
+					.forbidden_remote_server_names
+					.is_match(server_name.host())
+		})
+		.wide_filter_map(|server_name| async move {
 			self.services
 				.state_cache
 				.server_in_room(&server_name, room_id)
@@ -153,21 +180,28 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 				backfill_server,
 				federation::backfill::get_backfill::v1::Request {
 					room_id: room_id.to_owned(),
-					v: vec![first_pdu.1.event_id().to_owned()],
+					v: backwards_extremities.clone(),
 					limit: uint!(100),
 				},
 			)
 			.await;
 		match response {
 			| Ok(response) => {
-				for pdu in response.pdus {
-					if let Err(e) = self.backfill_pdu(backfill_server, pdu).boxed().await {
+				let pdus = response.pdus;
+				// Handle timeline events newest-first (maintain timeline integrity)
+				for pdu in pdus {
+					if let Err(e) = self.backfill_pdu(backfill_server, pdu, None).boxed().await {
 						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
 					}
 				}
 				return Ok(());
 			},
-			| Err(e) => {
+			| Err(ref e) => {
+				// If the server explicitly forbids us, drop it from candidates
+				if matches!(e, Error::Federation(_, _)) && e.to_string().contains("not allowed") {
+					info!("{backfill_server} forbade backfill for {room_id}, skipping");
+					continue;
+				}
 				warn!("{backfill_server} failed to provide backfill for room {room_id}: {e}");
 			},
 		}
@@ -182,6 +216,8 @@ pub async fn backfill_if_required(&self, room_id: &RoomId, from: PduCount) -> Re
 #[implement(super::Service)]
 #[tracing::instrument(name = "get_remote_pdu", level = "debug", skip(self))]
 pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Result<PduEvent> {
+	let _mutex = self.mutex_fetch.lock(event_id).await;
+
 	let local = self.get_pdu(event_id).await;
 	if local.is_ok() {
 		// We already have this PDU, no need to backfill
@@ -244,8 +280,22 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 				.map(ToOwned::to_owned)
 				.stream(),
 		)
-		.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name))
-		.filter_map(|server_name| async move {
+		.chain(
+			self.services
+				.state_cache
+				.room_servers(room_id)
+				.map(ToOwned::to_owned),
+		)
+		.ready_filter(|server_name| {
+			!self.services.globals.server_is_ours(server_name)
+				&& !self
+					.services
+					.server
+					.config
+					.forbidden_remote_server_names
+					.is_match(server_name.host())
+		})
+		.wide_filter_map(|server_name| async move {
 			self.services
 				.state_cache
 				.server_in_room(&server_name, room_id)
@@ -272,14 +322,24 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 				})
 			});
 		let pdu = match value {
-			| Ok(value) => {
-				self.services
-					.event_handler
-					.handle_incoming_pdu(backfill_server, room_id, event_id, value, false)
-					.boxed()
-					.await?;
-				debug!("Successfully backfilled {event_id} from {backfill_server}");
-				Some(self.get_pdu(event_id).await)
+			| Ok(value) => match self
+				.services
+				.event_handler
+				.handle_incoming_pdu(backfill_server, room_id, event_id, value, false, None)
+				.boxed()
+				.await
+			{
+				| Ok(_) => {
+					debug!("Successfully backfilled {event_id} from {backfill_server}");
+					Some(self.get_pdu(event_id).await)
+				},
+				| Err(e) => {
+					warn!(
+						"{backfill_server} provided an invalid PDU or failed state resolution \
+						 for {event_id}: {e}"
+					);
+					None
+				},
 			},
 			| Err(e) => {
 				warn!("{backfill_server} failed to provide backfill for room {room_id}: {e}");
@@ -297,7 +357,12 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 
 #[implement(super::Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
-pub async fn backfill_pdu(&self, origin: &ServerName, pdu: Box<RawJsonValue>) -> Result<()> {
+pub async fn backfill_pdu(
+	&self,
+	origin: &ServerName,
+	pdu: Box<RawJsonValue>,
+	count: Option<u64>,
+) -> Result<()> {
 	let (room_id, event_id, value) = self.services.event_handler.parse_incoming_pdu(&pdu).await?;
 
 	// Lock so we cannot backfill the same pdu twice at the same time
@@ -316,7 +381,7 @@ pub async fn backfill_pdu(&self, origin: &ServerName, pdu: Box<RawJsonValue>) ->
 
 	self.services
 		.event_handler
-		.handle_incoming_pdu(origin, &room_id, &event_id, value, false)
+		.handle_incoming_pdu(origin, &room_id, &event_id, value, false, None)
 		.boxed()
 		.await?;
 
@@ -328,7 +393,10 @@ pub async fn backfill_pdu(&self, origin: &ServerName, pdu: Box<RawJsonValue>) ->
 
 	let insert_lock = self.mutex_insert.lock(&room_id).await;
 
-	let count: i64 = self.services.globals.next_count().unwrap().try_into()?;
+	let count: i64 = match count {
+		| Some(count) => count.try_into()?,
+		| None => self.services.globals.next_count()?.try_into()?,
+	};
 
 	let pdu_id: RawPduId = PduId {
 		shortroomid,
@@ -351,4 +419,105 @@ pub async fn backfill_pdu(&self, origin: &ServerName, pdu: Box<RawJsonValue>) ->
 
 	debug!("Prepended backfill pdu");
 	Ok(())
+}
+
+/// Promote an outlier event into the visible timeline as a Normal PDU.
+/// This skips all auth checks — the caller is responsible for ensuring
+/// the event is valid (e.g. it came from a send_join response).
+#[implement(super::Service)]
+pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Result<()> {
+	// Skip if already in timeline
+	if self.get_pdu_id(event_id).await.is_ok() {
+		return Ok(());
+	}
+
+	let value = self.services.outlier.get_outlier_pdu_json(event_id).await?;
+
+	let pdu: PduEvent = serde_json::from_value(
+		serde_json::to_value(&value).map_err(|e| err!(Database("Bad outlier JSON: {e:?}")))?,
+	)
+	.map_err(|e| err!(Database("Bad outlier PDU: {e:?}")))?;
+
+	let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
+
+	let insert_lock = self.mutex_insert.lock(room_id).await;
+
+	// Use backfill (negative) PDU count — these are historical events
+	// that predate the join, not new forward events.
+	let count: i64 = self.services.globals.next_count()?.try_into()?;
+
+	let pdu_id: RawPduId = PduId {
+		shortroomid,
+		shorteventid: PduCount::Backfilled(validated!(0 - count)),
+	}
+	.into();
+
+	self.db.prepend_backfill_pdu(&pdu_id, event_id, &value);
+
+	drop(insert_lock);
+
+	if pdu.kind == TimelineEventType::RoomMessage {
+		let content: ExtractBody = pdu.get_content()?;
+		if let Some(body) = content.body {
+			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
+		}
+	}
+
+	// Remove from outlier room index
+	self.services
+		.outlier
+		.remove_outlier(event_id, Some(room_id))
+		.await;
+
+	Ok(())
+}
+
+/// Force-insert a PDU directly into the timeline, bypassing all auth checks.
+/// The caller provides the already-parsed PDU and its canonical JSON.
+/// Returns the assigned PduId on success.
+#[implement(super::Service)]
+pub async fn force_insert_pdu(
+	&self,
+	room_id: &RoomId,
+	event_id: &EventId,
+	pdu: &PduEvent,
+	value: &CanonicalJsonObject,
+	backfill: bool,
+) -> Result<RawPduId> {
+	// Skip if already in timeline
+	if self.get_pdu_id(event_id).await.is_ok() {
+		return Err!(Database("PDU {event_id} already in timeline"));
+	}
+
+	let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
+
+	let insert_lock = self.mutex_insert.lock(room_id).await;
+
+	let count: u64 = self.services.globals.next_count()?;
+
+	let (pdu_count, pdu_id) = if backfill {
+		let count_i64: i64 = count.try_into()?;
+		let pcount = PduCount::Backfilled(conduwuit_core::validated!(0 - count_i64));
+		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
+	} else {
+		let pcount = PduCount::Normal(count);
+		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
+	};
+
+	if backfill {
+		self.db.prepend_backfill_pdu(&pdu_id, event_id, value);
+	} else {
+		self.db.append_pdu(&pdu_id, pdu, value, pdu_count).await;
+	}
+
+	drop(insert_lock);
+
+	if pdu.kind == TimelineEventType::RoomMessage {
+		let content: ExtractBody = pdu.get_content()?;
+		if let Some(body) = content.body {
+			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
+		}
+	}
+
+	Ok(pdu_id)
 }

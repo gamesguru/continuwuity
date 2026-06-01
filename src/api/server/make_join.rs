@@ -37,7 +37,7 @@ pub(crate) async fn create_join_event_template_route(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), &body.room_id)
+		.server_is_participant(services.globals.server_name(), &body.room_id)
 		.await
 	{
 		info!(
@@ -263,7 +263,7 @@ pub(crate) async fn user_can_perform_restricted_join(
 					return Ok(true);
 				}
 			},
-			| AllowRule::UnstableSpamChecker =>
+			| AllowRule::UnstableSpamChecker => {
 				return match services
 					.antispam
 					.meowlnir_accept_make_join(room_id.to_owned(), user_id.to_owned())
@@ -271,7 +271,8 @@ pub(crate) async fn user_can_perform_restricted_join(
 				{
 					| Ok(()) => Ok(true),
 					| Err(_) => Err!(Request(Forbidden("Antispam rejected join request."))),
-				},
+				};
+			},
 			| _ => {
 				// We don't recognise this join rule, so we cannot satisfy the request.
 				could_satisfy = false;

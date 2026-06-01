@@ -90,6 +90,7 @@ conduwuit-macros.workspace = true
 const-str.workspace = true
 ctor.workspace = true
 either.workspace = true
+ed25519-dalek.workspace = true
 futures.workspace = true
 governor.workspace = true
 hickory-resolver.workspace = true
@@ -103,6 +104,7 @@ ldap3.optional = true
 log.workspace = true
 loole.workspace = true
 lru-cache.workspace = true
+moka = { workspace = true, features = ["sync"] }
 nonzero_ext.workspace = true
 rand.workspace = true
 regex.workspace = true
@@ -124,10 +126,12 @@ webpage.optional = true
 blurhash.workspace = true
 blurhash.optional = true
 recaptcha-verify = { version = "0.2.0", default-features = false }
+dashmap.workspace = true
 reqwest_recaptcha = { package = "reqwest", version = "0.12.28", default-features = false, features = ["rustls-tls-native-roots-no-provider"]  } # As long as recaptcha-verify's reqwest is outdated
 yansi.workspace = true
 linkify = "0.10.0"
 lettre.workspace = true
+scc = "3.7.1"
 
 [target.'cfg(all(unix, target_os = "linux"))'.dependencies]
 sd-notify.workspace = true

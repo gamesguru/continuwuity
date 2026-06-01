@@ -60,4 +60,18 @@ pub enum RoomCommand {
 	Exists {
 		room_id: OwnedRoomId,
 	},
+
+	/// Forcefully trigger federation sync/catchup in a room. Useful for
+	/// recovering a specific stale room immediately.
+	Bump {
+		room_id: Option<OwnedRoomId>,
+
+		/// Thump all stagnant federated rooms.
+		#[arg(long)]
+		all: bool,
+
+		/// Skip specific rooms (for excluding problematic rooms).
+		#[arg(long)]
+		skip: Vec<OwnedRoomId>,
+	},
 }

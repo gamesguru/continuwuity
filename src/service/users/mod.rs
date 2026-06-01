@@ -9,9 +9,10 @@ use conduwuit::result::LogErr;
 use conduwuit::{
 	Err, Error, Result, Server, debug_warn, err, info, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
+	warn,
 };
 #[cfg(feature = "ldap")]
-use conduwuit_core::{debug, error};
+use conduwuit_core::error;
 use database::{Deserialized, Ignore, Interfix, Json, Map};
 use futures::{Stream, StreamExt, TryFutureExt};
 #[cfg(feature = "ldap")]
@@ -24,7 +25,7 @@ use ruma::{
 	events::{
 		AnyToDeviceEvent, GlobalAccountDataEventType,
 		ignored_user_list::IgnoredUserListEvent,
-		invite_permission_config::{FilterLevel, InvitePermissionConfigEvent},
+		invite_permission_config::{FilterLevel, InvitePermissionConfigEventContent},
 	},
 	serde::Raw,
 	uint,
@@ -55,7 +56,6 @@ struct Services {
 	admin: Dep<admin::Service>,
 	appservice: Dep<appservice::Service>,
 	globals: Dep<globals::Service>,
-	state_accessor: Dep<rooms::state_accessor::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
 }
 
@@ -96,8 +96,6 @@ impl crate::Service for Service {
 				admin: args.depend::<admin::Service>("admin"),
 				appservice: args.depend::<appservice::Service>("appservice"),
 				globals: args.depend::<globals::Service>("globals"),
-				state_accessor: args
-					.depend::<rooms::state_accessor::Service>("rooms::state_accessor"),
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
 			},
 			db: Data {
@@ -150,6 +148,26 @@ impl Service {
 			})
 	}
 
+	fn glob_match(glob: &str, target: &str) -> bool {
+		let mut regex_str = String::with_capacity(glob.len().saturating_mul(2).saturating_add(2));
+		regex_str.push('^');
+		for c in glob.chars() {
+			match c {
+				| '*' => regex_str.push_str(".*"),
+				| '?' => regex_str.push('.'),
+				| '.' | '+' | '(' | ')' | '|' | '^' | '$' | '[' | ']' | '{' | '}' | '\\' => {
+					regex_str.push('\\');
+					regex_str.push(c);
+				},
+				| _ => regex_str.push(c),
+			}
+		}
+		regex_str.push('$');
+		regex::Regex::new(&regex_str)
+			.map(|re| re.is_match(target))
+			.unwrap_or(false)
+	}
+
 	/// Returns the recipient's filter level for an invite from the sender.
 	pub async fn invite_filter_level(
 		&self,
@@ -159,14 +177,72 @@ impl Service {
 		let level = if self.user_is_ignored(sender_user, recipient_user).await {
 			FilterLevel::Ignore
 		} else {
-			self.services
-				.account_data
-				.get_global(recipient_user, GlobalAccountDataEventType::InvitePermissionConfig)
-				.await
-				.map(|config: InvitePermissionConfigEvent| {
-					config.content.user_filter_level(sender_user)
-				})
-				.unwrap_or(FilterLevel::Allow)
+			let mut config_content = None;
+			for kind in
+				["m.invite_permission_config", "org.matrix.msc4155.invite_permission_config"]
+			{
+				if let Ok(raw) = self
+					.services
+					.account_data
+					.get_raw(None, recipient_user, kind)
+					.await
+				{
+					if let Ok(mut json) = raw.deserialized::<serde_json::Value>() {
+						if let Some(content_val) = json.get_mut("content") {
+							// MSC4155: Will ignore null fields
+							if let Some(obj) = content_val.as_object_mut() {
+								obj.retain(|_, v| !v.is_null());
+							}
+
+							if let Ok(parsed) = serde_json::from_value::<
+								InvitePermissionConfigEventContent,
+							>(content_val.clone())
+							{
+								config_content = Some(parsed);
+								break;
+							}
+						}
+					}
+				}
+			}
+
+			if let Some(content) = config_content {
+				let mut level = content.user_filter_level(sender_user);
+				if content.enabled {
+					let blocked_user = content
+						.blocked_users
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user.as_str()));
+					let blocked_server = content
+						.blocked_servers
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
+					let allowed_user = content
+						.allowed_users
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user.as_str()));
+					let allowed_server = content
+						.allowed_servers
+						.iter()
+						.any(|a| Self::glob_match(a, sender_user.server_name().as_str()));
+
+					if allowed_user {
+						level = FilterLevel::Allow;
+					} else if blocked_user {
+						level = FilterLevel::Block;
+					} else if allowed_server {
+						level = FilterLevel::Allow;
+					} else if blocked_server
+						|| !content.allowed_users.is_empty()
+						|| !content.allowed_servers.is_empty()
+					{
+						level = FilterLevel::Block;
+					}
+				}
+				level
+			} else {
+				FilterLevel::Allow
+			}
 		};
 
 		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");
@@ -766,6 +842,9 @@ impl Service {
 
 		if let Some(master_key) = master_key {
 			let (master_key_key, _) = parse_master_key(user_id, master_key)?;
+			let mut master_key_val: serde_json::Value =
+				serde_json::from_str(master_key.json().get())
+					.map_err(|e| err!(Database(debug_error!("Invalid master key JSON: {e}"))))?;
 
 			info!(
 				target: "cross_signing",
@@ -773,24 +852,52 @@ impl Service {
 				user_id
 			);
 
-			self.db
+			let old_key = self
+				.db
 				.keyid_key
-				.insert(&master_key_key, master_key.json().get().as_bytes());
+				.get(&master_key_key)
+				.await
+				.ok()
+				.and_then(|old| serde_json::from_slice::<serde_json::Value>(&old).ok());
 
-			self.db
-				.userid_masterkeyid
-				.insert(user_id.as_bytes(), &master_key_key);
+			if let Some(ref old_key) = old_key {
+				merge_signatures(&mut master_key_val, old_key);
+			}
+
+			let new_key_vec = serde_json::to_vec(&master_key_val).map_err(|e| {
+				err!(Database(debug_error!("Failed to serialize master key: {e}")))
+			})?;
+
+			if old_key.as_ref().is_none_or(|old| {
+				serde_json::to_vec(old).is_ok_and(|old_vec| old_vec != new_key_vec)
+			}) {
+				info!(
+					target: "cross_signing",
+					"Storing new master cross-signing key for user {}",
+					user_id
+				);
+
+				self.db.keyid_key.insert(&master_key_key, new_key_vec);
+
+				self.db
+					.userid_masterkeyid
+					.insert(user_id.as_bytes(), &master_key_key);
+			}
 		}
 
 		// Self-signing key
 		if let Some(self_signing_key) = self_signing_key {
-			let mut self_signing_key_ids = self_signing_key
-				.deserialize()
-				.map_err(|e| err!(Request(InvalidParam("Invalid self signing key: {e:?}"))))?
-				.keys
-				.into_values();
+			let mut self_signing_key_val: serde_json::Value =
+				serde_json::from_str(self_signing_key.json().get()).map_err(|e| {
+					err!(Database(debug_error!("Invalid self-signing key JSON: {e}")))
+				})?;
 
-			let self_signing_key_id = self_signing_key_ids.next().ok_or(Error::BadRequest(
+			let self_signing_key_obj = self_signing_key
+				.deserialize()
+				.map_err(|e| err!(Request(InvalidParam("Invalid self signing key: {e:?}"))))?;
+
+			let mut self_signing_key_ids = self_signing_key_obj.keys.values();
+			let self_signing_key_pub = self_signing_key_ids.next().ok_or(Error::BadRequest(
 				ErrorKind::InvalidParam,
 				"Self signing key contained no key.",
 			))?;
@@ -803,7 +910,7 @@ impl Service {
 			}
 
 			let mut self_signing_key_key = prefix.clone();
-			self_signing_key_key.extend_from_slice(self_signing_key_id.as_bytes());
+			self_signing_key_key.extend_from_slice(self_signing_key_pub.as_bytes());
 
 			info!(
 				target: "cross_signing",
@@ -811,18 +918,46 @@ impl Service {
 				user_id
 			);
 
-			self.db
+			let old_key = self
+				.db
 				.keyid_key
-				.insert(&self_signing_key_key, self_signing_key.json().get().as_bytes());
+				.get(&self_signing_key_key)
+				.await
+				.ok()
+				.and_then(|old| serde_json::from_slice::<serde_json::Value>(&old).ok());
 
-			self.db
-				.userid_selfsigningkeyid
-				.insert(user_id.as_bytes(), &self_signing_key_key);
+			if let Some(ref old_key) = old_key {
+				merge_signatures(&mut self_signing_key_val, old_key);
+			}
+
+			let new_key_vec = serde_json::to_vec(&self_signing_key_val).map_err(|e| {
+				err!(Database(debug_error!("Failed to serialize self-signing key: {e}")))
+			})?;
+
+			if old_key.as_ref().is_none_or(|old| {
+				serde_json::to_vec(old).is_ok_and(|old_vec| old_vec != new_key_vec)
+			}) {
+				info!(
+					target: "cross_signing",
+					"Storing new self-signing key for user {}",
+					user_id
+				);
+
+				self.db.keyid_key.insert(&self_signing_key_key, new_key_vec);
+
+				self.db
+					.userid_selfsigningkeyid
+					.insert(user_id.as_bytes(), &self_signing_key_key);
+			}
 		}
 
 		if let Some(user_signing_key) = user_signing_key {
-			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
+			let mut user_signing_key_val: serde_json::Value =
+				serde_json::from_str(user_signing_key.json().get()).map_err(|e| {
+					err!(Database(debug_error!("Invalid user-signing key JSON: {e}")))
+				})?;
 
+			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 			let user_signing_key_key = (user_id, &user_signing_key_id);
 
 			info!(
@@ -831,13 +966,37 @@ impl Service {
 				user_id
 			);
 
-			self.db
+			let old_key = self
+				.db
 				.keyid_key
-				.put_raw(user_signing_key_key, user_signing_key.json().get().as_bytes());
+				.qry(&user_signing_key_key)
+				.await
+				.ok()
+				.and_then(|old| serde_json::from_slice::<serde_json::Value>(&old).ok());
 
-			self.db
-				.userid_usersigningkeyid
-				.raw_put(user_id, user_signing_key_key);
+			if let Some(ref old_key) = old_key {
+				merge_signatures(&mut user_signing_key_val, old_key);
+			}
+
+			let new_key_vec = serde_json::to_vec(&user_signing_key_val).map_err(|e| {
+				err!(Database(debug_error!("Failed to serialize user-signing key: {e}")))
+			})?;
+
+			if old_key.as_ref().is_none_or(|old| {
+				serde_json::to_vec(old).is_ok_and(|old_vec| old_vec != new_key_vec)
+			}) {
+				info!(
+					target: "cross_signing",
+					"Storing new user-signing key for user {}",
+					user_id
+				);
+
+				self.db.keyid_key.put_raw(user_signing_key_key, new_key_vec);
+
+				self.db
+					.userid_usersigningkeyid
+					.raw_put(user_id, user_signing_key_key);
+			}
 		}
 
 		if notify {
@@ -889,6 +1048,12 @@ impl Service {
 				err!(Database(info!("signatures in keyid_key for a user is invalid.")))
 			})?
 			.insert(signature.0, signature.1.into());
+
+		info!(
+			target: "cross_signing",
+			"User {} signed key {} of user {}",
+			sender_id, key_id, target_id
+		);
 
 		let key = (target_id, key_id);
 		self.db.keyid_key.put(key, Json(cross_signing_key));
@@ -946,8 +1111,6 @@ impl Service {
 		self.services
 			.state_cache
 			.rooms_joined(user_id)
-			// Don't send key updates to unencrypted rooms
-			.filter(|room_id| self.services.state_accessor.is_encrypted_room(room_id))
 			.ready_for_each(|room_id| {
 				let key = (room_id, count);
 				self.db.keychangeid_userid.put_raw(key, user_id);
@@ -1091,15 +1254,16 @@ impl Service {
 		type Key<'a> = (&'a UserId, &'a DeviceId, u64);
 
 		let until = until.into().unwrap_or(u64::MAX);
-		let from = (user_id, device_id, until);
+		let from = (user_id, device_id, 0);
+
 		self.db
 			.todeviceid_events
-			.rev_keys_from(&from)
+			.stream_from(&from)
 			.ignore_err()
-			.ready_take_while(move |(user_id_, device_id_, _): &Key<'_>| {
-				user_id == *user_id_ && device_id == *device_id_
+			.ready_take_while(move |((user_id_, device_id_, count), _): &(Key<'_>, _)| {
+				user_id == *user_id_ && device_id == *device_id_ && *count <= until
 			})
-			.ready_for_each(|key: Key<'_>| {
+			.ready_for_each(|(key, _): (Key<'_>, serde_json::Value)| {
 				self.db.todeviceid_events.del(key);
 			})
 			.await;
@@ -1549,6 +1713,57 @@ pub fn parse_user_signing_key(user_signing_key: &Raw<CrossSigningKey>) -> Result
 	}
 
 	Ok(user_signing_key_id)
+}
+
+fn merge_signatures(new: &mut serde_json::Value, old: &serde_json::Value) {
+	// Normalize null/missing signatures in the new key to an empty object
+	// so old signatures can be merged in. Some servers (e.g. matrix.org)
+	// send signatures: `null` rather than `{}` which would cause
+	// as_object_mut() to return None, skipping/clobbering the merge.
+	if let Some(obj) = new.as_object_mut() {
+		match obj.get("signatures") {
+			| Some(v) if !v.is_object() => {
+				obj.insert("signatures".to_owned(), json!({}));
+			},
+			| None => {
+				obj.insert("signatures".to_owned(), json!({}));
+			},
+			| _ => {},
+		}
+	}
+
+	if let (Some(new_sigs), Some(old_sigs)) = (
+		new.get_mut("signatures").and_then(|v| v.as_object_mut()),
+		old.get("signatures").and_then(|v| v.as_object()),
+	) {
+		for (user, sigs) in old_sigs {
+			if let Some(sigs) = sigs.as_object() {
+				let Some(new_user_sigs) = new_sigs
+					.entry(user.clone())
+					.or_insert_with(|| json!({}))
+					.as_object_mut()
+				else {
+					warn!(
+						target: "cross_signing",
+						"Signatures for user {} in cross-signing key are not a JSON object. Skipping merge.",
+						user
+					);
+					continue;
+				};
+
+				for (key, val) in sigs {
+					if !new_user_sigs.contains_key(key) {
+						info!(
+							target: "cross_signing",
+							"Merging existing signature for user {} key {}",
+							user, key
+						);
+						new_user_sigs.insert(key.clone(), val.clone());
+					}
+				}
+			}
+		}
+	}
 }
 
 /// Ensure that a user only sees signatures from themselves and the target user

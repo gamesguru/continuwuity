@@ -106,8 +106,15 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 				debug!(%url, "URL preview HEAD probe returned {status}, falling back to GET");
 				let mut req = client.get(url.as_str());
 				if status == reqwest::StatusCode::FORBIDDEN {
-					req =
-						req.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent());
+					req = req.header(
+						reqwest::header::USER_AGENT,
+						self.services
+							.server
+							.config
+							.url_preview_user_agent
+							.as_deref()
+							.unwrap_or(&self.services.server.config.user_agent),
+					);
 				}
 				response = req.send().await?;
 			}
@@ -115,10 +122,12 @@ async fn request_url_preview(&self, url: &Url) -> Result<UrlPreviewData> {
 	}
 
 	if let Err(e) = response.error_for_status_ref() {
-		return Err!(Request(Unknown(error!("HTTP {e} fetching URL preview probe"))));
+		return Err!(Request(Unknown(warn!("HTTP {e} fetching URL preview probe"))));
 	}
 
 	debug!(%url, "URL preview response headers: {:?}", response.headers());
+
+	response.error_for_status_ref()?;
 
 	if let Some(remote_addr) = response.remote_addr() {
 		debug!(%url, "URL preview response remote address: {:?}", remote_addr);
@@ -161,7 +170,7 @@ pub async fn download_image(
 	preview_data: Option<UrlPreviewData>,
 ) -> Result<UrlPreviewData> {
 	use conduwuit::utils::random_string;
-	use image::ImageReader;
+	use image::{ImageFormat, ImageReader, imageops::FilterType};
 	use ruma::Mxc;
 
 	let mut preview_data = preview_data.unwrap_or_default();
@@ -174,7 +183,15 @@ pub async fn download_image(
 			.client
 			.url_preview
 			.get(url)
-			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.header(
+				reqwest::header::USER_AGENT,
+				self.services
+					.server
+					.config
+					.url_preview_user_agent
+					.as_deref()
+					.unwrap_or(&self.services.server.config.user_agent),
+			)
 			.send()
 			.await?;
 	}
@@ -183,7 +200,7 @@ pub async fn download_image(
 		return Err!(Request(Unknown(error!("HTTP {e} fetching image"))));
 	}
 
-	let image = response
+	let mut image = response
 		.limit_read(
 			self.services
 				.server
@@ -194,36 +211,25 @@ pub async fn download_image(
 		)
 		.await?;
 
-	let mxc = Mxc {
-		server_name: self.services.globals.server_name(),
-		media_id: &random_string(super::MXC_LENGTH),
-	};
+	let (mut width, mut height);
 
-	let mut final_image = image;
-	let mut final_width;
-	let mut final_height;
-
-	let cursor = std::io::Cursor::new(&final_image);
+	let cursor = std::io::Cursor::new(&image);
 	if let Ok(reader) = ImageReader::new(cursor).with_guessed_format() {
 		if let Ok(dim) = reader.into_dimensions() {
-			final_width = Some(dim.0);
-			final_height = Some(dim.1);
+			width = Some(dim.0);
+			height = Some(dim.1);
 
 			// Dynamically scale down massive URL preview images to 250x250 limits
 			// to avoid gigabytes of raw 4K database hoarding.
 			if dim.0 > 250 || dim.1 > 250 {
-				if let Ok(img) = image::load_from_memory(&final_image) {
-					use image::imageops::FilterType;
+				if let Ok(img) = image::load_from_memory(&image) {
 					let resized = img.resize(250, 250, FilterType::CatmullRom);
 					let mut cursor = std::io::Cursor::new(Vec::new());
 
-					if resized
-						.write_to(&mut cursor, image::ImageFormat::Jpeg)
-						.is_ok()
-					{
-						final_image = cursor.into_inner();
-						final_width = Some(resized.width());
-						final_height = Some(resized.height());
+					if resized.write_to(&mut cursor, ImageFormat::Jpeg).is_ok() {
+						image = cursor.into_inner();
+						width = Some(resized.width());
+						height = Some(resized.height());
 					}
 				}
 			}
@@ -238,12 +244,16 @@ pub async fn download_image(
 		)));
 	}
 
-	preview_data.image_width = final_width.or(preview_data.image_width);
-	preview_data.image_height = final_height.or(preview_data.image_height);
+	let mxc = Mxc {
+		server_name: self.services.globals.server_name(),
+		media_id: &random_string(super::MXC_LENGTH),
+	};
 
-	self.create(&mxc, None, None, None, &final_image).await?;
+	self.create(&mxc, None, None, None, &image).await?;
 
 	preview_data.image = Some(mxc.to_string());
+	preview_data.image_width = width.or(preview_data.image_width);
+	preview_data.image_height = height.or(preview_data.image_height);
 
 	Ok(preview_data)
 }
@@ -299,7 +309,15 @@ pub async fn download_media(&self, url: &str) -> Result<(OwnedMxcUri, usize)> {
 			.client
 			.url_preview
 			.get(url)
-			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.header(
+				reqwest::header::USER_AGENT,
+				self.services
+					.server
+					.config
+					.url_preview_user_agent
+					.as_deref()
+					.unwrap_or(&self.services.server.config.user_agent),
+			)
 			.send()
 			.await?;
 	}
@@ -378,7 +396,15 @@ async fn download_html(&self, url: &str) -> Result<UrlPreviewData> {
 	if response.status() == reqwest::StatusCode::FORBIDDEN {
 		response = client
 			.get(url)
-			.header(reqwest::header::USER_AGENT, conduwuit::version::user_agent())
+			.header(
+				reqwest::header::USER_AGENT,
+				self.services
+					.server
+					.config
+					.url_preview_user_agent
+					.as_deref()
+					.unwrap_or(&self.services.server.config.user_agent),
+			)
 			.send()
 			.await?;
 	}
@@ -519,7 +545,7 @@ pub fn url_preview_allowed(&self, url: &Url) -> bool {
 				| Some((_, root_domain)) => {
 					if denylist_domain_explicit.contains(&root_domain.to_owned()) {
 						debug!(
-							"Root domain {} is not allowed by \
+							"Root domain {} is not allowed by \n\t\t\t\t\t\t \
 							 url_preview_domain_explicit_denylist (check 1/3)",
 							&root_domain
 						);
@@ -529,7 +555,7 @@ pub fn url_preview_allowed(&self, url: &Url) -> bool {
 					if allowlist_domain_explicit.contains(&root_domain.to_owned()) {
 						debug!(
 							"Root domain {} is allowed by url_preview_domain_explicit_allowlist \
-							 (check 2/3)",
+							 \n\t\t\t\t\t (check 2/3)",
 							&root_domain
 						);
 						return true;
@@ -541,7 +567,7 @@ pub fn url_preview_allowed(&self, url: &Url) -> bool {
 					{
 						debug!(
 							"Root domain {} is allowed by url_preview_domain_contains_allowlist \
-							 (check 3/3)",
+							 \n\t\t\t\t\t (check 3/3)",
 							&root_domain
 						);
 						return true;

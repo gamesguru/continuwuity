@@ -30,7 +30,7 @@ use super::{
 	},
 	room_version::RoomVersion,
 };
-use crate::{debug, error, trace, warn};
+use crate::{debug, error, info, trace, warn};
 
 // FIXME: field extracting could be bundled for `content`
 #[derive(Deserialize)]
@@ -219,10 +219,9 @@ where
 			return Ok(false);
 		}
 
-		if room_version.room_ids_as_hashes && incoming_event.room_id().is_some() {
-			warn!("room create event incorrectly claims to have a room ID when it should not");
-			return Ok(false);
-		}
+		// Note: We cannot check `incoming_event.room_id().is_some()` to enforce
+		// wire-format compliance here. Conduit internally populates `room_id`
+		// via `from_id_val` for database routing, so it will always be Some.
 
 		if !room_version.use_room_create_sender
 			&& !room_version.explicitly_privilege_room_creators
@@ -289,8 +288,9 @@ where
 		return Ok(false);
 	}
 	let expected_room_id = room_create_event.room_id_or_hash();
+	let expects_room_id = !room_version.room_ids_as_hashes;
 
-	if incoming_event.room_id_or_hash() != expected_room_id {
+	if expects_room_id && incoming_event.room_id_or_hash() != expected_room_id {
 		warn!(
 			expected = ?expected_room_id,
 			received = ?incoming_event.room_id_or_hash(),
@@ -318,7 +318,7 @@ where
 	}
 
 	if let Some(ref pe) = power_levels_event {
-		if pe.room_id_or_hash() != expected_room_id {
+		if expects_room_id && pe.room_id_or_hash() != expected_room_id {
 			warn!(
 				expected = ?expected_room_id,
 				received = ?pe.room_id_or_hash(),
@@ -437,7 +437,7 @@ where
 		},
 	};
 
-	if sender_member_event.room_id_or_hash() != expected_room_id {
+	if expects_room_id && sender_member_event.room_id_or_hash() != expected_room_id {
 		warn!(
 			"room_id of incoming event ({:?}) does not match that of the m.room.create event \
 			 ({:?})",
@@ -715,11 +715,12 @@ where
 	let mut sender_power = power_levels
 		.users
 		.get(sender)
-		.or_else(|| sender_is_joined.then_some(&power_levels.users_default));
+		.or(Some(&power_levels.users_default));
 
-	let mut target_power = power_levels.users.get(target_user).or_else(|| {
-		(target_membership == MembershipState::Join).then_some(&power_levels.users_default)
-	});
+	let mut target_power = power_levels
+		.users
+		.get(target_user)
+		.or(Some(&power_levels.users_default));
 
 	let mut creators = BTreeSet::new();
 	creators.insert(create_room.sender().to_owned());
@@ -859,6 +860,9 @@ where
 					"sender cannot join as they are banned from the room"
 				);
 				false
+			} else if target_user_current_membership == MembershipState::Join {
+				trace!("sender is already joined to the room, allowing profile update");
+				true
 			} else {
 				match join_rules {
 					| JoinRule::Invite =>
@@ -1024,7 +1028,8 @@ where
 		},
 		| MembershipState::Leave => {
 			let can_unban = if target_user_current_membership == MembershipState::Ban {
-				sender_creator || sender_power.filter(|&p| p >= &power_levels.ban).is_some()
+				(sender_creator && !target_creator)
+					|| sender_power.filter(|&p| p >= &power_levels.ban).is_some()
 			} else {
 				true
 			};
@@ -1032,8 +1037,8 @@ where
 				target_user_current_membership,
 				MembershipState::Ban | MembershipState::Leave
 			) {
-				if sender_creator {
-					// sender is a creator
+				if sender_creator && !target_creator {
+					// sender is a creator, target is not
 					true
 				} else if sender_power.filter(|&p| p >= &power_levels.kick).is_none() {
 					// sender lacks kick power level
@@ -1063,7 +1068,7 @@ where
 					MembershipState::Join | MembershipState::Invite | MembershipState::Knock
 				);
 				if !allow {
-					warn!(
+					info!(
 						%sender,
 						current_membership_event_id=?target_user_membership_event_id,
 						current_membership=?target_user_current_membership,
@@ -1122,16 +1127,17 @@ where
 				);
 				false
 			} else {
-				let allow = sender_creator
+				let allow = (sender_creator && !target_creator)
 					|| (sender_power.filter(|&p| p >= &power_levels.ban).is_some()
 						&& target_power < sender_power);
 				if !allow {
 					warn!(
 						%sender,
 						%target_user,
-						?target_user_membership_event_id,
-						?power_levels_event_id,
-						"sender does not have enough power to ban the target",
+						?sender_power,
+						?target_power,
+						ban_level = %power_levels.ban,
+						"sender cannot ban target"
 					);
 				}
 				allow
@@ -1305,18 +1311,23 @@ fn check_power_levels(
 	for user in user_levels_to_check {
 		let old_level = old_state.users.get(user);
 		let new_level = new_state.users.get(user);
-		if new_level.is_some() && creators.contains(user) {
-			if new_level != Some(&Int::MAX) {
-				warn!(
-					"creators cannot appear in the users list of m.room.power_levels with a \
-					 non-privileged power level"
-				);
-				return Some(false); // cannot alter creator power level
-			}
-			trace!("ignoring creator in users list with privileged power level");
+
+		// Matrix auth checks only validate deltas. If the level didn't change,
+		// skip it — this must come before the creator check to avoid rejecting
+		// PL updates that don't touch the creator's entry.
+		if old_level.is_some() && new_level.is_some() && old_level == new_level {
 			continue;
 		}
-		if old_level.is_some() && new_level.is_some() && old_level == new_level {
+
+		if creators.contains(user) {
+			// In V12+ rooms, creators always have implicit Int::MAX power
+			// regardless of what content.users says. Any entry for a creator
+			// in content.users is effectively a no-op — skip it rather than
+			// rejecting the entire PL event. This prevents V2.1 state
+			// resolution from dropping valid PL events that happen to
+			// include the creator in their users dict (e.g. from federation
+			// partners or older room versions).
+			trace!("skipping creator {user} in users list — implicit Int::MAX power");
 			continue;
 		}
 

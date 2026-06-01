@@ -32,7 +32,7 @@ pub(crate) async fn get_missing_events_route(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), &body.room_id)
+		.server_is_participant(services.globals.server_name(), &body.room_id)
 		.await
 	{
 		info!(
@@ -47,6 +47,15 @@ pub(crate) async fn get_missing_events_route(
 		.try_into()
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
+
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		limit,
+		latest = body.latest_events.len(),
+		earliest = body.earliest_events.len(),
+		"Serving get_missing_events request"
+	);
 
 	let room_version = services.rooms.state.get_room_version(&body.room_id).await?;
 
@@ -82,7 +91,11 @@ pub(crate) async fn get_missing_events_route(
 		if !services
 			.rooms
 			.state_accessor
-			.server_can_see_event(body.origin(), &body.room_id, pdu.event_id())
+			.server_can_see_event(
+				body.origin().to_owned(),
+				body.room_id.clone(),
+				pdu.event_id().to_owned(),
+			)
 			.await
 		{
 			debug!(%next_event_id, origin = %body.origin(), "redacting event origin cannot see");

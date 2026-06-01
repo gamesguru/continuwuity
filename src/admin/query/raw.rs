@@ -2,7 +2,7 @@ use std::{borrow::Cow, collections::BTreeMap, ops::Deref, sync::Arc};
 
 use clap::Subcommand;
 use conduwuit::{
-	Err, Result, apply, at, is_zero,
+	Err, Result, apply, at, info, is_zero,
 	utils::{
 		stream::{IterStream, ReadyExt, TryIgnore, TryParallelExt},
 		string::EMPTY,
@@ -39,6 +39,12 @@ pub enum RawCommand {
 
 		/// Key
 		key: String,
+	},
+
+	/// Clear all entries from a database map
+	RawClear {
+		/// Map name
+		map: String,
 	},
 
 	/// Raw database keys iteration
@@ -207,10 +213,13 @@ pub(super) async fn compact(
 
 	let runtime = self.services.server.runtime().clone();
 	let parallelism = parallelism.unwrap_or(1);
+	let num_maps = maps.len();
+	info!("Starting compaction of {num_maps} column families (parallelism={parallelism})");
 	let results = maps
 		.into_iter()
 		.try_stream::<conduwuit::Error>()
 		.paralleln_and_then(runtime, parallelism, move |map| {
+			info!("Compacting column family: {}", map.name());
 			map.compact_blocking(options.clone())?;
 			Ok(map.name().to_owned())
 		})
@@ -219,6 +228,7 @@ pub(super) async fn compact(
 	let timer = Instant::now();
 	let results = results.await;
 	let query_time = timer.elapsed();
+	info!("Compaction complete: {num_maps} column families in {query_time:?}");
 	self.write_str(&format!("Jobs completed in {query_time:?}:\n\n```rs\n{results:#?}\n```"))
 		.await
 }
@@ -412,6 +422,24 @@ pub(super) async fn raw_del(&self, map: String, key: String) -> Result {
 
 	let query_time = timer.elapsed();
 	self.write_str(&format!("Operation completed in {query_time:?}"))
+		.await
+}
+
+#[admin_command]
+pub(super) async fn raw_clear(&self, map: String) -> Result {
+	let map = self.services.db.get(&map)?;
+	let timer = Instant::now();
+	let count = map
+		.raw_keys()
+		.ignore_err()
+		.ready_fold(0_usize, |count, key| {
+			map.remove(key);
+			count.saturating_add(1)
+		})
+		.await;
+
+	let query_time = timer.elapsed();
+	self.write_str(&format!("Cleared {count} entries in {query_time:?}"))
 		.await
 }
 

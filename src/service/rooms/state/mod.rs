@@ -1,9 +1,9 @@
 use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
 
 use async_trait::async_trait;
-use conduwuit::{RoomVersion, debug};
+use conduwuit::{RoomVersion, debug, info};
 use conduwuit_core::{
-	Event, PduEvent, Result, err,
+	Event, PduEvent, Result,
 	result::FlatOk,
 	state_res::{self, StateMap},
 	utils::{
@@ -47,6 +47,7 @@ struct Services {
 	state_accessor: Dep<rooms::state_accessor::Service>,
 	state_compressor: Dep<rooms::state_compressor::Service>,
 	timeline: Dep<rooms::timeline::Service>,
+	outlier: Dep<rooms::outlier::Service>,
 }
 
 struct Data {
@@ -57,6 +58,12 @@ struct Data {
 
 type RoomMutexMap = MutexMap<OwnedRoomId, ()>;
 pub type RoomMutexGuard = MutexMapGuard<OwnedRoomId, ()>;
+
+/// Hard cap on the number of forward extremities (DAG tips) stored per room.
+/// Enforced at the DB writer level to prevent unbounded fork accumulation.
+/// Matrix spec limits prev_events to 20, so keeping >10 tips is wasteful —
+/// servers can only reference a subset in any single event anyway.
+pub const MAX_FORWARD_EXTREMITIES: usize = 10;
 
 #[async_trait]
 impl crate::Service for Service {
@@ -73,6 +80,7 @@ impl crate::Service for Service {
 				state_compressor: args
 					.depend::<rooms::state_compressor::Service>("rooms::state_compressor"),
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
+				outlier: args.depend::<rooms::outlier::Service>("rooms::outlier"),
 			},
 			db: Data {
 				shorteventid_shortstatehash: args.db["shorteventid_shortstatehash"].clone(),
@@ -99,10 +107,68 @@ impl Service {
 		room_id: &RoomId,
 		shortstatehash: u64,
 		statediffnew: Arc<CompressedState>,
-		_statediffremoved: Arc<CompressedState>,
+		statediffremoved: Arc<CompressedState>,
 		state_lock: &RoomMutexGuard,
 	) -> Result {
-		let event_ids = statediffnew
+		self.force_state_inner(
+			room_id,
+			shortstatehash,
+			statediffnew,
+			statediffremoved,
+			state_lock,
+			true,
+		)
+		.await
+	}
+
+	/// Admin-only: set room state without triggering per-member cache updates
+	/// or outbound federation notifications (presence, device lists, etc).
+	/// The caller must rebuild the membership cache afterwards.
+	pub async fn force_state_quiet(
+		&self,
+		room_id: &RoomId,
+		shortstatehash: u64,
+		statediffnew: Arc<CompressedState>,
+		statediffremoved: Arc<CompressedState>,
+		state_lock: &RoomMutexGuard,
+	) -> Result {
+		self.force_state_inner(
+			room_id,
+			shortstatehash,
+			statediffnew,
+			statediffremoved,
+			state_lock,
+			false,
+		)
+		.await
+	}
+
+	async fn force_state_inner(
+		&self,
+		room_id: &RoomId,
+		shortstatehash: u64,
+		statediffnew: Arc<CompressedState>,
+		statediffremoved: Arc<CompressedState>,
+		state_lock: &RoomMutexGuard,
+		update_cache: bool,
+	) -> Result {
+		info!(
+			target: "force_state",
+			"processing {} new, {} removed state events for {room_id} (cache_update={update_cache})",
+			statediffnew.len(),
+			statediffremoved.len()
+		);
+
+		if !update_cache {
+			// Admin bypass: Skip membership churn and outbound federation notifications.
+			// The admin command will manually rebuild the cache via silent_bulk_sync.
+			self.set_room_state(room_id, shortstatehash, state_lock);
+			self.services.state_cache.update_joined_count(room_id).await;
+			info!(target: "force_state", "quiet mode: state pointer set for {room_id}");
+			return Ok(());
+		}
+
+		let new_event_ids = statediffnew
 			.iter()
 			.stream()
 			.map(|&new| parse_compressed_state_event(new).1)
@@ -113,15 +179,42 @@ impl Service {
 			})
 			.ignore_err();
 
-		pin_mut!(event_ids);
-		while let Some(event_id) = event_ids.next().await {
-			let Ok(pdu) = self
+		let removed_events = statediffremoved
+			.iter()
+			.stream()
+			.map(|&old| parse_compressed_state_event(old));
+
+		let mut new_processed = 0_usize;
+		let mut new_members = 0_usize;
+		let mut new_skipped = 0_usize;
+		pin_mut!(new_event_ids);
+		while let Some(event_id) = new_event_ids.next().await {
+			new_processed = new_processed.saturating_add(1);
+			let pdu = match self
 				.services
 				.timeline
 				.get_pdu_in_room(Some(room_id), &event_id)
 				.await
-			else {
-				continue;
+			{
+				| Ok(pdu) => pdu,
+				| Err(_) => match self
+					.services
+					.timeline
+					.get_pdu_in_room(None, &event_id)
+					.await
+				{
+					| Ok(pdu) => {
+						warn!(
+							target: "force_state",
+							"PDU {event_id} not found with room_id filter, recovered without"
+						);
+						pdu
+					},
+					| Err(_) => {
+						new_skipped = new_skipped.saturating_add(1);
+						continue;
+					},
+				},
 			};
 
 			match pdu.kind {
@@ -135,6 +228,22 @@ impl Service {
 						.state_cache
 						.update_membership(room_id, user_id, &pdu, false)
 						.await?;
+
+					// Membership changes can affect restricted room accessibility
+					self.services
+						.spaces
+						.roomid_spacehierarchy_cache
+						.lock()
+						.await
+						.remove(room_id);
+
+					new_members = new_members.saturating_add(1);
+					if new_members.is_multiple_of(1000) {
+						info!(
+							target: "force_state",
+							"processed {new_members} members, {new_processed} total, {new_skipped} skipped"
+						);
+					}
 				},
 				| TimelineEventType::SpaceChild => {
 					self.services
@@ -147,12 +256,119 @@ impl Service {
 				| _ => continue,
 			}
 		}
+		info!(
+			target: "force_state",
+			"new events done: {new_processed} processed, {new_members} members, {new_skipped} skipped"
+		);
 
+		pin_mut!(removed_events);
+		while let Some((shortstatekey, shorteventid)) = removed_events.next().await {
+			// Process cache updates using shortstatekey (PDU-free!)
+			// This guarantees we update the cache even if the historical PDU
+			// JSON has been pruned from the database.
+			if let Ok((event_type, state_key)) = self
+				.services
+				.short
+				.get_statekey_from_short(shortstatekey)
+				.await
+			{
+				if event_type == StateEventType::RoomMember {
+					if let Ok(user_id) = UserId::parse(&*state_key) {
+						// Re-sync membership from the NEW state to update cache correctly.
+						// NB: Must use state_get(shortstatehash) NOT room_state_get —
+						// the new state has not been committed yet via set_room_state.
+						if let Ok(new_pdu) = self
+							.services
+							.state_accessor
+							.state_get(
+								shortstatehash,
+								&StateEventType::RoomMember,
+								user_id.as_str(),
+							)
+							.await
+						{
+							let _ = self
+								.services
+								.state_cache
+								.update_membership(room_id, user_id, &new_pdu, false)
+								.await;
+						} else {
+							// User is no longer in the room at all in the new state
+							self.services
+								.state_cache
+								.mark_as_left(user_id, room_id, None)
+								.await;
+						}
+					}
+				} else if event_type == StateEventType::SpaceChild {
+					self.services
+						.spaces
+						.roomid_spacehierarchy_cache
+						.lock()
+						.await
+						.remove(room_id);
+				}
+			}
+
+			// Demote to outlier if possible (best-effort, not required for cache)
+			let Ok(event_id) = self
+				.services
+				.short
+				.get_eventid_from_short::<Box<_>>(shorteventid)
+				.await
+			else {
+				continue;
+			};
+
+			let pdu_json = self.services.timeline.get_pdu_json(&event_id).await;
+			if let Ok(pdu_json) = &pdu_json {
+				self.services
+					.outlier
+					.add_pdu_outlier(&event_id, pdu_json, Some(room_id));
+			}
+		}
+		info!(target: "force_state", "removed events done, updating joined count");
 		self.services.state_cache.update_joined_count(room_id).await;
 
 		self.set_room_state(room_id, shortstatehash, state_lock);
 
+		info!(target: "force_state", "complete for {room_id}");
 		Ok(())
+	}
+
+	/// Reset forward extremities to all events in the given state snapshot.
+	///
+	/// This is an intentionally destructive operation for admin-level DAG
+	/// repair. It breaks the room's DAG continuity by replacing extremities
+	/// with the full state set, forcing the room to "restart" from the given
+	/// state. Only call this from admin commands, never from normal federation
+	/// intake.
+	pub async fn reset_extremities_to_state(
+		&self,
+		room_id: &RoomId,
+		shortstatehash: u64,
+		state_lock: &RoomMutexGuard,
+	) {
+		let new_extremities: Vec<OwnedEventId> = self
+			.services
+			.state_accessor
+			.state_full_ids(shortstatehash)
+			.map(|(_, id)| id)
+			.collect()
+			.await;
+
+		info!(
+			target: "force_state",
+			"Admin: resetting {room_id} extremities to {} state events",
+			new_extremities.len()
+		);
+
+		self.set_forward_extremities(
+			room_id,
+			new_extremities.iter().map(AsRef::as_ref),
+			state_lock,
+		)
+		.await;
 	}
 
 	/// Generates a new StateHash and associates it with the incoming event.
@@ -187,7 +403,7 @@ impl Service {
 
 		if !already_existed {
 			let states_parents = match previous_shortstatehash {
-				| Ok(p) =>
+				| Ok(p) if p != 0 =>
 					self.services
 						.state_compressor
 						.load_shortstatehash_info(p)
@@ -198,12 +414,19 @@ impl Service {
 			let (statediffnew, statediffremoved) =
 				if let Some(parent_stateinfo) = states_parents.last() {
 					let statediffnew: CompressedState = state_ids_compressed
-						.difference(&parent_stateinfo.full_state)
+						.difference(
+							parent_stateinfo
+								.full_state
+								.as_ref()
+								.expect("top frame must have full_state"),
+						)
 						.copied()
 						.collect();
 
 					let statediffremoved: CompressedState = parent_stateinfo
 						.full_state
+						.as_ref()
+						.expect("top frame must have full_state")
 						.difference(&state_ids_compressed)
 						.copied()
 						.collect();
@@ -226,6 +449,17 @@ impl Service {
 			.aput::<KEY_LEN, VAL_LEN, _, _>(shorteventid, shortstatehash);
 
 		Ok(shortstatehash)
+	}
+
+	/// Overwrites the shortstatehash for a specific event. Used by admin
+	/// commands to fix stale pdu_shortstatehash entries after force-setting
+	/// room state.
+	pub fn set_pdu_shortstatehash(&self, shorteventid: u64, shortstatehash: u64) {
+		const BUFSIZE: usize = size_of::<u64>();
+
+		self.db
+			.shorteventid_shortstatehash
+			.aput::<BUFSIZE, BUFSIZE, _, _>(shorteventid, shortstatehash);
 	}
 
 	/// Generates a new StateHash and associates it with the incoming event.
@@ -253,7 +487,7 @@ impl Service {
 		match &new_pdu.state_key {
 			| Some(state_key) => {
 				let states_parents = match previous_shortstatehash {
-					| Ok(p) =>
+					| Ok(p) if p != 0 =>
 						self.services
 							.state_compressor
 							.load_shortstatehash_info(p)
@@ -277,6 +511,8 @@ impl Service {
 					.last()
 					.map(|info| {
 						info.full_state
+							.as_ref()
+							.expect("top frame must have full_state")
 							.iter()
 							.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
 					})
@@ -372,7 +608,6 @@ impl Service {
 			.room_state_get_content(room_id, &StateEventType::RoomCreate, "")
 			.await
 			.map(|content: RoomCreateEventContent| content.room_version)
-			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
@@ -396,6 +631,14 @@ impl Service {
 			.ignore_err()
 	}
 
+	/// Returns true if the given event_id is a current forward extremity
+	/// (DAG tip) for the room.
+	pub async fn is_forward_extremity(&self, room_id: &RoomId, event_id: &EventId) -> bool {
+		self.get_forward_extremities(room_id)
+			.any(|eid| futures::future::ready(eid == event_id))
+			.await
+	}
+
 	pub async fn set_forward_extremities<'a, I>(
 		&'a self,
 		room_id: &'a RoomId,
@@ -412,9 +655,16 @@ impl Service {
 			.ready_for_each(|key| self.db.roomid_pduleaves.remove(key))
 			.await;
 
-		for event_id in event_ids {
-			let key = (room_id, event_id);
-			self.db.roomid_pduleaves.put_raw(key, event_id);
+		// Enforce a hard cap at the DB writer level. Callers may pass more
+		// tips than this (e.g. from recalculate_extremities or
+		// reset_extremities_to_state), but we only persist the last N.
+		// Keeping the newest tips is preferred since they are most likely to
+		// be merged by future events.
+		let collected: Vec<&EventId> = event_ids.collect();
+		let start = collected.len().saturating_sub(MAX_FORWARD_EXTREMITIES);
+		for event_id in &collected[start..] {
+			let key = (room_id, *event_id);
+			self.db.roomid_pduleaves.put_raw(key, *event_id);
 		}
 	}
 

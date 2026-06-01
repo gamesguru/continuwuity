@@ -37,7 +37,7 @@ pub(crate) async fn get_backfill_route(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), &body.room_id)
+		.server_is_participant(services.globals.server_name(), &body.room_id)
 		.await
 	{
 		info!(
@@ -53,6 +53,14 @@ pub(crate) async fn get_backfill_route(
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
 
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		limit,
+		from = ?body.v,
+		"Serving backfill request"
+	);
+
 	let from = body
 		.v
 		.iter()
@@ -67,6 +75,7 @@ pub(crate) async fn get_backfill_route(
 		.ready_fold(PduCount::min(), cmp::max)
 		.await;
 
+	let origin = body.origin().to_owned();
 	Ok(get_backfill::v1::Response {
 		origin_server_ts: MilliSecondsSinceUnixEpoch::now(),
 
@@ -76,19 +85,22 @@ pub(crate) async fn get_backfill_route(
 			.rooms
 			.timeline
 			.pdus_rev(&body.room_id, Some(from.saturating_add(1)))
-			.try_take(limit)
-			.try_filter_map(|(_, pdu)| async move {
-				let room_id = pdu
-					.room_id_or_hash()
-					.ok_or_else(|| err!(Database("Event has no room_id")))?;
-				let visible = services
-					.rooms
-					.state_accessor
-					.server_can_see_event(body.origin(), &room_id, &pdu.event_id)
-					.await;
+			.try_filter_map(move |(_, pdu)| {
+				let origin = origin.clone();
+				async move {
+					let room_id = pdu
+						.room_id_or_hash()
+						.ok_or_else(|| err!(Database("Event has no room_id")))?;
+					let visible = services
+						.rooms
+						.state_accessor
+						.server_can_see_event(origin, room_id, pdu.event_id.clone())
+						.await;
 
-				if visible { Ok(Some(pdu)) } else { Ok(None) }
+					if visible { Ok(Some(pdu)) } else { Ok(None) }
+				}
 			})
+			.try_take(limit)
 			.map_ok(|mut pdu: Pdu| {
 				// Strip the transaction ID, as that is private
 				pdu.remove_transaction_id().log_err().ok();

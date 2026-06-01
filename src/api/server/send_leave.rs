@@ -53,12 +53,12 @@ async fn create_leave_event(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), room_id)
+		.server_is_participant(services.globals.server_name(), room_id)
 		.await
 	{
 		info!(
 			origin = origin.as_str(),
-			"Refusing to serve backfill for room we aren't participating in"
+			"Refusing to serve send_leave for room we aren't participating in"
 		);
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
@@ -172,7 +172,7 @@ async fn create_leave_event(
 	let pdu_id = services
 		.rooms
 		.event_handler
-		.handle_incoming_pdu(origin, room_id, &event_id, value, true)
+		.handle_incoming_pdu(origin, room_id, &event_id, value, true, None)
 		.boxed()
 		.await?
 		.ok_or_else(|| err!(Request(InvalidParam("Could not accept as timeline event."))))?;

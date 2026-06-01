@@ -75,8 +75,9 @@ if baseline:
     # A specific commit/branch was requested as the baseline
     baseline_run_filter = f"(b.commit_hash LIKE '{baseline}%' OR b.version_string LIKE '%{baseline}%' OR b.branch LIKE '%{baseline}%' OR b.id::text = '{baseline}')"
 else:
-    # Default to recent main/upstream
-    baseline_run_filter = "(b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream') OR b.version_string LIKE '%main%')"
+    # Default to the known good baseline for this dev branch
+    baseline = "ec5844630"
+    baseline_run_filter = f"(b.commit_hash LIKE '{baseline}%' OR b.version_string LIKE '%{baseline}%' OR b.branch LIKE '%{baseline}%' OR b.id::text = '{baseline}')"
 
 if like_str == "all":
     like_filter = ""

@@ -98,8 +98,10 @@ pub enum Error {
 	CanonicalJson(#[from] ruma::CanonicalJsonError),
 	#[error("There was a problem with the '{0}' directive in your configuration: {1}")]
 	Config(&'static str, Cow<'static, str>),
-	#[error("{0}")]
+	#[error("Conflict: {0}")]
 	Conflict(Cow<'static, str>), // This is only needed for when a room alias already exists
+	#[error("Missing auth events required for event validation: {0:?}")]
+	MissingAuthEvents(Vec<ruma::OwnedEventId>),
 	#[error(transparent)]
 	ContentDisposition(#[from] ruma::http_headers::ContentDispositionParseError),
 	#[error("{0}")]
@@ -166,8 +168,9 @@ impl Error {
 		match self {
 			| Self::Federation(origin, error) => format!("Answer from {origin}: {error}"),
 			| Self::FederationTimeout(origin) => format!("Federation timeout for {origin}"),
-			| Self::FederationConnection(origin) =>
-				format!("Federation connection error for {origin}"),
+			| Self::FederationConnection(origin) => {
+				format!("Federation connection error for {origin}")
+			},
 			| Self::Ruma(error) => response::ruma_error_message(error),
 			| _ => format!("{self}"),
 		}

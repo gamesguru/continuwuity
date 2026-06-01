@@ -716,9 +716,30 @@ pub(super) async fn force_leave_room(
 		return Err!("{user_id} is not joined in the room");
 	}
 
-	leave_room(self.services, &user_id, &room_id, None)
+	match leave_room(self.services, &user_id, &room_id, None)
 		.boxed()
-		.await?;
+		.await
+	{
+		| Ok(()) => {},
+		| Err(e) => {
+			// leave_room failed (likely zombie room with no state from a failed join).
+			// Fall back to directly clearing the membership cache.
+			warn!(
+				"leave_room failed for {user_id} in {room_id}: {e}. Falling back to direct \
+				 membership removal."
+			);
+			self.services
+				.rooms
+				.state_cache
+				.mark_as_left(&user_id, &room_id, None)
+				.await;
+			self.services
+				.rooms
+				.state_cache
+				.update_joined_count(&room_id)
+				.await;
+		},
+	}
 
 	self.write_str(&format!("{user_id} has left {room_id}.",))
 		.await
@@ -983,9 +1004,22 @@ pub(super) async fn force_leave_remote_room(
 	for server in vias_raw {
 		vias.insert(server);
 	}
-	remote_leave_room(self.services, &user_id, &room_id, None, vias)
+	let leave_pdu = remote_leave_room(self.services, &user_id, &room_id, None, vias)
 		.boxed()
-		.await?;
+		.await
+		.ok();
+
+	self.services
+		.rooms
+		.state_cache
+		.mark_as_left(&user_id, &room_id, leave_pdu)
+		.await;
+
+	self.services
+		.rooms
+		.state_cache
+		.update_joined_count(&room_id)
+		.await;
 
 	self.write_str(&format!("{user_id} successfully left {room_id} via remote server."))
 		.await
@@ -1213,4 +1247,28 @@ pub(super) async fn reset_push_rules(&self, user_id: String) -> Result {
 	recreate_push_rules_and_return(self.services, &user_id).await?;
 	self.write_str("Reset user's push rules to the server default.")
 		.await
+}
+
+#[admin_command]
+pub(super) async fn bump_device_lists(&self, user_id: String) -> Result {
+	if user_id.eq_ignore_ascii_case("all") {
+		let users: Vec<_> = self.services.users.list_local_users().collect().await;
+		let count = users.len();
+		for user in users {
+			self.services.users.mark_device_key_update(user).await;
+		}
+		self.write_str(&format!("Bumped device list updates for all {count} local users."))
+			.await
+	} else {
+		let user_id = parse_local_user_id(self.services, &user_id)?;
+		if !self.services.users.is_active(&user_id).await {
+			return Err!("User is not active.");
+		}
+		self.services.users.mark_device_key_update(&user_id).await;
+		self.write_str(
+			"Bumped device list updates for user, they will be rebroadcasted over federation \
+			 shortly.",
+		)
+		.await
+	}
 }

@@ -36,7 +36,7 @@ where
 
 #[implement(super::Map)]
 #[tracing::instrument(skip(self, keys), level = "trace")]
-pub(crate) fn get_batch<'a, S, K>(
+pub fn get_batch<'a, S, K>(
 	self: &'a Arc<Self>,
 	keys: S,
 ) -> impl Stream<Item = Result<Handle<'a>>> + Send + 'a
@@ -60,7 +60,7 @@ where
 
 #[implement(super::Map)]
 #[tracing::instrument(name = "batch_blocking", level = "trace", skip_all)]
-pub(crate) fn get_batch_blocking<'a, I, K>(
+pub fn get_batch_blocking<'a, I, K>(
 	&self,
 	keys: I,
 ) -> impl Iterator<Item = Result<Handle<'_>>> + Send + use<'_, I, K>

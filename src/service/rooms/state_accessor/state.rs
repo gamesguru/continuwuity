@@ -165,7 +165,10 @@ pub async fn state_get_shortid(
 				.copied()
 				.map(parse_compressed_state_event)
 				.map(at!(1))
-				.ok_or(err!(Request(NotFound("Not found in room state"))))
+				.ok_or(err!(Request(NotFound(
+					"Not found in room state: type={event_type} key={state_key:?} \
+					 ssh={shortstatehash}"
+				))))
 		})
 		.await?
 }
@@ -388,7 +391,14 @@ async fn load_full_state(&self, shortstatehash: ShortStateHash) -> Result<Arc<Co
 		.state_compressor
 		.load_shortstatehash_info(shortstatehash)
 		.map_err(|e| err!(Database("Missing state IDs: {e}")))
-		.map_ok(|vec| vec.last().expect("at least one layer").full_state.clone())
+		.map_ok(|vec| {
+			vec.last()
+				.expect("at least one layer")
+				.full_state
+				.as_ref()
+				.expect("top layer must have full_state")
+				.clone()
+		})
 		.await
 }
 

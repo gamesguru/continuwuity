@@ -59,7 +59,7 @@ use crate::{
 /// The default maximum number of events to return in the `timeline` key of
 /// joined and left rooms. If the number of events sent since the last sync
 /// exceeds this number, the `timeline` will be `limited`.
-const DEFAULT_TIMELINE_LIMIT: usize = 30;
+const DEFAULT_TIMELINE_LIMIT: usize = 10;
 
 /// A collection of updates to users' device lists, used for E2EE.
 struct DeviceListUpdates {
@@ -298,7 +298,7 @@ pub(crate) async fn build_sync_events(
 			 (room_id, joined_room, state_after, updates)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() || context.last_sync_end_count.is_none() {
+				if !joined_room.is_empty() {
 					joined_rooms.insert(room_id.clone(), joined_room);
 					if !state_after.is_empty() {
 						joined_state_after.insert(room_id, state_after);
@@ -340,7 +340,7 @@ pub(crate) async fn build_sync_events(
 		.rooms
 		.state_cache
 		.rooms_invited(syncing_user)
-		.wide_filter_map(async |(room_id, invite_state)| {
+		.wide_filter_map(|(room_id, invite_state)| async move {
 			if is_ignored_invite(services, syncing_user, &room_id).await {
 				None
 			} else {
@@ -562,7 +562,7 @@ async fn prepare_lazily_loaded_members(
 
 	// filter the input members through `retain_lazy_members`, which
 	// contains the actual lazy loading logic.
-	let lazily_loaded_members =
+	let mut lazily_loaded_members =
 		OptionFuture::from(sync_context.lazy_loading_enabled().then(|| {
 			services
 				.rooms
@@ -570,6 +570,13 @@ async fn prepare_lazily_loaded_members(
 				.retain_lazy_members(timeline_members.collect(), lazy_loading_context)
 		}))
 		.await;
+
+	// Matrix spec requires that the syncing user's own membership event is always
+	// included in the state, even if it otherwise would not be included due to
+	// lazy-loading!
+	if let Some(members) = &mut lazily_loaded_members {
+		members.insert(sync_context.syncing_user.into());
+	}
 
 	lazily_loaded_members
 }

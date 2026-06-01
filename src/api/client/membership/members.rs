@@ -1,13 +1,14 @@
 use axum::{extract::State, response::Json};
 use conduwuit::{
-	Err, Event, Pdu, PduCount, Result, at, err,
+	Err, Event, Pdu, PduCount, Result, err,
 	utils::{
 		future::TryExtExt,
 		stream::{BroadbandExt, ReadyExt},
 	},
 };
-use futures::{FutureExt, StreamExt, future::join};
+use futures::{StreamExt, future::join};
 use ruma::{
+	OwnedEventId,
 	api::client::membership::{
 		get_member_events::{self, v3::MembershipEventFilter},
 		joined_members,
@@ -64,38 +65,44 @@ pub(crate) async fn get_member_events_route(
 			.pdu_shortstatehash(pdu.event_id())
 			.await?;
 
-		// Collect into Vec<Pdu> to avoid HRTB/opaque-type conflicts with
-		// room_state_full's impl Event stream used later in this function.
-		let all_pdus: Vec<Pdu> = services
+		let chunk: Vec<_> = services
 			.rooms
 			.state_accessor
-			.state_full_pdus(shortstatehash)
-			.map(Event::into_pdu)
+			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
+			.broadn_filter_map(256, |(_, event_id)| async move {
+				services.rooms.timeline.get_pdu(&event_id).await.ok()
+			})
+			.ready_filter_map(|pdu| {
+				let pdu: Pdu = pdu.into_pdu();
+				membership_filter(pdu, membership, not_membership)
+			})
+			.map(Event::into_format)
 			.collect()
 			.await;
 
-		let chunk = all_pdus
-			.into_iter()
-			.filter(|pdu| *pdu.kind() == ruma::events::TimelineEventType::RoomMember)
-			.filter_map(|pdu| membership_filter(pdu, membership, not_membership))
-			.map(Event::into_format)
-			.collect();
-
 		return Ok(get_member_events::v3::Response { chunk });
 	}
+
+	let shortstatehash = services
+		.rooms
+		.state
+		.get_room_shortstatehash(&body.room_id)
+		.await?;
 
 	Ok(get_member_events::v3::Response {
 		chunk: services
 			.rooms
 			.state_accessor
-			.room_state_full(&body.room_id)
-			.ready_filter_map(Result::ok)
-			.ready_filter(|((ty, _), _)| *ty == StateEventType::RoomMember)
-			.map(at!(1))
-			.ready_filter_map(|pdu| membership_filter(pdu, membership, not_membership))
+			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
+			.broadn_filter_map(256, |(_, event_id)| async move {
+				services.rooms.timeline.get_pdu(&event_id).await.ok()
+			})
+			.ready_filter_map(|pdu| {
+				let pdu: Pdu = pdu.into_pdu();
+				membership_filter(pdu, membership, not_membership)
+			})
 			.map(Event::into_format)
 			.collect()
-			.boxed()
 			.await,
 	})
 }

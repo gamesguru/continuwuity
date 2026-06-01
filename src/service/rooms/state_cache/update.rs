@@ -115,7 +115,7 @@ pub async fn update_membership(
 				}
 			}
 
-			self.mark_as_joined(user_id, room_id);
+			self.mark_as_joined(user_id, room_id).await;
 		},
 		| MembershipState::Invite => {
 			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
@@ -172,12 +172,14 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 		.roomuserid_knockedcount
 		.raw_put(room_id, knockedcount);
 
+	let mut removed_servers = Vec::new();
 	self.room_servers(room_id)
 		.ready_for_each(|old_joined_server| {
 			if joined_servers.remove(old_joined_server) {
 				return;
 			}
 
+			removed_servers.push(old_joined_server.to_owned());
 			// Server not in room anymore
 			let roomserver_id = (room_id, old_joined_server);
 			let serverroom_id = (old_joined_server, room_id);
@@ -187,13 +189,43 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 		})
 		.await;
 
-	// Now only new servers are in joined_servers anymore
-	for server in &joined_servers {
-		let roomserver_id = (room_id, server);
-		let serverroom_id = (server, room_id);
+	if joinedcount > 100 {
+		if !removed_servers.is_empty() || !joined_servers.is_empty() {
+			self.server_visibility_cache.invalidate_all();
+		}
 
-		self.db.roomserverids.put_raw(roomserver_id, []);
-		self.db.serverroomids.put_raw(serverroom_id, []);
+		for server in &joined_servers {
+			let roomserver_id = (room_id, server);
+			let serverroom_id = (server, room_id);
+
+			self.db.roomserverids.put_raw(roomserver_id, []);
+			self.db.serverroomids.put_raw(serverroom_id, []);
+		}
+	} else {
+		for removed_server in removed_servers {
+			self.room_members(room_id)
+				.ready_for_each(|user_id| {
+					self.server_visibility_cache
+						.invalidate(&(removed_server.clone(), user_id.to_owned()));
+				})
+				.await;
+		}
+
+		// Now only new servers are in joined_servers anymore
+		for server in &joined_servers {
+			let roomserver_id = (room_id, server);
+			let serverroom_id = (server, room_id);
+
+			self.db.roomserverids.put_raw(roomserver_id, []);
+			self.db.serverroomids.put_raw(serverroom_id, []);
+
+			self.room_members(room_id)
+				.ready_for_each(|user_id| {
+					self.server_visibility_cache
+						.invalidate(&(server.clone(), user_id.to_owned()));
+				})
+				.await;
+		}
 	}
 
 	self.appservice_in_room_cache.write().remove(room_id);
@@ -204,7 +236,7 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 /// `update_membership` instead
 #[implement(super::Service)]
 #[tracing::instrument(skip(self), level = "debug")]
-pub fn mark_as_joined(&self, user_id: &UserId, room_id: &RoomId) {
+pub async fn mark_as_joined(&self, user_id: &UserId, room_id: &RoomId) {
 	let userroom_id = (user_id, room_id);
 	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
 
@@ -225,6 +257,78 @@ pub fn mark_as_joined(&self, user_id: &UserId, room_id: &RoomId) {
 	self.db.roomuserid_knockedcount.remove(&roomuser_id);
 
 	self.db.roomid_inviteviaservers.remove(room_id);
+
+	self.invalidate_user_visibility(user_id, room_id).await;
+	self.invalidate_server_visibility(user_id, room_id).await;
+}
+
+/// Silent variant of `mark_as_joined` for admin healing operations.
+/// Performs the exact same DB writes but does NOT trigger
+/// `update_membership`, presence updates, or device list notifications.
+/// The caller MUST call `update_joined_count` after the batch completes.
+#[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn mark_as_joined_silent(&self, user_id: &UserId, room_id: &RoomId) {
+	let userroom_id = (user_id, room_id);
+	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
+
+	let roomuser_id = (room_id, user_id);
+	let roomuser_id = serialize_key(roomuser_id).expect("failed to serialize roomuser_id");
+
+	self.db.userroomid_joined.insert(&userroom_id, []);
+	self.db.roomuserid_joined.insert(&roomuser_id, []);
+
+	self.db.userroomid_invitestate.remove(&userroom_id);
+	self.db.roomuserid_invitecount.remove(&roomuser_id);
+	self.db.userroomid_invitesender.remove(&userroom_id);
+
+	self.db.userroomid_leftstate.remove(&userroom_id);
+	self.db.roomuserid_leftcount.remove(&roomuser_id);
+
+	self.db.userroomid_knockedstate.remove(&userroom_id);
+	self.db.roomuserid_knockedcount.remove(&roomuser_id);
+
+	self.db.roomid_inviteviaservers.remove(room_id);
+
+	self.invalidate_user_visibility(user_id, room_id).await;
+	self.invalidate_server_visibility(user_id, room_id).await;
+}
+
+/// Silent variant of `mark_as_left` for admin healing operations.
+/// Performs the exact same DB writes but does NOT trigger
+/// `update_membership`, presence updates, or device list notifications.
+/// The caller MUST call `update_joined_count` after the batch completes.
+#[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn mark_as_left_silent(&self, user_id: &UserId, room_id: &RoomId) {
+	let userroom_id = (user_id, room_id);
+	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
+
+	let roomuser_id = (room_id, user_id);
+	let roomuser_id = serialize_key(roomuser_id).expect("failed to serialize roomuser_id");
+
+	// Write left state with no PDU (admin operation, no actual leave event)
+	self.db
+		.userroomid_leftstate
+		.raw_put(&userroom_id, Json(Option::<Pdu>::None));
+	self.db
+		.roomuserid_leftcount
+		.raw_aput::<8, _, _>(&roomuser_id, self.services.globals.next_count().unwrap());
+
+	self.db.userroomid_joined.remove(&userroom_id);
+	self.db.roomuserid_joined.remove(&roomuser_id);
+
+	self.db.userroomid_invitestate.remove(&userroom_id);
+	self.db.roomuserid_invitecount.remove(&roomuser_id);
+	self.db.userroomid_invitesender.remove(&userroom_id);
+
+	self.db.userroomid_knockedstate.remove(&userroom_id);
+	self.db.roomuserid_knockedcount.remove(&roomuser_id);
+
+	self.db.roomid_inviteviaservers.remove(room_id);
+
+	self.invalidate_user_visibility(user_id, room_id).await;
+	self.invalidate_server_visibility(user_id, room_id).await;
 }
 
 /// Mark a user as having left a room.
@@ -260,6 +364,9 @@ pub async fn mark_as_left(&self, user_id: &UserId, room_id: &RoomId, leave_pdu: 
 	self.db.roomuserid_knockedcount.remove(&roomuser_id);
 
 	self.db.roomid_inviteviaservers.remove(room_id);
+
+	self.invalidate_user_visibility(user_id, room_id).await;
+	self.invalidate_server_visibility(user_id, room_id).await;
 
 	if self.services.globals.user_is_local(user_id)
 		&& (self.services.config.forget_forced_upon_leave

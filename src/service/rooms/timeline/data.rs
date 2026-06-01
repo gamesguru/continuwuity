@@ -3,11 +3,14 @@ use std::sync::Arc;
 use conduwuit::{
 	Err, Event, PduCount, PduEvent, Result, at, err,
 	result::NotFound,
-	utils::{self, stream::TryReadyExt},
+	utils::{
+		self,
+		stream::{TryReadyExt, WidebandExt},
+	},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
 use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
-use ruma::{CanonicalJsonObject, EventId, OwnedUserId, RoomId, api::Direction};
+use ruma::{CanonicalJsonObject, EventId, OwnedEventId, OwnedUserId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
@@ -15,6 +18,7 @@ use crate::{Dep, rooms, rooms::short::ShortRoomId};
 pub(super) struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
+	roomid_outliereventid: Arc<Map>,
 	pduid_pdu: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
@@ -35,6 +39,7 @@ impl Data {
 			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
 			pduid_pdu: db["pduid_pdu"].clone(),
+			roomid_outliereventid: db["roomid_outliereventid"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
 			db: args.db.clone(),
@@ -68,7 +73,7 @@ impl Data {
 			.try_next()
 			.await?
 			.map(at!(1))
-			.ok_or_else(|| err!(Request(NotFound("no PDU's found in room"))))
+			.ok_or_else(|| err!(Request(NotFound("no PDUs found in room"))))
 	}
 
 	/// Returns the `count` of this pdu's id.
@@ -100,6 +105,80 @@ impl Data {
 		self.pduid_pdu.get(&pduid).await.deserialized()
 	}
 
+	pub(super) async fn reindex_timeline(&self, room_id: &RoomId) -> Result<usize> {
+		let mut count = 0_usize;
+		let pdus = self.pdus(room_id, PduCount::min());
+		pin_mut!(pdus);
+
+		// Pre-allocate key buffer outside the loop to avoid repeated heap allocations
+		let room_bytes = room_id.as_bytes();
+		let mut key = Vec::with_capacity(room_bytes.len().saturating_add(1).saturating_add(64));
+
+		while let Some((_, pdu)) = pdus.try_next().await? {
+			// Use canonical key format: room_id || 0xFF || event_id
+			// (must match add_pdu_outlier / room_stream expectations)
+			key.clear();
+			key.extend_from_slice(room_bytes);
+			key.push(0xFF);
+			key.extend_from_slice(pdu.event_id.as_bytes());
+
+			if let Ok(json) = self.get_non_outlier_pdu_json(&pdu.event_id).await {
+				self.eventid_outlierpdu.raw_put(&pdu.event_id, Json(&json));
+				// Must use raw_put to bypass Bincode serializer — .insert()
+				// would prepend an 8-byte length prefix, corrupting lookups.
+				self.roomid_outliereventid
+					.raw_put::<&[u8], &[u8]>(&key, pdu.event_id.as_bytes());
+				count = count.saturating_add(1);
+			}
+		}
+		Ok(count)
+	}
+
+	pub(super) async fn fix_pdu_event_ids(&self) -> Result<usize> {
+		use futures::TryStreamExt;
+		let mut fixed: usize = 0;
+		// Use raw_stream to iterate eventid_pduid mapping
+		let iter = self.eventid_pduid.raw_stream();
+		pin_mut!(iter);
+
+		while let Some((event_id_bytes, pdu_id_bytes)) = iter.try_next().await? {
+			if let Ok(event_id_str) = std::str::from_utf8(event_id_bytes) {
+				if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
+					let pdu_id: RawPduId = pdu_id_bytes.into();
+					if let Ok(mut json) = self
+						.pduid_pdu
+						.get(&pdu_id)
+						.await
+						.deserialized::<CanonicalJsonObject>()
+					{
+						if !json.contains_key("event_id") {
+							json.insert(
+								"event_id".into(),
+								ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
+							);
+							self.pduid_pdu.raw_put(pdu_id, Json(&json));
+							fixed = fixed.saturating_add(1);
+						}
+					}
+				}
+			}
+		}
+		Ok(fixed)
+	}
+
+	pub(super) async fn remove_from_timeline(&self, event_id: &EventId) {
+		if let Ok(pduid) = self.get_pdu_id(event_id).await {
+			self.pduid_pdu.remove(&pduid);
+			self.eventid_pduid.remove(event_id);
+		}
+	}
+
+	/// Remove timeline entry when pdu_id is known (avoids DB lookup).
+	pub(super) fn remove_from_timeline_by_id(&self, pdu_id: &RawPduId, event_id: &EventId) {
+		self.pduid_pdu.remove(pdu_id);
+		self.eventid_pduid.remove(event_id);
+	}
+
 	/// Returns the pdu's id.
 	#[inline]
 	pub(super) async fn get_pdu_id(&self, event_id: &EventId) -> Result<RawPduId> {
@@ -121,8 +200,24 @@ impl Data {
 
 		// Enforce cross-room boundary: verify the PDU belongs to the expected room
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-				return Err!(Database("PDU {event_id} does not belong to room {expected_room}"));
+			let actual_room = pdu.room_id_or_hash();
+			if let Some(actual_room) = actual_room {
+				if actual_room != expected_room {
+					return Err!(Database(
+						"PDU {event_id} does belong to room {actual_room} (expected \
+						 {expected_room})"
+					));
+				}
+			} else {
+				// v12 hashed-room PDUs may not contain room_id in the JSON.
+				// Verify room association by comparing ShortRoomId from pdu_id.
+				let expected_shortroomid =
+					self.services.short.get_shortroomid(expected_room).await?;
+				if pduid.shortroomid() != expected_shortroomid.to_be_bytes() {
+					return Err!(Database(
+						"PDU {event_id} does not belong to room {expected_room}"
+					));
+				}
 			}
 		}
 
@@ -150,15 +245,32 @@ impl Data {
 		let outlier = self
 			.eventid_outlierpdu
 			.get(event_id)
-			.map(move |handle| {
+			.then(move |handle| async move {
+				let handle = handle?;
 				let pdu: PduEvent = handle.deserialized()?;
 
 				// Enforce cross-room boundary
 				if let Some(expected_room) = room_id {
-					if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-						return Err(conduwuit::err!(Database(
-							"Outlier PDU {event_id} does not belong to room {expected_room}"
-						)));
+					let actual_room = pdu.room_id_or_hash();
+					if let Some(actual_room) = actual_room {
+						if actual_room != expected_room {
+							return Err(conduwuit::err!(Database(
+								"Outlier PDU {event_id} does belong to room {actual_room} \
+								 (expected {expected_room})"
+							)));
+						}
+					} else {
+						// v12 hashed-room PDUs may not contain room_id in the JSON.
+						// Verify room association via roomid_outliereventid table.
+						let mut key = expected_room.as_bytes().to_vec();
+						key.push(0xFF);
+						key.extend_from_slice(event_id.as_bytes());
+						if self.roomid_outliereventid.exists(&key).await.is_err() {
+							return Err(conduwuit::err!(Database(
+								"Outlier PDU {event_id} is not associated with room \
+								 {expected_room}"
+							)));
+						}
 					}
 				}
 
@@ -167,6 +279,183 @@ impl Data {
 			.boxed();
 
 		select_ok([accepted, outlier]).await.map(at!(0))
+	}
+
+	pub(super) fn backup_pdu_to_outlier(&self, event_id: &EventId, json: &CanonicalJsonObject) {
+		self.eventid_outlierpdu
+			.raw_put(event_id.as_bytes(), Json(json));
+		// Use expected raw key format: room_id || 0xFF || event_id
+		let room_id = json
+			.get("room_id")
+			.and_then(|v| v.as_str())
+			.and_then(|s| RoomId::parse(s).ok());
+		if let Some(room_id) = room_id {
+			let mut key = room_id.as_bytes().to_vec();
+			key.push(0xFF);
+			key.extend_from_slice(event_id.as_bytes());
+			self.roomid_outliereventid
+				.raw_put::<&[u8], &[u8]>(&key, event_id.as_bytes());
+		}
+	}
+
+	pub(super) async fn get_pdus_in_room_batch(
+		&self,
+		room_id: Option<&RoomId>,
+		event_ids: &[OwnedEventId],
+	) -> Vec<Result<PduEvent>> {
+		use futures::StreamExt;
+		let mut results = Vec::with_capacity(event_ids.len());
+
+		let mut expected_shortroomid: Option<ShortRoomId> = None;
+		if let Some(expected_room) = room_id {
+			if let Ok(id) = self.services.short.get_shortroomid(expected_room).await {
+				expected_shortroomid = Some(id);
+			}
+		}
+
+		// 1. Batch fetch from eventid_pduid
+		let pdu_ids: Vec<Result<database::Handle<'_>>> = self
+			.eventid_pduid
+			.get_batch(futures::stream::iter(event_ids.iter().map(|id| id.as_bytes())))
+			.collect()
+			.await;
+
+		// 2. Separate into hits and misses
+		let mut valid_pdu_ids = Vec::with_capacity(event_ids.len());
+		let mut missing_event_ids = Vec::with_capacity(event_ids.len());
+
+		for (i, pdu_id_res) in pdu_ids.iter().enumerate() {
+			match pdu_id_res {
+				| Ok(handle) => valid_pdu_ids.push(RawPduId::from(&**handle)),
+				| Err(_) => missing_event_ids.push(event_ids[i].as_bytes()),
+			}
+		}
+
+		// 3. Batch fetch timeline PDUs
+		let pdu_events = if !valid_pdu_ids.is_empty() {
+			self.pduid_pdu
+				.get_batch(futures::stream::iter(valid_pdu_ids.iter().map(AsRef::as_ref)))
+				.map(|res: Result<database::Handle<'_>>| {
+					res.and_then(|handle| handle.deserialized::<PduEvent>())
+				})
+				.collect()
+				.await
+		} else {
+			Vec::new()
+		};
+
+		// 4. Batch fetch outliers
+		let outlier_events = if !missing_event_ids.is_empty() {
+			self.eventid_outlierpdu
+				.get_batch(futures::stream::iter(missing_event_ids))
+				.map(|res: Result<database::Handle<'_>>| {
+					res.and_then(|handle| handle.deserialized::<PduEvent>())
+				})
+				.collect()
+				.await
+		} else {
+			Vec::new()
+		};
+
+		// 5. Re-assemble results in original order
+		let mut pdu_iter = pdu_events.into_iter();
+		let mut outlier_iter = outlier_events.into_iter();
+
+		for (i, pdu_id_res) in pdu_ids.iter().enumerate() {
+			if let Ok(pdu_id_handle) = pdu_id_res {
+				// Result comes from timeline
+				let pdu_res: Result<PduEvent> = pdu_iter
+					.next()
+					.expect("length matches timeline fetch count");
+				match pdu_res {
+					| Ok(pdu) => {
+						// Verify room boundary
+						if let Some(expected_room) = room_id {
+							if let Some(actual_room) = pdu.room_id_or_hash() {
+								if actual_room != expected_room {
+									results.push(Err!(Database(
+										"PDU {} does belong to room {} (expected {})",
+										event_ids[i],
+										actual_room,
+										expected_room
+									)));
+									continue;
+								}
+							} else if let Some(expected_short) = expected_shortroomid {
+								let pduid = RawPduId::from(&**pdu_id_handle);
+								if pduid.shortroomid() != expected_short.to_be_bytes() {
+									results.push(Err!(Database(
+										"PDU {} does not belong to room {}",
+										event_ids[i],
+										expected_room
+									)));
+									continue;
+								}
+							} else {
+								results.push(Err!(Database(
+									"PDU {} lacks room_id and expected shortroomid is unknown",
+									event_ids[i]
+								)));
+								continue;
+							}
+						}
+						results.push(Ok(pdu));
+					},
+					| Err(e) => results.push(Err(e)),
+				}
+			} else {
+				// Result comes from outlier
+				let outlier_res: Result<PduEvent> = outlier_iter
+					.next()
+					.expect("length matches outlier fetch count");
+				match outlier_res {
+					| Ok(pdu) => {
+						if let Some(expected_room) = room_id {
+							if let Some(actual_room) = pdu.room_id_or_hash() {
+								if actual_room != expected_room {
+									results.push(Err!(Database(
+										"PDU {} does belong to room {} (expected {})",
+										event_ids[i],
+										actual_room,
+										expected_room
+									)));
+									continue;
+								}
+							}
+						}
+						results.push(Ok(pdu));
+					},
+					| Err(_) => {
+						results.push(Err!(Request(NotFound(
+							"PDU not found in timeline or outliers"
+						))));
+					},
+				}
+			}
+		}
+
+		results
+	}
+
+	pub(super) fn multi_get_pdus<'a, S>(
+		&'a self,
+		room_id: Option<&'a RoomId>,
+		event_ids: S,
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a
+	where
+		S: Stream<Item = OwnedEventId> + Send + 'a,
+	{
+		use conduwuit::utils::stream::{automatic_amplification, automatic_width};
+		use futures::StreamExt;
+
+		event_ids
+			.boxed()
+			.ready_chunks(automatic_amplification())
+			.widen_then(automatic_width(), move |chunk| async move {
+				self.get_pdus_in_room_batch(room_id, &chunk).await
+			})
+			.map(futures::stream::iter)
+			.flatten()
 	}
 
 	/// Like get_non_outlier_pdu(), but without the expense of fetching and
@@ -196,8 +485,21 @@ impl Data {
 		let pdu: PduEvent = self.pduid_pdu.get(pdu_id).await.deserialized()?;
 
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-				return Err!(Database("PDU does not belong to room {expected_room}"));
+			let actual_room = pdu.room_id_or_hash();
+			if let Some(actual_room) = actual_room {
+				if actual_room != expected_room {
+					return Err!(Database(
+						"PDU does belong to room {actual_room} (expected {expected_room})"
+					));
+				}
+			} else {
+				// v12 hashed-room PDUs may not contain room_id in the JSON.
+				// Verify room association by comparing ShortRoomId from pdu_id.
+				let expected_shortroomid =
+					self.services.short.get_shortroomid(expected_room).await?;
+				if pdu_id.shortroomid() != expected_shortroomid.to_be_bytes() {
+					return Err!(Database("PDU does not belong to room {expected_room}"));
+				}
 			}
 		}
 
@@ -260,13 +562,13 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, until, Direction::Backward)
+		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.pduid_pdu
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(move |kv| Self::parse_json_slice(Some(room_id), kv))
+					.ready_and_then(move |kv| Self::parse_json_slice(None, kv))
 			})
 			.try_flatten_stream()
 	}
@@ -276,13 +578,13 @@ impl Data {
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, from, Direction::Forward)
+		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.pduid_pdu
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(move |kv| Self::parse_json_slice(Some(room_id), kv))
+					.ready_and_then(move |kv| Self::parse_json_slice(None, kv))
 			})
 			.try_flatten_stream()
 	}
@@ -295,10 +597,17 @@ impl Data {
 		let pdu = serde_json::from_slice::<PduEvent>(pdu)?;
 
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
-				return Err(conduwuit::err!(Database(
-					"PDU does not belong to expected room {expected_room}"
-				)));
+			let actual_room = pdu.room_id_or_hash();
+			if let Some(actual_room) = actual_room {
+				if actual_room != expected_room {
+					return Err(conduwuit::err!(Database(
+						"PDU does belong to room {actual_room} (expected {expected_room})"
+					)));
+				}
+			} else {
+				// v12 hashed-room PDUs may not contain room_id in the JSON.
+				// We do not have ShortRoomId here for the expected room, but
+				// we are called from an iterator that already filtered by it.
 			}
 		}
 
@@ -332,7 +641,7 @@ impl Data {
 		&self,
 		room_id: &RoomId,
 		shorteventid: PduCount,
-		dir: Direction,
+		_dir: Direction,
 	) -> Result<RawPduId> {
 		let shortroomid: ShortRoomId = self
 			.services
@@ -341,11 +650,7 @@ impl Data {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-		// +1 so we don't send the base event
-		let pdu_id = PduId {
-			shortroomid,
-			shorteventid: shorteventid.saturating_inc(dir),
-		};
+		let pdu_id = PduId { shortroomid, shorteventid };
 
 		Ok(pdu_id.into())
 	}

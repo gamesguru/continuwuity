@@ -13,6 +13,7 @@ pub(super) mod media;
 pub(super) mod openid;
 pub(super) mod publicrooms;
 pub(super) mod query;
+pub(super) mod room_digest;
 pub(super) mod send;
 pub(super) mod send_join;
 pub(super) mod send_knock;

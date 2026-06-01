@@ -142,6 +142,10 @@
 #
 #cache_capacity_modifier = 1.0
 
+# Override the tokio worker_thread count.
+#
+#worker_threads = varies by system
+
 # Set this to any float value in megabytes for continuwuity to tell the
 # database engine that this much memory is available for database read
 # caches.
@@ -210,6 +214,10 @@
 #
 #roomid_spacehierarchy_cache_capacity = varies by system
 
+# Maximum entries stored in the presence RAM cache.
+#
+#presence_cache_capacity = varies by system
+
 # Maximum entries stored in DNS memory-cache. The size of an entry may
 # vary so please take care if raising this value excessively. Only
 # decrease this when using an external DNS cache. Please note that
@@ -252,6 +260,10 @@
 # resolvers.
 #
 #dns_timeout = 10
+
+# This item is undocumented. Please contribute documentation for it.
+#
+#dns_cache_override_expire =
 
 # Fallback to TCP on DNS errors. Set this to false if unsupported by
 # nameserver.
@@ -313,6 +325,17 @@
 # federation, and setting it too high may cause runaway resource usage.
 #
 #max_concurrent_inbound_transactions = 150
+
+# Max concurrent global outbound requests. Limits how many outbound
+# federation HTTP connections can be in-flight simultaneously. Too high
+# and dead/slow servers consume all permits, starving live connections.
+#
+#max_concurrent_outbound_requests = 128
+
+# How many concurrent incoming federation transactions the server is
+# willing to accept from a single domain.
+#
+#max_concurrent_inbound_transactions_per_origin = 10
 
 # Maximum age (in seconds) for cached federation transaction responses.
 # Entries older than this will be removed during cleanup.
@@ -378,6 +401,29 @@
 #
 #federation_timeout = 60
 
+# Maximum time (seconds) to process a single incoming federation PDU.
+# This includes auth chain pre-fetching, outlier resolution, and state
+# resolution. If exceeded, the PDU is soft-failed and a per-room circuit
+# breaker is tripped.
+#
+#pdu_receive_timeout = 600
+
+# Timeout in seconds to try fetching missing prev_events over federation.
+#
+#fetch_prev_timeout = 30
+
+# Maximum number of room member servers to try when fetching missing
+# federation events (auth chains, outliers). These are tried after the
+# origin server and trusted_servers.
+#
+#federation_fallback_room_servers = 25
+
+# Federation presence interval (seconds).
+# This is used to aggressively load-shed large incoming loops of presence
+# updates and batch outgoing presence changes.
+#
+#federation_presence_interval_s = 5
+
 # MSC4284 Policy server request timeout (seconds). Generally policy
 # servers should respond near instantly, however may slow down under
 # load. If a policy server doesn't respond in a short amount of time, the
@@ -412,9 +458,22 @@
 #
 #sender_idle_timeout = 180
 
+# Federation sender transaction retry backoff base (seconds). This is
+# the minimum delay before the first retry after a failed transaction.
+# Subsequent retries use exponential backoff: base × 2^(tries-1).
+#
+#sender_retry_backoff_base = 2
+
 # Federation sender transaction retry backoff limit (seconds).
 #
 #sender_retry_backoff_limit = 86400
+
+# Maximum number of retry attempts for a failed federation destination
+# before its queued events are dropped. This prevents infinite retry
+# loops for permanently unreachable or broken servers. Set to 0 to
+# disable the limit (retry forever).
+#
+#sender_retry_max_attempts = 32
 
 # Appservice URL request connection timeout. Defaults to 35 seconds as
 # generally appservices are hosted within the same network.
@@ -551,6 +610,12 @@
 #
 #allow_federation = true
 
+# Enable or disable the startup forward-fill sweep that queries remote
+# servers to fetch missed events during server downtime. Disabling this
+# speeds up startup but relies entirely on periodic sweeps or DAG healing.
+#
+#allow_startup_forwardfill = false
+
 # Allows federation requests to be made to itself
 #
 # This isn't intended and is very likely a bug if federation requests are
@@ -617,6 +682,16 @@
 # This is inherently false if `allow_federation` is disabled
 #
 #allow_inbound_profile_lookup_federation_requests = true
+
+# Bypasses the room's history visibility rules for local users on your
+# server. If true, any local user joined to a room will be able to search
+# and view the full history of the room (assuming the server has the
+# PDUs), regardless of the room's m.room.history_visibility setting.
+#
+# This is technically a Matrix spec violation, but provided as an admin
+# override.
+#
+#allow_local_users_to_bypass_history_visibility = false
 
 # Allow standard users to create rooms. Appservices and admins are always
 # allowed to create rooms
@@ -1173,6 +1248,12 @@
 #
 #allow_local_presence = true
 
+# The duration in milliseconds for the Synapse-style presence debounce.
+# If greater than 0, any idle client claims of Offline will be ignored
+# if the user was Online within this time window.
+#
+#presence_idle_debounce_ms = 60000 (60 seconds)
+
 # Allow incoming federated presence updates.
 #
 # This option enables processing inbound presence updates from other
@@ -1517,6 +1598,14 @@
 #
 #url_preview_domain_explicit_denylist = []
 
+# A list of specific Event IDs (e.g. `$bad_event_id`) that are known to
+# have corrupted signatures or missing server keys, but should be globally
+# accepted by the server without signature verification. Useful for
+# bypassing unresolvable DAG holes without manually running `yolo
+# fetch-pdu --skip-auth`.
+#
+#bypassed_signature_events = []
+
 # Vector list of URLs allowed to send requests to for URL previews.
 #
 # Note that this is a *contains* match, not an explicit match. Putting
@@ -1552,9 +1641,17 @@
 #
 #url_preview_check_root_domain = false
 
-# User agent that is used specifically when fetching url previews.
+# User agent that the server uses for federation and client requests.
+# You can use templates like $PROJECT_NAME, $PROJECT_VERSION,
+# $PROJECT_VERSION_FULL.
 #
-#url_preview_user_agent = "guwitty/<version>"
+#user_agent = "$PROJECT_NAME/$PROJECT_VERSION_FULL"
+
+# User agent that is used specifically when fetching url previews.
+# You can use templates like $PROJECT_NAME, $PROJECT_VERSION,
+# $PROJECT_VERSION_FULL.
+#
+#url_preview_user_agent = "$PROJECT_NAME/$PROJECT_VERSION_FULL (embedbot; facebookexternalhit/1.1; +https://github.com)"
 
 # Determines whether audio and video files will be downloaded for URL
 # previews.

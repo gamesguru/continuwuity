@@ -29,7 +29,7 @@ pub(crate) async fn get_event_authorization_route(
 	if !services
 		.rooms
 		.state_cache
-		.server_in_room(services.globals.server_name(), &body.room_id)
+		.server_is_participant(services.globals.server_name(), &body.room_id)
 		.await
 	{
 		info!(
@@ -38,6 +38,13 @@ pub(crate) async fn get_event_authorization_route(
 		);
 		return Err!(Request(NotFound("This server is not participating in that room.")));
 	}
+
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		event_id = %body.event_id,
+		"Serving event_auth request"
+	);
 
 	let event = services
 		.rooms

@@ -150,7 +150,9 @@ pub trait Event: Clone + Debug {
 	//
 
 	/// All the authenticating events for this event.
-	fn auth_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_;
+	fn auth_events(
+		&self,
+	) -> impl DoubleEndedIterator<Item = &EventId> + ExactSizeIterator + Clone + Send + Debug + '_;
 
 	/// The event's content.
 	fn content(&self) -> &RawJsonValue;
@@ -160,6 +162,9 @@ pub trait Event: Clone + Debug {
 
 	/// The time of creation on the originating server.
 	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch;
+
+	/// The depth of this event.
+	fn depth(&self) -> ruma::UInt;
 
 	/// The events before this event.
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_;
@@ -186,6 +191,13 @@ pub trait Event: Clone + Debug {
 
 	/// Metadata container; peer-trusted only.
 	fn unsigned(&self) -> Option<&RawJsonValue>;
+
+	/// Whether this event has been rejected (auth failure, soft-fail, or
+	/// admin rejection). Default is `false` (not rejected).
+	/// Populated at fetch time to avoid async DB lookups during state
+	/// resolution.
+	#[inline]
+	fn rejected(&self) -> bool { false }
 
 	//#[deprecated]
 	#[inline]

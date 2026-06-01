@@ -7,7 +7,7 @@ use conduwuit::{
 	Event, PduCount, Result, debug_warn, err,
 	matrix::pdu::PduEvent,
 	ref_at, trace,
-	utils::stream::{BroadbandExt, ReadyExt, TryIgnore},
+	utils::stream::{BroadbandExt, ReadyExt, TryIgnore, WidebandExt},
 };
 use conduwuit_service::Services;
 use futures::StreamExt;
@@ -78,7 +78,7 @@ async fn load_timeline(
 					pdu.1.set_unsigned(Some(sender_user));
 					pdu
 				})
-				.then(async move |mut pdu| {
+				.wide_then(move |mut pdu| async move {
 					if let Err(e) = services
 						.rooms
 						.pdu_metadata
@@ -103,7 +103,7 @@ async fn load_timeline(
 					pdu.1.set_unsigned(Some(sender_user));
 					pdu
 				})
-				.then(async move |mut pdu| {
+				.wide_then(move |mut pdu| async move {
 					if let Err(e) = services
 						.rooms
 						.pdu_metadata

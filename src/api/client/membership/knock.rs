@@ -502,6 +502,7 @@ async fn knock_room_helper_local(
 			once(parsed_knock_pdu.event_id.borrow()),
 			&state_lock,
 			room_id,
+			false,
 		)
 		.await?;
 
@@ -640,7 +641,10 @@ async fn knock_room_helper_remote(
 			.get_or_create_shortstatekey(&event_type, &state_key)
 			.await;
 
-		services.rooms.outlier.add_pdu_outlier(&event_id, &event);
+		services
+			.rooms
+			.outlier
+			.add_pdu_outlier(&event_id, &event, Some(room_id));
 		state_map.insert(shortstatekey, event_id.clone());
 	}
 
@@ -660,7 +664,7 @@ async fn knock_room_helper_remote(
 	} = services
 		.rooms
 		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
+		.save_state_as_root(room_id, Arc::new(compressed))
 		.await?;
 
 	debug!("Forcing state for new room");
@@ -694,6 +698,7 @@ async fn knock_room_helper_remote(
 			once(parsed_knock_pdu.event_id.borrow()),
 			&state_lock,
 			room_id,
+			false,
 		)
 		.await?;
 

@@ -190,7 +190,14 @@ pub(crate) async fn invite_helper(
 		let pdu_id = services
 			.rooms
 			.event_handler
-			.handle_incoming_pdu(recipient_user.server_name(), room_id, &event_id, value, true)
+			.handle_incoming_pdu(
+				recipient_user.server_name(),
+				room_id,
+				&event_id,
+				value,
+				true,
+				None,
+			)
 			.boxed()
 			.await?
 			.ok_or_else(|| {

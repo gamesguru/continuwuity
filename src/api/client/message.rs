@@ -111,7 +111,7 @@ pub(crate) async fn get_message_events_route(
 		services
 			.rooms
 			.timeline
-			.backfill_if_required(room_id, from)
+			.backfill_if_required(room_id, from, limit)
 			.boxed()
 			.await
 			.log_err()
@@ -138,9 +138,11 @@ pub(crate) async fn get_message_events_route(
 		.ready_take_while(|(count, _)| Some(*count) != to)
 		.ready_filter_map(|item| event_filter(item, filter))
 		.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
-		.wide_filter_map(|item| visibility_filter(&services, item, sender_user))
+		.wide_filter_map(
+			|item| async move { visibility_filter(&services, item, sender_user).await },
+		)
 		.take(limit)
-		.then(async |mut pdu| {
+		.wide_then(move |mut pdu| async move {
 			pdu.1.set_unsigned(Some(sender_user));
 			if let Err(e) = services
 				.rooms
