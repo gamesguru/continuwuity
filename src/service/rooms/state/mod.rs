@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Write, iter::once, sync::Arc};
+use std::{collections::HashMap, fmt::Write, iter::once, mem::size_of, sync::Arc};
 
 use async_trait::async_trait;
 use conduwuit::{RoomVersion, debug};
@@ -373,6 +373,14 @@ impl Service {
 			.await
 			.map(|content: RoomCreateEventContent| content.room_version)
 			.map_err(|e| err!(Request(NotFound("No create event found: {e:?}"))))
+	}
+
+	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
+		self.db
+			.shorteventid_shortstatehash
+			.qry(&shorteventid)
+			.await
+			.deserialized()
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {
