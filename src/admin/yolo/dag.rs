@@ -350,6 +350,8 @@ pub(super) async fn get_remote_dag(
 	verbose: bool,
 	room_version: Option<RoomVersionId>,
 ) -> Result {
+	use futures::StreamExt;
+
 	if !self.services.server.config.allow_federation {
 		return Err!("Federation is disabled on this homeserver.");
 	}
@@ -482,17 +484,17 @@ pub(super) async fn get_remote_dag(
 			break;
 		}
 
-		use futures::StreamExt;
-		let room_version_ref = &room_version;
-		// Response PDUs will add their prev_events to the queue below
-		let mut verifications = futures::stream::iter(response.pdus.iter())
-			.map(|raw_pdu| async move {
-				let res = self
-					.services
-					.server_keys
-					.validate_and_add_event_id(raw_pdu, room_version_ref)
-					.await;
-				(raw_pdu, res)
+		let mut verifications = futures::stream::iter(response.pdus.into_iter())
+			.map(|raw_pdu| {
+				let rv = room_version.clone();
+				async move {
+					let res = self
+						.services
+						.server_keys
+						.validate_and_add_event_id(&raw_pdu, &rv)
+						.await;
+					(raw_pdu, res)
+				}
 			})
 			.buffer_unordered(500);
 
@@ -501,7 +503,7 @@ pub(super) async fn get_remote_dag(
 				| Ok(r) => r,
 				| Err(e) => {
 					match conduwuit::matrix::event::gen_event_id_canonical_json(
-						raw_pdu,
+						&raw_pdu,
 						&room_version,
 					) {
 						| Ok((eid, mut val)) => {

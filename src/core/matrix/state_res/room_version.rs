@@ -134,6 +134,10 @@ impl RoomVersion {
 		room_ids_as_hashes: true,
 		..Self::V11
 	};
+	pub const V12_1: Self = Self {
+		state_res: StateResolutionVersion::V2_2,
+		..Self::V12
+	};
 	pub const V2: Self = Self {
 		state_res: StateResolutionVersion::V2,
 		..Self::V1
@@ -175,6 +179,7 @@ impl RoomVersion {
 			| RoomVersionId::V10 => Self::V10,
 			| RoomVersionId::V11 => Self::V11,
 			| RoomVersionId::V12 => Self::V12,
+			| ver if ver.as_str() == "12.1" => Self::V12_1,
 			| ver => return Err(Error::Unsupported(format!("found version `{ver}`"))),
 		})
 	}
