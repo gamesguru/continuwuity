@@ -397,7 +397,7 @@ pub(super) async fn get_remote_dag(
 	let mut min_depth = u64::MAX;
 	let mut max_depth = 0_u64;
 	let mut consecutive_errors = 0_usize;
-	let batch_size = ruma::uint!(100);
+	let batch_size = ruma::uint!(500);
 	let start_time = tokio::time::Instant::now();
 
 	info!("get-remote-dag: starting crawl from {server} for {room_id} (limit: {limit})");
@@ -482,14 +482,22 @@ pub(super) async fn get_remote_dag(
 			break;
 		}
 
+		use futures::StreamExt;
+		let room_version_ref = &room_version;
 		// Response PDUs will add their prev_events to the queue below
-		for raw_pdu in &response.pdus {
-			let (event_id, value) = match self
-				.services
-				.server_keys
-				.validate_and_add_event_id(raw_pdu, &room_version)
-				.await
-			{
+		let mut verifications = futures::stream::iter(response.pdus.iter())
+			.map(|raw_pdu| async move {
+				let res = self
+					.services
+					.server_keys
+					.validate_and_add_event_id(raw_pdu, room_version_ref)
+					.await;
+				(raw_pdu, res)
+			})
+			.buffer_unordered(500);
+
+		while let Some((raw_pdu, validation_res)) = verifications.next().await {
+			let (event_id, value) = match validation_res {
 				| Ok(r) => r,
 				| Err(e) => {
 					match conduwuit::matrix::event::gen_event_id_canonical_json(

@@ -53,7 +53,7 @@ pub async fn repair_room_unsigned(&self, room_id: &RoomId) -> Result<usize> {
 				(event_id, kind, state_key, pdu_json, prev_state, false)
 			}
 		})
-		.buffer_unordered(100);
+		.buffer_unordered(500);
 
 	pin_mut!(pdus_stream);
 

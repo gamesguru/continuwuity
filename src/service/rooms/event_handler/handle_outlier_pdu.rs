@@ -368,10 +368,10 @@ where
 
 				let mut in_degree = HashMap::new();
 				for (eid, (_, pdu)) in &auth_chain_map {
-					let mut count = 0;
+					let mut count = 0_usize;
 					for auth_id in pdu.auth_events() {
 						if auth_chain_map.contains_key(auth_id) {
-							count += 1;
+							count = count.saturating_add(1);
 						}
 					}
 					in_degree.insert(eid.clone(), count);
@@ -388,7 +388,7 @@ where
 					for (other_eid, (_, other_pdu)) in &auth_chain_map {
 						if other_pdu.auth_events().any(|aid| aid == eid) {
 							if let Some(deg) = in_degree.get_mut(other_eid) {
-								*deg -= 1;
+								*deg = deg.saturating_sub(1);
 								if *deg == 0 {
 									queue.push(other_eid.clone());
 								}

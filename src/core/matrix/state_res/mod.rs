@@ -1180,9 +1180,18 @@ where
 		// partially-resolved PL state, which is needed to find the
 		// sender's join event during leave/kick auth checks.
 		{
+			let empty_map_rules = room_version
+				.state_res
+				.begin_iterative_auth_checks_with_empty_state_map();
 			let supplemental: Vec<_> = auth_types
 				.iter()
 				.stream()
+				.filter(|key| {
+					future::ready(
+						!(empty_map_rules
+							&& **key != (StateEventType::RoomPowerLevels, "".into())),
+					)
+				})
 				.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
 				.filter_map(|(key, ev_id)| async move {
 					// Exclude rejected events from resolved_state (Synapse parity)
@@ -1383,6 +1392,7 @@ where
 	// We use Option<usize> so that None < Some(0) in Rust's natural Ord ordering.
 	let mut event_to_mainline: HashMap<&OwnedEventId, Option<usize>> = HashMap::new();
 	let mut event_ts: HashMap<&OwnedEventId, MilliSecondsSinceUnixEpoch> = HashMap::new();
+	let mut cache: HashMap<OwnedEventId, Option<usize>> = HashMap::new();
 
 	for ev_id in to_sort {
 		let Some(event) = fetch_event(ev_id.clone()).await else {
@@ -1418,6 +1428,10 @@ where
 						break;
 					}
 					path.push(current_id.clone());
+					if let Some(&depth) = cache.get(&current_id) {
+						found_depth = depth;
+						break;
+					}
 					if let Some(&depth) = mainline_depth.get(&current_id) {
 						found_depth = Some(depth);
 						break;
@@ -1434,10 +1448,8 @@ where
 					}
 				}
 
-				if let Some(depth) = found_depth {
-					for id in path {
-						mainline_depth.insert(id, depth);
-					}
+				for id in path {
+					cache.insert(id, found_depth);
 				}
 				found_depth
 			};

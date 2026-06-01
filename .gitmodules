@@ -4,3 +4,6 @@
 [submodule "ruma-upstream"]
 	path = ruma-upstream
 	url = https://github.com/ruma/ruma.git
+[submodule "ruwuma"]
+	path = ruwuma
+	url = https://github.com/Wombat-Foundation/ruwuma.git

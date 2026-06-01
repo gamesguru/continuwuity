@@ -176,7 +176,7 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 				(event_id, kind, state_key, pdu_json, prev_state)
 			}
 		})
-		.buffer_unordered(100);
+		.buffer_unordered(500);
 
 	pin_mut!(pdus_stream);
 

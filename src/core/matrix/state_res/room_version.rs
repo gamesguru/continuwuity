@@ -31,6 +31,14 @@ pub enum StateResolutionVersion {
 	V2,
 	/// State resolution for room at version 12 or later.
 	V2_1,
+	/// State resolution v2.2 (MSC4297)
+	V2_2,
+}
+
+impl StateResolutionVersion {
+	pub fn begin_iterative_auth_checks_with_empty_state_map(&self) -> bool {
+		matches!(self, Self::V2_2)
+	}
 }
 
 #[cfg_attr(not(feature = "unstable-exhaustive-types"), non_exhaustive)]

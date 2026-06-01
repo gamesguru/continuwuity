@@ -526,7 +526,7 @@ where
 							.ok()?;
 						Some((shortstatekey, (*event_id).to_owned()))
 					})
-					.buffer_unordered(100)
+					.buffer_unordered(500)
 					.filter_map(ready)
 					.collect()
 					.await;
