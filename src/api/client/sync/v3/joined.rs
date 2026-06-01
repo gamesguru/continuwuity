@@ -926,23 +926,20 @@ async fn build_device_list_updates(
 		..
 	}: SyncContext<'_>,
 	room_id: &RoomId,
-	ShortStateHashes { .. }: ShortStateHashes,
+	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
 	joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
-	// initial syncs don't include device updates
-	if last_sync_end_count.is_none() {
-		return Ok(DeviceListUpdates::new());
-	}
-
-	// device list updates are only relevant for encrypted rooms
-	if !services
+	let is_encrypted_room = services
 		.rooms
 		.state_accessor
-		.is_encrypted_room(room_id)
-		.await
-	{
+		.state_get(current_shortstatehash, &StateEventType::RoomEncryption, "")
+		.is_ok();
+
+	// initial syncs don't include device updates, and rooms which aren't encrypted
+	// don't affect them, so return early in either of those cases
+	if last_sync_end_count.is_none() || !(is_encrypted_room.await) {
 		return Ok(DeviceListUpdates::new());
 	}
 
