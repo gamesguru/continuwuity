@@ -1,7 +1,9 @@
 use std::collections::{HashSet, VecDeque};
 
 use axum::extract::State;
-use conduwuit::{Err, Event, Result, debug, info, trace, utils::to_canonical_object, warn};
+use conduwuit::{
+	Err, Event, Result, RoomVersion, debug, info, trace, utils::to_canonical_object, warn,
+};
 use ruma::{OwnedEventId, api::federation::event::get_missing_events};
 use serde_json::{json, value::RawValue};
 
@@ -48,7 +50,8 @@ pub(crate) async fn get_missing_events_route(
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
 
-	let room_version = services.rooms.state.get_room_version(&body.room_id).await?;
+	let room_version_id = services.rooms.state.get_room_version(&body.room_id).await?;
+	let room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
 
 	let mut queue: VecDeque<OwnedEventId> = VecDeque::from(body.latest_events.clone());
 	let mut results: Vec<Box<RawValue>> = Vec::with_capacity(limit);
@@ -86,14 +89,15 @@ pub(crate) async fn get_missing_events_route(
 			.await
 		{
 			debug!(%next_event_id, origin = %body.origin(), "redacting event origin cannot see");
-			pdu.redact(&room_version, json!({}))?;
+			pdu.redact(&room_version_id, json!({}))?;
 		}
 
 		let mut prev_events: Vec<OwnedEventId> =
 			if room_version.state_dags && pdu.state_key().is_some() {
-				pdu.prev_state_events().map_or(Vec::new(), |i| i.collect())
+				pdu.prev_state_events()
+					.map_or(Vec::new(), |i| i.map(ToOwned::to_owned).collect())
 			} else {
-				pdu.prev_events().collect()
+				pdu.prev_events().map(ToOwned::to_owned).collect()
 			};
 		// MSC4242: make /get_missing_events deterministic
 		prev_events.sort();

@@ -269,10 +269,7 @@ impl Data {
 		};
 
 		// Parent's depth + 1
-		let parent_data = self
-			.get_jump_data(parent_id)
-			.await
-			.unwrap_or(StateJumpData { depth: 0, jumps: vec![] });
+		let parent_data = self.get_jump_data(parent_id).await?;
 		let my_depth = parent_data.depth.saturating_add(1);
 
 		// Build jump table: jumps[k] = 2^k-th ancestor
