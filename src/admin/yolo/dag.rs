@@ -1143,7 +1143,6 @@ pub(super) async fn audit_auth_chain(
 				.rooms
 				.state
 				.get_forward_extremities(&room_id)
-				.map(ToOwned::to_owned)
 				.collect()
 				.await,
 	};
@@ -1261,7 +1260,6 @@ pub(super) async fn fetch_missing_events(
 		.rooms
 		.state
 		.get_forward_extremities(&room_id)
-		.map(ToOwned::to_owned)
 		.collect()
 		.await;
 

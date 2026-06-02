@@ -35,5 +35,17 @@ V2.2 attempts to fix V2.1's flaws by searching for authorization events across t
 
 V2.1, despite its flaws, securely overlays the consensus Power Levels during validation, meaning it rightfully rejects Demotion Evasion attacks.
 
+## 4. The "V3" Solution & Invite Locks
+The original Matrix State Resolution algorithms oscillated between two extremes:
+* **V2.0 (The Shotgun):** Supplemented *all* state events (including `m.room.join_rules`) into the auth chain overlay during resolution. This caused global "Invite Locks" (The Catgirl Anomaly), where an Admin changing the room to Invite Only accidentally overwrote the local "Public" auth chain of historical joins, permanently locking out historical users.
+* **V2.1 (The Scalpel):** To fix Invite Locks, MSC4297 strictly isolated the supplemental merge to *only* `m.room.power_levels`. While this successfully protected `join_rules`, it accidentally isolated Bans and Kicks, creating the "Concurrent Ban Evasion" flaw (Point 2 above).
+
+**The V3 Sweet Spot:** The mathematically flawless solution is to expand the V2.1 Supplemental Merge to include **Authoritative Memberships** (Bans and Kicks). By supplementing `m.room.power_levels` AND `m.room.member` (when `membership == ban|leave` and `sender != state_key`), the consensus Ban successfully overlays onto concurrent malicious events, forcing `iterative_auth_check` to rightfully reject them. Meanwhile, `m.room.join_rules` remains cleanly isolated, ensuring the DAG can heal from splits without suffering Invite Locks.
+
+### The `continuwuity` Vulnerability
+Fascinatingly, the `continuwuity` codebase intuitively understood the V3 solution—its `is_power_event()` function correctly included Bans and Kicks. However, it accidentally also included `TimelineEventType::RoomJoinRules`. Because `RoomJoinRules` were being supplemented into the auth overlay, `continuwuity` was vulnerable to the exact V2.0 Invite Lock anomaly that MSC4297 was designed to prevent!
+
+We patched this by cleanly removing `TimelineEventType::RoomJoinRules` from `is_power_event()`, securing `continuwuity` against both Concurrent Ban Evasions and Invite Locks.
+
 ## Summary
-The cross-room DAG bleeding on live servers was a local UAF memory corruption bug, not a protocol-level graph theory failure. The refactor to `OwnedEventId` natively enforces memory safety across the codebase.
+The cross-room DAG bleeding on live servers was a local UAF memory corruption bug, not a protocol-level graph theory failure. The refactor to `OwnedEventId` natively enforces memory safety across the codebase, while our discoveries in State Resolution algorithms harden the network against future split-brain exploits.

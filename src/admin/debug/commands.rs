@@ -1317,7 +1317,11 @@ pub(crate) async fn force_set_state(
 		self.services
 			.rooms
 			.state
-			.set_forward_extremities(room_id.as_ref(), once(tip_pdu.event_id()), &state_lock)
+			.set_forward_extremities(
+				room_id.as_ref(),
+				once(tip_pdu.event_id().to_owned()),
+				&state_lock,
+			)
 			.await;
 
 		// Update the tip event's shortstatehash so that state_at_incoming
@@ -1614,7 +1618,7 @@ async fn promote_sync_anchor(
 				self.services
 					.rooms
 					.state
-					.set_forward_extremities(room_id, once(anchor_id.as_ref()), state_lock)
+					.set_forward_extremities(room_id, once(anchor_id.clone()), state_lock)
 					.await;
 				info!("Promoted {anchor_id} as timeline anchor for /sync");
 			},
