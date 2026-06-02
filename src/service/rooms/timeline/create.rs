@@ -132,7 +132,6 @@ pub async fn create_event(
 				.state
 				.get_forward_extremities(room_id)
 				.take(20)
-				.map(Into::into)
 				.collect()
 				.await,
 		| None => Vec::new(),

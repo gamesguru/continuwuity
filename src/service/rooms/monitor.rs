@@ -344,7 +344,6 @@ impl Service {
 				.state
 				.get_forward_extremities(room_id)
 				.take(20)
-				.map(ToOwned::to_owned)
 				.collect()
 				.await;
 

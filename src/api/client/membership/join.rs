@@ -772,7 +772,7 @@ async fn join_room_by_id_helper_remote(
 		.append_pdu(
 			&parsed_join_pdu,
 			join_event,
-			once(parsed_join_pdu.event_id.borrow()),
+			once(parsed_join_pdu.event_id.to_owned()),
 			&state_lock,
 			room_id,
 			false,

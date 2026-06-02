@@ -779,15 +779,15 @@ impl Service {
 
 		// Preserve outlier extremities (e.g. from force-set-state) that are not in the
 		// timeline.
-		let current_exts: Vec<_> = self
+		let current_exts: Vec<OwnedEventId> = self
 			.services
 			.state
 			.get_forward_extremities(room_id)
 			.collect()
 			.await;
 		for ext in current_exts {
-			if !entries.contains_key(ext) {
-				true_extremities.push(ext.to_owned());
+			if !entries.contains_key(&ext) {
+				true_extremities.push(ext);
 			}
 		}
 
@@ -862,7 +862,7 @@ impl Service {
 				.state
 				.set_forward_extremities(
 					room_id,
-					true_extremities.iter().map(AsRef::as_ref),
+					true_extremities.clone().into_iter(),
 					&state_lock,
 				)
 				.await;
@@ -1211,7 +1211,7 @@ impl Service {
 		let true_extremities = calculate_true_extremities(&graph, &sorted);
 
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
-		let current_set: HashSet<_> = current_extremities.map(ToOwned::to_owned).collect().await;
+		let current_set: HashSet<_> = current_extremities.collect().await;
 
 		let phantom_tips = detect_phantom_extremities(&graph, &current_set);
 
@@ -1224,7 +1224,11 @@ impl Service {
 			// set_forward_extremities enforces MAX_FORWARD_EXTREMITIES cap.
 			self.services
 				.state
-				.set_forward_extremities(room_id, true_extremities.into_iter(), &state_lock)
+				.set_forward_extremities(
+					room_id,
+					true_extremities.into_iter().map(ToOwned::to_owned),
+					&state_lock,
+				)
 				.await;
 		}
 

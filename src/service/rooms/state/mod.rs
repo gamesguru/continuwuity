@@ -363,12 +363,8 @@ impl Service {
 			new_extremities.len()
 		);
 
-		self.set_forward_extremities(
-			room_id,
-			new_extremities.iter().map(AsRef::as_ref),
-			state_lock,
-		)
-		.await;
+		self.set_forward_extremities(room_id, new_extremities.into_iter(), state_lock)
+			.await;
 	}
 
 	/// Generates a new StateHash and associates it with the incoming event.
@@ -621,13 +617,13 @@ impl Service {
 	pub fn get_forward_extremities<'a>(
 		&'a self,
 		room_id: &'a RoomId,
-	) -> impl Stream<Item = &'a EventId> + Send + 'a {
+	) -> impl Stream<Item = OwnedEventId> + Send + 'a {
 		let prefix = (room_id, Interfix);
 
 		self.db
 			.roomid_pduleaves
 			.keys_prefix(&prefix)
-			.map_ok(|(_, event_id): (Ignore, &EventId)| event_id)
+			.map_ok(|(_, event_id): (Ignore, &EventId)| event_id.to_owned())
 			.ignore_err()
 	}
 
@@ -635,7 +631,7 @@ impl Service {
 	/// (DAG tip) for the room.
 	pub async fn is_forward_extremity(&self, room_id: &RoomId, event_id: &EventId) -> bool {
 		self.get_forward_extremities(room_id)
-			.any(|eid| futures::future::ready(eid == event_id))
+			.any(|eid| futures::future::ready(eid == *event_id))
 			.await
 	}
 
@@ -645,7 +641,7 @@ impl Service {
 		event_ids: I,
 		_state_lock: &'a RoomMutexGuard,
 	) where
-		I: Iterator<Item = &'a EventId> + Send + 'a,
+		I: Iterator<Item = OwnedEventId> + Send + 'a,
 	{
 		let prefix = (room_id, Interfix);
 		self.db
@@ -660,11 +656,11 @@ impl Service {
 		// reset_extremities_to_state), but we only persist the last N.
 		// Keeping the newest tips is preferred since they are most likely to
 		// be merged by future events.
-		let collected: Vec<&EventId> = event_ids.collect();
+		let collected: Vec<OwnedEventId> = event_ids.collect();
 		let start = collected.len().saturating_sub(MAX_FORWARD_EXTREMITIES);
 		for event_id in &collected[start..] {
-			let key = (room_id, *event_id);
-			self.db.roomid_pduleaves.put_raw(key, *event_id);
+			let key = (room_id, &**event_id);
+			self.db.roomid_pduleaves.put_raw(key, &**event_id);
 		}
 	}
 

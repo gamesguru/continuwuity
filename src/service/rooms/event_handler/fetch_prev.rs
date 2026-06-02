@@ -60,7 +60,6 @@ where
 		.services
 		.state
 		.get_forward_extremities(room_id)
-		.map(ToOwned::to_owned)
 		.collect()
 		.await;
 

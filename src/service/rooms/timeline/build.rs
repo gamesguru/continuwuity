@@ -122,7 +122,7 @@ pub async fn build_and_append_pdu(
 			pdu_json,
 			// Since this PDU references all pdu_leaves we can update the leaves
 			// of the room
-			once(pdu.event_id()),
+			once(pdu.event_id().to_owned()),
 			state_lock,
 			&room_id,
 			false,

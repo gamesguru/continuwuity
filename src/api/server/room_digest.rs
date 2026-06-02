@@ -109,16 +109,15 @@ pub(crate) async fn get_room_digest_route(
 		return Err!(Request(Forbidden("This server is not participating in that room.")));
 	}
 
-	// 1. Collect forward extremities
+	// Collect forward extremities
 	let mut extremity_event_ids: Vec<OwnedEventId> = services
 		.rooms
 		.state
 		.get_forward_extremities(&room_id)
-		.map(ToOwned::to_owned)
 		.collect()
 		.await;
 
-	// 2. Reverse-walk the timeline to collect the active window of event IDs
+	// Reverse-walk the timeline to collect the active window of event IDs
 	let pdus = services.rooms.timeline.pdus_rev(&room_id, None);
 	futures::pin_mut!(pdus);
 
@@ -171,10 +170,10 @@ pub(crate) async fn get_room_digest_route(
 		"Computed room digest"
 	);
 
-	// 3. Build the Bloom filter
+	// Build the Bloom filter
 	let (digest, digest_bits) = build_xxh3_bloom(&window_event_ids)?;
 
-	// 4. Compute ETag for conditional request support
+	// Compute ETag for conditional request support
 	let etag = compute_etag(&mut extremity_event_ids, event_count);
 
 	let response = RoomDigestResponse {

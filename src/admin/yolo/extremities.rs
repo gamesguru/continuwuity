@@ -77,7 +77,6 @@ pub(super) async fn view_extremities(
 					.rooms
 					.state
 					.get_forward_extremities(room_id)
-					.map(ToOwned::to_owned)
 					.collect()
 					.await;
 				for eid in &extremities {
@@ -112,7 +111,6 @@ pub(super) async fn view_extremities(
 		.rooms
 		.state
 		.get_forward_extremities(&room_id)
-		.map(ToOwned::to_owned)
 		.collect()
 		.await;
 

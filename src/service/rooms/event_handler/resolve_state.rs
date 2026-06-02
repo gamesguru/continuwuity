@@ -199,6 +199,18 @@ where
 			.collect()
 			.await;
 
+		let meta = &self.services.pdu_metadata;
+		let pdus = pdus
+			.into_iter()
+			.stream()
+			.wide_then(|mut pdu| async move {
+				pdu.rejected = meta.is_event_admin_rejected(&pdu.event_id).await
+					|| meta.is_event_rejected(&pdu.event_id).await;
+				pdu
+			})
+			.collect::<Vec<_>>()
+			.await;
+
 		for pdu in &pdus {
 			let _ = fetch_cache_ref
 				.insert_async(pdu.event_id.clone(), Some(pdu.clone()))

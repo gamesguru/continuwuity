@@ -12,7 +12,7 @@ use conduwuit_core::{
 };
 use futures::StreamExt;
 use ruma::{
-	CanonicalJsonObject, EventId, RoomVersionId, UserId,
+	CanonicalJsonObject, EventId, OwnedEventId, RoomId, RoomVersionId, UserId,
 	events::{
 		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 		push_rules::PushRulesEvent,
@@ -45,7 +45,7 @@ pub async fn append_incoming_pdu<'a, Leaves>(
 	room_id: &'a ruma::RoomId,
 ) -> Result<Option<RawPduId>>
 where
-	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
+	Leaves: Iterator<Item = OwnedEventId> + Send + 'a,
 {
 	// We append to state before appending the pdu, so we don't have a moment in
 	// time with the pdu without it's state. This is okay because append_pdu can't
@@ -108,7 +108,7 @@ pub async fn append_pdu<'a, Leaves>(
 	soft_fail: bool,
 ) -> Result<RawPduId>
 where
-	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
+	Leaves: Iterator<Item = OwnedEventId> + Send + 'a,
 {
 	// Coalesce database writes for the remainder of this scope.
 	let _cork = self.db.db.cork();

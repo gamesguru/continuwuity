@@ -1506,24 +1506,17 @@ async fn add_event_and_auth_chain_to_graph<E, F, Fut>(
 	Fut: Future<Output = Option<E>> + Send,
 	E: Event + Send + Sync,
 {
-	let mut state = vec![event_id];
-	while let Some(eid) = state.pop() {
-		graph.entry(eid.clone()).or_default();
-		let event = fetch_event(eid.clone()).await;
-		let auth_events = event.as_ref().map(Event::auth_events).into_iter().flatten();
+	graph.entry(event_id.clone()).or_default();
+	let event = fetch_event(event_id.clone()).await;
+	let auth_events = event.as_ref().map(Event::auth_events).into_iter().flatten();
 
-		// Prefer the store to event as the store filters dedups the events
-		for aid in auth_events {
-			if auth_diff.contains(aid) {
-				if !graph.contains_key(aid) {
-					state.push(aid.to_owned());
-				}
-
-				graph
-					.get_mut(&eid)
-					.expect("We just inserted this at the start of the while loop")
-					.insert(aid.to_owned());
-			}
+	// 1-hop at a time
+	for aid in auth_events {
+		if auth_diff.contains(aid) {
+			graph
+				.get_mut(&event_id)
+				.expect("We just inserted this")
+				.insert(aid.to_owned());
 		}
 	}
 }

@@ -397,11 +397,10 @@ where
 		.await?;
 	}
 
-	let current_extremities: Vec<_> = self
+	let current_extremities: Vec<OwnedEventId> = self
 		.services
 		.state
 		.get_forward_extremities(room_id)
-		.map(ToOwned::to_owned)
 		.collect()
 		.await;
 
@@ -434,7 +433,7 @@ where
 		.append_incoming_pdu(
 			&incoming_pdu,
 			val,
-			extremities.iter().map(Borrow::borrow),
+			extremities.into_iter(),
 			state_ids_compressed,
 			soft_fail,
 			&state_lock,
@@ -488,11 +487,10 @@ where
 	// Fetch missing state and auth chain events by calling /state_ids at
 	// backwards extremities doing all the checks in this list starting at 1.
 	// These are not timeline events.
-	let current_extremities: Vec<_> = self
+	let current_extremities: Vec<OwnedEventId> = self
 		.services
 		.state
 		.get_forward_extremities(room_id)
-		.map(ToOwned::to_owned)
 		.collect()
 		.await;
 
@@ -702,11 +700,10 @@ async fn calculate_state_delta(
 	}
 
 	// FAST PATH 2: Bypass V2.1 Auth Check explosion for non-forking events
-	let current_extremities: Vec<_> = self
+	let current_extremities: Vec<OwnedEventId> = self
 		.services
 		.state
 		.get_forward_extremities(room_id)
-		.map(ToOwned::to_owned)
 		.collect()
 		.await;
 
