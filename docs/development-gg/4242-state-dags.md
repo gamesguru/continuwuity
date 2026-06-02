@@ -59,7 +59,7 @@ the focus is on eventual state event delivery and historic authorisation.
 
 When a server receives an event from another server, it needs to authorise that event. The
 [checks performed on receipt of a PDU](https://spec.matrix.org/v1.10/server-server-api/#checks-performed-on-receipt-of-a-pdu)
-outline the steps involved. 
+outline the steps involved.
 
 The area this MSC concerns itself with is Steps 4 and 5:
 
@@ -378,13 +378,13 @@ event, but sending server implementations MUST NOT stop walking the graph as it 
 C is still missing. This may result in additional `/get_missing_events` calls. This MSC recommends
 that servers exponentially increase their `limit` until they have seen all events, e.g. `?limit=10`
 then 20, 40, 80... Servers MAY cap the number of events they return in order to ensure that the HTTP response
-size remain within the maximum limits set by their reverse proxy. This requires no signalling 
+size remain within the maximum limits set by their reverse proxy. This requires no signalling
 e.g. `limited: true` because
 the termination condition is filling in the state DAG, not based on the number of events returned in any
 one response. This is a simple approach and there are better alternatives which can be explored
 in a future MSC which do fewer round trips and exchange less information.
  - [Bloom filters](https://arxiv.org/abs/2012.00472)
- - [Range-based set reconciliation](https://arxiv.org/abs/2212.13567) 
+ - [Range-based set reconciliation](https://arxiv.org/abs/2212.13567)
  - [Merkle search trees](https://ieeexplore.ieee.org/abstract/document/9049566).
 
 In addition to this, `/get_missing_events` is modified to return events deterministically. This is
@@ -448,7 +448,7 @@ The intended server behaviour would be:
     2. **[Removed in this version]** If there are entries whose `type` and `state_key` don’t match those specified by the auth events selection algorithm described in the server specification, reject.
     3. If there are entries which were themselves rejected under the checks performed on receipt of a PDU, reject.
     4. **[Removed in this version]** If any event in `auth_events` has a `room_id` which does not match that of the event being authorised, reject.
-  
+
  ##### Rationale
 
 - The create event changes are just to ensure that the create event cannot be changed, and parallels the existing rule
@@ -579,7 +579,7 @@ This proposal firms up the concept of rejected events. In today's Matrix, events
 Step 4 or Step 5 of the PDU checks. However, Step 4 is immutable, but Step 5 is not. The reason why we are
 so loose on defining "rejected" events is because of Step 5 as we know we cannot trust the state before the event:
 
-> This helps ensure that different servers’ view of state is more likely to converge, since rejection state of an event may be different. This can happen if a third server gives an incorrect version of the state when a server joins a room via it (either due to being faulty or malicious). 
+> This helps ensure that different servers’ view of state is more likely to converge, since rejection state of an event may be different. This can happen if a third server gives an incorrect version of the state when a server joins a room via it (either due to being faulty or malicious).
 
 https://spec.matrix.org/v1.10/rooms/v11/#rejected-events
 
@@ -797,4 +797,3 @@ This MSC has no dependencies, but would benefit greatly from an MSC which makes 
 such as [MSC4014](https://github.com/matrix-org/matrix-spec-proposals/pull/4014),
 [MSC4243](https://github.com/matrix-org/matrix-spec-proposals/pull/4243),
 [MSC4345](https://github.com/matrix-org/matrix-spec-proposals/pull/4345).
-

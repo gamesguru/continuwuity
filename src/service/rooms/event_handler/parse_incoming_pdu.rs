@@ -80,7 +80,7 @@ pub fn validate_pdu(&self, pdu: &CanonicalJsonObject, room_version: &RoomVersion
 	// `event_id` should not be present on the PDU.
 	// NOTE: The above is ignored since technically it's still allowed to be
 	// included, but should be ignored instead.
-	
+
 	let room_features = conduwuit::RoomVersion::new(room_version).map_err(|e| {
 		conduwuit::warn!("Unsupported room version: {e:?}");
 		err!(Request(UnsupportedRoomVersion("Unsupported room version")))
@@ -127,8 +127,9 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 		| Ok(room_id) => room_id,
 		| Err(_) => {
 			// V12 non-create event without room_id
-			// Try to find it from prev_events, prev_state_events, or auth_events, but do not
-			// allow untrusted input to trigger an unbounded number of sequential DB lookups.
+			// Try to find it from prev_events, prev_state_events, or auth_events, but do
+			// not allow untrusted input to trigger an unbounded number of sequential DB
+			// lookups.
 			let mut fallback_events = Vec::new();
 
 			if let Some(prev) = value.get("prev_events").and_then(|v| v.as_array()) {
@@ -142,11 +143,16 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 			}
 
 			if fallback_events.is_empty() {
-				return Err!(Request(InvalidParam("Missing room_id in PDU and no fallback events found")));
+				return Err!(Request(InvalidParam(
+					"Missing room_id in PDU and no fallback events found"
+				)));
 			}
 
 			let mut found_room_id = None;
-			for event_id in fallback_events.iter().take(MAX_AUTH_EVENTS_ROOM_ID_FALLBACK) {
+			for event_id in fallback_events
+				.iter()
+				.take(MAX_AUTH_EVENTS_ROOM_ID_FALLBACK)
+			{
 				if let Some(event_id) = event_id.as_str() {
 					if let Ok(event_id) = OwnedEventId::parse(event_id) {
 						if let Ok(pdu) = self.services.timeline.get_pdu(&event_id).await {
