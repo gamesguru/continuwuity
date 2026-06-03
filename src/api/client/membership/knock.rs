@@ -499,7 +499,7 @@ async fn knock_room_helper_local(
 		.append_pdu(
 			&parsed_knock_pdu,
 			knock_event,
-			once(parsed_knock_pdu.event_id.to_owned()),
+			once(parsed_knock_pdu.event_id.clone()),
 			&state_lock,
 			room_id,
 			false,
@@ -695,7 +695,7 @@ async fn knock_room_helper_remote(
 		.append_pdu(
 			&parsed_knock_pdu,
 			knock_event,
-			once(parsed_knock_pdu.event_id.to_owned()),
+			once(parsed_knock_pdu.event_id.clone()),
 			&state_lock,
 			room_id,
 			false,
