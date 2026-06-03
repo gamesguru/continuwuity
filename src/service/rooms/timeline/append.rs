@@ -12,7 +12,7 @@ use conduwuit_core::{
 };
 use futures::StreamExt;
 use ruma::{
-	CanonicalJsonObject, EventId, OwnedEventId, RoomId, RoomVersionId, UserId,
+	CanonicalJsonObject, OwnedEventId, RoomVersionId, UserId,
 	events::{
 		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 		push_rules::PushRulesEvent,

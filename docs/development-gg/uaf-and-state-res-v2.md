@@ -37,7 +37,7 @@ V2.1, despite its flaws, securely overlays the consensus Power Levels during val
 
 ## 4. The "V3" Solution & Invite Locks
 The original Matrix State Resolution algorithms oscillated between two extremes:
-* **V2.0 (The Shotgun):** Supplemented *all* state events (including `m.room.join_rules`) into the auth chain overlay during resolution. This caused global "Invite Locks" (The Catgirl Anomaly), where an Admin changing the room to Invite Only accidentally overwrote the local "Public" auth chain of historical joins, permanently locking out historical users.
+* **V2.0 (The Shotgun):** Supplemented *all* state events (including `m.room.join_rules`) into the auth chain overlay during resolution. This caused global "Invite Locks", where an Admin changing the room to Invite Only accidentally overwrote the local "Public" auth chain of historical joins, permanently locking out historical users.
 * **V2.1 (The Scalpel):** To fix Invite Locks, MSC4297 strictly isolated the supplemental merge to *only* `m.room.power_levels`. While this successfully protected `join_rules`, it accidentally isolated Bans and Kicks, creating the "Concurrent Ban Evasion" flaw (Point 2 above).
 
 **The V3 Sweet Spot:** The mathematically flawless solution is to expand the V2.1 Supplemental Merge to include **Authoritative Memberships** (Bans and Kicks). By supplementing `m.room.power_levels` AND `m.room.member` (when `membership == ban|leave` and `sender != state_key`), the consensus Ban successfully overlays onto concurrent malicious events, forcing `iterative_auth_check` to rightfully reject them. Meanwhile, `m.room.join_rules` remains cleanly isolated, ensuring the DAG can heal from splits without suffering Invite Locks.
