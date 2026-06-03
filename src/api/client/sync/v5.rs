@@ -985,7 +985,8 @@ where
 	}
 
 	for user_id in left_encrypted_users {
-		let dont_share_encrypted_room = !share_encrypted_room(services, sender_user, &user_id, None).await;
+		let dont_share_encrypted_room =
+			!share_encrypted_room(services, sender_user, &user_id, None).await;
 
 		// If the user doesn't share an encrypted room with the target anymore, we need
 		// to tell them

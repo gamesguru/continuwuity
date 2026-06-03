@@ -28,8 +28,8 @@ use ruma::{
 			sync::sync_events::{
 				self, DeviceLists,
 				v3::{
-					Filter, GlobalAccountData, InviteState, InvitedRoom, JoinedRoom, KnockState, KnockedRoom,
-					LeftRoom, Presence, Rooms, ToDevice,
+					Filter, GlobalAccountData, InviteState, InvitedRoom, JoinedRoom, KnockState,
+					KnockedRoom, LeftRoom, Presence, Rooms, ToDevice,
 				},
 			},
 			uiaa::UiaaResponse,
@@ -212,7 +212,7 @@ pub(crate) async fn sync_events_route(
 	}) && services.config.experimental_features.msc4222_enabled;
 
 	let response = build_sync_events(&services, &body, use_state_after).await?;
-	if body.body.full_state || !is_sync_response_empty(&response) {
+	if body.body.since.is_none() || body.body.full_state || !is_sync_response_empty(&response) {
 		return Ok(axum::Json(response).into_response());
 	}
 
@@ -291,7 +291,8 @@ pub(crate) async fn build_sync_events(
 			let joined_room = load_joined_room(services, context, room_id.to_owned()).await;
 
 			match joined_room {
-				| Ok((room, state_after, updates)) => Some((room_id.to_owned(), room, state_after, updates)),
+				| Ok((room, state_after, updates)) =>
+					Some((room_id.to_owned(), room, state_after, updates)),
 				| Err(err) => {
 					error!(?err, %room_id, "error loading joined room");
 					None
@@ -309,10 +310,15 @@ pub(crate) async fn build_sync_events(
 				BTreeMap<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>,
 				DeviceListUpdates,
 			),
-			 (room_id, joined_room, state_after, updates): (ruma::OwnedRoomId, JoinedRoom, Vec<Raw<ruma::events::AnySyncStateEvent>>, DeviceListUpdates)| {
+			 (room_id, joined_room, state_after, updates): (
+				ruma::OwnedRoomId,
+				JoinedRoom,
+				Vec<Raw<ruma::events::AnySyncStateEvent>>,
+				DeviceListUpdates,
+			)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() {
+				if !joined_room.is_empty() || context.last_sync_end_count.is_none() {
 					joined_rooms.insert(room_id.clone(), joined_room);
 					if !state_after.is_empty() {
 						joined_state_after.insert(room_id.clone(), state_after);
@@ -347,7 +353,12 @@ pub(crate) async fn build_sync_events(
 			|(mut left_rooms, mut left_state_after): (
 				BTreeMap<ruma::OwnedRoomId, LeftRoom>,
 				BTreeMap<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>,
-			), (room_id, left_room, state_after): (ruma::OwnedRoomId, LeftRoom, Vec<Raw<ruma::events::AnySyncStateEvent>>)| async move {
+			),
+			 (room_id, left_room, state_after): (
+				ruma::OwnedRoomId,
+				LeftRoom,
+				Vec<Raw<ruma::events::AnySyncStateEvent>>,
+			)| async move {
 				left_rooms.insert(room_id.clone(), left_room);
 				if !state_after.is_empty() {
 					left_state_after.insert(room_id, state_after);

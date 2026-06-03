@@ -23,10 +23,7 @@ use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
 	api::client::sync::sync_events::{
 		UnreadNotificationsCount,
-		v3::{
-			Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState,
-			Timeline,
-		},
+		v3::{Ephemeral, JoinedRoom, RoomAccountData, RoomSummary, State as RoomState, Timeline},
 	},
 	assign,
 	events::{
@@ -97,10 +94,8 @@ pub(super) async fn load_joined_room(
 		);
 	}
 
-	let state_events_raw: Vec<Raw<ruma::events::AnySyncStateEvent>> = state_events
-		.into_iter()
-		.map(Event::into_format)
-		.collect();
+	let state_events_raw: Vec<Raw<ruma::events::AnySyncStateEvent>> =
+		state_events.into_iter().map(Event::into_format).collect();
 
 	let (state_events_to_send, state_after) = if sync_context.use_state_after {
 		(Vec::new(), state_events_raw)
@@ -745,7 +740,9 @@ async fn build_heroes(
 		.ignore_err()
 		.ready_filter_map(|(event_type, state_key)| -> Option<OwnedUserId> {
 			if event_type == StateEventType::RoomMember {
-				UserId::parse(state_key.as_str()).ok().map(ToOwned::to_owned)
+				UserId::parse(state_key.as_str())
+					.ok()
+					.map(ToOwned::to_owned)
 			} else {
 				None
 			}

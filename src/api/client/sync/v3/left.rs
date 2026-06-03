@@ -7,9 +7,7 @@ use conduwuit::{
 use futures::StreamExt;
 use ruma::{
 	EventId, OwnedRoomId, RoomId,
-	api::client::sync::sync_events::v3::{
-		LeftRoom, RoomAccountData, State, Timeline,
-	},
+	api::client::sync::sync_events::v3::{LeftRoom, RoomAccountData, State, Timeline},
 	assign,
 	events::{AnySyncStateEvent, StateEventType, TimelineEventType},
 	serde::Raw,
@@ -182,10 +180,8 @@ pub(super) async fn load_left_room(
 		.collect::<Vec<_>>()
 		.await;
 
-	let state_events_raw: Vec<Raw<AnySyncStateEvent>> = state_events
-		.into_iter()
-		.map(Event::into_format)
-		.collect();
+	let state_events_raw: Vec<Raw<AnySyncStateEvent>> =
+		state_events.into_iter().map(Event::into_format).collect();
 
 	let (state_events_to_send, state_after) = if sync_context.use_state_after {
 		(Vec::new(), state_events_raw)
