@@ -136,21 +136,76 @@ impl Service {
 	) {
 		match response {
 			| Ok(dest) => self.handle_response_ok(&dest, futures, statuses).await,
-			| Err((dest, e)) => Self::handle_response_err(dest, statuses, &e),
+			| Err((dest, e)) => self.handle_response_err(dest, statuses, &e),
 		}
 	}
 
-	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
+	fn handle_response_err(&self, dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
 		debug!(dest = ?dest, "{e:?}");
-		statuses.entry(dest).and_modify(|e| {
+		let mut tries = 1_u32;
+		statuses.entry(dest.clone()).and_modify(|e| {
 			*e = match e {
 				| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
-				| &mut TransactionStatus::Retrying(ref n) =>
-					TransactionStatus::Failed(n.saturating_add(1), Instant::now()),
+				| &mut TransactionStatus::Retrying(ref n) => {
+					tries = n.saturating_add(1);
+					TransactionStatus::Failed(tries, Instant::now())
+				},
 				| TransactionStatus::Failed(..) => {
 					panic!("Request that was not even running failed?!")
 				},
 			}
+		});
+
+		// Schedule a delayed retry after the backoff period
+		let base = self.server.config.sender_retry_backoff_base;
+		let max = self.server.config.sender_retry_backoff_limit;
+		let delay_secs = base
+			.saturating_mul(
+				1_u64
+					.checked_shl(tries.saturating_sub(1))
+					.unwrap_or(u64::MAX),
+			)
+			.min(max);
+
+		let sender = self
+			.channels
+			.get(self.shard_id(&dest))
+			.expect("channel")
+			.0
+			.clone();
+
+		self.server.runtime().spawn(async move {
+			tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+			sender
+				.send(Msg {
+					dest,
+					event: SendingEvent::Flush,
+					queue_id: Vec::new(),
+				})
+				.ok();
+		});
+	}
+
+	/// Re-schedule a Flush for the given destination after a short delay.
+	/// Called when a Flush arrives but is rejected (e.g. backoff still active
+	/// due to timer jitter), so the retry isn't permanently lost.
+	fn reschedule_flush(&self, dest: Destination) {
+		let sender = self
+			.channels
+			.get(self.shard_id(&dest))
+			.expect("channel")
+			.0
+			.clone();
+
+		self.server.runtime().spawn(async move {
+			tokio::time::sleep(Duration::from_secs(1)).await;
+			sender
+				.send(Msg {
+					dest,
+					event: SendingEvent::Flush,
+					queue_id: Vec::new(),
+				})
+				.ok();
 		});
 	}
 
@@ -191,13 +246,28 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
-		let iv = vec![(msg.queue_id, msg.event)];
+		let _cork = self.db.db.cork();
+		let is_flush = matches!(msg.event, SendingEvent::Flush);
+		let iv = if !is_flush {
+			vec![(msg.queue_id, msg.event)]
+		} else {
+			self.db
+				.queued_requests(&msg.dest)
+				.take(DEQUEUE_LIMIT)
+				.collect::<Vec<_>>()
+				.await
+		};
+
 		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
 				futures.push(self.send_events(msg.dest, events));
 			} else {
 				statuses.remove(&msg.dest);
 			}
+		} else if is_flush {
+			// Flush was rejected (e.g., backoff still active due to timer
+			// jitter). Re-schedule so the retry isn't permanently lost.
+			self.reschedule_flush(msg.dest);
 		}
 	}
 
