@@ -7,7 +7,7 @@ use conduwuit::{
 	Event, PduCount, Result, debug_warn, err,
 	matrix::pdu::PduEvent,
 	ref_at, trace,
-	utils::stream::{ReadyExt, TryIgnore},
+	utils::stream::{BroadbandExt, ReadyExt, TryIgnore},
 };
 use conduwuit_service::Services;
 use futures::StreamExt;
@@ -48,6 +48,13 @@ async fn load_timeline(
 	ending_count: Option<PduCount>,
 	limit: usize,
 ) -> Result<TimelinePdus> {
+	if let (Some(starting_count), Some(ending_count)) = (starting_count, ending_count) {
+		debug_assert!(
+			starting_count <= ending_count,
+			"starting count {starting_count} > ending count {ending_count}"
+		);
+	}
+
 	let mut pdu_stream = match starting_count {
 		| Some(starting_count) => {
 			let last_timeline_count = services
@@ -142,7 +149,7 @@ async fn load_timeline(
 	Ok(TimelinePdus { pdus, limited })
 }
 
-async fn shares_a_room(
+async fn share_encrypted_room(
 	services: &Services,
 	sender_user: &UserId,
 	user_id: &UserId,
@@ -152,6 +159,13 @@ async fn shares_a_room(
 		.rooms
 		.state_cache
 		.get_shared_rooms(sender_user, user_id)
-		.ready_any(|room_id| Some(room_id) != ignore_room)
+		.ready_filter(|room_id| Some(room_id.as_ref()) != ignore_room)
+		.broad_any(|other_room_id| async move {
+			services
+				.rooms
+				.state_accessor
+				.is_encrypted_room(&other_room_id)
+				.await
+		})
 		.await
 }

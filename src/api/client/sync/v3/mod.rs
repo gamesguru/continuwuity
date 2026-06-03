@@ -11,18 +11,14 @@ use std::{
 use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Result, at, extract_variant,
+	Result, at, error, extract_variant,
 	utils::{
 		ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, Tools, WidebandExt},
 	},
-	warn,
 };
 use conduwuit_service::Services;
-use futures::{
-	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join3, join4},
-};
+use futures::{FutureExt, StreamExt, TryFutureExt, future::OptionFuture};
 use ruma::{
 	DeviceId, OwnedUserId, RoomId, UserId,
 	api::{
@@ -32,22 +28,23 @@ use ruma::{
 			sync::sync_events::{
 				self, DeviceLists,
 				v3::{
-					Filter, GlobalAccountData, InviteState, InvitedRoom, KnockState, KnockedRoom,
-					Presence, Rooms, ToDevice,
+					Filter, GlobalAccountData, InviteState, InvitedRoom, JoinedRoom, KnockState, KnockedRoom,
+					LeftRoom, Presence, Rooms, ToDevice,
 				},
 			},
 			uiaa::UiaaResponse,
 		},
 	},
+	assign,
 	events::{
-		AnyGlobalAccountDataEvent, AnyRawAccountDataEvent,
+		AnyRawAccountDataEvent,
 		presence::{PresenceEvent, PresenceEventContent},
 	},
 	serde::Raw,
 };
 use service::rooms::lazy_loading::{self, MemberSet, Options as _};
 
-use super::{load_timeline, shares_a_room};
+use super::{load_timeline, share_encrypted_room};
 use crate::{
 	Ruma, RumaResponse,
 	client::{
@@ -85,10 +82,10 @@ impl DeviceListUpdates {
 
 impl From<DeviceListUpdates> for DeviceLists {
 	fn from(val: DeviceListUpdates) -> Self {
-		Self {
+		assign!(Self::new(), {
 			changed: val.changed.into_iter().collect(),
 			left: val.left.into_iter().collect(),
-		}
+		})
 	}
 }
 
@@ -116,6 +113,9 @@ struct SyncContext<'a> {
 	/// The sync filter, which the client uses to specify what data should be
 	/// included in the sync response.
 	filter: &'a FilterDefinition,
+	/// Whether the state at the end of the timeline should be used when
+	/// calculating state diffs for sync.
+	use_state_after: bool,
 }
 
 impl<'a> SyncContext<'a> {
@@ -185,6 +185,7 @@ type PresenceUpdates = HashMap<OwnedUserId, PresenceEventContent>;
 pub(crate) async fn sync_events_route(
 	State(services): State<crate::State>,
 	ClientIp(client_ip): ClientIp,
+	axum::extract::RawQuery(query): axum::extract::RawQuery,
 	body: Ruma<sync_events::v3::Request>,
 ) -> Result<axum::response::Response, RumaResponse<UiaaResponse>> {
 	let (sender_user, sender_device) = body.sender();
@@ -206,8 +207,12 @@ pub(crate) async fn sync_events_route(
 	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.watch(sender_user, sender_device);
 
-	let response = build_sync_events(&services, &body).await?;
-	if body.body.since.is_none() || body.body.full_state || !is_sync_response_empty(&response) {
+	let use_state_after = query.as_deref().is_some_and(|q| {
+		q.contains("use_state_after=true") || q.contains("org.matrix.msc4222.state_after")
+	}) && services.config.experimental_features.msc4222_enabled;
+
+	let response = build_sync_events(&services, &body, use_state_after).await?;
+	if body.body.full_state || !is_sync_response_empty(&response) {
 		return Ok(axum::Json(response).into_response());
 	}
 
@@ -218,7 +223,7 @@ pub(crate) async fn sync_events_route(
 	_ = tokio::time::timeout(duration, watcher).await;
 
 	// Retry returning data
-	let response = build_sync_events(&services, &body).await?;
+	let response = build_sync_events(&services, &body, use_state_after).await?;
 	Ok(axum::Json(response).into_response())
 }
 
@@ -239,6 +244,7 @@ fn is_sync_response_empty(val: &serde_json::Value) -> bool {
 pub(crate) async fn build_sync_events(
 	services: &Services,
 	body: &Ruma<sync_events::v3::Request>,
+	use_state_after: bool,
 ) -> Result<serde_json::Value, RumaResponse<UiaaResponse>> {
 	let (syncing_user, syncing_device) = body.sender();
 
@@ -274,34 +280,42 @@ pub(crate) async fn build_sync_events(
 		current_count,
 		full_state,
 		filter: &filter,
+		use_state_after,
 	};
 
 	let joined_rooms = services
 		.rooms
 		.state_cache
 		.rooms_joined(syncing_user)
-		.map(ToOwned::to_owned)
-		.broad_filter_map(|room_id| async {
-			let joined_room = load_joined_room(services, context, room_id.clone()).await;
+		.broad_filter_map(|room_id| async move {
+			let joined_room = load_joined_room(services, context, room_id.to_owned()).await;
 
 			match joined_room {
-				| Ok((room, state_after, updates)) => Some((room_id, room, state_after, updates)),
+				| Ok((room, state_after, updates)) => Some((room_id.to_owned(), room, state_after, updates)),
 				| Err(err) => {
-					warn!(?err, %room_id, "error loading joined room");
+					error!(?err, %room_id, "error loading joined room");
 					None
 				},
 			}
 		})
 		.ready_fold(
-			(BTreeMap::new(), BTreeMap::new(), DeviceListUpdates::new()),
-			|(mut joined_rooms, mut joined_state_after, mut all_updates),
-			 (room_id, joined_room, state_after, updates)| {
+			(
+				BTreeMap::<ruma::OwnedRoomId, JoinedRoom>::new(),
+				BTreeMap::<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>::new(),
+				DeviceListUpdates::new(),
+			),
+			|(mut joined_rooms, mut joined_state_after, mut all_updates): (
+				BTreeMap<ruma::OwnedRoomId, JoinedRoom>,
+				BTreeMap<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>,
+				DeviceListUpdates,
+			),
+			 (room_id, joined_room, state_after, updates): (ruma::OwnedRoomId, JoinedRoom, Vec<Raw<ruma::events::AnySyncStateEvent>>, DeviceListUpdates)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() || context.last_sync_end_count.is_none() {
+				if !joined_room.is_empty() {
 					joined_rooms.insert(room_id.clone(), joined_room);
 					if !state_after.is_empty() {
-						joined_state_after.insert(room_id, state_after);
+						joined_state_after.insert(room_id.clone(), state_after);
 					}
 				}
 
@@ -320,14 +334,20 @@ pub(crate) async fn build_sync_events(
 				| Ok(Some((room, state_after))) => Some((room_id, room, state_after)),
 				| Ok(None) => None,
 				| Err(err) => {
-					warn!(?err, %room_id, "error loading joined room");
+					error!(?err, %room_id, "error loading joined room");
 					None
 				},
 			}
 		})
 		.fold(
-			(BTreeMap::new(), BTreeMap::new()),
-			|(mut left_rooms, mut left_state_after), (room_id, left_room, state_after)| async move {
+			(
+				BTreeMap::<ruma::OwnedRoomId, LeftRoom>::new(),
+				BTreeMap::<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>::new(),
+			),
+			|(mut left_rooms, mut left_state_after): (
+				BTreeMap<ruma::OwnedRoomId, LeftRoom>,
+				BTreeMap<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>,
+			), (room_id, left_room, state_after): (ruma::OwnedRoomId, LeftRoom, Vec<Raw<ruma::events::AnySyncStateEvent>>)| async move {
 				left_rooms.insert(room_id.clone(), left_room);
 				if !state_after.is_empty() {
 					left_state_after.insert(room_id, state_after);
@@ -357,9 +377,9 @@ pub(crate) async fn build_sync_events(
 
 			// only sync this invite if it was sent after the last /sync call
 			if last_sync_end_count < invite_count {
-				let invited_room = InvitedRoom {
-					invite_state: InviteState { events: invite_state },
-				};
+				let invited_room = assign!(InvitedRoom::new(), {
+					invite_state: InviteState::from(invite_state),
+				});
 
 				invited_rooms.insert(room_id, invited_room);
 			}
@@ -380,20 +400,14 @@ pub(crate) async fn build_sync_events(
 
 			// only sync this knock if it was sent after the last /sync call
 			if last_sync_end_count < knock_count {
-				let knocked_room = KnockedRoom {
-					knock_state: KnockState { events: knock_state },
-				};
+				let knocked_room = assign!(KnockedRoom::new(), {
+					knock_state: assign!(KnockState::new(), { events: knock_state }),
+				});
 
 				knocked_rooms.insert(room_id, knocked_room);
 			}
 			knocked_rooms
 		});
-
-	let (joined_rooms, left_rooms, invited_rooms, knocked_rooms) =
-		join4(joined_rooms, left_rooms, invited_rooms, knocked_rooms).await;
-
-	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
-	let (left_rooms, left_state_after) = left_rooms;
 
 	let presence_updates: OptionFuture<_> = services
 		.config
@@ -401,19 +415,11 @@ pub(crate) async fn build_sync_events(
 		.then(|| process_presence_updates(services, last_sync_end_count, syncing_user))
 		.into();
 
-	let account_data: Vec<Raw<AnyGlobalAccountDataEvent>> = services
+	let account_data = services
 		.account_data
 		.changes_since(None, syncing_user, last_sync_end_count, Some(current_count))
 		.ready_filter_map(|e| extract_variant!(e, AnyRawAccountDataEvent::Global))
-		.collect()
-		.await;
-
-	// Look for device list updates of this account
-	let keys_changed = services
-		.users
-		.keys_changed(syncing_user, last_sync_end_count, Some(current_count))
-		.map(ToOwned::to_owned)
-		.collect::<HashSet<_>>();
+		.collect();
 
 	let to_device_events = services
 		.users
@@ -426,35 +432,57 @@ pub(crate) async fn build_sync_events(
 		.map(at!(1))
 		.collect::<Vec<_>>();
 
+	// Look for device list updates of this account
+	let keys_changed = services
+		.users
+		.keys_changed(syncing_user, last_sync_end_count, Some(current_count))
+		.map(ToOwned::to_owned)
+		.collect::<HashSet<_>>();
+
 	let device_one_time_keys_count = services
 		.users
 		.count_one_time_keys(syncing_user, syncing_device);
 
-	// Remove all to-device events the device received *last time*
-	let remove_to_device_events =
-		services
-			.users
-			.remove_to_device_events(syncing_user, syncing_device, last_sync_end_count);
+	let (
+		(joined_rooms, joined_state_after, mut device_list_updates),
+		(left_rooms, left_state_after),
+		invited_rooms,
+		knocked_rooms,
+		presence_updates,
+		account_data,
+		to_device_events,
+		keys_changed,
+		device_one_time_keys_count,
+	) = async {
+		futures::join!(
+			joined_rooms,
+			left_rooms,
+			invited_rooms,
+			knocked_rooms,
+			presence_updates,
+			account_data,
+			to_device_events,
+			keys_changed,
+			device_one_time_keys_count,
+		)
+	}
+	.boxed()
+	.await;
 
-	let ephemeral = join3(remove_to_device_events, to_device_events, presence_updates);
-	let top = join3(ephemeral, device_one_time_keys_count, keys_changed)
-		.boxed()
+	// Remove all to-device events the device received *last time*
+	services
+		.users
+		.remove_to_device_events(syncing_user, syncing_device, last_sync_end_count)
 		.await;
 
-	let (ephemeral, device_one_time_keys_count, keys_changed) = top;
-	let ((), to_device_events, presence_updates) = ephemeral;
-	let mut device_list_updates: DeviceLists = device_list_updates.into();
 	device_list_updates.changed.extend(keys_changed);
 
-	let ruma_response = sync_events::v3::Response {
-		next_batch: current_count.to_string(),
-		rooms: Rooms {
-			leave: left_rooms,
-			join: joined_rooms,
-			invite: invited_rooms,
-			knock: knocked_rooms,
-		},
-		presence: Presence {
+	let ruma_response = assign!(sync_events::v3::Response::new(current_count.to_string()), {
+		account_data: assign!(GlobalAccountData::new(), { events: account_data }),
+		device_lists: device_list_updates.into(),
+		device_one_time_keys_count,
+		device_unused_fallback_key_types: None,
+		presence: assign!(Presence::new(), {
 			events: presence_updates
 				.into_iter()
 				.flat_map(IntoIterator::into_iter)
@@ -462,13 +490,15 @@ pub(crate) async fn build_sync_events(
 				.map(|ref event| Raw::new(event))
 				.filter_map(Result::ok)
 				.collect(),
-		},
-		account_data: GlobalAccountData { events: account_data },
-		to_device: ToDevice { events: to_device_events },
-		device_lists: device_list_updates,
-		device_one_time_keys_count,
-		device_unused_fallback_key_types: None,
-	};
+		}),
+		rooms: assign!(Rooms::new(), {
+			leave: left_rooms,
+			join: joined_rooms,
+			invite: invited_rooms,
+			knock: knocked_rooms,
+		}),
+		to_device: assign!(ToDevice::new(), { events: to_device_events }),
+	});
 
 	let mut val: serde_json::Value = serde_json::from_slice(
 		ruma_response

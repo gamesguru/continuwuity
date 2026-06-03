@@ -39,7 +39,7 @@ use ruma::{
 	uint,
 };
 
-use super::shares_a_room;
+use super::share_encrypted_room;
 use crate::{
 	Ruma,
 	client::{
@@ -929,7 +929,7 @@ where
 								match content.membership {
 									| MembershipState::Join => {
 										// A new user joined an encrypted room
-										if !shares_a_room(
+										if !share_encrypted_room(
 											services,
 											sender_user,
 											user_id,
@@ -963,7 +963,7 @@ where
 						// only send keys if the sender doesn't share a room with the target
 						// already
 						.filter_map(|user_id| async move {
-							(!shares_a_room(services, sender_user, user_id, Some(room_id)).await)
+							(!share_encrypted_room(services, sender_user, user_id, Some(room_id)).await)
 								.then(|| user_id.to_owned())
 						})
 						.collect::<Vec<_>>()
@@ -985,11 +985,11 @@ where
 	}
 
 	for user_id in left_encrypted_users {
-		let dont_shares_a_room = !shares_a_room(services, sender_user, &user_id, None).await;
+		let dont_share_encrypted_room = !share_encrypted_room(services, sender_user, &user_id, None).await;
 
-		// If the user doesn't share a room with the target anymore, we need
+		// If the user doesn't share an encrypted room with the target anymore, we need
 		// to tell them
-		if dont_shares_a_room {
+		if dont_share_encrypted_room {
 			device_list_left.insert(user_id);
 		}
 	}
