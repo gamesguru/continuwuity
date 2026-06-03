@@ -159,12 +159,12 @@ async fn share_encrypted_room(
 		.rooms
 		.state_cache
 		.get_shared_rooms(sender_user, user_id)
-		.ready_filter(|room_id| Some(room_id.as_ref()) != ignore_room)
+		.ready_filter(|room_id| Some(*room_id) != ignore_room)
 		.broad_any(|other_room_id| async move {
 			services
 				.rooms
 				.state_accessor
-				.is_encrypted_room(&other_room_id)
+				.is_encrypted_room(other_room_id)
 				.await
 		})
 		.await

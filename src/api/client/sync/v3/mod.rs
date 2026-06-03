@@ -241,6 +241,10 @@ fn is_sync_response_empty(val: &serde_json::Value) -> bool {
 	rooms_empty && presence_empty && account_data_empty && to_device_empty && device_lists_empty
 }
 
+type RoomStateMap = BTreeMap<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>;
+type JoinedRooms = BTreeMap<ruma::OwnedRoomId, JoinedRoom>;
+type LeftRooms = BTreeMap<ruma::OwnedRoomId, LeftRoom>;
+
 pub(crate) async fn build_sync_events(
 	services: &Services,
 	body: &Ruma<sync_events::v3::Request>,
@@ -300,14 +304,10 @@ pub(crate) async fn build_sync_events(
 			}
 		})
 		.ready_fold(
-			(
-				BTreeMap::<ruma::OwnedRoomId, JoinedRoom>::new(),
-				BTreeMap::<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>::new(),
-				DeviceListUpdates::new(),
-			),
+			(JoinedRooms::new(), RoomStateMap::new(), DeviceListUpdates::new()),
 			|(mut joined_rooms, mut joined_state_after, mut all_updates): (
-				BTreeMap<ruma::OwnedRoomId, JoinedRoom>,
-				BTreeMap<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>,
+				JoinedRooms,
+				RoomStateMap,
 				DeviceListUpdates,
 			),
 			 (room_id, joined_room, state_after, updates): (
@@ -321,7 +321,7 @@ pub(crate) async fn build_sync_events(
 				if !joined_room.is_empty() || context.last_sync_end_count.is_none() {
 					joined_rooms.insert(room_id.clone(), joined_room);
 					if !state_after.is_empty() {
-						joined_state_after.insert(room_id.clone(), state_after);
+						joined_state_after.insert(room_id, state_after);
 					}
 				}
 
@@ -346,14 +346,8 @@ pub(crate) async fn build_sync_events(
 			}
 		})
 		.fold(
-			(
-				BTreeMap::<ruma::OwnedRoomId, LeftRoom>::new(),
-				BTreeMap::<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>::new(),
-			),
-			|(mut left_rooms, mut left_state_after): (
-				BTreeMap<ruma::OwnedRoomId, LeftRoom>,
-				BTreeMap<ruma::OwnedRoomId, Vec<Raw<ruma::events::AnySyncStateEvent>>>,
-			),
+			(LeftRooms::new(), RoomStateMap::new()),
+			|(mut left_rooms, mut left_state_after): (LeftRooms, RoomStateMap),
 			 (room_id, left_room, state_after): (
 				ruma::OwnedRoomId,
 				LeftRoom,
