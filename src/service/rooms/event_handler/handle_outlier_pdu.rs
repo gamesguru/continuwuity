@@ -271,6 +271,7 @@ where
 				&incoming_pdu,
 				Some(room_id),
 			);
+			self.services.pdu_metadata.mark_event_rejected(pdu_event.event_id());
 			return Err!(Request(Forbidden("Event depends on rejected auth event {aid}")));
 		}
 
@@ -430,6 +431,7 @@ where
 							&incoming_pdu,
 							Some(room_id),
 						);
+						self.services.pdu_metadata.mark_event_rejected(pdu_event.event_id());
 						return Err!(Request(Forbidden(
 							"Event depends on rejected auth event {id}"
 						)));
@@ -471,6 +473,7 @@ where
 				&incoming_pdu,
 				Some(room_id),
 			);
+			self.services.pdu_metadata.mark_event_rejected(pdu_event.event_id());
 			return Err!(Request(Forbidden("Event depends on rejected auth event {id}")));
 		}
 
