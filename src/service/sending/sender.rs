@@ -152,9 +152,8 @@ impl Service {
 		e: &Error,
 	) {
 		match e {
-			| Error::FederationTimeout(..) | Error::FederationConnection(..) => {
-				tracing::warn!(dest = ?dest, "{e:?}");
-			},
+			| Error::FederationTimeout(..) | Error::FederationConnection(..) =>
+				tracing::warn!(dest = ?dest, "{e:?}"),
 			| _ if e.status_code().is_server_error() => tracing::warn!(dest = ?dest, "{e:?}"),
 			| _ => info!(dest = ?dest, "{e:?}"),
 		}
@@ -164,11 +163,6 @@ impl Service {
 		// destination with exponential backoff, which would block unrelated follow-up
 		// requests.
 		if e.status_code().is_client_error() && e.status_code().as_u16() != 429 {
-			let dest_clone = dest.clone();
-			let db = self.db.clone();
-			self.server.runtime().spawn(async move {
-				db.delete_all_active_requests_for(&dest_clone).await;
-			});
 			statuses.remove(&dest);
 			return;
 		}
@@ -340,13 +334,8 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
-		if matches!(msg.event, SendingEvent::Wakeup) {
-			statuses.remove(&msg.dest);
-		}
-
 		let _cork = self.db.db.cork();
-		let is_real_flush = matches!(msg.event, SendingEvent::Flush);
-		let is_flush = is_real_flush || matches!(msg.event, SendingEvent::Wakeup);
+		let is_flush = matches!(msg.event, SendingEvent::Flush);
 		let iv = if !is_flush {
 			vec![(msg.queue_id, msg.event)]
 		} else {
@@ -374,7 +363,7 @@ impl Service {
 			} else {
 				statuses.remove(&msg.dest);
 			}
-		} else if is_flush && is_real_flush {
+		} else if is_flush {
 			// Flush was rejected (e.g., backoff still active). Re-schedule
 			// at the remaining backoff time to avoid hot-polling the channel.
 			let delay = self.remaining_backoff(&msg.dest, statuses);
@@ -969,14 +958,14 @@ impl Service {
 							edu_jsons.push(edu);
 						}
 					},
-				| SendingEvent::Flush | SendingEvent::Wakeup => {}, // flush only; no new content
+				| SendingEvent::Flush => {}, // flush only; no new content
 			}
 		}
 
 		let txn_hash = calculate_hash(events.iter().filter_map(|e| match e {
 			| SendingEvent::Edu(b) => Some(&**b),
 			| SendingEvent::Pdu(b) => Some(b.as_ref()),
-			| SendingEvent::Flush | SendingEvent::Wakeup => None,
+			| SendingEvent::Flush => None,
 		}));
 
 		let txn_id = &*URL_SAFE_NO_PAD.encode(txn_hash);
@@ -1035,7 +1024,7 @@ impl Service {
 						pdus.push(pdu);
 					}
 				},
-				| SendingEvent::Edu(_) | SendingEvent::Flush | SendingEvent::Wakeup => {
+				| SendingEvent::Edu(_) | SendingEvent::Flush => {
 					// Push gateways don't need EDUs (?) and flush only;
 					// no new content
 				},
