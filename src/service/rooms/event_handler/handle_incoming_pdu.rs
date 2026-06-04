@@ -394,6 +394,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 						"Storing incoming PDU as outlier; missing auth events will be \
 						 fetched in background"
 					);
+					self.services.pdu_metadata.mark_event_rejected(event_id);
 					self.services
 						.outlier
 						.add_pdu_outlier(event_id, &value, Some(room_id));
