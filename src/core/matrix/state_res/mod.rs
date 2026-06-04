@@ -1180,9 +1180,18 @@ where
 		// partially-resolved PL state, which is needed to find the
 		// sender's join event during leave/kick auth checks.
 		{
+			let empty_map_rules = room_version
+				.state_res
+				.begin_iterative_auth_checks_with_empty_state_map();
 			let supplemental: Vec<_> = auth_types
 				.iter()
 				.stream()
+				.filter(|key| {
+					future::ready(
+						!(empty_map_rules
+							&& **key != (StateEventType::RoomPowerLevels, "".into())),
+					)
+				})
 				.ready_filter_map(|key| Some((key, resolved_state.get(key)?)))
 				.filter_map(|(key, ev_id)| async move {
 					// Exclude rejected events from resolved_state (Synapse parity)
@@ -1383,6 +1392,7 @@ where
 	// We use Option<usize> so that None < Some(0) in Rust's natural Ord ordering.
 	let mut event_to_mainline: HashMap<&OwnedEventId, Option<usize>> = HashMap::new();
 	let mut event_ts: HashMap<&OwnedEventId, MilliSecondsSinceUnixEpoch> = HashMap::new();
+	let mut cache: HashMap<OwnedEventId, Option<usize>> = HashMap::new();
 
 	for ev_id in to_sort {
 		let Some(event) = fetch_event(ev_id.clone()).await else {
@@ -1418,6 +1428,10 @@ where
 						break;
 					}
 					path.push(current_id.clone());
+					if let Some(&depth) = cache.get(&current_id) {
+						found_depth = depth;
+						break;
+					}
 					if let Some(&depth) = mainline_depth.get(&current_id) {
 						found_depth = Some(depth);
 						break;
@@ -1434,10 +1448,8 @@ where
 					}
 				}
 
-				if let Some(depth) = found_depth {
-					for id in path {
-						mainline_depth.insert(id, depth);
-					}
+				for id in path {
+					cache.insert(id, found_depth);
 				}
 				found_depth
 			};
@@ -1494,24 +1506,17 @@ async fn add_event_and_auth_chain_to_graph<E, F, Fut>(
 	Fut: Future<Output = Option<E>> + Send,
 	E: Event + Send + Sync,
 {
-	let mut state = vec![event_id];
-	while let Some(eid) = state.pop() {
-		graph.entry(eid.clone()).or_default();
-		let event = fetch_event(eid.clone()).await;
-		let auth_events = event.as_ref().map(Event::auth_events).into_iter().flatten();
+	graph.entry(event_id.clone()).or_default();
+	let event = fetch_event(event_id.clone()).await;
+	let auth_events = event.as_ref().map(Event::auth_events).into_iter().flatten();
 
-		// Prefer the store to event as the store filters dedups the events
-		for aid in auth_events {
-			if auth_diff.contains(aid) {
-				if !graph.contains_key(aid) {
-					state.push(aid.to_owned());
-				}
-
-				graph
-					.get_mut(&eid)
-					.expect("We just inserted this at the start of the while loop")
-					.insert(aid.to_owned());
-			}
+	// 1-hop at a time
+	for aid in auth_events {
+		if auth_diff.contains(aid) {
+			graph
+				.get_mut(&event_id)
+				.expect("We just inserted this")
+				.insert(aid.to_owned());
 		}
 	}
 }
@@ -1534,9 +1539,8 @@ fn is_type_and_key(ev: &impl Event, ev_type: &TimelineEventType, state_key: &str
 
 fn is_power_event(event: &impl Event) -> bool {
 	match event.event_type() {
-		| TimelineEventType::RoomPowerLevels
-		| TimelineEventType::RoomJoinRules
-		| TimelineEventType::RoomCreate => event.state_key() == Some(""),
+		| TimelineEventType::RoomPowerLevels | TimelineEventType::RoomCreate =>
+			event.state_key() == Some(""),
 		| TimelineEventType::RoomMember => {
 			if let Ok(content) = from_json_str::<RoomMemberEventContent>(event.content().get()) {
 				if [MembershipState::Leave, MembershipState::Ban].contains(&content.membership) {

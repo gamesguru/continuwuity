@@ -73,7 +73,6 @@ pub enum SendingEvent {
 	Pdu(RawPduId), // pduid
 	Edu(EduBuf),   // edu json
 	Flush,         // none
-	Wakeup,        // none, specifically clears backoff
 }
 
 pub type EduBuf = SmallVec<[u8; EDU_BUF_CAP]>;
@@ -546,21 +545,6 @@ impl Service {
 		for key in &keys {
 			self.db.servercurrentevent_data.remove(key);
 		}
-	}
-
-	/// Clears the exponential backoff for the given server and wakes up the
-	/// sender
-	pub fn clear_backoff(&self, server: &ServerName) {
-		if self.dead_servers.read().unwrap().contains(server) {
-			self.dead_servers.write().unwrap().remove(server);
-		}
-
-		let dest = Destination::Federation(server.to_owned());
-		let _ = self.dispatch(Msg {
-			dest,
-			event: SendingEvent::Wakeup,
-			queue_id: Vec::new(),
-		});
 	}
 }
 

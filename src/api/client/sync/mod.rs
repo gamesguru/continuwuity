@@ -118,18 +118,33 @@ async fn load_timeline(
 		},
 	};
 
-	// Return at most `limit` PDUs from the stream
-	let pdus = pdu_stream
-		.by_ref()
-		.take(limit)
-		.ready_fold(VecDeque::with_capacity(limit), |mut pdus, item| {
-			pdus.push_front(item);
-			pdus
-		})
-		.await;
+	let mut pdus = VecDeque::with_capacity(limit);
+	let mut limited = false;
 
-	// The timeline is limited if there are still more PDUs in the stream
-	let limited = pdu_stream.next().await.is_some();
+	while let Some(item) = pdu_stream.next().await {
+		// Check for a topological gap BEFORE this event
+		let mut gap_found = false;
+		if starting_count.is_some() {
+			for prev_id in item.1.prev_events() {
+				if services.rooms.timeline.get_pdu_count(prev_id).await.is_err() {
+					gap_found = true;
+					break;
+				}
+			}
+		}
+
+		pdus.push_front(item);
+
+		if gap_found {
+			limited = true;
+			break;
+		}
+
+		if pdus.len() >= limit {
+			limited = pdu_stream.next().await.is_some();
+			break;
+		}
+	}
 
 	trace!(
 		"syncing {:?} timeline pdus from {:?} to {:?} (limited = {:?})",

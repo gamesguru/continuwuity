@@ -245,7 +245,7 @@ where
 						debug!("Got {next_id} over federation from {successful_server}");
 
 						let room_version_id = match create_event {
-							| Some(ce) => {
+							| Some(ce) =>
 								match crate::rooms::event_handler::get_room_version_id(ce) {
 									| Ok(v) => v,
 									| Err(_) => {
@@ -256,8 +256,7 @@ where
 										back_off(next_id.clone());
 										continue;
 									},
-								}
-							},
+								},
 							| None => {
 								let mut version = None;
 								if let Ok(json) =
@@ -411,7 +410,7 @@ where
 						);
 
 						let room_version_id = match create_event {
-							| Some(ce) => {
+							| Some(ce) =>
 								match crate::rooms::event_handler::get_room_version_id(ce) {
 									| Ok(v) => v,
 									| Err(_) => {
@@ -422,8 +421,7 @@ where
 										back_off(next_id.clone());
 										continue;
 									},
-								}
-							},
+								},
 							| None =>
 								if let Some(override_v) = room_version_override {
 									override_v.clone()

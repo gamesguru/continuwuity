@@ -420,17 +420,30 @@ where
 			}
 
 			// Re-check: are we still missing auth events after /event_auth?
-			let still_missing: Vec<_> = pdu_event
-				.auth_events()
-				.filter(|id| !auth_events.contains_key(*id))
-				.collect();
+			let mut still_missing = Vec::new();
+			for id in pdu_event.auth_events() {
+				if !auth_events.contains_key(id) {
+					if self.services.pdu_metadata.is_event_rejected(id).await {
+						self.services.pdu_metadata.mark_event_rejected(event_id);
+						self.services.outlier.add_pdu_outlier(
+							pdu_event.event_id(),
+							&incoming_pdu,
+							Some(room_id),
+						);
+						return Err!(Request(Forbidden(
+							"Event depends on rejected auth event {id}"
+						)));
+					}
+					still_missing.push(id.to_owned());
+				}
+			}
+
 			if !still_missing.is_empty() {
 				debug_info!(
 					"Still missing {} auth events for {event_id} after /event_auth",
 					still_missing.len()
 				);
-				let missing: Vec<_> = still_missing.into_iter().map(ToOwned::to_owned).collect();
-				return Err!(MissingAuthEvents(missing));
+				return Err!(MissingAuthEvents(still_missing));
 			}
 		} else {
 			info!(

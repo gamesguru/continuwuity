@@ -215,11 +215,6 @@ async fn process_inbound_transaction(
 		.transactions_processed
 		.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-	// The sender is alive and sending us data, clear their backoff so we can
-	// immediately push any queued events (e.g. reliable to-device messages) to
-	// them.
-	services.sending.clear_backoff(body.origin());
-
 	// Spawn EDU processing into background so PDU pipeline starts immediately.
 	// EDUs are lightweight DB writes (to-device, receipts, typing) that don't
 	// need to block the transaction response.
