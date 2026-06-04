@@ -391,13 +391,8 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 						target: "state_res_debug",
 						event_id = %event_id,
 						count = missing.len(),
-						"Storing incoming PDU as outlier; missing auth events will be \
-						 fetched in background"
+						"Missing auth events could not be fetched via /state_ids. Dropping event until referenced again."
 					);
-					self.services
-						.outlier
-						.add_pdu_outlier(event_id, &value, Some(room_id));
-
 					return Ok(None);
 				},
 			}

@@ -466,6 +466,8 @@ where
 	for id in pdu_event.auth_events() {
 		// Re-check for rejected auth events. We might have fetched them via /event_auth
 		// and discovered they were rejected. If they are, this event must be rejected.
+		// NOTE: We must check this EVEN IF the event is present in auth_events (e.g.
+		// from local DB)
 		if self.services.pdu_metadata.is_event_rejected(id).await {
 			self.services.pdu_metadata.mark_event_rejected(event_id);
 			self.services.outlier.add_pdu_outlier(
