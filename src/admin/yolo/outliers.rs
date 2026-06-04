@@ -159,7 +159,7 @@ pub(super) async fn purge_outliers(
 			.map(|(event_id, _)| event_id)
 			.collect()
 			.await
-	} else {
+	} else if sender.is_some() {
 		self.services
 			.rooms
 			.outlier
@@ -171,6 +171,8 @@ pub(super) async fn purge_outliers(
 			.map(|(event_id, _)| event_id)
 			.collect()
 			.await
+	} else {
+		self.services.rooms.outlier.stream_keys().collect().await
 	};
 
 	let purged = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));

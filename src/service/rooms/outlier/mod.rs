@@ -67,6 +67,11 @@ pub async fn get_pdu_outlier(&self, event_id: &EventId) -> Result<PduEvent> {
 }
 
 #[implement(Service)]
+pub fn stream_keys(&self) -> impl Stream<Item = OwnedEventId> + Send + '_ {
+	self.db.eventid_outlierpdu.keys().ignore_err()
+}
+
+#[implement(Service)]
 pub fn stream(&self) -> impl Stream<Item = (OwnedEventId, PduEvent)> + Send + '_ {
 	self.db
 		.eventid_outlierpdu

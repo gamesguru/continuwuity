@@ -420,32 +420,17 @@ where
 			}
 
 			// Re-check: are we still missing auth events after /event_auth?
-			// If we failed to fetch an auth event because it was invalid/rejected,
-			// we MUST reject this event instead of treating it as merely "missing".
-			let mut still_missing = Vec::new();
-			for id in pdu_event.auth_events() {
-				if !auth_events.contains_key(id) {
-					if self.services.pdu_metadata.is_event_rejected(id).await {
-						self.services.pdu_metadata.mark_event_rejected(event_id);
-						self.services.outlier.add_pdu_outlier(
-							pdu_event.event_id(),
-							&incoming_pdu,
-							Some(room_id),
-						);
-						return Err!(Request(Forbidden(
-							"Event depends on rejected auth event {id}"
-						)));
-					}
-					still_missing.push(id.to_owned());
-				}
-			}
-
+			let still_missing: Vec<_> = pdu_event
+				.auth_events()
+				.filter(|id| !auth_events.contains_key(*id))
+				.collect();
 			if !still_missing.is_empty() {
 				debug_info!(
 					"Still missing {} auth events for {event_id} after /event_auth",
 					still_missing.len()
 				);
-				return Err!(MissingAuthEvents(still_missing));
+				let missing: Vec<_> = still_missing.into_iter().map(ToOwned::to_owned).collect();
+				return Err!(MissingAuthEvents(missing));
 			}
 		} else {
 			info!(
@@ -466,8 +451,6 @@ where
 	for id in pdu_event.auth_events() {
 		// Re-check for rejected auth events. We might have fetched them via /event_auth
 		// and discovered they were rejected. If they are, this event must be rejected.
-		// NOTE: We must check this EVEN IF the event is present in auth_events (e.g.
-		// from local DB)
 		if self.services.pdu_metadata.is_event_rejected(id).await {
 			self.services.pdu_metadata.mark_event_rejected(event_id);
 			self.services.outlier.add_pdu_outlier(
