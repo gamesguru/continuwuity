@@ -718,8 +718,9 @@ pub(super) async fn rescue_room(
 			"Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded, {failed} \
 			 failed)."
 		),
-		| (true, false) =>
-			format!("Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded)."),
+		| (true, false) => {
+			format!("Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded).")
+		},
 		| (false, true) => format!(
 			"Rescued {count} PDUs in room {room_id} ({failed} failed — check server logs for \
 			 details)."
