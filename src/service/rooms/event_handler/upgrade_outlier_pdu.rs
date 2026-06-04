@@ -112,10 +112,38 @@ where
 
 	let room_version = to_room_version(&room_version_id);
 
-	// Pre-fetch missing auth chain events from federation BEFORE
-	// acquiring the room lock. This is parallel (32 concurrent) and
-	// multi-server (origin + trusted + room members) with a 300s budget.
-	// (DELETED as fetch_state now gets auth_chain completely)
+	let current_extremities: Vec<OwnedEventId> = self
+		.services
+		.state
+		.get_forward_extremities(room_id)
+		.collect()
+		.await;
+
+	let prev_events_vec: Vec<_> = incoming_pdu.prev_events().map(ToOwned::to_owned).collect();
+	let is_fast_forward = !current_extremities.is_empty()
+		&& current_extremities.len() == prev_events_vec.len()
+		&& current_extremities
+			.iter()
+			.all(|e| prev_events_vec.contains(e));
+
+	// Pre-fetch missing auth chain events from federation BEFORE state resolution.
+	// We deleted iterative pre-fetching, so for non-fast-forward state events we
+	// must blindly trigger a bulk /state_ids to ensure state_res has the auth
+	// chain.
+	if incoming_pdu.state_key().is_some() && !is_fast_forward && !skip_soft_fail {
+		debug!(
+			event_id = %incoming_pdu.event_id,
+			"Event is a DAG fork state event; pre-fetching auth chain via /state_ids"
+		);
+		let _ = Box::pin(self.fetch_state(
+			origin,
+			create_event,
+			room_id,
+			incoming_pdu.event_id(),
+			false,
+		))
+		.await;
+	}
 
 	// Re-check if the PDU was added to the timeline while we were waiting
 	if let Ok(pduid) = self
