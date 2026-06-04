@@ -407,8 +407,8 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			if msg.contains("Event depends on rejected auth event") =>
 		{
 			warn!(
-				"Event {event_id} rejected because it depends on rejected auth event. \
-				 Returning Ok(None) to acknowledge the transaction."
+				"Event {event_id} rejected because it depends on rejected auth event. Returning \
+				 Ok(None) to acknowledge the transaction."
 			);
 			return Ok(None);
 		},

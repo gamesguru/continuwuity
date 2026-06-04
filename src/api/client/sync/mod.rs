@@ -128,7 +128,13 @@ async fn load_timeline(
 		let mut gap_found = false;
 		if starting_count.is_some() {
 			for prev_id in item.1.prev_events() {
-				if services.rooms.timeline.get_pdu_count(prev_id).await.is_err() {
+				if services
+					.rooms
+					.timeline
+					.get_pdu_count(prev_id)
+					.await
+					.is_err()
+				{
 					gap_found = true;
 					break;
 				}

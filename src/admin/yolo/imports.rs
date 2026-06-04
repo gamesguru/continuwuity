@@ -22,11 +22,12 @@ pub(super) async fn import_pdus(
 		| Some(v) => v,
 		| None => match self.services.rooms.state.get_room_version(&room_id).await {
 			| Ok(v) => v,
-			| Err(_) =>
+			| Err(_) => {
 				return Err!(Request(InvalidParam(
 					"Local room version unknown. You must specify --room-version explicitly \
 					 when importing to an empty room."
-				))),
+				)));
+			},
 		},
 	};
 
