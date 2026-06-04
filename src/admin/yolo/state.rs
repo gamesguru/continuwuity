@@ -91,6 +91,7 @@ pub(super) async fn compare_room_state(
 	let mut skipped = 0_usize;
 	let mut remote_joined: HashSet<String> = HashSet::new();
 	let mut remote_invited: HashSet<String> = HashSet::new();
+	let mut remote_left: HashSet<String> = HashSet::new();
 
 	// Conflict tracking: (server_label, event_id, ts, membership, displayname,
 	// avatar_url)
@@ -154,14 +155,22 @@ pub(super) async fn compare_room_state(
 											| "join" => {
 												remote_joined.insert(state_key.to_string());
 												remote_invited.remove(state_key.as_str());
+												remote_left.remove(state_key.as_str());
 											},
 											| "invite" => {
 												remote_invited.insert(state_key.to_string());
 												remote_joined.remove(state_key.as_str());
+												remote_left.remove(state_key.as_str());
+											},
+											| "leave" => {
+												remote_left.insert(state_key.to_string());
+												remote_joined.remove(state_key.as_str());
+												remote_invited.remove(state_key.as_str());
 											},
 											| _ => {
 												remote_joined.remove(state_key.as_str());
 												remote_invited.remove(state_key.as_str());
+												remote_left.remove(state_key.as_str());
 											},
 										}
 									}
@@ -232,14 +241,22 @@ pub(super) async fn compare_room_state(
 					| "join" => {
 						remote_joined.insert(state_key.to_string());
 						remote_invited.remove(state_key.as_str());
+						remote_left.remove(state_key.as_str());
 					},
 					| "invite" => {
 						remote_invited.insert(state_key.to_string());
 						remote_joined.remove(state_key.as_str());
+						remote_left.remove(state_key.as_str());
+					},
+					| "leave" => {
+						remote_left.insert(state_key.to_string());
+						remote_joined.remove(state_key.as_str());
+						remote_invited.remove(state_key.as_str());
 					},
 					| _ => {
 						remote_joined.remove(state_key.as_str());
 						remote_invited.remove(state_key.as_str());
+						remote_left.remove(state_key.as_str());
 					},
 				}
 
@@ -292,14 +309,22 @@ pub(super) async fn compare_room_state(
 						| Some("join") => {
 							remote_joined.insert(state_key.to_string());
 							remote_invited.remove(state_key.as_str());
+							remote_left.remove(state_key.as_str());
 						},
 						| Some("invite") => {
 							remote_invited.insert(state_key.to_string());
 							remote_joined.remove(state_key.as_str());
+							remote_left.remove(state_key.as_str());
+						},
+						| Some("leave") => {
+							remote_left.insert(state_key.to_string());
+							remote_joined.remove(state_key.as_str());
+							remote_invited.remove(state_key.as_str());
 						},
 						| _ => {
 							remote_joined.remove(state_key.as_str());
 							remote_invited.remove(state_key.as_str());
+							remote_left.remove(state_key.as_str());
 						},
 					}
 				}
@@ -311,6 +336,7 @@ pub(super) async fn compare_room_state(
 	let mut local_state: HashMap<(String, String), OwnedEventId> = HashMap::new();
 	let mut local_state_joined = 0_usize;
 	let mut local_state_invited = 0_usize;
+	let mut local_state_left = 0_usize;
 	{
 		let state_full = self
 			.services
@@ -343,6 +369,9 @@ pub(super) async fn compare_room_state(
 					| "join" => local_state_joined = local_state_joined.saturating_add(1),
 					| "invite" => {
 						local_state_invited = local_state_invited.saturating_add(1);
+					},
+					| "leave" => {
+						local_state_left = local_state_left.saturating_add(1);
 					},
 					| _ => {},
 				}
@@ -453,8 +482,10 @@ pub(super) async fn compare_room_state(
 		"Local joined:    state={local_state_joined}, cache={cached_joined} {cache_status}"
 	)?;
 	writeln!(out, "Local invited:   state={local_state_invited}")?;
+	writeln!(out, "Local left:      state={local_state_left}")?;
 	writeln!(out, "Remote joined:   {}", remote_joined.len())?;
 	writeln!(out, "Remote invited:  {}", remote_invited.len())?;
+	writeln!(out, "Remote left:     {}", remote_left.len())?;
 	if tip_is_state_event {
 		writeln!(
 			out,
@@ -499,6 +530,7 @@ pub(super) async fn compare_room_state(
 			let mut verify_errors = 0_usize;
 			let mut cmp_joined: HashSet<String> = HashSet::new();
 			let mut cmp_invited: HashSet<String> = HashSet::new();
+			let mut cmp_left: HashSet<String> = HashSet::new();
 			for pdu_raw in &response.pdus {
 				let (event_id, value) = match if skip_sig_verify {
 					conduwuit::matrix::event::gen_event_id_canonical_json(pdu_raw, &room_version)
@@ -564,14 +596,22 @@ pub(super) async fn compare_room_state(
 											| "join" => {
 												cmp_joined.insert(state_key.to_string());
 												cmp_invited.remove(state_key.as_str());
+												cmp_left.remove(state_key.as_str());
 											},
 											| "invite" => {
 												cmp_invited.insert(state_key.to_string());
 												cmp_joined.remove(state_key.as_str());
+												cmp_left.remove(state_key.as_str());
+											},
+											| "leave" => {
+												cmp_left.insert(state_key.to_string());
+												cmp_joined.remove(state_key.as_str());
+												cmp_invited.remove(state_key.as_str());
 											},
 											| _ => {
 												cmp_joined.remove(state_key.as_str());
 												cmp_invited.remove(state_key.as_str());
+												cmp_left.remove(state_key.as_str());
 											},
 										}
 									}
@@ -613,14 +653,22 @@ pub(super) async fn compare_room_state(
 							| "join" => {
 								cmp_joined.insert(state_key.to_string());
 								cmp_invited.remove(state_key.as_str());
+								cmp_left.remove(state_key.as_str());
 							},
 							| "invite" => {
 								cmp_invited.insert(state_key.to_string());
 								cmp_joined.remove(state_key.as_str());
+								cmp_left.remove(state_key.as_str());
+							},
+							| "leave" => {
+								cmp_left.insert(state_key.to_string());
+								cmp_joined.remove(state_key.as_str());
+								cmp_invited.remove(state_key.as_str());
 							},
 							| _ => {
 								cmp_joined.remove(state_key.as_str());
 								cmp_invited.remove(state_key.as_str());
+								cmp_left.remove(state_key.as_str());
 							},
 						}
 
@@ -660,14 +708,22 @@ pub(super) async fn compare_room_state(
 							| Some("join") => {
 								cmp_joined.insert(key.1.clone());
 								cmp_invited.remove(&key.1);
+								cmp_left.remove(&key.1);
 							},
 							| Some("invite") => {
 								cmp_invited.insert(key.1.clone());
 								cmp_joined.remove(&key.1);
+								cmp_left.remove(&key.1);
+							},
+							| Some("leave") => {
+								cmp_left.insert(key.1.clone());
+								cmp_joined.remove(&key.1);
+								cmp_invited.remove(&key.1);
 							},
 							| _ => {
 								cmp_joined.remove(&key.1);
 								cmp_invited.remove(&key.1);
+								cmp_left.remove(&key.1);
 							},
 						}
 					}
@@ -712,11 +768,12 @@ pub(super) async fn compare_room_state(
 
 			let mut section = format!(
 				"```\n--- {server} vs {cmp_server}:\nOnly on {server}: {}  Only on \
-				 {cmp_server}: {}\n{cmp_server} joined: {}, invited: {}\n",
+				 {cmp_server}: {}\n{cmp_server} joined: {}, invited: {}, left: {}\n",
 				only_on_first.len(),
 				only_on_cmp.len(),
 				cmp_joined.len(),
-				cmp_invited.len()
+				cmp_invited.len(),
+				cmp_left.len()
 			);
 			if verify_errors > 0 {
 				writeln!(section, "Skipped (bad sig): {verify_errors}")?;
