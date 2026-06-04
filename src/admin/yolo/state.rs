@@ -497,8 +497,8 @@ pub(super) async fn compare_room_state(
 
 			let mut server_state = HashMap::new();
 			let mut verify_errors = 0_usize;
-			let mut cmp_joined = 0_usize;
-			let mut cmp_invited = 0_usize;
+			let mut cmp_joined: HashSet<String> = HashSet::new();
+			let mut cmp_invited: HashSet<String> = HashSet::new();
 			for pdu_raw in &response.pdus {
 				let (event_id, value) = match if skip_sig_verify {
 					conduwuit::matrix::event::gen_event_id_canonical_json(pdu_raw, &room_version)
@@ -554,7 +554,7 @@ pub(super) async fn compare_room_state(
 									}
 								}
 								if pdu.kind == TimelineEventType::RoomMember {
-									if pdu.state_key.is_some() {
+									if let Some(state_key) = &pdu.state_key {
 										let content: JsonValue = pdu.get_content_as_value();
 										let membership = content
 											.get("membership")
@@ -562,12 +562,17 @@ pub(super) async fn compare_room_state(
 											.unwrap_or("unknown");
 										match membership {
 											| "join" => {
-												cmp_joined = cmp_joined.saturating_add(1);
+												cmp_joined.insert(state_key.to_string());
+												cmp_invited.remove(state_key.as_str());
 											},
 											| "invite" => {
-												cmp_invited = cmp_invited.saturating_add(1);
+												cmp_invited.insert(state_key.to_string());
+												cmp_joined.remove(state_key.as_str());
 											},
-											| _ => {},
+											| _ => {
+												cmp_joined.remove(state_key.as_str());
+												cmp_invited.remove(state_key.as_str());
+											},
 										}
 									}
 								}
@@ -606,12 +611,17 @@ pub(super) async fn compare_room_state(
 							.unwrap_or("unknown");
 						match membership {
 							| "join" => {
-								cmp_joined = cmp_joined.saturating_add(1);
+								cmp_joined.insert(state_key.to_string());
+								cmp_invited.remove(state_key.as_str());
 							},
 							| "invite" => {
-								cmp_invited = cmp_invited.saturating_add(1);
+								cmp_invited.insert(state_key.to_string());
+								cmp_joined.remove(state_key.as_str());
 							},
-							| _ => {},
+							| _ => {
+								cmp_joined.remove(state_key.as_str());
+								cmp_invited.remove(state_key.as_str());
+							},
 						}
 
 						if let Some(ref ck) = conflict_key {
@@ -643,6 +653,25 @@ pub(super) async fn compare_room_state(
 
 			if let Some(ref key) = tip_key {
 				server_state.insert(key.clone(), at_event_id.clone());
+				if let Some(ref tip_pdu) = tip_pdu_opt {
+					if tip_pdu.kind == TimelineEventType::RoomMember {
+						let content: JsonValue = tip_pdu.get_content_as_value();
+						match content.get("membership").and_then(|v| v.as_str()) {
+							| Some("join") => {
+								cmp_joined.insert(key.1.clone());
+								cmp_invited.remove(&key.1);
+							},
+							| Some("invite") => {
+								cmp_invited.insert(key.1.clone());
+								cmp_joined.remove(&key.1);
+							},
+							| _ => {
+								cmp_joined.remove(&key.1);
+								cmp_invited.remove(&key.1);
+							},
+						}
+					}
+				}
 			}
 
 			let mut only_on_first = Vec::new();
@@ -683,9 +712,11 @@ pub(super) async fn compare_room_state(
 
 			let mut section = format!(
 				"```\n--- {server} vs {cmp_server}:\nOnly on {server}: {}  Only on \
-				 {cmp_server}: {}\n{cmp_server} joined: {cmp_joined}, invited: {cmp_invited}\n",
+				 {cmp_server}: {}\n{cmp_server} joined: {}, invited: {}\n",
 				only_on_first.len(),
-				only_on_cmp.len()
+				only_on_cmp.len(),
+				cmp_joined.len(),
+				cmp_invited.len()
 			);
 			if verify_errors > 0 {
 				writeln!(section, "Skipped (bad sig): {verify_errors}")?;
