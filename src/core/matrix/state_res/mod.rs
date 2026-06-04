@@ -346,7 +346,8 @@ where
 
 	for id in auth_chain_sets.iter().flatten() {
 		if !id_to_index.contains_key(id) {
-			id_to_index.insert(id, index_to_id.len() as u32);
+			let idx = u32::try_from(index_to_id.len()).expect("too many event IDs");
+			id_to_index.insert(id, idx);
 			index_to_id.push(id);
 		}
 	}
@@ -363,7 +364,7 @@ where
 			}
 		}
 		if first {
-			union = bitmap.clone();
+			union.clone_from(&bitmap);
 			intersection = bitmap;
 			first = false;
 		} else {
@@ -375,7 +376,10 @@ where
 	let diff = union - intersection;
 	let result_ids: Vec<Id> = diff
 		.into_iter()
-		.map(move |idx| (*index_to_id[idx as usize]).clone())
+		.map(move |idx| {
+			let index = usize::try_from(idx).expect("idx fits in usize");
+			(*index_to_id[index]).clone()
+		})
 		.collect();
 
 	result_ids.into_iter().stream()
