@@ -19,6 +19,7 @@ use ruma::{
 
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
+	short::ShortStateHash,
 	state_compressor::{CompressedState, HashSetCompressStateEvent},
 	timeline::RawPduId,
 };
@@ -229,9 +230,28 @@ where
 	debug!(event_id = %incoming_pdu.event_id, "Running initial auth check against state-at-event");
 	let state_fetch_state = &state_at_incoming_event;
 	let state_fetch = |k: StateEventType, s: StateKey| async move {
-		let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
-		let event_id = state_fetch_state.get(&shortstatekey)?;
-		self.services.timeline.get_pdu(event_id).await.ok()
+		match state_fetch_state {
+			| StateAtEvent::Resolved(state) => {
+				let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
+				let event_id = state.get(&shortstatekey)?;
+				self.services.timeline.get_pdu(event_id).await.ok()
+			},
+			| StateAtEvent::FastForward(shortstatehash) => {
+				let shorteventid = self
+					.services
+					.state_accessor
+					.state_get_shortid(*shortstatehash, &k, &s)
+					.await
+					.ok()?;
+				let event_id = self
+					.services
+					.short
+					.get_eventid_from_short::<Box<_>>(shorteventid)
+					.await
+					.ok()?;
+				self.services.timeline.get_pdu(&event_id).await.ok()
+			},
+		}
 	};
 
 	let auth_check_state = state_res::event_auth::auth_check(
@@ -273,17 +293,26 @@ where
 		}
 	};
 
-	let state_ids_compressed: Arc<CompressedState> = self
-		.services
-		.state_compressor
-		.compress_state_events(
-			state_at_incoming_event
-				.iter()
-				.map(|(ssk, eid)| (ssk, eid.borrow())),
-		)
-		.collect()
-		.map(Arc::new)
-		.await;
+	let state_ids_compressed = match &state_at_incoming_event {
+		| StateAtEvent::FastForward(shortstatehash) => {
+			self.services
+				.state_compressor
+				.load_shortstatehash_info(*shortstatehash)
+				.await?
+				.pop()
+				.expect("must have frame")
+				.full_state
+				.expect("must have full_state")
+				.clone() // This is Arc<CompressedState>
+		},
+		| StateAtEvent::Resolved(state) =>
+			self.services
+				.state_compressor
+				.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, eid.borrow())))
+				.collect()
+				.map(Arc::new)
+				.await,
+	};
 
 	// Finalize soft_fail before any state processing: check policy server
 	// and redaction status so we can skip expensive state resolution for
@@ -491,12 +520,24 @@ where
 	Ok(pdu_id)
 }
 
-/// Determine the room state that was in effect just before the incoming PDU
-/// was sent.  Tries local DB first; if unavailable, falls back to a
-/// synchronous `/state_ids` fetch from the sending server; if that also fails,
-/// enqueues a DAG-healer request and returns `MissingAuthEvents`.
-///
-/// When `skip_soft_fail` is set and state cannot be found at all, the current
+#[derive(Clone)]
+enum StateAtEvent {
+	Resolved(HashMap<u64, OwnedEventId>),
+	FastForward(ShortStateHash),
+}
+
+impl StateAtEvent {
+	fn is_empty(&self) -> bool {
+		match self {
+			| Self::Resolved(map) => map.is_empty(),
+			| Self::FastForward(_) => false,
+		}
+	}
+}
+
+/// Find the state-at-event for an incoming PDU. If the PDU is a fast-forward
+/// candidate we bypass full state resolution. If we are unable to resolve state
+/// (e.g. auth chain fetch fails or soft-fail is active) then the room's current
 /// room state is used as a best-effort fallback to avoid wiping state.
 #[implement(super::Service)]
 #[tracing::instrument(level = "debug", skip_all)]
@@ -508,7 +549,7 @@ async fn resolve_state_at_incoming_event<Pdu>(
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 	skip_soft_fail: bool,
-) -> Result<HashMap<u64, OwnedEventId>>
+) -> Result<StateAtEvent>
 where
 	Pdu: Event + Send + Sync,
 {
@@ -532,32 +573,13 @@ where
 	if exact_match {
 		info!(
 			"Incoming PDU matches current extremities exactly (fast-forward candidate). \
-			 Fetching current state..."
+			 Skipping full state lookup."
 		);
 		if let Ok(current_shortstatehash) =
 			self.services.state.get_room_shortstatehash(room_id).await
 		{
 			if current_shortstatehash != 0 {
-				let current_state: HashMap<_, _> = self
-					.services
-					.state_accessor
-					.state_full_shortids(current_shortstatehash)
-					.ready_filter_map(Result::ok)
-					.map(|(shortstatekey, shorteventid)| async move {
-						let event_id = self
-							.services
-							.short
-							.get_eventid_from_short::<Box<_>>(shorteventid)
-							.await
-							.ok()?;
-						Some((shortstatekey, (*event_id).to_owned()))
-					})
-					.buffer_unordered(500)
-					.filter_map(ready)
-					.collect()
-					.await;
-
-				state = Some(current_state);
+				return Ok(StateAtEvent::FastForward(current_shortstatehash));
 			}
 		}
 	}
@@ -640,7 +662,7 @@ where
 					self.services
 						.pdu_metadata
 						.mark_event_rejected(incoming_pdu.event_id());
-					return Ok(HashMap::new());
+					return Ok(StateAtEvent::Resolved(HashMap::new()));
 				}
 
 				// All prev_events exist but state hashes not computed — safe to
@@ -690,7 +712,7 @@ where
 		state = Some(current_state);
 	}
 
-	Ok(state.unwrap_or_default())
+	Ok(StateAtEvent::Resolved(state.unwrap_or_default()))
 }
 
 /// For state events: build the new post-event state, run state resolution
@@ -704,7 +726,7 @@ where
 async fn calculate_state_delta(
 	&self,
 	incoming_pdu: &PduEvent,
-	state_at_incoming_event: HashMap<u64, OwnedEventId>,
+	state_at_incoming_event: StateAtEvent,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 ) -> Result<Option<HashSetCompressStateEvent>> {
@@ -714,61 +736,97 @@ async fn calculate_state_delta(
 
 	debug!("Event is a state-event. Deriving new room state");
 
-	// We also add state after incoming event to the fork states
-	let mut state_after = state_at_incoming_event;
-	if let Some(state_key) = incoming_pdu.state_key() {
-		let shortstatekey = self
-			.services
-			.short
-			.get_or_create_shortstatekey(&incoming_pdu.kind().to_string().into(), state_key)
-			.await;
+	let new_room_state = match state_at_incoming_event {
+		| StateAtEvent::FastForward(shortstatehash) => {
+			info!("Fast-forward state update, skipping state resolution and map expansion");
+			let mut current_state_compressed = self
+				.services
+				.state_compressor
+				.load_shortstatehash_info(shortstatehash)
+				.await?
+				.pop()
+				.expect("must have frame")
+				.full_state
+				.expect("must have full_state")
+				.as_ref()
+				.clone();
 
-		let event_id = incoming_pdu.event_id();
-		state_after.insert(shortstatekey, event_id.to_owned());
-	}
+			if let Some(state_key) = incoming_pdu.state_key() {
+				let shortstatekey = self
+					.services
+					.short
+					.get_or_create_shortstatekey(
+						&incoming_pdu.kind().to_string().into(),
+						state_key,
+					)
+					.await;
 
-	// FAST PATH 2: Bypass V2.1 Auth Check explosion for non-forking events
-	let current_extremities: Vec<OwnedEventId> = self
-		.services
-		.state
-		.get_forward_extremities(room_id)
-		.collect()
-		.await;
+				let shorteventid = self
+					.services
+					.short
+					.get_or_create_shorteventid(incoming_pdu.event_id())
+					.await;
 
-	let prev_events: Vec<_> = incoming_pdu.prev_events().map(ToOwned::to_owned).collect();
-	let is_fast_forward = !current_extremities.is_empty()
-		&& current_extremities.len() == prev_events.len()
-		&& current_extremities.iter().all(|e| prev_events.contains(e));
+				if let Ok(old_shorteventid) = self
+					.services
+					.state_accessor
+					.state_get_shortid(
+						shortstatehash,
+						&incoming_pdu.kind().to_string().into(),
+						state_key,
+					)
+					.await
+				{
+					let old_compressed = crate::rooms::state_compressor::compress_state_event(
+						shortstatekey,
+						old_shorteventid,
+					);
+					current_state_compressed.remove(&old_compressed);
+				}
 
-	let new_room_state = if is_fast_forward {
-		info!("Fast-forward state update, skipping state resolution");
-		self.services
-			.state_compressor
-			.compress_state_events(
-				state_after
-					.iter()
-					.map(|(ssk, eid)| (ssk, Borrow::borrow(eid))),
-			)
-			.collect()
-			.map(Arc::new)
-			.await
-	} else {
-		let t = Instant::now();
-		info!(
-			event_id = %incoming_pdu.event_id(),
-			%room_id,
-			"state_res: starting resolve_state for incoming state event"
-		);
-		let result = self
-			.resolve_state(room_id, room_version_id, state_after)
-			.await?;
-		info!(
-			event_id = %incoming_pdu.event_id(),
-			%room_id,
-			elapsed = ?t.elapsed(),
-			"state_res: resolve_state complete"
-		);
-		result
+				let new_compressed = crate::rooms::state_compressor::compress_state_event(
+					shortstatekey,
+					shorteventid,
+				);
+				current_state_compressed.insert(new_compressed);
+			}
+
+			Arc::new(current_state_compressed)
+		},
+		| StateAtEvent::Resolved(state_after) => {
+			let mut state_after = state_after.clone();
+			if let Some(state_key) = incoming_pdu.state_key() {
+				let shortstatekey = self
+					.services
+					.short
+					.get_or_create_shortstatekey(
+						&incoming_pdu.kind().to_string().into(),
+						state_key,
+					)
+					.await;
+
+				let event_id = incoming_pdu.event_id();
+				state_after.insert(shortstatekey, event_id.to_owned());
+			}
+
+			let t = Instant::now();
+			info!(
+				event_id = %incoming_pdu.event_id(),
+				%room_id,
+				"state_res: starting resolve_state for incoming state event"
+			);
+			let result = self
+				.resolve_state(room_id, room_version_id, state_after)
+				.await?;
+			info!(
+				event_id = %incoming_pdu.event_id(),
+				%room_id,
+				elapsed = ?t.elapsed(),
+				"state_res: resolve_state complete"
+			);
+
+			result
+		},
 	};
 
 	// Save the resolved state delta into the database (safe to do concurrently)
