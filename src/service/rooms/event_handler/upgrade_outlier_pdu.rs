@@ -526,14 +526,6 @@ enum StateAtEvent {
 	FastForward(ShortStateHash),
 }
 
-impl StateAtEvent {
-	fn is_empty(&self) -> bool {
-		match self {
-			| Self::Resolved(map) => map.is_empty(),
-			| Self::FastForward(_) => false,
-		}
-	}
-}
 
 /// Find the state-at-event for an incoming PDU. If the PDU is a fast-forward
 /// candidate we bypass full state resolution. If we are unable to resolve state
