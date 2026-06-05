@@ -532,7 +532,8 @@ where
 					| Identifier::UserId(user) =>
 						self.services.state_cache.is_joined(user, room).await,
 					| Identifier::ServerName(server) =>
-						self.services.state_cache.server_in_room(server, room).await,
+						self.services.state_cache.server_in_room(server, room).await
+							|| room.server_name() == Some(*server),
 				})
 				.await;
 
