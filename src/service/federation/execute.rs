@@ -2,7 +2,7 @@ use std::{fmt::Debug, mem};
 
 use bytes::Bytes;
 use conduwuit::{
-	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, debug_info, err, implement,
+	Err, Error, Result, debug, debug::INFO_SPAN_LEVEL, debug_error, err, implement,
 	trace, utils::response::LimitReadExt,
 };
 use http::{HeaderValue, header::AUTHORIZATION};
@@ -228,7 +228,7 @@ fn handle_error(
 
 	if e.is_connect() {
 		e = e.without_url();
-		debug_info!(%dest, %method, %url, "Federation connection failed: {e:?}");
+		tracing::warn!(target = "federation_debug", %dest, %method, %url, "Federation connection failed: {e:?}");
 		return Err(Error::FederationConnection(dest.to_owned()));
 	}
 

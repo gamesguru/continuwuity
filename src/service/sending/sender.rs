@@ -153,7 +153,7 @@ impl Service {
 	) {
 		match e {
 			| Error::FederationTimeout(..) | Error::FederationConnection(..) =>
-				tracing::info!(dest = ?dest, "{e:?}"),
+				tracing::warn!(target = "federation_debug", dest = ?dest, "{e:?}"),
 			| _ if e.status_code().is_server_error() => tracing::warn!(dest = ?dest, "{e:?}"),
 			| _ => info!(dest = ?dest, "{e:?}"),
 		}
@@ -1161,11 +1161,11 @@ impl Service {
 			edus,
 		};
 
-		tracing::trace!(dest = ?server, "Sending federation request to server!");
+		tracing::warn!(target = "federation_debug", dest = ?server, "Sending federation request to server!");
 		let result = self
 			.send_federation_request_on(&self.services.client.sender, &server, request)
 			.await;
-		tracing::trace!(dest = ?server, "Finished sending federation request! Result: {:?}", result.is_ok());
+		tracing::warn!(target = "federation_debug", dest = ?server, "Finished sending federation request! Result: {:?}", result.is_ok());
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {
 			if let Err(e) = result {
