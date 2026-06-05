@@ -179,6 +179,9 @@ impl Data {
 		self.eventid_pduid.remove(event_id);
 	}
 
+	/// Drop a duplicate PDU by ID without removing the event mapping
+	pub(super) fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) { self.pduid_pdu.remove(pdu_id); }
+
 	/// Returns the pdu's id.
 	#[inline]
 	pub(super) async fn get_pdu_id(&self, event_id: &EventId) -> Result<RawPduId> {

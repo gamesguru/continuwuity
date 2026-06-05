@@ -1386,6 +1386,8 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
+	let shortroomid = self.services.short.get_shortroomid(&room_id).await?;
+
 	let pdus: Vec<(PduCount, PduEvent)> = self
 		.services
 		.rooms
@@ -1395,12 +1397,34 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 		.await;
 
 	let total = pdus.len();
-	info!("Scanning {total} timeline PDUs in {room_id} for wrong-hash duplicates");
+	info!("Scanning {total} timeline PDUs in {room_id} for wrong-hash and exact duplicates");
 
-	let mut removed = 0_usize;
+	let mut removed_wrong_hash = 0_usize;
+	let mut removed_exact = 0_usize;
 	let mut kept = 0_usize;
-	for (_, pdu) in &pdus {
+	let mut seen: std::collections::HashSet<ruma::OwnedEventId> =
+		std::collections::HashSet::new();
+
+	for (pdu_count, pdu) in &pdus {
 		let stored_event_id = pdu.event_id();
+
+		// Check for exact duplicates in the timeline
+		if seen.contains(stored_event_id) {
+			if dry_run {
+				info!("Would remove exact duplicate: {stored_event_id}");
+			} else {
+				let pdu_id: conduwuit::matrix::pdu::RawPduId =
+					conduwuit::matrix::pdu::PduId { shortroomid, shorteventid: *pdu_count }
+						.into();
+				self.services
+					.rooms
+					.timeline
+					.drop_duplicate_pdu(&pdu_id)
+					.await;
+			}
+			removed_exact = removed_exact.saturating_add(1);
+			continue;
+		}
 
 		// Load the raw JSON to recompute the correct content-hash event_id
 		let Ok(json) = self
@@ -1427,7 +1451,7 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 
 		if *stored_event_id != *correct_event_id {
 			if dry_run {
-				info!("Would remove: {stored_event_id} (correct: {correct_event_id})");
+				info!("Would remove wrong-hash: {stored_event_id} (correct: {correct_event_id})");
 			} else {
 				self.services
 					.rooms
@@ -1440,20 +1464,27 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 					.remove_outlier(stored_event_id, None)
 					.await;
 			}
-			removed = removed.saturating_add(1);
+			removed_wrong_hash = removed_wrong_hash.saturating_add(1);
 		} else {
+			seen.insert(stored_event_id.clone());
 			kept = kept.saturating_add(1);
 		}
 
-		let processed = kept.saturating_add(removed);
+		let processed = kept
+			.saturating_add(removed_wrong_hash)
+			.saturating_add(removed_exact);
 		if processed.is_multiple_of(1000) && processed > 0 {
-			info!("Dedup progress: {kept} kept, {removed} wrong-hash of {total} total");
+			info!(
+				"Dedup progress: {kept} kept, {removed_wrong_hash} wrong-hash, {removed_exact} \
+				 exact duplicates of {total} total"
+			);
 		}
 	}
 
 	let action = if dry_run { "Would remove" } else { "Removed" };
 	self.write_str(&format!(
-		"{action} {removed} wrong-hash duplicates out of {total} timeline PDUs. {kept} kept."
+		"{action} {removed_wrong_hash} wrong-hash duplicates and {removed_exact} exact \
+		 duplicates out of {total} timeline PDUs. {kept} kept."
 	))
 	.await
 }

@@ -184,6 +184,11 @@ impl Service {
 	}
 
 	#[inline]
+	pub async fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) {
+		self.db.drop_duplicate_pdu(pdu_id);
+	}
+
+	#[inline]
 	pub async fn reindex_timeline(&self, room_id: &RoomId) -> Result<usize> {
 		self.db.reindex_timeline(room_id).await
 	}
