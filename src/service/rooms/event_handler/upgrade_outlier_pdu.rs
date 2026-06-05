@@ -20,7 +20,7 @@ use ruma::{
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
 	short::ShortStateHash,
-	state_compressor::{CompressedState, HashSetCompressStateEvent},
+	state_compressor::HashSetCompressStateEvent,
 	timeline::RawPduId,
 };
 
