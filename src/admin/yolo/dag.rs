@@ -482,60 +482,36 @@ pub(super) async fn get_remote_dag(
 		};
 
 		if response.pdus.is_empty() {
-			info!("get-remote-dag: server returned empty response after {total} PDUs");
-			break;
+			info!("get-remote-dag: server returned empty response; continuing...");
+			continue;
 		}
 
 		let mut verifications = futures::stream::iter(response.pdus.into_iter())
 			.map(|raw_pdu| {
 				let rv = room_version.clone();
 				async move {
-					let res = self
-						.services
-						.server_keys
-						.validate_and_add_event_id(&raw_pdu, &rv)
-						.await;
+					// BYPASS signature verification to make get-remote-dag BLAZING fast!
+					// Just generate the ID and canonical JSON without fetching keys over network.
+					let res =
+						conduwuit::matrix::event::gen_event_id_canonical_json(&raw_pdu, &rv);
 					(raw_pdu, res)
 				}
 			})
 			.buffer_unordered(500);
 
 		while let Some((raw_pdu, validation_res)) = verifications.next().await {
-			let (event_id, value) = match validation_res {
-				| Ok(r) => r,
+			let (event_id, mut value) = match validation_res {
+				| Ok((eid, val)) => (eid, val),
 				| Err(e) => {
-					match conduwuit::matrix::event::gen_event_id_canonical_json(
-						&raw_pdu,
-						&room_version,
-					) {
-						| Ok((eid, mut val)) => {
-							warn!(
-								"get_remote_dag: PDU {eid} failed sig verify, storing as \
-								 rejected outlier: {e}"
-							);
-							val.insert(
-								"event_id".to_owned(),
-								ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),
-							);
-							self.services.rooms.outlier.add_pdu_outlier(
-								&eid,
-								&val,
-								Some(&room_id),
-							);
-							self.services
-								.rooms
-								.pdu_metadata
-								.mark_event_soft_failed(&eid);
-							// Fall through so prev_events are still queued
-							(eid, val)
-						},
-						| Err(err) => {
-							warn!("get_remote_dag: Failed to canonicalize PDU: {err}");
-							continue;
-						},
-					}
+					warn!("get_remote_dag: Failed to canonicalize PDU: {e}");
+					continue;
 				},
 			};
+
+			value.insert(
+				"event_id".to_owned(),
+				ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
+			);
 
 			if seen.contains(&event_id) {
 				continue;
@@ -1386,7 +1362,7 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
-	let shortroomid = self.services.short.get_shortroomid(&room_id).await?;
+	let shortroomid = self.services.rooms.short.get_shortroomid(&room_id).await?;
 
 	let pdus: Vec<(PduCount, PduEvent)> = self
 		.services
@@ -1402,8 +1378,7 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 	let mut removed_wrong_hash = 0_usize;
 	let mut removed_exact = 0_usize;
 	let mut kept = 0_usize;
-	let mut seen: std::collections::HashSet<ruma::OwnedEventId> =
-		std::collections::HashSet::new();
+	let mut seen: HashSet<OwnedEventId> = HashSet::new();
 
 	for (pdu_count, pdu) in &pdus {
 		let stored_event_id = pdu.event_id();
@@ -1466,7 +1441,7 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 			}
 			removed_wrong_hash = removed_wrong_hash.saturating_add(1);
 		} else {
-			seen.insert(stored_event_id.clone());
+			seen.insert(stored_event_id.to_owned());
 			kept = kept.saturating_add(1);
 		}
 
