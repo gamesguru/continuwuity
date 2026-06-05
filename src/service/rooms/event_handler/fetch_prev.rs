@@ -69,7 +69,11 @@ where
 		.concurrency_scaled(2)
 		.min(servers.len());
 	let mut active = FuturesUnordered::new();
-	for server in servers.into_iter().take(server_fanout) {
+	for server in servers {
+		if self.services.sending.server_is_dead(&server) {
+			continue;
+		}
+
 		let room_id_owned = room_id.to_owned();
 		let earliest = earliest.clone();
 		let remaining = remaining.clone();
@@ -91,6 +95,10 @@ where
 			.await;
 			(server, res, t.elapsed())
 		});
+
+		if active.len() >= server_fanout {
+			break;
+		}
 	}
 
 	let room_version_id = self.services.state.get_room_version(room_id).await?;

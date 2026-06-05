@@ -247,7 +247,7 @@ impl Service {
 
 	#[tracing::instrument(skip(self, server, serialized), level = "debug")]
 	pub fn send_edu_server(&self, server: &ServerName, serialized: EduBuf) -> Result {
-		if self.dead_servers.read().unwrap().contains(server) {
+		if self.server_is_dead(server) {
 			return Ok(());
 		}
 
@@ -545,6 +545,11 @@ impl Service {
 		for key in &keys {
 			self.db.servercurrentevent_data.remove(key);
 		}
+	}
+
+	#[inline]
+	pub fn server_is_dead(&self, server: &ServerName) -> bool {
+		self.dead_servers.read().unwrap().contains(server)
 	}
 }
 

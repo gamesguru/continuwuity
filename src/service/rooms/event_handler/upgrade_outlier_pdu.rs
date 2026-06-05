@@ -19,9 +19,7 @@ use ruma::{
 
 use super::{get_room_version_id, to_room_version};
 use crate::rooms::{
-	short::ShortStateHash,
-	state_compressor::HashSetCompressStateEvent,
-	timeline::RawPduId,
+	short::ShortStateHash, state_compressor::HashSetCompressStateEvent, timeline::RawPduId,
 };
 
 /// Upgrade an outlier PDU to a full timeline event.
@@ -525,7 +523,6 @@ enum StateAtEvent {
 	Resolved(HashMap<u64, OwnedEventId>),
 	FastForward(ShortStateHash),
 }
-
 
 /// Find the state-at-event for an incoming PDU. If the PDU is a fast-forward
 /// candidate we bypass full state resolution. If we are unable to resolve state

@@ -627,11 +627,7 @@ impl Service {
 				let base = self.server.config.sender_retry_backoff_base;
 				let max = self.server.config.sender_retry_backoff_limit;
 				let backoff = base
-					.saturating_mul(
-						1_u64
-							.checked_shl(tries.saturating_sub(1))
-							.unwrap_or(u64::MAX),
-					)
+					.saturating_mul(1_u64.checked_shl(*tries).unwrap_or(u64::MAX))
 					.min(max);
 				let total = Duration::from_secs(backoff);
 				total
