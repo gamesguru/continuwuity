@@ -163,6 +163,11 @@ impl Service {
 		// destination with exponential backoff, which would block unrelated follow-up
 		// requests.
 		if e.status_code().is_client_error() && e.status_code().as_u16() != 429 {
+			let dest_clone = dest.clone();
+			let db = self.db.clone();
+			self.server.runtime().spawn(async move {
+				db.delete_all_active_requests_for(&dest_clone).await;
+			});
 			statuses.remove(&dest);
 			return;
 		}
@@ -367,7 +372,9 @@ impl Service {
 			// Flush was rejected (e.g., backoff still active). Re-schedule
 			// at the remaining backoff time to avoid hot-polling the channel.
 			let delay = self.remaining_backoff(&msg.dest, statuses);
-			self.reschedule_flush(msg.dest, delay);
+			if delay > Duration::ZERO {
+				self.reschedule_flush(msg.dest, delay);
+			}
 		}
 	}
 
@@ -616,10 +623,8 @@ impl Service {
 	/// Calculate the remaining backoff duration for a destination.
 	/// Used to schedule retries at the correct time instead of hot-polling.
 	fn remaining_backoff(&self, dest: &Destination, statuses: &CurTransactionStatus) -> Duration {
-		const FALLBACK: Duration = Duration::from_secs(5);
-
 		let Some(status) = statuses.get(dest) else {
-			return FALLBACK;
+			return Duration::ZERO;
 		};
 
 		match status {
@@ -637,7 +642,7 @@ impl Service {
 			| TransactionStatus::Cooldown(time) => Duration::from_millis(1500)
 				.saturating_sub(time.elapsed())
 				.max(Duration::from_millis(100)),
-			| _ => FALLBACK,
+			| _ => Duration::ZERO,
 		}
 	}
 

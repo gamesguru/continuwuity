@@ -79,6 +79,7 @@ where
 
 	let mut fetched_info: HashMap<OwnedEventId, CanonicalJsonObject> = HashMap::new();
 	let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::with_capacity(128);
+	let mut auth_chain_fetched: HashSet<OwnedEventId> = HashSet::with_capacity(128);
 	let mut active_fetches = FuturesUnordered::new();
 	let fetch_concurrency = std::sync::Arc::new(tokio::sync::Semaphore::new(
 		self.services.server.concurrency_scaled(2),
@@ -560,24 +561,29 @@ where
 				},
 				| Err(e) =>
 					if let conduwuit::Error::MissingAuthEvents(missing) = &e {
-						debug_info!(
-							"Suspending outlier {next_id} to fetch {} missing auth events via \
-							 /event_auth",
-							missing.len()
-						);
-						push_auth_fetch(
-							room_id.to_owned(),
-							next_id.clone(),
-							true,
-							&mut active_fetches,
-						);
-						for auth_event in missing {
-							if !graph.contains_key(auth_event) {
-								graph.insert(auth_event.clone(), HashSet::new());
+						if auth_chain_fetched.insert(next_id.clone()) {
+							debug_info!(
+								"Suspending outlier {next_id} to fetch {} missing auth events \
+								 via /event_auth",
+								missing.len()
+							);
+							push_auth_fetch(
+								room_id.to_owned(),
+								next_id.clone(),
+								true,
+								&mut active_fetches,
+							);
+							for auth_event in missing {
+								if !graph.contains_key(auth_event) {
+									graph.insert(auth_event.clone(), HashSet::new());
+								}
 							}
+							suspended = true;
+							unprocessed.push((next_id, value));
+						} else {
+							warn!(target: "auth_chain", "Permanently backing off event {next_id} after auth chain fetch yielded incomplete auth events");
+							back_off(next_id.clone());
 						}
-						suspended = true;
-						unprocessed.push((next_id, value));
 					} else {
 						warn!(target: "auth_chain", "Permanently backing off event {next_id} after auth failure: {e:?}");
 						back_off(next_id);
