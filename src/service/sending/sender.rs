@@ -165,8 +165,21 @@ impl Service {
 		if e.status_code().is_client_error() && e.status_code().as_u16() != 429 {
 			let dest_clone = dest.clone();
 			let db = self.db.clone();
+			let sender = self
+				.channels
+				.get(self.shard_id(&dest))
+				.expect("channel")
+				.0
+				.clone();
 			self.server.runtime().spawn(async move {
 				db.delete_all_active_requests_for(&dest_clone).await;
+				sender
+					.send(Msg {
+						dest: dest_clone,
+						event: SendingEvent::Wakeup,
+						queue_id: Vec::new(),
+					})
+					.ok();
 			});
 			statuses.remove(&dest);
 			return;
