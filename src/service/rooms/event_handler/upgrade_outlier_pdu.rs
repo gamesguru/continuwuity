@@ -100,18 +100,6 @@ where
 
 	// --- Phase 1: resolve state at the incoming event (extracted to reduce frame)
 	// ---
-	let state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
-		&incoming_pdu,
-		create_event,
-		origin,
-		room_id,
-		&room_version_id,
-		skip_soft_fail,
-	))
-	.await?;
-
-	let room_version = to_room_version(&room_version_id);
-
 	let current_extremities: Vec<OwnedEventId> = self
 		.services
 		.state
@@ -144,6 +132,18 @@ where
 		))
 		.await;
 	}
+
+	let state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
+		&incoming_pdu,
+		create_event,
+		origin,
+		room_id,
+		&room_version_id,
+		skip_soft_fail,
+	))
+	.await?;
+
+	let room_version = to_room_version(&room_version_id);
 
 	// Re-check if the PDU was added to the timeline while we were waiting
 	if let Ok(pduid) = self
