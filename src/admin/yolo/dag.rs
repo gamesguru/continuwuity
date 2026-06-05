@@ -392,6 +392,8 @@ pub(super) async fn get_remote_dag(
 	let mut writer = tokio::io::BufWriter::new(file);
 
 	let mut seen = HashSet::<OwnedEventId>::new();
+	let mut queued = HashSet::<OwnedEventId>::new();
+	queued.insert(start_event_id.clone());
 	let mut queue = VecDeque::from(vec![start_event_id]);
 	let mut total = 0_usize;
 	let mut total_prev_events = 0_u64;
@@ -571,7 +573,7 @@ pub(super) async fn get_remote_dag(
 
 			// Add prev_events to the queue for next iteration
 			for prev in pdu.prev_events() {
-				if !seen.contains(prev) {
+				if queued.insert(prev.to_owned()) {
 					queue.push_back(prev.to_owned());
 				}
 			}
