@@ -158,33 +158,6 @@ impl Service {
 			| _ => info!(dest = ?dest, "{e:?}"),
 		}
 
-		// If a transaction fails with a 4xx client error (except 429 Too Many
-		// Requests), we drop the transaction but do NOT penalize the entire
-		// destination with exponential backoff, which would block unrelated follow-up
-		// requests.
-		if e.status_code().is_client_error() && e.status_code().as_u16() != 429 {
-			let dest_clone = dest.clone();
-			let db = self.db.clone();
-			let sender = self
-				.channels
-				.get(self.shard_id(&dest))
-				.expect("channel")
-				.0
-				.clone();
-			self.server.runtime().spawn(async move {
-				db.delete_all_active_requests_for(&dest_clone).await;
-				sender
-					.send(Msg {
-						dest: dest_clone,
-						event: SendingEvent::Wakeup,
-						queue_id: Vec::new(),
-					})
-					.ok();
-			});
-			statuses.remove(&dest);
-			return;
-		}
-
 		let mut tries = 1_u32;
 		statuses.entry(dest.clone()).and_modify(|e| {
 			*e = match e {
@@ -314,7 +287,7 @@ impl Service {
 			self.db.mark_as_active(new_events.iter());
 			let new_events_vec = new_events.into_iter().map(|(_, e)| e).collect();
 			statuses.insert(dest.clone(), TransactionStatus::Running);
-			futures.push(self.send_events(dest.clone(), new_events_vec, None));
+			futures.push(self.send_events(dest.clone(), new_events_vec));
 			return;
 		}
 
@@ -375,9 +348,9 @@ impl Service {
 			reqs
 		};
 
-		if let Ok(Some((events, edu_count))) = self.select_events(&msg.dest, iv, statuses).await {
+		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
-				futures.push(self.send_events(msg.dest, events, edu_count));
+				futures.push(self.send_events(msg.dest, events));
 			} else {
 				statuses.remove(&msg.dest);
 			}
@@ -454,11 +427,9 @@ impl Service {
 							old_dest
 						);
 						statuses.insert(old_dest.clone(), TransactionStatus::Running);
-						futures.push(self.send_events(
-							old_dest,
-							std::mem::take(&mut current_events),
-							None,
-						));
+						futures.push(
+							self.send_events(old_dest, std::mem::take(&mut current_events)),
+						);
 					}
 				}
 				current_dest = Some(dest.clone());
@@ -481,11 +452,7 @@ impl Service {
 					old_dest
 				);
 				statuses.insert(old_dest.clone(), TransactionStatus::Running);
-				futures.push(self.send_events(
-					old_dest,
-					std::mem::take(&mut current_events),
-					None,
-				));
+				futures.push(self.send_events(old_dest, std::mem::take(&mut current_events)));
 			}
 		}
 
@@ -540,7 +507,7 @@ impl Service {
 		dest: &Destination,
 		new_events: Vec<QueueItem>, // Events we want to send: event and full key
 		statuses: &mut CurTransactionStatus,
-	) -> Result<Option<(Vec<SendingEvent>, Option<u64>)>> {
+	) -> Result<Option<Vec<SendingEvent>>> {
 		let has_pdu = new_events
 			.iter()
 			.any(|(_, e)| matches!(e, SendingEvent::Pdu(_)));
@@ -567,7 +534,7 @@ impl Service {
 				.ready_for_each(|(_, e)| events.push(e))
 				.await;
 
-			return Ok(Some((events, None)));
+			return Ok(Some(events));
 		}
 
 		// Compose the next transaction
@@ -579,7 +546,6 @@ impl Service {
 			}
 		}
 
-		let mut edu_count = None;
 		// Add EDU's into the transaction
 		if let Destination::Federation(server_name) = dest {
 			if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
@@ -587,11 +553,11 @@ impl Service {
 				let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
 
 				events.extend(select_edus);
-				edu_count = Some(last_count);
+				self.db.set_latest_educount(server_name, last_count);
 			}
 		}
 
-		Ok(Some((events, edu_count)))
+		Ok(Some(events))
 	}
 
 	fn select_events_current(
@@ -910,17 +876,11 @@ impl Service {
 		(Some(buf), since.1)
 	}
 
-	fn send_events(
-		&self,
-		dest: Destination,
-		events: Vec<SendingEvent>,
-		edu_count: Option<u64>,
-	) -> SendingFuture<'_> {
+	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>) -> SendingFuture<'_> {
 		debug_assert!(!events.is_empty(), "sending empty transaction");
 		match dest {
-			| Destination::Federation(server) => self
-				.send_events_dest_federation(server, events, edu_count)
-				.boxed(),
+			| Destination::Federation(server) =>
+				self.send_events_dest_federation(server, events).boxed(),
 			| Destination::Appservice(id) => self.send_events_dest_appservice(id, events).boxed(),
 			| Destination::Push(user_id, pushkey) =>
 				self.send_events_dest_push(user_id, pushkey, events).boxed(),
@@ -1087,7 +1047,6 @@ impl Service {
 		&self,
 		server: OwnedServerName,
 		events: Vec<SendingEvent>,
-		edu_count: Option<u64>,
 	) -> SendingResult {
 		let pdus: Vec<_> = events
 			.iter()
@@ -1207,12 +1166,7 @@ impl Service {
 				self.stats.outgoing_errors.fetch_add(1, Ordering::Relaxed);
 				Err((Destination::Federation(server), error))
 			},
-			| Ok(_) => {
-				if let Some(count) = edu_count {
-					self.db.set_latest_educount(&server, count);
-				}
-				Ok(Destination::Federation(server))
-			},
+			| Ok(_) => Ok(Destination::Federation(server)),
 		}
 	}
 
