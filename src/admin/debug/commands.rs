@@ -723,133 +723,17 @@ pub(crate) async fn force_set_state(
 		.await
 		.ok();
 
-	let mut state: HashMap<u64, OwnedEventId> = HashMap::new();
-
 	let at_event_id_clone = at_event_id.clone();
-	let at_event_id_str = at_event_id.to_string();
 
 	// Load state from file, federation, or local database
-	let (pdus, auth_chain): (
-		Vec<Box<serde_json::value::RawValue>>,
-		Vec<Box<serde_json::value::RawValue>>,
-	) = if let Some(ref path) = input {
-		info!("Loading state from file: {path}");
-		let data = std::fs::read_to_string(path)
-			.map_err(|e| err!(Database("Failed to read input file: {e:?}")))?;
-		let parsed: serde_json::Value = serde_json::from_str(&data)
-			.map_err(|e| err!(Database("Failed to parse input file: {e:?}")))?;
-		let pdus_val = parsed
-			.get("pdus")
-			.ok_or(err!(Database("Missing 'pdus' key in input file")))?;
-		let auth_val = parsed
-			.get("auth_chain")
-			.ok_or(err!(Database("Missing 'auth_chain' key in input file")))?;
-		let pdus: Vec<Box<serde_json::value::RawValue>> =
-			serde_json::from_value(pdus_val.clone())
-				.map_err(|e| err!(Database("Failed to parse PDUs: {e:?}")))?;
-		let auth_chain: Vec<Box<serde_json::value::RawValue>> =
-			serde_json::from_value(auth_val.clone())
-				.map_err(|e| err!(Database("Failed to parse auth chain: {e:?}")))?;
-		info!(
-			"Loaded {} state PDUs and {} auth chain events from file",
-			pdus.len(),
-			auth_chain.len()
-		);
-		(pdus, auth_chain)
-	} else if !server_names.is_empty() {
-		let mut all_pdus: Vec<Box<serde_json::value::RawValue>> = Vec::new();
-		let mut all_auth: Vec<Box<serde_json::value::RawValue>> = Vec::new();
-
-		for server_name in &server_names {
-			info!("Fetching room state from {server_name} at event {at_event_id_str}...");
-			match self
-				.services
-				.sending
-				.send_federation_request(server_name, get_room_state::v1::Request {
-					room_id: room_id.clone(),
-					event_id: at_event_id.clone(),
-				})
-				.await
-			{
-				| Ok(resp) => {
-					info!(
-						"Received {} state PDUs and {} auth chain events from {server_name}",
-						resp.pdus.len(),
-						resp.auth_chain.len()
-					);
-
-					if let Some(ref path) = output {
-						let suffix = if server_names.len() > 1 {
-							format!("-{server_name}")
-						} else {
-							String::new()
-						};
-						let dump_path = format!("{path}{suffix}");
-						info!("Dumping federation state response to {dump_path}");
-						let dump = serde_json::json!({
-							"room_id": room_id,
-							"server_name": server_name,
-							"event_id": at_event_id_str,
-							"pdus": resp.pdus,
-							"auth_chain": resp.auth_chain,
-						});
-						if let Err(e) = std::fs::write(
-							&dump_path,
-							serde_json::to_string_pretty(&dump).unwrap_or_default(),
-						) {
-							warn!("Failed to write output file {dump_path}: {e}");
-						}
-					}
-
-					all_pdus.extend(resp.pdus);
-					all_auth.extend(resp.auth_chain);
-				},
-				| Err(e) => {
-					warn!("Failed to fetch state from {server_name}: {e}");
-					self.write_str(&format!("⚠ Failed to fetch state from {server_name}: {e}\n"))
-						.await?;
-					continue;
-				},
-			}
-		}
-
-		if all_pdus.is_empty() {
-			return Err!(Request(Unknown("All servers failed to respond")));
-		}
-
-		info!(
-			"Merged state from {} server(s): {} PDUs, {} auth chain events",
-			server_names.len(),
-			all_pdus.len(),
-			all_auth.len()
-		);
-		(all_pdus, all_auth)
-	} else {
-		// Local-only: rebuild state from existing database without federation
-		info!("Rebuilding room state from local DAG (no federation)...");
-		let ssh = self
-			.services
-			.rooms
-			.state
-			.get_room_shortstatehash(&room_id)
-			.await
-			.map_err(|_| {
-				err!("No existing state for room — provide a server to bootstrap from")
-			})?;
-
-		let local_state: HashMap<u64, OwnedEventId> = self
-			.services
-			.rooms
-			.state_accessor
-			.state_full_ids(ssh)
-			.collect()
-			.await;
-
-		info!("Local state has {} entries, re-resolving...", local_state.len());
-		state = local_state;
-		// No PDUs or auth_chain to process — state is already populated
-		(Vec::new(), Vec::new())
-	};
+	let (pdus, auth_chain, mut state) = Box::pin(self.fetch_and_load_state(
+		&room_id,
+		&server_names,
+		&at_event_id,
+		input.as_ref(),
+		output.as_ref(),
+	))
+	.await?;
 
 	// Resolve room version: prefer DB, fall back to create event in
 	// federation response. Error out if neither works — using the wrong
@@ -882,125 +766,15 @@ pub(crate) async fn force_set_state(
 		v
 	};
 
-	info!(
-		"Validating signatures for {} room_state PDUs (skip_sig_verify={skip_sig_verify})",
-		pdus.len()
-	);
-	let mut validated = 0_usize;
-	let mut dropped = 0_usize;
-	for pdu in &pdus {
-		// Always compute event_id cheaply first (hash, no crypto)
-		let Ok((event_id, _)) =
-			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version)
-		else {
-			dropped = dropped.saturating_add(1);
-			continue;
-		};
+	let (validated, dropped) = Box::pin(self.validate_and_extract_state(
+		&room_id,
+		&room_version,
+		&pdus,
+		skip_sig_verify,
+		&mut state,
+	))
+	.await?;
 
-		// Skip expensive Ed25519 sig verification for events already stored locally
-		let already_exists = self
-			.services
-			.rooms
-			.timeline
-			.get_pdu_id(&event_id)
-			.await
-			.is_ok() || self
-			.services
-			.rooms
-			.outlier
-			.get_outlier_pdu_json(&event_id)
-			.await
-			.is_ok();
-
-		let result = if skip_sig_verify || already_exists {
-			// Skip signature validation — just derive event_id from content hash
-			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
-				|(event_id, mut value)| {
-					value.insert(
-						"event_id".into(),
-						ruma::CanonicalJsonValue::String(event_id.as_str().into()),
-					);
-					(event_id, value)
-				},
-			)
-		} else {
-			self.services
-				.server_keys
-				.validate_and_add_event_id(pdu, &room_version)
-				.await
-		};
-		let Ok((event_id, value)) = result else {
-			dropped = dropped.saturating_add(1);
-			continue;
-		};
-		validated = validated.saturating_add(1);
-
-		// Clear any rejection/soft-fail markers for state PDUs we accept from
-		// federation. Without this, previously rejected events stay in the
-		// rejectedeventids table and poison all subsequent state_res operations.
-		// (Auth chain events already get this treatment at line ~967 below.)
-		self.services
-			.rooms
-			.pdu_metadata
-			.clear_pdu_markers(&event_id);
-
-		let total = validated.saturating_add(dropped);
-		if total.is_multiple_of(100) {
-			info!(
-				"Sig verify progress: {validated} ok, {dropped} dropped of {} total",
-				pdus.len()
-			);
-		}
-
-		// Extract fields directly from canonical JSON — avoids PduEvent
-		// deserialization failures for events with oversized IDs (>255 bytes).
-		let event_type_str = value.get("type").and_then(|v| match v {
-			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
-			| _ => None,
-		});
-		let state_key_opt = value.get("state_key").and_then(|v| match v {
-			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
-			| _ => None,
-		});
-		let pdu_room_id = value.get("room_id").and_then(|v| match v {
-			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
-			| _ => None,
-		});
-
-		let Some(ref event_type) = event_type_str else {
-			warn!("Skipping PDU {event_id} with no type field");
-			dropped = dropped.saturating_add(1);
-			continue;
-		};
-
-		// Validate room_id matches (v11+ events may omit room_id)
-		if let Some(ref rid) = pdu_room_id {
-			if rid != room_id.as_str() {
-				return Err!(BadServerResponse(
-					"Remote room_state PDU belongs to a different room"
-				));
-			}
-		}
-
-		if !already_exists {
-			info!("PDU {event_id} NOT in timeline, adding as outlier");
-			self.services
-				.rooms
-				.outlier
-				.add_pdu_outlier(&event_id, &value, Some(&room_id));
-		}
-
-		if let Some(state_key) = &state_key_opt {
-			let shortstatekey = self
-				.services
-				.rooms
-				.short
-				.get_or_create_shortstatekey(&event_type.clone().into(), state_key)
-				.await;
-
-			state.insert(shortstatekey, event_id.clone());
-		}
-	}
 	info!("State PDUs: {validated} validated, {dropped} dropped (failed signature check)");
 	if dropped > 0 {
 		warn!(
@@ -1031,84 +805,14 @@ pub(crate) async fn force_set_state(
 		}
 	}
 
-	info!("Going through auth_chain response");
-	let mut auth_existing = 0_usize;
-	let mut auth_added = 0_usize;
-	let mut auth_dropped = 0_usize;
-	let auth_chain_total = auth_chain.len();
-	for pdu in &auth_chain {
-		// Compute event_id first (cheap hash, no crypto) to check existence
-		// before doing expensive sig verification.
-		let Ok((event_id, _)) =
-			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version)
-		else {
-			auth_dropped = auth_dropped.saturating_add(1);
-			continue;
-		};
+	let (auth_added, auth_existing, auth_dropped) = Box::pin(self.validate_and_add_auth_chain(
+		&room_id,
+		&room_version,
+		&auth_chain,
+		skip_sig_verify,
+	))
+	.await?;
 
-		// Skip events we already have (timeline or outlier store)
-		if self
-			.services
-			.rooms
-			.timeline
-			.get_pdu_id(&event_id)
-			.await
-			.is_ok() || self
-			.services
-			.rooms
-			.outlier
-			.get_outlier_pdu_json(&event_id)
-			.await
-			.is_ok()
-		{
-			auth_existing = auth_existing.saturating_add(1);
-		} else {
-			// Only sig-verify events we actually need to store
-			let result = if skip_sig_verify {
-				conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version).map(
-					|(event_id, mut value)| {
-						value.insert(
-							"event_id".into(),
-							ruma::CanonicalJsonValue::String(event_id.as_str().into()),
-						);
-						(event_id, value)
-					},
-				)
-			} else {
-				self.services
-					.server_keys
-					.validate_and_add_event_id(pdu, &room_version)
-					.await
-			};
-
-			let Ok((event_id, value)) = result else {
-				auth_dropped = auth_dropped.saturating_add(1);
-				continue;
-			};
-
-			// Clear markers for incoming auth events from the backbone
-			self.services
-				.rooms
-				.pdu_metadata
-				.clear_pdu_markers(&event_id);
-
-			self.services
-				.rooms
-				.outlier
-				.add_pdu_outlier(&event_id, &value, Some(&room_id));
-			auth_added = auth_added.saturating_add(1);
-		}
-
-		let processed = auth_existing
-			.saturating_add(auth_added)
-			.saturating_add(auth_dropped);
-		if processed.is_multiple_of(1000) {
-			info!(
-				"Auth chain progress: {auth_added} added, {auth_existing} existing, \
-				 {auth_dropped} dropped of {auth_chain_total} total"
-			);
-		}
-	}
 	info!("Auth chain: {auth_added} added, {auth_existing} existing, {auth_dropped} dropped");
 	let auth_total = auth_added.saturating_add(auth_existing);
 	if auth_total > 10_000 {
@@ -1116,83 +820,16 @@ pub(crate) async fn force_set_state(
 	}
 
 	if dry_run {
-		// Compare remote state against local state without modifying anything
-		let local_state: HashMap<u64, OwnedEventId> = if let Ok(ssh) = self
-			.services
-			.rooms
-			.state
-			.get_room_shortstatehash(&room_id)
-			.await
-		{
-			self.services
-				.rooms
-				.state_accessor
-				.state_full_ids(ssh)
-				.collect()
-				.await
-		} else {
-			HashMap::new()
-		};
-
-		let mut would_add = Vec::new();
-		let mut would_remove = Vec::new();
-		let mut would_replace = Vec::new();
-
-		// Events in remote state but not in local
-		for (ssk, remote_eid) in &state {
-			match local_state.get(ssk) {
-				| None => would_add.push(remote_eid.clone()),
-				| Some(local_eid) if local_eid != remote_eid => {
-					would_replace.push((local_eid.clone(), remote_eid.clone()));
-				},
-				| Some(_) => {}, // Same event, no change
-			}
-		}
-
-		// Events in local state but not in remote
-		for (ssk, local_eid) in &local_state {
-			if !state.contains_key(ssk) {
-				would_remove.push(local_eid.clone());
-			}
-		}
-
-		self.write_str(&format!(
-			"**Dry run** — no changes applied.\n\nRemote state events: {}\nLocal state events: \
-			 {}\nWould add: {}\nWould remove: {}\nWould replace: {}\nValidated: {validated}, \
-			 Dropped: {dropped}\nAuth chain: {auth_added} new, {auth_existing} existing, \
-			 {auth_dropped} dropped",
-			state.len(),
-			local_state.len(),
-			would_add.len(),
-			would_remove.len(),
-			would_replace.len(),
+		Box::pin(self.dry_run_comparison(
+			&room_id,
+			&state,
+			validated,
+			dropped,
+			auth_added,
+			auth_existing,
+			auth_dropped,
 		))
 		.await?;
-
-		if !would_replace.is_empty() {
-			use std::fmt::Write;
-			let mut details = String::from("\nReplacements:\n");
-			for (old, new) in &would_replace {
-				let _ = writeln!(details, "  {old} → {new}");
-			}
-			self.write_str(&details).await?;
-		}
-
-		if !would_add.is_empty() {
-			let mut details = String::from("\nAdditions:\n");
-			for eid in &would_add {
-				let _ = writeln!(details, "  + {eid}");
-			}
-			self.write_str(&details).await?;
-		}
-
-		if !would_remove.is_empty() {
-			let mut details = String::from("\nRemovals:\n");
-			for eid in &would_remove {
-				let _ = writeln!(details, "  - {eid}");
-			}
-			self.write_str(&details).await?;
-		}
 
 		return Ok(());
 	}
@@ -1352,6 +989,459 @@ pub(crate) async fn force_set_state(
 
 	self.write_str("Successfully forced the room state from the requested remote server.")
 		.await
+}
+
+#[admin_command]
+async fn fetch_and_load_state(
+	&self,
+	room_id: &ruma::RoomId,
+	server_names: &[OwnedServerName],
+	at_event_id: &EventId,
+	input: Option<&String>,
+	output: Option<&String>,
+) -> Result<(
+	Vec<Box<serde_json::value::RawValue>>,
+	Vec<Box<serde_json::value::RawValue>>,
+	HashMap<u64, OwnedEventId>,
+)> {
+	let mut state: HashMap<u64, OwnedEventId> = HashMap::new();
+	let at_event_id_str = at_event_id.to_string();
+
+	// Load state from file, federation, or local database
+	let (pdus, auth_chain): (
+		Vec<Box<serde_json::value::RawValue>>,
+		Vec<Box<serde_json::value::RawValue>>,
+	) = if let Some(path) = input {
+		info!("Loading state from file: {path}");
+		let data = std::fs::read_to_string(path)
+			.map_err(|e| err!(Database("Failed to read input file: {e:?}")))?;
+		let parsed: serde_json::Value = serde_json::from_str(&data)
+			.map_err(|e| err!(Database("Failed to parse input file: {e:?}")))?;
+		let pdus_val = parsed
+			.get("pdus")
+			.ok_or(err!(Database("Missing 'pdus' key in input file")))?;
+		let auth_val = parsed
+			.get("auth_chain")
+			.ok_or(err!(Database("Missing 'auth_chain' key in input file")))?;
+		let pdus: Vec<Box<serde_json::value::RawValue>> =
+			serde_json::from_value(pdus_val.clone())
+				.map_err(|e| err!(Database("Failed to parse PDUs: {e:?}")))?;
+		let auth_chain: Vec<Box<serde_json::value::RawValue>> =
+			serde_json::from_value(auth_val.clone())
+				.map_err(|e| err!(Database("Failed to parse auth chain: {e:?}")))?;
+		info!(
+			"Loaded {} state PDUs and {} auth chain events from file",
+			pdus.len(),
+			auth_chain.len()
+		);
+		(pdus, auth_chain)
+	} else if !server_names.is_empty() {
+		let mut all_pdus: Vec<Box<serde_json::value::RawValue>> = Vec::new();
+		let mut all_auth: Vec<Box<serde_json::value::RawValue>> = Vec::new();
+
+		for server_name in server_names {
+			info!("Fetching room state from {server_name} at event {at_event_id_str}...");
+			match self
+				.services
+				.sending
+				.send_federation_request(server_name, get_room_state::v1::Request {
+					room_id: room_id.to_owned(),
+					event_id: at_event_id.to_owned(),
+				})
+				.await
+			{
+				| Ok(resp) => {
+					info!(
+						"Received {} state PDUs and {} auth chain events from {server_name}",
+						resp.pdus.len(),
+						resp.auth_chain.len()
+					);
+
+					if let Some(path) = output {
+						let suffix = if server_names.len() > 1 {
+							format!("-{server_name}")
+						} else {
+							String::new()
+						};
+						let dump_path = format!("{path}{suffix}");
+						info!("Dumping federation state response to {dump_path}");
+						let dump = serde_json::json!({
+							"room_id": room_id,
+							"server_name": server_name,
+							"event_id": at_event_id_str,
+							"pdus": resp.pdus,
+							"auth_chain": resp.auth_chain,
+						});
+						if let Err(e) = std::fs::write(
+							&dump_path,
+							serde_json::to_string_pretty(&dump).unwrap_or_default(),
+						) {
+							warn!("Failed to write output file {dump_path}: {e}");
+						}
+					}
+
+					all_pdus.extend(resp.pdus);
+					all_auth.extend(resp.auth_chain);
+				},
+				| Err(e) => {
+					warn!("Failed to fetch state from {server_name}: {e}");
+					self.write_str(&format!("⚠ Failed to fetch state from {server_name}: {e}\n"))
+						.await?;
+					continue;
+				},
+			}
+		}
+
+		if all_pdus.is_empty() {
+			return Err!(Request(Unknown("All servers failed to respond")));
+		}
+
+		info!(
+			"Merged state from {} server(s): {} PDUs, {} auth chain events",
+			server_names.len(),
+			all_pdus.len(),
+			all_auth.len()
+		);
+		(all_pdus, all_auth)
+	} else {
+		// Local-only: rebuild state from existing database without federation
+		info!("Rebuilding room state from local DAG (no federation)...");
+		let ssh = self
+			.services
+			.rooms
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.map_err(|_| {
+				err!("No existing state for room — provide a server to bootstrap from")
+			})?;
+
+		let local_state: HashMap<u64, OwnedEventId> = self
+			.services
+			.rooms
+			.state_accessor
+			.state_full_ids(ssh)
+			.collect()
+			.await;
+
+		info!("Local state has {} entries, re-resolving...", local_state.len());
+		state = local_state;
+		// No PDUs or auth_chain to process — state is already populated
+		(Vec::new(), Vec::new())
+	};
+
+	Ok((pdus, auth_chain, state))
+}
+
+#[admin_command]
+async fn validate_and_extract_state(
+	&self,
+	room_id: &ruma::RoomId,
+	room_version: &RoomVersionId,
+	pdus: &[Box<serde_json::value::RawValue>],
+	skip_sig_verify: bool,
+	state: &mut HashMap<u64, OwnedEventId>,
+) -> Result<(usize, usize)> {
+	info!(
+		"Validating signatures for {} room_state PDUs (skip_sig_verify={skip_sig_verify})",
+		pdus.len()
+	);
+	let mut validated = 0_usize;
+	let mut dropped = 0_usize;
+	for pdu in pdus {
+		// Always compute event_id cheaply first (hash, no crypto)
+		let Ok((event_id, _)) =
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, room_version)
+		else {
+			dropped = dropped.saturating_add(1);
+			continue;
+		};
+
+		// Skip expensive Ed25519 sig verification for events already stored locally
+		let already_exists = self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok() || self
+			.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(&event_id)
+			.await
+			.is_ok();
+
+		let result = if skip_sig_verify || already_exists {
+			// Skip signature validation — just derive event_id from content hash
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, room_version).map(
+				|(event_id, mut value)| {
+					value.insert(
+						"event_id".into(),
+						ruma::CanonicalJsonValue::String(event_id.as_str().into()),
+					);
+					(event_id, value)
+				},
+			)
+		} else {
+			self.services
+				.server_keys
+				.validate_and_add_event_id(pdu, room_version)
+				.await
+		};
+		let Ok((event_id, value)) = result else {
+			dropped = dropped.saturating_add(1);
+			continue;
+		};
+		validated = validated.saturating_add(1);
+
+		// Clear any rejection/soft-fail markers for state PDUs we accept from
+		// federation. Without this, previously rejected events stay in the
+		// rejectedeventids table and poison all subsequent state_res operations.
+		// (Auth chain events already get this treatment at line ~967 below.)
+		self.services
+			.rooms
+			.pdu_metadata
+			.clear_pdu_markers(&event_id);
+
+		let total = validated.saturating_add(dropped);
+		if total.is_multiple_of(100) {
+			info!(
+				"Sig verify progress: {validated} ok, {dropped} dropped of {} total",
+				pdus.len()
+			);
+		}
+
+		// Extract fields directly from canonical JSON — avoids PduEvent
+		// deserialization failures for events with oversized IDs (>255 bytes).
+		let event_type_str = value.get("type").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+		let state_key_opt = value.get("state_key").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+		let pdu_room_id = value.get("room_id").and_then(|v| match v {
+			| ruma::CanonicalJsonValue::String(s) => Some(s.clone()),
+			| _ => None,
+		});
+
+		let Some(ref event_type) = event_type_str else {
+			warn!("Skipping PDU {event_id} with no type field");
+			dropped = dropped.saturating_add(1);
+			continue;
+		};
+
+		// Validate room_id matches (v11+ events may omit room_id)
+		if let Some(ref rid) = pdu_room_id {
+			if rid != room_id.as_str() {
+				return Err!(BadServerResponse(
+					"Remote room_state PDU belongs to a different room"
+				));
+			}
+		}
+
+		if !already_exists {
+			info!("PDU {event_id} NOT in timeline, adding as outlier");
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value, Some(room_id));
+		}
+
+		if let Some(state_key) = &state_key_opt {
+			let shortstatekey = self
+				.services
+				.rooms
+				.short
+				.get_or_create_shortstatekey(&event_type.clone().into(), state_key)
+				.await;
+
+			state.insert(shortstatekey, event_id.clone());
+		}
+	}
+	Ok((validated, dropped))
+}
+
+#[admin_command]
+async fn validate_and_add_auth_chain(
+	&self,
+	room_id: &ruma::RoomId,
+	room_version: &RoomVersionId,
+	auth_chain: &[Box<serde_json::value::RawValue>],
+	skip_sig_verify: bool,
+) -> Result<(usize, usize, usize)> {
+	info!("Going through auth_chain response");
+	let mut auth_existing = 0_usize;
+	let mut auth_added = 0_usize;
+	let mut auth_dropped = 0_usize;
+	let auth_chain_total = auth_chain.len();
+	for pdu in auth_chain {
+		// Compute event_id first (cheap hash, no crypto) to check existence
+		// before doing expensive sig verification.
+		let Ok((event_id, _)) =
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, room_version)
+		else {
+			auth_dropped = auth_dropped.saturating_add(1);
+			continue;
+		};
+
+		// Skip events we already have (timeline or outlier store)
+		if self
+			.services
+			.rooms
+			.timeline
+			.get_pdu_id(&event_id)
+			.await
+			.is_ok() || self
+			.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(&event_id)
+			.await
+			.is_ok()
+		{
+			auth_existing = auth_existing.saturating_add(1);
+		} else {
+			// Only sig-verify events we actually need to store
+			let result = if skip_sig_verify {
+				conduwuit::matrix::event::gen_event_id_canonical_json(pdu, room_version).map(
+					|(event_id, mut value)| {
+						value.insert(
+							"event_id".into(),
+							ruma::CanonicalJsonValue::String(event_id.as_str().into()),
+						);
+						(event_id, value)
+					},
+				)
+			} else {
+				self.services
+					.server_keys
+					.validate_and_add_event_id(pdu, room_version)
+					.await
+			};
+
+			let Ok((event_id, value)) = result else {
+				auth_dropped = auth_dropped.saturating_add(1);
+				continue;
+			};
+
+			// Clear markers for incoming auth events from the backbone
+			self.services
+				.rooms
+				.pdu_metadata
+				.clear_pdu_markers(&event_id);
+
+			self.services
+				.rooms
+				.outlier
+				.add_pdu_outlier(&event_id, &value, Some(room_id));
+			auth_added = auth_added.saturating_add(1);
+		}
+
+		let processed = auth_existing
+			.saturating_add(auth_added)
+			.saturating_add(auth_dropped);
+		if processed.is_multiple_of(1000) {
+			info!(
+				"Auth chain progress: {auth_added} added, {auth_existing} existing, \
+				 {auth_dropped} dropped of {auth_chain_total} total"
+			);
+		}
+	}
+	Ok((auth_added, auth_existing, auth_dropped))
+}
+
+#[admin_command]
+async fn dry_run_comparison(
+	&self,
+	room_id: &ruma::RoomId,
+	state: &HashMap<u64, OwnedEventId>,
+	validated: usize,
+	dropped: usize,
+	auth_added: usize,
+	auth_existing: usize,
+	auth_dropped: usize,
+) -> Result {
+	// Compare remote state against local state without modifying anything
+	let local_state: HashMap<u64, OwnedEventId> = if let Ok(ssh) = self
+		.services
+		.rooms
+		.state
+		.get_room_shortstatehash(room_id)
+		.await
+	{
+		self.services
+			.rooms
+			.state_accessor
+			.state_full_ids(ssh)
+			.collect()
+			.await
+	} else {
+		HashMap::new()
+	};
+
+	let mut would_add = Vec::new();
+	let mut would_remove = Vec::new();
+	let mut would_replace = Vec::new();
+
+	// Events in remote state but not in local
+	for (ssk, remote_eid) in state {
+		match local_state.get(ssk) {
+			| None => would_add.push(remote_eid.clone()),
+			| Some(local_eid) if local_eid != remote_eid => {
+				would_replace.push((local_eid.clone(), remote_eid.clone()));
+			},
+			| Some(_) => {}, // Same event, no change
+		}
+	}
+
+	// Events in local state but not in remote
+	for (ssk, local_eid) in &local_state {
+		if !state.contains_key(ssk) {
+			would_remove.push(local_eid.clone());
+		}
+	}
+
+	self.write_str(&format!(
+		"**Dry run** — no changes applied.\n\nRemote state events: {}\nLocal state events: \
+		 {}\nWould add: {}\nWould remove: {}\nWould replace: {}\nValidated: {validated}, \
+		 Dropped: {dropped}\nAuth chain: {auth_added} new, {auth_existing} existing, \
+		 {auth_dropped} dropped",
+		state.len(),
+		local_state.len(),
+		would_add.len(),
+		would_remove.len(),
+		would_replace.len(),
+	))
+	.await?;
+
+	if !would_replace.is_empty() {
+		let mut details = String::from("\nReplacements:\n");
+		for (old, new) in &would_replace {
+			let _ = writeln!(details, "  {old} → {new}");
+		}
+		self.write_str(&details).await?;
+	}
+
+	if !would_add.is_empty() {
+		let mut details = String::from("\nAdditions:\n");
+		for eid in &would_add {
+			let _ = writeln!(details, "  + {eid}");
+		}
+		self.write_str(&details).await?;
+	}
+
+	if !would_remove.is_empty() {
+		let mut details = String::from("\nRemovals:\n");
+		for eid in &would_remove {
+			let _ = writeln!(details, "  - {eid}");
+		}
+		self.write_str(&details).await?;
+	}
+
+	Ok(())
 }
 
 /// Mark conflicting local state events as rejected. Without this, stale

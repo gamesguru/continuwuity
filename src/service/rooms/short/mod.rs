@@ -141,12 +141,12 @@ where
 			}
 
 			if !misses.is_empty() {
+				const BUFSIZE: usize = size_of::<ShortEventId>();
 				let db_results: Vec<Result<database::Handle<'_>>> = stream::iter(misses.clone())
 					.get(&self.db.eventid_shorteventid)
 					.collect()
 					.await;
 
-				const BUFSIZE: usize = size_of::<ShortEventId>();
 				let missing_count =
 					u64::try_from(db_results.iter().filter(|res| res.is_err()).count())
 						.unwrap_or(0);
