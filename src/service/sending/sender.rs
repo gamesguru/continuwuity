@@ -287,7 +287,7 @@ impl Service {
 			self.db.mark_as_active(new_events.iter());
 			let new_events_vec = new_events.into_iter().map(|(_, e)| e).collect();
 			statuses.insert(dest.clone(), TransactionStatus::Running);
-			futures.push(self.send_events(dest.clone(), new_events_vec));
+			futures.push(self.send_events(dest.clone(), new_events_vec, None));
 			return;
 		}
 
@@ -348,9 +348,9 @@ impl Service {
 			reqs
 		};
 
-		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
+		if let Ok(Some((events, edu_count))) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
-				futures.push(self.send_events(msg.dest, events));
+				futures.push(self.send_events(msg.dest, events, edu_count));
 			} else {
 				statuses.remove(&msg.dest);
 			}
@@ -427,9 +427,11 @@ impl Service {
 							old_dest
 						);
 						statuses.insert(old_dest.clone(), TransactionStatus::Running);
-						futures.push(
-							self.send_events(old_dest, std::mem::take(&mut current_events)),
-						);
+						futures.push(self.send_events(
+							old_dest,
+							std::mem::take(&mut current_events),
+							None,
+						));
 					}
 				}
 				current_dest = Some(dest.clone());
@@ -452,7 +454,11 @@ impl Service {
 					old_dest
 				);
 				statuses.insert(old_dest.clone(), TransactionStatus::Running);
-				futures.push(self.send_events(old_dest, std::mem::take(&mut current_events)));
+				futures.push(self.send_events(
+					old_dest,
+					std::mem::take(&mut current_events),
+					None,
+				));
 			}
 		}
 
@@ -507,7 +513,7 @@ impl Service {
 		dest: &Destination,
 		new_events: Vec<QueueItem>, // Events we want to send: event and full key
 		statuses: &mut CurTransactionStatus,
-	) -> Result<Option<Vec<SendingEvent>>> {
+	) -> Result<Option<(Vec<SendingEvent>, Option<u64>)>> {
 		let has_pdu = new_events
 			.iter()
 			.any(|(_, e)| matches!(e, SendingEvent::Pdu(_)));
@@ -534,7 +540,9 @@ impl Service {
 				.ready_for_each(|(_, e)| events.push(e))
 				.await;
 
-			return Ok(Some(events));
+			if !events.is_empty() {
+				return Ok(Some((events, None)));
+			}
 		}
 
 		// Compose the next transaction
@@ -546,6 +554,7 @@ impl Service {
 			}
 		}
 
+		let mut edu_count = None;
 		// Add EDU's into the transaction
 		if let Destination::Federation(server_name) = dest {
 			if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
@@ -553,11 +562,11 @@ impl Service {
 				let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
 
 				events.extend(select_edus);
-				self.db.set_latest_educount(server_name, last_count);
+				edu_count = Some(last_count);
 			}
 		}
 
-		Ok(Some(events))
+		Ok(Some((events, edu_count)))
 	}
 
 	fn select_events_current(
@@ -880,11 +889,17 @@ impl Service {
 		(Some(buf), since.1)
 	}
 
-	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>) -> SendingFuture<'_> {
+	fn send_events(
+		&self,
+		dest: Destination,
+		events: Vec<SendingEvent>,
+		edu_count: Option<u64>,
+	) -> SendingFuture<'_> {
 		debug_assert!(!events.is_empty(), "sending empty transaction");
 		match dest {
-			| Destination::Federation(server) =>
-				self.send_events_dest_federation(server, events).boxed(),
+			| Destination::Federation(server) => self
+				.send_events_dest_federation(server, events, edu_count)
+				.boxed(),
 			| Destination::Appservice(id) => self.send_events_dest_appservice(id, events).boxed(),
 			| Destination::Push(user_id, pushkey) =>
 				self.send_events_dest_push(user_id, pushkey, events).boxed(),
@@ -1051,6 +1066,7 @@ impl Service {
 		&self,
 		server: OwnedServerName,
 		events: Vec<SendingEvent>,
+		edu_count: Option<u64>,
 	) -> SendingResult {
 		let pdus: Vec<_> = events
 			.iter()
@@ -1170,7 +1186,12 @@ impl Service {
 				self.stats.outgoing_errors.fetch_add(1, Ordering::Relaxed);
 				Err((Destination::Federation(server), error))
 			},
-			| Ok(_) => Ok(Destination::Federation(server)),
+			| Ok(_) => {
+				if let Some(count) = edu_count {
+					self.db.set_latest_educount(&server, count);
+				}
+				Ok(Destination::Federation(server))
+			},
 		}
 	}
 
