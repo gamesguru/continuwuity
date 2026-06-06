@@ -3507,11 +3507,11 @@ async fn v22_resolves_msc4297_state_reset() {
         "Under V2.1, Bob's join should be rejected because JR(Invite) overrides JR(Public)"
     );
 
-    // We added V12_1 which maps to RoomVersionId::Custom("12.1").
-    let v22_id = RoomVersionId::Custom("12.1".into());
+    // We added V12_1 which maps to RoomVersionId::_Custom("12.1".into()).
+    let v211_id = RoomVersionId::_Custom("12.1".into());
 
-    let resolved_v22 = resolve(
-        &v22_id,
+    let resolved_v211 = resolve(
+        &v211_id,
         &state_sets,
         &auth_chain,
         &fetcher,
@@ -3520,9 +3520,7 @@ async fn v22_resolves_msc4297_state_reset() {
     ).await.unwrap();
 
     assert!(
-        resolved_v22.get(&bob_key).is_some(),
-        "Under V2.2 (v12.1), Bob's join SHOULD be accepted because JR(Invite) is ignored during auth_state initialization!"
+        resolved_v211.get(&bob_key).is_some(),
+        "Under V2.1.1 (v12.1), Bob's join SHOULD be accepted because JR(Invite) is ignored during auth_state initialization!"
     );
-}
-    }
 }

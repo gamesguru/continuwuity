@@ -22,7 +22,7 @@ pub enum EventFormatVersion {
 	V3,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(not(feature = "unstable-exhaustive-types"), non_exhaustive)]
 pub enum StateResolutionVersion {
 	/// State resolution for rooms at version 1.
@@ -31,13 +31,13 @@ pub enum StateResolutionVersion {
 	V2,
 	/// State resolution for room at version 12 or later.
 	V2_1,
-	/// State resolution v2.2 (MSC4297)
-	V2_2,
+	/// State resolution v2.1.1 (MSC4297)
+	V2_1_1,
 }
 
 impl StateResolutionVersion {
 	pub fn begin_iterative_auth_checks_with_empty_state_map(&self) -> bool {
-		matches!(self, Self::V2_2)
+		matches!(self, Self::V2_1_1)
 	}
 }
 
@@ -135,7 +135,7 @@ impl RoomVersion {
 		..Self::V11
 	};
 	pub const V12_1: Self = Self {
-		state_res: StateResolutionVersion::V2_2,
+		state_res: StateResolutionVersion::V2_1_1,
 		..Self::V12
 	};
 	pub const V2: Self = Self {

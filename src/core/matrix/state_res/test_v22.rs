@@ -125,10 +125,10 @@ async fn v22_resolves_msc4297_state_reset() {
         "Under V2.1, Bob's join should be rejected because JR(Invite) overrides JR(Public)"
     );
 
-    // Evaluate under a hypothetical V13 (which would use V2_2) - wait, RoomVersionId doesn't have V13 yet.
+    // Evaluate under a hypothetical V13 (which would use V2_1_1) - wait, RoomVersionId doesn't have V13 yet.
     // We can manually create a RoomVersion struct!
-    let mut v22_version = RoomVersion::new(&RoomVersionId::V12).unwrap();
-    v22_version.state_res = super::room_version::StateResolutionVersion::V2_2;
+    let mut v211_version = RoomVersion::new(&RoomVersionId::V12).unwrap();
+    v211_version.state_res = super::room_version::StateResolutionVersion::V2_1_1;
 
     // We can't pass a custom RoomVersion directly to resolve, it takes a RoomVersionId.
     // Wait, resolve takes RoomVersionId and looks up the RoomVersion inside.
