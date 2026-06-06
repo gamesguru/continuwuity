@@ -300,7 +300,8 @@ impl Service {
 		// them from the timeline. This prevents data loss since
 		// remove_from_timeline_by_id deletes the pduid_pdu entries that exclusively
 		// hold normal event JSON.
-		self.backup_timeline_entries(shortroomid, &entries).await;
+		self.backup_timeline_entries(room_id, shortroomid, &entries)
+			.await;
 
 		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
 		self.remove_old_timeline_entries(shortroomid, &sorted, &entries)
@@ -925,6 +926,7 @@ impl Service {
 
 	async fn backup_timeline_entries(
 		&self,
+		room_id: &RoomId,
 		shortroomid: ShortRoomId,
 		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
 	) {
@@ -935,7 +937,7 @@ impl Service {
 		for (event_id, &(old_count, _)) in entries {
 			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
 			if let Ok(json) = self.db.get_pdu_json_from_id(&old_pdu_id).await {
-				self.db.backup_pdu_to_outlier(event_id, &json);
+				self.db.backup_pdu_to_outlier(room_id, event_id, &json);
 			} else {
 				warn!("reorder_timeline: could not find JSON for {event_id} in pduid_pdu!");
 			}

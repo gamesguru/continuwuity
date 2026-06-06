@@ -1158,19 +1158,21 @@ async fn validate_and_extract_state(
 		};
 
 		// Skip expensive Ed25519 sig verification for events already stored locally
-		let already_exists = self
+		let has_timeline = self
 			.services
 			.rooms
 			.timeline
 			.get_pdu_id(&event_id)
 			.await
-			.is_ok() || self
+			.is_ok();
+		let has_outlier = self
 			.services
 			.rooms
 			.outlier
 			.get_outlier_pdu_json(&event_id)
 			.await
 			.is_ok();
+		let already_exists = has_timeline || has_outlier;
 
 		let result = if skip_sig_verify || already_exists {
 			// Skip signature validation — just derive event_id from content hash
@@ -1242,8 +1244,12 @@ async fn validate_and_extract_state(
 			}
 		}
 
-		if !already_exists {
-			info!("PDU {event_id} NOT in timeline, adding as outlier");
+		if !has_timeline {
+			if !has_outlier {
+				info!("PDU {event_id} NOT in timeline, adding as outlier");
+			} else {
+				info!("PDU {event_id} is outlier, ensuring room association is present");
+			}
 			self.services
 				.rooms
 				.outlier
@@ -1288,20 +1294,31 @@ async fn validate_and_add_auth_chain(
 		};
 
 		// Skip events we already have (timeline or outlier store)
-		if self
+		let has_timeline = self
 			.services
 			.rooms
 			.timeline
 			.get_pdu_id(&event_id)
 			.await
-			.is_ok() || self
+			.is_ok();
+		let outlier_json = self
 			.services
 			.rooms
 			.outlier
 			.get_outlier_pdu_json(&event_id)
-			.await
-			.is_ok()
-		{
+			.await;
+		let has_outlier = outlier_json.is_ok();
+
+		if has_timeline || has_outlier {
+			if let Ok(json) = outlier_json {
+				// Ensure the outlier is associated with this room.
+				// For v12 hashed rooms, previous corrupt reorder_timeline runs might have
+				// omitted the room association, leaving it in a broken state.
+				self.services
+					.rooms
+					.outlier
+					.add_pdu_outlier(&event_id, &json, Some(room_id));
+			}
 			auth_existing = auth_existing.saturating_add(1);
 		} else {
 			// Only sig-verify events we actually need to store
