@@ -430,6 +430,8 @@ async fn join_room_by_id_helper_remote(
 			)))
 		})?;
 
+	drop(make_join_response);
+
 	let join_authorized_via_users_server = if !matches!(
 		room_version_id,
 		RoomVersionId::V1
@@ -516,17 +518,19 @@ async fn join_room_by_id_helper_remote(
 			.await,
 	};
 
-	let send_join_response = match services
-		.sending
-		.send_synapse_request(&remote_server, send_join_request)
-		.await
-	{
-		| Ok(response) => response,
-		| Err(e) => {
-			error!("send_join failed: {e:?}");
-			return Err(e);
+	let send_join_response = Box::new(
+		match services
+			.sending
+			.send_synapse_request(&remote_server, send_join_request)
+			.await
+		{
+			| Ok(response) => response,
+			| Err(e) => {
+				error!("send_join failed: {e:?}");
+				return Err(e);
+			},
 		},
-	};
+	);
 
 	info!("send_join finished");
 
@@ -591,8 +595,10 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	info!("Parsing join event");
-	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone(), Some(room_id))
-		.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?;
+	let parsed_join_pdu = Box::new(
+		PduEvent::from_id_val(&event_id, join_event.clone(), Some(room_id))
+			.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?,
+	);
 
 	info!("Acquiring server signing keys for response events");
 	let resp_events = &send_join_response.room_state;
@@ -679,6 +685,7 @@ async fn join_room_by_id_helper_remote(
 		.await;
 
 	drop(cork);
+	drop(send_join_response);
 
 	debug!("Running send_join auth check");
 	let fetch_state = &state;
@@ -698,23 +705,27 @@ async fn join_room_by_id_helper_remote(
 		}
 	};
 
-	let create_event = state_fetch(StateEventType::RoomCreate, "".into())
-		.await
-		.ok_or_else(|| {
-			err!(BadServerResponse(warn!(
-				"create event is missing from send_join auth_chain or state"
-			)))
-		})?;
+	let create_event = Box::new(
+		state_fetch(StateEventType::RoomCreate, "".into())
+			.await
+			.ok_or_else(|| {
+				err!(BadServerResponse(warn!(
+					"create event is missing from send_join auth_chain or state"
+				)))
+			})?,
+	);
 
 	let auth_check = state_res::event_auth::auth_check(
 		&state_res::RoomVersion::new(&room_version_id)?,
-		&parsed_join_pdu,
+		&*parsed_join_pdu,
 		None, // TODO: third party invite
 		|k, s| state_fetch(k.clone(), s.into()),
-		&create_event,
+		&*create_event,
 	)
 	.await
 	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
+
+	drop(state_fetch);
 
 	if !auth_check {
 		return Err!(Request(Forbidden("Auth check failed")));
@@ -727,6 +738,8 @@ async fn join_room_by_id_helper_remote(
 		.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, eid.borrow())))
 		.collect()
 		.await;
+
+	drop(state);
 
 	info!("Saving compressed state ({} compressed events)", compressed.len());
 	let HashSetCompressStateEvent {
@@ -762,18 +775,18 @@ async fn join_room_by_id_helper_remote(
 	let statehash_after_join = services
 		.rooms
 		.state
-		.append_to_state(&parsed_join_pdu, room_id)
+		.append_to_state(&*parsed_join_pdu, room_id)
 		.await?;
 
 	let join_event_clone = join_event.clone();
-	let parsed_join_pdu_clone = parsed_join_pdu.clone();
+	let parsed_join_pdu_clone = (*parsed_join_pdu).clone();
 
 	info!("Appending new room join event");
 	services
 		.rooms
 		.timeline
 		.append_pdu(
-			&parsed_join_pdu,
+			&*parsed_join_pdu,
 			join_event,
 			once(parsed_join_pdu.event_id.clone()),
 			&state_lock,
@@ -805,7 +818,7 @@ async fn join_room_by_id_helper_remote(
 			.process_timeline_upgrade(
 				parsed_join_pdu_clone,
 				join_event_clone,
-				&create_event,
+				&*create_event,
 				&remote_server,
 				room_id,
 			)
