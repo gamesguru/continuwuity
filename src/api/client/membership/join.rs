@@ -746,7 +746,7 @@ async fn join_room_by_id_helper_remote(
 	.await
 	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
 
-	drop(state_fetch);
+	let _ = state_fetch;
 
 	if !auth_check {
 		return Err!(Request(Forbidden("Auth check failed")));
@@ -799,7 +799,7 @@ async fn join_room_by_id_helper_remote(
 	let statehash_after_join = services
 		.rooms
 		.state
-		.append_to_state(&*parsed_join_pdu, room_id)
+		.append_to_state(&parsed_join_pdu, room_id)
 		.boxed()
 		.await?;
 
@@ -811,7 +811,7 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.timeline
 		.append_pdu(
-			&*parsed_join_pdu,
+			&parsed_join_pdu,
 			join_event,
 			once(parsed_join_pdu.event_id.clone()),
 			&state_lock,
