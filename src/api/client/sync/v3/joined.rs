@@ -467,11 +467,6 @@ async fn build_state_events(
 		last_sync_end_shortstatehash,
 	} = shortstatehashes;
 
-	if timeline.pdus.is_empty() {
-		// If the timeline is empty there can't possibly be any changes to the state
-		return Ok(vec![]);
-	}
-
 	// the user IDs of members whose membership needs to be sent to the client, if
 	// lazy-loading is enabled.
 	let lazily_loaded_members =
