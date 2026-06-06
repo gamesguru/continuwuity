@@ -233,6 +233,8 @@ where
 		graph.insert(id.to_owned(), HashSet::new());
 	}
 
+	let mut new_outliers_fetched = false;
+
 	let mut processed_pdus: HashMap<
 		OwnedEventId,
 		(PduEvent, Option<BTreeMap<String, CanonicalJsonValue>>),
@@ -558,6 +560,7 @@ where
 			{
 				| Ok((pdu, json)) => {
 					processed_pdus.insert(next_id.clone(), (pdu, Some(json)));
+					new_outliers_fetched = true;
 				},
 				| Err(e) =>
 					if let conduwuit::Error::MissingAuthEvents(missing) = &e {
@@ -613,5 +616,8 @@ where
 	}
 
 	trace!("Fetched and handled {} outlier pdus", final_pdus.len());
+	if new_outliers_fetched {
+		self.services.auth_chain.clear_db_cache().await;
+	}
 	final_pdus
 }

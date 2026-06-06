@@ -77,4 +77,9 @@ impl Data {
 		// Cache in RAM
 		self.auth_chain_cache.lock().insert(key, auth_chain);
 	}
+
+	pub(super) async fn clear_db_cache(&self) {
+		self.auth_chain_cache.lock().clear();
+		self.shorteventid_authchain.clear().await;
+	}
 }

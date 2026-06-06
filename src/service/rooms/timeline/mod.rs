@@ -211,6 +211,7 @@ impl Service {
 		use ruma::events::StateEventType;
 
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
+		self.services.auth_chain.clear_db_cache().await;
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)
@@ -735,13 +736,22 @@ impl Service {
 					fork_sshs.insert(ext_ssh);
 
 					// Build typed StateMap directly from state_full
-					let typed_state: state_res::StateMap<OwnedEventId> = self
+					let mut typed_state: state_res::StateMap<OwnedEventId> = self
 						.services
 						.state_accessor
 						.state_full(ext_ssh)
 						.map(|((ty, sk), pdu)| ((ty, sk), pdu.event_id().to_owned()))
 						.collect()
 						.await;
+
+					if let Ok(pdu) = self.get_pdu_in_room(Some(room_id), ext_eid).await {
+						if let Some(state_key) = &pdu.state_key {
+							typed_state.insert(
+								(pdu.kind.clone().into(), state_key.clone()),
+								ext_eid.to_owned(),
+							);
+						}
+					}
 
 					fork_states.push(typed_state);
 				}

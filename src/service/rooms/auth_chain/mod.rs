@@ -305,3 +305,6 @@ pub fn get_cache_usage(&self) -> (usize, usize) {
 
 #[implement(Service)]
 pub fn clear_cache(&self) { self.db.auth_chain_cache.lock().clear(); }
+
+#[implement(Service)]
+pub async fn clear_db_cache(&self) { self.db.clear_db_cache().await; }
