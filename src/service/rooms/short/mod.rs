@@ -25,6 +25,7 @@ use crate::{Dep, globals};
 pub struct Service {
 	db: Data,
 	services: Services,
+	statekey_cache: dashmap::DashMap<ShortStateKey, (StateEventType, StateKey)>,
 }
 
 struct Data {
@@ -58,6 +59,7 @@ impl crate::Service for Service {
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 			},
+			statekey_cache: dashmap::DashMap::new(),
 		}))
 	}
 
@@ -143,6 +145,9 @@ pub async fn get_or_create_shortstatekey(
 		.shortstatekey_statekey
 		.aput_put::<BUFSIZE, _, _>(shortstatekey, key);
 
+	let cached_key = (event_type.clone(), StateKey::from(state_key));
+	self.statekey_cache.insert(shortstatekey, cached_key);
+
 	shortstatekey
 }
 
@@ -198,7 +203,12 @@ pub async fn get_statekey_from_short(
 ) -> Result<(StateEventType, StateKey)> {
 	const BUFSIZE: usize = size_of::<ShortStateKey>();
 
-	self.db
+	if let Some(cached) = self.statekey_cache.get(&shortstatekey) {
+		return Ok(cached.clone());
+	}
+
+	let res: (StateEventType, StateKey) = self
+		.db
 		.shortstatekey_statekey
 		.aqry::<BUFSIZE, _>(&shortstatekey)
 		.await
@@ -207,7 +217,10 @@ pub async fn get_statekey_from_short(
 			err!(Database(
 				"Failed to find (StateEventType, state_key) from short {shortstatekey:?}: {e:?}"
 			))
-		})
+		})?;
+
+	self.statekey_cache.insert(shortstatekey, res.clone());
+	Ok(res)
 }
 
 #[implement(Service)]
@@ -219,8 +232,46 @@ where
 	S: Stream<Item = ShortStateKey> + Send + 'a,
 {
 	shortstatekey
-		.qry(&self.db.shortstatekey_statekey)
-		.map(Deserialized::deserialized)
+		.ready_chunks(256)
+		.then(move |chunk| async move {
+			let mut results = Vec::with_capacity(chunk.len());
+			let mut misses = Vec::new();
+			let mut miss_indices = Vec::new();
+
+			for (i, key) in chunk.iter().copied().enumerate() {
+				if let Some(cached) = self.statekey_cache.get(&key) {
+					results.push(Some(Ok(cached.clone())));
+				} else {
+					results.push(None);
+					misses.push(key);
+					miss_indices.push(i);
+				}
+			}
+
+			if !misses.is_empty() {
+				let db_results: Vec<Result<(StateEventType, StateKey)>> = stream::iter(misses.clone())
+					.qry(&self.db.shortstatekey_statekey)
+					.map(|res| {
+						res.and_then(|handle| {
+							serde_json::from_slice(&handle).map_err(|e| {
+								err!(Database("Failed to deserialize statekey: {e:?}"))
+							})
+						})
+					})
+					.collect()
+					.await;
+
+				for (idx, res) in miss_indices.into_iter().zip(db_results.into_iter()) {
+					if let Ok(ref val) = res {
+						self.statekey_cache.insert(misses[idx], val.clone());
+					}
+					results[idx] = Some(res);
+				}
+			}
+
+			stream::iter(results.into_iter().map(Option::unwrap))
+		})
+		.flatten()
 }
 
 /// Returns (shortstatehash, already_existed)
