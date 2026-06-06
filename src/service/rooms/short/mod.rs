@@ -559,12 +559,7 @@ where
 
 #[cfg(test)]
 mod tests {
-	use std::{
-		collections::BTreeMap,
-		path::PathBuf,
-		sync::Arc,
-		time::{SystemTime, UNIX_EPOCH},
-	};
+	use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 	use conduwuit::{
 		Server,
@@ -588,12 +583,12 @@ mod tests {
 		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
 	}
 
-	async fn setup_test_service() -> (TempDbGuard, Arc<Service>) {
-		let nanos = SystemTime::now()
-			.duration_since(UNIX_EPOCH)
-			.unwrap()
-			.as_nanos();
-		let db_path = PathBuf::from(format!(".tmp/test_db_{nanos}"));
+	async fn setup_test_service()
+	-> (TempDbGuard, Arc<globals::Service>, Arc<Service>, Arc<crate::service::Map>) {
+		static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 =
+			std::sync::atomic::AtomicU64::new(0);
+		let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_{count}"));
 		let _ = std::fs::remove_dir_all(&db_path); // ensure it's clean
 
 		let guard = TempDbGuard { path: db_path.clone() };
@@ -617,15 +612,15 @@ mod tests {
 			.expect("failed to open database");
 		let service_map = Arc::new(conduwuit::SyncRwLock::new(BTreeMap::new()));
 
-		let globals_service = crate::globals::Service::build(crate::Args {
+		let globals_service = globals::Service::build(crate::Args {
 			db: &db,
 			server: &server,
 			service: &service_map,
 		})
 		.expect("failed to build globals service");
 
-		let globals_service_dyn = globals_service.clone() as Arc<dyn crate::Service>;
-		let globals_any_dyn = globals_service.clone() as Arc<dyn std::any::Any + Send + Sync>;
+		let globals_service_dyn: Arc<dyn crate::Service> = globals_service.clone();
+		let globals_any_dyn: Arc<dyn std::any::Any + Send + Sync> = globals_service.clone();
 		service_map.write().insert(
 			"globals".to_owned(),
 			(Arc::downgrade(&globals_service_dyn), Arc::downgrade(&globals_any_dyn)),
@@ -638,12 +633,12 @@ mod tests {
 		})
 		.expect("failed to build short service");
 
-		(guard, short_service)
+		(guard, globals_service, short_service, service_map)
 	}
 
 	#[tokio::test]
 	async fn test_shorteventid_caching() {
-		let (_guard, service) = setup_test_service().await;
+		let (_guard, _globals, service, _map) = setup_test_service().await;
 		let event_id = event_id!("$abc:test.conduwuit.local");
 
 		// Initial lookup should result in cache miss and query DB (or allocate new
@@ -658,6 +653,8 @@ mod tests {
 		// Clear cache and retrieve via get_shorteventid to verify DB storage
 		service.eventid_shorteventid_cache.invalidate_all();
 		service.shorteventid_eventid_cache.invalidate_all();
+		service.eventid_shorteventid_cache.run_pending_tasks();
+		service.shorteventid_eventid_cache.run_pending_tasks();
 		assert_eq!(service.eventid_shorteventid_cache.get(&event_id.to_owned()), None);
 
 		let short_id2 = service.get_shorteventid(event_id).await.unwrap();
@@ -673,7 +670,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_shortstatekey_caching() {
-		let (_guard, service) = setup_test_service().await;
+		let (_guard, _globals, service, _map) = setup_test_service().await;
 		let event_type = StateEventType::RoomName;
 		let state_key = "";
 
@@ -701,6 +698,8 @@ mod tests {
 		// Invalidate and check DB persistence
 		service.statekey_shortstatekey_cache.invalidate_all();
 		service.shortstatekey_statekey_cache.invalidate_all();
+		service.statekey_shortstatekey_cache.run_pending_tasks();
+		service.shortstatekey_statekey_cache.run_pending_tasks();
 
 		let short_key2 = service
 			.get_shortstatekey(&event_type, state_key)
@@ -719,7 +718,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_multi_lookups() {
-		let (_guard, service) = setup_test_service().await;
+		let (_guard, _globals, service, _map) = setup_test_service().await;
 
 		let event1 = event_id!("$event1:test.conduwuit.local");
 		let event2 = event_id!("$event2:test.conduwuit.local");
