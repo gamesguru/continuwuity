@@ -268,10 +268,19 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	let (state_events, notification_counts, joined_since_last_sync) = try_join3(
-		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
+	let joined_since_last_sync =
+		check_joined_since_last_sync(services, shortstatehashes, sync_context).await?;
+
+	let (state_events, notification_counts) = try_join(
+		build_state_events(
+			services,
+			sync_context,
+			room_id,
+			shortstatehashes,
+			&timeline,
+			joined_since_last_sync,
+		),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
 	)
 	.await?;
 
@@ -453,6 +462,7 @@ async fn build_state_events(
 	room_id: &RoomId,
 	shortstatehashes: ShortStateHashes,
 	timeline: &TimelinePdus,
+	joined_since_last_sync: bool,
 ) -> Result<Vec<PduEvent>> {
 	let SyncContext {
 		syncing_user,
@@ -467,7 +477,8 @@ async fn build_state_events(
 		last_sync_end_shortstatehash,
 	} = shortstatehashes;
 
-	// compute the state hash at the start of the timeline if we are not using state_after
+	// compute the state hash at the start of the timeline if we are not using
+	// state_after
 	let state_hash = if use_state_after {
 		current_shortstatehash
 	} else if let Some((_, pdu)) = timeline.pdus.front() {
@@ -504,13 +515,13 @@ async fn build_state_events(
 		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders()).await;
 
 	// compute the state delta between the previous sync and this sync.
-	match (last_sync_end_count, last_sync_end_shortstatehash) {
+	match (last_sync_end_count, last_sync_end_shortstatehash, joined_since_last_sync) {
 		/*
 		if `last_sync_end_count` is Some (meaning this is an incremental sync), and `last_sync_end_shortstatehash`
 		is Some (meaning the syncing user didn't just join this room for the first time ever), and `full_state` is false,
 		then use `build_state_incremental`.
 		*/
-		| (Some(_), Some(last_sync_end_shortstatehash)) if !full_state => {
+		| (Some(_), Some(last_sync_end_shortstatehash), false) if !full_state =>
 			build_state_incremental(
 				services,
 				syncing_user,
@@ -521,14 +532,13 @@ async fn build_state_events(
 				lazily_loaded_members.as_ref(),
 			)
 			.boxed()
-			.await
-		},
+			.await,
 		/*
 		otherwise use `build_state_initial`. note that this branch will be taken if the user joined this room since the last sync
 		for the first time ever, because in that case we have no `last_sync_end_shortstatehash` and can't correctly calculate
 		the state using the incremental sync algorithm.
 		*/
-		| _ => {
+		| _ =>
 			build_state_initial(
 				services,
 				syncing_user,
@@ -538,8 +548,7 @@ async fn build_state_events(
 				lazily_loaded_members.as_ref(),
 			)
 			.boxed()
-			.await
-		},
+			.await,
 	}
 }
 
