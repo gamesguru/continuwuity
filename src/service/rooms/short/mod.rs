@@ -280,17 +280,18 @@ where
 			}
 
 			if !misses.is_empty() {
-				let db_results: Vec<Result<(StateEventType, StateKey)>> = stream::iter(misses.clone())
-					.qry(&self.db.shortstatekey_statekey)
-					.map(|res| {
-						res.and_then(|handle| {
-							serde_json::from_slice(&handle).map_err(|e| {
-								err!(Database("Failed to deserialize statekey: {e:?}"))
+				let db_results: Vec<Result<(StateEventType, StateKey)>> =
+					stream::iter(misses.clone())
+						.qry(&self.db.shortstatekey_statekey)
+						.map(|res| {
+							res.and_then(|handle| {
+								serde_json::from_slice(&handle).map_err(|e| {
+									err!(Database("Failed to deserialize statekey: {e:?}"))
+								})
 							})
 						})
-					})
-					.collect()
-					.await;
+						.collect()
+						.await;
 
 				for (idx, res) in miss_indices.into_iter().zip(db_results.into_iter()) {
 					if let Ok(ref val) = res {
