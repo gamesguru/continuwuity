@@ -1172,10 +1172,10 @@ where
 			}
 		}
 
-		// Merge resolved_state into auth context for ALL room versions.
+		// Merge resolved_state into auth context for all room versions.
 		// Without this, auth_check evaluates events in a vacuum and rejects
 		// valid membership transitions (e.g. "Sender cannot leave").
-		// V2: resolved_state provides authoritative state context.
+		// V2.0: resolved_state provides authoritative state context.
 		// V2.1: resolved_state provides membership context from the
 		// partially-resolved PL state, which is needed to find the
 		// sender's join event during leave/kick auth checks.
@@ -1210,13 +1210,19 @@ where
 
 		// Sort + dedup: binary search requires ascending order, and duplicates
 		// from overlapping auth_events/resolved_state must be collapsed.
-		// Supplemental entries are pushed AFTER auth_events, so reverse+dedup
-		// keeps supplemental (matching old HashMap overwrite semantics), then
-		// re-sort ascending for binary_search.
+		// Supplemental entries are pushed AFTER auth_events, so:
+		// - For V2.0 rooms (state_res < V2_1): reverse+dedup keeps supplemental
+		//   (matching old HashMap overwrite semantics).
+		// - For V2.1 rooms (state_res >= V2_1): dedup without reversing keeps the
+		//   event's own auth_events (maintaining MSC4297 spec compliance).
 		auth_state.sort_by(|a, b| a.0.cmp(&b.0));
-		auth_state.reverse();
-		auth_state.dedup_by(|a, b| a.0.eq(&b.0));
-		auth_state.sort_by(|a, b| a.0.cmp(&b.0));
+		if room_version.state_res < StateResolutionVersion::V2_1 {
+			auth_state.reverse();
+			auth_state.dedup_by(|a, b| a.0.eq(&b.0));
+			auth_state.sort_by(|a, b| a.0.cmp(&b.0));
+		} else {
+			auth_state.dedup_by(|a, b| a.0.eq(&b.0));
+		}
 
 		trace!(
 			keys = ?auth_state.iter().map(|(k, _)| k).collect::<Vec<_>>(),
