@@ -410,11 +410,13 @@ async fn join_room_by_id_helper_remote(
 	info!("Joining {room_id} over federation.");
 
 	let (make_join_response, remote_server) =
-		make_join_request(services, sender_user, room_id, servers).await?;
+		make_join_request(services, sender_user, room_id, servers)
+			.boxed()
+			.await?;
 
 	info!("make_join finished");
 
-	let room_version_id = make_join_response.room_version.unwrap_or(RoomVersionId::V1);
+	let room_version_id = make_join_response.room_version.clone().unwrap_or(RoomVersionId::V1);
 
 	if !services.server.supported_room_version(&room_version_id) {
 		// How did we get here?
@@ -461,9 +463,9 @@ async fn join_room_by_id_helper_remote(
 		),
 	);
 	let mut content = to_canonical_value(RoomMemberEventContent {
-		displayname: services.users.displayname(sender_user).await.ok(),
-		avatar_url: services.users.avatar_url(sender_user).await.ok(),
-		blurhash: services.users.blurhash(sender_user).await.ok(),
+		displayname: services.users.displayname(sender_user).boxed().await.ok(),
+		avatar_url: services.users.avatar_url(sender_user).boxed().await.ok(),
+		blurhash: services.users.blurhash(sender_user).boxed().await.ok(),
 		reason,
 		join_authorized_via_users_server: join_authorized_via_users_server.clone(),
 		..RoomMemberEventContent::new(MembershipState::Join)
@@ -515,6 +517,7 @@ async fn join_room_by_id_helper_remote(
 		pdu: services
 			.sending
 			.convert_to_outgoing_federation_event(join_event.clone())
+			.boxed()
 			.await,
 	};
 
@@ -522,6 +525,7 @@ async fn join_room_by_id_helper_remote(
 		match services
 			.sending
 			.send_synapse_request(&remote_server, send_join_request)
+			.boxed()
 			.await
 		{
 			| Ok(response) => response,
@@ -592,6 +596,7 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.short
 		.get_or_create_shortroomid(room_id)
+		.boxed()
 		.await;
 
 	info!("Parsing join event");
@@ -607,6 +612,7 @@ async fn join_room_by_id_helper_remote(
 	services
 		.server_keys
 		.acquire_events_pubkeys(resp_auth.iter().chain(resp_state.iter()))
+		.boxed()
 		.await;
 
 	info!("Going through send_join response room_state");
@@ -651,12 +657,14 @@ async fn join_room_by_id_helper_remote(
 					.rooms
 					.short
 					.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
+					.boxed()
 					.await;
 
 				state.insert(shortstatekey, pdu.event_id.clone());
 			}
 			state
 		})
+		.boxed()
 		.await;
 
 	drop(cork);
@@ -682,6 +690,7 @@ async fn join_room_by_id_helper_remote(
 				.add_pdu_outlier(&event_id, &value, Some(room_id));
 			services.rooms.pdu_metadata.clear_pdu_markers(&event_id);
 		})
+		.boxed()
 		.await;
 
 	drop(cork);
@@ -690,16 +699,23 @@ async fn join_room_by_id_helper_remote(
 	debug!("Running send_join auth check");
 	let fetch_state = &state;
 	let state_fetch = |k: StateEventType, s: StateKey| async move {
-		let shortstatekey = services.rooms.short.get_shortstatekey(&k, &s).await.ok()?;
+		let shortstatekey = services
+			.rooms
+			.short
+			.get_shortstatekey(&k, &s)
+			.boxed()
+			.await
+			.ok()?;
 
 		let event_id = fetch_state.get(&shortstatekey)?;
 		if matches!(k, StateEventType::RoomCreate) {
-			services.rooms.timeline.get_pdu(event_id).await.ok()
+			services.rooms.timeline.get_pdu(event_id).boxed().await.ok()
 		} else {
 			services
 				.rooms
 				.timeline
 				.get_pdu_in_room(Some(room_id), event_id)
+				.boxed()
 				.await
 				.ok()
 		}
@@ -707,6 +723,7 @@ async fn join_room_by_id_helper_remote(
 
 	let create_event = Box::new(
 		state_fetch(StateEventType::RoomCreate, "".into())
+			.boxed()
 			.await
 			.ok_or_else(|| {
 				err!(BadServerResponse(warn!(
@@ -719,9 +736,10 @@ async fn join_room_by_id_helper_remote(
 		&state_res::RoomVersion::new(&room_version_id)?,
 		&*parsed_join_pdu,
 		None, // TODO: third party invite
-		|k, s| state_fetch(k.clone(), s.into()),
+		|k, s| state_fetch(k.clone(), s.into()).boxed(),
 		&*create_event,
 	)
+	.boxed()
 	.await
 	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
 
@@ -737,6 +755,7 @@ async fn join_room_by_id_helper_remote(
 		.state_compressor
 		.compress_state_events(state.iter().map(|(ssk, eid)| (ssk, eid.borrow())))
 		.collect()
+		.boxed()
 		.await;
 
 	drop(state);
@@ -750,6 +769,7 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.state_compressor
 		.save_state_as_root(room_id, Arc::new(compressed))
+		.boxed()
 		.await?;
 
 	info!("Forcing state for new room (shortstatehash={statehash_before_join})");
@@ -767,6 +787,7 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.state_cache
 		.update_joined_count(room_id)
+		.boxed()
 		.await;
 
 	// We append to state before appending the pdu, so we don't have a moment in
@@ -776,6 +797,7 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.state
 		.append_to_state(&*parsed_join_pdu, room_id)
+		.boxed()
 		.await?;
 
 	let join_event_clone = join_event.clone();
@@ -793,6 +815,7 @@ async fn join_room_by_id_helper_remote(
 			room_id,
 			false,
 		)
+		.boxed()
 		.await?;
 
 	info!("Setting final room state for new room");
@@ -810,6 +833,7 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.state_accessor
 		.room_state_get(room_id, &StateEventType::RoomCreate, "")
+		.boxed()
 		.await
 	{
 		let _ = services
@@ -818,10 +842,11 @@ async fn join_room_by_id_helper_remote(
 			.process_timeline_upgrade(
 				parsed_join_pdu_clone,
 				join_event_clone,
-				&*create_event,
+				&create_event,
 				&remote_server,
 				room_id,
 			)
+			.boxed()
 			.await;
 	}
 
