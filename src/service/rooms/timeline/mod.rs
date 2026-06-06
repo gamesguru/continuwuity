@@ -9,7 +9,7 @@ mod repair_unsigned;
 use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
-pub use conduwuit_core::matrix::pdu::{PduId, RawPduId};
+pub use conduwuit_core::matrix::pdu::{PduId, RawPduId, ShortRoomId};
 use conduwuit_core::{
 	Result, Server, at, err, info,
 	matrix::{
@@ -300,46 +300,11 @@ impl Service {
 		// them from the timeline. This prevents data loss since
 		// remove_from_timeline_by_id deletes the pduid_pdu entries that exclusively
 		// hold normal event JSON.
-		info!(
-			"reorder_timeline: safely backing up {} events to outlier tables before deletion...",
-			entries.len()
-		);
-		for (event_id, &(old_count, _)) in &entries {
-			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-			if let Ok(json) = self.db.get_pdu_json_from_id(&old_pdu_id).await {
-				self.db.backup_pdu_to_outlier(event_id, &json);
-			} else {
-				warn!("reorder_timeline: could not find JSON for {event_id} in pduid_pdu!");
-			}
-		}
+		self.backup_timeline_entries(shortroomid, &entries).await;
 
-		info!("reorder_timeline: sorted {} events, removing old entries...", sorted.len());
 		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
-		let mut cork = Some(self.db.db.cork());
-		for (i, event_id) in sorted.iter().enumerate() {
-			let &(old_count, _) = entries.get(event_id).expect("in sorted list");
-			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-			// Deindex old pdu_id from search before removal
-			// Search de-indexing is skipped here because we no longer have the PduEvent in
-			// memory. It will be re-indexed during re-insertion with the new ID, which
-			// is fine since the search index overwrites old entries or ignores
-			// duplicates depending on the search backend.
-			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
-			if i.saturating_add(1).is_multiple_of(2000) {
-				info!(
-					"reorder_timeline: removed {}/{} entries...",
-					i.saturating_add(1),
-					sorted.len()
-				);
-			}
-			if i.saturating_add(1).is_multiple_of(10000) {
-				// Drop and re-cork to flush, then yield to let compaction breathe
-				drop(cork.take());
-				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-				cork = Some(self.db.db.cork());
-			}
-		}
-		drop(cork.take());
+		self.remove_old_timeline_entries(shortroomid, &sorted, &entries)
+			.await;
 
 		// Re-insert in topological order with fresh PduCount values
 		let count = sorted.len();
@@ -352,65 +317,10 @@ impl Service {
 			 {batch_start}..{})...",
 			batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
 		);
-		let mut cork = Some(self.db.db.cork());
-		for (i, event_id) in sorted.iter().enumerate() {
-			let new_count = batch_start
-				.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
-				.saturating_add(1);
-			let pdu_count = PduCount::Normal(new_count);
-			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+		self.reinsert_timeline_entries(room_id, shortroomid, &sorted, batch_start)
+			.await;
 
-			// Fetch the full PduEvent on-demand from the outlier table (where it was backed
-			// up)
-			let pdu = match self.db.get_pdu_in_room(Some(room_id), event_id).await {
-				| Ok(p) => p,
-				| Err(e) => {
-					warn!(
-						%event_id,
-						"PduEvent missing during re-insertion (skipping): {e}"
-					);
-					continue;
-				},
-			};
-
-			// Re-fetch JSON on-demand — avoids holding all event JSON in memory
-			// simultaneously. The event store is keyed by event_id independently of
-			// the timeline ordering, so this survives remove_from_timeline_by_id.
-			let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
-				| Ok(j) => j,
-				| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
-					| Ok(j) => j,
-					| Err(e) => {
-						warn!(
-							%event_id,
-							"PDU JSON missing during re-insertion (skipping): {e}"
-						);
-						continue;
-					},
-				},
-			};
-
-			self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
-			// Re-index search with new pdu_id
-			if pdu.kind == TimelineEventType::RoomMessage {
-				if let Ok(content) = pdu.get_content::<ExtractBody>() {
-					if let Some(body) = &content.body {
-						self.services.search.index_pdu(shortroomid, &pdu_id, body);
-					}
-				}
-			}
-			if i.saturating_add(1).is_multiple_of(2000) {
-				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
-			}
-			if i.saturating_add(1).is_multiple_of(10000) {
-				// Flush batch and yield so the executor can handle other work.
-				drop(cork.take());
-				tokio::task::yield_now().await;
-				cork = Some(self.db.db.cork());
-			}
-		}
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
-		drop(cork.take());
 		let final_sync = self.db.db.cork_and_sync();
 		drop(final_sync);
 		info!("reorder_timeline: re-insert complete, rebuilding shortstatehash chain...");
@@ -1011,6 +921,114 @@ impl Service {
 		);
 
 		Ok(count)
+	}
+
+	async fn backup_timeline_entries(
+		&self,
+		shortroomid: ShortRoomId,
+		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
+	) {
+		info!(
+			"reorder_timeline: safely backing up {} events to outlier tables before deletion...",
+			entries.len()
+		);
+		for (event_id, &(old_count, _)) in entries {
+			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
+			if let Ok(json) = self.db.get_pdu_json_from_id(&old_pdu_id).await {
+				self.db.backup_pdu_to_outlier(event_id, &json);
+			} else {
+				warn!("reorder_timeline: could not find JSON for {event_id} in pduid_pdu!");
+			}
+		}
+	}
+
+	async fn remove_old_timeline_entries(
+		&self,
+		shortroomid: ShortRoomId,
+		sorted: &[OwnedEventId],
+		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
+	) {
+		info!("reorder_timeline: sorted {} events, removing old entries...", sorted.len());
+		let mut cork = Some(self.db.db.cork());
+		for (i, event_id) in sorted.iter().enumerate() {
+			let &(old_count, _) = entries.get(event_id).expect("in sorted list");
+			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
+			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
+			if i.saturating_add(1).is_multiple_of(2000) {
+				info!(
+					"reorder_timeline: removed {}/{} entries...",
+					i.saturating_add(1),
+					sorted.len()
+				);
+			}
+			if i.saturating_add(1).is_multiple_of(10000) {
+				drop(cork.take());
+				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+				cork = Some(self.db.db.cork());
+			}
+		}
+		drop(cork.take());
+	}
+
+	async fn reinsert_timeline_entries(
+		&self,
+		room_id: &RoomId,
+		shortroomid: ShortRoomId,
+		sorted: &[OwnedEventId],
+		batch_start: u64,
+	) {
+		let count = sorted.len();
+		let mut cork = Some(self.db.db.cork());
+		for (i, event_id) in sorted.iter().enumerate() {
+			let new_count = batch_start
+				.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
+				.saturating_add(1);
+			let pdu_count = PduCount::Normal(new_count);
+			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+
+			let pdu = match self.db.get_pdu_in_room(Some(room_id), event_id).await {
+				| Ok(p) => p,
+				| Err(e) => {
+					warn!(
+						%event_id,
+						"PduEvent missing during re-insertion (skipping): {e}"
+					);
+					continue;
+				},
+			};
+
+			let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
+				| Ok(j) => j,
+				| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
+					| Ok(j) => j,
+					| Err(e) => {
+						warn!(
+							%event_id,
+							"PDU JSON missing during re-insertion (skipping): {e}"
+						);
+						continue;
+					},
+				},
+			};
+
+			self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
+			if pdu.kind == TimelineEventType::RoomMessage {
+				if let Ok(content) = pdu.get_content::<ExtractBody>() {
+					if let Some(body) = &content.body {
+						self.services.search.index_pdu(shortroomid, &pdu_id, body);
+					}
+				}
+			}
+			if i.saturating_add(1).is_multiple_of(2000) {
+				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
+			}
+			if i.saturating_add(1).is_multiple_of(10000) {
+				drop(cork.take());
+				tokio::task::yield_now().await;
+				cork = Some(self.db.db.cork());
+			}
+		}
+		drop(cork.take());
 	}
 
 	/// Prune fork storms down to operationally relevant tips using tail-based
