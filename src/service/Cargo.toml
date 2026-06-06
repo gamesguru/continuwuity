@@ -137,5 +137,8 @@ scc = "3.7.1"
 sd-notify.workspace = true
 sd-notify.optional = true
 
+[dev-dependencies]
+figment = { workspace = true, features = ["toml"] }
+
 [lints]
 workspace = true

@@ -1231,6 +1231,7 @@ dependencies = [
  "dashmap",
  "ed25519-dalek",
  "either",
+ "figment",
  "futures",
  "governor",
  "hickory-resolver 0.25.2",

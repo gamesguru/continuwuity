@@ -20,7 +20,10 @@ use crate::{Dep, globals};
 pub struct Service {
 	db: Data,
 	services: Services,
-	statekey_cache: dashmap::DashMap<ShortStateKey, (StateEventType, StateKey)>,
+	eventid_shorteventid_cache: moka::sync::Cache<OwnedEventId, ShortEventId>,
+	shorteventid_eventid_cache: moka::sync::Cache<ShortEventId, OwnedEventId>,
+	statekey_shortstatekey_cache: moka::sync::Cache<(StateEventType, StateKey), ShortStateKey>,
+	shortstatekey_statekey_cache: moka::sync::Cache<ShortStateKey, (StateEventType, StateKey)>,
 }
 
 struct Data {
@@ -40,6 +43,38 @@ pub type ShortStateHash = ShortId;
 
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
+		let eventidshort_cap = utils::math::usize_from_f64(
+			f64::from(args.server.config.eventidshort_cache_capacity)
+				* args.server.config.cache_capacity_modifier,
+		)
+		.expect("valid cache size")
+		.try_into()
+		.unwrap_or(args.server.config.eventidshort_cache_capacity);
+
+		let shorteventid_cap = utils::math::usize_from_f64(
+			f64::from(args.server.config.shorteventid_cache_capacity)
+				* args.server.config.cache_capacity_modifier,
+		)
+		.expect("valid cache size")
+		.try_into()
+		.unwrap_or(args.server.config.shorteventid_cache_capacity);
+
+		let statekeyshort_cap = utils::math::usize_from_f64(
+			f64::from(args.server.config.statekeyshort_cache_capacity)
+				* args.server.config.cache_capacity_modifier,
+		)
+		.expect("valid cache size")
+		.try_into()
+		.unwrap_or(args.server.config.statekeyshort_cache_capacity);
+
+		let shortstatekey_cap = utils::math::usize_from_f64(
+			f64::from(args.server.config.shortstatekey_cache_capacity)
+				* args.server.config.cache_capacity_modifier,
+		)
+		.expect("valid cache size")
+		.try_into()
+		.unwrap_or(args.server.config.shortstatekey_cache_capacity);
+
 		Ok(Arc::new(Self {
 			db: Data {
 				eventid_shorteventid: args.db["eventid_shorteventid"].clone(),
@@ -52,7 +87,18 @@ impl crate::Service for Service {
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 			},
-			statekey_cache: dashmap::DashMap::new(),
+			eventid_shorteventid_cache: moka::sync::Cache::builder()
+				.max_capacity(eventidshort_cap.into())
+				.build(),
+			shorteventid_eventid_cache: moka::sync::Cache::builder()
+				.max_capacity(shorteventid_cap.into())
+				.build(),
+			statekey_shortstatekey_cache: moka::sync::Cache::builder()
+				.max_capacity(statekeyshort_cap.into())
+				.build(),
+			shortstatekey_statekey_cache: moka::sync::Cache::builder()
+				.max_capacity(shortstatekey_cap.into())
+				.build(),
 		}))
 	}
 
@@ -77,49 +123,85 @@ where
 	I: Iterator<Item = &'a EventId> + Clone + Debug + Send + 'a,
 {
 	event_ids
-		.clone()
 		.stream()
-		.get(&self.db.eventid_shorteventid)
-		.zip(event_ids.into_iter().stream())
 		.ready_chunks(256)
-		.map(move |chunk| {
-			const BUFSIZE: usize = size_of::<ShortEventId>();
-			let missing_count =
-				u64::try_from(chunk.iter().filter(|(res, _)| res.is_err()).count()).unwrap_or(0);
-			let mut next_id = if missing_count > 0 {
-				self.services
-					.globals
-					.next_count_batch(missing_count)
-					.unwrap()
-			} else {
-				0
-			};
-
+		.then(move |chunk| async move {
 			let mut results = Vec::with_capacity(chunk.len());
-			let mut new_allocations = std::collections::HashMap::new();
-			for (result, event_id) in chunk {
-				match result {
-					| Ok(ref short) => results.push(utils::u64_from_u8(short)),
-					| Err(_) =>
-						if let Some(&short) = new_allocations.get(event_id) {
-							results.push(short);
-						} else {
-							let short = next_id.saturating_add(1);
-							next_id = short;
+			let mut misses = Vec::new();
+			let mut miss_indices = Vec::new();
 
-							self.db
-								.eventid_shorteventid
-								.raw_aput::<BUFSIZE, _, _>(event_id, short);
-							self.db
-								.shorteventid_eventid
-								.aput_raw::<BUFSIZE, _, _>(short, event_id);
-
-							new_allocations.insert(event_id, short);
-							results.push(short);
-						},
+			for (i, &event_id) in chunk.iter().enumerate() {
+				if let Some(short) = self.eventid_shorteventid_cache.get(&event_id.to_owned()) {
+					results.push(Some(short));
+				} else {
+					results.push(None);
+					misses.push(event_id);
+					miss_indices.push(i);
 				}
 			}
-			IterStream::stream(results.into_iter())
+
+			if !misses.is_empty() {
+				let db_results: Vec<Result<database::Handle<'_>>> = stream::iter(misses.clone())
+					.get(&self.db.eventid_shorteventid)
+					.collect()
+					.await;
+
+				const BUFSIZE: usize = size_of::<ShortEventId>();
+				let missing_count =
+					u64::try_from(db_results.iter().filter(|res| res.is_err()).count())
+						.unwrap_or(0);
+
+				let mut next_id = if missing_count > 0 {
+					self.services
+						.globals
+						.next_count_batch(missing_count)
+						.unwrap()
+				} else {
+					0
+				};
+
+				let mut new_allocations = std::collections::HashMap::new();
+
+				for (idx, (result, event_id)) in miss_indices
+					.into_iter()
+					.zip(db_results.into_iter().zip(misses.into_iter()))
+				{
+					let short = match result {
+						| Ok(ref handle) => {
+							let short = utils::u64_from_u8(handle);
+							self.eventid_shorteventid_cache
+								.insert(event_id.to_owned(), short);
+							self.shorteventid_eventid_cache
+								.insert(short, event_id.to_owned());
+							short
+						},
+						| Err(_) =>
+							if let Some(&short) = new_allocations.get(event_id) {
+								short
+							} else {
+								let short = next_id.saturating_add(1);
+								next_id = short;
+
+								self.db
+									.eventid_shorteventid
+									.raw_aput::<BUFSIZE, _, _>(event_id, short);
+								self.db
+									.shorteventid_eventid
+									.aput_raw::<BUFSIZE, _, _>(short, event_id);
+
+								new_allocations.insert(event_id, short);
+								self.eventid_shorteventid_cache
+									.insert(event_id.to_owned(), short);
+								self.shorteventid_eventid_cache
+									.insert(short, event_id.to_owned());
+								short
+							},
+					};
+					results[idx] = Some(short);
+				}
+			}
+
+			stream::iter(results.into_iter().map(Option::unwrap))
 		})
 		.flatten()
 }
@@ -139,16 +221,32 @@ fn create_shorteventid(&self, event_id: &EventId) -> ShortEventId {
 		.shorteventid_eventid
 		.aput_raw::<BUFSIZE, _, _>(short, event_id);
 
+	self.eventid_shorteventid_cache
+		.insert(event_id.to_owned(), short);
+	self.shorteventid_eventid_cache
+		.insert(short, event_id.to_owned());
+
 	short
 }
 
 #[implement(Service)]
 pub async fn get_shorteventid(&self, event_id: &EventId) -> Result<ShortEventId> {
-	self.db
+	if let Some(short) = self.eventid_shorteventid_cache.get(&event_id.to_owned()) {
+		return Ok(short);
+	}
+
+	let short = self
+		.db
 		.eventid_shorteventid
 		.get(event_id)
 		.await
-		.deserialized()
+		.deserialized()?;
+
+	self.eventid_shorteventid_cache
+		.insert(event_id.to_owned(), short);
+	self.shorteventid_eventid_cache
+		.insert(short, event_id.to_owned());
+	Ok(short)
 }
 
 #[implement(Service)]
@@ -176,7 +274,10 @@ pub async fn get_or_create_shortstatekey(
 		.aput_put::<BUFSIZE, _, _>(shortstatekey, key);
 
 	let cached_key = (event_type.clone(), StateKey::from(state_key));
-	self.statekey_cache.insert(shortstatekey, cached_key);
+	self.statekey_shortstatekey_cache
+		.insert(cached_key.clone(), shortstatekey);
+	self.shortstatekey_statekey_cache
+		.insert(shortstatekey, cached_key);
 
 	shortstatekey
 }
@@ -187,12 +288,23 @@ pub async fn get_shortstatekey(
 	event_type: &StateEventType,
 	state_key: &str,
 ) -> Result<ShortStateKey> {
+	let cached_key = (event_type.clone(), StateKey::from(state_key));
+	if let Some(short) = self.statekey_shortstatekey_cache.get(&cached_key) {
+		return Ok(short);
+	}
+
 	let key = (event_type, state_key);
-	self.db
+	let short: ShortStateKey = self
+		.db
 		.statekey_shortstatekey
 		.qry(&key)
 		.await
-		.deserialized()
+		.deserialized()?;
+
+	self.statekey_shortstatekey_cache
+		.insert(cached_key.clone(), short);
+	self.shortstatekey_statekey_cache.insert(short, cached_key);
+	Ok(short)
 }
 
 #[implement(Service)]
@@ -203,12 +315,30 @@ where
 {
 	const BUFSIZE: usize = size_of::<ShortEventId>();
 
-	self.db
+	if let Some(cached) = self.shorteventid_eventid_cache.get(&shorteventid) {
+		let s = serde_json::to_vec(&cached).unwrap();
+		return serde_json::from_slice::<Id>(&s)
+			.map_err(|e| err!(Database("Failed to deserialize EventId from cache: {e:?}")));
+	}
+
+	let res: Id = self
+		.db
 		.shorteventid_eventid
 		.aqry::<BUFSIZE, _>(&shorteventid)
 		.await
 		.deserialized()
-		.map_err(|e| err!(Database("Failed to find EventId from short {shorteventid:?}: {e:?}")))
+		.map_err(|e| {
+			err!(Database("Failed to find EventId from short {shorteventid:?}: {e:?}"))
+		})?;
+
+	let owned = res.to_owned();
+	let event_id: &EventId = owned.borrow();
+	self.shorteventid_eventid_cache
+		.insert(shorteventid, event_id.to_owned());
+	self.eventid_shorteventid_cache
+		.insert(event_id.to_owned(), shorteventid);
+
+	Ok(res)
 }
 
 #[implement(Service)]
@@ -218,12 +348,57 @@ pub fn multi_get_eventid_from_short<'a, Id, S>(
 ) -> impl Stream<Item = Result<Id>> + Send + 'a
 where
 	S: Stream<Item = ShortEventId> + Send + 'a,
-	Id: for<'de> Deserialize<'de> + Sized + ToOwned + 'a,
+	Id: for<'de> Deserialize<'de> + Sized + ToOwned + Send + 'a,
 	<Id as ToOwned>::Owned: Borrow<EventId>,
 {
 	shorteventid
-		.qry(&self.db.shorteventid_eventid)
-		.map(Deserialized::deserialized)
+		.ready_chunks(256)
+		.then(move |chunk| async move {
+			let mut results = Vec::with_capacity(chunk.len());
+			let mut misses = Vec::new();
+			let mut miss_indices = Vec::new();
+
+			for (i, key) in chunk.iter().copied().enumerate() {
+				if let Some(cached) = self.shorteventid_eventid_cache.get(&key) {
+					let s = serde_json::to_vec(&cached).unwrap();
+					let res = serde_json::from_slice::<Id>(&s)
+						.map_err(|e| err!(Database("Failed to deserialize EventId: {e:?}")));
+					results.push(Some(res));
+				} else {
+					results.push(None);
+					misses.push(key);
+					miss_indices.push(i);
+				}
+			}
+
+			if !misses.is_empty() {
+				let db_results: Vec<Result<database::Handle<'_>>> = stream::iter(misses.clone())
+					.qry(&self.db.shorteventid_eventid)
+					.collect()
+					.await;
+
+				for (idx, res) in miss_indices.into_iter().zip(db_results.into_iter()) {
+					let val: Result<Id> = res.and_then(|handle| {
+						serde_json::from_slice(&handle)
+							.map_err(|e| err!(Database("Failed to deserialize EventId: {e:?}")))
+					});
+
+					if let Ok(ref val) = val {
+						let owned = val.to_owned();
+						let event_id: &EventId = owned.borrow();
+						self.shorteventid_eventid_cache
+							.insert(misses[idx], event_id.to_owned());
+						self.eventid_shorteventid_cache
+							.insert(event_id.to_owned(), misses[idx]);
+					}
+
+					results[idx] = Some(val);
+				}
+			}
+
+			stream::iter(results.into_iter().map(Option::unwrap))
+		})
+		.flatten()
 }
 
 #[implement(Service)]
@@ -233,8 +408,8 @@ pub async fn get_statekey_from_short(
 ) -> Result<(StateEventType, StateKey)> {
 	const BUFSIZE: usize = size_of::<ShortStateKey>();
 
-	if let Some(cached) = self.statekey_cache.get(&shortstatekey) {
-		return Ok(cached.clone());
+	if let Some(cached) = self.shortstatekey_statekey_cache.get(&shortstatekey) {
+		return Ok(cached);
 	}
 
 	let res: (StateEventType, StateKey) = self
@@ -249,7 +424,10 @@ pub async fn get_statekey_from_short(
 			))
 		})?;
 
-	self.statekey_cache.insert(shortstatekey, res.clone());
+	self.shortstatekey_statekey_cache
+		.insert(shortstatekey, res.clone());
+	self.statekey_shortstatekey_cache
+		.insert(res.clone(), shortstatekey);
 	Ok(res)
 }
 
@@ -269,7 +447,7 @@ where
 			let mut miss_indices = Vec::new();
 
 			for (i, key) in chunk.iter().copied().enumerate() {
-				if let Some(cached) = self.statekey_cache.get(&key) {
+				if let Some(cached) = self.shortstatekey_statekey_cache.get(&key) {
 					results.push(Some(Ok(cached.clone())));
 				} else {
 					results.push(None);
@@ -294,7 +472,10 @@ where
 
 				for (idx, res) in miss_indices.into_iter().zip(db_results.into_iter()) {
 					if let Ok(ref val) = res {
-						self.statekey_cache.insert(misses[idx], val.clone());
+						self.shortstatekey_statekey_cache
+							.insert(misses[idx], val.clone());
+						self.statekey_shortstatekey_cache
+							.insert(val.clone(), misses[idx]);
 					}
 					results[idx] = Some(res);
 				}
@@ -374,4 +555,210 @@ where
 		| (Ok(state_key), Ok(event_id)) => Some(Ok((state_key, event_id))),
 		| (Err(e), _) | (_, Err(e)) => Some(Err(e)),
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{
+		collections::BTreeMap,
+		path::PathBuf,
+		sync::Arc,
+		time::{SystemTime, UNIX_EPOCH},
+	};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		matrix::StateKey,
+	};
+	use database::Database;
+	use figment::providers::Format;
+	use futures::stream::{self, StreamExt};
+	use ruma::{OwnedEventId, event_id, events::StateEventType};
+
+	use super::*;
+	use crate::Service as _;
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+
+	async fn setup_test_service() -> (TempDbGuard, Arc<Service>) {
+		let nanos = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		let db_path = PathBuf::from(format!(".tmp/test_db_{nanos}"));
+		let _ = std::fs::remove_dir_all(&db_path); // ensure it's clean
+
+		let guard = TempDbGuard { path: db_path.clone() };
+
+		let figment = figment::Figment::new().merge(figment::providers::Toml::string(&format!(
+			r#"
+				server_name = "test.conduwuit.local"
+				database_path = "{}"
+				"#,
+			db_path.to_string_lossy().replace('\\', "/")
+		)));
+
+		let config = Config::new(&figment).expect("failed to parse config");
+		let server = Arc::new(Server::new(config, None, Log {
+			reload: LogLevelReloadHandles::default(),
+			capture: Arc::new(capture::State::default()),
+		}));
+
+		let db = Database::open(&server)
+			.await
+			.expect("failed to open database");
+		let service_map = Arc::new(conduwuit::SyncRwLock::new(BTreeMap::new()));
+
+		let globals_service = crate::globals::Service::build(crate::Args {
+			db: &db,
+			server: &server,
+			service: &service_map,
+		})
+		.expect("failed to build globals service");
+
+		let globals_service_dyn = globals_service.clone() as Arc<dyn crate::Service>;
+		let globals_any_dyn = globals_service.clone() as Arc<dyn std::any::Any + Send + Sync>;
+		service_map.write().insert(
+			"globals".to_owned(),
+			(Arc::downgrade(&globals_service_dyn), Arc::downgrade(&globals_any_dyn)),
+		);
+
+		let short_service = Service::build(crate::Args {
+			db: &db,
+			server: &server,
+			service: &service_map,
+		})
+		.expect("failed to build short service");
+
+		(guard, short_service)
+	}
+
+	#[tokio::test]
+	async fn test_shorteventid_caching() {
+		let (_guard, service) = setup_test_service().await;
+		let event_id = event_id!("$abc:test.conduwuit.local");
+
+		// Initial lookup should result in cache miss and query DB (or allocate new
+		// since not in DB) Since it doesn't exist in DB, get_shorteventid returns
+		// Err, but get_or_create resolves/creates it
+		let short_id1 = service.get_or_create_shorteventid(event_id).await;
+
+		// Cache should now contain the mappings
+		assert_eq!(service.eventid_shorteventid_cache.get(&event_id.to_owned()), Some(short_id1));
+		assert_eq!(service.shorteventid_eventid_cache.get(&short_id1), Some(event_id.to_owned()));
+
+		// Clear cache and retrieve via get_shorteventid to verify DB storage
+		service.eventid_shorteventid_cache.invalidate_all();
+		service.shorteventid_eventid_cache.invalidate_all();
+		assert_eq!(service.eventid_shorteventid_cache.get(&event_id.to_owned()), None);
+
+		let short_id2 = service.get_shorteventid(event_id).await.unwrap();
+		assert_eq!(short_id1, short_id2);
+
+		// Cache should be repopulated after DB hit
+		assert_eq!(service.eventid_shorteventid_cache.get(&event_id.to_owned()), Some(short_id1));
+
+		// Test retrieve event_id from short_id
+		let retrieved: OwnedEventId = service.get_eventid_from_short(short_id1).await.unwrap();
+		assert_eq!(retrieved, event_id.to_owned());
+	}
+
+	#[tokio::test]
+	async fn test_shortstatekey_caching() {
+		let (_guard, service) = setup_test_service().await;
+		let event_type = StateEventType::RoomName;
+		let state_key = "";
+
+		// Initial get should fail
+		assert!(
+			service
+				.get_shortstatekey(&event_type, state_key)
+				.await
+				.is_err()
+		);
+
+		// Create/get state key
+		let short_key1 = service
+			.get_or_create_shortstatekey(&event_type, state_key)
+			.await;
+
+		// Cache should contain mappings
+		let cache_key = (event_type.clone(), StateKey::from(state_key));
+		assert_eq!(service.statekey_shortstatekey_cache.get(&cache_key), Some(short_key1));
+		assert_eq!(
+			service.shortstatekey_statekey_cache.get(&short_key1),
+			Some(cache_key.clone())
+		);
+
+		// Invalidate and check DB persistence
+		service.statekey_shortstatekey_cache.invalidate_all();
+		service.shortstatekey_statekey_cache.invalidate_all();
+
+		let short_key2 = service
+			.get_shortstatekey(&event_type, state_key)
+			.await
+			.unwrap();
+		assert_eq!(short_key1, short_key2);
+
+		// Cache should be repopulated
+		assert_eq!(service.statekey_shortstatekey_cache.get(&cache_key), Some(short_key1));
+
+		// Retrieve original key from short state key
+		let (ret_type, ret_key) = service.get_statekey_from_short(short_key1).await.unwrap();
+		assert_eq!(ret_type, event_type);
+		assert_eq!(ret_key.as_str(), state_key);
+	}
+
+	#[tokio::test]
+	async fn test_multi_lookups() {
+		let (_guard, service) = setup_test_service().await;
+
+		let event1 = event_id!("$event1:test.conduwuit.local");
+		let event2 = event_id!("$event2:test.conduwuit.local");
+
+		// Multi create/get
+		let stream = service.multi_get_or_create_shorteventid(vec![event1, event2].into_iter());
+		let mut stream = std::pin::pin!(stream);
+		let short1 = stream.next().await.unwrap();
+		let short2 = stream.next().await.unwrap();
+		assert!(stream.next().await.is_none());
+
+		// Check caches
+		assert_eq!(service.eventid_shorteventid_cache.get(&event1.to_owned()), Some(short1));
+		assert_eq!(service.eventid_shorteventid_cache.get(&event2.to_owned()), Some(short2));
+
+		// Retrieve batch from short ids
+		let short_stream = stream::iter(vec![short1, short2]);
+		let event_stream = service.multi_get_eventid_from_short::<OwnedEventId, _>(short_stream);
+		let mut event_stream = std::pin::pin!(event_stream);
+		assert_eq!(event_stream.next().await.unwrap().unwrap(), event1.to_owned());
+		assert_eq!(event_stream.next().await.unwrap().unwrap(), event2.to_owned());
+		assert!(event_stream.next().await.is_none());
+
+		// Test state keys batch lookup
+		let type1 = StateEventType::RoomTopic;
+		let type2 = StateEventType::RoomAvatar;
+		let sk1 = service.get_or_create_shortstatekey(&type1, "key1").await;
+		let sk2 = service.get_or_create_shortstatekey(&type2, "key2").await;
+
+		let statekey_stream = stream::iter(vec![sk1, sk2]);
+		let state_result_stream = service.multi_get_statekey_from_short(statekey_stream);
+		let mut state_result_stream = std::pin::pin!(state_result_stream);
+		let res1 = state_result_stream.next().await.unwrap().unwrap();
+		let res2 = state_result_stream.next().await.unwrap().unwrap();
+
+		assert_eq!(res1.0, type1);
+		assert_eq!(res1.1.as_str(), "key1");
+		assert_eq!(res2.0, type2);
+		assert_eq!(res2.1.as_str(), "key2");
+		assert!(state_result_stream.next().await.is_none());
+	}
 }
