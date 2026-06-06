@@ -1828,4 +1828,120 @@ mod tests {
 		let phantoms = detect_phantom_extremities(&graph, &stored);
 		assert_eq!(phantoms, vec![a], "only A is phantom, C is valid");
 	}
+
+	#[tokio::test]
+	async fn test_backup_pdu_to_outlier_v12() {
+		let _ = rustls::crypto::ring::default_provider().install_default();
+
+		use std::{path::PathBuf, sync::Arc};
+
+		use conduwuit::{
+			Server,
+			config::Config,
+			log::{Log, LogLevelReloadHandles, capture},
+		};
+		use figment::providers::Format;
+		use ruma::{CanonicalJsonObject, CanonicalJsonValue, event_id, room_id};
+
+		struct TempDbGuard {
+			path: PathBuf,
+		}
+
+		impl Drop for TempDbGuard {
+			fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+		}
+
+		static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 =
+			std::sync::atomic::AtomicU64::new(0);
+		let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_timeline_{count}"));
+		let _ = std::fs::remove_dir_all(&db_path);
+
+		let guard = TempDbGuard { path: db_path.clone() };
+
+		let figment = figment::Figment::new().merge(figment::providers::Toml::string(&format!(
+			r#"
+				server_name = "test.conduwuit.local"
+				database_path = "{}"
+				"#,
+			db_path.to_string_lossy().replace('\\', "/")
+		)));
+
+		let config = Config::new(&figment).expect("failed to parse config");
+		let runtime_handle = tokio::runtime::Handle::current();
+		let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+			reload: LogLevelReloadHandles::default(),
+			capture: Arc::new(capture::State::default()),
+		}));
+
+		let services = crate::Services::build(server)
+			.await
+			.expect("failed to build services");
+
+		let room_id = room_id!("!create_event_id");
+		let event_id = event_id!("$create_event_id");
+
+		// Create a mock Version 12 create event: no room_id field is present
+		let mut json = CanonicalJsonObject::new();
+		json.insert("type".to_owned(), CanonicalJsonValue::String("m.room.create".to_owned()));
+		json.insert(
+			"sender".to_owned(),
+			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
+		);
+		json.insert(
+			"content".to_owned(),
+			CanonicalJsonValue::Object(
+				vec![("room_version".to_owned(), CanonicalJsonValue::String("12".to_owned()))]
+					.into_iter()
+					.collect(),
+			),
+		);
+		json.insert(
+			"event_id".to_owned(),
+			CanonicalJsonValue::String(event_id.as_str().to_owned()),
+		);
+		json.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456789.into()));
+		json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
+		let mut hashes = CanonicalJsonObject::new();
+		hashes.insert(
+			"sha256".to_owned(),
+			CanonicalJsonValue::String("mock_sha256_hash_value".to_owned()),
+		);
+		json.insert("hashes".to_owned(), CanonicalJsonValue::Object(hashes));
+		json.insert(
+			"signatures".to_owned(),
+			CanonicalJsonValue::Object(CanonicalJsonObject::new()),
+		);
+		// Note: we do NOT insert "room_id" into the json, simulating a v12 create
+		// event.
+
+		// Run backup_pdu_to_outlier
+		services
+			.rooms
+			.timeline
+			.db
+			.backup_pdu_to_outlier(room_id, event_id, &json);
+
+		// Now retrieve the outlier event and check that it is found and associated
+		// correctly.
+		let result = services
+			.rooms
+			.timeline
+			.db
+			.get_pdu_in_room(Some(room_id), event_id)
+			.await;
+		assert!(
+			result.is_ok(),
+			"Expected to successfully retrieve the outlier event with associated room_id: {:?}",
+			result.err()
+		);
+
+		let pdu = result.unwrap();
+		assert_eq!(pdu.event_id, event_id);
+
+		// Clean up
+		drop(guard);
+	}
 }
