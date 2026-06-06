@@ -467,6 +467,37 @@ async fn build_state_events(
 		last_sync_end_shortstatehash,
 	} = shortstatehashes;
 
+	// compute the state hash at the start of the timeline if we are not using state_after
+	let state_hash = if use_state_after {
+		current_shortstatehash
+	} else if let Some((_, pdu)) = timeline.pdus.front() {
+		match services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(&pdu.event_id)
+			.await
+		{
+			| Ok(shortstatehash) => {
+				use futures::StreamExt;
+				let mut state_stream = std::pin::pin!(
+					services
+						.rooms
+						.state_accessor
+						.state_full_ids::<ruma::OwnedEventId>(shortstatehash)
+				);
+
+				if state_stream.next().await.is_some() {
+					shortstatehash
+				} else {
+					current_shortstatehash
+				}
+			},
+			| Err(_) => current_shortstatehash,
+		}
+	} else {
+		current_shortstatehash
+	};
+
 	// the user IDs of members whose membership needs to be sent to the client, if
 	// lazy-loading is enabled.
 	let lazily_loaded_members =
@@ -479,34 +510,36 @@ async fn build_state_events(
 		is Some (meaning the syncing user didn't just join this room for the first time ever), and `full_state` is false,
 		then use `build_state_incremental`.
 		*/
-		| (Some(_), Some(last_sync_end_shortstatehash)) if !full_state =>
+		| (Some(_), Some(last_sync_end_shortstatehash)) if !full_state => {
 			build_state_incremental(
 				services,
 				syncing_user,
 				last_sync_end_shortstatehash,
-				current_shortstatehash,
+				state_hash,
 				timeline,
 				use_state_after,
 				lazily_loaded_members.as_ref(),
 			)
 			.boxed()
-			.await,
+			.await
+		},
 		/*
 		otherwise use `build_state_initial`. note that this branch will be taken if the user joined this room since the last sync
 		for the first time ever, because in that case we have no `last_sync_end_shortstatehash` and can't correctly calculate
 		the state using the incremental sync algorithm.
 		*/
-		| _ =>
+		| _ => {
 			build_state_initial(
 				services,
 				syncing_user,
-				current_shortstatehash,
+				state_hash,
 				timeline,
 				use_state_after,
 				lazily_loaded_members.as_ref(),
 			)
 			.boxed()
-			.await,
+			.await
+		},
 	}
 }
 

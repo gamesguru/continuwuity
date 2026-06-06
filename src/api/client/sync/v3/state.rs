@@ -33,7 +33,7 @@ use crate::client::TimelinePdus;
 pub(super) async fn build_state_initial(
 	services: &Services,
 	sender_user: &UserId,
-	timeline_end_shortstatehash: ShortStateHash,
+	state_hash: ShortStateHash,
 	timeline: &TimelinePdus,
 	use_state_after: bool,
 	lazily_loaded_members: Option<&MemberSet>,
@@ -41,11 +41,11 @@ pub(super) async fn build_state_initial(
 	let event_ids_in_timeline: HashSet<_> =
 		timeline.pdus.iter().map(|pdu| &pdu.1.event_id).collect();
 
-	// load the keys and event IDs of the state events at the start of the timeline
+	// load the keys and event IDs of the state events at the target state hash
 	let (shortstatekeys, event_ids): (Vec<_>, Vec<_>) = services
 		.rooms
 		.state_accessor
-		.state_full_ids(timeline_end_shortstatehash)
+		.state_full_ids(state_hash)
 		.ready_filter(|(_, event_id)| {
 			use_state_after || !event_ids_in_timeline.contains(event_id)
 		})
@@ -96,7 +96,7 @@ pub(super) async fn build_state_incremental<'a>(
 	services: &Services,
 	sender_user: &'a UserId,
 	last_sync_end_shortstatehash: ShortStateHash,
-	timeline_end_shortstatehash: ShortStateHash,
+	state_hash: ShortStateHash,
 	timeline: &TimelinePdus,
 	use_state_after: bool,
 	lazily_loaded_members: Option<&'a MemberSet>,
@@ -106,7 +106,7 @@ pub(super) async fn build_state_incremental<'a>(
 	trace!(
 		%use_state_after,
 		%last_sync_end_shortstatehash,
-		%timeline_end_shortstatehash,
+		%state_hash,
 		"computing state for incremental sync"
 	);
 
@@ -132,7 +132,7 @@ pub(super) async fn build_state_incremental<'a>(
 							.rooms
 							.state_accessor
 							.state_get_shortid(
-								timeline_end_shortstatehash,
+								state_hash,
 								&StateEventType::RoomMember,
 								user_id.as_str(),
 							)
@@ -155,7 +155,7 @@ pub(super) async fn build_state_incremental<'a>(
 			services
 				.rooms
 				.state_accessor
-				.state_added((last_sync_end_shortstatehash, timeline_end_shortstatehash))
+				.state_added((last_sync_end_shortstatehash, state_hash))
 				.await?
 				.stream()
 				.map(at!(1)),
