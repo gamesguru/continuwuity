@@ -416,7 +416,10 @@ async fn join_room_by_id_helper_remote(
 
 	info!("make_join finished");
 
-	let room_version_id = make_join_response.room_version.clone().unwrap_or(RoomVersionId::V1);
+	let room_version_id = make_join_response
+		.room_version
+		.clone()
+		.unwrap_or(RoomVersionId::V1);
 
 	if !services.server.supported_room_version(&room_version_id) {
 		// How did we get here?
