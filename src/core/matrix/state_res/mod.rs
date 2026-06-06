@@ -630,6 +630,8 @@ where
 	Id: Clone + Eq + Hash + Send + Sync + 'a,
 	Hasher: BuildHasher + Send + Sync,
 {
+	use roaring::RoaringBitmap;
+
 	if auth_chain_sets.len() == 2 {
 		let diff: Vec<Id> = auth_chain_sets[0]
 			.symmetric_difference(&auth_chain_sets[1])
@@ -637,8 +639,6 @@ where
 			.collect();
 		return diff.into_iter().stream();
 	}
-
-	use roaring::RoaringBitmap;
 
 	let mut id_to_index = HashMap::new();
 	let mut index_to_id = Vec::new();

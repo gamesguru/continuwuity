@@ -8,7 +8,7 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Result, at, debug, debug_error, implement, info, trace,
+	Err, Result, at, debug, implement, info, trace,
 	utils::{
 		IterStream,
 		stream::{ReadyExt, TryBroadbandExt},

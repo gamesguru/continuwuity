@@ -377,19 +377,20 @@ where
 					.collect()
 					.await;
 
-				for (idx, res) in miss_indices.into_iter().zip(db_results.into_iter()) {
-					let val: Result<Id> = res.and_then(|handle| {
-						serde_json::from_slice(&handle)
-							.map_err(|e| err!(Database("Failed to deserialize EventId: {e:?}")))
-					});
+				for ((&miss_key, res), idx) in misses
+					.iter()
+					.zip(db_results.into_iter())
+					.zip(miss_indices.into_iter())
+				{
+					let val: Result<Id> = res.deserialized();
 
 					if let Ok(ref val) = val {
 						let owned = val.to_owned();
 						let event_id: &EventId = owned.borrow();
 						self.shorteventid_eventid_cache
-							.insert(misses[idx], event_id.to_owned());
+							.insert(miss_key, event_id.to_owned());
 						self.eventid_shorteventid_cache
-							.insert(event_id.to_owned(), misses[idx]);
+							.insert(event_id.to_owned(), miss_key);
 					}
 
 					results[idx] = Some(val);
@@ -460,22 +461,20 @@ where
 				let db_results: Vec<Result<(StateEventType, StateKey)>> =
 					stream::iter(misses.clone())
 						.qry(&self.db.shortstatekey_statekey)
-						.map(|res| {
-							res.and_then(|handle| {
-								serde_json::from_slice(&handle).map_err(|e| {
-									err!(Database("Failed to deserialize statekey: {e:?}"))
-								})
-							})
-						})
+						.map(Deserialized::deserialized)
 						.collect()
 						.await;
 
-				for (idx, res) in miss_indices.into_iter().zip(db_results.into_iter()) {
+				for ((&miss_key, res), idx) in misses
+					.iter()
+					.zip(db_results.into_iter())
+					.zip(miss_indices.into_iter())
+				{
 					if let Ok(ref val) = res {
 						self.shortstatekey_statekey_cache
-							.insert(misses[idx], val.clone());
+							.insert(miss_key, val.clone());
 						self.statekey_shortstatekey_cache
-							.insert(val.clone(), misses[idx]);
+							.insert(val.clone(), miss_key);
 					}
 					results[idx] = Some(res);
 				}
