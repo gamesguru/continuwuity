@@ -574,7 +574,7 @@ impl Service {
 					// Fail if a request has failed recently (exponential backoff)
 					let min = self.server.config.sender_retry_backoff_base;
 					let max = self.server.config.sender_retry_backoff_limit;
-					if continue_exponential_backoff_secs(min, max, time.elapsed(), *tries)
+					if continue_exponential_backoff_secs(min, max, time.elapsed(), tries.saturating_sub(1))
 						&& !matches!(dest, Destination::Appservice(_))
 					{
 						allow = false;
@@ -611,7 +611,11 @@ impl Service {
 				let base = self.server.config.sender_retry_backoff_base;
 				let max = self.server.config.sender_retry_backoff_limit;
 				let backoff = base
-					.saturating_mul(1_u64.checked_shl(*tries).unwrap_or(u64::MAX))
+					.saturating_mul(
+						1_u64
+							.checked_shl(tries.saturating_sub(1))
+							.unwrap_or(u64::MAX),
+					)
 					.min(max);
 				let total = Duration::from_secs(backoff);
 				total
