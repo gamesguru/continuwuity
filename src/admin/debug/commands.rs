@@ -834,8 +834,16 @@ pub(crate) async fn force_set_state(
 		return Ok(());
 	}
 
-	// Collect remote event IDs before state is consumed by compress/resolve
-	let remote_eids: HashSet<OwnedEventId> = state.values().cloned().collect();
+	// Collect remote event IDs (both state and auth chain) before state is consumed
+	// by compress/resolve
+	let mut remote_eids: HashSet<OwnedEventId> = state.values().cloned().collect();
+	for pdu in &auth_chain {
+		if let Ok((event_id, _)) =
+			conduwuit::matrix::event::gen_event_id_canonical_json(pdu, &room_version)
+		{
+			remote_eids.insert(event_id);
+		}
+	}
 	info!("Clearing PDU markers for {} remote events", remote_eids.len());
 
 	// Un-reject/un-soft-fail the authoritative remote events so they
@@ -846,7 +854,7 @@ pub(crate) async fn force_set_state(
 
 	// Neutralize DAG poison BEFORE state resolution evaluates them
 	info!("Rejecting conflicting local state");
-	Box::pin(self.reject_conflicting_state(&room_id, &remote_eids)).await;
+	Box::pin(self.reject_conflicting_state(&room_id, &at_event_id, &remote_eids)).await;
 
 	let new_room_state = if absolute {
 		info!("Resolving new room state (ABSOLUTE OVERRIDE)");
@@ -1319,6 +1327,12 @@ async fn validate_and_add_auth_chain(
 					.outlier
 					.add_pdu_outlier(&event_id, &json, Some(room_id));
 			}
+			// Clear markers for existing auth events to heal any previous
+			// soft-fails/rejections
+			self.services
+				.rooms
+				.pdu_metadata
+				.clear_pdu_markers(&event_id);
 			auth_existing = auth_existing.saturating_add(1);
 		} else {
 			// Only sig-verify events we actually need to store
@@ -1468,15 +1482,26 @@ async fn dry_run_comparison(
 async fn reject_conflicting_state(
 	&self,
 	room_id: &ruma::RoomId,
+	at_event_id: &EventId,
 	remote_eids: &HashSet<OwnedEventId>,
 ) {
-	let Ok(local_ssh) = self
+	let local_ssh: Result<u64> = match self
 		.services
 		.rooms
-		.state
-		.get_room_shortstatehash(room_id)
+		.state_accessor
+		.pdu_shortstatehash(at_event_id)
 		.await
-	else {
+	{
+		| Ok(ssh) => Ok(ssh),
+		| Err(_) =>
+			self.services
+				.rooms
+				.state
+				.get_room_shortstatehash(room_id)
+				.await,
+	};
+
+	let Ok(local_ssh) = local_ssh else {
 		return;
 	};
 

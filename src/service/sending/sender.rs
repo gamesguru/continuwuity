@@ -166,11 +166,14 @@ impl Service {
 					tries = n.saturating_add(1);
 					TransactionStatus::Failed(tries, Instant::now())
 				},
-				| TransactionStatus::Failed(..) => {
-					panic!("Request that was not even running failed?!")
+				| TransactionStatus::Failed(n, _) => {
+					tries = n.saturating_add(1);
+					tracing::warn!(dest = ?dest, tries = tries, "Request failed while already marked as failed");
+					TransactionStatus::Failed(tries, Instant::now())
 				},
-				| TransactionStatus::Cooldown(..) => {
-					panic!("Request in cooldown failed?!")
+				| TransactionStatus::Cooldown(_) => {
+					tracing::warn!(dest = ?dest, "Request failed while in cooldown");
+					TransactionStatus::Failed(1, Instant::now())
 				},
 			}
 		});
