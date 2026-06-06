@@ -635,22 +635,53 @@ where
 			.symmetric_difference(&auth_chain_sets[1])
 			.cloned()
 			.collect();
-		return futures::stream::iter(diff).boxed();
+		return diff.into_iter().stream();
 	}
 
-	let num_sets = auth_chain_sets.len();
-	let mut id_counts: HashMap<&'a Id, usize> = HashMap::new(); // Borrowed!
+	use roaring::RoaringBitmap;
+
+	let mut id_to_index = HashMap::new();
+	let mut index_to_id = Vec::new();
+
 	for id in auth_chain_sets.iter().flatten() {
-		let count = id_counts.entry(id).or_default();
-		*count = count.saturating_add(1);
+		if !id_to_index.contains_key(id) {
+			let idx = u32::try_from(index_to_id.len()).expect("too many event IDs");
+			id_to_index.insert(id, idx);
+			index_to_id.push(id);
+		}
 	}
 
-	id_counts
+	let mut union = RoaringBitmap::new();
+	let mut intersection = RoaringBitmap::new();
+	let mut first = true;
+
+	for set in auth_chain_sets {
+		let mut bitmap = RoaringBitmap::new();
+		for id in set {
+			if let Some(&idx) = id_to_index.get(id) {
+				bitmap.insert(idx);
+			}
+		}
+		if first {
+			union.clone_from(&bitmap);
+			intersection = bitmap;
+			first = false;
+		} else {
+			union |= &bitmap;
+			intersection &= bitmap;
+		}
+	}
+
+	let diff = union - intersection;
+	let result_ids: Vec<Id> = diff
 		.into_iter()
-		.filter(move |&(_id, count)| count < num_sets)
-		.map(|(id, _count)| id.clone())
-		.stream()
-		.boxed()
+		.map(move |idx| {
+			let index = usize::try_from(idx).expect("idx fits in usize");
+			(*index_to_id[index]).clone()
+		})
+		.collect();
+
+	result_ids.into_iter().stream()
 }
 
 /// Events are sorted from "earliest" to "latest".
