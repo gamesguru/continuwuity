@@ -17,7 +17,7 @@ jobs:
   complement-tests:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
-    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_COMPLEMENT_TESTS_COMPLEMENT_TESTS != ''
+    # if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_COMPLEMENT_TESTS_COMPLEMENT_TESTS != ''
     runs-on: ${{ matrix.os }}${{ matrix.arch == 'arm64' && '-arm' || '' }}
     env:
       FEATURES: "direct_tls"
@@ -196,6 +196,7 @@ jobs:
         run: git diff --color=always tests/test_results/complement/test_results.jsonl
 
       - name: Upload test logs
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}
@@ -206,8 +207,13 @@ jobs:
 
       - name: Parse Complement results
         id: results
+        if: always()
         run: |
           RESULTS="tests/test_results/complement/test_results.jsonl"
+          if [ ! -f "$RESULTS" ]; then
+            echo "Results file not found, skipping parsing."
+            exit 0
+          fi
 
           # Inject arch, os, and profile into the JSONL file itself.
           # We use a temp file to avoid reading/writing to the same file.
@@ -248,6 +254,7 @@ jobs:
           echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
       - name: Update Results Ledger
         if: always()
+        continue-on-error: true
         uses: ./.github/actions/update-results-ledger
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -265,9 +272,14 @@ jobs:
 
       - name: Ingest results into PostgreSQL
         if: always()
+        continue-on-error: true
         env:
           SSH_PASSPHRASE: ${{ secrets.C10Y_SSH_KEY_PRIVATE_PASSPHRASE || '' }}
         run: |
+          if [ -z "${{ secrets.C10Y_SSH_KEY_PRIVATE }}" ]; then
+            echo "PostgreSQL secrets not available, skipping ingestion."
+            exit 0
+          fi
           mkdir -p ~/.ssh
           echo "${{ secrets.C10Y_SSH_KEY_PRIVATE }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -306,6 +318,7 @@ jobs:
           ssh-keyscan -p 22 nutra.tk | tee -a ~/.ssh/known_hosts
       - name: Run Postgres Ingestion
         if: always()
+        continue-on-error: true
         uses: ./.github/actions/postgres
         with:
           ssh_target: "git@nutra.tk"
@@ -314,16 +327,29 @@ jobs:
           rebuild_db: false
 
       - name: Query updated Postgres stats
+        if: always()
+        continue-on-error: true
         env:
           PAGER: cat
           DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
-        run: python3 .github/actions/postgres/ci-query-failures.py
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL not set, skipping query."
+            exit 0
+          fi
+          python3 .github/actions/postgres/ci-query-failures.py
 
       - name: Get newly failing tests
         id: new_failures
+        if: always()
+        continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
         run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL not set, skipping failures check."
+            exit 0
+          fi
           SHA="${{ github.event.pull_request.head.sha || github.sha }}"
           ARCH="${{ matrix.arch }}"
           OS="${{ matrix.os }}"
@@ -350,7 +376,7 @@ jobs:
           fi
 
       - name: Post Complement results to PR
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
           FAILED_TESTS: ${{ steps.new_failures.outputs.new_failures }}
