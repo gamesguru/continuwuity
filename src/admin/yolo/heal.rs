@@ -8,207 +8,13 @@ use conduwuit::{
 	matrix::{Event, pdu::PduEvent},
 	state_res, warn,
 };
-use futures::{FutureExt, StreamExt, future::ready, pin_mut};
+use futures::{FutureExt, StreamExt, future::ready};
 use ruma::{
 	OwnedEventId, OwnedRoomId, OwnedServerName, RoomId,
-	api::federation::event::get_room_state,
 	events::{StateEventType, TimelineEventType},
 };
 
 use crate::admin_command;
-
-#[admin_command]
-pub(super) async fn heal_all_rooms(
-	&self,
-	server: OwnedServerName,
-	dry_run: bool,
-	limit: usize,
-) -> Result {
-	use conduwuit::matrix::event::gen_event_id_canonical_json;
-
-	let ours = self.services.globals.server_name();
-
-	// Collect all rooms we participate in
-	let rooms: Vec<OwnedRoomId> = self
-		.services
-		.rooms
-		.state_cache
-		.server_rooms(ours)
-		.map(ToOwned::to_owned)
-		.collect()
-		.await;
-
-	let total = if limit > 0 { limit.min(rooms.len()) } else { rooms.len() };
-	self.write_str(&format!(
-		"Healing {total}/{} rooms against {server} {}...\n\n",
-		rooms.len(),
-		if dry_run { "(DRY RUN)" } else { "" }
-	))
-	.await?;
-
-	let mut healed = 0_usize;
-	let mut skipped = 0_usize;
-	let mut errors = 0_usize;
-	let mut total_rejected = 0_usize;
-
-	for (i, room_id) in rooms.iter().take(total).enumerate() {
-		let Ok(room_version) = self.services.rooms.state.get_room_version(room_id).await else {
-			skipped = skipped.saturating_add(1);
-			continue;
-		};
-
-		// Get our latest event
-		let Ok(latest_pdu) = self
-			.services
-			.rooms
-			.timeline
-			.latest_pdu_in_room(room_id)
-			.await
-		else {
-			skipped = skipped.saturating_add(1);
-			continue;
-		};
-		let at_event_id = latest_pdu.event_id().to_owned();
-
-		// Fetch remote state
-		let Ok(response) = self
-			.services
-			.sending
-			.send_federation_request(&server, get_room_state::v1::Request {
-				room_id: room_id.clone(),
-				event_id: at_event_id.clone(),
-			})
-			.await
-		else {
-			skipped = skipped.saturating_add(1);
-			continue;
-		};
-
-		// Build remote state map
-		let mut remote_state: HashMap<(String, String), OwnedEventId> = HashMap::new();
-		for pdu_raw in &response.pdus {
-			let Ok((event_id, _value)) = gen_event_id_canonical_json(pdu_raw, &room_version)
-			else {
-				continue;
-			};
-
-			let pdu: PduEvent = match serde_json::from_str(pdu_raw.get()) {
-				| Ok(p) => p,
-				| Err(_) => continue,
-			};
-
-			if let Some(state_key) = &pdu.state_key {
-				remote_state.insert((pdu.kind.to_string(), state_key.to_string()), event_id);
-			}
-		}
-
-		if remote_state.is_empty() {
-			skipped = skipped.saturating_add(1);
-			continue;
-		}
-
-		// Build local state map
-		let Ok(local_state_hash) = self
-			.services
-			.rooms
-			.state
-			.get_room_shortstatehash(room_id)
-			.await
-		else {
-			skipped = skipped.saturating_add(1);
-			continue;
-		};
-
-		let mut local_state: HashMap<(String, String), OwnedEventId> = HashMap::new();
-		{
-			let state_full = self
-				.services
-				.rooms
-				.state_accessor
-				.state_full(local_state_hash);
-			pin_mut!(state_full);
-			while let Some(((event_type, state_key), pdu)) = state_full.next().await {
-				local_state.insert(
-					(event_type.to_string(), state_key.to_string()),
-					pdu.event_id().to_owned(),
-				);
-			}
-		}
-
-		// Find extra local events (in local but not remote, or different event ID)
-		let remote_eids: HashSet<OwnedEventId> = remote_state.values().cloned().collect();
-		let local_eids: HashSet<OwnedEventId> = local_state.values().cloned().collect();
-		let extra: Vec<OwnedEventId> = local_eids.difference(&remote_eids).cloned().collect();
-
-		if extra.is_empty() {
-			// Room is healthy
-			continue;
-		}
-
-		let n_extra = extra.len();
-		self.write_str(&format!(
-			"[{}/{}] {} — {n_extra} extra events",
-			i.saturating_add(1),
-			total,
-			room_id,
-		))
-		.await?;
-
-		if dry_run {
-			self.write_str(" (would reject + force-set)\n").await?;
-			healed = healed.saturating_add(1);
-			total_rejected = total_rejected.saturating_add(n_extra);
-			continue;
-		}
-
-		// Mark extra events as rejected
-		for eid in &extra {
-			if !self
-				.services
-				.rooms
-				.pdu_metadata
-				.is_event_rejected(eid)
-				.await
-			{
-				self.services.rooms.pdu_metadata.mark_event_rejected(eid);
-			}
-		}
-		total_rejected = total_rejected.saturating_add(n_extra);
-
-		// Force-set state from backbone
-		match Box::pin(self.force_set_state(
-			room_id.clone(),
-			vec![server.clone()],
-			None,
-			true,  // overwrite
-			true,  // skip_sig_verify
-			true,  // absolute (direct override, no state-res merge)
-			None,  // output
-			None,  // input
-			false, // dry_run
-			false, // skip_membership_rebuild (safe-ish: rebuild & silent calls)
-		))
-		.await
-		{
-			| Ok(()) => {
-				self.write_str(&format!(" ✓ rejected {n_extra}, state reset\n"))
-					.await?;
-				healed = healed.saturating_add(1);
-			},
-			| Err(e) => {
-				self.write_str(&format!(" ✗ force-set failed: {e}\n"))
-					.await?;
-				errors = errors.saturating_add(1);
-			},
-		}
-	}
-
-	self.write_str(&format!(
-		"\n**Summary**: {healed} healed, {skipped} skipped, {errors} errors, {total_rejected} \
-		 events rejected\n"
-	))
-	.await
-}
 
 #[admin_command]
 #[allow(clippy::fn_params_excessive_bools)]
@@ -563,7 +369,7 @@ pub(super) async fn rescue_room(
 			self.services
 				.rooms
 				.timeline
-				.reorder_timeline(&room_id, None),
+				.reorder_timeline(&room_id, None, false),
 		)
 		.await?;
 		self.write_str(&format!("Reordered {n} events. Clients should re-sync."))

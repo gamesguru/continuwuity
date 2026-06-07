@@ -72,6 +72,7 @@ struct Services {
 	state: Dep<rooms::state::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
 	state_accessor: Dep<rooms::state_accessor::Service>,
+	state_compressor: Dep<rooms::state_compressor::Service>,
 	pdu_metadata: Dep<rooms::pdu_metadata::Service>,
 	read_receipt: Dep<rooms::read_receipt::Service>,
 	sending: Dep<sending::Service>,
@@ -106,6 +107,8 @@ impl crate::Service for Service {
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
 				state_accessor: args
 					.depend::<rooms::state_accessor::Service>("rooms::state_accessor"),
+				state_compressor: args
+					.depend::<rooms::state_compressor::Service>("rooms::state_compressor"),
 				pdu_metadata: args.depend::<rooms::pdu_metadata::Service>("rooms::pdu_metadata"),
 				read_receipt: args.depend::<rooms::read_receipt::Service>("rooms::read_receipt"),
 				sending: args.depend::<sending::Service>("sending"),
@@ -200,7 +203,12 @@ impl Service {
 	/// sequential `PduCount::Normal` values. This fixes anachronisms
 	/// caused by rescued outliers being appended at the end of the
 	/// timeline.
-	pub async fn reorder_timeline(&self, room_id: &RoomId, tail: Option<usize>) -> Result<usize> {
+	pub async fn reorder_timeline(
+		&self,
+		room_id: &RoomId,
+		tail: Option<usize>,
+		no_compute_state: bool,
+	) -> Result<usize> {
 		use std::collections::{HashMap, HashSet};
 
 		use conduwuit_core::matrix::state_res;
@@ -310,8 +318,14 @@ impl Service {
 			 {batch_start}..{})...",
 			batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
 		);
-		self.reinsert_timeline_entries(room_id, shortroomid, &sorted, batch_start)
-			.await;
+		self.reinsert_timeline_entries(
+			room_id,
+			shortroomid,
+			&sorted,
+			batch_start,
+			no_compute_state,
+		)
+		.await;
 
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		let final_sync = self.db.db.cork_and_sync();
@@ -539,8 +553,32 @@ impl Service {
 		shortroomid: ShortRoomId,
 		sorted: &[OwnedEventId],
 		batch_start: u64,
+		no_compute_state: bool,
 	) {
 		let count = sorted.len();
+
+		let mut current_shortstatehash = if no_compute_state {
+			None
+		} else {
+			let mut ssh = 0;
+			if let Some(oldest_event_id) = sorted.first() {
+				if let Ok(oldest_pdu) = self
+					.db
+					.get_pdu_in_room(Some(room_id), oldest_event_id)
+					.await
+				{
+					if let Some(prev) = oldest_pdu.prev_events.first() {
+						if let Ok(prev_ssh) =
+							self.services.state_accessor.pdu_shortstatehash(prev).await
+						{
+							ssh = prev_ssh;
+						}
+					}
+				}
+			}
+			Some(ssh)
+		};
+
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
 			let new_count = batch_start
@@ -573,6 +611,68 @@ impl Service {
 					},
 				},
 			};
+
+			if let Some(mut ssh) = current_shortstatehash {
+				let shorteventid = self
+					.services
+					.short
+					.get_or_create_shorteventid(&pdu.event_id)
+					.await;
+				self.services
+					.state
+					.set_pdu_shortstatehash(shorteventid, ssh);
+
+				if let Some(state_key) = &pdu.state_key {
+					let states_parents = if ssh != 0 {
+						self.services
+							.state_compressor
+							.load_shortstatehash_info(ssh)
+							.await
+							.unwrap_or_default()
+					} else {
+						Vec::new()
+					};
+					let shortstatekey = self
+						.services
+						.short
+						.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
+						.await;
+					let new = self
+						.services
+						.state_compressor
+						.compress_state_event(shortstatekey, &pdu.event_id)
+						.await;
+					let replaces = states_parents.last().and_then(|info| {
+						info.full_state.as_ref().expect("top frame").iter().find(
+							|bytes: &&rooms::state_compressor::CompressedStateEvent| {
+								bytes.starts_with(&shortstatekey.to_be_bytes())
+							},
+						)
+					});
+
+					if Some(&new) != replaces {
+						if let Ok(new_ssh) = self.services.globals.next_count() {
+							let mut statediffnew =
+								rooms::state_compressor::CompressedState::new();
+							statediffnew.insert(new);
+							let mut statediffremoved =
+								rooms::state_compressor::CompressedState::new();
+							if let Some(replaces) = replaces {
+								statediffremoved.insert(*replaces);
+							}
+							let _ = self.services.state_compressor.save_state_from_diff(
+								new_ssh,
+								Arc::new(statediffnew),
+								Arc::new(statediffremoved),
+								2,
+								states_parents,
+							);
+							ssh = new_ssh;
+						}
+					}
+				}
+				current_shortstatehash = Some(ssh);
+			}
 
 			self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
 			if pdu.kind == TimelineEventType::RoomMessage {

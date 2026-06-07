@@ -223,6 +223,10 @@ pub enum YoloCommand {
 		/// When omitted, the full timeline is reordered.
 		#[arg(long)]
 		tail: Option<usize>,
+
+		/// If set, do not incrementally calculate state during reorder
+		#[arg(long)]
+		no_compute_state: bool,
 	},
 
 	/// Purge a PDU from the timeline (removes from both timeline and outlier
@@ -527,24 +531,6 @@ pub enum YoloCommand {
 		/// Also clear soft-fail markers
 		#[arg(long)]
 		soft_fail: bool,
-	},
-
-	/// Batch-heal all rooms by comparing state against a backbone server.
-	///
-	/// For each room: compares local state with the remote server,
-	/// marks any extra local events as rejected, then force-sets state
-	/// from the remote server. Reports a summary when done.
-	HealAllRooms {
-		/// Backbone server to compare against (e.g. matrix.org)
-		server: OwnedServerName,
-
-		/// Only report divergence without making changes
-		#[arg(long)]
-		dry_run: bool,
-
-		/// Maximum number of rooms to heal (0 = unlimited)
-		#[arg(long, default_value = "0")]
-		limit: usize,
 	},
 
 	/// Scan the database for corrupt/invalid room IDs and purge them.
