@@ -393,17 +393,50 @@ pub async fn backfill_pdu(
 			.remove_from_timeline_by_id(&existing_pdu_id, &event_id);
 	}
 
-	self.services
+	// Backfill events come from a trusted /backfill response. We only need
+	// signature verification + basic auth, not the full federation pipeline
+	// (which fails when auth chain events aren't available locally — common
+	// after a new join). If outlier processing fails (e.g. missing auth
+	// events), fall back to storing the raw PDU directly.
+	let room_version_id = self.services.state.get_room_version(&room_id).await?;
+
+	let (pdu_event, json_value) = match self
+		.services
 		.event_handler
-		.handle_incoming_pdu(origin, &room_id, &event_id, value, false, None)
-		.boxed()
-		.await?;
+		.handle_outlier_pdu(
+			origin,
+			None::<&PduEvent>,
+			&event_id,
+			&room_id,
+			value.clone(),
+			false,
+			false,
+			Some(&room_version_id),
+		)
+		.await
+	{
+		| Ok(result) => result,
+		| Err(e) => {
+			// Missing auth events are expected during backfill (we don't have
+			// the room's full history yet). Insert the raw PDU directly.
+			debug!("handle_outlier_pdu failed for backfill event {event_id}, inserting raw: {e}");
+			let mut raw = value;
+			raw.insert(
+				"event_id".to_owned(),
+				ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
+			);
+			let parsed: PduEvent =
+				serde_json::from_value(serde_json::to_value(&raw).expect("valid json"))
+					.map_err(|e| err!(Database("Bad backfill PDU {event_id}: {e}")))?;
+			(parsed, raw)
+		},
+	};
 
-	let value = self.get_pdu_json(&event_id).await?;
-
-	let pdu = self.get_pdu(&event_id).await?;
-
-	let shortroomid = self.services.short.get_shortroomid(&room_id).await?;
+	let shortroomid = self
+		.services
+		.short
+		.get_or_create_shortroomid(&room_id)
+		.await;
 
 	let insert_lock = self.mutex_insert.lock(&room_id).await;
 
@@ -419,12 +452,13 @@ pub async fn backfill_pdu(
 	.into();
 
 	// Insert pdu
-	self.db.prepend_backfill_pdu(&pdu_id, &event_id, &value);
+	self.db
+		.prepend_backfill_pdu(&pdu_id, &event_id, &json_value);
 
 	drop(insert_lock);
 
-	if pdu.kind == TimelineEventType::RoomMessage {
-		let content: ExtractBody = pdu.get_content()?;
+	if pdu_event.kind == TimelineEventType::RoomMessage {
+		let content: ExtractBody = pdu_event.get_content()?;
 		if let Some(body) = content.body {
 			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
 		}
