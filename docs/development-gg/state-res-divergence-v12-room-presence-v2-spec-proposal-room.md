@@ -24,19 +24,20 @@ Status:         ✓ tip is state event — room state includes tip (pre=38267102
 We investigated several "phantom" nodes in the DAG visualizer. These were events that were referenced by other events in the timeline as `prev_events`, but were missing from the `get-room-dag` timeline export because they were rejected/soft-failed and resided only in the outlier tree:
 
 1. **`$kLs29-CLnbEecpMy4txN3etFCL9PzOZSaicorfnFGNE`**
-   - Depth: ~3153
-   - Type: `m.room.member` (invite)
-   - Status: Rejected (Outlier)
+    - Depth: ~3153
+    - Type: `m.room.member` (invite)
+    - Status: Rejected (Outlier)
 
 2. **`$fPVTIbPz09MM3dd6C90uxa2YadiIVqtRITwbP4IVlwU`**
-   - Depth: ~661
-   - Status: Rejected (Outlier)
-   - Parent to: `$qhAFddgPWi4Yjg0OHnvO-qmO5xIkVpsbfDUWtV0XWLI` (d=662)
+    - Depth: ~661
+    - Status: Rejected (Outlier)
+    - Parent to: `$qhAFddgPWi4Yjg0OHnvO-qmO5xIkVpsbfDUWtV0XWLI` (d=662)
 
-*Note: With the updated `get-room-dag` command, these are now included in the dump with the `__outlier: true` flag, allowing the DAG visualizer to properly connect and highlight them rather than rendering them as dangling external edges.*
+_Note: With the updated `get-room-dag` command, these are now included in the dump with the `__outlier: true` flag, allowing the DAG visualizer to properly connect and highlight them rather than rendering them as dangling external edges._
 
 ## Heads (Forward Extremities)
-*(Analysis pending: need to run the head-finding script to identify all 4 timeline heads)*
+
+_(Analysis pending: need to run the head-finding script to identify all 4 timeline heads)_
 
 ## Final state (again from `nutra.tk`'s perspective)
 
