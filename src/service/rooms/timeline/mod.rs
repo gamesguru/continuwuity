@@ -21,7 +21,7 @@ use conduwuit_core::{
 };
 use futures::{Future, Stream, StreamExt, TryStreamExt, pin_mut};
 use ruma::{
-	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId,
+	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId,
 	events::{TimelineEventType, room::encrypted::Relation},
 };
 use serde::Deserialize;
@@ -708,75 +708,20 @@ impl Service {
 			}
 		}
 
+		// The topological walk already processed every event (including all fork
+		// tips) in DAG order — equivalent to incremental resolution at each merge
+		// point (what ruma-lean does). Holistic V2.0 state_res on large fork
+		// states causes false auth rejections: the dedup gives resolved_state
+		// priority over an event's own auth_events, letting stale membership
+		// events from the auth_diff cascade into spurious rejections that drop
+		// valid members. Trust the walk result instead.
 		if true_extremities.len() > 1 {
-			// Multiple forks — run state_res to reconcile
 			info!(
-				"reorder_timeline: {} forward extremities — running state resolution to \
-				 reconcile fork states...",
+				"reorder_timeline: {} forward extremities — walk state is authoritative \
+				 (topological replay is equivalent to incremental resolution)",
 				true_extremities.len()
 			);
-
-			// Collect the state at each extremity by looking up their
-			// pdu_shortstatehash (which the walk just set), then converting
-			// short keys to full (StateEventType, String) tuples for state_res.
-			let mut fork_states: Vec<state_res::StateMap<OwnedEventId>> = Vec::new();
-			let mut fork_sshs: HashSet<u64> = HashSet::new();
-
-			for ext_eid in &true_extremities {
-				if let Ok(ext_ssh) = self
-					.services
-					.state_accessor
-					.pdu_shortstatehash(ext_eid)
-					.await
-				{
-					// Deduplicate: skip if we already have a fork with this exact state
-					if fork_sshs.contains(&ext_ssh) {
-						continue;
-					}
-					fork_sshs.insert(ext_ssh);
-
-					// Build typed StateMap directly from state_full
-					let mut typed_state: state_res::StateMap<OwnedEventId> = self
-						.services
-						.state_accessor
-						.state_full(ext_ssh)
-						.map(|((ty, sk), pdu)| ((ty, sk), pdu.event_id().to_owned()))
-						.collect()
-						.await;
-
-					if let Ok(pdu) = self.get_pdu_in_room(Some(room_id), ext_eid).await {
-						if let Some(state_key) = &pdu.state_key {
-							typed_state.insert(
-								(pdu.kind.clone().into(), state_key.clone()),
-								ext_eid.to_owned(),
-							);
-						}
-					}
-
-					fork_states.push(typed_state);
-				}
-			}
-
-			if fork_states.len() != true_extremities.len() {
-				info!(
-					"reorder_timeline: deduplicated {} extremities down to {} unique fork states",
-					true_extremities.len(),
-					fork_states.len()
-				);
-			}
-
-			if fork_states.len() > 1 {
-				self.reconcile_fork_states(room_id, fork_states, &state_lock)
-					.await;
-			} else {
-				info!(
-					"reorder_timeline: only {} fork states available, keeping walk result",
-					fork_states.len()
-				);
-			}
 		} else {
-			// Single extremity or no extremities — walk result is correct.
-			// No need to restore a stale pre-walk snapshot.
 			info!(
 				"reorder_timeline: single extremity — walk state is authoritative (SSH {:?})",
 				walk_ssh
@@ -1061,131 +1006,6 @@ impl Service {
 				"failed to prune extremities: {e}"
 			),
 		}
-	}
-
-	fn reconcile_fork_states<'a>(
-		&'a self,
-		room_id: &'a RoomId,
-		fork_states: Vec<conduwuit_core::matrix::state_res::StateMap<OwnedEventId>>,
-		state_lock: &'a RoomMutexGuard,
-	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
-		Box::pin(async move {
-			use std::collections::HashSet;
-
-			let room_version = self
-				.services
-				.state
-				.get_room_version(room_id)
-				.await
-				.unwrap_or(RoomVersionId::V6);
-
-			// Iterative pairwise state resolution: resolve 2 forks at a time
-			// to keep memory bounded at O(2 × auth_chain_size) regardless of
-			// the total number of forks. Loading all N auth chains at once
-			// (N × ~40k events) causes OOM on fractured DAGs.
-			let mut fork_iter = fork_states.into_iter();
-			let mut accumulated = fork_iter.next().expect("fork_states is non-empty");
-			let total_forks = fork_iter.len().saturating_add(1); // +1 for the one we already took
-			let mut resolved_count = 1_usize;
-
-			for next_fork in fork_iter {
-				resolved_count = resolved_count.saturating_add(1);
-				if resolved_count.is_multiple_of(10) || resolved_count == total_forks {
-					info!(
-						"reorder_timeline: pairwise state resolution \
-						 {resolved_count}/{total_forks}..."
-					);
-				}
-
-				let pair = [accumulated.clone(), next_fork];
-				let auth_chain_sets: Vec<HashSet<OwnedEventId>> = {
-					let mut sets = Vec::with_capacity(2);
-					for state in &pair {
-						let chain: HashSet<OwnedEventId> = self
-							.services
-							.auth_chain
-							.event_ids_iter(room_id, state.values().map(AsRef::as_ref))
-							.try_collect()
-							.await
-							.unwrap_or_default();
-						sets.push(chain);
-					}
-					sets
-				};
-
-				match Box::pin(self.services.event_handler.state_resolution(
-					room_id,
-					&room_version,
-					pair.iter(),
-					&auth_chain_sets,
-				))
-				.await
-				{
-					| Ok(resolved) => {
-						accumulated = resolved;
-					},
-					| Err(e) => {
-						warn!(
-							"reorder_timeline: pairwise state resolution failed at step \
-							 {resolved_count}/{total_forks}: {e}; using partial result"
-						);
-						break;
-					},
-				}
-
-				// Yield to avoid starving other tasks during long resolution runs
-				tokio::task::yield_now().await;
-			}
-
-			let resolved = accumulated;
-
-			// Convert pairwise-resolved StateMap<OwnedEventId> to compressed state
-			let mut new_state = rooms::state_compressor::CompressedState::new();
-
-			for ((event_type, state_key), event_id) in &resolved {
-				let shortstatekey = self
-					.services
-					.short
-					.get_or_create_shortstatekey(event_type, state_key)
-					.await;
-				let shorteventid = self
-					.services
-					.short
-					.get_or_create_shorteventid(event_id)
-					.await;
-				new_state.insert(rooms::state_compressor::compress_state_event(
-					shortstatekey,
-					shorteventid,
-				));
-			}
-
-			match self
-				.services
-				.state_compressor
-				.save_state(room_id, Arc::new(new_state))
-				.await
-			{
-				| Ok(result) => {
-					self.services.state.set_room_state(
-						room_id,
-						result.shortstatehash,
-						state_lock,
-					);
-					info!(
-						"reorder_timeline: pairwise state resolution complete — new SSH {} ({} \
-						 resolved state entries, {total_forks} forks)",
-						result.shortstatehash,
-						resolved.len()
-					);
-				},
-				| Err(e) => {
-					warn!(
-						"reorder_timeline: save_state after resolution failed: {e}; keeping \
-						 walk result"
-					);
-				},
-			}
-		})
 	}
 
 	/// Automatically recalculates the true topological DAG forward extremities
