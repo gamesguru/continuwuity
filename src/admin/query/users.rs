@@ -104,7 +104,7 @@ async fn get_shared_rooms(&self, user_a: OwnedUserId, user_b: OwnedUserId) -> Re
 	let mut result = Vec::new();
 	let mut count = 0_u64;
 	while let Some(room_id) = rooms.next().await {
-		result.push(room_id.to_owned());
+		result.push(room_id.clone());
 		count = count.saturating_add(1);
 		if count.is_multiple_of(1000) {
 			tokio::task::yield_now().await;
@@ -211,7 +211,7 @@ async fn iter_users(&self) -> Result {
 	let mut result = Vec::new();
 	let mut count = 0_u64;
 	while let Some(user_id) = users.next().await {
-		result.push(user_id.to_owned());
+		result.push(user_id.clone());
 		count = count.saturating_add(1);
 		if count.is_multiple_of(1000) {
 			tokio::task::yield_now().await;
