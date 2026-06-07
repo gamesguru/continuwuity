@@ -183,13 +183,14 @@ async fn create_join_event(
 			)));
 		}
 
-		if !super::user_can_perform_restricted_join(
+		if super::user_can_perform_restricted_join(
 			services,
 			&state_key,
 			room_id,
 			&room_version_id,
 		)
 		.await?
+		.is_none()
 		{
 			return Err!(Request(UnableToAuthorizeJoin(
 				"Joining user did not pass restricted room's rules."

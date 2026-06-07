@@ -3,7 +3,7 @@ use std::{borrow::Borrow, collections::HashMap, iter::once, sync::Arc, time::Dur
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Result, debug, debug_info, debug_warn, err, error, info, is_true,
+	Err, Result, debug, debug_info, debug_warn, err, error, info,
 	matrix::{
 		StateKey,
 		event::{gen_event_id, gen_event_id_canonical_json},
@@ -857,17 +857,23 @@ async fn join_room_by_id_helper_local(
 		if !matches!(room_version, V1 | V2 | V3 | V4 | V5 | V6 | V7) {
 			// This is a restricted room, check if we can complete the join requirements
 			// locally.
-			let needs_auth_user =
+			let restricted_result =
 				user_can_perform_restricted_join(services, sender_user, room_id, &room_version)
 					.await;
-			if needs_auth_user.is_ok_and(is_true!()) {
-				// If there was an error or the value is false, we'll try joining over
-				// federation. Since it's Ok(true), we can authorise this locally.
+			if let Ok(Some(ref allowed_rooms)) = restricted_result {
+				// If there was an error or None, we'll try joining over
+				// federation. Since it's Ok(Some(..)), we can authorise this locally.
 				// If we can't select a local user, this will remain None, the join will fail,
 				// and we'll fall back to federation.
-				auth_user = select_authorising_user(services, room_id, sender_user, &state_lock)
-					.await
-					.ok();
+				auth_user = select_authorising_user(
+					services,
+					room_id,
+					sender_user,
+					allowed_rooms,
+					&state_lock,
+				)
+				.await
+				.ok();
 			}
 		}
 	}

@@ -7,7 +7,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::StreamExt;
 use ruma::{
-	OwnedUserId, RoomId, RoomVersionId, UserId,
+	OwnedRoomId, OwnedUserId, RoomId, RoomVersionId, UserId,
 	api::{client::error::ErrorKind, federation::membership::prepare_join_event},
 	events::{
 		StateEventType,
@@ -109,7 +109,7 @@ pub(crate) async fn create_join_event_template_route(
 		} else if matches!(room_version_id, V1 | V2 | V3 | V4 | V5 | V6 | V7) {
 			// room version does not support restricted join rules
 			None
-		} else if user_can_perform_restricted_join(
+		} else if let Some(allowed_rooms) = user_can_perform_restricted_join(
 			&services,
 			&body.user_id,
 			&body.room_id,
@@ -118,8 +118,14 @@ pub(crate) async fn create_join_event_template_route(
 		.await?
 		{
 			Some(
-				select_authorising_user(&services, &body.room_id, &body.user_id, &state_lock)
-					.await?,
+				select_authorising_user(
+					&services,
+					&body.room_id,
+					&body.user_id,
+					&allowed_rooms,
+					&state_lock,
+				)
+				.await?,
 			)
 		} else {
 			None
@@ -161,44 +167,73 @@ pub(crate) async fn create_join_event_template_route(
 }
 
 /// Attempts to find a user who is able to issue an invite in the target room.
+/// Per spec, the authorising user must be in both the restricted room AND at
+/// least one of the allowed rooms (from the join rules).
 pub(crate) async fn select_authorising_user(
 	services: &Services,
 	room_id: &RoomId,
 	user_id: &UserId,
+	allowed_rooms: &[OwnedRoomId],
 	state_lock: &RoomMutexGuard,
 ) -> Result<OwnedUserId> {
-	let auth_user = services
+	let local_members: Vec<_> = services
 		.rooms
 		.state_cache
 		.local_users_in_room(room_id)
-		.filter(|user| {
-			services
-				.rooms
-				.state_accessor
-				.user_can_invite(room_id, user, user_id, state_lock)
-		})
-		.boxed()
-		.next()
-		.await
-		.map(ToOwned::to_owned);
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
 
-	match auth_user {
-		| Some(auth_user) => Ok(auth_user),
-		| None => {
-			Err!(Request(UnableToGrantJoin(
-				"No user on this server is able to assist in joining."
-			)))
-		},
+	for user in &local_members {
+		// Must have invite power in the restricted room
+		if !services
+			.rooms
+			.state_accessor
+			.user_can_invite(room_id, user, user_id, state_lock)
+			.await
+		{
+			continue;
+		}
+
+		// Must be in at least one of the allowed rooms
+		let mut in_allowed = false;
+		for allowed_room in allowed_rooms {
+			if services
+				.rooms
+				.state_cache
+				.is_joined(user, allowed_room)
+				.await
+			{
+				in_allowed = true;
+				break;
+			}
+		}
+
+		if in_allowed {
+			return Ok(user.clone());
+		}
+
+		warn!(
+			"select_authorising_user: {user} can invite in {room_id} but is not in any allowed \
+			 room — skipping"
+		);
 	}
+
+	Err!(Request(UnableToGrantJoin(
+		"No user on this server is able to assist in joining."
+	)))
 }
 
 /// Checks whether the given user can join the given room via a restricted join.
+/// Returns `Ok(Some(allowed_rooms))` if the user can perform the restricted
+/// join, where `allowed_rooms` lists the rooms whose membership qualifies.
+/// Returns `Ok(None)` if the room is not restricted.
 pub(crate) async fn user_can_perform_restricted_join(
 	services: &Services,
 	user_id: &UserId,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
-) -> Result<bool> {
+) -> Result<Option<Vec<OwnedRoomId>>> {
 	use RoomVersionId::*;
 
 	// restricted rooms are not supported on <=v7
@@ -219,20 +254,30 @@ pub(crate) async fn user_can_perform_restricted_join(
 		.await
 	else {
 		// No join rules means there's nothing to authorise (defaults to invite)
-		return Ok(false);
+		return Ok(None);
 	};
 
 	let (JoinRule::Restricted(r) | JoinRule::KnockRestricted(r)) =
 		join_rules_event_content.join_rule
 	else {
 		// This is not a restricted room
-		return Ok(false);
+		return Ok(None);
 	};
 
 	if r.allow.is_empty() {
 		// This will never be authorisable, return forbidden.
 		return Err!(Request(Forbidden("You are not invited to this room.")));
 	}
+
+	// Collect the allowed room IDs for use by select_authorising_user
+	let allowed_rooms: Vec<OwnedRoomId> = r
+		.allow
+		.iter()
+		.filter_map(|rule| match rule {
+			| AllowRule::RoomMembership(m) => Some(m.room_id.clone()),
+			| _ => None,
+		})
+		.collect();
 
 	let mut could_satisfy = true;
 	for allow_rule in &r.allow {
@@ -260,7 +305,7 @@ pub(crate) async fn user_can_perform_restricted_join(
 						"User {} is allowed to join room {} via membership in room {}",
 						user_id, room_id, membership.room_id
 					);
-					return Ok(true);
+					return Ok(Some(allowed_rooms));
 				}
 			},
 			| AllowRule::UnstableSpamChecker => {
@@ -269,7 +314,7 @@ pub(crate) async fn user_can_perform_restricted_join(
 					.meowlnir_accept_make_join(room_id.to_owned(), user_id.to_owned())
 					.await
 				{
-					| Ok(()) => Ok(true),
+					| Ok(()) => Ok(Some(allowed_rooms.clone())),
 					| Err(_) => Err!(Request(Forbidden("Antispam rejected join request."))),
 				};
 			},
