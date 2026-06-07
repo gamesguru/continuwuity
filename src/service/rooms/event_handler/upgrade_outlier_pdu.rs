@@ -132,7 +132,7 @@ where
 		.await;
 	}
 
-	let state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
+	let mut state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
 		&incoming_pdu,
 		create_event,
 		origin,
@@ -389,6 +389,24 @@ where
 			.get_room_shortstatehash(room_id)
 			.await
 			.ok();
+
+		if let StateAtEvent::FastForward(shortstatehash) = &state_at_incoming_event {
+			if Some(*shortstatehash) != base_shortstatehash {
+				info!(
+					"Fast-forward state hash shift ({} -> {:?}), re-eval state @ incoming",
+					shortstatehash, base_shortstatehash
+				);
+				state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
+					&incoming_pdu,
+					create_event,
+					origin,
+					room_id,
+					&room_version_id,
+					skip_soft_fail,
+				))
+				.await?;
+			}
+		}
 
 		// Heavy computation WITHOUT the lock
 		let delta = self
