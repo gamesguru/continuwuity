@@ -76,7 +76,7 @@ Some values that are commonly tuned include:
 
 ### Recursion versus forwarding
 
-Unbound by default employs **recursive resolution** and contacts many servers around the world. While this allows updated and authoritative answers and are generally viable for most users, sometimes these recursive queries can be too slow to fully resolve. As an alternative, you can consider **forwarding** your queries to public resolvers, and benefit from faster responses from their CDNs.
+Unbound by default employs **recursive resolution** and contacts many servers around the world. While this approach provides updated and authoritative answers and is generally viable for most users, sometimes these recursive queries can be too slow to fully resolve. As an alternative, you can consider **forwarding** your queries to public resolvers to benefit from faster responses from their CDNs.
 
 Do note that most popular upstreams (such as Google DNS or Quad9) employ IP ratelimiting, so a generous cache is still needed to avoid making too many queries.
 
