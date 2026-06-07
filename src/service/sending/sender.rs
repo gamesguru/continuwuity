@@ -151,11 +151,10 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 		e: &Error,
 	) {
-		match e {
-			| Error::FederationTimeout(..) | Error::FederationConnection(..) =>
-				tracing::info!(target = "federation_debug", dest = ?dest, "{e:?}"),
-			| _ if e.status_code().is_server_error() => tracing::warn!(dest = ?dest, "{e:?}"),
-			| _ => info!(dest = ?dest, "{e:?}"),
+		if e.status_code() == http::StatusCode::TOO_MANY_REQUESTS {
+			tracing::info!(dest = ?dest, "{e:?}");
+		} else {
+			tracing::info!(target: "federation_debug", dest = ?dest, "{e:?}");
 		}
 
 		let mut tries = 1_u32;
@@ -168,11 +167,11 @@ impl Service {
 				},
 				| TransactionStatus::Failed(n, _) => {
 					tries = n.saturating_add(1);
-					tracing::warn!(dest = ?dest, tries = tries, "Request failed while already marked as failed");
+					tracing::info!(dest = ?dest, tries = tries, "Request failed while already marked as failed");
 					TransactionStatus::Failed(tries, Instant::now())
 				},
 				| TransactionStatus::Cooldown(_) => {
-					tracing::warn!(dest = ?dest, "Request failed while in cooldown");
+					tracing::info!(dest = ?dest, "Request failed while in cooldown");
 					TransactionStatus::Failed(1, Instant::now())
 				},
 			}
@@ -1157,11 +1156,11 @@ impl Service {
 			edus,
 		};
 
-		tracing::info!(target = "federation_debug", dest = ?server, "Sending federation request to server!");
+		tracing::info!(target: "federation_debug", dest = ?server, "Sending federation request to server!");
 		let result = self
 			.send_federation_request_on(&self.services.client.sender, &server, request)
 			.await;
-		tracing::info!(target = "federation_debug", dest = ?server, "Finished sending federation request! Result: {:?}", result.is_ok());
+		tracing::info!(target: "federation_debug", dest = ?server, "Finished sending federation request! Result: {:?}", result.is_ok());
 
 		for (event_id, result) in result.iter().flat_map(|resp| resp.pdus.iter()) {
 			if let Err(e) = result {
