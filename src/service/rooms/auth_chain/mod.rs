@@ -10,7 +10,7 @@ use std::{
 use conduwuit::{
 	Err, Result, at, debug, implement, info, trace,
 	utils::{
-		IterStream,
+		IterStream, MutexMap,
 		stream::{ReadyExt, TryBroadbandExt},
 	},
 	validated, warn,
@@ -24,6 +24,7 @@ use crate::{Dep, rooms, rooms::short::ShortEventId};
 pub struct Service {
 	services: Services,
 	db: Data,
+	mutex_fetch: MutexMap<OwnedEventId, ()>,
 }
 
 struct Services {
@@ -43,6 +44,7 @@ impl crate::Service for Service {
 				outlier: args.depend::<rooms::outlier::Service>("rooms::outlier"),
 			},
 			db: Data::new(&args),
+			mutex_fetch: MutexMap::new(),
 		}))
 	}
 
@@ -146,6 +148,8 @@ async fn get_auth_chain_outer(
 		.into_iter()
 		.try_stream::<conduwuit::Error>()
 		.broad_and_then(|(shortid, event_id)| async move {
+			let _guard = self.mutex_fetch.lock(event_id).await;
+
 			if let Ok(cached) = self.get_cached_eventid_authchain(&[shortid]).await {
 				return Ok((cached.to_vec(), true));
 			}

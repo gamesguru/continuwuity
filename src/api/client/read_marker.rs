@@ -211,7 +211,7 @@ pub(crate) async fn create_receipt_route(
 				if let Some(old_event_id) = services
 					.rooms
 					.read_receipt
-					.readreceipt_get(&body.room_id, sender_user, Some(&ReceiptThread::Unthreaded))
+					.readreceipt_get(&body.room_id, sender_user, Some(&body.body.thread))
 					.await
 				{
 					if let Ok(PduCount::Normal(old_count)) =
@@ -232,7 +232,7 @@ pub(crate) async fn create_receipt_route(
 						sender_user.to_owned(),
 						ruma::events::receipt::Receipt {
 							ts: Some(MilliSecondsSinceUnixEpoch::now()),
-							thread: ReceiptThread::Unthreaded,
+							thread: body.body.thread.clone(),
 						},
 					)]),
 				)]),

@@ -1296,8 +1296,8 @@ pub(super) async fn fetch_missing_events(
 		let mut active: FuturesUnordered<_> = FuturesUnordered::new();
 		for server in &servers {
 			let room_id_c = room_id.clone();
-			let earliest = extremities.clone();
-			let latest = remaining.clone();
+			let earliest = targets.clone(); // The older events (the disconnected chunk) to stop at
+			let latest = extremities.clone(); // The newer events to walk backwards from
 			active.push(async move {
 				let t = Instant::now();
 				let res = self

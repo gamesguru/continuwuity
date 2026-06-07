@@ -164,22 +164,23 @@ impl Service {
 		origin: &ruma::ServerName,
 		room_server_cap: usize,
 	) -> Vec<OwnedServerName> {
-		let mut servers: Vec<OwnedServerName> = vec![origin.to_owned()];
-		for s in &self.services.server.config.trusted_servers {
-			if !self.services.globals.server_is_ours(s) && !servers.contains(s) {
-				servers.push(s.clone());
-			}
-		}
 		let mut room_servers: Vec<OwnedServerName> = self
 			.services
 			.state_cache
 			.room_servers(room_id)
-			.ready_filter(|s| {
-				!self.services.globals.server_is_ours(s) && !servers.iter().any(|x| x == s)
-			})
+			.ready_filter(|s| !self.services.globals.server_is_ours(s))
 			.map(ToOwned::to_owned)
 			.collect()
 			.await;
+
+		let mut servers: Vec<OwnedServerName> = vec![origin.to_owned()];
+
+		// Prioritize trusted servers that are ACTUALLY in the room
+		for s in &self.services.server.config.trusted_servers {
+			if room_servers.contains(s) && !servers.contains(s) {
+				servers.push(s.clone());
+			}
+		}
 
 		// Sort by peer score: lower is better (latency + errors*1000 - successes*100)
 		// i64 allows healthy servers to score negative, ranking above unseen peers
@@ -197,8 +198,25 @@ impl Service {
 			}
 		});
 
-		room_servers.truncate(room_server_cap);
-		servers.extend(room_servers);
+		// Add remaining best-scored room servers (up to the cap)
+		let mut added: usize = 0;
+		for s in room_servers {
+			if !servers.contains(&s) {
+				servers.push(s.clone());
+				added = added.saturating_add(1);
+				if added >= room_server_cap {
+					break;
+				}
+			}
+		}
+
+		// Finally, add trusted servers NOT in the room as an absolute last resort
+		for s in &self.services.server.config.trusted_servers {
+			if !self.services.globals.server_is_ours(s) && !servers.contains(s) {
+				servers.push(s.clone());
+			}
+		}
+
 		servers
 	}
 

@@ -11,7 +11,7 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, future::ready, pin_mut};
 use ruma::{
 	OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, RoomId,
-	api::federation::event::{get_event, get_room_state},
+	api::federation::event::get_room_state,
 	events::{StateEventType, TimelineEventType},
 };
 
@@ -47,7 +47,6 @@ pub(super) async fn heal_room(
 	// Phase 2: Walk the DAG to find genuinely missing events
 	self.write_str("Phase 2: Scanning DAG for gaps...\n")
 		.await?;
-	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 	let latest_event_id = self
 		.services
 		.rooms
@@ -57,94 +56,70 @@ pub(super) async fn heal_room(
 		.event_id()
 		.to_owned();
 
-	let latest = self
-		.services
-		.rooms
-		.timeline
-		.get_pdu(&latest_event_id)
+	let state_ids = vec![latest_event_id.clone()];
+	if nuclear {
+		// If nuclear, we could include auth events of the latest event, but
+		// walk_dag walks both prev_events and auth_events anyway!
+	}
+
+	let fetcher = |event_id: OwnedEventId| {
+		Box::pin(async move {
+			if let Ok(pdu) = self.services.rooms.timeline.get_pdu(&event_id).await {
+				conduwuit::utils::dag_walker::FetchResult::Timeline(pdu)
+			} else if let Ok(pdu) = self.services.rooms.outlier.get_pdu_outlier(&event_id).await {
+				conduwuit::utils::dag_walker::FetchResult::Outlier(pdu)
+			} else {
+				conduwuit::utils::dag_walker::FetchResult::Missing
+			}
+		})
+	};
+
+	let result = conduwuit::utils::dag_walker::walk_dag(state_ids, fetcher).await;
+	let missing = result.missing;
+
+	let mut fetched = 0_usize;
+	if !missing.is_empty() {
+		self.write_str(&format!(
+			"Phase 2: Found {} missing events. Fetching via bulk APIs...\n",
+			missing.len()
+		))
 		.await?;
 
-	let mut queue: VecDeque<OwnedEventId> = latest.prev_events().map(ToOwned::to_owned).collect();
-	queue.extend(latest.auth_events().map(ToOwned::to_owned));
-	let mut seen = HashSet::<OwnedEventId>::new();
-	let mut fetched = 0_usize;
-	let mut local_found = 0_usize;
-	drop(latest);
+		if !dry_run {
+			let fetched_pdus = self
+				.services
+				.rooms
+				.event_handler
+				.fetch_and_handle_outliers(
+					&server,
+					missing.iter().map(AsRef::as_ref),
+					None::<&PduEvent>,
+					&room_id,
+					false, // skip_sig_verify
+					None,
+				)
+				.await;
 
-	while let Some(event_id) = queue.pop_front() {
-		if seen.contains(&event_id) {
-			continue;
-		}
-		seen.insert(event_id.clone());
-
-		// Check local sources: timeline first, then outlier table
-		if let Ok(pdu) = self.services.rooms.timeline.get_pdu(&event_id).await {
-			// Already in timeline — just walk its parents (no fetch needed)
-			local_found = local_found.saturating_add(1);
-			if nuclear {
-				queue.extend(pdu.prev_events().map(ToOwned::to_owned));
-				queue.extend(pdu.auth_events().map(ToOwned::to_owned));
+			fetched = fetched_pdus.len();
+			for (pdu, _) in fetched_pdus {
+				self.services
+					.rooms
+					.pdu_metadata
+					.clear_pdu_markers(pdu.event_id());
 			}
-			continue;
-		}
-
-		// Check outlier table
-		if let Ok(pdu) = self.services.rooms.outlier.get_pdu_outlier(&event_id).await {
-			// Present locally as outlier — walk parents, rescue will handle it
-			local_found = local_found.saturating_add(1);
-			queue.extend(pdu.prev_events().map(ToOwned::to_owned));
-			queue.extend(pdu.auth_events().map(ToOwned::to_owned));
-			continue;
-		}
-
-		if dry_run {
-			fetched = fetched.saturating_add(1);
-			continue;
-		}
-
-		// Genuinely missing — fetch from federation
-		let Ok(response) = self
-			.services
-			.sending
-			.send_federation_request(&server, get_event::v1::Request::new(event_id.clone(), None))
-			.await
-		else {
-			continue;
-		};
-
-		let Ok((eid, value)) = self
-			.services
-			.server_keys
-			.validate_and_add_event_id(&response.pdu, &room_version)
-			.await
-		else {
-			continue;
-		};
-
-		let Ok(pdu) = PduEvent::from_id_val(&eid, value.clone(), Some(room_id.as_ref())) else {
-			continue;
-		};
-
-		self.services
-			.rooms
-			.outlier
-			.add_pdu_outlier(&eid, &value, Some(&room_id));
-		// Clear rejection/soft-fail markers for forcefully imported state
-		self.services.rooms.pdu_metadata.clear_pdu_markers(&eid);
-		queue.extend(pdu.prev_events().map(ToOwned::to_owned));
-		queue.extend(pdu.auth_events().map(ToOwned::to_owned));
-		fetched = fetched.saturating_add(1);
-
-		// Yield periodically to avoid blocking the executor
-		if fetched.is_multiple_of(10) {
-			tokio::task::yield_now().await;
 		}
 	}
 
 	self.write_str(&format!(
-		"Phase 2: Scanned {seen} events ({local_found} local, {fetched} {action})\n",
-		seen = seen.len(),
-		action = if dry_run { "would fetch" } else { "fetched" },
+		"Phase 2: Scanned DAG ({} timeline, {} outliers, {} missing). {}\n",
+		result.in_timeline,
+		result.in_outlier,
+		missing.len(),
+		if dry_run {
+			format!("Would fetch {}.", missing.len())
+		} else {
+			format!("Fetched {fetched}.")
+		}
 	))
 	.await?;
 
@@ -596,120 +571,139 @@ pub(super) async fn rescue_room(
 	let mut count = 0_usize;
 	let mut skipped = 0_usize;
 	let mut failed = 0_usize;
-	for event_id in sorted {
-		let pdu = outliers.get(&event_id).expect("in sorted list");
 
-		// Skip superseded state events (only when not force-rescuing).
-		if !force {
-			if let Some(state_key) = &pdu.state_key {
-				let key = (pdu.kind.to_string(), state_key.to_string());
-				if let Some((curr_ts, curr_depth, curr_eid)) = current_state.get(&key) {
-					let dominated = (pdu.origin_server_ts, pdu.depth, &pdu.event_id)
-						< (*curr_ts, *curr_depth, curr_eid);
-					if dominated {
-						skipped = skipped.saturating_add(1);
-						continue;
+	// Build dependency graph for Concurrent DAG Execution
+	let mut indegree: HashMap<OwnedEventId, usize> = HashMap::with_capacity(sorted.len());
+	let mut dependents: HashMap<OwnedEventId, Vec<OwnedEventId>> =
+		HashMap::with_capacity(sorted.len());
+	let sorted_set: HashSet<OwnedEventId> = sorted.iter().cloned().collect();
+
+	for id in &sorted {
+		let pdu = outliers.get(id).expect("in sorted list");
+		let mut deps = HashSet::new();
+		for dep in pdu.prev_events().chain(pdu.auth_events()) {
+			if sorted_set.contains(dep) {
+				deps.insert(dep.to_owned());
+			}
+		}
+		indegree.insert(id.clone(), deps.len());
+		for dep in deps {
+			dependents.entry(dep).or_default().push(id.clone());
+		}
+	}
+
+	let mut ready_queue: VecDeque<OwnedEventId> = indegree
+		.iter()
+		.filter(|(_, count)| **count == 0)
+		.map(|(id, _)| id.clone())
+		.collect();
+
+	let mut pending_futures = futures::stream::FuturesUnordered::new();
+	// Limit concurrency to avoid memory exhaustion during heavy state-res
+	let max_concurrency = self.services.server.concurrency_scaled(4);
+
+	loop {
+		while pending_futures.len() < max_concurrency && !ready_queue.is_empty() {
+			let event_id = ready_queue.pop_front().unwrap();
+			let pdu = outliers.get(&event_id).expect("in sorted list").clone();
+			let origin = pdu
+				.origin
+				.clone()
+				.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+
+			// Fast path check
+			let mut is_skipped = false;
+			let mut is_forced = false;
+
+			if !force {
+				if let Some(state_key) = &pdu.state_key {
+					let key = (pdu.kind.to_string(), state_key.to_string());
+					if let Some((curr_ts, curr_depth, curr_eid)) = current_state.get(&key) {
+						let dominated = (pdu.origin_server_ts, pdu.depth, &pdu.event_id)
+							< (*curr_ts, *curr_depth, curr_eid);
+						if dominated {
+							is_skipped = true;
+						}
 					}
 				}
+			} else {
+				is_forced = true;
 			}
-		}
 
-		// --force fast path: bypass the network and auth checks entirely and
-		// directly promote the outlier to the timeline. Required for dead events
-		// where the network returns 404 for /state_ids (pruned remote databases)
-		// or the origin server is gone entirely.
-		if force {
-			self.services
-				.rooms
-				.pdu_metadata
-				.clear_pdu_markers(&event_id);
-			if self
-				.services
-				.rooms
-				.timeline
-				.promote_outlier(&room_id, &event_id)
-				.await
-				.is_ok()
-			{
-				count = count.saturating_add(1);
-			}
-			if count.is_multiple_of(500) && count > 0 {
-				info!("rescue_room (force): promoted {count} events...");
-				tokio::task::yield_now().await;
-			}
-			continue;
-		}
+			let event_handler = self.services.rooms.event_handler.clone();
+			let pdu_metadata = self.services.rooms.pdu_metadata.clone();
+			let timeline = self.services.rooms.timeline.clone();
+			let room_id_c = room_id.clone();
+			let create_event_c = create_event.clone();
 
-		let origin = pdu
-			.origin
-			.clone()
-			.unwrap_or_else(|| pdu.sender.server_name().to_owned());
+			pending_futures.push(async move {
+				if is_skipped {
+					return (event_id, Ok(None));
+				}
 
-		let pdu_json = match self.services.rooms.timeline.get_pdu_json(&event_id).await {
-			| Ok(json) => json,
-			| Err(e) => {
-				warn!("rescue_room: could not find JSON for {event_id}: {e}");
-				failed = failed.saturating_add(1);
-				continue;
-			},
-		};
+				if is_forced {
+					pdu_metadata.clear_pdu_markers(&event_id);
+					if timeline
+						.promote_outlier(&room_id_c, &event_id)
+						.await
+						.is_ok()
+					{
+						return (event_id, Ok(Some(())));
+					}
+					return (event_id, Ok(None));
+				}
 
-		// Always clear rejection/soft-fail markers before rescue attempt.
-		// An admin explicitly rescuing events wants them in the timeline.
-		// Without this, previously soft-failed events bounce off the early
-		// check in upgrade_outlier_to_timeline_pdu and nothing happens.
-		self.services
-			.rooms
-			.pdu_metadata
-			.clear_pdu_markers(&event_id);
+				let pdu_json = match timeline.get_pdu_json(&event_id).await {
+					| Ok(j) => j,
+					| Err(e) => return (event_id, Err(e)),
+				};
 
-		match Box::pin(
-			self.services
-				.rooms
-				.event_handler
-				.upgrade_outlier_to_timeline_pdu(
-					pdu.clone(),
-					pdu_json.clone(),
-					&create_event,
+				pdu_metadata.clear_pdu_markers(&event_id);
+
+				let res = Box::pin(event_handler.upgrade_outlier_to_timeline_pdu(
+					pdu,
+					pdu_json,
+					&create_event_c,
 					&origin,
-					&room_id,
-					// Always skip soft-fail for admin rescue (matches rescue-pdu)
+					&room_id_c,
 					true,
 					// is_forward_extremity
 					true,
-				),
-		)
-		.await
-		{
-			| Ok(Some(_)) => {
-				count = count.saturating_add(1);
-				// Update current_state so subsequent events can compare against
-				// the just-rescued event
-				if let Some(state_key) = &pdu.state_key {
-					let key = (pdu.kind.to_string(), state_key.to_string());
-					current_state
-						.insert(key, (pdu.origin_server_ts, pdu.depth, pdu.event_id.clone()));
-				}
-			},
-			| Ok(None) => {
-				// Event was acknowledged but NOT added to the timeline
-				// (e.g., soft-failed acknowledgment). Don't count as rescued.
-				skipped = skipped.saturating_add(1);
-			},
-			| Err(e) => {
-				failed = failed.saturating_add(1);
-				warn!(
-					event_id = %event_id,
-					sender = %pdu.sender(),
-					kind = %pdu.kind,
-					"rescue-room: failed to upgrade outlier: {e}"
-				);
-			},
+				))
+				.await;
+
+				(event_id, res.map(|o| o.map(|_| ())))
+			});
 		}
 
-		// Yield every 10 events to prevent blocking the executor too long
-		if count.is_multiple_of(10) {
-			tokio::task::yield_now().await;
+		if let Some((event_id, res)) = pending_futures.next().await {
+			match res {
+				| Ok(Some(())) => count = count.saturating_add(1),
+				| Ok(None) => skipped = skipped.saturating_add(1),
+				| Err(e) => {
+					failed = failed.saturating_add(1);
+					warn!(%event_id, "rescue-room: failed to upgrade outlier: {e}");
+				},
+			}
+
+			if let Some(deps) = dependents.get(&event_id) {
+				for dep in deps {
+					let count = indegree.get_mut(dep).unwrap();
+					*count = count.saturating_sub(1);
+					if *count == 0 {
+						ready_queue.push_back(dep.clone());
+					}
+				}
+			}
+
+			if count.is_multiple_of(50) && count > 0 {
+				tokio::task::yield_now().await;
+			}
+		} else if ready_queue.is_empty() && pending_futures.is_empty() {
+			break;
+		} else {
+			warn!("Cycle detected or missing dependencies in rescue_room DAG execution!");
+			break;
 		}
 	}
 

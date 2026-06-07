@@ -45,34 +45,44 @@ where
 		)
 		.await;
 
-	// In inline synchronous fetches, we cap the number of fallback servers to 2
-	// to prevent blocking the incoming federation queue for minutes when dealing
-	// with a dead origin or missing state backlog.
-	servers.truncate(2);
+	// In inline synchronous fetches, we cap the number of fallback servers to 5
+	// to prevent overwhelming the network while ensuring we hit room members.
+	// We run these concurrently.
+	servers.truncate(5);
 
 	let mut last_err = err!(Request(NotFound("No server could provide /state")));
-	let res = 'found: {
-		for server in &servers {
-			let req = self.services.sending.send_federation_request(
-				server,
-				get_room_state::v1::Request::new(event_id.to_owned(), room_id.to_owned()),
-			);
+	let mut futures = futures::stream::FuturesUnordered::new();
 
-			// Wrap in strict timeout so federation stalls don't freeze the pipeline
+	for server in &servers {
+		let server = server.clone();
+		let event_id = event_id.to_owned();
+		let room_id = room_id.to_owned();
+		futures.push(async move {
+			let req = self.services.sending.send_federation_request(
+				&server,
+				get_room_state::v1::Request::new(event_id, room_id),
+			);
 			match tokio::time::timeout(Duration::from_secs(60), req).await {
-				| Ok(Ok(res)) => {
+				| Ok(Ok(res)) => Ok((server, res)),
+				| Ok(Err(e)) => Err((server, e)),
+				| Err(_) =>
+					Err((server, err!(Request(Unknown("Server took too long to return /state"))))),
+			}
+		});
+	}
+
+	let res = 'found: {
+		while let Some(result) = futures.next().await {
+			match result {
+				| Ok((server, res)) => {
 					if server != origin {
 						debug!(%server, "fetch_state: used fallback server for /state");
 					}
 					break 'found res;
 				},
-				| Ok(Err(e)) => {
+				| Err((server, e)) => {
 					info!(%server, "fetch_state /state failed: {e}");
 					last_err = e;
-				},
-				| Err(_) => {
-					debug_warn!(%server, "fetch_state /state timed out");
-					last_err = err!(Request(Unknown("Server took too long to return /state")));
 				},
 			}
 		}
