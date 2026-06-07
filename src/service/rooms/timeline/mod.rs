@@ -211,7 +211,6 @@ impl Service {
 		use ruma::events::StateEventType;
 
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
-		self.services.auth_chain.clear_db_cache().await;
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)

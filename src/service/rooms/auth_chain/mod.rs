@@ -142,34 +142,43 @@ async fn get_auth_chain_outer(
 		return Ok(cached.to_vec());
 	}
 
-	let chunk_cache: Vec<_> = chunk
+	let chunk_results: Vec<(Vec<ShortEventId>, bool)> = chunk
 		.into_iter()
 		.try_stream::<conduwuit::Error>()
 		.broad_and_then(|(shortid, event_id)| async move {
 			if let Ok(cached) = self.get_cached_eventid_authchain(&[shortid]).await {
-				return Ok(cached.to_vec());
+				return Ok((cached.to_vec(), true));
 			}
 
-			let auth_chain = self.get_auth_chain_inner(room_id, event_id).await?;
-			self.cache_auth_chain_vec(vec![shortid], auth_chain.as_slice());
+			let (auth_chain, is_complete) = self.get_auth_chain_inner(room_id, event_id).await?;
+			if is_complete {
+				self.cache_auth_chain_vec(vec![shortid], auth_chain.as_slice());
+			}
 			info!(
 				%event_id,
 				elapsed = ?started.elapsed(),
 				"Cache missed event - starting recursive auth chain walk"
 			);
 
-			Ok(auth_chain)
+			Ok((auth_chain, is_complete))
 		})
 		.try_collect()
-		.map_ok(|chunk_cache: Vec<_>| chunk_cache.into_iter().flatten().collect())
-		.map_ok(|mut chunk_cache: Vec<_>| {
-			chunk_cache.sort_unstable();
-			chunk_cache.dedup();
-			chunk_cache
-		})
 		.await?;
 
-	self.cache_auth_chain_vec(chunk_key, chunk_cache.as_slice());
+	let mut chunk_cache = Vec::new();
+	let mut chunk_is_complete = true;
+	for (auth_chain, is_complete) in chunk_results {
+		chunk_cache.extend(auth_chain);
+		if !is_complete {
+			chunk_is_complete = false;
+		}
+	}
+	chunk_cache.sort_unstable();
+	chunk_cache.dedup();
+
+	if chunk_is_complete {
+		self.cache_auth_chain_vec(chunk_key, chunk_cache.as_slice());
+	}
 	info!(
 		chunk_cache_length = ?chunk_cache.len(),
 		elapsed = ?started.elapsed(),
@@ -185,9 +194,10 @@ async fn get_auth_chain_inner(
 	&self,
 	room_id: &RoomId,
 	event_id: &EventId,
-) -> Result<Vec<ShortEventId>> {
+) -> Result<(Vec<ShortEventId>, bool)> {
 	let mut todo = vec![event_id.to_owned()];
 	let mut found = HashSet::new();
+	let mut is_complete = true;
 
 	let started = Instant::now();
 	let mut last_progress = Instant::now();
@@ -226,7 +236,8 @@ async fn get_auth_chain_inner(
 		for (event_id, pdu_result) in results {
 			match pdu_result {
 				| Err(e) => {
-					info!(%event_id, ?e, "Could not find pdu mentioned in auth events");
+					info!(%event_id, ?e, "Could not find pdu mentioned in auth events; marking chain as incomplete");
+					is_complete = false;
 				},
 				| Ok(pdu) => {
 					if let Some(claimed_room_id) = pdu.room_id.clone() {
@@ -271,7 +282,7 @@ async fn get_auth_chain_inner(
 		}
 	}
 
-	Ok(found.into_iter().collect())
+	Ok((found.into_iter().collect(), is_complete))
 }
 
 #[implement(Service)]
