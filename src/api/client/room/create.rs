@@ -629,18 +629,6 @@ fn default_power_levels_content(
 		power_levels_content["events"]["m.room.tombstone"] =
 			serde_json::to_value(150).expect("150 is valid Value");
 
-		// Check that no creator appears in the users map (from override)
-		if let Some(users) = power_levels_content["users"].as_object() {
-			for creator in &creators {
-				if users.contains_key(creator.as_str()) {
-					return Err!(Request(BadJson(
-						"power_level_content_override cannot set a room creator in the users \
-						 map: {creator}"
-					)));
-				}
-			}
-		}
-
 		for creator in creators {
 			// Omit creators from the power level list altogether
 			power_levels_content["users"]
