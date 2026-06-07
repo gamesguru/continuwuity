@@ -961,23 +961,19 @@ where
 				}
 
 				// Check if sender is a v12 privileged room creator
-				let is_privileged_creator =
-					creator_event.as_ref().is_some_and(|creator_ev| {
-						from_json_str::<ruma::events::room::create::RoomCreateEventContent>(
-							creator_ev.content().get(),
-						)
-						.is_ok_and(|cc| {
-							RoomVersion::new(&cc.room_version)
-								.is_ok_and(|rv| rv.explicitly_privilege_room_creators)
-								&& (creator_ev.sender().as_str() == s.as_str()
-									|| cc
-										.additional_creators
-										.as_ref()
-										.is_some_and(|cs| {
-											cs.iter().any(|c| c.as_str() == s.as_str())
-										}))
-						})
-					});
+				let is_privileged_creator = creator_event.as_ref().is_some_and(|creator_ev| {
+					from_json_str::<ruma::events::room::create::RoomCreateEventContent>(
+						creator_ev.content().get(),
+					)
+					.is_ok_and(|cc| {
+						RoomVersion::new(&cc.room_version)
+							.is_ok_and(|rv| rv.explicitly_privilege_room_creators)
+							&& (creator_ev.sender().as_str() == s.as_str()
+								|| cc.additional_creators.as_ref().is_some_and(|cs| {
+									cs.iter().any(|c| c.as_str() == s.as_str())
+								}))
+					})
+				});
 
 				if is_privileged_creator {
 					sender_pl_cache.insert(cache_key, Int::MAX);
