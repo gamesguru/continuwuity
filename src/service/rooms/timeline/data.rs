@@ -596,7 +596,16 @@ impl Data {
 		(pdu_id, pdu): KeyVal<'_>,
 	) -> Result<PdusIterItem> {
 		let pdu_id: RawPduId = pdu_id.into();
-		let pdu = serde_json::from_slice::<PduEvent>(pdu)?;
+		let pdu = match serde_json::from_slice::<PduEvent>(pdu) {
+			| Ok(p) => p,
+			| Err(e) => {
+				conduwuit::warn!(
+					"parse_json_slice failed: {e}. JSON: {}",
+					String::from_utf8_lossy(pdu)
+				);
+				return Err(e.into());
+			},
+		};
 
 		if let Some(expected_room) = room_id {
 			let actual_room = pdu.room_id_or_hash();

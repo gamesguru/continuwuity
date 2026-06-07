@@ -84,7 +84,6 @@ struct Services {
 	spaces: Dep<rooms::spaces::Service>,
 	event_handler: Dep<rooms::event_handler::Service>,
 	outlier: Dep<rooms::outlier::Service>,
-	state_compressor: Dep<rooms::state_compressor::Service>,
 	auth_chain: Dep<rooms::auth_chain::Service>,
 }
 
@@ -118,8 +117,6 @@ impl crate::Service for Service {
 				search: args.depend::<rooms::search::Service>("rooms::search"),
 				spaces: args.depend::<rooms::spaces::Service>("rooms::spaces"),
 				outlier: args.depend::<rooms::outlier::Service>("rooms::outlier"),
-				state_compressor: args
-					.depend::<rooms::state_compressor::Service>("rooms::state_compressor"),
 				event_handler: args
 					.depend::<rooms::event_handler::Service>("rooms::event_handler"),
 				auth_chain: args.depend::<rooms::auth_chain::Service>("rooms::auth_chain"),
@@ -219,12 +216,10 @@ impl Service {
 		let mut entries: HashMap<OwnedEventId, (PduCount, ruma::UInt)> = HashMap::new();
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let dropped = 0_usize;
-		let mut tail_min_count: Option<PduCount> = None;
 
 		if let Some(limit) = tail {
 			info!("reorder_timeline: reading last {limit} PDUs from timeline (tail mode)...");
 			// Collect in reverse and record the minimum count seen (oldest in window)
-			let min_count = PduCount::max();
 			let mut rev = Box::pin(self.pdus_rev(room_id, None));
 			let mut collected = 0_usize;
 			while let Some((count, pdu)) = rev.try_next().await? {
@@ -240,9 +235,6 @@ impl Service {
 				if collected.is_multiple_of(10000) {
 					tokio::task::yield_now().await;
 				}
-			}
-			if min_count != PduCount::max() {
-				tail_min_count = Some(min_count);
 			}
 		} else {
 			info!("reorder_timeline: reading all PDUs from timeline...");
@@ -324,370 +316,11 @@ impl Service {
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		let final_sync = self.db.db.cork_and_sync();
 		drop(final_sync);
-		info!("reorder_timeline: re-insert complete, rebuilding shortstatehash chain...");
+		info!("reorder_timeline: re-insert complete, calculating forward extremities...");
 
-		// Rebuild per-PDU shortstatehashes: walk the reordered events in sequence
-		// and call append_to_state for state events (which updates the room's
-		// shortstatehash and records the mapping from shorteventid →
-		// shortstatehash). Non-state events inherit the current room shortstatehash.
-		// This fixes sync serving stale state snapshots after reorder.
+		// Calculate the true DAG forward extremities (events with in-degree 0
+		// in the reversed graph). This fixes broken pagination and fork storms.
 
-		// Save the room's current shortstatehash BEFORE the walk. The sequential
-		// rebuild uses naive "last event wins" which can disagree with state-res.
-		// We restore it after so force-set results are preserved.
-		let saved_shortstatehash = self.services.state.get_room_shortstatehash(room_id).await;
-
-		// Compute the FOUNDATION state: the state BEFORE the oldest timeline
-		// event. This is the correct starting point for the state walk.
-		//
-		// Strategy (in priority order):
-		// 1. Use pdu_shortstatehash from the oldest event's prev_events. These are
-		//    outliers whose hashes were never modified by reorder-timeline, so they
-		//    give the correct pre-timeline state.
-		// 2. If prev_events don't have SSH (never-processed outliers), fall back to
-		//    subtracting timeline state events from the full state. This works when all
-		//    state changes for a key are within the timeline, but can drop keys that
-		//    have pre-timeline values.
-		// 3. If prev_events is empty (m.room.create), use empty state.
-		//
-		// Without this seeding, the walk starts from the room's tip state
-		// and every historical event inherits the full future state
-		// ("Time-Travel State Bug").
-		if let Some(oldest_event_id) = sorted.first() {
-			let mut foundation_set = false;
-
-			// Tail mode: the foundation is simply the event immediately before the
-			// window boundary — look it up via pdus_rev starting just below min_count.
-			if let Some(min_count) = tail_min_count {
-				if let Some((_, pre_pdu)) = Box::pin(self.pdus_rev(room_id, Some(min_count)))
-					.try_next()
-					.await?
-				{
-					if let Ok(ssh) = self
-						.services
-						.state_accessor
-						.pdu_shortstatehash(&pre_pdu.event_id)
-						.await
-					{
-						if ssh != 0 {
-							self.services
-								.state
-								.set_room_state(room_id, ssh, &state_lock);
-							info!(
-								"reorder_timeline: tail: seeded walk from pre-window event {} \
-								 (SSH {ssh})",
-								pre_pdu.event_id
-							);
-							foundation_set = true;
-						}
-					}
-				}
-			}
-
-			if !foundation_set {
-				if let Ok(oldest_pdu) = self
-					.db
-					.get_pdu_in_room(Some(room_id), oldest_event_id)
-					.await
-				{
-					let prev_events: Vec<OwnedEventId> =
-						oldest_pdu.prev_events().map(ToOwned::to_owned).collect();
-
-					if prev_events.is_empty() {
-						// No prev_events → m.room.create → empty foundation.
-						// save_state with empty set creates a new SSH.
-						let empty = rooms::state_compressor::CompressedState::new();
-						if let Ok(result) = self
-							.services
-							.state_compressor
-							.save_state(room_id, Arc::new(empty))
-							.await
-						{
-							self.services.state.set_room_state(
-								room_id,
-								result.shortstatehash,
-								&state_lock,
-							);
-							info!(
-								"reorder_timeline: seeded walk from empty foundation \
-								 (m.room.create, no prev_events)"
-							);
-							foundation_set = true;
-						}
-					} else {
-						// Try each prev_event for an uncorrupted pdu_shortstatehash.
-						// These are outliers — reorder-timeline never touches their
-						// SSH, so they're guaranteed uncontaminated.
-						for prev_id in prev_events {
-							if let Ok(ssh) = self
-								.services
-								.state_accessor
-								.pdu_shortstatehash(&prev_id)
-								.await
-							{
-								self.services
-									.state
-									.set_room_state(room_id, ssh, &state_lock);
-								info!(
-									"reorder_timeline: seeded walk from prev_event {prev_id} \
-									 SSH {ssh}"
-								);
-								foundation_set = true;
-								break;
-							}
-						}
-					}
-				}
-			}
-
-			// Safe fallback: try the oldest event's own pdu_shortstatehash.
-			// If the room was never previously reordered, this is pristine.
-			if !foundation_set {
-				if let Ok(ssh) = self
-					.services
-					.state_accessor
-					.pdu_shortstatehash(oldest_event_id)
-					.await
-				{
-					self.services
-						.state
-						.set_room_state(room_id, ssh, &state_lock);
-					info!("reorder_timeline: seeded walk from oldest event SSH {ssh} (fallback)");
-					foundation_set = true;
-				}
-			}
-
-			// Last-resort fallback: subtract timeline state events from full state.
-			// Works when all state changes for a key originate in the
-			// timeline (locally-created rooms, single-join federated
-			// rooms). Can drop keys that have outlier-only pre-timeline
-			// values — but this is still better than the tip state.
-			if !foundation_set {
-				if let Ok(ssh) = saved_shortstatehash {
-					// Collect shorteventids for all state events in the timeline
-					let mut timeline_shorteventids: HashSet<u64> = HashSet::new();
-					for event_id in &sorted {
-						if let Ok(pdu) = self.db.get_pdu_in_room(Some(room_id), event_id).await {
-							if pdu.state_key.is_some() {
-								let seid = self
-									.services
-									.short
-									.get_or_create_shorteventid(event_id)
-									.await;
-								timeline_shorteventids.insert(seid);
-							}
-						}
-					}
-
-					// Load the full state and filter out timeline state events
-					let state_info_result = self
-						.services
-						.state_compressor
-						.load_shortstatehash_info(ssh)
-						.await;
-
-					if let Ok(state_info) = state_info_result {
-						let full_state_opt =
-							state_info.last().and_then(|info| info.full_state.clone());
-
-						if let Some(full_state) = full_state_opt {
-							use rooms::state_compressor::parse_compressed_state_event;
-
-							let foundation: rooms::state_compressor::CompressedState = full_state
-								.iter()
-								.filter(|entry| {
-									let (_ssk, seid) = parse_compressed_state_event(**entry);
-									!timeline_shorteventids.contains(&seid)
-								})
-								.copied()
-								.collect();
-
-							if let Ok(result) = self
-								.services
-								.state_compressor
-								.save_state(room_id, Arc::new(foundation))
-								.await
-							{
-								self.services.state.set_room_state(
-									room_id,
-									result.shortstatehash,
-									&state_lock,
-								);
-								info!(
-									"reorder_timeline: seeded walk from subtracted foundation \
-									 state {} ({} timeline state events removed, fallback)",
-									result.shortstatehash,
-									timeline_shorteventids.len()
-								);
-							}
-						}
-					}
-				}
-			}
-		}
-
-		let foundation_ssh = self
-			.services
-			.state
-			.get_room_shortstatehash(room_id)
-			.await
-			.ok();
-
-		// Load the foundation full state ONCE into memory. Every subsequent
-		// state event will be applied as an incremental diff against this
-		// cached set, avoiding the O(N × depth) DB reads that
-		// append_to_state would perform by re-loading the entire state
-		// chain for every single event.
-		let mut cached_full_state = if let Some(ssh) = foundation_ssh {
-			match self
-				.services
-				.state_compressor
-				.load_shortstatehash_info(ssh)
-				.await
-			{
-				| Ok(info) => info
-					.last()
-					.and_then(|i| i.full_state.clone())
-					.map(|arc| (*arc).clone())
-					.unwrap_or_default(),
-				| _ => {
-					use rooms::state_compressor::CompressedState;
-					CompressedState::new()
-				},
-			}
-		} else {
-			use rooms::state_compressor::CompressedState;
-			CompressedState::new()
-		};
-
-		let mut state_rebuilt = 0_usize;
-		let mut walk_ssh: Option<u64> = foundation_ssh;
-		let mut state_event_count = 0_usize;
-
-		for event_id in &sorted {
-			let Ok(pdu) = self.db.get_pdu_in_room(Some(room_id), event_id).await else {
-				continue;
-			};
-
-			// Get short IDs for this event
-			let shorteventid = self
-				.services
-				.short
-				.get_or_create_shorteventid(event_id)
-				.await;
-
-			// Associate this event with the CURRENT room SSH
-			if let Some(ssh) = walk_ssh {
-				self.services
-					.state
-					.set_pdu_shortstatehash(shorteventid, ssh);
-			}
-
-			// If this is a state event, apply the diff to cached_full_state
-			if let Some(state_key) = &pdu.state_key {
-				let shortstatekey = self
-					.services
-					.short
-					.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
-					.await;
-
-				let new_entry =
-					rooms::state_compressor::compress_state_event(shortstatekey, shorteventid);
-
-				// Find and remove the old entry with the same shortstatekey
-				let old_entry = cached_full_state
-					.iter()
-					.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
-					.copied();
-
-				if old_entry == Some(new_entry) {
-					// No change — SSH stays the same
-				} else {
-					// Apply the diff in memory
-					if let Some(old) = old_entry {
-						cached_full_state.remove(&old);
-					}
-					cached_full_state.insert(new_entry);
-
-					// Save as a new root to avoid expensive chain traversal
-					let new_ssh = match self
-						.services
-						.state_compressor
-						.save_state(room_id, Arc::new(cached_full_state.clone()))
-						.await
-					{
-						| Ok(result) => result.shortstatehash,
-						| Err(e) => {
-							warn!(
-								"reorder_timeline: save_state failed for {event_id}: {e}; \
-								 skipping shortstatehash rebuild for this event"
-							);
-							state_rebuilt = state_rebuilt.saturating_add(1);
-							continue;
-						},
-					};
-
-					if walk_ssh != Some(new_ssh) {
-						self.services
-							.state
-							.set_room_state(room_id, new_ssh, &state_lock);
-						walk_ssh = Some(new_ssh);
-					}
-
-					state_event_count = state_event_count.saturating_add(1);
-				}
-			}
-
-			state_rebuilt = state_rebuilt.saturating_add(1);
-			if state_rebuilt.is_multiple_of(5000) {
-				info!(
-					"reorder_timeline: rebuilt shortstatehash for {state_rebuilt}/{count} \
-					 events ({state_event_count} state changes)..."
-				);
-				tokio::task::yield_now().await;
-			}
-		}
-
-		// Post-walk invariant check: verify SSH diversity.
-		// If there were state events but the SSH never changed, the walk
-		// failed to advance state properly (regression guard).
-		if state_rebuilt > 0 {
-			info!(
-				"reorder_timeline: rebuilt state from cached foundation for {} events ({} state \
-				 events)",
-				state_rebuilt, state_event_count
-			);
-		}
-
-		if state_event_count > 1 && walk_ssh == foundation_ssh {
-			// walk_ssh never diverged from the foundation — every state
-			// event produced the same SSH it started with. This should be
-			// impossible unless append_to_state is broken.
-			warn!(
-				"reorder_timeline: INVARIANT VIOLATION — {state_event_count} state events but \
-				 SSH never advanced from foundation. Per-event state snapshots may be incorrect."
-			);
-		} else {
-			info!(
-				"reorder_timeline: walk complete — {state_rebuilt} events, {state_event_count} \
-				 state events processed"
-			);
-		}
-		// Compute the correct final room state. The sequential walk gives
-		// each event a pdu_shortstatehash for visibility, but at merge
-		// points (events with >1 prev_event) the "last writer wins"
-		// heuristic can disagree with proper state resolution.
-		//
-		// Strategy:
-		// - Single extremity: the walk result (walk_ssh) is correct since there are no
-		//   unresolved forks.
-		// - Multiple extremities: run state_res across all fork states to get the
-		//   authoritative resolved state.
-		// - Fallback: if state_res fails, keep the walk result rather than restoring a
-		//   potentially stale pre-walk snapshot.
-
-		// Calculate the true DAG forward extremities first (needed for both
-		// state resolution and the extremity store update below).
 		let mut true_extremities: Vec<OwnedEventId> = calculate_true_extremities(&graph, &sorted)
 			.into_iter()
 			.map(ToOwned::to_owned)
@@ -705,26 +338,6 @@ impl Service {
 			if !entries.contains_key(&ext) {
 				true_extremities.push(ext);
 			}
-		}
-
-		// The topological walk already processed every event (including all fork
-		// tips) in DAG order — equivalent to incremental resolution at each merge
-		// point (what ruma-lean does). Holistic V2.0 state_res on large fork
-		// states causes false auth rejections: the dedup gives resolved_state
-		// priority over an event's own auth_events, letting stale membership
-		// events from the auth_diff cascade into spurious rejections that drop
-		// valid members. Trust the walk result instead.
-		if true_extremities.len() > 1 {
-			info!(
-				"reorder_timeline: {} forward extremities — walk state is authoritative \
-				 (topological replay is equivalent to incremental resolution)",
-				true_extremities.len()
-			);
-		} else {
-			info!(
-				"reorder_timeline: single extremity — walk state is authoritative (SSH {:?})",
-				walk_ssh
-			);
 		}
 
 		if !true_extremities.is_empty() {
@@ -757,58 +370,55 @@ impl Service {
 
 		// Single pass over state snapshot — check-before-write avoids
 		// redundant DB writes for users whose cache is already correct.
-		let state_full = self.services.state_accessor.state_full(
-			self.services
-				.state
-				.get_room_shortstatehash(room_id)
-				.await
-				.unwrap_or_default(),
-		);
-		let mut state_full = std::pin::pin!(state_full);
-		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
-			if event_type != StateEventType::RoomMember {
-				continue;
-			}
-			let Ok(uid) = ruma::OwnedUserId::try_from(state_key.as_str()) else {
-				continue;
-			};
+		if let Ok(room_ssh) = self.services.state.get_room_shortstatehash(room_id).await {
+			let state_full = self.services.state_accessor.state_full(room_ssh);
+			let mut state_full = std::pin::pin!(state_full);
+			while let Some(((event_type, state_key), pdu)) = state_full.next().await {
+				if event_type != StateEventType::RoomMember {
+					continue;
+				}
+				let Ok(uid) = ruma::OwnedUserId::try_from(state_key.as_str()) else {
+					continue;
+				};
 
-			let content: serde_json::Value = pdu.get_content_as_value();
-			let membership = content
-				.get("membership")
-				.and_then(|v| v.as_str())
-				.unwrap_or("leave");
+				let content: serde_json::Value = pdu.get_content_as_value();
+				let membership = content
+					.get("membership")
+					.and_then(|v| v.as_str())
+					.unwrap_or("leave");
 
-			match membership {
-				| "join" => {
-					state_joined.insert(uid.clone());
-					if !self.services.state_cache.is_joined(&uid, room_id).await {
-						self.services
+				match membership {
+					| "join" => {
+						state_joined.insert(uid.clone());
+						if !self.services.state_cache.is_joined(&uid, room_id).await {
+							self.services
+								.state_cache
+								.mark_as_joined_silent(&uid, room_id)
+								.await;
+							members_synced = members_synced.saturating_add(1);
+						}
+					},
+					| "invite" => {
+						state_invited.insert(uid.clone());
+						// mark_as_invited requires sender; skip cache update
+						// for invites here — update_joined_count will
+						// reconcile.
+					},
+					| _ => {
+						if self
+							.services
 							.state_cache
-							.mark_as_joined_silent(&uid, room_id)
-							.await;
-						members_synced = members_synced.saturating_add(1);
-					}
-				},
-				| "invite" => {
-					state_invited.insert(uid.clone());
-					// mark_as_invited requires sender; skip cache update for
-					// invites here — update_joined_count will reconcile.
-				},
-				| _ => {
-					if self
-						.services
-						.state_cache
-						.is_invited_or_joined(&uid, room_id)
-						.await
-					{
-						self.services
-							.state_cache
-							.mark_as_left_silent(&uid, room_id)
-							.await;
-						members_synced = members_synced.saturating_add(1);
-					}
-				},
+							.is_invited_or_joined(&uid, room_id)
+							.await
+						{
+							self.services
+								.state_cache
+								.mark_as_left_silent(&uid, room_id)
+								.await;
+							members_synced = members_synced.saturating_add(1);
+						}
+					},
+				}
 			}
 		}
 
@@ -870,10 +480,7 @@ impl Service {
 			self.prune_extremities(room_id, 50).await;
 		}
 
-		info!(
-			"reorder_timeline: complete, {count} events reordered, {state_rebuilt} state \
-			 snapshots rebuilt"
-		);
+		info!("reorder_timeline: complete, {count} events reordered");
 
 		Ok(count)
 	}

@@ -552,10 +552,16 @@ pub async fn force_insert_pdu(
 		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
 	};
 
+	let mut value = value.clone();
+	value.insert(
+		"event_id".into(),
+		ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
+	);
+
 	if backfill {
-		self.db.prepend_backfill_pdu(&pdu_id, event_id, value);
+		self.db.prepend_backfill_pdu(&pdu_id, event_id, &value);
 	} else {
-		self.db.append_pdu(&pdu_id, pdu, value, pdu_count).await;
+		self.db.append_pdu(&pdu_id, pdu, &value, pdu_count).await;
 	}
 
 	drop(insert_lock);

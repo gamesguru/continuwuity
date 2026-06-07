@@ -225,16 +225,6 @@ pub enum YoloCommand {
 		tail: Option<usize>,
 	},
 
-	/// Promote all outlier events in a room to backfill timeline PDUs.
-	///
-	/// This skips auth checks and directly inserts outliers into the timeline.
-	/// Useful for rooms where the join flow stored events as outliers
-	/// instead of timeline PDUs.
-	PromoteOutliers {
-		/// The room ID.
-		room_id: OwnedRoomId,
-	},
-
 	/// Purge a PDU from the timeline (removes from both timeline and outlier
 	/// tables).
 	///
@@ -361,32 +351,6 @@ pub enum YoloCommand {
 		/// Skip signature verification (prevents DB write contention)
 		#[arg(long)]
 		skip_sig_verify: bool,
-	},
-
-	/// Heals a room by rescuing local outliers, fetching genuinely missing
-	/// events from federation, and optionally resyncing state.
-	///
-	/// By default this is a dry-run that only reports what would be done.
-	/// Pass --execute to actually make changes.
-	HealRoom {
-		/// The room ID.
-		room_id: OwnedRoomId,
-		/// The server to fetch from for missing history.
-		server: OwnedServerName,
-		/// If set, forcefully re-processes existing timeline PDUs.
-		#[arg(long)]
-		nuclear: bool,
-		/// Actually execute changes. Without this flag, only a dry-run
-		/// summary is printed.
-		#[arg(long)]
-		execute: bool,
-		/// If set, also resyncs room state from the remote server
-		/// (Phase 5). This is expensive and usually unnecessary.
-		#[arg(long)]
-		resync_state: bool,
-		/// If set, purges stuck outliers after healing.
-		#[arg(long)]
-		purge_after: bool,
 	},
 
 	/// Emergency command to re-import outliers from a JSONL file.

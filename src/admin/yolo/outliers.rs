@@ -5,7 +5,7 @@ use conduwuit::{
 	matrix::{Event, pdu::PduEvent},
 };
 use futures::{StreamExt, future::ready};
-use ruma::{OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedUserId, RoomId};
+use ruma::{OwnedEventId, OwnedRoomOrAliasId, OwnedUserId, RoomId};
 
 use crate::admin_command;
 
@@ -224,57 +224,4 @@ pub(super) async fn purge_outliers(
 	let s = skipped.load(std::sync::atomic::Ordering::Relaxed);
 	self.write_str(&format!("Purged {p} outliers, skipped {s} un-rescued outliers."))
 		.await
-}
-
-#[admin_command]
-pub(super) async fn promote_outliers(&self, room_id: OwnedRoomId) -> Result {
-	self.bail_restricted()?;
-
-	let outlier_ids: Vec<_> = self
-		.services
-		.rooms
-		.outlier
-		.room_stream(&room_id)
-		.map(|(event_id, _pdu)| event_id)
-		.collect()
-		.await;
-
-	let total = outlier_ids.len();
-	self.write_str(&format!("Promoting {total} outliers to timeline for {room_id}..."))
-		.await?;
-
-	let mut promoted = 0_usize;
-	let mut failed = 0_usize;
-	for event_id in &outlier_ids {
-		// Clear soft-fail/rejected markers so promoted events are visible
-		// to clients via sync. Without this, events are ghost timeline entries.
-		self.services.rooms.pdu_metadata.clear_pdu_markers(event_id);
-
-		match self
-			.services
-			.rooms
-			.timeline
-			.promote_outlier(&room_id, event_id)
-			.await
-		{
-			| Ok(()) => {
-				promoted = promoted.saturating_add(1);
-			},
-			| Err(e) => {
-				info!("Failed to promote outlier {event_id}: {e:?}");
-				failed = failed.saturating_add(1);
-			},
-		}
-
-		let done = promoted.saturating_add(failed);
-		if done.is_multiple_of(10000) {
-			info!(target: "promote_outliers", "Progress: {done}/{total} ({promoted} ok, {failed} err)");
-		}
-	}
-
-	self.write_str(&format!(
-		"Promoted {promoted} outliers, {failed} failed out of {total} total for {room_id}. \
-		 Clients should re-sync."
-	))
-	.await
 }
