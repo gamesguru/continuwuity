@@ -3,7 +3,7 @@ mod tests;
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Result, err,
+	Err, Result, RoomVersion, err,
 	matrix::{Event, pdu::PduBuilder},
 	utils::BoolExt,
 };
@@ -16,6 +16,7 @@ use ruma::{
 		AnyStateEventContent, StateEventType,
 		room::{
 			canonical_alias::RoomCanonicalAliasEventContent,
+			create::RoomCreateEventContent,
 			history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent},
 			join_rules::{JoinRule, RoomJoinRulesEventContent},
 			member::{MembershipState, RoomMemberEventContent},
@@ -455,6 +456,49 @@ async fn allowed_to_send_state_event(
 							"Authorising user {authorising_user} is not in the room, they \
 							 cannot authorise the join."
 						)));
+					}
+				}
+			}
+		},
+		| StateEventType::RoomPowerLevels => {
+			// In v12 rooms, creators must not appear in the power levels users map
+			let room_create = services
+				.rooms
+				.state_accessor
+				.room_state_get(room_id, &StateEventType::RoomCreate, "")
+				.await;
+			if let Ok(room_create) = room_create {
+				if let Ok(create_content) =
+					serde_json::from_str::<RoomCreateEventContent>(room_create.content().get())
+				{
+					let room_features = RoomVersion::new(&create_content.room_version);
+					if let Ok(room_features) = room_features {
+						if room_features.explicitly_privilege_room_creators {
+							if let Ok(pl_content) = json.deserialize_as::<serde_json::Value>() {
+								if let Some(users) =
+									pl_content.get("users").and_then(|u| u.as_object())
+								{
+									// Check the room creator (event sender of m.room.create)
+									if users.contains_key(room_create.sender().as_str()) {
+										return Err!(Request(BadJson(
+											"Room creator cannot be set in power levels users \
+											 map"
+										)));
+									}
+									// Check additional_creators
+									if let Some(additional) = create_content.additional_creators {
+										for creator in &additional {
+											if users.contains_key(creator.as_str()) {
+												return Err!(Request(BadJson(
+													"Room creator cannot be set in power levels \
+													 users map: {creator}"
+												)));
+											}
+										}
+									}
+								}
+							}
+						}
 					}
 				}
 			}
