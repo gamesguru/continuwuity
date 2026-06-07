@@ -355,8 +355,16 @@ where
 		if let Some(pl_event_id) = partially_resolved_pl_state.get(&power_levels_ty_sk) {
 			debug!(%pl_event_id, "selected global PL event");
 			if let Some(pl_event) = cached_fetch(pl_event_id.clone()).await {
-				if let Ok(c) = from_json_str::<PowerLevelsContentFields>(pl_event.content().get())
+				if let Ok(mut c) =
+					from_json_str::<PowerLevelsContentFields>(pl_event.content().get())
 				{
+					// For v12+ rooms, creators are stripped from the PL users map
+					// but need Int::MAX during state resolution sorting. Auth events
+					// also omit the create event (MSC4291), so the only reliable
+					// source is the unconflicted state.
+					if room_version.explicitly_privilege_room_creators {
+						inject_privileged_creators(&mut c, &unconflicted, &cached_fetch).await;
+					}
 					global_pl_context = Some(c);
 				} else {
 					warn!(%pl_event_id, "failed to parse global PL event content");
@@ -906,29 +914,6 @@ where
 		if let Some(s) = &sender_str {
 			if let Some(&user_level) = global_context.get_user_power(s) {
 				return user_level;
-			}
-			// Sender not in PL users map; check if they're a v12 privileged creator
-			if let Some(ref ev) = event {
-				for aid in ev.auth_events() {
-					if let Some(aev) = fetch_event(aid.to_owned()).await {
-						if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "") {
-							if from_json_str::<
-								ruma::events::room::create::RoomCreateEventContent,
-							>(aev.content().get())
-							.is_ok_and(|cc| {
-								RoomVersion::new(&cc.room_version)
-									.is_ok_and(|rv| rv.explicitly_privilege_room_creators)
-									&& (aev.sender().as_str() == s.as_str()
-										|| cc.additional_creators.as_ref().is_some_and(
-											|cs| cs.iter().any(|c| c.as_str() == s.as_str()),
-										))
-							}) {
-								return Int::MAX;
-							}
-							break;
-						}
-					}
-				}
 			}
 			return global_context.users_default;
 		}
@@ -1606,6 +1591,46 @@ where
 		| Some(state) => is_power_event(state),
 		| _ => false,
 	}
+}
+
+/// For v12+ rooms, inject privileged creators into the global PL context with
+/// Int::MAX. In these rooms creators are stripped from the PL users map and
+/// auth events omit the create event (MSC4291), so the only reliable source
+/// is the unconflicted state.
+async fn inject_privileged_creators<E, F, Fut>(
+	c: &mut PowerLevelsContentFields,
+	unconflicted: &StateMap<OwnedEventId>,
+	cached_fetch: &F,
+) where
+	F: Fn(OwnedEventId) -> Fut + Sync,
+	Fut: Future<Output = Option<E>> + Send,
+	E: Event + Send + Sync + Clone,
+{
+	let create_ty_sk = (StateEventType::RoomCreate, StateKey::new());
+	let Some(create_id) = unconflicted.get(&create_ty_sk) else {
+		return;
+	};
+	let Some(create_ev) = cached_fetch(create_id.clone()).await else {
+		return;
+	};
+	let Ok(cc) = from_json_str::<ruma::events::room::create::RoomCreateEventContent>(
+		create_ev.content().get(),
+	) else {
+		return;
+	};
+
+	let creator = create_ev.sender().to_owned();
+	if c.get_user_power(&creator).is_none() {
+		c.users.push((creator, Int::MAX));
+	}
+	if let Some(additional) = cc.additional_creators {
+		for ac in additional {
+			if c.get_user_power(&ac).is_none() {
+				c.users.push((ac, Int::MAX));
+			}
+		}
+	}
+	c.users.sort_by(|a, b| a.0.cmp(&b.0));
 }
 
 fn is_type_and_key(ev: &impl Event, ev_type: &TimelineEventType, state_key: &str) -> bool {
