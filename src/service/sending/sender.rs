@@ -136,21 +136,74 @@ impl Service {
 	) {
 		match response {
 			| Ok(dest) => self.handle_response_ok(&dest, futures, statuses).await,
-			| Err((dest, e)) => Self::handle_response_err(dest, statuses, &e),
+			| Err((dest, e)) => self.handle_response_err(dest, statuses, &e),
 		}
 	}
 
-	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
+	fn handle_response_err(
+		&self,
+		dest: Destination,
+		statuses: &mut CurTransactionStatus,
+		e: &Error,
+	) {
 		debug!(dest = ?dest, "{e:?}");
-		statuses.entry(dest).and_modify(|e| {
+		let mut tries = 1_u32;
+		statuses.entry(dest.clone()).and_modify(|e| {
 			*e = match e {
 				| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
-				| &mut TransactionStatus::Retrying(ref n) =>
-					TransactionStatus::Failed(n.saturating_add(1), Instant::now()),
+				| &mut TransactionStatus::Retrying(ref n) => {
+					tries = n.saturating_add(1);
+					TransactionStatus::Failed(tries, Instant::now())
+				},
 				| TransactionStatus::Failed(..) => {
 					panic!("Request that was not even running failed?!")
 				},
 			}
+		});
+
+		// If max retries exceeded, stop retrying this session
+		let max_attempts = self.server.config.sender_retry_max_attempts;
+		if max_attempts > 0 && tries >= max_attempts {
+			warn!(
+				dest = ?dest,
+				tries = tries,
+				"Pausing retries after {tries} failed attempts"
+			);
+			return;
+		}
+
+		// Schedule a delayed retry after the backoff period
+		let base = self.server.config.sender_retry_backoff_base;
+		let max = self.server.config.sender_retry_backoff_limit;
+		let delay_secs = base
+			.saturating_mul(
+				1_u64
+					.checked_shl(tries.saturating_sub(1))
+					.unwrap_or(u64::MAX),
+			)
+			.min(max);
+
+		self.reschedule_flush(dest, Duration::from_secs(delay_secs));
+	}
+
+	/// Re-schedule a Flush for the given destination after a delay.
+	fn reschedule_flush(&self, dest: Destination, delay: Duration) {
+		let sender = self
+			.channels
+			.get(self.shard_id(&dest))
+			.expect("channel")
+			.0
+			.clone();
+
+		self.server.runtime().spawn(async move {
+			tokio::time::sleep(delay).await;
+			sender
+				.send(Msg {
+					dest,
+					event: SendingEvent::Flush,
+					queue_id: Vec::new(),
+				})
+				.ok();
 		});
 	}
 

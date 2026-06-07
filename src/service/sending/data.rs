@@ -17,8 +17,8 @@ pub(super) type QueueItem = (Key, SendingEvent);
 pub(super) type Key = Vec<u8>;
 
 pub struct Data {
-	servercurrentevent_data: Arc<Map>,
-	servernameevent_data: Arc<Map>,
+	pub(super) servercurrentevent_data: Arc<Map>,
+	pub(super) servernameevent_data: Arc<Map>,
 	servername_educount: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
