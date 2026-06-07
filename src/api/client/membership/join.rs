@@ -803,9 +803,6 @@ async fn join_room_by_id_helper_remote(
 		.boxed()
 		.await?;
 
-	let join_event_clone = join_event.clone();
-	let parsed_join_pdu_clone = (*parsed_join_pdu).clone();
-
 	info!("Appending new room join event");
 	services
 		.rooms
@@ -830,28 +827,6 @@ async fn join_room_by_id_helper_remote(
 		.set_room_state(room_id, statehash_after_join, &state_lock);
 
 	drop(state_lock);
-
-	info!("Upgrading join event prev_events synchronously");
-	if let Ok(create_event) = services
-		.rooms
-		.state_accessor
-		.room_state_get(room_id, &StateEventType::RoomCreate, "")
-		.boxed()
-		.await
-	{
-		let _ = services
-			.rooms
-			.event_handler
-			.process_timeline_upgrade(
-				parsed_join_pdu_clone,
-				join_event_clone,
-				&create_event,
-				&remote_server,
-				room_id,
-			)
-			.boxed()
-			.await;
-	}
 
 	Ok(())
 }
