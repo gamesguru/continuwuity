@@ -202,7 +202,8 @@ pub(crate) async fn sync_events_route(
 	let watcher = services.sync.watch(sender_user, sender_device);
 
 	let response = build_sync_events(&services, &body).await?;
-	if body.body.full_state
+	if body.body.since.is_none()
+		|| body.body.full_state
 		|| !(response.rooms.is_empty()
 			&& response.presence.is_empty()
 			&& response.account_data.is_empty()
@@ -285,7 +286,7 @@ pub(crate) async fn build_sync_events(
 			|(mut joined_rooms, mut all_updates), (room_id, joined_room, updates)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() {
+				if !joined_room.is_empty() || context.last_sync_end_count.is_none() {
 					joined_rooms.insert(room_id, joined_room);
 				}
 
