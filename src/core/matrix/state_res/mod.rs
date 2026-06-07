@@ -907,6 +907,29 @@ where
 			if let Some(&user_level) = global_context.get_user_power(s) {
 				return user_level;
 			}
+			// Sender not in PL users map; check if they're a v12 privileged creator
+			if let Some(ref ev) = event {
+				for aid in ev.auth_events() {
+					if let Some(aev) = fetch_event(aid.to_owned()).await {
+						if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "") {
+							if from_json_str::<
+								ruma::events::room::create::RoomCreateEventContent,
+							>(aev.content().get())
+							.is_ok_and(|cc| {
+								RoomVersion::new(&cc.room_version)
+									.is_ok_and(|rv| rv.explicitly_privilege_room_creators)
+									&& (aev.sender().as_str() == s.as_str()
+										|| cc.additional_creators.as_ref().is_some_and(
+											|cs| cs.iter().any(|c| c.as_str() == s.as_str()),
+										))
+							}) {
+								return Int::MAX;
+							}
+							break;
+						}
+					}
+				}
+			}
 			return global_context.users_default;
 		}
 		return int!(0);

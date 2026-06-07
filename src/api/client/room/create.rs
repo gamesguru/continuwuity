@@ -619,6 +619,20 @@ fn default_power_levels_content(
 		let json: JsonObject = serde_json::from_str(power_level_content_override.json().get())
 			.map_err(|e| err!(Request(BadJson("Invalid power_level_content_override: {e:?}"))))?;
 
+		// Reject if the client explicitly sets a creator in the override's users map
+		if !creators.is_empty() {
+			if let Some(users) = json.get("users").and_then(|u| u.as_object()) {
+				for creator in &creators {
+					if users.contains_key(creator.as_str()) {
+						return Err!(Request(BadJson(
+							"power_level_content_override cannot set a room creator in the \
+							 users map: {creator}"
+						)));
+					}
+				}
+			}
+		}
+
 		for (key, value) in json {
 			power_levels_content[key] = value;
 		}
