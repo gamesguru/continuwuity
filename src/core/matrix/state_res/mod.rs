@@ -902,7 +902,59 @@ where
 	let event = fetch_event(event_id.to_owned()).await;
 	let sender_str = event.as_ref().map(|e| Event::sender(e).to_owned());
 
+	let Some(ev) = event else {
+		return int!(0);
+	};
+
+	if is_type_and_key(&ev, &TimelineEventType::RoomCreate, "") {
+		return Int::MAX;
+	}
+
+	// Scan auth chain for create and PL events
+	let mut creator_event: Option<E> = None;
+	let mut pl_event: Option<E> = None;
+	for aid in ev.auth_events() {
+		if let Some(aev) = fetch_event(aid.to_owned()).await {
+			if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "")
+				&& creator_event.is_none()
+			{
+				creator_event = Some(aev);
+			} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "")
+				&& pl_event.is_none()
+			{
+				pl_event = Some(aev);
+			}
+		}
+		if creator_event.is_some() && pl_event.is_some() {
+			break;
+		}
+	}
+
+	// Check if the sender is a v12 privileged room creator
+	let is_privileged_creator = creator_event.as_ref().is_some_and(|creator_ev| {
+		from_json_str::<ruma::events::room::create::RoomCreateEventContent>(
+			creator_ev.content().get(),
+		)
+		.is_ok_and(|create_content| {
+			let is_v12 = RoomVersion::new(&create_content.room_version)
+				.is_ok_and(|rv| rv.explicitly_privilege_room_creators);
+			if !is_v12 {
+				return false;
+			}
+			sender_str.as_ref().is_some_and(|s| {
+				creator_ev.sender().as_str() == s.as_str()
+					|| create_content
+						.additional_creators
+						.as_ref()
+						.is_some_and(|cs| cs.iter().any(|c| c.as_str() == s.as_str()))
+			})
+		})
+	});
+
 	if let Some(global_context) = global_pl_context {
+		if is_privileged_creator {
+			return Int::MAX;
+		}
 		if let Some(s) = &sender_str {
 			if let Some(&user_level) = global_context.get_user_power(s) {
 				return user_level;
@@ -912,75 +964,53 @@ where
 		return int!(0);
 	}
 
-	if let Some(ev) = event {
-		if is_type_and_key(&ev, &TimelineEventType::RoomCreate, "") {
+	if let Some(pl_ev) = pl_event {
+		let pl_id = pl_ev.event_id().to_owned();
+		let parsed_pl = parsed_pl_cache
+			.entry(pl_id.clone())
+			.or_insert_with(|| {
+				Arc::new(
+					from_json_str::<PowerLevelsContentFields>(pl_ev.content().get())
+						.unwrap_or_else(|_| PowerLevelsContentFields {
+							users_default: int!(0),
+							users: Vec::new(),
+						}),
+				)
+			})
+			.value()
+			.clone();
+
+		if let Some(s) = &sender_str {
+			let cache_key = (s.clone(), Some(pl_id));
+			if let Some(cached_pl) = sender_pl_cache.get(&cache_key) {
+				return *cached_pl;
+			}
+
+			let level = if is_privileged_creator {
+				Int::MAX
+			} else {
+				parsed_pl
+					.get_user_power(s)
+					.copied()
+					.unwrap_or(parsed_pl.users_default)
+			};
+
+			sender_pl_cache.insert(cache_key, level);
+			return level;
+		}
+	} else if let Some(creator_ev) = creator_event {
+		let mut is_creator = creator_ev.sender() == ev.sender();
+		if let Ok(create_content) = from_json_str::<
+			ruma::events::room::create::RoomCreateEventContent,
+		>(creator_ev.content().get())
+		{
+			#[allow(deprecated)]
+			if let Some(creator_user) = create_content.creator {
+				is_creator = creator_user == ev.sender();
+			}
+		}
+		if is_creator {
 			return Int::MAX;
-		}
-
-		let mut creator_event: Option<E> = None;
-		let mut pl_event: Option<E> = None;
-
-		// 1-HOP STRICT SCAN: avoids O(N * E) exponential BFS tarpit
-		for aid in ev.auth_events() {
-			if let Some(aev) = fetch_event(aid.to_owned()).await {
-				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "")
-					&& creator_event.is_none()
-				{
-					creator_event = Some(aev);
-				} else if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "")
-					&& pl_event.is_none()
-				{
-					pl_event = Some(aev);
-				}
-			}
-			if creator_event.is_some() && pl_event.is_some() {
-				break;
-			}
-		}
-
-		if let Some(pl_ev) = pl_event {
-			let pl_id = pl_ev.event_id().to_owned();
-			let parsed_pl = parsed_pl_cache
-				.entry(pl_id.clone())
-				.or_insert_with(|| {
-					Arc::new(
-						from_json_str::<PowerLevelsContentFields>(pl_ev.content().get())
-							.unwrap_or_else(|_| PowerLevelsContentFields {
-								users_default: int!(0),
-								users: Vec::new(),
-							}),
-					)
-				})
-				.value()
-				.clone();
-
-			if let Some(s) = &sender_str {
-				let cache_key = (s.clone(), Some(pl_id));
-				if let Some(cached_pl) = sender_pl_cache.get(&cache_key) {
-					return *cached_pl;
-				}
-
-				if let Some(&user_level) = parsed_pl.get_user_power(s) {
-					sender_pl_cache.insert(cache_key, user_level);
-					return user_level;
-				}
-				sender_pl_cache.insert(cache_key, parsed_pl.users_default);
-				return parsed_pl.users_default;
-			}
-		} else if let Some(creator_ev) = creator_event {
-			let mut is_creator = creator_ev.sender() == ev.sender();
-			if let Ok(create_content) = from_json_str::<
-				ruma::events::room::create::RoomCreateEventContent,
-			>(creator_ev.content().get())
-			{
-				#[allow(deprecated)]
-				if let Some(creator_user) = create_content.creator {
-					is_creator = creator_user == ev.sender();
-				}
-			}
-			if is_creator {
-				return Int::MAX;
-			}
 		}
 	}
 	int!(0)
