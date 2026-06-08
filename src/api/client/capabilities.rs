@@ -40,6 +40,9 @@ pub(crate) async fn get_capabilities_route(
 	capabilities.get_login_token =
 		GetLoginTokenCapability::new(services.server.config.login_via_existing_session);
 
+	// m.change_password capability
+	capabilities.set("m.change_password", json!({"enabled": true}))?;
+
 	// MSC4133 capability
 	capabilities.set("uk.tcpip.msc4133.profile_fields", json!({"enabled": true}))?;
 
