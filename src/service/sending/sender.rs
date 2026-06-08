@@ -1300,7 +1300,7 @@ pub(crate) fn build_receipt_map(
 	limit: usize,
 	num: &std::sync::atomic::AtomicUsize,
 ) -> ReceiptMap {
-	use std::sync::atomic::Ordering;
+	use std::{collections::btree_map::Entry, sync::atomic::Ordering};
 	let mut read = BTreeMap::<OwnedUserId, ReceiptData>::new();
 
 	for (user_id, count, read_receipt_json) in receipts {
@@ -1335,7 +1335,6 @@ pub(crate) fn build_receipt_map(
 			event_ids: vec![event_id.clone()],
 		};
 
-		use std::collections::btree_map::Entry;
 		match read.entry(user_id) {
 			| Entry::Vacant(v) => {
 				v.insert(receipt_data);

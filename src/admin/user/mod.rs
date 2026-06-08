@@ -2,7 +2,7 @@ mod commands;
 
 use clap::Subcommand;
 use conduwuit::Result;
-use ruma::{OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId};
+use ruma::{OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName};
 
 use crate::admin_command_dispatch;
 
@@ -170,6 +170,8 @@ pub enum UserCommand {
 	ForceJoinRoom {
 		user_id: String,
 		room_id: OwnedRoomOrAliasId,
+		#[arg(short, long)]
+		server: Vec<OwnedServerName>,
 	},
 
 	/// Manually leave a local user from a room.
