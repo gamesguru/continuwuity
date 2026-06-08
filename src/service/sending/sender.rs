@@ -1335,10 +1335,23 @@ pub(crate) fn build_receipt_map(
 			event_ids: vec![event_id.clone()],
 		};
 
-		if read.insert(user_id, receipt_data).is_none() {
-			if num.fetch_add(1, Ordering::Relaxed) >= limit.saturating_sub(1) {
-				break;
-			}
+		use std::collections::btree_map::Entry;
+		match read.entry(user_id) {
+			| Entry::Vacant(v) => {
+				v.insert(receipt_data);
+				if num.fetch_add(1, Ordering::Relaxed) >= limit.saturating_sub(1) {
+					break;
+				}
+			},
+			| Entry::Occupied(mut o) => {
+				let is_unthreaded = matches!(
+					receipt_data.data.thread,
+					ruma::events::receipt::ReceiptThread::Unthreaded
+				);
+				if is_unthreaded {
+					o.insert(receipt_data);
+				}
+			},
 		}
 	}
 
@@ -1492,5 +1505,101 @@ mod tests {
 
 		assert_eq!(map.read.len(), 3);
 		assert_eq!(num.load(Ordering::Relaxed), 3);
+	}
+
+	#[test]
+	fn test_build_receipt_map_unthreaded_precedence() {
+		let mut receipts = Vec::new();
+		let user_id = user_id!("@alice:example.com").to_owned();
+
+		// 1. Threaded receipt
+		let json_threaded = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"thread_id": "$thread1",
+							"ts": 10000
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id.clone(), 11, json_threaded.to_string()));
+
+		// 2. Unthreaded receipt
+		let json_unthreaded = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"ts": 12345
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id.clone(), 12, json_unthreaded.to_string()));
+
+		let since = (10, 20);
+		let num = AtomicUsize::new(0);
+		let map = build_receipt_map(receipts, since, 100, &num);
+
+		assert_eq!(map.read.len(), 1);
+		assert_eq!(num.load(Ordering::Relaxed), 1);
+
+		let data = map.read.get(&user_id).unwrap();
+		assert!(matches!(data.data.thread, ruma::events::receipt::ReceiptThread::Unthreaded));
+		assert_eq!(data.data.ts.map(|t| t.0.into()), Some(12345_u64));
+	}
+
+	#[test]
+	fn test_build_receipt_map_threaded_does_not_overwrite() {
+		let mut receipts = Vec::new();
+		let user_id = user_id!("@alice:example.com").to_owned();
+
+		// 1. Unthreaded receipt
+		let json_unthreaded = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"ts": 12345
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id.clone(), 11, json_unthreaded.to_string()));
+
+		// 2. Threaded receipt
+		let json_threaded = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"thread_id": "$thread1",
+							"ts": 10000
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id.clone(), 12, json_threaded.to_string()));
+
+		let since = (10, 20);
+		let num = AtomicUsize::new(0);
+		let map = build_receipt_map(receipts, since, 100, &num);
+
+		assert_eq!(map.read.len(), 1);
+		assert_eq!(num.load(Ordering::Relaxed), 1);
+
+		let data = map.read.get(&user_id).unwrap();
+		assert!(matches!(data.data.thread, ruma::events::receipt::ReceiptThread::Unthreaded));
+		assert_eq!(data.data.ts.map(|t| t.0.into()), Some(12345_u64));
 	}
 }
