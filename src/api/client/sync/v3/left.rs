@@ -297,6 +297,15 @@ async fn build_left_state_and_timeline(
 		state.swap_remove(index);
 	}
 
+	let leave_is_in_timeline = timeline
+		.pdus
+		.iter()
+		.any(|(_, pdu)| pdu.event_id == leave_membership_event.event_id);
+
+	if !leave_is_in_timeline {
+		state.push(leave_membership_event);
+	}
+
 	trace!(
 		%timeline_start_count,
 		%timeline_end_count,
