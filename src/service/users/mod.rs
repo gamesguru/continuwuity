@@ -245,7 +245,7 @@ impl Service {
 			}
 		};
 
-		trace!(%sender_user, %recipient_user, ?level, "invite_filter_level");
+		info!(%sender_user, %recipient_user, ?level, "invite_filter_level");
 		level
 	}
 

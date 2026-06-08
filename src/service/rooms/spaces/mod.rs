@@ -71,7 +71,7 @@ pub enum Identifier<'a> {
 
 type Cache = LruCache<OwnedRoomId, Option<CachedSpaceHierarchySummary>>;
 
-const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(0);
+const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 #[async_trait]
 impl crate::Service for Service {
