@@ -272,6 +272,8 @@ pub enum YoloCommand {
 		/// Print PDUs to the admin room (in addition to writing to file)
 		#[arg(long)]
 		print: bool,
+		#[arg(long)]
+		outliers: bool,
 	},
 
 	/// Fetch a room's DAG from a remote server via federation backfill API

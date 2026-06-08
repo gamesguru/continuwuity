@@ -169,15 +169,13 @@ pub(super) async fn recalculate_extremities(
 	if changed {
 		self.write_str(&format!(
 			"SUCCESS: DAG Extremities were silently broken and have now been recalculated and \
-			 permanently healed! Set to {} true DAG tips.\n",
-			num_true
+			 permanently healed! Set to {num_true} true DAG tips.\n"
 		))
 		.await?;
 	} else {
 		self.write_str(&format!(
-			"DAG Extremities are already mathematically perfect. Found {} true DAG tips. No \
-			 changes made.\n",
-			num_true
+			"DAG Extremities are already mathematically perfect. Found {num_true} true DAG \
+			 tips. No changes made.\n"
 		))
 		.await?;
 	}

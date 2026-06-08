@@ -792,8 +792,7 @@ impl Service {
 
 		let mut final_extremities: Vec<OwnedEventId> = true_extremities_set.into_iter().collect();
 
-		final_extremities
-			.sort_by_key(|eid| ts_map.get(eid).copied().unwrap_or(ruma::UInt::from(0_u32)));
+		final_extremities.sort_by_key(|eid| ts_map.get(eid).copied().unwrap_or_default());
 
 		let num_true_extremities = final_extremities.len();
 
@@ -1506,11 +1505,10 @@ pub fn merge_true_extremities<S: ::std::hash::BuildHasher>(
 	current_set: &std::collections::HashSet<OwnedEventId, S>,
 	phantom_tips: &[OwnedEventId],
 ) -> std::collections::HashSet<OwnedEventId> {
-	let mut true_extremities_set: std::collections::HashSet<OwnedEventId> =
-		true_extremities
-			.into_iter()
-			.map(ToOwned::to_owned)
-			.collect();
+	let mut true_extremities_set: std::collections::HashSet<OwnedEventId> = true_extremities
+		.into_iter()
+		.map(ToOwned::to_owned)
+		.collect();
 
 	for eid in current_set {
 		if !phantom_tips.contains(eid) {

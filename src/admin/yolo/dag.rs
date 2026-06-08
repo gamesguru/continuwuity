@@ -136,6 +136,7 @@ pub(super) async fn get_room_dag(
 	start: i64,
 	end: i64,
 	print: bool,
+	outliers: bool,
 ) -> Result {
 	let room_id = self.services.rooms.alias.resolve(&room_id).await?;
 	let pdu_ids: Vec<OwnedEventId> = self
@@ -190,29 +191,31 @@ pub(super) async fn get_room_dag(
 		i = i.saturating_add(1);
 	}
 
-	let outlier_ids: Vec<OwnedEventId> = self
-		.services
-		.rooms
-		.outlier
-		.room_stream(&room_id)
-		.map(|(id, _)| id)
-		.collect()
-		.await;
-
-	for event_id in outlier_ids {
-		if let Ok(pdu_json) = self
+	if outliers {
+		let outlier_ids: Vec<OwnedEventId> = self
 			.services
 			.rooms
 			.outlier
-			.get_outlier_pdu_json(&event_id)
-			.await
-		{
-			let pdu_result = self.services.rooms.outlier.get_pdu_outlier(&event_id).await;
-			if let Err(e) = stats
-				.process_and_write_pdu(self, &mut file, pdu_json, pdu_result, true, print)
+			.room_stream(&room_id)
+			.map(|(id, _)| id)
+			.collect()
+			.await;
+
+		for event_id in outlier_ids {
+			if let Ok(pdu_json) = self
+				.services
+				.rooms
+				.outlier
+				.get_outlier_pdu_json(&event_id)
 				.await
 			{
-				warn!("Failed to process outlier PDU {event_id}: {e}");
+				let pdu_result = self.services.rooms.outlier.get_pdu_outlier(&event_id).await;
+				if let Err(e) = stats
+					.process_and_write_pdu(self, &mut file, pdu_json, pdu_result, true, print)
+					.await
+				{
+					warn!("Failed to process outlier PDU {event_id}: {e}");
+				}
 			}
 		}
 	}
