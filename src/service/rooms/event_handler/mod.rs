@@ -173,7 +173,10 @@ impl Service {
 			.collect()
 			.await;
 
-		let mut servers: Vec<OwnedServerName> = vec![origin.to_owned()];
+		let mut servers: Vec<OwnedServerName> = Vec::new();
+		if !self.services.globals.server_is_ours(origin) {
+			servers.push(origin.to_owned());
+		}
 
 		// Prioritize trusted servers that are ACTUALLY in the room
 		for s in &self.services.server.config.trusted_servers {
