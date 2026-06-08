@@ -38,6 +38,11 @@ pub enum YoloCommand {
 		/// Show each missing/outlier event ID (default: summary only).
 		#[arg(short, long)]
 		verbose: bool,
+
+		/// Optional explicit servers to fetch from instead of the room's server
+		/// list.
+		#[arg(short, long, num_args = 1..)]
+		servers: Vec<OwnedServerName>,
 	},
 
 	/// Full membership audit: timeline vs state vs cache vs remote server.

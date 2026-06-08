@@ -13,7 +13,7 @@ use futures::{
 	stream::{FuturesUnordered, StreamExt},
 };
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, RoomId,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, OwnedServerName, RoomId,
 	ServerName,
 	api::federation::{authorization::get_event_authorization, event::get_event},
 };
@@ -38,6 +38,7 @@ pub async fn fetch_and_handle_outliers<'a, Pdu, Events>(
 	room_id: &'a RoomId,
 	skip_sig_verify: bool,
 	room_version_override: Option<&'a ruma::RoomVersionId>,
+	explicit_routing_servers: Option<Vec<OwnedServerName>>,
 ) -> Vec<(PduEvent, Option<BTreeMap<String, CanonicalJsonValue>>)>
 where
 	Pdu: Event + Send + Sync,
@@ -58,13 +59,16 @@ where
 		},
 	};
 
-	let mut routing_servers = self
-		.build_federation_server_list(
+	let mut routing_servers = if let Some(explicit) = explicit_routing_servers {
+		explicit
+	} else {
+		self.build_federation_server_list(
 			room_id,
 			origin,
 			self.services.server.config.federation_fallback_room_servers,
 		)
-		.await;
+		.await
+	};
 
 	if routing_servers.len() > 2 {
 		conduwuit::utils::shuffle(&mut routing_servers[1..]);

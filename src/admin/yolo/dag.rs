@@ -1099,6 +1099,7 @@ pub(super) async fn audit_auth_chain(
 	room_id: OwnedRoomId,
 	fetch: bool,
 	verbose: bool,
+	servers: Vec<OwnedServerName>,
 ) -> Result {
 	// Resolve room and get current state hash, fallback to extremities if no state
 	let state_ids: Vec<OwnedEventId> = match self
@@ -1198,6 +1199,7 @@ pub(super) async fn audit_auth_chain(
 			&room_id,
 			false, // TODO: fetch doesn't skip signature verification currently
 			None,
+			if servers.is_empty() { None } else { Some(servers) },
 		)
 		.await;
 
