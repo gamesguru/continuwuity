@@ -250,7 +250,14 @@ async fn build_ephemeral(
 	let (receipt_events, typing_event, private_read_event) =
 		join3(receipt_events, typing_event, private_read_event).await;
 
-	let mut edus = receipt_events;
+	let mut edus = if receipt_events.is_empty() {
+		Vec::new()
+	} else {
+		vec![
+			conduwuit_service::rooms::read_receipt::pack_receipts(receipt_events.into_iter())
+				.cast(),
+		]
+	};
 	edus.extend(typing_event);
 	edus.extend(private_read_event);
 

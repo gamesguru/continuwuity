@@ -94,14 +94,14 @@ impl Data {
 		room_id: &RoomId,
 		event: &ReceiptEvent,
 	) {
-		let new_thread = event
-			.content
-			.0
-			.values()
-			.next()
-			.and_then(|types| types.get(&ReceiptType::Read))
-			.and_then(|users| users.get(user_id))
-			.map(|receipt| &receipt.thread);
+		let mut new_receipts = Vec::new();
+		for receipts in event.content.0.values() {
+			for (receipt_type, users) in receipts {
+				if let Some(receipt) = users.get(user_id) {
+					new_receipts.push((receipt_type.clone(), receipt.thread.clone()));
+				}
+			}
+		}
 
 		// Remove old entry for the same thread
 		let last_possible_key = (room_id, u64::MAX);
@@ -123,16 +123,44 @@ impl Data {
 						== Some(&database::SEP)
 				{
 					let receipt = serde_json::from_slice::<ReceiptEvent>(value).ok()?;
-					let old_thread = receipt
-						.content
-						.0
-						.values()
-						.next()
-						.and_then(|types| types.get(&ReceiptType::Read))
-						.and_then(|users| users.get(user_id))
-						.map(|receipt| &receipt.thread);
+					let mut match_found = false;
+					for old_receipts in receipt.content.0.values() {
+						for (receipt_type, users) in old_receipts {
+							if let Some(old_receipt) = users.get(user_id) {
+								for (new_type, new_thread) in &new_receipts {
+									if receipt_type == new_type
+										&& &old_receipt.thread == new_thread
+									{
+										match_found = true;
+										conduwuit::info!(
+											?room_id,
+											?user_id,
+											?receipt_type,
+											?new_thread,
+											"Deleting old read receipt"
+										);
+										break;
+									}
+								}
+							}
+							if match_found {
+								break;
+							}
+						}
+						if match_found {
+							break;
+						}
+					}
 
-					if old_thread == new_thread {
+					if !match_found {
+						conduwuit::info!(
+							?room_id, ?user_id, ?new_receipts,
+							old_content = ?receipt.content,
+							"Did not match old receipt, leaving it in db"
+						);
+					}
+
+					if match_found {
 						return Some(key);
 					}
 				}
@@ -147,6 +175,7 @@ impl Data {
 
 		let count = self.services.globals.next_count().unwrap();
 		let latest_id = (room_id, count, user_id);
+		conduwuit::info!(?room_id, ?user_id, ?count, ?new_receipts, "Inserting new read receipt");
 		self.readreceiptid_readreceipt.put(latest_id, Json(event));
 	}
 
