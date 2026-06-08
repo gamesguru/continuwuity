@@ -13,23 +13,21 @@ use futures::{
 	stream::{FuturesUnordered, StreamExt},
 };
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, OwnedServerName, RoomId,
-	ServerName,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, OwnedServerName,
+	RoomId, ServerName,
 	api::federation::{authorization::get_event_authorization, event::get_event},
 };
 
 enum FetchResult {
-	Event(
-		OwnedEventId,
-		conduwuit::Result<(get_event::v1::Response, ruma::OwnedServerName)>,
-	),
+	Event(OwnedEventId, conduwuit::Result<(get_event::v1::Response, OwnedServerName)>),
 	AuthChain(
 		OwnedEventId,
-		conduwuit::Result<(get_event_authorization::v1::Response, ruma::OwnedServerName)>,
+		conduwuit::Result<(get_event_authorization::v1::Response, OwnedServerName)>,
 	),
 }
 
 #[implement(super::Service)]
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_and_handle_outliers<'a, Pdu, Events>(
 	&self,
 	origin: &'a ServerName,
