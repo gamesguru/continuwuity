@@ -96,7 +96,8 @@ async fn process_command(services: Arc<Services>, input: &CommandInput) -> Proce
 
 #[allow(clippy::result_large_err)]
 fn handle_panic(error: &Error, command: &CommandInput) -> ProcessorResult {
-	let link = "Please submit a [bug report](https://forgejo.ellis.link/continuwuation/continuwuity/issues/new). 🥺";
+	let link =
+		"Please submit a [bug report](https://github.com/gamesguru/continuwuity/issues/new). 🥺";
 	let msg = format!("Panic occurred while processing command:\n```\n{error:#?}\n```\n{link}");
 	let content = RoomMessageEventContent::notice_markdown(msg);
 	error!("Panic while processing command: {error:?}");
