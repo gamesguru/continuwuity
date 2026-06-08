@@ -487,6 +487,17 @@ impl Service {
 
 		increment(&self.db.userid_devicelistversion, user_id.as_bytes());
 
+		// MSC3890: Remove local notification settings for this device
+		let _: Result<_> = self
+			.services
+			.account_data
+			.delete(
+				None,
+				user_id,
+				&format!("org.matrix.msc3890.local_notification_settings.{device_id}"),
+			)
+			.await;
+
 		self.db.userdeviceid_metadata.del(userdeviceid);
 		self.mark_device_key_update(user_id).await;
 	}
