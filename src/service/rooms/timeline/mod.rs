@@ -734,9 +734,10 @@ impl Service {
 
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
-		let mut pdus = Vec::with_capacity(tail);
-		let mut graph = HashMap::with_capacity(tail);
-		let mut sorted = Vec::with_capacity(tail);
+		let capacity = if tail == usize::MAX { 0 } else { tail };
+		let mut pdus = Vec::with_capacity(capacity);
+		let mut graph = HashMap::with_capacity(capacity);
+		let mut sorted = Vec::with_capacity(capacity);
 
 		let mut stream = std::pin::pin!(self.pdus_rev(room_id, None));
 		while let Some(Ok((_count, pdu))) = stream.next().await {
