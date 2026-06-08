@@ -159,7 +159,7 @@ pub(super) async fn recalculate_extremities(
 	))
 	.await?;
 
-	let changed = self
+	let (changed, num_true) = self
 		.services
 		.rooms
 		.timeline
@@ -167,15 +167,38 @@ pub(super) async fn recalculate_extremities(
 		.await?;
 
 	if changed {
-		self.write_str(
+		self.write_str(&format!(
 			"SUCCESS: DAG Extremities were silently broken and have now been recalculated and \
-			 permanently healed!\n",
-		)
+			 permanently healed! Set to {} true DAG tips.\n",
+			num_true
+		))
 		.await?;
 	} else {
-		self.write_str("DAG Extremities are already mathematically perfect. No changes made.\n")
-			.await?;
+		self.write_str(&format!(
+			"DAG Extremities are already mathematically perfect. Found {} true DAG tips. No \
+			 changes made.\n",
+			num_true
+		))
+		.await?;
 	}
 
 	Ok(())
+}
+
+#[admin_command]
+pub(super) async fn count_extremities(&self, room: OwnedRoomOrAliasId, tail: i64) -> Result {
+	let room_id = self.services.rooms.alias.resolve(&room).await?;
+	let actual_tail = if tail < 0 {
+		usize::MAX
+	} else {
+		usize::try_from(tail).unwrap_or(usize::MAX)
+	};
+	let (changed, num_true) = self
+		.services
+		.rooms
+		.timeline
+		.recalculate_extremities(&room_id, actual_tail, false)
+		.await?;
+	self.write_str(&format!("Found {num_true} true DAG tips. (changed={changed})"))
+		.await
 }

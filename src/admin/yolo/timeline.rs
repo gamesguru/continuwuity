@@ -112,17 +112,24 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 
 	if in_timeline {
 		if let Some(room_id) = room_id_opt {
-			self.services
+			let (_, num_true) = self
+				.services
 				.rooms
 				.timeline
 				.recalculate_extremities(&room_id, 100, true)
 				.await?;
+			self.write_str(&format!(
+				"Purged {event_id} from timeline and outlier tables. DAG Extremities \
+				 automatically recalculated (now {num_true} tips)."
+			))
+			.await
+		} else {
+			self.write_str(&format!(
+				"Purged {event_id} from timeline and outlier tables. DAG Extremities \
+				 automatically recalculated."
+			))
+			.await
 		}
-		self.write_str(&format!(
-			"Purged {event_id} from timeline and outlier tables. DAG Extremities automatically \
-			 recalculated."
-		))
-		.await
 	} else {
 		self.write_str(&format!(
 			"Event {event_id} was not in the timeline (purged outlier only)."

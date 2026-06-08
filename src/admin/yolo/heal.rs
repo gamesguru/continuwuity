@@ -619,26 +619,27 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 				.state_cache
 				.server_in_room(ours, room_id)
 				.await;
-
 			if we_participate {
 				issues.push("ORPHANED (server listed, 0 local users)".to_owned());
 			}
 		}
 
 		// Forward extremities check
-		let would_change = self
+		let (would_change, num_true) = self
 			.services
 			.rooms
 			.timeline
 			.recalculate_extremities(room_id, 100, fix)
 			.await
-			.unwrap_or(false);
+			.unwrap_or((false, 0));
 
 		if would_change {
 			if fix {
-				issues.push("EXTREMITIES_DRIFT (Fixed)".to_owned());
+				issues.push(format!("EXTREMITIES_DRIFT (Fixed, true tips: {num_true})"));
 			} else {
-				issues.push("EXTREMITIES_DRIFT (DAG tips silently broken)".to_owned());
+				issues.push(format!(
+					"EXTREMITIES_DRIFT (DAG tips silently broken, true tips: {num_true})"
+				));
 			}
 		}
 
@@ -652,8 +653,8 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 
 		if ext_count == 0 {
 			issues.push("ZERO_EXTREMITIES (stuck DAG)".to_owned());
-		} else if ext_count > 10 {
-			issues.push(format!("EXCESSIVE_EXTREMITIES ({ext_count} tips)"));
+		} else if ext_count > 1 {
+			issues.push(format!("MULTIPLE_EXTREMITIES ({ext_count} tips)"));
 		}
 
 		// Membership cache drift check

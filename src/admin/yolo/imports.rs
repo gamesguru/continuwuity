@@ -188,7 +188,8 @@ pub(super) async fn import_pdus(
 		}
 	}
 
-	self.services
+	let (_, num_true) = self
+		.services
 		.rooms
 		.timeline
 		.recalculate_extremities(&room_id, 500, true)
@@ -196,8 +197,8 @@ pub(super) async fn import_pdus(
 
 	self.write_str(&format!(
 		"\nImported {inserted} PDUs, {rejected} stored as rejected outliers, {failed} errors \
-		 out of {total} total for {room_id}. DAG Extremities recalculated. Run \
-		 `force-set-room-state` to finalize."
+		 out of {total} total for {room_id}. DAG Extremities recalculated (now {num_true} \
+		 tips). Run `yolo reorder-timeline {room_id}` if you are finished importing."
 	))
 	.await
 }

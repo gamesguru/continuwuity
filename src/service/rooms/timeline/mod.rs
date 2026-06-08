@@ -699,12 +699,12 @@ impl Service {
 	/// `recalculate_extremities` with standardized logging.
 	pub async fn prune_extremities(&self, room_id: &RoomId, tail: usize) {
 		match self.recalculate_extremities(room_id, tail, true).await {
-			| Ok(true) => info!(
-				%room_id, tail,
+			| Ok((true, tips)) => info!(
+				%room_id, tail, tips,
 				"pruned extremities via tail-based recalculation"
 			),
-			| Ok(false) => info!(
-				%room_id, tail,
+			| Ok((false, tips)) => info!(
+				%room_id, tail, tips,
 				"extremities already consistent after recalculation"
 			),
 			| Err(e) => warn!(
@@ -726,7 +726,7 @@ impl Service {
 		room_id: &RoomId,
 		tail: usize,
 		update_db: bool,
-	) -> Result<bool> {
+	) -> Result<(bool, usize)> {
 		use std::collections::{HashMap, HashSet};
 
 		use futures::StreamExt;
@@ -763,22 +763,44 @@ impl Service {
 		// pdus_rev returns newest first. We need oldest for true_extremities
 		pdus.reverse();
 
+		let mut ts_map = HashMap::new();
 		for pdu in pdus {
 			let event_id = pdu.event_id.clone();
 			let prev_events: HashSet<OwnedEventId> = pdu.prev_events.iter().cloned().collect();
 			graph.insert(event_id.clone(), prev_events);
-			sorted.push(event_id);
+			sorted.push(event_id.clone());
+			ts_map.insert(event_id, pdu.origin_server_ts);
 		}
 
 		let true_extremities = calculate_true_extremities(&graph, &sorted);
-
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
 		let current_set: HashSet<_> = current_extremities.collect().await;
 
 		let phantom_tips = detect_phantom_extremities(&graph, &current_set);
 
-		if phantom_tips.is_empty() {
-			return Ok(false);
+		let true_extremities_set =
+			merge_true_extremities(true_extremities, &current_set, &phantom_tips);
+
+		// Ensure we have timestamps for all tips we intend to keep
+		for eid in &true_extremities_set {
+			if !ts_map.contains_key(eid) {
+				if let Ok(pdu) = self.get_pdu(eid).await {
+					ts_map.insert(eid.clone(), pdu.origin_server_ts);
+				}
+			}
+		}
+
+		let mut final_extremities: Vec<OwnedEventId> = true_extremities_set.into_iter().collect();
+
+		final_extremities
+			.sort_by_key(|eid| ts_map.get(eid).copied().unwrap_or(ruma::UInt::from(0_u32)));
+
+		let num_true_extremities = final_extremities.len();
+
+		// If the finalized extremities perfectly match the current DB, we skip
+		let final_set: HashSet<_> = final_extremities.iter().cloned().collect();
+		if final_set == current_set {
+			return Ok((false, num_true_extremities));
 		}
 
 		if update_db {
@@ -786,15 +808,11 @@ impl Service {
 			// set_forward_extremities enforces MAX_FORWARD_EXTREMITIES cap.
 			self.services
 				.state
-				.set_forward_extremities(
-					room_id,
-					true_extremities.into_iter().map(ToOwned::to_owned),
-					&state_lock,
-				)
+				.set_forward_extremities(room_id, final_extremities.into_iter(), &state_lock)
 				.await;
 		}
 
-		Ok(true)
+		Ok((true, num_true_extremities))
 	}
 
 	#[inline]
@@ -1480,5 +1498,63 @@ mod tests {
 
 		// Clean up
 		drop(guard);
+	}
+}
+
+pub fn merge_true_extremities<S: ::std::hash::BuildHasher>(
+	true_extremities: Vec<&EventId>,
+	current_set: &std::collections::HashSet<OwnedEventId, S>,
+	phantom_tips: &[OwnedEventId],
+) -> std::collections::HashSet<OwnedEventId> {
+	let mut true_extremities_set: std::collections::HashSet<OwnedEventId> =
+		true_extremities
+			.into_iter()
+			.map(ToOwned::to_owned)
+			.collect();
+
+	for eid in current_set {
+		if !phantom_tips.contains(eid) {
+			true_extremities_set.insert(eid.clone());
+		}
+	}
+
+	true_extremities_set
+}
+
+#[cfg(test)]
+mod tests_merge {
+	use std::collections::HashSet;
+
+	use ruma::{OwnedEventId, event_id};
+
+	use super::*;
+
+	#[test]
+	fn test_merge_true_extremities() {
+		let e1 = event_id!("$1").to_owned();
+		let e2 = event_id!("$2").to_owned();
+		let e3 = event_id!("$3").to_owned();
+		let e4 = event_id!("$4").to_owned();
+
+		// newly discovered true extremity
+		let true_exts = vec![&*e1];
+
+		// current tips in DB
+		let current_set: HashSet<OwnedEventId> = vec![e2.clone(), e3.clone(), e4.clone()]
+			.into_iter()
+			.collect();
+
+		// phantom tips: e2 and e3 are phantoms
+		let phantoms = vec![e2.clone(), e3.clone()];
+
+		let result = merge_true_extremities(true_exts, &current_set, &phantoms);
+
+		// Result should be e1 (true) and e4 (preserved from current_set because it's
+		// not a phantom)
+		assert_eq!(result.len(), 2);
+		assert!(result.contains(&e1));
+		assert!(result.contains(&e4));
+		assert!(!result.contains(&e2));
+		assert!(!result.contains(&e3));
 	}
 }
