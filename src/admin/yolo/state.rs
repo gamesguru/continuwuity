@@ -1859,3 +1859,50 @@ pub(super) async fn audit_membership(
 
 	Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+	use std::collections::HashMap;
+
+	use ruma::event_id;
+
+	use super::*;
+
+	#[test]
+	fn test_fmt_list_empty() {
+		let mut out = String::new();
+		fmt_list(&mut out, "Missing", &[]).unwrap();
+		assert_eq!(out, "Missing: []\n");
+	}
+
+	#[test]
+	fn test_fmt_list_items() {
+		let mut out = String::new();
+		fmt_list(&mut out, "Extra", &[(123, "item1".to_owned()), (456, "item2".to_owned())])
+			.unwrap();
+		assert_eq!(out, "Extra: [\n  item1\n  item2\n]\n");
+	}
+
+	#[test]
+	fn test_fmt_event_meta_empty() {
+		let meta = HashMap::new();
+		let eid = event_id!("$abc:test.org").to_owned();
+		assert_eq!(fmt_event_meta("m.room.member", &eid, &meta), "");
+	}
+
+	#[test]
+	fn test_fmt_event_meta_member() {
+		let mut meta = HashMap::new();
+		let eid = event_id!("$abc:test.org").to_owned();
+		meta.insert(eid.clone(), ("join".to_owned(), "@user:test.org".to_owned()));
+		assert_eq!(fmt_event_meta("m.room.member", &eid, &meta), " [join]");
+	}
+
+	#[test]
+	fn test_fmt_event_meta_power_levels() {
+		let mut meta = HashMap::new();
+		let eid = event_id!("$abc:test.org").to_owned();
+		meta.insert(eid.clone(), ("".to_owned(), "@user:test.org".to_owned()));
+		assert_eq!(fmt_event_meta("m.room.power_levels", &eid, &meta), " [by @user:test.org]");
+	}
+}

@@ -123,9 +123,10 @@ where
 			);
 			json_body = Some(CanonicalJsonValue::Object(CanonicalJsonObject::new()));
 		}
+		let body = make_body::<T>(&mut request, json_body.as_mut())?;
 		let auth = auth::auth(services, &mut request, json_body.as_ref(), &T::METADATA).await?;
 		Ok(Self {
-			body: make_body::<T>(&mut request, json_body.as_mut())?,
+			body,
 			origin: auth.origin,
 			sender_user: auth.sender_user,
 			sender_device: auth.sender_device,
