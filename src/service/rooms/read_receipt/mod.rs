@@ -166,8 +166,34 @@ where
 		);
 		match receipt {
 			| Ok(value) =>
-				for (event, receipt) in value.content {
-					json.insert(event, receipt);
+				for (event_id, new_receipts) in value.content {
+					let event_receipts = json.entry(event_id).or_insert_with(BTreeMap::new);
+					// Deeply merge the receipt trees to prevent overwriting existing receipts.
+					// Multiple users can read the same event, or a single user can have multiple
+					// receipts (e.g., threaded and unthreaded) for the exact same event.
+					for (receipt_type, new_users) in new_receipts {
+						let users = event_receipts
+							.entry(receipt_type)
+							.or_insert_with(BTreeMap::new);
+						for (user_id, new_receipt) in new_users {
+							let is_unthreaded = matches!(
+								new_receipt.thread,
+								ruma::events::receipt::ReceiptThread::Unthreaded
+							);
+
+							// MSC4102: "When a server is combining receipts into an EDU, if there
+							// are multiple receipts for the same (user, event, receipt
+							// type), always choose the receipt which is unthreaded (has no
+							// thread_id) when aggregating..."
+							if let std::collections::btree_map::Entry::Vacant(e) =
+								users.entry(user_id.clone())
+							{
+								e.insert(new_receipt);
+							} else if is_unthreaded {
+								users.insert(user_id, new_receipt);
+							}
+						}
+					}
 				},
 			| _ => {
 				debug!("failed to parse receipt: {:?}", receipt);
