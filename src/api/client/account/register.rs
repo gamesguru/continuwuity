@@ -425,6 +425,8 @@ async fn determine_registration_user_id(
 	emergency_mode_enabled: bool,
 ) -> Result<OwnedUserId> {
 	if let Some(supplied_username) = supplied_username {
+		let supplied_username = supplied_username.to_lowercase();
+
 		// The user gets to pick their username. Do some validation to make sure it's
 		// acceptable.
 
