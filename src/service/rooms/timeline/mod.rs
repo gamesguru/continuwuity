@@ -621,7 +621,7 @@ impl Service {
 				},
 			};
 
-			let json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
+			let mut json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
 				| Ok(j) => j,
 				| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
 					| Ok(j) => j,
@@ -646,6 +646,23 @@ impl Service {
 					.set_pdu_shortstatehash(shorteventid, ssh);
 
 				if let Some(state_key) = &pdu.state_key {
+					// Repair unsigned.prev_content for historical/backfilled events while we have the state snapshot!
+					if ssh != 0 {
+						if let Ok(prev_state) = self
+							.services
+							.state_accessor
+							.state_get(ssh, &pdu.kind.to_string().into(), state_key)
+							.await
+						{
+							if let Err(e) = crate::rooms::timeline::update_unsigned_prev_content(
+								&mut json,
+								&prev_state,
+							) {
+								warn!(%event_id, "Failed to repair unsigned.prev_content during reorder: {e}");
+							}
+						}
+					}
+
 					let states_parents = if ssh != 0 {
 						self.services
 							.state_compressor

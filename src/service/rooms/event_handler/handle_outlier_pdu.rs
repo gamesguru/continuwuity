@@ -223,8 +223,10 @@ where
 
 	// Now that we have checked the signature and hashes we can add the eventID and
 	// convert to our PduEvent type
-	incoming_pdu
-		.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
+	incoming_pdu.insert(
+		"event_id".to_owned(),
+		CanonicalJsonValue::String(event_id.as_str().to_owned()),
+	);
 
 	// Re-attach the origin's unsigned field (age, etc.) after stripping
 	// untrusted state metadata. append_pdu will recompute prev_content
