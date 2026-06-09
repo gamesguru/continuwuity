@@ -44,12 +44,15 @@ pub(super) async fn check_read_receipts_legacy(&self, room_id: OwnedRoomId) -> R
 		.read_receipt
 		.readreceipts_since(&room_id, Some(0));
 
-	let mut user_counts = BTreeMap::new();
-	let mut total_receipts = 0;
+	let mut user_counts: BTreeMap<_, usize> = BTreeMap::new();
+	let mut total_receipts: usize = 0;
 
 	while let Some((user_id, _count, _event_raw)) = stream.next().await {
-		total_receipts += 1;
-		*user_counts.entry(user_id.clone()).or_insert(0) += 1;
+		total_receipts = total_receipts.saturating_add(1);
+		user_counts
+			.entry(user_id.clone())
+			.and_modify(|c| *c = c.saturating_add(1))
+			.or_insert(1);
 	}
 
 	let mut msg = format!(
@@ -60,12 +63,10 @@ pub(super) async fn check_read_receipts_legacy(&self, room_id: OwnedRoomId) -> R
 	if duplicates.is_empty() {
 		msg.push_str("No duplicate read receipts found.");
 	} else {
-		msg.push_str(&format!(
-			"Found {} users with duplicate read receipts!\n",
-			duplicates.len()
-		));
+		use std::fmt::Write as _;
+		writeln!(msg, "Found {} users with duplicate read receipts!", duplicates.len()).unwrap();
 		for (user, count) in duplicates.iter().take(10) {
-			msg.push_str(&format!("- {user}: {count} receipts\n"));
+			writeln!(msg, "- {user}: {count} receipts").unwrap();
 		}
 	}
 

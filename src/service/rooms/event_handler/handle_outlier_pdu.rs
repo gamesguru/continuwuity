@@ -539,14 +539,27 @@ where
 		ready(auth_events_by_key.get(&key).map(ToOwned::to_owned))
 	};
 
-	// [NOTE: Rejection cascade now above auth events loop to avoid DAG holes]
+	let fetched_create;
+	let create_event_ref = if let Some(ce) = create_event {
+		ce.as_pdu()
+	} else if let Ok(ce) = self
+		.services
+		.state_accessor
+		.room_state_get(room_id, &StateEventType::RoomCreate, "")
+		.await
+	{
+		fetched_create = ce;
+		&fetched_create
+	} else {
+		&pdu_event
+	};
 
 	let auth_check = state_res::event_auth::auth_check(
 		&to_room_version(&room_version_id),
 		&pdu_event,
 		None, // TODO: third party invite
 		state_fetch,
-		create_event.map_or(&pdu_event, Event::as_pdu),
+		create_event_ref,
 	)
 	.await
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;

@@ -661,4 +661,10 @@ pub enum YoloCommand {
 		/// The room ID to check.
 		room_id: OwnedRoomId,
 	},
+
+	/// Checks the legacy un-threaded read receipts for a room.
+	CheckReadReceiptsLegacy {
+		/// The room ID.
+		room_id: OwnedRoomId,
+	},
 }
