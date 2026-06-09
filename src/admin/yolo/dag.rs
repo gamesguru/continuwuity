@@ -549,6 +549,10 @@ pub(super) async fn get_remote_dag(
 			})
 			.buffer_unordered(500);
 
+		// Collect batch results to identify true frontier
+		let mut batch_pdus = Vec::new();
+		let mut batch_event_ids = HashSet::new();
+
 		while let Some((raw_pdu, validation_res)) = verifications.next().await {
 			let (event_id, mut value) = match validation_res {
 				| Ok((eid, val)) => (eid, val),
@@ -558,11 +562,17 @@ pub(super) async fn get_remote_dag(
 				},
 			};
 
+			batch_event_ids.insert(event_id.clone());
+
 			value.insert(
 				"event_id".to_owned(),
 				ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
 			);
 
+			batch_pdus.push((event_id, value, raw_pdu));
+		}
+
+		for (event_id, value, raw_pdu) in batch_pdus {
 			if seen.contains(&event_id) {
 				continue;
 			}
@@ -574,19 +584,22 @@ pub(super) async fn get_remote_dag(
 			};
 
 			let mut export_val: serde_json::Map<String, serde_json::Value> =
-				serde_json::from_str(raw_pdu.get())?;
+				serde_json::from_str(raw_pdu.get()).unwrap_or_default();
 			if !export_val.contains_key("event_id") {
 				export_val.insert(
 					"event_id".to_owned(),
 					serde_json::Value::String(event_id.to_string()),
 				);
 			}
-			let json = serde_json::to_string(&export_val)?;
-			writer.write_all(json.as_bytes()).await?;
-			writer.write_all(b"\n").await?;
-			if print {
-				self.write_str(&format!("{json}\n")).await?;
+			if let Ok(json) = serde_json::to_string(&export_val) {
+				if writer.write_all(json.as_bytes()).await.is_ok() {
+					let _ = writer.write_all(b"\n").await;
+				}
+				if print {
+					let _ = self.write_str(&format!("{json}\n")).await;
+				}
 			}
+
 			total_prev_events = total_prev_events
 				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
 			let depth: u64 = pdu.depth.into();
@@ -603,10 +616,12 @@ pub(super) async fn get_remote_dag(
 				);
 			}
 
-			// Add prev_events to the queue for next iteration
+			// Add prev_events to the queue for next iteration ONLY if they are frontier
 			for prev in pdu.prev_events() {
-				if queued.insert(prev.to_owned()) {
-					queue.push_back(prev.to_owned());
+				if !seen.contains(prev) && !batch_event_ids.contains(prev) {
+					if queued.insert(prev.to_owned()) {
+						queue.push_back(prev.to_owned());
+					}
 				}
 			}
 

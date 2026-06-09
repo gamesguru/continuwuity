@@ -5,7 +5,6 @@ mod create;
 mod data;
 mod redact;
 mod repair_unsigned;
-
 use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
@@ -646,7 +645,8 @@ impl Service {
 					.set_pdu_shortstatehash(shorteventid, ssh);
 
 				if let Some(state_key) = &pdu.state_key {
-					// Repair unsigned.prev_content for historical/backfilled events while we have the state snapshot!
+					// Repair unsigned.prev_content for historical/backfilled events while we have
+					// the state snapshot!
 					if ssh != 0 {
 						if let Ok(prev_state) = self
 							.services
@@ -654,10 +654,7 @@ impl Service {
 							.state_get(ssh, &pdu.kind.to_string().into(), state_key)
 							.await
 						{
-							if let Err(e) = crate::rooms::timeline::update_unsigned_prev_content(
-								&mut json,
-								&prev_state,
-							) {
+							if let Err(e) = update_unsigned_prev_content(&mut json, &prev_state) {
 								warn!(%event_id, "Failed to repair unsigned.prev_content during reorder: {e}");
 							}
 						}
@@ -1512,6 +1509,302 @@ mod tests {
 		assert_eq!(phantoms, vec![a], "only A is phantom, C is valid");
 	}
 
+	#[tokio::test]
+	async fn test_upgrade_outlier_rejects_soft_failed_and_rejected_events() {
+		let _ = rustls::crypto::ring::default_provider().install_default();
+
+		use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+
+		use conduwuit::{
+			Server,
+			config::Config,
+			log::{Log, LogLevelReloadHandles, capture},
+		};
+		use figment::providers::Format;
+		use ruma::{
+			CanonicalJsonObject, CanonicalJsonValue, RoomId, RoomVersionId, ServerName, event_id,
+		};
+
+		use crate::rooms::timeline::PduEvent;
+
+		struct TempDbGuard {
+			path: PathBuf,
+		}
+
+		impl Drop for TempDbGuard {
+			fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+		}
+
+		static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 =
+			std::sync::atomic::AtomicU64::new(0);
+		let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		let db_path =
+			std::env::temp_dir().join(format!("conduwuit_test_db_upgrade_outlier_{count}"));
+		let _ = std::fs::remove_dir_all(&db_path);
+
+		let _guard = TempDbGuard { path: db_path.clone() };
+
+		let figment = figment::Figment::new().merge(figment::providers::Toml::string(&format!(
+			r#"
+				server_name = "test.conduwuit.local"
+				database_path = "{}"
+				"#,
+			db_path.to_string_lossy().replace('\\', "/")
+		)));
+
+		let config = Config::new(&figment).expect("failed to parse config");
+		let runtime_handle = tokio::runtime::Handle::current();
+		let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+			reload: LogLevelReloadHandles::default(),
+			capture: Arc::new(capture::State::default()),
+		}));
+
+		let services = crate::Services::build(server.clone())
+			.await
+			.expect("failed to build services");
+		let services = services.start().await.expect("failed to start services");
+
+		let room_id = RoomId::parse("!test_room:test.conduwuit.local").unwrap();
+		let create_event_id = event_id!("$create_event_id");
+		let origin = ServerName::parse("test.conduwuit.local").unwrap();
+
+		let mut create_json = CanonicalJsonObject::new();
+		create_json
+			.insert("type".to_owned(), CanonicalJsonValue::String("m.room.create".to_owned()));
+		create_json.insert(
+			"sender".to_owned(),
+			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
+		);
+		create_json.insert("state_key".to_owned(), CanonicalJsonValue::String("".to_owned()));
+		let mut content_map = BTreeMap::new();
+		content_map
+			.insert("room_version".to_owned(), CanonicalJsonValue::String("10".to_owned()));
+		content_map.insert(
+			"creator".to_owned(),
+			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
+		);
+		create_json.insert("content".to_owned(), CanonicalJsonValue::Object(content_map));
+		create_json.insert(
+			"event_id".to_owned(),
+			CanonicalJsonValue::String(create_event_id.as_str().to_owned()),
+		);
+		create_json
+			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456789.into()));
+		create_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		create_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		create_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
+
+		let create_pdu =
+			PduEvent::from_id_val(&create_event_id, create_json.clone(), Some(&room_id)).unwrap();
+
+		let test_event_id = event_id!("$test_event_id");
+		let mut test_json = CanonicalJsonObject::new();
+		test_json
+			.insert("type".to_owned(), CanonicalJsonValue::String("m.room.message".to_owned()));
+		test_json.insert(
+			"sender".to_owned(),
+			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
+		);
+		test_json.insert("content".to_owned(), CanonicalJsonValue::Object(BTreeMap::new()));
+		test_json.insert(
+			"event_id".to_owned(),
+			CanonicalJsonValue::String(test_event_id.as_str().to_owned()),
+		);
+		test_json
+			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456790.into()));
+		test_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		test_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		test_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(2.into()));
+
+		let test_pdu =
+			PduEvent::from_id_val(&test_event_id, test_json.clone(), Some(&room_id)).unwrap();
+		let btree_val = test_json
+			.into_iter()
+			.collect::<BTreeMap<String, CanonicalJsonValue>>();
+
+		// Mark the event as rejected to simulate a previously failed validation
+		services
+			.rooms
+			.pdu_metadata
+			.mark_event_rejected(&test_event_id);
+
+		// When rescue-room calls this with skip_soft_fail=false, it MUST return an
+		// error.
+		let result = services
+			.rooms
+			.event_handler
+			.upgrade_outlier_to_timeline_pdu(
+				test_pdu,
+				btree_val,
+				&create_pdu,
+				&origin,
+				&room_id,
+				false, // skip_soft_fail MUST be false
+				true,  // is_forward_extremity (simulating rescue-room forcing a promotion)
+			)
+			.await;
+
+		assert!(
+			result.is_err(),
+			"upgrade_outlier_to_timeline_pdu must reject events that are marked rejected when \
+			 skip_soft_fail is false"
+		);
+	}
+
+	#[tokio::test]
+	#[ignore]
+	async fn test_dags_import() {
+		let _ = rustls::crypto::ring::default_provider().install_default();
+
+		use std::{
+			collections::BTreeMap,
+			fs::File,
+			io::{BufRead, BufReader},
+			path::PathBuf,
+			sync::Arc,
+		};
+
+		use conduwuit::{
+			Server,
+			config::Config,
+			log::{Log, LogLevelReloadHandles, capture},
+		};
+		use figment::providers::Format;
+		use ruma::{EventId, RoomId, ServerName};
+		use serde_json::Value;
+
+		use crate::rooms::timeline::PduEvent;
+
+		struct TempDbGuard {
+			path: PathBuf,
+		}
+
+		impl Drop for TempDbGuard {
+			fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+		}
+
+		static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 =
+			std::sync::atomic::AtomicU64::new(0);
+		let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+		let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_dag_import_{count}"));
+		let _ = std::fs::remove_dir_all(&db_path);
+
+		let _guard = TempDbGuard { path: db_path.clone() };
+
+		let figment = figment::Figment::new().merge(figment::providers::Toml::string(&format!(
+			r#"
+				server_name = "test.conduwuit.local"
+				database_path = "{}"
+				"#,
+			db_path.to_string_lossy().replace('\\', "/")
+		)));
+
+		let config = Config::new(&figment).expect("failed to parse config");
+		let runtime_handle = tokio::runtime::Handle::current();
+		let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+			reload: LogLevelReloadHandles::default(),
+			capture: Arc::new(capture::State::default()),
+		}));
+
+		let services = crate::Services::build(server.clone())
+			.await
+			.expect("failed to build services");
+		let services = services.start().await.expect("failed to start services");
+
+		let room_id = RoomId::parse("!UbCmIlGTHNIgIRZcpt:nheko.im").unwrap();
+		let origin = ServerName::parse("nheko.im").unwrap();
+
+		let mut create_event_opt: Option<PduEvent> = None;
+
+		let mut imported = 0;
+		let mut failed = 0;
+
+		if let Ok(file) = File::open(
+			"/run/media/shane/shane4tb-ent/dags/remote-dag-UbCmIlGTHNIgIRZcpt_nheko.im-v5-nutra.\
+			 tk-d153360-383640.jsonl",
+		) {
+			let reader = BufReader::new(file);
+			for line in reader.lines() {
+				if let Ok(line) = line {
+					if let Ok(val) = serde_json::from_str::<Value>(&line) {
+						if let Value::Object(map) = val {
+							let event_id_str = map
+								.get("event_id")
+								.and_then(|v| v.as_str())
+								.map(|s| s.to_owned());
+							let mut eid = None;
+							if let Some(s) = &event_id_str {
+								eid = EventId::parse(s.as_str()).ok();
+							} else if let Some(hashes) = map.get("hashes") {
+								if let Some(sha256) =
+									hashes.get("sha256").and_then(|v| v.as_str())
+								{
+									let mut b64 = sha256.replace("+", "-").replace("/", "_");
+									b64 = b64.trim_end_matches('=').to_string();
+									let full_b64 = format!("${}", b64);
+									eid = EventId::parse(full_b64.as_str()).ok();
+								}
+							}
+
+							if let Some(event_id) = eid {
+								if let Ok(c_json) = serde_json::from_value::<
+									ruma::CanonicalJsonObject,
+								>(Value::Object(map.clone()))
+								{
+									if create_event_opt.is_none() {
+										if let Ok(pdu) = PduEvent::from_id_val(
+											&event_id,
+											c_json.clone(),
+											Some(&room_id),
+										) {
+											if pdu.kind
+												== TimelineEventType::RoomCreate
+											{
+												create_event_opt = Some(pdu);
+											}
+										}
+									}
+
+									let btree_val = c_json
+										.into_iter()
+										.collect::<BTreeMap<String, ruma::CanonicalJsonValue>>();
+
+									match services
+										.rooms
+										.event_handler
+										.handle_outlier_pdu(
+											&origin,
+											create_event_opt.as_ref(),
+											&event_id,
+											&room_id,
+											btree_val,
+											false,
+											true, // skip_sig_verify
+											None,
+										)
+										.await
+									{
+										| Ok(_) => {
+											imported += 1;
+										},
+										| Err(e) => {
+											println!(
+												"handle_outlier_pdu error for {event_id}: {e:?}"
+											);
+											failed += 1;
+										},
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		println!("Imported: {}, Failed: {}", imported, failed);
+	}
+
 	async fn run_test_handle_outlier_pdu(
 		room_version_str: &str,
 		include_room_id: bool,
@@ -1687,7 +1980,7 @@ mod tests {
 		let handle_missing_res = services
 			.rooms
 			.event_handler
-			.handle_outlier_pdu::<crate::rooms::timeline::PduEvent>(
+			.handle_outlier_pdu::<PduEvent>(
 				&origin,
 				None,
 				join_event_id,
@@ -1710,7 +2003,7 @@ mod tests {
 		let handle_create_res = services
 			.rooms
 			.event_handler
-			.handle_outlier_pdu::<crate::rooms::timeline::PduEvent>(
+			.handle_outlier_pdu::<PduEvent>(
 				&origin,
 				None,
 				create_event_id,
@@ -1746,7 +2039,7 @@ mod tests {
 		let handle_success_res = services
 			.rooms
 			.event_handler
-			.handle_outlier_pdu::<crate::rooms::timeline::PduEvent>(
+			.handle_outlier_pdu::<PduEvent>(
 				&origin,
 				create_event_param,
 				join_event_id,
