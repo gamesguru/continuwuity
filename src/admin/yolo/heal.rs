@@ -310,7 +310,8 @@ pub(super) async fn rescue_room(
 					&create_event_c,
 					&origin,
 					&room_id_c,
-					true,
+					// skip_soft_fail
+					false,
 					// is_forward_extremity
 					true,
 				))
