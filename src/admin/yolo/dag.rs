@@ -546,8 +546,14 @@ pub(super) async fn get_remote_dag(
 				continue;
 			};
 
-			let export_val: serde_json::Map<String, serde_json::Value> =
+			let mut export_val: serde_json::Map<String, serde_json::Value> =
 				serde_json::from_str(raw_pdu.get())?;
+			if !export_val.contains_key("event_id") {
+				export_val.insert(
+					"event_id".to_owned(),
+					serde_json::Value::String(event_id.to_string()),
+				);
+			}
 			let json = serde_json::to_string(&export_val)?;
 			writer.write_all(json.as_bytes()).await?;
 			writer.write_all(b"\n").await?;

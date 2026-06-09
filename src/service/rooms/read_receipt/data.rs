@@ -174,7 +174,7 @@ impl Data {
 
 		let count = self.services.globals.next_count().unwrap();
 		let latest_id = (room_id, count, user_id);
-		conduwuit::info!(?room_id, ?user_id, ?count, ?new_receipts, "Inserting new read receipt");
+		conduwuit::trace!(?room_id, ?user_id, ?count, ?new_receipts, "Inserting new read receipt");
 		self.readreceiptid_readreceipt.put(latest_id, Json(event));
 	}
 

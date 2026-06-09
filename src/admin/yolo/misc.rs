@@ -27,12 +27,12 @@ pub(super) async fn check_read_receipts(&self, room_id: OwnedRoomId) -> Result {
 	let packed = conduwuit_service::rooms::read_receipt::pack_receipts(receipts.into_iter());
 	let json = packed.json().get();
 
-	self.write_str(&format!("Pack Receipts Output:\n```json\n{}\n```", json))
+	self.write_str(&format!("Pack Receipts Output:\n```json\n{json}\n```"))
 		.await
 }
 
 #[admin_command]
-pub(super) async fn check_read_receipts_legacy(&self, room_id: ruma::OwnedRoomId) -> Result {
+pub(super) async fn check_read_receipts_legacy(&self, room_id: OwnedRoomId) -> Result {
 	use std::collections::BTreeMap;
 
 	use futures::StreamExt;
@@ -47,14 +47,13 @@ pub(super) async fn check_read_receipts_legacy(&self, room_id: ruma::OwnedRoomId
 	let mut user_counts = BTreeMap::new();
 	let mut total_receipts = 0;
 
-	while let Some((user_id, count, _event_raw)) = stream.next().await {
+	while let Some((user_id, _count, _event_raw)) = stream.next().await {
 		total_receipts += 1;
 		*user_counts.entry(user_id.clone()).or_insert(0) += 1;
 	}
 
 	let mut msg = format!(
-		"Checked read receipts for room {}\nTotal receipt items: {}\n",
-		room_id, total_receipts
+		"Checked read receipts for room {room_id}\nTotal receipt items: {total_receipts}\n"
 	);
 	let duplicates: Vec<_> = user_counts.iter().filter(|(_, c)| **c > 1).collect();
 
@@ -66,7 +65,7 @@ pub(super) async fn check_read_receipts_legacy(&self, room_id: ruma::OwnedRoomId
 			duplicates.len()
 		));
 		for (user, count) in duplicates.iter().take(10) {
-			msg.push_str(&format!("- {}: {} receipts\n", user, count));
+			msg.push_str(&format!("- {user}: {count} receipts\n"));
 		}
 	}
 

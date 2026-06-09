@@ -341,6 +341,11 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 						"{backfill_server} provided an invalid PDU or failed state resolution \
 						 for {event_id}: {e}"
 					);
+
+					if e.to_string().contains("Server was denied by room ACL") {
+						return Err(e);
+					}
+
 					None
 				},
 			},

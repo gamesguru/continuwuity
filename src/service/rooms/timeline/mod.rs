@@ -280,15 +280,19 @@ impl Service {
 			parents.retain(|prev_id| entries.contains_key(prev_id));
 		}
 
-		// Topological sort with origin_server_ts as tiebreaker
+		// Topological sort with PduCount as tiebreaker
 		info!("reorder_timeline: topological sort of {} events...", graph.len());
 		let event_fetch = |event_id: OwnedEventId| {
-			let ts = entries
-				.get(&event_id)
-				.map_or_else(|| ruma::uint!(0), |&(_, ts)| ts);
+			let count = entries.get(&event_id).map_or_else(
+				|| ruma::uint!(0),
+				|&(c, _)| match c {
+					| PduCount::Normal(n) => n.try_into().unwrap_or(ruma::UInt::MAX),
+					| PduCount::Backfilled(n) => n.try_into().unwrap_or(ruma::UInt::MAX),
+				},
+			);
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
-				ruma::MilliSecondsSinceUnixEpoch(ts),
+				ruma::MilliSecondsSinceUnixEpoch(count),
 			)))
 		};
 
@@ -511,15 +515,7 @@ impl Service {
 			 {stale_removed} stale"
 		);
 
-		let n_extremities = true_extremities.len();
 		drop(state_lock);
-
-		// Prune fork storms down to operationally relevant tips.
-		// Must happen after dropping state_lock since recalculate acquires its own.
-		if n_extremities > 5 {
-			self.prune_extremities(room_id, tail.unwrap_or(usize::MAX))
-				.await;
-		}
 
 		info!("reorder_timeline: complete, {count} events reordered");
 
@@ -870,19 +866,6 @@ impl Service {
 
 		let mut stream = std::pin::pin!(self.pdus_rev(room_id, None));
 		while let Some(Ok((_count, pdu))) = stream.next().await {
-			// ALGORITHMIC DAG HEALING:
-			// Do NOT include soft-failed events in the topological graph.
-			// By ignoring them, their parents will naturally have out-degree 0
-			// and become the true DAG tips, burying the soft-failed event.
-			if self
-				.services
-				.pdu_metadata
-				.is_event_soft_failed(&pdu.event_id)
-				.await
-			{
-				continue;
-			}
-
 			pdus.push(pdu);
 			if pdus.len() >= tail {
 				break;

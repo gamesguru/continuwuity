@@ -223,10 +223,10 @@ pub enum YoloCommand {
 		heal_from: Vec<OwnedServerName>,
 	},
 
-	/// Reorder the timeline for a room by origin_server_ts.
+	/// Reorder the timeline for a room by receive order (PduCount).
 	///
 	/// Fixes anachronisms caused by rescued outliers being appended at the
-	/// end of the timeline instead of in chronological order.
+	/// end of the timeline instead of in receive order (PduCount).
 	ReorderTimeline {
 		/// The room ID.
 		room_id: OwnedRoomId,
@@ -335,9 +335,6 @@ pub enum YoloCommand {
 		/// Skip auth checks and insert directly into timeline
 		#[arg(long)]
 		skip_auth: bool,
-		/// Force overwrite existing PDUs in the database.
-		#[arg(long)]
-		force: bool,
 	},
 
 	/// Re-broadcast stored read receipts for a room to all participating
