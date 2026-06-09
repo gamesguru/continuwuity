@@ -313,3 +313,1181 @@ fn strip_v12_create_removes() {
 	strip_room_id_if_needed(&mut obj, "12");
 	assert!(!obj.contains_key("room_id"), "room_id must be removed for V12 create events");
 }
+
+#[tokio::test]
+async fn test_yolo_audit_membership_drift() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+
+	use std::{path::PathBuf, sync::Arc};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		pdu::PduBuilder,
+	};
+	use figment::{Figment, providers::Format};
+	use ruma::{
+		RoomId, RoomVersionId,
+		events::room::{
+			create::RoomCreateEventContent,
+			member::{MembershipState, RoomMemberEventContent},
+		},
+	};
+
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_yolo_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+
+	let _guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build services");
+	let services = services.start().await.expect("failed to start services");
+
+	// Boot admin module context references
+	crate::init(&services.admin).await;
+
+	let room_id = RoomId::new(services.globals.server_name());
+	let _short_id = services
+		.rooms
+		.short
+		.get_or_create_shortroomid(&room_id)
+		.await;
+
+	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+
+	// Create bot user
+	let server_user = services.globals.server_user.as_ref();
+	services
+		.users
+		.create(server_user, None, None)
+		.await
+		.unwrap();
+
+	// 1. Create event
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomCreateEventContent {
+				federate: true,
+				predecessor: None,
+				room_version: RoomVersionId::V11,
+				..RoomCreateEventContent::new_v11()
+			}),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// 2. Bot user joins
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(server_user),
+				&RoomMemberEventContent::new(MembershipState::Join),
+			),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// Power levels event
+	use ruma::events::room::power_levels::RoomPowerLevelsEventContent;
+	let mut power_levels = RoomPowerLevelsEventContent::new();
+	power_levels
+		.users
+		.insert(server_user.to_owned(), ruma::int!(100));
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &power_levels),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// Join rules event
+	use ruma::events::room::join_rules::{JoinRule, RoomJoinRulesEventContent};
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomJoinRulesEventContent::new(JoinRule::Public)),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	drop(state_lock);
+
+	// Assert cache is currently consistent
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+	let output = match res {
+		| Ok(Some(out)) => out.body().to_owned(),
+		| _ => panic!("Expected output"),
+	};
+	assert!(
+		output.contains("No actionable divergences."),
+		"expected no divergences: {}",
+		output
+	);
+	assert!(
+		output.contains("OK: Membership cache is consistent"),
+		"expected consistent cache: {}",
+		output
+	);
+
+	// 1. Simulate user mismatch drift (user joined in state, but marked as left in
+	//    cache)
+	let user_id = ruma::user_id!("@user:test.conduwuit.local");
+	services.users.create(user_id, None, None).await.unwrap();
+
+	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(user_id.as_str()),
+				&RoomMemberEventContent::new(MembershipState::Join),
+			),
+			user_id,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+	drop(state_lock);
+
+	// Manually mark as left in cache (corrupt cache)
+	services
+		.rooms
+		.state_cache
+		.mark_as_left_silent(user_id, &room_id)
+		.await;
+	services
+		.rooms
+		.state_cache
+		.update_joined_count(&room_id)
+		.await;
+
+	// Run audit-membership and check it reports inconsistency and heals it
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	let output = match res {
+		| Ok(Some(out)) => out.body().to_owned(),
+		| _ => panic!("Expected output"),
+	};
+	assert!(
+		output.contains("✗ CACHE INCONSISTENCY"),
+		"expected cache inconsistency: {}",
+		output
+	);
+	assert!(output.contains("Cache repaired."), "expected cache to be repaired: {}", output);
+
+	// Assert cache is now consistent again
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	let output = match res {
+		| Ok(Some(out)) => out.body().to_owned(),
+		| _ => panic!("Expected output"),
+	};
+	assert!(
+		output.contains("OK: Membership cache is consistent"),
+		"expected consistent cache: {}",
+		output
+	);
+
+	// 2. Simulate aggregate count mismatch drift (count drift)
+	services.db["roomid_joinedcount"].raw_put(&room_id, 999_u64);
+
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	let output = match res {
+		| Ok(Some(out)) => out.body().to_owned(),
+		| _ => panic!("Expected output"),
+	};
+	assert!(
+		output.contains("✗ CACHE INCONSISTENCY"),
+		"expected count inconsistency: {}",
+		output
+	);
+	assert!(output.contains("cache=999"), "expected cached count in output: {}", output);
+	assert!(output.contains("Cache repaired."), "expected cache to be repaired: {}", output);
+
+	// Assert cache is consistent again
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	let output = match res {
+		| Ok(Some(out)) => out.body().to_owned(),
+		| _ => panic!("Expected output"),
+	};
+	assert!(
+		output.contains("OK: Membership cache is consistent"),
+		"expected consistent cache: {}",
+		output
+	);
+}
+
+#[tokio::test]
+async fn test_yolo_reorder_timeline() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+
+	use std::{path::PathBuf, sync::Arc};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		pdu::PduBuilder,
+	};
+	use figment::{Figment, providers::Format};
+	use ruma::{
+		RoomId, RoomVersionId,
+		events::room::{
+			create::RoomCreateEventContent,
+			member::{MembershipState, RoomMemberEventContent},
+			message::RoomMessageEventContent,
+		},
+	};
+
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_reorder_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+
+	let _guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build services");
+	let services = services.start().await.expect("failed to start services");
+
+	// Boot admin module context references
+	crate::init(&services.admin).await;
+
+	let room_id = RoomId::new(services.globals.server_name());
+	let _short_id = services
+		.rooms
+		.short
+		.get_or_create_shortroomid(&room_id)
+		.await;
+
+	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+
+	// Create bot user
+	let server_user = services.globals.server_user.as_ref();
+	services
+		.users
+		.create(server_user, None, None)
+		.await
+		.unwrap();
+
+	// 1. Create event
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomCreateEventContent {
+				federate: true,
+				predecessor: None,
+				room_version: RoomVersionId::V11,
+				..RoomCreateEventContent::new_v11()
+			}),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// 2. Bot user joins
+	let join_event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(server_user),
+				&RoomMemberEventContent::new(MembershipState::Join),
+			),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// 3. Append Event A
+	let event_a = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::timeline(&RoomMessageEventContent::text_plain("Event A")),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// Reset extremities to join_event so that Event B is concurrent (fork)
+	services
+		.rooms
+		.state
+		.set_forward_extremities(&room_id, vec![join_event.clone()].into_iter(), &state_lock)
+		.await;
+
+	// 4. Append Event B
+	let event_b = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::timeline(&RoomMessageEventContent::text_plain("Event B")),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	drop(state_lock);
+
+	// Mutate origin_server_ts: Event A = 2000, Event B = 1000
+	let mut json_a = services
+		.rooms
+		.timeline
+		.get_pdu_json(&event_a)
+		.await
+		.unwrap();
+	json_a.insert("origin_server_ts".to_owned(), ruma::CanonicalJsonValue::Integer(2000.into()));
+	let pdu_id_a = services.rooms.timeline.get_pdu_id(&event_a).await.unwrap();
+	services
+		.rooms
+		.timeline
+		.replace_pdu(&pdu_id_a, &json_a)
+		.await
+		.unwrap();
+
+	let mut json_b = services
+		.rooms
+		.timeline
+		.get_pdu_json(&event_b)
+		.await
+		.unwrap();
+	json_b.insert("origin_server_ts".to_owned(), ruma::CanonicalJsonValue::Integer(1000.into()));
+	let pdu_id_b = services.rooms.timeline.get_pdu_id(&event_b).await.unwrap();
+	services
+		.rooms
+		.timeline
+		.replace_pdu(&pdu_id_b, &json_b)
+		.await
+		.unwrap();
+
+	// Check original order (Event A count < Event B count)
+	let count_a_before = conduwuit::matrix::pdu::Id::from(
+		services.rooms.timeline.get_pdu_id(&event_a).await.unwrap(),
+	);
+	let count_b_before = conduwuit::matrix::pdu::Id::from(
+		services.rooms.timeline.get_pdu_id(&event_b).await.unwrap(),
+	);
+	assert!(
+		count_a_before.shorteventid.into_signed() < count_b_before.shorteventid.into_signed(),
+		"Event A should be before Event B initially"
+	);
+
+	// Run reorder-timeline
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+
+	// Check new order (Event B should now be before Event A)
+	let count_a_after = conduwuit::matrix::pdu::Id::from(
+		services.rooms.timeline.get_pdu_id(&event_a).await.unwrap(),
+	);
+	let count_b_after = conduwuit::matrix::pdu::Id::from(
+		services.rooms.timeline.get_pdu_id(&event_b).await.unwrap(),
+	);
+	assert!(
+		count_b_after.shorteventid.into_signed() < count_a_after.shorteventid.into_signed(),
+		"Event B should be before Event A after reordering"
+	);
+}
+
+#[tokio::test]
+async fn test_busted_dag_resolution() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+
+	use std::{
+		path::{Path, PathBuf},
+		sync::Arc,
+	};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		matrix::Event,
+	};
+	use figment::{Figment, providers::Format};
+	use futures::StreamExt;
+	use ruma::RoomId;
+
+	let dag_path = Path::new(
+		"/run/media/shane/shane4tb-ent/dags/\
+		 local-dag-L58ME6ufiP49v97UIOBIpvWKEgj4912JmECPuDzlvCI-v12-wombatx.me-d1-68018.jsonl",
+	);
+	if !dag_path.exists() {
+		println!("Skipping test_busted_dag_resolution: test DAG file not found");
+		return;
+	}
+
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_busted_dag_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+
+	let _guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build services");
+	let services = services.start().await.expect("failed to start services");
+
+	// Boot admin module context references
+	crate::init(&services.admin).await;
+
+	let room_id = RoomId::parse("!L58ME6ufiP49v97UIOBIpvWKEgj4912JmECPuDzlvCI").unwrap();
+
+	// 1. Import the DAG
+	let res = services
+		.admin
+		.command_in_place(
+			format!(
+				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 12",
+				dag_path.to_string_lossy()
+			),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "import-pdus failed: {:?}", res);
+
+	// Run reorder-timeline
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+
+	// Bootstrap room state hash from the latest PDU
+	let latest_pdu = services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await
+		.unwrap();
+	let latest_event_id = latest_pdu.event_id();
+	let ssh = services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(latest_event_id)
+		.await
+		.unwrap();
+	let state_lock = services.rooms.state.mutex.lock(&*room_id).await;
+	services
+		.rooms
+		.state
+		.set_room_state(&room_id, ssh, &state_lock);
+	drop(state_lock);
+
+	// Run force-set-state (to trigger re-resolution on local DAG)
+	let res = services
+		.admin
+		.command_in_place(
+			format!("debug force-set-state {room_id} --event-id {latest_event_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "force-set-state failed: {:?}", res);
+
+	// Run check-rooms (to check sanity)
+	let res = services
+		.admin
+		.command_in_place(
+			"yolo check-rooms".to_owned(),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "check-rooms failed: {:?}", res);
+
+	// Run audit-membership
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+
+	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
+	let exts_count = services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.count()
+		.await;
+	println!("Busted DAG resolved. Final forward extremities count: {}", exts_count);
+	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+}
+
+#[tokio::test]
+async fn test_unredacted_room_dag_resolution() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+
+	use std::{
+		path::{Path, PathBuf},
+		sync::Arc,
+	};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		matrix::Event,
+	};
+	use figment::{Figment, providers::Format};
+	use futures::StreamExt;
+	use ruma::RoomId;
+
+	let dag_path = Path::new(
+		"/run/media/shane/shane4tb-ent/dags/remote-dag-BDSybzDpGyDxMHZzpN_unredacted.\
+		 org-v10-unredacted.org-d1-23142.jsonl",
+	);
+	if !dag_path.exists() {
+		println!("Skipping test_unredacted_room_dag_resolution: test DAG file not found");
+		return;
+	}
+
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_unredacted_room_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+
+	let _guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build services");
+	let services = services.start().await.expect("failed to start services");
+
+	// Boot admin module context references
+	crate::init(&services.admin).await;
+
+	let room_id = RoomId::parse("!BDSybzDpGyDxMHZzpN:unredacted.org").unwrap();
+
+	// 1. Import the DAG
+	let res = services
+		.admin
+		.command_in_place(
+			format!(
+				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 10",
+				dag_path.to_string_lossy()
+			),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "import-pdus failed: {:?}", res);
+
+	// Run reorder-timeline
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+
+	// Bootstrap room state hash from the latest PDU
+	let latest_pdu = services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await
+		.unwrap();
+	let latest_event_id = latest_pdu.event_id();
+	let ssh = services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(latest_event_id)
+		.await
+		.unwrap();
+	let state_lock = services.rooms.state.mutex.lock(&*room_id).await;
+	services
+		.rooms
+		.state
+		.set_room_state(&room_id, ssh, &state_lock);
+	drop(state_lock);
+
+	// Run force-set-state (to trigger re-resolution on local DAG)
+	let res = services
+		.admin
+		.command_in_place(
+			format!("debug force-set-state {room_id} --event-id {latest_event_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "force-set-state failed: {:?}", res);
+
+	// Run check-rooms (to check sanity)
+	let res = services
+		.admin
+		.command_in_place(
+			"yolo check-rooms".to_owned(),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "check-rooms failed: {:?}", res);
+
+	// Run audit-membership
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+
+	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
+	let exts_count = services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.count()
+		.await;
+	println!("Unredacted Room DAG resolved. Final forward extremities count: {}", exts_count);
+	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+}
+
+#[tokio::test]
+async fn test_unredacted_lounge_dag_resolution() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+
+	use std::{
+		path::{Path, PathBuf},
+		sync::Arc,
+	};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		matrix::Event,
+	};
+	use figment::{Figment, providers::Format};
+	use futures::StreamExt;
+	use ruma::RoomId;
+
+	let dag_path = Path::new(
+		"/run/media/shane/shane4tb-ent/dags/\
+		 merged-sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE-unredacted-lounge-v12-d1-84135.jsonl",
+	);
+	if !dag_path.exists() {
+		println!("Skipping test_unredacted_lounge_dag_resolution: test DAG file not found");
+		return;
+	}
+
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path =
+		std::env::temp_dir().join(format!("conduwuit_test_db_unredacted_lounge_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+
+	let _guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build services");
+	let services = services.start().await.expect("failed to start services");
+
+	// Boot admin module context references
+	crate::init(&services.admin).await;
+
+	let room_id = RoomId::parse("!sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE").unwrap();
+
+	// 1. Import the DAG
+	let res = services
+		.admin
+		.command_in_place(
+			format!(
+				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 12",
+				dag_path.to_string_lossy()
+			),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "import-pdus failed: {:?}", res);
+
+	// Run reorder-timeline
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+
+	// Bootstrap room state hash from the latest PDU
+	let latest_pdu = services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await
+		.unwrap();
+	let latest_event_id = latest_pdu.event_id();
+	let ssh = services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(latest_event_id)
+		.await
+		.unwrap();
+	let state_lock = services.rooms.state.mutex.lock(&*room_id).await;
+	services
+		.rooms
+		.state
+		.set_room_state(&room_id, ssh, &state_lock);
+	drop(state_lock);
+
+	// Run force-set-state (to trigger re-resolution on local DAG)
+	let res = services
+		.admin
+		.command_in_place(
+			format!("debug force-set-state {room_id} --event-id {latest_event_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "force-set-state failed: {:?}", res);
+
+	// Run check-rooms (to check sanity)
+	let res = services
+		.admin
+		.command_in_place(
+			"yolo check-rooms".to_owned(),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "check-rooms failed: {:?}", res);
+
+	// Run audit-membership
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+
+	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
+	let exts_count = services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.count()
+		.await;
+	println!(
+		"Unredacted Lounge DAG resolved. Final forward extremities count: {}",
+		exts_count
+	);
+	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+
+	// Validate the expected state (compare with unredacted.org disputed winners)
+	let resolved_state_ids: std::collections::HashSet<ruma::OwnedEventId> = services
+		.rooms
+		.state_accessor
+		.state_full_pdus(ssh)
+		.map(|pdu| pdu.event_id().to_owned())
+		.collect()
+		.await;
+
+	let expected_present = [
+		"$TN3aSG4dg-NueYfa8FNgOg154yVJlB_g102cf5eQiFY",
+		"$x49Eu0L3xnLbMJ1sAJIk8wtj0moDiZyjya_rNh3U2UQ",
+		"$xqrfEc0vwvpDFN4laAkpvtniqlv1oV7kb-RfdT7mXCI",
+		"$0-Rwh5ycT6Hwr9jkoiSsOSKW7HK_xiSrNyCvzh2Whcs",
+		"$4sXgVhE2a85_i94Ul_TvfwKVfpjIHUQKWcuzdw0W8as",
+		"$CITU5ramZfoRbG5NuEBd_kMm6f9a1UJB5TKRhMpVT6E",
+		"$Hk-xXbs52DhNQI_Ca1E2DkyNMazBITKkepo8IuqC7EI",
+		"$DT2PAjF5OtuocQGMV_ekKgN68M6XaYYsO2TGQPGEZ_c",
+	];
+
+	let expected_absent = [
+		"$AJsK9SExNlblHbfse7eDhSNISk9E871gJzbkqoTA9Ds",
+		"$TtQ6QYSjCphiJuzNiwfINI-ylQQTkBSkWaMydae_nCc",
+		"$YlZG-G6Ak3fdjf4TIHEA8oD7C_FHX8EwmwFYL6jXNtg",
+		"$heDtrL6Z-AVUZkzEsqtIKLxIQpzhMwcEU4JZ1bRyXSE",
+		"$kUBfA5z53UYwkouV54Wq_UgK_8vnszbTp8gflvF3qns",
+		"$mK__qhCzbLBUyb4IjkIxXKQpmdBwr8vxWwd40sXn1U4",
+		"$rmb6V2Nb_UScP9htYUTPOy9LhbWgxb5wxgMEIfj8aFM",
+		"$EhAnh9S3GYGd3tHSsoVhZAGbQt9fPgV_ketRNIQDc0s",
+	];
+
+	for id in &expected_present {
+		let eid = <&ruma::EventId>::try_from(*id).unwrap();
+		assert!(resolved_state_ids.contains(eid), "resolved state should contain event: {id}");
+	}
+
+	for id in &expected_absent {
+		let eid = <&ruma::EventId>::try_from(*id).unwrap();
+		assert!(
+			!resolved_state_ids.contains(eid),
+			"resolved state should NOT contain event: {id}"
+		);
+	}
+}
+
+#[tokio::test]
+async fn test_nheko_dag_resolution() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+
+	use std::{
+		path::{Path, PathBuf},
+		sync::Arc,
+	};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		matrix::Event,
+	};
+	use figment::{Figment, providers::Format};
+	use futures::StreamExt;
+	use ruma::RoomId;
+
+	let dag_path = Path::new(
+		"/run/media/shane/shane4tb-ent/dags/local-dag-UbCmIlGTHNIgIRZcpt_nheko.im-v5-wombatx.\
+		 me-d1-383595.jsonl",
+	);
+	if !dag_path.exists() {
+		println!("Skipping test_nheko_dag_resolution: test DAG file not found");
+		return;
+	}
+
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_nheko_room_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+
+	let _guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build services");
+	let services = services.start().await.expect("failed to start services");
+
+	// Boot admin module context references
+	crate::init(&services.admin).await;
+
+	let room_id = RoomId::parse("!UbCmIlGTHNIgIRZcpt:nheko.im").unwrap();
+
+	// 1. Import the DAG
+	let res = services
+		.admin
+		.command_in_place(
+			format!(
+				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 5",
+				dag_path.to_string_lossy()
+			),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "import-pdus failed: {:?}", res);
+
+	// Run reorder-timeline
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+
+	// Bootstrap room state hash from the latest PDU
+	let latest_pdu = services
+		.rooms
+		.timeline
+		.latest_pdu_in_room(&room_id)
+		.await
+		.unwrap();
+	let latest_event_id = latest_pdu.event_id();
+	let ssh = services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(latest_event_id)
+		.await
+		.unwrap();
+	let state_lock = services.rooms.state.mutex.lock(&*room_id).await;
+	services
+		.rooms
+		.state
+		.set_room_state(&room_id, ssh, &state_lock);
+	drop(state_lock);
+
+	// Run force-set-state (to trigger re-resolution on local DAG)
+	let res = services
+		.admin
+		.command_in_place(
+			format!("debug force-set-state {room_id} --event-id {latest_event_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "force-set-state failed: {:?}", res);
+
+	// Run check-rooms (to check sanity)
+	let res = services
+		.admin
+		.command_in_place(
+			"yolo check-rooms".to_owned(),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "check-rooms failed: {:?}", res);
+
+	// Run audit-membership
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo audit-membership {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+
+	// Verify forward extremities count is not bloated (originally 6344 heads)
+	let exts_count = services
+		.rooms
+		.state
+		.get_forward_extremities(&room_id)
+		.count()
+		.await;
+	println!("Nheko Room DAG resolved. Final forward extremities count: {}", exts_count);
+	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+}

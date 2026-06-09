@@ -349,11 +349,17 @@ impl Service {
 
 			let request = ruma::api::federation::event::get_missing_events::v1::Request {
 				room_id: room_id.to_owned(),
-				earliest_events,
-				latest_events: missing_latest,
+				earliest_events: earliest_events.clone(),
+				latest_events: missing_latest.clone(),
 				limit: 50_u32.into(),
 				min_depth: 0_u32.into(),
 			};
+
+			info!(
+				target: "forwardfill",
+				"Asking {target_server} for missing events in {room_id} (latest: {missing_latest:?}, \
+				 earliest: {earliest_events:?})"
+			);
 
 			let response = match self
 				.services

@@ -79,6 +79,10 @@ where
 		let remaining = remaining.clone();
 		active.push(async move {
 			let t = Instant::now();
+			info!(
+				"Asking {server} for missing events in {room_id_owned} (latest: {remaining:?}, \
+				 earliest: {earliest:?})"
+			);
 			let res = tokio::time::timeout(
 				Duration::from_secs(10), // Time budget
 				self.services.sending.send_federation_request(

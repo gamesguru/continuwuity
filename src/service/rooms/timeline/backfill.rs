@@ -172,7 +172,10 @@ pub async fn backfill_if_required(
 		if !self.services.globals.server_is_ours(backfill_server) {
 			federated_room = true;
 		}
-		info!("Asking {backfill_server} for backfill in {room_id}");
+		info!(
+			"Asking {backfill_server} for backfill in {room_id} (extremities: \
+			 {backwards_extremities:?})"
+		);
 		let response = self
 			.services
 			.sending

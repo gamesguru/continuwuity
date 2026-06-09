@@ -95,5 +95,9 @@ tokio.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
 
+[dev-dependencies]
+figment.workspace = true
+rustls = { workspace = true, features = ["ring"] }
+
 [lints]
 workspace = true
