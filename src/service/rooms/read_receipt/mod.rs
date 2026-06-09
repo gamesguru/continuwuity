@@ -254,8 +254,10 @@ where
 
 	conduwuit::info!("Packed {} read receipts into EDU", content.len());
 	conduwuit::trace!(?content);
-	Raw::from_json(
-		serde_json::value::to_raw_value(&SyncEphemeralRoomEvent { content })
-			.expect("received valid json"),
-	)
+	let json_val = serde_json::json!({
+		"type": "m.receipt",
+		"content": content,
+	});
+
+	Raw::from_json(serde_json::value::to_raw_value(&json_val).expect("received valid json"))
 }

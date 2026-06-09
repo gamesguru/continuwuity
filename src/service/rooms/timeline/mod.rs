@@ -1591,6 +1591,12 @@ mod tests {
 		create_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
+		create_json
+			.insert("hashes".to_owned(), CanonicalJsonValue::Object(CanonicalJsonObject::new()));
+		create_json.insert(
+			"signatures".to_owned(),
+			CanonicalJsonValue::Object(CanonicalJsonObject::new()),
+		);
 
 		let create_pdu =
 			PduEvent::from_id_val(&create_event_id, create_json.clone(), Some(&room_id)).unwrap();

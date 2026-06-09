@@ -120,7 +120,7 @@ impl Data {
 			});
 
 		let mut to_remove = Vec::new();
-		let mut matches_found = 0;
+		let mut matches_found: usize = 0;
 		let mut actual_changes = new_receipts.len();
 
 		while let Some((key, value)) = stream.next().await {
@@ -143,7 +143,7 @@ impl Data {
 							for (new_event_id, new_type, new_thread) in &new_receipts {
 								if receipt_type == new_type && &old_receipt.thread == new_thread {
 									match_found = true;
-									matches_found += 1;
+									matches_found = matches_found.saturating_add(1);
 
 									if old_event_id == new_event_id {
 										actual_changes = actual_changes.saturating_sub(1);
