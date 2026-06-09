@@ -526,6 +526,9 @@ pub enum YoloCommand {
 		fix: bool,
 	},
 
+	/// Purge obsolete duplicate read receipts from the database.
+	HealReceipts,
+
 	/// Mark or unmark event IDs as rejected in the database.
 	///
 	/// Rejected events are permanently excluded from state resolution.
