@@ -223,10 +223,8 @@ where
 
 	// Now that we have checked the signature and hashes we can add the eventID and
 	// convert to our PduEvent type
-	incoming_pdu.insert(
-		"event_id".to_owned(),
-		CanonicalJsonValue::String(event_id.as_str().to_owned()),
-	);
+	incoming_pdu
+		.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
 
 	// Re-attach the origin's unsigned field (age, etc.) after stripping
 	// untrusted state metadata. append_pdu will recompute prev_content
@@ -486,9 +484,14 @@ where
 		}
 
 		let Some(auth_event) = auth_events.get(id).map(ToOwned::to_owned) else {
+			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services.outlier.add_pdu_outlier(
+				pdu_event.event_id(),
+				&incoming_pdu,
+				Some(room_id),
+			);
 			return Err!(Request(InvalidParam(debug_error!(
-				"Could not fetch all auth events for outlier event {event_id}, still missing: \
-				 {id}"
+				"Could not fetch all auth events for outlier {event_id}, still missing: {id}"
 			))));
 		};
 

@@ -584,10 +584,16 @@ where
 							unprocessed.push((next_id, value));
 						} else {
 							warn!(target: "auth_chain", "Permanently backing off event {next_id} after auth chain fetch yielded incomplete auth events");
+							self.services.pdu_metadata.mark_event_rejected(&next_id);
+							self.services.outlier.add_pdu_outlier(
+								&next_id,
+								&value,
+								Some(room_id),
+							);
 							back_off(next_id.clone());
 						}
 					} else {
-						warn!(target: "auth_chain", "Permanently backing off event {next_id} after auth failure: {e:?}");
+						warn!(target: "auth_chain", "Permanently backing off event {next_id} after general failure: {e:?}");
 						back_off(next_id);
 					},
 			}
