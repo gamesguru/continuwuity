@@ -191,20 +191,22 @@ where
 							if let Some(old_event_id) = user_locations.get(&location_key) {
 								if old_event_id != &event_id {
 									let old_eid = old_event_id.clone();
-									let mut remove_event = false;
-									if let Some(old_event_receipts) = json.get_mut(&old_eid) {
-										let mut remove_type = false;
-										if let Some(old_users) =
+									let remove_event = if let Some(old_event_receipts) = json.get_mut(&old_eid) {
+										let remove_type = if let Some(old_users) =
 											old_event_receipts.get_mut(&receipt_type)
 										{
 											old_users.remove(&user_id);
-											remove_type = old_users.is_empty();
-										}
+											old_users.is_empty()
+										} else {
+											false
+										};
 										if remove_type {
 											old_event_receipts.remove(&receipt_type);
 										}
-										remove_event = old_event_receipts.is_empty();
-									}
+										old_event_receipts.is_empty()
+									} else {
+										false
+									};
 									if remove_event {
 										json.remove(&old_eid);
 									}
