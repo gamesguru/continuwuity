@@ -36,10 +36,6 @@ pub(super) async fn manage_rejected(
 					.rooms
 					.pdu_metadata
 					.unmark_event_rejected(event_id);
-				self.services
-					.rooms
-					.pdu_metadata
-					.unmark_event_admin_rejected(event_id);
 				changed = changed.saturating_add(1);
 			} else {
 				already = already.saturating_add(1);
@@ -55,7 +51,7 @@ pub(super) async fn manage_rejected(
 				self.services
 					.rooms
 					.pdu_metadata
-					.mark_event_admin_rejected(event_id);
+					.mark_event_rejected(event_id);
 				changed = changed.saturating_add(1);
 			} else {
 				already = already.saturating_add(1);
@@ -141,10 +137,6 @@ pub(super) async fn unreject_room(
 					.rooms
 					.pdu_metadata
 					.unmark_event_rejected(event_id);
-				self.services
-					.rooms
-					.pdu_metadata
-					.unmark_event_admin_rejected(event_id);
 				unmarked = unmarked.saturating_add(1);
 			}
 		}

@@ -78,6 +78,26 @@ impl DagExportStats {
 		}
 
 		if let Ok(pdu) = &pdu_result {
+			let is_soft_failed = ctx
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_soft_failed(pdu.event_id())
+				.await;
+			if is_soft_failed {
+				obj.insert("__soft_failed".to_owned(), JsonValue::Bool(true));
+			}
+
+			let is_rejected = ctx
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_rejected(pdu.event_id())
+				.await;
+			if is_rejected {
+				obj.insert("__rejected".to_owned(), JsonValue::Bool(true));
+			}
+
 			if let Ok(ssh) = ctx
 				.services
 				.rooms

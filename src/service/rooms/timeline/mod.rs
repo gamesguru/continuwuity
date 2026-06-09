@@ -382,9 +382,35 @@ impl Service {
 		let mut state_joined: HashSet<ruma::OwnedUserId> = HashSet::new();
 		let mut state_invited: HashSet<ruma::OwnedUserId> = HashSet::new();
 
+		let mut room_ssh_opt = self
+			.services
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.ok();
+		if room_ssh_opt.is_none() {
+			if let Some(latest_eid) = sorted.last() {
+				if let Ok(ssh) = self
+					.services
+					.state_accessor
+					.pdu_shortstatehash(latest_eid)
+					.await
+				{
+					self.services
+						.state
+						.set_room_state(room_id, ssh, &state_lock);
+					info!(
+						"reorder_timeline: bootstrapped room state to shortstatehash {ssh} from \
+						 latest event {latest_eid}"
+					);
+					room_ssh_opt = Some(ssh);
+				}
+			}
+		}
+
 		// Single pass over state snapshot — check-before-write avoids
 		// redundant DB writes for users whose cache is already correct.
-		if let Ok(room_ssh) = self.services.state.get_room_shortstatehash(room_id).await {
+		if let Some(room_ssh) = room_ssh_opt {
 			let state_full = self.services.state_accessor.state_full(room_ssh);
 			let mut state_full = std::pin::pin!(state_full);
 			while let Some(((event_type, state_key), pdu)) = state_full.next().await {
@@ -491,7 +517,8 @@ impl Service {
 		// Prune fork storms down to operationally relevant tips.
 		// Must happen after dropping state_lock since recalculate acquires its own.
 		if n_extremities > 5 {
-			self.prune_extremities(room_id, 50).await;
+			self.prune_extremities(room_id, tail.unwrap_or(usize::MAX))
+				.await;
 		}
 
 		info!("reorder_timeline: complete, {count} events reordered");

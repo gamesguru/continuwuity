@@ -1525,13 +1525,10 @@ async fn reject_conflicting_state(
 				.services
 				.rooms
 				.pdu_metadata
-				.is_event_admin_rejected(eid)
+				.is_event_rejected(eid)
 				.await
 			{
-				self.services
-					.rooms
-					.pdu_metadata
-					.mark_event_admin_rejected(eid);
+				self.services.rooms.pdu_metadata.mark_event_rejected(eid);
 				rejected = rejected.saturating_add(1);
 			}
 		}

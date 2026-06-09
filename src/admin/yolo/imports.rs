@@ -70,12 +70,50 @@ pub(super) async fn import_pdus(
 		}
 		total = total.saturating_add(1);
 
-		let result: Result<bool> = async {
+		let raw_json: serde_json::Value = match serde_json::from_str(&line) {
+			| Ok(v) => v,
+			| Err(e) => {
+				warn!("import_pdus: Failed to parse line as JSON: {e}");
+				failed = failed.saturating_add(1);
+				continue;
+			},
+		};
+		let raw_obj = match raw_json.as_object() {
+			| Some(obj) => obj,
+			| None => {
+				warn!("import_pdus: Line is not a JSON object");
+				failed = failed.saturating_add(1);
+				continue;
+			},
+		};
+
+		let is_outlier = raw_obj
+			.get("__outlier")
+			.and_then(serde_json::Value::as_bool)
+			.unwrap_or(false);
+		let is_soft_failed = raw_obj
+			.get("__soft_failed")
+			.and_then(serde_json::Value::as_bool)
+			.unwrap_or(false);
+		let is_rejected = raw_obj
+			.get("__rejected")
+			.and_then(serde_json::Value::as_bool)
+			.unwrap_or(false);
+
+		let result: Result<(OwnedEventId, bool)> = async {
 			let (eid, value, pdu) = conduwuit::utils::pdu_parser::parse_and_clean_pdu(
 				&line,
 				room_id.as_ref(),
 				&room_version,
 			)?;
+
+			if is_outlier {
+				self.services
+					.rooms
+					.outlier
+					.add_pdu_outlier(&eid, &value, Some(&room_id));
+				return Ok((eid, true));
+			}
 
 			if skip_auth {
 				self.services
@@ -83,7 +121,7 @@ pub(super) async fn import_pdus(
 					.timeline
 					.force_insert_pdu(&room_id, &eid, &pdu, &value, true)
 					.await
-					.map(|_| true)
+					.map(|_| (eid.clone(), true))
 			} else {
 				let (eid, val) = if skip_sig_verify {
 					(eid, value)
@@ -130,7 +168,7 @@ pub(super) async fn import_pdus(
 								.pdu_metadata
 								.mark_event_soft_failed(&eid);
 
-							return Ok(false);
+							return Ok((eid, false));
 						},
 					}
 				};
@@ -166,14 +204,25 @@ pub(super) async fn import_pdus(
 					.promote_outlier(&room_id, &eid)
 					.await?;
 				let _ = pdu; // used by handle_outlier_pdu internally
-				Ok(true)
+				Ok((eid, true))
 			}
 		}
 		.await;
 
 		match result {
-			| Ok(true) => inserted = inserted.saturating_add(1),
-			| Ok(false) => rejected = rejected.saturating_add(1),
+			| Ok((eid, true)) => {
+				inserted = inserted.saturating_add(1);
+				if is_soft_failed {
+					self.services
+						.rooms
+						.pdu_metadata
+						.mark_event_soft_failed(&eid);
+				}
+				if is_rejected {
+					self.services.rooms.pdu_metadata.mark_event_rejected(&eid);
+				}
+			},
+			| Ok((_eid, false)) => rejected = rejected.saturating_add(1),
 			| Err(e) => {
 				warn!("import_pdus: {e}");
 				failed = failed.saturating_add(1);

@@ -6,6 +6,9 @@ use ruma::CanonicalJsonObject;
 #[inline]
 pub fn pdu_json_canonical_strip(event: &mut CanonicalJsonObject) {
 	event.remove("__shortstatehash");
+	event.remove("__outlier");
+	event.remove("__soft_failed");
+	event.remove("__rejected");
 	event.remove("event_id");
 	event.remove("prev_state_events");
 	event.remove("state_jump_pointers");

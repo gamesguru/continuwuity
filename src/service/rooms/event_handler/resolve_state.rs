@@ -182,8 +182,7 @@ where
 		// of O(N×M) async DB lookups.
 		if let Some(ref mut p) = pdu {
 			let meta = &self.services.pdu_metadata;
-			p.rejected = meta.is_event_admin_rejected(&event_id).await
-				|| meta.is_event_rejected(&event_id).await;
+			p.rejected = meta.is_event_rejected(&event_id).await;
 		}
 
 		let _ = fetch_cache_ref.insert_async(event_id, pdu.clone()).await;
@@ -204,8 +203,7 @@ where
 			.into_iter()
 			.stream()
 			.wide_then(|mut pdu| async move {
-				pdu.rejected = meta.is_event_admin_rejected(&pdu.event_id).await
-					|| meta.is_event_rejected(&pdu.event_id).await;
+				pdu.rejected = meta.is_event_rejected(&pdu.event_id).await;
 				pdu
 			})
 			.collect::<Vec<_>>()
