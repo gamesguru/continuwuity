@@ -98,9 +98,27 @@ pub(crate) async fn upload_keys_route(
 					%sender_user,
 					%sender_device,
 					?device_keys,
-					"Ignoring user uploaded keys as they are an exact copy already in the \
-					 database"
+					"Merging cross-signing signatures for re-uploaded exact copy of keys"
 				);
+
+				let mut new_device_keys_json =
+					serde_json::to_value(device_keys).expect("device_keys must be valid JSON");
+				let existing_device_keys_json = serde_json::to_value(&existing_keys)
+					.expect("existing_keys must be valid JSON");
+
+				conduwuit_service::users::merge_signatures(
+					&mut new_device_keys_json,
+					&existing_device_keys_json,
+				);
+
+				let merged_keys: ruma::serde::Raw<ruma::encryption::DeviceKeys> =
+					serde_json::from_value(new_device_keys_json)
+						.expect("Merged JSON must be valid Raw<DeviceKeys>");
+
+				services
+					.users
+					.add_device_keys(sender_user, sender_device, &merged_keys)
+					.await;
 			} else {
 				services
 					.users
@@ -472,8 +490,8 @@ where
 
 			device_keys.insert(user_id.to_owned(), container);
 		} else {
+			let mut container = BTreeMap::new();
 			for device_id in device_ids {
-				let mut container = BTreeMap::new();
 				if let Ok(mut keys) = services.users.get_device_keys(user_id, device_id).await {
 					let metadata = services
 						.users
@@ -490,9 +508,8 @@ where
 
 					container.insert(device_id.to_owned(), keys);
 				}
-
-				device_keys.insert(user_id.to_owned(), container);
 			}
+			device_keys.insert(user_id.to_owned(), container);
 		}
 
 		if let Ok(master_key) = services

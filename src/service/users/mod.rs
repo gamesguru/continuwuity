@@ -1715,7 +1715,7 @@ pub fn parse_user_signing_key(user_signing_key: &Raw<CrossSigningKey>) -> Result
 	Ok(user_signing_key_id)
 }
 
-fn merge_signatures(new: &mut serde_json::Value, old: &serde_json::Value) {
+pub fn merge_signatures(new: &mut serde_json::Value, old: &serde_json::Value) {
 	// Normalize null/missing signatures in the new key to an empty object
 	// so old signatures can be merged in. Some servers (e.g. matrix.org)
 	// send signatures: `null` rather than `{}` which would cause
