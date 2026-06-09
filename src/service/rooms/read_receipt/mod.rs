@@ -191,7 +191,9 @@ where
 							if let Some(old_event_id) = user_locations.get(&location_key) {
 								if old_event_id != &event_id {
 									let old_eid = old_event_id.clone();
-									let remove_event = if let Some(old_event_receipts) = json.get_mut(&old_eid) {
+									let remove_event = if let Some(old_event_receipts) =
+										json.get_mut(&old_eid)
+									{
 										let remove_type = if let Some(old_users) =
 											old_event_receipts.get_mut(&receipt_type)
 										{
