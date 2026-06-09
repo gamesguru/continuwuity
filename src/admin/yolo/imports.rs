@@ -40,6 +40,9 @@ pub(super) async fn import_pdus(
 		.filter(|s| !self.services.globals.server_is_ours(s))
 		.unwrap_or_else(|| self.services.globals.server_name());
 
+	// Cork database writes to batch and sync efficiently on drop
+	let _cork = self.services.db.cork();
+
 	let mut inserted = 0_usize;
 	let mut rejected = 0_usize;
 	let mut failed = 0_usize;
@@ -70,7 +73,7 @@ pub(super) async fn import_pdus(
 		}
 		total = total.saturating_add(1);
 
-		let raw_json: serde_json::Value = match serde_json::from_str(&line) {
+		let value: CanonicalJsonObject = match serde_json::from_str(&line) {
 			| Ok(v) => v,
 			| Err(e) => {
 				warn!("import_pdus: Failed to parse line as JSON: {e}");
@@ -78,31 +81,32 @@ pub(super) async fn import_pdus(
 				continue;
 			},
 		};
-		let raw_obj = match raw_json.as_object() {
-			| Some(obj) => obj,
-			| None => {
-				warn!("import_pdus: Line is not a JSON object");
-				failed = failed.saturating_add(1);
-				continue;
-			},
-		};
 
-		let is_outlier = raw_obj
+		let is_outlier = value
 			.get("__outlier")
-			.and_then(serde_json::Value::as_bool)
+			.and_then(|v| match v {
+				| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
+				| _ => None,
+			})
 			.unwrap_or(false);
-		let is_soft_failed = raw_obj
+		let is_soft_failed = value
 			.get("__soft_failed")
-			.and_then(serde_json::Value::as_bool)
+			.and_then(|v| match v {
+				| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
+				| _ => None,
+			})
 			.unwrap_or(false);
-		let is_rejected = raw_obj
+		let is_rejected = value
 			.get("__rejected")
-			.and_then(serde_json::Value::as_bool)
+			.and_then(|v| match v {
+				| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
+				| _ => None,
+			})
 			.unwrap_or(false);
 
 		let result: Result<(OwnedEventId, bool)> = async {
 			let (eid, value, pdu) = conduwuit::utils::pdu_parser::parse_and_clean_pdu(
-				&line,
+				value,
 				room_id.as_ref(),
 				&room_version,
 			)?;

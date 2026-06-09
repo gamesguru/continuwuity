@@ -1,19 +1,16 @@
 use ruma::{CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, RoomId, RoomVersionId};
 
-use crate::{PduEvent, Result, err};
+use crate::{PduEvent, Result};
 
 /// Parses a raw JSON string into a CanonicalJsonObject, strips diagnostic
 /// fields, handles room_id stripping based on room version, extracts the
 /// event_id, and returns the fully parsed PduEvent and its cleaned
 /// CanonicalJsonObject.
 pub fn parse_and_clean_pdu(
-	json_str: &str,
+	mut value: CanonicalJsonObject,
 	room_id: &RoomId,
 	room_version: &RoomVersionId,
 ) -> Result<(OwnedEventId, CanonicalJsonObject, PduEvent)> {
-	let mut value: CanonicalJsonObject =
-		serde_json::from_str(json_str).map_err(|e| err!("Failed to parse JSON: {e}"))?;
-
 	let event_id = match value
 		.get("event_id")
 		.and_then(CanonicalJsonValue::as_str)
@@ -76,7 +73,8 @@ mod tests {
 		})
 		.to_string();
 
-		let (eid, clean_val, pdu) = parse_and_clean_pdu(&raw_json, room_id, &version).unwrap();
+		let value: CanonicalJsonObject = serde_json::from_str(&raw_json).unwrap();
+		let (eid, clean_val, pdu) = parse_and_clean_pdu(value, room_id, &version).unwrap();
 
 		assert_eq!(eid.as_str(), "$test_event");
 		assert!(!clean_val.contains_key("__shortstatehash"));
