@@ -111,7 +111,7 @@ pub(crate) async fn upload_keys_route(
 					&existing_device_keys_json,
 				);
 
-				let merged_keys: ruma::serde::Raw<ruma::encryption::DeviceKeys> =
+				let merged_keys: Raw<ruma::encryption::DeviceKeys> =
 					serde_json::from_value(new_device_keys_json)
 						.expect("Merged JSON must be valid Raw<DeviceKeys>");
 

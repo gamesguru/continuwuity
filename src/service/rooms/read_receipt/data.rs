@@ -105,73 +105,76 @@ impl Data {
 
 		// Remove old entry for the same thread
 		let last_possible_key = (room_id, u64::MAX);
-		self.readreceiptid_readreceipt
+		let mut stream = self
+			.readreceiptid_readreceipt
 			.rev_stream_from_raw(&last_possible_key)
 			.ignore_err()
 			.ready_take_while(|(key, _)| {
 				key.starts_with(room_id.as_bytes())
 					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
-			})
-			.ready_filter_map(|(key, value)| {
-				let user_id_bytes = user_id.as_bytes();
-				if key.ends_with(user_id_bytes)
-					&& key
-						.len()
-						.checked_sub(user_id_bytes.len())
-						.and_then(|len| len.checked_sub(1))
-						.and_then(|idx| key.get(idx))
-						== Some(&database::SEP)
-				{
-					let receipt = serde_json::from_slice::<ReceiptEvent>(value).ok()?;
-					let mut match_found = false;
-					for old_receipts in receipt.content.0.values() {
-						for (receipt_type, users) in old_receipts {
-							if let Some(old_receipt) = users.get(user_id) {
-								for (new_type, new_thread) in &new_receipts {
-									if receipt_type == new_type
-										&& &old_receipt.thread == new_thread
-									{
-										match_found = true;
-										conduwuit::info!(
-											?room_id,
-											?user_id,
-											?receipt_type,
-											?new_thread,
-											"Deleting old read receipt"
-										);
-										break;
-									}
+			});
+
+		let mut to_remove = Vec::new();
+		while let Some((key, value)) = stream.next().await {
+			let user_id_bytes = user_id.as_bytes();
+			if key.ends_with(user_id_bytes)
+				&& key
+					.len()
+					.checked_sub(user_id_bytes.len())
+					.and_then(|len| len.checked_sub(1))
+					.and_then(|idx| key.get(idx))
+					== Some(&database::SEP)
+			{
+				let receipt = match serde_json::from_slice::<ReceiptEvent>(value) {
+					| Ok(r) => r,
+					| Err(_) => continue,
+				};
+				let mut match_found = false;
+				for old_receipts in receipt.content.0.values() {
+					for (receipt_type, users) in old_receipts {
+						if let Some(old_receipt) = users.get(user_id) {
+							for (new_type, new_thread) in &new_receipts {
+								if receipt_type == new_type && &old_receipt.thread == new_thread {
+									match_found = true;
+									conduwuit::trace!(
+										?room_id,
+										?user_id,
+										?receipt_type,
+										?new_thread,
+										"Deleting old read receipt"
+									);
+									break;
 								}
-							}
-							if match_found {
-								break;
 							}
 						}
 						if match_found {
 							break;
 						}
 					}
-
-					if !match_found {
-						conduwuit::info!(
-							?room_id, ?user_id, ?new_receipts,
-							old_content = ?receipt.content,
-							"Did not match old receipt, leaving it in db"
-						);
-					}
-
 					if match_found {
-						return Some(key);
+						break;
 					}
 				}
-				None
-			})
-			.widen_then(100, |key| async move {
-				self.readreceiptid_readreceipt.remove_raw(key);
-				yield_now().await;
-			})
-			.ready_for_each(|()| ())
-			.await;
+
+				if !match_found {
+					conduwuit::trace!(
+						?room_id, ?user_id, ?new_receipts,
+						old_content = ?receipt.content,
+						"Did not match old receipt, leaving it in db"
+					);
+				} else {
+					to_remove.push(key.to_vec());
+					if to_remove.len() >= new_receipts.len() {
+						break;
+					}
+				}
+			}
+		}
+
+		for key in to_remove {
+			self.readreceiptid_readreceipt.remove_raw(&key);
+			yield_now().await;
+		}
 
 		let count = self.services.globals.next_count().unwrap();
 		let latest_id = (room_id, count, user_id);
