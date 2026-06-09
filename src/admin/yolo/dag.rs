@@ -78,6 +78,7 @@ impl DagExportStats {
 		}
 
 		if let Ok(pdu) = &pdu_result {
+			obj.insert("event_id".to_owned(), JsonValue::String(pdu.event_id().to_string()));
 			let is_soft_failed = ctx
 				.services
 				.rooms
@@ -450,7 +451,7 @@ pub(super) async fn get_remote_dag(
 		};
 
 		batches = batches.saturating_add(1);
-		let response = match self
+		let mut response = match self
 			.services
 			.sending
 			.send_federation_request(&server, request)
@@ -473,7 +474,7 @@ pub(super) async fn get_remote_dag(
 				}
 
 				// Other errors: re-add all items to retry
-				for id in request_v.into_iter().rev() {
+				for id in request_v.clone().into_iter().rev() {
 					queue.push_front(id);
 				}
 
@@ -505,8 +506,34 @@ pub(super) async fn get_remote_dag(
 		};
 
 		if response.pdus.is_empty() {
-			info!("get-remote-dag: server returned empty response; continuing...");
-			continue;
+			info!("get-remote-dag: server gave empty /backfill, attempting /event/ fallback");
+			let mut fallback_pdus = Vec::new();
+			for event_id in request_v {
+				if let Ok(res) = self
+					.services
+					.sending
+					.send_federation_request(&server, get_event::v1::Request {
+						event_id: event_id.clone(),
+						include_unredacted_content: None,
+					})
+					.await
+				{
+					fallback_pdus.push(res.pdu);
+				}
+			}
+			if fallback_pdus.is_empty() {
+				info!(
+					"get-remote-dag: /event/ fallback also returned empty; giving up on this \
+					 batch."
+				);
+				continue;
+			}
+			info!("get-remote-dag: recovered {} PDUs via /event/ fallback!", fallback_pdus.len());
+			response = ruma::api::federation::backfill::get_backfill::v1::Response {
+				origin: server.clone(),
+				origin_server_ts: ruma::MilliSecondsSinceUnixEpoch::now(),
+				pdus: fallback_pdus,
+			};
 		}
 
 		let mut verifications = futures::stream::iter(response.pdus.into_iter())
