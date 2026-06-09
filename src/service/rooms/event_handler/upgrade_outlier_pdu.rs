@@ -381,80 +381,86 @@ where
 	let state_delta_opt;
 	let state_lock;
 
-	loop {
-		// Capture base state hash BEFORE the unlocked computation
-		let base_shortstatehash = self
-			.services
-			.state
-			.get_room_shortstatehash(room_id)
-			.await
-			.ok();
+	if !is_forward_extremity || incoming_pdu.state_key().is_none() {
+		state_delta_opt = None;
+		// Dummy lock to satisfy lifetimes since we aren't mutating state
+		state_lock = self.services.state.mutex.lock(room_id).await;
+	} else {
+		loop {
+			// Capture base state hash BEFORE the unlocked computation
+			let base_shortstatehash = self
+				.services
+				.state
+				.get_room_shortstatehash(room_id)
+				.await
+				.ok();
 
-		if let StateAtEvent::FastForward(shortstatehash) = &state_at_incoming_event {
-			if Some(*shortstatehash) != base_shortstatehash {
-				info!(
-					"Fast-forward state hash shift ({} -> {:?}), re-eval state @ incoming",
-					shortstatehash, base_shortstatehash
-				);
-				state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
+			if let StateAtEvent::FastForward(shortstatehash) = &state_at_incoming_event {
+				if Some(*shortstatehash) != base_shortstatehash {
+					info!(
+						"Fast-forward state hash shift ({} -> {:?}), re-eval state @ incoming",
+						shortstatehash, base_shortstatehash
+					);
+					state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
+						&incoming_pdu,
+						create_event,
+						origin,
+						room_id,
+						&room_version_id,
+						skip_soft_fail,
+					))
+					.await?;
+				}
+			}
+
+			// Heavy computation WITHOUT the lock
+			let delta = self
+				.calculate_state_delta(
 					&incoming_pdu,
-					create_event,
-					origin,
+					state_at_incoming_event.clone(),
 					room_id,
 					&room_version_id,
-					skip_soft_fail,
-				))
+				)
 				.await?;
+
+			// Acquire lock for the commit phase
+			trace!(room_id = %room_id, "Locking the room");
+			let lock = self.services.state.mutex.lock(room_id).await;
+
+			// Re-check if the PDU was already added while we were unlocked
+			if let Ok(pduid) = self
+				.services
+				.timeline
+				.get_pdu_id(incoming_pdu.event_id())
+				.await
+			{
+				return Ok(Some(pduid));
 			}
+
+			// OCC verification: has the base state shifted?
+			let current_shortstatehash = self
+				.services
+				.state
+				.get_room_shortstatehash(room_id)
+				.await
+				.ok();
+
+			if base_shortstatehash == current_shortstatehash {
+				// State is consistent — break while HOLDING the lock
+				state_delta_opt = delta;
+				state_lock = lock;
+				break;
+			}
+
+			// State changed — drop the lock and retry so we don't block the room
+			info!(
+				%room_id,
+				?base_shortstatehash,
+				?current_shortstatehash,
+				"Room state changed during unlocked state-res, dropping lock and retrying"
+			);
+			drop(lock);
 		}
-
-		// Heavy computation WITHOUT the lock
-		let delta = self
-			.calculate_state_delta(
-				&incoming_pdu,
-				state_at_incoming_event.clone(),
-				room_id,
-				&room_version_id,
-			)
-			.await?;
-
-		// Acquire lock for the commit phase
-		trace!(room_id = %room_id, "Locking the room");
-		let lock = self.services.state.mutex.lock(room_id).await;
-
-		// Re-check if the PDU was already added while we were unlocked
-		if let Ok(pduid) = self
-			.services
-			.timeline
-			.get_pdu_id(incoming_pdu.event_id())
-			.await
-		{
-			return Ok(Some(pduid));
-		}
-
-		// OCC verification: has the base state shifted?
-		let current_shortstatehash = self
-			.services
-			.state
-			.get_room_shortstatehash(room_id)
-			.await
-			.ok();
-
-		if base_shortstatehash == current_shortstatehash {
-			// State is consistent — break while HOLDING the lock
-			state_delta_opt = delta;
-			state_lock = lock;
-			break;
-		}
-
-		// State changed — drop the lock and retry so we don't block the room
-		info!(
-			%room_id,
-			?base_shortstatehash,
-			?current_shortstatehash,
-			"Room state changed during unlocked state-res, dropping lock and retrying"
-		);
-		drop(lock);
 	}
 
 	// Apply the state delta (still holding state_lock from the successful break)

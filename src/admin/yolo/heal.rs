@@ -175,34 +175,37 @@ pub(super) async fn rescue_room(
 	// state resolution: origin_server_ts, then depth, then event_id.
 	let mut current_state: HashMap<(String, String), (ruma::UInt, ruma::UInt, OwnedEventId)> =
 		HashMap::new();
-	if let Ok(state_hash) = self
-		.services
-		.rooms
-		.state
-		.get_room_shortstatehash(&room_id)
-		.await
-	{
-		// Collect into Vec FIRST to drop the zero-copy RocksDB iterator
-		// before the write/fetch phase. Holding an iterator across .await points
-		// risks SEGV if compaction invalidates the underlying memory.
-		let state_eids: Vec<_> = self
+
+	if !force {
+		if let Ok(state_hash) = self
 			.services
 			.rooms
-			.state_accessor
-			.state_full(state_hash)
-			.map(|((event_type, state_key), event)| {
-				(event_type.to_string(), state_key.to_string(), event.event_id().to_owned())
-			})
-			.collect()
-			.await;
+			.state
+			.get_room_shortstatehash(&room_id)
+			.await
+		{
+			// Collect into Vec FIRST to drop the zero-copy RocksDB iterator
+			// before the write/fetch phase. Holding an iterator across .await points
+			// risks SEGV if compaction invalidates the underlying memory.
+			let state_eids: Vec<_> = self
+				.services
+				.rooms
+				.state_accessor
+				.state_full(state_hash)
+				.map(|((event_type, state_key), event)| {
+					(event_type.to_string(), state_key.to_string(), event.event_id().to_owned())
+				})
+				.collect()
+				.await;
 
-		for (event_type, state_key, eid) in state_eids {
-			// Fetch the full PduEvent for depth access
-			if let Ok(full_pdu) = self.services.rooms.timeline.get_pdu(&eid).await {
-				current_state.insert(
-					(event_type, state_key),
-					(full_pdu.origin_server_ts, full_pdu.depth, eid),
-				);
+			for (event_type, state_key, eid) in state_eids {
+				// Fetch the full PduEvent for depth access
+				if let Ok(full_pdu) = self.services.rooms.timeline.get_pdu(&eid).await {
+					current_state.insert(
+						(event_type, state_key),
+						(full_pdu.origin_server_ts, full_pdu.depth, eid),
+					);
+				}
 			}
 		}
 	}
@@ -240,6 +243,8 @@ pub(super) async fn rescue_room(
 	let mut pending_futures = futures::stream::FuturesUnordered::new();
 	// Limit concurrency to avoid memory exhaustion during heavy state-res
 	let max_concurrency = self.services.server.concurrency_scaled(4);
+
+	let mut _cork = Some(self.services.db.cork());
 
 	loop {
 		while pending_futures.len() < max_concurrency && !ready_queue.is_empty() {
@@ -321,7 +326,7 @@ pub(super) async fn rescue_room(
 				| Ok(None) => skipped = skipped.saturating_add(1),
 				| Err(e) => {
 					failed = failed.saturating_add(1);
-					warn!(%event_id, "rescue-room: failed to upgrade outlier: {e}");
+					warn!(%room_id, %event_id, "rescue-room: failed to upgrade outlier: {e}");
 				},
 			}
 
@@ -335,8 +340,10 @@ pub(super) async fn rescue_room(
 				}
 			}
 
-			if count.is_multiple_of(50) && count > 0 {
+			if count.is_multiple_of(2000) {
+				_cork = None;
 				tokio::task::yield_now().await;
+				_cork = Some(self.services.db.cork());
 			}
 		} else if ready_queue.is_empty() && pending_futures.is_empty() {
 			break;
