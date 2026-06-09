@@ -170,7 +170,7 @@ where
 			value.json().get(),
 		);
 		match receipt {
-			| Ok(value) =>
+			| Ok(value) => {
 				for (event_id, new_receipts) in value.content {
 					for (receipt_type, new_users) in new_receipts {
 						for (user_id, new_receipt) in new_users {
@@ -236,7 +236,8 @@ where
 							}
 						}
 					}
-				},
+				}
+			},
 			| _ => {
 				debug!("failed to parse receipt: {:?}", receipt);
 			},

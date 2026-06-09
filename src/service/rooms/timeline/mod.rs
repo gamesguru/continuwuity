@@ -1757,9 +1757,7 @@ mod tests {
 											c_json.clone(),
 											Some(&room_id),
 										) {
-											if pdu.kind
-												== TimelineEventType::RoomCreate
-											{
+											if pdu.kind == TimelineEventType::RoomCreate {
 												create_event_opt = Some(pdu);
 											}
 										}

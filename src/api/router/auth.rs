@@ -424,7 +424,7 @@ fn auth_server_checks_impl(
 
 #[cfg(test)]
 mod tests {
-	use ruma::{ServerName, server_name};
+	use ruma::server_name;
 
 	use super::*;
 
