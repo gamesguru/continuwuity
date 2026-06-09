@@ -547,7 +547,7 @@ pub(super) async fn get_remote_dag(
 					(raw_pdu, res)
 				}
 			})
-			.buffer_unordered(500);
+			.buffered(500);
 
 		// Collect batch results to identify true frontier
 		let mut batch_pdus = Vec::new();
