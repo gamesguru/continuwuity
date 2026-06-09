@@ -137,7 +137,9 @@ pub(crate) async fn invite_helper(
 			let state_lock = services.rooms.state.mutex.lock(room_id).await;
 
 			let content = RoomMemberEventContent {
+				displayname: services.users.displayname(recipient_user).await.ok(),
 				avatar_url: services.users.avatar_url(recipient_user).await.ok(),
+				blurhash: services.users.blurhash(recipient_user).await.ok(),
 				is_direct: Some(is_direct),
 				reason,
 				..RoomMemberEventContent::new(MembershipState::Invite)
