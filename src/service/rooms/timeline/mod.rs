@@ -1521,9 +1521,7 @@ mod tests {
 			log::{Log, LogLevelReloadHandles, capture},
 		};
 		use figment::providers::Format;
-		use ruma::{
-			CanonicalJsonObject, CanonicalJsonValue, RoomId, RoomVersionId, ServerName, event_id,
-		};
+		use ruma::{CanonicalJsonObject, CanonicalJsonValue, RoomId, ServerName, event_id};
 
 		use crate::rooms::timeline::PduEvent;
 
@@ -1732,25 +1730,28 @@ mod tests {
 								.get("event_id")
 								.and_then(|v| v.as_str())
 								.map(|s| s.to_owned());
-							let mut eid = None;
+							let mut eid: Option<OwnedEventId> = None;
 							if let Some(s) = &event_id_str {
-								eid = EventId::parse(s.as_str()).ok();
-							} else if let Some(hashes) = map.get("hashes") {
-								if let Some(sha256) =
-									hashes.get("sha256").and_then(|v| v.as_str())
-								{
-									let mut b64 = sha256.replace("+", "-").replace("/", "_");
-									b64 = b64.trim_end_matches('=').to_string();
-									let full_b64 = format!("${}", b64);
-									eid = EventId::parse(full_b64.as_str()).ok();
-								}
+								eid = OwnedEventId::try_from(s.as_str()).ok();
+							} else if let Some(sha256) = map
+								.get("hashes")
+								.and_then(|h| h.get("sha256"))
+								.and_then(|v| v.as_str())
+							{
+								eid = OwnedEventId::try_from(format!(
+									"${}",
+									sha256
+										.replace('+', "-")
+										.replace('/', "_")
+										.trim_end_matches('=')
+								))
+								.ok();
 							}
 
 							if let Some(event_id) = eid {
-								if let Ok(c_json) = serde_json::from_value::<
-									ruma::CanonicalJsonObject,
-								>(Value::Object(map.clone()))
-								{
+								if let Ok(c_json) = serde_json::from_value::<CanonicalJsonObject>(
+									Value::Object(map.clone()),
+								) {
 									if create_event_opt.is_none() {
 										if let Ok(pdu) = PduEvent::from_id_val(
 											&event_id,

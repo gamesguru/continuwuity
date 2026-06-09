@@ -92,12 +92,20 @@ impl Data {
 		event: &ReceiptEvent,
 	) {
 		let mut new_receipts = Vec::new();
-		for receipts in event.content.0.values() {
+		for (event_id, receipts) in &event.content.0 {
 			for (receipt_type, users) in receipts {
 				if let Some(receipt) = users.get(user_id) {
-					new_receipts.push((receipt_type.clone(), receipt.thread.clone()));
+					new_receipts.push((
+						event_id.clone(),
+						receipt_type.clone(),
+						receipt.thread.clone(),
+					));
 				}
 			}
+		}
+
+		if new_receipts.is_empty() {
+			return;
 		}
 
 		// Remove old entry for the same thread
@@ -112,6 +120,9 @@ impl Data {
 			});
 
 		let mut to_remove = Vec::new();
+		let mut matches_found = 0;
+		let mut actual_changes = new_receipts.len();
+
 		while let Some((key, value)) = stream.next().await {
 			let user_id_bytes = user_id.as_bytes();
 			if key.ends_with(user_id_bytes)
@@ -126,19 +137,26 @@ impl Data {
 					continue;
 				};
 				let mut match_found = false;
-				for old_receipts in receipt.content.0.values() {
+				for (old_event_id, old_receipts) in &receipt.content.0 {
 					for (receipt_type, users) in old_receipts {
 						if let Some(old_receipt) = users.get(user_id) {
-							for (new_type, new_thread) in &new_receipts {
+							for (new_event_id, new_type, new_thread) in &new_receipts {
 								if receipt_type == new_type && &old_receipt.thread == new_thread {
 									match_found = true;
-									conduwuit::trace!(
-										?room_id,
-										?user_id,
-										?receipt_type,
-										?new_thread,
-										"Deleting old read receipt"
-									);
+									matches_found += 1;
+
+									if old_event_id == new_event_id {
+										actual_changes = actual_changes.saturating_sub(1);
+									} else {
+										conduwuit::trace!(
+											?room_id,
+											?user_id,
+											?receipt_type,
+											?new_thread,
+											"Deleting old read receipt"
+										);
+										to_remove.push(key.to_vec());
+									}
 									break;
 								}
 							}
@@ -152,19 +170,19 @@ impl Data {
 					}
 				}
 
-				if !match_found {
-					conduwuit::trace!(
-						?room_id, ?user_id, ?new_receipts,
-						old_content = ?receipt.content,
-						"Did not match old receipt, leaving it in db"
-					);
-				} else {
-					to_remove.push(key.to_vec());
-					if to_remove.len() >= new_receipts.len() {
-						break;
-					}
+				if matches_found >= new_receipts.len() {
+					break;
 				}
 			}
+		}
+
+		if actual_changes == 0 {
+			conduwuit::trace!(
+				?room_id,
+				?user_id,
+				"Read receipts did not change, skipping update"
+			);
+			return;
 		}
 
 		for key in to_remove {

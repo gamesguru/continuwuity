@@ -247,8 +247,12 @@ async fn build_ephemeral(
 		}
 	};
 
-	let (receipt_events, typing_event, private_read_event) =
+	let (mut receipt_events, typing_event, private_read_event) =
 		join3(receipt_events, typing_event, private_read_event).await;
+
+	if let Some(private_read) = private_read_event {
+		receipt_events.push(private_read);
+	}
 
 	let mut edus = if receipt_events.is_empty() {
 		Vec::new()
@@ -259,7 +263,6 @@ async fn build_ephemeral(
 		]
 	};
 	edus.extend(typing_event);
-	edus.extend(private_read_event);
 
 	Ok(Ephemeral { events: edus })
 }
