@@ -159,7 +159,12 @@ pub fn pack_receipts<I>(receipts: I) -> Raw<SyncEphemeralRoomEvent<ReceiptEventC
 where
 	I: Iterator<Item = Raw<AnySyncEphemeralRoomEvent>>,
 {
-	let mut json = BTreeMap::new();
+	let mut json: BTreeMap<OwnedEventId, BTreeMap<_, BTreeMap<OwnedUserId, _>>> = BTreeMap::new();
+	let mut user_locations: BTreeMap<
+		(OwnedUserId, ruma::events::receipt::ReceiptType, Option<String>),
+		OwnedEventId,
+	> = BTreeMap::new();
+
 	for value in receipts {
 		let receipt = serde_json::from_str::<SyncEphemeralRoomEvent<ReceiptEventContent>>(
 			value.json().get(),
@@ -167,19 +172,41 @@ where
 		match receipt {
 			| Ok(value) =>
 				for (event_id, new_receipts) in value.content {
-					let event_receipts = json.entry(event_id).or_insert_with(BTreeMap::new);
-					// Deeply merge the receipt trees to prevent overwriting existing receipts.
-					// Multiple users can read the same event, or a single user can have multiple
-					// receipts (e.g., threaded and unthreaded) for the exact same event.
 					for (receipt_type, new_users) in new_receipts {
-						let users = event_receipts
-							.entry(receipt_type)
-							.or_insert_with(BTreeMap::new);
 						for (user_id, new_receipt) in new_users {
 							let is_unthreaded = matches!(
 								new_receipt.thread,
 								ruma::events::receipt::ReceiptThread::Unthreaded
 							);
+
+							let location_key = (
+								user_id.clone(),
+								receipt_type.clone(),
+								new_receipt.thread.as_str().map(ToOwned::to_owned),
+							);
+
+							// If we previously saw a receipt for this user/type/thread on a
+							// DIFFERENT event, remove it! Since we iterate
+							// chronologically, the current receipt is newer.
+							if let Some(old_event_id) = user_locations.get(&location_key) {
+								if old_event_id != &event_id {
+									if let Some(old_event_receipts) = json.get_mut(old_event_id) {
+										if let Some(old_users) =
+											old_event_receipts.get_mut(&receipt_type)
+										{
+											old_users.remove(&user_id);
+										}
+									}
+								}
+							}
+
+							user_locations.insert(location_key, event_id.clone());
+
+							let event_receipts =
+								json.entry(event_id.clone()).or_insert_with(BTreeMap::new);
+							let users = event_receipts
+								.entry(receipt_type.clone())
+								.or_insert_with(BTreeMap::new);
 
 							// MSC4102: "When a server is combining receipts into an EDU, if there
 							// are multiple receipts for the same (user, event, receipt
@@ -200,6 +227,13 @@ where
 			},
 		}
 	}
+
+	// Clean up any empty maps left behind by the deduplication
+	json.retain(|_, event_receipts| {
+		event_receipts.retain(|_, users| !users.is_empty());
+		!event_receipts.is_empty()
+	});
+
 	let content = ReceiptEventContent::from_iter(json);
 
 	conduwuit::trace!(?content);

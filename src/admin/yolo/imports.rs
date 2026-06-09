@@ -251,7 +251,7 @@ pub(super) async fn import_pdus(
 	self.write_str(&format!(
 		"\nImported {inserted} PDUs, {rejected} stored as rejected outliers, {failed} errors \
 		 out of {total} total for {room_id}. DAG Extremities recalculated (now {num_true} \
-		 tips). Run `yolo reorder-timeline {room_id}` if you are finished importing."
+		 tips). Run `yolo rebuild-state {room_id}` if you are finished importing."
 	))
 	.await
 }

@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use conduwuit::{
 	Result,
-	utils::{
-		ReadyExt,
-		stream::{TryIgnore, WidebandExt},
-	},
+	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
 use futures::{Stream, StreamExt};
@@ -125,9 +122,8 @@ impl Data {
 					.and_then(|idx| key.get(idx))
 					== Some(&database::SEP)
 			{
-				let receipt = match serde_json::from_slice::<ReceiptEvent>(value) {
-					| Ok(r) => r,
-					| Err(_) => continue,
+				let Ok(receipt) = serde_json::from_slice::<ReceiptEvent>(value) else {
+					continue;
 				};
 				let mut match_found = false;
 				for old_receipts in receipt.content.0.values() {

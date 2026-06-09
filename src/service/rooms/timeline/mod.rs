@@ -741,6 +741,108 @@ impl Service {
 		}
 	}
 
+	/// Incrementally rebuilds the true state of the room by iterating through
+	/// the timeline in its current PduCount order, resolving the state for
+	/// each event, and updating the DB. This heals a fractured room state
+	/// without re-ordering events or generating new PduCounts, preventing UI
+	/// sync spam.
+	#[tracing::instrument(skip(self), level = "info")]
+	pub async fn rebuild_state(&self, room_id: &RoomId) -> Result<()> {
+		use std::{collections::BTreeSet, sync::Arc};
+
+		use futures::StreamExt;
+
+		let room_create = self
+			.services
+			.state_accessor
+			.room_state_get(room_id, &ruma::events::StateEventType::RoomCreate, "")
+			.await
+			.map_err(|_| err!(Database("Room create event not found")))?;
+		let create_content: ruma::events::room::create::RoomCreateEventContent =
+			serde_json::from_str(room_create.content().get())
+				.map_err(|e| err!(Database("Failed to parse RoomCreateEventContent: {e}")))?;
+		let room_version = create_content.room_version;
+
+		let mut stream = std::pin::pin!(self.pdus(room_id, None));
+		let mut current_shortstatehash = 0;
+		let mut last_added = Arc::new(BTreeSet::new());
+		let mut last_removed = Arc::new(BTreeSet::new());
+		let mut processed = 0_usize;
+
+		let mut cork = Some(self.db.db.cork());
+
+		while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
+			processed = processed.saturating_add(1);
+
+			// Resolve state mathematically
+			let state_after_opt = self
+				.services
+				.event_handler
+				.state_at_incoming_resolved(&pdu, room_id, &room_version)
+				.await?;
+
+			let state_after = state_after_opt.unwrap_or_default();
+
+			let compressed_state: BTreeSet<_> = self
+				.services
+				.state_compressor
+				.compress_state_events(state_after.iter().map(|(k, id)| (k, &**id)))
+				.collect()
+				.await;
+
+			// Compress and save the state delta
+			let state_delta = self
+				.services
+				.state_compressor
+				.save_state(room_id, Arc::new(compressed_state))
+				.await?;
+
+			current_shortstatehash = state_delta.shortstatehash;
+			last_added = state_delta.added;
+			last_removed = state_delta.removed;
+
+			// Update the pdu shortstatehash in DB
+			let shorteventid = self
+				.services
+				.short
+				.get_or_create_shorteventid(&pdu.event_id)
+				.await;
+
+			self.services
+				.state
+				.set_pdu_shortstatehash(shorteventid, current_shortstatehash);
+
+			if processed.is_multiple_of(1000) {
+				info!("rebuild_state: processed {processed} events...");
+				drop(cork.take());
+				tokio::task::yield_now().await;
+				cork = Some(self.db.db.cork());
+			}
+		}
+
+		drop(cork.take());
+
+		info!(
+			"rebuild_state: finished processing {processed} events. Updating room state pointer."
+		);
+
+		// Now we must update the room's global state to match the final calculated
+		// state
+		let state_lock = self.services.state.mutex.lock(room_id).await;
+		self.services
+			.state
+			.force_state_quiet(
+				room_id,
+				current_shortstatehash,
+				last_added,
+				last_removed,
+				&state_lock,
+			)
+			.await?;
+
+		Ok(())
+	}
+
 	/// Automatically recalculates the true topological DAG forward extremities
 	/// by querying the last `tail` events from the room's timeline and
 	/// analyzing their `prev_events` graph to find all nodes with out-degree
@@ -1524,6 +1626,7 @@ mod tests {
 
 		// Clean up
 		drop(guard);
+		let _ = server.shutdown();
 	}
 }
 

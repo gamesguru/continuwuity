@@ -244,7 +244,7 @@ pub(super) async fn rescue_room(
 	// Limit concurrency to avoid memory exhaustion during heavy state-res
 	let max_concurrency = self.services.server.concurrency_scaled(4);
 
-	let mut _cork = Some(self.services.db.cork());
+	let mut cork = Some(self.services.db.cork());
 
 	loop {
 		while pending_futures.len() < max_concurrency && !ready_queue.is_empty() {
@@ -341,9 +341,9 @@ pub(super) async fn rescue_room(
 			}
 
 			if count.is_multiple_of(2000) {
-				_cork = None;
+				let _ = cork.take();
 				tokio::task::yield_now().await;
-				_cork = Some(self.services.db.cork());
+				cork = Some(self.services.db.cork());
 			}
 		} else if ready_queue.is_empty() && pending_futures.is_empty() {
 			break;

@@ -246,6 +246,16 @@ pub enum YoloCommand {
 		no_compute_state: bool,
 	},
 
+	/// Incrementally rebuild the state of the room from the beginning of the
+	/// timeline.
+	///
+	/// Computes true state resolution at every step. Does not mutate timeline
+	/// PduCounts or ordering, meaning it will not cause client sync spam.
+	RebuildState {
+		/// The room ID.
+		room_id: OwnedRoomId,
+	},
+
 	/// Purge a PDU from the timeline (removes from both timeline and outlier
 	/// tables).
 	///
@@ -642,4 +652,10 @@ pub enum YoloCommand {
 	/// Useful after massive DAG healing operations where 404s have bloated the
 	/// heap.
 	ClearRatelimiter,
+
+	/// Diagnostic command to check for duplicate read receipts in a room.
+	CheckReadReceipts {
+		/// The room ID to check.
+		room_id: OwnedRoomId,
+	},
 }

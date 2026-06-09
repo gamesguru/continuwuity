@@ -81,7 +81,7 @@ where
 
 #[implement(super::Service)]
 #[tracing::instrument(name = "state", level = "debug", skip_all)]
-pub(super) async fn state_at_incoming_resolved<Pdu>(
+pub async fn state_at_incoming_resolved<Pdu>(
 	&self,
 	incoming_pdu: &Pdu,
 	room_id: &RoomId,

@@ -79,6 +79,21 @@ pub(super) async fn reorder_timeline(
 }
 
 #[admin_command]
+pub(super) async fn rebuild_state(&self, room_id: OwnedRoomId) -> Result {
+	self.bail_restricted()?;
+
+	self.write_str(&format!("Incrementally rebuilding state for {room_id} from the timeline..."))
+		.await?;
+
+	Box::pin(self.services.rooms.timeline.rebuild_state(&room_id)).await?;
+
+	self.write_str(&format!(
+		"Successfully rebuilt state for {room_id}. Timeline PduCounts were unchanged."
+	))
+	.await
+}
+
+#[admin_command]
 pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result {
 	self.bail_restricted()?;
 
