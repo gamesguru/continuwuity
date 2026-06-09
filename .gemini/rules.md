@@ -14,6 +14,7 @@
     4. Extract the failure output: `jq -r 'select(.Test == "<TestName>" and .Action == "output") | .Output' .complement-logs/test_logs.jsonl`
     5. Filter for assertions: `grep -i "MatchResponse\|did not see\|FAIL\|Error\|expected\|got\|assert"`
     6. **Then** look at the relevant server code based on what the assertion actually says — don't guess.
+7. **Always prioritize shared, modular, and reusable code.** Do not write ugly 200-line custom-built monolithic functions; aggressively extract shared logic into `utils` or service methods so it can be reused across components.
 
 ## CI & Testing
 

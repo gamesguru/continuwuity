@@ -14,141 +14,11 @@ use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
 	RoomVersionId,
 	api::federation::event::{get_event, get_missing_events},
-	events::{StateEventType, TimelineEventType},
 };
-use serde_json::Value as JsonValue;
 use tokio::io::AsyncWriteExt;
 
+use super::export::DagExportStats;
 use crate::admin_command;
-
-struct DagExportStats {
-	pub count: u64,
-	pub total_prev_events: u64,
-	pub state_events: u64,
-	pub missing_hash: u64,
-	pub unique_hashes: HashSet<u64>,
-	pub last_ssh: Option<u64>,
-	pub last_is_state_event: bool,
-	pub last_event_id: Option<Box<EventId>>,
-	pub last_event_type: Option<TimelineEventType>,
-	pub last_state_key: Option<String>,
-	pub max_depth: u64,
-	pub min_depth: u64,
-	pub all_event_ids: HashSet<OwnedEventId>,
-	pub referenced_as_prev: HashSet<OwnedEventId>,
-}
-
-impl Default for DagExportStats {
-	fn default() -> Self {
-		Self {
-			count: 0,
-			total_prev_events: 0,
-			state_events: 0,
-			missing_hash: 0,
-			unique_hashes: HashSet::new(),
-			last_ssh: None,
-			last_is_state_event: false,
-			last_event_id: None,
-			last_event_type: None,
-			last_state_key: None,
-			max_depth: 0,
-			min_depth: u64::MAX,
-			all_event_ids: HashSet::new(),
-			referenced_as_prev: HashSet::new(),
-		}
-	}
-}
-
-impl DagExportStats {
-	#[allow(clippy::too_many_arguments)]
-	async fn process_and_write_pdu(
-		&mut self,
-		ctx: &crate::context::Context<'_>,
-		file: &mut tokio::fs::File,
-		pdu_json: CanonicalJsonObject,
-		pdu_result: Result<PduEvent>,
-		is_outlier: bool,
-		print: bool,
-	) -> Result<()> {
-		let mut obj: serde_json::Map<String, JsonValue> =
-			serde_json::from_value(serde_json::to_value(&pdu_json)?)?;
-
-		if is_outlier {
-			obj.insert("__outlier".to_owned(), JsonValue::Bool(true));
-		}
-
-		if let Ok(pdu) = &pdu_result {
-			obj.insert("event_id".to_owned(), JsonValue::String(pdu.event_id().to_string()));
-			let is_soft_failed = ctx
-				.services
-				.rooms
-				.pdu_metadata
-				.is_event_soft_failed(pdu.event_id())
-				.await;
-			if is_soft_failed {
-				obj.insert("__soft_failed".to_owned(), JsonValue::Bool(true));
-			}
-
-			let is_rejected = ctx
-				.services
-				.rooms
-				.pdu_metadata
-				.is_event_rejected(pdu.event_id())
-				.await;
-			if is_rejected {
-				obj.insert("__rejected".to_owned(), JsonValue::Bool(true));
-			}
-
-			if let Ok(ssh) = ctx
-				.services
-				.rooms
-				.state_accessor
-				.pdu_shortstatehash(pdu.event_id())
-				.await
-			{
-				obj.insert("__shortstatehash".to_owned(), JsonValue::from(ssh));
-				self.unique_hashes.insert(ssh);
-				self.last_ssh = Some(ssh);
-			} else {
-				self.missing_hash = self.missing_hash.saturating_add(1);
-			}
-
-			if pdu.state_key.is_some() {
-				self.state_events = self.state_events.saturating_add(1);
-				self.last_is_state_event = true;
-				self.last_event_type = Some(pdu.kind().clone());
-				self.last_state_key = pdu.state_key.as_ref().map(ToString::to_string);
-			} else {
-				self.last_is_state_event = false;
-			}
-
-			self.last_event_id = Some(pdu.event_id().into());
-			let eid = pdu.event_id().to_owned();
-			self.all_event_ids.insert(eid);
-			for prev in pdu.prev_events() {
-				self.referenced_as_prev.insert(prev.to_owned());
-			}
-			let d: u64 = pdu.depth.into();
-			self.max_depth = self.max_depth.max(d);
-			self.min_depth = self.min_depth.min(d);
-		}
-
-		let json = serde_json::to_string(&obj)?;
-		file.write_all(json.as_bytes()).await?;
-		file.write_all(b"\n").await?;
-		if print {
-			ctx.write_str(&format!("{json}\n")).await?;
-		}
-		if let Ok(pdu) = &pdu_result {
-			self.total_prev_events = self
-				.total_prev_events
-				.saturating_add(u64::try_from(pdu.prev_events().count()).unwrap_or(0));
-		}
-		self.count = self.count.saturating_add(1);
-
-		Ok(())
-	}
-}
 
 #[admin_command]
 pub(super) async fn get_room_dag(
@@ -192,6 +62,12 @@ pub(super) async fn get_room_dag(
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
 
+	let outliers_path =
+		format!("/tmp/local-dag-{safe_room_id}-v{room_version_str}-{server}-outliers.jsonl");
+	let mut outliers_file = tokio::fs::File::create(&outliers_path)
+		.await
+		.map_err(|e| err!(Database("Failed to create outliers file {outliers_path}: {e:?}")))?;
+
 	for event_id in pdu_ids {
 		if let Ok(end) = u64::try_from(end) {
 			if i > end {
@@ -202,7 +78,15 @@ pub(super) async fn get_room_dag(
 			if let Ok(pdu_json) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
 				let pdu_result = self.services.rooms.timeline.get_pdu(&event_id).await;
 				if let Err(e) = stats
-					.process_and_write_pdu(self, &mut file, pdu_json, pdu_result, false, print)
+					.process_and_write_pdu(
+						self,
+						&mut file,
+						&mut outliers_file,
+						pdu_json,
+						pdu_result,
+						false,
+						print,
+					)
 					.await
 				{
 					warn!("Failed to process PDU {event_id}: {e}");
@@ -232,7 +116,15 @@ pub(super) async fn get_room_dag(
 			{
 				let pdu_result = self.services.rooms.outlier.get_pdu_outlier(&event_id).await;
 				if let Err(e) = stats
-					.process_and_write_pdu(self, &mut file, pdu_json, pdu_result, true, print)
+					.process_and_write_pdu(
+						self,
+						&mut file,
+						&mut outliers_file,
+						pdu_json,
+						pdu_result,
+						true,
+						print,
+					)
 					.await
 				{
 					warn!("Failed to process outlier PDU {event_id}: {e}");
@@ -279,11 +171,7 @@ pub(super) async fn get_room_dag(
 					.services
 					.rooms
 					.state_accessor
-					.state_get_id::<Box<EventId>>(
-						room,
-						&StateEventType::from(last_type.to_string()),
-						last_sk,
-					)
+					.state_get_id::<Box<EventId>>(room, &last_type.to_string().into(), last_sk)
 					.await
 					.is_ok_and(|eid| *eid == **last_eid);
 

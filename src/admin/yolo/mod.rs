@@ -1,4 +1,5 @@
 mod dag;
+pub(super) mod export;
 mod extremities;
 mod federation;
 mod heal;
