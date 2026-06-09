@@ -12,6 +12,7 @@ pub(super) async fn import_pdus(
 	path: String,
 	skip_auth: bool,
 	skip_sig_verify: bool,
+	force: bool,
 	room_version: Option<RoomVersionId>,
 ) -> Result {
 	use tokio::io::{AsyncBufReadExt, BufReader};
@@ -117,6 +118,17 @@ pub(super) async fn import_pdus(
 					.outlier
 					.add_pdu_outlier(&eid, &value, Some(&room_id));
 				return Ok((eid, true));
+			}
+
+			if force {
+				if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&eid).await {
+					self.services
+						.rooms
+						.timeline
+						.replace_pdu(&pdu_id, &value)
+						.await?;
+					return Ok((eid, true));
+				}
 			}
 
 			if skip_auth {

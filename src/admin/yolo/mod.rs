@@ -335,6 +335,9 @@ pub enum YoloCommand {
 		/// Skip auth checks and insert directly into timeline
 		#[arg(long)]
 		skip_auth: bool,
+		/// Force overwrite existing PDUs in the database.
+		#[arg(long)]
+		force: bool,
 	},
 
 	/// Re-broadcast stored read receipts for a room to all participating
@@ -412,6 +415,9 @@ pub enum YoloCommand {
 		#[arg(long)]
 		skip_sig_verify: bool,
 
+		/// Force overwrite existing PDUs in the database.
+		#[arg(long)]
+		force: bool,
 		/// Override the room version instead of guessing it if missing.
 		#[arg(long)]
 		room_version: Option<ruma::RoomVersionId>,
