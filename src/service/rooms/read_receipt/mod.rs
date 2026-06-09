@@ -251,6 +251,7 @@ where
 
 	let content = ReceiptEventContent::from_iter(json);
 
+	conduwuit::info!("Packed {} read receipts into EDU", content.len());
 	conduwuit::trace!(?content);
 	Raw::from_json(
 		serde_json::value::to_raw_value(&SyncEphemeralRoomEvent { content })

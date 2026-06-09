@@ -204,6 +204,13 @@ impl Data {
 
 				let event = serde_json::value::to_raw_value(&json)?;
 
+				conduwuit::info!(
+					"Yielding read receipt for user {} at count {} (since was {})",
+					user_id,
+					count,
+					since
+				);
+
 				Ok((user_id.to_owned(), count, Raw::from_json(event)))
 			})
 			.ignore_err()
