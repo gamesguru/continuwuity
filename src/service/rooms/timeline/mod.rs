@@ -1495,11 +1495,14 @@ mod tests {
 		assert_eq!(phantoms, vec![a], "only A is phantom, C is valid");
 	}
 
-	#[tokio::test]
-	async fn test_backup_pdu_to_outlier_v12() {
+	async fn run_test_handle_outlier_pdu(
+		room_version_str: &str,
+		include_room_id: bool,
+		room_id_str: &str,
+	) {
 		let _ = rustls::crypto::ring::default_provider().install_default();
 
-		use std::{path::PathBuf, sync::Arc};
+		use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 		use conduwuit::{
 			Server,
@@ -1507,7 +1510,9 @@ mod tests {
 			log::{Log, LogLevelReloadHandles, capture},
 		};
 		use figment::providers::Format;
-		use ruma::{CanonicalJsonObject, CanonicalJsonValue, event_id, room_id};
+		use ruma::{
+			CanonicalJsonObject, CanonicalJsonValue, RoomId, RoomVersionId, ServerName, event_id,
+		};
 
 		struct TempDbGuard {
 			path: PathBuf,
@@ -1520,7 +1525,7 @@ mod tests {
 		static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 =
 			std::sync::atomic::AtomicU64::new(0);
 		let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_timeline_{count}"));
+		let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_outlier_{count}"));
 		let _ = std::fs::remove_dir_all(&db_path);
 
 		let guard = TempDbGuard { path: db_path.clone() };
@@ -1540,76 +1545,251 @@ mod tests {
 			capture: Arc::new(capture::State::default()),
 		}));
 
-		let services = crate::Services::build(server)
+		let services = crate::Services::build(server.clone())
 			.await
 			.expect("failed to build services");
+		let services = services.start().await.expect("failed to start services");
 
-		let room_id = room_id!("!create_event_id");
-		let event_id = event_id!("$create_event_id");
+		let room_id = RoomId::parse(room_id_str).unwrap();
+		let create_event_id = event_id!("$create_event_id");
+		let join_event_id = event_id!("$join_event_id");
+		let room_version_id = RoomVersionId::try_from(room_version_str).unwrap();
+		let origin = ServerName::parse("test.conduwuit.local").unwrap();
 
-		// Create a mock Version 12 create event: no room_id field is present
-		let mut json = CanonicalJsonObject::new();
-		json.insert("type".to_owned(), CanonicalJsonValue::String("m.room.create".to_owned()));
-		json.insert(
+		// Create a mock create event
+		let mut create_json = CanonicalJsonObject::new();
+		create_json
+			.insert("type".to_owned(), CanonicalJsonValue::String("m.room.create".to_owned()));
+		create_json.insert(
 			"sender".to_owned(),
 			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
 		);
-		json.insert(
+		create_json.insert("state_key".to_owned(), CanonicalJsonValue::String("".to_owned()));
+		let mut content_map = BTreeMap::new();
+		content_map.insert(
+			"room_version".to_owned(),
+			CanonicalJsonValue::String(room_version_str.to_owned()),
+		);
+		if room_version_str == "5" || room_version_str == "9" || room_version_str == "10" {
+			content_map.insert(
+				"creator".to_owned(),
+				CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
+			);
+		}
+		create_json.insert("content".to_owned(), CanonicalJsonValue::Object(content_map));
+		create_json.insert(
+			"event_id".to_owned(),
+			CanonicalJsonValue::String(create_event_id.as_str().to_owned()),
+		);
+		create_json
+			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456789.into()));
+		create_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		create_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		create_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
+		let mut hashes = CanonicalJsonObject::new();
+		hashes.insert(
+			"sha256".to_owned(),
+			CanonicalJsonValue::String("mock_sha256_hash_value_1".to_owned()),
+		);
+		create_json.insert("hashes".to_owned(), CanonicalJsonValue::Object(hashes));
+		create_json.insert(
+			"signatures".to_owned(),
+			CanonicalJsonValue::Object(CanonicalJsonObject::new()),
+		);
+		if include_room_id {
+			create_json.insert(
+				"room_id".to_owned(),
+				CanonicalJsonValue::String(room_id.as_str().to_owned()),
+			);
+		}
+
+		// Create a mock join event for the creator
+		let mut join_json = CanonicalJsonObject::new();
+		join_json
+			.insert("type".to_owned(), CanonicalJsonValue::String("m.room.member".to_owned()));
+		join_json.insert(
+			"sender".to_owned(),
+			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
+		);
+		join_json.insert(
+			"state_key".to_owned(),
+			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
+		);
+		join_json.insert(
 			"content".to_owned(),
 			CanonicalJsonValue::Object(
-				vec![("room_version".to_owned(), CanonicalJsonValue::String("12".to_owned()))]
+				vec![("membership".to_owned(), CanonicalJsonValue::String("join".to_owned()))]
 					.into_iter()
 					.collect(),
 			),
 		);
-		json.insert(
+		join_json.insert(
 			"event_id".to_owned(),
-			CanonicalJsonValue::String(event_id.as_str().to_owned()),
+			CanonicalJsonValue::String(join_event_id.as_str().to_owned()),
 		);
-		json.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456789.into()));
-		json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
-		json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
-		json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
+		join_json
+			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456790.into()));
+		join_json.insert(
+			"prev_events".to_owned(),
+			CanonicalJsonValue::Array(vec![CanonicalJsonValue::String(
+				create_event_id.as_str().to_owned(),
+			)]),
+		);
+		join_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(2.into()));
 		let mut hashes = CanonicalJsonObject::new();
 		hashes.insert(
 			"sha256".to_owned(),
-			CanonicalJsonValue::String("mock_sha256_hash_value".to_owned()),
+			CanonicalJsonValue::String("mock_sha256_hash_value_2".to_owned()),
 		);
-		json.insert("hashes".to_owned(), CanonicalJsonValue::Object(hashes));
-		json.insert(
+		join_json.insert("hashes".to_owned(), CanonicalJsonValue::Object(hashes));
+		join_json.insert(
 			"signatures".to_owned(),
 			CanonicalJsonValue::Object(CanonicalJsonObject::new()),
 		);
-		// Note: we do NOT insert "room_id" into the json, simulating a v12 create
-		// event.
+		if include_room_id {
+			join_json.insert(
+				"room_id".to_owned(),
+				CanonicalJsonValue::String(room_id.as_str().to_owned()),
+			);
+		}
 
-		// Run backup_pdu_to_outlier
-		services
-			.rooms
-			.timeline
-			.db
-			.backup_pdu_to_outlier(room_id, event_id, &json);
+		// Auth events for room version <= 11 MUST contain the create event.
+		// For room version 12, it is explicitly forbidden and must be empty.
+		if room_version_str == "12" {
+			join_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
+		} else {
+			join_json.insert(
+				"auth_events".to_owned(),
+				CanonicalJsonValue::Array(vec![CanonicalJsonValue::String(
+					create_event_id.as_str().to_owned(),
+				)]),
+			);
+		}
 
-		// Now retrieve the outlier event and check that it is found and associated
-		// correctly.
-		let result = services
+		// Test Case 1: Create event missing. Handling the join event should FAIL.
+		let handle_missing_res = services
 			.rooms
-			.timeline
-			.db
-			.get_pdu_in_room(Some(room_id), event_id)
+			.event_handler
+			.handle_outlier_pdu::<crate::rooms::timeline::PduEvent>(
+				&origin,
+				None,
+				join_event_id,
+				&room_id,
+				join_json.clone(),
+				false,
+				true, // skip_sig_verify
+				Some(&room_version_id),
+			)
 			.await;
 		assert!(
-			result.is_ok(),
-			"Expected to successfully retrieve the outlier event with associated room_id: {:?}",
-			result.err()
+			handle_missing_res.is_err(),
+			"Expected handling outlier join event to fail when create event is missing, but it \
+			 succeeded: {:?}",
+			handle_missing_res
 		);
 
-		let pdu = result.unwrap();
-		assert_eq!(pdu.event_id, event_id);
+		// Test Case 2: Create event exists.
+		// First, handle the create event as an outlier.
+		let handle_create_res = services
+			.rooms
+			.event_handler
+			.handle_outlier_pdu::<crate::rooms::timeline::PduEvent>(
+				&origin,
+				None,
+				create_event_id,
+				&room_id,
+				create_json,
+				false,
+				true, // skip_sig_verify
+				Some(&room_version_id),
+			)
+			.await;
+		println!(
+			"Version {} Create Event handle result: {:?}",
+			room_version_str, handle_create_res
+		);
+		let create_pdu = handle_create_res
+			.as_ref()
+			.expect("failed to handle create PDU")
+			.0
+			.clone();
+		println!("Created event room_id: {:?}", create_pdu.room_id());
+		println!("Created event sender: {:?}", create_pdu.sender());
+
+		// Now, handle the join event as an outlier.
+		// For version 12, we must pass the create event since referencing it in
+		// auth_events is forbidden. For version <= 11, we pass None to test the
+		// fallback lookup path!
+		let create_event_param = if room_version_str == "12" {
+			Some(&create_pdu)
+		} else {
+			None
+		};
+
+		let handle_success_res = services
+			.rooms
+			.event_handler
+			.handle_outlier_pdu::<crate::rooms::timeline::PduEvent>(
+				&origin,
+				create_event_param,
+				join_event_id,
+				&room_id,
+				join_json,
+				false,
+				true, // skip_sig_verify
+				Some(&room_version_id),
+			)
+			.await;
+		println!(
+			"Version {} Join Event handle result: {:?}",
+			room_version_str, handle_success_res
+		);
+		assert!(
+			handle_success_res.is_ok(),
+			"Expected handling outlier join event to succeed when create event is present, but \
+			 it failed: {:?}",
+			handle_success_res.err()
+		);
+
+		// Verify we can retrieve the join event from the outlier database
+		let db_res = services
+			.rooms
+			.timeline
+			.db
+			.get_pdu_in_room(Some(&room_id), join_event_id)
+			.await;
+		assert!(db_res.is_ok(), "Expected to retrieve outlier join event: {:?}", db_res.err());
+		let pdu = db_res.unwrap();
+		assert_eq!(pdu.event_id, join_event_id);
 
 		// Clean up
 		drop(guard);
 		let _ = server.shutdown();
+	}
+
+	#[tokio::test]
+	async fn test_backup_pdu_to_outlier_v5() {
+		run_test_handle_outlier_pdu("5", true, "!create_event_id:test.conduwuit.local").await;
+	}
+
+	#[tokio::test]
+	async fn test_backup_pdu_to_outlier_v9() {
+		run_test_handle_outlier_pdu("9", true, "!create_event_id:test.conduwuit.local").await;
+	}
+
+	#[tokio::test]
+	async fn test_backup_pdu_to_outlier_v10() {
+		run_test_handle_outlier_pdu("10", true, "!create_event_id:test.conduwuit.local").await;
+	}
+
+	#[tokio::test]
+	async fn test_backup_pdu_to_outlier_v11() {
+		run_test_handle_outlier_pdu("11", true, "!create_event_id:test.conduwuit.local").await;
+	}
+
+	#[tokio::test]
+	async fn test_backup_pdu_to_outlier_v12() {
+		run_test_handle_outlier_pdu("12", false, "!create_event_id").await;
 	}
 }
 

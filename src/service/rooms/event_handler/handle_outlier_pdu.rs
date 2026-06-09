@@ -542,6 +542,10 @@ where
 	let fetched_create;
 	let create_event_ref = if let Some(ce) = create_event {
 		ce.as_pdu()
+	} else if let Some(ce) =
+		auth_events_by_key.get(&(StateEventType::RoomCreate, String::new().into()))
+	{
+		ce
 	} else if let Ok(ce) = self
 		.services
 		.state_accessor

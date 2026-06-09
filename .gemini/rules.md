@@ -140,3 +140,10 @@ jq -r 'select(.Test == "<TestName>" and .Action == "output") | .Output' \
 - GitHub org/repo for `gh` commands: resolved automatically by `gh` from git remotes.
 - Main development branch under test: `guru/dev-2026-03-27+b1-presence+b2-federation`
 - Complement baseline commit: `ec5844630`
+
+## Test Matrix Targets
+
+Use to determine the currently deployed revision. Update it in the `deployments.csv` if out of date.
+
+- `testmatrix nutra.tk`
+- `testmatrix wombatx.me`
