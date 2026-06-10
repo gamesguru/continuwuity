@@ -337,10 +337,13 @@
 #
 #max_concurrent_inbound_transactions_per_origin = 10
 
-# The maximum number of forward extremities (DAG tips) to maintain for a room.
-# Matrix recommends a cap of 10. Synapse uses 10. Conduwuit previously used 50.
-# Lowering this value strictly caps how wide the DAG can fracture before the
-# server forces it to collapse by aggressively shedding older branches.
+# The maximum number of forward extremities (DAG tips) to maintain for a
+# room. Matrix recommends a cap of 10. Synapse uses 10. Conduwuit
+# previously used 50. Lowering this value strictly caps how wide the DAG
+# can fracture before the server forces it to collapse by aggressively
+# shedding older branches.
+#
+# Setting this to -1 disables the limit entirely (infinite extremities).
 #
 #max_forward_extremities = 10
 
@@ -622,6 +625,13 @@
 # speeds up startup but relies entirely on periodic sweeps or DAG healing.
 #
 #allow_startup_forwardfill = false
+
+# How often the periodic forward-fill sweep runs, in seconds.
+# The periodic sweep scans for completely idle rooms (no activity for > 12 hours)
+# and tries to fetch any events missed while the room was quiet.
+# Set to 0 to completely disable the periodic sweep.
+#
+#forwardfill_sweep_interval_secs = 14400 (4 hours)
 
 # Allows federation requests to be made to itself
 #

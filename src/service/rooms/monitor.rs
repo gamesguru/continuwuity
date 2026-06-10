@@ -48,9 +48,6 @@ pub(crate) struct InnerServices {
 /// periodic background sweep.
 const PERIODIC_STALE_THRESHOLD_MS: u64 = 12 * 3600 * 1000; // 12 hours
 
-/// How often the periodic sweep runs.
-const SWEEP_INTERVAL_SECS: u64 = 4 * 3600; // every 4 hours
-
 impl Service {
 	pub async fn worker(self: Arc<Self>) -> Result<()> {
 		if !self.services.server.config.allow_federation {
@@ -70,7 +67,12 @@ impl Service {
 		}
 
 		// --- Periodic sweep ---
-		let mut interval = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
+		let sweep_interval = self.services.server.config.forwardfill_sweep_interval_secs;
+		if sweep_interval == 0 {
+			return Ok(());
+		}
+
+		let mut interval = tokio::time::interval(Duration::from_secs(sweep_interval));
 		interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 		// consume the immediate first tick so we don't double-scan on startup
 		interval.tick().await;

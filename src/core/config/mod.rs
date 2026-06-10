@@ -779,6 +779,15 @@ pub struct Config {
 	#[serde(default)]
 	pub allow_startup_forwardfill: bool,
 
+	/// How often the periodic forward-fill sweep runs, in seconds.
+	/// The periodic sweep scans for completely idle rooms (no activity for > 12
+	/// hours) and tries to fetch any events missed while the room was quiet.
+	/// Set to 0 to completely disable the periodic sweep.
+	///
+	/// default: 14400 (4 hours)
+	#[serde(default = "default_forwardfill_sweep_interval_secs")]
+	pub forwardfill_sweep_interval_secs: u64,
+
 	/// Allows federation requests to be made to itself
 	///
 	/// This isn't intended and is very likely a bug if federation requests are
@@ -2980,6 +2989,8 @@ fn default_max_concurrent_outbound_requests() -> usize { 128 }
 fn default_max_forward_extremities() -> isize { 10 }
 
 fn default_transaction_id_cache_max_age_secs() -> u64 { 60 * 60 * 2 }
+
+fn default_forwardfill_sweep_interval_secs() -> u64 { 60 * 60 * 4 }
 
 fn default_transaction_id_cache_max_entries() -> usize { 8192 }
 
