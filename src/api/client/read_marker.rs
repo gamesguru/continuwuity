@@ -76,10 +76,16 @@ pub(crate) async fn set_read_marker_route(
 						services.rooms.timeline.get_pdu_count(&old_event_id).await
 					{
 						if new_count <= old_count {
+							conduwuit::info!(
+								"Ignoring read receipt for {} from {} because it moves backwards from {} to {}",
+								&body.room_id, sender_user, old_count, new_count
+							);
 							return Ok(set_read_marker::v3::Response {});
 						}
 					}
 				}
+			} else {
+				conduwuit::debug!("Event {} not found in timeline, ignoring read receipt", event);
 			}
 
 			let receipt_content = BTreeMap::from_iter([(
@@ -108,6 +114,8 @@ pub(crate) async fn set_read_marker_route(
 					},
 				)
 				.await;
+
+			conduwuit::debug!("Accepted read receipt for {} from {}", event, sender_user);
 		}
 	}
 
@@ -129,7 +137,15 @@ pub(crate) async fn set_read_marker_route(
 					sender_user,
 					new_count,
 				);
+				conduwuit::debug!("Accepted private read receipt for {} from {}", event, sender_user);
+			} else {
+				conduwuit::info!(
+					"Ignoring private read receipt for {} from {} because it moves backwards from {} to {}",
+					&body.room_id, sender_user, old_count, new_count
+				);
 			}
+		} else {
+			conduwuit::debug!("Event {} not found in timeline, ignoring private read receipt", event);
 		}
 	}
 
@@ -200,10 +216,16 @@ pub(crate) async fn create_receipt_route(
 						services.rooms.timeline.get_pdu_count(&old_event_id).await
 					{
 						if new_count <= old_count {
+							conduwuit::info!(
+								"Ignoring read receipt for {} from {} because it moves backwards from {} to {}",
+								&body.room_id, sender_user, old_count, new_count
+							);
 							return Ok(create_receipt::v3::Response {});
 						}
 					}
 				}
+			} else {
+				conduwuit::debug!("Event {} not found in timeline, ignoring read receipt", &body.event_id);
 			}
 
 			let receipt_content = BTreeMap::from_iter([(
@@ -232,6 +254,8 @@ pub(crate) async fn create_receipt_route(
 					},
 				)
 				.await;
+
+			conduwuit::debug!("Accepted read receipt for {} from {}", &body.event_id, sender_user);
 		},
 		| create_receipt::v3::ReceiptType::ReadPrivate => {
 			let count = services.rooms.timeline.get_pdu_count(&body.event_id).await;
@@ -251,7 +275,15 @@ pub(crate) async fn create_receipt_route(
 						sender_user,
 						new_count,
 					);
+					conduwuit::debug!("Accepted private read receipt for {} from {}", &body.event_id, sender_user);
+				} else {
+					conduwuit::info!(
+						"Ignoring private read receipt for {} from {} because it moves backwards from {} to {}",
+						&body.room_id, sender_user, old_count, new_count
+					);
 				}
+			} else {
+				conduwuit::debug!("Event {} not found in timeline, ignoring private read receipt", &body.event_id);
 			}
 		},
 		| _ => {
