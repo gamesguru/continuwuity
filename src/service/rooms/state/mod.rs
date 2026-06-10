@@ -63,7 +63,7 @@ pub type RoomMutexGuard = MutexMapGuard<OwnedRoomId, ()>;
 /// Enforced at the DB writer level to prevent unbounded fork accumulation.
 /// Matrix spec limits prev_events to 20, so keeping >10 tips is wasteful —
 /// servers can only reference a subset in any single event anyway.
-pub const MAX_FORWARD_EXTREMITIES: usize = 10;
+pub const MAX_FORWARD_EXTREMITIES: usize = 50;
 
 #[async_trait]
 impl crate::Service for Service {
