@@ -282,12 +282,32 @@ impl Service {
 		// Topological sort with PduCount as tiebreaker
 		info!("reorder_timeline: topological sort of {} events...", graph.len());
 		let event_fetch = |event_id: OwnedEventId| {
-			let ts = entries
+			let pdu_count = entries
 				.get(&event_id)
-				.map_or_else(|| ruma::uint!(0), |&(_, ts)| ts);
+				.map_or_else(|| PduCount::Normal(0), |&(c, _)| c);
+
+			// Map PduCount into a strictly positive integer within ruma::UInt bounds (max
+			// 2^53 - 1). We center the mapping at 2^52. Backfilled (negative) are <
+			// 2^52, Normal are >= 2^52.
+			let center = 1_u64 << 52;
+			let stable_ts = match pdu_count {
+				| PduCount::Normal(n) => center.saturating_add(n),
+				| PduCount::Backfilled(n) => center.saturating_sub(n.unsigned_abs()),
+			};
+
+			// We MUST invert the value because state_res uses a max-heap that pops the
+			// highest tiebreaker value first. To weave unconstrained parallel branches
+			// forwards in time, the oldest PduCount must be mathematically converted
+			// into the highest value!
+			let max_uint = u64::from(ruma::UInt::MAX);
+			let inverted_ts = max_uint.saturating_sub(stable_ts);
+
+			// Safely convert to ruma::UInt
+			let ruma_ts = ruma::UInt::new(inverted_ts).unwrap_or(ruma::UInt::MAX);
+
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
-				ruma::MilliSecondsSinceUnixEpoch(ts),
+				ruma::MilliSecondsSinceUnixEpoch(ruma_ts),
 			)))
 		};
 
