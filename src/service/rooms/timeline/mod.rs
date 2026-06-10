@@ -282,12 +282,16 @@ impl Service {
 		// Topological sort with PduCount as tiebreaker
 		info!("reorder_timeline: topological sort of {} events...", graph.len());
 		let event_fetch = |event_id: OwnedEventId| {
-			let ts = entries
-				.get(&event_id)
-				.map_or_else(|| ruma::uint!(0), |&(_, ts)| ts);
+			let count = entries.get(&event_id).map_or_else(
+				|| ruma::uint!(0),
+				|&(c, _)| match c {
+					| PduCount::Normal(n) => n.try_into().unwrap_or(ruma::UInt::MAX),
+					| PduCount::Backfilled(n) => n.try_into().unwrap_or(ruma::UInt::MAX),
+				},
+			);
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
-				ruma::MilliSecondsSinceUnixEpoch(ts),
+				ruma::MilliSecondsSinceUnixEpoch(count),
 			)))
 		};
 
