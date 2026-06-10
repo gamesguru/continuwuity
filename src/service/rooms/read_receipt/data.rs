@@ -20,6 +20,7 @@ use crate::{Dep, globals};
 
 pub(super) struct Data {
 	roomuserid_privateread: Arc<Map>,
+	roomuserid_privatereadevent: Arc<Map>,
 	roomuserid_lastprivatereadupdate: Arc<Map>,
 	services: Services,
 	readreceiptid_readreceipt: Arc<Map>,
@@ -27,6 +28,8 @@ pub(super) struct Data {
 
 struct Services {
 	globals: Dep<globals::Service>,
+	timeline: Dep<crate::rooms::timeline::Service>,
+	short: Dep<crate::rooms::short::Service>,
 }
 
 pub(super) type ReceiptItem = (OwnedUserId, u64, Raw<AnySyncEphemeralRoomEvent>);
@@ -36,10 +39,13 @@ impl Data {
 		let db = &args.db;
 		Self {
 			roomuserid_privateread: db["roomuserid_privateread"].clone(),
+			roomuserid_privatereadevent: db["roomuserid_privatereadevent"].clone(),
 			roomuserid_lastprivatereadupdate: db["roomuserid_lastprivatereadupdate"].clone(),
 			readreceiptid_readreceipt: db["readreceiptid_readreceipt"].clone(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
+				timeline: args.depend::<crate::rooms::timeline::Service>("rooms::timeline"),
+				short: args.depend::<crate::rooms::short::Service>("rooms::short"),
 			},
 		}
 	}
@@ -83,6 +89,69 @@ impl Data {
 			})
 			.next()
 			.await
+	}
+
+	pub(super) async fn private_read_get(
+		&self,
+		room_id: &RoomId,
+		user_id: &UserId,
+	) -> Result<Option<(u64, ReceiptEvent)>> {
+		let mut key = room_id.as_bytes().to_vec();
+		key.push(0xFF);
+		key.extend_from_slice(user_id.as_bytes());
+
+		let count = self
+			.roomuserid_privateread
+			.get(&key)
+			.await
+			.map(|bytes| {
+				conduwuit::utils::u64_from_bytes(&*bytes).expect("bytes have right length")
+			})
+			.ok();
+
+		let Some(count) = count else {
+			return Ok(None);
+		};
+
+		// Fast path: try to get the full JSON event
+		if let Ok(handle) = self.roomuserid_privatereadevent.get(&key).await {
+			if let Ok(event) = handle.deserialized() {
+				return Ok(Some((count, event)));
+			}
+		}
+
+		// Fallback for legacy private read receipts that were only saved as a u64 count
+		let mut user_map = std::collections::BTreeMap::new();
+		user_map.insert(user_id.to_owned(), ruma::events::receipt::Receipt {
+			thread: ruma::events::receipt::ReceiptThread::Unthreaded,
+			ts: None, // Legacy receipts have no timestamp
+		});
+
+		let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+		let shorteventid = conduwuit::matrix::pdu::PduCount::Normal(count);
+		let pdu_id: conduwuit::matrix::pdu::RawPduId =
+			conduwuit::matrix::pdu::PduId { shortroomid, shorteventid }.into();
+		let pdu = self.services.timeline.get_pdu_from_id(&pdu_id).await?;
+		let event_id = pdu.event_id.to_owned();
+
+		let mut receipt_map = std::collections::BTreeMap::new();
+		receipt_map.insert(ruma::events::receipt::ReceiptType::ReadPrivate, user_map);
+		let mut content = std::collections::BTreeMap::new();
+		content.insert(event_id.into(), receipt_map);
+
+		let receipt_sync_event = ruma::events::SyncEphemeralRoomEvent {
+			content: ruma::events::receipt::ReceiptEventContent(content),
+		};
+
+		// We cast it back to ReceiptEvent because pack_receipts takes an iterator of
+		// AnySyncEphemeralRoomEvent
+		let event: ReceiptEvent = serde_json::from_str(
+			serde_json::to_string(&receipt_sync_event)
+				.expect("receipt created manually")
+				.as_str(),
+		)?;
+
+		Ok(Some((count, event)))
 	}
 
 	pub(super) async fn readreceipt_update(
@@ -234,12 +303,27 @@ impl Data {
 			.ignore_err()
 	}
 
-	pub(super) fn private_read_set(&self, room_id: &RoomId, user_id: &UserId, pdu_count: u64) {
-		let key = (room_id, user_id);
-		let next_count = self.services.globals.next_count().unwrap();
+	pub(super) fn private_read_set(
+		&self,
+		room_id: &RoomId,
+		user_id: &UserId,
+		count: u64,
+		receipt: &ReceiptEvent,
+	) -> Result<()> {
+		let mut key = room_id.as_bytes().to_vec();
+		key.push(0xFF);
+		key.extend_from_slice(user_id.as_bytes());
+		let next_count = self.services.globals.next_count()?;
 
-		self.roomuserid_privateread.put(key, pdu_count);
-		self.roomuserid_lastprivatereadupdate.put(key, next_count);
+		let receipt_json = serde_json::to_vec(receipt).expect("ReceiptEvent serializes");
+
+		self.roomuserid_privateread
+			.insert(&key, &count.to_be_bytes());
+		self.roomuserid_privatereadevent.insert(&key, &receipt_json);
+		self.roomuserid_lastprivatereadupdate
+			.insert(&key, &next_count.to_be_bytes());
+
+		Ok(())
 	}
 
 	pub(super) async fn private_read_get_count(

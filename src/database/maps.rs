@@ -220,6 +220,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "roomuserid_privatereadevent",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "roomuserid_lastprivatereadupdate",
 		..descriptor::RANDOM_SMALL
 	},

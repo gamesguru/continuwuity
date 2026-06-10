@@ -2,20 +2,13 @@ mod data;
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use conduwuit::{
-	Result, debug, err,
-	matrix::{
-		Event,
-		pdu::{PduCount, PduId, RawPduId},
-	},
-	warn,
-};
-use futures::{Stream, TryFutureExt, try_join};
+use conduwuit::{Result, debug, err, warn};
+use futures::Stream;
 use ruma::{
 	OwnedEventId, OwnedUserId, RoomId, UserId,
 	events::{
 		AnySyncEphemeralRoomEvent, SyncEphemeralRoomEvent,
-		receipt::{ReceiptEvent, ReceiptEventContent, Receipts},
+		receipt::{ReceiptEvent, ReceiptEventContent},
 	},
 	serde::Raw,
 };
@@ -84,37 +77,15 @@ impl Service {
 		room_id: &RoomId,
 		user_id: &UserId,
 	) -> Result<Raw<AnySyncEphemeralRoomEvent>> {
-		let pdu_count = self.private_read_get_count(room_id, user_id).map_err(|e| {
-			err!(Database(warn!("No private read receipt was set in {room_id}: {e}")))
-		});
-		let shortroomid = self.services.short.get_shortroomid(room_id).map_err(|e| {
-			err!(Database(warn!("Short room ID does not exist in database for {room_id}: {e}")))
-		});
+		let result = self.db.private_read_get(room_id, user_id).await?;
 
-		let (pdu_count, shortroomid) = try_join!(pdu_count, shortroomid)?;
-		let shorteventid = PduCount::Normal(pdu_count);
-		let pdu_id: RawPduId = PduId { shortroomid, shorteventid }.into();
-		let pdu = self.services.timeline.get_pdu_from_id(&pdu_id).await?;
-
-		let event_id: OwnedEventId = pdu.event_id().to_owned();
-		let user_id: OwnedUserId = user_id.to_owned();
-		let content: BTreeMap<OwnedEventId, Receipts> = BTreeMap::from_iter([(
-			event_id,
-			BTreeMap::from_iter([(
-				ruma::events::receipt::ReceiptType::ReadPrivate,
-				BTreeMap::from_iter([(user_id, ruma::events::receipt::Receipt {
-					ts: None, // TODO: start storing the timestamp so we can return one
-					thread: ruma::events::receipt::ReceiptThread::Unthreaded,
-				})]),
-			)]),
-		)]);
-		let receipt_event_content = ReceiptEventContent(content);
-		let receipt_sync_event = SyncEphemeralRoomEvent { content: receipt_event_content };
-
-		let event = serde_json::value::to_raw_value(&receipt_sync_event)
-			.expect("receipt created manually");
-
-		Ok(Raw::from_json(event))
+		if let Some((_, event)) = result {
+			let raw_event =
+				serde_json::value::to_raw_value(&event).expect("receipt created manually");
+			Ok(Raw::from_json(raw_event))
+		} else {
+			Err(err!(Database(warn!("No private read receipt was set in {room_id}"))))
+		}
 	}
 
 	/// Returns an iterator over the most recent read_receipts in a room,
@@ -132,8 +103,14 @@ impl Service {
 	/// Sets a private read marker at PDU `count`.
 	#[inline]
 	#[tracing::instrument(skip(self), level = "debug")]
-	pub fn private_read_set(&self, room_id: &RoomId, user_id: &UserId, count: u64) {
-		self.db.private_read_set(room_id, user_id, count);
+	pub fn private_read_set(
+		&self,
+		room_id: &RoomId,
+		user_id: &UserId,
+		count: u64,
+		receipt: &ReceiptEvent,
+	) -> Result<()> {
+		self.db.private_read_set(room_id, user_id, count, receipt)
 	}
 
 	/// Returns the private read marker PDU count.

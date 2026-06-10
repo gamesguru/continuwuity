@@ -189,9 +189,28 @@ where
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
 
 	// Mark as read first so the sync watcher uses the correct receipt
+	let receipt_content = std::collections::BTreeMap::from_iter([(
+		pdu.event_id().to_owned(),
+		std::collections::BTreeMap::from_iter([(
+			ruma::events::receipt::ReceiptType::ReadPrivate,
+			std::collections::BTreeMap::from_iter([(
+				pdu.sender().to_owned(),
+				ruma::events::receipt::Receipt {
+					ts: Some(ruma::MilliSecondsSinceUnixEpoch::now()),
+					thread: ruma::events::receipt::ReceiptThread::Unthreaded,
+				},
+			)]),
+		)]),
+	)]);
+	let receipt_event = ruma::events::receipt::ReceiptEvent {
+		content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+		room_id: room_id.to_owned(),
+	};
+
 	self.services
 		.read_receipt
-		.private_read_set(room_id, pdu.sender(), count);
+		.private_read_set(room_id, pdu.sender(), count, &receipt_event)
+		.expect("failed to set private read receipt");
 
 	self.services
 		.user

@@ -139,11 +139,31 @@ pub(crate) async fn set_read_marker_route(
 				.unwrap_or(0);
 
 			if new_count > old_count {
+				let receipt_content = BTreeMap::from_iter([(
+					event.to_owned(),
+					BTreeMap::from_iter([(
+						ReceiptType::ReadPrivate,
+						BTreeMap::from_iter([(
+							sender_user.to_owned(),
+							ruma::events::receipt::Receipt {
+								ts: Some(MilliSecondsSinceUnixEpoch::now()),
+								thread: ReceiptThread::Unthreaded,
+							},
+						)]),
+					)]),
+				)]);
+
+				let receipt_event = ruma::events::receipt::ReceiptEvent {
+					content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+					room_id: body.room_id.clone(),
+				};
+
 				services.rooms.read_receipt.private_read_set(
 					&body.room_id,
 					sender_user,
 					new_count,
-				);
+					&receipt_event,
+				)?;
 				conduwuit::debug!(
 					"Accepted private read receipt for {} from {}",
 					event,
@@ -301,11 +321,31 @@ pub(crate) async fn create_receipt_route(
 					.unwrap_or(0);
 
 				if new_count > old_count {
+					let receipt_content = BTreeMap::from_iter([(
+						body.event_id.clone(),
+						BTreeMap::from_iter([(
+							ReceiptType::ReadPrivate,
+							BTreeMap::from_iter([(
+								sender_user.to_owned(),
+								ruma::events::receipt::Receipt {
+									ts: Some(MilliSecondsSinceUnixEpoch::now()),
+									thread: body.body.thread.clone(),
+								},
+							)]),
+						)]),
+					)]);
+
+					let receipt_event = ruma::events::receipt::ReceiptEvent {
+						content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+						room_id: body.room_id.clone(),
+					};
+
 					services.rooms.read_receipt.private_read_set(
 						&body.room_id,
 						sender_user,
 						new_count,
-					);
+						&receipt_event,
+					)?;
 					conduwuit::debug!(
 						"Accepted private read receipt for {} from {}",
 						&body.event_id,
