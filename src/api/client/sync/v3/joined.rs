@@ -673,8 +673,8 @@ async fn build_notification_counts(
 		trace!(%notification_count, %highlight_count, "syncing new notification counts");
 
 		Ok(Some(UnreadNotificationsCount {
-			notification_count: Some(notification_count),
-			highlight_count: Some(highlight_count),
+			notification_count: (notification_count > uint!(0)).then_some(notification_count),
+			highlight_count: (highlight_count > uint!(0)).then_some(highlight_count),
 		}))
 	} else {
 		Ok(None)
