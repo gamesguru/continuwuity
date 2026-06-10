@@ -4,7 +4,7 @@ mod v5;
 use std::collections::VecDeque;
 
 use conduwuit::{
-	Event, PduCount, Result, debug_warn, err,
+	Event, PduCount, Result, debug_warn, err, info,
 	matrix::pdu::PduEvent,
 	ref_at, trace,
 	utils::stream::{BroadbandExt, ReadyExt, TryIgnore, WidebandExt},
@@ -118,16 +118,22 @@ async fn load_timeline(
 		},
 	};
 
-	let mut pdus = VecDeque::with_capacity(limit);
+	let mut pdus = pdu_stream
+		.by_ref()
+		.take(limit)
+		.ready_fold(VecDeque::with_capacity(limit), |mut pdus, item| {
+			pdus.push_front(item);
+			pdus
+		})
+		.await;
+
 	let mut limited = false;
 
-	let mut take_stream = pdu_stream.by_ref().take(limit);
-
-	while let Some(item) = take_stream.next().await {
-		// Check for a topological gap BEFORE this event
-		let mut gap_found = false;
-		if starting_count.is_some() {
-			for prev_id in item.1.prev_events() {
+	if starting_count.is_some() {
+		// Traverse newest to oldest to find the first topological gap backwards
+		for (i, (_, pdu)) in pdus.iter().enumerate().rev() {
+			let mut gap_found = false;
+			for prev_id in pdu.prev_events() {
 				if services
 					.rooms
 					.timeline
@@ -139,13 +145,18 @@ async fn load_timeline(
 					break;
 				}
 			}
-		}
 
-		pdus.push_front(item);
-
-		if gap_found {
-			limited = true;
-			break;
+			if gap_found {
+				// We found a gap BEFORE this PDU. Keep this PDU, but drop anything before.
+				info!(
+					"Topological gap in timeline for {} before PDU {}. Truncating.",
+					room_id,
+					pdu.event_id()
+				);
+				pdus.drain(0..i);
+				limited = true;
+				break;
+			}
 		}
 	}
 

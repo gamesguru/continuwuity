@@ -187,6 +187,7 @@ pub(crate) async fn sync_events_route(
 	ClientIp(client_ip): ClientIp,
 	body: Ruma<sync_events::v3::Request>,
 ) -> Result<axum::response::Response, RumaResponse<UiaaResponse>> {
+	let timer = std::time::Instant::now();
 	let (sender_user, sender_device) = body.sender();
 
 	// Presence update
@@ -206,8 +207,20 @@ pub(crate) async fn sync_events_route(
 	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.watch(sender_user, sender_device);
 
+	let log_time = |response: &serde_json::Value| {
+		if !is_sync_response_empty(response) && timer.elapsed().as_millis() > 1000 {
+			// log syncs if they took > 1s
+			conduwuit::info!(
+				"Large sync for {} completed in {:.2} s",
+				sender_user,
+				timer.elapsed().as_secs_f64()
+			);
+		}
+	};
+
 	let response = build_sync_events(&services, &body).await?;
 	if body.body.since.is_none() || body.body.full_state || !is_sync_response_empty(&response) {
+		log_time(&response);
 		return Ok(axum::Json(response).into_response());
 	}
 
@@ -219,6 +232,7 @@ pub(crate) async fn sync_events_route(
 
 	// Retry returning data
 	let response = build_sync_events(&services, &body).await?;
+	log_time(&response);
 	Ok(axum::Json(response).into_response())
 }
 
