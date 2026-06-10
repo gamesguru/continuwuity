@@ -1496,371 +1496,388 @@ async fn test_nheko_dag_resolution() {
 		.await;
 	println!("Nheko Room DAG resolved. Final forward extremities count: {}", exts_count);
 	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+}
 
-	#[tokio::test]
-	async fn test_yolo_heal_receipts() {
-		let _ = rustls::crypto::ring::default_provider().install_default();
+#[tokio::test]
+async fn test_yolo_heal_receipts() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+	use std::{path::PathBuf, sync::Arc};
 
-		use std::{path::PathBuf, sync::Arc};
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+	};
+	use conduwuit_database::Json;
+	use figment::{Figment, providers::Format};
+	use futures::StreamExt;
+	use ruma::{
+		RoomId, UserId,
+		events::receipt::{Receipt, ReceiptEvent, ReceiptEventContent, ReceiptType},
+	};
 
-		use conduwuit::{
-			Server,
-			config::Config,
-			database::Json,
-			log::{Log, LogLevelReloadHandles, capture},
-		};
-		use figment::{Figment, providers::Format};
-		use ruma::{
-			RoomId, UserId,
-			events::receipt::{Receipt, ReceiptEvent, ReceiptEventContent, ReceiptType},
-		};
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_heal_receipts_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
 
-		static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 =
-			std::sync::atomic::AtomicU64::new(0);
-		let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		let db_path =
-			std::env::temp_dir().join(format!("conduwuit_test_db_heal_receipts_{count}"));
-		let _ = std::fs::remove_dir_all(&db_path);
-
-		struct TempDbGuard {
-			path: PathBuf,
-		}
-		impl Drop for TempDbGuard {
-			fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-		}
-		let _guard = TempDbGuard { path: db_path.clone() };
-
-		let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-			r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-			db_path.to_string_lossy().replace('\\', "/")
-		)));
-
-		let config = Config::new(&figment).expect("failed to parse config");
-		let runtime_handle = tokio::runtime::Handle::current();
-		let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-			reload: LogLevelReloadHandles::default(),
-			capture: Arc::new(capture::State::default()),
-		}));
-
-		let services = service::Services::build(server)
-			.await
-			.expect("failed to build");
-		let services = services.start().await.expect("failed to start");
-		crate::init(&services.admin).await;
-
-		let room_id = RoomId::new(services.globals.server_name());
-		let user_id = UserId::parse("@user:test.conduwuit.local").unwrap();
-
-		// 1. Manually insert duplicate receipts into the database
-		let mut content1 = ReceiptEventContent(std::collections::BTreeMap::new());
-		let mut users1 = std::collections::BTreeMap::new();
-		users1.insert(
-			user_id.clone(),
-			Receipt::new(ruma::MilliSecondsSinceUnixEpoch(1000_u32.into())),
-		);
-		let mut types1 = std::collections::BTreeMap::new();
-		types1.insert(ReceiptType::Read, users1);
-		content1
-			.0
-			.insert(ruma::event_id!("$event1").to_owned(), types1);
-
-		let event1 = ReceiptEvent {
-			content: content1,
-			room_id: room_id.clone(),
-		};
-
-		let mut content2 = ReceiptEventContent(std::collections::BTreeMap::new());
-		let mut users2 = std::collections::BTreeMap::new();
-		users2.insert(
-			user_id.clone(),
-			Receipt::new(ruma::MilliSecondsSinceUnixEpoch(2000_u32.into())),
-		);
-		let mut types2 = std::collections::BTreeMap::new();
-		types2.insert(ReceiptType::Read, users2);
-		content2
-			.0
-			.insert(ruma::event_id!("$event2").to_owned(), types2);
-
-		let event2 = ReceiptEvent {
-			content: content2,
-			room_id: room_id.clone(),
-		};
-
-		// Insert in order
-		let mut prefix = room_id.as_bytes().to_vec();
-		prefix.push(conduwuit_database::SEP);
-
-		let mut key1 = prefix.clone();
-		key1.extend_from_slice(&1_u64.to_be_bytes());
-		services.db["readreceiptid_readreceipt"].raw_put(&key1, Json(event1));
-
-		let mut key2 = prefix.clone();
-		key2.extend_from_slice(&2_u64.to_be_bytes());
-		services.db["readreceiptid_readreceipt"].raw_put(&key2, Json(event2));
-
-		assert_eq!(services.db["readreceiptid_readreceipt"].iter_raw().count(), 2);
-
-		let res = services
-			.admin
-			.command_in_place(
-				format!("yolo heal-receipts {} --confirm", room_id),
-				None,
-				service::admin::InvocationSource::Console,
-			)
-			.await;
-		assert!(res.is_ok(), "heal-receipts failed: {:?}", res);
-
-		let count = services.db["readreceiptid_readreceipt"].iter_raw().count();
-		assert_eq!(count, 1, "Expected exactly 1 receipt remaining, got {}", count);
+	struct TempDbGuard {
+		path: PathBuf,
 	}
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+	let _guard = TempDbGuard { path: db_path.clone() };
 
-	#[tokio::test]
-	async fn test_yolo_repair_unsigned() {
-		let _ = rustls::crypto::ring::default_provider().install_default();
-
-		use std::{path::PathBuf, sync::Arc};
-
-		use conduwuit::{
-			Server,
-			config::Config,
-			log::{Log, LogLevelReloadHandles, capture},
-			pdu::PduBuilder,
-		};
-		use figment::{Figment, providers::Format};
-		use ruma::{
-			RoomId,
-			events::room::{create::RoomCreateEventContent, message::RoomMessageEventContent},
-		};
-
-		static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 =
-			std::sync::atomic::AtomicU64::new(0);
-		let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		let db_path =
-			std::env::temp_dir().join(format!("conduwuit_test_db_repair_unsigned_{count}"));
-		let _ = std::fs::remove_dir_all(&db_path);
-
-		struct TempDbGuard {
-			path: PathBuf,
-		}
-		impl Drop for TempDbGuard {
-			fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-		}
-		let _guard = TempDbGuard { path: db_path.clone() };
-
-		let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-			r#"
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
 			server_name = "test.conduwuit.local"
 			database_path = "{}"
 			"#,
-			db_path.to_string_lossy().replace('\\', "/")
-		)));
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
 
-		let config = Config::new(&figment).expect("failed to parse config");
-		let runtime_handle = tokio::runtime::Handle::current();
-		let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-			reload: LogLevelReloadHandles::default(),
-			capture: Arc::new(capture::State::default()),
-		}));
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
 
-		let services = service::Services::build(server)
-			.await
-			.expect("failed to build");
-		let services = services.start().await.expect("failed to start");
-		crate::init(&services.admin).await;
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build");
+	let services = services.start().await.expect("failed to start");
+	crate::init(&services.admin).await;
 
-		let room_id = RoomId::new(services.globals.server_name());
-		let server_user = services.globals.server_user.as_ref();
-		services
-			.users
-			.create(server_user, None, None)
-			.await
-			.unwrap();
+	let room_id = RoomId::new(services.globals.server_name());
+	let user_id = UserId::parse("@user:test.conduwuit.local").unwrap();
 
-		let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+	// 1. Manually insert duplicate receipts into the database
+	let mut content1 = ReceiptEventContent(std::collections::BTreeMap::new());
+	let mut users1 = std::collections::BTreeMap::new();
+	users1.insert(
+		user_id.clone().into(),
+		Receipt::new(ruma::MilliSecondsSinceUnixEpoch(1000_u32.into())),
+	);
+	let mut types1 = std::collections::BTreeMap::new();
+	types1.insert(ReceiptType::Read, users1);
+	content1
+		.0
+		.insert(ruma::event_id!("$event1").to_owned(), types1);
 
-		services
-			.rooms
-			.timeline
-			.build_and_append_pdu(
-				PduBuilder::state(String::new(), &RoomCreateEventContent::new_v11()),
-				server_user,
-				Some(&room_id),
-				&state_lock,
-			)
-			.await
-			.unwrap();
+	let event1 = ReceiptEvent {
+		content: content1,
+		room_id: room_id.clone(),
+	};
 
-		let event = services
-			.rooms
-			.timeline
-			.build_and_append_pdu(
-				PduBuilder::timeline(&RoomMessageEventContent::text_plain("Hello")),
-				server_user,
-				Some(&room_id),
-				&state_lock,
-			)
-			.await
-			.unwrap();
-		drop(state_lock);
+	let mut content2 = ReceiptEventContent(std::collections::BTreeMap::new());
+	let mut users2 = std::collections::BTreeMap::new();
+	users2.insert(
+		user_id.clone().into(),
+		Receipt::new(ruma::MilliSecondsSinceUnixEpoch(2000_u32.into())),
+	);
+	let mut types2 = std::collections::BTreeMap::new();
+	types2.insert(ReceiptType::Read, users2);
+	content2
+		.0
+		.insert(ruma::event_id!("$event2").to_owned(), types2);
 
-		let pdu_id = services.rooms.timeline.get_pdu_id(&event).await.unwrap();
-		let mut json = services.rooms.timeline.get_pdu_json(&event).await.unwrap();
-		let mut massive_unsigned = serde_json::Map::new();
-		massive_unsigned
-			.insert("transaction_id".to_owned(), serde_json::Value::String("A".repeat(50000)));
-		json.insert("unsigned".to_owned(), serde_json::Value::Object(massive_unsigned));
+	let event2 = ReceiptEvent {
+		content: content2,
+		room_id: room_id.clone(),
+	};
 
-		services
-			.rooms
-			.timeline
-			.replace_pdu(&pdu_id, &json)
-			.await
-			.unwrap();
+	// Insert in order
+	let mut prefix = room_id.as_bytes().to_vec();
+	prefix.push(conduwuit_database::SEP);
 
-		let res = services
-			.admin
-			.command_in_place(
-				format!("yolo repair-unsigned {} --confirm", room_id),
-				None,
-				service::admin::InvocationSource::Console,
-			)
-			.await;
-		assert!(res.is_ok(), "repair-unsigned failed: {:?}", res);
+	let mut key1 = prefix.clone();
+	key1.extend_from_slice(&1_u64.to_be_bytes());
+	key1.push(conduwuit_database::SEP);
+	key1.extend_from_slice(user_id.as_bytes());
+	services.db["readreceiptid_readreceipt"].raw_put(&key1, Json(event1));
 
-		let json_repaired = services.rooms.timeline.get_pdu_json(&event).await.unwrap();
-		let unsigned_repaired = json_repaired.get("unsigned");
-		if let Some(unsigned) = unsigned_repaired {
-			if let Some(obj) = unsigned.as_object() {
-				if let Some(txn) = obj.get("transaction_id") {
-					if let Some(s) = txn.as_str() {
-						assert!(
-							s.len() <= 1000,
-							"Unsigned transaction_id should have been truncated"
-						);
-					}
+	let mut key2 = prefix.clone();
+	key2.extend_from_slice(&2_u64.to_be_bytes());
+	key2.push(conduwuit_database::SEP);
+	key2.extend_from_slice(user_id.as_bytes());
+	services.db["readreceiptid_readreceipt"].raw_put(&key2, Json(event2));
+
+	assert_eq!(
+		services.db["readreceiptid_readreceipt"]
+			.raw_stream()
+			.count()
+			.await,
+		2
+	);
+
+	let res = services
+		.admin
+		.command_in_place(
+			"yolo heal-receipts".to_owned(),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "heal-receipts failed: {:?}", res);
+
+	let count = services.db["readreceiptid_readreceipt"]
+		.raw_stream()
+		.count()
+		.await;
+	assert_eq!(count, 1, "Expected exactly 1 receipt remaining, got {}", count);
+}
+
+#[tokio::test]
+async fn test_yolo_repair_unsigned() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+
+	use std::{path::PathBuf, sync::Arc};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		pdu::PduBuilder,
+	};
+	use figment::{Figment, providers::Format};
+	use ruma::{
+		RoomId,
+		events::room::{create::RoomCreateEventContent, message::RoomMessageEventContent},
+	};
+
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_repair_unsigned_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+	let _guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build");
+	let services = services.start().await.expect("failed to start");
+	crate::init(&services.admin).await;
+
+	let room_id = RoomId::new(services.globals.server_name());
+	let server_user = services.globals.server_user.as_ref();
+	services
+		.users
+		.create(server_user, None, None)
+		.await
+		.unwrap();
+
+	let admin_room = services.admin.admin_room().await.unwrap();
+
+	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomCreateEventContent::new_v11()),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	let event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(server_user),
+				&ruma::events::room::member::RoomMemberEventContent::new(
+					ruma::events::room::member::MembershipState::Join,
+				),
+			),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+	drop(state_lock);
+
+	let pdu_id = services.rooms.timeline.get_pdu_id(&event).await.unwrap();
+	let mut json = services.rooms.timeline.get_pdu_json(&event).await.unwrap();
+	let mut massive_unsigned = std::collections::BTreeMap::new();
+	massive_unsigned
+		.insert("transaction_id".to_owned(), ruma::CanonicalJsonValue::String("A".repeat(50000)));
+	json.insert("unsigned".to_owned(), ruma::CanonicalJsonValue::Object(massive_unsigned));
+
+	services
+		.rooms
+		.timeline
+		.replace_pdu(&pdu_id, &json)
+		.await
+		.unwrap();
+
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo repair-unsigned {}", room_id),
+			Some(admin_room),
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "repair-unsigned failed: {:?}", res);
+
+	let json_repaired = services.rooms.timeline.get_pdu_json(&event).await.unwrap();
+	let unsigned_repaired = json_repaired.get("unsigned");
+	if let Some(unsigned) = unsigned_repaired {
+		if let Some(obj) = unsigned.as_object() {
+			if let Some(txn) = obj.get("transaction_id") {
+				if let Some(s) = txn.as_str() {
+					assert!(
+						s.len() <= 1000,
+						"Unsigned transaction_id should have been truncated"
+					);
 				}
 			}
 		}
 	}
+}
 
-	#[tokio::test]
-	async fn test_yolo_rescue_room() {
-		let _ = rustls::crypto::ring::default_provider().install_default();
+#[tokio::test]
+async fn test_yolo_rescue_room() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
 
-		use std::{path::PathBuf, sync::Arc};
+	use std::{path::PathBuf, sync::Arc};
 
-		use conduwuit::{
-			Server,
-			config::Config,
-			log::{Log, LogLevelReloadHandles, capture},
-			pdu::PduBuilder,
-		};
-		use figment::{Figment, providers::Format};
-		use ruma::{
-			RoomId,
-			events::room::{
-				create::RoomCreateEventContent,
-				member::{MembershipState, RoomMemberEventContent},
-			},
-		};
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+		pdu::PduBuilder,
+	};
+	use figment::{Figment, providers::Format};
+	use ruma::{
+		RoomId,
+		events::room::{
+			create::RoomCreateEventContent,
+			member::{MembershipState, RoomMemberEventContent},
+		},
+	};
 
-		static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 =
-			std::sync::atomic::AtomicU64::new(0);
-		let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_rescue_room_{count}"));
-		let _ = std::fs::remove_dir_all(&db_path);
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_rescue_room_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
 
-		struct TempDbGuard {
-			path: PathBuf,
-		}
-		impl Drop for TempDbGuard {
-			fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-		}
-		let _guard = TempDbGuard { path: db_path.clone() };
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+	let _guard = TempDbGuard { path: db_path.clone() };
 
-		let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-			r#"
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
 			server_name = "test.conduwuit.local"
 			database_path = "{}"
 			"#,
-			db_path.to_string_lossy().replace('\\', "/")
-		)));
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
 
-		let config = Config::new(&figment).expect("failed to parse config");
-		let runtime_handle = tokio::runtime::Handle::current();
-		let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-			reload: LogLevelReloadHandles::default(),
-			capture: Arc::new(capture::State::default()),
-		}));
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
 
-		let services = service::Services::build(server)
-			.await
-			.expect("failed to build");
-		let services = services.start().await.expect("failed to start");
-		crate::init(&services.admin).await;
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build");
+	let services = services.start().await.expect("failed to start");
+	crate::init(&services.admin).await;
 
-		let room_id = RoomId::new(services.globals.server_name());
-		let server_user = services.globals.server_user.as_ref();
-		services
-			.users
-			.create(server_user, None, None)
-			.await
-			.unwrap();
+	let room_id = RoomId::new(services.globals.server_name());
+	let server_user = services.globals.server_user.as_ref();
+	services
+		.users
+		.create(server_user, None, None)
+		.await
+		.unwrap();
 
-		let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+	let admin_room = services.admin.admin_room().await.unwrap();
 
-		services
-			.rooms
-			.timeline
-			.build_and_append_pdu(
-				PduBuilder::state(String::new(), &RoomCreateEventContent::new_v11()),
-				server_user,
-				Some(&room_id),
-				&state_lock,
-			)
-			.await
-			.unwrap();
+	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
 
-		services
-			.rooms
-			.timeline
-			.build_and_append_pdu(
-				PduBuilder::state(
-					String::from(server_user),
-					&RoomMemberEventContent::new(MembershipState::Join),
-				),
-				server_user,
-				Some(&room_id),
-				&state_lock,
-			)
-			.await
-			.unwrap();
-		drop(state_lock);
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomCreateEventContent::new_v11()),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
 
-		services.db["roomid_shortstatehash"].remove(&room_id);
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(server_user),
+				&RoomMemberEventContent::new(MembershipState::Join),
+			),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+	drop(state_lock);
 
-		let res = services
-			.admin
-			.command_in_place(
-				format!("yolo rescue-room {} --confirm", room_id),
-				None,
-				service::admin::InvocationSource::Console,
-			)
-			.await;
-		assert!(res.is_ok(), "rescue-room failed: {:?}", res);
+	services.db["roomid_shortstatehash"].remove(&room_id);
 
-		let res = services
-			.admin
-			.command_in_place(
-				format!("debug check-rooms {}", room_id),
-				None,
-				service::admin::InvocationSource::Console,
-			)
-			.await;
-		let output = res.unwrap().unwrap().body().to_owned();
-		assert!(!output.contains("✗"), "Expected clean state after rescue");
-	}
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo rescue-room {}", room_id),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "rescue-room failed: {:?}", res);
+
+	let res = services
+		.admin
+		.command_in_place(
+			"yolo check-rooms".to_owned(),
+			Some(admin_room.clone()),
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	let output = res.unwrap().unwrap().body().to_owned();
+	assert!(!output.contains("✗"), "Expected clean state after rescue");
 }

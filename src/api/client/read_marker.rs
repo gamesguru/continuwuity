@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use axum::extract::State;
 use axum_client_ip::ClientIp;
-use conduwuit::{Err, PduCount, Result, err};
+use conduwuit::{Err, PduCount, Result};
 use ruma::{
 	MilliSecondsSinceUnixEpoch,
 	api::client::{read_marker::set_read_marker, receipt::create_receipt},
@@ -63,14 +63,9 @@ pub(crate) async fn set_read_marker_route(
 			&& !services.users.is_suspended(sender_user).await?
 		{
 			// Spec: server SHOULD NOT allow read receipts to move backwards
-			let new_count = services
-				.rooms
-				.timeline
-				.get_pdu_count(event)
-				.await
-				.map_err(|_| err!(Request(NotFound("Event not found."))))?;
+			let new_count = services.rooms.timeline.get_pdu_count(event).await;
 
-			if let PduCount::Normal(new_count) = new_count {
+			if let Ok(PduCount::Normal(new_count)) = new_count {
 				if let Some(old_event_id) = services
 					.rooms
 					.read_receipt
@@ -117,32 +112,24 @@ pub(crate) async fn set_read_marker_route(
 	}
 
 	if let Some(event) = &body.private_read_receipt {
-		let count = services
-			.rooms
-			.timeline
-			.get_pdu_count(event)
-			.await
-			.map_err(|_| err!(Request(NotFound("Event not found."))))?;
+		let count = services.rooms.timeline.get_pdu_count(event).await;
 
-		let PduCount::Normal(new_count) = count else {
-			return Err!(Request(InvalidParam(
-				"Event is a backfilled PDU and cannot be marked as read."
-			)));
-		};
-
-		// Don't allow private receipt to move backwards
-		let old_count = services
-			.rooms
-			.read_receipt
-			.private_read_get_count(&body.room_id, sender_user)
-			.await
-			.unwrap_or(0);
-
-		if new_count > old_count {
-			services
+		if let Ok(PduCount::Normal(new_count)) = count {
+			// Don't allow private receipt to move backwards
+			let old_count = services
 				.rooms
 				.read_receipt
-				.private_read_set(&body.room_id, sender_user, new_count);
+				.private_read_get_count(&body.room_id, sender_user)
+				.await
+				.unwrap_or(0);
+
+			if new_count > old_count {
+				services.rooms.read_receipt.private_read_set(
+					&body.room_id,
+					sender_user,
+					new_count,
+				);
+			}
 		}
 	}
 
@@ -200,14 +187,9 @@ pub(crate) async fn create_receipt_route(
 		},
 		| create_receipt::v3::ReceiptType::Read => {
 			// Spec: server SHOULD NOT allow read receipts to move backwards
-			let new_count = services
-				.rooms
-				.timeline
-				.get_pdu_count(&body.event_id)
-				.await
-				.map_err(|_| err!(Request(NotFound("Event not found."))))?;
+			let new_count = services.rooms.timeline.get_pdu_count(&body.event_id).await;
 
-			if let PduCount::Normal(new_count) = new_count {
+			if let Ok(PduCount::Normal(new_count)) = new_count {
 				if let Some(old_event_id) = services
 					.rooms
 					.read_receipt
@@ -252,33 +234,24 @@ pub(crate) async fn create_receipt_route(
 				.await;
 		},
 		| create_receipt::v3::ReceiptType::ReadPrivate => {
-			let count = services
-				.rooms
-				.timeline
-				.get_pdu_count(&body.event_id)
-				.await
-				.map_err(|_| err!(Request(NotFound("Event not found."))))?;
+			let count = services.rooms.timeline.get_pdu_count(&body.event_id).await;
 
-			let PduCount::Normal(new_count) = count else {
-				return Err!(Request(InvalidParam(
-					"Event is a backfilled PDU and cannot be marked as read."
-				)));
-			};
+			if let Ok(PduCount::Normal(new_count)) = count {
+				// Don't allow private receipt to move backwards
+				let old_count = services
+					.rooms
+					.read_receipt
+					.private_read_get_count(&body.room_id, sender_user)
+					.await
+					.unwrap_or(0);
 
-			// Don't allow private receipt to move backwards
-			let old_count = services
-				.rooms
-				.read_receipt
-				.private_read_get_count(&body.room_id, sender_user)
-				.await
-				.unwrap_or(0);
-
-			if new_count > old_count {
-				services.rooms.read_receipt.private_read_set(
-					&body.room_id,
-					sender_user,
-					new_count,
-				);
+				if new_count > old_count {
+					services.rooms.read_receipt.private_read_set(
+						&body.room_id,
+						sender_user,
+						new_count,
+					);
+				}
 			}
 		},
 		| _ => {
