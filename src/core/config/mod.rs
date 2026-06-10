@@ -423,14 +423,17 @@ pub struct Config {
 	#[serde(default = "default_max_concurrent_inbound_transactions_per_origin")]
 	pub max_concurrent_inbound_transactions_per_origin: usize,
 
-	/// The maximum number of forward extremities (DAG tips) to maintain for a room.
-	/// Matrix recommends a cap of 10. Synapse uses 10. Conduwuit previously used 50.
-	/// Lowering this value strictly caps how wide the DAG can fracture before the
-	/// server forces it to collapse by aggressively shedding older branches.
+	/// The maximum number of forward extremities (DAG tips) to maintain for a
+	/// room. Matrix recommends a cap of 10. Synapse uses 10. Conduwuit
+	/// previously used 50. Lowering this value strictly caps how wide the DAG
+	/// can fracture before the server forces it to collapse by aggressively
+	/// shedding older branches.
+	///
+	/// Setting this to -1 disables the limit entirely (infinite extremities).
 	///
 	/// default: 10
 	#[serde(default = "default_max_forward_extremities")]
-	pub max_forward_extremities: usize,
+	pub max_forward_extremities: isize,
 
 	/// Maximum age (in seconds) for cached federation transaction responses.
 	/// Entries older than this will be removed during cleanup.
@@ -2974,7 +2977,7 @@ fn default_max_concurrent_inbound_transactions_per_origin() -> usize { 10 }
 
 fn default_max_concurrent_outbound_requests() -> usize { 128 }
 
-fn default_max_forward_extremities() -> usize { 10 }
+fn default_max_forward_extremities() -> isize { 10 }
 
 fn default_transaction_id_cache_max_age_secs() -> u64 { 60 * 60 * 2 }
 

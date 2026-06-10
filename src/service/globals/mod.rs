@@ -341,7 +341,11 @@ impl Service {
 	}
 
 	pub fn max_forward_extremities(&self) -> usize {
-		self.server.config.max_forward_extremities
+		self.server
+			.config
+			.max_forward_extremities
+			.try_into()
+			.unwrap_or(usize::MAX)
 	}
 
 	pub fn allow_device_name_federation(&self) -> bool {
