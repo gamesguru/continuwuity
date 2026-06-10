@@ -2,7 +2,7 @@ use std::{collections::HashSet, fmt::Write};
 
 use conduwuit::{Err, Result, matrix::Event};
 use futures::StreamExt;
-use ruma::{OwnedEventId, OwnedRoomId};
+use ruma::{OwnedEventId, OwnedRoomId, RoomId};
 
 use crate::admin_command;
 
@@ -244,7 +244,15 @@ pub(super) async fn list_rejected(
 			} else {
 				""
 			};
-			writeln!(body, "{event_id}\tType: {}{flags}", pdu.kind())?;
+			let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
+			let sender = pdu.sender();
+			let kind = pdu.kind.to_string();
+			let ts = pdu.origin_server_ts;
+			writeln!(
+				body,
+				"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: \
+				 {kind}{flags}"
+			)?;
 			count = count.saturating_add(1);
 		}
 	}
