@@ -139,60 +139,92 @@ where
 					async move {
 						let stashed_unsigned = val.remove("unsigned");
 
-						let passes_sig = skip_sig_verify
+						let verification_result = if skip_sig_verify
 							|| self
 								.services
 								.server
 								.config
 								.bypassed_signature_events
-								.contains(&eid) || matches!(
+								.contains(&eid)
+						{
+							Ok(ruma::signatures::Verified::All)
+						} else {
 							self.services
 								.server_keys
 								.verify_event(&val, Some(&room_version_id))
-								.await,
-							Ok(ruma::signatures::Verified::All)
-						);
+								.await
+						};
 
-						if passes_sig {
-							// Re-attach unsigned for completeness
-							if let Some(ruma::CanonicalJsonValue::Object(mut unsigned_obj)) =
-								stashed_unsigned
-							{
-								unsigned_obj.remove("prev_content");
-								unsigned_obj.remove("prev_sender");
-								unsigned_obj.remove("replaces_state");
-								if !unsigned_obj.is_empty() {
-									val.insert(
-										"unsigned".to_owned(),
-										ruma::CanonicalJsonValue::Object(unsigned_obj),
-									);
+						match verification_result {
+							| Ok(
+								ruma::signatures::Verified::All
+								| ruma::signatures::Verified::Signatures,
+							) => {
+								if matches!(
+									verification_result,
+									Ok(ruma::signatures::Verified::Signatures)
+								) {
+									if let Err(e) = ruma::canonical_json::redact_in_place(
+										&mut val,
+										&room_version_id,
+										None,
+									) {
+										conduwuit::warn!("Redaction failed for {eid}: {e}");
+										self.services.pdu_metadata.mark_event_rejected(&eid);
+										val.insert(
+											"event_id".to_owned(),
+											ruma::CanonicalJsonValue::String(
+												eid.as_str().to_owned(),
+											),
+										);
+										self.services.outlier.add_pdu_outlier(
+											&eid,
+											&val,
+											Some(room_id),
+										);
+										return None;
+									}
 								}
-							}
 
-							val.insert(
-								"event_id".to_owned(),
-								ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),
-							);
-
-							if let Ok(pdu) = serde_json::from_value::<PduEvent>(
-								serde_json::to_value(&val).expect("valid JSON"),
-							) {
-								if crate::rooms::event_handler::check_room_id(room_id, &pdu)
-									.is_ok()
+								// Re-attach unsigned for completeness
+								if let Some(ruma::CanonicalJsonValue::Object(unsigned_obj)) =
+									stashed_unsigned
 								{
-									return Some((eid, (pdu, val)));
+									if !unsigned_obj.is_empty() {
+										val.insert(
+											"unsigned".to_owned(),
+											ruma::CanonicalJsonValue::Object(unsigned_obj),
+										);
+									}
 								}
-							}
-						} else {
-							// Event sig failed; persist as rejected outlier so we don't re-fetch
-							self.services.pdu_metadata.mark_event_rejected(&eid);
-							val.insert(
-								"event_id".to_owned(),
-								ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),
-							);
-							self.services
-								.outlier
-								.add_pdu_outlier(&eid, &val, Some(room_id));
+
+								val.insert(
+									"event_id".to_owned(),
+									ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),
+								);
+
+								if let Ok(pdu) = serde_json::from_value::<PduEvent>(
+									serde_json::to_value(&val).expect("valid JSON"),
+								) {
+									if crate::rooms::event_handler::check_room_id(room_id, &pdu)
+										.is_ok()
+									{
+										return Some((eid, (pdu, val)));
+									}
+								}
+							},
+							| _ => {
+								// Event sig failed; persist as rejected outlier so we don't
+								// re-fetch
+								self.services.pdu_metadata.mark_event_rejected(&eid);
+								val.insert(
+									"event_id".to_owned(),
+									ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),
+								);
+								self.services
+									.outlier
+									.add_pdu_outlier(&eid, &val, Some(room_id));
+							},
 						}
 						None
 					}

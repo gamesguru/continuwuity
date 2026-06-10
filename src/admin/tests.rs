@@ -1556,10 +1556,8 @@ async fn test_yolo_heal_receipts() {
 	// 1. Manually insert duplicate receipts into the database
 	let mut content1 = ReceiptEventContent(std::collections::BTreeMap::new());
 	let mut users1 = std::collections::BTreeMap::new();
-	users1.insert(
-		user_id.clone().into(),
-		Receipt::new(ruma::MilliSecondsSinceUnixEpoch(1000_u32.into())),
-	);
+	users1
+		.insert(user_id.into(), Receipt::new(ruma::MilliSecondsSinceUnixEpoch(1000_u32.into())));
 	let mut types1 = std::collections::BTreeMap::new();
 	types1.insert(ReceiptType::Read, users1);
 	content1
@@ -1573,10 +1571,8 @@ async fn test_yolo_heal_receipts() {
 
 	let mut content2 = ReceiptEventContent(std::collections::BTreeMap::new());
 	let mut users2 = std::collections::BTreeMap::new();
-	users2.insert(
-		user_id.clone().into(),
-		Receipt::new(ruma::MilliSecondsSinceUnixEpoch(2000_u32.into())),
-	);
+	users2
+		.insert(user_id.into(), Receipt::new(ruma::MilliSecondsSinceUnixEpoch(2000_u32.into())));
 	let mut types2 = std::collections::BTreeMap::new();
 	types2.insert(ReceiptType::Read, users2);
 	content2
@@ -1642,10 +1638,7 @@ async fn test_yolo_repair_unsigned() {
 		pdu::PduBuilder,
 	};
 	use figment::{Figment, providers::Format};
-	use ruma::{
-		RoomId,
-		events::room::{create::RoomCreateEventContent, message::RoomMessageEventContent},
-	};
+	use ruma::{RoomId, events::room::create::RoomCreateEventContent};
 
 	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1689,7 +1682,7 @@ async fn test_yolo_repair_unsigned() {
 		.await
 		.unwrap();
 
-	let admin_room = services.admin.admin_room().await.unwrap();
+	let _admin_room = services.admin.get_admin_room().await.unwrap();
 
 	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
 
@@ -1741,7 +1734,7 @@ async fn test_yolo_repair_unsigned() {
 		.admin
 		.command_in_place(
 			format!("yolo repair-unsigned {}", room_id),
-			Some(admin_room),
+			None,
 			service::admin::InvocationSource::Console,
 		)
 		.await;
@@ -1826,7 +1819,7 @@ async fn test_yolo_rescue_room() {
 		.await
 		.unwrap();
 
-	let admin_room = services.admin.admin_room().await.unwrap();
+	let _admin_room = services.admin.get_admin_room().await.unwrap();
 
 	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
 
@@ -1874,7 +1867,7 @@ async fn test_yolo_rescue_room() {
 		.admin
 		.command_in_place(
 			"yolo check-rooms".to_owned(),
-			Some(admin_room.clone()),
+			None,
 			service::admin::InvocationSource::Console,
 		)
 		.await;
