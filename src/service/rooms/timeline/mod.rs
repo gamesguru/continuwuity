@@ -1674,7 +1674,7 @@ mod tests {
 			log::{Log, LogLevelReloadHandles, capture},
 		};
 		use figment::providers::Format;
-		use ruma::{EventId, RoomId, ServerName};
+		use ruma::{RoomId, ServerName};
 		use serde_json::Value;
 
 		use crate::rooms::timeline::PduEvent;
