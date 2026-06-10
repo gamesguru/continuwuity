@@ -331,6 +331,20 @@ where
 				.await,
 		};
 
+		let mut active_rooms_with_ts = Vec::with_capacity(active_rooms.len());
+		for room in active_rooms {
+			let ts = match services.rooms.timeline.latest_pdu_in_room(room).await {
+				| Ok(pdu) => pdu.origin_server_ts().get().into(),
+				| Err(_) => 0_u64,
+			};
+			active_rooms_with_ts.push((room, ts));
+		}
+
+		// Sort descending by timestamp (most recent first)
+		active_rooms_with_ts.sort_by(|a, b| b.1.cmp(&a.1));
+		let active_rooms: Vec<&RoomId> =
+			active_rooms_with_ts.into_iter().map(|(r, _)| r).collect();
+
 		let mut new_known_rooms: BTreeSet<OwnedRoomId> = BTreeSet::new();
 
 		let ranges = list.ranges.clone();
