@@ -14,7 +14,7 @@ use ruma::{
 };
 
 use self::data::{Data, ReceiptItem};
-use crate::{Dep, rooms, sending};
+use crate::{Dep, sending};
 
 pub struct Service {
 	services: Services,
@@ -23,8 +23,6 @@ pub struct Service {
 
 struct Services {
 	sending: Dep<sending::Service>,
-	short: Dep<rooms::short::Service>,
-	timeline: Dep<rooms::timeline::Service>,
 }
 
 impl crate::Service for Service {
@@ -32,8 +30,6 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			services: Services {
 				sending: args.depend::<sending::Service>("sending"),
-				short: args.depend::<rooms::short::Service>("rooms::short"),
-				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 			},
 			db: Data::new(&args),
 		}))

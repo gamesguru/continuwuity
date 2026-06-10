@@ -105,7 +105,7 @@ impl Data {
 			.get(&key)
 			.await
 			.map(|bytes| {
-				conduwuit::utils::u64_from_bytes(&*bytes).expect("bytes have right length")
+				conduwuit::utils::u64_from_bytes(&bytes).expect("bytes have right length")
 			})
 			.ok();
 
@@ -132,12 +132,12 @@ impl Data {
 		let pdu_id: conduwuit::matrix::pdu::RawPduId =
 			conduwuit::matrix::pdu::PduId { shortroomid, shorteventid }.into();
 		let pdu = self.services.timeline.get_pdu_from_id(&pdu_id).await?;
-		let event_id = pdu.event_id.to_owned();
+		let event_id = pdu.event_id;
 
 		let mut receipt_map = std::collections::BTreeMap::new();
-		receipt_map.insert(ruma::events::receipt::ReceiptType::ReadPrivate, user_map);
+		receipt_map.insert(ReceiptType::ReadPrivate, user_map);
 		let mut content = std::collections::BTreeMap::new();
-		content.insert(event_id.into(), receipt_map);
+		content.insert(event_id, receipt_map);
 
 		let receipt_sync_event = ruma::events::SyncEphemeralRoomEvent {
 			content: ruma::events::receipt::ReceiptEventContent(content),
@@ -318,10 +318,10 @@ impl Data {
 		let receipt_json = serde_json::to_vec(receipt).expect("ReceiptEvent serializes");
 
 		self.roomuserid_privateread
-			.insert(&key, &count.to_be_bytes());
+			.insert(&key, count.to_be_bytes());
 		self.roomuserid_privatereadevent.insert(&key, &receipt_json);
 		self.roomuserid_lastprivatereadupdate
-			.insert(&key, &next_count.to_be_bytes());
+			.insert(&key, next_count.to_be_bytes());
 
 		Ok(())
 	}
