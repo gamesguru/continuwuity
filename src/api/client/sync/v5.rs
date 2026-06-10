@@ -553,6 +553,12 @@ where
 				.insert(room_id.clone(), pack_receipts(Box::new(receipts.into_iter())));
 		}
 
+		let last_notification_read = services
+			.rooms
+			.user
+			.last_notification_read(sender_user, room_id)
+			.await;
+
 		if roomsince != &0
 			&& timeline_pdus.is_empty()
 			&& response
@@ -562,6 +568,7 @@ where
 				.get(room_id)
 				.is_none_or(Vec::is_empty)
 			&& receipt_size == 0
+			&& last_notification_read <= *roomsince
 		{
 			continue;
 		}
