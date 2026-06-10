@@ -569,6 +569,29 @@ pub enum YoloCommand {
 		soft_fail: bool,
 	},
 
+	/// List rejected or soft-failed events in a room's timeline.
+	///
+	/// Scans the timeline and reports events flagged as rejected or
+	/// soft-failed.
+	#[command(name = "list-rejected")]
+	ListRejected {
+		/// The room to scan
+		room_id: OwnedRoomId,
+
+		/// Limit the number of events shown (default: 100).
+		#[arg(short, long)]
+		limit: Option<usize>,
+
+		/// Only show soft-failed events (implies ignoring rejected-only
+		/// events).
+		#[arg(long)]
+		soft_fail: bool,
+
+		/// Show newest events first (default: oldest first).
+		#[arg(short = 'R', long)]
+		reverse: bool,
+	},
+
 	/// Scan the database for corrupt/invalid room IDs and purge them.
 	///
 	/// This removes entries from serverroomids that contain non-ASCII bytes,

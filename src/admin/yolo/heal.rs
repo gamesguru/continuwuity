@@ -8,6 +8,7 @@ use conduwuit::{
 	matrix::{Event, pdu::PduEvent},
 	state_res, warn,
 };
+use conduwuit_core::utils::stream::TryIgnore;
 use futures::{FutureExt, StreamExt, future::ready};
 use ruma::{
 	OwnedEventId, OwnedRoomId, OwnedServerName, RoomId,
@@ -739,45 +740,55 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 
 #[admin_command]
 pub(super) async fn heal_receipts(&self) -> Result {
-	use ruma::events::receipt::ReceiptEvent;
 	use std::collections::HashSet;
 
-	self.write_str("Starting read receipt heal. This may take a moment...").await?;
+	use ruma::events::receipt::ReceiptEvent;
 
-	let mut stream = self.services.db["readreceiptid_readreceipt"].rev_stream().ignore_err();
-	
+	self.write_str("Starting read receipt heal. This may take a moment...")
+		.await?;
+
+	let mut stream = self.services.db["readreceiptid_readreceipt"]
+		.rev_raw_stream()
+		.ignore_err();
+
 	// seen: (room_id, user_id, receipt_type, thread)
 	let mut seen = HashSet::new();
 	let mut deleted = 0_usize;
 	let mut kept = 0_usize;
-	
+
 	while let Some((key, value)) = stream.next().await {
-		let parts: Vec<&[u8]> = key.split(|&b| b == database::SEP).collect();
-		if parts.len() < 3 { continue; }
-		
+		let parts: Vec<&[u8]> = key.split(|&b| b == conduwuit_database::SEP).collect();
+		if parts.len() < 3 {
+			continue;
+		}
+
 		let room_id_bytes = parts[0];
 		let room_id_str = String::from_utf8_lossy(room_id_bytes).to_string();
-		
-		let Ok(receipt) = serde_json::from_slice::<ReceiptEvent>(&value) else {
+
+		let Ok(receipt) = serde_json::from_slice::<ReceiptEvent>(value) else {
 			continue;
 		};
-		
+
 		let mut all_obsolete = true;
-		
-		for (_event_id, receipts) in &receipt.content.0 {
+
+		for receipts in receipt.content.0.values() {
 			for (receipt_type, users) in receipts {
 				for (user_id, receipt_data) in users {
-					let thread = receipt_data.thread.as_deref().unwrap_or("").to_owned();
-					let sig = (room_id_str.clone(), user_id.to_string(), receipt_type.to_string(), thread);
-					
-					if !seen.contains(&sig) {
-						seen.insert(sig);
+					let thread = receipt_data.thread.as_str().unwrap_or("").to_owned();
+					let sig = (
+						room_id_str.clone(),
+						user_id.to_string(),
+						receipt_type.to_string(),
+						thread,
+					);
+
+					if seen.insert(sig) {
 						all_obsolete = false;
 					}
 				}
 			}
 		}
-		
+
 		if all_obsolete {
 			self.services.db["readreceiptid_readreceipt"].remove(&key);
 			deleted = deleted.saturating_add(1);
@@ -785,7 +796,10 @@ pub(super) async fn heal_receipts(&self) -> Result {
 			kept = kept.saturating_add(1);
 		}
 	}
-	
-	self.write_str(&format!("Heal complete! Kept: {kept}, Deleted: {deleted} duplicate/obsolete receipts.")).await?;
+
+	self.write_str(&format!(
+		"Heal complete! Kept: {kept}, Deleted: {deleted} duplicate/obsolete receipts."
+	))
+	.await?;
 	Ok(())
 }

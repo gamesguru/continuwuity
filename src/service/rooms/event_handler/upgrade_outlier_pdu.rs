@@ -76,8 +76,8 @@ where
 			let accepted = self.services.pdu_metadata.is_event_accepted(aid).await;
 			if !exists || !accepted {
 				info!(
-					"Rejecting incoming event {} which depends on missing/rejected/soft-failed \
-					 auth event {aid}",
+					"Rejecting incoming event {} which depends on missing/rejected auth event \
+					 {aid}",
 					incoming_pdu.event_id()
 				);
 				self.services

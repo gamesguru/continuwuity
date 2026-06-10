@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::Write};
 
-use conduwuit::{Result, matrix::Event};
+use conduwuit::{Err, Result, matrix::Event};
 use futures::StreamExt;
 use ruma::{OwnedEventId, OwnedRoomId};
 
@@ -172,4 +172,87 @@ pub(super) async fn unreject_room(
 		self.write_str(&format!("Unmarked {unmarked} rejected events{soft_msg} in {room_id}.\n"))
 			.await
 	}
+}
+
+#[admin_command]
+pub(super) async fn list_rejected(
+	&self,
+	room_id: OwnedRoomId,
+	limit: Option<usize>,
+	soft_fail: bool,
+	reverse: bool,
+) -> Result {
+	self.bail_restricted()?;
+
+	let limit = limit.unwrap_or(100);
+	let mut count = 0;
+	let mut body = String::new();
+
+	let mut stream = if reverse {
+		self.services
+			.rooms
+			.timeline
+			.pdus_rev(&room_id, None)
+			.filter_map(|r| futures::future::ready(r.ok()))
+			.boxed()
+	} else {
+		self.services.rooms.timeline.all_pdus(&room_id).boxed()
+	};
+
+	while let Some((_, pdu)) = stream.next().await {
+		if count >= limit {
+			writeln!(body, "--- Stopped after {limit} entries ---")?;
+			break;
+		}
+
+		let event_id = pdu.event_id();
+		let mut show = false;
+		let mut is_soft = false;
+		let mut is_rej = false;
+
+		if !soft_fail {
+			if self
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_rejected(event_id)
+				.await
+			{
+				show = true;
+				is_rej = true;
+			}
+		}
+
+		if self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_soft_failed(event_id)
+			.await
+		{
+			show = true;
+			is_soft = true;
+		}
+
+		if show {
+			let flags = if is_soft && is_rej {
+				" [rejected, soft-failed]"
+			} else if is_soft {
+				" [soft-failed]"
+			} else if is_rej {
+				" [rejected]"
+			} else {
+				""
+			};
+			writeln!(body, "{event_id}\tType: {}{flags}", pdu.kind())?;
+			count = count.saturating_add(1);
+		}
+	}
+
+	if body.is_empty() {
+		return Err!("No rejected events found in timeline.");
+	}
+
+	self.write_str(&format!("Found {count} rejected timeline events:\n```\n{body}\n```"))
+		.await
 }
