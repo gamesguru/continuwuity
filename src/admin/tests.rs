@@ -1359,10 +1359,12 @@ async fn test_nheko_dag_resolution() {
 	use futures::StreamExt;
 	use ruma::RoomId;
 
-	let dag_path = Path::new(
+	let dag_path_str = std::env::var("CONDUWUIT_TEST_DAG_FILE").unwrap_or_else(|_| {
 		"/run/media/shane/shane4tb-ent/dags/local-dag-UbCmIlGTHNIgIRZcpt_nheko.im-v5-wombatx.\
-		 me-d1-383595.jsonl",
-	);
+		 me-d1-383595.jsonl"
+			.to_string()
+	});
+	let dag_path = Path::new(&dag_path_str);
 	if !dag_path.exists() {
 		println!("Skipping test_nheko_dag_resolution: test DAG file not found");
 		return;
