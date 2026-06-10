@@ -340,6 +340,10 @@ impl Service {
 			.allow_public_room_directory_over_federation
 	}
 
+	pub fn max_forward_extremities(&self) -> usize {
+		self.server.config.max_forward_extremities
+	}
+
 	pub fn allow_device_name_federation(&self) -> bool {
 		self.server.config.allow_device_name_federation
 	}
