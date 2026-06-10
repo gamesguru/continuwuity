@@ -303,12 +303,20 @@ where
 								}
 							},
 						};
-						let Ok((calculated_event_id, value)) =
-							gen_event_id_canonical_json(&res.pdu, &room_version_id)
-						else {
-							back_off(next_id);
-							continue;
-						};
+						let (calculated_event_id, value) =
+							match gen_event_id_canonical_json(&res.pdu, &room_version_id) {
+								| Ok(res) => res,
+								| Err(e) => {
+									info!(
+										"Failed to parse PDU JSON over federation from \
+										 {successful_server} for event {next_id}: {e}. Raw \
+										 JSON: {}",
+										res.pdu.get()
+									);
+									back_off(next_id);
+									continue;
+								},
+							};
 
 						if calculated_event_id != next_id {
 							warn!(
@@ -446,29 +454,37 @@ where
 						};
 
 						for pdu_raw in res.auth_chain {
-							if let Ok((auth_eid, auth_val)) =
-								gen_event_id_canonical_json(&pdu_raw, &room_version_id)
-							{
-								if !graph.contains_key(&auth_eid)
-									&& !fetched_info.contains_key(&auth_eid)
-									&& !self.services.timeline.pdu_exists(&auth_eid).await
-								{
-									let mut next_auth_events = HashSet::new();
-									if let Some(auth_events) = auth_val
-										.get("auth_events")
-										.and_then(CanonicalJsonValue::as_array)
+							match gen_event_id_canonical_json(&pdu_raw, &room_version_id) {
+								| Ok((auth_eid, auth_val)) => {
+									if !graph.contains_key(&auth_eid)
+										&& !fetched_info.contains_key(&auth_eid)
+										&& !self.services.timeline.pdu_exists(&auth_eid).await
 									{
-										for auth_event in auth_events {
-											if let Ok(aeid) = serde_json::from_value::<OwnedEventId>(
-												auth_event.clone().into(),
-											) {
-												next_auth_events.insert(aeid);
+										let mut next_auth_events = HashSet::new();
+										if let Some(auth_events) = auth_val
+											.get("auth_events")
+											.and_then(CanonicalJsonValue::as_array)
+										{
+											for auth_event in auth_events {
+												if let Ok(aeid) =
+													serde_json::from_value::<OwnedEventId>(
+														auth_event.clone().into(),
+													) {
+													next_auth_events.insert(aeid);
+												}
 											}
 										}
+										graph.insert(auth_eid.clone(), next_auth_events);
+										fetched_info.insert(auth_eid, auth_val);
 									}
-									graph.insert(auth_eid.clone(), next_auth_events);
-									fetched_info.insert(auth_eid, auth_val);
-								}
+								},
+								| Err(e) => {
+									warn!(
+										"Failed to parse auth_chain PDU JSON from \
+										 {successful_server}: {e}. Raw JSON: {}",
+										pdu_raw.get()
+									);
+								},
 							}
 						}
 					},

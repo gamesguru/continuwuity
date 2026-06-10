@@ -80,10 +80,44 @@ pub(super) async fn federation_request(
 			))
 			.await
 		}
+	} else if let Some(event_id_str) = url_path.strip_prefix("/_matrix/federation/v1/event/") {
+		let event_id: OwnedEventId = event_id_str
+			.parse()
+			.map_err(|e| err!("Invalid event ID: {e:?}"))?;
+
+		info!("Fetching federation event {event_id} from {server_name}");
+
+		let response = self
+			.services
+			.sending
+			.send_federation_request(&server_name, get_event::v1::Request {
+				event_id: event_id.clone(),
+				include_unredacted_content: None,
+			})
+			.await?;
+
+		let dump = serde_json::json!({
+			"server_name": server_name,
+			"event_id": event_id.to_string(),
+			"pdu": response.pdu,
+		});
+
+		let pretty = serde_json::to_string_pretty(&dump).unwrap_or_default();
+
+		if let Some(ref path) = output {
+			std::fs::write(path, &pretty)
+				.map_err(|e| err!("Failed to write output file: {e:?}"))?;
+			self.write_str(&format!("Saved event PDU to {path}")).await
+		} else {
+			let truncated = pretty.get(..4096).unwrap_or(&pretty);
+			self.write_str(&format!("Received event PDU\n\n{truncated}"))
+				.await
+		}
 	} else {
 		Err!(
 			"Unsupported federation endpoint: {url_path}\n\nSupported endpoints:\n  \
-			 /_matrix/federation/v1/state/!room:server?event_id=$event"
+			 /_matrix/federation/v1/state/!room:server?event_id=$event\n  \
+			 /_matrix/federation/v1/event/$event"
 		)
 	}
 }
