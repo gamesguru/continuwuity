@@ -1582,13 +1582,18 @@ mod tests {
 			"event_id".to_owned(),
 			CanonicalJsonValue::String(create_event_id.as_str().to_owned()),
 		);
+		create_json.insert(
+			"room_id".to_owned(),
+			CanonicalJsonValue::String(room_id.as_str().to_owned()),
+		);
 		create_json
 			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456789.into()));
 		create_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
-		create_json
-			.insert("hashes".to_owned(), CanonicalJsonValue::Object(CanonicalJsonObject::new()));
+		let mut hashes = CanonicalJsonObject::new();
+		hashes.insert("sha256".to_owned(), CanonicalJsonValue::String("".to_owned()));
+		create_json.insert("hashes".to_owned(), CanonicalJsonValue::Object(hashes));
 		create_json.insert(
 			"signatures".to_owned(),
 			CanonicalJsonValue::Object(CanonicalJsonObject::new()),
@@ -1610,11 +1615,22 @@ mod tests {
 			"event_id".to_owned(),
 			CanonicalJsonValue::String(test_event_id.as_str().to_owned()),
 		);
+		test_json.insert(
+			"room_id".to_owned(),
+			CanonicalJsonValue::String(room_id.as_str().to_owned()),
+		);
 		test_json
 			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456790.into()));
 		test_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		test_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		test_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(2.into()));
+		let mut hashes = CanonicalJsonObject::new();
+		hashes.insert("sha256".to_owned(), CanonicalJsonValue::String("".to_owned()));
+		test_json.insert("hashes".to_owned(), CanonicalJsonValue::Object(hashes));
+		test_json.insert(
+			"signatures".to_owned(),
+			CanonicalJsonValue::Object(CanonicalJsonObject::new()),
+		);
 
 		let test_pdu =
 			PduEvent::from_id_val(&test_event_id, test_json.clone(), Some(&room_id)).unwrap();
