@@ -1,7 +1,6 @@
 use std::{
 	collections::{HashMap, HashSet, VecDeque},
 	fmt::Write,
-	time::Instant,
 };
 
 use conduwuit::{
@@ -228,10 +227,23 @@ pub(super) async fn get_room_dag(
 	} else {
 		(0, 0)
 	};
+	let mut roots = Vec::new();
+	for (id, prevs) in &stats.all_events_prevs {
+		if prevs.iter().all(|p| !stats.all_event_ids.contains(p)) {
+			roots.push(id.clone());
+		}
+	}
+	let roots_count = roots.len();
+	let isolated_count = stats
+		.all_event_ids
+		.difference(&stats.referenced_as_prev)
+		.filter(|id| roots.contains(id))
+		.count();
+
 	writeln!(
 		out,
 		"Frag factor:    {frag_whole}.{frag_frac:03} ({count} events / {max_depth} depth, \
-		 {heads_count} heads)",
+		 {heads_count} heads, {roots_count} roots, {isolated_count} isolated)",
 		count = stats.count,
 		max_depth = stats.max_depth
 	)
@@ -1176,8 +1188,9 @@ pub(super) async fn fetch_missing_events(
 	room_id: OwnedRoomId,
 	event_ids: Vec<OwnedEventId>,
 	rounds: usize,
+	override_limit: bool,
 ) -> Result {
-	use futures::{StreamExt, stream::FuturesUnordered};
+	use std::time::Instant;
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
 
@@ -1193,7 +1206,7 @@ pub(super) async fn fetch_missing_events(
 		)
 		.await;
 
-	// Use current forward extremities as the "earliest" boundary
+	// Use current forward extremities if no explicit targets are given
 	let extremities: Vec<OwnedEventId> = self
 		.services
 		.rooms
@@ -1202,18 +1215,25 @@ pub(super) async fn fetch_missing_events(
 		.collect()
 		.await;
 
-	// If no explicit event IDs given, use extremities as the gap target too
-	let targets: Vec<OwnedEventId> = if event_ids.is_empty() {
+	let mut current_targets = if event_ids.is_empty() {
 		extremities.clone()
 	} else {
 		event_ids
 	};
 
+	if current_targets.len() > 50 && !override_limit {
+		return Err!(
+			"Refusing to trace backwards from more than 50 extremities/roots simultaneously \
+			 (provided: {}). This can cause severe server load. Pass --override to bypass this \
+			 safety check.",
+			current_targets.len()
+		);
+	}
+
 	self.write_str(&format!(
-		"fetch-missing-events: room={room_id} servers={} extremities={} targets={} rounds={}\n",
+		"fetch-missing-events (Chunked Crawler): room={room_id} servers={} roots={} rounds={}\n",
 		servers.len(),
-		extremities.len(),
-		targets.len(),
+		current_targets.len(),
 		rounds,
 	))
 	.await?;
@@ -1221,100 +1241,138 @@ pub(super) async fn fetch_missing_events(
 	let mut total_filled: usize = 0;
 
 	for round in 1..=rounds {
-		// Filter to IDs still missing locally
-		let remaining: Vec<OwnedEventId> = {
-			let mut r = Vec::new();
-			for id in &targets {
-				if !self.services.rooms.timeline.pdu_exists(id).await
-					&& self
-						.services
-						.rooms
-						.outlier
-						.get_pdu_outlier(id)
-						.await
-						.is_err()
-				{
-					r.push(id.clone());
-				}
-			}
-			r
-		};
-
-		if remaining.is_empty() {
-			self.write_str(&format!("Round {round}: all targets present locally, done.\n"))
+		if current_targets.is_empty() {
+			self.write_str(&format!("Round {round}: no targets left to trace backwards from.\n"))
 				.await?;
 			break;
 		}
 
+		// Ensure we don't exceed the Matrix specification limit of 100 latest_events
+		if current_targets.len() > 100 {
+			current_targets.truncate(100);
+		}
+
 		self.write_str(&format!(
-			"Round {round}/{rounds}: {} targets still missing, fanning out to {} servers...\n",
-			remaining.len(),
-			servers.len(),
+			"Round {round}/{rounds}: Tracing backwards from {} roots...\n",
+			current_targets.len()
 		))
 		.await?;
 
-		// Fan out POST /get_missing_events to all servers in parallel
-		let mut active: FuturesUnordered<_> = FuturesUnordered::new();
-		for server in &servers {
-			let room_id_c = room_id.clone();
-			let earliest = targets.clone(); // The older events (the disconnected chunk) to stop at
-			let latest = extremities.clone(); // The newer events to walk backwards from
-			active.push(async move {
-				let t = Instant::now();
-				let res = self
-					.services
-					.sending
-					.send_federation_request(server, get_missing_events::v1::Request {
-						room_id: room_id_c,
-						earliest_events: earliest,
-						latest_events: latest,
-						limit: 100_u32.into(),
-						min_depth: 0_u32.into(),
-					})
-					.await;
-				self.services.rooms.event_handler.update_peer_stats(
-					server,
-					res.is_ok(),
-					t.elapsed(),
-				);
-				res.map(|r| r.events)
-			});
-		}
-
 		let mut round_filled: usize = 0;
-		while let Some(result) = active.next().await {
-			if let Ok(events) = result {
-				for raw in events {
-					if let Ok((event_id, value)) = self
-						.services
-						.server_keys
-						.validate_and_add_event_id(raw.as_ref(), &room_version)
-						.await
-					{
-						self.services.rooms.outlier.add_pdu_outlier(
-							&event_id,
-							&value,
-							Some(&room_id),
-						);
-						round_filled = round_filled.saturating_add(1);
+		let mut next_targets = HashSet::new();
+		let mut success = false;
+
+		// Try servers sequentially to avoid hammering the federation
+		for server in &servers {
+			self.write_str(&format!("  -> Querying {server}...\n"))
+				.await?;
+			let t = Instant::now();
+			let res = self
+				.services
+				.sending
+				.send_federation_request(server, get_missing_events::v1::Request {
+					room_id: room_id.clone(),
+					earliest_events: vec![], // Walk as far back as limit allows
+					latest_events: current_targets.clone(),
+					limit: 100_u32.into(),
+					min_depth: 0_u32.into(),
+				})
+				.await;
+
+			self.services
+				.rooms
+				.event_handler
+				.update_peer_stats(server, res.is_ok(), t.elapsed());
+
+			match res {
+				| Ok(response) => {
+					let events = response.events;
+					if events.is_empty() {
+						continue; // Try next server
 					}
-				}
+
+					for raw in events {
+						if let Ok((event_id, value)) = self
+							.services
+							.server_keys
+							.validate_and_add_event_id(raw.as_ref(), &room_version)
+							.await
+						{
+							if self
+								.services
+								.rooms
+								.outlier
+								.get_pdu_outlier(&event_id)
+								.await
+								.is_err() && !self
+								.services
+								.rooms
+								.timeline
+								.pdu_exists(&event_id)
+								.await
+							{
+								self.services.rooms.outlier.add_pdu_outlier(
+									&event_id,
+									&value,
+									Some(&room_id),
+								);
+								round_filled = round_filled.saturating_add(1);
+
+								// Collect prev_events of the newly fetched events as potential
+								// next targets
+								if let Ok(pdu) = PduEvent::from_id_val(
+									&event_id,
+									value.clone(),
+									Some(room_id.as_ref()),
+								) {
+									for prev in pdu.prev_events() {
+										if self
+											.services
+											.rooms
+											.outlier
+											.get_pdu_outlier(prev)
+											.await
+											.is_err() && !self
+											.services
+											.rooms
+											.timeline
+											.pdu_exists(prev)
+											.await
+										{
+											next_targets.insert(prev.to_owned());
+										}
+									}
+								}
+							}
+						}
+					}
+
+					success = true;
+					self.write_str(&format!(
+						"  [Success] Fetched {round_filled} new missing ancestors from {server}.\n"
+					))
+					.await?;
+					break; // Found a server that has the events, stop checking others this round
+				},
+				| Err(_) => {},
 			}
 		}
 
 		total_filled = total_filled.saturating_add(round_filled);
-		self.write_str(&format!("Round {round}: filled {round_filled} events.\n"))
-			.await?;
 
-		if round_filled == 0 {
-			self.write_str("No new events found this round, stopping early.\n")
+		if !success || round_filled == 0 {
+			self.write_str("No new events found from any server this round, stopping early.\n")
 				.await?;
 			break;
 		}
+
+		current_targets = next_targets.into_iter().collect();
 	}
 
-	self.write_str(&format!("Done. Total events stored as outliers: {total_filled}\n"))
-		.await
+	self.write_str(&format!(
+		"Done. Total ancestors securely traced and stored as outliers: {total_filled}\n"
+	))
+	.await
 }
 
 #[admin_command]

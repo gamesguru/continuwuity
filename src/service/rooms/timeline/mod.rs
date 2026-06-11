@@ -868,14 +868,13 @@ impl Service {
 		use std::collections::{HashMap, HashSet};
 
 		use futures::StreamExt;
+		use roaring::RoaringBitmap;
 		use ruma::OwnedEventId;
 
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		let capacity = if tail == usize::MAX { 0 } else { tail };
 		let mut pdus = Vec::with_capacity(capacity);
-		let mut graph = HashMap::with_capacity(capacity);
-		let mut sorted = Vec::with_capacity(capacity);
 
 		let mut stream = std::pin::pin!(self.pdus_rev(room_id, None));
 		while let Some(Ok((_count, pdu))) = stream.next().await {
@@ -888,23 +887,95 @@ impl Service {
 		// pdus_rev returns newest first. We need oldest for true_extremities
 		pdus.reverse();
 
-		let mut ts_map = HashMap::new();
+		let mut ts_map = HashMap::with_capacity(pdus.len());
+		let mut id_map: HashMap<OwnedEventId, u32> = HashMap::with_capacity(pdus.len());
+		let mut reverse_id_map: Vec<OwnedEventId> = Vec::with_capacity(pdus.len());
+
+		let get_or_insert_id = |event_id: &OwnedEventId,
+		                            id_map: &mut HashMap<OwnedEventId, u32>,
+		                            reverse_id_map: &mut Vec<OwnedEventId>|
+		 -> u32 {
+			if let Some(&id) = id_map.get(event_id) {
+				id
+			} else {
+				let id = reverse_id_map.len() as u32;
+				id_map.insert(event_id.clone(), id);
+				reverse_id_map.push(event_id.clone());
+				id
+			}
+		};
+
+		let mut graph: Vec<RoaringBitmap> = Vec::with_capacity(pdus.len());
+		let mut sorted: Vec<u32> = Vec::with_capacity(pdus.len());
+
 		for pdu in pdus {
 			let event_id = pdu.event_id.clone();
-			let prev_events: HashSet<OwnedEventId> = pdu.prev_events.iter().cloned().collect();
-			graph.insert(event_id.clone(), prev_events);
-			sorted.push(event_id.clone());
+			let id = get_or_insert_id(&event_id, &mut id_map, &mut reverse_id_map);
+
+			if id as usize >= graph.len() {
+				graph.resize(id as usize + 1, RoaringBitmap::new());
+			}
+
+			let mut prev_bitmap = RoaringBitmap::new();
+			for prev in pdu.prev_events() {
+				prev_bitmap.insert(get_or_insert_id(
+					&prev.to_owned(),
+					&mut id_map,
+					&mut reverse_id_map,
+				));
+			}
+			graph[id as usize] = prev_bitmap;
+			sorted.push(id);
 			ts_map.insert(event_id, pdu.origin_server_ts);
 		}
 
-		let true_extremities = calculate_true_extremities(&graph, &sorted);
+		// Calculate true extremities via roaring bitmap intersections
+		let mut has_children = RoaringBitmap::new();
+		for parents in &graph {
+			has_children |= parents;
+		}
+
+		let mut true_extremities_bm = RoaringBitmap::new();
+		for &id in &sorted {
+			if !has_children.contains(id) {
+				true_extremities_bm.insert(id);
+			}
+		}
+
+		if true_extremities_bm.is_empty() {
+			if let Some(&last_id) = sorted.last() {
+				true_extremities_bm.insert(last_id);
+			}
+		}
+
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
 		let current_set: HashSet<_> = current_extremities.collect().await;
 
-		let phantom_tips = detect_phantom_extremities(&graph, &current_set);
+		let mut current_bm = RoaringBitmap::new();
+		for eid in &current_set {
+			if let Some(&id) = id_map.get(eid) {
+				current_bm.insert(id);
+			}
+		}
 
-		let true_extremities_set =
-			merge_true_extremities(true_extremities, &current_set, &phantom_tips);
+		let phantom_tips_bm = current_bm & has_children;
+
+		let mut true_extremities_set: HashSet<OwnedEventId> = true_extremities_bm
+			.into_iter()
+			.map(|id| reverse_id_map[id as usize].clone())
+			.collect();
+
+		// Merge in existing DB extremities that weren't proven to be phantoms
+		for eid in &current_set {
+			if let Some(&id) = id_map.get(eid) {
+				if !phantom_tips_bm.contains(id) {
+					true_extremities_set.insert(eid.clone());
+				}
+			} else {
+				// Event is not in the tail graph at all. Safe to keep.
+				true_extremities_set.insert(eid.clone());
+			}
+		}
 
 		// Ensure we have timestamps for all tips we intend to keep
 		for eid in &true_extremities_set {

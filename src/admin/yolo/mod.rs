@@ -659,6 +659,10 @@ pub enum YoloCommand {
 		/// Number of iterative rounds to run (default: 3).
 		#[arg(long, default_value = "3")]
 		rounds: usize,
+
+		/// Override the safety limit that prevents tracing >50 roots at once.
+		#[arg(long = "override")]
+		override_limit: bool,
 	},
 
 	/// Remove duplicate timeline events stored under wrong content-hash

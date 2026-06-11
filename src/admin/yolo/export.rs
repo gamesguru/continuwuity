@@ -23,6 +23,7 @@ pub(super) struct DagExportStats {
 	pub min_depth: u64,
 	pub all_event_ids: HashSet<OwnedEventId>,
 	pub referenced_as_prev: HashSet<OwnedEventId>,
+	pub all_events_prevs: std::collections::HashMap<OwnedEventId, Vec<OwnedEventId>>,
 }
 
 impl Default for DagExportStats {
@@ -42,6 +43,7 @@ impl Default for DagExportStats {
 			min_depth: u64::MAX,
 			all_event_ids: HashSet::new(),
 			referenced_as_prev: HashSet::new(),
+			all_events_prevs: std::collections::HashMap::new(),
 		}
 	}
 }
@@ -144,10 +146,13 @@ impl DagExportStats {
 
 				self.last_event_id = Some(pdu.event_id().into());
 				let eid = pdu.event_id().to_owned();
-				self.all_event_ids.insert(eid);
+				self.all_event_ids.insert(eid.clone());
+				let mut prevs = Vec::new();
 				for prev in pdu.prev_events() {
 					self.referenced_as_prev.insert(prev.to_owned());
+					prevs.push(prev.to_owned());
 				}
+				self.all_events_prevs.insert(eid, prevs);
 				let d: u64 = pdu.depth.into();
 				self.max_depth = self.max_depth.max(d);
 				self.min_depth = self.min_depth.min(d);
