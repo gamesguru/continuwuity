@@ -381,7 +381,7 @@ where
 	let state_delta_opt;
 	let state_lock;
 
-	if !is_forward_extremity || incoming_pdu.state_key().is_none() {
+	if !is_forward_extremity {
 		state_delta_opt = None;
 		// Dummy lock to satisfy lifetimes since we aren't mutating state
 		state_lock = self.services.state.mutex.lock(room_id).await;
@@ -743,11 +743,28 @@ async fn calculate_state_delta(
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
 ) -> Result<Option<HashSetCompressStateEvent>> {
-	if incoming_pdu.state_key().is_none() {
-		return Ok(None);
-	}
+	let current_shortstatehash = self
+		.services
+		.state
+		.get_room_shortstatehash(room_id)
+		.await
+		.ok();
 
-	debug!("Event is a state-event. Deriving new room state");
+	if incoming_pdu.state_key().is_none() {
+		// Just a normal message, state hasn't diverged: fast path out.
+		let state_at_hash = match &state_at_incoming_event {
+			| StateAtEvent::FastForward(ssh) => Some(*ssh),
+			| StateAtEvent::Resolved(_) => None, // We have to compress to get the hash
+		};
+
+		if let Some(ssh) = state_at_hash {
+			if Some(ssh) == current_shortstatehash {
+				return Ok(None);
+			}
+		}
+	} else {
+		info!("Event is a state-event. Deriving new room state");
+	}
 
 	let new_room_state = match state_at_incoming_event {
 		| StateAtEvent::FastForward(shortstatehash) => {
@@ -849,6 +866,16 @@ async fn calculate_state_delta(
 		.state_compressor
 		.save_state(room_id, new_room_state)
 		.await?;
+
+	// If the state delta is empty (no added/removed events), we can fast-path out
+	// without taking the room state lock and churning caches, UNLESS the state hash
+	// shifted (i.e., if we resolved from multiple parents to an existing hash).
+	if state_delta.added.is_empty()
+		&& state_delta.removed.is_empty()
+		&& Some(state_delta.shortstatehash) == current_shortstatehash
+	{
+		return Ok(None);
+	}
 
 	Ok(Some(state_delta))
 }

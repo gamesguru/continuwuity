@@ -228,6 +228,39 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run 'fix_local_invite_state' migration': {e}"))?;
 	}
 
+	if db["global"]
+		.get(MIGRATE_READ_RECEIPTS_TO_SSOT_MARKER)
+		.await
+		.is_not_found()
+	{
+		info!("Running migration 'migrate_read_receipts'");
+		migrate_read_receipts(services)
+			.await
+			.map_err(|e| err!("Failed to run 'migrate_read_receipts': {e}"))?;
+	}
+
+	if db["global"]
+		.get(MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER)
+		.await
+		.is_not_found()
+	{
+		info!("Running migration 'migrate_private_read_receipts'");
+		migrate_private_read_receipts(services)
+			.await
+			.map_err(|e| err!("Failed to run 'migrate_private_read_receipts': {e}"))?;
+	}
+
+	if db["global"]
+		.get(MIGRATE_EVENT_STORE_TO_SSOT_MARKER)
+		.await
+		.is_not_found()
+	{
+		info!("Running migration 'migrate_event_store_to_ssot'");
+		migrate_event_store_to_ssot(services)
+			.await
+			.map_err(|e| err!("Failed to run 'migrate_event_store_to_ssot': {e}"))?;
+	}
+
 	assert_eq!(
 		services.globals.db.database_version().await,
 		DATABASE_VERSION,
@@ -298,6 +331,202 @@ async fn migrate(services: &Services) -> Result<()> {
 
 	info!("Loaded RocksDB database with schema version {DATABASE_VERSION}");
 
+	Ok(())
+}
+
+const MIGRATE_READ_RECEIPTS_TO_SSOT_MARKER: &[u8] = b"migrate_read_receipts_to_ssot";
+async fn migrate_read_receipts(services: &Services) -> Result<()> {
+	use ruma::events::receipt::ReceiptEvent;
+
+	info!("Starting read receipt state map migration...");
+
+	let db = &services.db;
+	let stream_index = db["readreceiptid_readreceipt"].clone();
+	let state_map = db["roomuserid_readreceipt"].clone();
+
+	let mut stream =
+		stream_index.stream_raw_from::<(&RoomId, u64, &UserId), ReceiptEvent, _>(&[]);
+
+	let mut total_migrated: usize = 0;
+
+	while let Some(Ok(((room_id, count, user_id), event))) = stream.next().await {
+		let mut key = room_id.as_bytes().to_vec();
+		key.push(database::SEP);
+		key.extend_from_slice(user_id.as_bytes());
+
+		state_map.put(key, Json((count, event)));
+		total_migrated = total_migrated.saturating_add(1);
+
+		if total_migrated.is_multiple_of(2000) {
+			info!("Migrated {} read receipts to state map...", total_migrated);
+		}
+	}
+
+	info!("Successfully migrated {total_migrated} read receipts into the new O(1) state map!");
+	db["global"].insert(MIGRATE_READ_RECEIPTS_TO_SSOT_MARKER, []);
+	db.db.sort()?;
+	Ok(())
+}
+
+const MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER: &[u8] =
+	b"migrate_private_read_receipts_to_ssot";
+async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
+	info!("Starting private read receipt migration...");
+
+	let db = &services.db;
+	let legacy_count_map = db["roomuserid_privateread"].clone();
+	let legacy_event_map = db["roomuserid_privatereadevent"].clone();
+	let legacy_update_map = db["roomuserid_lastprivatereadupdate"].clone();
+	let new_receipt_map = db["roomuserid_privatereadreceipt"].clone();
+
+	let mut stream = legacy_count_map.stream_raw_from::<(&RoomId, &UserId), [u8; 8], _>(&[]);
+	let mut total_migrated: usize = 0;
+
+	while let Some(Ok(((room_id, user_id), count_bytes))) = stream.next().await {
+		let count = u64::from_be_bytes(count_bytes);
+
+		let mut legacy_key = room_id.as_bytes().to_vec();
+		legacy_key.push(0xFF);
+		legacy_key.extend_from_slice(user_id.as_bytes());
+
+		let event: ruma::events::receipt::ReceiptEvent =
+			if let Ok(event_bytes) = legacy_event_map.get(&legacy_key).await {
+				serde_json::from_slice(&event_bytes).unwrap_or_else(|_| {
+					ruma::events::receipt::ReceiptEvent {
+						content: ruma::events::receipt::ReceiptEventContent(
+							std::collections::BTreeMap::new(),
+						),
+						room_id: room_id.to_owned(),
+					}
+				})
+			} else {
+				ruma::events::receipt::ReceiptEvent {
+					content: ruma::events::receipt::ReceiptEventContent(
+						std::collections::BTreeMap::new(),
+					),
+					room_id: room_id.to_owned(),
+				}
+			};
+
+		let update_count = if let Ok(update_bytes) = legacy_update_map.get(&legacy_key).await {
+			conduwuit::utils::u64_from_bytes(&update_bytes).unwrap_or(0)
+		} else {
+			0
+		};
+
+		let mut new_key = room_id.as_bytes().to_vec();
+		new_key.push(database::SEP);
+		new_key.extend_from_slice(user_id.as_bytes());
+
+		new_receipt_map.put(new_key, Json((count, event, update_count)));
+		total_migrated = total_migrated.saturating_add(1);
+
+		if total_migrated.is_multiple_of(5000) {
+			info!("Migrated {} private read receipts...", total_migrated);
+		}
+	}
+
+	info!(
+		"Successfully migrated {total_migrated} private read receipts to new consolidated map!"
+	);
+	db["global"].insert(MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER, []);
+	db.db.sort()?;
+	Ok(())
+}
+
+const MIGRATE_EVENT_STORE_TO_SSOT_MARKER: &[u8] = b"migrate_event_store_to_ssot";
+async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
+	use conduwuit::PduEvent;
+
+	info!("Starting event store SSOT migration (Timeline)...");
+
+	let db = &services.db;
+	let pduid_pdu = db["pduid_pdu"].clone();
+	let eventid_pduid = db["eventid_pduid"].clone();
+
+	let eventid_pdu = db["eventid_pdu"].clone();
+	let room_pducount_eventid = db["room_pducount_eventid"].clone();
+	let event_metadata = db["event_metadata"].clone();
+
+	let mut timeline_stream = eventid_pduid.raw_stream();
+	let mut timeline_migrated: usize = 0;
+
+	while let Some(Ok((event_id_bytes, pdu_id_bytes))) = timeline_stream.next().await {
+		if let Ok(pdu_json_bytes) = pduid_pdu.get(&pdu_id_bytes).await {
+			let mut batch = database::rocksdb::WriteBatch::default();
+
+			eventid_pdu.raw_put_into_batch(&mut batch, event_id_bytes, &*pdu_json_bytes);
+			room_pducount_eventid.insert_into_batch(&mut batch, pdu_id_bytes, event_id_bytes);
+
+			if let Ok(parsed_pdu) = serde_json::from_slice::<PduEvent>(&pdu_json_bytes) {
+				let metadata = crate::rooms::timeline::EventMetadata {
+					short_room_id: u64::from_be_bytes(pdu_id_bytes[0..8].try_into().unwrap()),
+					is_outlier: false,
+					origin_server_ts: parsed_pdu.origin_server_ts().0,
+					depth: parsed_pdu.depth(),
+					soft_failed: false,
+					rejected: parsed_pdu.rejected(),
+					redacted_by: parsed_pdu.redacts().map(ToOwned::to_owned),
+					short_state_hash: None,
+				};
+				if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+					event_metadata.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
+				}
+			}
+
+			eventid_pdu.apply_batch(&batch);
+			timeline_migrated = timeline_migrated.saturating_add(1);
+
+			if timeline_migrated.is_multiple_of(10000) {
+				info!("Migrated {} timeline PDUs...", timeline_migrated);
+			}
+		}
+	}
+
+	info!(
+		"Timeline migration complete. Migrated {timeline_migrated} PDUs.\nStarting event store \
+		 SSOT migration (Outliers)..."
+	);
+
+	let eventid_outlierpdu = db["eventid_outlierpdu"].clone();
+	let mut outlier_stream = eventid_outlierpdu.raw_stream();
+	let mut outlier_migrated: usize = 0;
+
+	while let Some(Ok((event_id_bytes, pdu_json_bytes))) = outlier_stream.next().await {
+		let mut batch = database::rocksdb::WriteBatch::default();
+
+		eventid_pdu.raw_put_into_batch(&mut batch, event_id_bytes, pdu_json_bytes);
+
+		if let Ok(parsed_pdu) = serde_json::from_slice::<PduEvent>(pdu_json_bytes) {
+			let metadata = crate::rooms::timeline::EventMetadata {
+				short_room_id: 0, // Outliers lack context, 0 used temporarily
+				is_outlier: true,
+				origin_server_ts: parsed_pdu.origin_server_ts().0,
+				depth: parsed_pdu.depth(),
+				soft_failed: false,
+				rejected: parsed_pdu.rejected(),
+				redacted_by: parsed_pdu.redacts().map(ToOwned::to_owned),
+				short_state_hash: None,
+			};
+			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+				event_metadata.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
+			}
+		}
+
+		eventid_pdu.apply_batch(&batch);
+		outlier_migrated = outlier_migrated.saturating_add(1);
+
+		if outlier_migrated.is_multiple_of(10000) {
+			info!("Migrated {} outliers...", outlier_migrated);
+		}
+	}
+
+	info!(
+		"Successfully migrated {timeline_migrated} timeline PDUs and {outlier_migrated} \
+		 outliers to new SSOT tables!"
+	);
+	db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
+	db.db.sort()?;
 	Ok(())
 }
 
