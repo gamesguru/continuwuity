@@ -287,7 +287,7 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 		unhandled!("serialize bool not implemented")
 	}
 
-	fn serialize_unit(self) -> Result<Self::Ok> { unhandled!("serialize unit not implemented") }
+	fn serialize_unit(self) -> Result<Self::Ok> { Ok(()) }
 }
 
 impl<W: Write> ser::SerializeSeq for &mut Serializer<'_, W> {
