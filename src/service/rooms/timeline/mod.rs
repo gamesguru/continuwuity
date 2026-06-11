@@ -288,7 +288,7 @@ impl Service {
 
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
-				ruma::MilliSecondsSinceUnixEpoch(ts.into()),
+				ruma::MilliSecondsSinceUnixEpoch(ts),
 			)))
 		};
 

@@ -20,7 +20,7 @@ pub(super) async fn check_read_receipts(&self, room_id: OwnedRoomId) -> Result {
 		.rooms
 		.read_receipt
 		.readreceipts_since(&room_id, None)
-		.map(|(_, count, event)| format!("Count: {count}, Event: {:?}", event))
+		.map(|(_, count, event)| format!("Count: {count}, Event: {event:?}"))
 		.collect()
 		.await;
 
@@ -35,6 +35,8 @@ pub(super) async fn check_read_receipts(&self, room_id: OwnedRoomId) -> Result {
 
 #[admin_command]
 pub(super) async fn check_read_receipts_legacy(&self, room_id: OwnedRoomId) -> Result {
+	use std::fmt::Write;
+
 	use futures::StreamExt;
 	use ruma::{UserId, events::receipt::ReceiptEvent};
 
@@ -49,9 +51,8 @@ pub(super) async fn check_read_receipts_legacy(&self, room_id: OwnedRoomId) -> R
 	while let Some(Ok(((room, count, user), event))) = stream.next().await {
 		if room == room_id {
 			found = true;
-			msg.push_str(&format!(
-				"Legacy Receipt -> Count: {count}, User: {user}, Event: {event:?}\n"
-			));
+			let _ =
+				writeln!(msg, "Legacy Receipt -> Count: {count}, User: {user}, Event: {event:?}");
 		}
 	}
 
