@@ -325,6 +325,7 @@ pub(super) async fn get_remote_dag(
 	let mut min_depth = u64::MAX;
 	let mut max_depth = 0_u64;
 	let mut consecutive_errors = 0_usize;
+	let mut last_fetched_event: Option<OwnedEventId> = None;
 	let batch_size = ruma::uint!(500);
 	let start_time = tokio::time::Instant::now();
 
@@ -506,6 +507,7 @@ pub(super) async fn get_remote_dag(
 			min_depth = min_depth.min(depth);
 			max_depth = max_depth.max(depth);
 			total = total.saturating_add(1);
+			last_fetched_event = Some(event_id.clone());
 
 			if total.is_multiple_of(1000) {
 				let elapsed = start_time.elapsed();
@@ -551,9 +553,20 @@ pub(super) async fn get_remote_dag(
 		(0, 0)
 	};
 
+	let finish_reason = if consecutive_errors >= 3 {
+		"aborted (federation errors)"
+	} else if total >= limit && !unlimited {
+		"hit requested limit"
+	} else if queue.is_empty() {
+		"queue empty (reached genesis or all prev_events known locally)"
+	} else {
+		"unknown"
+	};
+
 	info!(
 		"get-remote-dag: complete — {total} PDUs from {server} in {elapsed:?} ({batches} \
-		 batches, bf={bf_whole}.{bf_frac:03}, depth={min_depth}..{max_depth})"
+		 batches, bf={bf_whole}.{bf_frac:03}, depth={min_depth}..{max_depth}, reason: \
+		 {finish_reason})"
 	);
 
 	// Rename to include depth range so successive runs don't overwrite
@@ -569,9 +582,14 @@ pub(super) async fn get_remote_dag(
 		&path
 	};
 
+	let tail_hint = last_fetched_event
+		.map(|e| format!("\nLast fetched event (tail): {e}"))
+		.unwrap_or_default();
+
 	self.write_str(&format!(
 		"\nSuccessfully fetched {total} PDUs from {server} to {display_path} (depth: \
-		 {min_depth}..{max_depth}, branching factor: {bf_whole}.{bf_frac:03})"
+		 {min_depth}..{max_depth}, branching factor: {bf_whole}.{bf_frac:03})\nReason: \
+		 {finish_reason}{tail_hint}\n"
 	))
 	.await
 }
