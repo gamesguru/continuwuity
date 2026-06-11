@@ -264,6 +264,13 @@ pub fn insert_into_batch<K, V>(
 	V: AsRef<[u8]>,
 {
 	batch.put_cf(&self.cf(), key.as_ref(), val.as_ref());
+}
+
+#[implement(super::Map)]
+pub fn wake<K>(&self, key: &K)
+where
+	K: AsRef<[u8]> + ?Sized,
+{
 	self.watchers.wake(key.as_ref());
 }
 

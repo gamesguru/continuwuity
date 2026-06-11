@@ -568,6 +568,7 @@ impl Data {
 		}
 
 		self.pduid_pdu.apply_batch(&batch);
+		self.pduid_pdu.wake(pdu_id);
 	}
 
 	pub(super) fn prepend_backfill_pdu(
@@ -614,8 +615,8 @@ impl Data {
 				);
 			}
 		}
-
 		self.pduid_pdu.apply_batch(&batch);
+		self.pduid_pdu.wake(pdu_id);
 	}
 
 	/// Removes a pdu and creates a new one with the same id.
@@ -663,6 +664,7 @@ impl Data {
 		}
 
 		self.pduid_pdu.apply_batch(&batch);
+		self.pduid_pdu.wake(pdu_id);
 		Ok(())
 	}
 
