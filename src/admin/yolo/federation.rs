@@ -470,14 +470,17 @@ pub(super) async fn fetch_state_ids(
 		}
 
 		// Print progress every 100 events to avoid silencing the command for hours
-		if (fetched + failed) % 100 == 0 {
-			info!("fetch_state_ids progress: {}/{} fetched", fetched + failed, total_events);
+		if (fetched.saturating_add(failed)).is_multiple_of(100) {
+			info!(
+				"fetch_state_ids progress: {}/{} fetched",
+				fetched.saturating_add(failed),
+				total_events
+			);
 		}
 	}
 
 	self.write_str(&format!(
-		"Finished fetching state_ids. Successfully fetched {} missing events, {} failed.",
-		fetched, failed
+		"Done fetching state_ids. Fetched {fetched} missing events, {failed} failed."
 	))
 	.await
 }
