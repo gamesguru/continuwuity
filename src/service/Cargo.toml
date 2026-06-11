@@ -133,6 +133,7 @@ yansi.workspace = true
 linkify = "0.10.0"
 lettre.workspace = true
 scc = "3.7.1"
+bincode = "1.3.3"
 
 [target.'cfg(all(unix, target_os = "linux"))'.dependencies]
 sd-notify.workspace = true

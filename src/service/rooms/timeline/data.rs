@@ -22,6 +22,9 @@ pub(super) struct Data {
 	pduid_pdu: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
+	eventid_pdu: Arc<Map>,
+	event_metadata: Arc<Map>,
+	room_pducount_eventid: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
 }
@@ -42,6 +45,9 @@ impl Data {
 			roomid_outliereventid: db["roomid_outliereventid"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
+			eventid_pdu: db["eventid_pdu"].clone(),
+			event_metadata: db["event_metadata"].clone(),
+			room_pducount_eventid: db["room_pducount_eventid"].clone(),
 			db: args.db.clone(),
 			services: Services {
 				short: args.depend::<rooms::short::Service>("rooms::short"),
@@ -528,6 +534,27 @@ impl Data {
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(pdu.event_id.as_bytes(), pdu_id);
 		self.eventid_outlierpdu.remove(pdu.event_id.as_bytes());
+
+		// --- Phase 1: Double-Write ---
+		self.eventid_pdu
+			.raw_put(pdu.event_id.as_bytes(), Json(json));
+		self.room_pducount_eventid
+			.insert(pdu_id, pdu.event_id.as_bytes());
+
+		let metadata = rooms::timeline::EventMetadata {
+			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
+			is_outlier: false,
+			origin_server_ts: pdu.origin_server_ts().0,
+			depth: pdu.depth(),
+			soft_failed: false, // Populated via migration or Phase 2 plumbing
+			rejected: pdu.rejected(),
+			redacted_by: pdu.redacts().map(ToOwned::to_owned),
+			short_state_hash: None,
+		};
+		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+			self.event_metadata
+				.insert(pdu.event_id.as_bytes(), &metadata_bytes);
+		}
 	}
 
 	pub(super) fn prepend_backfill_pdu(
@@ -539,6 +566,30 @@ impl Data {
 		self.pduid_pdu.raw_put(pdu_id, Json(json));
 		self.eventid_pduid.insert(event_id, pdu_id);
 		self.eventid_outlierpdu.remove(event_id);
+
+		// --- Phase 1: Double-Write ---
+		self.eventid_pdu.raw_put(event_id.as_bytes(), Json(json));
+		self.room_pducount_eventid
+			.insert(pdu_id, event_id.as_bytes());
+
+		// Backfilled PDUs don't have full event structs readily available here,
+		// but we can parse enough to populate the metadata.
+		if let Ok(pdu) = serde_json::from_value::<PduEvent>(serde_json::to_value(json).unwrap()) {
+			let metadata = rooms::timeline::EventMetadata {
+				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
+				is_outlier: false,
+				origin_server_ts: pdu.origin_server_ts().0,
+				depth: pdu.depth(),
+				soft_failed: false,
+				rejected: pdu.rejected(),
+				redacted_by: pdu.redacts().map(ToOwned::to_owned),
+				short_state_hash: None,
+			};
+			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+				self.event_metadata
+					.insert(event_id.as_bytes(), &metadata_bytes);
+			}
+		}
 	}
 
 	/// Removes a pdu and creates a new one with the same id.
@@ -546,12 +597,36 @@ impl Data {
 		&self,
 		pdu_id: &RawPduId,
 		pdu_json: &CanonicalJsonObject,
+		event_id: &EventId,
 	) -> Result {
 		if self.pduid_pdu.get(pdu_id).await.is_not_found() {
 			return Err!(Request(NotFound("PDU does not exist.")));
 		}
 
 		self.pduid_pdu.raw_put(pdu_id, Json(pdu_json));
+
+		// --- Phase 1: Double-Write ---
+		self.eventid_pdu
+			.raw_put(event_id.as_bytes(), Json(pdu_json));
+
+		if let Ok(pdu) =
+			serde_json::from_value::<PduEvent>(serde_json::to_value(pdu_json).unwrap())
+		{
+			let metadata = rooms::timeline::EventMetadata {
+				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
+				is_outlier: false,
+				origin_server_ts: pdu.origin_server_ts().0,
+				depth: pdu.depth(),
+				soft_failed: false,
+				rejected: pdu.rejected(),
+				redacted_by: pdu.redacts().map(ToOwned::to_owned),
+				short_state_hash: None,
+			};
+			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+				self.event_metadata
+					.insert(event_id.as_bytes(), &metadata_bytes);
+			}
+		}
 
 		Ok(())
 	}

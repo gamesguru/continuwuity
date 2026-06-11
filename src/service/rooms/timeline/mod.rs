@@ -3,6 +3,7 @@ mod backfill;
 mod build;
 mod create;
 mod data;
+mod metadata;
 mod redact;
 mod repair_unsigned;
 use std::{fmt::Write, sync::Arc};
@@ -26,7 +27,7 @@ use ruma::{
 use serde::Deserialize;
 
 use self::data::Data;
-pub use self::{create::pdu_fits, data::PdusIterItem};
+pub use self::{create::pdu_fits, data::PdusIterItem, metadata::EventMetadata};
 use crate::{
 	Dep, account_data, admin, appservice, globals, pusher, rooms, sending, server_keys, users,
 };
@@ -1111,8 +1112,13 @@ impl Service {
 
 	/// Removes a pdu and creates a new one with the same id.
 	#[tracing::instrument(skip(self), level = "debug")]
-	pub async fn replace_pdu(&self, pdu_id: &RawPduId, pdu_json: &CanonicalJsonObject) -> Result {
-		self.db.replace_pdu(pdu_id, pdu_json).await
+	pub async fn replace_pdu(
+		&self,
+		pdu_id: &RawPduId,
+		pdu_json: &CanonicalJsonObject,
+		event_id: &EventId,
+	) -> Result {
+		self.db.replace_pdu(pdu_id, pdu_json, event_id).await
 	}
 
 	/// Returns an iterator over all PDUs in a room. Unknown rooms produce no

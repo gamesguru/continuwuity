@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use conduwuit::{
 	Result, implement, info,
-	matrix::PduEvent,
+	matrix::{Event, PduEvent},
 	utils::stream::{BroadbandExt, ReadyExt, TryIgnore},
 };
 use database::{Deserialized, Json, Map};
@@ -20,6 +20,8 @@ struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_receivecount: Arc<Map>,
 	roomid_outliereventid: Arc<Map>,
+	eventid_pdu: Arc<Map>,
+	event_metadata: Arc<Map>,
 }
 
 struct Services {
@@ -35,6 +37,8 @@ impl crate::Service for Service {
 				eventid_outlierpdu: args.db["eventid_outlierpdu"].clone(),
 				eventid_receivecount: args.db["eventid_receivecount"].clone(),
 				roomid_outliereventid: args.db["roomid_outliereventid"].clone(),
+				eventid_pdu: args.db["eventid_pdu"].clone(),
+				event_metadata: args.db["event_metadata"].clone(),
 			},
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
@@ -161,7 +165,9 @@ pub fn add_pdu_outlier(
 	// the content hash and break signature verification when the event is
 	// later served over federation (e.g. in send_join responses).
 	// Room association is tracked externally via the roomid_outliereventid index.
-	self.db.eventid_outlierpdu.raw_put(event_id, Json(pdu));
+	self.db
+		.eventid_outlierpdu
+		.raw_put(event_id, Json(pdu.clone()));
 
 	// Populate the room-scoped index (metadata only, does not affect stored
 	// payload).
@@ -171,6 +177,31 @@ pub fn add_pdu_outlier(
 		key.push(0xFF);
 		key.extend_from_slice(event_id.as_bytes());
 		self.db.roomid_outliereventid.insert(&key, event_id);
+	}
+
+	// --- Phase 1: Double-Write ---
+	self.db.eventid_pdu.raw_put(event_id.as_bytes(), Json(&pdu));
+
+	// We don't have a fully parsed PduEvent here. To build EventMetadata,
+	// we attempt to parse it. If it fails, we provide defaults where needed.
+	if let Ok(parsed_pdu) =
+		serde_json::from_value::<PduEvent>(serde_json::to_value(&pdu).unwrap())
+	{
+		let metadata = rooms::timeline::EventMetadata {
+			short_room_id: 0, // Outliers lack context without async lookup; 0 used temporarily
+			is_outlier: true,
+			origin_server_ts: parsed_pdu.origin_server_ts().0,
+			depth: parsed_pdu.depth(),
+			soft_failed: false,
+			rejected: parsed_pdu.rejected(),
+			redacted_by: parsed_pdu.redacts().map(ToOwned::to_owned),
+			short_state_hash: None,
+		};
+		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+			self.db
+				.event_metadata
+				.insert(event_id.as_bytes(), &metadata_bytes);
+		}
 	}
 }
 
@@ -205,7 +236,7 @@ pub fn add_pdu_outlier_batch(
 
 	self.db
 		.eventid_outlierpdu
-		.raw_put_into_batch(batch, event_id, Json(pdu));
+		.raw_put_into_batch(batch, event_id, Json(pdu.clone()));
 
 	if let Some(room_id) = room_id_from_pdu {
 		let room_id: &RoomId = &room_id;
@@ -215,6 +246,31 @@ pub fn add_pdu_outlier_batch(
 		self.db
 			.roomid_outliereventid
 			.insert_into_batch(batch, &key, event_id);
+	}
+
+	// --- Phase 1: Double-Write ---
+	self.db
+		.eventid_pdu
+		.raw_put_into_batch(batch, event_id.as_bytes(), Json(&pdu));
+
+	if let Ok(parsed_pdu) =
+		serde_json::from_value::<PduEvent>(serde_json::to_value(&pdu).unwrap())
+	{
+		let metadata = rooms::timeline::EventMetadata {
+			short_room_id: 0,
+			is_outlier: true,
+			origin_server_ts: parsed_pdu.origin_server_ts().0,
+			depth: parsed_pdu.depth(),
+			soft_failed: false,
+			rejected: parsed_pdu.rejected(),
+			redacted_by: parsed_pdu.redacts().map(ToOwned::to_owned),
+			short_state_hash: None,
+		};
+		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+			self.db
+				.event_metadata
+				.insert_into_batch(batch, event_id.as_bytes(), &metadata_bytes);
+		}
 	}
 }
 

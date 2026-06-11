@@ -264,7 +264,7 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 			.services
 			.rooms
 			.timeline
-			.replace_pdu(&pdu_id, &pdu_json)
+			.replace_pdu(&pdu_id, &pdu_json, &event_id)
 			.await
 		{
 			warn!("Failed to replace PDU {event_id}: {e}");
@@ -285,6 +285,88 @@ pub(super) async fn repair_unsigned(&self, room_id: OwnedRoomId) -> Result {
 	self.write_str(&format!(
 		"Repair complete for room {room_id}: {repaired} state events repaired, {skipped} \
 		 skipped (no state snapshot), {errors} errors"
+	))
+	.await
+}
+
+#[admin_command]
+pub(super) async fn verify_event_store(&self) -> Result {
+	self.bail_restricted()?;
+
+	self.write_str("Verifying event store Phase 1 migration...\nScanning timeline events...")
+		.await?;
+
+	let mut timeline_missing = 0_usize;
+	let mut timeline_scanned = 0_usize;
+
+	let pduid_pdu_stream = self.services.db["pduid_pdu"].raw_stream();
+	futures::pin_mut!(pduid_pdu_stream);
+
+	while let Some(Ok((pdu_id_bytes, _pdu_json_bytes))) = pduid_pdu_stream.next().await {
+		timeline_scanned = timeline_scanned.saturating_add(1);
+
+		// 1. Check room_pducount_eventid
+		let event_id_bytes_res = self.services.db["room_pducount_eventid"]
+			.get(&pdu_id_bytes)
+			.await;
+		if event_id_bytes_res.is_err() {
+			timeline_missing = timeline_missing.saturating_add(1);
+			continue;
+		}
+
+		let event_id_bytes = event_id_bytes_res.unwrap();
+
+		// 2. Check eventid_pdu
+		let new_json_bytes_res = self.services.db["eventid_pdu"].get(&event_id_bytes).await;
+		if new_json_bytes_res.is_err() {
+			timeline_missing = timeline_missing.saturating_add(1);
+			continue;
+		}
+
+		// 3. Check event_metadata
+		let metadata_bytes_res = self.services.db["event_metadata"]
+			.get(&event_id_bytes)
+			.await;
+		if metadata_bytes_res.is_err() {
+			timeline_missing = timeline_missing.saturating_add(1);
+			continue;
+		}
+	}
+
+	self.write_str(&format!(
+		"Timeline scan complete. Scanned {timeline_scanned} timeline events. Missing in V2: \
+		 {timeline_missing}\nScanning outlier events..."
+	))
+	.await?;
+
+	let mut outlier_missing = 0_usize;
+	let mut outlier_scanned = 0_usize;
+
+	let outlier_stream = self.services.db["eventid_outlierpdu"].raw_stream();
+	futures::pin_mut!(outlier_stream);
+
+	while let Some(Ok((event_id_bytes, _json_bytes))) = outlier_stream.next().await {
+		outlier_scanned = outlier_scanned.saturating_add(1);
+
+		let new_json_bytes_res = self.services.db["eventid_pdu"].get(&event_id_bytes).await;
+		if new_json_bytes_res.is_err() {
+			outlier_missing = outlier_missing.saturating_add(1);
+			continue;
+		}
+
+		let metadata_bytes_res = self.services.db["event_metadata"]
+			.get(&event_id_bytes)
+			.await;
+		if metadata_bytes_res.is_err() {
+			outlier_missing = outlier_missing.saturating_add(1);
+			continue;
+		}
+	}
+
+	self.write_str(&format!(
+		"Outlier scan complete. Scanned {outlier_scanned} outlier events. Missing in V2: \
+		 {outlier_missing}\n\nParity check complete. Timeline missing: {timeline_missing}, \
+		 Outlier missing: {outlier_missing}"
 	))
 	.await
 }

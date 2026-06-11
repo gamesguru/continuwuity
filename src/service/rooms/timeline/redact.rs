@@ -56,5 +56,5 @@ pub async fn redact_pdu<Pdu: Event + Send + Sync>(
 		err!(Database(error!(%event_id, ?e, "Failed to convert PDU to canonical JSON")))
 	})?;
 
-	self.replace_pdu(&pdu_id, &obj).await
+	self.replace_pdu(&pdu_id, &obj, event_id).await
 }

@@ -125,7 +125,7 @@ pub(super) async fn import_pdus(
 					self.services
 						.rooms
 						.timeline
-						.replace_pdu(&pdu_id, &value)
+						.replace_pdu(&pdu_id, &value, &eid)
 						.await?;
 					return Ok((eid, true));
 				}

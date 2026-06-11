@@ -140,6 +140,24 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::SEQUENTIAL
 	},
 	Descriptor {
+		name: "eventid_pdu",
+		val_size_hint: Some(1520),
+		block_size: 2048,
+		index_size: 512,
+		..descriptor::RANDOM
+	},
+	Descriptor {
+		name: "event_metadata",
+		val_size_hint: Some(16),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "room_pducount_eventid",
+		key_size_hint: Some(16),
+		val_size_hint: Some(32),
+		..descriptor::SEQUENTIAL_SMALL
+	},
+	Descriptor {
 		name: "publicroomids",
 		..descriptor::RANDOM_SMALL
 	},

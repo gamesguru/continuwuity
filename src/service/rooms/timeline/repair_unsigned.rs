@@ -133,7 +133,7 @@ pub async fn repair_room_unsigned(&self, room_id: &RoomId) -> Result<usize> {
 			continue;
 		};
 
-		if let Err(e) = self.replace_pdu(&pdu_id, &pdu_json).await {
+		if let Err(e) = self.replace_pdu(&pdu_id, &pdu_json, &event_id).await {
 			tracing::warn!(%event_id, "repair_unsigned: failed to write updated json: {e}");
 			errors = errors.saturating_add(1);
 		} else {

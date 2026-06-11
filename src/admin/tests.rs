@@ -757,7 +757,7 @@ async fn test_yolo_reorder_timeline() {
 	services
 		.rooms
 		.timeline
-		.replace_pdu(&pdu_id_a, &json_a)
+		.replace_pdu(&pdu_id_a, &json_a, &event_a)
 		.await
 		.unwrap();
 
@@ -772,7 +772,7 @@ async fn test_yolo_reorder_timeline() {
 	services
 		.rooms
 		.timeline
-		.replace_pdu(&pdu_id_b, &json_b)
+		.replace_pdu(&pdu_id_b, &json_b, &event_b)
 		.await
 		.unwrap();
 
