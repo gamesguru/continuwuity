@@ -252,14 +252,14 @@ where
 
 	let total_auth_chain: usize = auth_chain_sets.iter().map(HashSet::len).sum();
 	if total_auth_chain > 10_000 {
-		warn!(
+		info!(
 			total_auth_chain,
 			num_sets = auth_chain_sets.len(),
 			"Auth chain exceeds 10k events — possible DAG bloat or amplification attack"
 		);
 	}
 	if all_conflicted.len() > 5_000 {
-		warn!(
+		info!(
 			count = all_conflicted.len(),
 			"Conflicted set exceeds 5k events — state resolution may be slow"
 		);
@@ -1078,7 +1078,7 @@ where
 
 	trace!(list = ?events_to_check, "events to check");
 	if events_to_check.len() > 5_000 {
-		warn!(
+		info!(
 			count = events_to_check.len(),
 			"iterative_auth_check processing >5k events — possible fork storm"
 		);
