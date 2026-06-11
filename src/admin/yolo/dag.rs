@@ -1129,7 +1129,7 @@ pub(super) async fn audit_auth_chain(
 			.latest_pdu_in_room(&room_id)
 			.await
 		{
-			state_ids.push(conduwuit::matrix::event::Event::event_id(&latest).to_owned());
+			state_ids.push(Event::event_id(&latest).to_owned());
 		}
 	}
 
