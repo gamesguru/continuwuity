@@ -371,3 +371,113 @@ pub(super) async fn resend_receipts(
 
 	Ok(())
 }
+
+#[admin_command]
+pub(super) async fn fetch_state_ids(
+	&self,
+	room_id: OwnedRoomId,
+	server: OwnedServerName,
+	event_id: OwnedEventId,
+) -> Result {
+	use ruma::api::federation::event::{get_event, get_room_state_ids};
+	self.bail_restricted()?;
+
+	let room_version = self
+		.services
+		.rooms
+		.state
+		.get_room_version(&room_id)
+		.await
+		.unwrap_or(RoomVersionId::V1);
+
+	self.write_str(&format!("Fetching state_ids for {room_id} at {event_id} from {server}..."))
+		.await?;
+
+	let response = self
+		.services
+		.sending
+		.send_federation_request(&server, get_room_state_ids::v1::Request {
+			room_id: room_id.clone(),
+			event_id: event_id.clone(),
+		})
+		.await?;
+
+	let mut missing_events = Vec::new();
+	let mut total_events = 0;
+
+	for id in response
+		.auth_chain_ids
+		.iter()
+		.chain(response.pdu_ids.iter())
+	{
+		total_events += 1;
+		let in_timeline = self.services.rooms.timeline.get_pdu(id).await.is_ok();
+		let in_outlier = self
+			.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(id)
+			.await
+			.is_ok();
+
+		if !in_timeline && !in_outlier {
+			missing_events.push(id.clone());
+		}
+	}
+
+	self.write_str(&format!(
+		"Found {} total events in state_ids response. {} are missing locally. Starting \
+		 incremental fetch...",
+		total_events,
+		missing_events.len()
+	))
+	.await?;
+
+	let mut fetched = 0;
+	let mut failed = 0;
+
+	for missing_id in missing_events {
+		match self
+			.services
+			.sending
+			.send_federation_request(
+				&server,
+				get_event::v1::Request::new(missing_id.clone(), None),
+			)
+			.await
+		{
+			| Ok(ev_resp) => {
+				if let Ok((eid, mut val)) = conduwuit::matrix::event::gen_event_id_canonical_json(
+					&ev_resp.pdu,
+					&room_version,
+				) {
+					val.insert(
+						"event_id".into(),
+						ruma::CanonicalJsonValue::String(eid.as_str().into()),
+					);
+					self.services
+						.rooms
+						.outlier
+						.add_pdu_outlier(&eid, &val, Some(&room_id));
+					fetched += 1;
+				} else {
+					failed += 1;
+				}
+			},
+			| Err(_) => {
+				failed += 1;
+			},
+		}
+
+		// Print progress every 100 events to avoid silencing the command for hours
+		if (fetched + failed) % 100 == 0 {
+			info!("fetch_state_ids progress: {}/{} fetched", fetched + failed, total_events);
+		}
+	}
+
+	self.write_str(&format!(
+		"Finished fetching state_ids. Successfully fetched {} missing events, {} failed.",
+		fetched, failed
+	))
+	.await
+}

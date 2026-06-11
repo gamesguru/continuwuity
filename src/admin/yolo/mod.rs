@@ -686,6 +686,20 @@ pub enum YoloCommand {
 		dry_run: bool,
 	},
 
+	/// Manually fetches the state and auth chain event IDs via /state_ids
+	/// and incrementally caches them locally to avoid 504 timeouts.
+	#[command(name = "fetch-state-ids")]
+	FetchStateIds {
+		/// Room ID
+		room_id: OwnedRoomId,
+
+		/// Remote server to fetch from
+		server: OwnedServerName,
+
+		/// The event ID to query the state at
+		event_id: OwnedEventId,
+	},
+
 	/// Clears the global bad_event ratelimiter cache.
 	///
 	/// Useful after massive DAG healing operations where 404s have bloated the
