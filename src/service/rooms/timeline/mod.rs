@@ -286,11 +286,9 @@ impl Service {
 				.get(&event_id)
 				.map_or(ruma::UInt::MAX, |&(_, ts)| ts);
 
-			let ruma_ts = get_inverted_ts_tiebreaker(ts);
-
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
-				ruma::MilliSecondsSinceUnixEpoch(ruma_ts),
+				ruma::MilliSecondsSinceUnixEpoch(ts.into()),
 			)))
 		};
 
@@ -1257,18 +1255,6 @@ pub fn update_unsigned_prev_content(
 	Ok(())
 }
 
-pub(crate) fn get_inverted_ts_tiebreaker(ts: ruma::UInt) -> ruma::UInt {
-	// We MUST invert the value because state_res uses a max-heap that pops the
-	// highest tiebreaker value first. To weave unconstrained parallel branches
-	// forwards in time, the oldest timestamp must be mathematically converted
-	// into the highest value!
-	let max_uint = u64::from(ruma::UInt::MAX);
-	let inverted_ts = max_uint.saturating_sub(ts.into());
-
-	// Safely convert to ruma::UInt
-	ruma::UInt::new(inverted_ts).unwrap_or(ruma::UInt::MAX)
-}
-
 #[cfg(test)]
 mod tests {
 	use std::collections::HashMap;
@@ -1276,21 +1262,6 @@ mod tests {
 	use ruma::event_id;
 
 	use super::*;
-
-	#[test]
-	fn test_inverted_ts_tiebreaker() {
-		let old_ts = ruma::UInt::new(100).unwrap();
-		let new_ts = ruma::UInt::new(1000).unwrap();
-
-		let old_inverted = get_inverted_ts_tiebreaker(old_ts);
-		let new_inverted = get_inverted_ts_tiebreaker(new_ts);
-
-		// Oldest timestamp should have the HIGHEST tiebreaker value
-		assert!(
-			old_inverted > new_inverted,
-			"Older event should have higher inverted tiebreaker"
-		);
-	}
 
 	#[test]
 	fn test_calculate_true_extremities_00_single_tip() {

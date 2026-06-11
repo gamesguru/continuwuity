@@ -75,7 +75,7 @@ pub(crate) async fn set_read_marker_route(
 					if let Ok(PduCount::Normal(old_count)) =
 						services.rooms.timeline.get_pdu_count(&old_event_id).await
 					{
-						if new_count <= old_count {
+						if new_count < old_count {
 							conduwuit::info!(
 								target: "read_receipt_debug",
 								"Ignoring read receipt for {} from {} because it moves backwards from {} to {}",
@@ -91,7 +91,6 @@ pub(crate) async fn set_read_marker_route(
 					"Event {} not found in timeline, ignoring read receipt", event
 				);
 			}
-
 			let receipt_content = BTreeMap::from_iter([(
 				event.to_owned(),
 				BTreeMap::from_iter([(
@@ -138,7 +137,7 @@ pub(crate) async fn set_read_marker_route(
 				.await
 				.unwrap_or(0);
 
-			if new_count > old_count {
+			if new_count >= old_count {
 				let receipt_content = BTreeMap::from_iter([(
 					event.to_owned(),
 					BTreeMap::from_iter([(
@@ -254,7 +253,7 @@ pub(crate) async fn create_receipt_route(
 					if let Ok(PduCount::Normal(old_count)) =
 						services.rooms.timeline.get_pdu_count(&old_event_id).await
 					{
-						if new_count <= old_count {
+						if new_count < old_count {
 							conduwuit::info!(
 								target: "read_receipt_debug",
 								"Ignoring read receipt for {} from {} because it moves \
@@ -274,7 +273,6 @@ pub(crate) async fn create_receipt_route(
 					&body.event_id
 				);
 			}
-
 			let receipt_content = BTreeMap::from_iter([(
 				body.event_id.clone(),
 				BTreeMap::from_iter([(
@@ -320,7 +318,7 @@ pub(crate) async fn create_receipt_route(
 					.await
 					.unwrap_or(0);
 
-				if new_count > old_count {
+				if new_count >= old_count {
 					let receipt_content = BTreeMap::from_iter([(
 						body.event_id.clone(),
 						BTreeMap::from_iter([(
