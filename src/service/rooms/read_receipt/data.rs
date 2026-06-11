@@ -326,6 +326,12 @@ impl Data {
 			self.readreceiptid_readreceipt.remove(&old_stream_key);
 		}
 
+		conduwuit::debug!(
+			target: "read_receipt_debug",
+			"Saving existing_event to DB: {}",
+			serde_json::to_string(&existing_event).unwrap()
+		);
+
 		let existing_event_json = Json(&existing_event);
 
 		// Insert new stream index entry

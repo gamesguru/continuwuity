@@ -225,12 +225,21 @@ where
 
 	let content = ReceiptEventContent::from_iter(json);
 
-	conduwuit::info!("Packed {} read receipts into EDU", content.len());
+	conduwuit::info!(
+		target: "read_receipt_debug",
+		"Packed {} read receipts into EDU", content.len()
+	);
 	conduwuit::trace!(?content);
 	let json_val = serde_json::json!({
 		"type": "m.receipt",
 		"content": content,
 	});
+
+	conduwuit::debug!(
+		target: "read_receipt_debug",
+		"pack_receipts output JSON: {}",
+		serde_json::to_string(&json_val).unwrap()
+	);
 
 	Raw::from_json(serde_json::value::to_raw_value(&json_val).expect("received valid json"))
 }
