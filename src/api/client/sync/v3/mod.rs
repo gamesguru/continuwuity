@@ -191,7 +191,9 @@ pub(crate) async fn sync_events_route(
 	let (sender_user, sender_device) = body.sender();
 
 	// Presence update
-	if services.config.allow_local_presence {
+	if services.config.allow_local_presence
+		&& body.body.set_presence != ruma::presence::PresenceState::Offline
+	{
 		services
 			.presence
 			.ping_presence(sender_user, &body.body.set_presence)
