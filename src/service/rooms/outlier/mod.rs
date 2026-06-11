@@ -136,73 +136,9 @@ pub fn add_pdu_outlier(
 	pdu: &CanonicalJsonObject,
 	room_id: Option<&RoomId>,
 ) {
-	// Stamp receive order (write-once, never mutated by rescue/reorder)
-	self.stamp_receive_count(event_id);
-
-	let mut pdu = pdu.clone();
-	pdu.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
-
-	// Resolve room_id from the JSON, the hint, or create-event heuristic.
-	// Do this BEFORE storing so we can inject it into the JSON if absent —
-	// this ensures PduEvent.room_id() is always populated when read back.
-	let room_id_from_pdu = pdu
-		.get("room_id")
-		.and_then(CanonicalJsonValue::as_str)
-		.and_then(|r| <&RoomId>::try_from(r).ok())
-		.map(ToOwned::to_owned)
-		.or_else(|| room_id.map(ToOwned::to_owned))
-		.or_else(|| {
-			let is_create =
-				pdu.get("type").and_then(CanonicalJsonValue::as_str) == Some("m.room.create");
-			is_create
-				.then(|| event_id.as_str().replace('$', "!"))
-				.and_then(|r| OwnedRoomId::parse(r).ok())
-		});
-
-	// Store the outlier PDU as-is, without injecting room_id into the JSON.
-	// v12 create events legitimately lack room_id in their canonical JSON
-	// (because room_id = hash of create event). Injecting it would corrupt
-	// the content hash and break signature verification when the event is
-	// later served over federation (e.g. in send_join responses).
-	// Room association is tracked externally via the roomid_outliereventid index.
-	self.db
-		.eventid_outlierpdu
-		.raw_put(event_id, Json(pdu.clone()));
-
-	// Populate the room-scoped index (metadata only, does not affect stored
-	// payload).
-	if let Some(room_id) = room_id_from_pdu {
-		let room_id: &RoomId = &room_id;
-		let mut key = room_id.as_bytes().to_vec();
-		key.push(0xFF);
-		key.extend_from_slice(event_id.as_bytes());
-		self.db.roomid_outliereventid.insert(&key, event_id);
-	}
-
-	// --- Phase 1: Double-Write ---
-	self.db.eventid_pdu.raw_put(event_id.as_bytes(), Json(&pdu));
-
-	// We don't have a fully parsed PduEvent here. To build EventMetadata,
-	// we attempt to parse it. If it fails, we provide defaults where needed.
-	if let Ok(parsed_pdu) =
-		serde_json::from_value::<PduEvent>(serde_json::to_value(&pdu).unwrap())
-	{
-		let metadata = rooms::timeline::EventMetadata {
-			short_room_id: 0, // Outliers lack context without async lookup; 0 used temporarily
-			is_outlier: true,
-			origin_server_ts: parsed_pdu.origin_server_ts().0,
-			depth: parsed_pdu.depth(),
-			soft_failed: false,
-			rejected: parsed_pdu.rejected(),
-			redacted_by: parsed_pdu.redacts().map(ToOwned::to_owned),
-			short_state_hash: None,
-		};
-		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-			self.db
-				.event_metadata
-				.insert(event_id.as_bytes(), &metadata_bytes);
-		}
-	}
+	let mut batch = database::rocksdb::WriteBatch::default();
+	self.add_pdu_outlier_batch(&mut batch, event_id, pdu, room_id);
+	self.db.eventid_outlierpdu.apply_batch(&batch);
 }
 
 /// Append the PDU as an outlier using a WriteBatch.

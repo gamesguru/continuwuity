@@ -403,14 +403,14 @@ pub(super) async fn fetch_state_ids(
 		.await?;
 
 	let mut missing_events = Vec::new();
-	let mut total_events = 0;
+	let mut total_events: usize = 0;
 
 	for id in response
 		.auth_chain_ids
 		.iter()
 		.chain(response.pdu_ids.iter())
 	{
-		total_events += 1;
+		total_events = total_events.saturating_add(1);
 		let in_timeline = self.services.rooms.timeline.get_pdu(id).await.is_ok();
 		let in_outlier = self
 			.services
@@ -433,8 +433,8 @@ pub(super) async fn fetch_state_ids(
 	))
 	.await?;
 
-	let mut fetched = 0;
-	let mut failed = 0;
+	let mut fetched: usize = 0;
+	let mut failed: usize = 0;
 
 	for missing_id in missing_events {
 		match self
@@ -459,13 +459,13 @@ pub(super) async fn fetch_state_ids(
 						.rooms
 						.outlier
 						.add_pdu_outlier(&eid, &val, Some(&room_id));
-					fetched += 1;
+					fetched = fetched.saturating_add(1);
 				} else {
-					failed += 1;
+					failed = failed.saturating_add(1);
 				}
 			},
 			| Err(_) => {
-				failed += 1;
+				failed = failed.saturating_add(1);
 			},
 		}
 

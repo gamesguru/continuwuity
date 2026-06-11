@@ -531,15 +531,26 @@ impl Data {
 	) {
 		debug_assert!(matches!(count, PduCount::Normal(_)), "PduCount not Normal");
 
-		self.pduid_pdu.raw_put(pdu_id, Json(json));
-		self.eventid_pduid.insert(pdu.event_id.as_bytes(), pdu_id);
-		self.eventid_outlierpdu.remove(pdu.event_id.as_bytes());
+		let mut batch = database::rocksdb::WriteBatch::default();
+
+		self.pduid_pdu
+			.raw_put_into_batch(&mut batch, pdu_id, Json(json));
+
+		let event_id_bytes = pdu.event_id.as_bytes();
+
+		// Map event_id -> pdu_id
+		self.eventid_pduid
+			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
+
+		self.eventid_outlierpdu
+			.remove_from_batch(&mut batch, event_id_bytes);
 
 		// --- Phase 1: Double-Write ---
 		self.eventid_pdu
-			.raw_put(pdu.event_id.as_bytes(), Json(json));
+			.raw_put_into_batch(&mut batch, event_id_bytes, Json(json));
+
 		self.room_pducount_eventid
-			.insert(pdu_id, pdu.event_id.as_bytes());
+			.insert_into_batch(&mut batch, pdu_id, event_id_bytes);
 
 		let metadata = rooms::timeline::EventMetadata {
 			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
@@ -553,8 +564,10 @@ impl Data {
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.event_metadata
-				.insert(pdu.event_id.as_bytes(), &metadata_bytes);
+				.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
 		}
+
+		self.pduid_pdu.apply_batch(&batch);
 	}
 
 	pub(super) fn prepend_backfill_pdu(
@@ -563,14 +576,22 @@ impl Data {
 		event_id: &EventId,
 		json: &CanonicalJsonObject,
 	) {
-		self.pduid_pdu.raw_put(pdu_id, Json(json));
-		self.eventid_pduid.insert(event_id, pdu_id);
-		self.eventid_outlierpdu.remove(event_id);
+		let mut batch = database::rocksdb::WriteBatch::default();
+
+		self.pduid_pdu
+			.raw_put_into_batch(&mut batch, pdu_id, Json(json));
+
+		let event_id_bytes = event_id.as_bytes();
+		self.eventid_pduid
+			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
+		self.eventid_outlierpdu
+			.remove_from_batch(&mut batch, event_id_bytes);
 
 		// --- Phase 1: Double-Write ---
-		self.eventid_pdu.raw_put(event_id.as_bytes(), Json(json));
+		self.eventid_pdu
+			.raw_put_into_batch(&mut batch, event_id_bytes, Json(json));
 		self.room_pducount_eventid
-			.insert(pdu_id, event_id.as_bytes());
+			.insert_into_batch(&mut batch, pdu_id, event_id_bytes);
 
 		// Backfilled PDUs don't have full event structs readily available here,
 		// but we can parse enough to populate the metadata.
@@ -586,10 +607,15 @@ impl Data {
 				short_state_hash: None,
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-				self.event_metadata
-					.insert(event_id.as_bytes(), &metadata_bytes);
+				self.event_metadata.insert_into_batch(
+					&mut batch,
+					&event_id_bytes,
+					metadata_bytes,
+				);
 			}
 		}
+
+		self.pduid_pdu.apply_batch(&batch);
 	}
 
 	/// Removes a pdu and creates a new one with the same id.
@@ -603,11 +629,16 @@ impl Data {
 			return Err!(Request(NotFound("PDU does not exist.")));
 		}
 
-		self.pduid_pdu.raw_put(pdu_id, Json(pdu_json));
+		let mut batch = database::rocksdb::WriteBatch::default();
+
+		self.pduid_pdu
+			.raw_put_into_batch(&mut batch, pdu_id, Json(pdu_json));
+
+		let event_id_bytes = event_id.as_bytes();
 
 		// --- Phase 1: Double-Write ---
 		self.eventid_pdu
-			.raw_put(event_id.as_bytes(), Json(pdu_json));
+			.raw_put_into_batch(&mut batch, event_id_bytes, Json(pdu_json));
 
 		if let Ok(pdu) =
 			serde_json::from_value::<PduEvent>(serde_json::to_value(pdu_json).unwrap())
@@ -623,11 +654,15 @@ impl Data {
 				short_state_hash: None,
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-				self.event_metadata
-					.insert(event_id.as_bytes(), &metadata_bytes);
+				self.event_metadata.insert_into_batch(
+					&mut batch,
+					&event_id_bytes,
+					metadata_bytes,
+				);
 			}
 		}
 
+		self.pduid_pdu.apply_batch(&batch);
 		Ok(())
 	}
 

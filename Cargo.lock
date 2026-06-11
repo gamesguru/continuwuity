@@ -1028,6 +1028,7 @@ dependencies = [
 name = "conduwuit_admin"
 version = "0.5.9"
 dependencies = [
+ "bincode",
  "clap",
  "conduwuit_api",
  "conduwuit_core",
