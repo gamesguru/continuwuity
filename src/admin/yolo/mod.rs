@@ -44,6 +44,11 @@ pub enum YoloCommand {
 		/// list.
 		#[arg(short, long, num_args = 1..)]
 		servers: Vec<OwnedServerName>,
+
+		/// Optional explicit event IDs to seed the auth chain audit from,
+		/// instead of using the room's current state.
+		#[arg(short = 'e', long = "event-id", num_args = 1..)]
+		event_ids: Vec<OwnedEventId>,
 	},
 
 	/// Full membership audit: timeline vs state vs cache vs remote server.

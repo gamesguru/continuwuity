@@ -1089,31 +1089,49 @@ pub(super) async fn audit_auth_chain(
 	fetch: bool,
 	verbose: bool,
 	servers: Vec<OwnedServerName>,
+	event_ids: Vec<OwnedEventId>,
 ) -> Result {
 	// Resolve room and get current state hash, fallback to extremities if no state
-	let state_ids: Vec<OwnedEventId> = match self
-		.services
-		.rooms
-		.state
-		.get_room_shortstatehash(&room_id)
-		.await
-	{
-		| Ok(sstatehash) =>
-			self.services
-				.rooms
-				.state_accessor
-				.state_full_ids(sstatehash)
-				.map(|(_, id)| id)
-				.collect()
-				.await,
-		| Err(_) =>
-			self.services
-				.rooms
-				.state
-				.get_forward_extremities(&room_id)
-				.collect()
-				.await,
+	let state_ids: Vec<OwnedEventId> = if !event_ids.is_empty() {
+		event_ids
+	} else {
+		match self
+			.services
+			.rooms
+			.state
+			.get_room_shortstatehash(&room_id)
+			.await
+		{
+			| Ok(sstatehash) =>
+				self.services
+					.rooms
+					.state_accessor
+					.state_full_ids(sstatehash)
+					.map(|(_, id)| id)
+					.collect()
+					.await,
+			| Err(_) =>
+				self.services
+					.rooms
+					.state
+					.get_forward_extremities(&room_id)
+					.collect()
+					.await,
+		}
 	};
+
+	let mut state_ids = state_ids;
+	if state_ids.is_empty() {
+		if let Ok(latest) = self
+			.services
+			.rooms
+			.timeline
+			.latest_pdu_in_room(&room_id)
+			.await
+		{
+			state_ids.push(conduwuit::matrix::event::Event::event_id(&latest).to_owned());
+		}
+	}
 
 	if state_ids.is_empty() {
 		return Err!(
