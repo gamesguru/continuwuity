@@ -20,6 +20,14 @@ Show non-default config values and keys missing from your config file (useful fo
 
 Reload configuration values
 
+## `!admin server set-config`
+
+Set a configuration key dynamically
+
+## `!admin server unset-config`
+
+Unset a dynamically configured key
+
 ## `!admin server memory-usage`
 
 Print database memory usage statistics

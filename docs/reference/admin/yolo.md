@@ -34,6 +34,10 @@ View the current forward extremities (timeline tips) of a room, or scan all room
 
 Recalculate and fix forward extremities using true topological DAG resolution
 
+## `!admin yolo count-extremities`
+
+Read-only calculation of the true topological DAG forward extremities without mutating the database
+
 ## `!admin yolo clean-extremities`
 
 Prune dangling forward extremities and reset them to the current room state
@@ -52,15 +56,15 @@ Attempts to "rescue" all outlier PDUs in a room
 
 ## `!admin yolo reorder-timeline`
 
-Reorder the timeline for a room by origin_server_ts.
+Reorder the timeline for a room by receive order (PduCount).
 
-Fixes anachronisms caused by rescued outliers being appended at the end of the timeline instead of in chronological order.
+Fixes anachronisms caused by rescued outliers being appended at the end of the timeline instead of in receive order (PduCount).
 
-## `!admin yolo promote-outliers`
+## `!admin yolo rebuild-state`
 
-Promote all outlier events in a room to backfill timeline PDUs.
+Incrementally rebuild the state of the room from the beginning of the timeline.
 
-This skips auth checks and directly inserts outliers into the timeline. Useful for rooms where the join flow stored events as outliers instead of timeline PDUs.
+Computes true state resolution at every step. Does not mutate timeline PduCounts or ordering, meaning it will not cause client sync spam.
 
 ## `!admin yolo purge-timeline-pdu`
 
@@ -98,12 +102,6 @@ This fixes persistent corruption where prev_content contained the event's own co
 
 Compares room state. With one server, compares local state against it. With multiple servers, also compares the first server against each additional server
 
-## `!admin yolo heal-room`
-
-Heals a room by rescuing local outliers, fetching genuinely missing events from federation, and optionally resyncing state.
-
-By default this is a dry-run that only reports what would be done. Pass --execute to actually make changes.
-
 ## `!admin yolo import-outliers`
 
 Emergency command to re-import outliers from a JSONL file
@@ -140,6 +138,10 @@ Fast local-only health check across all rooms.
 
 Scans every room in the database and reports: - Corrupt room IDs (non-ASCII, parse failures) - Soft-failed or missing create events - Orphaned rooms (no local users) - Extremity anomalies (0 or >10 forward extremities) - Membership cache drift (state vs cache mismatch)
 
+## `!admin yolo heal-receipts`
+
+Purge obsolete duplicate read receipts from the database
+
 ## `!admin yolo manage-rejected`
 
 Mark or unmark event IDs as rejected in the database.
@@ -152,11 +154,11 @@ Bulk-unreject all rejected events in a room.
 
 Scans the timeline and outlier tree, unmarks any events flagged as rejected so they participate in state resolution again. Use --soft-fail to also clear soft-fail markers.
 
-## `!admin yolo heal-all-rooms`
+## `!admin yolo list-rejected`
 
-Batch-heal all rooms by comparing state against a backbone server.
+List rejected or soft-failed events in a room's timeline.
 
-For each room: compares local state with the remote server, marks any extra local events as rejected, then force-sets state from the remote server. Reports a summary when done.
+Scans the timeline and reports events flagged as rejected or soft-failed.
 
 ## `!admin yolo clean-corrupt-rooms`
 
@@ -176,7 +178,7 @@ Surgically override a single state event in a room's state snapshot.
 
 Sets the state for a specific (type, state_key) tuple to the given event_id. The event must exist locally (timeline or outlier). Rebuilds membership cache if the event is m.room.member.
 
-Example: yolo set-state-event !room:server m.room.member @user:server $eventid
+Examples: yolo set-state-event !room:server m.room.create $eventid yolo set-state-event !room:server m.room.member $eventid --state-key @user:server
 
 ## `!admin yolo fetch-missing-events`
 
@@ -186,8 +188,22 @@ Uses the room's current forward extremities as the earliest boundary and fans ou
 
 Example: yolo fetch-missing-events !room:server
 
+## `!admin yolo dedup-room`
+
+Remove duplicate timeline events stored under wrong content-hash event IDs.
+
+Iterates all timeline PDUs in a room, recomputes the correct event_id from the canonical JSON hash, and removes entries where the stored event_id doesn't match. Use --dry-run to preview without deleting.
+
 ## `!admin yolo clear-ratelimiter`
 
 Clears the global bad_event ratelimiter cache.
 
 Useful after massive DAG healing operations where 404s have bloated the heap.
+
+## `!admin yolo check-read-receipts`
+
+Diagnostic command to check for duplicate read receipts in a room
+
+## `!admin yolo check-read-receipts-legacy`
+
+Checks the legacy un-threaded read receipts for a room

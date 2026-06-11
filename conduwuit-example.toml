@@ -627,8 +627,8 @@
 #allow_startup_forwardfill = false
 
 # How often the periodic forward-fill sweep runs, in seconds.
-# The periodic sweep scans for completely idle rooms (no activity for > 12 hours)
-# and tries to fetch any events missed while the room was quiet.
+# The periodic sweep scans for completely idle rooms (no activity for > 12
+# hours) and tries to fetch any events missed while the room was quiet.
 # Set to 0 to completely disable the periodic sweep.
 #
 #forwardfill_sweep_interval_secs = 14400 (4 hours)
