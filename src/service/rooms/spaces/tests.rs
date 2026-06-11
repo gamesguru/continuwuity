@@ -208,3 +208,27 @@ fn pagination_token_to_string() {
 		"9,34_3_1_true"
 	);
 }
+
+use crate::rooms::spaces::is_join_rule_accessible;
+
+#[test]
+fn test_is_join_rule_accessible() {
+	// If user is joined or invited, always true
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Invite, false, true), Some(true));
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Restricted, false, true), Some(true));
+
+	// If world_readable is true, always true
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Invite, true, false), Some(true));
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Restricted, true, false), Some(true));
+
+	// Public join rules are always true
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Public, false, false), Some(true));
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Knock, false, false), Some(true));
+
+	// Restricted requires checking allowed_rooms (returns None)
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Restricted, false, false), None);
+
+	// Private/Invite returns false
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Invite, false, false), Some(false));
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Private, false, false), Some(false));
+}

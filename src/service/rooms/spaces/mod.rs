@@ -133,6 +133,7 @@ pub async fn get_summary_and_children_local(
 			let is_accessible_child = self.is_accessible_child(
 				current_room,
 				&cached.summary.join_rule,
+				cached.summary.world_readable,
 				identifier,
 				allowed_rooms,
 			);
@@ -270,7 +271,13 @@ async fn get_summary_and_children_federation(
 	let allowed_room_ids = summary.allowed_room_ids.iter().map(AsRef::as_ref);
 
 	let is_accessible_child = self
-		.is_accessible_child(current_room, &summary.join_rule, &identifier, allowed_room_ids)
+		.is_accessible_child(
+			current_room,
+			&summary.join_rule,
+			summary.world_readable,
+			&identifier,
+			allowed_room_ids,
+		)
 		.await;
 
 	let accessibility = if is_accessible_child {
@@ -386,10 +393,17 @@ async fn get_room_summary(
 ) -> Result<SpaceHierarchyParentSummary, Error> {
 	let join_rule = self.services.state_accessor.get_join_rules(room_id).await;
 
+	let world_readable = self
+		.services
+		.state_accessor
+		.is_world_readable(room_id)
+		.await;
+
 	let is_accessible_child = self
 		.is_accessible_child(
 			room_id,
 			&join_rule.clone().into(),
+			world_readable,
 			identifier,
 			join_rule.allowed_rooms(),
 		)
@@ -404,8 +418,6 @@ async fn get_room_summary(
 	let topic = self.services.state_accessor.get_room_topic(room_id).ok();
 
 	let room_type = self.services.state_accessor.get_room_type(room_id).ok();
-
-	let world_readable = self.services.state_accessor.is_world_readable(room_id);
 
 	let guest_can_join = self.services.state_accessor.guest_can_join(room_id);
 
@@ -440,7 +452,6 @@ async fn get_room_summary(
 		name,
 		num_joined_members,
 		topic,
-		world_readable,
 		guest_can_join,
 		avatar_url,
 		room_type,
@@ -451,7 +462,6 @@ async fn get_room_summary(
 		name,
 		num_joined_members,
 		topic,
-		world_readable,
 		guest_can_join,
 		avatar_url,
 		room_type,
@@ -485,6 +495,7 @@ async fn is_accessible_child<'a, I>(
 	&self,
 	current_room: &RoomId,
 	join_rule: &SpaceRoomJoinRule,
+	world_readable: bool,
 	identifier: &Identifier<'_>,
 	allowed_rooms: I,
 ) -> bool
@@ -510,55 +521,69 @@ where
 		}
 	}
 
-	if let Identifier::UserId(user_id) = identifier {
+	let user_joined_or_invited = if let Identifier::UserId(user_id) = identifier {
 		let is_joined = self.services.state_cache.is_joined(user_id, current_room);
-
 		let is_invited = self.services.state_cache.is_invited(user_id, current_room);
 
 		pin_mut!(is_joined, is_invited);
-		if is_joined.or(is_invited).await {
-			return true;
-		}
-	}
+		is_joined.or(is_invited).await
+	} else {
+		false
+	};
 
-	match *join_rule {
-		| SpaceRoomJoinRule::Public
-		| SpaceRoomJoinRule::Knock
-		| SpaceRoomJoinRule::KnockRestricted => true,
-		| SpaceRoomJoinRule::Restricted => {
-			let is_allowed = allowed_rooms
-				.stream()
-				.any(async |room| match identifier {
-					| Identifier::UserId(user) =>
-						self.services.state_cache.is_joined(user, room).await,
-					| Identifier::ServerName(server) =>
-						self.services.state_cache.server_in_room(server, room).await
-							|| room.server_name() == Some(*server),
-				})
-				.await;
-
-			if !is_allowed {
-				conduwuit_core::info!(
-					target: "spaces_debug_filter",
-					room_id = %current_room,
-					?join_rule,
-					"spaces: room inaccessible: restricted join rule but user not in allowed rooms"
-				);
-			}
-
-			is_allowed
-		},
-
-		// Invite only, Private, or Custom join rule
-		| _ => {
+	if let Some(accessible) =
+		is_join_rule_accessible(join_rule, world_readable, user_joined_or_invited)
+	{
+		if !accessible {
 			conduwuit_core::info!(
 				target: "spaces_debug_filter",
 				room_id = %current_room,
 				?join_rule,
 				"spaces: room inaccessible: closed join rule and user not joined/invited"
 			);
-			false
-		},
+		}
+		return accessible;
+	}
+
+	// We only reach here if join_rule is Restricted, not world-readable, and user
+	// not joined
+	let is_allowed = allowed_rooms
+		.stream()
+		.any(async |room| match identifier {
+			| Identifier::UserId(user) => self.services.state_cache.is_joined(user, room).await,
+			| Identifier::ServerName(server) =>
+				self.services.state_cache.server_in_room(server, room).await
+					|| room.server_name() == Some(*server),
+		})
+		.await;
+
+	if !is_allowed {
+		conduwuit_core::info!(
+			target: "spaces_debug_filter",
+			room_id = %current_room,
+			?join_rule,
+			"spaces: room inaccessible: restricted join rule but user not in allowed rooms"
+		);
+	}
+
+	is_allowed
+}
+
+pub(crate) fn is_join_rule_accessible(
+	join_rule: &SpaceRoomJoinRule,
+	world_readable: bool,
+	user_joined_or_invited: bool,
+) -> Option<bool> {
+	if user_joined_or_invited || world_readable {
+		return Some(true);
+	}
+
+	match *join_rule {
+		| SpaceRoomJoinRule::Public
+		| SpaceRoomJoinRule::Knock
+		| SpaceRoomJoinRule::KnockRestricted => Some(true),
+		| SpaceRoomJoinRule::Restricted => None, // Requires checking allowed_rooms
+		| _ => Some(false),
 	}
 }
 
