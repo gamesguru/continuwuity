@@ -892,13 +892,13 @@ impl Service {
 		let mut reverse_id_map: Vec<OwnedEventId> = Vec::with_capacity(pdus.len());
 
 		let get_or_insert_id = |event_id: &OwnedEventId,
-		                            id_map: &mut HashMap<OwnedEventId, u32>,
-		                            reverse_id_map: &mut Vec<OwnedEventId>|
+		                        id_map: &mut HashMap<OwnedEventId, u32>,
+		                        reverse_id_map: &mut Vec<OwnedEventId>|
 		 -> u32 {
 			if let Some(&id) = id_map.get(event_id) {
 				id
 			} else {
-				let id = reverse_id_map.len() as u32;
+				let id = u32::try_from(reverse_id_map.len()).unwrap_or(0);
 				id_map.insert(event_id.clone(), id);
 				reverse_id_map.push(event_id.clone());
 				id
@@ -911,9 +911,10 @@ impl Service {
 		for pdu in pdus {
 			let event_id = pdu.event_id.clone();
 			let id = get_or_insert_id(&event_id, &mut id_map, &mut reverse_id_map);
+			let id_usize = usize::try_from(id).expect("u32 fits in usize");
 
-			if id as usize >= graph.len() {
-				graph.resize(id as usize + 1, RoaringBitmap::new());
+			if id_usize >= graph.len() {
+				graph.resize(id_usize.saturating_add(1), RoaringBitmap::new());
 			}
 
 			let mut prev_bitmap = RoaringBitmap::new();
@@ -924,29 +925,13 @@ impl Service {
 					&mut reverse_id_map,
 				));
 			}
-			graph[id as usize] = prev_bitmap;
+			graph[id_usize] = prev_bitmap;
 			sorted.push(id);
 			ts_map.insert(event_id, pdu.origin_server_ts);
 		}
 
 		// Calculate true extremities via roaring bitmap intersections
-		let mut has_children = RoaringBitmap::new();
-		for parents in &graph {
-			has_children |= parents;
-		}
-
-		let mut true_extremities_bm = RoaringBitmap::new();
-		for &id in &sorted {
-			if !has_children.contains(id) {
-				true_extremities_bm.insert(id);
-			}
-		}
-
-		if true_extremities_bm.is_empty() {
-			if let Some(&last_id) = sorted.last() {
-				true_extremities_bm.insert(last_id);
-			}
-		}
+		let true_extremities_bm = calculate_true_extremities_roaring(&graph, &sorted);
 
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
 		let current_set: HashSet<_> = current_extremities.collect().await;
@@ -958,21 +943,18 @@ impl Service {
 			}
 		}
 
-		let phantom_tips_bm = current_bm & has_children;
+		let phantom_tips_bm = detect_phantom_extremities_roaring(&graph, &current_bm);
+		let merged_extremities_bm =
+			merge_true_extremities_roaring(&true_extremities_bm, &current_bm, &phantom_tips_bm);
 
-		let mut true_extremities_set: HashSet<OwnedEventId> = true_extremities_bm
+		let mut true_extremities_set: HashSet<OwnedEventId> = merged_extremities_bm
 			.into_iter()
-			.map(|id| reverse_id_map[id as usize].clone())
+			.map(|id| reverse_id_map[usize::try_from(id).expect("u32 fits in usize")].clone())
 			.collect();
 
-		// Merge in existing DB extremities that weren't proven to be phantoms
+		// Add current extremities that were outside the graph window
 		for eid in &current_set {
-			if let Some(&id) = id_map.get(eid) {
-				if !phantom_tips_bm.contains(id) {
-					true_extremities_set.insert(eid.clone());
-				}
-			} else {
-				// Event is not in the tail graph at all. Safe to keep.
+			if !id_map.contains_key(eid) {
 				true_extremities_set.insert(eid.clone());
 			}
 		}
@@ -981,7 +963,7 @@ impl Service {
 		for eid in &true_extremities_set {
 			if !ts_map.contains_key(eid) {
 				if let Ok(pdu) = self.get_pdu(eid).await {
-					ts_map.insert(eid.clone(), pdu.origin_server_ts);
+					ts_map.insert(eid.to_owned(), pdu.origin_server_ts);
 				}
 			}
 		}
@@ -2293,5 +2275,122 @@ mod tests_merge {
 		assert!(result.contains(&e4));
 		assert!(!result.contains(&e2));
 		assert!(!result.contains(&e3));
+	}
+}
+
+#[must_use]
+pub fn detect_phantom_extremities_roaring(
+	graph: &[roaring::RoaringBitmap],
+	stored_extremities: &roaring::RoaringBitmap,
+) -> roaring::RoaringBitmap {
+	let mut has_children = roaring::RoaringBitmap::new();
+	for parents in graph {
+		has_children |= parents;
+	}
+
+	stored_extremities & has_children
+}
+
+#[must_use]
+pub fn calculate_true_extremities_roaring(
+	graph: &[roaring::RoaringBitmap],
+	sorted: &[u32],
+) -> roaring::RoaringBitmap {
+	let mut has_children = roaring::RoaringBitmap::new();
+	for parents in graph {
+		has_children |= parents;
+	}
+
+	let mut true_extremities = roaring::RoaringBitmap::new();
+	for &id in sorted {
+		if !has_children.contains(id) {
+			true_extremities.insert(id);
+		}
+	}
+
+	if true_extremities.is_empty() {
+		if let Some(&last_id) = sorted.last() {
+			true_extremities.insert(last_id);
+		}
+	}
+
+	true_extremities
+}
+
+#[must_use]
+pub fn merge_true_extremities_roaring(
+	true_extremities: &roaring::RoaringBitmap,
+	current_set: &roaring::RoaringBitmap,
+	phantom_tips: &roaring::RoaringBitmap,
+) -> roaring::RoaringBitmap {
+	let mut true_extremities_set = true_extremities.clone();
+	// or `std::ops::Sub::sub()`
+	let valid_current =
+		<&roaring::RoaringBitmap as std::ops::Sub>::sub(current_set, phantom_tips);
+	true_extremities_set |= valid_current;
+	true_extremities_set
+}
+
+#[cfg(test)]
+mod tests_roaring {
+	use roaring::RoaringBitmap;
+
+	use super::*;
+
+	#[test]
+	fn test_calculate_true_extremities_roaring_fork() {
+		let mut graph = vec![RoaringBitmap::new(); 3];
+		graph[1].insert(0); // 1 depends on 0
+		graph[2].insert(0); // 2 depends on 0
+
+		let sorted = vec![0, 1, 2];
+		let tips = calculate_true_extremities_roaring(&graph, &sorted);
+
+		let mut expected = RoaringBitmap::new();
+		expected.insert(1);
+		expected.insert(2);
+
+		assert_eq!(tips, expected);
+	}
+
+	#[test]
+	fn test_detect_phantom_extremities_roaring() {
+		let mut graph = vec![RoaringBitmap::new(); 3];
+		graph[1].insert(0);
+		graph[2].insert(1);
+
+		let mut stored_extremities = RoaringBitmap::new();
+		stored_extremities.insert(0); // 0 is a phantom tip because it's a parent
+		stored_extremities.insert(2); // 2 is a true tip
+
+		let phantoms = detect_phantom_extremities_roaring(&graph, &stored_extremities);
+
+		let mut expected = RoaringBitmap::new();
+		expected.insert(0); // 0 should be detected as phantom
+
+		assert_eq!(phantoms, expected);
+	}
+
+	#[test]
+	fn test_merge_true_extremities_roaring() {
+		let mut true_exts = RoaringBitmap::new();
+		true_exts.insert(1);
+
+		let mut current_set = RoaringBitmap::new();
+		current_set.insert(2);
+		current_set.insert(3);
+		current_set.insert(4);
+
+		let mut phantoms = RoaringBitmap::new();
+		phantoms.insert(2);
+		phantoms.insert(3);
+
+		let result = merge_true_extremities_roaring(&true_exts, &current_set, &phantoms);
+
+		let mut expected = RoaringBitmap::new();
+		expected.insert(1); // from true_exts
+		expected.insert(4); // from current_set (not a phantom)
+
+		assert_eq!(result, expected);
 	}
 }

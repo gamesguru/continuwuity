@@ -1349,7 +1349,8 @@ pub(super) async fn fetch_missing_events(
 
 					success = true;
 					self.write_str(&format!(
-						"  [Success] Fetched {round_filled} new missing ancestors from {server}.\n"
+						"  [Success] Fetched {round_filled} new missing ancestors from \
+						 {server}.\n"
 					))
 					.await?;
 					break; // Found a server that has the events, stop checking others this round
