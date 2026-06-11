@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use conduwuit::{
 	Result,
+	matrix::pdu::{PduCount, PduId, RawPduId},
 	utils::{ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
@@ -10,7 +11,7 @@ use ruma::{
 	CanonicalJsonObject, OwnedUserId, RoomId, UserId,
 	events::{
 		AnySyncEphemeralRoomEvent,
-		receipt::{ReceiptEvent, ReceiptType},
+		receipt::{Receipt, ReceiptEvent, ReceiptThread, ReceiptType},
 	},
 	serde::Raw,
 };
@@ -59,7 +60,7 @@ impl Data {
 		&self,
 		room_id: &RoomId,
 		user_id: &UserId,
-		target_thread: Option<&ruma::events::receipt::ReceiptThread>,
+		target_thread: Option<&ReceiptThread>,
 	) -> Option<ruma::OwnedEventId> {
 		let key = roomuserid_key(room_id, user_id);
 		let value = self.roomuserid_readreceipt.get(&key).await.ok()?;
@@ -152,15 +153,14 @@ impl Data {
 
 		// Fallback for legacy private read receipts that were only saved as a u64 count
 		let mut user_map = std::collections::BTreeMap::new();
-		user_map.insert(user_id.to_owned(), ruma::events::receipt::Receipt {
-			thread: ruma::events::receipt::ReceiptThread::Unthreaded,
+		user_map.insert(user_id.to_owned(), Receipt {
+			thread: ReceiptThread::Unthreaded,
 			ts: None, // Legacy receipts have no timestamp
 		});
 
 		let shortroomid = self.services.short.get_shortroomid(room_id).await?;
-		let shorteventid = conduwuit::matrix::pdu::PduCount::Normal(count);
-		let pdu_id: conduwuit::matrix::pdu::RawPduId =
-			conduwuit::matrix::pdu::PduId { shortroomid, shorteventid }.into();
+		let shorteventid = PduCount::Normal(count);
+		let pdu_id: RawPduId = PduId { shortroomid, shorteventid }.into();
 		let pdu = self.services.timeline.get_pdu_from_id(&pdu_id).await?;
 		let event_id = pdu.event_id;
 
@@ -227,6 +227,50 @@ impl Data {
 				})
 			};
 
+		// MSC4102: Synthesize unthreaded receipt if needed.
+		// "To ensure older clients receive read receipts for threads, a server MUST
+		// generate an unthreaded receipt for the same event and user when a threaded
+		// receipt is received." Because Ruma cannot represent both on the same event,
+		// and MSC4102 says to prioritize unthreaded, we effectively mutate the
+		// incoming threaded receipt to unthreaded, UNLESS the user's existing
+		// unthreaded receipt is already on a more recent event.
+		for (new_event_id, new_type, new_receipt) in &mut new_receipts {
+			if new_receipt.thread != ReceiptThread::Unthreaded {
+				let mut should_synthesize = true;
+
+				// Find existing unthreaded receipt's event ID
+				let mut existing_unthreaded_event_id = None;
+				for (ev_id, receipts) in &existing_event.content.0 {
+					if let Some(users) = receipts.get(new_type) {
+						if let Some(receipt) = users.get(user_id) {
+							if receipt.thread == ReceiptThread::Unthreaded {
+								existing_unthreaded_event_id = Some(ev_id.clone());
+								break;
+							}
+						}
+					}
+				}
+
+				if let Some(existing_ev_id) = existing_unthreaded_event_id {
+					if let (
+						Ok(PduCount::Normal(new_count)),
+						Ok(PduCount::Normal(existing_count)),
+					) = (
+						self.services.timeline.get_pdu_count(new_event_id).await,
+						self.services.timeline.get_pdu_count(&existing_ev_id).await,
+					) {
+						if existing_count > new_count {
+							should_synthesize = false;
+						}
+					}
+				}
+
+				if should_synthesize {
+					new_receipt.thread = ReceiptThread::Unthreaded;
+				}
+			}
+		}
+
 		// Remove old receipts for the same thread and type
 		for (_, new_type, new_receipt) in &new_receipts {
 			let mut empty_event_ids = Vec::new();
@@ -272,7 +316,7 @@ impl Data {
 			"Updating dual-index read receipt maps"
 		);
 
-		// 1. Delete old stream index entry
+		// Delete old stream index entry
 		if let Some(old_count) = old_count {
 			let mut old_stream_key = room_id.as_bytes().to_vec();
 			old_stream_key.push(database::SEP);
@@ -284,7 +328,7 @@ impl Data {
 
 		let existing_event_json = Json(&existing_event);
 
-		// 2. Insert new stream index entry
+		// Insert new stream index entry
 		let mut new_stream_key = room_id.as_bytes().to_vec();
 		new_stream_key.push(database::SEP);
 		new_stream_key.extend_from_slice(&new_count.to_be_bytes());
@@ -296,7 +340,7 @@ impl Data {
 		self.readreceiptid_readreceipt
 			.put(new_stream_key, &existing_event_json);
 
-		// 3. Update the state map
+		// Update state map
 		self.roomuserid_readreceipt
 			.put(key, Json((new_count, existing_event)));
 	}
