@@ -1132,13 +1132,34 @@ pub(super) async fn audit_auth_chain(
 	// forcefully injected
 	let fetcher = |event_id: OwnedEventId| {
 		Box::pin(async move {
+			let is_rejected = self
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_rejected(&event_id)
+				.await;
+			let is_soft_failed = self
+				.services
+				.rooms
+				.pdu_metadata
+				.is_event_soft_failed(&event_id)
+				.await;
+
 			if let Ok(pdu) = self.services.rooms.timeline.get_pdu(&event_id).await {
-				conduwuit::utils::dag_walker::FetchResult::Timeline(pdu)
+				conduwuit::utils::dag_walker::FetchResult::Timeline(
+					pdu,
+					is_rejected,
+					is_soft_failed,
+				)
 			} else if let Ok(pdu) = self.services.rooms.outlier.get_pdu_outlier(&event_id).await {
 				if verbose {
 					let _ = self.write_str(&format!("  OUTLIER: {event_id}\n")).await;
 				}
-				conduwuit::utils::dag_walker::FetchResult::Outlier(pdu)
+				conduwuit::utils::dag_walker::FetchResult::Outlier(
+					pdu,
+					is_rejected,
+					is_soft_failed,
+				)
 			} else {
 				if verbose {
 					let _ = self.write_str(&format!("  MISSING: {event_id}\n")).await;
@@ -1153,9 +1174,12 @@ pub(super) async fn audit_auth_chain(
 	let in_timeline = result.in_timeline;
 	let in_outlier = result.in_outlier;
 	let missing = result.missing;
+	let rejected = result.rejected;
+	let soft_failed = result.soft_failed;
 
 	self.write_str(&format!(
-		"Results: {in_timeline} timeline, {in_outlier} outlier-only, {} missing\n",
+		"Results: {in_timeline} timeline, {in_outlier} outlier-only, {} missing, {rejected} \
+		 rejected, {soft_failed} soft-failed\n",
 		missing.len()
 	))
 	.await?;
