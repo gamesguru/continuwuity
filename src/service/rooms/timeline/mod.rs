@@ -282,11 +282,11 @@ impl Service {
 		// Topological sort with PduCount as tiebreaker
 		info!("reorder_timeline: topological sort of {} events...", graph.len());
 		let event_fetch = |event_id: OwnedEventId| {
-			let pdu_count = entries
+			let ts = entries
 				.get(&event_id)
-				.map_or_else(|| PduCount::Normal(0), |&(c, _)| c);
+				.map_or(ruma::UInt::MAX, |&(_, ts)| ts);
 
-			let ruma_ts = get_inverted_pdu_count_tiebreaker(pdu_count);
+			let ruma_ts = get_inverted_ts_tiebreaker(ts);
 
 			ready(Ok::<_, state_res::Error>((
 				ruma::int!(0),
@@ -1257,22 +1257,13 @@ pub fn update_unsigned_prev_content(
 	Ok(())
 }
 
-pub(crate) fn get_inverted_pdu_count_tiebreaker(pdu_count: PduCount) -> ruma::UInt {
-	// Map PduCount into a strictly positive integer within ruma::UInt bounds (max
-	// 2^53 - 1). We center the mapping at 2^52. Backfilled (negative) are <
-	// 2^52, Normal are >= 2^52.
-	let center = 1_u64 << 52;
-	let stable_ts = match pdu_count {
-		| PduCount::Normal(n) => center.saturating_add(n),
-		| PduCount::Backfilled(n) => center.saturating_sub(n.unsigned_abs()),
-	};
-
+pub(crate) fn get_inverted_ts_tiebreaker(ts: ruma::UInt) -> ruma::UInt {
 	// We MUST invert the value because state_res uses a max-heap that pops the
 	// highest tiebreaker value first. To weave unconstrained parallel branches
-	// forwards in time, the oldest PduCount must be mathematically converted
+	// forwards in time, the oldest timestamp must be mathematically converted
 	// into the highest value!
 	let max_uint = u64::from(ruma::UInt::MAX);
-	let inverted_ts = max_uint.saturating_sub(stable_ts);
+	let inverted_ts = max_uint.saturating_sub(ts.into());
 
 	// Safely convert to ruma::UInt
 	ruma::UInt::new(inverted_ts).unwrap_or(ruma::UInt::MAX)
@@ -1287,26 +1278,17 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn test_inverted_pdu_count_tiebreaker() {
-		// PduCount chrono order: Backfill(-10) < Backfill(-1) < Normal(1) < Normal(10)
-		// Because the Max-Heap pops the HIGHEST value first, our tiebreaker
-		// must INVERT this order! i.e., older events must have a larger tiebreaker.
-		let backfilled_old = get_inverted_pdu_count_tiebreaker(PduCount::Backfilled(-10));
-		let backfilled_new = get_inverted_pdu_count_tiebreaker(PduCount::Backfilled(-1));
-		let normal_old = get_inverted_pdu_count_tiebreaker(PduCount::Normal(1));
-		let normal_new = get_inverted_pdu_count_tiebreaker(PduCount::Normal(10));
+	fn test_inverted_ts_tiebreaker() {
+		let old_ts = ruma::UInt::new(100).unwrap();
+		let new_ts = ruma::UInt::new(1000).unwrap();
 
+		let old_inverted = get_inverted_ts_tiebreaker(old_ts);
+		let new_inverted = get_inverted_ts_tiebreaker(new_ts);
+
+		// Oldest timestamp should have the HIGHEST tiebreaker value
 		assert!(
-			backfilled_old > backfilled_new,
-			"Older backfilled event should have higher inverted tiebreaker"
-		);
-		assert!(
-			backfilled_new > normal_old,
-			"Backfilled event should have higher inverted tiebreaker than normal event"
-		);
-		assert!(
-			normal_old > normal_new,
-			"Older normal event should have higher inverted tiebreaker"
+			old_inverted > new_inverted,
+			"Older event should have higher inverted tiebreaker"
 		);
 	}
 

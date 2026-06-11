@@ -156,6 +156,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
+		name: "roomuserid_readreceipt",
+		val_size_hint: Some(1024),
+		..descriptor::RANDOM
+	},
+	Descriptor {
 		name: "referencedevents",
 		..descriptor::RANDOM
 	},

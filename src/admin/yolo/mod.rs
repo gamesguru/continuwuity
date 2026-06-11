@@ -698,4 +698,7 @@ pub enum YoloCommand {
 		/// The room ID.
 		room_id: OwnedRoomId,
 	},
+
+	/// Migrate old read receipts to the new O(1) map.
+	MigrateReadReceipts,
 }

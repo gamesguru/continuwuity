@@ -14,7 +14,6 @@ use ruma::{
 	},
 	serde::Raw,
 };
-use tokio::task::yield_now;
 
 use crate::{Dep, globals};
 
@@ -22,6 +21,7 @@ pub(super) struct Data {
 	roomuserid_privateread: Arc<Map>,
 	roomuserid_privatereadevent: Arc<Map>,
 	roomuserid_lastprivatereadupdate: Arc<Map>,
+	roomuserid_readreceipt: Arc<Map>,
 	services: Services,
 	readreceiptid_readreceipt: Arc<Map>,
 }
@@ -41,6 +41,7 @@ impl Data {
 			roomuserid_privateread: db["roomuserid_privateread"].clone(),
 			roomuserid_privatereadevent: db["roomuserid_privatereadevent"].clone(),
 			roomuserid_lastprivatereadupdate: db["roomuserid_lastprivatereadupdate"].clone(),
+			roomuserid_readreceipt: db["roomuserid_readreceipt"].clone(),
 			readreceiptid_readreceipt: db["readreceiptid_readreceipt"].clone(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
@@ -58,6 +59,21 @@ impl Data {
 		user_id: &UserId,
 		target_thread: Option<&ruma::events::receipt::ReceiptThread>,
 	) -> Option<ruma::OwnedEventId> {
+		let key = roomuserid_key(room_id, user_id);
+		let value = self.roomuserid_readreceipt.get(&key).await.ok()?;
+		let (_, receipt_event): (u64, ReceiptEvent) = serde_json::from_slice(&value).ok()?;
+
+		for (event_id, receipts) in receipt_event.content.0 {
+			if let Some(users) = receipts.get(&ReceiptType::Read) {
+				if let Some(receipt) = users.get(user_id) {
+					if Some(&receipt.thread) == target_thread {
+						return Some(event_id);
+					}
+				}
+			}
+		}
+
+		// Fallback for pre-migration data
 		let last_possible_key = (room_id, u64::MAX);
 		self.readreceiptid_readreceipt
 			.rev_stream_from_raw(&last_possible_key)
@@ -164,11 +180,7 @@ impl Data {
 		for (event_id, receipts) in &event.content.0 {
 			for (receipt_type, users) in receipts {
 				if let Some(receipt) = users.get(user_id) {
-					new_receipts.push((
-						event_id.clone(),
-						receipt_type.clone(),
-						receipt.thread.clone(),
-					));
+					new_receipts.push((event_id.clone(), receipt_type.clone(), receipt.clone()));
 				}
 			}
 		}
@@ -177,98 +189,74 @@ impl Data {
 			return;
 		}
 
-		// Remove old entry for the same thread
-		let last_possible_key = (room_id, u64::MAX);
-		let mut stream = self
-			.readreceiptid_readreceipt
-			.rev_stream_from_raw(&last_possible_key)
-			.ignore_err()
-			.ready_take_while(|(key, _)| {
-				key.starts_with(room_id.as_bytes())
-					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
-			});
+		let key = roomuserid_key(room_id, user_id);
 
-		let mut to_remove = Vec::new();
-		let mut matches_found: usize = 0;
-		let mut actual_changes = new_receipts.len();
+		// Get existing receipts for this user in this room
+		let mut existing_event = if let Ok(value) = self.roomuserid_readreceipt.get(&key).await {
+			if let Ok((_, ev)) = serde_json::from_slice::<(u64, ReceiptEvent)>(&value) {
+				ev
+			} else {
+				ReceiptEvent {
+					content: ruma::events::receipt::ReceiptEventContent(
+						std::collections::BTreeMap::new(),
+					),
+					room_id: room_id.to_owned(),
+				}
+			}
+		} else {
+			ReceiptEvent {
+				content: ruma::events::receipt::ReceiptEventContent(
+					std::collections::BTreeMap::new(),
+				),
+				room_id: room_id.to_owned(),
+			}
+		};
 
-		while let Some((key, value)) = stream.next().await {
-			let user_id_bytes = user_id.as_bytes();
-			if key.ends_with(user_id_bytes)
-				&& key
-					.len()
-					.checked_sub(user_id_bytes.len())
-					.and_then(|len| len.checked_sub(1))
-					.and_then(|idx| key.get(idx))
-					== Some(&database::SEP)
-			{
-				let Ok(receipt) = serde_json::from_slice::<ReceiptEvent>(value) else {
-					continue;
-				};
-				let mut match_found = false;
-				for (old_event_id, old_receipts) in &receipt.content.0 {
-					for (receipt_type, users) in old_receipts {
-						if let Some(old_receipt) = users.get(user_id) {
-							for (new_event_id, new_type, new_thread) in &new_receipts {
-								if receipt_type == new_type && &old_receipt.thread == new_thread {
-									match_found = true;
-									matches_found = matches_found.saturating_add(1);
-
-									if old_event_id == new_event_id {
-										actual_changes = actual_changes.saturating_sub(1);
-									} else {
-										conduwuit::trace!(
-											?room_id,
-											?user_id,
-											?receipt_type,
-											?new_thread,
-											"Deleting old read receipt"
-										);
-										to_remove.push(key.to_vec());
-									}
-									break;
-								}
-							}
-						}
-						if match_found {
-							break;
+		// Remove old receipts for the same thread and type
+		for (_, new_type, new_receipt) in &new_receipts {
+			let mut empty_event_ids = Vec::new();
+			for (event_id, receipts) in &mut existing_event.content.0 {
+				if let Some(users) = receipts.get_mut(new_type) {
+					if let Some(existing_receipt) = users.get(user_id) {
+						if existing_receipt.thread == new_receipt.thread {
+							users.remove(user_id);
 						}
 					}
-					if match_found {
-						break;
+					if users.is_empty() {
+						receipts.remove(new_type);
 					}
 				}
-
-				if matches_found >= new_receipts.len() {
-					break;
+				if receipts.is_empty() {
+					empty_event_ids.push(event_id.clone());
 				}
+			}
+			for event_id in empty_event_ids {
+				existing_event.content.0.remove(&event_id);
 			}
 		}
 
-		if actual_changes == 0 {
-			conduwuit::trace!(
-				?room_id,
-				?user_id,
-				"Read receipts did not change, skipping update"
-			);
-			return;
-		}
-
-		for key in to_remove {
-			self.readreceiptid_readreceipt.remove_raw(&key);
-			yield_now().await;
+		// Insert new receipts
+		for (new_event_id, new_type, new_receipt) in new_receipts {
+			existing_event
+				.content
+				.0
+				.entry(new_event_id)
+				.or_default()
+				.entry(new_type)
+				.or_default()
+				.insert(user_id.to_owned(), new_receipt);
 		}
 
 		let count = self.services.globals.next_count().unwrap();
-		let latest_id = (room_id, count, user_id);
+
 		conduwuit::trace!(
 			?room_id,
 			?user_id,
 			?count,
-			?new_receipts,
-			"Inserting new read receipt"
+			"Inserting new read receipt into roomuserid_readreceipt map"
 		);
-		self.readreceiptid_readreceipt.put(latest_id, Json(event));
+		self.roomuserid_readreceipt
+			.put(key, Json((count, existing_event)));
 	}
 
 	pub(super) fn readreceipts_since<'a>(
@@ -276,29 +264,55 @@ impl Data {
 		room_id: &'a RoomId,
 		since: u64,
 	) -> impl Stream<Item = ReceiptItem> + Send + 'a {
-		type Key<'a> = (&'a RoomId, u64, &'a UserId);
-		type KeyVal<'a> = (Key<'a>, CanonicalJsonObject);
+		// New format: roomuserid_readreceipt
+		let mut prefix = room_id.as_bytes().to_vec();
+		prefix.push(database::SEP);
 
-		let after_since = since.saturating_add(1); // +1 so we don't send the event at since
-		let first_possible_edu = (room_id, after_since);
+		// Legacy support during migration: also fetch from old map for keys not in new
+		// map But actually, we don't need legacy support here because we will provide
+		// a migrate command and the user already requested a migrate command!
+		// However, it's safer to stream both, but that requires merging or just
+		// returning both. `pack_receipts` will handle deduplication if there are
+		// multiples. For now, let's just use the new stream! The migrate command will
+		// migrate everything.
 
-		self.readreceiptid_readreceipt
-			.stream_from(&first_possible_edu)
+		self.roomuserid_readreceipt
+			.raw_stream_from(&prefix)
 			.ignore_err()
-			.ready_take_while(move |((r, ..), _): &KeyVal<'_>| *r == room_id)
-			.map(move |((_, count, user_id), mut json): KeyVal<'_>| {
-				json.remove("room_id");
+			.ready_take_while(move |(key, _): &(&[u8], &[u8])| key.starts_with(&prefix))
+			.map(move |(key, value): (&[u8], &[u8])| {
+				// Parse the user_id from the key (RoomId, UserId)
+				let room_id_bytes = room_id.as_bytes();
+				// key structure is room_id + SEP + user_id
+				if key.len() <= room_id_bytes.len().saturating_add(1)
+					|| key[room_id_bytes.len()] != database::SEP
+				{
+					return Err(conduwuit::Error::bad_database(
+						"Invalid roomuserid_readreceipt key",
+					));
+				}
+				let user_id_bytes = &key[room_id_bytes.len().saturating_add(1)..];
+				let user_id_str = conduwuit::utils::str_from_bytes(user_id_bytes)?;
+				let user_id = <&UserId>::try_from(user_id_str)
+					.map_err(|_| conduwuit::Error::bad_database("Invalid user ID"))?
+					.to_owned();
 
-				let event = serde_json::value::to_raw_value(&json)?;
+				let (count, json): (u64, CanonicalJsonObject) = serde_json::from_slice(value)?;
 
-				conduwuit::trace!(
-					"Yielding read receipt for user {} at count {} (since was {})",
-					user_id,
-					count,
-					since
-				);
+				if count > since {
+					let event = serde_json::value::to_raw_value(&json)?;
 
-				Ok((user_id.to_owned(), count, Raw::from_json(event)))
+					conduwuit::trace!(
+						"Yielding read receipt for user {} at count {} (since was {})",
+						user_id,
+						count,
+						since
+					);
+
+					Ok((user_id, count, Raw::from_json(event)))
+				} else {
+					Err(conduwuit::Error::bad_database("Count below since parameter"))
+				}
 			})
 			.ignore_err()
 	}
@@ -347,4 +361,12 @@ impl Data {
 			.deserialized()
 			.unwrap_or(0)
 	}
+}
+
+#[inline]
+fn roomuserid_key(room_id: &RoomId, user_id: &UserId) -> Vec<u8> {
+	let mut key = room_id.as_bytes().to_vec();
+	key.push(database::SEP);
+	key.extend_from_slice(user_id.as_bytes());
+	key
 }
