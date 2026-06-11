@@ -21,6 +21,7 @@ pub(super) struct Data {
 	roomuserid_privateread: Arc<Map>,
 	roomuserid_privatereadevent: Arc<Map>,
 	roomuserid_lastprivatereadupdate: Arc<Map>,
+	roomuserid_privatereadreceipt: Arc<Map>,
 	roomuserid_readreceipt: Arc<Map>,
 	services: Services,
 	readreceiptid_readreceipt: Arc<Map>,
@@ -41,6 +42,7 @@ impl Data {
 			roomuserid_privateread: db["roomuserid_privateread"].clone(),
 			roomuserid_privatereadevent: db["roomuserid_privatereadevent"].clone(),
 			roomuserid_lastprivatereadupdate: db["roomuserid_lastprivatereadupdate"].clone(),
+			roomuserid_privatereadreceipt: db["roomuserid_privatereadreceipt"].clone(),
 			roomuserid_readreceipt: db["roomuserid_readreceipt"].clone(),
 			readreceiptid_readreceipt: db["readreceiptid_readreceipt"].clone(),
 			services: Services {
@@ -112,13 +114,25 @@ impl Data {
 		room_id: &RoomId,
 		user_id: &UserId,
 	) -> Result<Option<(u64, ReceiptEvent)>> {
-		let mut key = room_id.as_bytes().to_vec();
-		key.push(0xFF);
-		key.extend_from_slice(user_id.as_bytes());
+		let key = roomuserid_key(room_id, user_id);
+
+		// Try the new consolidated map first
+		if let Ok(value) = self.roomuserid_privatereadreceipt.get(&key).await {
+			if let Ok((count, event, _update_count)) =
+				serde_json::from_slice::<(u64, ReceiptEvent, u64)>(&value)
+			{
+				return Ok(Some((count, event)));
+			}
+		}
+
+		// Fallback to legacy map
+		let mut legacy_key = room_id.as_bytes().to_vec();
+		legacy_key.push(0xFF);
+		legacy_key.extend_from_slice(user_id.as_bytes());
 
 		let count = self
 			.roomuserid_privateread
-			.get(&key)
+			.get(&legacy_key)
 			.await
 			.map(|bytes| {
 				conduwuit::utils::u64_from_bytes(&bytes).expect("bytes have right length")
@@ -130,7 +144,7 @@ impl Data {
 		};
 
 		// Fast path: try to get the full JSON event
-		if let Ok(handle) = self.roomuserid_privatereadevent.get(&key).await {
+		if let Ok(handle) = self.roomuserid_privatereadevent.get(&legacy_key).await {
 			if let Ok(event) = handle.deserialized() {
 				return Ok(Some((count, event)));
 			}
@@ -191,26 +205,27 @@ impl Data {
 
 		let key = roomuserid_key(room_id, user_id);
 
-		// Get existing receipts for this user in this room
-		let mut existing_event = if let Ok(value) = self.roomuserid_readreceipt.get(&key).await {
-			if let Ok((_, ev)) = serde_json::from_slice::<(u64, ReceiptEvent)>(&value) {
-				ev
+		// Get existing receipts for this user in this room to find old_count
+		let (old_count, mut existing_event) =
+			if let Ok(value) = self.roomuserid_readreceipt.get(&key).await {
+				if let Ok((old_c, ev)) = serde_json::from_slice::<(u64, ReceiptEvent)>(&value) {
+					(Some(old_c), ev)
+				} else {
+					(None, ReceiptEvent {
+						content: ruma::events::receipt::ReceiptEventContent(
+							std::collections::BTreeMap::new(),
+						),
+						room_id: room_id.to_owned(),
+					})
+				}
 			} else {
-				ReceiptEvent {
+				(None, ReceiptEvent {
 					content: ruma::events::receipt::ReceiptEventContent(
 						std::collections::BTreeMap::new(),
 					),
 					room_id: room_id.to_owned(),
-				}
-			}
-		} else {
-			ReceiptEvent {
-				content: ruma::events::receipt::ReceiptEventContent(
-					std::collections::BTreeMap::new(),
-				),
-				room_id: room_id.to_owned(),
-			}
-		};
+				})
+			};
 
 		// Remove old receipts for the same thread and type
 		for (_, new_type, new_receipt) in &new_receipts {
@@ -247,16 +262,43 @@ impl Data {
 				.insert(user_id.to_owned(), new_receipt);
 		}
 
-		let count = self.services.globals.next_count().unwrap();
+		let new_count = self.services.globals.next_count().unwrap();
 
 		conduwuit::trace!(
 			?room_id,
 			?user_id,
-			?count,
-			"Inserting new read receipt into roomuserid_readreceipt map"
+			?new_count,
+			?old_count,
+			"Updating dual-index read receipt maps"
 		);
+
+		// 1. Delete old stream index entry
+		if let Some(old_count) = old_count {
+			let mut old_stream_key = room_id.as_bytes().to_vec();
+			old_stream_key.push(database::SEP);
+			old_stream_key.extend_from_slice(&old_count.to_be_bytes());
+			old_stream_key.push(database::SEP);
+			old_stream_key.extend_from_slice(user_id.as_bytes());
+			self.readreceiptid_readreceipt.remove(&old_stream_key);
+		}
+
+		let existing_event_json = Json(&existing_event);
+
+		// 2. Insert new stream index entry
+		let mut new_stream_key = room_id.as_bytes().to_vec();
+		new_stream_key.push(database::SEP);
+		new_stream_key.extend_from_slice(&new_count.to_be_bytes());
+		new_stream_key.push(database::SEP);
+		new_stream_key.extend_from_slice(user_id.as_bytes());
+
+		// For backward compatibility with older legacy maps, we store the pure
+		// ReceiptEvent in the stream index
+		self.readreceiptid_readreceipt
+			.put(new_stream_key, &existing_event_json);
+
+		// 3. Update the state map
 		self.roomuserid_readreceipt
-			.put(key, Json((count, existing_event)));
+			.put(key, Json((new_count, existing_event)));
 	}
 
 	pub(super) fn readreceipts_since<'a>(
@@ -264,55 +306,52 @@ impl Data {
 		room_id: &'a RoomId,
 		since: u64,
 	) -> impl Stream<Item = ReceiptItem> + Send + 'a {
-		// New format: roomuserid_readreceipt
+		// Dual-index stream: readreceiptid_readreceipt is keyed by (RoomId, Count,
+		// UserId)
 		let mut prefix = room_id.as_bytes().to_vec();
 		prefix.push(database::SEP);
 
-		// Legacy support during migration: also fetch from old map for keys not in new
-		// map But actually, we don't need legacy support here because we will provide
-		// a migrate command and the user already requested a migrate command!
-		// However, it's safer to stream both, but that requires merging or just
-		// returning both. `pack_receipts` will handle deduplication if there are
-		// multiples. For now, let's just use the new stream! The migrate command will
-		// migrate everything.
+		let mut first_possible_key = prefix.clone();
+		first_possible_key.extend_from_slice(&(since.saturating_add(1)).to_be_bytes());
 
-		self.roomuserid_readreceipt
-			.raw_stream_from(&prefix)
+		self.readreceiptid_readreceipt
+			.raw_stream_from(&first_possible_key)
 			.ignore_err()
 			.ready_take_while(move |(key, _): &(&[u8], &[u8])| key.starts_with(&prefix))
 			.map(move |(key, value): (&[u8], &[u8])| {
-				// Parse the user_id from the key (RoomId, UserId)
+				// Parse count and user_id from the key
 				let room_id_bytes = room_id.as_bytes();
-				// key structure is room_id + SEP + user_id
-				if key.len() <= room_id_bytes.len().saturating_add(1)
-					|| key[room_id_bytes.len()] != database::SEP
-				{
+				// Key structure: room_id + SEP + count (8 bytes) + SEP + user_id
+				let count_start = room_id_bytes.len().saturating_add(1);
+				let count_end = count_start.saturating_add(8);
+
+				if key.len() <= count_end || key[count_end] != database::SEP {
 					return Err(conduwuit::Error::bad_database(
-						"Invalid roomuserid_readreceipt key",
+						"Invalid readreceiptid_readreceipt key",
 					));
 				}
-				let user_id_bytes = &key[room_id_bytes.len().saturating_add(1)..];
+
+				let count_bytes = &key[count_start..count_end];
+				let count = conduwuit::utils::u64_from_bytes(count_bytes)
+					.map_err(|_| conduwuit::Error::bad_database("Invalid count bytes"))?;
+
+				let user_id_bytes = &key[count_end.saturating_add(1)..];
 				let user_id_str = conduwuit::utils::str_from_bytes(user_id_bytes)?;
 				let user_id = <&UserId>::try_from(user_id_str)
 					.map_err(|_| conduwuit::Error::bad_database("Invalid user ID"))?
 					.to_owned();
 
-				let (count, json): (u64, CanonicalJsonObject) = serde_json::from_slice(value)?;
+				let json: CanonicalJsonObject = serde_json::from_slice(value)?;
+				let event = serde_json::value::to_raw_value(&json)?;
 
-				if count > since {
-					let event = serde_json::value::to_raw_value(&json)?;
+				conduwuit::trace!(
+					"Yielding read receipt for user {} at count {} (since was {})",
+					user_id,
+					count,
+					since
+				);
 
-					conduwuit::trace!(
-						"Yielding read receipt for user {} at count {} (since was {})",
-						user_id,
-						count,
-						since
-					);
-
-					Ok((user_id, count, Raw::from_json(event)))
-				} else {
-					Err(conduwuit::Error::bad_database("Count below since parameter"))
-				}
+				Ok((user_id, count, Raw::from_json(event)))
 			})
 			.ignore_err()
 	}
@@ -324,18 +363,20 @@ impl Data {
 		count: u64,
 		receipt: &ReceiptEvent,
 	) -> Result<()> {
-		let mut key = room_id.as_bytes().to_vec();
-		key.push(0xFF);
-		key.extend_from_slice(user_id.as_bytes());
+		let key = roomuserid_key(room_id, user_id);
 		let next_count = self.services.globals.next_count()?;
 
-		let receipt_json = serde_json::to_vec(receipt).expect("ReceiptEvent serializes");
+		// Delete from legacy maps so they don't shadow in private_read_get during the
+		// transitional phase
+		let mut legacy_key = room_id.as_bytes().to_vec();
+		legacy_key.push(0xFF);
+		legacy_key.extend_from_slice(user_id.as_bytes());
+		self.roomuserid_privateread.remove(&legacy_key);
+		self.roomuserid_privatereadevent.remove(&legacy_key);
+		self.roomuserid_lastprivatereadupdate.remove(&legacy_key);
 
-		self.roomuserid_privateread
-			.insert(&key, count.to_be_bytes());
-		self.roomuserid_privatereadevent.insert(&key, &receipt_json);
-		self.roomuserid_lastprivatereadupdate
-			.insert(&key, next_count.to_be_bytes());
+		self.roomuserid_privatereadreceipt
+			.put(key, Json((count, receipt, next_count)));
 
 		Ok(())
 	}
@@ -345,8 +386,20 @@ impl Data {
 		room_id: &RoomId,
 		user_id: &UserId,
 	) -> Result<u64> {
-		let key = (room_id, user_id);
-		self.roomuserid_privateread.qry(&key).await.deserialized()
+		let key = roomuserid_key(room_id, user_id);
+		if let Ok(value) = self.roomuserid_privatereadreceipt.get(&key).await {
+			if let Ok((count, ..)) = serde_json::from_slice::<(u64, ReceiptEvent, u64)>(&value) {
+				return Ok(count);
+			}
+		}
+
+		let mut legacy_key = room_id.as_bytes().to_vec();
+		legacy_key.push(0xFF);
+		legacy_key.extend_from_slice(user_id.as_bytes());
+		self.roomuserid_privateread
+			.qry(&legacy_key)
+			.await
+			.deserialized()
 	}
 
 	pub(super) async fn last_privateread_update(
@@ -354,9 +407,20 @@ impl Data {
 		user_id: &UserId,
 		room_id: &RoomId,
 	) -> u64 {
-		let key = (room_id, user_id);
+		let key = roomuserid_key(room_id, user_id);
+		if let Ok(value) = self.roomuserid_privatereadreceipt.get(&key).await {
+			if let Ok((_, _, update_count)) =
+				serde_json::from_slice::<(u64, ReceiptEvent, u64)>(&value)
+			{
+				return update_count;
+			}
+		}
+
+		let mut legacy_key = room_id.as_bytes().to_vec();
+		legacy_key.push(0xFF);
+		legacy_key.extend_from_slice(user_id.as_bytes());
 		self.roomuserid_lastprivatereadupdate
-			.qry(&key)
+			.qry(&legacy_key)
 			.await
 			.deserialized()
 			.unwrap_or(0)

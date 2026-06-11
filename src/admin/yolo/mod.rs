@@ -701,4 +701,7 @@ pub enum YoloCommand {
 
 	/// Migrate old read receipts to the new O(1) map.
 	MigrateReadReceipts,
+
+	/// Migrate old private read receipts to the new consolidated map.
+	MigratePrivateReadReceipts,
 }
