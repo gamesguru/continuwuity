@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+	collections::{BTreeMap, HashSet},
+	pin::pin,
+};
 
 use conduwuit::{
 	Error, Result, at, debug, debug_warn, extract_variant,
@@ -426,7 +429,10 @@ async fn fetch_shortstatehashes(
 			| Some(last_sync_end_count) => services
 				.rooms
 				.timeline
-				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
+				.prev_shortstatehash(
+					room_id,
+					PduCount::Normal(last_sync_end_count.saturating_add(1)),
+				)
 				.await
 				.ok(),
 			| None => None,
@@ -549,8 +555,7 @@ async fn build_state_events(
 				// the state before that first event will be completely empty. In this case,
 				// or if we fail to resolve, we use current_shortstatehash to ensure clients
 				// get the m.room.create event in their initial sync state.
-				use futures::StreamExt;
-				let mut state_stream = std::pin::pin!(
+				let mut state_stream = pin!(
 					services
 						.rooms
 						.state_accessor
@@ -935,11 +940,12 @@ async fn build_device_list_updates(
 		.rooms
 		.state_accessor
 		.state_get(current_shortstatehash, &StateEventType::RoomEncryption, "")
+		.await
 		.is_ok();
 
 	// initial syncs don't include device updates, and rooms which aren't encrypted
 	// don't affect them, so return early in either of those cases
-	if last_sync_end_count.is_none() || !(is_encrypted_room.await) {
+	if last_sync_end_count.is_none() || !is_encrypted_room {
 		return Ok(DeviceListUpdates::new());
 	}
 

@@ -985,11 +985,11 @@ where
 	}
 
 	for user_id in left_encrypted_users {
-		let dont_shares_a_room = !shares_a_room(services, sender_user, &user_id, None).await;
+		let dont_share_a_room = !shares_a_room(services, sender_user, &user_id, None).await;
 
 		// If the user doesn't share a room with the target anymore, we need
 		// to tell them
-		if dont_shares_a_room {
+		if dont_share_a_room {
 			device_list_left.insert(user_id);
 		}
 	}

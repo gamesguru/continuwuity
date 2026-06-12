@@ -86,8 +86,19 @@ pub(super) async fn exists(&self, room_id: OwnedRoomId) -> Result {
 
 #[admin_command]
 pub(super) async fn purge_sync_tokens(&self, room: OwnedRoomOrAliasId) -> Result {
-	// Resolve the room ID from the room or alias ID
-	let room_id = self.services.rooms.alias.resolve(&room).await?;
+	// Accept room IDs directly, and only resolve aliases when they are local.
+	let room_id = if room.is_room_id() {
+		let room_id: &ruma::RoomId = (&*room).try_into().expect("valid RoomId");
+		room_id.to_owned()
+	} else {
+		let alias: &ruma::RoomAliasId = (&*room).try_into().expect("valid RoomAliasId");
+		if alias.server_name() != self.services.globals.server_name() {
+			return Err!(Request(NotFound(
+				"Refusing to resolve non-local room alias; please provide room ID or local alias"
+			)));
+		}
+		self.services.rooms.alias.resolve(&room).await?
+	};
 
 	// Delete all tokens for this room using the service method
 	let deleted_count = self

@@ -90,6 +90,14 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 	Ok(())
 }
 
+/// Drops all sync tokens from the database.
+///
+/// NOTE: This function is intended as a one-time migration utility. It uses
+/// `Map::clear()`, which operates on a snapshot. Because it runs after
+/// `router::start` has initialized background services, any concurrent writes
+/// to `roomsynctoken_shortstatehash` from background tasks would race with this
+/// clear and survive. There are currently no such writers, but this assumption
+/// must hold for this function to remain safe.
 async fn drop_sync_tokens(db: &conduwuit_database::Database) {
 	conduwuit_core::info!("Dropping all sync tokens as requested by CLI flag...");
 	db["roomsynctoken_shortstatehash"].clear().await;

@@ -280,6 +280,10 @@ impl Service {
 	/// Returns the shortstatehash of the room at the event directly preceding
 	/// the exclusive `before` param. `before` does not have to be a valid
 	/// count or in the room.
+	///
+	/// Note: Caching is restricted to `PduCount::Normal` to prevent stale cache
+	/// entries from being served if historical PDUs with backfilled counts are
+	/// subsequently inserted.
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub async fn prev_shortstatehash(
 		&self,
@@ -311,9 +315,11 @@ impl Service {
 		let result = self.services.state.get_shortstatehash(shorteventid).await;
 
 		if let Ok(hash) = result {
-			self.prev_shortstatehash_cache
-				.lock()
-				.insert((shortroomid, before), hash);
+			if matches!(before, PduCount::Normal(_)) {
+				self.prev_shortstatehash_cache
+					.lock()
+					.insert((shortroomid, before), hash);
+			}
 		}
 
 		result
@@ -322,6 +328,10 @@ impl Service {
 	/// Returns the shortstatehash of the room at the event directly following
 	/// the exclusive `after` param. `after` does not have to be a valid count
 	/// or in the room.
+	///
+	/// Note: Caching is restricted to `PduCount::Normal` to prevent stale cache
+	/// entries from being served if historical PDUs with backfilled counts are
+	/// subsequently inserted.
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub async fn next_shortstatehash(
 		&self,
@@ -353,9 +363,11 @@ impl Service {
 		let result = self.services.state.get_shortstatehash(shorteventid).await;
 
 		if let Ok(hash) = result {
-			self.next_shortstatehash_cache
-				.lock()
-				.insert((shortroomid, after), hash);
+			if matches!(after, PduCount::Normal(_)) {
+				self.next_shortstatehash_cache
+					.lock()
+					.insert((shortroomid, after), hash);
+			}
 		}
 
 		result
