@@ -59,7 +59,7 @@ use crate::{
 /// The default maximum number of events to return in the `timeline` key of
 /// joined and left rooms. If the number of events sent since the last sync
 /// exceeds this number, the `timeline` will be `limited`.
-const DEFAULT_TIMELINE_LIMIT: usize = 30;
+const DEFAULT_TIMELINE_LIMIT: usize = 10;
 
 /// A collection of updates to users' device lists, used for E2EE.
 struct DeviceListUpdates {
@@ -528,7 +528,7 @@ pub(crate) async fn build_sync_events(
 						if let Some(content) = helper.content {
 							if content.membership == "join" {
 								if let Some(state_key) = helper.state_key {
-									if let Ok(user_id) = UserId::parse(state_key) {
+									if let Ok(user_id) = UserId::parse(&state_key) {
 										extra_presence_users.insert(user_id.to_owned());
 									}
 								}
@@ -541,9 +541,11 @@ pub(crate) async fn build_sync_events(
 
 		for user_id in extra_presence_users {
 			if user_id != syncing_user {
-				if !presence_updates.contains_key(&user_id) {
-					if let Ok(presence_event) = services.presence.get_presence(&user_id).await {
-						presence_updates.insert(user_id, presence_event.content);
+				if let std::collections::hash_map::Entry::Vacant(e) =
+					presence_updates.entry(user_id)
+				{
+					if let Ok(presence_event) = services.presence.get_presence(e.key()).await {
+						e.insert(presence_event.content);
 					}
 				}
 			}
