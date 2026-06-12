@@ -455,6 +455,88 @@ pub(crate) async fn build_sync_events(
 	let mut device_list_updates: DeviceLists = device_list_updates.into();
 	device_list_updates.changed.extend(keys_changed);
 
+	let mut presence_updates = presence_updates.unwrap_or_default();
+	if services.config.allow_local_presence {
+		let mut extra_presence_users = HashSet::new();
+
+		// Collect members of rooms that the syncing user joined since the last sync
+		if let Some(last_sync_end_count) = last_sync_end_count {
+			for room_id in joined_rooms.keys() {
+				let last_sync_end_shortstatehash = services
+					.rooms
+					.timeline
+					.prev_shortstatehash(
+						room_id,
+						conduwuit::matrix::pdu::PduCount::Normal(
+							last_sync_end_count.saturating_add(1),
+						),
+					)
+					.await
+					.ok()
+					.flatten();
+
+				let joined_since_last_sync = match last_sync_end_shortstatehash {
+					| Some(last_sync_end_shortstatehash) => {
+						use ruma::events::{
+							StateEventType,
+							room::member::{MembershipState, RoomMemberEventContent},
+						};
+						let membership = services
+							.rooms
+							.state_accessor
+							.state_get_content::<RoomMemberEventContent>(
+								last_sync_end_shortstatehash,
+								&StateEventType::RoomMember,
+								syncing_user.as_str(),
+							)
+							.await
+							.ok();
+						membership
+							.as_ref()
+							.is_none_or(|content| content.membership != MembershipState::Join)
+					},
+					| None => true,
+				};
+
+				if joined_since_last_sync {
+					use futures::StreamExt;
+					let mut members = services.rooms.state_cache.room_members(room_id);
+					while let Some(member_id) = members.next().await {
+						extra_presence_users.insert(member_id.to_owned());
+					}
+				}
+			}
+		}
+
+		// Collect users who joined any room in the timeline of this sync
+		for joined_room in joined_rooms.values() {
+			for event in &joined_room.timeline.events {
+				let json_str = event.json().get();
+				let event_type = gjson::get(json_str, "type").str();
+				if event_type == "m.room.member" {
+					let membership = gjson::get(json_str, "content.membership").str();
+					if membership == "join" {
+						if let Ok(user_id) =
+							UserId::parse(gjson::get(json_str, "state_key").str())
+						{
+							extra_presence_users.insert(user_id.to_owned());
+						}
+					}
+				}
+			}
+		}
+
+		for user_id in extra_presence_users {
+			if user_id != syncing_user {
+				if !presence_updates.contains_key(&user_id) {
+					if let Ok(presence_event) = services.presence.get_presence(&user_id).await {
+						presence_updates.insert(user_id, presence_event.content);
+					}
+				}
+			}
+		}
+	}
+
 	let ruma_response = sync_events::v3::Response {
 		next_batch: current_count.to_string(),
 		rooms: Rooms {
