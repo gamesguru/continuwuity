@@ -291,25 +291,13 @@ where
 		};
 
 		if !is_soft_failed {
-			let state_fetch_current = |k: StateEventType, s: StateKey| async move {
-				let event_id = self
-					.services
-					.state_accessor
-					.room_state_get_id::<OwnedEventId>(room_id, &k, s.as_ref())
-					.await
-					.ok()?;
-				self.services.timeline.get_pdu(&event_id).await.ok()
-			};
-
-			let auth_check_current = state_res::event_auth::auth_check(
+			let auth_check_current = Box::pin(self.check_current_state_auth(
+				room_id,
 				&room_version,
 				&incoming_pdu,
-				None,
-				|ty, sk| state_fetch_current(ty.clone(), sk.into()),
-				create_event.as_pdu(),
-			)
-			.await
-			.unwrap_or(false);
+				create_event,
+			))
+			.await;
 
 			if !auth_check_current {
 				warn!(
@@ -579,6 +567,39 @@ where
 enum StateAtEvent {
 	Resolved(HashMap<u64, OwnedEventId>),
 	FastForward(ShortStateHash),
+}
+
+#[implement(super::Service)]
+#[tracing::instrument(level = "debug", skip_all)]
+async fn check_current_state_auth<Pdu>(
+	&self,
+	room_id: &RoomId,
+	room_version: &state_res::RoomVersion,
+	incoming_pdu: &PduEvent,
+	create_event: &Pdu,
+) -> bool
+where
+	Pdu: Event + Send + Sync,
+{
+	let state_fetch_current = |k: StateEventType, s: StateKey| async move {
+		let event_id = self
+			.services
+			.state_accessor
+			.room_state_get_id::<OwnedEventId>(room_id, &k, s.as_ref())
+			.await
+			.ok()?;
+		self.services.timeline.get_pdu(&event_id).await.ok()
+	};
+
+	state_res::event_auth::auth_check(
+		room_version,
+		incoming_pdu,
+		None,
+		|ty, sk| state_fetch_current(ty.clone(), sk.into()),
+		create_event.as_pdu(),
+	)
+	.await
+	.unwrap_or(false)
 }
 
 /// Find the state-at-event for an incoming PDU. If the PDU is a fast-forward
