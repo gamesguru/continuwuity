@@ -1,4 +1,4 @@
-use conduwuit::{Result, info, matrix::Event, warn};
+use conduwuit::{Result, err, info, matrix::Event, warn};
 use futures::{StreamExt, future::ready, pin_mut};
 use ruma::{EventId, OwnedEventId, OwnedRoomId};
 
@@ -7,7 +7,7 @@ use crate::admin_command;
 #[admin_command]
 pub(super) async fn reorder_timeline(
 	&self,
-	room_id: OwnedRoomId,
+	room_id: Option<OwnedRoomId>,
 	all: bool,
 	tail: Option<usize>,
 	no_compute_state: bool,
@@ -43,6 +43,8 @@ pub(super) async fn reorder_timeline(
 			.write_str(&format!("Reordered timeline for {count} rooms. Clients should re-sync."))
 			.await;
 	}
+
+	let room_id = room_id.ok_or_else(|| err!("room_id is required unless --all is specified"))?;
 
 	if let Some(n) = tail {
 		self.write_str(&format!(

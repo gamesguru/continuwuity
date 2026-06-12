@@ -235,7 +235,8 @@ pub enum YoloCommand {
 	/// end of the timeline instead of in receive order (PduCount).
 	ReorderTimeline {
 		/// The room ID.
-		room_id: OwnedRoomId,
+		#[arg(required_unless_present = "all")]
+		room_id: Option<OwnedRoomId>,
 
 		/// If set, reorders timeline in ALL rooms.
 		#[arg(long)]
