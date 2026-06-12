@@ -66,15 +66,39 @@ fn matches_sender<E: Event>(event: &E, filter: &RoomEventFilter) -> bool {
 	true
 }
 
+fn matches_wildcard(pattern: &str, target: &str) -> bool {
+	let mut parts = pattern.split('*');
+	let first = parts.next().expect("split always yields at least one item");
+	if !target.starts_with(first) {
+		return false;
+	}
+	let mut current_pos = first.len();
+	for part in parts {
+		if part.is_empty() {
+			continue;
+		}
+		if let Some(idx) = target[current_pos..].find(part) {
+			current_pos += idx + part.len();
+		} else {
+			return false;
+		}
+	}
+	if !pattern.ends_with('*') {
+		target.len() == current_pos
+	} else {
+		true
+	}
+}
+
 fn matches_type<E: Event>(event: &E, filter: &RoomEventFilter) -> bool {
 	let kind = event.kind().to_cow_str();
 
-	if filter.not_types.iter().any(is_equal_to!(&kind)) {
+	if filter.not_types.iter().any(|pattern| matches_wildcard(pattern, &kind)) {
 		return false;
 	}
 
 	if let Some(types) = filter.types.as_ref() {
-		if !types.iter().any(is_equal_to!(&kind)) {
+		if !types.iter().any(|pattern| matches_wildcard(pattern, &kind)) {
 			return false;
 		}
 	}
