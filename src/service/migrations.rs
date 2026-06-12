@@ -32,7 +32,7 @@ use crate::{Services, media, rooms::short::ShortStateHash};
 /// - If database is opened at lesser version we apply migrations up to this.
 ///   Note that named-feature migrations may also be performed when opening at
 ///   equal or lesser version. These are expected to be backward-compatible.
-pub(crate) const DATABASE_VERSION: u64 = 18;
+pub(crate) const DATABASE_VERSION: u64 = 19;
 
 pub(crate) async fn migrations(services: &Services) -> Result<()> {
 	let users_count = services.users.count().await;
@@ -259,6 +259,11 @@ async fn migrate(services: &Services) -> Result<()> {
 		migrate_event_store_to_ssot(services)
 			.await
 			.map_err(|e| err!("Failed to run 'migrate_event_store_to_ssot': {e}"))?;
+	}
+
+	if services.globals.db.database_version().await < 19 {
+		services.globals.db.bump_database_version(19);
+		info!("Migration: Bumped database version to 19");
 	}
 
 	assert_eq!(
