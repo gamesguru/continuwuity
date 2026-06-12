@@ -163,8 +163,14 @@ where
 								new_receipt.thread,
 								ruma::events::receipt::ReceiptThread::Unthreaded
 							);
-							if is_unthreaded || !existing_users.contains_key(&user_id) {
-								existing_users.insert(user_id, new_receipt);
+							match existing_users.entry(user_id) {
+								| std::collections::btree_map::Entry::Vacant(e) => {
+									e.insert(new_receipt);
+								},
+								| std::collections::btree_map::Entry::Occupied(mut e) =>
+									if is_unthreaded {
+										e.insert(new_receipt);
+									},
 							}
 						}
 					}
