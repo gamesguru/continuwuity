@@ -2,7 +2,7 @@ use conduwuit::{
 	Event, PduEvent, Result, debug_warn,
 	pdu::EventHash,
 	trace,
-	utils::{self, IterStream, future::ReadyEqExt, stream::WidebandExt as _},
+	utils::{self, IterStream, ReadyExt, future::ReadyEqExt, stream::WidebandExt as _},
 };
 use futures::{StreamExt, future::join};
 use ruma::{
@@ -209,9 +209,9 @@ pub(super) async fn load_left_room(
 		.stream()
 		// filter out ignored events from the timeline
 		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
-		.ready_filter(|(_, pdu)| {
+		.ready_filter(|(_, pdu): &(conduwuit::PduCount, PduEvent)| {
 			use conduwuit::matrix::event::Matches;
-			sync_context.filter.room.timeline.matches(pdu)
+			(&sync_context.filter.room.timeline).matches(pdu)
 		});
 
 	while let Some((_, pdu)) = stream.next().await {

@@ -370,7 +370,7 @@ async fn build_state_and_timeline(
 		.wide_filter_map(|item| ignored_filter(services, item, sync_context.syncing_user))
 		.ready_filter(|(_, pdu)| {
 			use conduwuit::matrix::event::Matches;
-			sync_context.filter.room.timeline.matches(pdu)
+			(&sync_context.filter.room.timeline).matches(pdu)
 		})
 		.map(at!(1))
 		.map(Event::into_format)
