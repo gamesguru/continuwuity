@@ -436,10 +436,10 @@ jobs:
           MATRIX_ROOM_ID: ${{ vars.C10Y_MATRIX_NOTIFY_ROOM_ID || '!m82A7i5caVq0WrL0mc:nutra.tk' }}
           MATRIX_HOMESERVER: ${{ vars.C10Y_MATRIX_NOTIFY_HOMESERVER || 'https://matrix.nutra.tk' }}
           RESULTS_OUTCOME: ${{ steps.results.outcome || '' }}
+          REF: ${{ github.head_ref || github.ref_name }}
         run: |
           ARCH="${{ matrix.arch }}"
           OS="${{ matrix.os }}"
-          REF="${{ github.head_ref || github.ref_name }}"
           SHA="${{ github.sha }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
@@ -456,9 +456,9 @@ jobs:
 
           if [ -n "${MATRIX_TOKEN}" ]; then
             TXN_ID="ci-$(date +%s)-${RANDOM}"
-            curl -f -X PUT \
+            jq -n --arg body "${MSG}" '{msgtype: "m.text", body: $body}' | curl -sf -X PUT \
               "${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${MATRIX_ROOM_ID}/send/m.room.message/${TXN_ID}" \
               -H "Authorization: Bearer ${MATRIX_TOKEN}" \
               -H "Content-Type: application/json" \
-              -d "{\"msgtype\":\"m.notice\",\"body\":\"${MSG}\"}"
+              --data @- || echo "Matrix notify failed (non-fatal)"
           fi
