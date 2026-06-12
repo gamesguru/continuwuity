@@ -319,16 +319,16 @@ complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR
 
 .PHONY: complement/stats
 complement/stats: ##H Check local test stats
-	@test -f "tests/test_results/complement/test_results.jsonl" || (echo "ERROR: tests/test_results/complement/test_results.jsonl does not exist" && exit 1)
+	@test -f "tests/test_results/complement-gg/test_results.jsonl" || (echo "ERROR: tests/test_results/complement-gg/test_results.jsonl does not exist" && exit 1)
 	@echo "Parsing Complement test results..."
-	@PASS=$$(jq -s '[.[] | select(.Action == "pass")] | length' tests/test_results/complement/test_results.jsonl); \
-	FAIL=$$(jq -s '[.[] | select(.Action == "fail")] | length' tests/test_results/complement/test_results.jsonl); \
-	SKIP=$$(jq -s '[.[] | select(.Action == "skip")] | length' tests/test_results/complement/test_results.jsonl); \
+	@PASS=$$(jq -s '[.[] | select(.Action == "pass")] | length' tests/test_results/complement-gg/test_results.jsonl); \
+	FAIL=$$(jq -s '[.[] | select(.Action == "fail")] | length' tests/test_results/complement-gg/test_results.jsonl); \
+	SKIP=$$(jq -s '[.[] | select(.Action == "skip")] | length' tests/test_results/complement-gg/test_results.jsonl); \
 	TOTAL=$$((PASS + FAIL + SKIP)); \
 	echo ""; \
 	if [ "$$FAIL" -gt 0 ] && [ "$$VERBOSE" = "1" ]; then \
 		echo "Failed Tests:"; \
-		jq -r 'select(.Action == "fail") | .Test' tests/test_results/complement/test_results.jsonl | sort -u; \
+		jq -r 'select(.Action == "fail") | .Test' tests/test_results/complement-gg/test_results.jsonl | sort -u; \
 		echo ""; \
 	fi; \
 	echo "=== Complement Test Stats ==="; \
@@ -339,7 +339,7 @@ complement/stats: ##H Check local test stats
 	echo "Σ Total:   $$TOTAL"; \
 	echo ""; \
 	echo "JSON file (on main) last modified by: "; \
-	git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+	git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement-gg/test_results.jsonl
 
 .PHONY: complement/diff
 complement/diff: ##H Diff local results against branch baseline (requires REF=git-ref)
@@ -351,7 +351,7 @@ complement/diff: ##H Diff local results against branch baseline (requires REF=gi
 		echo "ERROR: could not find results for $$SHA (or $${SHA:0:8}) in origin/_metadata/badges"; \
 		exit 1; \
 	fi; \
-	diff -u --color tests/test_results/complement/test_results.jsonl <(git show origin/_metadata/badges:$$FILE)
+	diff -u --color tests/test_results/complement-gg/test_results.jsonl <(git show origin/_metadata/badges:$$FILE)
 
 
 
