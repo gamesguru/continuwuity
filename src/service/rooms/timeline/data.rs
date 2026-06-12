@@ -19,7 +19,6 @@ pub(super) struct Data {
 	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	roomid_outliereventid: Arc<Map>,
-	pduid_pdu: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
 	eventid_pdu: Arc<Map>,
@@ -42,7 +41,6 @@ impl Data {
 		Self {
 			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
-			pduid_pdu: db["pduid_pdu"].clone(),
 			roomid_outliereventid: db["roomid_outliereventid"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
@@ -108,9 +106,12 @@ impl Data {
 		&self,
 		event_id: &EventId,
 	) -> Result<CanonicalJsonObject> {
-		let pduid = self.get_pdu_id(event_id).await?;
+		let _pduid = self.get_pdu_id(event_id).await?;
 
-		self.pduid_pdu.get(&pduid).await.deserialized()
+		self.eventid_pdu
+			.get(event_id.as_bytes())
+			.await
+			.deserialized()
 	}
 
 	/// Directly gets the PDU and JSON from the double-write `eventid_pdu` tree.
@@ -166,8 +167,8 @@ impl Data {
 				if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
 					let pdu_id: RawPduId = pdu_id_bytes.into();
 					if let Ok(mut json) = self
-						.pduid_pdu
-						.get(&pdu_id)
+						.eventid_pdu
+						.get(&event_id_bytes)
 						.await
 						.deserialized::<CanonicalJsonObject>()
 					{
@@ -176,7 +177,7 @@ impl Data {
 								"event_id".into(),
 								ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
 							);
-							self.pduid_pdu.raw_put(pdu_id, Json(&json));
+							self.eventid_pdu.raw_put(&event_id_bytes, Json(&json));
 							fixed = fixed.saturating_add(1);
 						}
 					}
@@ -188,7 +189,6 @@ impl Data {
 
 	pub(super) async fn remove_from_timeline(&self, event_id: &EventId) {
 		if let Ok(pduid) = self.get_pdu_id(event_id).await {
-			self.pduid_pdu.remove(&pduid);
 			self.eventid_pduid.remove(event_id);
 			self.room_pducount_eventid.remove(&pduid);
 
@@ -201,14 +201,12 @@ impl Data {
 
 	/// Remove timeline entry when pdu_id is known (avoids DB lookup).
 	pub(super) fn remove_from_timeline_by_id(&self, pdu_id: &RawPduId, event_id: &EventId) {
-		self.pduid_pdu.remove(pdu_id);
 		self.eventid_pduid.remove(event_id);
 		self.room_pducount_eventid.remove(pdu_id);
 	}
 
 	/// Drop a duplicate PDU by ID without removing the event mapping
 	pub(super) fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) {
-		self.pduid_pdu.remove(pdu_id);
 		self.room_pducount_eventid.remove(pdu_id);
 	}
 
@@ -229,7 +227,11 @@ impl Data {
 		event_id: &EventId,
 	) -> Result<PduEvent> {
 		let pduid = self.get_pdu_id(event_id).await?;
-		let pdu: PduEvent = self.pduid_pdu.get(&pduid).await.deserialized()?;
+		let pdu: PduEvent = self
+			.eventid_pdu
+			.get(event_id.as_bytes())
+			.await
+			.deserialized()?;
 
 		// Enforce cross-room boundary: verify the PDU belongs to the expected room
 		if let Some(expected_room) = room_id {
@@ -349,8 +351,19 @@ impl Data {
 
 		// Batch fetch timeline PDUs
 		let pdu_events = if !valid_pdu_ids.is_empty() {
-			self.pduid_pdu
+			let event_id_bytes_batch: Vec<Result<database::Handle<'_>>> = self
+				.room_pducount_eventid
 				.get_batch(futures::stream::iter(valid_pdu_ids.iter().map(AsRef::as_ref)))
+				.collect()
+				.await;
+
+			let valid_event_id_bytes: Vec<Vec<u8>> = event_id_bytes_batch
+				.into_iter()
+				.map(|r| r.map(|h| h.to_vec()).unwrap_or_default())
+				.collect();
+
+			self.eventid_pdu
+				.get_batch(futures::stream::iter(valid_event_id_bytes.iter().map(AsRef::as_ref)))
 				.map(|res: Result<database::Handle<'_>>| {
 					res.and_then(|handle| handle.deserialized::<PduEvent>())
 				})
@@ -498,7 +511,8 @@ impl Data {
 		room_id: Option<&RoomId>,
 		pdu_id: &RawPduId,
 	) -> Result<PduEvent> {
-		let pdu: PduEvent = self.pduid_pdu.get(pdu_id).await.deserialized()?;
+		let event_id_bytes = self.room_pducount_eventid.get(pdu_id).await?;
+		let pdu: PduEvent = self.eventid_pdu.get(&event_id_bytes).await.deserialized()?;
 
 		if let Some(expected_room) = room_id {
 			let actual_room = pdu.room_id_or_hash();
@@ -527,7 +541,8 @@ impl Data {
 		&self,
 		pdu_id: &RawPduId,
 	) -> Result<CanonicalJsonObject> {
-		self.pduid_pdu.get(pdu_id).await.deserialized()
+		let event_id_bytes = self.room_pducount_eventid.get(pdu_id).await?;
+		self.eventid_pdu.get(&event_id_bytes).await.deserialized()
 	}
 
 	pub(super) async fn append_pdu(
@@ -540,9 +555,6 @@ impl Data {
 		debug_assert!(matches!(count, PduCount::Normal(_)), "PduCount not Normal");
 
 		let mut batch = database::rocksdb::WriteBatch::default();
-
-		self.pduid_pdu
-			.raw_put_into_batch(&mut batch, pdu_id, Json(json));
 
 		let event_id_bytes = pdu.event_id.as_bytes();
 
@@ -615,9 +627,6 @@ impl Data {
 		json: &CanonicalJsonObject,
 	) {
 		let mut batch = database::rocksdb::WriteBatch::default();
-
-		self.pduid_pdu
-			.raw_put_into_batch(&mut batch, pdu_id, Json(json));
 
 		let event_id_bytes = event_id.as_bytes();
 		self.eventid_pduid
@@ -692,14 +701,11 @@ impl Data {
 		pdu_json: &CanonicalJsonObject,
 		event_id: &EventId,
 	) -> Result {
-		if self.pduid_pdu.get(pdu_id).await.is_not_found() {
+		if self.room_pducount_eventid.get(pdu_id).await.is_not_found() {
 			return Err!(Request(NotFound("PDU does not exist.")));
 		}
 
 		let mut batch = database::rocksdb::WriteBatch::default();
-
-		self.pduid_pdu
-			.raw_put_into_batch(&mut batch, pdu_id, Json(pdu_json));
 
 		let event_id_bytes = event_id.as_bytes();
 
