@@ -5,7 +5,7 @@ use conduwuit::{
 	matrix::{Event, pdu::PduEvent},
 };
 use futures::{StreamExt, future::ready};
-use ruma::{OwnedEventId, OwnedRoomOrAliasId, OwnedUserId, RoomId};
+use ruma::{OwnedEventId, OwnedRoomOrAliasId, OwnedUserId};
 
 use crate::admin_command;
 
@@ -100,7 +100,16 @@ pub(super) async fn list_outliers(
 				},
 		}
 
-		let room_id_str = pdu.room_id().map_or("unknown", RoomId::as_str);
+		let room_id_str = pdu.room_id().map_or_else(
+			|| {
+				if pdu.kind.to_string() == "m.room.create" {
+					event_id.as_str().replace('$', "!")
+				} else {
+					"unknown".to_owned()
+				}
+			},
+			|r| r.as_str().to_owned(),
+		);
 		let sender = pdu.sender();
 		let kind = pdu.kind.to_string();
 		let ts = pdu.origin_server_ts;

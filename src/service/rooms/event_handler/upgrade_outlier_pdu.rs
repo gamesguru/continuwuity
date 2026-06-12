@@ -280,7 +280,7 @@ where
 	let mut soft_fail = if skip_soft_fail {
 		false
 	} else {
-		match incoming_pdu.redacts_id(&room_version_id) {
+		let mut is_soft_failed = match incoming_pdu.redacts_id(&room_version_id) {
 			| None => false,
 			| Some(redact_id) =>
 				!self
@@ -288,7 +288,40 @@ where
 					.state_accessor
 					.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
 					.await?,
+		};
+
+		if !is_soft_failed {
+			let state_fetch_current = |k: StateEventType, s: StateKey| async move {
+				let event_id = self
+					.services
+					.state_accessor
+					.room_state_get_id::<OwnedEventId>(room_id, &k, s.as_ref())
+					.await
+					.ok()?;
+				self.services.timeline.get_pdu(&event_id).await.ok()
+			};
+
+			let auth_check_current = state_res::event_auth::auth_check(
+				&room_version,
+				&incoming_pdu,
+				None,
+				|ty, sk| state_fetch_current(ty.clone(), sk.into()),
+				create_event.as_pdu(),
+			)
+			.await
+			.unwrap_or(false);
+
+			if !auth_check_current {
+				warn!(
+					event_id = %incoming_pdu.event_id,
+					"Event passed auth against state-at-event, but FAILED auth against the current room state. \
+					This indicates a DAG fracture. Soft-failing event."
+				);
+				is_soft_failed = true;
+			}
 		}
+
+		is_soft_failed
 	};
 
 	let state_ids_compressed = match &state_at_incoming_event {
