@@ -11,7 +11,7 @@ use conduwuit::{
 	warn,
 };
 use database::Json;
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt, pin_mut};
 use itertools::Itertools;
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -350,17 +350,36 @@ async fn migrate_read_receipts(services: &Services) -> Result<()> {
 	let stream_index = db["readreceiptid_readreceipt"].clone();
 	let state_map = db["roomuserid_readreceipt"].clone();
 
-	let mut stream =
-		stream_index.stream_raw_from::<(&RoomId, u64, &UserId), ReceiptEvent, _>(&[]);
+	let stream = stream_index.raw_stream();
+	pin_mut!(stream);
 
 	let mut total_migrated: usize = 0;
 
-	while let Some(Ok(((room_id, count, user_id), event))) = stream.next().await {
-		let mut key = room_id.as_bytes().to_vec();
-		key.push(database::SEP);
-		key.extend_from_slice(user_id.as_bytes());
+	while let Some((key, value)) = stream.try_next().await? {
+		let sep1 = key.iter().position(|&b| b == database::SEP);
+		let Some(sep1) = sep1 else {
+			continue;
+		};
 
-		state_map.put(key, Json((count, event)));
+		let room_id_bytes = &key[..sep1];
+		let count_start = sep1.saturating_add(1);
+		let count_end = count_start.saturating_add(8);
+		if key.len() <= count_end || key[count_end] != database::SEP {
+			continue;
+		}
+		let count_bytes = &key[count_start..count_end];
+		let count = conduwuit::utils::u64_from_bytes(count_bytes).unwrap_or(0);
+		let user_id_bytes = &key[count_end.saturating_add(1)..];
+
+		let Ok(event) = serde_json::from_slice::<ReceiptEvent>(value) else {
+			continue;
+		};
+
+		let mut state_key = room_id_bytes.to_vec();
+		state_key.push(database::SEP);
+		state_key.extend_from_slice(user_id_bytes);
+
+		state_map.put(state_key, Json((count, event)));
 		total_migrated = total_migrated.saturating_add(1);
 
 		if total_migrated.is_multiple_of(2000) {
@@ -846,49 +865,53 @@ async fn fix_referencedevents_missing_sep(services: &Services) -> Result {
 }
 
 async fn fix_readreceiptid_readreceipt_duplicates(services: &Services) -> Result {
-	use conduwuit::arrayvec::ArrayString;
-	use ruma::identifiers_validation::MAX_BYTES;
-
-	type ArrayId = ArrayString<MAX_BYTES>;
-	type Key<'a> = (&'a RoomId, u64, &'a UserId);
-
 	info!("Fixing undeleted entries in readreceiptid_readreceipt...");
 
 	let db = &services.db;
 	let cork = db.cork_and_sync();
 	let readreceiptid_readreceipt = db["readreceiptid_readreceipt"].clone();
+	let roomuserid_readreceipt = db["roomuserid_readreceipt"].clone();
 
-	let mut cur_room: Option<ArrayId> = None;
-	let mut cur_user: Option<ArrayId> = None;
 	let (mut total, mut fixed): (usize, usize) = (0, 0);
-	readreceiptid_readreceipt
-		.keys()
-		.expect_ok()
-		.ready_for_each(|key: Key<'_>| {
-			let (room_id, _, user_id) = key;
-			let last_room = cur_room.replace(
-				room_id
-					.as_str()
-					.try_into()
-					.expect("invalid room_id in database"),
-			);
 
-			let last_user = cur_user.replace(
-				user_id
-					.as_str()
-					.try_into()
-					.expect("invalid user_id in database"),
-			);
+	let iter = readreceiptid_readreceipt.raw_stream();
+	pin_mut!(iter);
 
-			let is_dup = cur_room == last_room && cur_user == last_user;
-			if is_dup {
-				readreceiptid_readreceipt.del(key);
+	while let Some((key, _)) = iter.try_next().await? {
+		let sep1 = key.iter().position(|&b| b == database::SEP);
+		let Some(sep1) = sep1 else {
+			continue;
+		};
+
+		let room_id_bytes = &key[..sep1];
+		let count_start = sep1.saturating_add(1);
+		let count_end = count_start.saturating_add(8);
+		if key.len() <= count_end || key[count_end] != database::SEP {
+			continue;
+		}
+		let count_bytes = &key[count_start..count_end];
+		let count = conduwuit::utils::u64_from_bytes(count_bytes).unwrap_or(0);
+		let user_id_bytes = &key[count_end.saturating_add(1)..];
+
+		let mut state_key = room_id_bytes.to_vec();
+		state_key.push(database::SEP);
+		state_key.extend_from_slice(user_id_bytes);
+
+		let mut max_count = 0;
+		if let Ok(value) = roomuserid_readreceipt.get(&state_key).await {
+			if let Ok((state_count, _)) =
+				serde_json::from_slice::<(u64, ruma::events::receipt::ReceiptEvent)>(&value)
+			{
+				max_count = state_count;
 			}
+		}
 
-			fixed = fixed.saturating_add(is_dup.into());
-			total = total.saturating_add(1);
-		})
-		.await;
+		if count < max_count {
+			readreceiptid_readreceipt.del(key);
+			fixed = fixed.saturating_add(1);
+		}
+		total = total.saturating_add(1);
+	}
 
 	drop(cork);
 	info!(?total, ?fixed, "Fixed undeleted entries in readreceiptid_readreceipt.");

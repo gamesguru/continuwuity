@@ -552,23 +552,31 @@ impl Data {
 		self.room_pducount_eventid
 			.insert_into_batch(&mut batch, pdu_id, event_id_bytes);
 
+		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
+		{
+			bincode::deserialize::<rooms::timeline::EventMetadata>(&*bytes).ok()
+		} else {
+			None
+		};
+
 		let metadata = rooms::timeline::EventMetadata {
 			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
 			is_outlier: false,
 			origin_server_ts: pdu.origin_server_ts().0,
 			depth: pdu.depth(),
-			soft_failed: false, // Populated via migration or Phase 2 plumbing
+			soft_failed: existing_metadata.as_ref().is_some_and(|m| m.soft_failed),
 			rejected: pdu.rejected(),
 			redacted_by: pdu.redacts().map(ToOwned::to_owned),
-			short_state_hash: None,
+			short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.eventid_metadata
-				.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
+				.insert_into_batch(&mut batch, event_id_bytes, metadata_bytes);
 		}
 
 		self.pduid_pdu.apply_batch(&batch);
 		self.pduid_pdu.wake(pdu_id);
+		self.eventid_pdu.wake(event_id_bytes);
 	}
 
 	pub(super) fn prepend_backfill_pdu(
@@ -597,26 +605,34 @@ impl Data {
 		// Backfilled PDUs don't have full event structs readily available here,
 		// but we can parse enough to populate the metadata.
 		if let Ok(pdu) = serde_json::from_value::<PduEvent>(serde_json::to_value(json).unwrap()) {
+			let existing_metadata =
+				if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
+					bincode::deserialize::<rooms::timeline::EventMetadata>(&*bytes).ok()
+				} else {
+					None
+				};
+
 			let metadata = rooms::timeline::EventMetadata {
 				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
 				is_outlier: false,
 				origin_server_ts: pdu.origin_server_ts().0,
 				depth: pdu.depth(),
-				soft_failed: false,
+				soft_failed: existing_metadata.as_ref().is_some_and(|m| m.soft_failed),
 				rejected: pdu.rejected(),
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
-				short_state_hash: None,
+				short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				self.eventid_metadata.insert_into_batch(
 					&mut batch,
-					&event_id_bytes,
+					event_id_bytes,
 					metadata_bytes,
 				);
 			}
 		}
 		self.pduid_pdu.apply_batch(&batch);
 		self.pduid_pdu.wake(pdu_id);
+		self.eventid_pdu.wake(event_id_bytes);
 	}
 
 	/// Removes a pdu and creates a new one with the same id.
@@ -644,20 +660,27 @@ impl Data {
 		if let Ok(pdu) =
 			serde_json::from_value::<PduEvent>(serde_json::to_value(pdu_json).unwrap())
 		{
+			let existing_metadata =
+				if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await {
+					bincode::deserialize::<rooms::timeline::EventMetadata>(&*bytes).ok()
+				} else {
+					None
+				};
+
 			let metadata = rooms::timeline::EventMetadata {
 				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
 				is_outlier: false,
 				origin_server_ts: pdu.origin_server_ts().0,
 				depth: pdu.depth(),
-				soft_failed: false,
+				soft_failed: existing_metadata.as_ref().is_some_and(|m| m.soft_failed),
 				rejected: pdu.rejected(),
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
-				short_state_hash: None,
+				short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				self.eventid_metadata.insert_into_batch(
 					&mut batch,
-					&event_id_bytes,
+					event_id_bytes,
 					metadata_bytes,
 				);
 			}
@@ -665,6 +688,7 @@ impl Data {
 
 		self.pduid_pdu.apply_batch(&batch);
 		self.pduid_pdu.wake(pdu_id);
+		self.eventid_pdu.wake(event_id_bytes);
 		Ok(())
 	}
 

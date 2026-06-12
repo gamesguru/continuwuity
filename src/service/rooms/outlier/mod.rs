@@ -139,6 +139,8 @@ pub fn add_pdu_outlier(
 	let mut batch = database::rocksdb::WriteBatch::default();
 	self.add_pdu_outlier_batch(&mut batch, event_id, pdu, room_id);
 	self.db.eventid_outlierpdu.apply_batch(&batch);
+	self.db.eventid_outlierpdu.wake(event_id);
+	self.db.eventid_pdu.wake(event_id.as_bytes());
 }
 
 /// Append the PDU as an outlier using a WriteBatch.

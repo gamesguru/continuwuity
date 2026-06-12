@@ -234,7 +234,8 @@ impl Data {
 		// and MSC4102 says to prioritize unthreaded, we effectively mutate the
 		// incoming threaded receipt to unthreaded, UNLESS the user's existing
 		// unthreaded receipt is already on a more recent event.
-		for (new_event_id, new_type, new_receipt) in &mut new_receipts {
+		let mut synthetic_receipts = Vec::new();
+		for (new_event_id, new_type, new_receipt) in &new_receipts {
 			if new_receipt.thread != ReceiptThread::Unthreaded {
 				let mut should_synthesize = true;
 
@@ -266,10 +267,13 @@ impl Data {
 				}
 
 				if should_synthesize {
-					new_receipt.thread = ReceiptThread::Unthreaded;
+					let mut synthetic = new_receipt.clone();
+					synthetic.thread = ReceiptThread::Unthreaded;
+					synthetic_receipts.push((new_event_id.clone(), new_type.clone(), synthetic));
 				}
 			}
 		}
+		new_receipts.extend(synthetic_receipts);
 
 		// Remove old receipts for the same thread and type
 		for (_, new_type, new_receipt) in &new_receipts {

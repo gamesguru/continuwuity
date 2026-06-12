@@ -59,7 +59,7 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "eventid_metadata",
-		val_size_hint: Some(16),
+		val_size_hint: Some(128),
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
