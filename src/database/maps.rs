@@ -58,11 +58,23 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "eventid_metadata",
+		val_size_hint: Some(16),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "eventid_outlierpdu",
 		cache_disp: CacheDisp::SharedWith("pduid_pdu"),
 		key_size_hint: Some(48),
 		val_size_hint: Some(1488),
 		block_size: 1024,
+		index_size: 512,
+		..descriptor::RANDOM
+	},
+	Descriptor {
+		name: "eventid_pdu",
+		val_size_hint: Some(1520),
+		block_size: 2048,
 		index_size: 512,
 		..descriptor::RANDOM
 	},
@@ -91,6 +103,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
+		name: "federation_outbound_to_device",
+		val_size_hint: Some(128),
+		..descriptor::RANDOM
+	},
+	Descriptor {
 		name: "global",
 		..descriptor::RANDOM_SMALL
 	},
@@ -115,6 +132,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "logintoken_expiresatuserid",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "mediaid_file",
 		..descriptor::RANDOM_SMALL
 	},
@@ -124,6 +145,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "onetimekeyid_onetimekeys",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "openidtoken_expiresatuserid",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
@@ -140,21 +165,7 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::SEQUENTIAL
 	},
 	Descriptor {
-		name: "eventid_pdu",
-		val_size_hint: Some(1520),
-		block_size: 2048,
-		index_size: 512,
-		..descriptor::RANDOM
-	},
-	Descriptor {
-		name: "event_metadata",
-		val_size_hint: Some(16),
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "room_pducount_eventid",
-		key_size_hint: Some(16),
-		val_size_hint: Some(32),
+		name: "presenceid_presence",
 		..descriptor::SEQUENTIAL_SMALL
 	},
 	Descriptor {
@@ -166,16 +177,7 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "presenceid_presence",
-		..descriptor::SEQUENTIAL_SMALL
-	},
-	Descriptor {
 		name: "readreceiptid_readreceipt",
-		..descriptor::RANDOM
-	},
-	Descriptor {
-		name: "roomuserid_readreceipt",
-		val_size_hint: Some(1024),
 		..descriptor::RANDOM
 	},
 	Descriptor {
@@ -185,6 +187,17 @@ pub(super) static MAPS: &[Descriptor] = &[
 	Descriptor {
 		name: "registrationtoken_info",
 		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "rejectedeventids",
+		key_size_hint: Some(48),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "room_pducount_eventid",
+		key_size_hint: Some(16),
+		val_size_hint: Some(32),
+		..descriptor::SEQUENTIAL_SMALL
 	},
 	Descriptor {
 		name: "roomid_invitedcount",
@@ -243,11 +256,8 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "roomuserid_privatereadevent",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "roomuserid_lastprivatereadupdate",
+		name: "roomuserid_knockedcount",
+		val_size_hint: Some(8),
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
@@ -256,23 +266,31 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "roomuserid_lastprivatereadupdate",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "roomuserid_leftcount",
 		val_size_hint: Some(8),
 		..descriptor::RANDOM
-	},
-	Descriptor {
-		name: "roomuserid_knockedcount",
-		val_size_hint: Some(8),
-		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "roomuserid_privateread",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "roomuserid_privatereadevent",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "roomuserid_privatereadreceipt",
 		val_size_hint: Some(1024),
 		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "roomuserid_readreceipt",
+		val_size_hint: Some(1024),
+		..descriptor::RANDOM
 	},
 	Descriptor {
 		name: "roomuseroncejoinedids",
@@ -309,11 +327,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 	Descriptor {
 		name: "servernameevent_data",
 		cache_disp: CacheDisp::Unique,
-		val_size_hint: Some(128),
-		..descriptor::RANDOM
-	},
-	Descriptor {
-		name: "federation_outbound_to_device",
 		val_size_hint: Some(128),
 		..descriptor::RANDOM
 	},
@@ -356,11 +369,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "softfailedeventids",
-		key_size_hint: Some(48),
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "rejectedeventids",
 		key_size_hint: Some(48),
 		..descriptor::RANDOM_SMALL
 	},
@@ -448,6 +456,14 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "userid_lock",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userid_logindisabled",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "userid_masterkeyid",
 		..descriptor::RANDOM_SMALL
 	},
@@ -460,23 +476,15 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
-		name: "userid_suspension",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "userid_lock",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "userid_logindisabled",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
 		name: "userid_presenceid",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "userid_selfsigningkeyid",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userid_suspension",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
@@ -488,16 +496,12 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "openidtoken_expiresatuserid",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "logintoken_expiresatuserid",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
 		name: "userroomid_highlightcount",
 		..descriptor::RANDOM
+	},
+	Descriptor {
+		name: "userroomid_invitesender",
+		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "userroomid_invitestate",
@@ -508,19 +512,15 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
-		name: "userroomid_leftstate",
-		..descriptor::RANDOM
-	},
-	Descriptor {
 		name: "userroomid_knockedstate",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "userroomid_notificationcount",
+		name: "userroomid_leftstate",
 		..descriptor::RANDOM
 	},
 	Descriptor {
-		name: "userroomid_invitesender",
-		..descriptor::RANDOM_SMALL
+		name: "userroomid_notificationcount",
+		..descriptor::RANDOM
 	},
 ];

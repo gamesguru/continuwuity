@@ -452,7 +452,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 
 	let eventid_pdu = db["eventid_pdu"].clone();
 	let room_pducount_eventid = db["room_pducount_eventid"].clone();
-	let event_metadata = db["event_metadata"].clone();
+	let eventid_metadata = db["eventid_metadata"].clone();
 
 	let mut timeline_stream = eventid_pduid.raw_stream();
 	let mut timeline_migrated: usize = 0;
@@ -476,7 +476,11 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 					short_state_hash: None,
 				};
 				if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-					event_metadata.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
+					eventid_metadata.insert_into_batch(
+						&mut batch,
+						&event_id_bytes,
+						metadata_bytes,
+					);
 				}
 			}
 
@@ -515,7 +519,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 				short_state_hash: None,
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-				event_metadata.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
+				eventid_metadata.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
 			}
 		}
 

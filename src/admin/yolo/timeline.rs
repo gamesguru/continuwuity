@@ -307,7 +307,7 @@ pub(super) async fn verify_event_store(&self) -> Result {
 	while let Some(Ok((pdu_id_bytes, _pdu_json_bytes))) = pduid_pdu_stream.next().await {
 		timeline_scanned = timeline_scanned.saturating_add(1);
 
-		// 1. Check room_pducount_eventid
+		// Check room_pducount_eventid
 		let event_id_bytes_res = self.services.db["room_pducount_eventid"]
 			.get(&pdu_id_bytes)
 			.await;
@@ -318,15 +318,15 @@ pub(super) async fn verify_event_store(&self) -> Result {
 
 		let event_id_bytes = event_id_bytes_res.unwrap();
 
-		// 2. Check eventid_pdu
+		// Check eventid_pdu
 		let new_json_bytes_res = self.services.db["eventid_pdu"].get(&event_id_bytes).await;
 		if new_json_bytes_res.is_err() {
 			timeline_missing = timeline_missing.saturating_add(1);
 			continue;
 		}
 
-		// 3. Check event_metadata
-		let metadata_bytes_res = self.services.db["event_metadata"]
+		// Check eventid_metadata
+		let metadata_bytes_res = self.services.db["eventid_metadata"]
 			.get(&event_id_bytes)
 			.await;
 		if metadata_bytes_res.is_err() {
@@ -356,7 +356,7 @@ pub(super) async fn verify_event_store(&self) -> Result {
 			continue;
 		}
 
-		let metadata_bytes_res = self.services.db["event_metadata"]
+		let metadata_bytes_res = self.services.db["eventid_metadata"]
 			.get(&event_id_bytes)
 			.await;
 		if metadata_bytes_res.is_err() {

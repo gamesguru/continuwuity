@@ -21,7 +21,7 @@ struct Data {
 	eventid_receivecount: Arc<Map>,
 	roomid_outliereventid: Arc<Map>,
 	eventid_pdu: Arc<Map>,
-	event_metadata: Arc<Map>,
+	eventid_metadata: Arc<Map>,
 }
 
 struct Services {
@@ -38,7 +38,7 @@ impl crate::Service for Service {
 				eventid_receivecount: args.db["eventid_receivecount"].clone(),
 				roomid_outliereventid: args.db["roomid_outliereventid"].clone(),
 				eventid_pdu: args.db["eventid_pdu"].clone(),
-				event_metadata: args.db["event_metadata"].clone(),
+				eventid_metadata: args.db["eventid_metadata"].clone(),
 			},
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
@@ -203,9 +203,11 @@ pub fn add_pdu_outlier_batch(
 			short_state_hash: None,
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-			self.db
-				.event_metadata
-				.insert_into_batch(batch, event_id.as_bytes(), &metadata_bytes);
+			self.db.eventid_metadata.insert_into_batch(
+				batch,
+				event_id.as_bytes(),
+				&metadata_bytes,
+			);
 		}
 	}
 }

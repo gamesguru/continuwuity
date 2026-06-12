@@ -23,7 +23,7 @@ pub(super) struct Data {
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
 	eventid_pdu: Arc<Map>,
-	event_metadata: Arc<Map>,
+	eventid_metadata: Arc<Map>,
 	room_pducount_eventid: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
@@ -46,7 +46,7 @@ impl Data {
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
 			eventid_pdu: db["eventid_pdu"].clone(),
-			event_metadata: db["event_metadata"].clone(),
+			eventid_metadata: db["eventid_metadata"].clone(),
 			room_pducount_eventid: db["room_pducount_eventid"].clone(),
 			db: args.db.clone(),
 			services: Services {
@@ -563,7 +563,7 @@ impl Data {
 			short_state_hash: None,
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-			self.event_metadata
+			self.eventid_metadata
 				.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
 		}
 
@@ -608,7 +608,7 @@ impl Data {
 				short_state_hash: None,
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-				self.event_metadata.insert_into_batch(
+				self.eventid_metadata.insert_into_batch(
 					&mut batch,
 					&event_id_bytes,
 					metadata_bytes,
@@ -655,7 +655,7 @@ impl Data {
 				short_state_hash: None,
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-				self.event_metadata.insert_into_batch(
+				self.eventid_metadata.insert_into_batch(
 					&mut batch,
 					&event_id_bytes,
 					metadata_bytes,
