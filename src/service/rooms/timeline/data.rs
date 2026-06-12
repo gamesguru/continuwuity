@@ -756,13 +756,18 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
+		use conduwuit::utils::stream::{TryWidebandExt, automatic_width};
+
 		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
-				self.pduid_pdu
+				self.room_pducount_eventid
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(move |kv| Self::parse_json_slice(None, kv))
+					.wide_and_then(automatic_width(), move |(pdu_id, event_id_bytes)| async move {
+						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
+					})
 			})
 			.try_flatten_stream()
 	}
@@ -772,13 +777,18 @@ impl Data {
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
+		use conduwuit::utils::stream::{TryWidebandExt, automatic_width};
+
 		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
-				self.pduid_pdu
+				self.room_pducount_eventid
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.ready_and_then(move |kv| Self::parse_json_slice(None, kv))
+					.wide_and_then(automatic_width(), move |(pdu_id, event_id_bytes)| async move {
+						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
+					})
 			})
 			.try_flatten_stream()
 	}

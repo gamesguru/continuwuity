@@ -61,7 +61,7 @@ pub async fn watch(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
 
 		// PDUs
 		let short_roomid = short_roomid.to_be_bytes().to_vec();
-		futures.push(self.db.pduid_pdu.watch_prefix(&short_roomid));
+		futures.push(self.db.room_pducount_eventid.watch_prefix(&short_roomid));
 
 		// EDUs
 		let typing_room_id = room_id.to_owned();
