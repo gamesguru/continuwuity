@@ -197,14 +197,14 @@ fn get_cache(ctx: &Context, desc: &Descriptor) -> Option<Cache> {
 	// legacy-compat way
 	let config = &ctx.server.config;
 	let cap = match desc.name {
+		| "eventid_pdu" => Some(config.pdu_cache_capacity),
 		| "eventid_pduid" => Some(config.eventid_pdu_cache_capacity),
 		| "eventid_shorteventid" => Some(config.eventidshort_cache_capacity),
+		| "servernameevent_data" => Some(config.servernameevent_data_cache_capacity),
 		| "shorteventid_eventid" => Some(config.shorteventid_cache_capacity),
 		| "shorteventid_authchain" => Some(config.auth_chain_cache_capacity),
 		| "shortstatekey_statekey" => Some(config.shortstatekey_cache_capacity),
 		| "statekey_shortstatekey" => Some(config.statekeyshort_cache_capacity),
-		| "servernameevent_data" => Some(config.servernameevent_data_cache_capacity),
-		| "pduid_pdu" | "eventid_outlierpdu" => Some(config.pdu_cache_capacity),
 		| _ => None,
 	}
 	.map(TryInto::try_into)

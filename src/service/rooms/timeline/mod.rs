@@ -297,10 +297,10 @@ impl Service {
 			.await
 			.map_err(|e| err!(Database("Failed to sort timeline: {e:?}")))?;
 
-		// BACKUP PHASE: Safely backup all JSON to the outlier tables BEFORE deleting
+		// BACKUP PHASE: Safely backup all timeline pointers to the backup table BEFORE deleting
 		// them from the timeline. This prevents data loss since
-		// remove_from_timeline_by_id deletes the pduid_pdu entries that exclusively
-		// hold normal event JSON.
+		// remove_from_timeline_by_id deletes the room_pducount_eventid entries that exclusively
+		// route to normal event JSON.
 		self.backup_timeline_entries(room_id, shortroomid, &entries)
 			.await;
 

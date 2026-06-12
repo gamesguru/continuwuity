@@ -113,7 +113,7 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 		}
 	}
 
-	// Remove from timeline tables (pduid_pdu + eventid_pduid)
+	// Remove from timeline tables (room_pducount_eventid + eventid_pduid)
 	self.services
 		.rooms
 		.timeline
@@ -301,22 +301,11 @@ pub(super) async fn verify_event_store(&self) -> Result {
 	let mut timeline_missing = 0_usize;
 	let mut timeline_scanned = 0_usize;
 
-	let pduid_pdu_stream = self.services.db["pduid_pdu"].raw_stream();
-	futures::pin_mut!(pduid_pdu_stream);
+	let pduid_stream = self.services.db["room_pducount_eventid"].raw_stream();
+	futures::pin_mut!(pduid_stream);
 
-	while let Some(Ok((pdu_id_bytes, _pdu_json_bytes))) = pduid_pdu_stream.next().await {
+	while let Some(Ok((_pdu_id_bytes, event_id_bytes))) = pduid_stream.next().await {
 		timeline_scanned = timeline_scanned.saturating_add(1);
-
-		// Check room_pducount_eventid
-		let event_id_bytes_res = self.services.db["room_pducount_eventid"]
-			.get(&pdu_id_bytes)
-			.await;
-		if event_id_bytes_res.is_err() {
-			timeline_missing = timeline_missing.saturating_add(1);
-			continue;
-		}
-
-		let event_id_bytes = event_id_bytes_res.unwrap();
 
 		// Check eventid_pdu
 		let new_json_bytes_res = self.services.db["eventid_pdu"].get(&event_id_bytes).await;

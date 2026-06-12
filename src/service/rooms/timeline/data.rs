@@ -165,7 +165,7 @@ impl Data {
 		while let Some((event_id_bytes, pdu_id_bytes)) = iter.try_next().await? {
 			if let Ok(event_id_str) = std::str::from_utf8(event_id_bytes) {
 				if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
-					let pdu_id: RawPduId = pdu_id_bytes.into();
+					let _pdu_id: RawPduId = pdu_id_bytes.into();
 					if let Ok(mut json) = self
 						.eventid_pdu
 						.get(&event_id_bytes)
@@ -264,7 +264,7 @@ impl Data {
 	pub(super) async fn non_outlier_pdu_exists(&self, event_id: &EventId) -> Result {
 		let pduid = self.get_pdu_id(event_id).await?;
 
-		self.pduid_pdu.exists(&pduid).await
+		self.room_pducount_eventid.exists(&pduid).await
 	}
 
 	/// Returns the pdu.
@@ -363,7 +363,7 @@ impl Data {
 				.collect();
 
 			self.eventid_pdu
-				.get_batch(futures::stream::iter(valid_event_id_bytes.iter().map(AsRef::as_ref)))
+				.get_batch(futures::stream::iter(valid_event_id_bytes.iter().map(|x| x.as_ref())))
 				.map(|res: Result<database::Handle<'_>>| {
 					res.and_then(|handle| handle.deserialized::<PduEvent>())
 				})
@@ -615,8 +615,8 @@ impl Data {
 				.insert_into_batch(&mut batch, event_id_bytes, metadata_bytes);
 		}
 
-		self.pduid_pdu.apply_batch(&batch);
-		self.pduid_pdu.wake(pdu_id);
+		self.eventid_pdu.apply_batch(&batch);
+		self.room_pducount_eventid.wake(pdu_id);
 		self.eventid_pdu.wake(event_id_bytes);
 	}
 
@@ -689,8 +689,8 @@ impl Data {
 				);
 			}
 		}
-		self.pduid_pdu.apply_batch(&batch);
-		self.pduid_pdu.wake(pdu_id);
+		self.eventid_pdu.apply_batch(&batch);
+		self.room_pducount_eventid.wake(pdu_id);
 		self.eventid_pdu.wake(event_id_bytes);
 	}
 
@@ -742,8 +742,8 @@ impl Data {
 			}
 		}
 
-		self.pduid_pdu.apply_batch(&batch);
-		self.pduid_pdu.wake(pdu_id);
+		self.eventid_pdu.apply_batch(&batch);
+		self.room_pducount_eventid.wake(pdu_id);
 		self.eventid_pdu.wake(event_id_bytes);
 		Ok(())
 	}
@@ -764,10 +764,13 @@ impl Data {
 				self.room_pducount_eventid
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(automatic_width(), move |(pdu_id, event_id_bytes)| async move {
-						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
-					})
+					.wide_and_then(
+						automatic_width(),
+						move |(pdu_id, event_id_bytes)| async move {
+							let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+							Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
+						},
+					)
 			})
 			.try_flatten_stream()
 	}
@@ -785,10 +788,13 @@ impl Data {
 				self.room_pducount_eventid
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(automatic_width(), move |(pdu_id, event_id_bytes)| async move {
-						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
-					})
+					.wide_and_then(
+						automatic_width(),
+						move |(pdu_id, event_id_bytes)| async move {
+							let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+							Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
+						},
+					)
 			})
 			.try_flatten_stream()
 	}

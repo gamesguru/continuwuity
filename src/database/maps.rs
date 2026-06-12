@@ -63,15 +63,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "eventid_outlierpdu",
-		cache_disp: CacheDisp::SharedWith("pduid_pdu"),
-		key_size_hint: Some(48),
-		val_size_hint: Some(1488),
-		block_size: 1024,
-		index_size: 512,
-		..descriptor::RANDOM
-	},
-	Descriptor {
 		name: "eventid_pdu",
 		val_size_hint: Some(1520),
 		block_size: 2048,
@@ -154,15 +145,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 	Descriptor {
 		name: "passwordresettoken_info",
 		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "pduid_pdu",
-		cache_disp: CacheDisp::SharedWith("eventid_outlierpdu"),
-		key_size_hint: Some(16),
-		val_size_hint: Some(1520),
-		block_size: 2048,
-		index_size: 512,
-		..descriptor::SEQUENTIAL
 	},
 	Descriptor {
 		name: "presenceid_presence",

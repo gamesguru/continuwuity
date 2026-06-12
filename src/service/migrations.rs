@@ -500,7 +500,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	info!("Starting event store SSOT migration (Timeline)...");
 
 	let db = &services.db;
-	let pduid_pdu = db["pduid_pdu"].clone();
+	// pduid_pdu has been dropped, so we cannot run the migration from it.
 	let eventid_pduid = db["eventid_pduid"].clone();
 
 	let eventid_pdu = db["eventid_pdu"].clone();
@@ -511,38 +511,18 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	let mut timeline_migrated: usize = 0;
 
 	while let Some(Ok((event_id_bytes, pdu_id_bytes))) = timeline_stream.next().await {
-		if let Ok(pdu_json_bytes) = pduid_pdu.get(&pdu_id_bytes).await {
-			let mut batch = database::rocksdb::WriteBatch::default();
+		// pduid_pdu has been dropped. We cannot migrate from it anymore.
+		// If an admin needs to migrate an old database, they must first upgrade to a
+		// version that contains the migration, and then upgrade to this version.
+		warn!(
+			"Found unmigrated event {} in eventid_pduid, but pduid_pdu has been dropped. \
+			 This database must be migrated using an older version of conduwuit first.",
+			String::from_utf8_lossy(&event_id_bytes)
+		);
+		timeline_migrated = timeline_migrated.saturating_add(1);
 
-			eventid_pdu.raw_put_into_batch(&mut batch, event_id_bytes, &*pdu_json_bytes);
-			room_pducount_eventid.insert_into_batch(&mut batch, pdu_id_bytes, event_id_bytes);
-
-			if let Ok(parsed_pdu) = serde_json::from_slice::<PduEvent>(&pdu_json_bytes) {
-				let metadata = crate::rooms::timeline::EventMetadata {
-					short_room_id: u64::from_be_bytes(pdu_id_bytes[0..8].try_into().unwrap()),
-					is_outlier: false,
-					origin_server_ts: parsed_pdu.origin_server_ts().0,
-					depth: parsed_pdu.depth(),
-					soft_failed: false,
-					rejected: parsed_pdu.rejected(),
-					redacted_by: parsed_pdu.redacts().map(ToOwned::to_owned),
-					short_state_hash: None,
-				};
-				if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-					eventid_metadata.insert_into_batch(
-						&mut batch,
-						&event_id_bytes,
-						metadata_bytes,
-					);
-				}
-			}
-
-			eventid_pdu.apply_batch(&batch);
-			timeline_migrated = timeline_migrated.saturating_add(1);
-
-			if timeline_migrated.is_multiple_of(10000) {
-				info!("Migrated {} timeline PDUs...", timeline_migrated);
-			}
+		if timeline_migrated.is_multiple_of(10000) {
+			info!("Skipped {} unmigrated timeline PDUs...", timeline_migrated);
 		}
 	}
 
