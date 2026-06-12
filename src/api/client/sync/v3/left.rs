@@ -208,7 +208,11 @@ pub(super) async fn load_left_room(
 		.into_iter()
 		.stream()
 		// filter out ignored events from the timeline
-		.wide_filter_map(|item| ignored_filter(services, item, syncing_user));
+		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
+		.ready_filter(|(_, pdu)| {
+			use conduwuit::matrix::event::Matches;
+			sync_context.filter.room.timeline.matches(pdu)
+		});
 
 	while let Some((_, pdu)) = stream.next().await {
 		if pdu.event_type() == &TimelineEventType::RoomMember
