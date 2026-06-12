@@ -621,28 +621,14 @@ impl Service {
 			let pdu_count = PduCount::Normal(new_count);
 			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
-			let pdu = match self.db.get_pdu_in_room(Some(room_id), event_id).await {
-				| Ok(p) => p,
+			let (pdu, mut json) = match self.db.get_from_eventid_pdu(event_id).await {
+				| Ok(res) => res,
 				| Err(e) => {
 					warn!(
 						%event_id,
-						"PduEvent missing during re-insertion (skipping): {e}"
+						"PDU completely missing during re-insertion (skipping): {e}"
 					);
 					continue;
-				},
-			};
-
-			let mut json = match self.db.get_non_outlier_pdu_json(&pdu.event_id).await {
-				| Ok(j) => j,
-				| Err(_) => match self.db.get_pdu_json(&pdu.event_id).await {
-					| Ok(j) => j,
-					| Err(e) => {
-						warn!(
-							%event_id,
-							"PDU JSON missing during re-insertion (skipping): {e}"
-						);
-						continue;
-					},
 				},
 			};
 

@@ -113,6 +113,18 @@ impl Data {
 		self.pduid_pdu.get(&pduid).await.deserialized()
 	}
 
+	/// Directly gets the PDU and JSON from the double-write `eventid_pdu` tree.
+	/// Used for timeline re-insertion when other indices are cleared.
+	pub(super) async fn get_from_eventid_pdu(
+		&self,
+		event_id: &EventId,
+	) -> Result<(PduEvent, CanonicalJsonObject)> {
+		let handle = self.eventid_pdu.get(event_id.as_bytes()).await?;
+		let pdu: PduEvent = handle.deserialized()?;
+		let json: CanonicalJsonObject = handle.deserialized()?;
+		Ok((pdu, json))
+	}
+
 	pub(super) async fn reindex_timeline(&self, room_id: &RoomId) -> Result<usize> {
 		let mut count = 0_usize;
 		let pdus = self.pdus(room_id, PduCount::min());
