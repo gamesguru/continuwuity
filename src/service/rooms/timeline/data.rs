@@ -555,6 +555,25 @@ impl Data {
 		self.eventid_outlierpdu
 			.remove_from_batch(&mut batch, event_id_bytes);
 
+		// CLEANUP: Drop the room outlier index to prevent ghosts during reorder-timeline
+		let room_id_from_json = json
+			.get("room_id")
+			.and_then(ruma::CanonicalJsonValue::as_str)
+			.and_then(|r| <&ruma::RoomId>::try_from(r).ok());
+			
+		let room_id = room_id_from_json.map(ToOwned::to_owned).or_else(|| {
+			(json.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create"))
+				.then(|| pdu.event_id.as_str().replace('$', "!"))
+				.and_then(|r| ruma::OwnedRoomId::parse(r).ok())
+		});
+
+		if let Some(room) = room_id {
+			let mut key = room.as_bytes().to_vec();
+			key.push(0xFF);
+			key.extend_from_slice(event_id_bytes);
+			self.roomid_outliereventid.remove_from_batch(&mut batch, &key);
+		}
+
 		// --- Phase 1: Double-Write ---
 		self.eventid_pdu
 			.raw_put_into_batch(&mut batch, event_id_bytes, Json(json));
@@ -605,6 +624,25 @@ impl Data {
 			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
 		self.eventid_outlierpdu
 			.remove_from_batch(&mut batch, event_id_bytes);
+
+		// CLEANUP: Drop the room outlier index to prevent ghosts during reorder-timeline
+		let room_id_from_json = json
+			.get("room_id")
+			.and_then(ruma::CanonicalJsonValue::as_str)
+			.and_then(|r| <&ruma::RoomId>::try_from(r).ok());
+			
+		let room_id = room_id_from_json.map(ToOwned::to_owned).or_else(|| {
+			(json.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create"))
+				.then(|| event_id.as_str().replace('$', "!"))
+				.and_then(|r| ruma::OwnedRoomId::parse(r).ok())
+		});
+
+		if let Some(room) = room_id {
+			let mut key = room.as_bytes().to_vec();
+			key.push(0xFF);
+			key.extend_from_slice(event_id_bytes);
+			self.roomid_outliereventid.remove_from_batch(&mut batch, &key);
+		}
 
 		// --- Phase 1: Double-Write ---
 		self.eventid_pdu
