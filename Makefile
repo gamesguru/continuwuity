@@ -158,7 +158,7 @@ lint:   ##H Lint code
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		AWS_LC_RS_NO_BUNDLE=1 \
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
-		cargo clippy $(CARGO_SCOPE) --locked --no-deps $(CARGO_FLAGS) -- -D warnings
+		cargo clippy $(CARGO_SCOPE) --locked --no-deps $(CARGO_FLAGS) -- $(if $(CI),-D warnings)
 
 .PHONY: test
 test:   ##H Run tests
@@ -232,7 +232,7 @@ build-cross: ##H Cross-compile for specific glibc and CPU (uses cargo-zigbuild)
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		AWS_LC_RS_NO_BUNDLE=1 \
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
-		RUSTFLAGS="-C target-cpu=$(CPU_TARGET) $$RUSTFLAGS" \
+		RUSTFLAGS="-C target-cpu=$(CPU_TARGET) -C link-arg=-L/usr/lib -C link-arg=-L/usr/local/lib $$RUSTFLAGS" \
 		cargo zigbuild --target x86_64-unknown-linux-gnu.$(GLIBC_VERSION) --features $(FEATURES) --locked $(CARGO_FLAGS)
 
 
@@ -317,23 +317,25 @@ complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR
 	COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" COMPLEMENT_HOST_MOUNTS="$(PREFIX)/lib:$(PREFIX)/lib:ro$(if $(HOST_LIBS_MOUNTS),;$(HOST_LIBS_MOUNTS))" ./bin/complement $(COMPLEMENT_DIR)
 
 
-ifdef COMPLEMENT_RESULTS_DIR
-RESULTS_DIR ?= $(COMPLEMENT_RESULTS_DIR)
-endif
-RESULTS_DIR ?= tests/test_results/complement
+.PHONY: complement/clean
+complement/clean: ##H Force-remove all Complement Docker containers and networks
+	@echo "Cleaning up Complement docker resources..."
+	@docker ps -aq --filter "name=complement_" | xargs -r docker rm -f
+	@docker network ls -q --filter "name=complement_" | xargs -r docker network rm
+	@echo "Done."
 
 .PHONY: complement/stats
 complement/stats: ##H Check local test stats
-	@test -f "$(RESULTS_DIR)/test_results.jsonl" || (echo "ERROR: $(RESULTS_DIR)/test_results.jsonl does not exist" && exit 1)
+	@test -f "tests/test_results/complement/test_results.jsonl" || (echo "ERROR: tests/test_results/complement/test_results.jsonl does not exist" && exit 1)
 	@echo "Parsing Complement test results..."
-	@PASS=$$(jq -s '[.[] | select(.Action == "pass")] | length' $(RESULTS_DIR)/test_results.jsonl); \
-	FAIL=$$(jq -s '[.[] | select(.Action == "fail")] | length' $(RESULTS_DIR)/test_results.jsonl); \
-	SKIP=$$(jq -s '[.[] | select(.Action == "skip")] | length' $(RESULTS_DIR)/test_results.jsonl); \
+	@PASS=$$(jq -s '[.[] | select(.Action == "pass")] | length' tests/test_results/complement/test_results.jsonl); \
+	FAIL=$$(jq -s '[.[] | select(.Action == "fail")] | length' tests/test_results/complement/test_results.jsonl); \
+	SKIP=$$(jq -s '[.[] | select(.Action == "skip")] | length' tests/test_results/complement/test_results.jsonl); \
 	TOTAL=$$((PASS + FAIL + SKIP)); \
 	echo ""; \
 	if [ "$$FAIL" -gt 0 ] && [ "$$VERBOSE" = "1" ]; then \
 		echo "Failed Tests:"; \
-		jq -r 'select(.Action == "fail") | .Test' $(RESULTS_DIR)/test_results.jsonl | sort -u; \
+		jq -r 'select(.Action == "fail") | .Test' tests/test_results/complement/test_results.jsonl | sort -u; \
 		echo ""; \
 	fi; \
 	echo "=== Complement Test Stats ==="; \
@@ -344,7 +346,7 @@ complement/stats: ##H Check local test stats
 	echo "Σ Total:   $$TOTAL"; \
 	echo ""; \
 	echo "JSON file (on main) last modified by: "; \
-	git log -1 --format="%an (%ad) %H" origin/main -- $(RESULTS_DIR)/test_results.jsonl
+	git log -1 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
 
 .PHONY: complement/diff
 complement/diff: ##H Diff local results against branch baseline (requires REF=git-ref)
@@ -356,7 +358,7 @@ complement/diff: ##H Diff local results against branch baseline (requires REF=gi
 		echo "ERROR: could not find results for $$SHA (or $${SHA:0:8}) in origin/_metadata/badges"; \
 		exit 1; \
 	fi; \
-	diff -u --color $(RESULTS_DIR)/test_results.jsonl <(git show origin/_metadata/badges:$$FILE)
+	diff -u --color tests/test_results/complement/test_results.jsonl <(git show origin/_metadata/badges:$$FILE)
 
 
 
