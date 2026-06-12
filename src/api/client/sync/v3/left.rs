@@ -170,13 +170,15 @@ pub(super) async fn load_left_room(
 		},
 	};
 
-	let state_after = if services.config.experimental_features.msc4222_enabled {
+	let state_after = if services.config.experimental_features.msc4222_enabled
+		&& sync_context.use_state_after
+	{
 		if let Some(shortstatehash) = leave_shortstatehash {
 			let lazily_loaded_members = prepare_lazily_loaded_members(
 				services,
 				sync_context,
 				room_id,
-				timeline.senders(),
+				timeline.members(),
 			)
 			.await;
 
@@ -299,7 +301,7 @@ async fn build_left_state_and_timeline(
 	};
 
 	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders());
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members());
 
 	let (timeline_start_shortstatehash, lazily_loaded_members) =
 		join(timeline_start_shortstatehash, lazily_loaded_members).await;

@@ -557,7 +557,7 @@ async fn build_state_events(
 	// the user IDs of members whose membership needs to be sent to the client, if
 	// lazy-loading is enabled.
 	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders());
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members());
 
 	let (timeline_start_shortstatehash, lazily_loaded_members) =
 		join(timeline_start_shortstatehash, lazily_loaded_members).await;
@@ -610,7 +610,7 @@ async fn build_state_after(
 	shortstatehashes: ShortStateHashes,
 	timeline: &TimelinePdus,
 ) -> Result<Vec<PduEvent>> {
-	if !services.config.experimental_features.msc4222_enabled {
+	if !services.config.experimental_features.msc4222_enabled || !sync_context.use_state_after {
 		return Ok(Vec::new());
 	}
 
@@ -620,7 +620,7 @@ async fn build_state_after(
 	// the user IDs of members whose membership needs to be sent to the client, if
 	// lazy-loading is enabled.
 	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders()).await;
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members()).await;
 
 	build_state_initial(
 		services,
