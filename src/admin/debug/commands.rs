@@ -1922,19 +1922,41 @@ pub(super) async fn database_stats(
 	&self,
 	property: Option<String>,
 	map: Option<String>,
+	verbose: bool,
 ) -> Result {
 	let map_name = map.as_ref().map_or(EMPTY, String::as_str);
-	let property = property.unwrap_or_else(|| "rocksdb.stats".to_owned());
-	self.services
-		.db
-		.iter()
-		.filter(|&(&name, _)| map_name.is_empty() || map_name == name)
-		.try_stream()
-		.try_for_each(|(&name, map)| {
-			let res = map.property(&property).expect("invalid property");
-			writeln!(self, "##### {name}:\n```\n{}\n```", res.trim())
-		})
-		.await
+
+	if !verbose && property.is_none() {
+		writeln!(self, "| Map | Est. Keys | Est. Live Size |").await?;
+		writeln!(self, "| --- | ---: | ---: |").await?;
+		self.services
+			.db
+			.iter()
+			.filter(|&(&name, _)| map_name.is_empty() || map_name == name)
+			.try_stream()
+			.try_for_each(|(&name, map)| {
+				let keys = map
+					.property("rocksdb.estimate-num-keys")
+					.unwrap_or_default();
+				let size = map
+					.property("rocksdb.estimate-live-data-size")
+					.unwrap_or_default();
+				writeln!(self, "| {name} | {keys} | {size} |")
+			})
+			.await
+	} else {
+		let property = property.unwrap_or_else(|| "rocksdb.stats".to_owned());
+		self.services
+			.db
+			.iter()
+			.filter(|&(&name, _)| map_name.is_empty() || map_name == name)
+			.try_stream()
+			.try_for_each(|(&name, map)| {
+				let res = map.property(&property).expect("invalid property");
+				writeln!(self, "##### {name}:\n```\n{}\n```", res.trim())
+			})
+			.await
+	}
 }
 
 #[admin_command]

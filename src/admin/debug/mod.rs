@@ -231,6 +231,9 @@ pub enum DebugCommand {
 
 		#[arg(short, long, alias("column"))]
 		map: Option<String>,
+
+		#[arg(short, long)]
+		verbose: bool,
 	},
 
 	/// Trim memory usage
