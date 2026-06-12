@@ -261,6 +261,7 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run 'migrate_event_store_to_ssot': {e}"))?;
 	}
 
+	// Version 19 - keep events and outliers in a single table, add eventid_metadata
 	if services.globals.db.database_version().await < 19 {
 		services.globals.db.bump_database_version(19);
 		info!("Migration: Bumped database version to 19");
