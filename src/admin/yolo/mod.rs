@@ -718,9 +718,4 @@ pub enum YoloCommand {
 		/// The room ID.
 		room_id: OwnedRoomId,
 	},
-
-	/// Verifies the Phase 1 Double-Write event store schema.
-	/// Scans legacy tables to ensure all entries are successfully
-	/// mirrored in the new unified event store tables.
-	VerifyEventStore,
 }

@@ -241,19 +241,6 @@ fn get_cache(ctx: &Context, desc: &Descriptor) -> Option<Cache> {
 			Some(cache)
 		},
 
-		| CacheDisp::SharedWith(other) if !caches.contains_key(other) => {
-			let cache = Cache::new_lru_cache_opts(&cache_opts);
-			caches.insert(desc.name.into(), cache.clone());
-			Some(cache)
-		},
-
-		| CacheDisp::SharedWith(other) => Some(
-			caches
-				.get(other)
-				.cloned()
-				.expect("caches.contains_key(other) must be true"),
-		),
-
 		| CacheDisp::Shared => Some(
 			caches
 				.get("Shared")

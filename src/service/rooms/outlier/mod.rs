@@ -17,7 +17,6 @@ pub struct Service {
 }
 
 struct Data {
-	eventid_outlierpdu: Arc<Map>,
 	eventid_receivecount: Arc<Map>,
 	roomid_outliereventid: Arc<Map>,
 	eventid_pdu: Arc<Map>,
@@ -34,7 +33,6 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			db: Data {
-				eventid_outlierpdu: args.db["eventid_outlierpdu"].clone(),
 				eventid_receivecount: args.db["eventid_receivecount"].clone(),
 				roomid_outliereventid: args.db["roomid_outliereventid"].clone(),
 				eventid_pdu: args.db["eventid_pdu"].clone(),
@@ -54,8 +52,8 @@ impl crate::Service for Service {
 #[implement(Service)]
 pub async fn get_outlier_pdu_json(&self, event_id: &EventId) -> Result<CanonicalJsonObject> {
 	self.db
-		.eventid_outlierpdu
-		.get(event_id)
+		.eventid_pdu
+		.get(event_id.as_bytes())
 		.await
 		.deserialized()
 }
@@ -64,23 +62,27 @@ pub async fn get_outlier_pdu_json(&self, event_id: &EventId) -> Result<Canonical
 #[implement(Service)]
 pub async fn get_pdu_outlier(&self, event_id: &EventId) -> Result<PduEvent> {
 	self.db
-		.eventid_outlierpdu
-		.get(event_id)
+		.eventid_pdu
+		.get(event_id.as_bytes())
 		.await
 		.deserialized()
 }
 
 #[implement(Service)]
 pub fn stream_keys(&self) -> impl Stream<Item = OwnedEventId> + Send + '_ {
-	self.db.eventid_outlierpdu.keys().ignore_err()
+	self.db
+		.eventid_metadata
+		.stream::<OwnedEventId, rooms::timeline::EventMetadata>()
+		.ignore_err()
+		.broad_filter_map(|(eid, meta)| async move { meta.is_outlier.then_some(eid) })
 }
 
 #[implement(Service)]
 pub fn stream(&self) -> impl Stream<Item = (OwnedEventId, PduEvent)> + Send + '_ {
-	self.db
-		.eventid_outlierpdu
-		.stream::<OwnedEventId, PduEvent>()
-		.ignore_err()
+	self.stream_keys().broad_filter_map(move |eid| async move {
+		let pdu = self.get_pdu_outlier(&eid).await.ok()?;
+		Some((eid, pdu))
+	})
 }
 
 #[implement(Service)]
@@ -138,8 +140,7 @@ pub fn add_pdu_outlier(
 ) {
 	let mut batch = database::rocksdb::WriteBatch::default();
 	self.add_pdu_outlier_batch(&mut batch, event_id, pdu, room_id);
-	self.db.eventid_outlierpdu.apply_batch(&batch);
-	self.db.eventid_outlierpdu.wake(event_id);
+	self.db.eventid_pdu.apply_batch(&batch);
 	self.db.eventid_pdu.wake(event_id.as_bytes());
 }
 
@@ -172,9 +173,10 @@ pub fn add_pdu_outlier_batch(
 				.and_then(|r| OwnedRoomId::parse(r).ok())
 		});
 
+	// --- Phase 1: Write ---
 	self.db
-		.eventid_outlierpdu
-		.raw_put_into_batch(batch, event_id, Json(pdu.clone()));
+		.eventid_pdu
+		.raw_put_into_batch(batch, event_id.as_bytes(), Json(&pdu));
 
 	if let Some(room_id) = room_id_from_pdu {
 		let room_id: &RoomId = &room_id;
@@ -185,11 +187,6 @@ pub fn add_pdu_outlier_batch(
 			.roomid_outliereventid
 			.insert_into_batch(batch, &key, event_id);
 	}
-
-	// --- Phase 1: Double-Write ---
-	self.db
-		.eventid_pdu
-		.raw_put_into_batch(batch, event_id.as_bytes(), Json(&pdu));
 
 	if let Ok(parsed_pdu) =
 		serde_json::from_value::<PduEvent>(serde_json::to_value(&pdu).unwrap())
@@ -217,7 +214,7 @@ pub fn add_pdu_outlier_batch(
 /// Apply a batch of outlier insertions
 #[implement(Service)]
 pub fn apply_outlier_batch(&self, batch: &database::rocksdb::WriteBatch) {
-	self.db.eventid_outlierpdu.apply_batch(batch);
+	self.db.eventid_pdu.apply_batch(batch);
 }
 
 /// Remove the PDU from the outlier tree. When the caller knows the
@@ -231,8 +228,8 @@ pub async fn remove_outlier(&self, event_id: &EventId, provided_room_id: Option<
 		Some(room_id.to_owned())
 	} else if let Ok(json) = self
 		.db
-		.eventid_outlierpdu
-		.get(event_id)
+		.eventid_pdu
+		.get(event_id.as_bytes())
 		.await
 		.deserialized::<CanonicalJsonObject>()
 	{
@@ -264,8 +261,6 @@ pub async fn remove_outlier(&self, event_id: &EventId, provided_room_id: Option<
 	// entry may remain as a harmless orphan. room_stream filters by
 	// room prefix and ignores orphaned entries.
 
-	self.db.eventid_outlierpdu.remove(event_id);
-
 	if !self
 		.services
 		.timeline
@@ -278,39 +273,7 @@ pub async fn remove_outlier(&self, event_id: &EventId, provided_room_id: Option<
 }
 
 #[implement(Service)]
-pub async fn fix_pdu_event_ids(&self) -> Result<usize> {
-	use futures::{TryStreamExt, pin_mut};
-	let mut fixed: usize = 0;
-	// Use raw_stream to iterate eventid_outlierpdu mapping
-	let iter = self.db.eventid_outlierpdu.raw_stream();
-	pin_mut!(iter);
-
-	while let Some((event_id_bytes, _)) = iter.try_next().await? {
-		if let Ok(event_id_str) = std::str::from_utf8(event_id_bytes) {
-			if let Ok(event_id) = OwnedEventId::try_from(event_id_str) {
-				if let Ok(mut json) = self
-					.db
-					.eventid_outlierpdu
-					.get(&event_id_bytes)
-					.await
-					.deserialized::<CanonicalJsonObject>()
-				{
-					if !json.contains_key("event_id") {
-						json.insert(
-							"event_id".into(),
-							CanonicalJsonValue::String(event_id.as_str().to_owned()),
-						);
-						self.db
-							.eventid_outlierpdu
-							.raw_put(event_id_bytes, Json(&json));
-						fixed = fixed.saturating_add(1);
-					}
-				}
-			}
-		}
-	}
-	Ok(fixed)
-}
+pub async fn fix_pdu_event_ids(&self) -> Result<usize> { Ok(0) }
 
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "info")]

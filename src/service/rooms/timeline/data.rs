@@ -16,7 +16,6 @@ use super::{PduId, RawPduId};
 use crate::{Dep, rooms, rooms::short::ShortRoomId};
 
 pub(super) struct Data {
-	eventid_outlierpdu: Arc<Map>,
 	eventid_pduid: Arc<Map>,
 	roomid_outliereventid: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
@@ -39,7 +38,6 @@ impl Data {
 	pub(super) fn new(args: &crate::Args<'_>) -> Self {
 		let db = &args.db;
 		Self {
-			eventid_outlierpdu: db["eventid_outlierpdu"].clone(),
 			eventid_pduid: db["eventid_pduid"].clone(),
 			roomid_outliereventid: db["roomid_outliereventid"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
@@ -92,11 +90,13 @@ impl Data {
 	/// Returns the json of a pdu.
 	pub(super) async fn get_pdu_json(&self, event_id: &EventId) -> Result<CanonicalJsonObject> {
 		let accepted = self.get_non_outlier_pdu_json(event_id).boxed();
-		let outlier = self
-			.eventid_outlierpdu
-			.get(event_id)
-			.map(Deserialized::deserialized)
-			.boxed();
+		let outlier = async move {
+			self.eventid_pdu
+				.get(event_id.as_bytes())
+				.await?
+				.deserialized()
+		}
+		.boxed();
 
 		select_ok([accepted, outlier]).await.map(at!(0))
 	}
@@ -144,7 +144,11 @@ impl Data {
 			key.extend_from_slice(pdu.event_id.as_bytes());
 
 			if let Ok(json) = self.get_non_outlier_pdu_json(&pdu.event_id).await {
-				self.eventid_outlierpdu.raw_put(&pdu.event_id, Json(&json));
+				// Since we combine outlier and timeline JSON, we just make sure
+				// the JSON is stored in eventid_pdu. The add_pdu_outlier logic handles this.
+				self.eventid_pdu
+					.raw_put(pdu.event_id.as_bytes(), Json(&json));
+				self.eventid_pdu.wake(pdu.event_id.as_bytes());
 				// Must use raw_put to bypass Bincode serializer — .insert()
 				// would prepend an 8-byte length prefix, corrupting lookups.
 				self.roomid_outliereventid
@@ -177,7 +181,7 @@ impl Data {
 								"event_id".into(),
 								ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
 							);
-							self.eventid_pdu.raw_put(&event_id_bytes, Json(&json));
+							self.eventid_pdu.raw_put(event_id_bytes, Json(&json));
 							fixed = fixed.saturating_add(1);
 						}
 					}
@@ -269,7 +273,7 @@ impl Data {
 
 	/// Returns the pdu.
 	///
-	/// Checks the `eventid_outlierpdu` Tree if not found in the timeline.
+	/// Checks the `eventid_pdu` Tree if not found in the timeline.
 	/// If `room_id` is provided, validates the PDU belongs to that room.
 	pub(super) async fn get_pdu_in_room(
 		&self,
@@ -278,8 +282,8 @@ impl Data {
 	) -> Result<PduEvent> {
 		let accepted = self.get_non_outlier_pdu_in_room(room_id, event_id).boxed();
 		let outlier = self
-			.eventid_outlierpdu
-			.get(event_id)
+			.eventid_pdu
+			.get(event_id.as_bytes())
 			.then(move |handle| async move {
 				let handle = handle?;
 				let pdu: PduEvent = handle.deserialized()?;
@@ -363,7 +367,7 @@ impl Data {
 				.collect();
 
 			self.eventid_pdu
-				.get_batch(futures::stream::iter(valid_event_id_bytes.iter().map(|x| x.as_ref())))
+				.get_batch(futures::stream::iter(valid_event_id_bytes.iter().map(Vec::as_slice)))
 				.map(|res: Result<database::Handle<'_>>| {
 					res.and_then(|handle| handle.deserialized::<PduEvent>())
 				})
@@ -375,7 +379,7 @@ impl Data {
 
 		// Batch fetch outliers
 		let outlier_events = if !missing_event_ids.is_empty() {
-			self.eventid_outlierpdu
+			self.eventid_pdu
 				.get_batch(futures::stream::iter(missing_event_ids))
 				.map(|res: Result<database::Handle<'_>>| {
 					res.and_then(|handle| handle.deserialized::<PduEvent>())
@@ -490,8 +494,15 @@ impl Data {
 	/// Like get_non_outlier_pdu(), but without the expense of fetching and
 	/// parsing the PduEvent
 	#[inline]
-	pub(super) async fn outlier_pdu_exists(&self, event_id: &EventId) -> Result {
-		self.eventid_outlierpdu.exists(event_id).await
+	pub(super) async fn outlier_pdu_exists(&self, event_id: &EventId) -> Result<()> {
+		let bytes = self.eventid_metadata.get(event_id.as_bytes()).await?;
+		let meta: rooms::timeline::EventMetadata =
+			bincode::deserialize(&bytes).map_err(|e| err!(Database("corrupt metadata: {e}")))?;
+		if meta.is_outlier {
+			Ok(())
+		} else {
+			Err(err!(Request(NotFound("Not an outlier"))))
+		}
 	}
 
 	/// Like get_pdu(), but without the expense of fetching and parsing the data
@@ -562,8 +573,8 @@ impl Data {
 		self.eventid_pduid
 			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
 
-		self.eventid_outlierpdu
-			.remove_from_batch(&mut batch, event_id_bytes);
+		// No need to remove from eventid_outlierpdu.
+		// remove_from_timeline will drop it from eventid_pdu if it's not an outlier.
 
 		// CLEANUP: Drop the room outlier index to prevent ghosts during
 		// reorder-timeline
@@ -631,8 +642,6 @@ impl Data {
 		let event_id_bytes = event_id.as_bytes();
 		self.eventid_pduid
 			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
-		self.eventid_outlierpdu
-			.remove_from_batch(&mut batch, event_id_bytes);
 
 		// CLEANUP: Drop the room outlier index to prevent ghosts during
 		// reorder-timeline
@@ -756,7 +765,7 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		use conduwuit::utils::stream::{TryWidebandExt, automatic_width};
+		use conduwuit::utils::stream::TryWidebandExt;
 
 		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.map_ok(move |current| {
@@ -764,13 +773,10 @@ impl Data {
 				self.room_pducount_eventid
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(
-						automatic_width(),
-						move |(pdu_id, event_id_bytes)| async move {
-							let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-							Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
-						},
-					)
+					.wide_and_then(move |(pdu_id, event_id_bytes)| async move {
+						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
+					})
 			})
 			.try_flatten_stream()
 	}
@@ -780,7 +786,7 @@ impl Data {
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		use conduwuit::utils::stream::{TryWidebandExt, automatic_width};
+		use conduwuit::utils::stream::TryWidebandExt;
 
 		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.map_ok(move |current| {
@@ -788,13 +794,10 @@ impl Data {
 				self.room_pducount_eventid
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(
-						automatic_width(),
-						move |(pdu_id, event_id_bytes)| async move {
-							let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-							Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
-						},
-					)
+					.wide_and_then(move |(pdu_id, event_id_bytes)| async move {
+						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
+					})
 			})
 			.try_flatten_stream()
 	}

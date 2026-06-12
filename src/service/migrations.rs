@@ -502,22 +502,20 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	let db = &services.db;
 	// pduid_pdu has been dropped, so we cannot run the migration from it.
 	let eventid_pduid = db["eventid_pduid"].clone();
-
 	let eventid_pdu = db["eventid_pdu"].clone();
-	let room_pducount_eventid = db["room_pducount_eventid"].clone();
 	let eventid_metadata = db["eventid_metadata"].clone();
 
 	let mut timeline_stream = eventid_pduid.raw_stream();
 	let mut timeline_migrated: usize = 0;
 
-	while let Some(Ok((event_id_bytes, pdu_id_bytes))) = timeline_stream.next().await {
+	while let Some(Ok((event_id_bytes, _pdu_id_bytes))) = timeline_stream.next().await {
 		// pduid_pdu has been dropped. We cannot migrate from it anymore.
 		// If an admin needs to migrate an old database, they must first upgrade to a
 		// version that contains the migration, and then upgrade to this version.
 		warn!(
-			"Found unmigrated event {} in eventid_pduid, but pduid_pdu has been dropped. \
-			 This database must be migrated using an older version of conduwuit first.",
-			String::from_utf8_lossy(&event_id_bytes)
+			"Found unmigrated event {} in eventid_pduid, but pduid_pdu has been dropped. This \
+			 database must be migrated using an older version of conduwuit first.",
+			String::from_utf8_lossy(event_id_bytes)
 		);
 		timeline_migrated = timeline_migrated.saturating_add(1);
 
