@@ -1128,6 +1128,8 @@ async fn db_lt_19(services: &Services) -> Result<()> {
 
 		let mut batch = database::rocksdb::WriteBatch::default();
 
+		let mut batch_count = 0_usize;
+
 		while let Some(Ok((event_id_bytes, _))) = softfailed_stream.next().await {
 			count = count.saturating_add(1);
 			if let Ok(metadata_bytes) = db["eventid_metadata"].get_blocking(&event_id_bytes) {
@@ -1143,14 +1145,16 @@ async fn db_lt_19(services: &Services) -> Result<()> {
 								&new_bytes,
 							);
 							migrated = migrated.saturating_add(1);
+							batch_count = batch_count.saturating_add(1);
 						}
 					}
 				}
 			}
 
-			if migrated.is_multiple_of(1000) && migrated > 0 {
+			if batch_count >= 1000 {
 				db["eventid_metadata"].apply_batch(&batch);
 				batch.clear();
+				batch_count = 0;
 			}
 		}
 

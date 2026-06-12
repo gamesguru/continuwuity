@@ -63,9 +63,14 @@ pub(crate) async fn set_read_marker_route(
 			&& !services.users.is_suspended(sender_user).await?
 		{
 			// Spec: server SHOULD NOT allow read receipts to move backwards
-			let new_count = services.rooms.timeline.get_pdu_count(event).await;
+			let new_count = services
+				.rooms
+				.timeline
+				.get_pdu_count(event)
+				.await
+				.map_err(|_| conduwuit::err!(Request(NotFound("Event not found."))))?;
 
-			if let Ok(PduCount::Normal(new_count)) = new_count {
+			if let PduCount::Normal(new_count) = new_count {
 				if let Some(old_event_id) = services
 					.rooms
 					.read_receipt
@@ -75,7 +80,7 @@ pub(crate) async fn set_read_marker_route(
 					if let Ok(PduCount::Normal(old_count)) =
 						services.rooms.timeline.get_pdu_count(&old_event_id).await
 					{
-						if new_count < old_count {
+						if new_count <= old_count {
 							conduwuit::info!(
 								target: "read_receipt_debug",
 								"Ignoring read receipt for {} from {} because it moves backwards from {} to {}",
@@ -91,6 +96,7 @@ pub(crate) async fn set_read_marker_route(
 					"Event {} not found in timeline, ignoring read receipt", event
 				);
 			}
+
 			let receipt_content = BTreeMap::from_iter([(
 				event.to_owned(),
 				BTreeMap::from_iter([(
@@ -126,63 +132,62 @@ pub(crate) async fn set_read_marker_route(
 	}
 
 	if let Some(event) = &body.private_read_receipt {
-		let count = services.rooms.timeline.get_pdu_count(event).await;
+		let count = services
+			.rooms
+			.timeline
+			.get_pdu_count(event)
+			.await
+			.map_err(|_| conduwuit::err!(Request(NotFound("Event not found."))))?;
 
-		if let Ok(PduCount::Normal(new_count)) = count {
-			// Don't allow private receipt to move backwards
-			let old_count = services
-				.rooms
-				.read_receipt
-				.private_read_get_count(&body.room_id, sender_user)
-				.await
-				.unwrap_or(0);
+		let PduCount::Normal(new_count) = count else {
+			return Err!(Request(InvalidParam(
+				"Event is a backfilled PDU and cannot be marked as read."
+			)));
+		};
+		// Don't allow private receipt to move backwards
+		let old_count = services
+			.rooms
+			.read_receipt
+			.private_read_get_count(&body.room_id, sender_user)
+			.await
+			.unwrap_or(0);
 
-			if new_count >= old_count {
-				let receipt_content = BTreeMap::from_iter([(
-					event.to_owned(),
+		if new_count > old_count {
+			let receipt_content = BTreeMap::from_iter([(
+				event.to_owned(),
+				BTreeMap::from_iter([(
+					ReceiptType::ReadPrivate,
 					BTreeMap::from_iter([(
-						ReceiptType::ReadPrivate,
-						BTreeMap::from_iter([(
-							sender_user.to_owned(),
-							ruma::events::receipt::Receipt {
-								ts: Some(MilliSecondsSinceUnixEpoch::now()),
-								thread: ReceiptThread::Unthreaded,
-							},
-						)]),
+						sender_user.to_owned(),
+						ruma::events::receipt::Receipt {
+							ts: Some(MilliSecondsSinceUnixEpoch::now()),
+							thread: ReceiptThread::Unthreaded,
+						},
 					)]),
-				)]);
+				)]),
+			)]);
 
-				let receipt_event = ruma::events::receipt::ReceiptEvent {
-					content: ruma::events::receipt::ReceiptEventContent(receipt_content),
-					room_id: body.room_id.clone(),
-				};
+			let receipt_event = ruma::events::receipt::ReceiptEvent {
+				content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+				room_id: body.room_id.clone(),
+			};
 
-				services.rooms.read_receipt.private_read_set(
-					&body.room_id,
-					sender_user,
-					new_count,
-					&receipt_event,
-				)?;
-				conduwuit::debug!(
-					"Accepted private read receipt for {} from {}",
-					event,
-					sender_user
-				);
-			} else {
-				conduwuit::info!(
-					target: "read_receipt_debug",
-					"Ignoring private read receipt for {} from {} because it moves backwards \
-					 from {} to {}",
-					&body.room_id,
-					sender_user,
-					old_count,
-					new_count
-				);
-			}
+			services.rooms.read_receipt.private_read_set(
+				&body.room_id,
+				sender_user,
+				new_count,
+				&receipt_event,
+			)?;
+			conduwuit::debug!("Accepted private read receipt for {} from {}", event, sender_user);
 		} else {
-			conduwuit::debug!(
-				"Event {} not found in timeline, ignoring private read receipt",
-				event
+			conduwuit::info!(
+				target: "read_receipt_debug",
+				"Ignoring private read receipt for {} from {} because it moves backwards \
+				 from {} to {}",
+				&body.room_id,
+				sender_user,
+				old_count,
+				new_count
 			);
 		}
 	}
@@ -241,9 +246,14 @@ pub(crate) async fn create_receipt_route(
 		},
 		| create_receipt::v3::ReceiptType::Read => {
 			// Spec: server SHOULD NOT allow read receipts to move backwards
-			let new_count = services.rooms.timeline.get_pdu_count(&body.event_id).await;
+			let new_count = services
+				.rooms
+				.timeline
+				.get_pdu_count(&body.event_id)
+				.await
+				.map_err(|_| conduwuit::err!(Request(NotFound("Event not found."))))?;
 
-			if let Ok(PduCount::Normal(new_count)) = new_count {
+			if let PduCount::Normal(new_count) = new_count {
 				if let Some(old_event_id) = services
 					.rooms
 					.read_receipt
@@ -253,7 +263,7 @@ pub(crate) async fn create_receipt_route(
 					if let Ok(PduCount::Normal(old_count)) =
 						services.rooms.timeline.get_pdu_count(&old_event_id).await
 					{
-						if new_count < old_count {
+						if new_count <= old_count {
 							conduwuit::info!(
 								target: "read_receipt_debug",
 								"Ignoring read receipt for {} from {} because it moves \
@@ -273,6 +283,7 @@ pub(crate) async fn create_receipt_route(
 					&body.event_id
 				);
 			}
+
 			let receipt_content = BTreeMap::from_iter([(
 				body.event_id.clone(),
 				BTreeMap::from_iter([(
@@ -307,63 +318,66 @@ pub(crate) async fn create_receipt_route(
 			);
 		},
 		| create_receipt::v3::ReceiptType::ReadPrivate => {
-			let count = services.rooms.timeline.get_pdu_count(&body.event_id).await;
+			let count = services
+				.rooms
+				.timeline
+				.get_pdu_count(&body.event_id)
+				.await
+				.map_err(|_| conduwuit::err!(Request(NotFound("Event not found."))))?;
 
-			if let Ok(PduCount::Normal(new_count)) = count {
-				// Don't allow private receipt to move backwards
-				let old_count = services
-					.rooms
-					.read_receipt
-					.private_read_get_count(&body.room_id, sender_user)
-					.await
-					.unwrap_or(0);
+			let PduCount::Normal(new_count) = count else {
+				return Err!(Request(InvalidParam(
+					"Event is a backfilled PDU and cannot be marked as read."
+				)));
+			};
+			// Don't allow private receipt to move backwards
+			let old_count = services
+				.rooms
+				.read_receipt
+				.private_read_get_count(&body.room_id, sender_user)
+				.await
+				.unwrap_or(0);
 
-				if new_count >= old_count {
-					let receipt_content = BTreeMap::from_iter([(
-						body.event_id.clone(),
+			if new_count > old_count {
+				let receipt_content = BTreeMap::from_iter([(
+					body.event_id.clone(),
+					BTreeMap::from_iter([(
+						ReceiptType::ReadPrivate,
 						BTreeMap::from_iter([(
-							ReceiptType::ReadPrivate,
-							BTreeMap::from_iter([(
-								sender_user.to_owned(),
-								ruma::events::receipt::Receipt {
-									ts: Some(MilliSecondsSinceUnixEpoch::now()),
-									thread: body.body.thread.clone(),
-								},
-							)]),
+							sender_user.to_owned(),
+							ruma::events::receipt::Receipt {
+								ts: Some(MilliSecondsSinceUnixEpoch::now()),
+								thread: body.body.thread.clone(),
+							},
 						)]),
-					)]);
+					)]),
+				)]);
 
-					let receipt_event = ruma::events::receipt::ReceiptEvent {
-						content: ruma::events::receipt::ReceiptEventContent(receipt_content),
-						room_id: body.room_id.clone(),
-					};
+				let receipt_event = ruma::events::receipt::ReceiptEvent {
+					content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+					room_id: body.room_id.clone(),
+				};
 
-					services.rooms.read_receipt.private_read_set(
-						&body.room_id,
-						sender_user,
-						new_count,
-						&receipt_event,
-					)?;
-					conduwuit::debug!(
-						"Accepted private read receipt for {} from {}",
-						&body.event_id,
-						sender_user
-					);
-				} else {
-					conduwuit::info!(
-						target: "read_receipt_debug",
-						"Ignoring private read receipt for {} from {} because it moves \
-						 backwards from {} to {}",
-						&body.room_id,
-						sender_user,
-						old_count,
-						new_count
-					);
-				}
-			} else {
+				services.rooms.read_receipt.private_read_set(
+					&body.room_id,
+					sender_user,
+					new_count,
+					&receipt_event,
+				)?;
 				conduwuit::debug!(
-					"Event {} not found in timeline, ignoring private read receipt",
-					&body.event_id
+					"Accepted private read receipt for {} from {}",
+					&body.event_id,
+					sender_user
+				);
+			} else {
+				conduwuit::info!(
+					target: "read_receipt_debug",
+					"Ignoring private read receipt for {} from {} because it moves \
+					 backwards from {} to {}",
+					&body.room_id,
+					sender_user,
+					old_count,
+					new_count
 				);
 			}
 		},

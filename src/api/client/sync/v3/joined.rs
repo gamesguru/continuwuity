@@ -254,14 +254,9 @@ async fn build_ephemeral(
 		receipt_events.push(private_read);
 	}
 
-	let mut edus = if receipt_events.is_empty() {
-		Vec::new()
-	} else {
-		vec![
-			conduwuit_service::rooms::read_receipt::pack_receipts(receipt_events.into_iter())
-				.cast(),
-		]
-	};
+	let mut edus: Vec<Raw<ruma::events::AnySyncEphemeralRoomEvent>> =
+		receipt_events.into_iter().map(Raw::cast).collect();
+
 	edus.extend(typing_event);
 
 	Ok(Ephemeral { events: edus })
