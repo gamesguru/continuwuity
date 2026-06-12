@@ -47,7 +47,7 @@ use ruma::{
 };
 use service::rooms::lazy_loading::{self, MemberSet, Options as _};
 
-use super::{load_timeline, share_encrypted_room};
+use super::load_timeline;
 use crate::{
 	Ruma, RumaResponse,
 	client::{
@@ -472,8 +472,7 @@ pub(crate) async fn build_sync_events(
 						),
 					)
 					.await
-					.ok()
-					.flatten();
+					.ok();
 
 				let joined_since_last_sync = match last_sync_end_shortstatehash {
 					| Some(last_sync_end_shortstatehash) => {
@@ -511,15 +510,29 @@ pub(crate) async fn build_sync_events(
 		// Collect users who joined any room in the timeline of this sync
 		for joined_room in joined_rooms.values() {
 			for event in &joined_room.timeline.events {
-				let json_str = event.json().get();
-				let event_type = gjson::get(json_str, "type").str();
-				if event_type == "m.room.member" {
-					let membership = gjson::get(json_str, "content.membership").str();
-					if membership == "join" {
-						if let Ok(user_id) =
-							UserId::parse(gjson::get(json_str, "state_key").str())
-						{
-							extra_presence_users.insert(user_id.to_owned());
+				#[derive(serde::Deserialize)]
+				struct MemberEventHelper {
+					#[serde(rename = "type")]
+					event_type: String,
+					content: Option<MemberContentHelper>,
+					state_key: Option<String>,
+				}
+
+				#[derive(serde::Deserialize)]
+				struct MemberContentHelper {
+					membership: String,
+				}
+
+				if let Ok(helper) = event.deserialize_as::<MemberEventHelper>() {
+					if helper.event_type == "m.room.member" {
+						if let Some(content) = helper.content {
+							if content.membership == "join" {
+								if let Some(state_key) = helper.state_key {
+									if let Ok(user_id) = UserId::parse(state_key) {
+										extra_presence_users.insert(user_id.to_owned());
+									}
+								}
+							}
 						}
 					}
 				}
@@ -548,7 +561,6 @@ pub(crate) async fn build_sync_events(
 		presence: Presence {
 			events: presence_updates
 				.into_iter()
-				.flat_map(IntoIterator::into_iter)
 				.map(|(sender, content)| PresenceEvent { content, sender })
 				.map(|ref event| Raw::new(event))
 				.filter_map(Result::ok)

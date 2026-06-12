@@ -35,12 +35,16 @@ use ruma::{
 };
 use service::rooms::short::ShortStateHash;
 
-use super::{load_timeline, shares_a_room};
+use super::load_timeline;
 use crate::client::{
 	TimelinePdus, ignored_filter,
-	sync::v3::{
-		DEFAULT_TIMELINE_LIMIT, DeviceListUpdates, SyncContext, prepare_lazily_loaded_members,
-		state::{build_state_incremental, build_state_initial},
+	sync::{
+		shares_a_room,
+		v3::{
+			DEFAULT_TIMELINE_LIMIT, DeviceListUpdates, SyncContext,
+			prepare_lazily_loaded_members,
+			state::{build_state_incremental, build_state_initial},
+		},
 	},
 };
 
@@ -981,9 +985,7 @@ async fn build_device_list_updates(
 					| Leave if !shares_room => {
 						device_list_updates.left.insert(user_id);
 					},
-					| Join if joined_since_last_sync
-						|| shares_room
-						|| syncing_user == user_id =>
+					| Join if joined_since_last_sync || shares_room || syncing_user == user_id =>
 					{
 						device_list_updates.changed.insert(user_id);
 					},
