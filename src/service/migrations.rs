@@ -425,11 +425,45 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 					}
 				})
 			} else {
-				ruma::events::receipt::ReceiptEvent {
-					content: ruma::events::receipt::ReceiptEventContent(
-						std::collections::BTreeMap::new(),
-					),
-					room_id: room_id.to_owned(),
+				let Ok(shortroomid) = services.rooms.short.get_shortroomid(room_id).await else {
+					info!(?room_id, "Room missing, dropping legacy private read receipt");
+					continue;
+				};
+
+				let shorteventid = conduwuit::PduCount::Normal(count);
+				let pdu_id: crate::rooms::timeline::RawPduId =
+					crate::rooms::timeline::PduId { shortroomid, shorteventid }.into();
+
+				if let Ok(pdu) = services.rooms.timeline.get_pdu_from_id(&pdu_id).await {
+					info!(
+						?user_id,
+						?room_id,
+						?count,
+						"Synthesizing missing private read receipt event"
+					);
+					let mut user_map = std::collections::BTreeMap::new();
+					user_map.insert(user_id.to_owned(), ruma::events::receipt::Receipt {
+						thread: ruma::events::receipt::ReceiptThread::Unthreaded,
+						ts: None,
+					});
+					let mut receipt_map = std::collections::BTreeMap::new();
+					receipt_map.insert(ruma::events::receipt::ReceiptType::ReadPrivate, user_map);
+					let mut content = std::collections::BTreeMap::new();
+					content.insert(pdu.event_id, receipt_map);
+
+					let receipt_sync_event = ruma::events::SyncEphemeralRoomEvent {
+						content: ruma::events::receipt::ReceiptEventContent(content),
+					};
+					serde_json::from_str(&serde_json::to_string(&receipt_sync_event).unwrap())
+						.unwrap()
+				} else {
+					info!(
+						?user_id,
+						?room_id,
+						?count,
+						"Timeline event missing, dropping legacy private read receipt"
+					);
+					continue; // If the timeline event is truly gone, drop the receipt entirely
 				}
 			};
 
@@ -870,12 +904,12 @@ async fn fix_readreceiptid_readreceipt_duplicates(services: &Services) -> Result
 	let db = &services.db;
 	let cork = db.cork_and_sync();
 	let readreceiptid_readreceipt = db["readreceiptid_readreceipt"].clone();
-	let roomuserid_readreceipt = db["roomuserid_readreceipt"].clone();
-
+	let iter = readreceiptid_readreceipt.rev_raw_stream();
 	let (mut total, mut fixed): (usize, usize) = (0, 0);
-
-	let iter = readreceiptid_readreceipt.raw_stream();
 	pin_mut!(iter);
+
+	let mut seen = std::collections::HashSet::new();
+	let mut current_room: Option<Vec<u8>> = None;
 
 	while let Some((key, _)) = iter.try_next().await? {
 		let sep1 = key.iter().position(|&b| b == database::SEP);
@@ -884,29 +918,20 @@ async fn fix_readreceiptid_readreceipt_duplicates(services: &Services) -> Result
 		};
 
 		let room_id_bytes = &key[..sep1];
+
+		if Some(room_id_bytes) != current_room.as_deref() {
+			seen.clear();
+			current_room = Some(room_id_bytes.to_vec());
+		}
+
 		let count_start = sep1.saturating_add(1);
 		let count_end = count_start.saturating_add(8);
 		if key.len() <= count_end || key[count_end] != database::SEP {
 			continue;
 		}
-		let count_bytes = &key[count_start..count_end];
-		let count = conduwuit::utils::u64_from_bytes(count_bytes).unwrap_or(0);
 		let user_id_bytes = &key[count_end.saturating_add(1)..];
 
-		let mut state_key = room_id_bytes.to_vec();
-		state_key.push(database::SEP);
-		state_key.extend_from_slice(user_id_bytes);
-
-		let mut max_count = 0;
-		if let Ok(value) = roomuserid_readreceipt.get(&state_key).await {
-			if let Ok((state_count, _)) =
-				serde_json::from_slice::<(u64, ruma::events::receipt::ReceiptEvent)>(&value)
-			{
-				max_count = state_count;
-			}
-		}
-
-		if count < max_count {
+		if !seen.insert(user_id_bytes.to_vec()) {
 			readreceiptid_readreceipt.del(key);
 			fixed = fixed.saturating_add(1);
 		}

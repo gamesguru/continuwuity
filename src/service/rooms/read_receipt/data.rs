@@ -227,54 +227,6 @@ impl Data {
 				})
 			};
 
-		// MSC4102: Synthesize unthreaded receipt if needed.
-		// "To ensure older clients receive read receipts for threads, a server MUST
-		// generate an unthreaded receipt for the same event and user when a threaded
-		// receipt is received." Because Ruma cannot represent both on the same event,
-		// and MSC4102 says to prioritize unthreaded, we effectively mutate the
-		// incoming threaded receipt to unthreaded, UNLESS the user's existing
-		// unthreaded receipt is already on a more recent event.
-		let mut synthetic_receipts = Vec::new();
-		for (new_event_id, new_type, new_receipt) in &new_receipts {
-			if new_receipt.thread != ReceiptThread::Unthreaded {
-				let mut should_synthesize = true;
-
-				// Find existing unthreaded receipt's event ID
-				let mut existing_unthreaded_event_id = None;
-				for (ev_id, receipts) in &existing_event.content.0 {
-					if let Some(users) = receipts.get(new_type) {
-						if let Some(receipt) = users.get(user_id) {
-							if receipt.thread == ReceiptThread::Unthreaded {
-								existing_unthreaded_event_id = Some(ev_id.clone());
-								break;
-							}
-						}
-					}
-				}
-
-				if let Some(existing_ev_id) = existing_unthreaded_event_id {
-					if let (
-						Ok(PduCount::Normal(new_count)),
-						Ok(PduCount::Normal(existing_count)),
-					) = (
-						self.services.timeline.get_pdu_count(new_event_id).await,
-						self.services.timeline.get_pdu_count(&existing_ev_id).await,
-					) {
-						if existing_count > new_count {
-							should_synthesize = false;
-						}
-					}
-				}
-
-				if should_synthesize {
-					let mut synthetic = new_receipt.clone();
-					synthetic.thread = ReceiptThread::Unthreaded;
-					synthetic_receipts.push((new_event_id.clone(), new_type.clone(), synthetic));
-				}
-			}
-		}
-		new_receipts.extend(synthetic_receipts);
-
 		// Remove old receipts for the same thread and type
 		for (_, new_type, new_receipt) in &new_receipts {
 			let mut empty_event_ids = Vec::new();

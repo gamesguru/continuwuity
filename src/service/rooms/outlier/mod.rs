@@ -265,6 +265,16 @@ pub async fn remove_outlier(&self, event_id: &EventId, provided_room_id: Option<
 	// room prefix and ignores orphaned entries.
 
 	self.db.eventid_outlierpdu.remove(event_id);
+
+	if !self
+		.services
+		.timeline
+		.non_outlier_pdu_exists(event_id)
+		.await
+	{
+		self.db.eventid_pdu.remove(event_id.as_bytes());
+		self.db.eventid_metadata.remove(event_id.as_bytes());
+	}
 }
 
 #[implement(Service)]

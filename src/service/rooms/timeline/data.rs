@@ -176,6 +176,12 @@ impl Data {
 		if let Ok(pduid) = self.get_pdu_id(event_id).await {
 			self.pduid_pdu.remove(&pduid);
 			self.eventid_pduid.remove(event_id);
+			self.room_pducount_eventid.remove(&pduid);
+
+			if self.outlier_pdu_exists(event_id).await.is_err() {
+				self.eventid_pdu.remove(event_id.as_bytes());
+				self.eventid_metadata.remove(event_id.as_bytes());
+			}
 		}
 	}
 
@@ -183,10 +189,14 @@ impl Data {
 	pub(super) fn remove_from_timeline_by_id(&self, pdu_id: &RawPduId, event_id: &EventId) {
 		self.pduid_pdu.remove(pdu_id);
 		self.eventid_pduid.remove(event_id);
+		self.room_pducount_eventid.remove(pdu_id);
 	}
 
 	/// Drop a duplicate PDU by ID without removing the event mapping
-	pub(super) fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) { self.pduid_pdu.remove(pdu_id); }
+	pub(super) fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) {
+		self.pduid_pdu.remove(pdu_id);
+		self.room_pducount_eventid.remove(pdu_id);
+	}
 
 	/// Returns the pdu's id.
 	#[inline]
@@ -554,7 +564,7 @@ impl Data {
 
 		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
 		{
-			bincode::deserialize::<rooms::timeline::EventMetadata>(&*bytes).ok()
+			bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
 		} else {
 			None
 		};
@@ -607,7 +617,7 @@ impl Data {
 		if let Ok(pdu) = serde_json::from_value::<PduEvent>(serde_json::to_value(json).unwrap()) {
 			let existing_metadata =
 				if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
-					bincode::deserialize::<rooms::timeline::EventMetadata>(&*bytes).ok()
+					bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
 				} else {
 					None
 				};
@@ -662,7 +672,7 @@ impl Data {
 		{
 			let existing_metadata =
 				if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await {
-					bincode::deserialize::<rooms::timeline::EventMetadata>(&*bytes).ok()
+					bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
 				} else {
 					None
 				};
