@@ -582,13 +582,11 @@ where
 	Pdu: Event + Send + Sync,
 {
 	let state_fetch_current = |k: StateEventType, s: StateKey| async move {
-		let event_id = self
-			.services
+		self.services
 			.state_accessor
-			.room_state_get_id::<OwnedEventId>(room_id, &k, s.as_ref())
+			.room_state_get(room_id, &k, s.as_ref())
 			.await
-			.ok()?;
-		self.services.timeline.get_pdu(&event_id).await.ok()
+			.ok()
 	};
 
 	state_res::event_auth::auth_check(
