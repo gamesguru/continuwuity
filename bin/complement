@@ -7,7 +7,7 @@ set -euo pipefail
 COMPLEMENT_SRC="${COMPLEMENT_SRC:-"$1"}"
 
 # Default results directory
-RESULTS_DIR="${RESULTS_DIR:-tests/test_results/complement-gg}"
+RESULTS_DIR="${RESULTS_DIR:-${COMPLEMENT_RESULTS_DIR:-tests/test_results/complement}}"
 
 # A `.jsonl` file to write test logs to
 LOG_FILE="${2:-"${LOG_FILE:-$RESULTS_DIR/test_logs.jsonl}"}"
