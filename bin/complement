@@ -119,18 +119,18 @@ set +o pipefail
 if [ "$HAS_GOTESTSUM" = true ]; then
     # gotestsum writes full JSON logs
     # We ignore the exit code because we post-process the logs even on failure.
-    (env \
-        -C "$COMPLEMENT_SRC" \
-        COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        gotestsum --format pkgname --hide-summary=output \
+    (
+        cd "$COMPLEMENT_SRC"
+        COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" gotestsum --format pkgname --hide-summary=output \
             --jsonfile "$LOG_FILE" \
-            -- "${TEST_FLAGS[@]}" || true)
+            -- "${TEST_FLAGS[@]}" || true
+    )
 else
     # We ignore the exit code because we post-process the logs even on failure.
-    (env \
-        -C "$COMPLEMENT_SRC" \
-        COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
-        go test -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || true)
+    (
+        cd "$COMPLEMENT_SRC"
+        COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" go test -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || true
+    )
 fi
 
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
