@@ -512,6 +512,18 @@ impl Service {
 			 {stale_removed} stale"
 		);
 
+		// Clean up the backup routing map now that the timeline is safely re-inserted
+		let mut backup_batch = database::rocksdb::WriteBatch::default();
+		for &(old_count, _) in entries.values() {
+			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
+			self.db
+				.room_pducount_eventid_backup
+				.remove_from_batch(&mut backup_batch, old_pdu_id.as_ref());
+		}
+		self.db
+			.room_pducount_eventid_backup
+			.apply_batch(&backup_batch);
+
 		drop(state_lock);
 
 		info!("reorder_timeline: complete, {count} events reordered");
@@ -521,22 +533,24 @@ impl Service {
 
 	async fn backup_timeline_entries(
 		&self,
-		room_id: &RoomId,
+		_room_id: &RoomId,
 		shortroomid: ShortRoomId,
 		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
 	) {
 		info!(
-			"reorder_timeline: safely backing up {} events to outlier tables before deletion...",
+			"reorder_timeline: safely backing up {} sequence routing keys before deletion...",
 			entries.len()
 		);
+		let mut batch = database::rocksdb::WriteBatch::default();
 		for (event_id, &(old_count, _)) in entries {
 			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-			if let Ok(json) = self.db.get_pdu_json_from_id(&old_pdu_id).await {
-				self.db.backup_pdu_to_outlier(room_id, event_id, &json);
-			} else {
-				warn!("reorder_timeline: could not find JSON for {event_id} in pduid_pdu!");
-			}
+			self.db.room_pducount_eventid_backup.insert_into_batch(
+				&mut batch,
+				&old_pdu_id,
+				event_id.as_bytes(),
+			);
 		}
+		self.db.room_pducount_eventid_backup.apply_batch(&batch);
 	}
 
 	async fn remove_old_timeline_entries(

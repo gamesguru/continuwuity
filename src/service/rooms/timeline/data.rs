@@ -25,6 +25,7 @@ pub(super) struct Data {
 	eventid_pdu: Arc<Map>,
 	eventid_metadata: Arc<Map>,
 	room_pducount_eventid: Arc<Map>,
+	pub(super) room_pducount_eventid_backup: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
 }
@@ -48,6 +49,7 @@ impl Data {
 			eventid_pdu: db["eventid_pdu"].clone(),
 			eventid_metadata: db["eventid_metadata"].clone(),
 			room_pducount_eventid: db["room_pducount_eventid"].clone(),
+			room_pducount_eventid_backup: db["room_pducount_eventid_backup"].clone(),
 			db: args.db.clone(),
 			services: Services {
 				short: args.depend::<rooms::short::Service>("rooms::short"),
@@ -300,22 +302,6 @@ impl Data {
 		select_ok([accepted, outlier]).await.map(at!(0))
 	}
 
-	pub(super) fn backup_pdu_to_outlier(
-		&self,
-		room_id: &RoomId,
-		event_id: &EventId,
-		json: &CanonicalJsonObject,
-	) {
-		self.eventid_outlierpdu
-			.raw_put(event_id.as_bytes(), Json(json));
-		// Use expected raw key format: room_id || 0xFF || event_id
-		let mut key = room_id.as_bytes().to_vec();
-		key.push(0xFF);
-		key.extend_from_slice(event_id.as_bytes());
-		self.roomid_outliereventid
-			.raw_put::<&[u8], &[u8]>(&key, event_id.as_bytes());
-	}
-
 	pub(super) async fn get_pdus_in_room_batch(
 		&self,
 		room_id: Option<&RoomId>,
@@ -331,14 +317,14 @@ impl Data {
 			}
 		}
 
-		// 1. Batch fetch from eventid_pduid
+		// Batch fetch from eventid_pduid
 		let pdu_ids: Vec<Result<database::Handle<'_>>> = self
 			.eventid_pduid
 			.get_batch(futures::stream::iter(event_ids.iter().map(|id| id.as_bytes())))
 			.collect()
 			.await;
 
-		// 2. Separate into hits and misses
+		// Separate into hits and misses
 		let mut valid_pdu_ids = Vec::with_capacity(event_ids.len());
 		let mut missing_event_ids = Vec::with_capacity(event_ids.len());
 
@@ -349,7 +335,7 @@ impl Data {
 			}
 		}
 
-		// 3. Batch fetch timeline PDUs
+		// Batch fetch timeline PDUs
 		let pdu_events = if !valid_pdu_ids.is_empty() {
 			self.pduid_pdu
 				.get_batch(futures::stream::iter(valid_pdu_ids.iter().map(AsRef::as_ref)))
@@ -362,7 +348,7 @@ impl Data {
 			Vec::new()
 		};
 
-		// 4. Batch fetch outliers
+		// Batch fetch outliers
 		let outlier_events = if !missing_event_ids.is_empty() {
 			self.eventid_outlierpdu
 				.get_batch(futures::stream::iter(missing_event_ids))
@@ -375,7 +361,7 @@ impl Data {
 			Vec::new()
 		};
 
-		// 5. Re-assemble results in original order
+		// Re-assemble results in original order
 		let mut pdu_iter = pdu_events.into_iter();
 		let mut outlier_iter = outlier_events.into_iter();
 
@@ -555,12 +541,13 @@ impl Data {
 		self.eventid_outlierpdu
 			.remove_from_batch(&mut batch, event_id_bytes);
 
-		// CLEANUP: Drop the room outlier index to prevent ghosts during reorder-timeline
+		// CLEANUP: Drop the room outlier index to prevent ghosts during
+		// reorder-timeline
 		let room_id_from_json = json
 			.get("room_id")
 			.and_then(ruma::CanonicalJsonValue::as_str)
-			.and_then(|r| <&ruma::RoomId>::try_from(r).ok());
-			
+			.and_then(|r| <&RoomId>::try_from(r).ok());
+
 		let room_id = room_id_from_json.map(ToOwned::to_owned).or_else(|| {
 			(json.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create"))
 				.then(|| pdu.event_id.as_str().replace('$', "!"))
@@ -571,7 +558,8 @@ impl Data {
 			let mut key = room.as_bytes().to_vec();
 			key.push(0xFF);
 			key.extend_from_slice(event_id_bytes);
-			self.roomid_outliereventid.remove_from_batch(&mut batch, &key);
+			self.roomid_outliereventid
+				.remove_from_batch(&mut batch, &key);
 		}
 
 		// --- Phase 1: Double-Write ---
@@ -625,12 +613,13 @@ impl Data {
 		self.eventid_outlierpdu
 			.remove_from_batch(&mut batch, event_id_bytes);
 
-		// CLEANUP: Drop the room outlier index to prevent ghosts during reorder-timeline
+		// CLEANUP: Drop the room outlier index to prevent ghosts during
+		// reorder-timeline
 		let room_id_from_json = json
 			.get("room_id")
 			.and_then(ruma::CanonicalJsonValue::as_str)
-			.and_then(|r| <&ruma::RoomId>::try_from(r).ok());
-			
+			.and_then(|r| <&RoomId>::try_from(r).ok());
+
 		let room_id = room_id_from_json.map(ToOwned::to_owned).or_else(|| {
 			(json.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create"))
 				.then(|| event_id.as_str().replace('$', "!"))
@@ -641,7 +630,8 @@ impl Data {
 			let mut key = room.as_bytes().to_vec();
 			key.push(0xFF);
 			key.extend_from_slice(event_id_bytes);
-			self.roomid_outliereventid.remove_from_batch(&mut batch, &key);
+			self.roomid_outliereventid
+				.remove_from_batch(&mut batch, &key);
 		}
 
 		// --- Phase 1: Double-Write ---

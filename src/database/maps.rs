@@ -200,6 +200,12 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::SEQUENTIAL_SMALL
 	},
 	Descriptor {
+		name: "room_pducount_eventid_backup",
+		key_size_hint: Some(16),
+		val_size_hint: Some(32),
+		..descriptor::SEQUENTIAL_SMALL
+	},
+	Descriptor {
 		name: "roomid_invitedcount",
 		..descriptor::RANDOM_SMALL
 	},
