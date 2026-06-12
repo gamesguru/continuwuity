@@ -382,6 +382,15 @@ pub fn state_full_shortids(
 }
 
 #[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub async fn state_is_empty(&self, shortstatehash: ShortStateHash) -> bool {
+	self.load_full_state(shortstatehash)
+		.await
+		.map(|s| s.is_empty())
+		.unwrap_or(true)
+}
+
+#[implement(super::Service)]
 #[tracing::instrument(name = "load", level = "debug", skip(self))]
 async fn load_full_state(&self, shortstatehash: ShortStateHash) -> Result<Arc<CompressedState>> {
 	self.services

@@ -1,7 +1,4 @@
-use std::{
-	collections::{BTreeMap, HashSet},
-	pin::pin,
-};
+use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
 	Error, Result, at, debug, debug_warn, extract_variant,
@@ -38,7 +35,7 @@ use ruma::{
 };
 use service::rooms::short::ShortStateHash;
 
-use super::{load_timeline, shares_a_room};
+use super::{load_timeline, share_encrypted_room};
 use crate::client::{
 	TimelinePdus, ignored_filter,
 	sync::v3::{
@@ -447,19 +444,7 @@ async fn fetch_shortstatehashes(
 	// current_shortstatehash IF the room actually existed at that count.
 	// if the room is brand new to this sync stream, we keep it as None so
 	// that we correctly trigger an initial state sync.
-	let last_sync_end_shortstatehash = if let Some(hash) = next_hash {
-		Some(hash)
-	} else if let Some(last_count) = last_sync_end_count {
-		// Fallback for idle rooms: if nothing happened since last sync,
-		// and the room timeline started earlier, the state is unchanged.
-		match services.rooms.timeline.first_item_in_room(room_id).await {
-			| Ok((count, _)) if count <= PduCount::Normal(last_count) =>
-				Some(current_shortstatehash),
-			| _ => None,
-		}
-	} else {
-		None
-	};
+	let last_sync_end_shortstatehash = next_hash;
 
 	trace!(
 		"fetch_shortstatehashes: room={room_id} last_count={last_sync_end_count:?} \
@@ -555,14 +540,12 @@ async fn build_state_events(
 				// the state before that first event will be completely empty. In this case,
 				// or if we fail to resolve, we use current_shortstatehash to ensure clients
 				// get the m.room.create event in their initial sync state.
-				let mut state_stream = pin!(
-					services
-						.rooms
-						.state_accessor
-						.state_full_ids::<ruma::OwnedEventId>(shortstatehash)
-				);
-
-				if state_stream.next().await.is_some() {
+				if !services
+					.rooms
+					.state_accessor
+					.state_is_empty(shortstatehash)
+					.await
+				{
 					return shortstatehash;
 				}
 			}
@@ -988,13 +971,16 @@ async fn build_device_list_updates(
 			use MembershipState::*;
 
 			if matches!(content.membership, Leave | Join) {
-				let shares_room =
-					shares_a_room(services, syncing_user, &user_id, Some(room_id)).await;
+				let shares_encrypted_room =
+					share_encrypted_room(services, syncing_user, &user_id, Some(room_id)).await;
 				match content.membership {
-					| Leave if !shares_room => {
+					| Leave if !shares_encrypted_room => {
 						device_list_updates.left.insert(user_id);
 					},
-					| Join if joined_since_last_sync || syncing_user == user_id => {
+					| Join if joined_since_last_sync
+						|| shares_encrypted_room
+						|| syncing_user == user_id =>
+					{
 						device_list_updates.changed.insert(user_id);
 					},
 					| _ => (),
