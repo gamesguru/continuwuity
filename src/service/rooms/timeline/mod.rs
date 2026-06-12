@@ -101,10 +101,11 @@ impl crate::Service for Service {
 		let cache_capacity =
 			f64::from(config.shortstatehash_cache_capacity) * config.cache_capacity_modifier;
 		let cache_capacity = usize_from_f64(cache_capacity)?;
+		let per_cache = usize::max(1, cache_capacity / 2);
 
 		Ok(Arc::new(Self {
-			next_shortstatehash_cache: SyncMutex::new(LruCache::new(cache_capacity / 2)),
-			prev_shortstatehash_cache: SyncMutex::new(LruCache::new(cache_capacity / 2)),
+			next_shortstatehash_cache: SyncMutex::new(LruCache::new(per_cache)),
+			prev_shortstatehash_cache: SyncMutex::new(LruCache::new(per_cache)),
 			services: Services {
 				server: args.server.clone(),
 				account_data: args.depend::<account_data::Service>("account_data"),
