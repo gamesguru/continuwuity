@@ -366,7 +366,9 @@ impl Service {
 		let result = self.services.state.get_shortstatehash(shorteventid).await;
 
 		if let Ok(hash) = result {
-			if matches!(after, PduCount::Normal(_)) {
+			if matches!(after, PduCount::Normal(_))
+				&& self.db.pduid_exists(&after_pdu.into()).await
+			{
 				self.next_shortstatehash_cache
 					.lock()
 					.insert((shortroomid, after), hash);
