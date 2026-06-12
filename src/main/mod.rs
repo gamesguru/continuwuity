@@ -75,10 +75,9 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 
 	let runtime = runtime::new(args)?;
 	let server = Server::new(args, Some(runtime.handle()))?;
-	let drop_sync_tokens = args.drop_sync_tokens;
 
 	runtime.spawn(signal::signal(server.clone()));
-	runtime.block_on(async_main(&server, drop_sync_tokens))?;
+	runtime.block_on(async_main(&server))?;
 	runtime::shutdown(&server, runtime);
 
 	#[cfg(unix)]
@@ -90,20 +89,6 @@ pub fn run_with_args(args: &Args) -> Result<()> {
 	Ok(())
 }
 
-/// Drops all sync tokens from the database.
-///
-/// NOTE: This function is intended as a one-time migration utility. It uses
-/// `Map::clear()`, which operates on a snapshot. Because it runs after
-/// `router::start` has initialized background services, any concurrent writes
-/// to `roomsynctoken_shortstatehash` from background tasks would race with this
-/// clear and survive. There are currently no such writers, but this assumption
-/// must hold for this function to remain safe.
-async fn drop_sync_tokens(db: &conduwuit_database::Database) {
-	conduwuit_core::info!("Dropping all sync tokens as requested by CLI flag...");
-	db["roomsynctoken_shortstatehash"].clear().await;
-	conduwuit_core::info!("Finished dropping all sync tokens.");
-}
-
 /// Operate the server normally in release-mode static builds. This will start,
 /// run and stop the server within the asynchronous runtime.
 #[cfg(any(not(conduwuit_mods), not(feature = "conduwuit_mods")))]
@@ -113,14 +98,11 @@ async fn drop_sync_tokens(db: &conduwuit_database::Database) {
 	skip_all,
 	level = "info"
 )]
-async fn async_main(server: &Arc<Server>, drop_sync_tokens_flag: bool) -> Result<(), Error> {
+async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
 	extern crate conduwuit_router as router;
 
 	match router::start(&server.server).await {
 		| Ok(services) => {
-			if drop_sync_tokens_flag {
-				drop_sync_tokens(&services.db).await;
-			}
 			let _ = server.services.lock().await.insert(services);
 		},
 		| Err(error) => {
@@ -165,17 +147,13 @@ async fn async_main(server: &Arc<Server>, drop_sync_tokens_flag: bool) -> Result
 /// and hot-reload portions of the server as-needed before returning for an
 /// actual shutdown. This is not available in release-mode or static builds.
 #[cfg(all(conduwuit_mods, feature = "conduwuit_mods"))]
-async fn async_main(server: &Arc<Server>, drop_sync_tokens_flag: bool) -> Result<(), Error> {
+async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
 	let mut starts = true;
 	let mut reloads = true;
 	while reloads {
 		if let Err(error) = mods::open(server).await {
 			error!("Loading router: {error}");
 			return Err(error);
-		}
-
-		if starts && drop_sync_tokens_flag {
-			drop_sync_tokens(&server.server.db).await;
 		}
 
 		let result = mods::run(server, starts).await;
