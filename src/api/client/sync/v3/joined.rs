@@ -994,8 +994,7 @@ async fn build_device_list_updates(
 					| Leave if !shares_room => {
 						device_list_updates.left.insert(user_id);
 					},
-					| Join if joined_since_last_sync || shares_room || syncing_user == user_id =>
-					{
+					| Join if joined_since_last_sync || syncing_user == user_id => {
 						device_list_updates.changed.insert(user_id);
 					},
 					| _ => (),

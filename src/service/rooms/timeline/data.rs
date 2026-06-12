@@ -204,6 +204,24 @@ impl Data {
 		Ok(pdu)
 	}
 
+	/// Returns the event_id from the pdu directly.
+	pub(super) async fn get_event_id_from_pdu_id(
+		&self,
+		pdu_id: &RawPduId,
+	) -> Result<ruma::OwnedEventId> {
+		#[derive(serde::Deserialize)]
+		struct EventIdExtract {
+			event_id: ruma::OwnedEventId,
+		}
+
+		let extract: EventIdExtract = self.pduid_pdu.get(pdu_id).await.deserialized()?;
+		Ok(extract.event_id)
+	}
+
+	pub(super) async fn pduid_exists(&self, pdu_id: &RawPduId) -> bool {
+		self.pduid_pdu.exists(pdu_id).await.is_ok()
+	}
+
 	/// Returns the pdu as a `BTreeMap<String, CanonicalJsonValue>`.
 	pub(super) async fn get_pdu_json_from_id(
 		&self,
@@ -340,6 +358,9 @@ impl Data {
 			.ready_and_then(|pdu_bytes: &[u8]| {
 				let pdu_id = RawPduId::from(pdu_bytes);
 				Ok(pdu_id.pdu_count())
+			})
+			.ready_try_filter_map(|count| {
+				Ok(matches!(count, PduCount::Normal(_)).then_some(count))
 			});
 
 		pin_mut!(pdu_ids);
@@ -361,6 +382,9 @@ impl Data {
 			.ready_and_then(|pdu_bytes: &[u8]| {
 				let pdu_id = RawPduId::from(pdu_bytes);
 				Ok(pdu_id.pdu_count())
+			})
+			.ready_try_filter_map(|count| {
+				Ok(matches!(count, PduCount::Normal(_)).then_some(count))
 			});
 
 		pin_mut!(pdu_ids);

@@ -315,7 +315,9 @@ impl Service {
 		let result = self.services.state.get_shortstatehash(shorteventid).await;
 
 		if let Ok(hash) = result {
-			if matches!(before, PduCount::Normal(_)) {
+			if matches!(before, PduCount::Normal(_))
+				&& self.db.pduid_exists(&before_pdu.into()).await
+			{
 				self.prev_shortstatehash_cache
 					.lock()
 					.insert((shortroomid, before), hash);
@@ -405,7 +407,7 @@ impl Service {
 	pub async fn get_event_id_from_pdu_id(&self, pdu_id: &PduId) -> Result<OwnedEventId> {
 		let pdu_id: RawPduId = (*pdu_id).into();
 
-		self.get_pdu_from_id(&pdu_id).await.map(|pdu| pdu.event_id)
+		self.db.get_event_id_from_pdu_id(&pdu_id).await
 	}
 
 	/// Checks if pdu exists
