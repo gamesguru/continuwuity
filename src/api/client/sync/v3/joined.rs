@@ -922,21 +922,13 @@ async fn build_device_list_updates(
 		..
 	}: SyncContext<'_>,
 	room_id: &RoomId,
-	ShortStateHashes { current_shortstatehash, .. }: ShortStateHashes,
+	ShortStateHashes { .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
-	joined_since_last_sync: bool,
+	_joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
-	let is_encrypted_room = services
-		.rooms
-		.state_accessor
-		.state_get(current_shortstatehash, &StateEventType::RoomEncryption, "")
-		.await
-		.is_ok();
-
-	// initial syncs don't include device updates, and rooms which aren't encrypted
-	// don't affect them, so return early in either of those cases
-	if last_sync_end_count.is_none() || !is_encrypted_room {
+	// initial syncs don't include device updates, so return early
+	if last_sync_end_count.is_none() {
 		return Ok(DeviceListUpdates::new());
 	}
 
@@ -985,8 +977,7 @@ async fn build_device_list_updates(
 					| Leave if !shares_room => {
 						device_list_updates.left.insert(user_id);
 					},
-					| Join if joined_since_last_sync || shares_room || syncing_user == user_id =>
-					{
+					| Join => {
 						device_list_updates.changed.insert(user_id);
 					},
 					| _ => (),
