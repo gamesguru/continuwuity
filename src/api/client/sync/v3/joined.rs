@@ -35,7 +35,7 @@ use ruma::{
 };
 use service::rooms::short::ShortStateHash;
 
-use super::{load_timeline, share_encrypted_room};
+use super::{load_timeline, shares_a_room};
 use crate::client::{
 	TimelinePdus, ignored_filter,
 	sync::v3::{
@@ -975,14 +975,14 @@ async fn build_device_list_updates(
 			use MembershipState::*;
 
 			if matches!(content.membership, Leave | Join) {
-				let shares_encrypted_room =
-					share_encrypted_room(services, syncing_user, &user_id, Some(room_id)).await;
+				let shares_room =
+					shares_a_room(services, syncing_user, &user_id, Some(room_id)).await;
 				match content.membership {
-					| Leave if !shares_encrypted_room => {
+					| Leave if !shares_room => {
 						device_list_updates.left.insert(user_id);
 					},
 					| Join if joined_since_last_sync
-						|| shares_encrypted_room
+						|| shares_room
 						|| syncing_user == user_id =>
 					{
 						device_list_updates.changed.insert(user_id);

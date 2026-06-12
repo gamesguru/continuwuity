@@ -169,3 +169,18 @@ async fn share_encrypted_room(
 		})
 		.await
 }
+
+async fn shares_a_room(
+	services: &Services,
+	sender_user: &UserId,
+	user_id: &UserId,
+	ignore_room: Option<&RoomId>,
+) -> bool {
+	use conduwuit::utils::stream::ReadyExt;
+	services
+		.rooms
+		.state_cache
+		.get_shared_rooms(sender_user, user_id)
+		.ready_any(|room_id| Some(room_id) != ignore_room)
+		.await
+}
