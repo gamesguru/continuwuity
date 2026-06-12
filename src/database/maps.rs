@@ -79,12 +79,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
-		name: "eventid_receivecount",
-		key_size_hint: Some(48),
-		val_size_hint: Some(8),
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
 		name: "eventid_shorteventid",
 		cache_disp: CacheDisp::Unique,
 		key_size_hint: Some(48),
@@ -353,11 +347,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 		cache_disp: CacheDisp::Unique,
 		key_size_hint: Some(8),
 		val_size_hint: Some(1016),
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "softfailedeventids",
-		key_size_hint: Some(48),
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {

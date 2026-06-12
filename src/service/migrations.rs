@@ -261,10 +261,12 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run 'migrate_event_store_to_ssot': {e}"))?;
 	}
 
-	// Version 19 - keep events and outliers in a single table, add eventid_metadata
+	// Version 19 - keep events and outliers in a single table, add
+	// eventid_metadata, drop softfailedeventids
 	if services.globals.db.database_version().await < 19 {
-		services.globals.db.bump_database_version(19);
-		info!("Migration: Bumped database version to 19");
+		db_lt_19(services)
+			.await
+			.map_err(|e| err!("Failed to run v19 migrations: {e}"))?;
 	}
 
 	assert_eq!(
@@ -1108,5 +1110,66 @@ async fn fix_local_invite_state(services: &Services) -> Result {
 
 	db["global"].insert(FIXED_LOCAL_INVITE_STATE_MARKER, []);
 	db.db.sort()?;
+	Ok(())
+}
+
+async fn db_lt_19(services: &Services) -> Result<()> {
+	info!("Running v19 migration (migrating softfailedeventids to eventid_metadata)...");
+	let db = &services.db;
+	let cork = db.cork_and_sync();
+
+	let mut count = 0_usize;
+	let mut migrated = 0_usize;
+
+	// Open softfailedeventids map if it exists
+	if let Ok(softfailedeventids) = database::Map::open(&db.db, "softfailedeventids") {
+		let softfailed_stream = softfailedeventids.raw_stream();
+		pin_mut!(softfailed_stream);
+
+		let mut batch = database::rocksdb::WriteBatch::default();
+
+		while let Some(Ok((event_id_bytes, _))) = softfailed_stream.next().await {
+			count = count.saturating_add(1);
+			if let Ok(metadata_bytes) = db["eventid_metadata"].get_blocking(&event_id_bytes) {
+				if let Ok(mut meta) =
+					bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&metadata_bytes)
+				{
+					if !meta.soft_failed {
+						meta.soft_failed = true;
+						if let Ok(new_bytes) = bincode::serialize(&meta) {
+							db["eventid_metadata"].insert_into_batch(
+								&mut batch,
+								&event_id_bytes,
+								&new_bytes,
+							);
+							migrated = migrated.saturating_add(1);
+						}
+					}
+				}
+			}
+
+			if migrated.is_multiple_of(1000) && migrated > 0 {
+				db["eventid_metadata"].apply_batch(&batch);
+				batch.clear();
+			}
+		}
+
+		db["eventid_metadata"].apply_batch(&batch);
+		db.db
+			.drop_cf("softfailedeventids")
+			.unwrap_or_else(|e| warn!("Failed to drop softfailedeventids: {e}"));
+	}
+
+	// Drop eventid_receivecount if it exists
+	if database::Map::open(&db.db, "eventid_receivecount").is_ok() {
+		db.db
+			.drop_cf("eventid_receivecount")
+			.unwrap_or_else(|e| warn!("Failed to drop eventid_receivecount: {e}"));
+	}
+
+	drop(cork);
+	info!("Migrated {}/{} soft-failed events to eventid_metadata.", migrated, count);
+
+	services.globals.db.bump_database_version(19);
 	Ok(())
 }

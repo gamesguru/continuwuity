@@ -252,9 +252,6 @@ where
 			.cache_auth_chain_vec(vec![short_event_id], &full_auth_chain);
 	}
 
-	// Stamp receive order (write-once — outlier-first events already have this)
-	self.services.outlier.stamp_receive_count(pdu.event_id());
-
 	drop(insert_lock);
 
 	// See if the event matches any known pushers via power level

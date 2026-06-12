@@ -54,7 +54,7 @@ pub struct Map {
 }
 
 impl Map {
-	pub(crate) fn open(db: &Arc<Engine>, name: &'static str) -> Result<Arc<Self>> {
+	pub fn open(db: &Arc<Engine>, name: &'static str) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			name,
 			watchers: Watchers::default(),

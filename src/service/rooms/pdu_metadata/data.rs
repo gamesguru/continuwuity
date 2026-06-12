@@ -25,7 +25,7 @@ use crate::{
 pub(super) struct Data {
 	tofrom_relation: Arc<Map>,
 	referencedevents: Arc<Map>,
-	softfailedeventids: Arc<Map>,
+	eventid_metadata: Arc<Map>,
 	rejectedeventids: Arc<Map>,
 	services: Services,
 }
@@ -40,7 +40,7 @@ impl Data {
 		Self {
 			tofrom_relation: db["tofrom_relation"].clone(),
 			referencedevents: db["referencedevents"].clone(),
-			softfailedeventids: db["softfailedeventids"].clone(),
+			eventid_metadata: db["eventid_metadata"].clone(),
 			rejectedeventids: db["rejectedeventids"].clone(),
 			services: Services {
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
@@ -117,15 +117,44 @@ impl Data {
 	}
 
 	pub(super) fn mark_event_soft_failed(&self, event_id: &EventId) {
-		self.softfailedeventids.insert(event_id, []);
+		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			if let Ok(mut meta) =
+				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+			{
+				if !meta.soft_failed {
+					meta.soft_failed = true;
+					if let Ok(new_bytes) = bincode::serialize(&meta) {
+						self.eventid_metadata.insert(event_id, new_bytes);
+					}
+				}
+			}
+		}
 	}
 
 	pub(super) async fn is_event_soft_failed(&self, event_id: &EventId) -> bool {
-		self.softfailedeventids.get(event_id).await.is_ok()
+		if let Ok(metadata_bytes) = self.eventid_metadata.get(event_id).await {
+			if let Ok(meta) =
+				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+			{
+				return meta.soft_failed;
+			}
+		}
+		false
 	}
 
 	pub(super) fn unmark_event_soft_failed(&self, event_id: &EventId) {
-		self.softfailedeventids.remove(event_id);
+		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			if let Ok(mut meta) =
+				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+			{
+				if meta.soft_failed {
+					meta.soft_failed = false;
+					if let Ok(new_bytes) = bincode::serialize(&meta) {
+						self.eventid_metadata.insert(event_id, new_bytes);
+					}
+				}
+			}
+		}
 	}
 
 	pub(super) fn mark_event_rejected(&self, event_id: &EventId) {

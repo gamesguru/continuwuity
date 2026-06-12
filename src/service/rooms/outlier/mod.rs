@@ -9,7 +9,7 @@ use database::{Deserialized, Json, Map};
 use futures::Stream;
 use ruma::{CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, RoomId};
 
-use crate::{Dep, globals, rooms};
+use crate::{Dep, rooms};
 
 pub struct Service {
 	db: Data,
@@ -17,14 +17,12 @@ pub struct Service {
 }
 
 struct Data {
-	eventid_receivecount: Arc<Map>,
 	roomid_outliereventid: Arc<Map>,
 	eventid_pdu: Arc<Map>,
 	eventid_metadata: Arc<Map>,
 }
 
 struct Services {
-	globals: Dep<globals::Service>,
 	#[allow(dead_code)]
 	timeline: Dep<rooms::timeline::Service>,
 }
@@ -33,13 +31,11 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			db: Data {
-				eventid_receivecount: args.db["eventid_receivecount"].clone(),
 				roomid_outliereventid: args.db["roomid_outliereventid"].clone(),
 				eventid_pdu: args.db["eventid_pdu"].clone(),
 				eventid_metadata: args.db["eventid_metadata"].clone(),
 			},
 			services: Services {
-				globals: args.depend::<globals::Service>("globals"),
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 			},
 		}))
@@ -106,29 +102,6 @@ pub fn room_stream<'a>(
 		})
 }
 
-/// Returns the receive_count for an event, if it has been stamped.
-#[implement(Service)]
-pub async fn get_receive_count(&self, event_id: &EventId) -> Result<u64> {
-	self.db
-		.eventid_receivecount
-		.get(event_id)
-		.await
-		.deserialized()
-}
-
-/// Stamp an event with its receive order, if not already stamped.
-/// This is write-once: rescue, reorder, and table moves never change it.
-#[implement(Service)]
-pub fn stamp_receive_count(&self, event_id: &EventId) {
-	if self.db.eventid_receivecount.get_blocking(event_id).is_err() {
-		if let Ok(count) = self.services.globals.next_count() {
-			self.db
-				.eventid_receivecount
-				.insert(event_id, count.to_be_bytes());
-		}
-	}
-}
-
 /// Append the PDU as an outlier.
 #[implement(Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
@@ -154,8 +127,6 @@ pub fn add_pdu_outlier_batch(
 	pdu: &CanonicalJsonObject,
 	room_id: Option<&RoomId>,
 ) {
-	self.stamp_receive_count(event_id);
-
 	let mut pdu = pdu.clone();
 	pdu.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
 
