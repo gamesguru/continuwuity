@@ -193,12 +193,27 @@ impl Data {
 		Ok(fixed)
 	}
 
-	pub fn topo_pducount_key(pdu_id: &RawPduId, local_topological_depth: u64) -> Vec<u8> {
+	pub(super) fn topo_pducount_key(pdu_id: &RawPduId, local_topological_depth: u64) -> Vec<u8> {
 		let mut topo_key = Vec::with_capacity(32);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());
 		topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
 		topo_key.extend_from_slice(&pdu_id.as_ref()[8..]);
 		topo_key
+	}
+
+	pub(super) fn topo_key_to_pdu_id(topo_key: &[u8]) -> RawPduId {
+		let mut pdu_id_bytes = [0_u8; 16];
+		pdu_id_bytes[0..8].copy_from_slice(&topo_key[0..8]);
+		pdu_id_bytes[8..16].copy_from_slice(&topo_key[16..24]);
+		pdu_id_bytes.as_slice().into()
+	}
+
+	pub(super) async fn pdu_id_to_topo_key(&self, pdu_id: &RawPduId) -> Result<Vec<u8>> {
+		let event_id_bytes = self.room_pducount_eventid.get(pdu_id).await?;
+		let metadata_bytes = self.eventid_metadata.get(&event_id_bytes).await?;
+		let meta: rooms::timeline::EventMetadata = bincode::deserialize(&metadata_bytes)
+			.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e}")))?;
+		Ok(Self::topo_pducount_key(pdu_id, meta.local_topological_depth))
 	}
 
 	pub(super) fn remove_topo_pducount(&self, pdu_id: &RawPduId, event_id_bytes: &[u8]) {
@@ -647,7 +662,7 @@ impl Data {
 						}
 					}
 				}
-				max_depth + 1
+				max_depth.saturating_add(1)
 			},
 			|m| m.local_topological_depth,
 		);
@@ -742,7 +757,7 @@ impl Data {
 							}
 						}
 					}
-					max_depth + 1
+					max_depth.saturating_add(1)
 				},
 				|m| m.local_topological_depth,
 			);
@@ -820,7 +835,7 @@ impl Data {
 							}
 						}
 					}
-					max_depth + 1
+					max_depth.saturating_add(1)
 				},
 				|m| m.local_topological_depth,
 			);
@@ -864,25 +879,16 @@ impl Data {
 		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.and_then(move |current| async move {
 				let prefix = current.shortroomid();
+				let topo_key = self.pdu_id_to_topo_key(&current).await?;
 
-				let event_id_bytes = self.room_pducount_eventid.get(&current).await?;
-				let metadata_bytes = self.eventid_metadata.get(&event_id_bytes).await?;
-				let meta: rooms::timeline::EventMetadata = bincode::deserialize(&metadata_bytes)
-					.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e}")))?;
-				let depth = meta.local_topological_depth;
-
-				let topo_key = Self::topo_pducount_key(&current, depth);
-
-				Ok(self.roomid_topologicalorder_pducount
+				Ok(self
+					.roomid_topologicalorder_pducount
 					.rev_raw_stream_from(&topo_key)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.wide_and_then(move |(topo_key, event_id_bytes)| async move {
-						let mut pdu_id_bytes = Vec::with_capacity(16);
-						pdu_id_bytes.extend_from_slice(&topo_key[0..8]);
-						pdu_id_bytes.extend_from_slice(&topo_key[16..24]);
-
+						let pdu_id = Self::topo_key_to_pdu_id(topo_key);
 						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-						Self::parse_json_slice(None, (&pdu_id_bytes, json_bytes.as_ref()))
+						Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))
 					}))
 			})
 			.try_flatten_stream()
@@ -898,25 +904,16 @@ impl Data {
 		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.and_then(move |current| async move {
 				let prefix = current.shortroomid();
+				let topo_key = self.pdu_id_to_topo_key(&current).await?;
 
-				let event_id_bytes = self.room_pducount_eventid.get(&current).await?;
-				let metadata_bytes = self.eventid_metadata.get(&event_id_bytes).await?;
-				let meta: rooms::timeline::EventMetadata = bincode::deserialize(&metadata_bytes)
-					.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e}")))?;
-				let depth = meta.local_topological_depth;
-
-				let topo_key = Self::topo_pducount_key(&current, depth);
-
-				Ok(self.roomid_topologicalorder_pducount
+				Ok(self
+					.roomid_topologicalorder_pducount
 					.raw_stream_from(&topo_key)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.wide_and_then(move |(topo_key, event_id_bytes)| async move {
-						let mut pdu_id_bytes = Vec::with_capacity(16);
-						pdu_id_bytes.extend_from_slice(&topo_key[0..8]);
-						pdu_id_bytes.extend_from_slice(&topo_key[16..24]);
-
+						let pdu_id = Self::topo_key_to_pdu_id(topo_key);
 						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-						Self::parse_json_slice(None, (&pdu_id_bytes, json_bytes.as_ref()))
+						Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))
 					}))
 			})
 			.try_flatten_stream()

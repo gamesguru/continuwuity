@@ -527,13 +527,13 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 	let mut total_migrated: usize = 0;
 
 	while let Some(Ok((pdu_id_bytes, event_id_bytes))) = stream.next().await {
-		let pdu_id: crate::rooms::timeline::RawPduId = (&*pdu_id_bytes).into();
+		let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
 
 		let Ok(json_bytes) = eventid_pdu.get_blocking(&event_id_bytes) else {
 			continue;
 		};
 
-		let Ok(pdu) = serde_json::from_slice::<crate::conduwuit::PduEvent>(&json_bytes) else {
+		let Ok(pdu) = serde_json::from_slice::<conduwuit::PduEvent>(&json_bytes) else {
 			continue;
 		};
 
@@ -541,24 +541,28 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 			continue;
 		};
 
-		let Ok(mut meta) = bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&metadata_bytes) else {
+		let Ok(mut meta) =
+			bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&metadata_bytes)
+		else {
 			continue;
 		};
 
 		let mut max_depth = 0;
 		for prev_id in pdu.prev_events() {
 			if let Ok(prev_bytes) = eventid_metadata.get(prev_id.as_bytes()).await {
-				if let Ok(prev_meta) = bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&prev_bytes) {
+				if let Ok(prev_meta) =
+					bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&prev_bytes)
+				{
 					max_depth = max_depth.max(prev_meta.local_topological_depth);
 				}
 			}
 		}
 
-		let local_topological_depth = max_depth + 1;
+		let local_topological_depth = max_depth.saturating_add(1);
 		meta.local_topological_depth = local_topological_depth;
 
 		if let Ok(new_metadata_bytes) = bincode::serialize(&meta) {
-			eventid_metadata.put(&event_id_bytes, new_metadata_bytes);
+			eventid_metadata.put(event_id_bytes, new_metadata_bytes);
 		}
 
 		let mut topo_key = Vec::with_capacity(32);
