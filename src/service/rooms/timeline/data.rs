@@ -57,14 +57,19 @@ impl Data {
 
 	#[inline]
 	pub(super) async fn last_timeline_count(&self, room_id: &RoomId) -> Result<PduCount> {
-		let pdus_rev = self.pdus_rev(room_id, PduCount::max());
+		let current = self
+			.count_to_id(room_id, PduCount::max(), Direction::Backward)
+			.await?;
 
-		pin_mut!(pdus_rev);
-		let last_count = pdus_rev
+		let prefix = current.shortroomid();
+		let last_count = self
+			.room_pducount_eventid
+			.rev_raw_stream_from(&current)
+			.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
+			.map_ok(|(key, _)| RawPduId::from(key).pdu_count())
 			.try_next()
 			.await?
-			.map(at!(0))
-			.filter(|&count| matches!(count, PduCount::Normal(_)))
+			.filter(|count| matches!(count, PduCount::Normal(_)))
 			.unwrap_or_else(PduCount::max);
 
 		Ok(last_count)
