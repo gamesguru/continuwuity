@@ -329,7 +329,8 @@ pub(crate) async fn build_sync_events(
 		.state_cache
 		.rooms_left(syncing_user)
 		.broad_filter_map(|(room_id, leave_pdu)| async {
-			let left_room = load_left_room(services, context, room_id.clone(), leave_pdu).await;
+			let left_room =
+				Box::pin(load_left_room(services, context, room_id.clone(), leave_pdu)).await;
 
 			match left_room {
 				| Ok(Some((room, state_after))) => Some((room_id, room, state_after)),
