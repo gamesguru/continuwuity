@@ -874,22 +874,15 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		use conduwuit::utils::stream::TryWidebandExt;
-
 		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.and_then(move |current| async move {
 				let prefix = current.shortroomid();
-				let topo_key = self.pdu_id_to_topo_key(&current).await?;
+				let topo_key = self.seek_topo_key(room_id, until, &current).await?;
 
-				Ok(self
+				let stream = self
 					.roomid_topologicalorder_pducount
-					.rev_raw_stream_from(&topo_key)
-					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(move |(topo_key, event_id_bytes)| async move {
-						let pdu_id = Self::topo_key_to_pdu_id(topo_key);
-						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-						Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))
-					}))
+					.rev_raw_stream_from(&topo_key);
+				Ok(self.parse_topo_stream(stream, prefix.to_vec()))
 			})
 			.try_flatten_stream()
 	}
@@ -899,22 +892,15 @@ impl Data {
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		use conduwuit::utils::stream::TryWidebandExt;
-
 		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.and_then(move |current| async move {
 				let prefix = current.shortroomid();
-				let topo_key = self.pdu_id_to_topo_key(&current).await?;
+				let topo_key = self.seek_topo_key(room_id, from, &current).await?;
 
-				Ok(self
+				let stream = self
 					.roomid_topologicalorder_pducount
-					.raw_stream_from(&topo_key)
-					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(move |(topo_key, event_id_bytes)| async move {
-						let pdu_id = Self::topo_key_to_pdu_id(topo_key);
-						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-						Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))
-					}))
+					.raw_stream_from(&topo_key);
+				Ok(self.parse_topo_stream(stream, prefix.to_vec()))
 			})
 			.try_flatten_stream()
 	}
@@ -992,6 +978,40 @@ impl Data {
 		let pdu_id = PduId { shortroomid, shorteventid };
 
 		Ok(pdu_id.into())
+	}
+
+	async fn seek_topo_key(
+		&self,
+		room_id: &RoomId,
+		token: PduCount,
+		current: &RawPduId,
+	) -> Result<Vec<u8>> {
+		if token == PduCount::max() {
+			Ok(Self::topo_pducount_key(current, u64::MAX))
+		} else if token == PduCount::min() {
+			Ok(Self::topo_pducount_key(current, 0))
+		} else {
+			let token_pdu_id = self.count_to_id(room_id, token, Direction::Forward).await?;
+			let mut key = self.pdu_id_to_topo_key(&token_pdu_id).await?;
+			key[16..24].copy_from_slice(&current.as_ref()[8..]);
+			Ok(key)
+		}
+	}
+
+	fn parse_topo_stream<'a>(
+		&'a self,
+		stream: impl Stream<Item = Result<KeyVal<'a>>> + Send + 'a,
+		prefix: Vec<u8>,
+	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
+		use conduwuit::utils::stream::TryWidebandExt;
+
+		stream
+			.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
+			.wide_and_then(move |(topo_key, event_id_bytes)| async move {
+				let pdu_id = Self::topo_key_to_pdu_id(topo_key);
+				let json_bytes = self.eventid_pdu.get(event_id_bytes).await?;
+				Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))
+			})
 	}
 }
 
