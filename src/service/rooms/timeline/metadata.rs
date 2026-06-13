@@ -10,4 +10,6 @@ pub struct EventMetadata {
 	pub rejected: bool,
 	pub redacted_by: Option<ruma::OwnedEventId>,
 	pub short_state_hash: Option<u64>,
+	#[serde(default)]
+	pub local_topological_depth: u64,
 }

@@ -23,6 +23,7 @@ pub(super) struct Data {
 	eventid_pdu: Arc<Map>,
 	eventid_metadata: Arc<Map>,
 	room_pducount_eventid: Arc<Map>,
+	roomid_topologicalorder_pducount: Arc<Map>,
 	pub(super) room_pducount_eventid_backup: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
@@ -45,6 +46,7 @@ impl Data {
 			eventid_pdu: db["eventid_pdu"].clone(),
 			eventid_metadata: db["eventid_metadata"].clone(),
 			room_pducount_eventid: db["room_pducount_eventid"].clone(),
+			roomid_topologicalorder_pducount: db["roomid_topologicalorder_pducount"].clone(),
 			room_pducount_eventid_backup: db["room_pducount_eventid_backup"].clone(),
 			db: args.db.clone(),
 			services: Services {
@@ -191,10 +193,28 @@ impl Data {
 		Ok(fixed)
 	}
 
+	pub(super) fn topo_pducount_key(pdu_id: &RawPduId, local_topological_depth: u64) -> Vec<u8> {
+		let mut topo_key = Vec::with_capacity(32);
+		topo_key.extend_from_slice(&pdu_id.shortroomid());
+		topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
+		topo_key.extend_from_slice(&pdu_id.as_ref()[8..]);
+		topo_key
+	}
+
+	pub(super) fn remove_topo_pducount(&self, pdu_id: &RawPduId, event_id_bytes: &[u8]) {
+		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
+			if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+				self.roomid_topologicalorder_pducount
+					.remove(&Self::topo_pducount_key(pdu_id, meta.local_topological_depth));
+			}
+		}
+	}
+
 	pub(super) async fn remove_from_timeline(&self, event_id: &EventId) {
 		if let Ok(pduid) = self.get_pdu_id(event_id).await {
 			self.eventid_pduid.remove(event_id);
 			self.room_pducount_eventid.remove(&pduid);
+			self.remove_topo_pducount(&pduid, event_id.as_bytes());
 
 			if self.outlier_pdu_exists(event_id).await.is_err() {
 				self.eventid_pdu.remove(event_id.as_bytes());
@@ -207,11 +227,15 @@ impl Data {
 	pub(super) fn remove_from_timeline_by_id(&self, pdu_id: &RawPduId, event_id: &EventId) {
 		self.eventid_pduid.remove(event_id);
 		self.room_pducount_eventid.remove(pdu_id);
+		self.remove_topo_pducount(pdu_id, event_id.as_bytes());
 	}
 
 	/// Drop a duplicate PDU by ID without removing the event mapping
 	pub(super) fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) {
 		self.room_pducount_eventid.remove(pdu_id);
+		if let Ok(event_id_bytes) = self.room_pducount_eventid.get_blocking(pdu_id) {
+			self.remove_topo_pducount(pdu_id, &event_id_bytes);
+		}
 	}
 
 	/// Returns the pdu's id.
@@ -611,6 +635,30 @@ impl Data {
 			None
 		};
 
+		let local_topological_depth = existing_metadata.as_ref().map_or_else(
+			|| {
+				let mut max_depth = 0;
+				for prev_id in pdu.prev_events() {
+					if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes()) {
+						if let Ok(meta) =
+							bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
+						{
+							max_depth = max_depth.max(meta.local_topological_depth);
+						}
+					}
+				}
+				max_depth + 1
+			},
+			|m| m.local_topological_depth,
+		);
+
+		let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
+		self.roomid_topologicalorder_pducount.insert_into_batch(
+			&mut batch,
+			&topo_key,
+			event_id_bytes,
+		);
+
 		let metadata = rooms::timeline::EventMetadata {
 			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
 			is_outlier: false,
@@ -620,6 +668,7 @@ impl Data {
 			rejected: pdu.rejected(),
 			redacted_by: pdu.redacts().map(ToOwned::to_owned),
 			short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
+			local_topological_depth,
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.eventid_metadata
@@ -680,6 +729,31 @@ impl Data {
 					None
 				};
 
+			let local_topological_depth = existing_metadata.as_ref().map_or_else(
+				|| {
+					let mut max_depth = 0;
+					for prev_id in pdu.prev_events() {
+						if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes())
+						{
+							if let Ok(meta) =
+								bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
+							{
+								max_depth = max_depth.max(meta.local_topological_depth);
+							}
+						}
+					}
+					max_depth + 1
+				},
+				|m| m.local_topological_depth,
+			);
+
+			let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
+			self.roomid_topologicalorder_pducount.insert_into_batch(
+				&mut batch,
+				&topo_key,
+				event_id_bytes,
+			);
+
 			let metadata = rooms::timeline::EventMetadata {
 				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
 				is_outlier: false,
@@ -689,6 +763,7 @@ impl Data {
 				rejected: pdu.rejected(),
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
 				short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
+				local_topological_depth,
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				self.eventid_metadata.insert_into_batch(
@@ -732,6 +807,24 @@ impl Data {
 					None
 				};
 
+			let local_topological_depth = existing_metadata.as_ref().map_or_else(
+				|| {
+					let mut max_depth = 0;
+					for prev_id in pdu.prev_events() {
+						if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes())
+						{
+							if let Ok(meta) =
+								bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
+							{
+								max_depth = max_depth.max(meta.local_topological_depth);
+							}
+						}
+					}
+					max_depth + 1
+				},
+				|m| m.local_topological_depth,
+			);
+
 			let metadata = rooms::timeline::EventMetadata {
 				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
 				is_outlier: false,
@@ -741,6 +834,7 @@ impl Data {
 				rejected: pdu.rejected(),
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
 				short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
+				local_topological_depth,
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				self.eventid_metadata.insert_into_batch(

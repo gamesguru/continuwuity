@@ -212,6 +212,12 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "roomid_topologicalorder_pducount",
+		key_size_hint: Some(32),
+		val_size_hint: Some(32),
+		..descriptor::SEQUENTIAL_SMALL
+	},
+	Descriptor {
 		name: "roomserverids",
 		..descriptor::RANDOM_SMALL
 	},

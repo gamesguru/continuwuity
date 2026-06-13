@@ -171,6 +171,7 @@ pub fn add_pdu_outlier_batch(
 			rejected: parsed_pdu.rejected(),
 			redacted_by: parsed_pdu.redacts().map(ToOwned::to_owned),
 			short_state_hash: None,
+			local_topological_depth: 0,
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.db.eventid_metadata.insert_into_batch(
