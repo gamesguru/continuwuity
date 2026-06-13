@@ -415,6 +415,16 @@ async fn join_room_by_id_helper_remote(
 			)))
 		})?;
 
+	let remote_latest_events: Vec<ruma::OwnedEventId> = join_event_stub
+		.get("prev_events")
+		.and_then(|v| v.as_array())
+		.map(|arr| {
+			arr.iter()
+				.filter_map(|v| v.as_str().and_then(|s| <&ruma::EventId>::try_from(s).ok().map(ToOwned::to_owned)))
+				.collect()
+		})
+		.unwrap_or_default();
+
 	let join_authorized_via_users_server = if !matches!(
 		room_version_id,
 		RoomVersionId::V1
@@ -753,6 +763,51 @@ async fn join_room_by_id_helper_remote(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_join, &state_lock);
+
+	if !remote_latest_events.is_empty() {
+		let target_server = remote_server.clone();
+		let room_id = room_id.to_owned();
+		let timeline = services.rooms.timeline.clone();
+		let sending = services.sending.clone();
+		let event_handler = services.rooms.event_handler.clone();
+
+		tokio::spawn(async move {
+			let mut missing_latest = Vec::new();
+			for event_id in remote_latest_events {
+				if !timeline.pdu_exists(&event_id).await {
+					missing_latest.push(event_id);
+				}
+			}
+			if missing_latest.is_empty() {
+				return;
+			}
+			info!("Forward-filling {} missing extremities from {} after joining room {}", missing_latest.len(), target_server, room_id);
+			for event_id in missing_latest {
+				let request = federation::event::get_event::v1::Request {
+					event_id: event_id.clone(),
+					include_unredacted_content: Some(false),
+				};
+				let response = match sending.send_federation_request(&target_server, request).await {
+					| Ok(r) => r,
+					| Err(e) => {
+						warn!("Failed to fetch missing extremity {event_id}: {e}");
+						continue;
+					},
+				};
+				let (parsed_room_id, parsed_event_id, value) = match event_handler.parse_incoming_pdu(&response.pdu).await {
+					| Ok(v) => v,
+					| Err(e) => {
+						warn!("Failed to parse extremity {event_id}: {e}");
+						continue;
+					},
+				};
+				if parsed_room_id != room_id { continue; }
+				if let Err(e) = event_handler.handle_incoming_pdu(&target_server, &room_id, &parsed_event_id, value, true).await {
+					warn!("Failed to handle extremity {event_id}: {e}");
+				}
+			}
+		});
+	}
 
 	Ok(())
 }
