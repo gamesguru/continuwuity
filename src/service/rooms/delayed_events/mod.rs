@@ -1,7 +1,7 @@
 mod submission_queue;
 
 use std::{
-	collections::HashSet,
+	collections::{BTreeMap, HashSet},
 	fmt::Write,
 	sync::{
 		Arc,
@@ -231,6 +231,9 @@ impl Service {
 					.lock::<RoomId>(&event.room_id)
 					.await;
 
+				let mut unsigned = BTreeMap::new();
+				unsigned.insert("delay_id".to_owned(), delay_id.clone().into());
+
 				let result = match &event.state_key {
 					| Some(state_key) =>
 						self.services
@@ -243,6 +246,7 @@ impl Service {
 								event.content.cast_ref_unchecked(),
 								state_key,
 								Some(timestamp),
+								Some(unsigned)
 							)
 							.await,
 					| None =>
@@ -256,6 +260,7 @@ impl Service {
 								event.content.cast_ref_unchecked(),
 								None,
 								Some(timestamp),
+								Some(unsigned)
 							)
 							.await,
 				};

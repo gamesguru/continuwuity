@@ -462,6 +462,7 @@ pub(crate) async fn create_room_route(
 				&content,
 				&state_key,
 				None,
+				None,
 			)
 			.boxed()
 			.await

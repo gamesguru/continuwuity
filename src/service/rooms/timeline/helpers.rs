@@ -17,6 +17,7 @@ use ruma::{
 	},
 	serde::Raw,
 };
+use serde_json::Value;
 
 use crate::rooms::state::RoomMutexGuard;
 
@@ -31,6 +32,7 @@ pub async fn send_message_event_helper(
 	content: &Raw<AnyMessageLikeEventContent>,
 	txn_id: Option<&TransactionId>,
 	timestamp: Option<MilliSecondsSinceUnixEpoch>,
+	mut unsigned: Option<BTreeMap<String, Value>>,
 ) -> Result<OwnedEventId> {
 	// let json: &mut Raw<AnyMessageLikeEventContent> = &mut json.clone();
 	self.allowed_to_send_message_event(room_id, event_type)
@@ -39,11 +41,9 @@ pub async fn send_message_event_helper(
 	let content = serde_json::from_str(content.json().get())
 		.map_err(|e| err!(Request(BadJson("Invalid JSON body: {e}"))))?;
 
-	let unsigned = txn_id.map(|txn_id| {
-		let mut unsigned = BTreeMap::new();
-		unsigned.insert("transaction_id".to_owned(), txn_id.to_string().into());
-		unsigned
-	});
+	if let Some(txn_id) = txn_id {
+		unsigned.get_or_insert_default().insert("transaction_id".to_owned(), txn_id.to_string().into());
+	}
 
 	let event_id = self
 		.build_and_append_pdu(
@@ -96,6 +96,7 @@ pub async fn send_state_event_for_key_helper(
 	content: &Raw<AnyStateEventContent>,
 	state_key: &str,
 	timestamp: Option<MilliSecondsSinceUnixEpoch>,
+	unsigned: Option<BTreeMap<String, Value>>,
 ) -> Result<OwnedEventId> {
 	let mut content: Raw<AnyStateEventContent> = content.clone();
 	self.allowed_to_send_state_event(room_id, event_type, state_key, &mut content)
@@ -111,6 +112,7 @@ pub async fn send_state_event_for_key_helper(
 				content,
 				state_key: Some(state_key.into()),
 				timestamp,
+				unsigned,
 				..Default::default()
 			},
 			sender,
