@@ -833,11 +833,18 @@ impl Data {
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.wide_and_then(move |(pdu_id, event_id_bytes)| async move {
-						conduwuit::info!(
-							target: "timeline_debug",
-							"pdus_rev yielded pdu_id: {:?}", pdu_id
-						);
-						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+						let json_result = self.eventid_pdu.get(&event_id_bytes).await;
+						let json_bytes = match json_result {
+							| Ok(h) => h,
+							| Err(ref e) => {
+								conduwuit::warn!(
+									"pdus_rev: eventid_pdu.get failed for event_id_bytes ({} \
+									 bytes): {e}",
+									event_id_bytes.len()
+								);
+								return Err(json_result.unwrap_err());
+							},
+						};
 						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
 					})
 			})
@@ -858,11 +865,18 @@ impl Data {
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.wide_and_then(move |(pdu_id, event_id_bytes)| async move {
-						conduwuit::info!(
-							target: "timeline_debug",
-							"pdus_rev yielded pdu_id: {:?}", pdu_id
-						);
-						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+						let json_result = self.eventid_pdu.get(&event_id_bytes).await;
+						let json_bytes = match json_result {
+							| Ok(h) => h,
+							| Err(ref e) => {
+								conduwuit::warn!(
+									"pdus: eventid_pdu.get failed for event_id_bytes ({} \
+									 bytes): {e}",
+									event_id_bytes.len()
+								);
+								return Err(json_result.unwrap_err());
+							},
+						};
 						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
 					})
 			})
