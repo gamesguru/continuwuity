@@ -1,5 +1,5 @@
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet},
 	fmt::Write,
 	iter::once,
 	time::{Instant, SystemTime},
@@ -21,8 +21,9 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use lettre::message::Mailbox;
 use ruma::{
-	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	RoomVersionId, api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
+	OwnedRoomOrAliasId, OwnedServerName, RoomId, RoomVersionId, UInt,
+	api::federation::event::get_room_state, events::AnyStateEvent, serde::Raw,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -40,20 +41,24 @@ pub(super) async fn echo(&self, message: Vec<String>) -> Result {
 
 #[admin_command]
 pub(super) async fn get_auth_chain(&self, event_id: OwnedEventId) -> Result {
-	let Ok(event) = self.services.rooms.timeline.get_pdu(&event_id).await else {
+	let Ok(event) = self.services.rooms.timeline.get_pdu_json(&event_id).await else {
 		return Err!("Event not found.");
 	};
 
-	let room_id = event
-		.room_id_or_hash()
-		.ok_or_else(|| err!(Database("Event has no room_id")))?;
+	let room_id_str = event
+		.get("room_id")
+		.and_then(CanonicalJsonValue::as_str)
+		.ok_or_else(|| err!(Database("Invalid event in database")))?;
+
+	let room_id = <&RoomId>::try_from(room_id_str)
+		.map_err(|_| err!(Database("Invalid room id field in event in database")))?;
 
 	let start = Instant::now();
 	let count = self
 		.services
 		.rooms
 		.auth_chain
-		.event_ids_iter(&room_id, once(event_id.as_ref()))
+		.event_ids_iter(room_id, once(event_id.as_ref()))
 		.ready_filter_map(Result::ok)
 		.count()
 		.await;
@@ -62,6 +67,205 @@ pub(super) async fn get_auth_chain(&self, event_id: OwnedEventId) -> Result {
 	let out = format!("Loaded auth chain with length {count} in {elapsed:?}");
 
 	self.write_str(&out).await
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum NodeStatus {
+	Normal(bool),
+	SoftFailed(bool),
+	Rejected(bool),
+}
+
+struct AuthChild {
+	node_id: String,
+	event_id: OwnedEventId,
+	depth: UInt,
+	ts: UInt,
+	first_seen: bool,
+	pdu: Option<PduEvent>,
+}
+
+fn render_node(
+	graph: &mut String,
+	node_id: &str,
+	event_id: &EventId,
+	name: &str,
+	status: NodeStatus,
+) -> Result {
+	let evt_str = event_id.to_string();
+
+	let status_label = match status {
+		| NodeStatus::Normal(false) => format!("{evt_str}: {name}"),
+		| NodeStatus::Normal(true) => format!("{evt_str}: {name} (missing locally)"),
+		| NodeStatus::SoftFailed(false) => format!("{evt_str}: {name} (soft-failed)"),
+		| NodeStatus::SoftFailed(true) =>
+			format!("{evt_str}: {name} (soft-failed & missing locally)"),
+		| NodeStatus::Rejected(false) => format!("{evt_str}: {name} (rejected)"),
+		| NodeStatus::Rejected(true) => format!("{evt_str}: {name} (rejected & missing locally)"),
+	};
+
+	writeln!(graph, "{node_id}[\"{}\"]", status_label.as_str())?;
+
+	match status {
+		| NodeStatus::Rejected(_) => writeln!(graph, "class {node_id} rejected;")?,
+		| NodeStatus::SoftFailed(_) => writeln!(graph, "class {node_id} soft_failed;")?,
+		| NodeStatus::Normal(_) => {},
+	}
+
+	Ok(())
+}
+
+#[admin_command]
+pub(super) async fn show_auth_chain(&self, event_id: OwnedEventId) -> Result {
+	let node_status = async |event_id: &EventId, missing: bool| -> NodeStatus {
+		if self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_rejected(event_id)
+			.await
+		{
+			NodeStatus::Rejected(missing)
+		} else if self
+			.services
+			.rooms
+			.pdu_metadata
+			.is_event_soft_failed(event_id)
+			.await
+		{
+			NodeStatus::SoftFailed(missing)
+		} else {
+			NodeStatus::Normal(missing)
+		}
+	};
+
+	let Ok(root) = self.services.rooms.timeline.get_pdu(&event_id).await else {
+		return Err!("Event not found.");
+	};
+
+	let mut graph = String::from(
+		"```mermaid\n%% This is a mermaid graph. You can plug this output into\n\
+		%% https://mermaid.live/edit to visualise it on-the-fly.\nflowchart TD\n\
+		classDef rejected fill:#ffe5e5,stroke:#cc0000,stroke-width:2px,color:#000;\n\
+		classDef soft_failed fill:#fff6cc,stroke:#c9a400,stroke-width:2px,color:#000;\n"
+	);
+
+	let mut node_ids: HashMap<OwnedEventId, String> = HashMap::new();
+	let mut cached_events: HashMap<OwnedEventId, PduEvent> =
+		HashMap::from([(event_id.clone(), root.clone())]);
+	let mut scheduled: HashSet<OwnedEventId> = HashSet::from([event_id.clone()]);
+	let mut visited: HashSet<OwnedEventId> = HashSet::new();
+	let mut stack = vec![root];
+	let mut next_node_id = 0_usize;
+
+	let node_id_for = |event_id: &OwnedEventId,
+	                   node_ids: &mut HashMap<OwnedEventId, String>,
+	                   next_node_id: &mut usize| {
+		node_ids
+			.entry(event_id.clone())
+			.or_insert_with(|| {
+				let id = format!("n{}", *next_node_id);
+				*next_node_id = next_node_id.saturating_add(1);
+				id
+			})
+			.clone()
+	};
+	let node_name = |e: &PduEvent| {
+		if let Some(state_key) = e.state_key() {
+			format!("{},'{}'", e.event_type(), state_key)
+		} else {
+			format!("{}", e.event_type())
+		}
+	};
+
+	while let Some(event) = stack.pop() {
+		let current_event_id = event.event_id().to_owned();
+		if !visited.insert(current_event_id.clone()) {
+			continue;
+		}
+
+		let current_node_id = node_id_for(&current_event_id, &mut node_ids, &mut next_node_id);
+		let current_status = node_status(&current_event_id, false).await;
+
+		render_node(
+			&mut graph,
+			&current_node_id,
+			&current_event_id,
+			&node_name(&event),
+			current_status,
+		)?;
+
+		let mut children = Vec::with_capacity(event.auth_events.len());
+		for auth_event_id in event.auth_events().rev() {
+			let auth_event_id = auth_event_id.to_owned();
+			let auth_node_id = node_id_for(&auth_event_id, &mut node_ids, &mut next_node_id);
+			writeln!(graph, "{current_node_id} --> {auth_node_id}")?;
+
+			let first_seen = scheduled.insert(auth_event_id.clone());
+			let auth_pdu = if let Some(auth_pdu) = cached_events.get(&auth_event_id) {
+				// NOTE: events might be referenced multiple times (like the create event)
+				// so this saves some cheeky db lookup time
+				Some(auth_pdu.clone())
+			} else if first_seen {
+				match self.services.rooms.timeline.get_pdu(&auth_event_id).await {
+					| Ok(auth_event) => {
+						cached_events.insert(auth_event_id.clone(), auth_event.clone());
+						Some(auth_event)
+					},
+					| Err(_) => None,
+				}
+			} else {
+				None
+			};
+
+			// NOTE: Depth is used as the primary sorting key here, even though it has no
+			// bearing on state resolution or anything. Timestamp is used as a
+			// tiebreaker, failing back to lexicographical comparison.
+			let (depth, ts) = auth_pdu
+				.as_ref()
+				.map_or((UInt::MAX, UInt::MAX), |pdu| (pdu.depth, pdu.origin_server_ts));
+
+			children.push(AuthChild {
+				node_id: auth_node_id,
+				event_id: auth_event_id,
+				depth,
+				ts,
+				first_seen,
+				pdu: auth_pdu,
+			});
+		}
+
+		children.sort_by(|a, b| {
+			a.depth
+				.cmp(&b.depth)
+				.then(a.ts.cmp(&b.ts))
+				.then(a.event_id.as_str().cmp(b.event_id.as_str()))
+		});
+
+		for child in children.into_iter().rev() {
+			if !child.first_seen {
+				continue;
+			}
+
+			if let Some(child_pdu) = child.pdu {
+				// We have this PDU so will want to traverse it.
+				stack.push(child_pdu);
+			} else {
+				// We don't have this PDU locally so we can't traverse its auth events,
+				// but we can still render it as a node.
+				render_node(
+					&mut graph,
+					&child.node_id,
+					&child.event_id,
+					"",
+					node_status(&child.event_id, true).await,
+				)?;
+			}
+		}
+	}
+
+	graph.push_str("```\n");
+	self.write_str(&graph).await
 }
 
 #[admin_command]
@@ -74,12 +278,14 @@ pub(super) async fn parse_pdu(&self) -> Result {
 	}
 
 	let string = self.body[1..self.body.len().saturating_sub(1)].join("\n");
+	let room_version_rules = RoomVersionId::V12.rules().unwrap();
+
 	match serde_json::from_str(&string) {
 		| Err(e) => return Err!("Invalid json in command body: {e}"),
-		| Ok(value) => match ruma::signatures::reference_hash(&value, &RoomVersionId::V6) {
+		| Ok(value) => match ruma::signatures::reference_hash(&value, &room_version_rules) {
 			| Err(e) => return Err!("Could not parse PDU JSON: {e:?}"),
 			| Ok(hash) => {
-				let event_id = OwnedEventId::parse(format!("${hash}"));
+				let event_id = EventId::parse(format!("${hash}"));
 				match serde_json::from_value::<PduEvent>(serde_json::to_value(value)?) {
 					| Err(e) => return Err!("EventId: {event_id:?}\nCould not parse event: {e}"),
 					| Ok(pdu) => write!(self, "EventId: {event_id:?}\n{pdu:#?}"),
@@ -104,17 +310,33 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 		outlier = true;
 		pdu_json = self.services.rooms.timeline.get_pdu_json(&event_id).await;
 	}
+	let rejected = self
+		.services
+		.rooms
+		.pdu_metadata
+		.is_event_rejected(&event_id)
+		.await;
+	let soft_failed = self
+		.services
+		.rooms
+		.pdu_metadata
+		.is_event_soft_failed(&event_id)
+		.await;
 
 	match pdu_json {
 		| Err(_) => return Err!("PDU not found locally."),
 		| Ok(json) => {
 			let text = serde_json::to_string_pretty(&json)?;
-			let msg = if outlier {
-				"Outlier (Rejected / Soft Failed) PDU found in our database"
+			let msg = if rejected {
+				"Rejected PDU:"
+			} else if soft_failed {
+				"Soft-failed PDU:"
+			} else if outlier {
+				"Outlier PDU:"
 			} else {
-				"PDU found in our database"
+				"PDU:"
 			};
-			write!(self, "{msg}\n```json\n{text}\n```",)
+			write!(self, "{msg}\n```json\n{text}\n```")
 		},
 	}
 	.await
@@ -182,10 +404,7 @@ pub(super) async fn get_remote_pdu_list(&self, server: OwnedServerName, force: b
 
 	for event_id in list {
 		if force {
-			match self
-				.get_remote_pdu(event_id.to_owned(), server.clone())
-				.await
-			{
+			match self.get_remote_pdu(event_id.clone(), server.clone()).await {
 				| Err(e) => {
 					failed_count = failed_count.saturating_add(1);
 					self.services
@@ -200,7 +419,7 @@ pub(super) async fn get_remote_pdu_list(&self, server: OwnedServerName, force: b
 				},
 			}
 		} else {
-			self.get_remote_pdu(event_id.to_owned(), server.clone())
+			self.get_remote_pdu(event_id.clone(), server.clone())
 				.await?;
 			success_count = success_count.saturating_add(1);
 		}
@@ -232,10 +451,10 @@ pub(super) async fn get_remote_pdu(
 	match self
 		.services
 		.sending
-		.send_federation_request(&server, ruma::api::federation::event::get_event::v1::Request {
-			event_id: event_id.clone(),
-			include_unredacted_content: None,
-		})
+		.send_federation_request(
+			&server,
+			ruma::api::federation::event::get_event::v1::Request::new(event_id.clone()),
+		)
 		.await
 	{
 		| Err(e) => {
@@ -325,9 +544,9 @@ pub(super) async fn ping(&self, server: OwnedServerName) -> Result {
 	match self
 		.services
 		.sending
-		.send_federation_request(
+		.send_unauthenticated_request(
 			&server,
-			ruma::api::federation::discovery::get_server_version::v1::Request {},
+			ruma::api::federation::discovery::get_server_version::v1::Request::new(),
 		)
 		.await
 	{
@@ -356,7 +575,7 @@ pub(super) async fn force_device_list_updates(&self) -> Result {
 	self.services
 		.users
 		.stream()
-		.for_each(|user_id| self.services.users.mark_device_key_update(user_id))
+		.for_each(async |user_id| self.services.users.mark_device_key_update(&user_id).await)
 		.await;
 
 	write!(self, "Marked all devices for all users as having new keys to update").await
@@ -425,9 +644,16 @@ pub(super) async fn verify_json(&self) -> Result {
 	}
 
 	let string = self.body[1..self.body.len().checked_sub(1).unwrap()].join("\n");
+	let room_version_rules = RoomVersionId::V12.rules().unwrap();
+
 	match serde_json::from_str::<CanonicalJsonObject>(&string) {
 		| Err(e) => return Err!("Invalid json: {e}"),
-		| Ok(value) => match self.services.server_keys.verify_json(&value, None).await {
+		| Ok(value) => match self
+			.services
+			.server_keys
+			.verify_json(&value, &room_version_rules)
+			.await
+		{
 			| Err(e) => return Err!("Signature verification failed: {e}"),
 			| Ok(()) => write!(self, "Signature correct"),
 		},
@@ -440,9 +666,15 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	use ruma::signatures::Verified;
 
 	let mut event = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
+	let room_version_rules = RoomVersionId::V12.rules().unwrap();
 
 	event.remove("event_id");
-	let msg = match self.services.server_keys.verify_event(&event, None).await {
+	let msg = match self
+		.services
+		.server_keys
+		.verify_event(&event, &room_version_rules)
+		.await
+	{
 		| Err(e) => return Err(e),
 		| Ok(Verified::Signatures) => "signatures OK, but content hash failed (redaction).",
 		| Ok(Verified::All) => "signatures and hashes OK.",
@@ -539,16 +771,17 @@ pub(super) async fn force_set_room_state_from_server(
 	};
 
 	let room_version = self.services.rooms.state.get_room_version(&room_id).await?;
+	let room_version_rules = room_version.rules().unwrap();
 
 	let mut state: HashMap<u64, OwnedEventId> = HashMap::new();
 
 	let remote_state_response = self
 		.services
 		.sending
-		.send_federation_request(&server_name, get_room_state::v1::Request {
-			room_id: room_id.clone(),
-			event_id: at_event_id,
-		})
+		.send_federation_request(
+			&server_name,
+			get_room_state::v1::Request::new(at_event_id, room_id.clone()),
+		)
 		.await?;
 
 	for pdu in remote_state_response.pdus.clone() {
@@ -571,22 +804,17 @@ pub(super) async fn force_set_room_state_from_server(
 	for result in remote_state_response.pdus.iter().map(|pdu| {
 		self.services
 			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
+			.validate_and_add_event_id(pdu, &room_version_rules)
 	}) {
 		let Ok((event_id, value)) = result.await else {
 			continue;
 		};
 
-		let pdu = PduEvent::from_id_val(&event_id, value.clone(), Some(room_id.as_ref()))
-			.map_err(|e| {
-				debug_error!(
-					"Invalid PDU in fetching remote room state PDUs response: {value:#?}"
-				);
-				err!(BadServerResponse(debug_error!("Invalid PDU in send_join response: {e:?}")))
-			})?;
-		if pdu.room_id_or_hash().as_deref() != Some(room_id.as_ref()) {
-			return Err!(BadServerResponse("Remote room_state PDU belongs to a different room"));
-		}
+		let pdu = PduEvent::from_id_val(&event_id, value.clone()).map_err(|e| {
+			debug_error!("Invalid PDU in fetching remote room state PDUs response: {value:#?}");
+			err!(BadServerResponse(debug_error!("Invalid PDU in send_join response: {e:?}")))
+		})?;
+
 		self.services
 			.rooms
 			.outlier
@@ -601,6 +829,10 @@ pub(super) async fn force_set_room_state_from_server(
 				.await;
 
 			state.insert(shortstatekey, pdu.event_id.clone());
+			self.services
+				.rooms
+				.pdu_metadata
+				.clear_pdu_markers(pdu.event_id());
 		}
 	}
 
@@ -608,7 +840,7 @@ pub(super) async fn force_set_room_state_from_server(
 	for result in remote_state_response.auth_chain.iter().map(|pdu| {
 		self.services
 			.server_keys
-			.validate_and_add_event_id(pdu, &room_version)
+			.validate_and_add_event_id(pdu, &room_version_rules)
 	}) {
 		let Ok((event_id, value)) = result.await else {
 			continue;
@@ -618,6 +850,10 @@ pub(super) async fn force_set_room_state_from_server(
 			.rooms
 			.outlier
 			.add_pdu_outlier(&event_id, &value);
+		self.services
+			.rooms
+			.pdu_metadata
+			.clear_pdu_markers(&event_id);
 	}
 
 	info!("Resolving new room state");
@@ -625,7 +861,7 @@ pub(super) async fn force_set_room_state_from_server(
 		.services
 		.rooms
 		.event_handler
-		.resolve_state(&room_id, &room_version, state)
+		.resolve_state(&room_id, &room_version_rules, state)
 		.await?;
 
 	info!("Compressing new room state");
@@ -649,10 +885,7 @@ pub(super) async fn force_set_room_state_from_server(
 		.force_state(room_id.clone().as_ref(), short_state_hash, added, removed, &state_lock)
 		.await?;
 
-	info!(
-		"Updating joined counts for room just in case (e.g. we may have found a difference in \
-		 the room's m.room.member state"
-	);
+	info!("Updating joined counts for room");
 	self.services
 		.rooms
 		.state_cache
@@ -794,7 +1027,7 @@ pub(super) async fn runtime_metrics(&self) -> Result {
 		.await
 }
 
-#[cfg(all(tokio_unstable, feature = "tokio_metrics"))]
+#[cfg(tokio_unstable)]
 #[admin_command]
 pub(super) async fn runtime_interval(&self) -> Result {
 	let out = self.services.server.metrics.runtime_interval().map_or_else(
@@ -805,10 +1038,10 @@ pub(super) async fn runtime_interval(&self) -> Result {
 	self.write_str(&out).await
 }
 
-#[cfg(not(all(tokio_unstable, feature = "tokio_metrics")))]
+#[cfg(not(tokio_unstable))]
 #[admin_command]
 pub(super) async fn runtime_interval(&self) -> Result {
-	self.write_str("Runtime metrics require building with `tokio_unstable` and `tokio_metrics`.")
+	self.write_str("Runtime metrics require building with `tokio_unstable`.")
 		.await
 }
 

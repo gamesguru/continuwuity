@@ -7,10 +7,10 @@ use conduwuit::{
 use futures::future::ready;
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
-	events::{StateEventType, TimelineEventType},
+	events::StateEventType,
 };
 
-use super::{check_room_id, get_room_version_id, to_room_version};
+use super::{check_room_id, get_room_version_rules};
 use crate::rooms::timeline::pdu_fits;
 
 #[implement(super::Service)]
@@ -37,22 +37,22 @@ where
 	// 1. Remove unsigned field
 	value.remove("unsigned");
 
-	// TODO: For RoomVersion6 we must check that Raw<..> is canonical do we anywhere?: https://matrix.org/docs/spec/rooms/v6#canonical-json
-
 	// 2. Check signatures, otherwise drop
 	// 3. check content hash, redact if doesn't match
-	let room_version_id = get_room_version_id(create_event)?;
+	let room_version_rules = get_room_version_rules(create_event)?;
 	let mut incoming_pdu = match self
 		.services
 		.server_keys
-		.verify_event(&value, Some(&room_version_id))
+		.verify_event(&value, &room_version_rules)
 		.await
 	{
 		| Ok(ruma::signatures::Verified::All) => value,
 		| Ok(ruma::signatures::Verified::Signatures) => {
 			// Redact
 			debug_info!("Calculated hash does not match (redaction): {event_id}");
-			let Ok(obj) = ruma::canonical_json::redact(value, &room_version_id, None) else {
+			let Ok(obj) =
+				ruma::canonical_json::redact(value, &room_version_rules.redaction, None)
+			else {
 				return Err!(Request(InvalidParam("Redaction failed")));
 			};
 
@@ -88,6 +88,15 @@ where
 	let mut auth_events: HashMap<OwnedEventId, PduEvent> = HashMap::new();
 
 	for aid in pdu_event.auth_events() {
+		if self.services.pdu_metadata.is_event_rejected(aid).await {
+			debug_warn!(
+				"Rejecting incoming event {} which depends on rejected auth event {aid}",
+				event_id,
+			);
+			self.services.pdu_metadata.mark_event_rejected(event_id);
+			return Err!(Request(InvalidParam("Event has rejected auth event: {aid}")));
+		}
+
 		if let Ok(auth_event) = self.services.timeline.get_pdu(aid).await {
 			check_room_id(room_id, &auth_event)?;
 			trace!("Found auth event {aid} for outlier event {event_id} locally");
@@ -131,6 +140,8 @@ where
 		.filter(|id| !auth_events.contains_key(*id))
 		.collect::<Vec<_>>();
 	if !still_missing.is_empty() {
+		// Don't reject: this could be a temporary condition
+		// TODO: use get_missing_events?
 		return Err!(Request(InvalidParam(
 			"Could not fetch all auth events for outlier event {event_id}, still missing: \
 			 {still_missing:?}"
@@ -161,6 +172,10 @@ where
 				v.insert(auth_event);
 			},
 			| hash_map::Entry::Occupied(_) => {
+				self.services
+					.outlier
+					.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu);
+				self.services.pdu_metadata.mark_event_rejected(event_id);
 				return Err!(Request(InvalidParam(
 					"Auth event's type and state_key combination exists multiple times: {}, {}",
 					auth_event.kind,
@@ -170,16 +185,16 @@ where
 		}
 	}
 
-	// The original create event must be in the auth events for v11 and below.
-	// The create event itself has an empty auth_events array (it's the DAG root).
-	// For v12+, create is not required in auth_events.
-	if pdu_event.event_type() != &TimelineEventType::RoomCreate
-		&& !to_room_version(&room_version_id).room_ids_as_hashes
-		&& !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into()))
-	{
-		return Err!(Request(InvalidParam(
-			"Incoming event missing m.room.create in auth events"
-		)));
+	// The original create event must be in the auth events
+	if !matches!(
+		auth_events_by_key.get(&(StateEventType::RoomCreate, String::new().into())),
+		Some(_) | None
+	) {
+		self.services.pdu_metadata.mark_event_rejected(event_id);
+		self.services
+			.outlier
+			.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu);
+		return Err!(Request(InvalidParam("Incoming event refers to wrong create event.")));
 	}
 
 	let state_fetch = |ty: &StateEventType, sk: &str| {
@@ -187,8 +202,9 @@ where
 		ready(auth_events_by_key.get(&key).map(ToOwned::to_owned))
 	};
 
+	// PDU check: 3
 	let auth_check = state_res::event_auth::auth_check(
-		&to_room_version(&room_version_id),
+		&room_version_rules,
 		&pdu_event,
 		None, // TODO: third party invite
 		state_fetch,
@@ -198,7 +214,13 @@ where
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
 	if !auth_check {
-		return Err!(Request(Forbidden("Auth check failed")));
+		self.services.pdu_metadata.mark_event_rejected(event_id);
+		self.services
+			.outlier
+			.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu);
+		return Err!(Request(Forbidden(
+			"Event authorisation fails based on event's claimed auth events"
+		)));
 	}
 
 	trace!("Validation successful.");

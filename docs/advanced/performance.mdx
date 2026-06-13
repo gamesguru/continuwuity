@@ -1,0 +1,135 @@
+# Performance tuning
+
+Continuwuity's default configs are suited for many typical setups and scales appropriately with the size of your hardware. However, there are many scenarios where additional modifications can be made to better utilize your server resources.
+
+This page aims to outline various performance tweaks for Continuwuity and their effects. These adjustments are especially helpful for homeservers that join many large federated rooms or have many users, and it will become increasingly necessary as the Matrix network expands. As always, your mileage may vary according to your setup's specifics. If you have further discussions or recommendations, please share them in the community rooms.
+
+## DNS tuning (recommended)
+
+Please see the dedicated [DNS tuning guide](./dns.mdx).
+
+## Cache capacities
+
+If you have memory to spare, consider increasing the `cache_capacity_modifier` value to a larger number to allow more data to be stored in hot memory. This *significantly* speeds up many intensive operations (such as state resolutions) and decreases CPU usage and disk I/O. Start with a baseline of `cache_capacity_modifier = 2.0` and tune up until you are satisfied with RAM usage.
+
+On the other hand, if your system doesn't have a lot of RAM, consider decreasing the cache capacity modifier to something smaller than `1.0` to avoid low-memory issues (at the cost of higher load on disk/CPU). This recommendation also works if your system has abnormally little RAM compared to the number of CPU cores (for example, 2GB RAM for 12 cores), as cache capacities scale according to number of available cores.
+
+## Disabling some features
+
+You can disable outgoing **typing notifications** and **read markers** to reduce strain on the CPU and network when actively participating in rooms.
+
+```toml
+# disables sending read receipts
+allow_outgoing_read_receipts = false
+# disables sending typing notifications
+allow_outgoing_typing = false
+```
+
+Outgoing presence updates are also considered very expensive and have been disabled by default (`allow_outgoing_presence = false`). For more savings, you may wish to disable _all_ processing of presence entirely.
+
+```toml title=continuwuity.toml
+# disabling presence updates entirely
+allow_local_presence = false
+allow_incoming_presence = false
+allow_outgoing_presence = false
+```
+
+## Tuning database compression
+
+:::warning
+These steps SHOULD be done **before** starting Continuwuity for the first time. While switching database compression midway through is theoretically possible, this has not been tested extensively in the wild.
+:::
+
+### Changing the compression algorithm
+
+For reduced CPU usage at a tradeoff of increased storage space, consider deploying Continuwuity with the faster and less intensive `lz4` algorithm instead of `zstd` for rocksdb, and disable WAL compression entirely:
+
+```toml
+### in continuwuity.toml ###
+rocksdb_compression_algo = "lz4"
+rocksdb_wal_compression = "none"
+```
+
+This tweak can especially be helpful if you have an older or less performant CPU (e.g. a Raspberry Pi) and disk space to spare.
+
+### Increasing bottommost layer compression (`zstd` only)
+
+The bottommost layer of the database usually contains old and read-only data, so it is a suitable place for further compression. In Continuwuity, this is possible by setting `rocksdb_bottommost_compression = true` and tuning `rocksdb_bottommost_compression_level` to a more compact level than the default one used in `rocksdb_compression_level`. This tweak comes at a cost of increased CPU usage, but may prevent your database from growing too large in the long run.
+
+For those using `zstd` compression, the compression level ranges from 1 to 22. An example like this could apply:
+
+```toml
+### in continuwuity.toml ###
+rocksdb_compression_algo = "zstd"
+rocksdb_compression_level = 32767 # magic number, translates to level 3 on zstd
+rocksdb_bottommost_compression = true
+rocksdb_bottommost_compression_level = 9 # level 9 on zstd
+```
+
+For `lz4` users, the default level (`-1`) is already the most compact. You can only further decrease it to favor compression speed over ratio.
+
+Consult these documents for more information on compression tuning and levels:
+
+- [Rocksdb compression documentation][rocksdb-compression]
+- [Rocksdb default compression levels][rocksdb-compression-defaults]
+- [Zstd manual][zstd-manual]
+- [Lz4 manual][lz4-manual]
+
+[rocksdb-compression]: https://github.com/facebook/rocksdb/wiki/Compression
+[rocksdb-compression-defaults]: https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h#L208-L217
+[zstd-manual]: https://facebook.github.io/zstd/zstd_manual.html
+[lz4-manual]: https://github.com/lz4/lz4/blob/release/doc/lz4_manual.html
+
+## Other tweaks
+
+### Using UNIX sockets
+
+If your homeserver and reverse proxy live on the same machine, you may wish to expose Continuwuity on a UNIX socket instead of a port. This removes TCP overhead between the two programs.
+
+<details>
+
+<summary>Example config with Caddy</summary>
+
+```toml
+### in continuwuity.toml ###
+
+# `address` and `port` has to be commented out first
+#address = ["127.0.0.1", "::1"]
+#port = 8008
+unix_socket_path = "/run/continuwuity/continuwuity.sock"
+```
+
+```
+### in your Caddyfile ###
+https://matrix.example.com {
+    reverse_proxy unix//run/continuwuity/continuwuity.sock
+
+    # alternatively, use the http2-plaintext protocol
+    # reverse_proxy unix+h2c//run/continuwuity/continuwuity.sock
+}
+```
+
+</details>
+
+### Tuning your trusted servers
+
+:::info Vet your trusted servers!
+Trusted servers are your first point of contact when obtaining public keys from other servers, and they could theoretically impersonate other servers and cause significant harm to your deployment. Please thoroughly verify your trusted servers' credibility before adding them to your configuration.
+:::
+
+Trusted servers are queried sequentially in the order they are listed. If you have multiple trusted servers configured, put the faster ones first:
+
+```toml
+# Example config, using maintainers' recommended homeservers
+trusted_servers = ["codestorm.net","starstruck.systems","unredacted.org","matrix.org"]
+```
+
+Avoid prioritising `matrix.org` as your primary trusted server, as it tends to be quite slow.
+
+Some users have also reported that increasing `trusted_server_batch_size` has helped with faster joins for huge rooms. Start with doubling the default to `2048` until you find a suitable value.
+
+### Enable HTTP/3 on your reverse proxy
+
+Consider enabling the newer **HTTP/3** protocol for inbound connections to Continuwuity. In Caddy HTTP/3 is allowed by default, but you must expose port :443/**udp** on your firewall.
+
+HTTP/3 can vastly improve Client-Server connections especially on unstable networks, as it reduces packet losses and latency from TCP head-of-line blocking, includes workarounds for network switching, and reduces connection establishment handshakes. Continuwuity also includes experimental _outbound_ HTTP/3 support in its Docker images, so connections between Continuwuity servers can benefit from this too.

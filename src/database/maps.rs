@@ -121,6 +121,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "fallbackkeyid_fallbackkey",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "passwordresettoken_info",
 		..descriptor::RANDOM_SMALL
 	},
@@ -308,6 +312,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "rejectedeventids",
+		key_size_hint: Some(48),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "statehash_shortstatehash",
 		val_size_hint: Some(8),
 		..descriptor::RANDOM
@@ -372,7 +381,7 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "userid_blurhash",
-		..descriptor::RANDOM_SMALL
+		..descriptor::DROPPED
 	},
 	Descriptor {
 		name: "userid_dehydrateddevice",

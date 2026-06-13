@@ -14,11 +14,12 @@ mod upgrade_outlier_pdu;
 use std::{collections::HashMap, fmt::Write, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
-use conduwuit::{Err, Event, PduEvent, Result, RoomVersion, Server, SyncRwLock, utils::MutexMap};
+use conduwuit::{Err, Event, PduEvent, Result, Server, SyncRwLock, utils::MutexMap};
 use ruma::{
-	OwnedEventId, OwnedRoomId, RoomId, RoomVersionId,
-	events::room::create::RoomCreateEventContent,
+	OwnedEventId, OwnedRoomId, RoomId, events::room::create::RoomCreateEventContent,
+	room_version_rules::RoomVersionRules,
 };
+use tokio::sync::Notify;
 
 use crate::{Dep, globals, rooms, sending, server_keys};
 
@@ -26,6 +27,7 @@ pub struct Service {
 	pub mutex_federation: RoomMutexMap,
 	pub federation_handletime: SyncRwLock<HandleTimeMap>,
 	services: Services,
+	server_shutdown: Notify,
 }
 
 struct Services {
@@ -72,6 +74,7 @@ impl crate::Service for Service {
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 				server: args.server.clone(),
 			},
+			server_shutdown: Notify::new(),
 		}))
 	}
 
@@ -86,6 +89,8 @@ impl crate::Service for Service {
 	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+
+	fn interrupt(&self) { self.server_shutdown.notify_waiters(); }
 }
 
 impl Service {
@@ -122,14 +127,11 @@ fn check_room_id<Pdu: Event>(room_id: &RoomId, pdu: &Pdu) -> Result {
 	Ok(())
 }
 
-fn get_room_version_id<Pdu: Event>(create_event: &Pdu) -> Result<RoomVersionId> {
+fn get_room_version_rules<Pdu: Event>(create_event: &Pdu) -> Result<RoomVersionRules> {
 	let content: RoomCreateEventContent = create_event.get_content()?;
-	let room_version = content.room_version;
+	let Some(room_version_rules) = content.room_version.rules() else {
+		return Err!(Request(UnsupportedRoomVersion("Room version has no defined rules")));
+	};
 
-	Ok(room_version)
-}
-
-#[inline]
-fn to_room_version(room_version_id: &RoomVersionId) -> RoomVersion {
-	RoomVersion::new(room_version_id).expect("room version is supported")
+	Ok(room_version_rules)
 }

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use axum::extract::State;
 use axum_client_ip::ClientIp;
-use conduwuit::{Err, Result, err, matrix::pdu::PduBuilder, utils};
+use conduwuit::{Err, Result, err, matrix::pdu::PartialPdu, utils};
 use ruma::{api::client::message::send_message_event, events::MessageLikeEventType};
 use serde_json::from_str;
 
@@ -22,16 +22,16 @@ pub(crate) async fn send_message_event_route(
 	ClientIp(client_ip): ClientIp,
 	body: Ruma<send_message_event::v3::Request>,
 ) -> Result<send_message_event::v3::Response> {
-	let sender_user = body.sender_user();
-	let sender_device = body.sender_device.as_deref();
-	let appservice_info = body.appservice_info.as_ref();
+	let sender_user = body.identity.expect_sender_user()?;
+	let sender_device = body.identity.sender_device();
+
 	if services.users.is_suspended(sender_user).await? {
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
 	}
 
 	services
 		.users
-		.update_device_last_seen(sender_user, body.sender_device.as_deref(), client_ip)
+		.update_device_last_seen(sender_user, sender_device, client_ip)
 		.await;
 
 	// Forbid m.room.encrypted if encryption is disabled
@@ -40,7 +40,7 @@ pub(crate) async fn send_message_event_route(
 		return Err!(Request(Forbidden("Encryption has been disabled")));
 	}
 
-	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
+	let state_lock = services.rooms.state.mutex.lock(body.room_id.as_str()).await;
 
 	if body.event_type == MessageLikeEventType::CallInvite
 		&& services.rooms.directory.is_public_room(&body.room_id).await
@@ -62,11 +62,11 @@ pub(crate) async fn send_message_event_route(
 			)));
 		}
 
-		return Ok(send_message_event::v3::Response {
-			event_id: utils::string_from_bytes(&response)
-				.map(TryInto::try_into)
-				.map_err(|e| err!(Database("Invalid event_id in txnid data: {e:?}")))??,
-		});
+		let event_id = utils::string_from_bytes(&response)
+			.map(TryInto::try_into)
+			.map_err(|e| err!(Database("Invalid event_id in txnid data: {e:?}")))??;
+
+		return Ok(send_message_event::v3::Response::new(event_id));
 	}
 
 	let mut unsigned = BTreeMap::new();
@@ -79,11 +79,15 @@ pub(crate) async fn send_message_event_route(
 		.rooms
 		.timeline
 		.build_and_append_pdu(
-			PduBuilder {
+			PartialPdu {
 				event_type: body.event_type.clone().into(),
 				content,
 				unsigned: Some(unsigned),
-				timestamp: appservice_info.and(body.timestamp),
+				timestamp: if body.identity.is_appservice() {
+					body.timestamp
+				} else {
+					None
+				},
 				..Default::default()
 			},
 			sender_user,
@@ -101,5 +105,5 @@ pub(crate) async fn send_message_event_route(
 
 	drop(state_lock);
 
-	Ok(send_message_event::v3::Response { event_id })
+	Ok(send_message_event::v3::Response::new(event_id))
 }

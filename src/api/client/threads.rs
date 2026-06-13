@@ -7,7 +7,7 @@ use conduwuit::{
 	},
 };
 use futures::StreamExt;
-use ruma::{api::client::threads::get_threads, uint};
+use ruma::{api::client::threads::get_threads, assign, uint};
 
 use crate::Ruma;
 
@@ -16,6 +16,8 @@ pub(crate) async fn get_threads_route(
 	State(services): State<crate::State>,
 	ref body: Ruma<get_threads::v1::Request>,
 ) -> Result<get_threads::v1::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	// Use limit or else 10, with maximum 100
 	let limit = body
 		.limit
@@ -34,14 +36,14 @@ pub(crate) async fn get_threads_route(
 	let threads: Vec<(PduCount, PduEvent)> = services
 		.rooms
 		.threads
-		.threads_until(body.sender_user(), &body.room_id, from, &body.include)
+		.threads_until(sender_user, &body.room_id, from, &body.include)
 		.await?
 		.take(limit)
 		.filter_map(|(count, pdu)| async move {
 			services
 				.rooms
 				.state_accessor
-				.user_can_see_event(body.sender_user(), &body.room_id, &pdu.event_id)
+				.user_can_see_event(sender_user, &body.room_id, &pdu.event_id)
 				.await
 				.then_some((count, pdu))
 		})
@@ -49,7 +51,7 @@ pub(crate) async fn get_threads_route(
 			if let Err(e) = services
 				.rooms
 				.pdu_metadata
-				.add_bundled_aggregations_to_pdu(body.sender_user(), &mut pdu)
+				.add_bundled_aggregations_to_pdu(sender_user, &mut pdu)
 				.await
 			{
 				debug_warn!("Failed to add bundled aggregations to thread: {e}");
@@ -59,18 +61,18 @@ pub(crate) async fn get_threads_route(
 		.collect()
 		.await;
 
-	Ok(get_threads::v1::Response {
-		next_batch: threads
-			.last()
-			.filter(|_| threads.len() >= limit)
-			.map(at!(0))
-			.as_ref()
-			.map(ToString::to_string),
+	let next_batch = threads
+		.last()
+		.filter(|_| threads.len() >= limit)
+		.map(at!(0))
+		.as_ref()
+		.map(ToString::to_string);
 
-		chunk: threads
-			.into_iter()
-			.map(at!(1))
-			.map(Event::into_format)
-			.collect(),
-	})
+	let chunk = threads
+		.into_iter()
+		.map(at!(1))
+		.map(Event::into_format)
+		.collect();
+
+	Ok(assign!(get_threads::v1::Response::new(chunk), { next_batch }))
 }

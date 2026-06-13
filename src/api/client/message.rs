@@ -23,19 +23,20 @@ use conduwuit_service::{
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, future::OptionFuture, pin_mut};
 use ruma::{
-	DeviceId, RoomId, UserId,
+	RoomId, UserId,
 	api::{
 		Direction,
-		client::{error::ErrorKind, filter::RoomEventFilter, message::get_message_events},
+		client::{filter::RoomEventFilter, message::get_message_events},
+		error::{ErrorKind, SenderIgnoredErrorData},
 	},
+	assign,
 	events::{
 		AnyStateEvent, StateEventType,
 		TimelineEventType::{self, *},
-		invite_permission_config::FilterLevel,
 	},
 	serde::Raw,
 };
-use tracing::warn;
+use ruminuwuity::invite_permission_config::FilterLevel;
 
 use crate::Ruma;
 
@@ -74,9 +75,8 @@ pub(crate) async fn get_message_events_route(
 	ClientIp(client_ip): ClientIp,
 	body: Ruma<get_message_events::v3::Request>,
 ) -> Result<get_message_events::v3::Response> {
-	debug_assert!(IGNORED_MESSAGE_TYPES.is_sorted(), "IGNORED_MESSAGE_TYPES is not sorted");
-	let sender_user = body.sender_user();
-	let sender_device = body.sender_device.as_deref();
+	let sender_user = body.identity.expect_sender_user()?;
+	let sender_device = body.identity.sender_device();
 	let room_id = &body.room_id;
 	let filter = &body.filter;
 
@@ -157,17 +157,7 @@ pub(crate) async fn get_message_events_route(
 
 	let lazy_loading_context = lazy_loading::Context {
 		user_id: sender_user,
-		device_id: sender_device.or_else(|| {
-			if let Some(registration) = body.appservice_info.as_ref() {
-				Some(<&DeviceId>::from(registration.registration.id.as_str()))
-			} else {
-				warn!(
-					"No device_id provided and no appservice registration found, this should be \
-					 unreachable"
-				);
-				None
-			}
-		}),
+		device_id: sender_device,
 		room_id,
 		token: Some(from.into_unsigned()),
 		options: Some(&filter.lazy_load_options),
@@ -199,12 +189,12 @@ pub(crate) async fn get_message_events_route(
 		.map(Event::into_format)
 		.collect();
 
-	Ok(get_message_events::v3::Response {
+	Ok(assign!(get_message_events::v3::Response::new(), {
 		start: from.to_string(),
 		end: next_token.as_ref().map(PduCount::to_string),
-		chunk,
-		state,
-	})
+		chunk: chunk,
+		state: state,
+	}))
 }
 
 pub(crate) async fn lazy_loading_witness<'a, I>(
@@ -301,12 +291,12 @@ where
 {
 	// exclude Synapse's dummy events from bloating up response bodies. clients
 	// don't need to see this.
-	if event.kind().to_cow_str() == "org.matrix.dummy_event" {
+	if event.kind().to_string() == "org.matrix.dummy_event" {
 		return Ok(true);
 	}
 
 	let sender_user = event.sender();
-	let type_ignored = IGNORED_MESSAGE_TYPES.binary_search(event.kind()).is_ok();
+	let type_ignored = IGNORED_MESSAGE_TYPES.contains(event.kind());
 	let server_ignored = services
 		.moderation
 		.is_remote_server_ignored(sender_user.server_name());
@@ -323,7 +313,7 @@ where
 	if server_ignored {
 		// the sender's server is ignored, so ignore this event
 		return Err(Error::BadRequest(
-			ErrorKind::SenderIgnored { sender: None },
+			ErrorKind::SenderIgnored(SenderIgnoredErrorData::new()),
 			"The sender's server is ignored by this server.",
 		));
 	}
@@ -332,7 +322,9 @@ where
 		// the recipient of this PDU has the sender ignored, and we're not
 		// configured to send ignored messages to clients
 		return Err(Error::BadRequest(
-			ErrorKind::SenderIgnored { sender: Some(event.sender().to_owned()) },
+			ErrorKind::SenderIgnored(SenderIgnoredErrorData::with_sender(
+				event.sender().to_owned(),
+			)),
 			"You have ignored this sender.",
 		));
 	}

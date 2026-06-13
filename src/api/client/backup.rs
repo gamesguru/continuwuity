@@ -3,7 +3,6 @@ use std::cmp::Ordering;
 use axum::extract::State;
 use conduwuit::{Err, Result, err};
 use conduwuit_service::Services;
-use futures::{FutureExt, future::try_join};
 use ruma::{
 	UInt, UserId,
 	api::client::backup::{
@@ -26,9 +25,9 @@ pub(crate) async fn create_backup_version_route(
 ) -> Result<create_backup_version::v3::Response> {
 	let version = services
 		.key_backups
-		.create_backup(body.sender_user(), &body.algorithm)?;
+		.create_backup(body.identity.expect_sender_user()?, &body.algorithm)?;
 
-	Ok(create_backup_version::v3::Response { version })
+	Ok(create_backup_version::v3::Response::new(version))
 }
 
 /// # `PUT /_matrix/client/r0/room_keys/version/{version}`
@@ -41,10 +40,10 @@ pub(crate) async fn update_backup_version_route(
 ) -> Result<update_backup_version::v3::Response> {
 	services
 		.key_backups
-		.update_backup(body.sender_user(), &body.version, &body.algorithm)
+		.update_backup(body.identity.expect_sender_user()?, &body.version, &body.algorithm)
 		.await?;
 
-	Ok(update_backup_version::v3::Response {})
+	Ok(update_backup_version::v3::Response::new())
 }
 
 /// # `GET /_matrix/client/r0/room_keys/version`
@@ -54,15 +53,17 @@ pub(crate) async fn get_latest_backup_info_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_latest_backup_info::v3::Request>,
 ) -> Result<get_latest_backup_info::v3::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	let (version, algorithm) = services
 		.key_backups
-		.get_latest_backup(body.sender_user())
+		.get_latest_backup(sender_user)
 		.await
 		.map_err(|_| err!(Request(NotFound("Key backup does not exist."))))?;
 
-	let (count, etag) = get_count_etag(&services, body.sender_user(), &version).await?;
+	let (count, etag) = get_count_etag(&services, sender_user, &version).await;
 
-	Ok(get_latest_backup_info::v3::Response { algorithm, count, etag, version })
+	Ok(get_latest_backup_info::v3::Response::new(algorithm, count, etag, version))
 }
 
 /// # `GET /_matrix/client/v3/room_keys/version/{version}`
@@ -72,22 +73,19 @@ pub(crate) async fn get_backup_info_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_backup_info::v3::Request>,
 ) -> Result<get_backup_info::v3::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	let algorithm = services
 		.key_backups
-		.get_backup(body.sender_user(), &body.version)
+		.get_backup(sender_user, &body.version)
 		.await
 		.map_err(|_| {
 			err!(Request(NotFound("Key backup does not exist at version {:?}", body.version)))
 		})?;
 
-	let (count, etag) = get_count_etag(&services, body.sender_user(), &body.version).await?;
+	let (count, etag) = get_count_etag(&services, sender_user, &body.version).await;
 
-	Ok(get_backup_info::v3::Response {
-		algorithm,
-		count,
-		etag,
-		version: body.version.clone(),
-	})
+	Ok(get_backup_info::v3::Response::new(algorithm, count, etag, body.version.clone()))
 }
 
 /// # `DELETE /_matrix/client/r0/room_keys/version/{version}`
@@ -102,10 +100,10 @@ pub(crate) async fn delete_backup_version_route(
 ) -> Result<delete_backup_version::v3::Response> {
 	services
 		.key_backups
-		.delete_backup(body.sender_user(), &body.version)
+		.delete_backup(body.identity.expect_sender_user()?, &body.version)
 		.await;
 
-	Ok(delete_backup_version::v3::Response {})
+	Ok(delete_backup_version::v3::Response::new())
 }
 
 /// # `PUT /_matrix/client/r0/room_keys/keys`
@@ -120,9 +118,11 @@ pub(crate) async fn add_backup_keys_route(
 	State(services): State<crate::State>,
 	body: Ruma<add_backup_keys::v3::Request>,
 ) -> Result<add_backup_keys::v3::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	if services
 		.key_backups
-		.get_latest_backup_version(body.sender_user())
+		.get_latest_backup_version(sender_user)
 		.await
 		.is_ok_and(|version| version != body.version)
 	{
@@ -135,14 +135,14 @@ pub(crate) async fn add_backup_keys_route(
 		for (session_id, key_data) in &room.sessions {
 			services
 				.key_backups
-				.add_key(body.sender_user(), &body.version, room_id, session_id, key_data)
+				.add_key(sender_user, &body.version, room_id, session_id, key_data)
 				.await?;
 		}
 	}
 
-	let (count, etag) = get_count_etag(&services, body.sender_user(), &body.version).await?;
+	let (count, etag) = get_count_etag(&services, sender_user, &body.version).await;
 
-	Ok(add_backup_keys::v3::Response { count, etag })
+	Ok(add_backup_keys::v3::Response::new(etag, count))
 }
 
 /// # `PUT /_matrix/client/r0/room_keys/keys/{roomId}`
@@ -157,9 +157,11 @@ pub(crate) async fn add_backup_keys_for_room_route(
 	State(services): State<crate::State>,
 	body: Ruma<add_backup_keys_for_room::v3::Request>,
 ) -> Result<add_backup_keys_for_room::v3::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	if services
 		.key_backups
-		.get_latest_backup_version(body.sender_user())
+		.get_latest_backup_version(sender_user)
 		.await
 		.is_ok_and(|version| version != body.version)
 	{
@@ -171,13 +173,13 @@ pub(crate) async fn add_backup_keys_for_room_route(
 	for (session_id, key_data) in &body.sessions {
 		services
 			.key_backups
-			.add_key(body.sender_user(), &body.version, &body.room_id, session_id, key_data)
+			.add_key(sender_user, &body.version, &body.room_id, session_id, key_data)
 			.await?;
 	}
 
-	let (count, etag) = get_count_etag(&services, body.sender_user(), &body.version).await?;
+	let (count, etag) = get_count_etag(&services, sender_user, &body.version).await;
 
-	Ok(add_backup_keys_for_room::v3::Response { count, etag })
+	Ok(add_backup_keys_for_room::v3::Response::new(etag, count))
 }
 
 /// # `PUT /_matrix/client/r0/room_keys/keys/{roomId}/{sessionId}`
@@ -192,9 +194,11 @@ pub(crate) async fn add_backup_keys_for_session_route(
 	State(services): State<crate::State>,
 	body: Ruma<add_backup_keys_for_session::v3::Request>,
 ) -> Result<add_backup_keys_for_session::v3::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	if services
 		.key_backups
-		.get_latest_backup_version(body.sender_user())
+		.get_latest_backup_version(sender_user)
 		.await
 		.is_ok_and(|version| version != body.version)
 	{
@@ -207,7 +211,7 @@ pub(crate) async fn add_backup_keys_for_session_route(
 	let mut ok_to_replace = true;
 	if let Some(old_key) = &services
 		.key_backups
-		.get_session(body.sender_user(), &body.version, &body.room_id, &body.session_id)
+		.get_session(sender_user, &body.version, &body.room_id, &body.session_id)
 		.await
 		.ok()
 	{
@@ -266,7 +270,7 @@ pub(crate) async fn add_backup_keys_for_session_route(
 		services
 			.key_backups
 			.add_key(
-				body.sender_user(),
+				sender_user,
 				&body.version,
 				&body.room_id,
 				&body.session_id,
@@ -275,9 +279,9 @@ pub(crate) async fn add_backup_keys_for_session_route(
 			.await?;
 	}
 
-	let (count, etag) = get_count_etag(&services, body.sender_user(), &body.version).await?;
+	let (count, etag) = get_count_etag(&services, sender_user, &body.version).await;
 
-	Ok(add_backup_keys_for_session::v3::Response { count, etag })
+	Ok(add_backup_keys_for_session::v3::Response::new(etag, count))
 }
 
 /// # `GET /_matrix/client/r0/room_keys/keys`
@@ -289,10 +293,10 @@ pub(crate) async fn get_backup_keys_route(
 ) -> Result<get_backup_keys::v3::Response> {
 	let rooms = services
 		.key_backups
-		.get_all(body.sender_user(), &body.version)
+		.get_all(body.identity.expect_sender_user()?, &body.version)
 		.await;
 
-	Ok(get_backup_keys::v3::Response { rooms })
+	Ok(get_backup_keys::v3::Response::new(rooms))
 }
 
 /// # `GET /_matrix/client/r0/room_keys/keys/{roomId}`
@@ -304,10 +308,10 @@ pub(crate) async fn get_backup_keys_for_room_route(
 ) -> Result<get_backup_keys_for_room::v3::Response> {
 	let sessions = services
 		.key_backups
-		.get_room(body.sender_user(), &body.version, &body.room_id)
+		.get_room(body.identity.expect_sender_user()?, &body.version, &body.room_id)
 		.await;
 
-	Ok(get_backup_keys_for_room::v3::Response { sessions })
+	Ok(get_backup_keys_for_room::v3::Response::new(sessions))
 }
 
 /// # `GET /_matrix/client/r0/room_keys/keys/{roomId}/{sessionId}`
@@ -319,13 +323,18 @@ pub(crate) async fn get_backup_keys_for_session_route(
 ) -> Result<get_backup_keys_for_session::v3::Response> {
 	let key_data = services
 		.key_backups
-		.get_session(body.sender_user(), &body.version, &body.room_id, &body.session_id)
+		.get_session(
+			body.identity.expect_sender_user()?,
+			&body.version,
+			&body.room_id,
+			&body.session_id,
+		)
 		.await
 		.map_err(|_| {
 			err!(Request(NotFound(debug_error!("Backup key not found for this user's session."))))
 		})?;
 
-	Ok(get_backup_keys_for_session::v3::Response { key_data })
+	Ok(get_backup_keys_for_session::v3::Response::new(key_data))
 }
 
 /// # `DELETE /_matrix/client/r0/room_keys/keys`
@@ -335,14 +344,16 @@ pub(crate) async fn delete_backup_keys_route(
 	State(services): State<crate::State>,
 	body: Ruma<delete_backup_keys::v3::Request>,
 ) -> Result<delete_backup_keys::v3::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	services
 		.key_backups
-		.delete_all_keys(body.sender_user(), &body.version)
+		.delete_all_keys(sender_user, &body.version)
 		.await;
 
-	let (count, etag) = get_count_etag(&services, body.sender_user(), &body.version).await?;
+	let (count, etag) = get_count_etag(&services, sender_user, &body.version).await;
 
-	Ok(delete_backup_keys::v3::Response { count, etag })
+	Ok(delete_backup_keys::v3::Response::new(etag, count))
 }
 
 /// # `DELETE /_matrix/client/r0/room_keys/keys/{roomId}`
@@ -352,14 +363,16 @@ pub(crate) async fn delete_backup_keys_for_room_route(
 	State(services): State<crate::State>,
 	body: Ruma<delete_backup_keys_for_room::v3::Request>,
 ) -> Result<delete_backup_keys_for_room::v3::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	services
 		.key_backups
-		.delete_room_keys(body.sender_user(), &body.version, &body.room_id)
+		.delete_room_keys(sender_user, &body.version, &body.room_id)
 		.await;
 
-	let (count, etag) = get_count_etag(&services, body.sender_user(), &body.version).await?;
+	let (count, etag) = get_count_etag(&services, sender_user, &body.version).await;
 
-	Ok(delete_backup_keys_for_room::v3::Response { count, etag })
+	Ok(delete_backup_keys_for_room::v3::Response::new(etag, count))
 }
 
 /// # `DELETE /_matrix/client/r0/room_keys/keys/{roomId}/{sessionId}`
@@ -369,27 +382,31 @@ pub(crate) async fn delete_backup_keys_for_session_route(
 	State(services): State<crate::State>,
 	body: Ruma<delete_backup_keys_for_session::v3::Request>,
 ) -> Result<delete_backup_keys_for_session::v3::Response> {
+	let sender_user = body.identity.expect_sender_user()?;
+
 	services
 		.key_backups
-		.delete_room_key(body.sender_user(), &body.version, &body.room_id, &body.session_id)
+		.delete_room_key(sender_user, &body.version, &body.room_id, &body.session_id)
 		.await;
 
-	let (count, etag) = get_count_etag(&services, body.sender_user(), &body.version).await?;
+	let (count, etag) = get_count_etag(&services, sender_user, &body.version).await;
 
-	Ok(delete_backup_keys_for_session::v3::Response { count, etag })
+	Ok(delete_backup_keys_for_session::v3::Response::new(etag, count))
 }
 
 async fn get_count_etag(
 	services: &Services,
 	sender_user: &UserId,
 	version: &str,
-) -> Result<(UInt, String)> {
-	let count = services
+) -> (UInt, String) {
+	let count: UInt = services
 		.key_backups
 		.count_keys(sender_user, version)
-		.map(TryInto::try_into);
+		.await
+		.try_into()
+		.expect("number of keys should fit into a UInt");
 
-	let etag = services.key_backups.get_etag(sender_user, version).map(Ok);
+	let etag = services.key_backups.get_etag(sender_user, version).await;
 
-	Ok(try_join(count, etag).await?)
+	(count, etag)
 }

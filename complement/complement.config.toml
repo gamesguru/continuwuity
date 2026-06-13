@@ -6,7 +6,6 @@
 # ============================================= #
 [global]
 address = "0.0.0.0"
-allow_guest_registration = true
 allow_federation = true
 allow_device_name_federation = true
 allow_public_room_directory_over_federation = true
@@ -40,7 +39,6 @@ rocksdb_log_level = "info"
 rocksdb_max_log_files = 1
 rocksdb_recovery_mode = 0
 rocksdb_paranoid_file_checks = true
-log_guest_registrations = false
 allow_legacy_media = true
 freeze_legacy_media = false
 startup_netburst = true

@@ -1,10 +1,8 @@
 use axum::extract::State;
 use conduwuit::{Err, Result, info, utils::ReadyExt, warn};
 use futures::{FutureExt, StreamExt};
-use ruma::{
-	OwnedRoomAliasId, continuwuity_admin_api::rooms,
-	events::room::message::RoomMessageEventContent,
-};
+use ruma::{OwnedRoomAliasId, events::room::message::RoomMessageEventContent};
+use ruminuwuity::admin::continuwuity::rooms;
 
 use crate::{Ruma, client::leave_room};
 
@@ -15,7 +13,7 @@ pub(crate) async fn ban_room(
 	State(services): State<crate::State>,
 	body: Ruma<rooms::ban::v1::Request>,
 ) -> Result<rooms::ban::v1::Response> {
-	let sender_user = body.sender_user();
+	let sender_user = body.identity.expect_sender_user()?;
 	if !services.users.is_admin(sender_user).await {
 		return Err!(Request(Forbidden("Only server administrators can use this endpoint")));
 	}
@@ -36,7 +34,6 @@ pub(crate) async fn ban_room(
 			.rooms
 			.state_cache
 			.room_members(&body.room_id)
-			.map(ToOwned::to_owned)
 			.ready_filter(|user| services.globals.user_is_local(user))
 			.boxed();
 		let mut evicted = Vec::new();
@@ -63,9 +60,9 @@ pub(crate) async fn ban_room(
 			.rooms
 			.alias
 			.local_aliases_for_room(&body.room_id)
-			.map(ToOwned::to_owned)
-			.collect::<Vec<_>>()
+			.collect()
 			.await;
+
 		for alias in &aliases {
 			info!("Removing alias {} for banned room {}", alias, body.room_id);
 			services

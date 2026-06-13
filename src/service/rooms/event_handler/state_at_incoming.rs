@@ -5,13 +5,13 @@ use std::{
 };
 
 use conduwuit::{
-	Result, debug, err, implement,
+	Result, debug, err, error, implement,
 	matrix::{Event, StateMap},
 	trace,
 	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, TryWidebandExt},
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
-use ruma::{OwnedEventId, RoomId, RoomVersionId};
+use ruma::{OwnedEventId, RoomId, room_version_rules::RoomVersionRules};
 
 use crate::rooms::short::ShortStateHash;
 
@@ -22,7 +22,6 @@ use crate::rooms::short::ShortStateHash;
 pub(super) async fn state_at_incoming_degree_one<Pdu>(
 	&self,
 	incoming_pdu: &Pdu,
-	room_id: &RoomId,
 ) -> Result<Option<HashMap<u64, OwnedEventId>>>
 where
 	Pdu: Event + Send + Sync,
@@ -31,17 +30,6 @@ where
 		.prev_events()
 		.next()
 		.expect("at least one prev_event");
-
-	let prev_pdu = self
-		.services
-		.timeline
-		.get_pdu_in_room(Some(room_id), prev_event)
-		.await
-		.map_err(|e| err!(Database("Could not find prev event: {e:?}")))?;
-
-	if prev_pdu.room_id() != Some(room_id) {
-		return Err(err!(Database("prev_event is not in the same room")));
-	}
 
 	let Ok(prev_event_sstatehash) = self
 		.services
@@ -60,12 +48,18 @@ where
 		.await;
 
 	debug!("Using cached state");
+	let prev_pdu = self
+		.services
+		.timeline
+		.get_pdu(prev_event)
+		.await
+		.map_err(|e| err!(Database("Could not find prev event, but we know the state: {e:?}")))?;
 
 	if let Some(state_key) = &prev_pdu.state_key {
 		let shortstatekey = self
 			.services
 			.short
-			.get_or_create_shortstatekey(&prev_pdu.kind().to_string().into(), state_key)
+			.get_or_create_shortstatekey(&prev_pdu.kind.to_string().into(), state_key)
 			.await;
 
 		state.insert(shortstatekey, prev_event.to_owned());
@@ -83,7 +77,7 @@ pub(super) async fn state_at_incoming_resolved<Pdu>(
 	&self,
 	incoming_pdu: &Pdu,
 	room_id: &RoomId,
-	room_version_id: &RoomVersionId,
+	room_version_rules: &RoomVersionRules,
 ) -> Result<Option<HashMap<u64, OwnedEventId>>>
 where
 	Pdu: Event + Send + Sync,
@@ -95,13 +89,8 @@ where
 		.broad_and_then(|prev_eventid| {
 			self.services
 				.timeline
-				.get_pdu_in_room(Some(room_id), prev_eventid)
-				.and_then(move |prev_event| async move {
-					if prev_event.room_id() != Some(room_id) {
-						return Err(err!(Database("prev_event is not in the same room")));
-					}
-					Ok((prev_eventid, prev_event))
-				})
+				.get_pdu(prev_eventid)
+				.map_ok(move |prev_event| (prev_eventid, prev_event))
 		})
 		.broad_and_then(|(prev_eventid, prev_event)| {
 			self.services
@@ -129,9 +118,10 @@ where
 			.await?;
 
 	let Ok(new_state) = self
-		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(room_version_rules, fork_states.iter(), &auth_chain_sets)
 		.boxed()
 		.await
+		.inspect_err(|e| error!("State resolution failed: {e:?}"))
 	else {
 		return Ok(None);
 	};

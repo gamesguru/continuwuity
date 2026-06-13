@@ -5,11 +5,11 @@
   liburing,
   craneLib,
   pkg-config,
-  callPackage,
   rustPlatform,
   cargoExtraArgs ? "",
   rustflags ? "",
-  rocksdb ? callPackage ./rocksdb.nix { },
+  target_cpu ? null,
+  rocksdb,
   profile ? "release",
 }:
 let
@@ -39,7 +39,10 @@ let
       ROCKSDB_LIB_DIR = "${rocksdb}/lib";
       CARGO_PROFILE = profile;
       RUSTFLAGS = rustflags;
-    };
+    }
+    // (lib.optionalAttrs (target_cpu != null) {
+      TARGET_CPU = target_cpu;
+    });
   };
 in
 craneLib.buildPackage (
@@ -56,7 +59,7 @@ craneLib.buildPackage (
         ]
       }"
 
-      patchelf  --set-rpath "$old_rpath:$extra_rpath" $out/bin/conduwuit
+      patchelf --set-rpath "$old_rpath:$extra_rpath" $out/bin/conduwuit
     '';
 
     meta = {

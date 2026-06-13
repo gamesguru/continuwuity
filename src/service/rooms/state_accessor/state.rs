@@ -1,7 +1,7 @@
 use std::{borrow::Borrow, ops::Deref, sync::Arc};
 
 use conduwuit::{
-	Result, at, err, implement,
+	Pdu, Result, at, err, implement,
 	matrix::{Event, StateKey},
 	pair_of,
 	utils::{
@@ -115,6 +115,20 @@ pub async fn state_contains_shortstatekey(
 		.await
 		.flat_ok()
 		.is_some()
+}
+
+/// Returns a single PDU from `room_id` with key (`event_type`,
+/// `state_key`).
+#[implement(super::Service)]
+pub async fn state_get(
+	&self,
+	shortstatehash: ShortStateHash,
+	event_type: &StateEventType,
+	state_key: &str,
+) -> Result<Pdu> {
+	self.state_get_id(shortstatehash, event_type, state_key)
+		.and_then(async |event_id: OwnedEventId| self.services.timeline.get_pdu(&event_id).await)
+		.await
 }
 
 /// Returns a single EventId from `room_id` with key (`event_type`,
@@ -302,7 +316,9 @@ pub fn state_full(
 	shortstatehash: ShortStateHash,
 ) -> impl Stream<Item = ((StateEventType, StateKey), impl Event)> + Send + '_ {
 	self.state_full_pdus(shortstatehash)
-		.ready_filter_map(|pdu| Some(((pdu.kind().clone().into(), pdu.state_key()?.into()), pdu)))
+		.ready_filter_map(|pdu| {
+			Some(((pdu.kind().to_string().into(), pdu.state_key()?.into()), pdu))
+		})
 }
 
 #[implement(super::Service)]

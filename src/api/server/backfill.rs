@@ -2,7 +2,7 @@ use std::cmp;
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Event, Pdu, PduCount, Result, err, info,
+	Err, Event, PduCount, Result, info,
 	result::LogErr,
 	utils::{IterStream, ReadyExt, stream::TryTools},
 };
@@ -28,7 +28,7 @@ pub(crate) async fn get_backfill_route(
 ) -> Result<get_backfill::v1::Response> {
 	AccessCheck {
 		services: &services,
-		origin: body.origin(),
+		origin: &body.identity,
 		room_id: &body.room_id,
 		event_id: None,
 	}
@@ -41,7 +41,7 @@ pub(crate) async fn get_backfill_route(
 		.await
 	{
 		info!(
-			origin = body.origin().as_str(),
+			origin = body.identity.as_str(),
 			"Refusing to serve backfill for room we aren't participating in"
 		);
 		return Err!(Request(NotFound("This server is not participating in that room.")));
@@ -67,52 +67,51 @@ pub(crate) async fn get_backfill_route(
 		.ready_fold(PduCount::min(), cmp::max)
 		.await;
 
-	Ok(get_backfill::v1::Response {
-		origin_server_ts: MilliSecondsSinceUnixEpoch::now(),
+	let pdus = services
+		.rooms
+		.timeline
+		.pdus_rev(&body.room_id, Some(from.saturating_add(1)))
+		.try_take(limit)
+		.try_filter_map(|(_, pdu)| async move {
+			let Some(room_id) = pdu.room_id_or_hash() else {
+				return Ok(None);
+			};
+			Ok(services
+				.rooms
+				.state_accessor
+				.server_can_see_event(&body.identity, &room_id, &pdu.event_id)
+				.await
+				.then_some(pdu))
+		})
+		.and_then(async |mut pdu| {
+			// Strip the transaction ID, as that is private
+			pdu.remove_transaction_id().log_err().ok();
+			// Add age, as this is specified
+			pdu.add_age().log_err().ok();
+			// It's not clear if we should strip or add any more data, leave as is.
+			// In particular: Redaction?
+			Ok(pdu)
+		})
+		.try_filter_map(|pdu| async move {
+			Ok(services
+				.rooms
+				.timeline
+				.get_pdu_json(&pdu.event_id)
+				.await
+				.ok())
+		})
+		.and_then(|pdu| {
+			services
+				.sending
+				.convert_to_outgoing_federation_event(pdu)
+				.map(Ok)
+		})
+		.try_collect()
+		.await?;
 
-		origin: services.globals.server_name().to_owned(),
-
-		pdus: services
-			.rooms
-			.timeline
-			.pdus_rev(&body.room_id, Some(from.saturating_add(1)))
-			.try_take(limit)
-			.try_filter_map(|(_, pdu)| async move {
-				let room_id = pdu
-					.room_id_or_hash()
-					.ok_or_else(|| err!(Database("Event has no room_id")))?;
-				let visible = services
-					.rooms
-					.state_accessor
-					.server_can_see_event(body.origin(), &room_id, &pdu.event_id)
-					.await;
-
-				if visible { Ok(Some(pdu)) } else { Ok(None) }
-			})
-			.map_ok(|mut pdu: Pdu| {
-				// Strip the transaction ID, as that is private
-				pdu.remove_transaction_id().log_err().ok();
-				// Add age, as this is specified
-				pdu.add_age().log_err().ok();
-				// It's not clear if we should strip or add any more data, leave as is.
-				// In particular: Redaction?
-				pdu
-			})
-			.try_filter_map(|pdu| async move {
-				Ok(services
-					.rooms
-					.timeline
-					.get_pdu_json(&pdu.event_id)
-					.await
-					.ok())
-			})
-			.and_then(|pdu| {
-				services
-					.sending
-					.convert_to_outgoing_federation_event(pdu)
-					.map(Ok)
-			})
-			.try_collect()
-			.await?,
-	})
+	Ok(get_backfill::v1::Response::new(
+		services.globals.server_name().to_owned(),
+		MilliSecondsSinceUnixEpoch::now(),
+		pdus,
+	))
 }
