@@ -1002,8 +1002,8 @@ where
 					} else {
 						let allow = sender_creator
 							|| sender_power
-								.filter(|&p| p >= &power_levels.invite)
-								.is_some();
+								.as_ref()
+								.is_some_and(|&p| p >= &power_levels.invite);
 						if !allow {
 							warn!(
 								%sender,
@@ -1029,7 +1029,9 @@ where
 		| MembershipState::Leave => {
 			let can_unban = if target_user_current_membership == MembershipState::Ban {
 				(sender_creator && !target_creator)
-					|| sender_power.filter(|&p| p >= &power_levels.ban).is_some()
+					|| sender_power
+						.as_ref()
+						.is_some_and(|&p| p >= &power_levels.ban)
 			} else {
 				true
 			};
@@ -1040,7 +1042,10 @@ where
 				if sender_creator && !target_creator {
 					// sender is a creator, target is not
 					true
-				} else if sender_power.filter(|&p| p >= &power_levels.kick).is_none() {
+				} else if sender_power
+					.as_ref()
+					.is_none_or(|&p| p < &power_levels.kick)
+				{
 					// sender lacks kick power level
 					false
 				} else if let Some(sp) = sender_power {
@@ -1128,7 +1133,9 @@ where
 				false
 			} else {
 				let allow = (sender_creator && !target_creator)
-					|| (sender_power.filter(|&p| p >= &power_levels.ban).is_some()
+					|| (sender_power
+						.as_ref()
+						.is_some_and(|&p| p >= &power_levels.ban)
 						&& target_power < sender_power);
 				if !allow {
 					warn!(

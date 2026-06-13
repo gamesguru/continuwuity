@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, mem, net::IpAddr, sync::Arc};
 #[cfg(feature = "ldap")]
 use conduwuit::result::LogErr;
 use conduwuit::{
-	Err, Error, Result, Server, debug, debug_warn, err, info, is_equal_to, trace,
+	Err, Error, Result, Server, debug_warn, err, info, is_equal_to, trace,
 	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
 	warn,
 };
@@ -1525,6 +1525,8 @@ impl Service {
 
 	#[cfg(feature = "ldap")]
 	pub async fn search_ldap(&self, user_id: &UserId) -> Result<Vec<(String, Option<bool>)>> {
+		use crate::conduwuit::debug;
+
 		let localpart = user_id.localpart().to_owned();
 		let lowercased_localpart = localpart.to_lowercase();
 
@@ -1637,6 +1639,8 @@ impl Service {
 
 	#[cfg(feature = "ldap")]
 	pub async fn auth_ldap(&self, user_dn: &str, password: &str) -> Result {
+		use conduwuit::debug;
+
 		let config = &self.services.server.config.ldap;
 		let uri = config
 			.uri

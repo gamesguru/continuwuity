@@ -1902,7 +1902,7 @@ mod tests {
 	fn test_fmt_event_meta_power_levels() {
 		let mut meta = HashMap::new();
 		let eid = event_id!("$abc:test.org").to_owned();
-		meta.insert(eid.clone(), ("".to_owned(), "@user:test.org".to_owned()));
+		meta.insert(eid.clone(), (String::new(), "@user:test.org".to_owned()));
 		assert_eq!(fmt_event_meta("m.room.power_levels", &eid, &meta), " [by @user:test.org]");
 	}
 }

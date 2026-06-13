@@ -1666,8 +1666,10 @@ mod tests {
 			"room_id".to_owned(),
 			CanonicalJsonValue::String(room_id.as_str().to_owned()),
 		);
-		create_json
-			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456789.into()));
+		create_json.insert(
+			"origin_server_ts".to_owned(),
+			CanonicalJsonValue::Integer(123_456_789.into()),
+		);
 		create_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
@@ -1699,8 +1701,10 @@ mod tests {
 			"room_id".to_owned(),
 			CanonicalJsonValue::String(room_id.as_str().to_owned()),
 		);
-		test_json
-			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456790.into()));
+		test_json.insert(
+			"origin_server_ts".to_owned(),
+			CanonicalJsonValue::Integer(123_456_790.into()),
+		);
 		test_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		test_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		test_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(2.into()));
@@ -1748,7 +1752,6 @@ mod tests {
 	}
 
 	#[tokio::test]
-	#[ignore]
 	async fn test_dags_import() {
 		let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -1988,8 +1991,10 @@ mod tests {
 			"event_id".to_owned(),
 			CanonicalJsonValue::String(create_event_id.as_str().to_owned()),
 		);
-		create_json
-			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456789.into()));
+		create_json.insert(
+			"origin_server_ts".to_owned(),
+			CanonicalJsonValue::Integer(123_456_789.into()),
+		);
 		create_json.insert("prev_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
@@ -2034,8 +2039,10 @@ mod tests {
 			"event_id".to_owned(),
 			CanonicalJsonValue::String(join_event_id.as_str().to_owned()),
 		);
-		join_json
-			.insert("origin_server_ts".to_owned(), CanonicalJsonValue::Integer(123456790.into()));
+		join_json.insert(
+			"origin_server_ts".to_owned(),
+			CanonicalJsonValue::Integer(123_456_790.into()),
+		);
 		join_json.insert(
 			"prev_events".to_owned(),
 			CanonicalJsonValue::Array(vec![CanonicalJsonValue::String(

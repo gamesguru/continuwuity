@@ -36,64 +36,57 @@ fn parse_yolo(args: &[&str]) -> Result<crate::admin::AdminCommand, clap::Error> 
 }
 
 #[test]
-fn yolo_list_outliers_basic() {
-	assert!(parse_yolo(&["yolo", "list-outliers"]).is_ok());
-}
+fn yolo_list_outliers_basic() { parse_yolo(&["yolo", "list-outliers"]).unwrap(); }
 
 #[test]
 fn yolo_list_outliers_with_room() {
-	assert!(parse_yolo(&["yolo", "list-outliers", "!foo:example.org"]).is_ok());
+	parse_yolo(&["yolo", "list-outliers", "!foo:example.org"]).unwrap();
 }
 
 #[test]
 fn yolo_list_outliers_rejected_flag() {
-	assert!(parse_yolo(&["yolo", "list-outliers", "!foo:example.org", "--rejected"]).is_ok());
+	parse_yolo(&["yolo", "list-outliers", "!foo:example.org", "--rejected"]).unwrap();
 }
 
 #[test]
 fn yolo_list_outliers_clear_requires_rejected() {
 	// --clear without --rejected should fail
-	assert!(parse_yolo(&["yolo", "list-outliers", "!foo:example.org", "--clear"]).is_err());
+	parse_yolo(&["yolo", "list-outliers", "!foo:example.org", "--clear"]).unwrap_err();
 }
 
 #[test]
 fn yolo_list_outliers_rejected_and_clear() {
-	assert!(
-		parse_yolo(&["yolo", "list-outliers", "!foo:example.org", "--rejected", "--clear"])
-			.is_ok()
-	);
+	parse_yolo(&["yolo", "list-outliers", "!foo:example.org", "--rejected", "--clear"]).unwrap();
 }
 
 #[test]
 fn yolo_list_outliers_with_limit() {
-	assert!(parse_yolo(&["yolo", "list-outliers", "--limit", "50"]).is_ok());
+	parse_yolo(&["yolo", "list-outliers", "--limit", "50"]).unwrap();
 }
 
 #[test]
 fn yolo_list_outliers_with_sender() {
-	assert!(parse_yolo(&["yolo", "list-outliers", "--sender", "@user:example.org"]).is_ok());
+	parse_yolo(&["yolo", "list-outliers", "--sender", "@user:example.org"]).unwrap();
 }
 
 #[test]
 fn yolo_get_room_dag_negative_end() {
 	// Tests allow_hyphen_values = true
-	assert!(parse_yolo(&["yolo", "get-room-dag", "!foo:example.org", "0", "-1"]).is_ok());
+	parse_yolo(&["yolo", "get-room-dag", "!foo:example.org", "0", "-1"]).unwrap();
 }
 
 #[test]
 fn yolo_view_extremities_requires_room_or_all() {
 	// Neither room nor --all should fail
-	assert!(parse_yolo(&["yolo", "view-extremities"]).is_err());
+	parse_yolo(&["yolo", "view-extremities"]).unwrap_err();
 }
 
 #[test]
-fn yolo_view_extremities_all() {
-	assert!(parse_yolo(&["yolo", "view-extremities", "--all"]).is_ok());
-}
+fn yolo_view_extremities_all() { parse_yolo(&["yolo", "view-extremities", "--all"]).unwrap(); }
 
 #[test]
 fn yolo_view_extremities_with_room() {
-	assert!(parse_yolo(&["yolo", "view-extremities", "!foo:example.org"]).is_ok());
+	parse_yolo(&["yolo", "view-extremities", "!foo:example.org"]).unwrap();
 }
 
 // -- V11+/V12+ room_id stripping tests --
@@ -467,20 +460,18 @@ async fn test_yolo_audit_membership_drift() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+	assert!(res.is_ok(), "audit-membership failed: {res:?}");
 	let output = match res {
 		| Ok(Some(out)) => out.body().to_owned(),
 		| _ => panic!("Expected output"),
 	};
 	assert!(
 		output.contains("No actionable divergences."),
-		"expected no divergences: {}",
-		output
+		"expected no divergences: {output}"
 	);
 	assert!(
 		output.contains("OK: Membership cache is consistent"),
-		"expected consistent cache: {}",
-		output
+		"expected consistent cache: {output}"
 	);
 
 	// 1. Simulate user mismatch drift (user joined in state, but marked as left in
@@ -532,10 +523,9 @@ async fn test_yolo_audit_membership_drift() {
 	};
 	assert!(
 		output.contains("✗ CACHE INCONSISTENCY"),
-		"expected cache inconsistency: {}",
-		output
+		"expected cache inconsistency: {output}"
 	);
-	assert!(output.contains("Cache repaired."), "expected cache to be repaired: {}", output);
+	assert!(output.contains("Cache repaired."), "expected cache to be repaired: {output}");
 
 	// Assert cache is now consistent again
 	let res = services
@@ -552,8 +542,7 @@ async fn test_yolo_audit_membership_drift() {
 	};
 	assert!(
 		output.contains("OK: Membership cache is consistent"),
-		"expected consistent cache: {}",
-		output
+		"expected consistent cache: {output}"
 	);
 
 	// 2. Simulate aggregate count mismatch drift (count drift)
@@ -573,11 +562,10 @@ async fn test_yolo_audit_membership_drift() {
 	};
 	assert!(
 		output.contains("✗ CACHE INCONSISTENCY"),
-		"expected count inconsistency: {}",
-		output
+		"expected count inconsistency: {output}"
 	);
-	assert!(output.contains("cache=999"), "expected cached count in output: {}", output);
-	assert!(output.contains("Cache repaired."), "expected cache to be repaired: {}", output);
+	assert!(output.contains("cache=999"), "expected cached count in output: {output}");
+	assert!(output.contains("Cache repaired."), "expected cache to be repaired: {output}");
 
 	// Assert cache is consistent again
 	let res = services
@@ -594,8 +582,7 @@ async fn test_yolo_audit_membership_drift() {
 	};
 	assert!(
 		output.contains("OK: Membership cache is consistent"),
-		"expected consistent cache: {}",
-		output
+		"expected consistent cache: {output}"
 	);
 }
 
@@ -797,7 +784,7 @@ async fn test_yolo_reorder_timeline() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
 
 	// Check new order (Event B should now be before Event A)
 	let count_a_after = conduwuit::matrix::pdu::Id::from(
@@ -898,7 +885,7 @@ async fn test_busted_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "import-pdus failed: {:?}", res);
+	assert!(res.is_ok(), "import-pdus failed: {res:?}");
 
 	// Run reorder-timeline
 	let res = services
@@ -909,13 +896,13 @@ async fn test_busted_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
 
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
 		.rooms
 		.timeline
-		.latest_pdu_in_room(&room_id)
+		.latest_pdu_in_room(room_id)
 		.await
 		.unwrap();
 	let latest_event_id = latest_pdu.event_id();
@@ -925,11 +912,11 @@ async fn test_busted_dag_resolution() {
 		.pdu_shortstatehash(latest_event_id)
 		.await
 		.unwrap();
-	let state_lock = services.rooms.state.mutex.lock(&*room_id).await;
+	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 	services
 		.rooms
 		.state
-		.set_room_state(&room_id, ssh, &state_lock);
+		.set_room_state(room_id, ssh, &state_lock);
 	drop(state_lock);
 
 	// Run force-set-state (to trigger re-resolution on local DAG)
@@ -941,7 +928,7 @@ async fn test_busted_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "force-set-state failed: {:?}", res);
+	assert!(res.is_ok(), "force-set-state failed: {res:?}");
 
 	// Run check-rooms (to check sanity)
 	let res = services
@@ -952,7 +939,7 @@ async fn test_busted_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "check-rooms failed: {:?}", res);
+	assert!(res.is_ok(), "check-rooms failed: {res:?}");
 
 	// Run audit-membership
 	let res = services
@@ -963,17 +950,17 @@ async fn test_busted_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+	assert!(res.is_ok(), "audit-membership failed: {res:?}");
 
 	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
 	let exts_count = services
 		.rooms
 		.state
-		.get_forward_extremities(&room_id)
+		.get_forward_extremities(room_id)
 		.count()
 		.await;
-	println!("Busted DAG resolved. Final forward extremities count: {}", exts_count);
-	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+	println!("Busted DAG resolved. Final forward extremities count: {exts_count}");
+	assert!(exts_count < 10, "expected very few forward extremities, got: {exts_count}");
 }
 
 #[tokio::test]
@@ -1056,7 +1043,7 @@ async fn test_unredacted_room_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "import-pdus failed: {:?}", res);
+	assert!(res.is_ok(), "import-pdus failed: {res:?}");
 
 	// Run reorder-timeline
 	let res = services
@@ -1067,13 +1054,13 @@ async fn test_unredacted_room_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
 
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
 		.rooms
 		.timeline
-		.latest_pdu_in_room(&room_id)
+		.latest_pdu_in_room(room_id)
 		.await
 		.unwrap();
 	let latest_event_id = latest_pdu.event_id();
@@ -1083,11 +1070,11 @@ async fn test_unredacted_room_dag_resolution() {
 		.pdu_shortstatehash(latest_event_id)
 		.await
 		.unwrap();
-	let state_lock = services.rooms.state.mutex.lock(&*room_id).await;
+	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 	services
 		.rooms
 		.state
-		.set_room_state(&room_id, ssh, &state_lock);
+		.set_room_state(room_id, ssh, &state_lock);
 	drop(state_lock);
 
 	// Run force-set-state (to trigger re-resolution on local DAG)
@@ -1099,7 +1086,7 @@ async fn test_unredacted_room_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "force-set-state failed: {:?}", res);
+	assert!(res.is_ok(), "force-set-state failed: {res:?}");
 
 	// Run check-rooms (to check sanity)
 	let res = services
@@ -1110,7 +1097,7 @@ async fn test_unredacted_room_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "check-rooms failed: {:?}", res);
+	assert!(res.is_ok(), "check-rooms failed: {res:?}");
 
 	// Run audit-membership
 	let res = services
@@ -1121,17 +1108,17 @@ async fn test_unredacted_room_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+	assert!(res.is_ok(), "audit-membership failed: {res:?}");
 
 	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
 	let exts_count = services
 		.rooms
 		.state
-		.get_forward_extremities(&room_id)
+		.get_forward_extremities(room_id)
 		.count()
 		.await;
-	println!("Unredacted Room DAG resolved. Final forward extremities count: {}", exts_count);
-	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+	println!("Unredacted Room DAG resolved. Final forward extremities count: {exts_count}");
+	assert!(exts_count < 10, "expected very few forward extremities, got: {exts_count}");
 }
 
 #[tokio::test]
@@ -1215,7 +1202,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "import-pdus failed: {:?}", res);
+	assert!(res.is_ok(), "import-pdus failed: {res:?}");
 
 	// Run reorder-timeline
 	let res = services
@@ -1226,13 +1213,13 @@ async fn test_unredacted_lounge_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
 
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
 		.rooms
 		.timeline
-		.latest_pdu_in_room(&room_id)
+		.latest_pdu_in_room(room_id)
 		.await
 		.unwrap();
 	let latest_event_id = latest_pdu.event_id();
@@ -1242,11 +1229,11 @@ async fn test_unredacted_lounge_dag_resolution() {
 		.pdu_shortstatehash(latest_event_id)
 		.await
 		.unwrap();
-	let state_lock = services.rooms.state.mutex.lock(&*room_id).await;
+	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 	services
 		.rooms
 		.state
-		.set_room_state(&room_id, ssh, &state_lock);
+		.set_room_state(room_id, ssh, &state_lock);
 	drop(state_lock);
 
 	// Run force-set-state (to trigger re-resolution on local DAG)
@@ -1258,7 +1245,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "force-set-state failed: {:?}", res);
+	assert!(res.is_ok(), "force-set-state failed: {res:?}");
 
 	// Run check-rooms (to check sanity)
 	let res = services
@@ -1269,7 +1256,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "check-rooms failed: {:?}", res);
+	assert!(res.is_ok(), "check-rooms failed: {res:?}");
 
 	// Run audit-membership
 	let res = services
@@ -1280,20 +1267,17 @@ async fn test_unredacted_lounge_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+	assert!(res.is_ok(), "audit-membership failed: {res:?}");
 
 	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
 	let exts_count = services
 		.rooms
 		.state
-		.get_forward_extremities(&room_id)
+		.get_forward_extremities(room_id)
 		.count()
 		.await;
-	println!(
-		"Unredacted Lounge DAG resolved. Final forward extremities count: {}",
-		exts_count
-	);
-	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+	println!("Unredacted Lounge DAG resolved. Final forward extremities count: {exts_count}");
+	assert!(exts_count < 10, "expected very few forward extremities, got: {exts_count}");
 
 	// Validate the expected state (compare with unredacted.org disputed winners)
 	let resolved_state_ids: std::collections::HashSet<ruma::OwnedEventId> = services
@@ -1362,7 +1346,7 @@ async fn test_nheko_dag_resolution() {
 	let dag_path_str = std::env::var("CONDUWUIT_TEST_DAG_FILE").unwrap_or_else(|_| {
 		"/run/media/shane/shane4tb-ent/dags/local-dag-UbCmIlGTHNIgIRZcpt_nheko.im-v5-wombatx.\
 		 me-d1-383595.jsonl"
-			.to_string()
+			.to_owned()
 	});
 	let dag_path = Path::new(&dag_path_str);
 	if !dag_path.exists() {
@@ -1422,7 +1406,7 @@ async fn test_nheko_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "import-pdus failed: {:?}", res);
+	assert!(res.is_ok(), "import-pdus failed: {res:?}");
 
 	// Run reorder-timeline
 	let res = services
@@ -1433,13 +1417,13 @@ async fn test_nheko_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "reorder-timeline failed: {:?}", res);
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
 
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
 		.rooms
 		.timeline
-		.latest_pdu_in_room(&room_id)
+		.latest_pdu_in_room(room_id)
 		.await
 		.unwrap();
 	let latest_event_id = latest_pdu.event_id();
@@ -1449,11 +1433,11 @@ async fn test_nheko_dag_resolution() {
 		.pdu_shortstatehash(latest_event_id)
 		.await
 		.unwrap();
-	let state_lock = services.rooms.state.mutex.lock(&*room_id).await;
+	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 	services
 		.rooms
 		.state
-		.set_room_state(&room_id, ssh, &state_lock);
+		.set_room_state(room_id, ssh, &state_lock);
 	drop(state_lock);
 
 	// Run force-set-state (to trigger re-resolution on local DAG)
@@ -1465,7 +1449,7 @@ async fn test_nheko_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "force-set-state failed: {:?}", res);
+	assert!(res.is_ok(), "force-set-state failed: {res:?}");
 
 	// Run check-rooms (to check sanity)
 	let res = services
@@ -1476,7 +1460,7 @@ async fn test_nheko_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "check-rooms failed: {:?}", res);
+	assert!(res.is_ok(), "check-rooms failed: {res:?}");
 
 	// Run audit-membership
 	let res = services
@@ -1487,17 +1471,17 @@ async fn test_nheko_dag_resolution() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "audit-membership failed: {:?}", res);
+	assert!(res.is_ok(), "audit-membership failed: {res:?}");
 
 	// Verify forward extremities count is not bloated (originally 6344 heads)
 	let exts_count = services
 		.rooms
 		.state
-		.get_forward_extremities(&room_id)
+		.get_forward_extremities(room_id)
 		.count()
 		.await;
-	println!("Nheko Room DAG resolved. Final forward extremities count: {}", exts_count);
-	assert!(exts_count < 10, "expected very few forward extremities, got: {}", exts_count);
+	println!("Nheko Room DAG resolved. Final forward extremities count: {exts_count}");
+	assert!(exts_count < 10, "expected very few forward extremities, got: {exts_count}");
 }
 
 #[tokio::test]
@@ -1618,13 +1602,13 @@ async fn test_yolo_heal_receipts() {
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "heal-receipts failed: {:?}", res);
+	assert!(res.is_ok(), "heal-receipts failed: {res:?}");
 
 	let count = services.db["readreceiptid_readreceipt"]
 		.raw_stream()
 		.count()
 		.await;
-	assert_eq!(count, 1, "Expected exactly 1 receipt remaining, got {}", count);
+	assert_eq!(count, 1, "Expected exactly 1 receipt remaining, got {count}");
 }
 
 #[tokio::test]
@@ -1727,12 +1711,12 @@ async fn test_yolo_rescue_room() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo rescue-room {}", room_id),
+			format!("yolo rescue-room {room_id}"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
 		.await;
-	assert!(res.is_ok(), "rescue-room failed: {:?}", res);
+	assert!(res.is_ok(), "rescue-room failed: {res:?}");
 
 	let res = services
 		.admin
