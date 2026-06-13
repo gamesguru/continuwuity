@@ -29,6 +29,8 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
 use crate::{admin, admin::AdminCommand, context::Context};
 
+type ParsedCommand<'a> = (AdminCommand, Vec<String>, Vec<&'a str>);
+
 #[must_use]
 pub fn complete(line: &str) -> String { complete_command(AdminCommand::command(), line) }
 
@@ -89,19 +91,21 @@ async fn process_command(services: Arc<Services>, input: &CommandInput) -> Proce
 			write!(&mut logs, "Command failed with error:\n```\n{error:#?}\n```")
 				.expect("output buffer");
 
-			Err(reply(RoomMessageEventContent::notice_markdown(logs), context.reply_id))
+			Err(Box::new(reply(
+				RoomMessageEventContent::notice_markdown(logs),
+				context.reply_id,
+			)))
 		},
 	}
 }
 
-#[allow(clippy::result_large_err)]
 fn handle_panic(error: &Error, command: &CommandInput) -> ProcessorResult {
 	let link =
 		"Please submit a [bug report](https://github.com/gamesguru/continuwuity/issues/new). 🥺";
 	let msg = format!("Panic occurred while processing command:\n```\n{error:#?}\n```\n{link}");
 	let content = RoomMessageEventContent::notice_markdown(msg);
 	error!("Panic while processing command: {error:?}");
-	Err(reply(content, command.reply_id.as_deref()))
+	Err(Box::new(reply(content, command.reply_id.as_deref())))
 }
 
 /// Parse and process a message from the admin room
@@ -170,11 +174,10 @@ fn capture_create(context: &Context<'_>) -> (Arc<Capture>, Arc<SyncMutex<String>
 }
 
 /// Parse chat messages from the admin room into an AdminCommand object
-#[allow(clippy::result_large_err)]
 fn parse<'a>(
 	services: &Arc<Services>,
 	input: &'a CommandInput,
-) -> Result<(AdminCommand, Vec<String>, Vec<&'a str>), CommandOutput> {
+) -> Result<ParsedCommand<'a>, Box<CommandOutput>> {
 	let lines = input.command.lines().filter(|line| !line.trim().is_empty());
 	let command_line = lines.clone().next().expect("command missing first line");
 	let body = lines.skip(1).collect();
@@ -184,7 +187,10 @@ fn parse<'a>(
 			let message = error
 				.to_string()
 				.replace("server.name", services.globals.server_name().as_str());
-			Err(reply(RoomMessageEventContent::notice_plain(message), input.reply_id.as_deref()))
+			Err(Box::new(reply(
+				RoomMessageEventContent::notice_plain(message),
+				input.reply_id.as_deref(),
+			)))
 		},
 	}
 }
