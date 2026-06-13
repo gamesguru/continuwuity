@@ -717,6 +717,13 @@ async fn check_joined_since_last_sync(
 	}: ShortStateHashes,
 	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
 ) -> Result<bool> {
+	// If the user's current membership is not "Join", they cannot have "joined
+	// since last sync". We check this early to avoid expensive state queries.
+	let is_currently_joined = services.rooms.state_cache.is_joined(syncing_user, room_id).await;
+	if !is_currently_joined {
+		return Ok(false);
+	}
+
 	// TODO: If the requesting user got state-reset out of the room, this
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
