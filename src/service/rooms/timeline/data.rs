@@ -877,7 +877,9 @@ impl Data {
 		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.and_then(move |current| async move {
 				let prefix = current.shortroomid();
-				let topo_key = self.seek_topo_key(room_id, until, &current).await?;
+				let topo_key = self
+					.seek_topo_key(room_id, until, &current, Direction::Backward)
+					.await?;
 
 				let stream = self
 					.roomid_topologicalorder_pducount
@@ -895,7 +897,9 @@ impl Data {
 		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.and_then(move |current| async move {
 				let prefix = current.shortroomid();
-				let topo_key = self.seek_topo_key(room_id, from, &current).await?;
+				let topo_key = self
+					.seek_topo_key(room_id, from, &current, Direction::Forward)
+					.await?;
 
 				let stream = self
 					.roomid_topologicalorder_pducount
@@ -985,16 +989,55 @@ impl Data {
 		room_id: &RoomId,
 		token: PduCount,
 		current: &RawPduId,
+		dir: Direction,
 	) -> Result<Vec<u8>> {
+		use futures::StreamExt;
+
 		if token == PduCount::max() {
 			Ok(Self::topo_pducount_key(current, u64::MAX))
 		} else if token == PduCount::min() {
 			Ok(Self::topo_pducount_key(current, 0))
 		} else {
-			let token_pdu_id = self.count_to_id(room_id, token, Direction::Forward).await?;
-			let mut key = self.pdu_id_to_topo_key(&token_pdu_id).await?;
-			key[16..24].copy_from_slice(&current.as_ref()[8..]);
-			Ok(key)
+			let token_pdu_id = self.count_to_id(room_id, token, dir).await?;
+			if let Ok(mut key) = self.pdu_id_to_topo_key(&token_pdu_id).await {
+				key[16..24].copy_from_slice(&current.as_ref()[8..]);
+				return Ok(key);
+			}
+
+			// Fallback: find the nearest existing event in the requested direction
+			let prefix = current.shortroomid();
+
+			let nearest_pdu_id = if dir == Direction::Forward {
+				let mut stream = Box::pin(
+					self.room_pducount_eventid
+						.raw_stream_from(&token_pdu_id)
+						.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
+				);
+				stream
+					.next()
+					.await
+					.map(|res| res.map(|(k, _)| RawPduId::from(k)))
+			} else {
+				let mut stream = Box::pin(
+					self.room_pducount_eventid
+						.rev_raw_stream_from(&token_pdu_id)
+						.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
+				);
+				stream
+					.next()
+					.await
+					.map(|res| res.map(|(k, _)| RawPduId::from(k)))
+			};
+
+			if let Some(Ok(nearest_id)) = nearest_pdu_id {
+				let mut key = self.pdu_id_to_topo_key(&nearest_id).await?;
+				key[16..24].copy_from_slice(&current.as_ref()[8..]);
+				Ok(key)
+			} else if dir == Direction::Forward {
+				Ok(Self::topo_pducount_key(current, u64::MAX))
+			} else {
+				Ok(Self::topo_pducount_key(current, 0))
+			}
 		}
 	}
 
