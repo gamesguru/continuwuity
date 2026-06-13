@@ -859,8 +859,25 @@ impl Data {
 	/// into a full `PdusIterItem` by looking up the PDU JSON in
 	/// `eventid_pdu`.
 	async fn resolve_pdu(&self, (pdu_id, event_id_bytes): KeyVal<'_>) -> Result<PdusIterItem> {
-		let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-		Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
+		let json_bytes = match self.eventid_pdu.get(&event_id_bytes).await {
+			| Ok(h) => h,
+			| Err(e) => {
+				conduwuit::info!(
+					"resolve_pdu: eventid_pdu lookup failed for key ({} bytes, utf8={:?}): {e}",
+					event_id_bytes.len(),
+					std::str::from_utf8(event_id_bytes).ok(),
+				);
+				return Err(e);
+			},
+		};
+		Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref())).map_err(|e| {
+			conduwuit::info!(
+				"resolve_pdu: parse_json_slice failed for key ({} bytes, utf8={:?}): {e}",
+				event_id_bytes.len(),
+				std::str::from_utf8(event_id_bytes).ok(),
+			);
+			e
+		})
 	}
 
 	pub(super) fn topo_pdus_rev<'a>(

@@ -74,8 +74,8 @@ pub fn stream_keys(&self) -> impl Stream<Item = OwnedEventId> + Send + '_ {
 		.raw_stream()
 		.ignore_err()
 		.ready_filter_map(|(key, val)| {
-			let eid = OwnedEventId::try_from(std::str::from_utf8(&key).ok()?).ok()?;
-			let meta: rooms::timeline::EventMetadata = bincode::deserialize(&val).ok()?;
+			let eid = OwnedEventId::try_from(std::str::from_utf8(key).ok()?).ok()?;
+			let meta: rooms::timeline::EventMetadata = bincode::deserialize(val).ok()?;
 			meta.is_outlier.then_some(eid)
 		})
 }
@@ -107,8 +107,8 @@ pub fn room_stream<'a>(
 				.raw_stream()
 				.ignore_err()
 				.ready_filter_map(move |(key, val)| {
-					let eid = OwnedEventId::try_from(std::str::from_utf8(&key).ok()?).ok()?;
-					let meta: rooms::timeline::EventMetadata = bincode::deserialize(&val).ok()?;
+					let eid = OwnedEventId::try_from(std::str::from_utf8(key).ok()?).ok()?;
+					let meta: rooms::timeline::EventMetadata = bincode::deserialize(val).ok()?;
 					(meta.is_outlier && meta.short_room_id == target_short).then_some(eid)
 				})
 		})
