@@ -286,8 +286,7 @@ impl crate::Service for Service {
 			// Entries older than MAX_EVICT_AGE will never trigger backoff again, so they
 			// are safe to remove.
 			{
-				const MAX_EVICT_AGE: std::time::Duration =
-					std::time::Duration::from_hours(8);
+				const MAX_EVICT_AGE: std::time::Duration = std::time::Duration::from_hours(8);
 				let before = self.bad_event_ratelimiter.read().len();
 				self.bad_event_ratelimiter
 					.write()

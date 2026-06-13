@@ -1297,7 +1297,7 @@ mod tests {
 			HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 
-		let sorted = vec![a.clone(), b.clone()];
+		let sorted = vec![a, b.clone()];
 		let tips = calculate_true_extremities(&graph, &sorted);
 		let expected: Vec<&EventId> = vec![b.as_ref()];
 		assert_eq!(tips, expected);
@@ -1314,7 +1314,7 @@ mod tests {
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
 
-		let sorted = vec![a.clone(), b.clone(), c.clone()];
+		let sorted = vec![a, b.clone(), c.clone()];
 		let tips = calculate_true_extremities(&graph, &sorted);
 		let expected: Vec<&EventId> = vec![b.as_ref(), c.as_ref()];
 		assert_eq!(tips, expected);
@@ -1351,7 +1351,7 @@ mod tests {
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(y.clone(), vec![x.clone()].into_iter().collect());
 
-		let sorted = vec![a.clone(), b.clone(), x.clone(), y.clone()];
+		let sorted = vec![a, b.clone(), x, y.clone()];
 		let mut tips = calculate_true_extremities(&graph, &sorted);
 		tips.sort();
 
@@ -1368,7 +1368,7 @@ mod tests {
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
 			HashMap::new();
 
-		graph.insert(a.clone(), vec![z.clone()].into_iter().collect());
+		graph.insert(a.clone(), vec![z].into_iter().collect());
 
 		let sorted = vec![a.clone()];
 		let tips = calculate_true_extremities(&graph, &sorted);
@@ -1409,7 +1409,7 @@ mod tests {
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(a.clone(), vec![b.clone()].into_iter().collect());
 
-		let sorted = vec![a.clone(), b.clone()];
+		let sorted = vec![a, b.clone()];
 		let tips = calculate_true_extremities(&graph, &sorted);
 
 		// Fallback returns the last element in `sorted`
@@ -1460,9 +1460,9 @@ mod tests {
 
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		// Extraneous data outside the 'sorted' window
-		graph.insert(old.clone(), vec![older.clone()].into_iter().collect());
+		graph.insert(old, vec![older].into_iter().collect());
 
-		let sorted = vec![a.clone(), b.clone()];
+		let sorted = vec![a, b.clone()];
 		let tips = calculate_true_extremities(&graph, &sorted);
 
 		let expected: Vec<&EventId> = vec![&*b];
@@ -1483,7 +1483,7 @@ mod tests {
 		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
 
 		// Array is passed in completely scrambled chronological order
-		let sorted = vec![c.clone(), a.clone(), b.clone()];
+		let sorted = vec![c.clone(), a, b];
 		let tips = calculate_true_extremities(&graph, &sorted);
 
 		// Even though C was first in the array, A and B are in has_children.
@@ -1503,8 +1503,8 @@ mod tests {
 
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
 			HashMap::new();
-		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
-		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+		graph.insert(b.clone(), vec![a].into_iter().collect());
+		graph.insert(c.clone(), vec![b].into_iter().collect());
 
 		let stored: std::collections::HashSet<OwnedEventId> = vec![c].into_iter().collect();
 		let phantoms = detect_phantom_extremities(&graph, &stored);
@@ -1521,7 +1521,7 @@ mod tests {
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
 			HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
-		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+		graph.insert(c, vec![b].into_iter().collect());
 
 		let stored: std::collections::HashSet<OwnedEventId> =
 			vec![a.clone()].into_iter().collect();
@@ -1538,7 +1538,7 @@ mod tests {
 
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
 			HashMap::new();
-		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+		graph.insert(c.clone(), vec![b].into_iter().collect());
 
 		// $old is stored but not in the window graph at all
 		let stored: std::collections::HashSet<OwnedEventId> = vec![c, old].into_iter().collect();
@@ -1577,7 +1577,7 @@ mod tests {
 		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
 			HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
-		graph.insert(c.clone(), vec![b.clone()].into_iter().collect());
+		graph.insert(c.clone(), vec![b].into_iter().collect());
 
 		let stored: std::collections::HashSet<OwnedEventId> =
 			vec![a.clone(), c].into_iter().collect();
@@ -1649,7 +1649,7 @@ mod tests {
 			"sender".to_owned(),
 			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
 		);
-		create_json.insert("state_key".to_owned(), CanonicalJsonValue::String("".to_owned()));
+		create_json.insert("state_key".to_owned(), CanonicalJsonValue::String(String::new()));
 		let mut content_map = BTreeMap::new();
 		content_map
 			.insert("room_version".to_owned(), CanonicalJsonValue::String("10".to_owned()));
@@ -1674,7 +1674,7 @@ mod tests {
 		create_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		create_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(1.into()));
 		let mut hashes = CanonicalJsonObject::new();
-		hashes.insert("sha256".to_owned(), CanonicalJsonValue::String("".to_owned()));
+		hashes.insert("sha256".to_owned(), CanonicalJsonValue::String(String::new()));
 		create_json.insert("hashes".to_owned(), CanonicalJsonValue::Object(hashes));
 		create_json.insert(
 			"signatures".to_owned(),
@@ -1682,7 +1682,7 @@ mod tests {
 		);
 
 		let create_pdu =
-			PduEvent::from_id_val(&create_event_id, create_json.clone(), Some(&room_id)).unwrap();
+			PduEvent::from_id_val(create_event_id, create_json.clone(), Some(room_id)).unwrap();
 
 		let test_event_id = event_id!("$test_event_id");
 		let mut test_json = CanonicalJsonObject::new();
@@ -1709,7 +1709,7 @@ mod tests {
 		test_json.insert("auth_events".to_owned(), CanonicalJsonValue::Array(vec![]));
 		test_json.insert("depth".to_owned(), CanonicalJsonValue::Integer(2.into()));
 		let mut hashes = CanonicalJsonObject::new();
-		hashes.insert("sha256".to_owned(), CanonicalJsonValue::String("".to_owned()));
+		hashes.insert("sha256".to_owned(), CanonicalJsonValue::String(String::new()));
 		test_json.insert("hashes".to_owned(), CanonicalJsonValue::Object(hashes));
 		test_json.insert(
 			"signatures".to_owned(),
@@ -1717,7 +1717,7 @@ mod tests {
 		);
 
 		let test_pdu =
-			PduEvent::from_id_val(&test_event_id, test_json.clone(), Some(&room_id)).unwrap();
+			PduEvent::from_id_val(test_event_id, test_json.clone(), Some(room_id)).unwrap();
 		let btree_val = test_json
 			.into_iter()
 			.collect::<BTreeMap<String, CanonicalJsonValue>>();
@@ -1726,7 +1726,7 @@ mod tests {
 		services
 			.rooms
 			.pdu_metadata
-			.mark_event_rejected(&test_event_id);
+			.mark_event_rejected(test_event_id);
 
 		// When rescue-room calls this with skip_soft_fail=false, it MUST return an
 		// error.
@@ -1737,8 +1737,8 @@ mod tests {
 				test_pdu,
 				btree_val,
 				&create_pdu,
-				&origin,
-				&room_id,
+				origin,
+				room_id,
 				false, // skip_soft_fail MUST be false
 				true,  // is_forward_extremity (simulating rescue-room forcing a promotion)
 			)
@@ -1830,7 +1830,7 @@ mod tests {
 							let event_id_str = map
 								.get("event_id")
 								.and_then(|v| v.as_str())
-								.map(|s| s.to_owned());
+								.map(std::borrow::ToOwned::to_owned);
 							let mut eid: Option<OwnedEventId> = None;
 							if let Some(s) = &event_id_str {
 								eid = OwnedEventId::try_from(s.as_str()).ok();
@@ -1857,7 +1857,7 @@ mod tests {
 										if let Ok(pdu) = PduEvent::from_id_val(
 											&event_id,
 											c_json.clone(),
-											Some(&room_id),
+											Some(room_id),
 										) {
 											if pdu.kind == TimelineEventType::RoomCreate {
 												create_event_opt = Some(pdu);
@@ -1873,10 +1873,10 @@ mod tests {
 										.rooms
 										.event_handler
 										.handle_outlier_pdu(
-											&origin,
+											origin,
 											create_event_opt.as_ref(),
 											&event_id,
-											&room_id,
+											room_id,
 											btree_val,
 											false,
 											true, // skip_sig_verify
@@ -1902,7 +1902,7 @@ mod tests {
 			}
 		}
 
-		println!("Imported: {}, Failed: {}", imported, failed);
+		println!("Imported: {imported}, Failed: {failed}");
 	}
 
 	async fn run_test_handle_outlier_pdu(
@@ -1974,7 +1974,7 @@ mod tests {
 			"sender".to_owned(),
 			CanonicalJsonValue::String("@creator:test.conduwuit.local".to_owned()),
 		);
-		create_json.insert("state_key".to_owned(), CanonicalJsonValue::String("".to_owned()));
+		create_json.insert("state_key".to_owned(), CanonicalJsonValue::String(String::new()));
 		let mut content_map = BTreeMap::new();
 		content_map.insert(
 			"room_version".to_owned(),
@@ -2085,10 +2085,10 @@ mod tests {
 			.rooms
 			.event_handler
 			.handle_outlier_pdu::<PduEvent>(
-				&origin,
+				origin,
 				None,
 				join_event_id,
-				&room_id,
+				room_id,
 				join_json.clone(),
 				false,
 				true, // skip_sig_verify
@@ -2098,8 +2098,7 @@ mod tests {
 		assert!(
 			handle_missing_res.is_err(),
 			"Expected handling outlier join event to fail when create event is missing, but it \
-			 succeeded: {:?}",
-			handle_missing_res
+			 succeeded: {handle_missing_res:?}"
 		);
 
 		// Test Case 2: Create event exists.
@@ -2108,20 +2107,17 @@ mod tests {
 			.rooms
 			.event_handler
 			.handle_outlier_pdu::<PduEvent>(
-				&origin,
+				origin,
 				None,
 				create_event_id,
-				&room_id,
+				room_id,
 				create_json,
 				false,
 				true, // skip_sig_verify
 				Some(&room_version_id),
 			)
 			.await;
-		println!(
-			"Version {} Create Event handle result: {:?}",
-			room_version_str, handle_create_res
-		);
+		println!("Version {room_version_str} Create Event handle result: {handle_create_res:?}");
 		let create_pdu = handle_create_res
 			.as_ref()
 			.expect("failed to handle create PDU")
@@ -2144,20 +2140,17 @@ mod tests {
 			.rooms
 			.event_handler
 			.handle_outlier_pdu::<PduEvent>(
-				&origin,
+				origin,
 				create_event_param,
 				join_event_id,
-				&room_id,
+				room_id,
 				join_json,
 				false,
 				true, // skip_sig_verify
 				Some(&room_version_id),
 			)
 			.await;
-		println!(
-			"Version {} Join Event handle result: {:?}",
-			room_version_str, handle_success_res
-		);
+		println!("Version {room_version_str} Join Event handle result: {handle_success_res:?}");
 		assert!(
 			handle_success_res.is_ok(),
 			"Expected handling outlier join event to succeed when create event is present, but \
@@ -2170,7 +2163,7 @@ mod tests {
 			.rooms
 			.timeline
 			.db
-			.get_pdu_in_room(Some(&room_id), join_event_id)
+			.get_pdu_in_room(Some(room_id), join_event_id)
 			.await;
 		assert!(db_res.is_ok(), "Expected to retrieve outlier join event: {:?}", db_res.err());
 		let pdu = db_res.unwrap();

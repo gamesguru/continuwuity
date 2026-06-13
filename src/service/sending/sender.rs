@@ -1480,7 +1480,7 @@ mod tests {
 	fn test_build_receipt_map_over_limit() {
 		let mut receipts = Vec::new();
 		for i in 1..=5 {
-			let user_id_str = format!("@user{}:example.com", i);
+			let user_id_str = format!("@user{i}:example.com");
 			let user_id = <OwnedUserId as TryFrom<&str>>::try_from(user_id_str.as_str()).unwrap();
 			let json = serde_json::json!({
 				"type": "m.receipt",
@@ -1549,7 +1549,7 @@ mod tests {
 		assert_eq!(map.read.len(), 1);
 		assert_eq!(num.load(Ordering::Relaxed), 1);
 
-		let data = map.read.get(&user_id).unwrap();
+		let data = &map.read[&user_id];
 		assert!(matches!(data.data.thread, ruma::events::receipt::ReceiptThread::Unthreaded));
 		assert_eq!(data.data.ts.map(|t| t.0.into()), Some(12345_u64));
 	}
@@ -1597,7 +1597,7 @@ mod tests {
 		assert_eq!(map.read.len(), 1);
 		assert_eq!(num.load(Ordering::Relaxed), 1);
 
-		let data = map.read.get(&user_id).unwrap();
+		let data = &map.read[&user_id];
 		assert!(matches!(data.data.thread, ruma::events::receipt::ReceiptThread::Unthreaded));
 		assert_eq!(data.data.ts.map(|t| t.0.into()), Some(12345_u64));
 	}

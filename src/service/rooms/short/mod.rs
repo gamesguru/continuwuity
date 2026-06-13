@@ -377,11 +377,7 @@ where
 					.collect()
 					.await;
 
-				for ((&miss_key, res), idx) in misses
-					.iter()
-					.zip(db_results)
-					.zip(miss_indices)
-				{
+				for ((&miss_key, res), idx) in misses.iter().zip(db_results).zip(miss_indices) {
 					let val: Result<Id> = res.deserialized();
 
 					if let Ok(ref val) = val {
@@ -465,11 +461,7 @@ where
 						.collect()
 						.await;
 
-				for ((&miss_key, res), idx) in misses
-					.iter()
-					.zip(db_results)
-					.zip(miss_indices)
-				{
+				for ((&miss_key, res), idx) in misses.iter().zip(db_results).zip(miss_indices) {
 					if let Ok(ref val) = res {
 						self.shortstatekey_statekey_cache
 							.insert(miss_key, val.clone());
@@ -674,12 +666,10 @@ mod tests {
 		let state_key = "";
 
 		// Initial get should fail
-		assert!(
-			service
-				.get_shortstatekey(&event_type, state_key)
-				.await
-				.is_err()
-		);
+		service
+			.get_shortstatekey(&event_type, state_key)
+			.await
+			.unwrap_err();
 
 		// Create/get state key
 		let short_key1 = service

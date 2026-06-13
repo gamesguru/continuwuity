@@ -163,8 +163,7 @@ impl Service {
 			}
 		}
 		regex_str.push('$');
-		regex::Regex::new(&regex_str)
-			.is_ok_and(|re| re.is_match(target))
+		regex::Regex::new(&regex_str).is_ok_and(|re| re.is_match(target))
 	}
 
 	/// Returns the recipient's filter level for an invite from the sender.
