@@ -266,7 +266,7 @@ async fn build_left_state_and_timeline(
 		.and_then(|limit| limit.try_into().ok())
 		.unwrap_or(DEFAULT_TIMELINE_LIMIT);
 
-	let timeline = load_timeline(
+	let raw_timeline = load_timeline(
 		services,
 		syncing_user,
 		room_id,
@@ -275,6 +275,27 @@ async fn build_left_state_and_timeline(
 		timeline_limit,
 	)
 	.await?;
+
+	let mut stream = raw_timeline
+		.pdus
+		.into_iter()
+		.stream()
+		// filter out ignored events from the timeline
+		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
+		.ready_filter(|(_, pdu): &(conduwuit::PduCount, PduEvent)| {
+			use conduwuit::matrix::event::Matches;
+			(&sync_context.filter.room.timeline).matches(pdu)
+		});
+
+	let mut filtered_pdus = std::collections::VecDeque::new();
+	while let Some(item) = stream.next().await {
+		filtered_pdus.push_back(item);
+	}
+
+	let timeline = TimelinePdus {
+		pdus: filtered_pdus,
+		limited: raw_timeline.limited,
+	};
 
 	let timeline_start_shortstatehash = async {
 		if let Some((_, pdu)) = timeline.pdus.front() {

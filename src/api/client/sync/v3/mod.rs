@@ -211,7 +211,7 @@ pub(crate) async fn sync_events_route(
 
 	let mut use_state_after = false;
 	if let Some(q) = raw_query.as_deref() {
-		for (key, value) in form_urlencoded::parse(q.as_bytes()) {
+		for (key, value) in url::form_urlencoded::parse(q.as_bytes()) {
 			if key == "use_state_after" && value == "true" {
 				use_state_after = true;
 				break;
