@@ -730,20 +730,21 @@ async fn check_joined_since_last_sync(
 		// Incremental sync
 		// fetch the syncing user's membership event during the last sync.
 		// this will be None if `previous_sync_end_shortstatehash` is None.
-		let membership_during_previous_sync = match last_sync_end_shortstatehash {
-			| Some(last_sync_end_shortstatehash) => services
-				.rooms
-				.state_accessor
-				.state_get_content(
-					last_sync_end_shortstatehash,
-					&StateEventType::RoomMember,
-					syncing_user.as_str(),
-				)
-				.await
-				.inspect_err(|_| debug_warn!("User has no previous membership"))
-				.ok(),
-			| None => None,
-		};
+		let membership_during_previous_sync: Option<RoomMemberEventContent> =
+			match last_sync_end_shortstatehash {
+				| Some(last_sync_end_shortstatehash) => services
+					.rooms
+					.state_accessor
+					.state_get_content(
+						last_sync_end_shortstatehash,
+						&StateEventType::RoomMember,
+						syncing_user.as_str(),
+					)
+					.await
+					.inspect_err(|_| debug_warn!("User has no previous membership"))
+					.ok(),
+				| None => None,
+			};
 
 		let membership_during_current_sync: Option<RoomMemberEventContent> = services
 			.rooms
@@ -756,42 +757,46 @@ async fn check_joined_since_last_sync(
 			.await
 			.ok();
 
-		// If we can resolve the previous membership event, check if it was NOT Join.
-		// If we couldn't resolve it (None), default to true (assuming a fresh join)
-		// because treating it as false causes missing state events.
-		let mut joined_since_last_sync =
-			membership_during_previous_sync.as_ref().is_none_or(
-				|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
-			) && membership_during_current_sync.as_ref().is_some_and(
-				|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
-			);
+		let prev_membership = membership_during_previous_sync
+			.as_ref()
+			.map(|c| c.membership.clone());
+		let curr_membership = membership_during_current_sync
+			.as_ref()
+			.map(|c| c.membership.clone());
 
-		// Double-check: if the user's current membership event was appended before or
-		// at last_sync_end_count, then they did not join since the last sync. This
-		// prevents false-positives when previous shortstatehash is None (e.g. idle
-		// rooms).
-		if joined_since_last_sync {
-			if let Some(last_sync_end_count) = last_sync_end_count {
-				if let Ok(event_id) = services
-					.rooms
-					.state_accessor
-					.state_get_id::<ruma::OwnedEventId>(
-						current_shortstatehash,
-						&StateEventType::RoomMember,
-						syncing_user.as_str(),
-					)
-					.await
+		let prelim_joined_since_last_sync = prev_membership
+			.as_ref()
+			.is_none_or(|m| m != &MembershipState::Join)
+			&& curr_membership
+				.as_ref()
+				.is_some_and(|m| m == &MembershipState::Join);
+
+		let mut join_count = None;
+		if prelim_joined_since_last_sync && last_sync_end_count.is_some() {
+			if let Ok(event_id) = services
+				.rooms
+				.state_accessor
+				.state_get_id::<ruma::OwnedEventId>(
+					current_shortstatehash,
+					&StateEventType::RoomMember,
+					syncing_user.as_str(),
+				)
+				.await
+			{
+				if let Ok(PduCount::Normal(jc)) =
+					services.rooms.timeline.get_pdu_count(&event_id).await
 				{
-					if let Ok(PduCount::Normal(join_count)) =
-						services.rooms.timeline.get_pdu_count(&event_id).await
-					{
-						if join_count <= last_sync_end_count {
-							joined_since_last_sync = false;
-						}
-					}
+					join_count = Some(jc);
 				}
 			}
 		}
+
+		let joined_since_last_sync = calculate_joined_since_last_sync(
+			prev_membership.as_ref(),
+			curr_membership.as_ref(),
+			last_sync_end_count,
+			join_count,
+		);
 
 		if joined_since_last_sync && membership_during_previous_sync.is_some() {
 			warn!(
@@ -1030,4 +1035,95 @@ async fn build_device_list_updates(
 	}
 
 	Ok(device_list_updates)
+}
+
+#[inline]
+pub(super) fn calculate_joined_since_last_sync(
+	membership_during_previous_sync: Option<&MembershipState>,
+	membership_during_current_sync: Option<&MembershipState>,
+	last_sync_end_count: Option<u64>,
+	join_count: Option<u64>,
+) -> bool {
+	let mut joined_since_last_sync = membership_during_previous_sync
+		.is_none_or(|m| m != &MembershipState::Join)
+		&& membership_during_current_sync.is_some_and(|m| m == &MembershipState::Join);
+
+	if joined_since_last_sync {
+		if let Some(last_sync_end_count) = last_sync_end_count {
+			if let Some(join_count) = join_count {
+				if join_count <= last_sync_end_count {
+					joined_since_last_sync = false;
+				}
+			}
+		}
+	}
+
+	joined_since_last_sync
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_joined_since_last_sync_idle_room_joined_before() {
+		// If last_sync_end_shortstatehash is None (idle room),
+		// membership_during_previous_sync is None. If the user's current membership
+		// is Join, and they joined at count 50, but last sync ended at 100.
+		// Since 50 <= 100, they did NOT join since the last sync.
+		assert!(!calculate_joined_since_last_sync(
+			None,
+			Some(&MembershipState::Join),
+			Some(100),
+			Some(50),
+		));
+	}
+
+	#[test]
+	fn test_joined_since_last_sync_idle_room_joined_after() {
+		// If last_sync_end_shortstatehash is None, and the user joined at count 150,
+		// and last sync ended at 100. Since 150 > 100, they DID join since the last
+		// sync.
+		assert!(calculate_joined_since_last_sync(
+			None,
+			Some(&MembershipState::Join),
+			Some(100),
+			Some(150),
+		));
+	}
+
+	#[test]
+	fn test_joined_since_last_sync_normal_incremental_join() {
+		// User was previously Left (not Join), and is now Join. They joined since the
+		// last sync.
+		assert!(calculate_joined_since_last_sync(
+			Some(&MembershipState::Leave),
+			Some(&MembershipState::Join),
+			Some(100),
+			Some(150),
+		));
+	}
+
+	#[test]
+	fn test_joined_since_last_sync_normal_incremental_already_joined() {
+		// User was already Join, and is still Join. They did NOT join since the last
+		// sync.
+		assert!(!calculate_joined_since_last_sync(
+			Some(&MembershipState::Join),
+			Some(&MembershipState::Join),
+			Some(100),
+			Some(150),
+		));
+	}
+
+	#[test]
+	fn test_joined_since_last_sync_initial_sync() {
+		// Initial sync (last_sync_end_count is None).
+		// Note that check_joined_since_last_sync resolves to false on initial sync
+		// anyway, but the helper function should handle the None last_sync_end_count
+		// correctly.
+		assert!(
+			calculate_joined_since_last_sync(None, Some(&MembershipState::Join), None, None,)
+		);
+	}
 }
