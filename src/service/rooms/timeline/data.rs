@@ -389,31 +389,10 @@ impl Data {
 			}
 		}
 
-		// Batch fetch timeline PDUs
-		let pdu_events = if !valid_pdu_ids.is_empty() {
-			let event_id_bytes_batch: Vec<Result<database::Handle<'_>>> = self
-				.room_pducount_eventid
-				.get_batch(futures::stream::iter(valid_pdu_ids.iter().map(AsRef::as_ref)))
-				.collect()
-				.await;
+		// Two-hop resolve: room_pducount_eventid → eventid_pdu
+		let pdu_events = self.resolve_pdu_batch(&valid_pdu_ids).await;
 
-			let valid_event_id_bytes: Vec<Vec<u8>> = event_id_bytes_batch
-				.into_iter()
-				.map(|r| r.map(|h| h.to_vec()).unwrap_or_default())
-				.collect();
-
-			self.eventid_pdu
-				.get_batch(futures::stream::iter(valid_event_id_bytes.iter().map(Vec::as_slice)))
-				.map(|res: Result<database::Handle<'_>>| {
-					res.and_then(|handle| handle.deserialized::<PduEvent>())
-				})
-				.collect()
-				.await
-		} else {
-			Vec::new()
-		};
-
-		// Batch fetch outliers
+		// Batch fetch outliers directly from eventid_pdu
 		let outlier_events = if !missing_event_ids.is_empty() {
 			self.eventid_pdu
 				.get_batch(futures::stream::iter(missing_event_ids))
@@ -438,37 +417,11 @@ impl Data {
 					.expect("length matches timeline fetch count");
 				match pdu_res {
 					| Ok(pdu) => {
-						// Verify room boundary
-						if let Some(expected_room) = room_id {
-							if let Some(actual_room) = pdu.room_id_or_hash() {
-								if actual_room != expected_room {
-									results.push(Err!(Database(
-										"PDU {} does belong to room {} (expected {})",
-										event_ids[i],
-										actual_room,
-										expected_room
-									)));
-									continue;
-								}
-							} else if let Some(expected_short) = expected_shortroomid {
-								let pduid = RawPduId::from(&**pdu_id_handle);
-								if pduid.shortroomid() != expected_short.to_be_bytes() {
-									results.push(Err!(Database(
-										"PDU {} does not belong to room {}",
-										event_ids[i],
-										expected_room
-									)));
-									continue;
-								}
-							} else {
-								results.push(Err!(Database(
-									"PDU {} lacks room_id and expected shortroomid is unknown",
-									event_ids[i]
-								)));
-								continue;
-							}
-						}
-						results.push(Ok(pdu));
+						let short = expected_shortroomid
+							.map(|s| RawPduId::from(&**pdu_id_handle).shortroomid() == s.to_be_bytes());
+						results.push(
+							Self::check_room_boundary(pdu, room_id, short),
+						);
 					},
 					| Err(e) => results.push(Err(e)),
 				}
@@ -479,20 +432,9 @@ impl Data {
 					.expect("length matches outlier fetch count");
 				match outlier_res {
 					| Ok(pdu) => {
-						if let Some(expected_room) = room_id {
-							if let Some(actual_room) = pdu.room_id_or_hash() {
-								if actual_room != expected_room {
-									results.push(Err!(Database(
-										"PDU {} does belong to room {} (expected {})",
-										event_ids[i],
-										actual_room,
-										expected_room
-									)));
-									continue;
-								}
-							}
-						}
-						results.push(Ok(pdu));
+						results.push(
+							Self::check_room_boundary(pdu, room_id, None),
+						);
 					},
 					| Err(_) => {
 						results.push(Err!(Request(NotFound(
@@ -878,6 +820,67 @@ impl Data {
 			);
 			e
 		})
+	}
+
+	/// Resolve a batch of `pdu_id`s via the two-hop path:
+	/// `room_pducount_eventid` → event_id_bytes → `eventid_pdu` → PduEvent.
+	async fn resolve_pdu_batch(&self, pdu_ids: &[RawPduId]) -> Vec<Result<PduEvent>> {
+		if pdu_ids.is_empty() {
+			return Vec::new();
+		}
+
+		let event_id_batch: Vec<Result<database::Handle<'_>>> = self
+			.room_pducount_eventid
+			.get_batch(futures::stream::iter(pdu_ids.iter().map(AsRef::as_ref)))
+			.collect()
+			.await;
+
+		let mut results = Vec::with_capacity(event_id_batch.len());
+		for res in event_id_batch {
+			match res {
+				| Ok(event_id_handle) => {
+					results.push(
+						self.eventid_pdu
+							.get(&*event_id_handle)
+							.await
+							.and_then(|h| h.deserialized::<PduEvent>()),
+					);
+				},
+				| Err(e) => results.push(Err(e)),
+			}
+		}
+		results
+	}
+
+	/// Validate that a PDU belongs to the expected room.
+	/// `shortroomid_match` is a pre-computed fallback check for v12 PDUs
+	/// without room_id in the JSON. Pass `None` to skip the shortid check.
+	fn check_room_boundary(
+		pdu: PduEvent,
+		expected_room: Option<&RoomId>,
+		shortroomid_match: Option<bool>,
+	) -> Result<PduEvent> {
+		let Some(expected_room) = expected_room else {
+			return Ok(pdu);
+		};
+
+		if let Some(actual_room) = pdu.room_id_or_hash() {
+			if actual_room != expected_room {
+				return Err!(Database(
+					"PDU {} belongs to room {actual_room} (expected {expected_room})",
+					pdu.event_id()
+				));
+			}
+		} else if let Some(matches) = shortroomid_match {
+			if !matches {
+				return Err!(Database(
+					"PDU {} does not belong to room {expected_room}",
+					pdu.event_id()
+				));
+			}
+		}
+
+		Ok(pdu)
 	}
 
 	pub(super) fn topo_pdus_rev<'a>(
