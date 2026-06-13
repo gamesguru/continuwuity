@@ -715,7 +715,12 @@ async fn check_joined_since_last_sync(
 		last_sync_end_shortstatehash,
 		current_shortstatehash,
 	}: ShortStateHashes,
-	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
+	SyncContext {
+		syncing_user,
+		last_sync_end_count,
+		current_count,
+		..
+	}: SyncContext<'_>,
 ) -> Result<bool> {
 	// TODO: If the requesting user got state-reset out of the room, this
 	// will be `true` when it shouldn't be. this function should never be called
@@ -754,17 +759,47 @@ async fn check_joined_since_last_sync(
 		// If we can resolve the previous membership event, check if it was NOT Join.
 		// If we couldn't resolve it (None), default to true (assuming a fresh join)
 		// because treating it as false causes missing state events.
-		let joined_since_last_sync = membership_during_previous_sync.as_ref().is_none_or(
-			|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
-		) && membership_during_current_sync.as_ref().is_some_and(
-			|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
-		);
+		let mut joined_since_last_sync =
+			membership_during_previous_sync.as_ref().is_none_or(
+				|content: &RoomMemberEventContent| content.membership != MembershipState::Join,
+			) && membership_during_current_sync.as_ref().is_some_and(
+				|content: &RoomMemberEventContent| content.membership == MembershipState::Join,
+			);
+
+		// Double-check: if the user's current membership event was appended before or
+		// at last_sync_end_count, then they did not join since the last sync. This
+		// prevents false-positives when previous shortstatehash is None (e.g. idle
+		// rooms).
+		if joined_since_last_sync {
+			if let Some(last_sync_end_count) = last_sync_end_count {
+				if let Ok(event_id) = services
+					.rooms
+					.state_accessor
+					.state_get_id::<ruma::OwnedEventId>(
+						current_shortstatehash,
+						&StateEventType::RoomMember,
+						syncing_user.as_str(),
+					)
+					.await
+				{
+					if let Ok(PduCount::Normal(join_count)) =
+						services.rooms.timeline.get_pdu_count(&event_id).await
+					{
+						if join_count <= last_sync_end_count {
+							joined_since_last_sync = false;
+						}
+					}
+				}
+			}
+		}
 
 		if joined_since_last_sync && membership_during_previous_sync.is_some() {
 			warn!(
 				%room_id,
 				user_joined_since_last_sync = syncing_user.as_str(),
 				?last_sync_end_shortstatehash,
+				last_sync_end_count,
+				current_count,
 				membership = ?membership_during_previous_sync,
 			);
 		}
