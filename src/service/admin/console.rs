@@ -262,7 +262,7 @@ impl Console {
 			return;
 		}
 
-		self.add_history(line.clone());
+		self.add_history(&line);
 		let future = self.clone().process(line);
 
 		let (abort, abort_reg) = AbortHandle::new_pair();
@@ -308,7 +308,7 @@ impl Console {
 		});
 	}
 
-	fn add_history(&self, line: &str) { self.history.lock().add(&line); }
+	fn add_history(&self, line: &str) { self.history.lock().add(line); }
 
 	fn tab_complete(&self, line: &str) -> String {
 		self.admin
