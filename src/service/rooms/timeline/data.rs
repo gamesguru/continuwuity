@@ -883,6 +883,10 @@ impl Data {
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.wide_and_then(move |(pdu_id, event_id_bytes)| async move {
+						conduwuit::info!(
+							target: "timeline_debug",
+							"pdus_rev yielded pdu_id: {:?}", pdu_id
+						);
 						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
 						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
 					})
@@ -904,6 +908,10 @@ impl Data {
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.wide_and_then(move |(pdu_id, event_id_bytes)| async move {
+						conduwuit::info!(
+							target: "timeline_debug",
+							"pdus_rev yielded pdu_id: {:?}", pdu_id
+						);
 						let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
 						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
 					})
