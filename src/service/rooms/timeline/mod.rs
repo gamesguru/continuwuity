@@ -1853,16 +1853,14 @@ mod tests {
 								if let Ok(c_json) = serde_json::from_value::<CanonicalJsonObject>(
 									Value::Object(map.clone()),
 								) {
-									if create_event_opt.is_none() {
-										if let Ok(pdu) = PduEvent::from_id_val(
+									if create_event_opt.is_none()
+										&& let Ok(pdu) = PduEvent::from_id_val(
 											&event_id,
 											c_json.clone(),
 											Some(room_id),
-										) {
-											if pdu.kind == TimelineEventType::RoomCreate {
-												create_event_opt = Some(pdu);
-											}
-										}
+										) && pdu.kind == TimelineEventType::RoomCreate
+									{
+										create_event_opt = Some(pdu);
 									}
 
 									let btree_val = c_json

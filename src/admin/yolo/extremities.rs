@@ -60,7 +60,7 @@ pub(super) async fn view_extremities(
 			}
 		}
 
-		fractured.sort_by(|a, b| b.1.cmp(&a.1));
+		fractured.sort_by_key(|b| std::cmp::Reverse(b.1));
 
 		if fractured.is_empty() {
 			return self
