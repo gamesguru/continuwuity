@@ -445,7 +445,17 @@ async fn fetch_shortstatehashes(
 		Ok::<_, Error>(hash)
 	};
 
-	let (current_shortstatehash, next_hash) = try_join(current_hash, next_hash).await?;
+	let (current_shortstatehash, mut next_hash) = try_join(current_hash, next_hash).await?;
+
+	// If there are literally no events in the room after the last sync token,
+	// then the room's state could not have changed via normal timeline events.
+	// If we let last_sync_end_shortstatehash remain the ancient state, we might
+	// falsely trigger a full state sync if the state was changed via outliers.
+	if let Some(last_count) = last_sync_end_count {
+		if services.rooms.timeline.next_shortstatehash(room_id, PduCount::Normal(last_count)).await.is_err() {
+			next_hash = Some(current_shortstatehash);
+		}
+	}
 
 	// the room state as of the end of the last sync. if next_shortstatehash
 	// returned None (no events after last_sync_end_count), we fall back to
