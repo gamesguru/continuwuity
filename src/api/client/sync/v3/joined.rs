@@ -254,8 +254,8 @@ async fn build_ephemeral(
 		receipt_events.push(private_read);
 	}
 
-	let mut edus: Vec<Raw<ruma::events::AnySyncEphemeralRoomEvent>> =
-		receipt_events.into_iter().map(Raw::cast).collect();
+	let mut edus =
+		conduwuit_service::rooms::read_receipt::pack_receipts_v3(receipt_events.into_iter());
 
 	edus.extend(typing_event);
 

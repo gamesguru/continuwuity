@@ -497,15 +497,11 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 
 const MIGRATE_EVENT_STORE_TO_SSOT_MARKER: &[u8] = b"migrate_event_store_to_ssot";
 async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
-	use conduwuit::PduEvent;
-
 	info!("Starting event store SSOT migration (Timeline)...");
 
 	let db = &services.db;
 	// pduid_pdu has been dropped, so we cannot run the migration from it.
 	let eventid_pduid = db["eventid_pduid"].clone();
-	let eventid_pdu = db["eventid_pdu"].clone();
-	let eventid_metadata = db["eventid_metadata"].clone();
 
 	let mut timeline_stream = eventid_pduid.raw_stream();
 	let mut timeline_migrated: usize = 0;
@@ -526,48 +522,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 		}
 	}
 
-	info!(
-		"Timeline migration complete. Migrated {timeline_migrated} PDUs.\nStarting event store \
-		 SSOT migration (Outliers)..."
-	);
-
-	let eventid_outlierpdu = db["eventid_outlierpdu"].clone();
-	let mut outlier_stream = eventid_outlierpdu.raw_stream();
-	let mut outlier_migrated: usize = 0;
-
-	while let Some(Ok((event_id_bytes, pdu_json_bytes))) = outlier_stream.next().await {
-		let mut batch = database::rocksdb::WriteBatch::default();
-
-		eventid_pdu.raw_put_into_batch(&mut batch, event_id_bytes, pdu_json_bytes);
-
-		if let Ok(parsed_pdu) = serde_json::from_slice::<PduEvent>(pdu_json_bytes) {
-			let metadata = crate::rooms::timeline::EventMetadata {
-				short_room_id: 0, // Outliers lack context, 0 used temporarily
-				is_outlier: true,
-				origin_server_ts: parsed_pdu.origin_server_ts().0,
-				depth: parsed_pdu.depth(),
-				soft_failed: false,
-				rejected: parsed_pdu.rejected(),
-				redacted_by: parsed_pdu.redacts().map(ToOwned::to_owned),
-				short_state_hash: None,
-			};
-			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-				eventid_metadata.insert_into_batch(&mut batch, &event_id_bytes, metadata_bytes);
-			}
-		}
-
-		eventid_pdu.apply_batch(&batch);
-		outlier_migrated = outlier_migrated.saturating_add(1);
-
-		if outlier_migrated.is_multiple_of(10000) {
-			info!("Migrated {} outliers...", outlier_migrated);
-		}
-	}
-
-	info!(
-		"Successfully migrated {timeline_migrated} timeline PDUs and {outlier_migrated} \
-		 outliers to new SSOT tables!"
-	);
+	info!("Timeline migration complete. Migrated {timeline_migrated} PDUs.");
 	db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
 	db.db.sort()?;
 	Ok(())

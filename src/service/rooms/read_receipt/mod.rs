@@ -127,8 +127,15 @@ impl Service {
 	}
 }
 
-#[must_use]
-pub fn pack_receipts<I>(receipts: I) -> Raw<SyncEphemeralRoomEvent<ReceiptEventContent>>
+fn aggregate_receipts<I>(
+	receipts: I,
+) -> BTreeMap<
+	OwnedEventId,
+	BTreeMap<
+		ruma::events::receipt::ReceiptType,
+		BTreeMap<OwnedUserId, ruma::events::receipt::Receipt>,
+	>,
+>
 where
 	I: Iterator<Item = Raw<AnySyncEphemeralRoomEvent>>,
 {
@@ -223,6 +230,15 @@ where
 		!event_receipts.is_empty()
 	});
 
+	json
+}
+
+#[must_use]
+pub fn pack_receipts<I>(receipts: I) -> Raw<SyncEphemeralRoomEvent<ReceiptEventContent>>
+where
+	I: Iterator<Item = Raw<AnySyncEphemeralRoomEvent>>,
+{
+	let json = aggregate_receipts(receipts);
 	let content = ReceiptEventContent::from_iter(json);
 
 	conduwuit::info!(
@@ -242,4 +258,28 @@ where
 	);
 
 	Raw::from_json(serde_json::value::to_raw_value(&json_val).expect("received valid json"))
+}
+
+#[must_use]
+pub fn pack_receipts_v3<I>(receipts: I) -> Vec<Raw<AnySyncEphemeralRoomEvent>>
+where
+	I: Iterator<Item = Raw<AnySyncEphemeralRoomEvent>>,
+{
+	let json = aggregate_receipts(receipts);
+	let mut events = Vec::new();
+
+	for (event_id, event_receipts) in json {
+		let mut content_map = BTreeMap::new();
+		content_map.insert(event_id, event_receipts);
+		let content = ReceiptEventContent::from_iter(content_map);
+		let json_val = serde_json::json!({
+			"type": "m.receipt",
+			"content": content,
+		});
+		events.push(Raw::from_json(
+			serde_json::value::to_raw_value(&json_val).expect("received valid json"),
+		));
+	}
+
+	events
 }
