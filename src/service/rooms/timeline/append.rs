@@ -62,10 +62,7 @@ where
 	// Clean up the outlier table entry now that this event is in the timeline.
 	// Without this, events upgraded via the federation path remain in both the
 	// timeline and outlier tables indefinitely (the "stuck" state bug).
-	self.services
-		.outlier
-		.remove_outlier(pdu.event_id(), Some(room_id))
-		.await;
+	self.services.outlier.remove_outlier(pdu.event_id()).await;
 
 	// Process admin commands for federation events
 	if *pdu.kind() == TimelineEventType::RoomMessage {

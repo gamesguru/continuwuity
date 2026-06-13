@@ -1181,6 +1181,14 @@ async fn db_lt_19(services: &Services) -> Result<()> {
 			.unwrap_or_else(|e| warn!("Failed to drop eventid_receivecount: {e}"));
 	}
 
+	// Drop roomid_outliereventid — outlier tracking now uses
+	// eventid_metadata.is_outlier
+	if database::Map::open(&db.db, "roomid_outliereventid").is_ok() {
+		db.db
+			.drop_cf("roomid_outliereventid")
+			.unwrap_or_else(|e| warn!("Failed to drop roomid_outliereventid: {e}"));
+	}
+
 	drop(cork);
 	info!("Migrated {}/{} soft-failed events to eventid_metadata.", migrated, count);
 

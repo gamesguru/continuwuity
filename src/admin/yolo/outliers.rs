@@ -145,7 +145,7 @@ pub(super) async fn purge_outliers(
 ) -> Result {
 	// Fast path: single event by ID
 	if let Some(ref eid) = event_id {
-		self.services.rooms.outlier.remove_outlier(eid, None).await;
+		self.services.rooms.outlier.remove_outlier(eid).await;
 		return self.write_str(&format!("Purged outlier {eid}")).await;
 	}
 
@@ -194,11 +194,7 @@ pub(super) async fn purge_outliers(
 			let skipped = std::sync::Arc::clone(&skipped);
 			async move {
 				if force {
-					self.services
-						.rooms
-						.outlier
-						.remove_outlier(&event_id, None)
-						.await;
+					self.services.rooms.outlier.remove_outlier(&event_id).await;
 					purged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 				} else if self
 					.services
@@ -209,11 +205,7 @@ pub(super) async fn purge_outliers(
 					.is_ok()
 				{
 					// Duplicate: exists in both outlier and timeline tables
-					self.services
-						.rooms
-						.outlier
-						.remove_outlier(&event_id, None)
-						.await;
+					self.services.rooms.outlier.remove_outlier(&event_id).await;
 					purged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 				} else {
 					skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

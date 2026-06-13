@@ -121,11 +121,7 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 		.await;
 
 	// Also remove from outlier tables
-	self.services
-		.rooms
-		.outlier
-		.remove_outlier(&event_id, None)
-		.await;
+	self.services.rooms.outlier.remove_outlier(&event_id).await;
 
 	if in_timeline {
 		if let Some(room_id) = room_id_opt {

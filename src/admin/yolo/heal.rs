@@ -45,7 +45,7 @@ pub(super) async fn rescue_room(
 			} else {
 				// V3+ rooms: PDU JSON doesn't contain room_id.
 				// We need a way to find the room association.
-				// For --all, we might have to scan roomid_outliereventid.
+				// For --all, we scan eventid_metadata for outliers.
 				// But we can also just try to find it from the event_id if it's
 				// a create event, or just ignore for now as it's expensive.
 				if let Some(room_id) = pdu.room_id_or_hash() {

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use conduwuit::{
 	Result, implement, info,
 	matrix::{Event, PduEvent},
-	utils::stream::{BroadbandExt, ReadyExt, TryIgnore},
+	utils::stream::{BroadbandExt, TryIgnore},
 };
 use database::{Deserialized, Json, Map};
-use futures::Stream;
+use futures::{FutureExt, Stream, StreamExt};
 use ruma::{CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, RoomId};
 
-use crate::{Dep, rooms};
+use crate::{Dep, rooms, rooms::short::ShortRoomId};
 
 pub struct Service {
 	db: Data,
@@ -17,12 +17,12 @@ pub struct Service {
 }
 
 struct Data {
-	roomid_outliereventid: Arc<Map>,
 	eventid_pdu: Arc<Map>,
 	eventid_metadata: Arc<Map>,
 }
 
 struct Services {
+	short: Dep<rooms::short::Service>,
 	#[allow(dead_code)]
 	timeline: Dep<rooms::timeline::Service>,
 }
@@ -31,11 +31,11 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			db: Data {
-				roomid_outliereventid: args.db["roomid_outliereventid"].clone(),
 				eventid_pdu: args.db["eventid_pdu"].clone(),
 				eventid_metadata: args.db["eventid_metadata"].clone(),
 			},
 			services: Services {
+				short: args.depend::<rooms::short::Service>("rooms::short"),
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 			},
 		}))
@@ -86,19 +86,26 @@ pub fn room_stream<'a>(
 	&'a self,
 	room_id: &'a RoomId,
 ) -> impl Stream<Item = (OwnedEventId, PduEvent)> + Send + 'a {
-	let mut prefix = room_id.as_bytes().to_vec();
-	prefix.push(0xFF);
+	let short_room_id = self
+		.services
+		.short
+		.get_shortroomid(room_id)
+		.map(std::result::Result::ok);
 
-	self.db
-		.roomid_outliereventid
-		.raw_stream_from(&prefix)
-		.ignore_err()
-		.ready_take_while(move |kv| kv.0.starts_with(&prefix))
-		.broad_filter_map(move |kv| async move {
-			let event_id_str = std::str::from_utf8(kv.1).ok()?;
-			let event_id = OwnedEventId::try_from(event_id_str).ok()?;
-			let pdu = self.get_pdu_outlier(&event_id).await.ok()?;
-			Some((event_id, pdu))
+	futures::stream::once(short_room_id)
+		.filter_map(|opt| async move { opt })
+		.flat_map(move |target_short: ShortRoomId| {
+			self.db
+				.eventid_metadata
+				.stream::<OwnedEventId, rooms::timeline::EventMetadata>()
+				.ignore_err()
+				.broad_filter_map(move |(eid, meta)| async move {
+					(meta.is_outlier && meta.short_room_id == target_short).then_some(eid)
+				})
+		})
+		.broad_filter_map(move |eid: OwnedEventId| async move {
+			let pdu = self.get_pdu_outlier(&eid).await.ok()?;
+			Some((eid, pdu))
 		})
 }
 
@@ -149,21 +156,17 @@ pub fn add_pdu_outlier_batch(
 		.eventid_pdu
 		.raw_put_into_batch(batch, event_id.as_bytes(), Json(&pdu));
 
-	if let Some(room_id) = room_id_from_pdu {
-		let room_id: &RoomId = &room_id;
-		let mut key = room_id.as_bytes().to_vec();
-		key.push(0xFF);
-		key.extend_from_slice(event_id.as_bytes());
-		self.db
-			.roomid_outliereventid
-			.insert_into_batch(batch, &key, event_id);
-	}
-
 	if let Ok(parsed_pdu) =
 		serde_json::from_value::<PduEvent>(serde_json::to_value(&pdu).unwrap())
 	{
+		let short_room_id = room_id_from_pdu
+			.as_deref()
+			.and_then(|rid| self.services.short.get_shortroomid(rid).now_or_never())
+			.and_then(Result::ok)
+			.unwrap_or(0);
+
 		let metadata = rooms::timeline::EventMetadata {
-			short_room_id: 0,
+			short_room_id,
 			is_outlier: true,
 			origin_server_ts: parsed_pdu.origin_server_ts().0,
 			depth: parsed_pdu.depth(),
@@ -189,50 +192,10 @@ pub fn apply_outlier_batch(&self, batch: &database::rocksdb::WriteBatch) {
 	self.db.eventid_pdu.apply_batch(batch);
 }
 
-/// Remove the PDU from the outlier tree. When the caller knows the
-/// room_id (hot path), pass it for O(1) index cleanup. Otherwise the
-/// room_id is derived from the stored PDU JSON.
+/// Remove the PDU from the outlier tree.
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
-pub async fn remove_outlier(&self, event_id: &EventId, provided_room_id: Option<&RoomId>) {
-	// Fast path: caller provides room_id → O(1) index delete
-	let resolved_room_id: Option<OwnedRoomId> = if let Some(room_id) = provided_room_id {
-		Some(room_id.to_owned())
-	} else if let Ok(json) = self
-		.db
-		.eventid_pdu
-		.get(event_id.as_bytes())
-		.await
-		.deserialized::<CanonicalJsonObject>()
-	{
-		// Derive room_id from PDU JSON using the same fallback chain
-		// as add_pdu_outlier.
-		json.get("room_id")
-			.and_then(CanonicalJsonValue::as_str)
-			.and_then(|r| <&RoomId>::try_from(r).ok())
-			.map(ToOwned::to_owned)
-			.or_else(|| {
-				let is_create = json.get("type").and_then(CanonicalJsonValue::as_str)
-					== Some("m.room.create");
-				is_create
-					.then(|| event_id.as_str().replace('$', "!"))
-					.and_then(|r| OwnedRoomId::parse(r).ok())
-			})
-	} else {
-		None
-	};
-
-	if let Some(room_id) = resolved_room_id {
-		let room_id: &RoomId = &room_id;
-		let mut key = room_id.as_bytes().to_vec();
-		key.push(0xFF);
-		key.extend_from_slice(event_id.as_bytes());
-		self.db.roomid_outliereventid.remove(&key);
-	}
-	// If room_id can't be resolved, the ~80 byte roomid_outliereventid
-	// entry may remain as a harmless orphan. room_stream filters by
-	// room prefix and ignores orphaned entries.
-
+pub async fn remove_outlier(&self, event_id: &EventId) {
 	if !self
 		.services
 		.timeline

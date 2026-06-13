@@ -1516,7 +1516,7 @@ pub(super) async fn dedup_room(&self, room_id: OwnedRoomId, dry_run: bool) -> Re
 				self.services
 					.rooms
 					.outlier
-					.remove_outlier(stored_event_id, None)
+					.remove_outlier(stored_event_id)
 					.await;
 			}
 			removed_wrong_hash = removed_wrong_hash.saturating_add(1);

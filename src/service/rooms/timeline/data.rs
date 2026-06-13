@@ -17,7 +17,6 @@ use crate::{Dep, rooms, rooms::short::ShortRoomId};
 
 pub(super) struct Data {
 	eventid_pduid: Arc<Map>,
-	roomid_outliereventid: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
 	eventid_pdu: Arc<Map>,
@@ -40,7 +39,6 @@ impl Data {
 		let db = &args.db;
 		Self {
 			eventid_pduid: db["eventid_pduid"].clone(),
-			roomid_outliereventid: db["roomid_outliereventid"].clone(),
 			userroomid_highlightcount: db["userroomid_highlightcount"].clone(),
 			userroomid_notificationcount: db["userroomid_notificationcount"].clone(),
 			eventid_pdu: db["eventid_pdu"].clone(),
@@ -138,28 +136,11 @@ impl Data {
 		let pdus = self.pdus(room_id, PduCount::min());
 		pin_mut!(pdus);
 
-		// Pre-allocate key buffer outside the loop to avoid repeated heap allocations
-		let room_bytes = room_id.as_bytes();
-		let mut key = Vec::with_capacity(room_bytes.len().saturating_add(1).saturating_add(64));
-
 		while let Some((_, pdu)) = pdus.try_next().await? {
-			// Use canonical key format: room_id || 0xFF || event_id
-			// (must match add_pdu_outlier / room_stream expectations)
-			key.clear();
-			key.extend_from_slice(room_bytes);
-			key.push(0xFF);
-			key.extend_from_slice(pdu.event_id.as_bytes());
-
 			if let Ok(json) = self.get_non_outlier_pdu_json(&pdu.event_id).await {
-				// Since we combine outlier and timeline JSON, we just make sure
-				// the JSON is stored in eventid_pdu. The add_pdu_outlier logic handles this.
 				self.eventid_pdu
 					.raw_put(pdu.event_id.as_bytes(), Json(&json));
 				self.eventid_pdu.wake(pdu.event_id.as_bytes());
-				// Must use raw_put to bypass Bincode serializer — .insert()
-				// would prepend an 8-byte length prefix, corrupting lookups.
-				self.roomid_outliereventid
-					.raw_put::<&[u8], &[u8]>(&key, pdu.event_id.as_bytes());
 				count = count.saturating_add(1);
 			}
 		}
@@ -344,14 +325,25 @@ impl Data {
 						}
 					} else {
 						// v12 hashed-room PDUs may not contain room_id in the JSON.
-						// Verify room association via roomid_outliereventid table.
-						let mut key = expected_room.as_bytes().to_vec();
-						key.push(0xFF);
-						key.extend_from_slice(event_id.as_bytes());
-						if self.roomid_outliereventid.exists(&key).await.is_err() {
+						// Verify room association via eventid_metadata table.
+						if let Ok(meta_bytes) =
+							self.eventid_metadata.get(event_id.as_bytes()).await
+						{
+							if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(
+								&meta_bytes,
+							) {
+								let expected_short =
+									self.services.short.get_shortroomid(expected_room).await;
+								if expected_short.is_ok_and(|s| s != meta.short_room_id) {
+									return Err(conduwuit::err!(Database(
+										"Outlier PDU {event_id} is not associated with room \
+										 {expected_room}"
+									)));
+								}
+							}
+						} else {
 							return Err(conduwuit::err!(Database(
-								"Outlier PDU {event_id} is not associated with room \
-								 {expected_room}"
+								"Outlier PDU {event_id} has no metadata"
 							)));
 						}
 					}
@@ -617,31 +609,6 @@ impl Data {
 		self.eventid_pduid
 			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
 
-		// No need to remove from eventid_outlierpdu.
-		// remove_from_timeline will drop it from eventid_pdu if it's not an outlier.
-
-		// CLEANUP: Drop the room outlier index to prevent ghosts during
-		// reorder-timeline
-		let room_id_from_json = json
-			.get("room_id")
-			.and_then(ruma::CanonicalJsonValue::as_str)
-			.and_then(|r| <&RoomId>::try_from(r).ok());
-
-		let room_id = room_id_from_json.map(ToOwned::to_owned).or_else(|| {
-			(json.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create"))
-				.then(|| pdu.event_id.as_str().replace('$', "!"))
-				.and_then(|r| ruma::OwnedRoomId::parse(r).ok())
-		});
-
-		if let Some(room) = room_id {
-			let mut key = room.as_bytes().to_vec();
-			key.push(0xFF);
-			key.extend_from_slice(event_id_bytes);
-			self.roomid_outliereventid
-				.remove_from_batch(&mut batch, &key);
-		}
-
-		// --- Phase 1: Double-Write ---
 		self.eventid_pdu
 			.raw_put_into_batch(&mut batch, event_id_bytes, Json(json));
 
@@ -712,28 +679,6 @@ impl Data {
 		self.eventid_pduid
 			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
 
-		// CLEANUP: Drop the room outlier index to prevent ghosts during
-		// reorder-timeline
-		let room_id_from_json = json
-			.get("room_id")
-			.and_then(ruma::CanonicalJsonValue::as_str)
-			.and_then(|r| <&RoomId>::try_from(r).ok());
-
-		let room_id = room_id_from_json.map(ToOwned::to_owned).or_else(|| {
-			(json.get("type").and_then(ruma::CanonicalJsonValue::as_str) == Some("m.room.create"))
-				.then(|| event_id.as_str().replace('$', "!"))
-				.and_then(|r| ruma::OwnedRoomId::parse(r).ok())
-		});
-
-		if let Some(room) = room_id {
-			let mut key = room.as_bytes().to_vec();
-			key.push(0xFF);
-			key.extend_from_slice(event_id_bytes);
-			self.roomid_outliereventid
-				.remove_from_batch(&mut batch, &key);
-		}
-
-		// --- Phase 1: Double-Write ---
 		self.eventid_pdu
 			.raw_put_into_batch(&mut batch, event_id_bytes, Json(json));
 		self.room_pducount_eventid
