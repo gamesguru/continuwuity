@@ -1830,7 +1830,7 @@ mod tests {
 							let event_id_str = map
 								.get("event_id")
 								.and_then(|v| v.as_str())
-								.map(std::borrow::ToOwned::to_owned);
+								.map(ToOwned::to_owned);
 							let mut eid: Option<OwnedEventId> = None;
 							if let Some(s) = &event_id_str {
 								eid = OwnedEventId::try_from(s.as_str()).ok();
