@@ -111,7 +111,7 @@ mod tests {
 		graph.insert(b.clone(), vec![c.clone()].into_iter().collect());
 
 		let sorted = sort_timeline_events(&entries, &graph);
-		assert_eq!(sorted, vec![a.clone(), b.clone(), c.clone()]);
+		assert_eq!(sorted, vec![a, b, c]);
 	}
 
 	#[test]
@@ -139,6 +139,6 @@ mod tests {
 		// D has 0 in-degree, so it goes first.
 		// A, B, C form a cycle, so they fall back to timestamp sorting: A(10), B(20),
 		// C(30)
-		assert_eq!(sorted, vec![d.clone(), a.clone(), b.clone(), c.clone()]);
+		assert_eq!(sorted, vec![d, a, b, c]);
 	}
 }

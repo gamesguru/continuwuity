@@ -158,7 +158,9 @@ lint:   ##H Lint code
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		AWS_LC_RS_NO_BUNDLE=1 \
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
-		cargo clippy $(CARGO_SCOPE) --locked --no-deps $(CARGO_FLAGS) -- $(if $(CI),-D warnings)
+		CC=gcc \
+		CFLAGS="-Wno-error=unterminated-string-initialization" \
+		cargo +nightly clippy $(CARGO_SCOPE) --all-targets --features full --locked --no-deps $(CARGO_FLAGS) -- $(if $(CI),-D warnings)
 
 .PHONY: test
 test:   ##H Run tests
@@ -171,7 +173,7 @@ test:   ##H Run tests
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		AWS_LC_RS_NO_BUNDLE=1 \
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
-		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
+		cargo test $(CARGO_SCOPE) --locked --all-targets --features full --timings $(CARGO_FLAGS)
 
 
 PREFIX ?= /usr/local

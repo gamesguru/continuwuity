@@ -78,7 +78,7 @@ fn load_pdus_from_file(filename: &str) -> Vec<PduEvent> {
 			let event_id_str = obj.get("event_id").unwrap().as_str().unwrap().to_owned();
 			let event_id = EventId::parse(&event_id_str).unwrap();
 
-			PduEvent::from_id_val(&event_id, obj, None).expect("Failed to parse PduEvent")
+			PduEvent::from_id_val(event_id, obj, None).expect("Failed to parse PduEvent")
 		})
 		.collect()
 }
