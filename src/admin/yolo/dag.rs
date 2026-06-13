@@ -437,7 +437,7 @@ pub(super) async fn get_remote_dag(
 			};
 		}
 
-		let mut verifications = futures::stream::iter(response.pdus.into_iter())
+		let mut verifications = futures::stream::iter(response.pdus)
 			.map(|raw_pdu| {
 				let rv = room_version.clone();
 				async move {

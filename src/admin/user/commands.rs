@@ -455,7 +455,7 @@ pub(super) async fn list_joined_rooms(&self, user_id: String) -> Result {
 		.collect::<Vec<_>>()
 		.join("\n");
 
-	self.write_str(&format!("Rooms {user_id} Joined ({}):\n```\n{body}\n```", rooms.len(),))
+	self.write_str(&format!("Rooms {user_id} Joined ({}):\n```\n{body}\n```", rooms.len()))
 		.await
 }
 
@@ -691,7 +691,7 @@ pub(super) async fn force_join_room(
 	join_room_by_id_helper(self.services, &user_id, &room_id, None, &servers, &None, None)
 		.await?;
 
-	self.write_str(&format!("{user_id} has been joined to {room_id}.",))
+	self.write_str(&format!("{user_id} has been joined to {room_id}."))
 		.await
 }
 
@@ -744,7 +744,7 @@ pub(super) async fn force_leave_room(
 		},
 	}
 
-	self.write_str(&format!("{user_id} has left {room_id}.",))
+	self.write_str(&format!("{user_id} has left {room_id}."))
 		.await
 }
 
@@ -821,7 +821,7 @@ pub(super) async fn make_user_admin(&self, user_id: String) -> Result {
 		.boxed()
 		.await?;
 
-	self.write_str(&format!("{user_id} has been granted admin privileges.",))
+	self.write_str(&format!("{user_id} has been granted admin privileges."))
 		.await
 }
 
