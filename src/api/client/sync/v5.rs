@@ -376,7 +376,7 @@ where
 		}
 
 		// Sort descending by timestamp (most recent first)
-		active_rooms_with_ts.sort_by(|a, b| b.1.cmp(&a.1));
+		active_rooms_with_ts.sort_by_key(|b| std::cmp::Reverse(b.1));
 		let active_rooms: Vec<&RoomId> =
 			active_rooms_with_ts.into_iter().map(|(r, _)| r).collect();
 

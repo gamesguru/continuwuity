@@ -422,41 +422,6 @@ fn auth_server_checks_impl(
 	Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-	use ruma::server_name;
-
-	use super::*;
-
-	#[test]
-	fn test_auth_server_checks_impl_missing_destination() {
-		let server_name = server_name!("local.com");
-		let origin = server_name!("remote.com");
-		let result = auth_server_checks_impl(true, server_name, false, origin, None);
-		assert!(
-			result.is_ok(),
-			"Missing destination should be allowed for backwards compatibility"
-		);
-	}
-
-	#[test]
-	fn test_auth_server_checks_impl_valid_destination() {
-		let server_name = server_name!("local.com");
-		let origin = server_name!("remote.com");
-		let result = auth_server_checks_impl(true, server_name, false, origin, Some(server_name));
-		assert!(result.is_ok(), "Valid destination should be allowed");
-	}
-
-	#[test]
-	fn test_auth_server_checks_impl_invalid_destination() {
-		let server_name = server_name!("local.com");
-		let origin = server_name!("remote.com");
-		let wrong_dest = server_name!("wrong.com");
-		let result = auth_server_checks_impl(true, server_name, false, origin, Some(wrong_dest));
-		assert!(result.is_err(), "Invalid destination should be rejected");
-	}
-}
-
 async fn parse_x_matrix(request: &mut Request) -> Result<XMatrix> {
 	let TypedHeader(Authorization(x_matrix)) = request
 		.parts
@@ -497,5 +462,40 @@ async fn find_token(services: &Services, token: Option<&str>) -> Result<Token> {
 		| Err(e) if !e.is_not_found() => Err(e),
 		| Ok((token, _)) => Ok(token),
 		| _ => Ok(Token::Invalid),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use ruma::server_name;
+
+	use super::*;
+
+	#[test]
+	fn test_auth_server_checks_impl_missing_destination() {
+		let server_name = server_name!("local.com");
+		let origin = server_name!("remote.com");
+		let result = auth_server_checks_impl(true, server_name, false, origin, None);
+		assert!(
+			result.is_ok(),
+			"Missing destination should be allowed for backwards compatibility"
+		);
+	}
+
+	#[test]
+	fn test_auth_server_checks_impl_valid_destination() {
+		let server_name = server_name!("local.com");
+		let origin = server_name!("remote.com");
+		let result = auth_server_checks_impl(true, server_name, false, origin, Some(server_name));
+		assert!(result.is_ok(), "Valid destination should be allowed");
+	}
+
+	#[test]
+	fn test_auth_server_checks_impl_invalid_destination() {
+		let server_name = server_name!("local.com");
+		let origin = server_name!("remote.com");
+		let wrong_dest = server_name!("wrong.com");
+		let result = auth_server_checks_impl(true, server_name, false, origin, Some(wrong_dest));
+		assert!(result.is_err(), "Invalid destination should be rejected");
 	}
 }

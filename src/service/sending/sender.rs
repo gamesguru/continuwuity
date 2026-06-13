@@ -1494,7 +1494,7 @@ mod tests {
 					}
 				}
 			});
-			receipts.push((user_id, 10 + i as u64, json.to_string()));
+			receipts.push((user_id, 10 + u64::try_from(i).unwrap(), json.to_string()));
 		}
 
 		let since = (10, 20);
