@@ -409,7 +409,7 @@ impl Data {
 		let mut pdu_iter = pdu_events.into_iter();
 		let mut outlier_iter = outlier_events.into_iter();
 
-		for (i, pdu_id_res) in pdu_ids.iter().enumerate() {
+		for pdu_id_res in &pdu_ids {
 			if let Ok(pdu_id_handle) = pdu_id_res {
 				// Result comes from timeline
 				let pdu_res: Result<PduEvent> = pdu_iter
@@ -417,11 +417,10 @@ impl Data {
 					.expect("length matches timeline fetch count");
 				match pdu_res {
 					| Ok(pdu) => {
-						let short = expected_shortroomid
-							.map(|s| RawPduId::from(&**pdu_id_handle).shortroomid() == s.to_be_bytes());
-						results.push(
-							Self::check_room_boundary(pdu, room_id, short),
-						);
+						let short = expected_shortroomid.map(|s| {
+							RawPduId::from(&**pdu_id_handle).shortroomid() == s.to_be_bytes()
+						});
+						results.push(Self::check_room_boundary(pdu, room_id, short));
 					},
 					| Err(e) => results.push(Err(e)),
 				}
@@ -432,9 +431,7 @@ impl Data {
 					.expect("length matches outlier fetch count");
 				match outlier_res {
 					| Ok(pdu) => {
-						results.push(
-							Self::check_room_boundary(pdu, room_id, None),
-						);
+						results.push(Self::check_room_boundary(pdu, room_id, None));
 					},
 					| Err(_) => {
 						results.push(Err!(Request(NotFound(
@@ -825,6 +822,8 @@ impl Data {
 	/// Resolve a batch of `pdu_id`s via the two-hop path:
 	/// `room_pducount_eventid` → event_id_bytes → `eventid_pdu` → PduEvent.
 	async fn resolve_pdu_batch(&self, pdu_ids: &[RawPduId]) -> Vec<Result<PduEvent>> {
+		use futures::StreamExt;
+
 		if pdu_ids.is_empty() {
 			return Vec::new();
 		}
