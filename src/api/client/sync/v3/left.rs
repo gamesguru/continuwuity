@@ -204,17 +204,7 @@ pub(super) async fn load_left_room(
 
 	let TimelinePdus { pdus, limited } = timeline;
 
-	let mut stream = pdus
-		.into_iter()
-		.stream()
-		// filter out ignored events from the timeline
-		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
-		.ready_filter(|(_, pdu): &(conduwuit::PduCount, PduEvent)| {
-			use conduwuit::matrix::event::Matches;
-			(&sync_context.filter.room.timeline).matches(pdu)
-		});
-
-	while let Some((_, pdu)) = stream.next().await {
+	for (_, pdu) in pdus {
 		if pdu.event_type() == &TimelineEventType::RoomMember
 			&& pdu.state_key() == Some(syncing_user.as_str())
 		{

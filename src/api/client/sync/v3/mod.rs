@@ -209,9 +209,15 @@ pub(crate) async fn sync_events_route(
 	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.watch(sender_user, sender_device);
 
-	let use_state_after = raw_query
-		.as_deref()
-		.is_some_and(|q| q.contains("use_state_after=true"));
+	let mut use_state_after = false;
+	if let Some(q) = raw_query.as_deref() {
+		for (key, value) in form_urlencoded::parse(q.as_bytes()) {
+			if key == "use_state_after" && value == "true" {
+				use_state_after = true;
+				break;
+			}
+		}
+	}
 
 	let response = build_sync_events(&services, &body, use_state_after).await?;
 	if body.body.since.is_none() || body.body.full_state || !is_sync_response_empty(&response) {
