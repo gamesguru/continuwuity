@@ -420,7 +420,10 @@ async fn join_room_by_id_helper_remote(
 		.and_then(|v| v.as_array())
 		.map(|arr| {
 			arr.iter()
-				.filter_map(|v| v.as_str().and_then(|s| <&ruma::EventId>::try_from(s).ok().map(ToOwned::to_owned)))
+				.filter_map(|v| {
+					v.as_str()
+						.and_then(|s| <&ruma::EventId>::try_from(s).ok().map(ToOwned::to_owned))
+				})
 				.collect()
 		})
 		.unwrap_or_default();
@@ -781,28 +784,42 @@ async fn join_room_by_id_helper_remote(
 			if missing_latest.is_empty() {
 				return;
 			}
-			info!("Forward-filling {} missing extremities from {} after joining room {}", missing_latest.len(), target_server, room_id);
+			info!(
+				"Forward-filling {} missing extremities from {} after joining room {}",
+				missing_latest.len(),
+				target_server,
+				room_id
+			);
 			for event_id in missing_latest {
 				let request = federation::event::get_event::v1::Request {
 					event_id: event_id.clone(),
 					include_unredacted_content: Some(false),
 				};
-				let response = match sending.send_federation_request(&target_server, request).await {
+				let response = match sending
+					.send_federation_request(&target_server, request)
+					.await
+				{
 					| Ok(r) => r,
 					| Err(e) => {
 						warn!("Failed to fetch missing extremity {event_id}: {e}");
 						continue;
 					},
 				};
-				let (parsed_room_id, parsed_event_id, value) = match event_handler.parse_incoming_pdu(&response.pdu).await {
-					| Ok(v) => v,
-					| Err(e) => {
-						warn!("Failed to parse extremity {event_id}: {e}");
-						continue;
-					},
-				};
-				if parsed_room_id != room_id { continue; }
-				if let Err(e) = event_handler.handle_incoming_pdu(&target_server, &room_id, &parsed_event_id, value, true).await {
+				let (parsed_room_id, parsed_event_id, value) =
+					match event_handler.parse_incoming_pdu(&response.pdu).await {
+						| Ok(v) => v,
+						| Err(e) => {
+							warn!("Failed to parse extremity {event_id}: {e}");
+							continue;
+						},
+					};
+				if parsed_room_id != room_id {
+					continue;
+				}
+				if let Err(e) = event_handler
+					.handle_incoming_pdu(&target_server, &room_id, &parsed_event_id, value, true)
+					.await
+				{
 					warn!("Failed to handle extremity {event_id}: {e}");
 				}
 			}

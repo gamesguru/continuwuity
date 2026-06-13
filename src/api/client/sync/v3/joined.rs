@@ -452,7 +452,13 @@ async fn fetch_shortstatehashes(
 	// If we let last_sync_end_shortstatehash remain the ancient state, we might
 	// falsely trigger a full state sync if the state was changed via outliers.
 	if let Some(last_count) = last_sync_end_count {
-		if services.rooms.timeline.next_shortstatehash(room_id, PduCount::Normal(last_count)).await.is_err() {
+		if services
+			.rooms
+			.timeline
+			.next_shortstatehash(room_id, PduCount::Normal(last_count))
+			.await
+			.is_err()
+		{
 			next_hash = Some(current_shortstatehash);
 		}
 	}
@@ -729,7 +735,11 @@ async fn check_joined_since_last_sync(
 ) -> Result<bool> {
 	// If the user's current membership is not "Join", they cannot have "joined
 	// since last sync". We check this early to avoid expensive state queries.
-	let is_currently_joined = services.rooms.state_cache.is_joined(syncing_user, room_id).await;
+	let is_currently_joined = services
+		.rooms
+		.state_cache
+		.is_joined(syncing_user, room_id)
+		.await;
 	if !is_currently_joined {
 		return Ok(false);
 	}

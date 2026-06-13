@@ -93,7 +93,11 @@ fn matches_wildcard(pattern: &str, target: &str) -> bool {
 fn matches_type<E: Event>(event: &E, filter: &RoomEventFilter) -> bool {
 	let kind = event.kind().to_cow_str();
 
-	if filter.not_types.iter().any(|pattern| matches_wildcard(pattern, &kind)) {
+	if filter
+		.not_types
+		.iter()
+		.any(|pattern| matches_wildcard(pattern, &kind))
+	{
 		return false;
 	}
 
