@@ -921,7 +921,10 @@ impl Data {
 
 		// Check for room ID
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().is_some_and(|actual| actual != expected_room) {
+			if pdu
+				.room_id_or_hash()
+				.is_some_and(|actual| actual != expected_room)
+			{
 				return Err(conduwuit::err!(Database(
 					"PDU belongs to room {} (expected {expected_room})",
 					pdu.room_id_or_hash().expect("just checked")

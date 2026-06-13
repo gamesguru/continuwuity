@@ -68,9 +68,13 @@ pub async fn get_pdu_outlier(&self, event_id: &EventId) -> Result<PduEvent> {
 pub fn stream_keys(&self) -> impl Stream<Item = OwnedEventId> + Send + '_ {
 	self.db
 		.eventid_metadata
-		.stream::<OwnedEventId, rooms::timeline::EventMetadata>()
+		.raw_stream()
 		.ignore_err()
-		.broad_filter_map(|(eid, meta)| async move { meta.is_outlier.then_some(eid) })
+		.filter_map(|(key, val)| async move {
+			let eid = OwnedEventId::try_from(std::str::from_utf8(&key).ok()?).ok()?;
+			let meta: rooms::timeline::EventMetadata = bincode::deserialize(&val).ok()?;
+			meta.is_outlier.then_some(eid)
+		})
 }
 
 #[implement(Service)]
@@ -97,9 +101,11 @@ pub fn room_stream<'a>(
 		.flat_map(move |target_short: ShortRoomId| {
 			self.db
 				.eventid_metadata
-				.stream::<OwnedEventId, rooms::timeline::EventMetadata>()
+				.raw_stream()
 				.ignore_err()
-				.broad_filter_map(move |(eid, meta)| async move {
+				.filter_map(move |(key, val)| async move {
+					let eid = OwnedEventId::try_from(std::str::from_utf8(&key).ok()?).ok()?;
+					let meta: rooms::timeline::EventMetadata = bincode::deserialize(&val).ok()?;
 					(meta.is_outlier && meta.short_room_id == target_short).then_some(eid)
 				})
 		})
