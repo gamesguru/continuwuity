@@ -832,21 +832,7 @@ impl Data {
 				self.room_pducount_eventid
 					.rev_raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(move |(pdu_id, event_id_bytes)| async move {
-						let json_result = self.eventid_pdu.get(&event_id_bytes).await;
-						let json_bytes = match json_result {
-							| Ok(h) => h,
-							| Err(ref e) => {
-								conduwuit::warn!(
-									"pdus_rev: eventid_pdu.get failed for event_id_bytes ({} \
-									 bytes): {e}",
-									event_id_bytes.len()
-								);
-								return Err(json_result.unwrap_err());
-							},
-						};
-						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
-					})
+					.wide_and_then(move |kv| self.resolve_pdu(kv))
 			})
 			.try_flatten_stream()
 	}
@@ -864,23 +850,17 @@ impl Data {
 				self.room_pducount_eventid
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(move |(pdu_id, event_id_bytes)| async move {
-						let json_result = self.eventid_pdu.get(&event_id_bytes).await;
-						let json_bytes = match json_result {
-							| Ok(h) => h,
-							| Err(ref e) => {
-								conduwuit::warn!(
-									"pdus: eventid_pdu.get failed for event_id_bytes ({} \
-									 bytes): {e}",
-									event_id_bytes.len()
-								);
-								return Err(json_result.unwrap_err());
-							},
-						};
-						Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
-					})
+					.wide_and_then(move |kv| self.resolve_pdu(kv))
 			})
 			.try_flatten_stream()
+	}
+
+	/// Resolve a (pdu_id, event_id_bytes) pair from `room_pducount_eventid`
+	/// into a full `PdusIterItem` by looking up the PDU JSON in
+	/// `eventid_pdu`.
+	async fn resolve_pdu(&self, (pdu_id, event_id_bytes): KeyVal<'_>) -> Result<PdusIterItem> {
+		let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
+		Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
 	}
 
 	pub(super) fn topo_pdus_rev<'a>(
