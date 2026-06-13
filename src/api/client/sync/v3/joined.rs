@@ -445,23 +445,7 @@ async fn fetch_shortstatehashes(
 		Ok::<_, Error>(hash)
 	};
 
-	let (current_shortstatehash, mut next_hash) = try_join(current_hash, next_hash).await?;
-
-	// If there are literally no events in the room after the last sync token,
-	// then the room's state could not have changed via normal timeline events.
-	// If we let last_sync_end_shortstatehash remain the ancient state, we might
-	// falsely trigger a full state sync if the state was changed via outliers.
-	if let Some(last_count) = last_sync_end_count {
-		if services
-			.rooms
-			.timeline
-			.next_shortstatehash(room_id, PduCount::Normal(last_count))
-			.await
-			.is_err()
-		{
-			next_hash = Some(current_shortstatehash);
-		}
-	}
+	let (current_shortstatehash, next_hash) = try_join(current_hash, next_hash).await?;
 
 	// the room state as of the end of the last sync. if next_shortstatehash
 	// returned None (no events after last_sync_end_count), we fall back to
@@ -733,17 +717,6 @@ async fn check_joined_since_last_sync(
 	}: ShortStateHashes,
 	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
 ) -> Result<bool> {
-	// If the user's current membership is not "Join", they cannot have "joined
-	// since last sync". We check this early to avoid expensive state queries.
-	let is_currently_joined = services
-		.rooms
-		.state_cache
-		.is_joined(syncing_user, room_id)
-		.await;
-	if !is_currently_joined {
-		return Ok(false);
-	}
-
 	// TODO: If the requesting user got state-reset out of the room, this
 	// will be `true` when it shouldn't be. this function should never be called
 	// in that situation, but it may be if the membership cache didn't get updated.
