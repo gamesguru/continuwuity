@@ -269,6 +269,17 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run v19 migrations: {e}"))?;
 	}
 
+	if db["global"]
+		.get(POPULATE_TOPOLOGICAL_INDEX_MARKER)
+		.await
+		.is_not_found()
+	{
+		info!("Running migration 'populate_topological_index'");
+		populate_topological_index(services)
+			.await
+			.map_err(|e| err!("Failed to run 'populate_topological_index': {e}"))?;
+	}
+
 	assert_eq!(
 		services.globals.db.database_version().await,
 		DATABASE_VERSION,
@@ -498,6 +509,73 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 const MIGRATE_EVENT_STORE_TO_SSOT_MARKER: &[u8] = b"migrate_event_store_to_ssot";
 async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	services.db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
+	Ok(())
+}
+
+const POPULATE_TOPOLOGICAL_INDEX_MARKER: &[u8] = b"populate_topological_index";
+async fn populate_topological_index(services: &Services) -> Result<()> {
+	info!("Starting migration to populate roomid_topologicalorder_pducount...");
+
+	let db = &services.db;
+	let room_pducount_eventid = db["room_pducount_eventid"].clone();
+	let eventid_metadata = db["eventid_metadata"].clone();
+	let eventid_pdu = db["eventid_pdu"].clone();
+	let roomid_topologicalorder_pducount = db["roomid_topologicalorder_pducount"].clone();
+
+	let mut stream = room_pducount_eventid.raw_stream();
+
+	let mut total_migrated: usize = 0;
+
+	while let Some(Ok((pdu_id_bytes, event_id_bytes))) = stream.next().await {
+		let pdu_id: crate::rooms::timeline::RawPduId = (&*pdu_id_bytes).into();
+
+		let Ok(json_bytes) = eventid_pdu.get_blocking(&event_id_bytes) else {
+			continue;
+		};
+
+		let Ok(pdu) = serde_json::from_slice::<crate::conduwuit::PduEvent>(&json_bytes) else {
+			continue;
+		};
+
+		let Ok(metadata_bytes) = eventid_metadata.get_blocking(&event_id_bytes) else {
+			continue;
+		};
+
+		let Ok(mut meta) = bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&metadata_bytes) else {
+			continue;
+		};
+
+		let mut max_depth = 0;
+		for prev_id in pdu.prev_events() {
+			if let Ok(prev_bytes) = eventid_metadata.get(prev_id.as_bytes()).await {
+				if let Ok(prev_meta) = bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&prev_bytes) {
+					max_depth = max_depth.max(prev_meta.local_topological_depth);
+				}
+			}
+		}
+
+		let local_topological_depth = max_depth + 1;
+		meta.local_topological_depth = local_topological_depth;
+
+		if let Ok(new_metadata_bytes) = bincode::serialize(&meta) {
+			eventid_metadata.put(&event_id_bytes, new_metadata_bytes);
+		}
+
+		let mut topo_key = Vec::with_capacity(32);
+		topo_key.extend_from_slice(&pdu_id.shortroomid());
+		topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
+		topo_key.extend_from_slice(&pdu_id.as_ref()[8..]);
+		roomid_topologicalorder_pducount.put(&topo_key, event_id_bytes.to_vec());
+
+		total_migrated = total_migrated.saturating_add(1);
+		if total_migrated.is_multiple_of(10000) {
+			info!("Migrated {} events to topological index...", total_migrated);
+		}
+	}
+
+	info!("Successfully populated topological index for {total_migrated} events!");
+	db["global"].insert(POPULATE_TOPOLOGICAL_INDEX_MARKER, []);
+	db.db.sort()?;
 	Ok(())
 }
 
