@@ -99,13 +99,13 @@ fn matches_type<E: Event>(event: &E, filter: &RoomEventFilter) -> bool {
 	if filter
 		.not_types
 		.iter()
-		.any(|pattern| matches_wildcard(pattern, &kind))
+		.any(|pattern| matches_wildcard(&kind, pattern))
 	{
 		return false;
 	}
 
 	if let Some(types) = filter.types.as_ref() {
-		if !types.iter().any(|pattern| matches_wildcard(pattern, &kind)) {
+		if !types.iter().any(|pattern| matches_wildcard(&kind, pattern)) {
 			return false;
 		}
 	}
