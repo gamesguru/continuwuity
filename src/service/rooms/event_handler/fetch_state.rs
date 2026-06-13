@@ -62,7 +62,7 @@ where
 				&server,
 				get_room_state::v1::Request::new(event_id, room_id),
 			);
-			match tokio::time::timeout(Duration::from_secs(60), req).await {
+			match tokio::time::timeout(Duration::from_mins(1), req).await {
 				| Ok(Ok(res)) => Ok((server, res)),
 				| Ok(Err(e)) => Err((server, e)),
 				| Err(_) =>

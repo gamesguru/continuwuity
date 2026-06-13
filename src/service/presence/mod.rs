@@ -87,7 +87,7 @@ impl crate::Service for Service {
 			std::collections::HashMap::<OwnedUserId, tokio::task::JoinHandle<()>>::new();
 		let mut events_received: u64 = 0;
 		let mut next_tally = Instant::now()
-			.checked_add(Duration::from_secs(300))
+			.checked_add(Duration::from_mins(5))
 			.unwrap_or_else(Instant::now);
 
 		let self_flush = Arc::clone(&self);
@@ -243,7 +243,7 @@ impl crate::Service for Service {
 				);
 				events_received = 0;
 				next_tally = Instant::now()
-					.checked_add(Duration::from_secs(300))
+					.checked_add(Duration::from_mins(5))
 					.unwrap_or_else(Instant::now);
 			}
 		}

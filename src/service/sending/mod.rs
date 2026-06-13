@@ -135,7 +135,7 @@ impl crate::Service for Service {
 		let stats_self = self.clone();
 		let stats_task = self.server.runtime().spawn(async move {
 			loop {
-				tokio::time::sleep(Duration::from_secs(300)).await;
+				tokio::time::sleep(Duration::from_mins(5)).await;
 				stats_self.stats.report_and_reset();
 				stats_self.server.metrics.sending_queue_total.store(
 					stats_self

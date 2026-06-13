@@ -164,7 +164,7 @@ where
 
 				for (idx, (result, event_id)) in miss_indices
 					.into_iter()
-					.zip(db_results.into_iter().zip(misses.into_iter()))
+					.zip(db_results.into_iter().zip(misses))
 				{
 					let short = match result {
 						| Ok(ref handle) => {
@@ -379,8 +379,8 @@ where
 
 				for ((&miss_key, res), idx) in misses
 					.iter()
-					.zip(db_results.into_iter())
-					.zip(miss_indices.into_iter())
+					.zip(db_results)
+					.zip(miss_indices)
 				{
 					let val: Result<Id> = res.deserialized();
 
@@ -467,8 +467,8 @@ where
 
 				for ((&miss_key, res), idx) in misses
 					.iter()
-					.zip(db_results.into_iter())
-					.zip(miss_indices.into_iter())
+					.zip(db_results)
+					.zip(miss_indices)
 				{
 					if let Ok(ref val) = res {
 						self.shortstatekey_statekey_cache
@@ -547,8 +547,8 @@ where
 	let (short_state_keys, short_event_ids): pair_of!(Vec<_>) = short_state.unzip().await;
 
 	StreamExt::zip(
-		self.multi_get_statekey_from_short(stream::iter(short_state_keys.into_iter())),
-		self.multi_get_eventid_from_short(stream::iter(short_event_ids.into_iter())),
+		self.multi_get_statekey_from_short(stream::iter(short_state_keys)),
+		self.multi_get_eventid_from_short(stream::iter(short_event_ids)),
 	)
 	.ready_filter_map(|state_event| match state_event {
 		| (Ok(state_key), Ok(event_id)) => Some(Ok((state_key, event_id))),

@@ -74,7 +74,7 @@ impl crate::Service for Service {
 	async fn clear_cache(&self) { self.bad_event_ratelimiter.write().clear(); }
 
 	async fn worker(self: Arc<Self>) -> Result<()> {
-		let mut interval = tokio::time::interval(std::time::Duration::from_secs(60)); // 1 min
+		let mut interval = tokio::time::interval(std::time::Duration::from_mins(1)); // 1 min
 
 		let mut last_http_success = 0;
 		let mut last_http_fail = 0;
@@ -287,7 +287,7 @@ impl crate::Service for Service {
 			// are safe to remove.
 			{
 				const MAX_EVICT_AGE: std::time::Duration =
-					std::time::Duration::from_secs(60 * 60 * 8);
+					std::time::Duration::from_hours(8);
 				let before = self.bad_event_ratelimiter.read().len();
 				self.bad_event_ratelimiter
 					.write()
