@@ -1142,6 +1142,15 @@ impl Service {
 			.pdus_rev(room_id, until.unwrap_or_else(PduCount::max))
 	}
 
+	pub fn topo_pdus_rev<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+		until: Option<PduCount>,
+	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
+		self.db
+			.topo_pdus_rev(room_id, until.unwrap_or_else(PduCount::max))
+	}
+
 	#[tracing::instrument(skip(self), level = "info")]
 	pub async fn fix_pdu_event_ids(&self) -> Result<usize> { self.db.fix_pdu_event_ids().await }
 
@@ -1153,6 +1162,17 @@ impl Service {
 		from: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.db.pdus(room_id, from.unwrap_or_else(PduCount::min))
+	}
+
+	/// Forward iteration using topological ordering, starting after `from`.
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub fn topo_pdus<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+		from: Option<PduCount>,
+	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
+		self.db
+			.topo_pdus(room_id, from.unwrap_or_else(PduCount::min))
 	}
 }
 
