@@ -939,6 +939,7 @@ impl Service {
 
 	pub async fn mark_device_key_update(&self, user_id: &UserId) {
 		let count = self.services.globals.next_count().unwrap();
+		info!(%user_id, %count, "Marking device key update");
 
 		self.services
 			.state_cache

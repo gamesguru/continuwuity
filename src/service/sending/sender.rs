@@ -434,6 +434,7 @@ impl Service {
 		pin_mut!(server_rooms);
 		let mut device_list_changes = HashSet::<OwnedUserId>::new();
 		while let Some(room_id) = server_rooms.next().await {
+			info!(%room_id, "Checking room for device list changes");
 			let keys_changed = self
 				.services
 				.users
@@ -442,6 +443,7 @@ impl Service {
 
 			pin_mut!(keys_changed);
 			while let Some((user_id, count)) = keys_changed.next().await {
+				info!(%user_id, %count, %room_id, "Detected device list change");
 				if count > since.1 {
 					break;
 				}
