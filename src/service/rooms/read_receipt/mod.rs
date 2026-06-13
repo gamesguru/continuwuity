@@ -152,7 +152,7 @@ where
 			value.json().get(),
 		);
 		match receipt {
-			| Ok(value) =>
+			| Ok(value) => {
 				for (event_id, new_receipts) in value.content {
 					let existing_receipts = json.entry(event_id).or_default();
 					for (receipt_type, new_users) in new_receipts {
@@ -174,7 +174,8 @@ where
 							}
 						}
 					}
-				},
+				}
+			},
 			| _ => {
 				debug!("failed to parse receipt: {:?}", receipt);
 			},

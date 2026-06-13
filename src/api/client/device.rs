@@ -133,6 +133,7 @@ pub(crate) async fn delete_device_route(
 			.users
 			.remove_device(sender_user, &body.device_id)
 			.await;
+		flush_user_rooms(&services, sender_user).await;
 
 		return Ok(delete_device::v3::Response {});
 	}
@@ -151,6 +152,7 @@ pub(crate) async fn delete_device_route(
 		.users
 		.remove_device(sender_user, &body.device_id)
 		.await;
+	flush_user_rooms(&services, sender_user).await;
 
 	Ok(delete_device::v3::Response {})
 }
@@ -183,6 +185,7 @@ pub(crate) async fn delete_devices_route(
 		for device_id in &body.devices {
 			services.users.remove_device(sender_user, device_id).await;
 		}
+		flush_user_rooms(&services, sender_user).await;
 
 		return Ok(delete_devices::v3::Response {});
 	}
@@ -200,6 +203,15 @@ pub(crate) async fn delete_devices_route(
 	for device_id in &body.devices {
 		services.users.remove_device(sender_user, device_id).await;
 	}
+	flush_user_rooms(&services, sender_user).await;
 
 	Ok(delete_devices::v3::Response {})
+}
+
+async fn flush_user_rooms(services: &conduwuit_service::Services, user_id: &ruma::UserId) {
+	let rooms_joined = services.rooms.state_cache.rooms_joined(user_id);
+	tokio::pin!(rooms_joined);
+	while let Some(room_id) = rooms_joined.next().await {
+		let _ = services.sending.flush_room(room_id).await;
+	}
 }

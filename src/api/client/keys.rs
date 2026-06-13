@@ -106,12 +106,14 @@ pub(crate) async fn upload_keys_route(
 					.users
 					.add_device_keys(sender_user, sender_device, device_keys)
 					.await;
+				flush_user_rooms(&services, sender_user).await;
 			}
 		} else {
 			services
 				.users
 				.add_device_keys(sender_user, sender_device, device_keys)
 				.await;
+			flush_user_rooms(&services, sender_user).await;
 		}
 	}
 
@@ -219,6 +221,8 @@ pub(crate) async fn upload_signing_keys_route(
 			true, // notify so that other users see the new keys
 		)
 		.await?;
+
+	flush_user_rooms(&services, sender_user).await;
 
 	info!(
 		target: "cross_signing",
@@ -363,6 +367,8 @@ pub(crate) async fn upload_signatures_route(
 			}
 		}
 	}
+
+	flush_user_rooms(&services, sender_user).await;
 
 	Ok(upload_signatures::v3::Response { failures: BTreeMap::new() })
 }
@@ -719,4 +725,12 @@ pub(crate) async fn claim_keys_helper(
 	}
 
 	Ok(claim_keys::v3::Response { failures, one_time_keys })
+}
+
+async fn flush_user_rooms(services: &Services, user_id: &UserId) {
+	let rooms_joined = services.rooms.state_cache.rooms_joined(user_id);
+	tokio::pin!(rooms_joined);
+	while let Some(room_id) = rooms_joined.next().await {
+		let _ = services.sending.flush_room(room_id).await;
+	}
 }
