@@ -497,34 +497,7 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 
 const MIGRATE_EVENT_STORE_TO_SSOT_MARKER: &[u8] = b"migrate_event_store_to_ssot";
 async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
-	info!("Starting event store SSOT migration (Timeline)...");
-
-	let db = &services.db;
-	// pduid_pdu has been dropped, so we cannot run the migration from it.
-	let eventid_pduid = db["eventid_pduid"].clone();
-
-	let mut timeline_stream = eventid_pduid.raw_stream();
-	let mut timeline_migrated: usize = 0;
-
-	while let Some(Ok((event_id_bytes, _pdu_id_bytes))) = timeline_stream.next().await {
-		// pduid_pdu has been dropped. We cannot migrate from it anymore.
-		// If an admin needs to migrate an old database, they must first upgrade to a
-		// version that contains the migration, and then upgrade to this version.
-		warn!(
-			"Found unmigrated event {} in eventid_pduid, but pduid_pdu has been dropped. This \
-			 database must be migrated using an older version of conduwuit first.",
-			String::from_utf8_lossy(event_id_bytes)
-		);
-		timeline_migrated = timeline_migrated.saturating_add(1);
-
-		if timeline_migrated.is_multiple_of(10000) {
-			info!("Skipped {} unmigrated timeline PDUs...", timeline_migrated);
-		}
-	}
-
-	info!("Timeline migration complete. Migrated {timeline_migrated} PDUs.");
-	db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
-	db.db.sort()?;
+	services.db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
 	Ok(())
 }
 
