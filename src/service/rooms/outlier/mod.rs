@@ -3,7 +3,10 @@ use std::sync::Arc;
 use conduwuit::{
 	Result, implement, info,
 	matrix::{Event, PduEvent},
-	utils::stream::{BroadbandExt, TryIgnore},
+	utils::{
+		ReadyExt,
+		stream::{BroadbandExt, TryIgnore},
+	},
 };
 use database::{Deserialized, Json, Map};
 use futures::{FutureExt, Stream, StreamExt};
@@ -70,7 +73,7 @@ pub fn stream_keys(&self) -> impl Stream<Item = OwnedEventId> + Send + '_ {
 		.eventid_metadata
 		.raw_stream()
 		.ignore_err()
-		.filter_map(|(key, val)| async move {
+		.ready_filter_map(|(key, val)| {
 			let eid = OwnedEventId::try_from(std::str::from_utf8(&key).ok()?).ok()?;
 			let meta: rooms::timeline::EventMetadata = bincode::deserialize(&val).ok()?;
 			meta.is_outlier.then_some(eid)
@@ -103,7 +106,7 @@ pub fn room_stream<'a>(
 				.eventid_metadata
 				.raw_stream()
 				.ignore_err()
-				.filter_map(move |(key, val)| async move {
+				.ready_filter_map(move |(key, val)| {
 					let eid = OwnedEventId::try_from(std::str::from_utf8(&key).ok()?).ok()?;
 					let meta: rooms::timeline::EventMetadata = bincode::deserialize(&val).ok()?;
 					(meta.is_outlier && meta.short_room_id == target_short).then_some(eid)
