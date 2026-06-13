@@ -919,18 +919,13 @@ impl Data {
 			},
 		};
 
+		// Check for room ID
 		if let Some(expected_room) = room_id {
-			let actual_room = pdu.room_id_or_hash();
-			if let Some(actual_room) = actual_room {
-				if actual_room != expected_room {
-					return Err(conduwuit::err!(Database(
-						"PDU does belong to room {actual_room} (expected {expected_room})"
-					)));
-				}
-			} else {
-				// v12 hashed-room PDUs may not contain room_id in the JSON.
-				// We do not have ShortRoomId here for the expected room, but
-				// we are called from an iterator that already filtered by it.
+			if pdu.room_id_or_hash().is_some_and(|actual| actual != expected_room) {
+				return Err(conduwuit::err!(Database(
+					"PDU belongs to room {} (expected {expected_room})",
+					pdu.room_id_or_hash().expect("just checked")
+				)));
 			}
 		}
 
