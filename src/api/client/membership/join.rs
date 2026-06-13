@@ -774,7 +774,7 @@ async fn join_room_by_id_helper_remote(
 		let sending = services.sending.clone();
 		let event_handler = services.rooms.event_handler.clone();
 
-		tokio::spawn(async move {
+		services.server.runtime().spawn(async move {
 			let mut missing_latest = Vec::new();
 			for event_id in remote_latest_events {
 				if !timeline.pdu_exists(&event_id).await {
