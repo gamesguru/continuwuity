@@ -55,8 +55,23 @@ impl RawId {
 		}
 	}
 
+	/// Returns a canonical 16-byte key [shortroomid(8) | shorteventid(8)]
+	/// that is safe for both Normal and Backfilled variants. Use this instead
+	/// of as_ref() slicing when you need a uniform pdu_id representation.
 	#[inline]
 	#[must_use]
+	pub fn to_short_key(self) -> [u8; 16] {
+		let mut key = [0_u8; 16];
+		key[..8].copy_from_slice(&self.shortroomid());
+		key[8..].copy_from_slice(&self.shorteventid());
+		key
+	}
+
+	#[deprecated = "use shortroomid(), shorteventid(), or to_short_key() -- as_bytes() returns \
+	                different lengths for Normal (16) vs Backfilled (24) and raw slicing will \
+	                silently yield wrong bytes for Backfilled variants"]
+	#[allow(clippy::must_use_candidate)]
+	#[inline]
 	pub fn as_bytes(&self) -> &[u8] {
 		match self {
 			| Self::Normal(raw) => raw,
@@ -67,7 +82,12 @@ impl RawId {
 
 impl AsRef<[u8]> for RawId {
 	#[inline]
-	fn as_ref(&self) -> &[u8] { self.as_bytes() }
+	fn as_ref(&self) -> &[u8] {
+		match self {
+			| Self::Normal(raw) => raw,
+			| Self::Backfilled(raw) => raw,
+		}
+	}
 }
 
 impl From<&[u8]> for RawId {
