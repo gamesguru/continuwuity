@@ -2,6 +2,9 @@
 Created on Sat Apr 04 13:21:17 2026
 
 @author: shane
+
+Single-commit baseline comparison.
+Bulk JOIN approach: scales O(n) with limit.
 */
 
 WITH baseline_commit AS (
@@ -23,64 +26,48 @@ recent_runs AS (
     ORDER BY {order}
     LIMIT {limit}
 ),
-run_regs AS (
-    SELECT
-        r.id,
-        r.version_string,
-        r.run_date,
-        r.n_pass,
-        r.n_fail,
-        r.n_skip,
-        r.profile,
-        r.room_version,
-        r.features,
-        r.os,
-        r.arch,
-        counts.run_total,
-        counts.new_pass,
-        counts.new_skip,
-        counts.new_fail,
-        counts.new_failures_list,
-        counts.new_passes_list
+matched_baselines AS (
+    SELECT DISTINCT ON (r.id) r.id AS run_id, b2.id AS baseline_run_id
     FROM recent_runs r
-    LEFT JOIN LATERAL (
-        SELECT b2.id AS baseline_run_id
-        FROM baseline_runs b2
-        WHERE b2.os IS NOT DISTINCT FROM r.os
-          AND b2.arch IS NOT DISTINCT FROM r.arch
-          AND b2.profile IS NOT DISTINCT FROM r.profile
-          AND b2.room_version IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
-        LIMIT 1
-    ) mb_run_id ON TRUE
-    LEFT JOIN LATERAL (
-        SELECT
-            COUNT(*) as run_total,
-            COUNT(*) FILTER (WHERE rd.status = 'pass' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'pass'))) as new_pass,
-            COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'fail'))) as new_fail,
-            COUNT(*) FILTER (WHERE rd.status = 'skip' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'skip'))) as new_skip,
-            STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'fail'))) as new_failures_list,
-            STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'pass'))) as new_passes_list
-        FROM run_details rd
-        LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = mb_run_id.baseline_run_id
-        WHERE rd.run_id = r.id
-    ) counts ON TRUE
-    WHERE counts.run_total > 0
+    LEFT JOIN baseline_runs b2
+        ON b2.os IS NOT DISTINCT FROM r.os
+        AND b2.arch IS NOT DISTINCT FROM r.arch
+        AND b2.profile IS NOT DISTINCT FROM r.profile
+        AND b2.room_version IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+),
+run_agg AS (
+    SELECT
+        rd.run_id,
+        COUNT(*) as run_total,
+        COUNT(*) FILTER (WHERE rd.status = 'pass' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'pass'))) as new_pass,
+        COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'fail'))) as new_fail,
+        COUNT(*) FILTER (WHERE rd.status = 'skip' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'skip'))) as new_skip,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name)
+            FILTER (WHERE rd.status = 'fail' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'fail'))) as new_failures_list,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name)
+            FILTER (WHERE rd.status = 'pass' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'pass'))) as new_passes_list
+    FROM run_details rd
+    JOIN matched_baselines mb ON mb.run_id = rd.run_id
+    LEFT JOIN run_details bmb ON bmb.test_name = rd.test_name AND bmb.run_id = mb.baseline_run_id
+    GROUP BY rd.run_id
 )
 SELECT
-    id AS run_id,
-    version_string,
-    to_char(run_date AT TIME ZONE '{tz_sql}', 'YYYY-MM-DD HH24:MI:SS') AS run_date,
-    (n_pass + n_skip + n_fail) AS n_total,
-    n_pass,
-    n_skip,
-    n_fail,
-    new_pass,
-    new_fail,
-    profile,
-    room_version,
-    regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g') AS features,
-    os,
-    arch,
+    r.id AS run_id,
+    r.version_string,
+    to_char(r.run_date AT TIME ZONE '{tz_sql}', 'YYYY-MM-DD HH24:MI:SS') AS run_date,
+    (r.n_pass + r.n_skip + r.n_fail) AS n_total,
+    r.n_pass,
+    r.n_skip,
+    r.n_fail,
+    a.new_pass,
+    a.new_fail,
+    r.profile,
+    r.room_version,
+    regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g') AS features,
+    r.os,
+    r.arch,
     {columns_tail}
 FROM
-    run_regs
+    recent_runs r
+    JOIN run_agg a ON a.run_id = r.id
+WHERE a.run_total > 0

@@ -76,7 +76,8 @@ if verbose:
     cols.extend(["date_last_passed", "branches_passed_on"])
 if new_passes:
     cols.append("new_passes_list")
-columns_tail = ",\n    ".join(cols)
+# Global query uses 'a.' prefix (run_agg alias), baseline uses bare names
+columns_tail = ",\n    ".join(f"a.{c}" for c in cols)
 
 if like_str == "all":
     like_filter = ""
