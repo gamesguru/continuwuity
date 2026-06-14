@@ -186,6 +186,8 @@ impl Data {
 		Ok(fixed)
 	}
 
+	// TODO: uses shorteventid() not as_ref()[8..] — Backfilled RawPduIds are
+	// 24 bytes with a zero-tag; raw slicing yields wrong bytes. See RawId docs.
 	pub(super) fn topo_pducount_key(pdu_id: &RawPduId, local_topological_depth: u64) -> Vec<u8> {
 		let mut topo_key = Vec::with_capacity(32);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());

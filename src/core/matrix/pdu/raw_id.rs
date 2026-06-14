@@ -2,6 +2,10 @@ use arrayvec::ArrayVec;
 
 use super::{Count, Id, ShortEventId, ShortId, ShortRoomId};
 
+// TODO: RawId has two byte layouts — Normal is 16 bytes [room(8) | count(8)],
+// Backfilled is 24 bytes [room(8) | 0x00_tag(8) | count(8)]. NEVER use
+// as_ref()[8..] to extract the count; it yields zeros for Backfilled. Always
+// use shortroomid() and shorteventid() which handle both variants correctly.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum RawId {
 	Normal(RawIdNormal),
@@ -100,6 +104,9 @@ impl From<Id> for RawId {
 				Self::Normal(vec.as_ref().try_into().expect("RawVec into RawId::Normal"))
 			},
 			| Count::Backfilled(shorteventid) => {
+				// Zero-tag ensures backfilled keys sort before all Normal keys
+				// in RocksDB byte ordering. This makes the raw byte layout 24
+				// bytes instead of 16 — as_ref()[8..] will NOT give the count.
 				vec.extend(0_u64.to_be_bytes());
 				vec.extend(shorteventid.to_be_bytes());
 				Self::Backfilled(

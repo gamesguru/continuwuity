@@ -565,10 +565,13 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 			eventid_metadata.put(event_id_bytes, new_metadata_bytes);
 		}
 
+		// TODO: never use as_ref()[8..] on RawPduId — Backfilled IDs are 24 bytes
+		// with a zero-tag at [8..16], so as_ref()[8..] yields zeros instead of the
+		// count. Always use shorteventid() which handles both Normal and Backfilled.
 		let mut topo_key = Vec::with_capacity(32);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());
 		topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
-		topo_key.extend_from_slice(&pdu_id.as_ref()[8..]);
+		topo_key.extend_from_slice(&pdu_id.shorteventid());
 		roomid_topologicalorder_pducount.put(&topo_key, event_id_bytes.to_vec());
 
 		total_migrated = total_migrated.saturating_add(1);
