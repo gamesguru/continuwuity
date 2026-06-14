@@ -70,6 +70,13 @@ impl Data {
 			.filter(|count| matches!(count, PduCount::Normal(_)))
 			.unwrap_or_else(PduCount::max);
 
+		conduwuit::info!(
+			"last_timeline_count for {}: {:?} (seek from {:?})",
+			room_id,
+			last_count,
+			PduCount::max()
+		);
+
 		Ok(last_count)
 	}
 

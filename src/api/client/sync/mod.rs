@@ -6,11 +6,12 @@ use std::collections::VecDeque;
 use conduwuit::{
 	Event, PduCount, Result, debug_warn, err, info,
 	matrix::pdu::PduEvent,
-	ref_at, trace,
+	ref_at,
 	utils::stream::{BroadbandExt, ReadyExt, TryIgnore, WidebandExt},
+	warn,
 };
 use conduwuit_service::Services;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use ruma::{
 	OwnedUserId, RoomId, UserId,
 	events::TimelineEventType::{
@@ -61,6 +62,11 @@ async fn load_timeline(
 
 			if last_timeline_count <= starting_count {
 				// no messages have been sent in this room since `starting_count`
+				info!(
+					"load_timeline early return for {}: last_timeline_count={:?} <= \
+					 starting_count={:?}",
+					room_id, last_timeline_count, starting_count
+				);
 				return Ok(TimelinePdus::default());
 			}
 
@@ -72,6 +78,7 @@ async fn load_timeline(
 				.rooms
 				.timeline
 				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
+				.inspect_err(|e| warn!("sync timeline pdus_rev error for {room_id}: {e}"))
 				.ignore_err()
 				.ready_take_while(move |&(pducount, _)| pducount > starting_count)
 				.map(move |mut pdu| {
@@ -98,6 +105,7 @@ async fn load_timeline(
 				.rooms
 				.timeline
 				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
+				.inspect_err(|e| warn!("sync initial timeline pdus_rev error for {room_id}: {e}"))
 				.ignore_err()
 				.map(move |mut pdu| {
 					pdu.1.set_unsigned(Some(sender_user));
@@ -165,13 +173,21 @@ async fn load_timeline(
 		limited = pdu_stream.next().await.is_some();
 	}
 
-	trace!(
-		"syncing {:?} timeline pdus from {:?} to {:?} (limited = {:?})",
-		pdus.len(),
-		starting_count,
-		ending_count,
-		limited,
-	);
+	if pdus.is_empty() && starting_count.is_some() {
+		info!(
+			"sync: 0 timeline pdus for {} from {:?} to {:?} (limited = {:?})",
+			room_id, starting_count, ending_count, limited,
+		);
+	} else {
+		info!(
+			"sync: {:?} timeline pdus for {} from {:?} to {:?} (limited = {:?})",
+			pdus.len(),
+			room_id,
+			starting_count,
+			ending_count,
+			limited,
+		);
+	}
 
 	Ok(TimelinePdus { pdus, limited })
 }
