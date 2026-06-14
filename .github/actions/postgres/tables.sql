@@ -49,10 +49,15 @@ CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 -- Pre-computed set of tests that have ever passed, per room_version.
 -- Refreshed by CI after each insert. Enables O(1) regression lookups.
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ever_passed AS
-SELECT DISTINCT rd.test_name, COALESCE(r.room_version, '11') AS rv
+SELECT rd.test_name,
+       COALESCE(r.room_version, '11') AS rv,
+       MAX(r.run_date)::date::text AS last_passed,
+       '[' || STRING_AGG(DISTINCT LEFT(r.branch, 30), ', ') || ']' AS branches,
+       (array_agg(LEFT(r.commit_hash, 10) ORDER BY r.run_date DESC))[1] AS last_commit
 FROM run_details rd
 JOIN runs r ON rd.run_id = r.id
-WHERE rd.status = 'pass';
+WHERE rd.status = 'pass'
+GROUP BY rd.test_name, COALESCE(r.room_version, '11');
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_ever_passed
 ON mv_ever_passed (test_name, rv);
