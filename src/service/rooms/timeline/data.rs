@@ -70,7 +70,7 @@ impl Data {
 			.filter(|count| matches!(count, PduCount::Normal(_)))
 			.unwrap_or_else(PduCount::max);
 
-		conduwuit::info!(
+		conduwuit::info!(target: "timeline_debug",
 			"last_timeline_count for {}: {:?} (seek from {:?})",
 			room_id,
 			last_count,
@@ -773,7 +773,7 @@ impl Data {
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		let seek_count = until.saturating_inc(Direction::Backward);
-		conduwuit::info!(
+		conduwuit::info!(target: "timeline_debug",
 			"pdus_rev for {}: until={:?}, seek_count={:?}",
 			room_id,
 			until,
@@ -784,7 +784,7 @@ impl Data {
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				let key_bytes: Vec<u8> = current.as_ref().to_vec();
-				conduwuit::info!(
+				conduwuit::info!(target: "timeline_debug",
 					"pdus_rev seek key for {}: {:?} ({} bytes, prefix={:?})",
 					room_id,
 					key_bytes,
@@ -794,7 +794,7 @@ impl Data {
 				self.room_pducount_eventid
 					.rev_raw_stream_from(&current)
 					.inspect_ok(move |(key, _val)| {
-						conduwuit::info!(
+						conduwuit::info!(target: "timeline_debug",
 							"pdus_rev raw item: key={:?} ({} bytes)",
 							key.to_vec(),
 							key.len()
@@ -840,7 +840,7 @@ impl Data {
 		let json_bytes = match self.eventid_pdu.get(&event_id_bytes).await {
 			| Ok(h) => h,
 			| Err(e) => {
-				conduwuit::info!(
+				conduwuit::info!(target: "timeline_debug",
 					"resolve_pdu: eventid_pdu lookup failed for key ({} bytes, utf8={:?}): {e}",
 					event_id_bytes.len(),
 					std::str::from_utf8(event_id_bytes).ok(),
@@ -850,6 +850,7 @@ impl Data {
 		};
 		Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref())).map_err(|e| {
 			conduwuit::info!(
+				target: "timeline_debug",
 				"resolve_pdu: parse_json_slice failed for key ({} bytes, utf8={:?}): {e}",
 				event_id_bytes.len(),
 				std::str::from_utf8(event_id_bytes).ok(),

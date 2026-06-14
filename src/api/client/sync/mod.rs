@@ -185,11 +185,13 @@ async fn load_timeline(
 
 	if pdus.is_empty() && starting_count.is_some() {
 		info!(
+			target: "timeline_debug",
 			"sync: 0 timeline pdus for {} from {:?} to {:?} (limited = {:?})",
 			room_id, starting_count, ending_count, limited,
 		);
 	} else {
 		info!(
+			target: "timeline_debug",
 			"sync: {:?} timeline pdus for {} from {:?} to {:?} (limited = {:?})",
 			pdus.len(),
 			room_id,
