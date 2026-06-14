@@ -190,7 +190,7 @@ impl Data {
 		let mut topo_key = Vec::with_capacity(32);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());
 		topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
-		topo_key.extend_from_slice(&pdu_id.as_ref()[8..]);
+		topo_key.extend_from_slice(&pdu_id.shorteventid());
 		topo_key
 	}
 
@@ -1048,7 +1048,7 @@ impl Data {
 		} else {
 			let token_pdu_id = self.count_to_id(room_id, token, dir).await?;
 			if let Ok(mut key) = self.pdu_id_to_topo_key(&token_pdu_id).await {
-				key[16..24].copy_from_slice(&current.as_ref()[8..]);
+				key[16..24].copy_from_slice(&current.shorteventid());
 				return Ok(key);
 			}
 
@@ -1079,7 +1079,7 @@ impl Data {
 
 			if let Some(Ok(nearest_id)) = nearest_pdu_id {
 				let mut key = self.pdu_id_to_topo_key(&nearest_id).await?;
-				key[16..24].copy_from_slice(&current.as_ref()[8..]);
+				key[16..24].copy_from_slice(&current.shorteventid());
 				Ok(key)
 			} else if dir == Direction::Forward {
 				Ok(Self::topo_pducount_key(current, u64::MAX))
