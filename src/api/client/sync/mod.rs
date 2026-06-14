@@ -80,6 +80,16 @@ async fn load_timeline(
 				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
 				.inspect_err(|e| warn!("sync timeline pdus_rev error for {room_id}: {e}"))
 				.ignore_err()
+				.inspect(move |(pducount, _)| {
+					info!(
+						"sync filter check for {}: pducount={:?}, starting_count={:?}, \
+						 passes={:?}",
+						room_id,
+						pducount,
+						starting_count,
+						*pducount > starting_count
+					);
+				})
 				.ready_take_while(move |&(pducount, _)| pducount > starting_count)
 				.map(move |mut pdu| {
 					pdu.1.set_unsigned(Some(sender_user));
