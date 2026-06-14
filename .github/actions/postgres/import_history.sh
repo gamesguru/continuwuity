@@ -24,7 +24,7 @@ fi
 SQL_FILE="$(dirname "$0")/tables.sql"
 if [ -f "$SQL_FILE" ]; then
 	echo "✓ Applying fresh schema from $SQL_FILE..."
-	psql "$DB_TARGET" -c "DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE;" >/dev/null
+	psql "$DB_TARGET" -c "DROP MATERIALIZED VIEW IF EXISTS mv_ever_passed CASCADE; DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE;" >/dev/null
 	psql "$DB_TARGET" -f "$SQL_FILE" >/dev/null
 fi
 
@@ -85,5 +85,10 @@ echo "→ Consolidating and ingesting test details..."
         ORDER BY r.id, (t.j->>'Test'), (t.j->>'Action') ASC
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
 ) | psql "$DB_TARGET"
+
+echo "→ Refreshing ever-passed materialized view..."
+psql "$DB_TARGET" -c "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;" 2>/dev/null || \
+	psql "$DB_TARGET" -c "REFRESH MATERIALIZED VIEW mv_ever_passed;" 2>/dev/null || true
+
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
 echo "✓ Bulk import complete."

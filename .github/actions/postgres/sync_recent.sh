@@ -74,7 +74,9 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
           AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'), ''))
           AND r.room_version IS NOT DISTINCT FROM (NULLIF((t.j->>'room_version'), ''))
         WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
-        ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
-) | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"
+        ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
+
+        REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;
+") | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"
 
 echo "✓ Incremental sync of last $LIMIT runs complete."

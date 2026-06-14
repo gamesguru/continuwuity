@@ -41,13 +41,6 @@ if limit_match:
     limit = limit_match.group(1)
     args_str = args_str.replace(limit_match.group(0), "")
 
-# Extract baseline (can be a branch, commit hash, or run ID)
-baseline = None
-baseline_match = re.search(r"baseline=([a-zA-Z0-9_\-\.]+)", args_str)
-if baseline_match:
-    baseline = baseline_match.group(1)
-    args_str = args_str.replace(baseline_match.group(0), "")
-
 # Extract new_passes (Must be done before order parsing to avoid greedy capture)
 new_passes = False
 new_passes_match = re.search(r"new_passes=([^\s]*)", args_str, re.IGNORECASE)
@@ -66,18 +59,17 @@ order_match = re.search(
 if order_match:
     order = order_match.group(1).strip()
 
+# Extract baseline (can be a branch, commit hash, or run ID)
+baseline = None
+baseline_match = re.search(r"baseline=([a-zA-Z0-9_\-\.]+)", args_str)
+if baseline_match:
+    baseline = baseline_match.group(1)
+    args_str = args_str.replace(baseline_match.group(0), "")
+
 if new_passes:
     columns_tail = "new_failures_list,\n    new_passes_list"
 else:
     columns_tail = "new_failures_list"
-
-if baseline:
-    # A specific commit/branch was requested as the baseline
-    baseline_run_filter = f"(b.commit_hash LIKE '{baseline}%' OR b.version_string LIKE '%{baseline}%' OR b.branch LIKE '%{baseline}%' OR b.id::text = '{baseline}')"
-else:
-    # Default to the known good baseline for this dev branch
-    baseline = "ec5844630"
-    baseline_run_filter = f"(b.commit_hash LIKE '{baseline}%' OR b.version_string LIKE '%{baseline}%' OR b.branch LIKE '%{baseline}%' OR b.id::text = '{baseline}')"
 
 if like_str == "all":
     like_filter = ""
@@ -89,7 +81,6 @@ with open(sql_file_path, "r") as f:
     base_query_template = f.read()
 
 query = base_query_template.format(
-    baseline_run_filter=baseline_run_filter,
     tz_sql=tz_sql,
     columns_tail=columns_tail,
     order=order,
