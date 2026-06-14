@@ -70,13 +70,6 @@ impl Data {
 			.filter(|count| matches!(count, PduCount::Normal(_)))
 			.unwrap_or_else(PduCount::max);
 
-		conduwuit::info!(
-			"last_timeline_count for {}: {:?} (seek from {:?})",
-			room_id,
-			last_count,
-			PduCount::max()
-		);
-
 		Ok(last_count)
 	}
 
@@ -772,34 +765,11 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		let seek_count = until.saturating_inc(Direction::Backward);
-		conduwuit::info!(
-			"pdus_rev for {}: until={:?}, seek_count={:?}",
-			room_id,
-			until,
-			seek_count
-		);
-
-		self.count_to_id(room_id, seek_count, Direction::Backward)
+		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
-				let key_bytes: Vec<u8> = current.as_ref().to_vec();
-				conduwuit::info!(
-					"pdus_rev seek key for {}: {:?} ({} bytes, prefix={:?})",
-					room_id,
-					key_bytes,
-					key_bytes.len(),
-					prefix
-				);
 				self.room_pducount_eventid
 					.rev_raw_stream_from(&current)
-					.inspect_ok(move |(key, _val)| {
-						conduwuit::info!(
-							"pdus_rev raw item: key={:?} ({} bytes)",
-							key.to_vec(),
-							key.len()
-						);
-					})
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					// Clone raw bytes to owned before async resolve to avoid
 					// RocksDB cursor invalidation through try_buffered
@@ -808,7 +778,6 @@ impl Data {
 						self.resolve_pdu((&key, &val)).await
 					})
 			})
-			.inspect_err(|e| conduwuit::warn!("pdus_rev count_to_id failed: {e}"))
 			.try_flatten_stream()
 	}
 
