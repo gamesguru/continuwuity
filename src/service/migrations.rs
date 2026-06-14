@@ -565,7 +565,7 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 			eventid_metadata.put(event_id_bytes, new_metadata_bytes);
 		}
 
-		// TODO: never use as_ref()[8..] on RawPduId — Backfilled IDs are 24 bytes
+		// TODO: never use as_ref()[8..] on RawPduId -- Backfilled IDs are 24 bytes
 		// with a zero-tag at [8..16], so as_ref()[8..] yields zeros instead of the
 		// count. Always use shorteventid() which handles both Normal and Backfilled.
 		let mut topo_key = Vec::with_capacity(32);
