@@ -1110,7 +1110,9 @@ impl Service {
 	) -> Result<()> {
 		increment(&self.db.userid_devicelistversion, user_id.as_bytes());
 		self.update_device_metadata_no_increment(user_id, device_id, device)
-			.await
+			.await?;
+		self.mark_device_key_update(user_id).await;
+		Ok(())
 	}
 
 	// Updates device metadata without incrementing the device list version.
