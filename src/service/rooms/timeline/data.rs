@@ -770,8 +770,6 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		use conduwuit::utils::stream::TryWidebandExt;
-
 		let seek_count = until.saturating_inc(Direction::Backward);
 		conduwuit::info!(
 			"pdus_rev for {}: until={:?}, seek_count={:?}",
@@ -801,7 +799,12 @@ impl Data {
 						);
 					})
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(move |kv| self.resolve_pdu(kv))
+					// Clone raw bytes to owned before async resolve to avoid
+					// RocksDB cursor invalidation through try_buffered
+					.map_ok(|(key, val)| (key.to_vec(), val.to_vec()))
+					.and_then(move |(key, val)| async move {
+						self.resolve_pdu((&key, &val)).await
+					})
 			})
 			.inspect_err(|e| conduwuit::warn!("pdus_rev count_to_id failed: {e}"))
 			.try_flatten_stream()
@@ -812,15 +815,18 @@ impl Data {
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		use conduwuit::utils::stream::TryWidebandExt;
-
 		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.room_pducount_eventid
 					.raw_stream_from(&current)
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-					.wide_and_then(move |kv| self.resolve_pdu(kv))
+					// Clone raw bytes to owned before async resolve to avoid
+					// RocksDB cursor invalidation through try_buffered
+					.map_ok(|(key, val)| (key.to_vec(), val.to_vec()))
+					.and_then(move |(key, val)| async move {
+						self.resolve_pdu((&key, &val)).await
+					})
 			})
 			.try_flatten_stream()
 	}
@@ -1088,13 +1094,14 @@ impl Data {
 		stream: impl Stream<Item = Result<KeyVal<'a>>> + Send + 'a,
 		prefix: Vec<u8>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		use conduwuit::utils::stream::TryWidebandExt;
-
 		stream
 			.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
-			.wide_and_then(move |(topo_key, event_id_bytes)| async move {
-				let pdu_id = Self::topo_key_to_pdu_id(topo_key);
-				let json_bytes = self.eventid_pdu.get(event_id_bytes).await?;
+			// Clone raw bytes to owned before async resolve to avoid
+			// RocksDB cursor invalidation through try_buffered
+			.map_ok(|(key, val)| (key.to_vec(), val.to_vec()))
+			.and_then(move |(topo_key, event_id_bytes)| async move {
+				let pdu_id = Self::topo_key_to_pdu_id(&topo_key);
+				let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
 				Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))
 			})
 	}
