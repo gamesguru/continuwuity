@@ -772,14 +772,38 @@ impl Data {
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		use conduwuit::utils::stream::TryWidebandExt;
 
-		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
+		let seek_count = until.saturating_inc(Direction::Backward);
+		conduwuit::info!(
+			"pdus_rev for {}: until={:?}, seek_count={:?}",
+			room_id,
+			until,
+			seek_count
+		);
+
+		self.count_to_id(room_id, seek_count, Direction::Backward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
+				let key_bytes: Vec<u8> = current.as_ref().to_vec();
+				conduwuit::info!(
+					"pdus_rev seek key for {}: {:?} ({} bytes, prefix={:?})",
+					room_id,
+					key_bytes,
+					key_bytes.len(),
+					prefix
+				);
 				self.room_pducount_eventid
 					.rev_raw_stream_from(&current)
+					.inspect_ok(move |(key, _val)| {
+						conduwuit::info!(
+							"pdus_rev raw item: key={:?} ({} bytes)",
+							key.to_vec(),
+							key.len()
+						);
+					})
 					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 					.wide_and_then(move |kv| self.resolve_pdu(kv))
 			})
+			.inspect_err(|e| conduwuit::warn!("pdus_rev count_to_id failed: {e}"))
 			.try_flatten_stream()
 	}
 
