@@ -362,6 +362,16 @@ pub struct Config {
 	#[serde(default)]
 	pub query_over_tcp_only: bool,
 
+	/// Enable DNS 0x20 case randomization for cache-poisoning protection.
+	/// This randomizes the case of query names (e.g. `example.com` becomes
+	/// `eXaMpLe.CoM`) as a defense against DNS cache-poisoning attacks.
+	///
+	/// Some nameservers do not properly handle mixed-case queries and will
+	/// return ServFail, breaking federation with those servers entirely.
+	/// This is disabled by default for maximum compatibility.
+	#[serde(default)]
+	pub dns_case_randomization: bool,
+
 	/// DNS A/AAAA record lookup strategy
 	///
 	/// Takes a number of one of the following options:

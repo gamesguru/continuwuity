@@ -61,7 +61,7 @@ impl Resolver {
 		opts.try_tcp_on_error = config.dns_tcp_fallback;
 		opts.num_concurrent_reqs = 3;
 		opts.edns0 = true;
-		opts.case_randomization = true;
+		opts.case_randomization = config.dns_case_randomization;
 		opts.ip_strategy = match config.ip_lookup_strategy {
 			| 1 => hickory_resolver::config::LookupIpStrategy::Ipv4Only,
 			| 2 => hickory_resolver::config::LookupIpStrategy::Ipv6Only,
@@ -263,14 +263,24 @@ async fn resolve_to_reqwest(
 	result
 }
 
-/// Check if a DNS resolve error is a NoRecordsFound (NXDOMAIN) response.
-/// These are valid negative responses, not actual failures.
+/// Check if a DNS resolve error is a NoRecordsFound (NXDOMAIN/NoError)
+/// response. These are valid negative responses, not actual failures.
+/// ServFail is explicitly excluded as it indicates a transient server error.
 fn is_no_records_found(e: &hickory_resolver::ResolveError) -> bool {
-	use hickory_resolver::{ResolveErrorKind::Proto, proto::ProtoErrorKind};
+	use hickory_resolver::{
+		ResolveErrorKind::Proto,
+		proto::{ProtoErrorKind, op::ResponseCode},
+	};
 
 	matches!(
 		e.kind(),
-		Proto(e) if matches!(e.kind(), ProtoErrorKind::NoRecordsFound { .. })
+		Proto(e) if matches!(
+			e.kind(),
+			ProtoErrorKind::NoRecordsFound {
+				response_code: ResponseCode::NXDomain | ResponseCode::NoError,
+				..
+			}
+		)
 	)
 }
 
