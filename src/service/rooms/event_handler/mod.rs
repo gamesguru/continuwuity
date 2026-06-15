@@ -25,6 +25,7 @@ use crate::{Dep, globals, rooms, sending, server_keys};
 pub struct Service {
 	pub mutex_federation: RoomMutexMap,
 	pub federation_handletime: SyncRwLock<HandleTimeMap>,
+	pub pending_room_versions: SyncRwLock<HashMap<OwnedRoomId, RoomVersionId>>,
 	services: Services,
 }
 
@@ -54,6 +55,7 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			mutex_federation: RoomMutexMap::new(),
 			federation_handletime: HandleTimeMap::new().into(),
+			pending_room_versions: HashMap::new().into(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				sending: args.depend::<sending::Service>("sending"),
