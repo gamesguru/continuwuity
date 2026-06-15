@@ -73,6 +73,8 @@ pub(crate) async fn update_device_route(
 				.update_device_metadata(sender_user, &body.device_id, &device)
 				.await?;
 
+			flush_user_rooms(&services, sender_user).await;
+
 			Ok(update_device::v3::Response {})
 		},
 		| Err(_) => {

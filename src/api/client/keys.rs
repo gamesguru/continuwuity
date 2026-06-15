@@ -668,21 +668,23 @@ pub(crate) async fn claim_keys_helper(
 				.entry(user_id.server_name())
 				.or_insert_with(Vec::new)
 				.push((user_id, map));
-		}
-
-		let mut container = BTreeMap::new();
-		for (device_id, key_algorithm) in map {
-			if let Ok(one_time_keys) = services
-				.users
-				.take_one_time_key(user_id, device_id, key_algorithm)
-				.await
-			{
-				let mut c = BTreeMap::new();
-				c.insert(one_time_keys.0, one_time_keys.1);
-				container.insert(device_id.clone(), c);
+		} else {
+			let mut container = BTreeMap::new();
+			for (device_id, key_algorithm) in map {
+				if let Ok(one_time_keys) = services
+					.users
+					.take_one_time_key(user_id, device_id, key_algorithm)
+					.await
+				{
+					let mut c = BTreeMap::new();
+					c.insert(one_time_keys.0, one_time_keys.1);
+					container.insert(device_id.clone(), c);
+				}
+			}
+			if !container.is_empty() {
+				one_time_keys.insert(user_id.clone(), container);
 			}
 		}
-		one_time_keys.insert(user_id.clone(), container);
 	}
 
 	let mut failures = BTreeMap::new();
@@ -715,9 +717,12 @@ pub(crate) async fn claim_keys_helper(
 
 	for (server, response) in futures {
 		match response {
-			| Ok(keys) => {
-				one_time_keys.extend(keys.one_time_keys);
-			},
+			| Ok(keys) =>
+				for (user_id, keys) in keys.one_time_keys {
+					if !keys.is_empty() {
+						one_time_keys.insert(user_id, keys);
+					}
+				},
 			| Err(e) => {
 				failures.insert(server.to_string(), json!({"error": e.to_string()}));
 			},
