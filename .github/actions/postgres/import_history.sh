@@ -31,7 +31,7 @@ fi
 echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
 
 # 1. Bulk Ingest Run Summaries
-echo "→ Ingesting run summaries..."
+echo "-> Ingesting run summaries..."
 psql "$DB_TARGET" <<EOF
 CREATE TEMP TABLE b (j jsonb);
 \copy b FROM '$LEDGER_DIR/runs.jsonl' csv quote e'\x01' delimiter e'\x02';
@@ -47,7 +47,7 @@ ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version) DO NOTHING;
 EOF
 
 # 2. Bulk Ingest Test Details (Injecting metadata from filenames)
-echo "→ Consolidating and ingesting test details..."
+echo "-> Consolidating and ingesting test details..."
 (
 	echo "CREATE TEMP TABLE t (j jsonb);"
 	printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
@@ -86,7 +86,7 @@ echo "→ Consolidating and ingesting test details..."
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
 ) | psql "$DB_TARGET"
 
-echo "→ Populating ever_passed table (incremental UPSERT)..."
+echo "-> Populating ever_passed table (incremental UPSERT)..."
 psql "$DB_TARGET" <<'UPSERT_EOF'
 INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
 SELECT
