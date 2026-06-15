@@ -95,7 +95,7 @@ else:
 script_dir = os.path.dirname(__file__)
 if super_mode and baseline:
     # Superscore + baseline: filter to regressions that previously passed on a specific branch
-    branch_filter = f"AND ep.branches::text LIKE '%{baseline}%'"
+    branch_filter = f"AND ep2.branches::text LIKE '%{baseline}%'"
     sql_file_path = os.path.join(script_dir, "queries_global.sql")
     with open(sql_file_path, "r", encoding="utf-8") as f:
         base_query_template = f.read()

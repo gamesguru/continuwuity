@@ -30,10 +30,14 @@ run_agg AS (
             FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) as branches_passed_on
     FROM recent_runs r
     JOIN run_details rd ON rd.run_id = r.id
-    LEFT JOIN mv_ever_passed ep
-        ON ep.test_name = rd.test_name
-        AND ep.rv IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+    LEFT JOIN LATERAL (
+        SELECT ep2.test_name, ep2.last_passed, ep2.branches
+        FROM mv_ever_passed ep2
+        WHERE ep2.test_name = rd.test_name
         {branch_filter}
+        ORDER BY ep2.last_passed DESC NULLS LAST
+        LIMIT 1
+    ) ep ON TRUE
     GROUP BY rd.run_id
 )
 SELECT

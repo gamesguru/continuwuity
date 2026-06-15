@@ -47,24 +47,24 @@ CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
 CREATE INDEX IF NOT EXISTS idx_run_details_covering ON run_details (run_id, test_name, status);
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 
--- Pre-computed set of tests that have ever passed, per room_version.
+-- Pre-computed set of tests that have ever passed (any room version).
 -- Updated incrementally by CI via UPSERT after each ingest.
--- Legacy: was a MATERIALIZED VIEW, now a regular table for fast incremental updates.
+-- Legacy: was a MATERIALIZED VIEW with rv, now a regular table keyed by test_name only.
 CREATE TABLE IF NOT EXISTS ever_passed (
-    test_name text NOT NULL,
-    rv text NOT NULL DEFAULT '11',
+    test_name text PRIMARY KEY,
     last_passed text,
     last_commit text,
     last_branch text,
-    branches text[] DEFAULT '{}',
-    PRIMARY KEY (test_name, rv)
+    branches text[] DEFAULT '{}'
 );
 
 -- Backward compat alias (queries reference mv_ever_passed)
-CREATE OR REPLACE VIEW mv_ever_passed AS SELECT * FROM ever_passed;
+-- Adds a dummy rv column so existing queries still work during migration.
+CREATE OR REPLACE VIEW mv_ever_passed AS
+SELECT *, NULL::text AS rv FROM ever_passed;
 
 -- Global regression view: a test is a "new failure" if it fails now
--- AND has ever passed in any run with the same room_version.
+-- AND has ever passed in any prior run (regardless of room_version).
 CREATE OR REPLACE VIEW v_run_regressions AS
 SELECT
     r.id,
@@ -98,7 +98,6 @@ LEFT JOIN LATERAL (
     FROM run_details rd
     LEFT JOIN mv_ever_passed ep
         ON ep.test_name = rd.test_name
-        AND ep.rv IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
     WHERE rd.run_id = r.id
 ) counts ON TRUE
 WHERE r.n_pass > 0 AND counts.run_total > 0;
