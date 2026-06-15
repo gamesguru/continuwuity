@@ -28,7 +28,7 @@ echo "→ Streaming last $LIMIT run summaries..."
           (j->>'version_string'), (j->>'features'), (j->>'profile'), (j->>'binary_sha256'),
           (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, (j->>'room_version')
         FROM b ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version) DO NOTHING;"
-) | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"
+) | ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
 
 # 2. Ingest Recent Test Details
 echo "→ Streaming last $LIMIT run details (incremental files)..."
@@ -77,6 +77,6 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
 
         REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;
-") | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"
+") | ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
 
 echo "✓ Incremental sync of last $LIMIT runs complete."

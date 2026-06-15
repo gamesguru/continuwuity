@@ -71,3 +71,4 @@ FROM
     recent_runs r
     JOIN run_agg a ON a.run_id = r.id
 WHERE a.run_total > 0
+ORDER BY r.run_date DESC
