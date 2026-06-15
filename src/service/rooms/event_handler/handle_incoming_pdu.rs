@@ -366,9 +366,9 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			// fetch is needed (spec step 5: reject if auth events are rejected).
 			for mid in &missing {
 				if self.services.pdu_metadata.is_event_rejected(mid).await {
-					warn!(
-						"Event {event_id} rejected: missing auth event {mid} is already \
-						 marked rejected; skipping /state/ fetch"
+					info!(
+						"Event {event_id} rejected: missing auth event {mid} is already marked \
+						 rejected; skipping /state/ fetch"
 					);
 					self.services.pdu_metadata.mark_event_rejected(event_id);
 					self.services
@@ -471,8 +471,8 @@ pub async fn process_timeline_upgrade(
 		.await?
 		.origin_server_ts();
 
-	// 9. Fetch any missing prev events doing all checks listed here starting at 1.
-	//    These are timeline events
+	// Fetch any missing prev events doing all checks listed here starting at 1.
+	// These are timeline events
 	let (sorted_prev_events, mut eventid_info) = Box::pin(self.fetch_prev(
 		origin,
 		create_event,

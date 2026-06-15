@@ -14,7 +14,7 @@ use conduwuit_core::{
 		stream::{BroadbandExt, ReadyExt},
 	},
 };
-use futures::{FutureExt, Stream, StreamExt, TryFutureExt, pin_mut, stream::FuturesUnordered};
+use futures::{FutureExt, Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
 use lru_cache::LruCache;
 use ruma::{
 	OwnedEventId, OwnedRoomId, OwnedServerName, RoomId, ServerName, UserId,
@@ -522,11 +522,11 @@ where
 	}
 
 	let user_joined_or_invited = if let Identifier::UserId(user_id) = identifier {
-		let is_joined = self.services.state_cache.is_joined(user_id, current_room);
-		let is_invited = self.services.state_cache.is_invited(user_id, current_room);
-
-		pin_mut!(is_joined, is_invited);
-		is_joined.or(is_invited).await
+		let (is_joined, is_invited) = futures::join!(
+			self.services.state_cache.is_joined(user_id, current_room),
+			self.services.state_cache.is_invited(user_id, current_room),
+		);
+		is_joined || is_invited
 	} else {
 		false
 	};
