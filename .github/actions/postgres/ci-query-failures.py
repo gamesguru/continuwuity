@@ -72,7 +72,7 @@ if order_match:
 
 # Build columns_tail based on flags
 cols = ["new_failures_list"]
-if verbose:
+if verbose and not baseline:
     cols.extend(["date_last_passed", "branches_passed_on"])
 if new_passes:
     cols.append("new_passes_list")
