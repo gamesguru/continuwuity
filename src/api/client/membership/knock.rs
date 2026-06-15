@@ -666,14 +666,6 @@ async fn knock_room_helper_remote(
 		.append_to_state(&parsed_knock_pdu, room_id)
 		.await?;
 
-	info!("Updating membership locally to knock state with provided stripped state events");
-	// TODO: see TODO on the other call to `update_membership`
-	services
-		.rooms
-		.state_cache
-		.update_membership(room_id, sender_user, &parsed_knock_pdu, false)
-		.await?;
-
 	info!("Appending room knock event locally");
 	services
 		.rooms
@@ -694,6 +686,14 @@ async fn knock_room_helper_remote(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_knock, &state_lock);
+
+	info!("Updating membership locally to knock state with provided stripped state events");
+	// TODO: see TODO on the other call to `update_membership`
+	services
+		.rooms
+		.state_cache
+		.update_membership(room_id, sender_user, &parsed_knock_pdu, false)
+		.await?;
 
 	Ok(())
 }
