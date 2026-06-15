@@ -394,8 +394,11 @@ pub(crate) async fn build_sync_events(
 				.await
 				.ok();
 
+			warn!(%room_id, ?knock_count, ?last_sync_end_count, "Sync check knocked room");
+
 			// only sync this knock if it was sent after the last /sync call
 			if last_sync_end_count < knock_count {
+				warn!(%room_id, "Sync including knocked room in response!");
 				let knocked_room = KnockedRoom {
 					knock_state: KnockState { events: knock_state },
 				};
@@ -410,6 +413,11 @@ pub(crate) async fn build_sync_events(
 
 	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
 	let (left_rooms, left_state_after) = left_rooms;
+
+	for (room_id, room) in &joined_rooms {
+		warn!(%room_id, "Sync joined room timeline: {:?}", room.timeline.events.iter().map(|ev| ev.json().get()).collect::<Vec<_>>());
+		warn!(%room_id, "Sync joined room state: {:?}", room.state.events.iter().map(|ev| ev.json().get()).collect::<Vec<_>>());
+	}
 
 	let presence_updates: OptionFuture<_> = services
 		.config

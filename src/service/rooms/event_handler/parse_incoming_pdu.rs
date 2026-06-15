@@ -153,6 +153,7 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 
 #[implement(super::Service)]
 fn fallback_room_version(&self, value: &CanonicalJsonObject) -> RoomVersionId {
+	warn!("fallback_room_version keys: {:?}", value.keys().collect::<Vec<_>>());
 	if value.contains_key("hashes") {
 		self.services.server.config.default_room_version.clone()
 	} else {
