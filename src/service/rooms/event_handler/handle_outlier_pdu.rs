@@ -423,7 +423,7 @@ where
 									// Auth event was rejected or otherwise failed.
 									// Track locally so the still_missing check below
 									// doesn't depend on DB write visibility.
-									rejected_in_chain.insert(auth_eid.to_owned());
+									rejected_in_chain.insert(auth_eid.clone());
 								},
 							}
 						}
