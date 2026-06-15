@@ -387,7 +387,7 @@ pub async fn join_room_by_id_helper(
 		.await?;
 	} else {
 		// Ask a remote server if we are not participating in this room
-		join_room_by_id_helper_remote(
+		Box::pin(join_room_by_id_helper_remote(
 			services,
 			sender_user,
 			room_id,
@@ -395,8 +395,7 @@ pub async fn join_room_by_id_helper(
 			servers,
 			state_lock,
 			json_body,
-		)
-		.boxed()
+		))
 		.await?;
 	}
 	Ok(join_room_by_id::v3::Response::new(room_id.to_owned()))
@@ -608,6 +607,35 @@ async fn join_room_by_id_helper_remote(
 		.get_or_create_shortroomid(room_id)
 		.await;
 
+	join_room_by_id_helper_remote_process(
+		services,
+		sender_user,
+		room_id,
+		room_version_id,
+		remote_server,
+		join_event,
+		event_id,
+		state_lock,
+		send_join_response,
+		remote_latest_events,
+	)
+	.await
+}
+
+#[tracing::instrument(skip_all, fields(%sender_user, %room_id), name = "join_remote_process", level = "info")]
+#[allow(clippy::too_many_arguments)]
+async fn join_room_by_id_helper_remote_process(
+	services: &Services,
+	sender_user: &UserId,
+	room_id: &RoomId,
+	room_version_id: RoomVersionId,
+	remote_server: OwnedServerName,
+	join_event: CanonicalJsonObject,
+	event_id: ruma::OwnedEventId,
+	state_lock: RoomMutexGuard,
+	send_join_response: federation::membership::create_join_event::v2::Response,
+	remote_latest_events: Vec<ruma::OwnedEventId>,
+) -> Result {
 	info!("Parsing join event");
 	let parsed_join_pdu = PduEvent::from_id_val(&event_id, join_event.clone(), Some(room_id))
 		.map_err(|e| err!(BadServerResponse("Invalid join event PDU: {e:?}")))?;
@@ -797,7 +825,7 @@ async fn join_room_by_id_helper_remote(
 		let sending = services.sending.clone();
 		let event_handler = services.rooms.event_handler.clone();
 
-		services.server.runtime().spawn(async move {
+		services.server.runtime().spawn(Box::pin(async move {
 			let mut missing_latest = Vec::new();
 			for event_id in remote_latest_events {
 				if !timeline.pdu_exists(&event_id).await {
@@ -846,7 +874,7 @@ async fn join_room_by_id_helper_remote(
 					warn!("Failed to handle extremity {event_id}: {e}");
 				}
 			}
-		});
+		}));
 	}
 
 	Ok(())
@@ -950,7 +978,7 @@ async fn join_room_by_id_helper_local(
 		remote_servers = %servers.len(),
 		"Could not join room locally, attempting remote join",
 	);
-	join_room_by_id_helper_remote(
+	Box::pin(join_room_by_id_helper_remote(
 		services,
 		sender_user,
 		room_id,
@@ -958,7 +986,7 @@ async fn join_room_by_id_helper_local(
 		servers,
 		state_lock,
 		json_body,
-	)
+	))
 	.await
 }
 
