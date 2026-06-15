@@ -360,6 +360,24 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 	{
 		| Ok(res) => res,
 		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
+			// Before attempting expensive /state/ federation requests, check
+			// whether the missing auth events are already known to be rejected.
+			// If they are, this event inherits the rejection and no network
+			// fetch is needed (spec step 5: reject if auth events are rejected).
+			for mid in &missing {
+				if self.services.pdu_metadata.is_event_rejected(mid).await {
+					warn!(
+						"Event {event_id} rejected: missing auth event {mid} is already \
+						 marked rejected; skipping /state/ fetch"
+					);
+					self.services.pdu_metadata.mark_event_rejected(event_id);
+					self.services
+						.outlier
+						.add_pdu_outlier(event_id, &value, Some(room_id));
+					return Ok(None);
+				}
+			}
+
 			// The auth event chain for this PDU may be deeper than the
 			// iterative fetcher's per-call limit. Try calling /state_ids on
 			// the origin to retrieve and store the complete auth chain in one
