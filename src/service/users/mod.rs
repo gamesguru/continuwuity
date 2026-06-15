@@ -1268,8 +1268,7 @@ impl Service {
 	}
 
 	/// Updates device metadata and increments the device list version.
-	#[allow(clippy::unused_async_trait_impl)]
-	pub async fn update_device_metadata(
+	pub fn update_device_metadata(
 		&self,
 		user_id: &UserId,
 		device_id: &DeviceId,

@@ -42,8 +42,7 @@ impl Console {
 		})
 	}
 
-	#[allow(clippy::unused_async_trait_impl)]
-	pub(super) async fn handle_signal(self: &Arc<Self>, sig: &'static str) {
+	pub(super) fn handle_signal(self: &Arc<Self>, sig: &'static str) {
 		use std::io::IsTerminal;
 
 		if !self.server.running() {
