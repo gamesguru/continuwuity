@@ -33,6 +33,7 @@ run_agg AS (
     LEFT JOIN mv_ever_passed ep
         ON ep.test_name = rd.test_name
         AND ep.rv IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+        {branch_filter}
     GROUP BY rd.run_id
 )
 SELECT

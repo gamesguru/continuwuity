@@ -72,7 +72,7 @@ if order_match:
 
 # Build columns_tail based on flags
 cols = ["new_failures_list"]
-if verbose and not baseline:
+if verbose:
     cols.extend(["date_last_passed", "branches_passed_on"])
 if new_passes:
     cols.append("new_passes_list")
@@ -86,8 +86,23 @@ else:
 
 # Pick query template based on whether a baseline was specified
 script_dir = os.path.dirname(__file__)
-if baseline:
-    # Custom baseline: compare against a specific commit
+if baseline and verbose:
+    # Verbose + baseline: use global ever-passed query filtered to the baseline branch.
+    # Shows regressions that previously passed on the specified branch.
+    branch_filter = f"AND ep.branches @> ARRAY['{baseline}']"
+    sql_file_path = os.path.join(script_dir, "queries_global.sql")
+    with open(sql_file_path, "r", encoding="utf-8") as f:
+        base_query_template = f.read()
+    query = base_query_template.format(
+        tz_sql=tz_sql,
+        columns_tail=columns_tail,
+        order=order,
+        limit=limit,
+        like_filter=like_filter,
+        branch_filter=branch_filter,
+    )
+elif baseline:
+    # Custom baseline: compare against a specific commit (direct diff)
     baseline_run_filter = (
         f"(b.commit_hash LIKE '{baseline}%'"
         f" OR b.version_string LIKE '%{baseline}%'"
@@ -116,6 +131,7 @@ else:
         order=order,
         limit=limit,
         like_filter=like_filter,
+        branch_filter="",
     )
 
 print(f"\nExecuting Query:\n{query}\n")
