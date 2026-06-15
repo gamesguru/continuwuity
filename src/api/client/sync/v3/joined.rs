@@ -885,46 +885,50 @@ async fn build_device_list_updates(
 	timeline: &TimelinePdus,
 	joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
+	// initial syncs don't include device updates
+	if last_sync_end_count.is_none() {
+		return Ok(DeviceListUpdates::new());
+	}
+
 	let is_encrypted_room = services
 		.rooms
 		.state_accessor
 		.state_get(current_shortstatehash, &StateEventType::RoomEncryption, "")
-		.is_ok();
-
-	// initial syncs don't include device updates, and rooms which aren't encrypted
-	// don't affect them, so return early in either of those cases
-	if last_sync_end_count.is_none() || !(is_encrypted_room.await) {
-		return Ok(DeviceListUpdates::new());
-	}
+		.is_ok()
+		.await;
 
 	let mut device_list_updates = DeviceListUpdates::new();
 
-	// add users with changed keys to the `changed` list
-	services
-		.users
-		.room_keys_changed(room_id, last_sync_end_count, Some(current_count))
-		.map(at!(0))
-		.map(ToOwned::to_owned)
-		.ready_for_each(|user_id| {
-			device_list_updates.changed.insert(user_id);
-		})
-		.await;
-
-	if joined_since_last_sync {
+	// E2EE-specific: track key changes and joins only for encrypted rooms
+	if is_encrypted_room {
+		// add users with changed keys to the `changed` list
 		services
-			.rooms
-			.state_cache
-			.room_members(room_id)
+			.users
+			.room_keys_changed(room_id, last_sync_end_count, Some(current_count))
+			.map(at!(0))
+			.map(ToOwned::to_owned)
 			.ready_for_each(|user_id| {
-				if user_id != syncing_user {
-					device_list_updates.changed.insert(user_id.to_owned());
-				}
+				device_list_updates.changed.insert(user_id);
 			})
 			.await;
+
+		if joined_since_last_sync {
+			services
+				.rooms
+				.state_cache
+				.room_members(room_id)
+				.ready_for_each(|user_id| {
+					if user_id != syncing_user {
+						device_list_updates.changed.insert(user_id.to_owned());
+					}
+				})
+				.await;
+		}
 	}
 
-	// add users who now share encrypted rooms to `changed` and
-	// users who no longer share encrypted rooms to `left`
+	// Track membership changes for device_lists.changed (joins in encrypted
+	// rooms) and device_lists.left (leaves from any room when the user no
+	// longer shares any encrypted room with us).
 	let events = state_events
 		.iter()
 		.chain(timeline.pdus.iter().map(|(_, pdu)| pdu));
@@ -947,16 +951,15 @@ async fn build_device_list_updates(
 				use MembershipState::*;
 
 				match content.membership {
-					| Join => {
-						// User joined this (encrypted) room — always track
-						// their device list. We already verified the room is
-						// encrypted at the top of this function.
+					| Join if is_encrypted_room => {
+						// User joined this encrypted room — track their
+						// device list.
 						device_list_updates.changed.insert(user_id);
 					},
 					| Leave | Ban => {
 						// User left/was kicked/banned from this room.
-						// Only add to `left` if they don't share any
-						// OTHER encrypted rooms.
+						// Add to `left` if they don't share any OTHER
+						// encrypted rooms with the syncing user.
 						let shares_other =
 							share_encrypted_room(services, syncing_user, &user_id, Some(room_id))
 								.await;
