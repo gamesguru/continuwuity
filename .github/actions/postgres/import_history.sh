@@ -24,7 +24,7 @@ fi
 SQL_FILE="$(dirname "$0")/tables.sql"
 if [ -f "$SQL_FILE" ]; then
 	echo "✓ Applying fresh schema from $SQL_FILE..."
-	psql "$DB_TARGET" -c "DROP MATERIALIZED VIEW IF EXISTS mv_ever_passed CASCADE; DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE;" >/dev/null
+	psql "$DB_TARGET" -c "DROP MATERIALIZED VIEW IF EXISTS mv_ever_passed CASCADE; DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE; DROP TABLE IF EXISTS ever_passed CASCADE;" >/dev/null
 	psql "$DB_TARGET" -f "$SQL_FILE" >/dev/null
 fi
 
@@ -86,9 +86,34 @@ echo "→ Consolidating and ingesting test details..."
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
 ) | psql "$DB_TARGET"
 
-echo "→ Refreshing ever-passed materialized view..."
-psql "$DB_TARGET" -c "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;" 2>/dev/null ||
-	psql "$DB_TARGET" -c "REFRESH MATERIALIZED VIEW mv_ever_passed;" 2>/dev/null || true
+echo "→ Populating ever_passed table (incremental UPSERT)..."
+psql "$DB_TARGET" <<'UPSERT_EOF'
+INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
+SELECT
+    rd.test_name,
+    COALESCE(r.room_version, '11'),
+    MAX(r.run_date)::date::text,
+    (ARRAY_AGG(r.commit_hash ORDER BY r.run_date DESC))[1],
+    (ARRAY_AGG(r.branch ORDER BY r.run_date DESC))[1],
+    ARRAY_AGG(DISTINCT r.branch) FILTER (WHERE r.branch IS NOT NULL)
+FROM run_details rd
+JOIN runs r ON rd.run_id = r.id
+WHERE rd.status = 'pass'
+GROUP BY rd.test_name, COALESCE(r.room_version, '11')
+ON CONFLICT (test_name, rv) DO UPDATE SET
+    last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed),
+    last_commit = CASE
+        WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
+        THEN EXCLUDED.last_commit ELSE ever_passed.last_commit END,
+    last_branch = CASE
+        WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
+        THEN EXCLUDED.last_branch ELSE ever_passed.last_branch END,
+    branches = (
+        SELECT ARRAY_AGG(DISTINCT b ORDER BY b)
+        FROM UNNEST(ever_passed.branches || EXCLUDED.branches) AS b
+        WHERE b IS NOT NULL
+    );
+UPSERT_EOF
 
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
 echo "✓ Bulk import complete."

@@ -76,14 +76,31 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
         WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
 
-        INSERT INTO ever_passed (test_name, rv, last_passed)
-        SELECT rd.test_name, COALESCE(r.room_version, '11'), MAX(r.run_date)::date::text
+        INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
+        SELECT
+            rd.test_name,
+            COALESCE(r.room_version, '11'),
+            MAX(r.run_date)::date::text,
+            (ARRAY_AGG(r.commit_hash ORDER BY r.run_date DESC))[1],
+            (ARRAY_AGG(r.branch ORDER BY r.run_date DESC))[1],
+            ARRAY_AGG(DISTINCT r.branch) FILTER (WHERE r.branch IS NOT NULL)
         FROM run_details rd
         JOIN runs r ON rd.run_id = r.id
         WHERE rd.status = 'pass'
         GROUP BY rd.test_name, COALESCE(r.room_version, '11')
-        ON CONFLICT (test_name, rv) DO UPDATE
-        SET last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed);
+        ON CONFLICT (test_name, rv) DO UPDATE SET
+            last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed),
+            last_commit = CASE
+                WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
+                THEN EXCLUDED.last_commit ELSE ever_passed.last_commit END,
+            last_branch = CASE
+                WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
+                THEN EXCLUDED.last_branch ELSE ever_passed.last_branch END,
+            branches = (
+                SELECT ARRAY_AGG(DISTINCT b ORDER BY b)
+                FROM UNNEST(ever_passed.branches || EXCLUDED.branches) AS b
+                WHERE b IS NOT NULL
+            );
 "
 ) | ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
 

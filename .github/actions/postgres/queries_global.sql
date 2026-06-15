@@ -1,6 +1,6 @@
 /*
 Global "ever-passed" regression query.
-Uses mv_ever_passed materialized view instead of a single baseline commit.
+Uses ever_passed table (incremental UPSERT, no materialized view refresh).
 A test is a regression if it fails now but has ever passed in any prior run.
 Bulk JOIN approach: scales O(n) with limit, not O(n * tests).
 */
@@ -26,7 +26,7 @@ run_agg AS (
             FILTER (WHERE rd.status = 'pass' AND ep.test_name IS NULL) as new_passes_list,
         STRING_AGG(COALESCE(ep.last_passed, 'never'), E'\n' ORDER BY rd.test_name)
             FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) as date_last_passed,
-        STRING_AGG(COALESCE(ep.branches, '[]'), E'\n' ORDER BY rd.test_name)
+        STRING_AGG(COALESCE(ep.branches::text, '[]'), E'\n' ORDER BY rd.test_name)
             FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) as branches_passed_on
     FROM recent_runs r
     JOIN run_details rd ON rd.run_id = r.id
