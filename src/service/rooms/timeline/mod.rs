@@ -3,6 +3,7 @@ mod backfill;
 mod build;
 mod create;
 mod data;
+mod heal;
 mod metadata;
 mod redact;
 mod repair_unsigned;
@@ -27,7 +28,12 @@ use ruma::{
 use serde::Deserialize;
 
 use self::data::Data;
-pub use self::{create::pdu_fits, data::PdusIterItem, metadata::EventMetadata};
+pub use self::{
+	create::pdu_fits,
+	data::PdusIterItem,
+	heal::{HealOptions, HealResult},
+	metadata::EventMetadata,
+};
 use crate::{
 	Dep, account_data, admin, appservice, globals, pusher, rooms, sending, server_keys, users,
 };

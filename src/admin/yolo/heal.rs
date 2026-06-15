@@ -1,19 +1,15 @@
 use std::{
-	collections::{HashMap, HashSet, VecDeque},
+	collections::{HashMap, HashSet},
 	fmt::Write,
 };
 
 use conduwuit::{
 	Result, err, info,
 	matrix::{Event, pdu::PduEvent},
-	state_res, warn,
 };
 use conduwuit_core::utils::stream::TryIgnore;
-use futures::{FutureExt, StreamExt, future::ready};
-use ruma::{
-	OwnedEventId, OwnedRoomId, OwnedServerName, RoomId,
-	events::{StateEventType, TimelineEventType},
-};
+use futures::{StreamExt, future::ready};
+use ruma::{OwnedEventId, OwnedRoomId, OwnedServerName, RoomId, events::StateEventType};
 
 use crate::admin_command;
 
@@ -80,12 +76,11 @@ pub(super) async fn rescue_room(
 			.await;
 	}
 
-	let mut outliers: HashMap<OwnedEventId, PduEvent> = self
+	let mut events: HashMap<OwnedEventId, PduEvent> = self
 		.services
 		.rooms
 		.outlier
 		.room_stream(&room_id)
-		.map(|(event_id, pdu)| (event_id, pdu))
 		.collect()
 		.await;
 
@@ -104,286 +99,41 @@ pub(super) async fn rescue_room(
 			.await;
 
 		for (event_id, pdu) in timeline_pdus {
-			if outliers.contains_key(&event_id) {
-				continue;
-			}
-			outliers.insert(event_id, pdu);
+			events.entry(event_id).or_insert(pdu);
 		}
 	}
 
-	if outliers.is_empty() {
+	if events.is_empty() {
 		return self.write_str("No outliers found in this room.").await;
 	}
 
-	// Build the graph for topological sort.
-	// Only include prev_events that exist in our outlier set to avoid events
-	// being dropped from the sort output due to unresolvable parents.
-	let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
-		HashMap::with_capacity(outliers.len());
-	for (event_id, pdu) in &outliers {
-		let mut parents = HashSet::new();
-		for prev_id in pdu.prev_events() {
-			if outliers.contains_key(prev_id) {
-				parents.insert(prev_id.to_owned());
-			}
-		}
-		graph.insert(event_id.clone(), parents);
-	}
+	self.write_str(&format!(
+		"Healing {} events in room {room_id} via heal_room()...",
+		events.len()
+	))
+	.await?;
 
-	let event_fetch = |event_id: OwnedEventId| {
-		let pdu = if let Some(p) = outliers.get(&event_id) {
-			Some(p.clone())
-		} else {
-			self.services
-				.rooms
-				.timeline
-				.get_pdu(&event_id)
-				.now_or_never()
-				.and_then(Result::ok)
-		};
-
-		let ts = pdu.map_or_else(|| ruma::uint!(0), |p| p.origin_server_ts);
-		ready(Ok::<_, state_res::Error>((ruma::int!(0), ruma::MilliSecondsSinceUnixEpoch(ts))))
-	};
-
-	let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
-		.await
-		.map_err(|e| err!(Database("Failed to sort outliers: {e:?}")))?;
-
-	// Find the create event first to use as the foundation
-	let mut create_event = self
-		.services
-		.rooms
-		.state_accessor
-		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-		.await
-		.ok();
-
-	// If it's still missing, see if it's in our outlier list
-	if create_event.is_none() {
-		create_event = outliers
-			.values()
-			.find(|pdu| pdu.kind == TimelineEventType::RoomCreate)
-			.cloned();
-	}
-
-	let create_event =
-		create_event.ok_or_else(|| err!("Failed to find create event for room."))?;
-
-	// Build a map of current timeline state events for supersession checks.
-	// For each (event_type, state_key) we track (origin_server_ts, depth, event_id)
-	// to determine which event is "newer" using the same 3 tiebreakers as
-	// state resolution: origin_server_ts, then depth, then event_id.
-	let mut current_state: HashMap<(String, String), (ruma::UInt, ruma::UInt, OwnedEventId)> =
-		HashMap::new();
-
-	if !force {
-		if let Ok(state_hash) = self
-			.services
-			.rooms
-			.state
-			.get_room_shortstatehash(&room_id)
-			.await
-		{
-			// Collect into Vec FIRST to drop the zero-copy RocksDB iterator
-			// before the write/fetch phase. Holding an iterator across .await points
-			// risks SEGV if compaction invalidates the underlying memory.
-			let state_eids: Vec<_> = self
-				.services
-				.rooms
-				.state_accessor
-				.state_full(state_hash)
-				.map(|((event_type, state_key), event)| {
-					(event_type.to_string(), state_key.to_string(), event.event_id().to_owned())
-				})
-				.collect()
-				.await;
-
-			for (event_type, state_key, eid) in state_eids {
-				// Fetch the full PduEvent for depth access
-				if let Ok(full_pdu) = self.services.rooms.timeline.get_pdu(&eid).await {
-					current_state.insert(
-						(event_type, state_key),
-						(full_pdu.origin_server_ts, full_pdu.depth, eid),
-					);
-				}
-			}
-		}
-	}
-
-	let mut count = 0_usize;
-	let mut skipped = 0_usize;
-	let mut failed = 0_usize;
-
-	// Build dependency graph for Concurrent DAG Execution
-	let mut indegree: HashMap<OwnedEventId, usize> = HashMap::with_capacity(sorted.len());
-	let mut dependents: HashMap<OwnedEventId, Vec<OwnedEventId>> =
-		HashMap::with_capacity(sorted.len());
-	let sorted_set: HashSet<OwnedEventId> = sorted.iter().cloned().collect();
-
-	for id in &sorted {
-		let pdu = outliers.get(id).expect("in sorted list");
-		let mut deps = HashSet::new();
-		for dep in pdu.prev_events().chain(pdu.auth_events()) {
-			if sorted_set.contains(dep) {
-				deps.insert(dep.to_owned());
-			}
-		}
-		indegree.insert(id.clone(), deps.len());
-		for dep in deps {
-			dependents.entry(dep).or_default().push(id.clone());
-		}
-	}
-
-	let mut ready_queue: VecDeque<OwnedEventId> = indegree
-		.iter()
-		.filter(|(_, count)| **count == 0)
-		.map(|(id, _)| id.clone())
-		.collect();
-
-	let mut pending_futures = futures::stream::FuturesUnordered::new();
-	// Limit concurrency to avoid memory exhaustion during heavy state-res
-	let max_concurrency = self.services.server.concurrency_scaled(4);
-
-	let mut cork = Some(self.services.db.cork());
-
-	loop {
-		while pending_futures.len() < max_concurrency && !ready_queue.is_empty() {
-			let event_id = ready_queue.pop_front().unwrap();
-			let pdu = outliers.get(&event_id).expect("in sorted list").clone();
-			let origin = pdu
-				.origin
-				.clone()
-				.unwrap_or_else(|| pdu.sender.server_name().to_owned());
-
-			// Fast path check
-			let mut is_skipped = false;
-			let mut is_forced = false;
-
-			if !force {
-				if let Some(state_key) = &pdu.state_key {
-					let key = (pdu.kind.to_string(), state_key.to_string());
-					if let Some((curr_ts, curr_depth, curr_eid)) = current_state.get(&key) {
-						let dominated = (pdu.origin_server_ts, pdu.depth, &pdu.event_id)
-							< (*curr_ts, *curr_depth, curr_eid);
-						if dominated {
-							is_skipped = true;
-						}
-					}
-				}
-			} else {
-				is_forced = true;
-			}
-
-			let event_handler = self.services.rooms.event_handler.clone();
-			let pdu_metadata = self.services.rooms.pdu_metadata.clone();
-			let timeline = self.services.rooms.timeline.clone();
-			let room_id_c = room_id.clone();
-			let create_event_c = create_event.clone();
-
-			pending_futures.push(async move {
-				if is_skipped {
-					return (event_id, Ok(None));
-				}
-
-				if is_forced {
-					pdu_metadata.clear_pdu_markers(&event_id);
-					if timeline
-						.promote_outlier(&room_id_c, &event_id)
-						.await
-						.is_ok()
-					{
-						return (event_id, Ok(Some(())));
-					}
-					return (event_id, Ok(None));
-				}
-
-				let pdu_json = match timeline.get_pdu_json(&event_id).await {
-					| Ok(j) => j,
-					| Err(e) => return (event_id, Err(e)),
-				};
-
-				pdu_metadata.clear_pdu_markers(&event_id);
-
-				let res = Box::pin(event_handler.upgrade_outlier_to_timeline_pdu(
-					pdu,
-					pdu_json,
-					&create_event_c,
-					&origin,
-					&room_id_c,
-					// skip_soft_fail
-					false,
-					// is_forward_extremity
-					true,
-				))
-				.await;
-
-				(event_id, res.map(|o| o.map(|_| ())))
-			});
-		}
-
-		if let Some((event_id, res)) = pending_futures.next().await {
-			match res {
-				| Ok(Some(())) => count = count.saturating_add(1),
-				| Ok(None) => skipped = skipped.saturating_add(1),
-				| Err(e) => {
-					failed = failed.saturating_add(1);
-					warn!(%room_id, %event_id, "rescue-room: failed to upgrade outlier: {e}");
-				},
-			}
-
-			if let Some(deps) = dependents.get(&event_id) {
-				for dep in deps {
-					let count = indegree.get_mut(dep).unwrap();
-					*count = count.saturating_sub(1);
-					if *count == 0 {
-						ready_queue.push_back(dep.clone());
-					}
-				}
-			}
-
-			if count.is_multiple_of(2000) {
-				let _ = cork.take();
-				tokio::task::yield_now().await;
-				cork = Some(self.services.db.cork());
-			}
-		} else if ready_queue.is_empty() && pending_futures.is_empty() {
-			break;
-		} else {
-			warn!("Cycle detected or missing dependencies in rescue_room DAG execution!");
-			break;
-		}
-	}
-
-	let msg = match (skipped > 0, failed > 0) {
-		| (true, true) => format!(
-			"Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded, {failed} \
-			 failed)."
-		),
-		| (true, false) => {
-			format!("Rescued {count} PDUs in room {room_id} (skipped {skipped} superseded).")
+	let result = Box::pin(self.services.rooms.timeline.heal_room(
+		&room_id,
+		events,
+		None,
+		&conduwuit_service::rooms::timeline::HealOptions {
+			clear_markers: force,
+			compute_state: true,
+			rebuild_membership: true,
+			is_reorder: reorder,
 		},
-		| (false, true) => format!(
-			"Rescued {count} PDUs in room {room_id} ({failed} failed — check server logs for \
-			 details)."
-		),
-		| (false, false) => format!("Rescued {count} PDUs in room {room_id}."),
-	};
-	self.write_str(&msg).await?;
+	))
+	.await?;
 
-	if reorder {
-		self.write_str(&format!("\nRunning reorder-timeline for {room_id}..."))
-			.await?;
-		let n = Box::pin(
-			self.services
-				.rooms
-				.timeline
-				.reorder_timeline(&room_id, None, false),
-		)
-		.await?;
-		self.write_str(&format!("Reordered {n} events. Clients should re-sync."))
-			.await?;
-	}
+	let msg = format!(
+		"Healed room {room_id}: {} inserted, {} skipped, {} failed, {} extremities.",
+		result.inserted,
+		result.skipped,
+		result.failed,
+		result.extremities.len()
+	);
+	self.write_str(&msg).await?;
 
 	if !heal_from.is_empty() {
 		// Find the latest local event to use as at_event for bootstrapping
