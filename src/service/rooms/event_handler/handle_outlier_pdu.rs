@@ -333,6 +333,7 @@ where
 		// /event_auth to avoid excessive HTTP overhead and let the caller
 		// retry via /state_ids instead.
 		const MAX_INLINE_FETCH: usize = 5;
+		let mut rejected_in_chain = std::collections::BTreeSet::<OwnedEventId>::new();
 		if missing_auth_events.len() <= MAX_INLINE_FETCH {
 			info!(
 				target: "state_res_debug",
@@ -403,7 +404,7 @@ where
 				for auth_eid in sorted_auth_chain {
 					if let Some((auth_val, _)) = auth_chain_map.remove(&auth_eid) {
 						if !auth_events.contains_key(&auth_eid) {
-							if let Ok((pdu, _)) = Box::pin(self.handle_outlier_pdu(
+							match Box::pin(self.handle_outlier_pdu(
 								origin,
 								create_event,
 								&auth_eid,
@@ -415,7 +416,15 @@ where
 							))
 							.await
 							{
-								auth_events.insert(pdu.event_id().to_owned(), pdu);
+								| Ok((pdu, _)) => {
+									auth_events.insert(pdu.event_id().to_owned(), pdu);
+								},
+								| Err(_) => {
+									// Auth event was rejected or otherwise failed.
+									// Track locally so the still_missing check below
+									// doesn't depend on DB write visibility.
+									rejected_in_chain.insert(auth_eid.to_owned());
+								},
 							}
 						}
 					}
@@ -426,7 +435,9 @@ where
 			let mut still_missing = Vec::new();
 			for id in pdu_event.auth_events() {
 				if !auth_events.contains_key(id) {
-					if self.services.pdu_metadata.is_event_rejected(id).await {
+					if rejected_in_chain.contains(id)
+						|| self.services.pdu_metadata.is_event_rejected(id).await
+					{
 						self.services.pdu_metadata.mark_event_rejected(event_id);
 						self.services.outlier.add_pdu_outlier(
 							pdu_event.event_id(),
