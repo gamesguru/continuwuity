@@ -295,11 +295,19 @@ pub enum YoloCommand {
 
 	/// Fetch a room's DAG from a remote server via federation backfill API
 	/// and write it to a JSONL file.
+	///
+	/// With --gap-fill, uses a 3-layer hybrid approach:
+	///   Layer 1: /get_missing_events (targeted gap-fill between components)
+	///   Layer 2: /backfill (bulk crawl backwards, 500 events/batch)
+	///   Layer 3: GET /event/{id} (targeted stragglers)
+	///
+	/// With --import, inserts fetched PDUs directly into the timeline.
+	/// With --reorder, chains reorder-timeline after completion.
 	GetRemoteDag {
 		/// Room ID
 		room_id: OwnedRoomId,
 
-		/// Remote server to fetch from
+		/// Primary remote server to fetch from
 		server: OwnedServerName,
 
 		/// Maximum number of events to fetch (-1 for unlimited, default: 100)
@@ -321,6 +329,27 @@ pub enum YoloCommand {
 		/// Override the room version instead of guessing it if missing.
 		#[arg(long)]
 		room_version: Option<ruma::RoomVersionId>,
+
+		/// Additional servers to fan out to (rotates on dead-end/429)
+		#[arg(long = "also")]
+		extra_servers: Vec<OwnedServerName>,
+
+		/// Use 3-layer hybrid approach: /get_missing_events → /backfill →
+		/// GET /event to fill DAG gaps
+		#[arg(long)]
+		gap_fill: bool,
+
+		/// Insert fetched PDUs directly into the timeline (like import-pdus)
+		#[arg(long)]
+		import: bool,
+
+		/// Skip auth checks when importing (requires --import)
+		#[arg(long, requires = "import")]
+		skip_auth: bool,
+
+		/// Run reorder-timeline after completion (requires --import)
+		#[arg(long, requires = "import")]
+		reorder: bool,
 	},
 
 	/// Fetches a PDU from a remote server and attempts to verify/persist it.

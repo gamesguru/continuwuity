@@ -264,6 +264,8 @@ pub(super) async fn get_room_dag(
 }
 
 #[admin_command]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::fn_params_excessive_bools)]
 pub(super) async fn get_remote_dag(
 	&self,
 	room_id: OwnedRoomId,
@@ -273,6 +275,11 @@ pub(super) async fn get_remote_dag(
 	print: bool,
 	verbose: bool,
 	room_version: Option<RoomVersionId>,
+	extra_servers: Vec<OwnedServerName>,
+	_gap_fill: bool,
+	import: bool,
+	_skip_auth: bool,
+	reorder: bool,
 ) -> Result {
 	use futures::StreamExt;
 
@@ -308,6 +315,40 @@ pub(super) async fn get_remote_dag(
 			},
 	};
 
+	// Build server pool: primary + auto-discovered EMA-ranked room servers
+	let origin = room_id
+		.server_name()
+		.filter(|s| !self.services.globals.server_is_ours(s))
+		.unwrap_or_else(|| self.services.globals.server_name());
+	let mut pool = self
+		.services
+		.rooms
+		.event_handler
+		.build_server_pool(
+			&room_id,
+			origin,
+			self.services.server.config.federation_fallback_room_servers,
+		)
+		.await;
+
+	// Add any explicit --also servers
+	if !extra_servers.is_empty() {
+		let mut servers = vec![server.clone()];
+		for s in &extra_servers {
+			if !servers.contains(s) {
+				servers.push(s.clone());
+			}
+		}
+		// Rebuild pool with explicit servers first
+		let ranked = pool.server_names().to_vec();
+		for s in ranked {
+			if !servers.contains(&s) {
+				servers.push(s);
+			}
+		}
+		pool = service::rooms::event_handler::server_pool::ServerPool::from_servers(servers);
+	}
+
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
 	let path = format!("/tmp/remote-dag-{safe_room_id}-v{room_version}-{server}.jsonl");
 	let file = tokio::fs::File::create(&path)
@@ -329,9 +370,13 @@ pub(super) async fn get_remote_dag(
 	let batch_size = ruma::uint!(500);
 	let start_time = tokio::time::Instant::now();
 
-	info!("get-remote-dag: starting crawl from {server} for {room_id} (limit: {limit})");
-	self.write_str(&format!("Fetching DAG from {server} for {room_id} (limit: {limit})...\n"))
-		.await?;
+	let server_list_str = pool.display();
+
+	info!("get-remote-dag: starting crawl from {server_list_str} for {room_id} (limit: {limit})");
+	self.write_str(&format!(
+		"Fetching DAG from {server_list_str} for {room_id} (limit: {limit})...\n"
+	))
+	.await?;
 
 	let unlimited = limit < 0;
 	let limit = if unlimited {
@@ -345,6 +390,17 @@ pub(super) async fn get_remote_dag(
 		// Drain items from front so we don't lose unsent frontier items.
 		let current_batch_size = 50.min(queue.len());
 		let request_v: Vec<_> = queue.drain(..current_batch_size).collect();
+
+		// Pick next available server from the pool
+		let Some(active_server) = pool.next_available() else {
+			// All servers in cooldown, wait briefly
+			for id in request_v.into_iter().rev() {
+				queue.push_front(id);
+			}
+			tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+			continue;
+		};
+
 		let request = ruma::api::federation::backfill::get_backfill::v1::Request {
 			room_id: room_id.clone(),
 			v: request_v.clone(),
@@ -355,11 +411,12 @@ pub(super) async fn get_remote_dag(
 		let mut response = match self
 			.services
 			.sending
-			.send_federation_request(&server, request)
+			.send_federation_request(&active_server, request)
 			.await
 		{
 			| Ok(r) => {
 				consecutive_errors = 0;
+				pool.record_success(&active_server);
 				r
 			},
 			| Err(e) => {
@@ -374,29 +431,47 @@ pub(super) async fn get_remote_dag(
 					continue;
 				}
 
-				// Other errors: re-add all items to retry
+				// Re-add items for next server attempt
 				for id in request_v.clone().into_iter().rev() {
 					queue.push_front(id);
 				}
 
+				// 429 rate limit — pool handles cooldown + backoff
+				if service::rooms::event_handler::server_pool::ServerPool::is_rate_limit(&err_str)
+				{
+					pool.record_rate_limit(&active_server);
+					info!("get-remote-dag: {active_server} rate-limited, rotating");
+					continue;
+				}
+
+				// Other errors
+				pool.record_error(&active_server);
 				consecutive_errors = consecutive_errors.saturating_add(1);
 				info!(
-					"get-remote-dag: federation request failed after {total} PDUs in {batches} \
-					 batches (attempt {consecutive_errors}/3): {e}"
+					"get-remote-dag: {active_server} request failed after {total} PDUs in \
+					 {batches} batches (attempt {consecutive_errors}/3): {e}"
 				);
 				if verbose {
 					self.write_str(&format!(
-						"Federation request failed (batch {batches}, queue={}, attempt \
-						 {consecutive_errors}/3):\n```\n{e:?}\n```\n",
+						"Federation request to {active_server} failed (batch {batches}, \
+						 queue={}, attempt {consecutive_errors}/3):\n```\n{e:?}\n```\n",
 						queue.len()
 					))
 					.await?;
 				} else {
 					self.write_str(&format!(
-						"Federation request failed (attempt {consecutive_errors}/3): {e}"
+						"Federation request to {active_server} failed (attempt \
+						 {consecutive_errors}/3): {e}"
 					))
 					.await?;
 				}
+
+				// With multiple servers, rotate instead of giving up
+				if pool.is_multi() {
+					consecutive_errors = 0;
+					continue;
+				}
+
 				if consecutive_errors >= 3 {
 					self.write_str("Giving up after 3 consecutive failures.\n")
 						.await?;
@@ -407,19 +482,41 @@ pub(super) async fn get_remote_dag(
 		};
 
 		if response.pdus.is_empty() {
-			info!("get-remote-dag: server gave empty /backfill, attempting /event/ fallback");
+			// Dead-end — pool puts this server in short cooldown
+			pool.record_dead_end(&active_server);
+			for id in request_v.into_iter().rev() {
+				queue.push_front(id);
+			}
+
+			if !pool.all_exhausted() {
+				continue; // Try another server
+			}
+
+			// All servers exhausted, fall back to /event/
+			info!("get-remote-dag: all servers exhausted, falling back to /event/");
+			let batch_size_fb = 50.min(queue.len());
+			let request_v_fallback: Vec<_> = queue.drain(..batch_size_fb).collect();
 			let mut fallback_pdus = Vec::new();
-			for event_id in request_v {
-				if let Ok(res) = self
-					.services
-					.sending
-					.send_federation_request(&server, get_event::v1::Request {
-						event_id: event_id.clone(),
-						include_unredacted_content: None,
-					})
-					.await
-				{
-					fallback_pdus.push(res.pdu);
+			for event_id in &request_v_fallback {
+				for fallback_server in pool.server_names() {
+					if let Ok(res) = self
+						.services
+						.sending
+						.send_federation_request(fallback_server, get_event::v1::Request {
+							event_id: event_id.clone(),
+							include_unredacted_content: None,
+						})
+						.await
+					{
+						if fallback_server.as_str() != server.as_str() {
+							info!(
+								"get-remote-dag: {fallback_server} filled gap {event_id} that \
+								 primary server didn't have"
+							);
+						}
+						fallback_pdus.push(res.pdu);
+						break;
+					}
 				}
 			}
 			if fallback_pdus.is_empty() {
@@ -431,7 +528,7 @@ pub(super) async fn get_remote_dag(
 			}
 			info!("get-remote-dag: recovered {} PDUs via /event/ fallback!", fallback_pdus.len());
 			response = ruma::api::federation::backfill::get_backfill::v1::Response {
-				origin: server.clone(),
+				origin: active_server.clone(),
 				origin_server_ts: ruma::MilliSecondsSinceUnixEpoch::now(),
 				pdus: fallback_pdus,
 			};
@@ -587,11 +684,26 @@ pub(super) async fn get_remote_dag(
 		.unwrap_or_default();
 
 	self.write_str(&format!(
-		"\nSuccessfully fetched {total} PDUs from {server} to {display_path} (depth: \
+		"\nSuccessfully fetched {total} PDUs from {server_list_str} to {display_path} (depth: \
 		 {min_depth}..{max_depth}, branching factor: {bf_whole}.{bf_frac:03})\nReason: \
 		 {finish_reason}{tail_hint}\n"
 	))
-	.await
+	.await?;
+
+	// Pipeline hint
+	if import {
+		self.write_str(&format!(
+			"\nTo import: `yolo import-pdus {room_id} {display_path} --skip-sig-verify`\n"
+		))
+		.await?;
+	}
+
+	if reorder {
+		self.write_str(&format!("To reorder: `yolo reorder-timeline {room_id}`\n"))
+			.await?;
+	}
+
+	Ok(())
 }
 
 #[admin_command]

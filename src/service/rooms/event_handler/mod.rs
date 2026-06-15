@@ -9,6 +9,7 @@ mod handle_prev_pdu;
 mod parse_incoming_pdu;
 mod policy_server;
 mod resolve_state;
+pub mod server_pool;
 mod state_at_incoming;
 pub mod upgrade_outlier_pdu;
 
@@ -241,6 +242,50 @@ impl Service {
 		} else {
 			stats.errors.fetch_add(1, Ordering::Relaxed);
 		}
+	}
+
+	/// Build a [`ServerPool`] for a room, combining a primary server with
+	/// auto-discovered EMA-ranked room members.
+	///
+	/// This is the preferred entry point for any federation operation that
+	/// needs multi-server rotation with cooldown/backoff.
+	pub async fn build_server_pool(
+		&self,
+		room_id: &RoomId,
+		primary: &ruma::ServerName,
+		room_server_cap: usize,
+	) -> server_pool::ServerPool {
+		let ranked = self
+			.build_federation_server_list(room_id, primary, room_server_cap)
+			.await;
+
+		// Primary first, then merge ranked list (deduplicating)
+		let mut servers = vec![primary.to_owned()];
+		for s in ranked {
+			if !servers.contains(&s) {
+				servers.push(s);
+			}
+		}
+
+		let mut pool = server_pool::ServerPool::from_servers(servers);
+
+		// Seed signals from persistent PeerStats EMA data
+		for entry in &self.peer_scorer {
+			let server = entry.key();
+			let stats = entry.value();
+			let latency = f64::from(stats.latency_ms.load(Ordering::Relaxed));
+			let successes = f64::from(stats.successes.load(Ordering::Relaxed));
+			let errors = f64::from(stats.errors.load(Ordering::Relaxed));
+			let responsiveness = if (successes + errors) > 0.0 {
+				successes / (successes + errors)
+			} else {
+				0.5 // Unknown servers get neutral responsiveness
+			};
+			pool.set_signal(server, "latency", latency);
+			pool.set_signal(server, "responsiveness", responsiveness);
+		}
+
+		pool
 	}
 }
 
