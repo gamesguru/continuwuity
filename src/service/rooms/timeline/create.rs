@@ -301,7 +301,7 @@ pub async fn create_hash_and_sign_event(
 			| Error::Signatures(ruma::signatures::Error::PduSize) => {
 				Err!(Request(TooLarge("Message/PDU is too long (exceeds 65535 bytes)")))
 			},
-			| _ => Err!(Request(Unknown(warn!("Signing event failed: {e}")))),
+			| _ => Err!(Request(BadJson(warn!("Signing event failed: {e}")))),
 		};
 	}
 	// Generate event id
