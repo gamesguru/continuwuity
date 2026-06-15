@@ -52,14 +52,14 @@ impl Console {
 			if running {
 				self.interrupt_command();
 			} else if std::io::stdout().is_terminal() {
-				self.start().await;
+				self.start();
 			} else {
 				self.server.shutdown().unwrap_or_else(error::default_log);
 			}
 		}
 	}
 
-	pub async fn start(self: &Arc<Self>) {
+	pub fn start(self: &Arc<Self>) {
 		let mut worker_join = self.worker_join.lock();
 		if worker_join.is_none() {
 			let self_ = Arc::clone(self);

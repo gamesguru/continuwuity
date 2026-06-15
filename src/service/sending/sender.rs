@@ -58,7 +58,7 @@ enum TransactionStatus {
 	Cooldown(Instant),
 }
 
-type SendingError = (Destination, Error);
+type SendingError = Box<(Destination, Error)>;
 type SendingResult = Result<Destination, SendingError>;
 type SendingFuture<'a> = BoxFuture<'a, SendingResult>;
 type SendingFutures<'a> = FuturesUnordered<SendingFuture<'a>>;
@@ -141,7 +141,7 @@ impl Service {
 	) {
 		match response {
 			| Ok(dest) => self.handle_response_ok(&dest, futures, statuses).await,
-			| Err((dest, e)) => self.handle_response_err(dest, statuses, &e),
+			| Err(err) => self.handle_response_err(err.0, statuses, &err.1),
 		}
 	}
 
@@ -922,10 +922,10 @@ impl Service {
 		events: Vec<SendingEvent>,
 	) -> SendingResult {
 		let Some(appservice) = self.services.appservice.get_registration(&id).await else {
-			return Err((
+			return Err(Box::new((
 				Destination::Appservice(id.clone()),
 				err!(Database(warn!(?id, "Missing appservice registration"))),
-			));
+			)));
 		};
 
 		let mut pdu_jsons = Vec::with_capacity(
@@ -981,7 +981,7 @@ impl Service {
 			.await
 		{
 			| Ok(_) => Ok(Destination::Appservice(id)),
-			| Err(e) => Err((Destination::Appservice(id), e)),
+			| Err(e) => Err(Box::new((Destination::Appservice(id), e))),
 		}
 	}
 
@@ -1000,10 +1000,10 @@ impl Service {
 		events: Vec<SendingEvent>,
 	) -> SendingResult {
 		let Ok(pusher) = self.services.pusher.get_pusher(&user_id, &pushkey).await else {
-			return Err((
+			return Err(Box::new((
 				Destination::Push(user_id.clone(), pushkey.clone()),
 				err!(Database(error!(%user_id, ?pushkey, "Missing pusher"))),
-			));
+			)));
 		};
 
 		let mut pdus = Vec::with_capacity(
@@ -1058,7 +1058,7 @@ impl Service {
 				.pusher
 				.send_push_notice(&user_id, unread, &pusher, rules_for_user, &pdu)
 				.await
-				.map_err(|e| (Destination::Push(user_id.clone(), pushkey.clone()), e));
+				.map_err(|e| Box::new((Destination::Push(user_id.clone(), pushkey.clone()), e)));
 		}
 
 		Ok(Destination::Push(user_id, pushkey))
@@ -1186,7 +1186,7 @@ impl Service {
 		match result {
 			| Err(error) => {
 				self.stats.outgoing_errors.fetch_add(1, Ordering::Relaxed);
-				Err((Destination::Federation(server), error))
+				Err(Box::new((Destination::Federation(server), error)))
 			},
 			| Ok(_) => {
 				if let Some(count) = edu_count {

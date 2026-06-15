@@ -330,7 +330,7 @@ impl Service {
 			.await?;
 
 		self.schedule_timeout(user_id, new_state)?;
-		self.notify_presence_change(user_id).await.log_err().ok();
+		self.notify_presence_change(user_id).log_err().ok();
 
 		Ok(())
 	}
@@ -358,7 +358,7 @@ impl Service {
 			.await?;
 
 		self.schedule_timeout(user_id, presence_state)?;
-		self.notify_presence_change(user_id).await.log_err().ok();
+		self.notify_presence_change(user_id).log_err().ok();
 
 		Ok(())
 	}
@@ -444,7 +444,7 @@ impl Service {
 
 			// Broadcast offline transition to remotely clear federation backoff timers!
 			// This triggers the automated catch-up of missed events from downtime.
-			self.notify_presence_change(&user_id).await.log_err().ok();
+			self.notify_presence_change(&user_id).log_err().ok();
 		}
 
 		warn!("Presence reset complete: {reset} users reset to offline.");
@@ -513,14 +513,14 @@ impl Service {
 			// see the updated presence state. We have capped the outbound concurrent
 			// sending futures to 128 per worker to ensure that this batching doesn't
 			// create an outbound I/O storm or deplete DNS resources.
-			self.notify_presence_change(user_id).await.log_err().ok();
+			self.notify_presence_change(user_id).log_err().ok();
 		}
 
 		Ok(())
 	}
 
 	/// Intelligently batches user presence updates to remote servers
-	async fn notify_presence_change(&self, user_id: &UserId) -> Result<()> {
+	fn notify_presence_change(&self, user_id: &UserId) -> Result<()> {
 		if !self.services.globals.user_is_local(user_id) {
 			return Ok(());
 		}

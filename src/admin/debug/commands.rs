@@ -2028,7 +2028,7 @@ pub(super) async fn send_test_email(&self) -> Result {
 #[admin_command]
 pub(super) async fn fix_pdu_event_ids(&self) -> Result {
 	let timeline_fixed = self.services.rooms.timeline.fix_pdu_event_ids().await?;
-	let outlier_fixed = self.services.rooms.outlier.fix_pdu_event_ids().await?;
+	let outlier_fixed = self.services.rooms.outlier.fix_pdu_event_ids()?;
 
 	let out = format!(
 		"Fixed {timeline_fixed} missing event_ids in timeline PDUs.\nFixed {outlier_fixed} \

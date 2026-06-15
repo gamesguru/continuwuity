@@ -217,7 +217,7 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 }
 
 #[implement(Service)]
-pub async fn fix_pdu_event_ids(&self) -> Result<usize> { Ok(0) }
+pub fn fix_pdu_event_ids(&self) -> Result<usize> { Ok(0) }
 
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "info")]

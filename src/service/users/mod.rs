@@ -1276,14 +1276,13 @@ impl Service {
 	) -> Result<()> {
 		increment(&self.db.userid_devicelistversion, user_id.as_bytes());
 		self.update_device_metadata_no_increment(user_id, device_id, device)
-			.await
 	}
 
 	// Updates device metadata without incrementing the device list version.
 	// This is namely used for updating the last_seen_ip and last_seen_ts values,
 	// as those do not need a device list version bump due to them not being
 	// relevant to other consumers.
-	pub async fn update_device_metadata_no_increment(
+	pub fn update_device_metadata_no_increment(
 		&self,
 		user_id: &UserId,
 		device_id: &DeviceId,
@@ -1314,7 +1313,6 @@ impl Service {
 				device.last_seen_ts = Some(now);
 
 				self.update_device_metadata_no_increment(user_id, device_id, &device)
-					.await
 					.ok();
 			}
 		}
