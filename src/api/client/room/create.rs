@@ -24,7 +24,6 @@ use ruma::{
 			member::{MembershipState, RoomMemberEventContent},
 			name::RoomNameEventContent,
 			power_levels::RoomPowerLevelsEventContent,
-			topic::RoomTopicEventContent,
 		},
 	},
 	int,
@@ -520,7 +519,15 @@ pub(crate) async fn create_room_route(
 			.rooms
 			.timeline
 			.build_and_append_pdu(
-				PduBuilder::state(String::new(), &RoomTopicEventContent { topic: topic.clone() }),
+				PduBuilder {
+					event_type: TimelineEventType::RoomTopic,
+					content: to_raw_value(&json!({
+						"topic": topic,
+						"m.topic": { "m.text": [{ "body": topic }] },
+					}))?,
+					state_key: Some(StateKey::new()),
+					..Default::default()
+				},
 				sender_user,
 				Some(&room_id),
 				&state_lock,
