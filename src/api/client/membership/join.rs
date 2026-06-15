@@ -751,11 +751,14 @@ async fn join_room_by_id_helper_remote(
 		.await?;
 
 	debug!("Updating joined counts for new room");
+	// Update our membership locally to join state before calculating the joined
+	// counts, so that our server is properly added to the server participation
+	// cache.
 	services
 		.rooms
 		.state_cache
-		.update_joined_count(room_id)
-		.await;
+		.update_membership(room_id, sender_user, &parsed_join_pdu, true)
+		.await?;
 
 	// We append to state before appending the pdu, so we don't have a moment in
 	// time with the pdu without it's state. This is okay because append_pdu can't
