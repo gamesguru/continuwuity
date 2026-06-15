@@ -503,3 +503,9 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 ];
+
+/// Returns an iterator of column family names from the static MAPS list.
+/// Used for schema fingerprinting across crate boundaries.
+pub fn column_family_names() -> impl Iterator<Item = &'static str> {
+	MAPS.iter().map(|desc| desc.name)
+}

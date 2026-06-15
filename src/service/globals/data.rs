@@ -78,4 +78,16 @@ impl Data {
 	pub fn bump_database_version(&self, new_version: u64) {
 		self.global.raw_put(b"version", new_version);
 	}
+
+	pub async fn schema_fingerprint(&self) -> Option<[u8; 32]> {
+		self.global
+			.get(b"schema_fingerprint")
+			.await
+			.ok()
+			.and_then(|bytes| bytes.as_ref().try_into().ok())
+	}
+
+	pub fn set_schema_fingerprint(&self, hash: &[u8; 32]) {
+		self.global.insert(b"schema_fingerprint", hash);
+	}
 }

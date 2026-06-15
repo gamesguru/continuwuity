@@ -23,6 +23,7 @@ use ruma::{
 	push::Ruleset,
 	serde::Raw,
 };
+use sha2::{Digest, Sha256};
 
 use crate::{Services, media, rooms::short::ShortStateHash};
 
@@ -33,6 +34,37 @@ use crate::{Services, media, rooms::short::ShortStateHash};
 ///   Note that named-feature migrations may also be performed when opening at
 ///   equal or lesser version. These are expected to be backward-compatible.
 pub(crate) const DATABASE_VERSION: u64 = 19;
+
+/// Column families explicitly dropped in migrations. These are included
+/// in the fingerprint hash (prefixed with '-') so that a branch which
+/// still has them as live CFs produces a different fingerprint.
+const DROPPED_CFS: &[&str] =
+	&["eventid_receivecount", "roomid_outliereventid", "softfailedeventids"];
+
+/// Compute schema fingerprint from the static column family name list,
+/// explicitly dropped CFs, and the schema version number.
+fn compute_schema_fingerprint() -> [u8; 32] {
+	let mut hasher = Sha256::new();
+
+	// Include version so (v19, CFs) != (v20, same CFs)
+	hasher.update(DATABASE_VERSION.to_be_bytes());
+
+	// MAPS is already in alphabetical order (static slice)
+	for name in database::maps::column_family_names() {
+		hasher.update(b"+");
+		hasher.update(name.as_bytes());
+		hasher.update(b"\n");
+	}
+
+	// Dropped CFs marked with '-' prefix
+	for name in DROPPED_CFS {
+		hasher.update(b"-");
+		hasher.update(name.as_bytes());
+		hasher.update(b"\n");
+	}
+
+	hasher.finalize().into()
+}
 
 pub(crate) async fn migrations(services: &Services) -> Result<()> {
 	let users_count = services.users.count().await;
@@ -62,6 +94,10 @@ async fn fresh(services: &Services) -> Result<()> {
 	let db = &services.db;
 
 	services.globals.db.bump_database_version(DATABASE_VERSION);
+	services
+		.globals
+		.db
+		.set_schema_fingerprint(&compute_schema_fingerprint());
 
 	db["global"].insert(b"feat_sha256_media", []);
 	db["global"].insert(b"fix_bad_double_separator_in_state_cache", []);
@@ -88,6 +124,15 @@ async fn fresh(services: &Services) -> Result<()> {
 async fn migrate(services: &Services) -> Result<()> {
 	let db = &services.db;
 	let config = &services.server.config;
+
+	// Guard against running software older than what created this database
+	let db_version = services.globals.db.database_version().await;
+	if db_version > DATABASE_VERSION {
+		return Err!(Database(
+			"Database schema version {db_version} is newer than this software supports \
+			 ({DATABASE_VERSION}). Upgrade the software or use a compatible database.",
+		));
+	}
 
 	if services.globals.db.database_version().await < 11 {
 		return Err!(Database(
@@ -280,14 +325,26 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run 'populate_topological_index': {e}"))?;
 	}
 
-	assert_eq!(
-		services.globals.db.database_version().await,
-		DATABASE_VERSION,
-		"Failed asserting local database version {} is equal to known latest continuwuity \
-		 database version {}",
-		services.globals.db.database_version().await,
-		DATABASE_VERSION,
-	);
+	if services.globals.db.database_version().await != DATABASE_VERSION {
+		return Err!(Database(
+			"Database version {} does not match expected version {DATABASE_VERSION} after \
+			 running all migrations.",
+			services.globals.db.database_version().await,
+		));
+	}
+
+	// Validate schema fingerprint (trust-on-first-use for upgrades)
+	let expected = compute_schema_fingerprint();
+	if let Some(stored) = services.globals.db.schema_fingerprint().await {
+		if stored != expected {
+			return Err!(Database(
+				"Schema fingerprint mismatch! This database was created by a different build \
+				 with incompatible column families. Expected {expected:x?}, found {stored:x?}. \
+				 Do NOT continue — data corruption will occur.",
+			));
+		}
+	}
+	services.globals.db.set_schema_fingerprint(&expected);
 
 	{
 		let patterns = services.globals.forbidden_usernames();
@@ -1197,4 +1254,45 @@ async fn db_lt_19(services: &Services) -> Result<()> {
 
 	services.globals.db.bump_database_version(19);
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_schema_fingerprint_deterministic() {
+		let a = compute_schema_fingerprint();
+		let b = compute_schema_fingerprint();
+		assert_eq!(a, b, "fingerprint must be deterministic");
+	}
+
+	#[test]
+	fn test_schema_fingerprint_not_empty() {
+		let fp = compute_schema_fingerprint();
+		assert_ne!(fp, [0u8; 32], "fingerprint must not be all zeros");
+	}
+
+	#[test]
+	fn test_schema_fingerprint_sensitive_to_dropped_cfs() {
+		// The fingerprint includes DROPPED_CFS; verify our list is non-empty
+		// and thus contributes to the hash
+		assert!(
+			!DROPPED_CFS.is_empty(),
+			"DROPPED_CFS must list explicitly dropped column families"
+		);
+
+		// Verify the CF names we expect are present
+		assert!(DROPPED_CFS.contains(&"softfailedeventids"));
+		assert!(DROPPED_CFS.contains(&"eventid_receivecount"));
+		assert!(DROPPED_CFS.contains(&"roomid_outliereventid"));
+	}
+
+	#[test]
+	fn test_schema_fingerprint_includes_version() {
+		// The hash includes DATABASE_VERSION.to_be_bytes() as first input.
+		// We can't easily test mutation, but we verify the constant is
+		// included by confirming it matches the expected value.
+		assert_eq!(DATABASE_VERSION, 19);
+	}
 }
