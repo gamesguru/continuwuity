@@ -149,8 +149,6 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
-
-
       - name: Build Complement Docker image
         run: make complement/docker PROFILE=${{ matrix.profile }}
 
