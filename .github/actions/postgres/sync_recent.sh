@@ -7,7 +7,7 @@ set -euo pipefail
 
 LIMIT=${1:-100}
 TARGET_BRANCH=${TARGET_BRANCH:-"_metadata/badges"}
-DB_TARGET=${DATABASE_URL:-"c10y"}
+export DB_TARGET=${DATABASE_URL:-"c10y"}
 SSH_TARGET=${SSH_TARGET:-"git@nutra.tk"}
 
 echo "→ Fetching latest metadata from origin/$TARGET_BRANCH..."
@@ -18,7 +18,7 @@ git fetch origin "$TARGET_BRANCH" --depth 1 --filter=blob:none >/dev/null 2>&1
 echo "→ Streaming last $LIMIT run summaries..."
 (
 	echo "CREATE TEMP TABLE b (j jsonb);"
-	echo "\copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+	printf '%s\n' "\copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';"
 	git show "FETCH_HEAD:runs.jsonl" | tail -n "$LIMIT"
 	echo "\."
 	echo "INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, profile, binary_sha256, n_pass, n_skip, n_fail, room_version)
@@ -34,7 +34,7 @@ echo "→ Streaming last $LIMIT run summaries..."
 echo "→ Streaming last $LIMIT run details (incremental files)..."
 (
 	echo "CREATE TEMP TABLE t (j jsonb);"
-	echo "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+	printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
 
 	# Pre-cache the file list from the tree for fast existence checks
 	ALL_FILES=$(git ls-tree -r FETCH_HEAD:runs_data --name-only || true)
@@ -48,10 +48,10 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
 		PROFILE=$(echo "$run_json" | jq -r '.profile // ""')
 		ROOM_VERSION=$(echo "$run_json" | jq -r '.room_version // ""')
 
-		SAFE_ARCH=$(echo "$ARCH" | sed 's/[^a-zA-Z0-9._-]/_/g')
-		SAFE_OS=$(echo "$OS" | sed 's/[^a-zA-Z0-9._-]/_/g')
-		SAFE_PROFILE=$(echo "$PROFILE" | sed 's/[^a-zA-Z0-9._-]/_/g')
-		SAFE_ROOM_VERSION=$(echo "$ROOM_VERSION" | sed 's/[^a-zA-Z0-9._-]/_/g')
+		SAFE_ARCH=${ARCH//[!a-zA-Z0-9._-]/_}
+		SAFE_OS=${OS//[!a-zA-Z0-9._-]/_}
+		SAFE_PROFILE=${PROFILE//[!a-zA-Z0-9._-]/_}
+		SAFE_ROOM_VERSION=${ROOM_VERSION//[!a-zA-Z0-9._-]/_}
 
 		BASENAME="${COMMIT}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}-${SAFE_ROOM_VERSION}.jsonl"
 		FILENAME="runs_data/${BASENAME}"
@@ -76,7 +76,15 @@ echo "→ Streaming last $LIMIT run details (incremental files)..."
         WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
 
-        REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;
-") | ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
+        INSERT INTO ever_passed (test_name, rv, last_passed)
+        SELECT rd.test_name, COALESCE(r.room_version, '11'), MAX(r.run_date)::date::text
+        FROM run_details rd
+        JOIN runs r ON rd.run_id = r.id
+        WHERE rd.status = 'pass'
+        GROUP BY rd.test_name, COALESCE(r.room_version, '11')
+        ON CONFLICT (test_name, rv) DO UPDATE
+        SET last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed);
+"
+) | ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
 
 echo "✓ Incremental sync of last $LIMIT runs complete."

@@ -44,21 +44,24 @@ ON run_details (run_id, test_name);
 
 -- Performance indexes
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
+CREATE INDEX IF NOT EXISTS idx_run_details_covering ON run_details (run_id, test_name, status);
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 
 -- Pre-computed set of tests that have ever passed, per room_version.
--- Refreshed by CI after each insert. Enables O(1) regression lookups.
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ever_passed AS
-SELECT rd.test_name,
-       COALESCE(r.room_version, '11') AS rv,
-       MAX(r.run_date)::date::text AS last_passed
-FROM run_details rd
-JOIN runs r ON rd.run_id = r.id
-WHERE rd.status = 'pass'
-GROUP BY rd.test_name, COALESCE(r.room_version, '11');
+-- Updated incrementally by CI via UPSERT after each ingest.
+-- Legacy: was a MATERIALIZED VIEW, now a regular table for fast incremental updates.
+CREATE TABLE IF NOT EXISTS ever_passed (
+    test_name text NOT NULL,
+    rv text NOT NULL DEFAULT '11',
+    last_passed text,
+    last_commit text,
+    last_branch text,
+    branches text[] DEFAULT '{}',
+    PRIMARY KEY (test_name, rv)
+);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_ever_passed
-ON mv_ever_passed (test_name, rv);
+-- Backward compat alias (queries reference mv_ever_passed)
+CREATE OR REPLACE VIEW mv_ever_passed AS SELECT * FROM ever_passed;
 
 -- Global regression view: a test is a "new failure" if it fails now
 -- AND has ever passed in any run with the same room_version.

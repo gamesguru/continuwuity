@@ -18,6 +18,11 @@ baseline_runs AS (
     FROM runs b2
     WHERE b2.commit_hash = (SELECT commit_hash FROM baseline_commit)
 ),
+baseline_details AS (
+    SELECT rd.test_name, rd.status, b.id AS baseline_run_id
+    FROM baseline_runs b
+    JOIN run_details rd ON rd.run_id = b.id
+),
 recent_runs AS (
     SELECT r.*
     FROM runs r
@@ -39,16 +44,16 @@ run_agg AS (
     SELECT
         rd.run_id,
         COUNT(*) as run_total,
-        COUNT(*) FILTER (WHERE rd.status = 'pass' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'pass'))) as new_pass,
-        COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'fail'))) as new_fail,
-        COUNT(*) FILTER (WHERE rd.status = 'skip' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'skip'))) as new_skip,
+        COUNT(*) FILTER (WHERE rd.status = 'pass' AND (mb.baseline_run_id IS NOT NULL AND (bd.status IS NULL OR bd.status != 'pass'))) as new_pass,
+        COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb.baseline_run_id IS NOT NULL AND (bd.status IS NULL OR bd.status != 'fail'))) as new_fail,
+        COUNT(*) FILTER (WHERE rd.status = 'skip' AND (mb.baseline_run_id IS NOT NULL AND (bd.status IS NULL OR bd.status != 'skip'))) as new_skip,
         STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name)
-            FILTER (WHERE rd.status = 'fail' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'fail'))) as new_failures_list,
+            FILTER (WHERE rd.status = 'fail' AND (mb.baseline_run_id IS NOT NULL AND (bd.status IS NULL OR bd.status != 'fail'))) as new_failures_list,
         STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name)
-            FILTER (WHERE rd.status = 'pass' AND (mb.baseline_run_id IS NOT NULL AND (bmb.status IS NULL OR bmb.status != 'pass'))) as new_passes_list
+            FILTER (WHERE rd.status = 'pass' AND (mb.baseline_run_id IS NOT NULL AND (bd.status IS NULL OR bd.status != 'pass'))) as new_passes_list
     FROM run_details rd
     JOIN matched_baselines mb ON mb.run_id = rd.run_id
-    LEFT JOIN run_details bmb ON bmb.test_name = rd.test_name AND bmb.run_id = mb.baseline_run_id
+    LEFT JOIN baseline_details bd ON bd.test_name = rd.test_name AND bd.baseline_run_id = mb.baseline_run_id
     GROUP BY rd.run_id
 )
 SELECT

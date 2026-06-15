@@ -50,7 +50,7 @@ EOF
 echo "→ Consolidating and ingesting test details..."
 (
 	echo "CREATE TEMP TABLE t (j jsonb);"
-	echo "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+	printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
 	for f in "$LEDGER_DIR/runs_data"/*.jsonl; do
 		[ -f "$f" ] || continue
 		BASENAME=$(basename "$f" .jsonl)
@@ -87,7 +87,7 @@ echo "→ Consolidating and ingesting test details..."
 ) | psql "$DB_TARGET"
 
 echo "→ Refreshing ever-passed materialized view..."
-psql "$DB_TARGET" -c "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;" 2>/dev/null || \
+psql "$DB_TARGET" -c "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;" 2>/dev/null ||
 	psql "$DB_TARGET" -c "REFRESH MATERIALIZED VIEW mv_ever_passed;" 2>/dev/null || true
 
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
