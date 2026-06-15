@@ -48,9 +48,12 @@ if baseline_match:
     baseline = baseline_match.group(1)
     args_str = args_str.replace(baseline_match.group(0), "")
 
-# Extract --verbose flag
-verbose = "--verbose" in args_str or "-v" in args_str.split()
-args_str = args_str.replace("--verbose", "").replace(" -v ", " ")
+# Extract --super flag (superscore: best-ever per test across all branches)
+# --verbose is kept as backward-compat alias
+super_mode = "--super" in args_str or "-s" in args_str.split() or "--verbose" in args_str or "-v" in args_str.split()
+for flag in ("--super", "--verbose"):
+    args_str = args_str.replace(flag, "")
+args_str = re.sub(r"\s-[sv]\s", " ", f" {args_str} ").strip()
 
 # Extract new_passes (Must be done before order parsing to avoid greedy capture)
 new_passes = False
@@ -72,7 +75,7 @@ if order_match:
 
 # Build columns_tail based on flags
 cols = ["new_failures_list"]
-if verbose:
+if super_mode:
     cols.extend(["date_last_passed", "branches_passed_on"])
 if new_passes:
     cols.append("new_passes_list")
@@ -84,12 +87,15 @@ if like_str == "all":
 else:
     like_filter = f"AND version_string LIKE '%{like_str}%'"
 
-# Pick query template based on whether a baseline was specified
+# Pick query template:
+#   --super:             "superscore" — global ever-passed across all branches
+#   --super baseline=X:  superscore filtered to a specific branch
+#   baseline=X:          direct diff against a specific commit/branch run
+#   (default):           auto-baseline against the most recent matching run
 script_dir = os.path.dirname(__file__)
-if baseline and verbose:
-    # Verbose + baseline: use global ever-passed query filtered to the baseline branch.
-    # Shows regressions that previously passed on the specified branch.
-    branch_filter = f"AND ep.branches @> ARRAY['{baseline}']"
+if super_mode and baseline:
+    # Superscore + baseline: filter to regressions that previously passed on a specific branch
+    branch_filter = f"AND ep.branches::text LIKE '%{baseline}%'"
     sql_file_path = os.path.join(script_dir, "queries_global.sql")
     with open(sql_file_path, "r", encoding="utf-8") as f:
         base_query_template = f.read()
@@ -101,8 +107,21 @@ if baseline and verbose:
         like_filter=like_filter,
         branch_filter=branch_filter,
     )
+elif super_mode:
+    # Superscore: global ever-passed across all branches ("what's the best I've ever done?")
+    sql_file_path = os.path.join(script_dir, "queries_global.sql")
+    with open(sql_file_path, "r", encoding="utf-8") as f:
+        base_query_template = f.read()
+    query = base_query_template.format(
+        tz_sql=tz_sql,
+        columns_tail=columns_tail,
+        order=order,
+        limit=limit,
+        like_filter=like_filter,
+        branch_filter="",
+    )
 elif baseline:
-    # Custom baseline: compare against a specific commit (direct diff)
+    # Direct diff: compare against a specific commit/branch run
     baseline_run_filter = (
         f"(b.commit_hash LIKE '{baseline}%'"
         f" OR b.version_string LIKE '%{baseline}%'"
@@ -121,17 +140,24 @@ elif baseline:
         like_filter=like_filter,
     )
 else:
-    # Global baseline: uses mv_ever_passed matview (fast, catches all regressions)
-    sql_file_path = os.path.join(script_dir, "queries_global.sql")
+    # Default: auto-baseline against the most recent matching run
+    auto_baseline = like_str if like_str != "all" else "dev"
+    baseline_run_filter = (
+        f"(b.commit_hash LIKE '{auto_baseline}%'"
+        f" OR b.version_string LIKE '%{auto_baseline}%'"
+        f" OR b.branch LIKE '%{auto_baseline}%'"
+        f" OR b.id::text = '{auto_baseline}')"
+    )
+    sql_file_path = os.path.join(script_dir, "queries.sql")
     with open(sql_file_path, "r", encoding="utf-8") as f:
         base_query_template = f.read()
     query = base_query_template.format(
+        baseline_run_filter=baseline_run_filter,
         tz_sql=tz_sql,
         columns_tail=columns_tail,
         order=order,
         limit=limit,
         like_filter=like_filter,
-        branch_filter="",
     )
 
 print(f"\nExecuting Query:\n{query}\n")

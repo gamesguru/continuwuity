@@ -39,6 +39,10 @@ matched_baselines AS (
         AND b2.arch IS NOT DISTINCT FROM r.arch
         AND b2.profile IS NOT DISTINCT FROM r.profile
         AND b2.room_version IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+    LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS cnt FROM run_details rd WHERE rd.run_id = b2.id
+    ) bd_count ON TRUE
+    ORDER BY r.id, bd_count.cnt DESC NULLS LAST
 ),
 run_agg AS (
     SELECT
