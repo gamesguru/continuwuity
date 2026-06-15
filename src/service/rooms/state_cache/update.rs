@@ -122,6 +122,10 @@ pub async fn update_membership(
 			self.mark_as_invited(user_id, room_id, pdu.sender(), Some(last_state), None)
 				.await?;
 		},
+		| MembershipState::Knock => {
+			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
+			self.mark_as_knocked(user_id, room_id, Some(last_state));
+		},
 		| MembershipState::Leave | MembershipState::Ban => {
 			self.mark_as_left(user_id, room_id, Some(pdu.clone())).await;
 		},
