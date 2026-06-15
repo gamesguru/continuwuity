@@ -95,13 +95,11 @@ runs:
           AND r.room_version IS NOT DISTINCT FROM (NULLIF((t.j->>'room_version'), ''))
         WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
+
+        REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;
         SQL
         ) | ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
-
-        # Refresh matview async (fire-and-forget, don't block CI)
-        ssh -o StrictHostKeyChecking=no "$SSH_TARGET" \
-          "nohup psql -U git c10y -c 'REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ever_passed;' > /dev/null 2>&1 &"
-        echo "✓ Direct ingest complete (matview refresh queued)."
+        echo "✓ Direct ingest complete."
 
     - name: Bulk Sync History (backup)
       continue-on-error: true

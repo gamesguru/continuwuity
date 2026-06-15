@@ -73,7 +73,7 @@ if order_match:
 # Build columns_tail based on flags
 cols = ["new_failures_list"]
 if verbose:
-    cols.extend(["date_last_passed", "branches_passed_on"])
+    cols.append("date_last_passed")
 if new_passes:
     cols.append("new_passes_list")
 # Global query uses 'a.' prefix (run_agg alias), baseline uses bare names

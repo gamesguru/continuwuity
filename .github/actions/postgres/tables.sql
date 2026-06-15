@@ -51,9 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ever_passed AS
 SELECT rd.test_name,
        COALESCE(r.room_version, '11') AS rv,
-       MAX(r.run_date)::date::text AS last_passed,
-       '[' || STRING_AGG(DISTINCT LEFT(r.branch, 30), ', ') || ']' AS branches,
-       (array_agg(LEFT(r.commit_hash, 10) ORDER BY r.run_date DESC))[1] AS last_commit
+       MAX(r.run_date)::date::text AS last_passed
 FROM run_details rd
 JOIN runs r ON rd.run_id = r.id
 WHERE rd.status = 'pass'

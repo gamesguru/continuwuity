@@ -27,9 +27,7 @@ run_agg AS (
         STRING_AGG(COALESCE(ep.last_passed, 'never'), E'\n' ORDER BY rd.test_name)
             FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) as date_last_passed,
         STRING_AGG(COALESCE(ep.branches, '[]'), E'\n' ORDER BY rd.test_name)
-            FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) as branches_passed_on,
-        STRING_AGG(COALESCE(ep.last_commit, ''), E'\n' ORDER BY rd.test_name)
-            FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) as last_commit_passed
+            FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) as branches_passed_on
     FROM recent_runs r
     JOIN run_details rd ON rd.run_id = r.id
     LEFT JOIN mv_ever_passed ep
