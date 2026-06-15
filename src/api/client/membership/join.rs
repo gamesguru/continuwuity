@@ -269,6 +269,24 @@ pub async fn join_room_by_id_helper(
 	appservice_info: &Option<RegistrationInfo>,
 	json_body: Option<&CanonicalJsonValue>,
 ) -> Result<join_room_by_id::v3::Response> {
+	services
+		.rooms
+		.state_cache
+		.rooms_joining
+		.write()
+		.insert(room_id.to_owned());
+	struct JoinGuard<'a> {
+		state_cache: &'a service::rooms::state_cache::Service,
+		room_id: &'a RoomId,
+	}
+	impl Drop for JoinGuard<'_> {
+		fn drop(&mut self) { self.state_cache.rooms_joining.write().remove(self.room_id); }
+	}
+	let _join_guard = JoinGuard {
+		state_cache: &services.rooms.state_cache,
+		room_id,
+	};
+
 	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 
 	let user_is_guest = services
