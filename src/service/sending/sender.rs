@@ -79,6 +79,8 @@ const DEQUEUE_LIMIT: usize = 48;
 pub const PDU_LIMIT: usize = 50;
 pub const EDU_LIMIT: usize = 100;
 
+static EDU_TXN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 impl Service {
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub(super) async fn sender(self: Arc<Self>, id: usize) -> Result {
@@ -961,12 +963,23 @@ impl Service {
 			.fetch_add(pdus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
 		self.stats.outgoing_txns.fetch_add(1, Ordering::Relaxed);
 
-		let preimage = pdus
-			.iter()
-			.map(|raw| raw.get().as_bytes())
-			.chain(edus.iter().map(|raw| raw.json().get().as_bytes()));
+		let counter_bytes;
+		let preimage: Vec<&[u8]> = if pdus.is_empty() {
+			let counter = EDU_TXN_COUNTER.fetch_add(1, Ordering::Relaxed);
+			counter_bytes = counter.to_be_bytes();
+			pdus.iter()
+				.map(|raw| raw.get().as_bytes())
+				.chain(edus.iter().map(|raw| raw.json().get().as_bytes()))
+				.chain(std::iter::once(&counter_bytes[..]))
+				.collect()
+		} else {
+			pdus.iter()
+				.map(|raw| raw.get().as_bytes())
+				.chain(edus.iter().map(|raw| raw.json().get().as_bytes()))
+				.collect()
+		};
 
-		let txn_hash = calculate_hash(preimage);
+		let txn_hash = calculate_hash(preimage.into_iter());
 		let txn_id = &*URL_SAFE_NO_PAD.encode(txn_hash);
 		let request = send_transaction_message::v1::Request {
 			transaction_id: txn_id.into(),
