@@ -260,6 +260,15 @@ pub(crate) async fn join_room_by_id_or_alias_route(
 	Ok(join_room_by_id_or_alias::v3::Response { room_id: join_room_response.room_id })
 }
 
+struct JoinGuard<'a> {
+	state_cache: &'a service::rooms::state_cache::Service,
+	room_id: &'a RoomId,
+}
+
+impl Drop for JoinGuard<'_> {
+	fn drop(&mut self) { self.state_cache.rooms_joining.write().remove(self.room_id); }
+}
+
 pub async fn join_room_by_id_helper(
 	services: &Services,
 	sender_user: &UserId,
@@ -275,13 +284,6 @@ pub async fn join_room_by_id_helper(
 		.rooms_joining
 		.write()
 		.insert(room_id.to_owned());
-	struct JoinGuard<'a> {
-		state_cache: &'a service::rooms::state_cache::Service,
-		room_id: &'a RoomId,
-	}
-	impl Drop for JoinGuard<'_> {
-		fn drop(&mut self) { self.state_cache.rooms_joining.write().remove(self.room_id); }
-	}
 	let _join_guard = JoinGuard {
 		state_cache: &services.rooms.state_cache,
 		room_id,
