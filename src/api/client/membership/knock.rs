@@ -523,10 +523,8 @@ async fn knock_room_helper_remote(
 
 	services
 		.rooms
-		.event_handler
-		.pending_room_versions
-		.write()
-		.insert(room_id.to_owned(), room_version_id.clone());
+		.short
+		.set_room_version(room_id, &room_version_id);
 
 	let mut knock_event_stub: CanonicalJsonObject =
 		serde_json::from_str(make_knock_response.event.get()).map_err(|e| {
@@ -701,13 +699,6 @@ async fn knock_room_helper_remote(
 		.state_cache
 		.update_membership(room_id, sender_user, &parsed_knock_pdu, false)
 		.await?;
-
-	services
-		.rooms
-		.event_handler
-		.pending_room_versions
-		.write()
-		.remove(room_id);
 
 	Ok(())
 }

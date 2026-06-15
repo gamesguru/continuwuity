@@ -429,10 +429,8 @@ async fn join_room_by_id_helper_remote(
 
 	services
 		.rooms
-		.event_handler
-		.pending_room_versions
-		.write()
-		.insert(room_id.to_owned(), room_version_id.clone());
+		.short
+		.set_room_version(room_id, &room_version_id);
 
 	let mut join_event_stub: CanonicalJsonObject =
 		serde_json::from_str(make_join_response.event.get()).map_err(|e| {
@@ -883,13 +881,6 @@ async fn join_room_by_id_helper_remote_process(
 			}
 		}));
 	}
-
-	services
-		.rooms
-		.event_handler
-		.pending_room_versions
-		.write()
-		.remove(room_id);
 
 	Ok(())
 }
