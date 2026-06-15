@@ -181,16 +181,6 @@ async fn knock_room_by_id_helper(
 		return Err!(Request(Forbidden("You cannot knock on a room you are already joined in.")));
 	}
 
-	if services
-		.rooms
-		.state_cache
-		.is_knocked(sender_user, room_id)
-		.await
-	{
-		debug_warn!("{sender_user} is already knocked in {room_id}");
-		return Ok(knock_room::v3::Response { room_id: room_id.into() });
-	}
-
 	if let Ok(membership) = services
 		.rooms
 		.state_accessor

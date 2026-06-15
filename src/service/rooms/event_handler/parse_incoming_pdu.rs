@@ -136,7 +136,7 @@ pub async fn parse_incoming_pdu(&self, pdu: &RawJsonValue) -> Result<Parsed> {
 		.state
 		.get_room_version(&room_id)
 		.await
-		.unwrap_or(RoomVersionId::V1);
+		.unwrap_or_else(|_| self.services.server.config.default_room_version.clone());
 	let (event_id, value) = gen_event_id_canonical_json(pdu, &room_version_id).map_err(|e| {
 		err!(Request(InvalidParam("Could not convert event to canonical json: {e}")))
 	})?;
