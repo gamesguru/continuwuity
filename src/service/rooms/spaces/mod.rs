@@ -9,7 +9,7 @@ use conduwuit_core::{
 	Err, Error, Event, PduEvent, Result, debug, implement,
 	utils::{
 		IterStream,
-		future::{BoolExt, TryExtExt},
+		future::TryExtExt,
 		math::usize_from_f64,
 		stream::{BroadbandExt, ReadyExt},
 	},

@@ -358,11 +358,31 @@ async fn build_state_and_timeline(
 			.map(PduCount::Normal)
 	});
 
-	// filter out ignored events from the timeline and convert the PDUs into Ruma's
-	// AnySyncTimelineEvent type
+	// filter out ignored events from the timeline, apply the sync filter's
+	// type restrictions, and convert the PDUs into Ruma's AnySyncTimelineEvent
+	let timeline_types = &sync_context.filter.room.timeline.types;
+	let timeline_not_types = &sync_context.filter.room.timeline.not_types;
 	let filtered_timeline = timeline
 		.pdus
 		.into_iter()
+		.filter(|(_, pdu)| {
+			let event_type = pdu.kind.to_string();
+
+			// if not_types is set, exclude matching types
+			if timeline_not_types
+				.iter()
+				.any(|t| t == "*" || t == &event_type)
+			{
+				return false;
+			}
+
+			// if types is set, only include matching types
+			if let Some(types) = timeline_types {
+				return types.iter().any(|t| t == "*" || t == &event_type);
+			}
+
+			true
+		})
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item, sync_context.syncing_user))
 		.map(at!(1))
