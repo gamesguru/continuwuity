@@ -411,6 +411,11 @@ pub(crate) async fn build_sync_events(
 	let (joined_rooms, left_rooms, invited_rooms, knocked_rooms) =
 		join4(joined_rooms, left_rooms, invited_rooms, knocked_rooms).await;
 
+	for (room_id, room) in &joined_rooms {
+		warn!(%room_id, "Sync joined room timeline: {:?}", room.timeline.events.iter().map(|ev| ev.get()).collect::<Vec<_>>());
+		warn!(%room_id, "Sync joined room state: {:?}", room.state.events.iter().map(|ev| ev.get()).collect::<Vec<_>>());
+	}
+
 	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
 	let (left_rooms, left_state_after) = left_rooms;
 
@@ -597,6 +602,8 @@ pub(crate) async fn build_sync_events(
 			.body(),
 	)
 	.expect("ruma response is valid JSON");
+
+	warn!("SYNC val JSON: {:?}", serde_json::to_string(&val).unwrap());
 
 	// Manually insert state_after data for MSC4222
 	if let Some(join) = val.get_mut("rooms").and_then(|r| r.get_mut("join")) {
