@@ -525,7 +525,7 @@ mod tests {
 		};
 
 		let mut new_receipts = vec![(event_id.clone(), ReceiptType::Read, threaded)];
-		let existing = make_empty_receipt_event();
+		let _existing = make_empty_receipt_event();
 
 		// Simulate what readreceipt_update does: identify threaded receipts
 		// and append unthreaded copies.
