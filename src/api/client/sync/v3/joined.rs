@@ -946,19 +946,26 @@ async fn build_device_list_updates(
 			{
 				use MembershipState::*;
 
-				if matches!(content.membership, Leave | Join) {
-					let shares_encrypted_room =
-						share_encrypted_room(services, syncing_user, &user_id, Some(room_id))
-							.await;
-					match content.membership {
-						| Leave if !shares_encrypted_room => {
+				match content.membership {
+					| Join => {
+						// User joined this (encrypted) room — always track
+						// their device list. We already verified the room is
+						// encrypted at the top of this function.
+						device_list_updates.changed.insert(user_id);
+					},
+					| Leave | Ban => {
+						// User left/was kicked/banned from this room.
+						// Only add to `left` if they don't share any
+						// OTHER encrypted rooms.
+						let shares_other =
+							share_encrypted_room(services, syncing_user, &user_id, Some(room_id))
+								.await;
+
+						if !shares_other {
 							device_list_updates.left.insert(user_id);
-						},
-						| Join if shares_encrypted_room => {
-							device_list_updates.changed.insert(user_id);
-						},
-						| _ => (),
-					}
+						}
+					},
+					| _ => (),
 				}
 			}
 		}
