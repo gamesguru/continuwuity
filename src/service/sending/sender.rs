@@ -147,6 +147,11 @@ impl Service {
 
 	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
 		debug!(dest = ?dest, "{e:?}");
+		if e.status_code().is_client_error() {
+			statuses.remove(&dest);
+			return;
+		}
+
 		statuses.entry(dest).and_modify(|e| {
 			*e = match e {
 				| TransactionStatus::Running { .. } =>
