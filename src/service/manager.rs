@@ -88,7 +88,7 @@ impl Manager {
 			tokio::select! {
 				result = workers.join_next() => match result {
 					Some(Ok(result)) => self.handle_result(&mut workers, result).await?,
-					Some(Err(error)) => self.handle_abort(&mut workers, Error::from(error))?,
+					Some(Err(error)) => self.handle_abort(&mut workers, &Error::from(error))?,
 					None => break,
 				}
 			}
@@ -98,7 +98,7 @@ impl Manager {
 		Ok(())
 	}
 
-	fn handle_abort(&self, _workers: &mut WorkersLocked<'_>, error: Error) -> Result<()> {
+	fn handle_abort(&self, _workers: &mut WorkersLocked<'_>, error: &Error) -> Result<()> {
 		if !self.server.running() {
 			info!("Worker task aborted during shutdown: {error:?}");
 			return Ok(());
@@ -121,6 +121,7 @@ impl Manager {
 		}
 	}
 
+	#[allow(clippy::unused_self)]
 	fn handle_finished(
 		&self,
 		_workers: &mut WorkersLocked<'_>,
