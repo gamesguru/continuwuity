@@ -47,7 +47,7 @@ use ruma::{
 };
 use service::rooms::lazy_loading::{self, MemberSet, Options as _};
 
-use super::{load_timeline, share_encrypted_room};
+use super::{load_timeline, shares_a_room};
 use crate::{
 	Ruma, RumaResponse,
 	client::{
@@ -565,13 +565,8 @@ async fn collect_member_presence(
 		for room_id in joined_rooms.keys() {
 			let shortstatehash = services
 				.rooms
-				.timeline
-				.prev_shortstatehash(
-					room_id,
-					conduwuit::matrix::pdu::PduCount::Normal(
-						last_sync_end_count.saturating_add(1),
-					),
-				)
+				.user
+				.get_token_shortstatehash(room_id, last_sync_end_count)
 				.await
 				.ok();
 
