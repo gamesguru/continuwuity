@@ -282,7 +282,7 @@ async fn migrate(services: &Services) -> Result<()> {
 		.get(MIGRATE_EVENT_STORE_TO_SSOT_MARKER)
 		.await
 		.is_not_found()
-		|| db["eventid_pdu"].count().await == 0;
+		|| db["eventid_pdu"].raw_keys().next().await.is_none();
 
 	if ssot_needs_run {
 		info!("Running migration 'migrate_event_store_to_ssot'");
@@ -306,7 +306,11 @@ async fn migrate(services: &Services) -> Result<()> {
 		.get(MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER)
 		.await
 		.is_not_found()
-		|| db["roomuserid_privatereadreceipt"].count().await == 0;
+		|| db["roomuserid_privatereadreceipt"]
+			.raw_keys()
+			.next()
+			.await
+			.is_none();
 
 	if private_receipts_needs_run {
 		info!("Running migration 'migrate_private_read_receipts'");
