@@ -143,6 +143,23 @@ pub fn add_pdu_outlier_batch(
 	pdu: &CanonicalJsonObject,
 	room_id: Option<&RoomId>,
 ) {
+	// Guard: never overwrite an event that already has a timeline entry.
+	// The eventid_pdu and eventid_metadata tables are shared between timeline
+	// and outlier paths. Re-adding a timeline event as an outlier would set
+	// is_outlier=true and zero out local_topological_depth, making the event
+	// invisible to /sync's timeline iterator (the "stuck state" bug).
+	if let Ok(existing_meta) = self.db.eventid_metadata.get_blocking(event_id.as_bytes()) {
+		if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&existing_meta) {
+			if !meta.is_outlier {
+				info!(
+					%event_id,
+					"add_pdu_outlier: skipping, event already in timeline"
+				);
+				return;
+			}
+		}
+	}
+
 	let mut pdu = pdu.clone();
 	pdu.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
 

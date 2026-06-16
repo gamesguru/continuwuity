@@ -104,7 +104,25 @@ pub(super) async fn decorate_pdu_for_export(
 			}
 		}
 
-		// Always include PduCount for timeline ordering analysis
+		// Export full EventMetadata + PduCount for timeline diagnostics
+		if let Ok(meta_bytes) = ctx
+			.services
+			.rooms
+			.timeline
+			.get_event_metadata(pdu.event_id())
+			.await
+		{
+			obj.insert("__is_outlier".to_owned(), JsonValue::from(meta_bytes.is_outlier));
+			obj.insert("__short_room_id".to_owned(), JsonValue::from(meta_bytes.short_room_id));
+			obj.insert(
+				"__local_topo_depth".to_owned(),
+				JsonValue::from(meta_bytes.local_topological_depth),
+			);
+			obj.insert("__soft_failed".to_owned(), JsonValue::from(meta_bytes.soft_failed));
+			obj.insert("__rejected".to_owned(), JsonValue::from(meta_bytes.rejected));
+		}
+
+		// Stream ordering position (what /sync uses to iterate)
 		if let Ok(count) = ctx
 			.services
 			.rooms
@@ -113,28 +131,10 @@ pub(super) async fn decorate_pdu_for_export(
 			.await
 		{
 			let count_val: u64 = match count {
-				conduwuit::matrix::pdu::PduCount::Normal(n) => n,
-				conduwuit::matrix::pdu::PduCount::Backfilled(n) => n,
+				| conduwuit::matrix::pdu::PduCount::Normal(n) => n,
+				| conduwuit::matrix::pdu::PduCount::Backfilled(n) => n,
 			};
 			obj.insert("__pdu_count".to_owned(), JsonValue::from(count_val));
-		}
-
-		// Flag stuck events (in both timeline and outlier tables)
-		let in_timeline = ctx
-			.services
-			.rooms
-			.timeline
-			.non_outlier_pdu_exists(pdu.event_id())
-			.await;
-		let in_outlier = ctx
-			.services
-			.rooms
-			.outlier
-			.get_outlier_pdu_json(pdu.event_id())
-			.await
-			.is_ok();
-		if in_timeline && in_outlier {
-			obj.insert("__is_stuck".to_owned(), JsonValue::Bool(true));
 		}
 	} else {
 		is_separated = true;

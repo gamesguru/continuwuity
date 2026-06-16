@@ -179,6 +179,13 @@ impl Service {
 		self.db.get_pdu_count(event_id).await
 	}
 
+	/// Returns the EventMetadata for a PDU.
+	pub async fn get_event_metadata(&self, event_id: &EventId) -> Result<super::EventMetadata> {
+		let bytes = self.db.eventid_metadata.get(event_id.as_bytes()).await?;
+		bincode::deserialize(&bytes)
+			.map_err(|e| conduwuit::err!(Database("Failed to deserialize EventMetadata: {e}")))
+	}
+
 	/// Returns the json of a pdu.
 	pub async fn get_pdu_json(&self, event_id: &EventId) -> Result<CanonicalJsonObject> {
 		self.db.get_pdu_json(event_id).await
