@@ -585,7 +585,74 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 
 const MIGRATE_EVENT_STORE_TO_SSOT_MARKER: &[u8] = b"migrate_event_store_to_ssot";
 async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
-	services.db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
+	info!(
+		"Starting event store SSOT migration (pduid_pdu → eventid_pdu + \
+		 room_pducount_eventid)..."
+	);
+
+	let db = &services.db;
+
+	// Open the legacy pduid_pdu CF (key=shortroomid+pducount, value=PDU JSON)
+	let Ok(pduid_pdu) = database::Map::open(&db.db, "pduid_pdu") else {
+		info!("No legacy pduid_pdu column family found; skipping SSOT migration.");
+		db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
+		return Ok(());
+	};
+
+	let eventid_pdu = db["eventid_pdu"].clone();
+	let room_pducount_eventid = db["room_pducount_eventid"].clone();
+	let eventid_metadata = db["eventid_metadata"].clone();
+
+	let cork = db.cork_and_sync();
+	let stream = pduid_pdu.raw_stream();
+	pin_mut!(stream);
+
+	let mut total: usize = 0;
+	let mut skipped: usize = 0;
+
+	while let Some(Ok((pdu_id_bytes, pdu_json_bytes))) = stream.next().await {
+		// Parse the PDU to extract the event_id
+		let Ok(pdu) = serde_json::from_slice::<conduwuit::PduEvent>(pdu_json_bytes) else {
+			skipped = skipped.saturating_add(1);
+			continue;
+		};
+
+		let event_id_bytes = pdu.event_id.as_bytes();
+		let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
+
+		// eventid_pdu: event_id → PDU JSON
+		eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
+
+		// room_pducount_eventid: pdu_id → event_id
+		room_pducount_eventid.insert(&pdu_id, event_id_bytes);
+
+		// eventid_metadata: event_id → EventMetadata
+		let metadata = crate::rooms::timeline::EventMetadata {
+			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
+			is_outlier: false,
+			origin_server_ts: pdu.origin_server_ts().0,
+			depth: pdu.depth(),
+			soft_failed: false,
+			rejected: pdu.rejected(),
+			redacted_by: pdu.redacts().map(ToOwned::to_owned),
+			short_state_hash: None,
+			local_topological_depth: 0,
+		};
+		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+			eventid_metadata.insert(event_id_bytes, metadata_bytes);
+		}
+
+		total = total.saturating_add(1);
+		if total.is_multiple_of(10000) {
+			info!("Migrated {} PDUs to SSOT event store...", total);
+		}
+	}
+
+	drop(cork);
+	info!("Successfully migrated {total} PDUs to SSOT event store ({skipped} skipped).");
+
+	db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
+	db.db.sort()?;
 	Ok(())
 }
 

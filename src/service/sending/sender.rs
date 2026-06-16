@@ -75,6 +75,13 @@ pub const EDU_LIMIT: usize = 100;
 impl Service {
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub(super) async fn sender(self: Arc<Self>, id: usize) -> Result {
+		// In maintenance mode (listening=false), skip all outbound federation.
+		// Queued transactions are preserved and will drain on normal boot.
+		if !self.server.config.listening {
+			info!("sender[{id}]: maintenance mode, skipping outbound federation");
+			return Ok(());
+		}
+
 		let mut statuses: CurTransactionStatus = CurTransactionStatus::new();
 		let mut futures: SendingFutures<'_> = FuturesUnordered::new();
 
