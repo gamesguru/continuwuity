@@ -107,6 +107,11 @@ async fn fresh(services: &Services) -> Result<()> {
 	db["global"].insert(b"fix_corrupt_msc4133_fields", []);
 	db["global"].insert(b"populate_userroomid_leftstate_table", []);
 	db["global"].insert(b"fix_local_invite_state", []);
+	// v19 - PDU and read receipt refactor/optimization
+	db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
+	db["global"].insert(MIGRATE_READ_RECEIPTS_TO_SSOT_MARKER, []);
+	db["global"].insert(MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER, []);
+	db["global"].insert(POPULATE_TOPOLOGICAL_INDEX_MARKER, []);
 
 	// Create the admin room and server user on first run
 	info!("Creating admin room and server user");
