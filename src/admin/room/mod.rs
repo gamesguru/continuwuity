@@ -6,7 +6,7 @@ mod moderation;
 
 use clap::Subcommand;
 use conduwuit::Result;
-use ruma::OwnedRoomId;
+use ruma::{OwnedRoomId, OwnedRoomOrAliasId};
 
 use self::{
 	alias::RoomAliasCommand, directory::RoomDirectoryCommand, info::RoomInfoCommand,
@@ -73,5 +73,12 @@ pub enum RoomCommand {
 		/// Skip specific rooms (for excluding problematic rooms).
 		#[arg(long)]
 		skip: Vec<OwnedRoomId>,
+	},
+
+	/// Delete all sync tokens for a room
+	PurgeSyncTokens {
+		/// Room ID or alias to purge sync tokens for
+		#[arg(value_parser)]
+		room: OwnedRoomOrAliasId,
 	},
 }

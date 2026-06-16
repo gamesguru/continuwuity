@@ -190,13 +190,15 @@ pub(super) async fn load_left_room(
 		},
 	};
 
-	let state_after = if services.config.experimental_features.msc4222_enabled {
+	let state_after = if services.config.experimental_features.msc4222_enabled
+		&& sync_context.use_state_after
+	{
 		if let Some(shortstatehash) = leave_shortstatehash {
 			let lazily_loaded_members = prepare_lazily_loaded_members(
 				services,
 				sync_context,
 				room_id,
-				timeline.senders(),
+				timeline.members(),
 			)
 			.await;
 
@@ -223,24 +225,7 @@ pub(super) async fn load_left_room(
 
 	let TimelinePdus { pdus, limited } = timeline;
 
-	let mut stream = pdus
-		.into_iter()
-		.stream()
-		// filter out ignored events from the timeline
-		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
-		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
-			let matches = (&filter.room.timeline).matches(pdu);
-			tracing::info!(
-				"Checking timeline event {} of type {}: filter.types = {:?}, matches = {}",
-				pdu.event_id,
-				pdu.event_type(),
-				filter.room.timeline.types,
-				matches
-			);
-			matches
-		});
-
-	while let Some((_, pdu)) = stream.next().await {
+	for (_, pdu) in pdus {
 		if pdu.event_type() == &TimelineEventType::RoomMember
 			&& pdu.state_key() == Some(syncing_user.as_str())
 		{
@@ -308,7 +293,7 @@ async fn build_left_state_and_timeline(
 		.and_then(|limit| limit.try_into().ok())
 		.unwrap_or(DEFAULT_TIMELINE_LIMIT);
 
-	let timeline = load_timeline(
+	let raw_timeline = load_timeline(
 		services,
 		syncing_user,
 		room_id,
@@ -317,6 +302,26 @@ async fn build_left_state_and_timeline(
 		timeline_limit,
 	)
 	.await?;
+
+	let mut stream = raw_timeline
+		.pdus
+		.into_iter()
+		.stream()
+		// filter out ignored events from the timeline
+		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
+		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
+			(&sync_context.filter.room.timeline).matches(pdu)
+		});
+
+	let mut filtered_pdus = std::collections::VecDeque::new();
+	while let Some(item) = stream.next().await {
+		filtered_pdus.push_back(item);
+	}
+
+	let timeline = TimelinePdus {
+		pdus: filtered_pdus,
+		limited: raw_timeline.limited,
+	};
 
 	let timeline_start_shortstatehash = async {
 		if let Some((_, pdu)) = timeline.pdus.front() {
@@ -337,7 +342,7 @@ async fn build_left_state_and_timeline(
 	};
 
 	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders());
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members());
 
 	let (timeline_start_shortstatehash, lazily_loaded_members) =
 		join(timeline_start_shortstatehash, lazily_loaded_members).await;

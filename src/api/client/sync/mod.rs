@@ -6,7 +6,6 @@ use std::collections::VecDeque;
 use conduwuit::{
 	Event, PduCount, Result, debug_warn, err, info,
 	matrix::pdu::PduEvent,
-	ref_at,
 	utils::stream::{BroadbandExt, ReadyExt, TryIgnore, WidebandExt},
 	warn,
 };
@@ -43,14 +42,6 @@ impl TimelinePdus {
 			}
 			users
 		})
-	}
-
-	fn senders(&self) -> impl Iterator<Item = OwnedUserId> {
-		self.pdus
-			.iter()
-			.map(ref_at!(1))
-			.map(Event::sender)
-			.map(Into::into)
 	}
 }
 

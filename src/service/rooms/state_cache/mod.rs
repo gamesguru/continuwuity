@@ -26,6 +26,7 @@ pub struct Service {
 	user_visibility_cache: Cache<(OwnedUserId, OwnedUserId), bool>,
 	services: Services,
 	db: Data,
+	pub rooms_joining: SyncRwLock<std::collections::HashSet<OwnedRoomId>>,
 }
 
 struct Services {
@@ -63,6 +64,7 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			appservice_in_room_cache: SyncRwLock::new(HashMap::new()),
+			rooms_joining: SyncRwLock::new(std::collections::HashSet::new()),
 			// Ugly way to build the cache with a dynamic capacity
 			server_visibility_cache: Cache::builder()
 				.max_capacity(
@@ -194,6 +196,9 @@ pub async fn server_in_room<'a>(&'a self, server: &'a ServerName, room_id: &'a R
 	let key = (server, room_id);
 	self.db.serverroomids.qry(&key).await.is_ok()
 }
+
+#[implement(Service)]
+pub fn is_joining(&self, room_id: &RoomId) -> bool { self.rooms_joining.read().contains(room_id) }
 
 /// Returns true if the server is participating in the room (joined, invited, or
 /// knocked).

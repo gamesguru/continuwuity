@@ -607,7 +607,7 @@ async fn build_state_after(
 	shortstatehashes: ShortStateHashes,
 	timeline: &TimelinePdus,
 ) -> Result<Vec<PduEvent>> {
-	if !services.config.experimental_features.msc4222_enabled {
+	if !services.config.experimental_features.msc4222_enabled || !sync_context.use_state_after {
 		return Ok(Vec::new());
 	}
 

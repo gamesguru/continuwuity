@@ -116,6 +116,8 @@ struct SyncContext<'a> {
 	/// The sync filter, which the client uses to specify what data should be
 	/// included in the sync response.
 	filter: &'a FilterDefinition,
+	/// Whether MSC4222 state_after was requested by the client.
+	use_state_after: bool,
 }
 
 impl<'a> SyncContext<'a> {
@@ -185,6 +187,7 @@ type PresenceUpdates = HashMap<OwnedUserId, PresenceEventContent>;
 pub(crate) async fn sync_events_route(
 	State(services): State<crate::State>,
 	ClientIp(client_ip): ClientIp,
+	axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 	body: Ruma<sync_events::v3::Request>,
 ) -> Result<axum::response::Response, RumaResponse<UiaaResponse>> {
 	let timer = std::time::Instant::now();
@@ -209,6 +212,16 @@ pub(crate) async fn sync_events_route(
 	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.watch(sender_user, sender_device);
 
+	let mut use_state_after = false;
+	if let Some(q) = raw_query.as_deref() {
+		for (key, value) in url::form_urlencoded::parse(q.as_bytes()) {
+			if key == "use_state_after" && value == "true" {
+				use_state_after = true;
+				break;
+			}
+		}
+	}
+
 	let log_time = |response: &serde_json::Value| {
 		if !is_sync_response_empty(response) && timer.elapsed().as_millis() > 1000 {
 			// log syncs if they took > 1s
@@ -220,7 +233,7 @@ pub(crate) async fn sync_events_route(
 		}
 	};
 
-	let response = build_sync_events(&services, &body).await?;
+	let response = build_sync_events(&services, &body, use_state_after).await?;
 	if body.body.since.is_none() || body.body.full_state || !is_sync_response_empty(&response) {
 		log_time(&response);
 		return Ok(axum::Json(response).into_response());
@@ -233,7 +246,7 @@ pub(crate) async fn sync_events_route(
 	_ = tokio::time::timeout(duration, watcher).await;
 
 	// Retry returning data
-	let response = build_sync_events(&services, &body).await?;
+	let response = build_sync_events(&services, &body, use_state_after).await?;
 	log_time(&response);
 	Ok(axum::Json(response).into_response())
 }
@@ -255,6 +268,7 @@ fn is_sync_response_empty(val: &serde_json::Value) -> bool {
 pub(crate) async fn build_sync_events(
 	services: &Services,
 	body: &Ruma<sync_events::v3::Request>,
+	use_state_after: bool,
 ) -> Result<serde_json::Value, RumaResponse<UiaaResponse>> {
 	let (syncing_user, syncing_device) = body.sender();
 
@@ -290,6 +304,7 @@ pub(crate) async fn build_sync_events(
 		current_count,
 		full_state,
 		filter: &filter,
+		use_state_after,
 	};
 
 	let joined_rooms = services
@@ -330,7 +345,8 @@ pub(crate) async fn build_sync_events(
 		.state_cache
 		.rooms_left(syncing_user)
 		.broad_filter_map(|(room_id, leave_pdu)| async {
-			let left_room = load_left_room(services, context, room_id.clone(), leave_pdu).await;
+			let left_room =
+				Box::pin(load_left_room(services, context, room_id.clone(), leave_pdu)).await;
 
 			match left_room {
 				| Ok(Some((room, state_after))) => Some((room_id, room, state_after)),

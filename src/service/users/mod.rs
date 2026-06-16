@@ -1268,14 +1268,16 @@ impl Service {
 	}
 
 	/// Updates device metadata and increments the device list version.
-	pub fn update_device_metadata(
+	pub async fn update_device_metadata(
 		&self,
 		user_id: &UserId,
 		device_id: &DeviceId,
 		device: &Device,
 	) -> Result<()> {
 		increment(&self.db.userid_devicelistversion, user_id.as_bytes());
-		self.update_device_metadata_no_increment(user_id, device_id, device)
+		self.update_device_metadata_no_increment(user_id, device_id, device)?;
+		self.mark_device_key_update(user_id).await;
+		Ok(())
 	}
 
 	// Updates device metadata without incrementing the device list version.

@@ -1,6 +1,6 @@
 use conduwuit::{Err, Result};
 use futures::{FutureExt, StreamExt};
-use ruma::OwnedRoomId;
+use ruma::{OwnedRoomId, OwnedRoomOrAliasId};
 
 use crate::{PAGE_SIZE, admin_command, get_room_info};
 
@@ -171,4 +171,13 @@ pub(super) async fn bump(
 
 	self.write_str(&format!("Successfully triggered sync for room {room_id}"))
 		.await
+}
+
+#[admin_command]
+pub(super) async fn purge_sync_tokens(&self, _room: OwnedRoomOrAliasId) -> Result {
+	self.write_str(
+		"The server is running the stateless sync model. Database-backed sync tokens have been \
+		 dropped, so no tokens remain to be purged.",
+	)
+	.await
 }
