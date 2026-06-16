@@ -419,7 +419,7 @@ ci-complement-stats:
 
     echo ""
     echo "Last modified by:"
-    git log -5 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+    git log -5 --format="%an (%ad) %H" origin/main -- tests/test_results/complement-gg/test_results.jsonl
 
 # -----------------------------------------------------------------------------
 # CI Database Queries

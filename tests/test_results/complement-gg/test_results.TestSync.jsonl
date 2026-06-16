@@ -18,5 +18,7 @@
 {"Action":"pass","Test":"TestSyncLeaveSection/Left_rooms_appear_in_the_leave_section_of_full_state_sync"}
 {"Action":"pass","Test":"TestSyncLeaveSection/Left_rooms_appear_in_the_leave_section_of_sync"}
 {"Action":"pass","Test":"TestSyncLeaveSection/Newly_left_rooms_appear_in_the_leave_section_of_incremental_sync"}
-{"Action":"fail","Test":"TestSyncOmitsStateChangeOnFilteredEvents"}
-{"Action":"fail","Test":"TestSyncTimelineGap"}
+{"Action":"pass","Test":"TestSyncOmitsStateChangeOnFilteredEvents"}
+{"Action":"pass","Test":"TestSyncTimelineGap"}
+{"Action":"pass","Test":"TestSyncTimelineGap/full"}
+{"Action":"pass","Test":"TestSyncTimelineGap/incremental"}
