@@ -103,6 +103,39 @@ pub(super) async fn decorate_pdu_for_export(
 				shortstatehash = Some(ssh);
 			}
 		}
+
+		// Always include PduCount for timeline ordering analysis
+		if let Ok(count) = ctx
+			.services
+			.rooms
+			.timeline
+			.get_pdu_count(pdu.event_id())
+			.await
+		{
+			let count_val: u64 = match count {
+				conduwuit::matrix::pdu::PduCount::Normal(n) => n,
+				conduwuit::matrix::pdu::PduCount::Backfilled(n) => n,
+			};
+			obj.insert("__pdu_count".to_owned(), JsonValue::from(count_val));
+		}
+
+		// Flag stuck events (in both timeline and outlier tables)
+		let in_timeline = ctx
+			.services
+			.rooms
+			.timeline
+			.non_outlier_pdu_exists(pdu.event_id())
+			.await;
+		let in_outlier = ctx
+			.services
+			.rooms
+			.outlier
+			.get_outlier_pdu_json(pdu.event_id())
+			.await
+			.is_ok();
+		if in_timeline && in_outlier {
+			obj.insert("__is_stuck".to_owned(), JsonValue::Bool(true));
+		}
 	} else {
 		is_separated = true;
 	}
