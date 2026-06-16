@@ -72,7 +72,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update || true
           sudo apt-get install -y \
             build-essential \
             pkg-config \
@@ -157,12 +157,13 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}
+          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}-v${{ matrix.room_version }}
           path: |
             target/latest/conduwuit
             target/latest/conduwuit.asc
             target/latest/lib/
           retention-days: 60
+          overwrite: true
 
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
@@ -182,6 +183,8 @@ jobs:
 
       - name: Run Complement tests
         env:
+          CONDUWUIT_SENDER_TIMEOUT: 5
+          CONDUWUIT_SENDER_RETRY_BACKOFF_LIMIT: 5
           COMPLEMENT_SHARE_ENV_PREFIX: PASS_
           PASS_CONDUWUIT_DEFAULT_ROOM_VERSION: '"${{ matrix.room_version }}"'
         run: |
@@ -199,7 +202,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}
+          name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}-v${{ matrix.room_version }}
           path: |
             tests/test_results/complement/test_results.jsonl
             tests/test_results/complement/test_logs.jsonl
@@ -287,7 +290,8 @@ jobs:
           # Use ssh-agent to load the key (handles passphrases via DISPLAY workaround or expect if needed,
           # but usually CI keys are passwordless. If it has a password, sshpass can feed it)
           if [ -n "$SSH_PASSPHRASE" ]; then
-            sudo apt-get update && sudo apt-get install -y sshpass
+            sudo apt-get update || true
+            sudo apt-get install -y sshpass
             export SSH_ASKPASS_REQUIRE=force
             export SSH_ASKPASS_CMD="echo $SSH_PASSPHRASE"
             # Actually, standard sshpass is easier:
@@ -325,6 +329,21 @@ jobs:
           database_url: ${{ secrets.C10Y_POSTGRES_URL }}
           setup_tables: false
           rebuild_db: false
+          results_file: tests/test_results/complement/test_results.jsonl
+          run_metadata: >-
+            {
+              "commit_hash": "${{ github.event.pull_request.head.sha || github.sha }}",
+              "branch": "${{ github.head_ref || github.ref_name }}",
+              "arch": "${{ matrix.arch }}",
+              "os": "${{ matrix.os }}",
+              "profile": "${{ matrix.profile }}",
+              "room_version": "${{ matrix.room_version }}",
+              "version_string": "${{ steps.version.outputs.version }}",
+              "features": "${{ env.FEATURES }}",
+              "pass": ${{ steps.results.outputs.pass || 0 }},
+              "fail": ${{ steps.results.outputs.fail || 0 }},
+              "skip": ${{ steps.results.outputs.skip || 0 }}
+            }
 
       - name: Query updated Postgres stats
         if: always()
@@ -400,6 +419,7 @@ jobs:
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
               `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
+              `**Logs:** [View / Download Logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               '',
               '| Status | Count |',
               '|--------|-------|',

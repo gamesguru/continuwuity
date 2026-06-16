@@ -174,7 +174,7 @@ pub async fn handle_incoming_pdu<'a>(
 		.services
 		.state_cache
 		.server_in_room(self.services.globals.server_name(), room_id)
-		.await
+		.await && !self.services.state_cache.is_joining(room_id)
 	{
 		let is_room_member_event =
 			value.get("type").and_then(|t| t.as_str()) == Some("m.room.member");
