@@ -474,11 +474,31 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 	let legacy_update_map = db["roomuserid_lastprivatereadupdate"].clone();
 	let new_receipt_map = db["roomuserid_privatereadreceipt"].clone();
 
-	let mut stream = legacy_count_map.stream_raw_from::<(&RoomId, &UserId), [u8; 8], _>(&[]);
+	let stream = legacy_count_map.raw_stream();
+	pin_mut!(stream);
 	let mut total_migrated: usize = 0;
 
-	while let Some(Ok(((room_id, user_id), count_bytes))) = stream.next().await {
-		let count = u64::from_be_bytes(count_bytes);
+	while let Some((key, value)) = stream.try_next().await? {
+		let Some(sep) = key.iter().position(|&b| b == database::SEP) else {
+			continue;
+		};
+
+		let room_id_bytes = &key[..sep];
+		let user_id_bytes = &key[sep.saturating_add(1)..];
+
+		let Ok(room_id) = <&RoomId>::try_from(
+			conduwuit::utils::string::str_from_bytes(room_id_bytes).unwrap_or_default(),
+		) else {
+			continue;
+		};
+		let Ok(user_id) = <&UserId>::try_from(
+			conduwuit::utils::string::str_from_bytes(user_id_bytes).unwrap_or_default(),
+		) else {
+			continue;
+		};
+
+		let count =
+			conduwuit::utils::u64_from_bytes(value.get(..8).unwrap_or_default()).unwrap_or(0);
 
 		let mut legacy_key = room_id.as_bytes().to_vec();
 		legacy_key.push(0xFF);
