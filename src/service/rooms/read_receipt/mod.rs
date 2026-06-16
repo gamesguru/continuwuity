@@ -57,7 +57,10 @@ impl Service {
 		room_id: &RoomId,
 		event: &ReceiptEvent,
 	) {
-		let new_event_id = event.content.0.keys().next().unwrap();
+		let Some(new_event_id) = event.content.0.keys().next() else {
+			debug!(%user_id, %room_id, "Ignoring receipt with empty content");
+			return;
+		};
 		let new_thread = event
 			.content
 			.0
