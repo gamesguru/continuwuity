@@ -82,7 +82,8 @@ async fn load_timeline(
 				.inspect_err(|e| warn!("sync timeline pdus_rev error for {room_id}: {e}"))
 				.ignore_err()
 				.inspect(move |(pducount, _)| {
-					debug!(
+					info!(
+						target: "timeline_debug",
 						"sync filter check for {}: pducount={:?}, starting_count={:?}, \
 						 passes={:?}",
 						room_id,
@@ -185,13 +186,13 @@ async fn load_timeline(
 	}
 
 	if pdus.is_empty() && starting_count.is_some() {
-		debug!(
+		info!(
 			target: "timeline_debug",
 			"sync: 0 timeline pdus for {} from {:?} to {:?} (limited = {:?})",
 			room_id, starting_count, ending_count, limited,
 		);
 	} else {
-		debug!(
+		info!(
 			target: "timeline_debug",
 			"sync: {:?} timeline pdus for {} from {:?} to {:?} (limited = {:?})",
 			pdus.len(),
