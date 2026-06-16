@@ -273,6 +273,19 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run 'fix_local_invite_state' migration': {e}"))?;
 	}
 
+	let ssot_needs_run = db["global"]
+		.get(MIGRATE_EVENT_STORE_TO_SSOT_MARKER)
+		.await
+		.is_not_found()
+		|| db["eventid_pdu"].count().await == 0;
+
+	if ssot_needs_run {
+		info!("Running migration 'migrate_event_store_to_ssot'");
+		migrate_event_store_to_ssot(services)
+			.await
+			.map_err(|e| err!("Failed to run 'migrate_event_store_to_ssot': {e}"))?;
+	}
+
 	if db["global"]
 		.get(MIGRATE_READ_RECEIPTS_TO_SSOT_MARKER)
 		.await
@@ -284,26 +297,17 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run 'migrate_read_receipts': {e}"))?;
 	}
 
-	if db["global"]
+	let private_receipts_needs_run = db["global"]
 		.get(MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER)
 		.await
 		.is_not_found()
-	{
+		|| db["roomuserid_privatereadreceipt"].count().await == 0;
+
+	if private_receipts_needs_run {
 		info!("Running migration 'migrate_private_read_receipts'");
 		migrate_private_read_receipts(services)
 			.await
 			.map_err(|e| err!("Failed to run 'migrate_private_read_receipts': {e}"))?;
-	}
-
-	if db["global"]
-		.get(MIGRATE_EVENT_STORE_TO_SSOT_MARKER)
-		.await
-		.is_not_found()
-	{
-		info!("Running migration 'migrate_event_store_to_ssot'");
-		migrate_event_store_to_ssot(services)
-			.await
-			.map_err(|e| err!("Failed to run 'migrate_event_store_to_ssot': {e}"))?;
 	}
 
 	// Version 19 - keep events and outliers in a single table, add
@@ -586,70 +590,106 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 const MIGRATE_EVENT_STORE_TO_SSOT_MARKER: &[u8] = b"migrate_event_store_to_ssot";
 async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	info!(
-		"Starting event store SSOT migration (pduid_pdu → eventid_pdu + \
+		"Starting event store SSOT migration (pduid_pdu + eventid_outlierpdu → eventid_pdu + \
 		 room_pducount_eventid)..."
 	);
 
 	let db = &services.db;
-
-	// Open the legacy pduid_pdu CF (key=shortroomid+pducount, value=PDU JSON)
-	let Ok(pduid_pdu) = database::Map::open(&db.db, "pduid_pdu") else {
-		info!("No legacy pduid_pdu column family found; skipping SSOT migration.");
-		db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
-		return Ok(());
-	};
-
 	let eventid_pdu = db["eventid_pdu"].clone();
 	let room_pducount_eventid = db["room_pducount_eventid"].clone();
 	let eventid_metadata = db["eventid_metadata"].clone();
 
 	let cork = db.cork_and_sync();
-	let stream = pduid_pdu.raw_stream();
-	pin_mut!(stream);
 
 	let mut total: usize = 0;
+	let mut timeline: usize = 0;
+	let mut outliers: usize = 0;
 	let mut skipped: usize = 0;
 
-	while let Some(Ok((pdu_id_bytes, pdu_json_bytes))) = stream.next().await {
-		// Parse the PDU to extract the event_id
-		let Ok(pdu) = serde_json::from_slice::<conduwuit::PduEvent>(pdu_json_bytes) else {
-			skipped = skipped.saturating_add(1);
-			continue;
-		};
+	// Phase 1: Migrate timeline events from pduid_pdu (pdu_id → PDU JSON)
+	if let Ok(pduid_pdu) = database::Map::open(&db.db, "pduid_pdu") {
+		info!("Phase 1: Migrating timeline events from pduid_pdu...");
+		let stream = pduid_pdu.raw_stream();
+		pin_mut!(stream);
 
-		let event_id_bytes = pdu.event_id.as_bytes();
-		let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
+		while let Some(Ok((pdu_id_bytes, pdu_json_bytes))) = stream.next().await {
+			let Ok(pdu) = serde_json::from_slice::<conduwuit::PduEvent>(pdu_json_bytes) else {
+				skipped = skipped.saturating_add(1);
+				continue;
+			};
 
-		// eventid_pdu: event_id → PDU JSON
-		eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
+			let event_id_bytes = pdu.event_id.as_bytes();
+			let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
 
-		// room_pducount_eventid: pdu_id → event_id
-		room_pducount_eventid.insert(&pdu_id, event_id_bytes);
+			// eventid_pdu: event_id → PDU JSON
+			eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
 
-		// eventid_metadata: event_id → EventMetadata
-		let metadata = crate::rooms::timeline::EventMetadata {
-			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
-			is_outlier: false,
-			origin_server_ts: pdu.origin_server_ts().0,
-			depth: pdu.depth(),
-			soft_failed: false,
-			rejected: pdu.rejected(),
-			redacted_by: pdu.redacts().map(ToOwned::to_owned),
-			short_state_hash: None,
-			local_topological_depth: 0,
-		};
-		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-			eventid_metadata.insert(event_id_bytes, metadata_bytes);
+			// room_pducount_eventid: pdu_id → event_id
+			room_pducount_eventid.insert(&pdu_id, event_id_bytes);
+
+			// eventid_metadata
+			let metadata = crate::rooms::timeline::EventMetadata {
+				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
+				is_outlier: false,
+				origin_server_ts: pdu.origin_server_ts().0,
+				depth: pdu.depth(),
+				soft_failed: false,
+				rejected: pdu.rejected(),
+				redacted_by: pdu.redacts().map(ToOwned::to_owned),
+				short_state_hash: None,
+				local_topological_depth: 0,
+			};
+			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+				eventid_metadata.insert(event_id_bytes, metadata_bytes);
+			}
+
+			timeline = timeline.saturating_add(1);
+			total = total.saturating_add(1);
+			if total.is_multiple_of(10000) {
+				info!("Phase 1: Migrated {timeline} timeline PDUs...");
+			}
 		}
+		info!("Phase 1 complete: {timeline} timeline PDUs migrated.");
+	}
 
-		total = total.saturating_add(1);
-		if total.is_multiple_of(10000) {
-			info!("Migrated {} PDUs to SSOT event store...", total);
+	// Phase 2: Migrate outlier events from eventid_outlierpdu (event_id → PDU JSON)
+	if let Ok(eventid_outlierpdu) = database::Map::open(&db.db, "eventid_outlierpdu") {
+		info!("Phase 2: Migrating outlier events from eventid_outlierpdu...");
+		let stream = eventid_outlierpdu.raw_stream();
+		pin_mut!(stream);
+
+		while let Some(Ok((event_id_bytes, pdu_json_bytes))) = stream.next().await {
+			// Skip if already migrated from pduid_pdu
+			if eventid_pdu.get_blocking(event_id_bytes).is_ok() {
+				continue;
+			}
+
+			let Ok(_pdu) = serde_json::from_slice::<conduwuit::PduEvent>(pdu_json_bytes) else {
+				skipped = skipped.saturating_add(1);
+				continue;
+			};
+
+			// eventid_pdu: event_id → PDU JSON (outliers only at this point)
+			eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
+
+			outliers = outliers.saturating_add(1);
+			total = total.saturating_add(1);
+			if outliers.is_multiple_of(10000) {
+				info!("Phase 2: Migrated {outliers} outlier PDUs...");
+			}
 		}
+		info!("Phase 2 complete: {outliers} outlier PDUs migrated.");
+	}
+
+	if total == 0 {
+		info!("No legacy PDU data found; skipping SSOT migration.");
 	}
 
 	drop(cork);
-	info!("Successfully migrated {total} PDUs to SSOT event store ({skipped} skipped).");
+	info!(
+		"Successfully migrated {total} PDUs to SSOT event store ({timeline} timeline, \
+		 {outliers} outliers, {skipped} skipped)."
+	);
 
 	db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
 	db.db.sort()?;

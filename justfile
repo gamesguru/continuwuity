@@ -157,9 +157,10 @@ prebuild-rocksdb:
     # Build core libraries explicitly WITHOUT RTTI
     env ROCKSDB_NO_FBCODE=1 ROCKSDB_DISABLE_BENCHMARK=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I{{PREFIX}}/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L{{PREFIX}}/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
 
-    # Build ldb
-    # env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 DISABLE_SNAPPY=1 make ldb
+    # Build ldb (statically linked to avoid shared library RTTI/ABI mismatches)
     env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 make ldb
+    g++ -o ldb_static tools/ldb.o tools/ldb_cmd.o tools/ldb_tool.o tools/sst_dump_tool.o tools/io_tracer_parser_tool.o utilities/blob_db/blob_dump_tool.o librocksdb.a -lpthread -lrt -ldl -lsnappy -lz -llz4 -lzstd -luring -ljemalloc -lstdc++ -lm
+    mv ldb_static ldb
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
