@@ -382,35 +382,24 @@ async fn migrate(services: &Services) -> Result<()> {
 	{
 		let patterns = services.globals.forbidden_alias_names();
 		if !patterns.is_empty() {
-			for room_id in services
+			services
 				.rooms
-				.metadata
-				.iter_ids()
-				.map(ToOwned::to_owned)
-				.collect::<Vec<_>>()
-				.await
-			{
-				services
-					.rooms
-					.alias
-					.local_aliases_for_room(&room_id)
-					.ready_for_each(|room_alias| {
-						let matches = patterns.matches(room_alias.alias());
-						if matches.matched_any() {
-							warn!(
-								"Room with alias {} ({}) matches the following forbidden room \
-								 name patterns: {}",
-								room_alias,
-								&room_id,
-								matches
-									.into_iter()
-									.map(|x| &patterns.patterns()[x])
-									.join(", ")
-							);
-						}
-					})
-					.await;
-			}
+				.alias
+				.all_local_aliases()
+				.ready_for_each(|(room_id, alias)| {
+					let matches = patterns.matches(alias);
+					if matches.matched_any() {
+						warn!(
+							"Room with alias #{alias} ({room_id}) matches the following \
+							 forbidden room name patterns: {}",
+							matches
+								.into_iter()
+								.map(|x| &patterns.patterns()[x])
+								.join(", ")
+						);
+					}
+				})
+				.await;
 		}
 	}
 
