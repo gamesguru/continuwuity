@@ -72,9 +72,11 @@ where
 		.insert(room_id.into(), ((*prev_id).to_owned(), start_time));
 
 	defer! {{
-		self.federation_handletime
-			.write()
-			.remove(room_id);
+		if self.services.server.running() {
+			self.federation_handletime
+				.write()
+				.remove(room_id);
+		}
 	}};
 
 	Box::pin(self.upgrade_outlier_to_timeline_pdu(

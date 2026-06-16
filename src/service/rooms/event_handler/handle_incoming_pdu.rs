@@ -531,9 +531,11 @@ pub async fn process_timeline_upgrade(
 		.insert(room_id.into(), (event_id.to_owned(), start_time));
 
 	defer! {{
-		self.federation_handletime
-			.write()
-			.remove(room_id);
+		if self.services.server.running() {
+			self.federation_handletime
+				.write()
+				.remove(room_id);
+		}
 	}};
 
 	Box::pin(self.upgrade_outlier_to_timeline_pdu(
