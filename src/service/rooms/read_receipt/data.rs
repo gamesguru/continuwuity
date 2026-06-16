@@ -10,7 +10,7 @@ use ruma::{
 	CanonicalJsonObject, OwnedUserId, RoomId, UserId,
 	events::{
 		AnySyncEphemeralRoomEvent,
-		receipt::{ReceiptEvent, ReceiptType},
+		receipt::{ReceiptEvent, ReceiptThread, ReceiptType},
 	},
 	serde::Raw,
 };
@@ -99,6 +99,51 @@ impl Data {
 		let count = self.services.globals.next_count().unwrap();
 		let latest_id = (room_id, count, user_id);
 		self.readreceiptid_readreceipt.put(latest_id, Json(event));
+	}
+
+	pub(super) async fn get_read_receipt_event_id(
+		&self,
+		user_id: &UserId,
+		room_id: &RoomId,
+		new_thread: Option<&ReceiptThread>,
+	) -> Option<ruma::OwnedEventId> {
+		let last_possible_key = (room_id, u64::MAX);
+		let mut stream = self
+			.readreceiptid_readreceipt
+			.rev_stream_from_raw(&last_possible_key)
+			.ignore_err()
+			.ready_take_while(|(key, _)| {
+				key.starts_with(room_id.as_bytes())
+					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
+			});
+
+		while let Some((key, value)) = stream.next().await {
+			let user_id_bytes = user_id.as_bytes();
+			if key.ends_with(user_id_bytes)
+				&& key
+					.len()
+					.checked_sub(user_id_bytes.len())
+					.and_then(|len| len.checked_sub(1))
+					.and_then(|idx| key.get(idx))
+					== Some(&database::SEP)
+			{
+				if let Ok(receipt) = serde_json::from_slice::<ReceiptEvent>(value) {
+					let old_thread = receipt
+						.content
+						.0
+						.values()
+						.next()
+						.and_then(|types| types.get(&ReceiptType::Read))
+						.and_then(|users| users.get(user_id))
+						.map(|receipt| &receipt.thread);
+
+					if old_thread == new_thread {
+						return receipt.content.0.keys().next().cloned();
+					}
+				}
+			}
+		}
+		None
 	}
 
 	pub(super) fn readreceipts_since<'a>(

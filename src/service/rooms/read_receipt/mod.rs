@@ -15,7 +15,7 @@ use ruma::{
 	OwnedEventId, OwnedUserId, RoomId, UserId,
 	events::{
 		AnySyncEphemeralRoomEvent, SyncEphemeralRoomEvent,
-		receipt::{ReceiptEvent, ReceiptEventContent, Receipts},
+		receipt::{ReceiptEvent, ReceiptEventContent, ReceiptType, Receipts},
 	},
 	serde::Raw,
 };
@@ -57,6 +57,36 @@ impl Service {
 		room_id: &RoomId,
 		event: &ReceiptEvent,
 	) {
+		let new_event_id = event.content.0.keys().next().unwrap();
+		let new_thread = event
+			.content
+			.0
+			.values()
+			.next()
+			.and_then(|types| types.get(&ReceiptType::Read))
+			.and_then(|users| users.get(user_id))
+			.map(|receipt| &receipt.thread);
+
+		if let Some(old_event_id) = self
+			.db
+			.get_read_receipt_event_id(user_id, room_id, new_thread)
+			.await
+		{
+			if let (Ok(PduCount::Normal(new_count)), Ok(PduCount::Normal(old_count))) = (
+				self.services.timeline.get_pdu_count(new_event_id).await,
+				self.services.timeline.get_pdu_count(&old_event_id).await,
+			) {
+				if new_count <= old_count {
+					debug!(
+						"Ignoring backward read receipt update to {} from {} (current further \
+						 count: {})",
+						new_count, old_count, old_count
+					);
+					return;
+				}
+			}
+		}
+
 		self.db.readreceipt_update(user_id, room_id, event).await;
 		self.services
 			.sending
@@ -88,7 +118,7 @@ impl Service {
 		let content: BTreeMap<OwnedEventId, Receipts> = BTreeMap::from_iter([(
 			event_id,
 			BTreeMap::from_iter([(
-				ruma::events::receipt::ReceiptType::ReadPrivate,
+				ReceiptType::ReadPrivate,
 				BTreeMap::from_iter([(user_id, ruma::events::receipt::Receipt {
 					ts: None, // TODO: start storing the timestamp so we can return one
 					thread: ruma::events::receipt::ReceiptThread::Unthreaded,
