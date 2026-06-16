@@ -486,6 +486,9 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 	let stream = legacy_count_map.raw_stream();
 	pin_mut!(stream);
 	let mut total_migrated: usize = 0;
+	let mut with_event: usize = 0;
+	let mut count_only: usize = 0;
+	let mut skipped: usize = 0;
 
 	while let Some((key, value)) = stream.try_next().await? {
 		let Some(sep) = key.iter().position(|&b| b == database::SEP) else {
@@ -498,11 +501,13 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 		let Ok(room_id) = <&RoomId>::try_from(
 			conduwuit::utils::string::str_from_bytes(room_id_bytes).unwrap_or_default(),
 		) else {
+			skipped = skipped.saturating_add(1);
 			continue;
 		};
 		let Ok(user_id) = <&UserId>::try_from(
 			conduwuit::utils::string::str_from_bytes(user_id_bytes).unwrap_or_default(),
 		) else {
+			skipped = skipped.saturating_add(1);
 			continue;
 		};
 
@@ -515,6 +520,7 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 
 		let event: ruma::events::receipt::ReceiptEvent =
 			if let Ok(event_bytes) = legacy_event_map.get(&legacy_key).await {
+				with_event = with_event.saturating_add(1);
 				serde_json::from_slice(&event_bytes).unwrap_or_else(|_| {
 					ruma::events::receipt::ReceiptEvent {
 						content: ruma::events::receipt::ReceiptEventContent(
@@ -524,45 +530,13 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 					}
 				})
 			} else {
-				let Ok(shortroomid) = services.rooms.short.get_shortroomid(room_id).await else {
-					info!(?room_id, "Room missing, dropping legacy private read receipt");
-					continue;
-				};
-
-				let shorteventid = conduwuit::PduCount::Normal(count);
-				let pdu_id: crate::rooms::timeline::RawPduId =
-					crate::rooms::timeline::PduId { shortroomid, shorteventid }.into();
-
-				if let Ok(pdu) = services.rooms.timeline.get_pdu_from_id(&pdu_id).await {
-					info!(
-						?user_id,
-						?room_id,
-						?count,
-						"Synthesizing missing private read receipt event"
-					);
-					let mut user_map = std::collections::BTreeMap::new();
-					user_map.insert(user_id.to_owned(), ruma::events::receipt::Receipt {
-						thread: ruma::events::receipt::ReceiptThread::Unthreaded,
-						ts: None,
-					});
-					let mut receipt_map = std::collections::BTreeMap::new();
-					receipt_map.insert(ruma::events::receipt::ReceiptType::ReadPrivate, user_map);
-					let mut content = std::collections::BTreeMap::new();
-					content.insert(pdu.event_id, receipt_map);
-
-					let receipt_sync_event = ruma::events::SyncEphemeralRoomEvent {
-						content: ruma::events::receipt::ReceiptEventContent(content),
-					};
-					serde_json::from_str(&serde_json::to_string(&receipt_sync_event).unwrap())
-						.unwrap()
-				} else {
-					info!(
-						?user_id,
-						?room_id,
-						?count,
-						"Timeline event missing, dropping legacy private read receipt"
-					);
-					continue; // If the timeline event is truly gone, drop the receipt entirely
+				count_only = count_only.saturating_add(1);
+				// No cached event -- store receipt with count only (no DB lookups)
+				ruma::events::receipt::ReceiptEvent {
+					content: ruma::events::receipt::ReceiptEventContent(
+						std::collections::BTreeMap::new(),
+					),
+					room_id: room_id.to_owned(),
 				}
 			};
 
@@ -585,7 +559,8 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 	}
 
 	info!(
-		"Successfully migrated {total_migrated} private read receipts to new consolidated map!"
+		"Successfully migrated {total_migrated} private read receipts ({with_event} with event, \
+		 {count_only} count-only, {skipped} skipped)."
 	);
 	db["global"].insert(MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER, []);
 	db.db.sort()?;
@@ -595,7 +570,7 @@ async fn migrate_private_read_receipts(services: &Services) -> Result<()> {
 const MIGRATE_EVENT_STORE_TO_SSOT_MARKER: &[u8] = b"migrate_event_store_to_ssot";
 async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	info!(
-		"Starting event store SSOT migration (pduid_pdu + eventid_outlierpdu → eventid_pdu + \
+		"Starting event store SSOT migration (pduid_pdu + eventid_outlierpdu -> eventid_pdu + \
 		 room_pducount_eventid)..."
 	);
 
@@ -603,6 +578,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	let eventid_pdu = db["eventid_pdu"].clone();
 	let room_pducount_eventid = db["room_pducount_eventid"].clone();
 	let eventid_metadata = db["eventid_metadata"].clone();
+	let roomid_topologicalorder_pducount = db["roomid_topologicalorder_pducount"].clone();
 
 	let cork = db.cork_and_sync();
 
@@ -610,8 +586,11 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	let mut timeline: usize = 0;
 	let mut outliers: usize = 0;
 	let mut skipped: usize = 0;
+	let mut timeline_event_ids: std::collections::HashSet<Vec<u8>> =
+		std::collections::HashSet::new();
+	let mut depth_cache: HashMap<Vec<u8>, u64> = HashMap::new();
 
-	// Phase 1: Migrate timeline events from pduid_pdu (pdu_id → PDU JSON)
+	// Phase 1: Migrate timeline events from pduid_pdu (pdu_id -> PDU JSON)
 	if let Ok(pduid_pdu) = database::Map::open(&db.db, "pduid_pdu") {
 		info!("Phase 1: Migrating timeline events from pduid_pdu...");
 		let stream = pduid_pdu.raw_stream();
@@ -626,13 +605,22 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 			let event_id_bytes = pdu.event_id.as_bytes();
 			let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
 
-			// eventid_pdu: event_id → PDU JSON
+			// eventid_pdu: event_id -> PDU JSON
 			eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
 
-			// room_pducount_eventid: pdu_id → event_id
+			// room_pducount_eventid: pdu_id -> event_id
 			room_pducount_eventid.insert(&pdu_id, event_id_bytes);
 
-			// eventid_metadata
+			// eventid_metadata with topological depth
+			let mut max_depth: u64 = 0;
+			for prev_id in pdu.prev_events() {
+				if let Some(&d) = depth_cache.get(prev_id.as_bytes()) {
+					max_depth = max_depth.max(d);
+				}
+			}
+			let local_topological_depth = max_depth.saturating_add(1);
+			depth_cache.insert(event_id_bytes.to_vec(), local_topological_depth);
+
 			let metadata = crate::rooms::timeline::EventMetadata {
 				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
 				is_outlier: false,
@@ -642,12 +630,20 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 				rejected: pdu.rejected(),
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
 				short_state_hash: None,
-				local_topological_depth: 0,
+				local_topological_depth,
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				eventid_metadata.insert(event_id_bytes, metadata_bytes);
 			}
 
+			// roomid_topologicalorder_pducount
+			let mut topo_key = Vec::with_capacity(32);
+			topo_key.extend_from_slice(&pdu_id.shortroomid());
+			topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
+			topo_key.extend_from_slice(&pdu_id.shorteventid());
+			roomid_topologicalorder_pducount.insert(&topo_key, event_id_bytes);
+
+			timeline_event_ids.insert(event_id_bytes.to_vec());
 			timeline = timeline.saturating_add(1);
 			total = total.saturating_add(1);
 			if total.is_multiple_of(10000) {
@@ -657,25 +653,38 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 		info!("Phase 1 complete: {timeline} timeline PDUs migrated.");
 	}
 
-	// Phase 2: Migrate outlier events from eventid_outlierpdu (event_id → PDU JSON)
+	// Phase 2: Migrate outliers from eventid_outlierpdu (event_id -> PDU JSON)
 	if let Ok(eventid_outlierpdu) = database::Map::open(&db.db, "eventid_outlierpdu") {
 		info!("Phase 2: Migrating outlier events from eventid_outlierpdu...");
 		let stream = eventid_outlierpdu.raw_stream();
 		pin_mut!(stream);
 
 		while let Some(Ok((event_id_bytes, pdu_json_bytes))) = stream.next().await {
-			// Skip if already migrated from pduid_pdu
-			if eventid_pdu.get_blocking(event_id_bytes).is_ok() {
-				continue;
-			}
-
-			let Ok(_pdu) = serde_json::from_slice::<conduwuit::PduEvent>(pdu_json_bytes) else {
+			let Ok(pdu) = serde_json::from_slice::<conduwuit::PduEvent>(pdu_json_bytes) else {
 				skipped = skipped.saturating_add(1);
 				continue;
 			};
 
-			// eventid_pdu: event_id → PDU JSON (outliers only at this point)
-			eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
+			// Only write if Phase 1 didn't already handle this event
+			// (preserves authoritative timeline PDU data and is_outlier: false)
+			if !timeline_event_ids.contains(event_id_bytes) {
+				eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
+
+				let metadata = crate::rooms::timeline::EventMetadata {
+					short_room_id: 0,
+					is_outlier: true,
+					origin_server_ts: pdu.origin_server_ts().0,
+					depth: pdu.depth(),
+					soft_failed: false,
+					rejected: pdu.rejected(),
+					redacted_by: pdu.redacts().map(ToOwned::to_owned),
+					short_state_hash: None,
+					local_topological_depth: 0,
+				};
+				if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+					eventid_metadata.insert(event_id_bytes, metadata_bytes);
+				}
+			}
 
 			outliers = outliers.saturating_add(1);
 			total = total.saturating_add(1);
@@ -697,14 +706,20 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	);
 
 	db["global"].insert(MIGRATE_EVENT_STORE_TO_SSOT_MARKER, []);
+	db["global"].insert(POPULATE_TOPOLOGICAL_INDEX_MARKER, []);
 	db.db.sort()?;
 	Ok(())
 }
 
 const POPULATE_TOPOLOGICAL_INDEX_MARKER: &[u8] = b"populate_topological_index";
 async fn populate_topological_index(services: &Services) -> Result<()> {
-	info!("Starting migration to populate roomid_topologicalorder_pducount...");
+	#[derive(serde::Deserialize)]
+	struct PrevEventsOnly {
+		#[serde(default)]
+		prev_events: Vec<ruma::OwnedEventId>,
+	}
 
+	info!("Starting migration to populate roomid_topologicalorder_pducount...");
 	let db = &services.db;
 	let room_pducount_eventid = db["room_pducount_eventid"].clone();
 	let eventid_metadata = db["eventid_metadata"].clone();
@@ -714,6 +729,7 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 	let mut stream = room_pducount_eventid.raw_stream();
 
 	let mut total_migrated: usize = 0;
+	let mut depth_cache: HashMap<Vec<u8>, u64> = HashMap::new();
 
 	while let Some(Ok((pdu_id_bytes, event_id_bytes))) = stream.next().await {
 		let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
@@ -722,7 +738,8 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 			continue;
 		};
 
-		let Ok(pdu) = serde_json::from_slice::<conduwuit::PduEvent>(&json_bytes) else {
+		// Minimal deserialize -- only extract prev_events, skip everything else
+		let Ok(partial) = serde_json::from_slice::<PrevEventsOnly>(&json_bytes) else {
 			continue;
 		};
 
@@ -736,27 +753,29 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 			continue;
 		};
 
-		let mut max_depth = 0;
-		for prev_id in pdu.prev_events() {
-			if let Ok(prev_bytes) = eventid_metadata.get(prev_id.as_bytes()).await {
+		let mut max_depth: u64 = 0;
+		for prev_id in &partial.prev_events {
+			let prev_key = prev_id.as_bytes();
+			if let Some(&cached_depth) = depth_cache.get(prev_key) {
+				max_depth = max_depth.max(cached_depth);
+			} else if let Ok(prev_bytes) = eventid_metadata.get_blocking(prev_key) {
 				if let Ok(prev_meta) =
 					bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&prev_bytes)
 				{
 					max_depth = max_depth.max(prev_meta.local_topological_depth);
+					depth_cache.insert(prev_key.to_vec(), prev_meta.local_topological_depth);
 				}
 			}
 		}
 
 		let local_topological_depth = max_depth.saturating_add(1);
 		meta.local_topological_depth = local_topological_depth;
+		depth_cache.insert(event_id_bytes.to_vec(), local_topological_depth);
 
 		if let Ok(new_metadata_bytes) = bincode::serialize(&meta) {
 			eventid_metadata.put(event_id_bytes, new_metadata_bytes);
 		}
 
-		// TODO: never use as_ref()[8..] on RawPduId -- Backfilled IDs are 24 bytes
-		// with a zero-tag at [8..16], so as_ref()[8..] yields zeros instead of the
-		// count. Always use shorteventid() which handles both Normal and Backfilled.
 		let mut topo_key = Vec::with_capacity(32);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());
 		topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
