@@ -61,7 +61,7 @@ where
 	T: OutgoingRequest + Send,
 {
 	if !self.services.server.config.allow_federation {
-		return Err!(Config("allow_federation", "Federation is disabled."));
+		return Err!(debug!("Federation is disabled."));
 	}
 
 	if self.services.moderation.is_remote_server_forbidden(dest) {

@@ -8,7 +8,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit::info;
 use conduwuit_core::{
-	Error, Event, Result, err,
+	Error, Event, Result, debug_info, err,
 	result::LogErr,
 	trace,
 	utils::{
@@ -415,6 +415,11 @@ impl Service {
 		futures: &mut SendingFutures<'a>,
 		statuses: &mut CurTransactionStatus,
 	) {
+		if !self.server.config.allow_federation {
+			debug_info!("startup_netburst[{id}]: federation disabled, skipping");
+			return;
+		}
+
 		let keep =
 			usize::try_from(self.server.config.startup_netburst_keep).unwrap_or(usize::MAX);
 		let mut active = self.db.active_requests().boxed();
