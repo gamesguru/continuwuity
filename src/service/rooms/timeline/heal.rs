@@ -1,6 +1,5 @@
 use std::{
-	cmp::Reverse,
-	collections::{BinaryHeap, HashMap, HashSet},
+	collections::{HashMap, HashSet},
 	sync::Arc,
 };
 
@@ -73,11 +72,8 @@ struct CompactDag {
 	/// origin_server_ts per index for sort tiebreaking.
 	timestamps: Vec<u64>,
 
-	/// Forward adjacency: parents[idx] = set of parent indices within our set.
-	parents: Vec<Vec<u32>>,
-
-	/// Reverse adjacency: which indices have each idx as a parent.
-	/// Built lazily during sort but tracked here for extremity calc.
+	/// Reverse adjacency: which indices have at least one child within our set.
+	/// Used for extremity calculation (events NOT in this set are DAG tips).
 	has_children: RoaringBitmap,
 }
 
@@ -96,70 +92,38 @@ impl CompactDag {
 			timestamps.push(u64::from(pdu.origin_server_ts));
 		}
 
-		let mut parents = Vec::with_capacity(n);
 		let mut has_children = RoaringBitmap::new();
 
 		for event_id in &idx_to_id {
 			let pdu = &events[event_id];
-			let mut parent_indices = Vec::new();
 			for prev_id in pdu.prev_events() {
 				if let Some(&pidx) = id_to_idx.get(prev_id) {
-					parent_indices.push(pidx);
 					has_children.insert(pidx);
 				}
 			}
-			parents.push(parent_indices);
 		}
 
 		Self {
 			id_to_idx,
 			idx_to_id,
 			timestamps,
-			parents,
 			has_children,
 		}
 	}
 
-	/// Kahn's topological sort on compact u32 indices.
-	/// Tiebreaker: origin_server_ts ascending, then event_id ascending.
-	/// Returns sorted indices (oldest/root first).
-	fn topo_sort(&self) -> Vec<u32> {
+	/// Chronological sort by origin_server_ts ascending, then event_id.
+	/// Returns sorted indices (oldest first). DAG edges are only used for
+	/// extremity calculation, not ordering — topological sort produces bad
+	/// client UX by interleaving old state events with recent messages.
+	fn chrono_sort(&self) -> Vec<u32> {
 		let n = self.idx_to_id.len();
-
-		// Compute out-degree (number of parents within our set)
-		let mut outdegree: Vec<u32> = self.parents.iter().map(|p| idx32(p.len())).collect();
-
-		// Reverse adjacency: child → list of parents that depend on it
-		let mut reverse: Vec<Vec<u32>> = vec![Vec::new(); n];
-		for (child, parent_list) in self.parents.iter().enumerate() {
-			let child = idx32(child);
-			for &parent in parent_list {
-				reverse[idx(parent)].push(child);
-			}
-		}
-
-		// Seed with zero-outdegree nodes (roots — events with no parents in set)
-		let mut heap: BinaryHeap<Reverse<(u64, &OwnedEventId, u32)>> = BinaryHeap::new();
-		for (i, &deg) in outdegree.iter().enumerate() {
-			if deg == 0 {
-				heap.push(Reverse((self.timestamps[i], &self.idx_to_id[i], idx32(i))));
-			}
-		}
-
-		let mut sorted = Vec::with_capacity(n);
-		while let Some(Reverse((_, _, node))) = heap.pop() {
-			sorted.push(node);
-			// Release children whose last parent has been processed
-			for &child in &reverse[idx(node)] {
-				let ci = idx(child);
-				outdegree[ci] = outdegree[ci].saturating_sub(1);
-				if outdegree[ci] == 0 {
-					heap.push(Reverse((self.timestamps[ci], &self.idx_to_id[ci], child)));
-				}
-			}
-		}
-
-		sorted
+		let mut indices: Vec<u32> = (0..idx32(n)).collect();
+		indices.sort_by(|&a, &b| {
+			self.timestamps[idx(a)]
+				.cmp(&self.timestamps[idx(b)])
+				.then_with(|| self.idx_to_id[idx(a)].cmp(&self.idx_to_id[idx(b)]))
+		});
+		indices
 	}
 
 	/// Compute forward extremities: events in sorted that have no children.
@@ -201,16 +165,13 @@ pub async fn heal_room(
 	// Phase 1: Build compact DAG with u32 indices + roaring bitmap
 	let dag = CompactDag::build(&events);
 
-	// Phase 2: Topological sort on compact indices
-	info!("heal_room: topological sort of {} events...", events.len());
-	let sorted = dag.topo_sort();
+	// Phase 2: Chronological sort by origin_server_ts
+	info!("heal_room: sorting {} events by origin_server_ts...", events.len());
+	let sorted = dag.chrono_sort();
 	info!("heal_room: sorted {} events", sorted.len());
 
 	if sorted.len() != events.len() {
-		warn!(
-			"heal_room: topo sort dropped {} events (cycles or missing parents)",
-			events.len().saturating_sub(sorted.len())
-		);
+		warn!("heal_room: sort dropped {} events", events.len().saturating_sub(sorted.len()));
 	}
 
 	// Phase 3: If reorder mode, backup and remove old timeline entries
@@ -360,6 +321,17 @@ pub async fn heal_room(
 	}
 
 	drop(cork.take());
+
+	// Update the room's authoritative shortstatehash to match the
+	// recomputed state at the tip.
+	if let Some(ssh) = current_shortstatehash {
+		if ssh != 0 {
+			self.services
+				.state
+				.set_room_state(room_id, ssh, &state_lock);
+			info!("heal_room: updated room shortstatehash to {ssh}");
+		}
+	}
 
 	// Phase 5: Calculate forward extremities using roaring bitmap
 	let mut true_extremities = dag.extremities(&sorted);

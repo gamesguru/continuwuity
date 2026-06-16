@@ -277,31 +277,23 @@ impl Service {
 			return Ok(0);
 		}
 
-		// Build the DAG graph for topological sort.
+		// Build the DAG graph for extremity calculation only.
 		// IMPORTANT: Only include prev_events that are actually in our entries map.
-		// Events referencing missing prev_events (outliers, federation gaps) would
-		// otherwise get stuck with non-zero outdegree and be silently dropped from
-		// the sort output — then permanently deleted from the timeline.
 		for parents in graph.values_mut() {
 			parents.retain(|prev_id| entries.contains_key(prev_id));
 		}
 
-		// Topological sort with PduCount as tiebreaker
-		info!("reorder_timeline: topological sort of {} events...", graph.len());
-		let event_fetch = |event_id: OwnedEventId| {
-			let ts = entries
-				.get(&event_id)
-				.map_or(ruma::UInt::MAX, |&(_, ts)| ts);
-
-			ready(Ok::<_, state_res::Error>((
-				ruma::int!(0),
-				ruma::MilliSecondsSinceUnixEpoch(ts),
-			)))
-		};
-
-		let sorted = state_res::lexicographical_topological_sort(&graph, &event_fetch)
-			.await
-			.map_err(|e| err!(Database("Failed to sort timeline: {e:?}")))?;
+		// Sort chronologically by origin_server_ts for correct timeline presentation.
+		// The DAG graph is used for extremity calculation, not ordering — topological
+		// sort produces bad client UX by interleaving old state events with recent
+		// messages whenever the DAG has branches or gaps.
+		info!("reorder_timeline: sorting {} events by origin_server_ts...", entries.len());
+		let mut sorted: Vec<OwnedEventId> = entries.keys().cloned().collect();
+		sorted.sort_by(|a, b| {
+			let (_, ts_a) = entries[a];
+			let (_, ts_b) = entries[b];
+			ts_a.cmp(&ts_b).then_with(|| a.cmp(b))
+		});
 
 		// BACKUP PHASE: Safely backup all timeline pointers to the backup table BEFORE
 		// deleting them from the timeline. This prevents data loss since
