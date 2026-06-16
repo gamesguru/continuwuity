@@ -180,10 +180,8 @@ impl Service {
 	}
 
 	/// Returns the EventMetadata for a PDU.
-	pub async fn get_event_metadata(&self, event_id: &EventId) -> Result<super::EventMetadata> {
-		let bytes = self.db.eventid_metadata.get(event_id.as_bytes()).await?;
-		bincode::deserialize(&bytes)
-			.map_err(|e| conduwuit::err!(Database("Failed to deserialize EventMetadata: {e}")))
+	pub async fn get_event_metadata(&self, event_id: &EventId) -> Result<EventMetadata> {
+		self.db.get_event_metadata(event_id).await
 	}
 
 	/// Returns the json of a pdu.
@@ -224,8 +222,6 @@ impl Service {
 	) -> Result<usize> {
 		use std::collections::{HashMap, HashSet};
 
-		use conduwuit_core::matrix::state_res;
-		use futures::future::ready;
 		use ruma::events::StateEventType;
 
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;

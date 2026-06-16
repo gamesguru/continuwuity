@@ -99,6 +99,16 @@ impl Data {
 			.map(|pdu_id| pdu_id.pdu_count())
 	}
 
+	/// Returns the EventMetadata for a PDU.
+	pub(super) async fn get_event_metadata(
+		&self,
+		event_id: &EventId,
+	) -> Result<rooms::timeline::EventMetadata> {
+		let bytes = self.eventid_metadata.get(event_id.as_bytes()).await?;
+		bincode::deserialize(&bytes)
+			.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e}")))
+	}
+
 	/// Returns the json of a pdu.
 	pub(super) async fn get_pdu_json(&self, event_id: &EventId) -> Result<CanonicalJsonObject> {
 		let accepted = self.get_non_outlier_pdu_json(event_id).boxed();

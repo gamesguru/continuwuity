@@ -130,11 +130,15 @@ pub(super) async fn decorate_pdu_for_export(
 			.get_pdu_count(pdu.event_id())
 			.await
 		{
-			let count_val: u64 = match count {
-				| conduwuit::matrix::pdu::PduCount::Normal(n) => n,
-				| conduwuit::matrix::pdu::PduCount::Backfilled(n) => n,
-			};
-			obj.insert("__pdu_count".to_owned(), JsonValue::from(count_val));
+			match count {
+				| conduwuit::matrix::pdu::PduCount::Normal(n) => {
+					obj.insert("__pdu_count".to_owned(), JsonValue::from(n));
+				},
+				| conduwuit::matrix::pdu::PduCount::Backfilled(n) => {
+					obj.insert("__pdu_count".to_owned(), JsonValue::from(n));
+					obj.insert("__backfilled".to_owned(), JsonValue::Bool(true));
+				},
+			}
 		}
 	} else {
 		is_separated = true;
