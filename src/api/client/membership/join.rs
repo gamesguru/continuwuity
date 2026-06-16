@@ -612,7 +612,7 @@ async fn join_room_by_id_helper_remote(
 		.get_or_create_shortroomid(room_id)
 		.await;
 
-	join_room_by_id_helper_remote_process(
+	Box::pin(join_room_by_id_helper_remote_process(
 		services,
 		sender_user,
 		room_id,
@@ -623,7 +623,7 @@ async fn join_room_by_id_helper_remote(
 		state_lock,
 		send_join_response,
 		remote_latest_events,
-	)
+	))
 	.await
 }
 
@@ -793,10 +793,11 @@ async fn join_room_by_id_helper_remote_process(
 		.update_membership(room_id, sender_user, &parsed_join_pdu, true)
 		.await?;
 
-	// To prevent our join event from getting assigned a lower PduCount than the preceding
-	// historical extremities (which causes a chronologically out-of-order room timeline
-	// in client syncs), we drop the state lock temporarily, fetch and handle those extremities
-	// synchronously, and then re-acquire the lock before appending our join event.
+	// To prevent our join event from getting assigned a lower PduCount than the
+	// preceding historical extremities (which causes a chronologically
+	// out-of-order room timeline in client syncs), we drop the state lock
+	// temporarily, fetch and handle those extremities synchronously, and then
+	// re-acquire the lock before appending our join event.
 	drop(state_lock);
 
 	if !remote_latest_events.is_empty() {
@@ -829,21 +830,25 @@ async fn join_room_by_id_helper_remote_process(
 						continue;
 					},
 				};
-				let (parsed_room_id, parsed_event_id, value) =
-					match services.rooms.event_handler.parse_incoming_pdu(&response.pdu).await {
-						| Ok(v) => v,
-						| Err(e) => {
-							warn!("Failed to parse extremity {event_id}: {e}");
-							continue;
-						},
-					};
+				let (parsed_room_id, parsed_event_id, value) = match services
+					.rooms
+					.event_handler
+					.parse_incoming_pdu(&response.pdu)
+					.await
+				{
+					| Ok(v) => v,
+					| Err(e) => {
+						warn!("Failed to parse extremity {event_id}: {e}");
+						continue;
+					},
+				};
 				if parsed_room_id != room_id {
 					continue;
 				}
 				if let Err(e) = services
 					.rooms
 					.event_handler
-					.handle_incoming_pdu(&remote_server, &room_id, &parsed_event_id, value, true)
+					.handle_incoming_pdu(&remote_server, room_id, &parsed_event_id, value, true)
 					.await
 				{
 					warn!("Failed to handle extremity {event_id}: {e}");
