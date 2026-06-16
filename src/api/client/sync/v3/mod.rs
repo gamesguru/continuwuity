@@ -24,7 +24,7 @@ use futures::{
 	future::{OptionFuture, join3, join4},
 };
 use ruma::{
-	DeviceId, OwnedUserId, RoomId, UserId,
+	DeviceId, OwnedRoomId, OwnedUserId, RoomId, UserId,
 	api::{
 		OutgoingResponse,
 		client::{
@@ -462,6 +462,18 @@ pub(crate) async fn build_sync_events(
 	let mut device_list_updates: DeviceLists = device_list_updates.into();
 	device_list_updates.changed.extend(keys_changed);
 
+	let mut presence_updates = presence_updates.unwrap_or_default();
+	if services.config.allow_local_presence {
+		collect_member_presence(
+			services,
+			syncing_user,
+			last_sync_end_count,
+			&joined_rooms,
+			&mut presence_updates,
+		)
+		.await;
+	}
+
 	let ruma_response = sync_events::v3::Response {
 		next_batch: current_count.to_string(),
 		rooms: Rooms {
@@ -473,7 +485,6 @@ pub(crate) async fn build_sync_events(
 		presence: Presence {
 			events: presence_updates
 				.into_iter()
-				.flat_map(IntoIterator::into_iter)
 				.map(|(sender, content)| PresenceEvent { content, sender })
 				.map(|ref event| Raw::new(event))
 				.filter_map(Result::ok)
@@ -524,6 +535,129 @@ pub(crate) async fn build_sync_events(
 	}
 
 	Ok(val)
+}
+
+/// Collect presence updates for users relevant to the current sync window.
+///
+/// This gathers presence for:
+/// 1. Members of rooms the syncing user has newly joined since their last sync
+/// 2. Users who joined any room in the current sync's timeline
+///
+/// Presence is only fetched for users not already in `presence_updates` and
+/// excludes the syncing user themselves.
+#[tracing::instrument(name = "member_presence", level = "debug", skip_all)]
+async fn collect_member_presence(
+	services: &Services,
+	syncing_user: &UserId,
+	last_sync_end_count: Option<u64>,
+	joined_rooms: &BTreeMap<OwnedRoomId, sync_events::v3::JoinedRoom>,
+	presence_updates: &mut PresenceUpdates,
+) {
+	use ruma::events::{
+		StateEventType,
+		room::member::{MembershipState, RoomMemberEventContent},
+	};
+
+	let mut extra_users = HashSet::new();
+
+	// Phase 1: Collect users from rooms the syncing user newly joined
+	if let Some(last_sync_end_count) = last_sync_end_count {
+		for room_id in joined_rooms.keys() {
+			let shortstatehash = services
+				.rooms
+				.timeline
+				.prev_shortstatehash(
+					room_id,
+					conduwuit::matrix::pdu::PduCount::Normal(
+						last_sync_end_count.saturating_add(1),
+					),
+				)
+				.await
+				.ok();
+
+			let was_joined = match shortstatehash {
+				| Some(ssh) => services
+					.rooms
+					.state_accessor
+					.state_get_content::<RoomMemberEventContent>(
+						ssh,
+						&StateEventType::RoomMember,
+						syncing_user.as_str(),
+					)
+					.await
+					.is_ok_and(|c| c.membership == MembershipState::Join),
+				| None => false,
+			};
+
+			if !was_joined {
+				services
+					.rooms
+					.state_cache
+					.room_members(room_id)
+					.map(ToOwned::to_owned)
+					.ready_for_each(|uid| {
+						extra_users.insert(uid);
+					})
+					.await;
+			}
+		}
+	}
+
+	// Phase 2: Collect users whose join events appear in the timeline
+	for joined_room in joined_rooms.values() {
+		collect_timeline_join_users(&joined_room.timeline.events, &mut extra_users);
+	}
+
+	// Phase 3: Fetch presence for collected users (skip self and already-known)
+	for user_id in extra_users {
+		if user_id != syncing_user {
+			if let std::collections::hash_map::Entry::Vacant(e) = presence_updates.entry(user_id)
+			{
+				if let Ok(presence_event) = services.presence.get_presence(e.key()).await {
+					e.insert(presence_event.content);
+				}
+			}
+		}
+	}
+}
+
+/// Extract user IDs from join membership events in a list of timeline events.
+///
+/// This is a pure function (no I/O) for testability: given raw timeline events,
+/// it parses each one looking for `m.room.member` events with `membership:
+/// "join"` and collects the `state_key` (the user who joined).
+fn collect_timeline_join_users(
+	events: &[Raw<ruma::events::AnySyncTimelineEvent>],
+	users: &mut HashSet<OwnedUserId>,
+) {
+	#[derive(serde::Deserialize)]
+	struct MemberHelper {
+		#[serde(rename = "type")]
+		event_type: String,
+		content: Option<MemberContent>,
+		state_key: Option<String>,
+	}
+
+	#[derive(serde::Deserialize)]
+	struct MemberContent {
+		membership: String,
+	}
+
+	for event in events {
+		if let Ok(helper) = event.deserialize_as::<MemberHelper>() {
+			if helper.event_type == "m.room.member" {
+				if let Some(content) = helper.content {
+					if content.membership == "join" {
+						if let Some(ref state_key) = helper.state_key {
+							if let Ok(user_id) = UserId::parse(state_key) {
+								users.insert(user_id.to_owned());
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 #[tracing::instrument(name = "presence", level = "debug", skip_all)]
