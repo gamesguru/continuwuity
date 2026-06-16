@@ -493,7 +493,10 @@ impl Service {
 		pin_mut!(server_rooms);
 		let mut device_list_changes = HashSet::<OwnedUserId>::new();
 		while let Some(room_id) = server_rooms.next().await {
-			info!(%room_id, "Checking room for device list changes");
+			info!(
+				target: "device_list_debug",
+				%room_id, "Checking room for device list changes"
+			);
 			let keys_changed = self
 				.services
 				.users
