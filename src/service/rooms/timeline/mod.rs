@@ -325,14 +325,27 @@ impl Service {
 			 {batch_start}..{})...",
 			batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
 		);
-		self.reinsert_timeline_entries(
-			room_id,
-			shortroomid,
-			&sorted,
-			batch_start,
-			no_compute_state,
-		)
-		.await;
+		let final_ssh = self
+			.reinsert_timeline_entries(
+				room_id,
+				shortroomid,
+				&sorted,
+				batch_start,
+				no_compute_state,
+			)
+			.await;
+
+		// Update the room's authoritative shortstatehash to match the
+		// recomputed state at the tip. Without this, Room SSH stays stale
+		// and diverges from the tip's SSH.
+		if let Some(ssh) = final_ssh {
+			if ssh != 0 {
+				self.services
+					.state
+					.set_room_state(room_id, ssh, &state_lock);
+				info!("reorder_timeline: updated room shortstatehash to {ssh}");
+			}
+		}
 
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		let final_sync = self.db.db.cork_and_sync();
@@ -594,7 +607,7 @@ impl Service {
 		sorted: &[OwnedEventId],
 		batch_start: u64,
 		no_compute_state: bool,
-	) {
+	) -> Option<u64> {
 		let count = sorted.len();
 
 		let mut current_shortstatehash = if no_compute_state {
@@ -733,6 +746,8 @@ impl Service {
 			}
 		}
 		drop(cork.take());
+
+		current_shortstatehash.filter(|&ssh| ssh != 0)
 	}
 
 	/// Prune fork storms down to operationally relevant tips using tail-based

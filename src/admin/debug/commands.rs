@@ -691,28 +691,20 @@ pub(crate) async fn force_set_state(
 
 	let at_event_id = match at_event {
 		| Some(event_id) => event_id,
-		| None => {
-			if !self
-				.services
-				.rooms
-				.state_cache
-				.server_is_participant(&self.services.server.name, &room_id)
-				.await
-			{
-				return Err!(Request(InvalidParam(
-					"We are not participating in the room; provide an event_id to bootstrap \
-					 using the --at-event flag."
-				)));
-			}
-			self.services
-				.rooms
-				.timeline
-				.latest_pdu_in_room(&room_id)
-				.await
-				.map_err(|_| err!(Database("Failed to find the latest PDU in database")))?
-				.event_id()
-				.to_owned()
-		},
+		| None => self
+			.services
+			.rooms
+			.timeline
+			.latest_pdu_in_room(&room_id)
+			.await
+			.map_err(|_| {
+				err!(Request(InvalidParam(
+					"No PDUs found in room. Provide an event_id to bootstrap using the \
+					 --at-event flag."
+				)))
+			})?
+			.event_id()
+			.to_owned(),
 	};
 
 	let db_room_version = self
