@@ -689,18 +689,22 @@ where
 		from_json_str::<GetThirdPartyInvite>(content.get())?.third_party_invite;
 
 	let sender_membership = match &sender_membership_event {
-		| Some(pdu) => from_json_str::<GetMembership>(pdu.content().get())?.membership,
+		| Some(pdu) => from_json_str::<GetMembership>(pdu.content().get())
+			.map(|m| m.membership)
+			.unwrap_or(MembershipState::Leave),
 		| None => MembershipState::Leave,
 	};
 	let sender_is_joined = sender_membership == MembershipState::Join;
 
 	let target_user_current_membership = match &target_user_membership_event {
-		| Some(pdu) => from_json_str::<GetMembership>(pdu.content().get())?.membership,
+		| Some(pdu) => from_json_str::<GetMembership>(pdu.content().get())
+			.map(|m| m.membership)
+			.unwrap_or(MembershipState::Leave),
 		| None => MembershipState::Leave,
 	};
 
 	let power_levels: RoomPowerLevelsEventContent = match &power_levels_event {
-		| Some(ev) => from_json_str(ev.content().get())?,
+		| Some(ev) => from_json_str(ev.content().get()).unwrap_or_default(),
 		| None => RoomPowerLevelsEventContent::default(),
 	};
 
@@ -736,7 +740,9 @@ where
 	trace!(?creators, "creators for room");
 
 	let join_rules = if let Some(jr) = &join_rules_event {
-		from_json_str::<RoomJoinRulesEventContent>(jr.content().get())?.join_rule
+		from_json_str::<RoomJoinRulesEventContent>(jr.content().get())
+			.map(|c| c.join_rule)
+			.unwrap_or(JoinRule::Invite)
 	} else {
 		JoinRule::Invite
 	};

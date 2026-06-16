@@ -232,7 +232,7 @@ build-cross: ##H Cross-compile for specific glibc and CPU (uses cargo-zigbuild)
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		AWS_LC_RS_NO_BUNDLE=1 \
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
-		RUSTFLAGS="-C target-cpu=$(CPU_TARGET) $$RUSTFLAGS" \
+		RUSTFLAGS="-C target-cpu=$(CPU_TARGET) -C link-arg=-L/usr/lib -C link-arg=-L/usr/local/lib $$RUSTFLAGS" \
 		cargo zigbuild --target x86_64-unknown-linux-gnu.$(GLIBC_VERSION) --features $(FEATURES) --locked $(CARGO_FLAGS)
 
 
@@ -316,6 +316,13 @@ complement/run: ##H Run Complement docker tests locally (requires COMPLEMENT_DIR
 	@echo "Running Complement tests from $(COMPLEMENT_DIR)..."
 	COMPLEMENT_BASE_IMAGE="$(COMPLEMENT_IMAGE)" COMPLEMENT_HOST_MOUNTS="$(PREFIX)/lib:$(PREFIX)/lib:ro$(if $(HOST_LIBS_MOUNTS),;$(HOST_LIBS_MOUNTS))" ./bin/complement $(COMPLEMENT_DIR)
 
+
+.PHONY: complement/clean
+complement/clean: ##H Force-remove all Complement Docker containers and networks
+	@echo "Cleaning up Complement docker resources..."
+	@docker ps -aq --filter "name=complement_" | xargs -r docker rm -f
+	@docker network ls -q --filter "name=complement_" | xargs -r docker network rm
+	@echo "Done."
 
 .PHONY: complement/stats
 complement/stats: ##H Check local test stats

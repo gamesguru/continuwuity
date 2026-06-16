@@ -55,9 +55,14 @@ use super::{Destination, EduBuf, EduVec, Msg, SendingEvent, Service, data::Queue
 
 #[derive(Debug)]
 enum TransactionStatus {
-	Running,
+	Running {
+		pending_flush: bool,
+	},
 	Failed(u32, Instant), // number of times failed, time of last failure
-	Retrying(u32),        // number of times failed
+	Retrying {
+		tries: u32,
+		pending_flush: bool,
+	},
 }
 
 type SendingError = (Destination, Error);
@@ -73,6 +78,8 @@ const DEQUEUE_LIMIT: usize = 48;
 
 pub const PDU_LIMIT: usize = 50;
 pub const EDU_LIMIT: usize = 100;
+
+static EDU_TXN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl Service {
 	#[tracing::instrument(skip(self), level = "debug")]
@@ -142,11 +149,17 @@ impl Service {
 
 	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
 		debug!(dest = ?dest, "{e:?}");
+		if e.status_code().is_client_error() {
+			statuses.remove(&dest);
+			return;
+		}
+
 		statuses.entry(dest).and_modify(|e| {
 			*e = match e {
-				| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
-				| &mut TransactionStatus::Retrying(ref n) =>
-					TransactionStatus::Failed(n.saturating_add(1), Instant::now()),
+				| TransactionStatus::Running { .. } =>
+					TransactionStatus::Failed(1, Instant::now()),
+				| &mut TransactionStatus::Retrying { tries, .. } =>
+					TransactionStatus::Failed(tries.saturating_add(1), Instant::now()),
 				| TransactionStatus::Failed(..) => {
 					panic!("Request that was not even running failed?!")
 				},
@@ -164,6 +177,14 @@ impl Service {
 		let _cork = self.db.db.cork();
 		self.db.delete_all_active_requests_for(dest).await;
 
+		let pending_flush = matches!(
+			statuses.get(dest),
+			Some(
+				&TransactionStatus::Running { pending_flush: true }
+					| &TransactionStatus::Retrying { pending_flush: true, .. },
+			)
+		);
+
 		// Find events that have been added since starting the last request
 		let new_events = self
 			.db
@@ -174,10 +195,45 @@ impl Service {
 
 		// Insert any pdus we found
 		if !new_events.is_empty() {
+			statuses.insert(dest.clone(), TransactionStatus::Running { pending_flush: false });
 			self.db.mark_as_active(new_events.iter());
 
-			let new_events_vec = new_events.into_iter().map(at!(1)).collect();
+			let mut new_events_vec: Vec<SendingEvent> =
+				new_events.into_iter().map(at!(1)).collect();
+
+			if pending_flush {
+				if let Destination::Federation(server_name) = dest {
+					if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
+						debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
+						let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
+						new_events_vec.extend(select_edus);
+						self.db.set_latest_educount(server_name, last_count);
+					}
+				}
+			}
+
 			futures.push(self.send_events(dest.clone(), new_events_vec));
+		} else if pending_flush {
+			if let Destination::Federation(server_name) = dest {
+				if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
+					if !select_edus.is_empty() {
+						statuses.insert(dest.clone(), TransactionStatus::Running {
+							pending_flush: false,
+						});
+						debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
+						let select_edus_vec: Vec<SendingEvent> =
+							select_edus.into_iter().map(SendingEvent::Edu).collect();
+						self.db.set_latest_educount(server_name, last_count);
+						futures.push(self.send_events(dest.clone(), select_edus_vec));
+					} else {
+						statuses.remove(dest);
+					}
+				} else {
+					statuses.remove(dest);
+				}
+			} else {
+				statuses.remove(dest);
+			}
 		} else {
 			statuses.remove(dest);
 		}
@@ -264,7 +320,8 @@ impl Service {
 
 		for (dest, events) in txns {
 			if self.server.config.startup_netburst && !events.is_empty() {
-				statuses.insert(dest.clone(), TransactionStatus::Running);
+				statuses
+					.insert(dest.clone(), TransactionStatus::Running { pending_flush: false });
 				futures.push(self.send_events(dest.clone(), events));
 			}
 		}
@@ -347,14 +404,16 @@ impl Service {
 						allow = false;
 					} else {
 						retry = true;
-						*e = TransactionStatus::Retrying(*tries);
+						*e = TransactionStatus::Retrying { tries: *tries, pending_flush: false };
 					}
 				},
-				TransactionStatus::Running | TransactionStatus::Retrying(_) => {
+				TransactionStatus::Running { pending_flush }
+				| TransactionStatus::Retrying { pending_flush, .. } => {
+					*pending_flush = true;
 					allow = false; // already running
 				},
 			})
-			.or_insert(TransactionStatus::Running);
+			.or_insert(TransactionStatus::Running { pending_flush: false });
 
 		Ok((allow, retry))
 	}
@@ -434,6 +493,7 @@ impl Service {
 		pin_mut!(server_rooms);
 		let mut device_list_changes = HashSet::<OwnedUserId>::new();
 		while let Some(room_id) = server_rooms.next().await {
+			info!(%room_id, "Checking room for device list changes");
 			let keys_changed = self
 				.services
 				.users
@@ -442,6 +502,7 @@ impl Service {
 
 			pin_mut!(keys_changed);
 			while let Some((user_id, count)) = keys_changed.next().await {
+				info!(%user_id, %count, %room_id, "Detected device list change");
 				if count > since.1 {
 					break;
 				}
@@ -902,12 +963,23 @@ impl Service {
 			.fetch_add(pdus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
 		self.stats.outgoing_txns.fetch_add(1, Ordering::Relaxed);
 
-		let preimage = pdus
-			.iter()
-			.map(|raw| raw.get().as_bytes())
-			.chain(edus.iter().map(|raw| raw.json().get().as_bytes()));
+		let counter_bytes;
+		let preimage: Vec<&[u8]> = if pdus.is_empty() {
+			let counter = EDU_TXN_COUNTER.fetch_add(1, Ordering::Relaxed);
+			counter_bytes = counter.to_be_bytes();
+			pdus.iter()
+				.map(|raw| raw.get().as_bytes())
+				.chain(edus.iter().map(|raw| raw.json().get().as_bytes()))
+				.chain(std::iter::once(&counter_bytes[..]))
+				.collect()
+		} else {
+			pdus.iter()
+				.map(|raw| raw.get().as_bytes())
+				.chain(edus.iter().map(|raw| raw.json().get().as_bytes()))
+				.collect()
+		};
 
-		let txn_hash = calculate_hash(preimage);
+		let txn_hash = calculate_hash(preimage.into_iter());
 		let txn_id = &*URL_SAFE_NO_PAD.encode(txn_hash);
 		let request = send_transaction_message::v1::Request {
 			transaction_id: txn_id.into(),

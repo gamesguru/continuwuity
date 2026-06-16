@@ -9,10 +9,7 @@ use conduwuit::{
 		stream::{ReadyExt, WidebandExt as _},
 	},
 };
-use futures::{
-	StreamExt,
-	future::{OptionFuture, join},
-};
+use futures::{StreamExt, future::join};
 use ruma::{
 	EventId, OwnedRoomId, RoomId,
 	api::client::sync::sync_events::v3::{LeftRoom, RoomAccountData, State, Timeline},
@@ -98,22 +95,15 @@ pub(super) async fn load_left_room(
 		);
 	}
 
-	let last_sync_end_shortstatehash: OptionFuture<_> = last_sync_end_count
-		.map(|last_sync_end_count| {
-			services
-				.rooms
-				.user
-				.get_token_shortstatehash(room_id, last_sync_end_count)
-		})
-		.into();
-
-	let last_sync_end_shortstatehash = last_sync_end_shortstatehash.await.and_then(|result| {
-		if let Err(error) = &result {
-			debug_warn!("Failed to get token shortstatehash for room {room_id}: {error}");
-		}
-
-		result.ok()
-	});
+	let last_sync_end_shortstatehash = match last_sync_end_count {
+		| Some(last_sync_end_count) => services
+			.rooms
+			.timeline
+			.prev_shortstatehash(room_id, PduCount::Normal(last_sync_end_count.saturating_add(1)))
+			.await
+			.ok(),
+		| None => None,
+	};
 
 	let does_not_exist = services.rooms.metadata.exists(room_id).eq(&false).await;
 
@@ -208,13 +198,15 @@ pub(super) async fn load_left_room(
 		},
 	};
 
-	let state_after = if services.config.experimental_features.msc4222_enabled {
+	let state_after = if services.config.experimental_features.msc4222_enabled
+		&& sync_context.use_state_after
+	{
 		if let Some(shortstatehash) = leave_shortstatehash {
 			let lazily_loaded_members: Option<MemberSet> = prepare_lazily_loaded_members(
 				services,
 				sync_context,
 				room_id,
-				timeline.senders(),
+				timeline.members(),
 			)
 			.await;
 
@@ -367,7 +359,7 @@ async fn build_left_state_and_timeline(
 		.and_then(|limit| limit.try_into().ok())
 		.unwrap_or(DEFAULT_TIMELINE_LIMIT);
 
-	let timeline = load_timeline(
+	let raw_timeline = load_timeline(
 		services,
 		syncing_user,
 		room_id,
@@ -376,6 +368,27 @@ async fn build_left_state_and_timeline(
 		timeline_limit,
 	)
 	.await?;
+
+	let mut stream = raw_timeline
+		.pdus
+		.into_iter()
+		.stream()
+		// filter out ignored events from the timeline
+		.wide_filter_map(|item| ignored_filter(services, item, syncing_user))
+		.ready_filter(|(_, pdu): &(PduCount, PduEvent)| {
+			use conduwuit::matrix::event::Matches;
+			(&sync_context.filter.room.timeline).matches(pdu)
+		});
+
+	let mut filtered_pdus = std::collections::VecDeque::new();
+	while let Some(item) = stream.next().await {
+		filtered_pdus.push_back(item);
+	}
+
+	let timeline = TimelinePdus {
+		pdus: filtered_pdus,
+		limited: raw_timeline.limited,
+	};
 
 	let timeline_start_shortstatehash = async {
 		if let Some((_, pdu)) = timeline.pdus.front() {
@@ -395,7 +408,7 @@ async fn build_left_state_and_timeline(
 	};
 
 	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.senders());
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members());
 
 	let (timeline_start_shortstatehash, lazily_loaded_members) =
 		join(timeline_start_shortstatehash, lazily_loaded_members).await;

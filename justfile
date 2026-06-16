@@ -390,7 +390,7 @@ ci-complement-stats:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    RESULTS_DIR="{{env_var_or_default("COMPLEMENT_RESULTS_DIR", "tests/test_results/complement")}}"
+    RESULTS_DIR="{{env_var_or_default("COMPLEMENT_RESULTS_DIR", "tests/test_results/complement-gg")}}"
     RESULTS="$RESULTS_DIR/test_results.jsonl"
     if [ ! -f "$RESULTS" ]; then
         echo "ERROR: $RESULTS does not exist"
@@ -418,7 +418,7 @@ ci-complement-stats:
 
     echo ""
     echo "Last modified by:"
-    git log -5 --format="%an (%ad) %H" origin/main -- tests/test_results/complement/test_results.jsonl
+    git log -5 --format="%an (%ad) %H" origin/main -- tests/test_results/complement-gg/test_results.jsonl
 
 # -----------------------------------------------------------------------------
 # CI Database Queries

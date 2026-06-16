@@ -204,6 +204,24 @@ impl Data {
 		Ok(pdu)
 	}
 
+	/// Returns the event_id from the pdu directly.
+	pub(super) async fn get_event_id_from_pdu_id(
+		&self,
+		pdu_id: &RawPduId,
+	) -> Result<ruma::OwnedEventId> {
+		#[derive(serde::Deserialize)]
+		struct EventIdExtract {
+			event_id: ruma::OwnedEventId,
+		}
+
+		let extract: EventIdExtract = self.pduid_pdu.get(pdu_id).await.deserialized()?;
+		Ok(extract.event_id)
+	}
+
+	pub(super) async fn pduid_exists(&self, pdu_id: &RawPduId) -> bool {
+		self.pduid_pdu.exists(pdu_id).await.is_ok()
+	}
+
 	/// Returns the pdu as a `BTreeMap<String, CanonicalJsonValue>`.
 	pub(super) async fn get_pdu_json_from_id(
 		&self,
@@ -328,6 +346,68 @@ impl Data {
 		}
 	}
 
+	pub(super) async fn prev_timeline_count(&self, before: &PduId) -> Result<PduCount> {
+		let before_pdu =
+			Self::pdu_count_to_id(before.shortroomid, before.shorteventid, Direction::Backward);
+
+		let prefix = before_pdu.shortroomid();
+		let pdu_ids = self
+			.pduid_pdu
+			.rev_keys_raw_from(&before_pdu)
+			.ready_try_take_while(move |pdu_bytes: &&[u8]| Ok(pdu_bytes.starts_with(&prefix)))
+			.ready_and_then(|pdu_bytes: &[u8]| {
+				let pdu_id = RawPduId::from(pdu_bytes);
+				Ok(pdu_id.pdu_count())
+			})
+			.ready_try_filter_map(|count| {
+				Ok(matches!(count, PduCount::Normal(_)).then_some(count))
+			});
+
+		pin_mut!(pdu_ids);
+		pdu_ids
+			.try_next()
+			.await?
+			.ok_or_else(|| err!(Request(NotFound("No earlier PDUs found in room"))))
+	}
+
+	pub(super) async fn next_timeline_count(&self, after: &PduId) -> Result<PduCount> {
+		let after_pdu =
+			Self::pdu_count_to_id(after.shortroomid, after.shorteventid, Direction::Forward);
+
+		let prefix = after_pdu.shortroomid();
+		let pdu_ids = self
+			.pduid_pdu
+			.keys_raw_from(&after_pdu)
+			.ready_try_take_while(move |pdu_bytes: &&[u8]| Ok(pdu_bytes.starts_with(&prefix)))
+			.ready_and_then(|pdu_bytes: &[u8]| {
+				let pdu_id = RawPduId::from(pdu_bytes);
+				Ok(pdu_id.pdu_count())
+			})
+			.ready_try_filter_map(|count| {
+				Ok(matches!(count, PduCount::Normal(_)).then_some(count))
+			});
+
+		pin_mut!(pdu_ids);
+		pdu_ids
+			.try_next()
+			.await?
+			.ok_or_else(|| err!(Request(NotFound("No more PDUs found in room"))))
+	}
+
+	fn pdu_count_to_id(
+		shortroomid: ShortRoomId,
+		shorteventid: PduCount,
+		dir: Direction,
+	) -> RawPduId {
+		// +1 so we don't send the base event
+		let pdu_id = PduId {
+			shortroomid,
+			shorteventid: shorteventid.saturating_inc(dir),
+		};
+
+		pdu_id.into()
+	}
+
 	async fn count_to_id(
 		&self,
 		room_id: &RoomId,
@@ -341,13 +421,7 @@ impl Data {
 			.await
 			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-		// +1 so we don't send the base event
-		let pdu_id = PduId {
-			shortroomid,
-			shorteventid: shorteventid.saturating_inc(dir),
-		};
-
-		Ok(pdu_id.into())
+		Ok(Self::pdu_count_to_id(shortroomid, shorteventid, dir))
 	}
 }
 

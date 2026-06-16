@@ -18,6 +18,12 @@ inputs:
   rebuild_db:
     description: "Whether to run a full historical rebuild (import_history.sh)"
     default: "false"
+  results_file:
+    description: "Path to local test_results.jsonl for direct ingest"
+    default: ""
+  run_metadata:
+    description: "JSON object with run metadata: {commit_hash, branch, arch, os, profile, room_version, version_string, features, pass, fail, skip}"
+    default: ""
 
 runs:
   using: "composite"
@@ -39,7 +45,62 @@ runs:
       run: |
         cat "${{ github.action_path }}/tables.sql" | ssh -C -o StrictHostKeyChecking=no "${{ inputs.ssh_target }}" "psql -U git c10y"
 
-    - name: Bulk Sync History
+    - name: Direct Ingest
+      if: inputs.results_file != '' && inputs.run_metadata != ''
+      shell: bash
+      env:
+        SSH_TARGET: ${{ inputs.ssh_target }}
+        RESULTS_FILE: ${{ inputs.results_file }}
+        RUN_META: ${{ inputs.run_metadata }}
+      run: |
+        COMMIT=$(echo "$RUN_META" | jq -r '.commit_hash')
+        BRANCH=$(echo "$RUN_META" | jq -r '.branch // ""')
+        ARCH=$(echo "$RUN_META" | jq -r '.arch // ""')
+        OS=$(echo "$RUN_META" | jq -r '.os // ""')
+        PROFILE=$(echo "$RUN_META" | jq -r '.profile // ""')
+        ROOM_VERSION=$(echo "$RUN_META" | jq -r '.room_version // ""')
+        VERSION=$(echo "$RUN_META" | jq -r '.version_string // ""')
+        FEATURES=$(echo "$RUN_META" | jq -r '.features // ""')
+        PASS=$(echo "$RUN_META" | jq -r '.pass // 0')
+        FAIL=$(echo "$RUN_META" | jq -r '.fail // 0')
+        SKIP=$(echo "$RUN_META" | jq -r '.skip // 0')
+        RUN_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+        if [ -z "$COMMIT" ] || [ ! -f "$RESULTS_FILE" ]; then
+          echo "⚠ Direct ingest skipped: missing commit_hash or results_file"
+          exit 1
+        fi
+
+        echo "→ Direct ingest for $COMMIT ($ARCH/$OS/v$ROOM_VERSION)..."
+        (
+          cat <<SQL
+        INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
+        VALUES ('${RUN_DATE}'::timestamptz, '${COMMIT}', '${BRANCH}', '${ARCH}', '${OS}', '${PROFILE}', ${PASS}, ${SKIP}, ${FAIL}, '${ROOM_VERSION}', '${FEATURES}', '${VERSION}')
+        ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version) DO NOTHING;
+        SQL
+
+          echo "CREATE TEMP TABLE t (j jsonb);"
+          echo "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+          jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" \
+            '. + {commit: $c, arch: $a, os: $o, profile: $p, room_version: $rv}' "$RESULTS_FILE"
+          echo "\."
+
+          cat <<SQL
+        INSERT INTO run_details (run_id, test_name, status)
+        SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
+        FROM t JOIN runs r ON r.commit_hash = (t.j->>'commit')
+          AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
+          AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
+          AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'), ''))
+          AND r.room_version IS NOT DISTINCT FROM (NULLIF((t.j->>'room_version'), ''))
+        WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
+        ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
+        SQL
+        ) | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"
+        echo "✓ Direct ingest complete."
+
+    - name: Bulk Sync History (backup)
+      continue-on-error: true
       shell: bash
       env:
         DATABASE_URL: ${{ inputs.database_url }}

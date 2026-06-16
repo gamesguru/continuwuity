@@ -1,4 +1,9 @@
-use std::{borrow::Borrow, fmt::Debug, mem::size_of_val, sync::Arc};
+use std::{
+	borrow::Borrow,
+	fmt::Debug,
+	mem::{size_of, size_of_val},
+	sync::Arc,
+};
 
 pub use conduwuit::matrix::pdu::{ShortEventId, ShortId, ShortRoomId, ShortStateKey};
 use conduwuit::{
@@ -12,7 +17,7 @@ use futures::{
 	Stream, StreamExt,
 	stream::{self},
 };
-use ruma::{EventId, OwnedEventId, RoomId, events::StateEventType};
+use ruma::{EventId, OwnedEventId, RoomId, RoomVersionId, events::StateEventType};
 use serde::Deserialize;
 
 use crate::{Dep, globals};
@@ -28,6 +33,7 @@ struct Data {
 	statekey_shortstatekey: Arc<Map>,
 	shortstatekey_statekey: Arc<Map>,
 	roomid_shortroomid: Arc<Map>,
+	roomid_roomversion: Arc<Map>,
 	statehash_shortstatehash: Arc<Map>,
 }
 
@@ -46,6 +52,7 @@ impl crate::Service for Service {
 				statekey_shortstatekey: args.db["statekey_shortstatekey"].clone(),
 				shortstatekey_statekey: args.db["shortstatekey_statekey"].clone(),
 				roomid_shortroomid: args.db["roomid_shortroomid"].clone(),
+				roomid_roomversion: args.db["roomid_roomversion"].clone(),
 				statehash_shortstatehash: args.db["statehash_shortstatehash"].clone(),
 			},
 			services: Services {
@@ -285,4 +292,14 @@ where
 		| (Ok(state_key), Ok(event_id)) => Some(Ok((state_key, event_id))),
 		| (Err(e), _) | (_, Err(e)) => Some(Err(e)),
 	})
+}
+
+#[implement(Service)]
+pub async fn get_room_version(&self, room_id: &RoomId) -> Result<RoomVersionId> {
+	self.db.roomid_roomversion.get(room_id).await.deserialized()
+}
+
+#[implement(Service)]
+pub fn set_room_version(&self, room_id: &RoomId, version: &RoomVersionId) {
+	self.db.roomid_roomversion.insert(room_id, version);
 }

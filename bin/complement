@@ -7,7 +7,7 @@ set -euo pipefail
 COMPLEMENT_SRC="${COMPLEMENT_SRC:-"$1"}"
 
 # Default results directory
-RESULTS_DIR="${RESULTS_DIR:-tests/test_results/complement}"
+RESULTS_DIR="${COMPLEMENT_RESULTS_DIR:-"${RESULTS_DIR:-tests/test_results/complement}"}"
 
 # A `.jsonl` file to write test logs to
 LOG_FILE="${2:-"${LOG_FILE:-$RESULTS_DIR/test_logs.jsonl}"}"
@@ -34,7 +34,7 @@ COMPLEMENT_PARALLEL="${COMPLEMENT_PARALLEL:-2}"
 # On Linux, host.docker.internal doesn't work by default.
 # We try to detect the docker0 bridge IP and use it.
 if [[ "$OSTYPE" == "linux-gnu"* ]] && [ -z "${COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT:-}" ]; then
-    BRIDGE_IP=$(ip addr show docker0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -n1)
+    BRIDGE_IP=$(ip addr show docker0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -n1 || true)
     if [ -n "$BRIDGE_IP" ]; then
         echo "Detected Docker bridge IP: $BRIDGE_IP. Setting COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT=$BRIDGE_IP"
         export COMPLEMENT_HOSTNAME_RUNNING_COMPLEMENT="$BRIDGE_IP"
@@ -136,7 +136,7 @@ else
         COMPLEMENT_BASE_IMAGE="$COMPLEMENT_BASE_IMAGE" \
         go test -json "${TEST_FLAGS[@]}" | tee "$LOG_FILE" || true)
 fi
-
+set -o pipefail
 # Post-process the results into an easy-to-compare format, sorted by Test name for reproducible results
 # This ensures we have a consistent results file for the CI parser.
 if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
@@ -160,3 +160,5 @@ echo "complement logs saved at $LOG_FILE"
 echo "complement results saved at $RESULTS_FILE"
 echo ""
 echo ""
+
+exit 0
