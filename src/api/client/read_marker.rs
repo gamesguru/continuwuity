@@ -172,7 +172,7 @@ pub(crate) async fn create_receipt_route(
 						sender_user.to_owned(),
 						ruma::events::receipt::Receipt {
 							ts: Some(MilliSecondsSinceUnixEpoch::now()),
-							thread: ReceiptThread::Unthreaded,
+							thread: body.thread.clone(),
 						},
 					)]),
 				)]),

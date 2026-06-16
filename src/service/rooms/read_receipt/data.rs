@@ -68,32 +68,9 @@ impl Data {
 					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
 			})
 			.ready_filter_map(|(key, value)| {
-				let user_id_bytes = user_id.as_bytes();
-				if key.ends_with(user_id_bytes)
-					&& key
-						.len()
-						.checked_sub(user_id_bytes.len())
-						.and_then(|len| len.checked_sub(1))
-						.and_then(|idx| key.get(idx))
-						== Some(&database::SEP)
-				{
-					let receipt = serde_json::from_slice::<ReceiptEvent>(value).ok()?;
-					let old_thread = receipt
-						.content
-						.0
-						.values()
-						.next()
-						.and_then(|types| types.get(&ReceiptType::Read))
-						.and_then(|users| users.get(user_id))
-						.map(|receipt| &receipt.thread);
-
-					if old_thread == new_thread {
-						return Some(key);
-					}
-				}
-				None
+				Self::filter_user_receipt(key, value, user_id, new_thread)
 			})
-			.ready_for_each(|key| self.readreceiptid_readreceipt.remove_raw(key))
+			.ready_for_each(|(key, _)| self.readreceiptid_readreceipt.remove_raw(key))
 			.await;
 
 		let count = self.services.globals.next_count().unwrap();
@@ -115,32 +92,45 @@ impl Data {
 			.ready_take_while(|(key, _)| {
 				key.starts_with(room_id.as_bytes())
 					&& key.get(room_id.as_bytes().len()) == Some(&database::SEP)
+			})
+			.ready_filter_map(|(key, value)| {
+				Self::filter_user_receipt(key, value, user_id, new_thread)
 			});
 
-		while let Some((key, value)) = stream.next().await {
-			let user_id_bytes = user_id.as_bytes();
-			if key.ends_with(user_id_bytes)
-				&& key
-					.len()
-					.checked_sub(user_id_bytes.len())
-					.and_then(|len| len.checked_sub(1))
-					.and_then(|idx| key.get(idx))
-					== Some(&database::SEP)
-			{
-				if let Ok(receipt) = serde_json::from_slice::<ReceiptEvent>(value) {
-					let old_thread = receipt
-						.content
-						.0
-						.values()
-						.next()
-						.and_then(|types| types.get(&ReceiptType::Read))
-						.and_then(|users| users.get(user_id))
-						.map(|receipt| &receipt.thread);
+		if let Some((_, receipt)) = stream.next().await {
+			return receipt.content.0.keys().next().cloned();
+		}
+		None
+	}
 
-					if old_thread == new_thread {
-						return receipt.content.0.keys().next().cloned();
-					}
-				}
+	fn filter_user_receipt<K: AsRef<[u8]>, V: AsRef<[u8]>>(
+		key: K,
+		value: V,
+		user_id: &UserId,
+		expected_thread: Option<&ReceiptThread>,
+	) -> Option<(K, ReceiptEvent)> {
+		let key_bytes = key.as_ref();
+		let user_id_bytes = user_id.as_bytes();
+		if key_bytes.ends_with(user_id_bytes)
+			&& key_bytes
+				.len()
+				.checked_sub(user_id_bytes.len())
+				.and_then(|len| len.checked_sub(1))
+				.and_then(|idx| key_bytes.get(idx))
+				== Some(&database::SEP)
+		{
+			let receipt = serde_json::from_slice::<ReceiptEvent>(value.as_ref()).ok()?;
+			let old_thread = receipt
+				.content
+				.0
+				.values()
+				.next()
+				.and_then(|types| types.get(&ReceiptType::Read))
+				.and_then(|users| users.get(user_id))
+				.map(|receipt| &receipt.thread);
+
+			if old_thread == expected_thread {
+				return Some((key, receipt));
 			}
 		}
 		None
