@@ -361,7 +361,7 @@ async fn migrate(services: &Services) -> Result<()> {
 			services
 				.users
 				.stream()
-				.filter(|user_id| services.users.is_active_local(user_id))
+				.ready_filter(|user_id| services.globals.user_is_local(user_id))
 				.ready_for_each(|user_id| {
 					let matches = patterns.matches(user_id.localpart());
 					if matches.matched_any() {
