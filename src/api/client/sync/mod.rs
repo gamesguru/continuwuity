@@ -63,6 +63,7 @@ async fn load_timeline(
 			if last_timeline_count <= starting_count {
 				// no messages have been sent in this room since `starting_count`
 				info!(
+					target: "timeline_debug",
 					"load_timeline early return for {}: last_timeline_count={:?} <= \
 					 starting_count={:?}",
 					room_id, last_timeline_count, starting_count
@@ -81,7 +82,7 @@ async fn load_timeline(
 				.inspect_err(|e| warn!("sync timeline pdus_rev error for {room_id}: {e}"))
 				.ignore_err()
 				.inspect(move |(pducount, _)| {
-					info!(
+					debug!(
 						"sync filter check for {}: pducount={:?}, starting_count={:?}, \
 						 passes={:?}",
 						room_id,
@@ -184,13 +185,13 @@ async fn load_timeline(
 	}
 
 	if pdus.is_empty() && starting_count.is_some() {
-		info!(
+		debug!(
 			target: "timeline_debug",
 			"sync: 0 timeline pdus for {} from {:?} to {:?} (limited = {:?})",
 			room_id, starting_count, ending_count, limited,
 		);
 	} else {
-		info!(
+		debug!(
 			target: "timeline_debug",
 			"sync: {:?} timeline pdus for {} from {:?} to {:?} (limited = {:?})",
 			pdus.len(),
