@@ -326,6 +326,23 @@ where
 		"Auth events local lookup summary"
 	);
 	if !missing_auth_events.is_empty() {
+		// Defense-in-depth: re-check if any missing auth events have been
+		// marked rejected since the initial loop above. A sibling
+		// event in the same transaction batch may have processed and
+		// rejected the auth event already, so we can skip the network
+		// request entirely.
+		for mid in &missing_auth_events {
+			if self.services.pdu_metadata.is_event_rejected(mid).await {
+				self.services.pdu_metadata.mark_event_rejected(event_id);
+				self.services.outlier.add_pdu_outlier(
+					pdu_event.event_id(),
+					&incoming_pdu,
+					Some(room_id),
+				);
+				return Err!(Request(Forbidden("Event depends on rejected auth event {mid}")));
+			}
+		}
+
 		// For a small number of missing auth events, try /event_auth inline.
 		// This satisfies complement tests that register /event_auth handlers
 		// (e.g. TestInboundFederationRejectsEventsWithRejectedAuthEvents).

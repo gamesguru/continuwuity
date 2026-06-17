@@ -117,19 +117,34 @@ where
 	// We deleted iterative pre-fetching, so for non-fast-forward state events we
 	// must blindly trigger a bulk /state_ids to ensure state_res has the auth
 	// chain.
+	//
+	// Skip the pre-fetch entirely if any auth event is already rejected locally.
+	// The event will be rejected anyway during auth checking, so the /state_ids
+	// call would be wasted network traffic.
 	if incoming_pdu.state_key().is_some() && !is_fast_forward && !skip_soft_fail {
-		debug!(
-			event_id = %incoming_pdu.event_id,
-			"Event is a DAG fork state event; pre-fetching auth chain via /state_ids"
-		);
-		let _ = Box::pin(self.fetch_state(
-			origin,
-			create_event,
-			room_id,
-			incoming_pdu.event_id(),
-			false,
-		))
-		.await;
+		let any_auth_rejected = futures::stream::iter(incoming_pdu.auth_events())
+			.any(|aid| async move { self.services.pdu_metadata.is_event_rejected(aid).await })
+			.await;
+
+		if any_auth_rejected {
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				"Skipping /state_ids pre-fetch: auth events include rejected events"
+			);
+		} else {
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				"Event is a DAG fork state event; pre-fetching auth chain via /state_ids"
+			);
+			let _ = Box::pin(self.fetch_state(
+				origin,
+				create_event,
+				room_id,
+				incoming_pdu.event_id(),
+				false,
+			))
+			.await;
+		}
 	}
 
 	let mut state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
@@ -666,77 +681,106 @@ where
 
 	if state.is_none() && !skip_soft_fail {
 		// Local state is unavailable — prev_events are not yet in DB or their
-		// state hashes have not been computed. Attempt a synchronous /state_ids
-		// fetch from the sending server BEFORE queuing the async DAG healer.
+		// state hashes have not been computed.
 		//
-		// The healer fires asynchronously (after a delay), which races with the
-		// sending server's lifetime: in Complement tests the fake federation
-		// server shuts down when the test times out, so the healer's /state_ids
-		// calls always arrive too late and "all servers failed". Fetching inline
-		// here gives us a shot while the sender is still alive.
-		debug!(
-			event_id = %incoming_pdu.event_id,
-			%origin,
-			"local state unavailable; attempting synchronous /state_ids fetch"
-		);
-		match Box::pin(self.fetch_state(
-			origin,
-			create_event,
-			room_id,
-			incoming_pdu.event_id(),
-			false,
-		))
-		.await
-		{
-			| Ok(Some(fetched_state)) => {
-				info!(
-					target: "state_res_debug",
-					event_id = %incoming_pdu.event_id,
-					n_state = fetched_state.len(),
-					"fetched state via /state_ids; proceeding with auth check"
-				);
-				state = Some(fetched_state);
-			},
-			| Ok(None) | Err(_) => {
-				// Check if prev_events are completely unknown — not in the
-				// timeline AND not even stored as outliers. If they are, we
-				// cannot determine the correct state-at-event. Mark as
-				// rejected so the unreject path can re-evaluate later.
-				//
-				// Events whose prev_events reference KNOWN events (even
-				// rejected outliers) can safely fall through to the current
-				// room state fallback — the auth check will still reject
-				// invalid events.
-				let any_prev_unknown = futures::stream::iter(incoming_pdu.prev_events())
-					.any(|prev_id| async move {
-						self.services.timeline.get_pdu_id(prev_id).await.is_err()
-							&& self
-								.services
-								.outlier
-								.get_pdu_outlier(prev_id)
-								.await
-								.is_err()
-					})
-					.await;
+		// Before making any network requests, check whether state is missing
+		// because prev_events are rejected. If they are, a /state_ids fetch
+		// would be wasted traffic — just fall through to the current room
+		// state fallback. The auth check will still reject invalid events.
+		let all_prevs_rejected = futures::stream::iter(incoming_pdu.prev_events())
+			.all(|prev_id| async move {
+				self.services.pdu_metadata.is_event_rejected(prev_id).await
+					|| self.services.timeline.get_pdu_id(prev_id).await.is_ok()
+			})
+			.await;
 
-				if any_prev_unknown {
+		let any_prev_rejected = futures::stream::iter(incoming_pdu.prev_events())
+			.any(
+				|prev_id| async move { self.services.pdu_metadata.is_event_rejected(prev_id).await },
+			)
+			.await;
+
+		if any_prev_rejected && all_prevs_rejected {
+			// All non-timeline prev_events are rejected — no point fetching
+			// state from federation. Fall through to current room state.
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				"Skipping /state_ids fetch: prev_events are rejected; using current room state"
+			);
+		} else {
+			// Attempt a synchronous /state_ids fetch from the sending server
+			// BEFORE queuing the async DAG healer.
+			//
+			// The healer fires asynchronously (after a delay), which races with
+			// the sending server's lifetime: in Complement tests the fake
+			// federation server shuts down when the test times out, so the
+			// healer's /state_ids calls always arrive too late and "all servers
+			// failed". Fetching inline here gives us a shot while the sender
+			// is still alive.
+			debug!(
+				event_id = %incoming_pdu.event_id,
+				%origin,
+				"local state unavailable; attempting synchronous /state_ids fetch"
+			);
+			match Box::pin(self.fetch_state(
+				origin,
+				create_event,
+				room_id,
+				incoming_pdu.event_id(),
+				false,
+			))
+			.await
+			{
+				| Ok(Some(fetched_state)) => {
 					info!(
+						target: "state_res_debug",
 						event_id = %incoming_pdu.event_id,
-						"Rejecting event: prev_events completely unknown and /state_ids fetch failed"
+						n_state = fetched_state.len(),
+						"fetched state via /state_ids; proceeding with auth check"
 					);
-					self.services
-						.pdu_metadata
-						.mark_event_rejected(incoming_pdu.event_id());
-					return Ok(StateAtEvent::Resolved(HashMap::new()));
-				}
+					state = Some(fetched_state);
+				},
+				| Ok(None) | Err(_) => {
+					// Check if prev_events are completely unknown — not in the
+					// timeline AND not even stored as outliers. If they are, we
+					// cannot determine the correct state-at-event. Mark as
+					// rejected so the unreject path can re-evaluate later.
+					//
+					// Events whose prev_events reference KNOWN events (even
+					// rejected outliers) can safely fall through to the current
+					// room state fallback — the auth check will still reject
+					// invalid events.
+					let any_prev_unknown = futures::stream::iter(incoming_pdu.prev_events())
+						.any(|prev_id| async move {
+							self.services.timeline.get_pdu_id(prev_id).await.is_err()
+								&& self
+									.services
+									.outlier
+									.get_pdu_outlier(prev_id)
+									.await
+									.is_err()
+						})
+						.await;
 
-				// All prev_events exist but state hashes not computed — safe to
-				// fall back to current room state for the auth check.
-				debug!(
-					event_id = %incoming_pdu.event_id,
-					"fetch_state failed but prev_events present; falling back to current room state"
-				);
-			},
+					if any_prev_unknown {
+						info!(
+							event_id = %incoming_pdu.event_id,
+							"Rejecting event: prev_events completely unknown and /state_ids fetch failed"
+						);
+						self.services
+							.pdu_metadata
+							.mark_event_rejected(incoming_pdu.event_id());
+						return Ok(StateAtEvent::Resolved(HashMap::new()));
+					}
+
+					// All prev_events exist but state hashes not computed — safe to
+					// fall back to current room state for the auth check.
+					debug!(
+						event_id = %incoming_pdu.event_id,
+						"fetch_state failed but prev_events present; falling back to current room state"
+					);
+				},
+			}
 		}
 	}
 
