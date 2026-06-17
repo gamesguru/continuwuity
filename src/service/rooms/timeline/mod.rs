@@ -179,6 +179,10 @@ impl Service {
 		self.db.get_pdu_count(event_id).await
 	}
 
+	pub async fn outlier_pdu_exists(&self, event_id: &EventId) -> Result<()> {
+		self.db.outlier_pdu_exists(event_id).await
+	}
+
 	/// Returns the EventMetadata for a PDU.
 	pub async fn get_event_metadata(&self, event_id: &EventId) -> Result<EventMetadata> {
 		self.db.get_event_metadata(event_id).await
