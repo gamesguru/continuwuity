@@ -892,20 +892,22 @@ async fn build_device_list_updates(
 
 	let mut device_list_updates = DeviceListUpdates::new();
 
+	// handle edge case of us having just joined, no other events since
 	if joined_since_last_sync {
-		let joined_members = services
-			.rooms
-			.state_cache
-			.room_members(room_id)
-			.ready_filter_map(|member| async move {
-				(member != syncing_user
-					&& shares_a_room(services, syncing_user, &member, Some(room_id)).await)
-					.then_some(member)
-			});
+		let joined_members =
+			services
+				.rooms
+				.state_cache
+				.room_members(room_id)
+				.filter_map(|member| async move {
+					(member != syncing_user
+						&& shares_a_room(services, syncing_user, member, Some(room_id)).await)
+						.then_some(member.to_owned())
+				});
 
 		device_list_updates
 			.changed
-			.extend(joined_members.collect().await);
+			.extend(joined_members.collect::<Vec<_>>().await);
 	}
 
 	// add users with changed keys to the `changed` list
