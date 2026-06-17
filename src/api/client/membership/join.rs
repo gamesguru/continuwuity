@@ -843,6 +843,13 @@ async fn join_room_by_id_helper_remote_process(
 					},
 				};
 				if parsed_room_id != room_id {
+					warn!(
+						%parsed_event_id,
+						%parsed_room_id,
+						%room_id,
+						%remote_server,
+						"Room ID mismatch in send_join extremity fetch: event belongs to parsed room, expected target room"
+					);
 					continue;
 				}
 				if let Err(e) = services
@@ -861,8 +868,10 @@ async fn join_room_by_id_helper_remote_process(
 	state_lock = services.rooms.state.mutex.lock(room_id).await;
 
 	// We append to state before appending the pdu, so we don't have a moment in
-	// time with the pdu without it's state. This is okay because append_pdu can't
-	// fail.
+	// time with the pdu without its state. Both append_to_state and append_pdu
+	// can indeed fail, in which case the local membership cache may be left in an
+	// inconsistent state (where the user appears joined in the cache but the join
+	// PDU is not persisted).
 	let statehash_after_join = services
 		.rooms
 		.state
