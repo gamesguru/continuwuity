@@ -57,7 +57,6 @@ pub(crate) async fn search_events_route(
 	})
 }
 
-#[allow(clippy::map_unwrap_or)]
 async fn category_room_events(
 	services: &Services,
 	sender_user: &UserId,
@@ -95,33 +94,39 @@ async fn category_room_events(
 		});
 
 	let results: Vec<_> = rooms
-		.filter_map(|room_id| async move {
-			check_room_visible(services, sender_user, &room_id, criteria)
-				.await
-				.is_ok()
-				.then_some(room_id)
+		.filter_map(|room_id| {
+			async move {
+				check_room_visible(services, sender_user, &room_id, criteria)
+					.await
+					.is_ok()
+					.then_some(room_id)
+			}
+			.boxed()
 		})
-		.filter_map(|room_id| async move {
-			let query = RoomQuery {
-				room_id: &room_id,
-				user_id: Some(sender_user),
-				criteria,
-				skip: next_batch,
-				limit,
-			};
+		.filter_map(|room_id| {
+			async move {
+				let query = RoomQuery {
+					room_id: &room_id,
+					user_id: Some(sender_user),
+					criteria,
+					skip: next_batch,
+					limit,
+				};
 
-			let (count, results) = services
-				.rooms
-				.search
-				.search_pdus(&query, sender_user)
-				.await
-				.ok()?;
+				let (count, results) = services
+					.rooms
+					.search
+					.search_pdus(&query, sender_user)
+					.await
+					.ok()?;
 
-			results
-				.collect::<Vec<_>>()
-				.map(|results| (room_id.clone(), count, results))
-				.map(Some)
-				.await
+				results
+					.collect::<Vec<_>>()
+					.map(|results| (room_id.clone(), count, results))
+					.map(Some)
+					.await
+			}
+			.boxed()
 		})
 		.collect()
 		.await;

@@ -9,7 +9,7 @@ use conduwuit::{
 	},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, future::select_ok, pin_mut};
+use futures::{Stream, TryFutureExt, TryStreamExt, pin_mut};
 use ruma::{CanonicalJsonObject, EventId, OwnedEventId, OwnedUserId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
@@ -111,16 +111,10 @@ impl Data {
 
 	/// Returns the json of a pdu.
 	pub(super) async fn get_pdu_json(&self, event_id: &EventId) -> Result<CanonicalJsonObject> {
-		let accepted = self.get_non_outlier_pdu_json(event_id).boxed();
-		let outlier = async move {
-			self.eventid_pdu
-				.get(event_id.as_bytes())
-				.await?
-				.deserialized()
-		}
-		.boxed();
-
-		select_ok([accepted, outlier]).await.map(at!(0))
+		self.eventid_pdu
+			.get(event_id.as_bytes())
+			.await?
+			.deserialized()
 	}
 
 	/// Returns the json of a pdu.
@@ -292,7 +286,7 @@ impl Data {
 					));
 				}
 			} else {
-				// v12 hashed-room PDUs may not contain room_id in the JSON.
+				// v12 create events do not contain room_id in the JSON.
 				// Verify room association by comparing ShortRoomId from pdu_id.
 				let expected_shortroomid =
 					self.services.short.get_shortroomid(expected_room).await?;
@@ -380,55 +374,55 @@ impl Data {
 		room_id: Option<&RoomId>,
 		event_id: &EventId,
 	) -> Result<PduEvent> {
-		let accepted = self.get_non_outlier_pdu_in_room(room_id, event_id).boxed();
-		let outlier = self
+		let pdu: PduEvent = self
 			.eventid_pdu
 			.get(event_id.as_bytes())
-			.then(move |handle| async move {
-				let handle = handle?;
-				let pdu: PduEvent = handle.deserialized()?;
+			.await?
+			.deserialized()?;
 
-				// Enforce cross-room boundary
-				if let Some(expected_room) = room_id {
-					let actual_room = pdu.room_id_or_hash();
-					if let Some(actual_room) = actual_room {
-						if actual_room != expected_room {
-							return Err(conduwuit::err!(Database(
-								"Outlier PDU {event_id} does belong to room {actual_room} \
-								 (expected {expected_room})"
-							)));
+		if let Some(expected_room) = room_id {
+			let actual_room = pdu.room_id_or_hash();
+			if let Some(actual_room) = actual_room {
+				if actual_room != expected_room {
+					return Err!(Database(
+						"PDU {event_id} does belong to room {actual_room} (expected \
+						 {expected_room})"
+					));
+				}
+			} else {
+				// v12 create events do not contain room_id in the JSON.
+				// Verify room association.
+				if let Ok(expected_short) =
+					self.services.short.get_shortroomid(expected_room).await
+				{
+					if let Ok(pduid) = self.get_pdu_id(event_id).await {
+						if pduid.shortroomid() != expected_short.to_be_bytes() {
+							return Err!(Database(
+								"PDU {event_id} is not associated with room {expected_room}"
+							));
 						}
-					} else {
-						// v12 hashed-room PDUs may not contain room_id in the JSON.
-						// Verify room association via eventid_metadata table.
-						if let Ok(meta_bytes) =
-							self.eventid_metadata.get(event_id.as_bytes()).await
+					} else if let Ok(meta_bytes) =
+						self.eventid_metadata.get(event_id.as_bytes()).await
+					{
+						if let Ok(meta) =
+							bincode::deserialize::<rooms::timeline::EventMetadata>(&meta_bytes)
 						{
-							if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(
-								&meta_bytes,
-							) {
-								let expected_short =
-									self.services.short.get_shortroomid(expected_room).await;
-								if expected_short.is_ok_and(|s| s != meta.short_room_id) {
-									return Err(conduwuit::err!(Database(
-										"Outlier PDU {event_id} is not associated with room \
-										 {expected_room}"
-									)));
-								}
+							if meta.short_room_id != expected_short {
+								return Err!(Database(
+									"PDU {event_id} is not associated with room {expected_room}"
+								));
 							}
 						} else {
-							return Err(conduwuit::err!(Database(
-								"Outlier PDU {event_id} has no metadata"
-							)));
+							return Err!(Database("corrupt metadata"));
 						}
+					} else {
+						return Err!(Database("PDU has no room association metadata"));
 					}
 				}
+			}
+		}
 
-				Ok(pdu)
-			})
-			.boxed();
-
-		select_ok([accepted, outlier]).await.map(at!(0))
+		Ok(pdu)
 	}
 
 	pub(super) async fn get_pdus_in_room_batch(
@@ -557,10 +551,7 @@ impl Data {
 
 	/// Like get_pdu(), but without the expense of fetching and parsing the data
 	pub(super) async fn pdu_exists(&self, event_id: &EventId) -> Result {
-		let non_outlier = self.non_outlier_pdu_exists(event_id).boxed();
-		let outlier = self.outlier_pdu_exists(event_id).boxed();
-
-		select_ok([non_outlier, outlier]).await.map(at!(0))
+		self.eventid_pdu.exists(event_id.as_bytes()).await
 	}
 
 	/// Returns the pdu.
