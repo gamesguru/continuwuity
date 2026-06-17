@@ -409,7 +409,9 @@ where
 					.update_membership(room_id, target_user_id, pdu, true)
 					.await?;
 
-				if let Ok(content) = pdu.get_content::<ruma::events::room::member::RoomMemberEventContent>() {
+				if let Ok(content) =
+					pdu.get_content::<ruma::events::room::member::RoomMemberEventContent>()
+				{
 					if content.membership == ruma::events::room::member::MembershipState::Join {
 						if self.services.globals.user_is_local(target_user_id) {
 							self.services

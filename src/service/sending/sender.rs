@@ -25,8 +25,8 @@ use futures::{
 	stream::FuturesUnordered,
 };
 use ruma::{
-	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedRoomId, OwnedServerName, OwnedUserId,
-	RoomId, RoomVersionId, ServerName, UInt,
+	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedRoomId, OwnedServerName,
+	OwnedUserId, RoomId, RoomVersionId, ServerName, UInt,
 	api::{
 		appservice::event::push_events::v1::EphemeralData,
 		federation::transactions::{
@@ -753,7 +753,7 @@ impl Service {
 						.services
 						.users
 						.all_device_ids(user_id)
-						.map(|d| d.to_owned())
+						.map(ToOwned::to_owned)
 						.collect()
 						.await;
 					user_devices.insert(user_id.clone(), devices);
@@ -1466,7 +1466,8 @@ mod tests {
 	fn test_build_device_list_edus_empty() {
 		let all_changes = BTreeMap::new();
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 100);
+		let (events, max_processed_count) =
+			build_device_list_edus(all_changes, &HashMap::new(), since, 100);
 		assert!(events.is_empty());
 		assert_eq!(max_processed_count, 20);
 	}
@@ -1483,7 +1484,8 @@ mod tests {
 		all_changes.insert(18, users_18);
 
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 100);
+		let (events, max_processed_count) =
+			build_device_list_edus(all_changes, &HashMap::new(), since, 100);
 		assert_eq!(events.len(), 2);
 		assert_eq!(max_processed_count, 20);
 	}
@@ -1502,7 +1504,8 @@ mod tests {
 		all_changes.insert(18, users_18);
 
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 2);
+		let (events, max_processed_count) =
+			build_device_list_edus(all_changes, &HashMap::new(), since, 2);
 		assert_eq!(events.len(), 2);
 		assert_eq!(max_processed_count, 15);
 	}
@@ -1518,7 +1521,8 @@ mod tests {
 		all_changes.insert(15, users_15);
 
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 2);
+		let (events, max_processed_count) =
+			build_device_list_edus(all_changes, &HashMap::new(), since, 2);
 		assert_eq!(events.len(), 2);
 		assert_eq!(max_processed_count, 10);
 	}
@@ -1538,7 +1542,8 @@ mod tests {
 		all_changes.insert(18, users_18);
 
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 100);
+		let (events, max_processed_count) =
+			build_device_list_edus(all_changes, &HashMap::new(), since, 100);
 		// Alice should only produce 1 event, plus bob = 2 events total
 		assert_eq!(events.len(), 2);
 		assert_eq!(max_processed_count, 20);

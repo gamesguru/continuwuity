@@ -62,6 +62,7 @@ pub(crate) async fn get_event_authorization_route(
 		.auth_chain
 		.event_ids_iter(&body.room_id, once(body.event_id.borrow()))
 		.ready_filter_map(Result::ok)
+		.ready_filter(|id| id != &body.event_id)
 		.filter_map(|id| async move { services.rooms.timeline.get_pdu_json(&id).await.ok() })
 		.then(|pdu| services.sending.convert_to_outgoing_federation_event(pdu))
 		.collect()
