@@ -1175,15 +1175,11 @@ impl Service {
 			.map(|raw| raw.get().as_bytes())
 			.chain(edus.iter().map(|raw| raw.json().get().as_bytes()));
 
-		// We prepend the current timestamp to the transaction ID to ensure it is
-		// unique. conduwuit sends m.device_list_update EDUs with completely generic,
-		// hardcoded payloads (using stream_id: 1 and device_id: "placeholder") in
-		// order to trick the remote homeserver into forcing a full sync of the user's
-		// devices. Because this payload is entirely static, if a user updates their
-		// device keys multiple times, the exact same generic payload is sent.
-		// If we relied purely on the hash of the payload for the transaction ID, the
-		// remote server's transaction cache would mistakenly treat the new device list
-		// update as a duplicate retry of the previous one and silently drop it!
+		// We prepend the current timestamp to the transaction ID as a defensive
+		// measure to ensure uniqueness. The primary protection against duplicate
+		// transaction IDs is using unique stream_id values in device_list_update
+		// EDUs (see build_device_list_edus), but the timestamp provides an
+		// additional layer of safety against any payload hash collisions.
 		let txn_hash = calculate_hash(preimage);
 		let now = MilliSecondsSinceUnixEpoch::now();
 		let txn_id = format!("{}_{}", now.get(), URL_SAFE_NO_PAD.encode(txn_hash));
@@ -1299,12 +1295,14 @@ pub(crate) fn build_device_list_edus(
 			}
 
 			// Empty prev id forces synapse to resync; because synapse resyncs,
-			// we can just insert placeholder data
+			// we can just insert placeholder data. The stream_id uses the actual
+			// change count to ensure each update produces a unique EDU payload,
+			// preventing transaction cache poisoning on the remote server.
 			let edu = Edu::DeviceListUpdate(DeviceListUpdateContent {
 				user_id,
 				device_id: device_id!("placeholder").to_owned(),
 				device_display_name: Some("Placeholder".to_owned()),
-				stream_id: uint!(1),
+				stream_id: UInt::try_from(count).unwrap_or_else(|_| uint!(1)),
 				prev_id: Vec::new(),
 				deleted: None,
 				keys: None,
