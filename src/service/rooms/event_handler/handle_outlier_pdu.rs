@@ -326,6 +326,8 @@ where
 		"Auth events local lookup summary"
 	);
 	if !missing_auth_events.is_empty() {
+		const MAX_INLINE_FETCH: usize = 5;
+
 		// Defense-in-depth: re-check if any missing auth events have been
 		// marked rejected since the initial loop above. A sibling
 		// event in the same transaction batch may have processed and
@@ -349,7 +351,6 @@ where
 		// For large missing counts (e.g. MSC4297 with 250+ events), skip
 		// /event_auth to avoid excessive HTTP overhead and let the caller
 		// retry via /state_ids instead.
-		const MAX_INLINE_FETCH: usize = 5;
 		let mut rejected_in_chain = std::collections::BTreeSet::<OwnedEventId>::new();
 		if missing_auth_events.len() <= MAX_INLINE_FETCH {
 			info!(

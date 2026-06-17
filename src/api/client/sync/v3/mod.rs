@@ -11,7 +11,7 @@ use std::{
 use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Result, at, extract_variant,
+	Result, at, extract_variant, info,
 	utils::{
 		ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, Tools, WidebandExt},
@@ -428,6 +428,17 @@ pub(crate) async fn build_sync_events(
 	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
 	let (left_rooms, left_state_after) = left_rooms;
 
+	for (room_id, room) in &joined_rooms {
+		info!(
+			target: "sync_debug",
+			%room_id, "Sync joined room timeline: {:?}", room.timeline.events.iter().map(|ev| ev.json().get()).collect::<Vec<_>>()
+		);
+		info!(
+			target: "sync_debug",
+			%room_id, "Sync joined room state: {:?}", room.state.events.iter().map(|ev| ev.json().get()).collect::<Vec<_>>()
+		);
+	}
+
 	let presence_updates: OptionFuture<_> = services
 		.config
 		.allow_local_presence
@@ -549,6 +560,11 @@ pub(crate) async fn build_sync_events(
 			.body(),
 	)
 	.expect("ruma response is valid JSON");
+
+	info!(
+		target: "sync_debug",
+		"SYNC val JSON: {:?}", serde_json::to_string(&val).unwrap()
+	);
 
 	// Manually insert state_after data for MSC4222
 	if let Some(join) = val.get_mut("rooms").and_then(|r| r.get_mut("join")) {
