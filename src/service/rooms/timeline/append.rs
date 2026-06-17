@@ -17,8 +17,7 @@ use ruma::{
 		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 		push_rules::PushRulesEvent,
 		room::{
-			encrypted::Relation,
-			power_levels::RoomPowerLevelsEventContent,
+			encrypted::Relation, power_levels::RoomPowerLevelsEventContent,
 			redaction::RoomRedactionEventContent,
 		},
 	},
