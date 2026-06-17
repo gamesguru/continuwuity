@@ -273,7 +273,17 @@ impl Service {
 
 		let after_pdu = PduId { shortroomid, shorteventid: after };
 
-		let next_count = self.db.next_timeline_count(&after_pdu).await?;
+		let next_count = match self.db.next_timeline_count(&after_pdu).await {
+			| Ok(count) => count,
+			| Err(e) if e.is_not_found() => {
+				let current = self.services.state.get_room_shortstatehash(room_id).await?;
+				self.next_shortstatehash_cache
+					.lock()
+					.insert((shortroomid, after), current);
+				return Ok(current);
+			},
+			| Err(e) => return Err(e),
+		};
 		let next_pdu = PduId { shortroomid, shorteventid: next_count };
 
 		let shorteventid = self.get_shorteventid_from_pdu_id(&next_pdu).await?;
