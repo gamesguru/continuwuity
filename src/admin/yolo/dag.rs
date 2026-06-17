@@ -20,6 +20,7 @@ use super::export::DagExportStats;
 use crate::admin_command;
 
 #[admin_command]
+#[allow(clippy::fn_params_excessive_bools)]
 pub(super) async fn get_room_dag(
 	&self,
 	room_id: OwnedRoomOrAliasId,
@@ -27,6 +28,8 @@ pub(super) async fn get_room_dag(
 	end: i64,
 	print: bool,
 	outliers: bool,
+	segments: bool,
+	merge_outliers: bool,
 ) -> Result {
 	let room_id = self.services.rooms.alias.resolve(&room_id).await?;
 	let pdu_ids: Vec<OwnedEventId> = self
@@ -67,6 +70,16 @@ pub(super) async fn get_room_dag(
 		.await
 		.map_err(|e| err!(Database("Failed to create outliers file {outliers_path}: {e:?}")))?;
 
+	let mut segment_start_idx = actual_start;
+	let mut segment_start_ts = None;
+	let mut segment_end_ts = None;
+	let mut segment_start_depth = 0;
+	let mut segment_end_depth = 0;
+	let mut prev_ts = None;
+	let mut segment_count = 0_usize;
+	let mut segment_reports = Vec::new();
+	let mut chronological_breaks = Vec::new();
+
 	for event_id in pdu_ids {
 		if let Ok(end) = u64::try_from(end) {
 			if i > end {
@@ -76,6 +89,43 @@ pub(super) async fn get_room_dag(
 		if i >= actual_start {
 			if let Ok(pdu_json) = self.services.rooms.timeline.get_pdu_json(&event_id).await {
 				let pdu_result = self.services.rooms.timeline.get_pdu(&event_id).await;
+				if let Ok(ref pdu) = pdu_result {
+					let ts: u64 = pdu.origin_server_ts().0.into();
+					let depth: u64 = pdu.depth.into();
+					if let Some(pts) = prev_ts {
+						if ts < pts {
+							chronological_breaks.push((i, event_id.clone(), ts, pts));
+							if segments {
+								if let (Some(sts), Some(ets)) = (segment_start_ts, segment_end_ts)
+								{
+									segment_reports.push(format!(
+										"Segment {}: events {}..{} (len {}), depth {}..{}, time \
+										 {}..{}",
+										segment_count.saturating_add(1),
+										segment_start_idx,
+										i.saturating_sub(1),
+										i.saturating_sub(segment_start_idx),
+										segment_start_depth,
+										segment_end_depth,
+										format_ts(sts),
+										format_ts(ets),
+									));
+									segment_count = segment_count.saturating_add(1);
+									segment_start_idx = i;
+									segment_start_ts = Some(ts);
+									segment_start_depth = depth;
+								}
+							}
+						}
+					}
+					if segment_start_ts.is_none() {
+						segment_start_ts = Some(ts);
+						segment_start_depth = depth;
+					}
+					segment_end_ts = Some(ts);
+					segment_end_depth = depth;
+					prev_ts = Some(ts);
+				}
 				if let Err(e) = stats
 					.process_and_write_pdu(
 						self,
@@ -85,6 +135,7 @@ pub(super) async fn get_room_dag(
 						pdu_result,
 						false,
 						print,
+						merge_outliers,
 					)
 					.await
 				{
@@ -93,6 +144,24 @@ pub(super) async fn get_room_dag(
 			}
 		}
 		i = i.saturating_add(1);
+	}
+
+	if segments && segment_start_ts.is_some() {
+		if let (Some(sts), Some(ets)) = (segment_start_ts, segment_end_ts) {
+			let end_idx = i.saturating_sub(1);
+			let len = i.saturating_sub(segment_start_idx);
+			segment_reports.push(format!(
+				"Segment {}: events {}..{} (len {}), depth {}..{}, time {}..{}",
+				segment_count.saturating_add(1),
+				segment_start_idx,
+				end_idx,
+				len,
+				segment_start_depth,
+				segment_end_depth,
+				format_ts(sts),
+				format_ts(ets),
+			));
+		}
 	}
 
 	if outliers {
@@ -123,6 +192,7 @@ pub(super) async fn get_room_dag(
 						pdu_result,
 						true,
 						print,
+						merge_outliers,
 					)
 					.await
 				{
@@ -259,6 +329,28 @@ pub(super) async fn get_room_dag(
 	}
 	writeln!(out, "Status:         {tip_match}").expect("fmt");
 	writeln!(out, "```").expect("fmt");
+
+	if segments {
+		writeln!(out, "\n--- Chronological Segments ({}) ---", segment_reports.len())
+			.expect("fmt");
+		for report in &segment_reports {
+			writeln!(out, "{report}").expect("fmt");
+		}
+		writeln!(out, "\n--- Chronological Breaks ({}) ---", chronological_breaks.len())
+			.expect("fmt");
+		for (idx, eid, ts, pts) in &chronological_breaks {
+			let ts_dt = format_ts(*ts);
+			let pts_dt = format_ts(*pts);
+			let diff =
+				f64::from(u32::try_from(pts.saturating_sub(*ts)).unwrap_or(u32::MAX)) / 1000.0;
+			writeln!(
+				out,
+				"Break at index {idx}: event {eid} went BACKWARDS by {diff:.1}s\n  Prev: \
+				 {pts_dt}\n  Curr: {ts_dt}"
+			)
+			.expect("fmt");
+		}
+	}
 
 	self.write_str(&out).await
 }

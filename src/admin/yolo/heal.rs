@@ -416,6 +416,55 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			issues.push(format!("MULTIPLE_EXTREMITIES ({ext_count} tips)"));
 		}
 
+		// Chronological timeline check (detecting hidden fragmentation/breaks)
+		let mut timeline_breaks = 0_usize;
+		let mut timeline_segments = 1_usize;
+		let mut has_timeline_issue = false;
+		let pdus = self.services.rooms.timeline.all_pdus(room_id);
+		futures::pin_mut!(pdus);
+		let mut prev_ts = None;
+		while let Some((_count, pdu)) = pdus.next().await {
+			let ts: u64 = pdu.origin_server_ts().0.into();
+			if let Some(pts) = prev_ts {
+				if ts < pts {
+					timeline_breaks = timeline_breaks.saturating_add(1);
+					timeline_segments = timeline_segments.saturating_add(1);
+					has_timeline_issue = true;
+				}
+			}
+			prev_ts = Some(ts);
+		}
+
+		if has_timeline_issue {
+			if fix {
+				if Box::pin(
+					self.services
+						.rooms
+						.timeline
+						.reorder_timeline(room_id, None, false),
+				)
+				.await
+				.is_ok()
+				{
+					issues.push(format!(
+						"CHRONOLOGICAL_BREAKS (Fixed, breaks={timeline_breaks}, \
+						 segments={timeline_segments})"
+					));
+					fixed_rooms = fixed_rooms.saturating_add(1);
+				} else {
+					issues.push(format!(
+						"CHRONOLOGICAL_BREAKS (Failed to fix, breaks={timeline_breaks}, \
+						 segments={timeline_segments})"
+					));
+				}
+			} else {
+				issues.push(format!(
+					"CHRONOLOGICAL_BREAKS (breaks={timeline_breaks}, \
+					 segments={timeline_segments})"
+				));
+			}
+		}
+
 		// Membership cache drift check
 		let cache_joined = self
 			.services
@@ -481,7 +530,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 	let mut summary =
 		format!("\n**Scan complete:** {total_rooms} rooms checked, {problem_rooms} with issues.");
 	if fix && fixed_rooms > 0 {
-		write!(summary, " {fixed_rooms} membership caches repaired.").ok();
+		write!(summary, " {fixed_rooms} rooms repaired.").ok();
 	}
 	summary.push('\n');
 

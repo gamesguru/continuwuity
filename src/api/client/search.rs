@@ -83,15 +83,17 @@ async fn category_room_events(
 		.clone()
 		.map(IntoIterator::into_iter)
 		.map(IterStream::stream)
-		.map(StreamExt::boxed)
-		.unwrap_or_else(|| {
-			services
-				.rooms
-				.state_cache
-				.rooms_joined(sender_user)
-				.map(ToOwned::to_owned)
-				.boxed()
-		});
+		.map_or_else(
+			|| {
+				services
+					.rooms
+					.state_cache
+					.rooms_joined(sender_user)
+					.map(ToOwned::to_owned)
+					.boxed()
+			},
+			StreamExt::boxed,
+		);
 
 	let results: Vec<_> = rooms
 		.filter_map(|room_id| {

@@ -158,10 +158,12 @@ impl DagExportStats {
 		pdu_result: Result<PduEvent>,
 		is_outlier: bool,
 		print: bool,
+		merge_outliers: bool,
 	) -> Result<()> {
 		let pdu_opt = pdu_result.as_ref().ok();
 		let (obj, is_separated, shortstatehash) =
 			decorate_pdu_for_export(ctx, &pdu_json, pdu_opt, is_outlier).await?;
+		let is_separated = is_separated && !merge_outliers;
 
 		if let Ok(pdu) = &pdu_result {
 			if !is_separated {

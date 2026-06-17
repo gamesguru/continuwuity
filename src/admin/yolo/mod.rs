@@ -291,6 +291,13 @@ pub enum YoloCommand {
 		print: bool,
 		#[arg(long)]
 		outliers: bool,
+		/// Analyze and print chronological segments and breaks
+		#[arg(long)]
+		segments: bool,
+		/// Merge outliers into the main JSONL file instead of writing to a
+		/// separate file
+		#[arg(long)]
+		merge_outliers: bool,
 	},
 
 	/// Fetch a room's DAG from a remote server via federation backfill API
