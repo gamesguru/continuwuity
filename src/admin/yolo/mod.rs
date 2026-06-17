@@ -49,6 +49,10 @@ pub enum YoloCommand {
 		/// instead of using the room's current state.
 		#[arg(short = 'e', long = "event-id", num_args = 1..)]
 		event_ids: Vec<OwnedEventId>,
+
+		/// Seed the audit from all outlier events in the room as well.
+		#[arg(long)]
+		outliers: bool,
 	},
 
 	/// Full membership audit: timeline vs state vs cache vs remote server.

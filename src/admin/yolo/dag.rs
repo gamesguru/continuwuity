@@ -1290,9 +1290,10 @@ pub(super) async fn audit_auth_chain(
 	verbose: bool,
 	servers: Vec<OwnedServerName>,
 	event_ids: Vec<OwnedEventId>,
+	outliers: bool,
 ) -> Result {
 	// Resolve room and get current state hash, fallback to extremities if no state
-	let state_ids: Vec<OwnedEventId> = if !event_ids.is_empty() {
+	let mut state_ids: Vec<OwnedEventId> = if !event_ids.is_empty() {
 		event_ids
 	} else {
 		match self
@@ -1319,6 +1320,18 @@ pub(super) async fn audit_auth_chain(
 					.await,
 		}
 	};
+
+	if outliers {
+		let outlier_ids: Vec<OwnedEventId> = self
+			.services
+			.rooms
+			.outlier
+			.room_stream(&room_id)
+			.map(|(id, _)| id)
+			.collect()
+			.await;
+		state_ids.extend(outlier_ids);
+	}
 
 	let mut state_ids = state_ids;
 	if state_ids.is_empty() {
