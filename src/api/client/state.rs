@@ -378,12 +378,28 @@ async fn allowed_to_send_state_event(
 			let mut membership_content = match membership_result {
 				| Ok(content) => content,
 				| Err(e) => {
+					let is_join_to_join = services
+						.rooms
+						.state_accessor
+						.room_state_get(room_id, &StateEventType::RoomMember, state_key)
+						.await
+						.ok()
+						.and_then(|pdu| pdu.get_content::<RoomMemberEventContent>().ok())
+						.is_some_and(|c| c.membership == MembershipState::Join);
+
+					if !is_join_to_join {
+						return Err!(Request(BadJson(
+							"Membership content must have a valid JSON body with at least a \
+							 valid membership state: {e}"
+						)));
+					}
+
 					// Attempt lenient parse: strip the offending field and retry
 					let mut raw_value: serde_json::Value =
-						serde_json::from_str(json.json().get()).map_err(|e| {
+						serde_json::from_str(json.json().get()).map_err(|err| {
 							err!(Request(BadJson(
 								"Membership content must have a valid JSON body with at least a \
-								 valid membership state: {e}"
+								 valid membership state: {err}"
 							)))
 						})?;
 
@@ -393,10 +409,10 @@ async fn allowed_to_send_state_event(
 
 					let content =
 						serde_json::from_value::<RoomMemberEventContent>(raw_value.clone())
-							.map_err(|_| {
+							.map_err(|err| {
 								err!(Request(BadJson(
 									"Membership content must have a valid JSON body with at \
-									 least a valid membership state: {e}"
+									 least a valid membership state: {err}"
 								)))
 							})?;
 

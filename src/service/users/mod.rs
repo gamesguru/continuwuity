@@ -743,6 +743,27 @@ impl Service {
 		device_id: &DeviceId,
 		key_algorithm: &OneTimeKeyAlgorithm,
 	) -> Result<(OwnedKeyId<OneTimeKeyAlgorithm, OneTimeKeyName>, Raw<OneTimeKey>)> {
+		fn parse_map_row(
+			(key, val): (&[u8], &[u8]),
+		) -> (Vec<u8>, OwnedKeyId<OneTimeKeyAlgorithm, OneTimeKeyName>, Raw<OneTimeKey>) {
+			let key_json = key
+				.rsplit(|&b| b == 0xFF)
+				.next()
+				.ok_or_else(|| err!(Database("OneTimeKeyId in db is invalid.")))
+				.unwrap();
+
+			let parsed_key: OwnedKeyId<OneTimeKeyAlgorithm, OneTimeKeyName> =
+				serde_json::from_slice(key_json)
+					.map_err(|e| err!(Database("OneTimeKeyId in db is invalid. {e}")))
+					.unwrap();
+
+			let val: Raw<OneTimeKey> = serde_json::from_slice(val)
+				.map_err(|e| err!(Database("OneTimeKeys in db are invalid. {e}")))
+				.unwrap();
+
+			(key.to_vec(), parsed_key, val)
+		}
+
 		let count = self.services.globals.next_count()?.to_be_bytes();
 		self.db.userid_lastonetimekeyupdate.insert(user_id, count);
 
@@ -750,38 +771,32 @@ impl Service {
 		prefix.push(0xFF);
 		prefix.extend_from_slice(device_id.as_bytes());
 		prefix.push(0xFF);
-		prefix.push(b'"'); // Annoying quotation mark
-		prefix.extend_from_slice(key_algorithm.as_ref().as_bytes());
-		prefix.push(b':');
 
-		let one_time_key = self
+		let expected_algo_prefix = format!("{}:", key_algorithm.as_ref());
+
+		let one_time_key: Option<(
+			_,
+			OwnedKeyId<OneTimeKeyAlgorithm, OneTimeKeyName>,
+			Raw<OneTimeKey>,
+		)> = self
 			.db
 			.onetimekeyid_onetimekeys
 			.raw_stream_prefix(&prefix)
 			.ignore_err()
-			.map(|(key, val)| {
-				self.db.onetimekeyid_onetimekeys.remove(key);
-
-				let key = key
-					.rsplit(|&b| b == 0xFF)
-					.next()
-					.ok_or_else(|| err!(Database("OneTimeKeyId in db is invalid.")))
-					.unwrap();
-
-				let key = serde_json::from_slice(key)
-					.map_err(|e| err!(Database("OneTimeKeyId in db is invalid. {e}")))
-					.unwrap();
-
-				let val = serde_json::from_slice(val)
-					.map_err(|e| err!(Database("OneTimeKeys in db are invalid. {e}")))
-					.unwrap();
-
-				(key, val)
+			.map(parse_map_row)
+			.filter(|(_, parsed_key, _)| {
+				let starts = parsed_key.to_string().starts_with(&expected_algo_prefix);
+				std::future::ready(starts)
 			})
 			.next()
 			.await;
 
-		one_time_key.ok_or_else(|| err!(Request(NotFound("No one-time-key found"))))
+		let (key, parsed_key, val) =
+			one_time_key.ok_or_else(|| err!(Request(NotFound("One time key not found."))))?;
+
+		self.db.onetimekeyid_onetimekeys.del(&key);
+
+		Ok((parsed_key, val))
 	}
 
 	pub async fn count_one_time_keys(

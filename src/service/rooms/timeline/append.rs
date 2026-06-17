@@ -413,12 +413,10 @@ where
 
 				if let Ok(content) = pdu.get_content::<RoomMemberEventContent>() {
 					if content.membership == MembershipState::Join {
-						if self.services.globals.user_is_local(target_user_id) {
-							self.services
-								.users
-								.mark_device_key_update(target_user_id)
-								.await;
-						}
+						self.services
+							.users
+							.mark_device_key_update(target_user_id)
+							.await;
 					}
 				}
 
