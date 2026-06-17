@@ -383,9 +383,15 @@ where
 						auth_pdu,
 						&room_version_id,
 					) {
-						| Ok((ref auth_eid, ref auth_val)) => {
+						| Ok((ref auth_eid, mut auth_val)) => {
+							// V4+ events omit event_id on the wire; inject the
+							// computed ID so PduEvent deserialization succeeds.
+							auth_val.insert(
+								"event_id".to_owned(),
+								CanonicalJsonValue::String(auth_eid.as_str().to_owned()),
+							);
 							match serde_json::from_value::<PduEvent>(
-								serde_json::to_value(auth_val).unwrap_or_default(),
+								serde_json::to_value(&auth_val).unwrap_or_default(),
 							) {
 								| Ok(parsed) =>
 									if check_room_id(room_id, &parsed).is_ok() {
