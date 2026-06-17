@@ -86,8 +86,9 @@ runs:
           echo "\."
 
           cat <<SQL
+        SELECT pg_advisory_lock(42);
         INSERT INTO run_details (run_id, test_name, status)
-        SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
+        SELECT DISTINCT ON (r.id, (t.j->>'Test')) r.id, (t.j->>'Test'), (t.j->>'Action')
         FROM t JOIN runs r ON r.commit_hash = (t.j->>'commit')
           AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
           AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
@@ -104,6 +105,7 @@ runs:
               -e "s/{profile}/${PROFILE}/g" \
               -e "s/{room_version}/${ROOM_VERSION}/g" \
               "${{ github.action_path }}/upsert_ever_passed.sql"
+          echo "SELECT pg_advisory_unlock(42);"
         ) | ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
         echo "✓ Direct ingest complete."
 
