@@ -714,7 +714,7 @@ impl Service {
 	}
 
 	/// Look for device changes
-	#[tracing::instrument(name = "device_changes", level = "trace", skip(self, server_name))]
+	#[tracing::instrument(name = "device_changes", level = "info", skip(self, server_name))]
 	async fn select_edus_device_changes(
 		&self,
 		server_name: &ServerName,
@@ -739,6 +739,8 @@ impl Service {
 				all_changes.entry(count).or_default().insert(user_id.into());
 			}
 		}
+
+		tracing::info!(?all_changes, ?since, "select_edus_device_changes result");
 
 		build_device_list_edus(all_changes, since, SELECT_EDU_LIMIT)
 	}
@@ -918,7 +920,10 @@ impl Service {
 		events: Vec<SendingEvent>,
 		edu_count: Option<u64>,
 	) -> SendingFuture<'_> {
-		debug_assert!(!events.is_empty(), "sending empty transaction");
+		debug_assert!(
+			!events.is_empty() || matches!(dest, Destination::Federation(_)),
+			"sending empty transaction"
+		);
 		match dest {
 			| Destination::Federation(server) => self
 				.send_events_dest_federation(server, events, edu_count)
