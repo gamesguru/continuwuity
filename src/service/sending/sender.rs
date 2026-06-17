@@ -25,7 +25,7 @@ use futures::{
 	stream::FuturesUnordered,
 };
 use ruma::{
-	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedRoomId, OwnedServerName, OwnedUserId,
+	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedRoomId, OwnedServerName, OwnedUserId,
 	RoomId, RoomVersionId, ServerName, UInt,
 	api::{
 		appservice::event::push_events::v1::EphemeralData,
@@ -745,9 +745,25 @@ impl Service {
 			}
 		}
 
-		tracing::info!(?all_changes, ?since, "select_edus_device_changes result");
+		let mut user_devices = HashMap::<OwnedUserId, Vec<OwnedDeviceId>>::new();
+		for users in all_changes.values() {
+			for user_id in users {
+				if !user_devices.contains_key(user_id) {
+					let devices: Vec<OwnedDeviceId> = self
+						.services
+						.users
+						.all_device_ids(user_id)
+						.map(|d| d.to_owned())
+						.collect()
+						.await;
+					user_devices.insert(user_id.clone(), devices);
+				}
+			}
+		}
 
-		build_device_list_edus(all_changes, since, SELECT_EDU_LIMIT)
+		tracing::info!(?all_changes, ?user_devices, ?since, "select_edus_device_changes result");
+
+		build_device_list_edus(all_changes, &user_devices, since, SELECT_EDU_LIMIT)
 	}
 
 	/// Look for read receipts in this room
@@ -1278,6 +1294,7 @@ impl Service {
 
 pub(crate) fn build_device_list_edus(
 	all_changes: BTreeMap<u64, HashSet<OwnedUserId>>,
+	user_devices: &HashMap<OwnedUserId, Vec<OwnedDeviceId>>,
 	since: (u64, u64),
 	limit: usize,
 ) -> (EduVec, u64) {
@@ -1289,35 +1306,70 @@ pub(crate) fn build_device_list_edus(
 	for (count, users) in all_changes {
 		let mut consumed_all = true;
 		for user_id in users {
-			if events.len() >= limit {
-				limited = true;
-				consumed_all = false;
-				break;
-			}
-
 			if !device_list_changes.insert(user_id.clone()) {
 				continue;
 			}
 
-			// Empty prev id forces synapse to resync; because synapse resyncs,
-			// we can just insert placeholder data. The stream_id uses the actual
-			// change count to ensure each update produces a unique EDU payload,
-			// preventing transaction cache poisoning on the remote server.
-			let edu = Edu::DeviceListUpdate(DeviceListUpdateContent {
-				user_id,
-				device_id: device_id!("placeholder").to_owned(),
-				device_display_name: Some("Placeholder".to_owned()),
-				stream_id: UInt::try_from(count).unwrap_or_else(|_| uint!(1)),
-				prev_id: Vec::new(),
-				deleted: None,
-				keys: None,
-			});
+			let devices = user_devices.get(&user_id);
+			if let Some(devices) = devices.filter(|d| !d.is_empty()) {
+				let mut user_consumed_all = true;
+				for device_id in devices {
+					if events.len() >= limit {
+						limited = true;
+						user_consumed_all = false;
+						break;
+					}
 
-			let mut buf = EduBuf::new();
-			serde_json::to_writer(&mut buf, &edu)
-				.expect("failed to serialize device list update to JSON");
+					let edu = Edu::DeviceListUpdate(DeviceListUpdateContent {
+						user_id: user_id.clone(),
+						device_id: device_id.clone(),
+						device_display_name: Some("Placeholder".to_owned()),
+						stream_id: UInt::try_from(count).unwrap_or_else(|_| uint!(1)),
+						prev_id: Vec::new(),
+						deleted: None,
+						keys: None,
+					});
 
-			events.push(buf);
+					let mut buf = EduBuf::new();
+					serde_json::to_writer(&mut buf, &edu)
+						.expect("failed to serialize device list update to JSON");
+
+					events.push(buf);
+				}
+
+				if !user_consumed_all {
+					consumed_all = false;
+					device_list_changes.remove(&user_id);
+					break;
+				}
+			} else {
+				if events.len() >= limit {
+					limited = true;
+					consumed_all = false;
+					device_list_changes.remove(&user_id);
+					break;
+				}
+
+				// Empty prev id forces synapse to resync; because synapse resyncs,
+				// we can just insert placeholder data. The stream_id uses the actual
+				// change count to ensure each update produces a unique EDU payload,
+				// preventing transaction cache poisoning on the remote server.
+				let edu = Edu::DeviceListUpdate(DeviceListUpdateContent {
+					user_id,
+					device_id: device_id!("placeholder").to_owned(),
+					device_display_name: Some("Placeholder".to_owned()),
+					stream_id: UInt::try_from(count).unwrap_or_else(|_| uint!(1)),
+					prev_id: Vec::new(),
+					deleted: None,
+					keys: None,
+				});
+
+				let mut buf = EduBuf::new();
+				serde_json::to_writer(&mut buf, &edu)
+					.expect("failed to serialize device list update to JSON");
+
+				events.push(buf);
+			}
 		}
 
 		if consumed_all {
@@ -1402,7 +1454,7 @@ pub(crate) fn build_receipt_map(
 #[cfg(test)]
 mod tests {
 	use std::{
-		collections::{BTreeMap, HashSet},
+		collections::{BTreeMap, HashMap, HashSet},
 		sync::atomic::AtomicUsize,
 	};
 
@@ -1414,7 +1466,7 @@ mod tests {
 	fn test_build_device_list_edus_empty() {
 		let all_changes = BTreeMap::new();
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 100);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 100);
 		assert!(events.is_empty());
 		assert_eq!(max_processed_count, 20);
 	}
@@ -1431,7 +1483,7 @@ mod tests {
 		all_changes.insert(18, users_18);
 
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 100);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 100);
 		assert_eq!(events.len(), 2);
 		assert_eq!(max_processed_count, 20);
 	}
@@ -1450,7 +1502,7 @@ mod tests {
 		all_changes.insert(18, users_18);
 
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 2);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 2);
 		assert_eq!(events.len(), 2);
 		assert_eq!(max_processed_count, 15);
 	}
@@ -1466,7 +1518,7 @@ mod tests {
 		all_changes.insert(15, users_15);
 
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 2);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 2);
 		assert_eq!(events.len(), 2);
 		assert_eq!(max_processed_count, 10);
 	}
@@ -1486,7 +1538,7 @@ mod tests {
 		all_changes.insert(18, users_18);
 
 		let since = (10, 20);
-		let (events, max_processed_count) = build_device_list_edus(all_changes, since, 100);
+		let (events, max_processed_count) = build_device_list_edus(all_changes, &HashMap::new(), since, 100);
 		// Alice should only produce 1 event, plus bob = 2 events total
 		assert_eq!(events.len(), 2);
 		assert_eq!(max_processed_count, 20);

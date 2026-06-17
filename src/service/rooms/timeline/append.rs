@@ -409,6 +409,17 @@ where
 					.update_membership(room_id, target_user_id, pdu, true)
 					.await?;
 
+				if let Ok(content) = pdu.get_content::<ruma::events::room::member::RoomMemberEventContent>() {
+					if content.membership == ruma::events::room::member::MembershipState::Join {
+						if self.services.globals.user_is_local(target_user_id) {
+							self.services
+								.users
+								.mark_device_key_update(target_user_id)
+								.await;
+						}
+					}
+				}
+
 				// Invalidate hierarchy cache: membership changes can affect
 				// restricted room accessibility (the `allow` list checks
 				// whether the requesting user/server is joined to this room).
