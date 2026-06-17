@@ -43,13 +43,6 @@ pub(crate) async fn set_read_marker_route(
 			.await?;
 	}
 
-	if body.private_read_receipt.is_some() || body.read_receipt.is_some() {
-		services
-			.rooms
-			.user
-			.reset_notification_counts(sender_user, &body.room_id);
-	}
-
 	// ping presence
 	if services.config.allow_local_presence {
 		services
@@ -70,6 +63,7 @@ pub(crate) async fn set_read_marker_route(
 				.await
 				.map_err(|_| conduwuit::err!(Request(NotFound("Event not found."))))?;
 
+			let mut ignore_receipt = false;
 			if let PduCount::Normal(new_count) = new_count {
 				if let Some(old_event_id) = services
 					.rooms
@@ -86,7 +80,7 @@ pub(crate) async fn set_read_marker_route(
 								"Ignoring read receipt for {} from {} because it moves backwards from {} to {}",
 								&body.room_id, sender_user, old_count, new_count
 							);
-							return Ok(set_read_marker::v3::Response {});
+							ignore_receipt = true;
 						}
 					}
 				}
@@ -97,37 +91,44 @@ pub(crate) async fn set_read_marker_route(
 				);
 			}
 
-			let receipt_content = BTreeMap::from_iter([(
-				event.to_owned(),
-				BTreeMap::from_iter([(
-					ReceiptType::Read,
+			if !ignore_receipt {
+				let receipt_content = BTreeMap::from_iter([(
+					event.to_owned(),
 					BTreeMap::from_iter([(
-						sender_user.to_owned(),
-						ruma::events::receipt::Receipt {
-							ts: Some(MilliSecondsSinceUnixEpoch::now()),
-							thread: ReceiptThread::Unthreaded,
-						},
+						ReceiptType::Read,
+						BTreeMap::from_iter([(
+							sender_user.to_owned(),
+							ruma::events::receipt::Receipt {
+								ts: Some(MilliSecondsSinceUnixEpoch::now()),
+								thread: ReceiptThread::Unthreaded,
+							},
+						)]),
 					)]),
-				)]),
-			)]);
+				)]);
 
-			services
-				.rooms
-				.read_receipt
-				.readreceipt_update(
-					sender_user,
-					&body.room_id,
-					&ruma::events::receipt::ReceiptEvent {
-						content: ruma::events::receipt::ReceiptEventContent(receipt_content),
-						room_id: body.room_id.clone(),
-					},
-				)
-				.await;
+				services
+					.rooms
+					.read_receipt
+					.readreceipt_update(
+						sender_user,
+						&body.room_id,
+						&ruma::events::receipt::ReceiptEvent {
+							content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+							room_id: body.room_id.clone(),
+						},
+					)
+					.await;
 
-			conduwuit::info!(
-				target: "read_receipt_debug",
-				"Accepted read receipt for {} from {}", event, sender_user
-			);
+				services
+					.rooms
+					.user
+					.reset_notification_counts(sender_user, &body.room_id);
+
+				conduwuit::info!(
+					target: "read_receipt_debug",
+					"Accepted read receipt for {} from {}", event, sender_user
+				);
+			}
 		}
 	}
 
@@ -178,6 +179,12 @@ pub(crate) async fn set_read_marker_route(
 				new_count,
 				&receipt_event,
 			)?;
+
+			services
+				.rooms
+				.user
+				.reset_notification_counts(sender_user, &body.room_id);
+
 			conduwuit::debug!("Accepted private read receipt for {} from {}", event, sender_user);
 		} else {
 			conduwuit::info!(
@@ -208,16 +215,6 @@ pub(crate) async fn create_receipt_route(
 		.users
 		.update_device_last_seen(sender_user, body.sender_device.as_deref(), client_ip)
 		.await;
-
-	if matches!(
-		&body.receipt_type,
-		create_receipt::v3::ReceiptType::Read | create_receipt::v3::ReceiptType::ReadPrivate
-	) {
-		services
-			.rooms
-			.user
-			.reset_notification_counts(sender_user, &body.room_id);
-	}
 
 	// ping presence
 	if services.config.allow_local_presence {
@@ -253,6 +250,7 @@ pub(crate) async fn create_receipt_route(
 				.await
 				.map_err(|_| conduwuit::err!(Request(NotFound("Event not found."))))?;
 
+			let mut ignore_receipt = false;
 			if let PduCount::Normal(new_count) = new_count {
 				if let Some(old_event_id) = services
 					.rooms
@@ -273,7 +271,7 @@ pub(crate) async fn create_receipt_route(
 								old_count,
 								new_count
 							);
-							return Ok(create_receipt::v3::Response {});
+							ignore_receipt = true;
 						}
 					}
 				}
@@ -284,38 +282,45 @@ pub(crate) async fn create_receipt_route(
 				);
 			}
 
-			let receipt_content = BTreeMap::from_iter([(
-				body.event_id.clone(),
-				BTreeMap::from_iter([(
-					ReceiptType::Read,
+			if !ignore_receipt {
+				let receipt_content = BTreeMap::from_iter([(
+					body.event_id.clone(),
 					BTreeMap::from_iter([(
-						sender_user.to_owned(),
-						ruma::events::receipt::Receipt {
-							ts: Some(MilliSecondsSinceUnixEpoch::now()),
-							thread: body.body.thread.clone(),
-						},
+						ReceiptType::Read,
+						BTreeMap::from_iter([(
+							sender_user.to_owned(),
+							ruma::events::receipt::Receipt {
+								ts: Some(MilliSecondsSinceUnixEpoch::now()),
+								thread: body.body.thread.clone(),
+							},
+						)]),
 					)]),
-				)]),
-			)]);
+				)]);
 
-			services
-				.rooms
-				.read_receipt
-				.readreceipt_update(
-					sender_user,
-					&body.room_id,
-					&ruma::events::receipt::ReceiptEvent {
-						content: ruma::events::receipt::ReceiptEventContent(receipt_content),
-						room_id: body.room_id.clone(),
-					},
-				)
-				.await;
+				services
+					.rooms
+					.read_receipt
+					.readreceipt_update(
+						sender_user,
+						&body.room_id,
+						&ruma::events::receipt::ReceiptEvent {
+							content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+							room_id: body.room_id.clone(),
+						},
+					)
+					.await;
 
-			conduwuit::debug!(
-				"Accepted read receipt for {} from {}",
-				&body.event_id,
-				sender_user
-			);
+				services
+					.rooms
+					.user
+					.reset_notification_counts(sender_user, &body.room_id);
+
+				conduwuit::debug!(
+					"Accepted read receipt for {} from {}",
+					&body.event_id,
+					sender_user
+				);
+			}
 		},
 		| create_receipt::v3::ReceiptType::ReadPrivate => {
 			let count = services
@@ -364,6 +369,12 @@ pub(crate) async fn create_receipt_route(
 					new_count,
 					&receipt_event,
 				)?;
+
+				services
+					.rooms
+					.user
+					.reset_notification_counts(sender_user, &body.room_id);
+
 				conduwuit::debug!(
 					"Accepted private read receipt for {} from {}",
 					&body.event_id,
