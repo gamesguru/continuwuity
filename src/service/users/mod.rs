@@ -56,6 +56,7 @@ struct Services {
 	admin: Dep<admin::Service>,
 	appservice: Dep<appservice::Service>,
 	globals: Dep<globals::Service>,
+	sending: Dep<crate::sending::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
 }
 
@@ -96,6 +97,7 @@ impl crate::Service for Service {
 				admin: args.depend::<admin::Service>("admin"),
 				appservice: args.depend::<appservice::Service>("appservice"),
 				globals: args.depend::<globals::Service>("globals"),
+				sending: args.depend::<crate::sending::Service>("sending"),
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
 			},
 			db: Data {
@@ -1121,12 +1123,22 @@ impl Service {
 	pub async fn mark_device_key_update(&self, user_id: &UserId) {
 		let count = self.services.globals.next_count().unwrap();
 
+		tracing::info!(%user_id, "mark_device_key_update called");
+
 		self.services
 			.state_cache
 			.rooms_joined(user_id)
 			.ready_for_each(|room_id| {
 				let key = (room_id, count);
 				self.db.keychangeid_userid.put_raw(key, user_id);
+
+				tracing::info!(%user_id, %room_id, "Flushing room for device key update");
+
+				let sending = self.services.sending.clone();
+				let room_id = room_id.to_owned();
+				self.services.server.runtime().spawn(async move {
+					let _ = sending.flush_room(&room_id).await;
+				});
 			})
 			.await;
 

@@ -301,6 +301,15 @@ impl Service {
 		}
 
 		if new_events.is_empty() {
+			if let Destination::Federation(server_name) = dest {
+				let since = self.db.get_latest_educount(server_name).await;
+				let since_upper = self.services.globals.current_count().unwrap_or(0);
+				if since < since_upper {
+					statuses.insert(dest.clone(), TransactionStatus::Running);
+					futures.push(self.send_events(dest.clone(), vec![], None));
+					return;
+				}
+			}
 			statuses.remove(dest);
 			return;
 		}
@@ -1115,6 +1124,9 @@ impl Service {
 			.collect();
 
 		if pdus.is_empty() && edus.is_empty() {
+			if let Some(count) = edu_count {
+				self.db.set_latest_educount(&server, count);
+			}
 			return Ok(Destination::Federation(server));
 		}
 
