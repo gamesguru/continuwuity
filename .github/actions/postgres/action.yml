@@ -71,7 +71,7 @@ runs:
           exit 1
         fi
 
-        echo "→ Direct ingest for $COMMIT ($ARCH/$OS/v$ROOM_VERSION)..."
+        echo "-> Direct ingest for $COMMIT ($ARCH/$OS/v$ROOM_VERSION)..."
         (
           cat <<SQL
         INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
@@ -86,8 +86,9 @@ runs:
           echo "\."
 
           cat <<SQL
+        SELECT pg_advisory_lock(42);
         INSERT INTO run_details (run_id, test_name, status)
-        SELECT r.id, (t.j->>'Test'), (t.j->>'Action')
+        SELECT DISTINCT ON (r.id, (t.j->>'Test')) r.id, (t.j->>'Test'), (t.j->>'Action')
         FROM t JOIN runs r ON r.commit_hash = (t.j->>'commit')
           AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
           AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
@@ -96,10 +97,20 @@ runs:
         WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
         SQL
-        ) | ssh -C -o StrictHostKeyChecking=no "$SSH_TARGET" "psql -U git c10y"
+
+          # Incremental ever_passed UPSERT (shared SQL file, scoped to this run only)
+          sed -e "s/{commit}/${COMMIT}/g" \
+              -e "s/{arch}/${ARCH}/g" \
+              -e "s/{os}/${OS}/g" \
+              -e "s/{profile}/${PROFILE}/g" \
+              -e "s/{room_version}/${ROOM_VERSION}/g" \
+              "${{ github.action_path }}/upsert_ever_passed.sql"
+          echo "SELECT pg_advisory_unlock(42);"
+        ) | ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
         echo "✓ Direct ingest complete."
 
     - name: Bulk Sync History (backup)
+      if: always()
       continue-on-error: true
       shell: bash
       env:
