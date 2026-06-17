@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use conduwuit::{Result, implement};
+use conduwuit::{Result, implement, utils::stream::TryReadyExt};
 use database::{Database, Deserialized, Map};
 use ruma::{RoomId, UserId};
 
-use crate::{Dep, globals, rooms, rooms::short::ShortStateHash};
+use crate::{Dep, globals, rooms};
 
 pub struct Service {
 	db: Data,
@@ -93,35 +93,42 @@ pub async fn last_notification_read(&self, user_id: &UserId, room_id: &RoomId) -
 }
 
 #[implement(Service)]
-pub async fn associate_token_shortstatehash(
-	&self,
-	room_id: &RoomId,
-	token: u64,
-	shortstatehash: ShortStateHash,
-) {
-	let Ok(shortroomid) = self.services.short.get_shortroomid(room_id).await else {
-		return;
-	};
+pub async fn count_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
+	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
 
-	let _cork = self.db.db.cork();
-	let key: &[u64] = &[shortroomid, token];
-	self.db
+	// Create a prefix to search by - all entries for this room will start with its
+	// short ID
+	let prefix = &[shortroomid];
+
+	let count = self
+		.db
 		.roomsynctoken_shortstatehash
-		.put(key, shortstatehash);
+		.keys_prefix_raw(prefix)
+		.ready_try_fold(0_usize, |acc, _| Ok(acc.saturating_add(1)))
+		.await?;
+
+	Ok(count)
 }
 
 #[implement(Service)]
-pub async fn get_token_shortstatehash(
-	&self,
-	room_id: &RoomId,
-	token: u64,
-) -> Result<ShortStateHash> {
+pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
 	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
 
-	let key: &[u64] = &[shortroomid, token];
-	self.db
+	// Create a prefix to search by - all entries for this room will start with its
+	// short ID
+	let prefix = &[shortroomid];
+
+	let _cork = self.db.db.cork();
+
+	let count = self
+		.db
 		.roomsynctoken_shortstatehash
-		.qry(key)
-		.await
-		.deserialized()
+		.keys_prefix_raw(prefix)
+		.ready_try_fold(0_usize, |acc, key| {
+			self.db.roomsynctoken_shortstatehash.remove(key);
+			Ok(acc.saturating_add(1))
+		})
+		.await?;
+
+	Ok(count)
 }

@@ -174,10 +174,21 @@ pub(super) async fn bump(
 }
 
 #[admin_command]
-pub(super) async fn purge_sync_tokens(&self, _room: OwnedRoomOrAliasId) -> Result {
-	self.write_str(
-		"The server is running the stateless sync model. Database-backed sync tokens have been \
-		 dropped, so no tokens remain to be purged.",
-	)
+pub(super) async fn purge_sync_tokens(&self, room: OwnedRoomOrAliasId) -> Result {
+	// Resolve the room ID from the room or alias ID
+	let room_id = self.services.rooms.alias.resolve(&room).await?;
+
+	// Delete all tokens for this room using the service method
+	let deleted_count = self
+		.services
+		.rooms
+		.user
+		.delete_room_tokens(&room_id)
+		.await?;
+
+	self.write_str(&format!(
+		"Successfully deleted {deleted_count} sync tokens for room {}",
+		room_id.as_str()
+	))
 	.await
 }

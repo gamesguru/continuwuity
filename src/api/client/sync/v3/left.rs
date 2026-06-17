@@ -4,7 +4,7 @@ use conduwuit::{
 	trace,
 	utils::{self, IterStream, ReadyExt as _, future::ReadyEqExt, stream::WidebandExt as _},
 };
-use futures::{StreamExt, future::join};
+use futures::StreamExt;
 use ruma::{
 	EventId, OwnedRoomId, RoomId,
 	api::client::sync::sync_events::v3::{LeftRoom, RoomAccountData, State, Timeline},
@@ -84,7 +84,7 @@ pub(super) async fn load_left_room(
 
 	let does_not_exist = services.rooms.metadata.exists(room_id).eq(&false).await;
 
-	let (timeline, state_events, leave_shortstatehash) = match leave_membership_event.clone() {
+	let (timeline, state_events) = match leave_membership_event.clone() {
 		| Some(leave_membership_event) if does_not_exist => {
 			/*
 			we have none PDUs with left beef for this room, likely because it was a rejected invite to a room
@@ -118,14 +118,7 @@ pub(super) async fn load_left_room(
 			}
 
 			trace!("syncing remote-assisted leave PDU");
-			(
-				TimelinePdus {
-					pdus: vec![(PduCount::max(), leave_membership_event)].into(),
-					limited: false,
-				},
-				Vec::new(),
-				None,
-			)
+			(TimelinePdus::default(), vec![leave_membership_event])
 		},
 		| Some(leave_membership_event) => {
 			// we have this room in our DB, and can fetch the state and timeline from when
@@ -157,7 +150,7 @@ pub(super) async fn load_left_room(
 				)
 				.await?;
 
-			let (timeline, state_events) = build_left_state_and_timeline(
+			build_left_state_and_timeline(
 				services,
 				sync_context,
 				room_id,
@@ -165,9 +158,7 @@ pub(super) async fn load_left_room(
 				leave_shortstatehash,
 				prev_membership_event,
 			)
-			.await?;
-
-			(timeline, state_events, Some(leave_shortstatehash))
+			.await?
 		},
 		| None => {
 			/*
@@ -182,42 +173,12 @@ pub(super) async fn load_left_room(
 			}
 
 			trace!("syncing dummy leave event");
-			(
-				TimelinePdus::default(),
-				vec![create_dummy_leave_event(services, sync_context, room_id)],
-				None,
-			)
-		},
-	};
-
-	let state_after = if services.config.experimental_features.msc4222_enabled
-		&& sync_context.use_state_after
-	{
-		if let Some(shortstatehash) = leave_shortstatehash {
-			let lazily_loaded_members = prepare_lazily_loaded_members(
+			(TimelinePdus::default(), vec![create_dummy_leave_event(
 				services,
 				sync_context,
 				room_id,
-				timeline.members(),
-			)
-			.await;
-
-			build_state_initial(
-				services,
-				syncing_user,
-				room_id,
-				shortstatehash,
-				lazily_loaded_members.as_ref(),
-			)
-			.await?
-			.into_iter()
-			.map(Event::into_format)
-			.collect()
-		} else {
-			Vec::new()
-		}
-	} else {
-		Vec::new()
+			)])
+		},
 	};
 
 	let mut raw_timeline_pdus = Vec::with_capacity(timeline.pdus.len());
@@ -241,12 +202,18 @@ pub(super) async fn load_left_room(
 		.collect();
 
 	if !in_timeline && last_sync_end_count.is_none_or(|c| c < left_count) {
-		if let Some(leave_pdu) = leave_membership_event {
-			if (&filter.room.state).matches(&leave_pdu) {
-				state_events_raw.push(leave_pdu.into_format());
+		if let Some(ref leave_pdu) = leave_membership_event {
+			if (&filter.room.state).matches(leave_pdu) {
+				state_events_raw.push(leave_pdu.clone().into_format());
 			}
 		}
 	}
+
+	let (state_events_to_send, state_after) = if sync_context.use_state_after {
+		(Vec::new(), state_events_raw)
+	} else {
+		(state_events_raw, Vec::new())
+	};
 
 	Ok(Some((
 		LeftRoom {
@@ -256,7 +223,7 @@ pub(super) async fn load_left_room(
 				prev_batch: Some(current_count.to_string()),
 				events: raw_timeline_pdus,
 			},
-			state: State { events: state_events_raw },
+			state: State { events: state_events_to_send },
 		},
 		state_after,
 	)))
@@ -323,29 +290,8 @@ async fn build_left_state_and_timeline(
 		limited: raw_timeline.limited,
 	};
 
-	let timeline_start_shortstatehash = async {
-		if let Some((_, pdu)) = timeline.pdus.front() {
-			if let Ok(shortstatehash) = services
-				.rooms
-				.state_accessor
-				.pdu_shortstatehash(&pdu.event_id)
-				.await
-			{
-				return shortstatehash;
-			}
-		}
-
-		// the timeline generally should not be empty (see the TODO further down),
-		// but in case it is we use `leave_shortstatehash` as the state to
-		// send
-		leave_shortstatehash
-	};
-
 	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members());
-
-	let (timeline_start_shortstatehash, lazily_loaded_members) =
-		join(timeline_start_shortstatehash, lazily_loaded_members).await;
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members()).await;
 
 	// TODO: calculate incremental state for incremental syncs.
 	// always calculating initial state _works_ but returns more data and does
@@ -354,7 +300,9 @@ async fn build_left_state_and_timeline(
 		services,
 		syncing_user,
 		room_id,
-		timeline_start_shortstatehash,
+		leave_shortstatehash,
+		&timeline,
+		sync_context.use_state_after,
 		lazily_loaded_members.as_ref(),
 	)
 	.await?;

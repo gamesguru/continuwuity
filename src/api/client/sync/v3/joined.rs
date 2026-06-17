@@ -17,7 +17,7 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
-	future::{OptionFuture, join, join3, join4, try_join, try_join3, try_join4},
+	future::{OptionFuture, join, join3, join4, try_join, try_join3},
 };
 use ruma::{
 	OwnedRoomId, OwnedUserId, RoomId, UserId,
@@ -70,7 +70,6 @@ pub(super) async fn load_joined_room(
 		ephemeral,
 		StateAndTimeline {
 			state_events,
-			state_after,
 			timeline,
 			summary,
 			notification_counts,
@@ -93,14 +92,21 @@ pub(super) async fn load_joined_room(
 		);
 	}
 
+	let state_events_raw: Vec<Raw<AnySyncStateEvent>> =
+		state_events.into_iter().map(Event::into_format).collect();
+
+	let (state_events_to_send, state_after) = if sync_context.use_state_after {
+		(Vec::new(), state_events_raw)
+	} else {
+		(state_events_raw, Vec::new())
+	};
+
 	let joined_room = JoinedRoom {
 		account_data,
 		summary: summary.unwrap_or_default(),
 		unread_notifications: notification_counts.unwrap_or_default(),
 		timeline,
-		state: RoomState {
-			events: state_events.into_iter().map(Event::into_format).collect(),
-		},
+		state: RoomState { events: state_events_to_send },
 		ephemeral,
 		unread_thread_notifications: BTreeMap::new(),
 	};
@@ -119,11 +125,6 @@ pub(super) async fn load_joined_room(
 			joined_room.summary.joined_member_count
 		);
 	}
-
-	let state_after = state_after
-		.into_iter()
-		.map(Event::into_format)
-		.collect::<Vec<_>>();
 
 	Ok((joined_room, state_after, device_list_updates))
 }
@@ -266,7 +267,6 @@ async fn build_ephemeral(
 /// computed from them.
 struct StateAndTimeline {
 	state_events: Vec<PduEvent>,
-	state_after: Vec<PduEvent>,
 	timeline: Timeline,
 	summary: Option<RoomSummary>,
 	notification_counts: Option<UnreadNotificationsCount>,
@@ -286,11 +286,19 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	let (state_events, state_after, notification_counts, joined_since_last_sync) = try_join4(
-		build_state_events(services, sync_context, room_id, shortstatehashes, &timeline),
-		build_state_after(services, sync_context, room_id, shortstatehashes, &timeline),
+	let joined_since_last_sync =
+		check_joined_since_last_sync(services, shortstatehashes, sync_context).await?;
+
+	let (state_events, notification_counts) = try_join(
+		build_state_events(
+			services,
+			sync_context,
+			room_id,
+			shortstatehashes,
+			&timeline,
+			joined_since_last_sync,
+		),
 		build_notification_counts(services, sync_context, room_id, &timeline),
-		check_joined_since_last_sync(services, shortstatehashes, sync_context),
 	)
 	.await?;
 
@@ -392,7 +400,6 @@ async fn build_state_and_timeline(
 
 	Ok(StateAndTimeline {
 		state_events,
-		state_after,
 		timeline: Timeline {
 			limited,
 			prev_batch: prev_batch.as_ref().map(ToString::to_string),
@@ -417,56 +424,28 @@ struct ShortStateHashes {
 #[tracing::instrument(level = "debug", skip_all)]
 async fn fetch_shortstatehashes(
 	services: &Services,
-	SyncContext { last_sync_end_count, current_count, .. }: SyncContext<'_>,
+	SyncContext { last_sync_end_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 ) -> Result<ShortStateHashes> {
 	// the room state currently.
-	// TODO: this should be the room state as of `current_count`, but there's no way
-	// to get that right now.
 	let current_shortstatehash = services
 		.rooms
 		.state
 		.get_room_shortstatehash(room_id)
-		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))));
+		.map_err(|_| err!(Database(error!("Room {room_id} has no state"))))
+		.await?;
 
 	// the room state as of the end of the last sync.
-	// this will be None if we are doing an initial sync or if we just joined this
-	// room.
+	// this will be None if we are doing an initial sync.
 	let last_sync_end_shortstatehash =
 		OptionFuture::from(last_sync_end_count.map(|last_sync_end_count| {
-			// look up the shortstatehash saved by the last sync's call to
-			// `associate_token_shortstatehash`
 			services
 				.rooms
-				.user
-				.get_token_shortstatehash(room_id, last_sync_end_count)
-				.inspect_err(move |_| {
-					debug_warn!(
-						token = last_sync_end_count,
-						"Room has no shortstatehash for this token"
-					);
-				})
-				.ok()
+				.timeline
+				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
 		}))
-		.map(Option::flatten)
-		.map(Ok);
-
-	let (current_shortstatehash, last_sync_end_shortstatehash) =
-		try_join(current_shortstatehash, last_sync_end_shortstatehash).await?;
-
-	/*
-	associate the `current_count` with the `current_shortstatehash`, so we can
-	use it on the next sync as the `last_sync_end_shortstatehash`.
-
-	TODO: the table written to by this call grows extremely fast, gaining one new entry for each
-	joined room on _every single sync request_. we need to find a better way to remember the shortstatehash
-	between syncs.
-	*/
-	services
-		.rooms
-		.user
-		.associate_token_shortstatehash(room_id, current_count, current_shortstatehash)
-		.await;
+		.await
+		.transpose()?;
 
 	Ok(ShortStateHashes {
 		current_shortstatehash,
@@ -520,11 +499,13 @@ async fn build_state_events(
 	room_id: &RoomId,
 	shortstatehashes: ShortStateHashes,
 	timeline: &TimelinePdus,
+	joined_since_last_sync: bool,
 ) -> Result<Vec<PduEvent>> {
 	let SyncContext {
 		syncing_user,
 		last_sync_end_count,
 		full_state,
+		use_state_after,
 		..
 	} = sync_context;
 
@@ -533,50 +514,59 @@ async fn build_state_events(
 		last_sync_end_shortstatehash,
 	} = shortstatehashes;
 
-	// the spec states that the `state` property only includes state events up to
-	// the beginning of the timeline, so we determine the state of the syncing room
-	// as of the first timeline event. NOTE: this explanation is not entirely
-	// accurate; see the implementation of `build_state_incremental`.
-	let timeline_start_shortstatehash = async {
-		if let Some((_, pdu)) = timeline.pdus.front() {
-			if let Ok(shortstatehash) = services
-				.rooms
-				.state_accessor
-				.pdu_shortstatehash(&pdu.event_id)
-				.await
-			{
-				return shortstatehash;
-			}
-		}
+	// compute the state hash at the start of the timeline if we are not using
+	// state_after
+	let state_hash = if use_state_after {
+		current_shortstatehash
+	} else if let Some((_, pdu)) = timeline.pdus.front() {
+		match services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(&pdu.event_id)
+			.await
+		{
+			| Ok(shortstatehash) => {
+				use futures::StreamExt;
+				let mut state_stream = std::pin::pin!(
+					services
+						.rooms
+						.state_accessor
+						.state_full_ids::<ruma::OwnedEventId>(shortstatehash)
+				);
 
+				if state_stream.next().await.is_some() {
+					shortstatehash
+				} else {
+					current_shortstatehash
+				}
+			},
+			| Err(_) => current_shortstatehash,
+		}
+	} else {
 		current_shortstatehash
 	};
 
 	// the user IDs of members whose membership needs to be sent to the client, if
 	// lazy-loading is enabled.
 	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members());
-
-	let (timeline_start_shortstatehash, lazily_loaded_members) =
-		join(timeline_start_shortstatehash, lazily_loaded_members).await;
+		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members()).await;
 
 	// compute the state delta between the previous sync and this sync.
-	match (last_sync_end_count, last_sync_end_shortstatehash) {
+	match (last_sync_end_count, last_sync_end_shortstatehash, joined_since_last_sync) {
 		/*
 		if `last_sync_end_count` is Some (meaning this is an incremental sync), and `last_sync_end_shortstatehash`
 		is Some (meaning the syncing user didn't just join this room for the first time ever), and `full_state` is false,
 		then use `build_state_incremental`.
 		*/
-		| (Some(last_sync_end_count), Some(last_sync_end_shortstatehash)) if !full_state =>
+		| (Some(_), Some(last_sync_end_shortstatehash), false) if !full_state =>
 			build_state_incremental(
 				services,
 				syncing_user,
 				room_id,
-				PduCount::Normal(last_sync_end_count),
 				last_sync_end_shortstatehash,
-				timeline_start_shortstatehash,
-				current_shortstatehash,
+				state_hash,
 				timeline,
+				use_state_after,
 				lazily_loaded_members.as_ref(),
 			)
 			.boxed()
@@ -591,43 +581,14 @@ async fn build_state_events(
 				services,
 				syncing_user,
 				room_id,
-				timeline_start_shortstatehash,
+				state_hash,
+				timeline,
+				use_state_after,
 				lazily_loaded_members.as_ref(),
 			)
 			.boxed()
 			.await,
 	}
-}
-
-/// Calculate the state events after the timeline for MSC4222.
-async fn build_state_after(
-	services: &Services,
-	sync_context: SyncContext<'_>,
-	room_id: &RoomId,
-	shortstatehashes: ShortStateHashes,
-	timeline: &TimelinePdus,
-) -> Result<Vec<PduEvent>> {
-	if !services.config.experimental_features.msc4222_enabled || !sync_context.use_state_after {
-		return Ok(Vec::new());
-	}
-
-	let SyncContext { syncing_user, .. } = sync_context;
-	let ShortStateHashes { current_shortstatehash, .. } = shortstatehashes;
-
-	// the user IDs of members whose membership needs to be sent to the client, if
-	// lazy-loading is enabled.
-	let lazily_loaded_members =
-		prepare_lazily_loaded_members(services, sync_context, room_id, timeline.members()).await;
-
-	build_state_initial(
-		services,
-		syncing_user,
-		room_id,
-		current_shortstatehash,
-		lazily_loaded_members.as_ref(),
-	)
-	.boxed()
-	.await
 }
 
 /// Compute the number of unread notifications in this room.

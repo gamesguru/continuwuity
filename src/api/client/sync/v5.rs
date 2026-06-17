@@ -987,8 +987,8 @@ where
 
 		let since_shortstatehash = services
 			.rooms
-			.user
-			.get_token_shortstatehash(room_id, globalsince)
+			.timeline
+			.next_shortstatehash(room_id, PduCount::Normal(globalsince))
 			.await
 			.ok();
 
@@ -1092,10 +1092,9 @@ where
 						// Don't send key updates from the sender to the sender
 						.ready_filter(|user_id| sender_user != *user_id)
 						// Only send keys if the sender doesn't share an encrypted room with the target
-						// already
-						.filter_map(|user_id| {
-							share_encrypted_room(services, sender_user, user_id, Some(room_id))
-								.map(|res| res.or_some(user_id.to_owned()))
+						.filter_map(|user_id| async move {
+							(!share_encrypted_room(services, sender_user, user_id, Some(room_id)).await)
+								.then(|| user_id.to_owned())
 						})
 						.collect::<Vec<_>>()
 						.await,

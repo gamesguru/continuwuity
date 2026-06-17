@@ -307,6 +307,62 @@ impl Data {
 		Ok(pdu)
 	}
 
+	pub(super) async fn prev_timeline_count(&self, before: &PduId) -> Result<PduCount> {
+		let before_pdu =
+			Self::pdu_count_to_id(before.shortroomid, before.shorteventid, Direction::Backward);
+
+		let prefix = before_pdu.shortroomid();
+		let pdu_ids = self
+			.room_pducount_eventid
+			.rev_keys_raw_from(&before_pdu)
+			.ready_try_take_while(move |pdu_bytes: &&[u8]| Ok(pdu_bytes.starts_with(&prefix)))
+			.ready_and_then(|pdu_bytes: &[u8]| {
+				let pdu_id = RawPduId::from(pdu_bytes);
+				Ok(pdu_id.pdu_count())
+			});
+
+		pin_mut!(pdu_ids);
+		pdu_ids
+			.try_next()
+			.await?
+			.ok_or_else(|| err!(Request(NotFound("No earlier PDUs found in room"))))
+	}
+
+	pub(super) async fn next_timeline_count(&self, after: &PduId) -> Result<PduCount> {
+		let after_pdu =
+			Self::pdu_count_to_id(after.shortroomid, after.shorteventid, Direction::Forward);
+
+		let prefix = after_pdu.shortroomid();
+		let pdu_ids = self
+			.room_pducount_eventid
+			.keys_raw_from(&after_pdu)
+			.ready_try_take_while(move |pdu_bytes: &&[u8]| Ok(pdu_bytes.starts_with(&prefix)))
+			.ready_and_then(|pdu_bytes: &[u8]| {
+				let pdu_id = RawPduId::from(pdu_bytes);
+				Ok(pdu_id.pdu_count())
+			});
+
+		pin_mut!(pdu_ids);
+		pdu_ids
+			.try_next()
+			.await?
+			.ok_or_else(|| err!(Request(NotFound("No more PDUs found in room"))))
+	}
+
+	fn pdu_count_to_id(
+		shortroomid: ShortRoomId,
+		shorteventid: PduCount,
+		dir: Direction,
+	) -> RawPduId {
+		// +1 so we don't send the base event
+		let pdu_id = PduId {
+			shortroomid,
+			shorteventid: shorteventid.saturating_inc(dir),
+		};
+
+		pdu_id.into()
+	}
+
 	/// Like get_non_outlier_pdu(), but without the expense of fetching and
 	/// parsing the PduEvent
 	pub(super) async fn non_outlier_pdu_exists(&self, event_id: &EventId) -> Result {

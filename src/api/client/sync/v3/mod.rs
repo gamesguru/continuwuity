@@ -12,6 +12,7 @@ use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{
 	Result, at, extract_variant, info,
+	matrix::pdu::PduCount,
 	utils::{
 		ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, Tools, WidebandExt},
@@ -627,8 +628,8 @@ async fn collect_member_presence(
 		for room_id in joined_rooms.keys() {
 			let shortstatehash = services
 				.rooms
-				.user
-				.get_token_shortstatehash(room_id, last_sync_end_count)
+				.timeline
+				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
 				.await
 				.ok();
 
