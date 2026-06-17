@@ -122,6 +122,46 @@ pub async fn get_or_create_shorteventid(&self, event_id: &EventId) -> ShortEvent
 }
 
 #[implement(Service)]
+pub fn get_or_create_shorteventid_blocking(&self, event_id: &EventId) -> ShortEventId {
+	if let Some(short) = self.eventid_shorteventid_cache.get(&event_id.to_owned()) {
+		return short;
+	}
+
+	if let Ok(handle) = self
+		.db
+		.eventid_shorteventid
+		.get_blocking(event_id.as_bytes())
+	{
+		let short = utils::u64_from_u8(&handle);
+		self.eventid_shorteventid_cache
+			.insert(event_id.to_owned(), short);
+		self.shorteventid_eventid_cache
+			.insert(short, event_id.to_owned());
+		return short;
+	}
+
+	self.create_shorteventid(event_id)
+}
+
+#[implement(Service)]
+pub fn get_shorteventid_blocking(&self, event_id: &EventId) -> Result<ShortEventId> {
+	if let Some(short) = self.eventid_shorteventid_cache.get(&event_id.to_owned()) {
+		return Ok(short);
+	}
+
+	let handle = self
+		.db
+		.eventid_shorteventid
+		.get_blocking(event_id.as_bytes())?;
+	let short = utils::u64_from_u8(&handle);
+	self.eventid_shorteventid_cache
+		.insert(event_id.to_owned(), short);
+	self.shorteventid_eventid_cache
+		.insert(short, event_id.to_owned());
+	Ok(short)
+}
+
+#[implement(Service)]
 pub fn multi_get_or_create_shorteventid<'a, I>(
 	&'a self,
 	event_ids: I,

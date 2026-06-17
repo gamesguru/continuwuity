@@ -112,6 +112,7 @@ async fn fresh(services: &Services) -> Result<()> {
 	db["global"].insert(MIGRATE_READ_RECEIPTS_TO_SSOT_MARKER, []);
 	db["global"].insert(MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER, []);
 	db["global"].insert(POPULATE_TOPOLOGICAL_INDEX_MARKER, []);
+	db["global"].insert(POPULATE_SHORTPREVEVENTS_MARKER, []);
 
 	// Create the admin room and server user on first run
 	info!("Creating admin room and server user");
@@ -325,6 +326,12 @@ async fn migrate(services: &Services) -> Result<()> {
 		db_lt_19(services)
 			.await
 			.map_err(|e| err!("Failed to run v19 migrations: {e}"))?;
+	}
+
+	if services.globals.db.database_version().await < 20 {
+		db_lt_20(services)
+			.await
+			.map_err(|e| err!("Failed to run v20 migrations: {e}"))?;
 	}
 
 	if db["global"]

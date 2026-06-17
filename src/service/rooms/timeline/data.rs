@@ -23,6 +23,7 @@ pub(super) struct Data {
 	eventid_metadata: Arc<Map>,
 	room_pducount_eventid: Arc<Map>,
 	roomid_topologicalorder_pducount: Arc<Map>,
+	shorteventid_shortprevevents: Arc<Map>,
 	pub(super) room_pducount_eventid_backup: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
@@ -46,6 +47,7 @@ impl Data {
 			room_pducount_eventid: db["room_pducount_eventid"].clone(),
 			roomid_topologicalorder_pducount: db["roomid_topologicalorder_pducount"].clone(),
 			room_pducount_eventid_backup: db["room_pducount_eventid_backup"].clone(),
+			shorteventid_shortprevevents: db["shorteventid_shortprevevents"].clone(),
 			db: args.db.clone(),
 			services: Services {
 				short: args.depend::<rooms::short::Service>("rooms::short"),
@@ -667,12 +669,24 @@ impl Data {
 				.insert_into_batch(&mut batch, event_id_bytes, metadata_bytes);
 		}
 
+		let short_event_id = self
+			.services
+			.short
+			.get_or_create_shorteventid(&pdu.event_id)
+			.await;
+		let mut prev_shorts = Vec::new();
+		for prev in pdu.prev_events() {
+			let prev_short = self.services.short.get_or_create_shorteventid(prev).await;
+			prev_shorts.push(prev_short);
+		}
+		self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
+
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
 		self.eventid_pdu.wake(event_id_bytes);
 	}
 
-	pub(super) fn prepend_backfill_pdu(
+	pub(super) async fn prepend_backfill_pdu(
 		&self,
 		pdu_id: &RawPduId,
 		event_id: &EventId,
@@ -742,6 +756,18 @@ impl Data {
 					metadata_bytes,
 				);
 			}
+
+			let short_event_id = self
+				.services
+				.short
+				.get_or_create_shorteventid(event_id)
+				.await;
+			let mut prev_shorts = Vec::new();
+			for prev in pdu.prev_events() {
+				let prev_short = self.services.short.get_or_create_shorteventid(prev).await;
+				prev_shorts.push(prev_short);
+			}
+			self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
 		}
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
@@ -813,6 +839,18 @@ impl Data {
 					metadata_bytes,
 				);
 			}
+
+			let short_event_id = self
+				.services
+				.short
+				.get_or_create_shorteventid(event_id)
+				.await;
+			let mut prev_shorts = Vec::new();
+			for prev in pdu.prev_events() {
+				let prev_short = self.services.short.get_or_create_shorteventid(prev).await;
+				prev_shorts.push(prev_short);
+			}
+			self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
 		}
 
 		self.eventid_pdu.apply_batch(&batch);
@@ -1164,6 +1202,82 @@ impl Data {
 				let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
 				Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))
 			})
+	}
+
+	pub(super) fn room_event_ids_rev<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+		until: Option<PduCount>,
+	) -> impl Stream<Item = Result<ruma::OwnedEventId>> + Send + 'a {
+		let seek_count = until
+			.unwrap_or_else(PduCount::max)
+			.saturating_inc(Direction::Backward);
+		self.count_to_id(room_id, seek_count, Direction::Backward)
+			.map_ok(move |current| {
+				let prefix = current.shortroomid();
+				self.room_pducount_eventid
+					.rev_raw_stream_from(&current)
+					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
+					.map_ok(|(_key, val)| val.to_vec())
+					.and_then(move |val| async move {
+						let s = std::str::from_utf8(&val)
+							.map_err(|e| err!(Database("Invalid UTF-8 in event ID: {e:?}")))?;
+						ruma::OwnedEventId::parse(s)
+							.map_err(|e| err!(Database("Invalid EventId: {e:?}")))
+					})
+			})
+			.try_flatten_stream()
+	}
+
+	pub(super) fn store_shortprevevents(
+		&self,
+		shorteventid: rooms::short::ShortEventId,
+		shortprevevents: &[rooms::short::ShortEventId],
+	) {
+		let key = shorteventid.to_be_bytes();
+		let val = shortprevevents
+			.iter()
+			.flat_map(|s| s.to_be_bytes())
+			.collect::<Vec<u8>>();
+		self.shorteventid_shortprevevents.insert(&key, &val);
+	}
+
+	pub(super) fn store_shortprevevents_into_batch(
+		&self,
+		batch: &mut database::rocksdb::WriteBatch,
+		shorteventid: rooms::short::ShortEventId,
+		shortprevevents: &[rooms::short::ShortEventId],
+	) {
+		let key = shorteventid.to_be_bytes();
+		let val = shortprevevents
+			.iter()
+			.flat_map(|s| s.to_be_bytes())
+			.collect::<Vec<u8>>();
+		self.shorteventid_shortprevevents
+			.insert_into_batch(batch, &key, &val);
+	}
+
+	pub(super) async fn get_shortprevevents(
+		&self,
+		shorteventid: rooms::short::ShortEventId,
+	) -> Result<Vec<rooms::short::ShortEventId>> {
+		let key = shorteventid.to_be_bytes();
+		let val = self.shorteventid_shortprevevents.get(&key).await?;
+		let prev_shorts = val
+			.chunks_exact(std::mem::size_of::<u64>())
+			.map(conduwuit::utils::u64_from_u8)
+			.collect();
+		Ok(prev_shorts)
+	}
+
+	pub(super) async fn get_origin_server_ts(
+		&self,
+		event_id: &EventId,
+	) -> Result<ruma::MilliSecondsSinceUnixEpoch> {
+		let bytes = self.eventid_metadata.get(event_id.as_bytes()).await?;
+		let meta = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
+			.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e:?}")))?;
+		Ok(ruma::MilliSecondsSinceUnixEpoch(meta.origin_server_ts))
 	}
 }
 

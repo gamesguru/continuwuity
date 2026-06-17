@@ -461,7 +461,8 @@ pub async fn backfill_pdu(
 
 	// Insert pdu
 	self.db
-		.prepend_backfill_pdu(&pdu_id, &event_id, &json_value);
+		.prepend_backfill_pdu(&pdu_id, &event_id, &json_value)
+		.await;
 
 	drop(insert_lock);
 
@@ -508,7 +509,9 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 	}
 	.into();
 
-	self.db.prepend_backfill_pdu(&pdu_id, event_id, &value);
+	self.db
+		.prepend_backfill_pdu(&pdu_id, event_id, &value)
+		.await;
 
 	drop(insert_lock);
 
@@ -564,7 +567,9 @@ pub async fn force_insert_pdu(
 	);
 
 	if backfill {
-		self.db.prepend_backfill_pdu(&pdu_id, event_id, &value);
+		self.db
+			.prepend_backfill_pdu(&pdu_id, event_id, &value)
+			.await;
 	} else {
 		self.db.append_pdu(&pdu_id, pdu, &value, pdu_count).await;
 	}

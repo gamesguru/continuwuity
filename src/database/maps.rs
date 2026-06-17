@@ -329,6 +329,12 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::SEQUENTIAL
 	},
 	Descriptor {
+		name: "shorteventid_shortprevevents",
+		key_size_hint: Some(8),
+		cache_disp: CacheDisp::Unique,
+		..descriptor::SEQUENTIAL
+	},
+	Descriptor {
 		name: "shorteventid_eventid",
 		cache_disp: CacheDisp::Unique,
 		key_size_hint: Some(8),
