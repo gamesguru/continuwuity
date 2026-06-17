@@ -368,6 +368,7 @@ pub(crate) async fn create_room_route(
 	let power_levels_content = default_power_levels_content(
 		body.power_level_content_override.as_ref(),
 		&body.visibility,
+		&preset,
 		power_levels_to_grant,
 		creators,
 	)?;
@@ -577,12 +578,27 @@ pub(crate) async fn create_room_route(
 fn default_power_levels_content(
 	power_level_content_override: Option<&Raw<RoomPowerLevelsEventContent>>,
 	visibility: &room::Visibility,
+	preset: &create_room::v3::RoomPreset,
 	users: BTreeMap<OwnedUserId, Int>,
 	creators: Vec<OwnedUserId>,
 ) -> Result<serde_json::Value> {
+	use create_room::v3::RoomPreset;
+
 	let mut power_levels_content =
 		serde_json::to_value(RoomPowerLevelsEventContent { users, ..Default::default() })
 			.expect("event is valid, we just created it");
+
+	// Match Synapse's default: invite requires PL 50 (moderator) by default.
+	// For private_chat and trusted_private_chat presets, override to 0 so that
+	// any member can invite (matching Synapse's preset-specific overrides).
+	// This is important for restricted rooms (public_chat preset) where only
+	// sufficiently-privileged users should be able to invite.
+	let invite_level = match preset {
+		| RoomPreset::PrivateChat | RoomPreset::TrustedPrivateChat => 0,
+		| _ => 50,
+	};
+	power_levels_content["invite"] =
+		serde_json::to_value(invite_level).expect("invite level is valid Value");
 
 	// secure proper defaults of sensitive/dangerous permissions that moderators
 	// (power level 50) should not have easy access to
