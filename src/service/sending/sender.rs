@@ -1175,12 +1175,22 @@ impl Service {
 			.map(|raw| raw.get().as_bytes())
 			.chain(edus.iter().map(|raw| raw.json().get().as_bytes()));
 
+		// We prepend the current timestamp to the transaction ID to ensure it is
+		// unique. conduwuit sends m.device_list_update EDUs with completely generic,
+		// hardcoded payloads (using stream_id: 1 and device_id: "placeholder") in
+		// order to trick the remote homeserver into forcing a full sync of the user's
+		// devices. Because this payload is entirely static, if a user updates their
+		// device keys multiple times, the exact same generic payload is sent.
+		// If we relied purely on the hash of the payload for the transaction ID, the
+		// remote server's transaction cache would mistakenly treat the new device list
+		// update as a duplicate retry of the previous one and silently drop it!
 		let txn_hash = calculate_hash(preimage);
-		let txn_id = &*URL_SAFE_NO_PAD.encode(txn_hash);
+		let now = MilliSecondsSinceUnixEpoch::now();
+		let txn_id = format!("{}_{}", now.get(), URL_SAFE_NO_PAD.encode(txn_hash));
 		let request = send_transaction_message::v1::Request {
-			transaction_id: txn_id.into(),
+			transaction_id: txn_id.clone().into(),
 			origin: self.server.name.clone(),
-			origin_server_ts: MilliSecondsSinceUnixEpoch::now(),
+			origin_server_ts: now,
 			pdus,
 			edus,
 		};

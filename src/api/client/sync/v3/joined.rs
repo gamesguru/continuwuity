@@ -918,7 +918,8 @@ async fn build_device_list_updates(
 		.map(at!(0))
 		.map(ToOwned::to_owned)
 		.ready_for_each(|user_id| {
-			device_list_updates.changed.insert(user_id);
+			device_list_updates.changed.insert(user_id.clone());
+			tracing::error!("ADDED DEVICE UPDATE: {}", user_id);
 		})
 		.await;
 
@@ -955,7 +956,8 @@ async fn build_device_list_updates(
 						device_list_updates.left.insert(user_id);
 					},
 					| Join if !shares_room => {
-						device_list_updates.changed.insert(user_id);
+						device_list_updates.changed.insert(user_id.clone());
+						tracing::error!("ADDED DEVICE UPDATE: {}", user_id);
 					},
 					| _ => (),
 				}

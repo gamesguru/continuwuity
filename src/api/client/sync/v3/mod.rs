@@ -551,6 +551,7 @@ pub(crate) async fn build_sync_events(
 		}
 	}
 
+	tracing::error!("FINAL SYNC VAL: {}", val);
 	Ok(val)
 }
 
