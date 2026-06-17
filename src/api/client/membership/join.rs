@@ -612,7 +612,7 @@ async fn join_room_by_id_helper_remote(
 		.get_or_create_shortroomid(room_id)
 		.await;
 
-	join_room_by_id_helper_remote_process(
+	Box::pin(join_room_by_id_helper_remote_process(
 		services,
 		sender_user,
 		room_id,
@@ -623,7 +623,7 @@ async fn join_room_by_id_helper_remote(
 		state_lock,
 		send_join_response,
 		remote_latest_events,
-	)
+	))
 	.await
 }
 
@@ -637,7 +637,7 @@ async fn join_room_by_id_helper_remote_process(
 	remote_server: OwnedServerName,
 	join_event: CanonicalJsonObject,
 	event_id: ruma::OwnedEventId,
-	state_lock: RoomMutexGuard,
+	mut state_lock: RoomMutexGuard,
 	send_join_response: federation::membership::create_join_event::v2::Response,
 	remote_latest_events: Vec<ruma::OwnedEventId>,
 ) -> Result {
@@ -793,9 +793,85 @@ async fn join_room_by_id_helper_remote_process(
 		.update_membership(room_id, sender_user, &parsed_join_pdu, true)
 		.await?;
 
+	// To prevent our join event from getting assigned a lower PduCount than the
+	// preceding historical extremities (which causes a chronologically
+	// out-of-order room timeline in client syncs), we drop the state lock
+	// temporarily, fetch and handle those extremities synchronously, and then
+	// re-acquire the lock before appending our join event.
+	drop(state_lock);
+
+	if !remote_latest_events.is_empty() {
+		let mut missing_latest = Vec::new();
+		for event_id in &remote_latest_events {
+			if !services.rooms.timeline.pdu_exists(event_id).await {
+				missing_latest.push(event_id.clone());
+			}
+		}
+		if !missing_latest.is_empty() {
+			info!(
+				"Forward-filling {} missing extremities from {} after joining room {}",
+				missing_latest.len(),
+				remote_server,
+				room_id
+			);
+			for event_id in missing_latest {
+				let request = federation::event::get_event::v1::Request {
+					event_id: event_id.clone(),
+					include_unredacted_content: Some(false),
+				};
+				let response = match services
+					.sending
+					.send_federation_request(&remote_server, request)
+					.await
+				{
+					| Ok(r) => r,
+					| Err(e) => {
+						warn!("Failed to fetch missing extremity {event_id}: {e}");
+						continue;
+					},
+				};
+				let (parsed_room_id, parsed_event_id, value) = match services
+					.rooms
+					.event_handler
+					.parse_incoming_pdu(&response.pdu)
+					.await
+				{
+					| Ok(v) => v,
+					| Err(e) => {
+						warn!("Failed to parse extremity {event_id}: {e}");
+						continue;
+					},
+				};
+				if parsed_room_id != room_id {
+					warn!(
+						%parsed_event_id,
+						%parsed_room_id,
+						%room_id,
+						%remote_server,
+						"Room ID mismatch in send_join extremity fetch: event belongs to parsed room, expected target room"
+					);
+					continue;
+				}
+				if let Err(e) = services
+					.rooms
+					.event_handler
+					.handle_incoming_pdu(&remote_server, room_id, &parsed_event_id, value, true)
+					.await
+				{
+					warn!("Failed to handle extremity {event_id}: {e}");
+				}
+			}
+		}
+	}
+
+	// Re-acquire the state lock before appending our join event
+	state_lock = services.rooms.state.mutex.lock(room_id).await;
+
 	// We append to state before appending the pdu, so we don't have a moment in
-	// time with the pdu without it's state. This is okay because append_pdu can't
-	// fail.
+	// time with the pdu without its state. Both append_to_state and append_pdu
+	// can indeed fail, in which case the local membership cache may be left in an
+	// inconsistent state (where the user appears joined in the cache but the join
+	// PDU is not persisted).
 	let statehash_after_join = services
 		.rooms
 		.state
@@ -822,65 +898,6 @@ async fn join_room_by_id_helper_remote_process(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_join, &state_lock);
-
-	if !remote_latest_events.is_empty() {
-		let target_server = remote_server.clone();
-		let room_id = room_id.to_owned();
-		let timeline = services.rooms.timeline.clone();
-		let sending = services.sending.clone();
-		let event_handler = services.rooms.event_handler.clone();
-
-		services.server.runtime().spawn(Box::pin(async move {
-			let mut missing_latest = Vec::new();
-			for event_id in remote_latest_events {
-				if !timeline.pdu_exists(&event_id).await {
-					missing_latest.push(event_id);
-				}
-			}
-			if missing_latest.is_empty() {
-				return;
-			}
-			info!(
-				"Forward-filling {} missing extremities from {} after joining room {}",
-				missing_latest.len(),
-				target_server,
-				room_id
-			);
-			for event_id in missing_latest {
-				let request = federation::event::get_event::v1::Request {
-					event_id: event_id.clone(),
-					include_unredacted_content: Some(false),
-				};
-				let response = match sending
-					.send_federation_request(&target_server, request)
-					.await
-				{
-					| Ok(r) => r,
-					| Err(e) => {
-						warn!("Failed to fetch missing extremity {event_id}: {e}");
-						continue;
-					},
-				};
-				let (parsed_room_id, parsed_event_id, value) =
-					match event_handler.parse_incoming_pdu(&response.pdu).await {
-						| Ok(v) => v,
-						| Err(e) => {
-							warn!("Failed to parse extremity {event_id}: {e}");
-							continue;
-						},
-					};
-				if parsed_room_id != room_id {
-					continue;
-				}
-				if let Err(e) = event_handler
-					.handle_incoming_pdu(&target_server, &room_id, &parsed_event_id, value, true)
-					.await
-				{
-					warn!("Failed to handle extremity {event_id}: {e}");
-				}
-			}
-		}));
-	}
 
 	Ok(())
 }
