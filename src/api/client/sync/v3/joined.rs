@@ -871,6 +871,7 @@ async fn build_heroes(
 
 /// Collect updates to users' device lists for E2EE.
 #[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(skip_all)]
 async fn build_device_list_updates(
 	services: &Services,
 	SyncContext {

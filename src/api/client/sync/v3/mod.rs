@@ -282,6 +282,7 @@ pub(crate) async fn build_sync_events(
 		.and_then(|string| string.parse().ok());
 
 	let full_state = body.body.full_state;
+	tracing::error!(?last_sync_end_count, since = ?body.body.since, "DEBUG: SYNC");
 
 	// FilterDefinition is very large (0x1000 bytes), let's put it on the heap
 	let filter = Box::new(match body.body.filter.as_ref() {

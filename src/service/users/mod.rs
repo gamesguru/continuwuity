@@ -1110,11 +1110,15 @@ impl Service {
 		let from = from.unwrap_or(0);
 		let to = to.unwrap_or(u64::MAX);
 		let start = (user_or_room_id, from.saturating_add(1));
+
+		tracing::info!(%user_or_room_id, ?from, ?to, "keys_changed_user_or_room called");
+
 		self.db
 			.keychangeid_userid
 			.stream_from(&start)
 			.ignore_err()
-			.ready_take_while(move |((prefix, count), _): &KeyVal<'_>| {
+			.ready_take_while(move |((prefix, count), user_id): &KeyVal<'_>| {
+				tracing::info!(%prefix, %count, %user_id, expected_prefix = %user_or_room_id, "keys_changed_user_or_room yielded");
 				*prefix == user_or_room_id && *count <= to
 			})
 			.map(|((_, count), user_id): KeyVal<'_>| (user_id, count))
