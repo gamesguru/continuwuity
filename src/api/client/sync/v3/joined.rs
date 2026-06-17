@@ -901,7 +901,7 @@ async fn build_device_list_updates(
 				.room_members(room_id)
 				.filter_map(|member| async move {
 					(member != syncing_user
-						&& shares_a_room(services, syncing_user, member, Some(room_id)).await)
+						&& !shares_a_room(services, syncing_user, member, Some(room_id)).await)
 						.then_some(member.to_owned())
 				});
 
@@ -953,7 +953,7 @@ async fn build_device_list_updates(
 					| Leave if !shares_room => {
 						device_list_updates.left.insert(user_id);
 					},
-					| Join => {
+					| Join if !shares_room => {
 						device_list_updates.changed.insert(user_id);
 					},
 					| _ => (),

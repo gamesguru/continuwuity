@@ -18,7 +18,6 @@ use ruma::{
 		push_rules::PushRulesEvent,
 		room::{
 			encrypted::Relation,
-			member::{MembershipState, RoomMemberEventContent},
 			power_levels::RoomPowerLevelsEventContent,
 			redaction::RoomRedactionEventContent,
 		},
@@ -410,15 +409,6 @@ where
 					.state_cache
 					.update_membership(room_id, target_user_id, pdu, true)
 					.await?;
-
-				if let Ok(content) = pdu.get_content::<RoomMemberEventContent>() {
-					if content.membership == MembershipState::Join {
-						self.services
-							.users
-							.mark_device_key_update(target_user_id)
-							.await;
-					}
-				}
 
 				// Invalidate hierarchy cache: membership changes can affect
 				// restricted room accessibility (the `allow` list checks
