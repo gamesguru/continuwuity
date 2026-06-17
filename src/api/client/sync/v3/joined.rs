@@ -445,7 +445,9 @@ async fn fetch_shortstatehashes(
 				.next_shortstatehash(room_id, PduCount::Normal(last_sync_end_count))
 		}))
 		.await
-		.transpose()?;
+		.transpose()
+		.ok()
+		.flatten();
 
 	Ok(ShortStateHashes {
 		current_shortstatehash,
