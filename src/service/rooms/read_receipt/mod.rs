@@ -241,7 +241,7 @@ where
 	let json = aggregate_receipts(receipts);
 	let content = ReceiptEventContent::from_iter(json);
 
-	conduwuit::info!(
+	conduwuit::debug!(
 		target: "read_receipt_debug",
 		"Packed {} read receipts into EDU", content.len()
 	);
