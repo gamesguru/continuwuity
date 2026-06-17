@@ -247,6 +247,10 @@ impl Service {
 				if collected >= limit {
 					break;
 				}
+				// Stop traversing when we hit a backfilled event to keep segments isolated
+				let PduCount::Normal(_) = count else {
+					break;
+				};
 				entries.insert(pdu.event_id.clone(), (count, pdu.origin_server_ts));
 				graph.insert(
 					pdu.event_id.clone(),
@@ -258,10 +262,8 @@ impl Service {
 				}
 			}
 		} else {
-			info!("reorder_timeline: reading all PDUs from timeline...");
-			let pdus_backfill = self.pdus(room_id, Some(PduCount::min()));
-			let pdus_normal = self.pdus(room_id, Some(PduCount::Normal(0)));
-			let pdus = pdus_backfill.chain(pdus_normal);
+			info!("reorder_timeline: reading all normal PDUs from timeline...");
+			let pdus = self.pdus(room_id, Some(PduCount::Normal(0)));
 			pin_mut!(pdus);
 			while let Some((count, pdu)) = pdus.try_next().await? {
 				let eid = pdu.event_id.clone();

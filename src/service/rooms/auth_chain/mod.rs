@@ -1,21 +1,16 @@
 mod data;
 
-use std::{
-	collections::{BTreeSet, HashSet},
-	fmt::Debug,
-	sync::Arc,
-	time::Instant,
-};
+use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Instant};
 
 use conduwuit::{
-	Err, Result, at, debug, implement, info, trace,
+	Err, Result, debug, implement, info, trace,
 	utils::{
 		IterStream, MutexMap,
 		stream::{ReadyExt, TryBroadbandExt},
 	},
-	validated, warn,
+	warn,
 };
-use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use ruma::{EventId, OwnedEventId, RoomId};
 
 use self::data::Data;
@@ -32,8 +27,6 @@ struct Services {
 	timeline: Dep<rooms::timeline::Service>,
 	outlier: Dep<rooms::outlier::Service>,
 }
-
-type Bucket<'a> = BTreeSet<(u64, &'a EventId)>;
 
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
@@ -80,43 +73,67 @@ pub async fn get_auth_chain<'a, I>(
 where
 	I: Iterator<Item = &'a EventId> + Clone + Debug + ExactSizeIterator + Send + 'a,
 {
-	const NUM_BUCKETS: usize = 50; //TODO: change possible w/o disrupting db?
-	const BUCKET: Bucket<'_> = BTreeSet::new();
-
 	let started = Instant::now();
-	let mut starting_ids = self
+	let starting_ids: Vec<(ShortEventId, &EventId)> = self
 		.services
 		.short
 		.multi_get_or_create_shorteventid(starting_events.clone())
-		.zip(starting_events.clone().stream())
-		.boxed();
-
-	let mut buckets = [BUCKET; NUM_BUCKETS];
-	while let Some((short, starting_event)) = starting_ids.next().await {
-		let bucket: usize = short.try_into()?;
-		let bucket: usize = validated!(bucket % NUM_BUCKETS);
-		buckets[bucket].insert((short, starting_event));
-	}
+		.zip(starting_events.stream())
+		.collect()
+		.await;
 
 	debug!(
-		starting_events = ?starting_events.count(),
+		starting_events = ?starting_ids.len(),
 		elapsed = ?started.elapsed(),
 		"start",
 	);
 
-	let full_auth_chain: Vec<ShortEventId> = buckets
+	let mut full_auth_chain: HashSet<ShortEventId> = HashSet::new();
+	let mut uncached = Vec::new();
+
+	// Parallel check for starting events already in cache
+	let cache_checks = starting_ids
 		.into_iter()
-		.try_stream()
-		.broad_and_then(|chunk| self.get_auth_chain_outer(room_id, started, chunk))
-		.try_collect()
-		.map_ok(|auth_chain: Vec<_>| auth_chain.into_iter().flatten().collect())
-		.map_ok(|mut full_auth_chain: Vec<_>| {
-			full_auth_chain.sort_unstable();
-			full_auth_chain.dedup();
-			full_auth_chain
+		.try_stream::<conduwuit::Error>()
+		.broad_and_then(|(shortid, event_id)| async move {
+			let res = self.get_cached_eventid_authchain(&[shortid]).await;
+			Ok((shortid, event_id, res))
 		})
-		.boxed()
+		.try_collect::<Vec<_>>()
 		.await?;
+
+	for (shortid, event_id, cache_res) in cache_checks {
+		if let Ok(cached) = cache_res {
+			full_auth_chain.extend(cached.iter().copied());
+			full_auth_chain.insert(shortid);
+		} else {
+			uncached.push((shortid, event_id));
+		}
+	}
+
+	// Sequential walk for uncached starting events
+	for (shortid, event_id) in uncached {
+		let _guard = self.mutex_fetch.lock(event_id).await;
+
+		// Re-check cache under lock in case a concurrent walk populated it
+		if let Ok(cached) = self.get_cached_eventid_authchain(&[shortid]).await {
+			full_auth_chain.extend(cached.iter().copied());
+			full_auth_chain.insert(shortid);
+			continue;
+		}
+
+		let (auth_chain, is_complete) = self.get_auth_chain_inner(room_id, event_id).await?;
+		if is_complete {
+			self.cache_auth_chain_vec(vec![shortid], auth_chain.as_slice());
+		}
+
+		full_auth_chain.extend(auth_chain);
+		full_auth_chain.insert(shortid);
+	}
+
+	let mut full_auth_chain: Vec<ShortEventId> = full_auth_chain.into_iter().collect();
+	full_auth_chain.sort_unstable();
+	full_auth_chain.dedup();
 
 	info!(
 		chain_length = ?full_auth_chain.len(),
@@ -125,71 +142,6 @@ where
 	);
 
 	Ok(full_auth_chain)
-}
-
-#[implement(Service)]
-async fn get_auth_chain_outer(
-	&self,
-	room_id: &RoomId,
-	started: Instant,
-	chunk: Bucket<'_>,
-) -> Result<Vec<ShortEventId>> {
-	let chunk_key: Vec<ShortEventId> = chunk.iter().map(at!(0)).collect();
-
-	if chunk_key.is_empty() {
-		return Ok(Vec::new());
-	}
-
-	if let Ok(cached) = self.get_cached_eventid_authchain(&chunk_key).await {
-		return Ok(cached.to_vec());
-	}
-
-	let chunk_results: Vec<(Vec<ShortEventId>, bool)> = chunk
-		.into_iter()
-		.try_stream::<conduwuit::Error>()
-		.broad_and_then(|(shortid, event_id)| async move {
-			let _guard = self.mutex_fetch.lock(event_id).await;
-
-			if let Ok(cached) = self.get_cached_eventid_authchain(&[shortid]).await {
-				return Ok((cached.to_vec(), true));
-			}
-
-			let (auth_chain, is_complete) = self.get_auth_chain_inner(room_id, event_id).await?;
-			if is_complete {
-				self.cache_auth_chain_vec(vec![shortid], auth_chain.as_slice());
-			}
-			info!(
-				%event_id,
-				elapsed = ?started.elapsed(),
-				"Cache missed event - starting recursive auth chain walk"
-			);
-
-			Ok((auth_chain, is_complete))
-		})
-		.try_collect()
-		.await?;
-
-	let mut chunk_cache = Vec::new();
-	let mut chunk_is_complete = true;
-	for (auth_chain, is_complete) in chunk_results {
-		chunk_cache.extend(auth_chain);
-		if !is_complete {
-			chunk_is_complete = false;
-		}
-	}
-	chunk_cache.sort_unstable();
-	chunk_cache.dedup();
-
-	if chunk_is_complete {
-		self.cache_auth_chain_vec(chunk_key, chunk_cache.as_slice());
-	}
-	info!(
-		chunk_cache_length = ?chunk_cache.len(),
-		elapsed = ?started.elapsed(),
-		"Cache missed chunk - completed recursive walk",
-	);
-
-	Ok(chunk_cache)
 }
 
 #[implement(Service)]
