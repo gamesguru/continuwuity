@@ -316,17 +316,13 @@ pub(super) async fn get_remote_dag(
 	};
 
 	// Build server pool: primary + auto-discovered EMA-ranked room servers
-	let origin = room_id
-		.server_name()
-		.filter(|s| !self.services.globals.server_is_ours(s))
-		.unwrap_or_else(|| self.services.globals.server_name());
 	let mut pool = self
 		.services
 		.rooms
 		.event_handler
 		.build_server_pool(
 			&room_id,
-			origin,
+			&server,
 			self.services.server.config.federation_fallback_room_servers,
 		)
 		.await;
