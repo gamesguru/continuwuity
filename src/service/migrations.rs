@@ -328,12 +328,6 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run v19 migrations: {e}"))?;
 	}
 
-	if services.globals.db.database_version().await < 20 {
-		db_lt_20(services)
-			.await
-			.map_err(|e| err!("Failed to run v20 migrations: {e}"))?;
-	}
-
 	if db["global"]
 		.get(POPULATE_TOPOLOGICAL_INDEX_MARKER)
 		.await
@@ -365,6 +359,7 @@ async fn migrate(services: &Services) -> Result<()> {
 		}
 	}
 	services.globals.db.set_schema_fingerprint(&expected);
+	// --- END v19 migration ---
 
 	{
 		let patterns = services.globals.forbidden_usernames();
@@ -712,6 +707,8 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 }
 
 const POPULATE_TOPOLOGICAL_INDEX_MARKER: &[u8] = b"populate_topological_index";
+const POPULATE_SHORTPREVEVENTS_MARKER: &[u8] = b"populate_shortprevevents";
+
 async fn populate_topological_index(services: &Services) -> Result<()> {
 	#[derive(serde::Deserialize)]
 	struct PrevEventsOnly {

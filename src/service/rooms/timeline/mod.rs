@@ -1057,43 +1057,48 @@ impl Service {
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		let capacity = if tail == usize::MAX { 0 } else { tail };
-		let mut pdus = Vec::with_capacity(capacity);
+		let mut eids = Vec::with_capacity(capacity);
 
-		let mut stream = std::pin::pin!(self.pdus_rev(room_id, None));
-		while let Some(Ok((_count, pdu))) = stream.next().await {
-			pdus.push(pdu);
-			if pdus.len() >= tail {
+		let mut stream = std::pin::pin!(self.db.room_event_ids_rev(room_id, None));
+		while let Some(Ok(eid)) = stream.next().await {
+			eids.push(eid);
+			if eids.len() >= tail {
 				break;
 			}
 		}
 
-		// pdus_rev returns newest first. We need oldest for true_extremities
-		pdus.reverse();
+		// room_event_ids_rev returns newest first. We need oldest for true_extremities
+		eids.reverse();
 
-		let mut ts_map = HashMap::with_capacity(pdus.len());
-		let mut id_map: HashMap<OwnedEventId, u32> = HashMap::with_capacity(pdus.len());
-		let mut reverse_id_map: Vec<OwnedEventId> = Vec::with_capacity(pdus.len());
+		let mut short_ids: Vec<ShortEventId> = Vec::with_capacity(eids.len());
+		for eid in &eids {
+			let short = self.services.short.get_shorteventid(eid).await?;
+			short_ids.push(short);
+		}
 
-		let get_or_insert_id = |event_id: &OwnedEventId,
-		                        id_map: &mut HashMap<OwnedEventId, u32>,
-		                        reverse_id_map: &mut Vec<OwnedEventId>|
+		let mut ts_map = HashMap::with_capacity(eids.len());
+		let mut id_map: HashMap<ShortEventId, u32> = HashMap::with_capacity(eids.len());
+		let mut reverse_id_map: Vec<ShortEventId> = Vec::with_capacity(eids.len());
+
+		let get_or_insert_id = |short: ShortEventId,
+		                        id_map: &mut HashMap<ShortEventId, u32>,
+		                        reverse_id_map: &mut Vec<ShortEventId>|
 		 -> u32 {
-			if let Some(&id) = id_map.get(event_id) {
+			if let Some(&id) = id_map.get(&short) {
 				id
 			} else {
 				let id = u32::try_from(reverse_id_map.len()).unwrap_or(0);
-				id_map.insert(event_id.clone(), id);
-				reverse_id_map.push(event_id.clone());
+				id_map.insert(short, id);
+				reverse_id_map.push(short);
 				id
 			}
 		};
 
-		let mut graph: Vec<RoaringBitmap> = Vec::with_capacity(pdus.len());
-		let mut sorted: Vec<u32> = Vec::with_capacity(pdus.len());
+		let mut graph: Vec<RoaringBitmap> = Vec::with_capacity(eids.len());
+		let mut sorted: Vec<u32> = Vec::with_capacity(eids.len());
 
-		for pdu in pdus {
-			let event_id = pdu.event_id.clone();
-			let id = get_or_insert_id(&event_id, &mut id_map, &mut reverse_id_map);
+		for short in &short_ids {
+			let id = get_or_insert_id(*short, &mut id_map, &mut reverse_id_map);
 			let id_usize = usize::try_from(id).expect("u32 fits in usize");
 
 			if id_usize >= graph.len() {
@@ -1101,16 +1106,20 @@ impl Service {
 			}
 
 			let mut prev_bitmap = RoaringBitmap::new();
-			for prev in pdu.prev_events() {
+			let prev_shorts = self
+				.db
+				.get_shortprevevents(*short)
+				.await
+				.unwrap_or_default();
+			for prev_short in prev_shorts {
 				prev_bitmap.insert(get_or_insert_id(
-					&prev.to_owned(),
+					prev_short,
 					&mut id_map,
 					&mut reverse_id_map,
 				));
 			}
 			graph[id_usize] = prev_bitmap;
 			sorted.push(id);
-			ts_map.insert(event_id, pdu.origin_server_ts);
 		}
 
 		// Calculate true extremities via roaring bitmap intersections
@@ -1121,8 +1130,10 @@ impl Service {
 
 		let mut current_bm = RoaringBitmap::new();
 		for eid in &current_set {
-			if let Some(&id) = id_map.get(eid) {
-				current_bm.insert(id);
+			if let Ok(short) = self.services.short.get_shorteventid(eid).await {
+				if let Some(&id) = id_map.get(&short) {
+					current_bm.insert(id);
+				}
 			}
 		}
 
@@ -1130,14 +1141,24 @@ impl Service {
 		let merged_extremities_bm =
 			merge_true_extremities_roaring(&true_extremities_bm, &current_bm, &phantom_tips_bm);
 
-		let mut true_extremities_set: HashSet<OwnedEventId> = merged_extremities_bm
-			.into_iter()
-			.map(|id| reverse_id_map[usize::try_from(id).expect("u32 fits in usize")].clone())
-			.collect();
+		let mut true_extremities_set: HashSet<OwnedEventId> = HashSet::with_capacity(
+			usize::try_from(merged_extremities_bm.len()).unwrap_or(usize::MAX),
+		);
+		for id in merged_extremities_bm {
+			let short = reverse_id_map[usize::try_from(id).expect("u32 fits in usize")];
+			if let Ok(eid) = self.services.short.get_eventid_from_short(short).await {
+				true_extremities_set.insert(eid);
+			}
+		}
 
 		// Add current extremities that were outside the graph window
 		for eid in &current_set {
-			if !id_map.contains_key(eid) {
+			if let Ok(short) = self.services.short.get_shorteventid(eid).await {
+				if !id_map.contains_key(&short) {
+					true_extremities_set.insert(eid.clone());
+				}
+			} else {
+				// If we can't even get its shorteventid, still preserve it just in case
 				true_extremities_set.insert(eid.clone());
 			}
 		}
@@ -1145,15 +1166,20 @@ impl Service {
 		// Ensure we have timestamps for all tips we intend to keep
 		for eid in &true_extremities_set {
 			if !ts_map.contains_key(eid) {
-				if let Ok(pdu) = self.get_pdu(eid).await {
-					ts_map.insert(eid.to_owned(), pdu.origin_server_ts);
+				if let Ok(ts) = self.db.get_origin_server_ts(eid).await {
+					ts_map.insert(eid.to_owned(), ts);
 				}
 			}
 		}
 
 		let mut final_extremities: Vec<OwnedEventId> = true_extremities_set.into_iter().collect();
 
-		final_extremities.sort_by_key(|eid| ts_map.get(eid).copied().unwrap_or_default());
+		final_extremities.sort_by_key(|eid| {
+			ts_map
+				.get(eid)
+				.copied()
+				.unwrap_or(ruma::MilliSecondsSinceUnixEpoch(0_u32.into()))
+		});
 
 		let num_true_extremities = final_extremities.len();
 

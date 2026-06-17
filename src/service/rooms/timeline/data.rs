@@ -1208,7 +1208,7 @@ impl Data {
 		&'a self,
 		room_id: &'a RoomId,
 		until: Option<PduCount>,
-	) -> impl Stream<Item = Result<ruma::OwnedEventId>> + Send + 'a {
+	) -> impl Stream<Item = Result<OwnedEventId>> + Send + 'a {
 		let seek_count = until
 			.unwrap_or_else(PduCount::max)
 			.saturating_inc(Direction::Backward);
@@ -1222,13 +1222,14 @@ impl Data {
 					.and_then(move |val| async move {
 						let s = std::str::from_utf8(&val)
 							.map_err(|e| err!(Database("Invalid UTF-8 in event ID: {e:?}")))?;
-						ruma::OwnedEventId::parse(s)
+						OwnedEventId::parse(s)
 							.map_err(|e| err!(Database("Invalid EventId: {e:?}")))
 					})
 			})
 			.try_flatten_stream()
 	}
 
+	#[allow(dead_code)]
 	pub(super) fn store_shortprevevents(
 		&self,
 		shorteventid: rooms::short::ShortEventId,
@@ -1264,8 +1265,8 @@ impl Data {
 		let key = shorteventid.to_be_bytes();
 		let val = self.shorteventid_shortprevevents.get(&key).await?;
 		let prev_shorts = val
-			.chunks_exact(std::mem::size_of::<u64>())
-			.map(conduwuit::utils::u64_from_u8)
+			.chunks_exact(size_of::<u64>())
+			.map(utils::u64_from_u8)
 			.collect();
 		Ok(prev_shorts)
 	}
