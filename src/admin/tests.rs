@@ -874,6 +874,7 @@ async fn test_busted_dag_resolution() {
 	let room_id = RoomId::parse("!L58ME6ufiP49v97UIOBIpvWKEgj4912JmECPuDzlvCI").unwrap();
 
 	// 1. Import the DAG
+	let start_import = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -886,8 +887,11 @@ async fn test_busted_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
+	println!("yolo import-pdus took {:?}", start_import.elapsed());
 
 	// Run reorder-timeline
+	println!("Starting yolo reorder-timeline...");
+	let start_reorder = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -897,6 +901,7 @@ async fn test_busted_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
+	println!("yolo reorder-timeline took {:?}", start_reorder.elapsed());
 
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
@@ -920,6 +925,8 @@ async fn test_busted_dag_resolution() {
 	drop(state_lock);
 
 	// Run force-set-state (to trigger re-resolution on local DAG)
+	println!("Starting force-set-state...");
+	let start_force = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -929,8 +936,11 @@ async fn test_busted_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "force-set-state failed: {res:?}");
+	println!("force-set-state took {:?}", start_force.elapsed());
 
 	// Run check-rooms (to check sanity)
+	println!("Starting check-rooms...");
+	let start_check = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -940,8 +950,11 @@ async fn test_busted_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "check-rooms failed: {res:?}");
+	println!("check-rooms took {:?}", start_check.elapsed());
 
 	// Run audit-membership
+	println!("Starting audit-membership...");
+	let start_audit = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -951,6 +964,7 @@ async fn test_busted_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "audit-membership failed: {res:?}");
+	println!("audit-membership took {:?}", start_audit.elapsed());
 
 	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
 	let exts_count = services

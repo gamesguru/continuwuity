@@ -463,6 +463,7 @@ impl Service {
 		// The DAG graph is used for extremity calculation, not ordering — topological
 		// sort produces bad client UX by interleaving old state events with recent
 		// messages whenever the DAG has branches or gaps.
+		let start = std::time::Instant::now();
 		info!("reorder_timeline: sorting {} events by origin_server_ts...", entries.len());
 		let mut sorted: Vec<OwnedEventId> = entries.keys().cloned().collect();
 		sorted.sort_by(|a, b| {
@@ -470,17 +471,13 @@ impl Service {
 			let (_, ts_b) = entries[b];
 			ts_a.cmp(&ts_b).then_with(|| a.cmp(b))
 		});
-
-		// BACKUP PHASE: Safely backup all timeline pointers to the backup table BEFORE
-		// deleting them from the timeline. This prevents data loss since
-		// remove_from_timeline_by_id deletes the room_pducount_eventid entries that
-		// exclusively route to normal event JSON.
-		self.backup_timeline_entries(room_id, shortroomid, &entries)
-			.await;
+		info!("reorder_timeline: sort took {:?}", start.elapsed());
 
 		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
+		let remove_start = std::time::Instant::now();
 		self.remove_old_timeline_entries(shortroomid, &sorted, &entries)
 			.await;
+		info!("reorder_timeline: remove old took {:?}", remove_start.elapsed());
 
 		// Re-insert in topological order with fresh PduCount values
 		let count = sorted.len();
@@ -493,6 +490,7 @@ impl Service {
 			 {batch_start}..{})...",
 			batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
 		);
+		let reinsert_start = std::time::Instant::now();
 		let final_ssh = self
 			.reinsert_timeline_entries(
 				room_id,
@@ -502,6 +500,7 @@ impl Service {
 				no_compute_state,
 			)
 			.await;
+		info!("reorder_timeline: reinsert took {:?}", reinsert_start.elapsed());
 
 		// Update the room's authoritative shortstatehash to match the
 		// recomputed state at the tip. Without this, Room SSH stays stale
@@ -558,11 +557,7 @@ impl Service {
 			);
 		}
 
-		// Repair unsigned.prev_content JSON values which may have been missed during
-		// DAG holes
-		if let Err(e) = self.repair_room_unsigned(room_id).await {
-			warn!("reorder_timeline: failed to repair unsigned payload values: {e}");
-		}
+		info!("reorder_timeline: skipped repair unsigned per metadata design");
 
 		// Rebuild membership cache from the authoritative state snapshot.
 		// This fixes stale/missing entries left by previous DAG fractures.
@@ -693,23 +688,13 @@ impl Service {
 			}
 		}
 
+		let sync_start = std::time::Instant::now();
 		self.services.state_cache.update_joined_count(room_id).await;
 		info!(
 			"reorder_timeline: synced {members_synced} membership cache entries, removed \
 			 {stale_removed} stale"
 		);
-
-		// Clean up the backup routing map now that the timeline is safely re-inserted
-		let mut backup_batch = database::rocksdb::WriteBatch::default();
-		for &(old_count, _) in entries.values() {
-			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-			self.db
-				.room_pducount_eventid_backup
-				.remove_from_batch(&mut backup_batch, old_pdu_id.as_ref());
-		}
-		self.db
-			.room_pducount_eventid_backup
-			.apply_batch(&backup_batch);
+		info!("reorder_timeline: sweep cache took {:?}", sync_start.elapsed());
 
 		drop(state_lock);
 

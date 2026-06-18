@@ -173,7 +173,7 @@ test:   ##H Run tests
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		AWS_LC_RS_NO_BUNDLE=1 \
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
-		cargo test $(CARGO_SCOPE) --locked --all-targets --features full --timings $(CARGO_FLAGS)
+		cargo test --locked --all-targets $(if $(p),,$(if $(CRATE),,--features full)) --timings $(CARGO_FLAGS) $(CARGO_SCOPE)
 
 
 PREFIX ?= /usr/local

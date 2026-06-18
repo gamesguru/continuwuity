@@ -1622,6 +1622,9 @@ async fn add_event_and_auth_chain_to_graph<E, F, Fut>(
 {
 	let mut state = vec![event_id];
 	while let Some(eid) = state.pop() {
+		if graph.contains_key(&eid) {
+			continue;
+		}
 		graph.entry(eid.clone()).or_default();
 		let event = fetch_event(eid.clone()).await;
 		let auth_events = event.as_ref().map(Event::auth_events).into_iter().flatten();
