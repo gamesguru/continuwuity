@@ -418,3 +418,11 @@ pub async fn pdu_shortstatehash(&self, event_id: &EventId) -> Result<ShortStateH
 		.await
 		.deserialized()
 }
+
+#[implement(super::Service)]
+#[inline]
+pub async fn state_is_empty(&self, shortstatehash: ShortStateHash) -> bool {
+	self.load_full_state(shortstatehash)
+		.await
+		.map_or(true, |full_state| full_state.is_empty())
+}
