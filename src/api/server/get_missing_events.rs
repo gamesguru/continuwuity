@@ -148,7 +148,9 @@ pub(crate) async fn get_missing_events_route(
 		event_map.insert(id.clone(), raw);
 		depth_map.insert(id.clone(), depth);
 		for prev in prevs {
-			graph.entry(prev).or_default().push(id.clone());
+			if in_degree.contains_key(&prev) {
+				graph.entry(prev).or_default().push(id.clone());
+			}
 		}
 	}
 
