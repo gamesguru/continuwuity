@@ -88,7 +88,7 @@ pub(super) async fn import_pdus(
 
 		futures.push(async move {
 			total.fetch_add(1, Ordering::Relaxed);
-			let value: CanonicalJsonObject = match serde_json::from_str(&line) {
+			let value: CanonicalJsonObject = match tokio::task::spawn_blocking(move || serde_json::from_str(&line)).await.unwrap() {
 				| Ok(v) => v,
 				| Err(e) => {
 					warn!("import_pdus: Failed to parse line as JSON: {e}");
@@ -120,11 +120,17 @@ pub(super) async fn import_pdus(
 				.unwrap_or(false);
 
 			let result: Result<(OwnedEventId, bool)> = async {
-				let (eid, value, pdu) = conduwuit::utils::pdu_parser::parse_and_clean_pdu(
-					value,
-					room_id_ref.as_ref(),
-					room_version_ref,
-				)?;
+				let (eid, value, pdu) = tokio::task::spawn_blocking({
+					let room_id_ref = room_id_ref.clone();
+					let room_version_ref = room_version_ref.clone();
+					move || {
+						conduwuit::utils::pdu_parser::parse_and_clean_pdu(
+							value,
+							room_id_ref.as_ref(),
+							&room_version_ref,
+						)
+					}
+				}).await.unwrap()?;
 
 				if is_outlier {
 					self.services
@@ -266,7 +272,7 @@ pub(super) async fn import_pdus(
 			}
 		});
 
-		while futures.len() >= 100 {
+		while futures.len() >= 10_000 {
 			futures.next().await;
 		}
 	}

@@ -741,9 +741,30 @@ impl Service {
 	) -> Option<u64> {
 		let count = sorted.len();
 
-		let mut current_shortstatehash = if no_compute_state {
-			None
-		} else {
+		if no_compute_state {
+			let mut futures = futures::stream::FuturesUnordered::new();
+			for (i, event_id) in sorted.iter().enumerate() {
+				let event_id = event_id.clone();
+				let new_count = batch_start
+					.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
+					.saturating_add(1);
+				let pdu_count = PduCount::Normal(new_count);
+				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+				
+				futures.push(async move {
+					if let Ok((pdu, json)) = self.db.get_from_eventid_pdu(&event_id).await {
+						self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
+					}
+				});
+				if futures.len() >= 10000 {
+					futures.next().await;
+				}
+			}
+			while futures.next().await.is_some() {}
+			return None;
+		}
+
+		let mut current_shortstatehash = {
 			let mut ssh = 0;
 			if let Some(oldest_event_id) = sorted.first() {
 				if let Ok(oldest_pdu) = self
@@ -908,20 +929,12 @@ impl Service {
 	/// sync spam.
 	#[tracing::instrument(skip(self), level = "info")]
 	pub async fn rebuild_state(&self, room_id: &RoomId) -> Result<()> {
-		use std::{collections::BTreeSet, sync::Arc};
+		use std::{
+			collections::{BTreeSet, HashMap, HashSet},
+			sync::Arc,
+		};
 
 		use futures::StreamExt;
-
-		let room_create = self
-			.services
-			.state_accessor
-			.room_state_get(room_id, &ruma::events::StateEventType::RoomCreate, "")
-			.await
-			.map_err(|_| err!(Database("Room create event not found")))?;
-		let create_content: ruma::events::room::create::RoomCreateEventContent =
-			serde_json::from_str(room_create.content().get())
-				.map_err(|e| err!(Database("Failed to parse RoomCreateEventContent: {e}")))?;
-		let room_version = create_content.room_version;
 
 		let mut stream = std::pin::pin!(self.pdus(room_id, None));
 		let mut current_shortstatehash = 0;
@@ -929,48 +942,172 @@ impl Service {
 		let mut last_removed = Arc::new(BTreeSet::new());
 		let mut processed = 0_usize;
 
+		// Load all timeline events into memory for topological sort
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+		let mut events: HashMap<OwnedEventId, PduEvent> = HashMap::new();
+
+		info!("rebuild_state: reading timeline events into memory for sorting...");
+		while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
+			let id = pdu.event_id().to_owned();
+			let prev_events: HashSet<_> = pdu.prev_events().map(ToOwned::to_owned).collect();
+			graph.insert(id.clone(), prev_events);
+			events.insert(id, pdu);
+		}
+
+		let mut room_version = ruma::RoomVersionId::V1;
+		for pdu in events.values() {
+			if *pdu.kind() == TimelineEventType::RoomCreate {
+				if let Ok(create_content) = serde_json::from_str::<ruma::events::room::create::RoomCreateEventContent>(pdu.content().get()) {
+					room_version = create_content.room_version;
+					break;
+				}
+			}
+		}
+
+		info!("rebuild_state: loaded {} events. Filtering missing parents...", events.len());
+
+		for prev_events in graph.values_mut() {
+			prev_events.retain(|parent_id| events.contains_key(parent_id));
+		}
+
+		info!("rebuild_state: starting topological sort...");
+
+		let fetch_event_fn = |id: OwnedEventId| {
+			let (depth, ts) = events
+				.get(&id)
+				.map(|p| (p.depth(), p.origin_server_ts()))
+				.unwrap_or((ruma::uint!(0), ruma::MilliSecondsSinceUnixEpoch(ruma::uint!(0))));
+			
+			futures::future::ready(Result::Ok((depth.into(), ts)))
+		};
+
+		let sorted = conduwuit_core::matrix::state_res::lexicographical_topological_sort(&graph, &fetch_event_fn)
+			.await
+			.map_err(|e| err!(Database("DAG sort failed: {e}")))?;
+
+		info!("rebuild_state: topological sort finished. Starting O(1) state resolution...");
+
+		let mut ssh_cache: HashMap<OwnedEventId, u64> = HashMap::new();
+		let mut resolved_state_cache: HashMap<Vec<u64>, u64> = HashMap::new();
+		let mut processed = 0_usize;
+		let empty_ssh = self
+			.services
+			.state_compressor
+			.save_state(room_id, Arc::new(std::collections::BTreeSet::new()))
+			.await?
+			.shortstatehash;
+
 		let mut cork = Some(self.db.db.cork());
 
-		while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
+		for eid in sorted {
+			let Some(pdu) = events.get(&eid) else { continue };
 			processed = processed.saturating_add(1);
 
-			// Resolve state mathematically
-			let state_after_opt = self
-				.services
-				.event_handler
-				.state_at_incoming_resolved(&pdu, room_id, &room_version)
-				.await?;
+			// Find parent state
+			let prev_sshs: Vec<u64> = pdu
+				.prev_events()
+				.filter_map(|prev_id| ssh_cache.get(prev_id).copied())
+				.collect();
+			
+			let mut unique_sshs = prev_sshs.clone();
+			unique_sshs.sort_unstable();
+			unique_sshs.dedup();
 
-			let state_after = state_after_opt.unwrap_or_default();
+			let state_before = match unique_sshs.len() {
+				| 1 => unique_sshs[0], // O(1) single-parent fast path
+				| 0 => empty_ssh,
+				| _ => {
+					if let Some(&cached_ssh) = resolved_state_cache.get(&unique_sshs) {
+						cached_ssh
+					} else {
+						// Slow path for forks
+						let state_after_opt = self
+							.services
+							.event_handler
+							.state_at_incoming_resolved(pdu, room_id, &room_version)
+							.await?;
+						let state_after = state_after_opt.unwrap_or_default();
+						let compressed_state: std::collections::BTreeSet<_> = self
+							.services
+							.state_compressor
+							.compress_state_events(state_after.iter().map(|(k, id)| (k, &**id)))
+							.collect()
+							.await;
+						let state_delta = self
+							.services
+							.state_compressor
+							.save_state(room_id, Arc::new(compressed_state))
+							.await?;
+						
+						last_added = state_delta.added.clone();
+						last_removed = state_delta.removed.clone();
+						let ssh = state_delta.shortstatehash;
+						resolved_state_cache.insert(unique_sshs, ssh);
+						ssh
+					}
+				}
+			};
 
-			let compressed_state: BTreeSet<_> = self
-				.services
-				.state_compressor
-				.compress_state_events(state_after.iter().map(|(k, id)| (k, &**id)))
-				.collect()
-				.await;
+			let mut state_after = state_before;
 
-			// Compress and save the state delta
-			let state_delta = self
-				.services
-				.state_compressor
-				.save_state(room_id, Arc::new(compressed_state))
-				.await?;
+			if let Some(state_key) = pdu.state_key() {
+				let states_parents = if state_before != 0 {
+					self.services
+						.state_compressor
+						.load_shortstatehash_info(state_before)
+						.await
+						.unwrap_or_default()
+				} else {
+					Vec::new()
+				};
+				let shortstatekey = self
+					.services
+					.short
+					.get_or_create_shortstatekey(&pdu.kind().to_string().into(), state_key)
+					.await;
+				let new = self
+					.services
+					.state_compressor
+					.compress_state_event(shortstatekey, pdu.event_id())
+					.await;
+				let replaces = states_parents.last().and_then(|info| {
+					info.full_state.as_ref().expect("top frame").iter().find(
+						|bytes: &&rooms::state_compressor::CompressedStateEvent| {
+							bytes.starts_with(&shortstatekey.to_be_bytes())
+						},
+					)
+				});
 
-			current_shortstatehash = state_delta.shortstatehash;
-			last_added = state_delta.added;
-			last_removed = state_delta.removed;
+				if Some(&new) != replaces {
+					if let Ok(new_ssh) = self.services.globals.next_count() {
+						let mut statediffnew =
+							rooms::state_compressor::CompressedState::new();
+						statediffnew.insert(new);
+						let mut statediffremoved =
+							rooms::state_compressor::CompressedState::new();
+						if let Some(replaces) = replaces {
+							statediffremoved.insert(*replaces);
+						}
+						let _ = self.services.state_compressor.save_state_from_diff(
+							new_ssh,
+							Arc::new(statediffnew.clone()),
+							Arc::new(statediffremoved.clone()),
+							1000000, // diff_to_sibling
+							states_parents,
+						);
+						state_after = new_ssh;
+						last_added = Arc::new(statediffnew);
+						last_removed = Arc::new(statediffremoved);
+					}
+				}
+			}
 
-			// Update the pdu shortstatehash in DB
-			let shorteventid = self
-				.services
-				.short
-				.get_or_create_shorteventid(&pdu.event_id)
-				.await;
-
-			self.services
-				.state
-				.set_pdu_shortstatehash(shorteventid, current_shortstatehash);
+			ssh_cache.insert(eid.clone(), state_after);
+			self.services.state.set_pdu_shortstatehash(
+				self.services.short.get_or_create_shorteventid(&eid).await,
+				state_after,
+			);
+			current_shortstatehash = state_after;
 
 			if processed.is_multiple_of(1000) {
 				info!("rebuild_state: processed {processed} events...");

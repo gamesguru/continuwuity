@@ -686,18 +686,20 @@ impl Data {
 			.short
 			.get_or_create_shorteventid(&pdu.event_id)
 			.await;
-		let mut prev_shorts = Vec::new();
-		for prev in pdu.prev_events() {
-			let prev_short = self.services.short.get_or_create_shorteventid(prev).await;
-			prev_shorts.push(prev_short);
-		}
+		let prev_shorts: Vec<_> = self
+			.services
+			.short
+			.multi_get_or_create_shorteventid(pdu.prev_events())
+			.collect()
+			.await;
 		self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
 
-		let mut auth_shorts = Vec::new();
-		for auth in pdu.auth_events() {
-			let auth_short = self.services.short.get_or_create_shorteventid(auth).await;
-			auth_shorts.push(auth_short);
-		}
+		let auth_shorts: Vec<_> = self
+			.services
+			.short
+			.multi_get_or_create_shorteventid(pdu.auth_events())
+			.collect()
+			.await;
 		self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
 
 		self.eventid_pdu.apply_batch(&batch);
@@ -867,18 +869,20 @@ impl Data {
 				.short
 				.get_or_create_shorteventid(event_id)
 				.await;
-			let mut prev_shorts = Vec::new();
-			for prev in pdu.prev_events() {
-				let prev_short = self.services.short.get_or_create_shorteventid(prev).await;
-				prev_shorts.push(prev_short);
-			}
+			let prev_shorts: Vec<_> = self
+				.services
+				.short
+				.multi_get_or_create_shorteventid(pdu.prev_events())
+				.collect()
+				.await;
 			self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
 
-			let mut auth_shorts = Vec::new();
-			for auth in pdu.auth_events() {
-				let auth_short = self.services.short.get_or_create_shorteventid(auth).await;
-				auth_shorts.push(auth_short);
-			}
+			let auth_shorts: Vec<_> = self
+				.services
+				.short
+				.multi_get_or_create_shorteventid(pdu.auth_events())
+				.collect()
+				.await;
 			self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
 		}
 
