@@ -152,10 +152,12 @@ pub(crate) async fn get_missing_events_route(
 		}
 	}
 
-	for edges in graph.values() {
-		for to in edges {
-			if let Some(deg) = in_degree.get_mut(to) {
-				*deg = deg.saturating_add(1);
+	for (prev, edges) in graph.iter() {
+		if in_degree.contains_key(prev) {
+			for to in edges {
+				if let Some(deg) = in_degree.get_mut(to) {
+					*deg = deg.saturating_add(1);
+				}
 			}
 		}
 	}
