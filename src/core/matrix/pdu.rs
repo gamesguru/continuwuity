@@ -94,6 +94,16 @@ impl Pdu {
 		let mut pdu: Self = serde_json::from_value(serde_json::to_value(json)?)?;
 		pdu.event_id = event_id.to_owned();
 
+		if pdu.kind.to_string().chars().count() > 255 {
+			return Err(crate::err!(Request(InvalidParam("Event type is too long"))));
+		}
+
+		if let Some(state_key) = &pdu.state_key {
+			if state_key.chars().count() > 255 {
+				return Err(crate::err!(Request(InvalidParam("State key is too long"))));
+			}
+		}
+
 		if pdu.room_id.is_none() {
 			if pdu.kind == TimelineEventType::RoomCreate {
 				// V12+: room_id is omitted from the signed content. Derive it

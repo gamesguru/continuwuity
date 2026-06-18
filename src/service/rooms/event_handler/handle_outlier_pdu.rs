@@ -237,9 +237,7 @@ where
 		}
 	}
 
-	let pdu_event = match serde_json::from_value::<PduEvent>(
-		serde_json::to_value(&incoming_pdu).expect("CanonicalJsonObj is a valid JsonValue"),
-	) {
+	let pdu_event = match PduEvent::from_id_val(event_id, incoming_pdu.clone(), Some(room_id)) {
 		| Ok(pdu) => pdu,
 		| Err(e) => {
 			// Persist as a rejected outlier to preserve the DAG chain.
@@ -389,9 +387,8 @@ where
 								"event_id".to_owned(),
 								CanonicalJsonValue::String(auth_eid.as_str().to_owned()),
 							);
-							match serde_json::from_value::<PduEvent>(
-								serde_json::to_value(&auth_val).unwrap_or_default(),
-							) {
+							match PduEvent::from_id_val(auth_eid, auth_val.clone(), Some(room_id))
+							{
 								| Ok(parsed) =>
 									if check_room_id(room_id, &parsed).is_ok() {
 										info!(

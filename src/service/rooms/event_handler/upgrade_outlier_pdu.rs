@@ -700,12 +700,12 @@ where
 			)
 			.await;
 
-		if any_prev_rejected && all_prevs_rejected {
+		if incoming_pdu.state_key().is_none() || (any_prev_rejected && all_prevs_rejected) {
 			// All non-timeline prev_events are rejected — no point fetching
 			// state from federation. Fall through to current room state.
 			debug!(
 				event_id = %incoming_pdu.event_id,
-				"Skipping /state_ids fetch: prev_events are rejected; using current room state"
+				"Skipping /state_ids fetch: not a state event or prev_events are rejected; using current room state"
 			);
 		} else {
 			// Attempt a synchronous /state_ids fetch from the sending server

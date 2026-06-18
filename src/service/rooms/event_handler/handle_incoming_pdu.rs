@@ -486,7 +486,7 @@ pub async fn process_timeline_upgrade(
 		origin,
 		create_event,
 		room_id,
-		first_ts_in_room,
+		event_id,
 		incoming_pdu.prev_events(),
 	))
 	.await?;

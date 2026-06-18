@@ -1,1 +1,1 @@
-{"Action":"fail","Test":"TestOutboundFederationEventSizeGetMissingEvents"}
+{"Action":"pass","Test":"TestOutboundFederationEventSizeGetMissingEvents"}

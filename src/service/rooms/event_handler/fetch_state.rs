@@ -203,9 +203,9 @@ where
 									ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),
 								);
 
-								if let Ok(pdu) = serde_json::from_value::<PduEvent>(
-									serde_json::to_value(&val).expect("valid JSON"),
-								) {
+								if let Ok(pdu) =
+									PduEvent::from_id_val(&eid, val.clone(), Some(room_id))
+								{
 									if crate::rooms::event_handler::check_room_id(room_id, &pdu)
 										.is_ok()
 									{

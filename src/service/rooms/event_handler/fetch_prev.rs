@@ -10,7 +10,7 @@ use conduwuit::{
 };
 use futures::{StreamExt, stream::FuturesUnordered};
 use ruma::{
-	CanonicalJsonValue, EventId, MilliSecondsSinceUnixEpoch, OwnedEventId, RoomId, ServerName,
+	CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
 	api::federation::event::get_missing_events,
 };
 
@@ -24,7 +24,7 @@ pub(super) async fn fetch_prev<'a, Pdu, Events>(
 	origin: &ServerName,
 	create_event: &Pdu,
 	room_id: &RoomId,
-	_first_ts_in_room: MilliSecondsSinceUnixEpoch,
+	latest_event: &'a EventId,
 	initial_set: Events,
 ) -> Result<(
 	Vec<OwnedEventId>,
@@ -68,6 +68,7 @@ where
 		.server
 		.concurrency_scaled(2)
 		.min(servers.len());
+	let latest_event_owned = latest_event.to_owned();
 	let mut active = FuturesUnordered::new();
 	for server in servers {
 		if self.services.sending.server_is_dead(&server) {
@@ -77,11 +78,13 @@ where
 		let room_id_owned = room_id.to_owned();
 		let earliest = earliest.clone();
 		let remaining = remaining.clone();
+		let latest_event_owned = latest_event_owned.clone();
 		active.push(async move {
 			let t = Instant::now();
+			let latest_events = vec![latest_event_owned];
 			info!(
-				"Asking {server} for missing events in {room_id_owned} (latest: {remaining:?}, \
-				 earliest: {earliest:?})"
+				"Asking {server} for missing events in {room_id_owned} (latest: \
+				 {latest_events:?}, earliest: {earliest:?}, missing: {remaining:?})"
 			);
 			let res = tokio::time::timeout(
 				Duration::from_secs(10), // Time budget
@@ -90,7 +93,7 @@ where
 					get_missing_events::v1::Request {
 						room_id: room_id_owned,
 						earliest_events: earliest,
-						latest_events: remaining,
+						latest_events,
 						limit: 50_u32.into(),
 						min_depth: 0_u32.into(),
 					},
@@ -188,9 +191,9 @@ where
 								CanonicalJsonValue::String(eid.as_str().to_owned()),
 							);
 
-							if let Ok(pdu) = serde_json::from_value::<PduEvent>(
-								serde_json::to_value(&val).expect("valid JSON"),
-							) {
+							if let Ok(pdu) =
+								PduEvent::from_id_val(&eid, val.clone(), Some(room_id))
+							{
 								if check_room_id(room_id, &pdu).is_ok() {
 									return Some((eid, (pdu, val)));
 								}

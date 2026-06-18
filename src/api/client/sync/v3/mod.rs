@@ -11,7 +11,7 @@ use std::{
 use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Result, at, extract_variant, info,
+	Result, at, extract_variant,
 	matrix::pdu::PduCount,
 	utils::{
 		ReadyExt, TryFutureExtExt,
@@ -439,7 +439,6 @@ pub(crate) async fn build_sync_events(
 
 	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
 	let (left_rooms, left_state_after) = left_rooms;
-
 
 	let presence_updates: OptionFuture<_> = services
 		.config
