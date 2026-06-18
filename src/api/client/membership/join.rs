@@ -19,7 +19,7 @@ use conduwuit::{
 	},
 	warn,
 };
-use futures::{FutureExt, StreamExt, TryFutureExt};
+use futures::{FutureExt, StreamExt};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, OwnedRoomId, OwnedServerName, OwnedUserId, RoomId,
 	RoomVersionId, UserId,
@@ -662,21 +662,18 @@ async fn join_room_by_id_helper_remote_process(
 
 	info!("Going through send_join response room_state");
 	let cork = services.db.cork_and_flush();
-	let state = send_join_response
-		.room_state
-		.state
-		.iter()
-		.stream()
-		.then(|pdu| {
-			services
-				.server_keys
-				.validate_and_add_event_id(pdu, &room_version_id)
-				.inspect_err(|e| {
+	let state = services
+		.server_keys
+		.concurrent_validate_and_add_events(send_join_response.room_state.state, &room_version_id)
+		.filter_map(|res| async {
+			match res {
+				| Ok(val) => Some(val),
+				| Err(e) => {
 					info!("Could not validate send_join response room_state event: {e:?}");
-				})
-				.inspect(|_| debug!("Completed validating send_join response room_state event"))
+					None
+				},
+			}
 		})
-		.ready_filter_map(Result::ok)
 		.fold(HashMap::new(), |mut state, (event_id, value)| async move {
 			let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id)) {
 				| Ok(pdu) => pdu,
@@ -716,17 +713,21 @@ async fn join_room_by_id_helper_remote_process(
 
 	info!("Going through send_join response auth_chain");
 	let cork = services.db.cork_and_flush();
-	send_join_response
-		.room_state
-		.auth_chain
-		.iter()
-		.stream()
-		.then(|pdu| {
-			services
-				.server_keys
-				.validate_and_add_event_id(pdu, &room_version_id)
+	services
+		.server_keys
+		.concurrent_validate_and_add_events(
+			send_join_response.room_state.auth_chain,
+			&room_version_id,
+		)
+		.filter_map(|res| async {
+			match res {
+				| Ok(val) => Some(val),
+				| Err(e) => {
+					info!("Could not validate send_join response auth_chain event: {e:?}");
+					None
+				},
+			}
 		})
-		.ready_filter_map(Result::ok)
 		.ready_for_each(|(event_id, value)| {
 			trace!(%event_id, "Adding PDU as an outlier from send_join auth_chain");
 			services
@@ -739,7 +740,6 @@ async fn join_room_by_id_helper_remote_process(
 		.await;
 
 	drop(cork);
-	drop(send_join_response);
 
 	debug!("Running send_join auth check");
 	let fetch_state = &state;

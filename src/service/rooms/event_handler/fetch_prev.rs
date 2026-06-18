@@ -84,7 +84,8 @@ where
 			let latest_events = vec![latest_event_owned];
 			info!(
 				"Asking {server} for missing events in {room_id_owned} (latest: \
-				 {latest_events:?}, earliest: {earliest:?}, missing: {remaining:?})"
+				 {latest_events:?}, earliest_count: {}, missing: {remaining:?})",
+				earliest.len()
 			);
 			let res = tokio::time::timeout(
 				Duration::from_secs(10), // Time budget

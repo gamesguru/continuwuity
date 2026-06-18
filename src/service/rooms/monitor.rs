@@ -360,7 +360,8 @@ impl Service {
 			info!(
 				target: "forwardfill",
 				"Asking {target_server} for missing events in {room_id} (latest: {missing_latest:?}, \
-				 earliest: {earliest_events:?})"
+				 earliest count: {})",
+				earliest_events.len()
 			);
 
 			let response = match self

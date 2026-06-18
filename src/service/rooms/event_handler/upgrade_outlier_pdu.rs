@@ -37,6 +37,7 @@ pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	create_event: &Pdu,
 	origin: &ServerName,
 	room_id: &RoomId,
+	// Non-spec-compliant admin override to force-accept events.
 	skip_soft_fail: bool,
 	is_forward_extremity: bool,
 ) -> Result<Option<RawPduId>>
@@ -121,7 +122,7 @@ where
 	// Skip the pre-fetch entirely if any auth event is already rejected locally.
 	// The event will be rejected anyway during auth checking, so the /state_ids
 	// call would be wasted network traffic.
-	if incoming_pdu.state_key().is_some() && !is_fast_forward && !skip_soft_fail {
+	if !is_fast_forward && !skip_soft_fail {
 		let any_auth_rejected = futures::stream::iter(incoming_pdu.auth_events())
 			.any(|aid| async move { self.services.pdu_metadata.is_event_rejected(aid).await })
 			.await;
@@ -700,7 +701,7 @@ where
 			)
 			.await;
 
-		if incoming_pdu.state_key().is_none() || (any_prev_rejected && all_prevs_rejected) {
+		if any_prev_rejected && all_prevs_rejected {
 			// All non-timeline prev_events are rejected — no point fetching
 			// state from federation. Fall through to current room state.
 			debug!(

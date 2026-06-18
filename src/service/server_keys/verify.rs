@@ -235,3 +235,37 @@ pub async fn verify_json(
 	let keys = self.get_event_keys(event, room_version).await?;
 	ruma::signatures::verify_json(&keys, event.clone()).map_err(Into::into)
 }
+
+use std::sync::Arc;
+
+use futures::{Stream, StreamExt};
+
+#[implement(super::Service)]
+pub fn concurrent_validate_and_add_events<'a, I>(
+	self: &Arc<Self>,
+	events: I,
+	room_version: &'a RoomVersionId,
+) -> impl Stream<Item = Result<(OwnedEventId, CanonicalJsonObject)>> + Send + 'a
+where
+	I: IntoIterator<Item = Box<RawJsonValue>> + Send + 'a,
+	<I as IntoIterator>::IntoIter: Send,
+{
+	let server_keys_outer = self.clone();
+	futures::stream::iter(events)
+		.map(move |pdu: Box<RawJsonValue>| {
+			let server_keys = server_keys_outer.clone();
+			let room_version_id = room_version.clone();
+			let runtime = server_keys.services.server.runtime().clone();
+			runtime.spawn(async move {
+				server_keys
+					.validate_and_add_event_id(&pdu, &room_version_id)
+					.await
+			})
+		})
+		.buffer_unordered(self.services.server.concurrency_scaled(200))
+		.map(
+			|res: Result<Result<(OwnedEventId, CanonicalJsonObject)>, tokio::task::JoinError>| {
+				res.unwrap_or_else(|e| Err(conduwuit::err!(Database("Join task failed: {e}"))))
+			},
+		)
+}
