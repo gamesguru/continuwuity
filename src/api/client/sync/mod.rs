@@ -111,6 +111,7 @@ async fn load_timeline(
 					{
 						debug_warn!("Failed to add bundled aggregations: {e}");
 					}
+					pdu.1 = inject_membership(services, pdu.1).await;
 					pdu
 				})
 				.boxed()
@@ -137,6 +138,7 @@ async fn load_timeline(
 					{
 						debug_warn!("Failed to add bundled aggregations: {e}");
 					}
+					pdu.1 = inject_membership(services, pdu.1).await;
 					pdu
 				})
 				.boxed()
@@ -209,6 +211,64 @@ async fn load_timeline(
 	}
 
 	Ok(TimelinePdus { pdus, limited })
+}
+
+async fn inject_membership(services: &Services, mut pdu: PduEvent) -> PduEvent {
+	let is_sender_membership_event = pdu.kind() == &TimelineEventType::RoomMember
+		&& pdu.state_key().is_some_and(|k| k == pdu.sender().as_str());
+
+	let membership_state = if is_sender_membership_event {
+		let mut prev_membership = ruma::events::room::member::MembershipState::Leave;
+		if let Some(unsigned) = pdu.unsigned() {
+			if let Ok(unsigned_obj) = serde_json::from_str::<serde_json::Value>(unsigned.get()) {
+				if let Some(prev_content) = unsigned_obj.get("prev_content") {
+					if let Ok(prev_member) = serde_json::from_value::<
+						ruma::events::room::member::RoomMemberEventContent,
+					>(prev_content.clone())
+					{
+						prev_membership = prev_member.membership;
+					}
+				}
+			}
+		}
+		prev_membership
+	} else {
+		let mut current_membership = ruma::events::room::member::MembershipState::Leave;
+		if let Ok(shortstatehash) = services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(pdu.event_id())
+			.await
+		{
+			if let Ok(member_content) = services
+				.rooms
+				.state_accessor
+				.state_get_content::<ruma::events::room::member::RoomMemberEventContent>(
+					shortstatehash,
+					&ruma::events::StateEventType::RoomMember,
+					pdu.sender().as_str(),
+				)
+				.await
+			{
+				current_membership = member_content.membership;
+			}
+		}
+		current_membership
+	};
+
+	let mut unsigned: std::collections::BTreeMap<String, serde_json::Value> = pdu
+		.unsigned()
+		.map(|u| serde_json::from_str(u.get()).unwrap_or_default())
+		.unwrap_or_default();
+
+	if let Ok(membership_val) = serde_json::to_value(&membership_state) {
+		unsigned.insert("membership".to_owned(), membership_val);
+		if let Ok(new_unsigned) = serde_json::value::to_raw_value(&unsigned) {
+			pdu.unsigned = Some(new_unsigned);
+		}
+	}
+
+	pdu
 }
 
 async fn share_encrypted_room(
