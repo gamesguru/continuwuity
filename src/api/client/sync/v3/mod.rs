@@ -292,11 +292,19 @@ pub(crate) async fn build_sync_events(
 		// use inline filters directly
 		| Some(Filter::FilterDefinition(filter)) => filter.clone(),
 		// look up filter IDs from the database
-		| Some(Filter::FilterId(filter_id)) => services
-			.users
-			.get_filter(syncing_user, filter_id)
-			.await
-			.unwrap_or_default(),
+		| Some(Filter::FilterId(filter_id)) =>
+			if filter_id.starts_with('{') {
+				serde_json::from_str(filter_id).unwrap_or_else(|e| {
+					conduwuit::warn!("Failed to parse inline filter JSON: {}", e);
+					FilterDefinition::default()
+				})
+			} else {
+				services
+					.users
+					.get_filter(syncing_user, filter_id)
+					.await
+					.unwrap_or_default()
+			},
 	});
 
 	let context = SyncContext {

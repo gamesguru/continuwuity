@@ -1,10 +1,13 @@
-use std::collections::HashSet;
+use std::{collections::BTreeSet, ops::ControlFlow};
 
 use conduwuit::{
-	Result, at,
-	matrix::{Event, pdu::PduEvent},
+	Result, at, is_equal_to,
+	matrix::{
+		Event,
+		pdu::{PduCount, PduEvent},
+	},
 	utils::{
-		BoolExt, IterStream, ReadyExt,
+		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, TryIgnore},
 	},
 };
@@ -12,53 +15,13 @@ use conduwuit_service::{
 	Services,
 	rooms::{lazy_loading::MemberSet, short::ShortStateHash},
 };
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
+use itertools::Itertools;
 use ruma::{OwnedEventId, RoomId, UserId, events::StateEventType};
-use tracing::{debug, trace};
+use service::rooms::short::ShortEventId;
+use tracing::trace;
 
 use crate::client::TimelinePdus;
-
-/// Helper to get a membership event for a user in a room with fallbacks.
-async fn get_member_pdu_best_effort(
-	services: &Services,
-	room_id: &RoomId,
-	user_id: &UserId,
-	shortstatehash: ShortStateHash,
-) -> Option<PduEvent> {
-	// Try provided shortstatehash (spec-compliant for the start of the timeline)
-	if let Ok(pdu) = services
-		.rooms
-		.state_accessor
-		.state_get(shortstatehash, &StateEventType::RoomMember, user_id.as_str())
-		.await
-	{
-		return Some(pdu);
-	}
-
-	// Try current room state (fallback if incomplete state at timeline start)
-	if let Ok(pdu) = services
-		.rooms
-		.state_accessor
-		.room_state_get(room_id, &StateEventType::RoomMember, user_id.as_str())
-		.await
-	{
-		debug!(%user_id, %room_id, "Lazy load: Found member in current room state (fallback)");
-		return Some(pdu);
-	}
-
-	// Try left_state if they are no longer in the room
-	if let Ok(Some(pdu)) = services
-		.rooms
-		.state_cache
-		.left_state(user_id, room_id)
-		.await
-	{
-		debug!(%user_id, %room_id, "Lazy load: Found member in left_state cache (fallback)");
-		return Some(pdu);
-	}
-
-	None
-}
 
 /// Calculate the state events to include in an initial sync response.
 ///
@@ -71,32 +34,24 @@ async fn get_member_pdu_best_effort(
 	skip_all,
 	fields(current_shortstatehash)
 )]
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn build_state_initial(
 	services: &Services,
 	sender_user: &UserId,
-	room_id: &RoomId,
-	state_hash: ShortStateHash,
-	timeline: &TimelinePdus,
-	use_state_after: bool,
+	timeline_start_shortstatehash: ShortStateHash,
 	lazily_loaded_members: Option<&MemberSet>,
 ) -> Result<Vec<PduEvent>> {
-	let event_ids_in_timeline: HashSet<_> =
-		timeline.pdus.iter().map(|pdu| &pdu.1.event_id).collect();
-
-	// load the keys and event IDs of the state events at the target state hash
+	// load the keys and event IDs of the state events at the start of the timeline
 	let (shortstatekeys, event_ids): (Vec<_>, Vec<_>) = services
 		.rooms
 		.state_accessor
-		.state_full_ids(state_hash)
-		.ready_filter(|(_, event_id)| {
-			use_state_after || !event_ids_in_timeline.contains(event_id)
-		})
+		.state_full_ids(timeline_start_shortstatehash)
 		.unzip()
 		.await;
 
 	trace!("performing initial sync of {} state events", event_ids.len());
 
-	let filtered_event_ids: Vec<_> = services
+	services
 		.rooms
 		.short
 		// look up the full state keys
@@ -110,55 +65,21 @@ pub(super) async fn build_state_initial(
 				included in `lazily_loaded_members` or for the user requesting the sync.
 				*/
 				let event_is_redundant = event_type == StateEventType::RoomMember
-					&& state_key.as_str() != sender_user.as_str()
-					&& !state_key.as_str().try_into().is_ok_and(|user_id: &UserId| lazily_loaded_members.contains(user_id));
+					&& state_key.as_str().try_into().is_ok_and(|user_id: &UserId| {
+						sender_user != user_id && !lazily_loaded_members.contains(user_id)
+					});
 
 				event_is_redundant.or_some(event_id)
 			} else {
 				Some(event_id)
 			}
 		})
-		.collect()
-		.await;
-
-	let mut state_events = filtered_event_ids
-		.into_iter()
-		.stream()
 		.broad_filter_map(|event_id: OwnedEventId| async move {
 			services.rooms.timeline.get_pdu(&event_id).await.ok()
 		})
-		.collect::<Vec<_>>()
-		.await;
-
-	// if lazy loading is enabled, ensure ALL requested members are present.
-	// missing members is a common federated room issue w/ partial state history
-	if let Some(lazily_loaded_members) = lazily_loaded_members {
-		let missing_members: Vec<_> = lazily_loaded_members
-			.iter()
-			.stream()
-			.ready_filter(|user_id| {
-				let already_present = state_events.iter().any(|pdu| {
-					pdu.kind == StateEventType::RoomMember.into()
-						&& pdu.state_key.as_deref() == Some(user_id.as_str())
-				});
-				!already_present
-			})
-			.broad_filter_map(|user_id| async move {
-				get_member_pdu_best_effort(services, room_id, user_id, state_hash).await
-			})
-			.collect()
-			.await;
-
-		if !missing_members.is_empty() {
-			trace!(
-				"Added {} missing lazily loaded members to initial sync",
-				missing_members.len()
-			);
-			state_events.extend(missing_members);
-		}
-	}
-
-	Ok(state_events)
+		.collect()
+		.map(Ok)
+		.await
 }
 
 /// Calculate the state events to include in an incremental sync response.
@@ -172,32 +93,81 @@ pub(super) async fn build_state_incremental<'a>(
 	services: &Services,
 	sender_user: &'a UserId,
 	room_id: &RoomId,
+	last_sync_end_count: PduCount,
 	last_sync_end_shortstatehash: ShortStateHash,
-	state_hash: ShortStateHash,
+	timeline_start_shortstatehash: ShortStateHash,
+	timeline_end_shortstatehash: ShortStateHash,
 	timeline: &TimelinePdus,
-	use_state_after: bool,
 	lazily_loaded_members: Option<&'a MemberSet>,
 ) -> Result<Vec<PduEvent>> {
-	let mut state_event_ids: HashSet<OwnedEventId> = HashSet::new();
+	/*
+	NB: a limited sync is one where `timeline.limited == true`. Synapse calls this a "gappy" sync internally.
 
-	trace!(
-		%use_state_after,
-		%last_sync_end_shortstatehash,
-		%state_hash,
-		"computing state for incremental sync"
-	);
+	The algorithm implemented in this function is, currently, quite different from the algorithm vaguely described
+	by the Matrix specification. This is because the specification's description of the `state` property does not accurately
+	reflect how Synapse behaves, and therefore how client SDKs behave. Notable differences include:
+	1. We do not compute the delta using the naive approach of "every state event from the end of the last sync
+	   up to the start of this sync's timeline". see below for details.
+	2. If lazy-loading is enabled, we include lazily-loaded membership events. The specific users to include are determined
+	   elsewhere and supplied to this function in the `lazily_loaded_members` parameter.
+	*/
 
-	// Fetch lazy-loaded membership events if lazy-loading is enabled
-	if let Some(lazily_loaded_members) = lazily_loaded_members
-		&& !lazily_loaded_members.is_empty()
-	{
-		trace!("including lazy membership events for members: {:?}", lazily_loaded_members);
+	/*
+	the `state` property of an incremental sync which isn't limited are _usually_ empty.
+	(note: the specification says that the `state` property is _always_ empty for limited syncs, which is incorrect.)
+	however, if an event in the timeline (`timeline.pdus`) merges a split in the room's DAG (i.e. has multiple `prev_events`),
+	the state at the _end_ of the timeline may include state events which were merged in and don't exist in the state
+	at the _start_ of the timeline. because this is uncommon, we check here to see if any events in the timeline
+	merged a split in the DAG.
 
-		services
+	see: https://github.com/element-hq/synapse/issues/16941
+	*/
+
+	let timeline_is_linear = timeline.pdus.is_empty() || {
+		let last_pdu_of_last_sync = services
 			.rooms
-			.short
-			.multi_get_eventid_from_short::<'_, OwnedEventId, _>(
-				lazily_loaded_members
+			.timeline
+			.pdus_rev(room_id, Some(last_sync_end_count.saturating_add(1)))
+			.boxed()
+			.next()
+			.await
+			.transpose()
+			.expect("last sync should have had some PDUs")
+			.map(at!(1));
+
+		// make sure the prev_events of each pdu in the timeline refer only to the
+		// previous pdu
+		timeline
+			.pdus
+			.iter()
+			.try_fold(last_pdu_of_last_sync.map(|pdu| pdu.event_id), |prev_event_id, (_, pdu)| {
+				if let Ok(pdu_prev_event_id) = pdu.prev_events.iter().exactly_one() {
+					if prev_event_id
+						.as_ref()
+						.is_none_or(is_equal_to!(pdu_prev_event_id))
+					{
+						return ControlFlow::Continue(Some(pdu_prev_event_id.to_owned()));
+					}
+				}
+
+				trace!(
+					"pdu {:?} has split prev_events (expected {:?}): {:?}",
+					pdu.event_id, prev_event_id, pdu.prev_events
+				);
+				ControlFlow::Break(())
+			})
+			.is_continue()
+	};
+
+	if timeline_is_linear && !timeline.limited {
+		// if there are no splits in the DAG and the timeline isn't limited, then
+		// `state` will always be empty unless lazy loading is enabled.
+
+		if let Some(lazily_loaded_members) = lazily_loaded_members {
+			if !timeline.pdus.is_empty() {
+				// lazy loading is enabled, so we return the membership events which were
+				// requested by the caller.
+				let lazy_membership_events: Vec<_> = lazily_loaded_members
 					.iter()
 					.stream()
 					.broad_filter_map(|user_id| async move {
@@ -208,56 +178,92 @@ pub(super) async fn build_state_incremental<'a>(
 						services
 							.rooms
 							.state_accessor
-							.state_get_shortid(
-								state_hash,
+							.state_get(
+								timeline_start_shortstatehash,
 								&StateEventType::RoomMember,
 								user_id.as_str(),
 							)
-							.await
 							.ok()
-					}),
-			)
-			.ignore_err()
-			.ready_for_each(|event_id| {
-				state_event_ids.insert(event_id);
-			})
-			.await;
+							.await
+					})
+					.collect()
+					.await;
+
+				if !lazy_membership_events.is_empty() {
+					trace!(
+						"syncing lazy membership events for members: {:?}",
+						lazy_membership_events
+							.iter()
+							.map(|pdu| pdu.state_key().unwrap())
+							.collect::<Vec<_>>()
+					);
+				}
+				return Ok(lazy_membership_events);
+			}
+		}
+
+		// lazy loading is disabled, `state` is empty.
+		return Ok(vec![]);
 	}
 
-	// Fetch the state events added since the last sync.
-	services
+	/*
+	at this point, either the timeline is `limited` or the DAG has a split in it. this necessitates
+	computing the incremental state (which may be empty).
+
+	NOTE: this code path does not use the `lazy_membership_events` parameter. any changes to membership will be included
+	in the incremental state. therefore, the incremental state may include "redundant" membership events,
+	which we do not filter out because A. the spec forbids lazy-load filtering if the timeline is `limited`,
+	and B. DAG splits which require sending extra membership state events are (probably) uncommon enough that
+	the performance penalty is acceptable.
+	*/
+
+	trace!(%timeline_is_linear, %timeline.limited, "computing state for incremental sync");
+
+	// fetch the shorteventids of state events in the timeline
+	let state_events_in_timeline: BTreeSet<ShortEventId> = services
+		.rooms
+		.short
+		.multi_get_or_create_shorteventid(timeline.pdus.iter().filter_map(|(_, pdu)| {
+			if pdu.state_key().is_some() {
+				Some(pdu.event_id.as_ref())
+			} else {
+				None
+			}
+		}))
+		.collect()
+		.await;
+
+	trace!("{} state events in timeline", state_events_in_timeline.len());
+
+	/*
+	fetch the state events which were added since the last sync.
+
+	specifically we fetch the difference between the state at the last sync and the state at the _end_
+	of the timeline, and then we filter out state events in the timeline itself using the shorteventids we fetched.
+	this is necessary to account for splits in the DAG, as explained above.
+	*/
+	let state_diff = services
 		.rooms
 		.short
 		.multi_get_eventid_from_short::<'_, OwnedEventId, _>(
 			services
 				.rooms
 				.state_accessor
-				.state_added((last_sync_end_shortstatehash, state_hash))
+				.state_added((last_sync_end_shortstatehash, timeline_end_shortstatehash))
 				.await?
 				.stream()
-				.map(at!(1)),
+				.ready_filter_map(|(_, shorteventid)| {
+					if state_events_in_timeline.contains(&shorteventid) {
+						None
+					} else {
+						Some(shorteventid)
+					}
+				}),
 		)
-		.ignore_err()
-		.ready_for_each(|event_id| {
-			state_event_ids.insert(event_id);
-		})
-		.await;
+		.ignore_err();
 
-	if !use_state_after {
-		// If state_after isn't enabled, filter out state events which also exist
-		// in the timeline. If splits exist in the DAG, this may not be exactly the same
-		// thing as the state diff ending at the start of the timeline, but Synapse
-		// also does this and it's technically more useful behavior anyway.
-		// See: https://github.com/element-hq/synapse/issues/16941
-
-		for (_, pdu) in &timeline.pdus {
-			state_event_ids.remove(pdu.event_id());
-		}
-	}
-
-	// Finally, fetch the PDU contents and collect them into a vec
-	let mut state_diff_pdus = state_event_ids
-		.stream()
+	// finally, fetch the PDU contents and collect them into a vec
+	let state_diff_pdus = state_diff
 		.broad_filter_map(|event_id| async move {
 			services
 				.rooms
@@ -269,34 +275,10 @@ pub(super) async fn build_state_incremental<'a>(
 		.collect::<Vec<_>>()
 		.await;
 
-	trace!(?state_diff_pdus, "collected state PDUs for incremental sync");
-
-	// Ensure requested lazy-loaded members are present in the response
-	if let Some(lazily_loaded_members) = lazily_loaded_members {
-		let missing_members: Vec<_> = lazily_loaded_members
-			.iter()
-			.stream()
-			.ready_filter(|user_id| {
-				let already_present = state_diff_pdus.iter().any(|pdu| {
-					pdu.kind == StateEventType::RoomMember.into()
-						&& pdu.state_key.as_deref() == Some(user_id.as_str())
-				});
-				!already_present
-			})
-			.broad_filter_map(|user_id| async move {
-				get_member_pdu_best_effort(services, room_id, user_id, state_hash).await
-			})
-			.collect()
-			.await;
-
-		if !missing_members.is_empty() {
-			trace!(
-				"Added {} missing lazily loaded members to incremental sync",
-				missing_members.len()
-			);
-			state_diff_pdus.extend(missing_members);
-		}
-	}
-
+	trace!(
+		target: "conduwuit::api::client::sync",
+		?state_diff_pdus,
+		"collected state PDUs for incremental sync"
+	);
 	Ok(state_diff_pdus)
 }
