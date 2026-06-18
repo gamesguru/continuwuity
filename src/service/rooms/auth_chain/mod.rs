@@ -122,7 +122,9 @@ where
 			continue;
 		}
 
-		let (auth_chain, is_complete) = self.get_auth_chain_inner(room_id, event_id).await?;
+		let (auth_chain, is_complete) = self
+			.get_auth_chain_inner(room_id, event_id, shortid)
+			.await?;
 		if is_complete {
 			self.cache_auth_chain_vec(vec![shortid], auth_chain.as_slice());
 		}
@@ -150,8 +152,9 @@ async fn get_auth_chain_inner(
 	&self,
 	room_id: &RoomId,
 	event_id: &EventId,
+	shortid: ShortEventId,
 ) -> Result<(Vec<ShortEventId>, bool)> {
-	let mut todo = vec![event_id.to_owned()];
+	let mut todo = vec![(shortid, event_id.to_owned())];
 	let mut found = HashSet::new();
 	let mut is_complete = true;
 
@@ -165,74 +168,135 @@ async fn get_auth_chain_inner(
 		}
 
 		let current_batch = std::mem::take(&mut todo);
+		let (short_ids, event_ids): (Vec<_>, Vec<_>) = current_batch.into_iter().unzip();
 
-		let results: Vec<_> = current_batch
+		let mut next_short_ids = Vec::new();
+		let mut missing_events = Vec::new();
+
+		let batch_results: Vec<_> = self
+			.services
+			.timeline
+			.multi_get_shortauthevents(futures::stream::iter(short_ids.clone()))
+			.collect()
+			.await;
+
+		for (idx, (res, _short_id)) in batch_results
 			.into_iter()
-			.try_stream::<conduwuit::Error>()
-			.broad_and_then(|event_id| async move {
-				trace!(%event_id, "processing auth event");
-
-				// Try timeline first, then fall back to the outlier store.
-				let pdu_result = match self
-					.services
-					.timeline
-					.get_pdu_in_room(Some(room_id), &event_id)
-					.await
-				{
-					| Ok(pdu) => Ok(pdu),
-					| Err(_) => self.services.outlier.get_pdu_outlier(&event_id).await,
-				};
-
-				Ok((event_id, pdu_result))
-			})
-			.try_collect()
-			.await?;
-
-		let mut new_auth_events = HashSet::new();
-		for (event_id, pdu_result) in results {
-			match pdu_result {
-				| Err(e) => {
-					info!(%event_id, ?e, "Could not find pdu mentioned in auth events; marking chain as incomplete");
-					is_complete = false;
-				},
-				| Ok(pdu) => {
-					if let Some(claimed_room_id) = pdu.room_id.clone() {
-						if claimed_room_id != *room_id {
-							return Err!(Request(Forbidden(error!(
-								%event_id,
-								%room_id,
-								wrong_room_id = ?pdu.room_id.unwrap(),
-								"auth event for incorrect room"
-							))));
+			.zip(short_ids.into_iter())
+			.enumerate()
+		{
+			match res {
+				| Ok(auth_shorts) =>
+					for auth_short in auth_shorts {
+						if found.insert(auth_short) {
+							if let Ok(cached) =
+								self.get_cached_eventid_authchain(&[auth_short]).await
+							{
+								found.extend(cached.iter().copied());
+							} else {
+								next_short_ids.push(auth_short);
+							}
 						}
-					}
-
-					for auth_event in &pdu.auth_events {
-						new_auth_events.insert(auth_event.clone());
-					}
+					},
+				| Err(_) => {
+					missing_events.push(event_ids[idx].clone());
 				},
 			}
 		}
 
-		let new_auth_events: Vec<_> = new_auth_events.into_iter().collect();
-		if new_auth_events.is_empty() {
-			continue;
+		if !next_short_ids.is_empty() {
+			let resolved_events: Vec<_> = futures::stream::iter(next_short_ids.clone())
+				.zip(
+					self.services
+						.short
+						.multi_get_eventid_from_short::<OwnedEventId, _>(futures::stream::iter(
+							next_short_ids,
+						)),
+				)
+				.collect()
+				.await;
+
+			for (auth_short, res) in resolved_events {
+				if let Ok(auth_event_id) = res {
+					todo.push((auth_short, auth_event_id));
+				} else {
+					is_complete = false;
+				}
+			}
 		}
 
-		let mut short_ids = self
-			.services
-			.short
-			.multi_get_or_create_shorteventid(new_auth_events.iter().map(|id| &**id))
-			.zip(futures::stream::iter(new_auth_events.clone()))
-			.boxed();
+		if !missing_events.is_empty() {
+			let results: Vec<_> = missing_events
+				.into_iter()
+				.try_stream::<conduwuit::Error>()
+				.broad_and_then(|missing_event_id| async move {
+					trace!(%missing_event_id, "processing legacy auth event");
 
-		while let Some((sauthevent, auth_event)) = short_ids.next().await {
-			if found.insert(sauthevent) {
-				if let Ok(cached) = self.get_cached_eventid_authchain(&[sauthevent]).await {
-					found.extend(cached.iter().copied());
-				} else {
-					trace!(?auth_event, "adding auth event to processing queue");
-					todo.push(auth_event);
+					let pdu_result = match self
+						.services
+						.timeline
+						.get_pdu_in_room(Some(room_id), &missing_event_id)
+						.await
+					{
+						| Ok(pdu) => Ok(pdu),
+						| Err(_) =>
+							self.services
+								.outlier
+								.get_pdu_outlier(&missing_event_id)
+								.await,
+					};
+
+					Ok((missing_event_id, pdu_result))
+				})
+				.try_collect()
+				.await?;
+
+			let mut new_auth_events = HashSet::new();
+			for (missing_event_id, pdu_result) in results {
+				match pdu_result {
+					| Err(e) => {
+						info!(%missing_event_id, ?e, "Could not find pdu mentioned in auth events; marking chain as incomplete");
+						is_complete = false;
+					},
+					| Ok(pdu) => {
+						if let Some(claimed_room_id) = pdu.room_id.clone() {
+							if claimed_room_id != *room_id {
+								return Err!(Request(Forbidden(error!(
+									%missing_event_id,
+									%room_id,
+									wrong_room_id = ?pdu.room_id.unwrap(),
+									"auth event for incorrect room"
+								))));
+							}
+						}
+
+						for auth_event in &pdu.auth_events {
+							new_auth_events.insert(auth_event.clone());
+						}
+					},
+				}
+			}
+
+			let new_auth_events: Vec<_> = new_auth_events.into_iter().collect();
+			if new_auth_events.is_empty() {
+				continue;
+			}
+
+			let mut legacy_short_ids = self
+				.services
+				.short
+				.multi_get_or_create_shorteventid(new_auth_events.iter().map(|id| &**id))
+				.zip(futures::stream::iter(new_auth_events.clone()))
+				.boxed();
+
+			while let Some((sauthevent, auth_event)) = legacy_short_ids.next().await {
+				if found.insert(sauthevent) {
+					if let Ok(cached) = self.get_cached_eventid_authchain(&[sauthevent]).await {
+						found.extend(cached.iter().copied());
+					} else {
+						trace!(?auth_event, "adding legacy auth event to processing queue");
+						todo.push((sauthevent, auth_event));
+					}
 				}
 			}
 		}

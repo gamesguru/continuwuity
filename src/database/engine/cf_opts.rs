@@ -204,6 +204,8 @@ fn get_cache(ctx: &Context, desc: &Descriptor) -> Option<Cache> {
 		| "shorteventid_eventid" => Some(config.shorteventid_cache_capacity),
 		| "shorteventid_shortprevevents" =>
 			Some(config.shorteventid_shortprevevents_cache_capacity),
+		| "shorteventid_shortauthevents" =>
+			Some(config.shorteventid_shortauthevents_cache_capacity),
 		| "shorteventid_authchain" => Some(config.auth_chain_cache_capacity),
 		| "shortstatekey_statekey" => Some(config.shortstatekey_cache_capacity),
 		| "statekey_shortstatekey" => Some(config.statekeyshort_cache_capacity),

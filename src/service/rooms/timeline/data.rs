@@ -23,6 +23,7 @@ pub(super) struct Data {
 	eventid_metadata: Arc<Map>,
 	room_pducount_eventid: Arc<Map>,
 	roomid_topologicalorder_pducount: Arc<Map>,
+	shorteventid_shortauthevents: Arc<Map>,
 	shorteventid_shortprevevents: Arc<Map>,
 	pub(super) room_pducount_eventid_backup: Arc<Map>,
 	pub(super) db: Arc<Database>,
@@ -47,6 +48,7 @@ impl Data {
 			room_pducount_eventid: db["room_pducount_eventid"].clone(),
 			roomid_topologicalorder_pducount: db["roomid_topologicalorder_pducount"].clone(),
 			room_pducount_eventid_backup: db["room_pducount_eventid_backup"].clone(),
+			shorteventid_shortauthevents: db["shorteventid_shortauthevents"].clone(),
 			shorteventid_shortprevevents: db["shorteventid_shortprevevents"].clone(),
 			db: args.db.clone(),
 			services: Services {
@@ -691,6 +693,13 @@ impl Data {
 		}
 		self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
 
+		let mut auth_shorts = Vec::new();
+		for auth in pdu.auth_events() {
+			let auth_short = self.services.short.get_or_create_shorteventid(auth).await;
+			auth_shorts.push(auth_short);
+		}
+		self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
+
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
 		self.eventid_pdu.wake(event_id_bytes);
@@ -778,6 +787,13 @@ impl Data {
 				prev_shorts.push(prev_short);
 			}
 			self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
+
+			let mut auth_shorts = Vec::new();
+			for auth in pdu.auth_events() {
+				let auth_short = self.services.short.get_or_create_shorteventid(auth).await;
+				auth_shorts.push(auth_short);
+			}
+			self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
 		}
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
@@ -861,6 +877,13 @@ impl Data {
 				prev_shorts.push(prev_short);
 			}
 			self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
+
+			let mut auth_shorts = Vec::new();
+			for auth in pdu.auth_events() {
+				let auth_short = self.services.short.get_or_create_shorteventid(auth).await;
+				auth_shorts.push(auth_short);
+			}
+			self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
 		}
 
 		self.eventid_pdu.apply_batch(&batch);
@@ -1279,6 +1302,41 @@ impl Data {
 			.map(utils::u64_from_u8)
 			.collect();
 		Ok(prev_shorts)
+	}
+
+	pub(super) fn store_shortauthevents_into_batch(
+		&self,
+		batch: &mut database::rocksdb::WriteBatch,
+		shorteventid: rooms::short::ShortEventId,
+		shortauthevents: &[rooms::short::ShortEventId],
+	) {
+		let key = shorteventid.to_be_bytes();
+		let val = shortauthevents
+			.iter()
+			.flat_map(|s| s.to_be_bytes())
+			.collect::<Vec<u8>>();
+		self.shorteventid_shortauthevents
+			.insert_into_batch(batch, &key, &val);
+	}
+
+	pub(super) fn multi_get_shortauthevents<'a, I>(
+		&'a self,
+		shorteventids: I,
+	) -> impl Stream<Item = Result<Vec<rooms::short::ShortEventId>>> + Send + 'a
+	where
+		I: Stream<Item = rooms::short::ShortEventId> + Send + 'a,
+	{
+		use futures::StreamExt;
+		self.shorteventid_shortauthevents
+			.get_batch(shorteventids.map(u64::to_be_bytes))
+			.map(|res| {
+				let val = res?;
+				let auth_shorts = val
+					.chunks_exact(size_of::<u64>())
+					.map(utils::u64_from_u8)
+					.collect();
+				Ok(auth_shorts)
+			})
 	}
 
 	pub(super) async fn get_origin_server_ts(

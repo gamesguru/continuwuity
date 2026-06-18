@@ -1391,6 +1391,18 @@ impl Service {
 	}
 }
 
+impl Service {
+	pub fn multi_get_shortauthevents<'a, I>(
+		&'a self,
+		shorteventids: I,
+	) -> impl Stream<Item = Result<Vec<ShortEventId>>> + Send + 'a
+	where
+		I: Stream<Item = ShortEventId> + Send + 'a,
+	{
+		self.db.multi_get_shortauthevents(shorteventids)
+	}
+}
+
 /// Detect stored extremities that are provably broken: they appear in the
 /// window graph AND have children there (meaning they shouldn't be tips).
 ///

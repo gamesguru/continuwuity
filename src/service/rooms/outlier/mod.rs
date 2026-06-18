@@ -23,6 +23,7 @@ struct Data {
 	eventid_pdu: Arc<Map>,
 	eventid_metadata: Arc<Map>,
 	shorteventid_shortprevevents: Arc<Map>,
+	shorteventid_shortauthevents: Arc<Map>,
 }
 
 struct Services {
@@ -38,6 +39,7 @@ impl crate::Service for Service {
 				eventid_pdu: args.db["eventid_pdu"].clone(),
 				eventid_metadata: args.db["eventid_metadata"].clone(),
 				shorteventid_shortprevevents: args.db["shorteventid_shortprevevents"].clone(),
+				shorteventid_shortauthevents: args.db["shorteventid_shortauthevents"].clone(),
 			},
 			services: Services {
 				short: args.depend::<rooms::short::Service>("rooms::short"),
@@ -234,6 +236,26 @@ pub fn add_pdu_outlier_batch(
 		self.db
 			.shorteventid_shortprevevents
 			.insert_into_batch(batch, &key_bytes, &val_bytes);
+
+		let auth_shorts: Vec<rooms::short::ShortEventId> = parsed_pdu
+			.auth_events()
+			.map(|auth| {
+				self.services
+					.short
+					.get_or_create_shorteventid_blocking(auth)
+			})
+			.collect();
+
+		let auth_val_bytes = auth_shorts
+			.iter()
+			.flat_map(|s| s.to_be_bytes())
+			.collect::<Vec<u8>>();
+
+		self.db.shorteventid_shortauthevents.insert_into_batch(
+			batch,
+			&key_bytes,
+			&auth_val_bytes,
+		);
 	}
 }
 
