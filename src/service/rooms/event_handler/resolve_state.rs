@@ -162,60 +162,41 @@ pub async fn state_resolution<'a, StateSets>(
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	let fetch_cache = scc::HashMap::new();
-	let fetch_cache_ref = &fetch_cache;
+	let mut all_events = HashSet::new();
+	for state_set in state_sets.clone() {
+		all_events.extend(state_set.values().cloned());
+	}
+	for auth_chain in auth_chain_sets {
+		all_events.extend(auth_chain.iter().cloned());
+	}
 
-	// Populate pdu.rejected at fetch time so iterative_auth_check can use
-	// the synchronous event.rejected() method instead of async DB lookups.
+	let meta = &self.services.pdu_metadata;
+	let fetch_cache: HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>> = self
+		.services
+		.timeline
+		.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
+		.filter_map(|r| async move { r.ok() })
+		.wide_then(|mut pdu| async move {
+			pdu.rejected = meta.is_event_rejected(&pdu.event_id).await;
+			(pdu.event_id.clone(), Arc::new(pdu))
+		})
+		.collect()
+		.await;
+
 	let event_fetch = |event_id: OwnedEventId| async move {
-		if let Some(pdu) = fetch_cache_ref
-			.read_async(&event_id, |_, v: &Option<conduwuit_core::PduEvent>| v.clone())
-			.await
-		{
-			return pdu;
+		if let Some(pdu) = &fetch_cache.get(&event_id) {
+			return Some(pdu.clone());
 		}
+		// Fallback for missing auth events
 		let mut pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
-
-		// Populate rejection flag from pdu_metadata DB, gated by config.
-		// This replaces the old event_rejected callback with a single
-		// check at fetch time — O(1) field access during state-res instead
-		// of O(N×M) async DB lookups.
 		if let Some(ref mut p) = pdu {
-			let meta = &self.services.pdu_metadata;
-			p.rejected = meta.is_event_rejected(&event_id).await;
-		}
-
-		let _ = fetch_cache_ref.insert_async(event_id, pdu.clone()).await;
-		pdu
-	};
-
-	let event_batch_fetch = |event_ids: Vec<OwnedEventId>| async move {
-		let pdus: Vec<conduwuit_core::PduEvent> = self
-			.services
-			.timeline
-			.multi_get_pdus(Some(room_id), event_ids.into_iter().stream())
-			.filter_map(|r| async move { r.ok() })
-			.collect()
-			.await;
-
-		let meta = &self.services.pdu_metadata;
-		let pdus = pdus
-			.into_iter()
-			.stream()
-			.wide_then(|mut pdu| async move {
-				pdu.rejected = meta.is_event_rejected(&pdu.event_id).await;
-				pdu
-			})
-			.collect::<Vec<_>>()
-			.await;
-
-		for pdu in &pdus {
-			let _ = fetch_cache_ref
-				.insert_async(pdu.event_id.clone(), Some(pdu.clone()))
+			p.rejected = self
+				.services
+				.pdu_metadata
+				.is_event_rejected(&event_id)
 				.await;
 		}
-
-		pdus
+		pdu.map(Arc::new)
 	};
 
 	let event_missing_cb = move |missing_events: Vec<OwnedEventId>| {
@@ -243,12 +224,15 @@ where
 		}
 	};
 
+	let dummy_batch_fetch =
+		|_: Vec<OwnedEventId>| async move { Vec::<Arc<conduwuit_core::PduEvent>>::new() };
+
 	state_res::resolve(
 		room_version,
 		state_sets,
 		auth_chain_sets,
 		&event_fetch,
-		Some(&event_batch_fetch),
+		Some(&dummy_batch_fetch),
 		Some(&event_missing_cb),
 	)
 	.map_err(|e| err!(error!("State resolution failed: {e:?}")))
