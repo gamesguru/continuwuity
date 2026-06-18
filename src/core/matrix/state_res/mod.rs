@@ -1062,7 +1062,7 @@ where
 			match res {
 				| Ok(event) if event.rejected() => {
 					info!(
-						target: "state_res",
+						target: "state_res_debug",
 						event_id = event.event_id().as_str(),
 						"skipping previously rejected event"
 					);

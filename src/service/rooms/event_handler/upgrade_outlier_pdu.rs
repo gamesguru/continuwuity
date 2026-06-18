@@ -175,6 +175,21 @@ where
 	let mut missing_auth_events = false;
 
 	for event_id in incoming_pdu.auth_events() {
+		let is_rejected = self.services.pdu_metadata.is_event_rejected(event_id).await;
+		if is_rejected && !skip_soft_fail {
+			warn!(
+				event_id = %incoming_pdu.event_id,
+				auth_event_id = %event_id,
+				"Event rejected because auth_event is rejected"
+			);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(incoming_pdu.event_id());
+			return Err!(Request(Forbidden(
+				"Event authorisation fails because it references a rejected auth_event"
+			)));
+		}
+
 		if let Ok(pdu) = self.services.timeline.get_pdu(event_id).await {
 			if let Some(state_key) = &pdu.state_key {
 				let key = StateEventType::from(pdu.kind().clone());
