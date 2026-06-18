@@ -2,6 +2,9 @@ use conduwuit::{Err, Result, err, info, warn};
 use ruma::{
 	CanonicalJsonObject, OwnedEventId, OwnedRoomId, RoomVersionId, events::StateEventType,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
+use futures::{StreamExt, stream::FuturesUnordered};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::admin_command;
 
@@ -15,8 +18,6 @@ pub(super) async fn import_pdus(
 	force: bool,
 	room_version: Option<RoomVersionId>,
 ) -> Result {
-	use tokio::io::{AsyncBufReadExt, BufReader};
-
 	self.bail_restricted()?;
 
 	let room_version = match room_version {
@@ -44,7 +45,6 @@ pub(super) async fn import_pdus(
 	// Cork database writes to batch and sync efficiently on drop
 	let _cork = self.services.db.cork();
 
-	use std::sync::atomic::{AtomicUsize, Ordering};
 	let inserted = AtomicUsize::new(0);
 	let failed = AtomicUsize::new(0);
 	let total = AtomicUsize::new(0);
@@ -69,8 +69,6 @@ pub(super) async fn import_pdus(
 			.await
 			.ok(),
 	);
-
-	use futures::{StreamExt, stream::FuturesUnordered};
 
 	let mut futures = FuturesUnordered::new();
 
@@ -251,10 +249,11 @@ pub(super) async fn import_pdus(
 				},
 			}
 
-			let done = inserted.load(Ordering::Relaxed)
-				+ failed.load(Ordering::Relaxed)
-				+ rejected.load(Ordering::Relaxed);
-			if done % 1000 == 0 {
+			let done = inserted
+				.load(Ordering::Relaxed)
+				.saturating_add(failed.load(Ordering::Relaxed))
+				.saturating_add(rejected.load(Ordering::Relaxed));
+			if done.is_multiple_of(1000) {
 				info!(
 					"import_pdus: {}/{} ({} ok, {} rejected, {} err)",
 					done,

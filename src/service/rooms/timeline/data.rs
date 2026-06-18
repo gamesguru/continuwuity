@@ -774,6 +774,7 @@ impl Data {
 			.short
 			.get_or_create_shorteventid(event_id)
 			.await;
+
 		use futures::StreamExt;
 
 		let prev_events: Vec<&EventId> = pdu.prev_events().collect();
