@@ -29,18 +29,17 @@ where
 	Pdu: Event + Send + Sync,
 {
 	// Skip the PDU if we already have it
-	if let (Ok(pdu), Ok(json)) = (
-		self.services.timeline.get_pdu(event_id).await,
-		self.services.timeline.get_pdu_json(event_id).await,
-	) {
-		if pdu.room_id_or_hash().as_deref() == Some(room_id) {
-			info!(
-				target: "state_res_debug",
-				%event_id,
-				event_type = ?pdu.kind,
-				"handle_outlier_pdu: early return, event already known"
-			);
-			return Ok((pdu, json));
+	if let Ok(json) = self.services.timeline.get_outlier_pdu_json(event_id).await {
+		if let Ok(pdu) = PduEvent::from_id_val(event_id, json.clone(), Some(room_id)) {
+			if pdu.room_id_or_hash().as_deref() == Some(room_id) {
+				info!(
+					target: "state_res_debug",
+					%event_id,
+					event_type = ?pdu.kind,
+					"handle_outlier_pdu: early return, event already known"
+				);
+				return Ok((pdu, json));
+			}
 		}
 	}
 

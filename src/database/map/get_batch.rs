@@ -20,6 +20,10 @@ where
 	K: AsRef<[u8]> + Send + Sync + 'a,
 {
 	fn get(self, map: &'a Arc<super::Map>) -> impl Stream<Item = Result<Handle<'a>>> + Send + 'a;
+	fn get_nocache(
+		self,
+		map: &'a Arc<super::Map>,
+	) -> impl Stream<Item = Result<Handle<'a>>> + Send + 'a;
 }
 
 impl<'a, K, S> Get<'a, K, S> for S
@@ -31,6 +35,14 @@ where
 	#[inline]
 	fn get(self, map: &'a Arc<super::Map>) -> impl Stream<Item = Result<Handle<'a>>> + Send + 'a {
 		map.get_batch(self)
+	}
+
+	#[inline]
+	fn get_nocache(
+		self,
+		map: &'a Arc<super::Map>,
+	) -> impl Stream<Item = Result<Handle<'a>>> + Send + 'a {
+		map.get_batch_nocache(self)
 	}
 }
 
@@ -51,6 +63,32 @@ where
 			self.db.pool.execute_get(Get {
 				map: self.clone(),
 				key: chunk.iter().map(AsRef::as_ref).map(Into::into).collect(),
+				nocache: false,
+				res: None,
+			})
+		})
+		.map_ok(|results| results.into_iter().stream())
+		.try_flatten()
+}
+
+#[implement(super::Map)]
+#[tracing::instrument(skip(self, keys), level = "trace")]
+pub fn get_batch_nocache<'a, S, K>(
+	self: &'a Arc<Self>,
+	keys: S,
+) -> impl Stream<Item = Result<Handle<'a>>> + Send + 'a
+where
+	S: Stream<Item = K> + Send + 'a,
+	K: AsRef<[u8]> + Send + Sync + 'a,
+{
+	use crate::pool::Get;
+
+	keys.ready_chunks(automatic_amplification())
+		.widen_then(automatic_width(), |chunk| {
+			self.db.pool.execute_get(Get {
+				map: self.clone(),
+				key: chunk.iter().map(AsRef::as_ref).map(Into::into).collect(),
+				nocache: true,
 				res: None,
 			})
 		})

@@ -15,7 +15,7 @@ use conduwuit::{
 	matrix::pdu::PduCount,
 	utils::{
 		ReadyExt, TryFutureExtExt,
-		stream::{BroadbandExt, Tools, WidebandExt},
+		stream::{Tools, WidebandExt},
 	},
 	warn,
 };
@@ -314,7 +314,7 @@ pub(crate) async fn build_sync_events(
 		.state_cache
 		.rooms_joined(syncing_user)
 		.map(ToOwned::to_owned)
-		.broad_filter_map(|room_id| async {
+		.map(|room_id| async move {
 			let joined_room = load_joined_room(services, context, room_id.clone()).await;
 
 			match joined_room {
@@ -325,6 +325,8 @@ pub(crate) async fn build_sync_events(
 				},
 			}
 		})
+		.buffer_unordered(10)
+		.filter_map(std::future::ready)
 		.ready_fold(
 			(BTreeMap::new(), BTreeMap::new(), DeviceListUpdates::new()),
 			|(mut joined_rooms, mut joined_state_after, mut all_updates),
@@ -346,7 +348,7 @@ pub(crate) async fn build_sync_events(
 		.rooms
 		.state_cache
 		.rooms_left(syncing_user)
-		.broad_filter_map(|(room_id, leave_pdu)| async {
+		.map(|(room_id, leave_pdu)| async move {
 			let left_room =
 				Box::pin(load_left_room(services, context, room_id.clone(), leave_pdu)).await;
 
@@ -359,6 +361,8 @@ pub(crate) async fn build_sync_events(
 				},
 			}
 		})
+		.buffer_unordered(10)
+		.filter_map(std::future::ready)
 		.fold(
 			(BTreeMap::new(), BTreeMap::new()),
 			|(mut left_rooms, mut left_state_after), (room_id, left_room, state_after)| async move {

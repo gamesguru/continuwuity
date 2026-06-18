@@ -119,6 +119,16 @@ impl Data {
 			.deserialized()
 	}
 
+	pub(super) async fn get_outlier_pdu_json(
+		&self,
+		event_id: &EventId,
+	) -> Result<CanonicalJsonObject> {
+		self.eventid_pdu
+			.get_nocache(event_id.as_bytes())
+			.await?
+			.deserialized()
+	}
+
 	/// Returns the json of a pdu.
 	pub(super) async fn get_non_outlier_pdu_json(
 		&self,

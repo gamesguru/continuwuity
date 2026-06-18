@@ -64,7 +64,7 @@ pub async fn get_outlier_pdu_json(&self, event_id: &EventId) -> Result<Canonical
 pub async fn get_pdu_outlier(&self, event_id: &EventId) -> Result<PduEvent> {
 	self.db
 		.eventid_pdu
-		.get(event_id.as_bytes())
+		.get_nocache(event_id.as_bytes())
 		.await
 		.deserialized()
 }
