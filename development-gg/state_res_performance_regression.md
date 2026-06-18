@@ -8,7 +8,7 @@ The core issue stems from an accidental $O(N \cdot E)$ algorithmic complexity in
 ## Bottlenecks Discovered
 
 ### 1. The `get_power_level_for_sender` Strict Scan
-In earlier commits (e.g., around `48d682de5`), the algorithm was modified to alter how privileged room creators in v12 rooms were handled. However, this left behind an extremely slow lookup path. 
+In earlier commits (e.g., around `48d682de5`), the algorithm was modified to alter how privileged room creators in v12 rooms were handled. However, this left behind an extremely slow lookup path.
 
 When validating events during state resolution, the algorithm iterates through the `auth_events` of every event to find `m.room.power_levels` and `m.room.create`. Because this occurs inside the core topological sort loop, `fetch_event()` was being sequentially `await`ed on **every single auth event**, for **every single event in the conflicted set**. For a room with 20,000 conflicted events, this resulted in roughly ~100,000 sequential cache/database lookups.
 
