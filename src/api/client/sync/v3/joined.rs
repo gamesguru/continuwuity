@@ -9,7 +9,7 @@ use conduwuit::{
 	},
 	trace,
 	utils::{
-		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
+		IterStream, ReadyExt, TryFutureExtExt,
 		math::ruma_from_u64,
 		stream::{TryIgnore, WidebandExt},
 	},
@@ -163,8 +163,16 @@ async fn build_ephemeral(
 				.user_is_ignored(&read_user, syncing_user)
 				.await;
 
-			// filter out read receipts for ignored users
-			is_ignored.or_some(edu)
+			if is_ignored {
+				None
+			} else {
+				let mut json: serde_json::Value = serde_json::from_str(edu.json().get()).ok()?;
+				if let Some(obj) = json.as_object_mut() {
+					obj.remove("room_id");
+				}
+				let raw = serde_json::value::to_raw_value(&json).ok()?;
+				Some(Raw::from_json(raw))
+			}
 		})
 		.collect::<Vec<_>>()
 		.boxed();

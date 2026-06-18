@@ -12,7 +12,7 @@ use conduwuit::{
 	matrix::{Event, TypeStateKey, pdu::PduCount},
 	trace,
 	utils::{
-		BoolExt, FutureBoolExt, IterStream, ReadyExt, TryFutureExtExt,
+		FutureBoolExt, IterStream, ReadyExt, TryFutureExtExt,
 		future::ReadyEqExt,
 		math::{ruma_from_usize, usize_from_ruma},
 		stream::WidebandExt,
@@ -530,11 +530,22 @@ where
 			.read_receipt
 			.readreceipts_since(room_id, Some(*roomsince))
 			.filter_map(|(read_user, _ts, v)| async move {
-				services
+				let is_ignored = services
 					.users
 					.user_is_ignored(&read_user, sender_user)
-					.await
-					.or_some(v)
+					.await;
+
+				if is_ignored {
+					None
+				} else {
+					let mut json: serde_json::Value =
+						serde_json::from_str(v.json().get()).ok()?;
+					if let Some(obj) = json.as_object_mut() {
+						obj.remove("room_id");
+					}
+					let raw = serde_json::value::to_raw_value(&json).ok()?;
+					Some(Raw::from_json(raw))
+				}
 			})
 			.collect()
 			.await;

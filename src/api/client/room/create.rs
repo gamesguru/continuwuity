@@ -447,23 +447,22 @@ pub(crate) async fn create_room_route(
 		.await?;
 
 	// 5.3 Guest Access
-	services
-		.rooms
-		.timeline
-		.build_and_append_pdu(
-			PduBuilder::state(
-				String::new(),
-				&RoomGuestAccessEventContent::new(match preset {
-					| RoomPreset::PublicChat => GuestAccess::Forbidden,
-					| _ => GuestAccess::CanJoin,
-				}),
-			),
-			sender_user,
-			Some(&room_id),
-			&state_lock,
-		)
-		.boxed()
-		.await?;
+	if preset != RoomPreset::PublicChat {
+		services
+			.rooms
+			.timeline
+			.build_and_append_pdu(
+				PduBuilder::state(
+					String::new(),
+					&RoomGuestAccessEventContent::new(GuestAccess::CanJoin),
+				),
+				sender_user,
+				Some(&room_id),
+				&state_lock,
+			)
+			.boxed()
+			.await?;
+	}
 
 	// 6. Events listed in initial_state
 	for event in &body.initial_state {
