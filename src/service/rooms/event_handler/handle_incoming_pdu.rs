@@ -37,7 +37,6 @@ async fn should_rescind_invite(
 		|| event_sender != Some(sender.as_str())
 		|| event_type != Some("m.room.member")
 		|| state_key.is_none()
-		|| state_key != Some(sender.as_str())
 	{
 		return Ok(false);
 	}
@@ -50,8 +49,13 @@ async fn should_rescind_invite(
 		.and_then(|c| c.get("membership"))
 		.and_then(|m| m.as_str());
 
-	if membership != Some("leave") {
-		return Ok(false); // Not a leave event
+	// TODO: what about "kick" events, too?
+	if membership != Some("leave") && membership != Some("ban") {
+		return Ok(false); // Only leave and ban can rescind an invite
+	}
+
+	if target_user_id.server_name() != services.globals.server_name() {
+		return Ok(false);
 	}
 
 	// Does the target user have a pending invite?
@@ -306,13 +310,18 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
 		if is_room_member_event {
 			if should_rescind_invite(&self.services, &value, sender, room_id).await? {
+				let state_key = value
+					.get("state_key")
+					.and_then(|v| v.as_str())
+					.unwrap_or_default();
+				let target_user = UserId::parse(state_key).unwrap_or(sender);
 				debug_info!(
-					"Invite to {room_id} appears to have been rescinded by {sender}, marking as \
-					 left"
+					"Invite to {room_id} appears to have been rescinded by {sender}, marking \
+					 target {target_user} as left"
 				);
 				self.services
 					.state_cache
-					.mark_as_left(sender, room_id, None)
+					.mark_as_left(target_user, room_id, None)
 					.await;
 				return Ok(None);
 			}

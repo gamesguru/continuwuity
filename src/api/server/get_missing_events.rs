@@ -20,6 +20,8 @@ pub(crate) async fn get_missing_events_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_missing_events::v1::Request>,
 ) -> Result<get_missing_events::v1::Response> {
+	use std::collections::BTreeMap;
+
 	AccessCheck {
 		services: &services,
 		origin: body.origin(),
@@ -135,7 +137,7 @@ pub(crate) async fn get_missing_events_route(
 	if !queue.is_empty() {
 		debug!("limit reached before queue was empty");
 	}
-	use std::collections::BTreeMap;
+
 	let mut in_degree: BTreeMap<OwnedEventId, usize> = BTreeMap::new();
 	let mut graph: BTreeMap<OwnedEventId, Vec<OwnedEventId>> = BTreeMap::new();
 	let mut event_map: BTreeMap<OwnedEventId, Box<RawValue>> = BTreeMap::new();
