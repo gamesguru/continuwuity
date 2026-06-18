@@ -710,6 +710,7 @@ impl Data {
 		pdu_id: &RawPduId,
 		event_id: &EventId,
 		json: &CanonicalJsonObject,
+		pdu: &PduEvent,
 	) {
 		let mut batch = database::rocksdb::WriteBatch::default();
 
@@ -721,80 +722,78 @@ impl Data {
 			.raw_put_into_batch(&mut batch, event_id_bytes, Json(json));
 		self.room_pducount_eventid
 			.insert_into_batch(&mut batch, pdu_id, event_id_bytes);
+		let existing_metadata =
+			if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
+				bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
+			} else {
+				None
+			};
 
-		// Backfilled PDUs don't have full event structs readily available here,
-		// but we can parse enough to populate the metadata.
-		if let Ok(pdu) = serde_json::from_value::<PduEvent>(serde_json::to_value(json).unwrap()) {
-			let existing_metadata =
-				if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
-					bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
-				} else {
-					None
-				};
-
-			let local_topological_depth = existing_metadata.as_ref().map_or_else(
-				|| {
-					let mut max_depth = 0;
-					for prev_id in pdu.prev_events() {
-						if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes())
+		let local_topological_depth = existing_metadata.as_ref().map_or_else(
+			|| {
+				let mut max_depth = 0;
+				for prev_id in pdu.prev_events() {
+					if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes()) {
+						if let Ok(meta) =
+							bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
 						{
-							if let Ok(meta) =
-								bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
-							{
-								max_depth = max_depth.max(meta.local_topological_depth);
-							}
+							max_depth = max_depth.max(meta.local_topological_depth);
 						}
 					}
-					max_depth.saturating_add(1)
-				},
-				|m| m.local_topological_depth,
-			);
+				}
+				max_depth.saturating_add(1)
+			},
+			|m| m.local_topological_depth,
+		);
 
-			let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
-			self.roomid_topologicalorder_pducount.insert_into_batch(
-				&mut batch,
-				&topo_key,
-				event_id_bytes,
-			);
+		let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
+		self.roomid_topologicalorder_pducount.insert_into_batch(
+			&mut batch,
+			&topo_key,
+			event_id_bytes,
+		);
 
-			let metadata = rooms::timeline::EventMetadata {
-				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
-				is_outlier: false,
-				origin_server_ts: pdu.origin_server_ts().0,
-				depth: pdu.depth(),
-				soft_failed: existing_metadata.as_ref().is_some_and(|m| m.soft_failed),
-				rejected: pdu.rejected(),
-				redacted_by: pdu.redacts().map(ToOwned::to_owned),
-				short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
-				local_topological_depth,
-			};
-			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
-				self.eventid_metadata.insert_into_batch(
-					&mut batch,
-					event_id_bytes,
-					metadata_bytes,
-				);
-			}
-
-			let short_event_id = self
-				.services
-				.short
-				.get_or_create_shorteventid(event_id)
-				.await;
-			let mut prev_shorts = Vec::new();
-			for prev in pdu.prev_events() {
-				let prev_short = self.services.short.get_or_create_shorteventid(prev).await;
-				prev_shorts.push(prev_short);
-			}
-			self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
-
-			let mut auth_shorts = Vec::new();
-			for auth in pdu.auth_events() {
-				let auth_short = self.services.short.get_or_create_shorteventid(auth).await;
-				auth_shorts.push(auth_short);
-			}
-			self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
+		let metadata = rooms::timeline::EventMetadata {
+			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
+			is_outlier: false,
+			origin_server_ts: pdu.origin_server_ts().0,
+			depth: pdu.depth(),
+			soft_failed: existing_metadata.as_ref().is_some_and(|m| m.soft_failed),
+			rejected: pdu.rejected(),
+			redacted_by: pdu.redacts().map(ToOwned::to_owned),
+			short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
+			local_topological_depth,
+		};
+		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
+			self.eventid_metadata
+				.insert_into_batch(&mut batch, event_id_bytes, metadata_bytes);
 		}
+
+		let short_event_id = self
+			.services
+			.short
+			.get_or_create_shorteventid(event_id)
+			.await;
+		use futures::StreamExt;
+
+		let prev_events: Vec<&EventId> = pdu.prev_events().collect();
+		let prev_shorts: Vec<_> = self
+			.services
+			.short
+			.multi_get_or_create_shorteventid(prev_events.into_iter())
+			.collect()
+			.await;
+		self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
+
+		let auth_events: Vec<&EventId> = pdu.auth_events().collect();
+		let auth_shorts: Vec<_> = self
+			.services
+			.short
+			.multi_get_or_create_shorteventid(auth_events.into_iter())
+			.collect()
+			.await;
+		self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
+
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
 		self.eventid_pdu.wake(event_id_bytes);

@@ -44,10 +44,11 @@ pub(super) async fn import_pdus(
 	// Cork database writes to batch and sync efficiently on drop
 	let _cork = self.services.db.cork();
 
-	let mut inserted = 0_usize;
-	let mut rejected = 0_usize;
-	let mut failed = 0_usize;
-	let mut total = 0_usize;
+	use std::sync::atomic::{AtomicUsize, Ordering};
+	let inserted = AtomicUsize::new(0);
+	let failed = AtomicUsize::new(0);
+	let total = AtomicUsize::new(0);
+	let rejected = AtomicUsize::new(0);
 
 	let mode = match (skip_auth, skip_sig_verify) {
 		| (true, _) => "force-insert (skip-auth)",
@@ -60,198 +61,217 @@ pub(super) async fn import_pdus(
 	))
 	.await?;
 
-	let create_event = self
-		.services
-		.rooms
-		.state_accessor
-		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-		.await
-		.ok();
+	let create_event = std::sync::Arc::new(
+		self.services
+			.rooms
+			.state_accessor
+			.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+			.await
+			.ok(),
+	);
+
+	use futures::{StreamExt, stream::FuturesUnordered};
+
+	let mut futures = FuturesUnordered::new();
 
 	while let Ok(Some(line)) = lines.next_line().await {
 		if line.trim().is_empty() {
 			continue;
 		}
-		total = total.saturating_add(1);
 
-		let value: CanonicalJsonObject = match serde_json::from_str(&line) {
-			| Ok(v) => v,
-			| Err(e) => {
-				warn!("import_pdus: Failed to parse line as JSON: {e}");
-				failed = failed.saturating_add(1);
-				continue;
-			},
-		};
+		let create_event = std::sync::Arc::clone(&create_event);
+		let inserted = &inserted;
+		let failed = &failed;
+		let total = &total;
+		let rejected = &rejected;
+		let room_id_ref = &room_id;
+		let room_version_ref = &room_version;
 
-		let is_outlier = value
-			.get("__outlier")
-			.and_then(|v| match v {
-				| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
-				| _ => None,
-			})
-			.unwrap_or(false);
-		let is_soft_failed = value
-			.get("__soft_failed")
-			.and_then(|v| match v {
-				| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
-				| _ => None,
-			})
-			.unwrap_or(false);
-		let is_rejected = value
-			.get("__rejected")
-			.and_then(|v| match v {
-				| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
-				| _ => None,
-			})
-			.unwrap_or(false);
+		futures.push(async move {
+			total.fetch_add(1, Ordering::Relaxed);
+			let value: CanonicalJsonObject = match serde_json::from_str(&line) {
+				| Ok(v) => v,
+				| Err(e) => {
+					warn!("import_pdus: Failed to parse line as JSON: {e}");
+					failed.fetch_add(1, Ordering::Relaxed);
+					return;
+				},
+			};
 
-		let result: Result<(OwnedEventId, bool)> = async {
-			let (eid, value, pdu) = conduwuit::utils::pdu_parser::parse_and_clean_pdu(
-				value,
-				room_id.as_ref(),
-				&room_version,
-			)?;
+			let is_outlier = value
+				.get("__outlier")
+				.and_then(|v| match v {
+					| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
+					| _ => None,
+				})
+				.unwrap_or(false);
+			let is_soft_failed = value
+				.get("__soft_failed")
+				.and_then(|v| match v {
+					| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
+					| _ => None,
+				})
+				.unwrap_or(false);
+			let is_rejected = value
+				.get("__rejected")
+				.and_then(|v| match v {
+					| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
+					| _ => None,
+				})
+				.unwrap_or(false);
 
-			if is_outlier {
-				self.services
-					.rooms
-					.outlier
-					.add_pdu_outlier(&eid, &value, Some(&room_id));
-				return Ok((eid, true));
-			}
+			let result: Result<(OwnedEventId, bool)> = async {
+				let (eid, value, pdu) = conduwuit::utils::pdu_parser::parse_and_clean_pdu(
+					value,
+					room_id_ref.as_ref(),
+					room_version_ref,
+				)?;
 
-			if force {
-				if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&eid).await {
+				if is_outlier {
+					self.services
+						.rooms
+						.outlier
+						.add_pdu_outlier(&eid, &value, Some(room_id_ref));
+					return Ok((eid, true));
+				}
+
+				if force {
+					if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&eid).await {
+						self.services
+							.rooms
+							.timeline
+							.replace_pdu(&pdu_id, &value, &eid)
+							.await?;
+						return Ok((eid, true));
+					}
+				}
+
+				if skip_auth {
 					self.services
 						.rooms
 						.timeline
-						.replace_pdu(&pdu_id, &value, &eid)
-						.await?;
-					return Ok((eid, true));
-				}
-			}
-
-			if skip_auth {
-				self.services
-					.rooms
-					.timeline
-					.force_insert_pdu(&room_id, &eid, &pdu, &value, true)
-					.await
-					.map(|_| (eid.clone(), true))
-			} else {
-				let (eid, val) = if skip_sig_verify {
-					(eid, value)
-				} else {
-					// Build RawValue for sig verification from the canonical object.
-					// Strip event_id for v3+ rooms (not part of signed content).
-					// V1/V2 rooms require event_id for sig verification.
-					let mut raw_val = value.clone();
-					if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
-						raw_val.remove("event_id");
-					}
-					let raw = serde_json::value::RawValue::from_string(serde_json::to_string(
-						&raw_val,
-					)?)
-					.map_err(|e| err!("raw value: {e}"))?;
-
-					match self
-						.services
-						.server_keys
-						.validate_and_add_event_id(&raw, &room_version)
+						.force_insert_pdu(room_id_ref, &eid, &pdu, &value, true)
 						.await
+						.map(|_| (eid.clone(), true))
+				} else {
+					let (eid, val) = if skip_sig_verify {
+						(eid, value)
+					} else {
+						let mut raw_val = value.clone();
+						if *room_version_ref != RoomVersionId::V1
+							&& *room_version_ref != RoomVersionId::V2
+						{
+							raw_val.remove("event_id");
+						}
+						let raw = serde_json::value::RawValue::from_string(
+							serde_json::to_string(&raw_val)?,
+						)
+						.map_err(|e| err!("raw value: {e}"))?;
+
+						match self
+							.services
+							.server_keys
+							.validate_and_add_event_id(&raw, room_version_ref)
+							.await
+						{
+							| Ok(result) => result,
+							| Err(e) => {
+								warn!(
+									"import_pdus: Event {eid} failed verification: {e}\n  PDU: \
+									 {}",
+									serde_json::to_string_pretty(&value).unwrap_or_default(),
+								);
+								self.services.rooms.outlier.add_pdu_outlier(
+									&eid,
+									&value,
+									Some(room_id_ref),
+								);
+								self.services
+									.rooms
+									.pdu_metadata
+									.mark_event_soft_failed(&eid);
+								return Ok((eid, false));
+							},
+						}
+					};
+
+					let mut pdu_val = val;
+					if *room_version_ref != RoomVersionId::V1
+						&& *room_version_ref != RoomVersionId::V2
 					{
-						| Ok(result) => result,
-						| Err(e) => {
-							// Sig verification failed — persist as soft-failed outlier so the
-							// event is available for auth chain lookups and state context
-							let _eid_clone = eid.clone();
-
-							warn!(
-								"import_pdus: Event {eid} failed verification: {e}\n  PDU: {}",
-								serde_json::to_string_pretty(&value).unwrap_or_default(),
-							);
-
-							// Store as outlier
-							self.services.rooms.outlier.add_pdu_outlier(
-								&eid,
-								&value,
-								Some(&room_id),
-							);
-
-							// Mark as soft-failed (unverifiable, not proven fraudulent)
-							self.services
-								.rooms
-								.pdu_metadata
-								.mark_event_soft_failed(&eid);
-
-							return Ok((eid, false));
-						},
+						pdu_val.remove("event_id");
 					}
-				};
 
-				let mut pdu_val = val;
-				if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
-					pdu_val.remove("event_id");
-				}
+					let (pdu, _parsed) = self
+						.services
+						.rooms
+						.event_handler
+						.handle_outlier_pdu(
+							origin,
+							create_event.as_ref().as_ref(),
+							&eid,
+							room_id_ref,
+							pdu_val,
+							true,
+							skip_sig_verify,
+							Some(room_version_ref),
+						)
+						.await?;
 
-				// Local-only auth: handle_outlier_pdu checks auth_events from local DB,
-				// runs auth_check, and persists as outlier. auth_events_known=true skips
-				// federation fetches for missing auth events.
-				let (pdu, _parsed) = self
-					.services
-					.rooms
-					.event_handler
-					.handle_outlier_pdu(
-						origin,
-						create_event.as_ref(),
-						&eid,
-						&room_id,
-						pdu_val,
-						true,
-						skip_sig_verify,
-						Some(&room_version),
-					)
-					.await?;
-
-				// Promote from outlier to timeline
-				self.services
-					.rooms
-					.timeline
-					.promote_outlier(&room_id, &eid)
-					.await?;
-				let _ = pdu; // used by handle_outlier_pdu internally
-				Ok((eid, true))
-			}
-		}
-		.await;
-
-		match result {
-			| Ok((eid, true)) => {
-				inserted = inserted.saturating_add(1);
-				if is_soft_failed {
 					self.services
 						.rooms
-						.pdu_metadata
-						.mark_event_soft_failed(&eid);
+						.timeline
+						.promote_outlier(room_id_ref, &eid)
+						.await?;
+					let _ = pdu;
+					Ok((eid, true))
 				}
-				if is_rejected {
-					self.services.rooms.pdu_metadata.mark_event_rejected(&eid);
-				}
-			},
-			| Ok((_eid, false)) => rejected = rejected.saturating_add(1),
-			| Err(e) => {
-				warn!("import_pdus: {e}");
-				failed = failed.saturating_add(1);
-			},
-		}
+			}
+			.await;
 
-		let done = inserted.saturating_add(failed).saturating_add(rejected);
-		if done.is_multiple_of(1000) {
-			info!(
-				"import_pdus: {done}/{total} ({inserted} ok, {rejected} rejected, {failed} err)"
-			);
+			match result {
+				| Ok((eid, true)) => {
+					inserted.fetch_add(1, Ordering::Relaxed);
+					if is_soft_failed {
+						self.services
+							.rooms
+							.pdu_metadata
+							.mark_event_soft_failed(&eid);
+					}
+					if is_rejected {
+						self.services.rooms.pdu_metadata.mark_event_rejected(&eid);
+					}
+				},
+				| Ok((_eid, false)) => {
+					rejected.fetch_add(1, Ordering::Relaxed);
+				},
+				| Err(e) => {
+					warn!("import_pdus loop: {e}");
+					failed.fetch_add(1, Ordering::Relaxed);
+				},
+			}
+
+			let done = inserted.load(Ordering::Relaxed)
+				+ failed.load(Ordering::Relaxed)
+				+ rejected.load(Ordering::Relaxed);
+			if done % 1000 == 0 {
+				info!(
+					"import_pdus: {}/{} ({} ok, {} rejected, {} err)",
+					done,
+					total.load(Ordering::Relaxed),
+					inserted.load(Ordering::Relaxed),
+					rejected.load(Ordering::Relaxed),
+					failed.load(Ordering::Relaxed)
+				);
+			}
+		});
+
+		while futures.len() >= 100 {
+			futures.next().await;
 		}
 	}
+
+	while futures.next().await.is_some() {}
 
 	let (_, num_true) = self
 		.services
@@ -261,9 +281,13 @@ pub(super) async fn import_pdus(
 		.await?;
 
 	self.write_str(&format!(
-		"\nImported {inserted} PDUs, {rejected} stored as rejected outliers, {failed} errors \
-		 out of {total} total for {room_id}. DAG Extremities recalculated (now {num_true} \
-		 tips). Run `yolo rebuild-state {room_id}` if you are finished importing."
+		"\nImported {} PDUs, {} stored as rejected outliers, {} errors out of {} total for \
+		 {room_id}. DAG Extremities recalculated (now {num_true} tips). Run `yolo rebuild-state \
+		 {room_id}` if you are finished importing.",
+		inserted.load(Ordering::Relaxed),
+		rejected.load(Ordering::Relaxed),
+		failed.load(Ordering::Relaxed),
+		total.load(Ordering::Relaxed)
 	))
 	.await
 }

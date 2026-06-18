@@ -703,28 +703,6 @@ impl Service {
 		Ok(count)
 	}
 
-	async fn backup_timeline_entries(
-		&self,
-		_room_id: &RoomId,
-		shortroomid: ShortRoomId,
-		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
-	) {
-		info!(
-			"reorder_timeline: safely backing up {} sequence routing keys before deletion...",
-			entries.len()
-		);
-		let mut batch = database::rocksdb::WriteBatch::default();
-		for (event_id, &(old_count, _)) in entries {
-			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-			self.db.room_pducount_eventid_backup.insert_into_batch(
-				&mut batch,
-				&old_pdu_id,
-				event_id.as_bytes(),
-			);
-		}
-		self.db.room_pducount_eventid_backup.apply_batch(&batch);
-	}
-
 	async fn remove_old_timeline_entries(
 		&self,
 		shortroomid: ShortRoomId,
