@@ -4,6 +4,7 @@ use conduwuit::{
 	Error, Result, at, debug, debug_warn, extract_variant,
 	matrix::{
 		Event,
+		event::Matches,
 		pdu::{PduCount, PduEvent},
 	},
 	trace,
@@ -323,8 +324,9 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	let user_has_join_event_in_sync = timeline
-		.pdus
+	let TimelinePdus { pdus, limited: timeline_limited } = timeline;
+
+	let user_has_join_event_in_sync = pdus
 		.iter()
 		.map(|(_, pdu)| pdu)
 		.chain(state_events.iter())
@@ -349,45 +351,56 @@ async fn build_state_and_timeline(
 		.await
 		.is_ok_and(|room_type| room_type == ruma::room::RoomType::Space);
 
-	let limited = if timeline.pdus.is_empty() {
-		timeline.limited || ((joined_since_last_sync || user_has_join_event_in_sync) && !is_space)
+	let limited = if pdus.is_empty() {
+		timeline_limited || ((joined_since_last_sync || user_has_join_event_in_sync) && !is_space)
 	} else {
-		timeline.limited || joined_since_last_sync || user_has_join_event_in_sync
+		timeline_limited || joined_since_last_sync || user_has_join_event_in_sync
 	};
 
 	// the token which may be passed to the messages endpoint to backfill room
 	// history. If the timeline is empty, fallback to the start of this sync window
 	// to ensure clients always have a valid topological pagination token.
-	let prev_batch = timeline.pdus.front().map(at!(0)).or_else(|| {
+	let prev_batch = pdus.front().map(at!(0)).map(|c| c.to_string()).or_else(|| {
 		limited
 			.then_some(())
 			.and(sync_context.last_sync_end_count)
-			.map(PduCount::Normal)
+			.map(|c| PduCount::Normal(c).to_string())
 	});
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
-	let filtered_timeline = timeline
-		.pdus
+	let filtered_timeline_pdus: Vec<PduEvent> = pdus
 		.into_iter()
 		.stream()
 		.wide_filter_map(|item| ignored_filter(services, item, sync_context.syncing_user))
 		.ready_filter(|(_, pdu)| {
-			use conduwuit::matrix::event::Matches;
-			(&sync_context.filter.room.timeline).matches(pdu)
+			let filter = &sync_context.filter.room.timeline;
+			filter.matches(pdu)
 		})
 		.map(at!(1))
-		.map(Event::into_format)
 		.collect::<Vec<_>>()
 		.await;
+
+	let timeline_ids: HashSet<&ruma::EventId> = filtered_timeline_pdus
+		.iter()
+		.map(|pdu| &*pdu.event_id)
+		.collect();
+
+	let state_events: Vec<_> = state_events
+		.into_iter()
+		.filter(|pdu| !timeline_ids.contains(&*pdu.event_id))
+		.collect();
 
 	Ok(StateAndTimeline {
 		state_events,
 		state_after,
 		timeline: Timeline {
 			limited,
-			prev_batch: prev_batch.as_ref().map(ToString::to_string),
-			events: filtered_timeline,
+			prev_batch,
+			events: filtered_timeline_pdus
+				.into_iter()
+				.map(Event::into_format)
+				.collect(),
 		},
 		summary,
 		notification_counts,
