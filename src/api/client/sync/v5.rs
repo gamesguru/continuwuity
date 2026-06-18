@@ -536,8 +536,14 @@ where
 				}
 			});
 
-		let required_state =
-			collect_required_state(services, room_id, required_state_request).await;
+		let required_state = collect_required_state(
+			services,
+			sender_user,
+			room_id,
+			required_state_request,
+			&timeline_pdus,
+		)
+		.await;
 
 		let room_events: Vec<_> = timeline_pdus
 			.iter()
@@ -681,47 +687,116 @@ where
 }
 
 /// Collect the required state events for a room
+///
+/// Resolves the sentinel values from [MSC3575] / Matrix Rust SDK:
+/// - `*` expands to every state key for the given event type.
+/// - `$ME` is replaced by the syncing user's ID.
+/// - `$LAZY` (only meaningful for `m.room.member`) expands to the member events
+///   of every user that sent a timeline event plus the target of every member
+///   event in the timeline.
+///
+/// [MSC3575]: https://github.com/matrix-org/matrix-spec-proposals/blob/main/proposals/3575-sync.md
 async fn collect_required_state(
 	services: &Services,
+	sender_user: &UserId,
 	room_id: &RoomId,
 	required_state_request: &BTreeSet<TypeStateKey>,
+	timeline_pdus: &VecDeque<(PduCount, impl Event + Sync)>,
 ) -> Vec<Raw<AnySyncStateEvent>> {
 	let mut required_state = Vec::new();
 	let mut wildcard_types: HashSet<&StateEventType> = HashSet::new();
+	let mut fetched: HashSet<(StateEventType, String)> = HashSet::new();
+
+	let lazy = required_state_request
+		.iter()
+		.any(|(ty, sk)| *ty == StateEventType::RoomMember && sk.as_str() == "$LAZY");
 
 	for (event_type, state_key) in required_state_request {
 		if wildcard_types.contains(event_type) {
 			continue;
 		}
 
-		if state_key.as_str() == "*" {
-			wildcard_types.insert(event_type);
-			if let Ok(keys) = services
-				.rooms
-				.state_accessor
-				.room_state_keys(room_id, event_type)
-				.await
-			{
-				for key in keys {
-					if let Ok(event) = services
-						.rooms
-						.state_accessor
-						.room_state_get(room_id, event_type, &key)
-						.await
-					{
-						required_state.push(Event::into_format(event));
+		match state_key.as_str() {
+			| "*" => {
+				wildcard_types.insert(event_type);
+				if let Ok(keys) = services
+					.rooms
+					.state_accessor
+					.room_state_keys(room_id, event_type)
+					.await
+				{
+					for key in keys {
+						if !fetched.insert((event_type.clone(), key.clone())) {
+							continue;
+						}
+						if let Ok(event) = services
+							.rooms
+							.state_accessor
+							.room_state_get(room_id, event_type, &key)
+							.await
+						{
+							required_state.push(Event::into_format(event));
+						}
 					}
 				}
-			}
-		} else if let Ok(event) = services
-			.rooms
-			.state_accessor
-			.room_state_get(room_id, event_type, state_key)
-			.await
-		{
-			required_state.push(Event::into_format(event));
+			},
+			// Handled below via `lazy`; skip the literal "$LAZY" lookup only for member state.
+			| "$LAZY" if *event_type == StateEventType::RoomMember => {},
+			| "$ME" => {
+				let resolved_key = sender_user.as_str();
+				if !fetched.insert((event_type.clone(), resolved_key.to_owned())) {
+					continue;
+				}
+				if let Ok(event) = services
+					.rooms
+					.state_accessor
+					.room_state_get(room_id, event_type, resolved_key)
+					.await
+				{
+					required_state.push(Event::into_format(event));
+				}
+			},
+			| _ => {
+				if !fetched.insert((event_type.clone(), state_key.to_string())) {
+					continue;
+				}
+				if let Ok(event) = services
+					.rooms
+					.state_accessor
+					.room_state_get(room_id, event_type, state_key)
+					.await
+				{
+					required_state.push(Event::into_format(event));
+				}
+			},
 		}
 	}
+
+	if lazy && !wildcard_types.contains(&StateEventType::RoomMember) {
+		let mut lazy_members: HashSet<String> = HashSet::new();
+		for (_, pdu) in timeline_pdus {
+			lazy_members.insert(pdu.sender().as_str().to_owned());
+			if *pdu.event_type() == TimelineEventType::RoomMember {
+				if let Some(target) = pdu.state_key() {
+					lazy_members.insert(target.to_owned());
+				}
+			}
+		}
+		for member in lazy_members {
+			if !fetched.insert((StateEventType::RoomMember, member.clone())) {
+				continue;
+			}
+			if let Ok(event) = services
+				.rooms
+				.state_accessor
+				.room_state_get(room_id, &StateEventType::RoomMember, &member)
+				.await
+			{
+				required_state.push(Event::into_format(event));
+			}
+		}
+	}
+
 	required_state
 }
 
@@ -856,8 +931,8 @@ where
 
 		let since_shortstatehash = services
 			.rooms
-			.user
-			.get_token_shortstatehash(room_id, globalsince)
+			.timeline
+			.next_shortstatehash(room_id, PduCount::Normal(globalsince))
 			.await
 			.ok();
 
@@ -962,9 +1037,9 @@ where
 						.ready_filter(|user_id| sender_user != *user_id)
 						// Only send keys if the sender doesn't share an encrypted room with the target
 						// already
-						.filter_map(|user_id| {
-							share_encrypted_room(services, sender_user, user_id, Some(room_id))
-								.map(|res| res.or_some(user_id.to_owned()))
+						.filter_map(|user_id| async move {
+							(!share_encrypted_room(services, sender_user, user_id, Some(room_id)).await)
+								.then(|| user_id.to_owned())
 						})
 						.collect::<Vec<_>>()
 						.await,

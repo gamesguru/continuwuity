@@ -15,7 +15,7 @@ use ruma::{
 	OwnedEventId, OwnedUserId, RoomId, UserId,
 	events::{
 		AnySyncEphemeralRoomEvent, SyncEphemeralRoomEvent,
-		receipt::{ReceiptEvent, ReceiptEventContent, Receipts},
+		receipt::{ReceiptEvent, ReceiptEventContent, ReceiptType, Receipts},
 	},
 	serde::Raw,
 };
@@ -57,6 +57,39 @@ impl Service {
 		room_id: &RoomId,
 		event: &ReceiptEvent,
 	) {
+		let Some(new_event_id) = event.content.0.keys().next() else {
+			debug!(%user_id, %room_id, "Ignoring receipt with empty content");
+			return;
+		};
+		let new_thread = event
+			.content
+			.0
+			.values()
+			.next()
+			.and_then(|types| types.get(&ReceiptType::Read))
+			.and_then(|users| users.get(user_id))
+			.map(|receipt| &receipt.thread);
+
+		if let Some(old_event_id) = self
+			.db
+			.get_read_receipt_event_id(user_id, room_id, new_thread)
+			.await
+		{
+			if let (Ok(PduCount::Normal(new_count)), Ok(PduCount::Normal(old_count))) = (
+				self.services.timeline.get_pdu_count(new_event_id).await,
+				self.services.timeline.get_pdu_count(&old_event_id).await,
+			) {
+				if new_count <= old_count {
+					debug!(
+						"Ignoring backward read receipt update to {} from {} (current further \
+						 count: {})",
+						new_count, old_count, old_count
+					);
+					return;
+				}
+			}
+		}
+
 		self.db.readreceipt_update(user_id, room_id, event).await;
 		self.services
 			.sending
@@ -88,7 +121,7 @@ impl Service {
 		let content: BTreeMap<OwnedEventId, Receipts> = BTreeMap::from_iter([(
 			event_id,
 			BTreeMap::from_iter([(
-				ruma::events::receipt::ReceiptType::ReadPrivate,
+				ReceiptType::ReadPrivate,
 				BTreeMap::from_iter([(user_id, ruma::events::receipt::Receipt {
 					ts: None, // TODO: start storing the timestamp so we can return one
 					thread: ruma::events::receipt::ReceiptThread::Unthreaded,
@@ -146,16 +179,36 @@ pub fn pack_receipts<I>(receipts: I) -> Raw<SyncEphemeralRoomEvent<ReceiptEventC
 where
 	I: Iterator<Item = Raw<AnySyncEphemeralRoomEvent>>,
 {
-	let mut json = BTreeMap::new();
+	let mut json: BTreeMap<OwnedEventId, Receipts> = BTreeMap::new();
 	for value in receipts {
 		let receipt = serde_json::from_str::<SyncEphemeralRoomEvent<ReceiptEventContent>>(
 			value.json().get(),
 		);
 		match receipt {
-			| Ok(value) =>
-				for (event, receipt) in value.content {
-					json.insert(event, receipt);
-				},
+			| Ok(value) => {
+				for (event_id, new_receipts) in value.content {
+					let existing_receipts = json.entry(event_id).or_default();
+					for (receipt_type, new_users) in new_receipts {
+						let existing_users = existing_receipts.entry(receipt_type).or_default();
+						for (user_id, new_receipt) in new_users {
+							// Prefer unthreaded receipts if there's a clash
+							let is_unthreaded = matches!(
+								new_receipt.thread,
+								ruma::events::receipt::ReceiptThread::Unthreaded
+							);
+							match existing_users.entry(user_id) {
+								| std::collections::btree_map::Entry::Vacant(e) => {
+									e.insert(new_receipt);
+								},
+								| std::collections::btree_map::Entry::Occupied(mut e) =>
+									if is_unthreaded {
+										e.insert(new_receipt);
+									},
+							}
+						}
+					}
+				}
+			},
 			| _ => {
 				debug!("failed to parse receipt: {:?}", receipt);
 			},
