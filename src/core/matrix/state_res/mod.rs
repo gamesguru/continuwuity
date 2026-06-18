@@ -716,7 +716,8 @@ where
 {
 	debug!("reverse topological sort of power events");
 
-	let mut graph = HashMap::new();
+	let mut graph: rustc_hash::FxHashMap<OwnedEventId, rustc_hash::FxHashSet<OwnedEventId>> =
+		rustc_hash::FxHashMap::default();
 	for event_id in events_to_sort {
 		add_event_and_auth_chain_to_graph(&mut graph, event_id, auth_diff, fetch_event).await;
 	}
@@ -824,16 +825,18 @@ where
 
 	// outdegree_map is an event referring to the events before it, the
 	// more outdegree's the more recent the event.
-	let mut outdegree_map = graph.clone();
+	let mut outdegree_counts: rustc_hash::FxHashMap<Id, usize> = rustc_hash::FxHashMap::default();
 
 	// The number of events that depend on the given event (the EventId key)
 	// How many events reference this event in the DAG as a parent
-	let mut reverse_graph: HashMap<_, HashSet<_, Hasher>> = HashMap::new();
+	let mut reverse_graph: rustc_hash::FxHashMap<Id, rustc_hash::FxHashSet<Id>> =
+		rustc_hash::FxHashMap::default();
 
 	// Vec of nodes that have zero out degree, least recent events.
 	let mut zero_outdegree = Vec::new();
 
 	for (node, edges) in graph {
+		outdegree_counts.insert(node.clone(), edges.len());
 		if edges.is_empty() {
 			let (power_level, origin_server_ts) = key_fn(node.clone()).await?;
 			// The `Reverse` is because rusts `BinaryHeap` sorts largest -> smallest we need
@@ -845,9 +848,12 @@ where
 			}));
 		}
 
-		reverse_graph.entry(node).or_default();
+		reverse_graph.entry(node.clone()).or_default();
 		for edge in edges {
-			reverse_graph.entry(edge).or_default().insert(node);
+			reverse_graph
+				.entry(edge.clone())
+				.or_default()
+				.insert(node.clone());
 		}
 	}
 
@@ -859,18 +865,17 @@ where
 	while let Some(Reverse(item)) = heap.pop() {
 		let node = item.event_id;
 
-		for &parent in reverse_graph
-			.get(node)
+		for parent in reverse_graph
+			.get::<Id>(node)
 			.expect("EventId in heap is also in reverse_graph")
 		{
 			// The number of outgoing edges this node has
-			let out = outdegree_map
-				.get_mut(parent.borrow())
-				.expect("outdegree_map knows of all referenced EventIds");
+			let out = outdegree_counts
+				.get_mut::<Id>(parent)
+				.expect("outdegree_counts knows of all referenced EventIds");
 
-			// Only push on the heap once older events have been cleared
-			out.remove(node.borrow());
-			if out.is_empty() {
+			*out = out.saturating_sub(1);
+			if *out == 0 {
 				let (power_level, origin_server_ts) = key_fn(parent.clone()).await?;
 				heap.push(Reverse(TieBreaker {
 					power_level,
@@ -1411,20 +1416,35 @@ where
 		return Ok(vec![]);
 	}
 
-	// Step 1: Walk the mainline (the chain of power level events starting from the
-	// resolved power level) and assign each a position. Position 0 = most recent
-	// (highest priority). This is O(M) where M is the length of the mainline.
-	//
-	// NOTE: The mainline is a LINEAR CHAIN (each PL event references at most one
-	// predecessor PL event in its auth_events). We do NOT use LCA-to-RMQ here
-	// because Matrix auth chains are DAGs, not trees — the Euler tour required
-	// for RMQ is only valid on trees. We use a simple HashMap for O(1) lookups.
+	// Fast-path local cache to eliminate async Tokio overhead and DashMap locking.
+	// For massive DAGs (68,000+ events), we repeatedly walk the exact same PL
+	// chains. Hitting `fetch_event(id).await` sequentially forces 300,000+ task
+	// context switches. By locally caching the PDU, the async state machine
+	// completes immediately and synchronously.
+	let mut local_cache: rustc_hash::FxHashMap<OwnedEventId, E> =
+		rustc_hash::FxHashMap::default();
+
+	macro_rules! get {
+		($id:expr) => {
+			if let Some(ev) = local_cache.get($id) {
+				Some(ev.clone())
+			} else {
+				let id_owned = $id.to_owned();
+				let ev = fetch_event(id_owned.clone()).await;
+				if let Some(ref e) = ev {
+					local_cache.insert(id_owned, e.clone());
+				}
+				ev
+			}
+		};
+	}
+
 	let mut mainline_depth: rustc_hash::FxHashMap<usize, usize> =
 		rustc_hash::FxHashMap::default();
 	let mut pl = resolved_power_level;
 	let mut position: usize = 0;
 	while let Some(p) = pl {
-		let Some(event) = fetch_event(p).await else {
+		let Some(event) = get!(&p) else {
 			break;
 		};
 
@@ -1433,7 +1453,7 @@ where
 
 		pl = None;
 		for aid in event.auth_events() {
-			let Some(aev) = fetch_event(aid.to_owned()).await else {
+			let Some(aev) = get!(aid) else {
 				continue;
 			};
 			if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
@@ -1450,18 +1470,13 @@ where
 	let mut event_ts: rustc_hash::FxHashMap<usize, MilliSecondsSinceUnixEpoch> =
 		rustc_hash::FxHashMap::default();
 
-	// We can use *const () for this cache too, because we are caching based on
-	// the pointer of the referenced event! Wait, auth_events returns EventId.
-	// We MUST use OwnedEventId or EventId for is_pl_cache since we don't have
-	// the event pointer until we fetch it, and the point of the cache is to avoid
-	// fetching!
 	let mut is_pl_cache: rustc_hash::FxHashMap<OwnedEventId, bool> =
 		rustc_hash::FxHashMap::default();
 	let mut id_to_ptr: rustc_hash::FxHashMap<&OwnedEventId, usize> =
 		rustc_hash::FxHashMap::default();
 
 	for ev_id in to_sort {
-		let Some(event) = fetch_event(ev_id.clone()).await else {
+		let Some(event) = get!(ev_id) else {
 			continue;
 		};
 		id_to_ptr.insert(ev_id, event.as_ptr().addr());
@@ -1479,7 +1494,7 @@ where
 					let is_pl = match is_pl_cache.get(aid) {
 						| Some(&b) => b,
 						| None => {
-							let is_pl = fetch_event(aid.to_owned()).await.is_some_and(|aev| {
+							let is_pl = get!(aid).is_some_and(|aev| {
 								is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "")
 							});
 							is_pl_cache.insert(aid.to_owned(), is_pl);
@@ -1488,22 +1503,21 @@ where
 					};
 
 					if is_pl {
-						current_pl = fetch_event(aid.to_owned()).await;
+						current_pl = get!(aid);
 						break;
 					}
 				}
 
 				// Iteratively walk PL chain w/ path memoization & cycle guarding
 				let mut path = Vec::new();
-				let mut visited: HashSet<OwnedEventId> = HashSet::new();
+				let mut visited: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
 				let mut found_depth = None;
 				while let Some(c_pl) = current_pl {
-					let current_id = c_pl.event_id().to_owned();
-					if !visited.insert(current_id.clone()) {
+					let current_ptr = c_pl.as_ptr().addr();
+					if !visited.insert(current_ptr) {
 						// Cycle detected in auth chain — break to prevent infinite loop.
 						break;
 					}
-					let current_ptr = c_pl.as_ptr().addr();
 					path.push(current_ptr);
 					if let Some(&depth) = mainline_depth.get(&current_ptr) {
 						found_depth = Some(depth);
@@ -1511,7 +1525,7 @@ where
 					}
 					current_pl = None;
 					for aid in c_pl.auth_events() {
-						let Some(aev) = fetch_event(aid.to_owned()).await else {
+						let Some(aev) = get!(aid) else {
 							continue;
 						};
 						if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
@@ -1574,7 +1588,7 @@ where
 }
 
 async fn add_event_and_auth_chain_to_graph<E, F, Fut>(
-	graph: &mut HashMap<OwnedEventId, HashSet<OwnedEventId>>,
+	graph: &mut rustc_hash::FxHashMap<OwnedEventId, rustc_hash::FxHashSet<OwnedEventId>>,
 	event_id: OwnedEventId,
 	auth_diff: &HashSet<OwnedEventId>,
 	fetch_event: &F,
