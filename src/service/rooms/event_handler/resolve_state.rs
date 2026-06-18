@@ -180,12 +180,13 @@ where
 			pdu.rejected = meta.is_event_rejected(&pdu.event_id).await;
 			(pdu.event_id.clone(), Arc::new(pdu))
 		})
-		.collect()
+		.collect::<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>()
 		.await;
 
+	let fetch_cache_ref = &fetch_cache;
 	let event_fetch = |event_id: OwnedEventId| async move {
-		if let Some(pdu) = &fetch_cache.get(&event_id) {
-			return Some(pdu.clone());
+		if let Some(pdu) = fetch_cache_ref.get(&event_id).cloned() {
+			return Some(pdu);
 		}
 		// Fallback for missing auth events
 		let mut pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
