@@ -458,7 +458,7 @@ pub(super) async fn get_remote_dag(
 	}
 
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
-	let server_str = server.as_ref().map(|s| s.as_str()).unwrap_or("auto");
+	let server_str = server.as_ref().map_or("auto", |s| s.as_str());
 	let path = format!("/tmp/remote-dag-{safe_room_id}-v{room_version}-{server_str}.jsonl");
 	let file = tokio::fs::File::create(&path)
 		.await
