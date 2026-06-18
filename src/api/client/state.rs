@@ -201,6 +201,25 @@ async fn send_state_event_for_key_helper(
 	let json: &mut Raw<AnyStateEventContent> = &mut json.clone();
 	allowed_to_send_state_event(services, room_id, event_type, state_key, json).await?;
 	let state_lock = services.rooms.state.mutex.lock(room_id).await;
+
+	if let Ok(existing_event) =
+		services.rooms.state_accessor.room_state_get(room_id, event_type, state_key).await
+	{
+		if existing_event.sender() == sender {
+			if let Ok(existing_content) =
+				serde_json::from_str::<serde_json::Value>(existing_event.content().get())
+			{
+				if let Ok(new_content) =
+					serde_json::from_str::<serde_json::Value>(json.json().get())
+				{
+					if existing_content == new_content {
+						return Ok(existing_event.event_id().into());
+					}
+				}
+			}
+		}
+	}
+
 	let event_id = services
 		.rooms
 		.timeline
