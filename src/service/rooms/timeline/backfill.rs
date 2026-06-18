@@ -585,3 +585,54 @@ pub async fn force_insert_pdu(
 
 	Ok(pdu_id)
 }
+
+#[implement(super::Service)]
+pub async fn force_insert_pdu_batch(
+	&self,
+	batch: &mut database::rocksdb::WriteBatch,
+	room_id: &RoomId,
+	event_id: &EventId,
+	pdu: &PduEvent,
+	value: &CanonicalJsonObject,
+	backfill: bool,
+) -> Result<RawPduId> {
+	if self.get_pdu_id(event_id).await.is_ok() {
+		return Err!(Database("PDU {event_id} already in timeline"));
+	}
+
+	let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
+
+	let count: u64 = self.services.globals.next_count()?;
+
+	let (pdu_count, pdu_id) = if backfill {
+		let count_i64: i64 = count.try_into()?;
+		let pcount = PduCount::Backfilled(conduwuit_core::validated!(0 - count_i64));
+		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
+	} else {
+		let pcount = PduCount::Normal(count);
+		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
+	};
+
+	let mut value = value.clone();
+	value.insert(
+		"event_id".into(),
+		ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
+	);
+
+	if backfill {
+		self.db
+			.prepend_backfill_pdu_batch(batch, &pdu_id, event_id, &value, pdu)
+			.await;
+	} else {
+		self.db.append_pdu_batch(batch, &pdu_id, pdu, &value, pdu_count).await;
+	}
+
+	if pdu.kind == TimelineEventType::RoomMessage {
+		let content: ExtractBody = pdu.get_content()?;
+		if let Some(body) = content.body {
+			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
+		}
+	}
+
+	Ok(pdu_id)
+}

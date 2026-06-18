@@ -180,6 +180,14 @@ impl crate::Service for Service {
 }
 
 impl Service {
+	pub fn db_batch(&self) -> database::rocksdb::WriteBatch {
+		self.db.db_batch()
+	}
+
+	pub fn db_apply_batch(&self, batch: &database::rocksdb::WriteBatch) {
+		self.db.db_apply_batch(batch)
+	}
+
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub async fn first_pdu_in_room(&self, room_id: &RoomId) -> Result<impl Event> {
 		self.first_item_in_room(room_id).await.map(at!(1))
@@ -742,6 +750,11 @@ impl Service {
 		let count = sorted.len();
 
 		if no_compute_state {
+			let shared_batch = Arc::new(tokio::sync::Mutex::new((
+				self.db.db_batch(),
+				0_usize,
+			)));
+
 			let mut futures = futures::stream::FuturesUnordered::new();
 			for (i, event_id) in sorted.iter().enumerate() {
 				let event_id = event_id.clone();
@@ -750,10 +763,20 @@ impl Service {
 					.saturating_add(1);
 				let pdu_count = PduCount::Normal(new_count);
 				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+				let shared_batch = shared_batch.clone();
 				
 				futures.push(async move {
 					if let Ok((pdu, json)) = self.db.get_from_eventid_pdu(&event_id).await {
-						self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
+						let mut lock = shared_batch.lock().await;
+						let (batch, count) = &mut *lock;
+						self.db.append_pdu_batch(batch, &pdu_id, &pdu, &json, pdu_count).await;
+						*count += 1;
+						if *count >= 10000 {
+							self.db.db_apply_batch(batch);
+							*batch = self.db.db_batch();
+							*count = 0;
+						}
+						drop(lock);
 					}
 				});
 				if futures.len() >= 10000 {
@@ -761,6 +784,12 @@ impl Service {
 				}
 			}
 			while futures.next().await.is_some() {}
+			
+			let mut lock = shared_batch.lock().await;
+			let (batch, _) = &mut *lock;
+			self.db.db_apply_batch(batch);
+			drop(lock);
+
 			return None;
 		}
 
@@ -940,8 +969,6 @@ impl Service {
 		let mut current_shortstatehash = 0;
 		let mut last_added = Arc::new(BTreeSet::new());
 		let mut last_removed = Arc::new(BTreeSet::new());
-		let mut processed = 0_usize;
-
 		// Load all timeline events into memory for topological sort
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let mut events: HashMap<OwnedEventId, PduEvent> = HashMap::new();
@@ -1002,6 +1029,10 @@ impl Service {
 		for eid in sorted {
 			let Some(pdu) = events.get(&eid) else { continue };
 			processed = processed.saturating_add(1);
+
+			if processed.is_multiple_of(1000) {
+				info!("rebuild_state: resolved state for {}/{} events...", processed, events.len());
+			}
 
 			// Find parent state
 			let prev_sshs: Vec<u64> = pdu

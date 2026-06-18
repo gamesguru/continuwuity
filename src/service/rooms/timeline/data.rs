@@ -611,6 +611,14 @@ impl Data {
 		self.eventid_pdu.get(&event_id_bytes).await.deserialized()
 	}
 
+	pub(super) fn db_batch(&self) -> database::rocksdb::WriteBatch {
+		database::rocksdb::WriteBatch::default()
+	}
+
+	pub(super) fn db_apply_batch(&self, batch: &database::rocksdb::WriteBatch) {
+		self.eventid_pdu.apply_batch(batch)
+	}
+
 	pub(super) async fn append_pdu(
 		&self,
 		pdu_id: &RawPduId,
@@ -618,21 +626,34 @@ impl Data {
 		json: &CanonicalJsonObject,
 		count: PduCount,
 	) {
-		debug_assert!(matches!(count, PduCount::Normal(_)), "PduCount not Normal");
-
 		let mut batch = database::rocksdb::WriteBatch::default();
+		self.append_pdu_batch(&mut batch, pdu_id, pdu, json, count).await;
+		self.eventid_pdu.apply_batch(&batch);
+		self.room_pducount_eventid.wake(pdu_id);
+		self.eventid_pdu.wake(pdu.event_id.as_bytes());
+	}
+
+	pub(super) async fn append_pdu_batch(
+		&self,
+		batch: &mut database::rocksdb::WriteBatch,
+		pdu_id: &RawPduId,
+		pdu: &PduEvent,
+		json: &CanonicalJsonObject,
+		count: PduCount,
+	) {
+		debug_assert!(matches!(count, PduCount::Normal(_)), "PduCount not Normal");
 
 		let event_id_bytes = pdu.event_id.as_bytes();
 
 		// Map event_id -> pdu_id
 		self.eventid_pduid
-			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
+			.insert_into_batch(batch, &event_id_bytes, pdu_id);
 
 		self.eventid_pdu
-			.raw_put_into_batch(&mut batch, event_id_bytes, Json(json));
+			.raw_put_into_batch(batch, event_id_bytes, Json(json));
 
 		self.room_pducount_eventid
-			.insert_into_batch(&mut batch, pdu_id, event_id_bytes);
+			.insert_into_batch(batch, pdu_id, event_id_bytes);
 
 		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
 		{
@@ -660,7 +681,7 @@ impl Data {
 
 		let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
 		self.roomid_topologicalorder_pducount.insert_into_batch(
-			&mut batch,
+			batch,
 			&topo_key,
 			event_id_bytes,
 		);
@@ -678,7 +699,7 @@ impl Data {
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.eventid_metadata
-				.insert_into_batch(&mut batch, event_id_bytes, metadata_bytes);
+				.insert_into_batch(batch, event_id_bytes, metadata_bytes);
 		}
 
 		let short_event_id = self
@@ -692,7 +713,7 @@ impl Data {
 			.multi_get_or_create_shorteventid(pdu.prev_events())
 			.collect()
 			.await;
-		self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
+		self.store_shortprevevents_into_batch(batch, short_event_id, &prev_shorts);
 
 		let auth_shorts: Vec<_> = self
 			.services
@@ -700,11 +721,7 @@ impl Data {
 			.multi_get_or_create_shorteventid(pdu.auth_events())
 			.collect()
 			.await;
-		self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
-
-		self.eventid_pdu.apply_batch(&batch);
-		self.room_pducount_eventid.wake(pdu_id);
-		self.eventid_pdu.wake(event_id_bytes);
+		self.store_shortauthevents_into_batch(batch, short_event_id, &auth_shorts);
 	}
 
 	pub(super) async fn prepend_backfill_pdu(
@@ -715,15 +732,28 @@ impl Data {
 		pdu: &PduEvent,
 	) {
 		let mut batch = database::rocksdb::WriteBatch::default();
+		self.prepend_backfill_pdu_batch(&mut batch, pdu_id, event_id, json, pdu).await;
+		self.eventid_pdu.apply_batch(&batch);
+		self.room_pducount_eventid.wake(pdu_id);
+		self.eventid_pdu.wake(event_id.as_bytes());
+	}
 
+	pub(super) async fn prepend_backfill_pdu_batch(
+		&self,
+		batch: &mut database::rocksdb::WriteBatch,
+		pdu_id: &RawPduId,
+		event_id: &EventId,
+		json: &CanonicalJsonObject,
+		pdu: &PduEvent,
+	) {
 		let event_id_bytes = event_id.as_bytes();
 		self.eventid_pduid
-			.insert_into_batch(&mut batch, &event_id_bytes, pdu_id);
+			.insert_into_batch(batch, &event_id_bytes, pdu_id);
 
 		self.eventid_pdu
-			.raw_put_into_batch(&mut batch, event_id_bytes, Json(json));
+			.raw_put_into_batch(batch, event_id_bytes, Json(json));
 		self.room_pducount_eventid
-			.insert_into_batch(&mut batch, pdu_id, event_id_bytes);
+			.insert_into_batch(batch, pdu_id, event_id_bytes);
 		let existing_metadata =
 			if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
 				bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
@@ -750,7 +780,7 @@ impl Data {
 
 		let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
 		self.roomid_topologicalorder_pducount.insert_into_batch(
-			&mut batch,
+			batch,
 			&topo_key,
 			event_id_bytes,
 		);
@@ -768,7 +798,7 @@ impl Data {
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.eventid_metadata
-				.insert_into_batch(&mut batch, event_id_bytes, metadata_bytes);
+				.insert_into_batch(batch, event_id_bytes, metadata_bytes);
 		}
 
 		let short_event_id = self
@@ -783,7 +813,7 @@ impl Data {
 			.multi_get_or_create_shorteventid(pdu.prev_events())
 			.collect()
 			.await;
-		self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
+		self.store_shortprevevents_into_batch(batch, short_event_id, &prev_shorts);
 
 		let auth_shorts: Vec<_> = self
 			.services
@@ -791,11 +821,7 @@ impl Data {
 			.multi_get_or_create_shorteventid(pdu.auth_events())
 			.collect()
 			.await;
-		self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);
-
-		self.eventid_pdu.apply_batch(&batch);
-		self.room_pducount_eventid.wake(pdu_id);
-		self.eventid_pdu.wake(event_id_bytes);
+		self.store_shortauthevents_into_batch(batch, short_event_id, &auth_shorts);
 	}
 
 	/// Removes a pdu and creates a new one with the same id.

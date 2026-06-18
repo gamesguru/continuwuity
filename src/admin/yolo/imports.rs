@@ -73,6 +73,11 @@ pub(super) async fn import_pdus(
 
 	let mut futures = FuturesUnordered::new();
 
+	let shared_batch = std::sync::Arc::new(tokio::sync::Mutex::new((
+		self.services.rooms.timeline.db_batch(),
+		0_usize,
+	)));
+
 	while let Ok(Some(line)) = lines.next_line().await {
 		if line.trim().is_empty() {
 			continue;
@@ -85,6 +90,7 @@ pub(super) async fn import_pdus(
 		let rejected = &rejected;
 		let room_id_ref = &room_id;
 		let room_version_ref = &room_version;
+		let shared_batch = shared_batch.clone();
 
 		futures.push(async move {
 			total.fetch_add(1, Ordering::Relaxed);
@@ -152,12 +158,22 @@ pub(super) async fn import_pdus(
 				}
 
 				if skip_auth {
+					let mut lock = shared_batch.lock().await;
+					let (batch, count) = &mut *lock;
 					self.services
 						.rooms
 						.timeline
-						.force_insert_pdu(room_id_ref, &eid, &pdu, &value, true)
+						.force_insert_pdu_batch(batch, room_id_ref, &eid, &pdu, &value, true)
 						.await
-						.map(|_| (eid.clone(), true))
+						.unwrap();
+					*count += 1;
+					if *count >= 10000 {
+						self.services.rooms.timeline.db_apply_batch(batch);
+						*batch = self.services.rooms.timeline.db_batch();
+						*count = 0;
+					}
+					drop(lock);
+					Ok((eid.clone(), true))
 				} else {
 					let (eid, val) = if skip_sig_verify {
 						(eid, value)
@@ -278,6 +294,11 @@ pub(super) async fn import_pdus(
 	}
 
 	while futures.next().await.is_some() {}
+
+	let mut lock = shared_batch.lock().await;
+	let (batch, _) = &mut *lock;
+	self.services.rooms.timeline.db_apply_batch(batch);
+	drop(lock);
 
 	let (_, num_true) = self
 		.services
