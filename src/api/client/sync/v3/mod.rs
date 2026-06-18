@@ -283,7 +283,6 @@ pub(crate) async fn build_sync_events(
 		.and_then(|string| string.parse().ok());
 
 	let full_state = body.body.full_state;
-	tracing::error!(?last_sync_end_count, since = ?body.body.since, "DEBUG: SYNC");
 
 	// FilterDefinition is very large (0x1000 bytes), let's put it on the heap
 	let filter = Box::new(match body.body.filter.as_ref() {
@@ -441,16 +440,6 @@ pub(crate) async fn build_sync_events(
 	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
 	let (left_rooms, left_state_after) = left_rooms;
 
-	for (room_id, room) in &joined_rooms {
-		info!(
-			target: "sync_debug",
-			%room_id, "Sync joined room timeline: {:?}", room.timeline.events.iter().map(|ev| ev.json().get()).collect::<Vec<_>>()
-		);
-		info!(
-			target: "sync_debug",
-			%room_id, "Sync joined room state: {:?}", room.state.events.iter().map(|ev| ev.json().get()).collect::<Vec<_>>()
-		);
-	}
 
 	let presence_updates: OptionFuture<_> = services
 		.config
@@ -574,11 +563,6 @@ pub(crate) async fn build_sync_events(
 	)
 	.expect("ruma response is valid JSON");
 
-	info!(
-		target: "sync_debug",
-		"SYNC val JSON: {:?}", serde_json::to_string(&val).unwrap()
-	);
-
 	// Manually insert state_after data for MSC4222
 	if let Some(join) = val.get_mut("rooms").and_then(|r| r.get_mut("join")) {
 		for (room_id, state_after) in joined_state_after {
@@ -608,7 +592,6 @@ pub(crate) async fn build_sync_events(
 		}
 	}
 
-	tracing::error!("FINAL SYNC VAL: {}", val);
 	Ok(val)
 }
 
