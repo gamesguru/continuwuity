@@ -152,7 +152,7 @@ pub(crate) async fn get_missing_events_route(
 		}
 	}
 
-	for (prev, edges) in graph.iter() {
+	for (prev, edges) in &graph {
 		if in_degree.contains_key(prev) {
 			for to in edges {
 				if let Some(deg) = in_degree.get_mut(to) {
