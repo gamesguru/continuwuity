@@ -930,6 +930,14 @@ where
 
 		// 1-HOP STRICT SCAN: avoids O(N * E) exponential BFS tarpit
 		for aid in ev.auth_events() {
+			// FAST PATH: check if we already parsed this power levels event
+			if parsed_pl_cache.contains_key(aid) {
+				if let Some(aev) = fetch_event(aid.to_owned()).await {
+					pl_event = Some(aev);
+				}
+				continue;
+			}
+
 			if let Some(aev) = fetch_event(aid.to_owned()).await {
 				if is_type_and_key(&aev, &TimelineEventType::RoomCreate, "")
 					&& creator_event.is_none()
@@ -1449,6 +1457,8 @@ where
 	let mut event_to_mainline: HashMap<&OwnedEventId, Option<usize>> = HashMap::new();
 	let mut event_ts: HashMap<&OwnedEventId, MilliSecondsSinceUnixEpoch> = HashMap::new();
 
+	let mut is_pl_cache: HashMap<OwnedEventId, bool> = HashMap::new();
+
 	for ev_id in to_sort {
 		let Some(event) = fetch_event(ev_id.clone()).await else {
 			continue;
@@ -1463,11 +1473,19 @@ where
 				// Find the 1-hop PL event
 				let mut current_pl = None;
 				for aid in event.auth_events() {
-					let Some(aev) = fetch_event(aid.to_owned()).await else {
-						continue;
+					let is_pl = match is_pl_cache.get(aid) {
+						| Some(&b) => b,
+						| None => {
+							let is_pl = fetch_event(aid.to_owned()).await.is_some_and(|aev| {
+								is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "")
+							});
+							is_pl_cache.insert(aid.to_owned(), is_pl);
+							is_pl
+						},
 					};
-					if is_type_and_key(&aev, &TimelineEventType::RoomPowerLevels, "") {
-						current_pl = Some(aev);
+
+					if is_pl {
+						current_pl = fetch_event(aid.to_owned()).await;
 						break;
 					}
 				}
