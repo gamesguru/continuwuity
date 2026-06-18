@@ -1517,9 +1517,10 @@ where
 					}
 				}
 
-				if let Some(depth) = found_depth {
-					for id in path {
+				if let Some(mut depth) = found_depth {
+					for id in path.into_iter().rev() {
 						mainline_depth.insert(id, depth);
+						depth = depth.saturating_add(1);
 					}
 				}
 				found_depth
