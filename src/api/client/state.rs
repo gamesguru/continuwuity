@@ -202,8 +202,11 @@ async fn send_state_event_for_key_helper(
 	allowed_to_send_state_event(services, room_id, event_type, state_key, json).await?;
 	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 
-	if let Ok(existing_event) =
-		services.rooms.state_accessor.room_state_get(room_id, event_type, state_key).await
+	if let Ok(existing_event) = services
+		.rooms
+		.state_accessor
+		.room_state_get(room_id, event_type, state_key)
+		.await
 	{
 		if existing_event.sender() == sender {
 			if let Ok(existing_content) =
