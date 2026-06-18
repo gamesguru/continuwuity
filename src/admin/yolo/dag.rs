@@ -361,14 +361,14 @@ pub(super) async fn get_room_dag(
 pub(super) async fn get_remote_dag(
 	&self,
 	room_id: OwnedRoomId,
-	server: OwnedServerName,
+	server: Option<OwnedServerName>,
 	limit: i64,
 	from: Option<OwnedEventId>,
 	print: bool,
 	verbose: bool,
 	room_version: Option<RoomVersionId>,
 	extra_servers: Vec<OwnedServerName>,
-	_gap_fill: bool,
+	gap_fill: bool,
 	import: bool,
 	_skip_auth: bool,
 	reorder: bool,
@@ -379,8 +379,10 @@ pub(super) async fn get_remote_dag(
 		return Err!("Federation is disabled on this homeserver.");
 	}
 
-	if server == self.services.globals.server_name() {
-		return Err!("Cannot fetch from ourselves. Use get-room-dag instead.");
+	if let Some(ref s) = server {
+		if *s == self.services.globals.server_name() {
+			return Err!("Cannot fetch from ourselves. Use get-room-dag instead.");
+		}
 	}
 
 	let start_event_id: OwnedEventId = match from {
@@ -408,20 +410,38 @@ pub(super) async fn get_remote_dag(
 	};
 
 	// Build server pool: primary + auto-discovered EMA-ranked room servers
-	let mut pool = self
-		.services
-		.rooms
-		.event_handler
-		.build_server_pool(
-			&room_id,
-			&server,
-			self.services.server.config.federation_fallback_room_servers,
-		)
-		.await;
+	let mut pool = if !gap_fill {
+		if let Some(ref s) = server {
+			service::rooms::event_handler::server_pool::ServerPool::from_servers(vec![s.clone()])
+		} else if !extra_servers.is_empty() {
+			service::rooms::event_handler::server_pool::ServerPool::from_servers(vec![])
+		} else {
+			return Err!(
+				"You must specify a server, --also, or use --gap-fill for auto-discovery."
+			);
+		}
+	} else {
+		let preferred = server
+			.clone()
+			.unwrap_or_else(|| self.services.globals.server_name().to_owned());
+		self.services
+			.rooms
+			.event_handler
+			.build_server_pool(
+				&room_id,
+				&preferred,
+				self.services.server.config.federation_fallback_room_servers,
+			)
+			.await
+	};
 
 	// Add any explicit --also servers
 	if !extra_servers.is_empty() {
-		let mut servers = vec![server.clone()];
+		let mut servers = if let Some(ref s) = server {
+			vec![s.clone()]
+		} else {
+			vec![]
+		};
 		for s in &extra_servers {
 			if !servers.contains(s) {
 				servers.push(s.clone());
@@ -438,7 +458,8 @@ pub(super) async fn get_remote_dag(
 	}
 
 	let safe_room_id = room_id.to_string().replace('!', "").replace(':', "_");
-	let path = format!("/tmp/remote-dag-{safe_room_id}-v{room_version}-{server}.jsonl");
+	let server_str = server.as_ref().map(|s| s.as_str()).unwrap_or("auto");
+	let path = format!("/tmp/remote-dag-{safe_room_id}-v{room_version}-{server_str}.jsonl");
 	let file = tokio::fs::File::create(&path)
 		.await
 		.map_err(|e| err!(Database("Failed to create file {path}: {e:?}")))?;
@@ -596,7 +617,7 @@ pub(super) async fn get_remote_dag(
 						})
 						.await
 					{
-						if fallback_server.as_str() != server.as_str() {
+						if Some(fallback_server) != server.as_ref() {
 							info!(
 								"get-remote-dag: {fallback_server} filled gap {event_id} that \
 								 primary server didn't have"
@@ -697,7 +718,7 @@ pub(super) async fn get_remote_dag(
 			if total.is_multiple_of(1000) {
 				let elapsed = start_time.elapsed();
 				info!(
-					"get-remote-dag: {total} PDUs fetched from {server} in {elapsed:?} \
+					"get-remote-dag: {total} PDUs fetched from {server_list_str} in {elapsed:?} \
 					 ({batches} batches, queue={})",
 					queue.len()
 				);
@@ -749,14 +770,15 @@ pub(super) async fn get_remote_dag(
 	};
 
 	info!(
-		"get-remote-dag: complete — {total} PDUs from {server} in {elapsed:?} ({batches} \
-		 batches, bf={bf_whole}.{bf_frac:03}, depth={min_depth}..{max_depth}, reason: \
-		 {finish_reason})"
+		"get-remote-dag: complete — {total} PDUs from {server_list_str} in {elapsed:?} \
+		 ({batches} batches, bf={bf_whole}.{bf_frac:03}, depth={min_depth}..{max_depth}, \
+		 reason: {finish_reason})"
 	);
 
 	// Rename to include depth range so successive runs don't overwrite
 	let final_path = format!(
-		"/tmp/remote-dag-{safe_room_id}-v{room_version}-{server}-d{min_depth}-{max_depth}.jsonl"
+		"/tmp/remote-dag-{safe_room_id}-v{room_version}-{server_str}-d{min_depth}-{max_depth}.\
+		 jsonl"
 	);
 	if let Err(e) = tokio::fs::rename(&path, &final_path).await {
 		warn!("Failed to rename {path} -> {final_path}: {e}");

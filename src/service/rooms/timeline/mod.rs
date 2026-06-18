@@ -1178,7 +1178,7 @@ impl Service {
 			ts_map
 				.get(eid)
 				.copied()
-				.unwrap_or(ruma::MilliSecondsSinceUnixEpoch(0_u32.into()))
+				.unwrap_or_else(|| ruma::MilliSecondsSinceUnixEpoch(0_u32.into()))
 		});
 
 		let num_true_extremities = final_extremities.len();

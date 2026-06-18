@@ -307,10 +307,12 @@ pub enum YoloCommand {
 	/// Fetch a room's DAG from a remote server via federation backfill API
 	/// and write it to a JSONL file.
 	///
-	/// With --gap-fill, uses a 3-layer hybrid approach:
-	///   Layer 1: /get_missing_events (targeted gap-fill between components)
-	///   Layer 2: /backfill (bulk crawl backwards, 500 events/batch)
-	///   Layer 3: GET /event/{id} (targeted stragglers)
+	/// By default, this command strictly queries the single `<SERVER>`
+	/// specified.
+	///
+	/// With --gap-fill, it builds an auto-discovery pool of up to 25 other
+	/// known servers in the room and fans out dynamically if the primary
+	/// server fails or rate-limits.
 	///
 	/// With --import, inserts fetched PDUs directly into the timeline.
 	/// With --reorder, chains reorder-timeline after completion.
@@ -318,8 +320,9 @@ pub enum YoloCommand {
 		/// Room ID
 		room_id: OwnedRoomId,
 
-		/// Primary remote server to fetch from
-		server: OwnedServerName,
+		/// Primary remote server to fetch from (optional if using --gap-fill or
+		/// --also)
+		server: Option<OwnedServerName>,
 
 		/// Maximum number of events to fetch (-1 for unlimited, default: 100)
 		#[arg(long, default_value = "100", allow_hyphen_values = true)]
@@ -345,8 +348,8 @@ pub enum YoloCommand {
 		#[arg(long = "also")]
 		extra_servers: Vec<OwnedServerName>,
 
-		/// Use 3-layer hybrid approach: /get_missing_events → /backfill →
-		/// GET /event to fill DAG gaps
+		/// Auto-discover other room servers and fan out requests dynamically
+		/// if the primary server fails or rate-limits.
 		#[arg(long)]
 		gap_fill: bool,
 
