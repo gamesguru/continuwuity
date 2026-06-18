@@ -60,7 +60,7 @@ pub(crate) async fn get_missing_events_route(
 	let room_version = services.rooms.state.get_room_version(&body.room_id).await?;
 
 	let mut queue: VecDeque<OwnedEventId> = VecDeque::from(body.latest_events.clone());
-	let mut results: Vec<Box<RawValue>> = Vec::with_capacity(limit);
+	let mut results: Vec<(ruma::UInt, Box<RawValue>)> = Vec::with_capacity(limit);
 	let mut seen: HashSet<OwnedEventId> = HashSet::from_iter(body.earliest_events.clone());
 
 	while let Some(next_event_id) = queue.pop_front() {
@@ -113,12 +113,13 @@ pub(crate) async fn get_missing_events_route(
 			continue; // Don't include latest_events in results,
 			// but do include their prev_events in the queue
 		}
-		results.push(
+		results.push((
+			pdu.depth,
 			services
 				.sending
 				.convert_to_outgoing_federation_event(to_canonical_object(pdu)?)
 				.await,
-		);
+		));
 		trace!(
 			%next_event_id,
 			queue_len = queue.len(),
@@ -131,6 +132,7 @@ pub(crate) async fn get_missing_events_route(
 	if !queue.is_empty() {
 		debug!("limit reached before queue was empty");
 	}
-	results.reverse(); // return oldest first
-	Ok(get_missing_events::v1::Response { events: results })
+	results.sort_by_key(|(depth, _)| *depth); // return oldest first, guaranteeing topological order
+	let events = results.into_iter().map(|(_, event)| event).collect();
+	Ok(get_missing_events::v1::Response { events })
 }

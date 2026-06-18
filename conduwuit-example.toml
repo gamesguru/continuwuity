@@ -188,6 +188,10 @@
 
 # This item is undocumented. Please contribute documentation for it.
 #
+#shorteventid_shortprevevents_cache_capacity = varies by system
+
+# This item is undocumented. Please contribute documentation for it.
+#
 #eventidshort_cache_capacity = varies by system
 
 # This item is undocumented. Please contribute documentation for it.
