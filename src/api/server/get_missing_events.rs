@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Event, Result, RoomVersion, debug, info, trace, utils::to_canonical_object, warn,
+	Err, Event, Result, RoomVersion, debug, err, info, trace, utils::to_canonical_object, warn,
 };
 use ruma::{OwnedEventId, api::federation::event::get_missing_events};
 use serde_json::{json, value::RawValue};
@@ -51,7 +51,10 @@ pub(crate) async fn get_missing_events_route(
 		.min(LIMIT_MAX);
 
 	let room_version_id = services.rooms.state.get_room_version(&body.room_id).await?;
-	let room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
+	let room_version = RoomVersion::new(&room_version_id).map_err(|e| {
+		warn!("Unsupported room version {room_version_id}: {e:?}");
+		err!(Request(UnsupportedRoomVersion("Unsupported room version")))
+	})?;
 
 	let mut queue: VecDeque<OwnedEventId> = VecDeque::from(body.latest_events.clone());
 	let mut results: Vec<Box<RawValue>> = Vec::with_capacity(limit);

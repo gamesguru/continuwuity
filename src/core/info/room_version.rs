@@ -54,7 +54,7 @@ pub fn available_room_versions() -> impl Iterator<Item = RoomVersion> {
 		.zip(once(RoomVersionStability::Unstable).cycle())
 		.chain(
 			once(RoomVersionId::from_str("org.matrix.msc4242.12").expect("valid version"))
-				.zip(once(RoomVersionStability::Stable).cycle()),
+				.zip(once(RoomVersionStability::Unstable).cycle()),
 		);
 
 	STABLE_ROOM_VERSIONS
