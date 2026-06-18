@@ -222,10 +222,10 @@ impl Data {
 	pub(super) async fn get_event_id_from_pdu_id(
 		&self,
 		pdu_id: &RawPduId,
-	) -> Result<ruma::OwnedEventId> {
+	) -> Result<OwnedEventId> {
 		#[derive(serde::Deserialize)]
 		struct EventIdExtract {
-			event_id: ruma::OwnedEventId,
+			event_id: OwnedEventId,
 		}
 
 		let extract: EventIdExtract = self.pduid_pdu.get(pdu_id).await.deserialized()?;
