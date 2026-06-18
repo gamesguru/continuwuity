@@ -145,6 +145,9 @@ pub trait Event: Clone + Debug {
 
 	fn is_owned(&self) -> bool;
 
+	#[inline]
+	fn as_ptr(&self) -> *const () { std::ptr::null() }
+
 	//
 	// Canonical properties
 	//

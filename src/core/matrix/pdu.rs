@@ -280,15 +280,13 @@ impl Event for std::sync::Arc<Pdu> {
 	fn rejected(&self) -> bool { self.rejected }
 
 	#[inline]
-	fn as_mut_pdu(&mut self) -> &mut Pdu { std::sync::Arc::make_mut(self) }
+	fn as_mut_pdu(&mut self) -> &mut Pdu { Self::make_mut(self) }
 
 	#[inline]
-	fn as_pdu(&self) -> &Pdu { &self }
+	fn as_pdu(&self) -> &Pdu { self }
 
 	#[inline]
-	fn into_pdu(self) -> Pdu {
-		std::sync::Arc::try_unwrap(self).unwrap_or_else(|arc| (*arc).clone())
-	}
+	fn into_pdu(self) -> Pdu { Self::try_unwrap(self).unwrap_or_else(|arc| (*arc).clone()) }
 
 	#[inline]
 	fn is_owned(&self) -> bool { true }
@@ -363,7 +361,7 @@ impl Event for &std::sync::Arc<Pdu> {
 	fn as_mut_pdu(&mut self) -> &mut Pdu { panic!("Cannot mutate shared reference") }
 
 	#[inline]
-	fn as_pdu(&self) -> &Pdu { &***self }
+	fn as_pdu(&self) -> &Pdu { self }
 
 	#[inline]
 	fn into_pdu(self) -> Pdu { (**self).clone() }

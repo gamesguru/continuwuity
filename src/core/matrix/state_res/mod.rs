@@ -1419,16 +1419,17 @@ where
 	// predecessor PL event in its auth_events). We do NOT use LCA-to-RMQ here
 	// because Matrix auth chains are DAGs, not trees — the Euler tour required
 	// for RMQ is only valid on trees. We use a simple HashMap for O(1) lookups.
-	let mut mainline_depth: HashMap<OwnedEventId, usize> = HashMap::new();
+	let mut mainline_depth: rustc_hash::FxHashMap<usize, usize> =
+		rustc_hash::FxHashMap::default();
 	let mut pl = resolved_power_level;
 	let mut position: usize = 0;
 	while let Some(p) = pl {
-		mainline_depth.insert(p.clone(), position);
-		position = position.saturating_add(1);
-
 		let Some(event) = fetch_event(p).await else {
 			break;
 		};
+
+		mainline_depth.insert(event.as_ptr().addr(), position);
+		position = position.saturating_add(1);
 
 		pl = None;
 		for aid in event.auth_events() {
@@ -1444,31 +1445,33 @@ where
 
 	// Step 2: For each event to sort, find its associated power level event,
 	// then look up its mainline position in O(1).
-	//
-	// Depth semantics (matching the original ruma state-res algorithm):
-	//   - None  -> event has no PL in its auth chain; lowest priority, applied
-	//     first, loses
-	//   - Some(0) -> event's PL IS the resolved PL; highest priority, applied last,
-	//     wins
-	//   - Some(N) -> event's PL is N hops from the resolved PL; intermediate
-	//     priority
-	//
-	// We use Option<usize> so that None < Some(0) in Rust's natural Ord ordering.
-	let mut event_to_mainline: HashMap<&OwnedEventId, Option<usize>> = HashMap::new();
-	let mut event_ts: HashMap<&OwnedEventId, MilliSecondsSinceUnixEpoch> = HashMap::new();
+	let mut event_to_mainline: rustc_hash::FxHashMap<usize, Option<usize>> =
+		rustc_hash::FxHashMap::default();
+	let mut event_ts: rustc_hash::FxHashMap<usize, MilliSecondsSinceUnixEpoch> =
+		rustc_hash::FxHashMap::default();
 
-	let mut is_pl_cache: HashMap<OwnedEventId, bool> = HashMap::new();
+	// We can use *const () for this cache too, because we are caching based on
+	// the pointer of the referenced event! Wait, auth_events returns EventId.
+	// We MUST use OwnedEventId or EventId for is_pl_cache since we don't have
+	// the event pointer until we fetch it, and the point of the cache is to avoid
+	// fetching!
+	let mut is_pl_cache: rustc_hash::FxHashMap<OwnedEventId, bool> =
+		rustc_hash::FxHashMap::default();
+	let mut id_to_ptr: rustc_hash::FxHashMap<&OwnedEventId, usize> =
+		rustc_hash::FxHashMap::default();
 
 	for ev_id in to_sort {
 		let Some(event) = fetch_event(ev_id.clone()).await else {
 			continue;
 		};
-		event_ts.insert(ev_id, event.origin_server_ts());
+		id_to_ptr.insert(ev_id, event.as_ptr().addr());
+		event_ts.insert(event.as_ptr().addr(), event.origin_server_ts());
 
 		let depth: Option<usize> =
 			if is_type_and_key(&event, &TimelineEventType::RoomPowerLevels, "") {
 				// The event IS a power level event — look itself up directly
-				mainline_depth.get(ev_id).copied()
+				let ptr = event.as_ptr().addr();
+				mainline_depth.get(&ptr).copied()
 			} else {
 				// Find the 1-hop PL event
 				let mut current_pl = None;
@@ -1500,8 +1503,9 @@ where
 						// Cycle detected in auth chain — break to prevent infinite loop.
 						break;
 					}
-					path.push(current_id.clone());
-					if let Some(&depth) = mainline_depth.get(&current_id) {
+					let current_ptr = c_pl.as_ptr().addr();
+					path.push(current_ptr);
+					if let Some(&depth) = mainline_depth.get(&current_ptr) {
 						found_depth = Some(depth);
 						break;
 					}
@@ -1518,14 +1522,14 @@ where
 				}
 
 				if let Some(depth) = found_depth {
-					for id in path {
-						mainline_depth.insert(id, depth);
+					for ptr in path {
+						mainline_depth.insert(ptr, depth);
 					}
 				}
 				found_depth
 			};
 
-		event_to_mainline.insert(ev_id, depth);
+		event_to_mainline.insert(event.as_ptr().addr(), depth);
 	}
 
 	// Step 3: Sort by mainline position then ts/id. Applied left->right, last wins.
@@ -1536,17 +1540,19 @@ where
 	//
 	// This mirrors spec §6.6.3.3: "x < y if x.position > y.position" where ∞
 	// beats all finite positions (None events have position ∞).
-	let mut sort_event_ids: Vec<_> = event_to_mainline.keys().map(|&k| k.clone()).collect();
+	let mut sort_event_ids: Vec<OwnedEventId> = to_sort.to_vec();
 
 	sort_event_ids.sort_by(|a, b| {
-		let da = event_to_mainline.get(a).copied().flatten();
-		let db = event_to_mainline.get(b).copied().flatten();
+		let ptr_a = id_to_ptr.get(a).copied().unwrap_or(0);
+		let ptr_b = id_to_ptr.get(b).copied().unwrap_or(0);
+		let da = event_to_mainline.get(&ptr_a).copied().flatten();
+		let db = event_to_mainline.get(&ptr_b).copied().flatten();
 		let ta = event_ts
-			.get(a)
+			.get(&ptr_a)
 			.copied()
 			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
 		let tb = event_ts
-			.get(b)
+			.get(&ptr_b)
 			.copied()
 			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
 		match (da, db) {
