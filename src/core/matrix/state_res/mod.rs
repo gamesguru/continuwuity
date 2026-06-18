@@ -716,11 +716,18 @@ where
 {
 	debug!("reverse topological sort of power events");
 
+	let start_reverse = std::time::Instant::now();
 	let mut graph: rustc_hash::FxHashMap<OwnedEventId, rustc_hash::FxHashSet<OwnedEventId>> =
 		rustc_hash::FxHashMap::default();
 	for event_id in events_to_sort {
 		add_event_and_auth_chain_to_graph(&mut graph, event_id, auth_diff, fetch_event).await;
 	}
+
+	println!(
+		"reverse_topological_power_sort phase 1 (graph build) took {:?}",
+		start_reverse.elapsed()
+	);
+	let start_reverse_2 = std::time::Instant::now();
 
 	let event_to_pl: HashMap<_, _> = graph
 		.keys()
@@ -761,7 +768,12 @@ where
 		Ok((pl, ev.origin_server_ts()))
 	};
 
-	lexicographical_topological_sort(&graph, &fetcher).await
+	let res = lexicographical_topological_sort(&graph, &fetcher).await;
+	println!(
+		"reverse_topological_power_sort phase 2 (lexicographical sort) took {:?}",
+		start_reverse_2.elapsed()
+	);
+	res
 }
 
 /// Sorts the event graph based on number of outgoing/incoming edges.
@@ -803,7 +815,7 @@ where
 				.power_level
 				.cmp(&self.power_level)
 				.then(self.origin_server_ts.cmp(&other.origin_server_ts))
-				.then(self.event_id.cmp(other.event_id))
+				.then(self.event_id.borrow().cmp(other.event_id.borrow()))
 		}
 	}
 
@@ -1416,6 +1428,8 @@ where
 		return Ok(vec![]);
 	}
 
+	let start_mainline = std::time::Instant::now();
+
 	// Fast-path local cache to eliminate async Tokio overhead and DashMap locking.
 	// For massive DAGs (68,000+ events), we repeatedly walk the exact same PL
 	// chains. Hitting `fetch_event(id).await` sequentially forces 300,000+ task
@@ -1439,7 +1453,7 @@ where
 		};
 	}
 
-	let mut mainline_depth: rustc_hash::FxHashMap<usize, usize> =
+	let mut mainline_depth: rustc_hash::FxHashMap<OwnedEventId, usize> =
 		rustc_hash::FxHashMap::default();
 	let mut pl = resolved_power_level;
 	let mut position: usize = 0;
@@ -1448,7 +1462,7 @@ where
 			break;
 		};
 
-		mainline_depth.insert(event.as_ptr().addr(), position);
+		mainline_depth.insert(event.event_id().to_owned(), position);
 		position = position.saturating_add(1);
 
 		pl = None;
@@ -1463,30 +1477,32 @@ where
 		}
 	}
 
+	println!(
+		"mainline_sort phase 1 (pre-fetch PL mainline) took {:?}",
+		start_mainline.elapsed()
+	);
+	let start_phase_2 = std::time::Instant::now();
+
 	// Step 2: For each event to sort, find its associated power level event,
 	// then look up its mainline position in O(1).
-	let mut event_to_mainline: rustc_hash::FxHashMap<usize, Option<usize>> =
+	let mut event_to_mainline: rustc_hash::FxHashMap<OwnedEventId, Option<usize>> =
 		rustc_hash::FxHashMap::default();
-	let mut event_ts: rustc_hash::FxHashMap<usize, MilliSecondsSinceUnixEpoch> =
+	let mut event_ts: rustc_hash::FxHashMap<OwnedEventId, MilliSecondsSinceUnixEpoch> =
 		rustc_hash::FxHashMap::default();
 
 	let mut is_pl_cache: rustc_hash::FxHashMap<OwnedEventId, bool> =
-		rustc_hash::FxHashMap::default();
-	let mut id_to_ptr: rustc_hash::FxHashMap<&OwnedEventId, usize> =
 		rustc_hash::FxHashMap::default();
 
 	for ev_id in to_sort {
 		let Some(event) = get!(ev_id) else {
 			continue;
 		};
-		id_to_ptr.insert(ev_id, event.as_ptr().addr());
-		event_ts.insert(event.as_ptr().addr(), event.origin_server_ts());
+		event_ts.insert(ev_id.clone(), event.origin_server_ts());
 
 		let depth: Option<usize> =
 			if is_type_and_key(&event, &TimelineEventType::RoomPowerLevels, "") {
 				// The event IS a power level event — look itself up directly
-				let ptr = event.as_ptr().addr();
-				mainline_depth.get(&ptr).copied()
+				mainline_depth.get(event.event_id()).copied()
 			} else {
 				// Find the 1-hop PL event
 				let mut current_pl = None;
@@ -1508,18 +1524,19 @@ where
 					}
 				}
 
-				// Iteratively walk PL chain w/ path memoization & cycle guarding
+				// Iteratively walk PL chain w/ path memo
 				let mut path = Vec::new();
-				let mut visited: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
+				let mut visited: rustc_hash::FxHashSet<OwnedEventId> =
+					rustc_hash::FxHashSet::default();
 				let mut found_depth = None;
 				while let Some(c_pl) = current_pl {
-					let current_ptr = c_pl.as_ptr().addr();
-					if !visited.insert(current_ptr) {
+					let current_id = c_pl.event_id().to_owned();
+					if !visited.insert(current_id.clone()) {
 						// Cycle detected in auth chain — break to prevent infinite loop.
 						break;
 					}
-					path.push(current_ptr);
-					if let Some(&depth) = mainline_depth.get(&current_ptr) {
+					path.push(current_id.clone());
+					if let Some(&depth) = mainline_depth.get(&current_id) {
 						found_depth = Some(depth);
 						break;
 					}
@@ -1536,15 +1553,18 @@ where
 				}
 
 				if let Some(depth) = found_depth {
-					for ptr in path {
-						mainline_depth.insert(ptr, depth);
+					for id in path {
+						mainline_depth.insert(id, depth);
 					}
 				}
 				found_depth
 			};
 
-		event_to_mainline.insert(event.as_ptr().addr(), depth);
+		event_to_mainline.insert(ev_id.clone(), depth);
 	}
+
+	println!("mainline_sort phase 2 (event traversal) took {:?}", start_phase_2.elapsed());
+	let start_phase_3 = std::time::Instant::now();
 
 	// Step 3: Sort by mainline position then ts/id. Applied left->right, last wins.
 	//
@@ -1557,16 +1577,15 @@ where
 	let mut sort_event_ids: Vec<OwnedEventId> = to_sort.to_vec();
 
 	sort_event_ids.sort_by(|a, b| {
-		let ptr_a = id_to_ptr.get(a).copied().unwrap_or(0);
-		let ptr_b = id_to_ptr.get(b).copied().unwrap_or(0);
-		let da = event_to_mainline.get(&ptr_a).copied().flatten();
-		let db = event_to_mainline.get(&ptr_b).copied().flatten();
+		let da = event_to_mainline.get(a).copied().flatten();
+		let db = event_to_mainline.get(b).copied().flatten();
+
 		let ta = event_ts
-			.get(&ptr_a)
+			.get(a)
 			.copied()
 			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
 		let tb = event_ts
-			.get(&ptr_b)
+			.get(b)
 			.copied()
 			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
 		match (da, db) {
@@ -1583,6 +1602,10 @@ where
 				.then(a.as_str().cmp(b.as_str())),
 		}
 	});
+
+	sort_event_ids.dedup();
+	println!("mainline_sort phase 3 (sorting) took {:?}", start_phase_3.elapsed());
+	println!("mainline_sort total took {:?}", start_mainline.elapsed());
 
 	Ok(sort_event_ids)
 }
