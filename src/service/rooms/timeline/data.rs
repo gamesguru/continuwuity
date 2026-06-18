@@ -9,7 +9,7 @@ use conduwuit::{
 	},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
-use futures::{Stream, TryFutureExt, TryStreamExt, pin_mut};
+use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt, pin_mut};
 use ruma::{CanonicalJsonObject, EventId, OwnedEventId, OwnedUserId, RoomId, api::Direction};
 
 use super::{PduId, RawPduId};
@@ -775,22 +775,18 @@ impl Data {
 			.get_or_create_shorteventid(event_id)
 			.await;
 
-		use futures::StreamExt;
-
-		let prev_events: Vec<&EventId> = pdu.prev_events().collect();
 		let prev_shorts: Vec<_> = self
 			.services
 			.short
-			.multi_get_or_create_shorteventid(prev_events.into_iter())
+			.multi_get_or_create_shorteventid(pdu.prev_events())
 			.collect()
 			.await;
 		self.store_shortprevevents_into_batch(&mut batch, short_event_id, &prev_shorts);
 
-		let auth_events: Vec<&EventId> = pdu.auth_events().collect();
 		let auth_shorts: Vec<_> = self
 			.services
 			.short
-			.multi_get_or_create_shorteventid(auth_events.into_iter())
+			.multi_get_or_create_shorteventid(pdu.auth_events())
 			.collect()
 			.await;
 		self.store_shortauthevents_into_batch(&mut batch, short_event_id, &auth_shorts);

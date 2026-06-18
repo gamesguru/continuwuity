@@ -1,9 +1,10 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use conduwuit::{Err, Result, err, info, warn};
+use futures::{StreamExt, stream::FuturesUnordered};
 use ruma::{
 	CanonicalJsonObject, OwnedEventId, OwnedRoomId, RoomVersionId, events::StateEventType,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
-use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::admin_command;

@@ -10,7 +10,6 @@ pub(super) async fn reorder_timeline(
 	room_id: Option<OwnedRoomId>,
 	all: bool,
 	tail: Option<usize>,
-	_no_compute_state: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
