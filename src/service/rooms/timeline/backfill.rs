@@ -624,7 +624,9 @@ pub async fn force_insert_pdu_batch(
 			.prepend_backfill_pdu_batch(batch, &pdu_id, event_id, &value, pdu)
 			.await;
 	} else {
-		self.db.append_pdu_batch(batch, &pdu_id, pdu, &value, pdu_count).await;
+		self.db
+			.append_pdu_batch(batch, &pdu_id, pdu, &value, pdu_count)
+			.await;
 	}
 
 	if pdu.kind == TimelineEventType::RoomMessage {

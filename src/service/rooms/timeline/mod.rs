@@ -180,9 +180,7 @@ impl crate::Service for Service {
 }
 
 impl Service {
-	pub fn db_batch(&self) -> database::rocksdb::WriteBatch {
-		self.db.db_batch()
-	}
+	pub fn db_batch(&self) -> database::rocksdb::WriteBatch { self.db.db_batch() }
 
 	pub fn db_apply_batch(&self, batch: &database::rocksdb::WriteBatch) {
 		self.db.db_apply_batch(batch)
@@ -750,10 +748,7 @@ impl Service {
 		let count = sorted.len();
 
 		if no_compute_state {
-			let shared_batch = Arc::new(tokio::sync::Mutex::new((
-				self.db.db_batch(),
-				0_usize,
-			)));
+			let shared_batch = Arc::new(tokio::sync::Mutex::new((self.db.db_batch(), 0_usize)));
 
 			let mut futures = futures::stream::FuturesUnordered::new();
 			for (i, event_id) in sorted.iter().enumerate() {
@@ -764,12 +759,14 @@ impl Service {
 				let pdu_count = PduCount::Normal(new_count);
 				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 				let shared_batch = shared_batch.clone();
-				
+
 				futures.push(async move {
 					if let Ok((pdu, json)) = self.db.get_from_eventid_pdu(&event_id).await {
 						let mut lock = shared_batch.lock().await;
 						let (batch, count) = &mut *lock;
-						self.db.append_pdu_batch(batch, &pdu_id, &pdu, &json, pdu_count).await;
+						self.db
+							.append_pdu_batch(batch, &pdu_id, &pdu, &json, pdu_count)
+							.await;
 						*count += 1;
 						if *count >= 10000 {
 							self.db.db_apply_batch(batch);
@@ -784,7 +781,7 @@ impl Service {
 				}
 			}
 			while futures.next().await.is_some() {}
-			
+
 			let mut lock = shared_batch.lock().await;
 			let (batch, _) = &mut *lock;
 			self.db.db_apply_batch(batch);
@@ -984,7 +981,10 @@ impl Service {
 		let mut room_version = ruma::RoomVersionId::V1;
 		for pdu in events.values() {
 			if *pdu.kind() == TimelineEventType::RoomCreate {
-				if let Ok(create_content) = serde_json::from_str::<ruma::events::room::create::RoomCreateEventContent>(pdu.content().get()) {
+				if let Ok(create_content) = serde_json::from_str::<
+					ruma::events::room::create::RoomCreateEventContent,
+				>(pdu.content().get())
+				{
 					room_version = create_content.room_version;
 					break;
 				}
@@ -1004,13 +1004,16 @@ impl Service {
 				.get(&id)
 				.map(|p| (p.depth(), p.origin_server_ts()))
 				.unwrap_or((ruma::uint!(0), ruma::MilliSecondsSinceUnixEpoch(ruma::uint!(0))));
-			
+
 			futures::future::ready(Result::Ok((depth.into(), ts)))
 		};
 
-		let sorted = conduwuit_core::matrix::state_res::lexicographical_topological_sort(&graph, &fetch_event_fn)
-			.await
-			.map_err(|e| err!(Database("DAG sort failed: {e}")))?;
+		let sorted = conduwuit_core::matrix::state_res::lexicographical_topological_sort(
+			&graph,
+			&fetch_event_fn,
+		)
+		.await
+		.map_err(|e| err!(Database("DAG sort failed: {e}")))?;
 
 		info!("rebuild_state: topological sort finished. Starting O(1) state resolution...");
 
@@ -1031,7 +1034,11 @@ impl Service {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
-				info!("rebuild_state: resolved state for {}/{} events...", processed, events.len());
+				info!(
+					"rebuild_state: resolved state for {}/{} events...",
+					processed,
+					events.len()
+				);
 			}
 
 			// Find parent state
@@ -1039,7 +1046,7 @@ impl Service {
 				.prev_events()
 				.filter_map(|prev_id| ssh_cache.get(prev_id).copied())
 				.collect();
-			
+
 			let mut unique_sshs = prev_sshs.clone();
 			unique_sshs.sort_unstable();
 			unique_sshs.dedup();
@@ -1069,14 +1076,14 @@ impl Service {
 							.state_compressor
 							.save_state(room_id, Arc::new(compressed_state))
 							.await?;
-						
+
 						last_added = state_delta.added.clone();
 						last_removed = state_delta.removed.clone();
 						let ssh = state_delta.shortstatehash;
 						resolved_state_cache.insert(unique_sshs, ssh);
 						ssh
 					}
-				}
+				},
 			};
 
 			let mut state_after = state_before;
@@ -1111,8 +1118,7 @@ impl Service {
 
 				if Some(&new) != replaces {
 					if let Ok(new_ssh) = self.services.globals.next_count() {
-						let mut statediffnew =
-							rooms::state_compressor::CompressedState::new();
+						let mut statediffnew = rooms::state_compressor::CompressedState::new();
 						statediffnew.insert(new);
 						let mut statediffremoved =
 							rooms::state_compressor::CompressedState::new();

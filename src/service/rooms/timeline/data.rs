@@ -627,7 +627,8 @@ impl Data {
 		count: PduCount,
 	) {
 		let mut batch = database::rocksdb::WriteBatch::default();
-		self.append_pdu_batch(&mut batch, pdu_id, pdu, json, count).await;
+		self.append_pdu_batch(&mut batch, pdu_id, pdu, json, count)
+			.await;
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
 		self.eventid_pdu.wake(pdu.event_id.as_bytes());
@@ -680,11 +681,8 @@ impl Data {
 		);
 
 		let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
-		self.roomid_topologicalorder_pducount.insert_into_batch(
-			batch,
-			&topo_key,
-			event_id_bytes,
-		);
+		self.roomid_topologicalorder_pducount
+			.insert_into_batch(batch, &topo_key, event_id_bytes);
 
 		let metadata = rooms::timeline::EventMetadata {
 			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
@@ -732,7 +730,8 @@ impl Data {
 		pdu: &PduEvent,
 	) {
 		let mut batch = database::rocksdb::WriteBatch::default();
-		self.prepend_backfill_pdu_batch(&mut batch, pdu_id, event_id, json, pdu).await;
+		self.prepend_backfill_pdu_batch(&mut batch, pdu_id, event_id, json, pdu)
+			.await;
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
 		self.eventid_pdu.wake(event_id.as_bytes());
@@ -779,11 +778,8 @@ impl Data {
 		);
 
 		let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
-		self.roomid_topologicalorder_pducount.insert_into_batch(
-			batch,
-			&topo_key,
-			event_id_bytes,
-		);
+		self.roomid_topologicalorder_pducount
+			.insert_into_batch(batch, &topo_key, event_id_bytes);
 
 		let metadata = rooms::timeline::EventMetadata {
 			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),

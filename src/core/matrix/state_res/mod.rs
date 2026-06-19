@@ -188,7 +188,13 @@ where
 	// synapse says `full_set = {eid for eid in full_conflicted_set if eid in
 	// event_map}`
 	// Hydra: Also consider the conflicted state subgraph
-	let mut all_conflicted_ids: HashSet<_> = get_auth_chain_diff(auth_chain_sets)
+	let auth_diff_stream = if stateres_version == StateResolutionVersion::V2_1 {
+		futures::stream::empty().boxed()
+	} else {
+		get_auth_chain_diff(auth_chain_sets).boxed()
+	};
+
+	let mut all_conflicted_ids: HashSet<_> = auth_diff_stream
 		.chain(conflicting.into_values().flatten().stream())
 		.chain(conflicted_state_subgraph.into_iter().stream())
 		.collect()
