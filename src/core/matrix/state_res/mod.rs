@@ -29,7 +29,7 @@ use ruma::{
 		StateEventType, TimelineEventType,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
-	int, uint,
+	int,
 };
 use serde_json::from_str as from_json_str;
 use smallvec::SmallVec;
@@ -1184,26 +1184,20 @@ where
 		}
 	}
 
-	let auth_events: HashMap<OwnedEventId, E> = auth_event_ids
-		.into_iter()
-		.stream()
-		.broad_filter_map(fetch_event)
-		// SYNAPSE CHECK 2: filter rejected auth events
-		.broad_filter_map(|auth_event| async {
+	let mut auth_events: HashMap<OwnedEventId, E> = HashMap::new();
+	for id in auth_event_ids {
+		if let Some(auth_event) = fetch_event(id.clone()).await {
 			if auth_event.rejected() {
 				trace!(
 					target: "state_res",
 					event_id = auth_event.event_id().as_str(),
 					"skipping rejected auth event"
 				);
-				None
 			} else {
-				Some((auth_event.event_id().to_owned(), auth_event))
+				auth_events.insert(id, auth_event);
 			}
-		})
-		.collect()
-		.boxed()
-		.await;
+		}
+	}
 
 	trace!(map = ?auth_events.keys().collect::<Vec<_>>(), "fetched auth events");
 
@@ -1634,41 +1628,6 @@ where
 	println!("mainline_sort total took {:?}", start_mainline.elapsed());
 
 	Ok(sort_event_ids)
-}
-
-async fn add_event_and_auth_chain_to_graph<E, F, Fut>(
-	graph: &mut rustc_hash::FxHashMap<OwnedEventId, rustc_hash::FxHashSet<OwnedEventId>>,
-	event_id: OwnedEventId,
-	auth_diff: &HashSet<OwnedEventId>,
-	fetch_event: &F,
-) where
-	F: Fn(OwnedEventId) -> Fut + Sync,
-	Fut: Future<Output = Option<E>> + Send,
-	E: Event + Send + Sync,
-{
-	let mut state = vec![event_id];
-	while let Some(eid) = state.pop() {
-		if graph.contains_key(&eid) {
-			continue;
-		}
-		graph.entry(eid.clone()).or_default();
-		let event = fetch_event(eid.clone()).await;
-		let auth_events = event.as_ref().map(Event::auth_events).into_iter().flatten();
-
-		// Prefer the store to event as the store filters dedups the events
-		for aid in auth_events {
-			if auth_diff.contains(aid) {
-				if !graph.contains_key(aid) {
-					state.push(aid.to_owned());
-				}
-
-				graph
-					.get_mut(&eid)
-					.expect("We just inserted this at the start of the while loop")
-					.insert(aid.to_owned());
-			}
-		}
-	}
 }
 
 async fn is_power_event_id<E, F, Fut>(event_id: &EventId, fetch: &F) -> bool

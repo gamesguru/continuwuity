@@ -30,7 +30,7 @@ pub(super) async fn reorder_timeline(
 				self.services
 					.rooms
 					.timeline
-					.reorder_timeline(&room_id, None, true),
+					.reorder_timeline(&room_id, None, false),
 			)
 			.await
 			.is_ok()
@@ -54,7 +54,7 @@ pub(super) async fn reorder_timeline(
 		let count = Box::pin(self.services.rooms.timeline.reorder_timeline(
 			&room_id,
 			Some(n),
-			true,
+			false,
 		))
 		.await?;
 		return self
@@ -71,7 +71,7 @@ pub(super) async fn reorder_timeline(
 		self.services
 			.rooms
 			.timeline
-			.reorder_timeline(&room_id, None, true),
+			.reorder_timeline(&room_id, None, false),
 	)
 	.await?;
 

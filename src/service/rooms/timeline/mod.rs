@@ -748,44 +748,35 @@ impl Service {
 		let count = sorted.len();
 
 		if no_compute_state {
-			let shared_batch = Arc::new(tokio::sync::Mutex::new((self.db.db_batch(), 0_usize)));
+			let mut cork = Some(self.db.db.cork());
+			let mut batch = self.db.db_batch();
 
-			let mut futures = futures::stream::FuturesUnordered::new();
 			for (i, event_id) in sorted.iter().enumerate() {
-				let event_id = event_id.clone();
 				let new_count = batch_start
 					.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
 					.saturating_add(1);
 				let pdu_count = PduCount::Normal(new_count);
 				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
-				let shared_batch = shared_batch.clone();
 
-				futures.push(async move {
-					if let Ok((pdu, json)) = self.db.get_from_eventid_pdu(&event_id).await {
-						let mut lock = shared_batch.lock().await;
-						let (batch, count) = &mut *lock;
-						self.db
-							.append_pdu_batch(batch, &pdu_id, &pdu, &json, pdu_count)
-							.await;
-						*count = count.saturating_add(1);
-						if *count >= 10000 {
-							self.db.db_apply_batch(batch);
-							*batch = self.db.db_batch();
-							*count = 0;
-						}
-						drop(lock);
-					}
-				});
-				if futures.len() >= 10000 {
-					futures.next().await;
+				if let Ok((pdu, json)) = self.db.get_from_eventid_pdu(event_id).await {
+					self.db
+						.append_pdu_batch(&mut batch, &pdu_id, &pdu, &json, pdu_count)
+						.await;
+				}
+
+				if i.saturating_add(1).is_multiple_of(10000) {
+					self.db.db_apply_batch(&batch);
+					batch = self.db.db_batch();
+					drop(cork.take());
+					tokio::task::yield_now().await;
+					cork = Some(self.db.db.cork());
 				}
 			}
-			while futures.next().await.is_some() {}
 
-			let mut lock = shared_batch.lock().await;
-			let (batch, _) = &mut *lock;
-			self.db.db_apply_batch(batch);
-			drop(lock);
+			// Flush any remaining items in the batch
+			if !batch.is_empty() {
+				self.db.db_apply_batch(&batch);
+			}
 
 			return None;
 		}
