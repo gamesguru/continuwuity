@@ -1020,7 +1020,7 @@ impl Service {
 		let empty_ssh = self
 			.services
 			.state_compressor
-			.save_state(room_id, Arc::new(std::collections::BTreeSet::new()))
+			.save_state(room_id, Arc::new(BTreeSet::new()))
 			.await?
 			.shortstatehash;
 
@@ -1058,7 +1058,7 @@ impl Service {
 							.state_at_incoming_resolved(pdu, room_id, &room_version)
 							.await?;
 						let state_after = state_after_opt.unwrap_or_default();
-						let compressed_state: std::collections::BTreeSet<_> = self
+						let compressed_state: BTreeSet<_> = self
 							.services
 							.state_compressor
 							.compress_state_events(state_after.iter().map(|(k, id)| (k, &**id)))
