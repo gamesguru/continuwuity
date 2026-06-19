@@ -1,4 +1,4 @@
-use conduwuit::{Err, Result, debug, implement, info, trace, warn};
+use conduwuit::{Err, Result, debug, implement, info, warn};
 use ruma::{
 	RoomId, ServerName,
 	events::{StateEventType, room::server_acl::RoomServerAclEventContent},
@@ -43,7 +43,10 @@ pub async fn acl_check(&self, server_name: &ServerName, room_id: &RoomId) -> Res
 	}
 
 	if acl_event_content.is_allowed(server_name) {
-		warn!("ACL ALLOWED: server_name={}, room_id={}, acl_content={:?}", server_name, room_id, acl_event_content);
+		warn!(
+			"ACL ALLOWED: server_name={}, room_id={}, acl_content={:?}",
+			server_name, room_id, acl_event_content
+		);
 		Ok(())
 	} else {
 		debug!("Server {server_name} was denied by room ACL in {room_id}");

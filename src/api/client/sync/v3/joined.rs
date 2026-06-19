@@ -205,11 +205,14 @@ async fn build_ephemeral(
 				.await;
 
 			if let Ok(event) = event {
-				return Some(
-					Raw::new(&event)
-						.expect("typing event should be valid")
-						.cast(),
-				);
+				// Synapse and Dendrite omit m.typing events on initial sync if the user list is empty.
+				if !event.content.user_ids.is_empty() || last_sync_end_count.is_some() {
+					return Some(
+						Raw::new(&event)
+							.expect("typing event should be valid")
+							.cast(),
+					);
+				}
 			}
 		}
 
@@ -229,8 +232,8 @@ async fn build_ephemeral(
 				// update the marker if it's changed since the last sync
 				last_privateread_update > last_sync_end_count
 			},
-			// always update the marker on an initial sync
-			| None => true,
+			// omit the marker on an initial sync
+			| None => false,
 		};
 
 		if should_send_private_read {
