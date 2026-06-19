@@ -183,7 +183,7 @@ impl Service {
 	pub fn db_batch(&self) -> database::rocksdb::WriteBatch { self.db.db_batch() }
 
 	pub fn db_apply_batch(&self, batch: &database::rocksdb::WriteBatch) {
-		self.db.db_apply_batch(batch)
+		self.db.db_apply_batch(batch);
 	}
 
 	#[tracing::instrument(skip(self), level = "debug")]
@@ -767,7 +767,7 @@ impl Service {
 						self.db
 							.append_pdu_batch(batch, &pdu_id, &pdu, &json, pdu_count)
 							.await;
-						*count += 1;
+						*count = count.saturating_add(1);
 						if *count >= 10000 {
 							self.db.db_apply_batch(batch);
 							*batch = self.db.db_batch();
@@ -1002,8 +1002,10 @@ impl Service {
 		let fetch_event_fn = |id: OwnedEventId| {
 			let (depth, ts) = events
 				.get(&id)
-				.map(|p| (p.depth(), p.origin_server_ts()))
-				.unwrap_or((ruma::uint!(0), ruma::MilliSecondsSinceUnixEpoch(ruma::uint!(0))));
+				.map_or_else(
+				|| (ruma::uint!(0), ruma::MilliSecondsSinceUnixEpoch(ruma::uint!(0))),
+				|p| (p.depth(), p.origin_server_ts()),
+			);
 
 			futures::future::ready(Result::Ok((depth.into(), ts)))
 		};
@@ -1129,7 +1131,7 @@ impl Service {
 							new_ssh,
 							Arc::new(statediffnew.clone()),
 							Arc::new(statediffremoved.clone()),
-							1000000, // diff_to_sibling
+							1_000_000, // diff_to_sibling
 							states_parents,
 						);
 						state_after = new_ssh;

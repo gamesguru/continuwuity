@@ -194,24 +194,11 @@ where
 		get_auth_chain_diff(auth_chain_sets).boxed()
 	};
 
-	let mut all_conflicted_ids: HashSet<_> = auth_diff_stream
+	let all_conflicted_ids: HashSet<_> = auth_diff_stream
 		.chain(conflicting.into_values().flatten().stream())
 		.chain(conflicted_state_subgraph.into_iter().stream())
 		.collect()
 		.await;
-
-	if stateres_version == StateResolutionVersion::V2_1 {
-		let mut queue: Vec<OwnedEventId> = all_conflicted_ids.iter().cloned().collect();
-		while let Some(id) = queue.pop() {
-			if let Some(ev) = cached_fetch(id.clone()).await {
-				for aid in ev.auth_events() {
-					if all_conflicted_ids.insert(aid.to_owned()) {
-						queue.push(aid.to_owned());
-					}
-				}
-			}
-		}
-	}
 
 	if let Some(batch_fetch) = event_batch_fetch {
 		let ids: Vec<_> = all_conflicted_ids.iter().cloned().collect();

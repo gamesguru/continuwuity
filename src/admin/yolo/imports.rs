@@ -172,7 +172,7 @@ pub(super) async fn import_pdus(
 						.force_insert_pdu_batch(batch, room_id_ref, &eid, &pdu, &value, true)
 						.await
 						.unwrap();
-					*count += 1;
+					*count = count.saturating_add(1);
 					if *count >= 10000 {
 						self.services.rooms.timeline.db_apply_batch(batch);
 						*batch = self.services.rooms.timeline.db_batch();

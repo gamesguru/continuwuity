@@ -611,12 +611,13 @@ impl Data {
 		self.eventid_pdu.get(&event_id_bytes).await.deserialized()
 	}
 
+	#[allow(clippy::unused_self)]
 	pub(super) fn db_batch(&self) -> database::rocksdb::WriteBatch {
 		database::rocksdb::WriteBatch::default()
 	}
 
 	pub(super) fn db_apply_batch(&self, batch: &database::rocksdb::WriteBatch) {
-		self.eventid_pdu.apply_batch(batch)
+		self.eventid_pdu.apply_batch(batch);
 	}
 
 	pub(super) async fn append_pdu(
