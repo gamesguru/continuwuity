@@ -122,7 +122,7 @@ where
 	// Skip the pre-fetch entirely if any auth event is already rejected locally.
 	// The event will be rejected anyway during auth checking, so the /state_ids
 	// call would be wasted network traffic.
-	if !is_fast_forward && !skip_soft_fail {
+	if !is_fast_forward && !skip_soft_fail && incoming_pdu.state_key().is_some() {
 		let any_auth_rejected = futures::stream::iter(incoming_pdu.auth_events())
 			.any(|aid| async move { self.services.pdu_metadata.is_event_rejected(aid).await })
 			.await;
