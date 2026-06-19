@@ -77,6 +77,11 @@ pub(super) async fn import_pdus(
 
 	let mut futures = FuturesUnordered::new();
 
+	let shared_batch = std::sync::Arc::new(tokio::sync::Mutex::new((
+		self.services.rooms.timeline.db_batch(),
+		0_usize,
+	)));
+
 	while let Ok(Some(line)) = lines.next_line().await {
 		if line.trim().is_empty() {
 			continue;
@@ -86,11 +91,12 @@ pub(super) async fn import_pdus(
 		let room_id_ref = room_id.clone();
 		let room_version_ref = room_version.clone();
 		let origin = origin.clone();
-		
+		let shared_batch = shared_batch.clone();
+
 		let server_keys = self.services.server_keys.clone();
 		let event_handler = self.services.rooms.event_handler.clone();
 
-		futures.push(tokio::spawn(async move {
+		futures.push(self.services.server.runtime().spawn(async move {
 			let value: CanonicalJsonObject =
 				match tokio::task::spawn_blocking(move || serde_json::from_str(&line))
 					.await
@@ -134,7 +140,8 @@ pub(super) async fn import_pdus(
 				}
 			})
 			.await
-			.unwrap().map_err(|e| e.to_string())?;
+			.unwrap()
+			.map_err(|e| e.to_string())?;
 
 			if is_outlier {
 				return Ok((eid, value, pdu, true, is_soft_failed, is_rejected));
@@ -173,8 +180,7 @@ pub(super) async fn import_pdus(
 				};
 
 				let mut pdu_val = val;
-				if room_version_ref != RoomVersionId::V1
-					&& room_version_ref != RoomVersionId::V2
+				if room_version_ref != RoomVersionId::V1 && room_version_ref != RoomVersionId::V2
 				{
 					pdu_val.remove("event_id");
 				}
@@ -190,7 +196,8 @@ pub(super) async fn import_pdus(
 						skip_sig_verify,
 						Some(&room_version_ref),
 					)
-					.await.map_err(|e| e.to_string())?;
+					.await
+					.map_err(|e| e.to_string())?;
 
 				Ok((eid, value, pdu, false, is_soft_failed, is_rejected))
 			}
@@ -200,44 +207,99 @@ pub(super) async fn import_pdus(
 			if let Some(res) = futures.next().await {
 				total.fetch_add(1, Ordering::Relaxed);
 				let (eid, value, pdu, is_outlier, is_soft_failed, is_rejected) = match res {
-					Ok(Ok(data)) => data,
-					Ok(Err(e)) => { warn!("import_pdus: Failed to parse line: {e}"); failed.fetch_add(1, Ordering::Relaxed); continue; },
-					Err(e) => { warn!("import_pdus loop task panic: {e}"); failed.fetch_add(1, Ordering::Relaxed); continue; }
+					| Ok(Ok(data)) => data,
+					| Ok(Err(e)) => {
+						warn!("import_pdus: Failed to parse line: {e}");
+						failed.fetch_add(1, Ordering::Relaxed);
+						continue;
+					},
+					| Err(e) => {
+						warn!("import_pdus loop task panic: {e}");
+						failed.fetch_add(1, Ordering::Relaxed);
+						continue;
+					},
 				};
 
 				let insert_result: Result<(OwnedEventId, bool)> = async {
 					if is_outlier {
-						self.services.rooms.outlier.add_pdu_outlier(&eid, &value, Some(&room_id));
+						self.services
+							.rooms
+							.outlier
+							.add_pdu_outlier(&eid, &value, Some(&room_id));
 						return Ok((eid, true));
 					}
 					if force {
 						if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&eid).await {
-							self.services.rooms.timeline.replace_pdu(&pdu_id, &value, &eid).await?;
+							self.services
+								.rooms
+								.timeline
+								.replace_pdu(&pdu_id, &value, &eid)
+								.await?;
 							return Ok((eid, true));
 						}
 					}
 					if skip_auth {
-						self.services.rooms.timeline.force_insert_pdu(&room_id, &eid, &pdu, &value, true).await?;
+						let mut lock = shared_batch.lock().await;
+						let (batch, count) = &mut *lock;
+						self.services
+							.rooms
+							.timeline
+							.force_insert_pdu_batch(batch, &room_id, &eid, &pdu, &value, true)
+							.await?;
+						*count = count.saturating_add(1);
+						if *count >= 10000 {
+							self.services.rooms.timeline.db_apply_batch(batch);
+							*batch = self.services.rooms.timeline.db_batch();
+							*count = 0;
+						}
+						drop(lock);
 						Ok((eid, true))
 					} else {
-						self.services.rooms.timeline.promote_outlier(&room_id, &eid).await?;
+						self.services
+							.rooms
+							.timeline
+							.promote_outlier(&room_id, &eid)
+							.await?;
 						Ok((eid, true))
 					}
-				}.await;
+				}
+				.await;
 
 				match insert_result {
-					Ok((eid, true)) => {
+					| Ok((eid, true)) => {
 						inserted.fetch_add(1, Ordering::Relaxed);
-						if is_soft_failed { self.services.rooms.pdu_metadata.mark_event_soft_failed(&eid); }
-						if is_rejected { self.services.rooms.pdu_metadata.mark_event_rejected(&eid); }
+						if is_soft_failed {
+							self.services
+								.rooms
+								.pdu_metadata
+								.mark_event_soft_failed(&eid);
+						}
+						if is_rejected {
+							self.services.rooms.pdu_metadata.mark_event_rejected(&eid);
+						}
 					},
-					Ok((_eid, false)) => { rejected.fetch_add(1, Ordering::Relaxed); },
-					Err(e) => { warn!("import_pdus insert err: {e}"); failed.fetch_add(1, Ordering::Relaxed); },
+					| Ok((_eid, false)) => {
+						rejected.fetch_add(1, Ordering::Relaxed);
+					},
+					| Err(e) => {
+						warn!("import_pdus insert err: {e}");
+						failed.fetch_add(1, Ordering::Relaxed);
+					},
 				}
 
-				let done = inserted.load(Ordering::Relaxed).saturating_add(failed.load(Ordering::Relaxed)).saturating_add(rejected.load(Ordering::Relaxed));
+				let done = inserted
+					.load(Ordering::Relaxed)
+					.saturating_add(failed.load(Ordering::Relaxed))
+					.saturating_add(rejected.load(Ordering::Relaxed));
 				if done.is_multiple_of(1000) {
-					info!("import_pdus: {}/{} ({} ok, {} rejected, {} err)", done, total.load(Ordering::Relaxed), inserted.load(Ordering::Relaxed), rejected.load(Ordering::Relaxed), failed.load(Ordering::Relaxed));
+					info!(
+						"import_pdus: {}/{} ({} ok, {} rejected, {} err)",
+						done,
+						total.load(Ordering::Relaxed),
+						inserted.load(Ordering::Relaxed),
+						rejected.load(Ordering::Relaxed),
+						failed.load(Ordering::Relaxed)
+					);
 				}
 			}
 		}
@@ -246,47 +308,106 @@ pub(super) async fn import_pdus(
 	while let Some(res) = futures.next().await {
 		total.fetch_add(1, Ordering::Relaxed);
 		let (eid, value, pdu, is_outlier, is_soft_failed, is_rejected) = match res {
-			Ok(Ok(data)) => data,
-			Ok(Err(e)) => { warn!("import_pdus: Failed to parse line: {e}"); failed.fetch_add(1, Ordering::Relaxed); continue; },
-			Err(e) => { warn!("import_pdus loop task panic: {e}"); failed.fetch_add(1, Ordering::Relaxed); continue; }
+			| Ok(Ok(data)) => data,
+			| Ok(Err(e)) => {
+				warn!("import_pdus: Failed to parse line: {e}");
+				failed.fetch_add(1, Ordering::Relaxed);
+				continue;
+			},
+			| Err(e) => {
+				warn!("import_pdus loop task panic: {e}");
+				failed.fetch_add(1, Ordering::Relaxed);
+				continue;
+			},
 		};
 
 		let insert_result: Result<(OwnedEventId, bool)> = async {
 			if is_outlier {
-				self.services.rooms.outlier.add_pdu_outlier(&eid, &value, Some(&room_id));
+				self.services
+					.rooms
+					.outlier
+					.add_pdu_outlier(&eid, &value, Some(&room_id));
 				return Ok((eid, true));
 			}
 			if force {
 				if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&eid).await {
-					self.services.rooms.timeline.replace_pdu(&pdu_id, &value, &eid).await?;
+					self.services
+						.rooms
+						.timeline
+						.replace_pdu(&pdu_id, &value, &eid)
+						.await?;
 					return Ok((eid, true));
 				}
 			}
 			if skip_auth {
-				self.services.rooms.timeline.force_insert_pdu(&room_id, &eid, &pdu, &value, true).await?;
+				let mut lock = shared_batch.lock().await;
+				let (batch, count) = &mut *lock;
+				self.services
+					.rooms
+					.timeline
+					.force_insert_pdu_batch(batch, &room_id, &eid, &pdu, &value, true)
+					.await?;
+				*count = count.saturating_add(1);
+				if *count >= 10000 {
+					self.services.rooms.timeline.db_apply_batch(batch);
+					*batch = self.services.rooms.timeline.db_batch();
+					*count = 0;
+				}
+				drop(lock);
 				Ok((eid, true))
 			} else {
-				self.services.rooms.timeline.promote_outlier(&room_id, &eid).await?;
+				self.services
+					.rooms
+					.timeline
+					.promote_outlier(&room_id, &eid)
+					.await?;
 				Ok((eid, true))
 			}
-		}.await;
+		}
+		.await;
 
 		match insert_result {
-			Ok((eid, true)) => {
+			| Ok((eid, true)) => {
 				inserted.fetch_add(1, Ordering::Relaxed);
-				if is_soft_failed { self.services.rooms.pdu_metadata.mark_event_soft_failed(&eid); }
-				if is_rejected { self.services.rooms.pdu_metadata.mark_event_rejected(&eid); }
+				if is_soft_failed {
+					self.services
+						.rooms
+						.pdu_metadata
+						.mark_event_soft_failed(&eid);
+				}
+				if is_rejected {
+					self.services.rooms.pdu_metadata.mark_event_rejected(&eid);
+				}
 			},
-			Ok((_eid, false)) => { rejected.fetch_add(1, Ordering::Relaxed); },
-			Err(e) => { warn!("import_pdus insert err: {e}"); failed.fetch_add(1, Ordering::Relaxed); },
+			| Ok((_eid, false)) => {
+				rejected.fetch_add(1, Ordering::Relaxed);
+			},
+			| Err(e) => {
+				warn!("import_pdus insert err: {e}");
+				failed.fetch_add(1, Ordering::Relaxed);
+			},
 		}
 
-		let done = inserted.load(Ordering::Relaxed).saturating_add(failed.load(Ordering::Relaxed)).saturating_add(rejected.load(Ordering::Relaxed));
+		let done = inserted
+			.load(Ordering::Relaxed)
+			.saturating_add(failed.load(Ordering::Relaxed))
+			.saturating_add(rejected.load(Ordering::Relaxed));
 		if done.is_multiple_of(1000) {
-			info!("import_pdus: {}/{} ({} ok, {} rejected, {} err)", done, total.load(Ordering::Relaxed), inserted.load(Ordering::Relaxed), rejected.load(Ordering::Relaxed), failed.load(Ordering::Relaxed));
+			info!(
+				"import_pdus: {}/{} ({} ok, {} rejected, {} err)",
+				done,
+				total.load(Ordering::Relaxed),
+				inserted.load(Ordering::Relaxed),
+				rejected.load(Ordering::Relaxed),
+				failed.load(Ordering::Relaxed)
+			);
 		}
 	}
 
+	let mut lock = shared_batch.lock().await;
+	let (batch, _) = &mut *lock;
+	self.services.rooms.timeline.db_apply_batch(batch);
+	drop(lock);
 
 	let (_, num_true) = self
 		.services
