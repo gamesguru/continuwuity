@@ -249,7 +249,7 @@ pub(super) async fn import_pdus(
 					.await?;
 			}
 
-			Ok((eid.to_owned(), true))
+			Ok((eid.clone(), true))
 		}
 		.await;
 
@@ -276,7 +276,7 @@ pub(super) async fn import_pdus(
 		}
 
 		let done = inserted.saturating_add(rejected).saturating_add(failed);
-		if done % 5000 == 0 {
+		if done.is_multiple_of(5000) {
 			info!(
 				"import_pdus: {done}/{total} ({inserted} ok, {rejected} rejected, {failed} err)"
 			);
