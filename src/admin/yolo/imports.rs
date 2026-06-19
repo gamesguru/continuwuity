@@ -1,11 +1,7 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use conduwuit::{Err, Result, err, info, warn};
-use futures::{StreamExt, stream::FuturesUnordered};
 use ruma::{
 	CanonicalJsonObject, OwnedEventId, OwnedRoomId, RoomVersionId, events::StateEventType,
 };
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::admin_command;
 
@@ -58,46 +54,63 @@ pub(super) async fn import_pdus(
 		.await
 		.map_err(|e| err!("Failed to read file {path}: {e:?}"))?;
 
-	let room_id_ref = room_id.clone();
 	let room_version_ref = room_version.clone();
 
 	let parsed_pdus: Vec<_> = tokio::task::spawn_blocking(move || {
-		use rayon::prelude::*;
 		file_content
-			.par_lines()
+			.lines()
 			.filter(|line| !line.trim().is_empty())
 			.filter_map(|line| {
-				let value: CanonicalJsonObject = serde_json::from_str(line).ok()?;
+				let value: CanonicalJsonObject = match serde_json::from_str(line) {
+					| Ok(v) => v,
+					| Err(e) => {
+						warn!("Failed to parse JSON: {e}");
+						return None;
+					},
+				};
+
 				let is_outlier = value
 					.get("__outlier")
-					.and_then(|v| match v {
-						| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
-						| _ => None,
-					})
+					.and_then(ruma::CanonicalJsonValue::as_bool)
 					.unwrap_or(false);
 				let is_soft_failed = value
 					.get("__soft_failed")
-					.and_then(|v| match v {
-						| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
-						| _ => None,
-					})
+					.and_then(ruma::CanonicalJsonValue::as_bool)
 					.unwrap_or(false);
 				let is_rejected = value
 					.get("__rejected")
-					.and_then(|v| match v {
-						| ruma::CanonicalJsonValue::Bool(b) => Some(*b),
-						| _ => None,
-					})
+					.and_then(ruma::CanonicalJsonValue::as_bool)
 					.unwrap_or(false);
 
-				let (eid, value, pdu) = conduwuit::utils::pdu_parser::parse_and_clean_pdu(
-					value,
-					room_id_ref.as_ref(),
-					&room_version_ref,
-				)
-				.ok()?;
+				let mut pdu = value.clone();
+				pdu.remove("__outlier");
+				pdu.remove("__soft_failed");
+				pdu.remove("__rejected");
+				if room_version_ref != RoomVersionId::V1 && room_version_ref != RoomVersionId::V2
+				{
+					pdu.remove("event_id");
+				}
 
-				Some((eid, value, pdu, is_outlier, is_soft_failed, is_rejected))
+				let Some(eid) = value
+					.get("event_id")
+					.and_then(ruma::CanonicalJsonValue::as_str)
+					.and_then(|id| OwnedEventId::parse(id).ok())
+				else {
+					warn!("Missing or invalid event_id");
+					return None;
+				};
+
+				let pdu_event: conduwuit::PduEvent = match serde_json::from_value(
+					serde_json::to_value(&pdu).unwrap_or_default(),
+				) {
+					| Ok(v) => v,
+					| Err(e) => {
+						warn!("Failed to parse PduEvent for {eid}: {e}");
+						return None;
+					},
+				};
+
+				Some((eid, value, pdu_event, is_outlier, is_soft_failed, is_rejected))
 			})
 			.collect()
 	})
@@ -105,9 +118,9 @@ pub(super) async fn import_pdus(
 	.unwrap();
 
 	let total = parsed_pdus.len();
-	let mut inserted = 0;
-	let mut rejected = 0;
-	let mut failed = 0;
+	let mut inserted: usize = 0;
+	let mut rejected: usize = 0;
+	let mut failed: usize = 0;
 
 	// Cork database writes to batch and sync efficiently on drop
 	let _cork = self.services.db.cork();
@@ -124,7 +137,7 @@ pub(super) async fn import_pdus(
 	let mut batch = self.services.rooms.timeline.db_batch();
 	let mut count = 0_usize;
 
-	for (eid, mut value, mut pdu, is_outlier, is_soft_failed, is_rejected) in parsed_pdus {
+	for (eid, value, pdu, is_outlier, is_soft_failed, is_rejected) in parsed_pdus {
 		let is_outlier = is_outlier || force;
 
 		let (skip_further, eid, value, pdu) = if is_outlier {
@@ -147,7 +160,7 @@ pub(super) async fn import_pdus(
 					| Ok(r) => r,
 					| Err(e) => {
 						warn!("import_pdus insert err: {e}");
-						failed += 1;
+						failed = failed.saturating_add(1);
 						continue;
 					},
 				};
@@ -187,7 +200,10 @@ pub(super) async fn import_pdus(
 				.await;
 
 			match handled {
-				| Ok((new_pdu, _)) => (false, eid, value, new_pdu),
+				| Ok((new_pdu, _)) => {
+					let new_pdu_event = new_pdu.clone();
+					(false, eid, value, new_pdu_event)
+				},
 				| Err(_) => {
 					// If failed, treat as outlier
 					(true, eid, value, pdu)
@@ -201,7 +217,7 @@ pub(super) async fn import_pdus(
 					.rooms
 					.outlier
 					.add_pdu_outlier(&eid, &value, Some(&room_id));
-				return Ok((eid, true));
+				return Ok((eid.clone(), true));
 			}
 			if force {
 				if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&eid).await {
@@ -210,7 +226,7 @@ pub(super) async fn import_pdus(
 						.timeline
 						.replace_pdu(&pdu_id, &value, &eid)
 						.await?;
-					return Ok((eid, true));
+					return Ok((eid.clone(), true));
 				}
 			}
 			if skip_auth {
@@ -225,21 +241,21 @@ pub(super) async fn import_pdus(
 					batch = self.services.rooms.timeline.db_batch();
 					count = 0;
 				}
-				Ok((eid, true))
 			} else {
 				self.services
 					.rooms
 					.timeline
 					.promote_outlier(&room_id, &eid)
 					.await?;
-				Ok((eid, true))
 			}
+
+			Ok((eid.to_owned(), true))
 		}
 		.await;
 
 		match insert_result {
 			| Ok((eid, true)) => {
-				inserted += 1;
+				inserted = inserted.saturating_add(1);
 				if is_soft_failed {
 					self.services
 						.rooms
@@ -251,15 +267,15 @@ pub(super) async fn import_pdus(
 				}
 			},
 			| Ok((_eid, false)) => {
-				rejected += 1;
+				rejected = rejected.saturating_add(1);
 			},
 			| Err(e) => {
 				warn!("import_pdus insert err: {e}");
-				failed += 1;
+				failed = failed.saturating_add(1);
 			},
 		}
 
-		let done = inserted + rejected + failed;
+		let done = inserted.saturating_add(rejected).saturating_add(failed);
 		if done % 5000 == 0 {
 			info!(
 				"import_pdus: {done}/{total} ({inserted} ok, {rejected} rejected, {failed} err)"
@@ -283,6 +299,8 @@ pub(super) async fn import_pdus(
 	))
 	.await
 }
+
+#[admin_command]
 pub(super) async fn import_outliers(&self, jsonl: String) -> Result {
 	self.bail_restricted()?;
 	let mut count = 0_usize;

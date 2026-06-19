@@ -205,7 +205,8 @@ async fn build_ephemeral(
 				.await;
 
 			if let Ok(event) = event {
-				// Synapse and Dendrite omit m.typing events on initial sync if the user list is empty.
+				// Synapse and Dendrite omit m.typing events on initial sync if the user list is
+				// empty.
 				if !event.content.user_ids.is_empty() || last_sync_end_count.is_some() {
 					return Some(
 						Raw::new(&event)
