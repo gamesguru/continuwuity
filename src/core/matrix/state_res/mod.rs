@@ -710,10 +710,61 @@ where
 	debug!("reverse topological sort of power events");
 
 	let start_reverse = std::time::Instant::now();
+
+	let mut all_needed: HashSet<OwnedEventId> = auth_diff.clone();
+	for id in &events_to_sort {
+		all_needed.insert(id.clone());
+	}
+
+	let local_cache: rustc_hash::FxHashMap<OwnedEventId, E> = all_needed
+		.into_iter()
+		.stream()
+		.broad_filter_map(|id| async move {
+			let ev = fetch_event(id.clone()).await?;
+			Some((id, ev))
+		})
+		.collect()
+		.await;
+
+	let fast_fetch = |id: OwnedEventId| {
+		let ev = local_cache.get(&id).cloned();
+		async move {
+			if let Some(e) = ev {
+				Some(e)
+			} else {
+				fetch_event(id).await
+			}
+		}
+	};
+
 	let mut graph: rustc_hash::FxHashMap<OwnedEventId, rustc_hash::FxHashSet<OwnedEventId>> =
 		rustc_hash::FxHashMap::default();
 	for event_id in events_to_sort {
-		add_event_and_auth_chain_to_graph(&mut graph, event_id, auth_diff, fetch_event).await;
+		let mut state = vec![event_id];
+		while let Some(eid) = state.pop() {
+			if graph.contains_key(&eid) {
+				continue;
+			}
+			graph.entry(eid.clone()).or_default();
+			let auth_events = local_cache
+				.get(&eid)
+				.map(Event::auth_events)
+				.into_iter()
+				.flatten();
+
+			for aid in auth_events {
+				if auth_diff.contains(aid) {
+					if !graph.contains_key(aid) {
+						state.push(aid.to_owned());
+					}
+
+					graph
+						.get_mut(&eid)
+						.expect("We just inserted this at the start of the while loop")
+						.insert(aid.to_owned());
+				}
+			}
+		}
 	}
 
 	println!(
@@ -722,23 +773,25 @@ where
 	);
 	let start_reverse_2 = std::time::Instant::now();
 
-	let event_to_pl: HashMap<_, _> = graph
+	let event_to_key: HashMap<_, _> = graph
 		.keys()
 		.cloned()
 		.stream()
 		.broad_filter_map(async |event_id| {
 			let pl = get_power_level_for_sender(
 				&event_id,
-				fetch_event,
+				&fast_fetch,
 				global_pl_context,
 				parsed_pl_cache,
 				sender_pl_cache,
 			)
 			.await;
 
-			Some((event_id, pl))
+			let ev = local_cache.get(&event_id).cloned()?;
+
+			Some((event_id, (pl, ev.origin_server_ts())))
 		})
-		.inspect(|(event_id, pl)| {
+		.inspect(|(event_id, (pl, _))| {
 			debug!(
 				event_id = event_id.as_str(),
 				power_level = i64::from(*pl),
@@ -750,15 +803,10 @@ where
 		.await;
 
 	let fetcher = async |event_id: OwnedEventId| {
-		let pl = *event_to_pl
+		event_to_key
 			.get(&event_id)
-			.ok_or_else(|| Error::NotFound(String::new()))?;
-
-		let ev = fetch_event(event_id)
-			.await
-			.ok_or_else(|| Error::NotFound(String::new()))?;
-
-		Ok((pl, ev.origin_server_ts()))
+			.copied()
+			.ok_or_else(|| Error::NotFound(String::new()))
 	};
 
 	let res = lexicographical_topological_sort(&graph, &fetcher).await;
@@ -1478,19 +1526,16 @@ where
 
 	// Step 2: For each event to sort, find its associated power level event,
 	// then look up its mainline position in O(1).
-	let mut event_to_mainline: rustc_hash::FxHashMap<OwnedEventId, Option<usize>> =
-		rustc_hash::FxHashMap::default();
-	let mut event_ts: rustc_hash::FxHashMap<OwnedEventId, MilliSecondsSinceUnixEpoch> =
-		rustc_hash::FxHashMap::default();
-
 	let mut is_pl_cache: rustc_hash::FxHashMap<OwnedEventId, bool> =
 		rustc_hash::FxHashMap::default();
+
+	let mut sort_keys = Vec::with_capacity(to_sort.len());
 
 	for ev_id in to_sort {
 		let Some(event) = get!(ev_id) else {
 			continue;
 		};
-		event_ts.insert(ev_id.clone(), event.origin_server_ts());
+		let ts = event.origin_server_ts();
 
 		let depth: Option<usize> =
 			if is_type_and_key(&event, &TimelineEventType::RoomPowerLevels, "") {
@@ -1553,7 +1598,7 @@ where
 				found_depth
 			};
 
-		event_to_mainline.insert(ev_id.clone(), depth);
+		sort_keys.push((depth, ts, ev_id.clone()));
 	}
 
 	println!("mainline_sort phase 2 (event traversal) took {:?}", start_phase_2.elapsed());
@@ -1567,34 +1612,22 @@ where
 	//
 	// This mirrors spec §6.6.3.3: "x < y if x.position > y.position" where ∞
 	// beats all finite positions (None events have position ∞).
-	let mut sort_event_ids: Vec<OwnedEventId> = to_sort.to_vec();
-
-	sort_event_ids.sort_by(|a, b| {
-		let da = event_to_mainline.get(a).copied().flatten();
-		let db = event_to_mainline.get(b).copied().flatten();
-
-		let ta = event_ts
-			.get(a)
-			.copied()
-			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
-		let tb = event_ts
-			.get(b)
-			.copied()
-			.unwrap_or_else(|| MilliSecondsSinceUnixEpoch(uint!(0)));
+	sort_keys.sort_unstable_by(|(da, ta, a), (db, tb, b)| {
 		match (da, db) {
 			// Both have no PL ancestor -> tiebreak by ts ascending then id ascending.
-			| (None, None) => ta.cmp(&tb).then(a.as_str().cmp(b.as_str())),
+			| (None, None) => ta.cmp(tb).then(a.as_str().cmp(b.as_str())),
 			// No-PL events are worst (first).
 			| (None, Some(_)) => Ordering::Less,
 			| (Some(_), None) => Ordering::Greater,
 			// Both have a PL ancestor: DESCENDING position (farther from PL first).
 			// Then ascending ts (earlier ts -> loses; later ts -> wins).
-			| (Some(pa), Some(pb)) => pb
-				.cmp(&pa)
-				.then(ta.cmp(&tb))
-				.then(a.as_str().cmp(b.as_str())),
+			| (Some(pa), Some(pb)) =>
+				pb.cmp(pa).then(ta.cmp(tb)).then(a.as_str().cmp(b.as_str())),
 		}
 	});
+
+	let mut sort_event_ids: Vec<OwnedEventId> =
+		sort_keys.into_iter().map(|(_, _, id)| id).collect();
 
 	sort_event_ids.dedup();
 	println!("mainline_sort phase 3 (sorting) took {:?}", start_phase_3.elapsed());

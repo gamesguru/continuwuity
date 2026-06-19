@@ -1000,9 +1000,7 @@ impl Service {
 		info!("rebuild_state: starting topological sort...");
 
 		let fetch_event_fn = |id: OwnedEventId| {
-			let (depth, ts) = events
-				.get(&id)
-				.map_or_else(
+			let (depth, ts) = events.get(&id).map_or_else(
 				|| (ruma::uint!(0), ruma::MilliSecondsSinceUnixEpoch(ruma::uint!(0))),
 				|p| (p.depth(), p.origin_server_ts()),
 			);
