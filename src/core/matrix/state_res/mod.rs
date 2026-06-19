@@ -1012,6 +1012,17 @@ where
 			}
 		}
 
+		if creator_event.is_none() {
+			if let Some(room_id) = ev.room_id_or_hash() {
+				let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
+				if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
+					if let Some(ce) = fetch_event(create_event_id.into()).await {
+						creator_event = Some(ce);
+					}
+				}
+			}
+		}
+
 		if let Some(pl_ev) = pl_event {
 			let pl_id = pl_ev.event_id().to_owned();
 			let parsed_pl = parsed_pl_cache
