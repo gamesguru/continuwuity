@@ -930,65 +930,54 @@ impl Service {
 
 		use futures::StreamExt;
 
-		let mut stream = std::pin::pin!(self.pdus(room_id, None));
-		let mut current_shortstatehash = 0;
 		let original_room_shortstatehash = self
 			.services
 			.state
 			.get_room_shortstatehash(room_id)
 			.await
 			.ok();
-		// Load all timeline events into memory for topological sort
-		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
-		let mut events: HashMap<OwnedEventId, PduEvent> = HashMap::new();
 
-		info!("rebuild_state: reading timeline events into memory for sorting...");
-		while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
-			let id = pdu.event_id().to_owned();
-			let prev_events: HashSet<_> = pdu.prev_events().map(ToOwned::to_owned).collect();
-			graph.insert(id.clone(), prev_events);
-			events.insert(id, pdu);
-		}
+		// Stream events in pdu_count order (already sorted by reorder_timeline).
+		// Collect minimal metadata for the multi-head merge at the end.
+		info!("rebuild_state: streaming events in pdu_count order...");
+		let stream_start = std::time::Instant::now();
 
+		let mut events_meta: Vec<(OwnedEventId, Vec<OwnedEventId>, Option<String>, u64)> =
+			Vec::new();
 		let mut room_version = ruma::RoomVersionId::V1;
-		for pdu in events.values() {
-			if *pdu.kind() == TimelineEventType::RoomCreate {
+		let mut room_version_found = false;
+
+		let mut stream = std::pin::pin!(self.pdus(room_id, None));
+		while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
+			let eid = pdu.event_id().to_owned();
+			let prev: Vec<OwnedEventId> = pdu.prev_events().map(ToOwned::to_owned).collect();
+			let state_key = pdu.state_key().map(ToOwned::to_owned);
+			let depth = u64::from(pdu.depth());
+
+			if !room_version_found && *pdu.kind() == TimelineEventType::RoomCreate {
 				if let Ok(create_content) = serde_json::from_str::<
 					ruma::events::room::create::RoomCreateEventContent,
 				>(pdu.content().get())
 				{
 					room_version = create_content.room_version;
-					break;
+					room_version_found = true;
 				}
 			}
+
+			events_meta.push((eid, prev, state_key, depth));
 		}
 
-		info!("rebuild_state: loaded {} events. Filtering missing parents...", events.len());
+		println!(
+			"rebuild_state: loaded {} event metadata in {:?}",
+			events_meta.len(),
+			stream_start.elapsed(),
+		);
 
-		for prev_events in graph.values_mut() {
-			prev_events.retain(|parent_id| events.contains_key(parent_id));
-		}
-
-		info!("rebuild_state: starting topological sort...");
-
-		let fetch_event_fn = |id: OwnedEventId| {
-			let (depth, ts) = events.get(&id).map_or_else(
-				|| (ruma::uint!(0), ruma::MilliSecondsSinceUnixEpoch(ruma::uint!(0))),
-				|p| (p.depth(), p.origin_server_ts()),
-			);
-
-			futures::future::ready(Result::Ok((depth.into(), ts)))
-		};
-
-		let sorted = conduwuit_core::matrix::state_res::lexicographical_topological_sort(
-			&graph,
-			&fetch_event_fn,
-		)
-		.await
-		.map_err(|e| err!(Database("DAG sort failed: {e}")))?;
+		// Build event-id set for filtering missing parents + forward extremity calc
+		let event_set: HashSet<&OwnedEventId> = events_meta.iter().map(|(eid, ..)| eid).collect();
 
 		let rebuild_start = std::time::Instant::now();
-		println!("rebuild_state: topological sort finished. Starting state resolution...");
+		println!("rebuild_state: starting state resolution...");
 
 		let mut ssh_cache: HashMap<OwnedEventId, u64> = HashMap::new();
 		let mut resolved_state_cache: HashMap<Vec<u64>, u64> = HashMap::new();
@@ -1006,9 +995,10 @@ impl Service {
 			.shortstatehash;
 
 		let mut cork = Some(self.db.db.cork());
+		let total_events = events_meta.len();
+		let mut current_shortstatehash = 0_u64;
 
-		for eid in &sorted {
-			let Some(pdu) = events.get(eid) else { continue };
+		for (eid, prev_events, state_key, _depth) in &events_meta {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
@@ -1016,7 +1006,7 @@ impl Service {
 					"rebuild_state: {}/{} events | single:{} none:{} cached:{} resolved:{} | \
 					 cumulative_resolve: {:?} | elapsed: {:?}",
 					processed,
-					events.len(),
+					total_events,
 					single_parent_count,
 					no_parent_count,
 					cache_hit_count,
@@ -1026,9 +1016,10 @@ impl Service {
 				);
 			}
 
-			// Find parent state
-			let prev_sshs: Vec<u64> = pdu
-				.prev_events()
+			// Find parent state — only consider parents that exist in our event set
+			let prev_sshs: Vec<u64> = prev_events
+				.iter()
+				.filter(|prev_id| event_set.contains(prev_id))
 				.filter_map(|prev_id| ssh_cache.get(prev_id).copied())
 				.collect();
 
@@ -1052,11 +1043,12 @@ impl Service {
 						cache_hit_count = cache_hit_count.saturating_add(1);
 						cached_ssh
 					} else {
-						// Slow path for forks: run standard state resolution
+						// Slow path for forks: fetch PDU from DB and run state resolution
+						let pdu = self.get_pdu(eid).await?;
 						let state_after_opt = self
 							.services
 							.event_handler
-							.state_at_incoming_resolved(pdu, room_id, &room_version)
+							.state_at_incoming_resolved(&pdu, room_id, &room_version)
 							.await?;
 						let state_after = state_after_opt.unwrap_or_default();
 						let compressed_state: BTreeSet<_> = self
@@ -1101,7 +1093,7 @@ impl Service {
 
 			let mut state_after = state_before;
 
-			if let Some(state_key) = pdu.state_key() {
+			if let Some(sk) = state_key {
 				let states_parents = if state_before != 0 {
 					self.services
 						.state_compressor
@@ -1111,10 +1103,12 @@ impl Service {
 				} else {
 					Vec::new()
 				};
+				// Need the event type — fetch from DB only for state events
+				let pdu = self.get_pdu(eid).await?;
 				let shortstatekey = self
 					.services
 					.short
-					.get_or_create_shortstatekey(&pdu.kind().to_string().into(), state_key)
+					.get_or_create_shortstatekey(&pdu.kind().to_string().into(), sk)
 					.await;
 				let new = self
 					.services
@@ -1188,27 +1182,33 @@ impl Service {
 		// This handles disconnected components whose states were never merged
 		// during the linear walk.
 		let mut has_children: HashSet<&OwnedEventId> = HashSet::new();
-		for prev_events in graph.values() {
+		for (_, prev_events, ..) in &events_meta {
 			for parent in prev_events {
-				has_children.insert(parent);
+				if event_set.contains(parent) {
+					has_children.insert(parent);
+				}
 			}
 		}
-		let extremity_sshs: Vec<u64> = graph
-			.keys()
+		let extremity_sshs: Vec<u64> = events_meta
+			.iter()
+			.map(|(eid, ..)| eid)
 			.filter(|eid| !has_children.contains(eid))
 			.filter_map(|eid| ssh_cache.get(eid).copied())
 			.collect::<HashSet<_>>()
 			.into_iter()
 			.collect();
 
+		let num_extremities = events_meta
+			.iter()
+			.map(|(eid, ..)| eid)
+			.filter(|eid| !has_children.contains(eid))
+			.count();
+
 		if extremity_sshs.len() > 1 {
 			println!(
 				"rebuild_state: {} forward extremities with {} unique SSHs — merging \
 				 disconnected components...",
-				graph
-					.keys()
-					.filter(|eid| !has_children.contains(eid))
-					.count(),
+				num_extremities,
 				extremity_sshs.len(),
 			);
 
@@ -1272,6 +1272,31 @@ impl Service {
 					extremity_sshs.len(),
 				);
 
+				// Build ShortEventId → depth map only for conflicting SEIs
+				// using pre-computed depth from events_meta
+				let depth_by_eid: HashMap<&OwnedEventId, u64> = events_meta
+					.iter()
+					.map(|(eid, _, _, depth)| (eid, *depth))
+					.collect();
+				let mut sei_depth: HashMap<u64, u64> = HashMap::new();
+				let conflicting_seis: HashSet<u64> = ssk_values
+					.iter()
+					.filter(|(_, values)| values.len() > 1)
+					.flat_map(|(_, values)| values.iter().copied())
+					.collect();
+				for &sei in &conflicting_seis {
+					if let Ok(eid) = self
+						.services
+						.short
+						.get_eventid_from_short::<OwnedEventId>(sei)
+						.await
+					{
+						if let Some(&depth) = depth_by_eid.get(&eid) {
+							sei_depth.insert(sei, depth);
+						}
+					}
+				}
+
 				// Build the final state: for each ssk, if non-conflicting keep it;
 				// if conflicting, pick winner by latest depth (matching state_res behavior)
 				let mut final_state = BTreeSet::new();
@@ -1286,17 +1311,7 @@ impl Service {
 						let mut best_sei = 0_u64;
 						let mut best_depth = 0_u64;
 						for &sei in values {
-							let depth = if let Ok(eid) = self
-								.services
-								.short
-								.get_eventid_from_short::<OwnedEventId>(sei)
-								.await
-							{
-								let key: &EventId = &eid;
-								events.get(key).map_or(0, |p| u64::from(p.depth()))
-							} else {
-								0
-							};
+							let depth = sei_depth.get(&sei).copied().unwrap_or(0);
 							if depth > best_depth || best_sei == 0 {
 								best_depth = depth;
 								best_sei = sei;
