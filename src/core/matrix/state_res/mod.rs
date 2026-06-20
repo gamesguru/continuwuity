@@ -1629,11 +1629,11 @@ where
 	println!("mainline_sort phase 2 (event traversal) took {:?}", start_phase_2.elapsed());
 	let start_phase_3 = std::time::Instant::now();
 
-	sort_keys.sort_unstable_by(|(da, ta, a), (db, tb, b)| {
-		da.unwrap_or(0)
-			.cmp(&db.unwrap_or(0))
-			.then(ta.cmp(tb))
-			.then(a.as_str().cmp(b.as_str()))
+	sort_keys.sort_unstable_by(|(da, ta, a), (db, tb, b)| match (da, db) {
+		| (None, None) => ta.cmp(tb).then(a.as_str().cmp(b.as_str())),
+		| (None, Some(_)) => Ordering::Less,
+		| (Some(_), None) => Ordering::Greater,
+		| (Some(pa), Some(pb)) => pb.cmp(pa).then(ta.cmp(tb)).then(a.as_str().cmp(b.as_str())),
 	});
 
 	let mut sort_event_ids: Vec<OwnedEventId> =

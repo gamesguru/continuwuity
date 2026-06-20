@@ -10,14 +10,17 @@ use conduwuit::{
 	trace,
 	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, TryWidebandExt},
 };
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
+use futures::{
+	FutureExt, StreamExt, TryFutureExt, TryStreamExt,
+	future::{ready, try_join},
+};
 use ruma::{OwnedEventId, RoomId, RoomVersionId};
 
 use crate::rooms::short::ShortStateHash;
 
 // TODO: if we know the prev_events of the incoming event we can avoid the
-#[implement(super::Service)]
 // request and build the state from a known point and resolve if > 1 prev_event
+#[implement(super::Service)]
 #[tracing::instrument(name = "state", level = "debug", skip_all)]
 pub(super) async fn state_at_incoming_degree_one<Pdu>(
 	&self,
@@ -118,16 +121,194 @@ where
 	};
 
 	trace!("Calculating fork states...");
-	let fork_states: Vec<StateMap<_>> = extremity_sstatehashes
-		.into_iter()
-		.try_stream()
-		.wide_and_then(|(sstatehash, prev_event)| {
-			self.state_at_incoming_fork(room_id, sstatehash, prev_event)
-		})
-		.try_collect()
-		.await?;
 
-	let Ok(new_state) = self
+	let mut fork_compressed_states = Vec::with_capacity(extremity_sstatehashes.len());
+	let mut fork_hashes = Vec::with_capacity(extremity_sstatehashes.len());
+	for (sstatehash, prev_event) in &extremity_sstatehashes {
+		let mut state = self
+			.services
+			.state_compressor
+			.load_shortstatehash_info(*sstatehash)
+			.await?
+			.pop()
+			.unwrap()
+			.full_state
+			.unwrap()
+			.as_ref()
+			.clone();
+
+		if let Some(state_key) = prev_event.state_key() {
+			let shortstatekey = self
+				.services
+				.short
+				.get_or_create_shortstatekey(&prev_event.kind().to_string().into(), state_key)
+				.await;
+			let shorteventid = self
+				.services
+				.short
+				.get_or_create_shorteventid(prev_event.event_id())
+				.await;
+
+			let old_compressed = state
+				.iter()
+				.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
+				.copied();
+			if let Some(old) = old_compressed {
+				state.remove(&old);
+			}
+			state.insert(crate::rooms::state_compressor::compress_state_event(
+				shortstatekey,
+				shorteventid,
+			));
+		}
+		fork_compressed_states.push(state);
+		fork_hashes.push(*sstatehash);
+	}
+
+	let first_fork = &fork_compressed_states[0];
+	let mut conflicting_ssks = HashSet::new();
+
+	for fork in &fork_compressed_states[1..] {
+		for diff in first_fork.symmetric_difference(fork) {
+			let mut ssk_bytes = [0_u8; 8];
+			ssk_bytes.copy_from_slice(&diff[0..8]);
+			conflicting_ssks.insert(u64::from_be_bytes(ssk_bytes));
+		}
+	}
+
+	if conflicting_ssks.is_empty() {
+		// All forks are identical!
+		let mut state_map = HashMap::new();
+		for bytes in first_fork {
+			let mut ssk_bytes = [0_u8; 8];
+			ssk_bytes.copy_from_slice(&bytes[0..8]);
+			let ssk = u64::from_be_bytes(ssk_bytes);
+
+			let mut id_bytes = [0_u8; 8];
+			id_bytes.copy_from_slice(&bytes[8..16]);
+			let shorteventid = u64::from_be_bytes(id_bytes);
+
+			if let Ok(eid) = self
+				.services
+				.short
+				.get_eventid_from_short(shorteventid)
+				.await
+			{
+				state_map.insert(ssk, eid);
+			}
+		}
+		return Ok(Some(state_map));
+	}
+
+	let mut conflicting_event_ids = HashSet::new();
+	for fork in &fork_compressed_states {
+		for ssk in &conflicting_ssks {
+			let event_bytes = fork
+				.iter()
+				.find(|bytes| bytes.starts_with(&ssk.to_be_bytes()));
+			if let Some(bytes) = event_bytes {
+				let mut id_bytes = [0_u8; 8];
+				id_bytes.copy_from_slice(&bytes[8..16]);
+				let shorteventid = u64::from_be_bytes(id_bytes);
+				if let Ok(eid) = self
+					.services
+					.short
+					.get_eventid_from_short(shorteventid)
+					.await
+				{
+					conflicting_event_ids.insert(eid);
+				}
+			}
+		}
+	}
+
+	let conflicting_pdus: Vec<_> = self
+		.services
+		.timeline
+		.multi_get_pdus(Some(room_id), futures::stream::iter(conflicting_event_ids.into_iter()))
+		.filter_map(|r| ready(r.ok()))
+		.collect()
+		.await;
+
+	let mut auth_ssks = HashSet::new();
+	for ty in &[
+		ruma::events::StateEventType::RoomCreate,
+		ruma::events::StateEventType::RoomPowerLevels,
+		ruma::events::StateEventType::RoomJoinRules,
+	] {
+		if let Ok(ssk) = self.services.short.get_shortstatekey(ty, "").await {
+			auth_ssks.insert(ssk);
+		}
+	}
+
+	for pdu in conflicting_pdus {
+		if let Ok(ssk) = self
+			.services
+			.short
+			.get_shortstatekey(
+				&ruma::events::StateEventType::RoomMember,
+				&pdu.sender().to_string(),
+			)
+			.await
+		{
+			auth_ssks.insert(ssk);
+		}
+		if pdu.kind() == &ruma::events::TimelineEventType::RoomMember {
+			if let Some(sk) = pdu.state_key() {
+				if let Ok(ssk) = self
+					.services
+					.short
+					.get_shortstatekey(&ruma::events::StateEventType::RoomMember, sk)
+					.await
+				{
+					auth_ssks.insert(ssk);
+				}
+			}
+		}
+		if pdu.kind() == &ruma::events::TimelineEventType::RoomThirdPartyInvite {
+			if let Some(sk) = pdu.state_key() {
+				if let Ok(ssk) = self
+					.services
+					.short
+					.get_shortstatekey(&ruma::events::StateEventType::RoomThirdPartyInvite, sk)
+					.await
+				{
+					auth_ssks.insert(ssk);
+				}
+			}
+		}
+	}
+
+	let relevant_ssks: HashSet<_> = conflicting_ssks.union(&auth_ssks).copied().collect();
+
+	let mut fork_states: Vec<StateMap<_>> = Vec::new();
+	for fork in &fork_compressed_states {
+		let mut state_map = StateMap::new();
+		for ssk in &relevant_ssks {
+			let event_bytes = fork
+				.iter()
+				.find(|bytes| bytes.starts_with(&ssk.to_be_bytes()));
+			if let Some(bytes) = event_bytes {
+				let mut id_bytes = [0_u8; 8];
+				id_bytes.copy_from_slice(&bytes[8..16]);
+				let shorteventid = u64::from_be_bytes(id_bytes);
+				if let Ok(eid) = self
+					.services
+					.short
+					.get_eventid_from_short(shorteventid)
+					.await
+				{
+					if let Ok((ty, sk)) = self.services.short.get_statekey_from_short(*ssk).await
+					{
+						state_map.insert((ty, sk), eid);
+					}
+				}
+			}
+		}
+		fork_states.push(state_map);
+	}
+
+	let Ok(resolved_partial) = self
 		.state_resolution(room_id, room_version_id, fork_states.iter())
 		.boxed()
 		.await
@@ -135,62 +316,38 @@ where
 		return Ok(None);
 	};
 
-	new_state
-		.into_iter()
-		.stream()
-		.broad_then(|((event_type, state_key), event_id)| async move {
-			self.services
-				.short
-				.get_or_create_shortstatekey(&event_type, &state_key)
-				.map(move |shortstatekey| (shortstatekey, event_id))
-				.await
-		})
-		.collect()
-		.map(Some)
-		.map(Ok)
-		.await
-}
+	let mut final_state = HashMap::new();
+	for bytes in first_fork {
+		let mut ssk_bytes = [0_u8; 8];
+		ssk_bytes.copy_from_slice(&bytes[0..8]);
+		let ssk = u64::from_be_bytes(ssk_bytes);
 
-#[implement(super::Service)]
-async fn state_at_incoming_fork<Pdu>(
-	&self,
-	room_id: &RoomId,
-	sstatehash: ShortStateHash,
-	prev_event: Pdu,
-) -> Result<StateMap<OwnedEventId>>
-where
-	Pdu: Event,
-{
-	let mut leaf_state: HashMap<_, _> = self
-		.services
-		.state_accessor
-		.state_full_ids(sstatehash)
-		.collect()
-		.await;
+		if conflicting_ssks.contains(&ssk) {
+			continue; // We'll take this from resolved_partial
+		}
 
-	if let Some(state_key) = prev_event.state_key() {
-		let shortstatekey = self
+		let mut id_bytes = [0_u8; 8];
+		id_bytes.copy_from_slice(&bytes[8..16]);
+		let shorteventid = u64::from_be_bytes(id_bytes);
+
+		if let Ok(eid) = self
 			.services
 			.short
-			.get_or_create_shortstatekey(&prev_event.kind().to_string().into(), state_key)
-			.await;
-
-		let event_id = prev_event.event_id();
-		leaf_state.insert(shortstatekey, event_id.to_owned());
+			.get_eventid_from_short(shorteventid)
+			.await
+		{
+			final_state.insert(ssk, eid);
+		}
 	}
 
-	let fork_state = leaf_state
-		.iter()
-		.stream()
-		.broad_then(|(k, id)| {
-			self.services
-				.short
-				.get_statekey_from_short(*k)
-				.map_ok(|(ty, sk)| ((ty, sk), id.clone()))
-		})
-		.ready_filter_map(Result::ok)
-		.collect()
-		.map(Ok);
+	for ((ty, sk), eid) in resolved_partial.into_iter() {
+		let ssk = self
+			.services
+			.short
+			.get_or_create_shortstatekey(&ty, sk.as_ref())
+			.await;
+		final_state.insert(ssk, eid);
+	}
 
-	fork_state.await
+	Ok(Some(final_state))
 }
