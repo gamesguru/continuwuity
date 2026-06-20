@@ -127,10 +127,14 @@ where
 			.any(|aid| async move { self.services.pdu_metadata.is_event_rejected(aid).await })
 			.await;
 
-		if any_auth_rejected {
+		let any_prev_rejected = futures::stream::iter(incoming_pdu.prev_events())
+			.any(|pid| async move { self.services.pdu_metadata.is_event_rejected(pid).await })
+			.await;
+
+		if any_auth_rejected || any_prev_rejected {
 			debug!(
 				event_id = %incoming_pdu.event_id,
-				"Skipping /state_ids pre-fetch: auth events include rejected events"
+				"Skipping /state pre-fetch: auth or prev events include rejected events"
 			);
 		} else {
 			debug!(
