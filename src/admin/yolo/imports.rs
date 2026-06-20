@@ -83,17 +83,18 @@ pub(super) async fn import_pdus(
 					.and_then(ruma::CanonicalJsonValue::as_bool)
 					.unwrap_or(false);
 
-				let (eid, value, pdu_event) = match conduwuit::utils::pdu_parser::parse_and_clean_pdu(
-					value,
-					room_id_ref.as_ref(),
-					&room_version_ref,
-				) {
-					| Ok(v) => v,
-					| Err(e) => {
-						warn!("Failed to parse_and_clean_pdu: {e}");
-						return None;
-					},
-				};
+				let (eid, value, pdu_event) =
+					match conduwuit::utils::pdu_parser::parse_and_clean_pdu(
+						value,
+						room_id_ref.as_ref(),
+						&room_version_ref,
+					) {
+						| Ok(v) => v,
+						| Err(e) => {
+							warn!("Failed to parse_and_clean_pdu: {e}");
+							return None;
+						},
+					};
 
 				Some((eid, value, pdu_event, is_outlier, is_soft_failed, is_rejected))
 			})

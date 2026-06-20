@@ -1243,6 +1243,9 @@ async fn test_unredacted_lounge_dag_resolution() {
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
 	println!("import-pdus took {:?}", start_import.elapsed());
 
+	println!("Sleeping 2 seconds to let RocksDB settle...");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
 	// Run reorder-timeline
 	println!("Starting reorder-timeline...");
 	let start_reorder = std::time::Instant::now();
@@ -1258,6 +1261,9 @@ async fn test_unredacted_lounge_dag_resolution() {
 	println!("reorder-timeline took {:?}", start_reorder.elapsed());
 
 	// Run rebuild-state
+	println!("Sleeping 2 seconds to let RocksDB settle...");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
 	println!("Starting rebuild-state...");
 	let start_rebuild = std::time::Instant::now();
 	let res = services

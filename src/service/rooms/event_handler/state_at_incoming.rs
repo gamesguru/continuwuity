@@ -118,20 +118,17 @@ where
 	};
 
 	trace!("Calculating fork states...");
-	let (fork_states, auth_chain_sets): (Vec<StateMap<_>>, Vec<HashSet<_>>) =
-		extremity_sstatehashes
-			.into_iter()
-			.try_stream()
-			.wide_and_then(|(sstatehash, prev_event)| {
-				self.state_at_incoming_fork(room_id, sstatehash, prev_event)
-			})
-			.try_collect()
-			.map_ok(Vec::into_iter)
-			.map_ok(Iterator::unzip)
-			.await?;
+	let fork_states: Vec<StateMap<_>> = extremity_sstatehashes
+		.into_iter()
+		.try_stream()
+		.wide_and_then(|(sstatehash, prev_event)| {
+			self.state_at_incoming_fork(room_id, sstatehash, prev_event)
+		})
+		.try_collect()
+		.await?;
 
 	let Ok(new_state) = self
-		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(room_id, room_version_id, fork_states.iter())
 		.boxed()
 		.await
 	else {
@@ -160,7 +157,7 @@ async fn state_at_incoming_fork<Pdu>(
 	room_id: &RoomId,
 	sstatehash: ShortStateHash,
 	prev_event: Pdu,
-) -> Result<(StateMap<OwnedEventId>, HashSet<OwnedEventId>)>
+) -> Result<StateMap<OwnedEventId>>
 where
 	Pdu: Event,
 {
@@ -180,14 +177,7 @@ where
 
 		let event_id = prev_event.event_id();
 		leaf_state.insert(shortstatekey, event_id.to_owned());
-		// Now it's the state after the pdu
 	}
-
-	let auth_chain = self
-		.services
-		.auth_chain
-		.event_ids_iter(room_id, leaf_state.values().map(Borrow::borrow))
-		.try_collect();
 
 	let fork_state = leaf_state
 		.iter()
@@ -202,5 +192,5 @@ where
 		.collect()
 		.map(Ok);
 
-	try_join(fork_state, auth_chain).await
+	fork_state.await
 }

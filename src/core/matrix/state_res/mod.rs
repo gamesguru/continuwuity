@@ -86,12 +86,25 @@ const STATE_RES_MAX_CONFLICTED: usize = 200_000;
 //#[tracing::instrument(level = "debug", skip(state_sets, auth_chain_sets,
 //#[tracing::instrument(level event_fetch))]
 #[allow(clippy::cognitive_complexity)]
-pub async fn resolve<'a, Pdu, Sets, SetIter, Hasher, Fetch, FetchFut, BatchFetch, BatchFut, Cb>(
+pub async fn resolve<
+	'a,
+	Pdu,
+	Sets,
+	SetIter,
+	Hasher,
+	Fetch,
+	FetchFut,
+	BatchFetch,
+	BatchFut,
+	AuthFetch,
+	AuthFut,
+	Cb,
+>(
 	room_version: &RoomVersionId,
 	state_sets: Sets,
-	auth_chain_sets: &'a [HashSet<OwnedEventId, Hasher>],
 	event_fetch: &Fetch,
 	event_batch_fetch: Option<&BatchFetch>,
+	auth_chain_fetch: &AuthFetch,
 	event_missing_cb: Option<&Cb>,
 ) -> Result<StateMap<OwnedEventId>>
 where
@@ -99,8 +112,10 @@ where
 	FetchFut: Future<Output = Option<Pdu>> + Send,
 	BatchFetch: Fn(Vec<OwnedEventId>) -> BatchFut + Sync,
 	BatchFut: Future<Output = Vec<Pdu>> + Send,
+	AuthFetch: Fn(Vec<OwnedEventId>) -> AuthFut + Sync,
+	AuthFut: Future<Output = HashSet<OwnedEventId, Hasher>> + Send,
 	Cb: Fn(Vec<OwnedEventId>) + Sync,
-	Sets: IntoIterator<IntoIter = SetIter> + Send,
+	Sets: IntoIterator<IntoIter = SetIter> + Clone + Send,
 	SetIter: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 	Hasher: BuildHasher + Send + Sync,
 	Pdu: Event + Clone + Send + Sync,
@@ -148,7 +163,7 @@ where
 	};
 
 	// Split non-conflicting and conflicting state
-	let (unconflicted, conflicting) = separate(state_sets.into_iter());
+	let (unconflicted, conflicting) = separate(state_sets.clone().into_iter());
 
 	debug!(count = unconflicted.len(), "non-conflicting events");
 	trace!(map = ?unconflicted, "non-conflicting events");
@@ -188,10 +203,21 @@ where
 	// synapse says `full_set = {eid for eid in full_conflicted_set if eid in
 	// event_map}`
 	// Hydra: Also consider the conflicted state subgraph
+	let mut auth_chain_sets = Vec::new();
 	let auth_diff_stream = if stateres_version == StateResolutionVersion::V2_1 {
 		futures::stream::empty().boxed()
 	} else {
-		get_auth_chain_diff(auth_chain_sets).boxed()
+		for state_set in state_sets.into_iter() {
+			let mut conflicting_for_this_fork = Vec::new();
+			for (key, id) in state_set {
+				if conflicting.contains_key(key) {
+					conflicting_for_this_fork.push(id.clone());
+				}
+			}
+			let auth_chain = auth_chain_fetch(conflicting_for_this_fork).await;
+			auth_chain_sets.push(auth_chain);
+		}
+		get_auth_chain_diff(&auth_chain_sets).boxed()
 	};
 
 	let all_conflicted_ids: HashSet<_> = auth_diff_stream
@@ -243,14 +269,6 @@ where
 	debug!(count = all_conflicted.len(), "full conflicted set");
 	trace!(set = ?all_conflicted, "full conflicted set");
 
-	let total_auth_chain: usize = auth_chain_sets.iter().map(HashSet::len).sum();
-	if total_auth_chain > 10_000 {
-		info!(
-			total_auth_chain,
-			num_sets = auth_chain_sets.len(),
-			"Auth chain exceeds 10k events — possible DAG bloat or amplification attack"
-		);
-	}
 	if all_conflicted.len() > 5_000 {
 		info!(
 			count = all_conflicted.len(),
@@ -716,7 +734,8 @@ where
 		all_needed.insert(id.clone());
 	}
 
-	let mut local_cache_map: rustc_hash::FxHashMap<OwnedEventId, Option<E>> = rustc_hash::FxHashMap::default();
+	let mut local_cache_map: rustc_hash::FxHashMap<OwnedEventId, Option<E>> =
+		rustc_hash::FxHashMap::default();
 	let fetched: Vec<(OwnedEventId, Option<E>)> = all_needed
 		.into_iter()
 		.stream()
@@ -852,16 +871,8 @@ where
 		Id: Ord,
 	{
 		fn cmp(&self, other: &Self) -> Ordering {
-			// NOTE: the power level comparison is "backwards" intentionally.
-			// See the "Mainline ordering" section of the Matrix specification
-			// around where it says the following:
-			//
-			// > for events `x` and `y`, `x < y` if [...]
-			//
-			// <https://spec.matrix.org/v1.12/rooms/v11/#definitions>
-			other
-				.power_level
-				.cmp(&self.power_level)
+			self.power_level
+				.cmp(&other.power_level)
 				.then(self.origin_server_ts.cmp(&other.origin_server_ts))
 				.then(self.event_id.borrow().cmp(other.event_id.borrow()))
 		}
@@ -878,7 +889,7 @@ where
 
 	let mut id_to_index: rustc_hash::FxHashMap<&Id, usize> = rustc_hash::FxHashMap::default();
 	let mut index_to_id: Vec<&Id> = Vec::new();
-	
+
 	for (node, edges) in graph {
 		if !id_to_index.contains_key(node) {
 			id_to_index.insert(node, index_to_id.len());
@@ -891,28 +902,29 @@ where
 			}
 		}
 	}
-	
+
 	let num_nodes = index_to_id.len();
 	let mut outdegree_counts = vec![0_usize; num_nodes];
 	let mut reverse_graph = vec![Vec::<usize>::new(); num_nodes];
-	
+
 	for (node, edges) in graph {
-		let node_idx = id_to_index[node];
-		outdegree_counts[node_idx] += edges.len();
-		
-		for edge in edges {
-			let edge_idx = id_to_index[edge];
-			// Node references edge, so edge is a parent of node in the reverse iteration
-			reverse_graph[edge_idx].push(node_idx);
+		if let Some(&node_idx) = id_to_index.get(node) {
+			outdegree_counts[node_idx] += edges.len();
+
+			for edge in edges {
+				if let Some(&edge_idx) = id_to_index.get(edge) {
+					reverse_graph[edge_idx].push(node_idx);
+				}
+			}
 		}
 	}
-	
+
 	// Pre-fetch all keys to avoid await overhead in the sort loop
 	let mut keys = Vec::with_capacity(num_nodes);
 	for &id in &index_to_id {
 		keys.push(key_fn(id.clone()).await?);
 	}
-	
+
 	let mut zero_outdegree = Vec::new();
 	for (idx, &out_count) in outdegree_counts.iter().enumerate() {
 		if out_count == 0 {
@@ -1617,26 +1629,11 @@ where
 	println!("mainline_sort phase 2 (event traversal) took {:?}", start_phase_2.elapsed());
 	let start_phase_3 = std::time::Instant::now();
 
-	// Step 3: Sort by mainline position then ts/id. Applied left->right, last wins.
-	//
-	// None (no mainline connection) -> worst -> FIRST -> loses.
-	// For events with a connection: LARGER position = FARTHER from resolved PL =
-	// worse = comes FIRST.  Position 0 (closest to current PL) is LAST -> wins.
-	//
-	// This mirrors spec §6.6.3.3: "x < y if x.position > y.position" where ∞
-	// beats all finite positions (None events have position ∞).
 	sort_keys.sort_unstable_by(|(da, ta, a), (db, tb, b)| {
-		match (da, db) {
-			// Both have no PL ancestor -> tiebreak by ts ascending then id ascending.
-			| (None, None) => ta.cmp(tb).then(a.as_str().cmp(b.as_str())),
-			// No-PL events are worst (first).
-			| (None, Some(_)) => Ordering::Less,
-			| (Some(_), None) => Ordering::Greater,
-			// Both have a PL ancestor: DESCENDING position (farther from PL first).
-			// Then ascending ts (earlier ts -> loses; later ts -> wins).
-			| (Some(pa), Some(pb)) =>
-				pb.cmp(pa).then(ta.cmp(tb)).then(a.as_str().cmp(b.as_str())),
-		}
+		da.unwrap_or(0)
+			.cmp(&db.unwrap_or(0))
+			.then(ta.cmp(tb))
+			.then(a.as_str().cmp(b.as_str()))
 	});
 
 	let mut sort_event_ids: Vec<OwnedEventId> =

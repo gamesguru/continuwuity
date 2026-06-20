@@ -56,17 +56,6 @@ pub async fn resolve_state(
 		.flat_map(|fs| fs.iter().map(|(&ssk, eid)| (eid.clone(), ssk)))
 		.collect();
 
-	let auth_chain_sets = fork_states
-		.iter()
-		.try_stream()
-		.wide_and_then(|state| {
-			self.services
-				.auth_chain
-				.event_ids_iter(room_id, state.values().map(Borrow::borrow))
-				.try_collect()
-		})
-		.try_collect::<Vec<HashSet<OwnedEventId>>>();
-
 	let fork_states = fork_states
 		.iter()
 		.stream()
@@ -83,7 +72,7 @@ pub async fn resolve_state(
 		.map(Ok::<_, Error>)
 		.try_collect::<Vec<StateMap<OwnedEventId>>>();
 
-	let (fork_states, auth_chain_sets) = try_join(fork_states, auth_chain_sets).await?;
+	let fork_states = fork_states.await?;
 
 	// Do NOT fetch from federation here. State resolution must be local-only
 	// to avoid blocking. Missing auth chain events cause state_res to skip those
@@ -102,11 +91,10 @@ pub async fn resolve_state(
 
 	trace!("Resolving state");
 	let n_fork_states: usize = fork_states.iter().map(HashMap::len).sum();
-	let n_auth_chain: usize = auth_chain_sets.iter().map(HashSet::len).sum();
-	info!(%room_id, n_fork_states, n_auth_chain, "state_res: auth chains loaded, starting resolution");
+	info!(%room_id, n_fork_states, "state_res: fork states loaded, starting resolution");
 	let t = std::time::Instant::now();
 	let state = self
-		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(room_id, room_version_id, fork_states.iter())
 		.boxed()
 		.await?;
 	info!(%room_id, n_resolved = state.len(), elapsed = ?t.elapsed(), "state_res: resolution complete");
@@ -157,7 +145,6 @@ pub async fn state_resolution<'a, StateSets>(
 	room_id: &RoomId,
 	room_version: &'a RoomVersionId,
 	state_sets: StateSets,
-	auth_chain_sets: &'a [HashSet<OwnedEventId>],
 ) -> Result<StateMap<OwnedEventId>>
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
@@ -165,9 +152,6 @@ where
 	let mut all_events = HashSet::new();
 	for state_set in state_sets.clone() {
 		all_events.extend(state_set.values().cloned());
-	}
-	for auth_chain in auth_chain_sets {
-		all_events.extend(auth_chain.iter().cloned());
 	}
 
 	let meta = &self.services.pdu_metadata;
@@ -228,12 +212,21 @@ where
 	let dummy_batch_fetch =
 		|_: Vec<OwnedEventId>| async move { Vec::<Arc<conduwuit_core::PduEvent>>::new() };
 
+	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {
+		self.services
+			.auth_chain
+			.event_ids_iter(room_id, events.iter().map(|id| &**id))
+			.try_collect::<std::collections::HashSet<OwnedEventId>>()
+			.await
+			.unwrap_or_default()
+	};
+
 	state_res::resolve(
 		room_version,
 		state_sets,
-		auth_chain_sets,
 		&event_fetch,
 		Some(&dummy_batch_fetch),
+		&auth_chain_fetch,
 		Some(&event_missing_cb),
 	)
 	.map_err(|e| err!(error!("State resolution failed: {e:?}")))
