@@ -525,14 +525,7 @@ impl Service {
 				batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
 			);
 			let final_ssh = self
-				.reinsert_timeline_entries(
-					room_id,
-					shortroomid,
-					&sorted,
-					&entries,
-					batch_start,
-					no_compute_state,
-				)
+				.reindex_timeline_with_state(room_id, shortroomid, &sorted, &entries, batch_start)
 				.await;
 			println!(
 				"reorder_timeline: single-pass reindex+state took {:?}",
@@ -738,41 +731,18 @@ impl Service {
 		Ok(count)
 	}
 
-	async fn reinsert_timeline_entries(
+	/// Reindex timeline entries with state computation. For each event in
+	/// sorted order: removes the old pdu_count key, assigns a new pdu_count,
+	/// recomputes state (for state events), and writes the updated index.
+	async fn reindex_timeline_with_state(
 		&self,
 		room_id: &RoomId,
 		shortroomid: ShortRoomId,
 		sorted: &[OwnedEventId],
 		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
 		batch_start: u64,
-		no_compute_state: bool,
 	) -> Option<u64> {
 		let count = sorted.len();
-
-		if no_compute_state {
-			let mut cork = Some(self.db.db.cork());
-
-			for (i, event_id) in sorted.iter().enumerate() {
-				let new_count = batch_start
-					.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
-					.saturating_add(1);
-				let pdu_count = PduCount::Normal(new_count);
-				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
-
-				// Lightweight reindex: only update position mappings + metadata pdu_count.
-				// Canonical JSON, prev_events, and auth_events are immutable; don't touch them.
-				self.db
-					.reindex_pdu(&pdu_id, event_id, pdu_count.into_unsigned());
-
-				if i.saturating_add(1).is_multiple_of(10000) {
-					drop(cork.take());
-					tokio::task::yield_now().await;
-					cork = Some(self.db.db.cork());
-				}
-			}
-
-			return None;
-		}
 
 		let mut current_shortstatehash = {
 			let mut ssh = 0;
@@ -813,12 +783,13 @@ impl Service {
 				| Err(e) => {
 					warn!(
 						%event_id,
-						"PDU completely missing during re-insertion (skipping): {e}"
+						"PDU missing during reindex (skipping): {e}"
 					);
 					continue;
 				},
 			};
 
+			let mut json_modified = false;
 			if let Some(mut ssh) = current_shortstatehash {
 				let shorteventid = self
 					.services
@@ -839,8 +810,8 @@ impl Service {
 							.state_get(ssh, &pdu.kind.to_string().into(), state_key)
 							.await
 						{
-							if let Err(e) = update_unsigned_prev_content(&mut json, &prev_state) {
-								warn!(%event_id, "Failed to repair unsigned.prev_content during reorder: {e}");
+							if update_unsigned_prev_content(&mut json, &prev_state).is_ok() {
+								json_modified = true;
 							}
 						}
 					}
@@ -896,7 +867,14 @@ impl Service {
 				current_shortstatehash = Some(ssh);
 			}
 
-			self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
+			// Only write JSON when unsigned.prev_content was actually repaired;
+			// otherwise just update index mappings (metadata + pdu_count).
+			if json_modified {
+				self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
+			} else {
+				self.db
+					.reindex_pdu(&pdu_id, event_id, pdu_count.into_unsigned());
+			}
 			if pdu.kind == TimelineEventType::RoomMessage {
 				if let Ok(content) = pdu.get_content::<ExtractBody>() {
 					if let Some(body) = &content.body {
@@ -905,7 +883,7 @@ impl Service {
 				}
 			}
 			if i.saturating_add(1).is_multiple_of(2000) {
-				println!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
+				println!("reorder_timeline: reindexed {}/{count} events...", i.saturating_add(1));
 			}
 			if i.saturating_add(1).is_multiple_of(10000) {
 				drop(cork.take());
@@ -1204,6 +1182,146 @@ impl Service {
 			rebuild_start.elapsed(),
 			cumulative_resolve_time,
 		);
+
+		// Final multi-head resolution: find all forward extremities (events with no
+		// children in the DAG), collect their unique SSHs, and merge them.
+		// This handles disconnected components whose states were never merged
+		// during the linear walk.
+		let mut has_children: HashSet<&OwnedEventId> = HashSet::new();
+		for prev_events in graph.values() {
+			for parent in prev_events {
+				has_children.insert(parent);
+			}
+		}
+		let extremity_sshs: Vec<u64> = graph
+			.keys()
+			.filter(|eid| !has_children.contains(eid))
+			.filter_map(|eid| ssh_cache.get(eid).copied())
+			.collect::<HashSet<_>>()
+			.into_iter()
+			.collect();
+
+		if extremity_sshs.len() > 1 {
+			println!(
+				"rebuild_state: {} forward extremities with {} unique SSHs — merging \
+				 disconnected components...",
+				graph
+					.keys()
+					.filter(|eid| !has_children.contains(eid))
+					.count(),
+				extremity_sshs.len(),
+			);
+
+			// Load full compressed state for each unique SSH
+			let mut all_compressed = BTreeSet::new();
+			for &ssh in &extremity_sshs {
+				if let Ok(info) = self
+					.services
+					.state_compressor
+					.load_shortstatehash_info(ssh)
+					.await
+				{
+					if let Some(frame) = info.last() {
+						if let Some(full_state) = frame.full_state.as_ref() {
+							for entry in full_state.as_ref() {
+								all_compressed.insert(*entry);
+							}
+						}
+					}
+				}
+			}
+
+			// Build ssk → set of shorteventid values to detect conflicts
+			let mut ssk_values: HashMap<u64, HashSet<u64>> = HashMap::new();
+			for bytes in &all_compressed {
+				let mut ssk_bytes = [0_u8; 8];
+				ssk_bytes.copy_from_slice(&bytes[0..8]);
+				let ssk = u64::from_be_bytes(ssk_bytes);
+				let mut id_bytes = [0_u8; 8];
+				id_bytes.copy_from_slice(&bytes[8..16]);
+				let sei = u64::from_be_bytes(id_bytes);
+				ssk_values.entry(ssk).or_default().insert(sei);
+			}
+
+			let conflicting: Vec<_> = ssk_values
+				.iter()
+				.filter(|(_, values)| values.len() > 1)
+				.map(|(ssk, _)| *ssk)
+				.collect();
+
+			if conflicting.is_empty() {
+				// No conflicts — trivial union merge
+				println!(
+					"rebuild_state: trivial merge of {} state entries from {} components",
+					ssk_values.len(),
+					extremity_sshs.len(),
+				);
+				let merged_ssh = self
+					.services
+					.state_compressor
+					.save_state(room_id, Arc::new(all_compressed))
+					.await?
+					.shortstatehash;
+				current_shortstatehash = merged_ssh;
+			} else {
+				// Conflicting keys exist — need to pick winners
+				// For non-auth conflicts, pick the event with the latest depth
+				println!(
+					"rebuild_state: {} conflicting keys across {} components — resolving...",
+					conflicting.len(),
+					extremity_sshs.len(),
+				);
+
+				// Build the final state: for each ssk, if non-conflicting keep it;
+				// if conflicting, pick winner by latest depth (matching state_res behavior)
+				let mut final_state = BTreeSet::new();
+				for (&ssk, values) in &ssk_values {
+					if values.len() == 1 {
+						// Non-conflicting — keep the only value
+						let sei = *values.iter().next().unwrap();
+						final_state
+							.insert(rooms::state_compressor::compress_state_event(ssk, sei));
+					} else {
+						// Conflicting — pick winner by highest depth
+						let mut best_sei = 0_u64;
+						let mut best_depth = 0_u64;
+						for &sei in values {
+							let depth = if let Ok(eid) = self
+								.services
+								.short
+								.get_eventid_from_short::<OwnedEventId>(sei)
+								.await
+							{
+								let key: &EventId = &eid;
+								events.get(key).map_or(0, |p| u64::from(p.depth()))
+							} else {
+								0
+							};
+							if depth > best_depth || best_sei == 0 {
+								best_depth = depth;
+								best_sei = sei;
+							}
+						}
+						final_state
+							.insert(rooms::state_compressor::compress_state_event(ssk, best_sei));
+					}
+				}
+
+				println!("rebuild_state: merged state has {} entries", final_state.len());
+				let merged_ssh = self
+					.services
+					.state_compressor
+					.save_state(room_id, Arc::new(final_state))
+					.await?
+					.shortstatehash;
+				current_shortstatehash = merged_ssh;
+			}
+		} else {
+			println!(
+				"rebuild_state: all forward extremities share a single SSH — no multi-head \
+				 merge needed",
+			);
+		}
 
 		let (total_added, total_removed) = if let Some(old_ssh) = original_room_shortstatehash {
 			let old_info = self
