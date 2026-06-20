@@ -410,7 +410,7 @@ impl Service {
 		let dropped = 0_usize;
 
 		if let Some(limit) = tail {
-			info!("reorder_timeline: reading last {limit} PDUs from timeline (tail mode)...");
+			println!("reorder_timeline: reading last {limit} PDUs from timeline (tail mode)...");
 			// Collect in reverse and record the minimum count seen (oldest in window)
 			let mut rev = Box::pin(self.pdus_rev(room_id, None));
 			let mut collected = 0_usize;
@@ -433,7 +433,7 @@ impl Service {
 				}
 			}
 		} else {
-			info!("reorder_timeline: reading all PDUs from timeline...");
+			println!("reorder_timeline: reading all PDUs from timeline...");
 			let pdus_backfill = self.pdus(room_id, Some(PduCount::min()));
 			let pdus_normal = self.pdus(room_id, Some(PduCount::Normal(0)));
 			let pdus = pdus_backfill.chain(pdus_normal);
@@ -443,7 +443,7 @@ impl Service {
 				entries.insert(eid.clone(), (count, pdu.origin_server_ts));
 				graph.insert(eid, pdu.prev_events().map(ToOwned::to_owned).collect());
 				if entries.len().is_multiple_of(10000) {
-					info!("reorder_timeline: read {} PDUs so far...", entries.len());
+					println!("reorder_timeline: read {} PDUs so far...", entries.len());
 					tokio::task::yield_now().await;
 				}
 			}
@@ -453,7 +453,7 @@ impl Service {
 			warn!("{dropped} PDUs had no JSON and were skipped during reorder");
 		}
 
-		info!("reorder_timeline: collected {} PDUs ({dropped} dropped)", entries.len());
+		println!("reorder_timeline: collected {} PDUs ({dropped} dropped)", entries.len());
 
 		if entries.is_empty() {
 			return Ok(0);
@@ -470,20 +470,20 @@ impl Service {
 		// sort produces bad client UX by interleaving old state events with recent
 		// messages whenever the DAG has branches or gaps.
 		let start = std::time::Instant::now();
-		info!("reorder_timeline: sorting {} events by origin_server_ts...", entries.len());
+		println!("reorder_timeline: sorting {} events by origin_server_ts...", entries.len());
 		let mut sorted: Vec<OwnedEventId> = entries.keys().cloned().collect();
 		sorted.sort_by(|a, b| {
 			let (_, ts_a) = entries[a];
 			let (_, ts_b) = entries[b];
 			ts_a.cmp(&ts_b).then_with(|| a.cmp(b))
 		});
-		info!("reorder_timeline: sort took {:?}", start.elapsed());
+		println!("reorder_timeline: sort took {:?}", start.elapsed());
 
 		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
 		let remove_start = std::time::Instant::now();
 		self.remove_old_timeline_entries(shortroomid, &sorted, &entries)
 			.await;
-		info!("reorder_timeline: remove old took {:?}", remove_start.elapsed());
+		println!("reorder_timeline: remove old took {:?}", remove_start.elapsed());
 
 		// Re-insert in topological order with fresh PduCount values
 		let count = sorted.len();
@@ -506,7 +506,7 @@ impl Service {
 				no_compute_state,
 			)
 			.await;
-		info!("reorder_timeline: reinsert took {:?}", reinsert_start.elapsed());
+		println!("reorder_timeline: reinsert took {:?}", reinsert_start.elapsed());
 
 		// Update the room's authoritative shortstatehash to match the
 		// recomputed state at the tip. Without this, Room SSH stays stale
@@ -516,14 +516,14 @@ impl Service {
 				self.services
 					.state
 					.set_room_state(room_id, ssh, &state_lock);
-				info!("reorder_timeline: updated room shortstatehash to {ssh}");
+				println!("reorder_timeline: updated room shortstatehash to {ssh}");
 			}
 		}
 
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		let final_sync = self.db.db.cork_and_sync();
 		drop(final_sync);
-		info!("reorder_timeline: re-insert complete, calculating forward extremities...");
+		println!("reorder_timeline: re-insert complete, calculating forward extremities...");
 
 		// Calculate the true DAG forward extremities (events with in-degree 0
 		// in the reversed graph). This fixes broken pagination and fork storms.
@@ -563,7 +563,7 @@ impl Service {
 			);
 		}
 
-		info!("reorder_timeline: skipped repair unsigned per metadata design");
+		println!("reorder_timeline: skipped repair unsigned per metadata design");
 
 		// Rebuild membership cache from the authoritative state snapshot.
 		// This fixes stale/missing entries left by previous DAG fractures.
@@ -700,11 +700,11 @@ impl Service {
 			"reorder_timeline: synced {members_synced} membership cache entries, removed \
 			 {stale_removed} stale"
 		);
-		info!("reorder_timeline: sweep cache took {:?}", sync_start.elapsed());
+		println!("reorder_timeline: sweep cache took {:?}", sync_start.elapsed());
 
 		drop(state_lock);
 
-		info!("reorder_timeline: complete, {count} events reordered");
+		println!("reorder_timeline: complete, {count} events reordered");
 
 		Ok(count)
 	}
@@ -715,7 +715,7 @@ impl Service {
 		sorted: &[OwnedEventId],
 		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
 	) {
-		info!("reorder_timeline: sorted {} events, removing old entries...", sorted.len());
+		println!("reorder_timeline: sorted {} events, removing old entries...", sorted.len());
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
 			let &(old_count, _) = entries.get(event_id).expect("in sorted list");
@@ -906,7 +906,7 @@ impl Service {
 				}
 			}
 			if i.saturating_add(1).is_multiple_of(2000) {
-				info!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
+				println!("reorder_timeline: inserted {}/{count} events...", i.saturating_add(1));
 			}
 			if i.saturating_add(1).is_multiple_of(10000) {
 				drop(cork.take());
@@ -1010,11 +1010,17 @@ impl Service {
 		.await
 		.map_err(|e| err!(Database("DAG sort failed: {e}")))?;
 
-		info!("rebuild_state: topological sort finished. Starting state resolution...");
+		let rebuild_start = std::time::Instant::now();
+		println!("rebuild_state: topological sort finished. Starting state resolution...");
 
 		let mut ssh_cache: HashMap<OwnedEventId, u64> = HashMap::new();
 		let mut resolved_state_cache: HashMap<Vec<u64>, u64> = HashMap::new();
 		let mut processed = 0_usize;
+		let mut single_parent_count = 0_usize;
+		let mut no_parent_count = 0_usize;
+		let mut cache_hit_count = 0_usize;
+		let mut fork_resolve_count = 0_usize;
+		let mut cumulative_resolve_time = std::time::Duration::ZERO;
 		let empty_ssh = self
 			.services
 			.state_compressor
@@ -1029,10 +1035,16 @@ impl Service {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
-				info!(
-					"rebuild_state: resolved state for {}/{} events...",
+				println!(
+					"rebuild_state: {}/{} events | single:{} none:{} cached:{} resolved:{} | cumulative_resolve: {:?} | elapsed: {:?}",
 					processed,
-					events.len()
+					events.len(),
+					single_parent_count,
+					no_parent_count,
+					cache_hit_count,
+					fork_resolve_count,
+					cumulative_resolve_time,
+					rebuild_start.elapsed(),
 				);
 			}
 
@@ -1049,10 +1061,17 @@ impl Service {
 			let loop_start = std::time::Instant::now();
 
 			let state_before = match unique_sshs.len() {
-				| 1 => unique_sshs[0], // O(1) single-parent fast path
-				| 0 => empty_ssh,
+				| 1 => {
+					single_parent_count += 1;
+					unique_sshs[0]
+				},
+				| 0 => {
+					no_parent_count += 1;
+					empty_ssh
+				},
 				| _ => {
 					if let Some(&cached_ssh) = resolved_state_cache.get(&unique_sshs) {
+						cache_hit_count += 1;
 						cached_ssh
 					} else {
 						// Slow path for forks: run standard state resolution
@@ -1083,10 +1102,14 @@ impl Service {
 						resolved_state_cache.insert(unique_sshs, ssh);
 
 						let slow_path_elapsed = loop_start.elapsed();
+						fork_resolve_count += 1;
+						cumulative_resolve_time += slow_path_elapsed;
+
 						if slow_path_elapsed.as_millis() > 50 {
-							warn!(
-								"rebuild_state: slow path for {eid} with {} parents took {:?}",
+							println!(
+								"rebuild_state: SLOW fork #{fork_resolve_count} for {eid} ({} parents, {} unique ssh) took {:?}",
 								prev_sshs.len(),
+								prev_sshs.iter().collect::<HashSet<_>>().len(),
 								slow_path_elapsed
 							);
 						}
@@ -1172,8 +1195,10 @@ impl Service {
 
 		drop(cork.take());
 
-		info!(
-			"rebuild_state: finished processing {processed} events. Updating room state pointer."
+		println!(
+			"rebuild_state: DONE {processed} events in {:?} | single:{single_parent_count} none:{no_parent_count} cached:{cache_hit_count} resolved:{fork_resolve_count} | cumulative_resolve: {:?}",
+			rebuild_start.elapsed(),
+			cumulative_resolve_time,
 		);
 
 		let (total_added, total_removed) = if let Some(old_ssh) = original_room_shortstatehash {

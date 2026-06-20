@@ -87,6 +87,7 @@ pub async fn state_at_incoming_resolved<Pdu>(
 where
 	Pdu: Event + Send + Sync,
 {
+	let fn_start = std::time::Instant::now();
 	trace!("Calculating extremity statehashes...");
 	let Ok(extremity_sstatehashes) = incoming_pdu
 		.prev_events()
@@ -114,7 +115,8 @@ where
 		return Ok(None);
 	};
 
-	trace!("Calculating fork states...");
+	let num_forks = extremity_sstatehashes.len();
+	trace!("Calculating fork states ({num_forks} forks)...");
 
 	let mut fork_compressed_states = Vec::with_capacity(extremity_sstatehashes.len());
 	for (sstatehash, prev_event) in &extremity_sstatehashes {
@@ -168,8 +170,16 @@ where
 		}
 	}
 
+	println!(
+		"state_at_incoming_resolved: {num_forks} forks, {} conflicting keys, {} total state entries (took {:?} to compute)",
+		conflicting_ssks.len(),
+		first_fork.len(),
+		fn_start.elapsed(),
+	);
+
 	if conflicting_ssks.is_empty() {
 		// All forks are identical!
+		println!("state_at_incoming_resolved: TRIVIAL MERGE (0 conflicts) — skipping resolution");
 		let mut state_map = HashMap::new();
 		for bytes in first_fork {
 			let mut ssk_bytes = [0_u8; 8];
@@ -297,13 +307,24 @@ where
 		fork_states.push(state_map);
 	}
 
+	let resolve_start = std::time::Instant::now();
 	let Ok(resolved_partial) = self
 		.state_resolution(room_id, room_version_id, fork_states.iter())
 		.boxed()
 		.await
 	else {
+		println!(
+			"state_at_incoming_resolved: resolution FAILED after {:?} (total {:?})",
+			resolve_start.elapsed(),
+			fn_start.elapsed(),
+		);
 		return Ok(None);
 	};
+	println!(
+		"state_at_incoming_resolved: resolution took {:?}, total {:?}",
+		resolve_start.elapsed(),
+		fn_start.elapsed(),
+	);
 
 	let mut final_state = HashMap::new();
 	for bytes in first_fork {

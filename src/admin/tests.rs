@@ -914,6 +914,20 @@ async fn test_busted_dag_resolution() {
 	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
 	println!("yolo reorder-timeline took {:?}", start_reorder.elapsed());
 
+	// Run rebuild-state (compute state hashes from the create event forward)
+	println!("Starting rebuild-state...");
+	let start_rebuild = std::time::Instant::now();
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo rebuild-state {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "rebuild-state failed: {res:?}");
+	println!("rebuild-state took {:?}", start_rebuild.elapsed());
+
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
 		.rooms

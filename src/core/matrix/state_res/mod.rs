@@ -127,6 +127,7 @@ where
 		| V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 | V11 => StateResolutionVersion::V2,
 		| _ => StateResolutionVersion::V2_1,
 	};
+	let resolve_start = std::time::Instant::now();
 	debug!(version = ?stateres_version, "State resolution starting");
 	let fetch_cache: Arc<DashMap<OwnedEventId, Arc<OnceCell<Option<Pdu>>>>> =
 		Arc::new(DashMap::new());
@@ -162,18 +163,21 @@ where
 			.is_some_and(|cell| cell.value().get().is_some())
 	};
 
+	let separate_start = std::time::Instant::now();
 	// Split non-conflicting and conflicting state
 	let (unconflicted, conflicting) = separate(state_sets.clone().into_iter());
+	println!("resolve: separate() took {:?}", separate_start.elapsed());
 
 	debug!(count = unconflicted.len(), "non-conflicting events");
 	trace!(map = ?unconflicted, "non-conflicting events");
 
 	if conflicting.is_empty() {
+		println!("resolve: no conflicts, returning unconflicted ({} entries) in {:?}", unconflicted.len(), resolve_start.elapsed());
 		debug!("no conflicting state found");
 		return Ok(unconflicted);
 	}
 
-	debug!(count = conflicting.len(), "conflicting events");
+	println!("resolve: {} unconflicted, {} conflicting state keys", unconflicted.len(), conflicting.len());
 	trace!(map = ?conflicting, "conflicting events");
 	let (conflicted_state_subgraph, initial_state) =
 		if stateres_version == StateResolutionVersion::V2_1 {
@@ -249,24 +253,18 @@ where
 		}
 	}
 
+	let conflicted_set_start = std::time::Instant::now();
 	let all_conflicted: HashSet<_> = all_conflicted_ids
 		.into_iter()
 		.stream()
 		// Filter out non-existent events and non-state events in a single fetch.
-		// event_fetch returns None for missing events (same as event_exists would),
-		// and we need the event body anyway to check state_key — doing two separate
-		// broad passes would double the DB round-trips (up to 2× |all_conflicted|
-		// lookups). Auth chains and prev_events subgraph traversals can pull in
-		// non-state events (e.g. m.room.message) which lack a state_key; these must
-		// be excluded since iterative_auth_check requires all events to have one.
 		.broad_filter_map(async |id| {
 			let ev = cached_fetch(id.clone()).await?;
 			ev.state_key().is_some().then_some(id)
 		})
 		.collect()
 		.await;
-
-	debug!(count = all_conflicted.len(), "full conflicted set");
+	println!("resolve: conflicted set ({} events) computed in {:?}", all_conflicted.len(), conflicted_set_start.elapsed());
 	trace!(set = ?all_conflicted, "full conflicted set");
 
 	if all_conflicted.len() > 5_000 {
@@ -403,6 +401,7 @@ where
 
 	// -- Sort the control events based on power_level/clock/event_id and --
 	// outgoing/incoming edges, using the global context
+	let kahn_start = std::time::Instant::now();
 	let sorted_control_levels = reverse_topological_power_sort(
 		control_events,
 		&all_conflicted,
@@ -412,8 +411,7 @@ where
 		&sender_pl_cache,
 	)
 	.await?;
-
-	debug!(count = sorted_control_levels.len(), "power events");
+	println!("resolve: Kahn sort ({} control events) took {:?}", sorted_control_levels.len(), kahn_start.elapsed());
 	if sorted_control_levels.len() <= 10 {
 		info!(
 			"using {} sorted power events: {:?}",
@@ -431,6 +429,7 @@ where
 	trace!(list = ?sorted_control_levels, "sorted power events");
 
 	// Sequentially auth check each control event.
+	let auth_check_start = std::time::Instant::now();
 	let resolved_control = iterative_auth_check(
 		&room_version,
 		sorted_control_levels.iter().stream().map(AsRef::as_ref),
@@ -440,8 +439,7 @@ where
 		Some(&is_cached),
 	)
 	.await?;
-
-	debug!(count = resolved_control.len(), "resolved power events");
+	println!("resolve: iterative auth check (control, {} events → {} resolved) took {:?}", sorted_control_levels.len(), resolved_control.len(), auth_check_start.elapsed());
 	trace!(map = ?resolved_control, "resolved power events");
 
 	// At this point the control_events have been resolved we now have to
@@ -468,26 +466,29 @@ where
 
 	trace!(event_id = ?power_event, "power event");
 
+	let mainline_start = std::time::Instant::now();
 	let sorted_left_events =
 		mainline_sort(&events_to_resolve, power_event.cloned(), &cached_fetch).await?;
+	println!("resolve: mainline sort ({} events) took {:?}", sorted_left_events.len(), mainline_start.elapsed());
 
 	trace!(list = ?sorted_left_events, "events left, sorted, running iterative auth check");
 
+	let final_auth_start = std::time::Instant::now();
 	let mut resolved_state = iterative_auth_check(
 		&room_version,
 		sorted_left_events.iter().stream().map(AsRef::as_ref),
-		vec![resolved_control], // The control events are added to the final resolved state
+		vec![resolved_control],
 		&cached_fetch,
 		event_batch_fetch,
 		Some(&is_cached),
 	)
 	.await?;
+	println!("resolve: final auth check ({} events → {} resolved) took {:?}", sorted_left_events.len(), resolved_state.len(), final_auth_start.elapsed());
 
 	// Ensure unconflicting state is in the final state
 	resolved_state.extend(unconflicted);
 
-	debug!("state resolution finished");
-	trace!( map = ?resolved_state, "final resolved state" );
+	println!("resolve: TOTAL took {:?} ({} final state entries)", resolve_start.elapsed(), resolved_state.len());
 
 	Ok(resolved_state)
 }
