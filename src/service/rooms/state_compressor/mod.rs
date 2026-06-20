@@ -386,8 +386,9 @@ pub async fn save_state(
 		.get_room_shortstatehash(room_id)
 		.await
 		.ok();
-		
-	self.save_state_with_parent(room_id, previous_shortstatehash, new_state_ids_compressed).await
+
+	self.save_state_with_parent(room_id, previous_shortstatehash, new_state_ids_compressed)
+		.await
 }
 
 /// Returns the new shortstatehash, and the state diff from the previous

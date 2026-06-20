@@ -143,7 +143,8 @@ pub(super) async fn import_pdus(
 						(eid, value.clone())
 					} else {
 						let mut raw_val = value.clone();
-						if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
+						if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2
+						{
 							raw_val.remove("event_id");
 						}
 						let raw = match serde_json::value::RawValue::from_string(
@@ -227,7 +228,9 @@ pub(super) async fn import_pdus(
 						self.services
 							.rooms
 							.timeline
-							.force_insert_pdu_batch(&mut batch, &room_id, &eid, &pdu, &value, true)
+							.force_insert_pdu_batch(
+								&mut batch, &room_id, &eid, &pdu, &value, true,
+							)
 							.await?;
 					} else {
 						self.services
@@ -265,7 +268,10 @@ pub(super) async fn import_pdus(
 			}
 
 			self.services.rooms.timeline.db_apply_batch(&batch);
-			info!("Finished a chunk: {chunk_inserted} inserted, {chunk_rejected} rejected, {chunk_failed} failed");
+			info!(
+				"Finished a chunk: {chunk_inserted} inserted, {chunk_rejected} rejected, \
+				 {chunk_failed} failed"
+			);
 			inserted.fetch_add(chunk_inserted, std::sync::atomic::Ordering::Relaxed);
 			rejected.fetch_add(chunk_rejected, std::sync::atomic::Ordering::Relaxed);
 			failed.fetch_add(chunk_failed, std::sync::atomic::Ordering::Relaxed);

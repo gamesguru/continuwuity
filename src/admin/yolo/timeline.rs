@@ -27,12 +27,11 @@ pub(super) async fn reorder_timeline(
 
 		let mut count = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(
-				self.services
-					.rooms
-					.timeline
-					.reorder_timeline(&room_id, None, no_compute_state),
-			)
+			if Box::pin(self.services.rooms.timeline.reorder_timeline(
+				&room_id,
+				None,
+				no_compute_state,
+			))
 			.await
 			.is_ok()
 			{
@@ -68,12 +67,11 @@ pub(super) async fn reorder_timeline(
 	self.write_str(&format!("Reordering timeline for {room_id} by origin_server_ts..."))
 		.await?;
 
-	let count = Box::pin(
-		self.services
-			.rooms
-			.timeline
-			.reorder_timeline(&room_id, None, no_compute_state),
-	)
+	let count = Box::pin(self.services.rooms.timeline.reorder_timeline(
+		&room_id,
+		None,
+		no_compute_state,
+	))
 	.await?;
 
 	self.write_str(&format!(

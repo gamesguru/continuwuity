@@ -955,7 +955,12 @@ impl Service {
 
 		let mut stream = std::pin::pin!(self.pdus(room_id, None));
 		let mut current_shortstatehash = 0;
-		let original_room_shortstatehash = self.services.state.get_room_shortstatehash(room_id).await.ok();
+		let original_room_shortstatehash = self
+			.services
+			.state
+			.get_room_shortstatehash(room_id)
+			.await
+			.ok();
 		// Load all timeline events into memory for topological sort
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let mut events: HashMap<OwnedEventId, PduEvent> = HashMap::new();
@@ -1005,7 +1010,7 @@ impl Service {
 		.await
 		.map_err(|e| err!(Database("DAG sort failed: {e}")))?;
 
-		info!("rebuild_state: topological sort finished. Starting O(1) state resolution...");
+		info!("rebuild_state: topological sort finished. Starting state resolution...");
 
 		let mut ssh_cache: HashMap<OwnedEventId, u64> = HashMap::new();
 		let mut resolved_state_cache: HashMap<Vec<u64>, u64> = HashMap::new();
@@ -1019,8 +1024,8 @@ impl Service {
 
 		let mut cork = Some(self.db.db.cork());
 
-		for eid in sorted {
-			let Some(pdu) = events.get(&eid) else { continue };
+		for eid in &sorted {
+			let Some(pdu) = events.get(eid) else { continue };
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
@@ -1041,6 +1046,8 @@ impl Service {
 			unique_sshs.sort_unstable();
 			unique_sshs.dedup();
 
+			let loop_start = std::time::Instant::now();
+
 			let state_before = match unique_sshs.len() {
 				| 1 => unique_sshs[0], // O(1) single-parent fast path
 				| 0 => empty_ssh,
@@ -1048,7 +1055,7 @@ impl Service {
 					if let Some(&cached_ssh) = resolved_state_cache.get(&unique_sshs) {
 						cached_ssh
 					} else {
-						// Slow path for forks
+						// Slow path for forks: run standard state resolution
 						let state_after_opt = self
 							.services
 							.event_handler
@@ -1061,31 +1068,29 @@ impl Service {
 							.compress_state_events(state_after.iter().map(|(k, id)| (k, &**id)))
 							.collect()
 							.await;
-						let mut matched_ssh = None;
-						for &prev_ssh in &unique_sshs {
-							if let Ok(info) = self.services.state_compressor.load_shortstatehash_info(prev_ssh).await {
-								if let Some(parent_info) = info.last() {
-									if let Some(parent_state) = &parent_info.full_state {
-										if **parent_state == compressed_state {
-											matched_ssh = Some(prev_ssh);
-											break;
-										}
-									}
-								}
-							}
+
+						let state_delta = self
+							.services
+							.state_compressor
+							.save_state_with_parent(
+								room_id,
+								Some(unique_sshs[0]),
+								Arc::new(compressed_state),
+							)
+							.await?;
+
+						let ssh = state_delta.shortstatehash;
+						resolved_state_cache.insert(unique_sshs, ssh);
+
+						let slow_path_elapsed = loop_start.elapsed();
+						if slow_path_elapsed.as_millis() > 50 {
+							warn!(
+								"rebuild_state: slow path for {eid} with {} parents took {:?}",
+								prev_sshs.len(),
+								slow_path_elapsed
+							);
 						}
 
-						let ssh = if let Some(matched) = matched_ssh {
-							matched
-						} else {
-							let state_delta = self
-								.services
-								.state_compressor
-								.save_state_with_parent(room_id, Some(unique_sshs[0]), Arc::new(compressed_state))
-								.await?;
-							state_delta.shortstatehash
-						};
-						resolved_state_cache.insert(unique_sshs, ssh);
 						ssh
 					}
 				},
@@ -1144,7 +1149,7 @@ impl Service {
 
 			ssh_cache.insert(eid.clone(), state_after);
 			self.services.state.set_pdu_shortstatehash(
-				self.services.short.get_or_create_shorteventid(&eid).await,
+				self.services.short.get_or_create_shorteventid(eid).await,
 				state_after,
 			);
 			current_shortstatehash = state_after;
@@ -1155,6 +1160,14 @@ impl Service {
 				tokio::task::yield_now().await;
 				cork = Some(self.db.db.cork());
 			}
+
+			let full_loop_elapsed = loop_start.elapsed();
+			if full_loop_elapsed.as_millis() > 100 {
+				warn!(
+					"rebuild_state: full loop iteration for {eid} took {:?}",
+					full_loop_elapsed
+				);
+			}
 		}
 
 		drop(cork.take());
@@ -1164,17 +1177,42 @@ impl Service {
 		);
 
 		let (total_added, total_removed) = if let Some(old_ssh) = original_room_shortstatehash {
-			let old_info = self.services.state_compressor.load_shortstatehash_info(old_ssh).await.unwrap_or_default();
-			let new_info = self.services.state_compressor.load_shortstatehash_info(current_shortstatehash).await.unwrap_or_default();
+			let old_info = self
+				.services
+				.state_compressor
+				.load_shortstatehash_info(old_ssh)
+				.await
+				.unwrap_or_default();
+			let new_info = self
+				.services
+				.state_compressor
+				.load_shortstatehash_info(current_shortstatehash)
+				.await
+				.unwrap_or_default();
 			let empty = BTreeSet::new();
-			let old_full = old_info.last().and_then(|info| info.full_state.as_ref()).map(|a| &**a).unwrap_or(&empty);
-			let new_full = new_info.last().and_then(|info| info.full_state.as_ref()).map(|a| &**a).unwrap_or(&empty);
+			let old_full = old_info
+				.last()
+				.and_then(|info| info.full_state.as_ref())
+				.map_or(&empty, |a| &**a);
+			let new_full = new_info
+				.last()
+				.and_then(|info| info.full_state.as_ref())
+				.map_or(&empty, |a| &**a);
 			let added: BTreeSet<_> = new_full.difference(old_full).copied().collect();
 			let removed: BTreeSet<_> = old_full.difference(new_full).copied().collect();
 			(Arc::new(added), Arc::new(removed))
 		} else {
-			let new_info = self.services.state_compressor.load_shortstatehash_info(current_shortstatehash).await.unwrap_or_default();
-			let new_full = new_info.last().and_then(|info| info.full_state.as_ref()).cloned().unwrap_or_default();
+			let new_info = self
+				.services
+				.state_compressor
+				.load_shortstatehash_info(current_shortstatehash)
+				.await
+				.unwrap_or_default();
+			let new_full = new_info
+				.last()
+				.and_then(|info| info.full_state.as_ref())
+				.cloned()
+				.unwrap_or_default();
 			(new_full, Arc::new(BTreeSet::new()))
 		};
 
