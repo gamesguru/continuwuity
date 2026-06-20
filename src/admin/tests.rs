@@ -1227,6 +1227,8 @@ async fn test_unredacted_lounge_dag_resolution() {
 	let room_id = RoomId::parse("!sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE").unwrap();
 
 	// 1. Import the DAG
+	println!("Starting import-pdus...");
+	let start_import = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1239,8 +1241,11 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
+	println!("import-pdus took {:?}", start_import.elapsed());
 
 	// Run reorder-timeline
+	println!("Starting reorder-timeline...");
+	let start_reorder = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1250,8 +1255,11 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
+	println!("reorder-timeline took {:?}", start_reorder.elapsed());
 
 	// Run rebuild-state
+	println!("Starting rebuild-state...");
+	let start_rebuild = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1261,6 +1269,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "rebuild-state failed: {res:?}");
+	println!("rebuild-state took {:?}", start_rebuild.elapsed());
 
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
@@ -1284,6 +1293,8 @@ async fn test_unredacted_lounge_dag_resolution() {
 	drop(state_lock);
 
 	// Run force-set-state (to trigger re-resolution on local DAG)
+	println!("Starting force-set-state...");
+	let start_force = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1293,8 +1304,11 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "force-set-state failed: {res:?}");
+	println!("force-set-state took {:?}", start_force.elapsed());
 
 	// Run check-rooms (to check sanity)
+	println!("Starting check-rooms...");
+	let start_check = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1304,8 +1318,11 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "check-rooms failed: {res:?}");
+	println!("check-rooms took {:?}", start_check.elapsed());
 
 	// Run audit-membership
+	println!("Starting audit-membership...");
+	let start_audit = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1315,6 +1332,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "audit-membership failed: {res:?}");
+	println!("audit-membership took {:?}", start_audit.elapsed());
 
 	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
 	let exts_count = services

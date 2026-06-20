@@ -56,6 +56,7 @@ pub(super) async fn import_pdus(
 
 	let room_version_ref = room_version.clone();
 
+	let room_id_ref = room_id.clone();
 	let parsed_pdus: Vec<_> = tokio::task::spawn_blocking(move || {
 		file_content
 			.lines()
@@ -82,30 +83,14 @@ pub(super) async fn import_pdus(
 					.and_then(ruma::CanonicalJsonValue::as_bool)
 					.unwrap_or(false);
 
-				let mut pdu = value.clone();
-				pdu.remove("__outlier");
-				pdu.remove("__soft_failed");
-				pdu.remove("__rejected");
-				if room_version_ref != RoomVersionId::V1 && room_version_ref != RoomVersionId::V2
-				{
-					pdu.remove("event_id");
-				}
-
-				let Some(eid) = value
-					.get("event_id")
-					.and_then(ruma::CanonicalJsonValue::as_str)
-					.and_then(|id| OwnedEventId::parse(id).ok())
-				else {
-					warn!("Missing or invalid event_id");
-					return None;
-				};
-
-				let pdu_event: conduwuit::PduEvent = match serde_json::from_value(
-					serde_json::to_value(&pdu).unwrap_or_default(),
+				let (eid, value, pdu_event) = match conduwuit::utils::pdu_parser::parse_and_clean_pdu(
+					value,
+					room_id_ref.as_ref(),
+					&room_version_ref,
 				) {
 					| Ok(v) => v,
 					| Err(e) => {
-						warn!("Failed to parse PduEvent for {eid}: {e}");
+						warn!("Failed to parse_and_clean_pdu: {e}");
 						return None;
 					},
 				};

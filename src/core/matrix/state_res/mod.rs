@@ -716,21 +716,26 @@ where
 		all_needed.insert(id.clone());
 	}
 
-	let local_cache: rustc_hash::FxHashMap<OwnedEventId, E> = all_needed
+	let mut local_cache_map: rustc_hash::FxHashMap<OwnedEventId, Option<E>> = rustc_hash::FxHashMap::default();
+	let fetched: Vec<(OwnedEventId, Option<E>)> = all_needed
 		.into_iter()
 		.stream()
 		.broad_filter_map(|id| async move {
-			let ev = fetch_event(id.clone()).await?;
+			let ev = fetch_event(id.clone()).await;
 			Some((id, ev))
 		})
 		.collect()
 		.await;
 
+	for (id, ev) in fetched {
+		local_cache_map.insert(id, ev);
+	}
+
 	let fast_fetch = |id: OwnedEventId| {
-		let ev = local_cache.get(&id).cloned();
+		let cached = local_cache_map.get(&id).cloned();
 		async move {
-			if let Some(e) = ev {
-				Some(e)
+			if let Some(ev_opt) = cached {
+				ev_opt
 			} else {
 				fetch_event(id).await
 			}
@@ -746,8 +751,9 @@ where
 				continue;
 			}
 			graph.entry(eid.clone()).or_default();
-			let auth_events = local_cache
+			let auth_events = local_cache_map
 				.get(&eid)
+				.and_then(|o| o.as_ref())
 				.map(Event::auth_events)
 				.into_iter()
 				.flatten();
@@ -787,7 +793,7 @@ where
 			)
 			.await;
 
-			let ev = local_cache.get(&event_id).cloned()?;
+			let ev = local_cache_map.get(&event_id).and_then(|o| o.clone())?;
 
 			Some((event_id, (pl, ev.origin_server_ts())))
 		})
@@ -838,6 +844,7 @@ where
 		power_level: Int,
 		origin_server_ts: MilliSecondsSinceUnixEpoch,
 		event_id: &'a Id,
+		index: usize,
 	}
 
 	impl<Id> Ord for TieBreaker<'_, Id>
@@ -869,77 +876,81 @@ where
 
 	debug!("starting lexicographical topological sort");
 
-	// NOTE: an event that has no incoming edges happened most recently,
-	// and an event that has no outgoing edges happened least recently.
-
-	// NOTE: this is basically Kahn's algorithm except we look at nodes with no
-	// outgoing edges, c.f.
-	// https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm
-
-	// outdegree_map is an event referring to the events before it, the
-	// more outdegree's the more recent the event.
-	let mut outdegree_counts: rustc_hash::FxHashMap<Id, usize> = rustc_hash::FxHashMap::default();
-
-	// The number of events that depend on the given event (the EventId key)
-	// How many events reference this event in the DAG as a parent
-	let mut reverse_graph: rustc_hash::FxHashMap<Id, rustc_hash::FxHashSet<Id>> =
-		rustc_hash::FxHashMap::default();
-
-	// Vec of nodes that have zero out degree, least recent events.
-	let mut zero_outdegree = Vec::new();
-
+	let mut id_to_index: rustc_hash::FxHashMap<&Id, usize> = rustc_hash::FxHashMap::default();
+	let mut index_to_id: Vec<&Id> = Vec::new();
+	
 	for (node, edges) in graph {
-		outdegree_counts.insert(node.clone(), edges.len());
-		if edges.is_empty() {
-			let (power_level, origin_server_ts) = key_fn(node.clone()).await?;
-			// The `Reverse` is because rusts `BinaryHeap` sorts largest -> smallest we need
-			// smallest -> largest
+		if !id_to_index.contains_key(node) {
+			id_to_index.insert(node, index_to_id.len());
+			index_to_id.push(node);
+		}
+		for edge in edges {
+			if !id_to_index.contains_key(edge) {
+				id_to_index.insert(edge, index_to_id.len());
+				index_to_id.push(edge);
+			}
+		}
+	}
+	
+	let num_nodes = index_to_id.len();
+	let mut outdegree_counts = vec![0_usize; num_nodes];
+	let mut reverse_graph = vec![Vec::<usize>::new(); num_nodes];
+	
+	for (node, edges) in graph {
+		let node_idx = id_to_index[node];
+		outdegree_counts[node_idx] += edges.len();
+		
+		for edge in edges {
+			let edge_idx = id_to_index[edge];
+			// Node references edge, so edge is a parent of node in the reverse iteration
+			reverse_graph[edge_idx].push(node_idx);
+		}
+	}
+	
+	// Pre-fetch all keys to avoid await overhead in the sort loop
+	let mut keys = Vec::with_capacity(num_nodes);
+	for &id in &index_to_id {
+		keys.push(key_fn(id.clone()).await?);
+	}
+	
+	let mut zero_outdegree = Vec::new();
+	for (idx, &out_count) in outdegree_counts.iter().enumerate() {
+		if out_count == 0 {
+			let (power_level, origin_server_ts) = keys[idx];
 			zero_outdegree.push(Reverse(TieBreaker {
 				power_level,
 				origin_server_ts,
-				event_id: node,
+				event_id: index_to_id[idx],
+				index: idx,
 			}));
-		}
-
-		reverse_graph.entry(node.clone()).or_default();
-		for edge in edges {
-			reverse_graph
-				.entry(edge.clone())
-				.or_default()
-				.insert(node.clone());
 		}
 	}
 
 	let mut heap = BinaryHeap::from(zero_outdegree);
+	let mut sorted = Vec::with_capacity(num_nodes);
 
+	let mut iter_count: usize = 0;
 	// We remove the oldest node (most incoming edges) and check against all other
-	let mut sorted = vec![];
-	// Destructure the `Reverse` and take the smallest `node` each time
 	while let Some(Reverse(item)) = heap.pop() {
-		let node = item.event_id;
+		iter_count += 1;
+		if iter_count.is_multiple_of(1000) {
+			println!("Kahn's pop iter {}", iter_count);
+		}
+		let node_idx = item.index;
+		sorted.push(index_to_id[node_idx].clone());
 
-		for parent in reverse_graph
-			.get::<Id>(node)
-			.expect("EventId in heap is also in reverse_graph")
-		{
-			// The number of outgoing edges this node has
-			let out = outdegree_counts
-				.get_mut::<Id>(parent)
-				.expect("outdegree_counts knows of all referenced EventIds");
-
-			*out = out.saturating_sub(1);
-			if *out == 0 {
-				let (power_level, origin_server_ts) = key_fn(parent.clone()).await?;
+		for &parent_idx in &reverse_graph[node_idx] {
+			outdegree_counts[parent_idx] = outdegree_counts[parent_idx].saturating_sub(1);
+			if outdegree_counts[parent_idx] == 0 {
+				let (power_level, origin_server_ts) = keys[parent_idx];
 				heap.push(Reverse(TieBreaker {
 					power_level,
 					origin_server_ts,
-					event_id: parent,
+					event_id: index_to_id[parent_idx],
+					index: parent_idx,
 				}));
 			}
 		}
-
-		// synapse yields we push then return the vec
-		sorted.push(node.clone());
 	}
 
 	Ok(sorted)
@@ -1009,17 +1020,6 @@ where
 			}
 			if creator_event.is_some() && pl_event.is_some() {
 				break;
-			}
-		}
-
-		if creator_event.is_none() {
-			if let Some(room_id) = ev.room_id_or_hash() {
-				let create_event_id_raw = room_id.as_str().replacen('!', "$", 1);
-				if let Ok(create_event_id) = EventId::parse(&create_event_id_raw) {
-					if let Some(ce) = fetch_event(create_event_id.into()).await {
-						creator_event = Some(ce);
-					}
-				}
 			}
 		}
 
@@ -1481,19 +1481,17 @@ where
 	// chains. Hitting `fetch_event(id).await` sequentially forces 300,000+ task
 	// context switches. By locally caching the PDU, the async state machine
 	// completes immediately and synchronously.
-	let mut local_cache: rustc_hash::FxHashMap<OwnedEventId, E> =
+	let mut local_cache: rustc_hash::FxHashMap<OwnedEventId, Option<E>> =
 		rustc_hash::FxHashMap::default();
 
 	macro_rules! get {
 		($id:expr) => {
-			if let Some(ev) = local_cache.get($id) {
-				Some(ev.clone())
+			if let Some(ev_opt) = local_cache.get($id) {
+				ev_opt.clone()
 			} else {
 				let id_owned = $id.to_owned();
 				let ev = fetch_event(id_owned.clone()).await;
-				if let Some(ref e) = ev {
-					local_cache.insert(id_owned, e.clone());
-				}
+				local_cache.insert(id_owned, ev.clone());
 				ev
 			}
 		};
@@ -1503,7 +1501,12 @@ where
 		rustc_hash::FxHashMap::default();
 	let mut pl = resolved_power_level;
 	let mut position: usize = 0;
+	let mut walk_iter: usize = 0;
 	while let Some(p) = pl {
+		walk_iter += 1;
+		if walk_iter.is_multiple_of(1000) {
+			println!("mainline_sort walk iter {}", walk_iter);
+		}
 		let Some(event) = get!(&p) else {
 			break;
 		};
@@ -1572,7 +1575,12 @@ where
 				let mut visited: rustc_hash::FxHashSet<OwnedEventId> =
 					rustc_hash::FxHashSet::default();
 				let mut found_depth = None;
+				let mut walk_iter2: usize = 0;
 				while let Some(c_pl) = current_pl {
+					walk_iter2 += 1;
+					if walk_iter2.is_multiple_of(1000) {
+						println!("mainline phase2 walk iter {}", walk_iter2);
+					}
 					let current_id = c_pl.event_id().to_owned();
 					if !visited.insert(current_id.clone()) {
 						// Cycle detected in auth chain — break to prevent infinite loop.
