@@ -1231,7 +1231,7 @@ impl Service {
 				}
 			}
 
-			// Build ssk → set of shorteventid values to detect conflicts
+			// Build ssk -> set of shorteventid values to detect conflicts
 			let mut ssk_values: HashMap<u64, HashSet<u64>> = HashMap::new();
 			for bytes in &all_compressed {
 				let mut ssk_bytes = [0_u8; 8];
@@ -1272,7 +1272,7 @@ impl Service {
 					extremity_sshs.len(),
 				);
 
-				// Build ShortEventId → depth map only for conflicting SEIs
+				// Build ShortEventId -> depth map only for conflicting SEIs
 				// using pre-computed depth from events_meta
 				let depth_by_eid: HashMap<&OwnedEventId, u64> = events_meta
 					.iter()
