@@ -118,7 +118,19 @@ pub(super) async fn import_pdus(
 			.ok(),
 	);
 
-	let chunks: Vec<Vec<_>> = parsed_pdus.chunks(5000).map(|c| c.to_vec()).collect();
+	let chunks: Vec<Vec<_>> = parsed_pdus
+		.chunks(5000)
+		.map(
+			<[(
+				OwnedEventId,
+				std::collections::BTreeMap<String, ruma::CanonicalJsonValue>,
+				conduwuit::Pdu,
+				bool,
+				bool,
+				bool,
+			)]>::to_vec,
+		)
+		.collect();
 
 	let inserted = std::sync::atomic::AtomicUsize::new(0);
 	let rejected = std::sync::atomic::AtomicUsize::new(0);
