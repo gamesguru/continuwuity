@@ -159,44 +159,66 @@ where
 		fork_compressed_states.push(state);
 	}
 
-	let first_fork = &fork_compressed_states[0];
-	let mut conflicting_ssks = HashSet::new();
-
-	for fork in &fork_compressed_states[1..] {
-		for diff in first_fork.symmetric_difference(fork) {
-			let mut ssk_bytes = [0_u8; 8];
-			ssk_bytes.copy_from_slice(&diff[0..8]);
-			conflicting_ssks.insert(u64::from_be_bytes(ssk_bytes));
-		}
-	}
-
-	println!(
-		"state_at_incoming_resolved: {num_forks} forks, {} conflicting keys, {} total state entries (took {:?} to compute)",
-		conflicting_ssks.len(),
-		first_fork.len(),
-		fn_start.elapsed(),
-	);
-
-	if conflicting_ssks.is_empty() {
-		// All forks are identical!
-		println!("state_at_incoming_resolved: TRIVIAL MERGE (0 conflicts) — skipping resolution");
-		let mut state_map = HashMap::new();
-		for bytes in first_fork {
+	// Build ssk → set of (shorteventid) values across ALL forks.
+	// A key is only truly conflicting if multiple forks assign it DIFFERENT values.
+	// Keys present in only one fork are additions — auto-merged, no resolution
+	// needed.
+	let mut ssk_values: HashMap<u64, HashSet<u64>> = HashMap::new();
+	for fork in &fork_compressed_states {
+		for bytes in fork {
 			let mut ssk_bytes = [0_u8; 8];
 			ssk_bytes.copy_from_slice(&bytes[0..8]);
 			let ssk = u64::from_be_bytes(ssk_bytes);
 
 			let mut id_bytes = [0_u8; 8];
 			id_bytes.copy_from_slice(&bytes[8..16]);
-			let shorteventid = u64::from_be_bytes(id_bytes);
+			let sei = u64::from_be_bytes(id_bytes);
 
-			if let Ok(eid) = self
-				.services
-				.short
-				.get_eventid_from_short(shorteventid)
-				.await
-			{
-				state_map.insert(ssk, eid);
+			ssk_values.entry(ssk).or_default().insert(sei);
+		}
+	}
+
+	let conflicting_ssks: HashSet<u64> = ssk_values
+		.iter()
+		.filter(|(_, values)| values.len() > 1)
+		.map(|(ssk, _)| *ssk)
+		.collect();
+
+	let non_conflicting_additions = ssk_values.len().saturating_sub(conflicting_ssks.len());
+
+	println!(
+		"state_at_incoming_resolved: {num_forks} forks, {} truly conflicting keys, {} \
+		 auto-merged additions, {} total ssk (took {:?} to compute)",
+		conflicting_ssks.len(),
+		non_conflicting_additions,
+		ssk_values.len(),
+		fn_start.elapsed(),
+	);
+
+	if conflicting_ssks.is_empty() {
+		// No conflicting keys — build merged state from all forks' entries
+		println!("state_at_incoming_resolved: TRIVIAL MERGE (0 conflicts) — skipping resolution");
+		let mut state_map = HashMap::new();
+		// Collect the winning value for each ssk (all forks agree or it's a unique
+		// addition)
+		for fork in &fork_compressed_states {
+			for bytes in fork {
+				let mut ssk_bytes = [0_u8; 8];
+				ssk_bytes.copy_from_slice(&bytes[0..8]);
+				let ssk = u64::from_be_bytes(ssk_bytes);
+
+				let mut id_bytes = [0_u8; 8];
+				id_bytes.copy_from_slice(&bytes[8..16]);
+				let shorteventid = u64::from_be_bytes(id_bytes);
+
+				if let Ok(eid) = self
+					.services
+					.short
+					.get_eventid_from_short(shorteventid)
+					.await
+				{
+					state_map.insert(ssk, eid);
+				}
 			}
 		}
 		return Ok(Some(state_map));
@@ -326,27 +348,30 @@ where
 		fn_start.elapsed(),
 	);
 
+	// Build final state: unconflicted entries from all forks + resolved conflicts
 	let mut final_state = HashMap::new();
-	for bytes in first_fork {
-		let mut ssk_bytes = [0_u8; 8];
-		ssk_bytes.copy_from_slice(&bytes[0..8]);
-		let ssk = u64::from_be_bytes(ssk_bytes);
+	for fork in &fork_compressed_states {
+		for bytes in fork {
+			let mut ssk_bytes = [0_u8; 8];
+			ssk_bytes.copy_from_slice(&bytes[0..8]);
+			let ssk = u64::from_be_bytes(ssk_bytes);
 
-		if conflicting_ssks.contains(&ssk) {
-			continue; // We'll take this from resolved_partial
-		}
+			if conflicting_ssks.contains(&ssk) {
+				continue; // We'll take this from resolved_partial
+			}
 
-		let mut id_bytes = [0_u8; 8];
-		id_bytes.copy_from_slice(&bytes[8..16]);
-		let shorteventid = u64::from_be_bytes(id_bytes);
+			let mut id_bytes = [0_u8; 8];
+			id_bytes.copy_from_slice(&bytes[8..16]);
+			let shorteventid = u64::from_be_bytes(id_bytes);
 
-		if let Ok(eid) = self
-			.services
-			.short
-			.get_eventid_from_short(shorteventid)
-			.await
-		{
-			final_state.insert(ssk, eid);
+			if let Ok(eid) = self
+				.services
+				.short
+				.get_eventid_from_short(shorteventid)
+				.await
+			{
+				final_state.insert(ssk, eid);
+			}
 		}
 	}
 

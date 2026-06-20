@@ -258,6 +258,34 @@ impl Data {
 		self.remove_topo_pducount(pdu_id, event_id.as_bytes());
 	}
 
+	/// Lightweight re-index: update ONLY position indices without touching
+	/// immutable canonical JSON, prev_events, or auth_events.
+	/// Used by reorder-timeline to avoid 84k+ unnecessary JSON rewrites.
+	pub(super) fn reindex_pdu(&self, new_pdu_id: &RawPduId, event_id: &EventId, pdu_count: u64) {
+		let event_id_bytes = event_id.as_bytes();
+
+		// Update bidirectional position mapping
+		self.eventid_pduid.insert(event_id, new_pdu_id);
+		self.room_pducount_eventid
+			.insert(new_pdu_id, event_id_bytes);
+
+		// Update pdu_count in metadata (read-modify-write)
+		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
+			if let Ok(mut meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+				let old_local_topo = meta.local_topological_depth;
+				meta.pdu_count = pdu_count;
+				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
+					self.eventid_metadata
+						.insert(event_id_bytes, &metadata_bytes);
+				}
+				// Update topological index
+				let topo_key = Self::topo_pducount_key(new_pdu_id, old_local_topo);
+				self.roomid_topologicalorder_pducount
+					.insert(&topo_key, event_id_bytes);
+			}
+		}
+	}
+
 	/// Drop a duplicate PDU by ID without removing the event mapping
 	pub(super) fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) {
 		self.room_pducount_eventid.remove(pdu_id);
@@ -695,6 +723,7 @@ impl Data {
 			redacted_by: pdu.redacts().map(ToOwned::to_owned),
 			short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 			local_topological_depth,
+			pdu_count: count.into_unsigned(),
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.eventid_metadata
@@ -792,6 +821,7 @@ impl Data {
 			redacted_by: pdu.redacts().map(ToOwned::to_owned),
 			short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 			local_topological_depth,
+			pdu_count: pdu_id.pdu_count().into_unsigned(),
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.eventid_metadata
@@ -878,6 +908,7 @@ impl Data {
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
 				short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 				local_topological_depth,
+				pdu_count: pdu_id.pdu_count().into_unsigned(),
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				self.eventid_metadata.insert_into_batch(

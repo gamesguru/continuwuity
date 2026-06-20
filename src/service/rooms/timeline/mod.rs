@@ -749,7 +749,6 @@ impl Service {
 
 		if no_compute_state {
 			let mut cork = Some(self.db.db.cork());
-			let mut batch = self.db.db_batch();
 
 			for (i, event_id) in sorted.iter().enumerate() {
 				let new_count = batch_start
@@ -758,24 +757,16 @@ impl Service {
 				let pdu_count = PduCount::Normal(new_count);
 				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
-				if let Ok((pdu, json)) = self.db.get_from_eventid_pdu(event_id).await {
-					self.db
-						.append_pdu_batch(&mut batch, &pdu_id, &pdu, &json, pdu_count)
-						.await;
-				}
+				// Lightweight reindex: only update position mappings + metadata pdu_count.
+				// Canonical JSON, prev_events, and auth_events are immutable; don't touch them.
+				self.db
+					.reindex_pdu(&pdu_id, event_id, pdu_count.into_unsigned());
 
 				if i.saturating_add(1).is_multiple_of(10000) {
-					self.db.db_apply_batch(&batch);
-					batch = self.db.db_batch();
 					drop(cork.take());
 					tokio::task::yield_now().await;
 					cork = Some(self.db.db.cork());
 				}
-			}
-
-			// Flush any remaining items in the batch
-			if !batch.is_empty() {
-				self.db.db_apply_batch(&batch);
 			}
 
 			return None;
@@ -1036,7 +1027,8 @@ impl Service {
 
 			if processed.is_multiple_of(1000) {
 				println!(
-					"rebuild_state: {}/{} events | single:{} none:{} cached:{} resolved:{} | cumulative_resolve: {:?} | elapsed: {:?}",
+					"rebuild_state: {}/{} events | single:{} none:{} cached:{} resolved:{} | \
+					 cumulative_resolve: {:?} | elapsed: {:?}",
 					processed,
 					events.len(),
 					single_parent_count,
@@ -1062,16 +1054,16 @@ impl Service {
 
 			let state_before = match unique_sshs.len() {
 				| 1 => {
-					single_parent_count += 1;
+					single_parent_count = single_parent_count.saturating_add(1);
 					unique_sshs[0]
 				},
 				| 0 => {
-					no_parent_count += 1;
+					no_parent_count = no_parent_count.saturating_add(1);
 					empty_ssh
 				},
 				| _ => {
 					if let Some(&cached_ssh) = resolved_state_cache.get(&unique_sshs) {
-						cache_hit_count += 1;
+						cache_hit_count = cache_hit_count.saturating_add(1);
 						cached_ssh
 					} else {
 						// Slow path for forks: run standard state resolution
@@ -1102,12 +1094,14 @@ impl Service {
 						resolved_state_cache.insert(unique_sshs, ssh);
 
 						let slow_path_elapsed = loop_start.elapsed();
-						fork_resolve_count += 1;
-						cumulative_resolve_time += slow_path_elapsed;
+						fork_resolve_count = fork_resolve_count.saturating_add(1);
+						cumulative_resolve_time =
+							cumulative_resolve_time.saturating_add(slow_path_elapsed);
 
 						if slow_path_elapsed.as_millis() > 50 {
 							println!(
-								"rebuild_state: SLOW fork #{fork_resolve_count} for {eid} ({} parents, {} unique ssh) took {:?}",
+								"rebuild_state: SLOW fork #{fork_resolve_count} for {eid} ({} \
+								 parents, {} unique ssh) took {:?}",
 								prev_sshs.len(),
 								prev_sshs.iter().collect::<HashSet<_>>().len(),
 								slow_path_elapsed
@@ -1196,7 +1190,9 @@ impl Service {
 		drop(cork.take());
 
 		println!(
-			"rebuild_state: DONE {processed} events in {:?} | single:{single_parent_count} none:{no_parent_count} cached:{cache_hit_count} resolved:{fork_resolve_count} | cumulative_resolve: {:?}",
+			"rebuild_state: DONE {processed} events in {:?} | single:{single_parent_count} \
+			 none:{no_parent_count} cached:{cache_hit_count} resolved:{fork_resolve_count} | \
+			 cumulative_resolve: {:?}",
 			rebuild_start.elapsed(),
 			cumulative_resolve_time,
 		);

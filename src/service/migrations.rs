@@ -339,6 +339,17 @@ async fn migrate(services: &Services) -> Result<()> {
 			.map_err(|e| err!("Failed to run 'populate_topological_index': {e}"))?;
 	}
 
+	if db["global"]
+		.get(POPULATE_PDU_COUNT_IN_METADATA_MARKER)
+		.await
+		.is_not_found()
+	{
+		info!("Running migration 'populate_pdu_count_in_metadata'");
+		populate_pdu_count_in_metadata(services)
+			.await
+			.map_err(|e| err!("Failed to run 'populate_pdu_count_in_metadata': {e}"))?;
+	}
+
 	if services.globals.db.database_version().await != DATABASE_VERSION {
 		return Err!(Database(
 			"Database version {} does not match expected version {DATABASE_VERSION} after \
@@ -626,6 +637,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
 				short_state_hash: None,
 				local_topological_depth,
+				pdu_count: pdu_id.pdu_count().into_unsigned(),
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				eventid_metadata.insert(event_id_bytes, metadata_bytes);
@@ -675,6 +687,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 					redacted_by: pdu.redacts().map(ToOwned::to_owned),
 					short_state_hash: None,
 					local_topological_depth: 0,
+					pdu_count: 0,
 				};
 				if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 					eventid_metadata.insert(event_id_bytes, metadata_bytes);
@@ -787,6 +800,65 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 
 	info!("Successfully populated topological index for {total_migrated} events!");
 	db["global"].insert(POPULATE_TOPOLOGICAL_INDEX_MARKER, []);
+	db.db.sort()?;
+	Ok(())
+}
+
+const POPULATE_PDU_COUNT_IN_METADATA_MARKER: &[u8] = b"populate_pdu_count_in_metadata";
+
+async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
+	info!("Starting migration to populate pdu_count in EventMetadata from eventid_pduid...");
+
+	let db = &services.db;
+	let eventid_pduid = db["eventid_pduid"].clone();
+	let eventid_metadata = db["eventid_metadata"].clone();
+
+	let _cork = db.cork_and_sync();
+
+	let mut stream = eventid_pduid.raw_stream();
+
+	let mut migrated: usize = 0;
+	let mut skipped: usize = 0;
+	let mut missing_meta: usize = 0;
+
+	while let Some(Ok((event_id_bytes, pdu_id_bytes))) = stream.next().await {
+		let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
+		let count = pdu_id.pdu_count().into_unsigned();
+
+		let Ok(meta_bytes) = eventid_metadata.get_blocking(event_id_bytes) else {
+			missing_meta = missing_meta.saturating_add(1);
+			continue;
+		};
+
+		let Ok(mut meta) =
+			bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&meta_bytes)
+		else {
+			missing_meta = missing_meta.saturating_add(1);
+			continue;
+		};
+
+		if meta.pdu_count != 0 {
+			skipped = skipped.saturating_add(1);
+			continue;
+		}
+
+		meta.pdu_count = count;
+
+		if let Ok(new_bytes) = bincode::serialize(&meta) {
+			eventid_metadata.insert(event_id_bytes, new_bytes);
+		}
+
+		migrated = migrated.saturating_add(1);
+		if migrated.is_multiple_of(10000) {
+			info!("Migrated {migrated} events pdu_count into metadata...");
+		}
+	}
+
+	info!(
+		"Successfully populated pdu_count for {migrated} events ({skipped} already set, \
+		 {missing_meta} missing metadata)."
+	);
+	db["global"].insert(POPULATE_PDU_COUNT_IN_METADATA_MARKER, []);
 	db.db.sort()?;
 	Ok(())
 }

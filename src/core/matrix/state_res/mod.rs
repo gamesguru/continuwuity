@@ -172,12 +172,20 @@ where
 	trace!(map = ?unconflicted, "non-conflicting events");
 
 	if conflicting.is_empty() {
-		println!("resolve: no conflicts, returning unconflicted ({} entries) in {:?}", unconflicted.len(), resolve_start.elapsed());
+		println!(
+			"resolve: no conflicts, returning unconflicted ({} entries) in {:?}",
+			unconflicted.len(),
+			resolve_start.elapsed()
+		);
 		debug!("no conflicting state found");
 		return Ok(unconflicted);
 	}
 
-	println!("resolve: {} unconflicted, {} conflicting state keys", unconflicted.len(), conflicting.len());
+	println!(
+		"resolve: {} unconflicted, {} conflicting state keys",
+		unconflicted.len(),
+		conflicting.len()
+	);
 	trace!(map = ?conflicting, "conflicting events");
 	let (conflicted_state_subgraph, initial_state) =
 		if stateres_version == StateResolutionVersion::V2_1 {
@@ -264,7 +272,11 @@ where
 		})
 		.collect()
 		.await;
-	println!("resolve: conflicted set ({} events) computed in {:?}", all_conflicted.len(), conflicted_set_start.elapsed());
+	println!(
+		"resolve: conflicted set ({} events) computed in {:?}",
+		all_conflicted.len(),
+		conflicted_set_start.elapsed()
+	);
 	trace!(set = ?all_conflicted, "full conflicted set");
 
 	if all_conflicted.len() > 5_000 {
@@ -411,7 +423,11 @@ where
 		&sender_pl_cache,
 	)
 	.await?;
-	println!("resolve: Kahn sort ({} control events) took {:?}", sorted_control_levels.len(), kahn_start.elapsed());
+	println!(
+		"resolve: Kahn sort ({} control events) took {:?}",
+		sorted_control_levels.len(),
+		kahn_start.elapsed()
+	);
 	if sorted_control_levels.len() <= 10 {
 		info!(
 			"using {} sorted power events: {:?}",
@@ -439,7 +455,12 @@ where
 		Some(&is_cached),
 	)
 	.await?;
-	println!("resolve: iterative auth check (control, {} events → {} resolved) took {:?}", sorted_control_levels.len(), resolved_control.len(), auth_check_start.elapsed());
+	println!(
+		"resolve: iterative auth check (control, {} events → {} resolved) took {:?}",
+		sorted_control_levels.len(),
+		resolved_control.len(),
+		auth_check_start.elapsed()
+	);
 	trace!(map = ?resolved_control, "resolved power events");
 
 	// At this point the control_events have been resolved we now have to
@@ -469,7 +490,11 @@ where
 	let mainline_start = std::time::Instant::now();
 	let sorted_left_events =
 		mainline_sort(&events_to_resolve, power_event.cloned(), &cached_fetch).await?;
-	println!("resolve: mainline sort ({} events) took {:?}", sorted_left_events.len(), mainline_start.elapsed());
+	println!(
+		"resolve: mainline sort ({} events) took {:?}",
+		sorted_left_events.len(),
+		mainline_start.elapsed()
+	);
 
 	trace!(list = ?sorted_left_events, "events left, sorted, running iterative auth check");
 
@@ -483,12 +508,21 @@ where
 		Some(&is_cached),
 	)
 	.await?;
-	println!("resolve: final auth check ({} events → {} resolved) took {:?}", sorted_left_events.len(), resolved_state.len(), final_auth_start.elapsed());
+	println!(
+		"resolve: final auth check ({} events → {} resolved) took {:?}",
+		sorted_left_events.len(),
+		resolved_state.len(),
+		final_auth_start.elapsed()
+	);
 
 	// Ensure unconflicting state is in the final state
 	resolved_state.extend(unconflicted);
 
-	println!("resolve: TOTAL took {:?} ({} final state entries)", resolve_start.elapsed(), resolved_state.len());
+	println!(
+		"resolve: TOTAL took {:?} ({} final state entries)",
+		resolve_start.elapsed(),
+		resolved_state.len()
+	);
 
 	Ok(resolved_state)
 }
