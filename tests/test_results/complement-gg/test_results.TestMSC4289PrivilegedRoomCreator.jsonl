@@ -1,7 +1,7 @@
-{"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators"}
+{"Action":"fail","Test":"TestMSC4289PrivilegedRoomCreators"}
 {"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/PL_event_is_missing_creator_in_users_map"}
 {"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/admin_with_>PL100_cannot_kick_creator"}
-{"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/admin_with_>PL100_sorts_after_the_room_creator_for_state_resolution"}
+{"Action":"fail","Test":"TestMSC4289PrivilegedRoomCreators/admin_with_>PL100_sorts_after_the_room_creator_for_state_resolution"}
 {"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/creator_can_kick_admin"}
 {"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/creator_can_kick_admin_above_PL100"}
 {"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/creator_can_kick_admin_at_JSON_max_value"}

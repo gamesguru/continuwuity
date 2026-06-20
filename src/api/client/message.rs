@@ -241,15 +241,11 @@ pub(crate) async fn get_message_events_route(
 		.collect()
 		.await;
 
-	// When the returned page is smaller than the requested limit, we've
-	// exhausted available events. Return `end: None` so the client stops
-	// paginating. Without this, the client can loop forever re-requesting
-	// the same token when topo/raw fallback returns a cycling set of events.
-	let next_token = if events.len() < limit {
-		None
-	} else {
-		events.last().map(at!(0))
-	};
+	// Always return `end` when events are present so the client can continue
+	// paginating. Only return `None` when no events matched at all — that
+	// signals the client to stop. Filters can reduce the returned count
+	// below the limit without exhausting the timeline.
+	let next_token = events.last().map(at!(0));
 
 	let chunk = events
 		.into_iter()

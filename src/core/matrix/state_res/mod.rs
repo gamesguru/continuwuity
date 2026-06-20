@@ -232,6 +232,14 @@ where
 		get_auth_chain_diff(&auth_chain_sets).boxed()
 	};
 
+	// MSC4289: Save the conflicting map before consumption for creator
+	// preference post-processing.
+	let conflicting_for_msc4289 = if *room_version == V12 {
+		Some(conflicting.clone())
+	} else {
+		None
+	};
+
 	let all_conflicted_ids: HashSet<_> = auth_diff_stream
 		.chain(conflicting.into_values().flatten().stream())
 		.chain(conflicted_state_subgraph.into_iter().stream())
@@ -514,6 +522,49 @@ where
 		resolved_state.len(),
 		final_auth_start.elapsed()
 	);
+
+	// MSC4289: Privileged creator events always win in state resolution.
+	// The sort puts higher-PL events first (creator at Int::MAX), and
+	// iterative_auth_check lets the last passing event win, so a lower-PL
+	// admin's event can overwrite the creator's. Post-process to restore
+	// creator events as winners for any conflicted state key.
+	if let Some(ref conflicting_map) = conflicting_for_msc4289 {
+		let create_ty_sk = (StateEventType::RoomCreate, StateKey::new());
+		if let Some(create_id) = unconflicted.get(&create_ty_sk) {
+			if let Some(create_ev) = cached_fetch(create_id.clone()).await {
+				let creator = create_ev.sender().to_owned();
+
+				// For each conflicted state key, check if a creator's event was a candidate
+				for (key, candidate_ids) in conflicting_map {
+					let mut creator_event_id = None;
+					for id in candidate_ids {
+						let eid: OwnedEventId = id.clone();
+						if let Some(ev) = cached_fetch(eid).await {
+							if ev.sender() == creator {
+								creator_event_id = Some(id.clone());
+								break;
+							}
+						}
+					}
+					if let Some(creator_eid) = creator_event_id {
+						// If the resolved state has a different event for this key,
+						// override with the creator's event
+						if let Some(current) = resolved_state.get(key) {
+							if *current != creator_eid {
+								debug!(
+									state_key = ?key,
+									creator_event = %creator_eid,
+									overridden = %current,
+									"MSC4289: privileged creator event wins over non-creator"
+								);
+								resolved_state.insert(key.clone(), creator_eid);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// Ensure unconflicting state is in the final state
 	resolved_state.extend(unconflicted);
