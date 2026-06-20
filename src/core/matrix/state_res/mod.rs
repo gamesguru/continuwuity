@@ -536,6 +536,14 @@ where
 
 				// For each conflicted state key, check if a creator's event was a candidate
 				for (key, candidate_ids) in conflicting_map {
+					// Skip m.room.power_levels: the creator's privilege is
+					// enforced via Int::MAX in auth_check. Post-processing PL
+					// would break legitimate delegation chains where the creator
+					// grants power and a delegate's PL update should win.
+					if key.0 == StateEventType::RoomPowerLevels {
+						continue;
+					}
+
 					let mut creator_event_id = None;
 					for id in candidate_ids {
 						let eid: OwnedEventId = id.clone();
