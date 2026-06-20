@@ -1299,10 +1299,13 @@ async fn test_unredacted_lounge_dag_resolution() {
 	{
 		use futures::StreamExt;
 		// Scan the last 2000 events in reverse timeline order
-		let mut stream = services.rooms.timeline.pdus_rev(None, room_id, None);
+		let stream = services.rooms.timeline.pdus_rev(room_id, None);
+		futures::pin_mut!(stream);
 		let mut scanned = 0u32;
 		while let Some(Ok((_count, pdu))) = stream.next().await {
-			if scanned >= 2000 { break; }
+			if scanned >= 2000 {
+				break;
+			}
 			scanned += 1;
 			if let Ok(event_ssh) = services
 				.rooms
@@ -1378,7 +1381,6 @@ async fn test_unredacted_lounge_dag_resolution() {
 	println!("Unredacted Lounge DAG resolved. Final forward extremities count: {exts_count}");
 	assert!(exts_count < 10, "expected very few forward extremities, got: {exts_count}");
 
-
 	let expected_present = [
 		"$TN3aSG4dg-NueYfa8FNgOg154yVJlB_g102cf5eQiFY",
 		"$x49Eu0L3xnLbMJ1sAJIk8wtj0moDiZyjya_rNh3U2UQ",
@@ -1428,10 +1430,9 @@ async fn test_unredacted_lounge_dag_resolution() {
 				println!("  type={ty}, state_key={sk}");
 				// Find the actual winner in that slot
 				for state_pdu in &resolved_state_pdus {
-					if state_pdu.kind().to_string() == ty
-						&& state_pdu.state_key() == Some(sk)
-					{
-						println!("  actual winner: {} (sender={}, ts={})",
+					if state_pdu.kind().to_string() == ty && state_pdu.state_key() == Some(sk) {
+						println!(
+							"  actual winner: {} (sender={}, ts={})",
 							state_pdu.event_id(),
 							state_pdu.sender(),
 							u64::from(state_pdu.origin_server_ts().0),

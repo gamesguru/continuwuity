@@ -534,7 +534,10 @@ impl Service {
 					no_compute_state,
 				)
 				.await;
-			println!("reorder_timeline: single-pass reindex+state took {:?}", reindex_start.elapsed());
+			println!(
+				"reorder_timeline: single-pass reindex+state took {:?}",
+				reindex_start.elapsed()
+			);
 
 			if let Some(ssh) = final_ssh {
 				if ssh != 0 {
@@ -545,7 +548,6 @@ impl Service {
 				}
 			}
 		}
-
 
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		let final_sync = self.db.db.cork_and_sync();

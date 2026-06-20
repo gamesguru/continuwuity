@@ -313,12 +313,9 @@ where
 				}
 			}
 			if let Some((ref winner, _)) = best {
-				if winner.as_str().contains("TN3aSG4dg")
-					|| winner.as_str().contains("TtQ6QYSjCp")
+				if winner.as_str().contains("TN3aSG4dg") || winner.as_str().contains("TtQ6QYSjCp")
 				{
-					println!(
-						"  TRACE DISPUTED: ssk={ssk} winner={winner} (fast path)"
-					);
+					println!("  TRACE DISPUTED: ssk={ssk} winner={winner} (fast path)");
 				}
 				final_state.insert(*ssk, winner.clone());
 			}
