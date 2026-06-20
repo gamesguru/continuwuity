@@ -20,8 +20,6 @@ pub(crate) async fn get_missing_events_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_missing_events::v1::Request>,
 ) -> Result<get_missing_events::v1::Response> {
-	use std::collections::BTreeMap;
-
 	AccessCheck {
 		services: &services,
 		origin: body.origin(),
@@ -138,20 +136,51 @@ pub(crate) async fn get_missing_events_route(
 		debug!("limit reached before queue was empty");
 	}
 
+	let sorted_ids = topo_sort_events(
+		results
+			.iter()
+			.map(|(id, prevs, depth, _)| (id.clone(), prevs.clone(), *depth)),
+	);
+
+	let mut event_map: std::collections::BTreeMap<OwnedEventId, Box<RawValue>> = results
+		.into_iter()
+		.map(|(id, _, _, raw)| (id, raw))
+		.collect();
+
+	let events = sorted_ids
+		.into_iter()
+		.filter_map(|id| event_map.remove(&id))
+		.collect();
+
+	Ok(get_missing_events::v1::Response { events })
+}
+
+/// Topologically sort events using Kahn's algorithm.
+///
+/// Returns event IDs ordered such that an event always appears after its
+/// prev_events (i.e. oldest first). Events at the same depth are
+/// tie-broken by event ID (lexicographic ascending).
+///
+/// Only events present in the input set participate in the graph — external
+/// prev_events (e.g. `earliest_events`) are treated as implicit roots.
+pub(crate) fn topo_sort_events(
+	events: impl IntoIterator<Item = (OwnedEventId, Vec<OwnedEventId>, ruma::UInt)>,
+) -> Vec<OwnedEventId> {
+	use std::collections::BTreeMap;
+
 	let mut in_degree: BTreeMap<OwnedEventId, usize> = BTreeMap::new();
 	let mut graph: BTreeMap<OwnedEventId, Vec<OwnedEventId>> = BTreeMap::new();
-	let mut event_map: BTreeMap<OwnedEventId, Box<RawValue>> = BTreeMap::new();
 	let mut depth_map: BTreeMap<OwnedEventId, ruma::UInt> = BTreeMap::new();
 
-	for (id, prevs, depth, raw) in results {
-		in_degree.insert(id.clone(), 0);
-		event_map.insert(id.clone(), raw);
+	for (id, prevs, depth) in events {
+		in_degree.entry(id.clone()).or_insert(0);
 		depth_map.insert(id.clone(), depth);
 		for prev in prevs {
 			graph.entry(prev).or_default().push(id.clone());
 		}
 	}
 
+	// Count in-degrees: only edges whose source is in our event set count
 	for (prev, edges) in &graph {
 		if in_degree.contains_key(prev) {
 			for to in edges {
@@ -162,50 +191,146 @@ pub(crate) async fn get_missing_events_route(
 		}
 	}
 
-	let mut zero_in_degree: Vec<OwnedEventId> = in_degree
+	// Seed with zero-in-degree nodes, sorted shallowest-first so pop() gives us
+	// the shallowest (we want oldest/shallowest first in the output).
+	let mut ready: Vec<OwnedEventId> = in_degree
 		.iter()
 		.filter(|(_, deg)| **deg == 0)
 		.map(|(id, _)| id.clone())
 		.collect();
 
-	zero_in_degree.sort_by(|a, b| {
-		let depth_a = depth_map
-			.get(a)
-			.copied()
-			.unwrap_or_else(|| ruma::UInt::new(0).unwrap());
-		let depth_b = depth_map
-			.get(b)
-			.copied()
-			.unwrap_or_else(|| ruma::UInt::new(0).unwrap());
-		depth_b.cmp(&depth_a).then_with(|| b.cmp(a))
+	// Sort descending so pop() yields smallest depth first
+	ready.sort_by(|a, b| {
+		let da = depth_map.get(a).copied().unwrap_or(ruma::UInt::MIN);
+		let db = depth_map.get(b).copied().unwrap_or(ruma::UInt::MIN);
+		db.cmp(&da).then_with(|| b.cmp(a))
 	});
 
-	let mut events = Vec::with_capacity(event_map.len());
-	while let Some(node) = zero_in_degree.pop() {
-		if let Some(raw) = event_map.remove(&node) {
-			events.push(raw);
-		}
+	let mut output = Vec::with_capacity(in_degree.len());
+	while let Some(node) = ready.pop() {
+		output.push(node.clone());
 		if let Some(edges) = graph.get(&node) {
 			for to in edges {
 				if let Some(deg) = in_degree.get_mut(to) {
 					*deg = deg.saturating_sub(1);
 					if *deg == 0 {
-						zero_in_degree.push(to.clone());
+						ready.push(to.clone());
 					}
 				}
 			}
 		}
-		zero_in_degree.sort_by(|a, b| {
-			let depth_a = depth_map
-				.get(a)
-				.copied()
-				.unwrap_or_else(|| ruma::UInt::new(0).unwrap());
-			let depth_b = depth_map
-				.get(b)
-				.copied()
-				.unwrap_or_else(|| ruma::UInt::new(0).unwrap());
-			depth_b.cmp(&depth_a).then_with(|| b.cmp(a))
+		// Re-sort so pop() continues yielding shallowest
+		ready.sort_by(|a, b| {
+			let da = depth_map.get(a).copied().unwrap_or(ruma::UInt::MIN);
+			let db = depth_map.get(b).copied().unwrap_or(ruma::UInt::MIN);
+			db.cmp(&da).then_with(|| b.cmp(a))
 		});
 	}
-	Ok(get_missing_events::v1::Response { events })
+
+	output
+}
+
+#[cfg(test)]
+mod tests {
+	use ruma::OwnedEventId;
+
+	use super::topo_sort_events;
+
+	fn eid(s: &str) -> OwnedEventId { format!("${s}:example.com").try_into().unwrap() }
+
+	fn depth(n: u64) -> ruma::UInt { ruma::UInt::new(n).unwrap() }
+
+	/// Linear chain: A ← B ← C
+	/// Expected output: [A, B, C] (oldest first)
+	#[test]
+	fn linear_chain() {
+		let a = eid("a");
+		let b = eid("b");
+		let c = eid("c");
+
+		let events = vec![
+			(c.clone(), vec![b.clone()], depth(3)),
+			(b.clone(), vec![a.clone()], depth(2)),
+			(a.clone(), vec![eid("root")], depth(1)),
+		];
+
+		let sorted = topo_sort_events(events);
+		assert_eq!(sorted, vec![a, b, c]);
+	}
+
+	/// Fork and merge:
+	///   A ← B
+	///   A ← C
+	///   B,C ← D
+	/// Expected: A first, D last, B and C in between (ordered by depth/id)
+	#[test]
+	fn fork_and_merge() {
+		let a = eid("a");
+		let b = eid("b");
+		let c = eid("c");
+		let d = eid("d");
+
+		let events = vec![
+			(a.clone(), vec![eid("root")], depth(1)),
+			(b.clone(), vec![a.clone()], depth(2)),
+			(c.clone(), vec![a.clone()], depth(2)),
+			(d.clone(), vec![b.clone(), c.clone()], depth(3)),
+		];
+
+		let sorted = topo_sort_events(events);
+		assert_eq!(sorted[0], a, "A must be first");
+		assert_eq!(sorted[3], d, "D must be last");
+		// B and C are both at depth 2, order by event ID
+		assert!(sorted[1..3].contains(&b));
+		assert!(sorted[1..3].contains(&c));
+	}
+
+	/// Single event with no in-set prev_events
+	#[test]
+	fn single_event() {
+		let a = eid("a");
+		let events = vec![(a.clone(), vec![eid("external")], depth(5))];
+		let sorted = topo_sort_events(events);
+		assert_eq!(sorted, vec![a]);
+	}
+
+	/// Empty input returns empty output
+	#[test]
+	fn empty() {
+		let sorted = topo_sort_events(std::iter::empty());
+		assert!(sorted.is_empty());
+	}
+
+	/// Events at the same depth should be sorted by event ID (deterministic)
+	#[test]
+	fn same_depth_tiebreak() {
+		let a = eid("aaa");
+		let b = eid("bbb");
+		let c = eid("ccc");
+
+		let events = vec![
+			(c.clone(), vec![eid("root")], depth(1)),
+			(a.clone(), vec![eid("root")], depth(1)),
+			(b.clone(), vec![eid("root")], depth(1)),
+		];
+
+		let sorted = topo_sort_events(events);
+		// All independent, same depth → sorted by event ID lexicographically
+		assert_eq!(sorted, vec![a, b, c]);
+	}
+
+	/// Depth ordering takes precedence over insertion order
+	#[test]
+	fn depth_ordering() {
+		let shallow = eid("shallow");
+		let deep = eid("deep");
+
+		let events = vec![
+			(deep.clone(), vec![eid("root")], depth(10)),
+			(shallow.clone(), vec![eid("root")], depth(1)),
+		];
+
+		let sorted = topo_sort_events(events);
+		assert_eq!(sorted, vec![shallow, deep]);
+	}
 }
