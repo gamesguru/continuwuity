@@ -15,6 +15,7 @@ pub(super) async fn import_pdus(
 	force: bool,
 	room_version: Option<RoomVersionId>,
 ) -> Result {
+	use futures::StreamExt;
 	self.bail_restricted()?;
 
 	let room_version = match room_version {
@@ -117,7 +118,6 @@ pub(super) async fn import_pdus(
 			.ok(),
 	);
 
-	use futures::StreamExt;
 	let chunks: Vec<Vec<_>> = parsed_pdus.chunks(5000).map(|c| c.to_vec()).collect();
 
 	let inserted = std::sync::atomic::AtomicUsize::new(0);

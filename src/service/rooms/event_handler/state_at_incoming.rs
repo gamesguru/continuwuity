@@ -117,7 +117,6 @@ where
 	trace!("Calculating fork states...");
 
 	let mut fork_compressed_states = Vec::with_capacity(extremity_sstatehashes.len());
-	let mut fork_hashes = Vec::with_capacity(extremity_sstatehashes.len());
 	for (sstatehash, prev_event) in &extremity_sstatehashes {
 		let mut state = self
 			.services
@@ -156,7 +155,6 @@ where
 			));
 		}
 		fork_compressed_states.push(state);
-		fork_hashes.push(*sstatehash);
 	}
 
 	let first_fork = &fork_compressed_states[0];
