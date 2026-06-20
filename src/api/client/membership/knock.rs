@@ -181,16 +181,6 @@ async fn knock_room_by_id_helper(
 		return Err!(Request(Forbidden("You cannot knock on a room you are already joined in.")));
 	}
 
-	if services
-		.rooms
-		.state_cache
-		.is_knocked(sender_user, room_id)
-		.await
-	{
-		debug_warn!("{sender_user} is already knocked in {room_id}");
-		return Ok(knock_room::v3::Response { room_id: room_id.into() });
-	}
-
 	if let Ok(membership) = services
 		.rooms
 		.state_accessor
@@ -243,7 +233,7 @@ async fn knock_room_by_id_helper(
 			// join_room_by_id_helper We need to release the lock here and let
 			// join_room_by_id_helper acquire it again
 			drop(state_lock);
-			match join_room_by_id_helper(
+			match Box::pin(join_room_by_id_helper(
 				services,
 				sender_user,
 				room_id,
@@ -251,7 +241,7 @@ async fn knock_room_by_id_helper(
 				servers,
 				&None,
 				None,
-			)
+			))
 			.await
 			{
 				| Ok(_) => return Ok(knock_room::v3::Response::new(room_id.to_owned())),
@@ -531,6 +521,11 @@ async fn knock_room_helper_remote(
 		));
 	}
 
+	services
+		.rooms
+		.short
+		.set_room_version(room_id, &room_version_id);
+
 	let mut knock_event_stub: CanonicalJsonObject =
 		serde_json::from_str(make_knock_response.event.get()).map_err(|e| {
 			err!(BadServerResponse("Invalid make_knock event json received from server: {e:?}"))
@@ -676,14 +671,6 @@ async fn knock_room_helper_remote(
 		.append_to_state(&parsed_knock_pdu, room_id)
 		.await?;
 
-	info!("Updating membership locally to knock state with provided stripped state events");
-	// TODO: see TODO on the other call to `update_membership`
-	services
-		.rooms
-		.state_cache
-		.update_membership(room_id, sender_user, &parsed_knock_pdu, false)
-		.await?;
-
 	info!("Appending room knock event locally");
 	services
 		.rooms
@@ -704,6 +691,13 @@ async fn knock_room_helper_remote(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_knock, &state_lock);
+
+	info!("Updating membership locally to knock state with provided stripped state events");
+	services.rooms.state_cache.mark_as_knocked(
+		sender_user,
+		room_id,
+		Some(send_knock_response.knock_room_state.clone()),
+	);
 
 	Ok(())
 }

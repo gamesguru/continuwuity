@@ -17,11 +17,21 @@ It's the official community continuation of the `conduwuit <https://github.com/g
 Why the fork?
 ~~~~~~~~~~~~~
 
-I make too many changes and PRs, all of them non-breaking and additive (so, yes, it's fully backward-compatible).
+I make too many changes and PRs. Up til now it's backwards compatible, but with
+dropping the Sync Tokens I am slightly ahead.
 
-I cannot realistically PR all of the improvements I make into the main repo, so I've set up this fork.
+Optimizations in PDU event storage and read receipt logic will leave it largely
+non-backwards compatible, until the C10Y team accept these database
+improvements upstream.
 
-The main branch is generally the most stable. Feature branches are best avoided unless talking to me first.
+I cannot realistically PR all of the things I change into the main repo, so
+I've set up this fork.
+
+The main branch is generally the most stable. Some minor regressions with the
+`unsigned` field, media linger there (fixed on `dev` branches, but those are
+more experimental and not advised to run on your own).
+
+Feature branches are best avoided unless talking to me first.
 
 Complement tests have been added, as well functionality for these:
 

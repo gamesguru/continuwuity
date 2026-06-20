@@ -102,12 +102,14 @@ async fn async_main(server: &Arc<Server>) -> Result<(), Error> {
 	extern crate conduwuit_router as router;
 
 	match router::start(&server.server).await {
-		| Ok(services) => server.services.lock().await.insert(services),
+		| Ok(services) => {
+			let _ = server.services.lock().await.insert(services);
+		},
 		| Err(error) => {
 			error!("Critical error starting server: {error}");
 			return Err(error);
 		},
-	};
+	}
 
 	if let Err(error) = router::run(
 		server

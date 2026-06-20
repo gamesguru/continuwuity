@@ -17,7 +17,7 @@ jobs:
   complement-tests:
     # NOTE: to enable GitHub builds/workflows, add a REPOSITORY_VARIABLE
     # i.e., under /settings/variables/actions, C10Y_SOME_ENV_VAR=1
-    if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_COMPLEMENT_TESTS_COMPLEMENT_TESTS != ''
+    # if: vars.C10Y_ENABLE_GITHUB_WORKFLOW_COMPLEMENT_TESTS_COMPLEMENT_TESTS != ''
     runs-on: ${{ matrix.os }}${{ matrix.arch == 'arm64' && '-arm' || '' }}
     env:
       FEATURES: "direct_tls"
@@ -72,7 +72,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update || true
           sudo apt-get install -y \
             build-essential \
             pkg-config \
@@ -157,12 +157,13 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}
+          name: conduwuit-${{ matrix.profile }}-direct_tls-${{ matrix.arch }}-${{ matrix.os }}-v${{ matrix.room_version }}
           path: |
             target/latest/conduwuit
             target/latest/conduwuit.asc
             target/latest/lib/
           retention-days: 60
+          overwrite: true
 
       - name: Capture baseline stats
         run: VERBOSE=1 make complement/stats | tee baseline_stats.txt
@@ -182,6 +183,8 @@ jobs:
 
       - name: Run Complement tests
         env:
+          CONDUWUIT_SENDER_TIMEOUT: 5
+          CONDUWUIT_SENDER_RETRY_BACKOFF_LIMIT: 5
           COMPLEMENT_SHARE_ENV_PREFIX: PASS_
           PASS_CONDUWUIT_DEFAULT_ROOM_VERSION: '"${{ matrix.room_version }}"'
         run: |
@@ -196,9 +199,10 @@ jobs:
         run: git diff --color=always tests/test_results/complement/test_results.jsonl
 
       - name: Upload test logs
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}
+          name: complement-logs-${{ matrix.arch }}-${{ matrix.os }}-v${{ matrix.room_version }}
           path: |
             tests/test_results/complement/test_results.jsonl
             tests/test_results/complement/test_logs.jsonl
@@ -206,8 +210,13 @@ jobs:
 
       - name: Parse Complement results
         id: results
+        if: always()
         run: |
           RESULTS="tests/test_results/complement/test_results.jsonl"
+          if [ ! -f "$RESULTS" ]; then
+            echo "Results file not found, skipping parsing."
+            exit 0
+          fi
 
           # Inject arch, os, and profile into the JSONL file itself.
           # We use a temp file to avoid reading/writing to the same file.
@@ -248,6 +257,7 @@ jobs:
           echo "version=$VERSION" | tee -a $GITHUB_OUTPUT
       - name: Update Results Ledger
         if: always()
+        continue-on-error: true
         uses: ./.github/actions/update-results-ledger
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -265,9 +275,14 @@ jobs:
 
       - name: Ingest results into PostgreSQL
         if: always()
+        continue-on-error: true
         env:
           SSH_PASSPHRASE: ${{ secrets.C10Y_SSH_KEY_PRIVATE_PASSPHRASE || '' }}
         run: |
+          if [ -z "${{ secrets.C10Y_SSH_KEY_PRIVATE }}" ]; then
+            echo "PostgreSQL secrets not available, skipping ingestion."
+            exit 0
+          fi
           mkdir -p ~/.ssh
           echo "${{ secrets.C10Y_SSH_KEY_PRIVATE }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -275,7 +290,8 @@ jobs:
           # Use ssh-agent to load the key (handles passphrases via DISPLAY workaround or expect if needed,
           # but usually CI keys are passwordless. If it has a password, sshpass can feed it)
           if [ -n "$SSH_PASSPHRASE" ]; then
-            sudo apt-get update && sudo apt-get install -y sshpass
+            sudo apt-get update || true
+            sudo apt-get install -y sshpass
             export SSH_ASKPASS_REQUIRE=force
             export SSH_ASKPASS_CMD="echo $SSH_PASSPHRASE"
             # Actually, standard sshpass is easier:
@@ -306,24 +322,53 @@ jobs:
           ssh-keyscan -p 22 nutra.tk | tee -a ~/.ssh/known_hosts
       - name: Run Postgres Ingestion
         if: always()
+        continue-on-error: true
         uses: ./.github/actions/postgres
         with:
           ssh_target: "git@nutra.tk"
           database_url: ${{ secrets.C10Y_POSTGRES_URL }}
           setup_tables: false
           rebuild_db: false
+          results_file: tests/test_results/complement/test_results.jsonl
+          run_metadata: >-
+            {
+              "commit_hash": "${{ github.event.pull_request.head.sha || github.sha }}",
+              "branch": "${{ github.head_ref || github.ref_name }}",
+              "arch": "${{ matrix.arch }}",
+              "os": "${{ matrix.os }}",
+              "profile": "${{ matrix.profile }}",
+              "room_version": "${{ matrix.room_version }}",
+              "version_string": "${{ steps.version.outputs.version }}",
+              "features": "${{ env.FEATURES }}",
+              "pass": ${{ steps.results.outputs.pass || 0 }},
+              "fail": ${{ steps.results.outputs.fail || 0 }},
+              "skip": ${{ steps.results.outputs.skip || 0 }}
+            }
 
       - name: Query updated Postgres stats
+        if: always()
+        continue-on-error: true
         env:
           PAGER: cat
           DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
-        run: python3 .github/actions/postgres/ci-query-failures.py
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL not set, skipping query."
+            exit 0
+          fi
+          python3 .github/actions/postgres/ci-query-failures.py
 
       - name: Get newly failing tests
         id: new_failures
+        if: always()
+        continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.C10Y_POSTGRES_URL }}
         run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL not set, skipping failures check."
+            exit 0
+          fi
           SHA="${{ github.event.pull_request.head.sha || github.sha }}"
           ARCH="${{ matrix.arch }}"
           OS="${{ matrix.os }}"
@@ -350,7 +395,7 @@ jobs:
           fi
 
       - name: Post Complement results to PR
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
           FAILED_TESTS: ${{ steps.new_failures.outputs.new_failures }}
@@ -374,6 +419,7 @@ jobs:
             let currentRun = [
               `## Complement Test Results (${arch} ${os})`,
               `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
+              `**Logs:** [View / Download Logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               '',
               '| Status | Count |',
               '|--------|-------|',
@@ -428,3 +474,37 @@ jobs:
                 body,
               });
             }
+
+      - name: Notify Matrix room
+        if: always()
+        env:
+          MATRIX_TOKEN: ${{ secrets.NUTRA_BOT_PAT }}
+          MATRIX_ROOM_ID: ${{ vars.C10Y_MATRIX_NOTIFY_ROOM_ID || '!m82A7i5caVq0WrL0mc:nutra.tk' }}
+          MATRIX_HOMESERVER: ${{ vars.C10Y_MATRIX_NOTIFY_HOMESERVER || 'https://matrix.nutra.tk' }}
+          RESULTS_OUTCOME: ${{ steps.results.outcome || '' }}
+          REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ARCH="${{ matrix.arch }}"
+          OS="${{ matrix.os }}"
+          SHA="${{ github.sha }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ "${RESULTS_OUTCOME}" = "success" ]; then
+            PASS="${{ steps.results.outputs.pass || 0 }}"
+            FAIL="${{ steps.results.outputs.fail || 0 }}"
+            SKIP="${{ steps.results.outputs.skip || 0 }}"
+            TOTAL="${{ steps.results.outputs.total || 0 }}"
+            MARK=$([[ "$FAIL" == "0" ]] && echo "✓" || echo "✗")
+            MSG="${MARK} Complement (${ARCH} ${OS}): ${PASS} pass, ${FAIL} fail, ${SKIP} skip / ${TOTAL} total -- ${REF} @ ${SHA:0:7} -- ${RUN_URL}"
+          else
+            MSG="✗ Complement (${ARCH} ${OS}): job failed before producing test counts -- ${REF} @ ${SHA:0:7} -- ${RUN_URL}"
+          fi
+
+          if [ -n "${MATRIX_TOKEN}" ]; then
+            TXN_ID="ci-$(date +%s)-${RANDOM}"
+            jq -n --arg body "${MSG}" '{msgtype: "m.text", body: $body}' | curl -sf -X PUT \
+              "${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${MATRIX_ROOM_ID}/send/m.room.message/${TXN_ID}" \
+              -H "Authorization: Bearer ${MATRIX_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data @- || echo "Matrix notify failed (non-fatal)"
+          fi
