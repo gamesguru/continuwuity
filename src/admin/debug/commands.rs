@@ -720,6 +720,49 @@ pub(super) async fn get_verify_keys(&self, server_name: Option<OwnedServerName>)
 }
 
 #[admin_command]
+pub(super) async fn import_signing_key(
+	&self,
+	server_name: OwnedServerName,
+	key_id: String,
+	public_key: String,
+) -> Result {
+	use ruma::{
+		MilliSecondsSinceUnixEpoch,
+		api::federation::discovery::{ServerSigningKeys, VerifyKey},
+		serde::Base64,
+	};
+
+	let key_id: ruma::OwnedServerSigningKeyId = key_id
+		.try_into()
+		.map_err(|_| conduwuit::err!("Invalid key ID format. Expected e.g. ed25519:1"))?;
+
+	// Decode to validate the base64
+	let key_bytes =
+		Base64::parse(&public_key).map_err(|_| conduwuit::err!("Invalid base64 public key"))?;
+
+	let fp = conduwuit_service::server_keys::key_fingerprint(&key_bytes);
+
+	let verify_key = VerifyKey { key: key_bytes };
+
+	let mut new_keys =
+		ServerSigningKeys::new(server_name.clone(), MilliSecondsSinceUnixEpoch::now());
+	new_keys.verify_keys.insert(key_id.clone(), verify_key);
+
+	// This will preserve any displaced existing key in old_verify_keys
+	self.services.server_keys.add_signing_keys(new_keys).await;
+
+	// Show the updated state
+	let keys = self
+		.services
+		.server_keys
+		.signing_keys_for(&server_name)
+		.await?;
+
+	let out = format!("Imported `{key_id}` ({fp}) for `{server_name}`\n\n```rs\n{keys:#?}\n```");
+	self.write_str(&out).await
+}
+
+#[admin_command]
 pub(super) async fn resolve_true_destination(
 	&self,
 	server_name: OwnedServerName,
