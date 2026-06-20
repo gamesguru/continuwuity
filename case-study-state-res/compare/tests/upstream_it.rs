@@ -306,20 +306,18 @@ async fn resolve_batched(
 		return state_sets.into_iter().next().unwrap();
 	}
 
-	// Build auth chain sets per state set
-	let auth_chain_sets: Vec<HashSet<OwnedEventId>> = state_sets
-		.iter()
-		.map(|ss| store.auth_chain(ss.values().cloned()))
-		.collect();
-
 	let fetch = |id: OwnedEventId| std::future::ready(store.fetch(id));
+	let auth_chain_fetch = |ids: Vec<OwnedEventId>| {
+		let chain = store.auth_chain(ids.into_iter());
+		std::future::ready(chain)
+	};
 
 	state_res::resolve(
 		room_version,
 		state_sets.iter(),
-		&auth_chain_sets,
 		&fetch,
 		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
+		&auth_chain_fetch,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await
@@ -359,19 +357,18 @@ async fn resolve_state_maps(
 		})
 		.collect();
 
-	let auth_chain_sets: Vec<HashSet<OwnedEventId>> = state_sets
-		.iter()
-		.map(|ss| store.auth_chain(ss.values().cloned()))
-		.collect();
-
 	let fetch = |id: OwnedEventId| std::future::ready(store.fetch(id));
+	let auth_chain_fetch = |ids: Vec<OwnedEventId>| {
+		let chain = store.auth_chain(ids.into_iter());
+		std::future::ready(chain)
+	};
 
 	state_res::resolve(
 		room_version,
 		state_sets.iter(),
-		&auth_chain_sets,
 		&fetch,
 		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
+		&auth_chain_fetch,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await

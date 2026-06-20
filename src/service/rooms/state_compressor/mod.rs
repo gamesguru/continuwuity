@@ -59,7 +59,7 @@ pub struct HashSetCompressStateEvent {
 	pub removed: Arc<CompressedState>,
 }
 
-type StateInfoLruCache = LruCache<ShortStateHash, ShortStateInfoVec>;
+type StateInfoLruCache = LruCache<ShortStateHash, Arc<ShortStateInfoVec>>;
 type ShortStateInfoVec = Vec<ShortStateInfo>;
 type ParentStatesVec = Vec<ShortStateInfo>;
 
@@ -87,9 +87,11 @@ impl crate::Service for Service {
 	async fn memory_usage(&self, out: &mut (dyn Write + Send)) -> Result {
 		let (cache_len, ents) = {
 			let cache = self.stateinfo_cache.lock();
-			let ents = cache.iter().map(at!(1)).flat_map(|vec| vec.iter()).fold(
-				HashMap::new(),
-				|mut ents, ssi| {
+			let ents = cache
+				.iter()
+				.map(at!(1))
+				.flat_map(|arc_vec| arc_vec.iter())
+				.fold(HashMap::new(), |mut ents, ssi| {
 					ents.insert(Arc::as_ptr(&ssi.added), compressed_state_size(&ssi.added));
 					ents.insert(Arc::as_ptr(&ssi.removed), compressed_state_size(&ssi.removed));
 					if let Some(ref fs) = ssi.full_state {
@@ -97,8 +99,7 @@ impl crate::Service for Service {
 					}
 
 					ents
-				},
-			);
+				});
 
 			(cache.len(), ents)
 		};
@@ -126,7 +127,8 @@ pub async fn load_shortstatehash_info(
 	shortstatehash: ShortStateHash,
 ) -> Result<ShortStateInfoVec> {
 	if let Some(r) = self.stateinfo_cache.lock().get_mut(&shortstatehash) {
-		return Ok(r.clone());
+		// Arc clone is just a refcount bump — no Vec/BTreeSet allocation
+		return Ok((**r).clone());
 	}
 
 	let stack = self.new_shortstatehash_info(shortstatehash).await?;
@@ -154,7 +156,9 @@ async fn cache_shortstatehash_info(
 	shortstatehash: ShortStateHash,
 	stack: ShortStateInfoVec,
 ) -> Result {
-	self.stateinfo_cache.lock().insert(shortstatehash, stack);
+	self.stateinfo_cache
+		.lock()
+		.insert(shortstatehash, Arc::new(stack));
 
 	Ok(())
 }
@@ -164,45 +168,88 @@ async fn new_shortstatehash_info(
 	&self,
 	shortstatehash: ShortStateHash,
 ) -> Result<ShortStateInfoVec> {
-	let StateDiff { parent, added, removed } = self.get_statediff(shortstatehash).await?;
+	// Iterative chain walk: collect the chain of diffs from leaf to root,
+	// then reconstruct full state bottom-up. Avoids recursive Box::pin
+	// allocations and unbounded stack depth.
+	let mut chain: Vec<(ShortStateHash, Arc<CompressedState>, Arc<CompressedState>)> = Vec::new();
+	let mut current = shortstatehash;
 
-	let Some(parent) = parent else {
-		return Ok(vec![ShortStateInfo {
-			shortstatehash,
-			full_state: Some(added.clone()),
-			added,
-			removed,
-		}]);
-	};
+	loop {
+		// Check cache for this node — if found, use it as the base
+		if let Some(cached) = self.stateinfo_cache.lock().get_mut(&current) {
+			// Build on top of the cached stack
+			let mut stack: ShortStateInfoVec = (**cached).clone();
 
-	let mut stack = Box::pin(self.load_shortstatehash_info(parent)).await?;
-	let top = stack.last_mut().expect("at least one frame");
+			// Apply collected diffs in reverse (root-to-leaf) order
+			for (ssh, added, removed) in chain.into_iter().rev() {
+				let top = stack.last_mut().expect("at least one frame");
+				let mut full_state = (**top
+					.full_state
+					.as_ref()
+					.expect("top frame must have full_state"))
+				.clone();
 
-	let mut full_state = (**top
-		.full_state
-		.as_ref()
-		.expect("top frame must have full_state"))
-	.clone();
+				top.full_state = None;
 
-	// Drop the full_state from the parent layer to save gigabytes of RAM
-	// on deeply nested room states.
-	top.full_state = None;
+				full_state.extend(added.iter().copied());
+				let removed_set = (*removed).clone();
+				for r in &removed_set {
+					full_state.remove(r);
+				}
 
-	full_state.extend(added.iter().copied());
+				stack.push(ShortStateInfo {
+					shortstatehash: ssh,
+					added,
+					removed: Arc::new(removed_set),
+					full_state: Some(Arc::new(full_state)),
+				});
+			}
 
-	let removed = (*removed).clone();
-	for r in &removed {
-		full_state.remove(r);
+			return Ok(stack);
+		}
+
+		let StateDiff { parent, added, removed } = self.get_statediff(current).await?;
+
+		let Some(parent_hash) = parent else {
+			// Root node: build the initial stack
+			let mut stack = vec![ShortStateInfo {
+				shortstatehash: current,
+				full_state: Some(added.clone()),
+				added,
+				removed,
+			}];
+
+			// Apply collected diffs in reverse (root-to-leaf) order
+			for (ssh, added, removed) in chain.into_iter().rev() {
+				let top = stack.last_mut().expect("at least one frame");
+				let mut full_state = (**top
+					.full_state
+					.as_ref()
+					.expect("top frame must have full_state"))
+				.clone();
+
+				top.full_state = None;
+
+				full_state.extend(added.iter().copied());
+				let removed_set = (*removed).clone();
+				for r in &removed_set {
+					full_state.remove(r);
+				}
+
+				stack.push(ShortStateInfo {
+					shortstatehash: ssh,
+					added,
+					removed: Arc::new(removed_set),
+					full_state: Some(Arc::new(full_state)),
+				});
+			}
+
+			return Ok(stack);
+		};
+
+		chain.push((current, added, removed));
+		current = parent_hash;
 	}
-
-	stack.push(ShortStateInfo {
-		shortstatehash,
-		added,
-		removed: Arc::new(removed),
-		full_state: Some(Arc::new(full_state)),
-	});
-
-	Ok(stack)
 }
 
 #[implement(Service)]
@@ -515,7 +562,12 @@ pub async fn save_state_as_root(
 	// this avoids the O(depth) chain traversal that causes hangs on large rooms.
 	let (statediffnew, statediffremoved, states_parents) =
 		if let Some(prev) = previous_shortstatehash {
-			if let Some(cached) = self.stateinfo_cache.lock().get_mut(&prev).cloned() {
+			if let Some(cached) = self
+				.stateinfo_cache
+				.lock()
+				.get_mut(&prev)
+				.map(|c| (**c).clone())
+			{
 				// Parent state was already in cache — diff is cheap.
 				let parent = cached.last().expect("at least one frame");
 				let full = parent
