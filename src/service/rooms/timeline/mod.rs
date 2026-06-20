@@ -738,34 +738,6 @@ impl Service {
 		Ok(count)
 	}
 
-	async fn remove_old_timeline_entries(
-		&self,
-		shortroomid: ShortRoomId,
-		sorted: &[OwnedEventId],
-		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
-	) {
-		println!("reorder_timeline: sorted {} events, removing old entries...", sorted.len());
-		let mut cork = Some(self.db.db.cork());
-		for (i, event_id) in sorted.iter().enumerate() {
-			let &(old_count, _) = entries.get(event_id).expect("in sorted list");
-			let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-			self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
-			if i.saturating_add(1).is_multiple_of(2000) {
-				info!(
-					"reorder_timeline: removed {}/{} entries...",
-					i.saturating_add(1),
-					sorted.len()
-				);
-			}
-			if i.saturating_add(1).is_multiple_of(10000) {
-				drop(cork.take());
-				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-				cork = Some(self.db.db.cork());
-			}
-		}
-		drop(cork.take());
-	}
-
 	async fn reinsert_timeline_entries(
 		&self,
 		room_id: &RoomId,
