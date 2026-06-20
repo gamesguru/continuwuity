@@ -595,6 +595,7 @@ pub async fn force_insert_pdu_batch(
 	pdu: &PduEvent,
 	value: &CanonicalJsonObject,
 	backfill: bool,
+	depth_cache: Option<&mut std::collections::HashMap<ruma::OwnedEventId, u64>>,
 ) -> Result<RawPduId> {
 	if self.get_pdu_id(event_id).await.is_ok() {
 		return Err!(Database("PDU {event_id} already in timeline"));
@@ -621,11 +622,11 @@ pub async fn force_insert_pdu_batch(
 
 	if backfill {
 		self.db
-			.prepend_backfill_pdu_batch(batch, &pdu_id, event_id, &value, pdu)
+			.prepend_backfill_pdu_batch(batch, &pdu_id, event_id, &value, pdu, depth_cache)
 			.await;
 	} else {
 		self.db
-			.append_pdu_batch(batch, &pdu_id, pdu, &value, pdu_count)
+			.append_pdu_batch(batch, &pdu_id, pdu, &value, pdu_count, depth_cache)
 			.await;
 	}
 

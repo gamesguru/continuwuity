@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use conduwuit::{Err, Result, err, info, warn};
 use ruma::{
 	CanonicalJsonObject, OwnedEventId, OwnedRoomId, RoomVersionId, events::StateEventType,
@@ -142,6 +144,7 @@ pub(super) async fn import_pdus(
 			let mut chunk_rejected: usize = 0;
 			let mut chunk_failed: usize = 0;
 			let mut batch = self.services.rooms.timeline.db_batch();
+			let mut depth_cache: HashMap<OwnedEventId, u64> = HashMap::new();
 
 			for (eid, value, pdu, is_outlier, is_soft_failed, is_rejected) in chunk {
 				let is_outlier = is_outlier || force;
@@ -241,7 +244,13 @@ pub(super) async fn import_pdus(
 							.rooms
 							.timeline
 							.force_insert_pdu_batch(
-								&mut batch, &room_id, &eid, &pdu, &value, true,
+								&mut batch,
+								&room_id,
+								&eid,
+								&pdu,
+								&value,
+								true,
+								Some(&mut depth_cache),
 							)
 							.await?;
 					} else {

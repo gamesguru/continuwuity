@@ -656,7 +656,7 @@ impl Data {
 		count: PduCount,
 	) {
 		let mut batch = database::rocksdb::WriteBatch::default();
-		self.append_pdu_batch(&mut batch, pdu_id, pdu, json, count)
+		self.append_pdu_batch(&mut batch, pdu_id, pdu, json, count, None)
 			.await;
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
@@ -670,6 +670,7 @@ impl Data {
 		pdu: &PduEvent,
 		json: &CanonicalJsonObject,
 		count: PduCount,
+		mut depth_cache: Option<&mut std::collections::HashMap<OwnedEventId, u64>>,
 	) {
 		debug_assert!(matches!(count, PduCount::Normal(_)), "PduCount not Normal");
 
@@ -696,6 +697,13 @@ impl Data {
 			|| {
 				let mut max_depth = 0;
 				for prev_id in pdu.prev_events() {
+					// Try in-memory cache first, then fall back to DB
+					if let Some(ref cache) = depth_cache {
+						if let Some(&d) = cache.get(&prev_id.to_owned()) {
+							max_depth = max_depth.max(d);
+							continue;
+						}
+					}
 					if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes()) {
 						if let Ok(meta) =
 							bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
@@ -708,6 +716,11 @@ impl Data {
 			},
 			|m| m.local_topological_depth,
 		);
+
+		// Populate depth cache for downstream events
+		if let Some(ref mut cache) = depth_cache {
+			cache.insert(pdu.event_id.clone(), local_topological_depth);
+		}
 
 		let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
 		self.roomid_topologicalorder_pducount
@@ -760,7 +773,7 @@ impl Data {
 		pdu: &PduEvent,
 	) {
 		let mut batch = database::rocksdb::WriteBatch::default();
-		self.prepend_backfill_pdu_batch(&mut batch, pdu_id, event_id, json, pdu)
+		self.prepend_backfill_pdu_batch(&mut batch, pdu_id, event_id, json, pdu, None)
 			.await;
 		self.eventid_pdu.apply_batch(&batch);
 		self.room_pducount_eventid.wake(pdu_id);
@@ -774,6 +787,7 @@ impl Data {
 		event_id: &EventId,
 		json: &CanonicalJsonObject,
 		pdu: &PduEvent,
+		mut depth_cache: Option<&mut std::collections::HashMap<OwnedEventId, u64>>,
 	) {
 		let event_id_bytes = event_id.as_bytes();
 		self.eventid_pduid
@@ -794,6 +808,12 @@ impl Data {
 			|| {
 				let mut max_depth = 0;
 				for prev_id in pdu.prev_events() {
+					if let Some(ref cache) = depth_cache {
+						if let Some(&d) = cache.get(&prev_id.to_owned()) {
+							max_depth = max_depth.max(d);
+							continue;
+						}
+					}
 					if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes()) {
 						if let Ok(meta) =
 							bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
@@ -806,6 +826,10 @@ impl Data {
 			},
 			|m| m.local_topological_depth,
 		);
+
+		if let Some(ref mut cache) = depth_cache {
+			cache.insert(event_id.to_owned(), local_topological_depth);
+		}
 
 		let topo_key = Self::topo_pducount_key(pdu_id, local_topological_depth);
 		self.roomid_topologicalorder_pducount
