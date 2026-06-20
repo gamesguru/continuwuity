@@ -479,46 +479,73 @@ impl Service {
 		});
 		println!("reorder_timeline: sort took {:?}", start.elapsed());
 
-		// Remove old timeline entries (batched cork every 10K avoids giant WriteBatch)
-		let remove_start = std::time::Instant::now();
-		self.remove_old_timeline_entries(shortroomid, &sorted, &entries)
-			.await;
-		println!("reorder_timeline: remove old took {:?}", remove_start.elapsed());
-
-		// Re-insert in topological order with fresh PduCount values
+		// Reindex: remove old keys + insert new keys in a single pass
 		let count = sorted.len();
 		let batch_start = self
 			.services
 			.globals
 			.next_count_batch(u64::try_from(count).unwrap_or(u64::MAX))?;
-		info!(
-			"reorder_timeline: re-inserting {count} events in order (counter range \
-			 {batch_start}..{})...",
-			batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
-		);
-		let reinsert_start = std::time::Instant::now();
-		let final_ssh = self
-			.reinsert_timeline_entries(
-				room_id,
-				shortroomid,
-				&sorted,
-				batch_start,
-				no_compute_state,
-			)
-			.await;
-		println!("reorder_timeline: reinsert took {:?}", reinsert_start.elapsed());
+		let reindex_start = std::time::Instant::now();
+		if no_compute_state {
+			// Fast single-pass: remove old key + reindex with new key together
+			println!(
+				"reorder_timeline: single-pass reindex of {count} events (counter range \
+				 {batch_start}..{})...",
+				batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
+			);
+			let mut cork = Some(self.db.db.cork());
+			for (i, event_id) in sorted.iter().enumerate() {
+				// Remove old timeline key
+				let &(old_count, _) = entries.get(event_id).expect("in sorted list");
+				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
+				self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
 
-		// Update the room's authoritative shortstatehash to match the
-		// recomputed state at the tip. Without this, Room SSH stays stale
-		// and diverges from the tip's SSH.
-		if let Some(ssh) = final_ssh {
-			if ssh != 0 {
-				self.services
-					.state
-					.set_room_state(room_id, ssh, &state_lock);
-				println!("reorder_timeline: updated room shortstatehash to {ssh}");
+				// Insert new timeline key
+				let new_count = batch_start
+					.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
+					.saturating_add(1);
+				let pdu_count = PduCount::Normal(new_count);
+				let new_pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+				self.db
+					.reindex_pdu(&new_pdu_id, event_id, pdu_count.into_unsigned());
+
+				if i.saturating_add(1).is_multiple_of(10000) {
+					drop(cork.take());
+					tokio::task::yield_now().await;
+					cork = Some(self.db.db.cork());
+				}
+			}
+			drop(cork.take());
+			println!("reorder_timeline: single-pass reindex took {:?}", reindex_start.elapsed());
+		} else {
+			// Full mode: single-pass remove old + reinsert with state computation
+			println!(
+				"reorder_timeline: single-pass reindex+state of {count} events (counter range \
+				 {batch_start}..{})...",
+				batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
+			);
+			let final_ssh = self
+				.reinsert_timeline_entries(
+					room_id,
+					shortroomid,
+					&sorted,
+					&entries,
+					batch_start,
+					no_compute_state,
+				)
+				.await;
+			println!("reorder_timeline: single-pass reindex+state took {:?}", reindex_start.elapsed());
+
+			if let Some(ssh) = final_ssh {
+				if ssh != 0 {
+					self.services
+						.state
+						.set_room_state(room_id, ssh, &state_lock);
+					println!("reorder_timeline: updated room shortstatehash to {ssh}");
+				}
 			}
 		}
+
 
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		let final_sync = self.db.db.cork_and_sync();
@@ -742,6 +769,7 @@ impl Service {
 		room_id: &RoomId,
 		shortroomid: ShortRoomId,
 		sorted: &[OwnedEventId],
+		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
 		batch_start: u64,
 		no_compute_state: bool,
 	) -> Option<u64> {
@@ -794,6 +822,12 @@ impl Service {
 
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
+			// Remove old timeline key first
+			if let Some(&(old_count, _)) = entries.get(event_id) {
+				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
+				self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
+			}
+
 			let new_count = batch_start
 				.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
 				.saturating_add(1);
