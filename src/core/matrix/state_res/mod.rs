@@ -207,7 +207,7 @@ where
 	let auth_diff_stream = if stateres_version == StateResolutionVersion::V2_1 {
 		futures::stream::empty().boxed()
 	} else {
-		for state_set in state_sets.into_iter() {
+		for state_set in state_sets {
 			let mut conflicting_for_this_fork = Vec::new();
 			for (key, id) in state_set {
 				if conflicting.contains_key(key) {
@@ -812,7 +812,7 @@ where
 			)
 			.await;
 
-			let ev = local_cache_map.get(&event_id).and_then(|o| o.clone())?;
+			let ev = local_cache_map.get(&event_id).and_then(Clone::clone)?;
 
 			Some((event_id, (pl, ev.origin_server_ts())))
 		})
@@ -909,7 +909,7 @@ where
 
 	for (node, edges) in graph {
 		if let Some(&node_idx) = id_to_index.get(node) {
-			outdegree_counts[node_idx] += edges.len();
+			outdegree_counts[node_idx] = outdegree_counts[node_idx].saturating_add(edges.len());
 
 			for edge in edges {
 				if let Some(&edge_idx) = id_to_index.get(edge) {
@@ -944,9 +944,9 @@ where
 	let mut iter_count: usize = 0;
 	// We remove the oldest node (most incoming edges) and check against all other
 	while let Some(Reverse(item)) = heap.pop() {
-		iter_count += 1;
+		iter_count = iter_count.saturating_add(1);
 		if iter_count.is_multiple_of(1000) {
-			println!("Kahn's pop iter {}", iter_count);
+			println!("Kahn's pop iter {iter_count}");
 		}
 		let node_idx = item.index;
 		sorted.push(index_to_id[node_idx].clone());
@@ -1515,9 +1515,9 @@ where
 	let mut position: usize = 0;
 	let mut walk_iter: usize = 0;
 	while let Some(p) = pl {
-		walk_iter += 1;
+		walk_iter = walk_iter.saturating_add(1);
 		if walk_iter.is_multiple_of(1000) {
-			println!("mainline_sort walk iter {}", walk_iter);
+			println!("mainline_sort walk iter {walk_iter}");
 		}
 		let Some(event) = get!(&p) else {
 			break;
@@ -1589,9 +1589,9 @@ where
 				let mut found_depth = None;
 				let mut walk_iter2: usize = 0;
 				while let Some(c_pl) = current_pl {
-					walk_iter2 += 1;
+					walk_iter2 = walk_iter2.saturating_add(1);
 					if walk_iter2.is_multiple_of(1000) {
-						println!("mainline phase2 walk iter {}", walk_iter2);
+						println!("mainline phase2 walk iter {walk_iter2}");
 					}
 					let current_id = c_pl.event_id().to_owned();
 					if !visited.insert(current_id.clone()) {

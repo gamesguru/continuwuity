@@ -104,9 +104,6 @@ pub(super) async fn import_pdus(
 	.unwrap();
 
 	let total = parsed_pdus.len();
-	let mut inserted: usize = 0;
-	let mut rejected: usize = 0;
-	let mut failed: usize = 0;
 
 	// Cork database writes to batch and sync efficiently on drop
 	let _cork = self.services.db.cork();
@@ -120,156 +117,180 @@ pub(super) async fn import_pdus(
 			.ok(),
 	);
 
-	let mut batch = self.services.rooms.timeline.db_batch();
-	let mut count = 0_usize;
+	use futures::StreamExt;
+	let chunks: Vec<Vec<_>> = parsed_pdus.chunks(5000).map(|c| c.to_vec()).collect();
 
-	for (eid, value, pdu, is_outlier, is_soft_failed, is_rejected) in parsed_pdus {
-		let is_outlier = is_outlier || force;
+	let services = self.services.clone();
+	let room_id_clone = room_id.clone();
+	let origin_clone = origin.clone();
+	let room_version_clone = room_version.clone();
 
-		let (skip_further, eid, value, pdu) = if is_outlier {
-			(true, eid, value, pdu)
-		} else if skip_auth {
-			(false, eid, value, pdu)
-		} else {
-			let (eid, val) = if skip_sig_verify {
-				(eid, value.clone())
-			} else {
-				let mut raw_val = value.clone();
-				if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
-					raw_val.remove("event_id");
+	let results = futures::stream::iter(chunks)
+		.map(|chunk| {
+			let services = services.clone();
+			let room_id = room_id_clone.clone();
+			let origin = origin_clone.clone();
+			let room_version = room_version_clone.clone();
+			let create_event = create_event.clone();
+
+			async move {
+				let mut inserted: usize = 0;
+				let mut rejected: usize = 0;
+				let mut failed: usize = 0;
+				let mut batch = services.rooms.timeline.db_batch();
+
+				for (eid, value, pdu, is_outlier, is_soft_failed, is_rejected) in chunk {
+					let is_outlier = is_outlier || force;
+
+					let (skip_further, eid, value, pdu) = if is_outlier {
+						(true, eid, value, pdu)
+					} else if skip_auth {
+						(false, eid, value, pdu)
+					} else {
+						let (eid, val) = if skip_sig_verify {
+							(eid, value.clone())
+						} else {
+							let mut raw_val = value.clone();
+							if room_version != RoomVersionId::V1
+								&& room_version != RoomVersionId::V2
+							{
+								raw_val.remove("event_id");
+							}
+							let raw = match serde_json::value::RawValue::from_string(
+								serde_json::to_string(&raw_val)
+									.map_err(|e| e.to_string())
+									.unwrap_or_default(),
+							) {
+								| Ok(r) => r,
+								| Err(e) => {
+									warn!("import_pdus insert err: {e}");
+									failed = failed.saturating_add(1);
+									continue;
+								},
+							};
+
+							match services
+								.server_keys
+								.validate_and_add_event_id(&raw, &room_version)
+								.await
+							{
+								| Ok(result) => result,
+								| Err(_) => {
+									(eid, value.clone()) // Will handle as outlier due to failure
+								},
+							}
+						};
+
+						let mut pdu_val = val;
+						if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2
+						{
+							pdu_val.remove("event_id");
+						}
+
+						let handled = services
+							.rooms
+							.event_handler
+							.handle_outlier_pdu(
+								&origin,
+								create_event.as_ref().as_ref(),
+								&eid,
+								&room_id,
+								pdu_val,
+								true,
+								skip_sig_verify,
+								Some(&room_version),
+							)
+							.await;
+
+						match handled {
+							| Ok((new_pdu, _)) => {
+								let new_pdu_event = new_pdu.clone();
+								(false, eid, value, new_pdu_event)
+							},
+							| Err(_) => {
+								// If failed, treat as outlier
+								(true, eid, value, pdu)
+							},
+						}
+					};
+
+					let insert_result: Result<(OwnedEventId, bool)> = async {
+						if skip_further && is_outlier {
+							services
+								.rooms
+								.outlier
+								.add_pdu_outlier(&eid, &value, Some(&room_id));
+							return Ok((eid.clone(), true));
+						}
+						if force {
+							if let Ok(pdu_id) = services.rooms.timeline.get_pdu_id(&eid).await {
+								services
+									.rooms
+									.timeline
+									.replace_pdu(&pdu_id, &value, &eid)
+									.await?;
+								return Ok((eid.clone(), true));
+							}
+						}
+						if skip_auth {
+							services
+								.rooms
+								.timeline
+								.force_insert_pdu_batch(
+									&mut batch, &room_id, &eid, &pdu, &value, true,
+								)
+								.await?;
+						} else {
+							services
+								.rooms
+								.timeline
+								.promote_outlier(&room_id, &eid)
+								.await?;
+						}
+
+						Ok((eid.clone(), true))
+					}
+					.await;
+
+					match insert_result {
+						| Ok((eid, true)) => {
+							inserted = inserted.saturating_add(1);
+							if is_soft_failed {
+								services.rooms.pdu_metadata.mark_event_soft_failed(&eid);
+							}
+							if is_rejected {
+								services.rooms.pdu_metadata.mark_event_rejected(&eid);
+							}
+						},
+						| Ok((_eid, false)) => {
+							rejected = rejected.saturating_add(1);
+						},
+						| Err(e) => {
+							warn!("import_pdus insert err: {e}");
+							failed = failed.saturating_add(1);
+						},
+					}
 				}
-				let raw = match serde_json::value::RawValue::from_string(
-					serde_json::to_string(&raw_val)
-						.map_err(|e| e.to_string())
-						.unwrap_or_default(),
-				) {
-					| Ok(r) => r,
-					| Err(e) => {
-						warn!("import_pdus insert err: {e}");
-						failed = failed.saturating_add(1);
-						continue;
-					},
-				};
 
-				match self
-					.services
-					.server_keys
-					.validate_and_add_event_id(&raw, &room_version)
-					.await
-				{
-					| Ok(result) => result,
-					| Err(_) => {
-						(eid, value.clone()) // Will handle as outlier due to failure
-					},
-				}
-			};
-
-			let mut pdu_val = val;
-			if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
-				pdu_val.remove("event_id");
+				services.rooms.timeline.db_apply_batch(&batch);
+				info!(
+					"Finished a chunk: {inserted} inserted, {rejected} rejected, {failed} failed"
+				);
+				(inserted, rejected, failed)
 			}
-
-			let handled = self
-				.services
-				.rooms
-				.event_handler
-				.handle_outlier_pdu(
-					&origin,
-					create_event.as_ref().as_ref(),
-					&eid,
-					&room_id,
-					pdu_val,
-					true,
-					skip_sig_verify,
-					Some(&room_version),
-				)
-				.await;
-
-			match handled {
-				| Ok((new_pdu, _)) => {
-					let new_pdu_event = new_pdu.clone();
-					(false, eid, value, new_pdu_event)
-				},
-				| Err(_) => {
-					// If failed, treat as outlier
-					(true, eid, value, pdu)
-				},
-			}
-		};
-
-		let insert_result: Result<(OwnedEventId, bool)> = async {
-			if skip_further && is_outlier {
-				self.services
-					.rooms
-					.outlier
-					.add_pdu_outlier(&eid, &value, Some(&room_id));
-				return Ok((eid.clone(), true));
-			}
-			if force {
-				if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&eid).await {
-					self.services
-						.rooms
-						.timeline
-						.replace_pdu(&pdu_id, &value, &eid)
-						.await?;
-					return Ok((eid.clone(), true));
-				}
-			}
-			if skip_auth {
-				self.services
-					.rooms
-					.timeline
-					.force_insert_pdu_batch(&mut batch, &room_id, &eid, &pdu, &value, true)
-					.await?;
-				count = count.saturating_add(1);
-				if count >= 10000 {
-					self.services.rooms.timeline.db_apply_batch(&batch);
-					batch = self.services.rooms.timeline.db_batch();
-					count = 0;
-				}
-			} else {
-				self.services
-					.rooms
-					.timeline
-					.promote_outlier(&room_id, &eid)
-					.await?;
-			}
-
-			Ok((eid.clone(), true))
-		}
+		})
+		.buffer_unordered(32)
+		.collect::<Vec<_>>()
 		.await;
 
-		match insert_result {
-			| Ok((eid, true)) => {
-				inserted = inserted.saturating_add(1);
-				if is_soft_failed {
-					self.services
-						.rooms
-						.pdu_metadata
-						.mark_event_soft_failed(&eid);
-				}
-				if is_rejected {
-					self.services.rooms.pdu_metadata.mark_event_rejected(&eid);
-				}
-			},
-			| Ok((_eid, false)) => {
-				rejected = rejected.saturating_add(1);
-			},
-			| Err(e) => {
-				warn!("import_pdus insert err: {e}");
-				failed = failed.saturating_add(1);
-			},
-		}
-
-		let done = inserted.saturating_add(rejected).saturating_add(failed);
-		if done.is_multiple_of(5000) {
-			info!(
-				"import_pdus: {done}/{total} ({inserted} ok, {rejected} rejected, {failed} err)"
-			);
-		}
+	let mut inserted: usize = 0;
+	let mut rejected: usize = 0;
+	let mut failed: usize = 0;
+	for (ins, rej, fai) in results {
+		inserted = inserted.saturating_add(ins);
+		rejected = rejected.saturating_add(rej);
+		failed = failed.saturating_add(fai);
 	}
-
-	self.services.rooms.timeline.db_apply_batch(&batch);
 
 	let (_, num_true) = self
 		.services
