@@ -99,10 +99,10 @@ pub async fn resolve_state(
 		.await?;
 	info!(%room_id, n_resolved = state.len(), elapsed = ?t.elapsed(), "state_res: resolution complete");
 
-	// Diagnostic: log resolved PL
+	// Diagnostic: log resolved PL and JoinRules
 	for ((ty, sk), eid) in &state {
-		if ty.to_string() == "m.room.power_levels" {
-			info!("resolve_state RESULT PL ({ty},{sk}) => {eid}");
+		if ty.to_string() == "m.room.power_levels" || ty.to_string() == "m.room.join_rules" {
+			info!("resolve_state RESULT ({ty},{sk}) => {eid}");
 		}
 	}
 	trace!("State resolution done.");

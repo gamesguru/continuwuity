@@ -402,7 +402,29 @@ where
 				warn!(%pl_event_id, "failed to fetch global PL event");
 			}
 		} else {
-			warn!("no global PL event found in partially resolved PL state");
+			// PL is unconflicted (same event in all forks), so the sub-resolve
+			// step found no PL events to process.  Fall back to the unconflicted
+			// PL event so the power sort has real power data instead of defaults.
+			let unconflicted_pl = unconflicted.get(&power_levels_ty_sk);
+			if let Some(pl_event_id) = unconflicted_pl {
+				debug!(%pl_event_id, "PL is unconflicted; using as global PL context");
+				if let Some(pl_event) = cached_fetch(pl_event_id.clone()).await {
+					if let Ok(mut c) =
+						from_json_str::<PowerLevelsContentFields>(pl_event.content().get())
+					{
+						if room_version.explicitly_privilege_room_creators {
+							inject_privileged_creators(&mut c, &unconflicted, &cached_fetch)
+								.await;
+						}
+						global_pl_context = Some(c);
+					}
+				}
+			} else {
+				warn!(
+					n_unconflicted = unconflicted.len(),
+					"no global PL event in partially resolved PL or unconflicted state"
+				);
+			}
 		}
 	}
 
@@ -529,10 +551,12 @@ where
 	// admin's event can overwrite the creator's. Post-process to restore
 	// creator events as winners for any conflicted state key.
 	if let Some(ref conflicting_map) = conflicting_for_msc4289 {
+		info!(n_conflicting_keys = conflicting_map.len(), "MSC4289: post-processing conflicting map");
 		let create_ty_sk = (StateEventType::RoomCreate, StateKey::new());
 		if let Some(create_id) = unconflicted.get(&create_ty_sk) {
 			if let Some(create_ev) = cached_fetch(create_id.clone()).await {
 				let creator = create_ev.sender().to_owned();
+				info!(%creator, "MSC4289: creator identified");
 
 				// For each conflicted state key, check if a creator's event was a candidate
 				for (key, candidate_ids) in conflicting_map {
@@ -548,7 +572,8 @@ where
 					for id in candidate_ids {
 						let eid: OwnedEventId = id.clone();
 						if let Some(ev) = cached_fetch(eid).await {
-							if ev.sender() == creator {
+						info!(state_key = ?key, %id, sender = %ev.sender(), %creator, "MSC4289: checking candidate");
+						if ev.sender() == creator {
 								creator_event_id = Some(id.clone());
 								break;
 							}
@@ -559,7 +584,7 @@ where
 						// override with the creator's event
 						if let Some(current) = resolved_state.get(key) {
 							if *current != creator_eid {
-								debug!(
+								info!(
 									state_key = ?key,
 									creator_event = %creator_eid,
 									overridden = %current,
