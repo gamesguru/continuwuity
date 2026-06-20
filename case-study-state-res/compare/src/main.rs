@@ -340,14 +340,19 @@ async fn run_state_sets_mode(
 
 	// Build auth chain sets
 	let state_sets = vec![state_map_a, state_map_b];
-	let mut auth_chain_sets = Vec::new();
-	for map in &state_sets {
+
+	let fetch_event = |event_id: OwnedEventId| {
+		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
+	};
+
+	let events_map_ref = &events_map;
+	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {
 		let mut auth_chain = HashSet::new();
-		let mut stack: Vec<OwnedEventId> = map.values().cloned().collect();
+		let mut stack = events;
 		let mut visited = HashSet::new();
 		while let Some(ev_id) = stack.pop() {
 			if visited.insert(ev_id.clone())
-				&& let Some(ev) = events_map.get(&ev_id)
+				&& let Some(ev) = events_map_ref.get(&ev_id)
 			{
 				auth_chain.insert(ev_id.clone());
 				for auth_id in &ev.auth_events {
@@ -355,20 +360,16 @@ async fn run_state_sets_mode(
 				}
 			}
 		}
-		auth_chain_sets.push(auth_chain);
-	}
-
-	let fetch_event = |event_id: OwnedEventId| {
-		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
+		auth_chain
 	};
 
 	println!("Resolving state with room version {:?}...", room_version);
 	let conduwuit_resolved = state_res::resolve(
 		room_version,
 		&state_sets,
-		&auth_chain_sets,
-		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<Pdu>>>,
 		&fetch_event,
+		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<Pdu>>>,
+		&auth_chain_fetch,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await
@@ -448,14 +449,18 @@ async fn run_dag_mode(
 	}
 
 	// Build auth chain sets
-	let mut auth_chain_sets = Vec::new();
-	for map in &state_sets {
+	let fetch_event = |event_id: OwnedEventId| {
+		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
+	};
+
+	let events_map_ref = &events_map;
+	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {
 		let mut auth_chain = HashSet::new();
-		let mut stack: Vec<OwnedEventId> = map.values().cloned().collect();
+		let mut stack = events;
 		let mut visited = HashSet::new();
 		while let Some(ev_id) = stack.pop() {
 			if visited.insert(ev_id.clone())
-				&& let Some(ev) = events_map.get(&ev_id)
+				&& let Some(ev) = events_map_ref.get(&ev_id)
 			{
 				auth_chain.insert(ev_id.clone());
 				for auth_id in &ev.auth_events {
@@ -463,29 +468,16 @@ async fn run_dag_mode(
 				}
 			}
 		}
-		auth_chain_sets.push(auth_chain);
-	}
-
-	println!("State sets: {} heads", state_sets.len());
-	for (i, s) in state_sets.iter().enumerate() {
-		if state_sets.len() <= 10 || i < 3 || i >= state_sets.len() - 2 {
-			println!("  state_set[{}]: {} entries", i, s.len());
-		} else if i == 3 {
-			println!("  ...");
-		}
-	}
-
-	let fetch_event = |event_id: OwnedEventId| {
-		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
+		auth_chain
 	};
 
 	println!("Resolving state with room version {:?}...", room_version);
 	let conduwuit_resolved = state_res::resolve(
 		room_version,
 		&state_sets,
-		&auth_chain_sets,
-		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<Pdu>>>,
 		&fetch_event,
+		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<Pdu>>>,
+		&auth_chain_fetch,
 		None::<&fn(Vec<OwnedEventId>)>,
 	)
 	.await

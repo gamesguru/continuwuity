@@ -1,5 +1,4 @@
 use std::{
-	borrow::Borrow,
 	collections::{HashMap, HashSet},
 	iter::Iterator,
 };
@@ -8,15 +7,10 @@ use conduwuit::{
 	Result, debug, err, implement,
 	matrix::{Event, StateMap},
 	trace,
-	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, TryWidebandExt},
+	utils::stream::{IterStream, TryBroadbandExt},
 };
-use futures::{
-	FutureExt, StreamExt, TryFutureExt, TryStreamExt,
-	future::{ready, try_join},
-};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::ready};
 use ruma::{OwnedEventId, RoomId, RoomVersionId};
-
-use crate::rooms::short::ShortStateHash;
 
 // TODO: if we know the prev_events of the incoming event we can avoid the
 // request and build the state from a known point and resolve if > 1 prev_event
@@ -245,10 +239,7 @@ where
 		if let Ok(ssk) = self
 			.services
 			.short
-			.get_shortstatekey(
-				&ruma::events::StateEventType::RoomMember,
-				&pdu.sender().to_string(),
-			)
+			.get_shortstatekey(&ruma::events::StateEventType::RoomMember, pdu.sender().as_ref())
 			.await
 		{
 			auth_ssks.insert(ssk);
@@ -340,7 +331,7 @@ where
 		}
 	}
 
-	for ((ty, sk), eid) in resolved_partial.into_iter() {
+	for ((ty, sk), eid) in resolved_partial {
 		let ssk = self
 			.services
 			.short

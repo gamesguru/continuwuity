@@ -8,10 +8,10 @@ use conduwuit::{
 	Error, Result, err, implement, info,
 	state_res::{self, StateMap},
 	trace,
-	utils::stream::{IterStream, ReadyExt, TryWidebandExt, WidebandExt},
+	utils::stream::{IterStream, ReadyExt, WidebandExt},
 	warn,
 };
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use ruma::{OwnedEventId, RoomId, RoomVersionId};
 
 use crate::rooms::state_compressor::CompressedState;
@@ -216,7 +216,7 @@ where
 		self.services
 			.auth_chain
 			.event_ids_iter(room_id, events.iter().map(|id| &**id))
-			.try_collect::<std::collections::HashSet<OwnedEventId>>()
+			.try_collect::<HashSet<OwnedEventId>>()
 			.await
 			.unwrap_or_default()
 	};
