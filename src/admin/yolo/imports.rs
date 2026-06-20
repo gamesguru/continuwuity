@@ -120,177 +120,161 @@ pub(super) async fn import_pdus(
 	use futures::StreamExt;
 	let chunks: Vec<Vec<_>> = parsed_pdus.chunks(5000).map(|c| c.to_vec()).collect();
 
-	let services = self.services.clone();
-	let room_id_clone = room_id.clone();
-	let origin_clone = origin.clone();
-	let room_version_clone = room_version.clone();
+	let inserted = std::sync::atomic::AtomicUsize::new(0);
+	let rejected = std::sync::atomic::AtomicUsize::new(0);
+	let failed = std::sync::atomic::AtomicUsize::new(0);
 
-	let results = futures::stream::iter(chunks)
-		.map(|chunk| {
-			let services = services.clone();
-			let room_id = room_id_clone.clone();
-			let origin = origin_clone.clone();
-			let room_version = room_version_clone.clone();
-			let create_event = create_event.clone();
+	futures::stream::iter(chunks)
+		.for_each_concurrent(16, |chunk| async {
+			let mut chunk_inserted: usize = 0;
+			let mut chunk_rejected: usize = 0;
+			let mut chunk_failed: usize = 0;
+			let mut batch = self.services.rooms.timeline.db_batch();
 
-			async move {
-				let mut inserted: usize = 0;
-				let mut rejected: usize = 0;
-				let mut failed: usize = 0;
-				let mut batch = services.rooms.timeline.db_batch();
+			for (eid, value, pdu, is_outlier, is_soft_failed, is_rejected) in chunk {
+				let is_outlier = is_outlier || force;
 
-				for (eid, value, pdu, is_outlier, is_soft_failed, is_rejected) in chunk {
-					let is_outlier = is_outlier || force;
-
-					let (skip_further, eid, value, pdu) = if is_outlier {
-						(true, eid, value, pdu)
-					} else if skip_auth {
-						(false, eid, value, pdu)
+				let (skip_further, eid, value, pdu) = if is_outlier {
+					(true, eid, value, pdu)
+				} else if skip_auth {
+					(false, eid, value, pdu)
+				} else {
+					let (eid, val) = if skip_sig_verify {
+						(eid, value.clone())
 					} else {
-						let (eid, val) = if skip_sig_verify {
-							(eid, value.clone())
-						} else {
-							let mut raw_val = value.clone();
-							if room_version != RoomVersionId::V1
-								&& room_version != RoomVersionId::V2
-							{
-								raw_val.remove("event_id");
-							}
-							let raw = match serde_json::value::RawValue::from_string(
-								serde_json::to_string(&raw_val)
-									.map_err(|e| e.to_string())
-									.unwrap_or_default(),
-							) {
-								| Ok(r) => r,
-								| Err(e) => {
-									warn!("import_pdus insert err: {e}");
-									failed = failed.saturating_add(1);
-									continue;
-								},
-							};
-
-							match services
-								.server_keys
-								.validate_and_add_event_id(&raw, &room_version)
-								.await
-							{
-								| Ok(result) => result,
-								| Err(_) => {
-									(eid, value.clone()) // Will handle as outlier due to failure
-								},
-							}
+						let mut raw_val = value.clone();
+						if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
+							raw_val.remove("event_id");
+						}
+						let raw = match serde_json::value::RawValue::from_string(
+							serde_json::to_string(&raw_val)
+								.map_err(|e| e.to_string())
+								.unwrap_or_default(),
+						) {
+							| Ok(r) => r,
+							| Err(e) => {
+								warn!("import_pdus insert err: {e}");
+								chunk_failed = chunk_failed.saturating_add(1);
+								continue;
+							},
 						};
 
-						let mut pdu_val = val;
-						if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2
+						match self
+							.services
+							.server_keys
+							.validate_and_add_event_id(&raw, &room_version)
+							.await
 						{
-							pdu_val.remove("event_id");
-						}
-
-						let handled = services
-							.rooms
-							.event_handler
-							.handle_outlier_pdu(
-								&origin,
-								create_event.as_ref().as_ref(),
-								&eid,
-								&room_id,
-								pdu_val,
-								true,
-								skip_sig_verify,
-								Some(&room_version),
-							)
-							.await;
-
-						match handled {
-							| Ok((new_pdu, _)) => {
-								let new_pdu_event = new_pdu.clone();
-								(false, eid, value, new_pdu_event)
-							},
+							| Ok(result) => result,
 							| Err(_) => {
-								// If failed, treat as outlier
-								(true, eid, value, pdu)
+								(eid, value.clone()) // Will handle as outlier due to failure
 							},
 						}
 					};
 
-					let insert_result: Result<(OwnedEventId, bool)> = async {
-						if skip_further && is_outlier {
-							services
+					let mut pdu_val = val;
+					if room_version != RoomVersionId::V1 && room_version != RoomVersionId::V2 {
+						pdu_val.remove("event_id");
+					}
+
+					let handled = self
+						.services
+						.rooms
+						.event_handler
+						.handle_outlier_pdu(
+							&origin,
+							create_event.as_ref().as_ref(),
+							&eid,
+							&room_id,
+							pdu_val,
+							true,
+							skip_sig_verify,
+							Some(&room_version),
+						)
+						.await;
+
+					match handled {
+						| Ok((new_pdu, _)) => {
+							let new_pdu_event = new_pdu.clone();
+							(false, eid, value, new_pdu_event)
+						},
+						| Err(_) => {
+							// If failed, treat as outlier
+							(true, eid, value, pdu)
+						},
+					}
+				};
+
+				let insert_result: Result<(OwnedEventId, bool)> = async {
+					if skip_further && is_outlier {
+						self.services
+							.rooms
+							.outlier
+							.add_pdu_outlier(&eid, &value, Some(&room_id));
+						return Ok((eid.clone(), true));
+					}
+					if force {
+						if let Ok(pdu_id) = self.services.rooms.timeline.get_pdu_id(&eid).await {
+							self.services
 								.rooms
-								.outlier
-								.add_pdu_outlier(&eid, &value, Some(&room_id));
+								.timeline
+								.replace_pdu(&pdu_id, &value, &eid)
+								.await?;
 							return Ok((eid.clone(), true));
 						}
-						if force {
-							if let Ok(pdu_id) = services.rooms.timeline.get_pdu_id(&eid).await {
-								services
-									.rooms
-									.timeline
-									.replace_pdu(&pdu_id, &value, &eid)
-									.await?;
-								return Ok((eid.clone(), true));
-							}
-						}
-						if skip_auth {
-							services
-								.rooms
-								.timeline
-								.force_insert_pdu_batch(
-									&mut batch, &room_id, &eid, &pdu, &value, true,
-								)
-								.await?;
-						} else {
-							services
-								.rooms
-								.timeline
-								.promote_outlier(&room_id, &eid)
-								.await?;
-						}
-
-						Ok((eid.clone(), true))
 					}
-					.await;
-
-					match insert_result {
-						| Ok((eid, true)) => {
-							inserted = inserted.saturating_add(1);
-							if is_soft_failed {
-								services.rooms.pdu_metadata.mark_event_soft_failed(&eid);
-							}
-							if is_rejected {
-								services.rooms.pdu_metadata.mark_event_rejected(&eid);
-							}
-						},
-						| Ok((_eid, false)) => {
-							rejected = rejected.saturating_add(1);
-						},
-						| Err(e) => {
-							warn!("import_pdus insert err: {e}");
-							failed = failed.saturating_add(1);
-						},
+					if skip_auth {
+						self.services
+							.rooms
+							.timeline
+							.force_insert_pdu_batch(&mut batch, &room_id, &eid, &pdu, &value, true)
+							.await?;
+					} else {
+						self.services
+							.rooms
+							.timeline
+							.promote_outlier(&room_id, &eid)
+							.await?;
 					}
+
+					Ok((eid.clone(), true))
 				}
+				.await;
 
-				services.rooms.timeline.db_apply_batch(&batch);
-				info!(
-					"Finished a chunk: {inserted} inserted, {rejected} rejected, {failed} failed"
-				);
-				(inserted, rejected, failed)
+				match insert_result {
+					| Ok((eid, true)) => {
+						chunk_inserted = chunk_inserted.saturating_add(1);
+						if is_soft_failed {
+							self.services
+								.rooms
+								.pdu_metadata
+								.mark_event_soft_failed(&eid);
+						}
+						if is_rejected {
+							self.services.rooms.pdu_metadata.mark_event_rejected(&eid);
+						}
+					},
+					| Ok((_eid, false)) => {
+						chunk_rejected = chunk_rejected.saturating_add(1);
+					},
+					| Err(e) => {
+						warn!("import_pdus insert err: {e}");
+						chunk_failed = chunk_failed.saturating_add(1);
+					},
+				}
 			}
+
+			self.services.rooms.timeline.db_apply_batch(&batch);
+			info!("Finished a chunk: {chunk_inserted} inserted, {chunk_rejected} rejected, {chunk_failed} failed");
+			inserted.fetch_add(chunk_inserted, std::sync::atomic::Ordering::Relaxed);
+			rejected.fetch_add(chunk_rejected, std::sync::atomic::Ordering::Relaxed);
+			failed.fetch_add(chunk_failed, std::sync::atomic::Ordering::Relaxed);
 		})
-		.buffer_unordered(32)
-		.collect::<Vec<_>>()
 		.await;
 
-	let mut inserted: usize = 0;
-	let mut rejected: usize = 0;
-	let mut failed: usize = 0;
-	for (ins, rej, fai) in results {
-		inserted = inserted.saturating_add(ins);
-		rejected = rejected.saturating_add(rej);
-		failed = failed.saturating_add(fai);
-	}
+	let inserted = inserted.load(std::sync::atomic::Ordering::Relaxed);
+	let rejected = rejected.load(std::sync::atomic::Ordering::Relaxed);
+	let failed = failed.load(std::sync::atomic::Ordering::Relaxed);
 
 	let (_, num_true) = self
 		.services

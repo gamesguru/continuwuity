@@ -10,6 +10,7 @@ pub(super) async fn reorder_timeline(
 	room_id: Option<OwnedRoomId>,
 	all: bool,
 	tail: Option<usize>,
+	no_compute_state: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -30,7 +31,7 @@ pub(super) async fn reorder_timeline(
 				self.services
 					.rooms
 					.timeline
-					.reorder_timeline(&room_id, None, false),
+					.reorder_timeline(&room_id, None, no_compute_state),
 			)
 			.await
 			.is_ok()
@@ -54,7 +55,7 @@ pub(super) async fn reorder_timeline(
 		let count = Box::pin(self.services.rooms.timeline.reorder_timeline(
 			&room_id,
 			Some(n),
-			false,
+			no_compute_state,
 		))
 		.await?;
 		return self
@@ -71,7 +72,7 @@ pub(super) async fn reorder_timeline(
 		self.services
 			.rooms
 			.timeline
-			.reorder_timeline(&room_id, None, false),
+			.reorder_timeline(&room_id, None, no_compute_state),
 	)
 	.await?;
 

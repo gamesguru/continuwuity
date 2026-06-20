@@ -375,7 +375,6 @@ pub fn save_state_from_diff(
 /// Returns the new shortstatehash, and the state diff from the previous
 /// room state
 #[implement(Service)]
-#[tracing::instrument(skip(self, new_state_ids_compressed), level = "debug")]
 pub async fn save_state(
 	&self,
 	room_id: &RoomId,
@@ -387,7 +386,20 @@ pub async fn save_state(
 		.get_room_shortstatehash(room_id)
 		.await
 		.ok();
+		
+	self.save_state_with_parent(room_id, previous_shortstatehash, new_state_ids_compressed).await
+}
 
+/// Returns the new shortstatehash, and the state diff from the previous
+/// room state
+#[implement(Service)]
+#[tracing::instrument(skip(self, new_state_ids_compressed), level = "debug")]
+pub async fn save_state_with_parent(
+	&self,
+	room_id: &RoomId,
+	previous_shortstatehash: Option<ShortStateHash>,
+	new_state_ids_compressed: Arc<CompressedState>,
+) -> Result<HashSetCompressStateEvent> {
 	let state_hash =
 		utils::calculate_hash(new_state_ids_compressed.iter().map(|bytes| &bytes[..]));
 

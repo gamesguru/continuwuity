@@ -955,8 +955,7 @@ impl Service {
 
 		let mut stream = std::pin::pin!(self.pdus(room_id, None));
 		let mut current_shortstatehash = 0;
-		let mut last_added = Arc::new(BTreeSet::new());
-		let mut last_removed = Arc::new(BTreeSet::new());
+		let original_room_shortstatehash = self.services.state.get_room_shortstatehash(room_id).await.ok();
 		// Load all timeline events into memory for topological sort
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let mut events: HashMap<OwnedEventId, PduEvent> = HashMap::new();
@@ -1062,15 +1061,30 @@ impl Service {
 							.compress_state_events(state_after.iter().map(|(k, id)| (k, &**id)))
 							.collect()
 							.await;
-						let state_delta = self
-							.services
-							.state_compressor
-							.save_state(room_id, Arc::new(compressed_state))
-							.await?;
+						let mut matched_ssh = None;
+						for &prev_ssh in &unique_sshs {
+							if let Ok(info) = self.services.state_compressor.load_shortstatehash_info(prev_ssh).await {
+								if let Some(parent_info) = info.last() {
+									if let Some(parent_state) = &parent_info.full_state {
+										if **parent_state == compressed_state {
+											matched_ssh = Some(prev_ssh);
+											break;
+										}
+									}
+								}
+							}
+						}
 
-						last_added = state_delta.added.clone();
-						last_removed = state_delta.removed.clone();
-						let ssh = state_delta.shortstatehash;
+						let ssh = if let Some(matched) = matched_ssh {
+							matched
+						} else {
+							let state_delta = self
+								.services
+								.state_compressor
+								.save_state_with_parent(room_id, Some(unique_sshs[0]), Arc::new(compressed_state))
+								.await?;
+							state_delta.shortstatehash
+						};
 						resolved_state_cache.insert(unique_sshs, ssh);
 						ssh
 					}
@@ -1120,12 +1134,10 @@ impl Service {
 							new_ssh,
 							Arc::new(statediffnew.clone()),
 							Arc::new(statediffremoved.clone()),
-							1_000_000, // diff_to_sibling
+							2, // diff_to_sibling
 							states_parents,
 						);
 						state_after = new_ssh;
-						last_added = Arc::new(statediffnew);
-						last_removed = Arc::new(statediffremoved);
 					}
 				}
 			}
@@ -1151,6 +1163,21 @@ impl Service {
 			"rebuild_state: finished processing {processed} events. Updating room state pointer."
 		);
 
+		let (total_added, total_removed) = if let Some(old_ssh) = original_room_shortstatehash {
+			let old_info = self.services.state_compressor.load_shortstatehash_info(old_ssh).await.unwrap_or_default();
+			let new_info = self.services.state_compressor.load_shortstatehash_info(current_shortstatehash).await.unwrap_or_default();
+			let empty = BTreeSet::new();
+			let old_full = old_info.last().and_then(|info| info.full_state.as_ref()).map(|a| &**a).unwrap_or(&empty);
+			let new_full = new_info.last().and_then(|info| info.full_state.as_ref()).map(|a| &**a).unwrap_or(&empty);
+			let added: BTreeSet<_> = new_full.difference(old_full).copied().collect();
+			let removed: BTreeSet<_> = old_full.difference(new_full).copied().collect();
+			(Arc::new(added), Arc::new(removed))
+		} else {
+			let new_info = self.services.state_compressor.load_shortstatehash_info(current_shortstatehash).await.unwrap_or_default();
+			let new_full = new_info.last().and_then(|info| info.full_state.as_ref()).cloned().unwrap_or_default();
+			(new_full, Arc::new(BTreeSet::new()))
+		};
+
 		// Now we must update the room's global state to match the final calculated
 		// state
 		let state_lock = self.services.state.mutex.lock(room_id).await;
@@ -1159,8 +1186,8 @@ impl Service {
 			.force_state_quiet(
 				room_id,
 				current_shortstatehash,
-				last_added,
-				last_removed,
+				total_added,
+				total_removed,
 				&state_lock,
 			)
 			.await?;

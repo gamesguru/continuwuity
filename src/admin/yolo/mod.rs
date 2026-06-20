@@ -251,6 +251,11 @@ pub enum YoloCommand {
 		/// When omitted, the full timeline is reordered.
 		#[arg(long)]
 		tail: Option<usize>,
+
+		/// If set, do not compute state during timeline re-insertion.
+		/// Use this if you are going to run `yolo rebuild-state` afterwards.
+		#[arg(long)]
+		no_compute_state: bool,
 	},
 
 	/// Incrementally rebuild the state of the room from the beginning of the

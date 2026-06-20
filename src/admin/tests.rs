@@ -779,7 +779,7 @@ async fn test_yolo_reorder_timeline() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reorder-timeline {room_id}"),
+			format!("yolo reorder-timeline {room_id} --no-compute-state"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
@@ -906,7 +906,7 @@ async fn test_busted_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reorder-timeline {room_id}"),
+			format!("yolo reorder-timeline {room_id} --no-compute-state"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
@@ -1074,7 +1074,7 @@ async fn test_unredacted_room_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reorder-timeline {room_id}"),
+			format!("yolo reorder-timeline {room_id} --no-compute-state"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
@@ -1252,7 +1252,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reorder-timeline {room_id}"),
+			format!("yolo reorder-timeline {room_id} --no-compute-state"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
@@ -1483,7 +1483,7 @@ async fn test_nheko_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reorder-timeline {room_id}"),
+			format!("yolo reorder-timeline {room_id} --no-compute-state"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
