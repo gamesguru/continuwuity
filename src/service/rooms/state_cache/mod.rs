@@ -511,22 +511,26 @@ pub fn rooms_invited<'a>(
 
 /// Returns an iterator over all rooms a user is currently knocking.
 #[implement(Service)]
-#[tracing::instrument(skip(self), level = "trace")]
+#[tracing::instrument(skip(self), level = "debug")]
 pub fn rooms_knocked<'a>(
 	&'a self,
 	user_id: &'a UserId,
 ) -> impl Stream<Item = StrippedStateEventItem> + Send + 'a {
-	type KeyVal<'a> = (Key<'a>, Raw<Vec<AnyStrippedStateEvent>>);
 	type Key<'a> = (&'a UserId, &'a RoomId);
 
-	let prefix = (user_id, Interfix);
 	self.db
 		.userroomid_knockedstate
-		.stream_prefix(&prefix)
+		.keys::<Key<'_>>()
 		.ignore_err()
-		.map(|((_, room_id), state): KeyVal<'_>| (room_id.to_owned(), state))
-		.map(|(room_id, state)| Ok((room_id, state.deserialize_as()?)))
-		.ignore_err()
+		.ready_filter(move |(uid, _)| *uid == user_id)
+		.map(|(_, room_id)| room_id.to_owned())
+		.then(move |room_id| async move {
+			self.knock_state(user_id, &room_id)
+				.await
+				.ok()
+				.map(|events| (room_id, events))
+		})
+		.ready_filter_map(|item| item)
 }
 
 #[implement(Service)]
