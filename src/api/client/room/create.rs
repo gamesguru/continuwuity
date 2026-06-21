@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Error, Result, RoomVersion, debug, debug_info, err, info,
+	Err, Result, RoomVersion, debug, debug_info, err, info,
 	matrix::{StateKey, pdu::PduBuilder},
 	trace, warn,
 };
@@ -462,7 +462,7 @@ pub(crate) async fn create_room_route(
 			.boxed()
 			.await
 		{
-			| Err(Error::Request(ruma::api::client::error::ErrorKind::Forbidden { .. }, ..)) => {
+			| Err(e) if matches!(e.kind(), ruma::api::client::error::ErrorKind::Forbidden { .. }) => {
 				// Silently skip forbidden events
 				continue;
 			},

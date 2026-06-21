@@ -31,21 +31,24 @@ pub(crate) async fn worker(service: &Service) -> Result<()> {
 		.map_err(|_| err!(Err("Attempted to launch multiple instances of the worker")))?;
 	let receiver = queue.receiver.clone();
 
-	let mut scheduled_events = service.scheduled_events.lock().await;
 	let mut stream = service
 		.db
 		.delayid_scheduleddelayedevent
 		.stream::<'_, String, ScheduledDelayedEvent>()
 		.ignore_err();
 
+	let mut loaded_events = Vec::new();
+
 	while let Some((delay_id, event)) = stream.next().await {
 		let submission_time = event.running_since + event.delay;
 		queue
 			.queue
 			.push((Reverse(submission_time), delay_id.clone()));
-		scheduled_events.insert(delay_id);
+		loaded_events.push(delay_id);
 	}
 
+	let mut scheduled_events = service.scheduled_events.lock().await;
+	scheduled_events.extend(loaded_events);
 	drop(scheduled_events);
 
 	// work loop
@@ -55,7 +58,8 @@ pub(crate) async fn worker(service: &Service) -> Result<()> {
 			break;
 		}
 
-		let mem_usage = queue.queue.len() * (DELAY_ID_SIZE + size_of::<SystemTime>());
+		let item_size = DELAY_ID_SIZE.saturating_add(size_of::<SystemTime>());
+		let mem_usage = queue.queue.len().saturating_mul(item_size);
 		service.mem_usage.store(mem_usage, Ordering::Relaxed);
 
 		// NOTE: If a new event with an earlier submission time is pushed to the
