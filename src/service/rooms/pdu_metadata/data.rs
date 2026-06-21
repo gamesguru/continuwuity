@@ -26,7 +26,6 @@ pub(super) struct Data {
 	tofrom_relation: Arc<Map>,
 	referencedevents: Arc<Map>,
 	eventid_metadata: Arc<Map>,
-	rejectedeventids: Arc<Map>,
 	services: Services,
 }
 
@@ -41,7 +40,6 @@ impl Data {
 			tofrom_relation: db["tofrom_relation"].clone(),
 			referencedevents: db["referencedevents"].clone(),
 			eventid_metadata: db["eventid_metadata"].clone(),
-			rejectedeventids: db["rejectedeventids"].clone(),
 			services: Services {
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 			},
@@ -170,23 +168,57 @@ impl Data {
 	}
 
 	pub(super) fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
-		self.rejectedeventids.insert(event_id, reason.as_bytes());
+		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			if let Ok(mut meta) =
+				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+			{
+				if !meta.rejected || meta.rejection_reason.is_empty() {
+					meta.rejected = true;
+					reason.clone_into(&mut meta.rejection_reason);
+					if let Ok(new_bytes) = bincode::serialize(&meta) {
+						self.eventid_metadata.insert(event_id, new_bytes);
+					}
+				}
+			}
+		}
 	}
 
 	pub(super) async fn get_rejection_reason(&self, event_id: &EventId) -> Option<String> {
-		self.rejectedeventids
-			.get(event_id)
-			.await
-			.ok()
-			.map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+		let metadata_bytes = self.eventid_metadata.get(event_id).await.ok()?;
+		let meta =
+			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes).ok()?;
+		if meta.rejected && !meta.rejection_reason.is_empty() {
+			Some(meta.rejection_reason)
+		} else {
+			None
+		}
 	}
 
 	pub(super) async fn is_event_rejected(&self, event_id: &EventId) -> bool {
-		self.rejectedeventids.get(event_id).await.is_ok()
+		if let Ok(metadata_bytes) = self.eventid_metadata.get(event_id).await {
+			if let Ok(meta) =
+				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+			{
+				return meta.rejected;
+			}
+		}
+		false
 	}
 
 	pub(super) fn unmark_event_rejected(&self, event_id: &EventId) {
-		self.rejectedeventids.remove(event_id);
+		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			if let Ok(mut meta) =
+				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+			{
+				if meta.rejected {
+					meta.rejected = false;
+					meta.rejection_reason.clear();
+					if let Ok(new_bytes) = bincode::serialize(&meta) {
+						self.eventid_metadata.insert(event_id, new_bytes);
+					}
+				}
+			}
+		}
 	}
 
 	/// Removes any soft-fail or rejection markers applied to the target PDU

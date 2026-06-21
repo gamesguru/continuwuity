@@ -207,6 +207,7 @@ pub fn add_pdu_outlier_batch(
 			local_topological_depth: 0,
 			pdu_count: None,
 			soft_fail_reason: String::new(),
+			rejection_reason: String::new(),
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.db.eventid_metadata.insert_into_batch(

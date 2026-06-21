@@ -19,4 +19,7 @@ pub struct EventMetadata {
 	/// Reason why this event was soft-failed (empty = no reason stored).
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub soft_fail_reason: String,
+	/// Reason why this event was rejected (empty = no reason stored).
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub rejection_reason: String,
 }
