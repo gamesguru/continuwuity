@@ -467,28 +467,13 @@ impl Service {
 
 	pub async fn update_delayed_event(
 		&self,
-		sender_user: &UserId,
 		delay_id: String,
 		action: UpdateAction,
 	) -> Result<()> {
 		let Ok(event) = self.db.delayid_scheduleddelayedevent.get(&delay_id).await else {
-			if let Ok(finalized) = self.db.delayid_finalizeddelayedevent.get(&delay_id).await {
-				let finalized: FinalizedDelayedEvent = finalized.deserialized()?;
-				if finalized.event.user_id != sender_user {
-					return Err!(Request(Forbidden(
-						"You are not authorized to update this delayed event."
-					)));
-				}
-			}
 			return self.check_finalized_event_outcome(&delay_id, action).await;
 		};
 		let mut event: ScheduledDelayedEvent = event.deserialized()?;
-
-		if event.user_id != sender_user {
-			return Err!(Request(Forbidden(
-				"You are not authorized to update this delayed event."
-			)));
-		}
 
 		match action {
 			| UpdateAction::Restart => {
