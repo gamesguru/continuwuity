@@ -125,11 +125,14 @@ async fn get_signing_keys_for(
 
 	if needs_fetch {
 		if let Ok(new_keys) = services.server_keys.server_request(server_name).await {
-			services
+			if services
 				.server_keys
 				.add_signing_keys(new_keys.clone())
-				.await;
-			server_key = Some(new_keys);
+				.await
+				.is_ok()
+			{
+				server_key = Some(new_keys);
+			}
 		}
 	}
 

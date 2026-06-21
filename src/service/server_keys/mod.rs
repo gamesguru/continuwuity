@@ -8,7 +8,7 @@ mod verify;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use conduwuit::{
-	Result, Server, debug_error, debug_warn, implement, trace,
+	Result, Server, debug_error, debug_warn, err, implement, trace,
 	utils::{IterStream, timepoint_from_now},
 };
 use database::{Deserialized, Json, Map};
@@ -91,17 +91,25 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 }
 
 #[implement(Service)]
-pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
+pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) -> Result<()> {
 	let origin = &new_keys.server_name;
 
-	// Store the untouched, freshly signed response under `origin`
-	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
+	// Intra-payload collision verification (MSC 00FD)
+	for (key_id, verify_key) in &new_keys.verify_keys {
+		if let Some(old_verify_key) = new_keys.old_verify_keys.get(key_id) {
+			if verify_key.key != old_verify_key.key {
+				return Err(err!(Request(InvalidParam(
+					"Intra-payload Key ID collision detected"
+				))));
+			}
+		}
+	}
 
-	// Store the historical, cumulative keys under `origin\0historical`
+	// Load the historical, cumulative keys under `origin\0historical`
 	let mut historical_key = origin.as_bytes().to_vec();
 	historical_key.extend_from_slice(b"\0historical");
 
-	let mut keys: ServerSigningKeys = self
+	let mut historical_keys: ServerSigningKeys = self
 		.db
 		.server_signingkeys
 		.get(&historical_key)
@@ -111,11 +119,82 @@ pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
 			ServerSigningKeys::new(origin.to_owned(), MilliSecondsSinceUnixEpoch::now())
 		});
 
-	keys.verify_keys.extend(new_keys.verify_keys);
-	keys.old_verify_keys.extend(new_keys.old_verify_keys);
+	// Helper to compute sha256 hex string for fingerprint logging
+	let get_fingerprint = |base64_key: &ruma::serde::Base64| -> String {
+		use sha2::{Digest, Sha256};
+		let digest = Sha256::digest(base64_key.as_bytes());
+		digest.iter().map(|b| format!("{b:02x}")).collect()
+	};
+
+	// Merging with Collision Detection (First Seen Wins)
+	let mut filtered_verify_keys = new_keys.verify_keys.clone();
+	let mut filtered_old_verify_keys = new_keys.old_verify_keys.clone();
+
+	for (key_id, new_key) in &new_keys.verify_keys {
+		if let Some(existing_key) = historical_keys.verify_keys.get(key_id) {
+			if existing_key.key != new_key.key {
+				let existing_fp = get_fingerprint(&existing_key.key);
+				let new_fp = get_fingerprint(&new_key.key);
+				conduwuit::warn!(
+					"Key ID collision detected for server {origin} on active key {key_id}! \
+					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
+					 Retaining cached key."
+				);
+				filtered_verify_keys.remove(key_id);
+			}
+		} else if let Some(existing_old_key) = historical_keys.old_verify_keys.get(key_id) {
+			if existing_old_key.key != new_key.key {
+				let existing_fp = get_fingerprint(&existing_old_key.key);
+				let new_fp = get_fingerprint(&new_key.key);
+				conduwuit::warn!(
+					"Key ID collision detected for server {origin} on active/old key {key_id}! \
+					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
+					 Retaining cached key."
+				);
+				filtered_verify_keys.remove(key_id);
+			}
+		}
+	}
+
+	for (key_id, new_old_key) in &new_keys.old_verify_keys {
+		if let Some(existing_key) = historical_keys.verify_keys.get(key_id) {
+			if existing_key.key != new_old_key.key {
+				let existing_fp = get_fingerprint(&existing_key.key);
+				let new_fp = get_fingerprint(&new_old_key.key);
+				conduwuit::warn!(
+					"Key ID collision detected for server {origin} on old/active key {key_id}! \
+					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
+					 Retaining cached key."
+				);
+				filtered_old_verify_keys.remove(key_id);
+			}
+		} else if let Some(existing_old_key) = historical_keys.old_verify_keys.get(key_id) {
+			if existing_old_key.key != new_old_key.key {
+				let existing_fp = get_fingerprint(&existing_old_key.key);
+				let new_fp = get_fingerprint(&new_old_key.key);
+				conduwuit::warn!(
+					"Key ID collision detected for server {origin} on old key {key_id}! Cached \
+					 fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. Retaining \
+					 cached key."
+				);
+				filtered_old_verify_keys.remove(key_id);
+			}
+		}
+	}
+
+	// Store the filtered/merged historical keys
+	historical_keys.verify_keys.extend(filtered_verify_keys);
+	historical_keys
+		.old_verify_keys
+		.extend(filtered_old_verify_keys);
 	self.db
 		.server_signingkeys
-		.raw_put(&historical_key, Json(&keys));
+		.raw_put(&historical_key, Json(&historical_keys));
+
+	// Store the untouched, freshly signed response under `origin`
+	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
+
+	Ok(())
 }
 
 #[implement(Service)]
