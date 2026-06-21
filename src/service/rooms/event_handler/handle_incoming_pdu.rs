@@ -338,6 +338,19 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 				%room_id,
 				"Accepting inbound membership PDU for known room before participation cache catches up"
 			);
+		} else if is_room_member_event {
+			// We're not in this room but got a member event we couldn't
+			// rescind. Store it as an outlier so the remote server doesn't
+			// retry endlessly with 404s.
+			info!(
+				%origin,
+				%room_id,
+				"Storing unprocessable member PDU as outlier (not participating)"
+			);
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &value, Some(room_id));
+			return Ok(None);
 		} else {
 			info!(
 				%origin,
