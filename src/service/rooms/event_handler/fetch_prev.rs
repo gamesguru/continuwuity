@@ -37,6 +37,9 @@ where
 	let still_needed: Vec<OwnedEventId> = initial_set.map(ToOwned::to_owned).collect();
 	let mut remaining = Vec::with_capacity(still_needed.len());
 	for id in &still_needed {
+		if self.services.pdu_metadata.is_event_rejected(id).await {
+			continue; // TODO: don't fetch rejected events from federation?
+		}
 		if !self.services.timeline.pdu_exists(id).await
 			&& self.services.outlier.get_pdu_outlier(id).await.is_err()
 		{

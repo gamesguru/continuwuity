@@ -115,17 +115,18 @@ impl Data {
 	}
 
 	pub(super) fn mark_event_soft_failed(&self, event_id: &EventId, reason: &str) {
-		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
-			if let Ok(mut meta) =
-				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-			{
-				if !meta.soft_failed || meta.soft_fail_reason.is_empty() {
-					meta.soft_failed = true;
-					reason.clone_into(&mut meta.soft_fail_reason);
-					if let Ok(new_bytes) = bincode::serialize(&meta) {
-						self.eventid_metadata.insert(event_id, new_bytes);
-					}
-				}
+		let mut meta = if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+				.unwrap_or_default()
+		} else {
+			rooms::timeline::EventMetadata::default()
+		};
+
+		if !meta.soft_failed || meta.soft_fail_reason.is_empty() {
+			meta.soft_failed = true;
+			reason.clone_into(&mut meta.soft_fail_reason);
+			if let Ok(new_bytes) = bincode::serialize(&meta) {
+				self.eventid_metadata.insert(event_id, new_bytes);
 			}
 		}
 	}
@@ -168,17 +169,18 @@ impl Data {
 	}
 
 	pub(super) fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
-		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
-			if let Ok(mut meta) =
-				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-			{
-				if !meta.rejected || meta.rejection_reason.is_empty() {
-					meta.rejected = true;
-					reason.clone_into(&mut meta.rejection_reason);
-					if let Ok(new_bytes) = bincode::serialize(&meta) {
-						self.eventid_metadata.insert(event_id, new_bytes);
-					}
-				}
+		let mut meta = if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+				.unwrap_or_default()
+		} else {
+			rooms::timeline::EventMetadata::default()
+		};
+
+		if !meta.rejected || meta.rejection_reason.is_empty() {
+			meta.rejected = true;
+			reason.clone_into(&mut meta.rejection_reason);
+			if let Ok(new_bytes) = bincode::serialize(&meta) {
+				self.eventid_metadata.insert(event_id, new_bytes);
 			}
 		}
 	}

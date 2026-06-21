@@ -162,9 +162,16 @@ impl Service {
 	}
 
 	/// Returns true if the event is not rejected. Soft-failed events ARE
-	/// accepted for auth purposes.
+	/// accepted for auth purposes (used in federation/state-res contexts).
 	pub async fn is_event_accepted(&self, event_id: &EventId) -> bool {
 		!self.db.is_event_rejected(event_id).await
+	}
+
+	/// Returns true if the event is in the timeline and should be visible
+	/// to clients. Events only in the outlier store (rejected, pending,
+	/// etc.) are not visible.
+	pub async fn is_event_visible_to_clients(&self, event_id: &EventId) -> bool {
+		self.services.timeline.get_pdu_id(event_id).await.is_ok()
 	}
 
 	pub async fn get_rejection_reason(&self, event_id: &EventId) -> Option<String> {

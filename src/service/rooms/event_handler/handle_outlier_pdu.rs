@@ -32,6 +32,14 @@ where
 	if let Ok(json) = self.services.timeline.get_outlier_pdu_json(event_id).await {
 		if let Ok(pdu) = PduEvent::from_id_val(event_id, json.clone(), Some(room_id)) {
 			if pdu.room_id_or_hash().as_deref() == Some(room_id) {
+				// If this event was previously rejected, propagate the
+				// rejection so callers treat it as invalid (e.g. when
+				// checking auth chains of dependent events).
+				if self.services.pdu_metadata.is_event_rejected(event_id).await {
+					return Err!(Request(Forbidden(
+						"Event {event_id} is already known and rejected"
+					)));
+				}
 				info!(
 					target: "state_res_debug",
 					%event_id,
@@ -210,11 +218,11 @@ where
 					CanonicalJsonValue::String(event_id.as_str().to_owned()),
 				);
 				self.services
-					.pdu_metadata
-					.mark_event_rejected(event_id, "signature verification failed");
-				self.services
 					.outlier
 					.add_pdu_outlier(event_id, &value, Some(room_id));
+				self.services
+					.pdu_metadata
+					.mark_event_rejected(event_id, "signature verification failed");
 				return Err!(Request(InvalidParam(debug_error!(
 					"Signature verification failed for {event_id}: {e}"
 				))));

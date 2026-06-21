@@ -34,7 +34,7 @@ pub(crate) async fn get_room_event_route(
 		|| !services
 			.rooms
 			.pdu_metadata
-			.is_event_accepted(event_id)
+			.is_event_visible_to_clients(event_id)
 			.await
 	{
 		return Err!(Request(NotFound("Event not found.")));
