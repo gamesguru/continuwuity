@@ -47,7 +47,7 @@ use service::transactions::{
 	FederationTxnState, TransactionError, TxnKey, WrappedTransactionResponse,
 };
 use tokio::sync::watch::{Receiver, Sender};
-use tracing::instrument;
+use tracing::Instrument;
 
 use crate::Ruma;
 
@@ -97,10 +97,23 @@ pub(crate) async fn send_transaction_message_route(
 		},
 		| Ok(FederationTxnState::Started { receiver, sender }) => {
 			// We're the first, spawn the processing task
-			services
-				.server
-				.runtime()
-				.spawn(process_inbound_transaction(services, body, client, txn_key, sender));
+			let span = if body.pdus.is_empty() {
+				tracing::info_span!(
+					"edu",
+					id = ?body.transaction_id.as_str(),
+					origin = ?body.origin(),
+				)
+			} else {
+				tracing::info_span!(
+					"federation",
+					id = ?body.transaction_id.as_str(),
+					origin = ?body.origin(),
+				)
+			};
+			services.server.runtime().spawn(
+				process_inbound_transaction(services, body, client, txn_key, sender)
+					.instrument(span),
+			);
 			// and wait for it
 			wait_for_result(receiver).await
 		},
@@ -158,14 +171,6 @@ async fn wait_for_result(
 	}
 }
 
-#[instrument(
-	name = "federation",
-	skip_all,
-	fields(
-		id = ?body.transaction_id.as_str(),
-		origin = ?body.origin()
-	)
-)]
 async fn process_inbound_transaction(
 	services: crate::State,
 	body: Ruma<send_transaction_message::v1::Request>,
