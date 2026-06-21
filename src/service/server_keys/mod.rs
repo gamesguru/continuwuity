@@ -109,15 +109,19 @@ pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) -> Result<()> 
 	let mut historical_key = origin.as_bytes().to_vec();
 	historical_key.extend_from_slice(b"\0historical");
 
-	let mut historical_keys: ServerSigningKeys = self
+	let historical_keys_res = self
 		.db
 		.server_signingkeys
 		.get(&historical_key)
 		.await
-		.deserialized()
-		.unwrap_or_else(|_| {
-			ServerSigningKeys::new(origin.to_owned(), MilliSecondsSinceUnixEpoch::now())
-		});
+		.deserialized::<ServerSigningKeys>();
+
+	let mut historical_keys = match historical_keys_res {
+		| Ok(keys) => keys,
+		| Err(ref e) if e.is_not_found() =>
+			ServerSigningKeys::new(origin.to_owned(), MilliSecondsSinceUnixEpoch::now()),
+		| Err(e) => return Err(e),
+	};
 
 	// Helper to compute sha256 hex string for fingerprint logging
 	let get_fingerprint = |base64_key: &ruma::serde::Base64| -> String {
@@ -233,36 +237,43 @@ pub async fn verify_key_exists(&self, origin: &ServerName, key_id: &ServerSignin
 	let mut historical_key = origin.as_bytes().to_vec();
 	historical_key.extend_from_slice(b"\0historical");
 
-	let keys_res = if let Ok(keys) = self
+	if let Ok(keys) = self
 		.db
 		.server_signingkeys
 		.get(&historical_key)
 		.await
 		.deserialized::<Raw<ServerSigningKeys>>()
 	{
-		Ok(keys)
-	} else {
-		self.db
-			.server_signingkeys
-			.get(origin)
-			.await
-			.deserialized::<Raw<ServerSigningKeys>>()
-	};
+		if let Ok(Some(verify_keys)) = keys.get_field::<KeysMap<'_>>("verify_keys") {
+			if verify_keys.contains_key(key_id) {
+				return true;
+			}
+		}
 
-	let Ok(keys) = keys_res else {
-		debug_warn!("No known signing keys found for {origin}");
-		return false;
-	};
-
-	if let Ok(Some(verify_keys)) = keys.get_field::<KeysMap<'_>>("verify_keys") {
-		if verify_keys.contains_key(key_id) {
-			return true;
+		if let Ok(Some(old_verify_keys)) = keys.get_field::<KeysMap<'_>>("old_verify_keys") {
+			if old_verify_keys.contains_key(key_id) {
+				return true;
+			}
 		}
 	}
 
-	if let Ok(Some(old_verify_keys)) = keys.get_field::<KeysMap<'_>>("old_verify_keys") {
-		if old_verify_keys.contains_key(key_id) {
-			return true;
+	if let Ok(keys) = self
+		.db
+		.server_signingkeys
+		.get(origin)
+		.await
+		.deserialized::<Raw<ServerSigningKeys>>()
+	{
+		if let Ok(Some(verify_keys)) = keys.get_field::<KeysMap<'_>>("verify_keys") {
+			if verify_keys.contains_key(key_id) {
+				return true;
+			}
+		}
+
+		if let Ok(Some(old_verify_keys)) = keys.get_field::<KeysMap<'_>>("old_verify_keys") {
+			if old_verify_keys.contains_key(key_id) {
+				return true;
+			}
 		}
 	}
 
@@ -275,21 +286,21 @@ pub async fn verify_keys_for(&self, origin: &ServerName) -> VerifyKeys {
 	let mut historical_key = origin.as_bytes().to_vec();
 	historical_key.extend_from_slice(b"\0historical");
 
-	let keys_res = if let Ok(keys) = self
+	let mut keys = BTreeMap::new();
+
+	if let Ok(historical_keys) = self
 		.db
 		.server_signingkeys
 		.get(&historical_key)
 		.await
 		.deserialized::<ServerSigningKeys>()
 	{
-		Ok(keys)
-	} else {
-		self.signing_keys_for(origin).await
-	};
+		keys.extend(merge_old_keys(historical_keys).verify_keys);
+	}
 
-	let mut keys = keys_res
-		.map(|keys| merge_old_keys(keys).verify_keys)
-		.unwrap_or(BTreeMap::new());
+	if let Ok(origin_keys) = self.signing_keys_for(origin).await {
+		keys.extend(merge_old_keys(origin_keys).verify_keys);
+	}
 
 	if self.services.globals.server_is_ours(origin) {
 		keys.extend(self.verify_keys.clone().into_iter());

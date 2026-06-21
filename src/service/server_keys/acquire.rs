@@ -186,8 +186,9 @@ async fn acquire_origin(
 
 			if let Err(e) = self.add_signing_keys(server_keys.clone()).await {
 				debug_error!("Failed to add signing keys: {e}");
+			} else {
+				key_ids.retain(|key_id| !key_exists(&server_keys, key_id));
 			}
-			key_ids.retain(|key_id| !key_exists(&server_keys, key_id));
 		},
 	}
 
@@ -229,9 +230,7 @@ async fn acquire_notary_result(&self, missing: &mut Batch, server_keys: ServerSi
 	let server = &server_keys.server_name;
 	if let Err(e) = self.add_signing_keys(server_keys.clone()).await {
 		debug_error!("Failed to add signing keys: {e}");
-	}
-
-	if let Some(key_ids) = missing.get_mut(server) {
+	} else if let Some(key_ids) = missing.get_mut(server) {
 		key_ids.retain(|key_id| !key_exists(&server_keys, key_id));
 		if key_ids.is_empty() {
 			missing.remove(server);
