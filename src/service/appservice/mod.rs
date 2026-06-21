@@ -51,34 +51,47 @@ impl crate::Service for Service {
 		// In Complement tests, dynamically register appservices placed in
 		// `/complement/appservice/`
 		if std::path::Path::new("/complement/appservice").is_dir() {
-			if let Ok(mut entries) = tokio::fs::read_dir("/complement/appservice").await {
-				while let Ok(Some(entry)) = entries.next_entry().await {
-					let path = entry.path();
-					if path
-						.extension()
-						.is_some_and(|ext| ext == "yaml" || ext == "yml")
-					{
-						if let Ok(content) = tokio::fs::read_to_string(&path).await {
-							if let Ok(registration) =
-								serde_saphyr::from_str::<Registration>(&content)
-							{
-								if let Err(e) =
-									self.register_appservice(&registration, &content).await
-								{
+			match tokio::fs::read_dir("/complement/appservice").await {
+				| Err(e) => {
+					conduwuit::error!(
+						"Failed to read appservice directory /complement/appservice: {e:?}"
+					);
+				},
+				| Ok(mut entries) =>
+					while let Ok(Some(entry)) = entries.next_entry().await {
+						let path = entry.path();
+						if path
+							.extension()
+							.is_some_and(|ext| ext == "yaml" || ext == "yml")
+						{
+							match tokio::fs::read_to_string(&path).await {
+								| Err(e) => {
 									conduwuit::error!(
-										"Failed to register auto-loaded appservice from \
-										 {path:?}: {e:?}"
+										"Failed to read appservice file {path:?}: {e:?}"
 									);
-								} else {
-									conduwuit::info!(
-										"Auto-registered appservice {} from {path:?}",
-										registration.id
-									);
-								}
+								},
+								| Ok(content) => {
+									match serde_saphyr::from_str::<Registration>(&content) {
+										| Err(e) => {
+											conduwuit::error!(
+												"Failed to parse appservice YAML from {path:?}: \
+												 {e:?}"
+											);
+										},
+										| Ok(registration) => {
+											self.db
+												.id_appserviceregistrations
+												.insert(&registration.id, &content);
+											conduwuit::info!(
+												"Auto-registered appservice {} from {path:?}",
+												registration.id
+											);
+										},
+									}
+								},
 							}
 						}
-					}
-				}
+					},
 			}
 		}
 

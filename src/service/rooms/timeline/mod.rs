@@ -461,16 +461,6 @@ impl Service {
 		self.db.pdus(room_id, from.unwrap_or_else(PduCount::min))
 	}
 
-	#[tracing::instrument(skip(self), level = "debug")]
-	pub async fn pdu_from_timestamp(
-		&self,
-		room_id: &RoomId,
-		timestamp: u64,
-		dir: Direction,
-	) -> Result<PduEvent> {
-		self.db.pdu_from_timestamp(room_id, timestamp, dir).await
-	}
-
 	/// Returns a stream of PDUs starting from the nearest event to the given
 	/// timestamp, walking in the given direction.
 	#[tracing::instrument(skip(self), level = "debug")]

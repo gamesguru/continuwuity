@@ -3,7 +3,10 @@ use std::sync::Arc;
 use conduwuit::{
 	Err, Event, PduCount, PduEvent, Result, at, err,
 	result::NotFound,
-	utils::{self, stream::TryReadyExt},
+	utils::{
+		self,
+		stream::{ReadyExt, TryReadyExt},
+	},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
 use futures::{
@@ -322,21 +325,6 @@ impl Data {
 			.try_flatten_stream()
 	}
 
-	pub(super) async fn pdu_from_timestamp(
-		&self,
-		room_id: &RoomId,
-		timestamp: u64,
-		dir: Direction,
-	) -> Result<PduEvent> {
-		let stream = self.pdus_by_timestamp(room_id, timestamp, dir);
-
-		pin_mut!(stream);
-		stream
-			.try_next()
-			.await?
-			.ok_or_else(|| err!(Request(NotFound("No PDU found for timestamp"))))
-	}
-
 	/// Returns a stream of PDUs starting at `timestamp` in `dir`.
 	pub(super) fn pdus_by_timestamp<'a>(
 		&'a self,
@@ -355,7 +343,12 @@ impl Data {
 
 			let (seek_ts, count) = match dir {
 				| Direction::Forward => (timestamp, PduCount::min()),
-				| Direction::Backward => (timestamp, PduCount::max()),
+				| Direction::Backward => {
+					if timestamp == 0 {
+						return Ok::<_, conduwuit::Error>((short, Vec::new()));
+					}
+					(timestamp.saturating_sub(1), PduCount::max())
+				},
 			};
 
 			let key = pack_timestamp_key(short.to_be_bytes(), seek_ts, count);
@@ -365,6 +358,10 @@ impl Data {
 		// Main stream
 		setup
 			.map_ok(move |(short, key)| {
+				if key.is_empty() {
+					return futures::stream::empty().boxed();
+				}
+
 				let prefix = short.to_be_bytes();
 				let map = &self.db["roomid_timestamp_pducount"];
 
@@ -377,12 +374,24 @@ impl Data {
 				stream
 					.ready_try_take_while(move |(k, _)| Ok(k.starts_with(&prefix)))
 					// Extract PDU count via key lookup (shortroomid, timestamp, count)
-					.ready_and_then(|(k, _)| {
+					.ready_filter_map(|res| {
+						let (k, _) = match res {
+							Ok(kv) => kv,
+							Err(e) => return Some(Err(e)),
+						};
+
 						if k.len() != 25 {
-							return Err(err!(Database("Invalid timestamp index key length")));
+							tracing::warn!("Invalid timestamp index key length: {}", k.len());
+							return None;
 						}
 
-						let is_normal = k[16] == 1;
+						let variant = k[16];
+						if variant != 0 && variant != 1 {
+							tracing::warn!("Invalid timestamp index variant byte: {}", variant);
+							return None;
+						}
+
+						let is_normal = variant == 1;
 						let c_bytes: [u8; 8] = k[17..25].try_into().expect("valid slice");
 						let count = if is_normal {
 							PduCount::Normal(u64::from_be_bytes(c_bytes))
@@ -391,13 +400,25 @@ impl Data {
 							PduCount::Backfilled((sortable_c ^ (1 << 63)).cast_signed())
 						};
 
-						Ok(count)
+						Some(Ok(count))
 					})
 					// Using PDU count, fetch full PDU event object
-					.and_then(move |count| async move {
+					.filter_map(move |count| async move {
+						let count = match count {
+							Ok(c) => c,
+							Err(e) => return Some(Err(e)),
+						};
 						let pdu_id = PduId { shortroomid: short, shorteventid: count };
-						self.get_pdu_from_id_in_room(None, &pdu_id.into()).await
+						match self.get_pdu_from_id_in_room(None, &pdu_id.into()).await {
+							Ok(pdu) => Some(Ok(pdu)),
+							Err(e) if e.is_not_found() => {
+								tracing::info!("Skipping missing PDU in timestamp index scan: {e}");
+								None
+							}
+							Err(e) => Some(Err(e)),
+						}
 					})
+					.boxed()
 			})
 			.try_flatten_stream()
 	}
@@ -584,8 +605,10 @@ fn pack_timestamp_key(shortroomid: [u8; 8], ts: u64, count: PduCount) -> [u8; 25
 	key
 }
 
-//TODO: this is an ABA
+static INCREMENT_LOCK: conduwuit::SyncMutex<()> = conduwuit::SyncMutex::new(());
+
 fn increment(db: &Arc<Map>, key: &[u8]) {
+	let _lock = INCREMENT_LOCK.lock();
 	let old = db.get_blocking(key);
 	let new = utils::increment(old.ok().as_deref());
 	db.insert(key, new);
