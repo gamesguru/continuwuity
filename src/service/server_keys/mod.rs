@@ -123,7 +123,12 @@ pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) -> Result<()> 
 	let get_fingerprint = |base64_key: &ruma::serde::Base64| -> String {
 		use sha2::{Digest, Sha256};
 		let digest = Sha256::digest(base64_key.as_bytes());
-		digest.iter().map(|b| format!("{b:02x}")).collect()
+		let mut s = String::with_capacity(digest.len().saturating_mul(2));
+		for b in digest {
+			use std::fmt::Write as _;
+			let _ = write!(s, "{b:02x}");
+		}
+		s
 	};
 
 	// Merging with Collision Detection (First Seen Wins)
