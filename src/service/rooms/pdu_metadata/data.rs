@@ -119,7 +119,9 @@ impl Data {
 			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
 				.unwrap_or_default()
 		} else {
-			rooms::timeline::EventMetadata::default()
+			// New metadata: events reaching this path without existing metadata
+			// are always outliers (not yet in the timeline).
+			rooms::timeline::EventMetadata { is_outlier: true, ..Default::default() }
 		};
 
 		if !meta.soft_failed || meta.soft_fail_reason.is_empty() {
@@ -173,7 +175,9 @@ impl Data {
 			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
 				.unwrap_or_default()
 		} else {
-			rooms::timeline::EventMetadata::default()
+			// New metadata: events reaching this path without existing metadata
+			// are always outliers (not yet in the timeline).
+			rooms::timeline::EventMetadata { is_outlier: true, ..Default::default() }
 		};
 
 		if !meta.rejected || meta.rejection_reason.is_empty() {
