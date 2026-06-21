@@ -12,8 +12,8 @@ pub struct EventMetadata {
 	pub short_state_hash: Option<u64>,
 	#[serde(default)]
 	pub local_topological_depth: u64,
-	/// Timeline position counter. 0 = outlier / not in timeline.
-	/// Normal events start at 1, backfilled events wrap to high u64.
-	#[serde(default)]
-	pub pdu_count: u64,
+	/// Timeline position counter. `None` = legacy record (not yet migrated).
+	/// `Some(0)` = outlier / not in timeline. Normal events start at 1.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pdu_count: Option<u64>,
 }

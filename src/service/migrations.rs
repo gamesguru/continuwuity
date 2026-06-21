@@ -637,7 +637,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
 				short_state_hash: None,
 				local_topological_depth,
-				pdu_count: pdu_id.pdu_count().into_unsigned(),
+				pdu_count: Some(pdu_id.pdu_count().into_unsigned()),
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				eventid_metadata.insert(event_id_bytes, metadata_bytes);
@@ -687,7 +687,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 					redacted_by: pdu.redacts().map(ToOwned::to_owned),
 					short_state_hash: None,
 					local_topological_depth: 0,
-					pdu_count: 0,
+					pdu_count: None,
 				};
 				if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 					eventid_metadata.insert(event_id_bytes, metadata_bytes);
@@ -837,12 +837,12 @@ async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
 			continue;
 		};
 
-		if meta.pdu_count != 0 {
+		if meta.pdu_count.is_some() {
 			skipped = skipped.saturating_add(1);
 			continue;
 		}
 
-		meta.pdu_count = count;
+		meta.pdu_count = Some(count);
 
 		if let Ok(new_bytes) = bincode::serialize(&meta) {
 			eventid_metadata.insert(event_id_bytes, new_bytes);

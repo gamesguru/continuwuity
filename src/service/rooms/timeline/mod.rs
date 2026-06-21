@@ -875,13 +875,9 @@ impl Service {
 				self.db
 					.reindex_pdu(&pdu_id, event_id, pdu_count.into_unsigned());
 			}
-			if pdu.kind == TimelineEventType::RoomMessage {
-				if let Ok(content) = pdu.get_content::<ExtractBody>() {
-					if let Some(body) = &content.body {
-						self.services.search.index_pdu(shortroomid, &pdu_id, body);
-					}
-				}
-			}
+			// Search is NOT re-indexed here: search indexes by EventId + text
+			// content, both of which are immutable. Shifting pdu_count has no
+			// bearing on the search index.
 			if i.saturating_add(1).is_multiple_of(2000) {
 				println!("reorder_timeline: reindexed {}/{count} events...", i.saturating_add(1));
 			}
