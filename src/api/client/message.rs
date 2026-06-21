@@ -241,11 +241,15 @@ pub(crate) async fn get_message_events_route(
 		.collect()
 		.await;
 
-	// Always return `end` when events are present so the client can continue
-	// paginating. Only return `None` when no events matched at all — that
-	// signals the client to stop. Filters can reduce the returned count
-	// below the limit without exhausting the timeline.
-	let next_token = events.last().map(at!(0));
+	// Return `end` to allow continued pagination, but only when we haven't
+	// exhausted the timeline. When fewer events than the limit are returned,
+	// pagination is complete — return `None` to signal the client to stop.
+	// This prevents infinite pagination loops at the beginning/end of rooms.
+	let next_token = if events.len() < limit {
+		None
+	} else {
+		events.last().map(at!(0))
+	};
 
 	let chunk = events
 		.into_iter()
