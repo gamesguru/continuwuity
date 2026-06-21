@@ -736,6 +736,7 @@ impl Data {
 			short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 			local_topological_depth,
 			pdu_count: Some(count.into_unsigned()),
+			soft_fail_reason: String::new(),
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.eventid_metadata
@@ -845,6 +846,7 @@ impl Data {
 			short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 			local_topological_depth,
 			pdu_count: Some(pdu_id.pdu_count().into_unsigned()),
+			soft_fail_reason: String::new(),
 		};
 		if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 			self.eventid_metadata
@@ -932,6 +934,7 @@ impl Data {
 				short_state_hash: existing_metadata.and_then(|m| m.short_state_hash),
 				local_topological_depth,
 				pdu_count: Some(pdu_id.pdu_count().into_unsigned()),
+				soft_fail_reason: String::new(),
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				self.eventid_metadata.insert_into_batch(

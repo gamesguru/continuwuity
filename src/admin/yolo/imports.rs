@@ -272,7 +272,7 @@ pub(super) async fn import_pdus(
 							self.services
 								.rooms
 								.pdu_metadata
-								.mark_event_soft_failed(&eid);
+								.mark_event_soft_failed(&eid, "imported as soft-failed");
 						}
 						if is_rejected {
 							self.services

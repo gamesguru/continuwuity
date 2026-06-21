@@ -16,4 +16,7 @@ pub struct EventMetadata {
 	/// `Some(0)` = outlier / not in timeline. Normal events start at 1.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub pdu_count: Option<u64>,
+	/// Reason why this event was soft-failed (empty = no reason stored).
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub soft_fail_reason: String,
 }

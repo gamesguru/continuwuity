@@ -114,10 +114,30 @@ pub(super) async fn list_outliers(
 		let kind = pdu.kind.to_string();
 		let ts = pdu.origin_server_ts;
 		let flags = super::outlier_utils::render_flags(&status);
+		let reason = if is_rejected {
+			self.services
+				.rooms
+				.pdu_metadata
+				.get_rejection_reason(&event_id)
+				.await
+				.filter(|r| !r.is_empty())
+				.map_or(String::new(), |r| format!("\tReason: {r}"))
+		} else if is_soft_failed {
+			self.services
+				.rooms
+				.pdu_metadata
+				.get_soft_fail_reason(&event_id)
+				.await
+				.filter(|r| !r.is_empty())
+				.map_or(String::new(), |r| format!("\tReason: {r}"))
+		} else {
+			String::new()
+		};
 
 		writeln!(
 			body,
-			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: {kind}{flags}"
+			"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: \
+			 {kind}{flags}{reason}"
 		)?;
 		count = count.saturating_add(1);
 	}

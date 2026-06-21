@@ -116,13 +116,14 @@ impl Data {
 		self.referencedevents.qry(&key).await.is_ok()
 	}
 
-	pub(super) fn mark_event_soft_failed(&self, event_id: &EventId) {
+	pub(super) fn mark_event_soft_failed(&self, event_id: &EventId, reason: &str) {
 		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
 			if let Ok(mut meta) =
 				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
 			{
-				if !meta.soft_failed {
+				if !meta.soft_failed || meta.soft_fail_reason.is_empty() {
 					meta.soft_failed = true;
+					reason.clone_into(&mut meta.soft_fail_reason);
 					if let Ok(new_bytes) = bincode::serialize(&meta) {
 						self.eventid_metadata.insert(event_id, new_bytes);
 					}
@@ -140,6 +141,17 @@ impl Data {
 			}
 		}
 		false
+	}
+
+	pub(super) async fn get_soft_fail_reason(&self, event_id: &EventId) -> Option<String> {
+		let metadata_bytes = self.eventid_metadata.get(event_id).await.ok()?;
+		let meta =
+			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes).ok()?;
+		if meta.soft_failed && !meta.soft_fail_reason.is_empty() {
+			Some(meta.soft_fail_reason)
+		} else {
+			None
+		}
 	}
 
 	pub(super) fn unmark_event_soft_failed(&self, event_id: &EventId) {

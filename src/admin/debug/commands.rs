@@ -609,6 +609,34 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 		"Status: timeline={is_timeline} outlier={is_outlier} rejected={is_rejected} \
 		 soft_failed={is_soft_failed}"
 	)?;
+	if is_rejected {
+		let reason = self
+			.services
+			.rooms
+			.pdu_metadata
+			.get_rejection_reason(&event_id)
+			.await
+			.unwrap_or_default();
+		if reason.is_empty() {
+			writeln!(out, "Rejection reason: <none stored (legacy)>")?;
+		} else {
+			writeln!(out, "Rejection reason: {reason}")?;
+		}
+	}
+	if is_soft_failed {
+		let reason = self
+			.services
+			.rooms
+			.pdu_metadata
+			.get_soft_fail_reason(&event_id)
+			.await
+			.unwrap_or_default();
+		if reason.is_empty() {
+			writeln!(out, "Soft-fail reason: <none stored (legacy)>")?;
+		} else {
+			writeln!(out, "Soft-fail reason: {reason}")?;
+		}
+	}
 
 	self.write_str(&out).await
 }

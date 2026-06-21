@@ -638,6 +638,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 				short_state_hash: None,
 				local_topological_depth,
 				pdu_count: Some(pdu_id.pdu_count().into_unsigned()),
+				soft_fail_reason: String::new(),
 			};
 			if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 				eventid_metadata.insert(event_id_bytes, metadata_bytes);
@@ -688,6 +689,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 					short_state_hash: None,
 					local_topological_depth: 0,
 					pdu_count: None,
+					soft_fail_reason: String::new(),
 				};
 				if let Ok(metadata_bytes) = bincode::serialize(&metadata) {
 					eventid_metadata.insert(event_id_bytes, metadata_bytes);

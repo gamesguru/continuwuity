@@ -48,19 +48,19 @@ pub(super) async fn manage_rejected(
 			}
 		} else {
 			if !is_rejected {
-				self.services
-					.rooms
-					.pdu_metadata
-					.mark_event_rejected(event_id, "manually rejected via admin command");
+				self.services.rooms.pdu_metadata.mark_event_rejected(
+					event_id,
+					"manually rejected via admin command manage-rejected",
+				);
 				changed = changed.saturating_add(1);
 			} else {
 				already = already.saturating_add(1);
 			}
 			if soft_fail && !is_soft_failed {
-				self.services
-					.rooms
-					.pdu_metadata
-					.mark_event_soft_failed(event_id);
+				self.services.rooms.pdu_metadata.mark_event_soft_failed(
+					event_id,
+					"manually soft-failed via admin command manage-rejected",
+				);
 			}
 		}
 	}
@@ -248,10 +248,29 @@ pub(super) async fn list_rejected(
 			let sender = pdu.sender();
 			let kind = pdu.kind.to_string();
 			let ts = pdu.origin_server_ts;
+			let reason = if is_rej {
+				self.services
+					.rooms
+					.pdu_metadata
+					.get_rejection_reason(event_id)
+					.await
+					.filter(|r| !r.is_empty())
+					.map_or(String::new(), |r| format!("\tReason: {r}"))
+			} else if is_soft {
+				self.services
+					.rooms
+					.pdu_metadata
+					.get_soft_fail_reason(event_id)
+					.await
+					.filter(|r| !r.is_empty())
+					.map_or(String::new(), |r| format!("\tReason: {r}"))
+			} else {
+				String::new()
+			};
 			writeln!(
 				body,
 				"{event_id}\tTS: {ts}\tRoom: {room_id_str}\tSender: {sender}\tType: \
-				 {kind}{flags}"
+				 {kind}{flags}{reason}"
 			)?;
 			count = count.saturating_add(1);
 		}

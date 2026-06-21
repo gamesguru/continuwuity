@@ -135,10 +135,10 @@ pub(super) async fn compare_room_state(
 								&val,
 								Some(&room_id),
 							);
-							self.services
-								.rooms
-								.pdu_metadata
-								.mark_event_soft_failed(&eid);
+							self.services.rooms.pdu_metadata.mark_event_rejected(
+								&eid,
+								"signature verification failed in compare-room-state",
+							);
 							// Still count membership for the remote's totals —
 							// the remote sent this as part of their state.
 							if let Ok(pdu) =
@@ -556,10 +556,10 @@ pub(super) async fn compare_room_state(
 								&val,
 								Some(&room_id),
 							);
-							self.services
-								.rooms
-								.pdu_metadata
-								.mark_event_soft_failed(&eid);
+							self.services.rooms.pdu_metadata.mark_event_rejected(
+								&eid,
+								"signature verification failed in compare-room-state",
+							);
 							// Still count membership — remote sent this as
 							// part of their state.
 							if let Ok(pdu) =
@@ -1286,15 +1286,13 @@ pub(super) async fn audit_membership(
 							Some(&room_id),
 						);
 					}
+					// remove_from_timeline demotes back to outlier.
+					// no additional flag needed; rescue-room will re-evaluate.
 					self.services
 						.rooms
 						.timeline
 						.remove_from_timeline(&event_id)
 						.await;
-					self.services
-						.rooms
-						.pdu_metadata
-						.mark_event_soft_failed(&event_id);
 
 					pass_purged = pass_purged.saturating_add(1);
 					total_purged = total_purged.saturating_add(1);
@@ -1660,10 +1658,10 @@ pub(super) async fn audit_membership(
 									&val,
 									Some(&room_id),
 								);
-								self.services
-									.rooms
-									.pdu_metadata
-									.mark_event_soft_failed(&eid);
+								self.services.rooms.pdu_metadata.mark_event_rejected(
+									&eid,
+									"signature verification failed in rescue-room",
+								);
 							}
 							continue;
 						},

@@ -581,9 +581,10 @@ where
 		.await?;
 
 	if soft_fail {
-		self.services
-			.pdu_metadata
-			.mark_event_soft_failed(incoming_pdu.event_id());
+		self.services.pdu_metadata.mark_event_soft_failed(
+			incoming_pdu.event_id(),
+			"auth check failed against current room state",
+		);
 
 		debug_warn!(
 			elapsed = ?timer.elapsed(),

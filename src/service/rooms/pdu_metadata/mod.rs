@@ -131,8 +131,12 @@ impl Service {
 
 	#[inline]
 	#[tracing::instrument(skip(self), level = "debug")]
-	pub fn mark_event_soft_failed(&self, event_id: &EventId) {
-		self.db.mark_event_soft_failed(event_id);
+	pub fn mark_event_soft_failed(&self, event_id: &EventId, reason: &str) {
+		self.db.mark_event_soft_failed(event_id, reason);
+	}
+
+	pub async fn get_soft_fail_reason(&self, event_id: &EventId) -> Option<String> {
+		self.db.get_soft_fail_reason(event_id).await
 	}
 
 	#[inline]
