@@ -789,6 +789,11 @@ impl Service {
 				},
 			};
 
+			// Events being reindexed are definitively in the timeline; any
+			// rejection flags are stale and would poison state resolution
+			// if left in place. Soft-fail flags are intentional and persist.
+			self.services.pdu_metadata.unmark_event_rejected(event_id);
+
 			let mut json_modified = false;
 			if let Some(mut ssh) = current_shortstatehash {
 				let shorteventid = self
@@ -949,6 +954,11 @@ impl Service {
 			let prev: Vec<OwnedEventId> = pdu.prev_events().map(ToOwned::to_owned).collect();
 			let state_key = pdu.state_key().map(ToOwned::to_owned);
 			let depth = u64::from(pdu.depth());
+
+			// Timeline events are authoritative; clear any stale rejection
+			// flags that would otherwise poison the state resolution below.
+			// Soft-fail flags are intentional and must persist.
+			self.services.pdu_metadata.unmark_event_rejected(&eid);
 
 			if !room_version_found && *pdu.kind() == TimelineEventType::RoomCreate {
 				if let Ok(create_content) = serde_json::from_str::<

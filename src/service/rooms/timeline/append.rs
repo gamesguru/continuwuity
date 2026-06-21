@@ -62,6 +62,15 @@ where
 	// timeline and outlier tables indefinitely (the "stuck" state bug).
 	self.services.outlier.remove_outlier(pdu.event_id()).await;
 
+	// Clear any stale rejection flags now that the event is accepted into
+	// the timeline. Without this, events that were rejected during initial
+	// backfill (e.g., due to temporarily missing auth events) remain
+	// permanently poisoned — cascading auth failures through state
+	// resolution. Soft-fail flags are intentional and must persist.
+	self.services
+		.pdu_metadata
+		.unmark_event_rejected(pdu.event_id());
+
 	// Process admin commands for federation events
 	if *pdu.kind() == TimelineEventType::RoomMessage {
 		let content: ExtractBody = pdu.get_content()?;

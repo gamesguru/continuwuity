@@ -161,7 +161,19 @@ where
 		.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
 		.filter_map(|r| async move { r.ok() })
 		.wide_then(|mut pdu| async move {
-			pdu.rejected = meta.is_event_rejected(&pdu.event_id).await;
+			let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
+			if is_rejected {
+				// Defense-in-depth: the event is in the timeline, meaning it
+				// passed auth at some point. A stale rejection flag would
+				// poison state resolution by cascading auth failures. Clear
+				// the flag rather than propagating it.
+				warn!(
+					event_id = %pdu.event_id,
+					"timeline event has stale rejection flag, clearing"
+				);
+				meta.unmark_event_rejected(&pdu.event_id);
+			}
+			pdu.rejected = false;
 			(pdu.event_id.clone(), Arc::new(pdu))
 		})
 		.collect::<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>()
