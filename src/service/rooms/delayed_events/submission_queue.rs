@@ -67,7 +67,7 @@ pub(crate) async fn worker(service: &Service) -> Result<()> {
 			Some(delay_id)
 		};
 
-		let next_recieve = receiver.recv_async();
+		let next_receive = receiver.recv_async();
 
 		// RescvFuture is cancellation-safe
 		select! {
@@ -76,10 +76,10 @@ pub(crate) async fn worker(service: &Service) -> Result<()> {
 					queue.queue.push((Reverse(time), delay_id));
 				}
 			},
-			Ok((time, delay_id)) = next_recieve => {
+			Ok((time, delay_id)) = next_receive => {
 				queue.queue.push((Reverse(time), delay_id));
 			},
-			// Loop regularily to check if the service needs to stop even when there are no in-flight delayed events
+			// Loop regularly to check if the service needs to stop even when there are no in-flight delayed events
 			() = sleep(Duration::from_secs(2)) => (),
 		}
 	}

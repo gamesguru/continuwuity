@@ -69,7 +69,7 @@ pub(crate) async fn send_message_event_route(
 			} else {
 				None
 			},
-			None
+			None,
 		)
 		.await?;
 

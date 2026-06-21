@@ -246,7 +246,7 @@ impl Service {
 								event.content.cast_ref_unchecked(),
 								state_key,
 								Some(timestamp),
-								Some(unsigned)
+								Some(unsigned),
 							)
 							.await,
 					| None =>
@@ -260,7 +260,7 @@ impl Service {
 								event.content.cast_ref_unchecked(),
 								None,
 								Some(timestamp),
-								Some(unsigned)
+								Some(unsigned),
 							)
 							.await,
 				};

@@ -42,7 +42,9 @@ pub async fn send_message_event_helper(
 		.map_err(|e| err!(Request(BadJson("Invalid JSON body: {e}"))))?;
 
 	if let Some(txn_id) = txn_id {
-		unsigned.get_or_insert_default().insert("transaction_id".to_owned(), txn_id.to_string().into());
+		unsigned
+			.get_or_insert_default()
+			.insert("transaction_id".to_owned(), txn_id.to_string().into());
 	}
 
 	let event_id = self
