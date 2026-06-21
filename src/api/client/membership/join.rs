@@ -1040,7 +1040,17 @@ async fn join_room_by_id_helper_local(
 		return Ok(());
 	};
 
-	if servers.is_empty() || servers.len() == 1 && services.globals.server_is_ours(&servers[0]) {
+	let has_remote_servers = !(servers.is_empty()
+		|| servers.len() == 1 && services.globals.server_is_ours(&servers[0]));
+
+	// If the client didn't provide useful remote servers, try to discover them
+	// from room state. This is essential for restricted joins where local auth
+	// may fail due to stale state but a remote server can authorize via
+	// make_join/send_join.
+	let discovered_servers;
+	let servers = if has_remote_servers {
+		servers
+	} else {
 		if !services.rooms.metadata.exists(room_id).await {
 			return Err!(Request(
 				Unknown(
@@ -1050,8 +1060,28 @@ async fn join_room_by_id_helper_local(
 			));
 		}
 
-		return Err(error);
-	}
+		// Only attempt federation fallback for restricted rooms where local
+		// auth may fail due to stale state (e.g. power levels update not yet
+		// received). Non-restricted rooms should fail fast.
+		if !matches!(join_rules, JoinRule::Restricted(_) | JoinRule::KnockRestricted(_)) {
+			return Err(error);
+		}
+
+		discovered_servers = services
+			.rooms
+			.state_cache
+			.room_servers(room_id)
+			.ready_filter(|server| !services.globals.server_is_ours(server))
+			.map(ToOwned::to_owned)
+			.collect::<Vec<_>>()
+			.await;
+
+		if discovered_servers.is_empty() {
+			return Err(error);
+		}
+
+		discovered_servers.as_slice()
+	};
 
 	info!(
 		?error,
