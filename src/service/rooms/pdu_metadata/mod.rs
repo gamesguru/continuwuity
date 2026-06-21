@@ -145,8 +145,8 @@ impl Service {
 		self.db.is_event_rejected(event_id).await
 	}
 
-	pub fn mark_event_rejected(&self, event_id: &EventId) {
-		self.db.mark_event_rejected(event_id);
+	pub fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
+		self.db.mark_event_rejected(event_id, reason);
 	}
 
 	pub fn unmark_event_soft_failed(&self, event_id: &EventId) {
@@ -161,6 +161,10 @@ impl Service {
 	/// accepted for auth purposes.
 	pub async fn is_event_accepted(&self, event_id: &EventId) -> bool {
 		!self.db.is_event_rejected(event_id).await
+	}
+
+	pub async fn get_rejection_reason(&self, event_id: &EventId) -> Option<String> {
+		self.db.get_rejection_reason(event_id).await
 	}
 
 	pub fn clear_pdu_markers(&self, event_id: &EventId) { self.db.clear_pdu_markers(event_id); }

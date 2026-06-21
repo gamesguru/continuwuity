@@ -1520,7 +1520,10 @@ async fn reject_conflicting_state(
 				.is_event_rejected(eid)
 				.await
 			{
-				self.services.rooms.pdu_metadata.mark_event_rejected(eid);
+				self.services
+					.rooms
+					.pdu_metadata
+					.mark_event_rejected(eid, "conflicting state replaced by remote");
 				rejected = rejected.saturating_add(1);
 			}
 		}

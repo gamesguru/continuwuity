@@ -2314,7 +2314,7 @@ mod tests {
 		services
 			.rooms
 			.pdu_metadata
-			.mark_event_rejected(test_event_id);
+			.mark_event_rejected(test_event_id, "test: simulated rejection");
 
 		// When rescue-room calls this with skip_soft_fail=false, it MUST return an
 		// error.

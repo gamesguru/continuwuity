@@ -209,7 +209,9 @@ where
 					"event_id".to_owned(),
 					CanonicalJsonValue::String(event_id.as_str().to_owned()),
 				);
-				self.services.pdu_metadata.mark_event_rejected(event_id);
+				self.services
+					.pdu_metadata
+					.mark_event_rejected(event_id, "signature verification failed");
 				self.services
 					.outlier
 					.add_pdu_outlier(event_id, &value, Some(room_id));
@@ -243,7 +245,9 @@ where
 			// Persist as a rejected outlier to preserve the DAG chain.
 			// This prevents future valid events that reference this event from
 			// failing with MissingAuthEvents.
-			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(event_id, "invalid PDU format");
 			self.services
 				.outlier
 				.add_pdu_outlier(event_id, &incoming_pdu, Some(room_id));
@@ -262,15 +266,18 @@ where
 		// auth event to avoid deadlocks (e.g. MissingAuthEvents) when an auth event
 		// is unparsable but correctly marked as rejected in our database.
 		if self.services.pdu_metadata.is_event_rejected(aid).await {
-			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(event_id, &format!("depends on rejected auth event {aid}"));
 			self.services.outlier.add_pdu_outlier(
 				pdu_event.event_id(),
 				&incoming_pdu,
 				Some(room_id),
 			);
-			self.services
-				.pdu_metadata
-				.mark_event_rejected(pdu_event.event_id());
+			self.services.pdu_metadata.mark_event_rejected(
+				pdu_event.event_id(),
+				&format!("depends on rejected auth event {aid}"),
+			);
 			return Err!(Request(Forbidden("Event depends on rejected auth event {aid}")));
 		}
 
@@ -332,7 +339,10 @@ where
 		// request entirely.
 		for mid in &missing_auth_events {
 			if self.services.pdu_metadata.is_event_rejected(mid).await {
-				self.services.pdu_metadata.mark_event_rejected(event_id);
+				self.services.pdu_metadata.mark_event_rejected(
+					event_id,
+					&format!("depends on rejected auth event {mid}"),
+				);
 				self.services.outlier.add_pdu_outlier(
 					pdu_event.event_id(),
 					&incoming_pdu,
@@ -523,15 +533,19 @@ where
 				);
 				if !in_auth {
 					if in_rejected || in_db_rejected {
-						self.services.pdu_metadata.mark_event_rejected(event_id);
+						self.services.pdu_metadata.mark_event_rejected(
+							event_id,
+							&format!("depends on rejected auth event {id}"),
+						);
 						self.services.outlier.add_pdu_outlier(
 							pdu_event.event_id(),
 							&incoming_pdu,
 							Some(room_id),
 						);
-						self.services
-							.pdu_metadata
-							.mark_event_rejected(pdu_event.event_id());
+						self.services.pdu_metadata.mark_event_rejected(
+							pdu_event.event_id(),
+							&format!("depends on rejected auth event {id}"),
+						);
 						return Err!(Request(Forbidden(
 							"Event depends on rejected auth event {id}"
 						)));
@@ -568,20 +582,25 @@ where
 		// Re-check for rejected auth events. We might have fetched them via /event_auth
 		// and discovered they were rejected. If they are, this event must be rejected.
 		if self.services.pdu_metadata.is_event_rejected(id).await {
-			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(event_id, &format!("depends on rejected auth event {id}"));
 			self.services.outlier.add_pdu_outlier(
 				pdu_event.event_id(),
 				&incoming_pdu,
 				Some(room_id),
 			);
-			self.services
-				.pdu_metadata
-				.mark_event_rejected(pdu_event.event_id());
+			self.services.pdu_metadata.mark_event_rejected(
+				pdu_event.event_id(),
+				&format!("depends on rejected auth event {id}"),
+			);
 			return Err!(Request(Forbidden("Event depends on rejected auth event {id}")));
 		}
 
 		let Some(auth_event) = auth_events.get(id).map(ToOwned::to_owned) else {
-			self.services.pdu_metadata.mark_event_rejected(event_id);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(event_id, &format!("missing auth event {id}"));
 			self.services.outlier.add_pdu_outlier(
 				pdu_event.event_id(),
 				&incoming_pdu,
@@ -605,7 +624,9 @@ where
 				v.insert(auth_event);
 			},
 			| hash_map::Entry::Occupied(_) => {
-				self.services.pdu_metadata.mark_event_rejected(event_id);
+				self.services
+					.pdu_metadata
+					.mark_event_rejected(event_id, "duplicate auth event type+state_key");
 				self.services.outlier.add_pdu_outlier(
 					pdu_event.event_id(),
 					&incoming_pdu,
@@ -627,7 +648,9 @@ where
 		&& !to_room_version(&room_version_id).room_ids_as_hashes
 		&& !auth_events_by_key.contains_key(&(StateEventType::RoomCreate, String::new().into()))
 	{
-		self.services.pdu_metadata.mark_event_rejected(event_id);
+		self.services
+			.pdu_metadata
+			.mark_event_rejected(event_id, "missing m.room.create in auth events");
 		self.services
 			.outlier
 			.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu, Some(room_id));
@@ -671,7 +694,9 @@ where
 	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
 	if !auth_check {
-		self.services.pdu_metadata.mark_event_rejected(event_id);
+		self.services
+			.pdu_metadata
+			.mark_event_rejected(event_id, "auth check failed");
 		self.services
 			.outlier
 			.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu, Some(room_id));

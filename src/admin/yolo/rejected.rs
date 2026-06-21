@@ -51,7 +51,7 @@ pub(super) async fn manage_rejected(
 				self.services
 					.rooms
 					.pdu_metadata
-					.mark_event_rejected(event_id);
+					.mark_event_rejected(event_id, "manually rejected via admin command");
 				changed = changed.saturating_add(1);
 			} else {
 				already = already.saturating_add(1);

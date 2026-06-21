@@ -81,9 +81,10 @@ where
 					 {aid}",
 					incoming_pdu.event_id()
 				);
-				self.services
-					.pdu_metadata
-					.mark_event_rejected(incoming_pdu.event_id());
+				self.services.pdu_metadata.mark_event_rejected(
+					incoming_pdu.event_id(),
+					&format!("depends on missing or rejected auth event {aid}"),
+				);
 				return Err!(Request(Forbidden(
 					"Event depends on missing or rejected auth event {aid}"
 				)));
@@ -186,9 +187,10 @@ where
 				auth_event_id = %event_id,
 				"Event rejected because auth_event is rejected"
 			);
-			self.services
-				.pdu_metadata
-				.mark_event_rejected(incoming_pdu.event_id());
+			self.services.pdu_metadata.mark_event_rejected(
+				incoming_pdu.event_id(),
+				&format!("auth event {event_id} is rejected"),
+			);
 			return Err!(Request(Forbidden(
 				"Event authorisation fails because it references a rejected auth_event"
 			)));
@@ -249,9 +251,10 @@ where
 				"Event failed auth check against claimed auth_events, but skip_soft_fail is set — continuing"
 			);
 		} else {
-			self.services
-				.pdu_metadata
-				.mark_event_rejected(incoming_pdu.event_id());
+			self.services.pdu_metadata.mark_event_rejected(
+				incoming_pdu.event_id(),
+				"auth check failed against claimed auth_events",
+			);
 
 			return Err!(Request(Forbidden(
 				"Event authorisation fails based on its auth_events"
@@ -304,9 +307,10 @@ where
 				"Event failed auth check against state at event, but skip_soft_fail is set — continuing"
 			);
 		} else {
-			self.services
-				.pdu_metadata
-				.mark_event_rejected(incoming_pdu.event_id());
+			self.services.pdu_metadata.mark_event_rejected(
+				incoming_pdu.event_id(),
+				"auth check failed against state at event",
+			);
 
 			return Err!(Request(Forbidden("Event authorisation fails based on state at event")));
 		}
@@ -787,9 +791,10 @@ where
 							event_id = %incoming_pdu.event_id,
 							"Rejecting event: prev_events completely unknown and /state_ids fetch failed"
 						);
-						self.services
-							.pdu_metadata
-							.mark_event_rejected(incoming_pdu.event_id());
+						self.services.pdu_metadata.mark_event_rejected(
+							incoming_pdu.event_id(),
+							"prev_events unknown and /state_ids fetch failed",
+						);
 						return Ok(StateAtEvent::Resolved(HashMap::new()));
 					}
 

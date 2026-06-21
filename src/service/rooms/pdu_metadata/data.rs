@@ -157,8 +157,16 @@ impl Data {
 		}
 	}
 
-	pub(super) fn mark_event_rejected(&self, event_id: &EventId) {
-		self.rejectedeventids.insert(event_id, []);
+	pub(super) fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
+		self.rejectedeventids.insert(event_id, reason.as_bytes());
+	}
+
+	pub(super) async fn get_rejection_reason(&self, event_id: &EventId) -> Option<String> {
+		self.rejectedeventids
+			.get(event_id)
+			.await
+			.ok()
+			.map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 	}
 
 	pub(super) async fn is_event_rejected(&self, event_id: &EventId) -> bool {

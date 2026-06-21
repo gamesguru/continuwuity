@@ -397,7 +397,9 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 						"Event {event_id} rejected: missing auth event {mid} is already marked \
 						 rejected; skipping /state/ fetch"
 					);
-					self.services.pdu_metadata.mark_event_rejected(event_id);
+					self.services
+						.pdu_metadata
+						.mark_event_rejected(event_id, &format!("auth event {mid} is rejected"));
 					self.services
 						.outlier
 						.add_pdu_outlier(event_id, &value, Some(room_id));
@@ -439,7 +441,10 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 						"Storing incoming PDU as outlier; missing auth events will be \
 						 fetched in background"
 					);
-					self.services.pdu_metadata.mark_event_rejected(event_id);
+					self.services.pdu_metadata.mark_event_rejected(
+						event_id,
+						"missing auth events after /state_ids retry",
+					);
 					self.services
 						.outlier
 						.add_pdu_outlier(event_id, &value, Some(room_id));

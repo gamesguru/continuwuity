@@ -169,8 +169,11 @@ where
 										&room_version_id,
 										None,
 									) {
-										conduwuit::warn!("Redaction failed for {eid}: {e}");
-										self.services.pdu_metadata.mark_event_rejected(&eid);
+										conduwuit::warn!("Redaction failed for {eid}: {e:?}");
+										self.services.pdu_metadata.mark_event_rejected(
+											&eid,
+											"redaction failed after hash mismatch",
+										);
 										val.insert(
 											"event_id".to_owned(),
 											ruma::CanonicalJsonValue::String(
@@ -216,7 +219,9 @@ where
 							| _ => {
 								// Event sig failed; persist as rejected outlier so we don't
 								// re-fetch
-								self.services.pdu_metadata.mark_event_rejected(&eid);
+								self.services
+									.pdu_metadata
+									.mark_event_rejected(&eid, "signature verification failed");
 								val.insert(
 									"event_id".to_owned(),
 									ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),

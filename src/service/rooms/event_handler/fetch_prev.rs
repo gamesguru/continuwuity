@@ -200,7 +200,9 @@ where
 								}
 							}
 						} else {
-							self.services.pdu_metadata.mark_event_rejected(&eid);
+							self.services
+								.pdu_metadata
+								.mark_event_rejected(&eid, "signature verification failed");
 							val.insert(
 								"event_id".to_owned(),
 								CanonicalJsonValue::String(eid.as_str().to_owned()),
