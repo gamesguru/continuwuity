@@ -298,34 +298,24 @@ impl Data {
 	pub(super) async fn get_pdu_id(&self, event_id: &EventId) -> Result<RawPduId> {
 		// Fast path: metadata has pdu_count
 		let meta_result = self.eventid_metadata.get(event_id.as_bytes()).await;
-		match &meta_result {
-			| Ok(bytes) => match bincode::deserialize::<rooms::timeline::EventMetadata>(bytes) {
-				| Ok(meta) => {
-					if let Some(count) = meta.pdu_count {
-						let pdu_count = PduCount::from_unsigned(count);
-						return Ok(PduId {
-							shortroomid: meta.short_room_id,
-							shorteventid: pdu_count,
-						}
-						.into());
+		if let Ok(bytes) = &meta_result {
+			if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(bytes) {
+				if let Some(count) = meta.pdu_count {
+					let pdu_count = PduCount::from_unsigned(count);
+					return Ok(PduId {
+						shortroomid: meta.short_room_id,
+						shorteventid: pdu_count,
 					}
-					eprintln!("get_pdu_id: metadata found but pdu_count is None for {event_id}");
-				},
-				| Err(e) => eprintln!("get_pdu_id: metadata deser failed for {event_id}: {e}"),
-			},
-			| Err(e) => eprintln!("get_pdu_id: metadata lookup failed for {event_id}: {e}"),
+					.into());
+				}
+			}
 		}
 
 		// Legacy fallback
-		let legacy = self
-			.eventid_pduid
+		self.eventid_pduid
 			.get(event_id)
 			.await
-			.map(|handle| RawPduId::from(&*handle));
-		if legacy.is_err() {
-			eprintln!("get_pdu_id: legacy eventid_pduid also failed for {event_id}");
-		}
-		legacy
+			.map(|handle| RawPduId::from(&*handle))
 	}
 
 	/// Returns the pdu directly from `eventid_pduid` only.

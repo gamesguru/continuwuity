@@ -10,5 +10,5 @@
 {"Action":"pass","Test":"TestRestrictedRoomsLocalJoinInMSC3787Room/Join_should_fail_with_mangled_join_rules"}
 {"Action":"pass","Test":"TestRestrictedRoomsLocalJoinInMSC3787Room/Join_should_succeed_when_invited"}
 {"Action":"pass","Test":"TestRestrictedRoomsLocalJoinInMSC3787Room/Join_should_succeed_when_joined_to_allowed_room"}
-{"Action":"fail","Test":"TestRestrictedRoomsLocalJoinNoCreatorsUsesPowerLevelsV11"}
+{"Action":"pass","Test":"TestRestrictedRoomsLocalJoinNoCreatorsUsesPowerLevelsV11"}
 {"Action":"pass","Test":"TestRestrictedRoomsLocalJoinNoCreatorsUsesPowerLevelsV12"}
