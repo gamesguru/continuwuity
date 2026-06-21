@@ -93,7 +93,29 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 #[implement(Service)]
 pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
 	let origin = &new_keys.server_name;
+
+	// Store the untouched, freshly signed response under `origin`
 	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
+
+	// Store the historical, cumulative keys under `origin\0historical`
+	let mut historical_key = origin.as_bytes().to_vec();
+	historical_key.extend_from_slice(b"\0historical");
+
+	let mut keys: ServerSigningKeys = self
+		.db
+		.server_signingkeys
+		.get(&historical_key)
+		.await
+		.deserialized()
+		.unwrap_or_else(|_| {
+			ServerSigningKeys::new(origin.to_owned(), MilliSecondsSinceUnixEpoch::now())
+		});
+
+	keys.verify_keys.extend(new_keys.verify_keys);
+	keys.old_verify_keys.extend(new_keys.old_verify_keys);
+	self.db
+		.server_signingkeys
+		.raw_put(&historical_key, Json(&keys));
 }
 
 #[implement(Service)]
@@ -124,13 +146,26 @@ pub async fn required_keys_exist(
 pub async fn verify_key_exists(&self, origin: &ServerName, key_id: &ServerSigningKeyId) -> bool {
 	type KeysMap<'a> = BTreeMap<&'a ServerSigningKeyId, &'a RawJsonValue>;
 
-	let Ok(keys) = self
+	let mut historical_key = origin.as_bytes().to_vec();
+	historical_key.extend_from_slice(b"\0historical");
+
+	let keys_res = if let Ok(keys) = self
 		.db
 		.server_signingkeys
-		.get(origin)
+		.get(&historical_key)
 		.await
 		.deserialized::<Raw<ServerSigningKeys>>()
-	else {
+	{
+		Ok(keys)
+	} else {
+		self.db
+			.server_signingkeys
+			.get(origin)
+			.await
+			.deserialized::<Raw<ServerSigningKeys>>()
+	};
+
+	let Ok(keys) = keys_res else {
 		debug_warn!("No known signing keys found for {origin}");
 		return false;
 	};
@@ -153,9 +188,22 @@ pub async fn verify_key_exists(&self, origin: &ServerName, key_id: &ServerSignin
 
 #[implement(Service)]
 pub async fn verify_keys_for(&self, origin: &ServerName) -> VerifyKeys {
-	let mut keys = self
-		.signing_keys_for(origin)
+	let mut historical_key = origin.as_bytes().to_vec();
+	historical_key.extend_from_slice(b"\0historical");
+
+	let keys_res = if let Ok(keys) = self
+		.db
+		.server_signingkeys
+		.get(&historical_key)
 		.await
+		.deserialized::<ServerSigningKeys>()
+	{
+		Ok(keys)
+	} else {
+		self.signing_keys_for(origin).await
+	};
+
+	let mut keys = keys_res
 		.map(|keys| merge_old_keys(keys).verify_keys)
 		.unwrap_or(BTreeMap::new());
 
