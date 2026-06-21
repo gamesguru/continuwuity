@@ -108,6 +108,8 @@ pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
 
 	keys.verify_keys.extend(new_keys.verify_keys);
 	keys.old_verify_keys.extend(new_keys.old_verify_keys);
+	keys.valid_until_ts = new_keys.valid_until_ts;
+	keys.signatures = new_keys.signatures;
 	self.db.server_signingkeys.raw_put(origin, Json(&keys));
 }
 

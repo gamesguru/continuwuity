@@ -167,13 +167,12 @@ pub(crate) async fn get_remote_server_keys_batch_route(
 	for (server_name, key_ids) in &body.server_keys {
 		let min_valid = key_ids
 			.values()
-			.next()
-			.and_then(|c| c.minimum_valid_until_ts);
+			.filter_map(|c| c.minimum_valid_until_ts)
+			.max();
 
 		if let Ok(server_key) = get_signing_keys_for(&services, server_name, min_valid).await {
-			if let Ok(signed_key) = sign_signing_keys(&services, &server_key).await {
-				response_keys.push(signed_key);
-			}
+			let signed_key = sign_signing_keys(&services, &server_key).await?;
+			response_keys.push(signed_key);
 		}
 	}
 
