@@ -598,12 +598,7 @@ pub async fn force_insert_pdu_batch(
 	backfill: bool,
 	depth_cache: Option<&mut std::collections::HashMap<ruma::OwnedEventId, u64>>,
 ) -> Result<RawPduId> {
-	if self.get_pdu_id(event_id).await.is_ok() {
-		return Err!(Database("PDU {event_id} already in timeline"));
-	}
-
 	let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
-
 	let count: u64 = self.services.globals.next_count()?;
 
 	let (pdu_count, pdu_id) = if backfill {
