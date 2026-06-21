@@ -123,35 +123,37 @@ fn pick_closer(
 			let l_dist = l_ts.abs_diff(target_u64);
 			let f_dist = f_ts.abs_diff(target_u64);
 
-			if f_dist < l_dist {
-				debug!(
-					local_ts = l_ts,
-					fed_ts = f_ts,
-					target_ts = target_u64,
-					"Preferring federation result (closer to target)"
-				);
-				Ok(f)
-			} else if l_dist < f_dist {
-				Ok(l)
-			} else {
-				// For forward search, prefer the earlier event on tie.
-				// For backward search, prefer the later event on tie.
-				let prefer_fed = match dir {
-					| Direction::Forward => f_ts <= l_ts,
-					| Direction::Backward => f_ts >= l_ts,
-				};
-
-				if prefer_fed {
+			match f_dist.cmp(&l_dist) {
+				| std::cmp::Ordering::Less => {
 					debug!(
 						local_ts = l_ts,
 						fed_ts = f_ts,
 						target_ts = target_u64,
-						"Preferring federation result (tie-break)"
+						"Preferring federation result (closer to target)"
 					);
 					Ok(f)
-				} else {
-					Ok(l)
-				}
+				},
+				| std::cmp::Ordering::Greater => Ok(l),
+				| std::cmp::Ordering::Equal => {
+					// For forward search, prefer the earlier event on tie.
+					// For backward search, prefer the later event on tie.
+					let prefer_fed = match dir {
+						| Direction::Forward => f_ts <= l_ts,
+						| Direction::Backward => f_ts >= l_ts,
+					};
+
+					if prefer_fed {
+						debug!(
+							local_ts = l_ts,
+							fed_ts = f_ts,
+							target_ts = target_u64,
+							"Preferring federation result (tie-break)"
+						);
+						Ok(f)
+					} else {
+						Ok(l)
+					}
+				},
 			}
 		},
 		| (Some(l), None) => Ok(l),
