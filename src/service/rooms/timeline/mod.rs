@@ -3,6 +3,7 @@ mod backfill;
 mod build;
 mod create;
 mod data;
+mod helpers;
 mod redact;
 
 use std::{fmt::Write, mem::size_of, sync::Arc};
@@ -32,7 +33,7 @@ use serde::Deserialize;
 use self::data::Data;
 pub use self::{create::pdu_fits, data::PdusIterItem};
 use crate::{
-	Dep, account_data, admin, appservice, globals, pusher, rooms,
+	Dep, account_data, admin, appservice, config, globals, pusher, rooms,
 	rooms::short::{ShortEventId, ShortRoomId, ShortStateHash},
 	sending, server_keys, users,
 };
@@ -73,6 +74,8 @@ struct Services {
 	appservice: Dep<appservice::Service>,
 	admin: Dep<admin::Service>,
 	alias: Dep<rooms::alias::Service>,
+	config: Dep<config::Service>,
+	directory: Dep<rooms::directory::Service>,
 	globals: Dep<globals::Service>,
 	short: Dep<rooms::short::Service>,
 	state: Dep<rooms::state::Service>,
@@ -112,6 +115,8 @@ impl crate::Service for Service {
 				appservice: args.depend::<appservice::Service>("appservice"),
 				admin: args.depend::<admin::Service>("admin"),
 				alias: args.depend::<rooms::alias::Service>("rooms::alias"),
+				config: args.depend::<config::Service>("config"),
+				directory: args.depend::<rooms::directory::Service>("rooms::directory"),
 				globals: args.depend::<globals::Service>("globals"),
 				short: args.depend::<rooms::short::Service>("rooms::short"),
 				state: args.depend::<rooms::state::Service>("rooms::state"),
