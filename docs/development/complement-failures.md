@@ -6,7 +6,7 @@ Results: **391 pass / 138 fail** (subtests)
 
 ## Summary
 
-Current branch fixes **46 tests** vs the dev branch (362 pass / 167 fail),
+Current branch fixes **45 subtests** vs the dev branch (362 pass / 167 fail),
 with **zero regressions**. The remaining 138 failing subtests are categorized
 below.
 

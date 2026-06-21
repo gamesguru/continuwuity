@@ -257,17 +257,31 @@ impl Service {
 				.collect::<Vec<_>>()
 				.await
 		};
+		let was_tracked = statuses.contains_key(&msg.dest);
 
-		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
-			if !events.is_empty() {
-				futures.push(self.send_events(msg.dest, events));
-			} else {
-				statuses.remove(&msg.dest);
-			}
-		} else if is_flush {
-			// Flush was rejected (e.g., backoff still active due to timer
-			// jitter). Re-schedule so the retry isn't permanently lost.
-			self.reschedule_flush(msg.dest);
+		match self.select_events(&msg.dest, iv, statuses).await {
+			Ok(Some(events)) => {
+				if !events.is_empty() {
+					futures.push(self.send_events(msg.dest, events));
+				} else {
+					statuses.remove(&msg.dest);
+				}
+			},
+			Ok(None) if is_flush && !was_tracked => {
+				// Flush was rejected before a new send could start (e.g.,
+				// backoff still active due to timer jitter). Re-schedule so
+				// the retry isn't permanently lost.
+				self.reschedule_flush(msg.dest);
+			},
+			Ok(None) => {
+				// Ignore redundant flushes while a request is already in
+				// flight or otherwise already tracked.
+			},
+			Err(error) => {
+				if is_flush {
+					debug!(?error, dest = ?msg.dest, "Dropping flush after select_events error");
+				}
+			},
 		}
 	}
 
