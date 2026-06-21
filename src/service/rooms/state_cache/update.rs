@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use conduwuit::{Err, Event, Pdu, Result, implement, is_not_empty, utils::ReadyExt};
+use conduwuit::{Err, Event, Pdu, Result, implement, info, is_not_empty, utils::ReadyExt};
 use database::{Json, serialize_key};
 use futures::StreamExt;
 use ruma::{
@@ -163,6 +163,12 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 
 	self.db.roomid_joinedcount.raw_put(room_id, joinedcount);
 	self.db.roomid_invitedcount.raw_put(room_id, invitedcount);
+
+	info!(
+		"update_joined_count: room={room_id} joined={joinedcount} invited={invitedcount} \
+		 servers={:?}",
+		joined_servers
+	);
 
 	let mut removed_servers = Vec::new();
 	self.room_servers(room_id)

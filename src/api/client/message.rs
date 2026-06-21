@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Error, Result, at, debug_warn,
+	Err, Error, Result, at, debug_warn, info,
 	matrix::{
 		event::{Event, Matches},
 		pdu::PduCount,
@@ -106,6 +106,11 @@ pub(crate) async fn get_message_events_route(
 		.try_into()
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
+
+	info!(
+		"/messages: room={room_id} dir={:?} from={from} to={to:?} limit={limit}",
+		body.dir
+	);
 
 	if matches!(body.dir, Direction::Backward) {
 		services
@@ -255,12 +260,21 @@ pub(crate) async fn get_message_events_route(
 		.map(Event::into_format)
 		.collect();
 
-	Ok(get_message_events::v3::Response {
+	let resp = get_message_events::v3::Response {
 		start: from.to_string(),
 		end: next_token.as_ref().map(PduCount::to_string),
 		chunk,
 		state,
-	})
+	};
+
+	info!(
+		"/messages: room={room_id} returning {} events, start={}, end={:?}",
+		resp.chunk.len(),
+		resp.start,
+		resp.end
+	);
+
+	Ok(resp)
 }
 
 pub(crate) async fn lazy_loading_witness<'a, I>(

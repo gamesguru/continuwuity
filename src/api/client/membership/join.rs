@@ -835,6 +835,17 @@ async fn join_room_by_id_helper_remote_process(
 		.boxed()
 		.await;
 
+	let post_force_count = services
+		.rooms
+		.state_cache
+		.room_joined_count(room_id)
+		.await
+		.unwrap_or(0);
+	info!(
+		"join: after force_state+update_joined_count for {room_id}: \
+		 joined_count={post_force_count}"
+	);
+
 	// To prevent our join event from getting assigned a lower PduCount than the
 	// preceding historical extremities (which causes a chronologically
 	// out-of-order room timeline in client syncs), we drop the state lock
@@ -942,6 +953,14 @@ async fn join_room_by_id_helper_remote_process(
 		)
 		.boxed()
 		.await?;
+
+	let post_append_count = services
+		.rooms
+		.state_cache
+		.room_joined_count(room_id)
+		.await
+		.unwrap_or(0);
+	info!("join: after append_pdu for {room_id}: joined_count={post_append_count}");
 
 	info!("Setting final room state for new room");
 	// We set the room state after inserting the pdu, so that we never have a moment
