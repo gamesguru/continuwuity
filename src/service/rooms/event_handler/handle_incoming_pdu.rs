@@ -137,7 +137,12 @@ pub async fn handle_incoming_pdu<'a>(
 	trace!("processing incoming PDU from {origin} for room {room_id} with event id {event_id}");
 
 	// 1.1 Check we even know about the room
-	let meta_exists = self.services.metadata.exists(room_id).map(Ok);
+	let is_joining = self.services.state_cache.is_joining(room_id);
+	let meta_exists = self
+		.services
+		.metadata
+		.exists(room_id)
+		.map(move |exists| Ok(exists || is_joining));
 
 	// 1.2 Check if the room is disabled
 	let is_disabled = self.services.metadata.is_disabled(room_id).map(Ok);
