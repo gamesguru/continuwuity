@@ -1,1 +1,1 @@
-{"Action":"pass","Test":"TestRoomImageRoundtrip"}
+{"Action":"fail","Test":"TestRoomImageRoundtrip"}
