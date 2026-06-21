@@ -231,12 +231,17 @@ pub(super) async fn fetch_pdu(
 		return self.write_str(&msg).await;
 	}
 
-	let create_event = self
-		.services
-		.rooms
-		.state_accessor
-		.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-		.await?;
+	let create_event = if pdu.kind == ruma::events::TimelineEventType::RoomCreate {
+		// We're fetching the create event itself -- use it as its own create_event
+		// to avoid the catch-22 of needing the create event to insert the create event.
+		pdu.clone()
+	} else {
+		self.services
+			.rooms
+			.state_accessor
+			.room_state_get(&room_id, &StateEventType::RoomCreate, "")
+			.await?
+	};
 
 	info!("fetch_pdu: upgrading outlier to timeline PDU (full auth check)...");
 	let result = Box::pin(
