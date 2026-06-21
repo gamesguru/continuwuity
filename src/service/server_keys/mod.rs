@@ -91,26 +91,9 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 }
 
 #[implement(Service)]
-pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
+pub(crate) async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
 	let origin = &new_keys.server_name;
-
-	// (timo) Not atomic, but this is not critical
-	let mut keys: ServerSigningKeys = self
-		.db
-		.server_signingkeys
-		.get(origin)
-		.await
-		.deserialized()
-		.unwrap_or_else(|_| {
-			// Just insert "now", it doesn't matter
-			ServerSigningKeys::new(origin.to_owned(), MilliSecondsSinceUnixEpoch::now())
-		});
-
-	keys.verify_keys.extend(new_keys.verify_keys);
-	keys.old_verify_keys.extend(new_keys.old_verify_keys);
-	keys.valid_until_ts = new_keys.valid_until_ts;
-	keys.signatures = new_keys.signatures;
-	self.db.server_signingkeys.raw_put(origin, Json(&keys));
+	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
 }
 
 #[implement(Service)]

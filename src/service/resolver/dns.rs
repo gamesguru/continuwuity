@@ -157,6 +157,15 @@ async fn hooked_resolve(
 	}
 }
 
+fn is_valid_ip(ip: &std::net::IpAddr, client: &client::Service) -> bool {
+	use ipaddress::IPAddress;
+	if let Ok(parsed_ip) = IPAddress::parse(ip.to_string()) {
+		client.valid_cidr_range(&parsed_ip)
+	} else {
+		false
+	}
+}
+
 async fn resolve_to_reqwest(
 	server: Arc<Server>,
 	resolver: Arc<TokioResolver>,
@@ -165,21 +174,13 @@ async fn resolve_to_reqwest(
 ) -> ResolvingResult {
 	use std::{io, io::ErrorKind::Interrupted};
 
-	use ipaddress::IPAddress;
-
 	let handle_shutdown = || Box::new(io::Error::new(Interrupted, "Server shutting down"));
 
 	tokio::select! {
 		results = resolver.lookup_ip(name.as_str()) => {
 			let ips = results?
 				.into_iter()
-				.filter(move |ip| {
-					if let Ok(parsed_ip) = IPAddress::parse(ip.to_string()) {
-						client.valid_cidr_range(&parsed_ip)
-					} else {
-						false
-					}
-				})
+				.filter(move |ip| is_valid_ip(ip, &client))
 				.map(|ip| SocketAddr::new(ip, 0));
 			Ok(Box::new(ips))
 		}
@@ -191,18 +192,10 @@ async fn cached_to_reqwest(
 	cached: CachedOverride,
 	client: Arc<client::Service>,
 ) -> ResolvingResult {
-	use ipaddress::IPAddress;
-
 	let addrs = cached
 		.ips
 		.into_iter()
-		.filter(move |ip| {
-			if let Ok(parsed_ip) = IPAddress::parse(ip.to_string()) {
-				client.valid_cidr_range(&parsed_ip)
-			} else {
-				false
-			}
-		})
+		.filter(move |ip| is_valid_ip(ip, &client))
 		.map(move |ip| SocketAddr::new(ip, cached.port));
 
 	Ok(Box::new(addrs))

@@ -171,8 +171,12 @@ pub(crate) async fn get_remote_server_keys_batch_route(
 			.max();
 
 		if let Ok(server_key) = get_signing_keys_for(&services, server_name, min_valid).await {
-			let signed_key = sign_signing_keys(&services, &server_key).await?;
-			response_keys.push(signed_key);
+			match sign_signing_keys(&services, &server_key).await {
+				| Ok(signed_key) => response_keys.push(signed_key),
+				| Err(e) => {
+					conduwuit::warn!("Failed to sign server keys for {server_name}: {e}");
+				},
+			}
 		}
 	}
 
