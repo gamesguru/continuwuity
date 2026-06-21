@@ -1,9 +1,9 @@
-use axum::extract::State;
+use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{Err, Result, err, utils};
 use ruma::api::client::message::send_message_event;
 
-use crate::Ruma;
+use crate::{Ruma, RumaResponse};
 
 /// # `PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}`
 ///
@@ -18,7 +18,7 @@ pub(crate) async fn send_message_event_route(
 	State(services): State<crate::State>,
 	ClientIp(client_ip): ClientIp,
 	body: Ruma<send_message_event::v3::Request>,
-) -> Result<send_message_event::v3::Response> {
+) -> Result<axum::response::Response> {
 	let sender_user = body.sender_user();
 	let sender_device = body.sender_device.as_deref();
 	let appservice_info = body.appservice_info.as_ref();
@@ -32,6 +32,52 @@ pub(crate) async fn send_message_event_route(
 		.await;
 
 	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
+
+	if let Some(delay) = body.delay {
+		// Check if this is a new transaction id
+		if let Ok(response) = services
+			.transactions
+			.get_client_txn(sender_user, sender_device, &body.txn_id)
+			.await
+		{
+			if response.is_empty() {
+				return Err!(Request(InvalidParam(
+					"Tried to use txn id already used for an incompatible endpoint."
+				)));
+			}
+			return Ok(axum::Json(serde_json::json!({
+				"delay_id": utils::string_from_bytes(&response)?,
+			}))
+			.into_response());
+		}
+
+		let event = service::rooms::delayed_events::ScheduledDelayedEvent {
+			event_type: body.event_type.clone().into(),
+			state_key: None,
+			content: body.body.body.cast_ref().clone(),
+			user_id: sender_user.to_owned(),
+			room_id: body.room_id.clone(),
+			running_since: std::time::SystemTime::now(),
+			delay,
+		};
+		let delay_id = services
+			.rooms
+			.delayed_events
+			.queue_delayed_event(event)
+			.await?;
+
+		services.transactions.add_client_txnid(
+			sender_user,
+			sender_device,
+			&body.txn_id,
+			delay_id.as_bytes(),
+		);
+
+		return Ok(axum::Json(serde_json::json!({
+			"delay_id": delay_id,
+		}))
+		.into_response());
+	}
 
 	// Check if this is a new transaction id
 	if let Ok(response) = services
@@ -47,11 +93,12 @@ pub(crate) async fn send_message_event_route(
 			)));
 		}
 
-		return Ok(send_message_event::v3::Response {
+		return Ok(RumaResponse(send_message_event::v3::Response {
 			event_id: utils::string_from_bytes(&response)
 				.map(TryInto::try_into)
 				.map_err(|e| err!(Database("Invalid event_id in txnid data: {e:?}")))??,
-		});
+		})
+		.into_response());
 	}
 
 	let event_id = Box::pin(services.rooms.timeline.send_message_event_helper(
@@ -79,5 +126,5 @@ pub(crate) async fn send_message_event_route(
 
 	drop(state_lock);
 
-	Ok(send_message_event::v3::Response { event_id })
+	Ok(RumaResponse(send_message_event::v3::Response { event_id }).into_response())
 }

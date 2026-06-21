@@ -35,6 +35,9 @@ pub(crate) struct Args<T> {
 	/// Parsed JSON content.
 	/// None when body is not a valid string
 	pub(crate) json_body: Option<CanonicalJsonValue>,
+
+	/// MSC4140 delayed events timeout.
+	pub(crate) delay: Option<std::time::Duration>,
 }
 
 impl<T> Args<T>
@@ -123,6 +126,13 @@ where
 			);
 			json_body = Some(CanonicalJsonValue::Object(CanonicalJsonObject::new()));
 		}
+		let delay = request
+			.query
+			.org_matrix_msc4140_delay
+			.as_deref()
+			.and_then(|s| s.parse::<u64>().ok())
+			.map(std::time::Duration::from_millis);
+
 		let auth = auth::auth(services, &mut request, json_body.as_ref(), &T::METADATA).await?;
 		Ok(Self {
 			body: make_body::<T>(&mut request, json_body.as_mut())?,
@@ -131,6 +141,7 @@ where
 			sender_device: auth.sender_device,
 			appservice_info: auth.appservice_info,
 			json_body,
+			delay,
 		})
 	}
 }

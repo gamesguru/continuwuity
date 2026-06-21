@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests;
-use axum::extract::State;
+use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{Err, Result, err, matrix::Event};
 use futures::{FutureExt, TryStreamExt};
@@ -19,7 +19,7 @@ pub(crate) async fn send_state_event_for_key_route(
 	State(services): State<crate::State>,
 	ClientIp(ip): ClientIp,
 	body: Ruma<send_state_event::v3::Request>,
-) -> Result<send_state_event::v3::Response> {
+) -> Result<axum::response::Response> {
 	let sender_user = body.sender_user();
 	services
 		.users
@@ -28,6 +28,28 @@ pub(crate) async fn send_state_event_for_key_route(
 
 	if services.users.is_suspended(sender_user).await? {
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
+	}
+
+	if let Some(delay) = body.delay {
+		let event = service::rooms::delayed_events::ScheduledDelayedEvent {
+			event_type: body.event_type.clone().into(),
+			state_key: Some(body.state_key.clone()),
+			content: body.body.body.cast_ref().clone(),
+			user_id: sender_user.to_owned(),
+			room_id: body.room_id.clone(),
+			running_since: std::time::SystemTime::now(),
+			delay,
+		};
+		let delay_id = services
+			.rooms
+			.delayed_events
+			.queue_delayed_event(event)
+			.await?;
+
+		return Ok(axum::Json(serde_json::json!({
+			"delay_id": delay_id,
+		}))
+		.into_response());
 	}
 
 	let state_lock = services
@@ -57,7 +79,7 @@ pub(crate) async fn send_state_event_for_key_route(
 		.boxed()
 		.await?;
 
-	Ok(send_state_event::v3::Response { event_id })
+	Ok(RumaResponse(send_state_event::v3::Response { event_id }).into_response())
 }
 
 /// # `PUT /_matrix/client/*/rooms/{roomId}/state/{eventType}`
@@ -67,11 +89,10 @@ pub(crate) async fn send_state_event_for_empty_key_route(
 	State(services): State<crate::State>,
 	ClientIp(ip): ClientIp,
 	body: Ruma<send_state_event::v3::Request>,
-) -> Result<RumaResponse<send_state_event::v3::Response>> {
+) -> Result<axum::response::Response> {
 	send_state_event_for_key_route(State(services), ClientIp(ip), body)
 		.boxed()
 		.await
-		.map(RumaResponse)
 }
 
 /// # `GET /_matrix/client/v3/rooms/{roomid}/state`

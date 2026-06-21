@@ -5,16 +5,20 @@ use crate::Ruma;
 
 pub(crate) async fn update_delayed_event_event_route(
 	State(services): State<crate::State>,
-	axum::extract::Path((delay_id, action_str)): axum::extract::Path<(String, String)>,
+	axum::extract::Path(delay_id): axum::extract::Path<String>,
+	uri: http::Uri,
 	body: Ruma<ruma::api::client::device::get_devices::v3::Request>,
 ) -> Result<axum::Json<serde_json::Value>> {
 	let sender_user = body.sender_user();
 
-	let action = match action_str.as_str() {
-		| "restart" => service::rooms::delayed_events::UpdateAction::Restart,
-		| "send" => service::rooms::delayed_events::UpdateAction::Send,
-		| "cancel" => service::rooms::delayed_events::UpdateAction::Cancel,
-		| _ => return Err!(Request(InvalidParam("Invalid action."))),
+	let action = if uri.path().ends_with("/restart") {
+		service::rooms::delayed_events::UpdateAction::Restart
+	} else if uri.path().ends_with("/send") {
+		service::rooms::delayed_events::UpdateAction::Send
+	} else if uri.path().ends_with("/cancel") {
+		service::rooms::delayed_events::UpdateAction::Cancel
+	} else {
+		return Err!(Request(InvalidParam("Invalid action.")));
 	};
 
 	Box::pin(

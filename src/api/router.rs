@@ -9,7 +9,7 @@ use std::str::FromStr;
 use axum::{
 	Router,
 	response::{IntoResponse, Redirect},
-	routing::{any, get, post},
+	routing::{any, get, post, put},
 };
 use conduwuit::{Server, err};
 pub(super) use conduwuit_service::state::State;
@@ -120,8 +120,22 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::get_protocols_route)
 		.route("/_matrix/client/unstable/thirdparty/protocols",
 			get(client::get_protocols_route_unstable))
-		.ruma_route(&client::send_message_event_route)
-		.ruma_route(&client::send_state_event_for_key_route)
+		.route(
+			"/_matrix/client/v3/rooms/{room_id}/send/{event_type}/{txn_id}",
+			put(client::send_message_event_route),
+		)
+		.route(
+			"/_matrix/client/r0/rooms/{room_id}/send/{event_type}/{txn_id}",
+			put(client::send_message_event_route),
+		)
+		.route(
+			"/_matrix/client/v3/rooms/{room_id}/state/{event_type}/{state_key}",
+			put(client::send_state_event_for_key_route),
+		)
+		.route(
+			"/_matrix/client/r0/rooms/{room_id}/state/{event_type}/{state_key}",
+			put(client::send_state_event_for_key_route),
+		)
 		.ruma_route(&client::get_state_events_route)
 		.ruma_route(&client::get_state_events_for_key_route)
 		// Ruma doesn't have support for multiple paths for a single endpoint yet, and these routes
@@ -195,7 +209,15 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			get(client::get_delayed_event_route),
 		)
 		.route(
-			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/{action}",
+			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/restart",
+			post(client::update_delayed_event_event_route),
+		)
+		.route(
+			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/send",
+			post(client::update_delayed_event_event_route),
+		)
+		.route(
+			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/cancel",
 			post(client::update_delayed_event_event_route),
 		)
 		.ruma_route(&client::get_tags_route)

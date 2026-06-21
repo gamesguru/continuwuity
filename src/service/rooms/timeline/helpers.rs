@@ -267,7 +267,7 @@ async fn allowed_to_send_state_event(
 							.resolve_alias(alias)
 							.await
 							.map_err(|e| {
-							err!(Request(Unknown(
+							err!(Request(BadAlias(
 								"Failed resolving alias \"{alias}\": {e}",
 								alias = alias.as_str()
 							)))
