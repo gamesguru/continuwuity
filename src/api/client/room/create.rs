@@ -462,7 +462,9 @@ pub(crate) async fn create_room_route(
 			.boxed()
 			.await
 		{
-			| Err(e) if matches!(e.kind(), ruma::api::client::error::ErrorKind::Forbidden { .. }) => {
+			| Err(e)
+				if matches!(e.kind(), ruma::api::client::error::ErrorKind::Forbidden { .. }) =>
+			{
 				// Silently skip forbidden events
 				continue;
 			},
