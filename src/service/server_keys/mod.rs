@@ -8,7 +8,7 @@ mod verify;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use conduwuit::{
-	Result, Server, debug_error, debug_warn, implement, trace,
+	Result, Server, debug_error, debug_warn, err, implement, trace,
 	utils::{IterStream, timepoint_from_now},
 };
 use database::{Deserialized, Json, Map};
@@ -91,24 +91,119 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 }
 
 #[implement(Service)]
-async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
+pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) -> Result<()> {
 	let origin = &new_keys.server_name;
 
-	// (timo) Not atomic, but this is not critical
-	let mut keys: ServerSigningKeys = self
+	// Intra-payload collision verification (MSC 00FD)
+	for (key_id, verify_key) in &new_keys.verify_keys {
+		if let Some(old_verify_key) = new_keys.old_verify_keys.get(key_id) {
+			if verify_key.key != old_verify_key.key {
+				return Err(err!(Request(InvalidParam(
+					"Intra-payload Key ID collision detected"
+				))));
+			}
+		}
+	}
+
+	// Load the historical, cumulative keys under `origin\0historical`
+	let mut historical_key = origin.as_bytes().to_vec();
+	historical_key.extend_from_slice(b"\0historical");
+
+	let historical_keys_res = self
 		.db
 		.server_signingkeys
-		.get(origin)
+		.get(&historical_key)
 		.await
-		.deserialized()
-		.unwrap_or_else(|_| {
-			// Just insert "now", it doesn't matter
-			ServerSigningKeys::new(origin.to_owned(), MilliSecondsSinceUnixEpoch::now())
-		});
+		.deserialized::<ServerSigningKeys>();
 
-	keys.verify_keys.extend(new_keys.verify_keys);
-	keys.old_verify_keys.extend(new_keys.old_verify_keys);
-	self.db.server_signingkeys.raw_put(origin, Json(&keys));
+	let mut historical_keys = match historical_keys_res {
+		| Ok(keys) => keys,
+		| Err(ref e) if e.is_not_found() =>
+			ServerSigningKeys::new(origin.to_owned(), MilliSecondsSinceUnixEpoch::now()),
+		| Err(e) => return Err(e),
+	};
+
+	// Helper to compute sha256 hex string for fingerprint logging
+	let get_fingerprint = |base64_key: &ruma::serde::Base64| -> String {
+		use sha2::{Digest, Sha256};
+		let digest = Sha256::digest(base64_key.as_bytes());
+		let mut s = String::with_capacity(digest.len().saturating_mul(2));
+		for b in digest {
+			use std::fmt::Write as _;
+			let _ = write!(s, "{b:02x}");
+		}
+		s
+	};
+
+	// Merging with Collision Detection (First Seen Wins)
+	let mut filtered_verify_keys = new_keys.verify_keys.clone();
+	let mut filtered_old_verify_keys = new_keys.old_verify_keys.clone();
+
+	for (key_id, new_key) in &new_keys.verify_keys {
+		if let Some(existing_key) = historical_keys.verify_keys.get(key_id) {
+			if existing_key.key != new_key.key {
+				let existing_fp = get_fingerprint(&existing_key.key);
+				let new_fp = get_fingerprint(&new_key.key);
+				conduwuit::warn!(
+					"Key ID collision detected for server {origin} on active key {key_id}! \
+					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
+					 Retaining cached key."
+				);
+				filtered_verify_keys.remove(key_id);
+			}
+		} else if let Some(existing_old_key) = historical_keys.old_verify_keys.get(key_id) {
+			if existing_old_key.key != new_key.key {
+				let existing_fp = get_fingerprint(&existing_old_key.key);
+				let new_fp = get_fingerprint(&new_key.key);
+				conduwuit::warn!(
+					"Key ID collision detected for server {origin} on active/old key {key_id}! \
+					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
+					 Retaining cached key."
+				);
+				filtered_verify_keys.remove(key_id);
+			}
+		}
+	}
+
+	for (key_id, new_old_key) in &new_keys.old_verify_keys {
+		if let Some(existing_key) = historical_keys.verify_keys.get(key_id) {
+			if existing_key.key != new_old_key.key {
+				let existing_fp = get_fingerprint(&existing_key.key);
+				let new_fp = get_fingerprint(&new_old_key.key);
+				conduwuit::warn!(
+					"Key ID collision detected for server {origin} on old/active key {key_id}! \
+					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
+					 Retaining cached key."
+				);
+				filtered_old_verify_keys.remove(key_id);
+			}
+		} else if let Some(existing_old_key) = historical_keys.old_verify_keys.get(key_id) {
+			if existing_old_key.key != new_old_key.key {
+				let existing_fp = get_fingerprint(&existing_old_key.key);
+				let new_fp = get_fingerprint(&new_old_key.key);
+				conduwuit::warn!(
+					"Key ID collision detected for server {origin} on old key {key_id}! Cached \
+					 fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. Retaining \
+					 cached key."
+				);
+				filtered_old_verify_keys.remove(key_id);
+			}
+		}
+	}
+
+	// Store the filtered/merged historical keys
+	historical_keys.verify_keys.extend(filtered_verify_keys);
+	historical_keys
+		.old_verify_keys
+		.extend(filtered_old_verify_keys);
+	self.db
+		.server_signingkeys
+		.raw_put(&historical_key, Json(&historical_keys));
+
+	// Store the untouched, freshly signed response under `origin`
+	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
+
+	Ok(())
 }
 
 #[implement(Service)]
@@ -139,26 +234,46 @@ pub async fn required_keys_exist(
 pub async fn verify_key_exists(&self, origin: &ServerName, key_id: &ServerSigningKeyId) -> bool {
 	type KeysMap<'a> = BTreeMap<&'a ServerSigningKeyId, &'a RawJsonValue>;
 
-	let Ok(keys) = self
+	let mut historical_key = origin.as_bytes().to_vec();
+	historical_key.extend_from_slice(b"\0historical");
+
+	if let Ok(keys) = self
+		.db
+		.server_signingkeys
+		.get(&historical_key)
+		.await
+		.deserialized::<Raw<ServerSigningKeys>>()
+	{
+		if let Ok(Some(verify_keys)) = keys.get_field::<KeysMap<'_>>("verify_keys") {
+			if verify_keys.contains_key(key_id) {
+				return true;
+			}
+		}
+
+		if let Ok(Some(old_verify_keys)) = keys.get_field::<KeysMap<'_>>("old_verify_keys") {
+			if old_verify_keys.contains_key(key_id) {
+				return true;
+			}
+		}
+	}
+
+	if let Ok(keys) = self
 		.db
 		.server_signingkeys
 		.get(origin)
 		.await
 		.deserialized::<Raw<ServerSigningKeys>>()
-	else {
-		debug_warn!("No known signing keys found for {origin}");
-		return false;
-	};
-
-	if let Ok(Some(verify_keys)) = keys.get_field::<KeysMap<'_>>("verify_keys") {
-		if verify_keys.contains_key(key_id) {
-			return true;
+	{
+		if let Ok(Some(verify_keys)) = keys.get_field::<KeysMap<'_>>("verify_keys") {
+			if verify_keys.contains_key(key_id) {
+				return true;
+			}
 		}
-	}
 
-	if let Ok(Some(old_verify_keys)) = keys.get_field::<KeysMap<'_>>("old_verify_keys") {
-		if old_verify_keys.contains_key(key_id) {
-			return true;
+		if let Ok(Some(old_verify_keys)) = keys.get_field::<KeysMap<'_>>("old_verify_keys") {
+			if old_verify_keys.contains_key(key_id) {
+				return true;
+			}
 		}
 	}
 
@@ -168,11 +283,24 @@ pub async fn verify_key_exists(&self, origin: &ServerName, key_id: &ServerSignin
 
 #[implement(Service)]
 pub async fn verify_keys_for(&self, origin: &ServerName) -> VerifyKeys {
-	let mut keys = self
-		.signing_keys_for(origin)
+	let mut historical_key = origin.as_bytes().to_vec();
+	historical_key.extend_from_slice(b"\0historical");
+
+	let mut keys = BTreeMap::new();
+
+	if let Ok(historical_keys) = self
+		.db
+		.server_signingkeys
+		.get(&historical_key)
 		.await
-		.map(|keys| merge_old_keys(keys).verify_keys)
-		.unwrap_or(BTreeMap::new());
+		.deserialized::<ServerSigningKeys>()
+	{
+		keys.extend(merge_old_keys(historical_keys).verify_keys);
+	}
+
+	if let Ok(origin_keys) = self.signing_keys_for(origin).await {
+		keys.extend(merge_old_keys(origin_keys).verify_keys);
+	}
 
 	if self.services.globals.server_is_ours(origin) {
 		keys.extend(self.verify_keys.clone().into_iter());
