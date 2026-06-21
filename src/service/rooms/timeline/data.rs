@@ -264,7 +264,10 @@ impl Data {
 	pub(super) fn reindex_pdu(&self, new_pdu_id: &RawPduId, event_id: &EventId, pdu_count: u64) {
 		let event_id_bytes = event_id.as_bytes();
 
-		// Update position mapping (metadata)
+		// Update position mapping (metadata is the source of truth;
+		// eventid_pduid is still written for cache consistency until
+		// we add cache invalidation on insert)
+		self.eventid_pduid.insert(event_id, new_pdu_id);
 		self.room_pducount_eventid
 			.insert(new_pdu_id, event_id_bytes);
 
@@ -293,9 +296,24 @@ impl Data {
 		}
 	}
 
-	/// Returns the pdu's id.
-	#[inline]
+	/// Returns the pdu's id. Tries metadata `pdu_count` first (fast path),
+	/// then falls back to the legacy `eventid_pduid` table.
 	pub(super) async fn get_pdu_id(&self, event_id: &EventId) -> Result<RawPduId> {
+		// Fast path: metadata has pdu_count
+		if let Ok(bytes) = self.eventid_metadata.get(event_id.as_bytes()).await {
+			if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+				if let Some(count) = meta.pdu_count {
+					let pdu_count = PduCount::from_unsigned(count);
+					return Ok(PduId {
+						shortroomid: meta.short_room_id.into(),
+						shorteventid: pdu_count,
+					}
+					.into());
+				}
+			}
+		}
+
+		// Legacy fallback
 		self.eventid_pduid
 			.get(event_id)
 			.await
