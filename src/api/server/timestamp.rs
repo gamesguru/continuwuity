@@ -42,11 +42,15 @@ pub(crate) async fn get_event_by_timestamp_route(
 		.pdus_by_timestamp(room_id, body.ts.0.into(), body.dir);
 	pin_mut!(stream);
 
-	if let Some(Ok(pdu)) = stream.next().await {
-		return Ok(get_event_by_timestamp::v1::Response::new(
-			pdu.event_id.clone(),
-			MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
-		));
+	match stream.next().await {
+		| Some(Ok(pdu)) => {
+			return Ok(get_event_by_timestamp::v1::Response::new(
+				pdu.event_id.clone(),
+				MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
+			));
+		},
+		| Some(Err(e)) => return Err(e),
+		| None => {},
 	}
 
 	info!(

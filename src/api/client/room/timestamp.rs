@@ -47,7 +47,15 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 
 	let mut local_result = None;
 	let mut scanned = 0_usize;
-	while let Some(Ok(pdu)) = stream.next().await {
+	while let Some(item) = stream.next().await {
+		let pdu = match item {
+			| Ok(pdu) => pdu,
+			| Err(e) => {
+				warn!("Error scanning timestamp index stream: {e:?}");
+				continue;
+			},
+		};
+
 		scanned = scanned.saturating_add(1);
 		if scanned > MAX_SCAN {
 			break;
@@ -74,7 +82,19 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	if services.server.config.allow_federation {
 		if let Some(origin) = room_id.server_name() {
 			if origin != services.globals.server_name() {
-				let fed_result = federation_query(&services, origin, room_id, ts, dir).await;
+				let mut fed_result = federation_query(&services, origin, room_id, ts, dir).await;
+
+				// Verify that the user has permission to see the returned federation event
+				if let Some(ref fed) = fed_result {
+					if !services
+						.rooms
+						.state_accessor
+						.user_can_see_event(body.sender_user(), room_id, &fed.event_id)
+						.await
+					{
+						fed_result = None;
+					}
+				}
 
 				return pick_closer(ts, dir, local_result, fed_result);
 			}
@@ -103,14 +123,7 @@ fn pick_closer(
 			let l_dist = l_ts.abs_diff(target_u64);
 			let f_dist = f_ts.abs_diff(target_u64);
 
-			// For forward search, prefer the earlier event on tie.
-			// For backward search, prefer the later event on tie.
-			let prefer_fed = match dir {
-				| Direction::Forward => f_ts <= l_ts,
-				| Direction::Backward => f_ts >= l_ts,
-			};
-
-			if prefer_fed || f_dist < l_dist {
+			if f_dist < l_dist {
 				debug!(
 					local_ts = l_ts,
 					fed_ts = f_ts,
@@ -118,8 +131,27 @@ fn pick_closer(
 					"Preferring federation result (closer to target)"
 				);
 				Ok(f)
-			} else {
+			} else if l_dist < f_dist {
 				Ok(l)
+			} else {
+				// For forward search, prefer the earlier event on tie.
+				// For backward search, prefer the later event on tie.
+				let prefer_fed = match dir {
+					| Direction::Forward => f_ts <= l_ts,
+					| Direction::Backward => f_ts >= l_ts,
+				};
+
+				if prefer_fed {
+					debug!(
+						local_ts = l_ts,
+						fed_ts = f_ts,
+						target_ts = target_u64,
+						"Preferring federation result (tie-break)"
+					);
+					Ok(f)
+				} else {
+					Ok(l)
+				}
 			}
 		},
 		| (Some(l), None) => Ok(l),

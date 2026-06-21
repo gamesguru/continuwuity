@@ -303,13 +303,21 @@ async fn build_state_and_timeline(
 	let mut timeline = timeline;
 	if joined_since_last_sync && timeline.pdus.is_empty() {
 		warn!(%room_id, "timeline for newly joined room is empty, retrying without upper bound");
+		let timeline_limit = sync_context
+			.filter
+			.room
+			.timeline
+			.limit
+			.and_then(|limit| limit.try_into().ok())
+			.unwrap_or(DEFAULT_TIMELINE_LIMIT);
+
 		timeline = load_timeline(
 			services,
 			sync_context.syncing_user,
 			room_id,
 			sync_context.last_sync_end_count.map(PduCount::Normal),
 			None,
-			DEFAULT_TIMELINE_LIMIT,
+			timeline_limit,
 		)
 		.await?;
 	}
