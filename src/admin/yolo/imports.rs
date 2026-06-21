@@ -120,46 +120,8 @@ pub(super) async fn import_pdus(
 			.ok(),
 	);
 
-	// Pre-cache shortroomid once (avoids per-event DB lookup)
-	let _shortroomid = self
-		.services
-		.rooms
-		.short
-		.get_or_create_shortroomid(&room_id)
-		.await;
-
-	// Bulk pre-create all short event IDs in one pass. This collects every
-	// event_id, prev_event_id, and auth_event_id from the parsed set and
-	// runs multi_get_or_create_shorteventid to populate the in-memory cache.
-	// Subsequent per-event calls inside append_pdu_batch become cache hits.
-	{
-		use std::collections::HashSet;
-
-		use futures::StreamExt;
-
-		let mut all_ids: HashSet<OwnedEventId> = HashSet::with_capacity(total.saturating_mul(3));
-		for (eid, _, pdu, ..) in &parsed_pdus {
-			all_ids.insert(eid.clone());
-			for prev in &pdu.prev_events {
-				all_ids.insert(prev.clone());
-			}
-			for auth in &pdu.auth_events {
-				all_ids.insert(auth.clone());
-			}
-		}
-		let id_count = all_ids.len();
-		let _: Vec<_> = self
-			.services
-			.rooms
-			.short
-			.multi_get_or_create_shorteventid(all_ids.iter().map(AsRef::as_ref))
-			.collect()
-			.await;
-		info!("Pre-created {id_count} short event IDs for {total} PDUs");
-	};
-
 	let chunks: Vec<Vec<_>> = parsed_pdus
-		.chunks(10_000)
+		.chunks(5000)
 		.map(
 			<[(
 				OwnedEventId,
