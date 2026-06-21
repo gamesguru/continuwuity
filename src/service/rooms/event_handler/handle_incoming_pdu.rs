@@ -323,6 +323,11 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 					.state_cache
 					.mark_as_left(target_user, room_id, None)
 					.await;
+				// Store the leave/ban as an outlier so the remote server's
+				// retry finds it and doesn't loop with 404s.
+				self.services
+					.outlier
+					.add_pdu_outlier(event_id, &value, Some(room_id));
 				return Ok(None);
 			}
 		}
