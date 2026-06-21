@@ -82,10 +82,6 @@ pub async fn leave_room(
 	room_id: &RoomId,
 	reason: Option<String>,
 ) -> Result {
-	if services.rooms.state_cache.is_left(user_id, room_id).await {
-		return Ok(());
-	}
-
 	let is_banned = services.rooms.metadata.is_banned(room_id);
 	let is_disabled = services.rooms.metadata.is_disabled(room_id);
 
