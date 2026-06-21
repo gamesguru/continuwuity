@@ -23,10 +23,11 @@ mod ser;
 mod stream;
 #[cfg(test)]
 mod tests;
+pub mod transaction;
 pub(crate) mod util;
 mod watchers;
 
-use std::{ops::Index, sync::Arc};
+use std::{future::Future, ops::Index, sync::Arc};
 
 use conduwuit::{Result, Server, err};
 
@@ -76,6 +77,38 @@ impl Database {
 
 	#[inline]
 	pub fn keys(&self) -> impl Iterator<Item = &MapsKey> + Send + '_ { self.maps.keys() }
+
+	/// Executes a block of database operations within an atomic transaction.
+	/// Automatically commits the operations to the database upon completion.
+	pub async fn transaction<F, Fut, R>(&self, f: F) -> Result<R>
+	where
+		F: FnOnce() -> Fut,
+		Fut: Future<Output = Result<R>>,
+	{
+		use rocksdb::WriteBatchWithTransaction;
+		use tokio::sync::Mutex;
+
+		let batch =
+			Arc::new(Mutex::new((WriteBatchWithTransaction::<false>::default(), Vec::new())));
+
+		let res = transaction::TRANSACTION_BATCH
+			.scope(batch.clone(), async { f().await })
+			.await?;
+
+		let mut batch_guard = batch.lock().await;
+		let write_options = map::write_options_default(&self.db);
+		self.db
+			.db
+			.write_opt(&batch_guard.0, &write_options)
+			.or_else(or_else)?;
+		batch_guard.0.clear();
+
+		for wake_closure in batch_guard.1.drain(..) {
+			wake_closure();
+		}
+
+		Ok(res)
+	}
 }
 
 impl Index<&str> for Database {
