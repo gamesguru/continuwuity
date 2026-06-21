@@ -17,11 +17,13 @@ pub(crate) async fn update_delayed_event_event_route(
 		| _ => return Err!(Request(InvalidParam("Invalid action."))),
 	};
 
-	services
-		.rooms
-		.delayed_events
-		.update_delayed_event(delay_id, action)
-		.await?;
+	Box::pin(
+		services
+			.rooms
+			.delayed_events
+			.update_delayed_event(delay_id, action),
+	)
+	.await?;
 
 	Ok(axum::Json(serde_json::json!({})))
 }

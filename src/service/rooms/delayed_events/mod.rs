@@ -94,6 +94,7 @@ pub struct DelayedEventData {
 
 impl DelayedEventData {
 	/// Create a new delayed event data object with the given parameters
+	#[must_use]
 	pub fn new(
 		delay_id: String,
 		room_id: OwnedRoomId,
@@ -118,6 +119,7 @@ impl DelayedEventData {
 	}
 
 	/// Returns the status indicated by this delayed event data.
+	#[must_use]
 	pub fn status(&self) -> DelayedEventStatus {
 		if self.finalized_ts.is_none() {
 			DelayedEventStatus::Scheduled
@@ -189,7 +191,9 @@ impl crate::Service for Service {
 		}))
 	}
 
-	async fn worker(self: Arc<Self>) -> Result<()> { submission_queue::worker(&self).await }
+	async fn worker(self: Arc<Self>) -> Result<()> {
+		Box::pin(submission_queue::worker(&self)).await
+	}
 
 	fn interrupt(&self) { self.interrupt_requested.store(true, Ordering::Relaxed); }
 
@@ -197,8 +201,13 @@ impl crate::Service for Service {
 
 	async fn memory_usage(&self, out: &mut (dyn Write + Send)) -> Result {
 		let mut mem_usage = self.mem_usage.load(Ordering::Relaxed);
-		mem_usage +=
-			self.scheduled_events.lock().await.len() * (DELAY_ID_SIZE + size_of::<String>());
+		mem_usage = mem_usage.saturating_add(
+			self.scheduled_events
+				.lock()
+				.await
+				.len()
+				.saturating_mul(DELAY_ID_SIZE.saturating_add(size_of::<String>())),
+		);
 		writeln!(out, "{mem_usage} bytes")?;
 
 		Ok(())
@@ -334,33 +343,29 @@ impl Service {
 
 				let result = match &event.state_key {
 					| Some(state_key) =>
-						self.services
-							.timeline
-							.send_state_event_for_key_helper(
-								&event.user_id,
-								&event.room_id,
-								&state_lock,
-								&event.event_type.to_string().into(),
-								event.content.cast_ref(),
-								state_key,
-								Some(timestamp),
-								Some(unsigned),
-							)
-							.await,
+						Box::pin(self.services.timeline.send_state_event_for_key_helper(
+							&event.user_id,
+							&event.room_id,
+							&state_lock,
+							&event.event_type.to_string().into(),
+							event.content.cast_ref(),
+							state_key,
+							Some(timestamp),
+							Some(unsigned),
+						))
+						.await,
 					| None =>
-						self.services
-							.timeline
-							.send_message_event_helper(
-								&event.user_id,
-								&event.room_id,
-								&state_lock,
-								&event.event_type.to_string().into(),
-								event.content.cast_ref(),
-								None,
-								Some(timestamp),
-								Some(unsigned),
-							)
-							.await,
+						Box::pin(self.services.timeline.send_message_event_helper(
+							&event.user_id,
+							&event.room_id,
+							&state_lock,
+							&event.event_type.to_string().into(),
+							event.content.cast_ref(),
+							None,
+							Some(timestamp),
+							Some(unsigned),
+						))
+						.await,
 				};
 
 				match result {
@@ -479,8 +484,7 @@ impl Service {
 				Ok(())
 			},
 			| UpdateAction::Send | UpdateAction::Cancel =>
-				self.finalize_delayed_event(&delay_id, event, action, true)
-					.await,
+				Box::pin(self.finalize_delayed_event(&delay_id, event, action, true)).await,
 		}
 	}
 
@@ -562,12 +566,14 @@ impl Service {
 		let submission_time = event.running_since + event.delay;
 
 		if submission_time <= SystemTime::now() {
-			let _ = self
-				.finalize_delayed_event(&delay_id, event, UpdateAction::Send, false)
-				.await
-				.inspect_err(
-					|err| error!(%delay_id, %err, "Error encountered submitting event."),
-				);
+			let _ = Box::pin(self.finalize_delayed_event(
+				&delay_id,
+				event,
+				UpdateAction::Send,
+				false,
+			))
+			.await
+			.inspect_err(|err| error!(%delay_id, %err, "Error encountered submitting event."));
 			None
 		} else {
 			Some((submission_time, delay_id))

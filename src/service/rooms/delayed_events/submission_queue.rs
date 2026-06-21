@@ -72,7 +72,7 @@ pub(crate) async fn worker(service: &Service) -> Result<()> {
 		// RescvFuture is cancellation-safe
 		select! {
 			Some(delay_id) = next_submit => {
-				if let Some((time, delay_id)) = service.send_event_if_ready(delay_id).await {
+				if let Some((time, delay_id)) = Box::pin(service.send_event_if_ready(delay_id)).await {
 					queue.queue.push((Reverse(time), delay_id));
 				}
 			},

@@ -54,24 +54,21 @@ pub(crate) async fn send_message_event_route(
 		});
 	}
 
-	let event_id = services
-		.rooms
-		.timeline
-		.send_message_event_helper(
-			sender_user,
-			&body.room_id,
-			&state_lock,
-			&body.event_type,
-			&body.body.body,
-			Some(&body.txn_id),
-			if appservice_info.is_some() {
-				body.timestamp
-			} else {
-				None
-			},
-			None,
-		)
-		.await?;
+	let event_id = Box::pin(services.rooms.timeline.send_message_event_helper(
+		sender_user,
+		&body.room_id,
+		&state_lock,
+		&body.event_type,
+		&body.body.body,
+		Some(&body.txn_id),
+		if appservice_info.is_some() {
+			body.timestamp
+		} else {
+			None
+		},
+		None,
+	))
+	.await?;
 
 	services.transactions.add_client_txnid(
 		sender_user,

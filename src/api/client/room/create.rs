@@ -2,20 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
 use conduwuit::{
-	Err, Error, Result, RoomVersion, debug, debug_info, debug_warn, err, info,
+	Err, Error, Result, RoomVersion, debug, debug_info, err, info,
 	matrix::{StateKey, pdu::PduBuilder},
 	trace, warn,
 };
 use conduwuit_service::{Services, appservice::RegistrationInfo};
 use futures::FutureExt;
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, Int, MilliSecondsSinceUnixEpoch, OwnedRoomAliasId,
-	OwnedRoomId, OwnedUserId, RoomAliasId, RoomId, RoomVersionId, UserId,
-	api::client::{
-		error::ErrorKind::Forbidden,
-		room::{self, create_room},
-	},
-	assign,
+	CanonicalJsonObject, Int, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomVersionId,
+	api::client::room::{self, create_room},
 	events::{
 		AnyStateEventContent, StateEventType, TimelineEventType,
 		invite_permission_config::FilterLevel,
@@ -467,7 +462,7 @@ pub(crate) async fn create_room_route(
 			.boxed()
 			.await
 		{
-			| Err(Error::Request(Forbidden, ..)) => {
+			| Err(Error::Request(_forbidden, ..)) => {
 				// Silently skip forbidden events
 				continue;
 			},
