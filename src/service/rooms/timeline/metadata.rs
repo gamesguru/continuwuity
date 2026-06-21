@@ -14,12 +14,12 @@ pub struct EventMetadata {
 	pub local_topological_depth: u64,
 	/// Timeline position counter. `None` = legacy record (not yet migrated).
 	/// `Some(0)` = outlier / not in timeline. Normal events start at 1.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
+	#[serde(default)]
 	pub pdu_count: Option<u64>,
 	/// Reason why this event was soft-failed (empty = no reason stored).
-	#[serde(default, skip_serializing_if = "String::is_empty")]
+	#[serde(default)]
 	pub soft_fail_reason: String,
 	/// Reason why this event was rejected (empty = no reason stored).
-	#[serde(default, skip_serializing_if = "String::is_empty")]
+	#[serde(default)]
 	pub rejection_reason: String,
 }

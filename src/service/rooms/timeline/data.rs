@@ -264,10 +264,7 @@ impl Data {
 	pub(super) fn reindex_pdu(&self, new_pdu_id: &RawPduId, event_id: &EventId, pdu_count: u64) {
 		let event_id_bytes = event_id.as_bytes();
 
-		// Update position mapping (metadata is the source of truth;
-		// eventid_pduid is still written for cache consistency until
-		// we add cache invalidation on insert)
-		self.eventid_pduid.insert(event_id, new_pdu_id);
+		// Update position mapping (metadata pdu_count is source of truth)
 		self.room_pducount_eventid
 			.insert(new_pdu_id, event_id_bytes);
 
@@ -300,24 +297,35 @@ impl Data {
 	/// then falls back to the legacy `eventid_pduid` table.
 	pub(super) async fn get_pdu_id(&self, event_id: &EventId) -> Result<RawPduId> {
 		// Fast path: metadata has pdu_count
-		if let Ok(bytes) = self.eventid_metadata.get(event_id.as_bytes()).await {
-			if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
-				if let Some(count) = meta.pdu_count {
-					let pdu_count = PduCount::from_unsigned(count);
-					return Ok(PduId {
-						shortroomid: meta.short_room_id.into(),
-						shorteventid: pdu_count,
+		let meta_result = self.eventid_metadata.get(event_id.as_bytes()).await;
+		match &meta_result {
+			| Ok(bytes) => match bincode::deserialize::<rooms::timeline::EventMetadata>(bytes) {
+				| Ok(meta) => {
+					if let Some(count) = meta.pdu_count {
+						let pdu_count = PduCount::from_unsigned(count);
+						return Ok(PduId {
+							shortroomid: meta.short_room_id,
+							shorteventid: pdu_count,
+						}
+						.into());
 					}
-					.into());
-				}
-			}
+					eprintln!("get_pdu_id: metadata found but pdu_count is None for {event_id}");
+				},
+				| Err(e) => eprintln!("get_pdu_id: metadata deser failed for {event_id}: {e}"),
+			},
+			| Err(e) => eprintln!("get_pdu_id: metadata lookup failed for {event_id}: {e}"),
 		}
 
 		// Legacy fallback
-		self.eventid_pduid
+		let legacy = self
+			.eventid_pduid
 			.get(event_id)
 			.await
-			.map(|handle| RawPduId::from(&*handle))
+			.map(|handle| RawPduId::from(&*handle));
+		if legacy.is_err() {
+			eprintln!("get_pdu_id: legacy eventid_pduid also failed for {event_id}");
+		}
+		legacy
 	}
 
 	/// Returns the pdu directly from `eventid_pduid` only.
