@@ -243,8 +243,9 @@ pub async fn handle_incoming_pdu<'a>(
 		.services
 		.timeline
 		.first_pdu_in_room(room_id)
-		.await?
-		.origin_server_ts();
+		.await
+		.map(|pdu| pdu.origin_server_ts())
+		.unwrap_or_else(|_| ruma::MilliSecondsSinceUnixEpoch(ruma::uint!(0)));
 
 	// 9. Fetch any missing prev events doing all checks listed here starting at 1.
 	//    These are timeline events

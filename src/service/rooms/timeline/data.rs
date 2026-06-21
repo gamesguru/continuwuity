@@ -353,11 +353,9 @@ impl Data {
 				.await
 				.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-			// For backward search, use ts-1 so events at the exact given
-			// timestamp are excluded (MSC3030: "strictly before").
 			let (seek_ts, count) = match dir {
 				| Direction::Forward => (timestamp, PduCount::min()),
-				| Direction::Backward => (timestamp.saturating_sub(1), PduCount::max()),
+				| Direction::Backward => (timestamp, PduCount::max()),
 			};
 
 			let key = pack_timestamp_key(short.to_be_bytes(), seek_ts, count);
