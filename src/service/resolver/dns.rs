@@ -6,20 +6,20 @@ use hickory_resolver::TokioResolver;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 use super::cache::{Cache, CachedOverride};
-use crate::client;
+use crate::{Dep, client};
 
 pub struct Resolver {
 	pub(crate) resolver: Arc<TokioResolver>,
 	pub(crate) hooked: Arc<Hooked>,
 	server: Arc<Server>,
-	client: Arc<client::Service>,
+	client: Dep<client::Service>,
 }
 
 pub(crate) struct Hooked {
 	resolver: Arc<TokioResolver>,
 	cache: Arc<Cache>,
 	server: Arc<Server>,
-	client: Arc<client::Service>,
+	client: Dep<client::Service>,
 }
 
 type ResolvingResult = Result<Addrs, Box<dyn std::error::Error + Send + Sync>>;
@@ -29,7 +29,8 @@ impl Resolver {
 	pub(crate) fn build(
 		server: &Arc<Server>,
 		cache: Arc<Cache>,
-		client: Arc<client::Service>,
+		client_resolver: Dep<client::Service>,
+		client_hooked: Dep<client::Service>,
 	) -> Result<Arc<Self>> {
 		let config = &server.config;
 		let (sys_conf, mut opts) = hickory_resolver::system_conf::read_system_conf()
@@ -89,10 +90,10 @@ impl Resolver {
 				resolver,
 				cache,
 				server: server.clone(),
-				client: client.clone(),
+				client: client_hooked,
 			}),
 			server: server.clone(),
-			client,
+			client: client_resolver,
 		}))
 	}
 
