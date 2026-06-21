@@ -8,7 +8,7 @@ pub(crate) async fn update_delayed_event_event_route(
 	axum::extract::Path((delay_id, action_str)): axum::extract::Path<(String, String)>,
 	body: Ruma<ruma::api::client::device::get_devices::v3::Request>,
 ) -> Result<axum::Json<serde_json::Value>> {
-	let _sender_user = body.sender_user();
+	let sender_user = body.sender_user();
 
 	let action = match action_str.as_str() {
 		| "restart" => service::rooms::delayed_events::UpdateAction::Restart,
@@ -21,7 +21,7 @@ pub(crate) async fn update_delayed_event_event_route(
 		services
 			.rooms
 			.delayed_events
-			.update_delayed_event(delay_id, action),
+			.update_delayed_event(sender_user, delay_id, action),
 	)
 	.await?;
 
@@ -33,12 +33,12 @@ pub(crate) async fn get_delayed_event_route(
 	axum::extract::Path(delay_id): axum::extract::Path<String>,
 	body: Ruma<ruma::api::client::device::get_devices::v3::Request>,
 ) -> Result<axum::Json<serde_json::Value>> {
-	let _sender_user = body.sender_user();
+	let sender_user = body.sender_user();
 
 	let data = services
 		.rooms
 		.delayed_events
-		.get_delayed_event(delay_id)
+		.get_delayed_event(sender_user, delay_id)
 		.await?;
 
 	Ok(axum::Json(serde_json::json!({

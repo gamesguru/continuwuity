@@ -467,13 +467,28 @@ impl Service {
 
 	pub async fn update_delayed_event(
 		&self,
+		sender_user: &UserId,
 		delay_id: String,
 		action: UpdateAction,
 	) -> Result<()> {
 		let Ok(event) = self.db.delayid_scheduleddelayedevent.get(&delay_id).await else {
+			if let Ok(finalized) = self.db.delayid_finalizeddelayedevent.get(&delay_id).await {
+				let finalized: FinalizedDelayedEvent = finalized.deserialized()?;
+				if finalized.event.user_id != sender_user {
+					return Err!(Request(Forbidden(
+						"You are not authorized to update this delayed event."
+					)));
+				}
+			}
 			return self.check_finalized_event_outcome(&delay_id, action).await;
 		};
 		let mut event: ScheduledDelayedEvent = event.deserialized()?;
+
+		if event.user_id != sender_user {
+			return Err!(Request(Forbidden(
+				"You are not authorized to update this delayed event."
+			)));
+		}
 
 		match action {
 			| UpdateAction::Restart => {
@@ -489,19 +504,35 @@ impl Service {
 	}
 
 	/// Get a delayed event, scheduled or finalized, with a given ID
-	pub async fn get_delayed_event(&self, delay_id: String) -> Result<DelayedEventData> {
+	pub async fn get_delayed_event(
+		&self,
+		sender_user: &UserId,
+		delay_id: String,
+	) -> Result<DelayedEventData> {
 		let (scheduled, finalized) = join!(
 			self.db.delayid_scheduleddelayedevent.get(&delay_id),
 			self.db.delayid_finalizeddelayedevent.get(&delay_id)
 		);
 
 		match (scheduled, finalized) {
-			| (_, Ok(event)) => Ok(event
-				.deserialized::<FinalizedDelayedEvent>()?
-				.into_data(delay_id)),
-			| (Ok(event), _) => Ok(event
-				.deserialized::<ScheduledDelayedEvent>()?
-				.into_data(delay_id)),
+			| (_, Ok(event)) => {
+				let finalized: FinalizedDelayedEvent = event.deserialized()?;
+				if finalized.event.user_id != sender_user {
+					return Err!(Request(Forbidden(
+						"You are not authorized to view this delayed event."
+					)));
+				}
+				Ok(finalized.into_data(delay_id))
+			},
+			| (Ok(event), _) => {
+				let scheduled: ScheduledDelayedEvent = event.deserialized()?;
+				if scheduled.user_id != sender_user {
+					return Err!(Request(Forbidden(
+						"You are not authorized to view this delayed event."
+					)));
+				}
+				Ok(scheduled.into_data(delay_id))
+			},
 			| _ => Err!(Request(NotFound("No delayed event with this delay_id was found"))),
 		}
 	}

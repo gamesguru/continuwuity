@@ -58,6 +58,11 @@ pub(crate) async fn worker(service: &Service) -> Result<()> {
 		let mem_usage = queue.queue.len() * (DELAY_ID_SIZE + size_of::<SystemTime>());
 		service.mem_usage.store(mem_usage, Ordering::Relaxed);
 
+		// NOTE: If a new event with an earlier submission time is pushed to the
+		// queue while the `sleep(sleep_duration).await` is in progress, the worker
+		// will not wake early and will continue sleeping for the originally-peeked
+		// duration. This behavior is intentional, acceptable, and avoids complex
+		// sleep-interrupt mechanisms for this use case.
 		let next_submit = async {
 			let (time, _) = queue.queue.peek()?;
 			if let Ok(sleep_duration) = time.0.duration_since(SystemTime::now()) {
