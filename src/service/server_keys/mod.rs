@@ -91,7 +91,7 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 }
 
 #[implement(Service)]
-pub(crate) async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
+pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) {
 	let origin = &new_keys.server_name;
 	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
 }
