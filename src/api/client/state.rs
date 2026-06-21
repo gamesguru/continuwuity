@@ -150,7 +150,7 @@ pub(crate) async fn get_state_events_for_key_route(
 		.is_some_and(|f| f.to_lowercase().eq("event"));
 
 	Ok(get_state_events_for_key::v3::Response {
-		content: event_format.or(|| event.get_content_as_value()),
+		content: (!event_format).then(|| event.get_content_as_value()),
 		event: event_format.then(|| {
 			json!({
 				"content": event.content(),

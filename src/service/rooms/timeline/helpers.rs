@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use conduwuit::{Err, Result, err, implement, matrix::pdu::PartialPdu};
+use conduwuit::{Err, Result, err, implement, matrix::pdu::PduBuilder};
 use ruma::{
 	MilliSecondsSinceUnixEpoch, OwnedEventId, RoomId, TransactionId, UserId,
 	events::{
@@ -49,12 +49,13 @@ pub async fn send_message_event_helper(
 
 	let event_id = self
 		.build_and_append_pdu(
-			PartialPdu {
+			PduBuilder {
 				event_type: event_type.to_string().into(),
 				content,
+				state_key: None,
+				redacts: None,
 				timestamp,
 				unsigned,
-				..Default::default()
 			},
 			sender,
 			Some(room_id),
@@ -109,13 +110,13 @@ pub async fn send_state_event_for_key_helper(
 
 	let event_id = self
 		.build_and_append_pdu(
-			PartialPdu {
+			PduBuilder {
 				event_type: event_type.to_string().into(),
 				content,
 				state_key: Some(state_key.into()),
+				redacts: None,
 				timestamp,
 				unsigned,
-				..Default::default()
 			},
 			sender,
 			Some(room_id),
@@ -144,7 +145,7 @@ async fn allowed_to_send_state_event(
 		| StateEventType::RoomServerAcl => {
 			// prevents common ACL paw-guns as ACL management is difficult and prone to
 			// irreversible mistakes
-			match json.deserialize_as_unchecked::<RoomServerAclEventContent>() {
+			match json.deserialize_as::<RoomServerAclEventContent>() {
 				| Ok(acl_content) => {
 					let allow_has_wildcard = acl_content.allow.iter().any(|entry| entry == "*");
 					let deny_has_wildcard = acl_content.deny.iter().any(|entry| entry == "*");
@@ -211,7 +212,7 @@ async fn allowed_to_send_state_event(
 			// admin room is a sensitive room, it should not ever be made public
 			if let Ok(admin_room_id) = self.services.admin.get_admin_room().await {
 				if admin_room_id == room_id {
-					match json.deserialize_as_unchecked::<RoomJoinRulesEventContent>() {
+					match json.deserialize_as::<RoomJoinRulesEventContent>() {
 						| Ok(join_rule) =>
 							if join_rule.join_rule == JoinRule::Public {
 								return Err!(Request(Forbidden(
@@ -230,7 +231,7 @@ async fn allowed_to_send_state_event(
 		| StateEventType::RoomHistoryVisibility => {
 			// admin room is a sensitive room, it should not ever be made world readable
 			if let Ok(admin_room_id) = self.services.admin.get_admin_room().await {
-				match json.deserialize_as_unchecked::<RoomHistoryVisibilityEventContent>() {
+				match json.deserialize_as::<RoomHistoryVisibilityEventContent>() {
 					| Ok(visibility_content) => {
 						if admin_room_id == room_id
 							&& visibility_content.history_visibility
@@ -251,7 +252,7 @@ async fn allowed_to_send_state_event(
 			}
 		},
 		| StateEventType::RoomCanonicalAlias => {
-			match json.deserialize_as_unchecked::<RoomCanonicalAliasEventContent>() {
+			match json.deserialize_as::<RoomCanonicalAliasEventContent>() {
 				| Ok(canonical_alias_content) => {
 					let mut aliases = canonical_alias_content.alt_aliases.clone();
 
@@ -259,19 +260,23 @@ async fn allowed_to_send_state_event(
 						aliases.push(alias);
 					}
 
-					for alias in aliases {
+					for alias in &aliases {
 						let (alias_room_id, _) = self
 							.services
 							.alias
-							.resolve_alias(&alias)
+							.resolve_alias(alias)
 							.await
 							.map_err(|e| {
-								err!(Request(Unknown("Failed resolving alias \"{alias}\": {e}")))
-							})?;
+							err!(Request(Unknown(
+								"Failed resolving alias \"{alias}\": {e}",
+								alias = alias.as_str()
+							)))
+						})?;
 
 						if alias_room_id != room_id {
 							return Err!(Request(BadAlias(
-								"Room alias {alias} does not belong to room {room_id}"
+								"Room alias {alias} does not belong to room {room_id}",
+								alias = alias.as_str()
 							)));
 						}
 					}
@@ -283,66 +288,67 @@ async fn allowed_to_send_state_event(
 				},
 			}
 		},
-		| StateEventType::RoomMember =>
-			match json.deserialize_as_unchecked::<RoomMemberEventContent>() {
-				| Ok(mut membership_content) => {
-					let Ok(state_key) = UserId::parse(state_key) else {
-						return Err!(Request(BadJson(
-							"Membership event has invalid or non-existent state key"
-						)));
-					};
-
-					if let Some(authorising_user) =
-						membership_content.join_authorized_via_users_server
-					{
-						// join_authorized_via_users_server must be thrown away, if user is
-						// already a member of the room.
-						if self
-							.services
-							.state_cache
-							.is_joined(&state_key, room_id)
-							.await
-						{
-							membership_content.join_authorized_via_users_server = None;
-							*json = Raw::<AnyStateEventContent>::from_json_string(
-								serde_json::to_string(&membership_content)?,
-							)?;
-							return Ok(());
-						}
-
-						if membership_content.membership != MembershipState::Join {
-							return Err!(Request(BadJson(
-								"join_authorised_via_users_server is only for member joins"
-							)));
-						}
-
-						if !self.services.globals.user_is_local(&authorising_user) {
-							return Err!(Request(InvalidParam(
-								"Authorising user {authorising_user} does not belong to this \
-								 homeserver"
-							)));
-						}
-
-						if !self
-							.services
-							.state_cache
-							.is_joined(&authorising_user, room_id)
-							.await
-						{
-							return Err!(Request(InvalidParam(
-								"Authorising user {authorising_user} is not in the room, they \
-								 cannot authorise the join."
-							)));
-						}
-					}
-				},
-				| Err(e) => {
+		| StateEventType::RoomMember => match json.deserialize_as::<RoomMemberEventContent>() {
+			| Ok(mut membership_content) => {
+				let Ok(state_key) = UserId::parse(state_key) else {
 					return Err!(Request(BadJson(
-						"Membership content must have a valid JSON body with at least a valid \
-						 membership state: {e}"
+						"Membership event has invalid or non-existent state key"
 					)));
-				},
+				};
+
+				if let Some(authorising_user) =
+					membership_content.join_authorized_via_users_server
+				{
+					// join_authorized_via_users_server must be thrown away, if user is
+					// already a member of the room.
+					if self
+						.services
+						.state_cache
+						.is_joined(state_key, room_id)
+						.await
+					{
+						membership_content.join_authorized_via_users_server = None;
+						*json = Raw::<AnyStateEventContent>::from_json_string(
+							serde_json::to_string(&membership_content)?,
+						)?;
+						return Ok(());
+					}
+
+					if membership_content.membership != MembershipState::Join {
+						return Err!(Request(BadJson(
+							"join_authorised_via_users_server is only for member joins"
+						)));
+					}
+
+					if !self.services.globals.user_is_local(&authorising_user) {
+						return Err!(Request(InvalidParam(
+							"Authorising user {authorising_user} does not belong to this \
+							 homeserver",
+							authorising_user = authorising_user.as_str()
+						)));
+					}
+
+					if !self
+						.services
+						.state_cache
+						.is_joined(&authorising_user, room_id)
+						.await
+					{
+						return Err!(Request(InvalidParam(
+							"Authorising user {authorising_user} is not in the room, they \
+							 cannot authorise the join.",
+							authorising_user = authorising_user.as_str()
+						)));
+					}
+				}
 			},
+			| Err(e) => {
+				return Err!(Request(BadJson(
+					"Membership content must have a valid JSON body with at least a valid \
+					 membership state: {e}"
+				)));
+			},
+		},
 		| _ => (),
 	}
 

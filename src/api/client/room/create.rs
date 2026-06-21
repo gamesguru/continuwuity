@@ -11,9 +11,9 @@ use futures::FutureExt;
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, Int, MilliSecondsSinceUnixEpoch, OwnedRoomAliasId,
 	OwnedRoomId, OwnedUserId, RoomAliasId, RoomId, RoomVersionId, UserId,
-	api::{
-		client::room::{self, create_room},
+	api::client::{
 		error::ErrorKind::Forbidden,
+		room::{self, create_room},
 	},
 	assign,
 	events::{

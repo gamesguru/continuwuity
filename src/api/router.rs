@@ -186,10 +186,18 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::delete_dehydrated_device_route)
 		.ruma_route(&client::get_dehydrated_device_route)
 		.ruma_route(&client::get_dehydrated_events_route)
-		.ruma_route(&client::send_delayed_event_route)
-		.ruma_route(&client::update_delayed_event_event_route)
-		.ruma_route(&client::get_delayed_event_route)
-		.ruma_route(&client::get_all_delayed_events_route)
+		.route(
+			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events",
+			get(client::get_all_delayed_events_route),
+		)
+		.route(
+			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}",
+			get(client::get_delayed_event_route),
+		)
+		.route(
+			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/{action}",
+			post(client::update_delayed_event_event_route),
+		)
 		.ruma_route(&client::get_tags_route)
 		.ruma_route(&client::update_tag_route)
 		.ruma_route(&client::delete_tag_route)

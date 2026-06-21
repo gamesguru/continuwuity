@@ -21,16 +21,115 @@ use http::StatusCode;
 use loole::Sender;
 use ruma::{
 	MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId,
-	api::{
-		client::delayed_events::{
-			DelayedEventData, DelayedEventStatus, update_delayed_event::UpdateAction,
-		},
-		error::{ErrorKind, StandardErrorBody},
-	},
-	events::{AnyTimelineEventContent, TimelineEventType},
+	api::client::error::{ErrorKind, StandardErrorBody},
+	events::TimelineEventType,
 	serde::Raw,
 };
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateAction {
+	Restart,
+	Send,
+	Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DelayedEventStatus {
+	Scheduled,
+	Send,
+	Cancel,
+	Error,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AnyTimelineEventContent(pub serde_json::Value);
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DelayedEventData {
+	/// The ID of the delayed event.
+	pub delay_id: String,
+
+	/// The ID of the room that the delayed event was scheduled to be sent in.
+	pub room_id: OwnedRoomId,
+
+	/// The event type of the delayed event.
+	#[serde(rename = "type")]
+	pub event_type: TimelineEventType,
+
+	/// The State Key if the event is a state event, nothing otherwise
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub state_key: Option<String>,
+
+	/// The event content to send.
+	pub content: Raw<AnyTimelineEventContent>,
+
+	/// The duration that the server should wait before sending this event
+	#[serde(with = "ruma::serde::duration::ms")]
+	pub delay: Duration,
+
+	/// The timestamp when the delayed event was scheduled or last restarted.
+	pub running_since: MilliSecondsSinceUnixEpoch,
+
+	/// The error that prevented the delayed event from being sent.
+	/// Present only for finalized events that were cancelled due to an error.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub error: Option<StandardErrorBody>,
+
+	/// The event_id this event got when it was sent.
+	/// Present only for events that were sent successfully.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub event_id: Option<OwnedEventId>,
+
+	/// The timestamp when the event was finalized.
+	/// Present only for events that were finalized (sent, failed to send, or
+	/// cancelled).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	#[serde(rename = "finalised_ts")]
+	pub finalized_ts: Option<MilliSecondsSinceUnixEpoch>,
+}
+
+impl DelayedEventData {
+	/// Create a new delayed event data object with the given parameters
+	pub fn new(
+		delay_id: String,
+		room_id: OwnedRoomId,
+		event_type: TimelineEventType,
+		state_key: Option<String>,
+		content: Raw<AnyTimelineEventContent>,
+		delay: Duration,
+		running_since: MilliSecondsSinceUnixEpoch,
+	) -> Self {
+		Self {
+			delay_id,
+			room_id,
+			event_type,
+			state_key,
+			delay,
+			running_since,
+			content,
+			error: None,
+			event_id: None,
+			finalized_ts: None,
+		}
+	}
+
+	/// Returns the status indicated by this delayed event data.
+	pub fn status(&self) -> DelayedEventStatus {
+		if self.finalized_ts.is_none() {
+			DelayedEventStatus::Scheduled
+		} else if self.event_id.is_some() {
+			DelayedEventStatus::Send
+		} else if self.error.is_some() {
+			DelayedEventStatus::Error
+		} else {
+			DelayedEventStatus::Cancel
+		}
+	}
+}
 use submission_queue::SubmissionQueue;
 use tokio::{sync::Mutex, time::sleep};
 
@@ -126,8 +225,7 @@ impl ScheduledDelayedEvent {
 			self.state_key,
 			self.content,
 			self.delay,
-			self.running_since
-				.try_into()
+			MilliSecondsSinceUnixEpoch::from_system_time(self.running_since)
 				.expect("Should be a valid time"),
 		)
 	}
@@ -243,7 +341,7 @@ impl Service {
 								&event.room_id,
 								&state_lock,
 								&event.event_type.to_string().into(),
-								event.content.cast_ref_unchecked(),
+								event.content.cast_ref(),
 								state_key,
 								Some(timestamp),
 								Some(unsigned),
@@ -257,7 +355,7 @@ impl Service {
 								&event.room_id,
 								&state_lock,
 								&event.event_type.to_string().into(),
-								event.content.cast_ref_unchecked(),
+								event.content.cast_ref(),
 								None,
 								Some(timestamp),
 								Some(unsigned),
@@ -287,11 +385,17 @@ impl Service {
 						}
 						let recorded_error = match &error {
 							| Error::Request(kind, message, status_code) => (
-								StandardErrorBody::new(kind.clone(), message.to_string()),
+								StandardErrorBody {
+									kind: kind.clone(),
+									message: message.to_string(),
+								},
 								status_code.as_u16(),
 							),
 							| _ => (
-								StandardErrorBody::new(ErrorKind::Unknown, format!("{error}")),
+								StandardErrorBody {
+									kind: ErrorKind::Unknown,
+									message: format!("{error}"),
+								},
 								409,
 							),
 						};
@@ -377,7 +481,6 @@ impl Service {
 			| UpdateAction::Send | UpdateAction::Cancel =>
 				self.finalize_delayed_event(&delay_id, event, action, true)
 					.await,
-			| _ => Err!(Request(InvalidParam("Unknown delay parameter type"))),
 		}
 	}
 
