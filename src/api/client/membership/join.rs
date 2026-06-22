@@ -1039,34 +1039,58 @@ async fn join_room_by_id_helper_local(
 			let restricted_result =
 				user_can_perform_restricted_join(services, sender_user, room_id, &room_version)
 					.await;
-			if let Ok(Some(ref allowed_rooms)) = restricted_result {
-				// User qualifies via allowed room membership. Try to find a
-				// local user who can issue the authorising invite.
-				auth_user = select_authorising_user(
-					services,
-					room_id,
-					sender_user,
-					allowed_rooms,
-					&state_lock,
-				)
-				.await
-				.ok();
-			}
+			match &restricted_result {
+				| Ok(Some(allowed_rooms)) => {
+					// User qualifies via allowed room membership. Try to find a
+					// local user who can issue the authorising invite.
+					auth_user = select_authorising_user(
+						services,
+						room_id,
+						sender_user,
+						allowed_rooms,
+						&state_lock,
+					)
+					.await
+					.ok();
 
-			// If we couldn't authorize locally (no auth_user), go remote
-			// immediately. Don't build a doomed PDU that will fail auth.
-			// This matches Synapse's `_should_perform_remote_join` behavior.
-			if auth_user.is_none() {
-				return join_restricted_via_remote(
-					services,
-					sender_user,
-					room_id,
-					reason,
-					servers,
-					state_lock,
-					json_body,
-				)
-				.await;
+					// User qualifies but no local authorizer found -- another
+					// server might be able to authorize, so go remote.
+					if auth_user.is_none() {
+						return join_restricted_via_remote(
+							services,
+							sender_user,
+							room_id,
+							reason,
+							servers,
+							state_lock,
+							json_body,
+						)
+						.await;
+					}
+				},
+				| Err(e) if e.status_code() == http::StatusCode::FORBIDDEN => {
+					// User definitively doesn't qualify (not in any allowed
+					// room). Let local join attempt properly fail with 403.
+					info!("User cannot perform restricted join: {e}");
+				},
+				| Err(_) => {
+					// We couldn't verify all requirements (e.g. we're not in
+					// one of the allowed rooms). Try remote and hope it works.
+					return join_restricted_via_remote(
+						services,
+						sender_user,
+						room_id,
+						reason,
+						servers,
+						state_lock,
+						json_body,
+					)
+					.await;
+				},
+				| Ok(None) => {
+					// Room is not actually restricted (shouldn't reach here
+					// given is_restricted check, but handle gracefully).
+				},
 			}
 		}
 	}
@@ -1099,7 +1123,7 @@ async fn join_room_by_id_helper_local(
 		..Default::default()
 	};
 
-	// For non-restricted rooms, the local join is authoritative — no fallback.
+	// For non-restricted rooms, the local join is authoritative -- no fallback.
 	services
 		.rooms
 		.timeline
