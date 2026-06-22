@@ -545,8 +545,7 @@ pub async fn invite_state(
 		.userroomid_invitestate
 		.qry(&key)
 		.await
-		.deserialized()
-		.and_then(|val: Raw<Vec<AnyStrippedStateEvent>>| val.deserialize_as().map_err(Into::into))
+		.and_then(|handle| serde_json::from_slice(&handle).map_err(Into::into))
 }
 
 #[implement(Service)]
@@ -561,15 +560,18 @@ pub async fn knock_state(
 		.userroomid_knockedstate
 		.qry(&key)
 		.await
-		.deserialized()
-		.and_then(|val: Raw<Vec<AnyStrippedStateEvent>>| val.deserialize_as().map_err(Into::into))
+		.and_then(|handle| serde_json::from_slice(&handle).map_err(Into::into))
 }
 
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
 pub async fn left_state(&self, user_id: &UserId, room_id: &RoomId) -> Result<Option<Pdu>> {
 	let key = (user_id, room_id);
-	self.db.userroomid_leftstate.qry(&key).await.deserialized()
+	self.db
+		.userroomid_leftstate
+		.qry(&key)
+		.await
+		.and_then(|handle| serde_json::from_slice(&handle).map_err(Into::into))
 }
 
 /// Returns an iterator over all rooms a user left.
