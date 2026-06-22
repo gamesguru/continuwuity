@@ -92,10 +92,17 @@ pub(crate) async fn get_message_events_route(
 
 	// Check access before parsing pagination tokens — an unauthorized user
 	// should get 403 Forbidden, not a parse error from a stale token.
+	// Per Matrix spec, /messages is accessible to current AND former members.
+	// The per-event visibility_filter handles fine-grained history_visibility
+	// checks; this gate only verifies the user has/had membership.
 	if !services
 		.rooms
-		.state_accessor
-		.user_can_see_state_events(sender_user, room_id)
+		.state_cache
+		.is_joined(sender_user, room_id)
+		.await && !services
+		.rooms
+		.state_cache
+		.is_left(sender_user, room_id)
 		.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));

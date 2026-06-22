@@ -119,8 +119,8 @@ pub(crate) async fn joined_members_route(
 ) -> Result<Json<Response>> {
 	if !services
 		.rooms
-		.state_accessor
-		.user_can_see_state_events(body.sender_user(), &body.room_id)
+		.state_cache
+		.is_joined(body.sender_user(), &body.room_id)
 		.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));

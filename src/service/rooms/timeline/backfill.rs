@@ -473,6 +473,13 @@ pub async fn backfill_pdu(
 
 	let insert_lock = self.mutex_insert.lock(&room_id).await;
 
+	// Re-check after acquiring insert lock to prevent TOCTOU races
+	// with concurrent /send transactions inserting the same event.
+	if self.get_pdu_id(&event_id).await.is_ok() {
+		debug!("Event {event_id} already in timeline (post-lock check), skipping backfill");
+		return Ok(());
+	}
+
 	let count: i64 = match count {
 		| Some(count) => count.try_into()?,
 		| None => self.services.globals.next_count()?.try_into()?,
