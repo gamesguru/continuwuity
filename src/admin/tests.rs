@@ -1899,7 +1899,7 @@ async fn test_knocking_dag_resolution() {
 		config::Config,
 		log::{Log, LogLevelReloadHandles, capture},
 	};
-	use figment::Figment;
+	use figment::{Figment, providers::Format};
 	use ruma::RoomId;
 
 	let dag_path = Path::new(

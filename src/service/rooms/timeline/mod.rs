@@ -12,7 +12,7 @@ use std::{fmt::Write, sync::Arc};
 use async_trait::async_trait;
 pub use conduwuit_core::matrix::pdu::{PduId, RawPduId, ShortRoomId};
 use conduwuit_core::{
-	Result, Server, SyncMutex, at, err, info,
+	Result, Server, SyncMutex, at, debug, err, info,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduEvent},
@@ -413,7 +413,7 @@ impl Service {
 		let dropped = 0_usize;
 
 		if let Some(limit) = tail {
-			println!("reorder_timeline: reading last {limit} PDUs from timeline (tail mode)...");
+			debug!("reorder_timeline: reading last {limit} PDUs from timeline (tail mode)...");
 			// Collect in reverse and record the minimum count seen (oldest in window)
 			let mut rev = Box::pin(self.pdus_rev(room_id, None));
 			let mut collected = 0_usize;
@@ -436,7 +436,7 @@ impl Service {
 				}
 			}
 		} else {
-			println!("reorder_timeline: reading all PDUs from timeline...");
+			debug!("reorder_timeline: reading all PDUs from timeline...");
 			let pdus_backfill = self.pdus(room_id, Some(PduCount::min()));
 			let pdus_normal = self.pdus(room_id, Some(PduCount::Normal(0)));
 			let pdus = pdus_backfill.chain(pdus_normal);
@@ -446,7 +446,7 @@ impl Service {
 				entries.insert(eid.clone(), (count, pdu.origin_server_ts));
 				graph.insert(eid, pdu.prev_events().map(ToOwned::to_owned).collect());
 				if entries.len().is_multiple_of(10000) {
-					println!("reorder_timeline: read {} PDUs so far...", entries.len());
+					debug!("reorder_timeline: read {} PDUs so far...", entries.len());
 					tokio::task::yield_now().await;
 				}
 			}
@@ -456,7 +456,7 @@ impl Service {
 			warn!("{dropped} PDUs had no JSON and were skipped during reorder");
 		}
 
-		println!("reorder_timeline: collected {} PDUs ({dropped} dropped)", entries.len());
+		debug!("reorder_timeline: collected {} PDUs ({dropped} dropped)", entries.len());
 
 		if entries.is_empty() {
 			return Ok(0);
@@ -471,33 +471,33 @@ impl Service {
 		// Sort chronologically by origin_server_ts for correct topological index.
 		// Stream order is NOT changed -- only the topological index is rebuilt.
 		let start = std::time::Instant::now();
-		println!("reorder_timeline: sorting {} events by origin_server_ts...", entries.len());
+		debug!("reorder_timeline: sorting {} events by origin_server_ts...", entries.len());
 		let mut sorted: Vec<OwnedEventId> = entries.keys().cloned().collect();
 		sorted.sort_by(|a, b| {
 			let (_, ts_a) = entries[a];
 			let (_, ts_b) = entries[b];
 			ts_a.cmp(&ts_b).then_with(|| a.cmp(b))
 		});
-		println!("reorder_timeline: sort took {:?}", start.elapsed());
+		debug!("reorder_timeline: sort took {:?}", start.elapsed());
 
 		// Rebuild topological index only -- stream order is immutable.
 		let count = sorted.len();
 		let reindex_start = std::time::Instant::now();
-		println!("reorder_timeline: rebuilding topological index for {count} events...");
+		debug!("reorder_timeline: rebuilding topological index for {count} events...");
 
 		if !no_compute_state {
 			// Full mode: rebuild topo index + recompute state snapshots
 			let final_ssh = self
 				.rebuild_topo_index_with_state(room_id, shortroomid, &sorted, &entries)
 				.await;
-			println!("reorder_timeline: topo rebuild+state took {:?}", reindex_start.elapsed());
+			debug!("reorder_timeline: topo rebuild+state took {:?}", reindex_start.elapsed());
 
 			if let Some(ssh) = final_ssh {
 				if ssh != 0 {
 					self.services
 						.state
 						.set_room_state(room_id, ssh, &state_lock);
-					println!("reorder_timeline: updated room shortstatehash to {ssh}");
+					debug!("reorder_timeline: updated room shortstatehash to {ssh}");
 				}
 			}
 		} else {
@@ -521,13 +521,13 @@ impl Service {
 				}
 			}
 			drop(cork.take());
-			println!("reorder_timeline: topo rebuild took {:?}", reindex_start.elapsed());
+			debug!("reorder_timeline: topo rebuild took {:?}", reindex_start.elapsed());
 		}
 
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		let final_sync = self.db.db.cork_and_sync();
 		drop(final_sync);
-		println!("reorder_timeline: topo rebuild complete, calculating forward extremities...");
+		debug!("reorder_timeline: topo rebuild complete, calculating forward extremities...");
 
 		// Calculate the true DAG forward extremities (events with in-degree 0
 		// in the reversed graph). This fixes broken pagination and fork storms.
@@ -567,7 +567,7 @@ impl Service {
 			);
 		}
 
-		println!("reorder_timeline: skipped repair unsigned per metadata design");
+		debug!("reorder_timeline: skipped repair unsigned per metadata design");
 
 		// Rebuild membership cache from the authoritative state snapshot.
 		// This fixes stale/missing entries left by previous DAG fractures.
@@ -704,11 +704,11 @@ impl Service {
 			"reorder_timeline: synced {members_synced} membership cache entries, removed \
 			 {stale_removed} stale"
 		);
-		println!("reorder_timeline: sweep cache took {:?}", sync_start.elapsed());
+		debug!("reorder_timeline: sweep cache took {:?}", sync_start.elapsed());
 
 		drop(state_lock);
 
-		println!("reorder_timeline: complete, {count} events reordered (topo index/state)");
+		debug!("reorder_timeline: complete, {count} events reordered (topo index/state)");
 
 		Ok(count)
 	}
@@ -864,7 +864,7 @@ impl Service {
 			}
 
 			if i.saturating_add(1).is_multiple_of(2000) {
-				println!(
+				debug!(
 					"reorder_timeline: rebuilt {}/{count} topo entries...",
 					i.saturating_add(1)
 				);
@@ -956,7 +956,7 @@ impl Service {
 			events_meta.push((eid, prev, state_key, depth));
 		}
 
-		println!(
+		debug!(
 			"rebuild_state: loaded {} event metadata in {:?}",
 			events_meta.len(),
 			stream_start.elapsed(),
@@ -966,7 +966,7 @@ impl Service {
 		let event_set: HashSet<&OwnedEventId> = events_meta.iter().map(|(eid, ..)| eid).collect();
 
 		let rebuild_start = std::time::Instant::now();
-		println!("rebuild_state: starting state resolution...");
+		debug!("rebuild_state: starting state resolution...");
 
 		let mut ssh_cache: HashMap<OwnedEventId, u64> = HashMap::new();
 		let mut resolved_state_cache: HashMap<Vec<u64>, u64> = HashMap::new();
@@ -991,7 +991,7 @@ impl Service {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
-				println!(
+				debug!(
 					"rebuild_state: {}/{} events | single:{} none:{} cached:{} resolved:{} | \
 					 cumulative_resolve: {:?} | elapsed: {:?}",
 					processed,
@@ -1066,7 +1066,7 @@ impl Service {
 							cumulative_resolve_time.saturating_add(slow_path_elapsed);
 
 						if slow_path_elapsed.as_millis() > 50 {
-							println!(
+							debug!(
 								"rebuild_state: SLOW fork #{fork_resolve_count} for {eid} ({} \
 								 parents, {} unique ssh) took {:?}",
 								prev_sshs.len(),
@@ -1158,7 +1158,7 @@ impl Service {
 
 		drop(cork.take());
 
-		println!(
+		debug!(
 			"rebuild_state: DONE {processed} events in {:?} | single:{single_parent_count} \
 			 none:{no_parent_count} cached:{cache_hit_count} resolved:{fork_resolve_count} | \
 			 cumulative_resolve: {:?}",
@@ -1194,7 +1194,7 @@ impl Service {
 			.count();
 
 		if extremity_sshs.len() > 1 {
-			println!(
+			debug!(
 				"rebuild_state: {} forward extremities with {} unique SSHs — merging \
 				 disconnected components...",
 				num_extremities,
@@ -1240,7 +1240,7 @@ impl Service {
 
 			if conflicting.is_empty() {
 				// No conflicts — trivial union merge
-				println!(
+				debug!(
 					"rebuild_state: trivial merge of {} state entries from {} components",
 					ssk_values.len(),
 					extremity_sshs.len(),
@@ -1255,7 +1255,7 @@ impl Service {
 			} else {
 				// Conflicting keys exist — need to pick winners
 				// For non-auth conflicts, pick the event with the latest depth
-				println!(
+				debug!(
 					"rebuild_state: {} conflicting keys across {} components — resolving...",
 					conflicting.len(),
 					extremity_sshs.len(),
@@ -1311,7 +1311,7 @@ impl Service {
 					}
 				}
 
-				println!("rebuild_state: merged state has {} entries", final_state.len());
+				debug!("rebuild_state: merged state has {} entries", final_state.len());
 				let merged_ssh = self
 					.services
 					.state_compressor
@@ -1321,7 +1321,7 @@ impl Service {
 				current_shortstatehash = merged_ssh;
 			}
 		} else {
-			println!(
+			debug!(
 				"rebuild_state: all forward extremities share a single SSH — no multi-head \
 				 merge needed",
 			);
@@ -2457,7 +2457,7 @@ mod tests {
 											imported += 1;
 										},
 										| Err(e) => {
-											println!(
+											debug!(
 												"handle_outlier_pdu error for {event_id}: {e:?}"
 											);
 											failed += 1;
@@ -2471,7 +2471,7 @@ mod tests {
 			}
 		}
 
-		println!("Imported: {imported}, Failed: {failed}");
+		debug!("Imported: {imported}, Failed: {failed}");
 	}
 
 	async fn run_test_handle_outlier_pdu(
@@ -2686,14 +2686,14 @@ mod tests {
 				Some(&room_version_id),
 			)
 			.await;
-		println!("Version {room_version_str} Create Event handle result: {handle_create_res:?}");
+		debug!("Version {room_version_str} Create Event handle result: {handle_create_res:?}");
 		let create_pdu = handle_create_res
 			.as_ref()
 			.expect("failed to handle create PDU")
 			.0
 			.clone();
-		println!("Created event room_id: {:?}", create_pdu.room_id());
-		println!("Created event sender: {:?}", create_pdu.sender());
+		debug!("Created event room_id: {:?}", create_pdu.room_id());
+		debug!("Created event sender: {:?}", create_pdu.sender());
 
 		// Now, handle the join event as an outlier.
 		// For version 12, we must pass the create event since referencing it in
@@ -2719,7 +2719,7 @@ mod tests {
 				Some(&room_version_id),
 			)
 			.await;
-		println!("Version {room_version_str} Join Event handle result: {handle_success_res:?}");
+		debug!("Version {room_version_str} Join Event handle result: {handle_success_res:?}");
 		assert!(
 			handle_success_res.is_ok(),
 			"Expected handling outlier join event to succeed when create event is present, but \
