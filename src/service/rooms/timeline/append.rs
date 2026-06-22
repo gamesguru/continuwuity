@@ -182,6 +182,14 @@ where
 		.set_forward_extremities(room_id, leaves, state_lock)
 		.await;
 
+	// MSC4242: Update State DAG extremities for state events
+	if pdu.state_key().is_some() && pdu.prev_state_events().is_some() {
+		self.services
+			.state
+			.update_state_extremities_for_event(room_id, pdu, state_lock)
+			.await;
+	}
+
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
 	let count1 = self.services.globals.next_count().unwrap();

@@ -164,6 +164,11 @@ pub trait Event: Clone + Debug {
 	/// The events before this event.
 	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_;
 
+	/// The state events before this event (MSC4242).
+	fn prev_state_events(
+		&self,
+	) -> Option<impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_>;
+
 	/// If this event is a redaction event this is the event it redacts.
 	fn redacts(&self) -> Option<&EventId>;
 
