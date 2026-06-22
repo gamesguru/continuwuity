@@ -467,13 +467,10 @@ impl Service {
 		let reindex_start = std::time::Instant::now();
 		debug!("reorder_timeline: rebuilding topological index for {count} events...");
 
-		// Compute depths: max(parent_depths) + 1 for each event in topo order.
-		let mut depths: HashMap<&OwnedEventId, u64> = HashMap::with_capacity(count);
-
 		if !no_compute_state {
 			// Full mode: rebuild topo index + recompute state snapshots
 			let final_ssh = self
-				.rebuild_topo_index_with_state(room_id, shortroomid, &sorted, &entries, &graph)
+				.rebuild_topo_index_with_state(room_id, shortroomid, &sorted, &entries)
 				.await;
 			debug!("reorder_timeline: topo rebuild+state took {:?}", reindex_start.elapsed());
 
@@ -496,7 +493,7 @@ impl Service {
 				}
 				.into();
 
-				let local_topo_depth = compute_topo_depth(event_id, &graph, &mut depths);
+				let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
 				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 
 				if i.saturating_add(1).is_multiple_of(10000) {
@@ -701,20 +698,17 @@ impl Service {
 	/// Rebuild topological index with incremental state computation.
 	///
 	/// For each event in topo-sorted order: removes old topo entry,
-	/// computes `local_topological_depth` as `max(parent_depths) + 1`,
-	/// writes new topo key, and optionally recomputes state snapshots.
-	/// Stream order is NOT touched.
+	/// computes `local_topological_depth` as position in topo-sorted
+	/// list, writes new topo key, and optionally recomputes state
+	/// snapshots. Stream order is NOT touched.
 	async fn rebuild_topo_index_with_state(
 		&self,
 		room_id: &RoomId,
 		shortroomid: ShortRoomId,
 		sorted: &[OwnedEventId],
 		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
-		graph: &std::collections::HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>>,
 	) -> Option<u64> {
 		let count = sorted.len();
-		let mut depths: std::collections::HashMap<&OwnedEventId, u64> =
-			std::collections::HashMap::with_capacity(count);
 
 		let mut current_shortstatehash = {
 			let mut ssh = 0;
@@ -764,7 +758,7 @@ impl Service {
 			// if left in place. Soft-fail flags are intentional and persist.
 			self.services.pdu_metadata.unmark_event_rejected(event_id);
 
-			let local_topo_depth = compute_topo_depth(event_id, graph, &mut depths);
+			let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
 
 			// Rebuild topo index entry with new depth
 			self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
@@ -1767,37 +1761,6 @@ where
 		.filter(|eid| has_children.contains(eid))
 		.cloned()
 		.collect()
-}
-
-/// Compute topological depth for a single event: `max(parent_depths) + 1`.
-///
-/// Looks up parent depths from the `depths` map (which must already contain
-/// all parents that have been processed). Returns the new depth and inserts
-/// it into `depths`.
-pub fn compute_topo_depth<'a, S1, S2, S3>(
-	event_id: &'a OwnedEventId,
-	graph: &std::collections::HashMap<
-		OwnedEventId,
-		std::collections::HashSet<OwnedEventId, S2>,
-		S1,
-	>,
-	depths: &mut std::collections::HashMap<&'a OwnedEventId, u64, S3>,
-) -> u64
-where
-	S1: std::hash::BuildHasher,
-	S2: std::hash::BuildHasher,
-	S3: std::hash::BuildHasher,
-{
-	let max_parent_depth = graph.get(event_id).map_or(0, |parents| {
-		parents
-			.iter()
-			.filter_map(|p| depths.get(p).copied())
-			.max()
-			.unwrap_or(0)
-	});
-	let depth = max_parent_depth.saturating_add(1);
-	depths.insert(event_id, depth);
-	depth
 }
 
 /// Topological sort of a DAG using Kahn's algorithm.
