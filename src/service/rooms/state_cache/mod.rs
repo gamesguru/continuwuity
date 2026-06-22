@@ -506,7 +506,7 @@ pub fn rooms_invited<'a>(
 		.stream_prefix(&prefix)
 		.ignore_err()
 		.map(|((_, room_id), state): KeyVal<'_>| (room_id.to_owned(), state))
-		.map(|(room_id, state)| Ok((room_id, state.deserialize_as()?)))
+		.map(|(room_id, state)| Ok((room_id, serde_json::from_str(state.json().get())?)))
 		.ignore_err()
 }
 
@@ -526,8 +526,12 @@ pub fn rooms_knocked<'a>(
 		.stream_prefix(&prefix)
 		.ignore_err()
 		.map(|((_, room_id), state): KeyVal<'_>| (room_id.to_owned(), state))
-		.map(|(room_id, state)| Ok((room_id, state.deserialize_as()?)))
-		.inspect(|res| { if let Err(e) = res { conduwuit::warn!("rooms_knocked deserialize error: {e}"); } })
+		.map(|(room_id, state)| Ok((room_id, serde_json::from_str(state.json().get())?)))
+		.inspect(|res| {
+			if let Err(e) = res {
+				conduwuit::warn!("rooms_knocked deserialize error: {e}");
+			}
+		})
 		.ignore_err()
 }
 
