@@ -1048,7 +1048,7 @@ impl Data {
 				return Err(e);
 			},
 		};
-		Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref())).map_err(|e| e)
+		Self::parse_json_slice(None, (pdu_id, json_bytes.as_ref()))
 	}
 
 	/// Resolve a batch of `pdu_id`s via the two-hop path:
@@ -1129,7 +1129,16 @@ impl Data {
 				let stream = self
 					.roomid_topologicalorder_pducount
 					.rev_raw_stream_from(&topo_key);
-				Ok(self.parse_topo_stream(stream, prefix.to_vec()))
+				Ok(self
+					.parse_topo_stream(stream, prefix.to_vec())
+					// Monotonicity guard: the topo index encodes PduCount as
+					// raw bytes without the zero-tag that room_pducount_eventid
+					// uses for backfilled events. Two's complement makes
+					// Backfilled(-1) = 0xFFFF...FF sort AFTER all Normal
+					// events. When seeking backward past the earliest
+					// backfilled event, the RocksDB iterator wraps to the
+					// highest Normal events — stop if we see that happen.
+					.ready_try_take_while(move |(count, _)| Ok(*count <= until)))
 			})
 			.try_flatten_stream()
 	}
@@ -1149,7 +1158,11 @@ impl Data {
 				let stream = self
 					.roomid_topologicalorder_pducount
 					.raw_stream_from(&topo_key);
-				Ok(self.parse_topo_stream(stream, prefix.to_vec()))
+				Ok(self
+					.parse_topo_stream(stream, prefix.to_vec())
+					// Monotonicity guard: see topo_pdus_rev for details on
+					// the topo key encoding issue with backfilled events.
+					.ready_try_take_while(move |(count, _)| Ok(*count >= from)))
 			})
 			.try_flatten_stream()
 	}
