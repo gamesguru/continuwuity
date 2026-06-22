@@ -1688,8 +1688,8 @@ where
 
 	sort_keys.sort_unstable_by(|(da, ta, a), (db, tb, b)| match (da, db) {
 		| (None, None) => tb.cmp(ta).then(b.as_str().cmp(a.as_str())),
-		| (None, Some(_)) => Ordering::Greater,
-		| (Some(_), None) => Ordering::Less,
+		| (None, Some(_)) => Ordering::Less,
+		| (Some(_), None) => Ordering::Greater,
 		| (Some(pa), Some(pb)) => pb.cmp(pa).then(tb.cmp(ta)).then(b.as_str().cmp(a.as_str())),
 	});
 
