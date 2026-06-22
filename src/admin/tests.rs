@@ -1882,5 +1882,113 @@ async fn test_yolo_rescue_room() {
 		)
 		.await;
 	let output = res.unwrap().unwrap().body().to_owned();
-	assert!(!output.contains("✗"), "Expected clean state after rescue");
+	assert!(!output.contains('✗'), "Expected clean state after rescue");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_knocking_dag_resolution() {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+
+	use std::{
+		path::{Path, PathBuf},
+		sync::Arc,
+	};
+
+	use conduwuit::{
+		Server,
+		config::Config,
+		log::{Log, LogLevelReloadHandles, capture},
+	};
+	use figment::Figment;
+	use ruma::RoomId;
+
+	let dag_path = Path::new(
+		"/run/media/shane/shane4tb-ent/dags/\
+		 local-dag-ylRY10DiOcgVxCi0W8f9ztanFl5wdBxYCWQqM45n_Kk-v12-nutra.tk-merged.jsonl",
+	);
+	if !dag_path.exists() {
+		println!("Skipping test_knocking_dag_resolution: test DAG file not found");
+		return;
+	}
+
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_knocking_dag_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	struct TempDbGuard {
+		path: PathBuf,
+	}
+
+	impl Drop for TempDbGuard {
+		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+	}
+
+	let _guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
+		reload: LogLevelReloadHandles::default(),
+		capture: Arc::new(capture::State::default()),
+	}));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build services");
+	let services = services.start().await.expect("failed to start services");
+
+	// Boot admin module context references
+	crate::init(&services.admin).await;
+
+	let room_id = RoomId::parse("!ylRY10DiOcgVxCi0W8f9ztanFl5wdBxYCWQqM45n_Kk").unwrap();
+
+	// 1. Import the DAG
+	println!("Starting import-pdus...");
+	let res = services
+		.admin
+		.command_in_place(
+			format!(
+				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 12",
+				dag_path.to_string_lossy()
+			),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "import-pdus failed: {res:?}");
+
+	// Reorder PDU index
+	println!("Starting reorder-timeline...");
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id} --no-compute-state"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
+
+	// Run rebuild-state
+	println!("Starting rebuild-state...");
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo rebuild-state {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "rebuild-state failed: {res:?}");
+
+	println!("DAG knocking state resolved successfully without panicking!");
 }
