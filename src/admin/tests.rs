@@ -1316,7 +1316,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		futures::pin_mut!(stream);
 		let mut scanned = 0u32;
 		while let Some(Ok((_count, pdu))) = stream.next().await {
-			if scanned >= 2000 {
+			if scanned >= 100000 {
 				break;
 			}
 			scanned += 1;
