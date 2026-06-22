@@ -851,10 +851,12 @@ async fn test_busted_dag_resolution() {
 	use futures::StreamExt;
 	use ruma::RoomId;
 
-	let dag_path = Path::new(
+	let dag_path_str = std::env::var("CONDUWUIT_TEST_DAG_BUSTED").unwrap_or_else(|_| {
 		"/run/media/shane/shane4tb-ent/dags/\
-		 local-dag-L58ME6ufiP49v97UIOBIpvWKEgj4912JmECPuDzlvCI-v12-wombatx.me-d1-68018.jsonl",
-	);
+		 local-dag-L58ME6ufiP49v97UIOBIpvWKEgj4912JmECPuDzlvCI-v12-wombatx.me-d1-68018.jsonl"
+			.to_owned()
+	});
+	let dag_path = Path::new(&dag_path_str);
 	if !dag_path.exists() {
 		println!("Skipping test_busted_dag_resolution: test DAG file not found");
 		return;
@@ -1037,10 +1039,12 @@ async fn test_unredacted_room_dag_resolution() {
 	use futures::StreamExt;
 	use ruma::RoomId;
 
-	let dag_path = Path::new(
+	let dag_path_str = std::env::var("CONDUWUIT_TEST_DAG_UNREDACTED_ROOM").unwrap_or_else(|_| {
 		"/run/media/shane/shane4tb-ent/dags/remote-dag-BDSybzDpGyDxMHZzpN_unredacted.\
-		 org-v10-unredacted.org-d1-23142.jsonl",
-	);
+		 org-v10-unredacted.org-d1-23142.jsonl"
+			.to_owned()
+	});
+	let dag_path = Path::new(&dag_path_str);
 	if !dag_path.exists() {
 		println!("Skipping test_unredacted_room_dag_resolution: test DAG file not found");
 		return;
@@ -1206,10 +1210,14 @@ async fn test_unredacted_lounge_dag_resolution() {
 	use futures::StreamExt;
 	use ruma::RoomId;
 
-	let dag_path = Path::new(
-		"/run/media/shane/shane4tb-ent/dags/\
-		 merged-sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE-unredacted-lounge-v12-d1-84135.jsonl",
-	);
+	let dag_path_str =
+		std::env::var("CONDUWUIT_TEST_DAG_UNREDACTED_LOUNGE").unwrap_or_else(|_| {
+			"/run/media/shane/shane4tb-ent/dags/\
+			 merged-sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE-unredacted-lounge-v12-d1-84135.\
+			 jsonl"
+				.to_owned()
+		});
+	let dag_path = Path::new(&dag_path_str);
 	if !dag_path.exists() {
 		println!("Skipping test_unredacted_lounge_dag_resolution: test DAG file not found");
 		return;
@@ -1902,10 +1910,12 @@ async fn test_knocking_dag_resolution() {
 	use figment::{Figment, providers::Format};
 	use ruma::RoomId;
 
-	let dag_path = Path::new(
+	let dag_path_str = std::env::var("CONDUWUIT_TEST_DAG_KNOCKING").unwrap_or_else(|_| {
 		"/run/media/shane/shane4tb-ent/dags/\
-		 local-dag-ylRY10DiOcgVxCi0W8f9ztanFl5wdBxYCWQqM45n_Kk-v12-nutra.tk-merged.jsonl",
-	);
+		 local-dag-ylRY10DiOcgVxCi0W8f9ztanFl5wdBxYCWQqM45n_Kk-v12-nutra.tk-merged.jsonl"
+			.to_owned()
+	});
+	let dag_path = Path::new(&dag_path_str);
 	if !dag_path.exists() {
 		println!("Skipping test_knocking_dag_resolution: test DAG file not found");
 		return;

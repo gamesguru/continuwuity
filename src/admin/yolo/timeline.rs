@@ -9,7 +9,6 @@ pub(super) async fn reorder_timeline(
 	&self,
 	room_id: Option<OwnedRoomId>,
 	all: bool,
-	tail: Option<usize>,
 	no_compute_state: bool,
 ) -> Result {
 	self.bail_restricted()?;
@@ -27,11 +26,12 @@ pub(super) async fn reorder_timeline(
 
 		let mut count = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(self.services.rooms.timeline.reorder_timeline(
-				&room_id,
-				None,
-				no_compute_state,
-			))
+			if Box::pin(
+				self.services
+					.rooms
+					.timeline
+					.reorder_timeline(&room_id, no_compute_state),
+			)
 			.await
 			.is_ok()
 			{
@@ -46,32 +46,15 @@ pub(super) async fn reorder_timeline(
 
 	let room_id = room_id.ok_or_else(|| err!("room_id is required unless --all is specified"))?;
 
-	if let Some(n) = tail {
-		self.write_str(&format!(
-			"Reordering last {n} events in {room_id} by origin_server_ts (tail fast-path)..."
-		))
-		.await?;
-		let count = Box::pin(self.services.rooms.timeline.reorder_timeline(
-			&room_id,
-			Some(n),
-			no_compute_state,
-		))
-		.await?;
-		return self
-			.write_str(&format!(
-				"Reordered {count} events in room {room_id}. Clients should re-sync this room."
-			))
-			.await;
-	}
-
-	self.write_str(&format!("Reordering timeline for {room_id} by origin_server_ts..."))
+	self.write_str(&format!("Reordering timeline for {room_id} by topological DAG order..."))
 		.await?;
 
-	let count = Box::pin(self.services.rooms.timeline.reorder_timeline(
-		&room_id,
-		None,
-		no_compute_state,
-	))
+	let count = Box::pin(
+		self.services
+			.rooms
+			.timeline
+			.reorder_timeline(&room_id, no_compute_state),
+	)
 	.await?;
 
 	self.write_str(&format!(

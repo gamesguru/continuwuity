@@ -441,7 +441,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 					self.services
 						.rooms
 						.timeline
-						.reorder_timeline(room_id, None, false),
+						.reorder_timeline(room_id, false),
 				)
 				.await
 				.is_ok()

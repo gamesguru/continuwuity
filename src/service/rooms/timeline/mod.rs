@@ -381,12 +381,15 @@ impl Service {
 }
 
 impl Service {
-	/// Rebuild the topological index for a room using chronological sort.
+	/// Rebuild the topological index for a room using proper DAG
+	/// topological sort.
 	///
-	/// Reads all PDUs, builds the DAG from `prev_events`, sorts
-	/// chronologically by `origin_server_ts`, then rebuilds the
+	/// Reads all PDUs, builds the DAG from `prev_events`, performs a
+	/// topological sort (parents before children, Kahn's algorithm with
+	/// chronological tiebreaking), then rebuilds the
 	/// `roomid_topologicalorder_pducount` index with correct
-	/// `local_topological_depth` values. Stream order
+	/// `local_topological_depth` values computed as
+	/// `max(parent_depths) + 1`. Stream order
 	/// (`room_pducount_eventid`) is NEVER modified — it is immutable
 	/// arrival-time ordering.
 	///
@@ -395,7 +398,6 @@ impl Service {
 	pub async fn reorder_timeline(
 		&self,
 		room_id: &RoomId,
-		tail: Option<usize>,
 		no_compute_state: bool,
 	) -> Result<usize> {
 		use std::collections::{HashMap, HashSet};
@@ -405,50 +407,25 @@ impl Service {
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
-		// Collect PDUs from the timeline — either all (full reorder) or last N (tail).
+		// Collect all PDUs from the timeline.
 		// We need (PduCount, origin_server_ts) per event — the PduCount is the
 		// existing immutable stream order which we preserve.
 		let mut entries: HashMap<OwnedEventId, (PduCount, ruma::UInt)> = HashMap::new();
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let dropped = 0_usize;
 
-		if let Some(limit) = tail {
-			debug!("reorder_timeline: reading last {limit} PDUs from timeline (tail mode)...");
-			// Collect in reverse and record the minimum count seen (oldest in window)
-			let mut rev = Box::pin(self.pdus_rev(room_id, None));
-			let mut collected = 0_usize;
-			while let Some((count, pdu)) = rev.try_next().await? {
-				if collected >= limit {
-					break;
-				}
-				// Stop traversing when we hit a backfilled event to keep segments isolated
-				let PduCount::Normal(_) = count else {
-					break;
-				};
-				entries.insert(pdu.event_id.clone(), (count, pdu.origin_server_ts));
-				graph.insert(
-					pdu.event_id.clone(),
-					pdu.prev_events().map(ToOwned::to_owned).collect(),
-				);
-				collected = collected.saturating_add(1);
-				if collected.is_multiple_of(10000) {
-					tokio::task::yield_now().await;
-				}
-			}
-		} else {
-			debug!("reorder_timeline: reading all PDUs from timeline...");
-			let pdus_backfill = self.pdus(room_id, Some(PduCount::min()));
-			let pdus_normal = self.pdus(room_id, Some(PduCount::Normal(0)));
-			let pdus = pdus_backfill.chain(pdus_normal);
-			pin_mut!(pdus);
-			while let Some((count, pdu)) = pdus.try_next().await? {
-				let eid = pdu.event_id.clone();
-				entries.insert(eid.clone(), (count, pdu.origin_server_ts));
-				graph.insert(eid, pdu.prev_events().map(ToOwned::to_owned).collect());
-				if entries.len().is_multiple_of(10000) {
-					debug!("reorder_timeline: read {} PDUs so far...", entries.len());
-					tokio::task::yield_now().await;
-				}
+		debug!("reorder_timeline: reading all PDUs from timeline...");
+		let pdus_backfill = self.pdus(room_id, Some(PduCount::min()));
+		let pdus_normal = self.pdus(room_id, Some(PduCount::Normal(0)));
+		let pdus = pdus_backfill.chain(pdus_normal);
+		pin_mut!(pdus);
+		while let Some((count, pdu)) = pdus.try_next().await? {
+			let eid = pdu.event_id.clone();
+			entries.insert(eid.clone(), (count, pdu.origin_server_ts));
+			graph.insert(eid, pdu.prev_events().map(ToOwned::to_owned).collect());
+			if entries.len().is_multiple_of(10000) {
+				debug!("reorder_timeline: read {} PDUs so far...", entries.len());
+				tokio::task::yield_now().await;
 			}
 		}
 
@@ -462,33 +439,41 @@ impl Service {
 			return Ok(0);
 		}
 
-		// Build the DAG graph for extremity calculation only.
-		// IMPORTANT: Only include prev_events that are actually in our entries map.
+		// Retain only edges within our event set for both topo sort and extremities.
 		for parents in graph.values_mut() {
 			parents.retain(|prev_id| entries.contains_key(prev_id));
 		}
 
-		// Sort chronologically by origin_server_ts for correct topological index.
-		// Stream order is NOT changed -- only the topological index is rebuilt.
+		// Topological sort: parents before children (Kahn's algorithm).
+		// Tiebreak on origin_server_ts then event_id for determinism.
 		let start = std::time::Instant::now();
-		debug!("reorder_timeline: sorting {} events by origin_server_ts...", entries.len());
-		let mut sorted: Vec<OwnedEventId> = entries.keys().cloned().collect();
-		sorted.sort_by(|a, b| {
-			let (_, ts_a) = entries[a];
-			let (_, ts_b) = entries[b];
-			ts_a.cmp(&ts_b).then_with(|| a.cmp(b))
-		});
-		debug!("reorder_timeline: sort took {:?}", start.elapsed());
+		debug!("reorder_timeline: topologically sorting {} events...", entries.len());
+		let sorted = topo_sort_dag(&entries, &graph);
+		debug!(
+			"reorder_timeline: topo sort took {:?} ({} events)",
+			start.elapsed(),
+			sorted.len()
+		);
+
+		if sorted.len() != entries.len() {
+			warn!(
+				"reorder_timeline: topo sort dropped {} events (cycles or disconnected)",
+				entries.len().saturating_sub(sorted.len())
+			);
+		}
 
 		// Rebuild topological index only -- stream order is immutable.
 		let count = sorted.len();
 		let reindex_start = std::time::Instant::now();
 		debug!("reorder_timeline: rebuilding topological index for {count} events...");
 
+		// Compute depths: max(parent_depths) + 1 for each event in topo order.
+		let mut depths: HashMap<&OwnedEventId, u64> = HashMap::with_capacity(count);
+
 		if !no_compute_state {
 			// Full mode: rebuild topo index + recompute state snapshots
 			let final_ssh = self
-				.rebuild_topo_index_with_state(room_id, shortroomid, &sorted, &entries)
+				.rebuild_topo_index_with_state(room_id, shortroomid, &sorted, &entries, &graph)
 				.await;
 			debug!("reorder_timeline: topo rebuild+state took {:?}", reindex_start.elapsed());
 
@@ -511,7 +496,7 @@ impl Service {
 				}
 				.into();
 
-				let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
+				let local_topo_depth = compute_topo_depth(event_id, &graph, &mut depths);
 				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 
 				if i.saturating_add(1).is_multiple_of(10000) {
@@ -715,17 +700,21 @@ impl Service {
 
 	/// Rebuild topological index with incremental state computation.
 	///
-	/// For each event in sorted order: removes old topo entry, computes new
-	/// `local_topological_depth`, writes new topo key, and optionally
-	/// recomputes state snapshots. Stream order is NOT touched.
+	/// For each event in topo-sorted order: removes old topo entry,
+	/// computes `local_topological_depth` as `max(parent_depths) + 1`,
+	/// writes new topo key, and optionally recomputes state snapshots.
+	/// Stream order is NOT touched.
 	async fn rebuild_topo_index_with_state(
 		&self,
 		room_id: &RoomId,
 		shortroomid: ShortRoomId,
 		sorted: &[OwnedEventId],
 		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
+		graph: &std::collections::HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>>,
 	) -> Option<u64> {
 		let count = sorted.len();
+		let mut depths: std::collections::HashMap<&OwnedEventId, u64> =
+			std::collections::HashMap::with_capacity(count);
 
 		let mut current_shortstatehash = {
 			let mut ssh = 0;
@@ -775,8 +764,9 @@ impl Service {
 			// if left in place. Soft-fail flags are intentional and persist.
 			self.services.pdu_metadata.unmark_event_rejected(event_id);
 
+			let local_topo_depth = compute_topo_depth(event_id, graph, &mut depths);
+
 			// Rebuild topo index entry with new depth
-			let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
 			self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 
 			// State computation — uses existing pdu_id (unchanged stream order)
@@ -1777,6 +1767,131 @@ where
 		.filter(|eid| has_children.contains(eid))
 		.cloned()
 		.collect()
+}
+
+/// Compute topological depth for a single event: `max(parent_depths) + 1`.
+///
+/// Looks up parent depths from the `depths` map (which must already contain
+/// all parents that have been processed). Returns the new depth and inserts
+/// it into `depths`.
+pub fn compute_topo_depth<'a, S1, S2, S3>(
+	event_id: &'a OwnedEventId,
+	graph: &std::collections::HashMap<
+		OwnedEventId,
+		std::collections::HashSet<OwnedEventId, S2>,
+		S1,
+	>,
+	depths: &mut std::collections::HashMap<&'a OwnedEventId, u64, S3>,
+) -> u64
+where
+	S1: std::hash::BuildHasher,
+	S2: std::hash::BuildHasher,
+	S3: std::hash::BuildHasher,
+{
+	let max_parent_depth = graph.get(event_id).map_or(0, |parents| {
+		parents
+			.iter()
+			.filter_map(|p| depths.get(p).copied())
+			.max()
+			.unwrap_or(0)
+	});
+	let depth = max_parent_depth.saturating_add(1);
+	depths.insert(event_id, depth);
+	depth
+}
+
+/// Topological sort of a DAG using Kahn's algorithm.
+///
+/// Returns events in parent-before-child order. When multiple events have
+/// in-degree 0 simultaneously, tiebreaks on `origin_server_ts` first
+/// (chronological ordering within the same DAG level), then falls back to
+/// `event_id` (content hash) for determinism when timestamps collide.
+/// Events involved in cycles are appended at the end in the same order.
+pub fn topo_sort_dag<S1, S2>(
+	entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt), S1>,
+	graph: &std::collections::HashMap<
+		OwnedEventId,
+		std::collections::HashSet<OwnedEventId, S2>,
+		S1,
+	>,
+) -> Vec<OwnedEventId>
+where
+	S1: std::hash::BuildHasher,
+	S2: std::hash::BuildHasher,
+{
+	use std::collections::{BinaryHeap, HashMap, HashSet};
+
+	let n = entries.len();
+
+	// Build forward adjacency (parent -> children) and in-degree counts.
+	let mut children: HashMap<&OwnedEventId, Vec<&OwnedEventId>> = HashMap::with_capacity(n);
+	let mut in_degree: HashMap<&OwnedEventId, usize> = HashMap::with_capacity(n);
+
+	for event_id in entries.keys() {
+		in_degree.entry(event_id).or_insert(0);
+	}
+
+	for (event_id, parents) in graph {
+		if !entries.contains_key(event_id) {
+			continue;
+		}
+		for parent in parents {
+			if entries.contains_key(parent) {
+				children.entry(parent).or_default().push(event_id);
+				let deg = in_degree.entry(event_id).or_insert(0);
+				*deg = deg.saturating_add(1);
+			}
+		}
+	}
+
+	// Min-heap by (ts, event_id) for chronological tiebreaking with
+	// deterministic hash-based fallback when timestamps collide.
+	let mut heap: BinaryHeap<std::cmp::Reverse<(u64, &OwnedEventId)>> =
+		BinaryHeap::with_capacity(n);
+	for (event_id, deg) in &in_degree {
+		if *deg == 0 {
+			let ts = entries.get(*event_id).map_or(0, |(_, ts)| u64::from(*ts));
+			heap.push(std::cmp::Reverse((ts, *event_id)));
+		}
+	}
+
+	let mut result = Vec::with_capacity(n);
+	let mut visited: HashSet<&OwnedEventId> = HashSet::with_capacity(n);
+
+	while let Some(std::cmp::Reverse((_, event_id))) = heap.pop() {
+		if !visited.insert(event_id) {
+			continue;
+		}
+		result.push(event_id.clone());
+
+		if let Some(kids) = children.get(event_id) {
+			for &child in kids {
+				if let Some(deg) = in_degree.get_mut(child) {
+					*deg = deg.saturating_sub(1);
+					if *deg == 0 {
+						let ts = entries.get(child).map_or(0, |(_, ts)| u64::from(*ts));
+						heap.push(std::cmp::Reverse((ts, child)));
+					}
+				}
+			}
+		}
+	}
+
+	// Append any remaining events (cycles) in ts then event_id order
+	if result.len() < n {
+		let mut remaining: Vec<&OwnedEventId> = entries
+			.keys()
+			.filter(|eid| !visited.contains(eid))
+			.collect();
+		remaining.sort_by(|a, b| {
+			let ts_a = entries.get(*a).map_or(0, |(_, ts)| u64::from(*ts));
+			let ts_b = entries.get(*b).map_or(0, |(_, ts)| u64::from(*ts));
+			ts_a.cmp(&ts_b).then_with(|| a.cmp(b))
+		});
+		result.extend(remaining.into_iter().cloned());
+	}
+
+	result
 }
 
 pub fn calculate_true_extremities<'a, S1, S2>(

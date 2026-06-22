@@ -90,7 +90,7 @@ pub enum YoloCommand {
 		/// Bypass all state resolution and auth checks entirely. Use when the
 		/// network returns 404 for /state_ids (servers have pruned historical
 		/// state) or the origin server no longer exists. After force-rescuing
-		/// several events, run reorder-timeline --tail N to fix ordering.
+		/// several events, run reorder-timeline to fix ordering.
 		#[arg(long)]
 		force: bool,
 	},
@@ -233,10 +233,11 @@ pub enum YoloCommand {
 		heal_from: Vec<OwnedServerName>,
 	},
 
-	/// Reorder the timeline for a room by receive order (PduCount).
+	/// Reorder the timeline for a room using topological DAG sort.
 	///
-	/// Fixes anachronisms caused by rescued outliers being appended at the
-	/// end of the timeline instead of in receive order (PduCount).
+	/// Performs a full topological sort (parents before children) and
+	/// recomputes `local_topological_depth` as `max(parent_depths) + 1`.
+	/// Stream order is immutable and never modified.
 	ReorderTimeline {
 		/// The room ID.
 		#[arg(required_unless_present = "all")]
@@ -245,12 +246,6 @@ pub enum YoloCommand {
 		/// If set, reorders timeline in ALL rooms.
 		#[arg(long)]
 		all: bool,
-
-		/// Only reorder the last N events (fast path). Useful when only recent
-		/// events are out of order (e.g. after force-set-state ingestion).
-		/// When omitted, the full timeline is reordered.
-		#[arg(long)]
-		tail: Option<usize>,
 
 		/// If set, do not compute state during timeline re-insertion.
 		/// Use this if you are going to run `yolo rebuild-state` afterwards.

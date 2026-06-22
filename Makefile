@@ -301,7 +301,7 @@ complement/build: ##H Build conduwuit w direct_tls
 .PHONY: complement/docker
 complement/docker: ##H Build docker image from existing binary
 	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
-	-docker pull $(COMPLEMENT_BASE_IMAGE) 2>/dev/null
+	-docker pull $(COMPLEMENT_BASE_IMAGE)
 	DOCKER_BUILDKIT=1 docker buildx build \
 		--build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
 		--build-arg BINARY_PATH=target/latest/conduwuit \
