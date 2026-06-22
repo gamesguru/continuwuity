@@ -108,7 +108,7 @@ doc_build/
 
 # custom files
 /.tmp/
-.complement-logs
+.complement-logs*
 .~*
 ._*
 ~$*
