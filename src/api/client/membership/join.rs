@@ -861,8 +861,21 @@ async fn join_room_by_id_helper_remote_process(
 			}
 		}
 		if !missing_latest.is_empty() {
+			// Determine whether this is a first join or a re-join. For first
+			// joins the room has no timeline events yet, so pre-join
+			// extremities should be inserted as Backfilled (historical). For
+			// re-joins the room already has events from prior membership, so
+			// extremities that occurred while away should be Normal (live).
+			let is_rejoin = services
+				.rooms
+				.timeline
+				.last_timeline_count(room_id)
+				.await
+				.is_ok();
+
 			info!(
-				"Backfilling {} missing extremities from {} after joining room {}",
+				"{} {} missing extremities from {} after joining room {}",
+				if is_rejoin { "Forward-filling" } else { "Backfilling" },
 				missing_latest.len(),
 				remote_server,
 				room_id
@@ -905,22 +918,42 @@ async fn join_room_by_id_helper_remote_process(
 					);
 					continue;
 				}
-				// Insert pre-join extremities as Backfilled so they sort
-				// correctly before the join event in backward pagination,
-				// rather than polluting the Normal timeline range.
-				trace!(
-					%parsed_event_id,
-					keys = value.len(),
-					"Backfilling pre-join extremity"
-				);
-				if let Err(e) = services
-					.rooms
-					.timeline
-					.backfill_pdu(&remote_server, response.pdu, None)
-					.boxed()
-					.await
-				{
-					warn!("Failed to backfill extremity {event_id}: {e}");
+				if is_rejoin {
+					// Re-join: events happened while we were away, insert as
+					// Normal timeline events.
+					if let Err(e) = services
+						.rooms
+						.event_handler
+						.handle_incoming_pdu(
+							&remote_server,
+							room_id,
+							&parsed_event_id,
+							value,
+							true,
+							None,
+						)
+						.await
+					{
+						warn!("Failed to handle extremity {event_id}: {e}");
+					}
+				} else {
+					// First join: pre-join extremities are historical, insert
+					// as Backfilled so they sort correctly before the join
+					// event in backward pagination.
+					trace!(
+						%parsed_event_id,
+						keys = value.len(),
+						"Backfilling pre-join extremity"
+					);
+					if let Err(e) = services
+						.rooms
+						.timeline
+						.backfill_pdu(&remote_server, response.pdu, None)
+						.boxed()
+						.await
+					{
+						warn!("Failed to backfill extremity {event_id}: {e}");
+					}
 				}
 			}
 		}
