@@ -1,6 +1,6 @@
 use std::{cmp, collections::HashMap};
 
-use conduwuit::{smallstr::SmallString, trace};
+use conduwuit::{info, smallstr::SmallString, trace};
 use conduwuit_core::{
 	Err, Error, Result, err, implement,
 	matrix::{
@@ -248,6 +248,12 @@ pub async fn create_event(
 		| TimelineEventType::RoomCreate => &pdu,
 		| _ => create_pdu.as_ref().unwrap().as_pdu(),
 	};
+
+	info!(
+		"auth_events keys for event {}: {:?}",
+		pdu.event_id,
+		auth_events.keys().collect::<Vec<_>>()
+	);
 
 	let auth_check = state_res::auth_check(
 		&room_version,
