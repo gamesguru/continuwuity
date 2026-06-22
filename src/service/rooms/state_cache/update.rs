@@ -403,6 +403,11 @@ pub fn mark_as_knocked(
 	let roomuser_id = serialize_key(roomuser_id).expect("failed to serialize roomuser_id");
 
 	let new_count = self.services.globals.next_count().unwrap();
+	tracing::info!(
+		target: "knock_debug",
+		"mark_as_knocked called for user_id={} room_id={} new_count={} knocked_state={:?}",
+		user_id, room_id, new_count, knocked_state
+	);
 
 	self.db
 		.userroomid_knockedstate

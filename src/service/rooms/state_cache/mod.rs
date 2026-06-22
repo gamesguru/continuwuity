@@ -517,6 +517,7 @@ pub fn rooms_knocked<'a>(
 	&'a self,
 	user_id: &'a UserId,
 ) -> impl Stream<Item = StrippedStateEventItem> + Send + 'a {
+	// TODO: other places we depend on shorteventid but might not update it?
 	type KeyVal<'a> = (Key<'a>, &'a [u8]);
 	type Key<'a> = (&'a UserId, &'a RoomId);
 
