@@ -511,17 +511,7 @@ impl Service {
 				}
 				.into();
 
-				// Rebuild topo depth correctly using max(parents) + 1
-				let mut max_depth = 0_u64;
-				if let Ok(pdu) = self.db.get_pdu_in_room(Some(room_id), event_id).await {
-					for prev_id in pdu.prev_events() {
-						if let Some(meta) = self.db.get_event_metadata_blocking(prev_id) {
-							max_depth = max_depth.max(meta.local_topological_depth);
-						}
-					}
-				}
-				let local_topo_depth = max_depth.saturating_add(1);
-
+				let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
 				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 
 				if i.saturating_add(1).is_multiple_of(10000) {
@@ -786,13 +776,7 @@ impl Service {
 			self.services.pdu_metadata.unmark_event_rejected(event_id);
 
 			// Rebuild topo index entry with new depth
-			let mut max_depth = 0_u64;
-			for prev_id in pdu.prev_events() {
-				if let Some(meta) = self.db.get_event_metadata_blocking(prev_id) {
-					max_depth = max_depth.max(meta.local_topological_depth);
-				}
-			}
-			let local_topo_depth = max_depth.saturating_add(1);
+			let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
 			self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 
 			// State computation — uses existing pdu_id (unchanged stream order)
