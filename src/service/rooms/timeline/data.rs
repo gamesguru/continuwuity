@@ -288,6 +288,29 @@ impl Data {
 			.insert(event_id.as_bytes(), serde_json::to_vec(json).expect("json"));
 	}
 
+	pub(super) fn get_event_metadata_blocking(
+		&self,
+		event_id: &EventId,
+	) -> Option<rooms::timeline::EventMetadata> {
+		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id.as_bytes()) {
+			bincode::deserialize(&bytes).ok()
+		} else {
+			None
+		}
+	}
+
+	pub(super) fn set_event_metadata_depth(&self, event_id: &EventId, depth: u64) {
+		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id.as_bytes()) {
+			if let Ok(mut meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+				meta.local_topological_depth = depth;
+				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
+					self.eventid_metadata
+						.insert(event_id.as_bytes(), &metadata_bytes);
+				}
+			}
+		}
+	}
+
 	/// Drop a duplicate PDU by ID without removing the event mapping
 	pub(super) fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) {
 		self.room_pducount_eventid.remove(pdu_id);
