@@ -295,10 +295,8 @@ pub async fn heal_room(
 			}
 		}
 
-		// Remove from outlier table if it was an outlier
-		if !options.is_reorder {
-			self.services.outlier.remove_outlier(event_id).await;
-		}
+		// Clean up the outlier table entry if it exists.
+		self.services.outlier.remove_outlier(event_id).await;
 
 		inserted = inserted.saturating_add(1);
 
