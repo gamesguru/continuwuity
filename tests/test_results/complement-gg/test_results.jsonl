@@ -192,7 +192,7 @@
 {"Action":"pass","Test":"TestInboundFederationProfile"}
 {"Action":"pass","Test":"TestInboundFederationProfile/Inbound_federation_can_query_profile_data"}
 {"Action":"pass","Test":"TestInboundFederationProfile/Non-numeric_ports_in_server_names_are_rejected"}
-{"Action":"fail","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents"}
+{"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents"}
 {"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/Outlier_should_be_rejected"}
 {"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/sent_event_1_should_be_rejected"}
 {"Action":"pass","Test":"TestInboundFederationRejectsEventsWithRejectedAuthEvents/sent_event_2_should_be_rejected"}
@@ -533,8 +533,8 @@
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinInMSC3787Room/Join_should_fail_with_mangled_join_rules"}
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinInMSC3787Room/Join_should_succeed_when_invited"}
 {"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinInMSC3787Room/Join_should_succeed_when_joined_to_allowed_room"}
-{"Action":"fail","Test":"TestRestrictedRoomsRemoteJoinLocalUser"}
-{"Action":"fail","Test":"TestRestrictedRoomsRemoteJoinLocalUserInMSC3787Room"}
+{"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinLocalUser"}
+{"Action":"pass","Test":"TestRestrictedRoomsRemoteJoinLocalUserInMSC3787Room"}
 {"Action":"pass","Test":"TestRestrictedRoomsSpacesSummaryFederation"}
 {"Action":"pass","Test":"TestRestrictedRoomsSpacesSummaryLocal"}
 {"Action":"pass","Test":"TestRoomAlias"}
@@ -639,6 +639,9 @@
 {"Action":"pass","Test":"TestRoomState/Parallel/PUT_/createRoom_with_creation_content"}
 {"Action":"pass","Test":"TestRoomState/Parallel/PUT_/rooms/:room_id/state/m.room.topic_sets_topic"}
 {"Action":"pass","Test":"TestRoomSummary"}
+{"Action":"pass","Test":"TestRoomSummaryAllowedRoomIDs"}
+{"Action":"pass","Test":"TestRoomSummaryAllowedRoomIDs/non-restricted_room_omits_allowed_room_ids"}
+{"Action":"pass","Test":"TestRoomSummaryAllowedRoomIDs/restricted_room_includes_allowed_room_ids"}
 {"Action":"pass","Test":"TestRoomsInvite"}
 {"Action":"pass","Test":"TestRoomsInvite/Parallel"}
 {"Action":"pass","Test":"TestRoomsInvite/Parallel/Can_invite_users_to_invite-only_rooms"}
