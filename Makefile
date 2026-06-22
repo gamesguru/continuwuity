@@ -307,7 +307,7 @@ complement/docker: ##H Build docker image from existing binary
 		--build-arg BINARY_PATH=target/latest/conduwuit \
 		--build-arg UID=$(shell id -u) \
 		--build-arg GID=$(shell id -g) \
-		--pull=never \
+		--pull=false \
 		-t $(COMPLEMENT_IMAGE) \
 		-f ./docker/complement.Dockerfile \
 		--load .

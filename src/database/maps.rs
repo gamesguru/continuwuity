@@ -169,6 +169,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 		key_size_hint: Some(48),
 		..descriptor::RANDOM_SMALL
 	},
+	// Primary timeline index, keyed by stream order (monotonic server-local
+	// counter from globals.next_count()). Used by /sync, read receipts, and
+	// notification counting. Key: (shortroomid: u64, pdu_count: u64) -> event_id.
+	// Migrated from pduid_pdu as of v19 (migrate_event_store_to_ssot).
+	// See also: roomid_topologicalorder_pducount for DAG-based ordering.
 	Descriptor {
 		name: "room_pducount_eventid",
 		key_size_hint: Some(16),
