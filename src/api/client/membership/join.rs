@@ -1028,8 +1028,10 @@ async fn join_room_by_id_helper_local(
 
 	let room_version = room_version?;
 	let mut auth_user: Option<OwnedUserId> = None;
-	if !is_invited && matches!(join_rules, JoinRule::Restricted(_) | JoinRule::KnockRestricted(_))
-	{
+	let is_restricted =
+		matches!(join_rules, JoinRule::Restricted(_) | JoinRule::KnockRestricted(_));
+
+	if !is_invited && is_restricted {
 		use RoomVersionId::*;
 		if !matches!(room_version, V1 | V2 | V3 | V4 | V5 | V6 | V7) {
 			// This is a restricted room, check if we can complete the join requirements
@@ -1038,10 +1040,8 @@ async fn join_room_by_id_helper_local(
 				user_can_perform_restricted_join(services, sender_user, room_id, &room_version)
 					.await;
 			if let Ok(Some(ref allowed_rooms)) = restricted_result {
-				// If there was an error or None, we'll try joining over
-				// federation. Since it's Ok(Some(..)), we can authorise this locally.
-				// If we can't select a local user, this will remain None, the join will fail,
-				// and we'll fall back to federation.
+				// User qualifies via allowed room membership. Try to find a
+				// local user who can issue the authorising invite.
 				auth_user = select_authorising_user(
 					services,
 					room_id,
@@ -1051,6 +1051,22 @@ async fn join_room_by_id_helper_local(
 				)
 				.await
 				.ok();
+			}
+
+			// If we couldn't authorize locally (no auth_user), go remote
+			// immediately. Don't build a doomed PDU that will fail auth.
+			// This matches Synapse's `_should_perform_remote_join` behavior.
+			if auth_user.is_none() {
+				return join_restricted_via_remote(
+					services,
+					sender_user,
+					room_id,
+					reason,
+					servers,
+					state_lock,
+					json_body,
+				)
+				.await;
 			}
 		}
 	}
@@ -1083,17 +1099,30 @@ async fn join_room_by_id_helper_local(
 		..Default::default()
 	};
 
-	// Try normal join first
-	let Err(error) = services
+	// For non-restricted rooms, the local join is authoritative — no fallback.
+	services
 		.rooms
 		.timeline
 		.build_and_append_pdu(builder, sender_user, Some(room_id), &state_lock)
-		.await
-	else {
-		info!("Joined room locally");
-		return Ok(());
-	};
+		.await?;
 
+	info!("Joined room locally");
+	Ok(())
+}
+
+/// For restricted/knock_restricted rooms where the local server cannot
+/// authorize the join (no local user can issue the invite), attempt a
+/// remote join via federation. This is the Synapse-style upfront decision
+/// rather than a try-local-then-fallback approach.
+async fn join_restricted_via_remote(
+	services: &Services,
+	sender_user: &UserId,
+	room_id: &RoomId,
+	reason: Option<String>,
+	servers: &[OwnedServerName],
+	state_lock: RoomMutexGuard,
+	json_body: Option<&CanonicalJsonValue>,
+) -> Result {
 	let has_remote_servers = !(servers.is_empty()
 		|| servers.len() == 1 && services.globals.server_is_ours(&servers[0]));
 
@@ -1105,22 +1134,6 @@ async fn join_room_by_id_helper_local(
 	let servers = if has_remote_servers {
 		servers
 	} else {
-		if !services.rooms.metadata.exists(room_id).await {
-			return Err!(Request(
-				Unknown(
-					"Room was not found locally and no servers were found to help us discover it"
-				),
-				NOT_FOUND
-			));
-		}
-
-		// Only attempt federation fallback for restricted rooms where local
-		// auth may fail due to stale state (e.g. power levels update not yet
-		// received). Non-restricted rooms should fail fast.
-		if !matches!(join_rules, JoinRule::Restricted(_) | JoinRule::KnockRestricted(_)) {
-			return Err(error);
-		}
-
 		discovered_servers = services
 			.rooms
 			.state_cache
@@ -1131,16 +1144,17 @@ async fn join_room_by_id_helper_local(
 			.await;
 
 		if discovered_servers.is_empty() {
-			return Err(error);
+			return Err!(Request(Forbidden(
+				"Cannot authorize restricted join locally and no remote servers available."
+			)));
 		}
 
 		discovered_servers.as_slice()
 	};
 
 	info!(
-		?error,
 		remote_servers = %servers.len(),
-		"Could not join room locally, attempting remote join",
+		"Cannot authorize restricted join locally, attempting remote join",
 	);
 	Box::pin(join_room_by_id_helper_remote(
 		services,
