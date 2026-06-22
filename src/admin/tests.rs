@@ -797,23 +797,39 @@ async fn test_yolo_reorder_timeline() {
 		.await;
 	assert!(res.is_ok(), "rebuild-state failed: {res:?}");
 
-	// Check new order (Event B should now be before Event A)
+	// Verify stream order remains strictly immutable
 	let count_a_after = conduwuit::matrix::pdu::Id::from(
 		services.rooms.timeline.get_pdu_id(&event_a).await.unwrap(),
 	);
 	let count_b_after = conduwuit::matrix::pdu::Id::from(
 		services.rooms.timeline.get_pdu_id(&event_b).await.unwrap(),
 	);
-	println!(
-		"count_b_after: {}, count_a_after: {}",
-		count_b_after.shorteventid, count_a_after.shorteventid
+	assert_eq!(
+		count_a_before.shorteventid, count_a_after.shorteventid,
+		"Event A stream order must not be mutated"
 	);
-	assert!(
-		count_b_after.shorteventid.into_signed() < count_a_after.shorteventid.into_signed(),
-		"Event B should be before Event A after reordering. B: {}, A: {}",
-		count_b_after.shorteventid,
-		count_a_after.shorteventid
+	assert_eq!(
+		count_b_before.shorteventid, count_b_after.shorteventid,
+		"Event B stream order must not be mutated"
 	);
+
+	// Check new order (Event B should now be before Event A in topological order)
+	let mut ordered_events = Vec::new();
+	use futures::StreamExt;
+	let mut stream = Box::pin(services.rooms.timeline.topo_pdus(&room_id, None));
+	while let Some(Ok((_, pdu))) = stream.next().await {
+		ordered_events.push(pdu.event_id.clone());
+	}
+	let index_a = ordered_events
+		.iter()
+		.position(|id| id == &event_a)
+		.expect("Event A not found");
+	let index_b = ordered_events
+		.iter()
+		.position(|id| id == &event_b)
+		.expect("Event B not found");
+	println!("Event B topological index: {}, Event A topological index: {}", index_b, index_a);
+	assert!(index_b < index_a, "Event B should be before Event A after reordering");
 }
 
 #[tokio::test]

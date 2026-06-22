@@ -921,9 +921,9 @@ impl Service {
 			.await
 			.ok();
 
-		// Stream events in pdu_count order (already sorted by reorder_timeline).
+		// Stream events in topological order (already rebuilt by reorder_timeline).
 		// Collect minimal metadata for the multi-head merge at the end.
-		info!("rebuild_state: streaming events in pdu_count order...");
+		info!("rebuild_state: streaming events in topological order...");
 		let stream_start = std::time::Instant::now();
 
 		let mut events_meta: Vec<(OwnedEventId, Vec<OwnedEventId>, Option<String>, u64)> =
@@ -931,7 +931,7 @@ impl Service {
 		let mut room_version = ruma::RoomVersionId::V1;
 		let mut room_version_found = false;
 
-		let mut stream = std::pin::pin!(self.pdus(room_id, None));
+		let mut stream = std::pin::pin!(self.topo_pdus(room_id, None));
 		while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
 			let eid = pdu.event_id().to_owned();
 			let prev: Vec<OwnedEventId> = pdu.prev_events().map(ToOwned::to_owned).collect();
