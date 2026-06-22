@@ -516,14 +516,11 @@ pub fn rooms_knocked<'a>(
 	&'a self,
 	user_id: &'a UserId,
 ) -> impl Stream<Item = StrippedStateEventItem> + Send + 'a {
-	type Key<'a> = (&'a UserId, &'a RoomId);
-
 	self.db
 		.userroomid_knockedstate
-		.keys::<Key<'_>>()
+		.keys_raw_prefix(user_id)
 		.ignore_err()
-		.ready_filter(move |(uid, _)| *uid == user_id)
-		.map(|(_, room_id)| room_id.to_owned())
+		.map(|(_, room_id): (Ignore, &RoomId)| room_id.to_owned())
 		.then(move |room_id| async move {
 			self.knock_state(user_id, &room_id)
 				.await
