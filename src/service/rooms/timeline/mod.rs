@@ -381,14 +381,17 @@ impl Service {
 }
 
 impl Service {
-	/// Reorder the timeline for a room using topological sort.
+	/// Rebuild the topological index for a room using chronological sort.
 	///
-	/// Reads all PDUs, builds the DAG from `prev_events`, performs
-	/// Kahn's topological sort (via `lexicographical_topological_sort`)
-	/// with `origin_server_ts` as tiebreaker, then re-inserts with fresh
-	/// sequential `PduCount::Normal` values. This fixes anachronisms
-	/// caused by rescued outliers being appended at the end of the
-	/// timeline.
+	/// Reads all PDUs, builds the DAG from `prev_events`, sorts
+	/// chronologically by `origin_server_ts`, then rebuilds the
+	/// `roomid_topologicalorder_pducount` index with correct
+	/// `local_topological_depth` values. Stream order
+	/// (`room_pducount_eventid`) is NEVER modified — it is immutable
+	/// arrival-time ordering.
+	///
+	/// Optionally recomputes state snapshots incrementally and repairs
+	/// `unsigned.prev_content` on state events.
 	pub async fn reorder_timeline(
 		&self,
 		room_id: &RoomId,
@@ -402,9 +405,9 @@ impl Service {
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
-		// Collect PDUs from the timeline — either all (full reorder) or last N (tail)
-		// Only keep (PduCount, origin_server_ts) per event to avoid holding the full
-		// PduEvent JSON in memory simultaneously (causes OOM on large rooms).
+		// Collect PDUs from the timeline — either all (full reorder) or last N (tail).
+		// We need (PduCount, origin_server_ts) per event — the PduCount is the
+		// existing immutable stream order which we preserve.
 		let mut entries: HashMap<OwnedEventId, (PduCount, ruma::UInt)> = HashMap::new();
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let dropped = 0_usize;
@@ -465,10 +468,8 @@ impl Service {
 			parents.retain(|prev_id| entries.contains_key(prev_id));
 		}
 
-		// Sort chronologically by origin_server_ts for correct timeline presentation.
-		// The DAG graph is used for extremity calculation, not ordering — topological
-		// sort produces bad client UX by interleaving old state events with recent
-		// messages whenever the DAG has branches or gaps.
+		// Sort chronologically by origin_server_ts for correct topological index.
+		// Stream order is NOT changed -- only the topological index is rebuilt.
 		let start = std::time::Instant::now();
 		println!("reorder_timeline: sorting {} events by origin_server_ts...", entries.len());
 		let mut sorted: Vec<OwnedEventId> = entries.keys().cloned().collect();
@@ -479,58 +480,17 @@ impl Service {
 		});
 		println!("reorder_timeline: sort took {:?}", start.elapsed());
 
-		// Reindex: remove old keys + insert new keys in a single pass
+		// Rebuild topological index only -- stream order is immutable.
 		let count = sorted.len();
-		let batch_start = self
-			.services
-			.globals
-			.next_count_batch(u64::try_from(count).unwrap_or(u64::MAX))?;
 		let reindex_start = std::time::Instant::now();
-		if no_compute_state {
-			// Fast single-pass: remove old key + reindex with new key together
-			println!(
-				"reorder_timeline: single-pass reindex of {count} events (counter range \
-				 {batch_start}..{})...",
-				batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
-			);
-			let mut cork = Some(self.db.db.cork());
-			for (i, event_id) in sorted.iter().enumerate() {
-				// Remove old timeline key
-				let &(old_count, _) = entries.get(event_id).expect("in sorted list");
-				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-				self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
+		println!("reorder_timeline: rebuilding topological index for {count} events...");
 
-				// Insert new timeline key
-				let new_count = batch_start
-					.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
-					.saturating_add(1);
-				let pdu_count = PduCount::Normal(new_count);
-				let new_pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
-				self.db
-					.reindex_pdu(&new_pdu_id, event_id, pdu_count.into_unsigned());
-
-				if i.saturating_add(1).is_multiple_of(10000) {
-					drop(cork.take());
-					tokio::task::yield_now().await;
-					cork = Some(self.db.db.cork());
-				}
-			}
-			drop(cork.take());
-			println!("reorder_timeline: single-pass reindex took {:?}", reindex_start.elapsed());
-		} else {
-			// Full mode: single-pass remove old + reinsert with state computation
-			println!(
-				"reorder_timeline: single-pass reindex+state of {count} events (counter range \
-				 {batch_start}..{})...",
-				batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
-			);
+		if !no_compute_state {
+			// Full mode: rebuild topo index + recompute state snapshots
 			let final_ssh = self
-				.reindex_timeline_with_state(room_id, shortroomid, &sorted, &entries, batch_start)
+				.rebuild_topo_index_with_state(room_id, shortroomid, &sorted, &entries)
 				.await;
-			println!(
-				"reorder_timeline: single-pass reindex+state took {:?}",
-				reindex_start.elapsed()
-			);
+			println!("reorder_timeline: topo rebuild+state took {:?}", reindex_start.elapsed());
 
 			if let Some(ssh) = final_ssh {
 				if ssh != 0 {
@@ -540,12 +500,34 @@ impl Service {
 					println!("reorder_timeline: updated room shortstatehash to {ssh}");
 				}
 			}
+		} else {
+			// Fast mode: rebuild topo index only, no state computation
+			let mut cork = Some(self.db.db.cork());
+			for (i, event_id) in sorted.iter().enumerate() {
+				let &(existing_count, _) = entries.get(event_id).expect("in sorted list");
+				let pdu_id: RawPduId = PduId {
+					shortroomid,
+					shorteventid: existing_count,
+				}
+				.into();
+
+				let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
+				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+
+				if i.saturating_add(1).is_multiple_of(10000) {
+					drop(cork.take());
+					tokio::task::yield_now().await;
+					cork = Some(self.db.db.cork());
+				}
+			}
+			drop(cork.take());
+			println!("reorder_timeline: topo rebuild took {:?}", reindex_start.elapsed());
 		}
 
 		// Final batch: cork_and_sync ensures WAL is durable when dropped
 		let final_sync = self.db.db.cork_and_sync();
 		drop(final_sync);
-		println!("reorder_timeline: re-insert complete, calculating forward extremities...");
+		println!("reorder_timeline: topo rebuild complete, calculating forward extremities...");
 
 		// Calculate the true DAG forward extremities (events with in-degree 0
 		// in the reversed graph). This fixes broken pagination and fork storms.
@@ -726,21 +708,22 @@ impl Service {
 
 		drop(state_lock);
 
-		println!("reorder_timeline: complete, {count} events reordered");
+		println!("reorder_timeline: complete, {count} events reordered (topo index/state)");
 
 		Ok(count)
 	}
 
-	/// Reindex timeline entries with state computation. For each event in
-	/// sorted order: removes the old pdu_count key, assigns a new pdu_count,
-	/// recomputes state (for state events), and writes the updated index.
-	async fn reindex_timeline_with_state(
+	/// Rebuild topological index with incremental state computation.
+	///
+	/// For each event in sorted order: removes old topo entry, computes new
+	/// `local_topological_depth`, writes new topo key, and optionally
+	/// recomputes state snapshots. Stream order is NOT touched.
+	async fn rebuild_topo_index_with_state(
 		&self,
 		room_id: &RoomId,
 		shortroomid: ShortRoomId,
 		sorted: &[OwnedEventId],
 		entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
-		batch_start: u64,
 	) -> Option<u64> {
 		let count = sorted.len();
 
@@ -766,24 +749,22 @@ impl Service {
 
 		let mut cork = Some(self.db.db.cork());
 		for (i, event_id) in sorted.iter().enumerate() {
-			// Remove old timeline key first
-			if let Some(&(old_count, _)) = entries.get(event_id) {
-				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-				self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
+			// Use the existing stream order count -- do NOT fabricate a new one
+			let Some(&(existing_count, _)) = entries.get(event_id) else {
+				continue;
+			};
+			let pdu_id: RawPduId = PduId {
+				shortroomid,
+				shorteventid: existing_count,
 			}
-
-			let new_count = batch_start
-				.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
-				.saturating_add(1);
-			let pdu_count = PduCount::Normal(new_count);
-			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+			.into();
 
 			let (pdu, mut json) = match self.db.get_from_eventid_pdu(event_id).await {
 				| Ok(res) => res,
 				| Err(e) => {
 					warn!(
 						%event_id,
-						"PDU missing during reindex (skipping): {e}"
+						"PDU missing during topo rebuild (skipping): {e}"
 					);
 					continue;
 				},
@@ -794,6 +775,11 @@ impl Service {
 			// if left in place. Soft-fail flags are intentional and persist.
 			self.services.pdu_metadata.unmark_event_rejected(event_id);
 
+			// Rebuild topo index entry with new depth
+			let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
+			self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+
+			// State computation — uses existing pdu_id (unchanged stream order)
 			let mut json_modified = false;
 			if let Some(mut ssh) = current_shortstatehash {
 				let shorteventid = self
@@ -872,19 +858,16 @@ impl Service {
 				current_shortstatehash = Some(ssh);
 			}
 
-			// Only write JSON when unsigned.prev_content was actually repaired;
-			// otherwise just update index mappings (metadata + pdu_count).
+			// Only write JSON when unsigned.prev_content was actually repaired
 			if json_modified {
-				self.db.append_pdu(&pdu_id, &pdu, &json, pdu_count).await;
-			} else {
-				self.db
-					.reindex_pdu(&pdu_id, event_id, pdu_count.into_unsigned());
+				self.db.update_pdu_json(event_id, &json);
 			}
-			// Search is NOT re-indexed here: search indexes by EventId + text
-			// content, both of which are immutable. Shifting pdu_count has no
-			// bearing on the search index.
+
 			if i.saturating_add(1).is_multiple_of(2000) {
-				println!("reorder_timeline: reindexed {}/{count} events...", i.saturating_add(1));
+				println!(
+					"reorder_timeline: rebuilt {}/{count} topo entries...",
+					i.saturating_add(1)
+				);
 			}
 			if i.saturating_add(1).is_multiple_of(10000) {
 				drop(cork.take());

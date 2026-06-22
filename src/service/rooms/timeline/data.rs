@@ -25,7 +25,6 @@ pub(super) struct Data {
 	roomid_topologicalorder_pducount: Arc<Map>,
 	shorteventid_shortauthevents: Arc<Map>,
 	shorteventid_shortprevevents: Arc<Map>,
-	pub(super) room_pducount_eventid_backup: Arc<Map>,
 	pub(super) db: Arc<Database>,
 	services: Services,
 }
@@ -47,7 +46,6 @@ impl Data {
 			eventid_metadata: db["eventid_metadata"].clone(),
 			room_pducount_eventid: db["room_pducount_eventid"].clone(),
 			roomid_topologicalorder_pducount: db["roomid_topologicalorder_pducount"].clone(),
-			room_pducount_eventid_backup: db["room_pducount_eventid_backup"].clone(),
 			shorteventid_shortauthevents: db["shorteventid_shortauthevents"].clone(),
 			shorteventid_shortprevevents: db["shorteventid_shortprevevents"].clone(),
 			db: args.db.clone(),
@@ -251,38 +249,43 @@ impl Data {
 		}
 	}
 
-	/// Remove timeline entry when pdu_id is known (avoids DB lookup).
-	pub(super) fn remove_from_timeline_by_id(&self, pdu_id: &RawPduId, event_id: &EventId) {
-		self.eventid_pduid.remove(event_id);
-		self.room_pducount_eventid.remove(pdu_id);
-		self.remove_topo_pducount(pdu_id, event_id.as_bytes());
-	}
-
-	/// Lightweight re-index: update ONLY position indices without touching
-	/// immutable canonical JSON, prev_events, or auth_events.
-	/// Used by reorder-timeline to avoid 84k+ unnecessary JSON rewrites.
-	pub(super) fn reindex_pdu(&self, new_pdu_id: &RawPduId, event_id: &EventId, pdu_count: u64) {
+	/// Rebuild the topological index entry for a single event without
+	/// touching stream order. Removes the old topo key, computes a new
+	/// `local_topological_depth`, writes the new topo key, and updates
+	/// metadata.
+	pub(super) fn reindex_topo(
+		&self,
+		pdu_id: &RawPduId,
+		event_id: &EventId,
+		new_topo_depth: u64,
+	) {
 		let event_id_bytes = event_id.as_bytes();
 
-		// Update position mapping (metadata pdu_count is source of truth)
-		self.room_pducount_eventid
-			.insert(new_pdu_id, event_id_bytes);
+		// Remove old topo entry
+		self.remove_topo_pducount(pdu_id, event_id_bytes);
 
-		// Update pdu_count in metadata (read-modify-write)
+		// Write new topo entry
+		let topo_key = Self::topo_pducount_key(pdu_id, new_topo_depth);
+		self.roomid_topologicalorder_pducount
+			.insert(&topo_key, event_id_bytes);
+
+		// Update metadata with new topo depth
 		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
 			if let Ok(mut meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
-				let old_local_topo = meta.local_topological_depth;
-				meta.pdu_count = Some(pdu_count);
+				meta.local_topological_depth = new_topo_depth;
 				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
 					self.eventid_metadata
 						.insert(event_id_bytes, &metadata_bytes);
 				}
-				// Update topological index
-				let topo_key = Self::topo_pducount_key(new_pdu_id, old_local_topo);
-				self.roomid_topologicalorder_pducount
-					.insert(&topo_key, event_id_bytes);
 			}
 		}
+	}
+
+	/// Update only the canonical JSON for a PDU without touching any index.
+	/// Used when state repair modifies `unsigned.prev_content`.
+	pub(super) fn update_pdu_json(&self, event_id: &EventId, json: &CanonicalJsonObject) {
+		self.eventid_pdu
+			.insert(event_id.as_bytes(), serde_json::to_vec(json).expect("json"));
 	}
 
 	/// Drop a duplicate PDU by ID without removing the event mapping

@@ -180,6 +180,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		val_size_hint: Some(32),
 		..descriptor::SEQUENTIAL_SMALL
 	},
+	// DEPRECATED: This map is no longer used. Stream order is immutable and
+	// the reorder/heal code no longer backs up old stream order entries.
+	// Retained to avoid a schema migration; will be removed in a future
+	// database version bump.
 	Descriptor {
 		name: "room_pducount_eventid_backup",
 		key_size_hint: Some(16),

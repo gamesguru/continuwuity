@@ -33,8 +33,8 @@ pub struct HealOptions {
 	/// Rebuild the membership cache from the final state snapshot.
 	pub rebuild_membership: bool,
 
-	/// For reorder mode: existing timeline events have old PduCounts that
-	/// need to be backed up and removed before re-insertion.
+	/// Whether this heal invocation is being called from the reorder path.
+	/// When true, events are expected to already be in the timeline.
 	pub is_reorder: bool,
 }
 
@@ -174,60 +174,17 @@ pub async fn heal_room(
 		warn!("heal_room: sort dropped {} events", events.len().saturating_sub(sorted.len()));
 	}
 
-	// Phase 3: If reorder mode, backup and remove old timeline entries
-	if options.is_reorder {
-		if let Some(old_counts) = old_counts {
-			info!(
-				"heal_room: backing up {} old timeline entries before removal...",
-				old_counts.len()
-			);
+	// Phase 3: Stream order is immutable — we do NOT remove or backup
+	// existing timeline entries. Events that already have a stream order
+	// keep it. Only outlier promotions (events with no existing stream
+	// order) will get a new count in Phase 4.
 
-			// Backup old routing keys
-			let mut backup_batch = database::rocksdb::WriteBatch::default();
-			for (event_id, &old_count) in old_counts {
-				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-				self.db.room_pducount_eventid_backup.insert_into_batch(
-					&mut backup_batch,
-					&old_pdu_id,
-					event_id.as_bytes(),
-				);
-			}
-			self.db
-				.room_pducount_eventid_backup
-				.apply_batch(&backup_batch);
-
-			// Remove old timeline entries
-			let mut cork = Some(self.db.db.cork());
-			for (i, &idx) in sorted.iter().enumerate() {
-				let event_id = dag.id(idx);
-				if let Some(&old_count) = old_counts.get(event_id) {
-					let old_pdu_id: RawPduId =
-						PduId { shortroomid, shorteventid: old_count }.into();
-					self.db.remove_from_timeline_by_id(&old_pdu_id, event_id);
-				}
-				if i.saturating_add(1).is_multiple_of(10_000) {
-					drop(cork.take());
-					tokio::task::yield_now().await;
-					cork = Some(self.db.db.cork());
-				}
-			}
-			drop(cork.take());
-		}
-	}
-
-	// Phase 4: Insert events in topological order with fresh PduCounts and
-	// incremental state computation.
+	// Phase 4: Insert events into the timeline. For events that already
+	// have a stream order (existing timeline entries), preserve it. For
+	// outlier promotions, assign a new stream count.
 	let count = sorted.len();
-	let batch_start = self
-		.services
-		.globals
-		.next_count_batch(u64::try_from(count).unwrap_or(u64::MAX))?;
 
-	info!(
-		"heal_room: inserting {count} events (counter range {}..{})",
-		batch_start,
-		batch_start.saturating_add(u64::try_from(count).unwrap_or(u64::MAX))
-	);
+	info!("heal_room: processing {count} events for timeline insertion");
 
 	let mut current_shortstatehash = if options.compute_state {
 		// Try to seed from the oldest event's prev_events state
@@ -253,7 +210,7 @@ pub async fn heal_room(
 	let mut failed = 0_usize;
 	let mut cork = Some(self.db.db.cork());
 
-	for (i, &idx) in sorted.iter().enumerate() {
+	for &idx in &sorted {
 		let event_id = dag.id(idx);
 		let Some(pdu) = events.get(event_id) else {
 			skipped = skipped.saturating_add(1);
@@ -275,12 +232,28 @@ pub async fn heal_room(
 			self.services.pdu_metadata.clear_pdu_markers(event_id);
 		}
 
-		// Assign fresh PduCount
-		let new_count = batch_start
-			.saturating_add(u64::try_from(i).unwrap_or(u64::MAX))
-			.saturating_add(1);
-		let pdu_count = PduCount::Normal(new_count);
-		let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+		// Use existing stream order if the event is already in the timeline.
+		// Only assign a new count for outlier promotions (no existing count).
+		let (pdu_count, pdu_id, is_new_insertion) =
+			if let Some(&existing_count) = old_counts.and_then(|m| m.get(event_id)) {
+				// Event already has a stream order — preserve it
+				let pdu_id: RawPduId = PduId {
+					shortroomid,
+					shorteventid: existing_count,
+				}
+				.into();
+				(existing_count, pdu_id, false)
+			} else if let Ok(existing_pdu_id) = self.db.get_pdu_id(event_id).await {
+				// Event is in timeline via eventid_pduid — preserve its count
+				let existing_count = existing_pdu_id.pdu_count();
+				(existing_count, existing_pdu_id, false)
+			} else {
+				// Outlier promotion — assign a new stream count
+				let new_count = self.services.globals.next_count()?;
+				let pdu_count = PduCount::Normal(new_count);
+				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
+				(pdu_count, pdu_id, true)
+			};
 
 		// Compute state incrementally if enabled
 		if let Some(mut ssh) = current_shortstatehash {
@@ -289,10 +262,15 @@ pub async fn heal_room(
 			current_shortstatehash = Some(ssh);
 		}
 
-		// Write to timeline
-		self.db
-			.append_pdu(&pdu_id, &pdu_from_db, &json, pdu_count)
-			.await;
+		// Write to timeline only if this is a new insertion (outlier promotion)
+		if is_new_insertion {
+			self.db
+				.append_pdu(&pdu_id, &pdu_from_db, &json, pdu_count)
+				.await;
+		} else {
+			// Event already in timeline -- only update JSON if state repair modified it
+			self.db.update_pdu_json(event_id, &json);
+		}
 
 		// Index searchable content
 		if pdu.kind == TimelineEventType::RoomMessage {
@@ -366,22 +344,6 @@ pub async fn heal_room(
 	// Phase 7: Rebuild membership cache if requested
 	if options.rebuild_membership {
 		self.rebuild_membership_cache(room_id, &state_lock).await;
-	}
-
-	// Phase 8: Clean up backup routing map (reorder mode only)
-	if options.is_reorder {
-		if let Some(old_counts) = old_counts {
-			let mut backup_batch = database::rocksdb::WriteBatch::default();
-			for &old_count in old_counts.values() {
-				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-				self.db
-					.room_pducount_eventid_backup
-					.remove_from_batch(&mut backup_batch, old_pdu_id.as_ref());
-			}
-			self.db
-				.room_pducount_eventid_backup
-				.apply_batch(&backup_batch);
-		}
 	}
 
 	// Ensure WAL is durable
