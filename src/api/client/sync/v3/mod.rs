@@ -423,6 +423,12 @@ pub(crate) async fn build_sync_events(
 				.await
 				.ok();
 
+			tracing::info!(
+				target: "knock_debug",
+				"get_knock_count for room_id={} user_id={} returned {:?} last_sync_end_count={:?}",
+				room_id, syncing_user, knock_count, last_sync_end_count
+			);
+
 			// only sync this knock if it was sent after the last /sync call
 			if last_sync_end_count < knock_count {
 				let knocked_room = KnockedRoom {

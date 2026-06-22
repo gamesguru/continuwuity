@@ -235,6 +235,12 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 #[implement(super::Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn mark_as_joined(&self, user_id: &UserId, room_id: &RoomId) {
+	tracing::info!(
+		target: "knock_debug",
+		"mark_as_joined called for user_id={} room_id={}",
+		user_id,
+		room_id
+	);
 	let userroom_id = (user_id, room_id);
 	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
 
@@ -338,6 +344,10 @@ pub async fn mark_as_left_silent(&self, user_id: &UserId, room_id: &RoomId) {
 #[implement(super::Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn mark_as_left(&self, user_id: &UserId, room_id: &RoomId, leave_pdu: Option<Pdu>) {
+	tracing::info!(
+		target: "knock_debug",
+		"mark_as_left called for user_id={} room_id={}", user_id, room_id
+	);
 	let userroom_id = (user_id, room_id);
 	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
 
@@ -392,12 +402,18 @@ pub fn mark_as_knocked(
 	let roomuser_id = (room_id, user_id);
 	let roomuser_id = serialize_key(roomuser_id).expect("failed to serialize roomuser_id");
 
+	let new_count = self.services.globals.next_count().unwrap();
+	tracing::info!(
+		target: "knock_debug",
+		"mark_as_knocked called for user_id={} room_id={} new_count={}", user_id, room_id, new_count
+	);
+
 	self.db
 		.userroomid_knockedstate
 		.raw_put(&userroom_id, Json(knocked_state.unwrap_or_default()));
 	self.db
 		.roomuserid_knockedcount
-		.raw_aput::<8, _, _>(&roomuser_id, self.services.globals.next_count().unwrap());
+		.raw_aput::<8, _, _>(&roomuser_id, new_count);
 
 	self.db.userroomid_joined.remove(&userroom_id);
 	self.db.roomuserid_joined.remove(&roomuser_id);
