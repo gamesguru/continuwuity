@@ -482,9 +482,10 @@ pub fn rooms_joined<'a>(
 	&'a self,
 	user_id: &'a UserId,
 ) -> impl Stream<Item = &'a RoomId> + Send + 'a {
+	let prefix = (user_id, Interfix);
 	self.db
 		.userroomid_joined
-		.keys_raw_prefix(user_id)
+		.keys_prefix(&prefix)
 		.ignore_err()
 		.map(|(_, room_id): (Ignore, &RoomId)| room_id)
 }
@@ -516,18 +517,17 @@ pub fn rooms_knocked<'a>(
 	&'a self,
 	user_id: &'a UserId,
 ) -> impl Stream<Item = StrippedStateEventItem> + Send + 'a {
+	type KeyVal<'a> = (Key<'a>, Raw<Vec<AnyStrippedStateEvent>>);
+	type Key<'a> = (&'a UserId, &'a RoomId);
+
+	let prefix = (user_id, Interfix);
 	self.db
 		.userroomid_knockedstate
-		.keys_raw_prefix(user_id)
+		.stream_prefix(&prefix)
 		.ignore_err()
-		.map(|(_, room_id): (Ignore, &RoomId)| room_id.to_owned())
-		.then(move |room_id| async move {
-			self.knock_state(user_id, &room_id)
-				.await
-				.ok()
-				.map(|events| (room_id, events))
-		})
-		.ready_filter_map(|item| item)
+		.map(|((_, room_id), state): KeyVal<'_>| (room_id.to_owned(), state))
+		.map(|(room_id, state)| Ok((room_id, state.deserialize_as()?)))
+		.ignore_err()
 }
 
 #[implement(Service)]
