@@ -222,6 +222,9 @@ pub async fn backfill_if_required(
 			| Ok(response) => {
 				let pdus = response.pdus;
 				info!("backfill: {backfill_server} returned {} events for {room_id}", pdus.len());
+				if pdus.is_empty() {
+					continue;
+				}
 				// Handle timeline events newest-first (maintain timeline integrity)
 				for pdu in pdus {
 					if let Err(e) = self.backfill_pdu(backfill_server, pdu, None).boxed().await {
