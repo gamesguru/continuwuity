@@ -1,6 +1,6 @@
 use axum::{extract::State, response::Json};
 use conduwuit::{
-	Err, Event, Pdu, PduCount, Result, err,
+	Err, Event, Pdu, PduCount, Result, err, info,
 	utils::{
 		future::TryExtExt,
 		stream::{BroadbandExt, ReadyExt},
@@ -32,18 +32,22 @@ pub(crate) async fn get_member_events_route(
 	body: Ruma<get_member_events::v3::Request>,
 ) -> Result<get_member_events::v3::Response> {
 	let sender_user = body.sender_user();
+	let room_id = &body.room_id;
 	let membership = body.membership.as_ref();
 	let not_membership = body.not_membership.as_ref();
 
-	if !services
+	let is_joined = services
 		.rooms
 		.state_cache
-		.is_joined(sender_user, &body.room_id)
-		.await && !services
-		.rooms
-		.state_cache
-		.is_left(sender_user, &body.room_id)
-		.await
+		.is_joined(sender_user, room_id)
+		.await;
+
+	if !is_joined
+		&& !services
+			.rooms
+			.state_cache
+			.is_left(sender_user, room_id)
+			.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));
 	}
@@ -56,7 +60,7 @@ pub(crate) async fn get_member_events_route(
 		let mut pdus_rev = services
 			.rooms
 			.timeline
-			.pdus_rev(&body.room_id, Some(pdu_count))
+			.pdus_rev(room_id, Some(pdu_count))
 			.boxed();
 
 		let Some(Ok((_, pdu))) = pdus_rev.next().await else {
@@ -87,27 +91,79 @@ pub(crate) async fn get_member_events_route(
 		return Ok(get_member_events::v3::Response { chunk });
 	}
 
-	let shortstatehash = services
+	// For departed users, use state snapshot at the time of departure.
+	// Note: pdu_shortstatehash stores state BEFORE the event, so for the
+	// leave event the user still appears as "join". We collect the leave_pdu
+	// separately and overlay it on the snapshot results.
+	let (shortstatehash, leave_pdu) = if !is_joined {
+		if let Ok(Some(leave_pdu)) = services
+			.rooms
+			.state_cache
+			.left_state(sender_user, room_id)
+			.await
+		{
+			let ssh = services
+				.rooms
+				.state_accessor
+				.pdu_shortstatehash(leave_pdu.event_id())
+				.await
+				.ok();
+			info!(
+				target: "membership_debug",
+				"/members: departed user {sender_user} in {room_id}, leave_ssh={ssh:?}"
+			);
+			(ssh, Some(leave_pdu))
+		} else {
+			(None, None)
+		}
+	} else {
+		(None, None)
+	};
+
+	let shortstatehash = match shortstatehash {
+		| Some(ssh) => ssh,
+		| None =>
+			services
+				.rooms
+				.state
+				.get_room_shortstatehash(room_id)
+				.await?,
+	};
+
+	let mut members: Vec<Pdu> = services
 		.rooms
-		.state
-		.get_room_shortstatehash(&body.room_id)
-		.await?;
+		.state_accessor
+		.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
+		.broadn_filter_map(256, |(_, event_id)| async move {
+			services.rooms.timeline.get_pdu(&event_id).await.ok()
+		})
+		.map(|pdu| pdu.into_pdu())
+		.collect()
+		.await;
+
+	// Overlay the leave PDU: replace the user's "join" entry with their
+	// actual leave event so the membership is correct (pdu_shortstatehash
+	// stores state BEFORE the event, so the leave isn't reflected yet).
+	if let Some(leave_pdu) = leave_pdu {
+		let leave_pdu: Pdu = leave_pdu.into_pdu();
+		if let Some(leave_sk) = leave_pdu.state_key.as_deref() {
+			if let Some(pos) = members
+				.iter()
+				.position(|m| m.state_key.as_deref() == Some(leave_sk))
+			{
+				members[pos] = leave_pdu;
+			} else {
+				members.push(leave_pdu);
+			}
+		}
+	}
 
 	Ok(get_member_events::v3::Response {
-		chunk: services
-			.rooms
-			.state_accessor
-			.state_keys_with_ids::<OwnedEventId>(shortstatehash, &StateEventType::RoomMember)
-			.broadn_filter_map(256, |(_, event_id)| async move {
-				services.rooms.timeline.get_pdu(&event_id).await.ok()
-			})
-			.ready_filter_map(|pdu| {
-				let pdu: Pdu = pdu.into_pdu();
-				membership_filter(pdu, membership, not_membership)
-			})
+		chunk: members
+			.into_iter()
+			.filter_map(|pdu| membership_filter(pdu, membership, not_membership))
 			.map(Event::into_format)
-			.collect()
-			.await,
+			.collect(),
 	})
 }
 

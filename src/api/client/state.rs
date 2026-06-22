@@ -3,12 +3,12 @@ mod tests;
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Result, RoomVersion, err,
+	Err, Result, RoomVersion, err, info,
 	matrix::{Event, pdu::PduBuilder},
 	utils::BoolExt,
 };
 use conduwuit_service::Services;
-use futures::{FutureExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use ruma::{
 	MilliSecondsSinceUnixEpoch, OwnedEventId, RoomId, UserId,
 	api::client::state::{get_state_events, get_state_events_for_key, send_state_event},
@@ -91,29 +91,55 @@ pub(crate) async fn get_state_events_route(
 	body: Ruma<get_state_events::v3::Request>,
 ) -> Result<get_state_events::v3::Response> {
 	let sender_user = body.sender_user();
+	let room_id = &body.room_id;
 
-	if !services
+	let is_joined = services
 		.rooms
 		.state_cache
-		.is_joined(sender_user, &body.room_id)
-		.await && !services
-		.rooms
-		.state_cache
-		.is_left(sender_user, &body.room_id)
-		.await
+		.is_joined(sender_user, room_id)
+		.await;
+
+	if !is_joined
+		&& !services
+			.rooms
+			.state_cache
+			.is_left(sender_user, room_id)
+			.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view the room state.")));
 	}
 
-	Ok(get_state_events::v3::Response {
-		room_state: services
+	// For departed users, serve state frozen at the point they left
+	let shortstatehash = if !is_joined {
+		let ssh = leave_shortstatehash(&services, sender_user, room_id).await;
+		info!(
+			target: "membership_debug",
+			"/state: departed user {sender_user} in {room_id}, leave_ssh={ssh:?}"
+		);
+		ssh
+	} else {
+		None
+	};
+
+	let room_state: Vec<_> = if let Some(ssh) = shortstatehash {
+		services
 			.rooms
 			.state_accessor
-			.room_state_full_pdus(&body.room_id)
+			.state_full_pdus(ssh)
+			.map(Event::into_format)
+			.collect()
+			.await
+	} else {
+		services
+			.rooms
+			.state_accessor
+			.room_state_full_pdus(room_id)
 			.map_ok(Event::into_format)
 			.try_collect()
-			.await?,
-	})
+			.await?
+	};
+
+	Ok(get_state_events::v3::Response { room_state })
 }
 
 /// # `GET /_matrix/client/v3/rooms/{roomid}/state/{eventType}/{stateKey}`
@@ -129,34 +155,60 @@ pub(crate) async fn get_state_events_for_key_route(
 	body: Ruma<get_state_events_for_key::v3::Request>,
 ) -> Result<get_state_events_for_key::v3::Response> {
 	let sender_user = body.sender_user();
+	let room_id = &body.room_id;
 
-	if !services
+	let is_joined = services
 		.rooms
 		.state_cache
-		.is_joined(sender_user, &body.room_id)
-		.await && !services
-		.rooms
-		.state_cache
-		.is_left(sender_user, &body.room_id)
-		.await
+		.is_joined(sender_user, room_id)
+		.await;
+
+	if !is_joined
+		&& !services
+			.rooms
+			.state_cache
+			.is_left(sender_user, room_id)
+			.await
 	{
 		return Err!(Request(NotFound(debug_warn!(
 			"You don't have permission to view the room state."
 		))));
 	}
 
-	let event = services
-		.rooms
-		.state_accessor
-		.room_state_get(&body.room_id, &body.event_type, &body.state_key)
-		.await
-		.map_err(|_| {
-			err!(Request(NotFound(debug_warn!(
-					room_id = %body.room_id,
-					event_type = %body.event_type,
-					"State event not found in room.",
-			))))
-		})?;
+	// For departed users, look up state from the snapshot at departure
+	let event = if !is_joined {
+		if let Some(ssh) = leave_shortstatehash(&services, sender_user, room_id).await {
+			info!(
+				target: "membership_debug",
+				"/state/{}: departed user {sender_user} in {room_id}, using leave_ssh={ssh}",
+				body.event_type
+			);
+			services
+				.rooms
+				.state_accessor
+				.state_get(ssh, &body.event_type, &body.state_key)
+				.await
+		} else {
+			services
+				.rooms
+				.state_accessor
+				.room_state_get(room_id, &body.event_type, &body.state_key)
+				.await
+		}
+	} else {
+		services
+			.rooms
+			.state_accessor
+			.room_state_get(room_id, &body.event_type, &body.state_key)
+			.await
+	}
+	.map_err(|_| {
+		err!(Request(NotFound(debug_warn!(
+				room_id = %body.room_id,
+				event_type = %body.event_type,
+				"State event not found in room.",
+		))))
+	})?;
 
 	let event_format = body
 		.format
@@ -195,6 +247,30 @@ pub(crate) async fn get_state_events_for_empty_key_route(
 	get_state_events_for_key_route(State(services), body)
 		.await
 		.map(RumaResponse)
+}
+
+/// Get the shortstatehash for the state snapshot at the point when a user
+/// departed (left/banned) from a room. Returns None if the leave event
+/// can't be found or has no associated state snapshot.
+async fn leave_shortstatehash(
+	services: &Services,
+	user_id: &UserId,
+	room_id: &RoomId,
+) -> Option<u64> {
+	let leave_pdu = services
+		.rooms
+		.state_cache
+		.left_state(user_id, room_id)
+		.await
+		.ok()
+		.flatten()?;
+
+	services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(leave_pdu.event_id())
+		.await
+		.ok()
 }
 
 async fn send_state_event_for_key_helper(
