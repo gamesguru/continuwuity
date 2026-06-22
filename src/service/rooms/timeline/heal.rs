@@ -255,6 +255,17 @@ pub async fn heal_room(
 				(pdu_count, pdu_id, true)
 			};
 
+		// Rebuild topo depth. Since `sorted` is ordered, use max(parents) + 1.
+		let mut max_depth = 0_u64;
+		for prev_id in pdu.prev_events() {
+			if let Ok(bytes) = self.db.eventid_metadata.get_blocking(prev_id.as_bytes()) {
+				if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+					max_depth = max_depth.max(meta.local_topological_depth);
+				}
+			}
+		}
+		let new_topo_depth = max_depth.saturating_add(1);
+
 		// Compute state incrementally if enabled
 		if let Some(mut ssh) = current_shortstatehash {
 			self.compute_state_for_event(pdu, event_id, &mut json, &mut ssh, &pdu_id)
@@ -262,14 +273,30 @@ pub async fn heal_room(
 			current_shortstatehash = Some(ssh);
 		}
 
-		// Write to timeline only if this is a new insertion (outlier promotion)
+		// Write to timeline
 		if is_new_insertion {
+			// Pre-emptively update existing_metadata (if any) with the new depth
+			// so append_pdu preserves the CORRECT depth instead of the old one.
+			if let Ok(bytes) = self.db.eventid_metadata.get_blocking(event_id.as_bytes()) {
+				if let Ok(mut meta) =
+					bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
+				{
+					meta.local_topological_depth = new_topo_depth;
+					if let Ok(metadata_bytes) = bincode::serialize(&meta) {
+						self.db
+							.eventid_metadata
+							.insert(event_id.as_bytes(), &metadata_bytes);
+					}
+				}
+			}
 			self.db
 				.append_pdu(&pdu_id, &pdu_from_db, &json, pdu_count)
 				.await;
 		} else {
 			// Event already in timeline -- only update JSON if state repair modified it
 			self.db.update_pdu_json(event_id, &json);
+			// Explicitly rewrite the topological index entry and metadata
+			self.db.reindex_topo(&pdu_id, event_id, new_topo_depth);
 		}
 
 		// Index searchable content
