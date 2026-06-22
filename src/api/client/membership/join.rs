@@ -862,7 +862,7 @@ async fn join_room_by_id_helper_remote_process(
 		}
 		if !missing_latest.is_empty() {
 			info!(
-				"Forward-filling {} missing extremities from {} after joining room {}",
+				"Backfilling {} missing extremities from {} after joining room {}",
 				missing_latest.len(),
 				remote_server,
 				room_id
@@ -905,20 +905,22 @@ async fn join_room_by_id_helper_remote_process(
 					);
 					continue;
 				}
+				// Insert pre-join extremities as Backfilled so they sort
+				// correctly before the join event in backward pagination,
+				// rather than polluting the Normal timeline range.
+				trace!(
+					%parsed_event_id,
+					keys = value.len(),
+					"Backfilling pre-join extremity"
+				);
 				if let Err(e) = services
 					.rooms
-					.event_handler
-					.handle_incoming_pdu(
-						&remote_server,
-						room_id,
-						&parsed_event_id,
-						value,
-						true,
-						None,
-					)
+					.timeline
+					.backfill_pdu(&remote_server, response.pdu, None)
+					.boxed()
 					.await
 				{
-					warn!("Failed to handle extremity {event_id}: {e}");
+					warn!("Failed to backfill extremity {event_id}: {e}");
 				}
 			}
 		}
