@@ -409,9 +409,11 @@ pub fn mark_as_knocked(
 		user_id, room_id, new_count, knocked_state
 	);
 
-	self.db
-		.userroomid_knockedstate
-		.raw_put(&userroom_id, Json(knocked_state.unwrap_or_default()));
+	self.db.userroomid_knockedstate.raw_put(
+		&userroom_id,
+		serde_json::to_vec(&knocked_state.unwrap_or_default())
+			.expect("failed to serialize knock state"),
+	);
 	self.db
 		.roomuserid_knockedcount
 		.raw_aput::<8, _, _>(&roomuser_id, new_count);
