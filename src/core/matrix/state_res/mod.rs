@@ -932,7 +932,7 @@ where
 				.power_level
 				.cmp(&self.power_level)
 				.then(self.origin_server_ts.cmp(&other.origin_server_ts))
-				.then(self.event_id.cmp(other.event_id))
+				.then(self.event_id.borrow().cmp(other.event_id.borrow()))
 		}
 	}
 
@@ -1403,11 +1403,8 @@ where
 				.collect()
 				.await;
 
-			for (key, ev) in supplemental {
-				// resolved_state MUST take precedence over the event's own auth_events!
-				// Remove any existing entry from auth_state that matches this key.
-				auth_state.retain(|(k, _)| k != &key);
-				auth_state.push((key, ev));
+			for (key, event) in supplemental {
+				auth_state.push((key, event));
 			}
 		}
 
