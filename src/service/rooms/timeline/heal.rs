@@ -282,7 +282,7 @@ pub async fn heal_room(
 		} else {
 			// Event already in timeline -- only update JSON if state repair modified it
 			self.db.update_pdu_json(event_id, &json);
-			// Explicitly rewrite the topological index entry and metadata
+			// Explicitly rewrite the topological index entry and update its metadata
 			self.db.reindex_topo(&pdu_id, event_id, new_topo_depth);
 		}
 
