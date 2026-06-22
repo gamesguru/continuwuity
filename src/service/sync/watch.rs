@@ -19,8 +19,9 @@ pub async fn watch(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
 	// TODO: only send for user they share a room with
 	futures.push(self.db.todeviceid_events.watch_prefix(&userdeviceid_prefix));
 
-	futures.push(self.db.userroomid_joined.watch_prefix(&userid_prefix));
 	futures.push(self.db.userroomid_invitestate.watch_prefix(&userid_prefix));
+	futures.push(self.db.userroomid_joined.watch_prefix(&userid_prefix));
+	futures.push(self.db.userroomid_knockedstate.watch_prefix(&userid_prefix));
 	futures.push(self.db.userroomid_leftstate.watch_prefix(&userid_prefix));
 	futures.push(
 		self.db
