@@ -497,7 +497,7 @@ pub fn rooms_invited<'a>(
 	&'a self,
 	user_id: &'a UserId,
 ) -> impl Stream<Item = StrippedStateEventItem> + Send + 'a {
-	type KeyVal<'a> = (Key<'a>, Raw<Vec<AnyStrippedStateEvent>>);
+	type KeyVal<'a> = (Key<'a>, &'a [u8]);
 	type Key<'a> = (&'a UserId, &'a RoomId);
 
 	let prefix = (user_id, Interfix);
@@ -506,7 +506,7 @@ pub fn rooms_invited<'a>(
 		.stream_prefix(&prefix)
 		.ignore_err()
 		.map(|((_, room_id), state): KeyVal<'_>| (room_id.to_owned(), state))
-		.map(|(room_id, state)| Ok((room_id, serde_json::from_str(state.json().get())?)))
+		.map(|(room_id, state)| Ok((room_id, serde_json::from_slice(state)?)))
 		.ignore_err()
 }
 
@@ -517,7 +517,7 @@ pub fn rooms_knocked<'a>(
 	&'a self,
 	user_id: &'a UserId,
 ) -> impl Stream<Item = StrippedStateEventItem> + Send + 'a {
-	type KeyVal<'a> = (Key<'a>, Raw<Vec<AnyStrippedStateEvent>>);
+	type KeyVal<'a> = (Key<'a>, &'a [u8]);
 	type Key<'a> = (&'a UserId, &'a RoomId);
 
 	let prefix = (user_id, Interfix);
@@ -526,7 +526,7 @@ pub fn rooms_knocked<'a>(
 		.stream_prefix(&prefix)
 		.ignore_err()
 		.map(|((_, room_id), state): KeyVal<'_>| (room_id.to_owned(), state))
-		.map(|(room_id, state)| Ok((room_id, serde_json::from_str(state.json().get())?)))
+		.map(|(room_id, state)| Ok((room_id, serde_json::from_slice(state)?)))
 		.inspect(|res| {
 			if let Err(e) = res {
 				conduwuit::warn!("rooms_knocked deserialize error: {e}");
