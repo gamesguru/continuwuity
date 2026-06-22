@@ -928,11 +928,10 @@ where
 		Id: Ord,
 	{
 		fn cmp(&self, other: &Self) -> Ordering {
-			other
-				.power_level
-				.cmp(&self.power_level)
-				.then(self.origin_server_ts.cmp(&other.origin_server_ts))
-				.then(self.event_id.borrow().cmp(other.event_id.borrow()))
+			self.power_level
+				.cmp(&other.power_level)
+				.then(other.origin_server_ts.cmp(&self.origin_server_ts))
+				.then(other.event_id.borrow().cmp(self.event_id.borrow()))
 		}
 	}
 
@@ -1688,10 +1687,10 @@ where
 	let start_phase_3 = std::time::Instant::now();
 
 	sort_keys.sort_unstable_by(|(da, ta, a), (db, tb, b)| match (da, db) {
-		| (None, None) => ta.cmp(tb).then(a.as_str().cmp(b.as_str())),
+		| (None, None) => tb.cmp(ta).then(b.as_str().cmp(a.as_str())),
 		| (None, Some(_)) => Ordering::Less,
 		| (Some(_), None) => Ordering::Greater,
-		| (Some(pa), Some(pb)) => pb.cmp(pa).then(ta.cmp(tb)).then(a.as_str().cmp(b.as_str())),
+		| (Some(pa), Some(pb)) => pb.cmp(pa).then(tb.cmp(ta)).then(b.as_str().cmp(a.as_str())),
 	});
 
 	let mut sort_event_ids: Vec<OwnedEventId> =
