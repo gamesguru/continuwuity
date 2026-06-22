@@ -37,8 +37,12 @@ pub(crate) async fn get_member_events_route(
 
 	if !services
 		.rooms
-		.state_accessor
-		.user_can_see_state_events(sender_user, &body.room_id)
+		.state_cache
+		.is_joined(sender_user, &body.room_id)
+		.await && !services
+		.rooms
+		.state_cache
+		.is_left(sender_user, &body.room_id)
 		.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));
