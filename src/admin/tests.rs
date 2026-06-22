@@ -1202,8 +1202,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 	use futures::StreamExt;
 	use ruma::RoomId;
 
-	let dag_path_str =
-		std::env::var("CONDUWUIT_TEST_DAG_UNREDACTED_LOUNGE").unwrap_or_default();
+	let dag_path_str = std::env::var("CONDUWUIT_TEST_DAG_UNREDACTED_LOUNGE").unwrap_or_default();
 	let dag_path = Path::new(&dag_path_str);
 	if !dag_path.exists() {
 		println!("Skipping test_unredacted_lounge_dag_resolution: test DAG file not found");
