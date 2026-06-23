@@ -1,8 +1,52 @@
 use std::future::ready;
 
 use conduwuit::{Event, PduCount, Result};
+use conduwuit_core::matrix::pdu::PduEvent;
 use futures::{StreamExt, pin_mut};
-use ruma::{EventId, RoomId};
+use ruma::{CanonicalJsonObject, EventId, RoomId};
+
+/// Populates `unsigned.prev_content`, `unsigned.prev_sender`, and
+/// `unsigned.replaces_state` on a PDU's JSON from the given previous state
+/// event. This is idempotent — it first removes any existing values before
+/// writing.
+pub fn update_unsigned_prev_content(
+	pdu_json: &mut CanonicalJsonObject,
+	prev_state: &PduEvent,
+) -> Result<()> {
+	let unsigned = pdu_json.entry("unsigned".to_owned()).or_insert_with(|| {
+		ruma::CanonicalJsonValue::Object(std::collections::BTreeMap::default())
+	});
+
+	if let ruma::CanonicalJsonValue::Object(unsigned) = unsigned {
+		// Idempotently remove old (possibly wrong/missing) fields
+		unsigned.remove("prev_content");
+		unsigned.remove("prev_sender");
+		unsigned.remove("replaces_state");
+
+		let prev_content_value = prev_state.get_content_as_value();
+
+		unsigned.insert(
+			"prev_content".to_owned(),
+			ruma::CanonicalJsonValue::Object(
+				conduwuit_core::utils::to_canonical_object(prev_content_value).map_err(|e| {
+					conduwuit::err!(Database(error!(
+						"Failed to convert prev_state to canonical JSON: {e}"
+					)))
+				})?,
+			),
+		);
+		unsigned.insert(
+			"prev_sender".to_owned(),
+			ruma::CanonicalJsonValue::String(prev_state.sender().to_string()),
+		);
+		unsigned.insert(
+			"replaces_state".to_owned(),
+			ruma::CanonicalJsonValue::String(prev_state.event_id().to_string()),
+		);
+	}
+
+	Ok(())
+}
 
 #[conduwuit_macros::implement(super::Service)]
 #[tracing::instrument(level = "debug", skip_all)]
@@ -84,7 +128,7 @@ pub async fn repair_room_unsigned(&self, room_id: &RoomId) -> Result<usize> {
 			continue;
 		}
 
-		let Ok(mut pdu_json): std::result::Result<ruma::CanonicalJsonObject, _> = pdu_json else {
+		let Ok(mut pdu_json): std::result::Result<CanonicalJsonObject, _> = pdu_json else {
 			errors = errors.saturating_add(1);
 			continue;
 		};
@@ -120,7 +164,7 @@ pub async fn repair_room_unsigned(&self, room_id: &RoomId) -> Result<usize> {
 
 		// Populate from the previous state event
 		if let Some(prev_state) = prev_state {
-			if let Err(e) = super::update_unsigned_prev_content(&mut pdu_json, &prev_state) {
+			if let Err(e) = update_unsigned_prev_content(&mut pdu_json, &prev_state) {
 				tracing::warn!(%event_id, "repair_unsigned: failed to update unsigned: {e}");
 				errors = errors.saturating_add(1);
 				continue;
