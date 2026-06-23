@@ -1090,6 +1090,16 @@ impl Service {
 	}
 
 	#[inline]
+	pub fn user_keys_changed<'a>(
+		&'a self,
+		user_id: &'a UserId,
+		from: Option<u64>,
+		to: Option<u64>,
+	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
+		self.keys_changed_user_or_room(user_id.as_str(), from, to)
+	}
+
+	#[inline]
 	pub fn room_keys_changed<'a>(
 		&'a self,
 		room_id: &'a RoomId,

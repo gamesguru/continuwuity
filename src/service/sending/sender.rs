@@ -679,21 +679,25 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (EduVec, u64) {
-		let server_rooms = self.services.state_cache.server_rooms(server_name);
+		let local_users = self.services.users.list_local_users();
 
-		pin_mut!(server_rooms);
+		pin_mut!(local_users);
 		let mut all_changes = BTreeMap::<u64, HashSet<OwnedUserId>>::new();
 
-		while let Some(room_id) = server_rooms.next().await {
-			info!(
-				target: "device_list_debug",
-				%room_id, "Checking room for device list changes"
-			);
-			let keys_changed = self
+		while let Some(user_id) = local_users.next().await {
+			if !self
 				.services
-				.users
-				.room_keys_changed(room_id, Some(since.0), None)
-				.ready_filter(|(user_id, _)| self.services.globals.user_is_local(user_id));
+				.state_cache
+				.server_sees_user(server_name, user_id)
+				.await
+			{
+				continue;
+			}
+
+			let keys_changed =
+				self.services
+					.users
+					.user_keys_changed(user_id, Some(since.0), None);
 
 			pin_mut!(keys_changed);
 			while let Some((user_id, count)) = keys_changed.next().await {
@@ -720,7 +724,15 @@ impl Service {
 			}
 		}
 
-		tracing::info!(?all_changes, ?user_devices, ?since, "select_edus_device_changes result");
+		if !all_changes.is_empty() {
+			tracing::info!(
+				target: "device_list_debug",
+				?all_changes,
+				?user_devices,
+				?since,
+				"select_edus_device_changes result"
+			);
+		}
 
 		build_device_list_edus(all_changes, &user_devices, since, SELECT_EDU_LIMIT)
 	}
