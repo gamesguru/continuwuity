@@ -1,9 +1,7 @@
 use std::borrow::ToOwned;
 
 use axum::extract::State;
-use conduwuit::{
-	Err, Error, Result, debug, debug_info, info, matrix::pdu::PduBuilder, utils, warn,
-};
+use conduwuit::{Err, Error, Result, debug, debug_info, matrix::pdu::PduBuilder, utils, warn};
 use conduwuit_service::Services;
 use futures::StreamExt;
 use ruma::{
@@ -31,55 +29,8 @@ pub(crate) async fn create_join_event_template_route(
 	State(services): State<crate::State>,
 	body: Ruma<prepare_join_event::v1::Request>,
 ) -> Result<prepare_join_event::v1::Response> {
-	if !services.rooms.metadata.exists(&body.room_id).await {
-		return Err!(Request(NotFound("Room is unknown to this server.")));
-	}
-	if !services
-		.rooms
-		.state_cache
-		.server_is_participant(services.globals.server_name(), &body.room_id)
-		.await
-	{
-		info!(
-			origin = body.origin().as_str(),
-			room_id = %body.room_id,
-			"Refusing to serve make_join for room we aren't participating in"
-		);
-		return Err!(Request(NotFound("This server is not participating in that room.")));
-	}
-
-	if body.user_id.server_name() != body.origin() {
-		return Err!(Request(BadJson("Not allowed to join on behalf of another server/user.")));
-	}
-
-	// ACL check origin server
-	services
-		.rooms
-		.event_handler
-		.acl_check(body.origin(), &body.room_id)
+	super::utils::verify_make_membership(&services, body.origin(), &body.room_id, &body.user_id)
 		.await?;
-
-	if services
-		.moderation
-		.is_remote_server_forbidden(body.origin())
-	{
-		warn!(
-			"Server {} for remote user {} tried joining room ID {} which has a server name that \
-			 is globally forbidden. Rejecting.",
-			body.origin(),
-			&body.user_id,
-			&body.room_id,
-		);
-		return Err!(Request(Forbidden("Server is banned on this homeserver.")));
-	}
-
-	if let Some(server) = body.room_id.server_name() {
-		if services.moderation.is_remote_server_forbidden(server) {
-			return Err!(Request(Forbidden(warn!(
-				"Room ID server name {server} is banned on this homeserver."
-			))));
-		}
-	}
 
 	let room_version_id = services.rooms.state.get_room_version(&body.room_id).await?;
 	if !body.ver.contains(&room_version_id) {

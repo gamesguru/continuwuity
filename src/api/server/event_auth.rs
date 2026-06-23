@@ -26,19 +26,6 @@ pub(crate) async fn get_event_authorization_route(
 	.check()
 	.await?;
 
-	if !services
-		.rooms
-		.state_cache
-		.server_is_participant(services.globals.server_name(), &body.room_id)
-		.await
-	{
-		info!(
-			origin = body.origin().as_str(),
-			"Refusing to serve state for room we aren't participating in"
-		);
-		return Err!(Request(NotFound("This server is not participating in that room.")));
-	}
-
 	info!(
 		origin = body.origin().as_str(),
 		room_id = %body.room_id,

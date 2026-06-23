@@ -1,7 +1,7 @@
 use std::{borrow::Borrow, iter::once};
 
 use axum::extract::State;
-use conduwuit::{Err, Result, at, err, info, utils::IterStream};
+use conduwuit::{Result, at, err, info, utils::IterStream};
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use ruma::{OwnedEventId, api::federation::event::get_room_state};
 
@@ -23,19 +23,6 @@ pub(crate) async fn get_room_state_route(
 	}
 	.check()
 	.await?;
-
-	if !services
-		.rooms
-		.state_cache
-		.server_is_participant(services.globals.server_name(), &body.room_id)
-		.await
-	{
-		info!(
-			origin = body.origin().as_str(),
-			"Refusing to serve state for room we aren't participating in"
-		);
-		return Err!(Request(NotFound("This server is not participating in that room.")));
-	}
 
 	info!(
 		origin = body.origin().as_str(),

@@ -1,5 +1,5 @@
 use axum::extract::State;
-use conduwuit::{Err, Result, info, matrix::pdu::PduBuilder, utils};
+use conduwuit::{Result, matrix::pdu::PduBuilder, utils};
 use ruma::{
 	api::federation::membership::prepare_leave_event,
 	events::room::member::{MembershipState, RoomMemberEventContent},
@@ -15,34 +15,7 @@ pub(crate) async fn create_leave_event_template_route(
 	State(services): State<crate::State>,
 	body: Ruma<prepare_leave_event::v1::Request>,
 ) -> Result<prepare_leave_event::v1::Response> {
-	if !services.rooms.metadata.exists(&body.room_id).await {
-		return Err!(Request(NotFound("Room is unknown to this server.")));
-	}
-
-	if !services
-		.rooms
-		.state_cache
-		.server_is_participant(services.globals.server_name(), &body.room_id)
-		.await
-	{
-		info!(
-			origin = body.origin().as_str(),
-			"Refusing to serve make_leave for room we aren't participating in"
-		);
-		return Err!(Request(NotFound("This server is not participating in that room.")));
-	}
-
-	if body.user_id.server_name() != body.origin() {
-		return Err!(Request(Forbidden(
-			"Not allowed to leave on behalf of another server/user."
-		)));
-	}
-
-	// ACL check origin
-	services
-		.rooms
-		.event_handler
-		.acl_check(body.origin(), &body.room_id)
+	super::utils::verify_make_membership(&services, body.origin(), &body.room_id, &body.user_id)
 		.await?;
 
 	let room_version_id = services.rooms.state.get_room_version(&body.room_id).await?;
