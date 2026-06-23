@@ -264,11 +264,24 @@ pub(crate) async fn add_membership_to_unsigned(
 		return;
 	};
 
-	let membership = services
-		.rooms
-		.state_accessor
-		.user_membership_at_event(pdu.event_id(), &room_id, user_id)
-		.await;
+	let membership = if pdu.kind == ruma::events::TimelineEventType::RoomMember
+		&& pdu.state_key.as_deref() == Some(user_id.as_str())
+	{
+		if let Ok(content) = serde_json::from_str::<
+			ruma::events::room::member::RoomMemberEventContent,
+		>(pdu.content.get())
+		{
+			content.membership
+		} else {
+			ruma::events::room::member::MembershipState::Leave
+		}
+	} else {
+		services
+			.rooms
+			.state_accessor
+			.user_membership_at_event(pdu.event_id(), &room_id, user_id)
+			.await
+	};
 
 	pdu.set_membership(membership.as_str()).log_err().ok();
 }
