@@ -610,6 +610,13 @@ pub fn set_room_version(&self, room_id: &RoomId, version: &RoomVersionId) {
 mod tests {
 	use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
+	// RocksDB Env::new() returns the global default env. Context::Drop calls
+	// env.join_all_threads() which kills background threads shared by ALL
+	// databases in the process. Tests must run serially to prevent the first
+	// test's teardown from deadlocking the others.
+	static DB_TEST_MUTEX: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+		std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 	use conduwuit::{
 		Server,
 		config::Config,
@@ -688,6 +695,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_shorteventid_caching() {
+		let _serial = DB_TEST_MUTEX.lock().await;
 		let (_guard, _globals, service, _map) = setup_test_service().await;
 		let event_id = event_id!("$abc:test.conduwuit.local");
 
@@ -720,6 +728,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_shortstatekey_caching() {
+		let _serial = DB_TEST_MUTEX.lock().await;
 		let (_guard, _globals, service, _map) = setup_test_service().await;
 		let event_type = StateEventType::RoomName;
 		let state_key = "";
@@ -766,6 +775,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_multi_lookups() {
+		let _serial = DB_TEST_MUTEX.lock().await;
 		let (_guard, _globals, service, _map) = setup_test_service().await;
 
 		let event1 = event_id!("$event1:test.conduwuit.local");
