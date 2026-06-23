@@ -36,12 +36,12 @@ impl Service {
 		force_reindex: bool,
 	) -> Result<usize> {
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
-		let state_lock = self.services.state.mutex.lock(room_id).await;
 		let _insert_lock = if force_reindex {
 			Some(self.mutex_insert.lock(room_id).await)
 		} else {
 			None
 		};
+		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		// Collect all PDUs from the timeline.
 		// We need (PduCount, origin_server_ts) per event — the PduCount is the
@@ -107,17 +107,6 @@ impl Service {
 		if force_reindex {
 			available_counts = entries.values().map(|(c, _)| *c).collect();
 			available_counts.sort();
-
-			// Remove all existing stream/topo indices to prevent key collisions during
-			// permutation
-			let remove_cork = Some(self.db.db.cork());
-			for (event_id, &(old_count, _)) in &entries {
-				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-				self.db
-					.remove_stream_and_topo_pducount(&old_pdu_id, event_id.as_bytes());
-			}
-			drop(remove_cork);
-			debug!("reorder_timeline: purged old stream/topo keys for {} events", entries.len());
 		}
 
 		if !no_compute_state {
@@ -144,7 +133,30 @@ impl Service {
 			}
 		} else {
 			// Fast mode: rebuild topo index only, no state computation
-			let mut cork = Some(self.db.db.cork());
+			let mut depths: HashMap<OwnedEventId, u64> = HashMap::new();
+			for event_id in &sorted {
+				// TODO: Extract depth calculation from parents into a helper method
+				let max_parent_depth = graph.get(event_id).map_or(0, |parents| {
+					parents
+						.iter()
+						.filter_map(|p| depths.get(p))
+						.copied()
+						.max()
+						.unwrap_or(0)
+				});
+				let local_topo_depth = max_parent_depth.saturating_add(1);
+				depths.insert(event_id.clone(), local_topo_depth);
+			}
+
+			let cork = self.db.db.cork();
+			if force_reindex {
+				for (event_id, &(old_count, _)) in &entries {
+					let old_pdu_id: RawPduId =
+						PduId { shortroomid, shorteventid: old_count }.into();
+					self.db
+						.remove_stream_and_topo_pducount(&old_pdu_id, event_id.as_bytes());
+				}
+			}
 			for (i, event_id) in sorted.iter().enumerate() {
 				let &(existing_count, _) = entries.get(event_id).expect("in sorted list");
 				let new_count = if force_reindex {
@@ -153,8 +165,7 @@ impl Service {
 					existing_count
 				};
 				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: new_count }.into();
-
-				let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
+				let local_topo_depth = depths.get(event_id).copied().unwrap_or(0);
 
 				if force_reindex {
 					self.db.replace_stream_and_topo_pducount(
@@ -166,14 +177,8 @@ impl Service {
 				} else {
 					self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 				}
-
-				if i.saturating_add(1).is_multiple_of(10000) {
-					drop(cork.take());
-					tokio::task::yield_now().await;
-					cork = Some(self.db.db.cork());
-				}
 			}
-			drop(cork.take());
+			drop(cork);
 			debug!("reorder_timeline: topo rebuild took {:?}", reindex_start.elapsed());
 		}
 
@@ -276,8 +281,6 @@ impl Service {
 		force_reindex: bool,
 		available_counts: &[PduCount],
 	) -> Option<u64> {
-		let count = sorted.len();
-
 		let mut current_shortstatehash = {
 			let mut ssh = 0;
 			if let Some(oldest_event_id) = sorted.first() {
@@ -298,18 +301,17 @@ impl Service {
 			Some(ssh)
 		};
 
-		let mut cork = Some(self.db.db.cork());
-		for (i, event_id) in sorted.iter().enumerate() {
+		let mut depths: HashMap<OwnedEventId, u64> = HashMap::new();
+		for event_id in sorted {
 			// Use the existing stream order count -- do NOT fabricate a new one
 			let Some(&(existing_count, _)) = entries.get(event_id) else {
 				continue;
 			};
-			let new_count = if force_reindex {
-				available_counts[i]
-			} else {
-				existing_count
-			};
-			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: new_count }.into();
+			let pdu_id: RawPduId = PduId {
+				shortroomid,
+				shorteventid: existing_count,
+			}
+			.into();
 
 			let (pdu, mut json) = match self.db.get_from_eventid_pdu(event_id).await {
 				| Ok(res) => res,
@@ -327,19 +329,15 @@ impl Service {
 			// if left in place. Soft-fail flags are intentional and persist.
 			self.services.pdu_metadata.unmark_event_rejected(event_id);
 
-			let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
-
-			// Rebuild topo index entry with new depth
-			if force_reindex {
-				self.db.replace_stream_and_topo_pducount(
-					&pdu_id,
-					event_id,
-					local_topo_depth,
-					new_count,
-				);
-			} else {
-				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
-			}
+			// TODO: Extract depth calculation from parents into a helper method
+			let max_parent_depth = pdu
+				.prev_events()
+				.filter_map(|p| depths.get(p))
+				.copied()
+				.max()
+				.unwrap_or(0);
+			let local_topo_depth = max_parent_depth.saturating_add(1);
+			depths.insert(event_id.clone(), local_topo_depth);
 
 			// State computation — uses existing pdu_id (unchanged stream order)
 			if let Some(mut ssh) = current_shortstatehash {
@@ -354,20 +352,40 @@ impl Service {
 					self.db.update_pdu_json(event_id, &json);
 				}
 			}
+		}
 
-			if i.saturating_add(1).is_multiple_of(2000) {
-				debug!(
-					"reorder_timeline: rebuilt {}/{count} topo entries...",
-					i.saturating_add(1)
-				);
-			}
-			if i.saturating_add(1).is_multiple_of(10000) {
-				drop(cork.take());
-				tokio::task::yield_now().await;
-				cork = Some(self.db.db.cork());
+		// Now apply the DB replacements inside a single atomic cork
+		let cork = self.db.db.cork();
+		if force_reindex {
+			for (event_id, &(old_count, _)) in entries {
+				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
+				self.db
+					.remove_stream_and_topo_pducount(&old_pdu_id, event_id.as_bytes());
 			}
 		}
-		drop(cork.take());
+
+		for (i, event_id) in sorted.iter().enumerate() {
+			let Some(&(existing_count, _)) = entries.get(event_id) else { continue };
+			let new_count = if force_reindex {
+				available_counts[i]
+			} else {
+				existing_count
+			};
+			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: new_count }.into();
+			let local_topo_depth = depths.get(event_id).copied().unwrap_or(0);
+
+			if force_reindex {
+				self.db.replace_stream_and_topo_pducount(
+					&pdu_id,
+					event_id,
+					local_topo_depth,
+					new_count,
+				);
+			} else {
+				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+			}
+		}
+		drop(cork);
 
 		current_shortstatehash.filter(|&ssh| ssh != 0)
 	}

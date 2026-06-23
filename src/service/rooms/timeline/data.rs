@@ -242,6 +242,7 @@ impl Data {
 		event_id_bytes: &[u8],
 	) {
 		self.room_pducount_eventid.remove(pdu_id);
+		self.eventid_pduid.remove(event_id_bytes);
 		self.remove_topo_pducount(pdu_id, event_id_bytes);
 	}
 
