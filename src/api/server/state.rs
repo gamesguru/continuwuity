@@ -61,12 +61,31 @@ pub(crate) async fn get_room_state_route(
 			.await
 			.map_err(|_| err!(Request(NotFound("Room state not found."))))?
 	} else {
-		services
+		match services
 			.rooms
 			.state_accessor
 			.pdu_shortstatehash(&body.event_id)
 			.await
-			.map_err(|_| err!(Request(NotFound("PDU state not found."))))?
+		{
+			| Ok(hash) => hash,
+			| Err(_) => {
+				// The event exists in our timeline but its state hash hasn't
+				// been stored yet (race during send_join flow). Fall back to the
+				// room's current state hash — this is safe because if the event
+				// is in our timeline it was auth-checked against this state.
+				info!(
+					event_id = %body.event_id,
+					"pdu_shortstatehash missing for timeline event, falling back to current \
+					 room state"
+				);
+				services
+					.rooms
+					.state
+					.get_room_shortstatehash(&body.room_id)
+					.await
+					.map_err(|_| err!(Request(NotFound("PDU state not found."))))?
+			},
+		}
 	};
 
 	let state_ids: Vec<OwnedEventId> = services
