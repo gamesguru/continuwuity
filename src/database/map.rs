@@ -8,6 +8,7 @@ mod insert;
 mod keys;
 mod keys_from;
 mod keys_prefix;
+mod macros;
 mod open;
 mod options;
 mod qry;

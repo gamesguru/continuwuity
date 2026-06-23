@@ -54,25 +54,7 @@ where
 	S: Stream<Item = K> + Send + 'a,
 	K: Serialize + Debug + 'a,
 {
-	use crate::pool::Get;
-
-	keys.ready_chunks(automatic_amplification())
-		.widen_then(automatic_width(), |chunk| {
-			let keys = chunk
-				.iter()
-				.map(ser::serialize_to::<KeyBuf, _>)
-				.map(|result| result.expect("failed to serialize query key"))
-				.collect();
-
-			self.db.pool.execute_get(Get {
-				map: self.clone(),
-				key: keys,
-				nocache: false,
-				res: None,
-			})
-		})
-		.map_ok(|results| results.into_iter().stream())
-		.try_flatten()
+	qry_batch_inner(self, keys, false)
 }
 
 #[implement(super::Map)]
@@ -85,20 +67,32 @@ where
 	S: Stream<Item = K> + Send + 'a,
 	K: Serialize + Debug + 'a,
 {
+	qry_batch_inner(self, keys, true)
+}
+
+fn qry_batch_inner<'a, S, K>(
+	map: &'a Arc<super::Map>,
+	keys: S,
+	nocache: bool,
+) -> impl Stream<Item = Result<Handle<'a>>> + Send + 'a
+where
+	S: Stream<Item = K> + Send + 'a,
+	K: Serialize + Debug + 'a,
+{
 	use crate::pool::Get;
 
 	keys.ready_chunks(automatic_amplification())
-		.widen_then(automatic_width(), |chunk| {
+		.widen_then(automatic_width(), move |chunk| {
 			let keys = chunk
 				.iter()
 				.map(ser::serialize_to::<KeyBuf, _>)
 				.map(|result| result.expect("failed to serialize query key"))
 				.collect();
 
-			self.db.pool.execute_get(Get {
-				map: self.clone(),
+			map.db.pool.execute_get(Get {
+				map: map.clone(),
 				key: keys,
-				nocache: true,
+				nocache,
 				res: None,
 			})
 		})

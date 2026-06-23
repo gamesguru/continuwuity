@@ -56,19 +56,7 @@ where
 	S: Stream<Item = K> + Send + 'a,
 	K: AsRef<[u8]> + Send + Sync + 'a,
 {
-	use crate::pool::Get;
-
-	keys.ready_chunks(automatic_amplification())
-		.widen_then(automatic_width(), |chunk| {
-			self.db.pool.execute_get(Get {
-				map: self.clone(),
-				key: chunk.iter().map(AsRef::as_ref).map(Into::into).collect(),
-				nocache: false,
-				res: None,
-			})
-		})
-		.map_ok(|results| results.into_iter().stream())
-		.try_flatten()
+	get_batch_inner(self, keys, false)
 }
 
 #[implement(super::Map)]
@@ -81,14 +69,26 @@ where
 	S: Stream<Item = K> + Send + 'a,
 	K: AsRef<[u8]> + Send + Sync + 'a,
 {
+	get_batch_inner(self, keys, true)
+}
+
+fn get_batch_inner<'a, S, K>(
+	map: &'a Arc<super::Map>,
+	keys: S,
+	nocache: bool,
+) -> impl Stream<Item = Result<Handle<'a>>> + Send + 'a
+where
+	S: Stream<Item = K> + Send + 'a,
+	K: AsRef<[u8]> + Send + Sync + 'a,
+{
 	use crate::pool::Get;
 
 	keys.ready_chunks(automatic_amplification())
-		.widen_then(automatic_width(), |chunk| {
-			self.db.pool.execute_get(Get {
-				map: self.clone(),
+		.widen_then(automatic_width(), move |chunk| {
+			map.db.pool.execute_get(Get {
+				map: map.clone(),
 				key: chunk.iter().map(AsRef::as_ref).map(Into::into).collect(),
-				nocache: true,
+				nocache,
 				res: None,
 			})
 		})
