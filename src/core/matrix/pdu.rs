@@ -136,70 +136,76 @@ impl Pdu {
 	}
 }
 
+macro_rules! impl_event_delegates {
+	() => {
+		#[inline]
+		fn auth_events(
+			&self,
+		) -> impl DoubleEndedIterator<Item = &EventId>
+		+ ExactSizeIterator
+		+ Clone
+		+ Send
+		+ std::fmt::Debug
+		+ '_ {
+			self.as_pdu().auth_events.iter().map(AsRef::as_ref)
+		}
+
+		#[inline]
+		fn content(&self) -> &RawJsonValue { &self.as_pdu().content }
+
+		#[inline]
+		fn event_id(&self) -> &EventId { &self.as_pdu().event_id }
+
+		#[inline]
+		fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch {
+			MilliSecondsSinceUnixEpoch(self.as_pdu().origin_server_ts)
+		}
+
+		#[inline]
+		fn depth(&self) -> UInt { self.as_pdu().depth }
+
+		#[inline]
+		fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
+			self.as_pdu().prev_events.iter().map(AsRef::as_ref)
+		}
+
+		#[inline]
+		fn redacts(&self) -> Option<&EventId> { self.as_pdu().redacts.as_deref() }
+
+		#[inline]
+		fn room_id(&self) -> Option<&RoomId> { self.as_pdu().room_id.as_deref() }
+
+		#[inline]
+		fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
+			if let Some(room_id) = &self.as_pdu().room_id {
+				return Some(room_id.clone());
+			}
+			if *self.as_pdu().event_type() == TimelineEventType::RoomCreate {
+				let constructed_hash = self.as_pdu().event_id.as_str().replace('$', "!");
+				return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
+			}
+			None
+		}
+
+		#[inline]
+		fn sender(&self) -> &UserId { &self.as_pdu().sender }
+
+		#[inline]
+		fn state_key(&self) -> Option<&str> { self.as_pdu().state_key.as_deref() }
+
+		#[inline]
+		fn kind(&self) -> &TimelineEventType { &self.as_pdu().kind }
+
+		#[inline]
+		fn unsigned(&self) -> Option<&RawJsonValue> { self.as_pdu().unsigned.as_deref() }
+
+		#[inline]
+		fn rejected(&self) -> bool { self.as_pdu().rejected }
+	};
+}
+
 impl Event for Pdu {
-	#[inline]
-	fn auth_events(
-		&self,
-	) -> impl DoubleEndedIterator<Item = &EventId>
-	+ ExactSizeIterator
-	+ Clone
-	+ Send
-	+ std::fmt::Debug
-	+ '_ {
-		self.auth_events.iter().map(AsRef::as_ref)
-	}
-
-	#[inline]
-	fn content(&self) -> &RawJsonValue { &self.content }
-
-	#[inline]
-	fn event_id(&self) -> &EventId { &self.event_id }
-
-	#[inline]
-	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch {
-		MilliSecondsSinceUnixEpoch(self.origin_server_ts)
-	}
-
-	#[inline]
-	fn depth(&self) -> UInt { self.depth }
-
-	#[inline]
-	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
-		self.prev_events.iter().map(AsRef::as_ref)
-	}
-
-	#[inline]
-	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
-
-	#[inline]
-	fn room_id(&self) -> Option<&RoomId> { self.room_id.as_deref() }
-
-	#[inline]
-	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
-		if let Some(room_id) = &self.room_id {
-			return Some(room_id.clone());
-		}
-		if *self.event_type() == TimelineEventType::RoomCreate {
-			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
-		}
-		None
-	}
-
-	#[inline]
-	fn sender(&self) -> &UserId { &self.sender }
-
-	#[inline]
-	fn state_key(&self) -> Option<&str> { self.state_key.as_deref() }
-
-	#[inline]
-	fn kind(&self) -> &TimelineEventType { &self.kind }
-
-	#[inline]
-	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
-
-	#[inline]
-	fn rejected(&self) -> bool { self.rejected }
+	impl_event_delegates!();
 
 	#[inline]
 	fn as_mut_pdu(&mut self) -> &mut Pdu { self }
@@ -215,69 +221,7 @@ impl Event for Pdu {
 }
 
 impl Event for std::sync::Arc<Pdu> {
-	#[inline]
-	fn auth_events(
-		&self,
-	) -> impl DoubleEndedIterator<Item = &EventId>
-	+ ExactSizeIterator
-	+ Clone
-	+ Send
-	+ std::fmt::Debug
-	+ '_ {
-		self.auth_events.iter().map(AsRef::as_ref)
-	}
-
-	#[inline]
-	fn content(&self) -> &RawJsonValue { &self.content }
-
-	#[inline]
-	fn event_id(&self) -> &EventId { &self.event_id }
-
-	#[inline]
-	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch {
-		MilliSecondsSinceUnixEpoch(self.origin_server_ts)
-	}
-
-	#[inline]
-	fn depth(&self) -> UInt { self.depth }
-
-	#[inline]
-	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
-		self.prev_events.iter().map(AsRef::as_ref)
-	}
-
-	#[inline]
-	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
-
-	#[inline]
-	fn room_id(&self) -> Option<&RoomId> { self.room_id.as_deref() }
-
-	#[inline]
-	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
-		if let Some(room_id) = &self.room_id {
-			return Some(room_id.clone());
-		}
-		if *self.event_type() == TimelineEventType::RoomCreate {
-			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
-		}
-		None
-	}
-
-	#[inline]
-	fn sender(&self) -> &UserId { &self.sender }
-
-	#[inline]
-	fn state_key(&self) -> Option<&str> { self.state_key.as_deref() }
-
-	#[inline]
-	fn kind(&self) -> &TimelineEventType { &self.kind }
-
-	#[inline]
-	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
-
-	#[inline]
-	fn rejected(&self) -> bool { self.rejected }
+	impl_event_delegates!();
 
 	#[inline]
 	fn as_mut_pdu(&mut self) -> &mut Pdu { Self::make_mut(self) }
@@ -293,69 +237,7 @@ impl Event for std::sync::Arc<Pdu> {
 }
 
 impl Event for &std::sync::Arc<Pdu> {
-	#[inline]
-	fn auth_events(
-		&self,
-	) -> impl DoubleEndedIterator<Item = &EventId>
-	+ ExactSizeIterator
-	+ Clone
-	+ Send
-	+ std::fmt::Debug
-	+ '_ {
-		self.auth_events.iter().map(AsRef::as_ref)
-	}
-
-	#[inline]
-	fn content(&self) -> &RawJsonValue { &self.content }
-
-	#[inline]
-	fn event_id(&self) -> &EventId { &self.event_id }
-
-	#[inline]
-	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch {
-		MilliSecondsSinceUnixEpoch(self.origin_server_ts)
-	}
-
-	#[inline]
-	fn depth(&self) -> UInt { self.depth }
-
-	#[inline]
-	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
-		self.prev_events.iter().map(AsRef::as_ref)
-	}
-
-	#[inline]
-	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
-
-	#[inline]
-	fn room_id(&self) -> Option<&RoomId> { self.room_id.as_deref() }
-
-	#[inline]
-	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
-		if let Some(room_id) = &self.room_id {
-			return Some(room_id.clone());
-		}
-		if *self.event_type() == TimelineEventType::RoomCreate {
-			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
-		}
-		None
-	}
-
-	#[inline]
-	fn sender(&self) -> &UserId { &self.sender }
-
-	#[inline]
-	fn state_key(&self) -> Option<&str> { self.state_key.as_deref() }
-
-	#[inline]
-	fn kind(&self) -> &TimelineEventType { &self.kind }
-
-	#[inline]
-	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
-
-	#[inline]
-	fn rejected(&self) -> bool { self.rejected }
+	impl_event_delegates!();
 
 	#[inline]
 	fn as_mut_pdu(&mut self) -> &mut Pdu { panic!("Cannot mutate shared reference") }
@@ -371,75 +253,16 @@ impl Event for &std::sync::Arc<Pdu> {
 }
 
 impl Event for &Pdu {
-	#[inline]
-	fn auth_events(
-		&self,
-	) -> impl DoubleEndedIterator<Item = &EventId>
-	+ ExactSizeIterator
-	+ Clone
-	+ Send
-	+ std::fmt::Debug
-	+ '_ {
-		self.auth_events.iter().map(AsRef::as_ref)
-	}
+	impl_event_delegates!();
 
 	#[inline]
-	fn content(&self) -> &RawJsonValue { &self.content }
-
-	#[inline]
-	fn event_id(&self) -> &EventId { &self.event_id }
-
-	#[inline]
-	fn origin_server_ts(&self) -> MilliSecondsSinceUnixEpoch {
-		MilliSecondsSinceUnixEpoch(self.origin_server_ts)
-	}
-
-	#[inline]
-	fn depth(&self) -> UInt { self.depth }
-
-	#[inline]
-	fn prev_events(&self) -> impl DoubleEndedIterator<Item = &EventId> + Clone + Send + '_ {
-		self.prev_events.iter().map(AsRef::as_ref)
-	}
-
-	#[inline]
-	fn redacts(&self) -> Option<&EventId> { self.redacts.as_deref() }
-
-	#[inline]
-	fn room_id(&self) -> Option<&RoomId> { self.room_id.as_ref().map(AsRef::as_ref) }
-
-	#[inline]
-	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
-		if let Some(room_id) = &self.room_id {
-			return Some(room_id.clone());
-		}
-		if *self.event_type() == TimelineEventType::RoomCreate {
-			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			return RoomId::parse(&constructed_hash).ok().map(ToOwned::to_owned);
-		}
-		None
-	}
-
-	#[inline]
-	fn sender(&self) -> &UserId { &self.sender }
-
-	#[inline]
-	fn state_key(&self) -> Option<&str> { self.state_key.as_deref() }
-
-	#[inline]
-	fn kind(&self) -> &TimelineEventType { &self.kind }
-
-	#[inline]
-	fn unsigned(&self) -> Option<&RawJsonValue> { self.unsigned.as_deref() }
-
-	#[inline]
-	fn rejected(&self) -> bool { self.rejected }
+	fn as_mut_pdu(&mut self) -> &mut Pdu { panic!("Cannot mutate shared reference") }
 
 	#[inline]
 	fn as_pdu(&self) -> &Pdu { self }
 
 	#[inline]
-	fn into_pdu(self) -> Pdu { self.clone() }
+	fn into_pdu(self) -> Pdu { (*self).clone() }
 
 	#[inline]
 	fn is_owned(&self) -> bool { false }

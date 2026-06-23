@@ -405,12 +405,8 @@ impl Service {
 		let mut current_dest: Option<Destination> = None;
 		let mut current_events = Vec::new();
 
-		while let Some((key, event, dest)) = active.next().await {
-			if self.shard_id(&dest) != id {
-				continue;
-			}
-
-			if current_dest.as_ref() != Some(&dest) {
+		macro_rules! flush_current {
+			() => {
 				if let Some(old_dest) = current_dest.take() {
 					if self.server.config.startup_netburst && !current_events.is_empty() {
 						info!(
@@ -426,6 +422,16 @@ impl Service {
 						));
 					}
 				}
+			};
+		}
+
+		while let Some((key, event, dest)) = active.next().await {
+			if self.shard_id(&dest) != id {
+				continue;
+			}
+
+			if current_dest.as_ref() != Some(&dest) {
+				flush_current!();
 				current_dest = Some(dest.clone());
 				current_events.clear();
 			}
@@ -438,35 +444,19 @@ impl Service {
 			}
 		}
 
-		if let Some(old_dest) = current_dest.take() {
-			if self.server.config.startup_netburst && !current_events.is_empty() {
-				info!(
-					"startup_netburst[{id}]: resuming {} events for {:?}",
-					current_events.len(),
-					old_dest
-				);
-				statuses.insert(old_dest.clone(), TransactionStatus::Running);
-				futures.push(self.send_events(
-					old_dest,
-					std::mem::take(&mut current_events),
-					None,
-				));
-			}
-		}
+		flush_current!();
 
 		// Process orphaned queued requests
 		if self.server.config.startup_netburst {
 			let mut queued_dests = HashSet::new();
-			let mut queued = self.db.queued_request_destinations().boxed();
-			while let Some(dest) = queued.next().await {
-				if self.shard_id(&dest) == id {
-					queued_dests.insert(dest);
-				}
-			}
-			let mut reliable_queued = self.db.queued_reliable_request_destinations().boxed();
-			while let Some(dest) = reliable_queued.next().await {
-				if self.shard_id(&dest) == id {
-					queued_dests.insert(dest);
+			for mut stream in [
+				self.db.queued_request_destinations().boxed(),
+				self.db.queued_reliable_request_destinations().boxed(),
+			] {
+				while let Some(dest) = stream.next().await {
+					if self.shard_id(&dest) == id {
+						queued_dests.insert(dest);
+					}
 				}
 			}
 

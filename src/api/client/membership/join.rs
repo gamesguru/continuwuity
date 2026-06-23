@@ -10,13 +10,8 @@ use conduwuit::{
 		pdu::{PduBuilder, PduEvent},
 		state_res,
 	},
-	result::FlatOk,
 	trace,
-	utils::{
-		self, shuffle,
-		stream::{IterStream, ReadyExt},
-		to_canonical_object,
-	},
+	utils::{self, shuffle, stream::ReadyExt, to_canonical_object},
 	warn,
 };
 use futures::{FutureExt, StreamExt};
@@ -163,45 +158,19 @@ pub(crate) async fn join_room_by_id_or_alias_route(
 			.boxed()
 			.await?;
 
-			let mut servers = body.via.clone();
-			if servers.is_empty() {
-				debug!("No via servers provided for join, injecting some.");
-				servers.extend(
-					services
-						.rooms
-						.state_cache
-						.servers_invite_via(&room_id)
-						.map(ToOwned::to_owned)
-						.collect::<Vec<_>>()
-						.await,
-				);
-
-				servers.extend(
-					services
-						.rooms
-						.state_cache
-						.invite_state(sender_user, &room_id)
-						.await
-						.unwrap_or_default()
-						.iter()
-						.filter_map(|event| event.get_field("sender").ok().flatten())
-						.filter_map(|sender: &str| UserId::parse(sender).ok())
-						.map(|user| user.server_name().to_owned()),
-				);
-
-				if let Some(server) = room_id.server_name() {
-					servers.push(server.to_owned());
-				}
-			}
-
-			servers.sort_unstable();
-			servers.dedup();
-			shuffle(&mut servers);
+			let servers = super::fetch_join_knock_servers(
+				&services,
+				sender_user,
+				&room_id,
+				body.via.clone(),
+				false,
+			)
+			.await;
 
 			(servers, room_id)
 		},
 		| Err(room_alias) => {
-			let (room_id, mut servers) = services.rooms.alias.resolve_alias(&room_alias).await?;
+			let (room_id, servers) = services.rooms.alias.resolve_alias(&room_alias).await?;
 
 			banned_room_check(
 				&services,
@@ -212,33 +181,9 @@ pub(crate) async fn join_room_by_id_or_alias_route(
 			)
 			.await?;
 
-			let addl_via_servers = services
-				.rooms
-				.state_cache
-				.servers_invite_via(&room_id)
-				.map(ToOwned::to_owned);
-
-			let addl_state_servers = services
-				.rooms
-				.state_cache
-				.invite_state(sender_user, &room_id)
-				.await
-				.unwrap_or_default();
-
-			let mut addl_servers: Vec<_> = addl_state_servers
-				.iter()
-				.map(|event| event.get_field("sender"))
-				.filter_map(FlatOk::flat_ok)
-				.map(|user: &UserId| user.server_name().to_owned())
-				.stream()
-				.chain(addl_via_servers)
-				.collect()
-				.await;
-
-			addl_servers.sort_unstable();
-			addl_servers.dedup();
-			shuffle(&mut addl_servers);
-			servers.append(&mut addl_servers);
+			let servers =
+				super::fetch_join_knock_servers(&services, sender_user, &room_id, servers, true)
+					.await;
 
 			(servers, room_id)
 		},
