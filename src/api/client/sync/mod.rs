@@ -269,28 +269,43 @@ pub(crate) async fn add_membership_to_unsigned(
 		&& pdu.state_key.as_deref() == Some(user_id.as_str());
 
 	let membership = if is_own_membership {
-		// MSC4115: "For a user's own membership event, the unsigned.membership property
-		// MUST be the membership of the user prior to the event being applied."
-		let mut prev_membership = ruma::events::room::member::MembershipState::Leave;
-
-		if let Some(unsigned_raw) = &pdu.unsigned {
-			if let Ok(unsigned_map) = serde_json::from_str::<
-				serde_json::Map<String, serde_json::Value>,
-			>(unsigned_raw.get())
+		if let Ok(content) = serde_json::from_str::<
+			ruma::events::room::member::RoomMemberEventContent,
+		>(pdu.content.get())
+		{
+			content.membership
+		} else {
+			ruma::events::room::member::MembershipState::Leave
+		}
+	} else {
+		if pdu.kind == TimelineEventType::RoomCreate {
+			conduwuit::error!(
+				"DEBUG_MEMBERSHIP: evaluating m.room.create! event_id: {}",
+				pdu.event_id()
+			);
+			if let Ok(shortstatehash) = services
+				.rooms
+				.state_accessor
+				.pdu_shortstatehash(pdu.event_id())
+				.await
 			{
-				if let Some(prev_content_val) = unsigned_map.get("prev_content") {
-					if let Ok(prev_content) = serde_json::from_value::<
-						ruma::events::room::member::RoomMemberEventContent,
-					>(prev_content_val.clone())
-					{
-						prev_membership = prev_content.membership;
-					}
-				}
+				conduwuit::error!(
+					"DEBUG_MEMBERSHIP: m.room.create has shortstatehash: {}",
+					shortstatehash
+				);
+				let mem = services
+					.rooms
+					.state_accessor
+					.user_membership(shortstatehash, user_id)
+					.await;
+				conduwuit::error!("DEBUG_MEMBERSHIP: user_membership returned: {:?}", mem);
+			} else {
+				conduwuit::error!(
+					"DEBUG_MEMBERSHIP: pdu_shortstatehash FAILED for m.room.create!"
+				);
 			}
 		}
 
-		prev_membership
-	} else {
 		services
 			.rooms
 			.state_accessor
