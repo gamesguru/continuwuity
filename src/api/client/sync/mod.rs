@@ -260,10 +260,12 @@ pub(crate) async fn add_membership_to_unsigned(
 	user_id: &UserId,
 	pdu: &mut PduEvent,
 ) {
-	let room_id = &pdu.room_id;
+	let Some(room_id) = pdu.room_id_or_hash() else {
+		return;
+	};
 
 	// Is this a membership event for the syncing user?
-	let is_own_membership = pdu.kind == ruma::events::TimelineEventType::RoomMember
+	let is_own_membership = pdu.kind == TimelineEventType::RoomMember
 		&& pdu.state_key.as_deref() == Some(user_id.as_str());
 
 	let membership = if is_own_membership {
@@ -271,12 +273,19 @@ pub(crate) async fn add_membership_to_unsigned(
 		// MUST be the membership of the user prior to the event being applied."
 		let mut prev_membership = ruma::events::room::member::MembershipState::Leave;
 
-		if let Some(prev_content_val) = pdu.unsigned.get("prev_content") {
-			if let Ok(prev_content) = serde_json::from_value::<
-				ruma::events::room::member::RoomMemberEventContent,
-			>(prev_content_val.clone())
+		if let Some(unsigned_raw) = &pdu.unsigned {
+			if let Ok(unsigned_map) = serde_json::from_str::<
+				serde_json::Map<String, serde_json::Value>,
+			>(unsigned_raw.get())
 			{
-				prev_membership = prev_content.membership;
+				if let Some(prev_content_val) = unsigned_map.get("prev_content") {
+					if let Ok(prev_content) = serde_json::from_value::<
+						ruma::events::room::member::RoomMemberEventContent,
+					>(prev_content_val.clone())
+					{
+						prev_membership = prev_content.membership;
+					}
+				}
 			}
 		}
 
@@ -285,7 +294,7 @@ pub(crate) async fn add_membership_to_unsigned(
 		services
 			.rooms
 			.state_accessor
-			.user_membership_at_event(pdu.event_id(), room_id, user_id)
+			.user_membership_at_event(pdu.event_id(), &room_id, user_id)
 			.await
 	};
 
