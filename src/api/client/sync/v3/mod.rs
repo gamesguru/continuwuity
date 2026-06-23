@@ -3,7 +3,6 @@ mod left;
 mod state;
 
 use std::{
-	cmp::{self},
 	collections::{BTreeMap, HashMap, HashSet},
 	time::Duration,
 };

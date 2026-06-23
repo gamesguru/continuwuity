@@ -20,10 +20,13 @@ use crate::{Dep, globals};
 pub struct Service {
 	db: Data,
 	services: Services,
-	eventid_shorteventid_cache: moka::sync::Cache<OwnedEventId, ShortEventId>,
-	shorteventid_eventid_cache: moka::sync::Cache<ShortEventId, OwnedEventId>,
-	statekey_shortstatekey_cache: moka::sync::Cache<(StateEventType, StateKey), ShortStateKey>,
-	shortstatekey_statekey_cache: moka::sync::Cache<ShortStateKey, (StateEventType, StateKey)>,
+	pub eventid_shorteventid_cache: moka::sync::Cache<OwnedEventId, ShortEventId>,
+	pub shorteventid_eventid_cache: moka::sync::Cache<ShortEventId, OwnedEventId>,
+	pub statekey_shortstatekey_cache:
+		moka::sync::Cache<(StateEventType, StateKey), ShortStateKey>,
+	pub shortstatekey_statekey_cache:
+		moka::sync::Cache<ShortStateKey, (StateEventType, StateKey)>,
+	pub shorteventid_shortstatehash_cache: moka::sync::Cache<ShortEventId, ShortStateHash>,
 }
 
 struct Data {
@@ -100,6 +103,9 @@ impl crate::Service for Service {
 				.build(),
 			shortstatekey_statekey_cache: moka::sync::Cache::builder()
 				.max_capacity(shortstatekey_cap.into())
+				.build(),
+			shorteventid_shortstatehash_cache: moka::sync::Cache::builder()
+				.max_capacity(shorteventid_cap.into())
 				.build(),
 		}))
 	}

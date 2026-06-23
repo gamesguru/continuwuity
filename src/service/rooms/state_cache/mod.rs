@@ -689,3 +689,15 @@ pub async fn invite_sender(&self, user_id: &UserId, room_id: &RoomId) -> Result<
 		.await
 		.deserialized()
 }
+#[cfg(test)]
+mod serde_test3 {
+	use ruma::events::room::member::{MembershipState, RoomMemberEventContent};
+	#[test]
+	fn test_serde() {
+		let s = r#"{"displayname":"user-2 🏳️‍⚧️","membership":"join"}"#;
+		match serde_json::from_str::<RoomMemberEventContent>(s) {
+			| Ok(c) => println!("Success: {:?}", c.membership),
+			| Err(e) => panic!("Error: {}", e),
+		}
+	}
+}

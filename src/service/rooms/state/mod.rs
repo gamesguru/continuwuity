@@ -437,6 +437,10 @@ impl Service {
 		self.db
 			.shorteventid_shortstatehash
 			.aput::<KEY_LEN, VAL_LEN, _, _>(shorteventid, shortstatehash);
+		self.services
+			.short
+			.shorteventid_shortstatehash_cache
+			.insert(shorteventid, shortstatehash);
 
 		Ok(shortstatehash)
 	}
@@ -450,6 +454,10 @@ impl Service {
 		self.db
 			.shorteventid_shortstatehash
 			.aput::<BUFSIZE, BUFSIZE, _, _>(shorteventid, shortstatehash);
+		self.services
+			.short
+			.shorteventid_shortstatehash_cache
+			.insert(shorteventid, shortstatehash);
 	}
 
 	/// Generates a new StateHash and associates it with the incoming event.
@@ -472,6 +480,10 @@ impl Service {
 			self.db
 				.shorteventid_shortstatehash
 				.aput::<BUFSIZE, BUFSIZE, _, _>(shorteventid, p);
+			self.services
+				.short
+				.shorteventid_shortstatehash_cache
+				.insert(shorteventid, p);
 		}
 
 		match &new_pdu.state_key {
@@ -610,11 +622,27 @@ impl Service {
 	}
 
 	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
-		self.db
+		if let Some(shortstatehash) = self
+			.services
+			.short
+			.shorteventid_shortstatehash_cache
+			.get(&shorteventid)
+		{
+			return Ok(shortstatehash);
+		}
+
+		let shortstatehash: ShortStateHash = self
+			.db
 			.shorteventid_shortstatehash
 			.qry(&shorteventid)
 			.await
-			.deserialized()
+			.deserialized()?;
+
+		self.services
+			.short
+			.shorteventid_shortstatehash_cache
+			.insert(shorteventid, shortstatehash);
+		Ok(shortstatehash)
 	}
 
 	pub async fn get_room_shortstatehash(&self, room_id: &RoomId) -> Result<ShortStateHash> {

@@ -433,16 +433,28 @@ async fn load_full_state(&self, shortstatehash: ShortStateHash) -> Result<Arc<Co
 pub async fn pdu_shortstatehash(&self, event_id: &EventId) -> Result<ShortStateHash> {
 	const BUFSIZE: usize = size_of::<ShortEventId>();
 
+	let shorteventid = self.services.short.get_shorteventid(event_id).await?;
+	if let Some(shortstatehash) = self
+		.services
+		.short
+		.shorteventid_shortstatehash_cache
+		.get(&shorteventid)
+	{
+		return Ok(shortstatehash);
+	}
+
+	let shortstatehash = self
+		.db
+		.shorteventid_shortstatehash
+		.aqry::<BUFSIZE, _>(&shorteventid)
+		.await
+		.deserialized()?;
 	self.services
 		.short
-		.get_shorteventid(event_id)
-		.and_then(|shorteventid| {
-			self.db
-				.shorteventid_shortstatehash
-				.aqry::<BUFSIZE, _>(&shorteventid)
-		})
-		.await
-		.deserialized()
+		.shorteventid_shortstatehash_cache
+		.insert(shorteventid, shortstatehash);
+
+	Ok(shortstatehash)
 }
 
 #[implement(super::Service)]
