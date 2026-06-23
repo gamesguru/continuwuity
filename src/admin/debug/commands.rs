@@ -22,9 +22,8 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use lettre::message::Mailbox;
 use ruma::{
 	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName,
-	OwnedUserId, RoomVersionId,
+	RoomVersionId,
 	api::federation::event::{get_event, get_room_state},
-	events::StateEventType,
 };
 use service::rooms::{
 	short::{ShortEventId, ShortRoomId},
@@ -1565,142 +1564,13 @@ async fn reject_conflicting_state(
 /// Rebuild membership cache from a state snapshot. Extracted to keep
 /// `force_set_room_state_from_server` below the stack-frame limit.
 #[admin_command]
-async fn rebuild_membership_cache_inner(&self, room_id: OwnedRoomId, short_state_hash: u64) {
-	use conduwuit::{info, warn};
-
-	info!("Rebuilding membership cache from state snapshot for {room_id}");
-
-	let mut state_joined: HashSet<OwnedUserId> = HashSet::new();
-	let mut state_invited: HashSet<OwnedUserId> = HashSet::new();
-	let mut members_updated = 0_usize;
-
-	// Collect membership data into a Vec FIRST to drop the zero-copy
-	// RocksDB iterator before the write phase. Holding an iterator
-	// across .await points risks SEGV if compaction invalidates the
-	// underlying memory.
-	let members: Vec<(OwnedUserId, String)> = self
-		.services
-		.rooms
-		.state_accessor
-		.state_full(short_state_hash)
-		.filter_map(|((event_type, state_key), pdu)| async move {
-			if event_type != StateEventType::RoomMember {
-				return None;
-			}
-			let user_id = OwnedUserId::try_from(state_key.as_str()).ok()?;
-			let content = pdu.get_content_as_value();
-			let membership = content
-				.get("membership")
-				.and_then(|v| v.as_str())
-				.unwrap_or("leave")
-				.to_owned();
-			Some((user_id, membership))
-		})
-		.collect()
-		.await;
-
-	// Now process with the iterator dropped — safe to write.
-	for (user_id, membership) in &members {
-		match membership.as_str() {
-			| "join" => {
-				state_joined.insert(user_id.clone());
-				if !self
-					.services
-					.rooms
-					.state_cache
-					.is_joined(user_id, &room_id)
-					.await
-				{
-					self.services
-						.rooms
-						.state_cache
-						.mark_as_joined_silent(user_id, &room_id)
-						.await;
-					members_updated = members_updated.saturating_add(1);
-				}
-			},
-			| "invite" => {
-				state_invited.insert(user_id.clone());
-				// TODO: check-before-write for invites
-			},
-			| "leave" | "ban" => {
-				// TODO: distinguish left vs kicked vs banned for proper
-				// Cinny/Element display. Currently all three map to
-				// mark_as_left which loses the distinction.
-				if self
-					.services
-					.rooms
-					.state_cache
-					.is_invited_or_joined(user_id, &room_id)
-					.await
-				{
-					self.services
-						.rooms
-						.state_cache
-						.mark_as_left_silent(user_id, &room_id)
-						.await;
-					members_updated = members_updated.saturating_add(1);
-				}
-			},
-			| unknown => {
-				warn!("Unknown membership state '{unknown}' for {user_id} in {room_id}");
-			},
-		}
-	}
-
-	// Sweep stale joined cache entries
-	let cached_members: Vec<OwnedUserId> = self
-		.services
-		.rooms
-		.state_cache
-		.room_members(&room_id)
-		.map(ToOwned::to_owned)
-		.collect()
-		.await;
-
-	let mut stale_removed = 0_usize;
-	for user_id in &cached_members {
-		// Symmetric guard: only purge if they are neither joined NOR invited.
-		if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
-			self.services
-				.rooms
-				.state_cache
-				.mark_as_left_silent(user_id, &room_id)
-				.await;
-			stale_removed = stale_removed.saturating_add(1);
-		}
-	}
-
-	// Sweep stale invited cache entries
-	let cached_invited: Vec<OwnedUserId> = self
-		.services
-		.rooms
-		.state_cache
-		.room_members_invited(&room_id)
-		.map(ToOwned::to_owned)
-		.collect()
-		.await;
-
-	for user_id in &cached_invited {
-		// Only purge if they are neither invited NOR joined.
-		// If they transitioned to joined, mark_as_left would accidentally nuke their
-		// valid join.
-		if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
-			self.services
-				.rooms
-				.state_cache
-				.mark_as_left_silent(user_id, &room_id)
-				.await;
-			stale_removed = stale_removed.saturating_add(1);
-		}
-	}
-
+async fn rebuild_membership_cache_inner(&self, room_id: OwnedRoomId, _short_state_hash: u64) {
+	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
 	self.services
 		.rooms
-		.state_cache
-		.update_joined_count(&room_id)
+		.timeline
+		.rebuild_membership_cache(&room_id, &state_lock)
 		.await;
-	info!("Updated {members_updated} member entries, removed {stale_removed} stale caches");
 }
 
 /// Promote the most recent state event to the timeline as a Normal PDU,

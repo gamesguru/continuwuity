@@ -459,7 +459,7 @@ pub(super) async fn compute_state_for_event(
 /// Rebuild the membership cache from the current room state snapshot.
 /// Extracted from the reorder_timeline logic for reuse.
 #[conduwuit_core::implement(super::Service)]
-pub(super) async fn rebuild_membership_cache(
+pub async fn rebuild_membership_cache(
 	&self,
 	room_id: &RoomId,
 	_state_lock: &rooms::state::RoomMutexGuard,
