@@ -11,7 +11,7 @@ mod unban;
 use std::net::IpAddr;
 
 use axum::extract::State;
-use conduwuit::{Err, Result, utils::stream::IterStream, info, warn};
+use conduwuit::{Err, Result, info, utils::stream::IterStream, warn};
 use futures::{FutureExt, StreamExt};
 use ruma::{
 	CanonicalJsonObject, OwnedRoomId, OwnedServerName, RoomId, RoomVersionId, ServerName, UserId,
