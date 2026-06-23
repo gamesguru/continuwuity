@@ -88,6 +88,9 @@ impl HardState {
 
 /// A session-scoped multi-armed bandit pool of federation servers.
 ///
+/// TODO: Generalize this concept and use it to build server lists in more areas
+/// (like backfilling, missing events, and auth chain fetching).
+///
 /// Combines hard constraints (cooldown, error budget) with soft signal-based
 /// scoring for server selection.
 pub struct ServerPool {

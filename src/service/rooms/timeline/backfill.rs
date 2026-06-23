@@ -544,6 +544,8 @@ pub async fn force_insert_pdu_batch(
 }
 
 #[implement(super::Service)]
+/// TODO: Integrate the multi-armed bandit `ServerPool` algorithm here for
+/// optimal server selection.
 pub async fn get_backfill_servers<'a>(
 	&'a self,
 	room_id: &'a RoomId,
