@@ -1915,7 +1915,7 @@ pub fn update_unsigned_prev_content(
 		unsigned.insert(
 			"prev_content".to_owned(),
 			ruma::CanonicalJsonValue::Object(
-				conduwuit_core::utils::to_canonical_object(prev_content_value.clone()).map_err(
+				conduwuit_core::utils::to_canonical_object(prev_content_value).map_err(
 					|e| {
 						conduwuit::err!(Database(error!(
 							"Failed to convert prev_state to canonical JSON: {e}"

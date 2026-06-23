@@ -269,21 +269,24 @@ pub(crate) async fn add_membership_to_unsigned(
 		&& pdu.state_key.as_deref() == Some(user_id.as_str());
 
 	let membership = if is_own_membership {
-		// MSC4115: "Consider the room state just *after* event E landed. Any changes caused by
-		// the event itself... are included."
-		// For a user's own membership event, the state after the event is just the event itself.
+		// MSC4115: "Consider the room state just *after* event E landed. Any changes
+		// caused by the event itself... are included."
+		// For a user's own membership event, the state after the event is just the
+		// event itself.
 		let mut current_membership = ruma::events::room::member::MembershipState::Leave;
 
-		match serde_json::from_str::<ruma::events::room::member::RoomMemberEventContent>(pdu.content.get()) {
-			Ok(content) => {
+		match serde_json::from_str::<ruma::events::room::member::RoomMemberEventContent>(
+			pdu.content.get(),
+		) {
+			| Ok(content) => {
 				current_membership = content.membership;
 			},
-			Err(e) => {
+			| Err(e) => {
 				conduwuit::error!(
 					"DEBUG_MEMBERSHIP: Failed to parse content for {}: {e}",
 					pdu.event_id()
 				);
-			}
+			},
 		}
 
 		current_membership
