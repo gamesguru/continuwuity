@@ -15,6 +15,27 @@ use tokio::time::Instant;
 
 use crate::{admin_command, admin_command_dispatch};
 
+macro_rules! timer_result {
+	($self:expr, $timer:expr, $result:expr) => {{
+		let query_time = $timer.elapsed();
+		$self
+			.write_str(&format!(
+				"Query completed in {query_time:?}:\n\n```rs\n{:#?}\n```",
+				$result
+			))
+			.await
+	}};
+}
+
+macro_rules! timer_end {
+	($self:expr, $timer:expr) => {{
+		let query_time = $timer.elapsed();
+		$self
+			.write_str(&format!("\n```\n\nQuery completed in {query_time:?}"))
+			.await
+	}};
+}
+
 #[admin_command_dispatch]
 #[derive(Debug, Subcommand)]
 #[allow(clippy::enum_variant_names)]
@@ -227,10 +248,8 @@ pub(super) async fn compact(
 
 	let timer = Instant::now();
 	let results = results.await;
-	let query_time = timer.elapsed();
-	info!("Compaction complete: {num_maps} column families in {query_time:?}");
-	self.write_str(&format!("Jobs completed in {query_time:?}:\n\n```rs\n{results:#?}\n```"))
-		.await
+	info!("Compaction complete: {num_maps} column families in {:?}", timer.elapsed());
+	timer_result!(self, timer, results)
 }
 
 #[admin_command]
@@ -243,9 +262,7 @@ pub(super) async fn raw_count(&self, map: Option<String>, prefix: Option<String>
 		.ready_fold(0_usize, usize::saturating_add)
 		.await;
 
-	let query_time = timer.elapsed();
-	self.write_str(&format!("Query completed in {query_time:?}:\n\n```rs\n{count:#?}\n```"))
-		.await
+	timer_result!(self, timer, count)
 }
 
 #[admin_command]
@@ -262,9 +279,7 @@ pub(super) async fn raw_keys(&self, map: String, prefix: Option<String>) -> Resu
 		.boxed()
 		.await?;
 
-	let query_time = timer.elapsed();
-	self.write_str(&format!("\n```\n\nQuery completed in {query_time:?}"))
-		.await
+	timer_end!(self, timer)
 }
 
 #[admin_command]
@@ -284,9 +299,7 @@ pub(super) async fn raw_keys_sizes(&self, map: Option<String>, prefix: Option<St
 		})
 		.await;
 
-	let query_time = timer.elapsed();
-	self.write_str(&format!("```\n{result:#?}\n```\n\nQuery completed in {query_time:?}"))
-		.await
+	timer_result!(self, timer, result)
 }
 
 #[admin_command]
@@ -325,9 +338,7 @@ pub(super) async fn raw_vals_sizes(&self, map: Option<String>, prefix: Option<St
 		})
 		.await;
 
-	let query_time = timer.elapsed();
-	self.write_str(&format!("```\n{result:#?}\n```\n\nQuery completed in {query_time:?}"))
-		.await
+	timer_result!(self, timer, result)
 }
 
 #[admin_command]
@@ -364,9 +375,7 @@ pub(super) async fn raw_iter(&self, map: String, prefix: Option<String>) -> Resu
 		.boxed()
 		.await?;
 
-	let query_time = timer.elapsed();
-	self.write_str(&format!("\n```\n\nQuery completed in {query_time:?}"))
-		.await
+	timer_end!(self, timer)
 }
 
 #[admin_command]
@@ -387,9 +396,7 @@ pub(super) async fn raw_keys_from(
 		.boxed()
 		.await?;
 
-	let query_time = timer.elapsed();
-	self.write_str(&format!("\n```\n\nQuery completed in {query_time:?}"))
-		.await
+	timer_end!(self, timer)
 }
 
 #[admin_command]
@@ -409,9 +416,7 @@ pub(super) async fn raw_iter_from(
 		.try_collect::<Vec<(String, String)>>()
 		.await?;
 
-	let query_time = timer.elapsed();
-	self.write_str(&format!("Query completed in {query_time:?}:\n\n```rs\n{result:#?}\n```"))
-		.await
+	timer_result!(self, timer, result)
 }
 
 #[admin_command]
@@ -449,10 +454,8 @@ pub(super) async fn raw_get(&self, map: String, key: String) -> Result {
 	let timer = Instant::now();
 	let handle = map.get(&key).await?;
 
-	let query_time = timer.elapsed();
 	let result = String::from_utf8_lossy(&handle);
-	self.write_str(&format!("Query completed in {query_time:?}:\n\n```rs\n{result:?}\n```"))
-		.await
+	timer_result!(self, timer, result)
 }
 
 #[admin_command]

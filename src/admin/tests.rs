@@ -307,10 +307,57 @@ fn strip_v12_create_removes() {
 	assert!(!obj.contains_key("room_id"), "room_id must be removed for V12 create events");
 }
 
-#[tokio::test]
-async fn test_yolo_audit_membership_drift() {
+struct TempDbGuard {
+	path: std::path::PathBuf,
+}
+
+impl Drop for TempDbGuard {
+	fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
+}
+
+async fn setup_test_services(prefix: &str) -> (std::sync::Arc<service::Services>, TempDbGuard) {
+	use figment::providers::Format;
 	let _ = rustls::crypto::ring::default_provider().install_default();
 
+	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_{prefix}_{count}"));
+	let _ = std::fs::remove_dir_all(&db_path);
+
+	let guard = TempDbGuard { path: db_path.clone() };
+
+	let figment = figment::Figment::new().merge(figment::providers::Toml::string(&format!(
+		r#"
+			server_name = "test.conduwuit.local"
+			database_path = "{}"
+			"#,
+		db_path.to_string_lossy().replace('\\', "/")
+	)));
+
+	let config = conduwuit::config::Config::new(&figment).expect("failed to parse config");
+	let runtime_handle = tokio::runtime::Handle::current();
+	let server = std::sync::Arc::new(conduwuit::Server::new(
+		config,
+		Some(&runtime_handle),
+		conduwuit::log::Log {
+			reload: conduwuit::log::LogLevelReloadHandles::default(),
+			capture: std::sync::Arc::new(conduwuit::log::capture::State::default()),
+		},
+	));
+
+	let services = service::Services::build(server)
+		.await
+		.expect("failed to build services");
+	let services = services.start().await.expect("failed to start services");
+
+	// Boot admin module context references
+	crate::init(&services.admin).await;
+
+	(services, guard)
+}
+
+#[tokio::test]
+async fn test_yolo_audit_membership_drift() {
 	use std::{path::PathBuf, sync::Arc};
 
 	use conduwuit::{
@@ -327,44 +374,7 @@ async fn test_yolo_audit_membership_drift() {
 			member::{MembershipState, RoomMemberEventContent},
 		},
 	};
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_yolo_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build services");
-	let services = services.start().await.expect("failed to start services");
-
-	// Boot admin module context references
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("yolo").await;
 
 	let room_id = RoomId::new(services.globals.server_name());
 	let _short_id = services
@@ -588,8 +598,6 @@ async fn test_yolo_audit_membership_drift() {
 
 #[tokio::test]
 async fn test_yolo_reorder_timeline() {
-	let _ = rustls::crypto::ring::default_provider().install_default();
-
 	use std::{path::PathBuf, sync::Arc};
 
 	use conduwuit::{
@@ -607,44 +615,7 @@ async fn test_yolo_reorder_timeline() {
 			message::RoomMessageEventContent,
 		},
 	};
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_reorder_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build services");
-	let services = services.start().await.expect("failed to start services");
-
-	// Boot admin module context references
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("reorder").await;
 
 	let room_id = RoomId::new(services.globals.server_name());
 	let _short_id = services
@@ -834,8 +805,6 @@ async fn test_yolo_reorder_timeline() {
 
 #[tokio::test]
 async fn test_busted_dag_resolution() {
-	let _ = rustls::crypto::ring::default_provider().install_default();
-
 	use std::{
 		path::{Path, PathBuf},
 		sync::Arc,
@@ -857,44 +826,7 @@ async fn test_busted_dag_resolution() {
 		println!("Skipping test_busted_dag_resolution: test DAG file not found");
 		return;
 	}
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_busted_dag_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build services");
-	let services = services.start().await.expect("failed to start services");
-
-	// Boot admin module context references
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("busted_dag").await;
 
 	let room_id = RoomId::parse("!L58ME6ufiP49v97UIOBIpvWKEgj4912JmECPuDzlvCI").unwrap();
 
@@ -1018,8 +950,6 @@ async fn test_busted_dag_resolution() {
 
 #[tokio::test]
 async fn test_unredacted_room_dag_resolution() {
-	let _ = rustls::crypto::ring::default_provider().install_default();
-
 	use std::{
 		path::{Path, PathBuf},
 		sync::Arc,
@@ -1041,44 +971,7 @@ async fn test_unredacted_room_dag_resolution() {
 		println!("Skipping test_unredacted_room_dag_resolution: test DAG file not found");
 		return;
 	}
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_unredacted_room_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build services");
-	let services = services.start().await.expect("failed to start services");
-
-	// Boot admin module context references
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("unredacted_room").await;
 
 	let room_id = RoomId::parse("!BDSybzDpGyDxMHZzpN:unredacted.org").unwrap();
 
@@ -1185,8 +1078,6 @@ async fn test_unredacted_room_dag_resolution() {
 
 #[tokio::test]
 async fn test_unredacted_lounge_dag_resolution() {
-	let _ = rustls::crypto::ring::default_provider().install_default();
-
 	use std::{
 		path::{Path, PathBuf},
 		sync::Arc,
@@ -1208,45 +1099,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		println!("Skipping test_unredacted_lounge_dag_resolution: test DAG file not found");
 		return;
 	}
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path =
-		std::env::temp_dir().join(format!("conduwuit_test_db_unredacted_lounge_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build services");
-	let services = services.start().await.expect("failed to start services");
-
-	// Boot admin module context references
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("unredacted_lounge").await;
 
 	let room_id = RoomId::parse("!sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE").unwrap();
 
@@ -1464,8 +1317,6 @@ async fn test_unredacted_lounge_dag_resolution() {
 
 #[tokio::test]
 async fn test_nheko_dag_resolution() {
-	let _ = rustls::crypto::ring::default_provider().install_default();
-
 	use std::{
 		path::{Path, PathBuf},
 		sync::Arc,
@@ -1487,44 +1338,7 @@ async fn test_nheko_dag_resolution() {
 		println!("Skipping test_nheko_dag_resolution: test DAG file not found");
 		return;
 	}
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_nheko_room_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build services");
-	let services = services.start().await.expect("failed to start services");
-
-	// Boot admin module context references
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("nheko_room").await;
 
 	let room_id = RoomId::parse("!UbCmIlGTHNIgIRZcpt:nheko.im").unwrap();
 
@@ -1631,7 +1445,6 @@ async fn test_nheko_dag_resolution() {
 
 #[tokio::test]
 async fn test_yolo_heal_receipts() {
-	let _ = rustls::crypto::ring::default_provider().install_default();
 	use std::{path::PathBuf, sync::Arc};
 
 	use conduwuit::{
@@ -1646,40 +1459,7 @@ async fn test_yolo_heal_receipts() {
 		RoomId, UserId,
 		events::receipt::{Receipt, ReceiptEvent, ReceiptEventContent, ReceiptType},
 	};
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_heal_receipts_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build");
-	let services = services.start().await.expect("failed to start");
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("heal_receipts").await;
 
 	let room_id = RoomId::new(services.globals.server_name());
 	let user_id = UserId::parse("@user:test.conduwuit.local").unwrap();
@@ -1758,8 +1538,6 @@ async fn test_yolo_heal_receipts() {
 
 #[tokio::test]
 async fn test_yolo_rescue_room() {
-	let _ = rustls::crypto::ring::default_provider().install_default();
-
 	use std::{path::PathBuf, sync::Arc};
 
 	use conduwuit::{
@@ -1776,40 +1554,7 @@ async fn test_yolo_rescue_room() {
 			member::{MembershipState, RoomMemberEventContent},
 		},
 	};
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_rescue_room_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build");
-	let services = services.start().await.expect("failed to start");
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("rescue_room").await;
 
 	let room_id = RoomId::new(services.globals.server_name());
 	let server_user = services.globals.server_user.as_ref();
@@ -1877,8 +1622,6 @@ async fn test_yolo_rescue_room() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_knocking_dag_resolution() {
-	let _ = rustls::crypto::ring::default_provider().install_default();
-
 	use std::{
 		path::{Path, PathBuf},
 		sync::Arc,
@@ -1898,44 +1641,7 @@ async fn test_knocking_dag_resolution() {
 		println!("Skipping test_knocking_dag_resolution: test DAG file not found");
 		return;
 	}
-
-	static TEST_DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-	let count = TEST_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-	let db_path = std::env::temp_dir().join(format!("conduwuit_test_db_knocking_dag_{count}"));
-	let _ = std::fs::remove_dir_all(&db_path);
-
-	struct TempDbGuard {
-		path: PathBuf,
-	}
-
-	impl Drop for TempDbGuard {
-		fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); }
-	}
-
-	let _guard = TempDbGuard { path: db_path.clone() };
-
-	let figment = Figment::new().merge(figment::providers::Toml::string(&format!(
-		r#"
-			server_name = "test.conduwuit.local"
-			database_path = "{}"
-			"#,
-		db_path.to_string_lossy().replace('\\', "/")
-	)));
-
-	let config = Config::new(&figment).expect("failed to parse config");
-	let runtime_handle = tokio::runtime::Handle::current();
-	let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
-		reload: LogLevelReloadHandles::default(),
-		capture: Arc::new(capture::State::default()),
-	}));
-
-	let services = service::Services::build(server)
-		.await
-		.expect("failed to build services");
-	let services = services.start().await.expect("failed to start services");
-
-	// Boot admin module context references
-	crate::init(&services.admin).await;
+	let (services, _guard) = setup_test_services("knocking_dag").await;
 
 	let room_id = RoomId::parse("!ylRY10DiOcgVxCi0W8f9ztanFl5wdBxYCWQqM45n_Kk").unwrap();
 
