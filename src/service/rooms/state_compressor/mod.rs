@@ -693,6 +693,45 @@ fn save_statediff(&self, shortstatehash: ShortStateHash, diff: &StateDiff) {
 		.insert(&shortstatehash.to_be_bytes(), &value);
 }
 
+/// Convenience: load full state for a shortstatehash, returning None if the
+/// shortstatehash is 0 or doesn't exist. Wraps the common pattern of
+/// `load_shortstatehash_info(ssh).last().full_state.as_ref()`.
+#[implement(Service)]
+pub async fn get_full_state(
+	&self,
+	shortstatehash: ShortStateHash,
+) -> Option<Arc<CompressedState>> {
+	if shortstatehash == 0 {
+		return None;
+	}
+	let info = self.load_shortstatehash_info(shortstatehash).await.ok()?;
+	info.last()?.full_state.clone()
+}
+
+/// Compute the set difference between two state snapshots.
+/// Returns `(added, removed)` compressed state sets.
+#[implement(Service)]
+pub async fn diff_full_state(
+	&self,
+	old_ssh: ShortStateHash,
+	new_ssh: ShortStateHash,
+) -> (Arc<CompressedState>, Arc<CompressedState>) {
+	let empty = Arc::new(CompressedState::new());
+	let old_full = self.get_full_state(old_ssh).await;
+	let new_full = self.get_full_state(new_ssh).await;
+
+	match (old_full, new_full) {
+		| (Some(old), Some(new)) => {
+			let added: CompressedState = new.difference(&old).copied().collect();
+			let removed: CompressedState = old.difference(&new).copied().collect();
+			(Arc::new(added), Arc::new(removed))
+		},
+		| (None, Some(new)) => (new, empty),
+		| (Some(old), None) => (empty, old),
+		| (None, None) => (empty.clone(), empty),
+	}
+}
+
 #[inline]
 #[must_use]
 pub(crate) fn compress_state_event(

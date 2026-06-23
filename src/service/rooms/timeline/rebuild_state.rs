@@ -277,18 +277,10 @@ impl Service {
 			// Load full compressed state for each unique SSH
 			let mut all_compressed = BTreeSet::new();
 			for &ssh in &extremity_sshs {
-				if let Ok(info) = self
-					.services
-					.state_compressor
-					.load_shortstatehash_info(ssh)
-					.await
+				if let Some(full_state) = self.services.state_compressor.get_full_state(ssh).await
 				{
-					if let Some(frame) = info.last() {
-						if let Some(full_state) = frame.full_state.as_ref() {
-							for entry in full_state.as_ref() {
-								all_compressed.insert(*entry);
-							}
-						}
+					for entry in full_state.as_ref() {
+						all_compressed.insert(*entry);
 					}
 				}
 			}
@@ -296,12 +288,7 @@ impl Service {
 			// Build ssk -> set of shorteventid values to detect conflicts
 			let mut ssk_values: HashMap<u64, HashSet<u64>> = HashMap::new();
 			for bytes in &all_compressed {
-				let mut ssk_bytes = [0_u8; 8];
-				ssk_bytes.copy_from_slice(&bytes[0..8]);
-				let ssk = u64::from_be_bytes(ssk_bytes);
-				let mut id_bytes = [0_u8; 8];
-				id_bytes.copy_from_slice(&bytes[8..16]);
-				let sei = u64::from_be_bytes(id_bytes);
+				let (ssk, sei) = rooms::state_compressor::parse_compressed_state_event(*bytes);
 				ssk_values.entry(ssk).or_default().insert(sei);
 			}
 
@@ -400,48 +387,13 @@ impl Service {
 			);
 		}
 
-		let (total_added, total_removed) = if let Some(old_ssh) = original_room_shortstatehash {
-			let old_info = self
-				.services
-				.state_compressor
-				.load_shortstatehash_info(old_ssh)
-				.await
-				.unwrap_or_default();
-			let new_info = self
-				.services
-				.state_compressor
-				.load_shortstatehash_info(current_shortstatehash)
-				.await
-				.unwrap_or_default();
-			let empty = BTreeSet::new();
-			let old_full = old_info
-				.last()
-				.and_then(|info| info.full_state.as_ref())
-				.map_or(&empty, |a| &**a);
-			let new_full = new_info
-				.last()
-				.and_then(|info| info.full_state.as_ref())
-				.map_or(&empty, |a| &**a);
-			let added: BTreeSet<_> = new_full.difference(old_full).copied().collect();
-			let removed: BTreeSet<_> = old_full.difference(new_full).copied().collect();
-			(Arc::new(added), Arc::new(removed))
-		} else {
-			let new_info = self
-				.services
-				.state_compressor
-				.load_shortstatehash_info(current_shortstatehash)
-				.await
-				.unwrap_or_default();
-			let new_full = new_info
-				.last()
-				.and_then(|info| info.full_state.as_ref())
-				.cloned()
-				.unwrap_or_default();
-			(new_full, Arc::new(BTreeSet::new()))
-		};
+		let (total_added, total_removed) = self
+			.services
+			.state_compressor
+			.diff_full_state(original_room_shortstatehash.unwrap_or(0), current_shortstatehash)
+			.await;
 
-		// Now we must update the room's global state to match the final calculated
-		// state
+		// Now update the room's global state to match final calculated state
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 		self.services
 			.state
