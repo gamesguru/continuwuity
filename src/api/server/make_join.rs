@@ -1,7 +1,7 @@
 use std::borrow::ToOwned;
 
 use axum::extract::State;
-use conduwuit::{Err, Error, Result, debug, debug_info, warn};
+use conduwuit::{Err, Error, Result, debug, debug_info, info, warn};
 use conduwuit_service::Services;
 use futures::StreamExt;
 use ruma::{
@@ -91,6 +91,9 @@ pub(crate) async fn create_join_event_template_route(
 			return Err!(Request(Forbidden("Antispam rejected join request.")));
 		}
 	}
+
+	info!("Dropping state lock for room {}", body.room_id);
+	drop(state_lock);
 
 	let event = super::utils::build_membership_template_pdu(
 		&services,

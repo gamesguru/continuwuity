@@ -11,7 +11,7 @@ mod unban;
 use std::net::IpAddr;
 
 use axum::extract::State;
-use conduwuit::{Err, Result, utils::stream::IterStream, warn};
+use conduwuit::{Err, Result, utils::stream::IterStream, info, warn};
 use futures::{FutureExt, StreamExt};
 use ruma::{
 	CanonicalJsonObject, OwnedRoomId, OwnedServerName, RoomId, RoomVersionId, ServerName, UserId,
@@ -286,11 +286,12 @@ pub(crate) async fn fetch_join_knock_servers(
 			}
 		}
 
+		addl_servers.sort_unstable();
+		addl_servers.dedup();
+		conduwuit::utils::shuffle(&mut addl_servers);
 		servers.append(&mut addl_servers);
 	}
 
-	servers.sort_unstable();
-	servers.dedup();
-	conduwuit::utils::shuffle(&mut servers);
+	info!("Built list of servers for join/knock: {:?}", servers);
 	servers
 }
