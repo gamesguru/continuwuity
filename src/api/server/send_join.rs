@@ -13,11 +13,14 @@ use conduwuit::{
 use conduwuit_service::Services;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use ruma::{
-	CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName,
+	CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName, UserId,
 	api::federation::membership::create_join_event,
 	events::{
 		StateEventType,
-		room::member::{MembershipState, RoomMemberEventContent},
+		room::{
+			join_rules::JoinRule,
+			member::{MembershipState, RoomMemberEventContent},
+		},
 	},
 };
 use serde_json::value::{RawValue as RawJsonValue, to_raw_value};
@@ -203,6 +206,12 @@ async fn create_join_event(
 			.map_err(|e| {
 				err!(Request(InvalidParam(warn!("Failed to sign send_join event: {e}"))))
 			})?;
+	} else {
+		// Guard for restricted/knock_restricted rooms: when the join event
+		// lacks join_authorized_via_users_server the user must be invited or
+		// already joined.  Without this, handle_incoming_pdu would soft-fail
+		// the event but send_join would still return success.
+		guard_restricted_join_without_auth(services, &state_key, room_id).await?;
 	}
 
 	let mutex_lock = services
@@ -409,4 +418,40 @@ pub(crate) async fn create_join_event_v2_route(
 	);
 
 	Ok(create_join_event::v2::Response { room_state })
+}
+
+/// Reject a join to a restricted/knock_restricted room when the event lacks
+/// `join_authorized_via_users_server` and the user is neither invited nor
+/// already joined.
+async fn guard_restricted_join_without_auth(
+	services: &Services,
+	joining_user: &UserId,
+	room_id: &RoomId,
+) -> Result<()> {
+	let join_rules = services.rooms.state_accessor.get_join_rules(room_id).await;
+
+	if !matches!(join_rules, JoinRule::Restricted(_) | JoinRule::KnockRestricted(_)) {
+		return Ok(());
+	}
+
+	let is_invited = services
+		.rooms
+		.state_cache
+		.is_invited(joining_user, room_id)
+		.await;
+
+	let is_joined = services
+		.rooms
+		.state_cache
+		.is_joined(joining_user, room_id)
+		.await;
+
+	if !is_invited && !is_joined {
+		return Err!(Request(Forbidden(
+			"Restricted room requires join_authorized_via_users_server, an invite, or existing \
+			 membership."
+		)));
+	}
+
+	Ok(())
 }
