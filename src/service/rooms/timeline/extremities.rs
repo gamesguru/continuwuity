@@ -1,4 +1,12 @@
+use std::collections::{HashMap, HashSet};
+
+use conduwuit_core::{Result, info, warn};
+use futures::StreamExt;
+use roaring::RoaringBitmap;
 use ruma::{EventId, OwnedEventId};
+
+use super::Service;
+use crate::rooms::short::ShortEventId;
 
 /// Detect stored extremities that are provably broken: they appear in the
 /// window graph AND have children there (meaning they shouldn't be tips).
@@ -10,19 +18,15 @@ use ruma::{EventId, OwnedEventId};
 /// - Stored extremities outside the tail window (unverifiable)
 /// - MAX_FORWARD_EXTREMITIES capping (stored set is a subset of true tips)
 pub fn detect_phantom_extremities<S1, S2, S3>(
-	graph: &std::collections::HashMap<
-		OwnedEventId,
-		std::collections::HashSet<OwnedEventId, S2>,
-		S1,
-	>,
-	stored_extremities: &std::collections::HashSet<OwnedEventId, S3>,
+	graph: &HashMap<OwnedEventId, HashSet<OwnedEventId, S2>, S1>,
+	stored_extremities: &HashSet<OwnedEventId, S3>,
 ) -> Vec<OwnedEventId>
 where
 	S1: std::hash::BuildHasher,
 	S2: std::hash::BuildHasher,
 	S3: std::hash::BuildHasher,
 {
-	let has_children: std::collections::HashSet<&OwnedEventId> =
+	let has_children: HashSet<&OwnedEventId> =
 		graph.values().flat_map(|parents| parents.iter()).collect();
 
 	stored_extremities
@@ -37,19 +41,14 @@ where
 ///
 /// Falls back to the last element in `sorted` if the entire graph is cyclic.
 pub fn calculate_true_extremities<'a, S1, S2>(
-	graph: &std::collections::HashMap<
-		OwnedEventId,
-		std::collections::HashSet<OwnedEventId, S2>,
-		S1,
-	>,
+	graph: &HashMap<OwnedEventId, HashSet<OwnedEventId, S2>, S1>,
 	sorted: &'a [OwnedEventId],
 ) -> Vec<&'a EventId>
 where
 	S1: std::hash::BuildHasher,
 	S2: std::hash::BuildHasher,
 {
-	let mut has_children: std::collections::HashSet<OwnedEventId> =
-		std::collections::HashSet::new();
+	let mut has_children: HashSet<OwnedEventId> = HashSet::new();
 	for parents in graph.values() {
 		for parent in parents {
 			has_children.insert(parent.clone());
@@ -75,10 +74,10 @@ where
 /// removing phantom tips that have been proven stale.
 pub fn merge_true_extremities<S: ::std::hash::BuildHasher>(
 	true_extremities: Vec<&EventId>,
-	current_set: &std::collections::HashSet<OwnedEventId, S>,
+	current_set: &HashSet<OwnedEventId, S>,
 	phantom_tips: &[OwnedEventId],
-) -> std::collections::HashSet<OwnedEventId> {
-	let mut true_extremities_set: std::collections::HashSet<OwnedEventId> = true_extremities
+) -> HashSet<OwnedEventId> {
+	let mut true_extremities_set: HashSet<OwnedEventId> = true_extremities
 		.into_iter()
 		.map(ToOwned::to_owned)
 		.collect();
@@ -96,10 +95,10 @@ pub fn merge_true_extremities<S: ::std::hash::BuildHasher>(
 
 #[must_use]
 pub fn detect_phantom_extremities_roaring(
-	graph: &[roaring::RoaringBitmap],
-	stored_extremities: &roaring::RoaringBitmap,
-) -> roaring::RoaringBitmap {
-	let mut has_children = roaring::RoaringBitmap::new();
+	graph: &[RoaringBitmap],
+	stored_extremities: &RoaringBitmap,
+) -> RoaringBitmap {
+	let mut has_children = RoaringBitmap::new();
 	for parents in graph {
 		has_children |= parents;
 	}
@@ -109,15 +108,15 @@ pub fn detect_phantom_extremities_roaring(
 
 #[must_use]
 pub fn calculate_true_extremities_roaring(
-	graph: &[roaring::RoaringBitmap],
+	graph: &[RoaringBitmap],
 	sorted: &[u32],
-) -> roaring::RoaringBitmap {
-	let mut has_children = roaring::RoaringBitmap::new();
+) -> RoaringBitmap {
+	let mut has_children = RoaringBitmap::new();
 	for parents in graph {
 		has_children |= parents;
 	}
 
-	let mut true_extremities = roaring::RoaringBitmap::new();
+	let mut true_extremities = RoaringBitmap::new();
 	for &id in sorted {
 		if !has_children.contains(id) {
 			true_extremities.insert(id);
@@ -135,15 +134,196 @@ pub fn calculate_true_extremities_roaring(
 
 #[must_use]
 pub fn merge_true_extremities_roaring(
-	true_extremities: &roaring::RoaringBitmap,
-	current_set: &roaring::RoaringBitmap,
-	phantom_tips: &roaring::RoaringBitmap,
-) -> roaring::RoaringBitmap {
+	true_extremities: &RoaringBitmap,
+	current_set: &RoaringBitmap,
+	phantom_tips: &RoaringBitmap,
+) -> RoaringBitmap {
 	let mut true_extremities_set = true_extremities.clone();
-	let valid_current =
-		<&roaring::RoaringBitmap as std::ops::Sub>::sub(current_set, phantom_tips);
+	let valid_current = <&RoaringBitmap as std::ops::Sub>::sub(current_set, phantom_tips);
 	true_extremities_set |= valid_current;
 	true_extremities_set
+}
+
+impl Service {
+	/// Prune fork storms down to operationally relevant tips using tail-based
+	/// recalculation. This is a convenience wrapper around
+	/// `recalculate_extremities` with standardized logging.
+	pub async fn prune_extremities(&self, room_id: &ruma::RoomId, tail: usize) {
+		match self.recalculate_extremities(room_id, tail, true).await {
+			| Ok((true, tips)) => info!(
+				%room_id, tail, tips,
+				"pruned extremities via tail-based recalculation"
+			),
+			| Ok((false, tips)) => info!(
+				%room_id, tail, tips,
+				"extremities already consistent after recalculation"
+			),
+			| Err(e) => warn!(
+				%room_id, tail,
+				"failed to prune extremities: {e}"
+			),
+		}
+	}
+
+	/// Automatically recalculates the true topological DAG forward extremities
+	/// by querying the last `tail` events from the room's timeline and
+	/// analyzing their `prev_events` graph to find all nodes with out-degree
+	/// 0. Optionally overwrites the stored forward extremities if `update_db`
+	///    is true.
+	/// Returns true if the extremities were changed (or would be changed).
+	#[tracing::instrument(skip(self), level = "info")]
+	pub async fn recalculate_extremities(
+		&self,
+		room_id: &ruma::RoomId,
+		tail: usize,
+		update_db: bool,
+	) -> Result<(bool, usize)> {
+		let state_lock = self.services.state.mutex.lock(room_id).await;
+
+		let capacity = if tail == usize::MAX { 0 } else { tail };
+		let mut eids = Vec::with_capacity(capacity);
+
+		let mut stream = std::pin::pin!(self.db.room_event_ids_rev(room_id, None));
+		while let Some(Ok(eid)) = stream.next().await {
+			eids.push(eid);
+			if eids.len() >= tail {
+				break;
+			}
+		}
+
+		// room_event_ids_rev returns newest first. We need oldest for true_extremities
+		eids.reverse();
+
+		let mut short_ids: Vec<ShortEventId> = Vec::with_capacity(eids.len());
+		for eid in &eids {
+			let short = self.services.short.get_shorteventid(eid).await?;
+			short_ids.push(short);
+		}
+
+		let mut ts_map = HashMap::with_capacity(eids.len());
+		let mut id_map: HashMap<ShortEventId, u32> = HashMap::with_capacity(eids.len());
+		let mut reverse_id_map: Vec<ShortEventId> = Vec::with_capacity(eids.len());
+
+		let get_or_insert_id = |short: ShortEventId,
+		                        id_map: &mut HashMap<ShortEventId, u32>,
+		                        reverse_id_map: &mut Vec<ShortEventId>|
+		 -> u32 {
+			if let Some(&id) = id_map.get(&short) {
+				id
+			} else {
+				let id = u32::try_from(reverse_id_map.len()).unwrap_or(0);
+				id_map.insert(short, id);
+				reverse_id_map.push(short);
+				id
+			}
+		};
+
+		let mut graph: Vec<RoaringBitmap> = Vec::with_capacity(eids.len());
+		let mut sorted: Vec<u32> = Vec::with_capacity(eids.len());
+
+		for short in &short_ids {
+			let id = get_or_insert_id(*short, &mut id_map, &mut reverse_id_map);
+			let id_usize = usize::try_from(id).expect("u32 fits in usize");
+
+			if id_usize >= graph.len() {
+				graph.resize(id_usize.saturating_add(1), RoaringBitmap::new());
+			}
+
+			let mut prev_bitmap = RoaringBitmap::new();
+			let prev_shorts = self
+				.db
+				.get_shortprevevents(*short)
+				.await
+				.unwrap_or_default();
+			for prev_short in prev_shorts {
+				prev_bitmap.insert(get_or_insert_id(
+					prev_short,
+					&mut id_map,
+					&mut reverse_id_map,
+				));
+			}
+			graph[id_usize] = prev_bitmap;
+			sorted.push(id);
+		}
+
+		// Calculate true extremities via roaring bitmap intersections
+		let true_extremities_bm = calculate_true_extremities_roaring(&graph, &sorted);
+
+		let current_extremities = self.services.state.get_forward_extremities(room_id);
+		let current_set: HashSet<_> = current_extremities.collect().await;
+
+		let mut current_bm = RoaringBitmap::new();
+		for eid in &current_set {
+			if let Ok(short) = self.services.short.get_shorteventid(eid).await {
+				if let Some(&id) = id_map.get(&short) {
+					current_bm.insert(id);
+				}
+			}
+		}
+
+		let phantom_tips_bm = detect_phantom_extremities_roaring(&graph, &current_bm);
+		let merged_extremities_bm =
+			merge_true_extremities_roaring(&true_extremities_bm, &current_bm, &phantom_tips_bm);
+
+		let mut true_extremities_set: HashSet<OwnedEventId> = HashSet::with_capacity(
+			usize::try_from(merged_extremities_bm.len()).unwrap_or(usize::MAX),
+		);
+		for id in merged_extremities_bm {
+			let short = reverse_id_map[usize::try_from(id).expect("u32 fits in usize")];
+			if let Ok(eid) = self.services.short.get_eventid_from_short(short).await {
+				true_extremities_set.insert(eid);
+			}
+		}
+
+		// Add current extremities that were outside the graph window
+		for eid in &current_set {
+			if let Ok(short) = self.services.short.get_shorteventid(eid).await {
+				if !id_map.contains_key(&short) {
+					true_extremities_set.insert(eid.clone());
+				}
+			} else {
+				// If we can't even get its shorteventid, still preserve it just in case
+				true_extremities_set.insert(eid.clone());
+			}
+		}
+
+		// Ensure we have timestamps for all tips we intend to keep
+		for eid in &true_extremities_set {
+			if !ts_map.contains_key(eid) {
+				if let Ok(ts) = self.db.get_origin_server_ts(eid).await {
+					ts_map.insert(eid.to_owned(), ts);
+				}
+			}
+		}
+
+		let mut final_extremities: Vec<OwnedEventId> = true_extremities_set.into_iter().collect();
+
+		final_extremities.sort_by_key(|eid| {
+			ts_map
+				.get(eid)
+				.copied()
+				.unwrap_or_else(|| ruma::MilliSecondsSinceUnixEpoch(0_u32.into()))
+		});
+
+		let num_true_extremities = final_extremities.len();
+
+		// If the finalized extremities perfectly match the current DB, we skip
+		let final_set: HashSet<_> = final_extremities.iter().cloned().collect();
+		if final_set == current_set {
+			return Ok((false, num_true_extremities));
+		}
+
+		if update_db {
+			// STRICT OVERWRITE: Erases phantom tips that fell out of the window.
+			// set_forward_extremities enforces MAX_FORWARD_EXTREMITIES cap.
+			self.services
+				.state
+				.set_forward_extremities(room_id, final_extremities.into_iter(), &state_lock)
+				.await;
+		}
+
+		Ok((true, num_true_extremities))
+	}
 }
 
 #[cfg(test)]
