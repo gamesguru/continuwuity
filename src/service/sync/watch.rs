@@ -1,10 +1,13 @@
-use conduwuit::{Result, implement, trace};
+use conduwuit::{implement, trace};
 use futures::{FutureExt, StreamExt, pin_mut, stream::FuturesUnordered};
 use ruma::{DeviceId, UserId};
 
 #[implement(super::Service)]
-#[tracing::instrument(skip(self), level = "debug")]
-pub async fn watch(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
+pub async fn setup_watch<'a>(
+	&'a self,
+	user_id: &'a UserId,
+	device_id: &'a DeviceId,
+) -> impl Future<Output = ()> + Send + 'a {
 	let userid_bytes = user_id.as_bytes().to_vec();
 	let mut userid_prefix = userid_bytes.clone();
 	userid_prefix.push(0xFF);
@@ -99,14 +102,14 @@ pub async fn watch(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
 	// Server shutdown
 	futures.push(self.services.server.until_shutdown().boxed());
 
-	if !self.services.server.running() {
-		return Ok(());
+	async move {
+		if !self.services.server.running() {
+			return;
+		}
+
+		// Wait until one of them finds something
+		trace!(futures = futures.len(), "watch started");
+		futures.next().await;
+		trace!(futures = futures.len(), "watch finished");
 	}
-
-	// Wait until one of them finds something
-	trace!(futures = futures.len(), "watch started");
-	futures.next().await;
-	trace!(futures = futures.len(), "watch finished");
-
-	Ok(())
 }
