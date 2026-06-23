@@ -284,9 +284,29 @@ pub(crate) async fn add_membership_to_unsigned(
 					>(prev_content_val.clone())
 					{
 						prev_membership = prev_content.membership;
+					} else {
+						conduwuit::error!(
+							"DEBUG_MEMBERSHIP: Failed to parse prev_content: {}",
+							prev_content_val
+						);
 					}
+				} else {
+					conduwuit::error!(
+						"DEBUG_MEMBERSHIP: No prev_content in unsigned_map: {:?}",
+						unsigned_map
+					);
 				}
+			} else {
+				conduwuit::error!(
+					"DEBUG_MEMBERSHIP: Failed to parse unsigned_raw: {}",
+					unsigned_raw.get()
+				);
 			}
+		} else {
+			conduwuit::error!(
+				"DEBUG_MEMBERSHIP: pdu.unsigned is None for event: {}",
+				pdu.event_id()
+			);
 		}
 
 		prev_membership

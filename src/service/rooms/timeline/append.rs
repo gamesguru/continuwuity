@@ -134,36 +134,54 @@ where
 			.pdu_shortstatehash(pdu.event_id())
 			.await
 		{
-			if let Ok(prev_state) = self
+			match self
 				.services
 				.state_accessor
 				.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
 				.await
 			{
-				let prev_content_value = prev_state.get_content_as_value();
-				let curr_content_value = pdu.get_content_as_value();
+				| Ok(prev_state) => {
+					let prev_content_value = prev_state.get_content_as_value();
+					let curr_content_value = pdu.get_content_as_value();
 
-				// Log no-op membership transitions (identical content)
-				if pdu.kind() == &TimelineEventType::RoomMember
-					&& prev_content_value == curr_content_value
-				{
-					info!(
-						event_id = %pdu.event_id(),
-						sender = %pdu.sender(),
-						state_key = %state_key,
-						prev_event_id = %prev_state.event_id(),
-						room_id = %room_id,
-						"no-op membership event: content identical to prev_content \
-						 (possible stale state lookup during DAG fork)",
+					// Log no-op membership transitions (identical content)
+					if pdu.kind() == &TimelineEventType::RoomMember
+						&& prev_content_value == curr_content_value
+					{
+						info!(
+							event_id = %pdu.event_id(),
+							sender = %pdu.sender(),
+							state_key = %state_key,
+							prev_event_id = %prev_state.event_id(),
+							room_id = %room_id,
+							"no-op membership event: content identical to prev_content \
+							 (possible stale state lookup during DAG fork)",
+						);
+					}
+
+					if let Err(e) = crate::rooms::timeline::update_unsigned_prev_content(
+						&mut pdu_json,
+						&prev_state,
+					) {
+						error!(%room_id, event_id = %pdu.event_id(), "Failed to update unsigned.prev_content: {e}");
+					} else {
+						conduwuit::error!(
+							"DEBUG_MEMBERSHIP: Successfully called update_unsigned_prev_content \
+							 for {}",
+							pdu.event_id()
+						);
+					}
+				},
+				| Err(e) => {
+					conduwuit::error!(
+						"DEBUG_MEMBERSHIP: state_get failed for event {} with shortstatehash {} \
+						 and state_key {}: {}",
+						pdu.event_id(),
+						shortstatehash,
+						state_key,
+						e
 					);
-				}
-
-				if let Err(e) = crate::rooms::timeline::update_unsigned_prev_content(
-					&mut pdu_json,
-					&prev_state,
-				) {
-					error!(%room_id, event_id = %pdu.event_id(), "Failed to update unsigned.prev_content: {e}");
-				}
+				},
 			}
 		}
 	}
