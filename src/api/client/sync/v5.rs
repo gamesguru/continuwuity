@@ -78,8 +78,7 @@ pub(crate) async fn sync_events_v5_route(
 	let mut body = body.body;
 
 	// Setup watchers, so if there's no response, we can wait for them
-	// Setup watchers, so if there's no response, we can wait for them
-	let watcher = services.sync.watch(sender_user, sender_device);
+	let watcher = services.sync.setup_watch(sender_user, sender_device).await;
 
 	let conn_id = body.conn_id.clone();
 
@@ -107,9 +106,6 @@ pub(crate) async fn sync_events_v5_route(
 		.sync
 		.update_snake_sync_request_with_cache(&snake_key, &mut body);
 
-	let default = Duration::from_secs(30);
-	let duration = cmp::min(body.timeout.unwrap_or(default), default);
-
 	let mut response = build_sync_events_v5(
 		services,
 		sender_user,
@@ -130,21 +126,24 @@ pub(crate) async fn sync_events_v5_route(
 		.clone()
 		.is_none_or(|to| to.events.is_empty())
 	{
-		// Hang a few seconds so requests are not spammed
-		// Stop hanging if new info arrives
-		_ = tokio::time::timeout(duration, watcher).await;
+		// Hang until new info arrives, or the client's timeout expires
+		if let Some(timeout) = body.timeout {
+			if timeout > Duration::from_secs(0) {
+				_ = tokio::time::timeout(timeout, watcher).await;
 
-		// Rebuild the response after waking up to avoid returning advanced tokens
-		// without their associated events.
-		response = build_sync_events_v5(
-			services,
-			sender_user,
-			sender_device,
-			globalsince,
-			&body,
-			&known_rooms,
-		)
-		.await?;
+				// Rebuild the response after waking up to avoid returning advanced tokens
+				// without their associated events.
+				response = build_sync_events_v5(
+					services,
+					sender_user,
+					sender_device,
+					globalsince,
+					&body,
+					&known_rooms,
+				)
+				.await?;
+			}
+		}
 	}
 
 	trace!(

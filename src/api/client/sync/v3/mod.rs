@@ -211,7 +211,7 @@ pub(crate) async fn sync_events_route(
 		.await;
 
 	// Setup watchers, so if there's no response, we can wait for them
-	let watcher = services.sync.watch(sender_user, sender_device);
+	let watcher = services.sync.setup_watch(sender_user, sender_device).await;
 
 	let mut use_state_after = false;
 	if let Some(q) = raw_query.as_deref() {
@@ -240,14 +240,17 @@ pub(crate) async fn sync_events_route(
 		return Ok(axum::Json(response).into_response());
 	}
 
-	// Hang a few seconds so requests are not spammed
-	// Stop hanging if new info arrives
-	let default = Duration::from_secs(30);
-	let duration = cmp::min(body.body.timeout.unwrap_or(default), default);
-	_ = tokio::time::timeout(duration, watcher).await;
+	// Hang until new info arrives, or the client's timeout expires
+	if let Some(timeout) = body.body.timeout {
+		if timeout > Duration::from_secs(0) {
+			_ = tokio::time::timeout(timeout, watcher).await;
+			// Retry returning data
+			let response = build_sync_events(&services, &body, use_state_after).await?;
+			log_time(&response);
+			return Ok(axum::Json(response).into_response());
+		}
+	}
 
-	// Retry returning data
-	let response = build_sync_events(&services, &body, use_state_after).await?;
 	log_time(&response);
 	Ok(axum::Json(response).into_response())
 }
