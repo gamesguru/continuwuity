@@ -104,7 +104,9 @@ async fn drop_sync_tokens(db: &conduwuit_database::Database) {
 	if let Err(e) = db.db.drop_cf("roomsynctoken_shortstatehash") {
 		conduwuit_core::warn!("Failed to drop sync tokens column family: {e}");
 	}
-	conduwuit_core::info!("Finished dropping all sync tokens (requires restart to recreate the empty table).");
+	conduwuit_core::info!(
+		"Finished dropping all sync tokens (requires restart to recreate the empty table)."
+	);
 }
 
 /// Operate the server normally in release-mode static builds. This will start,
