@@ -10,6 +10,7 @@ pub(super) async fn reorder_timeline(
 	room_id: Option<OwnedRoomId>,
 	all: bool,
 	no_compute_state: bool,
+	force_reindex: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
@@ -26,12 +27,11 @@ pub(super) async fn reorder_timeline(
 
 		let mut count = 0_usize;
 		for room_id in room_ids {
-			if Box::pin(
-				self.services
-					.rooms
-					.timeline
-					.reorder_timeline(&room_id, no_compute_state),
-			)
+			if Box::pin(self.services.rooms.timeline.reorder_timeline(
+				&room_id,
+				no_compute_state,
+				force_reindex,
+			))
 			.await
 			.is_ok()
 			{
@@ -49,12 +49,11 @@ pub(super) async fn reorder_timeline(
 	self.write_str(&format!("Reordering timeline for {room_id} by topological DAG order..."))
 		.await?;
 
-	let count = Box::pin(
-		self.services
-			.rooms
-			.timeline
-			.reorder_timeline(&room_id, no_compute_state),
-	)
+	let count = Box::pin(self.services.rooms.timeline.reorder_timeline(
+		&room_id,
+		no_compute_state,
+		force_reindex,
+	))
 	.await?;
 
 	self.write_str(&format!(

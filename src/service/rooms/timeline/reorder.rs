@@ -33,9 +33,15 @@ impl Service {
 		&self,
 		room_id: &RoomId,
 		no_compute_state: bool,
+		force_reindex: bool,
 	) -> Result<usize> {
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let state_lock = self.services.state.mutex.lock(room_id).await;
+		let _insert_lock = if force_reindex {
+			Some(self.mutex_insert.lock(room_id).await)
+		} else {
+			None
+		};
 
 		// Collect all PDUs from the timeline.
 		// We need (PduCount, origin_server_ts) per event — the PduCount is the
@@ -92,15 +98,39 @@ impl Service {
 			);
 		}
 
-		// Rebuild topological index only -- stream order is immutable.
+		// Rebuild topological index
 		let count = sorted.len();
 		let reindex_start = std::time::Instant::now();
 		debug!("reorder_timeline: rebuilding topological index for {count} events...");
 
+		let mut available_counts: Vec<PduCount> = Vec::new();
+		if force_reindex {
+			available_counts = entries.values().map(|(c, _)| *c).collect();
+			available_counts.sort();
+
+			// Remove all existing stream/topo indices to prevent key collisions during
+			// permutation
+			let remove_cork = Some(self.db.db.cork());
+			for (event_id, &(old_count, _)) in &entries {
+				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
+				self.db
+					.remove_stream_and_topo_pducount(&old_pdu_id, event_id.as_bytes());
+			}
+			drop(remove_cork);
+			debug!("reorder_timeline: purged old stream/topo keys for {} events", entries.len());
+		}
+
 		if !no_compute_state {
 			// Full mode: rebuild topo index + recompute state snapshots
 			let final_ssh = self
-				.rebuild_topo_index_with_state(room_id, shortroomid, &sorted, &entries)
+				.rebuild_topo_index_with_state(
+					room_id,
+					shortroomid,
+					&sorted,
+					&entries,
+					force_reindex,
+					&available_counts,
+				)
 				.await;
 			debug!("reorder_timeline: topo rebuild+state took {:?}", reindex_start.elapsed());
 
@@ -117,14 +147,25 @@ impl Service {
 			let mut cork = Some(self.db.db.cork());
 			for (i, event_id) in sorted.iter().enumerate() {
 				let &(existing_count, _) = entries.get(event_id).expect("in sorted list");
-				let pdu_id: RawPduId = PduId {
-					shortroomid,
-					shorteventid: existing_count,
-				}
-				.into();
+				let new_count = if force_reindex {
+					available_counts[i]
+				} else {
+					existing_count
+				};
+				let pdu_id: RawPduId = PduId { shortroomid, shorteventid: new_count }.into();
 
 				let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
-				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+
+				if force_reindex {
+					self.db.replace_stream_and_topo_pducount(
+						&pdu_id,
+						event_id,
+						local_topo_depth,
+						new_count,
+					);
+				} else {
+					self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+				}
 
 				if i.saturating_add(1).is_multiple_of(10000) {
 					drop(cork.take());
@@ -232,6 +273,8 @@ impl Service {
 		shortroomid: ShortRoomId,
 		sorted: &[OwnedEventId],
 		entries: &HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
+		force_reindex: bool,
+		available_counts: &[PduCount],
 	) -> Option<u64> {
 		let count = sorted.len();
 
@@ -261,11 +304,12 @@ impl Service {
 			let Some(&(existing_count, _)) = entries.get(event_id) else {
 				continue;
 			};
-			let pdu_id: RawPduId = PduId {
-				shortroomid,
-				shorteventid: existing_count,
-			}
-			.into();
+			let new_count = if force_reindex {
+				available_counts[i]
+			} else {
+				existing_count
+			};
+			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: new_count }.into();
 
 			let (pdu, mut json) = match self.db.get_from_eventid_pdu(event_id).await {
 				| Ok(res) => res,
@@ -286,7 +330,16 @@ impl Service {
 			let local_topo_depth = u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1);
 
 			// Rebuild topo index entry with new depth
-			self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+			if force_reindex {
+				self.db.replace_stream_and_topo_pducount(
+					&pdu_id,
+					event_id,
+					local_topo_depth,
+					new_count,
+				);
+			} else {
+				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+			}
 
 			// State computation — uses existing pdu_id (unchanged stream order)
 			if let Some(mut ssh) = current_shortstatehash {

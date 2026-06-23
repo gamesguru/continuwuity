@@ -236,6 +236,31 @@ impl Data {
 		}
 	}
 
+	pub(super) fn remove_stream_and_topo_pducount(
+		&self,
+		pdu_id: &RawPduId,
+		event_id_bytes: &[u8],
+	) {
+		self.room_pducount_eventid.remove(pdu_id);
+		self.remove_topo_pducount(pdu_id, event_id_bytes);
+	}
+
+	pub(super) fn replace_stream_and_topo_pducount(
+		&self,
+		pdu_id: &RawPduId,
+		event_id: &EventId,
+		local_topo_depth: u64,
+		pdu_count: PduCount,
+	) {
+		self.room_pducount_eventid
+			.insert(pdu_id, event_id.as_bytes());
+		self.eventid_pduid.insert(event_id.as_bytes(), pdu_id);
+		self.set_event_metadata_depth_and_count(event_id, local_topo_depth, pdu_count);
+		let topo_key = Self::topo_pducount_key(pdu_id, local_topo_depth);
+		self.roomid_topologicalorder_pducount
+			.insert(&topo_key, event_id.as_bytes());
+	}
+
 	pub(super) async fn remove_from_timeline(&self, event_id: &EventId) {
 		if let Ok(pduid) = self.get_pdu_id(event_id).await {
 			self.eventid_pduid.remove(event_id);
@@ -303,6 +328,24 @@ impl Data {
 		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id.as_bytes()) {
 			if let Ok(mut meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
 				meta.local_topological_depth = depth;
+				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
+					self.eventid_metadata
+						.insert(event_id.as_bytes(), &metadata_bytes);
+				}
+			}
+		}
+	}
+
+	pub(super) fn set_event_metadata_depth_and_count(
+		&self,
+		event_id: &EventId,
+		depth: u64,
+		pdu_count: PduCount,
+	) {
+		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id.as_bytes()) {
+			if let Ok(mut meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+				meta.local_topological_depth = depth;
+				meta.pdu_count = Some(pdu_count.into_unsigned());
 				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
 					self.eventid_metadata
 						.insert(event_id.as_bytes(), &metadata_bytes);

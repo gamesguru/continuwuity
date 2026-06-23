@@ -251,6 +251,15 @@ pub enum YoloCommand {
 		/// Use this if you are going to run `yolo rebuild-state` afterwards.
 		#[arg(long)]
 		no_compute_state: bool,
+
+		/// If set, permanently re-assigns the immutable stream order
+		/// (`PduCount`) to perfectly match the DAG's topological order. This
+		/// destroys the arrival-time ordering but eliminates chronological
+		/// breaks in `/sync` and `get-room-dag`. Clients will skip events or
+		/// see duplicates if they do not clear their cache or initial sync
+		/// afterwards.
+		#[arg(long)]
+		force_reindex: bool,
 	},
 
 	/// Incrementally rebuild the state of the room from the beginning of the
