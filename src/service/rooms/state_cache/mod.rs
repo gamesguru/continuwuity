@@ -691,7 +691,7 @@ pub async fn invite_sender(&self, user_id: &UserId, room_id: &RoomId) -> Result<
 }
 #[cfg(test)]
 mod serde_test3 {
-	use ruma::events::room::member::{MembershipState, RoomMemberEventContent};
+	use ruma::events::room::member::RoomMemberEventContent;
 	#[test]
 	fn test_serde() {
 		let s = r#"{"displayname":"user-2 🏳️‍⚧️","membership":"join"}"#;

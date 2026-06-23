@@ -273,33 +273,18 @@ pub(crate) async fn add_membership_to_unsigned(
 		// caused by the event itself... are included."
 		// For a user's own membership event, the state after the event is just the
 		// event itself.
-		let mut current_membership = ruma::events::room::member::MembershipState::Leave;
-
-		match serde_json::from_str::<ruma::events::room::member::RoomMemberEventContent>(
+		serde_json::from_str::<ruma::events::room::member::RoomMemberEventContent>(
 			pdu.content.get(),
-		) {
-			| Ok(content) => {
-				current_membership = content.membership;
-			},
-			| Err(e) => {
-				conduwuit::error!(
-					"DEBUG_MEMBERSHIP: Failed to parse content for {}: {e}",
-					pdu.event_id()
-				);
-			},
-		}
-
-		current_membership
+		)
+		.map_or(ruma::events::room::member::MembershipState::Leave, |c| c.membership)
+	} else if pdu.kind == TimelineEventType::RoomCreate {
+		ruma::events::room::member::MembershipState::Leave
 	} else {
-		if pdu.kind == TimelineEventType::RoomCreate {
-			ruma::events::room::member::MembershipState::Leave
-		} else {
-			services
-				.rooms
-				.state_accessor
-				.user_membership_at_event(pdu.event_id(), &room_id, user_id)
-				.await
-		}
+		services
+			.rooms
+			.state_accessor
+			.user_membership_at_event(pdu.event_id(), &room_id, user_id)
+			.await
 	};
 
 	pdu.set_membership(membership.as_str()).log_err().ok();

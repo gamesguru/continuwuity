@@ -1907,21 +1907,15 @@ pub fn update_unsigned_prev_content(
 		unsigned.remove("replaces_state");
 
 		let prev_content_value = prev_state.get_content_as_value();
-		conduwuit::error!(
-			"DEBUG_MEMBERSHIP: update_unsigned_prev_content prev_content_value is {:?}",
-			prev_content_value
-		);
 
 		unsigned.insert(
 			"prev_content".to_owned(),
 			ruma::CanonicalJsonValue::Object(
-				conduwuit_core::utils::to_canonical_object(prev_content_value).map_err(
-					|e| {
-						conduwuit::err!(Database(error!(
-							"Failed to convert prev_state to canonical JSON: {e}"
-						)))
-					},
-				)?,
+				conduwuit_core::utils::to_canonical_object(prev_content_value).map_err(|e| {
+					conduwuit::err!(Database(error!(
+						"Failed to convert prev_state to canonical JSON: {e}"
+					)))
+				})?,
 			),
 		);
 		unsigned.insert(
@@ -1931,15 +1925,6 @@ pub fn update_unsigned_prev_content(
 		unsigned.insert(
 			"replaces_state".to_owned(),
 			ruma::CanonicalJsonValue::String(prev_state.event_id().to_string()),
-		);
-		conduwuit::error!(
-			"DEBUG_MEMBERSHIP: update_unsigned_prev_content FINISHED. unsigned is {:?}",
-			unsigned
-		);
-	} else {
-		conduwuit::error!(
-			"DEBUG_MEMBERSHIP: update_unsigned_prev_content SKIPPED because unsigned is not an \
-			 Object"
 		);
 	}
 
