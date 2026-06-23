@@ -142,40 +142,17 @@ impl Data {
 	where
 		I: Iterator<Item = (&'a SendingEvent, &'a Destination)> + Clone + Debug + Send,
 	{
-		let keys: Vec<_> = requests
-			.clone()
-			.map(|(event, dest)| {
-				let mut key = dest.get_prefix();
-				if let SendingEvent::Pdu(value) = event {
-					key.extend(value.as_ref());
-				} else {
-					let count = self.services.globals.next_count().unwrap();
-					key.extend(&count.to_be_bytes());
-				}
-
-				key
-			})
-			.collect();
-
-		self.servernameevent_data.insert_batch(
-			keys.iter()
-				.map(Vec::as_slice)
-				.zip(requests.map(at!(0)))
-				.map(|(key, event)| {
-					let value = if let SendingEvent::Edu(value) = &event {
-						&**value
-					} else {
-						&[]
-					};
-
-					(key, value)
-				}),
-		);
-
-		keys
+		self.queue_requests_impl(requests, &self.servernameevent_data)
 	}
 
 	pub(super) fn queue_reliable_requests<'a, I>(&self, requests: I) -> Vec<Vec<u8>>
+	where
+		I: Iterator<Item = (&'a SendingEvent, &'a Destination)> + Clone + Debug + Send,
+	{
+		self.queue_requests_impl(requests, &self.federation_outbound_to_device)
+	}
+
+	fn queue_requests_impl<'a, I>(&self, requests: I, map: &Map) -> Vec<Vec<u8>>
 	where
 		I: Iterator<Item = (&'a SendingEvent, &'a Destination)> + Clone + Debug + Send,
 	{
@@ -194,7 +171,7 @@ impl Data {
 			})
 			.collect();
 
-		self.federation_outbound_to_device.insert_batch(
+		map.insert_batch(
 			keys.iter()
 				.map(Vec::as_slice)
 				.zip(requests.map(at!(0)))
@@ -215,18 +192,36 @@ impl Data {
 	pub fn queued_requests(
 		&self,
 		destination: &Destination,
-	) -> impl Stream<Item = QueueItem> + Send + '_ + use<'_> {
+	) -> impl Stream<Item = QueueItem> + Send + '_ {
+		Self::queued_requests_impl(destination, &self.servernameevent_data, "servernameevent")
+	}
+
+	pub fn queued_reliable_requests(
+		&self,
+		destination: &Destination,
+	) -> impl Stream<Item = QueueItem> + Send + '_ {
+		Self::queued_requests_impl(
+			destination,
+			&self.federation_outbound_to_device,
+			"federation_outbound_to_device",
+		)
+	}
+
+	fn queued_requests_impl<'a>(
+		destination: &Destination,
+		map: &'a Arc<Map>,
+		map_name: &'static str,
+	) -> impl Stream<Item = QueueItem> + Send + 'a {
 		let prefix = destination.get_prefix();
-		self.servernameevent_data
-			.raw_stream_from(&prefix)
+		map.raw_stream_from(&prefix)
 			.ignore_err()
 			.ready_take_while(move |(key, _)| key.starts_with(&prefix))
-			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+			.ready_filter_map(move |(key, val)| match parse_servercurrentevent(key, val) {
 				| Ok((_, event)) => Some((key.to_vec(), event)),
 				| Err(e) => {
-					self.servernameevent_data.remove(key);
+					map.remove(key);
 					conduwuit::warn!(
-						"Removed corrupted servernameevent key ({} bytes): key_hex={:02x?} \
+						"Removed corrupted {map_name} key ({} bytes): key_hex={:02x?} \
 						 val_len={} err={e}",
 						key.len(),
 						key,
@@ -239,64 +234,32 @@ impl Data {
 
 	#[inline]
 	pub fn queued_request_destinations(&self) -> impl Stream<Item = Destination> + Send + '_ {
-		self.servernameevent_data
-			.raw_stream()
-			.ignore_err()
-			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
-				| Ok((dest, _)) => Some(dest),
-				| Err(e) => {
-					self.servernameevent_data.remove(key);
-					conduwuit::warn!(
-						"Removed corrupted servernameevent key ({} bytes): key_hex={:02x?} \
-						 val_len={} err={e}",
-						key.len(),
-						key,
-						val.len(),
-					);
-					None
-				},
-			})
-	}
-
-	pub fn queued_reliable_requests(
-		&self,
-		destination: &Destination,
-	) -> impl Stream<Item = QueueItem> + Send + '_ + use<'_> {
-		let prefix = destination.get_prefix();
-		self.federation_outbound_to_device
-			.raw_stream_from(&prefix)
-			.ignore_err()
-			.ready_take_while(move |(key, _)| key.starts_with(&prefix))
-			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
-				| Ok((_, event)) => Some((key.to_vec(), event)),
-				| Err(e) => {
-					self.federation_outbound_to_device.remove(key);
-					conduwuit::warn!(
-						"Removed corrupted federation_outbound_to_device key ({} bytes): \
-						 key_hex={:02x?} val_len={} err={e}",
-						key.len(),
-						key,
-						val.len(),
-					);
-					None
-				},
-			})
+		Self::queued_request_destinations_impl(&self.servernameevent_data, "servernameevent")
 	}
 
 	#[inline]
 	pub fn queued_reliable_request_destinations(
 		&self,
 	) -> impl Stream<Item = Destination> + Send + '_ {
-		self.federation_outbound_to_device
-			.raw_stream()
+		Self::queued_request_destinations_impl(
+			&self.federation_outbound_to_device,
+			"federation_outbound_to_device",
+		)
+	}
+
+	fn queued_request_destinations_impl<'a>(
+		map: &'a Arc<Map>,
+		map_name: &'static str,
+	) -> impl Stream<Item = Destination> + Send + 'a {
+		map.raw_stream()
 			.ignore_err()
-			.ready_filter_map(|(key, val)| match parse_servercurrentevent(key, val) {
+			.ready_filter_map(move |(key, val)| match parse_servercurrentevent(key, val) {
 				| Ok((dest, _)) => Some(dest),
 				| Err(e) => {
-					self.federation_outbound_to_device.remove(key);
+					map.remove(key);
 					conduwuit::warn!(
-						"Removed corrupted federation_outbound_to_device key ({} bytes): \
-						 key_hex={:02x?} val_len={} err={e}",
+						"Removed corrupted {map_name} key ({} bytes): key_hex={:02x?} \
+						 val_len={} err={e}",
 						key.len(),
 						key,
 						val.len(),
