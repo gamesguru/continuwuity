@@ -427,13 +427,12 @@ pub async fn backfill_pdu(
 			return Ok(());
 		}
 		// Normal count — demote to Backfilled below (don't skip)
-		debug!(
-			"Demoting {event_id} from Normal to Backfilled (federation /send raced with \
-			 backfill)"
+		info!(
+			target: "timeline_debug",
+			%room_id,
+			"Demoting {event_id} to backfilled: /send raced with /backfill"
 		);
-		self.db
-			.remove_from_timeline(&event_id)
-			.await;
+		self.db.remove_from_timeline(&event_id).await;
 	}
 
 	// Backfill events come from a trusted /backfill response. We only need
