@@ -289,3 +289,63 @@ pub(super) async fn verify_send_membership(
 
 	Ok((event_id, value, content, room_version_id, sender, state_key))
 }
+
+pub(super) async fn build_membership_template_pdu(
+	services: &Services,
+	room_id: &RoomId,
+	user_id: &ruma::UserId,
+	content: ruma::events::room::member::RoomMemberEventContent,
+) -> Result<Box<serde_json::value::RawValue>> {
+	let state_lock = services.rooms.state.mutex.lock(room_id).await;
+
+	let (pdu, _) = services
+		.rooms
+		.timeline
+		.create_event(
+			conduwuit::matrix::pdu::PduBuilder::state(user_id.to_string(), &content),
+			user_id,
+			Some(room_id),
+			&state_lock,
+		)
+		.await?;
+
+	drop(state_lock);
+	let mut pdu_json = conduwuit::utils::to_canonical_object(&pdu)
+		.expect("Barebones PDU should be convertible to canonical JSON");
+	pdu_json.remove("event_id");
+
+	Ok(serde_json::value::to_raw_value(&pdu_json)
+		.expect("CanonicalJson can be serialized to JSON"))
+}
+
+pub(super) async fn handle_and_send_incoming_pdu(
+	services: &Services,
+	origin: &ServerName,
+	room_id: &RoomId,
+	event_id: &EventId,
+	value: ruma::CanonicalJsonObject,
+	room_version_id: Option<&ruma::RoomVersionId>,
+) -> Result<conduwuit_core::pdu::RawPduId> {
+	use futures::FutureExt;
+
+	let mutex_lock = services
+		.rooms
+		.event_handler
+		.mutex_federation
+		.lock(room_id)
+		.await;
+
+	let pdu_id = services
+		.rooms
+		.event_handler
+		.handle_incoming_pdu(origin, room_id, event_id, value, true, room_version_id)
+		.boxed()
+		.await?
+		.ok_or_else(|| err!(Request(InvalidParam("Could not accept as timeline event."))))?;
+
+	drop(mutex_lock);
+
+	services.sending.send_pdu_room(room_id, &pdu_id).await?;
+
+	Ok(pdu_id)
+}

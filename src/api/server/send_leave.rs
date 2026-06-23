@@ -1,9 +1,8 @@
 #![allow(deprecated)]
 
 use axum::extract::State;
-use conduwuit::{Result, err};
+use conduwuit::Result;
 use conduwuit_service::Services;
-use futures::FutureExt;
 use ruma::{
 	RoomId, ServerName, api::federation::membership::create_leave_event,
 	events::room::member::MembershipState,
@@ -52,26 +51,8 @@ async fn create_leave_event(
 		)
 		.await?;
 
-	let mutex_lock = services
-		.rooms
-		.event_handler
-		.mutex_federation
-		.lock(room_id)
-		.await;
+	super::utils::handle_and_send_incoming_pdu(services, origin, room_id, &event_id, value, None)
+		.await?;
 
-	let pdu_id = services
-		.rooms
-		.event_handler
-		.handle_incoming_pdu(origin, room_id, &event_id, value, true, None)
-		.boxed()
-		.await?
-		.ok_or_else(|| err!(Request(InvalidParam("Could not accept as timeline event."))))?;
-
-	drop(mutex_lock);
-
-	services
-		.sending
-		.send_pdu_room(room_id, &pdu_id)
-		.boxed()
-		.await
+	Ok(())
 }

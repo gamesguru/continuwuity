@@ -28,7 +28,7 @@ async fn create_join_event(
 	pdu: &RawJsonValue,
 	omit_members: bool,
 ) -> Result<create_join_event::v2::RoomState> {
-	let (event_id, mut value, content, room_version_id, sender, state_key) =
+	let (event_id, mut value, content, room_version_id, _sender, state_key) =
 		super::utils::verify_send_membership(
 			services,
 			origin,
@@ -99,28 +99,21 @@ async fn create_join_event(
 	} else {
 		// Guard for restricted/knock_restricted rooms: when the join event
 		// lacks join_authorized_via_users_server the user must be invited or
-		// already joined.  Without this, handle_incoming_pdu would soft-fail
+		// already joined.  Without this, handle_and_send_incoming_pdu would soft-fail
 		// the event but send_join would still return success.
 		guard_restricted_join_without_auth(services, &state_key, room_id).await?;
 	}
 
-	let mutex_lock = services
-		.rooms
-		.event_handler
-		.mutex_federation
-		.lock(room_id)
-		.await;
+	let pdu_id = super::utils::handle_and_send_incoming_pdu(
+		services,
+		origin,
+		room_id,
+		&event_id,
+		value.clone(),
+		None,
+	)
+	.await?;
 
-	trace!("Acquired send_join mutex, persisting join event");
-	let pdu_id = services
-		.rooms
-		.event_handler
-		.handle_incoming_pdu(sender.server_name(), room_id, &event_id, value.clone(), true, None)
-		.boxed()
-		.await?
-		.ok_or_else(|| err!(Request(InvalidParam("Could not accept as timeline event."))))?;
-
-	drop(mutex_lock);
 	trace!("Fetching current state IDs");
 	let state_ids: Vec<OwnedEventId> = services
 		.rooms

@@ -1,12 +1,11 @@
 use RoomVersionId::*;
 use axum::extract::State;
-use conduwuit::{Err, Error, Result, debug_warn, matrix::pdu::PduBuilder, utils};
+use conduwuit::{Err, Error, Result, debug_warn};
 use ruma::{
 	RoomVersionId,
 	api::{client::error::ErrorKind, federation::knock::create_knock_event_template},
 	events::room::member::{MembershipState, RoomMemberEventContent},
 };
-use serde_json::value::to_raw_value;
 
 use crate::Ruma;
 
@@ -36,8 +35,6 @@ pub(crate) async fn create_knock_event_template_route(
 		));
 	}
 
-	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
-
 	if let Ok(membership) = services
 		.rooms
 		.state_accessor
@@ -54,27 +51,13 @@ pub(crate) async fn create_knock_event_template_route(
 		}
 	}
 
-	let (pdu, _) = services
-		.rooms
-		.timeline
-		.create_event(
-			PduBuilder::state(
-				body.user_id.to_string(),
-				&RoomMemberEventContent::new(MembershipState::Knock),
-			),
-			&body.user_id,
-			Some(&body.room_id),
-			&state_lock,
-		)
-		.await?;
+	let event = super::utils::build_membership_template_pdu(
+		&services,
+		&body.room_id,
+		&body.user_id,
+		RoomMemberEventContent::new(MembershipState::Knock),
+	)
+	.await?;
 
-	drop(state_lock);
-	let mut pdu_json = utils::to_canonical_object(&pdu)
-		.expect("Barebones PDU should be convertible to canonical JSON");
-	pdu_json.remove("event_id");
-
-	Ok(create_knock_event_template::v1::Response {
-		room_version: room_version_id,
-		event: to_raw_value(&pdu_json).expect("CanonicalJson can be serialized to JSON"),
-	})
+	Ok(create_knock_event_template::v1::Response { room_version: room_version_id, event })
 }

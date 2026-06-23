@@ -1,6 +1,5 @@
 use axum::extract::State;
 use conduwuit::{Err, Result, err, matrix::pdu::PduEvent};
-use futures::FutureExt;
 use ruma::{
 	RoomVersionId::*, api::federation::knock::send_knock, events::room::member::MembershipState,
 	serde::JsonObject,
@@ -37,34 +36,15 @@ pub(crate) async fn create_knock_event_v1_route(
 	let pdu: PduEvent = serde_json::from_value(event.into())
 		.map_err(|e| err!(Request(InvalidParam("Invalid knock event PDU: {e}"))))?;
 
-	let mutex_lock = services
-		.rooms
-		.event_handler
-		.mutex_federation
-		.lock(&body.room_id)
-		.await;
-
-	let pdu_id = services
-		.rooms
-		.event_handler
-		.handle_incoming_pdu(
-			sender.server_name(),
-			&body.room_id,
-			&event_id,
-			value.clone(),
-			true,
-			None,
-		)
-		.boxed()
-		.await?
-		.ok_or_else(|| err!(Request(InvalidParam("Could not accept as timeline event."))))?;
-
-	drop(mutex_lock);
-
-	services
-		.sending
-		.send_pdu_room(&body.room_id, &pdu_id)
-		.await?;
+	super::utils::handle_and_send_incoming_pdu(
+		&services,
+		sender.server_name(),
+		&body.room_id,
+		&event_id,
+		value,
+		None,
+	)
+	.await?;
 
 	let knock_room_state = services
 		.rooms

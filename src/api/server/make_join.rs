@@ -1,7 +1,7 @@
 use std::borrow::ToOwned;
 
 use axum::extract::State;
-use conduwuit::{Err, Error, Result, debug, debug_info, matrix::pdu::PduBuilder, utils, warn};
+use conduwuit::{Err, Error, Result, debug, debug_info, warn};
 use conduwuit_service::Services;
 use futures::StreamExt;
 use ruma::{
@@ -15,7 +15,6 @@ use ruma::{
 		},
 	},
 };
-use serde_json::value::to_raw_value;
 use service::rooms::state::RoomMutexGuard;
 use tokio::join;
 
@@ -93,27 +92,20 @@ pub(crate) async fn create_join_event_template_route(
 		}
 	}
 
-	let (pdu, _) = services
-		.rooms
-		.timeline
-		.create_event(
-			PduBuilder::state(body.user_id.to_string(), &RoomMemberEventContent {
-				join_authorized_via_users_server,
-				..RoomMemberEventContent::new(MembershipState::Join)
-			}),
-			&body.user_id,
-			Some(&body.room_id),
-			&state_lock,
-		)
-		.await?;
-	drop(state_lock);
-	let mut pdu_json = utils::to_canonical_object(&pdu)
-		.expect("Barebones PDU should be convertible to canonical JSON");
-	pdu_json.remove("event_id");
+	let event = super::utils::build_membership_template_pdu(
+		&services,
+		&body.room_id,
+		&body.user_id,
+		RoomMemberEventContent {
+			join_authorized_via_users_server,
+			..RoomMemberEventContent::new(MembershipState::Join)
+		},
+	)
+	.await?;
 
 	Ok(prepare_join_event::v1::Response {
 		room_version: Some(room_version_id),
-		event: to_raw_value(&pdu_json).expect("CanonicalJson can be serialized to JSON"),
+		event,
 	})
 }
 

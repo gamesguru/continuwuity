@@ -215,23 +215,7 @@ impl Service {
 			)
 			.min(max);
 
-		let sender = self
-			.channels
-			.get(self.shard_id(&dest))
-			.expect("channel")
-			.0
-			.clone();
-
-		self.server.runtime().spawn(async move {
-			tokio::time::sleep(Duration::from_secs(delay_secs)).await;
-			sender
-				.send(Msg {
-					dest,
-					event: SendingEvent::Flush,
-					queue_id: Vec::new(),
-				})
-				.ok();
-		});
+		self.reschedule_flush(dest, Duration::from_secs(delay_secs));
 	}
 
 	/// Re-schedule a Flush for the given destination after a delay.
@@ -317,22 +301,7 @@ impl Service {
 		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now()));
 
 		let dest_clone = dest.clone();
-		let sender = self
-			.channels
-			.get(self.shard_id(dest))
-			.expect("channel")
-			.0
-			.clone();
-		self.server.runtime().spawn(async move {
-			tokio::time::sleep(Duration::from_millis(1500)).await;
-			sender
-				.send(Msg {
-					dest: dest_clone,
-					event: SendingEvent::Flush,
-					queue_id: Vec::new(),
-				})
-				.ok();
-		});
+		self.reschedule_flush(dest_clone, Duration::from_millis(1500));
 	}
 
 	#[allow(clippy::needless_pass_by_ref_mut)]
