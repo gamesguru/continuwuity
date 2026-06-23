@@ -1,7 +1,4 @@
-use std::{
-	collections::{HashMap, HashSet},
-	sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use conduwuit_core::{
 	Result, debug, info,
@@ -12,13 +9,10 @@ use conduwuit_core::{
 	warn,
 };
 use futures::{StreamExt, TryStreamExt, pin_mut};
-use ruma::{OwnedEventId, RoomId, events::StateEventType};
+use ruma::{OwnedEventId, RoomId};
 
-use super::{
-	Service, extremities::calculate_true_extremities,
-	repair_unsigned::update_unsigned_prev_content,
-};
-use crate::rooms::{self, short::ShortRoomId};
+use super::{Service, extremities::calculate_true_extremities};
+use crate::rooms::short::ShortRoomId;
 
 impl Service {
 	/// Rebuild the topological index for a room using proper DAG
@@ -188,17 +182,14 @@ impl Service {
 
 		// Rebuild membership cache from the authoritative state snapshot.
 		// This fixes stale/missing entries left by previous DAG fractures.
-		let mut members_synced = 0_usize;
-		let mut state_joined: HashSet<ruma::OwnedUserId> = HashSet::new();
-		let mut state_invited: HashSet<ruma::OwnedUserId> = HashSet::new();
-
-		let mut room_ssh_opt = self
+		// Bootstrap room state if missing (e.g. first reorder after import).
+		if self
 			.services
 			.state
 			.get_room_shortstatehash(room_id)
 			.await
-			.ok();
-		if room_ssh_opt.is_none() {
+			.is_err()
+		{
 			if let Some(latest_eid) = sorted.last() {
 				if let Ok(ssh) = self
 					.services
@@ -213,115 +204,11 @@ impl Service {
 						"reorder_timeline: bootstrapped room state to shortstatehash {ssh} from \
 						 latest event {latest_eid}"
 					);
-					room_ssh_opt = Some(ssh);
 				}
 			}
 		}
 
-		// Single pass over state snapshot — check-before-write avoids
-		// redundant DB writes for users whose cache is already correct.
-		if let Some(room_ssh) = room_ssh_opt {
-			let state_full = self.services.state_accessor.state_full(room_ssh);
-			let mut state_full = std::pin::pin!(state_full);
-			while let Some(((event_type, state_key), pdu)) = state_full.next().await {
-				if event_type != StateEventType::RoomMember {
-					continue;
-				}
-				let Ok(uid) = ruma::OwnedUserId::try_from(state_key.as_str()) else {
-					continue;
-				};
-
-				let content: serde_json::Value = pdu.get_content_as_value();
-				let membership = content
-					.get("membership")
-					.and_then(|v: &serde_json::Value| v.as_str())
-					.unwrap_or("leave");
-
-				match membership {
-					| "join" => {
-						state_joined.insert(uid.clone());
-						if !self.services.state_cache.is_joined(&uid, room_id).await {
-							self.services
-								.state_cache
-								.mark_as_joined_silent(&uid, room_id)
-								.await;
-							members_synced = members_synced.saturating_add(1);
-						}
-					},
-					| "invite" => {
-						state_invited.insert(uid.clone());
-						// mark_as_invited requires sender; skip cache update
-						// for invites here — update_joined_count will
-						// reconcile.
-					},
-					| _ => {
-						if self
-							.services
-							.state_cache
-							.is_invited_or_joined(&uid, room_id)
-							.await
-						{
-							self.services
-								.state_cache
-								.mark_as_left_silent(&uid, room_id)
-								.await;
-							members_synced = members_synced.saturating_add(1);
-						}
-					},
-				}
-			}
-		}
-
-		// Sweep stale joined cache entries
-		let cached_members: Vec<ruma::OwnedUserId> = self
-			.services
-			.state_cache
-			.room_members(room_id)
-			.map(ToOwned::to_owned)
-			.collect()
-			.await;
-
-		let mut stale_removed = 0_usize;
-		for user_id in &cached_members {
-			// Symmetric guard: only purge if they are neither joined NOR invited.
-			if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
-				self.services
-					.state_cache
-					.mark_as_left_silent(user_id, room_id)
-					.await;
-				stale_removed = stale_removed.saturating_add(1);
-			}
-		}
-
-		// Sweep stale invited cache entries
-		let cached_invited: Vec<ruma::OwnedUserId> = self
-			.services
-			.state_cache
-			.room_members_invited(room_id)
-			.map(ToOwned::to_owned)
-			.collect()
-			.await;
-
-		for user_id in &cached_invited {
-			// Only purge if they are neither invited NOR joined.
-			// If they transitioned to joined, mark_as_left would accidentally nuke their
-			// valid join.
-			if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
-				self.services
-					.state_cache
-					.mark_as_left_silent(user_id, room_id)
-					.await;
-				stale_removed = stale_removed.saturating_add(1);
-			}
-		}
-
-		let sync_start = std::time::Instant::now();
-		self.services.state_cache.update_joined_count(room_id).await;
-		info!(
-			"reorder_timeline: synced {members_synced} membership cache entries, removed \
-			 {stale_removed} stale"
-		);
-		debug!("reorder_timeline: sweep cache took {:?}", sync_start.elapsed());
+		self.rebuild_membership_cache(room_id, &state_lock).await;
 
 		drop(state_lock);
 
@@ -399,87 +286,17 @@ impl Service {
 			self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 
 			// State computation — uses existing pdu_id (unchanged stream order)
-			let mut json_modified = false;
 			if let Some(mut ssh) = current_shortstatehash {
-				let shorteventid = self
-					.services
-					.short
-					.get_or_create_shorteventid(&pdu.event_id)
+				// Snapshot the JSON before state computation to detect changes
+				let json_before = json.clone();
+				self.compute_state_for_event(&pdu, event_id, &mut json, &mut ssh, &pdu_id)
 					.await;
-				self.services
-					.state
-					.set_pdu_shortstatehash(shorteventid, ssh);
-
-				if let Some(state_key) = &pdu.state_key {
-					// Repair unsigned.prev_content for historical/backfilled events while we have
-					// the state snapshot!
-					if ssh != 0 {
-						if let Ok(prev_state) = self
-							.services
-							.state_accessor
-							.state_get(ssh, &pdu.kind.to_string().into(), state_key)
-							.await
-						{
-							if update_unsigned_prev_content(&mut json, &prev_state).is_ok() {
-								json_modified = true;
-							}
-						}
-					}
-
-					let states_parents = if ssh != 0 {
-						self.services
-							.state_compressor
-							.load_shortstatehash_info(ssh)
-							.await
-							.unwrap_or_default()
-					} else {
-						Vec::new()
-					};
-					let shortstatekey = self
-						.services
-						.short
-						.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
-						.await;
-					let new = self
-						.services
-						.state_compressor
-						.compress_state_event(shortstatekey, &pdu.event_id)
-						.await;
-					let replaces = states_parents.last().and_then(|info| {
-						info.full_state.as_ref().expect("top frame").iter().find(
-							|bytes: &&rooms::state_compressor::CompressedStateEvent| {
-								bytes.starts_with(&shortstatekey.to_be_bytes())
-							},
-						)
-					});
-
-					if Some(&new) != replaces {
-						if let Ok(new_ssh) = self.services.globals.next_count() {
-							let mut statediffnew =
-								rooms::state_compressor::CompressedState::new();
-							statediffnew.insert(new);
-							let mut statediffremoved =
-								rooms::state_compressor::CompressedState::new();
-							if let Some(replaces) = replaces {
-								statediffremoved.insert(*replaces);
-							}
-							let _ = self.services.state_compressor.save_state_from_diff(
-								new_ssh,
-								Arc::new(statediffnew),
-								Arc::new(statediffremoved),
-								2,
-								states_parents,
-							);
-							ssh = new_ssh;
-						}
-					}
-				}
 				current_shortstatehash = Some(ssh);
-			}
 
-			// Only write JSON when unsigned.prev_content was actually repaired
-			if json_modified {
-				self.db.update_pdu_json(event_id, &json);
+				// Only write JSON when unsigned.prev_content was actually repaired
+				if json != json_before {
+					self.db.update_pdu_json(event_id, &json);
+				}
 			}
 
 			if i.saturating_add(1).is_multiple_of(2000) {

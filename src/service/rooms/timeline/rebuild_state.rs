@@ -186,55 +186,24 @@ impl Service {
 
 			let mut state_after = state_before;
 
-			if let Some(sk) = state_key {
-				let states_parents = if state_before != 0 {
-					self.services
-						.state_compressor
-						.load_shortstatehash_info(state_before)
-						.await
-						.unwrap_or_default()
-				} else {
-					Vec::new()
-				};
-				// Need the event type — fetch from DB only for state events
+			if state_key.is_some() {
+				// State event — need to compute the state diff
 				let pdu = self.get_pdu(eid).await?;
-				let shortstatekey = self
-					.services
-					.short
-					.get_or_create_shortstatekey(&pdu.kind().to_string().into(), sk)
-					.await;
-				let new = self
-					.services
-					.state_compressor
-					.compress_state_event(shortstatekey, pdu.event_id())
-					.await;
-				let replaces = states_parents.last().and_then(|info| {
-					info.full_state.as_ref().expect("top frame").iter().find(
-						|bytes: &&rooms::state_compressor::CompressedStateEvent| {
-							bytes.starts_with(&shortstatekey.to_be_bytes())
-						},
-					)
-				});
-
-				if Some(&new) != replaces {
-					if let Ok(new_ssh) = self.services.globals.next_count() {
-						let mut statediffnew = rooms::state_compressor::CompressedState::new();
-						statediffnew.insert(new);
-						let mut statediffremoved =
-							rooms::state_compressor::CompressedState::new();
-						if let Some(replaces) = replaces {
-							statediffremoved.insert(*replaces);
-						}
-						let _ = self.services.state_compressor.save_state_from_diff(
-							new_ssh,
-							Arc::new(statediffnew.clone()),
-							Arc::new(statediffremoved.clone()),
-							2, // diff_to_sibling
-							states_parents,
-						);
-						state_after = new_ssh;
+				let (_, mut json) = self.db.get_from_eventid_pdu(eid).await?;
+				let pdu_id: conduwuit_core::matrix::pdu::RawPduId =
+					conduwuit_core::matrix::pdu::PduId {
+						shortroomid: self.services.short.get_or_create_shortroomid(room_id).await,
+						shorteventid: conduwuit_core::matrix::pdu::PduCount::Normal(0),
 					}
-				}
+					.into();
+				self.compute_state_for_event(&pdu, eid, &mut json, &mut state_after, &pdu_id)
+					.await;
+			} else {
+				// Non-state event — just set the pdu_shortstatehash
+				let shorteventid = self.services.short.get_or_create_shorteventid(eid).await;
+				self.services
+					.state
+					.set_pdu_shortstatehash(shorteventid, state_before);
 			}
 
 			ssh_cache.insert(eid.clone(), state_after);
