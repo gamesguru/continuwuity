@@ -651,7 +651,8 @@ mod tests {
 		)));
 
 		let config = Config::new(&figment).expect("failed to parse config");
-		let server = Arc::new(Server::new(config, None, Log {
+		let runtime_handle = tokio::runtime::Handle::current();
+		let server = Arc::new(Server::new(config, Some(&runtime_handle), Log {
 			reload: LogLevelReloadHandles::default(),
 			capture: Arc::new(capture::State::default()),
 		}));
