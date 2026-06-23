@@ -269,47 +269,24 @@ pub(crate) async fn add_membership_to_unsigned(
 		&& pdu.state_key.as_deref() == Some(user_id.as_str());
 
 	let membership = if is_own_membership {
-		// MSC4115: "For a user's own membership event, the unsigned.membership property
-		// MUST be the membership of the user prior to the event being applied."
-		let mut prev_membership = ruma::events::room::member::MembershipState::Leave;
+		// MSC4115: "Consider the room state just *after* event E landed. Any changes caused by
+		// the event itself... are included."
+		// For a user's own membership event, the state after the event is just the event itself.
+		let mut current_membership = ruma::events::room::member::MembershipState::Leave;
 
-		if let Some(unsigned_raw) = &pdu.unsigned {
-			if let Ok(unsigned_map) = serde_json::from_str::<
-				serde_json::Map<String, serde_json::Value>,
-			>(unsigned_raw.get())
-			{
-				if let Some(prev_content_val) = unsigned_map.get("prev_content") {
-					if let Ok(prev_content) = serde_json::from_value::<
-						ruma::events::room::member::RoomMemberEventContent,
-					>(prev_content_val.clone())
-					{
-						prev_membership = prev_content.membership;
-					} else {
-						conduwuit::error!(
-							"DEBUG_MEMBERSHIP: Failed to parse prev_content: {}",
-							prev_content_val
-						);
-					}
-				} else {
-					conduwuit::error!(
-						"DEBUG_MEMBERSHIP: No prev_content in unsigned_map: {:?}",
-						unsigned_map
-					);
-				}
-			} else {
+		match serde_json::from_str::<ruma::events::room::member::RoomMemberEventContent>(pdu.content.get()) {
+			Ok(content) => {
+				current_membership = content.membership;
+			},
+			Err(e) => {
 				conduwuit::error!(
-					"DEBUG_MEMBERSHIP: Failed to parse unsigned_raw: {}",
-					unsigned_raw.get()
+					"DEBUG_MEMBERSHIP: Failed to parse content for {}: {e}",
+					pdu.event_id()
 				);
 			}
-		} else {
-			conduwuit::error!(
-				"DEBUG_MEMBERSHIP: pdu.unsigned is None for event: {}",
-				pdu.event_id()
-			);
 		}
 
-		prev_membership
+		current_membership
 	} else {
 		if pdu.kind == TimelineEventType::RoomCreate {
 			ruma::events::room::member::MembershipState::Leave

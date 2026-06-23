@@ -164,22 +164,16 @@ where
 						&prev_state,
 					) {
 						error!(%room_id, event_id = %pdu.event_id(), "Failed to update unsigned.prev_content: {e}");
-					} else {
-						conduwuit::error!(
-							"DEBUG_MEMBERSHIP: Successfully called update_unsigned_prev_content \
-							 for {}",
-							pdu.event_id()
-						);
 					}
 				},
 				| Err(e) => {
-					conduwuit::error!(
-						"DEBUG_MEMBERSHIP: state_get failed for event {} with shortstatehash {} \
-						 and state_key {}: {}",
-						pdu.event_id(),
-						shortstatehash,
-						state_key,
-						e
+					// It's normal for prev_state to be missing, especially for new members
+					// joining a room. No need to log an error.
+					conduwuit::debug!(
+						event_id = %pdu.event_id(),
+						%shortstatehash,
+						%state_key,
+						"state_get failed for prev_content (expected for new members): {e}",
 					);
 				},
 			}
