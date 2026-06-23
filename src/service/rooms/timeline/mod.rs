@@ -454,7 +454,7 @@ impl Service {
 		// Tiebreak on origin_server_ts then event_id for determinism.
 		let start = std::time::Instant::now();
 		debug!("reorder_timeline: topologically sorting {} events...", entries.len());
-		let sorted = topo_sort_dag(&entries, &graph);
+		let sorted = conduwuit::utils::timeline_sorter::sort_timeline_events(&entries, &graph);
 		debug!(
 			"reorder_timeline: topo sort took {:?} ({} events)",
 			start.elapsed(),
@@ -519,15 +519,13 @@ impl Service {
 
 		// Calculate the true DAG forward extremities (events with in-degree 0
 		// in the reversed graph). This fixes broken pagination and fork storms.
-
-		// TODO: why not just use `calculate_true_extremities_roaring()` here?
 		let mut true_extremities: Vec<OwnedEventId> = calculate_true_extremities(&graph, &sorted)
 			.into_iter()
 			.map(ToOwned::to_owned)
 			.collect();
 
-		// Preserve outlier extremities (e.g. from force-set-state) that are not in the
-		// timeline.
+		// Preserve outlier extremities (e.g. from force-set-state) that are not in
+		// the timeline.
 		let current_exts: Vec<OwnedEventId> = self
 			.services
 			.state
@@ -1736,98 +1734,4 @@ impl Service {
 	{
 		self.db.multi_get_shortauthevents(shorteventids)
 	}
-}
-
-/// Topological sort of a DAG using Kahn's algorithm.
-///
-/// Returns events in parent-before-child order. When multiple events have
-/// in-degree 0 simultaneously, tiebreaks on `origin_server_ts` first
-/// (chronological ordering within the same DAG level), then falls back to
-/// `event_id` (content hash) for determinism when timestamps collide.
-/// Events involved in cycles are appended at the end in the same order.
-pub fn topo_sort_dag<S1, S2>(
-	entries: &std::collections::HashMap<OwnedEventId, (PduCount, ruma::UInt), S1>,
-	graph: &std::collections::HashMap<
-		OwnedEventId,
-		std::collections::HashSet<OwnedEventId, S2>,
-		S1,
-	>,
-) -> Vec<OwnedEventId>
-where
-	S1: std::hash::BuildHasher,
-	S2: std::hash::BuildHasher,
-{
-	use std::collections::{BinaryHeap, HashMap, HashSet};
-
-	let n = entries.len();
-
-	// Build forward adjacency (parent -> children) and in-degree counts.
-	let mut children: HashMap<&OwnedEventId, Vec<&OwnedEventId>> = HashMap::with_capacity(n);
-	let mut in_degree: HashMap<&OwnedEventId, usize> = HashMap::with_capacity(n);
-
-	for event_id in entries.keys() {
-		in_degree.entry(event_id).or_insert(0);
-	}
-
-	for (event_id, parents) in graph {
-		if !entries.contains_key(event_id) {
-			continue;
-		}
-		for parent in parents {
-			if entries.contains_key(parent) {
-				children.entry(parent).or_default().push(event_id);
-				let deg = in_degree.entry(event_id).or_insert(0);
-				*deg = deg.saturating_add(1);
-			}
-		}
-	}
-
-	// Min-heap by (ts, event_id) for chronological tiebreaking with
-	// deterministic hash-based fallback when timestamps collide.
-	let mut heap: BinaryHeap<std::cmp::Reverse<(u64, &OwnedEventId)>> =
-		BinaryHeap::with_capacity(n);
-	for (event_id, deg) in &in_degree {
-		if *deg == 0 {
-			let ts = entries.get(*event_id).map_or(0, |(_, ts)| u64::from(*ts));
-			heap.push(std::cmp::Reverse((ts, *event_id)));
-		}
-	}
-
-	let mut result = Vec::with_capacity(n);
-	let mut visited: HashSet<&OwnedEventId> = HashSet::with_capacity(n);
-
-	while let Some(std::cmp::Reverse((_, event_id))) = heap.pop() {
-		if !visited.insert(event_id) {
-			continue;
-		}
-		result.push(event_id.clone());
-
-		if let Some(kids) = children.get(event_id) {
-			for &child in kids {
-				if let Some(deg) = in_degree.get_mut(child) {
-					*deg = deg.saturating_sub(1);
-					if *deg == 0 {
-						let ts = entries.get(child).map_or(0, |(_, ts)| u64::from(*ts));
-						heap.push(std::cmp::Reverse((ts, child)));
-					}
-				}
-			}
-		}
-	}
-
-	// Append any remaining events (cycles) in ts then event_id order
-	if result.len() < n {
-		let mut remaining: Vec<&OwnedEventId> = entries
-			.keys()
-			.filter(|eid| !visited.contains(eid))
-			.collect();
-		remaining.sort_by(|a, b| {
-			let ts_a = entries.get(*a).map_or(0, |(_, ts)| u64::from(*ts));
-			let ts_b = entries.get(*b).map_or(0, |(_, ts)| u64::from(*ts));
-			ts_a.cmp(&ts_b).then_with(|| a.cmp(b))
-		});
-		result.extend(remaining.into_iter().cloned());
-	}
-
-	result
 }

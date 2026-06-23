@@ -247,10 +247,9 @@ where
 	}
 	let sorted_eids = conduwuit::utils::timeline_sorter::sort_timeline_events(&entries, &graph);
 
-	// Sequentially auth_check them
-	// We run sequentially backwards (roots first) so auth checks succeed since
-	// handle_outlier_pdu queries the DB.
-	for eid in sorted_eids.into_iter().rev() {
+	// Sequentially auth_check them (roots first so auth checks succeed since
+	// handle_outlier_pdu queries the DB).
+	for eid in sorted_eids {
 		if let Some((_, val)) = verified_events.remove(&eid) {
 			if let Err(e) = self
 				.handle_outlier_pdu(

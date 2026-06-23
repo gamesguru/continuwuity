@@ -227,9 +227,7 @@ where
 		graph.insert(eid.clone(), pdu.prev_events().map(ToOwned::to_owned).collect());
 		entries.insert(eid.clone(), (0_u64.into(), pdu.origin_server_ts));
 	}
-	let mut sorted_eids =
-		conduwuit::utils::timeline_sorter::sort_timeline_events(&entries, &graph);
-	sorted_eids.reverse();
+	let sorted_eids = conduwuit::utils::timeline_sorter::sort_timeline_events(&entries, &graph);
 
 	let mut eventid_info = HashMap::new();
 
