@@ -147,52 +147,7 @@ pub async fn backfill_if_required(
 		}
 	});
 
-	let canonical_room_alias_server = once(
-		self.services
-			.state_accessor
-			.get_canonical_alias(room_id)
-			.await,
-	)
-	.filter_map(Result::ok)
-	.map(|alias| alias.server_name().to_owned())
-	.stream();
-
-	let mut servers = room_mods
-		.stream()
-		.map(ToOwned::to_owned)
-		.chain(canonical_room_alias_server)
-		.chain(
-			self.services
-				.server
-				.config
-				.trusted_servers
-				.iter()
-				.map(ToOwned::to_owned)
-				.stream(),
-		)
-		.chain(
-			self.services
-				.state_cache
-				.room_servers(room_id)
-				.map(ToOwned::to_owned),
-		)
-		.ready_filter(|server_name| {
-			!self.services.globals.server_is_ours(server_name)
-				&& !self
-					.services
-					.server
-					.config
-					.forbidden_remote_server_names
-					.is_match(server_name.host())
-		})
-		.wide_filter_map(|server_name| async move {
-			self.services
-				.state_cache
-				.server_in_room(&server_name, room_id)
-				.await
-				.then_some(server_name)
-		})
-		.boxed();
+	let mut servers = self.get_backfill_servers(room_id, room_mods).await.boxed();
 
 	let mut federated_room = false;
 
@@ -293,51 +248,7 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 		}
 	});
 
-	let canonical_room_alias_server = once(
-		self.services
-			.state_accessor
-			.get_canonical_alias(room_id)
-			.await,
-	)
-	.filter_map(Result::ok)
-	.map(|alias| alias.server_name().to_owned())
-	.stream();
-	let mut servers = room_mods
-		.stream()
-		.map(ToOwned::to_owned)
-		.chain(canonical_room_alias_server)
-		.chain(
-			self.services
-				.server
-				.config
-				.trusted_servers
-				.iter()
-				.map(ToOwned::to_owned)
-				.stream(),
-		)
-		.chain(
-			self.services
-				.state_cache
-				.room_servers(room_id)
-				.map(ToOwned::to_owned),
-		)
-		.ready_filter(|server_name| {
-			!self.services.globals.server_is_ours(server_name)
-				&& !self
-					.services
-					.server
-					.config
-					.forbidden_remote_server_names
-					.is_match(server_name.host())
-		})
-		.wide_filter_map(|server_name| async move {
-			self.services
-				.state_cache
-				.server_in_room(&server_name, room_id)
-				.await
-				.then_some(server_name)
-		})
-		.boxed();
+	let mut servers = self.get_backfill_servers(room_id, room_mods).await.boxed();
 
 	while let Some(ref backfill_server) = servers.next().await {
 		info!("Asking {backfill_server} for event {}", event_id);
@@ -578,22 +489,8 @@ pub async fn force_insert_pdu(
 
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
-	let count: u64 = self.services.globals.next_count()?;
-
-	let (pdu_count, pdu_id) = if backfill {
-		let count_i64: i64 = count.try_into()?;
-		let pcount = PduCount::Backfilled(conduwuit_core::validated!(0 - count_i64));
-		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
-	} else {
-		let pcount = PduCount::Normal(count);
-		(pcount, RawPduId::from(PduId { shortroomid, shorteventid: pcount }))
-	};
-
-	let mut value = value.clone();
-	value.insert(
-		"event_id".into(),
-		ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
-	);
+	let (pdu_count, pdu_id, value) =
+		self.prepare_pdu_insert(shortroomid, event_id, value, backfill)?;
 
 	if backfill {
 		self.db
@@ -628,6 +525,85 @@ pub async fn force_insert_pdu_batch(
 
 	let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 
+	let (pdu_count, pdu_id, value) =
+		self.prepare_pdu_insert(shortroomid, event_id, value, backfill)?;
+
+	if backfill {
+		self.db
+			.prepend_backfill_pdu_batch(batch, &pdu_id, event_id, &value, pdu, depth_cache)
+			.await;
+	} else {
+		self.db
+			.append_pdu_batch(batch, &pdu_id, pdu, &value, pdu_count, depth_cache)
+			.await;
+	}
+
+	self.index_pdu_search(shortroomid, &pdu_id, pdu);
+
+	Ok(pdu_id)
+}
+
+#[implement(super::Service)]
+pub async fn get_backfill_servers<'a>(
+	&'a self,
+	room_id: &'a RoomId,
+	room_mods: impl Iterator<Item = &'a ServerName> + Send + 'a,
+) -> impl futures::Stream<Item = ruma::OwnedServerName> + Send + 'a {
+	let canonical_room_alias_server = once(
+		self.services
+			.state_accessor
+			.get_canonical_alias(room_id)
+			.await,
+	)
+	.filter_map(Result::ok)
+	.map(|alias| alias.server_name().to_owned())
+	.stream();
+
+	room_mods
+		.map(ToOwned::to_owned)
+		.stream()
+		.chain(canonical_room_alias_server)
+		.chain(
+			self.services
+				.server
+				.config
+				.trusted_servers
+				.iter()
+				.map(ToOwned::to_owned)
+				.stream(),
+		)
+		.chain(
+			self.services
+				.state_cache
+				.room_servers(room_id)
+				.map(ToOwned::to_owned),
+		)
+		.ready_filter(|server_name| {
+			!self.services.globals.server_is_ours(server_name)
+				&& !self
+					.services
+					.server
+					.config
+					.forbidden_remote_server_names
+					.is_match(server_name.host())
+		})
+		.wide_filter_map(move |server_name| async move {
+			self.services
+				.state_cache
+				.server_in_room(&server_name, room_id)
+				.await
+				.then_some(server_name)
+		})
+}
+
+#[implement(super::Service)]
+pub fn prepare_pdu_insert(
+	&self,
+	shortroomid: u64,
+	event_id: &EventId,
+	value: &CanonicalJsonObject,
+	backfill: bool,
+) -> Result<(PduCount, RawPduId, CanonicalJsonObject)> {
 	let count: u64 = self.services.globals.next_count()?;
 
 	let (pdu_count, pdu_id) = if backfill {
@@ -645,17 +621,5 @@ pub async fn force_insert_pdu_batch(
 		ruma::CanonicalJsonValue::String(event_id.as_str().to_owned()),
 	);
 
-	if backfill {
-		self.db
-			.prepend_backfill_pdu_batch(batch, &pdu_id, event_id, &value, pdu, depth_cache)
-			.await;
-	} else {
-		self.db
-			.append_pdu_batch(batch, &pdu_id, pdu, &value, pdu_count, depth_cache)
-			.await;
-	}
-
-	self.index_pdu_search(shortroomid, &pdu_id, pdu);
-
-	Ok(pdu_id)
+	Ok((pdu_count, pdu_id, value))
 }
