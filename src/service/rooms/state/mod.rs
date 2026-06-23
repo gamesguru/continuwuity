@@ -451,6 +451,13 @@ impl Service {
 	pub fn set_pdu_shortstatehash(&self, shorteventid: u64, shortstatehash: u64) {
 		const BUFSIZE: usize = size_of::<u64>();
 
+		conduwuit::error!(
+			"DEBUG_MEMBERSHIP: set_pdu_shortstatehash called for shorteventid: {}, \
+			 shortstatehash: {}",
+			shorteventid,
+			shortstatehash
+		);
+
 		self.db
 			.shorteventid_shortstatehash
 			.aput::<BUFSIZE, BUFSIZE, _, _>(shorteventid, shortstatehash);

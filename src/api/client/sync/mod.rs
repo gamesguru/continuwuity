@@ -292,53 +292,14 @@ pub(crate) async fn add_membership_to_unsigned(
 		prev_membership
 	} else {
 		if pdu.kind == TimelineEventType::RoomCreate {
-			conduwuit::error!(
-				"DEBUG_MEMBERSHIP: evaluating m.room.create! event_id: {}",
-				pdu.event_id()
-			);
-			match services
+			ruma::events::room::member::MembershipState::Leave
+		} else {
+			services
 				.rooms
 				.state_accessor
-				.pdu_shortstatehash(pdu.event_id())
+				.user_membership_at_event(pdu.event_id(), &room_id, user_id)
 				.await
-			{
-				| Ok(shortstatehash) => {
-					conduwuit::error!(
-						"DEBUG_MEMBERSHIP: m.room.create has shortstatehash: {}",
-						shortstatehash
-					);
-					let mem = services
-						.rooms
-						.state_accessor
-						.user_membership(shortstatehash, user_id)
-						.await;
-					conduwuit::error!("DEBUG_MEMBERSHIP: user_membership returned: {:?}", mem);
-				},
-				| Err(e) => {
-					conduwuit::error!(
-						"DEBUG_MEMBERSHIP: pdu_shortstatehash FAILED for m.room.create! Error: \
-						 {:?}",
-						e
-					);
-					if let Ok(shorteventid) =
-						services.rooms.short.get_shorteventid(pdu.event_id()).await
-					{
-						conduwuit::error!(
-							"DEBUG_MEMBERSHIP: get_shorteventid SUCCEEDED! shorteventid: {}",
-							shorteventid
-						);
-					} else {
-						conduwuit::error!("DEBUG_MEMBERSHIP: get_shorteventid FAILED!");
-					}
-				},
-			}
 		}
-
-		services
-			.rooms
-			.state_accessor
-			.user_membership_at_event(pdu.event_id(), &room_id, user_id)
-			.await
 	};
 
 	pdu.set_membership(membership.as_str()).log_err().ok();
