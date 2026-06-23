@@ -15,14 +15,12 @@ use ruma::{
 	CanonicalJsonObject, EventId, Int, RoomId, ServerName,
 	api::federation,
 	events::{
-		StateEventType, TimelineEventType,
+		StateEventType,
 		room::{create::RoomCreateEventContent, power_levels::RoomPowerLevelsEventContent},
 	},
 	uint,
 };
 use serde_json::value::RawValue as RawJsonValue;
-
-use super::ExtractBody;
 
 #[implement(super::Service)]
 #[tracing::instrument(name = "backfill", level = "trace", skip(self))]
@@ -507,12 +505,7 @@ pub async fn backfill_pdu(
 
 	drop(insert_lock);
 
-	if pdu_event.kind == TimelineEventType::RoomMessage {
-		let content: ExtractBody = pdu_event.get_content()?;
-		if let Some(body) = content.body {
-			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
-		}
-	}
+	self.index_pdu_search(shortroomid, &pdu_id, &pdu_event);
 	drop(mutex_lock);
 
 	debug!("Prepended backfill pdu");
@@ -556,12 +549,7 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 
 	drop(insert_lock);
 
-	if pdu.kind == TimelineEventType::RoomMessage {
-		let content: ExtractBody = pdu.get_content()?;
-		if let Some(body) = content.body {
-			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
-		}
-	}
+	self.index_pdu_search(shortroomid, &pdu_id, &pdu);
 
 	// Remove from outlier room index
 	self.services.outlier.remove_outlier(event_id).await;
@@ -617,12 +605,7 @@ pub async fn force_insert_pdu(
 
 	drop(insert_lock);
 
-	if pdu.kind == TimelineEventType::RoomMessage {
-		let content: ExtractBody = pdu.get_content()?;
-		if let Some(body) = content.body {
-			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
-		}
-	}
+	self.index_pdu_search(shortroomid, &pdu_id, pdu);
 
 	Ok(pdu_id)
 }
@@ -672,12 +655,7 @@ pub async fn force_insert_pdu_batch(
 			.await;
 	}
 
-	if pdu.kind == TimelineEventType::RoomMessage {
-		let content: ExtractBody = pdu.get_content()?;
-		if let Some(body) = content.body {
-			self.services.search.index_pdu(shortroomid, &pdu_id, &body);
-		}
-	}
+	self.index_pdu_search(shortroomid, &pdu_id, pdu);
 
 	Ok(pdu_id)
 }

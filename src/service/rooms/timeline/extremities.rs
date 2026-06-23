@@ -338,8 +338,7 @@ mod tests {
 	fn test_calculate_true_extremities_00_single_tip() {
 		let a = event_id!("$a").to_owned();
 		let b = event_id!("$b").to_owned();
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 
 		let sorted = vec![a, b.clone()];
@@ -354,8 +353,7 @@ mod tests {
 		let b = event_id!("$b").to_owned();
 		let c = event_id!("$c").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
 
@@ -371,8 +369,7 @@ mod tests {
 		let b = event_id!("$b").to_owned();
 		let c = event_id!("$c").to_owned();
 		let d = event_id!("$d").to_owned();
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
@@ -390,8 +387,7 @@ mod tests {
 		let b = event_id!("$b").to_owned();
 		let x = event_id!("$x").to_owned();
 		let y = event_id!("$y").to_owned();
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(y.clone(), vec![x.clone()].into_iter().collect());
@@ -410,8 +406,7 @@ mod tests {
 	fn test_calculate_true_extremities_04_missing_parents() {
 		let a = event_id!("$a").to_owned();
 		let z = event_id!("$z").to_owned(); // not in sorted, but referenced
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 
 		graph.insert(a.clone(), vec![z].into_iter().collect());
 
@@ -426,11 +421,10 @@ mod tests {
 		let a = event_id!("$a").to_owned();
 		let b = event_id!("$b").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		// Graph only knows about A's parents (none). B is omitted from the map
 		// entirely.
-		graph.insert(a.clone(), std::collections::HashSet::new());
+		graph.insert(a.clone(), HashSet::new());
 
 		let sorted = vec![a.clone(), b.clone()];
 		let mut tips = calculate_true_extremities(&graph, &sorted);
@@ -449,8 +443,7 @@ mod tests {
 		let a = event_id!("$a").to_owned();
 		let b = event_id!("$b").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(a.clone(), vec![b.clone()].into_iter().collect());
 
@@ -464,8 +457,7 @@ mod tests {
 
 	#[test]
 	fn test_calculate_true_extremities_07_no_cap() {
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let mut sorted = Vec::new();
 		let root = event_id!("$root").to_owned();
 		sorted.push(root.clone());
@@ -486,8 +478,7 @@ mod tests {
 
 	#[test]
 	fn test_calculate_true_extremities_08_empty_input() {
-		let graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let sorted = vec![];
 		let tips = calculate_true_extremities(&graph, &sorted);
 		assert!(tips.is_empty(), "Empty graph should return empty extremities");
@@ -500,8 +491,7 @@ mod tests {
 		let old = event_id!("$old").to_owned();
 		let older = event_id!("$older").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		// Extraneous data outside the 'sorted' window
@@ -520,8 +510,7 @@ mod tests {
 		let b = event_id!("$b").to_owned();
 		let c = event_id!("$c").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 
 		// Linear chain: A -> B -> C
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
@@ -546,12 +535,11 @@ mod tests {
 		let b = event_id!("$b").to_owned();
 		let c = event_id!("$c").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		graph.insert(b.clone(), vec![a].into_iter().collect());
 		graph.insert(c.clone(), vec![b].into_iter().collect());
 
-		let stored: std::collections::HashSet<OwnedEventId> = vec![c].into_iter().collect();
+		let stored: HashSet<OwnedEventId> = vec![c].into_iter().collect();
 		let phantoms = detect_phantom_extremities(&graph, &stored);
 		assert!(phantoms.is_empty(), "correct tip should not be phantom");
 	}
@@ -563,13 +551,11 @@ mod tests {
 		let b = event_id!("$b").to_owned();
 		let c = event_id!("$c").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c, vec![b].into_iter().collect());
 
-		let stored: std::collections::HashSet<OwnedEventId> =
-			vec![a.clone()].into_iter().collect();
+		let stored: HashSet<OwnedEventId> = vec![a.clone()].into_iter().collect();
 		let phantoms = detect_phantom_extremities(&graph, &stored);
 		assert_eq!(phantoms, vec![a], "A has children and is phantom");
 	}
@@ -581,12 +567,11 @@ mod tests {
 		let c = event_id!("$c").to_owned();
 		let old = event_id!("$old").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		graph.insert(c.clone(), vec![b].into_iter().collect());
 
 		// $old is stored but not in the window graph at all
-		let stored: std::collections::HashSet<OwnedEventId> = vec![c, old].into_iter().collect();
+		let stored: HashSet<OwnedEventId> = vec![c, old].into_iter().collect();
 		let phantoms = detect_phantom_extremities(&graph, &stored);
 		assert!(phantoms.is_empty(), "out-of-window extremity should not be flagged");
 	}
@@ -595,8 +580,7 @@ mod tests {
 	fn test_phantom_14_capped_subset_ok() {
 		// 25 fork tips from a root, but stored set is capped to 10
 		let root = event_id!("$root").to_owned();
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 
 		let mut all_tips = Vec::new();
 		for i in 0..25 {
@@ -606,8 +590,7 @@ mod tests {
 		}
 
 		// Stored set is a capped subset (first 10 tips)
-		let stored: std::collections::HashSet<OwnedEventId> =
-			all_tips[..10].iter().cloned().collect();
+		let stored: HashSet<OwnedEventId> = all_tips[..10].iter().cloned().collect();
 		let phantoms = detect_phantom_extremities(&graph, &stored);
 		assert!(phantoms.is_empty(), "capped tips are still valid tips");
 	}
@@ -619,13 +602,11 @@ mod tests {
 		let b = event_id!("$b").to_owned();
 		let c = event_id!("$c").to_owned();
 
-		let mut graph: HashMap<OwnedEventId, std::collections::HashSet<OwnedEventId>> =
-			HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![b].into_iter().collect());
 
-		let stored: std::collections::HashSet<OwnedEventId> =
-			vec![a.clone(), c].into_iter().collect();
+		let stored: HashSet<OwnedEventId> = vec![a.clone(), c].into_iter().collect();
 		let phantoms = detect_phantom_extremities(&graph, &stored);
 		assert_eq!(phantoms, vec![a], "only A is phantom, C is valid");
 	}
@@ -643,10 +624,9 @@ mod tests {
 		let true_exts = vec![&*e1];
 
 		// current tips in DB
-		let current_set: std::collections::HashSet<OwnedEventId> =
-			vec![e2.clone(), e3.clone(), e4.clone()]
-				.into_iter()
-				.collect();
+		let current_set: HashSet<OwnedEventId> = vec![e2.clone(), e3.clone(), e4.clone()]
+			.into_iter()
+			.collect();
 
 		// phantom tips: e2 and e3 are phantoms
 		let phantoms = vec![e2.clone(), e3.clone()];

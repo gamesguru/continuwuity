@@ -455,10 +455,7 @@ where
 			}
 		},
 		| TimelineEventType::RoomMessage => {
-			let content: ExtractBody = pdu.get_content()?;
-			if let Some(body) = content.body {
-				self.services.search.index_pdu(shortroomid, &pdu_id, &body);
-			}
+			self.index_pdu_search(shortroomid, &pdu_id, pdu);
 		},
 		| _ => {},
 	}

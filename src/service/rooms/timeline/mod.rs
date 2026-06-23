@@ -187,6 +187,24 @@ impl crate::Service for Service {
 }
 
 impl Service {
+	/// Index a PDU's body for full-text search if it's a RoomMessage.
+	/// Encapsulates the pattern duplicated across append, backfill, and heal.
+	pub(super) fn index_pdu_search(
+		&self,
+		shortroomid: ShortRoomId,
+		pdu_id: &RawPduId,
+		pdu: &PduEvent,
+	) {
+		use ruma::events::TimelineEventType;
+		if pdu.kind == TimelineEventType::RoomMessage {
+			if let Ok(content) = pdu.get_content::<ExtractBody>() {
+				if let Some(body) = &content.body {
+					self.services.search.index_pdu(shortroomid, pdu_id, body);
+				}
+			}
+		}
+	}
+
 	pub fn db_batch(&self) -> database::rocksdb::WriteBatch { self.db.db_batch() }
 
 	pub fn db_apply_batch(&self, batch: &database::rocksdb::WriteBatch) {

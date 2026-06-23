@@ -13,12 +13,9 @@ use conduwuit_core::{
 };
 use futures::StreamExt;
 use roaring::RoaringBitmap;
-use ruma::{
-	CanonicalJsonObject, OwnedEventId, RoomId,
-	events::{StateEventType, TimelineEventType},
-};
+use ruma::{CanonicalJsonObject, OwnedEventId, RoomId, events::StateEventType};
 
-use super::{ExtractBody, update_unsigned_prev_content};
+use super::update_unsigned_prev_content;
 use crate::rooms;
 
 /// Options controlling what `heal_room` computes and writes.
@@ -287,13 +284,7 @@ pub async fn heal_room(
 		}
 
 		// Index searchable content
-		if pdu.kind == TimelineEventType::RoomMessage {
-			if let Ok(content) = pdu.get_content::<ExtractBody>() {
-				if let Some(body) = &content.body {
-					self.services.search.index_pdu(shortroomid, &pdu_id, body);
-				}
-			}
-		}
+		self.index_pdu_search(shortroomid, &pdu_id, pdu);
 
 		// Clean up the outlier table entry if it exists.
 		self.services.outlier.remove_outlier(event_id).await;
