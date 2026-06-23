@@ -259,13 +259,27 @@ fn is_sync_response_empty(val: &serde_json::Value) -> bool {
 		return true;
 	};
 
-	let rooms_empty = obj.get("rooms").is_none();
-	let presence_empty = obj.get("presence").is_none();
-	let account_data_empty = obj.get("account_data").is_none();
-	let to_device_empty = obj.get("to_device").is_none();
-	let device_lists_empty = obj.get("device_lists").is_none();
+	if obj.contains_key("rooms")
+		|| obj.contains_key("presence")
+		|| obj.contains_key("account_data")
+		|| obj.contains_key("to_device")
+	{
+		return false;
+	}
 
-	rooms_empty && presence_empty && account_data_empty && to_device_empty && device_lists_empty
+	obj.get("device_lists").is_none_or(|d| {
+		d.as_object().is_none_or(|d| {
+			let changed_empty = d
+				.get("changed")
+				.is_none_or(|c| c.as_array().is_none_or(Vec::is_empty));
+
+			let left_empty = d
+				.get("left")
+				.is_none_or(|l| l.as_array().is_none_or(Vec::is_empty));
+
+			changed_empty && left_empty
+		})
+	})
 }
 
 pub(crate) async fn build_sync_events(
