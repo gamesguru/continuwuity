@@ -871,15 +871,16 @@ async fn join_room_by_id_helper_remote_process(
 		}
 	}
 
-	// Phase 1: For FIRST joins only, backfill pre-join extremities BEFORE
-	// appending the join event. This ensures backfilled events get historical
-	// PduCounts that sort before the join event in backward pagination.
+	// Phase 1: For FIRST joins only, handle pre-join extremities BEFORE
+	// appending the join event. This ensures extremities get lower Normal
+	// PduCounts that sort before the join event, maintaining chronological
+	// order in backward pagination.
 	// We drop the state lock temporarily for the network requests.
 	if !missing_latest.is_empty() && !is_rejoin {
 		drop(state_lock);
 
 		info!(
-			"Backfilling {} missing extremities from {} after joining room {}",
+			"Forward-filling {} missing extremities from {} before joining room {}",
 			missing_latest.len(),
 			remote_server,
 			room_id
@@ -922,22 +923,15 @@ async fn join_room_by_id_helper_remote_process(
 				);
 				continue;
 			}
-			// First join: pre-join extremities are historical, insert
-			// as Backfilled so they sort correctly before the join
-			// event in backward pagination.
-			trace!(
-				%parsed_event_id,
-				keys = value.len(),
-				"Backfilling pre-join extremity"
-			);
+			// First join: insert as Normal so the extremity gets a lower
+			// PduCount than the join event that follows.
 			if let Err(e) = services
 				.rooms
-				.timeline
-				.backfill_pdu(&remote_server, response.pdu, None)
-				.boxed()
+				.event_handler
+				.handle_incoming_pdu(&remote_server, room_id, &parsed_event_id, value, true, None)
 				.await
 			{
-				warn!("Failed to backfill extremity {event_id}: {e}");
+				warn!("Failed to handle extremity {event_id} -- {e}");
 			}
 		}
 
