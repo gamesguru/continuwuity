@@ -208,7 +208,10 @@ impl Service {
 			}
 		}
 
-		self.rebuild_membership_cache(room_id, &state_lock).await;
+		self.services
+			.state_cache
+			.reconcile_membership(room_id)
+			.await;
 
 		drop(state_lock);
 

@@ -1004,11 +1004,11 @@ pub(super) async fn set_state_event(
 
 #[admin_command]
 pub(super) async fn rebuild_membership_cache(&self, room_id: OwnedRoomId) -> Result {
-	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
+	let _state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
 	self.services
 		.rooms
-		.timeline
-		.rebuild_membership_cache(&room_id, &state_lock)
+		.state_cache
+		.reconcile_membership(&room_id)
 		.await;
 
 	let out = format!("Rebuilt membership cache for {room_id}");

@@ -503,3 +503,91 @@ pub async fn mark_as_invited(
 
 	Ok(())
 }
+
+/// Rebuild the membership cache from the current room state snapshot.
+/// Extracted from the reorder_timeline logic for reuse.
+#[implement(super::Service)]
+pub async fn reconcile_membership(&self, room_id: &RoomId) {
+	let mut members_synced = 0_usize;
+	let mut state_joined: HashSet<ruma::OwnedUserId> = HashSet::new();
+	let mut state_invited: HashSet<ruma::OwnedUserId> = HashSet::new();
+
+	let room_ssh_opt = self
+		.services
+		.state
+		.get_room_shortstatehash(room_id)
+		.await
+		.ok();
+
+	if let Some(room_ssh) = room_ssh_opt {
+		let state_full = self.services.state_accessor.state_full(room_ssh);
+		let mut state_full = std::pin::pin!(state_full);
+		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
+			if event_type != StateEventType::RoomMember {
+				continue;
+			}
+			let Ok(uid) = ruma::OwnedUserId::try_from(state_key.as_str()) else {
+				continue;
+			};
+
+			let content: serde_json::Value = pdu.get_content_as_value();
+			let membership = content
+				.get("membership")
+				.and_then(|v| v.as_str())
+				.unwrap_or("leave");
+
+			match membership {
+				| "join" => {
+					state_joined.insert(uid.clone());
+					if !self.is_joined(&uid, room_id).await {
+						self.mark_as_joined_silent(&uid, room_id).await;
+						members_synced = members_synced.saturating_add(1);
+					}
+				},
+				| "invite" => {
+					state_invited.insert(uid.clone());
+				},
+				| _ =>
+					if self.is_invited_or_joined(&uid, room_id).await {
+						self.mark_as_left_silent(&uid, room_id).await;
+						members_synced = members_synced.saturating_add(1);
+					},
+			}
+		}
+	}
+
+	// Sweep stale joined cache entries
+	let cached_members: Vec<ruma::OwnedUserId> = self
+		.room_members(room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	let mut stale_removed = 0_usize;
+	for user_id in &cached_members {
+		if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
+			self.mark_as_left_silent(user_id, room_id).await;
+			stale_removed = stale_removed.saturating_add(1);
+		}
+	}
+
+	// Sweep stale invited cache entries
+	let cached_invited: Vec<ruma::OwnedUserId> = self
+		.room_members_invited(room_id)
+		.map(ToOwned::to_owned)
+		.collect()
+		.await;
+
+	for user_id in &cached_invited {
+		if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
+			self.mark_as_left_silent(user_id, room_id).await;
+			stale_removed = stale_removed.saturating_add(1);
+		}
+	}
+
+	self.update_joined_count(room_id).await;
+	info!(
+		"heal_room: synced {members_synced} membership cache entries, removed {stale_removed} \
+		 stale"
+	);
+}

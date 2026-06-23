@@ -289,6 +289,58 @@ pub async fn compress_state_event(
 	compress_state_event(shortstatekey, shorteventid)
 }
 
+/// Appends a state event to the state diff, returning the new shortstatehash if
+/// it changed, or None if the state event is already in the previous state.
+#[implement(Service)]
+#[tracing::instrument(skip(self, new_shortstatehash), level = "debug")]
+pub async fn append_state_pdu<F: FnOnce() -> Result<ShortStateHash>>(
+	&self,
+	previous_shortstatehash: ShortStateHash,
+	shortstatekey: ShortStateKey,
+	event_id: &EventId,
+	new_shortstatehash: F,
+) -> Result<Option<ShortStateHash>> {
+	let states_parents = if previous_shortstatehash != 0 {
+		self.load_shortstatehash_info(previous_shortstatehash)
+			.await?
+	} else {
+		Vec::new()
+	};
+
+	let new = self.compress_state_event(shortstatekey, event_id).await;
+
+	let replaces = states_parents.last().and_then(|info| {
+		info.full_state
+			.as_ref()
+			.expect("top frame must have full_state")
+			.iter()
+			.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
+	});
+
+	if Some(&new) == replaces {
+		return Ok(None);
+	}
+
+	let shortstatehash = new_shortstatehash()?;
+	let mut statediffnew = CompressedState::new();
+	statediffnew.insert(new);
+
+	let mut statediffremoved = CompressedState::new();
+	if let Some(replaces) = replaces {
+		statediffremoved.insert(*replaces);
+	}
+
+	self.save_state_from_diff(
+		shortstatehash,
+		Arc::new(statediffnew),
+		Arc::new(statediffremoved),
+		2,
+		states_parents,
+	)?;
+
+	Ok(Some(shortstatehash))
+}
+
 /// Creates a new shortstatehash that often is just a diff to an already
 /// existing shortstatehash and therefore very efficient.
 ///

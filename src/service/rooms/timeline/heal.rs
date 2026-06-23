@@ -1,7 +1,4 @@
-use std::{
-	collections::{HashMap, HashSet},
-	sync::Arc,
-};
+use std::collections::HashMap;
 
 use conduwuit_core::{
 	Result, info,
@@ -13,10 +10,9 @@ use conduwuit_core::{
 };
 use futures::StreamExt;
 use roaring::RoaringBitmap;
-use ruma::{CanonicalJsonObject, OwnedEventId, RoomId, events::StateEventType};
+use ruma::{CanonicalJsonObject, OwnedEventId, RoomId};
 
 use super::update_unsigned_prev_content;
-use crate::rooms;
 
 /// Options controlling what `heal_room` computes and writes.
 pub struct HealOptions {
@@ -346,7 +342,10 @@ pub async fn heal_room(
 
 	// Phase 7: Rebuild membership cache if requested
 	if options.rebuild_membership {
-		self.rebuild_membership_cache(room_id, &state_lock).await;
+		self.services
+			.state_cache
+			.reconcile_membership(room_id)
+			.await;
 	}
 
 	// Ensure WAL is durable
@@ -406,166 +405,21 @@ pub(super) async fn compute_state_for_event(
 		}
 	}
 
-	let states_parents = if *ssh != 0 {
-		self.services
-			.state_compressor
-			.load_shortstatehash_info(*ssh)
-			.await
-			.unwrap_or_default()
-	} else {
-		Vec::new()
-	};
-
 	let shortstatekey = self
 		.services
 		.short
 		.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
 		.await;
 
-	let new = self
+	let new_ssh = self
 		.services
 		.state_compressor
-		.compress_state_event(shortstatekey, &pdu.event_id)
+		.append_state_pdu(*ssh, shortstatekey, &pdu.event_id, || {
+			self.services.globals.next_count()
+		})
 		.await;
 
-	let replaces = states_parents.last().and_then(|info| {
-		info.full_state.as_ref().expect("top frame").iter().find(
-			|bytes: &&rooms::state_compressor::CompressedStateEvent| {
-				bytes.starts_with(&shortstatekey.to_be_bytes())
-			},
-		)
-	});
-
-	if Some(&new) != replaces {
-		if let Ok(new_ssh) = self.services.globals.next_count() {
-			let mut statediffnew = rooms::state_compressor::CompressedState::new();
-			statediffnew.insert(new);
-			let mut statediffremoved = rooms::state_compressor::CompressedState::new();
-			if let Some(replaces) = replaces {
-				statediffremoved.insert(*replaces);
-			}
-			let _ = self.services.state_compressor.save_state_from_diff(
-				new_ssh,
-				Arc::new(statediffnew),
-				Arc::new(statediffremoved),
-				2,
-				states_parents,
-			);
-			*ssh = new_ssh;
-		}
+	if let Ok(Some(new_ssh)) = new_ssh {
+		*ssh = new_ssh;
 	}
-}
-
-/// Rebuild the membership cache from the current room state snapshot.
-/// Extracted from the reorder_timeline logic for reuse.
-#[conduwuit_core::implement(super::Service)]
-pub async fn rebuild_membership_cache(
-	&self,
-	room_id: &RoomId,
-	_state_lock: &rooms::state::RoomMutexGuard,
-) {
-	let mut members_synced = 0_usize;
-	let mut state_joined: HashSet<ruma::OwnedUserId> = HashSet::new();
-	let mut state_invited: HashSet<ruma::OwnedUserId> = HashSet::new();
-
-	let room_ssh_opt = self
-		.services
-		.state
-		.get_room_shortstatehash(room_id)
-		.await
-		.ok();
-
-	if let Some(room_ssh) = room_ssh_opt {
-		let state_full = self.services.state_accessor.state_full(room_ssh);
-		let mut state_full = std::pin::pin!(state_full);
-		while let Some(((event_type, state_key), pdu)) = state_full.next().await {
-			if event_type != StateEventType::RoomMember {
-				continue;
-			}
-			let Ok(uid) = ruma::OwnedUserId::try_from(state_key.as_str()) else {
-				continue;
-			};
-
-			let content: serde_json::Value = pdu.get_content_as_value();
-			let membership = content
-				.get("membership")
-				.and_then(|v| v.as_str())
-				.unwrap_or("leave");
-
-			match membership {
-				| "join" => {
-					state_joined.insert(uid.clone());
-					if !self.services.state_cache.is_joined(&uid, room_id).await {
-						self.services
-							.state_cache
-							.mark_as_joined_silent(&uid, room_id)
-							.await;
-						members_synced = members_synced.saturating_add(1);
-					}
-				},
-				| "invite" => {
-					state_invited.insert(uid.clone());
-				},
-				| _ => {
-					if self
-						.services
-						.state_cache
-						.is_invited_or_joined(&uid, room_id)
-						.await
-					{
-						self.services
-							.state_cache
-							.mark_as_left_silent(&uid, room_id)
-							.await;
-						members_synced = members_synced.saturating_add(1);
-					}
-				},
-			}
-		}
-	}
-
-	// Sweep stale joined cache entries
-	let cached_members: Vec<ruma::OwnedUserId> = self
-		.services
-		.state_cache
-		.room_members(room_id)
-		.map(ToOwned::to_owned)
-		.collect()
-		.await;
-
-	let mut stale_removed = 0_usize;
-	for user_id in &cached_members {
-		if !state_joined.contains(user_id) && !state_invited.contains(user_id) {
-			self.services
-				.state_cache
-				.mark_as_left_silent(user_id, room_id)
-				.await;
-			stale_removed = stale_removed.saturating_add(1);
-		}
-	}
-
-	// Sweep stale invited cache entries
-	let cached_invited: Vec<ruma::OwnedUserId> = self
-		.services
-		.state_cache
-		.room_members_invited(room_id)
-		.map(ToOwned::to_owned)
-		.collect()
-		.await;
-
-	for user_id in &cached_invited {
-		if !state_invited.contains(user_id) && !state_joined.contains(user_id) {
-			self.services
-				.state_cache
-				.mark_as_left_silent(user_id, room_id)
-				.await;
-			stale_removed = stale_removed.saturating_add(1);
-		}
-	}
-
-	self.services.state_cache.update_joined_count(room_id).await;
-	info!(
-		"heal_room: synced {members_synced} membership cache entries, removed {stale_removed} \
-		 stale"
-	);
 }

@@ -1565,11 +1565,11 @@ async fn reject_conflicting_state(
 /// `force_set_room_state_from_server` below the stack-frame limit.
 #[admin_command]
 async fn rebuild_membership_cache_inner(&self, room_id: OwnedRoomId, _short_state_hash: u64) {
-	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
+	let _state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
 	self.services
 		.rooms
-		.timeline
-		.rebuild_membership_cache(&room_id, &state_lock)
+		.state_cache
+		.reconcile_membership(&room_id)
 		.await;
 }
 

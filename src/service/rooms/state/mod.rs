@@ -488,62 +488,24 @@ impl Service {
 
 		match &new_pdu.state_key {
 			| Some(state_key) => {
-				let states_parents = match previous_shortstatehash {
-					| Ok(p) if p != 0 =>
-						self.services
-							.state_compressor
-							.load_shortstatehash_info(p)
-							.await?,
-					| _ => Vec::new(),
-				};
-
 				let shortstatekey = self
 					.services
 					.short
 					.get_or_create_shortstatekey(&new_pdu.kind.to_string().into(), state_key)
 					.await;
 
-				let new = self
+				let new_ssh = self
 					.services
 					.state_compressor
-					.compress_state_event(shortstatekey, &new_pdu.event_id)
-					.await;
+					.append_state_pdu(
+						previous_shortstatehash.as_ref().copied().unwrap_or(0),
+						shortstatekey,
+						&new_pdu.event_id,
+						|| self.services.globals.next_count(),
+					)
+					.await?;
 
-				let replaces = states_parents
-					.last()
-					.map(|info| {
-						info.full_state
-							.as_ref()
-							.expect("top frame must have full_state")
-							.iter()
-							.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
-					})
-					.unwrap_or_default();
-
-				if Some(&new) == replaces {
-					return Ok(previous_shortstatehash.expect("must exist"));
-				}
-
-				// TODO: statehash with deterministic inputs
-				let shortstatehash = self.services.globals.next_count()?;
-
-				let mut statediffnew = CompressedState::new();
-				statediffnew.insert(new);
-
-				let mut statediffremoved = CompressedState::new();
-				if let Some(replaces) = replaces {
-					statediffremoved.insert(*replaces);
-				}
-
-				self.services.state_compressor.save_state_from_diff(
-					shortstatehash,
-					Arc::new(statediffnew),
-					Arc::new(statediffremoved),
-					2,
-					states_parents,
-				)?;
-
-				Ok(shortstatehash)
+				Ok(new_ssh.unwrap_or_else(|| previous_shortstatehash.expect("must exist")))
 			},
 			| _ =>
 				Ok(previous_shortstatehash.expect("first event in room must be a state event")),
