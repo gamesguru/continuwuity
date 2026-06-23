@@ -302,7 +302,7 @@ impl Console {
 	}
 
 	fn set_history(&self, readline: &mut Readline) {
-		self.history.lock().iter_rev().for_each(|entry| {
+		self.history.lock().iter().for_each(|entry| {
 			readline
 				.add_history_entry(entry.clone())
 				.expect("added history entry");
