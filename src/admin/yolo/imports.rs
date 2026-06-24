@@ -18,20 +18,27 @@ pub(super) async fn import_pdus(
 	room_version: Option<RoomVersionId>,
 ) -> Result {
 	use futures::StreamExt;
+	use tokio::io::AsyncBufReadExt;
 	self.bail_restricted()?;
-
-	let file_content = tokio::fs::read_to_string(&path)
-		.await
-		.map_err(|e| err!("Failed to read file {path}: {e:?}"))?;
 
 	let inferred_room_id = match room_id {
 		| Some(r) => r,
 		| None => {
-			let first_line = file_content
-				.lines()
-				.find(|l| !l.trim().is_empty())
-				.ok_or_else(|| err!(Request(InvalidParam("File is empty"))))?;
-			let first_pdu: CanonicalJsonObject = serde_json::from_str(first_line)
+			let file = tokio::fs::File::open(&path)
+				.await
+				.map_err(|e| err!("Failed to open file {path}: {e}"))?;
+			let mut reader = tokio::io::BufReader::new(file);
+			let mut first_line = String::new();
+			reader
+				.read_line(&mut first_line)
+				.await
+				.map_err(|e| err!("Failed to read line: {e}"))?;
+
+			if first_line.trim().is_empty() {
+				return Err!(Request(InvalidParam("File is empty or first line is invalid")));
+			}
+
+			let first_pdu: CanonicalJsonObject = serde_json::from_str(&first_line)
 				.map_err(|e| err!(Request(InvalidParam("Failed to parse first PDU: {e}"))))?;
 			let r_id = first_pdu
 				.get("room_id")
@@ -95,11 +102,16 @@ pub(super) async fn import_pdus(
 
 	let room_id_ref = room_id.clone();
 	let parsed_pdus: Vec<_> = tokio::task::spawn_blocking(move || {
-		file_content
+		use std::io::BufRead;
+		let file = std::fs::File::open(&path).expect("Failed to open file for parsing");
+		let reader = std::io::BufReader::new(file);
+
+		reader
 			.lines()
+			.filter_map(Result::ok)
 			.filter(|line| !line.trim().is_empty())
 			.filter_map(|line| {
-				let value: CanonicalJsonObject = match serde_json::from_str(line) {
+				let value: CanonicalJsonObject = match serde_json::from_str(&line) {
 					| Ok(v) => v,
 					| Err(e) => {
 						warn!("Failed to parse JSON: {e}");

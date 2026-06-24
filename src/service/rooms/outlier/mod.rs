@@ -285,7 +285,7 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 	}
 }
 
-/// Clears the outlier and error flags from an event's metadata.
+/// Clears the outlier flag from an event's metadata.
 /// This is used when an event is promoted to or already exists in the timeline.
 #[implement(Service)]
 pub fn clear_outlier_flag(&self, event_id: &EventId) {
