@@ -481,17 +481,15 @@ impl Service {
 						new_count,
 					);
 				}
+			} else if let Some(meta) = metadata_cache.get_mut(event_id) {
+				self.db.reindex_topo_with_cached_metadata(
+					&pdu_id,
+					event_id,
+					local_topo_depth,
+					meta,
+				);
 			} else {
-				if let Some(meta) = metadata_cache.get_mut(event_id) {
-					self.db.reindex_topo_with_cached_metadata(
-						&pdu_id,
-						event_id,
-						local_topo_depth,
-						meta,
-					);
-				} else {
-					self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
-				}
+				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 			}
 		}
 		drop(cork);

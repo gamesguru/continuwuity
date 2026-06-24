@@ -29,7 +29,7 @@ use crate::rooms::{
 /// thin; the heavy lifting is delegated to the helpers below so that each
 /// async state-machine stays within the stack-frame budget.
 #[implement(super::Service)]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::large_stack_frames)]
 pub async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	&self,
 	incoming_pdu: PduEvent,

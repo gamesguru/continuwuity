@@ -13,7 +13,7 @@ use super::{check_room_id, get_room_version_id, to_room_version};
 use crate::rooms::timeline::pdu_fits;
 
 #[implement(super::Service)]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::large_stack_frames)]
 pub async fn handle_outlier_pdu<'a, Pdu>(
 	&self,
 	origin: &'a ServerName,

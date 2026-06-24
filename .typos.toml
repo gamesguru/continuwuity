@@ -1,5 +1,5 @@
 [files]
-extend-exclude = ["*.csr", "*.lock", "pnpm-lock.yaml"]
+extend-exclude = ["*.csr", "*.lock", "pnpm-lock.yaml", "case-study-state-res/**", "tests/fixtures/**"]
 
 [default]
 
