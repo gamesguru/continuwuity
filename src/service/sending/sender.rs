@@ -285,6 +285,15 @@ impl Service {
 		}
 
 		if new_events.is_empty() {
+			if let Destination::Federation(server_name) = dest {
+				let since = self.db.get_latest_educount(server_name).await;
+				let since_upper = self.services.globals.current_count().unwrap_or(0);
+				if since < since_upper {
+					statuses.remove(dest);
+					self.reschedule_flush(dest.clone(), Duration::from_millis(0));
+					return;
+				}
+			}
 			statuses.remove(dest);
 			return;
 		}
@@ -292,7 +301,7 @@ impl Service {
 		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now()));
 
 		let dest_clone = dest.clone();
-		self.reschedule_flush(dest_clone, Duration::from_millis(50));
+		self.reschedule_flush(dest_clone, Duration::from_millis(1500));
 	}
 
 	#[allow(clippy::needless_pass_by_ref_mut)]
@@ -569,7 +578,7 @@ impl Service {
 					allow = false; // already running
 				},
 				TransactionStatus::Cooldown(time) => {
-					if !has_pdu && time.elapsed() < Duration::from_millis(50) {
+					if !has_pdu && time.elapsed() < Duration::from_millis(1500) {
 						allow = false;
 					} else {
 						*e = TransactionStatus::Running;
@@ -604,9 +613,9 @@ impl Service {
 					.saturating_sub(time.elapsed())
 					.max(Duration::from_secs(1))
 			},
-			| TransactionStatus::Cooldown(time) => Duration::from_millis(50)
+			| TransactionStatus::Cooldown(time) => Duration::from_millis(1500)
 				.saturating_sub(time.elapsed())
-				.max(Duration::from_millis(10)),
+				.max(Duration::from_millis(100)),
 			| _ => Duration::ZERO,
 		}
 	}
