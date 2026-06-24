@@ -332,6 +332,7 @@ pub(crate) async fn build_sync_events(
 		use_state_after,
 	};
 
+	let is_initial_sync = last_sync_end_count.is_none();
 	let joined_rooms = services
 		.rooms
 		.state_cache
@@ -356,7 +357,10 @@ pub(crate) async fn build_sync_events(
 			 (room_id, joined_room, state_after, updates)| {
 				all_updates.merge(updates);
 
-				if !joined_room.is_empty() {
+				// During initial sync, include every joined room so the client
+				// is aware of all rooms. During incremental sync, skip rooms
+				// with no updates to reduce response size.
+				if is_initial_sync || !joined_room.is_empty() {
 					joined_rooms.insert(room_id.clone(), joined_room);
 					if !state_after.is_empty() {
 						joined_state_after.insert(room_id, state_after);
