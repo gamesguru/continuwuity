@@ -10,7 +10,7 @@ use conduwuit::{
 	utils::stream::{IterStream, TryBroadbandExt},
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::ready};
-use ruma::{OwnedEventId, RoomId, RoomVersionId};
+use ruma::{EventId, OwnedEventId, RoomId, RoomVersionId};
 
 // TODO: if we know the prev_events of the incoming event we can avoid the
 // request and build the state from a known point and resolve if > 1 prev_event
@@ -87,10 +87,24 @@ pub async fn state_at_incoming_resolved<Pdu>(
 where
 	Pdu: Event + Send + Sync,
 {
+	self.resolve_extremities(incoming_pdu.prev_events(), room_id, room_version_id)
+		.await
+}
+
+#[implement(super::Service)]
+#[tracing::instrument(name = "state", level = "debug", skip_all)]
+pub async fn resolve_extremities<'a, I>(
+	&self,
+	prev_events: I,
+	room_id: &RoomId,
+	room_version_id: &RoomVersionId,
+) -> Result<Option<HashMap<u64, OwnedEventId>>>
+where
+	I: Iterator<Item = &'a EventId> + Send,
+{
 	let fn_start = std::time::Instant::now();
 	trace!("Calculating extremity statehashes...");
-	let Ok(extremity_sstatehashes) = incoming_pdu
-		.prev_events()
+	let Ok(extremity_sstatehashes) = prev_events
 		.try_stream()
 		.broad_and_then(|prev_eventid| {
 			self.services
@@ -109,7 +123,7 @@ where
 				.pdu_shortstatehash(prev_eventid)
 				.map_ok(move |sstatehash| (sstatehash, prev_event))
 		})
-		.try_collect::<HashMap<_, _>>()
+		.try_collect::<HashMap<u64, conduwuit_core::PduEvent>>()
 		.await
 	else {
 		return Ok(None);

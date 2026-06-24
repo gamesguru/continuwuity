@@ -111,7 +111,7 @@ impl Service {
 
 		if !no_compute_state {
 			// Full mode: rebuild topo index + recompute state snapshots
-			let final_ssh = self
+			let _final_ssh = self
 				.rebuild_topo_index_with_state(
 					room_id,
 					shortroomid,
@@ -122,15 +122,8 @@ impl Service {
 				)
 				.await;
 			debug!("reorder_timeline: topo rebuild+state took {:?}", reindex_start.elapsed());
-
-			if let Some(ssh) = final_ssh {
-				if ssh != 0 {
-					self.services
-						.state
-						.set_room_state(room_id, ssh, &state_lock);
-					debug!("reorder_timeline: updated room shortstatehash to {ssh}");
-				}
-			}
+			// _final_ssh ignored; room state resolved via true extremities
+			// below
 		} else {
 			// Fast mode: rebuild topo index only, no state computation
 			let mut depths: HashMap<OwnedEventId, u64> = HashMap::new();
@@ -222,6 +215,70 @@ impl Service {
 				"reorder_timeline: set forward extremities to {} true DAG tips",
 				true_extremities.len()
 			);
+
+			if !no_compute_state {
+				let room_version = self
+					.services
+					.state
+					.get_room_version(room_id)
+					.await
+					.unwrap_or(ruma::RoomVersionId::V11);
+
+				let final_ssh = if true_extremities.len() == 1 {
+					self.services
+						.state_accessor
+						.pdu_shortstatehash(&true_extremities[0])
+						.await
+						.ok()
+				} else {
+					info!(
+						"reorder_timeline: resolving state across {} extremities",
+						true_extremities.len()
+					);
+
+					if let Ok(Some(state)) = self
+						.services
+						.event_handler
+						.resolve_extremities(
+							true_extremities.iter().map(|id| &**id),
+							room_id,
+							&room_version,
+						)
+						.await
+					{
+						let compressed: crate::rooms::state_compressor::CompressedState = self
+							.services
+							.state_compressor
+							.compress_state_events(state.iter().map(|(k, v)| (k, v.as_ref())))
+							.collect()
+							.await;
+						let result = self
+							.services
+							.state_compressor
+							.save_state_as_root(room_id.as_ref(), std::sync::Arc::new(compressed))
+							.await;
+						if let Ok(res) = result {
+							Some(res.shortstatehash)
+						} else {
+							None
+						}
+					} else {
+						None
+					}
+				};
+
+				if let Some(ssh) = final_ssh {
+					if ssh != 0 {
+						self.services
+							.state
+							.set_room_state(room_id, ssh, &state_lock);
+						debug!(
+							"reorder_timeline: updated room shortstatehash to resolved state \
+							 {ssh}"
+						);
+					}
+				}
+			}
 		}
 
 		debug!("reorder_timeline: skipped repair unsigned per metadata design");
