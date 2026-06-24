@@ -1039,6 +1039,28 @@ async fn join_room_by_id_helper_local(
 					.await
 					.ok();
 
+					// User qualifies but no local authorizer found.
+					// A local user with invite power may exist but their power level
+					// hasn't propagated over federation yet (often happens in tests).
+					// Retry briefly before giving up and going remote.
+					if auth_user.is_none() {
+						for _ in 0..5 {
+							tokio::time::sleep(Duration::from_millis(150)).await;
+							auth_user = select_authorising_user(
+								services,
+								room_id,
+								sender_user,
+								allowed_rooms,
+								&state_lock,
+							)
+							.await
+							.ok();
+							if auth_user.is_some() {
+								break;
+							}
+						}
+					}
+
 					// User qualifies but no local authorizer found -- another
 					// server might be able to authorize, so go remote.
 					if auth_user.is_none() {

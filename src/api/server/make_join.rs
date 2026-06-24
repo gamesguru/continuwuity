@@ -16,7 +16,6 @@ use ruma::{
 	},
 };
 use service::rooms::state::RoomMutexGuard;
-use tokio::join;
 
 use crate::Ruma;
 
@@ -40,16 +39,34 @@ pub(crate) async fn create_join_event_template_route(
 	}
 
 	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
-	let (is_invited, is_joined) = join!(
-		services
-			.rooms
-			.state_cache
-			.is_invited(&body.user_id, &body.room_id),
-		services
-			.rooms
-			.state_cache
-			.is_joined(&body.user_id, &body.room_id)
-	);
+	let is_invited = services
+		.rooms
+		.state_cache
+		.is_invited(&body.user_id, &body.room_id)
+		.await;
+	let mut is_joined = services
+		.rooms
+		.state_cache
+		.is_joined(&body.user_id, &body.room_id)
+		.await;
+
+	// A remote server is asking to make_join, but our cache thinks they are already
+	// joined. This usually means they recently left and our federation queue
+	// hasn't processed the leave event yet. Sleep briefly and re-check to let
+	// federation catch up.
+	if is_joined {
+		for _ in 0..5 {
+			tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+			is_joined = services
+				.rooms
+				.state_cache
+				.is_joined(&body.user_id, &body.room_id)
+				.await;
+			if !is_joined {
+				break;
+			}
+		}
+	}
 	let join_authorized_via_users_server: Option<OwnedUserId> = {
 		use RoomVersionId::*;
 		if is_joined || is_invited {
