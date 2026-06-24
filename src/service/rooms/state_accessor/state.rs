@@ -413,6 +413,10 @@ pub fn state_full_shortids(
 #[implement(super::Service)]
 #[tracing::instrument(name = "load", level = "debug", skip(self))]
 async fn load_full_state(&self, shortstatehash: ShortStateHash) -> Result<Arc<CompressedState>> {
+	if shortstatehash == 0 {
+		return Ok(Arc::new(CompressedState::new()));
+	}
+
 	self.services
 		.state_compressor
 		.load_shortstatehash_info(shortstatehash)

@@ -126,6 +126,15 @@ pub async fn load_shortstatehash_info(
 	&self,
 	shortstatehash: ShortStateHash,
 ) -> Result<ShortStateInfoVec> {
+	if shortstatehash == 0 {
+		return Ok(vec![ShortStateInfo {
+			shortstatehash: 0,
+			full_state: Some(Arc::new(CompressedState::new())),
+			added: Arc::new(CompressedState::new()),
+			removed: Arc::new(CompressedState::new()),
+		}]);
+	}
+
 	if let Some(r) = self.stateinfo_cache.lock().get_mut(&shortstatehash) {
 		// Arc clone is just a refcount bump — no Vec/BTreeSet allocation
 		return Ok((**r).clone());
@@ -210,7 +219,8 @@ async fn new_shortstatehash_info(
 
 		let StateDiff { parent, added, removed } = self.get_statediff(current).await?;
 
-		let Some(parent_hash) = parent else {
+		let parent_hash = parent.unwrap_or(0);
+		if parent_hash == 0 {
 			// Root node: build the initial stack
 			let mut stack = vec![ShortStateInfo {
 				shortstatehash: current,
@@ -245,7 +255,7 @@ async fn new_shortstatehash_info(
 			}
 
 			return Ok(stack);
-		};
+		}
 
 		chain.push((current, added, removed));
 		current = parent_hash;
