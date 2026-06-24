@@ -28,7 +28,7 @@ where
 	let (lower_bound, _) = nodes_iter.size_hint();
 
 	let mut id_to_index: FxHashMap<Id, usize> =
-		FxHashMap::with_capacity_and_hasher(lower_bound, FxBuildHasher::default());
+		FxHashMap::with_capacity_and_hasher(lower_bound, FxBuildHasher);
 	let mut index_to_id: Vec<Id> = Vec::with_capacity(lower_bound);
 	let mut keys: Vec<K> = Vec::with_capacity(lower_bound);
 	let mut edges_list: Vec<P> = Vec::with_capacity(lower_bound);
