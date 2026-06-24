@@ -1001,7 +1001,7 @@ impl Data {
 						}
 					}
 				}
-				max_depth.saturating_add(1)
+				super::calculate_local_topo_depth(max_depth, pdu.depth().into())
 			},
 			|m| m.local_topological_depth,
 		);

@@ -123,7 +123,12 @@ impl Service {
 						.max()
 						.unwrap_or(0)
 				});
-				let local_topo_depth = max_parent_depth.saturating_add(1);
+				let local_topo_depth = super::calculate_local_topo_depth(
+					max_parent_depth,
+					metadata_cache
+						.get(event_id)
+						.map_or(1, |meta| meta.depth.into()),
+				);
 				depths.insert(event_id.clone(), local_topo_depth);
 			}
 
@@ -411,7 +416,8 @@ impl Service {
 				.copied()
 				.max()
 				.unwrap_or(0);
-			let local_topo_depth = max_parent_depth.saturating_add(1);
+			let local_topo_depth =
+				super::calculate_local_topo_depth(max_parent_depth, pdu.depth().into());
 			depths.insert(event_id.clone(), local_topo_depth);
 
 			// State computation — uses existing pdu_id (unchanged stream order)
