@@ -77,6 +77,7 @@ pub struct Service {
 	pub mutex_fetch: MutexMap<OwnedEventId, ()>,
 	pub next_shortstatehash_cache: SyncMutex<LruCache<(ShortRoomId, PduCount), ShortStateHash>>,
 	pub prev_shortstatehash_cache: SyncMutex<LruCache<(ShortRoomId, PduCount), ShortStateHash>>,
+	pub last_timeline_count_cache: moka::sync::Cache<OwnedRoomId, PduCount>,
 }
 
 struct Services {
@@ -120,6 +121,10 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			next_shortstatehash_cache: SyncMutex::new(LruCache::new(cache_capacity / 2)),
 			prev_shortstatehash_cache: SyncMutex::new(LruCache::new(cache_capacity / 2)),
+			last_timeline_count_cache: moka::sync::Cache::builder()
+				.max_capacity(100_000)
+				.time_to_idle(std::time::Duration::from_secs(600))
+				.build(),
 			services: Services {
 				server: args.server.clone(),
 				account_data: args.depend::<account_data::Service>("account_data"),
@@ -233,7 +238,13 @@ impl Service {
 
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub async fn last_timeline_count(&self, room_id: &RoomId) -> Result<PduCount> {
-		self.db.last_timeline_count(room_id).await
+		if let Some(count) = self.last_timeline_count_cache.get(&room_id.to_owned()) {
+			return Ok(count);
+		}
+		let count = self.db.last_timeline_count(room_id).await?;
+		self.last_timeline_count_cache
+			.insert(room_id.to_owned(), count);
+		Ok(count)
 	}
 
 	/// Returns the shortstatehash of the room at the event directly preceding

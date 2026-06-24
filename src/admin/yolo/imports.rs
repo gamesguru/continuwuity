@@ -108,7 +108,7 @@ pub(super) async fn import_pdus(
 
 		reader
 			.lines()
-			.filter_map(Result::ok)
+			.map_while(Result::ok)
 			.filter(|line| !line.trim().is_empty())
 			.filter_map(|line| {
 				let value: CanonicalJsonObject = match serde_json::from_str(&line) {

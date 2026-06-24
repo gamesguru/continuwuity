@@ -203,6 +203,8 @@ where
 	// Insert pdu FIRST to ensure it's in the DB before any secondary writes
 	// unexpectedly wake the sync watcher.
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
+	self.last_timeline_count_cache
+		.insert(room_id.to_owned(), pdu_count);
 
 	// Mark as read first so the sync watcher uses the correct receipt
 	let receipt_content = std::collections::BTreeMap::from_iter([(

@@ -679,6 +679,25 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (EduVec, u64) {
+		if since.0 == 0 {
+			// If the server has no previous sync token, we don't need to send them
+			// the entire history of device list changes. They will query `/keys/query`
+			// when needed. This prevents massive CPU usage on first federation.
+			return (EduVec::new(), since.1);
+		}
+
+		if since.0
+			>= self
+				.services
+				.users
+				.last_device_key_update_count
+				.load(Ordering::Relaxed)
+		{
+			// If there were no global device key updates since the last time we checked,
+			// we can safely skip the expensive per-room RocksDB checks.
+			return (EduVec::new(), since.1);
+		}
+
 		let server_rooms = self.services.state_cache.server_rooms(server_name);
 
 		pin_mut!(server_rooms);
@@ -717,15 +736,13 @@ impl Service {
 			}
 		}
 
-		if !all_changes.is_empty() {
-			tracing::info!(
-				target: "device_list_debug",
-				?all_changes,
-				?user_devices,
-				?since,
-				"select_edus_device_changes result"
-			);
-		}
+		tracing::debug!(
+			target: "device_list_debug",
+			changes_count = all_changes.len(),
+			devices_count = user_devices.len(),
+			?since,
+			"select_edus_device_changes result"
+		);
 
 		build_device_list_edus(all_changes, &user_devices, since, SELECT_EDU_LIMIT)
 	}

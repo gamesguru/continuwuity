@@ -584,8 +584,10 @@ pub(crate) async fn build_sync_events(
 	)
 	.expect("ruma response is valid JSON");
 
-	// Manually insert state_after data for MSC4222
+	// Manually insert state_after data for MSC4222 and inject missing ephemeral
+	// objects
 	if let Some(join) = val.get_mut("rooms").and_then(|r| r.get_mut("join")) {
+		// inject state_after
 		for (room_id, state_after) in joined_state_after {
 			if let Some(room) = join.get_mut(room_id.as_str()) {
 				let state_after_obj = serde_json::json!({ "events": state_after });
@@ -595,6 +597,16 @@ pub(crate) async fn build_sync_events(
 				room.as_object_mut()
 					.unwrap()
 					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
+			}
+		}
+
+		// inject missing ephemeral to satisfy complement
+		for (_room_id, room_val) in join.as_object_mut().unwrap() {
+			if !room_val.as_object().unwrap().contains_key("ephemeral") {
+				room_val
+					.as_object_mut()
+					.unwrap()
+					.insert("ephemeral".to_owned(), serde_json::json!({ "events": [] }));
 			}
 		}
 	}

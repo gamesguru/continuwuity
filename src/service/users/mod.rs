@@ -46,6 +46,7 @@ pub struct UserSuspension {
 }
 
 pub struct Service {
+	pub last_device_key_update_count: std::sync::atomic::AtomicU64,
 	services: Services,
 	db: Data,
 }
@@ -90,7 +91,12 @@ struct Data {
 
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
+		let current_count = args
+			.depend::<globals::Service>("globals")
+			.current_count()
+			.unwrap_or(0);
 		Ok(Arc::new(Self {
+			last_device_key_update_count: std::sync::atomic::AtomicU64::new(current_count),
 			services: Services {
 				server: args.server.clone(),
 				account_data: args.depend::<account_data::Service>("account_data"),
@@ -1133,6 +1139,8 @@ impl Service {
 
 	pub async fn mark_device_key_update(&self, user_id: &UserId) {
 		let count = self.services.globals.next_count().unwrap();
+		self.last_device_key_update_count
+			.store(count, std::sync::atomic::Ordering::Relaxed);
 
 		tracing::info!(%user_id, "mark_device_key_update called");
 
