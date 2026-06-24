@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use conduwuit_core::{
 	Result, debug, info,
@@ -8,10 +8,10 @@ use conduwuit_core::{
 	},
 	warn,
 };
-use futures::{StreamExt, TryStreamExt, pin_mut};
+use futures::StreamExt;
 use ruma::{OwnedEventId, RoomId};
 
-use super::{Service, extremities::calculate_true_extremities};
+use super::{Service, extremities::calculate_true_extremities, metadata::EventMetadata};
 use crate::rooms::short::ShortRoomId;
 
 impl Service {
@@ -43,33 +43,17 @@ impl Service {
 		};
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
-		// Collect all PDUs from the timeline.
-		// We need (PduCount, origin_server_ts) per event — the PduCount is the
-		// existing immutable stream order which we preserve.
-		let mut entries: HashMap<OwnedEventId, (PduCount, ruma::UInt)> = HashMap::new();
-		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
-		let dropped = 0_usize;
-
-		debug!("reorder_timeline: reading all PDUs from timeline...");
-		let pdus_backfill = self.pdus(room_id, Some(PduCount::min()));
-		let pdus_normal = self.pdus(room_id, Some(PduCount::Normal(0)));
-		let pdus = pdus_backfill.chain(pdus_normal);
-		pin_mut!(pdus);
-		while let Some((count, pdu)) = pdus.try_next().await? {
-			let eid = pdu.event_id.clone();
-			entries.insert(eid.clone(), (count, pdu.origin_server_ts));
-			graph.insert(eid, pdu.prev_events().map(ToOwned::to_owned).collect());
-			if entries.len().is_multiple_of(10000) {
-				debug!("reorder_timeline: read {} PDUs so far...", entries.len());
-				tokio::task::yield_now().await;
-			}
-		}
-
-		if dropped > 0 {
-			warn!("{dropped} PDUs had no JSON and were skipped during reorder");
-		}
-
-		debug!("reorder_timeline: collected {} PDUs ({dropped} dropped)", entries.len());
+		// Lightweight collection: reads only metadata + shortprevevents,
+		// avoids full PDU JSON deserialization.
+		debug!("reorder_timeline: collecting timeline entries (lightweight)...");
+		let collect_start = std::time::Instant::now();
+		let (entries, mut graph, mut metadata_cache) =
+			self.db.collect_reorder_entries(room_id).await?;
+		debug!(
+			"reorder_timeline: collected {} PDUs in {:?} (lightweight)",
+			entries.len(),
+			collect_start.elapsed()
+		);
 
 		if entries.is_empty() {
 			return Ok(0);
@@ -119,13 +103,15 @@ impl Service {
 					&entries,
 					force_reindex,
 					&available_counts,
+					&mut metadata_cache,
 				)
 				.await;
 			debug!("reorder_timeline: topo rebuild+state took {:?}", reindex_start.elapsed());
 			// _final_ssh ignored; room state resolved via true extremities
 			// below
 		} else {
-			// Fast mode: rebuild topo index only, no state computation
+			// Fast mode: rebuild topo index only, no state computation.
+			// Uses cached metadata to avoid all blocking DB reads.
 			let mut depths: HashMap<OwnedEventId, u64> = HashMap::new();
 			for event_id in &sorted {
 				// TODO: Extract depth calculation from parents into a helper method
@@ -146,8 +132,17 @@ impl Service {
 				for (event_id, &(old_count, _)) in &entries {
 					let old_pdu_id: RawPduId =
 						PduId { shortroomid, shorteventid: old_count }.into();
-					self.db
-						.remove_stream_and_topo_pducount(&old_pdu_id, event_id.as_bytes());
+					// Use cached depth to avoid blocking metadata read
+					if let Some(meta) = metadata_cache.get(event_id) {
+						self.db.remove_stream_and_topo_pducount_at_depth(
+							&old_pdu_id,
+							event_id.as_bytes(),
+							meta.local_topological_depth,
+						);
+					} else {
+						self.db
+							.remove_stream_and_topo_pducount(&old_pdu_id, event_id.as_bytes());
+					}
 				}
 			}
 			for (i, event_id) in sorted.iter().enumerate() {
@@ -161,14 +156,35 @@ impl Service {
 				let local_topo_depth = depths.get(event_id).copied().unwrap_or(0);
 
 				if force_reindex {
-					self.db.replace_stream_and_topo_pducount(
-						&pdu_id,
-						event_id,
-						local_topo_depth,
-						new_count,
-					);
+					// Use cached metadata to avoid blocking DB reads
+					if let Some(meta) = metadata_cache.get_mut(event_id) {
+						self.db.replace_stream_topo_with_cached_metadata(
+							&pdu_id,
+							event_id,
+							local_topo_depth,
+							new_count,
+							meta,
+						);
+					} else {
+						self.db.replace_stream_and_topo_pducount(
+							&pdu_id,
+							event_id,
+							local_topo_depth,
+							new_count,
+						);
+					}
 				} else {
-					self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+					// Use cached metadata to avoid blocking DB reads
+					if let Some(meta) = metadata_cache.get_mut(event_id) {
+						self.db.reindex_topo_with_cached_metadata(
+							&pdu_id,
+							event_id,
+							local_topo_depth,
+							meta,
+						);
+					} else {
+						self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+					}
 				}
 			}
 			drop(cork);
@@ -329,6 +345,7 @@ impl Service {
 	/// computes `local_topological_depth` as position in topo-sorted
 	/// list, writes new topo key, and optionally recomputes state
 	/// snapshots. Stream order is NOT touched.
+	#[allow(clippy::too_many_arguments)]
 	pub(super) async fn rebuild_topo_index_with_state(
 		&self,
 		room_id: &RoomId,
@@ -337,6 +354,7 @@ impl Service {
 		entries: &HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
 		force_reindex: bool,
 		available_counts: &[PduCount],
+		metadata_cache: &mut HashMap<OwnedEventId, EventMetadata>,
 	) -> Option<u64> {
 		let mut current_shortstatehash = {
 			let mut ssh = 0;
@@ -386,7 +404,7 @@ impl Service {
 			// if left in place. Soft-fail flags are intentional and persist.
 			self.services.pdu_metadata.unmark_event_rejected(event_id);
 
-			// TODO: Extract depth calculation from parents into a helper method
+			// Use in-memory depths from topo-sorted order
 			let max_parent_depth = pdu
 				.prev_events()
 				.filter_map(|p| depths.get(p))
@@ -411,13 +429,22 @@ impl Service {
 			}
 		}
 
-		// Now apply the DB replacements inside a single atomic cork
+		// Now apply the DB replacements inside a single atomic cork.
+		// Uses cached metadata to avoid blocking DB reads where possible.
 		let cork = self.db.db.cork();
 		if force_reindex {
 			for (event_id, &(old_count, _)) in entries {
 				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
-				self.db
-					.remove_stream_and_topo_pducount(&old_pdu_id, event_id.as_bytes());
+				if let Some(meta) = metadata_cache.get(event_id) {
+					self.db.remove_stream_and_topo_pducount_at_depth(
+						&old_pdu_id,
+						event_id.as_bytes(),
+						meta.local_topological_depth,
+					);
+				} else {
+					self.db
+						.remove_stream_and_topo_pducount(&old_pdu_id, event_id.as_bytes());
+				}
 			}
 		}
 
@@ -432,14 +459,33 @@ impl Service {
 			let local_topo_depth = depths.get(event_id).copied().unwrap_or(0);
 
 			if force_reindex {
-				self.db.replace_stream_and_topo_pducount(
-					&pdu_id,
-					event_id,
-					local_topo_depth,
-					new_count,
-				);
+				if let Some(meta) = metadata_cache.get_mut(event_id) {
+					self.db.replace_stream_topo_with_cached_metadata(
+						&pdu_id,
+						event_id,
+						local_topo_depth,
+						new_count,
+						meta,
+					);
+				} else {
+					self.db.replace_stream_and_topo_pducount(
+						&pdu_id,
+						event_id,
+						local_topo_depth,
+						new_count,
+					);
+				}
 			} else {
-				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+				if let Some(meta) = metadata_cache.get_mut(event_id) {
+					self.db.reindex_topo_with_cached_metadata(
+						&pdu_id,
+						event_id,
+						local_topo_depth,
+						meta,
+					);
+				} else {
+					self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
+				}
 			}
 		}
 		drop(cork);

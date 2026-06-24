@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+	collections::{HashMap, HashSet},
+	sync::Arc,
+};
 
 use conduwuit::{
 	Err, Event, PduCount, PduEvent, Result, at, err,
@@ -171,6 +174,135 @@ impl Data {
 		Ok(count)
 	}
 
+	/// Lightweight collection of all timeline entries for a room, suitable
+	/// for reorder-timeline. Returns:
+	///  - `entries`: event_id → (PduCount, origin_server_ts)
+	///  - `graph`: event_id → set of prev_event_ids
+	///  - `metadata_cache`: event_id → EventMetadata (for reuse in Phase 2)
+	///
+	/// This avoids deserializing full PDU JSON by reading only the
+	/// small bincode `EventMetadata` and packed `shorteventid_shortprevevents`
+	/// tables — orders of magnitude cheaper for large rooms.
+	pub(super) async fn collect_reorder_entries(
+		&self,
+		room_id: &RoomId,
+	) -> Result<(
+		HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
+		HashMap<OwnedEventId, HashSet<OwnedEventId>>,
+		HashMap<OwnedEventId, rooms::timeline::EventMetadata>,
+	)> {
+		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
+		let seek_backfill =
+			Self::pdu_count_to_id(shortroomid, PduCount::min(), Direction::Forward);
+		let seek_normal =
+			Self::pdu_count_to_id(shortroomid, PduCount::Normal(0), Direction::Forward);
+		let prefix = seek_backfill.shortroomid();
+
+		let mut entries: HashMap<OwnedEventId, (PduCount, ruma::UInt)> = HashMap::new();
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+		let mut metadata_cache: HashMap<OwnedEventId, rooms::timeline::EventMetadata> =
+			HashMap::new();
+
+		// Phase 1a: Iterate the stream index to get (pdu_id, event_id_bytes) pairs.
+		// No JSON deserialization — just raw key/value from room_pducount_eventid.
+		let mut all_event_ids: Vec<(PduCount, OwnedEventId)> = Vec::new();
+
+		// Iterate backfill range
+		let backfill_stream = self.room_pducount_eventid.raw_stream_from(&seek_backfill);
+		pin_mut!(backfill_stream);
+		while let Some(Ok((key, val))) = backfill_stream.next().await {
+			if !key.starts_with(&prefix) {
+				break;
+			}
+			let pdu_id = RawPduId::from(key);
+			let count = pdu_id.pdu_count();
+			if matches!(count, PduCount::Normal(_)) {
+				break; // crossed into normal range
+			}
+			if let Ok(s) = std::str::from_utf8(val) {
+				if let Ok(event_id) = OwnedEventId::try_from(s) {
+					all_event_ids.push((count, event_id));
+				}
+			}
+		}
+
+		// Iterate normal range
+		let normal_stream = self.room_pducount_eventid.raw_stream_from(&seek_normal);
+		pin_mut!(normal_stream);
+		while let Some(Ok((key, val))) = normal_stream.next().await {
+			if !key.starts_with(&prefix) {
+				break;
+			}
+			let pdu_id = RawPduId::from(key);
+			let count = pdu_id.pdu_count();
+			if let Ok(s) = std::str::from_utf8(val) {
+				if let Ok(event_id) = OwnedEventId::try_from(s) {
+					all_event_ids.push((count, event_id));
+				}
+			}
+			if all_event_ids.len().is_multiple_of(10000) {
+				tokio::task::yield_now().await;
+			}
+		}
+
+		// Phase 1b: For each event, read metadata (origin_server_ts) and
+		// resolve prev_events from the shortprevevents table.
+		for (count, event_id) in &all_event_ids {
+			// Read metadata
+			let meta_opt = if let Ok(bytes) = self.eventid_metadata.get(event_id.as_bytes()).await
+			{
+				rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
+			} else {
+				None
+			};
+
+			let ts = meta_opt
+				.as_ref()
+				.map_or_else(ruma::UInt::default, |m| m.origin_server_ts);
+
+			entries.insert(event_id.clone(), (*count, ts));
+
+			if let Some(meta) = meta_opt {
+				metadata_cache.insert(event_id.clone(), meta);
+			}
+
+			// Resolve prev_events via shorteventid → shortprevevents → eventid
+			let prev_events: HashSet<OwnedEventId> =
+				if let Ok(short_eid) = self.services.short.get_shorteventid(event_id).await {
+					if let Ok(short_prevs) = self.get_shortprevevents(short_eid).await {
+						let mut prevs = HashSet::with_capacity(short_prevs.len());
+						for short_prev in short_prevs {
+							if let Ok(prev_id) = self
+								.services
+								.short
+								.get_eventid_from_short::<OwnedEventId>(short_prev)
+								.await
+							{
+								prevs.insert(prev_id);
+							}
+						}
+						prevs
+					} else {
+						HashSet::new()
+					}
+				} else {
+					HashSet::new()
+				};
+
+			graph.insert(event_id.clone(), prev_events);
+
+			if entries.len().is_multiple_of(10000) {
+				conduwuit::debug!(
+					"collect_reorder_entries: processed {} events so far...",
+					entries.len()
+				);
+				tokio::task::yield_now().await;
+			}
+		}
+
+		Ok((entries, graph, metadata_cache))
+	}
+
 	pub(super) async fn fix_pdu_event_ids(&self) -> Result<usize> {
 		use futures::TryStreamExt;
 		let mut fixed: usize = 0;
@@ -237,6 +369,13 @@ impl Data {
 		}
 	}
 
+	/// Remove topo entry using a **known** depth, avoiding the `get_blocking`
+	/// call that `remove_topo_pducount` does.
+	pub(super) fn remove_topo_pducount_at_depth(&self, pdu_id: &RawPduId, old_depth: u64) {
+		self.roomid_topologicalorder_pducount
+			.remove(&Self::topo_pducount_key(pdu_id, old_depth));
+	}
+
 	pub(super) fn remove_stream_and_topo_pducount(
 		&self,
 		pdu_id: &RawPduId,
@@ -245,6 +384,19 @@ impl Data {
 		self.room_pducount_eventid.remove(pdu_id);
 		self.eventid_pduid.remove(event_id_bytes);
 		self.remove_topo_pducount(pdu_id, event_id_bytes);
+	}
+
+	/// Remove stream + topo indices using a **known** depth, avoiding
+	/// blocking metadata reads.
+	pub(super) fn remove_stream_and_topo_pducount_at_depth(
+		&self,
+		pdu_id: &RawPduId,
+		event_id_bytes: &[u8],
+		old_depth: u64,
+	) {
+		self.room_pducount_eventid.remove(pdu_id);
+		self.eventid_pduid.remove(event_id_bytes);
+		self.remove_topo_pducount_at_depth(pdu_id, old_depth);
 	}
 
 	pub(super) fn replace_stream_and_topo_pducount(
@@ -261,6 +413,58 @@ impl Data {
 		let topo_key = Self::topo_pducount_key(pdu_id, local_topo_depth);
 		self.roomid_topologicalorder_pducount
 			.insert(&topo_key, event_id.as_bytes());
+	}
+
+	/// Combined write: updates stream + topo index and overwrites metadata
+	/// from a pre-computed `EventMetadata`, avoiding any DB reads.
+	pub(super) fn replace_stream_topo_with_cached_metadata(
+		&self,
+		pdu_id: &RawPduId,
+		event_id: &EventId,
+		local_topo_depth: u64,
+		pdu_count: PduCount,
+		meta: &mut rooms::timeline::EventMetadata,
+	) {
+		self.room_pducount_eventid
+			.insert(pdu_id, event_id.as_bytes());
+		self.eventid_pduid.insert(event_id.as_bytes(), pdu_id);
+
+		// Update metadata fields and write in one shot — no read needed
+		meta.local_topological_depth = local_topo_depth;
+		meta.pdu_count = Some(pdu_count.into_unsigned());
+		if let Ok(metadata_bytes) = bincode::serialize(meta) {
+			self.eventid_metadata
+				.insert(event_id.as_bytes(), &metadata_bytes);
+		}
+
+		let topo_key = Self::topo_pducount_key(pdu_id, local_topo_depth);
+		self.roomid_topologicalorder_pducount
+			.insert(&topo_key, event_id.as_bytes());
+	}
+
+	/// Rebuild topo index entry using a cached `EventMetadata`, avoiding
+	/// any blocking DB reads. Updates the topo key and metadata in one shot.
+	pub(super) fn reindex_topo_with_cached_metadata(
+		&self,
+		pdu_id: &RawPduId,
+		event_id: &EventId,
+		new_topo_depth: u64,
+		meta: &mut rooms::timeline::EventMetadata,
+	) {
+		// Remove old topo entry using cached depth
+		self.remove_topo_pducount_at_depth(pdu_id, meta.local_topological_depth);
+
+		// Write new topo entry
+		let topo_key = Self::topo_pducount_key(pdu_id, new_topo_depth);
+		self.roomid_topologicalorder_pducount
+			.insert(&topo_key, event_id.as_bytes());
+
+		// Update metadata with new depth — no read needed
+		meta.local_topological_depth = new_topo_depth;
+		if let Ok(metadata_bytes) = bincode::serialize(meta) {
+			self.eventid_metadata
+				.insert(event_id.as_bytes(), &metadata_bytes);
+		}
 	}
 
 	pub(super) async fn remove_from_timeline(&self, event_id: &EventId) {
@@ -757,7 +961,7 @@ impl Data {
 		pdu: &PduEvent,
 		json: &CanonicalJsonObject,
 		count: PduCount,
-		mut depth_cache: Option<&mut std::collections::HashMap<OwnedEventId, u64>>,
+		mut depth_cache: Option<&mut HashMap<OwnedEventId, u64>>,
 	) {
 		debug_assert!(matches!(count, PduCount::Normal(_)), "PduCount not Normal");
 
@@ -874,7 +1078,7 @@ impl Data {
 		event_id: &EventId,
 		json: &CanonicalJsonObject,
 		pdu: &PduEvent,
-		mut depth_cache: Option<&mut std::collections::HashMap<OwnedEventId, u64>>,
+		mut depth_cache: Option<&mut HashMap<OwnedEventId, u64>>,
 	) {
 		let event_id_bytes = event_id.as_bytes();
 		self.eventid_pduid
