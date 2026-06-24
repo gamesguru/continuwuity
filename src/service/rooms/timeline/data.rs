@@ -72,8 +72,7 @@ impl Data {
 			.map_ok(|(key, _)| RawPduId::from(key).pdu_count())
 			.try_next()
 			.await?
-			.filter(|count| matches!(count, PduCount::Normal(_)))
-			.unwrap_or_else(PduCount::max);
+			.unwrap_or(PduCount::min());
 
 		conduwuit::debug!(
 			target: "timeline_debug",

@@ -181,3 +181,69 @@ impl Ord for Count {
 impl Default for Count {
 	fn default() -> Self { Self::Normal(0) }
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Backfilled events must always sort before Normal events in the
+	/// timeline ordering.  The sync early-return in `load_timeline` relies on
+	/// `last_timeline_count <= starting_count` to skip rooms with no new
+	/// activity.  If `last_timeline_count` returns a Backfilled count, it
+	/// must be less than any Normal sync token so the room is skipped.
+	#[test]
+	fn backfilled_is_less_than_normal() {
+		assert!(Count::Backfilled(-1) < Count::Normal(0));
+		assert!(Count::Backfilled(-1) < Count::Normal(1));
+		assert!(Count::Backfilled(0) < Count::Normal(1));
+		assert!(Count::Backfilled(i64::MIN) < Count::Normal(0));
+	}
+
+	/// `Count::min()` must be strictly less than any realistic Normal sync
+	/// token so that `last_timeline_count` returning `min()` for empty rooms
+	/// always triggers the sync early-return path.
+	#[test]
+	fn min_is_less_than_any_normal_token() {
+		assert!(Count::min() < Count::Normal(0));
+		assert!(Count::min() < Count::Normal(1));
+		assert!(Count::min() < Count::Normal(u64::MAX / 2));
+		assert!(Count::min() <= Count::Backfilled(-1));
+	}
+
+	/// `Count::max()` must be strictly greater than any realistic Normal sync
+	/// token.  Previously `last_timeline_count` incorrectly returned `max()`
+	/// for backfilled-only rooms, which defeated the sync early-return check
+	/// and caused massive log spam.
+	#[test]
+	fn max_is_greater_than_any_normal_token() {
+		assert!(Count::max() > Count::Normal(0));
+		assert!(Count::max() > Count::Normal(26_400_000));
+		assert!(Count::max() > Count::Backfilled(-1));
+		assert!(Count::max() > Count::min());
+	}
+
+	/// Verify the sync early-return invariant directly:
+	/// `last_timeline_count <= starting_count` must be true when the room's
+	/// latest event is Backfilled and the client's sync token is Normal.
+	#[test]
+	fn sync_early_return_skips_backfilled_rooms() {
+		let starting_count = Count::Normal(26_400_689); // typical sync token
+		let last_backfilled = Count::Backfilled(-100); // room with only backfilled events
+		let last_empty = Count::min(); // room with no events at all
+
+		assert!(
+			last_backfilled <= starting_count,
+			"backfilled-only rooms must trigger sync early return"
+		);
+		assert!(last_empty <= starting_count, "empty rooms must trigger sync early return");
+	}
+
+	/// Verify that a room with recent Normal activity is NOT skipped.
+	#[test]
+	fn sync_early_return_does_not_skip_active_rooms() {
+		let starting_count = Count::Normal(26_400_689);
+		let last_active = Count::Normal(26_400_692); // newer than sync token
+
+		assert!(last_active > starting_count, "active rooms must NOT trigger sync early return");
+	}
+}
