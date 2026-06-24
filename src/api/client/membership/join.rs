@@ -1190,7 +1190,7 @@ async fn make_join_request(
 	// membership in the allowed room may not have been federated yet (the
 	// make_join HTTP request can outpace the queued federation transaction).
 	// Retry the same server once after a short delay.
-	const RESTRICTED_RETRY_DELAY: Duration = Duration::from_millis(300);
+	const RESTRICTED_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 	let mut make_join_counter: usize = 0;
 	let mut last_error = None;

@@ -678,7 +678,7 @@ impl Service {
 		}
 
 		if since.0
-			>= self
+			> self
 				.services
 				.users
 				.last_device_key_update_count
