@@ -840,7 +840,7 @@ async fn test_busted_dag_resolution() {
 		.admin
 		.command_in_place(
 			format!(
-				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 12",
+				"yolo import-pdus {} --skip-auth --skip-sig-verify --room-version 12",
 				dag_path.to_string_lossy()
 			),
 			None,
@@ -984,7 +984,7 @@ async fn test_unredacted_room_dag_resolution() {
 		.admin
 		.command_in_place(
 			format!(
-				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 10",
+				"yolo import-pdus {} --skip-auth --skip-sig-verify --room-version 10",
 				dag_path.to_string_lossy()
 			),
 			None,
@@ -1114,7 +1114,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		.admin
 		.command_in_place(
 			format!(
-				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 12",
+				"yolo import-pdus {} --skip-auth --skip-sig-verify --room-version 12",
 				dag_path.to_string_lossy()
 			),
 			None,
@@ -1351,7 +1351,7 @@ async fn test_nheko_dag_resolution() {
 		.admin
 		.command_in_place(
 			format!(
-				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 5",
+				"yolo import-pdus {} --skip-auth --skip-sig-verify --room-version 5",
 				dag_path.to_string_lossy()
 			),
 			None,
@@ -1655,7 +1655,7 @@ async fn test_knocking_dag_resolution() {
 		.admin
 		.command_in_place(
 			format!(
-				"yolo import-pdus {room_id} {} --skip-auth --skip-sig-verify --room-version 12",
+				"yolo import-pdus {} --skip-auth --skip-sig-verify --room-version 12",
 				dag_path.to_string_lossy()
 			),
 			None,

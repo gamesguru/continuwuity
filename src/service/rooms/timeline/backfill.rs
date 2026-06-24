@@ -464,6 +464,7 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 
 	// Remove from outlier room index
 	self.services.outlier.remove_outlier(event_id).await;
+	self.services.pdu_metadata.clear_pdu_markers(event_id);
 
 	Ok(())
 }

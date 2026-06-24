@@ -10,8 +10,8 @@ use crate::admin_command;
 #[admin_command]
 pub(super) async fn import_pdus(
 	&self,
-	room_id: OwnedRoomId,
 	path: String,
+	room_id: Option<OwnedRoomId>,
 	skip_auth: bool,
 	skip_sig_verify: bool,
 	force: bool,
@@ -19,6 +19,44 @@ pub(super) async fn import_pdus(
 ) -> Result {
 	use futures::StreamExt;
 	self.bail_restricted()?;
+
+	let file_content = tokio::fs::read_to_string(&path)
+		.await
+		.map_err(|e| err!("Failed to read file {path}: {e:?}"))?;
+
+	let inferred_room_id = match room_id {
+		| Some(r) => r,
+		| None => {
+			let first_line = file_content
+				.lines()
+				.find(|l| !l.trim().is_empty())
+				.ok_or_else(|| err!(Request(InvalidParam("File is empty"))))?;
+			let first_pdu: CanonicalJsonObject = serde_json::from_str(first_line)
+				.map_err(|e| err!(Request(InvalidParam("Failed to parse first PDU: {e}"))))?;
+			let r_id = first_pdu
+				.get("room_id")
+				.and_then(|v| v.as_str())
+				.and_then(|s| ruma::RoomId::parse(s).ok());
+			r_id.map(ToOwned::to_owned)
+				.or_else(|| {
+					let is_create =
+						first_pdu.get("type").and_then(|v| v.as_str()) == Some("m.room.create");
+					if is_create {
+						let eid = first_pdu.get("event_id").and_then(|v| v.as_str())?;
+						OwnedRoomId::parse(eid.replace('$', "!")).ok()
+					} else {
+						None
+					}
+				})
+				.ok_or_else(|| {
+					err!(Request(InvalidParam(
+						"Could not infer room_id from first PDU. Please specify --room-id \
+						 manually."
+					)))
+				})?
+		},
+	};
+	let room_id = inferred_room_id;
 
 	let room_version = match room_version {
 		| Some(v) => {
@@ -52,10 +90,6 @@ pub(super) async fn import_pdus(
 		"Importing PDUs from {path} into {room_id} [{mode}] (in-memory)..\n"
 	))
 	.await?;
-
-	let file_content = tokio::fs::read_to_string(&path)
-		.await
-		.map_err(|e| err!("Failed to read file {path}: {e:?}"))?;
 
 	let room_version_ref = room_version.clone();
 

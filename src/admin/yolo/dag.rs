@@ -803,7 +803,7 @@ pub(super) async fn get_remote_dag(
 	// Pipeline hint
 	if import {
 		self.write_str(&format!(
-			"\nTo import: `yolo import-pdus {room_id} {display_path} --skip-sig-verify`\n"
+			"\nTo import: `yolo import-pdus {display_path} --skip-sig-verify`\n"
 		))
 		.await?;
 	}

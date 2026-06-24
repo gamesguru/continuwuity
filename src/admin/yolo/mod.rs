@@ -455,10 +455,12 @@ pub enum YoloCommand {
 	/// Use `get-remote-dag` to create the JSONL file, then this command
 	/// to import it. Run `reorder-timeline` afterwards to fix ordering.
 	ImportPdus {
-		/// The room ID to import into.
-		room_id: OwnedRoomId,
 		/// Path to the JSONL file on disk.
 		path: String,
+		/// Optional room ID to force import into. If omitted, it is inferred
+		/// from the PDUs.
+		#[arg(long)]
+		room_id: Option<OwnedRoomId>,
 		/// Skip auth checks and state resolution (force-insert directly
 		/// into the timeline, bypassing handle_incoming_pdu).
 		#[arg(long)]

@@ -280,6 +280,20 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 	{
 		self.db.eventid_pdu.remove(event_id.as_bytes());
 		self.db.eventid_metadata.remove(event_id.as_bytes());
+	} else if let Ok(metadata_bytes) = self.db.eventid_metadata.get_blocking(event_id.as_bytes())
+	{
+		if let Ok(mut meta) =
+			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
+		{
+			if meta.is_outlier {
+				meta.is_outlier = false;
+				if let Ok(new_bytes) = bincode::serialize(&meta) {
+					self.db
+						.eventid_metadata
+						.insert(event_id.as_bytes(), &new_bytes);
+				}
+			}
+		}
 	}
 }
 
