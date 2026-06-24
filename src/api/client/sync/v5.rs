@@ -1032,53 +1032,56 @@ where
 				let current_state_ids: HashMap<_, OwnedEventId> = services
 					.rooms
 					.state_accessor
-					.state_full_ids(current_shortstatehash)
+					.state_keys_with_ids(current_shortstatehash, &StateEventType::RoomMember)
 					.collect()
 					.await;
 
 				let since_state_ids: HashMap<_, _> = services
 					.rooms
 					.state_accessor
-					.state_full_ids(since_shortstatehash)
+					.state_keys_with_ids(since_shortstatehash, &StateEventType::RoomMember)
 					.collect()
 					.await;
 
-				for (key, id) in current_state_ids {
-					if since_state_ids.get(&key) != Some(&id) {
+				for (state_key, id) in current_state_ids {
+					if since_state_ids.get(&state_key) != Some(&id) {
+						let Ok(user_id) = UserId::parse(&state_key) else {
+							continue;
+						};
+
+						if user_id == sender_user {
+							continue;
+						}
+
 						let Ok(pdu) = services.rooms.timeline.get_pdu(&id).await else {
 							error!("Pdu in state not found: {id}");
 							continue;
 						};
-						if pdu.kind == TimelineEventType::RoomMember {
-							if let Some(Ok(user_id)) = pdu.state_key.as_deref().map(UserId::parse)
-							{
-								if user_id == sender_user {
-									continue;
-								}
 
-								let content: RoomMemberEventContent = pdu.get_content()?;
-								match content.membership {
-									| MembershipState::Join => {
-										// A new user joined an encrypted room
-										if !share_encrypted_room(
-											services,
-											sender_user,
-											user_id,
-											Some(room_id),
-										)
-										.await
-										{
-											device_list_changes.insert(user_id.to_owned());
-										}
-									},
-									| MembershipState::Leave => {
-										// Write down users that have left encrypted rooms we
-										// are in
-										left_encrypted_users.insert(user_id.to_owned());
-									},
-									| _ => {},
+						let Ok(content) = pdu.get_content::<RoomMemberEventContent>() else {
+							continue;
+						};
+
+						match content.membership {
+							| MembershipState::Join => {
+								// A new user joined an encrypted room
+								if !share_encrypted_room(
+									services,
+									sender_user,
+									user_id,
+									Some(room_id),
+								)
+								.await
+								{
+									device_list_changes.insert(user_id.to_owned());
 								}
-							}
+							},
+							| MembershipState::Leave => {
+								// Write down users that have left encrypted rooms we
+								// are in
+								left_encrypted_users.insert(user_id.to_owned());
+							},
+							| _ => {},
 						}
 					}
 				}
