@@ -571,16 +571,38 @@ impl Service {
 			return Ok(version);
 		}
 
-		let version = self
+		// Try the current room state snapshot first.
+		if let Ok(content) = self
 			.services
 			.state_accessor
-			.room_state_get_content(room_id, &StateEventType::RoomCreate, "")
+			.room_state_get_content::<RoomCreateEventContent>(
+				room_id,
+				&StateEventType::RoomCreate,
+				"",
+			)
 			.await
-			.map(|content: RoomCreateEventContent| content.room_version)
-			.map_err(|e| conduwuit::err!(Request(NotFound("No create event found: {e:?}"))))?;
+		{
+			let version = content.room_version;
+			self.services.short.set_room_version(room_id, &version);
+			return Ok(version);
+		}
 
-		self.services.short.set_room_version(room_id, &version);
-		Ok(version)
+		// Fallback: the create event might be an outlier (not in the state
+		// snapshot). Scan outliers for this room to find it.
+		let mut outlier_stream = Box::pin(self.services.outlier.room_stream(room_id));
+		while let Some((_eid, pdu)) = outlier_stream.next().await {
+			if pdu.kind == TimelineEventType::RoomCreate {
+				if let Ok(content) = pdu.get_content::<RoomCreateEventContent>() {
+					let version = content.room_version;
+					self.services.short.set_room_version(room_id, &version);
+					return Ok(version);
+				}
+			}
+		}
+
+		Err(conduwuit::err!(Request(NotFound(
+			"No create event found for room (checked state + outliers)"
+		))))
 	}
 
 	pub async fn get_shortstatehash(&self, shorteventid: ShortEventId) -> Result<ShortStateHash> {
