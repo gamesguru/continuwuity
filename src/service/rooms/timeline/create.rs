@@ -1,6 +1,6 @@
 use std::{cmp, collections::HashMap};
 
-use conduwuit::{smallstr::SmallString, trace};
+use conduwuit::{info, smallstr::SmallString, trace};
 use conduwuit_core::{
 	Err, Error, Result, err, implement,
 	matrix::{
@@ -23,29 +23,32 @@ use serde_json::value::{RawValue, to_raw_value};
 use super::RoomMutexGuard;
 
 pub fn pdu_fits(owned_obj: &mut CanonicalJsonObject) -> bool {
-	// room IDs, event IDs, senders, types, and state keys must all be <= 255 bytes
+	// room IDs, event IDs, senders, types, and state keys should ideally be <= 255
+	// bytes but legacy DAGs (e.g. matrix.org) contain events with much larger
+	// fields (e.g. 320+ bytes). We relax these to 1024 to prevent DAG splits,
+	// relying on the overall 64KiB limit.
 	if let Some(CanonicalJsonValue::String(room_id)) = owned_obj.get("room_id") {
-		if room_id.len() > 255 {
+		if room_id.len() > 1024 {
 			return false;
 		}
 	}
 	if let Some(CanonicalJsonValue::String(event_id)) = owned_obj.get("event_id") {
-		if event_id.len() > 255 {
+		if event_id.len() > 1024 {
 			return false;
 		}
 	}
 	if let Some(CanonicalJsonValue::String(sender)) = owned_obj.get("sender") {
-		if sender.len() > 255 {
+		if sender.len() > 1024 {
 			return false;
 		}
 	}
 	if let Some(CanonicalJsonValue::String(kind)) = owned_obj.get("type") {
-		if kind.len() > 255 {
+		if kind.len() > 1024 {
 			return false;
 		}
 	}
 	if let Some(CanonicalJsonValue::String(state_key)) = owned_obj.get("state_key") {
-		if state_key.len() > 255 {
+		if state_key.len() > 1024 {
 			return false;
 		}
 	}
@@ -216,6 +219,7 @@ pub async fn create_event(
 		},
 		hashes: EventHash { sha256: String::new() },
 		signatures: None,
+		rejected: false,
 	};
 
 	let auth_fetch = |k: &StateEventType, s: &str| {
@@ -245,6 +249,12 @@ pub async fn create_event(
 		| TimelineEventType::RoomCreate => &pdu,
 		| _ => create_pdu.as_ref().unwrap().as_pdu(),
 	};
+
+	info!(
+		"auth_events keys for event {}: {:?}",
+		pdu.event_id,
+		auth_events.keys().collect::<Vec<_>>()
+	);
 
 	let auth_check = state_res::auth_check(
 		&room_version,
@@ -298,7 +308,7 @@ pub async fn create_hash_and_sign_event(
 			| Error::Signatures(ruma::signatures::Error::PduSize) => {
 				Err!(Request(TooLarge("Message/PDU is too long (exceeds 65535 bytes)")))
 			},
-			| _ => Err!(Request(Unknown(warn!("Signing event failed: {e}")))),
+			| _ => Err!(Request(BadJson(warn!("Signing event failed: {e}")))),
 		};
 	}
 	// Generate event id
@@ -328,10 +338,11 @@ pub async fn create_hash_and_sign_event(
 			"Checking event in room {} with policy server",
 			pdu.room_id.as_ref().map_or("None", |id| id.as_str())
 		);
+		let policy_room_id = pdu.room_id_or_hash().expect("has room ID");
 		match self
 			.services
 			.event_handler
-			.ask_policy_server(&pdu, &mut pdu_json, pdu.room_id().expect("has room ID"), false)
+			.ask_policy_server(&pdu, &mut pdu_json, &policy_room_id, false)
 			.await
 		{
 			| Ok(true) => {},
@@ -361,4 +372,33 @@ pub async fn create_hash_and_sign_event(
 
 	trace!("New PDU created: {pdu:?}");
 	Ok((pdu, pdu_json))
+}
+
+#[cfg(test)]
+mod tests {
+	use ruma::{CanonicalJsonObject, CanonicalJsonValue};
+
+	use super::*;
+
+	#[test]
+	fn test_pdu_fits() {
+		let mut obj = CanonicalJsonObject::new();
+		obj.insert("type".into(), CanonicalJsonValue::String("m.room.message".into()));
+		assert!(pdu_fits(&mut obj));
+
+		// Test exact size limit boundary (65535 bytes)
+		let large_string = "a".repeat(65400);
+		obj.insert("content".into(), CanonicalJsonValue::String(large_string));
+		assert!(pdu_fits(&mut obj));
+
+		// Test oversized PDU (>65535 bytes)
+		let huge_string = "a".repeat(66000);
+		obj.insert("content".into(), CanonicalJsonValue::String(huge_string));
+		assert!(!pdu_fits(&mut obj));
+
+		// Test oversized individual field (>1024 chars for room_id)
+		let mut obj2 = CanonicalJsonObject::new();
+		obj2.insert("room_id".into(), CanonicalJsonValue::String("a".repeat(1025)));
+		assert!(!pdu_fits(&mut obj2));
+	}
 }

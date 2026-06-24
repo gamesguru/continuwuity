@@ -119,7 +119,7 @@ impl Service {
 
 			self.services
 				.timeline
-				.replace_pdu(&root_id, &root_pdu_json)
+				.replace_pdu(&root_id, &root_pdu_json, root_event_id)
 				.await?;
 		}
 

@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Error, Result, at, debug_warn,
+	Err, Error, Result, at, debug_warn, info,
 	matrix::{
 		event::{Event, Matches},
 		pdu::PduCount,
@@ -37,6 +37,7 @@ use ruma::{
 };
 use tracing::warn;
 
+use super::sync::add_membership_to_unsigned;
 use crate::Ruma;
 
 /// list of safe and common non-state events to ignore if the user is ignored
@@ -89,6 +90,24 @@ pub(crate) async fn get_message_events_route(
 		return Err!(Request(Forbidden("Room does not exist to this server")));
 	}
 
+	// Check access before parsing pagination tokens — an unauthorized user
+	// should get 403 Forbidden, not a parse error from a stale token.
+	// Per Matrix spec, /messages is accessible to current AND former members.
+	// The per-event visibility_filter handles fine-grained history_visibility
+	// checks; this gate only verifies the user has/had membership.
+	if !services
+		.rooms
+		.state_cache
+		.is_joined(sender_user, room_id)
+		.await && !services
+		.rooms
+		.state_cache
+		.is_left(sender_user, room_id)
+		.await
+	{
+		return Err!(Request(Forbidden("You don't have permission to view this room.")));
+	}
+
 	let from: PduCount = body
 		.from
 		.as_deref()
@@ -107,29 +126,37 @@ pub(crate) async fn get_message_events_route(
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
 
+	info!(
+		"/messages: room={room_id} dir={:?} from={from} to={to:?} limit={limit}",
+		body.dir
+	);
+
 	if matches!(body.dir, Direction::Backward) {
 		services
 			.rooms
 			.timeline
-			.backfill_if_required(room_id, from)
+			.backfill_if_required(room_id, from, limit)
 			.boxed()
 			.await
 			.log_err()
 			.ok();
 	}
 
+	// TODO: Fix topo depth computation for events arriving via federation with
+	// missing prev_events (partition recovery, backfill). Currently they all get
+	// depth=1, making seek_topo_key fail. See development-gg/topo_depth_fix.md
 	let it = match body.dir {
 		| Direction::Forward => services
 			.rooms
 			.timeline
-			.pdus(room_id, Some(from))
+			.topo_pdus(room_id, Some(from))
 			.ignore_err()
 			.boxed(),
 
 		| Direction::Backward => services
 			.rooms
 			.timeline
-			.pdus_rev(room_id, Some(from))
+			.topo_pdus_rev(room_id, Some(from))
 			.ignore_err()
 			.boxed(),
 	};
@@ -138,10 +165,13 @@ pub(crate) async fn get_message_events_route(
 		.ready_take_while(|(count, _)| Some(*count) != to)
 		.ready_filter_map(|item| event_filter(item, filter))
 		.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
-		.wide_filter_map(|item| visibility_filter(&services, item, sender_user))
+		.wide_filter_map(
+			|item| async move { visibility_filter(&services, item, sender_user).await },
+		)
 		.take(limit)
-		.then(async |mut pdu| {
+		.wide_then(move |mut pdu| async move {
 			pdu.1.set_unsigned(Some(sender_user));
+			add_membership_to_unsigned(&services, sender_user, &mut pdu.1).await;
 			if let Err(e) = services
 				.rooms
 				.pdu_metadata
@@ -154,6 +184,52 @@ pub(crate) async fn get_message_events_route(
 		})
 		.collect()
 		.await;
+
+	// Fallback: if topo index returned nothing, retry with raw stream.
+	// This handles events missing from the topo index (e.g. federation
+	// partition recovery where prev_events aren't available at insert time).
+	let events = if events.is_empty() {
+		let it = match body.dir {
+			| Direction::Forward => services
+				.rooms
+				.timeline
+				.pdus(room_id, Some(from))
+				.ignore_err()
+				.boxed(),
+
+			| Direction::Backward => services
+				.rooms
+				.timeline
+				.pdus_rev(room_id, Some(from))
+				.ignore_err()
+				.boxed(),
+		};
+
+		it.ready_take_while(|(count, _)| Some(*count) != to)
+			.ready_filter_map(|item| event_filter(item, filter))
+			.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
+			.wide_filter_map(|item| async move {
+				visibility_filter(&services, item, sender_user).await
+			})
+			.take(limit)
+			.wide_then(move |mut pdu| async move {
+				pdu.1.set_unsigned(Some(sender_user));
+				add_membership_to_unsigned(&services, sender_user, &mut pdu.1).await;
+				if let Err(e) = services
+					.rooms
+					.pdu_metadata
+					.add_bundled_aggregations_to_pdu(sender_user, &mut pdu.1)
+					.await
+				{
+					debug_warn!("Failed to add bundled aggregations: {e}");
+				}
+				pdu
+			})
+			.collect()
+			.await
+	} else {
+		events
+	};
 
 	let lazy_loading_context = lazy_loading::Context {
 		user_id: sender_user,
@@ -191,6 +267,12 @@ pub(crate) async fn get_message_events_route(
 		.collect()
 		.await;
 
+	// Always return `end` when events are present so the client can
+	// continue paginating. Omit it only when no events were returned,
+	// signalling the start/end of the timeline has been reached.
+	// The previous heuristic (events.len() < limit ⟹ exhausted) broke
+	// when filters caused fewer results than the limit despite more
+	// events existing further back in the timeline.
 	let next_token = events.last().map(at!(0));
 
 	let chunk = events
@@ -199,12 +281,21 @@ pub(crate) async fn get_message_events_route(
 		.map(Event::into_format)
 		.collect();
 
-	Ok(get_message_events::v3::Response {
+	let resp = get_message_events::v3::Response {
 		start: from.to_string(),
 		end: next_token.as_ref().map(PduCount::to_string),
 		chunk,
 		state,
-	})
+	};
+
+	info!(
+		"/messages: room={room_id} returning {} events, start={}, end={:?}",
+		resp.chunk.len(),
+		resp.start,
+		resp.end
+	);
+
+	Ok(resp)
 }
 
 pub(crate) async fn lazy_loading_witness<'a, I>(

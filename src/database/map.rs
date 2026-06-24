@@ -8,6 +8,7 @@ mod insert;
 mod keys;
 mod keys_from;
 mod keys_prefix;
+mod macros;
 mod open;
 mod options;
 mod qry;
@@ -38,7 +39,7 @@ use rocksdb::{AsColumnFamilyRef, ColumnFamily, ReadOptions, WriteOptions};
 
 pub(crate) use self::options::{
 	cache_iter_options_default, cache_read_options_default, iter_options_default,
-	read_options_default, write_options_default,
+	nocache_read_options_default, read_options_default, write_options_default,
 };
 pub use self::{get_batch::Get, qry_batch::Qry};
 use crate::{Engine, watchers::Watchers};
@@ -50,11 +51,12 @@ pub struct Map {
 	db: Arc<Engine>,
 	read_options: ReadOptions,
 	cache_read_options: ReadOptions,
+	nocache_read_options: ReadOptions,
 	write_options: WriteOptions,
 }
 
 impl Map {
-	pub(crate) fn open(db: &Arc<Engine>, name: &'static str) -> Result<Arc<Self>> {
+	pub fn open(db: &Arc<Engine>, name: &'static str) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			name,
 			watchers: Watchers::default(),
@@ -62,6 +64,7 @@ impl Map {
 			db: db.clone(),
 			read_options: read_options_default(db),
 			cache_read_options: cache_read_options_default(db),
+			nocache_read_options: nocache_read_options_default(db),
 			write_options: write_options_default(db),
 		}))
 	}

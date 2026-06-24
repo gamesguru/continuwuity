@@ -1,9 +1,11 @@
-use std::mem::size_of;
-
 use arrayvec::ArrayVec;
 
 use super::{Count, Id, ShortEventId, ShortId, ShortRoomId};
 
+// TODO: RawId has two byte layouts — Normal is 16 bytes [room(8) | count(8)],
+// Backfilled is 24 bytes [room(8) | 0x00_tag(8) | count(8)]. NEVER use
+// as_ref()[8..] to extract the count; it yields zeros for Backfilled. Always
+// use shortroomid() and shorteventid() which handle both variants correctly.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum RawId {
 	Normal(RawIdNormal),
@@ -53,8 +55,23 @@ impl RawId {
 		}
 	}
 
+	/// Returns a canonical 16-byte key [shortroomid(8) | shorteventid(8)]
+	/// that is safe for both Normal and Backfilled variants. Use this instead
+	/// of as_ref() slicing when you need a uniform pdu_id representation.
 	#[inline]
 	#[must_use]
+	pub fn to_short_key(self) -> [u8; 16] {
+		let mut key = [0_u8; 16];
+		key[..8].copy_from_slice(&self.shortroomid());
+		key[8..].copy_from_slice(&self.shorteventid());
+		key
+	}
+
+	#[deprecated = "use shortroomid(), shorteventid(), or to_short_key() -- as_bytes() returns \
+	                different lengths for Normal (16) vs Backfilled (24) and raw slicing will \
+	                silently yield wrong bytes for Backfilled variants"]
+	#[allow(clippy::must_use_candidate)]
+	#[inline]
 	pub fn as_bytes(&self) -> &[u8] {
 		match self {
 			| Self::Normal(raw) => raw,
@@ -65,7 +82,12 @@ impl RawId {
 
 impl AsRef<[u8]> for RawId {
 	#[inline]
-	fn as_ref(&self) -> &[u8] { self.as_bytes() }
+	fn as_ref(&self) -> &[u8] {
+		match self {
+			| Self::Normal(raw) => raw,
+			| Self::Backfilled(raw) => raw,
+		}
+	}
 }
 
 impl From<&[u8]> for RawId {
@@ -102,6 +124,9 @@ impl From<Id> for RawId {
 				Self::Normal(vec.as_ref().try_into().expect("RawVec into RawId::Normal"))
 			},
 			| Count::Backfilled(shorteventid) => {
+				// Zero-tag ensures backfilled keys sort before all Normal keys
+				// in RocksDB byte ordering. This makes the raw byte layout 24
+				// bytes instead of 16 — as_ref()[8..] will NOT give the count.
 				vec.extend(0_u64.to_be_bytes());
 				vec.extend(shorteventid.to_be_bytes());
 				Self::Backfilled(

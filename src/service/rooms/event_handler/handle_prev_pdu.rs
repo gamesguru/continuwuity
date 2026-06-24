@@ -50,8 +50,8 @@ where
 		if continue_exponential_backoff_secs(MIN_DURATION, MAX_DURATION, time.elapsed(), *tries) {
 			debug!(
 				?tries,
-				duration = ?time.elapsed(),
-				"Backing off from prev_event"
+			duration = ?time.elapsed(),
+			"Backing off from prev_event"
 			);
 			return Ok(());
 		}
@@ -72,13 +72,23 @@ where
 		.insert(room_id.into(), ((*prev_id).to_owned(), start_time));
 
 	defer! {{
-		self.federation_handletime
-			.write()
-			.remove(room_id);
+		if self.services.server.running() {
+			self.federation_handletime
+				.write()
+				.remove(room_id);
+		}
 	}};
 
-	self.upgrade_outlier_to_timeline_pdu(pdu, json, create_event, origin, room_id)
-		.await?;
+	Box::pin(self.upgrade_outlier_to_timeline_pdu(
+		pdu,
+		json,
+		create_event,
+		origin,
+		room_id,
+		false,
+		false,
+	))
+	.await?;
 
 	debug!(
 		elapsed = ?start_time.elapsed(),

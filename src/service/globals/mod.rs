@@ -81,6 +81,9 @@ impl Service {
 	pub fn next_count(&self) -> Result<u64> { self.db.next_count() }
 
 	#[inline]
+	pub fn next_count_batch(&self, diff: u64) -> Result<u64> { self.db.next_count_batch(diff) }
+
+	#[inline]
 	pub fn current_count(&self) -> Result<u64> { Ok(self.db.current_count()) }
 
 	#[inline]
@@ -91,6 +94,8 @@ impl Service {
 			.config
 			.allow_public_room_directory_over_federation
 	}
+
+	pub fn max_forward_extremities(&self) -> usize { 10 }
 
 	pub fn allow_device_name_federation(&self) -> bool {
 		self.server.config.allow_device_name_federation

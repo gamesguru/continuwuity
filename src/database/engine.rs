@@ -136,6 +136,8 @@ impl Engine {
 
 		sequence
 	}
+
+	pub fn drop_cf(&self, name: &str) -> Result<()> { result(self.db.drop_cf(name)) }
 }
 
 impl Drop for Engine {

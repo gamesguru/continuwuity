@@ -4,8 +4,8 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer, err,
-	implement, info, trace, utils::stream::IterStream, warn,
+	Err, Event, Result, debug::INFO_SPAN_LEVEL, debug_error, debug_info, defer, err, implement,
+	info, trace, utils::stream::IterStream, warn,
 };
 use futures::{
 	FutureExt, TryFutureExt, TryStreamExt,
@@ -14,7 +14,7 @@ use futures::{
 use ruma::{
 	CanonicalJsonValue, EventId, OwnedUserId, RoomId, ServerName, UserId,
 	events::{
-		StateEventType, TimelineEventType,
+		StateEventType,
 		room::member::{MembershipState, RoomMemberEventContent},
 	},
 };
@@ -24,32 +24,38 @@ use crate::rooms::timeline::{RawPduId, pdu_fits};
 
 async fn should_rescind_invite(
 	services: &crate::rooms::event_handler::Services,
-	content: &mut BTreeMap<String, CanonicalJsonValue>,
+	content: &BTreeMap<String, CanonicalJsonValue>,
 	sender: &UserId,
 	room_id: &RoomId,
-) -> Result<Option<PduEvent>> {
-	// We insert a bogus event ID since we can't actually calculate the right one
-	content.insert("event_id".to_owned(), CanonicalJsonValue::String("$rescind".to_owned()));
-	let pdu_event = serde_json::from_value::<PduEvent>(
-		serde_json::to_value(&content).expect("CanonicalJsonObj is a valid JsonValue"),
-	)
-	.map_err(|e| err!("invalid PDU: {e}"))?;
+) -> Result<bool> {
+	let event_room_id = content.get("room_id").and_then(|v| v.as_str());
+	let event_sender = content.get("sender").and_then(|v| v.as_str());
+	let event_type = content.get("type").and_then(|v| v.as_str());
+	let state_key = content.get("state_key").and_then(|v| v.as_str());
 
-	if pdu_event.room_id().is_none_or(|r| r != room_id)
-		&& pdu_event.sender() != sender
-		&& pdu_event.event_type() != &TimelineEventType::RoomMember
-		&& pdu_event.state_key().is_none_or(|v| v == sender.as_str())
+	if event_room_id.is_some_and(|r| r != room_id.as_str())
+		|| event_sender != Some(sender.as_str())
+		|| event_type != Some("m.room.member")
+		|| state_key.is_none()
 	{
-		return Ok(None);
+		return Ok(false);
 	}
 
-	let target_user_id = UserId::parse(pdu_event.state_key().unwrap())?;
-	if pdu_event
-		.get_content::<RoomMemberEventContent>()?
-		.membership
-		!= MembershipState::Leave
-	{
-		return Ok(None); // Not a leave event
+	let target_user_id = UserId::parse(state_key.unwrap())?;
+
+	let membership = content
+		.get("content")
+		.and_then(|c| c.as_object())
+		.and_then(|c| c.get("membership"))
+		.and_then(|m| m.as_str());
+
+	// TODO: what about "kick" events, too?
+	if membership != Some("leave") && membership != Some("ban") {
+		return Ok(false); // Only leave and ban can rescind an invite
+	}
+
+	if target_user_id.server_name() != services.globals.server_name() {
+		return Ok(false);
 	}
 
 	// Does the target user have a pending invite?
@@ -58,27 +64,27 @@ async fn should_rescind_invite(
 		.invite_state(target_user_id, room_id)
 		.await
 	else {
-		return Ok(None); // No pending invite, so nothing to rescind
+		return Ok(false); // No pending invite, so nothing to rescind
 	};
 	for event in pending_invite_state {
 		if event
 			.get_field::<String>("type")?
 			.is_some_and(|t| t == "m.room.member")
-			|| event
+			&& event
 				.get_field::<OwnedUserId>("state_key")?
 				.is_some_and(|s| s == *target_user_id)
-			|| event
+			&& event
 				.get_field::<OwnedUserId>("sender")?
 				.is_some_and(|s| s == *sender)
-			|| event
+			&& event
 				.get_field::<RoomMemberEventContent>("content")?
 				.is_some_and(|c| c.membership == MembershipState::Invite)
 		{
-			return Ok(Some(pdu_event));
+			return Ok(true);
 		}
 	}
 
-	Ok(None)
+	Ok(false)
 }
 
 /// When receiving an event one needs to:
@@ -122,10 +128,131 @@ pub async fn handle_incoming_pdu<'a>(
 	event_id: &'a EventId,
 	value: BTreeMap<String, CanonicalJsonValue>,
 	is_timeline_event: bool,
+	room_version_override: Option<&'a ruma::RoomVersionId>,
 ) -> Result<Option<RawPduId>> {
-	// 1. Skip the PDU if we already have it as a timeline event
+	// Prepare outlier value in case we need to soft-fail on timeout
+	let mut outlier_value = value.clone();
+	outlier_value
+		.insert("event_id".to_owned(), CanonicalJsonValue::String(event_id.as_str().to_owned()));
+
+	let fut = self.handle_incoming_pdu_inner(
+		origin,
+		room_id,
+		event_id,
+		value,
+		is_timeline_event,
+		room_version_override,
+	);
+
+	let pdu_timeout = 60;
+	match Box::pin(tokio::time::timeout(std::time::Duration::from_secs(pdu_timeout), fut)).await {
+		| Ok(res) => res,
+		| Err(_) => {
+			warn!(
+				%event_id,
+				%room_id,
+				%origin,
+				pdu_timeout,
+				"PDU processing timed out, storing as outlier"
+			);
+
+			// Store the event data as an outlier so subsequent events
+			// referencing it as a prev_event have something to build on.
+			// Do NOT mark it soft-failed — it didn't fail auth, it just
+			// ran out of time. It can be retried or upgraded later.
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &outlier_value, Some(room_id));
+
+			Err!(Request(Unknown("PDU processing timed out, please retry later.")))
+		},
+	}
+}
+
+#[implement(super::Service)]
+pub(super) async fn handle_incoming_pdu_inner<'a>(
+	&self,
+	origin: &'a ServerName,
+	room_id: &'a RoomId,
+	event_id: &'a EventId,
+	value: BTreeMap<String, CanonicalJsonValue>,
+	is_timeline_event: bool,
+	room_version_override: Option<&'a ruma::RoomVersionId>,
+) -> Result<Option<RawPduId>> {
+	// Skip if it's already an accepted timeline event.
 	if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
-		return Ok(Some(pdu_id));
+		if self.services.pdu_metadata.is_event_accepted(event_id).await {
+			return Ok(Some(pdu_id));
+		}
+	}
+	// NATIVE RETRY INTERCEPTION: If it's a known outlier that was rejected, check local auth.
+	else if is_timeline_event
+		&& self
+			.services
+			.outlier
+			.get_pdu_outlier(event_id)
+			.await
+			.is_ok()
+	{
+		let pdu = self
+			.services
+			.outlier
+			.get_pdu_outlier(event_id)
+			.await
+			.unwrap();
+		if !self.services.pdu_metadata.is_event_accepted(event_id).await {
+			// Fast local check: are all auth events AND prev_events NOW in the timeline?
+			let mut all_deps_satisfied = true;
+			for aid in pdu.auth_events() {
+				if !self.services.pdu_metadata.is_event_accepted(aid).await {
+					all_deps_satisfied = false;
+					break;
+				}
+			}
+			if all_deps_satisfied {
+				for prev_id in pdu.prev_events() {
+					// Prev must exist in the timeline (not just as outlier)
+					// for the unreject upgrade to have the state it needs.
+					if self.services.timeline.get_pdu_id(prev_id).await.is_err() {
+						all_deps_satisfied = false;
+						break;
+					}
+				}
+			}
+
+			if all_deps_satisfied {
+				// All auth deps are satisfied: clear the rejection flag so
+				// upgrade_outlier_pdu won't bail early with "Event has been rejected".
+				info!("Un-rejecting event {event_id}: all auth events now accepted");
+				self.services.pdu_metadata.unmark_event_rejected(event_id);
+
+				// The auth chain is finally valid! Bypass handle_outlier_pdu (we already
+				// verified sigs/hashes when we first saved it) and push to timeline
+				// upgrade.
+				let create_event = self
+					.services
+					.state_accessor
+					.room_state_get(room_id, &StateEventType::RoomCreate, "")
+					.await?;
+				let val = self
+					.services
+					.outlier
+					.get_outlier_pdu_json(event_id)
+					.await
+					.unwrap_or_else(|_| value.clone());
+				return Box::pin(self.process_timeline_upgrade(
+					pdu,
+					val,
+					&create_event,
+					origin,
+					room_id,
+				))
+				.await;
+			}
+			// Still missing/rejected dependencies. Return Ok(None) to ACK the transaction
+			// instantly WITHOUT triggering network fetches or state resolution lockups.
+			return Ok(None);
+		}
 	}
 	if !pdu_fits(&mut value.clone()) {
 		warn!(
@@ -136,16 +263,16 @@ pub async fn handle_incoming_pdu<'a>(
 	}
 	trace!("processing incoming PDU from {origin} for room {room_id} with event id {event_id}");
 
-	// 1.1 Check we even know about the room
+	// Check we even know about the room
 	let meta_exists = self.services.metadata.exists(room_id).map(Ok);
 
-	// 1.2 Check if the room is disabled
+	// Check if the room is disabled
 	let is_disabled = self.services.metadata.is_disabled(room_id).map(Ok);
 
-	// 1.3.1 Check room ACL on origin field/server
+	// Check room ACL on origin field/server
 	let origin_acl_check = self.acl_check(origin, room_id);
 
-	// 1.3.2 Check room ACL on sender's server name
+	// Check room ACL on sender's server name
 	let sender: &UserId = value
 		.get("sender")
 		.try_into()
@@ -174,7 +301,7 @@ pub async fn handle_incoming_pdu<'a>(
 		.services
 		.state_cache
 		.server_in_room(self.services.globals.server_name(), room_id)
-		.await && !self.services.state_cache.is_joining(room_id)
+		.await
 	{
 		let is_room_member_event =
 			value.get("type").and_then(|t| t.as_str()) == Some("m.room.member");
@@ -182,17 +309,25 @@ pub async fn handle_incoming_pdu<'a>(
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
 		if is_room_member_event {
-			if let Some(pdu) =
-				should_rescind_invite(&self.services, &mut value.clone(), sender, room_id).await?
-			{
+			if should_rescind_invite(&self.services, &value, sender, room_id).await? {
+				let state_key = value
+					.get("state_key")
+					.and_then(|v| v.as_str())
+					.unwrap_or_default();
+				let target_user = UserId::parse(state_key).unwrap_or(sender);
 				debug_info!(
-					"Invite to {room_id} appears to have been rescinded by {sender}, marking as \
-					 left"
+					"Invite to {room_id} appears to have been rescinded by {sender}, marking \
+					 target {target_user} as left"
 				);
 				self.services
 					.state_cache
-					.mark_as_left(sender, room_id, Some(pdu))
+					.mark_as_left(target_user, room_id, None)
 					.await;
+				// Store the leave/ban as an outlier so the remote server's
+				// retry finds it and doesn't loop with 404s.
+				self.services
+					.outlier
+					.add_pdu_outlier(event_id, &value, Some(room_id));
 				return Ok(None);
 			}
 		}
@@ -203,6 +338,19 @@ pub async fn handle_incoming_pdu<'a>(
 				%room_id,
 				"Accepting inbound membership PDU for known room before participation cache catches up"
 			);
+		} else if is_room_member_event {
+			// We're not in this room but got a member event we couldn't
+			// rescind. Store it as an outlier so the remote server doesn't
+			// retry endlessly with 404s.
+			info!(
+				%origin,
+				%room_id,
+				"Storing unprocessable member PDU as outlier (not participating)"
+			);
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &value, Some(room_id));
+			return Ok(None);
 		} else {
 			info!(
 				%origin,
@@ -224,14 +372,135 @@ pub async fn handle_incoming_pdu<'a>(
 		.room_state_get(room_id, &StateEventType::RoomCreate, "")
 		.await?);
 
-	let (incoming_pdu, val) = self
-		.handle_outlier_pdu(origin, create_event, event_id, room_id, value, false)
-		.await?;
+	let (incoming_pdu, val) = match self
+		.handle_outlier_pdu(
+			origin,
+			Some(create_event),
+			event_id,
+			room_id,
+			value.clone(),
+			false,
+			false,
+			room_version_override,
+		)
+		.await
+	{
+		| Ok(res) => res,
+		| Err(conduwuit::Error::MissingAuthEvents(missing)) => {
+			// Before attempting expensive /state/ federation requests, check
+			// whether the missing auth events are already known to be rejected.
+			// If they are, this event inherits the rejection and no network
+			// fetch is needed (spec step 5: reject if auth events are rejected).
+			for mid in &missing {
+				if self.services.pdu_metadata.is_event_rejected(mid).await {
+					info!(
+						"Event {event_id} rejected: missing auth event {mid} is already marked \
+						 rejected; skipping /state/ fetch"
+					);
+					self.services
+						.outlier
+						.add_pdu_outlier(event_id, &value, Some(room_id));
+					self.services
+						.pdu_metadata
+						.mark_event_rejected(event_id, &format!("auth event {mid} is rejected"));
+					return Ok(None);
+				}
+			}
 
-	// 8. if not timeline event: stop
+			// The auth event chain for this PDU may be deeper than the
+			// iterative fetcher's per-call limit. Try calling /state_ids on
+			// the origin to retrieve and store the complete auth chain in one
+			// shot, then retry handle_outlier_pdu. This also satisfies the
+			// Matrix spec requirement that servers call /state_ids when auth
+			// events are unresolvable via the normal backfill path.
+			let retry_result = Box::pin(async {
+				Box::pin(self.fetch_state(origin, create_event, room_id, event_id, false))
+					.await?;
+				Box::pin(self.handle_outlier_pdu(
+					origin,
+					Some(create_event),
+					event_id,
+					room_id,
+					value.clone(),
+					false,
+					false,
+					room_version_override,
+				))
+				.await
+			})
+			.await;
+
+			match retry_result {
+				| Ok(res) => res,
+				| Err(_) => {
+					// /state_ids didn't help — fall back to background healer.
+					info!(
+						target: "state_res_debug",
+						event_id = %event_id,
+						count = missing.len(),
+						"Storing incoming PDU as outlier; missing auth events will be \
+						 fetched in background"
+					);
+					self.services
+						.outlier
+						.add_pdu_outlier(event_id, &value, Some(room_id));
+					self.services.pdu_metadata.mark_event_rejected(
+						event_id,
+						"missing auth events after /state_ids retry",
+					);
+
+					return Ok(None);
+				},
+			}
+		},
+		| Err(conduwuit::Error::Request(_, ref msg, ..))
+			if msg.contains("Event depends on rejected auth event")
+				|| msg.contains("is already known and rejected") =>
+		{
+			info!(
+				"Event {event_id} rejected because it depends on rejected auth event. Returning \
+				 Ok(None) to acknowledge the transaction."
+			);
+			self.services
+				.outlier
+				.add_pdu_outlier(event_id, &value, Some(room_id));
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(event_id, "depends on rejected auth event");
+			return Ok(None);
+		},
+		| Err(e) => return Err(e),
+	};
+
+	// if not timeline event: stop
 	if !is_timeline_event {
 		return Ok(None);
 	}
+
+	// Run the timeline upgrade synchronously inline.
+	// We no longer need an MPSC worker because state resolution lockups (the V2.1
+	// drain trap) are fixed, so this runs blazingly fast without starving EDUs or
+	// OCC storms!
+	Box::pin(self.process_timeline_upgrade(incoming_pdu, val, create_event, origin, room_id))
+		.await
+}
+
+#[implement(super::Service)]
+#[tracing::instrument(
+	name = "pdu_upgrade",
+	level = INFO_SPAN_LEVEL,
+	skip_all,
+	fields(%room_id, %event_id = %incoming_pdu.event_id()),
+)]
+pub async fn process_timeline_upgrade(
+	&self,
+	incoming_pdu: conduwuit::PduEvent,
+	val: BTreeMap<String, CanonicalJsonValue>,
+	create_event: &conduwuit::PduEvent,
+	origin: &ServerName,
+	room_id: &RoomId,
+) -> Result<Option<RawPduId>> {
+	let event_id = incoming_pdu.event_id();
 
 	// Skip old events
 	let first_ts_in_room = self
@@ -241,11 +510,16 @@ pub async fn handle_incoming_pdu<'a>(
 		.await?
 		.origin_server_ts();
 
-	// 9. Fetch any missing prev events doing all checks listed here starting at 1.
-	//    These are timeline events
-	let (sorted_prev_events, mut eventid_info) = self
-		.fetch_prev(origin, create_event, room_id, first_ts_in_room, incoming_pdu.prev_events())
-		.await?;
+	// Fetch any missing prev events doing all checks listed here starting at 1.
+	// These are timeline events
+	let (sorted_prev_events, mut eventid_info) = Box::pin(self.fetch_prev(
+		origin,
+		create_event,
+		room_id,
+		event_id,
+		incoming_pdu.prev_events(),
+	))
+	.await?;
 
 	debug!(
 		events = ?sorted_prev_events,
@@ -296,12 +570,21 @@ pub async fn handle_incoming_pdu<'a>(
 		.insert(room_id.into(), (event_id.to_owned(), start_time));
 
 	defer! {{
-		self.federation_handletime
-			.write()
-			.remove(room_id);
+		if self.services.server.running() {
+			self.federation_handletime
+				.write()
+				.remove(room_id);
+		}
 	}};
 
-	self.upgrade_outlier_to_timeline_pdu(incoming_pdu, val, create_event, origin, room_id)
-		.boxed()
-		.await
+	Box::pin(self.upgrade_outlier_to_timeline_pdu(
+		incoming_pdu,
+		val,
+		create_event,
+		origin,
+		room_id,
+		false,
+		true,
+	))
+	.await
 }

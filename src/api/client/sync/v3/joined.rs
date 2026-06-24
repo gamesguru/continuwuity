@@ -9,7 +9,7 @@ use conduwuit::{
 	},
 	trace,
 	utils::{
-		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
+		IterStream, ReadyExt, TryFutureExtExt,
 		math::ruma_from_u64,
 		stream::{TryIgnore, WidebandExt},
 	},
@@ -163,8 +163,16 @@ async fn build_ephemeral(
 				.user_is_ignored(&read_user, syncing_user)
 				.await;
 
-			// filter out read receipts for ignored users
-			is_ignored.or_some(edu)
+			if is_ignored {
+				None
+			} else {
+				let mut json: serde_json::Value = serde_json::from_str(edu.json().get()).ok()?;
+				if let Some(obj) = json.as_object_mut() {
+					obj.remove("room_id");
+				}
+				let raw = serde_json::value::to_raw_value(&json).ok()?;
+				Some(Raw::from_json(raw))
+			}
 		})
 		.collect::<Vec<_>>()
 		.boxed();
@@ -197,11 +205,15 @@ async fn build_ephemeral(
 				.await;
 
 			if let Ok(event) = event {
-				return Some(
-					Raw::new(&event)
-						.expect("typing event should be valid")
-						.cast(),
-				);
+				// Synapse and Dendrite omit m.typing events on initial sync if the user list is
+				// empty.
+				if !event.content.user_ids.is_empty() || last_sync_end_count.is_some() {
+					return Some(
+						Raw::new(&event)
+							.expect("typing event should be valid")
+							.cast(),
+					);
+				}
 			}
 		}
 
@@ -221,8 +233,8 @@ async fn build_ephemeral(
 				// update the marker if it's changed since the last sync
 				last_privateread_update > last_sync_end_count
 			},
-			// always update the marker on an initial sync
-			| None => true,
+			// omit the marker on an initial sync
+			| None => false,
 		};
 
 		if should_send_private_read {

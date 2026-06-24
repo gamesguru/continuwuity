@@ -32,19 +32,23 @@ impl<E: Event> Matches<E> for &RoomEventFilter {
 }
 
 fn matches_room<E: Event>(event: &E, filter: &RoomEventFilter) -> bool {
-	if filter
-		.not_rooms
-		.iter()
-		.any(is_equal_to!(event.room_id().expect("event has a room ID")))
-	{
-		return false;
+	let room_id = event.room_id_or_hash();
+
+	if !filter.not_rooms.is_empty() {
+		if let Some(ref rid) = room_id {
+			if filter.not_rooms.iter().any(is_equal_to!(&**rid)) {
+				return false;
+			}
+		}
 	}
 
 	if let Some(rooms) = filter.rooms.as_ref() {
-		if !rooms
-			.iter()
-			.any(is_equal_to!(event.room_id().expect("event has a room ID")))
-		{
+		if let Some(ref rid) = room_id {
+			if !rooms.iter().any(is_equal_to!(&**rid)) {
+				return false;
+			}
+		} else if !rooms.is_empty() {
+			// If we have a filter but the event (e.g. v12 create) has no room_id
 			return false;
 		}
 	}
@@ -66,46 +70,15 @@ fn matches_sender<E: Event>(event: &E, filter: &RoomEventFilter) -> bool {
 	true
 }
 
-fn matches_wildcard(target: &str, pattern: &str) -> bool {
-	if pattern == "*" {
-		return true;
-	}
-	let mut parts = pattern.split('*');
-	let first = parts.next().expect("split always yields at least one item");
-	if !target.starts_with(first) {
-		return false;
-	}
-	let mut remaining = target.strip_prefix(first).unwrap_or("");
-	for part in parts {
-		if part.is_empty() {
-			continue;
-		}
-		if let Some(idx) = remaining.find(part) {
-			let next_start = idx.saturating_add(part.len());
-			remaining = remaining.get(next_start..).unwrap_or("");
-		} else {
-			return false;
-		}
-	}
-	if !pattern.ends_with('*') {
-		remaining.is_empty()
-	} else {
-		true
-	}
-}
 fn matches_type<E: Event>(event: &E, filter: &RoomEventFilter) -> bool {
 	let kind = event.kind().to_cow_str();
 
-	if filter
-		.not_types
-		.iter()
-		.any(|pattern| matches_wildcard(&kind, pattern))
-	{
+	if filter.not_types.iter().any(is_equal_to!(&kind)) {
 		return false;
 	}
 
 	if let Some(types) = filter.types.as_ref() {
-		if !types.iter().any(|pattern| matches_wildcard(&kind, pattern)) {
+		if !types.iter().any(is_equal_to!(&kind)) {
 			return false;
 		}
 	}

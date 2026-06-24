@@ -8,6 +8,7 @@ pub mod future;
 pub mod hash;
 pub mod html;
 pub mod json;
+pub mod kahns_sort;
 pub mod math;
 pub mod mutex_map;
 pub mod rand;
@@ -20,6 +21,7 @@ pub mod sys;
 #[cfg(test)]
 mod tests;
 pub mod time;
+pub mod timeline_sorter;
 pub mod with_lock;
 
 pub use ::conduwuit_macros::implement;

@@ -22,19 +22,29 @@ impl Data {
 	}
 
 	pub fn next_count(&self) -> Result<u64> {
+		self.next_count_batch(1)
+			.map(|start| start.saturating_add(1))
+	}
+
+	pub fn next_count_batch(&self, diff: u64) -> Result<u64> {
 		let _cork = self.db.cork();
 		let mut lock = self.counter.write();
 		let counter: &mut u64 = &mut lock;
+
+		#[cfg(debug_assertions)]
 		debug_assert!(
 			*counter == Self::stored_count(&self.global).unwrap_or_default(),
 			"counter mismatch"
 		);
 
-		*counter = counter.checked_add(1).unwrap_or(*counter);
+		let start = *counter;
+		*counter = counter
+			.checked_add(diff)
+			.ok_or_else(|| conduwuit::err!(Arithmetic("Counter overflow")))?;
 
 		self.global.insert(COUNTER, counter.to_be_bytes());
 
-		Ok(*counter)
+		Ok(start)
 	}
 
 	#[inline]
@@ -67,5 +77,17 @@ impl Data {
 	#[inline]
 	pub fn bump_database_version(&self, new_version: u64) {
 		self.global.raw_put(b"version", new_version);
+	}
+
+	pub async fn schema_fingerprint(&self) -> Option<[u8; 32]> {
+		self.global
+			.get(b"schema_fingerprint")
+			.await
+			.ok()
+			.and_then(|bytes| bytes.as_ref().try_into().ok())
+	}
+
+	pub fn set_schema_fingerprint(&self, hash: &[u8; 32]) {
+		self.global.insert(b"schema_fingerprint", hash);
 	}
 }

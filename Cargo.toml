@@ -58,6 +58,10 @@ version = "0.6.0"
 version = "0.22.1"
 default-features = false
 
+[workspace.dependencies.xxhash-rust]
+version = "0.8"
+features = ["xxh3"]
+
 # used for TURN server authentication
 [workspace.dependencies.hmac]
 version = "0.13.0"
@@ -341,6 +345,13 @@ version = "0.1.88"
 
 [workspace.dependencies.lru-cache]
 version = "0.1.2"
+
+[workspace.dependencies.dashmap]
+version = "6.1.0"
+
+[workspace.dependencies.moka]
+version = "0.12"
+default-features = false
 
 # Used for matrix spec type definitions and helpers
 [workspace.dependencies.ruma]

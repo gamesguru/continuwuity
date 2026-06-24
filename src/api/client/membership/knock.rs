@@ -8,9 +8,8 @@ use conduwuit::{
 		event::gen_event_id,
 		pdu::{PduBuilder, PduEvent},
 	},
-	result::FlatOk,
 	trace,
-	utils::{self, shuffle, stream::IterStream, to_canonical_object},
+	utils::{self, to_canonical_object},
 	warn,
 };
 use futures::{FutureExt, StreamExt};
@@ -67,42 +66,19 @@ pub(crate) async fn knock_room_route(
 			)
 			.await?;
 
-			let mut servers = body.via.clone();
-			servers.extend(
-				services
-					.rooms
-					.state_cache
-					.servers_invite_via(&room_id)
-					.map(ToOwned::to_owned)
-					.collect::<Vec<_>>()
-					.await,
-			);
-
-			servers.extend(
-				services
-					.rooms
-					.state_cache
-					.invite_state(sender_user, &room_id)
-					.await
-					.unwrap_or_default()
-					.iter()
-					.filter_map(|event| event.get_field("sender").ok().flatten())
-					.filter_map(|sender: &str| UserId::parse(sender).ok())
-					.map(|user| user.server_name().to_owned()),
-			);
-
-			if let Some(server) = room_id.server_name() {
-				servers.push(server.to_owned());
-			}
-
-			servers.sort_unstable();
-			servers.dedup();
-			shuffle(&mut servers);
+			let servers = super::fetch_join_knock_servers(
+				&services,
+				sender_user,
+				&room_id,
+				body.via.clone(),
+				false,
+			)
+			.await;
 
 			(servers, room_id)
 		},
 		| Err(room_alias) => {
-			let (room_id, mut servers) = services.rooms.alias.resolve_alias(&room_alias).await?;
+			let (room_id, servers) = services.rooms.alias.resolve_alias(&room_alias).await?;
 
 			banned_room_check(
 				&services,
@@ -113,33 +89,9 @@ pub(crate) async fn knock_room_route(
 			)
 			.await?;
 
-			let addl_via_servers = services
-				.rooms
-				.state_cache
-				.servers_invite_via(&room_id)
-				.map(ToOwned::to_owned);
-
-			let addl_state_servers = services
-				.rooms
-				.state_cache
-				.invite_state(sender_user, &room_id)
-				.await
-				.unwrap_or_default();
-
-			let mut addl_servers: Vec<_> = addl_state_servers
-				.iter()
-				.map(|event| event.get_field("sender"))
-				.filter_map(FlatOk::flat_ok)
-				.map(|user: &UserId| user.server_name().to_owned())
-				.stream()
-				.chain(addl_via_servers)
-				.collect()
-				.await;
-
-			addl_servers.sort_unstable();
-			addl_servers.dedup();
-			shuffle(&mut addl_servers);
-			servers.append(&mut addl_servers);
+			let servers =
+				super::fetch_join_knock_servers(&services, sender_user, &room_id, servers, true)
+					.await;
 
 			(servers, room_id)
 		},
@@ -179,6 +131,16 @@ async fn knock_room_by_id_helper(
 	{
 		debug_warn!("{sender_user} is already joined in {room_id} but attempted to knock");
 		return Err!(Request(Forbidden("You cannot knock on a room you are already joined in.")));
+	}
+
+	if services
+		.rooms
+		.state_cache
+		.is_knocked(sender_user, room_id)
+		.await
+	{
+		debug_warn!("{sender_user} is already knocked in {room_id}");
+		return Ok(knock_room::v3::Response { room_id: room_id.into() });
 	}
 
 	if let Ok(membership) = services
@@ -233,7 +195,7 @@ async fn knock_room_by_id_helper(
 			// join_room_by_id_helper We need to release the lock here and let
 			// join_room_by_id_helper acquire it again
 			drop(state_lock);
-			match Box::pin(join_room_by_id_helper(
+			match join_room_by_id_helper(
 				services,
 				sender_user,
 				room_id,
@@ -241,7 +203,7 @@ async fn knock_room_by_id_helper(
 				servers,
 				&None,
 				None,
-			))
+			)
 			.await
 			{
 				| Ok(_) => return Ok(knock_room::v3::Response::new(room_id.to_owned())),
@@ -489,9 +451,10 @@ async fn knock_room_helper_local(
 		.append_pdu(
 			&parsed_knock_pdu,
 			knock_event,
-			once(parsed_knock_pdu.event_id.borrow()),
+			once(parsed_knock_pdu.event_id.clone()),
 			&state_lock,
 			room_id,
+			false,
 		)
 		.await?;
 
@@ -520,11 +483,6 @@ async fn knock_room_helper_remote(
 			"Remote room version {room_version_id} is not supported by conduwuit"
 		));
 	}
-
-	services
-		.rooms
-		.short
-		.set_room_version(room_id, &room_version_id);
 
 	let mut knock_event_stub: CanonicalJsonObject =
 		serde_json::from_str(make_knock_response.event.get()).map_err(|e| {
@@ -635,7 +593,10 @@ async fn knock_room_helper_remote(
 			.get_or_create_shortstatekey(&event_type, &state_key)
 			.await;
 
-		services.rooms.outlier.add_pdu_outlier(&event_id, &event);
+		services
+			.rooms
+			.outlier
+			.add_pdu_outlier(&event_id, &event, Some(room_id));
 		state_map.insert(shortstatekey, event_id.clone());
 	}
 
@@ -655,7 +616,7 @@ async fn knock_room_helper_remote(
 	} = services
 		.rooms
 		.state_compressor
-		.save_state(room_id, Arc::new(compressed))
+		.save_state_as_root(room_id, Arc::new(compressed))
 		.await?;
 
 	debug!("Forcing state for new room");
@@ -671,6 +632,14 @@ async fn knock_room_helper_remote(
 		.append_to_state(&parsed_knock_pdu, room_id)
 		.await?;
 
+	info!("Updating membership locally to knock state with provided stripped state events");
+	// TODO: see TODO on the other call to `update_membership`
+	services
+		.rooms
+		.state_cache
+		.update_membership(room_id, sender_user, &parsed_knock_pdu, false)
+		.await?;
+
 	info!("Appending room knock event locally");
 	services
 		.rooms
@@ -678,9 +647,10 @@ async fn knock_room_helper_remote(
 		.append_pdu(
 			&parsed_knock_pdu,
 			knock_event,
-			once(parsed_knock_pdu.event_id.borrow()),
+			once(parsed_knock_pdu.event_id.clone()),
 			&state_lock,
 			room_id,
+			false,
 		)
 		.await?;
 
@@ -691,13 +661,6 @@ async fn knock_room_helper_remote(
 		.rooms
 		.state
 		.set_room_state(room_id, statehash_after_knock, &state_lock);
-
-	info!("Updating membership locally to knock state with provided stripped state events");
-	services.rooms.state_cache.mark_as_knocked(
-		sender_user,
-		room_id,
-		Some(send_knock_response.knock_room_state.clone()),
-	);
 
 	Ok(())
 }
