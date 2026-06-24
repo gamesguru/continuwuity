@@ -166,8 +166,8 @@ pub async fn update_joined_count(&self, room_id: &RoomId) {
 
 	info!(
 		"update_joined_count: room={room_id} joined={joinedcount} invited={invitedcount} \
-		 servers={:?}",
-		joined_servers
+		 n_servers={}",
+		joined_servers.len()
 	);
 
 	let mut removed_servers = Vec::new();

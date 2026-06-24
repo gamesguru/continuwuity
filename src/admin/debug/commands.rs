@@ -1009,6 +1009,7 @@ pub(crate) async fn force_set_state(
 		Box::pin(self.promote_sync_anchor(&room_id, short_state_hash, &state_lock)).await;
 	}
 
+	drop(state_lock);
 	if !skip_membership_rebuild {
 		info!("Rebuilding membership cache");
 		Box::pin(self.rebuild_membership_cache_inner(room_id.clone(), short_state_hash)).await;

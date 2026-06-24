@@ -799,8 +799,12 @@ async fn test_yolo_reorder_timeline() {
 		.iter()
 		.position(|id| id == &event_b)
 		.expect("Event B not found");
-	println!("Event B topological index: {}, Event A topological index: {}", index_b, index_a);
-	assert!(index_b < index_a, "Event B should be before Event A after reordering");
+	println!("Event A topological index: {}, Event B topological index: {}", index_a, index_b);
+	assert!(
+		index_a < index_b,
+		"Event A should be before Event B after reordering because they are concurrent DAG \
+		 forks and stream arrival (PduCount) tie-breaks"
+	);
 }
 
 #[tokio::test]

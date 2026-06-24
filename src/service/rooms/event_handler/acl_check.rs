@@ -22,7 +22,7 @@ pub async fn acl_check(&self, server_name: &ServerName, room_id: &RoomId) -> Res
 		return Ok(());
 	};
 
-	info!(
+	debug!(
 		target: "acl_debug",
 		%room_id, %server_name,
 		allow = ?acl_event_content.allow,
@@ -43,7 +43,7 @@ pub async fn acl_check(&self, server_name: &ServerName, room_id: &RoomId) -> Res
 	}
 
 	if acl_event_content.is_allowed(server_name) {
-		warn!(
+		debug!(
 			"ACL ALLOWED: server_name={}, room_id={}, acl_content={:?}",
 			server_name, room_id, acl_event_content
 		);
