@@ -225,7 +225,8 @@ where
 	let mut entries = HashMap::new();
 	for (eid, (pdu, _)) in &verified_events {
 		graph.insert(eid.clone(), pdu.prev_events().map(ToOwned::to_owned).collect());
-		entries.insert(eid.clone(), (0_u64.into(), pdu.origin_server_ts));
+		entries
+			.insert(eid.clone(), (0_u64.into(), pdu.depth().into(), pdu.origin_server_ts.into()));
 	}
 	let sorted_eids = conduwuit::utils::timeline_sorter::sort_timeline_events(&entries, &graph);
 

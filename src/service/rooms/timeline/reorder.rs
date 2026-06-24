@@ -89,7 +89,7 @@ impl Service {
 
 		let mut available_counts: Vec<PduCount> = Vec::new();
 		if force_reindex {
-			available_counts = entries.values().map(|(c, _)| *c).collect();
+			available_counts = entries.values().map(|(c, ..)| *c).collect();
 			available_counts.sort();
 		}
 
@@ -134,7 +134,7 @@ impl Service {
 
 			let cork = self.db.db.cork();
 			if force_reindex {
-				for (event_id, &(old_count, _)) in &entries {
+				for (event_id, &(old_count, ..)) in &entries {
 					let old_pdu_id: RawPduId =
 						PduId { shortroomid, shorteventid: old_count }.into();
 					// Use cached depth to avoid blocking metadata read
@@ -151,7 +151,7 @@ impl Service {
 				}
 			}
 			for (i, event_id) in sorted.iter().enumerate() {
-				let &(existing_count, _) = entries.get(event_id).expect("in sorted list");
+				let &(existing_count, ..) = entries.get(event_id).expect("in sorted list");
 				let new_count = if force_reindex {
 					available_counts[i]
 				} else {
@@ -356,7 +356,7 @@ impl Service {
 		room_id: &RoomId,
 		shortroomid: ShortRoomId,
 		sorted: &[OwnedEventId],
-		entries: &HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
+		entries: &HashMap<OwnedEventId, (PduCount, u64, u64)>,
 		force_reindex: bool,
 		available_counts: &[PduCount],
 		metadata_cache: &mut HashMap<OwnedEventId, EventMetadata>,
@@ -384,7 +384,7 @@ impl Service {
 		let mut depths: HashMap<OwnedEventId, u64> = HashMap::new();
 		for event_id in sorted {
 			// Use the existing stream order count -- do NOT fabricate a new one
-			let Some(&(existing_count, _)) = entries.get(event_id) else {
+			let Some(&(existing_count, ..)) = entries.get(event_id) else {
 				continue;
 			};
 			let pdu_id: RawPduId = PduId {
@@ -439,7 +439,7 @@ impl Service {
 		// Uses cached metadata to avoid blocking DB reads where possible.
 		let cork = self.db.db.cork();
 		if force_reindex {
-			for (event_id, &(old_count, _)) in entries {
+			for (event_id, &(old_count, ..)) in entries {
 				let old_pdu_id: RawPduId = PduId { shortroomid, shorteventid: old_count }.into();
 				if let Some(meta) = metadata_cache.get(event_id) {
 					self.db.remove_stream_and_topo_pducount_at_depth(
@@ -455,7 +455,7 @@ impl Service {
 		}
 
 		for (i, event_id) in sorted.iter().enumerate() {
-			let Some(&(existing_count, _)) = entries.get(event_id) else { continue };
+			let Some(&(existing_count, ..)) = entries.get(event_id) else { continue };
 			let new_count = if force_reindex {
 				available_counts[i]
 			} else {

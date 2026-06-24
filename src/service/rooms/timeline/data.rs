@@ -174,6 +174,16 @@ impl Data {
 		Ok(count)
 	}
 
+	async fn fallback_prev_events(&self, event_id: &EventId) -> HashSet<OwnedEventId> {
+		let mut prevs = HashSet::new();
+		if let Ok((pdu, _)) = self.get_from_eventid_pdu(event_id).await {
+			for prev_id in pdu.prev_events() {
+				prevs.insert(prev_id.to_owned());
+			}
+		}
+		prevs
+	}
+
 	/// Lightweight collection of all timeline entries for a room, suitable
 	/// for reorder-timeline. Returns:
 	///  - `entries`: event_id → (PduCount, origin_server_ts)
@@ -187,7 +197,7 @@ impl Data {
 		&self,
 		room_id: &RoomId,
 	) -> Result<(
-		HashMap<OwnedEventId, (PduCount, ruma::UInt)>,
+		HashMap<OwnedEventId, (PduCount, u64, u64)>,
 		HashMap<OwnedEventId, HashSet<OwnedEventId>>,
 		HashMap<OwnedEventId, rooms::timeline::EventMetadata>,
 	)> {
@@ -198,7 +208,7 @@ impl Data {
 			Self::pdu_count_to_id(shortroomid, PduCount::Normal(0), Direction::Forward);
 		let prefix = seek_backfill.shortroomid();
 
-		let mut entries: HashMap<OwnedEventId, (PduCount, ruma::UInt)> = HashMap::new();
+		let mut entries: HashMap<OwnedEventId, (PduCount, u64, u64)> = HashMap::new();
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		let mut metadata_cache: HashMap<OwnedEventId, rooms::timeline::EventMetadata> =
 			HashMap::new();
@@ -256,11 +266,10 @@ impl Data {
 				None
 			};
 
-			let ts = meta_opt
-				.as_ref()
-				.map_or_else(ruma::UInt::default, |m| m.origin_server_ts);
+			let ts = meta_opt.as_ref().map_or(0, |m| m.origin_server_ts.into());
+			let depth = meta_opt.as_ref().map_or(0, |m| m.depth.into());
 
-			entries.insert(event_id.clone(), (*count, ts));
+			entries.insert(event_id.clone(), (*count, depth, ts));
 
 			if let Some(meta) = meta_opt {
 				metadata_cache.insert(event_id.clone(), meta);
@@ -270,23 +279,27 @@ impl Data {
 			let prev_events: HashSet<OwnedEventId> =
 				if let Ok(short_eid) = self.services.short.get_shorteventid(event_id).await {
 					if let Ok(short_prevs) = self.get_shortprevevents(short_eid).await {
-						let mut prevs = HashSet::with_capacity(short_prevs.len());
-						for short_prev in short_prevs {
-							if let Ok(prev_id) = self
-								.services
-								.short
-								.get_eventid_from_short::<OwnedEventId>(short_prev)
-								.await
-							{
-								prevs.insert(prev_id);
+						if !short_prevs.is_empty() {
+							let mut prevs = HashSet::with_capacity(short_prevs.len());
+							for short_prev in short_prevs {
+								if let Ok(prev_id) = self
+									.services
+									.short
+									.get_eventid_from_short::<OwnedEventId>(short_prev)
+									.await
+								{
+									prevs.insert(prev_id);
+								}
 							}
+							prevs
+						} else {
+							self.fallback_prev_events(event_id).await
 						}
-						prevs
 					} else {
-						HashSet::new()
+						self.fallback_prev_events(event_id).await
 					}
 				} else {
-					HashSet::new()
+					self.fallback_prev_events(event_id).await
 				};
 
 			graph.insert(event_id.clone(), prev_events);
@@ -431,7 +444,11 @@ impl Data {
 
 		// Update metadata fields and write in one shot — no read needed
 		meta.local_topological_depth = local_topo_depth;
-		meta.pdu_count = Some(pdu_count.into_unsigned());
+		meta.pdu_count = match pdu_count {
+			| PduCount::Normal(x) => Some(x),
+			| PduCount::Backfilled(_) => None, /* Force fallback to eventid_pduid for proper
+			                                    * decoding */
+		};
 		if let Ok(metadata_bytes) = bincode::serialize(meta) {
 			self.eventid_metadata
 				.insert(event_id.as_bytes(), &metadata_bytes);
@@ -551,7 +568,10 @@ impl Data {
 		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id.as_bytes()) {
 			if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&bytes) {
 				meta.local_topological_depth = depth;
-				meta.pdu_count = Some(pdu_count.into_unsigned());
+				meta.pdu_count = match pdu_count {
+					| PduCount::Normal(x) => Some(x),
+					| PduCount::Backfilled(_) => None, // Force fallback to eventid_pduid
+				};
 				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
 					self.eventid_metadata
 						.insert(event_id.as_bytes(), &metadata_bytes);

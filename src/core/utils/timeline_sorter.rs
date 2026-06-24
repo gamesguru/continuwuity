@@ -1,6 +1,6 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use ruma::{OwnedEventId, UInt};
+use ruma::OwnedEventId;
 
 use crate::PduCount;
 
@@ -17,7 +17,7 @@ use crate::PduCount;
 /// Events involved in cycles are appended at the end in the same order.
 #[must_use]
 pub fn sort_timeline_events<S: std::hash::BuildHasher>(
-	entries: &HashMap<OwnedEventId, (PduCount, UInt), S>,
+	entries: &HashMap<OwnedEventId, (PduCount, u64, u64), S>,
 	graph: &HashMap<OwnedEventId, HashSet<OwnedEventId, S>, S>,
 ) -> Vec<OwnedEventId> {
 	let n = entries.len();
@@ -43,21 +43,22 @@ pub fn sort_timeline_events<S: std::hash::BuildHasher>(
 		}
 	}
 
-	// Min-heap by (ts, event_id) for chronological tiebreaking with
-	// deterministic hash-based fallback when timestamps collide.
-	let mut heap: BinaryHeap<std::cmp::Reverse<(u64, &OwnedEventId)>> =
+	// Min-heap by (depth, ts, event_id) for topological tiebreaking with
+	// chronological tiebreaking and deterministic hash-based fallback when
+	// timestamps collide.
+	let mut heap: BinaryHeap<std::cmp::Reverse<(u64, u64, &OwnedEventId)>> =
 		BinaryHeap::with_capacity(n);
 	for (event_id, deg) in &in_degree {
 		if *deg == 0 {
-			let ts = entries.get(*event_id).map_or(0, |(_, ts)| u64::from(*ts));
-			heap.push(std::cmp::Reverse((ts, *event_id)));
+			let (depth, ts) = entries.get(*event_id).map_or((0, 0), |(_, d, t)| (*d, *t));
+			heap.push(std::cmp::Reverse((depth, ts, *event_id)));
 		}
 	}
 
 	let mut result = Vec::with_capacity(n);
 	let mut visited: HashSet<&OwnedEventId> = HashSet::with_capacity(n);
 
-	while let Some(std::cmp::Reverse((_, event_id))) = heap.pop() {
+	while let Some(std::cmp::Reverse((_, _, event_id))) = heap.pop() {
 		if !visited.insert(event_id) {
 			continue;
 		}
@@ -68,8 +69,8 @@ pub fn sort_timeline_events<S: std::hash::BuildHasher>(
 				if let Some(deg) = in_degree.get_mut(child) {
 					*deg = deg.saturating_sub(1);
 					if *deg == 0 {
-						let ts = entries.get(child).map_or(0, |(_, ts)| u64::from(*ts));
-						heap.push(std::cmp::Reverse((ts, child)));
+						let (depth, ts) = entries.get(child).map_or((0, 0), |(_, d, t)| (*d, *t));
+						heap.push(std::cmp::Reverse((depth, ts, child)));
 					}
 				}
 			}
@@ -83,9 +84,12 @@ pub fn sort_timeline_events<S: std::hash::BuildHasher>(
 			.filter(|eid| !visited.contains(eid))
 			.collect();
 		remaining.sort_by(|a, b| {
-			let ts_a = entries.get(*a).map_or(0, |(_, ts)| u64::from(*ts));
-			let ts_b = entries.get(*b).map_or(0, |(_, ts)| u64::from(*ts));
-			ts_a.cmp(&ts_b).then_with(|| a.cmp(b))
+			let (depth_a, ts_a) = entries.get(*a).map_or((0, 0), |(_, d, t)| (*d, *t));
+			let (depth_b, ts_b) = entries.get(*b).map_or((0, 0), |(_, d, t)| (*d, *t));
+			depth_a
+				.cmp(&depth_b)
+				.then_with(|| ts_a.cmp(&ts_b))
+				.then_with(|| a.cmp(b))
 		});
 		result.extend(remaining.into_iter().cloned());
 	}
@@ -109,9 +113,9 @@ mod tests {
 		let b = event_id!("$B").to_owned();
 		let c = event_id!("$C").to_owned();
 
-		entries.insert(a.clone(), (0_u64.into(), 1_u32.into()));
-		entries.insert(b.clone(), (0_u64.into(), 2_u32.into()));
-		entries.insert(c.clone(), (0_u64.into(), 3_u32.into()));
+		entries.insert(a.clone(), (0_u64.into(), 1, 1));
+		entries.insert(b.clone(), (0_u64.into(), 2, 2));
+		entries.insert(c.clone(), (0_u64.into(), 3, 3));
 
 		// graph[child] = {parents}
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
@@ -133,10 +137,10 @@ mod tests {
 		let c = event_id!("$C").to_owned();
 		let d = event_id!("$D").to_owned();
 
-		entries.insert(a.clone(), (0_u64.into(), 10_u32.into()));
-		entries.insert(b.clone(), (0_u64.into(), 20_u32.into()));
-		entries.insert(c.clone(), (0_u64.into(), 30_u32.into()));
-		entries.insert(d.clone(), (0_u64.into(), 5_u32.into()));
+		entries.insert(a.clone(), (0_u64.into(), 1, 10));
+		entries.insert(b.clone(), (0_u64.into(), 2, 20));
+		entries.insert(c.clone(), (0_u64.into(), 3, 30));
+		entries.insert(d.clone(), (0_u64.into(), 0, 5));
 
 		// graph[child] = {parents}
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
@@ -160,9 +164,9 @@ mod tests {
 		let b = event_id!("$B").to_owned();
 		let c = event_id!("$C").to_owned();
 
-		entries.insert(a.clone(), (0_u64.into(), 1_u32.into()));
-		entries.insert(b.clone(), (0_u64.into(), 2_u32.into()));
-		entries.insert(c.clone(), (0_u64.into(), 3_u32.into()));
+		entries.insert(a.clone(), (0_u64.into(), 1, 1));
+		entries.insert(b.clone(), (0_u64.into(), 2, 2));
+		entries.insert(c.clone(), (0_u64.into(), 2, 3));
 
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
@@ -185,10 +189,10 @@ mod tests {
 		let c = event_id!("$C").to_owned();
 		let d = event_id!("$D").to_owned();
 
-		entries.insert(a.clone(), (0_u64.into(), 1_u32.into()));
-		entries.insert(b.clone(), (0_u64.into(), 2_u32.into()));
-		entries.insert(c.clone(), (0_u64.into(), 3_u32.into()));
-		entries.insert(d.clone(), (0_u64.into(), 4_u32.into()));
+		entries.insert(a.clone(), (0_u64.into(), 1, 1));
+		entries.insert(b.clone(), (0_u64.into(), 2, 2));
+		entries.insert(c.clone(), (0_u64.into(), 2, 3));
+		entries.insert(d.clone(), (0_u64.into(), 3, 4));
 
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
@@ -209,12 +213,33 @@ mod tests {
 		let b = event_id!("$B").to_owned();
 		let z = event_id!("$Z").to_owned();
 
-		entries.insert(b.clone(), (0_u64.into(), 1_u32.into()));
+		entries.insert(b.clone(), (0_u64.into(), 1, 1));
 
 		graph.insert(b.clone(), vec![z].into_iter().collect());
 
 		let sorted = sort_timeline_events(&entries, &graph);
 		// B should still appear (Z is ignored because it's not in entries)
 		assert_eq!(sorted, vec![b]);
+	}
+
+	#[test]
+	fn test_tiebreak_by_depth() {
+		let mut entries = HashMap::new();
+		let graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+
+		let a = event_id!("$A").to_owned();
+		let b = event_id!("$B").to_owned();
+		let c = event_id!("$C").to_owned();
+
+		// All events have 0 in-degree (no parents).
+		// B has the lowest depth, A has the lowest timestamp.
+		entries.insert(a.clone(), (0_u64.into(), 3, 10));
+		entries.insert(b.clone(), (0_u64.into(), 1, 30));
+		entries.insert(c.clone(), (0_u64.into(), 2, 20));
+
+		let sorted = sort_timeline_events(&entries, &graph);
+
+		// The tie-breaker should sort by depth first: B (1), C (2), A (3)
+		assert_eq!(sorted, vec![b, c, a]);
 	}
 }
