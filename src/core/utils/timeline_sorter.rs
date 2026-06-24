@@ -29,7 +29,7 @@ pub fn sort_timeline_events<S: std::hash::BuildHasher>(
 		let (depth, ts) = entries.get(event_id).map_or((0, 0), |(_, d, t)| (*d, *t));
 		// Min-heap tiebreaker matching the previous BinaryHeap::Reverse logic:
 		// smallest depth, smallest ts, smallest event_id
-		let key = (depth, ts, event_id.clone());
+		let key = (ts, depth, event_id.clone());
 		(event_id.clone(), parents, key)
 	}))
 }
@@ -160,7 +160,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_tiebreak_by_depth() {
+	fn test_tiebreak_by_ts() {
 		let mut entries = HashMap::new();
 		let graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 
@@ -176,7 +176,7 @@ mod tests {
 
 		let sorted = sort_timeline_events(&entries, &graph);
 
-		// The tie-breaker should sort by depth first: B (1), C (2), A (3)
-		assert_eq!(sorted, vec![b, c, a]);
+		// The tie-breaker should sort by ts first: A (10), C (20), B (30)
+		assert_eq!(sorted, vec![a, c, b]);
 	}
 }
