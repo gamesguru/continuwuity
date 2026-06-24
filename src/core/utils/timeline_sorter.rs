@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use ruma::OwnedEventId;
 
@@ -20,81 +20,18 @@ pub fn sort_timeline_events<S: std::hash::BuildHasher>(
 	entries: &HashMap<OwnedEventId, (PduCount, u64, u64), S>,
 	graph: &HashMap<OwnedEventId, HashSet<OwnedEventId, S>, S>,
 ) -> Vec<OwnedEventId> {
-	let n = entries.len();
-
-	// Build forward adjacency (parent -> children) and in-degree counts.
-	let mut children: HashMap<&OwnedEventId, Vec<&OwnedEventId>> = HashMap::with_capacity(n);
-	let mut in_degree: HashMap<&OwnedEventId, usize> = HashMap::with_capacity(n);
-
-	for event_id in entries.keys() {
-		in_degree.entry(event_id).or_insert(0);
-	}
-
-	for (event_id, parents) in graph {
-		if !entries.contains_key(event_id) {
-			continue;
-		}
-		for parent in parents {
-			if entries.contains_key(parent) {
-				children.entry(parent).or_default().push(event_id);
-				let deg = in_degree.entry(event_id).or_insert(0);
-				*deg = deg.saturating_add(1);
-			}
-		}
-	}
-
-	// Min-heap by (depth, ts, event_id) for topological tiebreaking with
-	// chronological tiebreaking and deterministic hash-based fallback when
-	// timestamps collide.
-	let mut heap: BinaryHeap<std::cmp::Reverse<(u64, u64, &OwnedEventId)>> =
-		BinaryHeap::with_capacity(n);
-	for (event_id, deg) in &in_degree {
-		if *deg == 0 {
-			let (depth, ts) = entries.get(*event_id).map_or((0, 0), |(_, d, t)| (*d, *t));
-			heap.push(std::cmp::Reverse((depth, ts, *event_id)));
-		}
-	}
-
-	let mut result = Vec::with_capacity(n);
-	let mut visited: HashSet<&OwnedEventId> = HashSet::with_capacity(n);
-
-	while let Some(std::cmp::Reverse((_, _, event_id))) = heap.pop() {
-		if !visited.insert(event_id) {
-			continue;
-		}
-		result.push(event_id.clone());
-
-		if let Some(kids) = children.get(event_id) {
-			for &child in kids {
-				if let Some(deg) = in_degree.get_mut(child) {
-					*deg = deg.saturating_sub(1);
-					if *deg == 0 {
-						let (depth, ts) = entries.get(child).map_or((0, 0), |(_, d, t)| (*d, *t));
-						heap.push(std::cmp::Reverse((depth, ts, child)));
-					}
-				}
-			}
-		}
-	}
-
-	// Append any remaining events (cycles) in ts then event_id order
-	if result.len() < n {
-		let mut remaining: Vec<&OwnedEventId> = entries
-			.keys()
-			.filter(|eid| !visited.contains(eid))
-			.collect();
-		remaining.sort_by(|a, b| {
-			let (depth_a, ts_a) = entries.get(*a).map_or((0, 0), |(_, d, t)| (*d, *t));
-			let (depth_b, ts_b) = entries.get(*b).map_or((0, 0), |(_, d, t)| (*d, *t));
-			depth_a
-				.cmp(&depth_b)
-				.then_with(|| ts_a.cmp(&ts_b))
-				.then_with(|| a.cmp(b))
-		});
-		result.extend(remaining.into_iter().cloned());
-	}
-
-	result
+	super::kahns_sort::kahn_sort(entries.keys().map(|event_id| {
+		let parents = graph
+			.get(event_id)
+			.map(|parents| parents.iter().cloned())
+			.into_iter()
+			.flatten();
+		let (depth, ts) = entries.get(event_id).map_or((0, 0), |(_, d, t)| (*d, *t));
+		// Min-heap tiebreaker matching the previous BinaryHeap::Reverse logic:
+		// smallest depth, smallest ts, smallest event_id
+		let key = (depth, ts, event_id.clone());
+		(event_id.clone(), parents, key)
+	}))
 }
 
 #[cfg(test)]

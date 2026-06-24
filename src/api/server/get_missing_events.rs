@@ -153,68 +153,14 @@ pub(crate) async fn get_missing_events_route(
 pub(crate) fn topo_sort_events(
 	events: impl IntoIterator<Item = (OwnedEventId, Vec<OwnedEventId>, ruma::UInt)>,
 ) -> Vec<OwnedEventId> {
-	use std::collections::BTreeMap;
-
-	let mut in_degree: BTreeMap<OwnedEventId, usize> = BTreeMap::new();
-	let mut graph: BTreeMap<OwnedEventId, Vec<OwnedEventId>> = BTreeMap::new();
-	let mut depth_map: BTreeMap<OwnedEventId, ruma::UInt> = BTreeMap::new();
-
-	for (id, prevs, depth) in events {
-		in_degree.entry(id.clone()).or_insert(0);
-		depth_map.insert(id.clone(), depth);
-		for prev in prevs {
-			graph.entry(prev).or_default().push(id.clone());
-		}
-	}
-
-	// Count in-degrees: only edges whose source is in our event set count
-	for (prev, edges) in &graph {
-		if in_degree.contains_key(prev) {
-			for to in edges {
-				if let Some(deg) = in_degree.get_mut(to) {
-					*deg = deg.saturating_add(1);
-				}
-			}
-		}
-	}
-
-	// Seed with zero-in-degree nodes, sorted shallowest-first so pop() gives us
-	// the shallowest (we want oldest/shallowest first in the output).
-	let mut ready: Vec<OwnedEventId> = in_degree
-		.iter()
-		.filter(|(_, deg)| **deg == 0)
-		.map(|(id, _)| id.clone())
-		.collect();
-
-	// Sort descending so pop() yields smallest depth first
-	ready.sort_by(|a, b| {
-		let da = depth_map.get(a).copied().unwrap_or(ruma::UInt::MIN);
-		let db = depth_map.get(b).copied().unwrap_or(ruma::UInt::MIN);
-		db.cmp(&da).then_with(|| b.cmp(a))
-	});
-
-	let mut output = Vec::with_capacity(in_degree.len());
-	while let Some(node) = ready.pop() {
-		output.push(node.clone());
-		if let Some(edges) = graph.get(&node) {
-			for to in edges {
-				if let Some(deg) = in_degree.get_mut(to) {
-					*deg = deg.saturating_sub(1);
-					if *deg == 0 {
-						ready.push(to.clone());
-					}
-				}
-			}
-		}
-		// Re-sort so pop() continues yielding shallowest
-		ready.sort_by(|a, b| {
-			let da = depth_map.get(a).copied().unwrap_or(ruma::UInt::MIN);
-			let db = depth_map.get(b).copied().unwrap_or(ruma::UInt::MIN);
-			db.cmp(&da).then_with(|| b.cmp(a))
-		});
-	}
-
-	output
+	conduwuit::utils::kahns_sort::kahn_sort(events.into_iter().map(|(id, prevs, depth)| {
+		// get_missing_events tiebreaks by oldest first (smallest depth), then event_id.
+		// The TieBreaker previously used `db.cmp(&da)` (descending sort), so
+		// popping the end of the vector yielded the smallest depth.
+		// Our kahn_sort pops the smallest key first, so we just use the depth directly.
+		let key = (depth, id.clone());
+		(id, prevs, key)
+	}))
 }
 
 #[cfg(test)]

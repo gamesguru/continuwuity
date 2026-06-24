@@ -13,8 +13,8 @@ mod benches;
 
 use std::{
 	borrow::Borrow,
-	cmp::{Ordering, Reverse},
-	collections::{BinaryHeap, HashMap, HashSet},
+	cmp::Ordering,
+	collections::{HashMap, HashSet},
 	hash::{BuildHasher, Hash},
 	sync::Arc,
 };
@@ -915,34 +915,6 @@ where
 	Hasher: BuildHasher + Default + Clone + Send + Sync,
 	S: BuildHasher + Clone + Send + Sync,
 {
-	#[derive(PartialEq, Eq)]
-	struct TieBreaker<'a, Id> {
-		power_level: Int,
-		origin_server_ts: MilliSecondsSinceUnixEpoch,
-		event_id: &'a Id,
-		index: usize,
-	}
-
-	impl<Id> Ord for TieBreaker<'_, Id>
-	where
-		Id: Ord,
-	{
-		fn cmp(&self, other: &Self) -> Ordering {
-			other
-				.power_level
-				.cmp(&self.power_level)
-				.then(self.origin_server_ts.cmp(&other.origin_server_ts))
-				.then(self.event_id.borrow().cmp(other.event_id.borrow()))
-		}
-	}
-
-	impl<Id> PartialOrd for TieBreaker<'_, Id>
-	where
-		Id: Ord,
-	{
-		fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
-	}
-
 	debug!("starting lexicographical topological sort");
 
 	let mut id_to_index: rustc_hash::FxHashMap<&Id, usize> = rustc_hash::FxHashMap::default();
@@ -962,20 +934,6 @@ where
 	}
 
 	let num_nodes = index_to_id.len();
-	let mut outdegree_counts = vec![0_usize; num_nodes];
-	let mut reverse_graph = vec![Vec::<usize>::new(); num_nodes];
-
-	for (node, edges) in graph {
-		if let Some(&node_idx) = id_to_index.get(node) {
-			outdegree_counts[node_idx] = outdegree_counts[node_idx].saturating_add(edges.len());
-
-			for edge in edges {
-				if let Some(&edge_idx) = id_to_index.get(edge) {
-					reverse_graph[edge_idx].push(node_idx);
-				}
-			}
-		}
-	}
 
 	// Pre-fetch all keys to avoid await overhead in the sort loop
 	let mut keys = Vec::with_capacity(num_nodes);
@@ -983,47 +941,22 @@ where
 		keys.push(key_fn(id.clone()).await?);
 	}
 
-	let mut zero_outdegree = Vec::new();
-	for (idx, &out_count) in outdegree_counts.iter().enumerate() {
-		if out_count == 0 {
-			let (power_level, origin_server_ts) = keys[idx];
-			zero_outdegree.push(Reverse(TieBreaker {
-				power_level,
-				origin_server_ts,
-				event_id: index_to_id[idx],
-				index: idx,
-			}));
-		}
-	}
+	let nodes = index_to_id.into_iter().enumerate().map(|(idx, id)| {
+		let parents = graph
+			.get::<Id>(id)
+			.map(|edges| edges.iter().cloned())
+			.into_iter()
+			.flatten();
+		let (power_level, origin_server_ts) = keys[idx];
+		// TieBreaker:
+		// 1. highest power level (Reverse)
+		// 2. lowest origin_server_ts
+		// 3. lowest event_id
+		let key = (std::cmp::Reverse(power_level), origin_server_ts, id.clone());
+		(id.clone(), parents, key)
+	});
 
-	let mut heap = BinaryHeap::from(zero_outdegree);
-	let mut sorted = Vec::with_capacity(num_nodes);
-
-	let mut iter_count: usize = 0;
-	// We remove the oldest node (most incoming edges) and check against all other
-	while let Some(Reverse(item)) = heap.pop() {
-		iter_count = iter_count.saturating_add(1);
-		if iter_count.is_multiple_of(1000) {
-			println!("Kahn's pop iter {iter_count}");
-		}
-		let node_idx = item.index;
-		sorted.push(index_to_id[node_idx].clone());
-
-		for &parent_idx in &reverse_graph[node_idx] {
-			outdegree_counts[parent_idx] = outdegree_counts[parent_idx].saturating_sub(1);
-			if outdegree_counts[parent_idx] == 0 {
-				let (power_level, origin_server_ts) = keys[parent_idx];
-				heap.push(Reverse(TieBreaker {
-					power_level,
-					origin_server_ts,
-					event_id: index_to_id[parent_idx],
-					index: parent_idx,
-				}));
-			}
-		}
-	}
-
-	Ok(sorted)
+	Ok(crate::utils::kahns_sort::kahn_sort(nodes))
 }
 
 /// Find the power level for the sender of `event_id` or return a default value
