@@ -1186,6 +1186,11 @@ async fn make_join_request(
 ) -> Result<(federation::membership::prepare_join_event::v1::Response, OwnedServerName)> {
 	const MAX_SERVERS_TO_TRY: usize = 5;
 	const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+	// When a server returns M_FORBIDDEN for a restricted join, the user's
+	// membership in the allowed room may not have been federated yet (the
+	// make_join HTTP request can outpace the queued federation transaction).
+	// Retry the same server once after a short delay.
+	const RESTRICTED_RETRY_DELAY: Duration = Duration::from_millis(300);
 
 	let mut make_join_counter: usize = 0;
 	let mut last_error = None;
@@ -1199,76 +1204,93 @@ async fn make_join_request(
 			"Asking {remote_server} for make_join (attempt \
 			 {make_join_counter}/{MAX_SERVERS_TO_TRY})",
 		);
-		let make_join_response = tokio::time::timeout(
-			REQUEST_TIMEOUT,
-			services.sending.send_federation_request(
-				remote_server,
-				federation::membership::prepare_join_event::v1::Request {
-					room_id: room_id.to_owned(),
-					user_id: sender_user.to_owned(),
-					ver: services.server.supported_room_versions().collect(),
+
+		let mut forbidden_retried = false;
+		loop {
+			let make_join_response = tokio::time::timeout(
+				REQUEST_TIMEOUT,
+				services.sending.send_federation_request(
+					remote_server,
+					federation::membership::prepare_join_event::v1::Request {
+						room_id: room_id.to_owned(),
+						user_id: sender_user.to_owned(),
+						ver: services.server.supported_room_versions().collect(),
+					},
+				),
+			)
+			.await;
+
+			trace!("make_join response: {:?}", make_join_response);
+
+			match make_join_response {
+				| Ok(Ok(response)) => {
+					info!("Received make_join response from {remote_server}");
+					if let Err(e) = validate_remote_member_event_stub(
+						&MembershipState::Join,
+						sender_user,
+						room_id,
+						response.room_version.as_ref().unwrap_or(&RoomVersionId::V1),
+						&to_canonical_object(&response.event)?,
+					) {
+						warn!("make_join response from {remote_server} failed validation: {e}");
+						break;
+					}
+					return Ok((response, remote_server.clone()));
 				},
-			),
-		)
-		.await;
-
-		trace!("make_join response: {:?}", make_join_response);
-
-		match make_join_response {
-			| Ok(Ok(response)) => {
-				info!("Received make_join response from {remote_server}");
-				if let Err(e) = validate_remote_member_event_stub(
-					&MembershipState::Join,
-					sender_user,
-					room_id,
-					response.room_version.as_ref().unwrap_or(&RoomVersionId::V1),
-					&to_canonical_object(&response.event)?,
-				) {
-					warn!("make_join response from {remote_server} failed validation: {e}");
-					continue;
-				}
-				return Ok((response, remote_server.clone()));
-			},
-			| Ok(Err(e)) => {
-				match e.kind() {
-					| ErrorKind::UnableToAuthorizeJoin => {
-						info!(
-							"{remote_server} was unable to verify the joining user satisfied \
-							 restricted join requirements: {e}. Will continue trying."
-						);
-					},
-					| ErrorKind::UnableToGrantJoin => {
-						info!(
-							"{remote_server} believes the joining user satisfies restricted \
-							 join rules, but is unable to authorise a join for us. Will \
-							 continue trying."
-						);
-					},
-					| ErrorKind::IncompatibleRoomVersion { room_version } => {
-						warn!(
-							"{remote_server} reports the room we are trying to join is \
-							 v{room_version}, which we do not support."
-						);
-						return Err(e);
-					},
-					| ErrorKind::Forbidden { .. } => {
-						warn!("{remote_server} refuses to let us join: {e}.");
-					},
-					| ErrorKind::NotFound => {
-						info!(
-							"{remote_server} does not know about {room_id}: {e}. Will continue \
-							 trying."
-						);
-					},
-					| _ => {
-						info!("{remote_server} failed to make_join: {e}. Will continue trying.");
-					},
-				}
-				last_error = Some(e);
-			},
-			| Err(_elapsed) => {
-				info!("{remote_server} timed out for make_join. Will continue trying.");
-			},
+				| Ok(Err(e)) => {
+					match e.kind() {
+						| ErrorKind::UnableToAuthorizeJoin => {
+							info!(
+								"{remote_server} was unable to verify the joining user \
+								 satisfied restricted join requirements: {e}. Will continue \
+								 trying."
+							);
+						},
+						| ErrorKind::UnableToGrantJoin => {
+							info!(
+								"{remote_server} believes the joining user satisfies restricted \
+								 join rules, but is unable to authorise a join for us. Will \
+								 continue trying."
+							);
+						},
+						| ErrorKind::IncompatibleRoomVersion { room_version } => {
+							warn!(
+								"{remote_server} reports the room we are trying to join is \
+								 v{room_version}, which we do not support."
+							);
+							return Err(e);
+						},
+						| ErrorKind::Forbidden { .. } => {
+							if !forbidden_retried {
+								info!(
+									"{remote_server} returned M_FORBIDDEN, retrying after \
+									 {RESTRICTED_RETRY_DELAY:?} to allow federation to propagate"
+								);
+								forbidden_retried = true;
+								tokio::time::sleep(RESTRICTED_RETRY_DELAY).await;
+								continue;
+							}
+							warn!("{remote_server} refuses to let us join: {e}.");
+						},
+						| ErrorKind::NotFound => {
+							info!(
+								"{remote_server} does not know about {room_id}: {e}. Will \
+								 continue trying."
+							);
+						},
+						| _ => {
+							info!(
+								"{remote_server} failed to make_join: {e}. Will continue trying."
+							);
+						},
+					}
+					last_error = Some(e);
+				},
+				| Err(_elapsed) => {
+					info!("{remote_server} timed out for make_join. Will continue trying.");
+				},
+			}
+			break;
 		}
 	}
 	info!("All {make_join_counter} servers tried were unable to assist in joining {room_id} :(");
