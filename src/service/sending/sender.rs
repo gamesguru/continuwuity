@@ -679,54 +679,25 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (EduVec, u64) {
-		let local_users: Vec<OwnedUserId> = self
-			.services
-			.users
-			.list_local_users()
-			.map(ToOwned::to_owned)
-			.collect()
-			.await;
+		let server_rooms = self.services.state_cache.server_rooms(server_name);
 
+		pin_mut!(server_rooms);
 		let mut all_changes = BTreeMap::<u64, HashSet<OwnedUserId>>::new();
 
-		for user_id in local_users {
-			let keys_changed =
-				self.services
-					.users
-					.user_keys_changed(&user_id, Some(since.0), None);
+		while let Some(room_id) = server_rooms.next().await {
+			let keys_changed = self
+				.services
+				.users
+				.room_keys_changed(room_id, Some(since.0), None)
+				.ready_filter(|(user_id, _)| self.services.globals.user_is_local(user_id));
 
 			pin_mut!(keys_changed);
 
-			let Some((changed_user_id, count)) = keys_changed.next().await else {
-				continue;
-			};
-
-			if count > since.1 {
-				continue;
-			}
-
-			if !self
-				.services
-				.state_cache
-				.server_sees_user(server_name, &user_id)
-				.await
-			{
-				continue;
-			}
-
-			all_changes
-				.entry(count)
-				.or_default()
-				.insert(changed_user_id.into());
-
-			while let Some((changed_user_id, count)) = keys_changed.next().await {
+			while let Some((user_id, count)) = keys_changed.next().await {
 				if count > since.1 {
 					break;
 				}
-				all_changes
-					.entry(count)
-					.or_default()
-					.insert(changed_user_id.into());
+				all_changes.entry(count).or_default().insert(user_id.into());
 			}
 		}
 
