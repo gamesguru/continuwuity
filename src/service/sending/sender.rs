@@ -285,15 +285,6 @@ impl Service {
 		}
 
 		if new_events.is_empty() {
-			if let Destination::Federation(server_name) = dest {
-				let since = self.db.get_latest_educount(server_name).await;
-				let since_upper = self.services.globals.current_count().unwrap_or(0);
-				if since < since_upper {
-					statuses.remove(dest);
-					self.reschedule_flush(dest.clone(), Duration::from_millis(0));
-					return;
-				}
-			}
 			statuses.remove(dest);
 			return;
 		}
