@@ -761,8 +761,7 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 			continue;
 		};
 
-		let Ok(mut meta) =
-			bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&metadata_bytes)
+		let Ok(mut meta) = crate::rooms::timeline::EventMetadata::from_bincode(&metadata_bytes)
 		else {
 			continue;
 		};
@@ -774,7 +773,7 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 				max_depth = max_depth.max(cached_depth);
 			} else if let Ok(prev_bytes) = eventid_metadata.get_blocking(prev_key) {
 				if let Ok(prev_meta) =
-					bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&prev_bytes)
+					crate::rooms::timeline::EventMetadata::from_bincode(&prev_bytes)
 				{
 					max_depth = max_depth.max(prev_meta.local_topological_depth);
 					depth_cache.insert(prev_key.to_vec(), prev_meta.local_topological_depth);
@@ -834,8 +833,7 @@ async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
 			continue;
 		};
 
-		let Ok(mut meta) =
-			bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&meta_bytes)
+		let Ok(mut meta) = crate::rooms::timeline::EventMetadata::from_bincode(&meta_bytes)
 		else {
 			missing_meta = missing_meta.saturating_add(1);
 			continue;
@@ -1428,7 +1426,7 @@ async fn db_lt_19(services: &Services) -> Result<()> {
 			count = count.saturating_add(1);
 			if let Ok(metadata_bytes) = db["eventid_metadata"].get_blocking(&event_id_bytes) {
 				if let Ok(mut meta) =
-					bincode::deserialize::<crate::rooms::timeline::EventMetadata>(&metadata_bytes)
+					crate::rooms::timeline::EventMetadata::from_bincode(&metadata_bytes)
 				{
 					if !meta.soft_failed {
 						meta.soft_failed = true;

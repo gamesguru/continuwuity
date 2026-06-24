@@ -23,3 +23,40 @@ pub struct EventMetadata {
 	#[serde(default)]
 	pub rejection_reason: String,
 }
+
+/// Pre-v19 schema: only 8 fields. Used as a fallback when bincode
+/// deserialization of the current struct fails on old DB entries.
+#[derive(Deserialize)]
+struct EventMetadataV1 {
+	short_room_id: u64,
+	is_outlier: bool,
+	origin_server_ts: ruma::UInt,
+	depth: ruma::UInt,
+	soft_failed: bool,
+	rejected: bool,
+	redacted_by: Option<ruma::OwnedEventId>,
+	short_state_hash: Option<u64>,
+}
+
+impl EventMetadata {
+	/// Deserialize from bincode bytes, falling back to the old 8-field
+	/// schema if the current 12-field layout fails (e.g. pre-migration
+	/// entries written before `local_topological_depth`, `pdu_count`,
+	/// `soft_fail_reason`, and `rejection_reason` were added).
+	pub fn from_bincode(bytes: &[u8]) -> Result<Self, bincode::Error> {
+		bincode::deserialize::<Self>(bytes).or_else(|_| {
+			let old = bincode::deserialize::<EventMetadataV1>(bytes)?;
+			Ok(Self {
+				short_room_id: old.short_room_id,
+				is_outlier: old.is_outlier,
+				origin_server_ts: old.origin_server_ts,
+				depth: old.depth,
+				soft_failed: old.soft_failed,
+				rejected: old.rejected,
+				redacted_by: old.redacted_by,
+				short_state_hash: old.short_state_hash,
+				..Default::default()
+			})
+		})
+	}
+}

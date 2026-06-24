@@ -108,7 +108,7 @@ impl Data {
 		event_id: &EventId,
 	) -> Result<rooms::timeline::EventMetadata> {
 		let bytes = self.eventid_metadata.get(event_id.as_bytes()).await?;
-		bincode::deserialize(&bytes)
+		rooms::timeline::EventMetadata::from_bincode(&bytes)
 			.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e}")))
 	}
 
@@ -230,7 +230,7 @@ impl Data {
 
 	pub(super) fn remove_topo_pducount(&self, pdu_id: &RawPduId, event_id_bytes: &[u8]) {
 		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
-			if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+			if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&bytes) {
 				self.roomid_topologicalorder_pducount
 					.remove(&Self::topo_pducount_key(pdu_id, meta.local_topological_depth));
 			}
@@ -298,7 +298,7 @@ impl Data {
 
 		// Update metadata with new topo depth
 		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
-			if let Ok(mut meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+			if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&bytes) {
 				meta.local_topological_depth = new_topo_depth;
 				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
 					self.eventid_metadata
@@ -320,7 +320,7 @@ impl Data {
 		event_id: &EventId,
 	) -> Option<rooms::timeline::EventMetadata> {
 		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id.as_bytes()) {
-			bincode::deserialize(&bytes).ok()
+			rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
 		} else {
 			None
 		}
@@ -328,7 +328,7 @@ impl Data {
 
 	pub(super) fn set_event_metadata_depth(&self, event_id: &EventId, depth: u64) {
 		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id.as_bytes()) {
-			if let Ok(mut meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+			if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&bytes) {
 				meta.local_topological_depth = depth;
 				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
 					self.eventid_metadata
@@ -345,7 +345,7 @@ impl Data {
 		pdu_count: PduCount,
 	) {
 		if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id.as_bytes()) {
-			if let Ok(mut meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes) {
+			if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&bytes) {
 				meta.local_topological_depth = depth;
 				meta.pdu_count = Some(pdu_count.into_unsigned());
 				if let Ok(metadata_bytes) = bincode::serialize(&meta) {
@@ -370,7 +370,7 @@ impl Data {
 		// Fast path: metadata has pdu_count
 		let meta_result = self.eventid_metadata.get(event_id.as_bytes()).await;
 		if let Ok(bytes) = &meta_result {
-			if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(bytes) {
+			if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(bytes) {
 				if let Some(count) = meta.pdu_count {
 					let pdu_count = PduCount::from_unsigned(count);
 					return Ok(PduId {
@@ -533,7 +533,7 @@ impl Data {
 						self.eventid_metadata.get(event_id.as_bytes()).await
 					{
 						if let Ok(meta) =
-							bincode::deserialize::<rooms::timeline::EventMetadata>(&meta_bytes)
+							rooms::timeline::EventMetadata::from_bincode(&meta_bytes)
 						{
 							if meta.short_room_id != expected_short {
 								return Err!(Database(
@@ -669,7 +669,8 @@ impl Data {
 	pub(super) async fn outlier_pdu_exists(&self, event_id: &EventId) -> Result<()> {
 		let bytes = self.eventid_metadata.get(event_id.as_bytes()).await?;
 		let meta: rooms::timeline::EventMetadata =
-			bincode::deserialize(&bytes).map_err(|e| err!(Database("corrupt metadata: {e}")))?;
+			rooms::timeline::EventMetadata::from_bincode(&bytes)
+				.map_err(|e| err!(Database("corrupt metadata: {e}")))?;
 		if meta.is_outlier {
 			Ok(())
 		} else {
@@ -774,7 +775,7 @@ impl Data {
 
 		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
 		{
-			bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
+			rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
 		} else {
 			None
 		};
@@ -791,9 +792,7 @@ impl Data {
 						}
 					}
 					if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes()) {
-						if let Ok(meta) =
-							bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
-						{
+						if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&bytes) {
 							max_depth = max_depth.max(meta.local_topological_depth);
 						}
 					}
@@ -887,7 +886,7 @@ impl Data {
 			.insert_into_batch(batch, pdu_id, event_id_bytes);
 		let existing_metadata =
 			if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
-				bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
+				rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
 			} else {
 				None
 			};
@@ -903,9 +902,7 @@ impl Data {
 						}
 					}
 					if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes()) {
-						if let Ok(meta) =
-							bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
-						{
+						if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&bytes) {
 							max_depth = max_depth.max(meta.local_topological_depth);
 						}
 					}
@@ -989,7 +986,7 @@ impl Data {
 		{
 			let existing_metadata =
 				if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await {
-					bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes).ok()
+					rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
 				} else {
 					None
 				};
@@ -1000,8 +997,7 @@ impl Data {
 					for prev_id in pdu.prev_events() {
 						if let Ok(bytes) = self.eventid_metadata.get_blocking(prev_id.as_bytes())
 						{
-							if let Ok(meta) =
-								bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
+							if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&bytes)
 							{
 								max_depth = max_depth.max(meta.local_topological_depth);
 							}
@@ -1492,7 +1488,7 @@ impl Data {
 		event_id: &EventId,
 	) -> Result<ruma::MilliSecondsSinceUnixEpoch> {
 		let bytes = self.eventid_metadata.get(event_id.as_bytes()).await?;
-		let meta = bincode::deserialize::<rooms::timeline::EventMetadata>(&bytes)
+		let meta = rooms::timeline::EventMetadata::from_bincode(&bytes)
 			.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e:?}")))?;
 		Ok(ruma::MilliSecondsSinceUnixEpoch(meta.origin_server_ts))
 	}

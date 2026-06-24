@@ -153,7 +153,7 @@ pub fn add_pdu_outlier_batch(
 	// is_outlier=true and zero out local_topological_depth, making the event
 	// invisible to /sync's timeline iterator (the "stuck state" bug).
 	if let Ok(existing_meta) = self.db.eventid_metadata.get_blocking(event_id.as_bytes()) {
-		if let Ok(meta) = bincode::deserialize::<rooms::timeline::EventMetadata>(&existing_meta) {
+		if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&existing_meta) {
 			if !meta.is_outlier {
 				info!(
 					%event_id,
@@ -290,9 +290,7 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 #[implement(Service)]
 pub fn clear_outlier_flag(&self, event_id: &EventId) {
 	if let Ok(metadata_bytes) = self.db.eventid_metadata.get_blocking(event_id.as_bytes()) {
-		if let Ok(mut meta) =
-			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-		{
+		if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
 			if meta.is_outlier {
 				meta.is_outlier = false;
 				if let Ok(new_bytes) = bincode::serialize(&meta) {

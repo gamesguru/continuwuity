@@ -116,8 +116,7 @@ impl Data {
 
 	pub(super) fn mark_event_soft_failed(&self, event_id: &EventId, reason: &str) {
 		let mut meta = if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
-			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-				.unwrap_or_default()
+			rooms::timeline::EventMetadata::from_bincode(&metadata_bytes).unwrap_or_default()
 		} else {
 			// New metadata: events reaching this path without existing metadata
 			// are always outliers (not yet in the timeline).
@@ -135,9 +134,7 @@ impl Data {
 
 	pub(super) async fn is_event_soft_failed(&self, event_id: &EventId) -> bool {
 		if let Ok(metadata_bytes) = self.eventid_metadata.get(event_id).await {
-			if let Ok(meta) =
-				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-			{
+			if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
 				return meta.soft_failed;
 			}
 		}
@@ -146,8 +143,7 @@ impl Data {
 
 	pub(super) async fn get_soft_fail_reason(&self, event_id: &EventId) -> Option<String> {
 		let metadata_bytes = self.eventid_metadata.get(event_id).await.ok()?;
-		let meta =
-			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes).ok()?;
+		let meta = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes).ok()?;
 		if meta.soft_failed && !meta.soft_fail_reason.is_empty() {
 			Some(meta.soft_fail_reason)
 		} else {
@@ -157,9 +153,7 @@ impl Data {
 
 	pub(super) fn unmark_event_soft_failed(&self, event_id: &EventId) {
 		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
-			if let Ok(mut meta) =
-				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-			{
+			if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
 				if meta.soft_failed {
 					meta.soft_failed = false;
 					if let Ok(new_bytes) = bincode::serialize(&meta) {
@@ -172,8 +166,7 @@ impl Data {
 
 	pub(super) fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
 		let mut meta = if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
-			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-				.unwrap_or_default()
+			rooms::timeline::EventMetadata::from_bincode(&metadata_bytes).unwrap_or_default()
 		} else {
 			// New metadata: events reaching this path without existing metadata
 			// are always outliers (not yet in the timeline).
@@ -191,8 +184,7 @@ impl Data {
 
 	pub(super) async fn get_rejection_reason(&self, event_id: &EventId) -> Option<String> {
 		let metadata_bytes = self.eventid_metadata.get(event_id).await.ok()?;
-		let meta =
-			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes).ok()?;
+		let meta = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes).ok()?;
 		if meta.rejected && !meta.rejection_reason.is_empty() {
 			Some(meta.rejection_reason)
 		} else {
@@ -202,9 +194,7 @@ impl Data {
 
 	pub(super) async fn is_event_rejected(&self, event_id: &EventId) -> bool {
 		if let Ok(metadata_bytes) = self.eventid_metadata.get(event_id).await {
-			if let Ok(meta) =
-				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-			{
+			if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
 				return meta.rejected;
 			}
 		}
@@ -213,9 +203,7 @@ impl Data {
 
 	pub(super) fn unmark_event_rejected(&self, event_id: &EventId) {
 		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
-			if let Ok(mut meta) =
-				bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
-			{
+			if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
 				if meta.rejected {
 					meta.rejected = false;
 					meta.rejection_reason.clear();
