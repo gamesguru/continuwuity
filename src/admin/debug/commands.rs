@@ -107,19 +107,22 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 		.outlier_pdu_exists(&event_id)
 		.await
 		.is_ok();
+	let in_db = self.services.rooms.timeline.pdu_exists(&event_id).await;
 
-	if !in_timeline && !in_outlier {
+	if !in_db {
 		return Err!("PDU not found locally.");
 	}
 
 	let pdu_json = if in_timeline {
 		self.services.rooms.timeline.get_pdu_json(&event_id).await?
-	} else {
+	} else if in_outlier || in_db {
 		self.services
 			.rooms
 			.outlier
 			.get_outlier_pdu_json(&event_id)
 			.await?
+	} else {
+		return Err!("PDU not found locally.");
 	};
 	let text = serde_json::to_string_pretty(&pdu_json)?;
 
@@ -128,8 +131,10 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 		status.push_str("STUCK STATE (Both Timeline and Outlier tables)");
 	} else if in_timeline {
 		status.push_str("Timeline PDU");
-	} else {
+	} else if in_outlier {
 		status.push_str("Outlier PDU");
+	} else {
+		status.push_str("Legacy Outlier PDU (No metadata found)");
 	}
 
 	let soft_failed = self

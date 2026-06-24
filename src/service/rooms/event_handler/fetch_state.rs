@@ -36,59 +36,55 @@ pub(super) async fn fetch_state<Pdu>(
 where
 	Pdu: Event + Send + Sync,
 {
-	// Build the full fallback server list: origin → trusted → room members.
-	let mut servers = self
-		.build_federation_server_list(
-			room_id,
-			origin,
-			self.services.server.config.federation_fallback_room_servers,
-		)
-		.await;
-
-	// In inline synchronous fetches, we cap the number of fallback servers to 5
-	// to prevent overwhelming the network while ensuring we hit room members.
-	// We run these concurrently.
-	servers.truncate(5);
-
+	let mut pool = self.build_server_pool(room_id, origin, 5).await;
 	let mut last_err = err!(Request(NotFound("No server could provide /state")));
-	let mut futures = futures::stream::FuturesUnordered::new();
 
-	for server in &servers {
-		let server = server.clone();
-		let event_id = event_id.to_owned();
-		let room_id = room_id.to_owned();
-		futures.push(async move {
-			let req = self.services.sending.send_federation_request(
-				&server,
-				get_room_state::v1::Request::new(event_id, room_id),
-			);
-			match tokio::time::timeout(Duration::from_mins(1), req).await {
-				| Ok(Ok(res)) => Ok((server, res)),
-				| Ok(Err(e)) => Err((server, e)),
-				| Err(_) =>
-					Err((server, err!(Request(Unknown("Server took too long to return /state"))))),
-			}
-		});
-	}
+	let weights = &[
+		("rank", 0.1),
+		("latency", 1.0),
+		("errors", 1000.0),
+		("rate_limits", 2000.0),
+		("dead_ends", 500.0),
+		("consecutive_picks", 100.0),
+	];
 
 	let res = 'found: {
-		while let Some(result) = futures.next().await {
-			match result {
-				| Ok((server, res)) => {
-					if server != origin {
+		while let Some(server) = pool.next_scored(weights) {
+			let req = self.services.sending.send_federation_request(
+				&server,
+				get_room_state::v1::Request::new(event_id.to_owned(), room_id.to_owned()),
+			);
+
+			let timeout = Duration::from_secs(self.services.server.config.federation_timeout);
+			match tokio::time::timeout(timeout, req).await {
+				| Ok(Ok(res)) => {
+					pool.record_success(&server);
+					if server != *origin {
 						debug!(%server, "fetch_state: used fallback server for /state");
 					}
 					break 'found res;
 				},
-				| Err((server, e)) => {
+				| Ok(Err(e)) => {
 					info!(%server, "fetch_state /state failed: {e}");
+					if super::server_pool::ServerPool::is_rate_limit(&e.to_string()) {
+						pool.record_rate_limit(&server);
+					} else {
+						pool.record_error(&server);
+					}
+					last_err = e;
+				},
+				| Err(_) => {
+					let e = err!(Request(Unknown("Server took too long to return /state")));
+					info!(%server, "fetch_state /state failed: {e}");
+					pool.record_dead_end(&server);
 					last_err = e;
 				},
 			}
 		}
+
 		warn!(
-			n_servers = servers.len(),
-			"fetch_state: all servers failed /state for {event_id}"
+			"fetch_state: all servers failed /state for {event_id}. pool stats:\n{}",
+			pool.summary()
 		);
 		return Err(last_err);
 	};
