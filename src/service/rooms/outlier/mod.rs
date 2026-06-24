@@ -103,6 +103,8 @@ pub fn room_stream<'a>(
 		.get_shortroomid(room_id)
 		.map(std::result::Result::ok);
 
+	let room_id_clone = room_id.to_owned();
+
 	futures::stream::once(short_room_id)
 		.filter_map(|opt| async move { opt })
 		.flat_map(move |target_short: ShortRoomId| {
@@ -113,12 +115,26 @@ pub fn room_stream<'a>(
 				.ready_filter_map(move |(key, val)| {
 					let eid = OwnedEventId::try_from(std::str::from_utf8(key).ok()?).ok()?;
 					let meta: rooms::timeline::EventMetadata = bincode::deserialize(val).ok()?;
-					(meta.is_outlier && meta.short_room_id == target_short).then_some(eid)
+					if !meta.is_outlier {
+						return None;
+					}
+					// If short_room_id is 0, we must defer the check to when we load the PDU JSON
+					if meta.short_room_id != 0 && meta.short_room_id != target_short {
+						return None;
+					}
+					Some((eid, meta.short_room_id))
 				})
 		})
-		.broad_filter_map(move |eid: OwnedEventId| async move {
-			let pdu = self.get_pdu_outlier(&eid).await.ok()?;
-			Some((eid, pdu))
+		.broad_filter_map(move |(eid, meta_short_room_id)| {
+			let room_id = room_id_clone.clone();
+			async move {
+				let pdu = self.get_pdu_outlier(&eid).await.ok()?;
+				// If metadata had a 0 short_room_id, we must check the actual PDU room_id
+				if meta_short_room_id == 0 && pdu.room_id() != Some(&*room_id) {
+					return None;
+				}
+				Some((eid, pdu))
+			}
 		})
 }
 
@@ -191,9 +207,7 @@ pub fn add_pdu_outlier_batch(
 	{
 		let short_room_id = room_id_from_pdu
 			.as_deref()
-			.and_then(|rid| self.services.short.get_shortroomid(rid).now_or_never())
-			.and_then(Result::ok)
-			.unwrap_or(0);
+			.map_or(0, |rid| self.services.short.get_or_create_shortroomid_blocking(rid));
 
 		let metadata = rooms::timeline::EventMetadata {
 			short_room_id,

@@ -606,21 +606,26 @@ pub enum YoloCommand {
 		soft_fail: bool,
 	},
 
-	/// Bulk-unreject all rejected events in a room.
+	/// Unreject events in a room.
 	///
 	/// Scans the timeline and outlier tree, unmarks any events flagged
 	/// as rejected so they participate in state resolution again.
 	/// Use --soft-fail to also clear soft-fail markers.
 	#[command(name = "unreject-room")]
 	UnrejectRoom {
-		/// The room to scan
-		room_id: OwnedRoomId,
+		/// The room ID.
+		#[arg(required_unless_present = "all")]
+		room_id: Option<OwnedRoomId>,
 
-		/// Only report the count without unrejecting
+		/// If set, unreject events in ALL rooms.
 		#[arg(long)]
+		all: bool,
+
+		/// If true, just count them but don't unmark.
+		#[arg(long, short)]
 		dry_run: bool,
 
-		/// Also clear soft-fail markers
+		/// Also unmark soft-failed events.
 		#[arg(long)]
 		soft_fail: bool,
 	},

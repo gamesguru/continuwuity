@@ -577,6 +577,24 @@ pub async fn get_or_create_shortroomid(&self, room_id: &RoomId) -> ShortRoomId {
 }
 
 #[implement(Service)]
+pub fn get_or_create_shortroomid_blocking(&self, room_id: &RoomId) -> ShortRoomId {
+	if let Ok(handle) = self.db.roomid_shortroomid.get_blocking(room_id.as_bytes()) {
+		utils::u64_from_u8(&handle)
+	} else {
+		const BUFSIZE: usize = size_of::<ShortRoomId>();
+
+		let short = self.services.globals.next_count().unwrap();
+		debug_assert!(size_of_val(&short) == BUFSIZE, "buffer requirement changed");
+
+		self.db
+			.roomid_shortroomid
+			.raw_aput::<BUFSIZE, _, _>(room_id, short);
+
+		short
+	}
+}
+
+#[implement(Service)]
 pub async fn multi_get_state_from_short<'a, S>(
 	&'a self,
 	short_state: S,

@@ -80,98 +80,149 @@ pub(super) async fn manage_rejected(
 }
 
 #[admin_command]
+#[allow(clippy::fn_params_excessive_bools)]
 pub(super) async fn unreject_room(
 	&self,
-	room_id: OwnedRoomId,
+	room_id: Option<OwnedRoomId>,
+	all: bool,
 	dry_run: bool,
 	soft_fail: bool,
 ) -> Result {
 	self.bail_restricted()?;
 
-	let mut unmarked = 0_usize;
-	let mut soft_unmarked = 0_usize;
-	let mut total = 0_usize;
+	let room_ids = if all {
+		self.services
+			.rooms
+			.metadata
+			.iter_ids()
+			.map(ToOwned::to_owned)
+			.collect::<Vec<_>>()
+			.await
+	} else if let Some(r) = room_id {
+		vec![r]
+	} else {
+		return Err!("Must specify a room_id or use --all.");
+	};
 
-	// Collect all event IDs from timeline + outlier tree
-	let mut pdu_ids: HashSet<OwnedEventId> = self
-		.services
-		.rooms
-		.timeline
-		.all_pdus(&room_id)
-		.map(|(_, pdu)| pdu.event_id().to_owned())
-		.collect()
-		.await;
+	let mut total_unmarked = 0_usize;
+	let mut total_soft_unmarked = 0_usize;
+	let mut total_found = 0_usize;
 
-	let outlier_count_before = pdu_ids.len();
+	for room_id in room_ids {
+		let mut unmarked = 0_usize;
+		let mut soft_unmarked = 0_usize;
+		let mut total = 0_usize;
 
-	let outliers: Vec<OwnedEventId> = self
-		.services
-		.rooms
-		.outlier
-		.room_stream(&room_id)
-		.map(|(event_id, _)| event_id)
-		.collect()
-		.await;
-
-	pdu_ids.extend(outliers);
-
-	self.write_str(&format!(
-		"Scanning {} events ({} timeline, {} outliers)...\n",
-		pdu_ids.len(),
-		outlier_count_before,
-		pdu_ids.len().saturating_sub(outlier_count_before),
-	))
-	.await?;
-
-	for event_id in &pdu_ids {
-		if self
+		// Collect all event IDs from timeline + outlier tree
+		let mut pdu_ids: HashSet<OwnedEventId> = self
 			.services
 			.rooms
-			.pdu_metadata
-			.is_event_rejected(event_id)
-			.await
-		{
-			total = total.saturating_add(1);
-			if !dry_run {
-				self.services
-					.rooms
-					.pdu_metadata
-					.unmark_event_rejected(event_id);
-				unmarked = unmarked.saturating_add(1);
-			}
+			.timeline
+			.all_pdus(&room_id)
+			.map(|(_, pdu)| pdu.event_id().to_owned())
+			.collect()
+			.await;
+
+		let outlier_count_before = pdu_ids.len();
+
+		let outliers: Vec<OwnedEventId> = self
+			.services
+			.rooms
+			.outlier
+			.room_stream(&room_id)
+			.map(|(event_id, _)| event_id)
+			.collect()
+			.await;
+
+		pdu_ids.extend(outliers);
+
+		if !all {
+			self.write_str(&format!(
+				"Scanning {} events ({} timeline, {} outliers)...\n",
+				pdu_ids.len(),
+				outlier_count_before,
+				pdu_ids.len().saturating_sub(outlier_count_before),
+			))
+			.await?;
 		}
-		if soft_fail
-			&& self
+
+		for event_id in &pdu_ids {
+			if self
 				.services
 				.rooms
 				.pdu_metadata
-				.is_event_soft_failed(event_id)
+				.is_event_rejected(event_id)
 				.await
-		{
-			if !dry_run {
-				self.services
+			{
+				total = total.saturating_add(1);
+				if !dry_run {
+					self.services
+						.rooms
+						.pdu_metadata
+						.unmark_event_rejected(event_id);
+					unmarked = unmarked.saturating_add(1);
+				}
+			}
+			if soft_fail
+				&& self
+					.services
 					.rooms
 					.pdu_metadata
-					.unmark_event_soft_failed(event_id);
-				soft_unmarked = soft_unmarked.saturating_add(1);
+					.is_event_soft_failed(event_id)
+					.await
+			{
+				if !dry_run {
+					self.services
+						.rooms
+						.pdu_metadata
+						.unmark_event_soft_failed(event_id);
+					soft_unmarked = soft_unmarked.saturating_add(1);
+				}
+			}
+		}
+
+		total_unmarked = total_unmarked.saturating_add(unmarked);
+		total_soft_unmarked = total_soft_unmarked.saturating_add(soft_unmarked);
+		total_found = total_found.saturating_add(total);
+
+		if !all {
+			if dry_run {
+				self.write_str(&format!(
+					"Dry run: Found {total} rejected events in {room_id} to unmark.\n"
+				))
+				.await?;
+			} else {
+				let soft_msg = if soft_fail {
+					format!(", {soft_unmarked} soft-fail markers cleared")
+				} else {
+					String::new()
+				};
+				self.write_str(&format!(
+					"Unmarked {unmarked} rejected events{soft_msg} in {room_id}.\n"
+				))
+				.await?;
 			}
 		}
 	}
 
-	if dry_run {
-		self.write_str(&format!(
-			"Dry run: Found {total} rejected events in {room_id} to unmark.\n"
-		))
-		.await
-	} else {
-		let soft_msg = if soft_fail {
-			format!(", {soft_unmarked} soft-fail markers cleared")
+	if all {
+		if dry_run {
+			self.write_str(&format!("Dry run: Found {total_found} rejected events total.\n"))
+				.await?;
 		} else {
-			String::new()
-		};
-		self.write_str(&format!("Unmarked {unmarked} rejected events{soft_msg} in {room_id}.\n"))
-			.await
+			let soft_msg = if soft_fail {
+				format!(", {total_soft_unmarked} soft-fail markers cleared")
+			} else {
+				String::new()
+			};
+			self.write_str(&format!(
+				"Unmarked {total_unmarked} rejected events{soft_msg} total across all rooms.\n"
+			))
+			.await?;
+		}
 	}
+
+	Ok(())
 }
 
 #[admin_command]
