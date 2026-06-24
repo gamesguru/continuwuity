@@ -453,7 +453,8 @@ download:	##H Download CI binary (set RUN to a specific RunID)
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
-	@ln -sfn ci target/latest
+	@rm -rf target/latest
+	@ln -s ci target/latest
 
 .PHONY: download/hash
 download/hash:	##H Download CI binary by Git commit hash (set HASH=)
