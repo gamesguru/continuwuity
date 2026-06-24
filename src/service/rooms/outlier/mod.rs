@@ -280,8 +280,16 @@ pub async fn remove_outlier(&self, event_id: &EventId) {
 	{
 		self.db.eventid_pdu.remove(event_id.as_bytes());
 		self.db.eventid_metadata.remove(event_id.as_bytes());
-	} else if let Ok(metadata_bytes) = self.db.eventid_metadata.get_blocking(event_id.as_bytes())
-	{
+	} else {
+		self.clear_outlier_flag(event_id);
+	}
+}
+
+/// Clears the outlier and error flags from an event's metadata.
+/// This is used when an event is promoted to or already exists in the timeline.
+#[implement(Service)]
+pub fn clear_outlier_flag(&self, event_id: &EventId) {
+	if let Ok(metadata_bytes) = self.db.eventid_metadata.get_blocking(event_id.as_bytes()) {
 		if let Ok(mut meta) =
 			bincode::deserialize::<rooms::timeline::EventMetadata>(&metadata_bytes)
 		{

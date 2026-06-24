@@ -225,11 +225,7 @@ pub(super) async fn purge_outliers(
 					.is_ok()
 				{
 					// Duplicate: exists in both outlier and timeline tables
-					self.services.rooms.outlier.remove_outlier(&event_id).await;
-					self.services
-						.rooms
-						.pdu_metadata
-						.clear_pdu_markers(&event_id);
+					self.services.rooms.outlier.clear_outlier_flag(&event_id);
 					purged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 				} else {
 					skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
