@@ -84,16 +84,36 @@ pub(crate) async fn create_join_event_template_route(
 		)
 		.await?
 		{
-			Some(
-				select_authorising_user(
-					&services,
-					&body.room_id,
-					&body.user_id,
-					&allowed_rooms,
-					&state_lock,
-				)
-				.await?,
+			// The authorising user's power level may not have propagated yet
+			// (common in test scenarios where events arrive in rapid succession).
+			// Retry briefly to let federation state catch up.
+			let mut auth_result = select_authorising_user(
+				&services,
+				&body.room_id,
+				&body.user_id,
+				&allowed_rooms,
+				&state_lock,
 			)
+			.await;
+
+			if auth_result.is_err() {
+				for _ in 0..5 {
+					tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+					auth_result = select_authorising_user(
+						&services,
+						&body.room_id,
+						&body.user_id,
+						&allowed_rooms,
+						&state_lock,
+					)
+					.await;
+					if auth_result.is_ok() {
+						break;
+					}
+				}
+			}
+
+			Some(auth_result?)
 		} else {
 			None
 		}

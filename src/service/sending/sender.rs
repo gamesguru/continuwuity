@@ -301,7 +301,7 @@ impl Service {
 		statuses.insert(dest.clone(), TransactionStatus::Cooldown(Instant::now()));
 
 		let dest_clone = dest.clone();
-		self.reschedule_flush(dest_clone, Duration::from_millis(1500));
+		self.reschedule_flush(dest_clone, Duration::from_millis(300));
 	}
 
 	#[allow(clippy::needless_pass_by_ref_mut)]
@@ -578,7 +578,7 @@ impl Service {
 					allow = false; // already running
 				},
 				TransactionStatus::Cooldown(time) => {
-					if !has_pdu && time.elapsed() < Duration::from_millis(1500) {
+					if !has_pdu && time.elapsed() < Duration::from_millis(300) {
 						allow = false;
 					} else {
 						*e = TransactionStatus::Running;
@@ -613,9 +613,9 @@ impl Service {
 					.saturating_sub(time.elapsed())
 					.max(Duration::from_secs(1))
 			},
-			| TransactionStatus::Cooldown(time) => Duration::from_millis(1500)
+			| TransactionStatus::Cooldown(time) => Duration::from_millis(300)
 				.saturating_sub(time.elapsed())
-				.max(Duration::from_millis(100)),
+				.max(Duration::from_millis(50)),
 			| _ => Duration::ZERO,
 		}
 	}
