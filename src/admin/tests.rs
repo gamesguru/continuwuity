@@ -784,7 +784,9 @@ async fn test_yolo_reorder_timeline() {
 		"Event B stream order must not be mutated"
 	);
 
-	// Check new order (Event B should now be before Event A in topological order)
+	// Check new order: B (ts=1000) should sort before A (ts=2000) because
+	// the topological sort tie-breaks concurrent forks by timestamp
+	// (chronological).
 	let mut ordered_events = Vec::new();
 	use futures::StreamExt;
 	let mut stream = Box::pin(services.rooms.timeline.topo_pdus(&room_id, None));
@@ -801,9 +803,9 @@ async fn test_yolo_reorder_timeline() {
 		.expect("Event B not found");
 	println!("Event A topological index: {}, Event B topological index: {}", index_a, index_b);
 	assert!(
-		index_a < index_b,
-		"Event A should be before Event B after reordering because they are concurrent DAG \
-		 forks and stream arrival (PduCount) tie-breaks"
+		index_b < index_a,
+		"Event B (ts=1000) should be before Event A (ts=2000) after reordering because the \
+		 topological sort tie-breaks concurrent forks by timestamp (chronological)"
 	);
 }
 
