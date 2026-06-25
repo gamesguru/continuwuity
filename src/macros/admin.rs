@@ -6,13 +6,13 @@ use syn::{Attribute, Error, Fields, Ident, ItemEnum, ItemFn, Meta, Variant, pars
 
 use crate::{Result, utils::camel_to_snake_string};
 
-pub(super) fn command(mut item: ItemFn, _args: &[Meta]) -> Result<TokenStream> {
+pub(super) fn command(mut item: ItemFn, _args: &[Meta]) -> TokenStream {
 	let attr: Attribute = parse_quote! {
 		#[conduwuit_macros::implement(crate::Context, params = "<'_>")]
 	};
 
 	item.attrs.push(attr);
-	Ok(item.into_token_stream().into())
+	item.into_token_stream().into()
 }
 
 pub(super) fn command_dispatch(item: ItemEnum, _args: &[Meta]) -> Result<TokenStream> {

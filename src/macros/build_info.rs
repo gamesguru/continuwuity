@@ -1,9 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::Result;
-
-pub(super) fn introspect(_args: TokenStream) -> Result<TokenStream> {
+pub(super) fn introspect(_args: TokenStream) -> TokenStream {
 	let cargo_crate_name = std::env::var("CARGO_CRATE_NAME").unwrap();
 	let crate_name = cargo_crate_name.trim_start_matches("conduwuit_");
 	let is_core = cargo_crate_name == "conduwuit_core";
@@ -43,7 +41,7 @@ pub(super) fn introspect(_args: TokenStream) -> Result<TokenStream> {
 		}
 	};
 
-	Ok(ret)
+	ret
 }
 
 fn append_features(features: &mut Vec<String>, flags: Vec<String>) {

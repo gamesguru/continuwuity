@@ -17,7 +17,7 @@ pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 #[proc_macro_attribute]
 pub fn admin_command(args: TokenStream, input: TokenStream) -> TokenStream {
-	attribute_macro::<ItemFn, _>(args, input, admin::command)
+	attribute_macro::<ItemFn, _>(args, input, |item, args| Ok(admin::command(item, args)))
 }
 
 #[proc_macro_attribute]
@@ -27,7 +27,7 @@ pub fn admin_command_dispatch(args: TokenStream, input: TokenStream) -> TokenStr
 
 #[proc_macro_attribute]
 pub fn recursion_depth(args: TokenStream, input: TokenStream) -> TokenStream {
-	attribute_macro::<Item, _>(args, input, debug::recursion_depth)
+	attribute_macro::<Item, _>(args, input, |item, args| Ok(debug::recursion_depth(item, args)))
 }
 
 #[proc_macro_attribute]
@@ -47,9 +47,7 @@ pub fn config_example_generator(args: TokenStream, input: TokenStream) -> TokenS
 
 #[proc_macro]
 pub fn introspect_crate(input: TokenStream) -> TokenStream {
-	build_info::introspect(input.into())
-		.unwrap_or_else(|e| e.to_compile_error())
-		.into()
+	build_info::introspect(input.into()).into()
 }
 
 fn attribute_macro<I, F>(args: TokenStream, input: TokenStream, func: F) -> TokenStream

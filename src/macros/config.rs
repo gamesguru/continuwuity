@@ -128,10 +128,10 @@ fn generate_example(input: &ItemStruct, args: &[Meta], write: bool) -> Result<To
 					.or_else(|| get_default(field))
 					.unwrap_or_default();
 
-				let default = if !default.is_empty() {
-					format!(" {default}")
-				} else {
+				let default = if default.is_empty() {
 					default
+				} else {
+					format!(" {default}")
 				};
 
 				if let Some(file) = file.as_mut() {

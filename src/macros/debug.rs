@@ -4,9 +4,7 @@ use proc_macro::TokenStream;
 use quote::ToTokens;
 use syn::{Item, Meta};
 
-use crate::Result;
-
-pub(super) fn recursion_depth(item: Item, _args: &[Meta]) -> Result<TokenStream> {
+pub(super) fn recursion_depth(item: Item, _args: &[Meta]) -> TokenStream {
 	let mut best: usize = 0;
 	let mut count: usize = 0;
 	// think you'd find a fancy recursive ast visitor? think again
@@ -23,5 +21,5 @@ pub(super) fn recursion_depth(item: Item, _args: &[Meta]) -> Result<TokenStream>
 	println!("DEPTH: {best}");
 	println!("LENGTH: {count}");
 
-	Ok(item.into_token_stream().into())
+	item.into_token_stream().into()
 }
