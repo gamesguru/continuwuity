@@ -582,6 +582,28 @@ pub enum YoloCommand {
 		fix: bool,
 	},
 
+	/// Sweep `eventid_pdu` (source of truth) and repopulate any missing or
+	/// corrupt derived data:
+	///
+	/// - `shortprevevents` / `shortauthevents` (DAG edge caches)
+	/// - `eventid_metadata` (bincode metadata: timestamps, depth, pdu_count)
+	/// - `roomid_topologicalorder_pducount` (topo index entries)
+	/// - `eventid_shorteventid` / `shorteventid_eventid` (ID mappings)
+	///
+	/// Safe to run at any time. Only writes missing entries; never
+	/// overwrites existing data. Run before `recalculate-extremities`
+	/// on rooms affected by old builds.
+	#[command(name = "reindex-short")]
+	ReindexShort {
+		/// The room ID to reindex (required unless --all).
+		#[arg(required_unless_present = "all")]
+		room_id: Option<OwnedRoomId>,
+
+		/// Reindex all rooms.
+		#[arg(long)]
+		all: bool,
+	},
+
 	/// Purge obsolete duplicate read receipts from the database.
 	HealReceipts,
 
