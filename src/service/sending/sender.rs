@@ -679,13 +679,6 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (EduVec, u64) {
-		if since.0 == 0 {
-			// If the server has no previous sync token, we don't need to send them
-			// the entire history of device list changes. They will query `/keys/query`
-			// when needed. This prevents massive CPU usage on first federation.
-			return (EduVec::new(), since.1);
-		}
-
 		if since.0
 			>= self
 				.services
