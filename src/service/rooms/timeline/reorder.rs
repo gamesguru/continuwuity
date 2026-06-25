@@ -8,7 +8,7 @@ use conduwuit_core::{
 use futures::StreamExt;
 use ruma::{OwnedEventId, RoomId};
 
-use super::{Service, extremities::calculate_true_extremities, metadata::EventMetadata};
+use super::{Service, metadata::EventMetadata};
 use crate::rooms::short::ShortRoomId;
 
 impl Service {
@@ -191,65 +191,21 @@ impl Service {
 		drop(final_sync);
 		debug!("reorder_timeline: topo rebuild complete, calculating forward extremities...");
 
-		// Calculate the true DAG forward extremities (events with in-degree 0
-		// in the reversed graph). This fixes broken pagination and fork storms.
-		let mut true_extremities: Vec<OwnedEventId> = calculate_true_extremities(&graph, &sorted)
-			.into_iter()
-			.map(ToOwned::to_owned)
-			.collect();
+		let true_extremities = self
+			.update_true_extremities(
+				room_id,
+				&graph,
+				&sorted,
+				|_, eid| entries.get(eid).map_or(0, |(_, _, ts)| *ts),
+				&state_lock,
+			)
+			.await?;
 
-		// Preserve outlier extremities (e.g. from force-set-state) that are not in
-		// the timeline.
-		let current_exts: Vec<OwnedEventId> = self
-			.services
-			.state
-			.get_forward_extremities(room_id)
-			.collect()
-			.await;
-		for ext in current_exts {
-			if !entries.contains_key(&ext) {
-				true_extremities.push(ext);
-			}
-		}
-
-		// Filter out soft-failed events (per Spec Server-Server API §Soft Failure:
-		// soft-failed events must not be forward extremities).
-		true_extremities
-			.retain(|eid| !metadata_cache.get(eid).is_some_and(|meta| meta.soft_failed));
-
-		// Enforce the configured cap to prevent state resolution OOMs.
-		// State resolution is O(N * S log S) where N = extremities,
-		// S = auth chain size. 2,000+ extremities will lock the executor.
-		let max_extremities = self.services.globals.max_forward_extremities();
-		if true_extremities.len() > max_extremities {
-			info!(
-				"reorder_timeline: pruning {} extremities down to {} for room {}",
-				true_extremities.len(),
-				max_extremities,
-				room_id
-			);
-			// Sort by timestamp (newest first) to keep the most relevant tips
-			true_extremities.sort_by_key(|eid| {
-				std::cmp::Reverse(entries.get(eid).map_or(0, |(_, _, ts)| *ts))
-			});
-			true_extremities.truncate(max_extremities);
-		}
-
+		info!(
+			"reorder_timeline: set forward extremities to {} true DAG tips",
+			true_extremities.len()
+		);
 		if !true_extremities.is_empty() {
-			self.services
-				.state
-				.set_forward_extremities(
-					room_id,
-					true_extremities.clone().into_iter(),
-					&state_lock,
-				)
-				.await;
-
-			info!(
-				"reorder_timeline: set forward extremities to {} true DAG tips",
-				true_extremities.len()
-			);
-
 			if !no_compute_state {
 				let room_version = self
 					.services

@@ -161,6 +161,17 @@ impl Data {
 		Ok((pdu, json))
 	}
 
+	/// Directly get raw PDU bytes from double-write `eventid_pdu` tree.
+	pub(super) async fn get_pdu_and_raw_bytes(
+		&self,
+		event_id: &EventId,
+	) -> Result<(PduEvent, Vec<u8>)> {
+		let handle = self.eventid_pdu.get(event_id.as_bytes()).await?;
+		let pdu: PduEvent = handle.deserialized()?;
+		let raw_bytes = handle.as_ref().to_vec();
+		Ok((pdu, raw_bytes))
+	}
+
 	pub(super) async fn reindex_timeline(&self, room_id: &RoomId) -> Result<usize> {
 		let mut count = 0_usize;
 		let pdus = self.pdus(room_id, PduCount::min());

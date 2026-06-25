@@ -11,7 +11,7 @@ use conduwuit_core::{
 use futures::StreamExt;
 use ruma::{OwnedEventId, RoomId};
 
-use super::{Service, extremities::calculate_true_extremities, metadata::EventMetadata};
+use super::{Service, metadata::EventMetadata};
 use crate::rooms::short::ShortEventId;
 
 /// Statistics returned from `reindex_short`.
@@ -93,25 +93,48 @@ impl Service {
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		// Auth chain cache for incremental computation
 		let mut auth_chain_cache: HashMap<ShortEventId, Vec<ShortEventId>> = HashMap::new();
+		// Timestamps for chronological extremities sorting
+		let mut ts_map: HashMap<ShortEventId, u64> = HashMap::new();
 
-		for (count, event_id) in &events {
-			let Ok((pdu, json)) = self.db.get_from_eventid_pdu(event_id).await else {
+		for (i, (count, event_id)) in events.iter().enumerate() {
+			if i.is_multiple_of(1000) {
+				info!(
+					"reindex_short: room={room_id} progress: {i}/{} events (hash_mismatches={}, \
+					 metadata={}, prev_events={}, auth_events={}, auth_chains={}, search={})",
+					stats.total_events,
+					stats.hash_mismatches,
+					stats.repaired_metadata,
+					stats.repaired_prev_events,
+					stats.repaired_auth_events,
+					stats.repaired_auth_chains,
+					stats.repaired_search_index,
+				);
+			}
+
+			let Ok((pdu, raw_bytes)) = self.db.get_pdu_and_raw_bytes(event_id).await else {
 				stats.missing_pdu = stats.missing_pdu.saturating_add(1);
 				continue;
 			};
 
 			// --- Event ID hash validation ---
-			if let Ok(expected_id) =
-				conduwuit_core::matrix::event::gen_event_id(&json, &room_version)
-			{
-				if expected_id != *event_id {
+			match conduwuit_core::matrix::event::gen_event_id_from_bytes(
+				&raw_bytes,
+				&room_version,
+			) {
+				| Ok(expected_id) =>
+					if expected_id != *event_id {
+						warn!(
+							"HASH_MISMATCH: room={room_id}, event={event_id}, \
+							 expected={expected_id}. Stored JSON does not match event ID hash."
+						);
+						stats.hash_mismatches = stats.hash_mismatches.saturating_add(1);
+					},
+				| Err(e) => {
 					warn!(
-						"HASH_MISMATCH: room={room_id}, event={event_id}, \
-						 expected={expected_id}. Stored canonical JSON does not match event ID \
-						 hash. Cannot safely mutate — quarantine only."
+						"HASH_ERROR: room={room_id}, event={event_id}, error={e:?}. Could not \
+						 generate event ID from stored bytes."
 					);
-					stats.hash_mismatches = stats.hash_mismatches.saturating_add(1);
-				}
+				},
 			}
 
 			// --- Short ID mappings ---
@@ -126,6 +149,7 @@ impl Service {
 				.short
 				.get_or_create_shorteventid(event_id)
 				.await;
+			ts_map.insert(short_eid, pdu.origin_server_ts().0.into());
 			if was_missing {
 				stats.repaired_short_ids = stats.repaired_short_ids.saturating_add(1);
 			}
@@ -269,21 +293,18 @@ impl Service {
 		}
 
 		let sorted: Vec<OwnedEventId> = events.iter().map(|(_, e)| e.clone()).collect();
-		let tips = calculate_true_extremities(&graph, &sorted);
+		let final_extremities = self
+			.update_true_extremities(
+				room_id,
+				&graph,
+				&sorted,
+				|short, _| ts_map.get(&short).copied().unwrap_or(0),
+				&state_lock,
+			)
+			.await?;
 
-		let extremity_count = tips.len();
-		if !tips.is_empty() {
-			self.services
-				.state
-				.set_forward_extremities(
-					room_id,
-					tips.into_iter().map(ToOwned::to_owned),
-					&state_lock,
-				)
-				.await;
-			stats.extremities_count = extremity_count;
-			stats.extremities_updated = true;
-		}
+		stats.extremities_count = final_extremities.len();
+		stats.extremities_updated = true;
 
 		drop(cork);
 		drop(state_lock);

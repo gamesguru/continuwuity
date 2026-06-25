@@ -341,8 +341,7 @@ pub(super) async fn get_room_dag(
 		for (idx, eid, ts, pts) in &chronological_breaks {
 			let ts_dt = format_ts(*ts);
 			let pts_dt = format_ts(*pts);
-			let diff =
-				f64::from(u32::try_from(pts.saturating_sub(*ts)).unwrap_or(u32::MAX)) / 1000.0;
+			let diff = std::time::Duration::from_millis(pts.saturating_sub(*ts)).as_secs_f64();
 			writeln!(
 				out,
 				"Break at index {idx}: event {eid} went BACKWARDS by {diff:.1}s\n  Prev: \
