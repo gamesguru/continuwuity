@@ -20,7 +20,7 @@ pub(super) async fn state_at_incoming_degree_one<Pdu>(
 	&self,
 	incoming_pdu: &Pdu,
 	room_id: &RoomId,
-) -> Result<Option<HashMap<u64, OwnedEventId>>>
+) -> Result<Option<Arc<CompressedState>>>
 where
 	Pdu: Event + Send + Sync,
 {
@@ -51,12 +51,17 @@ where
 		return Ok(None);
 	};
 
-	let mut state: HashMap<_, _> = self
+	let mut state = self
 		.services
-		.state_accessor
-		.state_full_ids(prev_event_sstatehash)
-		.collect()
-		.await;
+		.state_compressor
+		.load_shortstatehash_info(prev_event_sstatehash)
+		.await?
+		.pop()
+		.unwrap()
+		.full_state
+		.unwrap()
+		.as_ref()
+		.clone();
 
 	debug!("Using cached state");
 
@@ -66,14 +71,29 @@ where
 			.short
 			.get_or_create_shortstatekey(&prev_pdu.kind().to_string().into(), state_key)
 			.await;
+		let shorteventid = self
+			.services
+			.short
+			.get_or_create_shorteventid(prev_event)
+			.await;
 
-		state.insert(shortstatekey, prev_event.to_owned());
+		let old_compressed = state
+			.iter()
+			.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
+			.copied();
+		if let Some(old) = old_compressed {
+			state.remove(&old);
+		}
+		state.insert(crate::rooms::state_compressor::compress_state_event(
+			shortstatekey,
+			shorteventid,
+		));
 		// Now it's the state after the pdu
 	}
 
-	debug_assert!(!state.is_empty(), "should be returning None for empty HashMap result");
+	debug_assert!(!state.is_empty(), "should be returning None for empty CompressedState result");
 
-	Ok(Some(state))
+	Ok(Some(std::sync::Arc::new(state)))
 }
 
 #[implement(super::Service)]
@@ -83,7 +103,7 @@ pub async fn state_at_incoming_resolved<Pdu>(
 	incoming_pdu: &Pdu,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
-) -> Result<Option<HashMap<u64, OwnedEventId>>>
+) -> Result<Option<std::sync::Arc<conduwuit_core::matrix::CompressedState>>>
 where
 	Pdu: Event + Send + Sync,
 {
@@ -98,7 +118,7 @@ pub async fn resolve_extremities<'a, I>(
 	prev_events: I,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
-) -> Result<Option<HashMap<u64, OwnedEventId>>>
+) -> Result<Option<std::sync::Arc<conduwuit_core::matrix::CompressedState>>>
 where
 	I: Iterator<Item = &'a EventId> + Send,
 {
@@ -214,30 +234,15 @@ where
 	if conflicting_ssks.is_empty() {
 		// No conflicting keys — build merged state from all forks' entries
 		println!("state_at_incoming_resolved: TRIVIAL MERGE (0 conflicts) — skipping resolution");
-		let mut state_map = HashMap::new();
+		let mut state_map = std::collections::BTreeSet::new();
 		// Collect the winning value for each ssk (all forks agree or it's a unique
 		// addition)
 		for fork in &fork_compressed_states {
 			for bytes in fork {
-				let mut ssk_bytes = [0_u8; 8];
-				ssk_bytes.copy_from_slice(&bytes[0..8]);
-				let ssk = u64::from_be_bytes(ssk_bytes);
-
-				let mut id_bytes = [0_u8; 8];
-				id_bytes.copy_from_slice(&bytes[8..16]);
-				let shorteventid = u64::from_be_bytes(id_bytes);
-
-				if let Ok(eid) = self
-					.services
-					.short
-					.get_eventid_from_short(shorteventid)
-					.await
-				{
-					state_map.insert(ssk, eid);
-				}
+				state_map.insert(*bytes);
 			}
 		}
-		return Ok(Some(state_map));
+		return Ok(Some(std::sync::Arc::new(state_map)));
 	}
 
 	// Determine which state keys are auth-critical (affects resolution outcome)
@@ -267,7 +272,7 @@ where
 		);
 
 		// Build merged state from all forks' non-conflicting entries
-		let mut final_state = HashMap::new();
+		let mut final_state = std::collections::BTreeSet::new();
 		for fork in &fork_compressed_states {
 			for bytes in fork {
 				let mut ssk_bytes = [0_u8; 8];
@@ -278,25 +283,14 @@ where
 					continue; // Handle below
 				}
 
-				let mut id_bytes = [0_u8; 8];
-				id_bytes.copy_from_slice(&bytes[8..16]);
-				let shorteventid = u64::from_be_bytes(id_bytes);
-
-				if let Ok(eid) = self
-					.services
-					.short
-					.get_eventid_from_short(shorteventid)
-					.await
-				{
-					final_state.insert(ssk, eid);
-				}
+				final_state.insert(*bytes);
 			}
 		}
 
 		// For each conflicting key, pick the winner: latest origin_server_ts,
 		// then lexicographically largest event_id as tiebreaker.
 		for ssk in &conflicting_ssks {
-			let mut best: Option<(OwnedEventId, u64)> = None;
+			let mut best: Option<(OwnedEventId, u64, u64)> = None;
 			for fork in &fork_compressed_states {
 				let event_bytes = fork
 					.iter()
@@ -318,26 +312,29 @@ where
 							.await
 						{
 							let ts: u64 = pdu.origin_server_ts().0.into();
-							let dominated = best.as_ref().is_some_and(|(b_eid, b_ts)| {
+							let dominated = best.as_ref().is_some_and(|(b_eid, b_ts, _)| {
 								ts < *b_ts || (ts == *b_ts && eid.as_str() < b_eid.as_str())
 							});
 							if !dominated {
-								best = Some((eid, ts));
+								best = Some((eid, ts, shorteventid));
 							}
 						}
 					}
 				}
 			}
-			if let Some((ref winner, _)) = best {
+			if let Some((ref winner, _, shorteventid)) = best {
 				if winner.as_str().contains("TN3aSG4dg") || winner.as_str().contains("TtQ6QYSjCp")
 				{
 					println!("  TRACE DISPUTED: ssk={ssk} winner={winner} (fast path)");
 				}
-				final_state.insert(*ssk, winner.clone());
+				final_state.insert(crate::rooms::state_compressor::compress_state_event(
+					*ssk,
+					shorteventid,
+				));
 			}
 		}
 
-		return Ok(Some(final_state));
+		return Ok(Some(std::sync::Arc::new(final_state)));
 	}
 
 	// SLOW PATH: auth-critical keys conflict, need full state resolution
@@ -456,7 +453,7 @@ where
 	);
 
 	// Build final state: unconflicted entries from all forks + resolved conflicts
-	let mut final_state = HashMap::new();
+	let mut final_state = std::collections::BTreeSet::new();
 	for fork in &fork_compressed_states {
 		for bytes in fork {
 			let mut ssk_bytes = [0_u8; 8];
@@ -467,18 +464,7 @@ where
 				continue; // We'll take this from resolved_partial
 			}
 
-			let mut id_bytes = [0_u8; 8];
-			id_bytes.copy_from_slice(&bytes[8..16]);
-			let shorteventid = u64::from_be_bytes(id_bytes);
-
-			if let Ok(eid) = self
-				.services
-				.short
-				.get_eventid_from_short(shorteventid)
-				.await
-			{
-				final_state.insert(ssk, eid);
-			}
+			final_state.insert(*bytes);
 		}
 	}
 
@@ -488,8 +474,16 @@ where
 			.short
 			.get_or_create_shortstatekey(&ty, sk.as_ref())
 			.await;
-		final_state.insert(ssk, eid);
+		let shorteventid = self
+			.services
+			.short
+			.get_or_create_shorteventid(&eid)
+			.await;
+		final_state.insert(crate::rooms::state_compressor::compress_state_event(
+			ssk,
+			shorteventid,
+		));
 	}
 
-	Ok(Some(final_state))
+	Ok(Some(std::sync::Arc::new(final_state)))
 }
