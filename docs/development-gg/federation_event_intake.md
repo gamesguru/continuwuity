@@ -1,5 +1,9 @@
 # Federation Event Intake Path
 
+> ⚠️ **WARNING: Production-Safety Alert**
+> This implementation of the federation event intake path is not production-ready.
+> It is known to cause timeline jumps and gaps. Proceed with extreme caution.
+
 This document traces the full lifecycle of an incoming federation transaction, from
 the initial `PUT /send/{txnId}` through prev-event resolution and RocksDB persistence.
 It also documents known write-visibility races and their implications for sync

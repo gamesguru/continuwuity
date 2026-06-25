@@ -270,8 +270,34 @@ async fn build_state_and_timeline(
 	let joined_since_last_sync =
 		check_joined_since_last_sync(services, room_id, shortstatehashes, sync_context).await?;
 
-	let timeline =
+	let mut timeline =
 		build_timeline(services, sync_context, room_id, joined_since_last_sync).await?;
+
+	// The timeline should always include at least one PDU if the syncing user
+	// joined since the last sync (their join event). If it's empty, the join
+	// event was likely appended after current_count was captured at sync start
+	// (a race between federation join and sync). Re-fetch without the upper
+	// bound to include it.
+	if joined_since_last_sync && timeline.pdus.is_empty() {
+		warn!(%room_id, "timeline for newly joined room is empty, retrying without upper bound");
+		let timeline_limit = sync_context
+			.filter
+			.room
+			.timeline
+			.limit
+			.and_then(|limit| limit.try_into().ok())
+			.unwrap_or(DEFAULT_TIMELINE_LIMIT);
+
+		timeline = load_timeline(
+			services,
+			sync_context.syncing_user,
+			room_id,
+			sync_context.last_sync_end_count.map(PduCount::Normal),
+			None,
+			timeline_limit,
+		)
+		.await?;
+	}
 
 	let (state_events, state_after, notification_counts) = try_join3(
 		build_state_events(
@@ -294,33 +320,6 @@ async fn build_state_and_timeline(
 		state_len = state_events.len(),
 		"build_state_and_timeline: results"
 	);
-
-	// The timeline should always include at least one PDU if the syncing user
-	// joined since the last sync (their join event). If it's empty, the join
-	// event was likely appended after current_count was captured at sync start
-	// (a race between federation join and sync). Re-fetch without the upper
-	// bound to include it.
-	let mut timeline = timeline;
-	if joined_since_last_sync && timeline.pdus.is_empty() {
-		warn!(%room_id, "timeline for newly joined room is empty, retrying without upper bound");
-		let timeline_limit = sync_context
-			.filter
-			.room
-			.timeline
-			.limit
-			.and_then(|limit| limit.try_into().ok())
-			.unwrap_or(DEFAULT_TIMELINE_LIMIT);
-
-		timeline = load_timeline(
-			services,
-			sync_context.syncing_user,
-			room_id,
-			sync_context.last_sync_end_count.map(PduCount::Normal),
-			None,
-			timeline_limit,
-		)
-		.await?;
-	}
 
 	let (summary, device_list_updates) = try_join(
 		build_room_summary(

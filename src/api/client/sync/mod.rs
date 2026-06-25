@@ -125,20 +125,31 @@ async fn load_timeline(
 		},
 	};
 
-	// Return at most `limit` PDUs from the stream
+	let fetch_limit = limit.saturating_add(50);
+
+	// Return at most `fetch_limit` PDUs from the stream
 	let mut pdus = pdu_stream
 		.by_ref()
-		.take(limit)
-		.ready_fold(VecDeque::with_capacity(limit), |mut pdus, item| {
+		.take(fetch_limit)
+		.ready_fold(VecDeque::with_capacity(fetch_limit), |mut pdus, item| {
 			pdus.push_front(item);
 			pdus
 		})
 		.await;
 
-	// capture the count of the absolute earliest PDU in the stream as the
+	// The timeline is limited if there are still more PDUs in the stream or if we
+	// fetched more than `limit`
+	let limited = pdus.len() > limit || pdu_stream.next().await.is_some();
+
+	// capture the count of the absolute earliest PDU we will return as the
 	// prev_batch token. This must be determined before topological sort changes
 	// the order of the PDUs.
-	let prev_batch = pdus.front().map(|(count, _)| *count);
+	let prev_batch = if pdus.len() > limit {
+		pdus.get(pdus.len().saturating_sub(limit))
+			.map(|(count, _)| *count)
+	} else {
+		pdus.front().map(|(count, _)| *count)
+	};
 
 	if !pdus.is_empty() {
 		let mut event_to_count = std::collections::HashMap::new();
@@ -161,10 +172,12 @@ async fn load_timeline(
 				(count, pdu)
 			})
 			.collect();
-	}
 
-	// The timeline is limited if there are still more PDUs in the stream
-	let limited = pdu_stream.next().await.is_some();
+		if pdus.len() > limit {
+			let drop_count = pdus.len().saturating_sub(limit);
+			pdus.drain(0..drop_count);
+		}
+	}
 
 	trace!(
 		"syncing {:?} timeline pdus from {:?} to {:?} (limited = {:?})",

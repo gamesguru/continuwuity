@@ -48,13 +48,7 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	let mut local_result = None;
 	let mut scanned = 0_usize;
 	while let Some(item) = stream.next().await {
-		let pdu = match item {
-			| Ok(pdu) => pdu,
-			| Err(e) => {
-				warn!("Error scanning timestamp index stream: {e:?}");
-				continue;
-			},
-		};
+		let pdu = item?;
 
 		scanned = scanned.saturating_add(1);
 		if scanned > MAX_SCAN {
@@ -80,9 +74,22 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	// the correct event (e.g. the m.room.create event for "go to beginning").
 	// We pick whichever result is closer to the requested timestamp.
 	if services.server.config.allow_federation {
-		if let Some(origin) = room_id.server_name() {
-			if origin != services.globals.server_name() {
-				let mut fed_result = federation_query(&services, origin, room_id, ts, dir).await;
+		let mut origin = room_id.server_name().map(ToOwned::to_owned);
+		if origin.is_none() {
+			if let Ok(create_event) = services
+				.rooms
+				.state_accessor
+				.room_state_get(room_id, &ruma::events::StateEventType::RoomCreate, "")
+				.await
+			{
+				origin = Some(create_event.sender.server_name().to_owned());
+			}
+		}
+
+		if let Some(ref origin_server) = origin {
+			if origin_server != services.globals.server_name() {
+				let mut fed_result =
+					federation_query(&services, origin_server, room_id, ts, dir).await;
 
 				// Verify that the user has permission to see the returned federation event
 				if let Some(ref fed) = fed_result {

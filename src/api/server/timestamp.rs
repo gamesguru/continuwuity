@@ -16,6 +16,7 @@ pub(crate) async fn get_event_by_timestamp_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_event_by_timestamp::v1::Request>,
 ) -> Result<get_event_by_timestamp::v1::Response> {
+	const MAX_SCAN: usize = 256;
 	let room_id = &body.room_id;
 
 	AccessCheck {
@@ -42,15 +43,30 @@ pub(crate) async fn get_event_by_timestamp_route(
 		.pdus_by_timestamp(room_id, body.ts.0.into(), body.dir);
 	pin_mut!(stream);
 
-	match stream.next().await {
-		| Some(Ok(pdu)) => {
+	let mut scanned = 0_usize;
+	while let Some(item) = stream.next().await {
+		let pdu = item?;
+
+		scanned = scanned.saturating_add(1);
+		if scanned > MAX_SCAN {
+			break;
+		}
+
+		if (AccessCheck {
+			services: &services,
+			origin: body.origin(),
+			room_id,
+			event_id: Some(&pdu.event_id),
+		})
+		.check()
+		.await
+		.is_ok()
+		{
 			return Ok(get_event_by_timestamp::v1::Response::new(
 				pdu.event_id.clone(),
 				MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
 			));
-		},
-		| Some(Err(e)) => return Err(e),
-		| None => {},
+		}
 	}
 
 	info!(
