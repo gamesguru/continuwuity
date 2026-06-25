@@ -272,6 +272,22 @@ where
 				let event_id = state.get(&shortstatekey)?;
 				self.services.timeline.get_pdu(event_id).await.ok()
 			},
+			| StateAtEvent::Compressed(compressed) => {
+				let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
+				let event_bytes = compressed
+					.iter()
+					.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))?;
+				let mut id_bytes = [0_u8; 8];
+				id_bytes.copy_from_slice(&event_bytes[8..16]);
+				let shorteventid = u64::from_be_bytes(id_bytes);
+				let event_id = self
+					.services
+					.short
+					.get_eventid_from_short::<OwnedEventId>(shorteventid)
+					.await
+					.ok()?;
+				self.services.timeline.get_pdu(&event_id).await.ok()
+			},
 			| StateAtEvent::FastForward(shortstatehash) => {
 				let shorteventid = self
 					.services
@@ -358,11 +374,12 @@ where
 				.load_shortstatehash_info(*shortstatehash)
 				.await?
 				.pop()
-				.expect("must have frame")
+				.expect("top frame must have full_state")
 				.full_state
 				.expect("must have full_state")
 				.clone() // This is Arc<CompressedState>
 		},
+		| StateAtEvent::Compressed(compressed) => compressed.clone(),
 		| StateAtEvent::Resolved(state) =>
 			self.services
 				.state_compressor
@@ -606,6 +623,7 @@ where
 #[derive(Clone)]
 enum StateAtEvent {
 	Resolved(HashMap<u64, OwnedEventId>),
+	Compressed(Arc<crate::rooms::state_compressor::CompressedState>),
 	FastForward(ShortStateHash),
 }
 
@@ -673,7 +691,7 @@ where
 		&& prev_events.len() == current_extremities.len()
 		&& current_extremities.iter().all(|e| prev_events.contains(e));
 
-	let mut state = None;
+	let mut state_at_event: Option<StateAtEvent> = None;
 
 	if exact_match {
 		info!(
@@ -689,22 +707,25 @@ where
 		}
 	}
 
-	if state.is_none() {
+	if state_at_event.is_none() {
 		info!(
 			"State is none. Resolving state for incoming PDU (prev_events count: {})",
 			incoming_pdu.prev_events().count()
 		);
-		state = if incoming_pdu.prev_events().count() == 1 {
+		let resolved_state = if incoming_pdu.prev_events().count() == 1 {
 			self.state_at_incoming_degree_one(incoming_pdu, room_id)
-				.await?
+				.await
 		} else {
 			self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id)
-				.await?
+				.await
 		};
+		if let Ok(compressed) = resolved_state {
+			state_at_event = Some(StateAtEvent::Compressed(compressed));
+		}
 		info!("State resolution completed for incoming PDU");
 	}
 
-	if state.is_none() && !skip_soft_fail {
+	if state_at_event.is_none() && !skip_soft_fail {
 		// Local state is unavailable — prev_events are not yet in DB or their
 		// state hashes have not been computed.
 		//
@@ -763,7 +784,7 @@ where
 						n_state = fetched_state.len(),
 						"fetched state via /state_ids; proceeding with auth check"
 					);
-					state = Some(fetched_state);
+					state_at_event = Some(StateAtEvent::Resolved(fetched_state));
 				},
 				| Ok(None) | Err(_) => {
 					// Check if prev_events are completely unknown — not in the
@@ -810,7 +831,7 @@ where
 		}
 	}
 
-	if state.is_none() {
+	if state_at_event.is_none() {
 		// State could not be determined from prev_events or federation.
 		// Fall back to current room state — the auth check at step 11 will
 		// still reject invalid events.
@@ -844,10 +865,10 @@ where
 			.collect()
 			.await;
 
-		state = Some(current_state);
+		state_at_event = Some(StateAtEvent::Resolved(current_state));
 	}
 
-	Ok(StateAtEvent::Resolved(state.unwrap_or_default()))
+	Ok(state_at_event.unwrap())
 }
 
 /// For state events: build the new post-event state, run state resolution
@@ -876,7 +897,9 @@ async fn calculate_state_delta(
 		// Just a normal message, state hasn't diverged: fast path out.
 		let state_at_hash = match &state_at_incoming_event {
 			| StateAtEvent::FastForward(ssh) => Some(*ssh),
-			| StateAtEvent::Resolved(_) => None, // We have to compress to get the hash
+			| StateAtEvent::Compressed(_) | StateAtEvent::Resolved(_) => None, /* We have to
+			                                                                    * compress to
+			                                                                    * get the hash */
 		};
 
 		if let Some(ssh) = state_at_hash {
@@ -944,6 +967,39 @@ async fn calculate_state_delta(
 			}
 
 			Arc::new(current_state_compressed)
+		},
+		| StateAtEvent::Compressed(state_after) => {
+			let mut state_after = state_after.clone();
+			if let Some(state_key) = incoming_pdu.state_key() {
+				let shortstatekey = self
+					.services
+					.short
+					.get_or_create_shortstatekey(
+						&incoming_pdu.kind().to_string().into(),
+						state_key,
+					)
+					.await;
+				let shorteventid = self
+					.services
+					.short
+					.get_or_create_shorteventid(incoming_pdu.event_id())
+					.await;
+
+				let state_after_mut: &mut std::collections::BTreeSet<[u8; 16]> =
+					Arc::make_mut(&mut state_after);
+				let old_compressed = state_after_mut
+					.iter()
+					.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))
+					.copied();
+				if let Some(old) = old_compressed {
+					state_after_mut.remove(&old);
+				}
+				state_after_mut.insert(crate::rooms::state_compressor::compress_state_event(
+					shortstatekey,
+					shorteventid,
+				));
+			}
+			state_after
 		},
 		| StateAtEvent::Resolved(state_after) => {
 			let mut state_after = state_after.clone();

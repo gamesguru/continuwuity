@@ -776,9 +776,7 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 		let mut topo_key = Vec::with_capacity(32);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());
 		topo_key.extend_from_slice(&global_depth.to_be_bytes());
-		let mut sortable_count = pdu_id.shorteventid();
-		sortable_count[0] ^= 0x80;
-		topo_key.extend_from_slice(&sortable_count);
+		topo_key.extend_from_slice(&pdu_id.shorteventid());
 
 		roomid_topologicalorder_pducount.put(&topo_key, event_id_bytes.to_vec());
 

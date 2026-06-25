@@ -1,10 +1,6 @@
-use std::{
-	collections::{BTreeSet, HashMap, HashSet},
-	sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use conduwuit::{Event, Result, matrix::pdu::PduEvent};
-use futures::StreamExt;
 use ruma::{EventId, OwnedEventId, RoomId, RoomVersionId};
 
 pub(crate) struct TimelineStateResolver<'a> {
@@ -48,31 +44,27 @@ pub(super) async fn resolve_state_before(
 			if let Some(&cached_ssh) = resolver.resolved_state_cache.get(&unique_sshs) {
 				cached_ssh
 			} else {
-				let compressed_state_opt = self
+				let compressed_state = self
 					.services
 					.event_handler
 					.state_at_incoming_resolved(pdu, resolver.room_id, resolver.room_version)
 					.await
-					.ok()
-					.flatten();
+					.unwrap_or_else(|_| std::sync::Arc::new(std::collections::BTreeSet::new()));
 
-				let ssh = if let Some(compressed_state) = compressed_state_opt {
-					let state_delta = self
-						.services
-						.state_compressor
-						.save_state_with_parent(
-							resolver.room_id,
-							Some(unique_sshs[0]),
-							compressed_state,
-						)
-						.await
-						.ok();
-					state_delta.map_or(resolver.empty_ssh, |d| d.shortstatehash)
-				} else {
-					resolver.empty_ssh
-				};
+				let state_delta = self
+					.services
+					.state_compressor
+					.save_state_with_parent(
+						resolver.room_id,
+						Some(unique_sshs[0]),
+						compressed_state,
+					)
+					.await
+					.ok();
 
+				let ssh = state_delta.map_or(resolver.empty_ssh, |d| d.shortstatehash);
 				resolver.resolved_state_cache.insert(unique_sshs, ssh);
+
 				ssh
 			},
 	};

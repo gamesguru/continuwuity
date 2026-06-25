@@ -20,7 +20,7 @@ pub(super) async fn state_at_incoming_degree_one<Pdu>(
 	&self,
 	incoming_pdu: &Pdu,
 	room_id: &RoomId,
-) -> Result<Option<Arc<CompressedState>>>
+) -> Result<std::sync::Arc<crate::rooms::state_compressor::CompressedState>>
 where
 	Pdu: Event + Send + Sync,
 {
@@ -29,27 +29,21 @@ where
 		.next()
 		.expect("at least one prev_event");
 
-	let Ok(prev_pdu) = self
+	let prev_pdu = self
 		.services
 		.timeline
 		.get_pdu_in_room(Some(room_id), prev_event)
-		.await
-	else {
-		return Ok(None);
-	};
+		.await?;
 
 	if prev_pdu.room_id() != Some(room_id) {
-		return Ok(None);
+		return Err(err!(Database("prev_pdu room_id does not match")));
 	}
 
-	let Ok(prev_event_sstatehash) = self
+	let prev_event_sstatehash = self
 		.services
 		.state_accessor
 		.pdu_shortstatehash(prev_event)
-		.await
-	else {
-		return Ok(None);
-	};
+		.await?;
 
 	let mut state = self
 		.services
@@ -91,9 +85,9 @@ where
 		// Now it's the state after the pdu
 	}
 
-	debug_assert!(!state.is_empty(), "should be returning None for empty CompressedState result");
+	debug_assert!(!state.is_empty(), "should be returning Err for empty CompressedState result");
 
-	Ok(Some(std::sync::Arc::new(state)))
+	Ok(std::sync::Arc::new(state))
 }
 
 #[implement(super::Service)]
@@ -103,7 +97,7 @@ pub async fn state_at_incoming_resolved<Pdu>(
 	incoming_pdu: &Pdu,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
-) -> Result<Option<std::sync::Arc<conduwuit_core::matrix::CompressedState>>>
+) -> Result<std::sync::Arc<crate::rooms::state_compressor::CompressedState>>
 where
 	Pdu: Event + Send + Sync,
 {
@@ -118,13 +112,13 @@ pub async fn resolve_extremities<'a, I>(
 	prev_events: I,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
-) -> Result<Option<std::sync::Arc<conduwuit_core::matrix::CompressedState>>>
+) -> Result<std::sync::Arc<crate::rooms::state_compressor::CompressedState>>
 where
 	I: Iterator<Item = &'a EventId> + Send,
 {
 	let fn_start = std::time::Instant::now();
 	trace!("Calculating extremity statehashes...");
-	let Ok(extremity_sstatehashes) = prev_events
+	let extremity_sstatehashes = prev_events
 		.try_stream()
 		.broad_and_then(|prev_eventid| {
 			self.services
@@ -144,10 +138,7 @@ where
 				.map_ok(move |sstatehash| (sstatehash, prev_event))
 		})
 		.try_collect::<Vec<(u64, conduwuit_core::PduEvent)>>()
-		.await
-	else {
-		return Ok(None);
-	};
+		.await?;
 
 	let mut fork_compressed_states = Vec::with_capacity(extremity_sstatehashes.len());
 	for &(sstatehash, ref prev_event) in &extremity_sstatehashes {
@@ -242,7 +233,7 @@ where
 				state_map.insert(*bytes);
 			}
 		}
-		return Ok(Some(std::sync::Arc::new(state_map)));
+		return Ok(std::sync::Arc::new(state_map));
 	}
 
 	// Determine which state keys are auth-critical (affects resolution outcome)
@@ -251,6 +242,9 @@ where
 		ruma::events::StateEventType::RoomCreate,
 		ruma::events::StateEventType::RoomPowerLevels,
 		ruma::events::StateEventType::RoomJoinRules,
+		ruma::events::StateEventType::RoomServerAcl,
+		ruma::events::StateEventType::RoomMember,
+		ruma::events::StateEventType::RoomThirdPartyInvite,
 	] {
 		if let Ok(ssk) = self.services.short.get_shortstatekey(ty, "").await {
 			auth_ssks.insert(ssk);
@@ -334,7 +328,7 @@ where
 			}
 		}
 
-		return Ok(Some(std::sync::Arc::new(final_state)));
+		return Ok(std::sync::Arc::new(final_state));
 	}
 
 	// SLOW PATH: auth-critical keys conflict, need full state resolution
@@ -434,18 +428,18 @@ where
 	}
 
 	let resolve_start = std::time::Instant::now();
-	let Ok(resolved_partial) = self
+	let resolved_partial = self
 		.state_resolution(room_id, room_version_id, fork_states.iter())
 		.boxed()
 		.await
-	else {
-		println!(
-			"state_at_incoming_resolved: resolution FAILED after {:?} (total {:?})",
-			resolve_start.elapsed(),
-			fn_start.elapsed(),
-		);
-		return Ok(None);
-	};
+		.map_err(|e| {
+			println!(
+				"state_at_incoming_resolved: resolution FAILED after {:?} (total {:?}): {e}",
+				resolve_start.elapsed(),
+				fn_start.elapsed(),
+			);
+			e
+		})?;
 	println!(
 		"state_at_incoming_resolved: resolution took {:?}, total {:?}",
 		resolve_start.elapsed(),
@@ -474,16 +468,10 @@ where
 			.short
 			.get_or_create_shortstatekey(&ty, sk.as_ref())
 			.await;
-		let shorteventid = self
-			.services
-			.short
-			.get_or_create_shorteventid(&eid)
-			.await;
-		final_state.insert(crate::rooms::state_compressor::compress_state_event(
-			ssk,
-			shorteventid,
-		));
+		let shorteventid = self.services.short.get_or_create_shorteventid(&eid).await;
+		final_state
+			.insert(crate::rooms::state_compressor::compress_state_event(ssk, shorteventid));
 	}
 
-	Ok(Some(std::sync::Arc::new(final_state)))
+	Ok(std::sync::Arc::new(final_state))
 }

@@ -8,7 +8,6 @@ use conduwuit_core::{
 	matrix::pdu::{PduCount, PduId, RawPduId},
 	warn,
 };
-use futures::StreamExt;
 use ruma::{OwnedEventId, RoomId};
 
 use super::{Service, TimelineStateResolver, metadata::EventMetadata};
@@ -229,7 +228,7 @@ impl Service {
 						true_extremities.len()
 					);
 
-					if let Ok(Some(state)) = self
+					if let Ok(compressed) = self
 						.services
 						.event_handler
 						.resolve_extremities(
@@ -239,16 +238,10 @@ impl Service {
 						)
 						.await
 					{
-						let compressed: crate::rooms::state_compressor::CompressedState = self
-							.services
-							.state_compressor
-							.compress_state_events(state.iter().map(|(k, v)| (k, v.as_ref())))
-							.collect()
-							.await;
 						let result = self
 							.services
 							.state_compressor
-							.save_state_as_root(room_id.as_ref(), Arc::new(compressed))
+							.save_state_as_root(room_id.as_ref(), compressed)
 							.await;
 						if let Ok(res) = result {
 							Some(res.shortstatehash)

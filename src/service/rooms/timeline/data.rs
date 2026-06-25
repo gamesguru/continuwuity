@@ -411,12 +411,12 @@ impl Data {
 		pdu_id_bytes.as_slice().into()
 	}
 
-	pub(super) async fn pdu_id_to_topo_key(&self, pdu_id: &RawPduId) -> Result<Vec<u8>> {
+	pub(super) async fn pdu_id_to_depth(&self, pdu_id: &RawPduId) -> Result<u64> {
 		let event_id_bytes = self.room_pducount_eventid.get(pdu_id).await?;
 		let metadata_bytes = self.eventid_metadata.get(&event_id_bytes).await?;
 		let meta: rooms::timeline::EventMetadata = bincode::deserialize(&metadata_bytes)
 			.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e}")))?;
-		Ok(Self::topo_pducount_key(pdu_id, meta.depth.into()))
+		Ok(meta.depth.into())
 	}
 
 	pub(super) fn remove_topo_pducount(&self, pdu_id: &RawPduId, event_id_bytes: &[u8]) {
@@ -1504,58 +1504,30 @@ impl Data {
 		&self,
 		room_id: &RoomId,
 		token: PduCount,
-		current: &RawPduId,
+		current: &RawPduId, // This is token +/- 1
 		dir: Direction,
 	) -> Result<Vec<u8>> {
-		use futures::StreamExt;
-
 		if token == PduCount::max() {
 			Ok(Self::topo_pducount_key(current, u64::MAX))
 		} else if token == PduCount::min() {
 			Ok(Self::topo_pducount_key(current, 0))
 		} else {
+			// Find the EXACT depth of the requested token.
+			// We MUST NOT use the depth of a nearby 1D count, as it might be higher,
+			// causing us to jump forward in the DAG and infinite loop.
 			let token_pdu_id = self.count_to_id(room_id, token, dir).await?;
-			if let Ok(mut key) = self.pdu_id_to_topo_key(&token_pdu_id).await {
-				key[16..24]
-					.copy_from_slice(&current.shorteventid());
-				return Ok(key);
-			}
 
-			// Fallback: find the nearest existing event in the requested direction
-			let prefix = current.shortroomid();
-
-			let nearest_pdu_id = if dir == Direction::Forward {
-				let mut stream = Box::pin(
-					self.room_pducount_eventid
-						.raw_stream_from(&token_pdu_id)
-						.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
-				);
-				stream
-					.next()
-					.await
-					.map(|res| res.map(|(k, _)| RawPduId::from(k)))
-			} else {
-				let mut stream = Box::pin(
-					self.room_pducount_eventid
-						.rev_raw_stream_from(&token_pdu_id)
-						.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
-				);
-				stream
-					.next()
-					.await
-					.map(|res| res.map(|(k, _)| RawPduId::from(k)))
+			let target_depth = match self.pdu_id_to_depth(&token_pdu_id).await {
+				| Ok(depth) => depth,
+				| Err(_) => {
+					// If the exact token is missing, fallback safely without
+					// guessing depths that might cause infinite loops.
+					if dir == Direction::Forward { u64::MAX } else { 0 }
+				},
 			};
 
-			if let Some(Ok(nearest_id)) = nearest_pdu_id {
-				let mut key = self.pdu_id_to_topo_key(&nearest_id).await?;
-				key[16..24]
-					.copy_from_slice(&current.shorteventid());
-				Ok(key)
-			} else if dir == Direction::Forward {
-				Ok(Self::topo_pducount_key(current, u64::MAX))
-			} else {
-				Ok(Self::topo_pducount_key(current, 0))
-			}
+			// Construct key using EXACT depth of token, but the PduCount of token +/- 1.
+			Ok(Self::topo_pducount_key(current, target_depth))
 		}
 	}
 
