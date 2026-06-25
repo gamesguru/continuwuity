@@ -214,13 +214,6 @@ impl Service {
 			}
 		}
 
-		// Finally, add trusted servers NOT in the room as an absolute last resort
-		for s in &self.services.server.config.trusted_servers {
-			if !self.services.globals.server_is_ours(s) && !servers.contains(s) {
-				servers.push(s.clone());
-			}
-		}
-
 		servers
 	}
 
