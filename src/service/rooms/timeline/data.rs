@@ -394,17 +394,19 @@ impl Data {
 
 	// TODO: uses shorteventid() not as_ref()[8..] — Backfilled RawPduIds are
 	// 24 bytes with a zero-tag; raw slicing yields wrong bytes. See RawId docs.
+	pub(crate) fn offset_binary_encoding(mut count_bytes: [u8; 8]) -> [u8; 8] {
+		// Flip the sign bit of the PduCount (i64) so that negative (backfilled) counts
+		// sort strictly before positive (normal) counts in unsigned byte comparison.
+		// This operation is its own inverse and is used for both encoding/decoding.
+		count_bytes[0] ^= 0x80;
+		count_bytes
+	}
+
 	pub(crate) fn topo_pducount_key(pdu_id: &RawPduId, depth: u64) -> Vec<u8> {
 		let mut topo_key = Vec::with_capacity(32);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());
 		topo_key.extend_from_slice(&depth.to_be_bytes());
-
-		// Flip the sign bit of the PduCount (i64) so that negative (backfilled) counts
-		// sort strictly before positive (normal) counts in unsigned byte comparison.
-		let mut sortable_count = pdu_id.shorteventid();
-		sortable_count[0] ^= 0x80;
-		topo_key.extend_from_slice(&sortable_count);
-
+		topo_key.extend_from_slice(&Self::offset_binary_encoding(pdu_id.shorteventid()));
 		topo_key
 	}
 
@@ -412,10 +414,9 @@ impl Data {
 		let mut pdu_id_bytes = [0_u8; 16];
 		pdu_id_bytes[0..8].copy_from_slice(&topo_key[0..8]);
 
-		let mut sortable_count = [0_u8; 8];
-		sortable_count.copy_from_slice(&topo_key[16..24]);
-		sortable_count[0] ^= 0x80;
-		pdu_id_bytes[8..16].copy_from_slice(&sortable_count);
+		let mut count_bytes = [0_u8; 8];
+		count_bytes.copy_from_slice(&topo_key[16..24]);
+		pdu_id_bytes[8..16].copy_from_slice(&Self::offset_binary_encoding(count_bytes));
 
 		pdu_id_bytes.as_slice().into()
 	}
@@ -1525,7 +1526,8 @@ impl Data {
 		} else {
 			let token_pdu_id = self.count_to_id(room_id, token, dir).await?;
 			if let Ok(mut key) = self.pdu_id_to_topo_key(&token_pdu_id).await {
-				key[16..24].copy_from_slice(&current.shorteventid());
+				key[16..24]
+					.copy_from_slice(&Self::offset_binary_encoding(current.shorteventid()));
 				return Ok(key);
 			}
 
@@ -1556,7 +1558,8 @@ impl Data {
 
 			if let Some(Ok(nearest_id)) = nearest_pdu_id {
 				let mut key = self.pdu_id_to_topo_key(&nearest_id).await?;
-				key[16..24].copy_from_slice(&current.shorteventid());
+				key[16..24]
+					.copy_from_slice(&Self::offset_binary_encoding(current.shorteventid()));
 				Ok(key)
 			} else if dir == Direction::Forward {
 				Ok(Self::topo_pducount_key(current, u64::MAX))
