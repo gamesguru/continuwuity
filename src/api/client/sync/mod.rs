@@ -151,6 +151,11 @@ async fn load_timeline(
 		pdus.front().map(|(count, _)| *count)
 	};
 
+	if pdus.len() > limit {
+		let drop_count = pdus.len().saturating_sub(limit);
+		pdus.drain(0..drop_count);
+	}
+
 	if !pdus.is_empty() {
 		let mut event_to_count = std::collections::HashMap::new();
 		let events: Vec<_> = pdus
@@ -172,11 +177,6 @@ async fn load_timeline(
 				(count, pdu)
 			})
 			.collect();
-
-		if pdus.len() > limit {
-			let drop_count = pdus.len().saturating_sub(limit);
-			pdus.drain(0..drop_count);
-		}
 	}
 
 	trace!(
