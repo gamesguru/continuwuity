@@ -679,15 +679,21 @@ impl Service {
 		server_name: &ServerName,
 		since: (u64, u64),
 	) -> (EduVec, u64) {
-		if since.0
-			>= self
-				.services
-				.users
-				.last_device_key_update_count
-				.load(Ordering::Relaxed)
-		{
-			// If there were no global device key updates since the last time we checked,
-			// we can safely skip the expensive per-room RocksDB checks.
+		let last_update = self
+			.services
+			.users
+			.last_device_key_update_count
+			.load(Ordering::Relaxed);
+
+		if since.0 == 0 && since.0 >= last_update {
+			// New server with no previous sync token AND no recent device key
+			// updates — skip the expensive full-history scan. They will query
+			// /keys/query when needed.
+			return (EduVec::new(), since.1);
+		}
+
+		if since.0 >= last_update {
+			// No global device key updates since the last time we checked.
 			return (EduVec::new(), since.1);
 		}
 
