@@ -221,8 +221,14 @@ where
 		}
 	};
 
-	let dummy_batch_fetch =
-		|_: Vec<OwnedEventId>| async move { Vec::<Arc<conduwuit_core::PduEvent>>::new() };
+	let event_batch_fetch = |events: Vec<OwnedEventId>| async move {
+		self.services
+			.timeline
+			.multi_get_pdus(Some(room_id), futures::stream::iter(events))
+			.filter_map(|r| async move { r.ok().map(Arc::new) })
+			.collect::<Vec<_>>()
+			.await
+	};
 
 	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {
 		self.services
@@ -237,7 +243,7 @@ where
 		room_version,
 		state_sets,
 		&event_fetch,
-		Some(&dummy_batch_fetch),
+		Some(&event_batch_fetch),
 		&auth_chain_fetch,
 		Some(&event_missing_cb),
 	)
