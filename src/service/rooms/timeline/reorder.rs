@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use conduwuit_core::{
 	Result, debug, info,
-	matrix::{
-		event::Event,
-		pdu::{PduCount, PduId, RawPduId},
-	},
+	matrix::pdu::{PduCount, PduId, RawPduId},
 	warn,
 };
 use futures::StreamExt;
@@ -112,24 +109,17 @@ impl Service {
 		} else {
 			// Fast mode: rebuild topo index only, no state computation.
 			// Uses cached metadata to avoid all blocking DB reads.
-			let mut depths: HashMap<OwnedEventId, u64> = HashMap::new();
-			for event_id in &sorted {
-				// TODO: Extract depth calculation from parents into a helper method
-				let max_parent_depth = graph.get(event_id).map_or(0, |parents| {
-					parents
-						.iter()
-						.filter_map(|p| depths.get(p))
-						.copied()
-						.max()
-						.unwrap_or(0)
-				});
-				let local_topo_depth = super::calculate_local_topo_depth(
-					max_parent_depth,
-					metadata_cache
-						.get(event_id)
-						.map_or(1, |meta| meta.depth.into()),
+			// Position in Kahn's sort IS the correct topological depth.
+			// This ensures disconnected segments are interleaved chronologically
+			// (Kahn's sort uses origin_server_ts as the tiebreaker for roots).
+			let mut depths: HashMap<OwnedEventId, u64> = HashMap::with_capacity(sorted.len());
+			for (topo_position, event_id) in sorted.iter().enumerate() {
+				depths.insert(
+					event_id.clone(),
+					u64::try_from(topo_position)
+						.expect("topo position fits u64")
+						.saturating_add(1),
 				);
-				depths.insert(event_id.clone(), local_topo_depth);
 			}
 
 			let cork = self.db.db.cork();
@@ -381,7 +371,19 @@ impl Service {
 			Some(ssh)
 		};
 
-		let mut depths: HashMap<OwnedEventId, u64> = HashMap::new();
+		// Pre-compute position-based topo depths from Kahn's sort order.
+		// Position in the sorted list IS the correct topological depth,
+		// ensuring disconnected segments interleave chronologically.
+		let mut depths: HashMap<OwnedEventId, u64> = HashMap::with_capacity(sorted.len());
+		for (topo_position, event_id) in sorted.iter().enumerate() {
+			depths.insert(
+				event_id.clone(),
+				u64::try_from(topo_position)
+					.expect("topo position fits u64")
+					.saturating_add(1),
+			);
+		}
+
 		for event_id in sorted {
 			// Use the existing stream order count -- do NOT fabricate a new one
 			let Some(&(existing_count, ..)) = entries.get(event_id) else {
@@ -408,17 +410,6 @@ impl Service {
 			// rejection flags are stale and would poison state resolution
 			// if left in place. Soft-fail flags are intentional and persist.
 			self.services.pdu_metadata.unmark_event_rejected(event_id);
-
-			// Use in-memory depths from topo-sorted order
-			let max_parent_depth = pdu
-				.prev_events()
-				.filter_map(|p| depths.get(p))
-				.copied()
-				.max()
-				.unwrap_or(0);
-			let local_topo_depth =
-				super::calculate_local_topo_depth(max_parent_depth, pdu.depth().into());
-			depths.insert(event_id.clone(), local_topo_depth);
 
 			// State computation — uses existing pdu_id (unchanged stream order)
 			if let Some(mut ssh) = current_shortstatehash {
