@@ -393,10 +393,10 @@ impl Data {
 	}
 
 	pub(crate) fn topo_pducount_key(pdu_id: &RawPduId, depth: u64) -> Vec<u8> {
-		let mut topo_key = Vec::with_capacity(32);
+		let mut topo_key = Vec::with_capacity(24);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());
 		topo_key.extend_from_slice(&depth.to_be_bytes());
-		topo_key.extend_from_slice(&PduCount::offset_binary_encoding(pdu_id.shorteventid()));
+		topo_key.extend_from_slice(&pdu_id.shorteventid());
 		topo_key
 	}
 
@@ -406,7 +406,7 @@ impl Data {
 
 		let mut count_bytes = [0_u8; 8];
 		count_bytes.copy_from_slice(&topo_key[16..24]);
-		pdu_id_bytes[8..16].copy_from_slice(&PduCount::offset_binary_encoding(count_bytes));
+		pdu_id_bytes[8..16].copy_from_slice(&count_bytes);
 
 		pdu_id_bytes.as_slice().into()
 	}
@@ -1517,7 +1517,7 @@ impl Data {
 			let token_pdu_id = self.count_to_id(room_id, token, dir).await?;
 			if let Ok(mut key) = self.pdu_id_to_topo_key(&token_pdu_id).await {
 				key[16..24]
-					.copy_from_slice(&PduCount::offset_binary_encoding(current.shorteventid()));
+					.copy_from_slice(&current.shorteventid());
 				return Ok(key);
 			}
 
@@ -1549,7 +1549,7 @@ impl Data {
 			if let Some(Ok(nearest_id)) = nearest_pdu_id {
 				let mut key = self.pdu_id_to_topo_key(&nearest_id).await?;
 				key[16..24]
-					.copy_from_slice(&PduCount::offset_binary_encoding(current.shorteventid()));
+					.copy_from_slice(&current.shorteventid());
 				Ok(key)
 			} else if dir == Direction::Forward {
 				Ok(Self::topo_pducount_key(current, u64::MAX))
