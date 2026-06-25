@@ -44,6 +44,10 @@ pub(crate) async fn get_supported_versions_route(
 		("org.matrix.msc4155".to_owned(), true), /* invite filtering (https://github.com/matrix-org/matrix-spec-proposals/pull/4155) */
 	]);
 
+	if services.config.experimental_features.msc3030_enabled {
+		unstable_features.insert("org.matrix.msc3030".to_owned(), true); /* timestamp to event (https://github.com/matrix-org/matrix-spec-proposals/pull/3030) */
+	}
+
 	if services.config.experimental_features.msc3266_enabled {
 		unstable_features.insert("org.matrix.msc3266".to_owned(), true); /* room previews (https://github.com/matrix-org/matrix-spec-proposals/pull/3266) */
 	}

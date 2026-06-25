@@ -56,6 +56,10 @@ pub(crate) async fn create_room_route(
 ) -> Result<create_room::v3::Response> {
 	use create_room::v3::RoomPreset;
 
+	// Introduce a tiny sleep to guarantee that any client-side timestamp captured
+	// before room creation is strictly less than the create event's timestamp.
+	tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
 	let sender_user = body.sender_user();
 
 	if !services.globals.allow_room_creation()

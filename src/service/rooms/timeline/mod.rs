@@ -24,7 +24,7 @@ use conduwuit_core::{
 use futures::{Future, Stream, TryStreamExt, pin_mut};
 use lru_cache::LruCache;
 use ruma::{
-	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId,
+	CanonicalJsonObject, EventId, OwnedEventId, OwnedRoomId, RoomId, api::Direction,
 	events::room::encrypted::Relation,
 };
 use serde::Deserialize;
@@ -459,5 +459,22 @@ impl Service {
 		from: Option<PduCount>,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
 		self.db.pdus(room_id, from.unwrap_or_else(PduCount::min))
+	}
+
+	/// Returns a stream of PDUs starting from the nearest event to the given
+	/// timestamp, walking in the given direction.
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub fn pdus_by_timestamp<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+		timestamp: u64,
+		dir: Direction,
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a {
+		self.db.pdus_by_timestamp(room_id, timestamp, dir)
+	}
+
+	#[tracing::instrument(skip(self), level = "debug")]
+	pub async fn backfill_timestamp_index(&self, room_id: &RoomId) -> Result {
+		self.db.backfill_timestamp_index(room_id).await
 	}
 }
