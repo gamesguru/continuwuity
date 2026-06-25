@@ -116,7 +116,7 @@ pub(super) async fn decorate_pdu_for_export(
 			obj.insert("__short_room_id".to_owned(), JsonValue::from(meta_bytes.short_room_id));
 			obj.insert(
 				"__local_topo_depth".to_owned(),
-				JsonValue::from(meta_bytes.local_topological_depth),
+				JsonValue::from(meta_bytes.deprecated_local_topo_depth),
 			);
 			obj.insert("__soft_failed".to_owned(), JsonValue::from(meta_bytes.soft_failed));
 			obj.insert("__rejected".to_owned(), JsonValue::from(meta_bytes.rejected));

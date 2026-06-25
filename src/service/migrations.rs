@@ -624,8 +624,8 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 					max_depth = max_depth.max(d);
 				}
 			}
-			let local_topological_depth = max_depth.saturating_add(1);
-			depth_cache.insert(event_id_bytes.to_vec(), local_topological_depth);
+			let deprecated_local_topo_depth = max_depth.saturating_add(1);
+			depth_cache.insert(event_id_bytes.to_vec(), deprecated_local_topo_depth);
 
 			let metadata = crate::rooms::timeline::EventMetadata {
 				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
@@ -636,7 +636,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 				rejected: pdu.rejected(),
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
 				short_state_hash: None,
-				local_topological_depth,
+				deprecated_local_topo_depth,
 				pdu_count: Some(pdu_id.pdu_count().into_unsigned()),
 				soft_fail_reason: String::new(),
 				rejection_reason: String::new(),
@@ -648,7 +648,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 			// roomid_topologicalorder_pducount
 			let mut topo_key = Vec::with_capacity(32);
 			topo_key.extend_from_slice(&pdu_id.shortroomid());
-			topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
+			topo_key.extend_from_slice(&deprecated_local_topo_depth.to_be_bytes());
 			topo_key.extend_from_slice(&pdu_id.shorteventid());
 			roomid_topologicalorder_pducount.insert(&topo_key, event_id_bytes);
 
@@ -688,7 +688,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 					rejected: pdu.rejected(),
 					redacted_by: pdu.redacts().map(ToOwned::to_owned),
 					short_state_hash: None,
-					local_topological_depth: 0,
+					deprecated_local_topo_depth: 0,
 					pdu_count: None,
 					soft_fail_reason: String::new(),
 					rejection_reason: String::new(),
@@ -723,76 +723,51 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 	Ok(())
 }
 
-const POPULATE_TOPOLOGICAL_INDEX_MARKER: &[u8] = b"populate_topological_index";
+const POPULATE_TOPOLOGICAL_INDEX_MARKER: &[u8] = b"populate_topological_index_v2";
 const POPULATE_SHORTPREVEVENTS_MARKER: &[u8] = b"populate_shortprevevents";
 
 async fn populate_topological_index(services: &Services) -> Result<()> {
-	#[derive(serde::Deserialize)]
-	struct PrevEventsOnly {
-		#[serde(default)]
-		prev_events: Vec<ruma::OwnedEventId>,
-	}
-
 	info!("Starting migration to populate roomid_topologicalorder_pducount...");
 	let db = &services.db;
 	let room_pducount_eventid = db["room_pducount_eventid"].clone();
 	let eventid_metadata = db["eventid_metadata"].clone();
-	let eventid_pdu = db["eventid_pdu"].clone();
+
 	let roomid_topologicalorder_pducount = db["roomid_topologicalorder_pducount"].clone();
 
-	let mut stream = room_pducount_eventid.raw_stream();
+	// First, completely clear the old broken index (the byte encoding has changed).
+	let clear_stream = roomid_topologicalorder_pducount.raw_stream();
+	pin_mut!(clear_stream);
+	let mut cleared: usize = 0;
+	while let Some(Ok((key, _))) = clear_stream.next().await {
+		roomid_topologicalorder_pducount.remove(&key);
+		cleared = cleared.saturating_add(1);
+	}
+	info!("Cleared {cleared} old entries from topological index to prepare for rebuild.");
 
+	let mut stream = room_pducount_eventid.raw_stream();
 	let mut total_migrated: usize = 0;
-	let mut depth_cache: HashMap<Vec<u8>, u64> = HashMap::new();
 
 	while let Some(Ok((pdu_id_bytes, event_id_bytes))) = stream.next().await {
 		let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
-
-		let Ok(json_bytes) = eventid_pdu.get_blocking(&event_id_bytes) else {
-			continue;
-		};
-
-		// Minimal deserialize -- only extract prev_events, skip everything else
-		let Ok(partial) = serde_json::from_slice::<PrevEventsOnly>(&json_bytes) else {
-			continue;
-		};
 
 		let Ok(metadata_bytes) = eventid_metadata.get_blocking(&event_id_bytes) else {
 			continue;
 		};
 
-		let Ok(mut meta) = crate::rooms::timeline::EventMetadata::from_bincode(&metadata_bytes)
+		let Ok(meta) = crate::rooms::timeline::EventMetadata::from_bincode(&metadata_bytes)
 		else {
 			continue;
 		};
 
-		let mut max_depth: u64 = 0;
-		for prev_id in &partial.prev_events {
-			let prev_key = prev_id.as_bytes();
-			if let Some(&cached_depth) = depth_cache.get(prev_key) {
-				max_depth = max_depth.max(cached_depth);
-			} else if let Ok(prev_bytes) = eventid_metadata.get_blocking(prev_key) {
-				if let Ok(prev_meta) =
-					crate::rooms::timeline::EventMetadata::from_bincode(&prev_bytes)
-				{
-					max_depth = max_depth.max(prev_meta.local_topological_depth);
-					depth_cache.insert(prev_key.to_vec(), prev_meta.local_topological_depth);
-				}
-			}
-		}
-
-		let local_topological_depth = max_depth.saturating_add(1);
-		meta.local_topological_depth = local_topological_depth;
-		depth_cache.insert(event_id_bytes.to_vec(), local_topological_depth);
-
-		if let Ok(new_metadata_bytes) = bincode::serialize(&meta) {
-			eventid_metadata.put(event_id_bytes, new_metadata_bytes);
-		}
+		let global_depth: u64 = meta.depth.into();
 
 		let mut topo_key = Vec::with_capacity(32);
 		topo_key.extend_from_slice(&pdu_id.shortroomid());
-		topo_key.extend_from_slice(&local_topological_depth.to_be_bytes());
-		topo_key.extend_from_slice(&pdu_id.shorteventid());
+		topo_key.extend_from_slice(&global_depth.to_be_bytes());
+		let mut sortable_count = pdu_id.shorteventid();
+		sortable_count[0] ^= 0x80;
+		topo_key.extend_from_slice(&sortable_count);
+
 		roomid_topologicalorder_pducount.put(&topo_key, event_id_bytes.to_vec());
 
 		total_migrated = total_migrated.saturating_add(1);

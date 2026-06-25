@@ -22,7 +22,7 @@ impl Service {
 	/// topological sort (parents before children, Kahn's algorithm with
 	/// chronological tiebreaking), then rebuilds the
 	/// `roomid_topologicalorder_pducount` index with correct
-	/// `local_topological_depth` values computed as
+	/// `deprecated_local_topo_depth` values computed as
 	/// `max(parent_depths) + 1`. Stream order
 	/// (`room_pducount_eventid`) is NEVER modified — it is immutable
 	/// arrival-time ordering.
@@ -135,7 +135,7 @@ impl Service {
 						self.db.remove_stream_and_topo_pducount_at_depth(
 							&old_pdu_id,
 							event_id.as_bytes(),
-							meta.local_topological_depth,
+							meta.deprecated_local_topo_depth,
 						);
 					} else {
 						self.db
@@ -319,7 +319,7 @@ impl Service {
 	/// Rebuild topological index with incremental state computation.
 	///
 	/// For each event in topo-sorted order: removes old topo entry,
-	/// computes `local_topological_depth` as position in topo-sorted
+	/// computes `deprecated_local_topo_depth` as position in topo-sorted
 	/// list, writes new topo key, and optionally recomputes state
 	/// snapshots. Stream order is NOT touched.
 	#[allow(clippy::too_many_arguments)]
@@ -435,7 +435,7 @@ impl Service {
 					self.db.remove_stream_and_topo_pducount_at_depth(
 						&old_pdu_id,
 						event_id.as_bytes(),
-						meta.local_topological_depth,
+						meta.deprecated_local_topo_depth,
 					);
 				} else {
 					self.db

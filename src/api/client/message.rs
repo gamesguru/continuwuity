@@ -185,52 +185,6 @@ pub(crate) async fn get_message_events_route(
 		.collect()
 		.await;
 
-	// Fallback: if topo index returned nothing, retry with raw stream.
-	// This handles events missing from the topo index (e.g. federation
-	// partition recovery where prev_events aren't available at insert time).
-	let events = if events.is_empty() {
-		let it = match body.dir {
-			| Direction::Forward => services
-				.rooms
-				.timeline
-				.pdus(room_id, Some(from))
-				.ignore_err()
-				.boxed(),
-
-			| Direction::Backward => services
-				.rooms
-				.timeline
-				.pdus_rev(room_id, Some(from))
-				.ignore_err()
-				.boxed(),
-		};
-
-		it.ready_take_while(|(count, _)| Some(*count) != to)
-			.ready_filter_map(|item| event_filter(item, filter))
-			.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
-			.wide_filter_map(|item| async move {
-				visibility_filter(&services, item, sender_user).await
-			})
-			.take(limit)
-			.wide_then(move |mut pdu| async move {
-				pdu.1.set_unsigned(Some(sender_user));
-				add_membership_to_unsigned(&services, sender_user, &mut pdu.1).await;
-				if let Err(e) = services
-					.rooms
-					.pdu_metadata
-					.add_bundled_aggregations_to_pdu(sender_user, &mut pdu.1)
-					.await
-				{
-					debug_warn!("Failed to add bundled aggregations: {e}");
-				}
-				pdu
-			})
-			.collect()
-			.await
-	} else {
-		events
-	};
-
 	let lazy_loading_context = lazy_loading::Context {
 		user_id: sender_user,
 		device_id: sender_device.or_else(|| {

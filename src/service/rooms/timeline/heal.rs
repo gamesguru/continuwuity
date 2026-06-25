@@ -252,7 +252,7 @@ pub async fn heal_room(
 		let mut max_depth = 0_u64;
 		for prev_id in pdu.prev_events() {
 			if let Some(meta) = self.db.get_event_metadata_blocking(prev_id) {
-				max_depth = max_depth.max(meta.local_topological_depth);
+				max_depth = max_depth.max(meta.deprecated_local_topo_depth);
 			}
 		}
 		let new_topo_depth = max_depth.saturating_add(1);

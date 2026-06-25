@@ -46,16 +46,6 @@ pub use self::{
 	metadata::EventMetadata,
 	repair_unsigned::update_unsigned_prev_content,
 };
-
-#[inline]
-pub(super) fn calculate_local_topo_depth(max_parent_depth: u64, global_depth: u64) -> u64 {
-	if max_parent_depth > 0 {
-		max_parent_depth.saturating_add(1)
-	} else {
-		global_depth.max(1)
-	}
-}
-
 use crate::{
 	Dep, account_data, admin, appservice, globals, pusher, rooms,
 	rooms::short::{ShortEventId, ShortStateHash},

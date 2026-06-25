@@ -11,7 +11,7 @@ pub struct EventMetadata {
 	pub redacted_by: Option<ruma::OwnedEventId>,
 	pub short_state_hash: Option<u64>,
 	#[serde(default)]
-	pub local_topological_depth: u64,
+	pub deprecated_local_topo_depth: u64,
 	/// Timeline position counter. `None` = legacy record (not yet migrated).
 	/// `Some(0)` = outlier / not in timeline. Normal events start at 1.
 	#[serde(default)]
