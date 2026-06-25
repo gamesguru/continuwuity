@@ -585,10 +585,14 @@ pub enum YoloCommand {
 	/// Sweep `eventid_pdu` (source of truth) and repopulate any missing or
 	/// corrupt derived data:
 	///
-	/// - `shortprevevents` / `shortauthevents` (DAG edge caches)
-	/// - `eventid_metadata` (bincode metadata: timestamps, depth, pdu_count)
-	/// - `roomid_topologicalorder_pducount` (topo index entries)
 	/// - `eventid_shorteventid` / `shorteventid_eventid` (ID mappings)
+	/// - `eventid_metadata` (bincode metadata: timestamps, depth, pdu_count)
+	/// - `shorteventid_shortprevevents` / `shortauthevents` (DAG edge caches)
+	/// - `shorteventid_authchain` (transitive auth chain, computed
+	///   incrementally)
+	/// - `roomid_topologicalorder_pducount` (topo index entries)
+	/// - `roomid_pduleaves` (forward extremities from true DAG tips)
+	/// - `tofrom_relation` (thread/reply/reaction relations)
 	///
 	/// Safe to run at any time. Only writes missing entries; never
 	/// overwrites existing data. Run before `recalculate-extremities`

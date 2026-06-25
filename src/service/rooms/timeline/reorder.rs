@@ -490,3 +490,145 @@ impl Service {
 		current_shortstatehash.filter(|&ssh| ssh != 0)
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use std::collections::{HashMap, HashSet};
+
+	use conduwuit::utils::timeline_sorter::sort_timeline_events;
+	use conduwuit_core::PduCount;
+	use ruma::{OwnedEventId, event_id};
+
+	/// Compute position-based depths from a Kahn's sort result.
+	/// This mirrors the logic in reorder_timeline /
+	/// rebuild_topo_index_with_state.
+	fn position_depths(sorted: &[OwnedEventId]) -> HashMap<OwnedEventId, u64> {
+		sorted
+			.iter()
+			.enumerate()
+			.map(|(pos, eid)| (eid.clone(), u64::try_from(pos).expect("fits").saturating_add(1)))
+			.collect()
+	}
+
+	#[test]
+	fn test_position_depths_linear_chain() {
+		let a = event_id!("$A").to_owned();
+		let b = event_id!("$B").to_owned();
+		let c = event_id!("$C").to_owned();
+
+		let mut entries = HashMap::new();
+		entries.insert(a.clone(), (PduCount::from(0_u64), 1, 10));
+		entries.insert(b.clone(), (PduCount::from(0_u64), 2, 20));
+		entries.insert(c.clone(), (PduCount::from(0_u64), 3, 30));
+
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+		graph.insert(b.clone(), [a.clone()].into());
+		graph.insert(c.clone(), [b.clone()].into());
+
+		let sorted = sort_timeline_events(&entries, &graph);
+		let depths = position_depths(&sorted);
+
+		// Linear: A=1, B=2, C=3 — strictly increasing
+		assert_eq!(depths[&a], 1);
+		assert_eq!(depths[&b], 2);
+		assert_eq!(depths[&c], 3);
+	}
+
+	#[test]
+	fn test_position_depths_disconnected_segments() {
+		// Two disconnected chains: A→B (ts 10,20) and X→Y (ts 15,25).
+		// Position-based depths should interleave them chronologically.
+		let a = event_id!("$A").to_owned();
+		let b = event_id!("$B").to_owned();
+		let x = event_id!("$X").to_owned();
+		let y = event_id!("$Y").to_owned();
+
+		let mut entries = HashMap::new();
+		entries.insert(a.clone(), (PduCount::from(0_u64), 1, 10));
+		entries.insert(b.clone(), (PduCount::from(0_u64), 2, 20));
+		entries.insert(x.clone(), (PduCount::from(0_u64), 1, 15));
+		entries.insert(y.clone(), (PduCount::from(0_u64), 2, 25));
+
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+		graph.insert(b.clone(), [a.clone()].into());
+		graph.insert(y.clone(), [x.clone()].into());
+
+		let sorted = sort_timeline_events(&entries, &graph);
+		let depths = position_depths(&sorted);
+
+		// All 4 events get unique, monotonically increasing depths 1..4
+		let mut all_depths: Vec<u64> = depths.values().copied().collect();
+		all_depths.sort();
+		assert_eq!(all_depths, vec![1, 2, 3, 4]);
+
+		// Parent always has lower depth than child
+		assert!(depths[&a] < depths[&b]);
+		assert!(depths[&x] < depths[&y]);
+	}
+
+	#[test]
+	fn test_position_depths_diamond() {
+		// A → B, A → C, B+C → D
+		let a = event_id!("$A").to_owned();
+		let b = event_id!("$B").to_owned();
+		let c = event_id!("$C").to_owned();
+		let d = event_id!("$D").to_owned();
+
+		let mut entries = HashMap::new();
+		entries.insert(a.clone(), (PduCount::from(0_u64), 1, 10));
+		entries.insert(b.clone(), (PduCount::from(0_u64), 2, 20));
+		entries.insert(c.clone(), (PduCount::from(0_u64), 2, 25));
+		entries.insert(d.clone(), (PduCount::from(0_u64), 3, 30));
+
+		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+		graph.insert(b.clone(), [a.clone()].into());
+		graph.insert(c.clone(), [a.clone()].into());
+		graph.insert(d.clone(), [b.clone(), c.clone()].into());
+
+		let sorted = sort_timeline_events(&entries, &graph);
+		let depths = position_depths(&sorted);
+
+		// A must have the lowest depth, D must have the highest
+		assert_eq!(depths[&a], 1);
+		assert_eq!(depths[&d], 4);
+		// B and C are between A and D
+		assert!(depths[&b] > depths[&a] && depths[&b] < depths[&d]);
+		assert!(depths[&c] > depths[&a] && depths[&c] < depths[&d]);
+	}
+
+	#[test]
+	fn test_position_depths_single_event() {
+		let a = event_id!("$A").to_owned();
+		let entries: HashMap<OwnedEventId, (PduCount, u64, u64)> =
+			[(a.clone(), (PduCount::from(0_u64), 1, 10))].into();
+		let graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+
+		let sorted = sort_timeline_events(&entries, &graph);
+		let depths = position_depths(&sorted);
+
+		assert_eq!(depths[&a], 1);
+	}
+
+	#[test]
+	fn test_position_depths_all_roots_sorted_by_ts() {
+		// 5 unconnected events — should be sorted by timestamp
+		let a = event_id!("$A").to_owned();
+		let b = event_id!("$B").to_owned();
+		let c = event_id!("$C").to_owned();
+
+		let mut entries = HashMap::new();
+		entries.insert(a.clone(), (PduCount::from(0_u64), 0, 30));
+		entries.insert(b.clone(), (PduCount::from(0_u64), 0, 10));
+		entries.insert(c.clone(), (PduCount::from(0_u64), 0, 20));
+
+		let graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
+
+		let sorted = sort_timeline_events(&entries, &graph);
+		let depths = position_depths(&sorted);
+
+		// Sorted by ts: B(10)=1, C(20)=2, A(30)=3
+		assert_eq!(depths[&b], 1);
+		assert_eq!(depths[&c], 2);
+		assert_eq!(depths[&a], 3);
+	}
+}

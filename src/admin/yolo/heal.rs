@@ -602,3 +602,95 @@ pub(super) async fn heal_receipts(&self) -> Result {
 	.await?;
 	Ok(())
 }
+
+#[admin_command]
+pub(super) async fn reindex_short(&self, room_id: Option<OwnedRoomId>, all: bool) -> Result {
+	self.bail_restricted()?;
+
+	if all {
+		let rooms: Vec<OwnedRoomId> = self
+			.services
+			.rooms
+			.metadata
+			.iter_ids()
+			.map(ToOwned::to_owned)
+			.collect()
+			.await;
+
+		self.write_str(&format!("Reindexing derived data for {} rooms...\n", rooms.len()))
+			.await?;
+
+		let mut total_stats =
+			conduwuit_service::rooms::timeline::reindex::ReindexStats::default();
+		for (i, rid) in rooms.iter().enumerate() {
+			match self.services.rooms.timeline.reindex_short(rid).await {
+				| Ok(stats) => {
+					if stats.repaired_prev_events > 0
+						|| stats.repaired_metadata > 0
+						|| stats.repaired_auth_events > 0
+						|| stats.missing_pdu > 0
+					{
+						self.write_str(&format!(
+							"[{}/{}] {rid}: {stats}\n",
+							i.saturating_add(1),
+							rooms.len()
+						))
+						.await?;
+					}
+					total_stats.total_events =
+						total_stats.total_events.saturating_add(stats.total_events);
+					total_stats.missing_pdu =
+						total_stats.missing_pdu.saturating_add(stats.missing_pdu);
+					total_stats.hash_mismatches = total_stats
+						.hash_mismatches
+						.saturating_add(stats.hash_mismatches);
+					total_stats.repaired_short_ids = total_stats
+						.repaired_short_ids
+						.saturating_add(stats.repaired_short_ids);
+					total_stats.repaired_metadata = total_stats
+						.repaired_metadata
+						.saturating_add(stats.repaired_metadata);
+					total_stats.repaired_prev_events = total_stats
+						.repaired_prev_events
+						.saturating_add(stats.repaired_prev_events);
+					total_stats.repaired_auth_events = total_stats
+						.repaired_auth_events
+						.saturating_add(stats.repaired_auth_events);
+					total_stats.repaired_auth_chains = total_stats
+						.repaired_auth_chains
+						.saturating_add(stats.repaired_auth_chains);
+					total_stats.repaired_topo_index = total_stats
+						.repaired_topo_index
+						.saturating_add(stats.repaired_topo_index);
+					total_stats.repaired_relations = total_stats
+						.repaired_relations
+						.saturating_add(stats.repaired_relations);
+					total_stats.repaired_references = total_stats
+						.repaired_references
+						.saturating_add(stats.repaired_references);
+					total_stats.repaired_search_index = total_stats
+						.repaired_search_index
+						.saturating_add(stats.repaired_search_index);
+				},
+				| Err(e) => {
+					self.write_str(&format!(
+						"[{}/{}] {rid}: ERROR: {e}\n",
+						i.saturating_add(1),
+						rooms.len()
+					))
+					.await?;
+				},
+			}
+		}
+
+		self.write_str(&format!("\nAll rooms complete: {total_stats}"))
+			.await?;
+	} else {
+		let rid = room_id.expect("room_id required when --all not set");
+		let stats = self.services.rooms.timeline.reindex_short(&rid).await?;
+		self.write_str(&format!("Reindex complete for {rid}: {stats}"))
+			.await?;
+	}
+
+	Ok(())
+}

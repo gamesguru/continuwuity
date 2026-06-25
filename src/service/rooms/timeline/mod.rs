@@ -8,6 +8,7 @@ mod heal;
 mod metadata;
 mod rebuild_state;
 mod redact;
+pub mod reindex;
 mod reorder;
 mod repair_unsigned;
 use std::{fmt::Write, sync::Arc};

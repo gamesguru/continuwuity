@@ -114,6 +114,10 @@ impl Data {
 			.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e}")))
 	}
 
+	pub(super) fn store_eventid_metadata(&self, event_id_bytes: &[u8], metadata_bytes: Vec<u8>) {
+		self.eventid_metadata.insert(event_id_bytes, metadata_bytes);
+	}
+
 	/// Returns the json of a pdu.
 	pub(super) async fn get_pdu_json(&self, event_id: &EventId) -> Result<CanonicalJsonObject> {
 		self.eventid_pdu
@@ -1699,6 +1703,32 @@ impl Data {
 			.map(utils::u64_from_u8)
 			.collect();
 		Ok(prev_shorts)
+	}
+
+	pub(super) fn store_shortauthevents(
+		&self,
+		shorteventid: rooms::short::ShortEventId,
+		shortauthevents: &[rooms::short::ShortEventId],
+	) {
+		let key = shorteventid.to_be_bytes();
+		let val = shortauthevents
+			.iter()
+			.flat_map(|s| s.to_be_bytes())
+			.collect::<Vec<u8>>();
+		self.shorteventid_shortauthevents.insert(&key, &val);
+	}
+
+	pub(super) async fn get_shortauthevents(
+		&self,
+		shorteventid: rooms::short::ShortEventId,
+	) -> Result<Vec<rooms::short::ShortEventId>> {
+		let key = shorteventid.to_be_bytes();
+		let val = self.shorteventid_shortauthevents.get(&key).await?;
+		let auth_shorts = val
+			.chunks_exact(size_of::<u64>())
+			.map(utils::u64_from_u8)
+			.collect();
+		Ok(auth_shorts)
 	}
 
 	pub(super) fn store_shortauthevents_into_batch(
