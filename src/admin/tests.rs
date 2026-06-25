@@ -1727,7 +1727,7 @@ async fn test_yolo_reorder_timeline_state_resolution() {
 		.unwrap();
 
 	// 1. Create room event
-	let create_event = services
+	let _create_event = services
 		.rooms
 		.timeline
 		.build_and_append_pdu(
@@ -1745,7 +1745,7 @@ async fn test_yolo_reorder_timeline_state_resolution() {
 		.unwrap();
 
 	// 2. Bot user joins
-	let join_event = services
+	let _join_event = services
 		.rooms
 		.timeline
 		.build_and_append_pdu(
