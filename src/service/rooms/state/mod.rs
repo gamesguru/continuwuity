@@ -330,37 +330,6 @@ impl Service {
 		Ok(())
 	}
 
-	/// Reset forward extremities to all events in the given state snapshot.
-	///
-	/// This is an intentionally destructive operation for admin-level DAG
-	/// repair. It breaks the room's DAG continuity by replacing extremities
-	/// with the full state set, forcing the room to "restart" from the given
-	/// state. Only call this from admin commands, never from normal federation
-	/// intake.
-	pub async fn reset_extremities_to_state(
-		&self,
-		room_id: &RoomId,
-		shortstatehash: u64,
-		state_lock: &RoomMutexGuard,
-	) {
-		let new_extremities: Vec<OwnedEventId> = self
-			.services
-			.state_accessor
-			.state_full_ids(shortstatehash)
-			.map(|(_, id)| id)
-			.collect()
-			.await;
-
-		info!(
-			target: "force_state",
-			"Admin: resetting {room_id} extremities to {} state events",
-			new_extremities.len()
-		);
-
-		self.set_forward_extremities(room_id, new_extremities.into_iter(), state_lock)
-			.await;
-	}
-
 	/// Generates a new StateHash and associates it with the incoming event.
 	///
 	/// This adds all current state events (not including the incoming event)
@@ -675,8 +644,7 @@ impl Service {
 			.await;
 
 		// Enforce a hard cap at the DB writer level. Callers may pass more
-		// tips than this (e.g. from recalculate_extremities or
-		// reset_extremities_to_state), but we only persist the last N.
+		// tips than this (e.g. from recalculate_extremities),
 		// Keeping the newest tips is preferred since they are most likely to
 		// be merged by future events.
 		let collected: Vec<OwnedEventId> = event_ids.collect();
