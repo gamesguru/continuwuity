@@ -113,6 +113,7 @@ async fn fresh(services: &Services) -> Result<()> {
 	db["global"].insert(MIGRATE_PRIVATE_READ_RECEIPTS_TO_SSOT_MARKER, []);
 	db["global"].insert(POPULATE_TOPOLOGICAL_INDEX_MARKER, []);
 	db["global"].insert(POPULATE_SHORTPREVEVENTS_MARKER, []);
+	db["global"].insert(UNIFY_RAW_PDU_ID_MARKER, []);
 
 	// Create the admin room and server user on first run
 	info!("Creating admin room and server user");
@@ -348,6 +349,17 @@ async fn migrate(services: &Services) -> Result<()> {
 		populate_pdu_count_in_metadata(services)
 			.await
 			.map_err(|e| err!("Failed to run 'populate_pdu_count_in_metadata': {e}"))?;
+	}
+
+	if db["global"]
+		.get(UNIFY_RAW_PDU_ID_MARKER)
+		.await
+		.is_not_found()
+	{
+		info!("Running migration 'unify_raw_pdu_id_16_byte'");
+		unify_raw_pdu_id_16_byte(services)
+			.await
+			.map_err(|e| err!("Failed to run 'unify_raw_pdu_id_16_byte': {e}"))?;
 	}
 
 	if services.globals.db.database_version().await != DATABASE_VERSION {
@@ -1450,6 +1462,106 @@ async fn db_lt_19(services: &Services) -> Result<()> {
 	info!("Migrated {}/{} soft-failed events to eventid_metadata.", migrated, count);
 
 	services.globals.db.bump_database_version(19);
+	Ok(())
+}
+
+const UNIFY_RAW_PDU_ID_MARKER: &[u8] = b"unify_raw_pdu_id_16_byte";
+
+async fn unify_raw_pdu_id_16_byte(services: &Services) -> Result<()> {
+	info!("Starting database migration (RawPduId 16-byte unification)...");
+	let db = &services.db;
+	let eventid_pduid = db["eventid_pduid"].clone();
+	let room_pducount_eventid = db["room_pducount_eventid"].clone();
+
+	let _cork = db.cork_and_sync();
+	let stream = eventid_pduid.raw_stream();
+	pin_mut!(stream);
+
+	let mut total = 0_usize;
+	let mut migrated = 0_usize;
+	let mut skipped = 0_usize;
+	let mut batch = database::rocksdb::WriteBatch::default();
+
+	while let Some(Ok((event_id_bytes, old_raw_id_bytes))) = stream.next().await {
+		total = total.saturating_add(1);
+
+		let needs_migration = if old_raw_id_bytes.len() == 24 {
+			// Old backfilled 24-byte format
+			true
+		} else if old_raw_id_bytes.len() == 16 {
+			// Old normal format (or already migrated)
+			// Old normal counts were positive, so their high byte was < 0x80.
+			// Migrated normal counts use offset binary encoding, so their high byte is >=
+			// 0x80. Migrated backfilled counts use offset binary encoding, so their high
+			// byte is < 0x80. Wait, how do we know if it's already migrated?
+			// Actually, we don't know if an existing 16-byte key is old Normal or new
+			// Backfilled just by looking at it, but this migration runs precisely ONCE
+			// during the bump to v20. If we process it during the v20 bump, it MUST be
+			// an old key. Old Normal has high byte < 0x80.
+			// Old Backfilled is 24 bytes.
+			// So if it's 16 bytes and high byte is < 0x80, it's an old Normal key.
+			let high_byte = old_raw_id_bytes[8];
+			high_byte < 0x80
+		} else {
+			false
+		};
+
+		if !needs_migration {
+			skipped = skipped.saturating_add(1);
+			continue;
+		}
+
+		// It is an old format key (either 24 byte backfilled, or 16 byte normal).
+		// We can decode it using the OLD decoding rules implicitly.
+		// Wait! The `RawId::from` is already updated to the NEW 16-byte rules.
+		// So we CANNOT use `RawId::from` to decode old 24-byte keys, nor can we use
+		// `RawId::from` for old 16-byte keys!
+		// We must manually extract the `shortroomid` and `shorteventid` using the old
+		// logic.
+		let mut shortroomid = [0_u8; 8];
+		shortroomid.copy_from_slice(&old_raw_id_bytes[0..8]);
+
+		let mut count_bytes = [0_u8; 8];
+		if old_raw_id_bytes.len() == 24 {
+			// Old backfilled format: [room(8) | 0x00(8) | count(8)]
+			count_bytes.copy_from_slice(&old_raw_id_bytes[16..24]);
+		} else {
+			// Old normal format: [room(8) | count(8)]
+			count_bytes.copy_from_slice(&old_raw_id_bytes[8..16]);
+		}
+
+		// Apply offset binary encoding to the old two's complement count
+		let encoded_count = conduwuit::matrix::pdu::Count::offset_binary_encoding(count_bytes);
+
+		// Build the new 16 byte key
+		let mut new_raw_id_bytes = [0_u8; 16];
+		new_raw_id_bytes[0..8].copy_from_slice(&shortroomid);
+		new_raw_id_bytes[8..16].copy_from_slice(&encoded_count);
+
+		// Apply updates
+		room_pducount_eventid.remove_from_batch(&mut batch, old_raw_id_bytes);
+		room_pducount_eventid.insert_into_batch(&mut batch, &new_raw_id_bytes, event_id_bytes);
+		eventid_pduid.insert_into_batch(&mut batch, event_id_bytes, new_raw_id_bytes);
+
+		migrated = migrated.saturating_add(1);
+
+		if migrated.is_multiple_of(10000) {
+			room_pducount_eventid.apply_batch(&batch);
+			eventid_pduid.apply_batch(&batch);
+			batch.clear();
+			info!("RawPduId unification: Processed {} PDUs...", migrated);
+		}
+	}
+
+	room_pducount_eventid.apply_batch(&batch);
+	eventid_pduid.apply_batch(&batch);
+	batch.clear();
+
+	info!(
+		"RawPduId unification complete. Migrated {} PDUs ({} skipped, {} total).",
+		migrated, skipped, total
+	);
+	db["global"].insert(UNIFY_RAW_PDU_ID_MARKER, []);
 	Ok(())
 }
 

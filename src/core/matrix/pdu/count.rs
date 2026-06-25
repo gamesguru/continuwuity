@@ -142,6 +142,17 @@ impl Count {
 			debug_assert!(*i <= 0, "Backfilled sequence must be negative");
 		}
 	}
+
+	/// Applies offset binary encoding (flips the sign bit) to a byte
+	/// representation of an i64 or u64 so that it sorts correctly in RocksDB
+	/// unsigned byte comparison. This operation is its own inverse, so it is
+	/// used for both encoding and decoding.
+	#[inline]
+	#[must_use]
+	pub fn offset_binary_encoding(mut count_bytes: [u8; 8]) -> [u8; 8] {
+		count_bytes[0] ^= 0x80;
+		count_bytes
+	}
 }
 
 impl Display for Count {
