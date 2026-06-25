@@ -123,21 +123,18 @@ where
 				.pdu_shortstatehash(prev_eventid)
 				.map_ok(move |sstatehash| (sstatehash, prev_event))
 		})
-		.try_collect::<HashMap<u64, conduwuit_core::PduEvent>>()
+		.try_collect::<Vec<(u64, conduwuit_core::PduEvent)>>()
 		.await
 	else {
 		return Ok(None);
 	};
 
-	let num_forks = extremity_sstatehashes.len();
-	trace!("Calculating fork states ({num_forks} forks)...");
-
 	let mut fork_compressed_states = Vec::with_capacity(extremity_sstatehashes.len());
-	for (sstatehash, prev_event) in &extremity_sstatehashes {
+	for &(sstatehash, ref prev_event) in &extremity_sstatehashes {
 		let mut state = self
 			.services
 			.state_compressor
-			.load_shortstatehash_info(*sstatehash)
+			.load_shortstatehash_info(sstatehash)
 			.await?
 			.pop()
 			.unwrap()
@@ -172,6 +169,11 @@ where
 		}
 		fork_compressed_states.push(state);
 	}
+
+	fork_compressed_states.sort();
+	fork_compressed_states.dedup();
+	let num_forks = fork_compressed_states.len();
+	trace!("Calculating fork states ({num_forks} forks)...");
 
 	// Build ssk → set of (shorteventid) values across ALL forks.
 	// A key is only truly conflicting if multiple forks assign it DIFFERENT values.

@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+	collections::{BTreeSet, HashMap, HashSet},
+	sync::Arc,
+};
 
 use conduwuit_core::{
 	Result, debug, info,
@@ -8,7 +11,7 @@ use conduwuit_core::{
 use futures::StreamExt;
 use ruma::{OwnedEventId, RoomId};
 
-use super::{Service, metadata::EventMetadata};
+use super::{Service, TimelineStateResolver, metadata::EventMetadata};
 use crate::rooms::short::ShortRoomId;
 
 impl Service {
@@ -245,7 +248,7 @@ impl Service {
 						let result = self
 							.services
 							.state_compressor
-							.save_state_as_root(room_id.as_ref(), std::sync::Arc::new(compressed))
+							.save_state_as_root(room_id.as_ref(), Arc::new(compressed))
 							.await;
 						if let Ok(res) = result {
 							Some(res.shortstatehash)
@@ -330,25 +333,24 @@ impl Service {
 		available_counts: &[PduCount],
 		metadata_cache: &mut HashMap<OwnedEventId, EventMetadata>,
 	) -> Option<u64> {
-		let mut current_shortstatehash = {
-			let mut ssh = 0;
-			if let Some(oldest_event_id) = sorted.first() {
-				if let Ok(oldest_pdu) = self
-					.db
-					.get_pdu_in_room(Some(room_id), oldest_event_id)
-					.await
-				{
-					if let Some(prev) = oldest_pdu.prev_events.first() {
-						if let Ok(prev_ssh) =
-							self.services.state_accessor.pdu_shortstatehash(prev).await
-						{
-							ssh = prev_ssh;
-						}
-					}
-				}
-			}
-			Some(ssh)
-		};
+		let room_version = self
+			.services
+			.state
+			.get_room_version(room_id)
+			.await
+			.unwrap_or(ruma::RoomVersionId::V11);
+
+		let empty_ssh = self
+			.services
+			.state_compressor
+			.save_state(room_id, Arc::new(BTreeSet::new()))
+			.await
+			.ok()
+			.map_or(0, |d| d.shortstatehash);
+
+		let event_set: HashSet<&ruma::EventId> = sorted.iter().map(|id| &**id).collect();
+		let mut ssh_cache: HashMap<OwnedEventId, u64> = HashMap::new();
+		let mut resolved_state_cache: HashMap<Vec<u64>, u64> = HashMap::new();
 
 		// Pre-compute position-based topo depths from Kahn's sort order.
 		// Position in the sorted list IS the correct topological depth,
@@ -362,6 +364,8 @@ impl Service {
 					.saturating_add(1),
 			);
 		}
+
+		let mut final_ssh = None;
 
 		for event_id in sorted {
 			// Use the existing stream order count -- do NOT fabricate a new one
@@ -390,19 +394,35 @@ impl Service {
 			// if left in place. Soft-fail flags are intentional and persist.
 			self.services.pdu_metadata.unmark_event_rejected(event_id);
 
-			// State computation — uses existing pdu_id (unchanged stream order)
-			if let Some(mut ssh) = current_shortstatehash {
-				// Snapshot the JSON before state computation to detect changes
-				let json_before = json.clone();
-				self.compute_state_for_event(&pdu, event_id, &mut json, &mut ssh, &pdu_id)
-					.await;
-				current_shortstatehash = Some(ssh);
+			// Find parent state — only consider parents that exist in our event set
+			let state_before = self
+				.resolve_state_before(
+					&mut TimelineStateResolver {
+						room_id,
+						room_version: &room_version,
+						event_set: &event_set,
+						ssh_cache: &ssh_cache,
+						resolved_state_cache: &mut resolved_state_cache,
+						empty_ssh,
+					},
+					&pdu,
+				)
+				.await
+				.unwrap_or(empty_ssh);
 
-				// Only write JSON when unsigned.prev_content was actually repaired
-				if json != json_before {
-					self.db.update_pdu_json(event_id, &json);
-				}
+			let mut ssh = state_before;
+			// Snapshot the JSON before state computation to detect changes
+			let json_before = json.clone();
+			self.compute_state_for_event(&pdu, event_id, &mut json, &mut ssh, &pdu_id)
+				.await;
+
+			// Only write JSON when unsigned.prev_content was actually repaired
+			if json != json_before {
+				self.db.update_pdu_json(event_id, &json);
 			}
+
+			ssh_cache.insert(event_id.clone(), ssh);
+			final_ssh = Some(ssh);
 		}
 
 		// Now apply the DB replacements inside a single atomic cork.
@@ -466,7 +486,7 @@ impl Service {
 		}
 		drop(cork);
 
-		current_shortstatehash.filter(|&ssh| ssh != 0)
+		final_ssh.filter(|&ssh| ssh != 0)
 	}
 }
 

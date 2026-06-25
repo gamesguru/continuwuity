@@ -7,7 +7,7 @@ use conduwuit_core::{Result, debug, info, matrix::event::Event, warn};
 use futures::StreamExt;
 use ruma::{OwnedEventId, RoomId, events::TimelineEventType};
 
-use super::Service;
+use super::{Service, TimelineStateResolver};
 use crate::rooms;
 
 impl Service {
@@ -77,7 +77,6 @@ impl Service {
 		let mut processed = 0_usize;
 		let mut single_parent_count = 0_usize;
 		let mut no_parent_count = 0_usize;
-		let mut cache_hit_count = 0_usize;
 		let mut fork_resolve_count = 0_usize;
 		let mut cumulative_resolve_time = std::time::Duration::ZERO;
 		let empty_ssh = self
@@ -96,93 +95,71 @@ impl Service {
 
 			if processed.is_multiple_of(1000) {
 				debug!(
-					"rebuild_state: {}/{} events | single:{} none:{} cached:{} resolved:{} | \
+					"rebuild_state: {}/{} events | single:{} none:{} resolved:{} | \
 					 cumulative_resolve: {:?} | elapsed: {:?}",
 					processed,
 					total_events,
 					single_parent_count,
 					no_parent_count,
-					cache_hit_count,
 					fork_resolve_count,
 					cumulative_resolve_time,
 					rebuild_start.elapsed(),
 				);
 			}
 
+			let pdu = self.get_pdu(eid).await?;
+			let loop_start = std::time::Instant::now();
+
 			// Find parent state — only consider parents that exist in our event set
+			let event_set_refs: HashSet<&ruma::EventId> =
+				event_set.iter().map(|id| &***id).collect();
+			let state_before = self
+				.resolve_state_before(
+					&mut TimelineStateResolver {
+						room_id,
+						room_version: &room_version,
+						event_set: &event_set_refs,
+						ssh_cache: &ssh_cache,
+						resolved_state_cache: &mut resolved_state_cache,
+						empty_ssh,
+					},
+					&pdu,
+				)
+				.await?;
+
+			// Update statistics
 			let prev_sshs: Vec<u64> = prev_events
 				.iter()
 				.filter(|prev_id| event_set.contains(prev_id))
 				.filter_map(|prev_id| ssh_cache.get(prev_id).copied())
 				.collect();
-
 			let mut unique_sshs = prev_sshs.clone();
 			unique_sshs.sort_unstable();
 			unique_sshs.dedup();
-
-			let loop_start = std::time::Instant::now();
-
-			let state_before = match unique_sshs.len() {
+			match unique_sshs.len() {
 				| 1 => {
 					single_parent_count = single_parent_count.saturating_add(1);
-					unique_sshs[0]
 				},
 				| 0 => {
 					no_parent_count = no_parent_count.saturating_add(1);
-					empty_ssh
 				},
 				| _ => {
-					if let Some(&cached_ssh) = resolved_state_cache.get(&unique_sshs) {
-						cache_hit_count = cache_hit_count.saturating_add(1);
-						cached_ssh
-					} else {
-						// Slow path for forks: fetch PDU from DB and run state resolution
-						let pdu = self.get_pdu(eid).await?;
-						let state_after_opt = self
-							.services
-							.event_handler
-							.state_at_incoming_resolved(&pdu, room_id, &room_version)
-							.await?;
-						let state_after = state_after_opt.unwrap_or_default();
-						let compressed_state: BTreeSet<_> = self
-							.services
-							.state_compressor
-							.compress_state_events(state_after.iter().map(|(k, id)| (k, &**id)))
-							.collect()
-							.await;
+					let slow_path_elapsed = loop_start.elapsed();
+					fork_resolve_count = fork_resolve_count.saturating_add(1);
+					cumulative_resolve_time =
+						cumulative_resolve_time.saturating_add(slow_path_elapsed);
 
-						let state_delta = self
-							.services
-							.state_compressor
-							.save_state_with_parent(
-								room_id,
-								Some(unique_sshs[0]),
-								Arc::new(compressed_state),
-							)
-							.await?;
-
-						let ssh = state_delta.shortstatehash;
-						resolved_state_cache.insert(unique_sshs, ssh);
-
-						let slow_path_elapsed = loop_start.elapsed();
-						fork_resolve_count = fork_resolve_count.saturating_add(1);
-						cumulative_resolve_time =
-							cumulative_resolve_time.saturating_add(slow_path_elapsed);
-
-						if slow_path_elapsed.as_millis() > 50 {
-							debug!(
-								"rebuild_state: SLOW fork #{fork_resolve_count} for {eid} ({} \
-								 parents, {} unique ssh) took {:?}",
-								prev_sshs.len(),
-								prev_sshs.iter().collect::<HashSet<_>>().len(),
-								slow_path_elapsed
-							);
-						}
-
-						ssh
+					if slow_path_elapsed.as_millis() > 50 {
+						debug!(
+							"rebuild_state: SLOW fork #{fork_resolve_count} for {eid} ({} \
+							 parents, {} unique ssh) took {:?}",
+							prev_sshs.len(),
+							prev_sshs.iter().collect::<HashSet<_>>().len(),
+							slow_path_elapsed
+						);
 					}
 				},
-			};
+			}
 
 			let mut state_after = state_before;
 
@@ -207,10 +184,6 @@ impl Service {
 			}
 
 			ssh_cache.insert(eid.clone(), state_after);
-			self.services.state.set_pdu_shortstatehash(
-				self.services.short.get_or_create_shorteventid(eid).await,
-				state_after,
-			);
 			current_shortstatehash = state_after;
 
 			if processed.is_multiple_of(1000) {
@@ -233,8 +206,7 @@ impl Service {
 
 		debug!(
 			"rebuild_state: DONE {processed} events in {:?} | single:{single_parent_count} \
-			 none:{no_parent_count} cached:{cache_hit_count} resolved:{fork_resolve_count} | \
-			 cumulative_resolve: {:?}",
+			 none:{no_parent_count} resolved:{fork_resolve_count} | cumulative_resolve: {:?}",
 			rebuild_start.elapsed(),
 			cumulative_resolve_time,
 		);

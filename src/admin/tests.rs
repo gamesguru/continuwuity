@@ -1692,3 +1692,262 @@ async fn test_knocking_dag_resolution() {
 
 	println!("DAG knocking state resolved successfully without panicking!");
 }
+
+#[tokio::test]
+async fn test_yolo_reorder_timeline_state_resolution() {
+	use std::sync::Arc;
+
+	use conduwuit::pdu::PduBuilder;
+	use ruma::{
+		RoomId, RoomVersionId,
+		events::room::{
+			create::RoomCreateEventContent,
+			member::{MembershipState, RoomMemberEventContent},
+			message::RoomMessageEventContent,
+			name::RoomNameEventContent,
+		},
+	};
+	let (services, _guard) = setup_test_services("reorder_state_res").await;
+
+	let room_id = RoomId::new(services.globals.server_name());
+	let _short_id = services
+		.rooms
+		.short
+		.get_or_create_shortroomid(&room_id)
+		.await;
+
+	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+
+	// Create bot user
+	let server_user = services.globals.server_user.as_ref();
+	services
+		.users
+		.create(server_user, None, None)
+		.await
+		.unwrap();
+
+	// 1. Create room event
+	let create_event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomCreateEventContent {
+				federate: true,
+				predecessor: None,
+				room_version: RoomVersionId::V11,
+				..RoomCreateEventContent::new_v11()
+			}),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// 2. Bot user joins
+	let join_event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(server_user),
+				&RoomMemberEventContent::new(MembershipState::Join),
+			),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// 3. Set Room Name to "Name A" (base state event)
+	let name_a_event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomNameEventContent::new("Name A".to_owned())),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// Reset extremities to name_a_event so Branch 1 and Branch 2 fork from it
+	services
+		.rooms
+		.state
+		.set_forward_extremities(&room_id, vec![name_a_event.clone()].into_iter(), &state_lock)
+		.await;
+
+	// 4. Branch 1: Set Room Name to "Name B" (state event)
+	let name_b_event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomNameEventContent::new("Name B".to_owned())),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// Reset extremities to name_a_event again for Branch 2 fork
+	services
+		.rooms
+		.state
+		.set_forward_extremities(&room_id, vec![name_a_event.clone()].into_iter(), &state_lock)
+		.await;
+
+	// 5. Branch 2: Message "Hello C" (non-state event)
+	let message_c_event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::timeline(&RoomMessageEventContent::text_plain("Hello C")),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	// Reset extremities to merge the two branches at the next event
+	services
+		.rooms
+		.state
+		.set_forward_extremities(
+			&room_id,
+			vec![name_b_event.clone(), message_c_event.clone()].into_iter(),
+			&state_lock,
+		)
+		.await;
+
+	// 6. Append Merge Event M: "Hello M" (non-state event)
+	let merge_event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::timeline(&RoomMessageEventContent::text_plain("Hello M")),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	drop(state_lock);
+
+	// Run reorder-timeline (WITH state computation)
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
+
+	// Verify that state snapshot for message_c_event (Branch 2) does NOT leak
+	// Branch 1 ("Name B") name change. Its state name must be "Name A".
+	let ssh_c = services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(&message_c_event)
+		.await
+		.unwrap();
+	let name_c: Option<RoomNameEventContent> = services
+		.rooms
+		.state_accessor
+		.state_get_content(ssh_c, &ruma::events::StateEventType::RoomName, "")
+		.await
+		.ok();
+	assert_eq!(
+		name_c.as_ref().map(|c| c.name.as_str()),
+		Some("Name A"),
+		"Branch 2 message should not leak concurrent Branch 1 state changes"
+	);
+
+	// Verify that state snapshot for merge_event (M) correctly resolves conflict to
+	// "Name B"
+	let ssh_m = services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(&merge_event)
+		.await
+		.unwrap();
+	let name_m: Option<RoomNameEventContent> = services
+		.rooms
+		.state_accessor
+		.state_get_content(ssh_m, &ruma::events::StateEventType::RoomName, "")
+		.await
+		.ok();
+	assert_eq!(
+		name_m.as_ref().map(|c| c.name.as_str()),
+		Some("Name B"),
+		"Merge event state snapshot should resolve conflict to Name B"
+	);
+}
+
+#[tokio::test]
+async fn test_janian_dag_reorder_with_state() {
+	use std::path::Path;
+
+	use ruma::RoomId;
+
+	let dag_path_str = std::env::var("CONDUWUIT_TEST_DAG_JANIAN").unwrap_or_default();
+	let dag_path = Path::new(&dag_path_str);
+	if !dag_path.exists() {
+		println!("Skipping test_janian_dag_reorder_with_state: test DAG file not found");
+		return;
+	}
+	let (services, _guard) = setup_test_services("janian_dag").await;
+
+	let room_id = RoomId::parse("!hdMhyaHZvjLjagsXsk:janian.de").unwrap();
+
+	// 1. Import the DAG
+	let start_import = std::time::Instant::now();
+	let res = services
+		.admin
+		.command_in_place(
+			format!(
+				"yolo import-pdus {} --skip-auth --skip-sig-verify --room-version 11",
+				dag_path.to_string_lossy()
+			),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "import-pdus failed: {res:?}");
+	println!("yolo import-pdus took {:?}", start_import.elapsed());
+
+	// Run reorder-timeline WITH state computation!
+	println!("Starting yolo reorder-timeline (with state)...");
+	let start_reorder = std::time::Instant::now();
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
+	println!("yolo reorder-timeline took {:?}", start_reorder.elapsed());
+
+	// Run check-rooms (to check sanity)
+	println!("Starting check-rooms...");
+	let start_check = std::time::Instant::now();
+	let res = services
+		.admin
+		.command_in_place(
+			"yolo check-rooms".to_owned(),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "check-rooms failed: {res:?}");
+	println!("check-rooms took {:?}", start_check.elapsed());
+}

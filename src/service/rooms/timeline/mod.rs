@@ -11,6 +11,8 @@ mod redact;
 pub mod reindex;
 mod reorder;
 mod repair_unsigned;
+mod state;
+
 use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
@@ -32,6 +34,7 @@ use ruma::{
 use serde::Deserialize;
 
 use self::data::Data;
+pub(super) use self::state::TimelineStateResolver;
 pub use self::{
 	create::pdu_fits,
 	data::PdusIterItem,
