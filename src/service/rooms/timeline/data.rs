@@ -343,12 +343,9 @@ impl Data {
 
 			let (seek_ts, count) = match dir {
 				| Direction::Forward => (timestamp, PduCount::min()),
-				| Direction::Backward => {
-					if timestamp == 0 {
-						return Ok::<_, conduwuit::Error>((short, Vec::new()));
-					}
-					(timestamp.saturating_sub(1), PduCount::max())
-				},
+				// Must be inclusive (at or before) according to Matrix MSC3030.
+				// Do NOT subtract 1 from timestamp (which breaks tie-breaking/pagination).
+				| Direction::Backward => (timestamp, PduCount::max()),
 			};
 
 			let key = pack_timestamp_key(short.to_be_bytes(), seek_ts, count);
