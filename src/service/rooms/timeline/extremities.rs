@@ -220,8 +220,9 @@ impl Service {
 
 		let mut graph: Vec<RoaringBitmap> = Vec::with_capacity(eids.len());
 		let mut sorted: Vec<u32> = Vec::with_capacity(eids.len());
+		let mut pending_prev_cache: Vec<(ShortEventId, Vec<ShortEventId>)> = Vec::new();
 
-		for short in &short_ids {
+		for (idx, short) in short_ids.iter().enumerate() {
 			let id = get_or_insert_id(*short, &mut id_map, &mut reverse_id_map);
 			let id_usize = usize::try_from(id).expect("u32 fits in usize");
 
@@ -235,15 +236,48 @@ impl Service {
 				.get_shortprevevents(*short)
 				.await
 				.unwrap_or_default();
-			for prev_short in prev_shorts {
-				prev_bitmap.insert(get_or_insert_id(
-					prev_short,
-					&mut id_map,
-					&mut reverse_id_map,
-				));
+
+			if prev_shorts.is_empty() {
+				// Fallback: read PDU JSON and defer shortprevevents write
+				let event_id = &eids[idx];
+				let fallback_prevs = self.db.fallback_prev_events(event_id).await;
+				if !fallback_prevs.is_empty() {
+					let mut resolved_shorts = Vec::with_capacity(fallback_prevs.len());
+					for prev_id in &fallback_prevs {
+						let prev_short = self
+							.services
+							.short
+							.get_or_create_shorteventid(prev_id)
+							.await;
+						resolved_shorts.push(prev_short);
+						prev_bitmap.insert(get_or_insert_id(
+							prev_short,
+							&mut id_map,
+							&mut reverse_id_map,
+						));
+					}
+					pending_prev_cache.push((*short, resolved_shorts));
+				}
+			} else {
+				for prev_short in prev_shorts {
+					prev_bitmap.insert(get_or_insert_id(
+						prev_short,
+						&mut id_map,
+						&mut reverse_id_map,
+					));
+				}
 			}
 			graph[id_usize] = prev_bitmap;
 			sorted.push(id);
+		}
+
+		// Flush cached shortprevevents writes in a single batch
+		if !pending_prev_cache.is_empty() {
+			let cork = self.db.db.cork();
+			for (short_eid, prev_shorts) in &pending_prev_cache {
+				self.db.store_shortprevevents(*short_eid, prev_shorts);
+			}
+			drop(cork);
 		}
 
 		// Calculate true extremities via roaring bitmap intersections

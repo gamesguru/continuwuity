@@ -164,6 +164,9 @@ pub(super) static MAPS: &[Descriptor] = &[
 		name: "registrationtoken_info",
 		..descriptor::RANDOM_SMALL
 	},
+	// TODO: Legacy Conduit table, superseded by eventid_metadata.rejected
+	// and eventid_metadata.soft_failed fields. No service code references
+	// this CF. Remove in a future schema version bump.
 	Descriptor {
 		name: "rejectedeventids",
 		key_size_hint: Some(48),

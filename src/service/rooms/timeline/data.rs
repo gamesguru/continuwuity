@@ -173,13 +173,43 @@ impl Data {
 		Ok(count)
 	}
 
-	async fn fallback_prev_events(&self, event_id: &EventId) -> HashSet<OwnedEventId> {
+	pub(super) async fn fallback_prev_events(&self, event_id: &EventId) -> HashSet<OwnedEventId> {
 		let mut prevs = HashSet::new();
 		if let Ok((pdu, _)) = self.get_from_eventid_pdu(event_id).await {
 			for prev_id in pdu.prev_events() {
 				prevs.insert(prev_id.to_owned());
 			}
 		}
+		prevs
+	}
+
+	/// Reads prev_events from PDU JSON and lazily populates the
+	/// `shortprevevents` cache so future lookups avoid full JSON
+	/// deserialization.
+	pub(super) async fn fallback_and_cache_prev_events(
+		&self,
+		event_id: &EventId,
+	) -> HashSet<OwnedEventId> {
+		let prevs = self.fallback_prev_events(event_id).await;
+
+		if !prevs.is_empty() {
+			let short_eid = self
+				.services
+				.short
+				.get_or_create_shorteventid(event_id)
+				.await;
+			let mut prev_shorts = Vec::with_capacity(prevs.len());
+			for prev_id in &prevs {
+				prev_shorts.push(
+					self.services
+						.short
+						.get_or_create_shorteventid(prev_id)
+						.await,
+				);
+			}
+			self.store_shortprevevents(short_eid, &prev_shorts);
+		}
+
 		prevs
 	}
 
@@ -292,13 +322,13 @@ impl Data {
 							}
 							prevs
 						} else {
-							self.fallback_prev_events(event_id).await
+							self.fallback_and_cache_prev_events(event_id).await
 						}
 					} else {
-						self.fallback_prev_events(event_id).await
+						self.fallback_and_cache_prev_events(event_id).await
 					}
 				} else {
-					self.fallback_prev_events(event_id).await
+					self.fallback_and_cache_prev_events(event_id).await
 				};
 
 			graph.insert(event_id.clone(), prev_events);
