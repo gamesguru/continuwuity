@@ -1198,20 +1198,24 @@ where
 		}
 	}
 
-	let mut auth_events: HashMap<OwnedEventId, E> = HashMap::new();
-	for id in auth_event_ids {
-		if let Some(auth_event) = fetch_event(id.clone()).await {
+	let auth_events: HashMap<OwnedEventId, E> = auth_event_ids
+		.into_iter()
+		.stream()
+		.broad_filter_map(|id| async move {
+			let auth_event = fetch_event(id.clone()).await?;
 			if auth_event.rejected() {
 				trace!(
 					target: "state_res",
 					event_id = auth_event.event_id().as_str(),
 					"skipping rejected auth event"
 				);
+				None
 			} else {
-				auth_events.insert(id, auth_event);
+				Some((id, auth_event))
 			}
-		}
-	}
+		})
+		.collect()
+		.await;
 
 	trace!(map = ?auth_events.keys().collect::<Vec<_>>(), "fetched auth events");
 

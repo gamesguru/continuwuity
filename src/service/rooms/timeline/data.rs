@@ -1515,7 +1515,7 @@ impl Data {
 			Ok(Self::topo_pducount_key(current, 0))
 		} else {
 			// Find the EXACT depth of the requested token.
-			// We MUST NOT use the depth of a nearby 1D count blindly with `current`, 
+			// We MUST NOT use the depth of a nearby 1D count blindly with `current`,
 			// as it might be higher, causing us to jump forward in the DAG.
 			let token_pdu_id = self.count_to_id(room_id, token, dir).await?;
 
@@ -1549,12 +1549,13 @@ impl Data {
 
 					if let Some(Ok(nearest_pdu_id)) = nearest_pdu_id {
 						if let Ok(depth) = self.pdu_id_to_depth(&nearest_pdu_id).await {
-							// Return EXACT depth and EXACT nearest_pdu_id to prevent skipping OR time-traveling!
+							// Return EXACT depth and EXACT nearest_pdu_id to prevent skipping OR
+							// time-traveling!
 							return Ok(Self::topo_pducount_key(&nearest_pdu_id, depth));
 						}
 					}
 
-					// If no nearest event found in the DAG, fallback safely without guessing depths
+					// If no nearest event found in DAG, fallback without guessing depths
 					if dir == Direction::Forward { u64::MAX } else { 0 }
 				},
 			};

@@ -73,10 +73,8 @@ impl From<Id> for RawId {
 
 #[cfg(test)]
 mod tests {
-	use std::num::{NonZeroI64, NonZeroU64};
-
 	use super::*;
-	use crate::matrix::pdu::{ShortId, ShortRoomId};
+	use crate::matrix::pdu::ShortRoomId;
 
 	#[test]
 	fn test_offset_binary_encoding_sorting() {

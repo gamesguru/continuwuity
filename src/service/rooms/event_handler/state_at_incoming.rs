@@ -262,10 +262,11 @@ where
 		.await;
 
 	// FAST PATH: If none of the conflicting keys are auth-critical types
-	// (power_levels, join_rules, create, member), we can skip the full state resolution
-	// machinery (auth chain diff + Kahn's sort + mainline sort + iterative auth
-	// check = O(N²) on 1500+ events) and just pick winners directly.
-	// This handles ~90% of real-world forks (concurrent non-auth changes).
+	// (power_levels, join_rules, create, member), we can skip the full state
+	// resolution machinery (auth chain diff + Kahn's sort + mainline sort +
+	// iterative auth check = O(N²) on 1500+ events) and just pick winners
+	// directly. This handles ~90% of real-world forks (concurrent non-auth
+	// changes).
 	let all_simple_conflicts = conflicting_state_keys.iter().all(|(ty, _)| {
 		!matches!(
 			ty,

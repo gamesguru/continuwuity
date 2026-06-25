@@ -358,15 +358,7 @@ async fn setup_test_services(prefix: &str) -> (std::sync::Arc<service::Services>
 
 #[tokio::test]
 async fn test_yolo_audit_membership_drift() {
-	use std::{path::PathBuf, sync::Arc};
-
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-		pdu::PduBuilder,
-	};
-	use figment::{Figment, providers::Format};
+	use conduwuit::pdu::PduBuilder;
 	use ruma::{
 		RoomId, RoomVersionId,
 		events::room::{
@@ -598,15 +590,7 @@ async fn test_yolo_audit_membership_drift() {
 
 #[tokio::test]
 async fn test_yolo_reorder_timeline() {
-	use std::{path::PathBuf, sync::Arc};
-
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-		pdu::PduBuilder,
-	};
-	use figment::{Figment, providers::Format};
+	use conduwuit::pdu::PduBuilder;
 	use ruma::{
 		RoomId, RoomVersionId,
 		events::room::{
@@ -811,18 +795,9 @@ async fn test_yolo_reorder_timeline() {
 
 #[tokio::test]
 async fn test_busted_dag_resolution() {
-	use std::{
-		path::{Path, PathBuf},
-		sync::Arc,
-	};
+	use std::path::Path;
 
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-		matrix::Event,
-	};
-	use figment::{Figment, providers::Format};
+	use conduwuit::matrix::Event;
 	use futures::StreamExt;
 	use ruma::RoomId;
 
@@ -956,18 +931,9 @@ async fn test_busted_dag_resolution() {
 
 #[tokio::test]
 async fn test_unredacted_room_dag_resolution() {
-	use std::{
-		path::{Path, PathBuf},
-		sync::Arc,
-	};
+	use std::path::Path;
 
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-		matrix::Event,
-	};
-	use figment::{Figment, providers::Format};
+	use conduwuit::matrix::Event;
 	use futures::StreamExt;
 	use ruma::RoomId;
 
@@ -1084,18 +1050,9 @@ async fn test_unredacted_room_dag_resolution() {
 
 #[tokio::test]
 async fn test_unredacted_lounge_dag_resolution() {
-	use std::{
-		path::{Path, PathBuf},
-		sync::Arc,
-	};
+	use std::path::Path;
 
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-		matrix::Event,
-	};
-	use figment::{Figment, providers::Format};
+	use conduwuit::matrix::Event;
 	use futures::StreamExt;
 	use ruma::RoomId;
 
@@ -1323,18 +1280,9 @@ async fn test_unredacted_lounge_dag_resolution() {
 
 #[tokio::test]
 async fn test_nheko_dag_resolution() {
-	use std::{
-		path::{Path, PathBuf},
-		sync::Arc,
-	};
+	use std::path::Path;
 
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-		matrix::Event,
-	};
-	use figment::{Figment, providers::Format};
+	use conduwuit::matrix::Event;
 	use futures::StreamExt;
 	use ruma::RoomId;
 
@@ -1451,15 +1399,7 @@ async fn test_nheko_dag_resolution() {
 
 #[tokio::test]
 async fn test_yolo_heal_receipts() {
-	use std::{path::PathBuf, sync::Arc};
-
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-	};
 	use conduwuit_database::Json;
-	use figment::{Figment, providers::Format};
 	use futures::StreamExt;
 	use ruma::{
 		RoomId, UserId,
@@ -1544,15 +1484,7 @@ async fn test_yolo_heal_receipts() {
 
 #[tokio::test]
 async fn test_yolo_rescue_room() {
-	use std::{path::PathBuf, sync::Arc};
-
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-		pdu::PduBuilder,
-	};
-	use figment::{Figment, providers::Format};
+	use conduwuit::pdu::PduBuilder;
 	use ruma::{
 		RoomId,
 		events::room::{
@@ -1628,17 +1560,8 @@ async fn test_yolo_rescue_room() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_knocking_dag_resolution() {
-	use std::{
-		path::{Path, PathBuf},
-		sync::Arc,
-	};
+	use std::path::Path;
 
-	use conduwuit::{
-		Server,
-		config::Config,
-		log::{Log, LogLevelReloadHandles, capture},
-	};
-	use figment::{Figment, providers::Format};
 	use ruma::RoomId;
 
 	let dag_path_str = std::env::var("CONDUWUIT_TEST_DAG_KNOCKING").unwrap_or_default();
@@ -1695,8 +1618,6 @@ async fn test_knocking_dag_resolution() {
 
 #[tokio::test]
 async fn test_yolo_reorder_timeline_state_resolution() {
-	use std::sync::Arc;
-
 	use conduwuit::pdu::PduBuilder;
 	use ruma::{
 		RoomId, RoomVersionId,

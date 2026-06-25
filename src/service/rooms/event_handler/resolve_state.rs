@@ -155,7 +155,9 @@ where
 	}
 
 	let meta = &self.services.pdu_metadata;
-	let fetch_cache: Arc<tokio::sync::RwLock<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>> = Arc::new(tokio::sync::RwLock::new(
+	let fetch_cache: Arc<
+		tokio::sync::RwLock<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>,
+	> = Arc::new(tokio::sync::RwLock::new(
 		self.services
 			.timeline
 			.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
@@ -229,7 +231,8 @@ where
 	let event_batch_fetch = move |events: Vec<OwnedEventId>| {
 		let cache_clone = fetch_cache_for_batch.clone();
 		async move {
-			let fetched = self.services
+			let fetched = self
+				.services
 				.timeline
 				.multi_get_pdus(Some(room_id), futures::stream::iter(events))
 				.filter_map(|r| async move { r.ok().map(Arc::new) })
