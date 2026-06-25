@@ -155,45 +155,49 @@ where
 	}
 
 	let meta = &self.services.pdu_metadata;
-	let fetch_cache: HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>> = self
-		.services
-		.timeline
-		.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
-		.filter_map(|r| async move { r.ok() })
-		.wide_then(|mut pdu| async move {
-			let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
-			if is_rejected {
-				// Defense-in-depth: the event is in the timeline, meaning it
-				// passed auth at some point. A stale rejection flag would
-				// poison state resolution by cascading auth failures. Clear
-				// the flag rather than propagating it.
-				warn!(
-					event_id = %pdu.event_id,
-					"timeline event has stale rejection flag, clearing"
-				);
-				meta.unmark_event_rejected(&pdu.event_id);
-			}
-			pdu.rejected = false;
-			(pdu.event_id.clone(), Arc::new(pdu))
-		})
-		.collect::<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>()
-		.await;
+	let fetch_cache: Arc<tokio::sync::RwLock<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>> = Arc::new(tokio::sync::RwLock::new(
+		self.services
+			.timeline
+			.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
+			.filter_map(|r| async move { r.ok() })
+			.wide_then(|mut pdu| async move {
+				let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
+				if is_rejected {
+					// Defense-in-depth: the event is in the timeline, meaning it
+					// passed auth at some point. A stale rejection flag would
+					// poison state resolution by cascading auth failures. Clear
+					// the flag rather than propagating it.
+					warn!(
+						event_id = %pdu.event_id,
+						"timeline event has stale rejection flag, clearing"
+					);
+					meta.unmark_event_rejected(&pdu.event_id);
+				}
+				pdu.rejected = false;
+				(pdu.event_id.clone(), Arc::new(pdu))
+			})
+			.collect::<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>()
+			.await,
+	));
 
-	let fetch_cache_ref = &fetch_cache;
-	let event_fetch = |event_id: OwnedEventId| async move {
-		if let Some(pdu) = fetch_cache_ref.get(&event_id).cloned() {
-			return Some(pdu);
+	let fetch_cache_ref = fetch_cache.clone();
+	let event_fetch = move |event_id: OwnedEventId| {
+		let cache_clone = fetch_cache_ref.clone();
+		async move {
+			if let Some(pdu) = cache_clone.read().await.get(&event_id).cloned() {
+				return Some(pdu);
+			}
+			// Fallback for missing auth events
+			let mut pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
+			if let Some(ref mut p) = pdu {
+				p.rejected = self
+					.services
+					.pdu_metadata
+					.is_event_rejected(&event_id)
+					.await;
+			}
+			pdu.map(Arc::new)
 		}
-		// Fallback for missing auth events
-		let mut pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
-		if let Some(ref mut p) = pdu {
-			p.rejected = self
-				.services
-				.pdu_metadata
-				.is_event_rejected(&event_id)
-				.await;
-		}
-		pdu.map(Arc::new)
 	};
 
 	let event_missing_cb = move |missing_events: Vec<OwnedEventId>| {
@@ -221,13 +225,24 @@ where
 		}
 	};
 
-	let event_batch_fetch = |events: Vec<OwnedEventId>| async move {
-		self.services
-			.timeline
-			.multi_get_pdus(Some(room_id), futures::stream::iter(events))
-			.filter_map(|r| async move { r.ok().map(Arc::new) })
-			.collect::<Vec<_>>()
-			.await
+	let fetch_cache_for_batch = fetch_cache.clone();
+	let event_batch_fetch = move |events: Vec<OwnedEventId>| {
+		let cache_clone = fetch_cache_for_batch.clone();
+		async move {
+			let fetched = self.services
+				.timeline
+				.multi_get_pdus(Some(room_id), futures::stream::iter(events))
+				.filter_map(|r| async move { r.ok().map(Arc::new) })
+				.collect::<Vec<_>>()
+				.await;
+
+			let mut w = cache_clone.write().await;
+			for pdu in &fetched {
+				w.insert(pdu.event_id.clone(), pdu.clone());
+			}
+
+			fetched
+		}
 	};
 
 	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {

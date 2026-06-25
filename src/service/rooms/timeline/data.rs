@@ -1507,21 +1507,54 @@ impl Data {
 		current: &RawPduId, // This is token +/- 1
 		dir: Direction,
 	) -> Result<Vec<u8>> {
+		use futures::StreamExt;
+
 		if token == PduCount::max() {
 			Ok(Self::topo_pducount_key(current, u64::MAX))
 		} else if token == PduCount::min() {
 			Ok(Self::topo_pducount_key(current, 0))
 		} else {
 			// Find the EXACT depth of the requested token.
-			// We MUST NOT use the depth of a nearby 1D count, as it might be higher,
-			// causing us to jump forward in the DAG and infinite loop.
+			// We MUST NOT use the depth of a nearby 1D count blindly with `current`, 
+			// as it might be higher, causing us to jump forward in the DAG.
 			let token_pdu_id = self.count_to_id(room_id, token, dir).await?;
 
 			let target_depth = match self.pdu_id_to_depth(&token_pdu_id).await {
 				| Ok(depth) => depth,
 				| Err(_) => {
-					// If the exact token is missing, fallback safely without
-					// guessing depths that might cause infinite loops.
+					// Fallback: find the nearest existing event in the requested direction
+					let prefix = current.shortroomid();
+
+					let nearest_pdu_id = if dir == Direction::Forward {
+						let mut stream = Box::pin(
+							self.room_pducount_eventid
+								.raw_stream_from(&token_pdu_id)
+								.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
+						);
+						stream
+							.next()
+							.await
+							.map(|res| res.map(|(k, _)| RawPduId::from(k)))
+					} else {
+						let mut stream = Box::pin(
+							self.room_pducount_eventid
+								.rev_raw_stream_from(&token_pdu_id)
+								.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
+						);
+						stream
+							.next()
+							.await
+							.map(|res| res.map(|(k, _)| RawPduId::from(k)))
+					};
+
+					if let Some(Ok(nearest_pdu_id)) = nearest_pdu_id {
+						if let Ok(depth) = self.pdu_id_to_depth(&nearest_pdu_id).await {
+							// Return EXACT depth and EXACT nearest_pdu_id to prevent skipping OR time-traveling!
+							return Ok(Self::topo_pducount_key(&nearest_pdu_id, depth));
+						}
+					}
+
+					// If no nearest event found in the DAG, fallback safely without guessing depths
 					if dir == Direction::Forward { u64::MAX } else { 0 }
 				},
 			};
