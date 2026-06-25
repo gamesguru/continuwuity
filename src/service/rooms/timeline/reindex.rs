@@ -105,7 +105,11 @@ impl Service {
 				conduwuit_core::matrix::event::gen_event_id(&json, &room_version)
 			{
 				if expected_id != *event_id {
-					warn!("reindex_short: hash mismatch for {event_id}: expected {expected_id}");
+					warn!(
+						"HASH_MISMATCH: room={room_id}, event={event_id}, \
+						 expected={expected_id}. Stored canonical JSON does not match event ID \
+						 hash. Cannot safely mutate — quarantine only."
+					);
 					stats.hash_mismatches = stats.hash_mismatches.saturating_add(1);
 				}
 			}

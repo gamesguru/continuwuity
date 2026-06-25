@@ -27,8 +27,10 @@ pub fn sort_timeline_events<S: std::hash::BuildHasher>(
 			.into_iter()
 			.flatten();
 		let (depth, ts) = entries.get(event_id).map_or((0, 0), |(_, d, t)| (*d, *t));
-		// Min-heap tiebreaker matching the previous BinaryHeap::Reverse logic:
-		// smallest depth, smallest ts, smallest event_id
+		// Min-heap tiebreaker:
+		// 1. smallest ts (chronological sorting of concurrent forks)
+		// 2. smallest depth (fallback for identically-timestamped events)
+		// 3. smallest event_id (deterministic cryptographic fallback)
 		let key = (ts, depth, event_id.clone());
 		(event_id.clone(), parents, key)
 	}))

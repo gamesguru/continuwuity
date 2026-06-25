@@ -212,6 +212,29 @@ impl Service {
 			}
 		}
 
+		// Filter out soft-failed events (per Spec Server-Server API §Soft Failure:
+		// soft-failed events must not be forward extremities).
+		true_extremities
+			.retain(|eid| !metadata_cache.get(eid).is_some_and(|meta| meta.soft_failed));
+
+		// Enforce the configured cap to prevent state resolution OOMs.
+		// State resolution is O(N * S log S) where N = extremities,
+		// S = auth chain size. 2,000+ extremities will lock the executor.
+		let max_extremities = self.services.globals.max_forward_extremities();
+		if true_extremities.len() > max_extremities {
+			info!(
+				"reorder_timeline: pruning {} extremities down to {} for room {}",
+				true_extremities.len(),
+				max_extremities,
+				room_id
+			);
+			// Sort by timestamp (newest first) to keep the most relevant tips
+			true_extremities.sort_by_key(|eid| {
+				std::cmp::Reverse(entries.get(eid).map_or(0, |(_, _, ts)| *ts))
+			});
+			true_extremities.truncate(max_extremities);
+		}
+
 		if !true_extremities.is_empty() {
 			self.services
 				.state
