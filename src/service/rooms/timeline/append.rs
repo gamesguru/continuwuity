@@ -188,9 +188,25 @@ where
 
 	// Mark as read first so the sending client doesn't get a notification even if
 	// appending fails
+	let receipt_content = BTreeMap::from_iter([(
+		pdu.event_id().to_owned(),
+		BTreeMap::from_iter([(
+			ruma::events::receipt::ReceiptType::ReadPrivate,
+			BTreeMap::from_iter([(pdu.sender().to_owned(), ruma::events::receipt::Receipt {
+				ts: Some(ruma::MilliSecondsSinceUnixEpoch::now()),
+				thread: ruma::events::receipt::ReceiptThread::Unthreaded,
+			})]),
+		)]),
+	)]);
+	let receipt_event = ruma::events::receipt::ReceiptEvent {
+		content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+		room_id: room_id.to_owned(),
+	};
+
 	self.services
 		.read_receipt
-		.private_read_set(room_id, pdu.sender(), count1);
+		.private_read_set(room_id, pdu.sender(), count1, &receipt_event)
+		.expect("failed to set private read receipt");
 
 	self.services
 		.user
