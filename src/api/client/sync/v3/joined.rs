@@ -240,7 +240,8 @@ async fn build_ephemeral(
 	let (receipt_events, typing_event, private_read_event) =
 		join3(receipt_events, typing_event, private_read_event).await;
 
-	let mut edus = receipt_events;
+	let mut edus =
+		conduwuit_service::rooms::read_receipt::pack_receipts_v3(receipt_events.into_iter());
 	edus.extend(typing_event);
 	edus.extend(private_read_event);
 
@@ -520,6 +521,7 @@ async fn build_timeline(
 		starting_count,
 		Some(PduCount::Normal(current_count)),
 		timeline_limit,
+		false,
 	)
 	.await
 }
