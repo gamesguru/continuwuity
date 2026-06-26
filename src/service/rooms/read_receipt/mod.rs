@@ -251,10 +251,10 @@ where
 		"content": content,
 	});
 
-	conduwuit::debug!(
+	conduwuit::trace!(
 		target: "read_receipt_debug",
-		"pack_receipts output JSON: {}",
-		serde_json::to_string(&json_val).unwrap()
+		?json_val,
+		"pack_receipts output JSON"
 	);
 
 	Raw::from_json(serde_json::value::to_raw_value(&json_val).expect("received valid json"))

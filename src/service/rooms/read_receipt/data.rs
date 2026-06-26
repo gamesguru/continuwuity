@@ -288,10 +288,10 @@ impl Data {
 			self.readreceiptid_readreceipt.remove(&old_stream_key);
 		}
 
-		conduwuit::debug!(
+		conduwuit::trace!(
 			target: "read_receipt_debug",
-			"Saving existing_event to DB: {}",
-			serde_json::to_string(&existing_event).unwrap()
+			?existing_event,
+			"Saving existing_event to DB"
 		);
 
 		let existing_event_json = Json(&existing_event);

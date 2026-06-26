@@ -205,8 +205,7 @@ where
 
 	self.services
 		.read_receipt
-		.private_read_set(room_id, pdu.sender(), count1, &receipt_event)
-		.expect("failed to set private read receipt");
+		.private_read_set(room_id, pdu.sender(), count1, &receipt_event)?;
 
 	self.services
 		.user

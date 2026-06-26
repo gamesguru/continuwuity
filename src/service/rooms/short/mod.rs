@@ -1,4 +1,8 @@
-use std::{borrow::Borrow, mem::size_of, sync::Arc};
+use std::{
+	borrow::Borrow,
+	mem::{size_of, size_of_val},
+	sync::Arc,
+};
 
 pub use conduwuit::matrix::pdu::{ShortEventId, ShortId, ShortRoomId, ShortStateKey};
 use conduwuit::{
@@ -26,7 +30,6 @@ pub struct Service {
 		moka::sync::Cache<(StateEventType, StateKey), ShortStateKey>,
 	pub shortstatekey_statekey_cache:
 		moka::sync::Cache<ShortStateKey, (StateEventType, StateKey)>,
-	pub shorteventid_shortstatehash_cache: moka::sync::Cache<ShortEventId, ShortStateHash>,
 }
 
 struct Data {
@@ -103,9 +106,6 @@ impl crate::Service for Service {
 				.build(),
 			shortstatekey_statekey_cache: moka::sync::Cache::builder()
 				.max_capacity(shortstatekey_cap.into())
-				.build(),
-			shorteventid_shortstatehash_cache: moka::sync::Cache::builder()
-				.max_capacity(shorteventid_cap.into())
 				.build(),
 		}))
 	}

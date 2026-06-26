@@ -195,6 +195,7 @@ async fn update_read_receipt(
 			target: "read_receipt_debug",
 			"Event {} not found in timeline, ignoring read receipt", event_id
 		);
+		ignore_receipt = true;
 	}
 
 	if !ignore_receipt {
