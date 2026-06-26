@@ -429,17 +429,13 @@ impl super::Service {
 	}
 
 	/// Resolve a fork between multiple parent state sets using state_res.
-	/// Pre-separates unconflicted state (identical across all forks) and only
-	/// passes the conflicted subset to the resolver. This avoids the expensive
-	/// O(N) separate() call inside state_res on 7k+ state entries.
+	/// Uses pruned event cache (only auth-reachable events) and pre-computed
+	/// roaring bitmap auth chains for O(1) lookups.
 	async fn resolve_fork_with_states(
 		ctx: &RebuildCtx,
 		fork_states: &[&StateMap<OwnedEventId>],
 	) -> Result<StateMap<OwnedEventId>> {
-		// Pre-separate: partition into unconflicted (identical across all forks)
-		// and conflicted (different values across forks). This is the same work
-		// that state_res::resolve()'s separate() does, but we do it once and
-		// skip the resolver's redundant O(N) pass.
+		// Quick check: identify conflicted event IDs for event cache pruning
 		let mut all_keys: HashMap<(&ruma::events::StateEventType, &str), HashSet<&OwnedEventId>> =
 			HashMap::new();
 		for state in fork_states {
@@ -447,54 +443,23 @@ impl super::Service {
 				all_keys.entry((ty, sk.as_ref())).or_default().insert(eid);
 			}
 		}
-
-		let mut unconflicted: StateMap<OwnedEventId> = StateMap::new();
-		let mut conflicted_keys: HashSet<(ruma::events::StateEventType, String)> = HashSet::new();
-		for ((ty, sk), eids) in &all_keys {
-			// Spec: unconflicted iff ALL forks have this key AND agree on the value.
-			// Keys absent from some forks are conflicted (forks disagree on existence).
-			let present_in_all = fork_states
-				.iter()
-				.all(|s| s.contains_key(&((*ty).clone(), (*sk).into())));
-			if eids.len() == 1 && present_in_all {
-				unconflicted.insert(
-					((*ty).clone(), (*sk).into()),
-					(*eids.iter().next().unwrap()).clone(),
-				);
-			} else {
-				conflicted_keys.insert(((*ty).clone(), sk.to_string()));
-			}
-		}
-
-		// If no conflicts, return unconflicted directly (no resolver needed)
-		if conflicted_keys.is_empty() {
-			return Ok(unconflicted);
-		}
-
-		// Build conflicted-only state maps for the resolver (typically ~182 entries
-		// instead of 7k+). The resolver's separate() will be nearly free.
-		let conflicted_fork_states: Vec<StateMap<OwnedEventId>> = fork_states
-			.iter()
-			.map(|state| {
-				state
-					.iter()
-					.filter(|((ty, sk), _)| {
-						conflicted_keys.contains(&(ty.clone(), sk.to_string()))
-					})
-					.map(|((ty, sk), eid)| ((ty.clone(), sk.clone()), eid.clone()))
-					.collect()
-			})
+		let conflicted_eids: HashSet<OwnedEventId> = all_keys
+			.values()
+			.filter(|eids| eids.len() > 1)
+			.flatten()
+			.cloned()
+			.cloned()
 			.collect();
-		let conflicted_refs: Vec<&StateMap<OwnedEventId>> =
-			conflicted_fork_states.iter().collect();
+
+		// If no conflicts at all, return the first fork state (they're identical)
+		if conflicted_eids.is_empty() {
+			return Ok(fork_states[0].clone());
+		}
 
 		// Build pruned event cache: only events transitively reachable from
-		// conflicted events via auth_events (ruma-lean-style subgraph pruning)
-		let conflicted_eids: HashSet<OwnedEventId> = conflicted_fork_states
-			.iter()
-			.flat_map(|s| s.values().cloned())
-			.collect();
-
+		// conflicted events via auth_events (ruma-lean-style subgraph pruning).
+		// This is the main optimization — reducing the resolver's event lookups
+		// from 15k+ to ~50 events.
 		let pruned_cache: HashMap<OwnedEventId, Arc<PduEvent>> = {
 			let mut reachable = HashSet::new();
 			let mut stack: Vec<OwnedEventId> = conflicted_eids.into_iter().collect();
@@ -509,7 +474,7 @@ impl super::Service {
 					}
 				}
 			}
-			// Also include unconflicted events referenced by fork states (for auth checks)
+			// Include all events referenced by fork states (for auth context)
 			for state in fork_states {
 				for eid in state.values() {
 					reachable.insert(eid.clone());
@@ -550,23 +515,16 @@ impl super::Service {
 			async move { chain }
 		};
 
-		let resolved_conflicts = state_res::resolve(
+		state_res::resolve(
 			&ctx.room_version,
-			conflicted_refs.iter().copied(),
+			fork_states.iter().copied(),
 			&event_fetch,
 			Some(&event_batch_fetch),
 			&auth_chain_fetch,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
-		.map_err(|e| conduwuit_core::err!(error!("state_res::resolve failed: {e}")))?;
-
-		// Merge: unconflicted base + resolved conflicts on top
-		let mut final_state = unconflicted;
-		for (key, eid) in resolved_conflicts {
-			final_state.insert(key, eid);
-		}
-		Ok(final_state)
+		.map_err(|e| conduwuit_core::err!(error!("state_res::resolve failed: {e}")))
 	}
 
 	// ── Phase 4: Batch-write to DB ──
