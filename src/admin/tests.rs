@@ -330,6 +330,14 @@ async fn setup_test_services(prefix: &str) -> (std::sync::Arc<service::Services>
 		r#"
 			server_name = "test.conduwuit.local"
 			database_path = "{}"
+
+			# Test-specific RocksDB tuning to prevent WAL bloat and FD exhaustion.
+			# Without these, parallel tests create 46 column families each with
+			# unbounded WAL, consuming 1+ GiB per test and exhausting file descriptors.
+			db_write_buffer_capacity_mb = 4.0
+			db_cache_capacity_mb = 16.0
+			rocksdb_parallelism_threads = 1
+			rocksdb_wal_compression = "zstd"
 			"#,
 		db_path.to_string_lossy().replace('\\', "/")
 	)));

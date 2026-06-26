@@ -116,7 +116,13 @@ impl super::Service {
 				for auth_id in &pdu.auth_events {
 					if let Some(&i) = eid_to_idx.get(auth_id) {
 						chain.insert(i);
-						chain |= &auth_chain_bitmaps[to_usize(i)];
+						// Only include transitive chain if bitmap already computed
+						// (auth event appears before us in topo order). In busted DAGs,
+						// auth events may appear later — we still record the direct ref.
+						let idx = to_usize(i);
+						if idx < auth_chain_bitmaps.len() {
+							chain |= &auth_chain_bitmaps[idx];
+						}
 					}
 				}
 			}
