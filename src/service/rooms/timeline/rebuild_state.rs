@@ -312,6 +312,9 @@ impl super::Service {
 		});
 		let empty_group: usize = 0;
 
+		// Cache: sorted parent group set -> resolved group id
+		let mut fork_cache: HashMap<Vec<usize>, usize> = HashMap::new();
+
 		for (eid, prev_events, state_key, _depth) in &ctx.events_meta {
 			processed = processed.saturating_add(1);
 
@@ -340,50 +343,60 @@ impl super::Service {
 				| 0 => empty_group,
 				| 1 => parent_groups[0],
 				| _ => {
-					let fork_start = Instant::now();
-					// Materialize full state for each parent
-					let fork_states: Vec<StateMap<OwnedEventId>> = parent_groups
-						.iter()
-						.map(|&g| materialize_state(&state_groups, g))
-						.collect();
-					let fork_state_refs: Vec<&StateMap<OwnedEventId>> =
-						fork_states.iter().collect();
+					// Check fork cache: same parent groups -> same resolved state
+					let mut cache_key = parent_groups.clone();
+					cache_key.sort_unstable();
+					if let Some(&cached_gid) = fork_cache.get(&cache_key) {
+						cached_gid
+					} else {
+						let fork_start = Instant::now();
+						// Materialize full state for each parent
+						let fork_states: Vec<StateMap<OwnedEventId>> = parent_groups
+							.iter()
+							.map(|&g| materialize_state(&state_groups, g))
+							.collect();
+						let fork_state_refs: Vec<&StateMap<OwnedEventId>> =
+							fork_states.iter().collect();
 
-					let resolved = Self::resolve_fork_with_states(ctx, &fork_state_refs).await;
+						let resolved =
+							Self::resolve_fork_with_states(ctx, &fork_state_refs).await;
 
-					let fork_elapsed = fork_start.elapsed();
-					fork_resolve_count = fork_resolve_count.saturating_add(1);
-					cumulative_resolve_time =
-						cumulative_resolve_time.saturating_add(fork_elapsed);
+						let fork_elapsed = fork_start.elapsed();
+						fork_resolve_count = fork_resolve_count.saturating_add(1);
+						cumulative_resolve_time =
+							cumulative_resolve_time.saturating_add(fork_elapsed);
 
-					if fork_elapsed.as_millis() > 50 {
-						debug!(
-							"rebuild_state: SLOW fork #{} for {} ({} parents) took {:?}",
-							fork_resolve_count,
-							eid,
-							parent_groups.len(),
-							fork_elapsed,
-						);
-					}
-
-					match resolved {
-						| Ok(resolved_state) => {
-							let gid = state_groups.len();
-							state_groups.push(StateGroup {
-								parent: None,
-								delta: None,
-								full_state: Some(resolved_state),
-							});
-							gid
-						},
-						| Err(e) => {
-							warn!(
-								"rebuild_state: fork resolution failed for {}: {} — using first \
-								 parent",
-								eid, e,
+						if fork_elapsed.as_millis() > 50 {
+							debug!(
+								"rebuild_state: SLOW fork #{} for {} ({} parents) took {:?}",
+								fork_resolve_count,
+								eid,
+								parent_groups.len(),
+								fork_elapsed,
 							);
-							parent_groups[0]
-						},
+						}
+
+						let gid = match resolved {
+							| Ok(resolved_state) => {
+								let gid = state_groups.len();
+								state_groups.push(StateGroup {
+									parent: None,
+									delta: None,
+									full_state: Some(resolved_state),
+								});
+								gid
+							},
+							| Err(e) => {
+								warn!(
+									"rebuild_state: fork resolution failed for {}: {} — using \
+									 first parent",
+									eid, e,
+								);
+								parent_groups[0]
+							},
+						};
+						fork_cache.insert(cache_key, gid);
+						gid
 					}
 				},
 			};
@@ -429,72 +442,21 @@ impl super::Service {
 	}
 
 	/// Resolve a fork between multiple parent state sets using state_res.
-	/// Uses pruned event cache (only auth-reachable events) and pre-computed
-	/// roaring bitmap auth chains for O(1) lookups.
+	/// Uses full in-memory event cache and pre-computed roaring bitmap
+	/// auth chains for O(1) lookups.
 	async fn resolve_fork_with_states(
 		ctx: &RebuildCtx,
 		fork_states: &[&StateMap<OwnedEventId>],
 	) -> Result<StateMap<OwnedEventId>> {
-		// Quick check: identify conflicted event IDs for event cache pruning
-		let mut all_keys: HashMap<(&ruma::events::StateEventType, &str), HashSet<&OwnedEventId>> =
-			HashMap::new();
-		for state in fork_states {
-			for ((ty, sk), eid) in *state {
-				all_keys.entry((ty, sk.as_ref())).or_default().insert(eid);
-			}
-		}
-		let conflicted_eids: HashSet<OwnedEventId> = all_keys
-			.values()
-			.filter(|eids| eids.len() > 1)
-			.flatten()
-			.cloned()
-			.cloned()
-			.collect();
-
-		// If no conflicts at all, return the first fork state (they're identical)
-		if conflicted_eids.is_empty() {
-			return Ok(fork_states[0].clone());
-		}
-
-		// Build pruned event cache: only events transitively reachable from
-		// conflicted events via auth_events (ruma-lean-style subgraph pruning).
-		// This is the main optimization — reducing the resolver's event lookups
-		// from 15k+ to ~50 events.
-		let pruned_cache: HashMap<OwnedEventId, Arc<PduEvent>> = {
-			let mut reachable = HashSet::new();
-			let mut stack: Vec<OwnedEventId> = conflicted_eids.into_iter().collect();
-			while let Some(id) = stack.pop() {
-				if reachable.insert(id.clone()) {
-					if let Some(pdu) = ctx.event_cache.get(&id) {
-						for auth_id in &pdu.auth_events {
-							if ctx.event_set.contains(auth_id) {
-								stack.push(auth_id.clone());
-							}
-						}
-					}
-				}
-			}
-			// Include all events referenced by fork states (for auth context)
-			for state in fork_states {
-				for eid in state.values() {
-					reachable.insert(eid.clone());
-				}
-			}
-			reachable
-				.iter()
-				.filter_map(|id| ctx.event_cache.get(id).map(|pdu| (id.clone(), pdu.clone())))
-				.collect()
-		};
-
 		let event_fetch = |id: OwnedEventId| {
-			let pdu = pruned_cache.get(&id).cloned();
+			let pdu = ctx.event_cache.get(&id).cloned();
 			async move { pdu }
 		};
 
 		let event_batch_fetch = |ids: Vec<OwnedEventId>| {
 			let results: Vec<Arc<PduEvent>> = ids
 				.iter()
-				.filter_map(|id| pruned_cache.get(id).cloned())
+				.filter_map(|id| ctx.event_cache.get(id).cloned())
 				.collect();
 			async move { results }
 		};
