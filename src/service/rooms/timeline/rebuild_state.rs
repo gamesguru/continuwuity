@@ -307,8 +307,10 @@ impl super::Service {
 		state_groups.push(Arc::new(StateMap::new()));
 		let empty_group: usize = 0;
 
-		// Cache: sorted unique parent groups -> resolved group ID
-		let mut fork_cache: HashMap<Vec<usize>, usize> = HashMap::new();
+		// Cache: content hash of parent states -> resolved group ID.
+		// Group IDs are unstable (each state event increments the counter), so we
+		// hash the actual state content for cache keys instead.
+		let mut fork_cache: HashMap<u64, usize> = HashMap::new();
 
 		for (eid, prev_events, state_key, _depth) in &ctx.events_meta {
 			processed = processed.saturating_add(1);
@@ -359,8 +361,20 @@ impl super::Service {
 						unique_groups[0]
 					} else {
 						// Actually need state resolution
-						let mut cache_key = unique_groups.clone();
-						cache_key.sort_unstable();
+						// Build cache key from content hashes of parent states
+						// (group IDs are unstable, but content hashes are stable)
+						let cache_key = {
+							let mut h = std::collections::hash_map::DefaultHasher::new();
+							for s in &unique_states {
+								for (k, v) in s.iter() {
+									k.hash(&mut h);
+									v.hash(&mut h);
+								}
+								// Separator between states
+								0xFFFF_FFFFu32.hash(&mut h);
+							}
+							h.finish()
+						};
 
 						if let Some(&cached_gid) = fork_cache.get(&cache_key) {
 							fork_skip_count = fork_skip_count.saturating_add(1);
