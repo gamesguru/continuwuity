@@ -950,7 +950,7 @@ dependencies = [
  "anyhow",
  "conduwuit_core",
  "ruma",
- "ruma-lean",
+ "ruma-lean 0.1.4",
  "serde",
  "serde_json",
  "tokio",
@@ -1270,6 +1270,7 @@ dependencies = [
  "reqwest 0.13.4",
  "roaring",
  "ruma",
+ "ruma-lean 0.1.5-rc.0",
  "rustls",
  "rustyline-async",
  "scc",
@@ -4962,6 +4963,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5897641677b61ac7b07a30efe212e26bf21b1cb99151b8c225b4087db420771"
 dependencies = [
  "hashbrown 0.15.5",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ruma-lean"
+version = "0.1.5-rc.0"
+dependencies = [
+ "hashbrown 0.15.5",
+ "roaring",
  "serde",
  "serde_json",
 ]

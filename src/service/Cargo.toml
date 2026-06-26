@@ -111,6 +111,7 @@ regex.workspace = true
 reqwest.workspace = true
 roaring.workspace = true
 ruma.workspace = true
+ruma-lean = { path = "../../../ruma-lean" }
 rustyline-async.workspace = true
 rustyline-async.optional = true
 serde_json.workspace = true
