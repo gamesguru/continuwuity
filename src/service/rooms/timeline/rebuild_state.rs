@@ -36,6 +36,55 @@ struct RebuildCtx {
 	auth_chain_bitmaps: Vec<roaring::RoaringBitmap>,
 }
 
+/// A lightweight state group: parent reference + optional single delta entry.
+/// Full state maps are reconstructed lazily by walking the chain.
+struct StateGroup {
+	parent: Option<usize>,
+	/// The state delta applied on top of parent (None = fork-resolved full
+	/// state).
+	delta: Option<(ruma::events::StateEventType, String, OwnedEventId)>,
+	/// If this group was created by fork resolution, store the full resolved
+	/// state. Otherwise None (reconstruct by walking parent chain).
+	full_state: Option<StateMap<OwnedEventId>>,
+}
+
+/// Reconstruct the full state map for a group by walking the delta chain.
+fn materialize_state(groups: &[StateGroup], group_id: usize) -> StateMap<OwnedEventId> {
+	// If this group has a cached full state, use it
+	if let Some(ref full) = groups[group_id].full_state {
+		return full.clone();
+	}
+
+	// Walk the chain to collect deltas
+	let mut deltas: Vec<(ruma::events::StateEventType, String, OwnedEventId)> = Vec::new();
+	let mut current = group_id;
+	loop {
+		let group = &groups[current];
+		if let Some(ref full) = group.full_state {
+			// Found a full-state anchor, apply deltas on top
+			let mut state = full.clone();
+			for (ty, sk, eid) in deltas.into_iter().rev() {
+				state.insert((ty, sk.as_str().into()), eid);
+			}
+			return state;
+		}
+		if let Some(ref delta) = group.delta {
+			deltas.push(delta.clone());
+		}
+		match group.parent {
+			| Some(p) => current = p,
+			| None => break,
+		}
+	}
+
+	// Reached root (empty state), apply all deltas
+	let mut state = StateMap::new();
+	for (ty, sk, eid) in deltas.into_iter().rev() {
+		state.insert((ty, sk.as_str().into()), eid);
+	}
+	state
+}
+
 impl super::Service {
 	/// Rebuilds room state entirely in-memory like ruma-lean, then batch-writes
 	/// the result to DB. This avoids per-event RocksDB round-trips during state
@@ -238,16 +287,17 @@ impl super::Service {
 	}
 
 	// ── Phase 3: In-memory state walk with fork resolution ──
-	// Tracks state per event using state group deduplication:
-	// - state_groups: Vec of unique state maps (indexed by group_id)
+	// Uses a delta-chain representation to avoid cloning full state maps:
+	// - state_groups: Vec of (parent_group_id, Option<delta>)
 	// - event_group: maps event_id → group_id
-	// Non-state single-parent events share their parent's group (no clone).
+	// Full state maps are only materialized on-demand for fork resolution.
+	// This reduces memory from O(state_events × state_size) to O(state_events).
 
 	async fn rebuild_walk_state(
 		ctx: &RebuildCtx,
-	) -> (Vec<StateMap<OwnedEventId>>, HashMap<OwnedEventId, usize>) {
+	) -> (Vec<StateGroup>, HashMap<OwnedEventId, usize>) {
 		let start = Instant::now();
-		let mut state_groups: Vec<StateMap<OwnedEventId>> = Vec::new();
+		let mut state_groups: Vec<StateGroup> = Vec::new();
 		let mut event_group: HashMap<OwnedEventId, usize> = HashMap::new();
 		let mut fork_resolve_count = 0_usize;
 		let mut cumulative_resolve_time = Duration::ZERO;
@@ -255,7 +305,11 @@ impl super::Service {
 		let total_events = ctx.events_meta.len();
 
 		// Group 0 = empty state (for events with no parents)
-		state_groups.push(StateMap::new());
+		state_groups.push(StateGroup {
+			parent: None,
+			delta: None,
+			full_state: Some(StateMap::new()),
+		});
 		let empty_group: usize = 0;
 
 		for (eid, prev_events, state_key, _depth) in &ctx.events_meta {
@@ -287,7 +341,15 @@ impl super::Service {
 				| 1 => parent_groups[0],
 				| _ => {
 					let fork_start = Instant::now();
-					let resolved = Self::resolve_fork(ctx, &state_groups, &parent_groups).await;
+					// Materialize full state for each parent
+					let fork_states: Vec<StateMap<OwnedEventId>> = parent_groups
+						.iter()
+						.map(|&g| materialize_state(&state_groups, g))
+						.collect();
+					let fork_state_refs: Vec<&StateMap<OwnedEventId>> =
+						fork_states.iter().collect();
+
+					let resolved = Self::resolve_fork_with_states(ctx, &fork_state_refs).await;
 
 					let fork_elapsed = fork_start.elapsed();
 					fork_resolve_count = fork_resolve_count.saturating_add(1);
@@ -307,7 +369,11 @@ impl super::Service {
 					match resolved {
 						| Ok(resolved_state) => {
 							let gid = state_groups.len();
-							state_groups.push(resolved_state);
+							state_groups.push(StateGroup {
+								parent: None,
+								delta: None,
+								full_state: Some(resolved_state),
+							});
 							gid
 						},
 						| Err(e) => {
@@ -322,7 +388,7 @@ impl super::Service {
 				},
 			};
 
-			// Apply state event delta
+			// Apply state event delta (lightweight: just store the delta, no clone)
 			let group_after = if let Some(sk) = state_key {
 				let Some(pdu) = ctx.event_cache.get(eid) else {
 					warn!("rebuild_state: state event {eid} missing from cache — skipping");
@@ -331,10 +397,12 @@ impl super::Service {
 				};
 				let event_type: ruma::events::StateEventType = pdu.kind.to_string().into();
 
-				let mut new_state = state_groups[state_before_group].clone();
-				new_state.insert((event_type, sk.as_str().into()), eid.clone());
 				let gid = state_groups.len();
-				state_groups.push(new_state);
+				state_groups.push(StateGroup {
+					parent: Some(state_before_group),
+					delta: Some((event_type, sk.clone(), eid.clone())),
+					full_state: None,
+				});
 				gid
 			} else {
 				state_before_group
@@ -360,18 +428,14 @@ impl super::Service {
 		(state_groups, event_group)
 	}
 
-	/// Resolve a fork between multiple parent state groups using state_res.
+	/// Resolve a fork between multiple parent state sets using state_res.
 	/// Uses ruma-lean-style auth subgraph pruning: only events transitively
 	/// reachable from the conflicted set are passed to the resolver, instead
 	/// of the entire event cache.
-	async fn resolve_fork(
+	async fn resolve_fork_with_states(
 		ctx: &RebuildCtx,
-		state_groups: &[StateMap<OwnedEventId>],
-		parent_groups: &[usize],
+		fork_states: &[&StateMap<OwnedEventId>],
 	) -> Result<StateMap<OwnedEventId>> {
-		let fork_states: Vec<&StateMap<OwnedEventId>> =
-			parent_groups.iter().map(|&g| &state_groups[g]).collect();
-
 		// Identify conflicted state keys (present in multiple parents with
 		// different values) to prune the event cache for the resolver.
 		let conflicted_eids: HashSet<OwnedEventId> = {
@@ -379,7 +443,7 @@ impl super::Service {
 				(&ruma::events::StateEventType, &str),
 				HashSet<&OwnedEventId>,
 			> = HashMap::new();
-			for state in &fork_states {
+			for state in fork_states {
 				for ((ty, sk), eid) in *state {
 					all_keys.entry((ty, sk.as_ref())).or_default().insert(eid);
 				}
@@ -414,7 +478,7 @@ impl super::Service {
 				}
 			}
 			// Also include all events referenced by any fork state
-			for state in &fork_states {
+			for state in fork_states {
 				for eid in state.values() {
 					if !reachable.contains(eid) {
 						reachable.insert(eid.clone());
@@ -475,7 +539,7 @@ impl super::Service {
 		&self,
 		room_id: &RoomId,
 		events_meta: &[EventMeta],
-		state_groups: &[StateMap<OwnedEventId>],
+		state_groups: &[StateGroup],
 		event_group: &HashMap<OwnedEventId, usize>,
 		event_cache: &HashMap<OwnedEventId, Arc<PduEvent>>,
 	) -> Result<(HashMap<usize, u64>, u64)> {
@@ -489,7 +553,8 @@ impl super::Service {
 		let mut unique_event_ids: HashSet<OwnedEventId> = HashSet::new();
 		let referenced_groups: HashSet<usize> = event_group.values().copied().collect();
 		for &gid in &referenced_groups {
-			for ((ty, sk), event_id) in &state_groups[gid] {
+			let state = materialize_state(state_groups, gid);
+			for ((ty, sk), event_id) in &state {
 				unique_state_keys.insert((ty.to_string(), sk.to_string()));
 				unique_event_ids.insert(event_id.clone());
 			}
@@ -555,9 +620,9 @@ impl super::Service {
 				cached_ssh
 			} else {
 				// Compress this state group using pre-cached short IDs
-				let state_map = &state_groups[group_id];
+				let state_map = materialize_state(state_groups, group_id);
 				let mut compressed = BTreeSet::new();
-				for ((ty, sk), event_id) in state_map {
+				for ((ty, sk), event_id) in &state_map {
 					let ssk = ssk_cache
 						.get(&(ty.to_string(), sk.to_string()))
 						.copied()
