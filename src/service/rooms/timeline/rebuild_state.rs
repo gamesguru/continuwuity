@@ -429,41 +429,71 @@ impl super::Service {
 	}
 
 	/// Resolve a fork between multiple parent state sets using state_res.
-	/// Uses ruma-lean-style auth subgraph pruning: only events transitively
-	/// reachable from the conflicted set are passed to the resolver, instead
-	/// of the entire event cache.
+	/// Pre-separates unconflicted state (identical across all forks) and only
+	/// passes the conflicted subset to the resolver. This avoids the expensive
+	/// O(N) separate() call inside state_res on 7k+ state entries.
 	async fn resolve_fork_with_states(
 		ctx: &RebuildCtx,
 		fork_states: &[&StateMap<OwnedEventId>],
 	) -> Result<StateMap<OwnedEventId>> {
-		// Identify conflicted state keys (present in multiple parents with
-		// different values) to prune the event cache for the resolver.
-		let conflicted_eids: HashSet<OwnedEventId> = {
-			let mut all_keys: HashMap<
-				(&ruma::events::StateEventType, &str),
-				HashSet<&OwnedEventId>,
-			> = HashMap::new();
-			for state in fork_states {
-				for ((ty, sk), eid) in *state {
-					all_keys.entry((ty, sk.as_ref())).or_default().insert(eid);
-				}
-			}
-			all_keys
-				.into_values()
-				.filter(|eids| eids.len() > 1)
-				.flatten()
-				.cloned()
-				.collect()
-		};
 
-		// Build pruned event cache: only include events transitively reachable
-		// from the conflicted set via auth_events (like ruma-lean's
-		// compute_v2_1_conflicted_subgraph). This dramatically reduces the
-		// work for the resolver from thousands to tens of events.
-		let pruned_cache: HashMap<OwnedEventId, Arc<PduEvent>> = if conflicted_eids.is_empty() {
-			// No conflicts — resolver won't need any events
-			HashMap::new()
-		} else {
+		// Pre-separate: partition into unconflicted (identical across all forks)
+		// and conflicted (different values across forks). This is the same work
+		// that state_res::resolve()'s separate() does, but we do it once and
+		// skip the resolver's redundant O(N) pass.
+		let mut all_keys: HashMap<
+			(&ruma::events::StateEventType, &str),
+			HashSet<&OwnedEventId>,
+		> = HashMap::new();
+		for state in fork_states {
+			for ((ty, sk), eid) in *state {
+				all_keys.entry((ty, sk.as_ref())).or_default().insert(eid);
+			}
+		}
+
+		let mut unconflicted: StateMap<OwnedEventId> = StateMap::new();
+		let mut conflicted_keys: HashSet<(ruma::events::StateEventType, String)> = HashSet::new();
+		for ((ty, sk), eids) in &all_keys {
+			// Spec: unconflicted iff ALL forks have this key AND agree on the value.
+			// Keys absent from some forks are conflicted (forks disagree on existence).
+			let present_in_all = fork_states.iter().all(|s| s.contains_key(&((*ty).clone(), (*sk).into())));
+			if eids.len() == 1 && present_in_all {
+				unconflicted.insert(
+					((*ty).clone(), (*sk).into()),
+					(*eids.iter().next().unwrap()).clone(),
+				);
+			} else {
+				conflicted_keys.insert(((*ty).clone(), sk.to_string()));
+			}
+		}
+
+		// If no conflicts, return unconflicted directly (no resolver needed)
+		if conflicted_keys.is_empty() {
+			return Ok(unconflicted);
+		}
+
+		// Build conflicted-only state maps for the resolver (typically ~182 entries
+		// instead of 7k+). The resolver's separate() will be nearly free.
+		let conflicted_fork_states: Vec<StateMap<OwnedEventId>> = fork_states
+			.iter()
+			.map(|state| {
+				state
+					.iter()
+					.filter(|((ty, sk), _)| conflicted_keys.contains(&(ty.clone(), sk.to_string())))
+					.map(|((ty, sk), eid)| ((ty.clone(), sk.clone()), eid.clone()))
+					.collect()
+			})
+			.collect();
+		let conflicted_refs: Vec<&StateMap<OwnedEventId>> = conflicted_fork_states.iter().collect();
+
+		// Build pruned event cache: only events transitively reachable from
+		// conflicted events via auth_events (ruma-lean-style subgraph pruning)
+		let conflicted_eids: HashSet<OwnedEventId> = conflicted_fork_states
+			.iter()
+			.flat_map(|s| s.values().cloned())
+			.collect();
+
+		let pruned_cache: HashMap<OwnedEventId, Arc<PduEvent>> = {
 			let mut reachable = HashSet::new();
 			let mut stack: Vec<OwnedEventId> = conflicted_eids.into_iter().collect();
 			while let Some(id) = stack.pop() {
@@ -477,12 +507,10 @@ impl super::Service {
 					}
 				}
 			}
-			// Also include all events referenced by any fork state
+			// Also include unconflicted events referenced by fork states (for auth checks)
 			for state in fork_states {
 				for eid in state.values() {
-					if !reachable.contains(eid) {
-						reachable.insert(eid.clone());
-					}
+					reachable.insert(eid.clone());
 				}
 			}
 			reachable
@@ -520,16 +548,23 @@ impl super::Service {
 			async move { chain }
 		};
 
-		state_res::resolve(
+		let resolved_conflicts = state_res::resolve(
 			&ctx.room_version,
-			fork_states.iter().copied(),
+			conflicted_refs.iter().copied(),
 			&event_fetch,
 			Some(&event_batch_fetch),
 			&auth_chain_fetch,
 			None::<&fn(Vec<OwnedEventId>)>,
 		)
 		.await
-		.map_err(|e| conduwuit_core::err!(error!("state_res::resolve failed: {e}")))
+		.map_err(|e| conduwuit_core::err!(error!("state_res::resolve failed: {e}")))?;
+
+		// Merge: unconflicted base + resolved conflicts on top
+		let mut final_state = unconflicted;
+		for (key, eid) in resolved_conflicts {
+			final_state.insert(key, eid);
+		}
+		Ok(final_state)
 	}
 
 	// ── Phase 4: Batch-write to DB ──
