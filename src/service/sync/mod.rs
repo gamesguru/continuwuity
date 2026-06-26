@@ -141,7 +141,7 @@ impl Service {
 		};
 
 		let key = into_db_key(key.0.clone(), key.1.clone(), conn_id);
-		let cached_arc = self.connections.get_with(key.clone(), || {
+		let cached_arc = self.connections.get_with(key, || {
 			Arc::new(SyncMutex::new(SlidingSyncCache {
 				lists: BTreeMap::new(),
 				subscriptions: BTreeMap::new(),

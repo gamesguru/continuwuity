@@ -463,6 +463,7 @@ where
 	BTreeMap::default()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_rooms<'a, Rooms>(
 	services: &Services,
 	sender_user: &UserId,
