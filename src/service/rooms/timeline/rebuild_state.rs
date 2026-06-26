@@ -436,15 +436,12 @@ impl super::Service {
 		ctx: &RebuildCtx,
 		fork_states: &[&StateMap<OwnedEventId>],
 	) -> Result<StateMap<OwnedEventId>> {
-
 		// Pre-separate: partition into unconflicted (identical across all forks)
 		// and conflicted (different values across forks). This is the same work
 		// that state_res::resolve()'s separate() does, but we do it once and
 		// skip the resolver's redundant O(N) pass.
-		let mut all_keys: HashMap<
-			(&ruma::events::StateEventType, &str),
-			HashSet<&OwnedEventId>,
-		> = HashMap::new();
+		let mut all_keys: HashMap<(&ruma::events::StateEventType, &str), HashSet<&OwnedEventId>> =
+			HashMap::new();
 		for state in fork_states {
 			for ((ty, sk), eid) in *state {
 				all_keys.entry((ty, sk.as_ref())).or_default().insert(eid);
@@ -456,7 +453,9 @@ impl super::Service {
 		for ((ty, sk), eids) in &all_keys {
 			// Spec: unconflicted iff ALL forks have this key AND agree on the value.
 			// Keys absent from some forks are conflicted (forks disagree on existence).
-			let present_in_all = fork_states.iter().all(|s| s.contains_key(&((*ty).clone(), (*sk).into())));
+			let present_in_all = fork_states
+				.iter()
+				.all(|s| s.contains_key(&((*ty).clone(), (*sk).into())));
 			if eids.len() == 1 && present_in_all {
 				unconflicted.insert(
 					((*ty).clone(), (*sk).into()),
@@ -479,12 +478,15 @@ impl super::Service {
 			.map(|state| {
 				state
 					.iter()
-					.filter(|((ty, sk), _)| conflicted_keys.contains(&(ty.clone(), sk.to_string())))
+					.filter(|((ty, sk), _)| {
+						conflicted_keys.contains(&(ty.clone(), sk.to_string()))
+					})
 					.map(|((ty, sk), eid)| ((ty.clone(), sk.clone()), eid.clone()))
 					.collect()
 			})
 			.collect();
-		let conflicted_refs: Vec<&StateMap<OwnedEventId>> = conflicted_fork_states.iter().collect();
+		let conflicted_refs: Vec<&StateMap<OwnedEventId>> =
+			conflicted_fork_states.iter().collect();
 
 		// Build pruned event cache: only events transitively reachable from
 		// conflicted events via auth_events (ruma-lean-style subgraph pruning)
