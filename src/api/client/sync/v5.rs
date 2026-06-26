@@ -276,7 +276,9 @@ async fn build_sync_events_v5(
 			.iter()
 			.map(|(room_id, (_, limit, _))| (room_id.clone(), *limit))
 			.collect();
-		services.sync.update_snake_sync_timeline_limits(&snake_key, next_limits);
+		services
+			.sync
+			.update_snake_sync_timeline_limits(&snake_key, next_limits);
 	}
 
 	Ok(response)

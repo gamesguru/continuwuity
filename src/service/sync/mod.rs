@@ -124,9 +124,9 @@ impl Service {
 		snake_key: &SnakeConnectionsKey,
 		_request: &mut v5::Request,
 	) -> (BTreeMap<String, BTreeMap<OwnedRoomId, u64>>, BTreeMap<OwnedRoomId, usize>) {
-		let cached_arc = self.snake_connections.get_with(snake_key.clone(), || {
-			Arc::new(SyncMutex::new(SnakeSyncCache::default()))
-		});
+		let cached_arc = self
+			.snake_connections
+			.get_with(snake_key.clone(), || Arc::new(SyncMutex::new(SnakeSyncCache::default())));
 		let cached = cached_arc.lock();
 		(cached.known_rooms.clone(), cached.timeline_limits.clone())
 	}
@@ -289,9 +289,9 @@ impl Service {
 		globalsince: u64,
 	) {
 		assert!(key.2.is_some(), "Some(conn_id) required for this call");
-		let cached_arc = self.snake_connections.get_with(key.clone(), || {
-			Arc::new(SyncMutex::new(SnakeSyncCache::default()))
-		});
+		let cached_arc = self
+			.snake_connections
+			.get_with(key.clone(), || Arc::new(SyncMutex::new(SnakeSyncCache::default())));
 		let mut cached = cached_arc.lock();
 
 		for (room_id, lastsince) in cached
@@ -315,9 +315,9 @@ impl Service {
 		key: &SnakeConnectionsKey,
 		limits: BTreeMap<OwnedRoomId, usize>,
 	) {
-		let cached_arc = self.snake_connections.get_with(key.clone(), || {
-			Arc::new(SyncMutex::new(SnakeSyncCache::default()))
-		});
+		let cached_arc = self
+			.snake_connections
+			.get_with(key.clone(), || Arc::new(SyncMutex::new(SnakeSyncCache::default())));
 		let mut cached = cached_arc.lock();
 		for (room_id, limit) in limits {
 			cached.timeline_limits.insert(room_id, limit);

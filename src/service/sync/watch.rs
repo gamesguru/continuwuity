@@ -1,7 +1,8 @@
+use std::collections::HashSet;
+
 use conduwuit::{implement, trace};
 use futures::{Future, FutureExt, StreamExt, stream::FuturesUnordered};
 use ruma::{DeviceId, UserId};
-use std::collections::HashSet;
 
 #[implement(super::Service)]
 pub async fn setup_watch<'a>(
@@ -46,17 +47,21 @@ pub async fn setup_watch<'a>(
 		let mut typing_rx = self.services.typing.typing_update_sender.subscribe();
 		let user_rooms = joined_rooms.clone();
 
-		futures.push(async move {
-			loop {
-				match typing_rx.recv().await {
-					Ok(typing_room_id) if user_rooms.contains(&typing_room_id) => return,
-					// If it lagged or was for a room we aren't in, just try again
-					Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-					// Server shutting down / channel closed
-					Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+		futures.push(
+			async move {
+				loop {
+					match typing_rx.recv().await {
+						| Ok(typing_room_id) if user_rooms.contains(&typing_room_id) => return,
+						// If it lagged or was for a room we aren't in, just try again
+						| Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) =>
+							continue,
+						// Server shutting down / channel closed
+						| Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+					}
 				}
 			}
-		}.boxed());
+			.boxed(),
+		);
 	}
 
 	// Iterate over the set for database prefix watchers ONLY

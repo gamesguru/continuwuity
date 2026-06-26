@@ -80,7 +80,9 @@ async fn load_timeline(
 				.timeline
 				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
 				.ignore_err()
-				.ready_take_while(move |&(pducount, _)| is_expanded_timeline || pducount > starting_count)
+				.ready_take_while(move |&(pducount, _)| {
+					is_expanded_timeline || pducount > starting_count
+				})
 				.map(move |mut pdu| {
 					pdu.1.set_unsigned(Some(sender_user));
 					pdu
