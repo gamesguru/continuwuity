@@ -521,6 +521,7 @@ async fn build_timeline(
 		starting_count,
 		Some(PduCount::Normal(current_count)),
 		timeline_limit,
+		false,
 	)
 	.await
 }

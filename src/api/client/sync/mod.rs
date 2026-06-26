@@ -53,6 +53,7 @@ async fn load_timeline(
 	starting_count: Option<PduCount>,
 	ending_count: Option<PduCount>,
 	limit: usize,
+	is_expanded_timeline: bool,
 ) -> Result<TimelinePdus> {
 	let mut pdu_stream = match starting_count {
 		| Some(starting_count) => {
@@ -65,7 +66,7 @@ async fn load_timeline(
 					err!(Database(warn!("Failed to fetch end of room timeline: {}", err)))
 				})?;
 
-			if last_timeline_count <= starting_count {
+			if !is_expanded_timeline && last_timeline_count <= starting_count {
 				// no messages have been sent in this room since `starting_count`
 				return Ok(TimelinePdus::default());
 			}
@@ -79,7 +80,7 @@ async fn load_timeline(
 				.timeline
 				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
 				.ignore_err()
-				.ready_take_while(move |&(pducount, _)| pducount > starting_count)
+				.ready_take_while(move |&(pducount, _)| is_expanded_timeline || pducount > starting_count)
 				.map(move |mut pdu| {
 					pdu.1.set_unsigned(Some(sender_user));
 					pdu

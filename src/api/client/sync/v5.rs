@@ -102,7 +102,7 @@ pub(crate) async fn sync_events_v5_route(
 	}
 
 	// Get sticky parameters from cache
-	let known_rooms = services
+	let (known_rooms, timeline_limits) = services
 		.sync
 		.update_snake_sync_request_with_cache(&snake_key, &mut body);
 
@@ -113,6 +113,7 @@ pub(crate) async fn sync_events_v5_route(
 		globalsince,
 		&body,
 		&known_rooms,
+		&timeline_limits,
 	)
 	.await?;
 
@@ -140,6 +141,7 @@ pub(crate) async fn sync_events_v5_route(
 					globalsince,
 					&body,
 					&known_rooms,
+					&timeline_limits,
 				)
 				.await?;
 			}
@@ -162,6 +164,7 @@ async fn build_sync_events_v5(
 	globalsince: u64,
 	body: &sync_events::v5::Request,
 	known_rooms: &KnownRooms,
+	timeline_limits: &BTreeMap<OwnedRoomId, usize>,
 ) -> Result<sync_events::v5::Response> {
 	let next_batch = services.globals.current_count()?;
 
@@ -259,11 +262,22 @@ async fn build_sync_events_v5(
 		&todo_rooms,
 		&mut response,
 		body,
+		timeline_limits,
 	)
 	.await?;
 
 	let typing = collect_typing_events(services, sender_user, body, &todo_rooms).await?;
 	response.extensions.typing = typing;
+
+	// Save the current timeline limits back into our snake connections cache
+	if let Some(ref conn_id) = body.conn_id {
+		let snake_key = into_snake_key(sender_user, sender_device, conn_id.clone());
+		let next_limits: BTreeMap<OwnedRoomId, usize> = todo_rooms
+			.iter()
+			.map(|(room_id, (_, limit, _))| (room_id.clone(), *limit))
+			.collect();
+		services.sync.update_snake_sync_timeline_limits(&snake_key, next_limits);
+	}
 
 	Ok(response)
 }
@@ -455,6 +469,7 @@ async fn process_rooms<'a, Rooms>(
 	todo_rooms: &TodoRooms,
 	response: &mut sync_events::v5::Response,
 	body: &sync_events::v5::Request,
+	timeline_limits: &BTreeMap<OwnedRoomId, usize>,
 ) -> Result<BTreeMap<OwnedRoomId, sync_events::v5::response::Room>>
 where
 	Rooms: Iterator<Item = &'a RoomId> + Clone + Send + 'a,
@@ -462,6 +477,9 @@ where
 	let mut rooms = BTreeMap::new();
 	for (room_id, (required_state_request, timeline_limit, roomsince)) in todo_rooms {
 		let roomsincecount = PduCount::Normal(*roomsince);
+
+		let old_limit = timeline_limits.get(room_id).copied().unwrap_or(0);
+		let is_expanded_timeline = *timeline_limit > old_limit && old_limit > 0;
 
 		let mut timestamp: Option<_> = None;
 		let mut invite_state = None;
@@ -485,6 +503,7 @@ where
 				Some(roomsincecount),
 				Some(PduCount::from(next_batch)),
 				*timeline_limit,
+				is_expanded_timeline,
 			)
 			.await
 			{
