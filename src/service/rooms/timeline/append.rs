@@ -244,7 +244,7 @@ where
 		.short
 		.get_or_create_shorteventid(pdu.event_id())
 		.await;
-	if let Ok(mut full_auth_chain) = self
+	if let Ok(full_auth_chain) = self
 		.services
 		.auth_chain
 		.get_auth_chain(room_id, pdu.auth_events().map(AsRef::as_ref))
@@ -254,20 +254,22 @@ where
 		// transitive ancestors returned by get_auth_chain AND the PDU's
 		// own direct auth_events (which get_auth_chain uses as *starting*
 		// points but does not include in its output).
+		let mut bm = roaring::RoaringTreemap::new();
+		for id in &full_auth_chain {
+			bm.insert(*id);
+		}
 		for auth_event_id in pdu.auth_events() {
 			let short = self
 				.services
 				.short
 				.get_or_create_shorteventid(auth_event_id)
 				.await;
-			full_auth_chain.push(short);
+			bm.insert(short);
 		}
-		full_auth_chain.sort_unstable();
-		full_auth_chain.dedup();
 
 		self.services
 			.auth_chain
-			.cache_auth_chain_vec(vec![short_event_id], &full_auth_chain);
+			.cache_auth_chain_bitmap(vec![short_event_id], &bm);
 	}
 
 	drop(insert_lock);

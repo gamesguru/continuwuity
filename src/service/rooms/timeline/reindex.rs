@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+	collections::{HashMap, HashSet},
+	sync::Arc,
+};
 
 use conduwuit_core::{
 	Result, info,
@@ -9,6 +12,7 @@ use conduwuit_core::{
 	warn,
 };
 use futures::StreamExt;
+use roaring::RoaringTreemap;
 use ruma::{OwnedEventId, RoomId};
 
 use super::{Service, metadata::EventMetadata};
@@ -91,8 +95,8 @@ impl Service {
 
 		// Graph for extremity computation
 		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
-		// Auth chain cache for incremental computation
-		let mut auth_chain_cache: HashMap<ShortEventId, Vec<ShortEventId>> = HashMap::new();
+		// Auth chain cache for incremental computation (roaring bitmaps)
+		let mut auth_chain_cache: HashMap<ShortEventId, Arc<RoaringTreemap>> = HashMap::new();
 		// Timestamps for chronological extremities sorting
 		let mut ts_map: HashMap<ShortEventId, u64> = HashMap::new();
 
@@ -232,22 +236,20 @@ impl Service {
 				.await
 				.is_err()
 			{
-				let mut full_chain: HashSet<ShortEventId> = HashSet::new();
+				let mut full_chain = RoaringTreemap::new();
 				for &auth_short in &auth_shorts {
 					full_chain.insert(auth_short);
 					// Use our local cache (built during this sweep) for ancestors
 					if let Some(ancestor_chain) = auth_chain_cache.get(&auth_short) {
-						full_chain.extend(ancestor_chain.iter().copied());
+						full_chain |= ancestor_chain.as_ref();
 					}
 				}
-				let mut chain_vec: Vec<ShortEventId> = full_chain.into_iter().collect();
-				chain_vec.sort_unstable();
-				chain_vec.dedup();
 
+				let chain_arc = Arc::new(full_chain);
 				self.services
 					.auth_chain
-					.cache_auth_chain_vec(vec![short_eid], &chain_vec);
-				auth_chain_cache.insert(short_eid, chain_vec);
+					.cache_auth_chain_bitmap(vec![short_eid], &chain_arc);
+				auth_chain_cache.insert(short_eid, chain_arc);
 				stats.repaired_auth_chains = stats.repaired_auth_chains.saturating_add(1);
 			} else if let Ok(existing) = self
 				.services
@@ -256,7 +258,7 @@ impl Service {
 				.await
 			{
 				// Populate local cache for descendants
-				auth_chain_cache.insert(short_eid, existing.to_vec());
+				auth_chain_cache.insert(short_eid, existing);
 			}
 
 			// --- tofrom_relation ---
