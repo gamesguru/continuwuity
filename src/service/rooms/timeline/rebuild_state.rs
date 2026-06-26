@@ -1,6 +1,7 @@
 use std::{
 	collections::{BTreeSet, HashMap, HashSet},
 	hash::{Hash, Hasher},
+	pin::pin,
 	sync::Arc,
 	time::{Duration, Instant},
 };
@@ -36,55 +37,6 @@ struct RebuildCtx {
 	auth_chain_bitmaps: Vec<roaring::RoaringBitmap>,
 }
 
-/// A lightweight state group: parent reference + optional single delta entry.
-/// Full state maps are reconstructed lazily by walking the chain.
-struct StateGroup {
-	parent: Option<usize>,
-	/// The state delta applied on top of parent (None = fork-resolved full
-	/// state).
-	delta: Option<(ruma::events::StateEventType, String, OwnedEventId)>,
-	/// If this group was created by fork resolution, store the full resolved
-	/// state. Otherwise None (reconstruct by walking parent chain).
-	full_state: Option<StateMap<OwnedEventId>>,
-}
-
-/// Reconstruct the full state map for a group by walking the delta chain.
-fn materialize_state(groups: &[StateGroup], group_id: usize) -> StateMap<OwnedEventId> {
-	// If this group has a cached full state, use it
-	if let Some(ref full) = groups[group_id].full_state {
-		return full.clone();
-	}
-
-	// Walk the chain to collect deltas
-	let mut deltas: Vec<(ruma::events::StateEventType, String, OwnedEventId)> = Vec::new();
-	let mut current = group_id;
-	loop {
-		let group = &groups[current];
-		if let Some(ref full) = group.full_state {
-			// Found a full-state anchor, apply deltas on top
-			let mut state = full.clone();
-			for (ty, sk, eid) in deltas.into_iter().rev() {
-				state.insert((ty, sk.as_str().into()), eid);
-			}
-			return state;
-		}
-		if let Some(ref delta) = group.delta {
-			deltas.push(delta.clone());
-		}
-		match group.parent {
-			| Some(p) => current = p,
-			| None => break,
-		}
-	}
-
-	// Reached root (empty state), apply all deltas
-	let mut state = StateMap::new();
-	for (ty, sk, eid) in deltas.into_iter().rev() {
-		state.insert((ty, sk.as_str().into()), eid);
-	}
-	state
-}
-
 impl super::Service {
 	/// Rebuilds room state entirely in-memory like ruma-lean, then batch-writes
 	/// the result to DB. This avoids per-event RocksDB round-trips during state
@@ -106,7 +58,7 @@ impl super::Service {
 		let event_set: HashSet<OwnedEventId> =
 			events_meta.iter().map(|(eid, ..)| eid.clone()).collect();
 
-		// Phase 2b: Pre-compute auth chains bottom-up
+		// Phase 2b: Pre-compute auth chains via memoized DFS on auth DAG
 		let (eid_to_idx, idx_to_eid, auth_chain_bitmaps) =
 			Self::rebuild_auth_chains(&events_meta, &event_cache);
 
@@ -120,18 +72,12 @@ impl super::Service {
 			auth_chain_bitmaps,
 		};
 
-		// Phase 3: In-memory state walk with fork resolution
-		let (state_groups, event_group) = Self::rebuild_walk_state(&ctx).await;
+		// Phase 3: In-memory state walk with Arc<StateMap> sharing
+		let event_state = Self::rebuild_walk_state(&ctx).await;
 
 		// Phase 4: Batch-write to DB
-		let (group_to_ssh, current_shortstatehash) = self
-			.rebuild_batch_write(
-				room_id,
-				&ctx.events_meta,
-				&state_groups,
-				&event_group,
-				&ctx.event_cache,
-			)
+		let (event_ssh_map, current_shortstatehash) = self
+			.rebuild_batch_write(room_id, &ctx.events_meta, &event_state, &ctx.event_cache)
 			.await?;
 
 		// Phase 5: Final multi-head extremity merge
@@ -140,8 +86,7 @@ impl super::Service {
 				room_id,
 				&ctx.events_meta,
 				&ctx.event_set,
-				&event_group,
-				&group_to_ssh,
+				&event_ssh_map,
 				current_shortstatehash,
 			)
 			.await?;
@@ -168,25 +113,23 @@ impl super::Service {
 		Ok(())
 	}
 
-	// ── Phase 1: Stream events and collect metadata ──
-	async fn rebuild_stream_events(&self, room_id: &RoomId) -> (Vec<EventMeta>, RoomVersionId) {
-		info!("rebuild_state: streaming events in topological order...");
-		let start = Instant::now();
+	// ── Phase 1: Stream events ──
+	// Streams events from DB in topological order, extracts metadata.
 
+	async fn rebuild_stream_events(&self, room_id: &RoomId) -> (Vec<EventMeta>, RoomVersionId) {
+		let start = Instant::now();
 		let mut events_meta: Vec<EventMeta> = Vec::new();
 		let mut room_version = RoomVersionId::V1;
 		let mut room_version_found = false;
 
-		let mut stream = std::pin::pin!(self.topo_pdus(room_id, None));
+		let mut stream = pin!(self.topo_pdus(room_id, None));
 		while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
 			let eid = pdu.event_id().to_owned();
 			let prev: Vec<OwnedEventId> = pdu.prev_events().map(ToOwned::to_owned).collect();
 			let state_key = pdu.state_key().map(ToOwned::to_owned);
 			let depth = u64::from(pdu.depth());
 
-			// Timeline events are authoritative; clear any stale rejection
-			// flags that would otherwise poison the state resolution below.
-			// Soft-fail flags are intentional and must persist.
+			// Clear stale rejection flags (soft-fail flags persist)
 			self.services.pdu_metadata.unmark_event_rejected(&eid);
 
 			if !room_version_found && *pdu.kind() == TimelineEventType::RoomCreate {
@@ -202,32 +145,31 @@ impl super::Service {
 			events_meta.push((eid, prev, state_key, depth));
 		}
 
-		debug!(
-			"rebuild_state: loaded {} event metadata in {:?}",
+		info!(
+			"rebuild_state: streamed {} events in {:?} | room version: {}",
 			events_meta.len(),
 			start.elapsed(),
+			room_version,
 		);
 		(events_meta, room_version)
 	}
 
-	// ── Phase 2: Pre-load ALL events into RAM ──
+	// ── Phase 2a: Prefetch event PDUs ──
+	// Loads all event PDUs into an in-memory cache for fast random access.
+
 	async fn rebuild_prefetch_events(
 		&self,
 		room_id: &RoomId,
 		events_meta: &[EventMeta],
 	) -> HashMap<OwnedEventId, Arc<PduEvent>> {
 		let start = Instant::now();
-		let event_cache: HashMap<OwnedEventId, Arc<PduEvent>> = {
-			let event_ids_stream =
-				futures::stream::iter(events_meta.iter().map(|(eid, ..)| eid.clone()));
-			self.multi_get_pdus(Some(room_id), event_ids_stream)
-				.filter_map(|r| async move { r.ok() })
-				.map(|mut pdu| {
-					pdu.rejected = false;
-					(pdu.event_id.clone(), Arc::new(pdu))
-				})
-				.collect()
-				.await
+		let mut event_cache: HashMap<OwnedEventId, Arc<PduEvent>> =
+			HashMap::with_capacity(events_meta.len());
+		{
+			let mut stream = pin!(self.topo_pdus(room_id, None));
+			while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
+				event_cache.insert(pdu.event_id().to_owned(), Arc::new(pdu));
+			}
 		};
 		info!(
 			"rebuild_state: pre-loaded {} events into RAM in {:?}",
@@ -237,10 +179,11 @@ impl super::Service {
 		event_cache
 	}
 
-	// ── Phase 2b: Pre-compute auth chains bottom-up ──
-	// Since events are in topo order, each event's auth chain parents are
-	// already computed. Chains are stored as roaring bitmaps indexed by event
-	// position for compact O(1) union operations.
+	// ── Phase 2b: Pre-compute auth chains via memoized DFS ──
+	// Uses a two-pass approach: first indexes all events, then computes
+	// the transitive auth chain for each event using memoized DFS on the
+	// auth DAG (not the timeline topo order). This correctly handles
+	// busted DAGs where auth events appear out-of-topo-order.
 
 	fn rebuild_auth_chains(
 		events_meta: &[EventMeta],
@@ -248,6 +191,7 @@ impl super::Service {
 	) -> (HashMap<OwnedEventId, u32>, Vec<OwnedEventId>, Vec<roaring::RoaringBitmap>) {
 		let start = Instant::now();
 
+		// Pass 1: Index all events
 		let eid_to_idx: HashMap<OwnedEventId, u32> = events_meta
 			.iter()
 			.enumerate()
@@ -258,108 +202,135 @@ impl super::Service {
 		let idx_to_eid: Vec<OwnedEventId> =
 			events_meta.iter().map(|(eid, ..)| eid.clone()).collect();
 
-		let mut bitmaps: Vec<roaring::RoaringBitmap> = Vec::with_capacity(events_meta.len());
-		for (eid, ..) in events_meta {
-			let mut chain = roaring::RoaringBitmap::new();
-			if let Some(pdu) = event_cache.get(eid) {
-				for auth_id in &pdu.auth_events {
-					if let Some(&i) = eid_to_idx.get(auth_id) {
-						chain.insert(i);
-						// Only include transitive chain if bitmap already computed
-						// (auth event appears before us in topo order). In busted DAGs,
-						// auth events may appear later — we still record the direct ref.
-						let idx = to_usize(i);
-						if idx < bitmaps.len() {
-							chain |= &bitmaps[idx];
+		// Pass 2: Iterative post-order traversal on auth DAG for transitive closures.
+		// Uses an explicit stack instead of recursion (Rust has no TCO).
+		let n = events_meta.len();
+		let mut bitmaps: Vec<Option<roaring::RoaringBitmap>> = (0..n).map(|_| None).collect();
+
+		for start_idx in 0..n {
+			if bitmaps[start_idx].is_some() {
+				continue;
+			}
+
+			// Iterative post-order: stack contains (idx, expanded)
+			// First visit (expanded=false): push children, then re-push with expanded=true
+			// Second visit (expanded=true): all children computed, build our bitmap
+			let mut stack: Vec<(usize, bool)> = vec![(start_idx, false)];
+
+			while let Some((idx, expanded)) = stack.pop() {
+				if bitmaps[idx].is_some() {
+					continue;
+				}
+
+				if expanded {
+					// All auth parents are computed — build this node's chain
+					let mut chain = roaring::RoaringBitmap::new();
+					let eid = &idx_to_eid[idx];
+					if let Some(pdu) = event_cache.get(eid) {
+						for auth_id in &pdu.auth_events {
+							if let Some(&i) = eid_to_idx.get(auth_id) {
+								chain.insert(i);
+								if let Some(ref sub) = bitmaps[to_usize(i)] {
+									chain |= sub;
+								}
+							}
+						}
+					}
+					bitmaps[idx] = Some(chain);
+				} else {
+					// First visit: re-push self as expanded, then push uncomputed children
+					stack.push((idx, true));
+					let eid = &idx_to_eid[idx];
+					if let Some(pdu) = event_cache.get(eid) {
+						for auth_id in &pdu.auth_events {
+							if let Some(&i) = eid_to_idx.get(auth_id) {
+								let child = to_usize(i);
+								if bitmaps[child].is_none() {
+									stack.push((child, false));
+								}
+							}
 						}
 					}
 				}
 			}
-			bitmaps.push(chain);
 		}
 
+		// Unwrap all Options into final Vec
+		let final_bitmaps: Vec<roaring::RoaringBitmap> =
+			bitmaps.into_iter().map(Option::unwrap_or_default).collect();
+
 		debug!(
-			"rebuild_state: pre-computed {} auth chains in {:?}",
-			bitmaps.len(),
+			"rebuild_state: pre-computed {} auth chains (memoized DFS) in {:?}",
+			final_bitmaps.len(),
 			start.elapsed(),
 		);
-		(eid_to_idx, idx_to_eid, bitmaps)
+		(eid_to_idx, idx_to_eid, final_bitmaps)
 	}
 
-	// ── Phase 3: In-memory state walk with fork resolution ──
-	// Uses a delta-chain representation to avoid cloning full state maps:
-	// - state_groups: Vec of (parent_group_id, Option<delta>)
-	// - event_group: maps event_id → group_id
-	// Full state maps are only materialized on-demand for fork resolution.
-	// This reduces memory from O(state_events × state_size) to O(state_events).
+	// ── Phase 3: In-memory state walk with Arc<StateMap> sharing ──
+	// Uses Arc<StateMap> so message events share state via pointer copy (O(1)),
+	// and fork resolution uses Arc::ptr_eq to skip identical parents instantly.
+	// This matches ruma-lean's architecture.
 
 	async fn rebuild_walk_state(
 		ctx: &RebuildCtx,
-	) -> (Vec<StateGroup>, HashMap<OwnedEventId, usize>) {
+	) -> HashMap<OwnedEventId, Arc<StateMap<OwnedEventId>>> {
 		let start = Instant::now();
-		let mut state_groups: Vec<StateGroup> = Vec::new();
-		let mut event_group: HashMap<OwnedEventId, usize> = HashMap::new();
+		let empty_state: Arc<StateMap<OwnedEventId>> = Arc::new(StateMap::new());
+		let mut state_after: HashMap<OwnedEventId, Arc<StateMap<OwnedEventId>>> =
+			HashMap::with_capacity(ctx.events_meta.len());
 		let mut fork_resolve_count = 0_usize;
+		let mut fork_skip_count = 0_usize;
 		let mut cumulative_resolve_time = Duration::ZERO;
 		let mut processed = 0_usize;
 		let total_events = ctx.events_meta.len();
-
-		// Group 0 = empty state (for events with no parents)
-		state_groups.push(StateGroup {
-			parent: None,
-			delta: None,
-			full_state: Some(StateMap::new()),
-		});
-		let empty_group: usize = 0;
-
-		// Cache: sorted parent group set -> resolved group id
-		let mut fork_cache: HashMap<Vec<usize>, usize> = HashMap::new();
 
 		for (eid, prev_events, state_key, _depth) in &ctx.events_meta {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
 				debug!(
-					"rebuild_state: {}/{} events | {} groups | {} forks ({:?}) | elapsed: {:?}",
+					"rebuild_state: {}/{} events | {} forks resolved, {} skipped ({:?}) | \
+					 elapsed: {:?}",
 					processed,
 					total_events,
-					state_groups.len(),
 					fork_resolve_count,
+					fork_skip_count,
 					cumulative_resolve_time,
 					start.elapsed(),
 				);
 			}
 
-			// Collect parent groups (deduplicated)
-			let parent_groups: Vec<usize> = prev_events
-				.iter()
-				.filter(|p| ctx.event_set.contains(*p))
-				.filter_map(|p| event_group.get(p).copied())
-				.collect::<HashSet<usize>>()
-				.into_iter()
-				.collect();
+			// Collect parent states (deduplicated by Arc::ptr_eq)
+			let parents: Vec<Arc<StateMap<OwnedEventId>>> = {
+				let mut result: Vec<Arc<StateMap<OwnedEventId>>> = Vec::new();
+				for p in prev_events {
+					if ctx.event_set.contains(p) {
+						if let Some(s) = state_after.get(p) {
+							if !result.iter().any(|existing| Arc::ptr_eq(existing, s)) {
+								result.push(s.clone());
+							}
+						}
+					}
+				}
+				result
+			};
 
-			let state_before_group = match parent_groups.len() {
-				| 0 => empty_group,
-				| 1 => parent_groups[0],
+			let state_before = match parents.len() {
+				| 0 => empty_state.clone(),
+				| 1 => parents[0].clone(),
 				| _ => {
-					// Check fork cache: same parent groups -> same resolved state
-					let mut cache_key = parent_groups.clone();
-					cache_key.sort_unstable();
-					if let Some(&cached_gid) = fork_cache.get(&cache_key) {
-						cached_gid
+					// Multiple distinct parents — check if content is equal
+					let all_equal = parents.windows(2).all(|w| w[0].as_ref() == w[1].as_ref());
+					if all_equal {
+						fork_skip_count = fork_skip_count.saturating_add(1);
+						parents[0].clone()
 					} else {
+						// Actually need state resolution
 						let fork_start = Instant::now();
-						// Materialize full state for each parent
-						let fork_states: Vec<StateMap<OwnedEventId>> = parent_groups
-							.iter()
-							.map(|&g| materialize_state(&state_groups, g))
-							.collect();
-						let fork_state_refs: Vec<&StateMap<OwnedEventId>> =
-							fork_states.iter().collect();
-
-						let resolved =
-							Self::resolve_fork_with_states(ctx, &fork_state_refs).await;
+						let fork_refs: Vec<&StateMap<OwnedEventId>> =
+							parents.iter().map(AsRef::as_ref).collect();
+						let resolved = Self::resolve_fork_with_states(ctx, &fork_refs).await;
 
 						let fork_elapsed = fork_start.elapsed();
 						fork_resolve_count = fork_resolve_count.saturating_add(1);
@@ -371,57 +342,43 @@ impl super::Service {
 								"rebuild_state: SLOW fork #{} for {} ({} parents) took {:?}",
 								fork_resolve_count,
 								eid,
-								parent_groups.len(),
+								parents.len(),
 								fork_elapsed,
 							);
 						}
 
-						let gid = match resolved {
-							| Ok(resolved_state) => {
-								let gid = state_groups.len();
-								state_groups.push(StateGroup {
-									parent: None,
-									delta: None,
-									full_state: Some(resolved_state),
-								});
-								gid
-							},
+						match resolved {
+							| Ok(s) => Arc::new(s),
 							| Err(e) => {
 								warn!(
 									"rebuild_state: fork resolution failed for {}: {} — using \
 									 first parent",
 									eid, e,
 								);
-								parent_groups[0]
+								parents[0].clone()
 							},
-						};
-						fork_cache.insert(cache_key, gid);
-						gid
+						}
 					}
 				},
 			};
 
-			// Apply state event delta (lightweight: just store the delta, no clone)
-			let group_after = if let Some(sk) = state_key {
+			// Apply state event delta
+			let after = if let Some(sk) = state_key {
 				let Some(pdu) = ctx.event_cache.get(eid) else {
 					warn!("rebuild_state: state event {eid} missing from cache — skipping");
-					event_group.insert(eid.clone(), state_before_group);
+					state_after.insert(eid.clone(), state_before.clone());
 					continue;
 				};
 				let event_type: ruma::events::StateEventType = pdu.kind.to_string().into();
-
-				let gid = state_groups.len();
-				state_groups.push(StateGroup {
-					parent: Some(state_before_group),
-					delta: Some((event_type, sk.clone(), eid.clone())),
-					full_state: None,
-				});
-				gid
+				let mut new_state = (*state_before).clone();
+				new_state.insert((event_type, sk.clone().into()), eid.clone());
+				Arc::new(new_state)
 			} else {
-				state_before_group
+				// Message event: Arc clone, O(1)
+				state_before.clone()
 			};
 
-			event_group.insert(eid.clone(), group_after);
+			state_after.insert(eid.clone(), after);
 
 			if processed.is_multiple_of(5000) {
 				tokio::task::yield_now().await;
@@ -429,16 +386,16 @@ impl super::Service {
 		}
 
 		info!(
-			"rebuild_state: in-memory walk done in {:?} | {} events, {} state groups, {} forks \
-			 ({:?})",
+			"rebuild_state: in-memory walk done in {:?} | {} events, {} forks resolved, {} \
+			 skipped via Arc::ptr_eq/content ({:?})",
 			start.elapsed(),
 			processed,
-			state_groups.len(),
 			fork_resolve_count,
+			fork_skip_count,
 			cumulative_resolve_time,
 		);
 
-		(state_groups, event_group)
+		state_after
 	}
 
 	/// Resolve a fork between multiple parent state sets using state_res.
@@ -461,7 +418,7 @@ impl super::Service {
 			async move { results }
 		};
 
-		// Pre-computed auth chain lookup via roaring bitmaps
+		// Pre-computed auth chain lookup via roaring bitmaps (memoized DFS)
 		let auth_chain_fetch = |events: Vec<OwnedEventId>| {
 			let mut combined = roaring::RoaringBitmap::new();
 			for id in &events {
@@ -496,24 +453,29 @@ impl super::Service {
 		&self,
 		room_id: &RoomId,
 		events_meta: &[EventMeta],
-		state_groups: &[StateGroup],
-		event_group: &HashMap<OwnedEventId, usize>,
+		event_state: &HashMap<OwnedEventId, Arc<StateMap<OwnedEventId>>>,
 		event_cache: &HashMap<OwnedEventId, Arc<PduEvent>>,
-	) -> Result<(HashMap<usize, u64>, u64)> {
+	) -> Result<(HashMap<OwnedEventId, u64>, u64)> {
 		let write_start = Instant::now();
 		let mut cork = Some(self.db.db.cork());
 
-		// 4a: Pre-cache ALL short IDs across all groups to avoid serial DB lookups.
-		// Collect unique (type, state_key) pairs and event_ids, resolve once.
+		// 4a: Pre-cache ALL short IDs to avoid serial DB lookups.
 		let precache_start = Instant::now();
 		let mut unique_state_keys: HashSet<(String, String)> = HashSet::new();
 		let mut unique_event_ids: HashSet<OwnedEventId> = HashSet::new();
-		let referenced_groups: HashSet<usize> = event_group.values().copied().collect();
-		for &gid in &referenced_groups {
-			let state = materialize_state(state_groups, gid);
-			for ((ty, sk), event_id) in &state {
-				unique_state_keys.insert((ty.to_string(), sk.to_string()));
-				unique_event_ids.insert(event_id.clone());
+
+		// Collect unique state entries — deduplicate by content equality
+		let mut seen_states: Vec<Arc<StateMap<OwnedEventId>>> = Vec::new();
+		for state in event_state.values() {
+			if !seen_states
+				.iter()
+				.any(|existing| Arc::ptr_eq(existing, state))
+			{
+				seen_states.push(state.clone());
+				for ((ty, sk), event_id) in state.as_ref() {
+					unique_state_keys.insert((ty.to_string(), sk.to_string()));
+					unique_event_ids.insert(event_id.clone());
+				}
 			}
 		}
 		// Also collect all event IDs from events_meta for pdu_shortstatehash writes
@@ -547,18 +509,18 @@ impl super::Service {
 			precache_start.elapsed(),
 		);
 
-		// 4b: Compress unique groups with content-hash deduplication.
-		let empty_group: usize = 0;
-		let mut group_to_ssh: HashMap<usize, u64> = HashMap::new();
+		// 4b: Compress unique states with content-hash deduplication.
+		let mut event_ssh_map: HashMap<OwnedEventId, u64> =
+			HashMap::with_capacity(events_meta.len());
 		let empty_ssh = self
 			.services
 			.state_compressor
 			.save_state(room_id, Arc::new(BTreeSet::new()))
 			.await?
 			.shortstatehash;
-		group_to_ssh.insert(empty_group, empty_ssh);
 
-		// content_hash -> ssh for deduplication across different group_ids
+		// content_hash -> ssh for deduplication across different Arc instances
+		// with identical content
 		let mut content_to_ssh: HashMap<u64, u64> = HashMap::new();
 		let mut current_shortstatehash = empty_ssh;
 		let mut groups_compressed = 0_usize;
@@ -568,18 +530,14 @@ impl super::Service {
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 
 		for (eid, _prev, state_key, _depth) in events_meta {
-			let Some(&group_id) = event_group.get(eid) else {
+			let Some(state) = event_state.get(eid) else {
 				continue;
 			};
 
-			// Lazily compress state groups as we encounter them
-			let ssh = if let Some(&cached_ssh) = group_to_ssh.get(&group_id) {
-				cached_ssh
-			} else {
-				// Compress this state group using pre-cached short IDs
-				let state_map = materialize_state(state_groups, group_id);
+			// Compress and deduplicate by content hash
+			let ssh = {
 				let mut compressed = BTreeSet::new();
-				for ((ty, sk), event_id) in &state_map {
+				for ((ty, sk), event_id) in state.as_ref() {
 					let ssk = ssk_cache
 						.get(&(ty.to_string(), sk.to_string()))
 						.copied()
@@ -598,7 +556,7 @@ impl super::Service {
 				}
 				let content_hash = hasher.finish();
 
-				let ssh = if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
+				if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
 					groups_deduped = groups_deduped.saturating_add(1);
 					existing_ssh
 				} else {
@@ -611,11 +569,10 @@ impl super::Service {
 					content_to_ssh.insert(content_hash, ssh);
 					groups_compressed = groups_compressed.saturating_add(1);
 					ssh
-				};
-				group_to_ssh.insert(group_id, ssh);
-				ssh
+				}
 			};
 
+			event_ssh_map.insert(eid.clone(), ssh);
 			// Write pdu_shortstatehash for this event
 			if state_key.is_some() {
 				// State event: compute_state_for_event equivalent
@@ -657,7 +614,7 @@ impl super::Service {
 			groups_deduped,
 		);
 
-		Ok((group_to_ssh, current_shortstatehash))
+		Ok((event_ssh_map, current_shortstatehash))
 	}
 
 	// ── Phase 5: Final multi-head extremity merge ──
@@ -668,8 +625,7 @@ impl super::Service {
 		room_id: &RoomId,
 		events_meta: &[EventMeta],
 		event_set: &HashSet<OwnedEventId>,
-		event_group: &HashMap<OwnedEventId, usize>,
-		group_to_ssh: &HashMap<usize, u64>,
+		event_ssh_map: &HashMap<OwnedEventId, u64>,
 		current_shortstatehash: u64,
 	) -> Result<u64> {
 		let mut has_children: HashSet<&OwnedEventId> = HashSet::new();
@@ -685,10 +641,7 @@ impl super::Service {
 			.iter()
 			.map(|(eid, ..)| eid)
 			.filter(|eid| !has_children.contains(eid))
-			.filter_map(|eid| {
-				let group = event_group.get(eid)?;
-				group_to_ssh.get(group).copied()
-			})
+			.filter_map(|eid| event_ssh_map.get(eid).copied())
 			.collect::<HashSet<_>>()
 			.into_iter()
 			.collect();
