@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use conduwuit::{Event, Result, matrix::pdu::PduEvent};
 use ruma::{EventId, OwnedEventId, RoomId, RoomVersionId};
 
+use crate::rooms::event_handler::resolve_state::PduCache;
+
 pub(crate) struct TimelineStateResolver<'a> {
 	pub(crate) room_id: &'a RoomId,
 	pub(crate) room_version: &'a RoomVersionId,
@@ -10,6 +12,7 @@ pub(crate) struct TimelineStateResolver<'a> {
 	pub(crate) ssh_cache: &'a HashMap<OwnedEventId, u64>,
 	pub(crate) resolved_state_cache: &'a mut HashMap<Vec<u64>, u64>,
 	pub(crate) empty_ssh: u64,
+	pub(crate) prefetch_cache: Option<PduCache>,
 }
 
 #[conduwuit_core::implement(super::Service)]
@@ -47,7 +50,12 @@ pub(super) async fn resolve_state_before(
 				let compressed_state = self
 					.services
 					.event_handler
-					.state_at_incoming_resolved(pdu, resolver.room_id, resolver.room_version)
+					.state_at_incoming_resolved(
+						pdu,
+						resolver.room_id,
+						resolver.room_version,
+						resolver.prefetch_cache.clone(),
+					)
 					.await
 					.unwrap_or_else(|_| std::sync::Arc::new(std::collections::BTreeSet::new()));
 

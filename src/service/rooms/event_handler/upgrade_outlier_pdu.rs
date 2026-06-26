@@ -716,7 +716,7 @@ where
 			self.state_at_incoming_degree_one(incoming_pdu, room_id)
 				.await
 		} else {
-			self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id)
+			self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id, None)
 				.await
 		};
 		if let Ok(compressed) = resolved_state {

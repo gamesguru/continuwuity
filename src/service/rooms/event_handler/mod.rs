@@ -8,7 +8,7 @@ mod handle_outlier_pdu;
 mod handle_prev_pdu;
 mod parse_incoming_pdu;
 mod policy_server;
-mod resolve_state;
+pub(crate) mod resolve_state;
 pub mod server_pool;
 mod state_at_incoming;
 pub mod upgrade_outlier_pdu;

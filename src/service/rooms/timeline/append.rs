@@ -53,6 +53,23 @@ where
 		.set_event_state(&pdu.event_id, room_id, state_ids_compressed)
 		.await?;
 
+	// Soft-failed events pass auth against the state at the event but fail
+	// against the current room state. Per spec §11.33.2.6 they SHOULD NOT
+	// appear in /sync or /messages. Store the state association (above) for
+	// DAG integrity, but do NOT append to the timeline sequence.
+	if soft_fail {
+		self.services.outlier.clear_outlier_flag(pdu.event_id());
+		self.services
+			.pdu_metadata
+			.unmark_event_rejected(pdu.event_id());
+
+		conduwuit::debug_warn!(
+			event_id = %pdu.event_id,
+			"Event soft-failed; stored state but omitted from timeline"
+		);
+		return Ok(None);
+	}
+
 	let pdu_id = self
 		.append_pdu(pdu, pdu_json, new_room_leaves, state_lock, room_id, soft_fail)
 		.await?;

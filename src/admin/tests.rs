@@ -827,6 +827,20 @@ async fn test_busted_dag_resolution() {
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
 	println!("yolo import-pdus took {:?}", start_import.elapsed());
 
+	// Build derived data (auth chain roaring bitmaps, short IDs, metadata)
+	println!("Starting reindex-short...");
+	let start_reindex = std::time::Instant::now();
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reindex-short {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reindex-short failed: {res:?}");
+	println!("reindex-short took {:?}", start_reindex.elapsed());
+
 	// Run reorder-timeline
 	println!("Starting yolo reorder-timeline...");
 	let start_reorder = std::time::Instant::now();
@@ -948,6 +962,8 @@ async fn test_unredacted_room_dag_resolution() {
 	let room_id = RoomId::parse("!BDSybzDpGyDxMHZzpN:unredacted.org").unwrap();
 
 	// 1. Import the DAG
+	println!("Starting import-pdus...");
+	let start_import = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -960,8 +976,25 @@ async fn test_unredacted_room_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
+	println!("import-pdus took {:?}", start_import.elapsed());
+
+	// Build derived data (auth chain roaring bitmaps)
+	println!("Starting reindex-short...");
+	let start_reindex = std::time::Instant::now();
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reindex-short {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reindex-short failed: {res:?}");
+	println!("reindex-short took {:?}", start_reindex.elapsed());
 
 	// Run reorder-timeline
+	println!("Starting reorder-timeline...");
+	let start_reorder = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -971,8 +1004,11 @@ async fn test_unredacted_room_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
+	println!("reorder-timeline took {:?}", start_reorder.elapsed());
 
 	// Run rebuild-state
+	println!("Starting rebuild-state...");
+	let start_rebuild = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -982,6 +1018,7 @@ async fn test_unredacted_room_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "rebuild-state failed: {res:?}");
+	println!("rebuild-state took {:?}", start_rebuild.elapsed());
 
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
@@ -1082,6 +1119,20 @@ async fn test_unredacted_lounge_dag_resolution() {
 		.await;
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
 	println!("import-pdus took {:?}", start_import.elapsed());
+
+	// Build derived data (auth chain roaring bitmaps)
+	println!("Starting reindex-short...");
+	let start_reindex = std::time::Instant::now();
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reindex-short {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reindex-short failed: {res:?}");
+	println!("reindex-short took {:?}", start_reindex.elapsed());
 
 	// Reorder PDU index by origin_server_ts so rebuild-state processes
 	// parents before children (it walks events in pdu_count order)
@@ -1297,6 +1348,8 @@ async fn test_nheko_dag_resolution() {
 	let room_id = RoomId::parse("!UbCmIlGTHNIgIRZcpt:nheko.im").unwrap();
 
 	// 1. Import the DAG
+	println!("Starting import-pdus...");
+	let start_import = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1309,8 +1362,25 @@ async fn test_nheko_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
+	println!("import-pdus took {:?}", start_import.elapsed());
+
+	// Build derived data (auth chain roaring bitmaps)
+	println!("Starting reindex-short...");
+	let start_reindex = std::time::Instant::now();
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reindex-short {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reindex-short failed: {res:?}");
+	println!("reindex-short took {:?}", start_reindex.elapsed());
 
 	// Run reorder-timeline
+	println!("Starting reorder-timeline...");
+	let start_reorder = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1320,8 +1390,11 @@ async fn test_nheko_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
+	println!("reorder-timeline took {:?}", start_reorder.elapsed());
 
 	// Run rebuild-state
+	println!("Starting rebuild-state...");
+	let start_rebuild = std::time::Instant::now();
 	let res = services
 		.admin
 		.command_in_place(
@@ -1331,6 +1404,7 @@ async fn test_nheko_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "rebuild-state failed: {res:?}");
+	println!("rebuild-state took {:?}", start_rebuild.elapsed());
 
 	// Bootstrap room state hash from the latest PDU
 	let latest_pdu = services
@@ -1588,6 +1662,18 @@ async fn test_knocking_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
+
+	// Build derived data (auth chain roaring bitmaps)
+	println!("Starting reindex-short...");
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reindex-short {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reindex-short failed: {res:?}");
 
 	// Reorder PDU index
 	println!("Starting reorder-timeline...");

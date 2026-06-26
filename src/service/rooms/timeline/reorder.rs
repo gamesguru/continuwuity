@@ -235,6 +235,7 @@ impl Service {
 							true_extremities.iter().map(|id| &**id),
 							room_id,
 							&room_version,
+							None,
 						)
 						.await
 					{
@@ -397,6 +398,7 @@ impl Service {
 						ssh_cache: &ssh_cache,
 						resolved_state_cache: &mut resolved_state_cache,
 						empty_ssh,
+						prefetch_cache: None,
 					},
 					&pdu,
 				)

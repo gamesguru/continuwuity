@@ -16,6 +16,12 @@ use ruma::{OwnedEventId, RoomId, RoomVersionId};
 
 use crate::rooms::state_compressor::CompressedState;
 
+/// Pre-loaded event cache to avoid per-event RocksDB lookups during
+/// state resolution. Populated once at the start of bulk operations
+/// like rebuild_state.
+pub(crate) type PduCache =
+	Arc<tokio::sync::RwLock<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>>;
+
 #[implement(super::Service)]
 #[tracing::instrument(name = "resolve", level = "debug", skip_all)]
 pub async fn resolve_state(
@@ -94,7 +100,7 @@ pub async fn resolve_state(
 	info!(%room_id, n_fork_states, "state_res: fork states loaded, starting resolution");
 	let t = std::time::Instant::now();
 	let state = self
-		.state_resolution(room_id, room_version_id, fork_states.iter())
+		.state_resolution(room_id, room_version_id, fork_states.iter(), None)
 		.boxed()
 		.await?;
 	info!(%room_id, n_resolved = state.len(), elapsed = ?t.elapsed(), "state_res: resolution complete");
@@ -145,6 +151,7 @@ pub async fn state_resolution<'a, StateSets>(
 	room_id: &RoomId,
 	room_version: &'a RoomVersionId,
 	state_sets: StateSets,
+	prefetch_cache: Option<PduCache>,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
@@ -155,32 +162,59 @@ where
 	}
 
 	let meta = &self.services.pdu_metadata;
-	let fetch_cache: Arc<
-		tokio::sync::RwLock<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>,
-	> = Arc::new(tokio::sync::RwLock::new(
-		self.services
-			.timeline
-			.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
-			.filter_map(|r| async move { r.ok() })
-			.wide_then(|mut pdu| async move {
-				let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
-				if is_rejected {
-					// Defense-in-depth: the event is in the timeline, meaning it
-					// passed auth at some point. A stale rejection flag would
-					// poison state resolution by cascading auth failures. Clear
-					// the flag rather than propagating it.
-					warn!(
-						event_id = %pdu.event_id,
-						"timeline event has stale rejection flag, clearing"
-					);
-					meta.unmark_event_rejected(&pdu.event_id);
-				}
+	let fetch_cache: PduCache = if let Some(cache) = prefetch_cache {
+		// Pre-loaded cache provided (e.g. from rebuild_state). Merge in
+		// any state-set events that aren't already present.
+		let missing: Vec<OwnedEventId> = {
+			let r = cache.read().await;
+			all_events
+				.iter()
+				.filter(|eid| !r.contains_key(*eid))
+				.cloned()
+				.collect()
+		};
+		if !missing.is_empty() {
+			let fetched: Vec<_> = self
+				.services
+				.timeline
+				.multi_get_pdus(Some(room_id), futures::stream::iter(missing))
+				.filter_map(|r| async move { r.ok() })
+				.collect()
+				.await;
+			let mut w = cache.write().await;
+			for mut pdu in fetched {
 				pdu.rejected = false;
-				(pdu.event_id.clone(), Arc::new(pdu))
-			})
-			.collect::<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>()
-			.await,
-	));
+				w.insert(pdu.event_id.clone(), Arc::new(pdu));
+			}
+		}
+		cache
+	} else {
+		// No prefetch cache — build one from scratch (existing behavior)
+		Arc::new(tokio::sync::RwLock::new(
+			self.services
+				.timeline
+				.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
+				.filter_map(|r| async move { r.ok() })
+				.wide_then(|mut pdu| async move {
+					let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
+					if is_rejected {
+						// Defense-in-depth: the event is in the timeline, meaning it
+						// passed auth at some point. A stale rejection flag would
+						// poison state resolution by cascading auth failures. Clear
+						// the flag rather than propagating it.
+						warn!(
+							event_id = %pdu.event_id,
+							"timeline event has stale rejection flag, clearing"
+						);
+						meta.unmark_event_rejected(&pdu.event_id);
+					}
+					pdu.rejected = false;
+					(pdu.event_id.clone(), Arc::new(pdu))
+				})
+				.collect::<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>()
+				.await,
+		))
+	};
 
 	let fetch_cache_ref = fetch_cache.clone();
 	let event_fetch = move |event_id: OwnedEventId| {

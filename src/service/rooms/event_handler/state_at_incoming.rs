@@ -12,6 +12,8 @@ use conduwuit::{
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::ready};
 use ruma::{EventId, OwnedEventId, RoomId, RoomVersionId};
 
+use super::resolve_state::PduCache;
+
 // TODO: if we know the prev_events of the incoming event we can avoid the
 // request and build the state from a known point and resolve if > 1 prev_event
 #[implement(super::Service)]
@@ -97,11 +99,12 @@ pub async fn state_at_incoming_resolved<Pdu>(
 	incoming_pdu: &Pdu,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
+	prefetch_cache: Option<PduCache>,
 ) -> Result<std::sync::Arc<crate::rooms::state_compressor::CompressedState>>
 where
 	Pdu: Event + Send + Sync,
 {
-	self.resolve_extremities(incoming_pdu.prev_events(), room_id, room_version_id)
+	self.resolve_extremities(incoming_pdu.prev_events(), room_id, room_version_id, prefetch_cache)
 		.await
 }
 
@@ -112,6 +115,7 @@ pub async fn resolve_extremities<'a, I>(
 	prev_events: I,
 	room_id: &RoomId,
 	room_version_id: &RoomVersionId,
+	prefetch_cache: Option<PduCache>,
 ) -> Result<std::sync::Arc<crate::rooms::state_compressor::CompressedState>>
 where
 	I: Iterator<Item = &'a EventId> + Send,
@@ -243,8 +247,6 @@ where
 		ruma::events::StateEventType::RoomPowerLevels,
 		ruma::events::StateEventType::RoomJoinRules,
 		ruma::events::StateEventType::RoomServerAcl,
-		ruma::events::StateEventType::RoomMember,
-		ruma::events::StateEventType::RoomThirdPartyInvite,
 	] {
 		if let Ok(ssk) = self.services.short.get_shortstatekey(ty, "").await {
 			auth_ssks.insert(ssk);
@@ -450,7 +452,7 @@ where
 
 	let resolve_start = std::time::Instant::now();
 	let resolved_partial = self
-		.state_resolution(room_id, room_version_id, fork_states.iter())
+		.state_resolution(room_id, room_version_id, fork_states.iter(), prefetch_cache)
 		.boxed()
 		.await
 		.map_err(|e| {

@@ -3,19 +3,27 @@ use std::{
 	sync::Arc,
 };
 
-use conduwuit_core::{Result, debug, info, matrix::event::Event, warn};
+use conduwuit_core::{
+	Result, debug, info,
+	matrix::{
+		event::Event,
+		state_res::{self, StateMap},
+	},
+	warn,
+};
 use futures::StreamExt;
-use ruma::{OwnedEventId, RoomId, events::TimelineEventType};
+use ruma::{OwnedEventId, RoomId, RoomVersionId, events::TimelineEventType};
 
-use super::{Service, TimelineStateResolver};
 use crate::rooms;
 
-impl Service {
-	/// Incrementally rebuilds the true state of the room by iterating through
-	/// the timeline in its current PduCount order, resolving the state for
-	/// each event, and updating the DB. This heals a fractured room state
-	/// without re-ordering events or generating new PduCounts, preventing UI
-	/// sync spam.
+/// Safe u32 -> usize for Vec indexing of roaring bitmap indices.
+#[inline]
+fn to_usize(v: u32) -> usize { usize::try_from(v).expect("u32 fits in usize") }
+
+impl super::Service {
+	/// Rebuilds room state entirely in-memory like ruma-lean, then batch-writes
+	/// the result to DB. This avoids per-event RocksDB round-trips during state
+	/// resolution, achieving seconds instead of minutes for large DAGs.
 	#[tracing::instrument(skip(self), level = "info")]
 	pub async fn rebuild_state(&self, room_id: &RoomId) -> Result<()> {
 		let original_room_shortstatehash = self
@@ -25,14 +33,13 @@ impl Service {
 			.await
 			.ok();
 
-		// Stream events in topological order (already rebuilt by reorder_timeline).
-		// Collect minimal metadata for the multi-head merge at the end.
+		// ── Phase 1: Stream events and collect metadata ──
 		info!("rebuild_state: streaming events in topological order...");
 		let stream_start = std::time::Instant::now();
 
 		let mut events_meta: Vec<(OwnedEventId, Vec<OwnedEventId>, Option<String>, u64)> =
 			Vec::new();
-		let mut room_version = ruma::RoomVersionId::V1;
+		let mut room_version = RoomVersionId::V1;
 		let mut room_version_found = false;
 
 		let mut stream = std::pin::pin!(self.topo_pdus(room_id, None));
@@ -66,106 +73,274 @@ impl Service {
 			stream_start.elapsed(),
 		);
 
-		// Build event-id set for filtering missing parents + forward extremity calc
+		// ── Phase 2: Pre-load ALL events into RAM ──
+		let prefetch_start = std::time::Instant::now();
+		let event_cache: HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>> = {
+			let event_ids_stream =
+				futures::stream::iter(events_meta.iter().map(|(eid, ..)| eid.clone()));
+			self.multi_get_pdus(Some(room_id), event_ids_stream)
+				.filter_map(|r| async move { r.ok() })
+				.map(|mut pdu| {
+					pdu.rejected = false;
+					(pdu.event_id.clone(), Arc::new(pdu))
+				})
+				.collect()
+				.await
+		};
+		info!(
+			"rebuild_state: pre-loaded {} events into RAM in {:?}",
+			event_cache.len(),
+			prefetch_start.elapsed(),
+		);
+
+		// Build event set for filtering
 		let event_set: HashSet<&OwnedEventId> = events_meta.iter().map(|(eid, ..)| eid).collect();
 
-		let rebuild_start = std::time::Instant::now();
-		debug!("rebuild_state: starting state resolution...");
+		// ── Phase 2b: Pre-compute auth chains bottom-up ──
+		// Since events are in topo order, each event's auth chain parents are
+		// already computed. We store chains as roaring bitmaps indexed by event
+		// position for compact O(1) union operations.
+		let auth_chain_start = std::time::Instant::now();
+		let eid_to_idx: HashMap<&OwnedEventId, u32> = events_meta
+			.iter()
+			.enumerate()
+			.map(|(i, (eid, ..))| (eid, u32::try_from(i).expect("room has > 2^32 (4B) events")))
+			.collect();
+		let idx_to_eid: Vec<&OwnedEventId> = events_meta.iter().map(|(eid, ..)| eid).collect();
 
-		let mut ssh_cache: HashMap<OwnedEventId, u64> = HashMap::new();
-		let mut resolved_state_cache: HashMap<Vec<u64>, u64> = HashMap::new();
-		let mut processed = 0_usize;
-		let mut single_parent_count = 0_usize;
-		let mut no_parent_count = 0_usize;
+		let mut auth_chain_bitmaps: Vec<roaring::RoaringBitmap> =
+			Vec::with_capacity(events_meta.len());
+		for (eid, ..) in &events_meta {
+			let mut chain = roaring::RoaringBitmap::new();
+			if let Some(pdu) = event_cache.get(eid) {
+				for auth_id in &pdu.auth_events {
+					if let Some(&i) = eid_to_idx.get(auth_id) {
+						chain.insert(i);
+						chain |= &auth_chain_bitmaps[to_usize(i)];
+					}
+				}
+			}
+			auth_chain_bitmaps.push(chain);
+		}
+		debug!(
+			"rebuild_state: pre-computed {} auth chains in {:?}",
+			auth_chain_bitmaps.len(),
+			auth_chain_start.elapsed(),
+		);
+
+		// ── Phase 3: In-memory state walk ──
+		// Track state per event using state group deduplication:
+		// - state_groups: Vec of unique state maps (indexed by group_id)
+		// - event_group: maps event_id → group_id
+		// Non-state single-parent events share their parent's group (no clone).
+		let rebuild_start = std::time::Instant::now();
+		let mut state_groups: Vec<StateMap<OwnedEventId>> = Vec::new();
+		let mut event_group: HashMap<OwnedEventId, usize> = HashMap::new();
 		let mut fork_resolve_count = 0_usize;
 		let mut cumulative_resolve_time = std::time::Duration::ZERO;
-		let empty_ssh = self
-			.services
-			.state_compressor
-			.save_state(room_id, Arc::new(BTreeSet::new()))
-			.await?
-			.shortstatehash;
-
-		let mut cork = Some(self.db.db.cork());
+		let mut processed = 0_usize;
 		let total_events = events_meta.len();
-		let mut current_shortstatehash = 0_u64;
+
+		// Group 0 = empty state (for events with no parents)
+		state_groups.push(StateMap::new());
+		let empty_group: usize = 0;
 
 		for (eid, prev_events, state_key, _depth) in &events_meta {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
 				debug!(
-					"rebuild_state: {}/{} events | single:{} none:{} resolved:{} | \
-					 cumulative_resolve: {:?} | elapsed: {:?}",
+					"rebuild_state: {}/{} events | {} groups | {} forks ({:?}) | elapsed: {:?}",
 					processed,
 					total_events,
-					single_parent_count,
-					no_parent_count,
+					state_groups.len(),
 					fork_resolve_count,
 					cumulative_resolve_time,
 					rebuild_start.elapsed(),
 				);
 			}
 
-			let pdu = self.get_pdu(eid).await?;
-			let loop_start = std::time::Instant::now();
-
-			// Find parent state — only consider parents that exist in our event set
-			let event_set_refs: HashSet<&ruma::EventId> =
-				event_set.iter().map(|id| &***id).collect();
-			let state_before = self
-				.resolve_state_before(
-					&mut TimelineStateResolver {
-						room_id,
-						room_version: &room_version,
-						event_set: &event_set_refs,
-						ssh_cache: &ssh_cache,
-						resolved_state_cache: &mut resolved_state_cache,
-						empty_ssh,
-					},
-					&pdu,
-				)
-				.await?;
-
-			// Update statistics
-			let prev_sshs: Vec<u64> = prev_events
+			// Collect parent groups (deduplicated)
+			let parent_groups: Vec<usize> = prev_events
 				.iter()
-				.filter(|prev_id| event_set.contains(prev_id))
-				.filter_map(|prev_id| ssh_cache.get(prev_id).copied())
+				.filter(|p| event_set.contains(p))
+				.filter_map(|p| event_group.get(p).copied())
+				.collect::<HashSet<usize>>()
+				.into_iter()
 				.collect();
-			let mut unique_sshs = prev_sshs.clone();
-			unique_sshs.sort_unstable();
-			unique_sshs.dedup();
-			match unique_sshs.len() {
-				| 1 => {
-					single_parent_count = single_parent_count.saturating_add(1);
-				},
-				| 0 => {
-					no_parent_count = no_parent_count.saturating_add(1);
-				},
+
+			let state_before_group = match parent_groups.len() {
+				| 0 => empty_group,
+				| 1 => parent_groups[0],
 				| _ => {
-					let slow_path_elapsed = loop_start.elapsed();
+					// Fork: resolve in-memory
+					let fork_start = std::time::Instant::now();
+					let fork_states: Vec<&StateMap<OwnedEventId>> =
+						parent_groups.iter().map(|&g| &state_groups[g]).collect();
+
+					let event_fetch = |id: OwnedEventId| {
+						let pdu = event_cache.get(&id).cloned();
+						async move { pdu }
+					};
+
+					let event_batch_fetch = |ids: Vec<OwnedEventId>| {
+						let results: Vec<Arc<conduwuit_core::PduEvent>> = ids
+							.iter()
+							.filter_map(|id| event_cache.get(id).cloned())
+							.collect();
+						async move { results }
+					};
+
+					// Pre-computed auth chain lookup via roaring bitmaps
+					let auth_chain_fetch = |events: Vec<OwnedEventId>| {
+						let mut combined = roaring::RoaringBitmap::new();
+						for id in &events {
+							if let Some(&i) = eid_to_idx.get(id) {
+								combined.insert(i);
+								combined |= &auth_chain_bitmaps[to_usize(i)];
+							}
+						}
+						let chain: HashSet<OwnedEventId> = combined
+							.iter()
+							.map(|i| idx_to_eid[to_usize(i)].clone())
+							.collect();
+						async move { chain }
+					};
+
+					let resolved = state_res::resolve(
+						&room_version,
+						fork_states.iter().copied(),
+						&event_fetch,
+						Some(&event_batch_fetch),
+						&auth_chain_fetch,
+						None::<&fn(Vec<OwnedEventId>)>,
+					)
+					.await;
+
+					let fork_elapsed = fork_start.elapsed();
 					fork_resolve_count = fork_resolve_count.saturating_add(1);
 					cumulative_resolve_time =
-						cumulative_resolve_time.saturating_add(slow_path_elapsed);
+						cumulative_resolve_time.saturating_add(fork_elapsed);
 
-					if slow_path_elapsed.as_millis() > 50 {
+					if fork_elapsed.as_millis() > 50 {
 						debug!(
-							"rebuild_state: SLOW fork #{fork_resolve_count} for {eid} ({} \
-							 parents, {} unique ssh) took {:?}",
-							prev_sshs.len(),
-							prev_sshs.iter().collect::<HashSet<_>>().len(),
-							slow_path_elapsed
+							"rebuild_state: SLOW fork #{} for {} ({} parents) took {:?}",
+							fork_resolve_count,
+							eid,
+							parent_groups.len(),
+							fork_elapsed,
 						);
 					}
+
+					match resolved {
+						| Ok(resolved_state) => {
+							let gid = state_groups.len();
+							state_groups.push(resolved_state);
+							gid
+						},
+						| Err(e) => {
+							warn!(
+								"rebuild_state: fork resolution failed for {}: {} — using first \
+								 parent",
+								eid, e,
+							);
+							parent_groups[0]
+						},
+					}
 				},
+			};
+
+			// Apply state event delta
+			let group_after = if let Some(sk) = state_key {
+				let Some(pdu) = event_cache.get(eid) else {
+					warn!("rebuild_state: state event {eid} missing from cache — skipping");
+					event_group.insert(eid.clone(), state_before_group);
+					continue;
+				};
+				let event_type: ruma::events::StateEventType = pdu.kind.to_string().into();
+
+				let mut new_state = state_groups[state_before_group].clone();
+				new_state.insert((event_type, sk.as_str().into()), eid.clone());
+				let gid = state_groups.len();
+				state_groups.push(new_state);
+				gid
+			} else {
+				state_before_group
+			};
+
+			event_group.insert(eid.clone(), group_after);
+
+			if processed.is_multiple_of(5000) {
+				tokio::task::yield_now().await;
 			}
+		}
 
-			let mut state_after = state_before;
+		info!(
+			"rebuild_state: in-memory walk done in {:?} | {} events, {} state groups, {} forks \
+			 ({:?})",
+			rebuild_start.elapsed(),
+			processed,
+			state_groups.len(),
+			fork_resolve_count,
+			cumulative_resolve_time,
+		);
 
+		// ── Phase 4: Batch-write to DB ──
+		let write_start = std::time::Instant::now();
+		let mut cork = Some(self.db.db.cork());
+
+		// Deduplicate: group_id → shortstatehash (only compress each unique state once)
+		let mut group_to_ssh: HashMap<usize, u64> = HashMap::new();
+		let empty_ssh = self
+			.services
+			.state_compressor
+			.save_state(room_id, Arc::new(BTreeSet::new()))
+			.await?
+			.shortstatehash;
+		group_to_ssh.insert(empty_group, empty_ssh);
+
+		let mut current_shortstatehash = empty_ssh;
+		let mut groups_compressed = 0_usize;
+
+		for (eid, _prev, state_key, _depth) in &events_meta {
+			let Some(&group_id) = event_group.get(eid) else {
+				continue;
+			};
+
+			// Lazily compress state groups as we encounter them
+			let ssh = if let Some(&cached_ssh) = group_to_ssh.get(&group_id) {
+				cached_ssh
+			} else {
+				// Compress this state group → shortstatehash
+				let state_map = &state_groups[group_id];
+				let mut compressed = BTreeSet::new();
+				for ((ty, sk), event_id) in state_map {
+					let ssk = self
+						.services
+						.short
+						.get_or_create_shortstatekey(&ty.to_string().into(), sk)
+						.await;
+					let sei = self
+						.services
+						.short
+						.get_or_create_shorteventid(event_id)
+						.await;
+					compressed.insert(rooms::state_compressor::compress_state_event(ssk, sei));
+				}
+				let result = self
+					.services
+					.state_compressor
+					.save_state(room_id, Arc::new(compressed))
+					.await?;
+				let ssh = result.shortstatehash;
+				group_to_ssh.insert(group_id, ssh);
+				groups_compressed = groups_compressed.saturating_add(1);
+				ssh
+			};
+
+			// Write pdu_shortstatehash for this event
 			if state_key.is_some() {
-				// State event — need to compute the state diff
-				let pdu = self.get_pdu(eid).await?;
+				// State event: compute_state_for_event equivalent
 				let (_, mut json) = self.db.get_from_eventid_pdu(eid).await?;
 				let pdu_id: conduwuit_core::matrix::pdu::RawPduId =
 					conduwuit_core::matrix::pdu::PduId {
@@ -173,48 +348,37 @@ impl Service {
 						shorteventid: conduwuit_core::matrix::pdu::PduCount::Normal(0),
 					}
 					.into();
-				self.compute_state_for_event(&pdu, eid, &mut json, &mut state_after, &pdu_id)
-					.await;
+				if let Some(pdu) = event_cache.get(eid) {
+					let mut ssh_mut = ssh;
+					self.compute_state_for_event(pdu, eid, &mut json, &mut ssh_mut, &pdu_id)
+						.await;
+				}
 			} else {
-				// Non-state event — just set the pdu_shortstatehash
+				// Non-state event: just set pdu_shortstatehash
 				let shorteventid = self.services.short.get_or_create_shorteventid(eid).await;
 				self.services
 					.state
-					.set_pdu_shortstatehash(shorteventid, state_before);
+					.set_pdu_shortstatehash(shorteventid, ssh);
 			}
 
-			ssh_cache.insert(eid.clone(), state_after);
-			current_shortstatehash = state_after;
+			current_shortstatehash = ssh;
 
-			if processed.is_multiple_of(1000) {
-				info!("rebuild_state: processed {processed} events...");
+			if groups_compressed.is_multiple_of(100) && groups_compressed > 0 {
 				drop(cork.take());
 				tokio::task::yield_now().await;
 				cork = Some(self.db.db.cork());
-			}
-
-			let full_loop_elapsed = loop_start.elapsed();
-			if full_loop_elapsed.as_millis() > 100 {
-				warn!(
-					"rebuild_state: full loop iteration for {eid} took {:?}",
-					full_loop_elapsed
-				);
 			}
 		}
 
 		drop(cork.take());
 
-		debug!(
-			"rebuild_state: DONE {processed} events in {:?} | single:{single_parent_count} \
-			 none:{no_parent_count} resolved:{fork_resolve_count} | cumulative_resolve: {:?}",
-			rebuild_start.elapsed(),
-			cumulative_resolve_time,
+		info!(
+			"rebuild_state: batch-write done in {:?} | {} unique groups compressed",
+			write_start.elapsed(),
+			groups_compressed,
 		);
 
-		// Final multi-head resolution: find all forward extremities (events with no
-		// children in the DAG), collect their unique SSHs, and merge them.
-		// This handles disconnected components whose states were never merged
-		// during the linear walk.
+		// ── Phase 5: Final multi-head extremity merge ──
 		let mut has_children: HashSet<&OwnedEventId> = HashSet::new();
 		for (_, prev_events, ..) in &events_meta {
 			for parent in prev_events {
@@ -223,11 +387,15 @@ impl Service {
 				}
 			}
 		}
+
 		let extremity_sshs: Vec<u64> = events_meta
 			.iter()
 			.map(|(eid, ..)| eid)
 			.filter(|eid| !has_children.contains(eid))
-			.filter_map(|eid| ssh_cache.get(eid).copied())
+			.filter_map(|eid| {
+				let group = event_group.get(eid)?;
+				group_to_ssh.get(group).copied()
+			})
 			.collect::<HashSet<_>>()
 			.into_iter()
 			.collect();
@@ -285,8 +453,7 @@ impl Service {
 					.shortstatehash;
 				current_shortstatehash = merged_ssh;
 			} else {
-				// Conflicting keys exist — need to pick winners
-				// For non-auth conflicts, pick the event with the latest depth
+				// Conflicting keys exist — pick winners by depth
 				debug!(
 					"rebuild_state: {} conflicting keys across {} components — resolving...",
 					conflicting.len(),
