@@ -523,6 +523,7 @@ pub async fn process_timeline_upgrade(
 		room_id,
 		event_id,
 		incoming_pdu.prev_events(),
+		Some(incoming_pdu.sender().server_name()),
 	))
 	.await?;
 

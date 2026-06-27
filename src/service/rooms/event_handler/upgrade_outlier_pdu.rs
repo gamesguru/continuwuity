@@ -544,7 +544,20 @@ where
 					}
 				}
 
-				state_delta_opt = delta;
+				// CRITICAL: If soft-failed, discard the state delta. Without
+				// this, a banned user's state event (e.g. room name change,
+				// power level edit) would be applied via force_state below —
+				// modifying the room's active state — even though the event
+				// is correctly withheld from the timeline.
+				//
+				// DAG integrity is preserved because append_incoming_pdu
+				// still calls set_event_state using state_ids_compressed
+				// (computed prior to the OCC loop).
+				if soft_fail {
+					state_delta_opt = None;
+				} else {
+					state_delta_opt = delta;
+				}
 				state_lock = lock;
 				break;
 			}

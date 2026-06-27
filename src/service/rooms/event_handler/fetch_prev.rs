@@ -26,6 +26,7 @@ pub(super) async fn fetch_prev<'a, Pdu, Events>(
 	room_id: &RoomId,
 	latest_event: &'a EventId,
 	initial_set: Events,
+	event_sender_server: Option<&ruma::ServerName>,
 ) -> Result<(
 	Vec<OwnedEventId>,
 	HashMap<OwnedEventId, (PduEvent, BTreeMap<String, CanonicalJsonValue>)>,
@@ -52,9 +53,10 @@ where
 	}
 
 	let servers = self
-		.build_federation_server_list(
+		.build_federation_server_list_with_sender(
 			room_id,
 			origin,
+			event_sender_server,
 			self.services.server.config.federation_fallback_room_servers,
 		)
 		.await;
