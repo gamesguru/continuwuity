@@ -41,6 +41,7 @@ pub struct Metrics {
 	pub transactions_max_time_1m: AtomicU64,
 	pub transactions_slow_1s: AtomicU64,
 	pub transactions_slow_10s: AtomicU64,
+	pub transactions_slow_100s: AtomicU64,
 
 	// 1-minute rates
 	pub requests_rate_1m: AtomicU64,
@@ -96,6 +97,7 @@ impl Metrics {
 			transactions_max_time_1m: AtomicU64::new(0),
 			transactions_slow_1s: AtomicU64::new(0),
 			transactions_slow_10s: AtomicU64::new(0),
+			transactions_slow_100s: AtomicU64::new(0),
 			requests_rate_1m: AtomicU64::new(0),
 			dns_rate_1m: AtomicU64::new(0),
 			transactions_rate_1m: AtomicU64::new(0),

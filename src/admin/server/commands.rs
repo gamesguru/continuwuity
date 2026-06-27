@@ -578,16 +578,23 @@ pub(super) async fn diagnostics(&self) -> Result {
 	writeln!(info, "**Total Processing Time:** {total_time_s}.{total_time_frac}s")?;
 	writeln!(
 		info,
-		"**Slow Txns (>1s):** {}",
+		"**Slow Txns (>1s):**      {}",
 		metrics
 			.transactions_slow_1s
 			.load(std::sync::atomic::Ordering::Relaxed)
 	)?;
 	writeln!(
 		info,
-		"**Slow Txns (>10s):** {}",
+		"**Very Slow Txns (>10s):** {}",
 		metrics
 			.transactions_slow_10s
+			.load(std::sync::atomic::Ordering::Relaxed)
+	)?;
+	writeln!(
+		info,
+		"**Stalled Txns (>100s):**  {}",
+		metrics
+			.transactions_slow_100s
 			.load(std::sync::atomic::Ordering::Relaxed)
 	)?;
 

@@ -275,33 +275,58 @@ async fn process_inbound_transaction(
 			.transactions_slow_10s
 			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 	}
+	if elapsed > Duration::from_secs(100) {
+		services
+			.server
+			.metrics
+			.transactions_slow_100s
+			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	}
 
+	// Print update
 	if elapsed < Duration::from_millis(50) {
 		debug!(
 			target: "federation",
 			pdus = body.pdus.len(),
 			edus = body.edus.len(),
 			?elapsed,
-			"Finished processing transaction"
+			"Nominal txn"
 		);
-	} else if elapsed > Duration::from_secs(10) {
-		warn!(
-			target: "federation",
-			pdus = body.pdus.len(),
-			edus = body.edus.len(),
-			?elapsed,
-			"Slow transaction"
-		);
-	} else {
+	} else if elapsed < Duration::from_secs(1) {
 		info!(
 			target: "federation",
 			pdus = body.pdus.len(),
 			edus = body.edus.len(),
 			?elapsed,
-			"Finished processing transaction"
+			"Nominal txn"
+		);
+	} else if elapsed < Duration::from_secs(10) {
+		info!(
+			target: "federation",
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Slow txn"
+		);
+	} else if elapsed < Duration::from_secs(100) {
+		warn!(
+			target: "federation",
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Very slow txn"
+		);
+	} else {
+		warn!(
+			target: "federation",
+			pdus = body.pdus.len(),
+			edus = body.edus.len(),
+			?elapsed,
+			"Stalled txn"
 		);
 	}
 
+	// Bundle response
 	let response = send_transaction_message::v1::Response {
 		pdus: results
 			.into_iter()

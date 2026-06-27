@@ -88,6 +88,7 @@ impl crate::Service for Service {
 		let mut last_txn_time = 0;
 		let mut last_slow_1s = 0;
 		let mut last_slow_10s = 0;
+		let mut last_slow_100s = 0;
 
 		let mut shutdown = self.server.signal.subscribe();
 
@@ -209,8 +210,14 @@ impl crate::Service for Service {
 				.metrics
 				.transactions_slow_10s
 				.load(std::sync::atomic::Ordering::Relaxed);
+			let slow_100s = self
+				.server
+				.metrics
+				.transactions_slow_100s
+				.load(std::sync::atomic::Ordering::Relaxed);
 			let d_slow_1s = slow_1s.saturating_sub(last_slow_1s);
 			let d_slow_10s = slow_10s.saturating_sub(last_slow_10s);
+			let d_slow_100s = slow_100s.saturating_sub(last_slow_100s);
 
 			// Integer-only timing: whole.frac via division + modulo
 			let txn_avg_us = d_txn_time_us.checked_div(d_transactions).unwrap_or(0);
@@ -256,8 +263,8 @@ impl crate::Service for Service {
 				target: "stats",
 				"Network stats: (Last 1m) - HTTP Router: {} reqs ({:.2}% fail, {:.2}ms avg \
 				 latency) | DNS Resolver: {} reqs ({:.2}% fail, {:.2}ms avg latency) | Fed \
-				 Txns: {} (total: {}, {}.{}ms avg, {}.{}ms max, {}.{}s wall, {} >1s, {} \
-				 >10s) | Background: {} pres, {} bfill, {} send, {} state_res, {} auth_fetch, {} spaces",
+				 Txns: {} (total: {}, {}.{}ms avg, {}.{}ms max, {}.{}s wall, {} slow, {} \
+				 very slow, {} stalled) | Background: {} pres, {} bfill, {} send, {} state_res, {} auth_fetch, {} spaces",
 				d_http_total,
 				http_fail_rate,
 				http_avg_latency_ms,
@@ -274,6 +281,7 @@ impl crate::Service for Service {
 				txn_wall_frac,
 				d_slow_1s,
 				d_slow_10s,
+				d_slow_100s,
 				presence,
 				backfill,
 				sending,
@@ -313,6 +321,7 @@ impl crate::Service for Service {
 			last_txn_time = txn_time;
 			last_slow_1s = slow_1s;
 			last_slow_10s = slow_10s;
+			last_slow_100s = slow_100s;
 		}
 
 		Ok(())
