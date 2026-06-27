@@ -26,7 +26,7 @@ pub(super) async fn fetch_prev<'a, Pdu, Events>(
 	room_id: &RoomId,
 	latest_event: &'a EventId,
 	initial_set: Events,
-	event_sender_server: Option<&ruma::ServerName>,
+	event_sender_server: Option<&ServerName>,
 ) -> Result<(
 	Vec<OwnedEventId>,
 	HashMap<OwnedEventId, (PduEvent, BTreeMap<String, CanonicalJsonValue>)>,

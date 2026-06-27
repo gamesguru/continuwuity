@@ -72,6 +72,7 @@ pub async fn get_verify_key(
 	let notary_first = self.services.server.config.query_trusted_key_servers_first;
 	let notary_only = self.services.server.config.only_query_trusted_key_servers;
 
+	// .remove() takes ownership from the temporary map, avoiding a clone
 	if let Some(result) = self.verify_keys_for(origin).await.remove(key_id) {
 		trace!("Found key in cache");
 		return Ok(result);

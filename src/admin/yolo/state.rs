@@ -857,6 +857,7 @@ pub(super) async fn set_state_event(
 
 	self.bail_restricted()?;
 
+	// TODO: transactionalize this whole function for safety & idempotency
 	let event_type: StateEventType = event_type.into();
 
 	// Verify the event exists locally (timeline or outlier)
