@@ -149,8 +149,6 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
-
-
       - name: Build Complement Docker image
         run: make complement/docker PROFILE=${{ matrix.profile }}
 
@@ -240,7 +238,7 @@ jobs:
           echo "$FAILED_TESTS" | tee -a "$GITHUB_OUTPUT"
           echo "EOF" | tee -a "$GITHUB_OUTPUT"
 
-          echo "### Complement Test Results (${{ matrix.arch }} ${{ matrix.os }})" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "### Complement Test Results (${{ matrix.arch }} ${{ matrix.os }} v${{ matrix.room_version }})" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "| Status | Count |" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "|--------|-------|" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "| ✓ Pass | $PASS |" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -407,6 +405,7 @@ jobs:
             const total = ${{ steps.results.outputs.total || 0 }};
             const arch = '${{ matrix.arch }}';
             const os = '${{ matrix.os }}';
+            const roomVersion = '${{ matrix.room_version }}';
             const failedTestsRaw = process.env.FAILED_TESTS || '';
 
             const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
@@ -417,7 +416,7 @@ jobs:
             }
 
             let currentRun = [
-              `## Complement Test Results (${arch} ${os})`,
+              `## Complement Test Results (${arch} ${os} v${roomVersion})`,
               `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
               `**Logs:** [View / Download Logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               '',
@@ -441,7 +440,7 @@ jobs:
               issue_number: context.issue.number,
             });
 
-            const marker = `<!-- complement-test-results-${arch}-${os} -->`;
+            const marker = `<!-- complement-test-results-${arch}-${os}-v${roomVersion} -->`;
             const existing = comments.find(c =>
               c.body && c.body.includes(marker)
             );
@@ -449,7 +448,7 @@ jobs:
             let body = currentRun + '\n\n' + marker;
 
             if (existing) {
-              let oldBody = existing.body.replace(marker, '').replace(`## Complement Test Results (${arch} ${os})`, '').trim();
+              let oldBody = existing.body.replace(marker, '').replace(`## Complement Test Results (${arch} ${os} v${roomVersion})`, '').trim();
               if (oldBody.length > 0) {
                 const maxPreviousRuns = 6;
                 let parts = oldBody.split('<details><summary>Previous Runs</summary>');
@@ -486,7 +485,8 @@ jobs:
         run: |
           ARCH="${{ matrix.arch }}"
           OS="${{ matrix.os }}"
-          SHA="${{ github.sha }}"
+          RV="${{ matrix.room_version }}"
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           if [ "${RESULTS_OUTCOME}" = "success" ]; then
@@ -495,9 +495,9 @@ jobs:
             SKIP="${{ steps.results.outputs.skip || 0 }}"
             TOTAL="${{ steps.results.outputs.total || 0 }}"
             MARK=$([[ "$FAIL" == "0" ]] && echo "✓" || echo "✗")
-            MSG="${MARK} Complement (${ARCH} ${OS}): ${PASS} pass, ${FAIL} fail, ${SKIP} skip / ${TOTAL} total -- ${REF} @ ${SHA:0:7} -- ${RUN_URL}"
+            MSG="${MARK} Complement (${ARCH} ${OS} v${RV}): ${PASS} pass, ${FAIL} fail, ${SKIP} skip / ${TOTAL} total -- ${REF} @ ${SHA:0:7} -- ${RUN_URL}"
           else
-            MSG="✗ Complement (${ARCH} ${OS}): job failed before producing test counts -- ${REF} @ ${SHA:0:7} -- ${RUN_URL}"
+            MSG="✗ Complement (${ARCH} ${OS} v${RV}): job failed before producing test counts -- ${REF} @ ${SHA:0:7} -- ${RUN_URL}"
           fi
 
           if [ -n "${MATRIX_TOKEN}" ]; then

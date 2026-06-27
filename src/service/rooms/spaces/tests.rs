@@ -67,22 +67,85 @@ fn get_summary_children() {
 	}
 	.into();
 
-	assert_eq!(
-		get_parent_children_via(&summary, false)
-			.map(|(k, v)| (k, v.collect::<Vec<_>>()))
-			.collect::<Vec<_>>(),
-		vec![
-			(owned_room_id!("!foo:example.org"), vec![owned_server_name!("example.org")]),
-			(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")]),
-			(owned_room_id!("!baz:example.org"), vec![owned_server_name!("example.org")])
-		]
-	);
-	assert_eq!(
-		get_parent_children_via(&summary, true)
-			.map(|(k, v)| (k, v.collect::<Vec<_>>()))
-			.collect::<Vec<_>>(),
-		vec![(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")])]
-	);
+	let all = get_parent_children_via(&summary, false);
+	assert_eq!(all, vec![
+		(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")]),
+		(owned_room_id!("!baz:example.org"), vec![owned_server_name!("example.org")]),
+		(owned_room_id!("!foo:example.org"), vec![owned_server_name!("example.org")])
+	]);
+	let suggested = get_parent_children_via(&summary, true);
+	assert_eq!(suggested, vec![(owned_room_id!("!bar:example.org"), vec![owned_server_name!(
+		"example.org"
+	)])]);
+}
+
+#[test]
+fn get_summary_children_sorted_by_order() {
+	let summary: SpaceHierarchyParentSummary = SpaceHierarchyParentSummaryInit {
+		num_joined_members: UInt::from(1_u32),
+		room_id: owned_room_id!("!root:example.org"),
+		world_readable: true,
+		guest_can_join: true,
+		join_rule: SpaceRoomJoinRule::Public,
+		children_state: vec![
+			// No order field — should sort last, tiebreak by room_id
+			serde_json::from_str(
+				r#"{
+                      "content": { "via": ["example.org"], "suggested": false },
+                      "origin_server_ts": 1,
+                      "sender": "@alice:example.org",
+                      "state_key": "!zoo:example.org",
+                      "type": "m.space.child"
+                    }"#,
+			)
+			.unwrap(),
+			// order = "b"
+			serde_json::from_str(
+				r#"{
+                      "content": { "via": ["example.org"], "order": "b", "suggested": false },
+                      "origin_server_ts": 2,
+                      "sender": "@alice:example.org",
+                      "state_key": "!beta:example.org",
+                      "type": "m.space.child"
+                    }"#,
+			)
+			.unwrap(),
+			// order = "a"
+			serde_json::from_str(
+				r#"{
+                      "content": { "via": ["example.org"], "order": "a", "suggested": false },
+                      "origin_server_ts": 3,
+                      "sender": "@alice:example.org",
+                      "state_key": "!alpha:example.org",
+                      "type": "m.space.child"
+                    }"#,
+			)
+			.unwrap(),
+			// No order field — should sort last, tiebreak by room_id (before !zoo)
+			serde_json::from_str(
+				r#"{
+                      "content": { "via": ["example.org"], "suggested": false },
+                      "origin_server_ts": 4,
+                      "sender": "@alice:example.org",
+                      "state_key": "!aaa:example.org",
+                      "type": "m.space.child"
+                    }"#,
+			)
+			.unwrap(),
+		],
+		allowed_room_ids: vec![],
+	}
+	.into();
+
+	let result = get_parent_children_via(&summary, false);
+	let room_ids: Vec<_> = result.iter().map(|(id, _)| id.as_str()).collect();
+	// order="a" first, then order="b", then no-order sorted by room_id
+	assert_eq!(room_ids, vec![
+		"!alpha:example.org",
+		"!beta:example.org",
+		"!aaa:example.org",
+		"!zoo:example.org",
+	]);
 }
 
 #[test]
@@ -144,4 +207,28 @@ fn pagination_token_to_string() {
 		.to_string(),
 		"9,34_3_1_true"
 	);
+}
+
+use crate::rooms::spaces::is_join_rule_accessible;
+
+#[test]
+fn test_is_join_rule_accessible() {
+	// If user is joined or invited, always true
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Invite, false, true), Some(true));
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Restricted, false, true), Some(true));
+
+	// If world_readable is true, always true
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Invite, true, false), Some(true));
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Restricted, true, false), Some(true));
+
+	// Public join rules are always true
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Public, false, false), Some(true));
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Knock, false, false), Some(true));
+
+	// Restricted requires checking allowed_rooms (returns None)
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Restricted, false, false), None);
+
+	// Private/Invite returns false
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Invite, false, false), Some(false));
+	assert_eq!(is_join_rule_accessible(&SpaceRoomJoinRule::Private, false, false), Some(false));
 }

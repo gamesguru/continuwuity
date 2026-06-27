@@ -44,9 +44,27 @@ ON run_details (run_id, test_name);
 
 -- Performance indexes
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
+CREATE INDEX IF NOT EXISTS idx_run_details_covering ON run_details (run_id, test_name, status);
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 
--- Combine Regressions View: Compares directly against the most recent 'main' baseline
+-- Pre-computed set of tests that have ever passed (any room version).
+-- Updated incrementally by CI via UPSERT after each ingest.
+-- Legacy: was a MATERIALIZED VIEW with rv, now a regular table keyed by test_name only.
+CREATE TABLE IF NOT EXISTS ever_passed (
+    test_name text PRIMARY KEY,
+    last_passed text,
+    last_commit text,
+    last_branch text,
+    branches text[] DEFAULT '{}'
+);
+
+-- Backward compat alias (queries reference mv_ever_passed)
+-- Adds a dummy rv column so existing queries still work during migration.
+CREATE OR REPLACE VIEW mv_ever_passed AS
+SELECT *, NULL::text AS rv FROM ever_passed;
+
+-- Global regression view: a test is a "new failure" if it fails now
+-- AND has ever passed in any prior run (regardless of room_version).
 CREATE OR REPLACE VIEW v_run_regressions AS
 SELECT
     r.id,
@@ -65,37 +83,25 @@ SELECT
     r.n_pass,
     r.n_fail,
     r.n_skip,
-    (SELECT COUNT(*) FROM run_details WHERE run_id = dbr.default_baseline_run_id) as baseline_total,
-    counts.run_total,
-    (counts.run_total - (SELECT COUNT(*) FROM run_details WHERE run_id = dbr.default_baseline_run_id)) as diff_total,
-    -- Calculate deltas vs Default Baseline
-    counts.new_pass,
-    counts.new_skip,
-    counts.new_fail,
-    counts.new_failures_list,
-    counts.new_passes_list
+    counts.*
 FROM runs r
-CROSS JOIN LATERAL (
-    SELECT id AS default_baseline_run_id FROM runs
-    WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
-    OR version_string LIKE '%main%')
-    AND room_version IS NOT DISTINCT FROM r.room_version
-    ORDER BY run_date DESC
-    LIMIT 1
-) dbr
 LEFT JOIN LATERAL (
     SELECT
-        COUNT(*) as run_total,
-        COUNT(*) FILTER (WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass') as new_pass,
-        COUNT(*) FILTER (WHERE rd.status = 'skip' AND mb.status IS NOT NULL AND mb.status != 'skip') as new_skip,
-        COUNT(*) FILTER (WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail') as new_fail,
-        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail') as new_failures_list,
-        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass') as new_passes_list
+        COUNT(*) AS run_total,
+        COUNT(*) FILTER (WHERE rd.status = 'pass' AND ep.test_name IS NULL) AS new_pass,
+        COUNT(*) FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) AS new_fail,
+        COUNT(*) FILTER (WHERE rd.status = 'skip') AS new_skip,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name)
+            FILTER (WHERE rd.status = 'fail' AND ep.test_name IS NOT NULL) AS new_failures_list,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name)
+            FILTER (WHERE rd.status = 'pass' AND ep.test_name IS NULL) AS new_passes_list
     FROM run_details rd
-    LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = dbr.default_baseline_run_id
+    LEFT JOIN mv_ever_passed ep
+        ON ep.test_name = rd.test_name
     WHERE rd.run_id = r.id
 ) counts ON TRUE
 WHERE r.n_pass > 0 AND counts.run_total > 0;
 
--- Ensure read-only users can query the view and raw tables even after they get recreated by CI
+-- Auto-grant SELECT on all current and future objects so read-only users always work
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO public;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO public;

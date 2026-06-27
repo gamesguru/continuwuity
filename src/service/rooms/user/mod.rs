@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use conduwuit::{Result, implement};
-use database::{Deserialized, Map};
+use conduwuit::{Result, implement, utils::stream::TryReadyExt};
+use database::{Database, Deserialized, Map};
 use ruma::{RoomId, UserId};
 
-use crate::{Dep, globals};
+use crate::{Dep, globals, rooms};
 
 pub struct Service {
 	db: Data,
@@ -12,26 +12,33 @@ pub struct Service {
 }
 
 struct Data {
+	db: Arc<Database>,
 	userroomid_notificationcount: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
 	roomuserid_lastnotificationread: Arc<Map>,
+	roomsynctoken_shortstatehash: Arc<Map>,
 }
 
 struct Services {
 	globals: Dep<globals::Service>,
+	short: Dep<rooms::short::Service>,
 }
 
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			db: Data {
+				db: args.db.clone(),
 				userroomid_notificationcount: args.db["userroomid_notificationcount"].clone(),
 				userroomid_highlightcount: args.db["userroomid_highlightcount"].clone(),
-				roomuserid_lastnotificationread: args.db["userroomid_highlightcount"].clone(),
+				roomuserid_lastnotificationread: args.db["roomuserid_lastnotificationread"]
+					.clone(),
+				roomsynctoken_shortstatehash: args.db["roomsynctoken_shortstatehash"].clone(),
 			},
 
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
+				short: args.depend::<rooms::short::Service>("rooms::short"),
 			},
 		}))
 	}
@@ -83,4 +90,45 @@ pub async fn last_notification_read(&self, user_id: &UserId, room_id: &RoomId) -
 		.await
 		.deserialized()
 		.unwrap_or(0)
+}
+
+#[implement(Service)]
+pub async fn count_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
+	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+
+	// Create a prefix to search by - all entries for this room will start with its
+	// short ID
+	let prefix = &[shortroomid];
+
+	let count = self
+		.db
+		.roomsynctoken_shortstatehash
+		.keys_prefix_raw(prefix)
+		.ready_try_fold(0_usize, |acc, _| Ok(acc.saturating_add(1)))
+		.await?;
+
+	Ok(count)
+}
+
+#[implement(Service)]
+pub async fn delete_room_tokens(&self, room_id: &RoomId) -> Result<usize> {
+	let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+
+	// Create a prefix to search by - all entries for this room will start with its
+	// short ID
+	let prefix = &[shortroomid];
+
+	let _cork = self.db.db.cork();
+
+	let count = self
+		.db
+		.roomsynctoken_shortstatehash
+		.keys_prefix_raw(prefix)
+		.ready_try_fold(0_usize, |acc, key| {
+			self.db.roomsynctoken_shortstatehash.remove(key);
+			Ok(acc.saturating_add(1))
+		})
+		.await?;
+
+	Ok(count)
 }

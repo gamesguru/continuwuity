@@ -6,15 +6,15 @@ use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
 use conduwuit_core::{
-	Err, Error, Event, PduEvent, Result, implement,
+	Err, Error, Event, PduEvent, Result, debug, implement,
 	utils::{
 		IterStream,
-		future::{BoolExt, TryExtExt},
+		future::TryExtExt,
 		math::usize_from_f64,
 		stream::{BroadbandExt, ReadyExt},
 	},
 };
-use futures::{FutureExt, Stream, StreamExt, TryFutureExt, pin_mut, stream::FuturesUnordered};
+use futures::{FutureExt, Stream, StreamExt, TryFutureExt, stream::FuturesUnordered};
 use lru_cache::LruCache;
 use ruma::{
 	OwnedEventId, OwnedRoomId, OwnedServerName, RoomId, ServerName, UserId,
@@ -40,6 +40,7 @@ use crate::{Dep, rooms, sending};
 pub struct Service {
 	services: Services,
 	pub roomid_spacehierarchy_cache: Mutex<Cache>,
+	pub negative_cache_ts: Mutex<LruCache<OwnedRoomId, std::time::Instant>>,
 }
 
 struct Services {
@@ -70,6 +71,8 @@ pub enum Identifier<'a> {
 
 type Cache = LruCache<OwnedRoomId, Option<CachedSpaceHierarchySummary>>;
 
+const NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(0);
+
 #[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
@@ -88,6 +91,7 @@ impl crate::Service for Service {
 				sending: args.depend::<sending::Service>("sending"),
 			},
 			roomid_spacehierarchy_cache: Mutex::new(LruCache::new(usize_from_f64(cache_size)?)),
+			negative_cache_ts: Mutex::new(LruCache::new(usize_from_f64(cache_size)?)),
 		}))
 	}
 
@@ -99,7 +103,10 @@ impl crate::Service for Service {
 		Ok(())
 	}
 
-	async fn clear_cache(&self) { self.roomid_spacehierarchy_cache.lock().await.clear(); }
+	async fn clear_cache(&self) {
+		self.roomid_spacehierarchy_cache.lock().await.clear();
+		self.negative_cache_ts.lock().await.clear();
+	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
 }
@@ -126,6 +133,7 @@ pub async fn get_summary_and_children_local(
 			let is_accessible_child = self.is_accessible_child(
 				current_room,
 				&cached.summary.join_rule,
+				cached.summary.world_readable,
 				identifier,
 				allowed_rooms,
 			);
@@ -151,6 +159,40 @@ pub async fn get_summary_and_children_local(
 		.boxed()
 		.await
 	else {
+		debug!(room_id = %current_room, "spaces: local summary synthesis failed");
+		return Ok(None);
+	};
+
+	self.roomid_spacehierarchy_cache.lock().await.insert(
+		current_room.to_owned(),
+		Some(CachedSpaceHierarchySummary { summary: summary.clone() }),
+	);
+
+	Ok(Some(SummaryAccessibility::Accessible(summary)))
+}
+
+/// Last-resort fallback: always synthesizes from local DB even if member
+/// counts may be stale.  Used when both the primary local path (which skips
+/// stale rooms) and federation have failed, so the room still appears in the
+/// space hierarchy rather than vanishing.
+#[implement(Service)]
+async fn get_summary_and_children_local_fallback(
+	&self,
+	current_room: &RoomId,
+	identifier: &Identifier<'_>,
+) -> Result<Option<SummaryAccessibility>> {
+	let children_pdus: Vec<_> = self
+		.get_space_child_events(current_room)
+		.map(Event::into_format)
+		.collect()
+		.await;
+
+	let Ok(summary) = self
+		.get_room_summary(current_room, children_pdus, identifier)
+		.boxed()
+		.await
+	else {
+		debug!(room_id = %current_room, "spaces: local fallback summary synthesis failed");
 		return Ok(None);
 	};
 
@@ -179,6 +221,7 @@ async fn get_summary_and_children_federation(
 
 	let mut requests: FuturesUnordered<_> = via
 		.iter()
+		.take(3)
 		.map(|server| {
 			self.services
 				.sending
@@ -186,12 +229,20 @@ async fn get_summary_and_children_federation(
 		})
 		.collect();
 
-	let Some(Ok(response)) = requests.next().await else {
-		self.roomid_spacehierarchy_cache
+	// Fan out to all via servers; take the first successful response
+	let mut response = None;
+	while let Some(result) = requests.next().await {
+		if let Ok(resp) = result {
+			response = Some(resp);
+			break;
+		}
+	}
+
+	let Some(response) = response else {
+		self.negative_cache_ts
 			.lock()
 			.await
-			.insert(current_room.to_owned(), None);
-
+			.insert(current_room.to_owned(), std::time::Instant::now());
 		return Ok(None);
 	};
 
@@ -211,16 +262,22 @@ async fn get_summary_and_children_federation(
 				.map(|lock| (child, lock))
 		})
 		.ready_filter_map(|(child, mut cache)| {
-			(!cache.contains_key(current_room)).then_some((child, cache))
+			(!cache.contains_key(&child.room_id)).then_some((child, cache))
 		})
-		.for_each(|(child, cache)| self.cache_insert(cache, current_room, child))
+		.for_each(|(child, cache)| self.cache_insert(cache, child))
 		.await;
 
 	let identifier = Identifier::UserId(user_id);
 	let allowed_room_ids = summary.allowed_room_ids.iter().map(AsRef::as_ref);
 
 	let is_accessible_child = self
-		.is_accessible_child(current_room, &summary.join_rule, &identifier, allowed_room_ids)
+		.is_accessible_child(
+			current_room,
+			&summary.join_rule,
+			summary.world_readable,
+			&identifier,
+			allowed_room_ids,
+		)
 		.await;
 
 	let accessibility = if is_accessible_child {
@@ -288,6 +345,7 @@ pub async fn get_summary_and_children_client(
 ) -> Result<Option<SummaryAccessibility>> {
 	let identifier = Identifier::UserId(user_id);
 
+	// Try local (from cache or DB)
 	if let Ok(Some(response)) = self
 		.get_summary_and_children_local(current_room, &identifier)
 		.await
@@ -295,7 +353,34 @@ pub async fn get_summary_and_children_client(
 		return Ok(Some(response));
 	}
 
-	self.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
+	if self
+		.negative_cache_ts
+		.lock()
+		.await
+		.get_mut(current_room)
+		.is_some_and(|ts| ts.elapsed() < NEGATIVE_CACHE_TTL)
+	{
+		return Ok(None);
+	}
+
+	// Try federation (authoritative for rooms we merely observe)
+	match self
+		.get_summary_and_children_federation(current_room, suggested_only, user_id, via)
+		.await
+	{
+		| Ok(Some(response)) => return Ok(Some(response)),
+		| Ok(None) => {
+			debug!(room_id = %current_room, "spaces: federation returned no summary");
+		},
+		| Err(e) => {
+			debug!(room_id = %current_room, error = %e, "spaces: federation hierarchy request failed");
+		},
+	}
+
+	// Fallback: synthesize from local DB even with stale counts, so rooms don't
+	// vanish from the hierarchy when federation is unreachable.
+	debug!(room_id = %current_room, "spaces: using local fallback (may have stale counts)");
+	self.get_summary_and_children_local_fallback(current_room, &identifier)
 		.await
 }
 
@@ -308,10 +393,17 @@ async fn get_room_summary(
 ) -> Result<SpaceHierarchyParentSummary, Error> {
 	let join_rule = self.services.state_accessor.get_join_rules(room_id).await;
 
+	let world_readable = self
+		.services
+		.state_accessor
+		.is_world_readable(room_id)
+		.await;
+
 	let is_accessible_child = self
 		.is_accessible_child(
 			room_id,
 			&join_rule.clone().into(),
+			world_readable,
 			identifier,
 			join_rule.allowed_rooms(),
 		)
@@ -326,8 +418,6 @@ async fn get_room_summary(
 	let topic = self.services.state_accessor.get_room_topic(room_id).ok();
 
 	let room_type = self.services.state_accessor.get_room_type(room_id).ok();
-
-	let world_readable = self.services.state_accessor.is_world_readable(room_id);
 
 	let guest_can_join = self.services.state_accessor.guest_can_join(room_id);
 
@@ -362,7 +452,6 @@ async fn get_room_summary(
 		name,
 		num_joined_members,
 		topic,
-		world_readable,
 		guest_can_join,
 		avatar_url,
 		room_type,
@@ -373,7 +462,6 @@ async fn get_room_summary(
 		name,
 		num_joined_members,
 		topic,
-		world_readable,
 		guest_can_join,
 		avatar_url,
 		room_type,
@@ -407,6 +495,7 @@ async fn is_accessible_child<'a, I>(
 	&self,
 	current_room: &RoomId,
 	join_rule: &SpaceRoomJoinRule,
+	world_readable: bool,
 	identifier: &Identifier<'_>,
 	allowed_rooms: I,
 ) -> bool
@@ -422,65 +511,120 @@ where
 			.await
 			.is_err()
 		{
+			conduwuit_core::info!(
+				target: "spaces_debug_filter",
+				room_id = %current_room,
+				server = %server_name,
+				"spaces: room inaccessible: server failed ACL check"
+			);
 			return false;
 		}
 	}
 
-	if let Identifier::UserId(user_id) = identifier {
-		let is_joined = self.services.state_cache.is_joined(user_id, current_room);
+	let user_joined_or_invited = if let Identifier::UserId(user_id) = identifier {
+		let (is_joined, is_invited) = futures::join!(
+			self.services.state_cache.is_joined(user_id, current_room),
+			self.services.state_cache.is_invited(user_id, current_room),
+		);
+		is_joined || is_invited
+	} else {
+		false
+	};
 
-		let is_invited = self.services.state_cache.is_invited(user_id, current_room);
-
-		pin_mut!(is_joined, is_invited);
-		if is_joined.or(is_invited).await {
-			return true;
+	if let Some(accessible) =
+		is_join_rule_accessible(join_rule, world_readable, user_joined_or_invited)
+	{
+		if !accessible {
+			conduwuit_core::info!(
+				target: "spaces_debug_filter",
+				room_id = %current_room,
+				?join_rule,
+				"spaces: room inaccessible: closed join rule and user not joined/invited"
+			);
 		}
+		return accessible;
+	}
+
+	// We only reach here if join_rule is Restricted, not world-readable, and user
+	// not joined
+	let is_allowed = allowed_rooms
+		.stream()
+		.any(async |room| match identifier {
+			| Identifier::UserId(user) => self.services.state_cache.is_joined(user, room).await,
+			| Identifier::ServerName(server) =>
+				self.services.state_cache.server_in_room(server, room).await,
+		})
+		.await;
+
+	if !is_allowed {
+		conduwuit_core::info!(
+			target: "spaces_debug_filter",
+			room_id = %current_room,
+			?join_rule,
+			"spaces: room inaccessible: restricted join rule but user not in allowed rooms"
+		);
+	}
+
+	is_allowed
+}
+
+pub(crate) fn is_join_rule_accessible(
+	join_rule: &SpaceRoomJoinRule,
+	world_readable: bool,
+	user_joined_or_invited: bool,
+) -> Option<bool> {
+	if user_joined_or_invited || world_readable {
+		return Some(true);
 	}
 
 	match *join_rule {
 		| SpaceRoomJoinRule::Public
 		| SpaceRoomJoinRule::Knock
-		| SpaceRoomJoinRule::KnockRestricted => true,
-		| SpaceRoomJoinRule::Restricted =>
-			allowed_rooms
-				.stream()
-				.any(async |room| match identifier {
-					| Identifier::UserId(user) =>
-						self.services.state_cache.is_joined(user, room).await,
-					| Identifier::ServerName(server) =>
-						self.services.state_cache.server_in_room(server, room).await,
-				})
-				.await,
-
-		// Invite only, Private, or Custom join rule
-		| _ => false,
+		| SpaceRoomJoinRule::KnockRestricted => Some(true),
+		| SpaceRoomJoinRule::Restricted => None, // Requires checking allowed_rooms
+		| _ => Some(false),
 	}
 }
 
 /// Returns the children of a SpaceHierarchyParentSummary, making use of the
-/// children_state field
+/// children_state field.
+///
+/// Sorted by the spec-mandated `order` field (lexicographic), rooms without
+/// `order` come last, tiebreak by room_id for determinism across homeservers.
 pub fn get_parent_children_via(
 	parent: &SpaceHierarchyParentSummary,
 	suggested_only: bool,
-) -> impl DoubleEndedIterator<Item = (OwnedRoomId, impl Iterator<Item = OwnedServerName> + use<>)>
-+ Send
-+ '_ {
-	parent
+) -> Vec<(OwnedRoomId, Vec<OwnedServerName>)> {
+	let mut children: Vec<_> = parent
 		.children_state
 		.iter()
 		.map(Raw::deserialize)
 		.filter_map(Result::ok)
-		.filter_map(move |ce| {
-			(!suggested_only || ce.content.suggested)
-				.then_some((ce.state_key, ce.content.via.into_iter()))
-		})
+		.filter(|ce| !suggested_only || ce.content.suggested)
+		.map(|ce| (ce.state_key, ce.content.order, ce.content.via))
+		.collect();
+
+	// Spec: sort by `order` field (lexicographic), rooms without `order` come
+	// last, tiebreak by room_id for determinism across homeservers.
+	children.sort_by(|(room_a, order_a, _), (room_b, order_b, _)| {
+		match (order_a.as_deref(), order_b.as_deref()) {
+			| (Some(a), Some(b)) => a.cmp(b).then_with(|| room_a.cmp(room_b)),
+			| (Some(_), None) => std::cmp::Ordering::Less,
+			| (None, Some(_)) => std::cmp::Ordering::Greater,
+			| (None, None) => room_a.cmp(room_b),
+		}
+	});
+
+	children
+		.into_iter()
+		.map(|(room_id, _order, via)| (room_id, via))
+		.collect()
 }
 
 #[implement(Service)]
 async fn cache_insert(
 	&self,
 	mut cache: MutexGuard<'_, Cache>,
-	current_room: &RoomId,
 	child: SpaceHierarchyChildSummary,
 ) {
 	let SpaceHierarchyChildSummary {
@@ -520,7 +664,7 @@ async fn cache_insert(
 		room_version,
 	};
 
-	cache.insert(current_room.to_owned(), Some(CachedSpaceHierarchySummary { summary }));
+	cache.insert(room_id.clone(), Some(CachedSpaceHierarchySummary { summary }));
 }
 
 // Here because cannot implement `From` across ruma-federation-api and

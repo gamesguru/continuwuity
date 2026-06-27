@@ -157,9 +157,10 @@ prebuild-rocksdb:
     # Build core libraries explicitly WITHOUT RTTI
     env ROCKSDB_NO_FBCODE=1 ROCKSDB_DISABLE_BENCHMARK=1 DISABLE_JEMALLOC=1 EXTRA_CXXFLAGS="${EXTRA_CXXFLAGS:-} -I{{PREFIX}}/include -Wno-error=unused-parameter" EXTRA_LDFLAGS="-L{{PREFIX}}/lib" PORTABLE=0 USE_RTTI=1 make shared_lib static_lib -j$(nproc)
 
-    # Build ldb
-    # env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 DISABLE_SNAPPY=1 make ldb
+    # Build ldb (statically linked to avoid shared library RTTI/ABI mismatches)
     env DISABLE_WARNING_AS_ERROR=1 DEBUG_LEVEL=0 USE_RTTI=1 make ldb
+    g++ -o ldb_static tools/ldb.o tools/ldb_cmd.o tools/ldb_tool.o tools/sst_dump_tool.o tools/io_tracer_parser_tool.o utilities/blob_db/blob_dump_tool.o librocksdb.a -lpthread -lrt -ldl -lsnappy -lz -llz4 -lzstd -luring -ljemalloc -lstdc++ -lm
+    mv ldb_static ldb
 
 # Install RocksDB globally (requires sudo)
 install-rocksdb:
@@ -360,7 +361,7 @@ complement args=".":
     HOST_LIBS=$(ldd target/latest/conduwuit | awk '/=> \/usr\/lib\// {print $3}' | grep -vE 'libc\.so|libm\.so|libgcc_s\.so|libstdc\+\+\.so|libdl\.so|libpthread\.so|librt\.so' | awk '{print $1":"$1":ro"}' | paste -sd ';' - || true)
     MOUNTS="{{PREFIX}}/lib:{{PREFIX}}/lib:ro"
     if [ -n "$HOST_LIBS" ]; then MOUNTS="$MOUNTS;$HOST_LIBS"; fi
-    env COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 COMPLEMENT_BASE_IMAGE="continuwuity:complement" COMPLEMENT_HOST_MOUNTS="$MOUNTS" COMPLEMENT_RUN="{{args}}" RESULTS_DIR="{{env_var_or_default("COMPLEMENT_RESULTS_DIR", "tests/test_results/complement")}}" ./bin/complement ./complement-src
+    env COMPLEMENT_ALWAYS_PRINT_SERVER_LOGS=1 RESULTS_DIR="{{env_var_or_default("COMPLEMENT_RESULTS_DIR", "tests/test_results/complement-gg")}}" COMPLEMENT_BASE_IMAGE="continuwuity:complement" COMPLEMENT_HOST_MOUNTS="$MOUNTS" COMPLEMENT_RUN="{{args}}" ./bin/complement ./complement-src
 
 # -----------------------------------------------------------------------------
 # Complement CI
@@ -390,7 +391,7 @@ ci-complement-stats:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    RESULTS_DIR="{{env_var_or_default("COMPLEMENT_RESULTS_DIR", "tests/test_results/complement-gg")}}"
+    RESULTS_DIR="{{env_var_or_default("COMPLEMENT_RESULTS_DIR", "tests/test_results/complement")}}"
     RESULTS="$RESULTS_DIR/test_results.jsonl"
     if [ ! -f "$RESULTS" ]; then
         echo "ERROR: $RESULTS does not exist"

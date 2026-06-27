@@ -4,13 +4,14 @@ mod v5;
 use std::collections::VecDeque;
 
 use conduwuit::{
-	Event, PduCount, Result, debug_warn, err,
+	Event, PduCount, Result, debug_warn, err, info,
 	matrix::pdu::PduEvent,
-	trace,
-	utils::stream::{BroadbandExt, ReadyExt, TryIgnore},
+	result::LogErr,
+	utils::stream::{BroadbandExt, ReadyExt, TryIgnore, WidebandExt},
+	warn,
 };
 use conduwuit_service::Services;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use ruma::{
 	OwnedUserId, RoomId, UserId,
 	events::TimelineEventType::{
@@ -67,6 +68,12 @@ async fn load_timeline(
 
 			if last_timeline_count <= starting_count {
 				// no messages have been sent in this room since `starting_count`
+				conduwuit::debug!(
+					target: "timeline_debug",
+					"load_timeline early return for {}: last_timeline_count={:?} <= \
+					 starting_count={:?}",
+					room_id, last_timeline_count, starting_count
+				);
 				return Ok(TimelinePdus::default());
 			}
 
@@ -78,13 +85,26 @@ async fn load_timeline(
 				.rooms
 				.timeline
 				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
+				.inspect_err(|e| warn!("sync timeline pdus_rev error for {room_id}: {e}"))
 				.ignore_err()
+				.inspect(move |(pducount, _)| {
+					info!(
+						target: "timeline_debug",
+						"sync filter check for {}: pducount={:?}, starting_count={:?}, \
+						 passes={:?}",
+						room_id,
+						pducount,
+						starting_count,
+						*pducount > starting_count
+					);
+				})
 				.ready_take_while(move |&(pducount, _)| pducount > starting_count)
 				.map(move |mut pdu| {
 					pdu.1.set_unsigned(Some(sender_user));
 					pdu
 				})
-				.then(async move |mut pdu| {
+				.wide_then(move |mut pdu| async move {
+					add_membership_to_unsigned(services, sender_user, &mut pdu.1).await;
 					if let Err(e) = services
 						.rooms
 						.pdu_metadata
@@ -104,12 +124,14 @@ async fn load_timeline(
 				.rooms
 				.timeline
 				.pdus_rev(room_id, ending_count.map(|count| count.saturating_add(1)))
+				.inspect_err(|e| warn!("sync initial timeline pdus_rev error for {room_id}: {e}"))
 				.ignore_err()
 				.map(move |mut pdu| {
 					pdu.1.set_unsigned(Some(sender_user));
 					pdu
 				})
-				.then(async move |mut pdu| {
+				.wide_then(move |mut pdu| async move {
+					add_membership_to_unsigned(services, sender_user, &mut pdu.1).await;
 					if let Err(e) = services
 						.rooms
 						.pdu_metadata
@@ -124,8 +146,7 @@ async fn load_timeline(
 		},
 	};
 
-	// Return at most `limit` PDUs from the stream
-	let pdus = pdu_stream
+	let mut pdus = pdu_stream
 		.by_ref()
 		.take(limit)
 		.ready_fold(VecDeque::with_capacity(limit), |mut pdus, item| {
@@ -134,16 +155,61 @@ async fn load_timeline(
 		})
 		.await;
 
-	// The timeline is limited if there are still more PDUs in the stream
-	let limited = pdu_stream.next().await.is_some();
+	let mut limited = false;
 
-	trace!(
-		"syncing {:?} timeline pdus from {:?} to {:?} (limited = {:?})",
-		pdus.len(),
-		starting_count,
-		ending_count,
-		limited,
-	);
+	if starting_count.is_some() {
+		// Traverse newest to oldest to find the first topological gap backwards
+		for (i, (_, pdu)) in pdus.iter().enumerate().rev() {
+			let mut gap_found = false;
+			for prev_id in pdu.prev_events() {
+				if services
+					.rooms
+					.timeline
+					.get_pdu_count(prev_id)
+					.await
+					.is_err()
+				{
+					gap_found = true;
+					break;
+				}
+			}
+
+			if gap_found {
+				// We found a gap BEFORE this PDU. Keep this PDU, but drop anything before.
+				info!(
+					"Topological gap in timeline for {} before PDU {}. Truncating.",
+					room_id,
+					pdu.event_id()
+				);
+				pdus.drain(0..i);
+				limited = true;
+				break;
+			}
+		}
+	}
+
+	// The timeline is limited if there are still more PDUs in the stream
+	if !limited {
+		limited = pdu_stream.next().await.is_some();
+	}
+
+	if pdus.is_empty() && starting_count.is_some() {
+		info!(
+			target: "timeline_debug",
+			"sync: 0 timeline pdus for {} from {:?} to {:?} (limited = {:?})",
+			room_id, starting_count, ending_count, limited,
+		);
+	} else {
+		info!(
+			target: "timeline_debug",
+			"sync: {:?} timeline pdus for {} from {:?} to {:?} (limited = {:?})",
+			pdus.len(),
+			room_id,
+			starting_count,
+			ending_count,
+			limited,
+		);
+	}
 
 	Ok(TimelinePdus { pdus, limited })
 }
@@ -183,4 +249,43 @@ async fn shares_a_room(
 		.get_shared_rooms(sender_user, user_id)
 		.ready_any(|room_id| Some(room_id) != ignore_room)
 		.await
+}
+
+/// Look up the requesting user's membership at the event's state snapshot
+/// and set `unsigned.membership` accordingly. Mirrors the pattern used by
+/// `repair_unsigned` (delegates to `user_membership_at_event` on the
+/// state_accessor service).
+pub(crate) async fn add_membership_to_unsigned(
+	services: &Services,
+	user_id: &UserId,
+	pdu: &mut PduEvent,
+) {
+	let Some(room_id) = pdu.room_id_or_hash() else {
+		return;
+	};
+
+	// Is this a membership event for the syncing user?
+	let is_own_membership = pdu.kind == TimelineEventType::RoomMember
+		&& pdu.state_key.as_deref() == Some(user_id.as_str());
+
+	let membership = if is_own_membership {
+		// MSC4115: "Consider the room state just *after* event E landed. Any changes
+		// caused by the event itself... are included."
+		// For a user's own membership event, the state after the event is just the
+		// event itself.
+		serde_json::from_str::<ruma::events::room::member::RoomMemberEventContent>(
+			pdu.content.get(),
+		)
+		.map_or(ruma::events::room::member::MembershipState::Leave, |c| c.membership)
+	} else if pdu.kind == TimelineEventType::RoomCreate {
+		ruma::events::room::member::MembershipState::Leave
+	} else {
+		services
+			.rooms
+			.state_accessor
+			.user_membership_at_event(pdu.event_id(), &room_id, user_id)
+			.await
+	};
+
+	pdu.set_membership(membership.as_str()).log_err().ok();
 }

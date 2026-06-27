@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src/*", "xtask/"]
+members = ["case-study-state-res/compare", "src/*", "xtask/"]
 default-members = ["src/*"]
 
 [workspace.package]
@@ -57,6 +57,11 @@ version = "0.6.0"
 [workspace.dependencies.base64]
 version = "0.22.1"
 default-features = false
+
+# Used for MSC0F01 gossip reconciliation Bloom filter (XXH3 double-hashing)
+[workspace.dependencies.xxhash-rust]
+version = "0.8"
+features = ["xxh3"]
 
 # used for TURN server authentication
 [workspace.dependencies.hmac]
@@ -314,11 +319,6 @@ features = [
 version = "2.0.12"
 default-features = false
 
-# Used when hashing the state
-[workspace.dependencies.ring]
-version = "0.17.14"
-default-features = false
-
 # Used to make working with iterators easier, was already a transitive depdendency
 [workspace.dependencies.itertools]
 version = "0.14.0"
@@ -342,13 +342,26 @@ version = "0.1.88"
 [workspace.dependencies.lru-cache]
 version = "0.1.2"
 
-# Used for matrix spec type definitions and helpers
+[workspace.dependencies.moka]
+version = "0.12"
+default-features = false
+features = ["future"]
+
+[workspace.dependencies.dashmap]
+version = "6.1.0"
+
+# Used for matrix spec type definitions and helpers (legacy=libsodium compat)
+[workspace.dependencies.ed25519-dalek]
+version = "2.2.0"
+features = ["legacy_compatibility"]
+
 [workspace.dependencies.ruma]
 git = "https://forgejo.ellis.link/continuwuation/ruwuma"
 #branch = "conduwuit-changes"
 rev = "d00b51a8669b21689c4eb47fb81f3a8b27c3e371"
 features = [
     "compat",
+    "compat-arbitrary-length-ids",
     "rand",
     "appservice-api-c",
     "client-api",

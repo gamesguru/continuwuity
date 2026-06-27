@@ -58,11 +58,14 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "eventid_outlierpdu",
-		cache_disp: CacheDisp::SharedWith("pduid_pdu"),
-		key_size_hint: Some(48),
-		val_size_hint: Some(1488),
-		block_size: 1024,
+		name: "eventid_metadata",
+		val_size_hint: Some(128),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "eventid_pdu",
+		val_size_hint: Some(1520),
+		block_size: 2048,
 		index_size: 512,
 		..descriptor::RANDOM
 	},
@@ -82,6 +85,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 		val_size_hint: Some(8),
 		block_size: 512,
 		index_size: 512,
+		..descriptor::RANDOM
+	},
+	Descriptor {
+		name: "federation_outbound_to_device",
+		val_size_hint: Some(128),
 		..descriptor::RANDOM
 	},
 	Descriptor {
@@ -109,6 +117,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "logintoken_expiresatuserid",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "mediaid_file",
 		..descriptor::RANDOM_SMALL
 	},
@@ -121,17 +133,16 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "openidtoken_expiresatuserid",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "passwordresettoken_info",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "pduid_pdu",
-		cache_disp: CacheDisp::SharedWith("eventid_outlierpdu"),
-		key_size_hint: Some(16),
-		val_size_hint: Some(1520),
-		block_size: 2048,
-		index_size: 512,
-		..descriptor::SEQUENTIAL
+		name: "presenceid_presence",
+		..descriptor::SEQUENTIAL_SMALL
 	},
 	Descriptor {
 		name: "publicroomids",
@@ -140,10 +151,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 	Descriptor {
 		name: "pushkey_deviceid",
 		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "presenceid_presence",
-		..descriptor::SEQUENTIAL_SMALL
 	},
 	Descriptor {
 		name: "readreceiptid_readreceipt",
@@ -156,6 +163,35 @@ pub(super) static MAPS: &[Descriptor] = &[
 	Descriptor {
 		name: "registrationtoken_info",
 		..descriptor::RANDOM_SMALL
+	},
+	// TODO: Legacy Conduit table, superseded by eventid_metadata.rejected
+	// and eventid_metadata.soft_failed fields. No service code references
+	// this CF. Remove in a future schema version bump.
+	Descriptor {
+		name: "rejectedeventids",
+		key_size_hint: Some(48),
+		..descriptor::RANDOM_SMALL
+	},
+	// Primary timeline index, keyed by stream order (monotonic server-local
+	// counter from globals.next_count()). Used by /sync, read receipts, and
+	// notification counting. Key: (shortroomid: u64, pdu_count: u64) -> event_id.
+	// Migrated from pduid_pdu as of v19 (migrate_event_store_to_ssot).
+	// See also: roomid_topologicalorder_pducount for DAG-based ordering.
+	Descriptor {
+		name: "room_pducount_eventid",
+		key_size_hint: Some(16),
+		val_size_hint: Some(32),
+		..descriptor::SEQUENTIAL_SMALL
+	},
+	// DEPRECATED: This map is no longer used. Stream order is immutable and
+	// the reorder/heal code no longer backs up old stream order entries.
+	// Retained to avoid a schema migration; will be removed in a future
+	// database version bump.
+	Descriptor {
+		name: "room_pducount_eventid_backup",
+		key_size_hint: Some(16),
+		val_size_hint: Some(32),
+		..descriptor::SEQUENTIAL_SMALL
 	},
 	Descriptor {
 		name: "roomid_invitedcount",
@@ -174,12 +210,12 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "roomid_shortroomid",
-		val_size_hint: Some(8),
+		name: "roomid_roomversion",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "roomid_roomversion",
+		name: "roomid_shortroomid",
+		val_size_hint: Some(8),
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
@@ -188,12 +224,23 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "roomid_topologicalorder_pducount",
+		key_size_hint: Some(32),
+		val_size_hint: Some(32),
+		..descriptor::SEQUENTIAL_SMALL
+	},
+	Descriptor {
 		name: "roomserverids",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "roomsynctoken_shortstatehash",
-		..descriptor::DROPPED
+		file_shape: 3,
+		val_size_hint: Some(8),
+		block_size: 512,
+		compression_level: 3,
+		bottommost_level: Some(6),
+		..descriptor::SEQUENTIAL
 	},
 	Descriptor {
 		name: "roomuserdataid_accountdata",
@@ -209,6 +256,16 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "roomuserid_knockedcount",
+		val_size_hint: Some(8),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "roomuserid_lastnotificationread",
+		val_size_hint: Some(8),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "roomuserid_lastprivatereadupdate",
 		..descriptor::RANDOM_SMALL
 	},
@@ -218,13 +275,22 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
-		name: "roomuserid_knockedcount",
-		val_size_hint: Some(8),
+		name: "roomuserid_privateread",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "roomuserid_privateread",
+		name: "roomuserid_privatereadevent",
 		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "roomuserid_privatereadreceipt",
+		val_size_hint: Some(1024),
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "roomuserid_readreceipt",
+		val_size_hint: Some(1024),
+		..descriptor::RANDOM
 	},
 	Descriptor {
 		name: "roomuseroncejoinedids",
@@ -275,6 +341,18 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::SEQUENTIAL
 	},
 	Descriptor {
+		name: "shorteventid_shortauthevents",
+		key_size_hint: Some(8),
+		cache_disp: CacheDisp::Unique,
+		..descriptor::SEQUENTIAL
+	},
+	Descriptor {
+		name: "shorteventid_shortprevevents",
+		key_size_hint: Some(8),
+		cache_disp: CacheDisp::Unique,
+		..descriptor::SEQUENTIAL
+	},
+	Descriptor {
 		name: "shorteventid_eventid",
 		cache_disp: CacheDisp::Unique,
 		key_size_hint: Some(8),
@@ -299,11 +377,6 @@ pub(super) static MAPS: &[Descriptor] = &[
 		cache_disp: CacheDisp::Unique,
 		key_size_hint: Some(8),
 		val_size_hint: Some(1016),
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "softfailedeventids",
-		key_size_hint: Some(48),
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
@@ -390,6 +463,14 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "userid_lock",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userid_logindisabled",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "userid_masterkeyid",
 		..descriptor::RANDOM_SMALL
 	},
@@ -402,23 +483,15 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
-		name: "userid_suspension",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "userid_lock",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "userid_logindisabled",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
 		name: "userid_presenceid",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "userid_selfsigningkeyid",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userid_suspension",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
@@ -430,16 +503,12 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "openidtoken_expiresatuserid",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
-		name: "logintoken_expiresatuserid",
-		..descriptor::RANDOM_SMALL
-	},
-	Descriptor {
 		name: "userroomid_highlightcount",
 		..descriptor::RANDOM
+	},
+	Descriptor {
+		name: "userroomid_invitesender",
+		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "userroomid_invitestate",
@@ -450,19 +519,21 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
-		name: "userroomid_leftstate",
-		..descriptor::RANDOM
-	},
-	Descriptor {
 		name: "userroomid_knockedstate",
 		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userroomid_leftstate",
+		..descriptor::RANDOM
 	},
 	Descriptor {
 		name: "userroomid_notificationcount",
 		..descriptor::RANDOM
 	},
-	Descriptor {
-		name: "userroomid_invitesender",
-		..descriptor::RANDOM_SMALL
-	},
 ];
+
+/// Returns an iterator of column family names from the static MAPS list.
+/// Used for schema fingerprinting across crate boundaries.
+pub fn column_family_names() -> impl Iterator<Item = &'static str> {
+	MAPS.iter().map(|desc| desc.name)
+}

@@ -3,12 +3,12 @@ mod tests;
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Result, err,
+	Err, Result, RoomVersion, err, info,
 	matrix::{Event, pdu::PduBuilder},
 	utils::BoolExt,
 };
 use conduwuit_service::Services;
-use futures::{FutureExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use ruma::{
 	MilliSecondsSinceUnixEpoch, OwnedEventId, RoomId, UserId,
 	api::client::state::{get_state_events, get_state_events_for_key, send_state_event},
@@ -16,6 +16,7 @@ use ruma::{
 		AnyStateEventContent, StateEventType,
 		room::{
 			canonical_alias::RoomCanonicalAliasEventContent,
+			create::RoomCreateEventContent,
 			history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent},
 			join_rules::{JoinRule, RoomJoinRulesEventContent},
 			member::{MembershipState, RoomMemberEventContent},
@@ -90,25 +91,55 @@ pub(crate) async fn get_state_events_route(
 	body: Ruma<get_state_events::v3::Request>,
 ) -> Result<get_state_events::v3::Response> {
 	let sender_user = body.sender_user();
+	let room_id = &body.room_id;
 
-	if !services
+	let is_joined = services
 		.rooms
-		.state_accessor
-		.user_can_see_state_events(sender_user, &body.room_id)
-		.await
+		.state_cache
+		.is_joined(sender_user, room_id)
+		.await;
+
+	if !is_joined
+		&& !services
+			.rooms
+			.state_cache
+			.is_left(sender_user, room_id)
+			.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view the room state.")));
 	}
 
-	Ok(get_state_events::v3::Response {
-		room_state: services
+	// For departed users, serve state frozen at the point they left
+	let shortstatehash = if !is_joined {
+		let ssh = leave_shortstatehash(&services, sender_user, room_id).await;
+		info!(
+			target: "membership_debug",
+			"/state: departed user {sender_user} in {room_id}, leave_ssh={ssh:?}"
+		);
+		ssh
+	} else {
+		None
+	};
+
+	let room_state: Vec<_> = if let Some(ssh) = shortstatehash {
+		services
 			.rooms
 			.state_accessor
-			.room_state_full_pdus(&body.room_id)
+			.state_full_pdus(ssh)
+			.map(Event::into_format)
+			.collect()
+			.await
+	} else {
+		services
+			.rooms
+			.state_accessor
+			.room_state_full_pdus(room_id)
 			.map_ok(Event::into_format)
 			.try_collect()
-			.await?,
-	})
+			.await?
+	};
+
+	Ok(get_state_events::v3::Response { room_state })
 }
 
 /// # `GET /_matrix/client/v3/rooms/{roomid}/state/{eventType}/{stateKey}`
@@ -124,30 +155,60 @@ pub(crate) async fn get_state_events_for_key_route(
 	body: Ruma<get_state_events_for_key::v3::Request>,
 ) -> Result<get_state_events_for_key::v3::Response> {
 	let sender_user = body.sender_user();
+	let room_id = &body.room_id;
 
-	if !services
+	let is_joined = services
 		.rooms
-		.state_accessor
-		.user_can_see_state_events(sender_user, &body.room_id)
-		.await
+		.state_cache
+		.is_joined(sender_user, room_id)
+		.await;
+
+	if !is_joined
+		&& !services
+			.rooms
+			.state_cache
+			.is_left(sender_user, room_id)
+			.await
 	{
 		return Err!(Request(NotFound(debug_warn!(
 			"You don't have permission to view the room state."
 		))));
 	}
 
-	let event = services
-		.rooms
-		.state_accessor
-		.room_state_get(&body.room_id, &body.event_type, &body.state_key)
-		.await
-		.map_err(|_| {
-			err!(Request(NotFound(debug_warn!(
-					room_id = %body.room_id,
-					event_type = %body.event_type,
-					"State event not found in room.",
-			))))
-		})?;
+	// For departed users, look up state from the snapshot at departure
+	let event = if !is_joined {
+		if let Some(ssh) = leave_shortstatehash(&services, sender_user, room_id).await {
+			info!(
+				target: "membership_debug",
+				"/state/{}: departed user {sender_user} in {room_id}, using leave_ssh={ssh}",
+				body.event_type
+			);
+			services
+				.rooms
+				.state_accessor
+				.state_get(ssh, &body.event_type, &body.state_key)
+				.await
+		} else {
+			services
+				.rooms
+				.state_accessor
+				.room_state_get(room_id, &body.event_type, &body.state_key)
+				.await
+		}
+	} else {
+		services
+			.rooms
+			.state_accessor
+			.room_state_get(room_id, &body.event_type, &body.state_key)
+			.await
+	}
+	.map_err(|_| {
+		err!(Request(NotFound(debug_warn!(
+				room_id = %body.room_id,
+				event_type = %body.event_type,
+				"State event not found in room.",
+		))))
+	})?;
 
 	let event_format = body
 		.format
@@ -188,6 +249,30 @@ pub(crate) async fn get_state_events_for_empty_key_route(
 		.map(RumaResponse)
 }
 
+/// Get the shortstatehash for the state snapshot at the point when a user
+/// departed (left/banned) from a room. Returns None if the leave event
+/// can't be found or has no associated state snapshot.
+async fn leave_shortstatehash(
+	services: &Services,
+	user_id: &UserId,
+	room_id: &RoomId,
+) -> Option<u64> {
+	let leave_pdu = services
+		.rooms
+		.state_cache
+		.left_state(user_id, room_id)
+		.await
+		.ok()
+		.flatten()?;
+
+	services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(leave_pdu.event_id())
+		.await
+		.ok()
+}
+
 async fn send_state_event_for_key_helper(
 	services: &Services,
 	sender: &UserId,
@@ -200,6 +285,28 @@ async fn send_state_event_for_key_helper(
 	let json: &mut Raw<AnyStateEventContent> = &mut json.clone();
 	allowed_to_send_state_event(services, room_id, event_type, state_key, json).await?;
 	let state_lock = services.rooms.state.mutex.lock(room_id).await;
+
+	if let Ok(existing_event) = services
+		.rooms
+		.state_accessor
+		.room_state_get(room_id, event_type, state_key)
+		.await
+	{
+		if existing_event.sender() == sender {
+			if let Ok(existing_content) =
+				serde_json::from_str::<serde_json::Value>(existing_event.content().get())
+			{
+				if let Ok(new_content) =
+					serde_json::from_str::<serde_json::Value>(json.json().get())
+				{
+					if existing_content == new_content {
+						return Ok(existing_event.event_id().into());
+					}
+				}
+			}
+		}
+	}
+
 	let event_id = services
 		.rooms
 		.timeline
@@ -368,8 +475,62 @@ async fn allowed_to_send_state_event(
 				},
 			}
 		},
-		| StateEventType::RoomMember => match json.deserialize_as::<RoomMemberEventContent>() {
-			| Ok(mut membership_content) => {
+		| StateEventType::RoomMember => {
+			// Try strict deserialization first; if it fails due to an invalid
+			// join_authorised_via_users_server value (e.g. "unused"), strip
+			// the field and retry — the spec says servers should ignore this
+			// field on join->join transitions.
+			let membership_result = json.deserialize_as::<RoomMemberEventContent>();
+			let mut membership_content = match membership_result {
+				| Ok(content) => content,
+				| Err(e) => {
+					let is_join_to_join = services
+						.rooms
+						.state_accessor
+						.room_state_get(room_id, &StateEventType::RoomMember, state_key)
+						.await
+						.ok()
+						.and_then(|pdu| pdu.get_content::<RoomMemberEventContent>().ok())
+						.is_some_and(|c| c.membership == MembershipState::Join);
+
+					if !is_join_to_join {
+						return Err!(Request(BadJson(
+							"Membership content must have a valid JSON body with at least a \
+							 valid membership state: {e}"
+						)));
+					}
+
+					// Attempt lenient parse: strip the offending field and retry
+					let mut raw_value: serde_json::Value =
+						serde_json::from_str(json.json().get()).map_err(|err| {
+							err!(Request(BadJson(
+								"Membership content must have a valid JSON body with at least a \
+								 valid membership state: {err}"
+							)))
+						})?;
+
+					if let Some(obj) = raw_value.as_object_mut() {
+						obj.remove("join_authorised_via_users_server");
+					}
+
+					let content =
+						serde_json::from_value::<RoomMemberEventContent>(raw_value.clone())
+							.map_err(|err| {
+								err!(Request(BadJson(
+									"Membership content must have a valid JSON body with at \
+									 least a valid membership state: {err}"
+								)))
+							})?;
+
+					*json = Raw::<AnyStateEventContent>::from_json_string(serde_json::to_string(
+						&raw_value,
+					)?)
+					.unwrap();
+					content
+				},
+			};
+
+			{
 				let Ok(state_key) = UserId::parse(state_key) else {
 					return Err!(Request(BadJson(
 						"Membership event has invalid or non-existent state key"
@@ -419,13 +580,50 @@ async fn allowed_to_send_state_event(
 						)));
 					}
 				}
-			},
-			| Err(e) => {
-				return Err!(Request(BadJson(
-					"Membership content must have a valid JSON body with at least a valid \
-					 membership state: {e}"
-				)));
-			},
+			}
+		},
+		| StateEventType::RoomPowerLevels => {
+			// In v12 rooms, creators must not appear in the power levels users map
+			let room_create = services
+				.rooms
+				.state_accessor
+				.room_state_get(room_id, &StateEventType::RoomCreate, "")
+				.await;
+			if let Ok(room_create) = room_create {
+				if let Ok(create_content) =
+					serde_json::from_str::<RoomCreateEventContent>(room_create.content().get())
+				{
+					let room_features = RoomVersion::new(&create_content.room_version);
+					if let Ok(room_features) = room_features {
+						if room_features.explicitly_privilege_room_creators {
+							if let Ok(pl_content) = json.deserialize_as::<serde_json::Value>() {
+								if let Some(users) =
+									pl_content.get("users").and_then(|u| u.as_object())
+								{
+									// Check the room creator (event sender of m.room.create)
+									if users.contains_key(room_create.sender().as_str()) {
+										return Err!(Request(BadJson(
+											"Room creator cannot be set in power levels users \
+											 map"
+										)));
+									}
+									// Check additional_creators
+									if let Some(additional) = create_content.additional_creators {
+										for creator in &additional {
+											if users.contains_key(creator.as_str()) {
+												return Err!(Request(BadJson(
+													"Room creator cannot be set in power levels \
+													 users map: {creator}"
+												)));
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 		},
 		| _ => (),
 	}

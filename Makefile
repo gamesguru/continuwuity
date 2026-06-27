@@ -158,7 +158,9 @@ lint:   ##H Lint code
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		AWS_LC_RS_NO_BUNDLE=1 \
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
-		cargo clippy $(CARGO_SCOPE) --locked --no-deps $(CARGO_FLAGS) $$(if [ -n "$$CI" ]; then echo "-- -D warnings"; fi)
+		CC=gcc \
+		CFLAGS="$$(gcc -Wunterminated-string-initialization -x c -c /dev/null -o /dev/null 2>/dev/null && echo '-Wno-error=unterminated-string-initialization')" \
+		cargo +nightly clippy $(CARGO_SCOPE) --features full --locked --no-deps $(CARGO_FLAGS) -- $(if $(CI),-D warnings)
 
 .PHONY: test
 test:   ##H Run tests
@@ -171,7 +173,7 @@ test:   ##H Run tests
 		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
 		AWS_LC_RS_NO_BUNDLE=1 \
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
-		cargo test $(CARGO_SCOPE) --locked --all-targets --timings $(CARGO_FLAGS)
+		cargo test --locked --all-targets $(if $(p),,$(if $(CRATE),,--features full)) --timings $(CARGO_FLAGS) $(CARGO_SCOPE)
 
 
 PREFIX ?= /usr/local
@@ -299,11 +301,13 @@ complement/build: ##H Build conduwuit w direct_tls
 .PHONY: complement/docker
 complement/docker: ##H Build docker image from existing binary
 	@echo "Building Complement Docker image using base image: $(COMPLEMENT_BASE_IMAGE)..."
+	-docker pull $(COMPLEMENT_BASE_IMAGE)
 	DOCKER_BUILDKIT=1 docker buildx build \
 		--build-arg BASE_IMAGE=$(COMPLEMENT_BASE_IMAGE) \
 		--build-arg BINARY_PATH=target/latest/conduwuit \
 		--build-arg UID=$(shell id -u) \
 		--build-arg GID=$(shell id -g) \
+		--pull=false \
 		-t $(COMPLEMENT_IMAGE) \
 		-f ./docker/complement.Dockerfile \
 		--load .
@@ -449,7 +453,8 @@ download:	##H Download CI binary (set RUN to a specific RunID)
 	@chmod +x target/ci/conduwuit
 	@echo "Downloaded to target/ci/conduwuit"
 	@./target/ci/conduwuit -V
-	@ln -sfn ci target/latest
+	@rm -rf target/latest
+	@ln -s ci target/latest
 
 .PHONY: download/hash
 download/hash:	##H Download CI binary by Git commit hash (set HASH=)

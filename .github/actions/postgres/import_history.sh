@@ -24,14 +24,14 @@ fi
 SQL_FILE="$(dirname "$0")/tables.sql"
 if [ -f "$SQL_FILE" ]; then
 	echo "✓ Applying fresh schema from $SQL_FILE..."
-	psql "$DB_TARGET" -c "DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE;" >/dev/null
+	psql "$DB_TARGET" -c "DROP MATERIALIZED VIEW IF EXISTS mv_ever_passed CASCADE; DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE; DROP TABLE IF EXISTS ever_passed CASCADE;" >/dev/null
 	psql "$DB_TARGET" -f "$SQL_FILE" >/dev/null
 fi
 
 echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
 
 # 1. Bulk Ingest Run Summaries
-echo "→ Ingesting run summaries..."
+echo "-> Ingesting run summaries..."
 psql "$DB_TARGET" <<EOF
 CREATE TEMP TABLE b (j jsonb);
 \copy b FROM '$LEDGER_DIR/runs.jsonl' csv quote e'\x01' delimiter e'\x02';
@@ -47,10 +47,10 @@ ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version) DO NOTHING;
 EOF
 
 # 2. Bulk Ingest Test Details (Injecting metadata from filenames)
-echo "→ Consolidating and ingesting test details..."
+echo "-> Consolidating and ingesting test details..."
 (
 	echo "CREATE TEMP TABLE t (j jsonb);"
-	echo "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+	printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
 	for f in "$LEDGER_DIR/runs_data"/*.jsonl; do
 		[ -f "$f" ] || continue
 		BASENAME=$(basename "$f" .jsonl)
@@ -85,5 +85,35 @@ echo "→ Consolidating and ingesting test details..."
         ORDER BY r.id, (t.j->>'Test'), (t.j->>'Action') ASC
         ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;"
 ) | psql "$DB_TARGET"
+
+echo "-> Populating ever_passed table (incremental UPSERT)..."
+psql "$DB_TARGET" <<'UPSERT_EOF'
+INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
+SELECT
+    rd.test_name,
+    COALESCE(r.room_version, '11'),
+    MAX(r.run_date)::date::text,
+    (ARRAY_AGG(r.commit_hash ORDER BY r.run_date DESC))[1],
+    (ARRAY_AGG(r.branch ORDER BY r.run_date DESC))[1],
+    ARRAY_AGG(DISTINCT r.branch) FILTER (WHERE r.branch IS NOT NULL)
+FROM run_details rd
+JOIN runs r ON rd.run_id = r.id
+WHERE rd.status = 'pass'
+GROUP BY rd.test_name, COALESCE(r.room_version, '11')
+ON CONFLICT (test_name, rv) DO UPDATE SET
+    last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed),
+    last_commit = CASE
+        WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
+        THEN EXCLUDED.last_commit ELSE ever_passed.last_commit END,
+    last_branch = CASE
+        WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
+        THEN EXCLUDED.last_branch ELSE ever_passed.last_branch END,
+    branches = (
+        SELECT ARRAY_AGG(DISTINCT b ORDER BY b)
+        FROM UNNEST(ever_passed.branches || EXCLUDED.branches) AS b
+        WHERE b IS NOT NULL
+    );
+UPSERT_EOF
+
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
 echo "✓ Bulk import complete."

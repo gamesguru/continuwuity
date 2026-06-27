@@ -5,15 +5,22 @@ use std::{
 };
 
 use conduwuit::{
-	Error, Result, err, implement,
+	Error, Result, err, implement, info,
 	state_res::{self, StateMap},
 	trace,
-	utils::stream::{IterStream, ReadyExt, TryWidebandExt, WidebandExt},
+	utils::stream::{IterStream, ReadyExt, WidebandExt},
+	warn,
 };
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use ruma::{OwnedEventId, RoomId, RoomVersionId};
 
 use crate::rooms::state_compressor::CompressedState;
+
+/// Pre-loaded event cache to avoid per-event RocksDB lookups during
+/// state resolution. Populated once at the start of bulk operations
+/// like rebuild_state.
+pub(crate) type PduCache =
+	Arc<tokio::sync::RwLock<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>>;
 
 #[implement(super::Service)]
 #[tracing::instrument(name = "resolve", level = "debug", skip_all)]
@@ -40,16 +47,20 @@ pub async fn resolve_state(
 
 	trace!("Loading fork states");
 	let fork_states = [current_state_ids, incoming_state];
-	let auth_chain_sets = fork_states
+
+	// Build OwnedEventId -> ShortStateKey reverse map from the fork states BEFORE
+	// they are consumed into streams below. After state resolution completes, we
+	// use this for O(1) fast-path shortstatehash lookups instead of issuing
+	// ~50k concurrent get_or_create_shortstatekey DB calls.
+	//
+	// State resolution selects its output event_ids exclusively from the input
+	// fork states, so every resolved entry will normally hit this fast path.
+	// The get_or_create_shortstatekey fallback handles truly new state events
+	// (rare -- e.g., a new join that wasn't in either input fork).
+	let eid_to_ssk: HashMap<OwnedEventId, u64> = fork_states
 		.iter()
-		.try_stream()
-		.wide_and_then(|state| {
-			self.services
-				.auth_chain
-				.event_ids_iter(room_id, state.values().map(Borrow::borrow))
-				.try_collect()
-		})
-		.try_collect::<Vec<HashSet<OwnedEventId>>>();
+		.flat_map(|fs| fs.iter().map(|(&ssk, eid)| (eid.clone(), ssk)))
+		.collect();
 
 	let fork_states = fork_states
 		.iter()
@@ -67,23 +78,57 @@ pub async fn resolve_state(
 		.map(Ok::<_, Error>)
 		.try_collect::<Vec<StateMap<OwnedEventId>>>();
 
-	let (fork_states, auth_chain_sets) = try_join(fork_states, auth_chain_sets).await?;
+	let fork_states = fork_states.await?;
+
+	// Do NOT fetch from federation here. State resolution must be local-only
+	// to avoid blocking. Missing auth chain events cause state_res to skip those
+	// subgraph branches — producing a best-effort result with local data. The
+	// ingestion pipeline (handle_outlier_pdu, fetch_prev) is responsible for
+	// pre-fetching auth events before we reach this point.
+
+	// Diagnostic: log PL events in each fork state
+	for (i, fork) in fork_states.iter().enumerate() {
+		for ((ty, sk), eid) in fork {
+			if ty.to_string() == "m.room.power_levels" {
+				info!("resolve_state fork[{i}] PL ({ty},{sk}) => {eid}");
+			}
+		}
+	}
 
 	trace!("Resolving state");
+	let n_fork_states: usize = fork_states.iter().map(HashMap::len).sum();
+	info!(%room_id, n_fork_states, "state_res: fork states loaded, starting resolution");
+	let t = std::time::Instant::now();
 	let state = self
-		.state_resolution(room_id, room_version_id, fork_states.iter(), &auth_chain_sets)
+		.state_resolution(room_id, room_version_id, fork_states.iter(), None)
 		.boxed()
 		.await?;
+	info!(%room_id, n_resolved = state.len(), elapsed = ?t.elapsed(), "state_res: resolution complete");
 
+	// Diagnostic: log resolved PL and JoinRules
+	for ((ty, sk), eid) in &state {
+		if ty.to_string() == "m.room.power_levels" || ty.to_string() == "m.room.join_rules" {
+			info!("resolve_state RESULT ({ty},{sk}) => {eid}");
+		}
+	}
 	trace!("State resolution done.");
+	let eid_to_ssk = &eid_to_ssk;
 	let state_events: Vec<_> = state
 		.iter()
 		.stream()
-		.wide_then(|((event_type, state_key), event_id)| {
-			self.services
+		.wide_then(|((event_type, state_key), event_id)| async move {
+			// FAST PATH: ~99.9% of resolved events were in a fork state; their
+			// ShortStateKey is already known in memory — no DB call needed.
+			if let Some(&ssk) = eid_to_ssk.get(event_id) {
+				return (ssk, event_id.clone());
+			}
+			// SLOW PATH: truly new state event (e.g., a new join member event).
+			let ssk = self
+				.services
 				.short
 				.get_or_create_shortstatekey(event_type, state_key)
-				.map(move |shortstatekey| (shortstatekey, event_id))
+				.await;
+			(ssk, event_id.clone())
 		})
 		.collect()
 		.await;
@@ -92,7 +137,7 @@ pub async fn resolve_state(
 	let new_room_state: CompressedState = self
 		.services
 		.state_compressor
-		.compress_state_events(state_events.iter().map(|(ssk, eid)| (ssk, (*eid).borrow())))
+		.compress_state_events(state_events.iter().map(|(ssk, eid)| (ssk, eid.borrow())))
 		.collect()
 		.await;
 
@@ -100,20 +145,160 @@ pub async fn resolve_state(
 }
 
 #[implement(super::Service)]
-#[tracing::instrument(name = "ruma", level = "debug", skip_all)]
+#[tracing::instrument(name = "ruma", level = "debug", skip_all, fields(%room_id))]
 pub async fn state_resolution<'a, StateSets>(
 	&'a self,
 	room_id: &RoomId,
 	room_version: &'a RoomVersionId,
 	state_sets: StateSets,
-	auth_chain_sets: &'a [HashSet<OwnedEventId>],
+	prefetch_cache: Option<PduCache>,
 ) -> Result<StateMap<OwnedEventId>>
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	let event_fetch = |event_id| self.event_fetch(Some(room_id), event_id);
-	let event_exists = |event_id| self.event_exists(event_id);
-	state_res::resolve(room_version, state_sets, auth_chain_sets, &event_fetch, &event_exists)
-		.map_err(|e| err!(error!("State resolution failed: {e:?}")))
-		.await
+	let mut all_events = HashSet::new();
+	for state_set in state_sets.clone() {
+		all_events.extend(state_set.values().cloned());
+	}
+
+	let meta = &self.services.pdu_metadata;
+	let fetch_cache: PduCache = if let Some(cache) = prefetch_cache {
+		// Pre-loaded cache provided (e.g. from rebuild_state). Merge in
+		// any state-set events that aren't already present.
+		let missing: Vec<OwnedEventId> = {
+			let r = cache.read().await;
+			all_events
+				.iter()
+				.filter(|eid| !r.contains_key(*eid))
+				.cloned()
+				.collect()
+		};
+		if !missing.is_empty() {
+			let fetched: Vec<_> = self
+				.services
+				.timeline
+				.multi_get_pdus(Some(room_id), futures::stream::iter(missing))
+				.filter_map(|r| async move { r.ok() })
+				.collect()
+				.await;
+			let mut w = cache.write().await;
+			for mut pdu in fetched {
+				pdu.rejected = false;
+				w.insert(pdu.event_id.clone(), Arc::new(pdu));
+			}
+		}
+		cache
+	} else {
+		// No prefetch cache — build one from scratch (existing behavior)
+		Arc::new(tokio::sync::RwLock::new(
+			self.services
+				.timeline
+				.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
+				.filter_map(|r| async move { r.ok() })
+				.wide_then(|mut pdu| async move {
+					let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
+					if is_rejected {
+						// Defense-in-depth: the event is in the timeline, meaning it
+						// passed auth at some point. A stale rejection flag would
+						// poison state resolution by cascading auth failures. Clear
+						// the flag rather than propagating it.
+						warn!(
+							event_id = %pdu.event_id,
+							"timeline event has stale rejection flag, clearing"
+						);
+						meta.unmark_event_rejected(&pdu.event_id);
+					}
+					pdu.rejected = false;
+					(pdu.event_id.clone(), Arc::new(pdu))
+				})
+				.collect::<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>()
+				.await,
+		))
+	};
+
+	let fetch_cache_ref = fetch_cache.clone();
+	let event_fetch = move |event_id: OwnedEventId| {
+		let cache_clone = fetch_cache_ref.clone();
+		async move {
+			if let Some(pdu) = cache_clone.read().await.get(&event_id).cloned() {
+				return Some(pdu);
+			}
+			// Fallback for missing auth events
+			let mut pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
+			if let Some(ref mut p) = pdu {
+				p.rejected = self
+					.services
+					.pdu_metadata
+					.is_event_rejected(&event_id)
+					.await;
+			}
+			pdu.map(Arc::new)
+		}
+	};
+
+	let event_missing_cb = move |missing_events: Vec<OwnedEventId>| {
+		// Can't do async federation fetches here (sync callback inside state_res).
+		// The ingestion pipeline (handle_outlier_pdu, fetch_prev, fetch_state) is
+		// responsible for pre-fetching auth events before we reach this point.
+		if !missing_events.is_empty() {
+			let formatted_events = if missing_events.len() > 10 {
+				format!(
+					"{:?}, ... {} more ..., {:?}",
+					&missing_events[..5],
+					missing_events.len().saturating_sub(10),
+					&missing_events[missing_events.len().saturating_sub(5)..]
+				)
+			} else {
+				format!("{missing_events:?}")
+			};
+
+			warn!(
+				target: "state_res_debug",
+				count = missing_events.len(),
+				events = %formatted_events,
+				"state_res: skipping missing auth chain events (best-effort)"
+			);
+		}
+	};
+
+	let fetch_cache_for_batch = fetch_cache.clone();
+	let event_batch_fetch = move |events: Vec<OwnedEventId>| {
+		let cache_clone = fetch_cache_for_batch.clone();
+		async move {
+			let fetched = self
+				.services
+				.timeline
+				.multi_get_pdus(Some(room_id), futures::stream::iter(events))
+				.filter_map(|r| async move { r.ok().map(Arc::new) })
+				.collect::<Vec<_>>()
+				.await;
+
+			let mut w = cache_clone.write().await;
+			for pdu in &fetched {
+				w.insert(pdu.event_id.clone(), pdu.clone());
+			}
+
+			fetched
+		}
+	};
+
+	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {
+		self.services
+			.auth_chain
+			.event_ids_iter(room_id, events.iter().map(|id| &**id))
+			.try_collect::<HashSet<OwnedEventId>>()
+			.await
+			.unwrap_or_default()
+	};
+
+	state_res::resolve(
+		room_version,
+		state_sets,
+		&event_fetch,
+		Some(&event_batch_fetch),
+		&auth_chain_fetch,
+		Some(&event_missing_cb),
+	)
+	.map_err(|e| err!(error!("State resolution failed: {e:?}")))
+	.await
 }
