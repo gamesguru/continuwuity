@@ -88,8 +88,27 @@ impl Service {
 
 		let mut available_counts: Vec<PduCount> = Vec::new();
 		if force_reindex {
-			available_counts = entries.values().map(|(c, ..)| c.into_normal()).collect();
+			available_counts = entries
+				.values()
+				.map(|(c, ..)| match c {
+					| PduCount::Normal(n) => PduCount::Normal(*n),
+					| PduCount::Backfilled(n) => PduCount::Normal(n.unsigned_abs()),
+				})
+				.collect();
 			available_counts.sort();
+			available_counts.dedup();
+			// If dedup removed duplicates (abs collision), fill gaps with fresh
+			// counts to maintain 1:1 mapping
+			while available_counts.len() < entries.len() {
+				let max = available_counts
+					.last()
+					.map(|c| match c {
+						| PduCount::Normal(n) => n.saturating_add(1),
+						| PduCount::Backfilled(_) => 1,
+					})
+					.unwrap_or(1);
+				available_counts.push(PduCount::Normal(max));
+			}
 		}
 
 		if !no_compute_state {

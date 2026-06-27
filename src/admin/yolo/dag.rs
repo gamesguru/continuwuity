@@ -1441,7 +1441,7 @@ pub(super) async fn audit_auth_chain(
 			use std::fmt::Write;
 			let mut out = String::from("Missing event IDs:\n");
 			for eid in &missing {
-				let _ = write!(out, "  {eid}\n");
+				let _ = writeln!(out, "  {eid}");
 			}
 			out.push_str("Hint: rerun with --fetch to attempt recovery from room servers.\n");
 			self.write_str(&out).await?;
@@ -1457,7 +1457,7 @@ pub(super) async fn audit_auth_chain(
 		missing.len(),
 	);
 	for eid in &missing {
-		let _ = write!(out, "  -> {eid}\n");
+		let _ = writeln!(out, "  -> {eid}");
 	}
 	self.write_str(&out).await?;
 
@@ -1486,11 +1486,11 @@ pub(super) async fn audit_auth_chain(
 		.map(|(pdu, _)| pdu.event_id().to_owned())
 		.collect();
 	for eid in &fetched_ids {
-		let _ = write!(result_out, "  ✓ {eid}\n");
+		let _ = writeln!(result_out, "  ✓ {eid}");
 	}
 	for eid in &missing {
 		if !fetched_ids.iter().any(|fid| fid == eid) {
-			let _ = write!(result_out, "  ✗ {eid} (not found on any server)\n");
+			let _ = writeln!(result_out, "  ✗ {eid} (not found on any server)");
 		}
 	}
 	self.write_str(&result_out).await
