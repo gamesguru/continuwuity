@@ -21,6 +21,9 @@ impl Data {
 		}
 	}
 
+	// TODO: migrate SyncRwLock<u64> to AtomicU64 with Block Reservation Strategy
+	// (reserve N IDs in RocksDB, issue from RAM via atomic fetch-add, gaps on
+	// crash are acceptable since Matrix only requires monotonic stream IDs)
 	pub fn next_count(&self) -> Result<u64> {
 		self.next_count_batch(1)
 			.map(|start| start.saturating_add(1))
