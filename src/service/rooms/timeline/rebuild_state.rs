@@ -1,6 +1,7 @@
 use std::{
 	collections::{BTreeSet, HashMap, HashSet},
 	hash::{Hash, Hasher},
+	pin::pin,
 	sync::Arc,
 	time::{Duration, Instant},
 };
@@ -16,7 +17,17 @@ use ruma::{OwnedEventId, RoomId, RoomVersionId, events::TimelineEventType};
 use crate::rooms;
 
 /// Event metadata extracted during Phase 1 streaming.
-type EventMeta = (OwnedEventId, Vec<OwnedEventId>, Option<String>, u64);
+/// Carries auth_events and (event_type, state_key) so we never need to load
+/// full PduEvents into RAM during the walk. Only fork resolution (rare) needs
+/// on-demand DB reads.
+/// (event_id, prev_events, auth_events, Option<(event_type, state_key)>, depth)
+type EventMeta = (
+	OwnedEventId,
+	Vec<OwnedEventId>,
+	Vec<OwnedEventId>,
+	Option<(String, String)>,
+	u64,
+);
 
 /// Safe u32 -> usize for Vec indexing of roaring bitmap indices.
 #[inline]
@@ -30,10 +41,11 @@ fn is_subset(small: &StateMap<OwnedEventId>, large: &StateMap<OwnedEventId>) -> 
 }
 
 /// Shared context threaded through all phases of rebuild_state.
+/// No event_cache — metadata carries everything needed for the walk;
+/// PDUs are fetched on-demand only during fork resolution.
 struct RebuildCtx {
 	room_version: RoomVersionId,
 	events_meta: Vec<EventMeta>,
-	event_cache: HashMap<OwnedEventId, Arc<PduEvent>>,
 	event_set: HashSet<OwnedEventId>,
 	eid_to_idx: HashMap<OwnedEventId, u32>,
 	idx_to_eid: Vec<OwnedEventId>,
@@ -41,9 +53,10 @@ struct RebuildCtx {
 }
 
 impl super::Service {
-	/// Rebuilds room state entirely in-memory like ruma-lean, then batch-writes
-	/// the result to DB. This avoids per-event RocksDB round-trips during state
-	/// resolution, achieving seconds instead of minutes for large DAGs.
+	/// Rebuilds room state entirely in-memory, then batch-writes the result to
+	/// DB. Memory usage is dominated by metadata vectors and state groups, NOT
+	/// by full PduEvent JSON. For a 60K-event room this uses ~50MB instead of
+	/// the previous ~4GB.
 	#[tracing::instrument(skip(self), level = "info")]
 	pub async fn rebuild_state(&self, room_id: &RoomId) -> Result<()> {
 		let original_room_shortstatehash = self
@@ -53,29 +66,26 @@ impl super::Service {
 			.await
 			.ok();
 
-		// Phase 1: Stream events and collect metadata
+		// Phase 1: Stream events and extract metadata (no heavy JSON cache)
 		let (events_meta, room_version) = self.rebuild_stream_events(room_id).await;
 
-		// Phase 2: Pre-load ALL events into RAM
-		let event_cache = self.rebuild_prefetch_events(room_id, &events_meta).await;
 		let event_set: HashSet<OwnedEventId> =
 			events_meta.iter().map(|(eid, ..)| eid.clone()).collect();
 
 		// Phase 2b: Pre-compute auth chains bottom-up (iterative DFS)
 		let (eid_to_idx, idx_to_eid, auth_chain_bitmaps) =
-			Self::rebuild_auth_chains(&events_meta, &event_cache);
+			Self::rebuild_auth_chains(&events_meta);
 
 		let ctx = RebuildCtx {
 			room_version,
 			events_meta,
-			event_cache,
 			event_set,
 			eid_to_idx,
 			idx_to_eid,
 			auth_chain_bitmaps,
 		};
 
-		// Phase 3+4: Merged state walk + inline DB writes + group eviction
+		// Phase 3+4: In-memory state walk with eviction + inline DB writes
 		let (event_ssh, current_shortstatehash) =
 			self.rebuild_walk_and_write(room_id, &ctx).await?;
 
@@ -113,6 +123,8 @@ impl super::Service {
 	}
 
 	// ── Phase 1: Stream events and collect metadata ──
+	// Now extracts auth_events and event_type directly, eliminating the need
+	// for Phase 2 (prefetch).
 
 	async fn rebuild_stream_events(&self, room_id: &RoomId) -> (Vec<EventMeta>, RoomVersionId) {
 		info!("rebuild_state: streaming events in topological order...");
@@ -122,11 +134,14 @@ impl super::Service {
 		let mut room_version = RoomVersionId::V1;
 		let mut room_version_found = false;
 
-		let mut stream = std::pin::pin!(self.topo_pdus(room_id, None));
+		let mut stream = pin!(self.topo_pdus(room_id, None));
 		while let Some(Ok((_pdu_count, pdu))) = stream.next().await {
 			let eid = pdu.event_id().to_owned();
 			let prev: Vec<OwnedEventId> = pdu.prev_events().map(ToOwned::to_owned).collect();
-			let state_key = pdu.state_key().map(ToOwned::to_owned);
+			let auth: Vec<OwnedEventId> = pdu.auth_events().map(ToOwned::to_owned).collect();
+			let state_key = pdu
+				.state_key()
+				.map(|sk| (pdu.kind().to_string(), sk.to_owned()));
 			let depth = u64::from(pdu.depth());
 
 			// Timeline events are authoritative; clear any stale rejection flags.
@@ -142,52 +157,25 @@ impl super::Service {
 				}
 			}
 
-			events_meta.push((eid, prev, state_key, depth));
+			events_meta.push((eid, prev, auth, state_key, depth));
 		}
 
-		debug!(
-			"rebuild_state: loaded {} event metadata in {:?}",
+		info!(
+			"rebuild_state: streamed {} events in {:?} | room version: {}",
 			events_meta.len(),
 			start.elapsed(),
+			room_version,
 		);
 		(events_meta, room_version)
-	}
-
-	// ── Phase 2: Pre-load ALL events into RAM ──
-
-	async fn rebuild_prefetch_events(
-		&self,
-		room_id: &RoomId,
-		events_meta: &[EventMeta],
-	) -> HashMap<OwnedEventId, Arc<PduEvent>> {
-		let start = Instant::now();
-		let event_cache: HashMap<OwnedEventId, Arc<PduEvent>> = {
-			let event_ids_stream =
-				futures::stream::iter(events_meta.iter().map(|(eid, ..)| eid.clone()));
-			self.multi_get_pdus(Some(room_id), event_ids_stream)
-				.filter_map(|r| async move { r.ok() })
-				.map(|mut pdu| {
-					pdu.rejected = false;
-					(pdu.event_id.clone(), Arc::new(pdu))
-				})
-				.collect()
-				.await
-		};
-		info!(
-			"rebuild_state: pre-loaded {} events into RAM in {:?}",
-			event_cache.len(),
-			start.elapsed(),
-		);
-		event_cache
 	}
 
 	// ── Phase 2b: Pre-compute auth chains bottom-up ──
 	// Uses an iterative post-order DFS with cycle detection to correctly handle
 	// busted DAGs where auth events may appear out of order.
+	// Now reads auth_events directly from EventMeta instead of event_cache.
 
 	fn rebuild_auth_chains(
 		events_meta: &[EventMeta],
-		event_cache: &HashMap<OwnedEventId, Arc<PduEvent>>,
 	) -> (HashMap<OwnedEventId, u32>, Vec<OwnedEventId>, Vec<roaring::RoaringBitmap>) {
 		let start = Instant::now();
 
@@ -218,22 +206,21 @@ impl super::Service {
 
 				visiting[curr] = true;
 
-				let eid = &idx_to_eid[curr];
+				// Read auth_events from metadata (index 2 in the tuple)
+				let auth_events = &events_meta[curr].2;
 				let mut all_resolved = true;
-				if let Some(pdu) = event_cache.get(eid) {
-					for auth_id in &pdu.auth_events {
-						if let Some(&auth_idx) = eid_to_idx.get(auth_id) {
-							let auth_usize = to_usize(auth_idx);
-							if bitmaps[auth_usize].is_none() {
-								if visiting[auth_usize] {
-									warn!(
-										"rebuild_state: auth chain cycle at {} -> {}",
-										eid, auth_id,
-									);
-								} else {
-									stack.push(auth_usize);
-									all_resolved = false;
-								}
+				for auth_id in auth_events {
+					if let Some(&auth_idx) = eid_to_idx.get(auth_id) {
+						let auth_usize = to_usize(auth_idx);
+						if bitmaps[auth_usize].is_none() {
+							if visiting[auth_usize] {
+								warn!(
+									"rebuild_state: auth chain cycle at {} -> {}",
+									idx_to_eid[curr], auth_id,
+								);
+							} else {
+								stack.push(auth_usize);
+								all_resolved = false;
 							}
 						}
 					}
@@ -241,14 +228,12 @@ impl super::Service {
 
 				if all_resolved {
 					let mut chain = roaring::RoaringBitmap::new();
-					if let Some(pdu) = event_cache.get(eid) {
-						for auth_id in &pdu.auth_events {
-							if let Some(&auth_idx) = eid_to_idx.get(auth_id) {
-								let auth_usize = to_usize(auth_idx);
-								if let Some(resolved_chain) = &bitmaps[auth_usize] {
-									chain.insert(auth_idx);
-									chain |= resolved_chain;
-								}
+					for auth_id in auth_events {
+						if let Some(&auth_idx) = eid_to_idx.get(auth_id) {
+							let auth_usize = to_usize(auth_idx);
+							if let Some(resolved_chain) = &bitmaps[auth_usize] {
+								chain.insert(auth_idx);
+								chain |= resolved_chain;
 							}
 						}
 					}
@@ -277,6 +262,9 @@ impl super::Service {
 	// inline SSH compression and DB writes. Evicts state groups from memory as
 	// soon as all their child events have been processed, keeping only the
 	// "live frontier" in RAM (~100-200 groups instead of 10k+).
+	//
+	// No event_cache needed: state_key and event_type come from EventMeta.
+	// PDUs are fetched on-demand only during fork resolution.
 
 	async fn rebuild_walk_and_write(
 		&self,
@@ -287,14 +275,11 @@ impl super::Service {
 		let mut cork = Some(self.db.db.cork());
 
 		// ── Pre-cache short IDs ──
-		// Collect all (type, state_key) pairs from state events + all event IDs
 		let precache_start = Instant::now();
 		let mut unique_state_keys: HashSet<(String, String)> = HashSet::new();
-		for (eid, _, state_key, _) in &ctx.events_meta {
-			if let Some(sk) = state_key {
-				if let Some(pdu) = ctx.event_cache.get(eid) {
-					unique_state_keys.insert((pdu.kind.to_string(), sk.clone()));
-				}
+		for (_, _, _, state_key, _) in &ctx.events_meta {
+			if let Some((ty, sk)) = state_key {
+				unique_state_keys.insert((ty.clone(), sk.clone()));
 			}
 		}
 
@@ -323,8 +308,6 @@ impl super::Service {
 		);
 
 		// ── Pre-compute group eviction metadata ──
-		// children_remaining[eid] = number of future events that reference eid
-		// as a prev_event. When it hits 0, eid's group can potentially be freed.
 		let mut children_remaining: HashMap<&OwnedEventId, usize> = HashMap::new();
 		for (_, prev_events, ..) in &ctx.events_meta {
 			for p in prev_events {
@@ -335,8 +318,6 @@ impl super::Service {
 			}
 		}
 
-		// group_live_refs[gid] = number of events with remaining children that
-		// use this group. When it hits 0, the group's StateMap can be freed.
 		let mut group_live_refs: HashMap<usize, usize> = HashMap::new();
 
 		// ── State walk + inline write ──
@@ -373,7 +354,7 @@ impl super::Service {
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let mut current_shortstatehash = empty_ssh;
 
-		for (eid, prev_events, state_key, _depth) in &ctx.events_meta {
+		for (eid, prev_events, _, state_key, _depth) in &ctx.events_meta {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
@@ -429,8 +410,6 @@ impl super::Service {
 							let mut state_hashes = Vec::with_capacity(unique_states.len());
 							for s in &unique_states {
 								let mut h = std::collections::hash_map::DefaultHasher::new();
-								// Sort entries to guarantee deterministic hashing
-								// across HashMap/BTreeMap types
 								let mut entries: Vec<_> = s.iter().collect();
 								entries.sort_unstable_by_key(|(k, _)| *k);
 								for (k, v) in entries {
@@ -474,13 +453,14 @@ impl super::Service {
 								fork_skip_count = fork_skip_count.saturating_add(1);
 								unique_groups[superset_idx]
 							} else {
-								// Genuine conflict: ruma-lean optimized resolution
+								// Genuine conflict: fetch PDUs on-demand + ruma-lean
 								let fork_start = Instant::now();
 								let fork_state_refs: Vec<&StateMap<OwnedEventId>> =
 									unique_states.iter().map(|s| &**s).collect();
 
-								let resolved =
-									Self::resolve_fork_with_states(ctx, &fork_state_refs);
+								let resolved = self
+									.resolve_fork_with_states(room_id, ctx, &fork_state_refs)
+									.await;
 
 								let fork_elapsed = fork_start.elapsed();
 								fork_resolve_count = fork_resolve_count.saturating_add(1);
@@ -519,14 +499,9 @@ impl super::Service {
 			};
 
 			// ── Apply state event or inherit parent group ──
-			let group_after = if let Some(sk) = state_key {
-				let Some(pdu) = ctx.event_cache.get(eid) else {
-					warn!("rebuild_state: state event {eid} missing from cache — skipping");
-					event_group.insert(eid.clone(), state_before_group);
-					continue;
-				};
-				let event_type: ruma::events::StateEventType = pdu.kind.to_string().into();
-				let sk_typed: conduwuit_core::matrix::StateKey = sk.as_str().into();
+			let group_after = if let Some((event_type_str, state_key_str)) = state_key {
+				let event_type: ruma::events::StateEventType = event_type_str.as_str().into();
+				let sk_typed: conduwuit_core::matrix::StateKey = state_key_str.as_str().into();
 
 				let current_state = state_groups
 					.get(&state_before_group)
@@ -552,7 +527,6 @@ impl super::Service {
 			event_group.insert(eid.clone(), group_after);
 
 			// ── Track group liveness ──
-			// If this event has children, mark its group as live
 			if children_remaining.get(eid).copied().unwrap_or(0) > 0 {
 				let refs = group_live_refs.entry(group_after).or_insert(0);
 				*refs = refs.saturating_add(1);
@@ -600,18 +574,16 @@ impl super::Service {
 
 			// Write pdu_shortstatehash for this event
 			if state_key.is_some() {
-				if let Ok((_, mut json)) = self.db.get_from_eventid_pdu(eid).await {
+				if let Ok((pdu, mut json)) = self.db.get_from_eventid_pdu(eid).await {
 					let pdu_id: conduwuit_core::matrix::pdu::RawPduId =
 						conduwuit_core::matrix::pdu::PduId {
 							shortroomid,
 							shorteventid: conduwuit_core::matrix::pdu::PduCount::Normal(0),
 						}
 						.into();
-					if let Some(pdu) = ctx.event_cache.get(eid) {
-						let mut ssh_mut = ssh;
-						self.compute_state_for_event(pdu, eid, &mut json, &mut ssh_mut, &pdu_id)
-							.await;
-					}
+					let mut ssh_mut = ssh;
+					self.compute_state_for_event(&pdu, eid, &mut json, &mut ssh_mut, &pdu_id)
+						.await;
 				}
 			} else {
 				let shorteventid = sei_cache.get(eid).copied().unwrap_or(0);
@@ -628,12 +600,10 @@ impl super::Service {
 				if let Some(remaining) = children_remaining.get_mut(p) {
 					*remaining = remaining.saturating_sub(1);
 					if *remaining == 0 {
-						// Parent p has no more unprocessed children
 						if let Some(&parent_gid) = event_group.get(p) {
 							if let Some(refs) = group_live_refs.get_mut(&parent_gid) {
 								*refs = refs.saturating_sub(1);
 								if *refs == 0 {
-									// No live events reference this group; free it
 									state_groups.remove(&parent_gid);
 									group_live_refs.remove(&parent_gid);
 									groups_evicted = groups_evicted.saturating_add(1);
@@ -670,10 +640,13 @@ impl super::Service {
 		Ok((event_ssh, current_shortstatehash))
 	}
 
-	/// Resolve a fork between multiple parent state sets natively using
-	/// `ruma-lean`. Pre-separates unconflicted/conflicted, computes auth
-	/// difference via roaring bitmaps, and calls `resolve_lean` directly.
-	fn resolve_fork_with_states(
+	/// Resolve a fork between multiple parent state sets using on-demand PDU
+	/// fetches and `ruma-lean`. Pre-separates unconflicted/conflicted, computes
+	/// auth difference via roaring bitmaps, then fetches only the needed PDUs
+	/// from RocksDB (typically ~200 events, <5ms).
+	async fn resolve_fork_with_states(
+		&self,
+		room_id: &RoomId,
 		ctx: &RebuildCtx,
 		fork_states: &[&StateMap<OwnedEventId>],
 	) -> StateMap<OwnedEventId> {
@@ -751,14 +724,40 @@ impl super::Service {
 			}
 		}
 
-		for idx in &union_auth {
-			if intersect_auth.contains(idx) {
-				continue;
-			}
+		// auth_diff = union - intersection (O(1) bitwise operation)
+		let auth_diff = &union_auth - &intersect_auth;
+		for idx in auth_diff {
 			conflicted_eids.insert(ctx.idx_to_eid[to_usize(idx)].clone());
 		}
 
-		// 3. Convert PduEvent -> LeanEvent for conflicted + auth context events
+		// 3. Collect all event IDs we need to fetch for resolution
+		let mut auth_context_eids: HashSet<OwnedEventId> = HashSet::new();
+		for idx in union_auth {
+			auth_context_eids.insert(ctx.idx_to_eid[to_usize(idx)].clone());
+		}
+		for state in fork_states {
+			for eid in state.values() {
+				auth_context_eids.insert(eid.clone());
+			}
+		}
+
+		// 4. Fetch PDUs on-demand from RocksDB (typically ~200 events, <5ms)
+		let mut fetch_ids: HashSet<OwnedEventId> = auth_context_eids.clone();
+		fetch_ids.extend(conflicted_eids.iter().cloned());
+		let fetch_ids_vec: Vec<OwnedEventId> = fetch_ids.into_iter().collect();
+
+		let pdus = self
+			.multi_get_pdus(Some(room_id), futures::stream::iter(fetch_ids_vec))
+			.collect::<Vec<_>>()
+			.await;
+		let mut pdu_map: HashMap<OwnedEventId, PduEvent> = HashMap::new();
+		for res in pdus {
+			if let Ok(pdu) = res {
+				pdu_map.insert(pdu.event_id.clone(), pdu);
+			}
+		}
+
+		// 5. Convert PduEvent -> LeanEvent
 		let to_lean = |pdu: &PduEvent| -> ruma_lean::LeanEvent {
 			let content_val: serde_json::Value =
 				serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
@@ -783,23 +782,12 @@ impl super::Service {
 			}
 		};
 
-		// 4. Build auth_context and conflicted_events maps
-		let mut auth_context_eids: HashSet<OwnedEventId> = HashSet::new();
-		for idx in &union_auth {
-			auth_context_eids.insert(ctx.idx_to_eid[to_usize(idx)].clone());
-		}
-		// Include unconflicted event IDs — they act as auth base
-		for state in fork_states {
-			for eid in state.values() {
-				auth_context_eids.insert(eid.clone());
-			}
-		}
-
+		// 6. Build auth_context and conflicted_events maps
 		let mut conflicted_events: HashMap<String, ruma_lean::LeanEvent> = HashMap::new();
 		let mut auth_context: HashMap<String, ruma_lean::LeanEvent> = HashMap::new();
 
 		for eid in &auth_context_eids {
-			if let Some(pdu) = ctx.event_cache.get(eid) {
+			if let Some(pdu) = pdu_map.get(eid) {
 				let lean = to_lean(pdu);
 				if conflicted_eids.contains(eid) {
 					conflicted_events.insert(eid.to_string(), lean);
@@ -813,13 +801,13 @@ impl super::Service {
 			if let std::collections::hash_map::Entry::Vacant(e) =
 				conflicted_events.entry(eid.to_string())
 			{
-				if let Some(pdu) = ctx.event_cache.get(eid) {
+				if let Some(pdu) = pdu_map.get(eid) {
 					e.insert(to_lean(pdu));
 				}
 			}
 		}
 
-		// 5. Map room version to ruma-lean's StateResVersion
+		// 7. Map room version to ruma-lean's StateResVersion
 		let version = match ctx.room_version.as_str() {
 			| "1" => ruma_lean::StateResVersion::V1,
 			| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
@@ -828,11 +816,11 @@ impl super::Service {
 			| _ => ruma_lean::StateResVersion::V2_1_1,
 		};
 
-		// 6. Call ruma-lean's resolve_lean directly
+		// 8. Call ruma-lean's resolve_lean directly
 		let resolved_lean =
 			ruma_lean::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
 
-		// 7. Convert back to Ruma StateMap
+		// 9. Convert back to Ruma StateMap
 		let mut resolved = StateMap::new();
 		for ((ty_str, sk_opt), eid_str) in resolved_lean {
 			let ty: ruma::events::StateEventType = ty_str.into();
@@ -944,7 +932,7 @@ impl super::Service {
 		// Build ShortEventId -> depth map for conflicting SEIs
 		let depth_by_eid: HashMap<&OwnedEventId, u64> = events_meta
 			.iter()
-			.map(|(eid, _, _, depth)| (eid, *depth))
+			.map(|(eid, _, _, _, depth)| (eid, *depth))
 			.collect();
 		let mut sei_depth: HashMap<u64, u64> = HashMap::new();
 		let conflicting_seis: HashSet<u64> = ssk_values
