@@ -92,7 +92,7 @@ pub(super) async fn parse_pdu(&self) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
+pub(super) async fn get_pdu(&self, event_id: OwnedEventId, verbose: bool) -> Result {
 	let in_timeline = self
 		.services
 		.rooms
@@ -157,7 +157,54 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId) -> Result {
 		status.push_str(" [REJECTED]");
 	}
 
-	let out = format!("Status: {status}\n\n```json\n{text}\n```");
+	let mut out = format!("Status: {status}\n\n```json\n{text}\n```");
+
+	if verbose {
+		match self
+			.services
+			.rooms
+			.timeline
+			.get_event_metadata(&event_id)
+			.await
+		{
+			| Ok(meta) => {
+				use std::fmt::Write;
+				writeln!(out)?;
+				writeln!(out, "## Metadata")?;
+				writeln!(out, "- **pdu_count**:        {:?}", meta.pdu_count)?;
+				writeln!(out, "- **origin_server_ts**: {}", meta.origin_server_ts)?;
+				writeln!(out, "- **depth**:            {}", meta.depth)?;
+				writeln!(out, "- **short_room_id**:    {}", meta.short_room_id)?;
+				writeln!(out, "- **is_outlier**:       {}", meta.is_outlier)?;
+				writeln!(out, "- **soft_failed**:      {}", meta.soft_failed)?;
+				writeln!(out, "- **rejected**:         {}", meta.rejected)?;
+				writeln!(
+					out,
+					"- **redacted_by**:      {}",
+					meta.redacted_by
+						.as_ref()
+						.map_or("None".to_owned(), |e| e.to_string())
+				)?;
+				writeln!(
+					out,
+					"- **short_state_hash**: {}",
+					meta.short_state_hash
+						.map_or("None".to_owned(), |h| h.to_string())
+				)?;
+				if !meta.soft_fail_reason.is_empty() {
+					writeln!(out, "- **soft_fail_reason**: {}", meta.soft_fail_reason)?;
+				}
+				if !meta.rejection_reason.is_empty() {
+					writeln!(out, "- **rejection_reason**: {}", meta.rejection_reason)?;
+				}
+			},
+			| Err(e) => {
+				use std::fmt::Write;
+				writeln!(out, "\n⚠ No metadata found: {e}")?;
+			},
+		}
+	}
+
 	self.write_str(&out).await
 }
 

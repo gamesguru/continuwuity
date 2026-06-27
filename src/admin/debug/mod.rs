@@ -36,6 +36,10 @@ pub enum DebugCommand {
 	GetPdu {
 		/// An event ID (a $ followed by the base64 reference hash)
 		event_id: OwnedEventId,
+
+		/// Also print deserialized eventid_metadata (short IDs, flags, SSH)
+		#[arg(short, long)]
+		verbose: bool,
 	},
 
 	/// Retrieve and print a PDU by PduId from the Continuwuity database
