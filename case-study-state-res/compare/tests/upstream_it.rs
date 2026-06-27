@@ -1,22 +1,22 @@
 //! Integration tests running upstream `ruma-state-res` fixtures against
-//! Conduwuit's engine.
+//! Conduwuit's engine via rezzy.
 //!
 //! Each test loads the same fixture files used by upstream ruma-state-res
 //! tests. "Batched" tests load multiple PDU files, each representing one side
 //! of a DAG fork (plus a common bootstrap). State is built per-fork and fed to
-//! `state_res::resolve` as separate state sets.
+//! `rezzy::resolve_lean` as separate state sets.
 //!
 //! "State map" tests (MSC4297) load explicit state maps + PDU definitions.
 
 use std::{
-	collections::{BTreeSet, HashMap, HashSet, VecDeque},
+	collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
 	fs,
 	path::Path,
 };
 
 use conduwuit_core::{
 	PduEvent,
-	matrix::{Event, state_res, state_res::StateMap},
+	matrix::{Event, state_res::StateMap},
 };
 use ruma::{CanonicalJsonValue, EventId, OwnedEventId, RoomVersionId};
 
@@ -107,8 +107,6 @@ impl EventStore {
 		}
 		Self { events: map }
 	}
-
-	fn fetch(&self, id: OwnedEventId) -> Option<PduEvent> { self.events.get(&id).cloned() }
 
 	fn auth_chain(&self, event_ids: impl Iterator<Item = OwnedEventId>) -> HashSet<OwnedEventId> {
 		let mut chain = HashSet::new();
@@ -282,8 +280,161 @@ fn format_state_for_snapshot(state: &StateMap<OwnedEventId>, store: &EventStore)
 // Resolution Modes
 // ==========================================
 
+/// Convert a PduEvent to a rezzy LeanEvent.
+fn to_lean(pdu: &PduEvent) -> rezzy::LeanEvent {
+	let content_val: serde_json::Value =
+		serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
+	let power_level = content_val
+		.get("power_level")
+		.and_then(|pl| {
+			pl.as_i64()
+				.or_else(|| pl.as_str().and_then(|s| s.parse().ok()))
+		})
+		.unwrap_or(0);
+	rezzy::LeanEvent {
+		event_id: pdu.event_id.to_string(),
+		event_type: pdu.kind.to_string(),
+		state_key: pdu.state_key.as_ref().map(ToString::to_string),
+		power_level,
+		origin_server_ts: pdu.origin_server_ts.into(),
+		sender: pdu.sender.to_string(),
+		content: content_val,
+		prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
+		auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
+		depth: u64::from(pdu.depth),
+	}
+}
+
+/// Map RoomVersionId to rezzy's StateResVersion.
+fn to_rezzy_version(v: &RoomVersionId) -> rezzy::StateResVersion {
+	match v.as_str() {
+		| "1" => rezzy::StateResVersion::V1,
+		| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
+			rezzy::StateResVersion::V2,
+		| "12" => rezzy::StateResVersion::V2_1,
+		| "12.1" => rezzy::StateResVersion::V2_1_1,
+		| _ => panic!("unknown room version: {}", v.as_str()),
+	}
+}
+
+/// Resolve state sets via rezzy: pre-separate unconflicted/conflicted,
+/// compute auth diff, convert to LeanEvent, call resolve_lean.
+fn resolve_via_rezzy(
+	state_sets: &[StateMap<OwnedEventId>],
+	store: &EventStore,
+	room_version: &RoomVersionId,
+) -> StateMap<OwnedEventId> {
+	let num_maps = state_sets.len();
+
+	// Pre-separate unconflicted/conflicted
+	let mut counts: HashMap<(String, String, String), usize> = HashMap::new();
+	let mut key_to_ids: HashMap<(String, String), HashSet<String>> = HashMap::new();
+
+	for map in state_sets {
+		for ((ty, sk), id) in map {
+			let ty_s = ty.to_string();
+			let sk_s = sk.to_string();
+			let id_s = id.to_string();
+			let entry = counts
+				.entry((ty_s.clone(), sk_s.clone(), id_s.clone()))
+				.or_insert(0);
+			*entry = entry.saturating_add(1);
+			key_to_ids.entry((ty_s, sk_s)).or_default().insert(id_s);
+		}
+	}
+
+	let mut unconflicted: BTreeMap<(String, Option<String>), String> = BTreeMap::new();
+	let mut conflicted_keys: HashSet<(String, String)> = HashSet::new();
+
+	for (key, ids) in &key_to_ids {
+		if ids.len() == 1 {
+			let id = ids.iter().next().unwrap();
+			let count = counts
+				.get(&(key.0.clone(), key.1.clone(), id.clone()))
+				.copied()
+				.unwrap_or(0);
+			if count == num_maps {
+				let sk_opt = if key.1.is_empty() { None } else { Some(key.1.clone()) };
+				unconflicted.insert((key.0.clone(), sk_opt), id.clone());
+				continue;
+			}
+		}
+		conflicted_keys.insert(key.clone());
+	}
+
+	// Collect conflicted event IDs
+	let mut conflicted_eids: HashSet<OwnedEventId> = HashSet::new();
+	for map in state_sets {
+		for ((ty, sk), id) in map {
+			if conflicted_keys.contains(&(ty.to_string(), sk.to_string())) {
+				conflicted_eids.insert(id.clone());
+			}
+		}
+	}
+
+	if conflicted_eids.is_empty() {
+		return state_sets[0].clone();
+	}
+
+	// Compute auth chain difference
+	let mut per_set_chains: Vec<HashSet<OwnedEventId>> = Vec::new();
+	for map in state_sets {
+		let chain = store.auth_chain(map.values().cloned());
+		per_set_chains.push(chain);
+	}
+
+	let mut union_auth: HashSet<OwnedEventId> = HashSet::new();
+	let mut intersect_auth: HashSet<OwnedEventId> = per_set_chains[0].clone();
+	for chain in &per_set_chains {
+		union_auth.extend(chain.iter().cloned());
+		intersect_auth.retain(|eid| chain.contains(eid));
+	}
+
+	for eid in &union_auth {
+		if !intersect_auth.contains(eid) {
+			conflicted_eids.insert(eid.clone());
+		}
+	}
+
+	// Build LeanEvent maps
+	let mut conflicted_events: HashMap<String, rezzy::LeanEvent> = HashMap::new();
+	let mut auth_context: HashMap<String, rezzy::LeanEvent> = HashMap::new();
+
+	// All state set values + union auth
+	let mut all_ids: HashSet<OwnedEventId> = union_auth;
+	for map in state_sets {
+		all_ids.extend(map.values().cloned());
+	}
+	all_ids.extend(conflicted_eids.iter().cloned());
+
+	for eid in &all_ids {
+		if let Some(pdu) = store.events.get(eid) {
+			let lean = to_lean(pdu);
+			if conflicted_eids.contains(eid) {
+				conflicted_events.insert(eid.to_string(), lean);
+			} else {
+				auth_context.insert(eid.to_string(), lean);
+			}
+		}
+	}
+
+	let version = to_rezzy_version(room_version);
+	let resolved_lean =
+		rezzy::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
+
+	// Convert back to Ruma StateMap
+	let mut resolved = StateMap::new();
+	for ((ty_str, sk_opt), eid_str) in resolved_lean {
+		let ty: ruma::events::StateEventType = ty_str.into();
+		let sk: conduwuit_core::matrix::StateKey = sk_opt.unwrap_or_default().into();
+		if let Ok(eid) = OwnedEventId::try_from(eid_str.as_str()) {
+			resolved.insert((ty, sk), eid);
+		}
+	}
+	resolved
+}
+
 /// Resolve by building per-leaf state maps from the DAG structure.
-/// This is the correct approach: each leaf represents a fork tip.
 async fn resolve_batched(
 	fixture_files: &[&str],
 	room_version: &RoomVersionId,
@@ -306,22 +457,7 @@ async fn resolve_batched(
 		return state_sets.into_iter().next().unwrap();
 	}
 
-	let fetch = |id: OwnedEventId| std::future::ready(store.fetch(id));
-	let auth_chain_fetch = |ids: Vec<OwnedEventId>| {
-		let chain = store.auth_chain(ids.into_iter());
-		std::future::ready(chain)
-	};
-
-	state_res::resolve(
-		room_version,
-		state_sets.iter(),
-		&fetch,
-		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
-		&auth_chain_fetch,
-		None::<&fn(Vec<OwnedEventId>)>,
-	)
-	.await
-	.expect("State resolution failed")
+	resolve_via_rezzy(&state_sets, &store, room_version)
 }
 
 /// Resolve MSC4297 state map tests: explicit state maps + PDU definitions.
@@ -357,22 +493,7 @@ async fn resolve_state_maps(
 		})
 		.collect();
 
-	let fetch = |id: OwnedEventId| std::future::ready(store.fetch(id));
-	let auth_chain_fetch = |ids: Vec<OwnedEventId>| {
-		let chain = store.auth_chain(ids.into_iter());
-		std::future::ready(chain)
-	};
-
-	state_res::resolve(
-		room_version,
-		state_sets.iter(),
-		&fetch,
-		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<PduEvent>>>,
-		&auth_chain_fetch,
-		None::<&fn(Vec<OwnedEventId>)>,
-	)
-	.await
-	.expect("State resolution failed")
+	resolve_via_rezzy(&state_sets, &store, room_version)
 }
 
 // ==========================================
