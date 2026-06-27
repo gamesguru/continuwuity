@@ -88,8 +88,7 @@ impl Service {
 
 		let mut available_counts: Vec<PduCount> = Vec::new();
 		if force_reindex {
-			available_counts =
-				entries.values().map(|(c, ..)| c.into_normal()).collect();
+			available_counts = entries.values().map(|(c, ..)| c.into_normal()).collect();
 			available_counts.sort();
 		}
 
