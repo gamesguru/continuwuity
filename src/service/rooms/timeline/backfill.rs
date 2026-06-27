@@ -324,24 +324,14 @@ pub async fn backfill_pdu(
 		.lock(&room_id)
 		.await;
 
-	// If the PDU already exists as a timeline event, check whether it needs
-	// to be demoted from Normal to Backfilled. A concurrent federation /send
-	// transaction can race with backfill and insert the event with a Normal
-	// count; leaving it there breaks backward pagination ordering because
-	// Normal events sort after all Backfilled events.
-	if let Ok(existing_pdu_id) = self.get_pdu_id(&event_id).await {
-		let existing_count = existing_pdu_id.pdu_count();
-		if matches!(existing_count, PduCount::Backfilled(_)) {
-			debug!("Event {event_id} already backfilled, skipping");
-			return Ok(());
-		}
-		// Normal count — demote to Backfilled below (don't skip)
-		info!(
-			target: "timeline_debug",
-			%room_id,
-			"Demoting {event_id} to backfilled: /send raced with /backfill"
-		);
-		self.db.remove_from_timeline(&event_id).await;
+	// If the PDU already exists in the timeline, skip. A concurrent
+	// federation /send may have raced with /backfill and inserted the
+	// event with a Normal count. Keeping Normal is correct — it sorts
+	// in the live timeline where the user expects it. Demoting to
+	// Backfilled would inject the event into the wrong stream position.
+	if self.get_pdu_id(&event_id).await.is_ok() {
+		debug!("Event {event_id} already in timeline, skipping backfill");
+		return Ok(());
 	}
 
 	// Backfill events come from a trusted /backfill response. We only need
