@@ -724,8 +724,8 @@ impl super::Service {
 			}
 		}
 
-		// auth_diff = union - intersection (O(1) bitwise operation)
-		let auth_diff = &union_auth - &intersect_auth;
+		// auth_diff = union \ intersection (SIMD-optimized set difference)
+		let auth_diff = std::ops::Sub::sub(&union_auth, &intersect_auth);
 		for idx in auth_diff {
 			conflicted_eids.insert(ctx.idx_to_eid[to_usize(idx)].clone());
 		}
