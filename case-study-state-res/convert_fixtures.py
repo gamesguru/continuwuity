@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Convert ruma-lean fixtures to conduwuit Pdu JSONL format.
+"""Convert rezzy fixtures to conduwuit Pdu JSONL format.
 
 Adds missing fields (hashes, signatures, depth) that conduwuit's Pdu requires.
-Processes all JSON fixture files from ruma-lean and outputs one JSONL per test case.
+Processes all JSON fixture files from rezzy and outputs one JSONL per test case.
 """
 import json
 import os
 import sys
 from pathlib import Path
 
-RUMA_LEAN_FIXTURES = Path("/run/media/shane/shane4tb-ent/repos/ruma-lean/res/ruma_upstream")
+RUMA_LEAN_FIXTURES = Path("/run/media/shane/shane4tb-ent/repos/rezzy/res/ruma_upstream")
 OUTPUT_DIR = Path("/run/media/shane/shane4tb-ent/repos/continuwuity/case-study-state-res/fixtures")
 
 # Test cases: name -> list of fixture files (in order)
@@ -56,7 +56,7 @@ TEST_CASES = {
 
 
 def enrich_event(ev: dict, idx: int) -> dict:
-    """Add fields required by conduwuit's Pdu that ruma-lean fixtures lack."""
+    """Add fields required by conduwuit's Pdu that rezzy fixtures lack."""
     enriched = dict(ev)
     if "depth" not in enriched:
         enriched["depth"] = idx + 1

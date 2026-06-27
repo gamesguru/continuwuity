@@ -2,9 +2,9 @@
 # State Resolution Verification: unredacted.org vs matrix.org
 # Room: !sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE
 #
-# Uses ruma-lean's independent state-res output (state-res.json) to determine
+# Uses rezzy's independent state-res output (state-res.json) to determine
 # which server resolved state correctly for disputed membership events.
-#   cargo install ruma-lean --features cli
+#   cargo install rezzy --features cli
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -12,11 +12,11 @@ cd "$(dirname "$0")"
 STATE_RES="state-res-unredacted-dag.json"
 
 # Generate state-res output from raw DAG
-ruma-lean -i ./remote-dag-sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE-v12-unredacted.org-formatted.jsonl | tee "$STATE_RES"
+rezzy -i ./remote-dag-sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE-v12-unredacted.org-formatted.jsonl | tee "$STATE_RES"
 
 echo "=== State Resolution Verification ==="
 echo "Room: !sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE"
-echo "Resolver: ruma-lean (independent V2 state-res)"
+echo "Resolver: rezzy (independent V2 state-res)"
 echo
 
 # Disputed events — same state_key, different event_id on each server

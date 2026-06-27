@@ -314,7 +314,7 @@ where
 	//    2. m.room.join_rules - needed for join auth checks
 	//    3. m.room.member - sender's join must be in state for PL auth
 	//    4. m.room.power_levels - the actual PL events
-	//    This matches Synapse/ruma-lean behavior where ALL member events
+	//    This matches Synapse/rezzy behavior where ALL member events
 	//    go through the Kahn-sorted power event path.
 	//
 	//    NOTE: This is ONLY needed for V2.1 which starts from empty state.

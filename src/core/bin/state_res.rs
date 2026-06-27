@@ -36,6 +36,6 @@ async fn main() {
     }
 
     // Actually, setting up the exact state_sets from a DAG.jsonl is non-trivial.
-    // The DAG jsonl from ruma-lean usually has all events. The extremities are the leaves.
+    // The DAG jsonl from rezzy usually has all events. The extremities are the leaves.
     // I need to identify extremities to form state_sets.
 }

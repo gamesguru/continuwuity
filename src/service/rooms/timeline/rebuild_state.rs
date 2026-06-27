@@ -453,7 +453,7 @@ impl super::Service {
 								fork_skip_count = fork_skip_count.saturating_add(1);
 								unique_groups[superset_idx]
 							} else {
-								// Genuine conflict: fetch PDUs on-demand + ruma-lean
+								// Genuine conflict: fetch PDUs on-demand + rezzy
 								let fork_start = Instant::now();
 								let fork_state_refs: Vec<&StateMap<OwnedEventId>> =
 									unique_states.iter().map(|s| &**s).collect();
@@ -641,7 +641,7 @@ impl super::Service {
 	}
 
 	/// Resolve a fork between multiple parent state sets using on-demand PDU
-	/// fetches and `ruma-lean`. Pre-separates unconflicted/conflicted, computes
+	/// fetches and `rezzy`. Pre-separates unconflicted/conflicted, computes
 	/// auth difference via roaring bitmaps, then fetches only the needed PDUs
 	/// from RocksDB (typically ~200 events, <5ms).
 	async fn resolve_fork_with_states(
@@ -805,7 +805,7 @@ impl super::Service {
 			}
 		}
 
-		// 7. Map room version to ruma-lean's StateResVersion
+		// 7. Map room version to rezzy's StateResVersion
 		let version = match ctx.room_version.as_str() {
 			| "1" => ruma_lean::StateResVersion::V1,
 			| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
@@ -814,7 +814,7 @@ impl super::Service {
 			| _ => ruma_lean::StateResVersion::V2_1_1,
 		};
 
-		// 8. Call ruma-lean's resolve_lean directly
+		// 8. Call rezzy's resolve_lean directly
 		let resolved_lean =
 			ruma_lean::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
 
