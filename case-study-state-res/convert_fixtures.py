@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-RUMA_LEAN_FIXTURES = Path("/run/media/shane/shane4tb-ent/repos/rezzy/res/ruma_upstream")
+rezzy_FIXTURES = Path("/run/media/shane/shane4tb-ent/repos/rezzy/res/ruma_upstream")
 OUTPUT_DIR = Path("/run/media/shane/shane4tb-ent/repos/continuwuity/case-study-state-res/fixtures")
 
 # Test cases: name -> list of fixture files (in order)
@@ -73,7 +73,7 @@ def main():
     for test_name, fixture_files in TEST_CASES.items():
         events = []
         for fname in fixture_files:
-            fpath = RUMA_LEAN_FIXTURES / fname
+            fpath = rezzy_FIXTURES / fname
             if not fpath.exists():
                 print(f"  SKIP {fname} (not found)", file=sys.stderr)
                 continue

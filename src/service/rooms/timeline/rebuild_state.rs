@@ -756,7 +756,7 @@ impl super::Service {
 		}
 
 		// 5. Convert PduEvent -> LeanEvent
-		let to_lean = |pdu: &PduEvent| -> ruma_lean::LeanEvent {
+		let to_lean = |pdu: &PduEvent| -> rezzy::LeanEvent {
 			let content_val: serde_json::Value =
 				serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
 			let power_level = content_val
@@ -766,7 +766,7 @@ impl super::Service {
 						.or_else(|| pl.as_str().and_then(|s| s.parse().ok()))
 				})
 				.unwrap_or(0);
-			ruma_lean::LeanEvent {
+			rezzy::LeanEvent {
 				event_id: pdu.event_id.to_string(),
 				event_type: pdu.kind.to_string(),
 				state_key: pdu.state_key.as_ref().map(ToString::to_string),
@@ -781,8 +781,8 @@ impl super::Service {
 		};
 
 		// 6. Build auth_context and conflicted_events maps
-		let mut conflicted_events: HashMap<String, ruma_lean::LeanEvent> = HashMap::new();
-		let mut auth_context: HashMap<String, ruma_lean::LeanEvent> = HashMap::new();
+		let mut conflicted_events: HashMap<String, rezzy::LeanEvent> = HashMap::new();
+		let mut auth_context: HashMap<String, rezzy::LeanEvent> = HashMap::new();
 
 		for eid in &auth_context_eids {
 			if let Some(pdu) = pdu_map.get(eid) {
@@ -807,16 +807,16 @@ impl super::Service {
 
 		// 7. Map room version to rezzy's StateResVersion
 		let version = match ctx.room_version.as_str() {
-			| "1" => ruma_lean::StateResVersion::V1,
+			| "1" => rezzy::StateResVersion::V1,
 			| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
-				ruma_lean::StateResVersion::V2,
-			| "12" => ruma_lean::StateResVersion::V2_1,
-			| _ => ruma_lean::StateResVersion::V2_1_1,
+				rezzy::StateResVersion::V2,
+			| "12" => rezzy::StateResVersion::V2_1,
+			| _ => rezzy::StateResVersion::V2_1_1,
 		};
 
 		// 8. Call rezzy's resolve_lean directly
 		let resolved_lean =
-			ruma_lean::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
+			rezzy::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
 
 		// 9. Convert back to Ruma StateMap
 		let mut resolved = StateMap::new();

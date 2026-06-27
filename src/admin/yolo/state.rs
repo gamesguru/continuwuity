@@ -892,6 +892,17 @@ pub(super) async fn set_state_event(
 		)));
 	}
 
+	// Automatically clear rejected/soft-failed flags — if we're explicitly
+	// promoting this event to current state, these flags are contradictory.
+	self.services
+		.rooms
+		.pdu_metadata
+		.unmark_event_rejected(&event_id);
+	self.services
+		.rooms
+		.pdu_metadata
+		.unmark_event_soft_failed(&event_id);
+
 	let state_lock = self.services.rooms.state.mutex.lock(&room_id).await;
 
 	// Get current state
