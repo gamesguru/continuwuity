@@ -183,13 +183,13 @@ pub(super) async fn get_pdu(&self, event_id: OwnedEventId, verbose: bool) -> Res
 					"- **redacted_by**:      {}",
 					meta.redacted_by
 						.as_ref()
-						.map_or("None".to_owned(), |e| e.to_string())
+						.map_or_else(|| "None".to_owned(), ToString::to_string)
 				)?;
 				writeln!(
 					out,
 					"- **short_state_hash**: {}",
 					meta.short_state_hash
-						.map_or("None".to_owned(), |h| h.to_string())
+						.map_or_else(|| "None".to_owned(), |h| h.to_string())
 				)?;
 				if !meta.soft_fail_reason.is_empty() {
 					writeln!(out, "- **soft_fail_reason**: {}", meta.soft_fail_reason)?;

@@ -1438,8 +1438,13 @@ pub(super) async fn audit_auth_chain(
 
 	if missing.is_empty() || !fetch {
 		if !missing.is_empty() {
-			self.write_str("Hint: rerun with --fetch to attempt recovery from room servers.\n")
-				.await?;
+			use std::fmt::Write;
+			let mut out = String::from("Missing event IDs:\n");
+			for eid in &missing {
+				let _ = write!(out, "  {eid}\n");
+			}
+			out.push_str("Hint: rerun with --fetch to attempt recovery from room servers.\n");
+			self.write_str(&out).await?;
 		}
 		return Ok(());
 	}
@@ -1447,11 +1452,14 @@ pub(super) async fn audit_auth_chain(
 	// --fetch: reuse the battle-tested outlier fetch pipeline (32-server EMA
 	// fallback, backoff, full signature validation, rate-limit tracking)
 
-	self.write_str(&format!(
+	let mut out = format!(
 		"Fetching {} missing events via fetch_and_handle_outliers pipeline...\n",
 		missing.len(),
-	))
-	.await?;
+	);
+	for eid in &missing {
+		let _ = write!(out, "  -> {eid}\n");
+	}
+	self.write_str(&out).await?;
 
 	let fetched = self
 		.services
@@ -1468,12 +1476,24 @@ pub(super) async fn audit_auth_chain(
 		)
 		.await;
 
-	self.write_str(&format!(
+	let mut result_out = format!(
 		"Fetched {}/{} missing auth events (now in outlier store).\n",
 		fetched.len(),
 		missing.len()
-	))
-	.await
+	);
+	let fetched_ids: HashSet<OwnedEventId> = fetched
+		.iter()
+		.map(|(pdu, _)| pdu.event_id().to_owned())
+		.collect();
+	for eid in &fetched_ids {
+		let _ = write!(result_out, "  ✓ {eid}\n");
+	}
+	for eid in &missing {
+		if !fetched_ids.iter().any(|fid| fid == eid) {
+			let _ = write!(result_out, "  ✗ {eid} (not found on any server)\n");
+		}
+	}
+	self.write_str(&result_out).await
 }
 
 #[admin_command]
