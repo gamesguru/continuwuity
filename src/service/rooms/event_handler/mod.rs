@@ -25,7 +25,7 @@ use std::{
 
 use async_trait::async_trait;
 use conduwuit::{
-	Err, Event, PduEvent, Result, RoomVersion, Server, SyncRwLock,
+	Err, Event, Result, RoomVersion, Server, SyncRwLock,
 	utils::{MutexMap, stream::ReadyExt},
 };
 use futures::StreamExt;
@@ -138,23 +138,6 @@ impl crate::Service for Service {
 }
 
 impl Service {
-	async fn event_fetch(
-		&self,
-		room_id: Option<&RoomId>,
-		event_id: OwnedEventId,
-	) -> Option<PduEvent> {
-		if let Ok(pdu) = self
-			.services
-			.timeline
-			.get_pdu_in_room(room_id, &event_id)
-			.await
-		{
-			Some(pdu)
-		} else {
-			self.services.outlier.get_pdu_outlier(&event_id).await.ok()
-		}
-	}
-
 	/// Build a prioritized list of federation servers for fetching events:
 	///  1. origin (the server that sent the transaction)
 	///  2. event sender's homeserver (structurally guaranteed to have the

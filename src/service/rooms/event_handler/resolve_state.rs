@@ -177,9 +177,10 @@ where
 			let ty_s = ty.to_string();
 			let sk_s = sk.to_string();
 			let id_s = id.to_string();
-			*counts
+			let entry = counts
 				.entry((ty_s.clone(), sk_s.clone(), id_s.clone()))
-				.or_insert(0) += 1;
+				.or_insert(0);
+			*entry = entry.saturating_add(1);
 			key_to_ids.entry((ty_s, sk_s)).or_default().insert(id_s);
 		}
 	}
