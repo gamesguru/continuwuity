@@ -100,13 +100,10 @@ impl Service {
 			// If dedup removed duplicates (abs collision), fill gaps with fresh
 			// counts to maintain 1:1 mapping
 			while available_counts.len() < entries.len() {
-				let max = available_counts
-					.last()
-					.map(|c| match c {
-						| PduCount::Normal(n) => n.saturating_add(1),
-						| PduCount::Backfilled(_) => 1,
-					})
-					.unwrap_or(1);
+				let max = available_counts.last().map_or(1, |c| match c {
+					| PduCount::Normal(n) => n.saturating_add(1),
+					| PduCount::Backfilled(_) => 1,
+				});
 				available_counts.push(PduCount::Normal(max));
 			}
 		}
@@ -485,17 +482,15 @@ impl Service {
 						new_count,
 					);
 				}
+			} else if let Some(meta) = metadata_cache.get_mut(event_id) {
+				self.db.reindex_topo_with_cached_metadata(
+					&pdu_id,
+					event_id,
+					local_topo_depth,
+					meta,
+				);
 			} else {
-				if let Some(meta) = metadata_cache.get_mut(event_id) {
-					self.db.reindex_topo_with_cached_metadata(
-						&pdu_id,
-						event_id,
-						local_topo_depth,
-						meta,
-					);
-				} else {
-					self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
-				}
+				self.db.reindex_topo(&pdu_id, event_id, local_topo_depth);
 			}
 		}
 		drop(cork);

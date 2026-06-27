@@ -751,10 +751,8 @@ impl super::Service {
 			.collect::<Vec<_>>()
 			.await;
 		let mut pdu_map: HashMap<OwnedEventId, PduEvent> = HashMap::new();
-		for res in pdus {
-			if let Ok(pdu) = res {
-				pdu_map.insert(pdu.event_id.clone(), pdu);
-			}
+		for pdu in pdus.into_iter().flatten() {
+			pdu_map.insert(pdu.event_id.clone(), pdu);
 		}
 
 		// 5. Convert PduEvent -> LeanEvent

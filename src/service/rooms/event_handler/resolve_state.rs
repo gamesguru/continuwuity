@@ -226,11 +226,23 @@ where
 			// Fallback for missing auth events
 			let mut pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
 			if let Some(ref mut p) = pdu {
-				p.rejected = self
+				let is_rejected = self
 					.services
 					.pdu_metadata
 					.is_event_rejected(&event_id)
 					.await;
+				if is_rejected && self.services.timeline.pdu_exists(&event_id).await {
+					// Event is in the timeline (passed auth) but has a stale
+					// rejection flag from an old build. Clear it.
+					warn!(
+						event_id = %event_id,
+						"auth chain event has stale rejection flag, clearing"
+					);
+					self.services.pdu_metadata.unmark_event_rejected(&event_id);
+					p.rejected = false;
+				} else {
+					p.rejected = is_rejected;
+				}
 			}
 			pdu.map(Arc::new)
 		}
