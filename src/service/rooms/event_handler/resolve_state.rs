@@ -6,7 +6,7 @@ use std::{
 
 use conduwuit::{
 	Error, Result, err, implement, info,
-	state_res::{self, StateMap},
+	state_res::StateMap,
 	trace,
 	utils::stream::{IterStream, ReadyExt, WidebandExt},
 	warn,
@@ -145,7 +145,7 @@ pub async fn resolve_state(
 }
 
 #[implement(super::Service)]
-#[tracing::instrument(name = "ruma", level = "debug", skip_all, fields(%room_id))]
+#[tracing::instrument(name = "rezzy", level = "debug", skip_all, fields(%room_id))]
 pub async fn state_resolution<'a, StateSets>(
 	&'a self,
 	room_id: &RoomId,
@@ -156,161 +156,228 @@ pub async fn state_resolution<'a, StateSets>(
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	let mut all_events = HashSet::new();
-	for state_set in state_sets.clone() {
-		all_events.extend(state_set.values().cloned());
+	use std::collections::BTreeMap;
+
+	let state_sets_vec: Vec<&StateMap<OwnedEventId>> = state_sets.collect();
+	let num_maps = state_sets_vec.len();
+
+	if num_maps == 0 {
+		return Ok(StateMap::new());
+	}
+	if num_maps == 1 {
+		return Ok(state_sets_vec[0].clone());
 	}
 
-	let meta = &self.services.pdu_metadata;
-	let fetch_cache: PduCache = if let Some(cache) = prefetch_cache {
-		// Pre-loaded cache provided (e.g. from rebuild_state). Merge in
-		// any state-set events that aren't already present.
-		let missing: Vec<OwnedEventId> = {
-			let r = cache.read().await;
-			all_events
-				.iter()
-				.filter(|eid| !r.contains_key(*eid))
-				.cloned()
-				.collect()
-		};
-		if !missing.is_empty() {
-			let fetched: Vec<_> = self
-				.services
-				.timeline
-				.multi_get_pdus(Some(room_id), futures::stream::iter(missing))
-				.filter_map(|r| async move { r.ok() })
-				.collect()
-				.await;
-			let mut w = cache.write().await;
-			for mut pdu in fetched {
-				pdu.rejected = false;
-				w.insert(pdu.event_id.clone(), Arc::new(pdu));
+	// Pre-separate unconflicted/conflicted keys
+	let mut counts: HashMap<(String, String, String), usize> = HashMap::new();
+	let mut key_to_ids: HashMap<(String, String), HashSet<String>> = HashMap::new();
+
+	for map in &state_sets_vec {
+		for ((ty, sk), id) in *map {
+			let ty_s = ty.to_string();
+			let sk_s = sk.to_string();
+			let id_s = id.to_string();
+			*counts
+				.entry((ty_s.clone(), sk_s.clone(), id_s.clone()))
+				.or_insert(0) += 1;
+			key_to_ids.entry((ty_s, sk_s)).or_default().insert(id_s);
+		}
+	}
+
+	let mut unconflicted: BTreeMap<(String, Option<String>), String> = BTreeMap::new();
+	let mut conflicted_keys: HashSet<(String, String)> = HashSet::new();
+
+	for (key, ids) in &key_to_ids {
+		if ids.len() == 1 {
+			let id = ids.iter().next().unwrap();
+			let count = counts
+				.get(&(key.0.clone(), key.1.clone(), id.clone()))
+				.copied()
+				.unwrap_or(0);
+			if count == num_maps {
+				let state_key_opt = if key.1.is_empty() { None } else { Some(key.1.clone()) };
+				unconflicted.insert((key.0.clone(), state_key_opt), id.clone());
+				continue;
 			}
 		}
-		cache
-	} else {
-		// No prefetch cache — build one from scratch (existing behavior)
-		Arc::new(tokio::sync::RwLock::new(
-			self.services
-				.timeline
-				.multi_get_pdus(Some(room_id), all_events.into_iter().stream())
-				.filter_map(|r| async move { r.ok() })
-				.wide_then(|mut pdu| async move {
-					let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
-					if is_rejected {
-						// Defense-in-depth: the event is in the timeline, meaning it
-						// passed auth at some point. A stale rejection flag would
-						// poison state resolution by cascading auth failures. Clear
-						// the flag rather than propagating it.
+		conflicted_keys.insert(key.clone());
+	}
+
+	// Collect all conflicted event IDs
+	let mut conflicted_eids: HashSet<OwnedEventId> = HashSet::new();
+	for map in &state_sets_vec {
+		for ((ty, sk), id) in *map {
+			if conflicted_keys.contains(&(ty.to_string(), sk.to_string())) {
+				conflicted_eids.insert(id.clone());
+			}
+		}
+	}
+
+	// Early exit: no conflicts
+	if conflicted_eids.is_empty() {
+		return Ok(state_sets_vec[0].clone());
+	}
+
+	// Compute auth chain difference
+	let mut per_set_chains: Vec<HashSet<OwnedEventId>> = Vec::with_capacity(num_maps);
+	for map in &state_sets_vec {
+		let state_eids: Vec<OwnedEventId> = map.values().cloned().collect();
+		let chain: HashSet<OwnedEventId> = self
+			.services
+			.auth_chain
+			.event_ids_iter(room_id, state_eids.iter().map(|id| &**id))
+			.try_collect()
+			.await
+			.unwrap_or_default();
+		per_set_chains.push(chain);
+	}
+
+	let mut union_auth: HashSet<OwnedEventId> = HashSet::new();
+	let mut intersect_auth: HashSet<OwnedEventId> = per_set_chains[0].clone();
+	for chain in &per_set_chains {
+		union_auth.extend(chain.iter().cloned());
+		intersect_auth.retain(|eid| chain.contains(eid));
+	}
+
+	// auth diff events are also conflicted
+	for eid in &union_auth {
+		if !intersect_auth.contains(eid) {
+			conflicted_eids.insert(eid.clone());
+		}
+	}
+
+	// Collect all event IDs we need to fetch
+	let mut fetch_ids: HashSet<OwnedEventId> = union_auth;
+	fetch_ids.extend(conflicted_eids.iter().cloned());
+	for map in &state_sets_vec {
+		fetch_ids.extend(map.values().cloned());
+	}
+
+	// Fetch PDUs (honor prefetch cache)
+	let meta = &self.services.pdu_metadata;
+	let pdu_map: HashMap<OwnedEventId, conduwuit_core::PduEvent> =
+		if let Some(cache) = prefetch_cache {
+			let cached = cache.read().await;
+			let mut map: HashMap<OwnedEventId, conduwuit_core::PduEvent> = cached
+				.iter()
+				.filter(|(eid, _)| fetch_ids.contains(*eid))
+				.map(|(eid, pdu)| (eid.clone(), (**pdu).clone()))
+				.collect();
+
+			// Fetch any missing from DB
+			let missing: Vec<OwnedEventId> = fetch_ids
+				.iter()
+				.filter(|eid| !map.contains_key(*eid))
+				.cloned()
+				.collect();
+			drop(cached);
+
+			if !missing.is_empty() {
+				let fetched: Vec<conduwuit_core::PduEvent> = self
+					.services
+					.timeline
+					.multi_get_pdus(Some(room_id), futures::stream::iter(missing))
+					.filter_map(|r| async move { r.ok() })
+					.collect()
+					.await;
+				for mut pdu in fetched {
+					// Clear stale rejection flags for timeline events
+					if meta.is_event_rejected(&pdu.event_id).await
+						&& self.services.timeline.pdu_exists(&pdu.event_id).await
+					{
 						warn!(
 							event_id = %pdu.event_id,
-							"timeline event has stale rejection flag, clearing"
+							"state_res: clearing stale rejection flag on timeline event"
 						);
 						meta.unmark_event_rejected(&pdu.event_id);
+						pdu.rejected = false;
 					}
-					pdu.rejected = false;
-					(pdu.event_id.clone(), Arc::new(pdu))
-				})
-				.collect::<HashMap<OwnedEventId, Arc<conduwuit_core::PduEvent>>>()
-				.await,
-		))
-	};
-
-	let fetch_cache_ref = fetch_cache.clone();
-	let event_fetch = move |event_id: OwnedEventId| {
-		let cache_clone = fetch_cache_ref.clone();
-		async move {
-			if let Some(pdu) = cache_clone.read().await.get(&event_id).cloned() {
-				return Some(pdu);
-			}
-			// Fallback for missing auth events
-			let mut pdu = self.event_fetch(Some(room_id), event_id.clone()).await;
-			if let Some(ref mut p) = pdu {
-				let is_rejected = self
-					.services
-					.pdu_metadata
-					.is_event_rejected(&event_id)
-					.await;
-				if is_rejected && self.services.timeline.pdu_exists(&event_id).await {
-					// Event is in the timeline (passed auth) but has a stale
-					// rejection flag from an old build. Clear it.
-					warn!(
-						event_id = %event_id,
-						"auth chain event has stale rejection flag, clearing"
-					);
-					self.services.pdu_metadata.unmark_event_rejected(&event_id);
-					p.rejected = false;
-				} else {
-					p.rejected = is_rejected;
+					map.insert(pdu.event_id.clone(), pdu);
 				}
 			}
-			pdu.map(Arc::new)
-		}
-	};
-
-	let event_missing_cb = move |missing_events: Vec<OwnedEventId>| {
-		// Can't do async federation fetches here (sync callback inside state_res).
-		// The ingestion pipeline (handle_outlier_pdu, fetch_prev, fetch_state) is
-		// responsible for pre-fetching auth events before we reach this point.
-		if !missing_events.is_empty() {
-			let formatted_events = if missing_events.len() > 10 {
-				format!(
-					"{:?}, ... {} more ..., {:?}",
-					&missing_events[..5],
-					missing_events.len().saturating_sub(10),
-					&missing_events[missing_events.len().saturating_sub(5)..]
-				)
-			} else {
-				format!("{missing_events:?}")
-			};
-
-			warn!(
-				target: "state_res_debug",
-				count = missing_events.len(),
-				events = %formatted_events,
-				"state_res: skipping missing auth chain events (best-effort)"
-			);
-		}
-	};
-
-	let fetch_cache_for_batch = fetch_cache.clone();
-	let event_batch_fetch = move |events: Vec<OwnedEventId>| {
-		let cache_clone = fetch_cache_for_batch.clone();
-		async move {
-			let fetched = self
-				.services
+			map
+		} else {
+			// Build fresh cache
+			self.services
 				.timeline
-				.multi_get_pdus(Some(room_id), futures::stream::iter(events))
-				.filter_map(|r| async move { r.ok().map(Arc::new) })
-				.collect::<Vec<_>>()
-				.await;
+				.multi_get_pdus(Some(room_id), fetch_ids.into_iter().stream())
+				.filter_map(|r| async move { r.ok() })
+				.then(|mut pdu| async move {
+					let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
+					if is_rejected && self.services.timeline.pdu_exists(&pdu.event_id).await {
+						warn!(
+							event_id = %pdu.event_id,
+							"state_res: clearing stale rejection flag on timeline event"
+						);
+						meta.unmark_event_rejected(&pdu.event_id);
+						pdu.rejected = false;
+					}
+					(pdu.event_id.clone(), pdu)
+				})
+				.collect()
+				.await
+		};
 
-			let mut w = cache_clone.write().await;
-			for pdu in &fetched {
-				w.insert(pdu.event_id.clone(), pdu.clone());
-			}
-
-			fetched
+	// Convert PduEvent → LeanEvent
+	let to_lean = |pdu: &conduwuit_core::PduEvent| -> rezzy::LeanEvent {
+		let content_val: serde_json::Value =
+			serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
+		let power_level = content_val
+			.get("power_level")
+			.and_then(|pl| {
+				pl.as_i64()
+					.or_else(|| pl.as_str().and_then(|s| s.parse().ok()))
+			})
+			.unwrap_or(0);
+		rezzy::LeanEvent {
+			event_id: pdu.event_id.to_string(),
+			event_type: pdu.kind.to_string(),
+			state_key: pdu.state_key.as_ref().map(ToString::to_string),
+			power_level,
+			origin_server_ts: pdu.origin_server_ts.into(),
+			sender: pdu.sender.to_string(),
+			content: content_val,
+			prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
+			auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
+			depth: u64::from(pdu.depth),
 		}
 	};
 
-	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {
-		self.services
-			.auth_chain
-			.event_ids_iter(room_id, events.iter().map(|id| &**id))
-			.try_collect::<HashSet<OwnedEventId>>()
-			.await
-			.unwrap_or_default()
+	// Build conflicted_events and auth_context maps for rezzy
+	let mut conflicted_events: HashMap<String, rezzy::LeanEvent> = HashMap::new();
+	let mut auth_context: HashMap<String, rezzy::LeanEvent> = HashMap::new();
+
+	for (eid, pdu) in &pdu_map {
+		let lean = to_lean(pdu);
+		if conflicted_eids.contains(eid) {
+			conflicted_events.insert(eid.to_string(), lean);
+		} else {
+			auth_context.insert(eid.to_string(), lean);
+		}
+	}
+
+	// Map room version
+	let version = match room_version.as_str() {
+		| "1" => rezzy::StateResVersion::V1,
+		| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
+			rezzy::StateResVersion::V2,
+		| "12" => rezzy::StateResVersion::V2_1,
+		| _ => rezzy::StateResVersion::V2_1_1,
 	};
 
-	state_res::resolve(
-		room_version,
-		state_sets,
-		&event_fetch,
-		Some(&event_batch_fetch),
-		&auth_chain_fetch,
-		Some(&event_missing_cb),
-	)
-	.map_err(|e| err!(error!("State resolution failed: {e:?}")))
-	.await
+	// Call rezzy (sync -- no async overhead)
+	let resolved_lean =
+		rezzy::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
+
+	// Convert back to Ruma StateMap
+	let mut resolved = StateMap::new();
+	for ((ty_str, sk_opt), eid_str) in resolved_lean {
+		let ty: ruma::events::StateEventType = ty_str.into();
+		let sk: conduwuit_core::matrix::StateKey = sk_opt.unwrap_or_default().into();
+		if let Ok(eid) = OwnedEventId::try_from(eid_str.as_str()) {
+			resolved.insert((ty, sk), eid);
+		}
+	}
+
+	Ok(resolved)
 }
