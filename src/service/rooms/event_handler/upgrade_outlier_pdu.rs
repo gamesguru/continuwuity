@@ -81,10 +81,13 @@ where
 					 {aid}",
 					incoming_pdu.event_id()
 				);
-				self.services.pdu_metadata.mark_event_rejected(
-					incoming_pdu.event_id(),
-					&format!("depends on missing or rejected auth event {aid}"),
-				);
+				self.services
+					.pdu_metadata
+					.mark_event_rejected(
+						incoming_pdu.event_id(),
+						&format!("depends on missing or rejected auth event {aid}"),
+					)
+					.await;
 				return Err!(Request(Forbidden(
 					"Event depends on missing or rejected auth event {aid}"
 				)));
@@ -187,10 +190,13 @@ where
 				auth_event_id = %event_id,
 				"Event rejected because auth_event is rejected"
 			);
-			self.services.pdu_metadata.mark_event_rejected(
-				incoming_pdu.event_id(),
-				&format!("auth event {event_id} is rejected"),
-			);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(
+					incoming_pdu.event_id(),
+					&format!("auth event {event_id} is rejected"),
+				)
+				.await;
 			return Err!(Request(Forbidden(
 				"Event authorisation fails because it references a rejected auth_event"
 			)));
@@ -251,10 +257,13 @@ where
 				"Event failed auth check against claimed auth_events, but skip_soft_fail is set — continuing"
 			);
 		} else {
-			self.services.pdu_metadata.mark_event_rejected(
-				incoming_pdu.event_id(),
-				"auth check failed against claimed auth_events",
-			);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(
+					incoming_pdu.event_id(),
+					"auth check failed against claimed auth_events",
+				)
+				.await;
 
 			return Err!(Request(Forbidden(
 				"Event authorisation fails based on its auth_events"
@@ -323,49 +332,23 @@ where
 				"Event failed auth check against state at event, but skip_soft_fail is set — continuing"
 			);
 		} else {
-			self.services.pdu_metadata.mark_event_rejected(
-				incoming_pdu.event_id(),
-				"auth check failed against state at event",
-			);
+			self.services
+				.pdu_metadata
+				.mark_event_rejected(
+					incoming_pdu.event_id(),
+					"auth check failed against state at event",
+				)
+				.await;
 
 			return Err!(Request(Forbidden("Event authorisation fails based on state at event")));
 		}
 	}
 
-	let mut soft_fail = if skip_soft_fail {
-		false
-	} else {
-		let mut is_soft_failed = match incoming_pdu.redacts_id(&room_version_id) {
-			| None => false,
-			| Some(redact_id) =>
-				!self
-					.services
-					.state_accessor
-					.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
-					.await?,
-		};
-
-		if !is_soft_failed {
-			let auth_check_current = Box::pin(self.check_current_state_auth(
-				room_id,
-				&room_version,
-				&incoming_pdu,
-				create_event,
-			))
-			.await;
-
-			if !auth_check_current {
-				warn!(
-					event_id = %incoming_pdu.event_id,
-					"Event passed auth against state-at-event, but FAILED auth against the current room state. \
-					This indicates a DAG fracture. Soft-failing event."
-				);
-				is_soft_failed = true;
-			}
-		}
-
-		is_soft_failed
-	};
+	// NOTE: soft_fail is evaluated INSIDE the OCC loop (below) against the
+	// committed current state to avoid a TOCTOU race. If the current state
+	// changes between the initial check and the commit, a banned user's
+	// message could slip through.
+	let mut soft_fail = false;
 
 	let state_ids_compressed = match &state_at_incoming_event {
 		| StateAtEvent::FastForward(shortstatehash) => {
@@ -523,7 +506,44 @@ where
 				.ok();
 
 			if base_shortstatehash == current_shortstatehash {
-				// State is consistent — break while HOLDING the lock
+				// State is consistent — evaluate soft_fail against the
+				// COMMITTED current state while holding the lock. This
+				// closes the TOCTOU race: the state we check against is
+				// exactly the state that will be live when we append.
+				if !skip_soft_fail {
+					// Check redaction permissions
+					if let Some(redact_id) = incoming_pdu.redacts_id(&room_version_id) {
+						if !self
+							.services
+							.state_accessor
+							.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
+							.await?
+						{
+							soft_fail = true;
+						}
+					}
+
+					// Auth against current room state (the critical check)
+					if !soft_fail {
+						let auth_check_current = Box::pin(self.check_current_state_auth(
+							room_id,
+							&room_version,
+							&incoming_pdu,
+							create_event,
+						))
+						.await;
+
+						if !auth_check_current {
+							warn!(
+								event_id = %incoming_pdu.event_id,
+								"Event passed auth against state-at-event, but FAILED auth \
+								against the committed current room state. Soft-failing event."
+							);
+							soft_fail = true;
+						}
+					}
+				}
+
 				state_delta_opt = delta;
 				state_lock = lock;
 				break;
@@ -813,10 +833,13 @@ where
 							event_id = %incoming_pdu.event_id,
 							"Rejecting event: prev_events completely unknown and /state_ids fetch failed"
 						);
-						self.services.pdu_metadata.mark_event_rejected(
-							incoming_pdu.event_id(),
-							"prev_events unknown and /state_ids fetch failed",
-						);
+						self.services
+							.pdu_metadata
+							.mark_event_rejected(
+								incoming_pdu.event_id(),
+								"prev_events unknown and /state_ids fetch failed",
+							)
+							.await;
 						return Ok(StateAtEvent::Resolved(HashMap::new()));
 					}
 

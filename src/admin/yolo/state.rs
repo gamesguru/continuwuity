@@ -135,10 +135,14 @@ pub(super) async fn compare_room_state(
 								&val,
 								Some(&room_id),
 							);
-							self.services.rooms.pdu_metadata.mark_event_rejected(
-								&eid,
-								"signature verification failed in compare-room-state",
-							);
+							self.services
+								.rooms
+								.pdu_metadata
+								.mark_event_rejected(
+									&eid,
+									"signature verification failed in compare-room-state",
+								)
+								.await;
 							// Still count membership for the remote's totals —
 							// the remote sent this as part of their state.
 							if let Ok(pdu) =
@@ -556,10 +560,14 @@ pub(super) async fn compare_room_state(
 								&val,
 								Some(&room_id),
 							);
-							self.services.rooms.pdu_metadata.mark_event_rejected(
-								&eid,
-								"signature verification failed in compare-room-state",
-							);
+							self.services
+								.rooms
+								.pdu_metadata
+								.mark_event_rejected(
+									&eid,
+									"signature verification failed in compare-room-state",
+								)
+								.await;
 							// Still count membership — remote sent this as
 							// part of their state.
 							if let Ok(pdu) =
@@ -1529,10 +1537,14 @@ pub(super) async fn audit_membership(
 									&val,
 									Some(&room_id),
 								);
-								self.services.rooms.pdu_metadata.mark_event_rejected(
-									&eid,
-									"signature verification failed in rescue-room",
-								);
+								self.services
+									.rooms
+									.pdu_metadata
+									.mark_event_rejected(
+										&eid,
+										"signature verification failed in rescue-room",
+									)
+									.await;
 							}
 							continue;
 						},

@@ -600,10 +600,13 @@ where
 							unprocessed.push((next_id, value));
 						} else {
 							warn!(target: "auth_chain", "Permanently backing off event {next_id} after auth chain fetch yielded incomplete auth events");
-							self.services.pdu_metadata.mark_event_rejected(
-								&next_id,
-								"incomplete auth events after auth chain fetch",
-							);
+							self.services
+								.pdu_metadata
+								.mark_event_rejected(
+									&next_id,
+									"incomplete auth events after auth chain fetch",
+								)
+								.await;
 							self.services.outlier.add_pdu_outlier(
 								&next_id,
 								&value,

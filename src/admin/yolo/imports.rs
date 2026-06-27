@@ -315,7 +315,8 @@ pub(super) async fn import_pdus(
 							self.services
 								.rooms
 								.pdu_metadata
-								.mark_event_rejected(&eid, "imported as rejected");
+								.mark_event_rejected(&eid, "imported as rejected")
+								.await;
 						}
 					},
 					| Ok((_eid, false)) => {

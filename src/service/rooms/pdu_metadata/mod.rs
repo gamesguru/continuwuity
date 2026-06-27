@@ -149,7 +149,15 @@ impl Service {
 		self.db.is_event_rejected(event_id).await
 	}
 
-	pub fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
+	pub async fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
+		if self.services.timeline.pdu_exists(event_id).await {
+			conduwuit::warn!(
+				%event_id,
+				%reason,
+				"refusing to reject timeline event (already passed auth)"
+			);
+			return;
+		}
 		self.db.mark_event_rejected(event_id, reason);
 	}
 

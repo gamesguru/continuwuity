@@ -402,7 +402,8 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 						.add_pdu_outlier(event_id, &value, Some(room_id));
 					self.services
 						.pdu_metadata
-						.mark_event_rejected(event_id, &format!("auth event {mid} is rejected"));
+						.mark_event_rejected(event_id, &format!("auth event {mid} is rejected"))
+						.await;
 					return Ok(None);
 				}
 			}
@@ -444,10 +445,13 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 					self.services
 						.outlier
 						.add_pdu_outlier(event_id, &value, Some(room_id));
-					self.services.pdu_metadata.mark_event_rejected(
-						event_id,
-						"missing auth events after /state_ids retry",
-					);
+					self.services
+						.pdu_metadata
+						.mark_event_rejected(
+							event_id,
+							"missing auth events after /state_ids retry",
+						)
+						.await;
 
 					return Ok(None);
 				},
@@ -466,7 +470,8 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 				.add_pdu_outlier(event_id, &value, Some(room_id));
 			self.services
 				.pdu_metadata
-				.mark_event_rejected(event_id, "depends on rejected auth event");
+				.mark_event_rejected(event_id, "depends on rejected auth event")
+				.await;
 			return Ok(None);
 		},
 		| Err(e) => return Err(e),

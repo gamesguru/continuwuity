@@ -166,10 +166,13 @@ where
 										None,
 									) {
 										conduwuit::warn!("Redaction failed for {eid}: {e:?}");
-										self.services.pdu_metadata.mark_event_rejected(
-											&eid,
-											"redaction failed after hash mismatch",
-										);
+										self.services
+											.pdu_metadata
+											.mark_event_rejected(
+												&eid,
+												"redaction failed after hash mismatch",
+											)
+											.await;
 										val.insert(
 											"event_id".to_owned(),
 											ruma::CanonicalJsonValue::String(
@@ -217,7 +220,8 @@ where
 								// re-fetch
 								self.services
 									.pdu_metadata
-									.mark_event_rejected(&eid, "signature verification failed");
+									.mark_event_rejected(&eid, "signature verification failed")
+									.await;
 								val.insert(
 									"event_id".to_owned(),
 									ruma::CanonicalJsonValue::String(eid.as_str().to_owned()),

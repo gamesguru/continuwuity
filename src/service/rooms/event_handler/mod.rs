@@ -157,12 +157,28 @@ impl Service {
 
 	/// Build a prioritized list of federation servers for fetching events:
 	///  1. origin (the server that sent the transaction)
-	///  2. trusted/notary servers (from config)
-	///  3. room member servers (capped by room_server_cap)
+	///  2. event sender's homeserver (structurally guaranteed to have the
+	///     event)
+	///  3. trusted/notary servers (from config)
+	///  4. room member servers (capped by room_server_cap)
 	pub async fn build_federation_server_list(
 		&self,
 		room_id: &RoomId,
 		origin: &ruma::ServerName,
+		room_server_cap: usize,
+	) -> Vec<OwnedServerName> {
+		self.build_federation_server_list_with_sender(room_id, origin, None, room_server_cap)
+			.await
+	}
+
+	/// Like [`build_federation_server_list`] but with an explicit sender
+	/// homeserver injected at index 1. The sender's homeserver is
+	/// structurally guaranteed to possess the event and its auth chain.
+	pub async fn build_federation_server_list_with_sender(
+		&self,
+		room_id: &RoomId,
+		origin: &ruma::ServerName,
+		event_sender_server: Option<&ruma::ServerName>,
 		room_server_cap: usize,
 	) -> Vec<OwnedServerName> {
 		let mut room_servers: Vec<OwnedServerName> = self
@@ -177,6 +193,16 @@ impl Service {
 		let mut servers: Vec<OwnedServerName> = Vec::new();
 		if !self.services.globals.server_is_ours(origin) {
 			servers.push(origin.to_owned());
+		}
+
+		// Inject event sender's homeserver right after origin — it is
+		// structurally guaranteed to possess the event and its auth chain.
+		if let Some(sender_server) = event_sender_server {
+			if !self.services.globals.server_is_ours(sender_server)
+				&& !servers.contains(&sender_server.to_owned())
+			{
+				servers.push(sender_server.to_owned());
+			}
 		}
 
 		// Prioritize trusted servers that are ACTUALLY in the room
