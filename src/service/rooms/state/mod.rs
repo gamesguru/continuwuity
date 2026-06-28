@@ -673,16 +673,23 @@ impl Service {
 
 		let content_val: serde_json::Value =
 			serde_json::from_str(content.get()).unwrap_or(serde_json::Value::Null);
+		// For auth_types_for_event, V2 vs V2_1+ is the only distinction
+		// (whether `m.room.create` is included). V2_1_1 and V2_2 behave the same.
+		let version = if room_version.room_ids_as_hashes {
+			rezzy::StateResVersion::V2_1
+		} else {
+			rezzy::StateResVersion::V2
+		};
 		let auth_types_raw = rezzy::auth::auth_types_for_event(
 			&kind.to_string(),
 			sender.as_str(),
 			state_key,
 			&content_val,
+			// MSC4291 (v12+): auth_events must NOT reference m.room.create
+			version,
 		);
-		// MSC4291 (v12+): auth_events must NOT reference m.room.create
 		let auth_types: Vec<(StateEventType, conduwuit_core::matrix::StateKey)> = auth_types_raw
 			.into_iter()
-			.filter(|(ty, _)| !room_version.room_ids_as_hashes || ty != "m.room.create")
 			.map(|(ty, sk)| (ty.into(), sk.into()))
 			.collect();
 		debug!(?auth_types, "Auth types for event");
