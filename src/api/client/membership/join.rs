@@ -796,7 +796,7 @@ async fn join_room_by_id_helper_remote_process(
 		match services
 			.rooms
 			.timeline
-			.promote_outliers_sorted(room_id, &outlier_event_ids)
+			.promote_outliers_sorted(room_id, &outlier_event_ids, &room_version_id)
 			.await
 		{
 			| Ok(count) => info!("Promoted {count} outliers to timeline in {room_id}"),

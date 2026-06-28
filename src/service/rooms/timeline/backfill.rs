@@ -477,6 +477,7 @@ pub async fn promote_outliers_sorted(
 	&self,
 	room_id: &RoomId,
 	event_ids: &[ruma::OwnedEventId],
+	room_version: &ruma::RoomVersionId,
 ) -> Result<usize> {
 	use conduwuit_core::debug;
 
@@ -522,11 +523,20 @@ pub async fn promote_outliers_sorted(
 		.find(|ev| ev.event_type == "m.room.create");
 
 	// Topo sort: ancestors first (create → PL → joins → messages)
+	let state_res_version = {
+		use ruma::RoomVersionId::*;
+		match room_version {
+			| V1 | V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 | V11 =>
+				rezzy::StateResVersion::V2,
+			| V12 => rezzy::StateResVersion::V2_1,
+			| _ver => return Err!(Database("Unsupported room version for topo sort: {_ver}")),
+		}
+	};
 	let sorted_ids = rezzy::sorting::lean_kahn_sort(
 		&events_map,
 		&events_map, // auth context is the same set
 		create_ev,
-		rezzy::StateResVersion::V2,
+		state_res_version,
 	);
 
 	debug!(
