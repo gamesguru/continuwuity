@@ -507,7 +507,7 @@ pub async fn promote_outliers_sorted(
 			auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
 			prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
 			power_level: 0,
-			depth: pdu.depth.try_into().unwrap_or(0),
+			depth: u64::from(pdu.depth),
 		};
 		events_map.insert(event_id.to_string(), lean);
 	}
