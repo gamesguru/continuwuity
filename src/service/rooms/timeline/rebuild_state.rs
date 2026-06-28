@@ -701,7 +701,22 @@ impl super::Service {
 			return fork_states[0].clone();
 		}
 
-		// 2. Compute auth difference efficiently using roaring bitmaps
+		// 2. Map room version early — needed to decide auth chain diff vs subgraph
+		let version = match ctx.room_version.as_str() {
+			| "1" => rezzy::StateResVersion::V1,
+			| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
+				rezzy::StateResVersion::V2,
+			| "12" => rezzy::StateResVersion::V2_1,
+			| _ => rezzy::StateResVersion::V2_1_1,
+		};
+		let is_v2_1_plus = matches!(
+			version,
+			rezzy::StateResVersion::V2_1
+				| rezzy::StateResVersion::V2_1_1
+				| rezzy::StateResVersion::V2_2
+		);
+
+		// 3. Compute auth chains (needed for both V2 auth diff and V2_1+ context)
 		let mut union_auth = roaring::RoaringBitmap::new();
 		let mut intersect_auth = roaring::RoaringBitmap::new();
 		let mut first = true;
@@ -724,13 +739,16 @@ impl super::Service {
 			}
 		}
 
-		// auth_diff = union \ intersection (SIMD-optimized set difference)
-		let auth_diff = std::ops::Sub::sub(&union_auth, &intersect_auth);
-		for idx in auth_diff {
-			conflicted_eids.insert(ctx.idx_to_eid[to_usize(idx)].clone());
+		// V2 only: auth chain diff events are also conflicted.
+		// V2_1+ (MSC4297): uses conflicted state subgraph instead.
+		if !is_v2_1_plus {
+			let auth_diff = std::ops::Sub::sub(&union_auth, &intersect_auth);
+			for idx in auth_diff {
+				conflicted_eids.insert(ctx.idx_to_eid[to_usize(idx)].clone());
+			}
 		}
 
-		// 3. Collect all event IDs we need to fetch for resolution
+		// 4. Collect all event IDs we need to fetch for resolution
 		let mut auth_context_eids: HashSet<OwnedEventId> = HashSet::new();
 		for idx in union_auth {
 			auth_context_eids.insert(ctx.idx_to_eid[to_usize(idx)].clone());
@@ -741,7 +759,7 @@ impl super::Service {
 			}
 		}
 
-		// 4. Fetch PDUs on-demand from RocksDB (typically ~200 events, <5ms)
+		// 5. Fetch PDUs on-demand from RocksDB (typically ~200 events, <5ms)
 		let mut fetch_ids: HashSet<OwnedEventId> = auth_context_eids.clone();
 		fetch_ids.extend(conflicted_eids.iter().cloned());
 		let fetch_ids_vec: Vec<OwnedEventId> = fetch_ids.into_iter().collect();
@@ -755,7 +773,7 @@ impl super::Service {
 			pdu_map.insert(pdu.event_id.clone(), pdu);
 		}
 
-		// 5. Convert PduEvent -> LeanEvent
+		// 6. Convert PduEvent -> LeanEvent
 		let to_lean = |pdu: &PduEvent| -> rezzy::LeanEvent {
 			let content_val: serde_json::Value =
 				serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
@@ -780,38 +798,35 @@ impl super::Service {
 			}
 		};
 
-		// 6. Build auth_context and conflicted_events maps
-		let mut conflicted_events: HashMap<String, rezzy::LeanEvent> = HashMap::new();
-		let mut auth_context: HashMap<String, rezzy::LeanEvent> = HashMap::new();
+		// 7. Build full context ONCE, then extract conflicted via remove()
+		let mut auth_context: HashMap<String, rezzy::LeanEvent> = pdu_map
+			.iter()
+			.map(|(eid, pdu)| (eid.to_string(), to_lean(pdu)))
+			.collect();
 
-		for eid in &auth_context_eids {
-			if let Some(pdu) = pdu_map.get(eid) {
-				let lean = to_lean(pdu);
-				if conflicted_eids.contains(eid) {
-					conflicted_events.insert(eid.to_string(), lean);
-				} else {
-					auth_context.insert(eid.to_string(), lean);
+		let conflicted_events: HashMap<String, rezzy::LeanEvent> = if is_v2_1_plus {
+			// MSC4297 (V2.1+): rezzy computes the exact HashMap we need
+			let direct_conflicted: Vec<String> =
+				conflicted_eids.iter().map(ToString::to_string).collect();
+			let v2_1_conflicted_subgraph =
+				rezzy::compute_v2_1_conflicted_subgraph(&auth_context, &direct_conflicted);
+
+			// Remove conflicted events from auth_context (mutually exclusive)
+			for id in v2_1_conflicted_subgraph.keys() {
+				auth_context.remove(id);
+			}
+
+			v2_1_conflicted_subgraph
+		} else {
+			// V1 or V2: pull known conflicted_eids (state diff + auth chain diff) out
+			let mut v2_conflicted_auth_context = HashMap::with_capacity(conflicted_eids.len());
+			for eid in &conflicted_eids {
+				let id_str = eid.to_string();
+				if let Some(lean) = auth_context.remove(&id_str) {
+					v2_conflicted_auth_context.insert(id_str, lean);
 				}
 			}
-		}
-		// Also ensure any conflicted events not yet in the map are included
-		for eid in &conflicted_eids {
-			if let std::collections::hash_map::Entry::Vacant(e) =
-				conflicted_events.entry(eid.to_string())
-			{
-				if let Some(pdu) = pdu_map.get(eid) {
-					e.insert(to_lean(pdu));
-				}
-			}
-		}
-
-		// 7. Map room version to rezzy's StateResVersion
-		let version = match ctx.room_version.as_str() {
-			| "1" => rezzy::StateResVersion::V1,
-			| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
-				rezzy::StateResVersion::V2,
-			| "12" => rezzy::StateResVersion::V2_1,
-			| _ => rezzy::StateResVersion::V2_1_1,
+			v2_conflicted_auth_context
 		};
 
 		// 8. Call rezzy's resolve_lean directly
