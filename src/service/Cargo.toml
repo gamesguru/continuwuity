@@ -111,7 +111,7 @@ regex.workspace = true
 reqwest.workspace = true
 roaring.workspace = true
 ruma.workspace = true
-rezzy = { git = "https://github.com/gamesguru/rezzy", rev = "3c3be315a6fddaff3d496cbe366f4647332ec9d8" }
+rezzy = { git = "https://github.com/gamesguru/rezzy", rev = "bdb0409ef84b35e67ab08e3acdf6dbcd12cb6ebc" }
 rustyline-async.workspace = true
 rustyline-async.optional = true
 serde_json.workspace = true

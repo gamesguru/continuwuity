@@ -529,7 +529,7 @@ pub async fn promote_outliers_sorted(
 			| V1 | V2 | V3 | V4 | V5 | V6 | V7 | V8 | V9 | V10 | V11 =>
 				rezzy::StateResVersion::V2,
 			| V12 => rezzy::StateResVersion::V2_1,
-			| _ver => return Err!(Database("Unsupported room version for topo sort: {_ver}")),
+			| ver => return Err!(Database("Unsupported room version for topo sort: {ver}")),
 		}
 	};
 	let sorted_ids = rezzy::sorting::lean_kahn_sort(

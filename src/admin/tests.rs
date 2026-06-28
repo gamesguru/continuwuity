@@ -1270,7 +1270,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		"$0-Rwh5ycT6Hwr9jkoiSsOSKW7HK_xiSrNyCvzh2Whcs",
 		"$4sXgVhE2a85_i94Ul_TvfwKVfpjIHUQKWcuzdw0W8as",
 		"$CITU5ramZfoRbG5NuEBd_kMm6f9a1UJB5TKRhMpVT6E",
-		"$Hk-xXbs52DhNQI_Ca1E2DkyNMazBITKkepo8IuqC7EI",
+		"$EhAnh9S3GYGd3tHSsoVhZAGbQt9fPgV_ketRNIQDc0s",
 		"$DT2PAjF5OtuocQGMV_ekKgN68M6XaYYsO2TGQPGEZ_c",
 	];
 
@@ -1282,7 +1282,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		"$kUBfA5z53UYwkouV54Wq_UgK_8vnszbTp8gflvF3qns",
 		"$mK__qhCzbLBUyb4IjkIxXKQpmdBwr8vxWwd40sXn1U4",
 		"$rmb6V2Nb_UScP9htYUTPOy9LhbWgxb5wxgMEIfj8aFM",
-		"$EhAnh9S3GYGd3tHSsoVhZAGbQt9fPgV_ketRNIQDc0s",
+		"$Hk-xXbs52DhNQI_Ca1E2DkyNMazBITKkepo8IuqC7EI",
 	];
 
 	// Collect all resolved state PDUs for diagnostics
