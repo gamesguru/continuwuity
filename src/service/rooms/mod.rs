@@ -1,4 +1,5 @@
 pub mod alias;
+pub mod auth_adapter;
 pub mod auth_chain;
 pub mod directory;
 pub mod event_handler;

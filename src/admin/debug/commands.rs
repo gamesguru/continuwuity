@@ -529,9 +529,8 @@ pub(super) async fn verify_json(&self) -> Result {
 pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	use std::fmt::Write;
 
-	use conduwuit::matrix::{Event, EventTypeExt, RoomVersion, state_res};
-	use futures::future::ready;
-	use ruma::{events::StateEventType, signatures::Verified};
+	use conduwuit::matrix::{Event, EventTypeExt, RoomVersion};
+	use ruma::signatures::Verified;
 
 	let pdu = self.services.rooms.timeline.get_pdu(&event_id).await?;
 	let mut event = self.services.rooms.timeline.get_pdu_json(&event_id).await?;
@@ -573,7 +572,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	} else {
 		RoomVersionId::V12
 	};
-	let room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
+	let _room_version = RoomVersion::new(&room_version_id).expect("room version is supported");
 
 	// Signature verification
 	let sig_msg = match self
@@ -588,7 +587,7 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	};
 
 	// Auth check against current room state
-	let auth_msg = if let Some(room_id) = pdu.room_id_or_hash() {
+	let auth_msg = if let Some(_room_id) = pdu.room_id_or_hash() {
 		{
 			// Gather auth events from the PDU's own declared auth_events
 			let mut auth_events = HashMap::new();
@@ -601,36 +600,14 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 				}
 			}
 
-			let state_fetch = |k: &StateEventType, s: &str| {
-				let key = k.with_state_key(s);
-				ready(auth_events.get(&key).map(ToOwned::to_owned))
-			};
-
-			// Get create event for this room
-			let create = self
-				.services
-				.rooms
-				.state_accessor
-				.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-				.await;
-
-			match create {
-				| Ok(create_event) => {
-					match state_res::event_auth::auth_check(
-						&room_version,
-						&pdu,
-						None,
-						state_fetch,
-						create_event.as_pdu(),
-					)
-					.await
-					{
-						| Ok(true) => "PASS".to_owned(),
-						| Ok(false) => "FAIL (not authorized)".to_owned(),
-						| Err(e) => format!("ERROR: {e}"),
-					}
-				},
-				| Err(_) => "SKIP (no create event)".to_owned(),
+			let state_provider =
+				conduwuit_service::rooms::auth_adapter::PduStateProvider::from_ruma_map(
+					&auth_events,
+				);
+			if conduwuit_service::rooms::auth_adapter::rezzy_auth_check(&pdu, &state_provider) {
+				"PASS".to_owned()
+			} else {
+				"FAIL (not authorized)".to_owned()
 			}
 		}
 	} else {

@@ -233,22 +233,13 @@ where
 		}
 	}
 
-	let state_fetch_auth = |k: &StateEventType, s: &str| {
-		let key = (k.to_owned(), s.into());
-		ready(auth_events.get(&key).cloned())
-	};
+	let state_provider =
+		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_events);
 
 	// Check the auth of the event passes based on the claimed auth_events
 	debug!(event_id = %incoming_pdu.event_id, "Running auth check with claimed state auth");
-	let auth_check_claimed = state_res::event_auth::auth_check(
-		&room_version,
-		&incoming_pdu,
-		None, // third-party invite
-		state_fetch_auth,
-		create_event.as_pdu(),
-	)
-	.await
-	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+	let auth_check_claimed =
+		crate::rooms::auth_adapter::rezzy_auth_check(&incoming_pdu, &state_provider);
 
 	if !auth_check_claimed {
 		if skip_soft_fail {
@@ -273,57 +264,80 @@ where
 
 	// Check auth of event passes based on its state (soft-fail check)
 	debug!(event_id = %incoming_pdu.event_id, "Running initial auth check against state-at-event");
-	let state_fetch_state = &state_at_incoming_event;
-	let state_fetch = |k: StateEventType, s: StateKey| async move {
-		match state_fetch_state {
-			| StateAtEvent::Resolved(state) => {
-				let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
-				let event_id = state.get(&shortstatekey)?;
-				self.services.timeline.get_pdu(event_id).await.ok()
-			},
-			| StateAtEvent::Compressed(compressed) => {
-				let shortstatekey = self.services.short.get_shortstatekey(&k, &s).await.ok()?;
-				let event_bytes = compressed
-					.iter()
-					.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))?;
-				let mut id_bytes = [0_u8; 8];
-				id_bytes.copy_from_slice(&event_bytes[8..16]);
-				let shorteventid = u64::from_be_bytes(id_bytes);
-				let event_id = self
-					.services
-					.short
-					.get_eventid_from_short::<OwnedEventId>(shorteventid)
-					.await
-					.ok()?;
-				self.services.timeline.get_pdu(&event_id).await.ok()
-			},
-			| StateAtEvent::FastForward(shortstatehash) => {
-				let shorteventid = self
-					.services
-					.state_accessor
-					.state_get_shortid(*shortstatehash, &k, &s)
-					.await
-					.ok()?;
-				let event_id = self
-					.services
-					.short
-					.get_eventid_from_short::<Box<_>>(shorteventid)
-					.await
-					.ok()?;
-				self.services.timeline.get_pdu(&event_id).await.ok()
-			},
-		}
-	};
+	let srv = crate::rooms::auth_adapter::to_state_res_version(&room_version_id);
+	let content = incoming_pdu.get_content_as_value();
+	let auth_types = rezzy::auth::auth_types_for_event(
+		&incoming_pdu.kind.to_string(),
+		incoming_pdu.sender().as_str(),
+		incoming_pdu.state_key(),
+		&content,
+		srv,
+	);
 
-	let auth_check_state = state_res::event_auth::auth_check(
-		&room_version,
-		&incoming_pdu,
-		None, // TODO: third party invite
-		|ty, sk| state_fetch(ty.clone(), sk.into()),
-		create_event.as_pdu(),
-	)
-	.await
-	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+	let mut state_auth_events = HashMap::new();
+	for (ty, sk) in &auth_types {
+		let state_ty: StateEventType = ty.as_str().into();
+		let state_key = StateKey::from(sk.as_str());
+		let pdu_opt: Option<PduEvent> = async {
+			match &state_at_incoming_event {
+				| StateAtEvent::Resolved(state) => {
+					let shortstatekey = self
+						.services
+						.short
+						.get_shortstatekey(&state_ty, &state_key)
+						.await
+						.ok()?;
+					let event_id = state.get(&shortstatekey)?;
+					self.services.timeline.get_pdu(event_id).await.ok()
+				},
+				| StateAtEvent::Compressed(compressed) => {
+					let shortstatekey = self
+						.services
+						.short
+						.get_shortstatekey(&state_ty, &state_key)
+						.await
+						.ok()?;
+					let event_bytes = compressed
+						.iter()
+						.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))?;
+					let mut id_bytes = [0_u8; 8];
+					id_bytes.copy_from_slice(&event_bytes[8..16]);
+					let shorteventid = u64::from_be_bytes(id_bytes);
+					let event_id = self
+						.services
+						.short
+						.get_eventid_from_short::<OwnedEventId>(shorteventid)
+						.await
+						.ok()?;
+					self.services.timeline.get_pdu(&event_id).await.ok()
+				},
+				| StateAtEvent::FastForward(shortstatehash) => {
+					let shorteventid = self
+						.services
+						.state_accessor
+						.state_get_shortid(*shortstatehash, &state_ty, &state_key)
+						.await
+						.ok()?;
+					let event_id = self
+						.services
+						.short
+						.get_eventid_from_short::<OwnedEventId>(shorteventid)
+						.await
+						.ok()?;
+					self.services.timeline.get_pdu(&event_id).await.ok()
+				},
+			}
+		}
+		.await;
+
+		if let Some(pdu) = pdu_opt {
+			state_auth_events.insert((state_ty, state_key), pdu);
+		}
+	}
+	let state_at_provider =
+		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&state_auth_events);
+	let auth_check_state =
+		crate::rooms::auth_adapter::rezzy_auth_check(&incoming_pdu, &state_at_provider);
 
 	if !auth_check_state {
 		if skip_soft_fail {
@@ -529,9 +543,8 @@ where
 							room_id,
 							&room_version,
 							&incoming_pdu,
-							create_event,
 						))
-						.await;
+						.await?;
 
 						if !auth_check_current {
 							warn!(
@@ -662,33 +675,44 @@ enum StateAtEvent {
 
 #[implement(super::Service)]
 #[tracing::instrument(level = "debug", skip_all)]
-async fn check_current_state_auth<Pdu>(
+async fn check_current_state_auth(
 	&self,
 	room_id: &RoomId,
-	room_version: &state_res::RoomVersion,
+	_room_version: &state_res::RoomVersion,
 	incoming_pdu: &PduEvent,
-	create_event: &Pdu,
-) -> bool
-where
-	Pdu: Event + Send + Sync,
-{
-	let state_fetch_current = |k: StateEventType, s: StateKey| async move {
-		self.services
-			.state_accessor
-			.room_state_get(room_id, &k, s.as_ref())
-			.await
-			.ok()
-	};
+) -> Result<bool> {
+	let room_version_id = self.services.state.get_room_version(room_id).await?;
+	let srv = crate::rooms::auth_adapter::to_state_res_version(&room_version_id);
+	let content = incoming_pdu.get_content_as_value();
+	let mut auth_types = rezzy::auth::auth_types_for_event(
+		&incoming_pdu.kind.to_string(),
+		incoming_pdu.sender().as_str(),
+		incoming_pdu.state_key(),
+		&content,
+		srv,
+	);
 
-	state_res::event_auth::auth_check(
-		room_version,
-		incoming_pdu,
-		None,
-		|ty, sk| state_fetch_current(ty.clone(), sk.into()),
-		create_event.as_pdu(),
-	)
-	.await
-	.unwrap_or(false)
+	// Always include create event — rezzy's check_auth uses it for the
+	// is_creator fallback when no membership event exists for the sender.
+	if !auth_types.iter().any(|(ty, _)| ty == "m.room.create") {
+		auth_types.push(("m.room.create".to_owned(), String::new()));
+	}
+
+	let mut auth_state = HashMap::new();
+	for (ty, sk) in &auth_types {
+		let state_ty: StateEventType = ty.as_str().into();
+		if let Ok(pdu) = self
+			.services
+			.state_accessor
+			.room_state_get(room_id, &state_ty, sk)
+			.await
+		{
+			auth_state.insert((state_ty, StateKey::from(sk.as_str())), pdu);
+		}
+	}
+
+	let state_provider = crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_state);
+	Ok(crate::rooms::auth_adapter::rezzy_auth_check(incoming_pdu, &state_provider))
 }
 
 /// Find the state-at-event for an incoming PDU. If the PDU is a fast-forward

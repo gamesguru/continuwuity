@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug, debug_info, err, implement, info, state_res, trace, warn,
+	Err, Event, PduEvent, Result, debug, debug_info, err, implement, info, trace, warn,
 };
-use futures::future::ready;
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
 	events::{StateEventType, TimelineEventType},
@@ -689,39 +688,9 @@ where
 		)));
 	}
 
-	let state_fetch = |ty: &StateEventType, sk: &str| {
-		let key = (ty.to_owned(), sk.into());
-		ready(auth_events_by_key.get(&key).map(ToOwned::to_owned))
-	};
-
-	let fetched_create;
-	let create_event_ref = if let Some(ce) = create_event {
-		ce.as_pdu()
-	} else if let Some(ce) =
-		auth_events_by_key.get(&(StateEventType::RoomCreate, String::new().into()))
-	{
-		ce
-	} else if let Ok(ce) = self
-		.services
-		.state_accessor
-		.room_state_get(room_id, &StateEventType::RoomCreate, "")
-		.await
-	{
-		fetched_create = ce;
-		&fetched_create
-	} else {
-		&pdu_event
-	};
-
-	let auth_check = state_res::event_auth::auth_check(
-		&to_room_version(&room_version_id),
-		&pdu_event,
-		None, // TODO: third party invite
-		state_fetch,
-		create_event_ref,
-	)
-	.await
-	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
+	let state_provider =
+		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_events_by_key);
+	let auth_check = crate::rooms::auth_adapter::rezzy_auth_check(&pdu_event, &state_provider);
 
 	if !auth_check {
 		self.services

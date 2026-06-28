@@ -6,12 +6,12 @@ use conduwuit_core::{
 	matrix::{
 		event::{Event, gen_event_id},
 		pdu::{EventHash, PduBuilder, PduEvent},
-		state_res::{self, RoomVersion},
+		state_res::RoomVersion,
 	},
 	utils::{self, IterStream, ReadyExt, stream::TryIgnore},
 	warn,
 };
-use futures::{StreamExt, TryStreamExt, future, future::ready};
+use futures::{StreamExt, TryStreamExt, future};
 use ruma::{
 	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, RoomId, RoomVersionId,
 	UserId,
@@ -221,34 +221,6 @@ pub async fn create_event(
 		rejected: false,
 	};
 
-	let auth_fetch = |k: &StateEventType, s: &str| {
-		let key = (k.clone(), s.into());
-		ready(auth_events.get(&key).map(ToOwned::to_owned))
-	};
-
-	let room_id_or_hash = pdu.room_id_or_hash();
-	let create_pdu = match &pdu.kind {
-		| TimelineEventType::RoomCreate => None,
-		| _ => {
-			let room_id = room_id_or_hash.ok_or_else(|| {
-				err!(Request(Forbidden(warn!("Failed to determine room ID for event"))))
-			})?;
-			Some(
-				self.services
-					.state_accessor
-					.room_state_get(&room_id, &StateEventType::RoomCreate, "")
-					.await
-					.map_err(|e| {
-						err!(Request(Forbidden(warn!("Failed to fetch room create event: {e}"))))
-					})?,
-			)
-		},
-	};
-	let create_event = match &pdu.kind {
-		| TimelineEventType::RoomCreate => &pdu,
-		| _ => create_pdu.as_ref().unwrap().as_pdu(),
-	};
-
 	info!(
 		"auth_events keys for new {} at PDU {}: {:?}",
 		pdu.kind,
@@ -256,17 +228,9 @@ pub async fn create_event(
 		auth_events.keys().collect::<Vec<_>>()
 	);
 
-	let auth_check = state_res::auth_check(
-		&room_version,
-		&pdu,
-		None, // TODO: third_party_invite
-		auth_fetch,
-		create_event,
-	)
-	.await
-	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
-
-	if !auth_check {
+	let state_provider =
+		crate::rooms::auth_adapter::PduStateProvider::from_smallstr_map(&auth_events);
+	if !crate::rooms::auth_adapter::rezzy_auth_check(&pdu, &state_provider) {
 		return Err!(Request(Forbidden("Event is not authorized.")));
 	}
 	trace!(
