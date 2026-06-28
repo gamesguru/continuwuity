@@ -250,7 +250,8 @@ pub async fn create_event(
 	};
 
 	info!(
-		"auth_events keys for event {}: {:?}",
+		"auth_events keys for new {} at PDU {}: {:?}",
+		pdu.kind,
 		pdu.event_id,
 		auth_events.keys().collect::<Vec<_>>()
 	);
