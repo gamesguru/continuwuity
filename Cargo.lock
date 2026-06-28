@@ -4773,7 +4773,7 @@ checksum = "1e061d1b48cb8d38042de4ae0a7a6401009d6143dc80d2e2d6f31f0bdd6470c7"
 [[package]]
 name = "rezzy"
 version = "0.1.5-rc.0"
-source = "git+https://github.com/gamesguru/rezzy?rev=cf31750688edb8f63df83789b2652f1955e26e57#cf31750688edb8f63df83789b2652f1955e26e57"
+source = "git+https://github.com/gamesguru/rezzy?rev=7e1893aee73e2a424b7beab23679085eda7dfb38#7e1893aee73e2a424b7beab23679085eda7dfb38"
 dependencies = [
  "hashbrown 0.15.5",
  "roaring",
