@@ -137,6 +137,11 @@ pub async fn required_keys_exist(
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub async fn verify_key_exists(&self, origin: &ServerName, key_id: &ServerSigningKeyId) -> bool {
+	// Our own active signing key is held in memory, not necessarily in the DB
+	if self.services.globals.server_is_ours(origin) && self.verify_keys.contains_key(key_id) {
+		return true;
+	}
+
 	type KeysMap<'a> = BTreeMap<&'a ServerSigningKeyId, &'a RawJsonValue>;
 
 	let Ok(keys) = self

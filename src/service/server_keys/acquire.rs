@@ -174,6 +174,10 @@ async fn acquire_origin(
 	mut key_ids: Vec<OwnedServerSigningKeyId>,
 	timeout: Instant,
 ) -> (OwnedServerName, Vec<OwnedServerSigningKeyId>) {
+	// Our own keys are available locally; never query ourselves over federation
+	if self.services.globals.server_is_ours(&origin) {
+		return (origin, key_ids);
+	}
 	match timeout_at(timeout, self.server_request(&origin)).await {
 		| Err(e) => debug_warn!(%origin, "timed out: {e}"),
 		| Ok(Err(e)) => debug_error!(%origin, "{e}"),
