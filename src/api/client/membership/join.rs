@@ -607,6 +607,7 @@ async fn join_room_by_id_helper_remote_process(
 
 	info!("Going through send_join response room_state");
 	let cork = services.db.cork_and_flush();
+	let mut outlier_event_ids: Vec<ruma::OwnedEventId> = Vec::new();
 	let state = services
 		.server_keys
 		.concurrent_validate_and_add_events(send_join_response.room_state.state, &room_version_id)
@@ -619,46 +620,53 @@ async fn join_room_by_id_helper_remote_process(
 				},
 			}
 		})
-		.fold(HashMap::new(), |mut state, (event_id, value)| async move {
-			let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id)) {
-				| Ok(pdu) => pdu,
-				| Err(e) => {
-					info!("Invalid PDU in send_join response: {e:?}: {value:#?}");
-					return state;
-				},
-			};
-			if !pdu_fits(&mut value.clone()) {
-				warn!(
-					"dropping incoming PDU {event_id} in room {room_id} from room join because \
-					 it exceeds 65535 bytes or is otherwise too large."
-				);
-				return state;
-			}
-			services
-				.rooms
-				.outlier
-				.add_pdu_outlier(&event_id, &value, Some(room_id));
-			services.rooms.pdu_metadata.clear_pdu_markers(&event_id);
-			if let Some(state_key) = &pdu.state_key {
-				let shortstatekey = services
+		.fold(
+			(HashMap::new(), Vec::new()),
+			|(mut state, mut eids), (event_id, value)| async move {
+				let pdu = match PduEvent::from_id_val(&event_id, value.clone(), Some(room_id)) {
+					| Ok(pdu) => pdu,
+					| Err(e) => {
+						info!("Invalid PDU in send_join response: {e:?}: {value:#?}");
+						return (state, eids);
+					},
+				};
+				if !pdu_fits(&mut value.clone()) {
+					warn!(
+						"dropping incoming PDU {event_id} in room {room_id} from room join \
+						 because it exceeds 65535 bytes or is otherwise too large."
+					);
+					return (state, eids);
+				}
+				services
 					.rooms
-					.short
-					.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
-					.boxed()
-					.await;
+					.outlier
+					.add_pdu_outlier(&event_id, &value, Some(room_id));
+				services.rooms.pdu_metadata.clear_pdu_markers(&event_id);
+				eids.push(event_id.clone());
+				if let Some(state_key) = &pdu.state_key {
+					let shortstatekey = services
+						.rooms
+						.short
+						.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
+						.boxed()
+						.await;
 
-				state.insert(shortstatekey, pdu.event_id.clone());
-			}
-			state
-		})
+					state.insert(shortstatekey, pdu.event_id.clone());
+				}
+				(state, eids)
+			},
+		)
 		.boxed()
 		.await;
+
+	let (state, mut state_eids) = state;
+	outlier_event_ids.append(&mut state_eids);
 
 	drop(cork);
 
 	info!("Going through send_join response auth_chain");
 	let cork = services.db.cork_and_flush();
-	services
+	let auth_eids: Vec<ruma::OwnedEventId> = services
 		.server_keys
 		.concurrent_validate_and_add_events(
 			send_join_response.room_state.auth_chain,
@@ -673,16 +681,20 @@ async fn join_room_by_id_helper_remote_process(
 				},
 			}
 		})
-		.ready_for_each(|(event_id, value)| {
+		.fold(Vec::new(), |mut eids, (event_id, value)| async move {
 			trace!(%event_id, "Adding PDU as an outlier from send_join auth_chain");
 			services
 				.rooms
 				.outlier
 				.add_pdu_outlier(&event_id, &value, Some(room_id));
 			services.rooms.pdu_metadata.clear_pdu_markers(&event_id);
+			eids.push(event_id);
+			eids
 		})
 		.boxed()
 		.await;
+
+	outlier_event_ids.extend(auth_eids);
 
 	drop(cork);
 
@@ -771,6 +783,26 @@ async fn join_room_by_id_helper_remote_process(
 		&state_lock,
 	))
 	.await?;
+
+	// Promote auth chain + state outliers to the backfilled timeline.
+	// This makes the room's origin events (create, initial joins, power
+	// levels) visible when users scroll up. Events are topo-sorted so
+	// ancestors appear before descendants.
+	if !outlier_event_ids.is_empty() {
+		info!(
+			"Promoting {} auth chain + state outliers to timeline in {room_id}",
+			outlier_event_ids.len()
+		);
+		match services
+			.rooms
+			.timeline
+			.promote_outliers_sorted(room_id, &outlier_event_ids)
+			.await
+		{
+			| Ok(count) => info!("Promoted {count} outliers to timeline in {room_id}"),
+			| Err(e) => warn!("Failed to promote outliers in {room_id}: {e}"),
+		}
+	}
 
 	info!("Updating joined counts for new room");
 	services

@@ -466,6 +466,95 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 	Ok(())
 }
 
+/// Promote a batch of outlier events into the backfilled timeline in
+/// topological order (ancestors before descendants). Uses rezzy's Kahn sort
+/// to order events by their DAG structure.
+///
+/// This is called during `/send_join` to make auth chain + state events
+/// visible when users scroll up. Events already in the timeline are skipped.
+#[implement(super::Service)]
+pub async fn promote_outliers_sorted(
+	&self,
+	room_id: &RoomId,
+	event_ids: &[ruma::OwnedEventId],
+) -> Result<usize> {
+	use conduwuit_core::debug;
+
+	if event_ids.is_empty() {
+		return Ok(0);
+	}
+
+	// Build LeanEvent map from outlier PDUs for topo sort
+	let mut events_map: rezzy::HashMap<String, rezzy::types::LeanEvent> = rezzy::HashMap::new();
+
+	for event_id in event_ids {
+		// Skip events already in the timeline
+		if self.get_pdu_id(event_id).await.is_ok() {
+			continue;
+		}
+
+		let Ok(pdu) = self.services.outlier.get_pdu_outlier(event_id).await else {
+			continue;
+		};
+
+		let lean = rezzy::types::LeanEvent {
+			event_id: event_id.to_string(),
+			event_type: pdu.kind.to_string(),
+			sender: pdu.sender.to_string(),
+			state_key: pdu.state_key.as_ref().map(ToString::to_string),
+			content: serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null),
+			origin_server_ts: u64::from(pdu.origin_server_ts),
+			auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
+			prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
+			power_level: 0,
+			depth: pdu.depth.try_into().unwrap_or(0),
+		};
+		events_map.insert(event_id.to_string(), lean);
+	}
+
+	if events_map.is_empty() {
+		return Ok(0);
+	}
+
+	// Find the create event for the sort
+	let create_ev = events_map
+		.values()
+		.find(|ev| ev.event_type == "m.room.create");
+
+	// Topo sort: ancestors first (create → PL → joins → messages)
+	let sorted_ids = rezzy::sorting::lean_kahn_sort(
+		&events_map,
+		&events_map, // auth context is the same set
+		create_ev,
+		rezzy::StateResVersion::V2,
+	);
+
+	debug!(
+		"Promoting {} outliers to timeline in room {} ({} sorted)",
+		events_map.len(),
+		room_id,
+		sorted_ids.len(),
+	);
+
+	let mut promoted = 0_usize;
+	for event_id_str in &sorted_ids {
+		let Ok(event_id) = <&EventId>::try_from(event_id_str.as_str()) else {
+			continue;
+		};
+		match self.promote_outlier(room_id, event_id).await {
+			| Ok(()) => {
+				promoted = promoted.saturating_add(1);
+			},
+			| Err(e) => {
+				debug!("Could not promote {event_id} to timeline: {e}");
+			},
+		}
+	}
+
+	debug!("Promoted {promoted}/{} outliers in {room_id}", sorted_ids.len());
+	Ok(promoted)
+}
+
 /// Force-insert a PDU directly into the timeline, bypassing all auth checks.
 /// The caller provides the already-parsed PDU and its canonical JSON.
 /// Returns the assigned PduId on success.
