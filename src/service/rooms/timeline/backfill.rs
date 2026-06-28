@@ -306,6 +306,13 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 	Err!("No servers could be used to fetch {} in {}.", room_id, event_id)
 }
 
+/// TODO: Known gap — early state events (create, initial joins, power levels)
+/// arrive via `/send_join` and are stored as **outliers**, not timeline PDUs.
+/// When backfill reaches the bottom of the DAG, these outlier ancestors are
+/// never promoted into the visible timeline. Users scrolling up will see
+/// backfilled messages but not the room's origin events. Fix: after backfill
+/// exhausts prev_events into outlier territory, promote those outliers into
+/// the timeline ordered by `origin_server_ts`.
 #[implement(super::Service)]
 #[tracing::instrument(skip(self, pdu), level = "debug")]
 pub async fn backfill_pdu(
