@@ -10,7 +10,7 @@ use conduwuit::{
 	utils::stream::{IterStream, TryBroadbandExt},
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::ready};
-use ruma::{EventId, OwnedEventId, RoomId, RoomVersionId};
+use ruma::{EventId, RoomId, RoomVersionId};
 
 use super::resolve_state::PduCache;
 
@@ -253,108 +253,12 @@ where
 		}
 	}
 
-	// We must resolve the actual EventType from the SSK because some auth events
-	// (like RoomMember) have dynamic state keys, which have unique SSKs.
-	let conflicting_state_keys: Vec<_> = self
-		.services
-		.short
-		.multi_get_statekey_from_short(conflicting_ssks.iter().copied().stream())
-		.filter_map(|r| async move { r.ok() })
-		.collect()
-		.await;
+	// All conflicts go through full state resolution to ensure correctness.
+	// A previous "FAST PATH" optimization existed here that bypassed resolution
+	// for non-auth conflicts by picking winners via (origin_server_ts, event_id),
+	// but that heuristic doesn't match the V2 mainline sort algorithm and
+	// produced incorrect results when timestamps were equal.
 
-	// FAST PATH: If none of the conflicting keys are auth-critical types
-	// (power_levels, join_rules, create, member), we can skip the full state
-	// resolution machinery (auth chain diff + Kahn's sort + mainline sort +
-	// iterative auth check = O(N²) on 1500+ events) and just pick winners
-	// directly. This handles ~90% of real-world forks (concurrent non-auth
-	// changes).
-	let all_simple_conflicts = conflicting_state_keys.iter().all(|(ty, _)| {
-		!matches!(
-			ty,
-			ruma::events::StateEventType::RoomCreate
-				| ruma::events::StateEventType::RoomPowerLevels
-				| ruma::events::StateEventType::RoomJoinRules
-				| ruma::events::StateEventType::RoomServerAcl
-				| ruma::events::StateEventType::RoomMember
-				| ruma::events::StateEventType::RoomThirdPartyInvite
-		)
-	});
-
-	if all_simple_conflicts {
-		println!(
-			"state_at_incoming_resolved: FAST PATH — {} non-auth conflicts, picking winners \
-			 directly",
-			conflicting_ssks.len()
-		);
-
-		// Build merged state from all forks' non-conflicting entries
-		let mut final_state = std::collections::BTreeSet::new();
-		for fork in &fork_compressed_states {
-			for bytes in fork {
-				let mut ssk_bytes = [0_u8; 8];
-				ssk_bytes.copy_from_slice(&bytes[0..8]);
-				let ssk = u64::from_be_bytes(ssk_bytes);
-
-				if conflicting_ssks.contains(&ssk) {
-					continue; // Handle below
-				}
-
-				final_state.insert(*bytes);
-			}
-		}
-
-		// For each conflicting key, pick the winner: latest origin_server_ts,
-		// then lexicographically largest event_id as tiebreaker.
-		for ssk in &conflicting_ssks {
-			let mut best: Option<(OwnedEventId, u64, u64)> = None;
-			for fork in &fork_compressed_states {
-				let event_bytes = fork
-					.iter()
-					.find(|bytes| bytes.starts_with(&ssk.to_be_bytes()));
-				if let Some(bytes) = event_bytes {
-					let mut id_bytes = [0_u8; 8];
-					id_bytes.copy_from_slice(&bytes[8..16]);
-					let shorteventid = u64::from_be_bytes(id_bytes);
-					if let Ok(eid) = self
-						.services
-						.short
-						.get_eventid_from_short::<OwnedEventId>(shorteventid)
-						.await
-					{
-						if let Ok(pdu) = self
-							.services
-							.timeline
-							.get_pdu_in_room(Some(room_id), &eid)
-							.await
-						{
-							let ts: u64 = pdu.origin_server_ts().0.into();
-							let dominated = best.as_ref().is_some_and(|(b_eid, b_ts, _)| {
-								ts < *b_ts || (ts == *b_ts && eid.as_str() < b_eid.as_str())
-							});
-							if !dominated {
-								best = Some((eid, ts, shorteventid));
-							}
-						}
-					}
-				}
-			}
-			if let Some((ref winner, _, shorteventid)) = best {
-				if winner.as_str().contains("TN3aSG4dg") || winner.as_str().contains("TtQ6QYSjCp")
-				{
-					println!("  TRACE DISPUTED: ssk={ssk} winner={winner} (fast path)");
-				}
-				final_state.insert(crate::rooms::state_compressor::compress_state_event(
-					*ssk,
-					shorteventid,
-				));
-			}
-		}
-
-		return Ok(std::sync::Arc::new(final_state));
-	}
-
-	// SLOW PATH: auth-critical keys conflict, need full state resolution
 	let mut conflicting_event_ids = HashSet::new();
 	for fork in &fork_compressed_states {
 		for ssk in &conflicting_ssks {
