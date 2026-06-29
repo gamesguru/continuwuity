@@ -95,13 +95,7 @@ impl super::Service {
 
 		// Phase 5: Final multi-head extremity merge
 		let current_shortstatehash = self
-			.rebuild_merge_extremities(
-				room_id,
-				&ctx.events_meta,
-				&ctx.event_set,
-				&event_ssh,
-				current_shortstatehash,
-			)
+			.rebuild_merge_extremities(room_id, &ctx, &event_ssh, current_shortstatehash)
 			.await?;
 
 		// Phase 6: Apply final state
@@ -862,21 +856,21 @@ impl super::Service {
 	async fn rebuild_merge_extremities(
 		&self,
 		room_id: &RoomId,
-		events_meta: &[EventMeta],
-		event_set: &HashSet<OwnedEventId>,
+		ctx: &RebuildCtx,
 		event_ssh: &HashMap<OwnedEventId, u64>,
 		current_shortstatehash: u64,
 	) -> Result<u64> {
 		let mut has_children: HashSet<&OwnedEventId> = HashSet::new();
-		for (_, prev_events, ..) in events_meta {
+		for (_, prev_events, ..) in &ctx.events_meta {
 			for parent in prev_events {
-				if event_set.contains(parent) {
+				if ctx.event_set.contains(parent) {
 					has_children.insert(parent);
 				}
 			}
 		}
 
-		let extremity_sshs: Vec<u64> = events_meta
+		let extremity_sshs: Vec<u64> = ctx
+			.events_meta
 			.iter()
 			.map(|(eid, ..)| eid)
 			.filter(|eid| !has_children.contains(eid))
@@ -885,7 +879,8 @@ impl super::Service {
 			.into_iter()
 			.collect();
 
-		let num_extremities = events_meta
+		let num_extremities = ctx
+			.events_meta
 			.iter()
 			.map(|(eid, ..)| eid)
 			.filter(|eid| !has_children.contains(eid))
@@ -901,110 +896,51 @@ impl super::Service {
 		}
 
 		debug!(
-			"rebuild_state: {} forward extremities with {} unique SSHs — merging...",
+			"rebuild_state: {} forward extremities with {} unique SSHs — merging via n-way \
+			 resolution...",
 			num_extremities,
 			extremity_sshs.len(),
 		);
 
-		// Load full compressed state for each unique SSH
-		let mut all_compressed = BTreeSet::new();
+		let mut fork_states = Vec::with_capacity(extremity_sshs.len());
 		for &ssh in &extremity_sshs {
-			if let Some(full_state) = self.services.state_compressor.get_full_state(ssh).await {
-				for entry in full_state.as_ref() {
-					all_compressed.insert(*entry);
+			use futures::StreamExt;
+			let mut state_map = StateMap::new();
+			let stream = self
+				.services
+				.state_accessor
+				.state_full_ids::<OwnedEventId>(ssh);
+			futures::pin_mut!(stream);
+			while let Some((ssk, eid)) = stream.next().await {
+				if let Ok((ty, sk)) = self.services.short.get_statekey_from_short(ssk).await {
+					state_map.insert((ty, sk), eid);
 				}
 			}
+			fork_states.push(state_map);
 		}
 
-		// Build ssk -> set of shorteventid values to detect conflicts
-		let mut ssk_values: HashMap<u64, HashSet<u64>> = HashMap::new();
-		for bytes in &all_compressed {
-			let (ssk, sei) = rooms::state_compressor::parse_compressed_state_event(*bytes);
-			ssk_values.entry(ssk).or_default().insert(sei);
-		}
+		let fork_state_refs: Vec<&StateMap<OwnedEventId>> = fork_states.iter().collect();
+		let resolved_map = Self::resolve_fork_with_states(ctx, &fork_state_refs);
 
-		let conflicting: Vec<_> = ssk_values
-			.iter()
-			.filter(|(_, values)| values.len() > 1)
-			.map(|(ssk, _)| *ssk)
-			.collect();
-
-		if conflicting.is_empty() {
-			// No conflicts — trivial union merge
-			debug!(
-				"rebuild_state: trivial merge of {} state entries from {} components",
-				ssk_values.len(),
-				extremity_sshs.len(),
-			);
-			let merged_ssh = self
-				.services
-				.state_compressor
-				.save_state(room_id, Arc::new(all_compressed))
-				.await?
-				.shortstatehash;
-			return Ok(merged_ssh);
-		}
-
-		// Conflicting keys exist — pick winners by depth
-		debug!(
-			"rebuild_state: {} conflicting keys across {} components — resolving by depth...",
-			conflicting.len(),
-			extremity_sshs.len(),
-		);
-
-		// Build ShortEventId -> depth map for conflicting SEIs
-		let depth_by_eid: HashMap<&OwnedEventId, u64> = events_meta
-			.iter()
-			.map(|(eid, _, _, _, depth)| (eid, *depth))
-			.collect();
-		let mut sei_depth: HashMap<u64, u64> = HashMap::new();
-		let conflicting_seis: HashSet<u64> = ssk_values
-			.iter()
-			.filter(|(_, values)| values.len() > 1)
-			.flat_map(|(_, values)| values.iter().copied())
-			.collect();
-		for &sei in &conflicting_seis {
-			if let Ok(eid) = self
+		let mut compressed = BTreeSet::new();
+		for ((ty, sk), id) in &resolved_map {
+			let ssk = self
 				.services
 				.short
-				.get_eventid_from_short::<OwnedEventId>(sei)
-				.await
-			{
-				if let Some(&depth) = depth_by_eid.get(&eid) {
-					sei_depth.insert(sei, depth);
-				}
-			}
+				.get_or_create_shortstatekey(ty, sk.as_ref())
+				.await;
+			let sei = self.services.short.get_or_create_shorteventid(id).await;
+			compressed.insert(rooms::state_compressor::compress_state_event(ssk, sei));
 		}
 
-		// Each ssk: non-conflicting keeps only value; conflicting picks latest depth
-		let mut final_state = BTreeSet::new();
-		for (&ssk, values) in &ssk_values {
-			if values.len() == 1 {
-				// Non-conflicting — keep the only value
-				let sei = *values.iter().next().expect("non-empty set");
-				final_state.insert(rooms::state_compressor::compress_state_event(ssk, sei));
-			} else {
-				// Conflicting — pick latest depth
-				let mut best_sei = 0_u64;
-				let mut best_depth = 0_u64;
-				for &sei in values {
-					let depth = sei_depth.get(&sei).copied().unwrap_or(0);
-					if depth > best_depth || best_sei == 0 {
-						best_depth = depth;
-						best_sei = sei;
-					}
-				}
-				final_state.insert(rooms::state_compressor::compress_state_event(ssk, best_sei));
-			}
-		}
-
-		debug!("rebuild_state: merged state has {} entries", final_state.len());
+		debug!("rebuild_state: merged state has {} entries", compressed.len());
 		let merged_ssh = self
 			.services
 			.state_compressor
-			.save_state(room_id, Arc::new(final_state))
+			.save_state(room_id, Arc::new(compressed))
 			.await?
 			.shortstatehash;
+
 		Ok(merged_ssh)
 	}
 }
