@@ -43,8 +43,8 @@ pub fn pdu_to_lean(pdu: &PduEvent) -> LeanEvent<String> {
 		sender: pdu.sender().to_string(),
 		state_key: pdu.state_key().map(str::to_owned),
 		content: pdu.get_content_as_value(),
-		prev_events: pdu.prev_events().map(|e| e.to_string()).collect(),
-		auth_events: pdu.auth_events().map(|e| e.to_string()).collect(),
+		prev_events: pdu.prev_events().map(ToString::to_string).collect(),
+		auth_events: pdu.auth_events().map(ToString::to_string).collect(),
 		origin_server_ts: pdu.origin_server_ts().get().into(),
 		depth: pdu.depth().into(),
 		..Default::default()
@@ -114,7 +114,7 @@ impl StateProvider<String> for PduStateProvider {
 /// Returns `Ok(true)` if the event passes auth, `Ok(false)` if it fails.
 /// This matches ruma's `auth_check` return signature for drop-in
 /// compatibility.
-pub fn rezzy_auth_check(pdu: &PduEvent, state: &impl StateProvider<String>) -> bool {
+pub fn rezzy_auth_check<S: StateProvider<String>>(pdu: &PduEvent, state: &S) -> bool {
 	let lean = pdu_to_lean(pdu);
 	rezzy::auth::check_auth(&lean, state).is_ok()
 }
