@@ -280,7 +280,7 @@ impl super::Service {
 			}
 		}
 
-		let mut ssk_cache: HashMap<(String, String), u64> =
+		let mut ssk_cache: HashMap<(String, Option<String>), u64> =
 			HashMap::with_capacity(unique_state_keys.len());
 		for (ty, sk) in &unique_state_keys {
 			let ssk = self
@@ -288,7 +288,7 @@ impl super::Service {
 				.short
 				.get_or_create_shortstatekey(&ty.as_str().into(), sk)
 				.await;
-			ssk_cache.insert((ty.clone(), sk.clone()), ssk);
+			ssk_cache.insert((ty.clone(), Some(sk.clone())), ssk);
 		}
 
 		let mut sei_cache: HashMap<OwnedEventId, u64> =
@@ -427,25 +427,19 @@ impl super::Service {
 				);
 			}
 
-			// Compress state to BTreeSet<u128>
+			// Compress state to BTreeSet<u128> for storage but hash sequentially for time.
 			let mut compressed = BTreeSet::new();
-			for ((ty, sk_opt), ev_id_str) in &state {
-				let sk = sk_opt.as_deref().unwrap_or("");
-				let ssk = ssk_cache
-					.get(&(ty.clone(), sk.to_owned()))
-					.copied()
-					.unwrap_or(0);
-				let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
-				compressed.insert(rooms::state_compressor::compress_state_event(ssk, sei));
-			}
-
-			// Content-hash dedup
 			let mut hasher = std::collections::hash_map::DefaultHasher::new();
-			for entry in &compressed {
-				entry.hash(&mut hasher);
+			for (key, ev_id_str) in &state {
+				let ssk = ssk_cache.get(key).copied().unwrap_or(0);
+				let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
+				let compressed_val = rooms::state_compressor::compress_state_event(ssk, sei);
+				compressed_val.hash(&mut hasher);
+				compressed.insert(compressed_val);
 			}
 			let content_hash = hasher.finish();
 
+			// Dedupe/compress groups and generate pdu_shortstatehash
 			let ssh = if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
 				groups_deduped = groups_deduped.saturating_add(1);
 				existing_ssh
