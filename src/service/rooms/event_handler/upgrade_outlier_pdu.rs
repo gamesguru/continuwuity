@@ -238,8 +238,11 @@ where
 
 	// Check the auth of the event passes based on the claimed auth_events
 	debug!(event_id = %incoming_pdu.event_id, "Running auth check with claimed state auth");
-	let auth_check_claimed =
-		crate::rooms::auth_adapter::rezzy_auth_check(&incoming_pdu, &state_provider);
+	let auth_check_claimed = crate::rooms::auth_adapter::rezzy_auth_check(
+		&incoming_pdu,
+		&state_provider,
+		crate::rooms::auth_adapter::to_state_res_version(&room_version_id),
+	);
 
 	if !auth_check_claimed {
 		if skip_soft_fail {
@@ -337,7 +340,7 @@ where
 	let state_at_provider =
 		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&state_auth_events);
 	let auth_check_state =
-		crate::rooms::auth_adapter::rezzy_auth_check(&incoming_pdu, &state_at_provider);
+		crate::rooms::auth_adapter::rezzy_auth_check(&incoming_pdu, &state_at_provider, srv);
 
 	if !auth_check_state {
 		if skip_soft_fail {
@@ -712,7 +715,7 @@ async fn check_current_state_auth(
 	}
 
 	let state_provider = crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_state);
-	Ok(crate::rooms::auth_adapter::rezzy_auth_check(incoming_pdu, &state_provider))
+	Ok(crate::rooms::auth_adapter::rezzy_auth_check(incoming_pdu, &state_provider, srv))
 }
 
 /// Find the state-at-event for an incoming PDU. If the PDU is a fast-forward

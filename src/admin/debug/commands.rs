@@ -604,7 +604,11 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 				conduwuit_service::rooms::auth_adapter::PduStateProvider::from_ruma_map(
 					&auth_events,
 				);
-			if conduwuit_service::rooms::auth_adapter::rezzy_auth_check(&pdu, &state_provider) {
+			if conduwuit_service::rooms::auth_adapter::rezzy_auth_check(
+				&pdu,
+				&state_provider,
+				conduwuit_service::rooms::auth_adapter::to_state_res_version(&room_version_id),
+			) {
 				"PASS".to_owned()
 			} else {
 				"FAIL (not authorized)".to_owned()

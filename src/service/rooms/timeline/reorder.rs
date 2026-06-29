@@ -8,6 +8,7 @@ use conduwuit_core::{
 	matrix::pdu::{PduCount, PduId, RawPduId},
 	warn,
 };
+use futures::TryStreamExt;
 use ruma::{OwnedEventId, RoomId};
 
 use super::{Service, TimelineStateResolver, metadata::EventMetadata};
@@ -377,6 +378,41 @@ impl Service {
 
 		let mut final_ssh = None;
 
+		// Pre-load ALL PDUs into a cache to avoid redundant RocksDB reads.
+		// During state resolution, every merge event re-fetches the entire
+		// auth chain from disk. With this cache, all fetches are O(1) HashMap
+		// lookups instead of O(1) RocksDB reads (~100x faster per lookup).
+		let prefetch_cache: crate::rooms::event_handler::resolve_state::PduCache = {
+			let mut cache = HashMap::with_capacity(sorted.len());
+			for event_id in sorted {
+				if let Ok(pdu) = self.get_pdu(event_id).await {
+					cache.insert(event_id.clone(), Arc::new(pdu));
+				}
+			}
+			// Also pre-load auth chain events that may not be in our sorted set
+			let auth_chain_ids: Vec<OwnedEventId> = self
+				.services
+				.auth_chain
+				.event_ids_iter(room_id, sorted.iter().map(|id| &**id))
+				.try_collect()
+				.await
+				.unwrap_or_default();
+			for eid in &auth_chain_ids {
+				if !cache.contains_key(eid) {
+					if let Ok(pdu) = self.get_pdu(eid).await {
+						cache.insert(eid.clone(), Arc::new(pdu));
+					}
+				}
+			}
+			info!(
+				"rebuild_topo_index_with_state: pre-loaded {} PDUs ({} timeline + {} auth chain)",
+				cache.len(),
+				sorted.len(),
+				auth_chain_ids.len(),
+			);
+			Arc::new(tokio::sync::RwLock::new(cache))
+		};
+
 		for event_id in sorted {
 			// Use the existing stream order count -- do NOT fabricate a new one
 			let Some(&(existing_count, ..)) = entries.get(event_id) else {
@@ -414,7 +450,7 @@ impl Service {
 						ssh_cache: &ssh_cache,
 						resolved_state_cache: &mut resolved_state_cache,
 						empty_ssh,
-						prefetch_cache: None,
+						prefetch_cache: Some(prefetch_cache.clone()),
 					},
 					&pdu,
 				)

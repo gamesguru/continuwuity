@@ -114,7 +114,11 @@ impl StateProvider<String> for PduStateProvider {
 /// Returns `Ok(true)` if the event passes auth, `Ok(false)` if it fails.
 /// This matches ruma's `auth_check` return signature for drop-in
 /// compatibility.
-pub fn rezzy_auth_check<S: StateProvider<String>>(pdu: &PduEvent, state: &S) -> bool {
+pub fn rezzy_auth_check<S: StateProvider<String>>(
+	pdu: &PduEvent,
+	state: &S,
+	version: rezzy::types::StateResVersion,
+) -> bool {
 	let lean = pdu_to_lean(pdu);
-	rezzy::auth::check_auth(&lean, state).is_ok()
+	rezzy::auth::check_auth(&lean, state, version).is_ok()
 }

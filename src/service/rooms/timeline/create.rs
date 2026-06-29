@@ -230,7 +230,11 @@ pub async fn create_event(
 
 	let state_provider =
 		crate::rooms::auth_adapter::PduStateProvider::from_smallstr_map(&auth_events);
-	if !crate::rooms::auth_adapter::rezzy_auth_check(&pdu, &state_provider) {
+	if !crate::rooms::auth_adapter::rezzy_auth_check(
+		&pdu,
+		&state_provider,
+		crate::rooms::auth_adapter::to_state_res_version(&room_version_id),
+	) {
 		return Err!(Request(Forbidden("Event is not authorized.")));
 	}
 	trace!(

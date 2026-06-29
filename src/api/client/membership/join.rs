@@ -722,6 +722,7 @@ async fn join_room_by_id_helper_remote_process(
 	let auth_check = conduwuit_service::rooms::auth_adapter::rezzy_auth_check(
 		&parsed_join_pdu,
 		&state_provider,
+		conduwuit_service::rooms::auth_adapter::to_state_res_version(&room_version_id),
 	);
 
 	if !auth_check {

@@ -690,7 +690,11 @@ where
 
 	let state_provider =
 		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_events_by_key);
-	let auth_check = crate::rooms::auth_adapter::rezzy_auth_check(&pdu_event, &state_provider);
+	let auth_check = crate::rooms::auth_adapter::rezzy_auth_check(
+		&pdu_event,
+		&state_provider,
+		crate::rooms::auth_adapter::to_state_res_version(&room_version_id),
+	);
 
 	if !auth_check {
 		self.services
