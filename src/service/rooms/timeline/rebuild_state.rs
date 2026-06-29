@@ -860,6 +860,9 @@ impl super::Service {
 		event_ssh: &HashMap<OwnedEventId, u64>,
 		current_shortstatehash: u64,
 	) -> Result<u64> {
+		use conduwuit::utils::stream::{IterStream, ReadyExt, WidebandExt};
+		use futures::{StreamExt, TryStreamExt};
+
 		let mut has_children: HashSet<&OwnedEventId> = HashSet::new();
 		for (_, prev_events, ..) in &ctx.events_meta {
 			for parent in prev_events {
@@ -895,29 +898,80 @@ impl super::Service {
 			return Ok(current_shortstatehash);
 		}
 
-		debug!(
-			"rebuild_state: {} forward extremities with {} unique SSHs — merging via n-way \
-			 resolution...",
-			num_extremities,
-			extremity_sshs.len(),
-		);
-
-		let mut fork_states = Vec::with_capacity(extremity_sshs.len());
+		// Load full compressed state for each unique SSH
+		let mut all_compressed = BTreeSet::new();
 		for &ssh in &extremity_sshs {
-			use futures::StreamExt;
-			let mut state_map = StateMap::new();
-			let stream = self
-				.services
-				.state_accessor
-				.state_full_ids::<OwnedEventId>(ssh);
-			futures::pin_mut!(stream);
-			while let Some((ssk, eid)) = stream.next().await {
-				if let Ok((ty, sk)) = self.services.short.get_statekey_from_short(ssk).await {
-					state_map.insert((ty, sk), eid);
+			if let Some(full_state) = self.services.state_compressor.get_full_state(ssh).await {
+				for entry in full_state.as_ref() {
+					all_compressed.insert(*entry);
 				}
 			}
-			fork_states.push(state_map);
 		}
+
+		// Build ssk -> set of shorteventid values to detect conflicts
+		let mut ssk_values: HashMap<u64, HashSet<u64>> = HashMap::new();
+		for bytes in &all_compressed {
+			let (ssk, sei) = rooms::state_compressor::parse_compressed_state_event(*bytes);
+			ssk_values.entry(ssk).or_default().insert(sei);
+		}
+
+		let conflicting: Vec<_> = ssk_values
+			.iter()
+			.filter(|(_, values)| values.len() > 1)
+			.map(|(ssk, _)| *ssk)
+			.collect();
+
+		if conflicting.is_empty() {
+			// No conflicts — trivial union merge
+			debug!(
+				"rebuild_state: trivial merge of {} state entries from {} components",
+				ssk_values.len(),
+				extremity_sshs.len(),
+			);
+			let merged_ssh = self
+				.services
+				.state_compressor
+				.save_state(room_id, Arc::new(all_compressed))
+				.await?
+				.shortstatehash;
+			return Ok(merged_ssh);
+		}
+
+		debug!(
+			"rebuild_state: {} forward extremities with {} unique SSHs ({} conflicts) — merging \
+			 via n-way resolution...",
+			num_extremities,
+			extremity_sshs.len(),
+			conflicting.len(),
+		);
+
+		let mut fork_maps = Vec::with_capacity(extremity_sshs.len());
+		for &ssh in &extremity_sshs {
+			let map: HashMap<u64, OwnedEventId> = self
+				.services
+				.state_accessor
+				.state_full_ids(ssh)
+				.collect()
+				.await;
+			fork_maps.push(map);
+		}
+
+		let fork_states: Vec<StateMap<OwnedEventId>> = fork_maps
+			.iter()
+			.stream()
+			.wide_then(|fork_map| {
+				let shortstatekeys = fork_map.keys().copied().stream();
+				let event_ids = fork_map.values().cloned().stream();
+				self.services
+					.short
+					.multi_get_statekey_from_short(shortstatekeys)
+					.zip(event_ids)
+					.ready_filter_map(|(ty_sk, id)| Some((ty_sk.ok()?, id)))
+					.collect()
+			})
+			.map(Ok::<_, conduwuit::Error>)
+			.try_collect()
+			.await?;
 
 		let fork_state_refs: Vec<&StateMap<OwnedEventId>> = fork_states.iter().collect();
 		let resolved_map = Self::resolve_fork_with_states(ctx, &fork_state_refs);
