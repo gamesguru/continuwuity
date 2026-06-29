@@ -356,24 +356,37 @@ impl super::Service {
 			| _ => rezzy::StateResVersion::V2_1_1,
 		};
 
-		// ── Compute state at all events via rezzy batch ──
+		// ── Compute state at all events via rezzy streaming ──
 		let batch_start = Instant::now();
-		let all_ids: Vec<&str> = ctx
+		let all_ids_owned: Vec<String> = ctx
 			.events_meta
 			.iter()
-			.map(|(eid, ..)| eid.as_str())
+			.map(|(eid, ..)| eid.to_string())
 			.collect();
-		let batch_states = rezzy::compute_state_at_batch(&all_ids, &lean_events, version);
-		info!(
-			"rebuild_state: batch state computation for {} events done in {:?} ({} results)",
-			all_ids.len(),
-			batch_start.elapsed(),
-			batch_states.len(),
-		);
-		// LeanEvent map no longer needed after batch computation
-		drop(lean_events);
 
-		// ── Write SSH for each event ──
+		let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+
+		// Spawn synchronous rezzy pipeline on a blocking thread
+		let lean_events_moved = lean_events;
+		tokio::task::spawn_blocking(move || {
+			let target_refs: Vec<&String> = all_ids_owned.iter().collect();
+			let mut abort = false;
+			rezzy::compute_state_at_streaming(
+				&target_refs,
+				&lean_events_moved,
+				version,
+				|id, state| {
+					if abort {
+						return;
+					}
+					if tx.blocking_send((id, state)).is_err() {
+						abort = true;
+					}
+				},
+			);
+		});
+
+		// ── Consume stream and write SSH for each event ──
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let empty_ssh = self
 			.services
@@ -389,9 +402,17 @@ impl super::Service {
 		let mut groups_deduped = 0_usize;
 		let mut processed = 0_usize;
 		let total_events = ctx.events_meta.len();
-		let empty_state = std::collections::BTreeMap::new();
+		let mut events_meta_map = HashMap::with_capacity(ctx.events_meta.len());
+		for meta in &ctx.events_meta {
+			events_meta_map.insert(meta.0.as_str(), meta);
+		}
 
-		for (eid, _, _, state_key, _) in &ctx.events_meta {
+		while let Some((resolved_id, state)) = rx.recv().await {
+			let Some(&(eid, _, _, state_key, _)) = events_meta_map.get(resolved_id.as_str())
+			else {
+				continue;
+			};
+
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
@@ -402,18 +423,16 @@ impl super::Service {
 					total_events,
 					groups_compressed,
 					groups_deduped,
-					start.elapsed(),
+					batch_start.elapsed(),
 				);
 			}
 
-			let state = batch_states.get(eid.as_str()).unwrap_or(&empty_state);
-
 			// Compress state to BTreeSet<u128>
 			let mut compressed = BTreeSet::new();
-			for ((ty, sk_opt), ev_id_str) in state {
+			for ((ty, sk_opt), ev_id_str) in &state {
 				let sk = sk_opt.as_deref().unwrap_or("");
 				let ssk = ssk_cache
-					.get(&(ty.clone(), sk.to_string()))
+					.get(&(ty.clone(), sk.to_owned()))
 					.copied()
 					.unwrap_or(0);
 				let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
