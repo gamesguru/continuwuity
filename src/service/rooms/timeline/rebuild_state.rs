@@ -3,7 +3,7 @@ use std::{
 	hash::{Hash, Hasher},
 	pin::pin,
 	sync::Arc,
-	time::{Duration, Instant},
+	time::Instant,
 };
 
 use conduwuit_core::{
@@ -32,13 +32,6 @@ type EventMeta = (
 /// Safe u32 -> usize for Vec indexing of roaring bitmap indices.
 #[inline]
 fn to_usize(v: u32) -> usize { usize::try_from(v).expect("u32 fits in usize") }
-
-/// Check if `small` is a subset of `large` (every entry in small exists in
-/// large with the same value).
-#[inline]
-fn is_subset(small: &StateMap<OwnedEventId>, large: &StateMap<OwnedEventId>) -> bool {
-	small.len() <= large.len() && small.iter().all(|(k, v)| large.get(k) == Some(v))
-}
 
 /// Shared context threaded through all phases of rebuild_state.
 /// Metadata carries everything needed for the walk; state event PDUs
@@ -263,15 +256,12 @@ impl super::Service {
 		(eid_to_idx, idx_to_eid, final_bitmaps)
 	}
 
-	// ── Phase 3+4: Merged state walk + inline DB writes + group eviction ──
+	// ── Phase 3+4: Batch state computation via rezzy + inline DB writes ──
 	//
-	// Combines the state walk (fork resolution, state event application) with
-	// inline SSH compression and DB writes. Evicts state groups from memory as
-	// soon as all their child events have been processed, keeping only the
-	// "live frontier" in RAM (~100-200 groups instead of 10k+).
-	//
-	// No event_cache needed: state_key and event_type come from EventMeta.
-	// PDUs are fetched on-demand only during fork resolution.
+	// Delegates the entire state walk (topological sort, fork resolution at
+	// merge points, state event application) to rezzy's compute_state_at_batch.
+	// This replaces the previous per-event walk loop with state groups, fork
+	// caching, superset optimization, and group eviction.
 
 	async fn rebuild_walk_and_write(
 		&self,
@@ -303,8 +293,11 @@ impl super::Service {
 
 		let mut sei_cache: HashMap<OwnedEventId, u64> =
 			HashMap::with_capacity(ctx.events_meta.len());
+		let mut sei_str_cache: HashMap<String, u64> =
+			HashMap::with_capacity(ctx.events_meta.len());
 		for (eid, ..) in &ctx.events_meta {
 			let sei = self.services.short.get_or_create_shorteventid(eid).await;
+			sei_str_cache.insert(eid.to_string(), sei);
 			sei_cache.insert(eid.clone(), sei);
 		}
 		debug!(
@@ -314,267 +307,138 @@ impl super::Service {
 			precache_start.elapsed(),
 		);
 
-		// ── Pre-compute group eviction metadata ──
-		let mut children_remaining: HashMap<&OwnedEventId, usize> = HashMap::new();
-		for (_, prev_events, ..) in &ctx.events_meta {
-			for p in prev_events {
-				if ctx.event_set.contains(p) {
-					let count = children_remaining.entry(p).or_insert(0);
-					*count = count.saturating_add(1);
+		// ── Build LeanEvent map from events_meta + state_pdus ──
+		let lean_start = Instant::now();
+		let mut lean_events: HashMap<String, rezzy::LeanEvent> =
+			HashMap::with_capacity(ctx.events_meta.len());
+
+		for (i, (eid, prev, auth, _state_key, depth)) in ctx.events_meta.iter().enumerate() {
+			let lean = if let Some(Some(pdu)) = ctx.state_pdus.get(i) {
+				// State event: full LeanEvent with content for resolution
+				let content_val: serde_json::Value =
+					serde_json::from_str(pdu.content().get()).unwrap_or(serde_json::Value::Null);
+				rezzy::LeanEvent {
+					event_id: eid.to_string(),
+					event_type: pdu.kind().to_string(),
+					state_key: pdu.state_key().map(str::to_owned),
+					sender: pdu.sender().to_string(),
+					content: content_val,
+					prev_events: prev.iter().map(ToString::to_string).collect(),
+					auth_events: auth.iter().map(ToString::to_string).collect(),
+					origin_server_ts: pdu.origin_server_ts().get().into(),
+					depth: *depth,
+					..Default::default()
 				}
-			}
+			} else {
+				// Non-state event: skeleton for DAG traversal only
+				rezzy::LeanEvent {
+					event_id: eid.to_string(),
+					prev_events: prev.iter().map(ToString::to_string).collect(),
+					auth_events: auth.iter().map(ToString::to_string).collect(),
+					depth: *depth,
+					..Default::default()
+				}
+			};
+			lean_events.insert(eid.to_string(), lean);
 		}
+		debug!(
+			"rebuild_state: built {} LeanEvents in {:?}",
+			lean_events.len(),
+			lean_start.elapsed(),
+		);
 
-		let mut group_live_refs: HashMap<usize, usize> = HashMap::new();
+		// ── Map room version to StateResVersion ──
+		let version = match ctx.room_version.as_str() {
+			| "1" => rezzy::StateResVersion::V1,
+			| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
+				rezzy::StateResVersion::V2,
+			| "12" => rezzy::StateResVersion::V2_1,
+			| _ => rezzy::StateResVersion::V2_1_1,
+		};
 
-		// ── State walk + inline write ──
-		let mut state_groups: HashMap<usize, Arc<StateMap<OwnedEventId>>> = HashMap::new();
-		let mut event_group: HashMap<OwnedEventId, usize> = HashMap::new();
-		let mut event_ssh: HashMap<OwnedEventId, u64> = HashMap::new();
-		let mut group_to_ssh: HashMap<usize, u64> = HashMap::new();
-		let mut fork_cache: HashMap<u64, usize> = HashMap::new();
-		let mut content_to_ssh: HashMap<u64, u64> = HashMap::new();
-		let mut next_gid: usize = 0;
+		// ── Compute state at all events via rezzy batch ──
+		let batch_start = Instant::now();
+		let all_ids: Vec<&str> = ctx
+			.events_meta
+			.iter()
+			.map(|(eid, ..)| eid.as_str())
+			.collect();
+		let batch_states = rezzy::compute_state_at_batch(&all_ids, &lean_events, version);
+		info!(
+			"rebuild_state: batch state computation for {} events done in {:?} ({} results)",
+			all_ids.len(),
+			batch_start.elapsed(),
+			batch_states.len(),
+		);
+		// LeanEvent map no longer needed after batch computation
+		drop(lean_events);
 
-		let mut fork_resolve_count = 0_usize;
-		let mut fork_skip_count = 0_usize;
-		let mut cumulative_resolve_time = Duration::ZERO;
-		let mut groups_compressed = 0_usize;
-		let mut groups_deduped = 0_usize;
-		let mut groups_evicted = 0_usize;
-		let mut processed = 0_usize;
-		let total_events = ctx.events_meta.len();
-
-		// Group 0 = empty state (for events with no parents)
-		let empty_group: usize = next_gid;
-		state_groups.insert(empty_group, Arc::new(StateMap::new()));
-		next_gid = next_gid.saturating_add(1);
-
+		// ── Write SSH for each event ──
+		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let empty_ssh = self
 			.services
 			.state_compressor
 			.save_state(room_id, Arc::new(BTreeSet::new()))
 			.await?
 			.shortstatehash;
-		group_to_ssh.insert(empty_group, empty_ssh);
 
-		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
+		let mut event_ssh: HashMap<OwnedEventId, u64> = HashMap::new();
+		let mut content_to_ssh: HashMap<u64, u64> = HashMap::new();
 		let mut current_shortstatehash = empty_ssh;
+		let mut groups_compressed = 0_usize;
+		let mut groups_deduped = 0_usize;
+		let mut processed = 0_usize;
+		let total_events = ctx.events_meta.len();
+		let empty_state = std::collections::BTreeMap::new();
 
-		for (eid, prev_events, _, state_key, _depth) in &ctx.events_meta {
+		for (eid, _, _, state_key, _) in &ctx.events_meta {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
 				debug!(
-					"rebuild_state: {}/{} events | {} live groups ({} evicted) | {} forks \
-					 resolved, {} skipped ({:?}) | elapsed: {:?}",
+					"rebuild_state: writing {}/{} SSHs | {} compressed, {} deduped | elapsed: \
+					 {:?}",
 					processed,
 					total_events,
-					state_groups.len(),
-					groups_evicted,
-					fork_resolve_count,
-					fork_skip_count,
-					cumulative_resolve_time,
+					groups_compressed,
+					groups_deduped,
 					start.elapsed(),
 				);
 			}
 
-			// ── Resolve parent state ──
-			let parent_groups: Vec<usize> = prev_events
-				.iter()
-				.filter(|p| ctx.event_set.contains(*p))
-				.filter_map(|p| event_group.get(p).copied())
-				.collect::<HashSet<usize>>()
-				.into_iter()
-				.collect();
+			let state = batch_states.get(eid.as_str()).unwrap_or(&empty_state);
 
-			let state_before_group = match parent_groups.len() {
-				| 0 => empty_group,
-				| 1 => parent_groups[0],
-				| _ => {
-					// Deduplicate parents by content equality
-					let mut unique_states: Vec<Arc<StateMap<OwnedEventId>>> = Vec::new();
-					let mut unique_groups: Vec<usize> = Vec::new();
-					for &g in &parent_groups {
-						let Some(state) = state_groups.get(&g) else {
-							continue;
-						};
-						if !unique_states
-							.iter()
-							.any(|s| Arc::ptr_eq(s, state) || **s == **state)
-						{
-							unique_states.push(state.clone());
-							unique_groups.push(g);
-						}
-					}
-
-					if unique_states.len() <= 1 {
-						fork_skip_count = fork_skip_count.saturating_add(1);
-						unique_groups.first().copied().unwrap_or(empty_group)
-					} else {
-						// Build order-independent cache key from sorted content hashes
-						let cache_key = {
-							let mut state_hashes = Vec::with_capacity(unique_states.len());
-							for s in &unique_states {
-								let mut h = std::collections::hash_map::DefaultHasher::new();
-								let mut entries: Vec<_> = s.iter().collect();
-								entries.sort_unstable_by_key(|(k, _)| *k);
-								for (k, v) in entries {
-									k.hash(&mut h);
-									v.hash(&mut h);
-								}
-								state_hashes.push(h.finish());
-							}
-							// Sort hashes so parent order doesn't matter
-							state_hashes.sort_unstable();
-
-							let mut h = std::collections::hash_map::DefaultHasher::new();
-							for hash in state_hashes {
-								hash.hash(&mut h);
-							}
-							h.finish()
-						};
-
-						if let Some(&cached_gid) = fork_cache.get(&cache_key) {
-							fork_skip_count = fork_skip_count.saturating_add(1);
-							cached_gid
-						} else {
-							// Superset optimization
-							let mut is_chain = true;
-							let mut superset_idx = 0;
-							for i in 1..unique_states.len() {
-								let superset = &unique_states[superset_idx];
-								let current = &unique_states[i];
-
-								if is_subset(current, superset) {
-									// current is covered
-								} else if is_subset(superset, current) {
-									superset_idx = i;
-								} else {
-									is_chain = false;
-									break;
-								}
-							}
-
-							let gid = if is_chain {
-								fork_skip_count = fork_skip_count.saturating_add(1);
-								unique_groups[superset_idx]
-							} else {
-								// Genuine conflict: resolve via in-memory PDUs + rezzy
-								let fork_start = Instant::now();
-								let fork_state_refs: Vec<&StateMap<OwnedEventId>> =
-									unique_states.iter().map(|s| &**s).collect();
-
-								let resolved =
-									Self::resolve_fork_with_states(ctx, &fork_state_refs);
-
-								let fork_elapsed = fork_start.elapsed();
-								fork_resolve_count = fork_resolve_count.saturating_add(1);
-								cumulative_resolve_time =
-									cumulative_resolve_time.saturating_add(fork_elapsed);
-
-								if fork_elapsed.as_millis() > 50 {
-									debug!(
-										"rebuild_state: SLOW fork #{} for {} ({} unique \
-										 parents) took {:?}",
-										fork_resolve_count,
-										eid,
-										unique_states.len(),
-										fork_elapsed,
-									);
-								}
-
-								// Reuse parent group if resolved matches exactly
-								if let Some(idx) =
-									unique_states.iter().position(|s| **s == resolved)
-								{
-									unique_groups[idx]
-								} else {
-									let gid = next_gid;
-									next_gid = next_gid.saturating_add(1);
-									state_groups.insert(gid, Arc::new(resolved));
-									gid
-								}
-							};
-
-							fork_cache.insert(cache_key, gid);
-							gid
-						}
-					}
-				},
-			};
-
-			// ── Apply state event or inherit parent group ──
-			let group_after = if let Some((event_type_str, state_key_str)) = state_key {
-				let event_type: ruma::events::StateEventType = event_type_str.as_str().into();
-				let sk_typed: conduwuit_core::matrix::StateKey = state_key_str.as_str().into();
-
-				let current_state = state_groups
-					.get(&state_before_group)
-					.cloned()
-					.unwrap_or_default();
-
-				// Skip deep clone if state event is redundant (no-op)
-				if current_state.get(&(event_type.clone(), sk_typed.clone())) == Some(eid) {
-					state_before_group
-				} else {
-					let mut new_state = (*current_state).clone();
-					new_state.insert((event_type, sk_typed), eid.clone());
-					let gid = next_gid;
-					next_gid = next_gid.saturating_add(1);
-					state_groups.insert(gid, Arc::new(new_state));
-					gid
-				}
-			} else {
-				// Message event: inherit parent's group (zero allocation)
-				state_before_group
-			};
-
-			event_group.insert(eid.clone(), group_after);
-
-			// ── Track group liveness ──
-			if children_remaining.get(eid).copied().unwrap_or(0) > 0 {
-				let refs = group_live_refs.entry(group_after).or_insert(0);
-				*refs = refs.saturating_add(1);
+			// Compress state to BTreeSet<u128>
+			let mut compressed = BTreeSet::new();
+			for ((ty, sk_opt), ev_id_str) in state {
+				let sk = sk_opt.as_deref().unwrap_or("");
+				let ssk = ssk_cache
+					.get(&(ty.clone(), sk.to_string()))
+					.copied()
+					.unwrap_or(0);
+				let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
+				compressed.insert(rooms::state_compressor::compress_state_event(ssk, sei));
 			}
 
-			// ── Inline SSH compression + write ──
-			let ssh = if let Some(&cached_ssh) = group_to_ssh.get(&group_after) {
-				cached_ssh
+			// Content-hash dedup
+			let mut hasher = std::collections::hash_map::DefaultHasher::new();
+			for entry in &compressed {
+				entry.hash(&mut hasher);
+			}
+			let content_hash = hasher.finish();
+
+			let ssh = if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
+				groups_deduped = groups_deduped.saturating_add(1);
+				existing_ssh
 			} else {
-				let state_map = state_groups.get(&group_after).cloned().unwrap_or_default();
-				let mut compressed = BTreeSet::new();
-				for ((ty, sk), event_id) in state_map.iter() {
-					let ssk = ssk_cache
-						.get(&(ty.to_string(), sk.to_string()))
-						.copied()
-						.unwrap_or(0);
-					let sei = sei_cache.get(event_id).copied().unwrap_or(0);
-					compressed.insert(rooms::state_compressor::compress_state_event(ssk, sei));
-				}
-
-				// Content-hash dedup
-				let mut hasher = std::collections::hash_map::DefaultHasher::new();
-				for entry in &compressed {
-					entry.hash(&mut hasher);
-				}
-				let content_hash = hasher.finish();
-
-				let ssh = if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
-					groups_deduped = groups_deduped.saturating_add(1);
-					existing_ssh
-				} else {
-					let result = self
-						.services
-						.state_compressor
-						.save_state(room_id, Arc::new(compressed))
-						.await?;
-					let ssh = result.shortstatehash;
-					content_to_ssh.insert(content_hash, ssh);
-					groups_compressed = groups_compressed.saturating_add(1);
-					ssh
-				};
-				group_to_ssh.insert(group_after, ssh);
+				let result = self
+					.services
+					.state_compressor
+					.save_state(room_id, Arc::new(compressed))
+					.await?;
+				let ssh = result.shortstatehash;
+				content_to_ssh.insert(content_hash, ssh);
+				groups_compressed = groups_compressed.saturating_add(1);
 				ssh
 			};
 
@@ -601,25 +465,6 @@ impl super::Service {
 			event_ssh.insert(eid.clone(), ssh);
 			current_shortstatehash = ssh;
 
-			// ── Evict dead parent groups ──
-			for p in prev_events {
-				if let Some(remaining) = children_remaining.get_mut(p) {
-					*remaining = remaining.saturating_sub(1);
-					if *remaining == 0 {
-						if let Some(&parent_gid) = event_group.get(p) {
-							if let Some(refs) = group_live_refs.get_mut(&parent_gid) {
-								*refs = refs.saturating_sub(1);
-								if *refs == 0 {
-									state_groups.remove(&parent_gid);
-									group_live_refs.remove(&parent_gid);
-									groups_evicted = groups_evicted.saturating_add(1);
-								}
-							}
-						}
-					}
-				}
-			}
-
 			if groups_compressed.is_multiple_of(100) && groups_compressed > 0 {
 				drop(cork.take());
 				tokio::task::yield_now().await;
@@ -630,17 +475,12 @@ impl super::Service {
 		drop(cork.take());
 
 		info!(
-			"rebuild_state: walk+write done in {:?} | {} events, {} forks resolved, {} skipped \
-			 ({:?}) | {} groups compressed, {} deduped, {} evicted, {} still live",
+			"rebuild_state: walk+write done in {:?} | {} events, {} groups compressed, {} \
+			 deduped",
 			start.elapsed(),
 			processed,
-			fork_resolve_count,
-			fork_skip_count,
-			cumulative_resolve_time,
 			groups_compressed,
 			groups_deduped,
-			groups_evicted,
-			state_groups.len(),
 		);
 
 		Ok((event_ssh, current_shortstatehash))
