@@ -7,7 +7,7 @@ use std::{
 };
 
 use conduwuit_core::{
-	PduEvent, Result, debug, info,
+	Result, debug, info,
 	matrix::{event::Event, state_res::StateMap},
 	warn,
 };
@@ -45,7 +45,31 @@ struct RebuildCtx {
 	auth_chain_bitmaps: Vec<roaring::RoaringBitmap>,
 	/// State event PDUs indexed by the same u32 as eid_to_idx.
 	/// `None` for message events (never needed for resolution).
-	state_pdus: Vec<Option<PduEvent>>,
+	state_pdus: Vec<Option<rezzy::LeanEvent>>,
+}
+
+fn pdu_to_lean(pdu: &conduwuit::PduEvent) -> rezzy::LeanEvent {
+	let content_val: serde_json::Value =
+		serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
+	let power_level = content_val
+		.get("power_level")
+		.and_then(|pl| {
+			pl.as_i64()
+				.or_else(|| pl.as_str().and_then(|s| s.parse().ok()))
+		})
+		.unwrap_or(0);
+	rezzy::LeanEvent {
+		event_id: pdu.event_id.to_string(),
+		event_type: pdu.kind.to_string(),
+		state_key: pdu.state_key.as_ref().map(ToString::to_string),
+		power_level,
+		origin_server_ts: pdu.origin_server_ts.into(),
+		sender: pdu.sender.to_string(),
+		content: content_val,
+		prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
+		auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
+		depth: u64::from(pdu.depth),
+	}
 }
 
 impl super::Service {
@@ -120,12 +144,12 @@ impl super::Service {
 	async fn rebuild_stream_events(
 		&self,
 		room_id: &RoomId,
-	) -> (Vec<EventMeta>, RoomVersionId, Vec<Option<PduEvent>>) {
+	) -> (Vec<EventMeta>, RoomVersionId, Vec<Option<rezzy::LeanEvent>>) {
 		info!("rebuild_state: streaming events in topological order...");
 		let start = Instant::now();
 
 		let mut events_meta: Vec<EventMeta> = Vec::new();
-		let mut state_pdus: Vec<Option<PduEvent>> = Vec::new();
+		let mut state_pdus: Vec<Option<rezzy::LeanEvent>> = Vec::new();
 		let mut room_version = RoomVersionId::V1;
 		let mut room_version_found = false;
 
@@ -155,7 +179,7 @@ impl super::Service {
 
 			events_meta.push((eid, prev, auth, state_key, depth));
 			// Keep state event PDUs for fork resolution; drop messages
-			state_pdus.push(if is_state { Some(pdu) } else { None });
+			state_pdus.push(if is_state { Some(pdu_to_lean(&pdu)) } else { None });
 		}
 
 		let state_count = state_pdus.iter().filter(|p| p.is_some()).count();
@@ -313,22 +337,9 @@ impl super::Service {
 			HashMap::with_capacity(ctx.events_meta.len());
 
 		for (i, (eid, prev, auth, _state_key, depth)) in ctx.events_meta.iter().enumerate() {
-			let lean = if let Some(Some(pdu)) = ctx.state_pdus.get(i) {
+			let lean = if let Some(Some(lean_ev)) = ctx.state_pdus.get(i) {
 				// State event: full LeanEvent with content for resolution
-				let content_val: serde_json::Value =
-					serde_json::from_str(pdu.content().get()).unwrap_or(serde_json::Value::Null);
-				rezzy::LeanEvent {
-					event_id: eid.to_string(),
-					event_type: pdu.kind().to_string(),
-					state_key: pdu.state_key().map(str::to_owned),
-					sender: pdu.sender().to_string(),
-					content: content_val,
-					prev_events: prev.iter().map(ToString::to_string).collect(),
-					auth_events: auth.iter().map(ToString::to_string).collect(),
-					origin_server_ts: pdu.origin_server_ts().get().into(),
-					depth: *depth,
-					..Default::default()
-				}
+				lean_ev.clone()
 			} else {
 				// Non-state event: skeleton for DAG traversal only
 				rezzy::LeanEvent {
@@ -627,43 +638,16 @@ impl super::Service {
 			}
 		}
 
-		// 5. Build LeanEvents from in-memory state_pdus (zero RocksDB I/O)
-		let to_lean = |pdu: &PduEvent| -> rezzy::LeanEvent {
-			let content_val: serde_json::Value =
-				serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
-			let power_level = content_val
-				.get("power_level")
-				.and_then(|pl| {
-					pl.as_i64()
-						.or_else(|| pl.as_str().and_then(|s| s.parse().ok()))
-				})
-				.unwrap_or(0);
-			rezzy::LeanEvent {
-				event_id: pdu.event_id.to_string(),
-				event_type: pdu.kind.to_string(),
-				state_key: pdu.state_key.as_ref().map(ToString::to_string),
-				power_level,
-				origin_server_ts: pdu.origin_server_ts.into(),
-				sender: pdu.sender.to_string(),
-				content: content_val,
-				prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
-				auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
-				depth: u64::from(pdu.depth),
-			}
-		};
-
-		let mut pdu_map: HashMap<OwnedEventId, &PduEvent> = HashMap::new();
+		// 5. Build LeanEvents from in-memory state_pdus (zero RocksDB I/O and zero JSON
+		//    parsing!)
+		let mut auth_context: HashMap<String, rezzy::LeanEvent> = HashMap::new();
 		for &idx in &all_needed_indices {
-			if let Some(Some(pdu)) = ctx.state_pdus.get(to_usize(idx)) {
-				pdu_map.insert(ctx.idx_to_eid[to_usize(idx)].clone(), pdu);
+			if let Some(Some(lean_ev)) = ctx.state_pdus.get(to_usize(idx)) {
+				auth_context.insert(ctx.idx_to_eid[to_usize(idx)].to_string(), lean_ev.clone());
 			}
 		}
 
 		// 6. Build full context ONCE, then extract conflicted via remove()
-		let mut auth_context: HashMap<String, rezzy::LeanEvent> = pdu_map
-			.iter()
-			.map(|(eid, pdu)| (eid.to_string(), to_lean(pdu)))
-			.collect();
 
 		let conflicted_events: HashMap<String, rezzy::LeanEvent> = if is_v2_1_plus {
 			// MSC4297 (V2.1+): rezzy computes the exact HashMap we need
