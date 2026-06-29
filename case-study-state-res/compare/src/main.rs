@@ -1,11 +1,11 @@
 use std::{
-	collections::{HashMap, HashSet},
+	collections::{BTreeMap, HashMap, HashSet},
 	fs::File,
 	io::BufReader,
 	sync::Arc,
 };
 
-use conduwuit_core::matrix::{Pdu, state_res};
+use conduwuit_core::matrix::{Pdu, state_res::StateMap};
 use ruma::{OwnedEventId, RoomVersionId};
 
 enum Mode {
@@ -338,46 +338,13 @@ async fn run_state_sets_mode(
 	println!("State A: {} keys, State B: {} keys", state_map_a.len(), state_map_b.len());
 	println!("Conflicts: {}, Only in A: {}, Only in B: {}", conflicts, only_a, only_b);
 
-	// Build auth chain sets
+	// Resolve using rezzy
 	let state_sets = vec![state_map_a, state_map_b];
-
-	let fetch_event = |event_id: OwnedEventId| {
-		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
-	};
-
-	let events_map_ref = &events_map;
-	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {
-		let mut auth_chain = HashSet::new();
-		let mut stack = events;
-		let mut visited = HashSet::new();
-		while let Some(ev_id) = stack.pop() {
-			if visited.insert(ev_id.clone())
-				&& let Some(ev) = events_map_ref.get(&ev_id)
-			{
-				auth_chain.insert(ev_id.clone());
-				for auth_id in &ev.auth_events {
-					stack.push(auth_id.clone());
-				}
-			}
-		}
-		auth_chain
-	};
-
-	println!("Resolving state with room version {:?}...", room_version);
-	let conduwuit_resolved = state_res::resolve(
-		room_version,
-		&state_sets,
-		&fetch_event,
-		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<Pdu>>>,
-		&auth_chain_fetch,
-		None::<&fn(Vec<OwnedEventId>)>,
-	)
-	.await
-	.expect("Conduwuit failed to resolve");
+	let conduwuit_resolved = resolve_via_rezzy(&state_sets, &events_map, room_version);
 
 	let duration = start_time.elapsed();
 	println!(
-		"Conduwuit resolved {} events in {:.2}s",
+		"Rezzy resolved {} events in {:.2}s",
 		conduwuit_resolved.len(),
 		duration.as_secs_f64()
 	);
@@ -448,44 +415,12 @@ async fn run_dag_mode(
 		state_sets.push(state_map);
 	}
 
-	// Build auth chain sets
-	let fetch_event = |event_id: OwnedEventId| {
-		std::future::ready(events_map.get(&event_id).map(|p| (**p).clone()))
-	};
-
-	let events_map_ref = &events_map;
-	let auth_chain_fetch = |events: Vec<OwnedEventId>| async move {
-		let mut auth_chain = HashSet::new();
-		let mut stack = events;
-		let mut visited = HashSet::new();
-		while let Some(ev_id) = stack.pop() {
-			if visited.insert(ev_id.clone())
-				&& let Some(ev) = events_map_ref.get(&ev_id)
-			{
-				auth_chain.insert(ev_id.clone());
-				for auth_id in &ev.auth_events {
-					stack.push(auth_id.clone());
-				}
-			}
-		}
-		auth_chain
-	};
-
-	println!("Resolving state with room version {:?}...", room_version);
-	let conduwuit_resolved = state_res::resolve(
-		room_version,
-		&state_sets,
-		&fetch_event,
-		None::<&fn(Vec<OwnedEventId>) -> std::future::Ready<Vec<Pdu>>>,
-		&auth_chain_fetch,
-		None::<&fn(Vec<OwnedEventId>)>,
-	)
-	.await
-	.expect("Conduwuit failed to resolve");
+	// Resolve using rezzy
+	let conduwuit_resolved = resolve_via_rezzy(&state_sets, &events_map, room_version);
 
 	let duration = start_time.elapsed();
 	println!(
-		"Conduwuit resolved {} events in {:.2}s",
+		"Rezzy resolved {} events in {:.2}s",
 		conduwuit_resolved.len(),
 		duration.as_secs_f64()
 	);
@@ -501,4 +436,208 @@ async fn run_dag_mode(
 	export_results(&conduwuit_resolved, &events_map, duration, room_version);
 
 	Ok(())
+}
+
+/// Resolve state using rezzy::resolve_lean instead of ruma's
+/// state_res::resolve.
+///
+/// Builds the unconflicted/conflicted/auth_context split from state sets and
+/// the full events map, then calls rezzy synchronously.
+fn resolve_via_rezzy(
+	state_sets: &[conduwuit_core::matrix::StateMap<OwnedEventId>],
+	events_map: &HashMap<OwnedEventId, Arc<Pdu>>,
+	room_version: &RoomVersionId,
+) -> StateMap<OwnedEventId> {
+	// Map room version to rezzy StateResVersion
+	let version = match room_version.as_str() {
+		| "1" => rezzy::StateResVersion::V1,
+		| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
+			rezzy::StateResVersion::V2,
+		| "12" => rezzy::StateResVersion::V2_1,
+		| "12.1" => rezzy::StateResVersion::V2_1_1,
+		| v => panic!("Unknown room version: {v}"),
+	};
+
+	let num_maps = state_sets.len();
+	if num_maps == 0 {
+		return HashMap::new();
+	}
+	if num_maps == 1 {
+		return state_sets[0].clone();
+	}
+
+	// Separate unconflicted vs conflicted keys
+	let mut counts: HashMap<(String, String, String), usize> = HashMap::new();
+	let mut key_to_ids: HashMap<(String, String), HashSet<String>> = HashMap::new();
+
+	for map in state_sets {
+		for ((ty, sk), id) in map {
+			let ty_s = ty.to_string();
+			let sk_s = sk.to_string();
+			let id_s = id.to_string();
+			*counts
+				.entry((ty_s.clone(), sk_s.clone(), id_s.clone()))
+				.or_insert(0) += 1;
+			key_to_ids.entry((ty_s, sk_s)).or_default().insert(id_s);
+		}
+	}
+
+	let mut unconflicted: BTreeMap<(String, Option<String>), String> = BTreeMap::new();
+	let mut conflicted_eids: HashSet<String> = HashSet::new();
+
+	for (key, ids) in &key_to_ids {
+		if ids.len() == 1 {
+			let id = ids.iter().next().unwrap();
+			let count = counts
+				.get(&(key.0.clone(), key.1.clone(), id.clone()))
+				.copied()
+				.unwrap_or(0);
+			if count == num_maps {
+				let sk_opt = if key.1.is_empty() { None } else { Some(key.1.clone()) };
+				unconflicted.insert((key.0.clone(), sk_opt), id.clone());
+				continue;
+			}
+		}
+		for id in ids {
+			conflicted_eids.insert(id.clone());
+		}
+	}
+
+	// Collect all state event IDs for auth chain computation
+	let all_state_eids: HashSet<String> = state_sets
+		.iter()
+		.flat_map(|m| m.values())
+		.map(ToString::to_string)
+		.collect();
+
+	// Walk auth chains from all state events
+	let mut auth_chain_union: HashSet<String> = HashSet::new();
+	let mut stack: Vec<String> = all_state_eids.into_iter().collect();
+	let mut visited = HashSet::new();
+	while let Some(eid) = stack.pop() {
+		if !visited.insert(eid.clone()) {
+			continue;
+		}
+		if let Ok(eid_owned) = OwnedEventId::try_from(eid.as_str())
+			&& let Some(ev) = events_map.get(&eid_owned)
+		{
+			auth_chain_union.insert(eid.clone());
+			for auth_id in &ev.auth_events {
+				stack.push(auth_id.to_string());
+			}
+		}
+	}
+
+	// Auth chain diff: add diff events to conflicted set
+	let is_v2_1_plus = matches!(
+		version,
+		rezzy::StateResVersion::V2_1
+			| rezzy::StateResVersion::V2_1_1
+			| rezzy::StateResVersion::V2_2
+	);
+
+	if !is_v2_1_plus {
+		// V2: auth chain diff adds events to conflicted set
+		let mut per_set_chains: Vec<HashSet<String>> = Vec::new();
+		for map in state_sets {
+			let mut chain = HashSet::new();
+			let mut stack: Vec<String> = map.values().map(ToString::to_string).collect();
+			let mut visited = HashSet::new();
+			while let Some(eid) = stack.pop() {
+				if !visited.insert(eid.clone()) {
+					continue;
+				}
+				if let Ok(eid_owned) = OwnedEventId::try_from(eid.as_str())
+					&& let Some(ev) = events_map.get(&eid_owned)
+				{
+					chain.insert(eid.clone());
+					for auth_id in &ev.auth_events {
+						stack.push(auth_id.to_string());
+					}
+				}
+			}
+			per_set_chains.push(chain);
+		}
+		let intersect: HashSet<String> = per_set_chains
+			.iter()
+			.skip(1)
+			.fold(per_set_chains[0].clone(), |acc, c| acc.intersection(c).cloned().collect());
+		for eid in &auth_chain_union {
+			if !intersect.contains(eid) {
+				conflicted_eids.insert(eid.clone());
+			}
+		}
+	}
+
+	// Convert PDUs to LeanEvents
+	let to_lean = |pdu: &Pdu| -> rezzy::LeanEvent {
+		let content_val: serde_json::Value =
+			serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
+		rezzy::LeanEvent {
+			event_id: pdu.event_id.to_string(),
+			event_type: pdu.kind.to_string(),
+			state_key: pdu.state_key.as_ref().map(ToString::to_string),
+			power_level: content_val
+				.get("power_level")
+				.and_then(|pl| pl.as_i64())
+				.unwrap_or(0),
+			origin_server_ts: pdu.origin_server_ts.into(),
+			sender: pdu.sender.to_string(),
+			content: content_val,
+			prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
+			auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
+			depth: u64::from(pdu.depth),
+		}
+	};
+
+	// Build full auth context
+	let mut auth_context: HashMap<String, rezzy::LeanEvent> = auth_chain_union
+		.iter()
+		.filter_map(|eid| {
+			OwnedEventId::try_from(eid.as_str())
+				.ok()
+				.and_then(|owned| events_map.get(&owned))
+				.map(|pdu| (eid.clone(), to_lean(pdu)))
+		})
+		.collect();
+
+	// Extract conflicted events from auth_context
+	let conflicted_events: HashMap<String, rezzy::LeanEvent> = if is_v2_1_plus {
+		let direct: Vec<String> = conflicted_eids.iter().cloned().collect();
+		let subgraph = rezzy::compute_v2_1_conflicted_subgraph(&auth_context, &direct);
+		for id in subgraph.keys() {
+			auth_context.remove(id);
+		}
+		subgraph
+	} else {
+		let mut ce = HashMap::new();
+		for eid in &conflicted_eids {
+			if let Some(lean) = auth_context.remove(eid) {
+				ce.insert(eid.clone(), lean);
+			}
+		}
+		ce
+	};
+
+	println!(
+		"rezzy: {} unconflicted, {} conflicted, {} auth_context",
+		unconflicted.len(),
+		conflicted_events.len(),
+		auth_context.len()
+	);
+
+	let resolved_lean =
+		rezzy::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
+
+	// Convert back to StateMap
+	let mut resolved = HashMap::new();
+	for ((ty_str, sk_opt), eid_str) in resolved_lean {
+		let ty: ruma::events::StateEventType = ty_str.into();
+		let sk: conduwuit_core::matrix::state_key::StateKey = sk_opt.unwrap_or_default().into();
+		if let Ok(eid) = OwnedEventId::try_from(eid_str.as_str()) {
+			resolved.insert((ty, sk), eid);
+		}
+	}
+
+	resolved
 }

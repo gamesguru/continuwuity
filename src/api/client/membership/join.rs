@@ -5,10 +5,8 @@ use axum_client_ip::ClientIp;
 use conduwuit::{
 	Err, Result, debug, debug_info, debug_warn, err, error, info,
 	matrix::{
-		StateKey,
 		event::{gen_event_id, gen_event_id_canonical_json},
 		pdu::{PduBuilder, PduEvent},
-		state_res,
 	},
 	trace,
 	utils::{self, shuffle, stream::ReadyExt, to_canonical_object},
@@ -699,53 +697,32 @@ async fn join_room_by_id_helper_remote_process(
 	drop(cork);
 
 	debug!("Running send_join auth check");
+	// Build auth state from the send_join response state for rezzy
 	let fetch_state = &state;
-	let state_fetch = |k: StateEventType, s: StateKey| async move {
-		let shortstatekey = services
+	let mut auth_events: HashMap<
+		(StateEventType, conduwuit::matrix::state_key::StateKey),
+		PduEvent,
+	> = HashMap::new();
+	for (&shortstatekey, event_id) in fetch_state {
+		if let Ok((ty, sk)) = services
 			.rooms
 			.short
-			.get_shortstatekey(&k, &s)
+			.get_statekey_from_short(shortstatekey)
 			.boxed()
 			.await
-			.ok()?;
-
-		let event_id = fetch_state.get(&shortstatekey)?;
-		if matches!(k, StateEventType::RoomCreate) {
-			services.rooms.timeline.get_pdu(event_id).boxed().await.ok()
-		} else {
-			services
-				.rooms
-				.timeline
-				.get_pdu_in_room(Some(room_id), event_id)
-				.boxed()
-				.await
-				.ok()
+		{
+			if let Ok(pdu) = services.rooms.timeline.get_pdu(event_id).boxed().await {
+				auth_events.insert((ty, sk), pdu);
+			}
 		}
-	};
+	}
 
-	let create_event = Box::new(
-		state_fetch(StateEventType::RoomCreate, "".into())
-			.boxed()
-			.await
-			.ok_or_else(|| {
-				err!(BadServerResponse(warn!(
-					"create event is missing from send_join auth_chain or state"
-				)))
-			})?,
+	let state_provider =
+		conduwuit_service::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_events);
+	let auth_check = conduwuit_service::rooms::auth_adapter::rezzy_auth_check(
+		&parsed_join_pdu,
+		&state_provider,
 	);
-
-	let auth_check = state_res::event_auth::auth_check(
-		&state_res::RoomVersion::new(&room_version_id)?,
-		&*parsed_join_pdu,
-		None, // TODO: third party invite
-		|k, s| state_fetch(k.clone(), s.into()).boxed(),
-		&*create_event,
-	)
-	.boxed()
-	.await
-	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
-
-	let _ = state_fetch;
 
 	if !auth_check {
 		return Err!(Request(Forbidden("Auth check failed")));
