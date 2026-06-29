@@ -42,11 +42,13 @@ fn raw_id_normal_shorteventid_matches_bytes() {
 	};
 	let raw: RawId = id.into();
 
-	// shorteventid() must return the count bytes
-	assert_eq!(raw.shorteventid(), 12345_u64.to_be_bytes());
+	// shorteventid() returns the offset-binary-encoded count bytes
+	// (sign bit flipped for correct unsigned lexicographic sorting)
+	let expected = Count::offset_binary_encoding(12345_i64.to_be_bytes());
+	assert_eq!(raw.shorteventid(), expected);
 
-	// For Normal, as_ref()[8..] happens to be the same 8 bytes
-	assert_eq!(&raw.as_ref()[8..], &12345_u64.to_be_bytes());
+	// as_ref()[8..] is the same 8 encoded bytes in the uniform 16-byte layout
+	assert_eq!(&raw.as_ref()[8..], &expected);
 }
 
 #[test]
@@ -59,26 +61,15 @@ fn raw_id_backfilled_shorteventid_returns_count() {
 	};
 	let raw: RawId = id.into();
 
-	// Backfilled raw is 24 bytes: [room(8) | 0x00(8) | i64(8)]
-	assert_eq!(raw.as_ref().len(), 24);
+	// Uniform 16-byte layout: [room(8) | offset_binary_encoded_count(8)]
+	assert_eq!(raw.as_ref().len(), 16);
 
-	// shorteventid() correctly returns the i64 count bytes
-	assert_eq!(raw.shorteventid(), (-99_i64).to_be_bytes());
+	// shorteventid() returns the offset-binary-encoded count bytes
+	let expected = Count::offset_binary_encoding((-99_i64).to_be_bytes());
+	assert_eq!(raw.shorteventid(), expected);
 
-	// REGRESSION: as_ref()[8..16] gives ZEROS, not the count
-	assert_eq!(
-		&raw.as_ref()[8..16],
-		&0_u64.to_be_bytes(),
-		"Backfilled raw bytes 8..16 must be zero-tag, NOT the count"
-	);
-
-	// REGRESSION: as_ref()[8..] is 16 bytes, not 8 — copy_from_slice
-	// into an 8-byte target would only take the zero bytes
-	assert_eq!(
-		raw.as_ref()[8..].len(),
-		16,
-		"as_ref()[8..] on Backfilled must be 16 bytes, exposing the bug"
-	);
+	// as_ref()[8..] is exactly 8 bytes — the encoded count
+	assert_eq!(raw.as_ref()[8..].len(), 8);
 }
 
 #[test]
