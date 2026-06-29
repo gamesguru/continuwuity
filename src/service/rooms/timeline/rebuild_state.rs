@@ -447,7 +447,11 @@ impl super::Service {
 				let result = self
 					.services
 					.state_compressor
-					.save_state(room_id, Arc::new(compressed))
+					.save_state_with_parent(
+						room_id,
+						Some(current_shortstatehash),
+						Arc::new(compressed),
+					)
 					.await?;
 				let ssh = result.shortstatehash;
 				content_to_ssh.insert(content_hash, ssh);
