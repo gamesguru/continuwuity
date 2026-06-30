@@ -689,7 +689,8 @@ where
 	}
 
 	let state_provider =
-		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_events_by_key);
+		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_events_by_key)
+			.with_create_event(create_event);
 	let auth_check = crate::rooms::auth_adapter::rezzy_auth_check(
 		&pdu_event,
 		&state_provider,

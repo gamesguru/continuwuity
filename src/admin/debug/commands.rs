@@ -587,8 +587,16 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 	};
 
 	// Auth check against current room state
-	let auth_msg = if let Some(_room_id) = pdu.room_id_or_hash() {
+	let auth_msg = if let Some(ref room_id) = pdu.room_id_or_hash() {
 		{
+			let create_event = self
+				.services
+				.rooms
+				.state_accessor
+				.room_state_get(room_id, &ruma::events::StateEventType::RoomCreate, "")
+				.await
+				.ok();
+
 			// Gather auth events from the PDU's own declared auth_events
 			let mut auth_events = HashMap::new();
 			for auth_event_id in pdu.auth_events() {
@@ -603,7 +611,8 @@ pub(super) async fn verify_pdu(&self, event_id: OwnedEventId) -> Result {
 			let state_provider =
 				conduwuit_service::rooms::auth_adapter::PduStateProvider::from_ruma_map(
 					&auth_events,
-				);
+				)
+				.with_create_event(create_event.as_ref());
 			if conduwuit_service::rooms::auth_adapter::rezzy_auth_check(
 				&pdu,
 				&state_provider,

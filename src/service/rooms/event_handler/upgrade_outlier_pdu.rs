@@ -234,7 +234,8 @@ where
 	}
 
 	let state_provider =
-		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_events);
+		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&auth_events)
+			.with_create_event(Some(create_event));
 
 	// Check the auth of the event passes based on the claimed auth_events
 	debug!(event_id = %incoming_pdu.event_id, "Running auth check with claimed state auth");
@@ -338,7 +339,8 @@ where
 		}
 	}
 	let state_at_provider =
-		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&state_auth_events);
+		crate::rooms::auth_adapter::PduStateProvider::from_ruma_map(&state_auth_events)
+			.with_create_event(Some(create_event));
 	let auth_check_state =
 		crate::rooms::auth_adapter::rezzy_auth_check(&incoming_pdu, &state_at_provider, srv);
 

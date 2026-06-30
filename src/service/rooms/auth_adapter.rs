@@ -33,13 +33,13 @@ pub fn to_state_res_version(room_version_id: &RoomVersionId) -> StateResVersion 
 	}
 }
 
-/// Convert a `PduEvent` into a `LeanEvent<String>` suitable for rezzy's
+/// Convert any `Event` into a `LeanEvent<String>` suitable for rezzy's
 /// auth checking and state resolution APIs.
 #[must_use]
-pub fn pdu_to_lean(pdu: &PduEvent) -> LeanEvent<String> {
+pub fn pdu_to_lean<E: Event>(pdu: &E) -> LeanEvent<String> {
 	LeanEvent {
 		event_id: pdu.event_id().to_string(),
-		event_type: pdu.kind.to_string(),
+		event_type: pdu.kind().to_string(),
 		sender: pdu.sender().to_string(),
 		state_key: pdu.state_key().map(str::to_owned),
 		content: pdu.get_content_as_value(),
@@ -98,6 +98,20 @@ impl PduStateProvider {
 			.collect();
 
 		Self { events }
+	}
+
+	/// Add the `m.room.create` event explicitly to the state provider.
+	///
+	/// This is necessary for Room Versions 11/12 (v12+), where `m.room.create`
+	/// is omitted from the event's `auth_events` list but is still required by
+	/// state resolution and auth checks.
+	#[must_use]
+	pub fn with_create_event<E: Event>(mut self, create_event: Option<&E>) -> Self {
+		if let Some(pdu) = create_event {
+			let key = (StateEventType::RoomCreate.to_string(), Some(String::new()));
+			self.events.insert(key, pdu_to_lean(pdu));
+		}
+		self
 	}
 }
 

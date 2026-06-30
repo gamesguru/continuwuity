@@ -228,8 +228,19 @@ pub async fn create_event(
 		auth_events.keys().collect::<Vec<_>>()
 	);
 
+	let create_event = if let Some(room_id) = room_id {
+		self.services
+			.state_accessor
+			.room_state_get(room_id, &StateEventType::RoomCreate, "")
+			.await
+			.ok()
+	} else {
+		None
+	};
+
 	let state_provider =
-		crate::rooms::auth_adapter::PduStateProvider::from_smallstr_map(&auth_events);
+		crate::rooms::auth_adapter::PduStateProvider::from_smallstr_map(&auth_events)
+			.with_create_event(create_event.as_ref());
 	if !crate::rooms::auth_adapter::rezzy_auth_check(
 		&pdu,
 		&state_provider,
@@ -282,6 +293,7 @@ pub async fn create_hash_and_sign_event(
 	// Generate event id
 	pdu.event_id = gen_event_id(&pdu_json, &room_version_id)?;
 	pdu_json.insert("event_id".into(), CanonicalJsonValue::String(pdu.event_id.clone().into()));
+	info!("Generated PDU event ID: {}", pdu.event_id);
 
 	// MSC4291: ensure room_id is in our internal representation even if it's
 	// v12+
