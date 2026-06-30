@@ -150,7 +150,11 @@ impl Service {
 	}
 
 	pub async fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
-		if self.services.timeline.pdu_exists(event_id).await {
+		// Only protect events that are truly on the timeline (have a PduCount
+		// ordering entry), not outliers. The eventid_pdu table is shared by
+		// both timeline and outlier paths, so pdu_exists would incorrectly
+		// prevent rejection of outliers that were just added.
+		if self.is_event_visible_to_clients(event_id).await {
 			conduwuit::warn!(
 				%event_id,
 				%reason,
