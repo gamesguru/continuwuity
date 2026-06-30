@@ -1577,7 +1577,7 @@ mod tests {
 	#[test]
 	fn test_schema_fingerprint_not_empty() {
 		let fp = compute_schema_fingerprint();
-		assert_ne!(fp, [0u8; 32], "fingerprint must not be all zeros");
+		assert_ne!(fp, [0_u8; 32], "fingerprint must not be all zeros");
 	}
 
 	#[test]

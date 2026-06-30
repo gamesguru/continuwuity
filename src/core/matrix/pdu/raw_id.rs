@@ -126,8 +126,8 @@ mod tests {
 			shorteventid: Count::Normal(42),
 		};
 
-		let raw_backfill: RawId = backfill.clone().into();
-		let raw_normal: RawId = normal.clone().into();
+		let raw_backfill: RawId = backfill.into();
+		let raw_normal: RawId = normal.into();
 
 		let id_backfill: Id = raw_backfill.into();
 		let id_normal: Id = raw_normal.into();

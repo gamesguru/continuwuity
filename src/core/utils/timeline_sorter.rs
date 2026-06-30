@@ -135,7 +135,7 @@ mod tests {
 
 		graph.insert(b.clone(), vec![a.clone()].into_iter().collect());
 		graph.insert(c.clone(), vec![a.clone()].into_iter().collect());
-		graph.insert(d.clone(), vec![b.clone(), c.clone()].into_iter().collect());
+		graph.insert(d.clone(), vec![b, c].into_iter().collect());
 
 		let sorted = sort_timeline_events(&entries, &graph);
 		// A must be first, D must be last

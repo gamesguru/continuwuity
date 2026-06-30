@@ -402,7 +402,8 @@ features = [
 ]
 
 [workspace.dependencies.rezzy]
-version = "0.4.0"
+git = "https://github.com/gamesguru/rezzy"
+branch = "feat/third-party-invite-rules"
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://forgejo.ellis.link/continuwuation/rust-rocksdb-zaidoon1"
