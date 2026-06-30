@@ -401,6 +401,9 @@ features = [
     "unstable-msc4439", # pgp_key in .well_known/matrix/support
 ]
 
+[workspace.dependencies.rezzy]
+version = "0.2.0"
+
 [workspace.dependencies.rust-rocksdb]
 git = "https://forgejo.ellis.link/continuwuation/rust-rocksdb-zaidoon1"
 rev = "61d9d23872197e9ace4a477f2617d5c9f50ecb23"
