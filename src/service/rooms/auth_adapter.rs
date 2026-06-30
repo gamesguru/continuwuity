@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use conduwuit_core::matrix::{Event, PduEvent, state_key::StateKey, state_res::RoomVersion};
-use rezzy::{auth::StateProvider, types::LeanEvent};
+use rezzy::{LeanEvent, StateResVersion, auth::StateProvider};
 use ruma::{RoomVersionId, events::StateEventType};
 
 /// Map a ruma `RoomVersionId` to rezzy's `StateResVersion`.
@@ -19,17 +19,17 @@ use ruma::{RoomVersionId, events::StateEventType};
 ///
 /// Panics on unrecognized room versions (via `RoomVersion::new()`).
 #[must_use]
-pub fn to_state_res_version(room_version_id: &RoomVersionId) -> rezzy::types::StateResVersion {
+pub fn to_state_res_version(room_version_id: &RoomVersionId) -> StateResVersion {
 	let rv = RoomVersion::new(room_version_id).expect("unsupported room version");
 
 	if rv.state_res == RoomVersion::V1.state_res {
-		rezzy::types::StateResVersion::V1
+		StateResVersion::V1
 	} else if rv.state_res == RoomVersion::V12_1.state_res {
-		rezzy::types::StateResVersion::V2_1_1
+		StateResVersion::V2_1_1
 	} else if rv.state_res == RoomVersion::V12.state_res {
-		rezzy::types::StateResVersion::V2_1
+		StateResVersion::V2_1
 	} else {
-		rezzy::types::StateResVersion::V2
+		StateResVersion::V2
 	}
 }
 
@@ -117,7 +117,7 @@ impl StateProvider<String> for PduStateProvider {
 pub fn rezzy_auth_check<S: StateProvider<String>>(
 	pdu: &PduEvent,
 	state: &S,
-	version: rezzy::types::StateResVersion,
+	version: StateResVersion,
 ) -> bool {
 	let lean = pdu_to_lean(pdu);
 	rezzy::auth::check_auth(&lean, state, version).is_ok()

@@ -156,7 +156,7 @@ pub async fn state_resolution<'a, StateSets>(
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	use std::collections::BTreeMap;
+	use rezzy::SharedState;
 
 	let state_sets_vec: Vec<&StateMap<OwnedEventId>> = state_sets.collect();
 	let num_maps = state_sets_vec.len();
@@ -185,7 +185,7 @@ where
 		}
 	}
 
-	let mut unconflicted: BTreeMap<(String, Option<String>), String> = BTreeMap::new();
+	let mut unconflicted: SharedState = SharedState::new();
 	let mut conflicted_keys: HashSet<(String, String)> = HashSet::new();
 
 	for (key, ids) in &key_to_ids {

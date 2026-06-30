@@ -676,7 +676,7 @@ impl super::Service {
 
 		// 7. Call rezzy's resolve_lean directly
 		let resolved_lean =
-			rezzy::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
+			rezzy::resolve_lean(unconflicted.into(), conflicted_events, &auth_context, version);
 
 		// 8. Convert back to Ruma StateMap
 		let mut resolved = StateMap::new();

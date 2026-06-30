@@ -1,5 +1,5 @@
 use std::{
-	collections::{BTreeMap, HashMap, HashSet},
+	collections::{HashMap, HashSet},
 	fs::File,
 	io::BufReader,
 	sync::Arc,
@@ -448,6 +448,8 @@ fn resolve_via_rezzy(
 	events_map: &HashMap<OwnedEventId, Arc<Pdu>>,
 	room_version: &RoomVersionId,
 ) -> StateMap<OwnedEventId> {
+	use rezzy::state::at::SharedState;
+
 	// Map room version to rezzy StateResVersion
 	let version = match room_version.as_str() {
 		| "1" => rezzy::StateResVersion::V1,
@@ -482,7 +484,7 @@ fn resolve_via_rezzy(
 		}
 	}
 
-	let mut unconflicted: BTreeMap<(String, Option<String>), String> = BTreeMap::new();
+	let mut unconflicted: SharedState = SharedState::new();
 	let mut conflicted_eids: HashSet<String> = HashSet::new();
 
 	for (key, ids) in &key_to_ids {

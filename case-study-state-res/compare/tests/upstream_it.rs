@@ -9,7 +9,7 @@
 //! "State map" tests (MSC4297) load explicit state maps + PDU definitions.
 
 use std::{
-	collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+	collections::{BTreeSet, HashMap, HashSet, VecDeque},
 	fs,
 	path::Path,
 };
@@ -324,6 +324,8 @@ fn resolve_via_rezzy(
 	store: &EventStore,
 	room_version: &RoomVersionId,
 ) -> StateMap<OwnedEventId> {
+	use rezzy::state::at::SharedState;
+
 	let num_maps = state_sets.len();
 
 	// Pre-separate unconflicted/conflicted
@@ -343,7 +345,7 @@ fn resolve_via_rezzy(
 		}
 	}
 
-	let mut unconflicted: BTreeMap<(String, Option<String>), String> = BTreeMap::new();
+	let mut unconflicted: SharedState = SharedState::new();
 	let mut conflicted_keys: HashSet<(String, String)> = HashSet::new();
 
 	for (key, ids) in &key_to_ids {

@@ -486,7 +486,7 @@ pub async fn promote_outliers_sorted(
 	}
 
 	// Build LeanEvent map from outlier PDUs for topo sort
-	let mut events_map: rezzy::HashMap<String, rezzy::types::LeanEvent> = rezzy::HashMap::new();
+	let mut events_map: rezzy::HashMap<String, rezzy::LeanEvent> = rezzy::HashMap::new();
 
 	for event_id in event_ids {
 		// Skip events already in the timeline
@@ -498,7 +498,7 @@ pub async fn promote_outliers_sorted(
 			continue;
 		};
 
-		let lean = rezzy::types::LeanEvent {
+		let lean = rezzy::LeanEvent {
 			event_id: event_id.to_string(),
 			event_type: pdu.kind.to_string(),
 			sender: pdu.sender.to_string(),
@@ -532,7 +532,7 @@ pub async fn promote_outliers_sorted(
 			| ver => return Err!(Database("Unsupported room version for topo sort: {ver}")),
 		}
 	};
-	let sorted_ids = rezzy::sorting::lean_kahn_sort(
+	let sorted_ids = rezzy::resolve::sorting::lean_kahn_sort(
 		&events_map,
 		&events_map, // auth context is the same set
 		create_ev,
